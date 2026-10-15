@@ -453,8 +453,15 @@ def brief(d, source='compact', now=None, handoff=None):
                         % (lp.get('delay') or '?', hm(lp.get('next_at'))))
             body.append('- prompt（原样）：%s' % ' '.join(str(lp['prompt']).split())[:300])
         body.append('- /loop 形式：`%s`' % lp.get('rearm', '/loop'))
-        step = ('下一步：①先重新 arm 循环——调用 ScheduleWakeup，prompt 原样照抄「prompt（原样）」那行，delaySeconds %s；'
-                % (lp.get('delay') or 1200))
+        if lp.get('prompt'):
+            step = ('下一步：①先重新 arm 循环——调用 ScheduleWakeup，prompt 原样照抄「prompt（原样）」那行，delaySeconds %s；'
+                    % (lp.get('delay') or 1200))
+        else:
+            # A CronCreate job outlives a compaction in the same process: re-arming
+            # it blind is how an orchestrator ended up with three identical
+            # self-patrols (issue #4271). One loop, checked first.
+            step = ('下一步：①先 CronList——同一 prompt 的定时任务还在就不要再建（压缩不会清掉会话里的定时任务），'
+                    '多出来的用 CronDelete 删到只剩一条；一条都不在了才按上面的 /loop 形式重建；')
     else:
         body.append('- （没有在跑的循环）')
         step = '下一步：①'

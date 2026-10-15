@@ -22,9 +22,12 @@
 #      past it), and files it through the ONE filer road with
 #      `--breakage-key macos-<the red tests>` (bin/fleet-issue-file.sh, issues
 #      #2078, #4232): one issue per red test set across every machine, login and
-#      new stable — no commit in the key; one already open gets a 「同一故障」
-#      comment and comes back exit 5. Either way it raises ONE `breakage` alert
-#      (fleet-alerts.sh event) on --session's fleet — and spawns NOTHING: since
+#      new stable — no commit in the key; `--fault-sha` / `--fault-link` name the
+#      run (issue #4271): one already open gets ONE 「同一故障」 comment per new
+#      sha and comes back exit 5, a closed one is reopened when the red run's
+#      commit contains its fix. A NEW or REOPENED issue raises ONE `breakage`
+#      alert (fleet-alerts.sh event) on --session's fleet (a red run on an issue
+#      already open raises none — the issue is the reminder) — and spawns NOTHING: since
 #      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
 #      person's, or a steward holder's (the fleet-steward plugin).
 #   4. remembers the run id it filed for, so the same red run is never re-filed
@@ -187,19 +190,29 @@ case "$bkey" in ''|*[!A-Za-z0-9._-]*) bkey=$(printf '%s' "$what" | cksum | cut -
 bkey="macos-$bkey"
 [ "${#bkey}" -le 80 ] || bkey="macos-$(printf '%s' "$bkey" | cksum | cut -d' ' -f1)"
 filer="${FLEET_MACOS_FILE_CMD:-$BIN/fleet-issue-file.sh}"
-url=$(bash "$filer" --breakage-key "$bkey" --repo "$repo" --priority p1 --from macos-watch --title "$title" --body "$body"); rc=$?
+ferr=$(mktemp "${TMPDIR:-/tmp}/fleet-macos-file.XXXXXX") || ferr=/dev/null
+url=$(bash "$filer" --breakage-key "$bkey" --fault-sha "$rsha" --fault-link "https://github.com/$repo/actions/runs/$rid" \
+        --repo "$repo" --priority p1 --from macos-watch --title "$title" --body "$body" 2>"$ferr"); rc=$?
+reopened=0; grep -q ': reopened ' "$ferr" 2>/dev/null && reopened=1
+[ "$ferr" = /dev/null ] || { cat "$ferr" >&2; rm -f "$ferr"; }
 case "$rc" in
   0|5) printf '%s\n' "$rid" > "$memo" ;;
   *)   log "filing failed (rc $rc) — retried next tick"; exit 1 ;;
 esac
-if [ "$rc" = 5 ]; then
+if [ "$reopened" = 1 ]; then
+  printf 'filed\t%s\t%s\t(reopened)\n' "$rid" "$url"
+elif [ "$rc" = 5 ]; then
   printf 'filed\t%s\t%s\t(already open)\n' "$rid" "$url"
 else
   printf 'filed\t%s\t%s\n' "$rid" "$url"
 fi
-# The reminder: one alert per red run (the memo above keeps it to one), on the
-# fleet the tick named. Nobody is spawned for it (issue #3120).
-bash "$alert" event ${sock:+-L "$sock"} breakage \
-  "fleet: macOS is red since ${s7}, every Mac stays on the previous version — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
-  >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
+# The reminder: one alert when the issue is NEW or REOPENED (issue #4271) — a
+# red run on an issue already open is one comment there, not another alert: the
+# open issue is the reminder, and the stale-lane alert (5.) still fires once per
+# streak. Nobody is spawned for it (issue #3120).
+if [ "$rc" = 0 ] || [ "$reopened" = 1 ]; then
+  bash "$alert" event ${sock:+-L "$sock"} breakage \
+    "fleet: macOS is red since ${s7}, every Mac stays on the previous version — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
+    >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
+fi
 exit 0

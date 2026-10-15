@@ -7918,13 +7918,25 @@ fleet_from_marker() {
 # --- breakage fingerprint: one issue per broken base branch (issue #2078) ------
 # On 2026-10-07 04:26Z master went red on one duplicate route and three sessions
 # filed three issues (#2039 #2040 #2041) and three fixes inside 16 seconds. The
-# fingerprint names the BREAKAGE, not the observer: the commit the red streak
-# started at (not the head — a merge landing while red must not mint a new one),
-# the first job that failed IN THAT RUN (by completion time — a finished run never
-# changes, so every later observer agrees), and the first error line of that
-# job's log with line numbers and durations stripped (a half-fix that moves the
-# lines is the same breakage). REST only — `gh api` / `gh run view` — so it
-# answers under a spent GraphQL budget, the state a red master tends to come with.
+# fingerprint names the BREAKAGE, not the observer: the channel (`ci-`) + the
+# first job that failed in the red streak's first run (by completion time — a
+# finished run never changes, so every later observer agrees) + the first error
+# line of that job's log with line numbers and durations stripped (a half-fix that
+# moves the lines is the same breakage). NO commit (issue #4271: a key with the sha
+# in it opened one issue per new commit — 21 for one red macOS test); the commit
+# the streak started at is still reported beside it. REST only — `gh api` /
+# `gh run view` — so it answers under a spent GraphQL budget, the state a red
+# master tends to come with.
+#
+# EVERY automatic filer goes through the same fingerprint road (issue #4271):
+# `fleet-issue-file.sh --breakage-key <channel>-<failed step>` — the master probe
+# (`ci-…`), fleet-macos-watch.sh (`macos-…`), fleet-cn-probe-watch.sh
+# (`cn-path-…`), fleet-nightly-miss.sh (`nightly-…` / `flaky-…`) and
+# fleet-train-quarantine.sh (`selftest-quarantine.…` / `flaky-…`) — with
+# `--fault-sha` / `--fault-link` naming where it is red THIS time. An open issue
+# under the key gets one comment per new sha; a closed one is reopened when the
+# red version contains the commit that closed it (fleet_fault_contains), else
+# only noted. Never a second issue.
 #
 # RED IS PER WORKFLOW, judged on its last FINISHED run (issue #2175). The first
 # probe read the head commit's check-runs, and at 11:22 / 11:29Z on 2026-10-07
@@ -7939,11 +7951,12 @@ fleet_from_marker() {
 # running on the branch weeks ago is nobody's breakage today.
 #
 # fleet_breakage_probe <repo> [<branch>] → one line per RED workflow, the oldest
-#   streak first: `key<TAB>sha<TAB>check<TAB>line<TAB>names` — names = the
-#   workflow, every failed job of the streak's first run and every Go test the
+#   streak first: `key<TAB>sha<TAB>check<TAB>line<TAB>names<TAB>run id` — names =
+#   the workflow, every failed job of the streak's first run and every Go test the
 #   error line names, `|`-joined (what a filer's text is matched against).
 #   rc 0 · 1 no workflow is red · 2 gh could not answer.
-#   No <branch> ⇒ the repo's default branch. key = `<sha7>-<sha12 of sha·check·line>`.
+#   No <branch> ⇒ the repo's default branch. key = `ci-<sha12 of check·line>` —
+#   the channel + the failed step, never a commit (issue #4271).
 # fleet_breakage_key <repo> [<branch>] → the first row's key alone (same rc).
 # fleet_breakage_pick <text> [<base>] → the row a filing's text is about (rc 1 none).
 # fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
@@ -8018,10 +8031,13 @@ JOBS
     [ -n "$jname" ] || jname="$wname"
     line=''
     case "$jid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
-    key="$(printf '%.7s' "$sha")-$(printf '%s\t%s\t%s' "$sha" "$jname" "$line" | fleet_sha12)"
+    # No commit in the key (issue #4271): the same job red on the same line is one
+    # breakage whichever commit its streak started at — a red that comes back
+    # after its fix reopens that issue (fleet-issue-file.sh), never files another.
+    key="ci-$(printf '%s\t%s' "$jname" "$line" | fleet_sha12)"
     names=$( { printf '%s\n' "$wname"; printf '%s\n' "$jobs" | cut -f2; printf '%s\n' "$line" | grep -oE 'Test[A-Za-z0-9_]+'; } \
                | grep . | awk '!seen[$0]++' | paste -sd '|' -)
-    out="$out$key	$sha	$jname	$line	$names
+    out="$out$key	$sha	$jname	$line	$names	$rid
 "
   done <<STARTS
 $starts
@@ -8103,6 +8119,70 @@ fleet_breakage_find() {
   n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1)
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
   printf 'https://github.com/%s/issues/%s\n' "$repo" "$n"
+}
+
+# fleet_fault_find_closed <repo> <key> — the newest CLOSED issue (not closed as
+#   not planned) whose body carries the breakage marker for <key>:
+#   `<number><TAB><closed_at>` (rc 1 none / unread). The recently-updated closed
+#   list first (the search index lags an issue closed minutes ago), then the
+#   search API for an older one; every hit is checked against the exact marker.
+fleet_fault_find_closed() {
+  local repo="$1" mk owner name rows n q
+  mk=$(fleet_breakage_marker "$2"); owner="${repo%%/*}"; name="${repo#*/}"
+  rows=$(gh api "repos/$owner/$name/issues?state=closed&per_page=100&sort=updated&direction=desc" \
+           --jq '.[] | select(.pull_request == null) | select((.state_reason // "") != "not_planned")
+                 | "\(.number)\t\(.closed_at // "")\t\(.body // "" | gsub("[\r\n\t]"; " "))"' 2>/dev/null)
+  n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1,2)
+  if [ -z "$n" ]; then
+    q="repo:$owner/$name is:issue is:closed in:body \"fleet:breakage key=$2\""
+    rows=$(gh api -X GET search/issues -f q="$q" -f sort=updated -f order=desc -f per_page=20 \
+             --jq '.items[] | select((.state_reason // "") != "not_planned")
+                   | "\(.number)\t\(.closed_at // "")\t\(.body // "" | gsub("[\r\n\t]"; " "))"' 2>/dev/null)
+    n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1,2)
+  fi
+  case "${n%%	*}" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$n"
+}
+
+# fleet_fault_fix_commit <repo> <number> — the commit that closed the issue (the
+#   last `closed` event's commit_id: a PR merge or a commit that said Closes #N);
+#   nothing (rc 1) when it was closed by hand.
+fleet_fault_fix_commit() {
+  local c
+  c=$(gh api "repos/${1%%/*}/${1#*/}/issues/$2/events?per_page=100" \
+        --jq '[.[] | select(.event == "closed")] | last | .commit_id // empty' 2>/dev/null)
+  case "$c" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) printf '%s\n' "$c" ;; *) return 1 ;; esac
+}
+
+# fleet_fault_contains <repo> <fix sha> <red sha> — rc 0 when <red sha> contains
+#   <fix sha> (the compare API: ahead / identical), 1 when it does not (behind /
+#   diverged: the red is on a version without the fix), 2 unknown.
+fleet_fault_contains() {
+  local st
+  st=$(gh api "repos/${1%%/*}/${1#*/}/compare/$2...$3" --jq .status 2>/dev/null)
+  case "$st" in ahead|identical) return 0 ;; behind|diverged) return 1 ;; *) return 2 ;; esac
+}
+
+# fleet_fault_after_close <repo> <red sha> <closed_at> — no fix commit to compare
+#   against (closed by hand): rc 0 when <red sha>'s commit is newer than the close
+#   (a version cut after it — red again), 1 older, 2 unknown.
+fleet_fault_after_close() {
+  local d te tc
+  d=$(gh api "repos/${1%%/*}/${1#*/}/commits/$2" --jq '.commit.committer.date // empty' 2>/dev/null)
+  te=$(fleet_epoch_from_iso "$d" 2>/dev/null); tc=$(fleet_epoch_from_iso "$3" 2>/dev/null)
+  case "$te$tc" in ''|*[!0-9]*) return 2 ;; esac
+  [ -n "$te" ] && [ -n "$tc" ] || return 2
+  [ "$te" -gt "$tc" ]
+}
+
+# fleet_fault_seen <repo> <number> <sha> — rc 0 when the issue's body or one of
+#   its comments already carries `<!-- fleet:fault sha=<sha> -->`: this version's
+#   red is on record, so a re-sighting (the next tick, another machine) adds nothing.
+fleet_fault_seen() {
+  local mk; mk="<!-- fleet:fault sha=$3 -->"
+  { gh api "repos/${1%%/*}/${1#*/}/issues/$2" --jq '.body // ""' 2>/dev/null
+    gh api "repos/${1%%/*}/${1#*/}/issues/$2/comments?per_page=100" --jq '.[].body // ""' 2>/dev/null
+  } | grep -qF -- "$mk"
 }
 
 # --- fleet label taxonomy: the fixed, curated set (issue #333) -----------------

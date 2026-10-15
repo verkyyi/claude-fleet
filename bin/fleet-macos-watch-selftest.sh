@@ -14,7 +14,9 @@
 #                     --session's fleet; nobody is spawned; the run id is remembered
 #   C. same run       not re-filed (no 「同一故障」 comment spam every tick)
 #   D. throttle       inside FLEET_MACOS_WATCH_SECS nothing is read
-#   E. rc 5           the breakage is already open: remembered, alerted, no spawn
+#   E. rc 5           the breakage is already open: remembered, NOT alerted (the open
+#                     issue is the reminder, issue #4271), no spawn; reopened
+#                     (the filer says `: reopened `) ⇒ alerted once
 #   F. rc 1           a failed filing is NOT remembered (retried next tick), exit 1
 #   G. noise          a cancelled run and a pull_request run are no verdict; a
 #                     train red only on Linux, or one with no macOS job, is not
@@ -60,6 +62,7 @@ cat > "$WORK/filer" <<SH
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/filed"
 echo https://github.com/o/r/issues/4242
+cat "$WORK/filer_err" >&2 2>/dev/null
 exit \$(cat "$WORK/filer_rc" 2>/dev/null || echo 0)
 SH
 cat > "$WORK/alert" <<SH
@@ -99,7 +102,7 @@ memo() { cat "$WORK/conf/global/macos-watch/o-r.filed" 2>/dev/null || echo none;
 filed() { cat "$WORK/filed" 2>/dev/null; }
 alerted() { cat "$WORK/alerted" 2>/dev/null; }
 spawned() { [ -f "$WORK/spawned" ] && echo yes || echo no; }
-reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted" "$WORK/filer_rc" "$WORK/jobs."* "$WORK/conf/global/macos-watch/"*; }
+reset() { rm -f "$WORK/filed" "$WORK/spawned" "$WORK/alerted" "$WORK/filer_rc" "$WORK/filer_err" "$WORK/jobs."* "$WORK/conf/global/macos-watch/"*; }
 
 # --- A. green ------------------------------------------------------------------
 reset; echo 9 > "$WORK/conf/stale"; mkdir -p "$WORK/conf/global/macos-watch"; echo 7 > "$WORK/conf/global/macos-watch/o-r.filed"
@@ -112,7 +115,8 @@ reset; red_runs
 run --now --session fleet
 eq "B: red exits 0" 0 "$RC"; contains "B: says filed" "$OUT" "filed	30	https://github.com/o/r/issues/4242"
 F=$(filed)
-contains "B: filed under the red test's key, no commit in it (#4232)" "$F" "--breakage-key macos-dash-marker-selftest --repo o/r"
+contains "B: filed under the red test's key, no commit in it (#4232)" "$F" "--breakage-key macos-dash-marker-selftest --fault-sha"
+contains "B: the sighting names the red run's commit + link (#4271)" "$F" "--fault-sha $S3 --fault-link https://github.com/o/r/actions/runs/30 --repo o/r"
 contains "B: title names the test" "$F" "macOS 检查红了、Mac 停在上一版：dash-marker-selftest.sh"
 lacks "B: a bare 'FAIL: a thing' line is not a test name" "$F" "红了：a,"
 contains "B: title names the job" "$F" "（macOS / shard 2）"
@@ -140,7 +144,11 @@ eq "D: throttled exits 0" 0 "$RC"; eq "D: says nothing" "" "$OUT"; eq "D: nothin
 reset; red_runs; echo 5 > "$WORK/filer_rc"
 run --now --session fleet
 eq "E: exits 0" 0 "$RC"; contains "E: says already open" "$OUT" "(already open)"; eq "E: remembered" 30 "$(memo)"
-eq "E: no spawn" no "$(spawned)"; contains "E: alerted" "$(alerted)" "breakage"
+eq "E: no spawn" no "$(spawned)"; eq "E: an issue already open raises no alert (#4271)" "" "$(alerted)"
+reset; red_runs; echo 5 > "$WORK/filer_rc"
+echo 'fleet-issue-file: breakage macos-x: reopened https://github.com/o/r/issues/4242 — red again on a version with its fix, not filing (exit 5)' > "$WORK/filer_err"
+run --now --session fleet
+contains "E2: says reopened" "$OUT" "(reopened)"; contains "E2: a reopened issue is alerted" "$(alerted)" "breakage"
 
 # --- F. a failed filing is retried ---------------------------------------------------
 reset; red_runs; echo 1 > "$WORK/filer_rc"
@@ -190,7 +198,7 @@ env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
   FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_ALERT_CMD="$WORK/alert" bash "$WORK/dg.sh" >/dev/null 2>&1
 i=0; while [ "$i" -lt 100 ] && ! grep -q 'filed' "$WORK/dg/macos-watch.log" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
 contains "J: diskguard's tick ran the watcher on the gated repo" "$(cat "$WORK/dg/macos-watch.log" 2>/dev/null)" "fleet o/r filed	30"
-contains "J: filed with --breakage-key" "$(filed)" "--breakage-key macos-dash-marker-selftest --repo o/r"
+contains "J: filed with --breakage-key" "$(filed)" "--breakage-key macos-dash-marker-selftest --fault-sha"
 eq "J: a repo without the gate files is never read" 1 "$(filed | grep -c -e '--breakage')"
 contains "J: alerted on the fleet" "$(alerted)" "event -L fleet breakage"
 eq "J: nobody spawned" no "$(spawned)"

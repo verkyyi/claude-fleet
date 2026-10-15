@@ -44,9 +44,14 @@
 #      #2170's sightings (11:22:55 and 11:29:30Z, head a6dd7c9b then an
 #      unfinished bb7da505) and the one after bb7da505 went red too all give ONE
 #      key; the two pg logs normalize to the same `--- FAIL:` line.
-#   T. auto (issue #2175): no flag + a red base + a text naming it ⇒ filed as
-#      breakage (marker, dedup → exit 5); --no-breakage files plain; a red word
-#      on a green base, or a text naming neither base nor check, files plain.
+#   T. no auto road (issue #4271, replacing #2175's): no flag + a red base + a
+#      text naming it ⇒ an ORDINARY issue, no probe; the #4268 shape (a design
+#      ticket mentioning 「红」) files plain and a later one is not swallowed;
+#      only --breakage fingerprints; --no-breakage still parses.
+#   Y. one issue per fingerprint across shas (issue #4271): three shas red ⇒ 1
+#      issue + 3 comments (sha + link), a repeat sha adds none; closed + red on a
+#      sha containing the fix ⇒ reopened; on an older sha ⇒ only noted; closed by
+#      hand + a newer sha ⇒ reopened.
 #   V. which rule dispatched it (issue #2786): from the orchestrator's pane
 #      (@fleet_role orchestrator ⇒ the marker says role=orchestrator) the five
 #      shapes filed with --rule 1…5 carry 「按规则 N 派发」 + `<!-- fleet:rule n=N
@@ -134,6 +139,9 @@ case "$1" in
         printf '%s' "$b" > "$BRK_STORE/issue-$n"; printf 'https://github.com/acme/widgets/issues/%s\n' "$n"; exit 0
       fi
       printf 'https://github.com/acme/widgets/issues/%s\n' "${NEW_NUM:-777}"
+    elif [ "$2" = reopen ]; then
+      printf '%s\n' "$*" >> "$GH_LOG"
+      [ -n "${BRK_STORE:-}" ] && [ -f "$BRK_STORE/closed-$3" ] && mv "$BRK_STORE/closed-$3" "$BRK_STORE/issue-$3"
     elif [ "$2" = comment ]; then
       printf '%s\n' "$*" >> "$GH_LOG"
       shift 2; n="$1"; b=''
@@ -166,7 +174,21 @@ case "$1" in
     fi
     # --- the breakage probe's REST reads (tests O–R), answered post-jq the way the
     # lib's --jq programs shape them; the open-issue list comes from BRK_STORE.
-    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
+    # --- issue #4271: closed issues under a key, how one was closed, what a sha
+    # contains, and what is already on record — all from BRK_STORE.
+    if [ -n "${BRK_STORE:-}" ]; then
+      case "$p" in
+        search/*)                  exit 0 ;;
+        repos/*/issues\?state=closed*) for f in "$BRK_STORE"/closed-*; do [ -e "$f" ] || continue; case "$f" in *.at) continue ;; esac
+                                     printf '%s\t%s\t%s\n' "${f##*-}" "$(cat "$f.at" 2>/dev/null)" "$(tr '\n' ' ' < "$f")"; done; exit 0 ;;
+        repos/*/issues/*/events*)  n=${p#*/issues/}; n=${n%%/*}; cat "$BRK_STORE/fix-$n" 2>/dev/null; exit 0 ;;
+        repos/*/issues/*/comments*) n=${p#*/issues/}; n=${n%%/*}; cat "$BRK_STORE/comments-$n" 2>/dev/null; exit 0 ;;
+        repos/*/issues/[0-9]*)     n=${p#*/issues/}; case "$n" in *[!0-9]*) ;; *) cat "$BRK_STORE/issue-$n" "$BRK_STORE/closed-$n" 2>/dev/null; exit 0 ;; esac ;;
+        repos/*/compare/*)         c=${p#*/compare/}; cat "$BRK_STORE/compare-${c##*...}" 2>/dev/null; exit 0 ;;
+        repos/*/commits/*)         c=${p#*/commits/}; cat "$BRK_STORE/date-$c" 2>/dev/null; exit 0 ;;
+      esac
+    fi
     case "$p" in
       repos/acme/widgets)                    echo main; exit 0 ;;
       */actions/runs\?*)                     [ -n "${BRK_RUNS_FILE:-}" ] && cat "$BRK_RUNS_FILE"; exit 0 ;;
@@ -456,7 +478,10 @@ pc=$(probe "$FX/runs-cancel-on-top" "$WORK/log-a")
 [ "$rca" = 0 ] && [ -n "$pa" ]                       || fail "R the probe must answer on a red workflow" "$(cat "$GH_LOG")"
 [ "$(printf '%s\n' "$pa" | grep -c .)" = 1 ]         || fail "R one red workflow = one row (docs: cancelled over a green is not red)" "$pa"
 ka=${pa%%	*}; ka2=${pa2%%	*}; kb=${pb%%	*}; kc=${pc%%	*}
-case "$ka" in bbbb222-*) ;; *) fail "R the key must start with the red streak's FIRST commit (bbbb222), got [$ka]" "$pa" ;; esac
+case "$ka" in ci-*) ;; *) fail "R the key is the channel (ci-) + the failed step, got [$ka]" "$pa" ;; esac
+case "$ka" in *bbbb222*|*aaaa111*) fail "R no commit in the key (issue #4271), got [$ka]" "$pa" ;; esac
+printf '%s' "$pa" | cut -f2 | grep -qx 'bbbb222bbbb222' || fail "R field 2 is still the red streak's FIRST commit (bbbb222)" "$pa"
+printf '%s' "$pa" | cut -f6 | grep -qx '9002'          || fail "R field 6 is that run's id (the sighting's link)" "$pa"
 [ "$ka" = "$ka2" ]                                   || fail "R two logs that differ only in line numbers must give one key" "$pa"$'\n'"$pa2"
 [ "$ka" != "$kb" ]                                   || fail "R a different error line must give a different key" "$pa"$'\n'"$pb"
 [ "$ka" = "$kc" ]                                    || fail "R a cancelled run on top is no verdict — same key" "$pa"$'\n'"$pc"
@@ -477,7 +502,7 @@ ps_=$(probe "$FX/runs-stale" "$WORK/log-a"); rcs=$?
 kk=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$FX/runs-red" BRK_JOBS_DIR="$FX/jobs" BRK_LOG="$WORK/log-a" \
       bash -c '. "$1/fleet-lib.sh"; fleet_breakage_key acme/widgets' _ "$WORK/bin")
 [ "$kk" = "$ka" ]                                    || fail "R fleet_breakage_key is the probe's first field" "[$kk] vs [$ka]"
-ok "R fingerprint = per-workflow last finished verdict; streak's first commit + its first failed job + error line sans line numbers"
+ok "R fingerprint = per-workflow last finished verdict; ci- + its first failed job + error line sans line numbers, no commit (the streak's first one reported beside)"
 
 # ============================ S: the real 2026-10-07 tokenledger-pg red =========
 # Issue #2175: master went red at c902bf83 (tokenledger run 37611916613: `test`
@@ -518,7 +543,7 @@ s63=$(sp "$FX/runs-2163"); s70=$(sp "$FX/runs-2170"); slt=$(sp "$FX/runs-later")
 [ -n "$s63" ] && [ -n "$s70" ] && [ -n "$slt" ]      || fail "S master WAS red at #2163's and #2170's filing — the probe must say so" "[$s63] [$s70] [$slt]"
 k63=${s63%%	*}; k70=${s70%%	*}; klt=${slt%%	*}
 [ "$k63" = "$k70" ] && [ "$k70" = "$klt" ]           || fail "S #2163, #2170 and a later sighting are ONE breakage" "$s63"$'\n'"$s70"$'\n'"$slt"
-case "$k63" in c902bf8-*) ;; *) fail "S the streak started at c902bf83, got [$k63]" "$s63" ;; esac
+printf '%s' "$s63" | cut -f2 | grep -q '^c902bf8' || fail "S the streak started at c902bf83" "$s63"
 printf '%s' "$s63" | cut -f5 | grep -q 'tokenledger-pg' || fail "S the names carry the failed tokenledger-pg job" "$s63"
 l1=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112763377741")
 l2=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112766631835")
@@ -531,9 +556,13 @@ for t in 'tokenledger-pg 红：hub_settings_legacy 两个测试在 Postgres 上�
 done
 pk=$(printf '%s\n' "$s63" | env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_pick "$1" master' _ '登录页按钮点了没反应，报错 undefined')
 [ -z "$pk" ]                                         || fail "S a text naming neither the base branch nor a red check picks nothing" "[$pk]"
-ok "S the real 2026-10-07 red: #2163 / #2170 / later = one key at c902bf8; both pg logs → one --- FAIL line; both titles pick it"
+ok "S the real 2026-10-07 red: #2163 / #2170 / later = one key (streak at c902bf8); both pg logs → one --- FAIL line; both titles pick it"
 
-# ============================ T: auto — no flag, a red base the text names =====
+# ============================ T: no auto road — only a flag makes a breakage ====
+# Issue #4271 (replacing #2175's auto road): a red base AND a text naming it is
+# still an ordinary issue without --breakage — #4268, a release-gate design
+# ticket whose body said 「红」, was taken as macOS / shard 6's breakage and then
+# swallowed the next filing as 「同一故障」.
 rm -rf "$WORK/conf/global/breakage"; BRK2="$WORK/brk2"; mkdir -p "$BRK2"
 run_auto() {  # run_auto <sfx> <runs file> <args…>
   local sfx="$1" rf="$2"; shift 2
@@ -545,26 +574,85 @@ run_auto() {  # run_auto <sfx> <runs file> <args…>
 }
 : > "$GH_LOG"
 run_auto t1 "$FX/runs-2163" --title 'master 红：tokenledger-pg 上 TestDropLegacyMachineLogins 失败' --from w1
-[ "$(cat "$WORK/rc-t1")" = 0 ]                       || fail "T1 an auto breakage filing must file" "$(cat "$WORK/err-t1")"
-nt=$(ls "$BRK2"/issue-*); nt=${nt##*-}
-grep -q "<!-- fleet:breakage key=$k63 -->" "$BRK2/issue-$nt" || fail "T1 no flag, red base, text names it ⇒ the breakage marker" "$(cat "$BRK2/issue-$nt")"
-grep -q 'auto, issue #2175' "$WORK/err-t1"           || fail "T1 the filer says it went auto" "$(cat "$WORK/err-t1")"
+nt=$(ls "$BRK2"/issue-* 2>/dev/null | head -1); nt=${nt##*-}
+[ "$(cat "$WORK/rc-t1")" = 0 ] && [ -n "$nt" ] && ! grep -q 'fleet:breakage' "$BRK2/issue-$nt" \
+                                                     || fail "T1 no flag: a text saying master is red files an ORDINARY issue (#4271)" "$(cat "$WORK/err-t1" "$BRK2/issue-$nt" 2>/dev/null)"
+grep -q 'actions/runs' "$GH_LOG"                     && fail "T1 no flag: no probe is run" "$(cat "$GH_LOG")"
+run_auto t2 "$FX/runs-2170" --title '发版门槛看复测结果' --body 'cn 这一关认的是旧 stable 上的红判定；master 红的时候也一样' --from orchestrator
+[ "$(cat "$WORK/rc-t2")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t2" \
+                                                     || fail "T2 the #4268 shape (a design ticket mentioning 「红」) files plain" "$(cat "$WORK/err-t2")"
+run_auto t3 "$FX/runs-2170" --title '另一个普通单，也提到 master 红' --from orchestrator
+[ "$(cat "$WORK/rc-t3")" = 0 ] && [ "$(ls "$BRK2"/issue-* | wc -l | tr -d ' ')" = 3 ] \
+                                                     || fail "T3 a later ordinary filing is not swallowed as 「同一故障」" "$(cat "$WORK/err-t3")"
 rm -rf "$WORK/conf/global/breakage"
-run_auto t2 "$FX/runs-2170" --title 'tokenledger-pg 红：hub_settings_legacy 两个测试' --from w2 --spawn
-[ "$(cat "$WORK/rc-t2")" = 5 ]                       || fail "T2 a second auto sighting dedups (exit 5)" "$(cat "$WORK/err-t2")"
-grep -q -- '--no-breakage' "$WORK/err-t2"            || fail "T2 an auto exit 5 names the way out (--no-breakage)" "$(cat "$WORK/err-t2")"
-[ "$(ls "$BRK2"/issue-* | wc -l | tr -d ' ')" = 1 ]  || fail "T2 no second issue"
-run_auto t3 "$FX/runs-2170" --title 'master 红：tokenledger-pg 另一个问题' --no-breakage
-[ "$(cat "$WORK/rc-t3")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t3" \
-                                                     || fail "T3 --no-breakage files plain" "$(cat "$WORK/err-t3")"
-run_auto t4 "$FX/runs-green" --title 'master 红了？其实是绿的' --repo acme/widgets
-[ "$(cat "$WORK/rc-t4")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t4" \
-                                                     || fail "T4 a red word on a green base files plain" "$(cat "$WORK/err-t4")"
-[ -s "$WORK/err-t4" ] && grep -q breakage "$WORK/err-t4" && fail "T4 auto on a green base says nothing" "$(cat "$WORK/err-t4")"
-run_auto t5 "$FX/runs-2170" --title '登录按钮报错 undefined'
-[ "$(cat "$WORK/rc-t5")" = 0 ] && ! grep -q 'fleet:breakage' "$WORK/body-t5" \
-                                                     || fail "T5 a red base the text does not name files plain" "$(cat "$WORK/err-t5")"
-ok "T auto: no flag + red base the text names ⇒ breakage (marker, exit 5 dedup); --no-breakage / green base / unrelated text file plain"
+run_auto t4 "$FX/runs-2163" --title 'master 红：tokenledger-pg' --breakage --from w4
+grep -q "<!-- fleet:breakage key=$k63 -->" "$WORK/body-t4" \
+                                                     || fail "T4 explicit --breakage still fingerprints the red base" "$(cat "$WORK/err-t4" "$WORK/body-t4")"
+grep -q '<!-- fleet:fault sha=c902bf830000 -->' "$WORK/body-t4" \
+                                                     || fail "T4 the probe's streak commit is recorded as the first sighting" "$(cat "$WORK/body-t4")"
+run_auto t5 "$FX/runs-2170" --title 'x' --no-breakage
+[ "$(cat "$WORK/rc-t5")" = 0 ]                       || fail "T5 --no-breakage still parses" "$(cat "$WORK/err-t5")"
+ok "T no auto road: 「master 红」 in an ordinary filing files plain and swallows nothing; only --breakage fingerprints"
+
+# ============================ Y: one issue per fingerprint, across shas (#4271) ===
+# Y1 the same fingerprint red on three new shas: ONE issue, three appended
+#    comments (each naming its sha + link); the same sha again adds nothing.
+# Y2 its fix merged and the issue closed: red again on a sha that CONTAINS the fix
+#    ⇒ the old issue is reopened (exit 5), no new one.
+# Y3 closed, red on an OLDER sha without the fix (a probe on the old stable) ⇒
+#    noted on the closed issue, not reopened, nothing filed.
+# Y4 closed by hand (no commit): a sha newer than the close reopens it.
+rm -rf "$WORK/conf/global/breakage"; BRK3="$WORK/brk3"; mkdir -p "$BRK3"
+run_y() {  # run_y <sfx> <args…>
+  local sfx="$1"; shift
+  rm -rf "$WORK/conf/global/breakage"
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BIND_LOG="$BIND_LOG" BODY="$WORK/body-$sfx" \
+  FLEET_REPO="acme/widgets" FLEET_CONF_DIR="$WORK/conf" BRK_STORE="$BRK3" \
+    bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out-$sfx" 2>"$WORK/err-$sfx"
+  echo $? > "$WORK/rc-$sfx"
+}
+yk=(--title 'macOS 检查红了：x-selftest' --breakage-key macos-x-selftest --from macos-watch)
+run_y y0 "${yk[@]}" --fault-sha 0000000aaaa --fault-link https://github.com/acme/widgets/actions/runs/100
+[ "$(cat "$WORK/rc-y0")" = 0 ]                       || fail "Y0 the first sighting files" "$(cat "$WORK/err-y0")"
+ny=$(ls "$BRK3"/issue-*); ny=${ny##*-}
+for i in 1 2 3; do
+  run_y "y$i" "${yk[@]}" --fault-sha "${i}${i}${i}${i}${i}${i}${i}bbbb" --fault-link "https://github.com/acme/widgets/actions/runs/10$i"
+  [ "$(cat "$WORK/rc-y$i")" = 5 ] && grep -qx "https://github.com/acme/widgets/issues/$ny" "$WORK/out-y$i" \
+                                                     || fail "Y1 sha $i: exit 5 + the first issue's URL" "$(cat "$WORK/err-y$i")"
+done
+run_y y4 "${yk[@]}" --fault-sha 3333333bbbb --fault-link https://github.com/acme/widgets/actions/runs/103
+[ "$(ls "$BRK3"/issue-* | wc -l | tr -d ' ')" = 1 ]  || fail "Y1 three shas red: ONE issue" "$(ls "$BRK3")"
+[ "$(grep -c '同一故障' "$BRK3/comments-$ny")" = 3 ] || fail "Y1 three shas red: exactly 3 appended comments (the repeat adds none)" "$(cat "$BRK3/comments-$ny")"
+for i in 1 2 3; do
+  grep -q "${i}${i}${i}${i}${i}${i}${i}\` 上仍红 — https://github.com/acme/widgets/actions/runs/10$i" "$BRK3/comments-$ny" \
+                                                     || fail "Y1 comment $i names its sha and link" "$(cat "$BRK3/comments-$ny")"
+done
+grep -q 'already on record' "$WORK/err-y4"           || fail "Y1 a sha already on record says so" "$(cat "$WORK/err-y4")"
+ok "Y1 one fingerprint red on 3 shas: 1 issue, 3 comments with sha + link; the same sha again adds nothing"
+
+# Y2: fixed by commit fff…, closed; red on 4444444 which contains it ⇒ reopen.
+mv "$BRK3/issue-$ny" "$BRK3/closed-$ny"; echo 2026-10-14T01:00:00Z > "$BRK3/closed-$ny.at"
+echo fffffff1234 > "$BRK3/fix-$ny"
+echo ahead > "$BRK3/compare-4444444cccc"; echo behind > "$BRK3/compare-5555555dddd"
+run_y y5 "${yk[@]}" --fault-sha 5555555dddd
+[ "$(cat "$WORK/rc-y5")" = 5 ] && [ -f "$BRK3/closed-$ny" ] && [ "$(ls "$BRK3"/issue-* 2>/dev/null | wc -l | tr -d ' ')" = 0 ] \
+                                                     || fail "Y3 red on an older sha without the fix: not reopened, nothing filed" "$(cat "$WORK/err-y5"; ls "$BRK3")"
+grep -q '不含修复 `fffffff`，不重开' "$BRK3/comments-$ny" || fail "Y3 the old-version red is noted on the closed issue" "$(cat "$BRK3/comments-$ny")"
+grep -q 'not reopened' "$WORK/err-y5"                || fail "Y3 stderr says not reopened" "$(cat "$WORK/err-y5")"
+run_y y6 "${yk[@]}" --fault-sha 4444444cccc --fault-link https://github.com/acme/widgets/actions/runs/104
+[ "$(cat "$WORK/rc-y6")" = 5 ] && [ -f "$BRK3/issue-$ny" ] && [ "$(ls "$BRK3"/issue-* | wc -l | tr -d ' ')" = 1 ] \
+                                                     || fail "Y2 red on a sha containing the fix: the OLD issue is reopened, no new one" "$(cat "$WORK/err-y6"; ls "$BRK3")"
+grep -q "issue reopen $ny" "$GH_LOG"                 || fail "Y2 reopened through gh issue reopen" "$(cat "$GH_LOG")"
+grep -q '重开：修复 `fffffff` 之后的版本 `4444444` 复测仍红' "$BRK3/comments-$ny" || fail "Y2 the reopen comment names the fix and the sha" "$(cat "$BRK3/comments-$ny")"
+grep -q ': reopened ' "$WORK/err-y6"                 || fail "Y2 stderr says reopened (macos-watch alerts on it)" "$(cat "$WORK/err-y6")"
+ok "Y2/Y3 closed: red on a version with the fix reopens the old issue; on an older one it is only noted"
+
+# Y4: closed by hand (no fix commit) — a sha committed after the close reopens it.
+mv "$BRK3/issue-$ny" "$BRK3/closed-$ny"; rm -f "$BRK3/fix-$ny"
+echo 2026-10-14T02:00:00Z > "$BRK3/date-6666666eeee"
+run_y y7 "${yk[@]}" --fault-sha 6666666eeee
+[ "$(cat "$WORK/rc-y7")" = 5 ] && [ -f "$BRK3/issue-$ny" ] || fail "Y4 closed by hand, red on a newer sha: reopened" "$(cat "$WORK/err-y7"; ls "$BRK3")"
+ok "Y4 closed by hand: a newer red sha reopens it"
 
 # --- U. a title is the issue's use (issue #2545): a long title, or one opening on a
 # script name, files all the same with ONE hint line; a short use says nothing.

@@ -1505,13 +1505,13 @@ TOOLS = {
                        "provenance marker, the label taxonomy, the default milestone. parent links it as a "
                        "sub-issue; spawn hands it to a new worker (caps + dedup apply; a cap refusal leaves it "
                        "filed); bind makes THIS scratch session its worker (refused from a worker). breakage: the "
-                       "base branch is RED and this is its fix — the filer fingerprints the breakage (the commit it "
-                       "started at · the first failed check · its first error line) and files ONE issue per "
+                       "base branch is RED and this is its fix — the filer fingerprints the breakage (the first failed check · "
+                       "its first error line, never the commit) and files ONE issue per "
                        "fingerprint: one already open gets a 「同一故障」 comment and comes back as exit 5 + its URL, "
-                       "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078). "
-                       "Left out, it is AUTOMATIC: a title/body that says the base branch is red, or names the red "
-                       "check, while it IS red is filed as breakage all the same; breakage: false files it plain "
-                       "(issue #2175). rule: the rule-table row this dispatch follows (fleet-role.py rules) — the "
+                       "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078); "
+                       "a closed one is reopened when the red version contains its fix (issue #4271). "
+                       "Left out, the filing is an ordinary issue whatever its text says (issue #4271: the auto "
+                       "road of #2175 is gone) — say breakage: true for a red base. rule: the rule-table row this dispatch follows (fleet-role.py rules) — the "
                        "body ends 「按规则 N 派发」 + its fleet:rule marker; from the orchestrator a filing with none "
                        "gets 「未注明规则」 (issue #2786). "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
@@ -1528,7 +1528,7 @@ TOOLS = {
             "bind": {"type": "boolean", "description": "Scratch only: become its worker in place."},
             "breakage": {"type": "boolean", "description": "The base branch is red and this issue is its fix: "
                          "fingerprint it and file one issue per breakage (exit 5 + the URL when one is open). "
-                         "Omitted = auto (the text names the red base / check); false = never."},
+                         "Omitted or false = an ordinary issue (no auto road since issue #4271)."},
             "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
             "rule": {"type": "integer", "minimum": 1,

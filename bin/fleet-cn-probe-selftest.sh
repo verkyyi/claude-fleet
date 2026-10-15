@@ -103,7 +103,7 @@ red_out; : > "$WORK/gh.log"
 watch --now
 eq "D: red handled → exit 0 ($OUT)" 0 "$RC"; contains "D: says red" "$OUT" "red	0123456	codex:entry	https://github.com/o/r/issues/91"
 fl=$(cat "$WORK/filer.log")
-contains "D: one breakage per layer" "$fl" "--breakage --breakage-key cn-path-codex --repo o/r"
+contains "D: one breakage per layer" "$fl" "--breakage --breakage-key cn-path-codex --fault-sha $SHA --repo o/r"
 contains "D: titled by the layer" "$fl" "国内真实用户路径不通：卡在 codex"
 g=$(cat "$WORK/gh.log")
 contains "D: failure status" "$g" "-f state=failure -f context=cn path"

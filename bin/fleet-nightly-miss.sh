@@ -214,7 +214,7 @@ ${flist:-（没有读出改动的文件）}"
   if [ "$dry" = 1 ] || [ -z "$repo" ]; then
     url="(would file: $label · $key)"
   else
-    url=$(file_issue --repo "$repo" --breakage-key "$key" --label "$label" --priority p1 \
+    url=$(file_issue --repo "$repo" --breakage-key "$key" --fault-sha "$sha" ${runurl:+--fault-link "$runurl"} --label "$label" --priority p1 \
             --title "$title" --body "$body"); frc=$?
     case "$frc" in
       0|5) url=$(printf '%s\n' "$url" | tail -1) ;;

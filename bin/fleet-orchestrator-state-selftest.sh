@@ -13,6 +13,8 @@
 #   C. a worker pane, a Codex orchestrator, a headless child, FLEET_ORCH_STATE=0:
 #      nothing written, nothing printed;
 #   D. a state older than 2 hours is 只当参考; 30 children still fit 40 lines;
+#   D2. a CronCreate loop's re-arm step says CronList first — a job that survived
+#      the compaction is not created twice (issue #4271);
 #   E. PostToolUse ScheduleWakeup updates the loop in place, stop:true clears it;
 #      a UserPromptSubmit without a [child-report] touches nothing;
 #   F. fleet-compact-resume.sh --brief in the orchestrator window prints the state;
@@ -168,6 +170,18 @@ ctx=$(env FLEET_CONF_DIR="$T/conf" python3 "$S" brief --no-mark)
 has "D: stale state" "$ctx" '只当参考'
 [ "$(printf '%s\n' "$ctx" | wc -l | tr -d ' ')" -le 40 ] || fail "D: a long state broke 40 lines" "$ctx"; ok
 has "D: the loop survives the cut" "$ctx" '重新 arm 循环'
+# A CronCreate loop (no ScheduleWakeup prompt) survives a compaction in-process:
+# the step says CronList first, never re-create blind (issue #4271 — three
+# identical self-patrols on one orchestrator).
+python3 - "$STATE" <<'PY2'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d['loop'] = dict(prompt='', delay=0, next_at=0, rearm='/loop 30m /fleet-orchestrate')
+json.dump(d, open(p, 'w'))
+PY2
+ctx=$(env FLEET_CONF_DIR="$T/conf" python3 "$S" brief --no-mark)
+has "D2: a cron loop is checked with CronList first" "$ctx" 'CronList'
+case "$ctx" in *'调用 ScheduleWakeup'*) fail "D2: a cron loop must not be told to ScheduleWakeup blind" "$ctx" ;; *) ok ;; esac
 
 # --- E. incremental -----------------------------------------------------------
 run "$OP" '{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":600,"prompt":"<<autonomous-loop-dynamic>>"}}' >/dev/null
