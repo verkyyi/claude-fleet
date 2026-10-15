@@ -127,11 +127,45 @@ def swap(link, target):
     os.replace(tmp, link)
 
 
+def prune(root):
+    """Every version dir under <root> but `current` and `.prev`, and any
+    `.seed-partial` left by a killed copy — gone; returns the names removed.
+    Only for an image-owned runtime (#4283): no updater runs there to retire
+    a version, and a person's pod copied 1.3 GB per new image onto its PVC
+    until the disk guard refused new sessions. Run at boot, before anything
+    starts from the runtime, so no process can stand on what goes."""
+    root = Path(root)
+    keep = set()
+    for link in ('current', '.prev'):
+        try:
+            keep.add(os.path.basename(os.readlink(root / link)))
+        except OSError:
+            pass
+    gone = []
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        n = d.name
+        if n in keep or d.is_symlink() or not d.is_dir():
+            continue
+        if SHA.fullmatch(n) or (n.endswith('.seed-partial') and SHA.fullmatch(n[:-len('.seed-partial')])):
+            shutil.rmtree(d, ignore_errors=True)
+            gone.append(n)
+    return gone
+
+
 def seed(seed_root, root, state, force=False):
     """The disk runtime <root> from the image's <seed_root>; returns one word:
     seeded (none on disk) · newer (the image's seq is past the disk's) · kept.
     force (FLEET_NODE_UPDATE_OWNER=image, the self-update off): the image's
-    version, whatever the disk holds — the old image-owned way."""
+    version, whatever the disk holds — the old image-owned way — and only
+    `current` and `.prev` stay on the disk (prune)."""
+    word = _seed(seed_root, root, state, force)
+    if force:
+        for n in prune(root):
+            print('fleet-image: pruned runtime %s' % n[:12], file=sys.stderr)
+    return word
+
+
+def _seed(seed_root, root, state, force):
     seed_root, root = Path(seed_root), Path(root)
     img = release(seed_root / 'current')
     if img is None:

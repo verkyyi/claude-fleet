@@ -6624,6 +6624,20 @@ drill_linux_image_pins_old() {
   WHAT="镜像 A、盘上已切到 B：重启两次仍是 B；更新器切换中不播种；空闲时更新的镜像 C 才播种（.prev=B）；supervisor 退出后从新 current 再起"
 }
 
+# ---- user-pod-runtime-pileup (#4283): a person's pod owns its runtime by the
+# image — no updater retires a version — and each new image's 1.3 GB copy stayed
+# on the PVC until the disk guard refused every session. A boot keeps two.
+drill_user_pod_runtime_pileup() {
+  CAP=15; local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-node-linux-selftest.py" LinuxNode.test_image_owned_runtime_never_piles_up \
+       >"$WORK/linux-pileup.out" 2>&1; then
+    WHY="an image-owned runtime still keeps every version it was ever seeded: $(tail -n 2 "$WORK/linux-pileup.out")"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="镜像管的运行时换五次镜像后盘上只剩 current + .prev；同镜像重启也清掉旧版本和中断的 .seed-partial，不碰非版本目录；更新器管的不删"
+}
+
 # The hub asks a Linux managed machine's root node program to do something
 # other than open / close one fresh login (EPIC #3208 C2, issue #3210). The node
 # half is tokenledger/internal/agent (the two fixed argvs, BAD_ARGS for the rest,
