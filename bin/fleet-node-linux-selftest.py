@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Linux managed lifecycle contracts (#3022), isolated from the live install."""
 import importlib.util
+import io
+from contextlib import redirect_stderr
 import os
 from pathlib import Path
 import tempfile
@@ -1565,6 +1567,40 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
             with self.assertRaisesRegex(ValueError, 'no staged runtime'):
                 m.seed(seed, root, state)
             self.assertEqual(os.readlink(root / 'current'), A)
+
+    def test_image_owned_runtime_never_piles_up(self):
+        """BREAK-IT user-pod-runtime-pileup (#4283): a person's pod
+        (FLEET_NODE_UPDATE_OWNER=image) seeds each new image's 1.3 GB runtime onto
+        its PVC; with no updater to retire them, seven versions filled 9 GB of a
+        20 GB disk and the disk guard refused every new session. An image-owned
+        boot keeps `current` and `.prev` only; a node-owned one leaves the rest to
+        the updater's prune."""
+        m = self.stage_mod()
+        shas = [c * 40 for c in 'abcde']
+        with tempfile.TemporaryDirectory() as d:
+            seed, root, state = Path(d, 'seed'), Path(d, 'runtime'), Path(d, 'state')
+            state.mkdir()
+            for i, sha in enumerate(shas):   # five image rollouts
+                self.fake_release(seed, sha, i + 1)
+                m.swap(seed / 'current', sha)
+                with redirect_stderr(io.StringIO()):
+                    m.seed(seed, root, state, force=True)
+            self.assertEqual((os.readlink(root / 'current'), os.readlink(root / '.prev')), (shas[4], shas[3]))
+            self.assertEqual(sorted(p.name for p in root.iterdir()), sorted(['current', '.prev', shas[3], shas[4]]))
+            # a restart on the same image prunes what an older release left too
+            (root / shas[0]).mkdir()
+            (root / (shas[1] + '.seed-partial')).mkdir()
+            (root / 'notes').mkdir()   # not a version: never ours to remove
+            with redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(m.seed(seed, root, state, force=True), 'kept')
+            self.assertIn('pruned runtime ' + shas[0][:12], err.getvalue())
+            self.assertEqual(sorted(p.name for p in root.iterdir()),
+                             sorted(['current', '.prev', 'notes', shas[3], shas[4]]))
+            self.assertTrue((root / 'current' / 'bin/fleet-node-linux.py').is_file())
+            # node-owned: the updater retires versions, the seed removes nothing
+            (root / shas[0]).mkdir()
+            self.assertEqual(m.seed(seed, root, state), 'kept')
+            self.assertTrue((root / shas[0]).is_dir())
 
     def test_loop_restarts_supervisor_from_new_current(self):
         """A switch's restart request ends the supervisor; the loop starts it again
