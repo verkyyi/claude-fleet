@@ -129,7 +129,9 @@ var routeAccess = map[string]string{
 	// claude-fleet#2519).
 	CredProxyUsagePath: accessSelf, "/v1/node/usage": accessSelf, "/v1/fleet/person-usage": accessUser,
 	control.SSHRelayPath: accessSelf, control.SSHRelayDataPath: accessSelf,
-	control.ChatRelayDataPath: accessSelf,
+	control.ChatRelayDataPath: accessSelf, control.TermDataPath: accessSelf,
+	// The browser terminal (claude-fleet#3838): each person their own.
+	TermConnectPath: accessUser, TermHomePath: accessUser,
 	// The web chat (claude-fleet#3645): each person their own conversation.
 	ChatPathPrefix: accessUser,
 	// The 60-second trial (claude-fleet#3590): the start mints a trial

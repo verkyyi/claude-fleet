@@ -231,6 +231,13 @@ type Config struct {
 	// CCQUOTA_FLEET_CHAT=0 turns it off, and the hello then never offers it.
 	FleetChat bool
 
+	// FleetTerm lets the hub relay a person's browser to a terminal on this
+	// login (claude-fleet#3838): after the hub's terminal grant verifies, the
+	// agent runs `ccquota term-pty` as the login on a PTY of its own. On by
+	// default with Fleet; CCQUOTA_FLEET_TERM=0 turns it off, and the hello then
+	// never offers CapTerm.
+	FleetTerm bool
+
 	// FleetSvc makes this login a service login (claude-fleet#4086): its hello
 	// lists CapSvcRun (when its install carries bin/fleet-svc-local.sh) and the
 	// hub may hand it service run attempts. CCQUOTA_FLEET_SVC=1 in the login's
@@ -322,6 +329,10 @@ type Agent struct {
 	svcLogs svcLogFollows
 	// chatRelays counts the chat relays open on this login (claude-fleet#3644).
 	chatRelays chatSlots
+	// termRelays counts the terminals open on this login, termSpent the relay
+	// ids a grant was already used for (claude-fleet#3838).
+	termRelays relaySlots
+	termSpent  spentGrants
 	// svcRuns are the service run attempts running on this login (claude-fleet#4086).
 	svcRuns svcRunTable
 	// machine is the machine link this agent is a tenant of

@@ -207,6 +207,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	if a.cfg.FleetChat {
 		caps = append(caps, control.CapChat)
 	}
+	if a.cfg.FleetTerm {
+		caps = append(caps, control.CapTerm)
+	}
 	if a.svcRunCapable() {
 		// A service login takes service run attempts (claude-fleet#4086).
 		caps = append(caps, control.CapSvcRun)
@@ -368,6 +371,12 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				// offer CapChat ignores it (claude-fleet#3644).
 				if a.cfg.FleetChat {
 					go a.openChatRelay(ctx, m)
+				}
+			case control.TypeTermOpen:
+				// Same binding again; no CapTerm offered, none served
+				// (claude-fleet#3838).
+				if a.cfg.FleetTerm {
+					go a.openTermRelay(ctx, m)
 				}
 			case control.TypeServiceLog:
 				// One entry's log (claude-fleet#2797): a page, or a

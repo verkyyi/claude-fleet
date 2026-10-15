@@ -810,6 +810,7 @@ def ops_resources(image, hub, cluster, namespace='fleet-workers', provisioner=''
            {'name': 'CCQUOTA_FLEET_COMPUTE', 'value': '0'},
            {'name': 'CCQUOTA_FLEET_SSH_RELAY', 'value': '0'},
            {'name': 'CCQUOTA_FLEET_CHAT', 'value': '0'},
+           {'name': 'CCQUOTA_FLEET_TERM', 'value': '0'},
            {'name': 'CCQUOTA_FLEET_PROVISIONER', 'value': provisioner},
            {'name': 'HOME', 'value': '/work'}]
     # the token down a pipe, never the environment (claude-fleet#1971)

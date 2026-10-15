@@ -99,11 +99,7 @@ func ChatTokenHash(token string) string {
 // SignChatPerson is the hub's half: fpp1.<claims>.<HMAC-SHA256>, keyed with the
 // login's token hash.
 func SignChatPerson(c ChatPerson, tokenHash string) string {
-	raw, _ := json.Marshal(c)
-	body := chatPersonPrefix + "." + base64.RawURLEncoding.EncodeToString(raw)
-	mac := hmac.New(sha256.New, []byte(tokenHash))
-	mac.Write([]byte(body))
-	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signStatement(chatPersonPrefix, c, tokenHash)
 }
 
 // VerifyChatPerson is the agent's half: the statement must verify with this
@@ -111,25 +107,9 @@ func SignChatPerson(c ChatPerson, tokenHash string) string {
 // fault is an error — a statement that does not hold is never "no statement".
 func VerifyChatPerson(s, tokenHash, login, relay string, now time.Time) (*ChatPerson, error) {
 	bad := func(why string) error { return errors.New("X-Fleet-Person: " + why) }
-	if tokenHash == "" {
-		return nil, bad("no key to verify with")
-	}
-	parts := strings.Split(strings.TrimSpace(s), ".")
-	if len(parts) != 3 || parts[0] != chatPersonPrefix {
-		return nil, bad("malformed")
-	}
-	got, err := base64.RawURLEncoding.DecodeString(parts[2])
+	raw, err := verifyStatement(chatPersonPrefix, s, tokenHash)
 	if err != nil {
-		return nil, bad("malformed")
-	}
-	mac := hmac.New(sha256.New, []byte(tokenHash))
-	mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal(mac.Sum(nil), got) {
-		return nil, bad("signature does not verify (not signed for this login)")
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, bad("malformed")
+		return nil, bad(err.Error())
 	}
 	var c ChatPerson
 	if err := json.Unmarshal(raw, &c); err != nil || c.V != 1 || c.Person == "" {
@@ -141,12 +121,60 @@ func VerifyChatPerson(s, tokenHash, login, relay string, now time.Time) (*ChatPe
 	case c.Relay != relay:
 		return nil, bad("for another relay")
 	}
-	iat, exp := time.Unix(c.Iat, 0), time.Unix(c.Exp, 0)
-	switch {
-	case !exp.After(now):
-		return nil, bad("expired")
-	case iat.After(now.Add(chatPersonSkew)), exp.Sub(iat) > ChatPersonMaxTTL, !exp.After(iat):
-		return nil, bad("issued/expires out of range")
+	if why := statementWindow(c.Iat, c.Exp, ChatPersonMaxTTL, now); why != "" {
+		return nil, bad(why)
 	}
 	return &c, nil
+}
+
+// signStatement is one hub statement: <prefix>.<claims>.<HMAC-SHA256>, keyed
+// with a login's token hash. The prefix names the service it is for (fpp1 the
+// chat relay, ftg1 the terminal — claude-fleet#3838): verifyStatement checks it
+// before the signature, so a statement minted for one service never opens the
+// other.
+func signStatement(prefix string, claims any, tokenHash string) string {
+	raw, _ := json.Marshal(claims)
+	body := prefix + "." + base64.RawURLEncoding.EncodeToString(raw)
+	mac := hmac.New(sha256.New, []byte(tokenHash))
+	mac.Write([]byte(body))
+	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// verifyStatement checks s is a prefix statement signed with tokenHash and
+// returns its claims, unread.
+func verifyStatement(prefix, s, tokenHash string) ([]byte, error) {
+	if tokenHash == "" {
+		return nil, errors.New("no key to verify with")
+	}
+	parts := strings.Split(strings.TrimSpace(s), ".")
+	if len(parts) != 3 || parts[0] != prefix {
+		return nil, errors.New("malformed")
+	}
+	got, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return nil, errors.New("malformed")
+	}
+	mac := hmac.New(sha256.New, []byte(tokenHash))
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	if !hmac.Equal(mac.Sum(nil), got) {
+		return nil, errors.New("signature does not verify (not signed for this login)")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, errors.New("malformed")
+	}
+	return raw, nil
+}
+
+// statementWindow is "" when a statement issued at iat and expiring at exp
+// holds now and lives no longer than max, else why not.
+func statementWindow(iat, exp int64, max time.Duration, now time.Time) string {
+	i, e := time.Unix(iat, 0), time.Unix(exp, 0)
+	switch {
+	case !e.After(now):
+		return "expired"
+	case i.After(now.Add(chatPersonSkew)), e.Sub(i) > max, !e.After(i):
+		return "issued/expires out of range"
+	}
+	return ""
 }

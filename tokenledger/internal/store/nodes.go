@@ -94,6 +94,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// Browser terminals' records (claude-fleet#3838).
+	if err := s.ensureFleetTermSessions(); err != nil {
+		return err
+	}
 	// A node's own signing key and the nonces it spent (claude-fleet#3699).
 	if err := s.ensureFleetNodeKeys(); err != nil {
 		return err

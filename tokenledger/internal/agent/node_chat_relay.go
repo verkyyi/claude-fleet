@@ -97,10 +97,46 @@ func (c *chatSlots) give() {
 	c.mu.Unlock()
 }
 
-// chatRelayDataURL is the data stream's ws(s) URL for relay id.
-func chatRelayDataURL(hub, id string) string {
+// relayDataURL is the data stream's ws(s) URL for relay id at path.
+func relayDataURL(hub, path, id string) string {
 	u := nodeURL(hub)
-	return strings.TrimSuffix(u, control.Path) + control.ChatRelayDataPath + "?id=" + url.QueryEscape(id)
+	return strings.TrimSuffix(u, control.Path) + path + "?id=" + url.QueryEscape(id)
+}
+
+// chatRelayDataURL is the chat relay's data stream URL for relay id.
+func chatRelayDataURL(hub, id string) string { return relayDataURL(hub, control.ChatRelayDataPath, id) }
+
+// dialRelayData dials the data half of one relay the hub asked for — the chat
+// relay's and the terminal's (claude-fleet#3838) one door: this agent's own
+// signature plus the relay's secret.
+func (a *Agent) dialRelayData(ctx context.Context, path, id, secret string) (*websocket.Conn, error) {
+	u := relayDataURL(a.cfg.hub(), path, id)
+	ws, _, err := websocket.Dial(ctx, u, &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":  []string{a.authValue(http.MethodGet, u)},
+			"X-Relay-Secret": []string{secret},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	ws.SetReadLimit(1 << 20)
+	return ws, nil
+}
+
+// readRelayHello reads the hub's first frame — a JSON text frame — into v,
+// within chatRelayHelloTimeout.
+func readRelayHello(ctx context.Context, ws *websocket.Conn, v any) error {
+	hctx, cancel := context.WithTimeout(ctx, chatRelayHelloTimeout)
+	defer cancel()
+	typ, raw, err := ws.Read(hctx)
+	if err != nil {
+		return err
+	}
+	if typ != websocket.MessageText || json.Unmarshal(raw, v) != nil {
+		return errors.New("first frame is not the hub's hello")
+	}
+	return nil
 }
 
 // openChatRelay serves one TypeChatRelayOpen, bound to the control channel's ctx.
@@ -123,27 +159,18 @@ func (a *Agent) openChatRelay(ctx context.Context, m control.Message) {
 
 	dctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
 	defer cancel()
-	u := chatRelayDataURL(a.cfg.hub(), ro.RelayID)
-	ws, _, err := websocket.Dial(dctx, u, &websocket.DialOptions{
-		HTTPHeader: http.Header{
-			"Authorization":  []string{a.authValue(http.MethodGet, u)},
-			"X-Relay-Secret": []string{ro.Secret},
-		},
-	})
+	ws, err := a.dialRelayData(dctx, control.ChatRelayDataPath, ro.RelayID, ro.Secret)
 	if err != nil {
 		log.Printf("chat relay %s: dial the hub: %v", short(ro.RelayID), err)
 		return
 	}
 	defer ws.CloseNow()
-	ws.SetReadLimit(1 << 20)
 
 	// The first frame is the hub's statement of who this is for; nothing
 	// reaches the socket before it verifies.
-	hctx, hcancel := context.WithTimeout(ctx, chatRelayHelloTimeout)
-	typ, raw, err := ws.Read(hctx)
-	hcancel()
 	var hello control.ChatRelayHello
-	if err == nil && (typ != websocket.MessageText || json.Unmarshal(raw, &hello) != nil) {
+	err = readRelayHello(ctx, ws, &hello)
+	if err != nil {
 		err = errors.New("first frame is not the X-Fleet-Person hello")
 	}
 	var who *control.ChatPerson

@@ -7789,6 +7789,79 @@ drill_chat_relay_replica_hop() {
   SECS=$(since "$t0")
 }
 
+# term_go <tests> <pkgs> <what-ok> — the browser terminal's Go drills (issue
+# #3838): each test held by name, run when a toolchain and module cache are here.
+term_go() {
+  local tests="$1" pkgs="$2" ok="$3" out rc t
+  for t in $tests; do
+    grep -q "^func $t(" "$ROOT"/tokenledger/internal/api/*_test.go "$ROOT"/tokenledger/internal/agent/*_test.go \
+      "$ROOT"/tokenledger/internal/control/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
+  done
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    # shellcheck disable=SC2086 # pkgs is a word list
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" $pkgs 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT=$ok ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT="这台没有 Go 模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；测试按名核对在" ;;
+      *) WHY="the terminal relay (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20[0-9][0-9]/' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+}
+
+# term-other-person (issue #3838, EPIC #3836 C1): a browser terminal reaches only
+# the signed-in person's own home login — never another person, an admin as
+# themselves or through a view, the operator's door, another origin; and the node
+# opens no terminal on a grant signed wrong, expired, for another relay / login /
+# service, replayed, or naming a path. The open names no target.
+drill_term_other_person() {
+  CAP=180; local t0 out
+  t0=$(now)
+  out=$(awk '/^type TermOpen struct/,/^}/' "$ROOT/tokenledger/internal/control/term_relay.go" | grep -c 'json:"')
+  [ "$out" = 3 ] || { WHY="TermOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
+  grep -q 'viewAsAsked(r) != ""' "$ROOT/tokenledger/internal/api/term_relay.go" 2>/dev/null \
+    || { WHY="termPerson does not refuse a view-as"; return 1; }
+  term_go 'TestTermRelayOtherPersonNeverReachesIt TestTermRelayBadGrantNeverOpensATerminal TestTermRelayReachesOwnWorker TestTermGrant' \
+    './internal/api ./internal/control' \
+    '别人 / 管理员本人 / 以他视角 / 运营门 / 别的 Origin / 两个或没有选择器 / 路径当目标 / 不存在的 worker → 拒，命令 0 次启动；签错 / 过期 / 给别的转发 / 别的登录 / 对话的声明 / 命令当目标 / 重放 → 节点断开，不开终端；本人能开（对照）' \
+    || return 1
+  SECS=$(since "$t0")
+}
+
+# term-relay-orphan (issue #3838): whichever end goes — a half-open browser, a
+# malformed or oversized frame, a revoked sign-in, a browser gone mid-attach, the
+# agent's link — both streams, the PTY and its command go within 30 s, and a
+# terminal never interrupts a chat relay on the same login (nor the reverse).
+drill_term_relay_orphan() {
+  CAP=240; local t0
+  t0=$(now)
+  grep -q 'defer s.termRelays.closeNode(nc)' "$ROOT/tokenledger/internal/api/nodes.go" 2>/dev/null \
+    || { WHY="a dropped control link does not end its terminals (no termRelays.closeNode)"; return 1; }
+  term_go 'TestTermRelayOrphanReleasesEverything TestTermRelayAgentLinkDrop TestTermRelayDoesNotInterruptChat TestTermPtyRunsTheOneCommand TestTermControlFrames' \
+    './internal/api ./internal/agent ./internal/control' \
+    '半开 / 畸形帧 / 超大帧 / 撤销登录 / 接到一半走了 / 控制链路断：30 秒内伪终端和命令进程归零、转发表空；终端饱和、关、发垃圾都不打断同登录的对话，反之亦然' \
+    || return 1
+  SECS=$(since "$t0")
+}
+
+# term-view-kills-session (issue #3838): the browser terminal's tmux view is a
+# grouped `<fleet>@view-web-<id>` that goes with its terminal — never the fleet
+# session, a window, or a worker's process — and nothing new starts.
+# bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_view_kills_session() {
+  CAP=120; local t0 out rc
+  t0=$(now)
+  if ! command -v tmux >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 tmux"; return 0; fi
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="fleet-term-attach-selftest is red: $(printf '%s' "$out" | grep FAIL | head -4 | tr '\n' ' ')"; return 1; }
+  WHAT='真伪终端接上分组视图、挂断：30 秒内视图没了，fleet 会话、窗口数、worker 进程号不变，没新起会话；未知 worker / 路径目标 / 被占视图都拒且不留视图'
+  SECS=$(since "$t0")
+}
+
 # land-race (issue #3602, EPIC #3570 C9): two sessions of a FLEET_LAND=fleet repo
 # land at once through fleet-land.sh — both land, one after the other, the second
 # rebased onto the first and checked again; a red check never moves the base; gh 0 times.
