@@ -4879,8 +4879,10 @@ drill_idle_timeout_starves_merged() {
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
 drill_dispatch_identity_fallback() {
-  CAP=15; local out
+  CAP=15; local out t0
+  t0=$(now)
   out=$(bash "$BIN/fleet-dispatch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
   WHAT='固定 provider 的接受身份不变：拒绝替换 T，也不在入口结果未知后补开本机'
 }
 

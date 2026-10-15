@@ -76,6 +76,15 @@ CSOCK="fleet-drill-$LOGIN"     # the drill's own client server
 cleanup() {
   TMUX='' "$TMUXB" -L "$CSOCK" kill-server >/dev/null 2>&1
   TMUX='' "$TMUXB" -L "$FX" kill-server >/dev/null 2>&1
+  # Keep the panel's pre-Enter selection in CI output when a thin-client leg
+  # fails: a detached client otherwise hides whether the drill selected Quit.
+  if [ "$FAILS" -gt 0 ]; then
+    for f in "$T"/fleet-onboard-drill.*/screen-*panel*.txt; do
+      [ -f "$f" ] || continue
+      printf 'panel diagnostic: %s\n' "$f"
+      cat "$f"
+    done
+  fi
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -425,6 +434,9 @@ python3 '$BIN/fleet-thin.py'; sleep 600"
     [ -s "$LH/.cache/claude-fleet/thin.log" ] && TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill | grep -q 'Claude Code' && return 0
     sleep 0.5; n=$((n - 1))
   done
+  printf 'thin startup diagnostics: %s\n' "$T" >&2
+  tail -n 10 "$LH/.cache/claude-fleet/thin.log" 2>/dev/null >&2
+  TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill 2>/dev/null | tail -n 10 >&2
   return 1
 }
 pkeys() { TMUX='' "$TMUXB" -L "$CSOCK" send-keys -t drill "$@"; }
