@@ -438,12 +438,12 @@ WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --agent=codex --prompt 'seeded on
 grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$NEWWIN_LOG" || fail "O --bg --agent must survive the re-exec and precede the seed" "$(cat "$NEWWIN_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent gemini
-grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O an unknown --agent must be dropped, never embedded" "$(cat "$NEWWIN_LOG")"
-grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "O an unknown --agent still spawns (fleet default)" "$(cat "$NEWWIN_LOG")"
+[ ! -s "$NEWWIN_LOG" ] || fail "O an unknown --agent must open nothing" "$(cat "$NEWWIN_LOG")"
+[ ! -s "$NEWWIN_LOG" ] || fail "O unknown provider opened a window" "$(cat "$NEWWIN_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
-grep -q -- '--agent' "$NEWWIN_LOG"         && fail "O a default spawn must carry NO --agent (byte-for-byte unchanged)" "$(cat "$NEWWIN_LOG")"
-ok "O --agent codex reaches the launcher (cold path, survives --bg); unknown/default carry none (#547)"
+grep -q -- '--agent claude' "$NEWWIN_LOG" || fail "O default provider is frozen" "$(cat "$NEWWIN_LOG")"
+ok "O --agent codex reaches the launcher (cold path, survives --bg); unknown refused; default frozen (#4392)"
 
 # ==================== P: names prefill an unsent draft =======================
 check_draft() {

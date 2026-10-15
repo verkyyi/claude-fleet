@@ -54,8 +54,10 @@ type placeRequest struct {
 	// Node is "auto" (default) or one roster machine.
 	Node string `json:"node"`
 	// OriginWID is the worker that asked for this one, if any.
-	OriginWID string `json:"origin_wid"`
-	Agent     string `json:"agent"`
+	OriginWID   string          `json:"origin_wid"`
+	Agent       string          `json:"agent"`
+	CodingAgent string          `json:"coding_agent"`
+	Dispatch    *dispatchChoice `json:"dispatch"`
 	// Reap is when the session may be closed on its own (claude-fleet#1902).
 	Reap string `json:"reap"`
 	// AccountClass is the kind of subscription the session must run on
@@ -131,6 +133,21 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "the body must be one JSON object")
 		return
+	}
+	if req.Idem == "" && req.CodingAgent != "" {
+		req.Idem = "place-" + newOperationID()
+	}
+	if req.Dispatch != nil && req.Idem == "" {
+		req.Idem = req.Dispatch.RequestID
+	}
+	d, derr := resolveDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), req.Idem)
+	if derr != nil {
+		httpError(w, http.StatusBadRequest, errorObject(derr)["message"])
+		return
+	}
+	if d != nil {
+		req.Dispatch = d
+		req.Agent = d.ResolvedAgent
 	}
 	if req.Node == "" {
 		req.Node = "auto"
@@ -231,6 +248,37 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		p.Worker = c
 	}
 
+	if req.Dispatch != nil {
+		input := map[string]any{"repo": req.Repo, "node": req.Node, "idempotency_key": req.Dispatch.RequestID,
+			"agent": req.Agent, "dispatch": req.Dispatch}
+		if scratch {
+			input["kind"] = "scratch"
+			if req.Name != "" {
+				input["name"] = req.Name
+			}
+		} else {
+			input["issue"] = float64(req.Issue)
+		}
+		if req.OriginWID != "" {
+			input["origin_wid"] = req.OriginWID
+		}
+		if req.Reap != "" {
+			input["reap"] = req.Reap
+		}
+		if req.AccountClass != "" {
+			input["account_class"] = req.AccountClass
+		}
+		accepted, _, e := parseWrite("worker_start", input)
+		if e == nil {
+			e = s.acceptDispatch(p, &accepted)
+		}
+		if e != nil {
+			httpError(w, http.StatusConflict, errorObject(e)["message"])
+			return
+		}
+		req.Dispatch = accepted.params["dispatch"].(*dispatchChoice)
+		req.Idem = req.Dispatch.RequestID
+	}
 	pl, err := s.pickNode(p, req.Repo, req.Node, now)
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
@@ -239,7 +287,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	}
 	if pl.FleetID == fleetID {
 		s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
-		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl})
+		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl, "dispatch": req.Dispatch})
 		return
 	}
 
@@ -286,7 +334,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	// goes now: done=true means the answer was written (LOCAL, or every
 	// machine declined); false with pl moved means try pl.
 	next := func(a placeAttempt) (done bool, ok bool) {
-		if req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
+		if req.Dispatch != nil || req.Node != "auto" || wait <= 0 || time.Until(deadline) < placeRetryMin(wait) {
 			return false, false
 		}
 		attempts = append(attempts, a)
@@ -306,7 +354,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		pl = npl
 		if pl.FleetID == fleetID {
 			s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine)+" after "+strconv.Itoa(len(attempts)), time.Now())
-			writeJSON(w, http.StatusOK, withAttempts(map[string]any{"local": true, "placement": pl}))
+			writeJSON(w, http.StatusOK, withAttempts(map[string]any{"local": true, "placement": pl, "dispatch": req.Dispatch}))
 			return true, true
 		}
 		return false, true
@@ -362,6 +410,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Agent != "" {
 			args["agent"] = req.Agent
+		}
+		if req.Dispatch != nil {
+			args["dispatch"] = req.Dispatch
 		}
 		if req.OriginWID != "" {
 			args["origin_wid"] = req.OriginWID

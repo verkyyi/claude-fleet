@@ -490,6 +490,12 @@ case "$mode" in
     FLEET_START_NOTE='（单子和分支稍后会补给你，先开始。）'
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
+    case "$agent" in claude|codex) ;; *) printf 'start: unknown coding agent\n' >&2; exit 2 ;; esac
+    if [ -n "${FLEET_DISPATCH:-}" ]; then
+      FLEET_DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$agent" --accepted "$FLEET_DISPATCH") || exit 2
+      export FLEET_DISPATCH
+    fi
+
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
     # or bare name; an unknown/ambiguous one is refused (6) before any gate runs.
     # No $5 → the fleet's only repo (fleet_target_repo, issue #1938) — a fleet

@@ -127,6 +127,11 @@ set -uo pipefail
 # and input draft; --prompt <t> / --prompt=<t> is the optional submitted seed;
 # --bg backgrounds the slow half of the spawn (the dash ⌃s / typed-↵ path — see
 # below); the lone positional is the headless <fleet-session>.
+set_agent() {
+  case "$1" in claude|codex) ;; *) printf 'dash-raw-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2 ;; esac
+  [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
+  AGENT=$1
+}
 NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -154,8 +159,8 @@ while [ "$#" -gt 0 ]; do
     # validated below so only a known token is embedded in a command string. An
     # explicit agent always takes the COLD path — the warm pool holds windows
     # launched under the fleet default, which may be the other agent.
-    --agent)       AGENT="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
-    --agent=*)     AGENT="${1#--agent=}"; shift ;;
+    --agent)       set_agent "${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --agent=*)     set_agent "${1#--agent=}"; shift ;;
     # --as <name> (issue #3122, EPIC #3111 C11): the standard agent file this
     # session starts as — `claude --agent <name>`, found the way Claude Code finds
     # it (the checkout's .claude/agents > ~/.claude/agents > a plugin); named but
@@ -268,11 +273,13 @@ case "$AS_ARG" in
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
   *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
 esac
-case "$AGENT" in
-  ''|claude|codex) : ;;
-  *) printf 'dash-raw-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
-     tmux display-message "raw: unknown --agent $AGENT — using the fleet default" 2>/dev/null; AGENT="" ;;
-esac
+BIN="$(cd "$(dirname "$0")" && pwd)"
+EXPLICIT_AGENT=$AGENT
+DISPATCH="${FLEET_DISPATCH:-}"
+if [ -n "$DISPATCH" ]; then
+  DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
+  AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # The reap policy, canonical or refused before anything opens (issue #1902).
@@ -408,7 +415,7 @@ fi
 
 MAIN="${FLEET_MAIN:-}"
 # The agent file it starts as (issue #3122), looked for from where it will run.
-AS_KV=''
+AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   _asdir=$HOME; [ "$NOREPO" != 1 ] && [ -n "$MAIN" ] && _asdir=$MAIN
   if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && [ "$AS_SOFT" != 1 ]; then
@@ -430,8 +437,13 @@ if [ -n "$AS_KV" ]; then
     REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$(as_kv reap)") \
       || { refuse "raw: $(as_kv file): fleet.reap is not a reap policy"; exit 1; }
   fi
-  [ -z "$AGENT" ] && case "$(as_kv agent)" in claude|codex) AGENT=$(as_kv agent) ;; esac
+  TEMPLATE_AGENT=$(as_kv agent)
+  [ -n "$AGENT" ] || AGENT=$TEMPLATE_AGENT
 fi
+DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
+  --template "$TEMPLATE_AGENT" --default "${FLEET_AGENT:-}" --accepted "$DISPATCH") || exit 2
+AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+
 if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 fi
@@ -491,7 +503,8 @@ if [ "$BG" = 1 ]; then
     '') ;; on) owarg="$owarg --desk" ;; off) owarg="$owarg --no-desk" ;;
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
   esac
-  fleet_bg "FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
+  fleet_bg "FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -535,7 +548,14 @@ if [ "$PLACING" = 1 ]; then
     _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
   fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
-  place_out=$(fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+  _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
+  place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
+  if [ -s "$_dispatch_result" ]; then
+    DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
+    TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
+  fi
+  rm -f "$_dispatch_result"
+
   _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
   # Issue #1610: machines that declined first (the hub tried the next one).
   case "$_why" in *$'\t'after\ *)
@@ -868,6 +888,7 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 # fleet-cleanup-idle.py reads it for such a session as "15 minutes after its agent
 # EXITED": a turn that merely ended is the session waiting for you, not over.
 [ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
+TM set-window-option -t "$win" @dispatch "$DISPATCH" 2>/dev/null
 [ -n "$TASK_REF" ] && TM set-window-option -t "$win" @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 # … and a coordinator's record names this session (issue #3330; the hub fills its
 # own starts' from the answer, no hub ⇒ fleet-task-record exits 3).

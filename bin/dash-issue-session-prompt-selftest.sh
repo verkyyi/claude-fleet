@@ -173,11 +173,11 @@ ok "C the collapsed seed carries none of the retired paragraph pieces or skills"
 grep -qF -- "fleet-session-wrap.sh' --agent codex \"\$(cat '" "$WORK/newwin" \
   || fail "D --agent codex must sit between the launcher and the seed in the new-window command" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234
-grep -q -- '--agent' "$WORK/newwin" && fail "D a default spawn must carry NO --agent" "$(cat "$WORK/newwin")"
+grep -q -- '--agent claude' "$WORK/newwin" || fail "D a default spawn freezes Claude" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; run_spawn 234 --agent=gemini
-grep -q -- '--agent' "$WORK/newwin" && fail "D an unknown --agent must be dropped, never embedded" "$(cat "$WORK/newwin")"
+[ ! -s "$WORK/newwin" ] || fail "D an unknown --agent must open nothing" "$(cat "$WORK/newwin")"
 grep -q 'unknown --agent' "$WORK/spawn.err" || fail "D an unknown --agent should be reported on stderr" "$(cat "$WORK/spawn.err")"
-ok "D --agent codex rides the launch command; default/unknown carry none (#547)"
+ok "D --agent codex rides the launch command; default is frozen; unknown is refused (#4392)"
 
 # ===== SEED R: a PARKED session's return (--resume + --seed-file, issue #2671) ===
 # The same conversation (`--resume <sid>` between the launcher and the seed) and

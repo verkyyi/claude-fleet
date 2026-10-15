@@ -123,6 +123,9 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 		if in.State != "" || in.Issue != "" || in.WorkerID != "" || in.Key != "" || in.Note != "" || in.Asked != "" || in.Parked != "" || in.PR != "" || in.Rule != "" || len(in.Clear) != 0 {
 			return "authoritative tasks use ticket_ref and mutation, not legacy updates"
 		}
+		if in.Mutation == nil && (!codingAgentOK(in.ResolvedAgent) || (in.RequestedAgent != "default" && (!codingAgentOK(in.RequestedAgent) || in.RequestedAgent != in.ResolvedAgent))) {
+			return "invalid or contradictory requested/resolved coding agent"
+		}
 		if in.Mutation != nil {
 			if in.Title != "" || in.RequestedAgent != "" || in.ResolvedAgent != "" || in.TicketRef != "" || in.ParentTask != "" || in.ParentSession != "" || len(in.RequestPayload) != 0 || in.Repo != "" || in.Token != "" || in.Via != "" {
 				return "mutation cannot amend the accepted request"

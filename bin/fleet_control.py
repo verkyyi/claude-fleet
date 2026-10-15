@@ -112,7 +112,7 @@ class Control:
             env["FLEET_TIMING_READY_SECS"] = os.environ["FLEET_TIMING_READY_SECS"]
         return env
 
-    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False):
+    def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None):
         env = self.environment()
         env.pop("FLEET_CONTROL_DRAFT", None)
         if draft:
@@ -121,6 +121,8 @@ class Control:
             # The operation a start belongs to (issue #2235): its detached
             # paperwork (fleet-start-backfill.sh) stamps t_filed / t_bound on it.
             env["FLEET_CONTROL_OP"] = op_id
+        if dispatch:
+            env["FLEET_DISPATCH"] = json.dumps(dispatch, separators=(",", ":"))
         if task:
             # The hub's task record a start belongs to (issue #3325), validated
             # (T<n>): the window is stamped @task, a no-repo one files no desk
@@ -963,7 +965,7 @@ class Control:
                                                      params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
-                                                     timeout=180, task=params.get("task"), draft="draft" in params)
+                                                     timeout=180, dispatch=params.get("dispatch"), task=params.get("task"), draft="draft" in params)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` for the issue and the title (validated above) where
@@ -974,7 +976,7 @@ class Control:
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
-                                                     timeout=240, op_id=op_id, task=params.get("task"))
+                                                     timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"))
                     first = output.decode("utf-8", "replace").split("\n", 1)[0].strip()
                     if not code and first.startswith("warm\t"):
                         # 发出即开 (issue #2234, EPIC #2230 C4): answered from the warm
@@ -991,7 +993,7 @@ class Control:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), *([""] + reap_arg if reap_arg else []),
-                                                     timeout=180)
+                                                     timeout=180, task=params.get("task"), dispatch=params.get("dispatch"))
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     # 7 = a new issue (issue #1953) that could not be filed: nothing was opened.

@@ -133,7 +133,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' rule='' spawn=0 reap='' agent='' draft='' pr_note=''
+  title='' bodyf='' repo='' rule='' spawn=0 reap='' agent='' as_agent='' draft='' pr_note=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -142,7 +142,11 @@ if [ "$cmd" = dispatch ]; then
       --rule) rule="${2:-}"; shift ;;
       --spawn) spawn=1 ;;
       --reap) reap="${2:-}"; shift ;;
-      --agent) agent="${2:-}"; shift ;;
+      --agent)
+        [ -z "$agent" ] || [ "$agent" = "${2:-}" ] || die 2 "contradictory --agent values"
+        case "${2:-}" in claude|codex) agent=$2 ;; *) die 2 "--agent must be claude or codex; use --as for an agent definition" ;; esac
+        shift ;;
+      --as) as_agent="${2:-}"; shift ;;
       --draft) draft=--draft ;;   # issue #3715: a draft-only development task
       --pr-note) pr_note="${2:-}"; draft=--draft; shift ;;
       *) usage ;;
@@ -156,13 +160,43 @@ if [ "$cmd" = dispatch ]; then
   # One token per (caller, words): the orchestrator asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
+  # Resolve the definition's provider before acceptance, independently of its
+  # tools/body. Explicit --agent wins. Every retry retains the full input.
+  template=''
+  if [ -n "$as_agent" ]; then
+    kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}") || exit 2
+    template=$(printf '%s\n' "$kv" | awk -F'\t' '$1 == "agent" {print $2; exit}')
+  fi
+  dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   if applicable; then
-    t=$(bash "$0" new --title "$title" --token "$tok" --via 编排 ${repo:+--repo "$repo"} ${rule:+--rule "$rule"}) || exit $?
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rule" "$draft" "$pr_note" <<'JSON'
+import json,sys
+d,title,body,repo,reap,template,rule,draft,note=sys.argv[1:]
+d=json.loads(d)
+print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo,
+    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
+    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
+JSON
+    ) || exit 2
+    accepted=$(call POST /v1/node/tasks "$payload") || exit 1
+    t=$(printf '%s' "$accepted" | field id)
+    is_tref "$t" || die 1 "the hub's answer names no accepted record"
+    dispatch=$(python3 - "$dispatch" "$accepted" <<'JSON'
+import json,sys
+from pathlib import Path
+d,t=map(json.loads,sys.argv[1:])
+if t.get("authority_version") != 1 or t.get("requested_agent") != d["requested_agent"] or t.get("resolved_agent") != d["resolved_agent"]:
+    sys.exit("hub did not accept the requested provider contract")
+d.update(task=t["id"],generation=t["generation"],attempt_id=t["attempt_id"])
+print(json.dumps(d,separators=(",", ":")))
+JSON
+    ) || exit 1
     printf '%s\n' "$t"
   elif [ -z "$repo" ]; then
     die 3 "no hub here: a task with no repo has nowhere to be recorded — file an issue instead (file_issue)"
   fi
+  export FLEET_DISPATCH="$dispatch"
   if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
     sp=''; [ "$spawn" = 1 ] && sp=--spawn
     exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
@@ -172,7 +206,7 @@ if [ "$cmd" = dispatch ]; then
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
   printf '%s\n' "${body:-$title}" > "$pf"
   exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
-    ${agent:+--as "$agent"} "--prompt-file=$pf"
+    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} "--prompt-file=$pf"
 fi
 
 applicable || exit 3

@@ -75,10 +75,10 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `children` | — | `fleet-children.sh --json` | the script's |
 | `repos` | — | `fleet-repo.sh list` (`structuredContent.repos` = the parsed `owner/name` list) | the script's |
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
-| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
+| `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
 | `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — a task record waits on its issue's worker; one with no issue answers NO-WORKER naming its session | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
-| `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--agent A] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
+| `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
 ### 报 问 记 合 (issue #1808, EPIC #1813 C6)
@@ -214,6 +214,32 @@ The definition lives once, in **`conf/mcp-worker.json`**:
 - **Off** — `FLEET_MCP=0`, a caller's own `--mcp-config` / `--strict-mcp-config`
   (Claude), or no `conf/mcp-worker.json` / `fleet-mcp.py` beside `bin/`: nothing is
   added and the argv is byte for byte what it was.
+
+### Coding agent selection
+
+`spawn` and `task` accept `coding_agent: "codex" | "claude"` for the
+executable. Existing `agent` still names an agent definition (`--as`); it is
+not a provider alias. For example, `agent: "reviewer", coding_agent: "codex"`
+keeps the reviewer definition and explicitly chooses Codex. CLI `--agent`
+means provider; `fleet-task-record.sh dispatch --as` selects a definition.
+Unknown providers and contradictory repeated explicit choices fail before work
+is opened. No picker or tool availability changes are part of this contract.
+
+A local start resolves explicit provider, definition hint, issue label, fleet
+configuration, then built-in Claude, in that order. The client placement API
+has no local repository configuration, so its unspecified provider resolves to
+Claude. The request records the source. A `--title` fast path may use cached
+labels only before acceptance. Its accepted `dispatch` envelope carries
+`request_id`, `requested_agent`, `resolved_agent`, `agent_source` and, with hub
+acceptance, `task`, `generation`, `attempt_id`. Detached re-entry and remote
+placement preserve it, including when labels or defaults change. It is data,
+not an executable-provider receipt.
+
+New provider-bearing placement requests use C1's additive authoritative task
+records and existing operation journal. Legacy requests remain readable; an
+existing legacy T record is never implicitly adopted. An unsent draft is not
+accepted work. Actual process verification and lifecycle receipts belong to
+C3; source merge is not evidence of deployment or live acceptance.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 
