@@ -8,13 +8,21 @@ import json
 import pathlib
 import sys
 sys.path.insert(0, sys.argv[1])
-from fleet_dispatch import resolve
+from fleet_dispatch import resolve, placement_check
 from fleet_hub_common import validate_write, Fault
 import fleet_control
 
 explicit = resolve(["codex"], template="claude", label="claude", default="claude", request_id="fixture-1")
 accepted = dict(explicit, task="T17", generation=3, attempt_id="task:T17:g3")
 assert resolve(["codex"], template="claude", label="claude", default="claude", accepted=accepted) == accepted
+placement_check(accepted, "T17", 0)
+for envelope, task, code in [(explicit,"T9",0), (accepted,"T9",0), (accepted,"T17",1), (accepted,"T17",6)]:
+    try:
+        placement_check(envelope, task, code)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("placement replaced task identity or fell back after uncertain send")
 for choices in (["unknown"], ["codex", "claude"]):
     try:
         resolve(choices)

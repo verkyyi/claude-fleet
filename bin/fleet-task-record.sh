@@ -157,6 +157,12 @@ if [ "$cmd" = dispatch ]; then
   [ -z "$draft" ] || [ -n "$repo" ] || die 2 "--draft needs --repo: a draft PR lives in a repo"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
+  rmark=''
+  if [ -n "$rule" ]; then
+    case "$rule" in *[!0-9]*) die 2 "--rule must be a rule number (got $rule)" ;; esac
+    rmark=$(python3 "$BIN/fleet-role.py" rules --mark "$rule" 2>/dev/null | sed -n 's/.*<!-- fleet:rule \(n=[0-9]* v=[0-9a-f]*\) -->.*/\1/p')
+    [ -n "$rmark" ] || die 2 "--rule $rule: no such rule in the table (fleet-role.py rules)"
+  fi
   # One token per (caller, words): the orchestrator asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
@@ -170,11 +176,11 @@ if [ "$cmd" = dispatch ]; then
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   if applicable; then
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rule" "$draft" "$pr_note" <<'JSON'
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" <<'JSON'
 import json,sys
 d,title,body,repo,reap,template,rule,draft,note=sys.argv[1:]
 d=json.loads(d)
-print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo,
+print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo, rule=rule,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
 JSON

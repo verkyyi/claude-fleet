@@ -548,6 +548,7 @@ if [ "$PLACING" = 1 ]; then
     _pw=$(fleet_key_wid "$SESS" "$ORIGIN") || _pw=''   # by identity (#1646)
   fi
   _prepo="${REPO_ARG:-$(fleet_norm_repo "${FLEET_REPO:-}")}"
+  python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
   _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "$_pw" "$AGENT" '' '' "$NAME" "$REAP"); place_rc=$?
   if [ -s "$_dispatch_result" ]; then
@@ -585,6 +586,7 @@ if [ "$PLACING" = 1 ]; then
     0:LOCAL\ *)
       printf 'dash-raw-session: scratch 开在本机 %s — %s\n' "${_pv#LOCAL }" "$_why" >&2 ;;
     *)
+      python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit 1
       if [ "$NODE" != auto ]; then
         refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
         [ "$place_rc" = 4 ] && exit 2; exit 1

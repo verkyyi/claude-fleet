@@ -238,7 +238,12 @@ not an executable-provider receipt.
 New provider-bearing placement requests use C1's additive authoritative task
 records and existing operation journal. Legacy requests remain readable; an
 existing legacy T record is never implicitly adopted. An unsent draft is not
-accepted work. Actual process verification and lifecycle receipts belong to
+accepted work. Placement of an existing T requires its matching accepted
+envelope; a failed or uncertain placement cannot fall back to a new local
+start. Hub-off local starts still freeze their provider without inventing a
+hub task. The operation journal records the accepted task and generation;
+it does not claim a lifecycle transition or populate execution receipts.
+Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)

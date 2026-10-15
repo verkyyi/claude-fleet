@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -75,5 +76,61 @@ func TestClientCodingAgentKeepsAcceptedChoice(t *testing.T) {
 	}
 	if target.count() != 1 {
 		t.Fatal("contradiction opened work")
+	}
+}
+
+func TestCodingAgentRequiresCompleteEnvelope(t *testing.T) {
+	for _, raw := range []map[string]any{
+		{"request_id": "k", "requested_agent": "codex", "resolved_agent": "codex", "agent_source": "explicit"},
+		{"version": 1, "request_id": "k", "requested_agent": "default", "resolved_agent": "codex", "agent_source": "explicit"},
+	} {
+		if _, err := resolveDispatch("codex", "", raw, "k"); err == nil {
+			t.Fatalf("incomplete or contradictory envelope accepted: %v", raw)
+		}
+	}
+}
+
+func TestCodingAgentDoesNotAdoptLegacyTask(t *testing.T) {
+	h, first, second, _, _ := twoNodes(t)
+	legacy, err := h.srv.Store.CreateFleetTask(store.FleetTask{Owner: "fixture", Title: "legacy"}, "legacy-choice", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "repo": writeRepo,
+		"task": legacy.Ref, "coding_agent": "codex", "idempotency_key": "no-adoption"}, 400)
+	got, err := h.srv.Store.FleetTask(legacy.ID)
+	if err != nil || got.AuthorityVersion != 0 || got.Title != legacy.Title || first.count()+second.count() != 0 {
+		t.Fatalf("legacy task changed or work opened: %+v %v", got, err)
+	}
+}
+
+func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		t.Run(map[bool]string{false: "remote", true: "local"}[local], func(t *testing.T) {
+			h, first, target, f5, f4 := twoNodes(t)
+			target.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
+			tok, fid := h.tokens["mac-d"], f5.FleetID
+			if local {
+				tok, fid = h.tokens["mac-c"], f4.FleetID
+			}
+			input := map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": fid,
+				"coding_agent": "codex", "idempotency_key": "node-provider"}
+			status, out := placeCall(t, h, tok, input)
+			if status != 200 || out["local"] != local {
+				t.Fatalf("placement: %d %v", status, out)
+			}
+			d := out["dispatch"].(map[string]any)
+			if d["resolved_agent"] != "codex" || d["task"] == "" || d["generation"] != float64(1) {
+				t.Fatalf("identity lost: %v", d)
+			}
+			if local {
+				if first.count()+target.count() != 0 {
+					t.Fatal("local placement sent work")
+				}
+			} else if target.writes[0]["params"].(map[string]any)["task"] != d["task"] {
+				t.Fatal("remote task differs")
+			}
+			t.Logf("fixture node local=%t accepted envelope=%v", local, d)
+		})
 	}
 }

@@ -30,6 +30,8 @@ def validate(value):
         raise ValueError("invalid requested coding agent")
     if value.get("agent_source") not in SOURCES:
         raise ValueError("invalid coding agent source")
+    if value["requested_agent"] == "default" and value["agent_source"] == "explicit":
+        raise ValueError("default choice cannot have explicit provenance")
     if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value.get("request_id", "")):
         raise ValueError("dispatch needs a request idempotency key")
     if value["requested_agent"] != "default" and (
@@ -66,6 +68,15 @@ def resolve(explicit=(), template="", label="", default="", accepted=None, reque
                          resolved_agent=chosen, agent_source=source))
 
 
+def placement_check(value, task, code):
+    """Do not replace an existing record or open locally after an uncertain send."""
+    validate(value)
+    if task and value.get("task") != task:
+        raise ValueError("existing task requires its accepted dispatch; implicit adoption is refused")
+    if code not in (0, 10):
+        raise ValueError("dispatch placement did not succeed; no local fallback")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--agent", action="append", default=[])
@@ -74,10 +85,14 @@ def main():
     p.add_argument("--default", default="")
     p.add_argument("--accepted", default="")
     p.add_argument("--request-id", default="")
+    p.add_argument("--placement-code", type=int)
+    p.add_argument("--task", default="")
     a = p.parse_args()
     try:
         value = resolve(a.agent, a.template, a.label, a.default,
                         json.loads(a.accepted) if a.accepted else None, a.request_id)
+        if a.placement_code is not None:
+            placement_check(value, a.task, a.placement_code)
     except (ValueError, TypeError) as e:
         p.error(str(e))
     print(json.dumps(value, separators=(",", ":")))

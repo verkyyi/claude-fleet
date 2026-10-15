@@ -607,6 +607,7 @@ if [ "$PLACING" = 1 ]; then
         _pre_asg=0
       fi
     fi
+    python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
     place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
@@ -672,6 +673,7 @@ if [ "$PLACING" = 1 ]; then
         [ -n "$_after" ] || exit "$RC_INFRA"
         exit "$RC_CAP" ;;
       *)
+        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
         if [ "$NODE" != auto ]; then
           refuse "#$num 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
           [ "$place_rc" = 4 ] && exit "$RC_CAP"; exit "$RC_INFRA"

@@ -37,6 +37,7 @@ func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoic
 	}
 	d := &dispatchChoice{Version: 1, RequestID: key, RequestedAgent: coding, ResolvedAgent: coding, AgentSource: "explicit"}
 	if raw != nil {
+		d = &dispatchChoice{}
 		b, err := json.Marshal(raw)
 		decoder := json.NewDecoder(bytes.NewReader(b))
 		decoder.DisallowUnknownFields()
@@ -54,6 +55,7 @@ func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoic
 		return bad()
 	}
 	if d.RequestedAgent != "default" && (d.RequestedAgent != d.ResolvedAgent || d.AgentSource != "explicit") ||
+		d.RequestedAgent == "default" && d.AgentSource == "explicit" ||
 		coding != "" && coding != d.ResolvedAgent || legacy != "" && legacy != d.ResolvedAgent {
 		return bad()
 	}
@@ -83,8 +85,11 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 	}
 	var t store.FleetTask
 	if d.Task != "" {
+		if supplied := asString(w.params["task"]); supplied != "" && supplied != d.Task {
+			return fault("INVALID_ARGUMENT", "task differs from accepted dispatch")
+		}
 		t, err = s.Store.FleetTask(store.ParseTaskRef(d.Task))
-		if err != nil || t.Owner != p.Actor || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
+		if err != nil || t.Owner != p.Actor || t.Repo != w.repo || t.AuthorityVersion != 1 || t.Generation != d.Generation ||
 			t.RequestedAgent != d.RequestedAgent || t.ResolvedAgent != d.ResolvedAgent || t.AttemptID != d.AttemptID {
 			return fault("INVALID_STATE", "accepted dispatch task owner, generation or provider does not match")
 		}
