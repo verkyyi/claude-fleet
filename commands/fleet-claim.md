@@ -341,10 +341,9 @@ override them):
        `mcp__fleet-orch__await` with its number where the dispatch group is
        mounted, else `mcp__fleet__gh` (`kind: issue`) on it between
        `mcp__fleet__pr_verdict` `wait: true` reads — then re-read your own verdict. Never
-       a second issue, never a second fixer. (Forget the flag and the filer
-       still catches it when your title names the red base or check — issue
-       #2175 — but say `breakage: true`; `breakage: false` is for a different
-       problem that merely mentions the red.)
+       a second issue, never a second fixer. The flag is the only road (issue
+       #4271): a filing without `breakage: true` is an ordinary issue whatever
+       its text says about red.
      - **`BLOCKED`** → branch protection (a required review) refuses the merge.
        That is a real gate, not a hedge — you can't and shouldn't force it: say so
        on the issue (blocked, below) and stop.

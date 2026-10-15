@@ -26,16 +26,25 @@
 #      「同一故障，来自 …」 comment on it, its URL on stdout, exit 5, no spawn,
 #      no bind. On 2026-10-07 three sessions filed #2039 #2040 #2041 and three
 #      fixes inside 16 seconds for one duplicate route. --breakage-key K takes a
-#      key already computed (a selftest, a caller holding the probe's answer).
-#      A base that is not red files an ordinary issue and says so.
-#      AUTO (issue #2175): with neither flag, a filing whose title/body has a red
-#      word (红 失败 报错 · red fail broken …) probes the base branch, and when it
-#      IS red and the text names the red check (a workflow, failed job or Go test
-#      of it) or says the base branch is red, the filing runs as --breakage —
-#      fleet_breakage_pick. On 2026-10-07 three sessions filed #2159 #2163 #2170
-#      for one red tokenledger-pg without the flag: a rule the caller has to
-#      remember is no rule. --no-breakage files plain; FLEET_BREAKAGE_AUTO=0 turns
-#      the auto road off. A text with no red word reads nothing.
+#      key already computed — every automatic filer (a watch, a probe, the train,
+#      the nightly) names its fingerprint this way: `<channel>-<failed step>`,
+#      NEVER a commit (issue #4271). A base that is not red files an ordinary
+#      issue and says so.
+#      ONE ISSUE PER FINGERPRINT, ACROSS SHAS (issue #4271): --fault-sha S /
+#      --fault-link URL say where it is red THIS time (the probe's own: the
+#      streak's first commit and its run). An open issue under the key gets ONE
+#      「同一故障」 comment per new sha (`<!-- fleet:fault sha=S -->`; a sha already
+#      on record adds nothing). None open but a closed one (not «not planned»):
+#      when S contains the commit that closed it (fleet_fault_contains; closed by
+#      hand: S newer than the close) it is REOPENED with a comment — the fix did
+#      not hold; else S is an older version without the fix and it is only noted
+#      there. Either way exit 5 and that URL, never a new issue.
+#      NOT AUTOMATIC ANY MORE (issue #4271, replacing #2175's auto road): only
+#      --breakage / --breakage-key make a filing a breakage. A person's or the
+#      orchestrator's ordinary issue whose text says 「红」 is an ordinary issue —
+#      #4268 (a release-gate design ticket) was taken as macOS / shard 6's breakage
+#      and swallowed the next filing as 「同一故障」. The old auto knob is read
+#      by nothing; --no-breakage still parses (a no-op).
 #   2. STAMP the invisible `<!-- fleet:from role=… session=… issue=… -->`
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
@@ -81,6 +90,7 @@
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
 #                       [--parent N] [--from ROLE] [--milestone M] [--rule N] \
 #                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage] \
+#                       [--fault-sha S] [--fault-link URL] \
 #                       [--task T<n>] [--draft] [--pr-note TEXT]
 #   --draft (issue #3715): a DRAFT-ONLY ticket — the body carries
 #      `<!-- fleet:draft-only -->` (bin/fleet-draft.sh block): its worker opens a
@@ -102,7 +112,8 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 title='' body='' priority='' parent='' from='' milestone='' repo='' spawn=0 bind=0 rule='' task=''
 draft=0 pr_note=''
-breakage='' bk_auto=0 breakage_key='' bk_sha='' bk_check='' bk_line='' bk_lock='' bk_held=0
+breakage='' breakage_key='' bk_sha='' bk_check='' bk_line='' bk_rid='' bk_lock='' bk_held=0
+fault_sha='' fault_link='' 
 labels=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -127,9 +138,11 @@ while [ "$#" -gt 0 ]; do
     --breakage)  breakage=1 ;;
     --no-breakage) breakage=0 ;;
     --breakage-key) shift; breakage_key="${1:-}" ;;
+    --fault-sha)  shift; fault_sha="${1:-}" ;;
+    --fault-link) shift; fault_link="${1:-}" ;;
     --draft)     draft=1 ;;
     --pr-note)   shift; pr_note="${1:-}"; draft=1 ;;
-    -h|--help)   sed -n '2,95p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     --*)         printf 'fleet-issue-file: unknown flag %s\n' "$1" >&2; exit 2 ;;
     *)           printf 'fleet-issue-file: unexpected argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -142,6 +155,14 @@ if [ -n "$task" ]; then
   [ "$task" = bad ] && { printf 'fleet-issue-file: --task must be a hub record T<n>\n' >&2; exit 2; }
 fi
 # A key is a lock directory's name and a marker token: one safe word.
+# A sighting's where is a note, never a reason to lose the filing: a malformed
+# one is dropped with a line on stderr.
+case "$fault_sha" in
+  ''|[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) fault_sha=x ;;
+esac
+case "$fault_sha" in *[!0-9a-f]*) printf 'fleet-issue-file: --fault-sha is not a commit sha — ignored\n' >&2; fault_sha='' ;; esac
+case "$fault_link" in *[[:space:]]*) printf 'fleet-issue-file: --fault-link is not one URL — ignored\n' >&2; fault_link='' ;; esac
 case "$breakage_key" in
   ''|*[!A-Za-z0-9._-]*) [ -n "$breakage_key" ] && { printf 'fleet-issue-file: --breakage-key must be [A-Za-z0-9._-]+ (got %s)\n' "$breakage_key" >&2; exit 2; } ;;
 esac
@@ -246,13 +267,9 @@ if [ "${#labels[@]}" -gt 0 ]; then
 fi
 
 # --- 1b. one issue per breakage (issue #2078) -----------------------------------
-# With --breakage / --breakage-key, or AUTO (issue #2175): no flag and a red word
-# in the title/body. An ordinary filing with no red word runs none of this — no
-# probe, no lock, no list read (the drill's degenerate leg pins it).
-if [ -z "$breakage" ] && [ -z "$breakage_key" ] && [ "${FLEET_BREAKAGE_AUTO:-1}" != 0 ] \
-   && fleet_breakage_text_red_word "$title"$'\n'"$body"; then
-  breakage=1 bk_auto=1
-fi
+# Only with --breakage / --breakage-key (issue #4271: a red word in the text no
+# longer makes a breakage). An ordinary filing runs none of this — no probe, no
+# lock, no list read (the drill's degenerate leg pins it).
 if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
   # The base branch: the window's repo overlay (FLEET_BASE_BRANCH), else the
   # probe asks GitHub for the repo's default branch.
@@ -268,15 +285,16 @@ if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
     # branch said red) the oldest red. Explicit --breakage with no match: the
     # oldest red all the same — the caller said it is the base branch's.
     _row=$(printf '%s\n' "$_probe" | fleet_breakage_pick "$title"$'\n'"$body" "${FLEET_BASE_BRANCH:-}")
-    [ -n "$_row" ] || [ "$bk_auto" = 1 ] || _row=${_probe%%$'\n'*}
+    [ -n "$_row" ] || _row=${_probe%%$'\n'*}
   fi
   if [ -n "$_row" ]; then
-    IFS=$'\t' read -r breakage_key bk_sha bk_check bk_line _ <<EOF
-$_row
-EOF
-    [ "$bk_auto" = 1 ] && printf 'fleet-issue-file: the base branch is red and this issue names it — filing it as --breakage (auto, issue #2175; --no-breakage files it plain)\n' >&2
+    breakage_key=$(printf '%s' "$_row" | cut -f1); bk_sha=$(printf '%s' "$_row" | cut -f2)
+    bk_check=$(printf '%s' "$_row" | cut -f3);   bk_line=$(printf '%s' "$_row" | cut -f4)
+    bk_rid=$(printf '%s' "$_row" | cut -f6)
+    [ -n "$fault_sha" ] || fault_sha="$bk_sha"
+    case "$bk_rid" in ''|*[!0-9]*) ;; *) [ -n "$fault_link" ] || fault_link="https://github.com/$(fleet_norm_repo "$repo")/actions/runs/$bk_rid" ;; esac
     printf 'fleet-issue-file: breakage %s — %s @ %.7s: %s\n' "$breakage_key" "$bk_check" "$bk_sha" "$bk_line" >&2
-  elif [ "$bk_auto" = 0 ]; then
+  else
     case "$_prc" in
       0|1) printf 'fleet-issue-file: --breakage: no workflow on %s is red (its last finished run) — filing an ordinary issue\n' "${FLEET_BASE_BRANCH:-the default branch}" >&2 ;;
       9)   printf 'fleet-issue-file: --breakage: %s has no forge (FLEET_FORGE=none), so no runs to fingerprint — filing without one\n' "$repo" >&2 ;;
@@ -321,21 +339,68 @@ if [ -n "$breakage_key" ]; then
     fi
     [ -n "$bk_existing" ] && printf '%s\n' "${bk_existing##*/}" > "$bk_lock/issue"
   fi
+  # None open: a CLOSED issue under the key (issue #4271) — GitHub tickets only
+  # (the hub's door finds open ones). Red again on a version that contains the
+  # commit that closed it ⇒ the fix did not hold: reopen it. Red on an older
+  # version (a probe still testing the stable before the fix) ⇒ note it there.
+  bk_closed='' bk_reopen=0 bk_fix=''
+  if [ "$bk_held" = 1 ] && [ -z "$bk_existing" ] && [ "$tk_home" != hub ]; then
+    _cl=$(fleet_fault_find_closed "$(fleet_norm_repo "$repo")" "$breakage_key") || _cl=''
+    if [ -n "$_cl" ]; then
+      bk_closed="${_cl%%	*}"; _closed_at="${_cl#*	}"
+      bk_existing=$(bash "$BIN/fleet-ticket.sh" url "$tkb:$(fleet_norm_repo "$repo")#$bk_closed")
+      [ -n "$bk_existing" ] || bk_existing="https://github.com/$(fleet_norm_repo "$repo")/issues/$bk_closed"
+      if [ -z "$fault_sha" ]; then
+        bk_reopen=1                                  # nothing says it is an old version: red is red
+      elif bk_fix=$(fleet_fault_fix_commit "$(fleet_norm_repo "$repo")" "$bk_closed"); then
+        fleet_fault_contains "$(fleet_norm_repo "$repo")" "$bk_fix" "$fault_sha" && bk_reopen=1
+      else
+        fleet_fault_after_close "$(fleet_norm_repo "$repo")" "$fault_sha" "$_closed_at" && bk_reopen=1
+      fi
+      if [ "$bk_reopen" = 1 ]; then
+        bash "$BIN/fleet-ticket.sh" state "$tkb:$(fleet_norm_repo "$repo")#$bk_closed" open >/dev/null 2>&1 \
+          || { printf 'fleet-issue-file: could not reopen %s\n' "$bk_existing" >&2; bk_reopen=0; }
+      fi
+      printf '%s\n' "$bk_closed" > "$bk_lock/issue"
+    fi
+  fi
   if [ -n "$bk_existing" ]; then
     # 「我也碰到了」: a record-only comment (no-relay — the fixer's pane is not
-    # interrupted by it), who from, then the URL and exit 5. Never spawn / bind.
-    _role=$(fleet_from_role "$from")
-    _who=$(fleet_origin_key 2>/dev/null); [ -n "$_who" ] || _who=$(fleet_current_session 2>/dev/null)
-    # ${_who} braced: bash 3.2 under a C locale reads a following UTF-8 byte as
-    # part of the name (`_who（`: unbound variable).
-    _cb="同一故障，来自 ${_role}${_who:+（${_who}）}"$'\n\n'"$(fleet_from_marker "$_role" "$repo")"$'\n'"<!-- fleet:no-relay -->"
-    _cnum="${bk_existing##*/}"
-    _cf=$(mktemp "${TMPDIR:-/tmp}/fleet-bk-comment.XXXXXX") && printf '%s' "$_cb" > "$_cf" \
-      && bash "$BIN/fleet-ticket.sh" post "$tkb:$(fleet_norm_repo "$repo")#$_cnum" --body-file "$_cf" >/dev/null 2>&1 \
-      || printf 'fleet-issue-file: could not comment on %s\n' "$bk_existing" >&2
-    rm -f "${_cf:-}"
-    printf 'fleet-issue-file: breakage %s already has an open issue: %s — commented there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
-    [ "$bk_auto" = 1 ] && printf 'fleet-issue-file: (taken as that breakage because the base branch is red and the text names it — a different problem? re-file with --no-breakage)\n' >&2
+    # interrupted by it), who from, where (the sha + link), then the URL and exit
+    # 5. Never spawn / bind. One comment per sha: a sha already on record (the
+    # body it was filed with, an earlier comment) adds nothing.
+    _cnum="${bk_existing##*/}"; _seen=0
+    [ -n "$fault_sha" ] && [ "$tk_home" != hub ] && [ "$bk_reopen" = 0 ] \
+      && fleet_fault_seen "$(fleet_norm_repo "$repo")" "$_cnum" "$fault_sha" && _seen=1
+    if [ "$_seen" = 0 ]; then
+      _role=$(fleet_from_role "$from")
+      _who=$(fleet_origin_key 2>/dev/null); [ -n "$_who" ] || _who=$(fleet_current_session 2>/dev/null)
+      # ${_who} braced: bash 3.2 under a C locale reads a following UTF-8 byte as
+      # part of the name (`_who（`: unbound variable).
+      _where=''
+      [ -n "$fault_sha" ] && _where="：\`$(printf '%.7s' "$fault_sha")\` 上仍红${fault_link:+ — $fault_link}"
+      _head="同一故障${_where}，来自 ${_role}${_who:+（${_who}）}"
+      if [ "$bk_reopen" = 1 ]; then
+        _head="重开：修复${bk_fix:+ \`$(printf '%.7s' "$bk_fix")\`} 之后的版本${fault_sha:+ \`$(printf '%.7s' "$fault_sha")\`} 复测仍红，修复没有生效${fault_link:+ — $fault_link}（来自 ${_role}${_who:+（${_who}）}，issue #4271：同一指纹不开新单）"
+      elif [ -n "$bk_closed" ]; then
+        _head="已关的同一故障在旧版本${fault_sha:+ \`$(printf '%.7s' "$fault_sha")\`} 上仍红${fault_link:+ — $fault_link}——这个版本不含修复${bk_fix:+ \`$(printf '%.7s' "$bk_fix")\`}，不重开（来自 ${_role}${_who:+（${_who}）}）"
+      fi
+      _cb="$_head"$'\n\n'"$(fleet_from_marker "$_role" "$repo")"$'\n'"<!-- fleet:no-relay -->"
+      [ -n "$fault_sha" ] && _cb="$_cb"$'\n'"<!-- fleet:fault sha=$fault_sha -->"
+      _cf=$(mktemp "${TMPDIR:-/tmp}/fleet-bk-comment.XXXXXX") && printf '%s' "$_cb" > "$_cf" \
+        && bash "$BIN/fleet-ticket.sh" post "$tkb:$(fleet_norm_repo "$repo")#$_cnum" --body-file "$_cf" >/dev/null 2>&1 \
+        || printf 'fleet-issue-file: could not comment on %s\n' "$bk_existing" >&2
+      rm -f "${_cf:-}"
+    fi
+    if [ "$bk_reopen" = 1 ]; then
+      printf 'fleet-issue-file: breakage %s: reopened %s — red again on a version with its fix, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
+    elif [ -n "$bk_closed" ]; then
+      printf 'fleet-issue-file: breakage %s: its issue %s is closed and %.7s predates the fix — noted there, not reopened, not filing (exit 5)\n' "$breakage_key" "$bk_existing" "$fault_sha" >&2
+    elif [ "$_seen" = 1 ]; then
+      printf 'fleet-issue-file: breakage %s already has an open issue: %s — %.7s is already on record there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" "$fault_sha" >&2
+    else
+      printf 'fleet-issue-file: breakage %s already has an open issue: %s — commented there, not filing (exit 5)\n' "$breakage_key" "$bk_existing" >&2
+    fi
     printf '%s\n' "$bk_existing"
     exit 5
   fi
@@ -380,7 +445,10 @@ if [ -n "$breakage_key" ]; then
   # What the operator reads to tell two breakages apart, then the marker.
   _fp=''
   [ -n "$bk_check" ] && _fp="故障指纹：\`$bk_check\` @ \`$(printf '%.7s' "$bk_sha")\`${bk_line:+ — $bk_line}"$'\n'
+  [ -z "$bk_check" ] && [ -n "$fault_sha" ] \
+    && _fp="故障指纹：\`$breakage_key\`，首次见于 \`$(printf '%.7s' "$fault_sha")\`${fault_link:+ — $fault_link}（同一指纹以后只追加评论，issue #4271）"$'\n'
   body="$body"$'\n\n'"$_fp$(fleet_breakage_marker "$breakage_key")"
+  [ -n "$fault_sha" ] && body="$body"$'\n'"<!-- fleet:fault sha=$fault_sha -->"
 fi
 
 # --- 2b. default milestone: guarantee every filing gets one (issue #433) --------

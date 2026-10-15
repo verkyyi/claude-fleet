@@ -65,8 +65,9 @@
 #   steward-write-storm                             bin/fleet_steward.py (State.budget_left, do_answer, flush_deferred)
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
-#   breakage-no-flag                                bin/fleet-issue-file.sh (auto), fleet_breakage_pick /
-#                                                   fleet_breakage_text_red_word (fleet-lib.sh), fleet-mcp.py file_issue
+#   breakage-no-flag                                bin/fleet-issue-file.sh (no auto road, #4271), fleet-mcp.py file_issue
+#   breakage-new-sha                                bin/fleet-issue-file.sh --fault-sha, fleet_fault_find_closed /
+#                                                   fleet_fault_fix_commit / fleet_fault_contains / fleet_fault_seen (fleet-lib.sh)
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/internal/api fleet_place.go (go test, when here)
@@ -4083,16 +4084,16 @@ EOF
   WHAT="3 个并发开单：1 张单 + 2 个退出码 5 + 2 条「同一故障」；行号变了仍认得，换故障照常开新单，普通开单不碰"
 }
 
-# Three sessions see master red and file its fix — and none passes --breakage
-# (issue #2175). On 2026-10-07 11:18–11:29Z #2159 #2163 #2170 were filed that
-# way for one red tokenledger-pg: the dedup lived in a skill's prose, so it ran
-# only for a caller that remembered it. Now the filer itself notices: a red
-# word in the text, a red base branch (per workflow, its last FINISHED run — the
-# head then was a commit the workflow never ran on), and the text naming the
-# base branch or the red check ⇒ --breakage all the same. Each filer words it
-# differently, like the real three (one names only the Go test, in its title).
+# An ordinary issue whose text says 「红」 is taken as the red base's breakage
+# (issue #4271, undoing #2175's auto road). On 2026-10-14 the orchestrator filed
+# #4268 — a release-gate design ticket whose body said 「红判定」 — while macOS /
+# shard 6 was red: the filer probed, stamped #4268 with that fingerprint, and the
+# NEXT ordinary filing (#4271's first try) was swallowed as 「同一故障」 under it.
+# Now only --breakage / --breakage-key make a breakage: two ordinary filings that
+# name the red master file two plain issues, no probe read; an explicit
+# --breakage still fingerprints, and a second one dedups (exit 5).
 drill_breakage_no_flag() {
-  CAP=25; local d="$WORK/bkn" t0 i c n0 created fives=0
+  CAP=25; local d="$WORK/bkn" t0 i c c2 n0 created
   mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
   cat > "$d/fp/gh" <<'EOF'
 #!/bin/bash
@@ -4101,8 +4102,7 @@ case "$1" in
   issue)
     case "$2" in
       create)
-        sleep 0.4
-        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 2159 ))
+        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 4268 ))
         shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
         printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
       comment)
@@ -4110,13 +4110,11 @@ case "$1" in
         printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n" ;;
     esac ;;
   api)
-    p=''; for a in "$@"; do case "$a" in repos/*) p="$a";; esac; done
+    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
     case "$p" in
-      # master: tokenledger red since c902bf83 (a cancelled run before it, then
-      # green); the head a6dd7c9b only ran selftests, green.
-      */actions/runs\?*)  printf '200\t3002\ta6dd7c9b\tsuccess\t2026-10-07T11:07:45Z\tselftests\t900\n100\t3001\tc902bf83\tfailure\t2026-10-07T11:07:06Z\ttokenledger\t900\n100\t3000\t6ff6f385\tcancelled\t2026-10-07T11:06:33Z\ttokenledger\t960\n100\t2999\t38ae532a\tsuccess\t2026-10-07T11:05:50Z\ttokenledger\t1000\n' ;;
+      */actions/runs\?*)  printf '100\t3001\tc902bf83\tfailure\t2026-10-07T11:07:06Z\ttokenledger\t900\n100\t2999\t38ae532a\tsuccess\t2026-10-07T11:05:50Z\ttokenledger\t1000\n' ;;
       */actions/runs/3001/jobs*) printf '7741\ttokenledger-pg\n' ;;
-      repos/o/w/issues\?*) for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+      repos/o/w/issues\?state=open*) for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
     esac ;;
   run) printf 'tokenledger-pg\tstore + api tests on Postgres\t2026-10-07T11:22:21.7565667Z --- FAIL: TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey (1.12s)\n' ;;
 esac
@@ -4126,24 +4124,93 @@ EOF
   bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
            FLEET_GH_WRITE_GAP=0 FLEET_BASE_BRANCH=master BK_STORE="$d/store" "$@"; }
   t0=$(now)
-  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --title 'tokenledger-pg 红：hub_settings_legacy 两个测试在 Postgres 上报 collation "nocase" 不存在' > "$d/out1" 2> "$d/err1"; echo $? > "$d/rc1" ) &
-  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --title 'master 红：tokenledger-pg 上 TestDropLegacyMachineLogins / TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey 失败' > "$d/out2" 2> "$d/err2"; echo $? > "$d/rc2" ) &
-  ( bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w3 --title 'TestFleetUsers_MachineLoginTakesOverAnOldIdentitysKey 失败' --body 'master 的 tokenledger 工作流在 c902bf83 起红' > "$d/out3" 2> "$d/err3"; echo $? > "$d/rc3" ) &
-  wait
-  SECS=$(since "$t0")
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from orchestrator --title '发版门槛看复测结果，不看单开没开' \
+     --body 'cn 这一关认的是「当前 stable 上的红判定」；master 红的时候 tokenledger-pg 也一样被挡' > "$d/out1" 2> "$d/err1"; c=$?
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from orchestrator --title '每种故障只开一张单' \
+     --body '「master 红」用 breakage 指纹；macOS 红每个新 sha 开一张' > "$d/out2" 2> "$d/err2"; c2=$?
   created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
-  [ "$created" = 1 ] || { WHY="3 filers with NO --breakage made $created issues (want 1): $(cat "$d"/err? 2>/dev/null | tr '\n' ' ' | cut -c1-300)"; return 1; }
-  n0=$(ls "$d/store"/issue-* | head -1); n0=${n0##*-}
-  grep -q '<!-- fleet:breakage key=c902bf8-' "$d/store/issue-$n0" || { WHY="the one issue carries no fleet:breakage marker at c902bf8: $(tr '\n' ' ' < "$d/store/issue-$n0" | cut -c1-200)"; return 1; }
-  for i in 1 2 3; do [ "$(cat "$d/rc$i")" = 5 ] && fives=$((fives + 1)); done
-  [ "$fives" = 2 ] || { WHY="want 2 × exit 5, got $fives: $(cat "$d"/rc? | tr '\n' ' ')"; return 1; }
-  # The way out: --no-breakage files a second one plain, and so does a filing
-  # that has nothing to do with the red.
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --title 'master 红：另一个问题' --no-breakage > "$d/out4" 2> "$d/err4"; c=$?
-  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --title '登录页报错 undefined' > "$d/out5" 2> "$d/err5"; i=$?
+  [ "$c" = 0 ] && [ "$c2" = 0 ] && [ "$created" = 2 ] \
+    || { WHY="two ordinary filings mentioning a red master: exit $c / $c2, $created issues (want 0, 0, 2): $(cat "$d"/err? | tr '\n' ' ' | cut -c1-300)"; return 1; }
+  grep -l 'fleet:breakage' "$d/store"/issue-* >/dev/null 2>&1 && { WHY="an ordinary filing was stamped with a breakage fingerprint"; return 1; }
+  grep -q 'actions/runs' "$d/store/gh.log" && { WHY="an ordinary filing probed the base branch: $(grep actions/runs "$d/store/gh.log" | head -1)"; return 1; }
+  # The explicit flag still fingerprints the red base; a second one dedups.
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --breakage --title 'tokenledger-pg 红' > "$d/out3" 2> "$d/err3"; c=$?
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --breakage --title 'master 红了' > "$d/out4" 2> "$d/err4"; c2=$?
+  SECS=$(since "$t0")
   created=$(ls "$d/store"/issue-* | wc -l | tr -d ' ')
-  [ "$c" = 0 ] && [ "$i" = 0 ] && [ "$created" = 3 ] || { WHY="--no-breakage exited $c, an unrelated filing $i, issues now $created (want 0, 0, 3)"; return 1; }
-  WHAT="3 个都不带 --breakage 的并发开单（措辞各异）：只建 1 张单 + 2 个退出码 5；--no-breakage 与无关的单照常开"
+  n0=$(grep -l 'fleet:breakage key=ci-' "$d/store"/issue-* 2>/dev/null | head -1)
+  [ "$c" = 0 ] && [ "$c2" = 5 ] && [ "$created" = 3 ] && [ -n "$n0" ] \
+    || { WHY="explicit --breakage: exit $c / $c2, $created issues, marker [${n0:-none}] (want 0, 5, 3, a ci- key): $(cat "$d/err3" "$d/err4" | tr '\n' ' ' | cut -c1-300)"; return 1; }
+  WHAT="正文写了「master 红」的两张普通单都按普通单开、一次探针都不跑、互不吞并；显式 --breakage 才按指纹开，第二个退出码 5"
+}
+
+# One fingerprint red on every new sha (issue #4271): fleet-macos-watch.sh opened
+# a new issue for each new stable (21 for one red test before #4232), and
+# cn-probe closed one and opened the next (#4199 → #4255, #4207 → #4224) — its
+# fix was on trunk, the probe still tested the old stable, the issue was closed
+# by hand, the next red was a new issue. Now: an open issue under the key gets
+# one comment per new sha; closed, a red on a version CONTAINING the commit that
+# closed it reopens that issue, a red on an older version is only noted there.
+drill_breakage_new_sha() {
+  CAP=25; local d="$WORK/bkns" t0 i c n0 created
+  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
+  cat > "$d/fp/gh" <<'EOF'
+#!/bin/bash
+S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        n=$(( $(ls "$S"/issue-* "$S"/closed-* 2>/dev/null | grep -vc '\.at$') + 4199 ))
+        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
+      comment)
+        shift 2; n="$1"; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" | tr '\n' ' ' >> "$S/comments-$n"; printf '\n' >> "$S/comments-$n" ;;
+      reopen) [ -f "$S/closed-$3" ] && mv "$S/closed-$3" "$S/issue-$3" ;;
+    esac ;;
+  api)
+    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
+    case "$p" in
+      search/*) ;;
+      repos/o/w/issues\?state=open*)   for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+      repos/o/w/issues\?state=closed*) for f in "$S"/closed-*; do [ -e "$f" ] || continue; case "$f" in *.at) continue ;; esac
+                                         printf '%s\t%s\t%s\n' "${f##*-}" "$(cat "$f.at")" "$(tr '\n' ' ' < "$f")"; done ;;
+      repos/o/w/issues/*/events*)      n=${p#*/issues/}; cat "$S/fix-${n%%/*}" 2>/dev/null ;;
+      repos/o/w/issues/*/comments*)    n=${p#*/issues/}; cat "$S/comments-${n%%/*}" 2>/dev/null ;;
+      repos/o/w/issues/[0-9]*)         cat "$S/issue-${p##*/}" 2>/dev/null ;;
+      repos/o/w/compare/*)             c=${p##*...}; case "$c" in 9*) echo ahead ;; *) echo behind ;; esac ;;
+    esac ;;
+esac
+exit 0
+EOF
+  chmod +x "$d/fp/gh"
+  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
+           FLEET_GH_WRITE_GAP=0 BK_STORE="$d/store" "$@"; }
+  sight() {  # sight <sha> — the cn probe red on that stable, at its layer
+    rm -rf "$d/conf/global/breakage"
+    bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from cn-probe --breakage --breakage-key cn-path-pod \
+       --fault-sha "$1" --fault-link "https://github.com/o/w/actions/runs/${1:0:4}" --title '国内真实用户路径不通：卡在 pod' > "$d/out" 2> "$d/err"
+  }
+  t0=$(now)
+  for i in 1111111 2222222 3333333 4444444; do sight "${i}aaaa"; done
+  sight 4444444aaaa                                   # the next tick, same stable
+  created=$(ls "$d/store"/issue-* 2>/dev/null | wc -l | tr -d ' ')
+  n0=$(ls "$d/store"/issue-*); n0=${n0##*-}
+  [ "$created" = 1 ] || { WHY="one fingerprint on 4 stables made $created issues (want 1)"; return 1; }
+  [ "$(grep -c '同一故障' "$d/store/comments-$n0" 2>/dev/null)" = 3 ] \
+    || { WHY="want 3 「同一故障」 comments (one per new sha, the repeat none): $(cat "$d/store/comments-$n0" 2>/dev/null | cut -c1-200)"; return 1; }
+  # The fix lands in 9000000 and closes it; the probe still tests the old stable.
+  mv "$d/store/issue-$n0" "$d/store/closed-$n0"; echo 2026-10-14T03:00:00Z > "$d/store/closed-$n0.at"; echo 9000000ffff > "$d/store/fix-$n0"
+  sight 4444444aaaa; c=$?
+  [ "$c" = 5 ] && [ -f "$d/store/closed-$n0" ] && ! ls "$d/store"/issue-* >/dev/null 2>&1 \
+    || { WHY="a red on the old stable after the fix closed it: exit $c, want 5, the issue still closed, nothing new: $(tr '\n' ' ' < "$d/err" | cut -c1-200)"; return 1; }
+  sight 9100000aaaa; c=$?                             # the stable with the fix — still red
+  SECS=$(since "$t0")
+  [ "$c" = 5 ] && [ -f "$d/store/issue-$n0" ] && [ "$(ls "$d/store"/issue-* | wc -l | tr -d ' ')" = 1 ] \
+    || { WHY="red on a stable containing the fix must REOPEN #$n0 (exit $c): $(tr '\n' ' ' < "$d/err" | cut -c1-200)"; return 1; }
+  grep -q '重开：修复' "$d/store/comments-$n0" || { WHY="the reopen left no comment naming the fix"; return 1; }
+  WHAT="同一指纹在 4 个 stable 上红：1 张单 + 3 条评论（同 sha 不重复）；修复关单后旧 stable 仍红只记一笔不重开，含修复的版本仍红就重开那张旧单"
 }
 
 # A release that deletes a hook script an old session's table still calls: the

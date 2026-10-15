@@ -24,7 +24,9 @@
 #      layer it stopped at; on red its target is the breakage issue) — the one
 #      thing bin/fleet-stable.sh reads;
 #   4. red → bin/fleet-issue-file.sh --breakage --breakage-key cn-path-<layer>
-#      (one issue per stuck layer, across machines — exit 5 = already open), and
+#      --fault-sha <stable> (one issue per stuck layer, across machines and
+#      stables — exit 5 = already has one: one comment per new stable; a closed
+#      one reopened only when the stable it tested contains the fix, issue #4271), and
 #      ONE `breakage` alert per issue (fleet-alerts.sh event) — nobody is spawned
 #      (issue #3120); green → forgets what it filed.
 #
@@ -128,7 +130,7 @@ $(printf '%s\n' "$out" | tail -n 60)
   if [ "$dry" = 1 ]; then
     printf 'would-file\tcn-path-%s\t%s\n' "$layer" "$title"
   else
-    issue=$($FILER --breakage --breakage-key "cn-path-$layer" --repo "$repo" --priority p1 --from cn-probe \
+    issue=$($FILER --breakage --breakage-key "cn-path-$layer" ${stable:+--fault-sha "$stable"} --repo "$repo" --priority p1 --from cn-probe \
               --title "$title" --body "$body" 2>/dev/null | grep -E '^https?://' | tail -n 1); rc=$?
     [ -n "$issue" ] || { log "filing the red path failed — retried next run"; rc=1; }
   fi

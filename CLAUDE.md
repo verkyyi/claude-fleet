@@ -310,25 +310,38 @@ one-off drill / audit records do not go in the repo (issue #3576).
   one `drill_<id>` (the test reds on either side missing); a way fixed in another
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
-- **A red base branch is ONE issue, filed through `--breakage`** (issue #2078,
-  EPIC #2074 C7). `fleet-issue-file.sh --breakage` (the `file_issue` tool's
-  `breakage: true`) fingerprints the breakage first — `fleet_breakage_probe`
-  (`bin/fleet-lib.sh`): red per workflow on its last FINISHED run (never the
-  head's check-runs — issue #2175), the commit that red streak started at, that
-  run's first failed job, its first error line sans `:<digits>` — REST only, so it
-  answers under a spent GraphQL budget. One issue per fingerprint: a `<key>/`
-  lock under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second
-  filers on one machine, the `<!-- fleet:breakage key=… -->` marker in the body
-  is what another machine finds (`fleet_breakage_find`, the REST open-issue list,
-  never `gh search` — its index lags). A later sighting gets a record-only
-  「同一故障，来自 …」 comment on the first issue, its URL on stdout and **exit 5**;
-  the caller waits for that issue (`await`), never files or spawns a second.
-  **The flag is not the caller's to remember** (issue #2175): with neither flag, a
-  title/body with a red word probes the base, and a red base the text names (the
-  branch, or a red workflow / job / Go test — `fleet_breakage_pick`) is filed as
-  `--breakage` all the same; `--no-breakage` (`breakage: false`) files plain. An
-  ordinary filing with no red word runs none of it, byte for byte. `docs/dev/BREAK-IT.md`
-  `breakage-three-filers` / `breakage-no-flag` + `fleet-issue-file-selftest.sh` O–T pin it.
+- **A fault is ONE issue, whatever commit it is red on** (issues #2078, #4271;
+  EPIC #2074 C7). Every automatic filer — the master probe, `fleet-macos-watch.sh`,
+  `fleet-cn-probe-watch.sh`, `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh` —
+  goes through `fleet-issue-file.sh --breakage[-key <channel>-<failed step>]`, and
+  the key NEVER carries a sha (`ci-<job · error line>`, `macos-<tests>`,
+  `cn-path-<layer>`, `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`).
+  `--breakage` alone (the `file_issue` tool's `breakage: true`) fingerprints the
+  base first — `fleet_breakage_probe` (`bin/fleet-lib.sh`): red per workflow on its
+  last FINISHED run (never the head's check-runs — issue #2175), that streak's
+  first run's first failed job and its first error line sans `:<digits>`, REST
+  only. `--fault-sha` / `--fault-link` say where it is red THIS time (the probe's
+  own: the streak's first commit and run). One issue per key: a `<key>/` lock
+  under `$FLEET_CONF_DIR/global/breakage` (2 min) holds the same-second filers on
+  one machine, the `<!-- fleet:breakage key=… -->` marker in the body is what
+  another machine finds (`fleet_breakage_find`, the REST open-issue list, never
+  `gh search` — its index lags). An open one gets ONE record-only 「同一故障」
+  comment per new sha (`<!-- fleet:fault sha=… -->`; a sha on record adds none);
+  only a closed one (not «not planned», `fleet_fault_find_closed`) ⇒ reopened when
+  the red version contains the commit that closed it (`fleet_fault_contains`;
+  closed by hand: a newer commit), else only noted there. Its URL on stdout and
+  **exit 5** either way; the caller waits for it (`await`), never files or spawns a
+  second. **Only the flag makes a breakage** (issue #4271 removed #2175's auto
+  road): an ordinary filing whose text says 「红」 is an ordinary issue, no probe
+  — #4268 was taken as macOS' breakage and swallowed the next ticket.
+  `docs/dev/BREAK-IT.md` `breakage-three-filers` / `breakage-no-flag` /
+  `breakage-new-sha` + `fleet-issue-file-selftest.sh` O–T, Y pin it.
+  **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
+  only PRODUCE (macos-watch, cn-probe — they file, and alert only on a new or
+  reopened issue, plus macOS' once-per-streak held-back alert); the patrol is the
+  orchestrator session's ONE self-patrol loop — after a compaction its state says
+  `CronList` first, never a second job — and a steward holder's `/loop` is the
+  same patrol, never run beside it.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything

@@ -93,7 +93,7 @@ print((n - datetime.timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%
     _heads=$(cat "$results"/train-flaky-"$_t".txt "$results"/*/train-flaky-"$_t".txt 2>/dev/null | head -40)
     _num=''
     if [ -n "$repo" ]; then
-      _url=$(file_issue --repo "$repo" --breakage-key "$_key" \
+      _url=$(file_issue --repo "$repo" --breakage-key "$_key" --fault-sha "$sha" --fault-link "https://github.com/$repo/actions/runs/$run" \
                --label flaky --title "列车上 ${_t} 时好时坏：红了一次，重跑才过" \
                --body "$_t 在发布列车上红了一次，同一片里单独重跑一次是绿的（\`run-selftests.sh --retry-red 1\`，issue #3866），所以这趟照发。$( [ "$_t" != "$drill_flaky" ] || printf '（这是 \`drill_flaky\` 演练：第一次的红是演练记的。）' )
 它七天里在列车上重跑才过 ${_max} 次，就进隔离（最多 48 小时）。修好它，这张单就关。
@@ -273,7 +273,7 @@ case "$cmd" in
       else
         [ -n "$repo" ] || die "record: --repo is needed to file the breakage issue"
         key="selftest-quarantine.${t%-selftest.sh}"
-        url=$(file_issue --repo "$repo" --breakage-key "$key" \
+        url=$(file_issue --repo "$repo" --breakage-key "$key" --fault-sha "$sha" --fault-link "https://github.com/$repo/actions/runs/$run" \
                 --label bug --title "列车隔离了 ${t}：连红两趟" \
                 --body "$t 在连续两趟发布列车上红（run ${prev_run:-?} 与 run ${run}，TRAIN_SHA ${sha}），这趟的改动没碰它，也没碰它点名的文件，所以列车隔离它最多 ${hours} 小时（issue #3243）。PR 与夜里的全量照跑它；碰到它的列车也照跑。修好它，隔离就失效；到期自动恢复。
 https://github.com/$repo/actions/runs/$run") ; frc=$?
