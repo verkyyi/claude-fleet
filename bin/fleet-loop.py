@@ -71,6 +71,40 @@ def wakeup_prompt(schedule, now):
                         for j in fleet_cron.pending(schedule, now))
 
 
+def durable_ready(r, now):
+    """A due durable job (issue #4280) is delivered only while its journal is
+    active and the native table no longer holds it; returned or rolled back,
+    it leaves this plan. True = deliver what is due now."""
+    if not r.get('durable_fid') or 'jobs' not in r['schedule']:
+        return True
+    due = [j for j in fleet_cron.pending(r['schedule'], now) if j['id'] in r.get('durable_ids', [])]
+    if not due:
+        return True
+    import fleet_transfer_durable as durable
+    verdict = durable.gate(r['durable_fid'])
+    if verdict == 'wait':
+        r['detail'] = 'Durable job waits for its single-owner activation'
+        return False
+    if verdict == 'drop':
+        for job in due:
+            job['next_run_at'] = None
+        fleet_cron.refresh(r['schedule'])
+        r['detail'] = 'Durable job belongs to the native scheduler again; not delivered here'
+        return r['schedule']['next_run_at'] is not None and now >= r['schedule']['next_run_at']
+    return True
+
+
+def durable_delivered(r, ids, delivery):
+    mine = [i for i in ids if i in r.get('durable_ids', [])]
+    if mine and r.get('durable_fid'):
+        import fleet_transfer_durable as durable
+        try:
+            durable.complete(r['durable_fid'], delivery)
+        except (OSError, ValueError) as error:
+            # Delivered either way; the journal only lags. Never a resend.
+            r['detail'] = 'Durable job delivered; journal not completed: ' + str(error)
+
+
 def tm(r, *args):
     return subprocess.check_output(['tmux', '-L', r['fleet']['session'], *args],
                                    stderr=subprocess.PIPE, timeout=5).decode().strip()
@@ -323,6 +357,16 @@ def dispatch(path, now=None):
                         r['home'] = identity['home']
                     r.update(thread_id=sid,status='active')
                     save(path,r)
+                    if r.get('durable_fid'):
+                        # Bound after the source exited (bridge()): this loop is
+                        # the durable job's one owner from here (issue #4280).
+                        try:
+                            import fleet_transfer_durable as durable
+                            durable.activate(r['durable_fid'], dict(agent=r.get('agent','codex'), session=sid,
+                                                                    record=str(path)))
+                        except (OSError, ValueError) as error:
+                            r['detail'] = 'Durable job not activated: ' + str(error)
+                            save(path,r)
                 except (OSError,ValueError,KeyError,TypeError,EOFError,subprocess.SubprocessError):
                     return  # Native SessionStart has not bound the root yet.
             if r.get('agent') == 'claude' and r['status'] == 'delivering':
@@ -333,13 +377,19 @@ def dispatch(path, now=None):
                 return
             if 'jobs' in r['schedule']:
                 for job in r['schedule']['jobs']:
-                    if job['expires_at'] is not None and job['expires_at'] <= now: job['next_run_at'] = None
+                    # A recurring job keeps its one final round past expiry
+                    # (fleet_cron.final_fire, native 2.1.295); a one-shot does not.
+                    if not job.get('recurring', True) and job['expires_at'] is not None and job['expires_at'] <= now:
+                        job['next_run_at'] = None
                 fleet_cron.refresh(r['schedule'])
                 if r['schedule']['next_run_at'] is None:
                     r.update(status='complete', detail='Every cron job expired or stopped')
                     save(path, r)
                     return
             if r['status'] != 'active' or now < r['schedule']['next_run_at']:
+                return
+            if not durable_ready(r, now):
+                save(path, r)
                 return
             try:
                 current(r)
@@ -386,6 +436,7 @@ def dispatch(path, now=None):
                               'Fleet retains the last interval; missed intervals are never replayed.')
                     if 'jobs' in r['schedule']:
                         prompt = wakeup_prompt(r['schedule'], now) + '\n\nFleet owns these independent cron schedules. Preserve their cadence, timezone and expiry. Do not rearm or recreate them. Stop only a completed job with fleet-loop.py stop --job ID; do not stop other monitoring. Continue in the existing conversation language.'
+                    due_ids = [j['id'] for j in fleet_cron.pending(r['schedule'], now)] if 'jobs' in r['schedule'] else []
                     result = rpc.call('turn/start', {'threadId': r['thread_id'],
                                                     'input': [{'type': 'text', 'text': prompt}]})
                     r['last_turn_id'] = result['turn']['id']
@@ -393,6 +444,7 @@ def dispatch(path, now=None):
                 r['last_delivered_at'] = now
                 r['deliveries'] += 1
                 advance(r['schedule'], now)
+                durable_delivered(r, due_ids, r['last_turn_id'])
                 r['detail'] = 'Wakeup accepted by the bound Codex thread'
             except (OSError, ValueError, KeyError, TypeError, EOFError, RuntimeError, subprocess.SubprocessError) as error:
                 r['status'] = 'paused'
@@ -410,6 +462,11 @@ def recover(session):
     No extra daemon or background scheduler is started here.
     """
     root = Path(os.environ.get('FLEET_CONF_DIR',str(Path.home()/'.config/claude-fleet'))) / 'handoffs'
+    try:
+        import fleet_transfer_durable as durable
+        durable.recover_all()   # interrupted durable handovers (issue #4280)
+    except (OSError, ValueError):
+        pass
     adapter = runpy.run_path(str(Path(__file__).with_name('fleet-codex-session.py')))
     rows = adapter['tmux'](['list-windows','-t',session,'-F',
         '#{window_id}|#{pane_id}|#{pane_pid}|#{pane_current_path}|#{@cc_agent}|#{@handoff_manifest}|#{@reported}'],session)
@@ -489,6 +546,7 @@ def acknowledge_claude(r):
                 r.update(status='active',last_turn_id=row.get('uuid'),last_delivered_at=r['delivery_started_at'],
                          deliveries=r.get('deliveries',0)+1,detail='Claude inbox message acknowledged in its exact transcript')
                 advance(r['schedule'], r['delivery_started_at'])
+                durable_delivered(r, r.get('delivery_jobs', []), r['delivery_id'])
                 return True
     return False
 
@@ -496,6 +554,7 @@ def acknowledge_claude(r):
 def deliver_claude(path,r,now):
     transcript = claude_transcript(r)
     r.update(status='delivering',delivery_id='fleet-loop:'+r['id']+':'+str(uuid.uuid4()),
+             delivery_jobs=[j['id'] for j in fleet_cron.pending(r['schedule'], now)] if 'jobs' in r['schedule'] else [],
              delivery_started_at=now,delivery_offset=transcript.stat().st_size,
              detail='Claude inbox delivery awaiting transcript acknowledgement')
     save(path,r)  # Persist before the frame write; a timeout is never a retry.
@@ -581,6 +640,8 @@ def bridge(args):
          'agent': agent, 'workspace_kind': m['workspace'].get('kind', 'worktree'), 'schedule': schedule, 'socket': '', 'thread_id': None,
          'deliveries': raw.get('deliveries',0), 'last_delivered_at':raw.get('last_delivered_at'),
          'controller_pid': os.getpid()}
+    if m.get('durable_fid'):
+        r.update(durable_fid=m['durable_fid'], durable_ids=m.get('durable_ids', []))
     r['pane_pid'] = int(pane(r, '#{pane_pid}'))
     current(r)
     claim_owner(path,r,raw)

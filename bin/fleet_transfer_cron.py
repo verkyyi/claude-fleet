@@ -17,15 +17,27 @@ def refuse_durable():
                      'switch refused, source and native tasks stay running')
 
 
-def check_durable_store():
+def durable_journal(fid):
+    """The live durable handover of this lifelong identity, or None."""
+    import fleet_transfer_durable as durable
+    try:
+        r = durable.read(durable.journal_path(fid))
+    except ValueError:
+        return None   # no lifelong identity, so no journal of its own
+    return r if r and r.get('state') not in durable.TERMINAL else None
+
+
+def check_durable_store(fid=''):
     """Persistence is not execution. Check even without a process-local marker:
     another session may have created this project's task. Never mutate the table
-    or infer that an overdue task has already fired."""
+    or infer that an overdue task has already fired. A durable task may only move
+    on the single-owner road (fleet_transfer_durable.py): the exact source's
+    confirmed native CronDelete, recorded in its journal (#4280)."""
     home = Path.home().resolve()
     try:
         data = json.loads((home/'.claude/scheduled_tasks.json').read_text())
     except FileNotFoundError:
-        return
+        data = {'tasks': []}
     entries = data.get('tasks', data.get('jobs')) if isinstance(data, dict) else data
     if not isinstance(entries, list):
         raise ValueError('unknown native durable task table; execution owner cannot be verified')
@@ -35,6 +47,11 @@ def check_durable_store():
             raise ValueError('unknown native durable task project; execution owner cannot be verified')
         if Path(project).resolve() == home:
             refuse_durable()
+    journal = durable_journal(fid)
+    if journal and journal['state'] != 'withdrawn':
+        raise ValueError('native durable handover is %s: the source has not confirmed its native '
+                         'CronDelete; switch refused' % journal['state'])
+    return journal
 
 
 def process_start(pid):
@@ -99,8 +116,12 @@ def has_native_activity(transcript, pid):
     return False
 
 
-def validate(raw, transcript, pid, sid, fid, mark, now=None):
-    check_durable_store()
+def validate(raw, transcript, pid, sid, fid, mark, now=None, staging=None):
+    """`staging`: the export's native durable records (before the source's
+    CronDelete); None at cutover, where the withdrawn journal stands in."""
+    journal = None if staging is not None else check_durable_store(fid)
+    durable_jobs = ({r['id']: r for r in staging} if staging is not None
+                    else {j['id']: j for j in (journal or {}).get('jobs', [])})
     now = time.time() if now is None else now
     proof = raw.get('native_source', {})
     if (proof.get('pid') != int(pid) or proof.get('session_id') != sid or proof.get('fleet_id') != fid
@@ -109,12 +130,26 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
     native = live_list(transcript, pid, now)
     schedule = plan(raw, now)
     by_id = {str(j.get('id')):j for j in native}
-    if len(by_id) != len(native) or set(by_id) != {j['id'] for j in schedule['jobs']}:
+    listed = set(by_id) if staging is not None else set(by_id) | set(durable_jobs)
+    if (len(by_id) != len(native) or listed != {j['id'] for j in schedule['jobs']}
+            or (staging is None and set(by_id) & set(durable_jobs))):
         raise ValueError('cron plan does not match the current native task identities')
     moved = []
     for job in schedule['jobs']:
-        original = by_id[job['id']]
         evidence = proof.get('job_evidence', {}).get(job['id'], {})
+        if job['id'] in durable_jobs:
+            # The full native record (export) or the journal's staged copy
+            # (cutover) is the evidence; the job must match it exactly.
+            import fleet_transfer_durable as durable
+            want = (durable.job_for(durable_jobs[job['id']]) if staging is not None
+                    else {k: durable_jobs[job['id']][k] for k in durable.job_for(durable_jobs[job['id']])})
+            if {k: job[k] for k in want} != want or evidence.get('durable', {}).get('value') is not True:
+                raise ValueError('durable cron job differs from its native record: ' + job['id'])
+            if job['next_run_at'] is None or job['next_run_at'] <= now + 60:
+                raise ValueError('durable cron task is no longer pending beyond the cutover margin')
+            moved.append(job)
+            continue
+        original = by_id[job['id']]
         if (type(original.get('recurring')) is not bool
                 or original['recurring'] != job['recurring']):
             raise ValueError('cron recurrence differs from the live task')
@@ -136,18 +171,20 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
         if durable:
             refuse_durable()
         moved.append(job)
-        if job['next_run_at'] is None or (job['expires_at'] is not None and job['expires_at'] <= now):
+        if job['next_run_at'] is None or (not job['recurring'] and job['expires_at'] is not None and job['expires_at'] <= now):
             raise ValueError('cron task is no longer active')
         if job['next_run_at'] != next_fire(job, now):
             raise ValueError('cron plan no longer names the next native calendar round')
         if job['next_run_at'] <= now + 60:
             raise ValueError('native cron is due within the cutover margin; let that round finish before switching')
     marker = prune(parse(mark), int(now))
-    marked = {j for j, _ in marker['ids']}
-    if marker['next'] or not {j['id'] for j in moved} <= marked <= set(by_id):
+    marked = {j for j, _ in marker['ids']} - set(durable_jobs)
+    if marker['next'] or not {j['id'] for j in moved} - set(durable_jobs) <= marked <= set(by_id):
         raise ValueError('native scheduler mark is unknown, mixed, or disagrees with CronList')
     schedule.update(jobs=moved)
     refresh(schedule)
+    if durable_jobs:
+        schedule['durable_ids'] = sorted(durable_jobs)
     return schedule
 
 
@@ -170,7 +207,15 @@ def export(jobs_file, session, pane):
     # The caller must supply confirmed=True and explicit per-job evidence;
     # source identity is read here, never supplied by an unrelated transcript.
     proof.update(pid=source['pid'], session_id=source['session_id'], fleet_id=fid)
-    validate(raw, source['transcript'], source['pid'], source['session_id'], fid, mark)
+    import fleet_transfer_durable as durable
+    version = durable.transcript_version(source['transcript'])
+    staging = durable.inspect(Path.home(), source['pid'], version)['records'] if durable.tasks(
+        durable.read(durable.native_paths(Path.home())[0])) else None
+    if staging is not None:
+        if durable_journal(fid) and durable_journal(fid)['state'] != 'staged':
+            raise ValueError('an unresolved durable handover exists for this session; resolve it first')
+    schedule = validate(raw, source['transcript'], source['pid'], source['session_id'], fid, mark,
+                        staging=staging)
     root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home()/'.config/claude-fleet'))) / 'transfer-plans'
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not fid or any(c not in 'abcdefABCDEF0123456789-' for c in fid):
@@ -181,4 +226,9 @@ def export(jobs_file, session, pane):
         os.chmod(temp, 0o600)
         json.dump(raw, f, ensure_ascii=False, indent=2)
     temp.replace(path)
+    if staging is not None:
+        jobs = [j for j in schedule['jobs'] if j['id'] in schedule.get('durable_ids', [])]
+        journal = durable.stage(fid, Path.home(), source['pid'], source['session_id'], version, jobs,
+                               source['transcript'])
+        print('staged durable handover (inert until the switch activates it): ' + str(journal))
     print(path)

@@ -7473,11 +7473,22 @@ drill_transfer_preparation_retry() {
 }
 
 drill_transfer_durable_owner() {
-  CAP=20
+  CAP=60
   local started; started=$(now)
   bash "$BIN/fleet-transfer-selftest.sh" --norepo-durable >"$WORK/transfer-durable.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/transfer-durable.out" | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$started"); WHAT='durable reminder has no proven successor: all entry points refuse before source exit or task mutation'
+  SECS=$(since "$started"); WHAT='mixed patrol + durable one-shot: B refuses before preparation; the source receipt (road 1) or the isolated takeover (road 2) moves it; the target loop delivers it once, on time; failures keep one owner'
+}
+
+# A durable handover killed mid-way, or meeting a Claude it cannot account for
+# (issue #4280): a crash at any step must leave exactly one owner and every
+# unrelated native record; an unknown / HOME-bound Claude refuses before a write.
+drill_transfer_durable_crash() {
+  CAP=30
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-durable-selftest.py" >"$WORK/transfer-durable-crash.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-durable-crash.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='SIGKILL at write-ahead / table write / withdrawn: the sweep settles one owner, unrelated records intact; unknown Claude refused by pid'
 }
 
 drill_transfer_proxy_auth() {

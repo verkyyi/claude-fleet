@@ -19,18 +19,43 @@ def fields(cron):
     return parts, values
 
 
-def next_fire(job, after):
-    parts, (minute, hour, dom, month, dow) = fields(job['cron'])
+def _match(parts, values, zone, tick):
+    minute, hour, dom, month, dow = values
+    dt = datetime.datetime.fromtimestamp(tick, zone)
+    d, w = dt.day in dom, (dt.weekday()+1) % 7 in dow
+    day = (d or w) if not (parts[2].startswith('*') or parts[4].startswith('*')) else (d and w)
+    return dt.minute in minute and dt.hour in hour and dt.month in month and day
+
+
+def final_fire(job):
+    """A recurring job's last round: native 2.1.295 delivers the first fire at or
+    after its expiry (createdAt + 7 days) and only then deletes the job."""
+    if job['expires_at'] is None or not job.get('recurring', True):
+        return None
+    parts, values = fields(job['cron'])
     zone = ZoneInfo(job['timezone'])
-    # Recurring native jobs expire; one-shots may have only a firing date.
-    horizon = after + (8 if job.get('recurring', True) else 366) * 86400
-    end = min(job['expires_at'], horizon) if job['expires_at'] is not None else horizon
-    tick = (int(after) // 60 + 1) * 60
+    tick = math.ceil(job['expires_at'] / 60) * 60
+    end = tick + 8 * 86400
     while tick < end:
-        dt = datetime.datetime.fromtimestamp(tick, zone)
-        d, w = dt.day in dom, (dt.weekday()+1) % 7 in dow
-        day = (d or w) if not (parts[2].startswith('*') or parts[4].startswith('*')) else (d and w)
-        if dt.minute in minute and dt.hour in hour and dt.month in month and day:
+        if _match(parts, values, zone, tick):
+            return tick
+        tick += 60
+    return None
+
+
+def next_fire(job, after):
+    parts, values = fields(job['cron'])
+    zone = ZoneInfo(job['timezone'])
+    # Recurring native jobs expire after one final round; one-shots may have only a firing date.
+    horizon = after + (8 if job.get('recurring', True) else 366) * 86400
+    last = final_fire(job)
+    if job['expires_at'] is not None and not job.get('recurring', True):
+        horizon = min(job['expires_at'], horizon)
+    elif last is not None:
+        horizon = min(last + 60, horizon)
+    tick = (int(after) // 60 + 1) * 60
+    while tick < horizon:
+        if _match(parts, values, zone, tick):
             return tick
         tick += 60
     return None
@@ -70,12 +95,13 @@ def plan(value, now=None):
                                   or expiry > now+(8 if job['recurring'] else 366)*86400):
             raise ValueError('cron expiry exceeds the bounded native lifetime')
         due = raw.get('next_run_at', next_fire(job, now))
+        last = final_fire(job) if job['recurring'] else expiry
         if due is not None and (type(due) not in (int,float) or not math.isfinite(due)
-                                or (expiry is not None and due >= expiry)):
+                                or (last is not None and (due > last if job['recurring'] else due >= last))):
             raise ValueError('invalid cron next_run_at')
         if due is not None and next_fire(job, due-60) != due:
             raise ValueError('cron next_run_at must preserve its wall-clock phase')
-        job['next_run_at'] = due if expiry is None or expiry > now else None
+        job['next_run_at'] = due
         result.append(job)
     plan = {'jobs':result}
     refresh(plan)
@@ -88,8 +114,8 @@ def refresh(schedule):
 
 
 def pending(schedule, now):
-    return [j for j in schedule['jobs'] if j['next_run_at'] is not None
-            and j['next_run_at'] <= now and (j['expires_at'] is None or now < j['expires_at'])]
+    # A recurring job's final round may land after its expiry (final_fire).
+    return [j for j in schedule['jobs'] if j['next_run_at'] is not None and j['next_run_at'] <= now]
 
 
 def advance(schedule, now):

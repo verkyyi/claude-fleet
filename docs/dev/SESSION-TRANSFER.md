@@ -177,25 +177,63 @@ from a fifteen-minute frequency or the marker's grace-extended expiry.
 The text form of CronList proves current membership and recurrence, while its
 truncated prompt needs a separately verified complete record. Every job's
 `durable` flag must be proven. Session-only jobs move to Fleet's scheduler.
-**A durable task blocks the switch:** its native table surviving is not proof
-that an execution owner survives. Transfer checks HOME's
-`~/.claude/scheduled_tasks.json` even without a native marker or transcript entry
-(another session can create a project task), and refuses before exit or arming.
-The panel still asks the exact source to read CronList and prepare the current
-task inventory and handoff notes. If a durable task is present, the source
-records its ownership and explains the missing successor guarantee, then stops
-before export/arm. This requires no operator JSON export or retry. Unknown
-table/project formats also block cutover. The source and native records remain
-unchanged; no duplicate Fleet timer is created.
+Transfer checks HOME's `~/.claude/scheduled_tasks.json` even without a native
+marker or transcript entry (another session can create a project task): a durable
+record still there, with no single-owner handover, refuses before exit or arming
+(#4263's guard, still the fallback). Unknown table/project formats also block.
 
-This is the safety fallback, not completion of #4258's actual mixed-task goal.
-That goal still requires a verified single-owner migration: stage and read back
-an inactive Fleet task, confirm native relinquishment, then activate one owner,
-with rollback and crash recovery at every boundary. A native runtime fence or
-equivalent execution acknowledgment is required; deleting a JSON record alone
-cannot rule out a task already claimed by another Claude session. No such
-protocol is implemented here. Do not report a source containing a durable task
-as ready or delete its task to bypass the refusal.
+### Durable one-shot tasks: the single-owner handover (#4280)
+
+A durable task survives the source's exit on disk, but nothing delivers it on
+time afterwards (a later Claude only offers a catch-up). `bin/fleet_transfer_durable.py`
+moves it to the Fleet loop of the switched conversation with exactly one owner at
+every instant, recorded in `$FLEET_CONF_DIR/transfer-durable/<fid>.json`:
+
+| state | owner | how it gets there |
+|---|---|---|
+| `staged` | native | the inert Fleet copy + the native record are written and read back; Fleet's dispatch answers *wait* |
+| `withdrawing` | native while the record is in the table, else Fleet | written **before** any native change |
+| `withdrawn` | Fleet (inert) | the record is gone and its evidence agrees (below) |
+| `active` | Fleet | the source process is verified gone (pid + procStart, never the session id — a `/clear` keeps the process) and the target's loop is bound; the only state Fleet delivers in |
+| `complete` | done | Fleet's delivery was accepted; a copy a stale writer put back meanwhile is withdrawn again |
+| `rolled_back` / `returned` | native | before activation, or the record reappeared before Fleet delivered it |
+
+**Road 1 — the live source holds the scheduler lock (the panel's default).** The
+preparation message has the source include the task in its plan (durable evidence
+true); `export-cron` stages it; the source runs `fleet_transfer_durable.py begin`
+(write-ahead), its native **CronDelete**, a native **CronList**, then `confirm`,
+which needs every id's CronDelete receipt, a later CronList without them (no
+scheduler call after it) and the table without them. Fleet never writes the native
+table on this road. Arm only after `confirm`.
+
+**Road 2 — the source cannot cooperate** (a quota failover, or `--durable-takeover`):
+the controller stages the records the source process itself created, `/exit`s it,
+and only after the exit withdraws them — inside the isolation boundary: Fleet holds
+the **launch gate** (`transfer-durable/launch.gate`; `fleet-session-wrap.sh` starts
+no Claude in that HOME until it is released) and **every live Claude process of the
+login** must be registered (`~/.claude/sessions/<pid>.json`) and run outside the
+HOME project — native writers rewrite the whole table and share no lock, so an
+unknown, old or HOME-bound Claude refuses before any write, naming its pid (and one
+appearing during the write is shown as `attention`). The rewrite is a plain
+read-modify-write: re-read right before an atomic rename, only the staged records
+go, every other record stays byte for byte. A scheduler lock held by another live
+process refuses; the lock is a hint, never the proof. A source with an active
+session-only schedule (its `@loop` mark, or a replay of its transcript) is refused
+here: only its own verified plan can move those.
+
+**Failure keeps one owner.** Before the receipt / the withdrawal the native record
+never left (`rolled_back`, nothing to restore). After it, a target that does not
+bind rolls back by resuming the source **through the same Fleet loop** (the
+recovery loop carries the job and activates it); a check that fails while the
+source still runs asks it to re-create the task with native CronCreate, and only
+its receipt plus the table settle `restoring` → `rolled_back`. A controller killed
+mid-way is settled by the quota tick's sweep (`fleet-loop.py recover` →
+`recover_all`): record still in the table ⇒ native; already withdrawn ⇒ Fleet,
+marked `attention` until `resume-source.sh` takes it into the loop; a source killed
+between its CronDelete receipts and its CronList counts its receipts plus the
+table. Evidence that settles nothing is shown (`fleet_transfer_durable.py status
+<fid>`), never resent. Only Claude 2.1.295's formats are accepted, and a native
+one-shot at :00/:30 (native picks an early jitter) does not move.
 
 For verified session-only tasks, the panel instructs the owning Claude session
 to run this exporter itself without stopping any task (not an operator step):
@@ -219,8 +257,10 @@ condition. Due jobs use the same native conversation writer. An accepted wakeup
 advances only its due jobs and retires a one-shot after its first accepted
 delivery; a delivery whose result is uncertain is paused and
 never resent automatically. The owner ends one responsibility with
-`fleet-loop.py stop --job <id>`; `defer` refuses multi-cron plans. Expiry stops
-each job independently. On a failed target that has exited, rollback resumes the
+`fleet-loop.py stop --job <id>`; `defer` refuses multi-cron plans. A recurring
+job keeps its rounds until its expiry and then delivers ONE final round, the first
+match at or after it (native 2.1.295 deletes a 7-day-old job after that fire);
+a one-shot ends at its expiry. Native's per-id lateness jitter is not reproduced. On a failed target that has exited, rollback resumes the
 source conversation through the Fleet scheduler with the last recorded schedule;
 it does not assume `Claude --resume` restores in-memory CronCreate jobs. An
 ambiguous target delivery requires inspection before recovery.

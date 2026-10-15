@@ -69,6 +69,7 @@ die() { FAILURE=$*; printf 'fleet-transfer: %s\n' "$*" >&2;
 usage() { sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; }
 SESS='' TARGET='' TO='' NOTES='' LOOP='' DRY=0 PREPARE=0 AFTER=0 EXPECT='' REQUEST='' CODEX_TARGET_HOME='' REQUIRE_IDLE=0
 TARGET_FILE='' QUOTA_REQUEST='' DRAFT='' INSPECT=0 NATIVE=0 RETRY='' EXPECT_SID='' FROM_PANEL=0 PREPARATION_ID=''
+TAKEOVER=0 TAKEOVER_PLAN='' DURABLE="$BIN/fleet_transfer_durable.py"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --session|--window|--to|--handoff|--loop|--expected-source|--armed-request|--target-file|--quota-request|--draft-file|--codex-home|--retry|--expected-session-id|--preparation-id)
@@ -92,10 +93,16 @@ while [ "$#" -gt 0 ]; do
     --inspect) INSPECT=1; DRY=1; shift ;;
     --native-resume) NATIVE=1; shift ;;
     --require-codex-idle) REQUIRE_IDLE=1; shift ;;
+    --durable-takeover) TAKEOVER=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument $1 (exactly one --window is required)" ;;
   esac
 done
+# Road 2 of the durable handover (issue #4280): a source that cannot run its own
+# CronDelete — a quota failover, or an explicit --durable-takeover — has its
+# durable tasks taken by this controller, inside the isolation boundary.
+[ -z "$QUOTA_REQUEST" ] || TAKEOVER=1
+export FLEET_DURABLE_TAKEOVER=$TAKEOVER
 # target_auth — may the TARGET account start an agent? (issue #1667, EPIC #1665 C3)
 # Asked BEFORE anything is written and again right before /exit, so a target whose
 # login ccquota has marked reauth_required — or a Claude label marked by
@@ -411,7 +418,9 @@ if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
   [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
 fi
 if [ "$NOREPO" = 1 ]; then
-  if [ "$SOURCE_AGENT" = claude ] && [ -z "$LOOP" ] && [ -n "$(opt '#{@loop}')" ]; then
+  # A staged durable handover (issue #4280) needs its plan even with no @loop.
+  if [ "$SOURCE_AGENT" = claude ] && [ -z "$LOOP" ] && { [ -n "$(opt '#{@loop}')" ] \
+      || [ -s "$FLEET_CONF_DIR/transfer-durable/$(opt '#{@fleet_id}').json" ]; }; then
     _plan="$FLEET_CONF_DIR/transfer-plans/$(opt '#{@fleet_id}').json"
     [ ! -s "$_plan" ] || LOOP=$_plan
   fi
@@ -484,6 +493,13 @@ if [ "$AFTER" = 1 ]; then
     --idle-wait "${FLEET_TRANSFER_IDLE_WAIT:-240}" --defer "${FLEET_HANDOFF_DEFER_SECS:-30}"
 fi
 
+# Road 2: stage the source's own durable tasks (inert) while it still runs.
+if [ "$TAKEOVER" = 1 ] && [ "$NOREPO" = 1 ] && [ "$SOURCE_AGENT" = claude ] && [ "$PREPARE" != 1 ]; then
+  TAKEOVER_PLAN=$(python3 "$DURABLE" stage-takeover "$(opt '#{@fleet_id}')" "$HOME" "$PID" "$SID" "$TRANSCRIPT" "$$") \
+    || die 'durable takeover refused; source and its tasks stay as they are'
+  [ -z "$TAKEOVER_PLAN" ] || [ -z "$LOOP" ] \
+    || die 'durable takeover carries the durable tasks alone: a source with a verified plan can run its own CronDelete'
+fi
 [ -z "$QUOTA_REQUEST" ] || [ ! -s "$QUOTA_REQUEST/unsent-draft.txt" ] || DRAFT="$QUOTA_REQUEST/unsent-draft.txt"
 package_flags=(--identity "$IDENTITY" --lease-key "$LEASE_KEY" --input-view "$INPUT_VIEW"); [ "$NOREPO" != 1 ] || package_flags+=(--norepo)
 [ "$NATIVE" = 0 ] || package_flags+=(--native-resume)
@@ -492,10 +508,13 @@ BUNDLE=$(python3 "$HELPER" package --output "$FLEET_CONF_DIR/handoffs" --main "$
   --worktree "$WT" --sid "$SID" --transcript "$TRANSCRIPT" --registry "$REGISTRY" --pid "$PID" \
   --source-agent "$SOURCE_AGENT" --codex-home "$CODEX_SOURCE_HOME" --target-home "$CODEX_TARGET_HOME" \
   --session "$SESS" --window "$WIN" --pane "$PANE" --handle "$HANDLE" --issue "$ISSUE" \
-  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "$LOOP" --launcher "$LAUNCH" \
+  --origin "$ORIGIN" --repo "${FLEET_REPO:-}" --handoff "$NOTES" --previous "$PREVIOUS" --loop "${TAKEOVER_PLAN:-$LOOP}" --launcher "$LAUNCH" \
   --to "$TO" --target-file "$TARGET_FILE" --quota-request "$QUOTA_REQUEST" --draft-file "$DRAFT" ${package_flags[@]+"${package_flags[@]}"}) || exit 1
 printf 'handoff package: %s\n' "$BUNDLE"
 [ "$PREPARE" != 1 ] || exit 0
+# The single-owner durable journal this switch carries (issue #4280), if any.
+DFID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("durable_fid") or "")' "$BUNDLE/manifest.json") \
+  || die 'cannot read the handoff manifest'
 
 # One transfer per worktree. mkdir is atomic; a killed controller leaves a lock
 # for explicit inspection, rather than allowing a second controller to guess.
@@ -514,6 +533,17 @@ cleanup() {
     # An exact still-live source can end this failed attempt. A stale result
     # must never mark a newer panel request rejected.
     python3 "$BIN/.fleet-transfer-norepo.py" abort-request "$SOCK" "$PANE" "$PREPARATION_ID" >/dev/null 2>&1 || :
+  fi
+  if [ -n "${DFID:-}" ] && [ "$SUCCESS" != 1 ] && [ "$ROLLED" != 1 ]; then
+    # Before activation the durable task goes back to its native owner: a
+    # source still running is asked to re-create it (CronCreate + receipt);
+    # a source already gone keeps it in the journal for resume-source.sh.
+    _dout=$(python3 "$DURABLE" abort "$DFID" "${FAILURE:-transfer did not complete}" 2>&1) || :
+    if [ "$(printf '%s\n' "$_dout" | head -1)" = restoring ] && fleet_pid_alive "$PID"; then
+      printf '%s\n' "$_dout" | sed 1d | bash "$BIN/fleet-peer-send.sh" -L "$SOCK" "$PANE" - >/dev/null 2>&1 || :
+      TM set-option -w -t "$WIN" @transfer_note '切换未完成：已请源会话重建 durable 任务' 2>/dev/null || :
+    fi
+    printf 'fleet-transfer: durable handover: %s\n' "$(python3 "$DURABLE" status "$DFID" 2>/dev/null)" >&2
   fi
   if [ "$ROLLED" = 1 ]; then
     printf 'fleet-transfer: %s did not start; the source %s session %s was resumed in place. Handoff kept for a retry: %s\n' \
@@ -580,6 +610,9 @@ case "$EXIT_WAIT:$BOOT_WAIT" in *[!0-9:]*|:*|*:) die 'transfer timeouts must be 
 if [ "$NOREPO" = 1 ]; then
   PREPARATION_ID=$(python3 "$BIN/.fleet-transfer-norepo.py" check-request "$SOCK" "$PANE" "$PID" "$SID" "$TO" "$PREPARATION_ID" "$NOTES" --commit) || die 'panel preparation was superseded before exit'
 fi
+# The source's confirmed CronDelete is the only native road (issue #4280): the
+# controller takes the journal over, or the source keeps running.
+[ -z "$DFID" ] || python3 "$DURABLE" claim "$DFID" "$$" || die 'durable handover is not confirmed by the source'
 EXIT_SENT=1
 TM set-option -w -t "$PANE" @wrap_quiet 1 2>/dev/null   # the fleet's own exit: no recovery page (#1784)
 SK Escape || die 'cannot address source prompt'
@@ -672,7 +705,10 @@ rollback() {
   # The note is printed into the pane above the resumed source, so the pane
   # itself says what happened even with no bar in view.
   printf -v cmd 'printf "%%s\\n" %q; exec bash %q --run-source' "▲ $note" "$BUNDLE/resume-source.sh"
-  if [ "$NOREPO" = 1 ] && [ -n "$LOOP" ]; then
+  if [ "$NOREPO" = 1 ] && { [ -n "$LOOP" ] || [ -n "$TAKEOVER_PLAN" ]; }; then
+    # The launch gate goes before the source's Claude comes back (issue #4280);
+    # a withdrawn durable task rides the recovery loop below.
+    [ -z "$DFID" ] || python3 "$DURABLE" abort "$DFID" "$why" >/dev/null 2>&1 || :
     _recovery=$(python3 "$HELPER" rollback-cron "$BUNDLE") || die 'cannot prepare cron rollback; source remains stopped'
     if [ -n "$_recovery" ]; then
       TM set-option -wu -t "$WIN" @loop 2>/dev/null || :
@@ -687,7 +723,12 @@ rollback() {
           && IFS=$'\t' read -r back rest <<< "$got" && [ "$(printf '%s' "$rest" | cut -f1)" = "$SID" ] && break
       else
         if back=$(fleet_pane_claude_pid "$PANE" "$SOCK" 2>/dev/null) && [ "$(fleet_cc_session_id "$back")" = "$SID" ]; then
-          if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then break; fi
+          if [ -z "$_recovery" ] || python3 "$HELPER" target-ready "$_recovery" "$SOCK" "$PANE" >/dev/null 2>&1; then
+            # The resumed source's Fleet loop carries the durable job now.
+            [ -z "$DFID" ] || [ -z "$_recovery" ] || python3 "$DURABLE" activate "$DFID" \
+              "{\"agent\":\"$SOURCE_AGENT\",\"rollback\":true,\"pid\":\"$back\"}" >/dev/null || :
+            break
+          fi
         fi
       fi
       back=''
@@ -718,6 +759,8 @@ rollback() {
   exit 1
 }
 
+# The source is gone and nothing native can run the withdrawn durable task.
+[ -z "$DFID" ] || python3 "$DURABLE" handed "$DFID" || rollback 'durable handover is not settled'
 # The helper quotes metadata as argv; conversation text is only ever data.
 python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the target launcher'
 # The source agent's measurement-bus stamps go too — ALL of them (issue #3461:
@@ -758,6 +801,13 @@ done
 TM clear-history -t "$PANE" 2>/dev/null || :   # a resume's replay, out of history (#870)
 python3 "$HELPER" state "$BUNDLE" started "$TO identity $CPID; task completion is not implied." || die 'cannot record target startup'
 SUCCESS=1
+if [ -n "$DFID" ] && ! python3 "$DURABLE" activate "$DFID" "{\"agent\":\"$TO\",\"session\":\"$CPID\"}"; then
+  # The target runs; its Fleet loop holds the job but will not deliver it
+  # until this is settled — shown, never guessed.
+  TM set-option -w -t "$WIN" @transfer_note 'durable 任务未激活：请查看 fleet_transfer_durable.py status' 2>/dev/null || :
+  [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event -L "$SOCK" transfer-failed \
+    "${HANDLE:-$WIN}: durable 任务未激活 ($DFID)" >/dev/null 2>&1 || :
+fi
 [ "$NOREPO" != 1 ] || python3 "$BIN/.fleet-transfer-norepo.py" complete-request "$SOCK" "$PANE" "$PREPARATION_ID" || :
 # A switch that landed some other way ends a retry still waiting on this window.
 _fid=$(TM show-options -wqv -t "$WIN" @fleet_id 2>/dev/null)
