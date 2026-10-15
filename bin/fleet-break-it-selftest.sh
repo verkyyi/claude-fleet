@@ -122,6 +122,10 @@
 #   drill-expiry-user-pod                           tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   podKept / handMadePod: a pod's own login settled, its
 #                                                   endpoints kept) + store DeleteDrillKeeping
+#   cn-probe-wait-past-terminal                     bin/fleet-cn-probe.sh codex step (the new session's own terminal error)
+#   cn-probe-coarse-verdict                         bin/fleet-cn-probe.sh stages + bin/fleet-cn-probe-result.py (one result)
+#                                                   + bin/fleet-cn-probe-diag.sh (read-only, redacted)
+#   cn-probe-env-masked                             bin/fleet-cn-probe-watch.sh (a failed ensure is the run's env verdict)
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), internal/agent lane_state.go,
@@ -5764,6 +5768,31 @@ drill_drill_expiry_user_pod() {
     '个人 pod 上的演练登录到期即结清：不发 remove、rc 2 不重试，人立即删、同名登录马上能再邀、pod 不掉线（go test）' || return 1
   SECS=$(since "$t0")
 }
+
+# ---- cn-probe-* (#4303): the China probe waited 300 s past a 403 the new Codex
+# session had already shown (#4290), compressed every cause into one coarse layer
+# (#4301: «no logins to serve» while the account opener was off), and walked on
+# past a failed ensure. Each drill runs its leg of bin/fleet-cn-probe-selftest.sh:
+# the REAL probe and diagnosis against stub ssh / tmux / fleet in a sandbox HOME.
+cnprobe_leg() {   # cnprobe_leg <leg> <cap> <what>
+  CAP=$2; local t0 out
+  [ -f "$BIN/fleet-cn-probe-diag.sh" ] && [ -f "$BIN/fleet-cn-probe-result.py" ] \
+    || { WHY="no bin/fleet-cn-probe-diag.sh / fleet-cn-probe-result.py — the probe has one coarse verdict and no diagnosis"; return 1; }
+  t0=$(now)
+  out=$(CNP_LEG=$1 bash "$BIN/fleet-cn-probe-selftest.sh" 2>&1) \
+    || { WHY="$(printf '%s\n' "$out" | grep -E 'selftest FAIL|rror' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT=$3
+}
+drill_cn_probe_wait_past_terminal() { cnprobe_leg H 120 "新会话屏上 403「no upstream credential」⇒ 10 s 内失败、reason upstream_no_credential；重试中的 429、历史日志和别的窗口里的旧错误不算；慢回答照通，不答照样等到时限"; }
+drill_cn_probe_coarse_verdict() {
+  cnprobe_leg J 120 "x" || return 1
+  local s1=$SECS
+  cnprobe_leg K 120 "x" || return 1
+  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2])))' "$s1" "$SECS")
+  WHAT="诊断写明真实拒绝者与读数（1.51 of 1.00 cores, 59% throttled）、开号器为何关（运行时组可写）、身份过期判 env；0600、无凭据；文本与退出码出自 result.json，阶段带起止 / 耗时 / reason_code / 证据"
+}
+drill_cn_probe_env_masked() { cnprobe_leg I 60 "ensure 失败 ⇒ 本轮 env · ensure:identity，不跑探针、不开会话，原话留证，单标题「国内探针环境无效」"; }
 
 # ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
 # read the load, under one observed_at, and the hub folded a machine's load from
