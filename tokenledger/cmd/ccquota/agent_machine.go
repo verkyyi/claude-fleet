@@ -191,7 +191,16 @@ func accountOpener(on string) string {
 	if on != "1" || accountGOOS != "linux" {
 		return ""
 	}
-	return envOr("CCQUOTA_MACHINE_OPENER", machineScript("fleet-node-linux.py"))
+	if v := os.Getenv("CCQUOTA_MACHINE_OPENER"); v != "" {
+		return v
+	}
+	p, why := machineScriptWhy("fleet-node-linux.py")
+	if p == "" {
+		// said once at start: without it a machine with no login only ever
+		// printed «no logins to serve» (claude-fleet#4301)
+		fmt.Fprintf(os.Stderr, "ccquota agent --machine: FLEET_NODE_ACCOUNT_OPS=1 but no opener: %s\n", why)
+	}
+	return p
 }
 
 // accountGOOS is the platform accountOpener judges; a test seam.
@@ -373,19 +382,48 @@ func entryCtl(on string) string {
 // machineScript is a root-owned, not group/world-writable script beside this
 // binary in the root runtime, or "" — never one anyone else could swap.
 func machineScript(name string) string {
+	p, _ := machineScriptWhy(name)
+	return p
+}
+
+// machineScriptWhy is machineScript plus, for "", why the script was not taken.
+func machineScriptWhy(name string) (string, string) {
 	exe, err := os.Executable()
 	if err != nil {
-		return ""
+		return "", err.Error()
 	}
-	p := filepath.Join(filepath.Dir(exe), name)
+	return scriptBeside(filepath.Dir(exe), name, os.Geteuid(), os.Getegid())
+}
+
+// scriptBeside judges <dir>/<name> for a program running as euid/egid. A
+// group-writable file passes only for a non-root program whose own group it is:
+// one person's pod runs as its login with fsGroup = that login's group, and the
+// kubelet's fsGroup pass (OnRootMismatch, after anything touched the disk's top)
+// adds g+w to every file — a group of one, nobody else's write (claude-fleet#4301:
+// the opener read "" and the drill pod sat at «no logins to serve»).
+func scriptBeside(dir, name string, euid, egid int) (string, string) {
+	p := filepath.Join(dir, name)
 	fi, err := os.Stat(p)
-	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm()&0o022 != 0 {
-		return ""
+	if err != nil {
+		return "", err.Error()
 	}
-	if uid, ok := fileUID(fi); os.Geteuid() == 0 && (!ok || uid != 0) {
-		return ""
+	if !fi.Mode().IsRegular() {
+		return "", p + ": not a regular file"
 	}
-	return p
+	perm := fi.Mode().Perm()
+	if perm&0o002 != 0 {
+		return "", fmt.Sprintf("%s: mode %o — anyone may write it", p, perm)
+	}
+	if perm&0o020 != 0 {
+		gid, ok := fileGID(fi)
+		if euid == 0 || !ok || int(gid) != egid {
+			return "", fmt.Sprintf("%s: mode %o — its group may write it", p, perm)
+		}
+	}
+	if uid, ok := fileUID(fi); euid == 0 && (!ok || uid != 0) {
+		return "", p + ": not root's"
+	}
+	return p, ""
 }
 
 // runCoreExec is `ccquota core-exec --sock S --login L -- argv…`: what prepCmd
