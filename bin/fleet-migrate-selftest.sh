@@ -239,6 +239,18 @@ TM set-window-option -t "$w1" @epic 'acme/repo#7'
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
+cat > "$FB/manual-quota" <<'EOS'
+#!/bin/bash
+[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
+state="${TMPDIR}/.claude-dash/global"
+mkdir -p "$state"
+date +%s > "$state/account.quota.ts.$$"
+mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
+printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
+EOS
+chmod +x "$FB/manual-quota"
+export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
+
 if selftest_section 1; then
 # --- whoami: token truth (A) beats a wrong stamp, and heals it
 TM set-window-option -t "$w1" @cc_account acctB
@@ -286,17 +298,6 @@ ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail "dry-ru
 
 # Operator-selected destinations can cross the 85% automatic ceiling, but a
 # fresh reading at/above 95% (or an unknown reading) must refuse before /exit.
-cat > "$FB/manual-quota" <<'EOS'
-#!/bin/bash
-[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
-state="${TMPDIR}/.claude-dash/global"
-mkdir -p "$state"
-date +%s > "$state/account.quota.ts.$$"
-mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
-printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
-EOS
-chmod +x "$FB/manual-quota"
-export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
 ok; out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1")
 printf '%s' "$out" | grep -q 'would /exit' || fail "89% explicit target must be previewable: $out"
 ok; FAKE_MANUAL_PCT=95 bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" >"$WORK/manual-block.out" 2>&1 \
