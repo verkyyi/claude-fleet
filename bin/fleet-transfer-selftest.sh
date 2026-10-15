@@ -24,7 +24,7 @@ ok() { checks=$((checks+1)); }
 
 IBIN="$WORK/install/bin"; FB="$WORK/fakebin"
 mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/fleets/$LBL"
-for f in fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
+for f in fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
@@ -220,55 +220,197 @@ if [ "${1:-}" = --norepo ] || [ "${1:-}" = --norepo-cron ] || [ "${1:-}" = --nor
   TM set-environment -t "$LBL" HOME "$HOME"
   printf '[projects."%s"]\ntrust_level = "trusted"\n' "$HOME" > "$HOME/.codex/config.toml"
   if [ "${1:-}" = --norepo-durable ]; then
-    spawn 96 norepo norepo
-    for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
-    TM set-option -w -t "$WIN" @norepo 1
-    TM set-option -w -t "$WIN" @fleet_role worker
-    TM set-option -w -t "$WIN" @fleet_id 11111111-1111-4111-8111-111111111196
-    mkdir -p "$HOME/.claude"
-    python3 - "$HOME" <<'PYDURABLE'
-import json,sys
-from pathlib import Path
-home=Path(sys.argv[1]); record=dict(id='durable-reminder',cron='13 9 21 10 *',
-    prompt='must still be delivered',createdInProject=str(home))
-(home/'.claude/scheduled_tasks.json').write_text(json.dumps(dict(tasks=[record])))
-PYDURABLE
-    cp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json"
-    printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
-    # No native marker or transcript entry: externally-created project tasks
-    # must not disappear from the guard merely because this process never listed them.
-    for mode in --dry-run --prepare-only --after-turn; do
-      transfer "$mode" --handoff "$WORK/durable-notes.md" && fail 'durable source without an execution owner must refuse'
-      printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
-      kill -0 "$PID" || fail 'durable refusal exited the source'
-      [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable refusal replaced source identity'
-      cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
-      [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
-      [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'non-panel refusal must not enqueue preparation'
-      ok
-    done
-    # A panel click still asks the exact source for current native evidence.
-    # Preparation is not authorization to withdraw tasks or exit the source.
+    # #4280: a mixed plan — one session-only patrol + one durable one-shot —
+    # moves on the single-owner road: B still refuses before preparation, the
+    # source's own CronDelete receipt + CronList withdraw it, the target's Fleet
+    # loop delivers it exactly once, and failures keep exactly one owner.
     cat > "$IBIN/fleet-peer-send.sh" <<'PYPREP'
 #!/bin/sh
 cat >> "$TRANSFER_TEST_ROOT/preparation-messages"
 printf '\nREQUEST\n' >> "$TRANSFER_TEST_ROOT/preparation-messages"
 PYPREP
-    transfer --from-panel --dry-run || fail 'durable panel must explain preparation'
-    case "$OUT" in *preparation-needed:*) ;; *) fail 'missing durable preparation status' ;; esac
-    [ ! -e "$FLEET_CONF_DIR/transfer-preparation" ] || fail 'panel dry-run wrote preparation'
-    transfer --from-panel || fail 'durable panel must request source CronList'
-    transfer --from-panel || fail 'durable panel preparation must deduplicate'
-    [ "$(grep -c '^REQUEST$' "$WORK/preparation-messages")" = 1 ] || fail 'durable preparation sent twice'
+    rm "$FB/codex"; cp "$BIN/fleet-loop-fake-codex.py" "$FB/codex"; chmod +x "$FB/codex"
+    durable_source() { # n — a no-repo Claude source holding the native lock, with one durable task
+      spawn "$1" norepo norepo
+      for k in raw worktree; do TM set-option -wu -t "$WIN" "@$k"; done
+      TM set-option -w -t "$WIN" @norepo 1
+      TM set-option -w -t "$WIN" @fleet_role worker
+      TM set-option -w -t "$WIN" @cc_agent claude
+      TM set-option -w -t "$WIN" @fleet_id "11111111-1111-4111-8111-1111111111$1"
+      mkdir -p "$HOME/.claude"
+      rm -f "$WORK/delivered.log" "$HOME/delivered.log"
+      python3 - "$HOME" "$PID" "$TRANSCRIPT" "$SID" "$(field fleet_id)" "$IBIN" "$WORK/native-plan.json" <<'PYDURABLE'
+import datetime,json,sys,time
+from pathlib import Path
+home,pid,transcript,sid,fid,ibin,planp=sys.argv[1:]; sys.path.insert(0,ibin)
+import fleet_transfer_durable as D
+start=D.proc_start(pid); now=time.time(); zone=D.local_zone()
+due=datetime.datetime.now()+datetime.timedelta(days=1)
+cron='%d %d %d %d *'%(13 if due.minute in (0,30) else due.minute,due.hour,due.day,due.month)
+record=dict(id='2b6a2f9f',cron=cron,prompt='EPIC acceptance: reread the train metrics once',createdAt=int(now*1000),
+            createdBySessionId='before-clear',createdByPid=int(pid),createdByProcStart=start,createdInProject=str(Path(home).resolve()))
+(Path(home)/'.claude/scheduled_tasks.json').write_text(json.dumps(dict(tasks=[record])))
+(Path(home)/'.claude/scheduled_tasks.lock').write_text(json.dumps(dict(sessionId='before-clear',pid=int(pid),procStart=start,acquiredAt=1)))
+pt=datetime.datetime.fromtimestamp(now+360,datetime.timezone.utc)
+patrol=dict(id='patrol',prompt='exact patrol instruction',cron=str(pt.minute)+' * * * *',recurring=True,durable=False,
+            timezone='UTC',expires_at=now+7200,stop_when='')
+once=dict(D.job_for(record),durable=True)
+ev={'2b6a2f9f':{k:dict(value=once[k],source='native table record') for k in ('prompt','cron','durable','timezone','expires_at','stop_when')}}
+plan=dict(jobs=[patrol,once],native_source=dict(confirmed=True,job_evidence=ev))
+Path(planp).write_text(json.dumps(plan))
+ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
+listed=[patrol,dict(id='2b6a2f9f',cron=cron,prompt=record['prompt'],recurring=False)]
+with open(transcript,'a') as f:
+    f.write(json.dumps(dict(type='system',version='2.1.295',sessionId=sid))+'\n')
+    f.write(json.dumps(dict(timestamp=ts,message=dict(content=[dict(type='tool_use',id='list0',name='CronList',input={})])))+'\n')
+    f.write(json.dumps(dict(timestamp=ts,toolUseResult=dict(jobs=listed),message=dict(content=[dict(type='tool_result',tool_use_id='list0')])))+'\n')
+PYDURABLE
+      TM set-option -w -t "$WIN" @loop "kind=cron id=patrol@$(( $(date +%s)+7200 ))"
+      cp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json"
+      DFID=$(field fleet_id)
+      JOURNAL="$FLEET_CONF_DIR/transfer-durable/$DFID.json"
+    }
+    as_source() { local sp; sp=$(TM display-message -p -t "$PANE" '#{socket_path}'); TMUX="$sp,0,0" TMUX_PANE="$PANE" "$@"; }
+    native_receipts() { # the source's own CronDelete of the durable id, then CronList (patrol only)
+      python3 - "$HOME" "$TRANSCRIPT" <<'PYNATIVE'
+import datetime,json,os,sys
+from pathlib import Path
+home,transcript=sys.argv[1:]; store=Path(home)/'.claude/scheduled_tasks.json'
+t=json.loads(store.read_text()); t['tasks']=[x for x in t['tasks'] if x['id']!='2b6a2f9f']
+tmp=str(store)+'.native'; open(tmp,'w').write(json.dumps(t)); os.rename(tmp,store)
+ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
+rows=[('del','CronDelete',dict(id='2b6a2f9f'),'Cancelled job 2b6a2f9f'),('list1','CronList',{},None)]
+with open(transcript,'a') as f:
+    for tid,name,inp,res in rows:
+        if res is None:
+            res=dict(jobs=[j for j in json.load(open(os.environ['TRANSFER_TEST_ROOT']+'/native-plan.json'))['jobs'] if j['id']=='patrol'])
+        f.write(json.dumps(dict(timestamp=ts,message=dict(content=[dict(type='tool_use',id=tid,name=name,input=inp)])))+'\n')
+        f.write(json.dumps(dict(timestamp=ts,toolUseResult=res,message=dict(content=[dict(type='tool_result',tool_use_id=tid)])))+'\n')
+PYNATIVE
+    }
+    jstate() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["state"])' "$JOURNAL"; }
+    prepare_source() { # export (stages the inert copy) → begin → CronDelete + CronList → confirm
+      OUT=$(as_source python3 "$IBIN/fleet-loop.py" export-cron --session "$LBL" --jobs-file "$WORK/native-plan.json" 2>&1) \
+        || fail 'source export of the mixed plan'
+      [ "$(jstate)" = staged ] || fail 'export must stage the durable journal'
+      cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'staging touched the native table'
+      python3 "$IBIN/fleet_transfer_durable.py" begin "$DFID" || fail 'durable write-ahead'
+      native_receipts
+      python3 "$IBIN/fleet_transfer_durable.py" confirm "$DFID" "$TRANSCRIPT" || fail 'durable receipt confirmation'
+      [ "$(jstate)" = withdrawn ] || fail 'confirmed receipts must withdraw the journal'
+    }
+
+    # 1) B: no preparation yet — every entry refuses, nothing changes.
+    durable_source 96
+    printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
+    for mode in --dry-run --prepare-only --after-turn; do
+      transfer "$mode" --handoff "$WORK/durable-notes.md" && fail 'durable source without its native receipt must refuse'
+      printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
+      kill -0 "$PID" || fail 'durable refusal exited the source'
+      cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
+      [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
+      ok
+    done
+    transfer --from-panel || fail 'durable panel must request source preparation'
     grep -q 'Call native CronList now' "$WORK/preparation-messages" || fail 'panel did not ask for current CronList'
-    grep -q 'handoff notes' "$WORK/preparation-messages" || fail 'panel did not ask for handoff notes'
-    transfer --after-turn --handoff "$WORK/durable-notes.md" && fail 'preparation cannot bypass durable ownership refusal'
-    kill -0 "$PID" || fail 'durable preparation exited source'
-    [ "$(fleet_cc_session_id "$PID")" = "$SID" ] || fail 'durable preparation changed native identity'
-    cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable preparation changed tasks'
-    [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable preparation created a transfer packet'
+    grep -q "fleet_transfer_durable.py begin $DFID" "$WORK/preparation-messages" || fail 'panel did not give the write-ahead step'
+    grep -q 'native CronDelete' "$WORK/preparation-messages" || fail 'panel did not ask for the native CronDelete'
+    grep -q "fleet_transfer_durable.py confirm $DFID" "$WORK/preparation-messages" || fail 'panel did not give the receipt check'
     ok
-    printf 'fleet-transfer durable refusal selftest: PASS (%s checks)\n' "$checks"
+
+    # 2) success: the target's Fleet loop delivers the durable task once, on time.
+    prepare_source
+    PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$FLEET_CONF_DIR/transfer-preparation/$DFID.json")
+    printf 'Fleet-Preparation-Request: %s\nVerified source notes.\n' "$PREP" > "$WORK/panel-notes.md"
+    transfer --handoff "$WORK/panel-notes.md" || { cat "$(packet)/pane-target-failed.txt" >&2 2>/dev/null; fail 'mixed durable cutover'; }
+    kill -0 "$PID" 2>/dev/null && fail 'source must exit before the target owns its task'
+    BUNDLE=$(packet)
+    python3 - "$BUNDLE/loop/state.json" "$JOURNAL" "$IBIN" "$HOME" <<'PYDELIVER' || fail 'durable delivered exactly once by the target loop'
+import json,sys,runpy,time
+from pathlib import Path
+path,journal,ibin,home=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4])
+sys.path.insert(0,ibin)
+for _ in range(40):
+    if path.exists() and json.loads(path.read_text()).get('status')=='active': break
+    time.sleep(.1)
+r=json.loads(path.read_text()); assert r['status']=='active',r
+j=json.loads(journal.read_text()); assert j['state']=='active' and j['target']['agent']=='codex',j
+assert r['durable_fid']==j['fid'] and r['durable_ids']==['2b6a2f9f'],r
+assert '2b6a2f9f' not in [t['id'] for t in json.loads((home/'.claude/scheduled_tasks.json').read_text())['tasks']]
+log=home/'delivered.log'
+loop=runpy.run_path(ibin+'/fleet-loop.py')
+jobs={x['id']:x for x in r['schedule']['jobs']}
+patrol,once=jobs['patrol']['next_run_at'],jobs['2b6a2f9f']['next_run_at']
+assert patrol<once
+loop['dispatch'](path,now=patrol)                  # the session-only patrol, on its own round
+lines=log.read_text().splitlines(); assert len(lines)==1 and 'exact patrol instruction' in lines[0],lines
+assert 'reread the train metrics' not in lines[0]
+loop['dispatch'](path,now=once-1)                  # not yet
+assert len(log.read_text().splitlines())==1
+loop['dispatch'](path,now=once)                    # on time
+loop['dispatch'](path,now=once+1)                  # never again
+loop['dispatch'](path,now=once+3600)
+lines=log.read_text().splitlines()
+assert sum('reread the train metrics once' in x for x in lines)==1,lines
+j=json.loads(journal.read_text()); assert j['state']=='complete',j['state']
+r=json.loads(path.read_text()); assert jobs and [x['next_run_at'] for x in r['schedule']['jobs'] if x['id']=='2b6a2f9f']==[None]
+PYDELIVER
+    ok
+
+    # 3) the target fails: the source comes back through the Fleet loop, which
+    #    owns the durable task from then on (no native re-create, no duplicate).
+    durable_source 97
+    prepare_source
+    PREP=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_id"])' "$FLEET_CONF_DIR/transfer-preparation/$DFID.json" 2>/dev/null || :)
+    touch "$WORK/fail-target"
+    transfer --handoff "$WORK/durable-notes.md" && fail 'failed durable target reported success'
+    rm "$WORK/fail-target"
+    BUNDLE=$(packet)
+    python3 - "$BUNDLE" "$JOURNAL" "$SID" <<'PYBACK' || fail 'rollback must hand the durable task to the resumed source loop'
+import json,sys,time
+from pathlib import Path
+b,journal,sid=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
+assert json.loads((b/'state.json').read_text())['state']=='rolled_back'
+for _ in range(40):
+    j=json.loads(journal.read_text())
+    if j['state']=='active': break
+    time.sleep(.1)
+assert j['state']=='active' and j['target']['agent']=='claude',j
+r=json.loads((b/'rollback/loop/state.json').read_text())
+assert r['agent']=='claude' and r['thread_id']==sid and r['durable_fid']==j['fid'],r
+assert [x['id'] for x in r['schedule']['jobs']]==['patrol','2b6a2f9f']
+PYBACK
+    ok
+
+    # 4) a check fails before /exit, after the receipt: the still-running source
+    #    is asked to re-create its task natively, and only its receipt settles it.
+    durable_source 98
+    prepare_source
+    : > "$WORK/preparation-messages"
+    # An out-of-bounds exit wait dies after the package, before the claim and /exit.
+    OUT=$(FLEET_TRANSFER_EXIT_WAIT=99 bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$WIN" --to codex --handoff "$WORK/durable-notes.md" 2>&1) \
+      && fail 'an out-of-bounds exit wait must refuse'
+    printf '%s' "$OUT" | grep -q 'timeout bounds' || fail 'the refusal came from somewhere else'
+    kill -0 "$PID" || fail 'a refused cutover exited the source'
+    [ "$(jstate)" = restoring ] || { printf '%s\n' "$OUT" >&2; fail "a pre-exit failure must ask the source to restore (got $(jstate))"; }
+    grep -q 'CronCreate' "$WORK/preparation-messages" || fail 'the source was not asked for the native re-create'
+    python3 - "$HOME" "$TRANSCRIPT" <<'PYCREATE'
+import datetime,json,os,sys
+from pathlib import Path
+home,transcript=sys.argv[1:]; store=Path(home)/'.claude/scheduled_tasks.json'
+before=json.load(open(os.environ['TRANSFER_TEST_ROOT']+'/native-before.json'))['tasks'][0]
+t=json.loads(store.read_text()); t['tasks'].append(dict(before,id='c0ffee00'))
+tmp=str(store)+'.native'; open(tmp,'w').write(json.dumps(t)); os.rename(tmp,store)
+ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
+inp=dict(cron=before['cron'],prompt=before['prompt'],recurring=False,durable=True)
+with open(transcript,'a') as f:
+    f.write(json.dumps(dict(timestamp=ts,message=dict(content=[dict(type='tool_use',id='mk',name='CronCreate',input=inp)])))+'\n')
+    f.write(json.dumps(dict(timestamp=ts,toolUseResult=dict(id='c0ffee00',durable=True),message=dict(content=[dict(type='tool_result',tool_use_id='mk')])))+'\n')
+PYCREATE
+    python3 "$IBIN/fleet_transfer_durable.py" confirm-restored "$DFID" "$TRANSCRIPT" || fail 'native re-create receipt'
+    [ "$(jstate)" = rolled_back ] || fail 'the re-create must settle the rollback'
+    ok
+    printf 'fleet-transfer durable handover selftest: PASS (%s checks)\n' "$checks"
     exit 0
   fi
   if [ "${1:-}" != --norepo-cron ]; then

@@ -20,7 +20,10 @@ def refuse_durable():
 def durable_journal(fid):
     """The live durable handover of this lifelong identity, or None."""
     import fleet_transfer_durable as durable
-    r = durable.read(durable.journal_path(fid)) if fid else None
+    try:
+        r = durable.read(durable.journal_path(fid))
+    except ValueError:
+        return None   # no lifelong identity, so no journal of its own
     return r if r and r.get('state') not in durable.TERMINAL else None
 
 

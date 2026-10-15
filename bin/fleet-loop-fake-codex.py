@@ -33,7 +33,9 @@ if 'app-server' in args:
     if method=='initialize':result={}
     elif method=='thread/read':result={'thread':{'id':'12345678-1234-1234-1234-123456789abc','cwd':str(root),'status':{'type':'idle'}}}
     elif method=='turn/start':
-     (root/'delivered.json').write_text(json.dumps(q['params']));result={'turn':{'id':'native-turn'}}
+     (root/'delivered.json').write_text(json.dumps(q['params']))
+     with open(root/'delivered.log','a') as log:log.write(json.dumps(q['params'])+'\n')  # every turn, in order
+     result={'turn':{'id':'native-turn'}}
     else:raise RuntimeError(method)
     payload=json.dumps({'id':q['id'],'result':result}).encode();n=len(payload)
     c.sendall(bytes([129,n]) + payload if n<126 else bytes([129,126])+struct.pack('!H',n)+payload)
