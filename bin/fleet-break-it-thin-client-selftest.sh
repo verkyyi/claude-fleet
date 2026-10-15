@@ -453,7 +453,7 @@ drill_thin_upload_blocks_input() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-thin-upload-selftest.py" Pump 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT="慢剪贴板期间 PTY 输出继续，Ctrl+C 及时取消，缓冲输入不执行"
+  WHAT="慢剪贴板期间 PTY 输出和 resize 继续，Ctrl+C 只取消上传并及时恢复输入，暂停期文字回车不执行"
 }
 
 tc_cleanup() {

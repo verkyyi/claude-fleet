@@ -28,7 +28,10 @@ os.write(1, b'\\x1b]7502;cur;token=test;m=-;l=-;w=fu/fid\\x07READY')
 while True:
     r, _, _ = select.select([0], [], [], .02)
     os.write(1, b'.')
-    if r and b'\\x03' in os.read(0, 65536): os.write(1, b'INTERRUPTED')
+    if r:
+        data = os.read(0, 65536)
+        with open(__file__ + '.input', 'ab') as f: f.write(data)
+        os.write(1, b'RESUMED' if b'resumed' in data else b'INTERRUPTED')
 """)
             driver = d / "driver.py"
             driver.write_text("""import importlib.util, sys, signal
@@ -64,8 +67,19 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                 read_until(b'RESIZED', .75)
                 start = time.monotonic()
                 os.write(master, b"held command\r\x03")
-                read_until(b"INTERRUPTED", .75)
-                print("pump interrupt latency %.3fs" % (time.monotonic() - start), flush=True)
+                read_until('附件已取消'.encode(), .75)
+                end = time.monotonic() + .75
+                child = int(clip.with_suffix('.started').read_text())
+                while time.monotonic() < end:
+                    state = subprocess.run(['ps', '-o', 'stat=', '-p', str(child)], capture_output=True).stdout.strip()
+                    if not state or state.startswith(b'Z'): break
+                    time.sleep(.01)
+                self.assertTrue(not state or state.startswith(b'Z'), 'capture not reaped')
+                time.sleep(.1)
+                os.write(master, b'resumed\r')
+                read_until(b'RESUMED', .75)
+                self.assertEqual(Path(str(remote) + '.input').read_bytes(), b'resumed\r')
+                print("pump cancel/reap/resume latency %.3fs" % (time.monotonic() - start), flush=True)
             finally:
                 p.terminate()
                 try: p.wait(timeout=2)
@@ -117,14 +131,15 @@ class Transactions(unittest.TestCase):
             p = self.root / name; p.write_bytes(name.encode()); paths.append(str(p))
         return self.mod.START + (' '.join(shlex.quote(p) for p in paths) + ' ').encode() + self.mod.END
 
-    def test_files_and_immediate_enter_are_ordered_once(self):
+    def test_files_insert_once_and_paused_enter_is_discarded(self):
         data = self.drop('中文 file.txt', "quote'file.png")
         self.assertEqual(self.tx.feed(data + b'caption\r'), b'')
         out = self.settle()
         self.assertTrue(out.startswith(self.mod.START))
-        self.assertTrue(out.endswith(self.mod.END + b'caption\r'))
+        self.assertTrue(out.endswith(self.mod.END))
+        self.assertNotIn(b'caption', out)
         import shlex
-        paths = shlex.split(out[len(self.mod.START):-len(self.mod.END + b'caption\r')].decode())
+        paths = shlex.split(out[len(self.mod.START):-len(self.mod.END)].decode())
         self.assertEqual(len(paths), 2)
         self.assertEqual([Path(p).read_bytes() for p in paths], ['中文 file.txt'.encode(), b"quote'file.png"])
         self.assertEqual(self.tx.poll(), b'')
@@ -133,10 +148,57 @@ class Transactions(unittest.TestCase):
         a, b = self.drop('first.txt'), self.drop('second.txt')
         self.assertEqual(self.tx.feed(a + b'first caption' + b + b'\r'), b'')
         out = self.settle()
-        self.assertEqual(out.count(self.mod.START), 2)
-        self.assertLess(out.index(b'first.txt'), out.index(b'first caption'))
-        self.assertLess(out.index(b'first caption'), out.index(b'second.txt'))
-        self.assertTrue(out.endswith(b'\r'))
+        self.assertEqual(out.count(self.mod.START), 1)
+        self.assertNotIn(b'first caption', out)
+        self.assertNotIn(b'second.txt', out)
+        self.assertTrue(out.endswith(self.mod.END))
+        self.assertEqual(self.tx.feed(b'fresh\r'), b'fresh\r')
+
+    def test_paused_flood_and_split_paste_never_replay(self):
+        os.environ['FLEET_UPLOAD_FIXTURE_DELAY'] = '.3'
+        self.tx.feed(self.drop('first.txt'))
+        self.tx.feed(b'x' * (2 * self.mod.CAP) + b'\r')
+        self.assertFalse(self.tx.buf)
+        self.tx.feed(self.mod.START[:3])
+        self.tx.feed(self.mod.START[3:] + b'/do/not/execute')
+        out = self.settle()
+        self.assertTrue(out.endswith(self.mod.END))
+        self.assertEqual(self.tx.feed(b' tail\r' + self.mod.END[:4]), b'')
+        self.assertEqual(self.tx.feed(self.mod.END[4:] + b'fresh\r'), b'fresh\r')
+
+    def test_real_progress_aggregate_phases_and_image(self):
+        import json
+        os.environ['FLEET_UPLOAD_FIXTURE_CHUNK_DELAY'] = '.02'
+        a, b = self.root / 'one.bin', self.root / 'two.bin'
+        a.write_bytes(b'a' * 262144); b.write_bytes(b'b' * 131072)
+        self.tx.feed(self.mod.START + (str(a) + ' ' + str(b)).encode() + self.mod.END)
+        self.assertTrue(self.settle().endswith(self.mod.END))
+        events = [json.loads(line) for line in (self.root / 'progress.ndjson').read_text().splitlines()]
+        self.assertEqual(events[0]['phase'], 'preparing')
+        self.assertEqual(events[-1]['phase'], 'uploaded')
+        transfer = [e for e in events if e['phase'] in ('uploading', 'confirming')]
+        self.assertTrue(any(0 < e['done'] < 262144 for e in transfer), transfer)
+        self.assertEqual({e['total'] for e in transfer}, {393216})
+        self.assertEqual([e['done'] for e in transfer], sorted(e['done'] for e in transfer))
+        self.assertEqual({e['index'] for e in transfer}, {1, 2})
+        self.assertEqual(events[-1]['done'], 393216)
+        # Actual image gesture, same auto-insert framing and no manufactured Enter.
+        clip = self.root / 'image.py'
+        clip.write_text("import sys,pathlib\npathlib.Path(sys.argv[1]).write_bytes(b'PNG bytes')\n")
+        os.environ['FLEET_CLIENT_CLIP_CMD'] = '%s %s' % (sys.executable, clip)
+        self.tx.feed(b'\x16')
+        result = self.settle()
+        self.assertIn(b'clip.png', result)
+        self.assertTrue(result.startswith(self.mod.START) and result.endswith(self.mod.END))
+
+    def test_failed_second_commit_never_inserts_partial_paths(self):
+        os.environ['FLEET_UPLOAD_FIXTURE_FAIL_NAME'] = 'second.txt'
+        self.tx.feed(self.drop('first.txt', 'second.txt'))
+        self.assertEqual(self.settle(), b'')
+        completed = list((self.root / '.cache/claude-fleet/inbox').rglob('*first.txt'))
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].read_bytes(), b'first.txt')
+        self.assertFalse(list(self.root.rglob('*.part')))
 
     def test_text_cjk_and_every_frame_boundary(self):
         data = self.mod.START + '你好 ordinary text'.encode() + self.mod.END + b'\r'
@@ -146,7 +208,7 @@ class Transactions(unittest.TestCase):
             tx.close()
         os.environ['FLEET_CLIENT_CLIP_CMD'] = '/usr/bin/false'
         os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
-        self.assertEqual(self.tx.feed(b'\x16after\r') + self.settle(timeout=2), b'\x16after\r')
+        self.assertEqual(self.tx.feed(b'\x16') + self.settle(timeout=2), b'\x16')
         self.assertFalse(self.notices)
         os.environ.pop('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', None)
         large = self.mod.START + b'/' + b'x' * 60000 + self.mod.END
@@ -161,16 +223,15 @@ class Transactions(unittest.TestCase):
         self.assertEqual(self.settle(), b'')
 
     def test_cancel_overflow_and_target_change(self):
-        for reason in ('interrupt', 'same-read', 'overflow', 'switch', 'reconnect'):
+        for reason in ('interrupt', 'same-read', 'switch', 'reconnect'):
             with self.subTest(reason=reason):
                 os.environ['FLEET_UPLOAD_FIXTURE_DELAY'] = '.5'
                 data = self.drop(reason + '.txt')
                 if reason == 'same-read':
-                    self.assertEqual(self.tx.feed(data + b'discard\r\x03'), b'\x03')
+                    self.assertEqual(self.tx.feed(data + b'discard\r\x03'), b'')
                 else:
                     self.tx.feed(data + b'discard\r')
-                    if reason == 'interrupt': self.assertEqual(self.tx.feed(b'\x03'), b'\x03')
-                    elif reason == 'overflow': self.tx.feed(b'x' * self.mod.CAP)
+                    if reason == 'interrupt': self.assertEqual(self.tx.feed(b'\x03'), b'')
                     elif reason == 'switch': self.req['selection'] += 1
                     else: self.req['token'] += 'new'
                 self.assertEqual(self.settle(), b'')
@@ -194,10 +255,14 @@ class Transactions(unittest.TestCase):
                     self.tx.poll(); time.sleep(.01)
                 self.assertTrue(marker.exists())
                 pid = int(marker.read_text())
-                self.assertEqual(self.tx.feed(b'\x03'), b'\x03')
+                self.assertEqual(self.tx.feed(b'\x03'), b'')
                 self.assertEqual(self.settle(), b'')
                 status = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True).stdout.strip()
                 self.assertTrue(not status or status.startswith(b'Z'), status)
+                if phase == 'transfer':
+                    import json
+                    events = [json.loads(s) for s in (self.root / 'progress.ndjson').read_text().splitlines()]
+                    self.assertEqual(events[-1]['phase'], 'cancelled')
 
     def test_hash_timeout_and_shutdown_race(self):
         # Instrument the expensive hash call in a private worker copy. The pump
@@ -258,6 +323,34 @@ while True: t.poll();time.sleep(.01)
             self.assertTrue(not status or status.startswith(b'Z'))
         finally:
             if p.poll() is None: p.kill(); p.wait()
+
+
+class Topbar(unittest.TestCase):
+    def test_width_progress_and_restoration(self):
+        import base64, json
+        bar = module('fleet-topbar.py')
+        state = dict(id='g-123', window='@1', until=time.time() + 10, phase='uploading',
+                     name='long screenshot name.png', done=3400000, total=8100000, index=2, count=3)
+        full = bar.upload_line(state, 120)
+        self.assertIn('41%', full)
+        self.assertIn('3.4 / 8.1 MB', full)
+        self.assertIn('2/3', full)
+        self.assertIn('Input paused', full)
+        for cols in (20, 32, 45, 80, 120):
+            line = bar.upload_line(state, cols)
+            self.assertLessEqual(bar.cells(line), cols)
+            self.assertIn('cancel', line)
+            self.assertIn('41%', line)
+        for phase in ('preparing', 'confirming', 'uploaded', 'failed', 'cancelled'):
+            line = bar.upload_line(dict(state, phase=phase), 120)
+            self.assertIn(phase.title(), line)
+            if phase == 'preparing': self.assertNotIn('%', line)
+        kv = dict(w='@1', up=base64.b64encode(json.dumps(state).encode()).decode())
+        self.assertIn('@view_upload_id', bar.render_upload(kv, 80))
+        self.assertIsNone(bar.render_upload(dict(kv, w='@2'), 80))
+        state['until'] = 0
+        kv['up'] = base64.b64encode(json.dumps(state).encode()).decode()
+        self.assertIsNone(bar.render_upload(kv, 80))
 
 
 class Receiver(unittest.TestCase):
@@ -361,9 +454,54 @@ class LiveTarget(unittest.TestCase):
                 self.assertEqual(call('recv-checked', h, data[:-1]).returncode, 1)
                 self.assertEqual(path.read_bytes(), data)
                 self.assertFalse(list(root.rglob('*.part')))
+                # The real status endpoint and tmux option, on this isolated
+                # attached view. Nothing is written to the worker pane.
+                def status_start(operation):
+                    p = subprocess.Popen([sys.executable, str(BIN / 'fleet-client-upload.py'), 'status'],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+                    p.stdin.write(json.dumps(dict(h, operation=operation)).encode() + b'\n'); p.stdin.flush()
+                    self.assertTrue(select.select([p.stdout], [], [], 5)[0], 'status not ready')
+                    self.assertIn('identity', json.loads(p.stdout.readline()))
+                    return p
+                def status_finish(p, phase):
+                    p.stdin.write(json.dumps(dict(phase=phase)).encode() + b'\n'); p.stdin.flush()
+                    p.stdin.close(); self.assertEqual(p.wait(timeout=5), 0, p.stderr.read())
+                    p.stdout.close(); p.stderr.close()
+                def state():
+                    import base64
+                    return json.loads(base64.b64decode(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload')))
+                tm('set-option', '-t', '=' + sess + '@view-test', '@view_flash', 'keep this flash')
+                older = status_start(1)
+                self.assertEqual(state()['phase'], 'preparing')
+                newer = status_start(2)
+                older.stdin.close(); older.wait(timeout=5); older.stdout.close(); older.stderr.close()
+                self.assertEqual(state()['operation'], 2, 'old EOF cleared the new upload')
+                update = dict(phase='uploading', name='screen.png', done=42, total=100, index=1, count=1)
+                newer.stdin.write(json.dumps(update).encode() + b'\n'); newer.stdin.flush()
+                end = time.monotonic() + 3
+                while state()['phase'] != 'uploading' and time.monotonic() < end: time.sleep(.05)
+                self.assertEqual(state()['done'], 42)
+                raw = tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload')
+                win = tm('display-message', '-p', '-t', '=' + sess + '@view-test:', '#{window_id}')
+                for width in (45, 120):
+                    line = run([sys.executable, str(BIN / 'fleet-topbar.py'), 'render', '--node',
+                                'cw=' + str(width), 'up=' + raw, 'w=' + win]).stdout.decode().strip()
+                    rendered = tm('display-message', '-p', '-t', '=' + sess + '@view-test:', line)
+                    self.assertIn('42%', rendered)
+                    self.assertIn('cancel', rendered)
+                status_finish(newer, 'uploaded')
+                self.assertEqual(state()['phase'], 'uploaded')
+                self.assertLess(state()['until'] - time.time(), 2)
+                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_flash'), 'keep this flash')
+                active = status_start(3)
+                status_finish(active, 'cancelled')
+                self.assertEqual(state()['phase'], 'cancelled')
+                old_gen = status_start(4)
                 tm('set-option', '-w', '-t', sess + ':', '@cc_launcher_pid', '999')
                 self.assertEqual(call('target', h).returncode, 1, 'replacement accepted')
                 run(['bash', str(BIN / 'fleet-remote-view.sh'), 'cur', str(views), sock, sess + '@view-test'])
+                old_gen.stdin.close(); old_gen.wait(timeout=5); old_gen.stdout.close(); old_gen.stderr.close()
+                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload_id'), '')
                 self.assertEqual(call('target', h).returncode, 1, 'old generation accepted')
                 client.terminate(); client.wait(timeout=3)
                 self.assertEqual(call('target', h).returncode, 1, 'detached view accepted')

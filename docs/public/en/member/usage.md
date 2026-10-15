@@ -81,9 +81,9 @@ fleet quit                     # quit fleet (see below)
 
 In the desktop fleet terminal, drop files or press `Ctrl+V` to paste a clipboard image. Fleet uploads them and inserts their remote paths automatically, including multiple files. Ordinary text paste works as before.
 
-Output and resizing continue during a slow transfer. Text and Enter typed afterwards wait for the attachment, then arrive in order. `Ctrl+C` cancels it. Failure, a session switch or a disconnect discards the attachment operation and waiting input, with a notification asking you to type again.
+Output and resizing continue while Fleet prepares and uploads attachments. The top bar shows Preparing → Uploading (received bytes and total progress) → Confirming → Uploaded. Input is paused: text, Enter and further drops are discarded, never saved for later. `Ctrl+C` cancels only the upload and restores input without interrupting remote work. Success inserts the confirmed remote paths once, without pressing Enter. Failure, switching sessions or disconnecting inserts nothing; type again after input resumes.
 
-Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. More than 64 KiB of waiting input also cancels with a notification. If Fleet cannot verify the current session, attachments fail visibly while ordinary text input remains available.
+Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. If Fleet cannot verify the current session, attachments fail visibly while ordinary text input remains available.
 
 ## Working in a code repository
 

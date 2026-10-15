@@ -47,6 +47,7 @@ place), grey with ? while its machine is out of reach or on the relay — the on
 time the machine is written.
 """
 import json
+import base64
 import os
 import re
 import subprocess
@@ -469,6 +470,48 @@ def node_record(kv):
     return rec, down, "relay" if rname == "relay" else "", via
 
 
+def upload_line(state, cols):
+    """Space belongs to state/bytes/cancel first; filenames yield on a phone."""
+    phase = state['phase']
+    word = {'preparing': 'Preparing', 'uploading': 'Uploading', 'confirming': 'Confirming',
+            'uploaded': 'Uploaded', 'failed': 'Failed', 'cancelled': 'Cancelled'}[phase]
+    active = phase in ('preparing', 'uploading', 'confirming')
+    done, total = state.get('done', 0), state.get('total', 0)
+    percent = (' %d%%' % (100 * done // total)) if phase != 'preparing' and total else ''
+    count = (' %s/%s' % (state['index'], state['count'])) if state.get('count', 0) > 1 else ''
+    suffix = ' · Input paused · Ctrl+C cancel' if active else ' · Input resumed'
+    detail = (' · %.1f / %.1f MB' % (done / 1000000, total / 1000000)) if phase != 'preparing' else ''
+    fixed = '↑ ' + word + count + percent + detail + suffix
+    if cells(fixed) > cols:
+        detail = ''
+        suffix = ' · Paused · ^C cancel' if active else ''
+        fixed = '↑ ' + word + count + percent + suffix
+    if cells(fixed) > cols:
+        fixed = word + percent + (' · ^C cancel' if active else '')
+    if cells(fixed) > cols and active:
+        fixed = ('↑' + percent.strip() if phase == 'uploading' else word[:4]) + ' Pause ^C cancel'
+    room = cols - cells(fixed) - 1
+    name = clip(state.get('name', ''), max(0, room))
+    if name and fixed.startswith('↑ ') and cells(fixed) + cells(name) + 1 <= cols:
+        fixed = '↑ ' + name + ' ' + fixed[2:]
+    return clip(fixed, cols)
+
+
+def render_upload(kv, cols):
+    try:
+        state = json.loads(base64.b64decode(kv.get('up', ''), validate=True))
+        if state['until'] <= time.time() or state['phase'] == 'clear' or state['window'] != kv.get('w'):
+            return None
+        if not re.fullmatch(r'[A-Za-z0-9-]+', state['id']): return None
+        line = '#[fg=%s,bold]%s#[default]' % (HL, tmux_text(upload_line(state, cols)))
+        # A cached #() output loses ownership immediately on switch/reconnect or
+        # replacement by another attachment, even before Python next runs.
+        line = '#{?#{==:#{@view_upload_id},%s},%s,%s}' % (state['id'], branch_text(line), quick_fmt())
+        return own_window(state['window'], line)
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def render_node(kv, cols):
     # this connection's language (issue #3329): the 看台's `@view_lang`, when the
     # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
@@ -476,6 +519,10 @@ def render_node(kv, cols):
     vl = kv.get("vl", "")
     if vl.startswith("1:"):
         os.environ["FLEET_VIEW_LANG"] = vl[2:]
+    upload = render_upload(kv, cols)
+    if upload is not None:
+        print(upload)
+        return 0
     # the one-time language line (D8, L4): the whole line for 8 s, then the status
     flu = kv.get("flu", "")
     if kv.get("fl") and flu.isdigit() and time.time() < int(flu):
