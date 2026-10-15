@@ -107,6 +107,21 @@ want:
 $want"
 ok "C the seeded name set is exactly fleet_labels_allowed (one source of truth)"
 
+# C2: the documented default label install in a fresh HOME must not resurrect
+# retired automation (#4326). Check the actual create calls, not just the table.
+mkdir -p "$WORK/home" "$WORK/home/.config/claude-fleet"
+HOME="$WORK/home" FLEET_CONF_DIR="$WORK/home/.config/claude-fleet" \
+  FLEET_REPO='acme/widgets' run_seed
+[ "$RC" -eq 0 ] || fail "C2 fresh-HOME label install must succeed" "$(cat "$WORK/err")"
+for retired in autoland autofill; do
+  grep -q "^label create $retired " "$GH_LOG" \
+    && fail "C2 fresh installs must not create $retired" "$(cat "$GH_LOG")"
+  printf '%s\n' "$allowed" | grep -Fxq "$retired" \
+    && fail "C2 the filer must not accept $retired" "$allowed"
+done
+grep -q '^label create epic ' "$GH_LOG" || fail "C2 active labels must still be installed" "$(cat "$GH_LOG")"
+ok "C2 fresh-HOME label install excludes autoland/autofill; active labels remain"
+
 # ============================ D: no repo resolved ==========================
 # FLEET_REPO='' overrides any value inherited from the caller's shell → no repo.
 FLEET_REPO='' run_seed

@@ -8248,8 +8248,8 @@ fleet_fault_seen() {
 #     `gh label list` — so no filer can file against an
 #     off-taxonomy label even if one has been minted in the repo out of band.
 #     Fixed seed, no minting.
-# `autoland` is a known-stale label (its daemon retired in #277) but is kept in
-# the set FOR NOW; retiring it is deferred to a separate follow-up.
+# Retired automation labels autoland (#277) and autofill (#3120) are excluded
+# from both seeding and filing (#4326). Legacy session origin names are separate.
 #
 # DESCRIPTIONS ARE READ BY STRANGERS (issue #678). This set is seeded into every
 # fleet repo, and a fleet repo is not always the operator's own sandbox — on a
@@ -8277,8 +8277,6 @@ priority:p0|B60205|Highest priority — sorts first in the backlog (tier 0)
 priority:p1|D93F0B|High priority — backlog tier 1 (after all p0)
 priority:p2|FBCA04|Medium priority — backlog tier 2 (after all p1)
 blocked|b60205|Blocked on other work — claude-fleet skips it when picking what to start next
-autoland|0e8a16|Opt this issue's PR into hands-off auto-land
-autofill|0e8a16|Opt this issue into hands-off auto-start: claude-fleet spawns a worker for it when a slot frees
 epic|8250DF|Tracking parent for a batch of sub-issues planned and run together by claude-fleet
 agent:codex|10A37F|claude-fleet starts this issue's worker in Codex instead of the fleet default
 agent:claude|D97757|claude-fleet starts this issue's worker in Claude Code instead of the fleet default

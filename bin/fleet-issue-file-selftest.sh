@@ -62,9 +62,8 @@
 #      6 with nothing filed; a driver / the orchestrator / the steward / a take_role holder /
 #      no pane / FLEET_ALLOW_WORKER_SPAWN=1 spawn; a breakage a worker files is
 #      filed with no spawn and queued under breakage-spawn/ for the steward.
-#   X. autofill is retired (issue #3120): a filing that still asks for the
-#      `autofill` label (an older orchestrator's rule) files with rc 0, the label
-#      never reaches `gh issue create`, the others do, and stderr says it once.
+#   X. retired automation labels autoland/autofill are rejected before filing
+#      (issue #4326), alone or alongside valid labels.
 #
 # Exit 0 = pass; non-zero = fail (prints the failing assertion + captured output).
 set -uo pipefail
@@ -726,20 +725,18 @@ nw=$(cat "$WORK/out-w5"); nw=${nw##*/}
   || fail "W5 the orchestrator's breakage spawns its fixer itself, nothing queued" "$(cat "$WORK/err-w5")"
 ok "W4-5 breakage: a worker's is queued for the steward (no spawn); the orchestrator's spawns as before"
 
-# ============================ X: autofill dropped (issue #3120) ============
-: > "$GH_LOG"
-run_fif --title "Later" --label "enhancement,autofill" --priority p2
-[ "$RC" -eq 0 ]                               || fail "X a filing with autofill must still succeed (rc 0, got $RC)" "$(cat "$WORK/err")"
-grep -q 'issue create' "$GH_LOG"              || fail "X it must still be filed" "$(cat "$GH_LOG")"
-grep -q -- '--label autofill' "$GH_LOG"       && fail "X autofill must never reach gh issue create" "$(cat "$GH_LOG")"
-grep -q -- '--label enhancement' "$GH_LOG" && grep -q -- '--label priority:p2' "$GH_LOG" \
-                                              || fail "X the other labels must still be filed" "$(cat "$GH_LOG")"
-[ "$(grep -c 'label autofill dropped' "$WORK/err")" = 1 ] || fail "X stderr must say it once" "$(cat "$WORK/err")"
-: > "$GH_LOG"
-run_fif --title "Only that" --label autofill
-[ "$RC" -eq 0 ] && grep -q 'issue create' "$GH_LOG" && ! grep -q -- '--label' "$GH_LOG" \
-                                              || fail "X autofill alone files label-less" "$(cat "$GH_LOG"; cat "$WORK/err")"
-ok "X autofill is accepted for one version, dropped before create, said once on stderr"
+# ============================ X: retired labels rejected (issue #4326) =====
+for retired in autoland autofill; do
+  for requested in "$retired" "enhancement,$retired"; do
+    : > "$GH_LOG"
+    run_fif --title "Retired automation" --label "$requested" --priority p2
+    [ "$RC" -eq 3 ] || fail "X $requested must be rejected (rc 3, got $RC)" "$(cat "$WORK/err")"
+    grep -q "off-taxonomy label(s): $retired" "$WORK/err" \
+      || fail "X the rejection must name $retired" "$(cat "$WORK/err")"
+    grep -q 'issue create' "$GH_LOG" && fail "X rejected labels must not file an issue" "$(cat "$GH_LOG")"
+  done
+done
+ok "X autoland/autofill are rejected before filing, alone or with valid labels"
 
 printf '\nselftest OK: %s assertions passed (channel: validate · provenance · create · milestone · parent · spawn · bind · breakage · worker seat)\n' "$pass"
 exit 0
