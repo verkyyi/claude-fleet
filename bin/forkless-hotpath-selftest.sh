@@ -7,10 +7,11 @@
 #   EQUIVALENCE  every rewritten helper is run against the original pipeline it
 #                replaced, over a corpus that includes the awkward inputs (empty,
 #                no separator, trailing slashes, non-ASCII, empty tab fields).
-#   BUDGET       the two producers that dominated the machine's exec rate are run
-#                under a counting PATH shim and must not exec the tools they no
-#                longer need: tmux-status.sh (every 5s per attached client) and
-#                tmux-pr-refresh.sh's per-window @prci loop (every 15s, per window).
+#   BUDGET       the producer that dominated the machine's exec rate is run
+#                under a counting PATH shim and must not exec the tools it no
+#                longer needs: tmux-pr-refresh.sh's per-window @prci loop (every
+#                15s, per window). (The other, the old client's tmux-status.sh,
+#                went with that client — issue #3008.)
 #                The pr-refresh half also replays a window list through a fake tmux
 #                and checks every glyph it paints, so a builtin rewrite that drifts
 #                from `sed`/`cut` shows up as a wrong @prci, not just a count.
@@ -116,36 +117,11 @@ for t in date tr cut sed dirname basename uname cat; do
 done
 count() { local n; n=$(grep -cx "$1" "$WORK/exec.log" 2>/dev/null); printf '%s' "${n:-0}"; }
 
-# ---------------------------------------------------------------- tmux-status.sh
-TMPD="$WORK/tmp"; G="$TMPD/.claude-dash/global"; mkdir -p "$G" "$WORK/acc"
-now=$(date +%s)
-for u in $(fleet_daemon_unit_names); do printf '%s\n' "$now" > "$G/$u.tick"; done
-printf '%s\n' $((now - 10000)) > "$G/cleanup.tick"            # one overdue unit
-printf '5h 1.0M · 7d 2.0M' > "$G/usage"
-printf '%s\t42%% of weekly' "$now" > "$G/ratelimit"
-printf '%s\n' $((now - 1000)) > "$G/account.quota.ts"          # stale watch → ✖ quota · stale
-printf '0\t0\n' > "$G/account.quota.empty"
-: > "$WORK/exec.log"
-out=$(TMPDIR="$TMPD/" FLEET_LIVE_ROOT="$BIN/.." FLEET_ACCOUNTS_DIR="$WORK/acc" FLEET_STATE_DIR="$WORK/ghstate" FLEET_GH_FAKE_LIMIT="" CCQUOTA_HUB_URL=http://127.0.0.1:9 \
-      PATH="$WORK/bin:$PATH" bash "$BIN/tmux-status.sh" 2>&1) || fail "tmux-status.sh exited non-zero" "$out"
-# The bar draws only what wants a hand (issue #1616): no 负载 / 内存 / 盘 chips.
-case "$out" in *"负载"*|*"内存"*|*"盘 "*) fail "tmux-status.sh still draws a machine chip (issue #1616)" "$out" ;; esac; CHECKS=$((CHECKS+1))
-# The 5h/7d usage stat is gone from the bar (issue #1100) — a usage cache on
-# disk must NOT resurface it; the modal (prefix u) is its only reader now.
-case "$out" in *"5h "*|*"7d "*|*"range=user|usage"*) fail "tmux-status.sh still renders the 5h/7d usage stat (issue #1100)" "$out" ;; esac; CHECKS=$((CHECKS+1))
-# The bar only COUNTS alerts now (issue #1238): both alarms land in one `✖ 2`,
-# and the rows themselves are in the file the render just (re)wrote.
-case "$out" in *"✖ 2#"*) ;; *) fail "tmux-status.sh: the two alarms must be counted" "$out" ;; esac; CHECKS=$((CHECKS+1))
-case "$(cat "$G/alerts.ndjson")" in *'"subject":"quota","condition":"stale","value":"16m"'*) ;; *) fail "tmux-status.sh: the stale quota watch must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
-case "$(cat "$G/alerts.ndjson")" in *'"subject":"daemon","condition":"stale"'*'"detail":"cleanup"'*) ;; *) fail "tmux-status.sh: the overdue unit must still be raised" "$(cat "$G/alerts.ndjson")" ;; esac; CHECKS=$((CHECKS+1))
-[ "$(count date)" -le 1 ] || fail "tmux-status.sh forked date $(count date)× — one pinned clock per render (#888)"; CHECKS=$((CHECKS+1))
-for t in tr cut dirname uname cat; do
-  eq "tmux-status.sh execs no $t (#888)" 0 "$(count "$t")"
-done
-
 # ---------------------------------------------------------------- tmux-pr-refresh.sh
 # One fake fleet `s1` on fake/repo; gh fails (offline — the loop reads the prmap we
 # seed); tmux replays a window list and logs every set-window-option.
+TMPD="$WORK/tmp"; G="$TMPD/.claude-dash/global"; mkdir -p "$G"
+now=$(date +%s)
 CONFD="$WORK/conf"; mkdir -p "$CONFD/fleets/s1"
 printf 'FLEET_REPO="fake/repo"\n' > "$CONFD/fleets/s1/conf"
 C="$TMPD/.claude-dash"; FD="$C/fleets/fake-repo"; mkdir -p "$FD"
