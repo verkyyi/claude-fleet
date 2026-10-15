@@ -214,17 +214,17 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    action (issue #1558) fills `conf/claude-settings.default.json` — the ONE
    default Claude configuration for every login on a managed machine — into
    `~/.claude/settings.json` (its `settings` section: `permissions.defaultMode:
-   bypassPermissions`, `skipDangerousModePermissionPrompt`, `effortLevel`,
-   `outputStyle`, `theme`, `tui`, `precomputeCompactionEnabled`,
-   `agentPushNotifEnabled`; never `model` or `enabledPlugins`, those stay the
-   login's) and into Claude Code's GLOBAL config `~/.claude.json` (its
+   bypassPermissions`, `skipDangerousModePermissionPrompt`,
+   `precomputeCompactionEnabled`, `agentPushNotifEnabled`; never `model`,
+   `enabledPlugins`, `effortLevel`, `outputStyle`, `theme` or `tui` — the model
+   and the interface stay Claude Code's own, issue #4323) and into Claude Code's GLOBAL config `~/.claude.json` (its
    `globalConfig` section: `leftArrowOpensAgents: false`, issue #1528 — the only
    place that key is read, so a stray ← in a pane never strands it in the agents
    view). It is **fill only**: a key the login lacks is set, a key the login has
    — whatever the value — is never overwritten, and `permissions.defaultMode`
    lands beside the login's own `permissions.allow`. A key the login wants left
    alone entirely goes in `~/.claude/settings.fleet-override.json` — a JSON
-   array of dotted key paths (`["effortLevel", "permissions.defaultMode"]`;
+   array of dotted key paths (`["agentPushNotifEnabled", "permissions.defaultMode"]`;
    `"permissions"` shields the whole object), or an object keyed by them — and
    `FLEET_KEEP_AGENTS_KEY=1` is the same for `leftArrowOpensAgents`. The
    `.claude.json` write takes Claude Code's own `.claude.json.lock`. The plugin

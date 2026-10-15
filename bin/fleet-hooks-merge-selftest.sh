@@ -211,8 +211,24 @@ grep -q '^absent ' "$WORK/d1" || fail "defaults did not say .claude.json is abse
 d defaults-check --settings "$S7" --config "$K" >"$WORK/d1c" && fail "defaults-check passed with no .claude.json at all"
 grep -q '^missing    claude.json leftArrowOpensAgents' "$WORK/d1c" || fail "defaults-check did not name the global key" "$(cat "$WORK/d1c")"
 ok "defaults: an empty settings.json gets every default key; an absent .claude.json is not created"
+# leg (issue #4323): the model and interface stay Claude Code's own — a fresh login gets none of
+# effortLevel / outputStyle / theme / tui, and a login that set them keeps its values byte for byte
+S7="$S7" python3 - <<'PY' || fail "defaults wrote a model / interface key into a fresh settings.json" "$(cat "$S7")"
+import json, os, sys
+s = json.load(open(os.environ["S7"]))
+sys.exit(0 if not {"effortLevel", "outputStyle", "theme", "tui"} & set(s) else 1)
+PY
+printf '{"effortLevel": "low", "outputStyle": "Explanatory", "theme": "light", "tui": "classic"}\n' > "$WORK/own4.json"
+d defaults --settings "$WORK/own4.json" --config "$K" >"$WORK/d1o" || fail "defaults over a login's own four keys failed" "$(cat "$WORK/d1o")"
+python3 - "$WORK/own4.json" <<'PY' || fail "defaults changed a login's own model / interface key" "$(cat "$WORK/own4.json")"
+import json, sys
+s = json.load(open(sys.argv[1]))
+sys.exit(0 if (s["effortLevel"], s["outputStyle"], s["theme"], s["tui"]) == ("low", "Explanatory", "light", "classic") else 1)
+PY
+grep -qE 'settings.json (effortLevel|outputStyle|theme|tui)' "$WORK/d1o" && fail "defaults reported a model / interface key as its own" "$(cat "$WORK/d1o")"
+ok "defaults: no effortLevel / outputStyle / theme / tui on a fresh login; a login's own four survive untouched"
 # leg: the login's own values survive — a different effortLevel, permissions.allow beside the filled defaultMode, hooks
-printf '{"effortLevel": "high", "permissions": {"allow": ["Bash(x)"]}, "hooks": {"Stop": [{"hooks": []}]}, "model": "m"}\n' > "$S7"
+printf '{"effortLevel": "high", "agentPushNotifEnabled": false, "permissions": {"allow": ["Bash(x)"]}, "hooks": {"Stop": [{"hooks": []}]}, "model": "m"}\n' > "$S7"
 printf '{\n  "numStartups": 7,\n  "oauthAccount": {"emailAddress": "a@b"},\n  "projects": {"/x": {"hasTrustDialogAccepted": true}}\n}\n' > "$K"
 chmod 600 "$K"
 mkdir "$K.lock"
@@ -228,9 +244,10 @@ import json, os, sys
 s = json.load(open(os.environ["S7"]))
 sys.exit(0 if s["effortLevel"] == "high" and s["permissions"]["allow"] == ["Bash(x)"]
          and s["permissions"]["defaultMode"] == "bypassPermissions" and s["hooks"] == {"Stop": [{"hooks": []}]}
-         and s["model"] == "m" and s["outputStyle"] == "Concise" else 1)
+         and s["model"] == "m" and s["agentPushNotifEnabled"] is False
+         and s["precomputeCompactionEnabled"] is False else 1)
 PY
-grep -q '^differs    settings.json effortLevel = "high" (default "xhigh")' "$WORK/d2" || fail "defaults did not report the login's own effortLevel" "$(cat "$WORK/d2")"
+grep -q '^differs    settings.json agentPushNotifEnabled = false (default true)' "$WORK/d2" || fail "defaults did not report the login's own agentPushNotifEnabled" "$(cat "$WORK/d2")"
 grep -q '^set            claude.json leftArrowOpensAgents = false' "$WORK/d2" || fail "defaults did not fill leftArrowOpensAgents" "$(cat "$WORK/d2")"
 K="$K" python3 - <<'PY' || fail "defaults touched another .claude.json key or missed its own" "$(cat "$K")"
 import json, os, sys
@@ -242,7 +259,7 @@ sys.exit(0 if s == {"numStartups": 7, "oauthAccount": {"emailAddress": "a@b"},
 PY
 [ "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$K")" = 600 ] \
   || fail "defaults loosened .claude.json's mode"
-ok "defaults: the login's effortLevel / permissions.allow / hooks / model survive, defaultMode fills in beside them, .claude.json gets its key at mode 0600"
+ok "defaults: the login's effortLevel / agentPushNotifEnabled / permissions.allow / hooks / model survive, defaultMode fills in beside them, .claude.json gets its key at mode 0600"
 # leg: idempotent — no write, no backup; check passes except for the login's own key
 cp "$S7" "$WORK/s.before"; cp "$K" "$WORK/k.before"
 d defaults --settings "$S7" --config "$K" >"$WORK/d3" || fail "second defaults run failed" "$(cat "$WORK/d3")"
@@ -250,26 +267,26 @@ grep -q '^unchanged' "$WORK/d3" || fail "second defaults run was not a no-op" "$
 cmp -s "$S7" "$WORK/s.before" || fail "no-op defaults rewrote settings.json"
 cmp -s "$K" "$WORK/k.before" || fail "no-op defaults rewrote .claude.json"
 [ "$(nbak settings.json)" = 0 ] && [ "$(nbak claude.json)" = 0 ] || fail "defaults wrote a backup"
-d defaults-check --settings "$S7" --config "$K" >"$WORK/d3c" && fail "defaults-check passed over the login's own effortLevel" "$(cat "$WORK/d3c")"
+d defaults-check --settings "$S7" --config "$K" >"$WORK/d3c" && fail "defaults-check passed over the login's own agentPushNotifEnabled" "$(cat "$WORK/d3c")"
 head -1 "$WORK/d3c" | grep -q '^1 key(s) differ from claude-settings.default.json' || fail "defaults-check's first line is not the count" "$(cat "$WORK/d3c")"
-grep -q '^differs    settings.json effortLevel' "$WORK/d3c" || fail "defaults-check did not name the differing key" "$(cat "$WORK/d3c")"
+grep -q '^differs    settings.json agentPushNotifEnabled' "$WORK/d3c" || fail "defaults-check did not name the differing key" "$(cat "$WORK/d3c")"
 ok "defaults: idempotent (no write, no backup); defaults-check counts the login's own key as 1 differ"
 # leg: the override file and --skip shield keys; a user true in .claude.json is kept, not corrected
-printf '["theme", "permissions"]\n' > "$WORK/override.json"
+printf '["precomputeCompactionEnabled", "permissions"]\n' > "$WORK/override.json"
 printf '{}\n' > "$S7"
 printf '{"leftArrowOpensAgents": true, "theme": "dark"}\n' > "$K"
 d defaults --settings "$S7" --config "$K" >"$WORK/d4" || fail "defaults with an override failed" "$(cat "$WORK/d4")"
-S7="$S7" python3 - <<'PY' || fail "override did not shield theme / permissions" "$(cat "$S7")"
+S7="$S7" python3 - <<'PY' || fail "override did not shield precomputeCompactionEnabled / permissions" "$(cat "$S7")"
 import json, os, sys
 s = json.load(open(os.environ["S7"]))
-sys.exit(0 if "theme" not in s and "permissions" not in s and s["effortLevel"] == "xhigh" else 1)
+sys.exit(0 if "precomputeCompactionEnabled" not in s and "permissions" not in s and s["agentPushNotifEnabled"] is True else 1)
 PY
-grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, theme' "$WORK/d4" || fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
+grep -q '^kept    2 key(s) left to this login: permissions.defaultMode, precomputeCompactionEnabled' "$WORK/d4" || fail "defaults did not list the kept keys" "$(cat "$WORK/d4")"
 grep -q '^differs    claude.json leftArrowOpensAgents = true (default false)' "$WORK/d4" || fail "defaults did not report the user's true" "$(cat "$WORK/d4")"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); sys.exit(0 if s=={"leftArrowOpensAgents": True, "theme": "dark", "hasCompletedOnboarding": True, "hasSeenAutoDefaultNudge": True} else 1)' "$K" \
   || fail "defaults corrected a user true — the fill became a pin" "$(cat "$K")"
 d defaults-check --settings "$S7" --config "$K" --skip leftArrowOpensAgents >"$WORK/d4c" || fail "defaults-check with override + --skip unhappy" "$(cat "$WORK/d4c")"
-grep -q '^ok .*left to this login: permissions.defaultMode, theme, leftArrowOpensAgents' "$WORK/d4c" || fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
+grep -q '^ok .*left to this login: permissions.defaultMode, precomputeCompactionEnabled, leftArrowOpensAgents' "$WORK/d4c" || fail "defaults-check did not list the shielded keys" "$(cat "$WORK/d4c")"
 d defaults-check --settings "$S7" --config "$K" >"$WORK/d4d" && fail "defaults-check ignored the user's true without --skip"
 ok "defaults: the override file and --skip shield keys; a user true is kept and reported, never corrected"
 # leg: a malformed defaults file is refused
