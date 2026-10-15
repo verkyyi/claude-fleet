@@ -383,22 +383,7 @@ def proc_uid(pid):
 def stop_group(pid, grace=5.0, group=True):
     """TERM the process group (a job of ours: its own session) or, group=False,
     the one process; KILL what is left after grace."""
-    for k in ((os.killpg, os.kill) if group else (os.kill,)):
-        try:
-            k(pid, signal.SIGTERM)
-            break
-        except OSError:
-            continue
-    end = now() + grace
-    while now() < end and sup.pid_alive(pid):
-        time.sleep(0.05)
-    if sup.pid_alive(pid):
-        for k in ((os.killpg, os.kill) if group else (os.kill,)):
-            try:
-                k(pid, signal.SIGKILL)
-                break
-            except OSError:
-                continue
+    sup.stop_processes([(pid, group and (sup.child_group(pid) or not sup.pid_alive(pid)))], grace)
     return not sup.pid_alive(pid)
 
 
@@ -1029,7 +1014,11 @@ class Core(object):
 
     def strays(self, ent):
         """Root processes running exactly <ent>'s command that are not in the book:
-        what the root daemon left running when the seat took over."""
+        what the root daemon left when the seat took over — including the shared
+        proxy which exec'd into its role account (#3135)."""
+        shared = sup.shared_proxy_pid(ent)
+        if shared:
+            return [shared]
         full = " ".join(ent["cmd"])
         tail = " ".join(ent["cmd"][1:])
         out = []
@@ -1094,17 +1083,31 @@ class Core(object):
             if mine:
                 return {"ok": True, "stopped": stop_group(mine.pid)}
             pids = self.strays(ent)
-            return {"ok": True, "stopped": all(stop_group(x) for x in pids) if pids else False, "strays": len(pids)}
+            stopped = [stop_group(x) for x in pids]  # never short-circuit a later stray
+            return {"ok": True, "stopped": all(stopped) if pids else False, "strays": len(pids)}
         # start: one copy — a job of mine still running, or the root daemon's
         if mine:
             return {"error": "running", "pid": mine.pid}
         left = self.strays(ent)
+        if left and ent["name"] == "cred-proxy-shared":
+            # Its launcher exec'd AND dropped uid. Only the named, validated
+            # proxy whose parent is gone may be replaced at start; an active
+            # daemon's child remains its own. Stop also recognises it above.
+            for pid in left:
+                if sup.pid_parent(pid) != 1 or sup.shared_proxy_pid(ent) != pid:
+                    return {"error": "running (left by the root daemon)", "pid": pid}
+                stop_group(pid, group=sup.child_group(pid))
+                self.log(self.tl.uid, "machine", a, "stopped orphan shared proxy pid %d" % pid)
+            left = self.strays(ent)
         if left:
             return {"error": "running (left by the root daemon)", "pid": left[0]}
         if not sup.trusted(sup.script_of(ent["cmd"])):
             raise Refused(None, "job %s: %s is not root-owned, or someone else may write it"
                           % (a["job"], sup.script_of(ent["cmd"])))
         with self.lock:
+            old = self.jobs.get(key)
+            if old is not None and old.poll() is None:
+                return {"error": "running", "pid": old.pid}
             fh = self.machine_log(a["job"], task)
             p = subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                  env=sup.machine_env(sup.Paths(), ent.get("env")), start_new_session=True,

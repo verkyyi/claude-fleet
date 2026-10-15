@@ -242,6 +242,9 @@ EOF
   _snap=$(tmux -S "$3" display-message -p -t "=$4:" '#{window_id}|#{@fleet_id}|#{@peer_cur}|#{pane_id}|#{pane_pid}|#{@cc_launcher_pid}|#{@cc_session_id}|#{@codex_session_id}|#{pane_current_command}|#{pane_dead}' 2>/dev/null)
   rv_row_set "$_f" upload_target "$_snap" || exit 0
   rv_row_set "$_f" upload_gen "$_g" || exit 0
+  # Invalidate a cached upload line before this selection's first redraw.
+  tmux -S "$3" set-option -t "=$4:" @view_upload_id '' \; \
+    set-option -t "=$4:" @view_upload_gen "$_g" 2>/dev/null
   printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s;g=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" "$_g" 2>/dev/null > "$_y"
   exit 0
 fi
@@ -852,7 +855,7 @@ rv_thin_dress() {
   bar="#(python3 '$BIN/fleet-topbar.py' render --node view=$v s=$s reg='$VIEWS' g='$FLEET_C/global'"
   bar="$bar sock=#{q:socket_path} cw=#{client_width} w=#{window_id} pc=#{q:@peer_cur} pd=#{pane_dead}"
   # this connection's language and its one-time line (issue #3329): what attach set
-  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until})"
+  bar="$bar vl=#{q:@view_lang_set}:#{q:@view_lang} fl=#{q:@view_flash} flu=#{@view_flash_until} up=#{q:@view_upload})"
   T set-option -t "$gid" status on \; set-option -t "$gid" status-position top \; \
     set-option -t "$gid" status-interval 2 \; set-option -t "$gid" status-style "bg=#1a1b26,fg=#565f89" \; \
     set-option -t "$gid" status-format[0] "$bar" \; set-option -t "$gid" destroy-unattached off \; \
@@ -871,6 +874,21 @@ rv_thin_dress() {
     "if -F '#{@view_thin}' { run-shell -b \"bash '$BIN/fleet-remote-view.sh' notify-jump '#{socket_path}' '#{client_session}' >/dev/null 2>&1 || :\" }" 2>/dev/null
   return 0
 }
+# Values are arguments captured by the EXIT trap: rv_attach_thin's locals are
+# already out of scope when the dispatcher exits after a normal detach.
+rv_browser_cleanup() {
+  local bsock="$1" bgid="$2" bf="$3" bpid="$4" bv="$5" bs="$6" bw bp br
+  [ "$(cut -f5 "$bf" 2>/dev/null)" != "$bpid" ] || rm -rf "$bf" "$bf.d"
+  [ "$(tmux -L "$bsock" show-options -qv -t "$bgid" @view_thin 2>/dev/null)" != "$bv" ] \
+    || tmux -L "$bsock" kill-session -t "$bgid" 2>/dev/null
+  # Only peer panels made by this connection, never another view or a worker.
+  tmux -L "$bsock" list-windows -t "=$bs" -F '#{window_id}|#{@peer_view}|#{@fleet_role}' 2>/dev/null \
+    | while IFS='|' read -r bw bp br; do
+        [ "$bp:$br" != "$bv:panel" ] || tmux -L "$bsock" kill-window -t "$bw" 2>/dev/null
+      done
+  return 0
+}
+
 rv_attach_thin() {
   local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp last lastgone
   local browser='' bhome=''
@@ -920,6 +938,7 @@ rv_attach_thin() {
   if [ -n "$want" ]; then
     w=$(rv_thin_window "$s" "$want")
     if [ -z "$w" ]; then
+      [ -z "$browser" ] || { note "browser: requested session ended"; return 4; }
       case "$want" in */*) wfar=${want#wid:} ;; esac
       note "attach --thin: ${want#*/} is not live on $(hostname -s) — landing elsewhere${wfar:+, then there}"
     fi
@@ -950,6 +969,15 @@ rv_attach_thin() {
       || { note "attach --thin: no 看台 session for $view"; return 1; }
     [ -n "$w" ] || w=$(rv_thin_window "$s" "$cur")
   fi
+  if [ -n "$browser" ]; then
+    # Arm cleanup before dressing the view: interruption during setup must not
+    # strand an unattached grouped session either.
+    T set-option -t "$gid" @view_thin "$view" 2>/dev/null
+    # shellcheck disable=SC2064 # capture locals now; the EXIT runs after this function returns
+    trap "rv_browser_cleanup $(printf '%q ' "$sock" "$gid" "$f" "$$" "$view" "$s")" EXIT
+    trap 'exit 129' HUP
+    trap 'exit 143' TERM
+  fi
   # Nowhere named: a resumed 看台 still kept stays where it was; anything else lands home.
   # Home is the orchestrator: here, or — no such window here — wherever it runs,
   # through ⌘N's own road below (issue #3007: a home that is not the holder put the
@@ -972,6 +1000,16 @@ rv_attach_thin() {
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
+  if [ -n "$browser" ]; then
+    # The personal shell is persistent; browser navigation never creates a
+    # per-view shell. Load native keys even on a minimally initialized fleet.
+    T set-option -t "$gid" @view_web_home "$bhome" 2>/dev/null
+    sp=$(T display-message -p -t "$gid:" '#{socket_path}')
+    TMUX="$sp,0,0" python3 "$BIN/fleet-quickopen.py" view-keys
+    T set-option -t "$gid" key-table fleet-view
+    # A browser attachment is disposable. The captured session id and row pid
+    # belong to THIS attach; neither cleanup can hit a replacement connection.
+  fi
   # the language this connection's client brought (issue #3326): per 看台, never the
   # server's environment (started before, `update-environment` has no LANG) —
   # empty = it said none. Issue #3329: the 看台 draws in it — FLEET_VIEW_LANG in its
@@ -998,7 +1036,7 @@ rv_attach_thin() {
   esac
   # C4: a window per other (machine, login) your sessions are on, made now — off
   # the attach's path — so the first visit to another machine is already warm
-  case "$view" in *-via-*) ;; *)
+  case "$browser:$view" in 1:*|*:*-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
   esac
   # the one message after issue #3328 took the keys away: 快捷键只剩 ⌘P, once per
@@ -1040,7 +1078,12 @@ rv_attach_thin() {
       done </dev/null >/dev/null 2>&1 & ) ;;
   esac
   trap 'rc=129' HUP
-  T attach-session -t "$gid"; rc=$?
+  [ -z "$browser" ] || trap 'exit 143' TERM
+  if [ -n "$browser" ]; then
+    T attach-session -t "$gid" \; set-option -t "$gid" destroy-unattached on; rc=$?
+  else
+    T attach-session -t "$gid"; rc=$?
+  fi
   # The 看台 stays: its row says since when nobody looks (only while it is ours).
   [ "$(cut -f5 "$f" 2>/dev/null)" = "$$" ] && rv_row_set "$f" left "$(date +%s)"
   return "$rc"

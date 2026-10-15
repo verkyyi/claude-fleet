@@ -24,6 +24,9 @@ goes; the home pane and whatever runs in it stay.
                                 exec the native Fleet client on that connection:
                                 the worker named (else the remembered one, if
                                 still live), else the home pane; never a new one
+    connect --conn <id> --target personal|worker:<fleet_id> [--generation N]
+                                C1's authorized PTY entry: ensure, claim, attach,
+                                renew while connected, epoch-scoped cleanup
     release --conn <id>         drop that connection's 看台 (the work stays)
     control claim|take|check|renew|release|resize --target T --conn C [--epoch E]
                                 the one-controller lease per target: claim wins
@@ -44,6 +47,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -93,17 +97,34 @@ def write_json(path, obj):
 
 
 class Lock:
-    def __init__(self, name):
+    def __init__(self, name, nonblocking=False):
         self.path = os.path.join(state_dir(), name)
+        self.nonblocking = nonblocking
 
     def __enter__(self):
         self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if self.nonblocking else 0))
+        except BlockingIOError:
+            os.close(self.fd)
+            out({"state": "taken"}, 5)
         return self
 
     def __exit__(self, *a):
         fcntl.flock(self.fd, fcntl.LOCK_UN)
         os.close(self.fd)
+
+
+class ConnectionLock(Lock):
+    """Dispose per-connection lock files without opening an inode reuse race."""
+    def __enter__(self):
+        with Lock("connections.lock"):
+            return super().__enter__()
+
+    def __exit__(self, *a):
+        with Lock("connections.lock"):
+            os.unlink(self.path)
+            super().__exit__(*a)
 
 
 def lib(cmd, *a):
@@ -271,10 +292,13 @@ def cmd_attach(args):
     worker = opt(args, "--worker")
     device = opt(args, "--device", B64) or ""
     lang = opt(args, "--lang", LANG)
+    generation = opt(args, "--generation", re.compile(r"[0-9]+"))
     st = read_json(os.path.join(state_dir(), "terminal.json"))
     state, sess, sock, win, _ = reading(st)
     if state != "live":
         out(view(st, state), RC[state])
+    if generation is not None and str(st.get("generation")) != generation:
+        out(view(st, "ended"), 5)
     want = None
     if "--shell" not in args:
         want = worker or st.get("last_worker")
@@ -291,6 +315,132 @@ def cmd_attach(args):
     env.pop("TMUX_PANE", None)
     sys.stdout.flush()
     os.execvpe(argv[0], argv, env)
+
+
+def close_view(lease):
+    """Fence a connected controller before replacing its epoch. Session ids
+    are never reused by a running tmux server; also check the connection mark.
+    No worker/home window is killed, and no newer view is looked up by name.
+    """
+    sock, gid = lease.get("socket"), lease.get("view")
+    if sock and gid and lease.get("conn") and server_pid(sock) == lease.get("server_pid"):
+        rc, rows = tm(sock, "list-sessions", "-F", "#{session_id}|#{session_name}")
+        if rc == 0 and gid + "|" + lease.get("session", "") in rows.splitlines():
+            return tm(sock, "kill-session", "-t", gid)[0] == 0
+    return True
+
+
+def cmd_connect(args):
+    """C1's authorized PTY entry. C3 can claim/take with the SAME target/conn
+    before calling connect, and pass --generation on reconnect. No automatic
+    take or renew of an ended terminal. Wire hello/status remains C3's job.
+    """
+    conn = opt(args, "--conn", CONN, need=True)
+    target = opt(args, "--target", re.compile(r"personal|worker:[A-Za-z0-9-]+"), need=True)
+    generation = opt(args, "--generation", re.compile(r"[0-9]+"))
+    # Hold this until cleanup finishes: duplicate relay ids may neither attach
+    # nor remove the first connection's resources.
+    with ConnectionLock("conn-" + conn + ".lock", nonblocking=True):
+        return connect(args, conn, target, generation)
+
+
+def connect(args, conn, target, generation):
+    sess, sock = fleet()
+    worker = None
+    if target.startswith("worker:"):
+        if not sess:
+            out({"state": "nofleet"}, 3)
+        # Only the exact fleet_id authorized by C1, never a window name/path or
+        # another host. Revalidate in attach before creating any grouped view.
+        rc, rows = tm(sock, "list-windows", "-t", "=" + sess, "-F", "#{window_id}|#{@fleet_id}")
+        matches = [r.split("|")[0] for r in rows.splitlines() if r.partition("|")[2] == target[7:]]
+        if len(matches) != 1:
+            out({"state": "ended", "target": target}, 4)
+        worker = matches[0]
+    # Only first use may initialize the no-repo fleet/home. --renew is never
+    # implicit; a previously lost pane or server stays ended.
+    st = read_json(os.path.join(state_dir(), "terminal.json"))
+    if generation is not None and (not st or str(st.get("generation")) != generation):
+        out(view(st, "ended"), 5)
+    ensure = [sys.executable, __file__, "ensure"]
+    if target == "personal" and not st:
+        ensure += ["--init"]
+    r = subprocess.run(ensure, stdout=subprocess.PIPE, universal_newlines=True)
+    if r.returncode:
+        sys.stdout.write(r.stdout)
+        sys.exit(r.returncode)
+    st = json.loads(r.stdout)
+    if generation is not None and str(st.get("generation")) != generation:
+        out(view(st, "ended"), 5)
+    sess, sock = fleet()
+    if tm(sock, "has-session", "-t", "=%s@view-wt-%s" % (sess, conn))[0] == 0:
+        out({"state": "taken"}, 5)
+    path = control_path(target)
+    child, lease = None, None
+    stopped = [False]
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *a: stopped.__setitem__(0, True))
+    try:
+        # Serialize claim AND view creation with take. An epoch cannot be
+        # handed over while an old attachment is still about to appear.
+        with Lock("control/.lock"), Lock(".lock"):
+            current = read_json(os.path.join(state_dir(), "terminal.json"))
+            if not current or current.get("generation") != st["generation"] or reading(current)[0] != "live":
+                out(view(current, "ended"), 5)
+            lease, rc = control_claim(path, target, conn, "claim")
+            if rc:
+                out(lease, rc)
+            argv = [sys.executable, __file__, "attach", "--conn", conn, "--generation", str(st["generation"])]
+            if worker:
+                argv += ["--worker", worker]
+            child = subprocess.Popen(argv)
+            deadline = time.monotonic() + 15
+            g = "%s@view-wt-%s" % (sess, conn)
+            attached = False
+            while child.poll() is None and not stopped[0] and time.monotonic() < deadline:
+                rc, gid = tm(sock, "display-message", "-p", "-t", "=" + g + ":", "#{session_id}")
+                if rc == 0 and gid.startswith("$"):
+                    lease.update(socket=sock, view=gid, session=g, server_pid=server_pid(sock), generation=st["generation"])
+                    write_json(path, lease)
+                    if tm(sock, "list-clients", "-t", "=" + g, "-F", "#{client_pid}")[1]:
+                        attached = True
+                        break
+                time.sleep(0.05)
+            if not attached:
+                return 1
+        while child.poll() is None and not stopped[0]:
+            with Lock("control/.lock"):
+                current = read_json(path) or {}
+                if (current.get("conn"), current.get("epoch")) != (conn, lease["epoch"]):
+                    break
+                if time.time() - current["ts"] > lease_secs() / 3:
+                    current["ts"] = time.time()
+                    write_json(path, current)
+            time.sleep(0.2)
+        return child.returncode or 0
+    finally:
+        # A stale connection only disposes its captured view and subprocess;
+        # release the lease iff we still own the very same epoch.
+        closed = not lease or close_view(lease)
+        if child and child.poll() is None:
+            try:
+                # Closing the view makes tmux return. Let the native attach's
+                # EXIT trap finish its row/peer cleanup before sending TERM;
+                # a signal DURING that trap can interrupt the cleanup itself.
+                child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                child.terminate()
+                try:
+                    child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+        if closed and lease and "epoch" in lease:
+            with Lock("control/.lock"):
+                current = read_json(path) or {}
+                if (current.get("conn"), current.get("epoch")) == (conn, lease["epoch"]):
+                    current.update(conn=None, ts=0)
+                    write_json(path, current)
 
 
 def attach_pids(conn):
@@ -348,6 +498,24 @@ def clamp(v, lo_hi):
     return max(lo_hi[0], min(lo_hi[1], n))
 
 
+def control_path(target):
+    return os.path.join(state_dir(), "control", hashlib.sha256(target.encode()).hexdigest()[:32] + ".json")
+
+
+def control_claim(path, target, conn, op):
+    L = read_json(path) or {"target": target, "epoch": 0, "conn": None, "ts": 0}
+    fresh = L.get("conn") and time.time() - float(L.get("ts") or 0) < lease_secs()
+    if op == "claim" and fresh and L["conn"] != conn:
+        return {"state": "paused", "target": target, "epoch": L["epoch"]}, 4
+    if L.get("conn") != conn or op == "take":
+        if not close_view(L):  # fence old PTY before another epoch may attach
+            return {"state": "error", "error": "old controller could not be closed"}, 1
+        L = {"target": target, "epoch": int(L["epoch"]) + 1}
+    L.update(conn=conn, ts=time.time(), state="controller")
+    write_json(path, L)
+    return L, 0
+
+
 def cmd_control(args):
     if not args or args[0] not in ("claim", "take", "check", "renew", "release", "resize"):
         out({"state": "error", "error": "control claim|take|check|renew|release|resize"}, 2)
@@ -355,23 +523,19 @@ def cmd_control(args):
     target = opt(args, "--target", need=True)
     conn = opt(args, "--conn", CONN, need=True)
     epoch = opt(args, "--epoch", re.compile(r"[0-9]{1,12}"), need=op not in ("claim", "take"))
-    path = os.path.join(state_dir(), "control", hashlib.sha256(target.encode()).hexdigest()[:32] + ".json")
+    path = control_path(target)
     now = time.time()
     with Lock("control/.lock"):
         L = read_json(path) or {"target": target, "epoch": 0, "conn": None, "ts": 0}
-        fresh = L.get("conn") and now - float(L.get("ts") or 0) < lease_secs()
         mine = L.get("conn") == conn and (epoch is None or int(epoch) == L["epoch"])
         if op in ("claim", "take"):
-            if op == "claim" and fresh and L["conn"] != conn:
-                out({"state": "paused", "target": target, "epoch": L["epoch"]}, 4)
-            if L.get("conn") != conn or op == "take":
-                L["epoch"] = int(L["epoch"]) + 1
-            L.update(conn=conn, ts=now)
-            write_json(path, L)
-            out({"state": "controller", "target": target, "epoch": L["epoch"]})
+            result, rc = control_claim(path, target, conn, op)
+            out(result, rc)
         if not mine or epoch is None or int(epoch) != L["epoch"]:
             out({"state": "stale", "target": target, "epoch": L["epoch"]}, 1)
         if op == "release":
+            if not close_view(L):
+                out({"state": "error", "error": "controller could not be closed"}, 1)
             L.update(conn=None, ts=0)
             write_json(path, L)
             out({"state": "released", "target": target, "epoch": L["epoch"]})
@@ -387,12 +551,11 @@ def cmd_control(args):
 
 def main(argv):
     cmds = {"ensure": cmd_ensure, "status": cmd_status, "select": cmd_select,
-            "attach": cmd_attach, "release": cmd_release, "control": cmd_control}
+            "attach": cmd_attach, "connect": cmd_connect, "release": cmd_release, "control": cmd_control}
     if not argv or argv[0] not in cmds:
         sys.stderr.write(__doc__)
         return 2
-    cmds[argv[0]](argv[1:])
-    return 0
+    return cmds[argv[0]](argv[1:]) or 0
 
 
 if __name__ == "__main__":

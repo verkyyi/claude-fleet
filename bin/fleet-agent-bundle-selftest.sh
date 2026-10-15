@@ -116,6 +116,19 @@ printf '%s\n' "$chk" | grep >/dev/null "^github .*\$HOME/.claude/fleet/bin/mcp-g
   && ok "B Claude skills + commands (a skill's script executable)" || bad "B claude skills: $(ls "$H/.claude/skills" "$H/.claude/commands" 2>&1 | tr '\n' ' ')"
 [ -f "$H/.codex/skills/doc-preview/SKILL.md" ] && [ -f "$H/.codex/skills/fleet-claim/SKILL.md" ] \
   && ok "B Codex skills (repo skills + command skills)" || bad "B codex skills: $(ls "$H/.codex/skills" 2>&1 | tr '\n' ' ')"
+# #4325: inspect the fresh HOME's generated content, not just source/existence.
+"$PY" - "$REPO/commands/fleet-claim.md" "$H" <<'PYCLAIM'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+home = Path(sys.argv[2])
+claude = (home / ".claude/commands/fleet-claim.md").read_text()
+codex = (home / ".codex/skills/fleet-claim/SKILL.md").read_text()
+assert claude == source, "Claude's installed claim drifted from the command"
+assert codex.endswith(source.replace("$ARGUMENTS", "the text after this skill name")), "Codex's generated claim is stale or incomplete"
+assert len(source.encode()) <= 13000, "installed worker command exceeds its reading budget"
+PYCLAIM
+[ "$?" = 0 ] && ok "B fresh HOME: Claude and generated Codex claim carry the complete slim command" || bad "B claim content drift"
 n=$(grep -c '^\[mcp_servers\.' "$H/.codex/config.toml" 2>/dev/null)
 [ "$n" = 4 ] && grep -q '\.claude/fleet/bin/mcp-fetch.sh' "$H/.codex/config.toml" && ok "B Codex MCP: 4 servers, fetch at the package's bin/" || bad "B codex mcp: $n $(cat "$H/.codex/config.toml" 2>&1)"
 [ -f "$R/mod/fleet/.claude-plugin/plugin.json" ] && ok "B the mod (mod/fleet/.claude-plugin/plugin.json) is in the package" || bad "B no mod"

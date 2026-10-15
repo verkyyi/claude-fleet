@@ -15,18 +15,23 @@ export type AttachmentState = {
   connection?: string
   pair?: string
   error?: string
+  status?: number
+  message?: string
+  trialLeft?: string
 }
 export type AttachmentOptions = {
   /** Same-origin route supplied by the independently authorized service adapter. */
   url: string
   generation?: string
   preferRelay?: boolean
+  /** Request adapters must never establish a successor for an uncertain write. */
+  reconnect?: boolean
   signal?: AbortSignal
   onState: (state: AttachmentState) => void
   onData: (data: string | ArrayBuffer) => void
 }
 type Signal = { t: string; sdp?: string; stun?: string[]; generation?: string;
-  target?: string; conn?: string; mode?: 'direct' | 'relay'; pair?: string; error?: string }
+  status?: number; message?: string; trial_left?: string; target?: string; conn?: string; mode?: 'direct' | 'relay'; pair?: string; error?: string }
 type Attempt = {
   ws: WebSocket; pc?: RTCPeerConnection; dc?: RTCDataChannel
   timer?: ReturnType<typeof setTimeout>; offerSent: boolean; choice?: 'direct' | 'relay'
@@ -74,6 +79,21 @@ export class BrowserAttachment {
     }
   }
 
+  /** Wait only before enqueueing; never retry a send after it succeeds. */
+  async write(data: string | Uint8Array): Promise<void> {
+    const attempt = this.attempt
+    const size = typeof data === 'string' ? new TextEncoder().encode(data).length : data.byteLength
+    if (size > FRAME_MAX) throw new Error('attachment frame too large')
+    const until = Date.now() + 5000
+    for (;;) {
+      if (!attempt || this.attempt !== attempt || !this.current(attempt) || !attempt.ready) throw new Error('attachment closed')
+      const out = attempt.choice === 'direct' ? attempt.dc : attempt.ws
+      if (out && out.bufferedAmount + size <= BUFFER_MAX) { this.send(data); return }
+      if (Date.now() >= until) throw new Error('attachment buffer full')
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+  }
+
   close(): void {
     if (this.stopped) return
     this.stopped = true
@@ -101,7 +121,7 @@ export class BrowserAttachment {
   }
   private end(a: Attempt, error?: string, fatal = false) {
     if (!this.current(a)) return
-    const canFallback = !fatal && !this.relayed && a.offerSent && Boolean(this.generation)
+    const canFallback = this.options.reconnect !== false && !fatal && !this.relayed && a.offerSent && Boolean(this.generation)
     this.dispose(a)
     if (canFallback) {
       this.relayed = true
@@ -146,7 +166,7 @@ export class BrowserAttachment {
         if (!msg.generation || !msg.target || (this.generation && this.generation !== msg.generation) ||
           (this.target && this.target !== msg.target)) { this.end(a, 'interrupted', true); return }
         this.generation = msg.generation; this.target = msg.target
-        this.publish({ generation: this.generation, target: this.target })
+        this.publish({ generation: this.generation, target: this.target, trialLeft: msg.trial_left })
         if (relay || typeof RTCPeerConnection === 'undefined') {
           this.signal(a, { t: 'relay' }); this.choose(a, 'relay'); return
         }
@@ -203,7 +223,7 @@ export class BrowserAttachment {
       case 'selected':
         if (msg.mode !== a.choice) { this.end(a, 'invalid_selection', true); return }
         this.publish({ pair: msg.pair }); return
-      case 'error': this.end(a, msg.error ?? 'refused', true); return
+      case 'error': this.publish({ status: msg.status, message: msg.message }); this.end(a, msg.error ?? 'refused', true); return
       default: this.data(a, raw)
     }
   }

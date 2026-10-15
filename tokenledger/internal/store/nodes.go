@@ -95,6 +95,9 @@ func (s *Store) EnsureNodes() error {
 		return err
 	}
 	// Browser terminals' records (claude-fleet#3838).
+	if err := s.ensureChatRequests(); err != nil {
+		return err
+	}
 	if err := s.ensureFleetTermSessions(); err != nil {
 		return err
 	}

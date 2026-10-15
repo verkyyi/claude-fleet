@@ -862,6 +862,7 @@ func (s *Server) routes() *routeMux {
 		// …and of a terminal (claude-fleet#3838), the same way.
 		mux.HandleFunc(control.TermDataPath, s.handleTermRelayData)
 		mux.HandleFunc(control.AttachmentDataPath, s.handleTermRelayData)
+		mux.HandleFunc(control.ChatAttachmentDataPath, s.handleChatRelayData)
 		// The route list `fleet connect` measures (claude-fleet#1414): it
 		// admits a certificate by a signed timestamp, so it authenticates
 		// itself, outside the viewer gate.

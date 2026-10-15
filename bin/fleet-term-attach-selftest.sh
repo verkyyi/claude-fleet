@@ -6,7 +6,7 @@
 # within 30 s while the fleet session, its windows and their processes all stay
 # (BREAK-IT `term-view-kills-session`). Also: an unknown worker, a bad target, a
 # taken view are refused with no view left behind; personal lands on the
-# session's current window; nothing new starts.
+# persistent home pane; native menu/select/shell/return work without starting AI.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 fails=0
@@ -17,39 +17,57 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: no python3"; exit 0; }
 # the fleet's shim refuses a delete on a fleet's socket — this one is a test's
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -)
 export PATH
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE FLEET_SESSION FLEET_CLIENT FLEET_SHELL CCQUOTA_FLEET
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/term-attach.XXXXXX")
 RS="ttat$$"
-export FLEET_CONF_DIR="$WORK/conf"
+export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" FLEET_STATUS_G="$WORK/global"
+export TMPDIR="$WORK/tmp" SHELL=/bin/sh FLEET_UI_LANG=en
+mkdir -p "$HOME" "$TMPDIR" "$FLEET_STATUS_G"
+export FLEET_VIEW_ROWS_CMD="cat '$WORK/rows'"
+export FLEET_VIEW_FIRST_CMD="echo unexpected >> '$WORK/first'"
+: > "$WORK/rows"
 mkdir -p "$FLEET_CONF_DIR/fleets/$RS" "$WORK/main"
 printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\n' "$WORK/main" > "$FLEET_CONF_DIR/fleets/$RS/conf"
 tt() { tmux -L "$RS" "$@"; }
 cleanup() { tt kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 
-tt new-session -d -s "$RS" -n home -x 100 -y 30 'sleep 600'
+tt -f /dev/null new-session -d -s "$RS" -n home -x 120 -y 32 'exec /bin/sh'
 tt new-window -d -t "=$RS:" -n wk 'sleep 600'
 W=$(tt list-windows -t "=$RS" -F '#{window_id} #{window_name}' | awk '$2 == "wk" { print $1 }')
 tt set-option -w -t "$W" @fleet_id fid-1
+H=$(tt display-message -p -t "=$RS:home" '#{window_id}')
+HPID=$(tt display-message -p -t "$H" '#{pane_pid}')
+tt set-option -w -t "$H" @fleet_role home
+tt set-option -w -t "$W" @fleet_role worker
+US=$'\037'
+row() { local IFS="$US"; printf '%s\n' "$*"; }
+row "$W" working x wk ' ' '' 0 '' '' '#1' - 50% ok 'Browser worker' merged '' '' '' '' > "$WORK/rows"
 PANEPID=$(tt display-message -p -t "$W" '#{pane_pid}')
 NWIN=$(tt list-windows -t "=$RS" | wc -l | tr -d ' ')
 
 # run <view> <target> — the attach on a real pty, in the background; its pid in P.
 run() {
-  python3 - "$BIN/fleet-term-attach.sh" "$1" "$2" "$WORK/$1.rc" "$WORK/$1.out" >/dev/null 2>&1 <<'PY' &
-import os, pty, sys, time, select, signal
-script, view, target, rcf, outf = sys.argv[1:6]
+  python3 - "$BIN/fleet-term-attach.sh" "$1" "$2" "$WORK/$1.rc" "$WORK/$1.out" "$WORK/$1.in" >/dev/null 2>&1 <<'PY' &
+import os, pty, sys, time, select, signal, fcntl, termios, struct
+script, view, target, rcf, outf, inf = sys.argv[1:7]
 out = open(outf, "wb")
 pid, fd = pty.fork()
 if pid == 0:
     os.environ["TERM"] = "xterm-256color"   # what term-pty gives it
     os.execvp("bash", ["bash", script, "--view", view, "--target", target])
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 120, 0, 0))
+input_file = open(inf, "w+b", buffering=0)
+status = None
 # keep the terminal drained; stop when told (SIGUSR1) by hanging it up
 stop = []
 signal.signal(signal.SIGUSR1, lambda *a: stop.append(1))
 deadline = time.time() + 60
 while time.time() < deadline and not stop:
+    b = input_file.read()
+    if b:
+        os.write(fd, b)
     r, _, _ = select.select([fd], [], [], 0.2)
     if r:
         try:
@@ -59,36 +77,78 @@ while time.time() < deadline and not stop:
             out.write(b); out.flush()
         except OSError:
             break
-    if os.waitpid(pid, os.WNOHANG)[0]:
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
         break
-if stop:
+    status = None
+if stop or time.time() >= deadline:
     os.close(fd)           # the hang-up: the terminal's only end goes away
     try:
         os.killpg(pid, signal.SIGHUP)
     except OSError:
         pass
-_, st = os.waitpid(pid, 0)
-open(rcf, "w").write(str(os.waitstatus_to_exitcode(st)))
+if status is None:
+    _, status = os.waitpid(pid, 0)
+open(rcf, "w").write(str(os.waitstatus_to_exitcode(status)))
 PY
   P=$!
 }
 waitfor() { local i=0; while [ $i -lt "$2" ]; do eval "$1" && return 0; sleep 0.2; i=$((i + 1)); done; return 1; }
 
+# Feed the SAME bytes as the browser through the actual PTY, never call a menu
+# action directly. The row producer is a fixture; popup, keys and go are real.
+# shellcheck disable=SC2034 # v and before are read by waitfor's eval in this scope
+native() {
+  local c="$1" v="=$RS@view-wt-$1" before
+  before=$(grep -ao 'Browser worker' "$WORK/$c.out" | wc -l | tr -d ' ')
+  printf '\033[927~' >> "$WORK/$c.in"
+  waitfor '[ "$(grep -ao "Browser worker" "$WORK/$c.out" | wc -l | tr -d " ")" -gt "$before" ]' 75 \
+    && ok "$c User927 opens native menu" || bad "$c User927 did not draw native menu"
+  printf 'Browser worker\r' >> "$WORK/$c.in"
+  waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$W" ]' 50 \
+    && ok "$c menu selects worker" || bad "$c menu did not select worker"
+  sleep 0.4
+  printf '\034' >> "$WORK/$c.in"
+  waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$H" ]' 50 \
+    && ok "$c shell is persistent home" || bad "$c shell did not select home"
+  printf 'echo WEB_SHELL_%s\r' "$c" >> "$WORK/$c.in"
+  waitfor 'tt capture-pane -p -t "$H" | grep -q "^WEB_SHELL_$c"' 50 \
+    && ok "$c real shell accepts input" || bad "$c shell input lost"
+  printf '\034' >> "$WORK/$c.in"
+  waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$W" ]' 50 \
+    && ok "$c shell returns to worker" || bad "$c shell did not return"
+  before=$(grep -ao 'Browser worker' "$WORK/$c.out" | wc -l | tr -d ' ')
+  printf '\035p' >> "$WORK/$c.in"
+  waitfor '[ "$(grep -ao "Browser worker" "$WORK/$c.out" | wc -l | tr -d " ")" -gt "$before" ]' 75 \
+    && ok "$c Ctrl+] p opens native menu" || bad "$c prefix menu did not draw"
+  printf '\033' >> "$WORK/$c.in"
+  sleep 0.4
+}
+
 # A: worker — attached on its window; hang up ⇒ the view goes, the fleet stays.
 run web-a1 worker:fid-1
-if waitfor 'tt has-session -t "=$RS@view-web-a1" 2>/dev/null && [ -n "$(tt list-clients -t "=$RS@view-web-a1" 2>/dev/null)" ]' 50; then
-  ok "A an attached view $RS@view-web-a1"
-  G=$(tt list-sessions -F '#{session_name} #{session_id}' | awk -v n="$RS@view-web-a1" '$1 == n { print $2 }')
+if waitfor 'tt has-session -t "=$RS@view-wt-web-a1" 2>/dev/null && [ -n "$(tt list-clients -t "=$RS@view-wt-web-a1" 2>/dev/null)" ]' 50; then
+  AP=$P
+  ok "A an attached view $RS@view-wt-web-a1"
+  G=$(tt list-sessions -F '#{session_name} #{session_id}' | awk -v n="$RS@view-wt-web-a1" '$1 == n { print $2 }')
   cur=$(tt display-message -p -t "$G:" '#{window_id}')
   [ "$cur" = "$W" ] && ok "A it shows the worker's window" || bad "A it shows $cur, want $W"
   [ "$(tt show-options -v -t "$G" destroy-unattached 2>/dev/null)" = on ] \
     && ok "A destroy-unattached is on once attached" || bad "A destroy-unattached is not on"
+  [ "$(tt show-options -v -t "$G" key-table)" = fleet-view ] && ok "A native Fleet keys" || bad "A missing native keys"
+  native web-a1
+  bash "$BIN/fleet-term-attach.sh" --view web-a1 --target worker:fid-1 > "$WORK/duplicate.out"
+  [ "$?" = 5 ] && ok "A duplicate connection refused" || bad "A duplicate connection accepted"
+  run web-denied worker:fid-1; wait "$P" 2>/dev/null
+  [ "$(cat "$WORK/web-denied.rc")" = 4 ] && ok "A second controller paused before attach" || bad "A second controller attached"
+  tt has-session -t "=$RS@view-wt-web-denied" 2>/dev/null && bad "A refused controller left a view"
+  P=$AP
 else
   bad "A no attached view appeared: $(tr -d '\033' < "$WORK/web-a1.out" 2>/dev/null | tr '\r\n' '  ' | cut -c1-300) rc=$(cat "$WORK/web-a1.rc" 2>/dev/null) tmux=$(tmux -V)"
 fi
 t0=$(date +%s)
 kill -USR1 "$P" 2>/dev/null
-if waitfor '! tt has-session -t "=$RS@view-web-a1" 2>/dev/null' 150; then
+if waitfor '! tt has-session -t "=$RS@view-wt-web-a1" 2>/dev/null' 150; then
   ok "A the hung-up terminal's view is gone in $(( $(date +%s) - t0 ))s (≤30s)"
 else
   bad "A the view outlived its terminal by 30s"
@@ -107,26 +167,50 @@ run web-b2 'worker:../x'; wait "$P" 2>/dev/null
 [ "$(cat "$WORK/web-b2.rc" 2>/dev/null)" = 2 ] && ok "B a path for a target: exit 2" || bad "B a path for a target: exit $(cat "$WORK/web-b2.rc" 2>/dev/null)"
 run notweb worker:fid-1; wait "$P" 2>/dev/null
 [ "$(cat "$WORK/notweb.rc" 2>/dev/null)" = 2 ] && ok "B a view that is not web-: exit 2" || bad "B a non-web view: exit $(cat "$WORK/notweb.rc" 2>/dev/null)"
-tt new-session -d -t "=$RS" -s "$RS@view-web-b3"
+tt new-session -d -t "=$RS" -s "$RS@view-wt-web-b3"
 run web-b3 worker:fid-1; wait "$P" 2>/dev/null
 [ "$(cat "$WORK/web-b3.rc" 2>/dev/null)" = 5 ] && ok "B a taken view: exit 5" || bad "B a taken view: exit $(cat "$WORK/web-b3.rc" 2>/dev/null)"
-tt has-session -t "=$RS@view-web-b3" 2>/dev/null && ok "B …and the other's view is untouched" || bad "B the other's view was killed"
-tt kill-session -t "=$RS@view-web-b3"
+tt has-session -t "=$RS@view-wt-web-b3" 2>/dev/null && ok "B …and the other's view is untouched" || bad "B the other's view was killed"
+tt kill-session -t "=$RS@view-wt-web-b3"
 [ "$(tt list-sessions -F '#{session_name}' | grep -c .)" = 1 ] && ok "B no view left behind" || bad "B views left: $(tt list-sessions -F '#{session_name}' | tr '\n' ' ')"
 
-# C: personal — the session's current window, nothing started.
-tt select-window -t "=$RS:home"
-H=$(tt display-message -p -t "=$RS:" '#{window_id}')
+# C: personal — the persistent home, even when the fleet selected a worker.
+tt select-window -t "=$RS:$W"
 run web-c1 personal
-if waitfor 'tt has-session -t "=$RS@view-web-c1" 2>/dev/null' 50; then
-  G=$(tt list-sessions -F '#{session_name} #{session_id}' | awk -v n="$RS@view-web-c1" '$1 == n { print $2 }')
-  [ "$(tt display-message -p -t "$G:" '#{window_id}')" = "$H" ] && ok "C personal lands on the current window" || bad "C personal landed elsewhere"
+if waitfor 'tt list-clients -t "=$RS@view-wt-web-c1" -F x 2>/dev/null | grep -q x' 75; then
+  G=$(tt list-sessions -F '#{session_name} #{session_id}' | awk -v n="$RS@view-wt-web-c1" '$1 == n { print $2 }')
+  [ "$(tt display-message -p -t "$G:" '#{window_id}')" = "$H" ] && ok "C personal lands on persistent home" || bad "C personal landed elsewhere"
+  native web-c1
 else
   bad "C no personal view"
 fi
 kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
-waitfor '! tt has-session -t "=$RS@view-web-c1" 2>/dev/null' 150 && ok "C its view goes with it" || bad "C its view stayed"
+waitfor '! tt has-session -t "=$RS@view-wt-web-c1" 2>/dev/null' 150 && ok "C its view goes with it" || bad "C its view stayed"
 [ "$(tt list-windows -t "=$RS" | wc -l | tr -d ' ')" = "$NWIN" ] && ok "C no window was made" || bad "C a window was made"
+
+# D: takeover fences the old real attachment before returning a new epoch.
+run web-d1 personal; DP=$P
+waitfor 'tt list-clients -t "=$RS@view-wt-web-d1" -F x 2>/dev/null | grep -q x' 75 || bad "D no first controller"
+python3 "$BIN/fleet-webterm.py" control take --target personal --conn web-d2 > "$WORK/take.json"
+! tt has-session -t "=$RS@view-wt-web-d1" 2>/dev/null && ok "D take fenced old view" || bad "D old view survived take"
+run web-d2 personal
+waitfor 'tt list-clients -t "=$RS@view-wt-web-d2" -F x 2>/dev/null | grep -q x' 75 || bad "D no replacement controller"
+wait "$DP" 2>/dev/null
+python3 "$BIN/fleet-webterm.py" control check --target personal --conn web-d2 --epoch "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["epoch"])' "$WORK/take.json")" >/dev/null \
+  && ok "D old cleanup preserves new epoch" || bad "D old cleanup released new epoch"
+kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+waitfor '! tt has-session -t "=$RS@view-wt-web-d2" 2>/dev/null' 150 || bad "D replacement view stayed"
+[ "$(tt display-message -p -t "$H" '#{pane_pid}')" = "$HPID" ] && ok "D persistent shell pid unchanged" || bad "D shell was replaced"
+[ "$(tt list-windows -t "=$RS" | wc -l | tr -d ' ')" = "$NWIN" ] && ok "D no extra shell or agent" || bad "D extra window"
+[ ! -s "$WORK/first" ] && ok "D never auto-started AI" || bad "D automatic session start"
+[ "$(find "$FLEET_CONF_DIR/remote-views" -name 'wt-web-*' | wc -l | tr -d ' ')" = 0 ] && ok "D no connection rows or spools left" || {
+  bad "D connection registry leaked"
+  find "$FLEET_CONF_DIR/remote-views" -name 'wt-web-*' -print
+}
+# A changed generation is not first use: never remake the shell automatically.
+tt respawn-pane -k -t "$H"
+run web-ended personal; wait "$P" 2>/dev/null
+[ "$(cat "$WORK/web-ended.rc")" = 5 ] && ok "D lost shell stays ended" || bad "D lost shell silently renewed"
 
 [ "$fails" = 0 ] && { echo "fleet-term-attach-selftest: all passed"; exit 0; }
 echo "fleet-term-attach-selftest: $fails failed"; exit 1

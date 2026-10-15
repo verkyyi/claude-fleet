@@ -64,6 +64,10 @@ func connectAttachmentTest(t *testing.T, r *termRig, direct bool) *attachmentCli
 	if c == nil {
 		t.Fatalf("attach status %d", st)
 	}
+	return connectAttachmentSocket(t, c, direct)
+}
+
+func connectAttachmentSocket(t *testing.T, c *websocket.Conn, direct bool) *attachmentClient {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &attachmentClient{ws: c, signals: readAttachmentFrames(ctx, c), data: make(chan attachmentFrame, 32), mode: "relay"}
 	t.Cleanup(func() {

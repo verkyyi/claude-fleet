@@ -164,4 +164,28 @@ need commands/fleet-context.md context
 need skills/fleet-open/SKILL.md open where show
 ok "C claim · handoff · compact-resume · context · fleet-open name the tools that replaced their scripts"
 
+# --- D: the worker entry stays small and keeps the lifecycle's heading anchors (#4325)
+python3 - "$ROOT/commands/fleet-claim.md" "$ROOT/docs/dev/WORKER.md" <<'PYCLAIM'
+from pathlib import Path
+import sys
+claim, background = (Path(p).read_text() for p in sys.argv[1:])
+assert len(claim.encode()) <= 13000, "fleet-claim.md exceeds the 13,000-byte reading budget"
+headings = [
+    "## 0. Resolve fleet + guard seat + read the issue — ONE call (run FIRST)",
+    "## 1. Ground yourself, then implement",
+    "### Ground cheaply — keep the broad sweep out of the main context",
+    "### Before you touch code: the 「改动前」 capture",
+    "## 2. The standing contract (built-in charter — the base layer)",
+    "## 3. Report + proceed",
+    "## 排障 — scripts, for when a tool is not enough",
+]
+actual = [line for line in claim.splitlines() if line.startswith("##")]
+assert actual == headings, actual
+for heading in headings:
+    assert heading in background.splitlines(), "background lost section: " + heading
+assert "docs/dev/WORKER.md" in claim
+PYCLAIM
+[ "$?" = 0 ] || fail "D: worker reading budget / heading compatibility"
+ok "D claim <=13,000 bytes; steps/subsections unchanged and indexed in WORKER.md"
+
 printf 'skill-tools-selftest: %d passed\n' "$pass"

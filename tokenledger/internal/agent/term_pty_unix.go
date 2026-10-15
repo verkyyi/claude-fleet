@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,6 +25,10 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	env, err := termPtyEnv(os.Environ())
+	if err != nil {
+		return 1, err
+	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return 1, errors.New("no home to run the terminal in")
@@ -39,7 +44,7 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 	argv := termAttachArgv(home, view, target)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = home
-	cmd.Env = termPtyEnv(os.Environ())
+	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {
@@ -72,30 +77,47 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 
 // termPtyEnv is the terminal's environment: a terminal type, a UTF-8 locale
 // (CJK input and wide cells need it), and no tmux of the agent's own.
-func termPtyEnv(env []string) []string {
-	out := make([]string, 0, len(env)+2)
-	utf8 := false
+func termPtyEnv(env []string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "locale", "-a")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
+	locales, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list terminal locales: %w", err)
+	}
+	return termPtyLocaleEnv(env, strings.Fields(string(locales)))
+}
+
+func termPtyLocaleEnv(env, available []string) ([]string, error) {
+	out := make([]string, 0, len(env)+4)
+	want := make(map[string]string)
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
 		case "TMUX", "TMUX_PANE", "TERM":
 			continue
 		case "LANG", "LC_ALL", "LC_CTYPE":
-			if strings.Contains(strings.ToUpper(strings.ReplaceAll(v, "-", "")), "UTF8") {
-				utf8 = true
-			}
+			want[k] = v
+			continue
 		}
 		out = append(out, kv)
 	}
-	out = append(out, "TERM=xterm-256color")
-	if !utf8 {
-		if _, err := os.Stat("/usr/share/locale/en_US.UTF-8"); err == nil {
-			out = append(out, "LANG=en_US.UTF-8")
-		} else {
-			out = append(out, "LANG=C.UTF-8")
+	normal := func(s string) string { return strings.ToUpper(strings.ReplaceAll(s, "-", "")) }
+	// Preserve an installed UTF-8 choice in locale precedence order. Inherited
+	// LC_ALL=C must not override a UTF-8 LANG; never assume C.UTF-8 exists on macOS.
+	candidates := append([]string{want["LC_ALL"], want["LC_CTYPE"], want["LANG"], "C.UTF-8", "en_US.UTF-8"}, available...)
+	for _, candidate := range candidates {
+		if !strings.Contains(normal(candidate), "UTF8") {
+			continue
+		}
+		for _, installed := range available {
+			if normal(candidate) == normal(installed) {
+				return append(out, "TERM=xterm-256color", "LANG="+installed, "LC_CTYPE="+installed, "LC_ALL="+installed), nil
+			}
 		}
 	}
-	return out
+	return nil, errors.New("no installed UTF-8 locale for the terminal")
 }
 
 // termReadFrames applies the agent's frames to the terminal until stdin ends

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
@@ -187,61 +187,23 @@ func (s *Server) trialRefund(pid, why string) {
 // runs; a page that went away mid-turn saw no error frame, so it is never one.
 type turnWatch struct {
 	io.ReadCloser
-	line   []byte
-	reply  bool
-	failed bool
-	onFail func()
-	closed bool
+	outcome control.ChatOutcome
+	onFail  func()
+	closed  bool
 }
-
-// turnWatchLineMax bounds the one line held while it passes; a longer line is
-// a reply (only a reply frame carries that much).
-const turnWatchLineMax = 64 << 10
 
 func (tw *turnWatch) Read(p []byte) (int, error) {
 	n, err := tw.ReadCloser.Read(p)
-	for _, b := range p[:n] {
-		if b != '\n' {
-			if len(tw.line) < turnWatchLineMax {
-				tw.line = append(tw.line, b)
-			} else {
-				tw.reply = true
-			}
-			continue
-		}
-		tw.frame()
-	}
+	tw.outcome.Feed(p[:n])
 	return n, err
 }
-
-func (tw *turnWatch) frame() {
-	var f struct {
-		T string `json:"t"`
-	}
-	if json.Unmarshal(tw.line, &f) == nil {
-		switch f.T {
-		case "text", "tool", "tool_result", "ask", "done":
-			tw.reply = true
-		case "error":
-			if !tw.reply {
-				tw.failed = true
-			}
-		}
-	}
-	tw.line = tw.line[:0]
-}
-
 func (tw *turnWatch) Close() error {
 	err := tw.ReadCloser.Close()
-	if tw.closed {
-		return err
-	}
-	tw.closed = true
-	if len(tw.line) > 0 {
-		tw.frame()
-	}
-	if tw.failed && !tw.reply {
-		tw.onFail()
+	if !tw.closed {
+		tw.closed = true
+		if tw.outcome.Refund() {
+			tw.onFail()
+		}
 	}
 	return err
 }

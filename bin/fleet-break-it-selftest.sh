@@ -7583,6 +7583,15 @@ print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
   WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
 }
 
+drill_idle_activity_between_probes() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-idle-edges-selftest.sh" 2>&1) \
+    || { WHY="short-lived worker activity certified idle: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
@@ -7813,6 +7822,15 @@ term_go() {
   fi
 }
 
+# Chat has its own admission and never replays a submitted request.
+drill_chat_direct_admission() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
+    '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
+  SECS=$(since "$t0")
+}
+
 # term-other-person (issue #3838, EPIC #3836 C1): a browser terminal reaches only
 # the signed-in person's own home login — never another person, an admin as
 # themselves or through a view, the operator's door, another origin; and the node
@@ -7849,7 +7867,7 @@ drill_term_relay_orphan() {
 }
 
 # term-view-kills-session (issue #3838): the browser terminal's tmux view is a
-# grouped `<fleet>@view-web-<id>` that goes with its terminal — never the fleet
+# native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
 drill_term_view_kills_session() {
@@ -7858,7 +7876,7 @@ drill_term_view_kills_session() {
   if ! command -v tmux >/dev/null 2>&1; then SECS=0; WHAT="SKIP：这里没有 tmux"; return 0; fi
   out=$(bash "$BIN/fleet-term-attach-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="fleet-term-attach-selftest is red: $(printf '%s' "$out" | grep FAIL | head -4 | tr '\n' ' ')"; return 1; }
-  WHAT='真伪终端接上分组视图、挂断：30 秒内视图没了，fleet 会话、窗口数、worker 进程号不变，没新起会话；未知 worker / 路径目标 / 被占视图都拒且不留视图'
+  WHAT='两种入口的真 PTY 打开原生菜单、选会话、切持久壳并返回；挂断 30 秒内本连接 view/registry 清零，home/worker pid 不变；重复连接、占用控制权和未知目标先拒，take 先收旧视图，旧 cleanup 不释放新 epoch'
   SECS=$(since "$t0")
 }
 

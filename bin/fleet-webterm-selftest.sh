@@ -146,6 +146,9 @@ eq "D: --shell lands home" "$HW" "$(vcur d3)"
 tt kill-window -t "=$TL:b-d3"; WT release --conn d3 >/dev/null
 eq "D: still no session started" "" "$(cat "$WORK/first.log")"
 o=$(WT attach --conn 'x;y' 2>&1); eq "D: a bad conn id refused" 2 "$?"
+o=$(WT attach --conn gone --worker '@999999' 2>&1); eq "D: explicit gone worker refuses instead of landing home" 4 "$?"
+o=$(WT attach --conn changed --generation 999 2>&1); eq "D: attach refuses another generation" 5 "$?"
+o=$(WT connect --conn changed --target personal --generation 999 2>&1); eq "D: PTY connect refuses another generation" 5 "$?"
 
 # --- E. control --------------------------------------------------------------------
 C() { WT control "$@" --target personal; }

@@ -107,6 +107,44 @@ func TestTermPtyArgs(t *testing.T) {
 	}
 }
 
+func TestTermPtyLocaleEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		env, installed []string
+		want           string
+	}{
+		{"LC_ALL C overrides LANG", []string{"LC_ALL=C", "LANG=zh_CN.UTF-8"}, []string{"C", "zh_CN.utf8"}, "zh_CN.utf8"},
+		{"LC_CTYPE C overrides LANG", []string{"LC_CTYPE=C", "LANG=en_US.UTF-8"}, []string{"en_US.UTF-8"}, "en_US.UTF-8"},
+		{"LC_ALL precedence", []string{"LC_ALL=zh_CN.UTF-8", "LC_CTYPE=en_US.UTF-8", "LANG=C.UTF-8"}, []string{"C.utf8", "zh_CN.utf8", "en_US.utf8"}, "zh_CN.utf8"},
+		{"macOS no C UTF8", []string{"LANG=C"}, []string{"C", "en_US.UTF-8"}, "en_US.UTF-8"},
+		{"Linux spelling", nil, []string{"C", "C.utf8"}, "C.utf8"},
+		{"uninstalled inherited locale", []string{"LC_ALL=bogus.UTF-8"}, []string{"C", "en_US.UTF-8"}, "en_US.UTF-8"},
+		{"no UTF8", nil, []string{"C", "POSIX"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env, err := termPtyLocaleEnv(append(tc.env, "TMUX=wrong", "TMUX_PANE=%1", "TERM=dumb", "KEEP=yes"), tc.installed)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("accepted host without UTF-8")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(env, "\n")
+			for _, key := range []string{"LANG", "LC_CTYPE", "LC_ALL"} {
+				if strings.Count(got, key+"=") != 1 || !strings.Contains(got, key+"="+tc.want) {
+					t.Fatalf("wrong locale: %v", env)
+				}
+			}
+			if strings.Contains(got, "TMUX") || !strings.Contains(got, "TERM=xterm-256color") || !strings.Contains(got, "KEEP=yes") {
+				t.Fatal(env)
+			}
+		})
+	}
+}
+
 func TestTermGrantSpentOnce(t *testing.T) {
 	var g spentGrants
 	now := time.Now()

@@ -28,25 +28,32 @@ Everything starts from one key. The tables below are generated from fleet's key 
 The panel looks roughly like this (sample data):
 
 ```text
-⚡ Write a sentence, ↵ to hand it to a new session
+› Search sessions                 Sessions 8
 Waiting on you 1
-  ● Login page redesign   mac-a    asking: keep the old redirect?
+  ! Login page redesign   mac-a    asking: keep the old redirect?
 Working 2
-  ● Fix export timeout    mac-a    #128
-  ● Weekly report data    linux-a
+  » Fix export timeout    mac-a    #128
+  » Weekly report data    linux-a
 Just landed 1
   ✓ Upgrade dependencies  mac-a    PR #131 merged
 ▸ Ended (4)
+  ⚡ New session (blank)
 ↵ go  Tab act  ↑↓ pick  type to filter  ? legend  esc close  ↑ to ⚡
 ```
 
 ### Open a session
 
-- **Hand over a new task**: open the panel, write a sentence on the ⚡ line at the top (for example "add a header row to the CSV export"), and press ↵. fleet records the task and opens a new session to do it; your sentence is the first thing the session receives. Press Tab first to pick which repository it works in, and whether Claude or Codex does it.
-- **Open a blank session**: pick the "⚡ New session (blank)" row and press ↵. It is tied to no repository — good for asking questions, looking things up, or talking a request through first.
-- **Switch to another session**: just type a few letters (name, machine and state are all searchable) and press ↵. ↵ without typing goes back to the session you looked at last.
+- **Write a new task**: pick “⚡ New session (blank)” or “⚡ New task” below the search results, then press Enter or Tab to open an editor beside that row. Search text seeds an empty draft only. Enter in the editor adds a newline. Tab / Shift+Tab walks the editor, repository, agent and buttons; left/right changes the repository or agent. Only “Open with draft (not sent)” opens a session with your complete draft in its input. Review and send it from that session.
+- **Open a blank session**: choose “Open blank session” in the same overlay. It uses the selected repository and agent; choose “No repository” if you do not need one. Opening a blank session keeps the draft.
+- **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
+
+Menus and editors cover a small area near their source row; the list stays in place. F6 moves focus between list and overlay. Changing the list selection leaves the overlay's target unchanged; Tab explicitly retargets it. Escape closes the overlay and restores the selection, search and scroll from when it opened; another Escape closes the panel. Click to select a row, double-click to enter a session or open the composer; overlay buttons are clickable.
+
+Draft text, repository, agent, caret and control focus are stored privately on this machine for this view. They survive cancellation, retargeting and session switches. “Clear draft” or a confirmed successful draft opening clears the text; failures and unconfirmed openings retain it. Repository and agent remain selected. Resize preserves editor state and selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice, keep the overlay inside the real terminal bounds, and retain Tab, F6 and Escape. Long content scrolls inside the overlay.
 
 ### Session states
+
+The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished windows still open count; reaped records do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
 
 The panel groups sessions by what you should do:
 
@@ -81,9 +88,9 @@ fleet quit                     # quit fleet (see below)
 
 In the desktop fleet terminal, drop files or press `Ctrl+V` to paste a clipboard image. Fleet uploads them and inserts their remote paths automatically, including multiple files. Ordinary text paste works as before.
 
-Output and resizing continue during a slow transfer. Text and Enter typed afterwards wait for the attachment, then arrive in order. `Ctrl+C` cancels it. Failure, a session switch or a disconnect discards the attachment operation and waiting input, with a notification asking you to type again.
+Output and resizing continue while Fleet prepares and uploads attachments. The top bar shows Preparing → Uploading (received bytes and total progress) → Confirming → Uploaded. Input is paused: text, Enter and further drops are discarded, never saved for later. `Ctrl+C` cancels only the upload and restores input without interrupting remote work. Success inserts the confirmed remote paths once, without pressing Enter. Failure, switching sessions or disconnecting inserts nothing; type again after input resumes.
 
-Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. More than 64 KiB of waiting input also cancels with a notification. If Fleet cannot verify the current session, attachments fail visibly while ordinary text input remains available.
+Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. If Fleet cannot verify the current session, attachments fail visibly while ordinary text input remains available.
 
 ## Working in a code repository
 
@@ -155,3 +162,9 @@ Without iTerm2 (for example Ghostty, or the system's own Terminal) ⌘ keys neve
 - **Common questions**: [FAQ](../faq.md).
 
 A managed conversation without a repository can also switch to Codex from the list menu. Finish its current turn first. For native scheduled tasks, the panel asks the source to verify its current tasks and prepare handoff notes before switching. The source keeps running during preparation; missing sign-in, folder trust or task details are explained. Session-only patrols and one-shot reminders keep their own timing and expiry, and deleted tasks stay deleted. A durable Claude reminder in the project moves too: the source deletes it with its own scheduler only after Fleet has saved an inactive copy, and the copy goes live once the source has exited — so the reminder arrives once, on time, in the switched conversation. If the source cannot do that itself (for example it is out of quota), the switch takes the reminder only while no other Claude could be rewriting that project's task list; otherwise it explains which process is in the way and the original conversation and reminders keep running. You do not need to find or export JSON. A trusted node fills a missing HOME trust entry while respecting explicit distrust and pre-trust opt-out. Unsent input remains a draft.
+
+## Webchat connections
+
+Webchat tries a direct connection to your home node first and uses the hub relay when the network prevents it. Older nodes and the local page continue to work, with the same conversation and quota rules.
+
+If the connection drops after submission, the page reloads the conversation and says that the message may already have arrived. Review the recovered conversation before retrying. Messages, stop requests and answers are never sent again automatically.
