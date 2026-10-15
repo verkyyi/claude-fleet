@@ -194,12 +194,12 @@ door_why() {
 
 # jump_check: which road the entry route took (claude-fleet#4193)
 jump_check() {
-  local argv
-  argv=$(on_client "timeout $TMO fleet connect $MACHINE --route entry --print 2>/dev/null")
+  local pargv
+  pargv=$(on_client "timeout $TMO fleet connect $MACHINE --route entry --print 2>/dev/null")
   unpin
-  case "$argv" in
+  case "$pargv" in
     *'-W %h:%p'*'-l fleet-jump'*) pass jump "entry went through the door's jump account to the pod's own sshd"; OKS="${OKS}（跳转）" ;;
-    *) if [ "$JUMP" = 1 ]; then fail jump "entry still took the door's per-login road: ${argv:-no argv}"
+    *) if [ "$JUMP" = 1 ]; then fail jump "entry still took the door's per-login road: ${pargv:-no argv}"
        else say "INFO jump entry took the door's per-login road (the hub offers no jump here yet)"; fi ;;
   esac
 }

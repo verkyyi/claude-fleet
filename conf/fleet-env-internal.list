@@ -98,6 +98,7 @@ FLEET_CLIENT_VER                   handoff: the thin client's .client-version ve
 FLEET_CN_PROBE                     knob: 0 turns off the China real-user path patrol on the diskguard tick (fleet-cn-probe-watch.sh, fleet-diskguard.sh, #4180)
 FLEET_CN_PROBE_ANSWER              knob: fleet-cn-probe.sh — seconds a new Codex session may take to answer (default 300, #4180)
 FLEET_CN_PROBE_CLIENT              knob: fleet-cn-probe.sh — the China client box to walk `fleet connect` from (#4150)
+FLEET_CN_PROBE_JUMP                knob: fleet-cn-probe.sh — 1 makes an entry route that still took the door's per-login road a FAIL (--jump, #4193)
 FLEET_CN_PROBE_CMD                 seam: fleet-cn-probe-watch.sh — the probe it runs (#4180)
 FLEET_CN_PROBE_DOOR_NS             knob: fleet-cn-probe.sh — the namespace of the door it reads when the door refuses a key (#4150)
 FLEET_CN_PROBE_DRILL_CMD           seam: fleet-cn-probe-env.sh — the fleet-drill.sh it invites / approves with (#4180)
