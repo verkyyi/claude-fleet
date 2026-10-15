@@ -1046,3 +1046,6 @@ FLEET_PLATFORM                     seam: the release platform fleet_platform ans
 FLEET_DOCPREV_TICK                 knob: 0 stops the diskguard tick restarting a dead doc-preview server while docs are shared (default 1, #3988)
 FLEET_SPINNER_WATCH                knob: 0 = the spinner animates every socket, watched or not (tmux-spinner.sh, 1 = frames only where a client is attached, #4261)
 FLEET_HUBSESS_IDLE_SKIP            knob: 0 = the collector keeps the hub-sessions loop alive on a login with no session and no client (fleet_login_unused in fleet-lib.sh, 1, #4261)
+FLEET_CI_WORKER_PAT                seam: the argv mark of a running CI job (fleet-ci-runner.py's Runner.Worker); fleet_idle_now reads it, a selftest gives a private one (#4355)
+FLEET_IDLE_SELF_SOCKET             seam: socket path paired with FLEET_IDLE_SELF_WIN (#4355)
+FLEET_IDLE_SELF_WIN                seam: fleet_idle_now's caller window when it has no $TMUX_PANE (#4355)

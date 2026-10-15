@@ -184,15 +184,16 @@ class Pass:
     def sweep_sessions(self, d):
         for n in sorted(os.listdir(d)):
             p = os.path.join(d, n)
-            if n.startswith("."):
+            if n.startswith(".") and not n.startswith(".idle-"):
                 self.sweep_tmp(p)
                 continue
             try:
                 st = os.lstat(p)
             except OSError:
                 continue
-            if not owned_by(st, n):
-                self.act("rm %s (not %s's — uid %d)" % (p, n, st.st_uid), os.unlink, p)
+            login = n[6:] if n.startswith(".idle-") else n
+            if not owned_by(st, login):
+                self.act("rm %s (not %s's — uid %d)" % (p, login, st.st_uid), os.unlink, p)
 
     def sweep_gh_repo(self, d):
         for n in sorted(os.listdir(d)):

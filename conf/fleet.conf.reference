@@ -2495,6 +2495,25 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Doctor load warn per core @group=disk @tier=advanced @scope=global @edit=int
 #FLEET_LOAD_WARN_PER_CORE=4
 
+# `fleet-doctor`'s `idle-cost` line (issue #4355): what the fleet costs this
+# machine while nobody is working — processes started a second, measured by
+# `bin/fleet-idle-cost.sh` only when idle (no working worker window, no CI job).
+# Shown on a host (承载); 1 forces it on any computer, 0 silences it.
+# @label=Doctor idle-cost line @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_DOCTOR_IDLE_COST=
+
+# Processes started a second while idle above which the `idle-cost` line WARNs,
+# naming the three biggest sources (发起人拍板, EPIC #4354).
+# @label=Idle-cost warn rate @group=disk @tier=internal @scope=global @edit=int @unit=/s
+#FLEET_IDLE_COST_WARN=50
+
+# How old (seconds) a kept idle-cost reading may be before the doctor takes a new
+# one, and how long (seconds) that doctor window is.
+# @label=Idle-cost reading max age @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_IDLE_COST_MAX_AGE=3600
+# @label=Idle-cost doctor window @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_DOCTOR_IDLE_COST_SECS=60
+
 # macOS fseventsd RSS (MB) at which `fleet-doctor`'s `machine` check WARNs and the
 # diskguard --watch tick sends its once-a-day reminder (issue #889): a bloated
 # fseventsd stalls every new session 6-8s at spawn. Report-only — the fleet never
