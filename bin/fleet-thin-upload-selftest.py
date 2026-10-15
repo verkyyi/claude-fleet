@@ -15,7 +15,13 @@ BIN = Path(__file__).resolve().parent
 
 
 class Pump(unittest.TestCase):
-    def test_slow_clipboard_keeps_output_and_interrupt(self):
+    def test_slow_clipboard_keeps_output_and_cancel(self):
+        self.slow('capture')
+
+    def test_stalled_transfer_keeps_output_and_cancel(self):
+        self.slow('transfer')
+
+    def slow(self, phase):
         with tempfile.TemporaryDirectory(prefix="thin-upload-test.") as d:
             d = Path(d)
             clip = d / "clip.py"
@@ -24,7 +30,7 @@ class Pump(unittest.TestCase):
             remote.write_text("""import os, select, tty, signal
 tty.setraw(0)
 signal.signal(signal.SIGWINCH, lambda *_: os.write(1, b'RESIZED'))
-os.write(1, b'\\x1b]7502;cur;token=test;m=-;l=-;w=fu/fid\\x07READY')
+os.write(1, b'\\x1b]7502;cur;token=test;m=-;l=-;w=fu/fid;g=one\\x07READY')
 while True:
     r, _, _ = select.select([0], [], [], .02)
     os.write(1, b'.')
@@ -46,6 +52,16 @@ t.pump([sys.executable, sys.argv[2]], 'test')
             master, slave = os.openpty()
             env = dict(os.environ, HOME=str(d), FLEET_ITERM_PROFILE="0", FLEET_ITERM_KEYS="0",
                        FLEET_CLIENT_CLIP_CMD=f"{sys.executable} {clip}")
+            endpoint = d / 'endpoint'; endpoint.mkdir()
+            (endpoint / 'fleet-client-upload.py').symlink_to(BIN / 'fleet-thin-upload-fixture.py')
+            env['FLEET_REMOTE_BIN'] = str(endpoint)
+            marker = clip.with_suffix('.started')
+            gesture = b'\x16'
+            if phase == 'transfer':
+                src = d / 'slow.bin'; src.write_bytes(b'x' * 262144)
+                gesture = b'\x1b[200~' + str(src).encode() + b'\x1b[201~'
+                marker = d / 'transfer.pid'
+                env.update(FLEET_UPLOAD_FIXTURE_DELAY='30', FLEET_UPLOAD_FIXTURE_MARKER=str(marker))
             p = subprocess.Popen([sys.executable, str(driver), str(BIN), str(remote)],
                                  stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
             os.close(slave)
@@ -56,10 +72,10 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                 self.assertIn(word, out)
             try:
                 read_until(b"READY")
-                os.write(master, b"\x16")
+                os.write(master, gesture)
                 end = time.monotonic() + 3
-                while not clip.with_suffix('.started').exists() and time.monotonic() < end: time.sleep(.02)
-                self.assertTrue(clip.with_suffix('.started').exists(), "capture never started")
+                while not marker.exists() and time.monotonic() < end: time.sleep(.02)
+                self.assertTrue(marker.exists(), phase + ' never started')
                 read_until(b"..", .75)
                 import fcntl, struct, termios
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
@@ -69,24 +85,24 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                 os.write(master, b"held command\r\x03")
                 read_until('附件已取消'.encode(), .75)
                 end = time.monotonic() + .75
-                child = int(clip.with_suffix('.started').read_text())
+                child = int(marker.read_text())
                 while time.monotonic() < end:
                     state = subprocess.run(['ps', '-o', 'stat=', '-p', str(child)], capture_output=True).stdout.strip()
                     if not state or state.startswith(b'Z'): break
                     time.sleep(.01)
-                self.assertTrue(not state or state.startswith(b'Z'), 'capture not reaped')
-                time.sleep(.1)
+                self.assertTrue(not state or state.startswith(b'Z'), phase + ' not reaped')
+                time.sleep(.2)
                 os.write(master, b'resumed\r')
                 read_until(b'RESUMED', .75)
                 self.assertEqual(Path(str(remote) + '.input').read_bytes(), b'resumed\r')
-                print("pump cancel/reap/resume latency %.3fs" % (time.monotonic() - start), flush=True)
+                print("pump %s cancel/reap/resume latency %.3fs" % (phase, time.monotonic() - start), flush=True)
             finally:
                 p.terminate()
                 try: p.wait(timeout=2)
                 except subprocess.TimeoutExpired: p.kill(); p.wait()
                 os.close(master)
-                if clip.with_suffix('.started').exists():
-                    try: os.kill(int(clip.with_suffix('.started').read_text()), signal.SIGKILL)
+                if marker.exists():
+                    try: os.kill(int(marker.read_text()), signal.SIGKILL)
                     except ProcessLookupError: pass
 
 
