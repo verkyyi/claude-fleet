@@ -287,7 +287,7 @@ footer a:hover{color:var(--fleet-ink)}
     <nav class="links" aria-label="{{links_group}}"><a href="#what">{{nav_what}}</a><a href="#start">{{nav_start}}</a><a href="#price">{{nav_price}}</a></nav>
     <nav class="lang" aria-label="{{lang_group}}"><a href="/" hreflang="zh-CN" lang="zh-CN" data-set="zh"{{cur_zh}}>中</a><a href="/en/" hreflang="en" lang="en" data-set="en"{{cur_en}}>EN</a></nav>
     <a class="signin" href="/app" data-out>{{signin}}</a>
-    <a class="btn btn-p" href="/app/try" data-out>{{try}}</a>
+    <a class="btn btn-p" href="{{try_href}}" data-out>{{try}}</a>
     <a class="btn btn-p" href="/app" id="to-app" hidden>{{console}}</a>
     <form class="out" id="sign-out" method="post" action="/logout" hidden><input type="hidden" name="to" value="{{logout_to}}"><button type="submit">{{signout}}</button></form>
   </div>
@@ -298,8 +298,10 @@ footer a:hover{color:var(--fleet-ink)}
   <h1>{{h1}}</h1>
   <p class="sub">{{sub}}</p>
   <div class="cta">
-    <a class="btn btn-p" href="/app/try"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg>{{try}}</a>
+    <a class="btn btn-p" href="{{try_href}}"><!--trial--><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg><!--/trial-->{{try}}</a>
+<!--trial-->
     <a class="btn" href="/apply" data-out>{{apply}}</a>
+<!--/trial-->
   </div>
   <p class="fine">{{fine}}</p>
 
@@ -415,7 +417,7 @@ footer a:hover{color:var(--fleet-ink)}
 
 <section class="end"><div class="wrap">
   <h2>{{end_h}}</h2>
-  <div class="cta"><a class="btn btn-p" href="/app/try"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg>{{try}}</a></div>
+  <div class="cta"><a class="btn btn-p" href="{{try_href}}"><!--trial--><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M10 2h4"/></svg><!--/trial-->{{try}}</a></div>
 </div></section>
 </main>
 

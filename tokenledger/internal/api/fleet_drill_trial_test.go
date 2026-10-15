@@ -305,7 +305,8 @@ func TestDrillTrialSelfDelete(t *testing.T) {
 	}
 }
 
-// No code, no change: fleet.trial off 404s both doors; a real sign-in's
+// No code, no change: fleet.trial off 404s the mint and answers a redeem
+// link 试用暂未开放 (claude-fleet#4269); a real sign-in's
 // trial is the one it always was.
 func TestDrillTrialOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
@@ -313,8 +314,8 @@ func TestDrillTrialOffAddsNothing(t *testing.T) {
 	if code, _ := drillReq(t, h, http.MethodPost, DrillTrialPath, viewerToken, map[string]any{}); code != http.StatusNotFound {
 		t.Fatalf("mint with fleet.trial off = %d; want 404", code)
 	}
-	if code := redeem(t, h, "ft_aaaaaaaaaaaaaaaaaaaaaaaaaa").StatusCode; code != http.StatusNotFound {
-		t.Fatalf("redeem with fleet.trial off = %d; want 404", code)
+	if resp := redeem(t, h, "ft_aaaaaaaaaaaaaaaaaaaaaaaaaa"); resp.StatusCode != http.StatusOK || cookieNamed(resp, authz.CookieName) != nil {
+		t.Fatalf("redeem with fleet.trial off = %d; want 200, the 试用暂未开放 page and no session (claude-fleet#4269)", resp.StatusCode)
 	}
 	setHubSetting(t, h.srv, TrialKey, "on")
 	w := httptest.NewRecorder()

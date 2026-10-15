@@ -378,6 +378,9 @@ type signinScanPage struct {
 	// Trial: on the way to a trial (claude-fleet#4058) — the code is drawn
 	// for one, and the page says scanning starts it.
 	Trial bool
+	// TrialOn: fleet.trial is on — only then does the plain lead offer the
+	// trial (claude-fleet#4269).
+	TrialOn bool
 	// The other ways; OtherOpen unfolds them (WeChat is not answering).
 	Email, GitHub, OtherOpen bool
 }
@@ -393,7 +396,7 @@ func mobileBrowser(r *http.Request) bool {
 // ?s= names it, else the one it holds, else a new one.
 func (s *Server) renderSigninScan(w http.ResponseWriter, r *http.Request, loc, e string) {
 	now := time.Now()
-	page := signinScanPage{pageView: newPageView(r, loc), Mode: "qr", Apply: toApply(r), Trial: s.trialAsked(r),
+	page := signinScanPage{pageView: newPageView(r, loc), Mode: "qr", Apply: toApply(r), Trial: s.trialAsked(r), TrialOn: s.trialOn(),
 		Email: s.Email.ready(), GitHub: s.GitHub.ready(), PageURL: s.hubURL(r) + appURL("/signin")}
 	purpose := wxPurposeLogin
 	if page.Trial {
@@ -525,7 +528,7 @@ var signinScanTmpl = template.Must(template.New("signin-scan").Funcs(pageFuncs(i
 <title>{{t "signin.title"}}</title>{{if .Scene}}<noscript><meta http-equiv="refresh" content="2;url=` + wxPollPath + `?s={{.Scene}}{{if .Trial}}&amp;p=trial{{end}}"></noscript>{{end}}</head><body><div class="page">` + entryTop + `
 <main class="col" id="wx"{{if .Scene}} data-s="{{.Scene}}"{{end}}{{if .Trial}} data-p="trial"{{end}}>
 ` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
-<p class="lead">{{if .Trial}}{{t "signin.wx.lead.trial"}}{{else if .Apply}}{{t "signin.wx.lead.apply"}}{{else}}{{t "signin.wx.lead"}}{{end}}</p>
+<p class="lead">{{if .Trial}}{{t "signin.wx.lead.trial"}}{{else if .Apply}}{{t "signin.wx.lead.apply"}}{{else if .TrialOn}}{{t "signin.wx.lead"}}{{else}}{{t "signin.wx.lead.notrial"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 {{if eq .Mode "mobile"}}<button class="btn wx" type="button" id="wxcopy" data-url="{{.PageURL}}">` + wechatIcon + `{{t "signin.wx.open"}}</button>
 <p class="alert" id="wxcopied" role="status" hidden>` + checkIcon + `<span>{{t "signin.wx.copied"}}</span></p>
@@ -596,6 +599,10 @@ func init() {
 		"signin.wx.lead": {
 			i18n.EN:   "Scan with WeChat and follow 二四网络科技 to sign in. Not on the list yet? Sign in, then try it and apply right there.",
 			i18n.ZhCN: "用微信扫码关注「二四网络科技」登录。还不在名单上的，登录后可以先试用、当场申请。",
+		},
+		"signin.wx.lead.notrial": {
+			i18n.EN:   "Scan with WeChat and follow 二四网络科技 to sign in. Not on the list yet? Sign in, then apply right there.",
+			i18n.ZhCN: "用微信扫码关注「二四网络科技」登录。还不在名单上的，登录后当场申请。",
 		},
 		"signin.wx.lead.trial": {
 			i18n.EN:   "Scan with WeChat and follow 二四网络科技 — your trial starts right away. One trial per account; email or GitHub work too, under other ways.",

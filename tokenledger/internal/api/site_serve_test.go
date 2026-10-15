@@ -141,9 +141,9 @@ func TestSitePaths(t *testing.T) {
 	if rec := do(http.MethodGet, "/en/", admin); rec.Code != http.StatusOK {
 		t.Errorf("signed-in /en/ = %d; want 200", rec.Code)
 	}
-	// The site's try button opens the console until the try page exists (C20).
-	if rec := do(http.MethodGet, AppPrefix+"/try?from=site", nil); rec.Code != http.StatusFound || rec.Header().Get("Location") != AppPrefix+"?from=site" {
-		t.Errorf("GET /app/try = %d → %q; want 302 → /app?from=site", rec.Code, rec.Header().Get("Location"))
+	// An old try link with the trial off: 试用暂未开放, apply (claude-fleet#4269).
+	if rec := do(http.MethodGet, AppPrefix+"/try?from=site", nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `href="`+ApplyPath+`"`) {
+		t.Errorf("GET /app/try = %d; want 200 and the way to apply", rec.Code)
 	}
 }
 
@@ -213,5 +213,47 @@ func TestAppIconPublic(t *testing.T) {
 	h.srv.Site = false
 	if rec := get(http.MethodGet, "/favicon.svg"); rec.Code != http.StatusNotFound {
 		t.Errorf("no UI: /favicon.svg = %d, want 404", rec.Code)
+	}
+}
+
+// With fleet.trial off the site is the build's apply/ copy — no trial in it —
+// wherever the build has one; on, every page is as it always was
+// (claude-fleet#4269). The copies are never reachable as assets.
+func TestSiteTrialOffServesApplyPages(t *testing.T) {
+	h, _, _ := rolesHarness(t)
+	h.srv.Site = true
+	site, docs := siteFixture()
+	for name, body := range map[string]string{
+		"index.html":    `<a href="/apply">申请使用</a>`,
+		"en/index.html": `<a href="/apply">Apply for access</a>`,
+		"llms.txt":      "# ClaudeFleet apply",
+		"llms-zh.txt":   "# ClaudeFleet 申请",
+		"llms-full.txt": "# ClaudeFleet — apply",
+	} {
+		site[siteApplyDir+name] = &fstest.MapFile{Data: []byte(body)}
+	}
+	h.srv.SiteFS, h.srv.DocsFS = site, docs
+	get := func(p string) (int, string) {
+		rec := httptest.NewRecorder()
+		h.srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		return rec.Code, rec.Body.String()
+	}
+	off := map[string]string{"/": "申请使用", "/en/": "Apply for access", "/llms.txt": "# ClaudeFleet apply",
+		"/llms-zh.txt": "# ClaudeFleet 申请", "/llms-full.txt": "# ClaudeFleet — apply", "/robots.txt": "User-agent"}
+	for p, want := range off {
+		if code, body := get(p); code != http.StatusOK || !strings.HasPrefix(body, want) && !strings.Contains(body, want) {
+			t.Errorf("trial off: GET %s = %d %q; want the apply copy %q", p, code, body, want)
+		}
+	}
+	for _, p := range []string{"/site/apply/index.html", "/site/apply/llms.txt", "/site/apply/en/index.html"} {
+		if code, _ := get(p); code != http.StatusNotFound {
+			t.Errorf("GET %s = %d; want 404", p, code)
+		}
+	}
+	setHubSetting(t, h.srv, TrialKey, "on")
+	for p, want := range map[string]string{"/": `lang="zh-CN"`, "/en/": `lang="en"`, "/llms.txt": "- [FAQ]"} {
+		if code, body := get(p); code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("trial on: GET %s = %d %q; want the page as it was (%q)", p, code, body, want)
+		}
 	}
 }

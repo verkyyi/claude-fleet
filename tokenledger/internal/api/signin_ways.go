@@ -95,13 +95,16 @@ type signinWaysPage struct {
 	GitHub      bool
 	// Apply: the person came to apply (?next=/apply, claude-fleet#4049).
 	Apply bool
+	// TrialOn: fleet.trial is on — only then does the lead offer the trial
+	// (claude-fleet#4269: off, a stranger is told one way, to apply).
+	TrialOn bool
 }
 
 // renderSigninWays draws /signin with every way that is on, in the one order.
 func (s *Server) renderSigninWays(w http.ResponseWriter, r *http.Request, loc, note string) {
 	page := signinWaysPage{pageView: newPageView(r, loc), Note: note,
 		WeChat: s.WeChat.ready() && (s.WeChat.webReady() || inWeChat(r)), InWeChat: inWeChat(r) && s.WeChat.mpReady(),
-		Email: s.Email.ready(), GitHub: s.GitHub.ready(), Apply: toApply(r)}
+		Email: s.Email.ready(), GitHub: s.GitHub.ready(), Apply: toApply(r), TrialOn: s.trialOn()}
 	page.Code = page.Email && r.URL.Query().Get("step") == "code"
 	writeAuthPage(w, http.StatusOK, signinWaysTmpl, loc, page)
 }
@@ -118,7 +121,7 @@ var signinWayNotes = map[string]bool{
 var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `
 <title>{{t "signin.title"}}</title></head><body><div class="page">` + entryTop + `
 <main class="col">` + limitedPill + `<h1>{{t "signin.h1"}}<span class="dot">.</span></h1>
-<p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else if .Apply}}{{t "signin.lead.apply"}}{{else}}{{t "signin.ways.lead"}}{{end}}</p>
+<p class="lead">{{if .Code}}{{t "signin.code.lead"}}{{else if .Apply}}{{t "signin.lead.apply"}}{{else if .TrialOn}}{{t "signin.ways.lead"}}{{else}}{{t "signin.ways.lead.apply"}}{{end}}</p>
 {{if .Note}}<p class="alert" role="status">` + alertIcon + `<span>{{.Note}}</span></p>{{end}}
 {{if .Code}}<form class="stack" method="post" action="/auth/email/code">
 <label for="code">{{t "signin.code.label"}}</label>
@@ -140,6 +143,10 @@ var signinWaysText = map[string]i18n.Text{
 	"signin.ways.lead": {
 		i18n.EN:   "Pick up your chats and sessions. Not on the list yet? Sign in, then try it and apply right there.",
 		i18n.ZhCN: "继续你的对话和会话。还不在名单上的，登录后可以先试用、当场申请。",
+	},
+	"signin.ways.lead.apply": {
+		i18n.EN:   "Pick up your chats and sessions. Not on the list yet? Sign in, then apply right there.",
+		i18n.ZhCN: "继续你的对话和会话。还不在名单上的，登录后当场申请。",
 	},
 	"signin.ways.fine": {
 		i18n.EN:   "No account yet? Sign in and apply, or ask an admin for an invite.",

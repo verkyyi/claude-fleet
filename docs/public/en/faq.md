@@ -6,7 +6,7 @@ Questions are written on this page only. The FAQ on the website's front page, th
 
 ### Why do I need to apply?
 <!-- faq: site -->
-ClaudeFleet is in limited access for now: every account stands for a real machine and real quota, so we open it in batches, as many people as we can look after. To look around first, scan the WeChat code and follow 二四网络科技 (Ersi Network) to try it for 15 minutes; to keep using it, apply in one tap from the chat — we usually answer within a working day and send the result to your WeChat. An application keeps only how you signed in, what you wrote on the form and the decision.
+ClaudeFleet is in limited access for now: every account stands for a real machine and real quota, so we open it in batches, as many people as we can look after. To use it, apply: tell us what you want it for, and we usually answer within a working day — on your WeChat if you signed in with WeChat. An application keeps only how you signed in, what you wrote on the form and the decision.
 
 ### How is it different from installing Claude Code myself?
 <!-- faq: site -->

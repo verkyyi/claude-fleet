@@ -27,6 +27,10 @@ import (
 //	             for search engines and AI assistants (claude-fleet#3585, C15),
 //	             each with this hub's address filled in like a page
 //
+// With fleet.trial off (claude-fleet#4269) a page and an llms file are the
+// build's apply/ copy — the same with no trial in it, every 「立即体验」 a
+// 「申请使用」 — when the build has one; on, the page as it always was.
+//
 // A page's absolute addresses (canonical, hreflang, og:url, JSON-LD) are built
 // with the placeholder siteOrigin and become this hub's address (hubURL) as
 // the page is served, so no hub's address is written in the repo.
@@ -88,13 +92,27 @@ func (s *Server) serveSitePath(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// siteApplyDir holds the build's pages with no trial (claude-fleet#4269).
+const siteApplyDir = "apply/"
+
+// siteRead reads a page or crawl file of the site: the apply/ copy while
+// fleet.trial is off and the build has one, else the file itself.
+func (s *Server) siteRead(name string) ([]byte, error) {
+	if !s.trialOn() {
+		if b, err := fs.ReadFile(s.SiteFS, siteApplyDir+name); err == nil {
+			return b, nil
+		}
+	}
+	return fs.ReadFile(s.SiteFS, name)
+}
+
 // sitePage serves one of the site's pages, its origin filled in; false when
 // this hub carries no such page.
 func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, name, lang string) bool {
 	if s.SiteFS == nil {
 		return false
 	}
-	b, err := fs.ReadFile(s.SiteFS, name)
+	b, err := s.siteRead(name)
 	if err != nil {
 		return false
 	}
@@ -116,7 +134,7 @@ func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name stri
 		http.NotFound(w, r)
 		return
 	}
-	b, err := fs.ReadFile(s.SiteFS, name)
+	b, err := s.siteRead(name)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -133,7 +151,7 @@ func (s *Server) siteCrawlFile(w http.ResponseWriter, r *http.Request, name stri
 // /site/ is 404.
 func (s *Server) siteAsset(w http.ResponseWriter, r *http.Request, name string) {
 	ext := path.Ext(name)
-	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(path.Base(name), ".") {
+	if s.SiteFS == nil || !fs.ValidPath(name) || ext == ".html" || ext == ".json" || siteCrawlFiles[name] || strings.HasPrefix(name, siteApplyDir) || strings.HasPrefix(path.Base(name), ".") {
 		http.NotFound(w, r)
 		return
 	}
