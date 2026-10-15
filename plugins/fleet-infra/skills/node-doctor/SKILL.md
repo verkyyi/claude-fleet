@@ -131,6 +131,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `hubauth` | node | [mac-node-enroll] [login-lifecycle] | 入口不认这台的令牌：查 node.env，或 `fleet login` |
 | `icloud` | node | [mac-node-prep] | 退出 iCloud 或关同步 |
 | `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
+| `idle-cost` | node | [node-doctor] | 空闲时每秒起多少进程和主要来源；忙或状态不明显示未量，超过默认 50/s 时用 `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` 查全表 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
 | `keys` | node | [node-doctor] | 面板键与 tmux prefix 撞了：改 prefix2 或那个键 |

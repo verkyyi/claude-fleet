@@ -6,7 +6,7 @@
 #   fleet-idle-cost.sh [--secs 60] [--top 10] [--json]
 #       idle ⇒ measure one window (bin/fleet-idle-cost.py), print it (TSV, or the
 #       JSON with --json) and keep it as $FLEET_CONF_DIR/idle-cost/last.json.
-#       Busy at the start or at the end ⇒ nothing is measured: one line
+#       Busy or unavailable at any probe during the window ⇒ no reading kept:
 #       `idle-cost<TAB>busy<TAB><reason>` (JSON: {"state":"busy",…}), exit 3.
 #   fleet-idle-cost.sh --idle
 #       only the idle predicate: prints `idle` (exit 0) or the reason (exit 1).
@@ -64,7 +64,8 @@ trap 'rm -f "$tmp"' EXIT
 excl=(--exclude-pid "$$")
 ppid_=$(fleet_pane_fmt '#{pane_pid}' 2>/dev/null)
 case "$ppid_" in ''|*[!0-9]*) ;; *) excl+=(--exclude-pid "$ppid_") ;; esac
-python3 "$BIN/fleet-idle-cost.py" sample --secs "$secs" --top "$top" --out "$tmp" "${excl[@]}" || exit 1
-why=$(fleet_idle_now) || busy "$why (became busy during the window)"
+why=$(fleet_idle_probe sample --secs "$secs" --top "$top" --out "$tmp" "${excl[@]}"); rc=$?
+[ "$rc" != 3 ] || busy "$why (during the sampling window)"
+[ "$rc" = 0 ] || exit "$rc"
 mv -f "$tmp" "$last"
 render "$last"

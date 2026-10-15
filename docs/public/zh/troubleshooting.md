@@ -640,6 +640,13 @@ fleet debug report
 - **是什么**：整台机器的负载、有没有失控的孤儿进程、会话总数。
 - **WARN / FAIL 怎么办**：负载过高：`fleet-diskguard.sh --orphans` 点名失控的进程，停掉它们。
 
+#### `idle-cost`
+
+来自 `fleet doctor`（承载机）。
+
+- **是什么**：整机空闲时每秒新起的进程数、fleet 的 CPU 开销和最多的来源。无 working 会话且无 CI 作业时才量，量读数的会话本身除外；其它登录的状态缺失或过期也显示「未量」。
+- **WARN / FAIL 怎么办**：默认超过 50 个/秒时 WARN。运行 `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` 取 60 秒读数，`--json` 给报告用，`--idle` 只查能否量，`--last` 看上次结果。来源排名来自 0.2 秒采样，来源速率为估计值，极短命进程可能漏采。不要停掉正在干活的会话来制造空闲；等它们自然空闲再量。
+
 #### `memory`
 
 来自 `fleet doctor`。

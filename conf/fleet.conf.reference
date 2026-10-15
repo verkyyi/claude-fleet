@@ -2512,7 +2512,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Idle-cost reading max age @group=disk @tier=internal @scope=global @edit=int @unit=s
 #FLEET_IDLE_COST_MAX_AGE=3600
 # @label=Idle-cost doctor window @group=disk @tier=internal @scope=global @edit=int @unit=s
-#FLEET_DOCTOR_IDLE_COST_SECS=10
+#FLEET_DOCTOR_IDLE_COST_SECS=60
 
 # macOS fseventsd RSS (MB) at which `fleet-doctor`'s `machine` check WARNs and the
 # diskguard --watch tick sends its once-a-day reminder (issue #889): a bloated

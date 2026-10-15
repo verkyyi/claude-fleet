@@ -1987,29 +1987,30 @@ fi
 # job). A host only (承载; FLEET_DOCTOR_IDLE_COST=1 forces it, =0 silences it).
 # Busy ⇒ INFO 「有会话在干活，未量」, never a number taken under load. Idle ⇒ the
 # kept reading when younger than FLEET_IDLE_COST_MAX_AGE (3600 s), else one
-# FLEET_DOCTOR_IDLE_COST_SECS (10) window now. Over FLEET_IDLE_COST_WARN (50 a
+# FLEET_DOCTOR_IDLE_COST_SECS (60) window now. Over FLEET_IDLE_COST_WARN (50 a
 # second, 发起人拍板 8) ⇒ WARN naming the three biggest sources; never FAIL.
 icchk="${FLEET_DOCTOR_IDLE_COST:-$(_gconf_val FLEET_DOCTOR_IDLE_COST)}"
 _ict="$(dirname "$0")/fleet-idle-cost.sh"
 if [ "$icchk" != 0 ] && [ -f "$_ict" ] && { [ "${_ho_on:-0}" = 1 ] || [ "$icchk" = 1 ]; }; then
   icwarn="${FLEET_IDLE_COST_WARN:-$(_gconf_val FLEET_IDLE_COST_WARN)}"
   case "$icwarn" in ''|*[!0-9.]*) icwarn=50 ;; esac
-  icage="${FLEET_IDLE_COST_MAX_AGE:-3600}"; case "$icage" in ''|*[!0-9]*) icage=3600 ;; esac
-  icsecs="${FLEET_DOCTOR_IDLE_COST_SECS:-10}"; case "$icsecs" in ''|*[!0-9]*) icsecs=10 ;; esac
+  icage="${FLEET_IDLE_COST_MAX_AGE:-$(_gconf_val FLEET_IDLE_COST_MAX_AGE)}"; case "$icage" in ''|*[!0-9]*) icage=3600 ;; esac
+  icsecs="${FLEET_DOCTOR_IDLE_COST_SECS:-$(_gconf_val FLEET_DOCTOR_IDLE_COST_SECS)}"; case "$icsecs" in ''|*[!0-9]*) icsecs=60 ;; esac
   iclast="$conf_dir/idle-cost/last.json"
   # rate · age (s) · the three biggest sources, from a kept reading
   _ic_sum() {
     python3 - "$iclast" <<'EOF_IC' 2>/dev/null
 import json, sys, time
 r = json.load(open(sys.argv[1]))
+assert r["state"] == "idle"
 top = "；".join("%s %s/s" % (x["who"], x["rate"]) for x in r.get("spawn_top", [])[:3])
-print("%s\t%d\t%s\t%s" % (r["rate"], int(time.time()) - int(r["ts"]), r["secs"], top or "-"))
+print("%s\t%d\t%s\t%s\t%s" % (r["rate"], int(time.time()) - int(r["ts"]), r["secs"], top or "-", r["fleet_cpu_pct"]))
 EOF_IC
   }
   if ! icwhy=$(FLEET_CONF_DIR="$conf_dir" bash "$_ict" --idle 2>/dev/null); then
     icprev=''
     [ -f "$iclast" ] && icprev=$(_ic_sum | awk -F'\t' 'NF { printf "；上次空闲读数 %s 个/秒（%d 分钟前）", $1, $2/60 }')
-    info idle-cost "有会话在干活，未量（${icwhy:-busy}）$icprev — 空闲时 \`bash bin/fleet-idle-cost.sh\`"
+    info idle-cost "未量（${icwhy:-无法确认整机空闲}）$icprev — 空闲时 \`bash bin/fleet-idle-cost.sh\`"
   else
     icfresh=''
     [ -f "$iclast" ] && [ -n "$(find "$iclast" -mmin "-$(( (icage + 59) / 60 ))" 2>/dev/null)" ] && icfresh=1
@@ -2017,12 +2018,13 @@ EOF_IC
     [ -n "$icfresh" ] || { FLEET_CONF_DIR="$conf_dir" bash "$_ict" --secs "$icsecs" >/dev/null 2>&1; icrc=$?; }
     if [ "$icrc" = 3 ]; then
       info idle-cost "有会话在干活，未量（量的时候有会话开始干活）"
-    elif ! icline=$(_ic_sum) || [ -z "$icline" ]; then
+    elif [ "$icrc" != 0 ] || ! icline=$(_ic_sum) || [ -z "$icline" ]; then
       warn idle-cost "量不出来：\`bash bin/fleet-idle-cost.sh\` 没有留下读数（${iclast}）"
     else
       icr=$(printf '%s' "$icline" | cut -f1); ica=$(printf '%s' "$icline" | cut -f2)
       icw=$(printf '%s' "$icline" | cut -f3); ictop=$(printf '%s' "$icline" | cut -f4)
-      ictxt="空闲时每秒新起 ${icr} 个进程（${icw} 秒窗口，$(( ica / 60 )) 分钟前）"
+      iccpu=$(printf '%s' "$icline" | cut -f5)
+      ictxt="空闲时每秒新起 ${icr} 个进程，fleet CPU ${iccpu}%（${icw} 秒窗口，$(( ica / 60 )) 分钟前）"
       if awk -v r="$icr" -v w="$icwarn" 'BEGIN{ exit !(r > w) }'; then
         warn idle-cost "${ictxt}，超过 ${icwarn} 个/秒 — 最多: ${ictop}。全表: \`bash bin/fleet-idle-cost.sh\`"
       else

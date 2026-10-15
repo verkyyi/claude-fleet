@@ -34,6 +34,9 @@ cleanup() {
 }
 trap cleanup EXIT
 export FLEET_CONF_DIR="$WORK/conf"
+export FLEET_MACHINE_SESSIONS_DIR="$WORK/sessions"
+export FLEET_MACHINE_SESSIONS_OWNER_CHECK=0
+mkdir -p "$FLEET_MACHINE_SESSIONS_DIR"
 export FLEET_CI_WORKER_PAT="idlecost-ci-$$-marker"
 mkdir -p "$FLEET_CONF_DIR/fleets/$SOCK"
 printf 'FLEET_SESSION=%s\n' "$SOCK" > "$FLEET_CONF_DIR/fleets/$SOCK/conf"
@@ -51,7 +54,8 @@ tmux -L "$SOCK" set-option -w -t "$W" @claude_state working
 out=$(idle); rc=$?
 [ "$rc" = 1 ] || fail "A1: a working worker window must read busy (rc 1)" "$out"
 has "working: 1" "$out" "A1: the reason names the working session"
-out=$(FLEET_IDLE_SELF_WIN="$W" idle); rc=$?
+SP=$(tmux -L "$SOCK" display-message -p -t "$W" '#{socket_path}')
+out=$(FLEET_IDLE_SELF_WIN="$W" FLEET_IDLE_SELF_SOCKET="$SP" idle); rc=$?
 [ "$rc" = 0 ] || fail "A2: the caller's own window is not someone working" "$out"
 has idle "$out" "A2: idle says so"
 tmux -L "$SOCK" set-option -w -t "$W" @claude_state done
@@ -83,44 +87,11 @@ out=$(bash "$BIN/fleet-idle-cost.sh" --secs 1 --json); rc=$?
 has '"state": "busy"' "$out" "B3: the JSON says busy"
 tmux -L "$SOCK" set-option -w -t "$W" @claude_state done
 
-# --- C: the fake spawner is ranked first, its rate within 30% -----------------
-# A ranking can only be pinned on a quiet box — the condition the tool measures
-# in. A 3 s baseline over FLEET_IDLE_COST_SELFTEST_NOISE (30 a second: a busy
-# worker's Mac) skips this leg with one line; a CI runner is quiet and runs it.
-python3 "$BIN/fleet-idle-cost.py" sample --secs 3 --min-age 1 --out "$WORK/base.json" || fail "C0: the sampler failed"
-base=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rate"])' "$WORK/base.json")
-if awk -v b="$base" -v n="${FLEET_IDLE_COST_SELFTEST_NOISE:-30}" 'BEGIN{ exit !(b > n) }'; then
-  echo "SKIP C: this machine starts $base processes a second on its own — too busy to pin a ranking"
-else
-cat > "$WORK/fake.sh" <<'SH'
-n=0; while :; do /usr/bin/true; n=$((n+1)); echo "$n" > "$1.tmp"; mv -f "$1.tmp" "$1"; sleep 0.1; done
-SH
-bash "$WORK/fake.sh" "$WORK/cnt" & fp=$!; PIDS="$PIDS $fp"
-sleep 2
-n0=$(cat "$WORK/cnt"); t0=$(python3 -c 'import time; print(time.time())')
-python3 "$BIN/fleet-idle-cost.py" sample --secs 8 --min-age 1 --out "$WORK/r.json" || fail "C: the sampler failed"
-n1=$(cat "$WORK/cnt"); t1=$(python3 -c 'import time; print(time.time())')
-kill "$fp" 2>/dev/null; wait "$fp" 2>/dev/null
-# each loop turn starts two processes: true and sleep
-read -r top_pid top_rate truth <<EOF
-$(python3 - "$WORK/r.json" "$n0" "$n1" "$t0" "$t1" <<'PY'
-import json, sys
-r = json.load(open(sys.argv[1]))
-n0, n1, t0, t1 = int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
-top = r["spawn_top"][0] if r["spawn_top"] else {"pid": 0, "rate": 0}
-print(top["pid"], top["rate"], round(2 * (n1 - n0) / (t1 - t0), 2))
-PY
-)
-EOF
-CHECKS=$((CHECKS + 1))
-[ "$top_pid" = "$fp" ] || fail "C1: the fake program (pid $fp) must rank first" "$(python3 "$BIN/fleet-idle-cost.py" render "$WORK/r.json")"
-CHECKS=$((CHECKS + 1))
-awk -v r="$top_rate" -v t="$truth" 'BEGIN{ d = r - t; if (d < 0) d = -d; exit !(t > 0 && d <= 0.3 * t) }' \
-  || fail "C2: its rate $top_rate/s must be within 30% of the real $truth/s" "$(python3 "$BIN/fleet-idle-cost.py" render "$WORK/r.json")"
-out=$(python3 "$BIN/fleet-idle-cost.py" render "$WORK/r.json")
-has "$(printf 'spawn\t1\t')" "$out" "C3: the TSV lists the ranking"
-has "$(printf 'idle-cost\t')" "$out" "C3: the TSV leads with the rate line"
-fi
+# --- C: bounded real spawner, isolated counter + attribution regression --------
+# The supported load harness owns the experiment; its command gives the fake
+# spawner its own kernel deadline too. No noise-based skip of the 30% assertion.
+bash "$BIN/fleet-loadgen.sh" 1 20 -- python3 "$BIN/../tests/idle-cost/acceptance.py" "$WORK" "$BIN" \
+  || fail "C: bounded spawner / sampler acceptance failed"
 
 # --- D: idle ⇒ the wrapper keeps the reading ---------------------------------
 out=$(bash "$BIN/fleet-idle-cost.sh" --secs 1 --top 3); rc=$?
@@ -130,6 +101,41 @@ has "$(printf 'idle-cost\t')" "$out" "D1: a measured reading"
 out=$(bash "$BIN/fleet-idle-cost.sh" --last --json)
 printf '%s' "$out" | python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["state"] == "idle" and "rate" in r' \
   || fail "D3: --last --json prints the kept reading as JSON" "$out"
+
+# An entire busy interval inside the window invalidates it. The old reading
+# must survive. Drive only this test's isolated socket, with a bounded helper.
+cp "$FLEET_CONF_DIR/idle-cost/last.json" "$WORK/kept.json"
+python3 - "$SOCK" "$W" <<'PY_BUSY' &
+import subprocess, sys, time
+sock, win = sys.argv[1:]
+time.sleep(0.8)
+subprocess.run(["tmux", "-L", sock, "set-option", "-w", "-t", win, "@claude_state", "working"], check=True)
+time.sleep(0.6)
+subprocess.run(["tmux", "-L", sock, "set-option", "-w", "-t", win, "@claude_state", "done"], check=True)
+PY_BUSY
+bpid=$!; PIDS="$PIDS $bpid"
+out=$(bash "$BIN/fleet-idle-cost.sh" --secs 3); rc=$?
+wait "$bpid"
+[ "$rc" = 3 ] || fail "D4: busy wholly inside the window must invalidate it" "$out"
+cmp -s "$WORK/kept.json" "$FLEET_CONF_DIR/idle-cost/last.json" || fail "D5: rejected sample replaced the last good reading"
+
+# Another login, and absent / stale / old publishers, never certify idle.
+python3 - "$FLEET_MACHINE_SESSIONS_DIR/peer" <<'PY_PEER'
+import json, sys, time
+with open(sys.argv[1], "w") as f:
+    f.write("1 %d 0\nidle-v1 %s\n" % (time.time(), json.dumps({"ts": time.time(), "working": 1, "unknown": False, "changed": 0})))
+PY_PEER
+out=$(idle); rc=$?
+[ "$rc" = 1 ] || fail "D6: another login's working session must refuse idle" "$out"
+has "login peer" "$out" "D6: busy reason names the login"
+printf '1 %s 0\n' "$(date +%s)" > "$FLEET_MACHINE_SESSIONS_DIR/peer"
+out=$(idle); rc=$?
+[ "$rc" = 1 ] || fail "D7: old publisher without working state is unknown" "$out"
+has unknown "$out" "D7: unknown is explicit"
+printf '0 1 0\n' > "$FLEET_MACHINE_SESSIONS_DIR/peer"
+out=$(idle); rc=$?
+[ "$rc" = 1 ] || fail "D8: a stale zero is not idle" "$out"
+rm "$FLEET_MACHINE_SESSIONS_DIR/peer"
 
 # --- E: the doctor row ---------------------------------------------------------
 doc_row() {

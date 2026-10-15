@@ -640,6 +640,13 @@ From `fleet doctor`.
 - **What it is**: the whole machine's load, any runaway orphan processes, the total number of sessions.
 - **On WARN / FAIL**: load too high: `fleet-diskguard.sh --orphans` names the runaway processes; stop them.
 
+#### `idle-cost`
+
+From `fleet doctor` (machines hosting sessions).
+
+- **What it is**: new processes per second, fleet CPU usage and the largest sources while the machine is idle. Sampling requires no working session or CI job, except the measuring session itself. Missing or stale state from another login means no measurement.
+- **On WARN / FAIL**: WARN above 50 processes per second by default. Run `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` for a 60-second reading; `--json` is for reports, `--idle` checks eligibility, and `--last` prints the saved reading. Source ranking uses 0.2-second snapshots; source rates are estimates and very short-lived processes can be missed. Wait for active work to finish naturally before measuring.
+
 #### `memory`
 
 From `fleet doctor`.

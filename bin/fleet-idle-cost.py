@@ -27,8 +27,10 @@ TSV lines (tab-separated):
 """
 import json
 import os
+import pwd
 import re
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -88,37 +90,53 @@ def who(cmd):
 class Sampler:
     def __init__(self, exclude):
         self.own = 0                 # processes this sampler started
+        self.own_pids = set()
         self.exclude = set(exclude) | {os.getpid()}
         self.ppid = {}               # pid → ppid at first sight (before any reparenting)
         self.cmd = {}
+        self.uid = {}
         self.first = None            # pids of the first sample
         self.last = {}               # pid → (etime, cputime) in the newest sample it was in
         self.seen_at = {}            # pid → monotonic time of the newest sample it was in
         self.cpu0 = {}               # pid → cputime in the first sample
         self.samples = 0
 
-    def run(self, argv):
+    def run(self, argv, check=True):
         self.own += 1
-        return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              universal_newlines=True).stdout
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             universal_newlines=True)
+        self.own_pids.add(p.pid)
+        try:
+            out, _ = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            raise RuntimeError("observer command timed out: " + argv[0])
+        if check and p.returncode:
+            raise RuntimeError("observer command failed: " + argv[0])
+        return out
 
     def sample(self):
-        out = self.run(["ps", "-axo", "pid=,ppid=,etime=,time=,command="])
+        out = self.run(["ps", "-axo", "pid=,ppid=,uid=,etime=,time=,command="])
+        if not out.strip():
+            raise RuntimeError("process table unreadable")
         now = time.monotonic()
         pids = set()
         for line in out.splitlines():
-            f = line.split(None, 4)
-            if len(f) < 4:
+            f = line.split(None, 5)
+            if len(f) < 5:
                 continue
             try:
                 pid, ppid = int(f[0]), int(f[1])
-                et, ct = secs_of(f[2]), secs_of(f[3])
+                uid = int(f[2])
+                et, ct = secs_of(f[3]), secs_of(f[4])
             except ValueError:
                 continue
             pids.add(pid)
             if pid not in self.ppid:
                 self.ppid[pid] = ppid
-                self.cmd[pid] = f[4] if len(f) > 4 else ""
+                self.cmd[pid] = f[5] if len(f) > 5 else ""
+                self.uid[pid] = uid
             self.last[pid] = (et, ct)
             self.seen_at[pid] = now
             if self.first is None:
@@ -136,6 +154,142 @@ class Sampler:
             seen.add(pid)
             pid = self.ppid[pid]
         return pid in self.exclude
+
+
+class IdleGuard:
+    """One idle definition, shared by --idle, sampling and the collector.
+
+    Other logins publish an optional second line in the existing machine session
+    file. Old readers still consume the unchanged first line. Until a login has
+    upgraded, an awake login is unknown; missing state never becomes zero work.
+    """
+    def __init__(self, a, sampler):
+        self.a, self.s = a, sampler
+        self.previous = None
+        self.started = time.time()
+
+    def local(self):
+        sockets = {r.split("\t", 1)[0] for r in self.a.configs.splitlines() if r}
+        # A new fleet configured during a window must enter the next probe.
+        d = os.path.join(self.a.conf_dir, "fleets")
+        if os.path.isdir(d):
+            sockets.update(n for n in os.listdir(d) if os.path.isfile(os.path.join(d, n, "conf")))
+        rows = {}
+        for label in sorted(sockets):
+            path = os.path.join(os.environ.get("TMUX_TMPDIR", "/tmp"),
+                                "tmux-%s" % os.getuid(), label)
+            try:
+                out = self.s.run(["tmux", "-L", label, "list-windows", "-a", "-F",
+                                  self.a.window_format])
+            except RuntimeError:
+                # A configured but stopped fleet has no socket. A server that
+                # exists but cannot answer is unknown, not an empty scan.
+                if not os.path.exists(path):
+                    continue
+                raise
+            # fleet_lw_fmt / fleet_lw_filter, kept in sync with fleet-lib.sh:
+            # drop view rows and duplicate window ids before reading the body.
+            seen = set()
+            for line in out.splitlines():
+                prefix, sep, body = line.partition(" ")
+                if re.match(r"^@\d+:\$\d+:", prefix):
+                    wid, _, session = prefix.split(":", 2)
+                    if "@view-" in session or wid in seen:
+                        continue
+                    seen.add(wid)
+                    line = body
+                f = line.split("|")
+                if len(f) != 6:
+                    raise RuntimeError("malformed window state: " + label)
+                sock, wid, role, state, changed, life = f
+                # FLEET_ROLE_FMT is supplied by fleet-lib; same fallback as
+                # FLEET_ROLE_AWK, for windows predating role stamps.
+                worker = role == "=worker" or (not role.startswith("=") and
+                                               role not in {"home", "plan", "dash", "backlog"})
+                if worker and life not in {"sleeping", "remote"}:
+                    rows[(sock, wid)] = (state, changed, life)
+        return rows
+
+    def snapshot(self):
+        rows = self.local()
+        return {"ts": time.time(), "working": sum(v[0] == "working" for v in rows.values()),
+                "unknown": any(not v[0] or v[2] in {"preparing", "waking"} for v in rows.values()),
+                "changed": max([float(v[1] or 0) for v in rows.values()] or [0])}
+
+    def peers(self, foreign):
+        d = self.a.sessions_dir
+        try:
+            names = os.listdir(d)
+        except FileNotFoundError:
+            names = []
+        except OSError:
+            return "unknown: machine session inventory unreadable"
+        covered = set()
+        for name in names:
+            if name.startswith(".") or name == self.a.login:
+                continue
+            path = os.path.join(d, name)
+            try:
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+                             getattr(os, "O_NONBLOCK", 0))
+                try:
+                    st = os.fstat(fd)
+                    if not stat.S_ISREG(st.st_mode):
+                        raise ValueError("not a regular file")
+                    if os.environ.get("FLEET_MACHINE_SESSIONS_OWNER_CHECK", "1") != "0":
+                        owner = pwd.getpwuid(st.st_uid)
+                        if name not in (owner.pw_name, os.path.basename(owner.pw_dir)):
+                            raise ValueError("wrong owner")
+                    lines = os.read(fd, 65536).decode().splitlines()
+                finally:
+                    os.close(fd)
+                count, ts = [int(x) for x in lines[0].split()[:2]]
+                age = time.time() - ts
+                if count < 0 or age < -60 or age > 300:
+                    raise ValueError("stale inventory")
+                if len(lines) < 2 or not lines[1].startswith("idle-v1 "):
+                    if count or st.st_uid in foreign:
+                        raise ValueError("working state not published")
+                else:
+                    r = json.loads(lines[1][8:])
+                    if not 0 <= time.time() - r["ts"] <= 300 or r["unknown"]:
+                        raise ValueError("working state unavailable")
+                    if not isinstance(r["working"], int) or r["working"] < 0:
+                        raise ValueError("invalid working count")
+                    if r["working"]:
+                        return "working: %s session(s) in login %s" % (r["working"], name)
+                    if self.previous is not None and r["changed"] >= self.started:
+                        return "busy interval: state changed in login " + name
+                covered.add(st.st_uid)
+            except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
+                return "unknown: login %s (%s)" % (name, e)
+        if foreign - covered:
+            return "unknown: another login has sessions but no fresh inventory"
+        return ""
+
+    def check(self, alive):
+        rows = self.local()
+        rows.pop((self.a.self_socket, self.a.self_window), None)
+        working = sum(v[0] == "working" or v[2] in {"preparing", "waking"} for v in rows.values())
+        if working:
+            return "working: %s session(s)" % working
+        if any(not v[0] for v in rows.values()):
+            return "unknown: worker state unavailable"
+        if self.previous is not None and rows != self.previous:
+            return "busy interval: worker state changed during sampling"
+        pat = os.environ.get("FLEET_CI_WORKER_PAT", "Runner.Worker")
+        foreign = set()
+        for p in alive:
+            cmd = self.s.cmd.get(p, "")
+            if p in self.s.own_pids or self.s.excluded(p):
+                continue
+            if pat and pat in cmd:
+                return "ci: 1 job(s) running"
+            if self.s.uid[p] != os.getuid() and re.search(r"(?:^|/|\s)(?:tmux|claude|codex)(?:\s|$)", cmd):
+                foreign.add(self.s.uid[p])
+        reason = self.peers(foreign)
+        self.previous = rows
+        return reason
 
 
 def fork_counter():
@@ -163,15 +317,25 @@ def probe_pid(s):
 
 def cmd_sample(a):
     s = Sampler(a.exclude)
+    alive = s.sample()
+    guard = IdleGuard(a, s) if a.configs is not None else None
+    if guard:
+        why = guard.check(alive)
+        if why:
+            print(why)
+            return 3
     forks0 = fork_counter()
     p0 = probe_pid(s) if forks0 is None else 0
     own0 = s.own
     t0 = time.monotonic()
-    s.sample()
-    alive = s.first
     while time.monotonic() - t0 < a.secs:
-        time.sleep(a.interval)
+        time.sleep(min(a.interval, max(0, a.secs - (time.monotonic() - t0))))
         alive = s.sample()
+        if guard:
+            why = guard.check(alive)
+            if why:
+                print(why)
+                return 3
     secs = time.monotonic() - t0
     own = s.own - own0
     if forks0 is not None:
@@ -184,11 +348,13 @@ def cmd_sample(a):
         method = "pid"
     end = time.monotonic()
     newp = [p for p in s.ppid if p not in s.first]
-    mine = [p for p in newp if s.excluded(p)]
+    # Known observer children were already removed from the kernel/PID count.
+    # Do not subtract the ps processes a second time when a snapshot saw them.
+    mine = [p for p in newp if s.excluded(p) and p not in s.own_pids]
     new = max(0, new - len(mine))
     owners = {}
     for p in newp:
-        if p in mine:
+        if s.excluded(p) or p in s.own_pids:
             continue
         a_ = s.ppid.get(p)
         top = p
@@ -216,12 +382,12 @@ def cmd_sample(a):
     spawn = sorted(owners.items(), key=lambda kv: -kv[1])[:a.top]
     rate = new / secs if secs else 0.0
     spawn_rows = [{"rank": i + 1, "pid": k[0], "who": k[1], "seen": n,
-                   "rate": round(rate * n / seen_total, 2)}
+                   "rate": round(rate * n / seen_total, 2), "estimated": True}
                   for i, (k, n) in enumerate(spawn)]
     cpu = []
     fleet_cpu = 0.0
     for p, c0 in s.cpu0.items():
-        if p not in alive or p in s.exclude or s.excluded(p):
+        if p not in alive or s.excluded(p) or s.last[p][0] < a.min_age:
             continue
         d = s.last[p][1] - c0
         if d <= 0:
@@ -240,7 +406,7 @@ def cmd_sample(a):
         load = []
     reading = {
         "ts": int(time.time()), "host": socket.gethostname().split(".")[0],
-        "state": "idle", "secs": round(secs, 1), "samples": s.samples,
+        "state": "idle" if guard else "unverified", "secs": round(secs, 1), "samples": s.samples,
         "method": method, "new": new, "rate": round(rate, 2),
         "excluded": len(mine), "own_forks": own,
         "fleet_cpu_pct": round(100 * fleet_cpu / secs, 1) if secs else 0.0,
@@ -286,12 +452,33 @@ def main(argv):
     sp.add_argument("--min-age", type=float, default=60.0,
                     help="an owner is alive at the end and at least this old (s)")
     sp.add_argument("--out", required=True)
+    ip = sub.add_parser("idle")
+    cp = sub.add_parser("snapshot")
+    for parser in (sp, ip, cp):
+        parser.add_argument("--configs", default=None)
+        parser.add_argument("--conf-dir", default="")
+        parser.add_argument("--sessions-dir", default="")
+        parser.add_argument("--login", default="")
+        parser.add_argument("--self-window", default="")
+        parser.add_argument("--self-socket", default="")
+        parser.add_argument("--window-format", default="")
     rp = sub.add_parser("render")
     rp.add_argument("file")
     rp.add_argument("--json", action="store_true")
     rp.add_argument("--top", type=int, default=10)
     a = ap.parse_args(argv)
+    if a.cmd in {"idle", "snapshot"}:
+        s = Sampler([])
+        guard = IdleGuard(a, s)
+        if a.cmd == "snapshot":
+            print(json.dumps(guard.snapshot(), separators=(",", ":")))
+            return 0
+        reason = guard.check(s.sample())
+        print(reason or "idle")
+        return 1 if reason else 0
     if a.cmd == "sample":
+        if not (0 < a.secs <= 3600 and 0 < a.interval <= a.secs and a.top > 0):
+            ap.error("sample needs 0 < interval <= secs <= 3600 and top > 0")
         return cmd_sample(a)
     if a.cmd == "render":
         return cmd_render(a)
@@ -300,4 +487,9 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (OSError, ValueError, RuntimeError) as e:
+        mode = sys.argv[1] if len(sys.argv) > 1 else ""
+        print("unknown: " + str(e), file=sys.stdout if mode in {"idle", "sample"} else sys.stderr)
+        sys.exit(3 if mode == "sample" else 1)
