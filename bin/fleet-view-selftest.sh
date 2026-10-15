@@ -185,8 +185,8 @@ done
 ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
 [ "$ask" -lt "$work" ] || fail "B: 等你 is not the first group"
 grep -q '! Beta 要你拍板' "$W/popup.txt" || fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
-# the lit row (the current session, alpha) is marked ▶ — reverse alone on a grey row was invisible (#3007)
-[ "$(grep -c '▶' "$W/popup.txt")" = 1 ] && grep -q '▶.*Alpha' "$W/popup.txt" || fail "B: the lit row is not the one marked ▶: $(grep -n '▶' "$W/popup.txt")"
+# Highlight changes background only; text and glyph columns stay fixed (#4416).
+grep -q '▶' "$W/popup.txt" && fail "B: selection inserted a marker"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
 # `?` on an empty query: the legend line; with text it is a letter of the query
 to send-keys -t o:view -l '?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
@@ -422,8 +422,8 @@ for mode in ("", "ascii"):
         assert g == gl[e["sym"]] and len(g) == 1 and w1(g) == 1, (g, e)
         if mode == "ascii": assert g.isascii(), g
         text = "".join(s[0] for s in segs)
-        if e["target"] == "@2": assert e["word"] in text and text.startswith("▶ "), text
-        else: assert e["word"] not in text.split(e["text"])[0], text
+        assert e["word"] not in text.split(e["text"])[0], text
+        assert text.startswith("  " + gl[e["sym"]] + " "), text
     assert len({e["sym"] for e in shown if e["kind"] == "sess"}) == 6
     assert any(any(st.startswith("c") for _, st in segs for st in st) for segs in lines)
 os.environ["NO_COLOR"] = "1"

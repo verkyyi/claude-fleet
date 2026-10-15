@@ -230,7 +230,7 @@ waitfor 'Tab 操作' || fail "D: the list did not reopen"
 screen > "$W/before.txt"
 to send-keys -t o Tab; waitfor '回收…' || fail "D: no menu"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
-waitfor '▶ 回收…' || fail "D: ↓ did not reach 回收: $(screen)"
+waitfor '回收…' || fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
 waitfor '回收「Alpha 做完了」？(y/n)' || fail "D: 回收 did not ask y/n: $(screen)"
 to send-keys -t o n
@@ -247,15 +247,15 @@ screen > "$W/after.txt"
 reset
 to send-keys -t o Tab; waitfor '改名…' || fail "D: no menu (3)"
 for _ in $(seq 1 4); do to send-keys -t o Down; done
-waitfor '▶ 改名…' || fail "D: ↓4 is not 改名: $(screen)"
+waitfor '改名…' || fail "D: ↓4 is not 改名: $(screen)"
 to send-keys -t o Enter
-waitfor '新名字› 新名字' || fail "D: 改名 did not ask on the bottom line, pre-filled: $(screen)"
+waitfor '新名字▏' || fail "D: 改名 did not ask on the bottom line, pre-filled: $(screen)"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || fail "D: Esc did not cancel the rename"
 [ -z "$(calls)" ] || fail "D: a cancelled rename ran «$(calls)»"
 # ⌘P's 置顶 (issue #3517): the session in view has its own line, and ⌃T on the lit
 # row runs the row's own 置顶 — dash-pin-toggle.sh once, the list stays open
-screen | grep -q '📌 置顶当前会话' || fail "D: no 「📌 置顶当前会话」 line: $(screen)"
+screen | grep -q '置顶当前会话' || fail "D: no 「置顶当前会话」 line: $(screen)"
 reset
 to send-keys -t o C-t
 for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
@@ -265,7 +265,7 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 📌 置顶当前会话 and ⌃T (#3517)"
+pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
@@ -371,7 +371,7 @@ to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
 to send-keys -t o Tab; waitfor '─ Far 在 mac-a' || fail "E: Tab on the far row: $(screen)"
 for _ in $(seq 1 6); do to send-keys -t o Down; done
-waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
+waitfor '停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
 to send-keys -t o Enter
 waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-row-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
