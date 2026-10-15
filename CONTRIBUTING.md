@@ -4,6 +4,7 @@
 
 后续产品设计以 [Fleet 产品方向与设计原则](docs/dev/PRODUCT-DIRECTION.md)为依据。
 提出新设计时，请逐项回答文档中的「设计判断标准」，说明与产品定位、设计原则及演进边界的关系。
+新增组件的 PR 正文须写一行「归类：核心 / 按需 / 移除 / 待定」（选一），并同步更新唯一归类表 [COMPONENTS.md](docs/dev/COMPONENTS.md) 的组件、类别和理由。
 
 ## Issue titles：从用户视角起（issue #2545）
 
