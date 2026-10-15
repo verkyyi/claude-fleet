@@ -78,23 +78,25 @@ func (s *Server) jumpTarget(pod, door string, now time.Time) string {
 	return strings.ToLower(firstLabel(pod)) + "." + dw.ns + ".svc.cluster.local"
 }
 
-// withJump fills a pod's entry routes for the jump: door is the machine whose
-// address they are, own the pod's own host keys. Unchanged unless the door
-// and the pod both said they are ready and the pod's keys are known.
-func (s *Server) withJump(routes []FleetRoute, pod, door string, own []string, now time.Time) []FleetRoute {
-	target := s.jumpTarget(pod, door, now)
+// withJump fills a pod's entry routes for the jump, and the pod's own host
+// keys beside them: door is the machine whose address they are, own the pod's
+// own host keys. Unchanged unless the door and the pod both said they are
+// ready and the pod's keys are known.
+func (s *Server) withJump(m FleetMachine, door string, own []string, now time.Time) FleetMachine {
+	target := s.jumpTarget(m.Hostname, door, now)
 	if len(own) == 0 || target == "" {
-		return routes
+		return m
 	}
-	out := make([]FleetRoute, len(routes))
-	for i, r := range routes {
+	out := make([]FleetRoute, len(m.Routes))
+	for i, r := range m.Routes {
 		if r.Name == "entry" || strings.HasPrefix(r.Name, "entry-") {
 			r.Jump, r.Target, r.TargetPort = doorJumpUser, target, 22
-			r.TargetHostKeys = append([]string(nil), own...)
 		}
 		out[i] = r
 	}
-	return out
+	m.Routes = out
+	m.TargetHostKeys = append([]string(nil), own...)
+	return m
 }
 
 // entryJumpLine is the one line a phone or a bare ssh copies (the keys page):

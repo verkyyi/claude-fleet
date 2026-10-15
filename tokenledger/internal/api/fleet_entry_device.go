@@ -143,7 +143,7 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 	m.Routes = routes
 	if pod && door != m.Hostname {
 		// the door's jump account to the pod's own sshd (claude-fleet#4193)
-		m.Routes = s.withJump(m.Routes, m.Hostname, door, own, now)
+		m = s.withJump(m, door, own, now)
 	}
 	return m
 }

@@ -253,8 +253,8 @@ for f in ("fleet-cert", "fleet-cert-cert.pub"):
     open(os.path.join(sys.argv[2], ".ssh", f), "w").close()
 door, pod = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDOOR", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOD"
 jr = {"name": "entry", "host": "203.0.113.10", "port": 22022, "jump": "fleet-jump",
-      "target": "u-aaaa1.fleet-workers.svc.cluster.local", "target_port": 22, "target_host_keys": [pod]}
-m = {"hostname": "u-aaaa1", "host_keys": [door], "routes": [jr]}
+      "target": "u-aaaa1.fleet-workers.svc.cluster.local", "target_port": 22}
+m = {"hostname": "u-aaaa1", "host_keys": [door], "target_host_keys": [pod], "routes": [jr]}
 r = fc.pinned_row(fc.route_rows(m, ""), "entry")
 c = fc.ssh_command(m, r, "alice", "", known_hosts=fc.write_known_hosts(m))
 pc = next(x for x in c if x.startswith("ProxyCommand="))
@@ -265,8 +265,8 @@ print(c[-1], "HostKeyAlias=fleet-u-aaaa1-pod" in c, "-W %h:%p -l fleet-jump -p" 
 print("|".join(sorted(open(sys.argv[2] + "/kh").read().splitlines())).replace(door, "D").replace(pod, "P"))
 # 3 a jump with no pod key, or a target outside the cluster ⇒ the old road, byte for byte
 old = fc.ssh_command(m, dict(r, jump="", target="", target_host_keys=[]), "alice", "")
-for bad in (dict(jr, target_host_keys=[]), dict(jr, target="evil.example.com"), dict(jr, jump="x y")):
-    mb = dict(m, routes=[bad])
+for mb in (dict(m, target_host_keys=[]), dict(m, routes=[dict(jr, target="evil.example.com")]),
+           dict(m, routes=[dict(jr, jump="x y")])):
     rb = fc.pinned_row(fc.route_rows(mb, ""), "entry")
     print(fc.ssh_command(mb, rb, "alice", "") == old, end=" ")
 print()

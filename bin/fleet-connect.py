@@ -966,7 +966,8 @@ def jump_of(r):
     """A route's jump (claude-fleet#4193, design #4181 A2): a person's pod behind
     the door, reached through the door's one jump account — the route's
     host:port is the door, `target` the pod's own sshd inside the cluster, and
-    `target_host_keys` the pod's own host keys as the hub lists them. {} unless
+    `target_host_keys` the pod's own host keys as the hub lists them (the
+    machine's, copied onto the row by route_rows). {} unless
     every part is well-formed and a key is listed (never TOFU): the route is
     then the door's per-login road, as before."""
     if not isinstance(r, dict) or not r.get("jump"):
@@ -989,7 +990,7 @@ def route_rows(machine, hub):
                "order": i, "ms": [], "errors": []}
         if r.get("prefix"):
             row["prefix"] = int(r["prefix"])
-        j = jump_of(r)
+        j = jump_of(dict(r, target_host_keys=machine.get("target_host_keys")))
         if j:
             row.update(j)
         row["skip"] = route_skip(row)

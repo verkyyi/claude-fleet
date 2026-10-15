@@ -64,7 +64,7 @@ func TestDoorJumpRouteOnlyWhenBothSaidSo(t *testing.T) {
 		}
 	}
 	if entry == nil || entry.Jump != doorJumpUser || entry.Target != "u-alice1.fleet-workers.svc.cluster.local" ||
-		entry.TargetPort != 22 || len(entry.TargetHostKeys) != 1 || entry.TargetHostKeys[0] != own ||
+		entry.TargetPort != 22 || len(got.TargetHostKeys) != 1 || got.TargetHostKeys[0] != own ||
 		entry.Host != "203.0.113.10" || entry.Port != entryPort {
 		t.Fatalf("the jump route: %+v", got.Routes)
 	}

@@ -752,7 +752,7 @@ hub's user CA naming the login, and — until the old road goes — the door's k
 The hub offers it only while both said so lately (`jumpFresh`, 10 min): the door's
 pull carries `?jump=1&ns=<ns>` once its jump block is in its config, the pod's
 pull carries `?jump=1`. Then a pod's `entry` routes carry `jump` · `target` ·
-`target_port` · `target_host_keys` (the pod's own host keys, from its heartbeat),
+`target_port`, and the machine `target_host_keys` (the pod's own host keys, from its heartbeat),
 and `fleet connect` runs `ssh -o ProxyCommand='ssh -W %h:%p -l fleet-jump <door>'
 <login>@<target>` — the door's key under `fleet-<pod>`, the pod's under
 `fleet-<pod>-pod`, never TOFU. An older client ignores the fields and takes the
