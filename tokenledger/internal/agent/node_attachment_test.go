@@ -15,7 +15,7 @@ import (
 func TestAttachmentLeaseAndEpoch(t *testing.T) {
 	for _, reason := range []string{"expiry", "wrong-target", "stale-epoch", "renew"} {
 		t.Run(reason, func(t *testing.T) {
-			g := control.AttachmentGrant{V: 1, Person: "alice", Home: "node", Login: "alice", Node: "ep", Service: "term", Target: "personal", Conn: "conn", Generation: "gen", Mode: "relay", Epoch: 1, Iat: time.Now().Unix(), Exp: time.Now().Add(2 * time.Second).Unix()}
+			initialGrant := control.AttachmentGrant{V: 1, Person: "alice", Home: "node", Login: "alice", Node: "ep", Service: "term", Target: "personal", Conn: "conn", Generation: "gen", Mode: "relay", Epoch: 1, Iat: time.Now().Unix(), Exp: time.Now().Add(2 * time.Second).Unix()}
 			done := make(chan struct{})
 			selected := make(chan struct{})
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +26,7 @@ func TestAttachmentLeaseAndEpoch(t *testing.T) {
 				defer ws.CloseNow()
 				ctx, cancel := context.WithCancel(r.Context())
 				defer cancel()
-				s := newAuthorizedStream(ctx, cancel, ws, g, "key")
+				s := newAuthorizedStream(ctx, cancel, ws, initialGrant, "key")
 				go s.read()
 				go s.watchLease()
 				select {
@@ -45,6 +45,9 @@ func TestAttachmentLeaseAndEpoch(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ws.CloseNow()
+			// The handler may still be starting after Dial returns. Keep its
+			// initial grant separate from the client's selection and renewals.
+			g := initialGrant
 			if reason != "expiry" {
 				g.Epoch = 2
 				if err = writeAttachmentSignal(ctx, ws, control.AttachmentSignal{T: "select", Grant: control.SignAttachment(g, "key")}); err != nil {
