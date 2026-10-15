@@ -496,6 +496,8 @@ From `fleet doctor`.
 - **What it is**: whether this computer holds a release signing private key (in the environment, the configuration directory, `~/.ssh` or `~/.config`). The private key belongs only in the release train; machines accept only the offline root key and the keys it vouches for.
 - **On WARN / FAIL**: delete the private key the explanation names; if you suspect it leaked, ask your admin to sign a revocation with the root key (the operations docs, "release signing").
 
+To inspect the pinned public key, run `~/.claude/fleet/bin/fleet-release-key.sh status`. When a different root is endorsed by the pinned key, status succeeds and says the next release fetch will automatically re-pin to that root; no manual trust change is needed. Unknown or revoked chains still fail. Managed logins and logins linked to the machine runtime use `/var/db/fleet-node/release.pub`; their login pin has no effect. Status does not change any key.
+
 #### `entry`
 
 From `fleet doctor`.

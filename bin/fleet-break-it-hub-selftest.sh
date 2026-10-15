@@ -2796,6 +2796,16 @@ drill_release_key_outside_train() {
   SECS=$(since "$t0")
 }
 
+# ---- release-key-status-chain (#3844): status agrees with the fetcher's trust.
+drill_release_key_status_chain() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-release-key-selftest.py" 2>&1) \
+    || { WHY="release-key status: $out"; return 1; }
+  WHAT='旧 pin 担保根则 status 成功且只读；未知、伪造、吊销链仍拒；托管与跟随运行时的登录按机器 pin 判断'
+  SECS=$(since "$t0")
+}
+
 # ---- release-key-revoked (#3559, EPIC #3500 C17): a manifest signed by a key
 # the root vouched for, then revoked, must be refused by the Python check
 # (fleet-release-verify.py, what fleet-release-fetch.py uses) — from the
