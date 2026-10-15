@@ -43,7 +43,7 @@ jobs:
         working-directory: tokenledger
         run: |
           set -o pipefail
-          go test -tags browseracceptance -count=1 -v -timeout 5m -run '^Test(Attachment|TerminalConsole)Chromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
+          go test -tags browseracceptance -count=1 -v -timeout 7m -run '^Test(Attachment|TerminalConsole|ChatAttachment)Chromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -51,3 +51,4 @@ jobs:
           path: |
             browser-attachment.log
             extras/browser-transport/evidence/
+            extras/browser-transport/chat-*.zip

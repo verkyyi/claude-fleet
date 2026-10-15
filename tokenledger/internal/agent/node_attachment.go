@@ -20,14 +20,29 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	if json.Unmarshal(m.Payload, &ro) != nil || ro.RelayID == "" || len(ro.RelayID) > 128 || ro.Login != a.chatLogin() {
 		return
 	}
-	if !a.termRelays.take(termRelayMaxPerLogin) {
+	service := ro.Service
+	if service == "" {
+		service = "term"
+	} // previous nodes' terminal open
+	path := control.AttachmentDataPath
+	if service == "chat" {
+		if !a.cfg.FleetChat || !a.chatRelays.take() {
+			return
+		}
+		defer a.chatRelays.give()
+		path = control.ChatAttachmentDataPath
+	} else if service == "term" {
+		if !a.cfg.FleetTerm || !a.termRelays.take(termRelayMaxPerLogin) {
+			return
+		}
+		defer a.termRelays.give()
+	} else {
 		return
 	}
-	defer a.termRelays.give()
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	dctx, dcancel := context.WithTimeout(ctx, sshRelayDialTimeout)
-	ws, err := a.dialRelayData(dctx, control.AttachmentDataPath, ro.RelayID, ro.Secret)
+	ws, err := a.dialRelayData(dctx, path, ro.RelayID, ro.Secret)
 	dcancel()
 	if err != nil {
 		return
@@ -40,7 +55,7 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	}
 	key := control.ChatTokenHash(a.cfg.Token)
 	g, err := control.VerifyAttachment(initial.Grant, key, ro.Login, ro.RelayID, generation, time.Now())
-	if err != nil || g.Service != "term" || !a.cfg.FleetTerm || g.Epoch != 1 || !a.termSpent.spend(g.Conn, time.Now()) {
+	if err != nil || g.Service != service || g.Epoch != 1 || !a.termSpent.spend(g.Conn, time.Now()) {
 		return
 	}
 	finish, err := a.attachments.begin(ctx, g, cancel)
@@ -114,11 +129,14 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	if ctx.Err() != nil {
 		return
 	}
-	h, err := startTermHelper(ctx, "web-"+g.Conn, g.Target, 0, 0)
-	if err != nil {
-		return
+	var h termHelper
+	if service == "term" {
+		h, err = startTermHelper(ctx, "web-"+g.Conn, g.Target, 0, 0)
+		if err != nil {
+			return
+		}
+		defer h.Close()
 	}
-	defer h.Close()
 	if writeAttachmentSignal(ctx, ws, control.AttachmentSignal{T: "selected", Mode: selection.Mode, Pair: pair}) != nil {
 		return
 	}
@@ -128,7 +146,11 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	if peer != nil {
 		peer.Arm()
 	}
-	spliceTermStream(ctx, stream, h)
+	if service == "chat" {
+		a.spliceChatStream(ctx, cancel, stream, s, g)
+	} else {
+		spliceTermStream(ctx, stream, h)
+	}
 }
 
 func writeAttachmentSignal(ctx context.Context, ws *websocket.Conn, v control.AttachmentSignal) error {
@@ -155,10 +177,11 @@ type authorizedStream struct {
 	active   bool
 	selected chan control.AttachmentGrant
 	in       chan attachmentFrame
+	recorded chan struct{}
 }
 
 func newAuthorizedStream(ctx context.Context, cancel context.CancelFunc, ws *websocket.Conn, g control.AttachmentGrant, key string) *authorizedStream {
-	return &authorizedStream{ctx: ctx, cancel: cancel, ws: ws, key: key, grant: g, selected: make(chan control.AttachmentGrant, 1), in: make(chan attachmentFrame, 8)}
+	return &authorizedStream{ctx: ctx, cancel: cancel, ws: ws, key: key, grant: g, selected: make(chan control.AttachmentGrant, 1), in: make(chan attachmentFrame, 8), recorded: make(chan struct{}, 1)}
 }
 
 func (s *authorizedStream) read() {
@@ -188,6 +211,17 @@ func (s *authorizedStream) read() {
 			}
 			if signal.T == "select" {
 				s.selected <- g
+			}
+			continue
+		}
+		if t == websocket.MessageText && json.Unmarshal(b, &signal) == nil && signal.T == "chat_recorded" {
+			if s.grant.Service != "chat" || signal.Conn != s.grant.Chat.ID {
+				return
+			}
+			select {
+			case s.recorded <- struct{}{}:
+			default:
+				return
 			}
 			continue
 		}

@@ -76,6 +76,9 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			case <-time.After(10 * time.Second):
 			}
 			io.WriteString(w, `{"t":"done"}`+"\n")
+		case "/api/stop", "/api/answer":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ok":true}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

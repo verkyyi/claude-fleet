@@ -7822,6 +7822,15 @@ term_go() {
   fi
 }
 
+# Chat has its own admission and never replays a submitted request.
+drill_chat_direct_admission() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
+    '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
+  SECS=$(since "$t0")
+}
+
 # term-other-person (issue #3838, EPIC #3836 C1): a browser terminal reaches only
 # the signed-in person's own home login — never another person, an admin as
 # themselves or through a view, the operator's door, another origin; and the node

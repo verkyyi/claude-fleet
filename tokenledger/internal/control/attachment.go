@@ -22,26 +22,28 @@ type AttachmentOpen struct {
 	RelayID string `json:"relay_id"`
 	Secret  string `json:"secret"`
 	Login   string `json:"login"`
+	Service string `json:"service,omitempty"`
 }
 
 // Conn identifies the request, Epoch fences its one selected data path. A fresh
 // authorization is required to select relay after negotiation; ready is final.
 type AttachmentGrant struct {
-	V           int    `json:"v"`
-	Person      string `json:"person"`
-	Home        string `json:"home"`
-	Login       string `json:"login"`
-	Node        string `json:"node"`
-	Service     string `json:"service"`
-	Target      string `json:"target"`
-	Conn        string `json:"conn"`
-	Previous    string `json:"previous,omitempty"`
-	Generation  string `json:"generation"`
-	Fingerprint string `json:"fingerprint"`
-	Mode        string `json:"mode"`
-	Epoch       uint64 `json:"epoch"`
-	Iat         int64  `json:"iat"`
-	Exp         int64  `json:"exp"`
+	Chat        ChatAttachmentRequest `json:"chat,omitempty"`
+	V           int                   `json:"v"`
+	Person      string                `json:"person"`
+	Home        string                `json:"home"`
+	Login       string                `json:"login"`
+	Node        string                `json:"node"`
+	Service     string                `json:"service"`
+	Target      string                `json:"target"`
+	Conn        string                `json:"conn"`
+	Previous    string                `json:"previous,omitempty"`
+	Generation  string                `json:"generation"`
+	Fingerprint string                `json:"fingerprint"`
+	Mode        string                `json:"mode"`
+	Epoch       uint64                `json:"epoch"`
+	Iat         int64                 `json:"iat"`
+	Exp         int64                 `json:"exp"`
 }
 
 func SignAttachment(g AttachmentGrant, key string) string {
@@ -65,6 +67,12 @@ func VerifyAttachment(s, key, login, conn, generation string, now time.Time) (At
 		g.Login != login || g.Conn != conn || g.Generation == "" || g.Generation != generation ||
 		g.Epoch == 0 || !ValidAttachmentTarget(g.Service, g.Target) ||
 		statementWindow(g.Iat, g.Exp, AttachmentLease, now) != "" {
+		return g, bad
+	}
+	if g.Service == "chat" && !g.Chat.Valid(g.Target) {
+		return g, bad
+	}
+	if g.Service != "chat" && g.Chat != (ChatAttachmentRequest{}) {
 		return g, bad
 	}
 	if g.Mode != "negotiate" && g.Mode != "direct" && g.Mode != "relay" {
@@ -120,11 +128,15 @@ func SameAttachment(a, b AttachmentGrant) bool {
 }
 
 type AttachmentSignal struct {
+	Status     int      `json:"status,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	TrialLeft  string   `json:"trial_left,omitempty"`
 	T          string   `json:"t"`
 	Grant      string   `json:"grant,omitempty"`
 	SDP        string   `json:"sdp,omitempty"`
 	STUN       []string `json:"stun,omitempty"`
 	Mode       string   `json:"mode,omitempty"`
+	Refund     bool     `json:"refund,omitempty"`
 	Conn       string   `json:"conn,omitempty"`
 	Generation string   `json:"generation,omitempty"`
 	Target     string   `json:"target,omitempty"`

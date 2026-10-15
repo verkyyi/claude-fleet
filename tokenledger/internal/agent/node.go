@@ -205,7 +205,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		}
 	}
 	if a.cfg.FleetChat {
-		caps = append(caps, control.CapChat)
+		caps = append(caps, control.CapChat, control.CapChatAttachment)
 	}
 	if a.cfg.FleetTerm {
 		caps = append(caps, control.CapTerm)
@@ -382,7 +382,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 					go a.openTermRelay(ctx, m)
 				}
 			case control.TypeAttachmentOpen:
-				if a.cfg.FleetTerm {
+				if a.cfg.FleetTerm || a.cfg.FleetChat {
 					go a.openAttachment(ctx, m, attachmentGeneration)
 				}
 			case control.TypeServiceLog:
