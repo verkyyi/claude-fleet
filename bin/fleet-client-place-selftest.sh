@@ -398,6 +398,7 @@ printf '%s\n' "$*" > "$WORK/i-args"
 case "${I_MODE:-cold}" in
   cold) printf 'https://github.com/acme/web/issues/42\n@17\n' ;;
   warm) printf 'warm\t@18\tacme-web·x\t/w\tF1\t1\t2\t3\n' ;;
+  scratch) printf '@19\tfull draft title\t/work tree\tF1\t1\t2\t3\n' ;;
   no)   printf 'dash-issue-session: #42 should run in Codex, but …\n' >&2
         printf 'start: filed #42 but its session did not open (no Codex login) — it is on the backlog\n' >&2; exit 1 ;;
 esac
@@ -416,6 +417,11 @@ eq "I: this machine" "$H" "$(python3 -c 'import json,sys; print(json.load(open(s
 rm -f "$WORK/i.json"
 I_MODE=warm FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x'
 eq "I: a warm start's window" '@18' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+rm -f "$WORK/i.json"
+I_MODE=scratch FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web scratch --name short --agent codex --draft-file "$WORK/draft.txt"
+eq "I: cold draft start exit" 0 "$RC"
+eq "I: a cold draft's tab-separated window" '@19' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
+eq "I: a cold draft does not file an issue" '' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed", ""))' "$WORK/i.json")"
 rm -f "$WORK/i.json"
 I_MODE=no FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
 eq "I: a declined start" 5 "$RC"
