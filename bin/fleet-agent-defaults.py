@@ -6,11 +6,11 @@ conf/agent-defaults/ is the only source:
 
   claude/mcp.default.json    user-scope MCP servers → ~/.claude.json "mcpServers"
                              (context7 · playwright · github · fetch)
-  claude/CLAUDE.default.md   one marker-delimited block → ~/.claude/CLAUDE.md
+  claude/CLAUDE.default.md   legacy block reference (not installed)
   codex/config.default.toml  approval_policy / sandbox_mode / model_reasoning_effort /
                              check_for_update_on_startup
                              + the same [mcp_servers.*] → $CODEX_HOME/config.toml
-  codex/AGENTS.default.md    the same block → $CODEX_HOME/AGENTS.md
+  codex/AGENTS.default.md    legacy block reference (not installed)
   skills/ (the repo's)       counted here, installed by fleet-install-apply.sh's
                              skills / codex-skills passes into ~/.claude/skills and
                              $CODEX_HOME/skills
@@ -18,8 +18,8 @@ conf/agent-defaults/ is the only source:
 Merge = the #1558 semantics: FILL ONLY. An MCP server the login already has under
 that name — whatever its command — is never rewritten; a top-level Codex key the
 login has, whatever its value, is never changed; `model` is never shipped. The
-doc block is the fleet's own: appended when absent, replaced in place when its
-text moved on, everything outside the markers untouched. A login's ~/.claude.json
+legacy doc blocks are left byte for byte as they are; apply/check neither install
+nor require them (#3125). Only an explicit strip removes a marked block. A login's ~/.claude.json
 that Claude Code never wrote is not created (same as #1558); a $CODEX_HOME that
 does not exist means Codex is not set up on that login — nothing is created there.
 ~/.config/claude-fleet/agent-overrides.json lists what is never written: a JSON
@@ -54,6 +54,11 @@ writes nothing (exit 2). The ~/.claude.json write takes Claude Code's own
          missing` (exit 0) or the same counts without `ok` plus one `missing …`
          line each (exit 1). A $CODEX_HOME that does not exist reads `codex n/a`.
          fleet-doctor's `agents` line.
+
+  strip  [--claude-md F] [--codex-home D]… [--override F] [--skip PATH]…
+         [--dry-run] removes only the legacy marker block; leaves personal text,
+         configs and skills alone. Malformed/duplicate markers refuse before any
+         write. Missing files stay absent. No installed defaults are needed.
 
 Exit: 0 ok · 1 check found something missing · 2 unreadable/malformed input or a
 held lock.
@@ -400,32 +405,40 @@ def parse_defaults_toml(path):
 
 # --- the doc block ------------------------------------------------------------------
 
-def block_of(path):
-    text = read_text(path)
-    if text is None:
-        die("%s missing" % path)
-    if BEGIN not in text or END not in text or text.index(BEGIN) > text.index(END):
-        die("%s must hold one %s … %s block" % (path, BEGIN, END))
-    return text.strip("\n") + "\n"
-
-
-def doc_merge(path, block):
-    """(new_text or None, status): appended · replaced · unchanged · malformed."""
-    cur = read_text(path)
-    if cur is None:
-        return block, "appended"
-    b, e = cur.find(BEGIN), cur.find(END)
-    if b < 0 and e < 0:
-        sep = "" if cur == "" or cur.endswith("\n\n") else ("\n" if cur.endswith("\n") else "\n\n")
-        return cur + sep + block, "appended"
-    if b < 0 or e < 0 or e < b:
-        return None, "malformed"
-    e_end = e + len(END)
-    old = cur[b:e_end]
-    new_block = block.strip("\n")
-    if old == new_block:
-        return None, "unchanged"
-    return cur[:b] + new_block + cur[e_end:], "replaced"
+def strip_docs(a, homes, blocked):
+    """Explicit cleanup only; preflight every file before writing any of them."""
+    paths = []
+    if not shielded("claude.doc", blocked):
+        paths.append(a.claude_md)
+    if not shielded("codex.doc", blocked):
+        paths.extend(os.path.join(h, "AGENTS.md") for h in homes)
+    changes = {}
+    for path in paths:
+        target = os.path.realpath(path)
+        try:
+            # Preserve personal text including CRLF outside the marked block.
+            with open(target, encoding="utf-8", newline="") as f:
+                cur = f.read()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError) as e:
+            die("cannot read %s: %s" % (path, e))
+        if BEGIN not in cur and END not in cur:
+            continue
+        if cur.count(BEGIN) != 1 or cur.count(END) != 1 or cur.index(END) < cur.index(BEGIN):
+            die("%s: malformed or duplicate fleet markers — left alone" % path)
+        b, e = cur.index(BEGIN), cur.index(END) + len(END)
+        # The marker's line ending belongs to the block, not the following text.
+        if cur[e:e + 2] == "\r\n":
+            e += 2
+        elif cur[e:e + 1] == "\n":
+            e += 1
+        changes[target] = (path, cur[:b] + cur[e:])
+    for path, text in changes.values():
+        write_text(path, text, a.dry_run)
+    print("stripped %d fleet block(s)%s" % (len(changes),
+          " (dry run — nothing written)" if a.dry_run else ""))
+    return 0
 
 
 # --- skills -------------------------------------------------------------------------
@@ -455,7 +468,7 @@ class Report:
         print(line)
 
 
-def claude_side(a, rep, want_mcp, block, blocked, check):
+def claude_side(a, rep, want_mcp, blocked, check):
     label = os.path.basename(a.claude_config)
     names = [n for n in want_mcp]
     kept_names = [n for n in names if shielded("claude.mcp." + n, blocked)]
@@ -524,26 +537,6 @@ def claude_side(a, rep, want_mcp, block, blocked, check):
             else:
                 hm.with_config_lock(a.claude_config, apply_cfg)
 
-    # the CLAUDE.md block
-    if shielded("claude.doc", blocked):
-        rep.kept.append("claude.doc")
-    else:
-        new, status = doc_merge(a.claude_md, block)
-        if check:
-            if status in ("appended", "replaced"):
-                rep.missing["claude"].append("missing    claude doc %s fleet block (%s)"
-                                             % (os.path.basename(a.claude_md),
-                                                "absent" if status == "appended" else "stale"))
-            elif status == "malformed":
-                rep.missing["claude"].append("missing    claude doc %s fleet block is malformed (one marker without the other)"
-                                             % os.path.basename(a.claude_md))
-        elif status == "malformed":
-            rep.say("own            claude doc %s — a fleet marker without its pair; left alone" % os.path.basename(a.claude_md))
-        elif status != "unchanged":
-            rep.say("set            claude doc %s fleet block (%s)" % (os.path.basename(a.claude_md), status))
-            rep.sets["claude"] += 1
-            write_text(a.claude_md, new, a.dry_run)
-
     # skills (count only — the install's skills pass copies them)
     if a.claude_skills and not shielded("claude.skills", blocked):
         for n in missing_skills(repo_skills(a.root), a.claude_skills):
@@ -552,7 +545,7 @@ def claude_side(a, rep, want_mcp, block, blocked, check):
         rep.kept.append("claude.skills")
 
 
-def codex_side(a, rep, home, tag, want_top, want_srv, block, blocked, check):
+def codex_side(a, rep, home, tag, want_top, want_srv, blocked, check):
     if not os.path.isdir(home):
         rep.codex_na.append(home)
         if not check:
@@ -619,24 +612,6 @@ def codex_side(a, rep, home, tag, want_top, want_srv, block, blocked, check):
                 die("%s: the merged file would not parse (%s) — nothing written" % (conf, e))
         rep.sets["codex"] += len(top_add) + len(srv_add)
         write_text(conf, new_text, a.dry_run)
-    # the AGENTS.md block
-    agents = os.path.join(home, "AGENTS.md")
-    if shielded("codex.doc", blocked):
-        rep.kept.append("%s.doc" % tag)
-    else:
-        new, status = doc_merge(agents, block)
-        if check:
-            if status in ("appended", "replaced"):
-                rep.missing["codex"].append("missing    %s doc AGENTS.md fleet block (%s)"
-                                            % (tag, "absent" if status == "appended" else "stale"))
-            elif status == "malformed":
-                rep.missing["codex"].append("missing    %s doc AGENTS.md fleet block is malformed (one marker without the other)" % tag)
-        elif status == "malformed":
-            rep.say("own            %s doc AGENTS.md — a fleet marker without its pair; left alone" % tag)
-        elif status != "unchanged":
-            rep.say("set            %s doc AGENTS.md fleet block (%s)" % (tag, status))
-            rep.sets["codex"] += 1
-            write_text(agents, new, a.dry_run)
     # skills (count only — the install's codex-skills pass copies them)
     if shielded("codex.skills", blocked):
         rep.kept.append("%s.skills" % tag)
@@ -669,7 +644,7 @@ def reroot(v, spelled):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("action", choices=("apply", "check"))
+    ap.add_argument("action", choices=("apply", "check", "strip"))
     ap.add_argument("--root", default=DEFAULT_ROOT, help="install root holding conf/agent-defaults/ and skills/")
     ap.add_argument("--claude-config", default=DEFAULT_CLAUDE_CONFIG)
     ap.add_argument("--claude-md", default=DEFAULT_CLAUDE_MD)
@@ -689,6 +664,10 @@ def main():
         if h not in homes:
             homes.append(h)
 
+    blocked = override_paths(a.override, a.skip)
+    if a.action == "strip":
+        return strip_docs(a, homes, blocked)
+
     base = os.path.join(a.root, "conf", "agent-defaults")
     if not os.path.isdir(base):
         die("%s missing — no agent defaults in this install" % base)
@@ -705,21 +684,18 @@ def main():
         spelled = scripts_spelling(a.scripts_root)
         mcp["mcpServers"] = reroot(mcp["mcpServers"], spelled)
         want_srv = reroot(want_srv, spelled)
-    claude_block = block_of(os.path.join(base, "claude", "CLAUDE.default.md"))
-    codex_block = block_of(os.path.join(base, "codex", "AGENTS.default.md"))
-    blocked = override_paths(a.override, a.skip)
 
     rep = Report()
     if shielded("claude", blocked):
         rep.kept.append("claude")
     else:
-        claude_side(a, rep, mcp["mcpServers"], claude_block, blocked, check)
+        claude_side(a, rep, mcp["mcpServers"], blocked, check)
     if shielded("codex", blocked):
         rep.kept.append("codex")
     else:
         for h in homes:
             tag = "codex" if len(homes) == 1 and h == os.path.abspath(DEFAULT_CODEX_HOME) else "codex[%s]" % tilde(h)
-            codex_side(a, rep, h, tag, want_top, want_srv, codex_block, blocked, check)
+            codex_side(a, rep, h, tag, want_top, want_srv, blocked, check)
 
     kept_note = "" if not rep.kept else "; %d left to this login: %s" % (len(rep.kept), ", ".join(rep.kept))
     if check:

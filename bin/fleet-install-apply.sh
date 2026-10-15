@@ -1253,8 +1253,8 @@ fi
 # conf/agent-defaults/ is the ONE default package for BOTH agents on a managed
 # login: the user-scope MCP servers (context7 · playwright · github · fetch) into
 # ~/.claude.json and $CODEX_HOME/config.toml, Codex's approval_policy /
-# sandbox_mode / model_reasoning_effort, and one marker-delimited fleet block in
-# ~/.claude/CLAUDE.md / $CODEX_HOME/AGENTS.md. Fill only (the #1558 semantics): a
+# sandbox_mode / model_reasoning_effort. Instruction files are left alone (#3125);
+# legacy blocks are removed only by an explicit strip. Fill only: a
 # server or key the login has is never rewritten; the override file names what is
 # never written. Every moving apply; every Codex home the script knows
 # (CODEX_HOME, FLEET_CODEX_HOME, codex/accounts.json). Not under $COPY — a plugin
