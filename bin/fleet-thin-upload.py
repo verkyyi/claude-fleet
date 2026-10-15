@@ -244,7 +244,13 @@ class Input:
 
 
 def supervise():
+    deadline = time.monotonic() + TIMEOUT
+    # Even a parent that stays alive but stops writing the initial request may
+    # not leave a permanent waiter. There are no children or temp files yet.
+    signal.signal(signal.SIGALRM, signal.SIG_DFL)
+    signal.setitimer(signal.ITIMER_REAL, TIMEOUT)
     req = json.loads(sys.stdin.buffer.readline(RESULT_CAP))
+    signal.setitimer(signal.ITIMER_REAL, 0)
     with tempfile.TemporaryDirectory(prefix='fleet-upload.') as tmp:
         req['tmp'] = tmp
         worker = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--work'],
@@ -253,7 +259,6 @@ def supervise():
         worker.stdin.write(json.dumps(req).encode() + b'\n')
         worker.stdin.close()
         out = bytearray()
-        deadline = time.monotonic() + TIMEOUT
         cancelled = False
         try:
             while time.monotonic() < deadline:
