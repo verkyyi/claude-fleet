@@ -968,14 +968,22 @@ case "$mode" in
   reap)
     fleet_load_conf "$sess"
     key="${3:-}"
-    case "$key" in issue-*|scratch-*|*:issue-*|*:scratch-*) ;; *) exit 2 ;; esac
+    case "$key" in
+      fid:*) fleet_is_fid "${key#fid:}" || exit 2 ;;
+      issue-*|scratch-*|*:issue-*|*:scratch-*) ;;
+      *) exit 2 ;;
+    esac
     sock=$(fleet_socket "$sess")
     sp=$(tmux -L "$sock" display-message -p '#{socket_path}' 2>/dev/null)
     [ -n "$sp" ] || { printf 'reap: fleet %s has no running tmux server\n' "$sess" >&2; exit 5; }
     target="$key"
     # The one repo's `<slug>:issue-N` (issue #1939) is the reaper's own bare key.
     _a=$(fleet_key_alias "$sess" "$key"); [ -n "$_a" ] && { key=$_a; target=$_a; }
-    case "$key" in *:*)
+    case "$key" in
+    fid:*)
+      target=$(fleet_win_for_fid "${key#fid:}" "$sock") && [ -n "$target" ] \
+        || { printf 'reap: no unique live window holds %s on %s\n' "$key" "$sess" >&2; exit 5; } ;;
+    *:*)
       target=$(fleet_win_for_key "$key" "$sock") && [ -n "$target" ] \
         || { printf 'reap: no live window holds %s on %s\n' "$key" "$sess" >&2; exit 5; } ;;
     esac

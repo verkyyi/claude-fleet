@@ -115,6 +115,11 @@ if "list-windows" in sys.argv:
     # @claude_needs, when asked; column 13 (issue #1646) the window's @fleet_id,
     # the tenth column of workers.tsv.
     fmt=sys.argv[sys.argv.index("-F") + 1]
+    if fmt.endswith("#{window_id}|#{session_name}|#{@pool}|#{@fleet_id}") and data.exists():
+        for row in data.read_text().splitlines():
+            cols = row.split("\\t")
+            print("|".join([cols[0], "demo", "", cols[9] if len(cols) > 9 else ""]))
+        sys.exit(0)
     keep="#{@repo}" in fmt
     if "#{pane_pid}" in fmt and data.exists():
         # the busy read (issue #1607): window, pane pid (none — no process tree
@@ -239,7 +244,7 @@ printf '%s\\n' "$* TMUX=${TMUX:-} LOCAL=${FLEET_REAP_LOCAL:-}" >> "$FLEET_CONF_D
 [ ! -f "$FLEET_CONF_DIR/reap-live" ] || { echo skip:live; echo 'reap: issue-124 is live or could not be checked (working for 12s) — leaving window and worktree alone' >&2; exit 3; }
 [ ! -f "$FLEET_CONF_DIR/reap-fail" ] || { echo failed:kill-window; exit 5; }
 n="${1#issue-}"
-awk -F'\\t' -v n="$n" '!($2 == n)' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
+awk -F'\\t' -v n="$n" '!($2 == n || $1 == n)' "$FLEET_CONF_DIR/workers.tsv" > "$FLEET_CONF_DIR/workers.new"
 mv "$FLEET_CONF_DIR/workers.new" "$FLEET_CONF_DIR/workers.tsv"
 if [ -f "$FLEET_CONF_DIR/reap-dirty" ]; then echo reaped:keep; else echo reaped:full; fi
 ''')
@@ -599,6 +604,24 @@ class HubTests(HubFixture):
             self.lifecycle("worker_reap", "issue-125", idem="no-scope", token=reader["token"])
         with self.assertRaises(Fault):
             self.call("worker_reap", {"worker_id": self.worker("issue-125"), "answer": "yes", "idempotency_key": "extra"})
+
+    def test_reap_preserves_identity_for_keyless_sessions(self):
+        wanted, other = str(uuid.uuid4()), str(uuid.uuid4())
+        self.node.windows(("@12", None, True, "", "", "?", wanted),
+                          ("@13", None, True, "", "", "?", other))
+        done = self.lifecycle("worker_reap", wanted)
+        self.assertEqual(done["status"], "succeeded", done)
+        self.assertEqual(done["result"]["reaped"]["identity"], wanted)
+        self.assertEqual(self.node.calls("reap"), ["@12 --yes TMUX=/tmp/fleet-hub-selftest.sock,0,0 LOCAL=1"])
+        remaining = self.call("fleet_status", {"fleet_id": self.fleet})["workers"]
+        self.assertEqual([worker["identity"] for worker in remaining], [other])
+        self.node.windows(("@12", None, True, "", "", "?", wanted),
+                          ("@13", None, True, "", "", "?", wanted))
+        ambiguous = self.lifecycle("worker_reap", wanted, idem="duplicate-fid")
+        self.assertEqual(ambiguous["result"]["error"]["code"], "AMBIGUOUS", ambiguous)
+        missing = self.lifecycle("worker_reap", str(uuid.uuid4()), idem="missing-fid")
+        self.assertEqual(missing["result"]["error"]["code"], "NOT_FOUND", missing)
+        self.assertEqual(len(self.node.calls("reap")), 1)
 
     def test_switch_moves_the_window_by_key_or_identity(self):
         # worker_switch (issue #2102): the Fleet Shell's 「换到可用订阅」. The worker
