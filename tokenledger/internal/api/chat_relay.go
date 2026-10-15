@@ -48,6 +48,14 @@ func chatRelayKey(host, login string) string { return host + "/" + login }
 // compatible and offering CapChat. Another login's agent is never used — the
 // socket is reachable only as the login.
 func (s *Server) chatRelayNode(host, login string) (string, *nodeConn, error) {
+	return s.loginRelayNode(host, login, func(c *nodeConn) bool { return c.canChat },
+		"NO_CHAT", "the chat relay")
+}
+
+// loginRelayNode picks login's own link on host that offers a relay kind (has):
+// the chat relay's and the terminal's (claude-fleet#3838) one picker. A link
+// of that login without it answers missing; none at all, NODE_OFFLINE.
+func (s *Server) loginRelayNode(host, login string, has func(*nodeConn) bool, missing, what string) (string, *nodeConn, error) {
 	s.nodes.mu.Lock()
 	defer s.nodes.mu.Unlock()
 	ids := make([]string, 0, len(s.nodes.conns))
@@ -61,14 +69,14 @@ func (s *Server) chatRelayNode(host, login string) (string, *nodeConn, error) {
 		if c.hostname() != host || c.user() != login || !control.Compatible(int(c.proto.Load())) {
 			continue
 		}
-		if !c.canChat {
+		if !has(c) {
 			seen = true
 			continue
 		}
 		return epID, c, nil
 	}
 	if seen {
-		return "", nil, sshRelayRefusal("NO_CHAT", "%s on %s runs an agent without the chat relay; update it", login, host)
+		return "", nil, sshRelayRefusal(missing, "%s on %s runs an agent without %s; update it", login, host, what)
 	}
 	return "", nil, sshRelayRefusal("NODE_OFFLINE", "%s on %s is not connected", login, host)
 }
@@ -84,37 +92,95 @@ func (s *Server) dialChatRelay(ctx context.Context, person, host, login string) 
 	if err != nil {
 		return nil, err
 	}
-	key := chatRelayKey(host, login)
 	max := s.ChatRelayMaxPerLogin
 	if max <= 0 {
 		max = defaultChatRelayMaxPerLogin
 	}
-	if !s.chatRelays.admit(key, max) {
-		return nil, sshRelayRefusal("TOO_MANY", "already %d chat relays open for %s", max, key)
+	or, err := s.openLoginRelay(ctx, loginRelaySpec{
+		kind: "chat relay", table: &s.chatRelays, epID: epID, node: nc,
+		key: chatRelayKey(host, login), max: max, person: person,
+		open: func(id, secret string) (control.Message, error) {
+			return control.New(control.TypeChatRelayOpen, control.ChatRelayOpen{RelayID: id, Secret: secret, Login: login})
+		},
+		hello: func(id, tokHash string, now time.Time) []byte {
+			b, _ := json.Marshal(control.ChatRelayHello{Person: control.SignChatPerson(control.ChatPerson{
+				V: 1, Person: person, Login: login, Relay: id, Iat: now.Unix(), Exp: now.Add(chatPersonTTL).Unix(),
+			}, tokHash)})
+			return b
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	rd := s.ChatRelayRateBPS
+	if rd == 0 {
+		rd = defaultChatRelayRateBPS
+	}
+	return &chatRelayConn{
+		Conn: websocket.NetConn(or.ctx, or.ws, websocket.MessageBinary),
+		ctx:  or.ctx, lim: s.chatRelays.limiter(or.key, rd), end: or.end,
+	}, nil
+}
+
+// loginRelaySpec is one relay to ask a login's agent for: which table admits
+// and holds it, the open request and the first frame (the statement) to send.
+type loginRelaySpec struct {
+	kind   string // "chat relay", "term relay": the log's word
+	table  *sshRelayTable
+	epID   string
+	node   *nodeConn
+	key    string // what the table's bound counts by
+	max    int
+	person string
+	open   func(id, secret string) (control.Message, error)
+	hello  func(id, tokHash string, now time.Time) []byte
+}
+
+// openedRelay is a relay whose agent attached and took the first frame.
+type openedRelay struct {
+	id, key string
+	ws      *websocket.Conn
+	// ctx ends when the relay does (Close, or the agent's link dropped).
+	ctx context.Context
+	end func(why string)
+}
+
+// openLoginRelay is the chat relay's and the terminal's (claude-fleet#3838) one
+// opening: admit the relay against its table's per-key bound, ask the agent on
+// its control channel, wait for its data stream (sshRelayAttachTimeout), sign
+// and send the first frame with the token hash that link proved its login
+// with. Every failure ends the relay and frees its slot; end is idempotent.
+func (s *Server) openLoginRelay(ctx context.Context, sp loginRelaySpec) (*openedRelay, error) {
+	if !sp.table.admit(sp.key, sp.max) {
+		return nil, sshRelayRefusal("TOO_MANY", "already %d %ss open for %s", sp.max, sp.kind, sp.key)
 	}
 	rctx, cancel := context.WithCancel(context.Background())
-	p := &pendingSSHRelay{id: control.NewOpID(), secret: control.NewOpID(), endpointID: epID, node: nc,
+	p := &pendingSSHRelay{id: control.NewOpID(), secret: control.NewOpID(), endpointID: sp.epID, node: sp.node,
 		attach: make(chan *websocket.Conn, 1), done: make(chan struct{}), cancel: cancel}
-	s.chatRelays.put(p)
+	sp.table.put(p)
 	started := time.Now()
 	var once sync.Once
 	end := func(why string) {
 		once.Do(func() {
 			cancel()
 			close(p.done)
-			s.chatRelays.drop(p.id)
-			s.chatRelays.release(key)
-			log.Printf("chat relay %s: %s -> %s: %s after %s", p.id[:8], person, key, why, time.Since(started).Round(time.Second))
+			sp.table.drop(p.id)
+			sp.table.release(sp.key)
+			log.Printf("%s %s: %s -> %s: %s after %s", sp.kind, p.id[:8], sp.person, sp.key, why, time.Since(started).Round(time.Second))
 		})
 	}
 
-	open, _ := control.New(control.TypeChatRelayOpen, control.ChatRelayOpen{RelayID: p.id, Secret: p.secret, Login: login})
+	open, err := sp.open(p.id, p.secret)
+	if err != nil {
+		end("build the request: " + err.Error())
+		return nil, sshRelayRefusal("INTERNAL", "cannot build the request")
+	}
 	wctx, wcancel := context.WithTimeout(ctx, 5*time.Second)
-	err = s.SendNodeWrite(wctx, epID, open)
+	err = s.SendNodeWrite(wctx, sp.epID, open)
 	wcancel()
 	if err != nil {
 		end("ask the agent: " + err.Error())
-		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent did not take the request: %v", key, err)
+		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent did not take the request: %v", sp.key, err)
 	}
 	var agentConn *websocket.Conn
 	t := time.NewTimer(sshRelayAttachTimeout)
@@ -123,41 +189,30 @@ func (s *Server) dialChatRelay(ctx context.Context, person, host, login string) 
 	case agentConn = <-p.attach:
 	case <-t.C:
 		end("agent never attached")
-		return nil, sshRelayRefusal("NODE_TIMEOUT", "%s's agent did not open the stream within %s", key, sshRelayAttachTimeout)
+		return nil, sshRelayRefusal("NODE_TIMEOUT", "%s's agent did not open the stream within %s", sp.key, sshRelayAttachTimeout)
 	case <-ctx.Done():
 		end("caller gone")
 		return nil, ctx.Err()
 	case <-rctx.Done():
 		end("agent disconnected")
-		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent disconnected", key)
+		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent disconnected", sp.key)
 	}
 
-	tokHash := nc.tokHash
+	tokHash := sp.node.tokHash
 	if tokHash == "" {
-		if tokHash, err = s.Store.EndpointTokenHash(epID); err != nil || tokHash == "" {
+		if tokHash, err = s.Store.EndpointTokenHash(sp.epID); err != nil || tokHash == "" {
 			end("no token hash to sign with")
-			return nil, sshRelayRefusal("INTERNAL", "cannot sign for %s", key)
+			return nil, sshRelayRefusal("INTERNAL", "cannot sign for %s", sp.key)
 		}
 	}
-	now := time.Now()
-	hello, _ := json.Marshal(control.ChatRelayHello{Person: control.SignChatPerson(control.ChatPerson{
-		V: 1, Person: person, Login: login, Relay: p.id, Iat: now.Unix(), Exp: now.Add(chatPersonTTL).Unix(),
-	}, tokHash)})
 	wctx, wcancel = context.WithTimeout(ctx, 5*time.Second)
-	err = agentConn.Write(wctx, websocket.MessageText, hello)
+	err = agentConn.Write(wctx, websocket.MessageText, sp.hello(p.id, tokHash, time.Now()))
 	wcancel()
 	if err != nil {
 		end("agent gone before the stream started")
-		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent closed the stream: %v", key, err)
+		return nil, sshRelayRefusal("NODE_OFFLINE", "%s's agent closed the stream: %v", sp.key, err)
 	}
-	rd := s.ChatRelayRateBPS
-	if rd == 0 {
-		rd = defaultChatRelayRateBPS
-	}
-	return &chatRelayConn{
-		Conn: websocket.NetConn(rctx, agentConn, websocket.MessageBinary),
-		ctx:  rctx, lim: s.chatRelays.limiter(key, rd), end: end,
-	}, nil
+	return &openedRelay{id: p.id, key: sp.key, ws: agentConn, ctx: rctx, end: end}, nil
 }
 
 // handleChatRelayData serves ChatRelayDataPath: an agent attaching the data half
@@ -227,19 +282,25 @@ func (s *Server) chatRelayPeer(r *http.Request, host, login string) (store.NodeC
 	if _, _, err := s.chatRelayNode(host, login); err == nil {
 		return store.NodeConn{}, false
 	}
+	return s.peerLoginLink(host, login, control.CapChat)
+}
+
+// peerLoginLink is the other replica's link to login on host offering cap, the
+// lowest endpoint id first; false when none does.
+func (s *Server) peerLoginLink(host, login, cap string) (store.NodeConn, bool) {
 	peers := s.peerConns()
 	if len(peers) == 0 {
 		return store.NodeConn{}, false
 	}
 	nodes, err := s.Store.Nodes()
 	if err != nil {
-		log.Printf("fleet: read nodes for the chat relay: %v", err)
+		log.Printf("fleet: read nodes for a login relay: %v", err)
 		return store.NodeConn{}, false
 	}
 	var l []store.NodeConn
 	for _, n := range nodes {
 		pc, ok := peers[n.EndpointID]
-		if !ok || n.Hostname != host || n.OSUser != login || !pc.HasCap(control.CapChat) || !control.Compatible(n.Proto) {
+		if !ok || n.Hostname != host || n.OSUser != login || !pc.HasCap(cap) || !control.Compatible(n.Proto) {
 			continue
 		}
 		l = append(l, pc)

@@ -1678,6 +1678,8 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		FleetSSHRelay: fleet && getenv("CCQUOTA_FLEET_SSH_RELAY") != "0",
 		// The chat relay likewise (claude-fleet#3644).
 		FleetChat: fleet && getenv("CCQUOTA_FLEET_CHAT") != "0",
+		// The terminal relay likewise (claude-fleet#3838).
+		FleetTerm: fleet && getenv("CCQUOTA_FLEET_TERM") != "0",
 		// A service login (claude-fleet#4086): service run attempts, as it.
 		FleetSvc: fleet && getenv("CCQUOTA_FLEET_SVC") == "1",
 		// fleet-ops: the cluster's provisioner it hands tickets to (claude-fleet#3553).
@@ -1774,6 +1776,9 @@ func sshRelayConfig(srv *api.Server) error {
 		{"CCQUOTA_FLEET_CHAT_RELAY_MAX", func(n int64) { srv.ChatRelayMaxPerLogin = int(n) }},
 		{"CCQUOTA_FLEET_CHAT_RELAY_RATE_BPS", func(n int64) { srv.ChatRelayRateBPS = n }},
 		{"CCQUOTA_FLEET_CHAT_PER_PERSON", func(n int64) { srv.ChatMaxPerPerson = int(n) }},
+		{"CCQUOTA_FLEET_TERM_PER_PERSON", func(n int64) { srv.TermMaxPerPerson = int(n) }},
+		{"CCQUOTA_FLEET_TERM_RELAY_MAX", func(n int64) { srv.TermRelayMaxPerLogin = int(n) }},
+		{"CCQUOTA_FLEET_TERM_RELAY_RATE_BPS", func(n int64) { srv.TermRelayRateBPS = n }},
 		{"CCQUOTA_FLEET_CHAT_PER_MINUTE", func(n int64) { srv.ChatPerMinute = int(n) }},
 	} {
 		v := os.Getenv(kv.name)

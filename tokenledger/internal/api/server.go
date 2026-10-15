@@ -219,6 +219,17 @@ type Server struct {
 	chatRelays sshRelayTable
 	// chatGate holds each person's /v1/chat bounds (claude-fleet#3645).
 	chatGate chatGate
+
+	// TermMaxPerPerson / TermPerMinute bound one person's browser terminals
+	// at once and opened a minute (0: 2 / 20); TermRelayMaxPerLogin and
+	// TermRelayRateBPS one login's (0: 8, 1 MiB/s) — claude-fleet#3838.
+	TermMaxPerPerson     int
+	TermPerMinute        int
+	TermRelayMaxPerLogin int
+	TermRelayRateBPS     int64
+	// termGate / termRelays: the terminals' bounds and the relays in flight.
+	termGate   chatGate
+	termRelays sshRelayTable
 	// trialConvoIO takes a trial's conversation out of its login and puts it
 	// into the next (claude-fleet#4060); nil = through the person's own chat
 	// relay. Tests put a stand-in here.
@@ -670,6 +681,10 @@ func (s *Server) routes() *routeMux {
 		// The web chat (claude-fleet#3645): a signed-in person's own
 		// conversation, relayed to their home login's service.
 		mux.Handle(ChatPathPrefix, s.viewerOnly(http.HandlerFunc(s.handleChat)))
+		// The browser terminal (claude-fleet#3838): a signed-in person's own,
+		// on their home login.
+		mux.Handle(TermConnectPath, s.viewerOnly(http.HandlerFunc(s.handleTermConnect)))
+		mux.Handle(TermHomePath, s.viewerOnly(http.HandlerFunc(s.handleTermHome)))
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
 		// Drill triers (claude-fleet#4215): an admin's code, once, into the
@@ -841,6 +856,8 @@ func (s *Server) routes() *routeMux {
 		// The data half of a chat relay (claude-fleet#3644): the agent, by
 		// its own signature or token, as for the SSH relay.
 		mux.HandleFunc(control.ChatRelayDataPath, s.handleChatRelayData)
+		// …and of a terminal (claude-fleet#3838), the same way.
+		mux.HandleFunc(control.TermDataPath, s.handleTermRelayData)
 		// The route list `fleet connect` measures (claude-fleet#1414): it
 		// admits a certificate by a signed timestamp, so it authenticates
 		// itself, outside the viewer gate.

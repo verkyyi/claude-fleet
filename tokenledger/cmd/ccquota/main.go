@@ -49,6 +49,10 @@ func main() {
 		// A chat relay's last hop, run as the login (claude-fleet#3644):
 		// its own conversation socket on stdio, nothing else.
 		os.Exit(runChatPipe(os.Args[2:]))
+	case "term-pty": // agent.TermPtyCmd
+		// A terminal relay's last hop, run as the login (claude-fleet#3838):
+		// its own PTY on the one attach command, framed on stdio.
+		os.Exit(runTermPty(os.Args[2:]))
 	case "hub":
 		err = runHub(os.Args[2:])
 	case "enroll":

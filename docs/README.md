@@ -37,6 +37,7 @@
 - [CLIENT.md](dev/CLIENT.md) — 客户端与按键
 - [CLIENT-LOGS.md](dev/CLIENT-LOGS.md) — 客户端自己的日志
 - [WEB-CHAT.md](dev/WEB-CHAT.md) — 浏览器里和会话对话（最小版）
+- [WEB-TERMINAL.md](dev/WEB-TERMINAL.md) — 浏览器里打开自己的终端（中继、授权、视图）
 - [LOCAL-AND-HUB.md](dev/LOCAL-AND-HUB.md) — 本机模式与联机模式
 
 **入口与机器**
