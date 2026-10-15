@@ -1270,4 +1270,21 @@ drill_user_pod_opener_group_write() {
   WHAT="个人 pod 仍是 fsGroup=<uid> + OnRootMismatch（kubelet 会给整盘加 g+w）；开号脚本组可写而组是程序自己的照收，root、别人的组、人人可写都拒，拒时说原因；${gohalf}"
 }
 
+# user-pod-login-reissued (#4301): the hub retires a person's pod login's
+# endpoint (an expired drill, an `accounts forget`) and sends a new create for
+# the same login. The disk still declares it under the old op, and `login open`
+# answered 「already exists on this pod」 rc 3 — the account row failed, the pod
+# had no login and no way to get one. Now the create claims it: the new op
+# written, home and data kept, the retired token dropped for the new join code.
+drill_user_pod_login_reissued() {
+  CAP=30
+  local t0 out
+  t0=$(now)
+  out=$(python3 -I "$BIN/fleet-node-linux-selftest.py" -k test_pod_login_reissued 2>&1) \
+    || { WHY="the reissued create is refused again: $(printf '%s' "$out" | grep -E 'Refuse|Error|assert' | head -3 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$out" | grep -q 'Ran 1 test' || { WHY="the reissue test did not run: $(printf '%s' "$out" | tail -3)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod 唯一的登录被入口重新要一次：盘上的旧声明照认（改写 op）、家目录和数据不动、退役的 token 换成新 join 码入网、交给守护——不再「already exists」rc 3"
+}
+
 cred_run_drills "$0"
