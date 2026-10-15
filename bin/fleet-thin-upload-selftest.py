@@ -21,8 +21,9 @@ class Pump(unittest.TestCase):
             clip = d / "clip.py"
             clip.write_text("import time, pathlib, os\npathlib.Path(__file__).with_suffix('.started').write_text(str(os.getpid()))\ntime.sleep(30)\n")
             remote = d / "remote.py"
-            remote.write_text("""import os, select, tty
+            remote.write_text("""import os, select, tty, signal
 tty.setraw(0)
+signal.signal(signal.SIGWINCH, lambda *_: os.write(1, b'RESIZED'))
 os.write(1, b'\\x1b]7502;cur;token=test;m=-;l=-;w=fu/fid\\x07READY')
 while True:
     r, _, _ = select.select([0], [], [], .02)
@@ -57,6 +58,10 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                 while not clip.with_suffix('.started').exists() and time.monotonic() < end: time.sleep(.02)
                 self.assertTrue(clip.with_suffix('.started').exists(), "capture never started")
                 read_until(b"..", .75)
+                import fcntl, struct, termios
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+                os.kill(p.pid, signal.SIGWINCH)
+                read_until(b'RESIZED', .75)
                 start = time.monotonic()
                 os.write(master, b"held command\r\x03")
                 read_until(b"INTERRUPTED", .75)
@@ -190,6 +195,66 @@ class Transactions(unittest.TestCase):
                 status = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True).stdout.strip()
                 self.assertTrue(not status or status.startswith(b'Z'), status)
 
+    def test_hash_timeout_and_shutdown_race(self):
+        # Instrument the expensive hash call in a private worker copy. The pump
+        # and supervisor stay real; no production bypass or live filesystem.
+        copied = self.root / 'worker'; copied.mkdir()
+        worker = copied / 'fleet-thin-upload.py'
+        original = (BIN / 'fleet-thin-upload.py').read_text()
+        (copied / 'fleet-client-upload.py').symlink_to(BIN / 'fleet-client-upload.py')
+        marker = self.root / 'hash.pid'
+        instrumented = original.replace('dest.write(b); digest.update(b)',
+            "dest.write(b); Path(%r).write_text(str(os.getpid())); time.sleep(30); digest.update(b)" % str(marker))
+        worker.write_text(instrumented)
+        self.mod.__file__ = str(worker)
+        self.tx.feed(self.drop('hash.txt') + b'discard\r')
+        end = time.monotonic() + 5
+        while not marker.exists() and time.monotonic() < end:
+            self.tx.poll(); time.sleep(.01)
+        self.assertTrue(marker.exists())
+        self.tx.feed(b'\x03'); self.assertEqual(self.settle(), b'')
+        status = subprocess.run(['ps', '-o', 'stat=', '-p', marker.read_text()], capture_output=True).stdout.strip()
+        self.assertTrue(not status or status.startswith(b'Z'))
+        worker.write_text(instrumented.replace('TIMEOUT = 120', 'TIMEOUT = .3'))
+        self.tx.feed(self.drop('timeout.txt') + b'discard\r')
+        self.assertEqual(self.settle(), b'')
+        self.assertTrue(self.notices)
+        worker.write_text(original)
+        self.tx.feed(self.drop('finished.txt') + b'never release\r')
+        # Send the request, but do not consume a completed result before close.
+        while self.tx.request:
+            self.tx.poll(); time.sleep(.01)
+        time.sleep(.3)
+        self.tx.close()
+        self.assertEqual(self.tx.poll(), b'')
+        self.assertFalse(self.tx.buf)
+
+    def test_parent_sigkill_reaps_capture_and_private_directory(self):
+        import json
+        marker = self.root / 'capture.json'
+        clip = self.root / 'capture.py'
+        clip.write_text('import os,time,json,sys,pathlib\npathlib.Path(%r).write_text(json.dumps([os.getpid(),sys.argv[1]]))\ntime.sleep(30)\n' % str(marker))
+        env = dict(os.environ, FLEET_CLIENT_CLIP_CMD='%s %s' % (sys.executable, clip))
+        code = """import importlib.util,json,sys,time
++s=importlib.util.spec_from_file_location('uploads',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
++t=m.Input(lambda:json.loads(sys.argv[2]),lambda _:None);t.feed(b'\\x16')
++while True: t.poll();time.sleep(.01)
++""".replace('\n+', '\n')
+        p = subprocess.Popen([sys.executable, '-c', code, str(BIN / 'fleet-thin-upload.py'), json.dumps(self.req)], env=env)
+        try:
+            end = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < end: time.sleep(.02)
+            self.assertTrue(marker.exists())
+            child, png = json.loads(marker.read_text())
+            p.kill(); p.wait()
+            end = time.monotonic() + 3
+            while Path(png).parent.exists() and time.monotonic() < end: time.sleep(.02)
+            self.assertFalse(Path(png).parent.exists(), 'supervisor left its private directory')
+            status = subprocess.run(['ps', '-o', 'stat=', '-p', str(child)], capture_output=True).stdout.strip()
+            self.assertTrue(not status or status.startswith(b'Z'))
+        finally:
+            if p.poll() is None: p.kill(); p.wait()
+
 
 class Receiver(unittest.TestCase):
     def setUp(self):
@@ -234,6 +299,75 @@ class Receiver(unittest.TestCase):
                 with self.assertRaises(ValueError): self.mod.commit(self.up, h, io.BytesIO(b'partial'))
                 self.assertEqual(Path(first['path']).read_bytes(), data)
                 self.assertFalse(list(Path(root).rglob('*.part')))
+
+
+class LiveTarget(unittest.TestCase):
+    def test_checked_receiver_on_isolated_tmux(self):
+        import hashlib, json, shutil, sqlite3, uuid
+        tmux = shutil.which('tmux')
+        if not tmux: self.skipTest('tmux unavailable')
+        with tempfile.TemporaryDirectory(prefix='upload-target.') as root:
+            root = Path(root); conf = root / 'conf'
+            sess = 'upload-test-' + uuid.uuid4().hex[:12]
+            (conf / 'fleets' / sess).mkdir(parents=True)
+            (conf / 'fleets' / sess / 'conf').write_text('FLEET_REPO=example/test\n')
+            (conf / 'control').mkdir()
+            db = sqlite3.connect(conf / 'control/state.sqlite3')
+            db.execute('CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT)')
+            db.execute('INSERT INTO metadata VALUES (?, ?)', ('machine_id', str(uuid.uuid4())))
+            db.commit(); db.close()
+            env = dict(os.environ, HOME=str(root), FLEET_CONF_DIR=str(conf), TERM='xterm-256color')
+            for k in ('TMUX', 'TMUX_PANE', 'FLEET_SESSION', 'CCQUOTA_FLEET'): env.pop(k, None)
+            def run(args, data=None, check=True):
+                return subprocess.run(args, input=data, env=env, capture_output=True, timeout=8, check=check)
+            def tm(*args): return run([tmux, '-L', sess, *args]).stdout.decode().strip()
+            client = None; master = slave = None
+            try:
+                tm('-f', '/dev/null', 'new-session', '-d', '-s', sess, 'sleep 300')
+                fid = str(uuid.uuid4())
+                tm('set-option', '-w', '-t', sess + ':', '@fleet_id', fid)
+                tm('new-session', '-d', '-t', sess, '-s', sess + '@view-test')
+                fu = run(['bash', '-c', '. "$1/fleet-lib.sh"; fleet_uuid "$2"', '_', str(BIN), sess]).stdout.decode().strip()
+                wid = fu + '/' + fid
+                master, slave = os.openpty()
+                client = subprocess.Popen([tmux, '-L', sess, 'attach-session', '-t', sess + '@view-test'],
+                                          stdin=slave, stdout=slave, stderr=slave, env=env)
+                views = conf / 'remote-views'; views.mkdir()
+                row = views / 'test'
+                row.write_text('%s\t%s\tthin\t0\t%s\tcur=%s\ttoken=secret\tfuid=%s\n' %
+                               (os.ttyname(slave), sess, client.pid, wid, fu))
+                end = time.monotonic() + 3
+                while not tm('list-clients', '-F', '#{client_tty}') and time.monotonic() < end: time.sleep(.02)
+                sock = tm('display-message', '-p', '-t', sess + ':', '#{socket_path}')
+                run(['bash', str(BIN / 'fleet-remote-view.sh'), 'cur', str(views), sock, sess + '@view-test'])
+                cells = dict(x.split('=', 1) for x in row.read_text().split('\t')[5:] if '=' in x)
+                h = dict(view='test', token='secret', cur=['-', '-', wid], generation=cells['upload_gen'].strip())
+                def call(action, h, data=b''):
+                    return run([sys.executable, str(BIN / 'fleet-client-upload.py'), action],
+                               json.dumps(h).encode() + b'\n' + data, check=False)
+                probe = call('target', h)
+                self.assertEqual(probe.returncode, 0, probe.stderr)
+                h['identity'] = json.loads(probe.stdout)
+                data = b'complete uploaded file'
+                h.update(name='file.txt', size=len(data), sha256=hashlib.sha256(data).hexdigest())
+                sent = call('recv-checked', h, data)
+                self.assertEqual(sent.returncode, 0, sent.stderr)
+                path = Path(json.loads(sent.stdout)['path'])
+                self.assertEqual(path.read_bytes(), data)
+                self.assertEqual(call('recv-checked', h, data[:-1]).returncode, 1)
+                self.assertEqual(path.read_bytes(), data)
+                self.assertFalse(list(root.rglob('*.part')))
+                tm('set-option', '-w', '-t', sess + ':', '@cc_launcher_pid', '999')
+                self.assertEqual(call('target', h).returncode, 1, 'replacement accepted')
+                run(['bash', str(BIN / 'fleet-remote-view.sh'), 'cur', str(views), sock, sess + '@view-test'])
+                self.assertEqual(call('target', h).returncode, 1, 'old generation accepted')
+                client.terminate(); client.wait(timeout=3)
+                self.assertEqual(call('target', h).returncode, 1, 'detached view accepted')
+            finally:
+                if client and client.poll() is None: client.terminate(); client.wait(timeout=3)
+                for fd in (master, slave):
+                    if fd is not None: os.close(fd)
+                run([tmux, '-L', sess, 'kill-server'], check=False)
 
 
 if __name__ == "__main__":
