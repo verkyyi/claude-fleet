@@ -1,12 +1,117 @@
 # 组件分类
 
-本表是组件类别的唯一来源（EPIC #4322）。类别为核心、按需、移除或待定；
-默认安装体检（#4327）和程序归属盘点（#4328）在此表继续补齐其它组件。
+本表是组件类别的唯一来源（EPIC #4322），承接组件盘点草稿 §1–§5，按该批
+发起人的最终拍板订正；程序归属盘点（#4328）引用这里的组件名。
+判断依据是 [产品方向](PRODUCT-DIRECTION.md)。核心是必要能力；按需是可选扩展；
+移除是已决定退出的能力或默认行为（理由注明是否已完成）；待定须由发起人决定。
+**类别不代表当前安装状态**：表内注明尚未收尾的默认项，登记不等于授权删除。
+
+本批保留执行会话及其工作树、协作、合并守卫；编排和管家的特殊实现下一批才移除。
+已有用户设置和旧规则块不自动收回。免确认运行本批不改，隔离策略另批决定。
+
+## 会话默认配置与钩子
 
 | 组件 | 类别 | 理由 |
 |---|---|---|
+| Claude 模型与界面默认项（`effortLevel`、`outputStyle`、`theme`、`tui`） | 移除 | #4323 已从新装默认文件移除四项；用户已有值保留，回归审计逐项检测。 |
+| 免确认运行（Claude `bypassPermissions` / `skipDangerousModePermissionPrompt`；Codex `approval_policy` / `sandbox_mode`） | 待定 | 待发起人定：本批明确不改，随托管隔离环境一起决定；守卫只防手滑，不构成安全隔离。 |
+| Codex 思考档位（`model_reasoning_effort`）及其它模型设置 | 待定 | 待发起人定：当前 Codex 仍填入 `high`；本批四键指标仅指 Claude，不能把读数 0 解释成两种模型的全部设置都原生。 |
+| 登录 MCP 默认包（context7 / playwright / github / fetch） | 待定 | 待发起人定：当前两种代理的配置仍默认填入四个服务；本批不改变安装包。 |
+| 会话状态钩子（`set-claude-state.sh`） | 核心 | 执行会话仍属核心；工作、等待、退出状态用于恢复和回收，保留既有钩子。 |
+| 会话恢复与事件记录（`classify-hook.sh`、`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 维持会话身份、连续性和生命周期；本批不拆执行会话的恢复与合并流程。 |
 | 更新说明（`whats_new` / `bin/fleet-whats-new.sh`） | 按需 | 普通会话不再默认附加「改了什么」；工具保留，用户要看时再读。Claude 和 Codex 的默认钩子均不注册，旧表的 `--hook` 暂留为静默兼容入口（#4324）。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 不再默认写入或检查；已有块原样保留，用户可用 `fleet-agent-defaults.py strip` 按需删除。执行会话仍由技能携带规则，守卫照常生效（#3125）。 |
+| 命令误操作守卫（`hooks/bash-guard.py` 的删除、强推、广域信号检查） | 核心 | 防止共享宿主上的误操作；不能替代进程或账号隔离。 |
+| 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 发起人拍板执行会话保持核心：基础检出只读、协作经过桥接、代码写作由 worker 完成的边界保持。 |
+| 文档发布守卫（`hooks/artifact-guard.py`） | 核心 | 轮换账号下 Artifact 的访问归属不可靠，给操作者读的页面通过 doc-preview 送达。 |
+| 会话内 mod（`mod/fleet` 的 usage / where / state） | 核心 | 提供用量、操作者位置及会话状态。 |
+| 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
+| Fleet MCP（status / where / context / open / show） | 核心 | 代理读取状态和向操作者送达内容的统一接口。 |
+| 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 发起人明确保留跨会话协作基础设施；工具权限仍按会话座位控制，不能随编排插件一起删。 |
+| 编排 MCP 挂载组（`conf/mcp-orch.json`） | 按需 | 随编排插件挂载；未来角色模板改造另批实施，底层协作接口保留。 |
+
+## 可选插件
+
+编排、管家在 #3111 后**新装不带**；草稿看到的是盘点登录自行装好的状态，
+不是默认启用状态。`fleet` 核心包和 `mod/fleet` 不属于下表的可选插件计数。
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
+| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 发起人定为下一批改成普通会话模板后移除；当前按需安装，本批不动，跨会话基础设施保留。 |
+| 管家特殊实现（`fleet-steward` 插件、巡查逻辑、决定单） | 移除 | 同上，下一批改成普通会话模板；当前按需安装，本批不删除正在使用的实现。 |
+| EPIC 批次（`fleet-epic`） | 按需 | 用户选择才安装；依赖关系仍由插件管理，不属于默认核心。 |
+| 反馈（`fleet-feedback`） | 按需 | 普通新装不启用；受托管登录按 #3360 既有策略首次默认启用，之后尊重用户关闭/卸载。本批只登记此例外，不改变托管策略。 |
+| 浏览器（`fleet-browser`） | 按需 | 用户选择浏览器能力后安装，不进入普通默认。 |
+| 基础设施运维（`fleet-infra`） | 按需 | 运维人员主动安装；既有代码明确拒绝把它列为托管默认。 |
+
+## 命令与技能
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
+| 执行会话（`fleet-claim` / worker start hook） | 核心 | 发起人拍板 2 覆盖草稿的按需建议；按单开工、正常 PR/合并流程保持，说明书按 #4325 瘦身。 |
+| 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 保留同一任务的上下文与恢复能力。 |
+| 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 支持跨节点连续工作与已关闭会话恢复。 |
+| 首次使用（`fleet-onboard`） | 核心 | 提供首次使用入口。 |
+| 安装同步（`fleet-sync-install`） | 核心 | 操作者维护版本的入口；执行会话不得自行同步在线安装。 |
+| 内容送达与阅读（`fleet-open` / `doc-preview`） | 按需 | 需要打开页面或阅读文档时调用；目前技能仍随核心包配送，类别不表示已拆包。 |
+| 仓库接入与帮助（`fleet-add-repo` / `fleet-help`） | 按需 | 使用对应能力时调用；目前随包配送，后续拆包不在本单范围。 |
+| 命令模板（`commands/_template*.md`） | 待定 | 待发起人定：核实内部脚手架与运行时引用后再决定去留。 |
+
+## 后台进程
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
+| 凭据代理（cred-proxy） | 核心 | 会话访问订阅的统一入口。 |
+| 额度观察（quotawatch） | 核心 | 提供用量及额度可见性。 |
+| 版本维护（install-sync / base-sync） | 核心 | 跟随稳定版本及维护基础检出；版本激活由既有发布流程负责。 |
+| 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 维持共享宿主稳定，回收退出会话资源。 |
+| 休眠（sleep） | 待定 | 待发起人定：核对执行会话休眠与承载模型的关系。 |
+| 收集与账本观察（collect / ledger-watch） | 待定 | 待发起人定：逐项区分计量、恢复必需的数据和可选遥测。 |
+| GitHub 工作流（issue-bridge / pr-refresh / webhook） | 核心 | 执行会话保持核心的拍板覆盖草稿按需建议；本批保留 issue 交接和 PR 合并门。 |
+| 终端状态与节点连接（spinner / peerlink） | 待定 | 待发起人定：草稿建议按需，但现有看台、状态恢复和跨机链路也使用它们，须先核实再拆。 |
+
+## Web、宿主与附加集成
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
+| Hub（`tokenledger`） | 核心 | 接入、计量与任务调度。 |
+| Web 接入（web-chat / web-console） | 核心 | 产品近期的网页使用入口。 |
+| 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；隔离策略不由本表宣称完成。 |
+| 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
+| 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
+| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。 |
+| 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 按操作者设备能力使用。 |
+| 企业微信通知（wecom-webhook-notify.sh） | 按需 | 用户自行选择的通知集成。 |
+
+## 退役项
+
+| 组件 | 类别 | 理由 |
+|---|---|---|
 | 退役自动化标签（`autoland` / `autofill`） | 移除 | 对应自动合并与自动开工机制已退役；默认标签安装不再创建，建单通道拒绝请求这些标签。旧会话的 `autofill` 来源名继续可读（#4326）。 |
+
+## 默认安装审计
+
+运行 `bash bin/fleet-default-audit-selftest.sh`。它在临时 HOME 通过真实安装器安装
+代理配置包，再走普通宿主的安装应用路径（不装守护进程，Claude 插件 CLI 用本地替身）。
+来源为本分支的文件，不读在线登录的设置，不联网安装插件，不触碰在线 tmux。
+stdout 只输出四行 `指标<TAB>整数`；任何非零或安装失败都退出 1。
+stderr 是检查诊断与负向回归结果，不属于指标行。两条安装路径分别读数，
+每项输出两次读数的较大值，宿主重合并不能掩盖客户端默认项。
+
+| 指标 | 计数口径 | 期望 |
+|---|---|---|
+| `model_ui_settings` | 安装后 Claude settings.json 中四键 `effortLevel` / `outputStyle` / `theme` / `tui` 的存在项数；不是 Codex 全部配置的指标 | 0 |
+| `instruction_blocks` | Claude CLAUDE.md 与 Codex AGENTS.md 的 `fleet:agent-defaults` 规则块总段数；一个 begin/end 块只算一段，孤立 end 也不能漏报 | 0 |
+| `conversation_hooks` | Claude 安装钩子及 Codex 实际发出的启动钩子中，未列入审阅过的核心清单的钩子；where、refocus、worker seed 和守卫/生命周期钩子保留 | 0 |
+| `enabled_plugins` | 普通登录安装后启用的可选插件 ID 去重数（插件 CLI 状态及 enabledPlugins 设置）；不含核心包/mod，不代表托管登录的反馈例外 | 0 |
+
+四键各有一腿负向回归：改沙盒中的默认文件，经真实填充程序写入新配置，读数必须变为 1。
+可独立演示 `bash bin/fleet-default-audit-selftest.sh --inject-key effortLevel`，应输出首项 1
+并退出 1。规则块、旧 whats-new、新钩子、prompt 钩子及启用插件也有非零检测。
+新增钩子必须先在本表归类，再更新审计里的核心允许清单；不能自动从钩子表生成允许清单。
+
+自测由 `run-selftests.sh` 自动发现；脚本列出安装器、默认文件、合并程序、钩子表、
+Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自测选择。
+四项 0 只证明上表口径，不声称所有待定项已收尾，也不证明在线版本已同步。
