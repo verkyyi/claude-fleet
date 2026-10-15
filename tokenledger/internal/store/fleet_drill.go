@@ -211,6 +211,14 @@ func (s *Store) ExpiredDrills(now time.Time) ([]DrillPerson, error) {
 // their detail, and with them the person row they reference — the drill row,
 // its devices and nodes go all the same, so it can no longer sign in.
 func (s *Store) DeleteDrill(pid, actor string, now time.Time, keepHosts ...string) (*DrillDeleted, error) {
+	return s.DeleteDrillKeeping(pid, actor, now, keepHosts, nil)
+}
+
+// DeleteDrillKeeping is DeleteDrill, except that an endpoint on a host
+// keepNodes says yes to stays enrolled (claude-fleet#4297): a person's pod
+// whose one login is the drill's runs its machine link as that login, and
+// retiring it cut the pod off the hub. nil keeps none — DeleteDrill.
+func (s *Store) DeleteDrillKeeping(pid, actor string, now time.Time, keepHosts []string, keepNodes func(host string) bool) (*DrillDeleted, error) {
 	d, err := s.Drill(pid)
 	if err != nil {
 		return nil, err
@@ -225,7 +233,11 @@ func (s *Store) DeleteDrill(pid, actor string, now time.Time, keepHosts ...strin
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range eps {
+	for _, ep := range eps {
+		id := ep.id
+		if ep.kept(keepNodes) {
+			continue
+		}
 		if err := s.DeleteEndpoint(id); err != nil {
 			// It has history (or only a roster row is left): retire it.
 			if _, err := s.RetireEndpoint(id); err != nil {
@@ -303,20 +315,49 @@ func (s *Store) DeleteDrill(pid, actor string, now time.Time, keepHosts ...strin
 
 // endpointsOfLogin is every live endpoint whose agent runs as login — on the
 // enrollment row or on the roster.
-func (s *Store) endpointsOfLogin(login string) ([]string, error) {
-	rows, err := s.read.Query(`SELECT endpoint_id FROM endpoints WHERE os_user = ? AND retired_at IS NULL
-		UNION SELECT endpoint_id FROM nodes WHERE os_user = ?`, login, login)
+func (s *Store) endpointsOfLogin(login string) ([]drillEndpoint, error) {
+	rows, err := s.read.Query(`SELECT endpoint_id, COALESCE(hostname, '') FROM endpoints WHERE os_user = ? AND retired_at IS NULL
+		UNION SELECT endpoint_id, COALESCE(hostname, '') FROM nodes WHERE os_user = ?`, login, login)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []drillEndpoint
+	at := map[string]int{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var id, host string
+		if err := rows.Scan(&id, &host); err != nil {
 			return nil, err
 		}
-		out = append(out, id)
+		i, ok := at[id]
+		if !ok {
+			i = len(out)
+			at[id] = i
+			out = append(out, drillEndpoint{id: id})
+		}
+		if host != "" {
+			out[i].hosts = append(out[i].hosts, host)
+		}
 	}
 	return out, rows.Err()
+}
+
+// drillEndpoint is one endpoint of a drill's login and the hostnames the
+// endpoint and roster rows give it.
+type drillEndpoint struct {
+	id    string
+	hosts []string
+}
+
+// kept says keepNodes keeps ep: any of its hostnames.
+func (ep drillEndpoint) kept(keepNodes func(host string) bool) bool {
+	if keepNodes == nil {
+		return false
+	}
+	for _, h := range ep.hosts {
+		if keepNodes(h) {
+			return true
+		}
+	}
+	return false
 }

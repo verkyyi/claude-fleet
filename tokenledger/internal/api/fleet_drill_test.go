@@ -654,3 +654,92 @@ func TestDrillInviteMessageHome(t *testing.T) {
 		t.Fatalf("home: %q", got)
 	}
 }
+
+// A person's pod keeps its one login until the pod itself goes: the node's
+// rc 2 「pod keeps its one login」 is final, so it settles the login — the drill
+// is not held for an hour re-sending the remove every minute, the person goes
+// with every row, and the same login can be invited again at once
+// (claude-fleet#4297, drillcn on u-drillcn4150). A login on a pod the hub did
+// not make is settled before any remove is sent at all.
+func TestDrillLoginOnUserPodIsSettledNotRetried(t *testing.T) {
+	old := drillRemoveRetry
+	drillRemoveRetry = 0
+	t.Cleanup(func() { drillRemoveRetry = old })
+	h, nodes, inv := drillOnFleet(t)
+	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
+	drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	m, op = expectAccountOp(t, nodes["mac-c"].tnode)
+	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountRemove, Login: op.Login, Exit: 2,
+		Detail: "fleet-node-linux: a person's pod keeps its one login until the pod itself is destroyed"})
+	waitState(t, h, inv.PersonID, "mac-c", store.AccountFailed)
+	code, body := drillReq(t, h, http.MethodDelete, DrillSelfPath, "", selfDeleteRequest{ApproveCode: inv.ApproveCode})
+	var out store.DrillDeleted
+	if code != 200 || json.Unmarshal(body, &out) != nil || len(out.LeftForOperator) != 0 {
+		t.Fatalf("self-delete after the pod refused: %d %s; want 200, nothing left for the operator", code, body)
+	}
+	if got, ok := readMsg(nodes["mac-c"].tnode, 300*time.Millisecond); ok && got.Type == control.TypeAccountOp {
+		t.Fatalf("the refused remove was sent again: %+v", got)
+	}
+	if _, err := h.srv.Store.Principal(inv.PersonID); err == nil {
+		t.Fatal("the person is still there")
+	}
+	// the same login is invited again at once (the probe's next identity)
+	if code, body := drillReq(t, h, http.MethodPost, DrillPath, "viewer-secret", map[string]any{"host": "mac-d", "login": inv.Login}); code != 200 {
+		t.Fatalf("invite %s again: %d %s; want 200", inv.Login, code, body)
+	}
+
+	// An active login on a person's pod (u-<nonce>) the hub did not make: no
+	// remove, settled at once.
+	h2, nodes2, inv2 := drillOnFleet(t)
+	m, op = expectAccountOp(t, nodes2["mac-c"].tnode)
+	sendResult(t, nodes2["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
+	waitState(t, h2, inv2.PersonID, "mac-c", store.AccountActive)
+	if _, err := h2.srv.Store.DB().Exec(`UPDATE fleet_accounts SET hostname = 'u-drillpod42' WHERE principal_id = ? AND hostname = 'mac-c'`, inv2.PersonID); err != nil {
+		t.Fatal(err)
+	}
+	d, err := h2.srv.Store.Drill(inv2.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left, handed := h2.srv.closeDrillLogins(d, time.Now()); len(left) != 0 || len(handed) != 0 {
+		t.Fatalf("close on a pod: left %v handed %+v; want it settled", left, handed)
+	}
+	as, _ := h2.srv.Store.FleetAccounts(inv2.PersonID)
+	for _, a := range as {
+		if a.Hostname == "u-drillpod42" && a.State != store.AccountActive {
+			t.Fatalf("pod row = %+v; want no remove queued", a)
+		}
+	}
+
+	// The pod's machine link runs as its one login — the drill's: deleting the
+	// person keeps it enrolled (before, it was retired and the pod fell off the
+	// hub, 「unrecognised enrollment token」); the login's endpoint on any other
+	// machine goes as before.
+	db := h2.srv.Store.DB()
+	for _, ep := range [][2]string{{"ep_pod42", "u-drillpod42"}, {"ep_other42", "mac-c"}} {
+		if _, err := db.Exec(`INSERT INTO endpoints (endpoint_id, token_hash, label, enrolled_at, hostname, os_user)
+			VALUES (?, ?, ?, ?, ?, ?)`, ep[0], "h-"+ep[0], ep[0], time.Now().UTC().Format(time.RFC3339), ep[1], inv2.Login); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO nodes (endpoint_id, hostname, os_user) VALUES (?, ?, ?)`, ep[0], ep[1], inv2.Login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h2.srv.SweepDrills(d.ExpiresAt.Add(time.Minute))
+	if _, err := h2.srv.Store.Principal(inv2.PersonID); err == nil {
+		t.Fatal("the expired drill person on a pod is still there")
+	}
+	var live int
+	db.QueryRow(`SELECT COUNT(*) FROM endpoints WHERE endpoint_id = 'ep_pod42' AND retired_at IS NULL`).Scan(&live)
+	var roster int
+	db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE endpoint_id = 'ep_pod42'`).Scan(&roster)
+	if live != 1 || roster != 1 {
+		t.Fatalf("pod endpoint live=%d roster=%d; want the pod still enrolled and on the roster", live, roster)
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE endpoint_id = 'ep_other42'`).Scan(&roster)
+	if roster != 0 {
+		t.Fatal("the drill login's endpoint on another machine was kept")
+	}
+}

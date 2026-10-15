@@ -14,8 +14,10 @@
 #             the login — else the drill person is made again: `fleet drill invite
 #             --login <login> --home <machine> --ttl 24h` (this computer's admin
 #             certificate signs it — the hub's cap on a drill person is 24 h, so it
-#             IS re-made about once a day: the expiry deletes the person and the
-#             login the hub opened on the pod, the invite opens it again), then
+#             IS re-made about once a day: the expiry deletes the person — the
+#             pod keeps its one login, settled with no remove (issue #4297) — and
+#             the invite, which sweeps expired drill people first, opens it again
+#             under the same name at once; no early renewal needed), then
 #             `fleet login` on the client, confirmed by the invite's one-time
 #             approve code (`fleet drill approve`, the code in the environment, never
 #             printed), then waits ≤ FLEET_CN_PROBE_ENSURE_WAIT s (300) for the hub to

@@ -102,6 +102,7 @@
 2.4 done-no-pr-stranded
 0.2 drill-confirms-as-operator
 0.1 drill-login-handed-silently
+0.1 drill-expiry-user-pod
 0.1 drill-login-orphaned
 0.1 drill-person-no-machine
 0.1 email-link-replay

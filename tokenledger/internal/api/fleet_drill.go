@@ -446,6 +446,23 @@ var drillCloseGiveUp = time.Hour
 // seconds, a failing script must not run back to back.
 var drillRemoveRetry = time.Minute
 
+// podKeepsLogin is fleet-node-linux's refusal to remove the login of one
+// person's pod (login_remove, rc 2): final, never a reason to retry.
+const podKeepsLogin = "pod keeps its one login"
+
+// podKept says a's last op was a remove the node refused for good because
+// the machine is a person's pod.
+func podKept(a store.FleetAccount) bool {
+	return a.State == store.AccountFailed && a.Op == control.AccountRemove && strings.Contains(a.Detail, podKeepsLogin)
+}
+
+// handMadePod says host is one person's pod the hub did not make (none of
+// its cluster pod rows): a remove of its login is refused for good there, and
+// it is never the hub's to take down.
+func (s *Server) handMadePod(host string) bool {
+	return isUserPodName(host) && s.clusterPodOf(host) == nil
+}
+
 // closeDrillLogins removes every login the hub opened for drill person d
 // (claude-fleet#2549: its first session's machine) — a real OS login on a
 // machine, which deleting the person's rows would leave behind with nobody
@@ -475,6 +492,18 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) (left []s
 			continue // not one the hub opened: its own computer, a computer it signed in on (#2212)
 		}
 		where := a.Login + "@" + a.Hostname
+		// One person's pod the hub did not make keeps its one login until the
+		// pod itself goes (fleet-node-linux refuses the remove for good, rc 2):
+		// nothing to remove, so it is settled — no remove sent, the row goes
+		// with the person and the next invite opens the same login there again
+		// (claude-fleet#4297: before, the remove was re-sent every minute for an
+		// hour, the row read failed, the pod fell off the person's list and a new
+		// invite of the login was refused). A pod the hub made is destroyed by
+		// the remove, as before.
+		if podKept(a) || ((a.State == store.AccountActive || a.State == store.AccountFailed) && s.handMadePod(a.Hostname)) {
+			log.Printf("fleet: drill %s: %s is a person's pod's own login (kept until the pod itself goes) — settled, not removed", d.PrincipalID, where)
+			continue
+		}
 		switch a.State {
 		case store.AccountRemoved:
 			continue // gone from the machine: dropped with the person
@@ -549,7 +578,11 @@ func (s *Server) deleteDrill(d *store.DrillPerson, actor string, now time.Time, 
 	for _, a := range handed {
 		hosts = append(hosts, a.Hostname)
 	}
-	out, err := s.Store.DeleteDrill(d.PrincipalID, actor, now, hosts...)
+	// A person's pod the hub did not make stays enrolled: its machine link
+	// runs as the pod's one login — the drill's — and retiring it cut the pod
+	// off the hub, gone from the roster until it was joined again by hand
+	// (claude-fleet#4297, u-drillcn4150).
+	out, err := s.Store.DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)
 	if err != nil {
 		return nil, err
 	}
