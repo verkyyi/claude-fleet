@@ -533,14 +533,14 @@ out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1)
 is "K: a second migrate changes nothing" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf")" "$snap"
 hasnt "K: …and says nothing about it" "$out" "retired keys"
 # the old client's settings (issue #3008): its [client] lines, each kept as a
-# comment; a key that only starts the same (FLEET_CLIENT_LAYOUT) is not one of them
+# comment; a key that only starts the same (FLEET_KEY_PANEL) remains usable
 mkbox k2
 printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=0\n# ---- [client] ----\nif [ "${FLEET_SHELL:-0}" = 1 ]; then\nexport FLEET_CLIENT=shell\nFLEET_COMPOSE=1\nFLEET_SIDEBAR_FOLD=off\nexport FLEET_CLIENT_LAYOUT=solo\nFLEET_KEY_PANEL=cmd+p\nfi  # ---- [client] end ----\n' > "$CD/fleet.conf"
 out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
 is "K: (#3008) migrate exits 0" "$rc" 0
-is "K: (#3008) the old client's three lines are comments" "$(grep -c '^# retired #3008: ' "$CD/fleet.conf")" 3
+is "K: (#3008) the old client's four lines are comments" "$(grep -c '^# retired #3008: ' "$CD/fleet.conf")" 4
 is "K: (#3008) …and none is active" "$(grep -cE '^[[:space:]]*(export[[:space:]]+)?(FLEET_CLIENT|FLEET_COMPOSE|FLEET_SIDEBAR_FOLD)=' "$CD/fleet.conf")" 0
-has "K: (#3008) FLEET_CLIENT_LAYOUT stays" "$(cat "$CD/fleet.conf")" "export FLEET_CLIENT_LAYOUT=solo"
+has "K: (#3008) layout is retired" "$(cat "$CD/fleet.conf")" "# retired #3008: export FLEET_CLIENT_LAYOUT=solo"
 has "K: (#3008) …and the panel key" "$(cat "$CD/fleet.conf")" "FLEET_KEY_PANEL=cmd+p"
 
 printf 'fleet-conf-selftest: %d checks, %d failed\n' "$CHECKS" "$FAILS"

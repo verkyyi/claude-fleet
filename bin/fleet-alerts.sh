@@ -63,7 +63,7 @@
 #                                    a FLEET_ALERT_FLASH_KINDS kind also flashes
 #                                    on <sock> (or the current server)
 #
-# Sourced (tmux-status.sh does, every 5s per client) it only defines functions;
+# Sourced (fleet-topbar.py does, every 5s per client) it only defines functions;
 # the caller must already have usage-lib.sh + fleet-daemon-lib.sh loaded.
 
 case "${BASH_SOURCE[0]}" in */*) _FA_BIN="${BASH_SOURCE[0]%/*}" ;; *) _FA_BIN=. ;; esac

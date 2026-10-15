@@ -7,10 +7,10 @@
 #   tmux     run-shell "sh …/fleet-ui-lang.sh toast '#{client_name}' KEY"
 #   python   fleet-ui-lang.sh dump PREFIX… — every KEY starting with a PREFIX as
 #            KEY NUL TEXT NUL, each printf argument left as a \001 slot
-#            (fleet-sidebar.py reads its strings this way, once, at start)
+#            (fleet_view.py reads its strings this way, once, at start)
 #
-# Today there were four tables (this one, fleet-sidebar.py's TEXT,
-# fleet-sidebar-menu.sh's MENU_KEYS, fleet-keys.sh's whole zh sheet); a string
+# Today there were four tables (this one, fleet_view.py's TEXT,
+# fleet_view.py ACTIONS's MENU_KEYS, fleet-keys.sh's whole zh sheet); a string
 # added anywhere else is a second source again — fleet-ui-lang-selftest.sh greps
 # for one. A key with no entry prints itself, so a typo is visible, never blank.
 #
@@ -929,7 +929,7 @@ fleet_ui_t() {
     en:toast_sidebar_focus)     printf 'Tasks: type a name ↵ = new session · . = row menu · ↑↓ switch · empty line ←→ fold · with text ←→ move · ↵/Esc worker' ;;
     zh:toast_shell_sidebar)     printf '任务：↑↓ 切换 · ↵ 进入 · . 行菜单 · ? 快捷键 · Esc 返回' ;;
     en:toast_shell_sidebar)     printf 'Tasks: ↑↓ switch · ↵ enter · . row menu · ? keys · Esc back' ;;
-    # the row menu's confirmed reap (fleet-sidebar-reap.sh), off dash-reap's token
+    # the row menu's confirmed reap (fleet_view.py reap action), off dash-reap's token
     zh:reap_done)               printf 'fleet: 已回收' ;;
     en:reap_done)               printf 'fleet: reaped' ;;
     zh:reap_kept)               printf 'fleet: 已回收 — 脏 worktree 已保留在磁盘' ;;
@@ -969,7 +969,7 @@ fleet_ui_t() {
     en:remote_label_message_fmt) printf 'message %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_answer_fmt)  printf '答 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_answer_fmt)  printf 'answer %s (on %s)' "${1:-}" "${2:-}" ;;
-    # --- the task sidebar's own strings (fleet-sidebar.py reads `dump sidebar_`)
+    # --- the task sidebar's own strings (fleet_view.py reads `dump sidebar_`)
     zh:sidebar_new_to_fmt)      printf '新会话 → %s…' "${1:-}" ;;
     en:sidebar_new_to_fmt)      printf 'New session → %s…' "${1:-}" ;;
     zh:sidebar_rename)          printf '改名› ' ;;
@@ -1554,7 +1554,7 @@ fleet_ui_t() {
     en:sidebar_ask_restore)     printf 'y reopen first · r restore› ' ;;
     zh:sidebar_ask_keys)        printf '↵ 确定 · esc 取消' ;;
     en:sidebar_ask_keys)        printf '↵ ok · esc cancel' ;;
-    # --- the row menu (fleet-sidebar-menu.sh). menu_keys is THE letter table:
+    # --- the row menu (fleet_view.py ACTIONS). menu_keys is THE letter table:
     # `action<TAB>letter<TAB>what`, read by the menu (mk) and the ? sheet (--keys).
     zh:menu_keys)               printf '%s' 'rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称取消）
 pin	t	置顶 / 取消置顶

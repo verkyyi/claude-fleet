@@ -98,7 +98,7 @@ def step(h, live, delta):
 
 
 def rows_text(rows):
-    """The list's rows (fleet-sidebar.py's 15-field rows) as switch-rows.tsv:
+    """The list's rows (the producer’s session rows) as switch-rows.tsv:
     every session row, with the repo heading it sits under — key · state ·
     glyph · name · machine · group · badge, then (issue #2365, appended so a
     reader of the seven is unchanged) issue · PR · reap policy · title · repo,
@@ -229,7 +229,7 @@ class Heal:
     popup closed. So, a moment after a resize and then every HEAL seconds, the
     popup asks tmux for that whole redraw — a line feed on its last row: a popup
     narrower than the terminal cannot be scrolled in place (the client keeps the
-    terminal's left/right margins off, conf/tmux-shell.conf), so tmux draws the
+    terminal's left/right margins off, conf/tmux-view.conf), so tmux draws the
     popup again, frame and all — and curses repaints from a cleared screen."""
     # The thin view freezes the pane behind its popup (#3058), so it needs only
     # the resize repair. Repeating the scroll/clear there flashes the frame even

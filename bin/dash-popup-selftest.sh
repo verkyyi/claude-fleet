@@ -287,7 +287,7 @@ echo "ok: one door — every popup in bin/ and conf/ goes through dash-popup.sh,
 # FLEET_DASH_WINDOW=1 only) aside. Since the old client went (issue #3008, with
 # its quick open, dispatch, rescan, route and repo_add popups — the 看台 draws its
 # own, fleet_view.py), one is left: the backlog's keys sheet. The history: what fit one line asked on the sidebar's input
-# line (fleet-sidebar.py `Ask`); what duplicated the sidebar is gone. Two stay
+# line (fleet_view.py `Ask`); what duplicated the sidebar is gone. Two stay
 # since issue #1714 took the node's keys (prefix b / u / c / ! and the alert-count
 # taps were the only doors of backlog / usage / config / alerts): keys — the
 # client's prefix ? — and the task picker, until its chain was deleted (#3732). The

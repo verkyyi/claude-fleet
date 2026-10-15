@@ -7,8 +7,7 @@
 #   fleet-client-retire.sh stop [--quiet] [--if-unattached]
 #
 # A computer that ran the old client before this version keeps its processes
-# until they are stopped: its tmux servers (`-L fleet-shell` and `-L
-# fleet-shell-stage`, or `fleet-node-client[-stage]` on a managed machine, plus a
+# until they are stopped: its tmux servers (`-L fleet-shell` and the companion stage server, or `fleet-node-client[-stage]` on a managed machine, plus a
 # one-session view's `<label>-solo-<pid>`), its keeper, hub loop, action loop and
 # warm lines — every one running from the old client's mirror, the cache's bin/
 # (~/.cache/claude-fleet/shell/bin, FLEET_SHELL_CACHE). `stop` first runs that

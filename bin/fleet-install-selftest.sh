@@ -514,8 +514,7 @@ HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 echo "$out" | grep -q -e '这台电脑要做什么' -e '接入口吗' && bad "H1 a question was printed: $out" || ok "H1 neither old question is printed"
 [ -f "$H1/.claude/fleet/bin/fleet" ] && [ ! -e "$H1/.claude/fleet/.git" ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] && [ "$(hval "$H1" FLEET_HOST)" = 0 ] \
   && ok "H1 the base in ~/.claude/fleet, the address written, FLEET_HOST=0" || bad "H1 state: host=$(hval "$H1" FLEET_HOST) hub=$(hval "$H1" FLEET_HUB_URL) $(ls -a "$H1/.claude/fleet" | head -3)"
-[ "$(hval "$H1" FLEET_CLIENT_LAYOUT)" = solo ] && (export FLEET_SHELL=1; . "$H1/.config/claude-fleet/fleet.conf"; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]) \
-  && ok "H1 a computer the fleet was never on: FLEET_CLIENT_LAYOUT=solo, read by the shell ([client])" || bad "H1 layout: $(grep -n LAYOUT "$H1/.config/claude-fleet/fleet.conf" 2>&1)"
+[ -z "$(hval "$H1" FLEET_CLIENT_LAYOUT)" ] && ok "H1 no retired layout written" || bad "H1 retired layout written"
 before=$(hsnap "$H1"); HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again → not one file changes" \
   || bad "H1 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
@@ -804,7 +803,7 @@ KV="$KH/.local/share/claude-fleet-vendor/bin/tmux"
   && ok "K the bundle's static tmux is in ~/.local/share/claude-fleet-vendor/bin — no Homebrew" || bad "K vendor tmux: $(ls -la "$(dirname "$KV")" 2>&1) $out"
 ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
 [ "$ft" = "$KV" ] && ok "K fleet_find_tool tmux → the static one" || bad "K fleet_find_tool tmux: $ft"
-[ "$(hval "$KH" FLEET_CLIENT_LAYOUT)" = solo ] && ok "K a computer the fleet was never on → FLEET_CLIENT_LAYOUT=solo" || bad "K layout: $(cat "$KH/.config/claude-fleet/fleet.conf" 2>&1)"
+[ -z "$(hval "$KH" FLEET_CLIENT_LAYOUT)" ] && ok "K no retired layout written" || bad "K retired layout written"
 # the newcomer's screen before `fleet` (issue #2347, EPIC #2259): what to type, no fleet word
 kw=$(echo "$out" | grep -E '入口|承载|只协调|扫码' || true)
 [ -z "$kw" ] && echo "$out" | grep -q '^  之后每次只敲：fleet$' && echo "$out" | grep -q '^邀请: 已收下，登录时一起带上$' \

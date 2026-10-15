@@ -66,7 +66,7 @@
 #
 # OFF unless the hub is configured: with no URL this is a one-line refusal, and
 # nothing in a one-machine fleet ever calls it (the menu offers these actions on
-# remote rows only — bin/fleet-sidebar-menu.sh).
+# remote rows only — bin/fleet_view.py ACTIONS).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null

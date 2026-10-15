@@ -2160,7 +2160,7 @@ def view_keys(me, if_stale=False):
 # --- a row's actions: Tab (issue #3181, EPIC #3178 C3) ----------------------------------
 #
 # THE table (共同约定 2): every thing the old sidebar's row menu did to a session
-# (fleet-sidebar-menu.sh) is one ACTIONS entry — `id` · `label(row)` · `when(row)`
+# (fleet_view.py ACTIONS) is one ACTIONS entry — `id` · `label(row)` · `when(row)`
 # · `local(row, answer)` · `far(row, answer)` (C4 fills it; None = not on another
 # machine's row yet) · `ask` (None | "text" | "key" | "choice": the question the
 # panel's bottom line asks first). `local` / `far` return the argv of the SAME

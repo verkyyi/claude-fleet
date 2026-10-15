@@ -62,7 +62,7 @@ they repaint instantly:
 - **Dash / dashboard** — `bin/tmux-dashboard.sh` + `bin/tmux-dashboard-rows.sh`,
   focused with `prefix+g` (an embedded pane in the `plan` hub). A grid, one row per Claude session/window:
   branch, dirty flag, context %, PR number + CI symbol. Mission control.
-- **Status bar** (a.k.a. status line) — `bin/tmux-status.sh` plus the
+- **Status bar** (a.k.a. status line) — `bin/fleet-topbar.py --node` plus the
   window-name format. The thin strip tmux always shows; renders a per-window
   attention marker (`✓` / `✗` / `!`) and a right-side summary.
 - **Backlog panel** — `bin/tmux-issues.sh`, opened with `prefix+b`. An fzf popup

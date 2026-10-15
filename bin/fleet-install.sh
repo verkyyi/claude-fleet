@@ -675,11 +675,6 @@ if [ "$HUB_ANS" = 1 ] && [ "$DEBUG_TICKETS" = 1 ] && _fp=$(debug_fp) && [ -n "$_
     fi
   fi
 fi
-# a computer the fleet was never on: the newcomer's one-session view (共同约定 1)
-if [ "$FRESH" = 1 ]; then
-  fconf set-client FLEET_CLIENT_LAYOUT 'export FLEET_CLIENT_LAYOUT=solo' >/dev/null 2>&1 || :
-fi
-
 # ── 3 — PATH, once ─────────────────────────────────────────────────────────
 MARK="# fleet (claude-fleet#1470)"
 rc_file() {

@@ -702,7 +702,7 @@ fi
 # machine's come from its node, off the hub cache's epicstale_<sess>
 # (fleet-hub-sessions.sh). Each becomes ONE grey row at the top of its repo's
 # group, `#<N> <title>` badged 没人在跑, keyed `epicstale:<ref>[@<machine>]` — a tap
-# asks to reopen its driver (fleet-sidebar.py). No stale mark ⇒ not one line more.
+# asks to reopen its driver (fleet_view.py). No stale mark ⇒ not one line more.
 ESTALE=''                       # ref US machine US age US slug US N, one a line
 if [ "$SIDEBAR" = 1 ] && [ -d "$FLEET_CONF_DIR/global/epic-running.d" ]; then
   for _ef in "$FLEET_CONF_DIR/global/epic-running.d/"*; do
@@ -1742,7 +1742,7 @@ fi
 # already read (orphanrep_read, `<machine>/<id>` a line — the sidebar writes it).
 # Each becomes ONE row under its repo's heading, `<child> <STATE> PR #n` badged
 # 结果给你, keyed `orphanrep:<id>[@<machine>]`; a second tap shows the result and
-# asks to mark it read (fleet-sidebar.py). None ⇒ not one line more.
+# asks to mark it read (fleet_view.py). None ⇒ not one line more.
 if [ "$SIDEBAR" = 1 ]; then
   _orows=''
   if [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then

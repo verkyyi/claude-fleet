@@ -239,79 +239,18 @@ why?"* (see [`bin/fleet-install-follow.sh`](bin/fleet-install-follow.sh)).
 built in; `jq` is a soft dep only for the optional `conf/statusline.sh` status
 line, which exits silently without it.)
 
-## Keybindings (prefix defaults to your tmux prefix)
+## Keybindings
 
-Every key below is the **client's** — `fleet` on your own computer
-(`conf/tmux-shell.conf`, its own tmux server `-L fleet-shell`). A node's fleet
-session binds none of them (issue #1714, EPIC #1710): it carries the execution
-sessions only, and the client looks at it through a view session with its prefix
-and status line off. Attaching to a node session directly still works — tmux's
-stock keys and one line at the top saying to use `fleet`.
+`fleet` opens the thin client. **⌘P** in iTerm2, **⌃空格**, **F12** or **⌃] p**
+opens the panel: choose a session, start a task, open its shell, or quit fleet.
+Tab on a row shows its actions. The panel and top bar run on the home machine
+(`fleet_view.py`, `fleet-topbar.py --node`, `conf/tmux-view.conf`).
+Your computer runs one foreground Python loop and one connection; closing it
+leaves the sessions running. See [the client guide](docs/dev/CLIENT.md) for key
+customization, phone controls and the completed sidebar migration checklist.
 
-| Key | Action |
-|---|---|
-| tap / right-click | the task list takes no keys (issue #1950): a tap on a row switches to it, a second tap or a right-click opens its menu, a tap on ▸ / ▾ — or anywhere left of the row's name — folds (issue #2167), and `⌘.` / `prefix .` folds the session in view from wherever the keyboard is; a rename, an answer or a message is asked on one line under the session (↵ ok · esc cancel) |
-| `prefix q` / `prefix h` | back to the machine you were on (the previous window) |
-| `prefix z` | zoom the session pane — from the task list too: it zooms the session and hands the keyboard back, never the list |
-| `prefix [` | scroll back the session (tmux copy-mode) — from the task list too |
-| `prefix ?` | keymap cheatsheet — a popup listing **every** fleet shortcut, each with a one-line description; `q`/`esc` closes it |
-| `F9` | (no prefix) zoom the session pane on the right — this computer's pane; the key never reaches the far end |
-
-What the node used to bind and where it went (#1714): `prefix a` (next needs
-window) and the `● N` badge — the task list orders by who waits on you;
-`prefix e` — the client's list is always on; `prefix b` / `c` / `u` / `!` (backlog,
-config, usage, alerts popups) and the bar's `☰` / `✖ ▲` taps — retired with the
-node's bar (#1739 decides what the client gets); `prefix g` / `Space` / `E` / `z` /
-`[` / `?` / `F9` — the client's, above.
-
-Worker and scratch windows show a **30-column task list on the left** on wide
-screens. It shares the hub's live statuses, pins and parent/child grouping,
-highlights the current worker, and keeps that worker visible even in a folded
-group. Rows use your task descriptions, without internal worker IDs or a second
-title row inside the sidebar. The current task has a `▶` marker. Click the
-sidebar (or press `prefix E`) to give it the arrow keys: the selection shows
-keyboard focus (the list's border carries no label — issue #2167). ↑↓ (and
-Home/End) switch to the highlighted task without Enter, once the highlight has
-rested for about a quarter second: a held key is one switch, not one per row,
-and a row you only passed over is never selected — nor woken, since a sleeping
-worker resumes only after the view has stayed on it for two seconds. The
-sidebar keeps the arrow keys after each switch, and a click switches the same
-way. Click the worker, or press Enter/Esc, to return keyboard input to the worker;
-its top border's **WORKER** label then turns blue. The words on a pane's top
-line never change with focus — only the colour moves.
-Clicking the top border itself requires tmux 3.7 or newer; on older versions,
-click inside the sidebar or use `prefix E` to focus it.
-`FLEET_SIDEBAR_WIDTH` sets the width (24–60) — the floor: the list widens to
-its longest row up to `FLEET_SIDEBAR_WIDTH_MAX` (44; set it to the width to pin
-the list), and a drag of the divider sets the width from then on (the session's
-`@sidebar_width_manual`; `tmux set -u -t <session>: @sidebar_width_manual` goes
-back to auto). Whichever applies is held: when a window takes a narrower
-client's size tmux scales every pane, and the list snaps back on the spot
-rather than sitting where the scale left it.
-Below sidebar width + 81 columns (111 by default), the list hides automatically
-to leave 80 columns for the worker, then returns when space permits. `prefix z`
-still zooms the worker for focused work. Only the visible worker owns a sidebar;
-background windows and detached fleets do not run sidebar refresh loops.
-The full hub list also hides worker IDs and gives that space to task descriptions.
-
-The status bar is the client's too (`conf/tmux-shell.conf` → `bin/tmux-status.sh`):
-`fleet` on the left; the right side draws **only what wants your hand**, and is
-empty while all is well — the machine of a session on another machine, the
-current account once 5h or week reaches `FLEET_STATUS_QUOTA_PCT` (80 %),
-`⚠ GitHub 受限`, the **alert counts** (`✖ N` alarms, `▲ N` warnings, from
-`bin/fleet-alerts.sh`) and `○ 入口 Nm` when the hub has gone silent. On a
-54-column iPad / iPhone in portrait the whole bar stays within 30 columns in
-every state. A node's own status line is one static hint at the top
-(`conf/tmux-bar.conf`), which only a direct attach ever sees.
-
-To zoom a pane fullscreen, double-click it (or its border), `prefix z`, or `F9` —
-except the session with the task list on screen, where a double-click selects a
-word as in stock tmux (zoom it with `prefix z`, `F9` or the divider).
-
-There is no other-fleet cue and no fleet switching: **one fleet per login** holds
-every repo you work on (EPIC #977), so the red `●` is the one needs signal and the
-dash lists every repo at once, grouped under a heading per repo. Several fleets on one
-machine means several logins, each with its own.
+A direct node attach keeps tmux's stock keys. One fleet per login holds every
+repo you work on; the panel includes your sessions on other machines too.
 
 ### tmux baseline
 
@@ -661,9 +600,8 @@ SSH. Everything here routes URLs through `bin/open-url.sh` instead:
 
 In the `fleet` client, text you select in the right pane — another machine's
 session — lands in your own clipboard (#1766). The machine's tmux copies it and
-sends it outward as OSC 52; the stage and the shell (`conf/tmux-shell-stage.conf`,
-`conf/tmux-shell.conf`) pass it on with `set-clipboard on` (tmux's default,
-`external`, drops it), and the terminal must accept it:
+sends it outward as OSC 52; the home view and thin loop pass it to your
+terminal. The node enables `set-clipboard on`, and the terminal must accept it:
 
 - **iTerm2** — Settings → General → Selection → 「Applications in terminal may
   access clipboard」 (`AllowClipboardAccess`). `fleet doctor` on the client
@@ -792,7 +730,7 @@ degrading to a pane-content heuristic.
 | warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path. |
 | PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ✅ | ✅ | tmux draws it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which `bin/tmux-pr-refresh.sh` stamps on every window from the PR map (issue #1954). The mod's progress band above Claude Code's input stays as a mirror. |
 | knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool. |
-| the task list only shows and taps · its short questions (rename · answer · message) on one line under the session | ✅ | ✅ | Not agent code: the client's list (`bin/fleet-sidebar.py`) takes no keys, and a question opens as a one-line pane of the client's own tmux under the session pane (`bin/fleet-ask.py`, issue #1950) — whichever agent runs in that session, it is resized by one line and keeps its own screen. |
+| The panel asks rename, answer and message prompts in place | ✅ | ✅ | `fleet_view.py` handles them without changing the agent pane. |
 | who waits on you, and what they ask, without the list (the bar's `! n 等你` · a notification with the question's own words · its click jumps there) | ✅ | ✅ | One field, the needs alert's `detail` (issue #1951): Claude's from the AskUserQuestion / permission payload or transcript (`bin/set-claude-state.sh`, the mod's `ask`), Codex's from the app-server's request_user_input / approval request (`bin/fleet-codex-attention.py`), both through `bin/fleet_needs_detail.py` into `@claude_needs_detail`; the node's inventory and the hub carry it to the client's `needs_<sess>`, where `bin/fleet-alerts.sh` draws the count and raises one notification per wait (`FLEET_NOTIFY=0` off). |
 | orchestrating: any session that binds no issue takes the role (/fleet-orchestrate — the fleet-orchestrate plugin); nothing opens or reopens a resident one | ✅ | ✅ | `take_role` stamps `@fleet_role_def orchestrator` (bin/fleet-role-take.sh, issue #3114); a Codex session reads the plugin's skill as `$fleet-orchestrate` and the dispatch group through bin/fleet-codex-plugins.py (issue #3123). The resident seat is gone (issue #3118). |
 <!-- codex-matrix:end -->

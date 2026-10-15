@@ -1075,7 +1075,7 @@ open)
   case "$node" in *[!A-Za-z0-9._-]*) note "bad machine label: $node"; exit 2 ;; esac
   # `<name> · @mac-a` (issue #1780): the window name is also the pane header
   # (conf/tmux-attention.conf's pane-border-format; the stage's title line,
-  # conf/tmux-shell-stage.conf), so the top of the pane says at a glance where
+  # conf/tmux-view.conf), so the top of the pane says at a glance where
   # the keys go — in the sidebar row's own words: `@mac-a`, `@本机` when that machine
   # is this computer. No machine PREFIX on the name (#1475's `mac-a <name>`), no ⇄
   # (#1621): a proxy window is known by `@remote`, never by its name.
