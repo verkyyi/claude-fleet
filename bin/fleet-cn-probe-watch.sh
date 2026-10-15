@@ -1,5 +1,6 @@
 #!/bin/bash
 # fleet-cn-probe-watch.sh --repo <owner/name> [--session <fleet>] [--now] [--dry-run]
+#                         [--recover [--expect KEY=VALUE]… [--why TEXT]]
 #   — the China real-user path, walked by a machine every few hours; a red one is
 #     ONE breakage issue, one alert, and a red light on the stable it tested that
 #     holds `stable` where it is (issue #4180).
@@ -43,6 +44,25 @@
 # skips it. --dry-run runs the probe and prints what it would post / file,
 # changing nothing (no ensure, no status, no issue, no state).
 #
+# Every run that walks — tick, --now or recovery, green or red — and every reason
+# a tick did NOT walk (throttled until …, a lock held by …, a dead holder's lock
+# taken over) is one line of $SD/history.ndjson ({ts, ev, mode, run_id, stable,
+# verdict, class, reason_code, …}; a skip once per reason, not once a tick) — the
+# diskguard log only ever saw the tick's own output (issue #4304). The lock holds
+# its pid: a holder that is gone is taken over at once (recorded), a live one
+# after an hour as before.
+#
+# Recovery verification (issue #4304): `--recover` opens a bounded round in
+# bin/fleet-cn-probe-recover.py (--expect pins the deployed version vector —
+# stable=<sha> · hub=… · client=… · runtime=… · image=… · pod=…; start it once the
+# target is really deployed, never at a merge) and walks at once; every tick then
+# asks the round whether a run is due — a due one ignores the throttle, one at a
+# time under the same lock — and hands its result.json to the round, which counts
+# FLEET_CN_RECOVER_NEED (3) complete passes in a row on one vector inside
+# FLEET_CN_RECOVER_MAX_RUNS (6) runs / FLEET_CN_RECOVER_MAX_SECS (5400) s, runs
+# back to back (FLEET_CN_RECOVER_EVERY, 0 — never on the hour), then writes its evidence and steps aside:
+# the patrol is back on its throttle. `fleet-cn-probe-recover.py <SD> status|stop`.
+#
 # Run dirs: FLEET_CN_PROBE_RUNS (default $SD/runs), the newest
 # FLEET_CN_PROBE_KEEP_RUNS (60) kept.
 # Seams: FLEET_CN_PROBE_CMD (the probe), FLEET_CN_PROBE_ENV_CMD (ensure),
@@ -56,13 +76,17 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-repo='' sess='' dry=0 now=0
+repo='' sess='' dry=0 now=0 recover=0 rwhy=''
+rexp=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo)    shift; repo="${1:-}" ;;
     --session) shift; sess="${1:-}" ;;
     --dry-run|-n) dry=1 ;;
     --now)     now=1 ;;
+    --recover) recover=1 ;;
+    --expect)  shift; rexp+=(--expect "${1:-}") ;;
+    --why)     shift; rwhy="${1:-}" ;;
     -h|--help) sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)         printf 'fleet-cn-probe-watch: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -82,19 +106,62 @@ mkdir -p "$SD" 2>/dev/null
 log() { printf 'fleet-cn-probe-watch: %s\n' "$*" >&2; }
 secs() { case "$1" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
 
+REC="python3 $BIN/fleet-cn-probe-recover.py $SD"
+# hist key=value… — one line of history.ndjson (every walk, every distinct skip)
+hist() {
+  [ "$dry" = 1 ] && return 0
+  python3 - "$SD/history.ndjson" "$@" <<'PY' 2>/dev/null
+import json, sys, time
+d = {"ts": int(time.time())}
+for kv in sys.argv[2:]:
+    k, _, v = kv.partition("=")
+    d[k] = int(v) if v.isdigit() and k in ("ts", "start", "end", "pid", "age") else v
+with open(sys.argv[1], "a") as f:
+    f.write(json.dumps(d, ensure_ascii=False, sort_keys=True) + "\n")
+PY
+  # bounded: the newest 5000 lines
+  [ "$(wc -l < "$SD/history.ndjson" 2>/dev/null || echo 0)" -le 5000 ] || {
+    tail -n 4000 "$SD/history.ndjson" > "$SD/history.ndjson.tmp" && mv "$SD/history.ndjson.tmp" "$SD/history.ndjson"; }
+}
+# skip <key> key=value… — a skip is recorded once per key (a throttle per stamp, a lock per holder)
+skip() { local k=$1; shift; [ "$(cat "$SD/skip" 2>/dev/null)" = "$k" ] && return 0
+  [ "$dry" = 1 ] || printf '%s\n' "$k" > "$SD/skip"; hist ev=skip "$@"; }
+
 t=$(date +%s)
-if [ "$now" = 0 ] && [ "$dry" = 0 ]; then
+mode=tick; [ "$now" = 1 ] && mode=now
+if [ "$recover" = 1 ] && [ "$dry" = 0 ]; then
+  $REC start ${rexp[@]+"${rexp[@]}"} ${rwhy:+--why "$rwhy"} >&2 || exit 1
+fi
+due=0
+if [ "$dry" = 0 ] && [ -f "$SD/recover.json" ]; then
+  dline=$($REC due 2>&1) && due=1
+  case "$dline" in *abandoned*|exhausted*) printf '%s\n' "$dline" | while IFS= read -r l; do hist ev=recover line="$l"; done ;; esac
+fi
+[ "$due" = 1 ] && mode=recover
+if [ "$now" = 0 ] && [ "$dry" = 0 ] && [ "$due" = 0 ]; then
   last=$(sed -n 1p "$SD/stamp" 2>/dev/null); last=$(secs "$last" 0)
   if [ -f "$SD/red" ]; then every=$(secs "${FLEET_CN_PROBE_RED_SECS:-}" 3600); else every=$(secs "${FLEET_CN_PROBE_SECS:-}" 21600); fi
-  [ $((t - last)) -lt "$every" ] && exit 0
+  if [ $((t - last)) -lt "$every" ]; then
+    [ "$last" -le "$t" ] || { skip "clock:$last" why=clock_behind_stamp stamp="$last"; exit 0; }
+    skip "throttle:$last" why=throttle stamp="$last" next="$((last + every))"; exit 0
+  fi
 fi
-# one run at a time; a lock older than an hour is a run that died
+# one run at a time: the lock holds its pid — a holder that is gone is taken over
+# at once, a live one after an hour (a run that hangs)
 if ! mkdir "$SD/lock" 2>/dev/null; then
-  [ -n "$(find "$SD/lock" -maxdepth 0 -mmin +60 2>/dev/null)" ] || exit 0
-  rmdir "$SD/lock" 2>/dev/null; mkdir "$SD/lock" 2>/dev/null || exit 0
+  hp=$(sed -n 1p "$SD/lock/pid" 2>/dev/null | awk '{print $1}'); hp=$(secs "$hp" '')
+  if [ -n "$hp" ] && ! kill -0 "$hp" 2>/dev/null; then
+    hist ev=lock_reclaimed why=holder_gone pid="$hp" mode="$mode"
+  elif [ -n "$(find "$SD/lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+    hist ev=lock_reclaimed why=older_than_60m pid="${hp:-0}" mode="$mode"
+  else
+    skip "lock:${hp:-?}" why=lock_held pid="${hp:-0}" mode="$mode"; exit 0
+  fi
+  rm -rf "$SD/lock" 2>/dev/null; mkdir "$SD/lock" 2>/dev/null || exit 0
 fi
-trap 'rmdir "$SD/lock" 2>/dev/null' EXIT
-[ "$dry" = 1 ] || printf '%s\n' "$t" > "$SD/stamp"
+trap 'rm -rf "$SD/lock" 2>/dev/null' EXIT
+printf '%s %s\n' "$$" "$t" > "$SD/lock/pid"
+[ "$dry" = 1 ] || { printf '%s\n' "$t" > "$SD/stamp"; rm -f "$SD/skip"; }
 
 # the stable this run tests: what every client, login and pod follows now
 stable=$($GH api "repos/$repo/commits/stable" --jq .sha 2>/dev/null)
@@ -104,6 +171,10 @@ case "$stable" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;; 
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -dc 0-9a-f)
 RUNS=${FLEET_CN_PROBE_RUNS:-$SD/runs}
 export FLEET_CN_PROBE_RUN_ID=$RUN_ID FLEET_CN_PROBE_RUNS=$RUNS
+if [ "$due" = 1 ]; then
+  $REC begin "$RUN_ID" "$$" >/dev/null 2>&1 || { due=0; mode=now; }
+fi
+hist ev=start mode="$mode" run_id="$RUN_ID" stable="$stable" pid="$$"
 ens='' ens_rc=0
 if [ "$dry" = 0 ]; then
   e0=$(date +%s)
@@ -157,6 +228,13 @@ else
     *) desc="不通（${reason}）：卡在 $stuck — $detail" ;; esac
 fi
 desc=$(printf '%s' "$desc" | cut -c1-130)
+hist ev=run mode="$mode" run_id="$RUN_ID" stable="$stable" verdict="$verdict" class="$cls" reason_code="$reason" \
+  stuck="$stuck" start="$t" end="$(date +%s)" result="$result"
+rline=''
+if [ "$due" = 1 ]; then
+  rline=$($REC finish "$RUN_ID" "${result:--}" 2>&1)
+  printf '%s\n' "$rline" | while IFS= read -r l; do [ -z "$l" ] || hist ev=recover run_id="$RUN_ID" line="$l"; done
+fi
 
 issue=''
 if [ "$verdict" = red ]; then
@@ -212,10 +290,12 @@ fi
 if [ "$verdict" = green ]; then
   rm -f "$SD/red" "$SD/filed"
   printf 'green\t%s\t%s\n' "${stable:0:7}" "$desc"
+  [ -z "$rline" ] || printf '%s\n' "$rline" | awk '{print "recover\t" $0}'
   exit "$rc"
 fi
 : > "$SD/red"
 printf 'red\t%s\t%s\t%s\n' "${stable:0:7}" "$stuck" "${issue:--}"
+[ -z "$rline" ] || printf '%s\n' "$rline" | awk '{print "recover\t" $0}'
 # the reminder: one alert per breakage issue (the memo keeps it to one)
 if [ -n "$issue" ] && [ "$(cat "$SD/filed" 2>/dev/null)" != "$issue" ]; then
   printf '%s\n' "$issue" > "$SD/filed"

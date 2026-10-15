@@ -32,7 +32,19 @@
 #   K  one result: stages carry start / end / secs / reason_code / evidence, the
 #      verdict line and exit come from result.json, a pass is only a run with no
 #      failed stage
-# CNP_LEG=<H|I|J|K> runs one of these alone (the BREAK-IT drills do).
+# Recovery verification (issue #4304):
+#   L  the round on a fake clock: a repeated start / begin runs one round, one run;
+#      a dead run is abandoned, never counted; red, env, partial, an unread or
+#      unexpected version and a clock run backwards never count; a new vector
+#      restarts the streak; 3 in a row → done with 3 distinct runs as evidence;
+#      the run and time budgets end it (exhausted)
+#   M  the patrol for real: every walk (--now too) and each distinct skip is on
+#      history.ndjson; a dead holder's lock is taken over; --recover walks at once,
+#      the next ticks are recovery runs, done after 3, then the throttle again
+#   N  the probe leaves none of its sessions on the pod: the client's `fleet close`
+#      failing, the pod stops each by its fleet id; neither working, the key is
+#      kept and the next run stops it first
+# CNP_LEG=<H|I|J|K|L|M|N> runs one of these alone (the BREAK-IT drills do).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/cnprobe-st.XXXXXX")
@@ -60,7 +72,15 @@ out=$(bash "$BIN/fleet-cn-probe.sh" --help 2>&1); contains "probe: help names th
 rig() {
   R="$WORK/rig"; rm -rf "$R"; mkdir -p "$R/shim" "$R/home/.config/claude-fleet/global" "$R/home/.claude" \
     "$R/home/.local/share/claude-fleet" "$R/tmux" "$R/node/runtime/sha-rt/bin" "$R/runs"
-  mkdir -p "$R/home/.claude/fleet/logs"; ln -s "$BIN" "$R/home/.claude/fleet/bin"
+  mkdir -p "$R/home/.claude/fleet/logs" "$R/home/.config/claude-fleet/fleets/fleet"; ln -s "$BIN" "$R/home/.claude/fleet/bin"
+  # the pod's graceful stop by fleet id: drops the key the stub `fleet ls` lists
+  cat > "$R/stop" <<'SH'
+#!/bin/bash
+[ -z "${CNP_POD_STOP_FAIL:-}" ] || exit 1
+echo "$*" >> "$CNP_TMUX_DIR/stops"
+f=${2#fid:}; grep -v "/$f\$" "$CNP_TMUX_DIR/keys" > "$CNP_TMUX_DIR/keys.n"; mv -f "$CNP_TMUX_DIR/keys.n" "$CNP_TMUX_DIR/keys"
+SH
+  chmod +x "$R/stop"
   ln -s sha-rt "$R/node/runtime/current"
   printf 'export FLEET_HUB_URL="https://hub.test"\n' > "$R/home/.config/claude-fleet/fleet.conf"
   printf 'version=0123abc\n' > "$R/home/.local/share/claude-fleet/.client-version"
@@ -102,14 +122,15 @@ case "$1 $2" in
   'connect --pick') printf '{"machine": "%s"}\n' "$M"; exit 0 ;;
   'route '*) exit 0 ;;
   'ls --json') printf '['; sep=''; for k in $(cat "$K" 2>/dev/null); do printf '%s{"key": "%s"}' "$sep" "$k"; sep=,; done; echo ']'; exit 0 ;;
-  'close '*) grep -vx "$2" "$K" > "$K.n" 2>/dev/null; mv -f "$K.n" "$K"; exit 0 ;;
+  'close '*) [ -z "${CNP_CLOSE_FAIL:-}" ] || exit 1   # the client's close answered nothing (#4304)
+    grep -vx "$2" "$K" > "$K.n" 2>/dev/null; mv -f "$K.n" "$K"; exit 0 ;;
   'codex --new')
     w=${3##*：}
     echo "› $3"
     case "${CNP_SCENARIO:-answer}" in
       refused) echo "fleet: could not open a session: REFUSED AT_CAPACITY all-full: every machine is at its session cap or pausing new sessions — $M: 机器暂停接新：负载过高"; exit 1 ;;
     esac
-    echo scratch-9 >> "$K"
+    echo "${CNP_NEWKEY:-scratch-9}" >> "$K"
     echo "GPT-6.1-Sol high · ~ ? for shortcuts"
     case "${CNP_SCENARIO:-answer}" in
       403) sleep 1; echo "■ unexpected status 403 Forbidden: cred-proxy: no upstream credential for account default, url: http://127.0.0.1:35583/codex/responses" ;;
@@ -138,7 +159,7 @@ probe_run() {
     CNP_MACHINE=u-test1 FLEET_CN_PROBE_MACHINE=u-test1 FLEET_CN_PROBE_KEY='' FLEET_CN_PROBE_KNOWN_HOSTS='' \
     FLEET_CN_PROBE_RUNS="$R/runs" FLEET_CN_PROBE_KUBECTL=/nonexistent/kubectl FLEET_CN_PROBE_DIAG_SOURCES='client pod' \
     FLEET_CN_PROBE_NODE_LOG="$R/node/node-agent.log" FLEET_CN_PROBE_NODE_RUNTIME="$R/node/runtime" \
-    FLEET_CN_PROBE_ANSWER=${FLEET_CN_PROBE_ANSWER:-20} FLEET_CN_PROBE_TIMEOUT=10 \
+    FLEET_CN_PROBE_ANSWER=${FLEET_CN_PROBE_ANSWER:-20} FLEET_CN_PROBE_TIMEOUT=10 FLEET_CN_PROBE_POD_STOP="$R/stop" \
     bash "$BIN/fleet-cn-probe.sh" --layers "${1:-codex}" 2>&1); PRC=$?
   PSECS=$((SECONDS - t0))
   PRES=$(printf '%s\n' "$POUT" | sed -n 's/^RESULT //p' | tail -n 1)
@@ -285,6 +306,172 @@ leg_K() {   # one result: the verdict and the exit come from result.json
   contains "K: …CLASS env" "$o" "CLASS env machine_not_listed"
   : > "$d/stages.tsv"; o=$(python3 "$BIN/fleet-cn-probe-result.py" render "$d"); eq "K: no stage → exit 1" 1 "$?"
   contains "K: …CLASS probe" "$o" "CLASS probe no_stages"
+}
+
+# ---- recovery verification (issue #4304) ------------------------------------
+# mkres <run dir> <verdict pass|fail> <class> <reason> <start epoch> <end epoch> [k=v vector overrides…]
+# — a result.json in #4303's shape (stages per route, the diagnosis' vector)
+mkres() {
+  python3 - "$@" <<'PY'
+import json, os, sys, time
+d, verdict, cls, reason, t0, t1 = sys.argv[1:7]
+iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(t)))
+vec = {"version.hub": "prod-fb6c00f", "version.hub_client": "fb6c00fdbdbf", "version.client": "install 4c32afe",
+       "version.node_runtime": "9046bd34", "image.digest": "sha256:9e82", "target.pod_uid": "b3c7"}
+skip = set()
+for kv in sys.argv[7:]:
+    k, _, v = kv.partition("=")
+    if k == "skip":
+        skip.add(v)
+    else:
+        vec[k] = v
+layers = [l for l in "client cert list entry relay view:entry view:relay codex:entry codex:relay".split() if l not in skip]
+st = [{"layer": l, "result": "pass", "class": "none", "reason_code": "ok", "start": iso(t0), "end": iso(t1)} for l in layers]
+if verdict == "fail":
+    st.append({"layer": "codex:relay", "result": "fail", "class": cls, "reason_code": reason, "start": iso(t0), "end": iso(t1)})
+os.makedirs(d, exist_ok=True)
+r = {"run_id": os.path.basename(d), "verdict": verdict, "class": "none" if verdict == "pass" else cls,
+     "reason_code": "ok" if verdict == "pass" else reason, "stuck": None if verdict == "pass" else "codex:relay",
+     "detail": "", "oks": "entry 通；relay 通", "started": iso(t0), "ended": iso(t1), "stages": st,
+     "diag": {"readings": vec}}
+json.dump(r, open(os.path.join(d, "result.json"), "w"))
+PY
+}
+
+leg_L() {   # the recovery round's state machine, on a fake clock
+  local d="$WORK/legL" R T o rc dead n
+  rm -rf "$d"; mkdir -p "$d"
+  R="python3 $BIN/fleet-cn-probe-recover.py $d/sd"
+  T=1790000000
+  rec() { FLEET_CN_RECOVER_NOW=$T $R "$@"; }
+  sleep 0 & dead=$!; wait "$dead"
+  # one run: begin (alive pid) → result → finish; <verdict…> as mkres; advances the clock past the interval
+  walk() { local id="r$1"; shift
+    o=$(rec due); eq "L: due before $id ($o)" 0 "$?"
+    rec begin "$id" $$ >/dev/null; T=$((T + 300))
+    mkres "$d/runs/$id" "$1" "$2" "$3" $((T - 280)) $((T - 5)) "${@:4}"
+    o=$(rec finish "$id" "$d/runs/$id/result.json"); T=$((T + 300)); }
+  o=$(rec status); eq "L: no round yet" "no round" "$o"
+  o=$(rec due); eq "L: nothing due without a round" 1 "$?"
+  o=$(rec start --expect stable=fb6c00f --why "fix #4290 deployed"); contains "L: start" "$o" "started"
+  o=$(rec start --expect stable=fb6c00f); contains "L: a repeated start is the same round" "$o" "already active"
+  eq "L: …one round only" 1 "$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(len(s.get("past", [])) + 1)' "$d/sd/recover.json")"
+  # duplicate trigger: a second begin while the first is live is refused
+  rec begin r0 $$ >/dev/null; o=$(rec begin r0b $$); eq "L: a second begin while one runs → 3" 3 "$?"
+  o=$(rec due); eq "L: …and nothing is due" 1 "$?"; contains "L: …it is running" "$o" "running r0"
+  # crash: the booked pid is gone → abandoned, not counted, a budget run
+  python3 - "$d/sd/recover.json" "$dead" <<'PY'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p)); s["round"]["running"]["pid"] = int(sys.argv[2]); json.dump(s, open(p, "w"))
+PY
+  o=$(rec due); contains "L: a dead holder is abandoned" "$o" "not counted abandoned r0"
+  mkres "$d/runs/r0" pass none ok $((T - 100)) $((T - 5))
+  o=$(rec finish r0 "$d/runs/r0/result.json"); contains "L: a crashed run finished late counts nothing" "$o" "already judged"
+  T=$((T + 600))
+  walk 1 pass none ok;                                  contains "L: pass 1 counted" "$o" "counted r1 — 1 in a row"
+  walk 2 fail product upstream_http_403;               contains "L: a red resets" "$o" "not counted product:upstream_http_403 r2 — 0 in a row"
+  walk 3 pass none ok;                                  contains "L: pass after red starts at 1" "$o" "counted r3 — 1 in a row"
+  walk 4 pass none ok version.hub=prod-aaaaaaa;        contains "L: a new vector restarts the streak" "$o" "counted r4 — 1 in a row"
+  # budget: 6 runs (r0 abandoned + r1..r4 = 5); one more that does not count ends it
+  walk 5 fail env identity_expired;                    contains "L: env never counts" "$o" "not counted env:identity_expired"
+  contains "L: run budget → exhausted" "$o" "exhausted"; contains "L: …says why" "$o" "budget: 6 runs"
+  o=$(rec due); eq "L: an exhausted round is not due" 1 "$?"
+  ev=$(ls "$d/sd/recover/"*.json | head -n 1); [ -f "$ev" ] || fail "L: no evidence for the exhausted round"
+  eq "L: evidence 0600" 600 "$(stat -f %Lp "$ev" 2>/dev/null || stat -c %a "$ev")"
+  # a fresh round: three passes on one vector, 10 min apart → done, three distinct runs
+  o=$(rec start --expect stable=fb6c00f --every 600); contains "L: a new round after the end" "$o" "started"
+  walk 11 pass none ok
+  T=$((T - 1)); o=$(rec due); eq "L: the next run waits the interval" 1 "$?"; contains "L: …until" "$o" "waiting until"; T=$((T + 1))
+  walk 12 pass none ok skip=relay;                      contains "L: a partial walk does not count" "$o" "not counted partial"
+  walk 13 pass none ok version.client=unknown;          contains "L: an unread version does not count" "$o" "not counted env:version_unknown"
+  walk 14 pass none ok version.hub_client=deadbeef;     contains "L: another stable than expected" "$o" "not counted version_mismatch"
+  o=$(rec status); contains "L: status names the round" "$o" "active — 0 in a row of 3"
+  rec stop --why test >/dev/null
+  o=$(rec start --expect stable=fb6c00f); contains "L: round 3 (back to back by default)" "$o" "every 0s"
+  walk 21 pass none ok; walk 22 pass none ok
+  # clock run backwards: never a success
+  rec due >/dev/null; rec begin r23 $$ >/dev/null; T=$((T - 7200)); mkres "$d/runs/r23" pass none ok $((T - 100)) $((T - 5))
+  o=$(rec finish r23 "$d/runs/r23/result.json"); contains "L: a clock run backwards is not a pass" "$o" "not counted clock_skew"
+  T=$((T + 7200 + 900))
+  walk 24 pass none ok; walk 25 pass none ok; walk 26 pass none ok
+  contains "L: three in a row → done" "$o" "done"
+  ev=$(sed -n 's/.*evidence \(.*\)$/\1/p' <<<"$o" | tail -n 1)
+  n=$(python3 -c 'import json,sys; e=json.load(open(sys.argv[1])); r=[a["run_id"] for a in e["counted_runs"]]; print(len(set(r)), " ".join(r), e["state"])' "$ev")
+  eq "L: the evidence names three independent runs" "3 r24 r25 r26 done" "$n"
+  o=$(rec finish r26 "$d/runs/r26/result.json"); contains "L: finishing again counts nothing twice" "$o" "already judged"
+  o=$(rec due); eq "L: done → nothing more due" 1 "$?"
+  # the time budget
+  rec start --max-secs 1200 >/dev/null; walk 31 fail product x; T=$((T + 1300))
+  o=$(rec due); contains "L: past the time budget → exhausted" "$o" "budget: 20 min"
+}
+
+leg_M() {   # the patrol: every walk is on record, recovery ticks are serial and bounded
+  local d="$WORK/legM" SDm o h
+  rm -rf "$d"; mkdir -p "$d/conf" "$d/home" "$d/tmp"
+  SDm="$d/conf/global/cn-probe"
+  # a probe that writes #4303's result.json into its run dir (fail while $d/red), as the real one does
+  cat > "$d/probe" <<SH
+#!/bin/bash
+echo run >> "$d/probe.runs"
+t=\$(date +%s); rd="\$FLEET_CN_PROBE_RUNS/\$FLEET_CN_PROBE_RUN_ID"
+if [ -f "$d/red" ]; then bash "$d/mkres" "\$rd" fail product upstream_http_403 \$((t - 1)) \$t; echo "RESULT \$rd/result.json"; echo "CLASS product upstream_http_403"; echo "不通：卡在 codex:relay — 403"
+else bash "$d/mkres" "\$rd" pass none ok \$((t - 1)) \$t; echo "RESULT \$rd/result.json"; echo "CLASS none ok"; echo "通：自动选 entry；entry 通；relay 通"; fi
+SH
+  { printf '#!/bin/bash\n'; declare -f mkres; printf 'mkres "$@"\n'; } > "$d/mkres"
+  printf '#!/bin/sh\necho "ENSURE pod ok"\n' > "$d/ensure"
+  printf '#!/bin/sh\necho "https://github.com/o/r/issues/93"\n' > "$d/filer"
+  printf '#!/bin/sh\ncase "$*" in *commits/stable*) echo 0123456789abcdef0123456789abcdef01234567 ;; esac\nexit 0\n' > "$d/gh"
+  chmod +x "$d/probe" "$d/ensure" "$d/filer" "$d/gh" "$d/mkres"; : > "$d/key"
+  pw() { o=$(FLEET_CONF_DIR="$d/conf" HOME="$d/home" TMPDIR="$d/tmp" FLEET_CN_PROBE_GH="$d/gh" FLEET_CN_PROBE_KEY="$d/key" \
+    FLEET_CN_PROBE_CMD="$d/probe" FLEET_CN_PROBE_ENV_CMD="$d/ensure" FLEET_CN_PROBE_FILE_CMD="$d/filer" FLEET_CN_PROBE_DIAG=0 \
+    FLEET_CN_RECOVER_EVERY=0 bash "$W" --repo o/r "$@" 2>&1); }
+  wruns() { if [ -f "$d/probe.runs" ]; then wc -l < "$d/probe.runs" | tr -d ' '; else echo 0; fi; }
+  hcount() { grep -c "$1" "$SDm/history.ndjson" 2>/dev/null || echo 0; }
+  # a manual green run is on record (the diskguard log never saw these)
+  pw --now; contains "M: a --now green walks" "$o" "green	0123456"
+  eq "M: …and is on record" 1 "$(hcount '"ev": "run".*"mode": "now".*"verdict": "green"')"
+  # throttled ticks: one skip line per throttle period, not one a tick
+  pw; pw; pw; eq "M: throttled ticks walk nothing" 1 "$(wruns)"
+  eq "M: …recorded once" 1 "$(hcount '"why": "throttle"')"
+  # a lock whose holder is gone is taken over at once, and said so
+  sleep 0 & local dead=$!; wait "$dead"
+  mkdir "$SDm/lock"; echo "$dead 1" > "$SDm/lock/pid"
+  pw --now; eq "M: a dead holder's lock does not stall the patrol" 2 "$(wruns)"
+  eq "M: …the takeover is recorded" 1 "$(hcount '"ev": "lock_reclaimed".*"why": "holder_gone"')"
+  # a live holder's lock: a skip, recorded once
+  mkdir "$SDm/lock"; echo "$$ 1" > "$SDm/lock/pid"
+  pw --now; pw --now; eq "M: a live holder blocks" 2 "$(wruns)"
+  eq "M: …recorded once" 1 "$(hcount '"why": "lock_held"')"; rm -rf "$SDm/lock"
+  # recovery: --recover walks at once (inside the green throttle), then each tick is due
+  : > "$d/red"; pw --recover --expect stable=fb6c00f; rm -f "$d/red"
+  contains "M: a red recovery run does not count" "$o" "not counted product:upstream_http_403"
+  pw; contains "M: the next tick is a recovery run" "$o" "counted"; contains "M: …1 in a row" "$o" "1 in a row of 3"
+  pw; pw; contains "M: three in a row → done" "$o" "done"
+  eq "M: six walks so far" 6 "$(wruns)"
+  eq "M: every recovery walk is on record" 4 "$(hcount '"ev": "run".*"mode": "recover"')"
+  pw; eq "M: after done the patrol is back on its throttle" 6 "$(wruns)"
+  # the three counted runs are three different run dirs with their own result.json
+  h=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1]))["round"]; print(len(set(s["streak"])), all(__import__("os").path.exists(a["result"]) for a in s["attempts"] if a["counted"]))' "$SDm/recover.json")
+  eq "M: three independent complete runs" "3 True" "$h"
+}
+
+leg_N() {   # the probe closes every session it opened: the client's close, else the pod's stop by fleet id
+  rig
+  CNP_SCENARIO=answer CNP_CLOSE_FAIL=1 CNP_NEWKEY=wid:f00d/fid-a probe_run
+  eq "N: the walk itself passes" 0 "$PRC"
+  contains "N: the client's close failing is said" "$POUT" "could not close the session wid:f00d/fid-a"
+  contains "N: …and the pod stops it by its fleet id" "$POUT" "stopped the session wid:f00d/fid-a it opened on the pod"
+  contains "N: …through fleet-worker-stop.sh fid:" "$(cat "$R/tmux/stops")" "fleet fid:fid-a"
+  [ ! -s "$R/tmux/keys" ] || fail "N: a session was left on the pod: $(cat "$R/tmux/keys")"
+  [ ! -s "$R/runs/.left-sessions" ] || fail "N: a stopped session stayed on the leftover list"
+  # neither road works: kept, and the next run stops it before opening its own
+  CNP_SCENARIO=answer CNP_CLOSE_FAIL=1 CNP_POD_STOP_FAIL=1 CNP_NEWKEY=wid:f00d/fid-b probe_run
+  contains "N: a session neither road could close is said" "$POUT" "left on the pod (retried next run): wid:f00d/fid-b"
+  contains "N: …and kept for the next run" "$(cat "$R/runs/.left-sessions")" "wid:f00d/fid-b "
+  CNP_SCENARIO=answer CNP_NEWKEY=wid:f00d/fid-c probe_run
+  contains "N: the next run stops the leftover first" "$POUT" "INFO sweep stopped the session wid:f00d/fid-b"
+  [ ! -s "$R/tmux/keys" ] || fail "N: sessions still on the pod after the sweep: $(cat "$R/tmux/keys")"
+  [ ! -s "$R/runs/.left-sessions" ] || fail "N: the leftover list kept a stopped session"
 }
 
 if [ -n "${CNP_LEG:-}" ]; then
@@ -445,7 +632,7 @@ out=$(bash "$E" ensure --repo o/r --stable $SHA 2>&1); rc=$?
 eq "G: no Deployment, no manifest → 1" 1 "$rc"; contains "G: says so" "$out" "no FLEET_CN_PROBE_POD_MANIFEST"
 
 # --- H..K: the probe itself, offline (issue #4303) -----------------------------
-for leg in H I J K; do "leg_$leg"; done
+for leg in H I J K L M N; do "leg_$leg"; done
 
 # --- L. a drill person made again gets its own allowlist (issue #4290) ---------------
 cat > "$WORK/shim/ssh" <<SH
