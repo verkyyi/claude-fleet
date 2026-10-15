@@ -11,7 +11,7 @@ import sys
 
 bin_dir = Path(sys.argv[1])
 probe = '''. "$1/selftest-sections.sh"
-selftest_sections 3
+selftest_sections "$2"
 for n in 1 2 3; do
   if selftest_section "$n"; then echo "$n"; fi
 done
@@ -22,7 +22,7 @@ def run(part=None):
     e = dict(env)
     if part is not None:
         e['SELFTEST_PART'] = part
-    return subprocess.run(['bash', '-c', probe, '_', str(bin_dir)], env=e,
+    return subprocess.run(['bash', '-c', probe, '_', str(bin_dir), '3'], env=e,
                           text=True, capture_output=True)
 
 assert run().stdout == '1\n'
