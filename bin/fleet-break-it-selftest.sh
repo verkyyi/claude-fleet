@@ -7583,6 +7583,15 @@ print(" ".join(a["id"] for a, _ in fv.menu_of(r)))' "$BIN" 2>&1)
   WHAT="别的机器上的会话也能换 Codex：菜单有这一项；那台机器上回合中 / 窗口换人 / 已是该 agent 一行拒绝、什么都不派，空闲的派一次 fleet-transfer.sh"
 }
 
+drill_idle_activity_between_probes() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-idle-edges-selftest.sh" 2>&1) \
+    || { WHY="short-lived worker activity certified idle: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

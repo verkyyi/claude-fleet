@@ -436,6 +436,7 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
     # shellcheck source=/dev/null
     . "$_idle_lib"
     fleet_idle_activity
+    fleet_idle_window_activity
   fi
   # What the window said BEFORE this write — only with the cross-machine hub on
   # (issue #1481, below): the nudge is for a CHANGE, and a per-tool `working`
@@ -472,6 +473,7 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # last-activity stamp (drives the dashboard's "Nm ago" column).
   tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
   command -v fleet_idle_activity >/dev/null 2>&1 && fleet_idle_activity
+  command -v fleet_idle_window_activity >/dev/null 2>&1 && fleet_idle_window_activity
   # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;
   # this marker — `<socket path>.dirty`, beside tmux's own socket, the one path the
   # daemon and this pane are guaranteed to agree on — gets the change drawn on its
