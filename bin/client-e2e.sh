@@ -237,7 +237,7 @@ cat > "$SHIM/argv.sh" <<EOF
 printf '{"argv": ["$SHIM/ssh", "%s"], "host": 1, "route": {"name": "lan"}}\n' "$NODE"
 EOF
 out=$(cd "$CH" && env -i PATH="$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
-        FLEET_THIN_ARGV_CMD="sh $SHIM/argv.sh" FLEET_THIN_LOG="$WORK/thin.log" \
+        FLEET_NODE_STATE="$WORK/no-node" FLEET_THIN_ARGV_CMD="sh $SHIM/argv.sh" FLEET_THIN_LOG="$WORK/thin.log" \
         FLEET_HUB_TOKEN="$VT" CCQUOTA_VIEWER_TOKEN="$VT" FLEET_ITERM_KEYS=0 \
         python3 "$WORK/ptyrun.py" "$FLEET" </dev/null 2>"$WORK/fleet.err"); rc=$?
 [ "$rc" = 0 ] || die "fleet exited $rc" "$(tail -n 5 "$WORK/fleet.err") $out"

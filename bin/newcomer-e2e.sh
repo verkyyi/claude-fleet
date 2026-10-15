@@ -272,7 +272,7 @@ ok "fleet installed, fleet.conf names $HUB, ~/.ssh untouched"
 SHIM="$WORK/shim"; mkdir -p "$SHIM"
 nenv() {
   env -i PATH="$SHIM:$CH/.local/bin:$PATH" HOME="$CH" SHELL=/bin/zsh TERM=xterm-256color LANG=zh_CN.UTF-8 \
-    PYTHONUNBUFFERED=1 "$@"
+    PYTHONUNBUFFERED=1 FLEET_NODE_STATE="$WORK/no-node" "$@"
 }
 
 # =============================================================================
