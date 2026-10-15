@@ -76,7 +76,7 @@ EOF
   local m
   for m in m1 m2; do
     mkdir -p "$R/home/$m/.claude/fleet/bin"
-    ln -s "$BIN/fleet-client-upload.py" "$R/home/$m/.claude/fleet/bin/fleet-client-upload.py"
+    ln -s "$BIN/fleet-thin-upload-fixture.py" "$R/home/$m/.claude/fleet/bin/fleet-client-upload.py"
     cat > "$R/home/$m/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
 #!/bin/bash
 echo "\$HOST_NAME \$*" >> "$R/rv.log"; echo \$\$ > "$R/rv.pid"
@@ -94,7 +94,7 @@ if [ -n "\$resume" ] && [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$R/nofleet.\$H
 mkdir -p "$R/views"; st="$R/views/\$HOST_NAME.\$view"
 if [ -n "\$want" ]; then w=\$want; elif [ -n "\$resume" ] && [ -f "\$st" ]; then w=\$(cat "\$st"); else w=orch; fi
 echo "\$w" > "\$st"
-printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/%s\007' "\$token" "$ME" "\$(id -un)" "\$w"
+printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/%s;g=fixture\007' "\$token" "$ME" "\$(id -un)" "\$w"
 if [ -e "$R/tmux.attach" ]; then
   # a real session behind it: the home's tmux, allow-passthrough on (as a node)
   exec "$RT" -S "$R/s/home" attach -t w
@@ -296,14 +296,14 @@ EOF
     || { WHY="the view never attached to the home's session"; tc_done; return 1; }
   sleep 0.5; touch "$R/attached"; t0=$(now); touch "$R/spoof.go"
   until_ok 3 test -e "$R/spoofed" || { WHY="the spoofing program never ran"; tc_done; return 1; }
-  until_ok 6 grep -qs '	upload	' "$R/thin.log" || { WHY="no upload after the spoof (the loop gone? $(tail -n 2 "$R/thin.log" | tr '\t' ' '))"; tc_done; return 1; }
+  until_ok 6 test -e "$R/home/m1/.cache/claude-fleet/inbox/.target" || { WHY="no upload after the spoof (the loop gone? $(tail -n 2 "$R/thin.log" | tr '\t' ' '))"; tc_done; return 1; }
   SECS=$(since "$t0")
   kill -0 "$(cat "$R/thin.pid")" 2>/dev/null || { WHY="a forged quit ended the loop: $(tail -n 3 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
   grep -aq SPOOFED "$R/term.out" || { WHY="the session's output never reached the person's terminal"; tc_done; return 1; }
   grep -aq ']7502' "$R/term.out" && { WHY="an OSC 7502 reached the person's terminal"; tc_done; return 1; }
-  up=$(grep '	upload	' "$R/thin.log" | tail -n 1)
-  case $up in *"	0	drop_me.txt → "*/inbox/*) ;;
-    *) WHY="the upload did not go by the home's cur: $(printf '%s' "$up" | tr '\t' ' ')"; tc_done; return 1 ;; esac
+  up=$(cat "$R/home/m1/.cache/claude-fleet/inbox/.target")
+  case $up in *evil*) WHY="the upload followed a forged target: $up"; tc_done; return 1 ;; esac
+  [ -n "$up" ] || { WHY="no committed target"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="会话里的程序（真 tmux，allow-passthrough on）印出伪造的 OSC 7502 quit / cur（直出与 passthrough）：循环照常，终端见不到 7502，随后的拖放仍按家机器的 cur 落到收件箱"
 }
@@ -445,6 +445,15 @@ PY
   case $out in *"-p $port 127.0.0.1"*) ;;
     *) WHY="not the tailnet line: '$out' $(head -c 300 "$D/err")"; return 1 ;; esac
   WHAT="离开家里的局域网（热点 172.20.10.0/28），记住的是家里的 lan 192.0.2.10：没对它握手，${SECS}s 选中 Tailscale"
+}
+
+drill_thin_upload_blocks_input() {
+  CAP=12
+  local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-thin-upload-selftest.py" Pump 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="慢剪贴板期间 PTY 输出继续，Ctrl+C 及时取消，缓冲输入不执行"
 }
 
 tc_cleanup() {

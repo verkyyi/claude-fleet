@@ -112,7 +112,7 @@ cd "$T/home/\$host" && HOME="$T/home/\$host" HOST_NAME=\$host exec sh -c "\$remo
 EOF
 for m in m1 m2; do
   mkdir -p "$T/home/$m/.claude/fleet/bin"
-  ln -s "$BIN/fleet-client-upload.py" "$T/home/$m/.claude/fleet/bin/fleet-client-upload.py"
+  ln -s "$BIN/fleet-thin-upload-fixture.py" "$T/home/$m/.claude/fleet/bin/fleet-client-upload.py"
   cat > "$T/home/$m/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
 #!/bin/bash
 echo "\$HOST_NAME \$*" >> "$T/rv.log"
@@ -132,7 +132,7 @@ if [ -n "\$want" ]; then w=\$want; elif [ -n "\$resume" ] && [ -f "\$st" ]; then
 echo "\$w" > "\$st"
 stty -echo lnext undef 2>/dev/null
 printf '\033]7502;cur;token=bad;m=evil;l=evil;w=evil\007'
-printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/%s\007' "\$token" "$ME" "\$(id -un)" "\$w"
+printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/%s;g=fixture\007' "\$token" "$ME" "\$(id -un)" "\$w"
 printf 'VIEW %s ON %s\r\n' "\$w" "\$HOST_NAME"
 while IFS= read -r line; do
   case \$line in

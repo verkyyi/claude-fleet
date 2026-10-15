@@ -117,9 +117,11 @@ bin/fleet-client-lease.py
 # open it on the device in your hands (#1717): the executor and what it drives
 bin/fleet-client-actions.py
 bin/fleet-client-upload.py
+bin/fleet-upload-receive.py
 # the thin client (#3003, EPIC #2999 C6): `fleet --thin` — one loop, one ssh to
 # the home machine; it reuses fleet-connect.py --argv and the upload filter above
 bin/fleet-thin.py
+bin/fleet-thin-upload.py
 # a forwarded page / OAuth callback's bookkeeping, for the thin loop and the
 # action executor alike (#3236, fleet-browser)
 bin/fleet_open_fwd.py

@@ -236,7 +236,13 @@ EOF
     case "$_p" in ?*@?*) _m=${_p%@*} _l=${_p##*@} ;; esac
   fi
   _ok() { printf '%s' "$1" | tr -cd 'A-Za-z0-9._:@/-'; }
-  printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" 2>/dev/null > "$_y"
+  # #4379: bind an upload to this selection and the active pane/agent launch.
+  # Old clients ignore g; new clients fail attachments visibly on an old home.
+  _g="$$-$(date +%s)"
+  _snap=$(tmux -S "$3" display-message -p -t "=$4:" '#{window_id}|#{@fleet_id}|#{@peer_cur}|#{pane_id}|#{pane_pid}|#{@cc_launcher_pid}|#{@cc_session_id}|#{@codex_session_id}|#{pane_current_command}|#{pane_dead}' 2>/dev/null)
+  rv_row_set "$_f" upload_target "$_snap" || exit 0
+  rv_row_set "$_f" upload_gen "$_g" || exit 0
+  printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s;g=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" "$_g" 2>/dev/null > "$_y"
   exit 0
 fi
 

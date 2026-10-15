@@ -77,6 +77,14 @@ fleet close report             # close a session
 fleet quit                     # quit fleet (see below)
 ```
 
+## Pasting images and dropping files
+
+In the desktop fleet terminal, drop files or press `Ctrl+V` to paste a clipboard image. Fleet uploads them and inserts their remote paths automatically, including multiple files. Ordinary text paste works as before.
+
+Output and resizing continue during a slow transfer. Text and Enter typed afterwards wait for the attachment, then arrive in order. `Ctrl+C` cancels it. Failure, a session switch or a disconnect discards the attachment operation and waiting input, with a notification asking you to type again.
+
+Each operation allows 16 files: 10 MiB per image, 100 MiB per other file, and 100 MiB total. It times out after 120 seconds. More than 64 KiB of waiting input also cancels with a notification. If Fleet cannot verify the current session, attachments fail visibly while ordinary text input remains available.
+
 ## Working in a code repository
 
 For a task in a repository, the session changes **its own copy of the code** and touches nobody else's; when it is done it opens a pull request, merges it itself once the checks pass, and then tells you the result. You see it under "Just landed" and read what changed on the PR.

@@ -766,6 +766,11 @@ def cmd_sweep(argv):
 
 
 def main(argv):
+    if argv and argv[0] in ("target", "identity", "recv-checked", "recv-stage"):
+        spec = importlib.util.spec_from_file_location("fleet_upload_receive", os.path.join(BIN, "fleet-upload-receive.py"))
+        receiver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(receiver)
+        return receiver.main(argv[0], sys.modules[__name__], argv[1:])
     if not argv:
         sys.stderr.write(__doc__)
         return 2

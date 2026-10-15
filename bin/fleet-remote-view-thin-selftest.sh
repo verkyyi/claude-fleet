@@ -466,16 +466,16 @@ tt new-window -d -t "=$TL:" -n osc1 "sleep 300"
 tt pipe-pane -O -t "=$TL:osc1" "cat >> '$WORK/osc.osc1'"
 tt respawn-pane -k -t "=$TL:osc1" "env -u TMUX FLEET_CONF_DIR='$FLEET_CONF_DIR' TMPDIR='$TMPDIR' bash '$BIN/fleet-remote-view.sh' attach --thin --view devo1 --want $U/fid-7 --device $DEV --route lan --token tko; sleep 300"
 tt pipe-pane -O -t "=$TL:osc1" "cat >> '$WORK/osc.osc1'"
-waitfor 8 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-7>'" \
+waitfor 8 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-7;g='" \
   || fail "O: the attach says the session in view" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
 tn new-window -d -t "=$RS:" -n peerx "sleep 300"
 PX=$(tn display-message -p -t "=$RS:peerx" '#{window_id}')
 tn set-option -w -t "$PX" @peer 'far1@bob' \; set-option -w -t "$PX" @peer_cur "wid:FU9/ffar" \; set-option -w -t "$PX" @fleet_role panel
 tn select-window -t "=$(vs devo1):$PX"
-waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=far1;l=bob;w=FU9/ffar>'" \
+waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=far1;l=bob;w=FU9/ffar;g='" \
   || fail "O: a peer window says its machine and login" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
 tn select-window -t "=$(vs devo1):$W8"
-waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-8>'" \
+waitfor 5 sh -c "tr '\033\007' '<>' < '$WORK/osc.osc1' 2>/dev/null | grep -qF '<]7502;cur;token=tko;m=-;l=-;w=$U/fid-8;g='" \
   || fail "O: a switch back here says it" "$(osc osc1 | grep -o '7502;cur[^>]*' | tail -n 3)"
 hasnt "O: no other token on that tty" "$(osc osc1 | grep -o '7502;[a-z]*;token=[^;>]*' | grep -v 'token=tko')" "token="
 tt new-window -d -t "=$TL:" -n osc2 "sleep 300"
