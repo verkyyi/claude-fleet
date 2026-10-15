@@ -348,6 +348,126 @@ class Crashes(Base):
         self.assert_single_owner()
 
 
+class Takeover(Base):
+    """Road 2: the source cannot cooperate; Fleet withdraws inside isolation."""
+    def setUp(self):
+        super().setUp()
+        self.registry = Path(self.tmp.name, 'sessions')
+        self.registry.mkdir()
+        os.environ['FLEET_CC_SESSIONS_DIR'] = str(self.registry)
+        # Claude processes already on this machine (a developer's own sessions)
+        # are accounted for as running elsewhere; the legs add their own.
+        for pid in D.claude_processes():
+            self.register(pid, '/elsewhere')
+        dead = dict(self.record, id='unrelated', prompt='someone else\'s reminder', createdByPid=1,
+                    createdByProcStart='Thu Jan  1 00:00:00 1970')
+        self.store.write_text(json.dumps(dict(tasks=[dead, self.record])))
+        self.unrelated = dead
+        self.ctl = self.spawn()
+
+    def register(self, pid, cwd):
+        (self.registry / ('%d.json' % pid)).write_text(json.dumps(dict(sessionId='s%d' % pid, cwd=cwd)))
+
+    def fake_claude(self):
+        link = Path(self.tmp.name, 'bin', 'claude')
+        link.parent.mkdir(exist_ok=True)
+        if not link.exists():
+            link.symlink_to('/bin/sleep')
+        p = subprocess.Popen([str(link), '60'])
+        self.procs.append(p)
+        wait_for(lambda: p.pid in D.claude_processes())
+        return p
+
+    def stage2(self):
+        path = D.stage_takeover(FID, self.home, self.source.pid, 'after-clear', '2.1.295', self.ctl.pid)
+        self.observer = Observer(path)
+        self.observer.start()
+        return path
+
+    def test_isolated_takeover_keeps_every_other_record(self):
+        self.stage2()
+        self.assertEqual(D.gate(FID), 'wait')
+        D.claim(FID, self.ctl.pid)
+        self.kill_source()
+        D.handed(FID)
+        self.assertEqual(self.state(), 'withdrawn')
+        self.assertEqual(D.tasks(D.read(self.store)), [self.unrelated])
+        gate = D.read(D.gate_path())
+        self.assertEqual((gate['pid'], gate['home']), (self.ctl.pid, str(self.home)))
+        waiter = subprocess.Popen([sys.executable, str(BIN / 'fleet_transfer_durable.py'), 'gate-wait', str(self.home)],
+                                  stdout=subprocess.DEVNULL, env=dict(os.environ))
+        time.sleep(1)
+        self.assertIsNone(waiter.poll())                      # a new Claude here waits
+        D.activate(FID, dict(agent='codex'))
+        self.assertEqual(waiter.wait(timeout=5), 0)          # and starts once it is settled
+        self.assertFalse(D.gate_path().exists())
+        self.assertEqual(D.gate(FID), 'deliver')
+        self.assert_single_owner()
+
+    def test_unknown_claude_refuses_naming_it(self):
+        stray = self.fake_claude()
+        with self.assertRaises(D.Refused) as caught:
+            self.stage2()
+        self.assertIn('pid %d' % stray.pid, str(caught.exception))
+        self.register(stray.pid, str(self.home))
+        with self.assertRaises(D.Refused) as caught:
+            self.stage2()
+        self.assertIn('runs in this HOME', str(caught.exception))
+        self.register(stray.pid, '/somewhere/else')
+        self.stage2()                                         # accounted for: allowed
+        self.assertEqual(self.state(), 'staged')
+
+    def test_claude_appearing_after_staging_refuses_before_any_write(self):
+        self.stage2()
+        D.claim(FID, self.ctl.pid)
+        self.kill_source()
+        before = self.store.read_bytes()
+        self.fake_claude()
+        with self.assertRaises(D.Refused):
+            D.handed(FID)
+        self.assertEqual(self.store.read_bytes(), before)
+        self.assertEqual(D.abort(FID, 'isolation broke'), 'rolled_back')
+        self.assertFalse(D.gate_path().exists())
+        self.assert_single_owner()
+
+    def test_third_party_lock_holder_refuses(self):
+        other = self.spawn()
+        self.lock.write_text(json.dumps(dict(sessionId='someone-else', pid=other.pid,
+                                             procStart=D.proc_start(other.pid), acquiredAt=1)))
+        with self.assertRaises(D.Refused) as caught:
+            self.stage2()
+        self.assertIn('pid %d' % other.pid, str(caught.exception))
+
+    def crash_at(self, point):
+        self.stage2()
+        self.kill_source()
+        env = dict(os.environ, FLEET_DURABLE_TEST_CRASH=point, PYTHONPATH=str(BIN))
+        code = 'import os,sys,fleet_transfer_durable as D; D.claim(sys.argv[1], os.getpid()); D.handed(sys.argv[1])'
+        ctl = subprocess.run([sys.executable, '-c', code, FID], env=env, timeout=30)
+        self.assertEqual(ctl.returncode, -9)
+        self.assertIn(self.unrelated, D.tasks(D.read(self.store)))   # never lost, at any step
+        return D.recover_all()
+
+    def test_crash_after_write_ahead(self):
+        self.assertEqual(self.crash_at('withdrawing'), [(FID, 'rolled_back')])
+        self.assertEqual(D.tasks(D.read(self.store)), [self.unrelated, self.record])
+        self.assertFalse(D.gate_path().exists() and D.alive(D.read(D.gate_path())['pid'], D.read(D.gate_path())['start']))
+        self.assert_single_owner()
+
+    def test_crash_after_table_write(self):
+        self.assertEqual(self.crash_at('table-written'), [(FID, 'withdrawing')])
+        self.assertEqual(D.owner(D.load(FID)), 'fleet')       # Fleet's journal holds it,
+        self.assertIn('resume-source.sh', D.load(FID)['attention'])   # visibly
+        self.assertEqual(D.tasks(D.read(self.store)), [self.unrelated])
+        self.assert_single_owner()
+
+    def test_crash_after_withdrawn(self):
+        self.assertEqual(self.crash_at('withdrawn'), [(FID, 'withdrawn')])
+        D.activate(FID, dict(agent='claude', rollback=True))  # the resumed source's loop
+        self.assertEqual(D.gate(FID), 'deliver')
+        self.assert_single_owner()
+
+
 if __name__ == '__main__':
     result = unittest.main(exit=False, verbosity=1).result
     if result.wasSuccessful():

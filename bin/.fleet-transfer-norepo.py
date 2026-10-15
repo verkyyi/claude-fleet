@@ -48,6 +48,10 @@ class SchedulePreparation(ValueError):
     pass
 
 
+class TakeoverRefused(ValueError):
+    """Road 2's isolation or ownership checks failed: a refusal, never a preparation."""
+
+
 def preparation_path(values):
     return Path(os.environ['FLEET_CONF_DIR'])/'transfer-preparation'/(values['fleet_id']+'.json')
 
@@ -221,8 +225,31 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
         if agent == 'claude':
             from fleet_transfer_cron import validate as validate_cron, has_native_activity, live_list, check_durable_store
             # A durable record still in the table, or a journal the source has
-            # not confirmed, sends the panel to source preparation (#4280).
-            journal = check_durable_store(values['fleet_id'])
+            # not confirmed, sends the panel to source preparation (#4280) —
+            # unless this switch takes the source's tasks itself (road 2:
+            # --durable-takeover / a quota failover), checked read-only here.
+            if os.environ.get('FLEET_DURABLE_TAKEOVER') == '1':
+                import fleet_transfer_durable as durable
+                try:
+                    taken = durable.precheck_takeover(Path.home(), pid, durable.transcript_version(transcript))
+                except durable.Refused as error:
+                    raise TakeoverRefused(str(error)) from error
+                if taken and not loop:
+                    # A source that cannot list its tasks: its own PostToolUse mark and
+                    # a replay of its transcript must both show no session-only
+                    # scheduling besides the durable tasks road 2 takes.
+                    durable_ids = {r['id'] for r in taken}
+                    with open(transcript, encoding='utf-8') as lines:
+                        replayed = reader['prune'](reader['parse'](reader['replay'](lines)), int(time.time()))
+                    session_only = ({j for j, _ in active['ids']} | {j for j, _ in replayed['ids']}) - durable_ids
+                    if session_only or active['next'] or replayed['next'] or (mark and 'kind=' not in mark):
+                        raise TakeoverRefused('session-only scheduling is active (%s); only the source\'s own '
+                                              'verified plan can move it, takeover refused'
+                                              % (', '.join(sorted(session_only)) or 'a wakeup'))
+                    return None
+                journal = None
+            else:
+                journal = check_durable_store(values['fleet_id'])
             native = has_native_activity(transcript, pid)
             if native and not active['ids'] and not active['next'] and not loop:
                 if live_list(transcript, pid, time.time()):
@@ -233,6 +260,8 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
                     raise ValueError('native scheduling is active or unknown: export current CronList and a verified multi-cron plan before switching')
                 raw = json.loads(Path(loop).read_text())
                 verified = validate_cron(raw, transcript, pid, sid, values['fleet_id'], mark)
+    except TakeoverRefused:
+        raise
     except ValueError as error:
         raise SchedulePreparation(str(error)) from error
     return verified

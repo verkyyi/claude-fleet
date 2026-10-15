@@ -32,6 +32,17 @@ Fleet loop (the job goes with it), and a source still running is asked for an
 explicit CronCreate (`restoring` → `rolled_back` once its receipt and the table
 agree). Anything the evidence cannot settle is left as it is and shown
 (`status`, `attention`), never resent.
+
+Road 2 — the source cannot cooperate (dead, stuck, out of quota): the transfer
+controller stages from the native table (the records the source process created,
+by pid + procStart), the source exits, and `handed` withdraws them itself, ONLY
+inside the isolation boundary: Fleet holds the launch gate (fleet-session-wrap
+starts no Claude in this HOME meanwhile) and every live Claude process of this
+login is accounted for — registered, and not in this HOME project (the only
+writers of its table). An unknown or HOME-bound Claude refuses, naming its pid.
+The rewrite is a plain read-modify-write (re-read just before an atomic
+rename); every other record stays byte for byte. The scheduler lock is only a
+hint here: a holder that is alive and not the source refuses too.
 """
 from contextlib import contextmanager
 import errno
@@ -39,6 +50,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -53,6 +65,7 @@ from fleet_cron import fields, next_fire  # noqa: E402
 SUPPORTED = ('2.1.295',)
 MARGIN = 180          # a task due sooner stays with its current owner
 CLAIM_SECS = 900      # a staged / withdrawing journal no transfer claimed goes stale
+GATE_WAIT = 1800      # a launch waits at most this long behind the gate
 TERMINAL = ('rolled_back', 'returned', 'complete')
 SCHED_TOOLS = ('CronList', 'CronCreate', 'CronDelete', 'ScheduleWakeup')
 
@@ -84,6 +97,12 @@ def alive(pid, start):
     except PermissionError:
         pass
     return bool(start) and proc_start(pid) == start
+
+
+def crash(point):
+    # Selftest seam: SIGKILL this process at a named step (never set in use).
+    if os.environ.get('FLEET_DURABLE_TEST_CRASH') == point:
+        os.kill(os.getpid(), 9)
 
 
 # --- files -------------------------------------------------------------------
@@ -466,25 +485,226 @@ def confirm_restored(fid, transcript):
         save(path, r, 'rolled_back', why='source re-created its tasks natively')
 
 
+# --- road 2: the uncooperative source; Fleet rewrites inside isolation -------
+
+def claude_processes():
+    """Every live Claude process of this login, by the walk fleet-lib.sh uses
+    (fleet_pane_claude_pids): comm `claude`, or node/bun running its cli."""
+    me = os.getuid()
+    rows = subprocess.check_output(['ps', '-axo', 'pid=,uid=,stat=,comm='], text=True,
+                                   env=dict(os.environ, LC_ALL='C'), timeout=10, errors='replace')
+    cmds = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True,
+                                   env=dict(os.environ, LC_ALL='C'), timeout=10, errors='replace')
+    command = {}
+    for line in cmds.splitlines():
+        head = line.strip().split(None, 1)
+        if head and head[0].isdigit():
+            command[int(head[0])] = ' ' + (head[1] if len(head) > 1 else '') + ' '
+    extra = os.environ.get('FLEET_CLAUDE_COMM', '')
+    found = []
+    for line in rows.splitlines():
+        part = line.split(None, 3)
+        if len(part) < 4 or not part[0].isdigit() or int(part[1]) != me or 'Z' in part[2]:
+            continue
+        pid, base = int(part[0]), part[3].rsplit('/', 1)[-1]
+        cmd = command.get(pid, '')
+        if (base == 'claude' or (re_node(base) and ('claude-code/cli.js' in cmd or '/claude ' in cmd))
+                or (extra and base in ('bash', 'sh', 'zsh', 'dash') and extra in cmd)):
+            found.append(pid)
+    return sorted(found)
+
+
+def re_node(base):
+    return base == 'bun' or (base.startswith('node') and base[4:].isdigit()) or base == 'node'
+
+
+def isolation(home, exclude=()):
+    """Refuse unless every live Claude of this login is registered and runs
+    outside this HOME project — i.e. none can rewrite its task table."""
+    registry = Path(os.environ.get('FLEET_CC_SESSIONS_DIR', str(Path.home() / '.claude/sessions')))
+    unknown = []
+    for pid in claude_processes():
+        if pid in exclude:
+            continue
+        try:
+            cwd = json.loads((registry / ('%d.json' % pid)).read_text()).get('cwd', '')
+        except (OSError, ValueError):
+            unknown.append('pid %d (no session registry: unknown or old)' % pid)
+            continue
+        if not cwd or Path(cwd).resolve() == Path(home).resolve():
+            unknown.append('pid %d (runs in this HOME)' % pid)
+    if unknown:
+        raise Refused('a live Claude outside the handover could rewrite the native task table: '
+                      + '; '.join(unknown) + '; switch refused, nothing changed')
+
+
+def gate_path():
+    return root() / 'launch.gate'
+
+
+def take_gate(r):
+    gate = read(gate_path())
+    ctl = r['controller']
+    if gate and gate.get('fid') != r['fid'] and alive(gate.get('pid'), gate.get('start')):
+        raise Refused('another durable handover holds the launch gate (pid %s)' % gate.get('pid'))
+    atomic(gate_path(), dict(home=r['home'], fid=r['fid'], pid=ctl['pid'], start=ctl['start']))
+
+
+def release_gate(r):
+    gate = read(gate_path())
+    if gate and gate.get('fid') == r['fid']:
+        os.unlink(gate_path())
+
+
+def gate_wait(cwd):
+    """fleet-session-wrap's call before every Claude launch."""
+    waited, said = 0, False
+    while True:
+        gate = read(gate_path())
+        if (not gate or Path(cwd).resolve() != Path(gate.get('home', '/')).resolve()
+                or not alive(gate.get('pid'), gate.get('start'))):
+            return 0
+        if waited >= GATE_WAIT:
+            print('fleet: the durable handover gate is still held after %ds; starting anyway' % waited)
+            return 1
+        if not said:
+            print('fleet: waiting for a durable task handover in this HOME to settle…', flush=True)
+            said = True
+        time.sleep(1)
+        waited += 1
+
+
+def source_records(home, source_pid):
+    """The records in HOME's table that this exact source process created."""
+    start = proc_start(source_pid)
+    store, _ = native_paths(home)
+    return [r for r in tasks(read(store))
+            if start and r.get('createdByPid') == int(source_pid) and r.get('createdByProcStart') == start]
+
+
+def precheck_takeover(home, source_pid, version):
+    """Read-only: may road 2 take the source's durable tasks? [] = nothing to take."""
+    if not source_records(home, source_pid):
+        return []
+    return _takeover_checks(Path(home).resolve(), source_pid, version)[0]
+
+
+def _takeover_checks(home, source_pid, version):
+    store, lock = native_paths(home)
+    start = proc_start(source_pid)
+    if not start:
+        raise Refused('the source process is gone; stage before it exits')
+    source = dict(pid=int(source_pid), start=start)
+    records = source_records(home, source_pid)
+    if not records:
+        raise ValueError('the source created no native durable task')
+    if version not in SUPPORTED:
+        raise Refused('native durable handover requires a verified Claude ' + '/'.join(SUPPORTED)
+                      + ' (source is ' + str(version or 'unknown') + ')')
+    kind, owner_ = holder(lock, source)
+    if kind == 'other':
+        raise Refused('native scheduler lock is held by another live process: ' + describe(owner_)
+                      + '; switch refused, nothing changed')
+    check_records(records, home, source, time.time())
+    isolation(home, exclude=(source['pid'],))
+    return records, source
+
+
+def stage_takeover(fid, home, source_pid, session_id, version, controller):
+    """Before the source exits: stage the records the source process created."""
+    home = Path(home).resolve()
+    records, source = _takeover_checks(home, source_pid, version)
+    jobs = [job_for(r) for r in records]
+    path = new_journal(fid, home, dict(records=records, source=source), session_id, version, jobs, 'fence')
+    with locked(path) as r:
+        r['controller'] = dict(pid=int(controller), start=proc_start(controller))
+        save(path, r)
+    return path
+
+
+def takeover_plan(fid):
+    """The Fleet loop plan a road-2 switch carries: the journal's staged jobs."""
+    r = load(fid)
+    plans = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'transfer-plans'
+    plans.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = plans / (fid + '.takeover.json')
+    atomic(path, dict(jobs=[{k: v for k, v in j.items() if k != 'next_run_at'} for j in r['jobs']]))
+    return path
+
+
+def _rewrite_without(r):
+    """Plain read-modify-write: re-read right before the atomic rename, and only
+    the staged records go."""
+    store = Path(r['store'])
+    for _ in range(5):
+        before = store.read_bytes()
+        current = json.loads(before)
+        new = dict(current, tasks=[t for t in tasks(current) if r['records'].get(t['id']) != t])
+        if store.read_bytes() != before:
+            continue
+        atomic(store, new, stat.S_IMODE(store.stat().st_mode))
+        crash('table-written')
+        return
+    raise ValueError('the native task table kept changing; not withdrawing')
+
+
+def takeover(r, path):
+    """After the source exited: gate, isolation, write-ahead, rewrite, read back."""
+    if _source_alive(r):
+        raise Refused('the source process is still alive')
+    take_gate(r)
+    kind, owner_ = holder(r['lock'], r['source'])
+    if kind == 'other':
+        raise Refused('native scheduler lock is held by another live process: ' + describe(owner_))
+    isolation(r['home'])
+    current = table(r['store'])
+    if any(current.get(i) != rec for i, rec in r['records'].items()):
+        raise Refused('a staged native task changed since staging; not withdrawing')
+    others = {i: t for i, t in current.items() if i not in r['records']}
+    save(path, r, 'withdrawing')
+    crash('withdrawing')
+    _rewrite_without(r)
+    after = table(r['store'])
+    if set(after) & set(r['records']) or {i: after.get(i) for i in others} != others:
+        raise ValueError('native task table readback after the withdrawal disagrees')
+    try:
+        isolation(r['home'])
+    except Refused as error:
+        r['attention'] = 'a Claude appeared during the withdrawal: ' + str(error)
+    save(path, r, 'withdrawn')
+    crash('withdrawn')
+
+
 # --- the transfer controller -------------------------------------------------
 
 def claim(fid, controller):
     """Before the source exits: the receipt is in and the controller owns the journal."""
     path = journal_path(fid)
     with locked(path) as r:
-        if r['state'] != 'withdrawn':
+        if r['state'] == 'active':
+            return   # an earlier switch already gave it to Fleet; it moves with the loop
+        if r['road'] == 'fence':
+            if r['state'] != 'staged':
+                raise Refused('durable takeover is %s, not staged' % r['state'])
+        elif r['state'] != 'withdrawn':
             raise Refused('durable handover is %s: the source has not confirmed its native '
                           'CronDelete; switch refused' % r['state'])
-        _absent(r)
+        else:
+            _absent(r)
         r['controller'] = dict(pid=int(controller), start=proc_start(controller))
         r['deadline'] = time.time() + 1800
         save(path, r)
 
 
 def handed(fid):
-    """After the source exited: the native side has nothing left to run."""
+    """After the source exited: the native side has nothing left to run (road 2:
+    after Fleet withdrew it, inside the isolation boundary)."""
     path = journal_path(fid)
     with locked(path) as r:
+        if r['state'] == 'active':
+            return
+        if r['road'] == 'fence' and r['state'] == 'staged':
+            takeover(r, path)
         if r['state'] != 'withdrawn':
             raise Refused('durable handover is %s, not withdrawn' % r['state'])
         if _source_alive(r):
@@ -506,17 +726,27 @@ def activate(fid, target):
         r['target'] = target
         r.pop('attention', None)
         save(path, r, 'active')
+        release_gate(r)
 
 
 def abort(fid, reason='switch did not happen'):
     """Before activation. A still-running source is asked to take it back."""
     path = journal_path(fid)
+    try:
+        return _abort(path, reason)
+    finally:
+        r = read(path)
+        if r:
+            release_gate(r)
+
+
+def _abort(path, reason):
     with locked(path) as r:
         state = r['state']
         if state in TERMINAL or state == 'restoring':
             return state
         if state == 'active':
-            raise Refused('Fleet already owns the durable task; not rolling it back')
+            return state   # Fleet owns it; the loop that carries it decides
         present = {j['id'] for j in r['jobs']} & set(table(r['store']))
         if state == 'staged' or (state == 'withdrawing' and present == set(r['records'])):
             save(path, r, 'rolled_back', why=reason)   # the native record never left
@@ -576,6 +806,7 @@ def recover(fid):
             present = ids & set(table(r['store']))
             if r['state'] in ('staged', 'withdrawing') and present == ids:
                 save(path, r, 'rolled_back', why='no transfer claimed it; native kept the task')
+                release_gate(r)
                 return 'rolled_back'
             if (r['state'] == 'withdrawing' and not present and not _source_alive(r)
                     and r.get('transcript') and _receipts(r, r['transcript'])[0] == ids):
@@ -593,7 +824,7 @@ def recover(fid):
 def recover_all():
     out = []
     if root().is_dir():
-        for path in sorted(root().glob('*.json')):
+        for path in sorted(root().glob('*-*-*-*-*.json')):
             try:
                 out.append((path.stem, recover(path.stem)))
             except (OSError, ValueError) as error:
@@ -626,6 +857,14 @@ def main(argv):
         claim(args[0], int(args[1]))
     elif action == 'handed':
         handed(args[0])
+    elif action == 'stage-takeover':
+        # <fid> <home> <source pid> <source session> <source transcript> <controller pid>
+        if not source_records(args[1], int(args[2])):
+            return 0
+        stage_takeover(args[0], args[1], int(args[2]), args[3], transcript_version(args[4]), int(args[5]))
+        print(takeover_plan(args[0]))
+    elif action == 'gate-wait':
+        return gate_wait(args[0])
     elif action == 'activate':
         activate(args[0], json.loads(args[1]))
     elif action == 'abort':

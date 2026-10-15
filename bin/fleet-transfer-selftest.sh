@@ -86,6 +86,8 @@ while (my $line = <STDIN>) {
     if (-e "$ENV{TRANSFER_TEST_ROOT}/native-plan.json") {
         open(my $p, '<', "$ENV{TRANSFER_TEST_ROOT}/native-plan.json") or die;
         local $/; my $plan=decode_json(<$p>); close $p;
+        # Durable tasks do not stop on exit: no dialog without a session-only one.
+        goto EXITNOW unless grep { !$_->{durable} } @{$plan->{jobs}};
         print "Background work is running\nThe following will stop when you exit:\n";
         for my $job (@{$plan->{jobs}}) { print "scheduled task · $job->{cron}\n" unless $job->{durable}; }
         print "❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\nEnter to confirm · Esc to cancel\n";
@@ -100,6 +102,7 @@ while (my $line = <STDIN>) {
         my $confirm = <STDIN>;
         next unless defined($confirm) && $confirm =~ /^\s*$/;
     }
+    EXITNOW:
     $ENV{FLEET_SESSION_END_REASON} = 'prompt_input_exit';
     system('/bin/bash', "$ENV{TRANSFER_TEST_ROOT}/install/bin/session-end-hook.sh");
     exit 0;
@@ -300,6 +303,55 @@ PYNATIVE
       [ "$(jstate)" = withdrawn ] || fail 'confirmed receipts must withdraw the journal'
     }
 
+    # 0) road 2 — the source cannot run its own CronDelete (quota, stuck): this
+    #    controller takes its durable task, ONLY inside the isolation boundary.
+    printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
+    durable_source 99
+    TM set-option -wu -t "$WIN" @loop
+    printf '{"jobs":[{"id":"2b6a2f9f","durable":true}]}\n' > "$WORK/native-plan.json"   # loop-bridge targets only
+    # Claude processes already on this machine (a developer's own sessions) are
+    # accounted for as running elsewhere; CI has none.
+    python3 - "$IBIN" "$WORK/sessions" <<'PYKNOWN'
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1]); import fleet_transfer_durable as D
+for pid in D.claude_processes():
+    f=Path(sys.argv[2])/('%d.json'%pid)
+    if not f.exists(): f.write_text(json.dumps(dict(sessionId='known-%d'%pid,cwd='/elsewhere')))
+PYKNOWN
+    mkdir -p "$WORK/stray"; ln -sf /bin/sleep "$WORK/stray/claude"
+    "$WORK/stray/claude" 60 & STRAY=$!
+    sleep 0.3
+    transfer --durable-takeover --handoff "$WORK/durable-notes.md" && fail 'an unknown live Claude must refuse the takeover'
+    printf '%s' "$OUT" | grep -q "pid $STRAY" || fail 'the takeover refusal must name the unknown Claude'
+    kill -0 "$PID" || fail 'a refused takeover exited the source'
+    cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'a refused takeover changed native tasks'
+    [ ! -e "$JOURNAL" ] || fail 'a refused takeover staged a journal'
+    kill "$STRAY"; wait "$STRAY" 2>/dev/null
+    ok
+    transfer --durable-takeover --handoff "$WORK/durable-notes.md" || { cat "$(packet)/pane-target-failed.txt" >&2 2>/dev/null; fail 'isolated durable takeover'; }
+    kill -0 "$PID" 2>/dev/null && fail 'source must exit before Fleet takes its task'
+    BUNDLE=$(packet)
+    python3 - "$BUNDLE/loop/state.json" "$JOURNAL" "$IBIN" "$HOME" "$WORK/native-before.json" <<'PYTAKE' || fail 'road 2: one Fleet delivery, every other record kept'
+import json,sys,runpy,time
+from pathlib import Path
+path,journal,ibin,home,before=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4]),Path(sys.argv[5])
+for _ in range(40):
+    if path.exists() and json.loads(path.read_text()).get('status')=='active': break
+    time.sleep(.1)
+j=json.loads(journal.read_text()); assert j['state']=='active' and j['road']=='fence',j
+assert not (journal.parent/'launch.gate').exists()
+assert json.loads((home/'.claude/scheduled_tasks.json').read_text())['tasks']==[]
+log=home/'delivered.log'
+loop=runpy.run_path(ibin+'/fleet-loop.py')
+due=[x for x in json.loads(path.read_text())['schedule']['jobs'] if x['id']=='2b6a2f9f'][0]['next_run_at']
+for now in (due-1,due,due+1,due+3600): loop['dispatch'](path,now=now)
+lines=log.read_text().splitlines()
+assert len(lines)==1 and 'reread the train metrics once' in lines[0],lines
+assert json.loads(journal.read_text())['state']=='complete'
+PYTAKE
+    ok
+
     # 1) B: no preparation yet — every entry refuses, nothing changes.
     durable_source 96
     printf 'Keep the source and reminder running.\n' > "$WORK/durable-notes.md"
@@ -308,7 +360,7 @@ PYNATIVE
       printf '%s' "$OUT" | grep -q 'durable.*execution owner' || fail 'durable refusal must explain missing execution owner'
       kill -0 "$PID" || fail 'durable refusal exited the source'
       cmp "$HOME/.claude/scheduled_tasks.json" "$WORK/native-before.json" || fail 'durable refusal changed native tasks'
-      [ ! -e "$FLEET_CONF_DIR/handoffs" ] || fail 'durable refusal wrote a handoff'
+      ! ls -d "$FLEET_CONF_DIR"/handoffs/*-"$SID"-* >/dev/null 2>&1 || fail 'durable refusal wrote a handoff'
       ok
     done
     transfer --from-panel || fail 'durable panel must request source preparation'

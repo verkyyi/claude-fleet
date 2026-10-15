@@ -271,6 +271,13 @@ while :; do
   # the last one's working directory (@agent_cwd, issue #3183): a new agent starts
   # where it is launched.
   [ "$intmux" = 1 ] && { wset -u @agent_status; wset -u @agent_status_ts; wset -u @agent_cwd; }
+  # A durable task handover that rewrites this HOME's native task table holds
+  # every new Claude here until it is settled (issue #4280): the launch gate.
+  if [ -f "$PCONF/transfer-durable/launch.gate" ]; then
+    launch_agent=claude; prev=''
+    for a in ${cmd[@]+"${cmd[@]}"}; do [ "$prev" = --agent ] && launch_agent=$a; prev=$a; done
+    [ "$launch_agent" != claude ] || python3 "$BIN/fleet_transfer_durable.py" gate-wait "$PWD" || :
+  fi
   PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   rc=$?
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then

@@ -122,7 +122,6 @@ def package(a):
     if a.handoff and not notes.strip():
         raise ValueError("--handoff must name a non-empty UTF-8 file")
     loop = None
-    durable_ids = []
     if a.loop:
         validate = runpy.run_path(str(Path(__file__).with_name('fleet-loop.py')))['spec']
         raw = json.loads(Path(a.loop).read_text(encoding='utf-8'))
@@ -131,7 +130,6 @@ def package(a):
             if not isinstance(verified, dict):
                 raise ValueError('native cron packet needs the controller-verified ownership plan')
             loop = validate(verified) if verified['jobs'] else None
-            durable_ids = verified.get('durable_ids', [])
         else:
             loop = validate(raw)
     elif a.previous:
@@ -260,11 +258,18 @@ def package(a):
         manifest['loop_spec_path'] = str(bundle / 'loop-spec.json')
         if a.loop:
             manifest['native_cron'] = json.loads(Path(a.loop).read_text()).get('native_source')
-        if durable_ids:
-            # The single-owner journal (issue #4280): the loop delivers these
-            # only once fleet_transfer_durable.py says the handover is active.
-            manifest['durable_fid'] = json.loads(a.identity)['fleet_id']
-            manifest['durable_ids'] = durable_ids
+        # The single-owner journal (issue #4280): the loop delivers these only
+        # once fleet_transfer_durable.py says the handover is active.
+        durable = None
+        if a.norepo:
+            import fleet_transfer_cron
+            durable = fleet_transfer_cron.durable_journal(json.loads(a.identity)['fleet_id'])
+        if durable:
+            ids = [j['id'] for j in durable['jobs']]
+            if not set(ids) <= {j['id'] for j in loop.get('jobs', [])}:
+                raise ValueError('the Fleet plan does not carry every staged durable job')
+            manifest['durable_fid'] = durable['fid']
+            manifest['durable_ids'] = ids
     draft_file = a.draft_file
     if a.input_view:
         view = json.loads(a.input_view)
@@ -368,7 +373,7 @@ def package(a):
     helper = str(Path(a.launcher).parent / ".fleet-transfer.py")
     resume = "#!/bin/bash\nset -uo pipefail\n"
     resume += 'if [ "${1:-}" = --run-source ]; then\n  cd %s || exit 1\n' % q(worktree)
-    if manifest.get('native_cron'):
+    if manifest.get('native_cron') or manifest.get('durable_fid'):
         resume += '  recovery=$(python3 %s rollback-cron %s) || exit 1\n' % (q(helper), q(str(bundle)))
         resume += '  tmux -L %s set-option -w -t %s @handoff_manifest "$recovery/manifest.json" || exit 1\n  exec bash "$recovery/launch.sh"\n' % (q(a.session), q(a.pane))
     else:
@@ -509,7 +514,7 @@ def launcher(bundle, launch):
 
 def rollback_cron(bundle):
     m = json.loads((bundle / 'manifest.json').read_text())
-    if not m.get('native_cron'):
+    if not m.get('native_cron') and not m.get('durable_fid'):
         return
     recovery = bundle / 'rollback'
     recovery.mkdir(mode=0o700)  # One recovery, never a second timer controller.
