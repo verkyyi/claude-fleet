@@ -116,8 +116,9 @@ Verify actual running versions, not only workflow success. Shared-proxy updates
 can interrupt in-flight HTTP connections even though worker processes remain;
 coordinate a quiet interval rather than promise a zero-impact restart.
 
-For mini2, confirm a matching pooled rejection appears in the hub audit, a new
-access fingerprint is installed, and a later request from the existing session
-succeeds. For Arvin, verify central recovery and the terminal panel repository
-task separately. If terminal automation is unavailable, mark real panel
+For the affected separated machine, confirm a matching pooled rejection appears
+in the hub audit, a new access fingerprint is installed, and a later request from
+the existing session succeeds. For the affected personal POD, verify central
+recovery and the terminal panel repository task separately. If terminal
+automation is unavailable, mark real panel
 acceptance pending operator evidence; do not substitute a CLI launch.
