@@ -712,4 +712,34 @@ func TestDrillLoginOnUserPodIsSettledNotRetried(t *testing.T) {
 			t.Fatalf("pod row = %+v; want no remove queued", a)
 		}
 	}
+
+	// The pod's machine link runs as its one login — the drill's: deleting the
+	// person keeps it enrolled (before, it was retired and the pod fell off the
+	// hub, 「unrecognised enrollment token」); the login's endpoint on any other
+	// machine goes as before.
+	db := h2.srv.Store.DB()
+	for _, ep := range [][2]string{{"ep_pod42", "u-drillpod42"}, {"ep_other42", "mac-c"}} {
+		if _, err := db.Exec(`INSERT INTO endpoints (endpoint_id, token_hash, label, enrolled_at, hostname, os_user)
+			VALUES (?, ?, ?, ?, ?, ?)`, ep[0], "h-"+ep[0], ep[0], time.Now().UTC().Format(time.RFC3339), ep[1], inv2.Login); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO nodes (endpoint_id, hostname, os_user) VALUES (?, ?, ?)`, ep[0], ep[1], inv2.Login); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h2.srv.SweepDrills(d.ExpiresAt.Add(time.Minute))
+	if _, err := h2.srv.Store.Principal(inv2.PersonID); err == nil {
+		t.Fatal("the expired drill person on a pod is still there")
+	}
+	var live int
+	db.QueryRow(`SELECT COUNT(*) FROM endpoints WHERE endpoint_id = 'ep_pod42' AND retired_at IS NULL`).Scan(&live)
+	var roster int
+	db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE endpoint_id = 'ep_pod42'`).Scan(&roster)
+	if live != 1 || roster != 1 {
+		t.Fatalf("pod endpoint live=%d roster=%d; want the pod still enrolled and on the roster", live, roster)
+	}
+	db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE endpoint_id = 'ep_other42'`).Scan(&roster)
+	if roster != 0 {
+		t.Fatal("the drill login's endpoint on another machine was kept")
+	}
 }

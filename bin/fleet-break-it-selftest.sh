@@ -120,7 +120,8 @@
 #   drill-login-handed-silently                     tokenledger/internal/api fleet_drill.go (closeDrillLogins
 #                                                   handed) + store DeleteDrill (keeps the handed rows)
 #   drill-expiry-user-pod                           tokenledger/internal/api fleet_drill.go (closeDrillLogins
-#                                                   podKept / isUserPodName: a pod's own login settled)
+#                                                   podKept / handMadePod: a pod's own login settled, its
+#                                                   endpoints kept) + store DeleteDrillKeeping
 #   machine-lane-reissued                           tokenledger/internal/api fleet_login_node.go (deviceNode, machineServing)
 #                                                   + store EndpointByTokenHash (prev_token_hash) + node_machine.go
 #                                                   (staleLoginTokenWhy), internal/agent lane_state.go,
@@ -5755,10 +5756,12 @@ drill_drill_expiry_user_pod() {
   t0=$(now)
   grep -q 'podKeepsLogin = "pod keeps its one login"' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
     || { WHY="closeDrillLogins no longer knows the pod's final refusal"; return 1; }
+  grep -q 'DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
+    || { WHY="deleteDrill retires a hand-made pod's endpoints again — the pod falls off the hub"; return 1; }
   grep -q "pod keeps its one login" "$ROOT/bin/fleet-node-linux.py" \
     || { WHY="fleet-node-linux's pod refusal changed its words — closeDrillLogins would retry it again"; return 1; }
   _drill_go_tests 'TestDrillLoginOnUserPodIsSettledNotRetried' "$ROOT/tokenledger/internal/api/fleet_drill_test.go" \
-    '个人 pod 上的演练登录到期即结清：不发 remove、rc 2 不重试，人立即删、同名登录马上能再邀（go test）' || return 1
+    '个人 pod 上的演练登录到期即结清：不发 remove、rc 2 不重试，人立即删、同名登录马上能再邀、pod 不掉线（go test）' || return 1
   SECS=$(since "$t0")
 }
 

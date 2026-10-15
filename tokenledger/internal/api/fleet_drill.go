@@ -456,6 +456,13 @@ func podKept(a store.FleetAccount) bool {
 	return a.State == store.AccountFailed && a.Op == control.AccountRemove && strings.Contains(a.Detail, podKeepsLogin)
 }
 
+// handMadePod says host is one person's pod the hub did not make (none of
+// its cluster pod rows): a remove of its login is refused for good there, and
+// it is never the hub's to take down.
+func (s *Server) handMadePod(host string) bool {
+	return isUserPodName(host) && s.clusterPodOf(host) == nil
+}
+
 // closeDrillLogins removes every login the hub opened for drill person d
 // (claude-fleet#2549: its first session's machine) — a real OS login on a
 // machine, which deleting the person's rows would leave behind with nobody
@@ -493,8 +500,7 @@ func (s *Server) closeDrillLogins(d *store.DrillPerson, now time.Time) (left []s
 		// hour, the row read failed, the pod fell off the person's list and a new
 		// invite of the login was refused). A pod the hub made is destroyed by
 		// the remove, as before.
-		if podKept(a) || ((a.State == store.AccountActive || a.State == store.AccountFailed) &&
-			isUserPodName(a.Hostname) && s.clusterPodOf(a.Hostname) == nil) {
+		if podKept(a) || ((a.State == store.AccountActive || a.State == store.AccountFailed) && s.handMadePod(a.Hostname)) {
 			log.Printf("fleet: drill %s: %s is a person's pod's own login (kept until the pod itself goes) — settled, not removed", d.PrincipalID, where)
 			continue
 		}
@@ -572,7 +578,11 @@ func (s *Server) deleteDrill(d *store.DrillPerson, actor string, now time.Time, 
 	for _, a := range handed {
 		hosts = append(hosts, a.Hostname)
 	}
-	out, err := s.Store.DeleteDrill(d.PrincipalID, actor, now, hosts...)
+	// A person's pod the hub did not make stays enrolled: its machine link
+	// runs as the pod's one login — the drill's — and retiring it cut the pod
+	// off the hub, gone from the roster until it was joined again by hand
+	// (claude-fleet#4297, u-drillcn4150).
+	out, err := s.Store.DeleteDrillKeeping(d.PrincipalID, actor, now, hosts, s.handMadePod)
 	if err != nil {
 		return nil, err
 	}
