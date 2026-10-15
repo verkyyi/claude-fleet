@@ -7795,7 +7795,7 @@ term_go() {
   local tests="$1" pkgs="$2" ok="$3" out rc t
   for t in $tests; do
     grep -q "^func $t(" "$ROOT"/tokenledger/internal/api/*_test.go "$ROOT"/tokenledger/internal/agent/*_test.go \
-      "$ROOT"/tokenledger/internal/control/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
+      "$ROOT"/tokenledger/internal/control/*_test.go "$ROOT"/tokenledger/internal/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     # shellcheck disable=SC2086 # pkgs is a word list
