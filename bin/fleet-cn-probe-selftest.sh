@@ -447,4 +447,39 @@ eq "G: no Deployment, no manifest → 1" 1 "$rc"; contains "G: says so" "$out" "
 # --- H..K: the probe itself, offline (issue #4303) -----------------------------
 for leg in H I J K; do "leg_$leg"; done
 
+# --- L. a drill person made again gets its own allowlist (issue #4290) ---------------
+cat > "$WORK/shim/ssh" <<SH
+#!/bin/sh
+in=\$(cat)
+case "\$in" in
+  *'id -u'*) printf 'USER\n/home/x/.local/bin/fleet\n' ;;
+  *'cert-check'*) if [ -f "$WORK/listed" ]; then printf 'PASS\tok\n{"machine": "u-test1"}\n'; else printf 'FAIL\tno certificate\n'; fi ;;
+  *'fleet login'*) printf 'CODE ABCD-EFGH\n' ;;
+esac
+SH
+cat > "$WORK/drill" <<SH
+#!/bin/sh
+case "\$1" in
+  invite) printf '{"person_id":"drill-h1","approve_code":"fd_secret"}\n' ;;
+  approve) : > "$WORK/listed" ;;
+esac
+SH
+cat > "$WORK/policy" <<SH
+#!/bin/sh
+echo "tok=\${CCQUOTA_VIEWER_TOKEN:+set} \$*" >> "$WORK/policy.log"
+SH
+chmod +x "$WORK/shim/ssh" "$WORK/drill" "$WORK/policy"
+rm -f "$WORK/listed" "$WORK/policy.log"
+out=$(FLEET_CN_PROBE_DRILL_CMD="$WORK/drill" FLEET_CN_PROBE_POLICY_CMD="$WORK/policy" FLEET_CN_PROBE_ENSURE_WAIT=10 \
+  FLEET_CN_PROBE_CRED_ALLOW='codex:account:aa uuid-b' CCQUOTA_VIEWER_TOKEN=t0k bash "$E" ensure --repo o/r --stable $SHA 2>&1)
+contains "L: the drill is made again" "$out" "ENSURE identity made a new drill person"
+contains "L: its allowlist is written" "$out" "ENSURE allow made drill-h1"
+eq "L: one set, the operator token in its environment" "tok=set set --force user drill-h1 codex:account:aa uuid-b" "$(cat "$WORK/policy.log" 2>/dev/null)"
+lacks "L: no token on an argv or the output" "$out$(cat "$WORK/policy.log")" "t0k"
+rm -f "$WORK/listed" "$WORK/policy.log"
+out=$(FLEET_CN_PROBE_DRILL_CMD="$WORK/drill" FLEET_CN_PROBE_POLICY_CMD="$WORK/policy" FLEET_CN_PROBE_ENSURE_WAIT=10 \
+  bash "$E" ensure --repo o/r --stable $SHA 2>&1)
+lacks "L: no FLEET_CN_PROBE_CRED_ALLOW ⇒ no list written" "$out" "ENSURE allow"
+[ ! -f "$WORK/policy.log" ] || fail "L: a list was written with no FLEET_CN_PROBE_CRED_ALLOW"
+
 printf 'fleet-cn-probe-selftest OK (%d checks)\n' "$CHECKS"

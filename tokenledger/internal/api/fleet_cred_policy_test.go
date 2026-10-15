@@ -685,6 +685,65 @@ func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
 	}
 }
 
+// claude-fleet#4290: a person's own pod (u-<nonce>) is made and rebuilt by the
+// hub for one person, so in strict mode it had no machine list and every
+// subscription was denied — the China real-user probe's Codex turns were all
+// 403 until someone listed the pod by hand. With no list of its own it takes
+// its owner's person list; a drill owner reads its creator's; a list written
+// for the pod wins; an ordinary machine is unchanged.
+func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
+	h, _, _ := policyRig(t)
+	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	const pod = "u-pod4290a"
+	pa, err := h.srv.Store.Principal(pAlice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AdoptAccount(pa, pod, now); err != nil {
+		t.Fatal(err)
+	}
+	alicePod := enrollAs(t, h, "alice-"+pod, pod, pa.Login)
+	// Before alice has a list: the pod inherits «none» — still nothing.
+	if got, _, _ := leased(t, h, alicePod); len(got) != 0 {
+		t.Fatalf("unlisted owner's pod leased %v", got)
+	}
+	setPolicy(t, h, "user", pAlice, []string{uuidGmail, uuidCodex})
+	if got, _, _ := leased(t, h, alicePod); !eq(got, "claude/gmail", "codex/default") {
+		t.Fatalf("pod with the owner's list: %v", got)
+	}
+	// An ordinary machine with no list still denies (alice on mac-c has no machine list).
+	if got, _, _ := leased(t, h, enrollAs(t, h, "alice-mac-c2", "mac-c", pa.Login)); len(got) != 0 {
+		t.Fatalf("ordinary machine with no list leased %v", got)
+	}
+	// A list written for the pod itself wins.
+	setPolicy(t, h, "node", pod, []string{uuidCodex})
+	if got, _, _ := leased(t, h, alicePod); !eq(got, "codex/default") {
+		t.Fatalf("pod's own list: %v", got)
+	}
+	// A drill person's pod (the probe's): its creator's list, through the drill.
+	const dpod = "u-pod4290b"
+	if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: "drill-p", Login: "drillp", Hostname: "mac-c",
+		CodeHash: HashToken("fd_drill-p"), CreatedBy: pAlice, CreatedAt: now, ExpiresAt: now.Add(time.Hour), Home: dpod}); err != nil {
+		t.Fatal(err)
+	}
+	dp, err := h.srv.Store.Principal("drill-p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AdoptAccount(dp, dpod, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.SetFleetSetting(trustKey(dpod), TrustTrusted, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := leased(t, h, enrollAs(t, h, "drillp-"+dpod, dpod, "drillp")); !eq(got, "claude/gmail", "codex/default") {
+		t.Fatalf("drill's pod: %v, want its creator alice's list", got)
+	}
+}
+
 // A list that takes a provider's LAST subscription from its scope is refused
 // unless forced (claude-fleet#3713): a Linux machine kept only a Codex account
 // after a narrowing aimed at one Claude account, and its person's sessions all

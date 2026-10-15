@@ -39,6 +39,8 @@
 #                                                   tokenledger/internal/api judge() (go test, when a toolchain is here)
 #   dispatch-wrong-replica                          tokenledger/internal/api node_route.go (fleet_node_conns +
 #                                                   /internal/v1/node-write; go test, when a toolchain is here)
+#   cred-user-pod-unlisted                          tokenledger/internal/api fleet_cred_policy.go
+#                                                   (userPodNodeAllow; go test, when a toolchain is here)
 #   two-hubs-double-refresh                         tokenledger/internal/leader (Leader / Lock), credvault Lease's
 #                                                   CrossLock, the three gated loops (go test, when a toolchain is here)
 #   github-signin-unreachable                       tokenledger/internal/api github_auth.go (githubExchange) +
@@ -750,6 +752,34 @@ drill_dispatch_wrong_replica() {
     esac
   else
     WHAT='没有 go：六条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- cred-user-pod-unlisted (#4290): in strict mode a person's pod (u-<nonce>) the
+# hub made or rebuilt had no machine allowlist, so every subscription was denied —
+# every Codex turn 403 until someone listed the pod by hand. The fix is the hub's:
+# with no list of its own the pod takes its owner's person list (a drill owner,
+# its creator's). The drill is its Go test where a toolchain is, else by name.
+drill_cred_user_pod_unlisted() {
+  CAP=120; local t0 out rc f=$ROOT/tokenledger/internal/api/fleet_cred_policy_test.go
+  t0=$(now)
+  grep -q '^func TestCredPolicyStrictUserPodUsesOwnersList(' "$f" 2>/dev/null \
+    || { WHY="the hub half's test TestCredPolicyStrictUserPodUsesOwnersList is not in ${f#$ROOT/}"; return 1; }
+  grep -q 'userPodNodeAllow(settings' "$ROOT/tokenledger/internal/api/fleet_cred_policy.go" \
+    || { WHY="credPolicyFor does not give a person's pod its owner's list"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList|TestCredPolicyStrictDrillUsesCreatorsList)$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='严格模式下没单独列的个人 pod 用主人的个人白名单（演练人用创建者的），pod 自己的列表优先，普通机器不变（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在' ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  else
+    WHAT='没有 go：测试按名核对在，Go 门（tokenledger.yml）跑它'
   fi
   SECS=$(since "$t0")
 }

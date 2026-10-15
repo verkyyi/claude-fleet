@@ -347,6 +347,18 @@ func (s *Store) FleetAccountsInState(states ...string) ([]FleetAccount, error) {
 	return scanFleetAccounts(rows)
 }
 
+// ActiveAccountsOn is every login the hub manages on hostname that is up
+// (claude-fleet#4290): state active, not a 登录即认人 row, newest first — a
+// person's pod has one, its owner's.
+func (s *Store) ActiveAccountsOn(hostname string) ([]FleetAccount, error) {
+	rows, err := s.read.Query(fleetAccountColumns+` WHERE `+s.d.eqNocase("hostname")+` AND state = ? AND op <> ?
+		ORDER BY updated_at DESC`, hostname, AccountActive, AccountOpLogin)
+	if err != nil {
+		return nil, err
+	}
+	return scanFleetAccounts(rows)
+}
+
 // RecentCreates is up to n of the latest logins the hub opened on hostname
 // that went active (claude-fleet#2696): op create, newest first — how long
 // opening one takes there is each row's UpdatedAt - RequestedAt.
