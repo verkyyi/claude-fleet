@@ -116,6 +116,11 @@ printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/ccquota"
 # The agent: records its argv and what its OWN window said at launch, then idles.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/bash
+# The doctor's plugin inventory is a CLI read, not an agent session. Without
+# this reply it waits for the session fixture's sleep to hit its 60s timeout.
+case "\${1:-} \${2:-} \${3:-}" in
+  'plugin list --json'|'plugin marketplace list') printf '[]\n'; exit 0 ;;
+esac
 w=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
 printf '%s\n' "\$*" > "$WORK/rec/\$w.args"
 tmux display-message -p -t "\$TMUX_PANE" '#{@repo}|#{@norepo}|#{@worktree}' > "$WORK/rec/\$w.seen"
@@ -221,7 +226,9 @@ done
   || fail "setup: no collector tick queued o/beta: $(cat "$TMPDIR/.claude-dash/global/collect.repoqueue" 2>&1)"
 out=$(bash "$BIN/fleet-repo.sh" add --session "$S" o/beta "$MB" 2>/dev/null); rc=$?
 [ "$out:$rc" = "refused:hosted:1" ] && ok "setup: a repeat add is refused:hosted, non-zero" || fail "setup: repeat add [$out:$rc]"
-sh "$BIN/fleet-doctor.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^ +(PASS|WARN) +repos ' > "$WORK/doctor.repos"
+# Only the repository rows are under test here. The idle-cost row has its own
+# selftest; do not start a real 60-second machine sample in this sandbox.
+FLEET_DOCTOR_IDLE_COST=0 sh "$BIN/fleet-doctor.sh" 2>/dev/null | sed $'s/\x1b\\[[0-9;]*m//g' | grep -E '^ +(PASS|WARN) +repos ' > "$WORK/doctor.repos"
 grep -Eq 'repos +2 hosted \(ft\): o/alpha . .*· o/beta .' "$WORK/doctor.repos" \
   && ok "setup: doctor's repos row lists both repos (#1104)" || fail "setup: doctor repos rows: $(cat "$WORK/doctor.repos")"
 grep -Eq 'repos +1 hosted \(fd\): o/solo .' "$WORK/doctor.repos" \

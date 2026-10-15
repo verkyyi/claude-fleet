@@ -327,6 +327,12 @@ echo "$out" | grep -q 'fleet connect' && bad "E no tmux: it went to connect: $ou
 
 fi
 
+if [ "$SELFTEST_SECTION" = 2 ]; then
+  # F originally follows E's clean reinstall. Prepare that installed client
+  # before using F's deliberately restricted tool PATH for dependency checks.
+  sh < "$WORK/install.sh" > "$WORK/f-install.out" 2>&1 \
+    || bad "F fixture install: $(cat "$WORK/f-install.out")"
+fi
 if selftest_section 2; then
 # ── F — the tmux step ───────────────────────────────────────────────────────
 fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }

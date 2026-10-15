@@ -131,6 +131,10 @@ client_fixture() {
   printf 'FLEET_SHELL_WIDTH=34\nFLEET_UI_LANG=zh\n' > "$CD/shell.conf"
 }
 
+oldkey() {   # $1 FLEET_ROLE value — a file one version old, in the [common] it had
+  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_ROLE="%s"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG=zh\n' "$1" > "$CD/fleet.conf"
+}
+
 if selftest_section 1; then
 # ---------------------------------------------------------------------------- A
 mkbox a
@@ -268,9 +272,6 @@ has "F: names the command" "$l" "fleet-conf.sh migrate"
 hasnt "F: no credential printed" "$l" "vt-secret"
 
 # ---------------------------------------------------------------------------- G
-oldkey() {   # $1 FLEET_ROLE value — a file one version old, in the [common] it had
-  printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_ROLE="%s"\nexport FLEET_HUB_URL="https://hub.example"\nFLEET_UI_LANG=zh\n' "$1" > "$CD/fleet.conf"
-}
 # mac-b: client,node with a fleet here
 mkbox g1; node_fixture; rm -f "$INS/fleet.conf"; oldkey client,node
 is "G mac-b: before migrate, host reads the old key" "$(run bash "$INS/bin/fleet-conf.sh" host --why)" "$(printf '1\tFLEET_ROLE=client,node（旧键）')"

@@ -30,7 +30,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 3
+selftest_sections 4
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -164,6 +164,10 @@ case "$(opt "$wS" window_name)" in scratch-*) ok "C repo scratch name is bare (#
 case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
   *) ok "C no-repo name untagged" ;; esac
 
+fi
+
+if selftest_section 4; then
+# Bare starts need only the shared two-repo fixture, not the issue windows.
 raw "$S"; w=$(newest "$S")
 eq "C current repo all → no-repo" "$(opt "$w" @norepo)" 1
 printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"   # the retired picker's (#1034)
@@ -171,6 +175,9 @@ raw "$S"; w=$(newest "$S")
 eq "C a stale current-repo file → still no-repo" "$(opt "$w" @norepo)" 1
 rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
+fi
+
+if selftest_section 1; then
 # ---- D. keys -------------------------------------------------------------------------
 inpane() {   # $1=window — run the rest as if inside that window's pane
   local w="$1"; shift
