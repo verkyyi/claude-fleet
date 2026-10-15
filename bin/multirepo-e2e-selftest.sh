@@ -58,7 +58,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
-selftest_sections 6
+selftest_sections 7
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -443,6 +443,13 @@ if [ -n "$rN" ]; then
 else leak i "the no-repo session not restored"; fi
 [ -n "$rB" ] && { wait_rec "$rB"; chk i "restored B#12's launcher saw B" "$(cut -d'|' -f1 "$WORK/rec/$rB.seen" 2>/dev/null)" o/beta; }
 
+fi
+
+if [ "$SELFTEST_SECTION" = 7 ]; then
+  # Populate both fleets' issue caches, as the restore section's collect did.
+  collect
+fi
+if selftest_section 7; then
 # ==== (z) degenerate: a one-repo fleet beside it =========================================
 spawn 12 "$D" || fail "(z) one-repo spawn: $(cat "$WORK/err")"
 wD=$(tmux list-windows -t "$D" -F '#{@issue} #{window_id}' | awk '$1==12 {print $2; exit}')
