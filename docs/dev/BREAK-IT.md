@@ -491,4 +491,5 @@
 | 无仓库编排从面板换 Codex（#4258），或带原生 Cron 时直接退出源 | linked-worktree guard 拒绝；放开后若未保留身份和调度会丢巡检 | 共用 transfer 只接受有 lifelong identity 的受管 HOME 会话，核验源当前清单；session-only 调度接管；隔离真进程验证准备、切换、投递与失败回退 | `transfer-norepo` |
 | 面板交接准备过期或源拒绝后无法重试，或旧请求借新请求的有效期 arm（#4258） | 同会话永久卡在旧记录，或过时交接意图触发退出 | 明确点击只替换已送达过期或明确终结的准备；未确认投递不重发；请求 ID 固定进消息、笔记及等待器，arm、退出提交和结果写入均核验同代 | `transfer-preparation-retry` |
 | 只保留 durable 提醒原表就退出唯一 Claude（#4258） | 表还在但没有执行者，提醒漏发；直接复制成 Fleet timer 又可能重复投递 | 没有可核验的单一执行 owner 迁移时，所有入口在退出源前拒绝；原任务和源会话不变，实际接续目标尚未完成 | `transfer-durable-owner` |
+| durable 移交在改原生锁或任务表后崩溃（#4258） | 无成功回执却已撤掉原任务，或源与 Fleet 同时执行 | 未接入的事务原型覆盖写前日志及单控制器崩溃；尚缺所有原生写者共同隔离，并发写表仍可丢任务或复活旧任务。生产继续前置拒绝，不能视为已修复或完成接续 | `transfer-durable-crash` |
 | Codex 无仓库首次启动缺 HOME 信任（#3029、#4258），或 proxy config 符号链接被替换 | 新会话停在信任提示，或信任只留在临时 home；合法单引号 untrusted 被漏读 | 公共启动器与 transfer 共用 TOML 读取和受信节点 HOME 白名单；fill-only 写实际目标，保留符号链接、权限和并发改动；显式不信任与 opt-out 不变 | `codex-home-trust` |

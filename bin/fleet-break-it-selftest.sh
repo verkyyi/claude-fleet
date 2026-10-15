@@ -7327,6 +7327,14 @@ drill_transfer_durable_owner() {
   SECS=$(since "$started"); WHAT='durable reminder has no proven successor: all entry points refuse before source exit or task mutation'
 }
 
+drill_transfer_durable_crash() {
+  CAP=20
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-durable-selftest.py" >"$WORK/transfer-durable-crash.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-durable-crash.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='native ownership transaction: source exit fence, rollback and controller SIGKILL at native writes'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
