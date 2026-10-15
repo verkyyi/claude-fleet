@@ -42,6 +42,9 @@ case "$target" in
   *) say "fleet-term-attach: --target is personal or worker:<fleet id>"; exit 2 ;;
 esac
 
+# term-pty sets it; a terminal with none (or dumb) cannot attach at all
+case "${TERM:-}" in ''|dumb) export TERM=xterm-256color ;; esac
+
 s=$(fleet_sockets | head -n 1)
 [ -n "$s" ] || { say "这台机器上没有在运行的 fleet（no fleet session is live here）"; exit 3; }
 sock=$(fleet_socket "$s")

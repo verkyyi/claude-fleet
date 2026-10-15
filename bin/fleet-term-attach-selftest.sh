@@ -43,6 +43,7 @@ script, view, target, rcf, outf = sys.argv[1:6]
 out = open(outf, "wb")
 pid, fd = pty.fork()
 if pid == 0:
+    os.environ["TERM"] = "xterm-256color"   # what term-pty gives it
     os.execvp("bash", ["bash", script, "--view", view, "--target", target])
 # keep the terminal drained; stop when told (SIGUSR1) by hanging it up
 stop = []
