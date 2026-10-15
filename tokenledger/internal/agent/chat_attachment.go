@@ -90,7 +90,12 @@ func (a *Agent) spliceChatStream(ctx context.Context, cancel context.CancelFunc,
 	}
 	// Do not connect to chat.sock until a complete, bounded request arrived.
 	rctx, stop := context.WithTimeout(ctx, 15*time.Second)
-	body, err := readChatRequest(rctx, stream, g.Chat.Bytes, func(n int) error { return a.chatDirectRate.wait(rctx, n, g.Chat.Rate) })
+	body, err := readChatRequest(rctx, stream, g.Chat.Bytes, func(n int) error {
+		if err := a.chatDirectRate.wait(rctx, n, g.Chat.Rate); err != nil {
+			return err
+		}
+		return send(control.ChatAttachmentFrame{T: "continue"})
+	})
 	stop()
 	if err != nil {
 		result(true)

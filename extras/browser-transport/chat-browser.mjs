@@ -8,8 +8,9 @@ const blocked = process.argv.includes('--deny-udp')
 assert(origin && cookie)
 const script = await build({ entryPoints: ['chat.ts'], bundle: true, write: false, format: 'esm', target: 'es2022' })
 const browser = await chromium.launch({ args: blocked ? ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : [] })
+let context
 try {
-  const context = await browser.newContext()
+  context = await browser.newContext()
   const eq = cookie.indexOf('=')
   await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: origin }])
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
@@ -20,6 +21,8 @@ try {
     const { chatRequest, fetchChat } = await import('/chat-test.mjs')
     const states = [], requests = []
     const Original = window.RTCPeerConnection, peers = []
+    const OriginalSocket = window.WebSocket, sockets = []
+    window.WebSocket = class extends OriginalSocket { constructor(...args) { super(...args); sockets.push(this) } }
     window.RTCPeerConnection = class extends Original { constructor(config) { super(config); peers.push(this) } }
     for (const target of ['conversation', 'turn', 'stop', 'answer']) {
       const requestId = crypto.randomUUID().replaceAll('-', '')
@@ -34,6 +37,10 @@ try {
       const duplicate = await chatRequest(target, '', { requestId })
       if (duplicate.status !== 409 || (await duplicate.json()).code !== 'duplicate') throw new Error('duplicate admitted')
     }
+    // The full allowed body must not overflow the node's bounded frame inbox.
+    const large = JSON.stringify({ text: 'x'.repeat(1024 * 1024 - 32) })
+    const big = await chatRequest('turn', large)
+    if (!big.ok || !(await big.text()).includes('中文-once')) throw new Error('bounded large request failed')
     // Local mode never performs discovery/signaling. Old-node discovery must
     // select the legacy HTTP route before sending, exactly once.
     const nativeFetch = window.fetch, calls = []
@@ -52,6 +59,7 @@ try {
       const reader = response.body.getReader()
       await reader.read()
       peers.at(-1).close()
+      sockets.at(-1).close()
       let uncertain = false
       try { while (!(await reader.read()).done) {} } catch (e) { uncertain = e.message.includes('可能已送达') }
       if (!uncertain) throw new Error('lost submission was not visible')
@@ -61,9 +69,11 @@ try {
     }
     return { states, requests, calls }
   }, { blocked })
-  assert.equal(result.states.length, 4)
-  assert(result.states.every(s => s.mode === (blocked ? 'relay' : 'direct')))
   console.log(JSON.stringify({ browser: browser.version(), udp: blocked ? 'denied' : 'allowed', ...result }))
-  await context.tracing.stop({ path: `chat-${blocked ? 'denied' : 'direct'}.zip` })
-  await context.close()
-} finally { await browser.close() }
+  // A late selected-pair update can publish ready again for the same channel.
+  assert.equal(new Set(result.states.map(s => s.connection)).size, 4)
+  assert(result.states.every(s => s.mode === (blocked ? 'relay' : 'direct')))
+} finally {
+  await context?.tracing.stop({ path: `chat-${blocked ? 'denied' : 'direct'}.zip` }).catch(() => {})
+  await browser.close()
+}

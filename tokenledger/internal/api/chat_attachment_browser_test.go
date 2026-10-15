@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -19,12 +20,18 @@ func TestChatAttachmentChromium(t *testing.T) {
 		t.Run(map[bool]string{false: "direct", true: "udp-denied"}[blocked], func(t *testing.T) {
 			h, svc, host, login := chatHarness(t)
 			setChatHome(t, h, pAlice, host, login)
+			var turnsStarted atomic.Int32
 			svc.mu.Lock()
 			svc.turn = func(w http.ResponseWriter) {
 				w.Header().Set("Content-Type", "application/x-ndjson")
 				io.WriteString(w, "{\"t\":\"text\",\"d\":\"中文-once\"}\n")
 				w.(http.Flusher).Flush()
-				time.Sleep(400 * time.Millisecond)
+				if turnsStarted.Add(1) == 3 && !blocked {
+					// Keep the third turn alive while the browser cuts its transport.
+					time.Sleep(3 * time.Second)
+				} else {
+					time.Sleep(400 * time.Millisecond)
+				}
 				io.WriteString(w, "{\"t\":\"done\"}\n")
 			}
 			svc.mu.Unlock()
@@ -50,9 +57,9 @@ func TestChatAttachmentChromium(t *testing.T) {
 					turns++
 				}
 			}
-			want := 2
+			want := 3
 			if blocked {
-				want = 1
+				want = 2
 			}
 			if turns != want {
 				t.Fatalf("turns %d want %d (replay)", turns, want)

@@ -21,9 +21,12 @@ export function chatRequest(target: string, body = '', options: {
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined
     let submitted = false, headers = false, ended = false
     let trialLeft = ''
+    let continued: (() => void) | undefined
+    let cancelChunk: ((error: Error) => void) | undefined
     const fail = (error: Error) => {
       if (ended) return
       ended = true
+      cancelChunk?.(error)
       if (headers) controller?.error(error); else reject(error)
       connection?.close()
     }
@@ -45,7 +48,18 @@ export function chatRequest(target: string, body = '', options: {
         if (state.state !== 'ready' || submitted) return
         submitted = true
         void (async () => {
-          for (let i = 0; i < bytes.length; i += 16 * 1024) await connection.write(bytes.slice(i, i + 16 * 1024))
+          for (let i = 0; i < bytes.length; i += 16 * 1024) {
+            // One chunk in flight bounds the receiver even when its per-login
+            // rate budget is shared with another tab or a long response.
+            const acknowledged = new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(() => reject(new UncertainChatRequest()), 15000)
+              continued = () => { clearTimeout(timer); continued = undefined; cancelChunk = undefined; resolve() }
+              cancelChunk = error => { clearTimeout(timer); continued = undefined; cancelChunk = undefined; reject(error) }
+            })
+            // Install a rejection handler before awaiting the socket write.
+            const sending = connection.write(bytes.slice(i, i + 16 * 1024))
+            await Promise.all([sending, acknowledged])
+          }
           await connection.write(JSON.stringify({ t: 'request_end' }))
         })().catch(() => fail(new UncertainChatRequest()))
       },
@@ -57,6 +71,7 @@ export function chatRequest(target: string, body = '', options: {
         }
         try {
           const frame = JSON.parse(data)
+          if (frame.t === 'continue' && !headers && continued) { continued(); return }
           if (frame.t === 'headers' && !headers && Number.isInteger(frame.status) && frame.status >= 200 && frame.status <= 599) {
             const response = new Response([204, 205, 304].includes(frame.status) ? null : stream, { status: frame.status, headers: { 'Content-Type': frame.content_type || 'application/octet-stream', ...(trialLeft ? { 'X-Fleet-Trial-Left': trialLeft } : {}) } })
             headers = true
