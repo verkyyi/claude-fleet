@@ -553,7 +553,7 @@ drill_train_superseded_red() {
 # deploy as before · unreadable / unknown ⇒ red, no blind deploy.
 drill_train_hub_backwards() {
   CAP=30
-  local t0 d out rc wf c1 c2 c3 s1
+  local t0 d out rc wf c1 c2 c3 c4 c5 s1 tr
   wf="$BIN/../.github/workflows/release-train.yml"
   grep -q 'bin/fleet-train-hub.sh "$SHA"' "$wf" || { WHY="release-train.yml's hub plan does not run fleet-train-hub.sh"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-hubb.XXXXXX")
@@ -570,11 +570,18 @@ drill_train_hub_backwards() {
           && git -C "$d/seed" commit -qam side && git -C "$d/seed" rev-parse HEAD > "$d/s1" && git -C "$d/seed" push -q origin side \
           && git -C "$d/seed" checkout -q master || exit 1; }
     done
+    # c4 changes only the console (packed into the image), c5 only the retired chat page
+    mkdir -p "$d/seed/extras/web-console/dist" "$d/seed/extras/web-chat/ui"
+    printf 'console\n' > "$d/seed/extras/web-console/dist/index.html"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm c4 && git -C "$d/seed" rev-parse HEAD > "$d/c4" || exit 1
+    printf 'chat\n' > "$d/seed/extras/web-chat/ui/index.html"
+    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm c5 && git -C "$d/seed" rev-parse HEAD > "$d/c5" || exit 1
     git -C "$d/seed" push -q origin HEAD:master && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); s1=$(cat "$d/s1"); mkdir -p "$d/hub"; t0=$(now)
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); c4=$(cat "$d/c4"); c5=$(cat "$d/c5"); s1=$(cat "$d/s1"); mkdir -p "$d/hub"; t0=$(now)
   live() { printf '{"commit":"%.7s","version":"prod-%.7s"}\n' "$1" "$1" > "$d/hub/version"; }
-  plan() { out=$(env -u RELEASE_TRAIN_HUB GITHUB_OUTPUT="$d/out" bash "$BIN/fleet-train-hub.sh" "$c2" --dir "$d/co" --hub "file://$d/hub" --timeout 5 2>&1); rc=$?; : > "$d/out"; }
+  tr=$c2
+  plan() { out=$(env -u RELEASE_TRAIN_HUB GITHUB_OUTPUT="$d/out" bash "$BIN/fleet-train-hub.sh" "$tr" --dir "$d/co" --hub "file://$d/hub" --timeout 5 2>&1); rc=$?; : > "$d/out"; }
   dep() { printf '%s\n' "$out" | sed -n 's/^deploy=//p' | head -1; }
   # the hub already runs TRAIN_SHA: skip
   live "$c2"; plan
@@ -588,13 +595,20 @@ drill_train_hub_backwards() {
   # behind TRAIN_SHA (its ancestor, Go changed since): deployed as before
   live "$c1"; plan
   [ "$rc" = 0 ] && [ "$(dep)" = true ] || { WHY="a hub behind TRAIN_SHA was not deployed: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # only the console changed since the hub's commit (issue #4105): deployed
+  tr=$c4; live "$c3"; plan
+  [ "$rc" = 0 ] && [ "$(dep)" = true ] || { WHY="a console-only change was not deployed: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # only extras/web-chat/ui (no longer in the image): skipped
+  tr=$c5; live "$c4"; plan
+  [ "$rc" = 0 ] && [ "$(dep)" = false ] || { WHY="a web-chat/ui-only change still redeployed the hub: $rc $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  tr=$c2
   # /version unreadable, or a commit nobody here knows: red, no blind deploy
   rm -f "$d/hub/version"; plan
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="an unreadable /version still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   printf '{"commit":"abcdef1","version":"prod-abcdef1"}\n' > "$d/hub/version"; plan
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="a hub commit the checkout cannot place still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；读不到 /version 或认不出提交：红，不盲部署"
+  WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；只改控制台照常部署、只改 web-chat/ui 不部署；读不到 /version 或认不出提交：红，不盲部署"
 }
 
 # The repo is public (EPIC #3569): a PR that adds an internal address used to merge
