@@ -225,6 +225,7 @@ class Input:
         self.job = None
         if self.cancelled:
             self.result = b''
+            self.say('fleet · 输入已恢复')
             return b''
         try:
             result = json.loads(self.result)

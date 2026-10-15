@@ -84,6 +84,7 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                 start = time.monotonic()
                 os.write(master, b"held command\r\x03")
                 read_until('附件已取消'.encode(), .75)
+                read_until('输入已恢复'.encode(), .75)
                 end = time.monotonic() + .75
                 child = int(marker.read_text())
                 while time.monotonic() < end:
@@ -91,11 +92,12 @@ t.pump([sys.executable, sys.argv[2]], 'test')
                     if not state or state.startswith(b'Z'): break
                     time.sleep(.01)
                 self.assertTrue(not state or state.startswith(b'Z'), phase + ' not reaped')
-                time.sleep(.2)
                 os.write(master, b'resumed\r')
                 read_until(b'RESUMED', .75)
                 self.assertEqual(Path(str(remote) + '.input').read_bytes(), b'resumed\r')
-                print("pump %s cancel/reap/resume latency %.3fs" % (phase, time.monotonic() - start), flush=True)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, .75)
+                print("pump %s cancel/reap/resume latency %.3fs" % (phase, elapsed), flush=True)
             finally:
                 p.terminate()
                 try: p.wait(timeout=2)
