@@ -686,6 +686,8 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(TermConnectPath, s.viewerOnly(http.HandlerFunc(s.handleTermConnect)))
 		mux.Handle(AttachmentPath, s.viewerOnly(http.HandlerFunc(s.handleAttachment)))
 		mux.Handle(TermHomePath, s.viewerOnly(http.HandlerFunc(s.handleTermHome)))
+		mux.Handle(TermClientPath, s.stateRouteFunc(s.handleFleetClient))
+		mux.Handle(TermClientPath+"/actions", s.stateRouteFunc(s.handleFleetClientActions))
 		// The 60-second trial (claude-fleet#3590): each 404s while fleet.trial is off.
 		mux.HandleFunc(TryStartPath, s.handleTryStart)
 		// Drill triers (claude-fleet#4215): an admin's code, once, into the

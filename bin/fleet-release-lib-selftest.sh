@@ -126,11 +126,14 @@ rm -f "$H/tamper"
 # --- E. trust-release-key ---------------------------------------------------------------
 C="$WORK/confE"; mkdir -p "$C"; cp "$H/key" "$C/release.pub"
 out=$(FLEET_CONF_DIR="$C" FLEET_HUB_URL="$HUB" bash "$BIN/fleet-release-key.sh" status </dev/null 2>&1); eq "E: same key → 0" 0 "$?"
-printf 'ed25519 AAAAoldpinned0000003\n' > "$C/release.pub"
+# A well-formed, unrelated public key (RFC 8032): status now checks the chain,
+# so a malformed placeholder would exercise an unreadable pin, not a new key.
+EOLD='ed25519 11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo='
+printf '%s\n' "$EOLD" > "$C/release.pub"
 out=$(FLEET_CONF_DIR="$C" FLEET_HUB_URL="$HUB" bash "$BIN/fleet-release-key.sh" status </dev/null 2>&1); eq "E: another → status 1" 1 "$?"
 has "E: …names the command" "$out" "fleet host trust-release-key"
 FLEET_CONF_DIR="$C" FLEET_HUB_URL="$HUB" bash "$BIN/fleet-release-key.sh" trust </dev/null >/dev/null 2>&1 </dev/null
-eq "E: no --yes, no answer → not taken" "ed25519 AAAAoldpinned0000003" "$(cat "$C/release.pub")"
+eq "E: no --yes, no answer → not taken" "$EOLD" "$(cat "$C/release.pub")"
 out=$(FLEET_CONF_DIR="$C" FLEET_HUB_URL="$HUB" bash "$BIN/fleet-release-key.sh" trust --yes </dev/null 2>&1); eq "E: --yes → 0" 0 "$?"
 eq "E: …taken" "$(cat "$H/key")" "$(cat "$C/release.pub")"
 has "E: …both fingerprints printed" "$out" "现在认的"

@@ -4,12 +4,14 @@ on:
     paths:
       - 'tokenledger/**'
       - 'extras/browser-transport/**'
+      - 'extras/web-console/**'
       - '.github/workflows/browser-attachment.yml'
   push:
     branches: [master]
     paths:
       - 'tokenledger/**'
       - 'extras/browser-transport/**'
+      - 'extras/web-console/**'
       - '.github/workflows/browser-attachment.yml'
 concurrency:
   group: browser-attachment-${{ github.ref }}
@@ -33,15 +35,19 @@ jobs:
         working-directory: extras/browser-transport
       - run: npm run check
         working-directory: extras/browser-transport
+      - run: node terminal-client.mjs
+        working-directory: extras/browser-transport
       - run: npx playwright install --with-deps chromium
         working-directory: extras/browser-transport
       - name: Actual browser to node adapter, UDP denial, no replay and cleanup
         working-directory: tokenledger
         run: |
           set -o pipefail
-          go test -tags browseracceptance -count=1 -v -timeout 3m -run '^TestAttachmentChromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
+          go test -tags browseracceptance -count=1 -v -timeout 5m -run '^Test(Attachment|TerminalConsole)Chromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-attachment-evidence
-          path: browser-attachment.log
+          path: |
+            browser-attachment.log
+            extras/browser-transport/evidence/

@@ -3026,7 +3026,9 @@ def popup(screen, qo, vid, client, forward=""):
             at = bolt_at()
         msg = forward_note(vid, forward)
     top = 0
-    heal = qo.Heal()
+    # The popup door's --freeze contains background output. Repair after resize
+    # only: a periodic last-row scroll otherwise repaints the frame at rest.
+    heal = qo.Heal(periodic=False)
     fresh = Refresh(vid, first=0 if bg else None)
     # Tab (issue #3181): `menu` = the row's actions, `choice` = an action's options,
     # `ask` = the question on the bottom line. Esc steps back to the list.

@@ -9,7 +9,7 @@
 # until a person says otherwise, here:
 #
 #   fleet-release-key.sh [status]      the pinned key's fingerprint, the hub's,
-#                                      and whether they are the same
+#                                      and whether its chain endorses the root
 #   fleet-release-key.sh trust [--yes] take the hub's key: both fingerprints
 #                                      printed, asked (y/N); --yes = compared
 #                                      already. `fleet host trust-release-key`.
@@ -25,7 +25,8 @@
 # key_chain) and revokes it (a root-signed list, kept in release.pub.revoked
 # once seen). A login pinned to the hub's old signing key moves to the root by
 # itself at its next update; `trust` is the manual road only for a root that
-# itself changed. status says who signs and what is revoked.
+# itself changed. status says who signs and what is revoked; managed / runtime-
+# linked logins use the machine pin, since their login pin does not drive updates.
 #
 # No hub, or a hub that keeps no releases: says so, changes nothing.
 # Exit: 0 same / trusted · 1 different (status) or not taken · 2 usage / no hub.
@@ -51,12 +52,26 @@ for a in "$@"; do
   case "$a" in -y|--yes) YES=1 ;; *) echo "fleet host trust-release-key: 不认识 ${a}（--yes）" >&2; exit 2 ;; esac
 done
 case "$verb" in -h|--help|help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;; esac
+if [ "$verb" = status ]; then
+  # Same ownership as install-sync: adopted accounts and runtime-linked logins
+  # follow the machine updater. Only status reads its pin; trust is unchanged.
+  # shellcheck source=fleet-daemon-lib.sh
+  . "$here/fleet-daemon-lib.sh"
+  node_root="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"
+  linked_root=$(sed -n 's/.*"root": *"\([^"]*\)".*/\1/p' "$HOME/.claude/fleet/.fleet-linked" 2>/dev/null)
+  if fleet_node_manages || { [ -n "$linked_root" ] && [ -d "$linked_root" ] && [ -d "$node_root" ] \
+      && [ "$(cd "$linked_root" && pwd -P)" = "$(cd "$node_root" && pwd -P)" ]; }; then
+    PK="${FLEET_NODE_STATE:-/var/db/fleet-node}/release.pub"
+    echo "托管登录：跟随机器运行时，登录级 pin 不起作用；以机器级 ${PK} 为准"
+    [ -r "$PK" ] && [ -s "$PK" ] || { echo "机器级钥匙不可读：${PK} — 无法判断发布信任"; exit 1; }
+  fi
+fi
 hub=$(fleet_rel_hub_url)
 # shellcheck disable=SC2034,SC1091  # FLEET_SHELL=1 picks fleet.conf's [client] section
 [ -n "$hub" ] || hub=$(FLEET_SHELL=1; [ -f "$CONF/fleet.conf" ] && . "$CONF/fleet.conf" >/dev/null 2>&1; fleet_rel_hub_url)
 [ -n "$hub" ] || { echo "这台没有接入口 — 没有要认的发布签名钥匙"; exit 2; }
 tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-release-key.XXXXXX") || exit 1
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp" "$tmp.manifest"' EXIT
 code=$(fleet_rel_http "$hub/v1/fleet/release/key" "$tmp" "$TMO")
 case "$code" in
   200) fleet_rel_keyline "$tmp" || { echo "✗ 入口 ${hub} 答的不是一把 ed25519 钥匙"; exit 1; } ;;
@@ -84,6 +99,37 @@ print("作废单：记下 %d 把（%s）· 版本 %s" % (len(k), " ".join(k) or 
     fi
     if [ -z "$old" ]; then echo "还没记下入口的钥匙；入口现在用的指纹 ${new}（下次取版本时记下）"; exit 0; fi
     if cmp -s <(head -n 1 "$tmp") "$PK"; then echo "认的钥匙 ${old} = 入口现在用的"; exit 0; fi
+    # Certificates carry their own signatures. Ask the fetcher's trust reader
+    # whether it would re-pin to this exact root; never save trust from status.
+    code=$(fleet_rel_http "$hub/v1/fleet/release/stable" "$tmp.manifest" "$TMO")
+    if [ "$code" != 200 ]; then
+      echo "认的钥匙 ${old}，入口现在用的 ${new}：无法读取 stable 清单（HTTP ${code}），暂时无法核对担保链"
+      exit 1
+    fi
+    python3 -B - "$here" "$PK" "$tmp" "$tmp.manifest" 2>/dev/null <<'PY'
+import importlib.util, json, sys
+try:
+    spec = importlib.util.spec_from_file_location("verify", sys.argv[1] + "/fleet-release-verify.py")
+    v = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(v)
+    anchor, root = v._pubkey(sys.argv[2]), v._pubkey(sys.argv[3])
+    with open(sys.argv[4]) as f:
+        m = json.load(f)
+    revs = [m["revoked"]] if isinstance(m.get("revoked"), dict) else []
+    t = v.trust(anchor, m.get("key_chain") or [], revs, v.load_revoked(sys.argv[2] + ".revoked")[0])
+    sys.exit(0 if t[3] == root else 1)
+except (OSError, ValueError, TypeError, AttributeError, KeyError):
+    sys.exit(2)
+PY
+    trust_rc=$?
+    if [ "$trust_rc" = 0 ]; then
+      echo "认的钥匙 ${old}：担保链认可 · 下次取版本自动重钉到根 ${new}"
+      exit 0
+    fi
+    if [ "$trust_rc" != 1 ]; then
+      echo "认的钥匙 ${old}，入口现在用的 ${new}：无法核对 stable 清单的担保链"
+      exit 1
+    fi
     echo "认的钥匙 ${old} ≠ 入口现在用的 ${new} — 入口的新版本不会被换上；确认是你们换了钥匙后：fleet host trust-release-key"
     exit 1 ;;
   trust)

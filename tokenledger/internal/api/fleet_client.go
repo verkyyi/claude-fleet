@@ -85,6 +85,9 @@ const (
 	// ClientTestPath is the test identity's door: the lease at ClientPath, as
 	// identity test.
 	ClientTestPath = control.ClientPath + "/test"
+	// Browser leases use the terminal's person-only identity, including admins.
+	// They must never become the operator's client or advertise iTerm delivery.
+	TermClientPath = "/v1/term/client"
 	// clientTestSlot marks the test identity's slot in the lease table.
 	clientTestSlot = "#test"
 )
@@ -616,6 +619,22 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if r.URL.Path == TermClientPath {
+		if r.Method != http.MethodPost {
+			httpError(w, http.StatusMethodNotAllowed, "POST only")
+			return
+		}
+		switch req.Action {
+		case "acquire":
+			req.Lease = "" // a fresh browser cannot adopt a previous device
+		case "renew", "input", "release":
+		default:
+			httpError(w, http.StatusBadRequest, "acquire, renew, input or release only")
+			return
+		}
+		req.Terminal, req.Via, req.Host = "browser", "public", ""
+		req.Caps = []string{"link"}
+	}
 	now := time.Now()
 	id, ok := s.clientIdentity(w, r, req.Cert, req.Sig, req.TS, now)
 	if !ok {
@@ -717,6 +736,18 @@ func (s *Server) handleFleetClient(w http.ResponseWriter, r *http.Request) {
 // else a connection certificate proven by a signed timestamp. It answers the
 // refusal itself.
 func (s *Server) clientIdentity(w http.ResponseWriter, r *http.Request, cert, sig string, ts int64, now time.Time) (sshRelayIdentity, bool) {
+	if r.URL.Path == TermClientPath || r.URL.Path == TermClientPath+"/actions" {
+		if !s.termOriginOK(r) {
+			httpError(w, http.StatusForbidden, "same-origin browser required")
+			return sshRelayIdentity{}, false
+		}
+		person, status, code, msg := s.termPerson(r)
+		if code != "" {
+			s.termRefuse(w, person, "client", status, code, msg)
+			return sshRelayIdentity{}, false
+		}
+		return sshRelayIdentity{Principal: person, Actor: person}, true
+	}
 	if id, ok := s.sshRelayHTTPIdentity(r); ok {
 		return id, true
 	}

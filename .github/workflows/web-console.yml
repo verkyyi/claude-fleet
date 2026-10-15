@@ -10,12 +10,14 @@ on:
     branches: [master]
     paths:
       - 'extras/web-console/**'
+      - 'extras/browser-transport/attachment.ts'
       - 'extras/fleet-theme/**'
       - 'bin/web-console-pack.sh'
       - '.github/workflows/web-console.yml'
   pull_request:
     paths:
       - 'extras/web-console/**'
+      - 'extras/browser-transport/attachment.ts'
       - 'extras/fleet-theme/**'
       - 'bin/web-console-pack.sh'
       - '.github/workflows/web-console.yml'
