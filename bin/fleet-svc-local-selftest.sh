@@ -15,6 +15,9 @@
 #               its directory and a straggler; `clean <R> <k>` removes both
 #   E. twice    an attempt whose directory exists already is refused (exit 3) —
 #               a redelivered start never shares a directory
+#   F. path     with root's PATH the login's ~/.local/bin/claude is found
+#   G. refused  claude refused by the API (exit 1, the error in its JSON result,
+#               nothing on stderr) — the hand-in's detail carries that result
 # No network beyond 127.0.0.1, no claude, no root. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -82,6 +85,7 @@ dirname "$PWD" > "$DRILL/prev-dir"
 env > "$DRILL/env-$n"
 cp "$HOME/.claude/settings.json" "$DRILL/settings-$n" 2>/dev/null
 [ "${DRILL_HANG:-0}" = 1 ] && { sleep 3009 & wait; }
+[ "${DRILL_REFUSED:-0}" = 1 ] && { echo '{"type":"result","subtype":"success","is_error":true,"result":"API Error: 403 no subscription account for this session: the pool is tight"}'; exit 1; }
 printf '# report %s\n' "$n" > "$out/report.md"
 printf '{"title":"t","summary":"s"}' > "$out/meta.json"
 echo '{"type":"result","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
@@ -153,6 +157,14 @@ printf '%s\n' "$KEY" | env -u FLEET_SVC_CLAUDE HOME="$WORK/realhome" PATH=/usr/b
   && ok "F with root's PATH the login's ~/.local/bin/claude runs it" \
   || bad "F rc=$rc: $(tail -3 "$WORK/run-5.out" | tr '\n' ' ') $(grep R5 "$WORK/results")"
 settle || bad "F a process of run 5 outlived it"
+
+# G
+echo 6 > "$WORK/n"
+DRILL_REFUSED=1 one 6 1; rc=$?
+[ "$rc" = 1 ] && grep -q '^/v1/node/svc-runs/R6/result .*"exit": 1.*"detail": "claude ended 1 (success): API Error: 403 no subscription account' "$WORK/results" \
+  && ok "G an API refusal's own words reach the hand-in's detail" \
+  || bad "G rc=$rc: $(grep R6 "$WORK/results")"
+settle || bad "G a process of run 6 outlived it"
 
 [ "$fail" = 0 ] && echo "svc-local selftest: PASS" || echo "svc-local selftest: FAIL"
 exit "$fail"
