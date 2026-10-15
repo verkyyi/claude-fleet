@@ -77,6 +77,14 @@ calls, rc = drive(text, lambda t: frame(screen='❯ \n' if t < 9 else '❯ \nfoo
 assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 13, calls
 print('ok cold: prompt age and screen stability both gate delivery')
 
+calls, rc = drive(text, lambda t: frame('› \n', command='codex', cx=0 if t < 1 else 2))
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 11, calls
+calls, rc = drive(text, lambda t: frame('› \n', command='codex', cy=1 if t < 1 else 0))
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 11, calls
+calls, rc = drive(text, lambda t: frame('› existing draft\n', command='codex', cx=0))
+assert not pastes(calls)
+print('ok cold cursor paint: wait for the empty prompt cursor, but never overwrite real text')
+
 calls, rc = drive(text, lambda t: frame('› \x1b[2mAsk Codex\x1b[22m\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
 calls, rc = drive(text, lambda t: frame('❯\u00a0\x1b[38;2;2;90;0m\x1b[2m建议\x1b[0m\n', command='2.1.274'), warm=True)

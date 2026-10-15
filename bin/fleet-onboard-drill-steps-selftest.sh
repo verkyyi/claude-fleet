@@ -354,7 +354,7 @@ if [ "\$(cat "$T/new.mode" 2>/dev/null)" = refuse ]; then
   exit 2
 fi
 p= prev=
-for a; do [ "\$prev" = --prompt ] && p=\$a; prev=\$a; done
+for a; do [ "\$prev" = --draft ] && p=\$a; prev=\$a; done
 w=\$(TMUX= "$TMUXB" -S "$IN" new-window -d -P -F '#{window_id}' -t fl -n 我的会话 "bash '$T/claude.sh'") || exit 1
 TMUX= "$TMUXB" -S "$IN" set-option -w -t "\$w" @fleet_id fnew
 TMUX= "$TMUXB" -S "$IN" set-option -w -t "\$w" @task_line "\$p"
@@ -434,7 +434,7 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
   done
   [ "$rc" = 0 ] && ok 'E: exit 0' || { bad "E: exit $rc"; printf '%s\n' "$out" | tail -n 25 | sed 's/^/     │ /'; }
   case "$(cat "$T/new.argv" 2>/dev/null)" in
-    *'--no-repo'*'--prompt first'*) ok 'E: ⌘P → ⚡ ran the panel'"'"'s new session with the words (do new --prompt first)' ;;
+    *'--no-repo'*'--draft first'*) ok 'E: ⌘P → ⚡ ran the panel'"'"'s new session with an unsent draft (do new --draft first)' ;;
     *) bad "E: the new-session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
   esac
   printf '%s\n' "$out" | grep -q '⌘P，敲「first」，⚡ 回车' && ok 'E: steps.md says ⌘P, never prefix c' || bad 'E: steps.md does not name ⌘P'
@@ -454,7 +454,7 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
       ok 'H: an unreadable fleet ls is named in the FAIL, not «no row»'
     else bad "H: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
     case "$(cat "$T/new.argv" 2>/dev/null)" in
-      *'--prompt first'*) ok 'H: the panel did open the new session' ;;
+      *'--draft first'*) ok 'H: the panel did open the new session' ;;
       *) bad "H: no new session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
     esac
   else bad 'H: the thin client did not come up'; fi

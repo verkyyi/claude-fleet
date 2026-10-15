@@ -518,7 +518,9 @@ fi
 # they open here. Hub module off: nothing runs unless --node names another machine.
 if [ "$PLACING" = 1 ]; then
   if [ "$NOREPO" = 1 ] || [ -n "$PROMPT$DRAFT" ]; then
-    _why='a no-repo scratch'; [ -n "$PROMPT$DRAFT" ] && _why='a scratch with input text'
+    _why='a no-repo scratch'
+    [ -n "$PROMPT" ] && _why='a seeded scratch (--prompt)'
+    [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
     PLACING=0
   elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then

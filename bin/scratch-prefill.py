@@ -61,8 +61,6 @@ def input_status(screen, cx, cy):
         if prompt:
             # capture-pane strips trailing ASCII spaces from a blank input.
             start = len(prompt.group(1)) + 1
-            if cy != y or cx != start:
-                return "busy"
             if has_input(lines[y], start):
                 # NO_COLOR removes Claude's dim style as well as its colors.
                 # Recognize only the standard startup placeholders, and only
@@ -74,6 +72,10 @@ def input_status(screen, cx, cy):
                          or (glyph == "›" and placeholder == "Ask Codex to do anything"))
                 if SGR.search(lines[y]) or not ghost:
                     return "busy"
+            if cy != y or cx < start:
+                return "waiting"
+            if cx != start:
+                return "busy"
             return "empty"
     return "waiting"
 
@@ -161,7 +163,7 @@ def prefill(socket, pane, draft, warm):
         if status == "empty":
             if appeared is None:
                 appeared = now
-            if screen != previous:
+            if unchanged is None or screen != previous:
                 unchanged = now
             if warm or (now - appeared >= SETTLE and now - unchanged >= STABLE):
                 buf = "scratch-draft-" + str(os.getpid())
