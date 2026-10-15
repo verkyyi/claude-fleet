@@ -33,7 +33,11 @@ class CronTests(unittest.TestCase):
         # A handoff or recovery must preserve a consumed one-shot, not rearm it.
         restored = loop.spec(s, now=once+1)
         self.assertIsNone(restored['jobs'][1]['next_run_at'])
+        # Native 2.1.295 delivers one final round at or after the 7-day expiry,
+        # then deletes the job (fleet_cron.final_fire).
         loop.advance(restored, start+7*86400)
+        self.assertEqual(restored['next_run_at'], start+7*86400+420)
+        loop.advance(restored, start+7*86400+420)
         self.assertIsNone(restored['next_run_at'])
 
     def test_two_schedules_keep_phase_and_expiry(self):
@@ -49,6 +53,9 @@ class CronTests(unittest.TestCase):
         self.assertEqual([j['next_run_at'] for j in s['jobs']], [start+900,start+1320])
         self.assertEqual([j['prompt'] for j in s['jobs']], ['first patrol','second patrol'])
         loop.advance(s, start+3601)
+        # 'a' (*/15) had its final round at the expiry itself; 'b' still has one.
+        self.assertEqual([j['next_run_at'] for j in s['jobs']], [None, start+3600+420])
+        loop.advance(s, start+3600+420)
         self.assertIsNone(s['next_run_at'])
 
     def test_ambiguous_specs_refuse(self):
@@ -217,7 +224,11 @@ class LoopTests(unittest.TestCase):
         loop.dispatch(self.path, now=now+1320)
         self.assertEqual(len(self.messages),2)  # one-shot never runs a second time
         loop.dispatch(self.path, now=now+3601)
-        self.assertEqual(len(self.messages),2)
+        # 'a' expired at +3600 and native fires its overdue final round once.
+        self.assertEqual(len(self.messages),3)
+        self.assertIn('patrol one',self.messages[2]['input'][0]['text'])
+        loop.dispatch(self.path, now=now+3700)
+        self.assertEqual(len(self.messages),3)
         self.assertEqual(self.read()['status'],'complete')
 
     def test_ambiguous_multi_cron_delivery_is_never_resent(self):

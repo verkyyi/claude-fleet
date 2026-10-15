@@ -345,8 +345,15 @@ assert patrol<once
 loop['dispatch'](path,now=patrol)                  # the session-only patrol, on its own round
 lines=log.read_text().splitlines(); assert len(lines)==1 and 'exact patrol instruction' in lines[0],lines
 assert 'reread the train metrics' not in lines[0]
+# The patrol keeps its rounds through its one final round after expiry (native 2.1.295).
+while True:
+    nxt=[x for x in json.loads(path.read_text())['schedule']['jobs'] if x['id']=='patrol'][0]['next_run_at']
+    if nxt is None or nxt>=once: break
+    loop['dispatch'](path,now=nxt)
+patrols=len(log.read_text().splitlines())
+assert patrols>=2 and all('reread the train metrics' not in x for x in log.read_text().splitlines())
 loop['dispatch'](path,now=once-1)                  # not yet
-assert len(log.read_text().splitlines())==1
+assert len(log.read_text().splitlines())==patrols
 loop['dispatch'](path,now=once)                    # on time
 loop['dispatch'](path,now=once+1)                  # never again
 loop['dispatch'](path,now=once+3600)

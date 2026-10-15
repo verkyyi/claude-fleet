@@ -171,7 +171,7 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None, staging=None):
         if durable:
             refuse_durable()
         moved.append(job)
-        if job['next_run_at'] is None or (job['expires_at'] is not None and job['expires_at'] <= now):
+        if job['next_run_at'] is None or (not job['recurring'] and job['expires_at'] is not None and job['expires_at'] <= now):
             raise ValueError('cron task is no longer active')
         if job['next_run_at'] != next_fire(job, now):
             raise ValueError('cron plan no longer names the next native calendar round')

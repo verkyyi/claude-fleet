@@ -377,7 +377,10 @@ def dispatch(path, now=None):
                 return
             if 'jobs' in r['schedule']:
                 for job in r['schedule']['jobs']:
-                    if job['expires_at'] is not None and job['expires_at'] <= now: job['next_run_at'] = None
+                    # A recurring job keeps its one final round past expiry
+                    # (fleet_cron.final_fire, native 2.1.295); a one-shot does not.
+                    if not job.get('recurring', True) and job['expires_at'] is not None and job['expires_at'] <= now:
+                        job['next_run_at'] = None
                 fleet_cron.refresh(r['schedule'])
                 if r['schedule']['next_run_at'] is None:
                     r.update(status='complete', detail='Every cron job expired or stopped')
