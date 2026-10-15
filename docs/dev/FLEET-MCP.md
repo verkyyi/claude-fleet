@@ -434,32 +434,24 @@ A version that fails its probe is refused (`tool=(reload) verdict=refused` in
 `verdict=exec` and `verdict=resumed` under the one pid. `FLEET_MCP_RELOAD=0` turns
 it off. The legacy `fleet-peer` shim never reloads.
 
-## What changed, told at the next turn (issue #1897, EPIC #1906 C4)
+## What changed, on demand (issue #4324)
 
-A session that keeps working across a version move is not reopened (C3 only
-reopens an idle one), so it is TOLD: `hooks/settings-hooks.json`'s
-`UserPromptSubmit` runs `fleet-whats-new.sh --hook` — Claude and Codex alike
-(`hooks/codex-map.json`) — and when the expected version (`agent-cfg.expected`'s
-`ver` line, C2) differs from the one this session last heard of (`@ver_told`,
-else its launch `@agent_ver`), it hands the agent a note of at most five lines as
-`hookSpecificOutput.additionalContext`, then stamps `@ver_told=<sha>` so the same
-version is never told twice:
-
-```
-fleet 已从 69be1df 更新到 7c2a0e1，和你有关的：
-· 新工具 fleet.whats_new
-· 技能 /fleet-claim：交付前多一步 fleet.evidence after
-· 守卫：直接敲 fleet-comment.sh 会被记录，请用 fleet.comment
-另有 6 项内部改动。
-```
+`whats_new` prints the changes when requested. By default it compares this
+session's launch version (`@agent_ver`) with the expected version
+(`agent-cfg.expected`'s `ver` line); `from` and `to` select an explicit range.
+The tool runs `fleet-whats-new.sh --full`, which lists every relevant change.
+The script's `<old> <new>` form remains available for a brief of at most five lines.
 
 Relevant = a tool added or retired (`TOOLS` of the two versions), a commit that
-touches `docs/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
+touches `docs/dev/FLEET-MCP.md`, a worker-owned skill (`owner: worker`) or a guard
 (`hooks/*guard.py`, `bin/tmux-shim/`, the hook table); everything else is counted.
-A rollback is one line. Only at a turn boundary — nothing in a running turn is
-interrupted. No `ver` expected, no pane, or no move ⇒ nothing (as before); a session
-with neither stamp is baselined silently. `FLEET_WHATS_NEW=0` turns it off; each
-note is logged in `logs/whats-new.log`. `whats_new` prints the full list any time.
+A rollback is one line.
+
+The default hook table no longer registers `fleet-whats-new.sh --hook`, for
+either Claude or Codex. Old sessions can still call that entry: it consumes
+stdin and exits 0 silently for one release cycle, without injecting context or
+writing `@ver_told`. Device-location context and compact-time worker refocus
+remain core; see [COMPONENTS.md](COMPONENTS.md).
 
 ## Protocol
 
@@ -487,9 +479,10 @@ tampered / another pane / another fleet / revoked, migration, renewal, no leak.
 `bin/fleet-mcp-selftest.sh` M — a new version between calls: the in-flight call
 finishes on the old code, exec keeps pid + connection + credential, `list_changed`,
 the new tool listed, a broken version refused, the quiet poll, `FLEET_MCP_RELOAD=0`.
-`bin/whats-new-selftest.sh` — the C4 note: ≤ 5 lines, unrelated-only = one line,
-overflow, rollback, told once per version per session (`@ver_told`), the Codex
-wiring, the `whats_new` tool, and the degenerate (no `ver` / no move ⇒ nothing).
+`bin/whats-new-selftest.sh` — on-demand summaries: ≤ 5 lines, unrelated-only =
+one line, overflow, rollback, the `whats_new` tool, silent old-hook compatibility,
+and fresh sandbox installation / upgrade without whats-new injection. Claude
+and Codex retain device-location context and compact-time refocus.
 `bin/fleet-mcp-selftest.sh` K — the hub route: assertion only with hub + token +
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
 `worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)

@@ -1,6 +1,6 @@
 #!/bin/bash
-# whats-new-selftest.sh — a working session is told, once, at its next turn, what
-# changed in the fleet (issue #1897, EPIC #1906 C4).
+# whats-new-selftest.sh — changes are available on demand, never injected into
+# a conversation (issue #4324; summary behaviour from #1897, EPIC #1906 C4).
 #
 # bin/fleet-whats-new.sh reads a sandbox git history (FLEET_WHATS_NEW_REPO) whose
 # commits add a fleet tool, touch a worker skill, touch a guard and change
@@ -9,14 +9,13 @@
 #   B. unrelated — a range of internal commits only: ONE summary line
 #   C. overflow  — more relevant changes than fit: still ≤ 5 lines, 「看全部」
 #   D. rollback / unknown sha — one line each
-#   E. hook      — @agent_ver old, expected ver new: the note as UserPromptSubmit
-#                  additionalContext, @ver_told stamped; the next turn says nothing;
-#                  the next move is told from @ver_told; no stamps ⇒ baselined
-#                  silently; FLEET_WHATS_NEW=0 / no pane ⇒ nothing
+#   E. old hook  — old tables can still call --hook: exit 0, no output or stamp,
+#                  even after a version move; --full still reads the session version
 #   F. degenerate — no `ver` line expected, or the same version ⇒ no output, no stamp
-#   G. Codex     — hooks/settings-hooks.json wires the hook on UserPromptSubmit and
-#                  fleet-hooks-emit.sh --target codex carries it
+#   G. wiring    — Claude and Codex carry no whats-new hook; where/refocus stay
 #   H. tool      — fleet-mcp.py lists whats_new and runs `fleet-whats-new.sh --full`
+#   I. install   — fresh sandbox HOME defaults + hook merge: whats-new absent,
+#                  where/refocus present; upgrade preserves personal settings/hooks
 # Drives fleet-whats-new.sh, hooks/settings-hooks.json, fleet-hooks-emit.sh,
 # fleet-mcp.py. Exit 0 = pass.
 set -uo pipefail
@@ -31,7 +30,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/whatsnew-selftest.XXXXXX")" || exit 2
 WORK=$(cd "$WORK" && pwd -P)
 S="whatsnew$$"
 trap '"$REAL_TMUX" -L "$S" kill-server 2>/dev/null; rm -rf "$WORK"' EXIT INT TERM
-unset TMUX TMUX_PANE FLEET_WHATS_NEW
+unset TMUX TMUX_PANE
 export FLEET_CONF_DIR="$WORK/conf" FLEET_WHATS_NEW_REPO="$WORK/repo"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 mkdir -p "$WORK/conf/global" "$WORK/shim" "$WORK/repo"
@@ -53,7 +52,7 @@ mcp() {   # mcp <tool names…> — a fleet-mcp.py with that TOOLS table
     printf '}\n\nLEGACY = {\n    "list_agents": (tool_agents, {}),\n}\n'; } > "$WORK/repo/bin/fleet-mcp.py"
 }
 g init -q
-mkdir -p "$WORK/repo/commands" "$WORK/repo/hooks" "$WORK/repo/docs" "$WORK/repo/skills/fleet-open"
+mkdir -p "$WORK/repo/commands" "$WORK/repo/hooks" "$WORK/repo/docs/dev" "$WORK/repo/skills/fleet-open"
 mcp status brief
 printf '<!-- fleet skill · owner: worker -->\nv1\n' > "$WORK/repo/commands/fleet-claim.md"
 printf '<!-- fleet skill · owner: hub -->\nv1\n'    > "$WORK/repo/commands/fleet-epic-run.md"
@@ -112,24 +111,22 @@ opt() { "$REAL_TMUX" -L "$S" show-options -wqv -t "$1" "$2"; }
 hook() { printf '{"hook_event_name":"UserPromptSubmit","prompt":"go"}' | PATH="$WORK/shim:$PATH" TMUX="x" TMUX_PANE="$1" "$WN" --hook; }
 printf 'claude aaa default:x\nver %s\n' "$V6" > "$EXP"
 "$REAL_TMUX" -L "$S" set-option -w -t "$P1" @agent_ver "$V0"
-out=$(hook "$P1"); rc=$?
+out=$(hook "$P1" 2>&1); rc=$?
 eq "E: hook exit" 0 "$rc"
-ctx=$(printf '%s' "$out" | python3 -c 'import json,sys; o=json.load(sys.stdin)["hookSpecificOutput"]; assert o["hookEventName"]=="UserPromptSubmit"; print(o["additionalContext"])') \
-  || fail "E: not a UserPromptSubmit additionalContext" "$out"
-has "E: the note" "$ctx" "fleet 已从 ${V0:0:7} 更新到 ${V6:0:7}"
-has "E: the tool" "$ctx" "fleet.whats_new"
-eq "E: ≤ 5 lines" 5 "$(lines "$ctx")" "$ctx"
-eq "E: @ver_told stamped" "$V6" "$(opt "$P1" @ver_told)"
+eq "E: old hook is silent after a version move" "" "$out"
+eq "E: no stamp written" "" "$(opt "$P1" @ver_told)"
 eq "E: the next turn says nothing" "" "$(hook "$P1")"
+out=$(PATH="$WORK/shim:$PATH" TMUX=x TMUX_PANE="$P1" "$WN" --full)
+has "E: on-demand full output still reads launch/expected versions" "$out" "fleet 已从 ${V0:0:7} 更新到 ${V6:0:7}"
+"$REAL_TMUX" -L "$S" set-option -w -t "$P1" @ver_told "$V6"
 printf 'claude aaa default:x\nver %s\n' "$V9" > "$EXP"
-out=$(hook "$P1")
-has "E: the next move is told from @ver_told" "$out" "fleet 已从 ${V6:0:7} 更新到 ${V9:0:7}"
-eq "E: …and stamped" "$V9" "$(opt "$P1" @ver_told)"
+out=$(hook "$P1" 2>&1); rc=$?
+eq "E: next version hook exit" 0 "$rc"
+eq "E: another version move stays silent" "" "$out"
+eq "E: old stamp left untouched" "$V6" "$(opt "$P1" @ver_told)"
 eq "E: no stamps → nothing said" "" "$(hook "$P2")"
-eq "E: …but baselined" "$V9" "$(opt "$P2" @ver_told)"
+eq "E: no baseline written" "" "$(opt "$P2" @ver_told)"
 "$REAL_TMUX" -L "$S" set-option -wu -t "$P1" @ver_told
-eq "E: FLEET_WHATS_NEW=0 → nothing" "" "$(FLEET_WHATS_NEW=0 hook "$P1")"
-eq "E: …and no stamp" "" "$(opt "$P1" @ver_told)"
 eq "E: no pane → nothing" "" "$(hook "")"
 
 # --- F: degenerate ------------------------------------------------------------
@@ -142,16 +139,21 @@ printf 'ver %s\n' "$V0" > "$EXP"
 eq "F: the same version → nothing" "" "$(hook "$P1")"
 eq "F: …no stamp" "" "$(opt "$P1" @ver_told)"
 
-# --- G: wired for Claude and Codex --------------------------------------------
+# --- G: no injection for Claude or Codex --------------------------------------
 SRC="$BIN/../hooks/settings-hooks.json"
-python3 - "$SRC" <<'PY' || fail "G: settings-hooks.json does not run fleet-whats-new.sh --hook on UserPromptSubmit"
+python3 - "$SRC" <<'PY' || fail "G: hook table removed whats-new but must preserve where/refocus"
 import json, sys
-cmds = [h["command"] for b in json.load(open(sys.argv[1]))["hooks"]["UserPromptSubmit"] for h in b["hooks"]]
-assert any(c.endswith("bin/fleet-whats-new.sh --hook") for c in cmds), cmds
+hooks = json.load(open(sys.argv[1]))["hooks"]
+cmds = [h["command"] for groups in hooks.values() for b in groups for h in b["hooks"]]
+assert not any("fleet-whats-new.sh" in c for c in cmds), cmds
+assert any("fleet-where-hook.sh" in h["command"] for b in hooks["SessionStart"] for h in b["hooks"])
+assert any("refocus-hook.sh" in h["command"] for b in hooks["SessionStart"] if b.get("matcher") == "compact" for h in b["hooks"])
 PY
 CHECKS=$((CHECKS+1))
-cdx=$("$BIN/fleet-hooks-emit.sh" --target codex --event UserPromptSubmit 2>&1) || fail "G: codex emit failed" "$cdx"
-has "G: Codex carries it" "$cdx" "fleet-whats-new.sh' --hook"
+cdx=$("$BIN/fleet-hooks-emit.sh" --target codex 2>&1) || fail "G: codex emit failed" "$cdx"
+hasnt "G: Codex carries no whats-new hook" "$cdx" "fleet-whats-new.sh"
+has "G: Codex keeps device context" "$cdx" "fleet-where-hook.sh"
+has "G: Codex keeps compact refocus" "$cdx" "refocus-hook.sh"
 
 # --- H: the tool --------------------------------------------------------------
 printf '%s\n' \
@@ -169,6 +171,48 @@ assert r["structuredContent"]["exit"] == 0, r
 text = r["content"][0]["text"]
 assert "fleet 已从 %s" % sys.argv[1][:7] in text and "fleet.whats_new" in text, text
 assert rows[3]["result"].get("isError"), rows[3]          # to without from is refused
+PY
+CHECKS=$((CHECKS+1))
+
+# --- I: the default install in a fresh HOME, then an existing login ------------
+python3 - "$BIN" "$WORK" <<'PY' || fail "I: sandbox default install / upgrade"
+import json, os, pathlib, subprocess, sys
+
+bin_dir, work = map(pathlib.Path, sys.argv[1:])
+home = work / "home"
+(home / ".claude").mkdir(parents=True)
+settings = home / ".claude/settings.json"
+config = home / ".claude.json"
+config.write_text("{}\n")
+env = dict(os.environ, HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"))
+
+def install():
+    for args in [("defaults", "--config", str(config)), ("merge",)]:
+        subprocess.run([sys.executable, str(bin_dir / "fleet-hooks-merge.py"), *args],
+                       env=env, check=True, stdout=subprocess.DEVNULL)
+    return json.loads(settings.read_text())
+
+def commands(data):
+    return [h["command"] for groups in data["hooks"].values() for g in groups for h in g["hooks"]]
+
+fresh = install()
+cmds = commands(fresh)
+assert not any("fleet-whats-new.sh" in c for c in cmds), cmds
+for name in ("fleet-where-hook.sh", "refocus-hook.sh"):
+    assert sum(name in c for c in cmds) == 1, cmds
+print("  sandbox install: whats-new=0 where=1 refocus=1")
+
+# Simulate a login with the old managed hook and personal settings/hook.
+personal = {"type": "command", "command": "echo personal"}
+fresh["hooks"]["UserPromptSubmit"][0]["hooks"].append(personal)
+fresh["theme"] = "dark"
+expected = json.loads(json.dumps(fresh))
+fresh["hooks"]["UserPromptSubmit"][0]["hooks"].append(
+    {"type": "command", "command": "bash ~/.claude/fleet/bin/fleet-whats-new.sh --hook"})
+settings.write_text(json.dumps(fresh))
+upgraded = install()
+assert upgraded == expected, upgraded
+print("  sandbox upgrade: retired hook removed; other hooks/order and personal settings preserved")
 PY
 CHECKS=$((CHECKS+1))
 
