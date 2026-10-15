@@ -1348,15 +1348,22 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     # never seen yet is looked up below first.
     key = want or (cache.get("last") if cache.get("last") != AVOID else "") or ""
     ent = entries.get(key) if key else None
+    if info is None and hub and ent and ent.get("hub") == hub \
+            and (ent.get("machine") or {}).get("target_host_keys"):
+        try:
+            info = fetch_routes(hub, token)
+        except (Refused, OSError, ValueError):
+            pass
     # the hub's home answer names the login THIS machine is entered as
     # (claude-fleet#3049: the one with a live fleet there) — it wins over the
     # remembered one, which may be the login the fleet moved away from
     hm = pick_machine((info or {}).get("machines") or [], key, None) if ent and key else None
+    changed = info is not None and ent and hm != ent.get("machine")
     if hm and isinstance(hm.get("login"), str) and hm["login"] and hm["login"] != ent.get("login"):
         ent["login"] = hm["login"]
         save_cache(cache)
     pin = pin_for(key, *machine_names((ent or {}).get("machine")))
-    if pin and ent and ent.get("hub") == hub and isinstance(ent.get("machine"), dict):
+    if pin and ent and not changed and ent.get("hub") == hub and isinstance(ent.get("machine"), dict):
         r = pinned_row(route_rows(ent["machine"], hub), pin)
         if r is not None:
             return run_pinned(ent["machine"], ent.get("label") or key, r, pin, ent.get("login", ""), hub,
@@ -1368,7 +1375,7 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
     # network this computer is on (claude-fleet#3074): the line picked at home
     # is never the first one tried somewhere else.
     rem = remembered(ent) if ent else None
-    if not pin and rem and retest is not True and ent.get("hub") == hub \
+    if not pin and rem and not changed and retest is not True and ent.get("hub") == hub \
             and (retest == "last" or now - float(rem.get("at", 0)) < ttl) and not route_skip(rem["route"]):
         r = rem["route"]
         r = dict(r, ms=[], errors=[], order=0)

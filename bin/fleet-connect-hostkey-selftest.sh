@@ -55,6 +55,47 @@ EOF
 [[ "$(sed -n 4p <<<"$out")" != *UserKnownHostsFile* ]] && ok "ssh_command: no keys → ssh's own known_hosts, as before" \
   || bad "ssh_command without keys: $(sed -n 4p <<<"$out")"
 
+python3 - "$BIN/fleet-connect.py" "$HOSTPUB" "$OTHERPUB" <<'EOF' && ok "pod rebuild: refresh cached pins and automatic routes from hub, retain strict trust offline" || bad "pod rebuild cache refresh"
+import copy, importlib.util, sys, time
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location("fc", sys.argv[1])
+fc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fc)
+new_key, old_key = sys.argv[2:]
+hub = "https://hub.example"
+old = {"hostname": "pod", "login": "alice", "host_keys": [old_key], "target_host_keys": [old_key], "relay": True,
+       "routes": [{"name": "entry", "host": "door.example", "port": 22022, "jump": "fleet-jump", "target": "u-pod1.fleet-workers.svc.cluster.local"}]}
+fresh = dict(old, host_keys=[new_key], target_host_keys=[new_key])
+route = fc.route_rec(fc.route_rows(old, hub)[0])
+cache = {"last": "pod", "machines": {"pod": {"hub": hub, "machine": old, "label": "pod", "login": "alice",
+         "at": time.time(), "route": route, "routes": [route]}}}
+
+def measure(rows, *arguments):
+    for row in rows:
+        row["ms"] = [1]
+    return rows
+
+for pin in ("entry", "relay", ""):
+    for supplied in (True, False):
+        info = {"machines": [fresh]}
+        with patch.object(fc, "load_cache", return_value=copy.deepcopy(cache)), patch.object(fc, "save_cache"), \
+             patch.object(fc, "pin_for", return_value=pin), patch.object(fc, "fetch_routes", return_value=info) as fetch, \
+             patch.object(fc, "measure", side_effect=measure), patch.object(fc, "run_ssh", return_value=0) as run:
+            assert fc.connect("pod", hub, "", False, False, False, [], info=info if supplied else None) == 0
+            chosen, selected = run.call_args.args[:2]
+            assert chosen["host_keys"] == [new_key], (pin, supplied, chosen)
+            if selected["name"] == "entry":
+                assert selected["target_host_keys"] == [new_key]
+            assert fetch.call_count == (0 if supplied else 1)
+
+with patch.object(fc, "load_cache", return_value=copy.deepcopy(cache)), patch.object(fc, "pin_for", return_value="entry"), \
+     patch.object(fc, "fetch_routes", side_effect=OSError("offline")), patch.object(fc, "run_ssh", return_value=0) as run:
+    fc.connect("pod", hub, "", False, False, False, [])
+    chosen, selected = run.call_args.args[:2]
+    assert chosen["host_keys"] == [old_key]
+    assert selected["target_host_keys"] == [old_key]
+EOF
+
 # ── 2 — a real sshd ─────────────────────────────────────────────────────────
 SSHD=/usr/sbin/sshd
 if [ ! -x "$SSHD" ] || ! command -v ssh >/dev/null 2>&1; then

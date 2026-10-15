@@ -80,6 +80,8 @@ python3 bin/fleet-cn-probe-recover.py "$FLEET_CONF_DIR/global/cn-probe" stop --w
 
 所以巡检走的是**已上线**的入口、客户端和 pod 镜像，它的结论挡**下一次**前移。
 
+POD 重建验收还要保留客户端已有的自动 / 固定线路缓存，先直接重连，不能先 `--retest` 或删 known_hosts 掩盖旧密钥问题。连接器对 POD 从已鉴权的 hub 路由刷新主机身份；已有 home 响应直接复用，不再请求一次。身份变化后不走旧缓存捷径。hub 不可用时只保留原有信任，未知密钥仍由 SSH 拒绝，不能关闭主机校验。
+
 ## 手动
 
 ```sh
