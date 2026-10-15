@@ -603,7 +603,7 @@ fi
 # an exited one when no agent runs there (fleet_window_has_agent, #2404) or it is
 # a test identity's (@test_identity) — a placement check, never anyone's work.
 if [ "$(tmux display-message -t "$target" -p '#{@norepo}' 2>/dev/null)" = 1 ]; then
-  FLEET_SESSION="$(fleet_current_session)"; export FLEET_SESSION
+  FLEET_SESSION="$(tmux display-message -p -t "$target" "$FLEET_SESSION_FMT")"; export FLEET_SESSION
   nstate=$(fleet_reap_state "$target") \
     || nstate=$(tmux display-message -t "$target" -p '#{@claude_state}' 2>/dev/null)
   if [ -z "$nstate" ] && { ! fleet_window_has_agent "$target" \
