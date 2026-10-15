@@ -1549,6 +1549,16 @@ drill_node_core_old_code() {
 # login, four of a login with no session, and every spare login's issue-bridge /
 # pr-refresh asking GitHub every 15 s through a stand-in that compiled the
 # supervisor's 8k lines each time.
+drill_node_restart_shared_orphan() {
+  CAP=120
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-node-orphans-selftest.sh" 2>&1) \
+    || { WHY="daemon restart left a shared lock holder / process group: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="隔离代理持有真实 flock：守护接管 exec 后的进程，根核心收回无账的旧锁，连续三次重启仍一份；组长先退后仍收顽固子进程，参数里提及脚本的活动作业不碰"
+}
+
 drill_core_restart_leaks_loops() {
   CAP=120
   local t0 out
