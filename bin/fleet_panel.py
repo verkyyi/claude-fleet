@@ -223,3 +223,56 @@ def draw_box(screen, box, title, lines, selected, top, follow, qo, attr):
         put(screen, box.y + box.h - 1, box.x, "└" + "─" * max(0, box.w - 2) + "┘", box.w, qo.clip)
         put(screen, box.y + box.h - 1, box.x + 1, tail, box.w - 2, qo.clip)
     return top, hits
+
+
+class Input:
+    """Bracketed paste is text, never a sequence of buttons/Enter keystrokes.
+
+    Partial pastes survive input timeouts and resize notifications. A cancelled
+    or oversized paste never dispatches anything. Ordinary Escape still closes
+    the overlay; unrelated following keys are put back in order.
+    """
+    def __init__(self):
+        self.paste = None
+
+    def read(self, screen):
+        ch = screen.get_wch()
+        if self.paste is not None:
+            if ch == curses.KEY_RESIZE:
+                return ch
+            if isinstance(ch, str):
+                self.paste += ch
+                if self.paste.endswith("\x1b[201~"):
+                    text, self.paste = self.paste[:-6], None
+                    return ("paste", text)
+                # Keep bounded memory while retaining the end-marker suffix.
+                if len(self.paste) > 4010:
+                    self.paste = self.paste[:4001] + self.paste[-6:]
+            return None
+        if ch != "\x1b":
+            return ch
+        seq = []
+        screen.timeout(25)
+        try:
+            for _ in range(5):
+                try:
+                    c = screen.get_wch()
+                except curses.error:
+                    break
+                seq.append(c)
+                if not isinstance(c, str) or not "[200~".startswith("".join(seq)):
+                    break
+                if "".join(seq) == "[200~":
+                    self.paste = ""
+                    return None
+        finally:
+            screen.timeout(100)
+        # Terminal focus events aren't user Escape or search text.
+        if seq in (["[", "I"], ["[", "O"]):
+            return None
+        for c in reversed(seq):
+            if isinstance(c, int):
+                curses.ungetch(c)
+            else:
+                curses.unget_wch(c)
+        return "\x1b"

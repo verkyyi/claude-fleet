@@ -105,9 +105,9 @@ def main():
             width = cells(lines[bottom].split("╰")[1].split("╯")[0]) + 2
             body = lines[top + 1:bottom]
             assert "╮" in lines[top] and "╯" in lines[bottom], lines
-            assert all(line.count("│") == 2 and cells(line.split("│")[0]) == x and
-                       cells(line.split("│")[1]) == width - 2 for line in body), lines
-            assert all("BACKGROUND" not in line.split("│")[1] and "龘" not in line.split("│")[1]
+            assert all(line.count("│") >= 2 and cells(line.split("│")[0]) == x and
+                       cells("│".join(line.split("│")[1:-1])) == width - 2 for line in body), lines
+            assert all("BACKGROUND" not in "│".join(line.split("│")[1:-1]) and "龘" not in "│".join(line.split("│")[1:-1])
                        for line in body), lines
             return top, x, width, bottom
 
@@ -179,12 +179,12 @@ def main():
                     state.write_text("")
                     until(lambda: "PANEL-" not in capture() and "New session" in capture())
                     tm(outer, "send-keys", "-t", "out:0", "Tab")
-                    until(lambda: "Tab next cell" in capture())
+                    until(lambda: "Tab / S-Tab" in capture())
                     frame()
                     check(proc.poll() is None, "%d menu / empty list / new-task cells remain open" % width)
                     state.write_text(title)
 
-                tm(outer, "send-keys", "-t", "out:0", "Escape")
+                tm(outer, "send-keys", "-t", "out:0", "Escape", "Escape")
                 proc.wait(timeout=5)
                 check(proc.returncode == 0, "%d popup exit: %s" % (width, proc.stderr.read().decode()))
                 proc = None

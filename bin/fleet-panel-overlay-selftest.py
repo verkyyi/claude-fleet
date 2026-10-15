@@ -270,6 +270,21 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
 
+    def test_paste_never_activates_controls(self):
+        self.keys("Up", "Enter")
+        self.wait("开窗预填")
+        self.literal("\x1b[200~literal\n\ttext\n\x1b[201~")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and self.draft().get("text") != "literal\n    text\n":
+            time.sleep(.05)
+        self.assertEqual(self.draft()["text"], "literal\n    text\n", self.screen())
+        self.keys("Tab", "Tab", "Tab")
+        self.literal("\x1b[200~\n\n\t\n\x1b[201~")
+        self.assertEqual(self.actions(), [])
+        self.keys("Escape", "Escape")
+        self.wait("POPUP-CLOSED")
+        self.evidence.append("PASS bracketed multiline paste stays text; pasted Enter/Tab on a button dispatches nothing")
+
     def test_multiline_submit_once_options_and_persistence(self):
         self.literal("draft")
         self.keys("Enter")

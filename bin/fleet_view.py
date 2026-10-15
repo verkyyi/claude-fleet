@@ -82,12 +82,12 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 ~0.2 s for the row producer) and refresh it in the background after the switch.
 
 WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
-「合并后关」 / 「空闲 2 小时关」, and only on the lit row's line at the foot;
+「合并后关」 / 「空闲 2 小时关」, available in the row's actions;
 names are the issue's title as wide as the popup is (the producer's 12-cell name
 when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
 x failed · » working · ✓ done · ∙ idle · ? lost, coloured unless NO_COLOR /
-FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii) — only the lit row writes its word
-beside it, and `?` on an empty query shows the legend. Machine, login and repo
+FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii). Selection keeps the same glyph;
+`?` on an empty query shows the legend. Machine, login and repo
 (only when 2+) are tags at the row's end, never a group. No session
 is special (issue #3119): the one holding the orchestrator or the steward is a row
 like any other — no session is behind 「新任务」 below. All of it through
@@ -2952,8 +2952,20 @@ def _keys():
 
 
 def popup(screen, qo, vid, client, forward=""):
+    # Scope paste mode to this popup's terminal, including exceptions/close.
+    sys.stdout.write("\x1b[?2004h")
+    sys.stdout.flush()
+    try:
+        return _popup(screen, qo, vid, client, forward)
+    finally:
+        sys.stdout.write("\x1b[?2004l")
+        sys.stdout.flush()
+
+
+def _popup(screen, qo, vid, client, forward=""):
     # raw: ⌃\ is a key here (a shell beside the lit row), never SIGQUIT
     import fleet_panel as panel
+    inputs = panel.Input()
     curses.raw()
     curses.curs_set(0)
     styles = {"bold": curses.A_BOLD, "lit": curses.A_REVERSE}
@@ -3321,8 +3333,27 @@ def popup(screen, qo, vid, client, forward=""):
         screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
                            max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
         try:
-            ch = screen.get_wch()
+            ch = inputs.read(screen)
         except curses.error:
+            continue
+        if ch is None:
+            continue
+        if isinstance(ch, tuple) and ch[0] == "paste":
+            if overlay and overlay.focus:
+                if mode == "compose" and draft.control == 0:
+                    text = ch[1].replace("\t", "    ")
+                    if not draft.editor.insert(text):
+                        msg = say("view_draft_limit")
+                    editor_follow, overlay.follow = True, True
+                    save_draft()
+                # Pasting onto a button never activates it.
+                continue
+            # Search paste is a single edit; no newline/Tab may run a command.
+            query += " ".join(ch[1].split())[:4000]
+            shown = listing()
+            at = next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
+                      next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), 0))
+            top, follow_list = 0, True
             continue
         msg, msg_until = "", 0
         if ch in ("\x1b", "\x03"):
