@@ -66,6 +66,8 @@ python3 bin/fleet-cn-probe-recover.py "$FLEET_CONF_DIR/global/cn-probe" stop --w
 
 排查 `codex` 超时要同时看 pod 上的回答和客户端自己的 `*.ssherr`。`Session open refused by peer` 后跟 `Could not resolve hostname u-…` 表示 SSH 复用会话被拒后退回了裸主机名，不能仅凭界面的「找不到这台机器的地址」判断入口丢了在线状态。客户端应在复用连接返回 255 后为当前窗口重新选路，不关闭其他窗口共用的连接。双副本下还需分别验证机器身份鉴权和门 / pod 的跳转就绪状态；连接落在哪个副本都应得到一致结果。
 
+个人 POD 的 CPU 准入策略还必须经真实 SSH 登录验证：容器环境里的 `FLEET_USER_POD=1` 不会自动传入 sshd 创建的会话。pod 的服务端 sshd 配置用 `SetEnv FLEET_USER_POD=1` 保留这个身份；不能只看 `kubectl exec` 或 tmux 服务端环境就认定客户端开会话也走个人 POD 策略。内存保护和显式 `FLEET_ADMIT_POD_CPU=hold` 仍然生效。
+
 - 在它测的 stable 提交上留提交状态 `cn path`（failure，指向 breakage 单）；绿了留 success。
 - 按卡住的层开一张 breakage 单（`--breakage-key cn-path-<层>`，跨机器去重），发一条 `breakage` 提醒，不开修复会话（#3120）。
 - **挡发版**：`bin/fleet-stable.sh` 第 9 道门 `cn:` 读**当前** stable 上最新的 `cn path`。红且它指的单还开着 ⇒ 拒绝前移（`--precheck` 也拦，列车在跑测试前就停）。关掉那张单（修复随这次前移发出）或下一次巡检转绿 ⇒ 放行；`--force` 越过并记 `logs/stable-move.log`；`FLEET_STABLE_CN_GATE=0` 关掉这道门。
