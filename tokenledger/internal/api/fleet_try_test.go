@@ -584,11 +584,12 @@ func TestTrialAdmissionQueues(t *testing.T) {
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
 	setHubSetting(t, h.srv, TrialKey, "on")
+	// Only mac-d may hand out a spare. Set the cap before replenishing:
+	// lowering it afterwards leaves mac-c's ready spare claimable (#4129).
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "0")
 	sparesOn(t, h, "1")
-	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated)
 	openSpares(t, nodes["mac-d"], 1, control.CredsepSeparated)
 	readySpares(t, h, "mac-d", 1)
-	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "0")
 	old := trialPoolLeft
 	t.Cleanup(func() { trialPoolLeft = old })
 	pool := func(left float64, ok bool) { trialPoolLeft = func(*Server) (float64, bool) { return left, ok } }
@@ -641,8 +642,8 @@ func TestTrialAdmissionQueues(t *testing.T) {
 	if a, err := h.srv.tryClaim(p, "", time.Now()); err != nil || (a.State != "ready" && a.State != "opening") {
 		t.Fatalf("claim with every gate open = %+v, %v; want a seat", a, err)
 	}
-	if !auditHas(mustAudit(t, h), "trial.claim", "ok", "mac-d") {
-		t.Errorf("no trial.claim audit")
+	if audit := mustAudit(t, h); !auditHas(audit, "trial.claim", "ok", "mac-d") {
+		t.Errorf("no trial.claim audit for mac-d: %+v", audit)
 	}
 	// The ETA follows the last releases' spacing once two are known.
 	for i, q := range []string{"gh:7403", "gh:7404"} {
