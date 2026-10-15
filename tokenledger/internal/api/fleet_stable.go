@@ -373,10 +373,12 @@ func (s *StableSource) storeTreeLocked(sha string, files map[string][]byte) {
 	}
 	if s.files == nil || s.size-replaced+total > stableCacheMax {
 		s.files, s.size, s.whole = map[string][]byte{}, 0, map[string]bool{}
+		replaced = 0
 	}
 	for path, body := range files {
-		s.storeLocked(sha+"/"+path, body)
+		s.files[sha+"/"+path] = body
 	}
+	s.size += total - replaced
 	if s.whole == nil {
 		s.whole = map[string]bool{}
 	}

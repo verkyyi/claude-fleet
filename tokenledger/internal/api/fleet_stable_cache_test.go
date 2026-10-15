@@ -79,6 +79,21 @@ func TestStableCacheReplacementSize(t *testing.T) {
 	}
 }
 
+func TestStableCachePartialReleaseCompletion(t *testing.T) {
+	stable := &StableSource{}
+	stable.storeLocked("release/bin/fleet", []byte("fleet"))
+	stable.storeTreeLocked("older", map[string][]byte{"bin/fleet": []byte("older")})
+	stable.storeTreeLocked("release", map[string][]byte{
+		"bin/fleet": []byte("fleet"), "bin/fleet-logout.sh": []byte("logout"),
+	})
+	if stable.size != len("fleetolderlogout") || !stable.whole["release"] || !stable.whole["older"] {
+		t.Fatalf("partial completion: size=%d whole=%v", stable.size, stable.whole)
+	}
+	if len(stable.files) != 3 {
+		t.Fatalf("partial completion retained %d files; want 3", len(stable.files))
+	}
+}
+
 func TestStableCacheOversizedLocalRelease(t *testing.T) {
 	sha := strings.Repeat("b", 40)
 	files := map[string][]byte{StableManifestPath: []byte("bin/fleet\n"), "bin/fleet": []byte("fleet")}
