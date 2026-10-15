@@ -1,6 +1,6 @@
 #!/bin/bash
 # idle-login-loops-selftest.sh — a login nobody uses runs no per-login loop for
-# nobody, and the loops that do run fork little (issue #4261: macmini at load ~20
+# nobody, and the loops that do run fork little (issue #4261: a shared 15-core node at load ~20
 # with ~970 forks/s, most of them each login's polling scripts).
 #
 #   A. fleet_login_unused   0 sessions awake + 0 asleep, a fresh row, no client on

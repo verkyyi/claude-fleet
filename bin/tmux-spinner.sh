@@ -227,8 +227,8 @@ SOCKETS=''
 # (a spare login, a node nobody's 看台 is on) is read like a quiet one — its glyph
 # written, re-read every IDLE_READ_SECS or on the marker — never 8 frames a second;
 # and with no client on ANY socket the loop ticks UNWATCHED_TICK_SECS, not
-# IDLE_TICK_SECS: the tick is the hook→screen ceiling, and there is no screen. On
-# macmini that was ~8 logins × a `sleep` + a `tmux` per frame for nobody. tmux
+# IDLE_TICK_SECS: the tick is the hook→screen ceiling, and there is no screen. On a
+# shared node that was ~8 logins × a `sleep` + a `tmux` per frame for nobody. tmux
 # itself keeps the answer on its socket file — u+x while a client is attached
 # (server_update_socket) — so it is a builtin test every frame, no fork.
 # FLEET_SPINNER_WATCH=0 animates every socket, as before.
