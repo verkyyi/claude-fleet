@@ -2,27 +2,27 @@
 # fleet-agent-defaults-selftest.sh — ONE default package for both agents (issue #1559,
 # EPIC #1524 C12): conf/agent-defaults/ filled by bin/fleet-agent-defaults.py into
 # ~/.claude.json (user-scope MCP), $CODEX_HOME/config.toml (approval_policy /
-# sandbox_mode / model_reasoning_effort + the same MCP), and one marker block in
-# ~/.claude/CLAUDE.md / $CODEX_HOME/AGENTS.md, with bin/mcp-github.sh and
+# sandbox_mode / model_reasoning_effort + the same MCP). Docs are untouched by
+# apply/check; strip is explicit legacy cleanup (#3125). With bin/mcp-github.sh and
 # bin/mcp-fetch.sh as the two servers' wrappers. Hermetic: a sandbox install root
 # whose conf/agent-defaults IS the repo's (symlink), a sandbox skills/ of its own.
 #
 #   1  the shipped defaults: shape, the four servers, the three Codex keys, no
 #      `model`, both doc blocks marked; tomllib agrees with the fleet's reader
 #   2  empty: {} .claude.json + a one-key config.toml + no docs → every default
-#      in; `filled claude 5 · codex 9`; check reads 0 missing (skills once installed)
+#      in; `filled claude 4 · codex 8`; check reads 0 missing (skills once installed)
 #   3  own: a same-name server (both agents) and a login's approval_policy are
 #      never rewritten; the login's lines survive byte for byte; the personal
-#      AGENTS.md text survives under the appended block
+#      AGENTS.md text survives byte for byte
 #   4  idempotent: a second apply writes nothing, cmp-equal files
-#   5  a stale fleet block is replaced in place; the login's text around it stays
+#   5  old/partial blocks are untouched; explicit strip preserves personal text
 #   6  the override file + --skip shield items; `codex` alone shields that agent
 #   7  absent: no .claude.json is never created; no $CODEX_HOME is n/a, not created
 #   8  a held .claude.json.lock is never stolen (exit 2, nothing written)
 #   9  `mcp_servers = { … }` inline at the top is reported, not extended; the
 #      merged file still parses
 #  10  malformed defaults are refused (exit 2): `model`, a credential-shaped key,
-#      a doc block missing its end marker
+#      legacy doc templates are no longer installation inputs
 #  11  no token anywhere: the shipped files, the wrappers and the merged configs
 #  12  the wrappers: github takes `gh auth token` into the env and execs the
 #      server with `stdio`; no token → exit 1; fetch execs uvx when present
@@ -94,17 +94,17 @@ done
 fresh "$WORK/c1"
 run python3 check "$WORK/c1" > "$WORK/o1"; rc=$?
 [ "$rc" = 1 ] || fail "check on an empty login should exit 1 (got $rc)" "$(cat "$WORK/o1")"
-head -1 "$WORK/o1" | grep -q '^claude 5 missing · codex 9 missing · skills 4 missing$' || fail 'check head line on an empty login' "$(cat "$WORK/o1")"
+head -1 "$WORK/o1" | grep -q '^claude 4 missing · codex 8 missing · skills 4 missing$' || fail 'check head line on an empty login' "$(cat "$WORK/o1")"
 [ "$(grep -c '^missing    codex\[.*\] mcp ' "$WORK/o1")" = 4 ] || fail 'check did not name 4 missing Codex servers' "$(cat "$WORK/o1")"
 grep -q '^missing    codex\[.*\] approval_policy (default "never")$' "$WORK/o1" || fail 'check did not name approval_policy with its default' "$(cat "$WORK/o1")"
-grep -q '^missing    claude doc CLAUDE.md fleet block (absent)$' "$WORK/o1" || fail 'check did not name the absent CLAUDE.md block' "$(cat "$WORK/o1")"
+grep -q ' doc ' "$WORK/o1" && fail 'check still requires a doc block'
 grep -q '^missing    claude skill sk1$' "$WORK/o1" && grep -q '^missing    codex\[.*\] skill sk2$' "$WORK/o1" || fail 'check did not count the skills' "$(cat "$WORK/o1")"
 ok '1 shipped defaults: four servers, three Codex keys, no model, marked doc blocks; check names each missing item once'
 
 # --- 2. empty login → every default in --------------------------------------------------
 run python3 apply "$WORK/c1" > "$WORK/o2" || fail 'apply on an empty login failed' "$(cat "$WORK/o2")"
-grep -q '^filled  claude 5 · codex 9$' "$WORK/o2" || fail 'apply summary' "$(cat "$WORK/o2")"
-[ "$(grep -c '^set ' "$WORK/o2")" = 14 ] || fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
+grep -q '^filled  claude 4 · codex 8$' "$WORK/o2" || fail 'apply summary' "$(cat "$WORK/o2")"
+[ "$(grep -c '^set ' "$WORK/o2")" = 12 ] || fail 'apply did not print one set per item' "$(cat "$WORK/o2")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'sorted(d["mcpServers"])')" = "['context7', 'fetch', 'github', 'playwright']" ] \
   || fail '.claude.json did not get the four servers' "$(cat "$WORK/c1/claude/.claude.json")"
 [ "$(json_get "$WORK/c1/claude/.claude.json" 'd["mcpServers"]["context7"]')" = "$(json_get "$D/claude/mcp.default.json" 'd["mcpServers"]["context7"]')" ] \
@@ -120,15 +120,14 @@ if [ "$HAS_TOML" = 1 ]; then
   [ "$(toml_get "$WORK/c1/codex/config.toml" 'd["mcp_servers"]["github"]["args"]')" = "$(toml_get "$D/codex/config.default.toml" 'd["mcp_servers"]["github"]["args"]')" ] \
     || fail 'the merged github args differ from the default'
 fi
-grep -q '^<!-- fleet:agent-defaults begin -->' "$WORK/c1/claude/CLAUDE.md" && grep -q '^<!-- fleet:agent-defaults end -->' "$WORK/c1/claude/CLAUDE.md" \
-  || fail 'CLAUDE.md was not created with the block'
-grep -q '^<!-- fleet:agent-defaults begin -->' "$WORK/c1/codex/AGENTS.md" || fail 'AGENTS.md was not created with the block'
+[ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] \
+  || fail 'apply created instruction files on a fresh login'
 grep -q '^skills  4 not installed yet' "$WORK/o2" || fail 'apply did not report the uninstalled skills' "$(cat "$WORK/o2")"
 # the skills passes install them → check reads all zeros
 install_skills "$WORK/c1"
 run python3 check "$WORK/c1" > "$WORK/o2c" || fail 'check after apply + skills still unhappy' "$(cat "$WORK/o2c")"
 grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing$' "$WORK/o2c" || fail 'check ok line' "$(cat "$WORK/o2c")"
-ok '2 empty login: 4+4 servers, 3 Codex keys, both doc blocks; filled 5 · 8; check 0 missing'
+ok '2 empty login: configs filled, instruction files absent; check 0 missing'
 
 # --- 3. the login's own is never rewritten ---------------------------------------------------
 fresh "$WORK/c3"
@@ -156,6 +155,9 @@ trust_level = "trusted"
 EOF
 printf '# Global AGENTS.md\n\nMy own rules.\n' > "$WORK/c3/codex/AGENTS.md"
 cp "$WORK/c3/codex/config.toml" "$WORK/c3/toml.before"
+printf 'Personal Claude rules.\n' > "$WORK/c3/claude/CLAUDE.md"
+cp "$WORK/c3/codex/AGENTS.md" "$WORK/c3/agents.before"
+cp "$WORK/c3/claude/CLAUDE.md" "$WORK/c3/claude.before"
 run python3 apply "$WORK/c3" > "$WORK/o3" || fail 'apply over a login'\''s own failed' "$(cat "$WORK/o3")"
 [ "$(json_get "$WORK/c3/claude/.claude.json" 'd["mcpServers"]["playwright"]["args"]')" = "['@playwright/mcp@1.2.3', '--headless']" ] \
   || fail 'the login'\''s playwright was rewritten' "$(cat "$WORK/c3/claude/.claude.json")"
@@ -187,10 +189,10 @@ grep -q '^\[mcp_servers\.github\]$' "$WORK/c3/codex/config.toml" && grep -q '^\[
   || fail 'the missing servers were not appended'
 grep -q '^own            codex\[.*\] approval_policy = "on-request" (default "never")$' "$WORK/o3" || fail 'apply did not report the login'\''s approval_policy' "$(cat "$WORK/o3")"
 grep -q '^own            codex\[.*\] mcp fetch — this login'\''s$' "$WORK/o3" || fail 'apply did not report the login'\''s fetch' "$(cat "$WORK/o3")"
-head -3 "$WORK/c3/codex/AGENTS.md" | grep -q '^# Global AGENTS.md$' && grep -q '^My own rules.$' "$WORK/c3/codex/AGENTS.md" \
-  && grep -q '^<!-- fleet:agent-defaults begin -->' "$WORK/c3/codex/AGENTS.md" || fail 'AGENTS.md: personal text lost or block not appended' "$(cat "$WORK/c3/codex/AGENTS.md")"
-grep -q '^filled  claude 4 · codex 7$' "$WORK/o3" || fail 'own-case summary' "$(cat "$WORK/o3")"
-ok '3 own: same-name servers and the login'\''s approval_policy / model kept; its lines survive in order; personal AGENTS.md text under the block'
+cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/c3/agents.before" && cmp -s "$WORK/c3/claude/CLAUDE.md" "$WORK/c3/claude.before" \
+  || fail 'apply changed personal instruction files'
+grep -q '^filled  claude 3 · codex 6$' "$WORK/o3" || fail 'own-case summary' "$(cat "$WORK/o3")"
+ok '3 own: servers, keys and personal instruction files preserved'
 
 # --- 4. idempotent ----------------------------------------------------------------------
 for f in claude/.claude.json codex/config.toml claude/CLAUDE.md codex/AGENTS.md; do cp "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before"; done
@@ -203,22 +205,44 @@ done
 [ -z "$(find "$WORK/c3/claude" "$WORK/c3/codex" -maxdepth 1 -name '*.bak.*' 2>/dev/null)" ] || fail 'apply left a backup'
 ok '4 idempotent: second apply writes nothing, no backup'
 
-# --- 5. a stale block is replaced in place ---------------------------------------------------
-sed 's/rules on a managed machine/OLD HEADING/' "$WORK/c3/codex/AGENTS.md" > "$WORK/c3/codex/AGENTS.md.new" && mv "$WORK/c3/codex/AGENTS.md.new" "$WORK/c3/codex/AGENTS.md"
-printf '\nTrailing personal note.\n' >> "$WORK/c3/codex/AGENTS.md"
-run python3 check "$WORK/c3" > "$WORK/o5c"; [ $? = 1 ] || fail 'check passed over a stale block'
-grep -q '^missing    codex\[.*\] doc AGENTS.md fleet block (stale)$' "$WORK/o5c" || fail 'check did not call the block stale' "$(cat "$WORK/o5c")"
-run python3 apply "$WORK/c3" > "$WORK/o5" || fail 'apply over a stale block failed' "$(cat "$WORK/o5")"
-grep -q '^set            codex\[.*\] doc AGENTS.md fleet block (replaced)$' "$WORK/o5" || fail 'apply did not replace the stale block' "$(cat "$WORK/o5")"
-grep -q 'OLD HEADING' "$WORK/c3/codex/AGENTS.md" && fail 'the stale text is still there'
-grep -q '^My own rules.$' "$WORK/c3/codex/AGENTS.md" && grep -q '^Trailing personal note.$' "$WORK/c3/codex/AGENTS.md" \
-  && [ "$(grep -c '<!-- fleet:agent-defaults begin -->' "$WORK/c3/codex/AGENTS.md")" = 1 ] || fail 'text around the block changed, or the block doubled' "$(cat "$WORK/c3/codex/AGENTS.md")"
-# one marker without its pair: left alone, reported
-printf '# mine\n<!-- fleet:agent-defaults begin -->\nhalf\n' > "$WORK/c3/claude/CLAUDE.md"
-run python3 apply "$WORK/c3" > "$WORK/o5b" || fail 'apply over a malformed block failed'
-grep -q '^own            claude doc CLAUDE.md — a fleet marker without its pair; left alone$' "$WORK/o5b" || fail 'a half block was not reported' "$(cat "$WORK/o5b")"
-[ "$(cat "$WORK/c3/claude/CLAUDE.md")" = "$(printf '# mine\n<!-- fleet:agent-defaults begin -->\nhalf')" ] || fail 'a half block was edited'
-ok '5 stale block replaced in place, text around it kept; a half block is left alone and reported'
+# --- 5. legacy blocks are preserved; strip is an explicit, doc-only operation ---------
+install_skills "$WORK/c3"
+for f in claude/CLAUDE.md codex/AGENTS.md; do
+  printf 'Personal before.\r\n<!-- fleet:agent-defaults begin -->\r\nOLD HEADING\r\n<!-- fleet:agent-defaults end -->\r\nPersonal after.\r\n' > "$WORK/c3/$f"
+  cp "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before"
+done
+run python3 check "$WORK/c3" > "$WORK/o5c" || fail 'check requires an updated legacy block'
+run python3 apply "$WORK/c3" > "$WORK/o5" || fail 'apply over legacy blocks failed'
+run python3 strip "$WORK/c3" --dry-run > "$WORK/o5dry" || fail 'strip dry-run failed'
+for f in claude/CLAUDE.md codex/AGENTS.md; do
+  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "apply/check/dry-run changed $f"
+done
+run python3 strip "$WORK/c3" > "$WORK/o5s" || fail 'strip failed'
+printf 'Personal before.\r\nPersonal after.\r\n' > "$WORK/personal.expected"
+for f in claude/CLAUDE.md codex/AGENTS.md; do
+  cmp -s "$WORK/c3/$f" "$WORK/personal.expected" || fail "strip changed personal bytes in $f"
+done
+for f in claude/.claude.json codex/config.toml; do
+  cmp -s "$WORK/c3/$f" "$WORK/c3/$(echo "$f" | tr / _).before" || fail "strip changed $f"
+done
+run python3 strip "$WORK/c3" > "$WORK/o5s2" || fail 'second strip failed'
+grep -q '^stripped 0 fleet block(s)$' "$WORK/o5s2" || fail 'strip is not idempotent'
+# A malformed second doc must refuse before changing the valid first doc.
+cp "$D/claude/CLAUDE.default.md" "$WORK/c3/claude/CLAUDE.md"
+printf '# mine\n<!-- fleet:agent-defaults begin -->\nhalf\n' > "$WORK/c3/codex/AGENTS.md"
+cp "$WORK/c3/codex/AGENTS.md" "$WORK/half.before"
+run python3 apply "$WORK/c3" > /dev/null || fail 'apply over a partial block failed'
+run python3 check "$WORK/c3" > /dev/null || fail 'check requires repair of a partial block'
+run python3 strip "$WORK/c3" > "$WORK/o5bad" 2>&1; [ $? = 2 ] || fail 'strip accepted partial markers'
+cmp -s "$WORK/c3/claude/CLAUDE.md" "$D/claude/CLAUDE.default.md" && cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" \
+  || fail 'strip wrote before preflight completed'
+run python3 strip "$WORK/c3" --skip codex.doc > /dev/null || fail 'strip did not honor doc override'
+cmp -s "$WORK/c3/codex/AGENTS.md" "$WORK/half.before" || fail 'strip changed a shielded doc'
+cat "$D/codex/AGENTS.default.md" "$D/codex/AGENTS.default.md" > "$WORK/c3/codex/AGENTS.md"
+run python3 strip "$WORK/c3" > /dev/null 2>&1; [ $? = 2 ] || fail 'strip accepted duplicate blocks'
+run python3 strip "$WORK/c1" > /dev/null || fail 'strip with absent docs failed'
+[ ! -e "$WORK/c1/claude/CLAUDE.md" ] && [ ! -e "$WORK/c1/codex/AGENTS.md" ] || fail 'strip created absent docs'
+ok '5 legacy blocks untouched; strip preserves personal bytes, respects overrides, refuses malformed/duplicate blocks before writing'
 
 # --- 6. the override file and --skip -------------------------------------------------------
 fresh "$WORK/c6"; install_skills "$WORK/c6"
@@ -229,13 +253,13 @@ grep -q '^\[mcp_servers\.playwright\]' "$WORK/c6/codex/config.toml" && fail 'a b
 grep -q '^sandbox_mode' "$WORK/c6/codex/config.toml" && fail 'codex.sandbox_mode was not shielded'
 grep -q '^approval_policy = "never"$' "$WORK/c6/codex/config.toml" || fail 'the unshielded key was not filled'
 [ -e "$WORK/c6/claude/CLAUDE.md" ] && fail 'claude.doc was not shielded — CLAUDE.md written'
-[ -e "$WORK/c6/codex/AGENTS.md" ] || fail 'codex.doc was shielded by mistake'
-grep -q '^kept    4 item(s) left to this login: claude.mcp.playwright, claude.doc, codex\[.*\].sandbox_mode, codex\[.*\].mcp.playwright$' "$WORK/o6" \
+[ ! -e "$WORK/c6/codex/AGENTS.md" ] || fail 'apply created AGENTS.md'
+grep -q '^kept    3 item(s) left to this login: claude.mcp.playwright, codex\[.*\].sandbox_mode, codex\[.*\].mcp.playwright$' "$WORK/o6" \
   || fail 'apply did not list the kept items' "$(cat "$WORK/o6")"
 OVR="$WORK/ovr6.json" run python3 check "$WORK/c6" > "$WORK/o6c" || fail 'check with the same override unhappy' "$(cat "$WORK/o6c")"
-grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing; 4 left to this login: ' "$WORK/o6c" || fail 'check did not list the kept items' "$(cat "$WORK/o6c")"
+grep -q '^ok claude 0 missing · codex 0 missing · skills 0 missing; 3 left to this login: ' "$WORK/o6c" || fail 'check did not list the kept items' "$(cat "$WORK/o6c")"
 run python3 check "$WORK/c6" > "$WORK/o6d"; [ $? = 1 ] || fail 'check without the override passed over the shielded items'
-head -1 "$WORK/o6d" | grep -q '^claude 2 missing · codex 2 missing · skills 0 missing$' || fail 'check without the override miscounted' "$(cat "$WORK/o6d")"
+head -1 "$WORK/o6d" | grep -q '^claude 1 missing · codex 2 missing · skills 0 missing$' || fail 'check without the override miscounted' "$(cat "$WORK/o6d")"
 # `codex` alone shields that agent; --skip adds from the command line; an object override works too
 fresh "$WORK/c6b"; install_skills "$WORK/c6b"
 printf '{"codex": "my own Codex config"}\n' > "$WORK/ovr6b.json"
@@ -254,7 +278,7 @@ run python3 apply "$WORK/c7" > "$WORK/o7" || fail 'apply on a login with nothing
 [ -e "$WORK/c7/codex" ] && fail 'a Codex home was created'
 grep -q '^absent  .*\.claude\.json — Claude Code has not run on this login yet; its 4 server(s) wait for the next sync$' "$WORK/o7" || fail 'apply did not say .claude.json is absent' "$(cat "$WORK/o7")"
 grep -q '^absent  .*/c7/codex — Codex is not set up on this login; nothing created$' "$WORK/o7" || fail 'apply did not say the Codex home is absent' "$(cat "$WORK/o7")"
-[ -e "$WORK/c7/claude/CLAUDE.md" ] || fail 'CLAUDE.md (under an existing ~/.claude) was not written'
+[ ! -e "$WORK/c7/claude/CLAUDE.md" ] || fail 'apply created CLAUDE.md'
 run python3 check "$WORK/c7" > "$WORK/o7c"; [ $? = 1 ] || fail 'check passed with no .claude.json'
 head -1 "$WORK/o7c" | grep -q '^claude 4 missing · codex n/a (no .*/c7/codex) · skills 2 missing$' || fail 'check head with no .claude.json / no Codex' "$(cat "$WORK/o7c")"
 grep -q '^missing    claude mcp context7 — Claude Code has not run on this login yet$' "$WORK/o7c" || fail 'check did not say why the servers are missing' "$(cat "$WORK/o7c")"
@@ -298,9 +322,12 @@ cp "$ROOT/conf/agent-defaults/codex/config.default.toml" "$BR/conf/agent-default
 printf '{"mcpServers": {"github": {"command": "x", "env": {"GITHUB_TOKEN": "ghp_abc"}}}}\n' > "$BR/conf/agent-defaults/claude/mcp.default.json"; bad 'defaults with a token key'
 grep -q 'credential-shaped key' "$WORK/o10" || fail 'token refusal did not say why' "$(cat "$WORK/o10")"
 cp "$ROOT/conf/agent-defaults/claude/mcp.default.json" "$BR/conf/agent-defaults/claude/mcp.default.json"
-printf '<!-- fleet:agent-defaults begin -->\nno end\n' > "$BR/conf/agent-defaults/codex/AGENTS.default.md"; bad 'doc block without end'
+# Legacy templates are not inputs to apply/check anymore.
+rm "$BR/conf/agent-defaults/codex/AGENTS.default.md" "$BR/conf/agent-defaults/claude/CLAUDE.default.md"
+python3 "$SCRIPT" apply --root "$BR" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" \
+  --override "$WORK/no-override.json" >/dev/null || fail 'apply still needs legacy doc templates'
 python3 "$SCRIPT" apply --root "$WORK/nowhere" --claude-config "$WORK/c10/claude/.claude.json" --codex-home "$WORK/c10/codex" >/dev/null 2>&1; [ $? = 2 ] || fail 'a root without conf/agent-defaults was not refused with exit 2'
-ok '10 malformed defaults (model, a credential-shaped key, a half doc block, no defaults dir) exit 2 and write nothing'
+ok '10 malformed defaults (model, a credential-shaped key, no defaults dir) exit 2 and write nothing'
 
 # --- 11. no token anywhere ---------------------------------------------------------------------
 TOKRE='gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|GITHUB_PERSONAL_ACCESS_TOKEN'
@@ -356,5 +383,16 @@ if [ -x /usr/bin/python3 ] && ! /usr/bin/python3 -c 'import tomllib' 2>/dev/null
 else
   ok '13 (skipped: no tomllib-less /usr/bin/python3 on this box — the macOS CI leg runs it)'
 fi
+
+# --- 14. a new sandbox HOME, default paths (both agents), zero injected rules ---------
+LOGIN="$WORK/login"; mkdir -p "$LOGIN/.claude" "$LOGIN/.codex"
+printf '{}\n' > "$LOGIN/.claude.json"
+printf 'cli_auth_credentials_store = "file"\n' > "$LOGIN/.codex/config.toml"
+: > "$LOGIN/.claude/CLAUDE.md"; : > "$LOGIN/.codex/AGENTS.md"
+HOME="$LOGIN" CLAUDE_CONFIG_DIR='' CODEX_HOME="$LOGIN/.codex" FLEET_CODEX_HOME='' FLEET_CONF_DIR="$LOGIN/.config/claude-fleet" \
+  python3 "$SCRIPT" apply --root "$SR" > "$WORK/o14" || fail 'sandbox HOME default apply failed'
+[ "$(grep -c 'claude-fleet' "$LOGIN/.claude/CLAUDE.md")" = 0 ] && [ "$(grep -c 'claude-fleet' "$LOGIN/.codex/AGENTS.md")" = 0 ] \
+  || fail 'sandbox HOME instruction files gained fleet rules'
+ok '14 sandbox HOME default apply: CLAUDE.md 0 · AGENTS.md 0 fleet lines'
 
 printf 'PASS  fleet-agent-defaults-selftest (%d checks)\n' "$pass"

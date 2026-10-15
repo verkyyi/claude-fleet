@@ -240,10 +240,16 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    `codex/config.default.toml` fills `approval_policy = "never"`,
    `sandbox_mode = "danger-full-access"`, `model_reasoning_effort` and the same
    four `[mcp_servers.*]` into every known `$CODEX_HOME/config.toml` (never
-   `model`), and `claude/CLAUDE.default.md` / `codex/AGENTS.default.md` put ONE
-   marker-delimited fleet block (`<!-- fleet:agent-defaults begin/end -->`) into
-   `~/.claude/CLAUDE.md` / `$CODEX_HOME/AGENTS.md` — appended when absent,
-   replaced in place when the text moved on, everything outside it the login's.
+   `model`). `apply` and `check` leave `~/.claude/CLAUDE.md` and every
+   `$CODEX_HOME/AGENTS.md` untouched (#3125): new logins get no fleet block,
+   and existing blocks (including older text) stay byte for byte. Worker rules
+   travel with the worker skill; guards keep their existing checks and explain
+   refusals at the point of use. To remove a legacy block deliberately, run
+   `python3 bin/fleet-agent-defaults.py strip` (`--dry-run` previews the count;
+   `--claude-md` / repeated `--codex-home` select paths). It removes only the
+   `<!-- fleet:agent-defaults begin/end -->` block, preserving surrounding text,
+   configs and skills. Missing files stay absent; malformed or duplicate markers
+   refuse before any file is changed. Agent/doc overrides also shield `strip`.
    Same fill-only rule: a server the login already has under that name, or a
    Codex key it set, is never rewritten; the login's `config.toml` is edited as
    text (new keys before the first `[table]`, new servers appended as their own

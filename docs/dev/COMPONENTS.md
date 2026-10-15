@@ -8,3 +8,4 @@
 | 更新说明（`whats_new` / `bin/fleet-whats-new.sh`） | 按需 | 普通会话不再默认附加「改了什么」；工具保留，用户要看时再读。Claude 和 Codex 的默认钩子均不注册，旧表的 `--hook` 暂留为静默兼容入口（#4324）。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |
+| 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 不再默认写入或检查；已有块原样保留，用户可用 `fleet-agent-defaults.py strip` 按需删除。执行会话仍由技能携带规则，守卫照常生效（#3125）。 |
