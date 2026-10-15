@@ -4,17 +4,22 @@
 An HTTP CONNECT proxy, Service `fleet-egress:3128` in fleet-workers. A user pod's
 own egress guard rejects the public internet (render.py --egress-closed), so
 everything a login fetches from outside — GitHub, package sources, the provider
-endpoints Claude Code / Codex call besides the API — comes through here. It
-opens a tunnel ONLY:
+endpoints Claude Code / Codex call besides the API, a cluster API on 6443, a
+cloud log service — comes through here. It opens a tunnel ONLY:
 
+  - for CONNECT (nothing plain, nothing decrypted),
   - from a source address in FLEET_EGRESS_SOURCES (the cluster's pod range —
     ACK's flannel enforces no NetworkPolicy, so this is the wall that holds),
   - to a host FLEET_EGRESS_ALLOW names (`name` exact, `.name` = it and every
-    subdomain, `*` = any host — the run egress, fleet-egress-run, #4005),
-  - on a port in FLEET_EGRESS_PORTS (443),
-  - to an address that resolves public (never the VPC, metadata or loopback) —
-    or through the parent FLEET_EGRESS_VIA names for that host (GitHub's git
-    transport through the Singapore gh-relay: `.github.com=HOST:3128`).
+    subdomain, `*` = any host — the default since #4311: any public host),
+  - on a port FLEET_EGRESS_PORTS names (`*` = any — the default since #4311;
+    the run egress, fleet-egress-run, keeps 443),
+  - to an address that resolves public (never the VPC, metadata, loopback or a
+    private range: every answer, so a rebinding name is refused too) — or
+    through the parent FLEET_EGRESS_VIA names for that host (`PATTERN=HOST:PORT`:
+    the LLM endpoints and GitHub through the US egress). A host
+    FLEET_EGRESS_REQUIRE_VIA names must have such a parent (refused at start
+    otherwise) and is never opened directly: the parent's refusal is ours.
 
 Subscription traffic never comes here: a session's API calls go to the cluster
 credential proxy (fleet-credproxy), which forwards them through fleet-relay.
@@ -32,10 +37,8 @@ import socket
 import sys
 import time
 
-ALLOW = ('.anthropic.com .claude.ai .claude.com .openai.com .chatgpt.com '
-         '.github.com .githubusercontent.com ghcr.io '
-         'registry.npmjs.org .npmmirror.com pypi.org files.pythonhosted.org '
-         'proxy.golang.org sum.golang.org goproxy.cn sum.golang.google.cn')
+ALLOW = '*'         # FLEET_EGRESS_ALLOW: any public host (#4311); the address check below is the wall
+PORTS = '*'         # FLEET_EGRESS_PORTS: any port (#4311); the run egress sets 443
 SOURCES = ''        # FLEET_EGRESS_SOURCES: the cluster's own pod range (an overlay's), never a built-in
 MAX_HEAD = 8192
 MAX_TUNNELS = int(os.environ.get('FLEET_EGRESS_MAX', '256'))
@@ -63,7 +66,8 @@ def config(env=os.environ):
     allow = patterns(env.get('FLEET_EGRESS_ALLOW', ALLOW))
     sources = [ipaddress.ip_network(s.strip(), strict=False)
                for s in env.get('FLEET_EGRESS_SOURCES', SOURCES).replace(',', ' ').split() if s.strip()]
-    ports = frozenset(int(p) for p in env.get('FLEET_EGRESS_PORTS', '443').replace(',', ' ').split())
+    ports = env.get('FLEET_EGRESS_PORTS', PORTS).replace(',', ' ').split()
+    ports = None if '*' in ports else frozenset(int(p) for p in ports)
     via = []
     for item in env.get('FLEET_EGRESS_VIA', '').split():
         pat, sep, parent = item.partition('=')
@@ -71,6 +75,12 @@ def config(env=os.environ):
         if not sep or not host or not port.isdigit():
             raise ValueError('FLEET_EGRESS_VIA takes PATTERN=HOST:PORT, not %r' % item)
         via.append((pat.lower().rstrip('.'), (host, int(port))))
+    # a host that must never leave from here (the LLM endpoints): refuse an
+    # incomplete policy at start. An ancestor mapping covers a whole suffix; an
+    # exact one cannot cover a required suffix.
+    for pat in patterns(env.get('FLEET_EGRESS_REQUIRE_VIA', '')):
+        if not any(p == pat or (p.startswith('.') and match(pat.lstrip('.'), (p,))) for p, _ in via):
+            raise ValueError('FLEET_EGRESS_REQUIRE_VIA has no parent mapping for %s' % pat)
     return allow, sources, ports, via
 
 
@@ -94,7 +104,7 @@ def parse_head(head):
     if method != 'CONNECT':
         return method, '', 0
     host, sep, port = target.rpartition(':')
-    if not sep or not port.isdigit() or host.startswith('['):
+    if not sep or not port.isdigit() or not 0 < int(port) < 65536 or host.startswith('['):
         raise ValueError('bad CONNECT target')
     return method, host.lower().rstrip('.'), int(port)
 
@@ -103,7 +113,7 @@ def decide(method, host, port, allow, ports):
     """None = tunnel; else the refusal reason."""
     if method != 'CONNECT':
         return 'method_not_allowed'
-    if port not in ports:
+    if ports is not None and port not in ports:
         return 'port_not_allowed'
     if not match(host, allow):
         return 'host_not_allowed'
@@ -238,10 +248,102 @@ async def serve(listen):
     server = await asyncio.start_server(p.handle, host or '0.0.0.0', int(port), limit=MAX_HEAD)
     if not sources:
         log(event='unconfigured', key='FLEET_EGRESS_SOURCES', note='未配置 FLEET_EGRESS_SOURCES — every source is refused')
-    log(event='listening', listen=listen, allow=len(allow), ports=sorted(ports),
+    log(event='listening', listen=listen, allow=len(allow), ports=sorted(ports) if ports is not None else '*',
         sources=[str(s) for s in sources], via=['%s=%s:%d' % (pat, h, n) for pat, (h, n) in via])
     async with server:
         await server.serve_forever()
+
+
+def check_private():
+    """BREAK-IT egress-private-via-proxy (#4311): every host and port is open, yet a
+    name that resolves to the VPC, the metadata address, loopback, a private or the
+    cluster's range — even ONE such answer among public ones — gets 403, never a tunnel."""
+    for a in ('127.0.0.1', '10.0.0.1', '172.20.3.4', '172.21.0.1', '192.168.1.1', '100.100.100.200',
+              '100.64.0.1', '169.254.169.254', '0.0.0.0', '224.0.0.1', '::1', 'fd00::1', 'fe80::1'):
+        assert not public(a), a
+    assert public('140.82.112.3') and public('8.8.8.8')
+
+    async def run():
+        answers = {'metadata.test': ['100.100.100.200'], 'vpc.test': ['172.20.3.4'],
+                   'rebind.test': ['140.82.112.3', '10.0.0.1'], '100.100.100.200': ['100.100.100.200'],
+                   '127.0.0.1': ['127.0.0.1'], 'ok.test': ['140.82.112.3']}
+        loop = asyncio.get_running_loop()
+        orig = loop.getaddrinfo
+
+        async def fake(host, port, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, '', (a, port)) for a in answers[host]]
+        loop.getaddrinfo = fake
+        try:
+            for host in ('metadata.test', 'vpc.test', 'rebind.test', '100.100.100.200', '127.0.0.1'):
+                for port in (443, 80, 6443):
+                    try:
+                        await resolve(host, port)
+                        raise AssertionError('resolved %s:%d' % (host, port))
+                    except PermissionError:
+                        pass
+            assert await resolve('ok.test', 6443) == '140.82.112.3'
+        finally:
+            loop.getaddrinfo = orig
+    asyncio.run(run())
+
+
+def check_require_via():
+    """BREAK-IT egress-required-via-direct (#4311): a host FLEET_EGRESS_REQUIRE_VIA
+    names (the LLM endpoints) goes through its parent on every port, never direct —
+    a policy that leaves one uncovered refuses to start, and the parent's refusal is
+    ours (502), the direct resolver never asked."""
+    for required, mappings in (('.claude.com', 'platform.claude.com=us:3128'),
+                               ('.anthropic.com', '.claude.com=us:3128'),
+                               ('registry.npmjs.org', '')):
+        try:
+            config({'FLEET_EGRESS_REQUIRE_VIA': required, 'FLEET_EGRESS_VIA': mappings})
+            raise AssertionError('incomplete mandatory route accepted: %s' % required)
+        except ValueError:
+            pass
+    req = '.anthropic.com .claude.ai .claude.com registry.npmjs.org'
+    _, _, _, via = config({'FLEET_EGRESS_REQUIRE_VIA': req,
+                           'FLEET_EGRESS_VIA': ' '.join(p + '=us:3128' for p in req.split())})
+    for host in ('api.anthropic.com', 'anthropic.com', 'platform.claude.com', 'claude.ai', 'registry.npmjs.org'):
+        assert parent_for(host, via) == ('us', 3128), host
+    assert parent_for('api.anthropic.com.evil.test', via) is None
+
+    async def run():
+        asked = []
+
+        async def parent(r, w):
+            head = await r.readuntil(b'\r\n\r\n')
+            asked.append(head.split(b'\r\n', 1)[0])
+            w.write(b'HTTP/1.1 502 no_us_connector\r\n\r\n')
+            await w.drain()
+            w.close()
+        par = await asyncio.start_server(parent, '127.0.0.1', 0)
+        pport = par.sockets[0].getsockname()[1]
+
+        async def forbidden_dns(host, port):
+            raise AssertionError('a mandatory parent fell back to direct DNS: %s' % host)
+
+        def opener(addr, port):
+            assert (addr, port) == ('us', 3128), (addr, port)
+            return asyncio.open_connection('127.0.0.1', pport)
+        p = Proxy(('*',), [ipaddress.ip_network('127.0.0.0/8')], None, via,
+                  resolver=forbidden_dns, opener=opener)
+        srv = await asyncio.start_server(p.handle, '127.0.0.1', 0, limit=MAX_HEAD)
+        sport = srv.sockets[0].getsockname()[1]
+        for target in (b'api.anthropic.com:443', b'api.anthropic.com:8443', b'claude.ai:443'):
+            r, w = await asyncio.open_connection('127.0.0.1', sport)
+            w.write(b'CONNECT %s HTTP/1.1\r\n\r\n' % target)
+            await w.drain()
+            out = await asyncio.wait_for(r.read(), 5)
+            w.close()
+            assert out.startswith(b'HTTP/1.1 502 upstream_failed'), (target, out)
+            assert asked[-1] == b'CONNECT %s HTTP/1.1' % target, asked
+        srv.close()
+        par.close()
+    sys.stdout = open(os.devnull, 'w')
+    try:
+        asyncio.run(run())
+    finally:
+        sys.stdout = sys.__stdout__
 
 
 def selftest():
@@ -257,19 +359,26 @@ def selftest():
             raise AssertionError('parsed %r' % bad)
         except ValueError:
             pass
-    assert decide('CONNECT', 'api.anthropic.com', 443, allow, ports) is None
-    assert decide('CONNECT', 'anthropic.com', 443, allow, ports) is None
-    assert decide('CONNECT', 'registry.npmjs.org', 443, allow, ports) is None
-    assert decide('CONNECT', 'evil-anthropic.com', 443, allow, ports) == 'host_not_allowed'
-    assert decide('CONNECT', 'api.anthropic.com.example', 443, allow, ports) == 'host_not_allowed'
-    assert decide('CONNECT', 'example.com', 443, allow, ports) == 'host_not_allowed'
-    assert decide('CONNECT', 'github.com', 22, allow, ports) == 'port_not_allowed'
+    # the default (#4311): any host, any port — CONNECT only
+    assert ports is None and allow == ('*',)
+    for host, port in (('api.anthropic.com', 443), ('203.0.113.9', 6443), ('example.com', 22),
+                       ('logs.example.net', 443)):
+        assert decide('CONNECT', host, port, allow, ports) is None, (host, port)
     assert decide('GET', 'github.com', 80, allow, ports) == 'method_not_allowed'
-    # the run egress (#4005): any host on 443, never another port or method
-    anyhost = patterns('*')
-    assert decide('CONNECT', 'example.com', 443, anyhost, ports) is None
-    assert decide('CONNECT', 'example.com', 22, anyhost, ports) == 'port_not_allowed'
-    assert decide('GET', 'example.com', 443, anyhost, ports) == 'method_not_allowed'
+    for bad in (b'CONNECT a.com:0 HTTP/1.1\r\n\r\n', b'CONNECT a.com:65536 HTTP/1.1\r\n\r\n'):
+        try:
+            parse_head(bad)
+            raise AssertionError('parsed %r' % bad)
+        except ValueError:
+            pass
+    # a named list still narrows: the run egress (#4005) keeps 443, an overlay may list hosts
+    named, _, p443, _ = config({'FLEET_EGRESS_ALLOW': '.anthropic.com registry.npmjs.org',
+                                'FLEET_EGRESS_PORTS': '443'})
+    assert decide('CONNECT', 'anthropic.com', 443, named, p443) is None
+    assert decide('CONNECT', 'evil-anthropic.com', 443, named, p443) == 'host_not_allowed'
+    assert decide('CONNECT', 'api.anthropic.com.example', 443, named, p443) == 'host_not_allowed'
+    assert decide('CONNECT', 'registry.npmjs.org', 22, named, p443) == 'port_not_allowed'
+    assert decide('CONNECT', 'example.com', 22, patterns('*'), p443) == 'port_not_allowed'
     assert parent_for('codeload.github.com', via) == ('198.51.100.7', 3128)
     assert parent_for('github.com', via) == ('198.51.100.7', 3128)
     assert parent_for('api.anthropic.com', via) is None
@@ -279,9 +388,8 @@ def selftest():
             raise AssertionError('took %r' % b)
         except ValueError:
             pass
-    for a in ('127.0.0.1', '10.0.0.1', '172.21.0.1', '100.100.100.200', '::1', 'fd00::1'):
-        assert not public(a), a
-    assert public('140.82.112.3')
+    check_private()
+    check_require_via()
 
     async def live():
         async def echo(r, w):
@@ -335,8 +443,10 @@ def selftest():
             return out
         out = await ask(b'CONNECT files.pythonhosted.org:443 HTTP/1.1\r\n\r\n')
         assert out.startswith(b'HTTP/1.1 502 upstream_failed'), out
-        out = await ask(b'CONNECT example.com:443 HTTP/1.1\r\n\r\n')
-        assert out.startswith(b'HTTP/1.1 403 host_not_allowed'), out
+        out = await ask(b'CONNECT example.com:6443 HTTP/1.1\r\n\r\n', b'kubec')
+        assert out == b'HTTP/1.1 200 Connection established\r\n\r\nkubec', out
+        out = await ask(b'GET http://example.com/ HTTP/1.1\r\n\r\n')
+        assert out.startswith(b'HTTP/1.1 403 method_not_allowed'), out
         out = await ask(b'CONNECT pypi.org:443 HTTP/1.1\r\n\r\n')
         assert out.startswith(b'HTTP/1.1 403 blocked_address'), out
         # direct: a real round trip to the echo server
@@ -368,4 +478,8 @@ def selftest():
 if __name__ == '__main__':
     if sys.argv[1:] == ['--selftest']:
         sys.exit(selftest())
+    if sys.argv[1:2] == ['--selftest'] and sys.argv[2:] in (['private'], ['require-via']):
+        (check_private if sys.argv[2] == 'private' else check_require_via)()
+        print('fleet-egress selftest %s: ok' % sys.argv[2])
+        sys.exit(0)
     asyncio.run(serve(os.environ.get('FLEET_EGRESS_LISTEN', '0.0.0.0:3128')))

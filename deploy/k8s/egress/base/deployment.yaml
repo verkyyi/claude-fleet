@@ -61,10 +61,16 @@ spec:
             # enforces no NetworkPolicy, so this check is the wall that holds.
             - name: FLEET_EGRESS_SOURCES
               value: ""
-            # Hosts that need a parent proxy (GitHub through gh-relay); the
-            # overlay sets it, empty = every allowed host direct.
+            # Hosts that need a parent proxy (the LLM endpoints and GitHub through
+            # the US egress); the overlay sets it, empty = every host direct.
             - name: FLEET_EGRESS_VIA
               value: ""
+            # Hosts that must NEVER leave directly (the LLM endpoints): each needs
+            # a FLEET_EGRESS_VIA mapping or the program refuses to start (#4311).
+            - name: FLEET_EGRESS_REQUIRE_VIA
+              value: ""
+            # FLEET_EGRESS_ALLOW / FLEET_EGRESS_PORTS default to `*` (#4311): any
+            # public host on any port; the address check is the wall.
           readinessProbe:
             tcpSocket:
               port: 3128

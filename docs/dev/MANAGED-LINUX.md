@@ -464,7 +464,7 @@ rebuilds a user pod.
 | Service | What | Manifests |
 |---|---|---|
 | `fleet-credproxy:80` | the cluster credential proxy (`ccquota credproxy`): takes a session's hub pass (`fcp-h1.`), asks the hub which account it is bound to, puts that account's short-lived token on the request and forwards it through the Singapore relay. 2 replicas, PDB, rolling `maxUnavailable: 0`, no Ingress | `deploy/k8s/credproxy/fleet-workers` |
-| `fleet-egress:3128` | a CONNECT proxy: pod range only, 443 only, a host allow-list (provider endpoints, GitHub, package sources), GitHub through `extras/gh-relay`. 2 replicas, PDB | `deploy/k8s/egress` |
+| `fleet-egress:3128` | a CONNECT proxy: pod range only, CONNECT only, any public host on any port (#4311) — every resolved address must be public (never the VPC, metadata, loopback, a private range); the LLM endpoints and GitHub through a parent (`FLEET_EGRESS_VIA`), the LLM endpoints never direct (`FLEET_EGRESS_REQUIRE_VIA`). 2 replicas, PDB | `deploy/k8s/egress` |
 | network rules | default deny; `fleet/role=user` → kube-dns, the two services, the hub's address | `deploy/k8s/fleet-workers/networkpolicy.yaml` |
 
 `kubectl kustomize deploy/k8s/fleet-workers` renders all three
