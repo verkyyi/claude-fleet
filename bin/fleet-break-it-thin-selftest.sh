@@ -209,6 +209,17 @@ d = json.loads(base64.b64decode(m.group(1))); print(d["id"] if d.get("rport") ==
   WHAT="经别的机器的看台看会话时，open 交给那台家（--from-peer），家把会话机器的回环端口转成自己的 4242 交给看台的循环，回执回来：${r}"
 }
 
+# view-popup-idle-redraw (issue #4410): an idle frozen popup must not scroll and
+# redraw its whole frame every second. Real terminal output, not a screenshot.
+drill_view_popup_idle_redraw() {
+  CAP=30
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-popup-redraw-selftest.sh" --idle 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="真实 tmux 弹窗开着、背后持续中英输出：静止 2.25 秒整框重画 0 次、框线单元格不变；关闭后后台显示恢复"
+}
+
 # view-popup-wide-bleed (issue #3058): tmux 3.7c draws a wide character a pane writes
 # under a popup through the wrong cells, so wrapped CJK behind the ⌘P list lands on
 # its frame and rows. The pane behind must write NOTHING while the popup is up.
