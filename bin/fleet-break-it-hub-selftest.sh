@@ -16,6 +16,7 @@
 #                                                   tokenledger/internal/release trust.go (go test, when a toolchain is)
 #   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
 #   empty-fleet-not-restored                        bin/fleet-sessions-snapshot.sh, fleet-restore.sh --auto
+#   empty-fleet-disk-floor                          bin/fleet-restore.sh home_floor_gb, fleet-sessions-snapshot-selftest.sh H2
 #   node-update-sessions                            bin/fleet-node-update.py (sessions save / restore)
 #   release-unverified                              bin/fleet-release.sh (fleet-release-selftest.sh's sandbox)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
@@ -428,6 +429,19 @@ drill_empty_fleet_not_restored() {
     || { WHY="fleet-sessions-snapshot-selftest H: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
   SECS=$(since "$t0")
   WHAT="没会话的 fleet：save 留下 FLEET 行，kill-server → restore 拉回 home；fleet-down 的不拉；--auto 不跳过无 WIN 的图"
+}
+
+# A pod roll dips free disk under the load floor for minutes (issue #4266): an empty
+# fleet's home — no load — passes only the ENOSPC floor on its way back.
+drill_empty_fleet_disk_floor() {
+  CAP=60; local t0 out
+  grep -q '^home_floor_gb()' "$BIN/fleet-restore.sh" \
+    || { WHY="fleet-restore.sh has no home_floor_gb — an empty fleet's home waits on the load floor"; return 1; }
+  t0=$(now)
+  out=$(FSS_ONLY=H bash "$BIN/fleet-sessions-snapshot-selftest.sh" 2>&1) \
+    || { WHY="fleet-sessions-snapshot-selftest H2: $(printf '%s' "$out" | grep -m1 FAIL)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="空闲盘低于负载线（5 GB < 12）：没会话的 fleet 照样拉回 home，restore 和 --auto 都是；0 GB 不拉；有会话的仍挡"
 }
 
 drill_node_update_sessions() {
