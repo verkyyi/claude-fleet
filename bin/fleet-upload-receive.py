@@ -189,7 +189,7 @@ def status(up, h):
         raise ValueError('invalid operation')
     leases = load('fleet_thin_lease')
     row = leases.rows()[h['view']]
-    sess, view = row['sess'], '=%s@view-%s' % (row['sess'], h['view'])
+    sess, view = row['sess'], '=%s@view-%s:' % (row['sess'], h['view'])
     key = '%s-%s' % (h['generation'], op)
     state = dict(phase='preparing', name='', index=0, count=0, done=0, total=0,
                  generation=h['generation'], operation=op, window=ident['home'].split('|')[0], id=key)

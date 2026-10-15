@@ -255,6 +255,17 @@ class Input:
             self.job = None
 
 
+def kill_group(proc, sig):
+    # Darwin can return EPERM for a zombie session leader's vanished group.
+    # Reap it first, but still kill the group: a completed worker may have left
+    # its (no-image) probe running. Never swallow denial for a live process.
+    proc.poll()
+    try: os.killpg(proc.pid, sig)
+    except ProcessLookupError: pass
+    except PermissionError:
+        if proc.poll() is None: raise
+
+
 def supervise():
     deadline = time.monotonic() + TIMEOUT
     # Even a parent that stays alive but stops writing the initial request may
@@ -296,14 +307,14 @@ def supervise():
                     if len(out) > RESULT_CAP:
                         out.clear()
                         break
+                    if b'\n' in out:
+                        break  # one framed result; do not wait for Python/thread teardown
             else:
                 out.clear()
         finally:
-            try: os.killpg(worker.pid, signal.SIGTERM)
-            except ProcessLookupError: pass
+            kill_group(worker, signal.SIGTERM)
             time.sleep(.05)
-            try: os.killpg(worker.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
+            kill_group(worker, signal.SIGKILL)
             worker.wait()
             worker.stdout.close()
             if status:
@@ -328,12 +339,10 @@ def supervise():
                     if status.poll() is None:
                         # Let the receiver unwind any target/peer subprocess
                         # groups it owns before the final hard deadline.
-                        try: os.killpg(status.pid, signal.SIGTERM)
-                        except ProcessLookupError: pass
+                        kill_group(status, signal.SIGTERM)
                         try: status.wait(timeout=.2)
                         except subprocess.TimeoutExpired: pass
-                    try: os.killpg(status.pid, signal.SIGKILL)
-                    except ProcessLookupError: pass
+                    kill_group(status, signal.SIGKILL)
                     status.wait()
                     status.stdin.close()
         if not cancelled:
@@ -554,4 +563,5 @@ if __name__ == '__main__':
             result = {'ok': False}
             if type(error) is ValueError:
                 result['error'] = str(error)[:120]
-        sys.stdout.write(json.dumps(result))
+        sys.stdout.write(json.dumps(result) + '\n')
+        sys.stdout.flush()

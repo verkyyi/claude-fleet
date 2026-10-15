@@ -509,9 +509,9 @@ def render_upload(kv, cols):
         # Generation is written only by cur, never by a status writer; even a
         # switch racing a last publish cannot resurrect the old view's line.
         if not re.fullmatch(r'[A-Za-z0-9-]+', state['generation']): return None
-        line = '#{?#{&&:#{==:#{@view_upload_id},%s},#{==:#{@view_upload_gen},%s}},%s,%s}' % (
-            state['id'], state['generation'], branch_text(line), quick_fmt())
-        return own_window(state['window'], line)
+        guard = '#{&&:#{==:#{@view_upload_id},%s},#{==:#{@view_upload_gen},%s}}' % (
+            state['id'], state['generation'])
+        return own_window(state['window'], line, guard)
     except (ValueError, KeyError, TypeError):
         return None
 
@@ -573,11 +573,14 @@ def quick_fmt():
     return " %s %s#[fg=%s#,bold]#{=/64/…:window_name}#[default]" % (sym, key, FG)
 
 
-def own_window(win, line):
+def own_window(win, line, guard=''):
     """`line` for window `win` only: #{?<the client's window is win>,line,quick}."""
     if not re.fullmatch(r"@[0-9]+", win or ""):
         return line
-    return "#{?#{==:#{window_id},%s},%s,%s}" % (win, branch_text(line), quick_fmt())
+    condition = '#{==:#{window_id},%s}' % win
+    if guard:
+        condition = '#{&&:%s,%s}' % (condition, guard)
+    return "#{?%s,%s,%s}" % (condition, branch_text(line), quick_fmt())
 
 
 # --- a tap on the line -------------------------------------------------------------

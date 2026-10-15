@@ -131,6 +131,7 @@ mkdir -p "$T/views"; st="$T/views/\$HOST_NAME.\$view"
 if [ -n "\$want" ]; then w=\$want; elif [ -n "\$resume" ] && [ -f "\$st" ]; then w=\$(cat "\$st"); else w=orch; fi
 echo "\$w" > "\$st"
 stty -echo lnext undef 2>/dev/null
+[ ! -e "$T/echo-input" ] || stty echo 2>/dev/null
 printf '\033]7502;cur;token=bad;m=evil;l=evil;w=evil\007'
 printf '\033]7502;cur;token=%s;m=%s;l=%s;w=u/%s;g=fixture\007' "\$token" "$ME" "\$(id -un)" "\$w"
 printf 'VIEW %s ON %s\r\n' "\$w" "\$HOST_NAME"
@@ -226,6 +227,7 @@ printf '#!/bin/sh\nexit 0\n' > "$T/update.sh"; chmod +x "$T/update.sh"
 # B C D E — one session: connect, drop, a fake quit, uploads, quit
 # ---------------------------------------------------------------------------
 : > "$T/rv.log"; : > "$T/ssh.log"
+touch "$T/echo-input"  # observe automatic insertion, then send a fresh Enter
 THIN_ARGS='["s1"]' drive main '[
  ["expect", "VIEW s1 ON m1"],
  ["children", ""],
@@ -235,9 +237,11 @@ THIN_ARGS='["s1"]' drive main '[
  ["expect", "FAKE SENT"],
  ["sleep", 0.5],
  ["send", "\u001b[200~'"$T"'/drop\\ me.txt\u001b[201~\n"],
+ ["expect", "inbox"],
+ ["send", "\n"],
  ["expect", "GOT\\[.*inbox"],
  ["send", "\u0016"],
- ["sleep", 0.4],
+ ["expect", "\u0016|\\^V"],
  ["send", "x\n"],
  ["expect", "GOT\\[\\^Vx\\]"],
  ["sleep", 0.2]
@@ -274,7 +278,7 @@ touch "$T/clip.on"; : > "$T/rv.log"
 THIN_ARGS='[]' drive pic '[
  ["expect", "VIEW orch ON m1"],
  ["send", "\u0016"],
- ["sleep", 0.8],
+ ["expect", "inbox"],
  ["send", "\n"],
  ["expect", "GOT\\[.*clip.png"],
  ["send", "quit\n"],
@@ -285,7 +289,7 @@ case $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic") in *"^[[200~$T/home/m1/.cache/claud
   *) fail "E: ⌃V picture: $(grep -ao 'GOT\[[^]]*\]' "$T/out.pic")" ;; esac
 case $res in *'RC 0'*) ok "H: ⌘Q (quit, our token) → exit 0" ;; *) fail "H: quit: $res" ;; esac
 case $out in *$'\e]1337;SetProfile=Default\a') ok "H: the iTerm2 profile back last" ;; *) fail "H: profile not restored at the end" ;; esac
-rm -f "$T/clip.on"
+rm -f "$T/clip.on" "$T/echo-input"
 
 # K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
 # profile with ONE ⌘ chord (⌘P) + ⇧↵ — and, one version long (issue #3328,

@@ -100,6 +100,7 @@ if [ -e "$R/tmux.attach" ]; then
   exec "$RT" -S "$R/s/home" attach -t w
 fi
 stty -echo lnext undef 2>/dev/null
+[ ! -e "$R/echo-input" ] || stty echo 2>/dev/null
 printf 'VIEW %s ON %s\r\n' "\$w" "\$HOST_NAME"
 while IFS= read -r line; do
   case \$line in
@@ -202,12 +203,15 @@ drill_thin_control_socket() {
   CAP=8   # one session + an upload + ⌘Q, every ssh resolved by the real ssh -G
   local t0 bad n
   tc_rig; t0=$(now)
+  touch "$R/echo-input"  # observe the inserted path before sending a NEW Enter
   # a static net first: the thin road never asks ssh for a master or a persisting one
   bad=$(grep -nE 'ControlMaster=(yes|auto|autoask|ask)|ControlPersist=' "$BIN/fleet-thin.py" "$BIN/fleet-thin-upload.py" 2>/dev/null)
   [ -z "$bad" ] || { WHY="the thin road asks for a master: $bad"; tc_done; return 1; }
   THIN_ARGS='["--home", "m1", "s1"]' tc_drive cs '[
    ["expect", "VIEW s1 ON m1"],
    ["send", "\u001b[200~'"$R"'/drop\\ me.txt\u001b[201~\n"],
+   ["expect", "inbox"],
+   ["send", "\n"],
    ["expect", "GOT\\[.*inbox"],
    ["send", "quit\n"],
    ["wait", 10]

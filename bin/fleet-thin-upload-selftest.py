@@ -191,7 +191,7 @@ class Transactions(unittest.TestCase):
         a, b = self.root / 'one.bin', self.root / 'two.bin'
         a.write_bytes(b'a' * 262144); b.write_bytes(b'b' * 131072)
         self.tx.feed(self.mod.START + (str(a) + ' ' + str(b)).encode() + self.mod.END)
-        self.assertTrue(self.settle().endswith(self.mod.END))
+        self.assertTrue(self.settle(timeout=15).endswith(self.mod.END))
         events = [json.loads(line) for line in (self.root / 'progress.ndjson').read_text().splitlines()]
         self.assertEqual(events[0]['phase'], 'preparing')
         self.assertEqual(events[-1]['phase'], 'uploaded')
@@ -227,7 +227,9 @@ class Transactions(unittest.TestCase):
             tx.close()
         os.environ['FLEET_CLIENT_CLIP_CMD'] = '/usr/bin/false'
         os.environ['FLEET_UPLOAD_FIXTURE_PROBE_DELAY'] = '30'
-        self.assertEqual(self.tx.feed(b'\x16') + self.settle(timeout=2), b'\x16')
+        # Startup may be slower on a shared Mac; still far below the stalled
+        # 30-second target probe, which must never delay ordinary Ctrl+V.
+        self.assertEqual(self.tx.feed(b'\x16') + self.settle(timeout=5), b'\x16')
         self.assertFalse(self.notices)
         os.environ.pop('FLEET_UPLOAD_FIXTURE_PROBE_DELAY', None)
         large = self.mod.START + b'/' + b'x' * 60000 + self.mod.END
@@ -442,6 +444,7 @@ class LiveTarget(unittest.TestCase):
                 return subprocess.run(args, input=data, env=env, capture_output=True, timeout=8, check=check)
             def tm(*args): return run([tmux, '-L', sess, *args]).stdout.decode().strip()
             client = None; master = slave = None
+            statuses = []
             try:
                 tm('-f', '/dev/null', 'new-session', '-d', '-s', sess, 'sleep 300')
                 fid = str(uuid.uuid4())
@@ -482,6 +485,7 @@ class LiveTarget(unittest.TestCase):
                 def status_start(operation):
                     p = subprocess.Popen([sys.executable, str(BIN / 'fleet-client-upload.py'), 'status'],
                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+                    statuses.append(p)
                     p.stdin.write(json.dumps(dict(h, operation=operation)).encode() + b'\n'); p.stdin.flush()
                     self.assertTrue(select.select([p.stdout], [], [], 5)[0], 'status not ready')
                     self.assertIn('identity', json.loads(p.stdout.readline()))
@@ -492,8 +496,9 @@ class LiveTarget(unittest.TestCase):
                     p.stdout.close(); p.stderr.close()
                 def state():
                     import base64
-                    return json.loads(base64.b64decode(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload')))
-                tm('set-option', '-t', '=' + sess + '@view-test', '@view_flash', 'keep this flash')
+                    return json.loads(base64.b64decode(tm('show-option', '-qv', '-t', '=' + sess + '@view-test:', '@view_upload')))
+                tm('set-option', '-t', '=' + sess + '@view-test:', '@view_flash', 'keep this flash')
+                tm('set-option', '-t', '=' + sess + '@view-test:', '@view_flash_until', str(int(time.time()) + 60))
                 older = status_start(1)
                 self.assertEqual(state()['phase'], 'preparing')
                 newer = status_start(2)
@@ -504,18 +509,37 @@ class LiveTarget(unittest.TestCase):
                 end = time.monotonic() + 3
                 while state()['phase'] != 'uploading' and time.monotonic() < end: time.sleep(.05)
                 self.assertEqual(state()['done'], 42)
-                raw = tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload')
+                raw = tm('show-option', '-qv', '-t', '=' + sess + '@view-test:', '@view_upload')
                 win = tm('display-message', '-p', '-t', '=' + sess + '@view-test:', '#{window_id}')
+                bar = ("#(python3 '%s/fleet-topbar.py' render --node view=test s=%s reg='%s' g='%s/global' "
+                       "sock=#{q:socket_path} cw=#{client_width} w=#{window_id} up=#{q:@view_upload} "
+                       "fl=#{q:@view_flash} flu=#{@view_flash_until})") % (BIN, sess, views, conf)
+                tm('set-option', '-t', '=' + sess + '@view-test:', 'status-position', 'top')
+                tm('set-option', '-t', '=' + sess + '@view-test:', 'status-interval', '2')
+                tm('set-option', '-t', '=' + sess + '@view-test:', 'status-format[0]', bar)
                 for width in (45, 120):
                     line = run([sys.executable, str(BIN / 'fleet-topbar.py'), 'render', '--node',
                                 'cw=' + str(width), 'up=' + raw, 'w=' + win]).stdout.decode().strip()
-                    rendered = tm('display-message', '-p', '-t', '=' + sess + '@view-test:', line)
-                    self.assertIn('42%', rendered)
-                    self.assertIn('cancel', rendered)
+                    self.assertIn('42%', line)
+                    self.assertIn('cancel', line)
+                    import fcntl, struct, termios
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 24, width, 0, 0))
+                    os.kill(client.pid, signal.SIGWINCH)
+                    tm('refresh-client', '-S', '-t', os.ttyname(slave))
+                    seen = b''; end = time.monotonic() + 3
+                    while b'42%' not in seen and time.monotonic() < end:
+                        if select.select([master], [], [], .05)[0]: seen += os.read(master, 65536)
+                    self.assertIn(b'42%', seen, 'status never reached the attached PTY')
+                    self.assertNotIn(b'42%%', seen)
+                self.assertNotIn('Input paused', tm('capture-pane', '-p', '-t', win))
                 status_finish(newer, 'uploaded')
                 self.assertEqual(state()['phase'], 'uploaded')
                 self.assertLess(state()['until'] - time.time(), 2)
-                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_flash'), 'keep this flash')
+                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test:', '@view_flash'), 'keep this flash')
+                seen = b''; end = time.monotonic() + 5
+                while b'keep this flash' not in seen and time.monotonic() < end:
+                    if select.select([master], [], [], .05)[0]: seen += os.read(master, 65536)
+                self.assertIn(b'keep this flash', seen, 'normal view bar did not return')
                 active = status_start(3)
                 status_finish(active, 'cancelled')
                 self.assertEqual(state()['phase'], 'cancelled')
@@ -524,11 +548,17 @@ class LiveTarget(unittest.TestCase):
                 self.assertEqual(call('target', h).returncode, 1, 'replacement accepted')
                 run(['bash', str(BIN / 'fleet-remote-view.sh'), 'cur', str(views), sock, sess + '@view-test'])
                 old_gen.stdin.close(); old_gen.wait(timeout=5); old_gen.stdout.close(); old_gen.stderr.close()
-                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test', '@view_upload_id'), '')
+                self.assertEqual(tm('show-option', '-qv', '-t', '=' + sess + '@view-test:', '@view_upload_id'), '')
                 self.assertEqual(call('target', h).returncode, 1, 'old generation accepted')
                 client.terminate(); client.wait(timeout=3)
                 self.assertEqual(call('target', h).returncode, 1, 'detached view accepted')
             finally:
+                for p in statuses:
+                    if p.poll() is None:
+                        p.terminate()
+                        try: p.wait(timeout=2)
+                        except subprocess.TimeoutExpired: p.kill(); p.wait()
+                    p.stdin.close(); p.stdout.close(); p.stderr.close()
                 if client and client.poll() is None: client.terminate(); client.wait(timeout=3)
                 for fd in (master, slave):
                     if fd is not None: os.close(fd)

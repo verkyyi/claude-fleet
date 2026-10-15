@@ -243,8 +243,8 @@ EOF
   rv_row_set "$_f" upload_target "$_snap" || exit 0
   rv_row_set "$_f" upload_gen "$_g" || exit 0
   # Invalidate a cached upload line before this selection's first redraw.
-  tmux -S "$3" set-option -t "=$4" @view_upload_id '' \; \
-    set-option -t "=$4" @view_upload_gen "$_g" 2>/dev/null
+  tmux -S "$3" set-option -t "=$4:" @view_upload_id '' \; \
+    set-option -t "=$4:" @view_upload_gen "$_g" 2>/dev/null
   printf '\033]7502;cur;token=%s;m=%s;l=%s;w=%s;g=%s\007' "$_t" "$(_ok "$_m")" "$(_ok "$_l")" "$(_ok "$_c")" "$_g" 2>/dev/null > "$_y"
   exit 0
 fi
