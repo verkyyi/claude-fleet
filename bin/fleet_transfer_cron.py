@@ -9,7 +9,28 @@ import time
 import fleet_iso
 
 from fleet_loop_mark import claude_tool_results, parse, prune
-from fleet_cron import plan, next_fire
+from fleet_cron import plan, next_fire, refresh
+
+
+def durable_record(proof, job):
+    """Retain the native HOME task table; reading it never transfers ownership."""
+    path = Path(proof.get('durable_store', ''))
+    expected = Path.home()/'.claude/scheduled_tasks.json'
+    if not path.is_absolute() or path.resolve() != expected.resolve():
+        raise ValueError('durable task needs the exact native HOME scheduled_tasks.json')
+    data = json.loads(path.read_text())
+    entries = data.get('tasks', data.get('jobs')) if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        raise ValueError('unknown native durable task table')
+    matches = [entry for entry in entries if isinstance(entry, dict) and entry.get('id') == job['id']]
+    if len(matches) != 1:
+        raise ValueError('durable task is missing or ambiguous in its native table')
+    record = matches[0]
+    if (record.get('prompt') != job['prompt'] or record.get('cron') != job['cron']
+            or record.get('recurring', False) != job['recurring']
+            or record.get('createdInProject') != str(Path.home().resolve())):
+        raise ValueError('durable task content or project differs from the native table')
+    return dict(store=str(path.resolve()), record=record, owner='native-claude-project')
 
 
 def process_start(pid):
@@ -85,20 +106,18 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
     by_id = {str(j.get('id')):j for j in native}
     if len(by_id) != len(native) or set(by_id) != {j['id'] for j in schedule['jobs']}:
         raise ValueError('cron plan does not match the current native task identities')
-    marker = prune(parse(mark), int(now))
-    if marker['next'] or set(j for j, _ in marker['ids']) != set(by_id):
-        raise ValueError('native scheduler mark is unknown, mixed, or disagrees with CronList')
+    retained, moved = [], []
     for job in schedule['jobs']:
         original = by_id[job['id']]
         evidence = proof.get('job_evidence', {}).get(job['id'], {})
         if (type(original.get('recurring')) is not bool
                 or original['recurring'] != job['recurring']):
             raise ValueError('cron recurrence differs from the live task')
-        # A durable native job may survive /exit and fire a second time. Until
-        # its native owner can be transferred, never copy it into Fleet's timer.
+        # Durable jobs keep their native project owner. Copy their provenance
+        # into the handoff, never their timer into the Fleet scheduler.
         durable = original.get('durable', evidence.get('durable', {}).get('value'))
-        if durable is not False or ('durable' not in original and not evidence.get('durable', {}).get('source')):
-            raise ValueError('cron must be proven session-only; durable or unknown native ownership cannot be copied')
+        if type(durable) is not bool or ('durable' not in original and not evidence.get('durable', {}).get('source')):
+            raise ValueError('cron native durability must be proven before handover')
         # Missing native timezone/expiry requires the source's explicit evidence,
         # never an interval or the marker's grace-extended expiry as a guess.
         for key in ('prompt', 'cron', 'timezone', 'expires_at', 'stop_when'):
@@ -110,12 +129,22 @@ def validate(raw, transcript, pid, sid, fid, mark, now=None):
         preview = original.get('prompt_preview')
         if preview and not job['prompt'].startswith(preview.removesuffix('…').removesuffix('...')):
             raise ValueError('full cron prompt disagrees with the current preview')
+        if durable:
+            retained.append(durable_record(proof, job))
+            continue
+        moved.append(job)
         if job['next_run_at'] is None or (job['expires_at'] is not None and job['expires_at'] <= now):
             raise ValueError('cron task is no longer active')
         if job['next_run_at'] != next_fire(job, now):
             raise ValueError('cron plan no longer names the next native calendar round')
         if job['next_run_at'] <= now + 60:
             raise ValueError('native cron is due within the cutover margin; let that round finish before switching')
+    marker = prune(parse(mark), int(now))
+    marked = {j for j, _ in marker['ids']}
+    if marker['next'] or not {j['id'] for j in moved} <= marked <= set(by_id):
+        raise ValueError('native scheduler mark is unknown, mixed, or disagrees with CronList')
+    schedule.update(jobs=moved, native_durable=retained)
+    refresh(schedule)
     return schedule
 
 

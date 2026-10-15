@@ -93,6 +93,23 @@ class NativeCronTests(unittest.TestCase):
                 proven['native_source']['job_evidence']['b']['durable']=dict(value=True,source='persistent task')
                 with self.assertRaises(ValueError): native.validate(proven,path,42,SID,'fid',mark,now)
                 write(records)
+                # A project-scoped durable one-shot survives source exit. Keep
+                # its exact native record and never give Fleet a second timer.
+                home=(Path(d)/'home').resolve(); (home/'.claude').mkdir(parents=True)
+                store=home/'.claude/scheduled_tasks.json'
+                durable=dict(id='b',cron=jobs[1]['cron'],prompt=jobs[1]['prompt'],createdInProject=str(home))
+                store.write_text(json.dumps([durable]))
+                kept=json.loads(json.dumps(raw)); kept['jobs'][1]['durable']=True
+                kept['native_source']['durable_store']=str(store)
+                write(result('CronList',{},kept['jobs']))
+                with patch.dict(os.environ,HOME=str(home)):
+                    out=native.validate(kept,path,42,SID,'fid','kind=cron id=a@%d' % (now+4000),now)
+                    self.assertEqual([j['id'] for j in out['jobs']],['a'])
+                    self.assertEqual(out['native_durable'][0]['record'],durable)
+                    self.assertEqual(json.loads(store.read_text()),[durable])
+                    store.write_text('[]')
+                    with self.assertRaises(ValueError): native.validate(kept,path,42,SID,'fid',mark,now)
+                write(records)
                 with self.assertRaises(ValueError): native.validate(raw,path,43,SID,'fid',mark,now)
                 with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'other',mark,now)
                 with self.assertRaises(ValueError): native.validate(raw,path,42,SID,'fid','',now)

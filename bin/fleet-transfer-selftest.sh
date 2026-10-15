@@ -87,7 +87,7 @@ while (my $line = <STDIN>) {
         open(my $p, '<', "$ENV{TRANSFER_TEST_ROOT}/native-plan.json") or die;
         local $/; my $plan=decode_json(<$p>); close $p;
         print "Background work is running\nThe following will stop when you exit:\n";
-        for my $job (@{$plan->{jobs}}) { print "scheduled task · $job->{cron}\n"; }
+        for my $job (@{$plan->{jobs}}) { print "scheduled task · $job->{cron}\n" unless $job->{durable}; }
         print "❯ 1. Exit and stop tasks\n2. Move to background and exit\n3. Stay\nEnter to confirm · Esc to cancel\n";
         local $/="\n"; my $confirm=<STDIN>;
         next unless defined($confirm) && $confirm =~ /^\s*$/;
@@ -355,7 +355,8 @@ PYBACK
     TM set-option -w -t "$WIN" @cc_agent claude
     TM set-option -w -t "$WIN" @fleet_id "11111111-1111-4111-8111-1111111111$n"
     python3 - "$WORK/native-plan.json" "$TRANSCRIPT" "$PID" "$SID" "$(field fleet_id)" <<'PYNATIVE'
-import datetime,json,sys,time
+import datetime,json,sys,time,os
+from pathlib import Path
 p,transcript,pid,sid,fid=sys.argv[1:]; now=time.time()
 jobs=[]
 for ident,offset,recurring in [('once',180,False),('patrol',360,True)]:
@@ -363,6 +364,12 @@ for ident,offset,recurring in [('once',180,False),('patrol',360,True)]:
     jobs.append(dict(id=ident,prompt='exact '+ident+' instruction',cron=str(dt.minute)+' * * * *',
                      recurring=recurring,durable=False,timezone='UTC',expires_at=now+7200,stop_when=''))
 raw=dict(jobs=jobs,native_source=dict(pid=int(pid),session_id=sid,fleet_id=fid,confirmed=True))
+home=Path(os.environ['HOME']).resolve(); store=home/'.claude/scheduled_tasks.json'
+store.parent.mkdir(exist_ok=True)
+record=dict(id='durable-reminder',cron='13 9 21 10 *',prompt='native reminder only',createdInProject=str(home))
+store.write_text(json.dumps(dict(tasks=[record])))
+jobs.append(dict(record,recurring=False,durable=True,timezone='America/Los_Angeles',expires_at=None,stop_when=''))
+raw['native_source']['durable_store']=str(store)
 open(p,'w').write(json.dumps(raw))
 ts=datetime.datetime.now(datetime.timezone.utc).isoformat()
 with open(transcript,'a') as f:
@@ -391,6 +398,10 @@ for _ in range(40):
     time.sleep(.1)
 r=json.loads(path.read_text()); assert r['status']=='active',r
 assert [(j['id'],j['prompt'],j['recurring'],j['stop_when']) for j in r['schedule']['jobs']]==[('once','exact once instruction',False,''),('patrol','exact patrol instruction',True,'')]
+manifest=json.loads(Path(r['manifest']).read_text())
+kept=manifest['native_durable']; assert len(kept)==1 and kept[0]['record']['id']=='durable-reminder'
+assert json.loads(Path(kept[0]['store']).read_text())==dict(tasks=[kept[0]['record']])
+assert 'native Claude project scheduler' in Path(r['manifest']).with_name('pickup.md').read_text()
 if n=='95':
     assert r['agent']=='claude' and r['thread_id']==sid
     assert json.loads((path.parents[2]/'state.json').read_text())['state']=='rolled_back'

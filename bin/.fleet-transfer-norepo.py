@@ -95,8 +95,8 @@ def request_preparation(session, pane, transcript, pid, sid, target):
         prompt=("[Fleet panel transfer request] The operator selected a switch to "+target+
                 ". Source scheduling must be verified before any exit. Read the request at "+str(path)+
                 "; if expired, cancelled by later user instructions, or its pid/session/fleet identity does not match, do not switch. "
-                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. Durable jobs or unknown durability cannot be copied because they may survive source exit. "
-                "Write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable:false, timezone, expires_at and stop_when wherever absent or truncated in CronList. "
+                "Call native CronList now. Keep every native task running. Verify each current job's id, full untruncated prompt, cron, recurrence, durable/session-only ownership, IANA timezone, expiry and stop condition using its current tool result and this session's evidence; never guess missing values. Durable jobs stay in the native HOME scheduled_tasks.json table: verify its exact record and supply native_source.durable_store, never delete it or create a second timer. "
+                "Write a private JSON plan with jobs [{id,prompt,cron,recurring,timezone,expires_at,stop_when}] (recurring is boolean; expires_at may be null only for a one-shot with no separate expiry; stop_when is an empty string only when explicitly no additional condition) and native_source {confirmed:true,job_evidence:{job_id:{field:{value,source}}}}. Include evidence for prompt, cron, durable (boolean), timezone, expires_at and stop_when wherever absent or truncated in CronList. Include all current jobs: Fleet separates native durable records from session-only jobs itself. "
                 "Export it using python3 "+str(Path(__file__).with_name('fleet-loop.py'))+
                 " export-cron --session "+session+" --jobs-file <private-plan>. "
                 "Write private handoff notes covering role, task record, parent/children, latest user requests, pending decisions, current work and next action. "
@@ -116,6 +116,7 @@ def request_preparation(session, pane, transcript, pid, sid, target):
 
 def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
     values = identity(session, pane)
+    verified = None
     def opt(key):
         return subprocess.check_output(['tmux','-L',session,'show-options','-wqv','-t',pane,'@'+key],
                                        text=True, timeout=5).strip()
@@ -126,7 +127,7 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
         if agent == 'claude':
             from fleet_transfer_cron import validate as validate_cron, has_native_activity, live_list
             native = has_native_activity(transcript, pid)
-            if native and not active['ids'] and not active['next']:
+            if native and not active['ids'] and not active['next'] and not loop:
                 if live_list(transcript, pid, time.time()):
                     raise ValueError('live CronList disagrees with the absent/expired scheduler mark')
             needs_plan = active['ids'] or active['next'] or (mark and 'kind=' not in mark)
@@ -134,18 +135,19 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
                 if not loop:
                     raise ValueError('native scheduling is active or unknown: export current CronList and a verified multi-cron plan before switching')
                 raw = json.loads(Path(loop).read_text())
-                validate_cron(raw, transcript, pid, sid, values['fleet_id'], mark)
+                verified = validate_cron(raw, transcript, pid, sid, values['fleet_id'], mark)
     except ValueError as error:
         raise SchedulePreparation(str(error)) from error
+    return verified
 
 
 def readiness(session, pane, transcript, pid, sid, loop, agent):
-    schedule_readiness(session, pane, transcript, pid, sid, loop, agent)
+    verified = schedule_readiness(session, pane, transcript, pid, sid, loop, agent)
     view = runpy.run_path(str(Path(__file__).with_name('fleet-input.py')))['snapshot'](session,pane,agent=agent)
     if view['state'] not in ('empty','draft'):
         raise ValueError('source input is not safely exportable: ' + view.get('reason','unknown composer'))
     if agent == 'claude' and loop:
-        view['native_plan'] = json.loads(Path(loop).read_text())
+        view['native_plan'] = verified
     return view
 
 

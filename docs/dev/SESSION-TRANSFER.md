@@ -163,10 +163,15 @@ record each missing field as `{ "value": <exact value>, "source": <verified evid
 under that job id. An unknown value is a blocker, never an invitation to infer it
 from a fifteen-minute frequency or the marker's grace-extended expiry.
 The text form of CronList proves current membership and recurrence, while its
-truncated prompt needs a separately verified complete record. Every job must be
-proven `durable: false`, either by the native record's session-only marker or by
-explicit evidence. Durable or unknown ownership refuses: a task surviving source
-exit must not also be recreated in Fleet's scheduler.
+truncated prompt needs a separately verified complete record. Every job's
+`durable` flag must be proven. Session-only jobs move to Fleet's scheduler;
+durable jobs remain in the native HOME `~/.claude/scheduled_tasks.json` table.
+For durable jobs, `native_source.durable_store` names that exact file; transfer
+reads its full record and verifies id, prompt, cron, recurrence and project.
+It copies the provenance into `native-durable.json`, never a second timer, and
+rechecks the record before source exit. Unknown ownership or a changed/missing
+record refuses. The handoff explains that native durable execution still needs
+a Claude session in the project; retaining the record does not make Codex fire it.
 
 From the owning Claude session, export the plan without stopping any task:
 
