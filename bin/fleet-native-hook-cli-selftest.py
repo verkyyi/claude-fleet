@@ -10,6 +10,7 @@ from pathlib import Path
 import pty
 import runpy
 import select
+import shlex
 import shutil
 import signal
 import struct
@@ -29,6 +30,14 @@ result = {"event": payload.get("hook_event_name"), "source": payload.get("source
           "environment": {name: os.environ.get(name) for name in
               ("PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA", "FLEET_SESSION")}}
 Path(sys.argv[1]).write_text(json.dumps(result))
+'''
+
+DENY_SCRIPT = '''import json, sys
+from pathlib import Path
+payload = json.load(sys.stdin)
+Path(sys.argv[1]).write_text(json.dumps(payload))
+print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+    "permissionDecision": "deny", "permissionDecisionReason": sys.argv[2]}}))
 '''
 
 
@@ -77,6 +86,8 @@ def main():
     managed_probe = bool(proot or system_directory)
     client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
     requests, checks = [], []
+    tool_fixture = {"active": False, "requests": []}
+    managed_hook_count = 1
 
     def check(condition, name):
         if not condition:
@@ -85,8 +96,30 @@ def main():
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization"))})
+            if tool_fixture["active"]:
+                tool_fixture["requests"].append(request)
+                sequence = len(tool_fixture["requests"])
+                if sequence == 1:
+                    item = {"type": "function_call", "id": "fc_fixture", "call_id": "call_fixture", "name": "exec_command",
+                            "arguments": json.dumps({"cmd": tool_fixture["command"], "max_output_tokens": 100})}
+                else:
+                    item = {"type": "message", "id": "msg_fixture", "role": "assistant", "status": "completed",
+                            "content": [{"type": "output_text", "text": "fixture complete", "annotations": []}]}
+                response = {"id": "resp_fixture_" + str(sequence), "object": "response", "status": "completed",
+                            "output": [item], "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+                events = [{"type": "response.created", "response": dict(response, status="in_progress", output=[])},
+                          {"type": "response.output_item.added", "output_index": 0, "item": item},
+                          {"type": "response.output_item.done", "output_index": 0, "item": item},
+                          {"type": "response.completed", "response": response}]
+                body = "".join("event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n" for event in events).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             body = b'{"error":{"message":"offline hook probe; inference disabled"}}'
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
@@ -202,8 +235,8 @@ def main():
                 entries = rpc.call("hooks/list", {"cwds": [str(root)]})["data"]
                 if managed_probe:
                     managed_hooks = [hook for entry in entries for hook in entry["hooks"] if hook.get("isManaged")]
-                    check(len(managed_hooks) == 1 and managed_hooks[0]["source"] == "system"
-                          and managed_hooks[0]["trustStatus"] == "managed",
+                    check(len(managed_hooks) == managed_hook_count
+                          and all(hook["source"] == "system" and hook["trustStatus"] == "managed" for hook in managed_hooks),
                           "system requirements hook has managed trust independently of plugin: "
                           + json.dumps([{key: hook.get(key) for key in ("source", "isManaged", "trustStatus")}
                                         for entry in entries for hook in entry["hooks"]]))
@@ -212,7 +245,7 @@ def main():
                 check(len(hooks) == 1 and not hooks[0]["isManaged"], "exactly one non-managed fixture hook")
                 return hooks[0]
 
-            def remote_turn(phase, flags):
+            def remote_turn(phase, flags, expected_status="failed"):
                 stage = "turn-" + phase
                 with client(stage) as rpc:
                     existing_ids = {thread["id"] for thread in rpc.call("thread/list", {"limit": 100})["data"]}
@@ -225,7 +258,8 @@ def main():
                             [sys.executable, "-c",
                              "import fcntl,os,sys,termios; fcntl.ioctl(0,termios.TIOCSCTTY,0); os.execv(sys.argv[1],sys.argv[1:])",
                              *invocation, "--remote", "unix://" + str(root / (stage + ".sock")),
-                             "--no-alt-screen", *flags, "Offline hook probe; inference is disabled. Do not run tools."],
+                             "--no-alt-screen", *flags, "Run only the offline fixture's test command." if tool_fixture["active"]
+                             else "Offline hook probe; inference is disabled. Do not run tools."],
                             env=dict(environment, TERM="xterm-256color"), cwd=root,
                             stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
                         os.close(slave)
@@ -249,9 +283,9 @@ def main():
                                         continue
                                     loaded = rpc.call("thread/read", {"threadId": thread["id"], "includeTurns": True})["thread"]
                                     turns = loaded.get("turns", [])
-                                    if turns and turns[-1].get("status") == "failed":
+                                    if turns and turns[-1].get("status") == expected_status:
                                         return {"review_required": False, "thread_id": thread["id"]}
-                        raise AssertionError(phase + " remote TUI reached neither review nor failed turn: "
+                        raise AssertionError(phase + " remote TUI reached neither review nor " + expected_status + " turn: "
                                              + output[-1500:].decode(errors="replace"))
                     finally:
                         os.close(descriptor)
@@ -269,7 +303,7 @@ def main():
                            ("plugin", "add", "native-hook-fixture@fleet-hook-probe", "--json")):
                 result, _stdout, stderr = command(*values)
                 check(result == 0, "native install: " + stderr[-300:] if result else "native install")
-            report = {"scope": "fixture hook trust and execution; deliberately failed local inference, not panel acceptance",
+            report = {"scope": "offline native hook fixtures; no real model or credentials, not panel acceptance",
                       "version": version.strip(), "remote_tui": arguments.remote_tui,
                       "managed_mapping": "proot" if proot else "mount-namespace" if system_directory else False, "phases": []}
             if arguments.probe_bypass:
@@ -360,6 +394,69 @@ def main():
                                          "review_required": review_required})
                 if managed_probe:
                     report["phases"][-1]["managed_executed"] = managed_observed is not None
+            if managed_probe:
+                with client("tool-fixture-trust") as rpc:
+                    hook = fixture_hook(rpc)
+                    rpc.call("config/value/write", {"keyPath": "hooks.state", "mergeStrategy": "upsert",
+                             "value": {hook["key"]: {"trusted_hash": hook["currentHash"]}}})
+                tool_marker = root / "tool-executed"
+                deny_marker = root / "denied-tool.json"
+                (managed / "deny.py").write_text(DENY_SCRIPT, encoding="utf-8")
+                tool_fixture.update(active=True, command="printf native-guard-canary > " + shlex.quote(str(tool_marker)))
+                report["tool_phases"] = []
+                reason = "fixture-managed-denial-v1"
+                for phase in ("allow-control", "deny", "local-disable", "updated-guard"):
+                    if phase == "deny":
+                        managed_hook_count = 2
+                        with (system / "requirements.toml").open("a", encoding="utf-8") as config:
+                            config.write('[[hooks.PreToolUse]]\nmatcher="^Bash$"\n[[hooks.PreToolUse.hooks]]\n'
+                                         'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "deny.py")
+                                         + " " + str(deny_marker) + " " + reason) + '\n')
+                    elif phase == "updated-guard":
+                        previous_reason = reason
+                        reason = "fixture-managed-denial-v2"
+                        config = system / "requirements.toml"
+                        config.write_text(config.read_text().replace(previous_reason, reason), encoding="utf-8")
+                    with client("tool-" + phase + "-verify") as rpc:
+                        fixture_hook(rpc)
+                    for marker_path in (tool_marker, deny_marker, managed_marker, marker):
+                        marker_path.unlink(missing_ok=True)
+                    tool_fixture["requests"] = []
+                    before = len(requests)
+                    flags = ["-c", 'sandbox_mode="danger-full-access"']
+                    if phase == "local-disable":
+                        flags += ["-c", "features.hooks=false"]
+                    if arguments.remote_tui:
+                        outcome = remote_turn("tool-" + phase, flags, expected_status="completed")
+                        check(not outcome["review_required"] and bool(outcome["thread_id"]), phase + " actual remote turn completes")
+                        identifiers = [outcome["thread_id"]]
+                    else:
+                        result, stdout, stderr = command(*flags, "exec", "--json", "--skip-git-repo-check",
+                                                        "Run only the offline fixture's test command.")
+                        events = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+                        check(result == 0 and any(event.get("type") == "turn.completed" for event in events),
+                              phase + " actual native tool turn completes: " + stderr[-1500:])
+                        identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
+                    check(len(requests) == before + 2, phase + " uses exactly two synthetic loopback responses")
+                    check(any(tool.get("name") == "exec_command" for tool in tool_fixture["requests"][0].get("tools", [])),
+                          phase + " native runtime offers the tool being tested")
+                    managed_observed = json.loads(managed_marker.read_text())
+                    plugin_observed = json.loads(marker.read_text())
+                    check(identifiers == [managed_observed["session_id"]] == [plugin_observed["session_id"]],
+                          phase + " managed and trusted plugin hooks execute on the actual tool thread")
+                    if phase == "allow-control":
+                        check(tool_marker.read_text() == "native-guard-canary" and not deny_marker.exists(),
+                              "positive control executes the exact harmless write without a deny hook")
+                    else:
+                        denied = json.loads(deny_marker.read_text())
+                        check(not tool_marker.exists(), phase + " managed hook prevents the write despite fixture full-access mode")
+                        check(denied["tool_name"] == "Bash" and denied["tool_use_id"] == "call_fixture"
+                              and identifiers == [denied["session_id"]] and denied["tool_input"]["command"] == tool_fixture["command"],
+                              phase + " managed hook receives the exact native tool and thread")
+                        outputs = [item.get("output", "") for request in tool_fixture["requests"] for item in request.get("input", [])
+                                   if item.get("type") == "function_call_output" and item.get("call_id") == "call_fixture"]
+                        check(any(reason in output for output in outputs), phase + " native loop receives the current managed denial reason")
+                    report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks))
             print(json.dumps(report, indent=2))
