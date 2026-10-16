@@ -501,8 +501,10 @@ class Spinner:
                     if dirty:
                         marker.unlink(missing_ok=True)  # before fresh read
                     if c.changed or dirty or read_due or maintenance_due:
-                        self.tables[name] = windows(c)
+                        # Preserve notifications arriving with the read's
+                        # response: they may describe a newer state than it.
                         c.changed = False
+                        self.tables[name] = windows(c)
                 except (OSError, ValueError):
                     self.drop(name)
             watched = os.environ.get('FLEET_SPINNER_WATCH') == '0' or self.observer.watched(list(self.controls.values()))
