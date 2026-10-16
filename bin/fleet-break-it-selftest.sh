@@ -4886,6 +4886,22 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_repo_cutover_inflight() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_final_gate_reserves_before_window_creation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='最后一道本机门先持久预留；暂停且没有窗口时，空清单不能证明排空'
+}
+
+drill_repo_cutover_stop_binding() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_unbound_and_wrong_native_receipt_refused 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='未知原生身份及换会话后的旧停止证明均拒绝'
+}
+
 drill_launch_receipt_fence() {
   CAP=15; local out t0
   t0=$(now)

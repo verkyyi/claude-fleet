@@ -94,6 +94,10 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		httpError(w, 404, "no authority selection of yours")
 		return
 	}
+	if strings.HasSuffix(r.URL.Path, "/start") {
+		s.ticketAuthorityStart(w, r, c, repo)
+		return
+	}
 	// A node's pre-start check is a read, not a manifest or a new polling loop.
 	if r.Method == http.MethodGet && r.URL.Query().Get("gate") == "1" {
 		writeJSON(w, 200, a)
@@ -208,6 +212,61 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		return
 	}
 	writeJSON(w, 200, a)
+}
+
+func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c ticketCaller, repo string) {
+	ep, _ := s.nodeAuthOpt(r)
+	if ep == nil || r.Method != http.MethodPost {
+		httpError(w, 403, "local reservation needs its authenticated node")
+		return
+	}
+	fs, err := s.Store.Fleets()
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	hosted := false
+	for _, f := range fs {
+		if f.EndpointID == ep.ID && fleetHosts(f, repo) {
+			hosted = true
+		}
+	}
+	if !hosted {
+		httpError(w, 403, "node does not host this repo")
+		return
+	}
+	var in struct {
+		Action  string                    `json:"action"`
+		Key     string                    `json:"reservation"`
+		Worker  string                    `json:"worker_id"`
+		Native  *store.RepoNativeIdentity `json:"native_identity"`
+		Stopped bool                      `json:"execution_stopped"`
+	}
+	if !decodeTicket(w, r, &in) {
+		return
+	}
+	if !idemRE.MatchString(in.Key) || (in.Action == "stopped" && !in.Stopped) {
+		httpError(w, 400, "reservation / native stop proof required")
+		return
+	}
+	if in.Worker != "" {
+		owned := false
+		for _, f := range fs {
+			if f.EndpointID == ep.ID && fleetHosts(f, repo) && strings.HasPrefix(in.Worker, f.FleetID+"/") {
+				owned = true
+			}
+		}
+		if !owned {
+			httpError(w, 403, "worker belongs to another node")
+			return
+		}
+	}
+	start, err := s.Store.RepoLocalStart(repo, c.owner, ep.ID, in.Key, in.Action, in.Worker, in.Native, time.Now())
+	if err != nil {
+		httpError(w, 409, err.Error())
+		return
+	}
+	writeJSON(w, 200, start)
 }
 
 func (s *Server) repoDispatchGate(repo string, accepted bool) error {

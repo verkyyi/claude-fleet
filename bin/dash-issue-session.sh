@@ -1044,6 +1044,7 @@ if [ -n "$TASK_REF" ]; then
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 fleet_repo_authority_guard "$REPO" --finish >/dev/null || { refuse "repo requires accepted hub launch"; exit "$RC_INFRA"; }
+[ -z "${FLEET_AUTHORITY_START:-}" ] || pend="$pend FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477

@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -107,17 +108,109 @@ func TestRepoAuthorityExpiredOwnerAndNativeStop(t *testing.T) {
 		t.Fatal("foreign node stopped owner", err)
 	}
 	ack.EndpointID = "node-a"
-	a, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now)
-	if err != nil {
-		t.Fatal(err)
+	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); !errors.Is(err, ErrTaskFence) {
+		t.Fatal("unbound legacy receipt accepted", err)
 	}
-	ack.EndpointID = "node-b"
-	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); err == nil {
-		t.Fatal("foreign replay was accepted")
+}
+
+func TestRepoAuthorityPausedAfterFinalGate(t *testing.T) {
+	s := taskStore(t)
+	// This is the last admission, not the early read. No window/native process
+	// exists yet. The launcher is paused until freeze + empty inventory + apply.
+	paused, resume, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		_, err := s.RepoLocalStart("org/a", "alice", "node-a", "paused", "reserve", "", nil, time.Now())
+		if err != nil {
+			done <- err
+			close(paused)
+			return
+		}
+		close(paused)
+		<-resume
+		_, err = s.RepoLocalStart("org/a", "alice", "node-a", "paused", "begin", "f/w", nil, time.Now())
+		done <- err
+	}()
+	<-paused
+	a, _ := s.RepoAuthority("org/a")
+	a = repoChange(t, s, a, "freeze")
+	if len(a.Owners) != 0 {
+		t.Fatal("fixture must have no observed window", a)
+	}
+	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "empty-inventory"}, time.Now().Add(24*time.Hour)); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("paused start lost to empty inventory/expiry", err)
+	}
+	close(resume)
+	if err := <-done; !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("resumed start created native after freeze", err)
+	}
+	if _, err := s.RepoLocalStart("org/a", "alice", "node-b", "paused", "cancel", "", nil, time.Now()); err == nil {
+		t.Fatal("foreign node cancelled reservation")
+	}
+	if _, err := s.RepoLocalStart("org/a", "alice", "node-a", "paused", "cancel", "", nil, time.Now()); err != nil {
+		t.Fatal(err)
 	}
 	a = repoChange(t, s, a, "apply")
 	if a.Mode != "hub" {
 		t.Fatal(a)
+	}
+}
+
+func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(fmt.Sprint(replacement), func(t *testing.T) {
+			s := taskStore(t)
+			old := &RepoNativeIdentity{WorkerID: "f/w", NativeSession: "old", PID: 123, Birth: "old-birth", Executable: "/bin/codex"}
+			run := func(key, action string, native *RepoNativeIdentity) {
+				t.Helper()
+				if _, err := s.RepoLocalStart("org/a", "alice", "node-a", key, action, "f/w", native, time.Now()); err != nil {
+					t.Fatal(action, err)
+				}
+			}
+			for _, action := range []string{"reserve", "begin", "observe"} {
+				run("old", action, old)
+			}
+			current := old
+			if replacement {
+				run("old", "stopped", old)
+				current = &RepoNativeIdentity{WorkerID: "f/w", NativeSession: "new", PID: 456, Birth: "new-birth", Executable: "/bin/codex"}
+				for _, action := range []string{"reserve", "begin", "observe"} {
+					run("replacement", action, current)
+				}
+			}
+			a, _ := s.RepoAuthority("org/a")
+			a = repoChange(t, s, a, "freeze")
+			proof := func(n *RepoNativeIdentity) string {
+				b, _ := json.Marshal(struct {
+					*RepoNativeIdentity
+					Stopped bool `json:"execution_stopped"`
+				}{n, true})
+				return string(b)
+			}
+			wrong := *old
+			wrong.PID = 999
+			ack := RepoAuthorityChange{Action: "stop_ack", Revision: a.Revision, Key: "ack", EndpointID: "node-a", WorkerID: "f/w", Evidence: proof(&wrong)}
+			if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
+				t.Fatal("wrong dead process released owner", err)
+			}
+			ack.Evidence = proof(old)
+			if replacement {
+				if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
+					t.Fatal("pre-transfer native receipt released live replacement", err)
+				}
+				return
+			}
+			run("old", "stopped", current)
+			var err error
+			a, err = s.ChangeRepoAuthority("org/a", "alice", ack, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ack.EndpointID = "node-b"
+			if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); err == nil {
+				t.Fatal("foreign replay accepted")
+			}
+			a = repoChange(t, s, a, "apply")
+		})
 	}
 }
 

@@ -666,8 +666,11 @@ claimed=""
 # only ever gets a window warmed from THAT repo's worktree. A no-repo scratch never
 # claims.
 _pool_ok=1; { [ "$NOREPO" = 1 ] || [ -n "${FLEET_LAUNCH:-}" ]; } && _pool_ok=0
+[ -z "${FLEET_AUTHORITY_START:-}" ] || _pool_ok=0
 _pool_repo=$REPO_ARG
 if [ "$WARM_ONLY" = 1 ]; then
+  # A pre-existing native process cannot consume a new admission reservation.
+  [ -z "${FLEET_AUTHORITY_START:-}" ] || { refuse "authority reservation requires a cold start"; exit 3; }
   # The node's slot contract (issue #2233): the window id alone, exit 3 = none
   # ready. HOME is `--repo -`. Its worktree (and so its slug) is read off the
   # window: the claim clears @pool_slug. Nothing ready: nothing opened, exit 3.
@@ -850,6 +853,7 @@ else
     _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
     stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
   fi
+  [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") $launch"
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1

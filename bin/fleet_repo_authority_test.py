@@ -16,13 +16,36 @@ import fleet_task_control as control
 
 
 class RepoAuthorityTests(unittest.TestCase):
+    def test_final_gate_reserves_before_window_creation(self):
+        calls = []
+        def api(method, path, body=None, query=None):
+            calls.append((method, path, body))
+            if method == "GET":
+                return dict(mode="legacy", revision=0)
+            return dict(reservation="fixture-start", mode="legacy")
+        with patch.object(migration.ticket, "api", side_effect=api), contextlib.redirect_stdout(io.StringIO()):
+            migration.gate("org/a", True)
+        self.assertTrue(any(method == "POST" and body.get("action") == "reserve"
+                            for method, _, body in calls), "last gate must leave a durable reservation before any window exists")
+
+    def test_unbound_and_wrong_native_receipt_refused(self):
+        proof = dict(worker_id="fleet/session", native_session="old", pid=123, birth="old-birth", executable="/bin/codex")
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "receipt.json"
+            f.write_text(json.dumps(proof))
+            with patch.object(migration.os, "kill", side_effect=ProcessLookupError()):
+                for saved in (None, dict(proof, native_session="replacement", pid=456)):
+                    authority = dict(legacy_owners=[dict(worker_id=proof["worker_id"], native_identity=saved)])
+                    with self.assertRaises(ValueError):
+                        migration.stopped_receipt(f, authority)
+
     def test_manifest_apply_repeat_rollback_and_repo_b(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             conf = root / "conf"
             repos = conf / "fleets/fixture/repos"
             repos.mkdir(parents=True)
-            (conf / "fleets/fixture.conf").write_text('FLEET_SESSION="fixture"\n')
+            (conf / "fleets/fixture/conf").write_text('FLEET_SESSION="fixture"\n')
             a = repos / "org-a.conf"
             b = repos / "org-b.conf"
             original = 'FLEET_REPO="org/a"\nFLEET_TICKETS="github"\nFLEET_FORGE="github"\nFLEET_LAND="github"\n'
@@ -92,17 +115,18 @@ class RepoAuthorityTests(unittest.TestCase):
 
     def test_stop_receipt_requires_positive_proof(self):
         proof = dict(worker_id="fleet/session", native_session="native", pid=123, birth="birth", executable="/bin/codex")
+        authority = dict(legacy_owners=[dict(worker_id=proof["worker_id"], native_identity=proof)])
         with tempfile.TemporaryDirectory() as tmp:
             f = Path(tmp) / "receipt.json"
             f.write_text(json.dumps(proof))
             with patch.object(migration.os, "kill", return_value=None), patch.object(migration.launch, "process", return_value=proof):
                 with self.assertRaisesRegex(ValueError, "still alive"):
-                    migration.stopped_receipt(f)
+                    migration.stopped_receipt(f, authority)
             with patch.object(migration.os, "kill", side_effect=PermissionError("unknown")):
                 with self.assertRaises(PermissionError):
-                    migration.stopped_receipt(f)
+                    migration.stopped_receipt(f, authority)
             with patch.object(migration.os, "kill", side_effect=ProcessLookupError()):
-                self.assertTrue(migration.stopped_receipt(f)["execution_stopped"])
+                self.assertTrue(migration.stopped_receipt(f, authority)["execution_stopped"])
 
     def test_blocked_github_keeps_work_and_pr_separate(self):
         c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")

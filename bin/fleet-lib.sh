@@ -1148,10 +1148,17 @@ _FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET
 # local scratch without a lease. Hub outage is unknown, never legacy fallback.
 # No hub and no explicit selection remains byte-for-byte the legacy path.
 fleet_repo_authority_guard() {
-  local repo="${1:-}" phase="${2:---gate}" selected="${FLEET_TASK_AUTHORITY:-}"
+  local repo="${1:-}" phase="${2:---gate}" selected="${FLEET_TASK_AUTHORITY:-}" result
   [ -n "$repo" ] || return 0
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$selected" ]; then return 0; fi
-  ( _fleet_hub_env; python3 "$BIN/fleet_repo_authority.py" "$repo" "$phase" )
+  result=$( _fleet_hub_env
+    if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ]; then "$FLEET_HUB_AUTHORITY_CMD" "$repo" "$phase"
+    else python3 "$BIN/fleet_repo_authority.py" "$repo" "$phase"; fi ) || return 1
+  if [ "$phase" = --finish ]; then
+    FLEET_AUTHORITY_START=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reservation", ""))') || return 1
+    export FLEET_AUTHORITY_START
+  fi
+  printf '%s\n' "$result"
 }
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +

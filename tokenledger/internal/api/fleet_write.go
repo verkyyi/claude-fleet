@@ -573,7 +573,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if ref, ok := args["ticket_ref"]; ok {
 			v, yes := ref.(string)
-			if !yes || d == nil || (v != "gh:"+w.repo+"#"+fmt.Sprint(w.params["issue"]) && v != "hub:"+w.repo+"#"+fmt.Sprint(w.params["issue"])) {
+			if !yes || d == nil || !ticketRefMatches(v, w.repo, fmt.Sprint(w.params["issue"])) {
 				err = fault("INVALID_ARGUMENT", "ticket_ref must explicitly match the accepted repo and issue")
 				break
 			}

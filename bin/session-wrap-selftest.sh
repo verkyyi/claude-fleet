@@ -97,7 +97,7 @@ grep -q '^    restore_watch' "$BIN/fleet-diskguard.sh" || fail "A: the diskguard
 
 # --------------------------------------------- B: the wrapper, on a real tmux ----
 mkdir -p "$WORK/wbin"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 cat > "$WORK/wbin/session-end-hook.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/recycled"

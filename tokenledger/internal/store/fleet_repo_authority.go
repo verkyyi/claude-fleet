@@ -27,10 +27,27 @@ type RepoAuthority struct {
 }
 
 type RepoLegacyOwner struct {
-	WorkerID   string `json:"worker_id"`
-	EndpointID string `json:"endpoint_id"`
-	Stopped    string `json:"stopped_evidence,omitempty"`
+	WorkerID   string              `json:"worker_id"`
+	EndpointID string              `json:"endpoint_id"`
+	Stopped    string              `json:"stopped_evidence,omitempty"`
+	Native     *RepoNativeIdentity `json:"native_identity,omitempty"`
 }
+
+// A saved observation, never a PID selected by the stop requester. Each local
+// launch reservation may bind this identity only once, from the native hook.
+type RepoNativeIdentity struct {
+	WorkerID      string `json:"worker_id"`
+	NativeSession string `json:"native_session"`
+	PID           int    `json:"pid"`
+	Birth         string `json:"birth"`
+	Executable    string `json:"executable"`
+}
+
+func (n *RepoNativeIdentity) Valid() bool {
+	return n != nil && n.WorkerID != "" && n.NativeSession != "" && n.PID > 0 && n.Birth != "" && strings.HasPrefix(n.Executable, "/")
+}
+
+func sameRepoNative(a, b *RepoNativeIdentity) bool { return a.Valid() && b.Valid() && *a == *b }
 
 type RepoTicketMap struct {
 	From       string `json:"from"`
@@ -135,6 +152,19 @@ func (s *Store) repoStartTx(tx *sql.Tx, repo string, accepted bool) error {
 // tasks with retained execution leases. Neither is proof of native stop.
 func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []RepoLegacyOwner, error) {
 	blockers, owners := []string{}, []RepoLegacyOwner{}
+	starts, err := repoLocalStarts(q, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, start := range starts {
+		if start.Phase == "stopped" || start.Phase == "cancelled" {
+			continue
+		}
+		blockers = append(blockers, "local start retained: "+start.Reservation)
+		if start.WorkerID != "" {
+			owners = append(owners, RepoLegacyOwner{WorkerID: start.WorkerID, EndpointID: start.EndpointID, Native: start.Native})
+		}
+	}
 	rows, err := q.Query(`SELECT worker_id, endpoint_id, task_id FROM fleet_leases WHERE repo = ? OR repo = ? OR task_id IN (SELECT id FROM fleet_tasks WHERE repo = ?)`, repo, "hub:"+repo, repo)
 	if err != nil {
 		return nil, nil, err
@@ -204,8 +234,12 @@ func (s *Store) RepoAuthorityBlockers(repo string, rollback bool) ([]string, []R
 func rememberOwners(a *RepoAuthority, owners []RepoLegacyOwner) {
 	for _, o := range owners {
 		found := false
-		for _, old := range a.Owners {
+		for i, old := range a.Owners {
 			if old.WorkerID == o.WorkerID && old.EndpointID == o.EndpointID {
+				if o.Native.Valid() && !sameRepoNative(old.Native, o.Native) {
+					a.Owners[i].Native = o.Native
+					a.Owners[i].Stopped = ""
+				}
 				found = true
 				break
 			}
@@ -310,9 +344,24 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		if a.Mode != "frozen" || c.EndpointID == "" || c.WorkerID == "" || c.Evidence == "" {
 			return a, ErrTaskInvalid
 		}
+		var proof struct {
+			RepoNativeIdentity
+			Stopped bool `json:"execution_stopped"`
+		}
+		if json.Unmarshal([]byte(c.Evidence), &proof) != nil || !proof.Stopped || !proof.RepoNativeIdentity.Valid() || proof.WorkerID != c.WorkerID {
+			return a, ErrTaskFence
+		}
+		// The operation journal is the saved native observation. A missing,
+		// unbound or replacement execution cannot be released by an old receipt.
+		if err = checkRepoNativeStop(tx, repo, c.EndpointID, &proof.RepoNativeIdentity); err != nil {
+			return a, err
+		}
 		matched := false
 		for i, o := range a.Owners {
 			if o.WorkerID == c.WorkerID && o.EndpointID == c.EndpointID {
+				if !sameRepoNative(o.Native, &proof.RepoNativeIdentity) {
+					return a, ErrTaskFence
+				}
 				a.Owners[i].Stopped = c.Evidence
 				matched = true
 			}

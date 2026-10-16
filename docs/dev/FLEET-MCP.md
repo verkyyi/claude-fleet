@@ -300,12 +300,24 @@ save a fresh dry-run between stages. Exact retries reuse the same operation key.
 The manifest must name this exact repo/session and unchanged local settings.
 
 Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
+The last local gate reserves a start in the existing operation journal before
+window creation. Freeze, admission and cancellation serialize on the same repo
+lock. A paused launcher, empty inventory or elapsed lease never erases it.
+`--cancel-start RESERVATION` revokes only a never-begun reservation; a racing
+launcher then cannot begin. Started but unobserved execution stays blocked.
+The existing session wrapper consumes each reservation once; resumes and
+transfers through that wrapper require a new admission. Its existing native
+startup hook binds the process/session, and its native wait records stop.
 All registered hosts must advertise `repo_authority_v1` and `launch_v1` before
 freeze; apply also requires fresh post-freeze observations. Unknown/offline
 hosts refuse cutover. Captured legacy owners remain blockers after expiry or
 inventory disappearance. Drain them using the existing stop workflow, then on
 the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
-receipt names worker, native session, PID, birth and executable. The command
+receipt names worker, native session, PID, birth and executable. It must match
+the native identity saved for that frozen owner in the operation journal;
+an arbitrary dead process or a pre-transfer receipt cannot release a replacement.
+Older owners without that binding stay blocked: drain these before freezing;
+missing observation is not an acknowledgement. The command
 requires ESRCH or a positively observed different process identity; permission
 or probe failure remains unknown. The authenticated node's acknowledgement is
 journalled. It does not stop processes or adopt a live owner automatically.
