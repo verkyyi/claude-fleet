@@ -146,7 +146,9 @@ Hub、proxy 和 DNS 的实际需要（DNS 要有 UDP/TCP 两项），以及正�
 
 observer 记录 execve/execveat、clone/exit、connect/sendto/sendmsg/sendmmsg、已有
 socket 上的 write/writev/sendfile/splice，失败尝试也计数。io_uring_setup 注入 ENOSYS
-并要求真实正控制；io_uring_enter、成功的 namespace/FD 注入或 SCM_RIGHTS 拒绝。
+并要求真实正控制；io_uring_enter、成功的 namespace/FD 注入拒绝。SCM_RIGHTS 仅接收
+strace `-yy` 在内核边界解码为普通文件、pipe、anon inode 或 Unix socket 的描述符；
+Internet socket 传递、缺类型或截断控制消息拒绝，不能用应用给出的类型补齐。
 FD/OFD 并发排序不确定、未知 strace 格式、非主线程 exec 特殊生命周期、丢事件、
 缺 EOF 或未退出后代都不能 PASS。原始 trace 只在内存中解析，不保存 argv/env、
 请求 payload、token 或原始错误文本。

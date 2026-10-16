@@ -24,8 +24,29 @@ TRACE_CALLS = ('execve,execveat,clone,clone3,fork,vfork,exit,exit_group,wait4,wa
                'socket,socketpair,bind,recvfrom,connect,accept,accept4,sendto,sendmsg,sendmmsg,'
                'dup,dup2,dup3,fcntl,close,close_range,write,writev,sendfile,splice,recvmsg,recvmmsg,'
                'io_uring_setup,io_uring_enter,pidfd_getfd,unshare,setns')
-STRACE_OPTIONS = ['-f', '-q', '-ttt', '-T', '-v', '-s', '0', '--kill-on-exit',
+STRACE_OPTIONS = ['-f', '-q', '-ttt', '-T', '-v', '-s', '0', '-yy', '--kill-on-exit',
                   '-e', 'trace=' + TRACE_CALLS, '-e', 'inject=io_uring_setup:error=ENOSYS']
+
+
+def descriptor_metadata(call):
+    """Separate kernel-decoded -yy FD annotations without changing strings."""
+    result, descriptors, offset = [], {}, 0
+    while offset < len(call):
+        if call[offset] == '"':
+            end = offset + 1
+            while end < len(call):
+                if call[end] == '\\': end += 2; continue
+                if call[end] == '"': end += 1; break
+                end += 1
+            result.append(call[offset:end]); offset = end
+            continue
+        found = re.match(r'(\d+)<((?:->|[^<>])*)>', call[offset:]) if call[offset].isdigit() else None
+        if found:
+            descriptors[int(found[1])] = found[2]
+            result.append(found[1]); offset += found.end()
+        else:
+            result.append(call[offset]); offset += 1
+    return ''.join(result), descriptors
 
 
 class Trace:
@@ -84,6 +105,7 @@ class Trace:
         self.events.append((pid, start, end, category, count))
 
     def decode(self, pid, start, end, call):
+        call, descriptors = descriptor_metadata(call)
         found = re.match(r'(\w+)\(', call)
         require(found is not None, 'UNKNOWN_SYSCALL_FORMAT')
         name = found[1]
@@ -132,9 +154,22 @@ class Trace:
             self.action((start, 'write', pid, (int(fd[1]), end)))
             return
         if name in ('recvmsg', 'recvmmsg'):
-            # A transferred socket cannot silently acquire an untracked FD.
-            # This version refuses SCM_RIGHTS rather than inventing an owner.
-            require('SCM_RIGHTS' not in call and 'MSG_CTRUNC' not in call, 'FD_TRANSFER_UNSUPPORTED')
+            require('MSG_CTRUNC' not in call, 'FD_TRANSFER_TRUNCATED')
+            if 'SCM_RIGHTS' in call:
+                groups = re.findall(r'cmsg_type=SCM_RIGHTS, cmsg_data=\[([0-9, ]+)\]', call)
+                require(len(groups) == call.count('SCM_RIGHTS'), 'FD_TRANSFER_UNREADABLE')
+                for group in groups:
+                    for number in group.split(','):
+                        fd = int(number)
+                        annotation = descriptors.get(fd, '')
+                        # Chromium's Unix IPC passes memfd, pipe and Unix
+                        # sockets. Their kernel-decoded type cannot send IP
+                        # traffic. Internet sockets need OFD alias provenance;
+                        # until supported, refuse instead of guessing a zero.
+                        require(re.fullmatch(r'(?:/[^<>]+|pipe:\[\d+\]|anon_inode:\[[^]]+\]|'
+                                             r'UNIX(?:-STREAM|-DGRAM|-SEQPACKET)?:\[[^]]+\])', annotation)
+                                and 'io_uring' not in annotation, 'FD_TRANSFER_UNSUPPORTED')
+                        self.action((start, 'socket', pid, (fd, None, 'local', 'MSG_CMSG_CLOEXEC' in call)))
             return
         if name == 'io_uring_setup':
             require('= -1 ENOSYS' in call and '(INJECTED)' in call, 'IO_URING_UNFENCED')
@@ -374,6 +409,9 @@ class Trace:
                     state[1] = categories[0]
                 if disconnected:
                     state[1] = 'unknown'
+                if connected or disconnected:
+                    bound.pop(id(state), None)
+                    replies = {key: value for key, value in replies.items() if key[0] != id(state)}
                 if not categories:
                     categories = [state[1]] * count
                 elif name == 'sendmmsg' and len(categories) < count and not local:

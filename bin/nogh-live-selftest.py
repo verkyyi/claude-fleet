@@ -232,6 +232,19 @@ class TraceMetadata(unittest.TestCase):
         trace.pending[8] = (1.5, 'connect(')
         with self.assertRaises(live.Refused): trace.finish(0)
 
+    def test_kernel_typed_local_ipc_rights_do_not_hide_internet_sockets(self):
+        self.make_trace([
+            'recvmsg(3<UNIX-STREAM:[111->222]>, {msg_control=[{cmsg_type=SCM_RIGHTS, cmsg_data=[4</memfd:browser (deleted)>, 5<UNIX-STREAM:[333->444]>]}]}, 0) = 1',
+            'write(4</memfd:browser (deleted)>, ""..., 1) = 1',
+        ]).finish(0)
+        with self.assertRaises(live.Refused):
+            self.make_trace(['recvmsg(3, {msg_control=[{cmsg_type=SCM_RIGHTS, cmsg_data=[4<TCP:[192.0.2.1:10->203.0.113.1:443]>]}]}, 0) = 1'])
+
+    def test_fd_annotations_never_rewrite_quoted_exec_names(self):
+        text, fds = observer.descriptor_metadata('execve("/tmp/3<gh>", [], 0) = 0')
+        self.assertEqual(text, 'execve("/tmp/3<gh>", [], 0) = 0')
+        self.assertEqual(fds, {})
+
     def test_teardown_attempts_are_kept(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) = 3'])
         trace.decode(7, 2.05, 2.06,
