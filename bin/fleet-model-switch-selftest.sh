@@ -455,16 +455,16 @@ cat > "$WORK/ps-shim/ps" <<'SH'
 printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 Z Fri Oct 16 02:00:00 2026 claude\n910 1 Ss Fri Oct 16 02:00:00 2026 zsh\n911 910 S+ Fri Oct 16 02:00:00 2026 claude\n'
 SH
 chmod +x "$WORK/ps-shim/ps"
-zout=$(FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids 900 910 2>/dev/null)
+zout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids 900 910 2>/dev/null)
 ok; [ "$zout" = "910 911" ] || fail "a zombie claude must not count; a live one must" "$zout"
 # Invalid bytes from an unrelated process must remain silent (#3129).
 cat > "$WORK/ps-shim/ps" <<'SH'
 #!/bin/sh
 printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 S+ Fri Oct 16 02:00:00 2026 claude\n950 1 S Fri Oct 16 02:00:00 2026 python3 \346\211\n'
 SH
-cerr=$( { FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
+cerr=$( { FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
 ok; [ -z "$cerr" ] || fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
-cout=$(FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
+cout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
 ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------
