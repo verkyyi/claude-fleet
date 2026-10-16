@@ -130,8 +130,8 @@ home_wins() { pool_wins | awk -F'|' '$2 == 1'; }
 has_home() { [ -n "$(home_wins)" ]; }
 drop_all() { for w in $(pool_wins | awk -F'|' '{ print $1 }'); do nt kill-window -t "$w"; done; }
 until_() {  # until_ <tenths> <cmd…> — poll a condition, re-run every tenth
-  local n=$1 i; shift
-  for i in $(seq 1 "$n"); do "$@" && return 0; sleep 0.1; done
+  local n=$1 _; shift
+  for _ in $(seq 1 "$n"); do "$@" && return 0; sleep 0.1; done
   return 1
 }
 gone() { ! kill -0 "$1" 2>/dev/null; }
@@ -269,7 +269,7 @@ until_ 300 refill_gone || fail "E2 the claim's refill never finished"
 [ -e "$FLEET_CONF_DIR/global/retired/$fid2" ] && [ ! -s "$FLEET_CONF_DIR/global/retired/$fid2" ] \
   || fail "E2 another writer's retired mark was taken back" "$(ls -la "$FLEET_CONF_DIR/global/retired")"
 [ "$(nt display-message -p -t "$two" '#{session_name}')" = "$SESS" ] || fail "E2 the claimed session was harmed"
-ls "$FLEET_CONF_DIR/global/retired" | grep -q unmark && fail "E2 a side file was left behind"
+for f in "$FLEET_CONF_DIR"/global/retired/*.unmark.*; do [ -e "$f" ] && fail "E2 a side file was left behind" "$f"; done
 ok "E2 a retired mark another closer wrote meanwhile stands; only the pass's own is taken back"
 
 # ---- E3 / E4: a mark already there; a mark that cannot be put back -----------
@@ -294,7 +294,8 @@ race_moved "$fid4"; w4=$RW
 finish "$pe" 100 3 "E4 the off pass that could not put a mark back" "$WORK/e3.log"
 rm -f "$WORK/ln.fail"
 grep -q "could not put back the retired mark" "$WORK/e3.log" || fail "E4 the pass must say what it kept" "$(cat "$WORK/e3.log")"
-[ -e "$RET/$fid4.unmark.$pe" ] || [ -n "$(ls "$RET" | grep "^$fid4.unmark.")" ] || fail "E4 the mark's side copy must be kept" "$(ls -la "$RET")"
+side=''; for f in "$RET/$fid4".unmark.*; do [ -e "$f" ] && side=$f; done
+[ -n "$side" ] || fail "E4 the mark's side copy must be kept" "$(ls -la "$RET")"
 alive "$w4" || fail "E4 the moved session was killed"
 nt kill-window -t "$w3"; nt kill-window -t "$w4"
 ok "E3 a mark already there is never owned nor written over; E4 one that cannot be put back is kept aside, exit 3"
