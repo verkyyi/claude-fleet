@@ -776,7 +776,7 @@ def tool_spawn(args):
                       + (["--pr-note", args["pr_note"]] if args.get("pr_note") else []), WRITE_TIMEOUT_S)
         if mark["exit"] != 0:
             return mark
-    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_, SPAWN_TIMEOUT_S,
+    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_ + (["--agent", args["coding_agent"]] if args.get("coding_agent") else []), SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
 
 
@@ -827,7 +827,9 @@ def tool_task(args):
     if args.get("reap"):
         argv += ["--reap", args["reap"]]
     if args.get("agent"):
-        argv += ["--agent", args["agent"]]
+        argv += ["--as", args["agent"]]
+    if args.get("coding_agent"):
+        argv += ["--agent", args["coding_agent"]]
     argv += draft_argv(args)
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
@@ -1288,6 +1290,7 @@ TOOLS = {
                        "driver spawn; a worker files.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
+            "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; overrides template, labels and fleet defaults."},
             "reap": dict(REAP_POLICY, description="When the fleet may close it on its own (default merged: "
                                                   "after its PR merged) — see set_reap."),
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
@@ -1337,6 +1340,7 @@ TOOLS = {
                      "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
             "spawn": {"type": "boolean", "description": "Start its session now."},
             "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
+            "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; independent of the agent definition."},
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
                       "description": "The agent file a no-repo session starts as (issue #3122)."},
             "draft": dict(DRAFT, description=DRAFT["description"] + " Needs repo."), "pr_note": PR_NOTE},

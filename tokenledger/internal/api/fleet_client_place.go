@@ -82,13 +82,15 @@ type clientPlaceRequest struct {
 	// Home / New: a HOME session (`fleet claude`, claude-fleet#2564) — a
 	// no-repo scratch that first goes back to the person's current one
 	// (fleet_home.go); New opens another anyway and makes it the current.
-	Home        bool   `json:"home"`
-	New         bool   `json:"new"`
-	Agent       string `json:"agent"`
-	Reap        string `json:"reap"`
-	Idem        string `json:"idempotency_key"`
-	OperationID string `json:"operation_id"`
-	Wait        *int   `json:"wait"`
+	Home        bool            `json:"home"`
+	New         bool            `json:"new"`
+	Agent       string          `json:"agent"`
+	CodingAgent string          `json:"coding_agent"`
+	Dispatch    *dispatchChoice `json:"dispatch"`
+	Reap        string          `json:"reap"`
+	Idem        string          `json:"idempotency_key"`
+	OperationID string          `json:"operation_id"`
+	Wait        *int            `json:"wait"`
 	// Attachments: the files the writing area sends with a new or scratch
 	// start (claude-fleet#2393) — see fleet_attachment.go.
 	Attachments []clientAttachment `json:"attachments"`
@@ -345,7 +347,19 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	if idem == "" {
 		idem = "client-" + lease[:min(8, len(lease))] + "-" + strconv.FormatInt(now.UnixNano(), 36)
 	}
+	d, derr := resolveDispatch(req.CodingAgent, req.Agent, dispatchRaw(req.Dispatch), idem)
+	if derr != nil {
+		httpError(w, http.StatusBadRequest, errorObject(derr)["message"])
+		return
+	}
+	if d != nil {
+		req.Dispatch = d
+		req.Agent = d.ResolvedAgent
+	}
 	args := map[string]any{"node": node, "idempotency_key": idem}
+	if d != nil {
+		args["dispatch"] = d
+	}
 	if req.NoRepo {
 		args["no_repo"] = true
 	} else {
@@ -521,7 +535,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	// The task's record (claude-fleet#3325) is written before anything is
 	// placed: every answer below fills it, a refusal included.
 	var task *store.FleetTask
-	if req.Task {
+	if req.Task && req.Dispatch == nil {
 		rec, err := s.Store.CreateFleetTask(store.FleetTask{Owner: p.Actor, Title: taskTitle(req), Via: req.Via,
 			Device: s.clientLeases.deviceOf(leaseKey, lease), Repo: req.Repo, Agent: req.Agent},
 			"place:"+p.Actor+":"+idem, now)
@@ -539,7 +553,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	retry := node == "auto" && wait > 0 && (req.Kind == "" || req.Kind == "issue" || req.Kind == "scratch")
+	retry := req.Dispatch == nil && node == "auto" && wait > 0 && (req.Kind == "" || req.Kind == "issue" || req.Kind == "scratch")
 	deadline := now.Add(wait)
 	declined := map[string]string{}
 	attempts := []placeAttempt{}
@@ -703,6 +717,17 @@ func (s *Server) clientPlaceAnswer(r *http.Request, op map[string]any, pl *Place
 	}
 	opID := asString(op["operation_id"])
 	out := ClientPlaceResponse{OperationID: opID, Machine: m, Placement: pl, Login: placedLogin(pl)}
+	if recorded, err := s.Store.FleetOperation(opID); err == nil {
+		var envelope struct {
+			Params struct {
+				Task string `json:"task"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(recorded.Request), &envelope) == nil {
+			out.Task = envelope.Params.Task
+		}
+	}
+
 	oc := outcomeOf(op, m)
 	if oc.State == "unknown" && wait > 0 {
 		oc = neverStarted(op, heard, oc, wait)

@@ -123,6 +123,10 @@ if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
 case "${1:-}" in
   display-message) case "$*" in *-p*) case "$*" in *window_id*) echo @9 ;; *session_name*) echo testsess ;; *) echo '' ;; esac ;; esac ;;
   show-options) echo '' ;;
+  run-shell)
+    if [ "${RUNSHELL_RUN:-0}" = 1 ]; then
+      FLEET_AGENT=claude bash -c "${@: -1}"
+    fi ;;
   new-window) printf '%s\n' "$*" >> "$NEWWIN_LOG"; echo @9 ;;
 esac
 exit 0
@@ -157,7 +161,7 @@ grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
 
 GH_LABELS='[{"name":"bug"}]' run_spawn
 [ -s "$WORK/newwin" ] || fail "D the unlabelled spawn opened nothing" "$(cat "$WORK/spawn.err")"
-grep -q -- '--agent' "$WORK/newwin" && fail "D no agent label ⇒ no --agent (FLEET_AGENT decides)" "$(cat "$WORK/newwin")"
+grep -q -- '--agent claude' "$WORK/newwin" || fail "D no agent label freezes default" "$(cat "$WORK/newwin")"
 
 GH_LABELS='[{"name":"agent:codex"}]' run_spawn --agent claude
 grep -qF -- "fleet-session-wrap.sh' --agent claude" "$WORK/newwin" \
@@ -172,22 +176,33 @@ GH_LABELS='[{"name":"agent:codex"}]' CODEX_CMD="$NOLOGIN" run_spawn; rc=$?
 grep -q 'ccquota codex login' "$WORK/spawn.err" || fail "D the refusal says ccquota codex login" "$(cat "$WORK/spawn.err")"
 
 GH_LABELS='[]' CODEX_CMD="$NOLOGIN" run_spawn
-grep -q -- '--agent' "$WORK/newwin" && fail "D a Claude spawn never asks for Codex" "$(cat "$WORK/newwin")"
+grep -q -- '--agent codex' "$WORK/newwin" && fail "D a Claude spawn never asks for Codex" "$(cat "$WORK/newwin")"
 [ -s "$WORK/newwin" ] || fail "D a Claude spawn opens without a Codex login" "$(cat "$WORK/spawn.err")"
 # --title promised no round-trip (#216): the label comes off the collector's copy.
 run_title() {
   rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"; : > "$WORK/gh.log"
   mkdir -p "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)"
-  printf '77\tbug,agent:codex\n' > "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)/labels"
+  printf '77\tbug,agent:%s\n' "${CACHED_AGENT:-codex}" > "$WORK/dash/.claude-dash/fleets/$(fleet_slug acme/widgets)/labels"
   PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" GH_LOG="$WORK/gh.log" \
   FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
   FLEET_PRESPAWN_DEDUP=0 NEWWIN_LOG="$WORK/newwin" FLEET_CODEX_READY_CMD="$READY" \
-    "$SPAWN" 77 --origin hub --title 'Known Title' >"$WORK/spawn.out" 2>"$WORK/spawn.err"
+    "$SPAWN" 77 --origin hub --title 'Known Title' "$@" >"$WORK/spawn.out" 2>"$WORK/spawn.err"
 }
 run_title
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \
   || fail "D --title: the cached agent:codex label routes to Codex" "$(cat "$WORK/newwin") $(cat "$WORK/spawn.err")"
 grep -q 'issue view' "$WORK/gh.log" && fail "D --title must make no gh issue view (#216)" "$(cat "$WORK/gh.log")"
+# Controlled stale cache: no explicit provider follows the old hint; an explicit
+# provider wins in both the title fast path and detached re-entry (#4392).
+CACHED_AGENT=claude run_title --agent codex
+ grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || fail "D stale Claude label overrides explicit Codex"
+CACHED_AGENT=claude RUNSHELL_RUN=1 run_title --agent codex --async
+ grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" || fail "D async lost explicit Codex" "$(cat "$WORK/spawn.err")"
+run_spawn --agent codex --agent claude; rc=$?
+[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || fail "D conflicting explicit providers opened work"
+run_spawn --agent unknown; rc=$?
+[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] || fail "D unknown provider opened work"
+printf 'fixture: stale Claude cache + explicit Codex: title/async Codex; invalid/conflict: no launch\n'
 run_shell_spawn --agent codex; rc=$?
 [ "$rc" = 0 ] || fail "D #3097: a Codex spawn from run-shell on a separated login exited $rc" "$(cat "$WORK/spawn.err")"
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$WORK/newwin" \

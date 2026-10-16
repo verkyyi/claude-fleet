@@ -20,7 +20,7 @@
 #   HELD    the hub says another machine holds it → exit 3, no spawn.
 #   NOELIG  auto, no machine eligible → opened here, one note.
 #   NAMED   --node mac-a refused by the hub → exit 2, no spawn, lease given back.
-#   DOWN    hub unreachable → opened here.
+#   DOWN    hub unreachable → refused, no local fallback (#4392).
 #   HUBSENT a start the hub sent (fleet-control-read.sh: --origin hub --node
 #           local) → never placed again; its --origin-wid is stamped verbatim,
 #           and its key as @origin (fleet-report-parent.sh needs a key there).
@@ -258,7 +258,7 @@ export CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_HUB_PLACE_CMD="$PLACE"
 # ===== REMOTE: placed on mac-a ⇒ nothing here, lease kept ============================
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "REMOTE exits 0 (rc=$(rc))"
-place_has "--node auto acme/widgets 258 $WID" || fail "REMOTE asks with node auto and this fleet's worker_id"
+place_has "--node auto --agent claude acme/widgets 258 $WID" || fail "REMOTE asks with node auto and this fleet's worker_id"
 err_has '#258 → mac-a (hub operation op_42, accepted)' || fail "REMOTE names the machine and the operation"
 err_has 'mac-b excluded: load 1.00/core > 0.8'      || fail "REMOTE carries the reason"
 tmux_has 'new-window'                            && fail "REMOTE must not open a window here"
@@ -285,9 +285,9 @@ tmux_has 'new-window'                            && fail "HELD must not spawn"
 ok "HELD leased elsewhere → exit 3, no spawn"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tNo machine can take a new session now' PLACE_RC=4 run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "NOELIG auto with no eligible machine opens it here"
-err_has '没有机器能接 #258'                        || fail "NOELIG says so"
-ok "NOELIG auto, no machine eligible → opened here, one note"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "NOELIG auto with no eligible machine opens nothing here"
+err_has 'no local fallback'                        || fail "NOELIG says so"
+ok "NOELIG auto, no machine eligible → refused, no fallback"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tmac-a: at the per-person cap (6/6 sessions)' PLACE_RC=4 run_spawn 258 --node mac-a
 [ "$(rc)" = 2 ]                                  || fail "NAMED a refused named machine exits 2 (rc=$(rc))"
@@ -298,19 +298,19 @@ ok "NAMED --node mac-a refused → exit 2, no spawn, lease back"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=1 \
   PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "DOWN hub unreachable opens it here"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "DOWN hub unreachable opens nothing here"
 err_has 'fleet: hub unreachable (context deadline exceeded (Client.Timeout exceeded while awaiting headers)) — placing #258, opening it here' \
                                                  || fail "DOWN one note, with the cause"
-ok "DOWN hub unreachable → opened here"
+ok "DOWN hub unreachable → refused, no fallback"
 
 # issue #1507: a hub that ANSWERED is never 「unreachable」 — the note carries its error
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=1 \
   PLACE_STDERR='ccquota: hub answered HTTP 403: {"error":"fleet c45a2451 is not registered to this node"}' run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "WHY a refused placement opens it here"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "WHY a refused placement opens nothing here"
 err_has 'fleet: placement refused: HTTP 403 — fleet c45a2451 is not registered to this node — placing #258' \
                                                  || fail "WHY a 403 reads 「placement refused」 with the hub's error"
 err_has 'unreachable'                            && fail "WHY a hub that answered is not 「unreachable」"
-ok "WHY hub answered 403 → 「placement refused: HTTP 403 — <error>」, opened here"
+ok "WHY hub answered 403 → refused with its error, no fallback"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-a" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin hub --origin-wid "$MACHINE/issue-77" --node local
 [ -s "$PLACE_LOG" ]                              && fail "HUBSENT a start the hub sent is never placed again"
@@ -349,7 +349,7 @@ if command -v zsh >/dev/null 2>&1; then          # the exact shape of the EPIC #
   tmux_has 'new-window'                          || fail "PIN zsh's unsplit \$extra opens it here"
 fi
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 "--node mac-a"
-place_has "--node mac-a acme/widgets 258"           || fail "PIN a fused --node <other machine> is asked for by name"
+place_has "--node mac-a --agent claude acme/widgets 258"           || fail "PIN a fused --node <other machine> is asked for by name"
 ok "PIN --node local in any order and fused (\"--node local\", zsh's unsplit \$var) → no hub call; fused mac-a → by name"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" INFLIGHT=1 FLEET_GLOBAL_MAX_SESSIONS=1 run_spawn 258
@@ -371,10 +371,10 @@ err_has 'mac-a: full (8/8 sessions'                 || fail "ALLFULL names each 
 err_has 'raise FLEET_GLOBAL_MAX_SESSIONS'        && fail "ALLFULL is the fleet-wide answer, not this machine's cap line"
 tmux_has 'new-window'                            && fail "ALLFULL must not spawn"
 lease_has release                                || fail "ALLFULL gives the lease back"
-# This machine freed a slot since its last beat: open here after all.
+# Even if a local slot freed, the refused accepted dispatch must not be replaced.
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$ALLFULL" PLACE_RC=4 run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "ALLFULL with a slot here now opens it here (rc=$(rc))"
-ok "ALLFULL every machine full → 都满了 naming each, exit 2; a slot here since → opened here"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'        || fail "ALLFULL a local slot cannot replace refused placement (rc=$(rc))"
+ok "ALLFULL every machine full → 都满了 naming each, exit 2; a slot here since → still refused"
 
 # ===== FLEET_SPAWN_NODE (issue #1475): the login-wide default when nothing names a machine
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258
@@ -649,13 +649,13 @@ printf '%s\n' "\$*" >> "$WORK/ccq.log"; printf 'LOCAL mac-b\tchose mac-b\n'; exi
 CCQFAKE
 chmod +x "$WORK/fakebin/ccquota"
 FLEET_HUB_PLACE_CMD='' CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" run_spawn 258
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "TOKEN-less default place still opens it here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "TOKEN-less default place still opens nothing here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -e "$WORK/ccq.log" ]                           && fail "TOKEN-less: ccquota place must not be run without a token" "$(cat "$WORK/ccq.log")"
 err_has "no node token (CCQUOTA_TOKEN unset and $NODE_ENV missing)" || fail "TOKEN-less stderr names what is missing" "$(cat "$WORK/spawn.err")"
 err_has 'opening #258 here'                      || fail "TOKEN-less stderr says where it opens" "$(cat "$WORK/spawn.err")"
 err_has 'hub unreachable'                        && fail "TOKEN-less is not 「hub unreachable」" "$(cat "$WORK/spawn.err")"
 rm -f "$WORK/fakebin/ccquota"
-ok "TOKEN node.env's token reaches the place command only; none → 「no node token」, opened here"
+ok "TOKEN node.env's token reaches the place command only; none → refused"
 
 # ===== SCRATCH (issue #1541, EPIC #1529 R3): a raw scratch session is placed too ===
 # The same seams (FLEET_HUB_PLACE_CMD / FLEET_HUB_LEASE_CMD, the fake git / gh /
@@ -695,7 +695,7 @@ ok "SCRATCH OFF: hub off → no placement, byte-identical (no flag, auto, local)
 export CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_HUB_PLACE_CMD="$PLACE"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --name '试一下 侧边栏' --origin issue-77
 [ "$(rc)" = 0 ]                                  || fail "SCRATCH-REMOTE exits 0 (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-place_has "--node mac-a --origin-wid $UUID/issue-77 --name 试一下 侧边栏 acme/widgets scratch $UUID" \
+place_has "--node mac-a --origin-wid $UUID/issue-77 --agent claude --name 试一下 侧边栏 acme/widgets scratch $UUID" \
                                                  || fail "SCRATCH-REMOTE asks for mac-a as a scratch of THIS fleet, with its parent and name" "$(cat "$PLACE_LOG")"
 [ -s "$LEASE_LOG" ]                              && fail "SCRATCH-REMOTE a scratch takes no lease" "$(cat "$LEASE_LOG")"
 err_has 'scratch → mac-a (hub operation op_42, accepted)' || fail "SCRATCH-REMOTE names the machine and the operation" "$(cat "$WORK/spawn.err")"
@@ -711,19 +711,19 @@ ok "SCRATCH DONE → exit 0, the window id on stderr"
 
 PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b (score 0.9)' run_raw
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-LOCAL the hub chose this machine → opened here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-place_has "--node auto acme/widgets scratch $UUID" || fail "SCRATCH-LOCAL no --node asks with auto (the FLEET_SPAWN_NODE default)" "$(cat "$PLACE_LOG")"
+place_has "--node auto --agent claude acme/widgets scratch $UUID" || fail "SCRATCH-LOCAL no --node asks with auto (the FLEET_SPAWN_NODE default)" "$(cat "$PLACE_LOG")"
 err_has 'scratch 开在本机 mac-b'                      || fail "SCRATCH-LOCAL says where and why"
 [ -s "$LEASE_LOG" ]                              && fail "SCRATCH-LOCAL still no lease"
 ok "SCRATCH LOCAL → opened here as today; asked with auto when nothing names a machine"
 
 PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tNo machine can take a new session now' PLACE_RC=4 run_raw
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-NOELIG auto with no eligible machine opens it here (rc=$(rc))"
-err_has '没有机器能接这个 scratch'                  || fail "SCRATCH-NOELIG says so"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "SCRATCH-NOELIG auto with no eligible machine opens nothing here (rc=$(rc))"
+err_has 'no local fallback'                  || fail "SCRATCH-NOELIG says so"
 PLACE_ANSWER=$'REFUSED NO_ELIGIBLE_NODE\tmac-a: at the per-person cap (6/6 sessions)' PLACE_RC=4 run_raw --node mac-a
 [ "$(rc)" = 2 ]                                  || fail "SCRATCH-NAMED a refused named machine exits 2 (rc=$(rc))"
 tmux_has 'new-window'                            && fail "SCRATCH-NAMED must not open it here instead"
 err_has 'scratch 不能开在 mac-a: mac-a: at the per-person cap' || fail "SCRATCH-NAMED carries the hub's reason" "$(cat "$WORK/spawn.err")"
-ok "SCRATCH NOELIG auto → opened here with a note; NAMED refused → exit 2, nothing opened"
+ok "SCRATCH NOELIG auto → refused; NAMED refused → exit 2, nothing opened"
 
 PLACE_ANSWER=$'DECLINED mac-a op_44 2\tdash-raw-session: at capacity: 6/6 sessions' PLACE_RC=5 run_raw --node mac-a
 [ "$(rc)" = 2 ] && err_has '被 mac-a 拒绝 (exit 2): dash-raw-session: at capacity' || fail "SCRATCH-DECLINED mac-a full → exit 2 with its line (rc=$(rc))" "$(cat "$WORK/spawn.err")"
@@ -740,11 +740,11 @@ tmux_has 'new-window'                            && fail "SCRATCH-ALL_DECLINED n
 ok "SCRATCH DECLINED (2 full · 1 else), ALL_DECLINED and UNKNOWN (exit 1) come back as an issue spawn's do"
 
 PLACE_RC=1 PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": context deadline exceeded' run_raw
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SCRATCH-DOWN hub unreachable opens it here (rc=$(rc))"
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window'         || fail "SCRATCH-DOWN hub unreachable opens nothing here (rc=$(rc))"
 err_has 'fleet: hub unreachable (context deadline exceeded) — placing a scratch session, opening it here' || fail "SCRATCH-DOWN one note, with the cause" "$(cat "$WORK/spawn.err")"
 PLACE_RC=1 run_raw --node mac-a
 [ "$(rc)" = 1 ] && err_has 'scratch 不能开在 mac-a'    || fail "SCRATCH-DOWN a named machine with the hub down is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-ok "SCRATCH DOWN → auto opens here with one note; a named machine is refused"
+ok "SCRATCH DOWN → neither auto nor a named machine opens locally"
 
 for n in local mac-b; do
   PLACE_ANSWER="$REMOTE_LINE" FLEET_NODE_ALIASES="$(hostname -s | tr '[:upper:]' '[:lower:]')=mac-b" run_raw --node "$n"
@@ -755,7 +755,7 @@ PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_raw
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-SPAWN_NODE=local must not ask the hub"
 tmux_has 'new-window'                            || fail "SCRATCH-SPAWN_NODE=local opens it here"
 PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=mac-a run_raw
-place_has "--node mac-a acme/widgets scratch $UUID" && err_has 'scratch → mac-a' || fail "SCRATCH-SPAWN_NODE=mac-a asks for that machine by name" "$(cat "$PLACE_LOG")"
+place_has "--node mac-a --agent claude acme/widgets scratch $UUID" && err_has 'scratch → mac-a' || fail "SCRATCH-SPAWN_NODE=mac-a asks for that machine by name" "$(cat "$PLACE_LOG")"
 ok "SCRATCH SELF (local / this host's alias) and FLEET_SPAWN_NODE=local never ask; FLEET_SPAWN_NODE=mac-a asks by name"
 
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --prompt 'seed me'
