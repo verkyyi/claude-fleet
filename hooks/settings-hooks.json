@@ -53,6 +53,11 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/bin/fleet-codex-session.py hook" }
+        ]
+      },
+      {
+        "hooks": [
           { "type": "command", "command": "sh ~/.claude/fleet/bin/set-claude-state.sh working" }
         ]
       }

@@ -155,6 +155,7 @@ hasprefix(){ argv1l | grep -- "^$1" >/dev/null; }
 # ============================================================================
 # A. default fleet: unchanged claude launch, no @cc_agent
 # ============================================================================
+if [ "${1:-}" != --resume-defaults ]; then
 : > "$WORK/conf/fleets/f1/conf"
 run '/fleet-claim'
 [ "$(ran)" = claude ] || fail "A default must exec claude" "$(cat "$WORK/err")"
@@ -479,6 +480,37 @@ argv1l | grep '^mcp_servers\.fleet=' >/dev/null && fail "I FLEET_MCP=0 still mou
 run '/fleet-claim'
 [ "$(ran)" = claude ] && hasprefix '--mcp-config=.*/conf/mcp-worker\.json$' || fail "I the Claude launch lacks the same server" "$(argv1l)"
 ok "I Codex: -c mcp_servers.fleet (from conf/mcp-worker.json, TMUX env forwarded); Claude: --mcp-config of that file; FLEET_MCP=0 off"
+fi
+
+# J. A sparse home must not turn fleet permission defaults into explicit
+# resume overrides. Exercise the real composer, absent from the earlier cases.
+for s in fleet-agent-team.py fleet-hooks-merge.py; do ln -s "$BIN/$s" "$IBIN/$s"; done
+ln -s "$ROOT/conf/agent-defaults" "$WORK/install/conf/agent-defaults"
+printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
+run --agent codex 'fresh fixture'
+hasarg 'approval_policy="never"' && hasarg 'sandbox_mode="danger-full-access"' \
+  || fail 'J fresh launch lost fleet permission defaults' "$(cat "$WORK/err")"
+for shape in '--resume source-id' 'resume source-id' 'fork source-id'; do
+  # shellcheck disable=SC2086
+  run --agent codex $shape
+  hasprefix 'approval_policy=' && fail 'J composer injected approval override into resume' "$(argv1l)"
+  hasprefix 'sandbox_mode=' && fail 'J composer injected sandbox override into resume' "$(argv1l)"
+  hasarg 'model_reasoning_effort="high"' && hasprefix 'hooks.SessionStart=' && hasprefix 'hooks.Stop=' \
+    || fail 'J resume lost non-permission defaults or hooks' "$(argv1l)"
+done
+# Explicit caller choices still reach native validation; never silently strip them.
+run --agent codex --resume source-id -c 'approval_policy="on-request"' 'nudge'
+hasarg 'approval_policy="on-request"' || fail 'J explicit caller permission was discarded'
+# Even when its value equals a default, a team policy is explicitly selected.
+printf '%s\n' '{"version":1,"bundle":{"codex_config":{"approval_policy":"never"}}}' > "$FLEET_CONF_DIR/team-bundle.json"
+run --agent codex --resume source-id
+hasarg 'approval_policy="never"' || fail 'J explicit team permission was discarded'
+rm -f "$FLEET_CONF_DIR/team-bundle.json"
+# A locked default is policy, not a convenience fallback, and still refuses at native.
+printf 'codex.approval_policy\n' > "$WORK/install/conf/agent-locked.list"
+run --agent codex --resume source-id
+hasarg 'approval_policy="never"' || fail 'J locked permission was discarded'
+ok 'J resume preserves saved permissions; fresh defaults, explicit/locked policy and hooks retained'
 
 # ============================================================================
 # J. the native usage pilot (#4557): the runtime reads FLEET_CODEX_NATIVE_USAGE from

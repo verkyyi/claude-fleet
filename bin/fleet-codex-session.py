@@ -20,7 +20,7 @@ import uuid
 
 
 def tmux(args, socket=""):
-    prefix = ["tmux"] + (["-L", socket] if socket else [])
+    prefix = ["tmux"] + (["-S" if os.path.isabs(socket) else "-L", socket] if socket else [])
     return subprocess.run(prefix + args, text=True, capture_output=True,
                           timeout=3, check=True).stdout.strip()
 
@@ -181,12 +181,59 @@ def bus_fields(stats, home):
     return out
 
 
+def start_identity(payload):
+    data = {"session_id": payload["session_id"], "owner": os.environ.get('FLEET_CODEX_LAUNCHER_PID', ''),
+            "home": str(Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().resolve()),
+            "transcript": payload.get("transcript_path", ""),
+            "cwd": payload.get("cwd", ""), "model": payload.get("model", ""),
+            "remote": os.environ.get("FLEET_CODEX_REMOTE", "")}
+    if os.environ.get("FLEET_CODEX_VERSION_WARNING"):
+        data["version_warning"] = os.environ["FLEET_CODEX_VERSION_WARNING"]
+    if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
+        subscription = json.loads(os.environ['FLEET_CODEX_SUBSCRIPTION'])
+        data['subscription'] = {key: subscription[key] for key in ('account', 'profile', 'home')}
+    return data
+
+
 def hook():
     payload = None
     if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
         from fleet_repo_authority import observe_native
-        payload = json.load(sys.stdin)
-        observe_native(payload)
+        from fleet_ticket import Fail
+        try:
+            payload = json.load(sys.stdin)
+            if not isinstance(payload, dict):
+                raise ValueError('unknown hook payload')
+            event = payload.get('hook_event_name')
+            if event == 'UserPromptSubmit':
+                # This is also wired in the shared table; Claude has no Codex
+                # launcher and retains its existing hooks/authority behavior.
+                if os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
+                    from fleet_native_registration import verify_registered
+                    verify_registered(payload)
+                return
+            if event == 'SessionStart' and os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
+                data = start_identity(payload)
+                observe_native(payload, data)
+                # All three identity fields have already committed atomically.
+                # Optional telemetry cannot undo or repeat authority admission.
+                try:
+                    feed(os.environ['TMUX_PANE'], data['owner'], telemetry(data), data['home'])
+                except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+                    pass
+                return
+            observe_native(payload)
+        except (Fail, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            # Authority is not telemetry. 0.160.1 honors this control output
+            # only on successful hook exit; a nonzero exit merely warns. This
+            # handles returned errors, NOT native timeout/kill. Later inputs
+            # have their own read-only UserPromptSubmit gate above.
+            reason = 'Fleet authority registration unconfirmed; preserve execution for reconciliation.'
+            if isinstance(payload, dict) and payload.get('hook_event_name') == 'UserPromptSubmit':
+                print(json.dumps({'decision': 'block', 'reason': reason}))
+            else:
+                print(json.dumps({'continue': False, 'stopReason': reason}))
+            return
     if os.environ.get("FLEET_LAUNCH_CONTEXT"):
         from fleet_launch import hook as launch_hook
         if payload is None:
