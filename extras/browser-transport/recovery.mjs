@@ -12,7 +12,7 @@ const eq = cookie.indexOf('=')
 const auth = { name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: origin }
 await context.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
-await context.addInitScript(() => {
+const observe = () => {
   window.__ready = []; window.__pairs = []; window.__attempts = 0
   const frame = event => {
     if (typeof event.data !== 'string') return
@@ -26,7 +26,9 @@ await context.addInitScript(() => {
   window.WebSocket = class extends WS { constructor(...a) { super(...a); if (String(a[0]).includes('/v1/attachment/connect')) window.__attempts++; this.addEventListener('message', frame) } }
   const create = RTCPeerConnection.prototype.createDataChannel
   RTCPeerConnection.prototype.createDataChannel = function(...a) { const dc = create.apply(this, a); dc.addEventListener('message', frame); return dc }
-})
+}
+await context.addInitScript(observe)
+const others = []
 const evidence = []
 const state = async () => (await context.request.get(`${fixture}/state`)).json()
 const ready = async page => {
@@ -73,7 +75,13 @@ try {
       await page.getByRole('button', { name: 'Open shell', exact: true }).click()
       await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.worker_window}`)) })
     }
-    const second = await context.newPage(); await second.goto(url)
+    // Independent cookie/storage profile: another browser signed in as the same person.
+    const other = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+    others.push({ context: other, target })
+    await other.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
+    await other.addInitScript(observe)
+    await other.tracing.start({ screenshots: true, snapshots: true, sources: true })
+    const second = await other.newPage(); await second.goto(url)
     await second.getByRole('button', { name: 'Use here', exact: true }).waitFor()
     assert(await second.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
     await second.getByRole('button', { name: 'Use here', exact: true }).click()
@@ -86,7 +94,8 @@ try {
     assert(pairs.some(p => p.mode === mode))
     if (mode === 'direct') assert(pairs.some(p => p.pair && p.pair !== 'hub'))
     await second.screenshot({ path: `${dir}/${target}.png` })
-    evidence.push({ target, first, resumed, taken, commandCount: 1, homePID: snapshot.home_pid, workerPID: snapshot.worker_pid, pairs })
+    assert.equal((await state()).commands.split('\n').filter(v => v === tag).length, 1, 'reopen or takeover replayed input')
+    evidence.push({ independentBrowserProfiles: true, target, first, resumed, taken, commandCount: 1, homePID: snapshot.home_pid, workerPID: snapshot.worker_pid, pairs })
     if (target === 'personal') {
       const directEntry = await context.newPage()
       await directEntry.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
@@ -134,7 +143,7 @@ try {
   await page.close()
   console.log(JSON.stringify({ browser: browser.version(), mode, evidence, relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'ended; no replay', safari: 'pending', osIME: 'pending' }))
 } catch (error) {
-  for (const [i, page] of context.pages().entries()) {
+  for (const [i, page] of [context, ...others.map(o => o.context)].flatMap(c => c.pages()).entries()) {
     console.error('page', i, page.url(), await page.locator('body').innerText());
     await page.screenshot({ path: `${dir}/failure-${i}.png` });
   }
@@ -142,5 +151,9 @@ try {
   throw error;
 } finally {
   await context.tracing.stop({ path: `${dir}/trace.zip` })
+  for (const other of others) {
+    await other.context.tracing.stop({ path: `${dir}/trace-controller-${other.target}.zip` })
+    await other.context.close()
+  }
   await context.close(); await browser.close()
 }
