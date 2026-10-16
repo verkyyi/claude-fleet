@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Quota episodes, recovery, exact owners, drafts and transfer launch contracts."""
 import importlib.util
-import argparse
 import contextlib
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -510,20 +510,43 @@ class ClaudeLooping(unittest.TestCase):
 
 
 class Drafts(unittest.TestCase):
+    def package(self, root, *extra):
+        # Exercise the current CLI and manifest, with a registered worktree.
+        # A hand-built Namespace or partial manifest can silently drift behind it.
+        root=root.resolve();main=root/'repo';worktree=root/'issue-1'
+        def run(*args):
+            result=subprocess.run(args,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            return result.stdout.strip()
+        run('git','init','-q',str(main))
+        run('git','-C',str(main),'-c','user.name=Fixture','-c','user.email=fixture@example.com',
+            '-c','commit.gpgsign=false','commit','-q','--allow-empty','-m','fixture')
+        run('git','-C',str(main),'worktree','add','-qb','issue-1',str(worktree))
+        transcript=root/'source.jsonl'
+        transcript.write_text(json.dumps(dict(type='user',sessionId='source',message={'content':'original task'}))+'\n')
+        packet=Path(run(sys.executable,transfer.__file__,'package',
+            '--main',str(main),'--worktree',str(worktree),'--output',str(root/'packets'),
+            '--sid','source','--pid',str(os.getpid()),'--transcript',str(transcript),'--registry','',
+            '--session','isolated','--window','@2','--pane','%2','--launcher','/fleet/launcher',
+            '--handle','a1','--issue','1','--origin','scratch-99','--repo','example/repo',*extra))
+        manifest=json.loads((packet/'manifest.json').read_text())
+        self.assertEqual(manifest['workspace'],dict(kind='worktree',path=str(worktree),
+            branch='issue-1',head=run('git','-C',str(worktree),'rev-parse','HEAD'),repo='example/repo'))
+        self.assertEqual(manifest['fleet'],dict(session='isolated',window_id='@2',pane_id='%2',
+            handle='a1',issue='1',origin='scratch-99'))
+        self.assertEqual(manifest['source']['session_id'],'source')
+        self.assertEqual(manifest['source']['transcript_path'],str(transcript))
+        self.assertEqual((packet/'source.jsonl').read_bytes(),transcript.read_bytes())
+        return packet,manifest
+
     def test_waiting_loop_and_unsent_draft_survive_another_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:
-            p=Path(tmp);repo=p/'repo';repo.mkdir();prior=p/'prior';(prior/'loop').mkdir(parents=True)
+            p=Path(tmp);prior=p/'prior';(prior/'loop').mkdir(parents=True)
             manifest=prior/'manifest.json';draft=prior/'draft.txt';draft.write_text('1、做。2、')
             manifest.write_text(json.dumps({'draft':{'state':'unsent','path':str(draft)}}))
             (prior/'loop/state.json').write_text(json.dumps(dict(id='stable-id',status='waiting-quota',
                 thread_id='source',deliveries=7,generation=2,schedule=dict(prompt='继续检查',interval_seconds=300,next_run_at=1))))
-            transcript=p/'source.jsonl';transcript.write_text(json.dumps(dict(type='user',sessionId='source',message={'content':'original task'}))+'\n')
-            a=argparse.Namespace(**{k:'' for k in ('handoff','loop','target_file','quota_request','draft_file','registry','codex_home','target_home','handle','issue','origin','repo')},
-                worktree=str(repo),main=str(repo),output=str(p/'packets'),previous=str(manifest),sid='source',pid=42,
-                transcript=str(transcript),session='isolated',window='@2',pane='%2',launcher='/fleet/launch',source_agent='claude',to='codex',native_resume=False)
-            out=io.StringIO()
-            with patch.object(transfer,'run',return_value=''),contextlib.redirect_stdout(out):transfer.package(a)
-            packet=Path(out.getvalue().strip());m=json.loads((packet/'manifest.json').read_text())
+            packet,m=self.package(p,'--previous',str(manifest))
             loop=json.loads(Path(m['loop_spec_path']).read_text())
             self.assertEqual((loop['id'],loop['generation'],loop['deliveries']),('stable-id',3,7))
             self.assertEqual(loop['next_run_at'],1)
@@ -546,18 +569,19 @@ class Drafts(unittest.TestCase):
 
     def test_pinned_launcher_keeps_target_home_and_draft_out_of_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
-            p=Path(tmp)
-            data=dict(target={'agent':'codex','codex_home':'/specific home'},source={'codex_home':'/old home'},workspace={'path':tmp})
-            (p/'manifest.json').write_text(json.dumps(data))
+            root=Path(tmp);draft=root/'draft.txt';draft.write_text('1、做。2、')
+            p,data=self.package(root,'--target-home','/specific home','--codex-home','/old home',
+                '--draft-file',str(draft))
             transfer.launcher(p,'/fleet/launcher')
             script=(p/'launch.sh').read_text()
             self.assertIn("--codex-home '/specific home'",script)
             self.assertNotIn('/old home',script)
+            self.assertNotIn(draft.read_text(),script+(p/'pickup.md').read_text())
+            self.assertEqual(Path(data['draft']['path']).read_text(),draft.read_text())
             data['target']={'agent':'claude','label':'work'};data['native_resume']=True
-            data['source'].update(agent='claude',session_id='exact-uuid')
             (p/'manifest.json').write_text(json.dumps(data));transfer.launcher(p,'/fleet/launcher')
             script=(p/'launch.sh').read_text()
-            self.assertIn('--agent claude --resume exact-uuid',script)
+            self.assertIn('--agent claude --resume source',script)
             self.assertIn('FLEET_ACCOUNT_LABEL=work',script)
 
 

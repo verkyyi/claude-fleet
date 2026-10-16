@@ -144,12 +144,6 @@ STALL="${FLEET_AWAIT_STALL_SECS:-1200}"; case "$STALL" in ''|*[!0-9]*) STALL=120
 CPU_PCT="${FLEET_AWAIT_CPU_PCT:-10}";   case "$CPU_PCT" in ''|*[!0-9]*) CPU_PCT=10 ;; esac
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
-sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
-[ -n "$sess" ] || die "not inside a fleet — run it from a fleet pane, or pass -L <socket>"
-[ -n "$KEY" ] || KEY=$(fleet_origin_key)
-[ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
-KEY=$(fleet_origin_canon "$KEY" '' "$sess")
-
 # A hub task record (issue #3330) → its issue, or a refusal naming its session.
 TASK=''
 case "$NUM" in T*)
@@ -159,6 +153,13 @@ case "$NUM" in T*)
   tget() { printf '%s' "$trec" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
 except ValueError: pass' "$1" 2>/dev/null; }
+  if [ "$trc" -ne 0 ] && { [ "$trc" -ne 3 ] || [ -n "$(fleet_pane_fmt '#{@launch}')" ]; }; then
+    printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TASK"
+    exit 3
+  fi
+  if [ "$(tget authority_version)" = 1 ]; then
+    exec python3 "$BIN/fleet_task_control.py" await --task "$TASK" --timeout "$((TIMEOUT - SECONDS > 0 ? TIMEOUT - SECONDS : 1))" --interval "$INTERVAL"
+  fi
   tiss=''; tkey=''
   if [ "$trc" -eq 0 ]; then tiss=$(tget issue); tkey=$(tget session_key); fi
   case "$tiss" in
@@ -175,6 +176,13 @@ except ValueError: pass' "$1" 2>/dev/null; }
       exit 5 ;;
   esac ;;
 esac
+
+sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
+[ -n "$sess" ] || die "not inside a fleet — run it from a fleet pane, or pass -L <socket>"
+[ -n "$KEY" ] || KEY=$(fleet_origin_key)
+[ -n "$KEY" ] || die "no parent key — run it from a scratch or worker pane (the hub has none), or pass --parent issue-N|scratch-N"
+KEY=$(fleet_origin_canon "$KEY" '' "$sess")
+
 
 # A worker_id target (issue #1420) → this fleet's issue number, or a refusal.
 case "$NUM" in wid:*)

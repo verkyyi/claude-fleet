@@ -10,6 +10,9 @@
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
 #                     → `T<n>` on stdout. The same token twice is the same record.
 #   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
+#   fleet-task-record.sh children T<n>     → accepted parent generation + children
+#   fleet-task-record.sh report T<n>       ← fenced report JSON on stdin
+#   fleet-task-record.sh mutate T<n>       ← fenced lifecycle command JSON on stdin
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
@@ -176,12 +179,19 @@ if [ "$cmd" = dispatch ]; then
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   if applicable; then
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" <<'JSON'
+    parent_wid=''; parent_task=''
+    task_win=$(fleet_pane_fmt '#{window_id}')
+    if [ -n "$task_win" ]; then
+      task_sess=$(fleet_current_session)
+      parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
+      parent_task=$(fleet_pane_fmt '#{@task}')
+    fi
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" "$parent_wid" "$parent_task" <<'JSON'
 import json,sys
-d,title,body,repo,reap,template,rule,draft,note=sys.argv[1:]
+d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
 d=json.loads(d)
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo, rule=rule,
-    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
+    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
 JSON
     ) || exit 2
@@ -217,6 +227,15 @@ fi
 applicable || exit 3
 
 case "$cmd" in
+  children)
+    is_tref "${1:-}" || usage
+    call GET "/v1/node/tasks/$1/children"
+    exit $? ;;
+  report)
+    is_tref "${1:-}" || usage
+    report=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))') || exit 2
+    call POST "/v1/node/tasks/$1/reports" "$report"
+    exit $? ;;
   mutate)
     is_tref "${1:-}" || usage
     mutation=$(python3 -c 'import json,sys; print(json.dumps({"authority_version":1,"mutation":json.load(sys.stdin)}))') || exit 2

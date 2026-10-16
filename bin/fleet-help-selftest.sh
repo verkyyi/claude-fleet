@@ -16,6 +16,8 @@
 #      index is not empty
 #   C  the skill ships: it is on the hub client's manifest (the agent bundle's
 #      skills/), and docs/dev/CLIENT.md carries the 常见问题 section it answers from
+#   D  current thin-client intents and FAQ coverage survive a retirement: a
+#      shorter index or an unrelated heading sharing a prefix must not hide it
 # Exit 0 = pass.
 set -u
 
@@ -124,5 +126,44 @@ MAN="$ROOT/tokenledger/internal/api/fleetclient/manifest"
 grep -qx 'skills/fleet-help/SKILL.md' "$MAN" || fail "C: skills/fleet-help/SKILL.md is not on the client manifest — run bin/fleet-client-mirror.sh"
 grep -q '^## 常见问题' "$ROOT/docs/dev/CLIENT.md" || fail "C: docs/dev/CLIENT.md lost its 常见问题 section"
 ok "C on the client manifest; docs/dev/CLIENT.md has its 常见问题"
+
+# --- D: current help coverage (issue #4449) --------------------------------------
+# B intentionally accepts heading prefixes. Before #4449, the retired "The keys"
+# and "A new session" still passed by matching the phone keys and CLI headings.
+# Keep their actual intents, and the broken panel/task/shell intents, on the
+# current user's guide; deleting those rows must not make B green either.
+python3 - "$SKILL" <<'PY' || fail "D: current client help coverage"
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+index = text.split("## 2.", 1)[1].split("## 3.", 1)[0]
+rows = [line.split("|", 2)[1:] for line in index.splitlines() if line.startswith("|")]
+usage = "docs/public/zh/member/usage.md"
+client = "docs/dev/CLIENT.md"
+required = [
+    ("⌘P:", usage, "一个键：总面板"),
+    ("⌘P:", usage, "一个会话能做的事"),
+    ("client keys", client, "One key + the panel"),
+    ("a new session", usage, "开一个会话"),
+    ("a new session", client, "A new session in one command"),
+    ("hand a task", usage, "开一个会话"),
+    ("a session's state", usage, "会话的状态"),
+    ("session's shell", usage, "一个会话能做的事"),
+    ("phone's keys", client, "The keys: one, to open the panel"),
+    ("cannot connect", client, "连不上"),
+    ("Chinese shows", client, "中文乱码"),
+    ("list stopped updating", client, "列表停住"),
+    ("leaving, quitting", client, "会话结束了"),
+    ("quota and usage", client, "额度和用量在哪看"),
+]
+for intent, doc, section in required:
+    matches = [body for label, body in rows if intent in label]
+    ref = "`%s` § 「%s」" % (doc, section)
+    if len(matches) != 1 or ref not in matches[0]:
+        sys.exit("missing current help for %s: %s" % (intent, ref))
+# Every reference still goes through B's real file/section checker above.
+print("current client intents and all five FAQ answers retained")
+PY
+ok "D thin-client panel / keys / new session / task / state / shell and FAQ coverage"
 
 echo "fleet-help selftest: $pass passed"

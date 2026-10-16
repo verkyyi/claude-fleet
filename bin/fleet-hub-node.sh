@@ -382,6 +382,12 @@ EOF
   exit 0
 fi
 
+# Task reports are fenced against task and parent generation before any key
+# resolution or ledger delivery. The hub retains retryable delivery failures.
+if [ "$KIND" = child_report ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("payload", {}).get("task_report") else 1)' "$WORK/in"; then
+  exec python3 "$BIN/fleet_task_control.py" receive --file "$WORK/in"
+fi
+
 home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this machine"
 sock=$(fleet_socket "$home")
 pkey=${TO#*/}

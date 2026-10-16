@@ -95,6 +95,8 @@ type FleetTask struct {
 	ActualAgent       string `json:"actual_agent,omitempty"`
 	ParentTask        string `json:"parent_task,omitempty"`
 	ParentSession     string `json:"parent_session,omitempty"`
+	ParentGeneration  int64  `json:"parent_generation,omitempty"`
+	CancelRequest     string `json:"cancel_request,omitempty"`
 	TicketRef         string `json:"ticket_ref,omitempty"`
 	LeaseRef          string `json:"lease_ref,omitempty"`
 	Outcome           string `json:"outcome,omitempty"`
@@ -131,12 +133,12 @@ func (s *Store) ensureFleetTasks() error {
 		return err
 	}
 	for _, col := range []string{"attempt_id", "execution_owner", "execution_endpoint", "requested_agent", "resolved_agent", "actual_agent",
-		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request"} {
+		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request", "cancel_request"} {
 		if err := s.addColumn("fleet_tasks", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
 	}
-	for _, col := range []string{"authority_version", "generation"} {
+	for _, col := range []string{"authority_version", "generation", "parent_generation"} {
 		if err := s.addColumn("fleet_tasks", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
@@ -147,7 +149,7 @@ func (s *Store) ensureFleetTasks() error {
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
 	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at,
 	authority_version, generation, attempt_id, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
-	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request`
+	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request, parent_generation, cancel_request`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
 // the caller's one-time key (the place's idempotency key): writing the same
@@ -289,7 +291,7 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 			&t.Parked, &t.Rule, &created, &updated,
 			&t.AuthorityVersion, &t.Generation, &t.AttemptID, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
 			&t.ActualAgent, &t.ParentTask, &t.ParentSession, &t.TicketRef, &t.LeaseRef, &t.Outcome, &t.Evidence,
-			&t.Observation, &t.RequestPayload, &t.acceptedRequest); err != nil {
+			&t.Observation, &t.RequestPayload, &t.acceptedRequest, &t.ParentGeneration, &t.CancelRequest); err != nil {
 			return nil, err
 		}
 		t.Ref = TaskRef(t.ID)

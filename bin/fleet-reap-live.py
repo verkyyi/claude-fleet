@@ -40,7 +40,7 @@ def waiting(target, socket_name=None):
               's=$(tmux ${L:+-L "$L"} display-message -p -t "$t" "#{?#{session_group},#{session_group},#{session_name}}" 2>/dev/null)\n'
               '[ -n "$L" ] && TMUX=\n'
               'fleet_window_waiting_children "$s" "$t" >/dev/null 2>&1 && { echo children; exit 0; }\n'
-              'fleet_window_bg_busy "$s" "$t" 1 && { echo bg; exit 0; }\n'
+              'fleet_window_bg_busy "$s" "$t" 1 1 && { echo bg; exit 0; }\n'
               'fleet_window_tool_busy "$s" "$t" && echo tool\n'
               'exit 0\n')
     out = subprocess.run(["bash", "-c", script, "reap-live", str(LIB), target, socket_name or ""],

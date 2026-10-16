@@ -190,7 +190,9 @@ class Supervisor(Receipts):
             self.assertEqual(launch.supervise(argv), 0)
             self.assertEqual(started.call_args.args[0], argv[:-1])
             self.assertEqual(started.call_args.kwargs["env"]["FLEET_LAUNCH_NATIVE"], self.receipt["native_session"])
-            delivered.assert_not_called()
+            delivered.assert_called_once()
+            self.assertEqual(delivered.call_args.args[0][2:], ["finalize", "--pane", "%1"])
+            self.assertNotIn("input", delivered.call_args.kwargs)
             published.assert_called_once()
             self.assertEqual(stamped.call_args.args[2]["phase"], "resumed")
 
