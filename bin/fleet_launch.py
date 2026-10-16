@@ -198,6 +198,8 @@ def inspect(context, pane, socket=""):
     receipt = check_receipt(c, json.loads(option(pane, "@launch_receipt", socket)))
     if option(pane, "@fleet_id", socket) != c["worker_id"].split("/")[1] or not same_process(receipt):
         raise ValueError("interrupted: native process identity was lost")
+    if not descendant(receipt["pid"], int(option(pane, "pane_pid", socket))):
+        raise ValueError("interrupted: native process no longer belongs to this pane")
     return dict(receipt, window_id=option(pane, "window_id", socket))
 
 
@@ -343,7 +345,7 @@ def supervise(argv):
     # The spawner records the seed file BEFORE opening the window. Remove it
     # from the launcher's argv; neither native provider sees it before proof.
     seedfile = option(pane, "@launch_seed")
-    seed = Path(seedfile).read_text().rstrip("\n") if seedfile else ""
+    seed = Path(seedfile).read_text().rstrip("\n") if seedfile and not old else ""
     argv, asked, resume = held_argv(argv, seed, bool(seedfile), old)
     if asked != c["provider"]:
         raise ValueError("resume provider differs from accepted launch")

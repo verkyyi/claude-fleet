@@ -48,7 +48,7 @@ class Supervisor(Receipts):
             seed = Path(directory) / "seed"
             seed.write_text("private task input\n")
             opts = {"@launch": json.dumps(self.context), "@launch_seed": str(seed),
-                    "@fleet_id": self.context["worker_id"].split("/")[1], "window_id": "@7"}
+                    "@fleet_id": self.context["worker_id"].split("/")[1], "window_id": "@7", "pane_pid": "11"}
             started, sent = [], []
             child = mock.Mock(pid=12)
             child.poll.return_value = None
@@ -127,6 +127,15 @@ class Supervisor(Receipts):
         with mock.patch.object(launch, "process", return_value=dict(self.receipt, birth="new-birth")):
             self.assertFalse(launch.same_process(self.receipt))
 
+    def test_copied_receipt_cannot_claim_another_panes_process(self):
+        opts = {"@launch": json.dumps(self.context), "@launch_receipt": json.dumps(self.receipt),
+                "@fleet_id": self.context["worker_id"].split("/")[1], "pane_pid": "99"}
+        with mock.patch.object(launch, "option", side_effect=lambda p,k,*a: opts.get(k,"")), \
+             mock.patch.object(launch, "same_process", return_value=True), \
+             mock.patch.object(launch, "descendant", return_value=False):
+            with self.assertRaisesRegex(ValueError, "no longer belongs"):
+                launch.inspect(self.context, "%1")
+
     def test_recovery_keeps_option_values_and_strips_only_input(self):
         sid = self.receipt["native_session"]
         argv = ["launcher", "--agent=codex", "resume", sid, "legacy nudge", "-m", "model-name", "-c", "x=y"]
@@ -153,6 +162,34 @@ class Supervisor(Receipts):
             with self.assertRaisesRegex(ValueError, "fenced"):
                 launch.supervise(["launcher", "--agent", "codex"])
             start.assert_not_called()
+
+    def test_resume_verifies_same_session_without_resending_seed(self):
+        opts = {"@launch": json.dumps(self.context), "@launch_receipt": json.dumps(self.receipt),
+                "@launch_seed": "/already-removed-seed", "@launch_started": "1"}
+        child = mock.Mock(pid=12)
+        child.poll.return_value = None
+        child.wait.return_value = 0
+        observed = dict(self.receipt, pid=43, birth="resumed-process")
+        argv = ["launcher", "--agent", "codex", "resume", self.receipt["native_session"], "automatic nudge"]
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
+             mock.patch.object(launch, "option", side_effect=lambda p,k: opts.get(k,"")), \
+             mock.patch.object(launch, "same_process", return_value=False), \
+             mock.patch.object(launch, "current_task"), \
+             mock.patch.object(launch, "tmux"), \
+             mock.patch.object(launch, "process", return_value=dict(observed, pid=12)), \
+             mock.patch.object(launch, "inspect", return_value=observed), \
+             mock.patch.object(launch, "descendant", return_value=True), \
+             mock.patch.object(launch, "publish") as published, \
+             mock.patch.object(launch, "stamp") as stamped, \
+             mock.patch.object(launch, "stop_created"), \
+             mock.patch.object(launch.subprocess, "Popen", return_value=child) as started, \
+             mock.patch.object(launch.subprocess, "run") as delivered:
+            self.assertEqual(launch.supervise(argv), 0)
+            self.assertEqual(started.call_args.args[0], argv[:-1])
+            self.assertEqual(started.call_args.kwargs["env"]["FLEET_LAUNCH_NATIVE"], self.receipt["native_session"])
+            delivered.assert_not_called()
+            published.assert_called_once()
+            self.assertEqual(stamped.call_args.args[2]["phase"], "resumed")
 
     def test_late_hook_preserves_delivery_and_refuses_replacement(self):
         opts = {"@launch": json.dumps(self.context), "@launch_receipt": json.dumps(dict(self.receipt, phase="delivered"))}
