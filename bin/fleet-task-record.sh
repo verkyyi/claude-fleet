@@ -73,6 +73,7 @@ call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
+  [ -z "${FLEET_TASK_AUTHORITY:-}" ] || [ "$url" = "$FLEET_TASK_AUTHORITY" ] || die 1 "task authority changed; reconciliation required"
   # signed once this login has a key (issue #3710), else the token
   resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
@@ -225,6 +226,21 @@ JSON
 fi
 
 applicable || exit 3
+
+if [ "$cmd" = authority ]; then
+  pair=$(fleet_node_pair) || exit 3
+  printf '%s\n' "${pair%%	*}"
+  exit 0
+fi
+# The original HTTP adapter remains the only credential reader. Recovery stores
+# receipts in control/state.sqlite3 and calls this raw road, never a second API.
+case "$cmd" in
+  get|report|mutate|stopped)
+    if [ "${FLEET_TASK_RECOVERY_RAW:-0}" != 1 ]; then
+      is_tref "${1:-}" || usage
+      exec python3 "$BIN/fleet_task_recovery.py" "$cmd" "$1"
+    fi ;;
+esac
 
 case "$cmd" in
   children)

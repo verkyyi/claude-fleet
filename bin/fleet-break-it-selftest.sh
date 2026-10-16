@@ -4878,6 +4878,14 @@ drill_idle_timeout_starves_merged() {
 # An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
+drill_task_outage_recovery() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-task-recovery-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='断线及重放保留同一任务和进程，超限明确待核对'
+}
+
 drill_task_report_fence() {
   CAP=15; local out t0
   t0=$(now)
