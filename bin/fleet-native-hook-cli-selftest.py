@@ -48,7 +48,9 @@ def main():
     parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--probe-bypass", action="store_true", help="also test the launcher's hook-trust bypass against an untrusted fixture")
     parser.add_argument("--remote-tui", action="store_true", help="exercise an actual remote TUI on an owned PTY instead of embedded exec")
-    parser.add_argument("--managed-proot", help="Linux-only trusted fixture path mapping; not a security sandbox or production configuration")
+    managed_options = parser.add_mutually_exclusive_group()
+    managed_options.add_argument("--managed-proot", help="Linux-only trusted fixture path mapping; not a security sandbox or production configuration")
+    managed_options.add_argument("--managed-system-dir", type=Path, help="empty temporary directory already bind-mounted at /etc/codex in an isolated GitHub-hosted CI namespace")
     arguments = parser.parse_args()
     binary = shutil.which(arguments.codex)
     if not binary:
@@ -57,6 +59,22 @@ def main():
     proot = shutil.which(arguments.managed_proot) if arguments.managed_proot else None
     if arguments.managed_proot and (sys.platform != "linux" or not proot):
         parser.error("managed probe requires Linux and an explicitly supplied PRoot executable")
+    system_directory = None
+    if arguments.managed_system_dir:
+        if (sys.platform != "linux" or os.geteuid() == 0 or os.environ.get("GITHUB_ACTIONS") != "true"
+                or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+            parser.error("system directory mode requires a non-root process in disposable GitHub-hosted Linux CI")
+        try:
+            system_directory = arguments.managed_system_dir.resolve(strict=True)
+            namespace = os.stat("/proc/self/ns/mnt").st_ino
+            parent_namespace = int(os.environ.get("FLEET_NATIVE_PARENT_MOUNT_NS", "0"))
+            if (system_directory.parent != Path("/tmp") or not system_directory.name.startswith("fleet-managed-system-")
+                    or system_directory.stat().st_uid != os.geteuid() or any(system_directory.iterdir())
+                    or not system_directory.samefile("/etc/codex") or not parent_namespace or namespace == parent_namespace):
+                parser.error("managed system fixture must be empty, owned, temporary and bind-mounted in a separate mount namespace")
+        except (OSError, ValueError) as error:
+            parser.error("invalid managed system fixture: " + str(error))
+    managed_probe = bool(proot or system_directory)
     client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
     requests, checks = [], []
 
@@ -105,10 +123,11 @@ def main():
             }
             invocation = [binary]
             managed_marker = root / "managed-result.json"
-            if proot:
-                system = root / "system-codex"
+            if managed_probe:
+                system = system_directory or root / "system-codex"
                 managed = root / "managed"
-                system.mkdir()
+                if not system_directory:
+                    system.mkdir()
                 managed.mkdir()
                 (managed / "hook.py").write_text(HOOK_SCRIPT, encoding="utf-8")
                 (system / "requirements.toml").write_text(
@@ -118,15 +137,19 @@ def main():
                     encoding="utf-8")
                 mapping_marker = "fleet-probe-" + root.name
                 (system / mapping_marker).write_text("fixture-only", encoding="utf-8")
-                check(not Path("/etc/codex", mapping_marker).exists(), "fixture marker absent from host system configuration")
-                environment["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "")
                 environment["RUST_LOG"] = "codex_hooks=debug"
-                mapping = [str(Path(proot).resolve()), "-b", str(system) + ":/etc/codex"]
-                mapped = subprocess.run([*mapping, "/bin/cat", "/etc/codex/" + mapping_marker],
-                                        env=environment, capture_output=True, text=True, timeout=15)
-                check(mapped.returncode == 0 and mapped.stdout == "fixture-only", "system configuration mapping reaches only fixture child")
-                check(not Path("/etc/codex", mapping_marker).exists(), "fixture mapping does not publish host system configuration")
-                invocation = [*mapping, binary]
+                if proot:
+                    check(not Path("/etc/codex", mapping_marker).exists(), "fixture marker absent from host system configuration")
+                    environment["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "")
+                    mapping = [str(Path(proot).resolve()), "-b", str(system) + ":/etc/codex"]
+                    mapped = subprocess.run([*mapping, "/bin/cat", "/etc/codex/" + mapping_marker],
+                                            env=environment, capture_output=True, text=True, timeout=15)
+                    check(mapped.returncode == 0 and mapped.stdout == "fixture-only", "system configuration mapping reaches only fixture child")
+                    check(not Path("/etc/codex", mapping_marker).exists(), "fixture mapping does not publish host system configuration")
+                    invocation = [*mapping, binary]
+                else:
+                    check(Path("/etc/codex", mapping_marker).read_text() == "fixture-only",
+                          "private kernel mount exposes the fixture without PRoot")
             market = root / "market"
             plugin = market / "plugins/native-hook-fixture"
             for directory in (market / ".claude-plugin", plugin / ".claude-plugin", plugin / "hooks"):
@@ -177,7 +200,7 @@ def main():
 
             def fixture_hook(rpc):
                 entries = rpc.call("hooks/list", {"cwds": [str(root)]})["data"]
-                if proot:
+                if managed_probe:
                     managed_hooks = [hook for entry in entries for hook in entry["hooks"] if hook.get("isManaged")]
                     check(len(managed_hooks) == 1 and managed_hooks[0]["source"] == "system"
                           and managed_hooks[0]["trustStatus"] == "managed",
@@ -248,7 +271,7 @@ def main():
                 check(result == 0, "native install: " + stderr[-300:] if result else "native install")
             report = {"scope": "fixture hook trust and execution; deliberately failed local inference, not panel acceptance",
                       "version": version.strip(), "remote_tui": arguments.remote_tui,
-                      "managed_mapping": bool(proot), "phases": []}
+                      "managed_mapping": "proot" if proot else "mount-namespace" if system_directory else False, "phases": []}
             if arguments.probe_bypass:
                 inline = 'hooks.SessionStart=[{hooks=[{type="command",command="printf isolated-core-hook"}]}]'
                 with client("inline-classification", ("-c", inline)) as rpc:
@@ -309,7 +332,7 @@ def main():
                       phase + (" review blocks inference" if review_required else " uses only one local inference request")
                       + (": " + json.dumps(requests[before:]) if len(requests) != before + (0 if review_required else 1) else ""))
                 observed = json.loads(marker.read_text()) if marker.exists() else None
-                if proot:
+                if managed_probe:
                     managed_observed = json.loads(managed_marker.read_text()) if managed_marker.exists() else None
                     if review_required:
                         check(managed_observed is None, phase + " review blocks session before either hook executes")
@@ -335,7 +358,7 @@ def main():
                     check(observed is None, phase + " hook does not execute")
                 report["phases"].append({"phase": phase, "trust": hook["trustStatus"], "executed": observed is not None,
                                          "review_required": review_required})
-                if proot:
+                if managed_probe:
                     report["phases"][-1]["managed_executed"] = managed_observed is not None
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks))
