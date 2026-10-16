@@ -44,7 +44,7 @@ const observedWords = (t: Task) => {
 
 const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({ t, ticket, onFile }) => {
   const state = taskStatus(t);
-  const ref = taskTicket(t);
+  const ref = taskTicket(t, ticket?.backend);
   const pr = taskPR(t);
   const landing = taskLanding(t);
   const mismatch = agentMismatch(t);
@@ -189,7 +189,15 @@ export default function TasksPage() {
     return m;
   }, [ticketList]);
   const repos = useMemo(() => [...new Set(ticketList.map((t) => t.repo))].sort(), [ticketList]);
-  const ticketOf = (t: Task) => { const r = taskTicket(t); return r ? byRef.get(`${r.backend}:${r.repo.toLowerCase()}#${r.n}`) : undefined; };
+  const ticketOf = (t: Task) => {
+    const r = taskTicket(t);
+    if (!r) return undefined;
+    if (t.ticket_ref) return byRef.get(`${r.backend}:${r.repo.toLowerCase()}#${r.n}`);
+    // Legacy placement has no backend. Preserve the registered ticket's home
+    // when the existing ticket list has exactly one matching reference.
+    const matches = ticketList.filter((ticket) => ticket.repo.toLowerCase() === r.repo.toLowerCase() && ticket.number === r.n);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
   const taskList = tasks.data?.tasks || [];
 
   return (

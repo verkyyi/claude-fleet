@@ -35,6 +35,8 @@ for (const pr of ['51', 'javascript:alert(1)', 'https://other.test/team/app/pull
 }
 assert.deepEqual(taskTicket({ ticket_ref: 'hub:forge/repo#42', issue: 'wrong/repo#42' }), { backend: 'hub', repo: 'forge/repo', n: 42 });
 assert.deepEqual(taskTicket({ issue: 'team/app#42' }), { backend: 'gh', repo: 'team/app', n: 42 });
+assert.deepEqual(taskTicket({ issue: 'team/app#42' }, 'hub'), { backend: 'hub', repo: 'team/app', n: 42 });
+assert.deepEqual(taskTicket({ ticket_ref: 'gh:team/app#42' }, 'hub'), { backend: 'gh', repo: 'team/app', n: 42 });
 assert.equal(taskTicket({ ticket_ref: 'unknown:team/app#42', issue: 'wrong/repo#42' }), null);
 
 const initial = { data: null, failed: false };

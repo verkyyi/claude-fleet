@@ -29,8 +29,8 @@ export function agentMismatch(t: Task): boolean {
     || (t.requested_agent && t.resolved_agent && t.requested_agent !== t.resolved_agent));
 }
 
-export function taskTicket(t: Task): { backend: string; repo: string; n: number } | null {
-  const raw = t.ticket_ref || (t.issue ? `gh:${t.issue}` : "");
+export function taskTicket(t: Task, legacyBackend = "gh"): { backend: string; repo: string; n: number } | null {
+  const raw = t.ticket_ref || (t.issue ? `${legacyBackend}:${t.issue}` : "");
   const m = /^(hub|gh):([^\s:#]+)#([1-9][0-9]*)$/.exec(raw);
   return m ? { backend: m[1], repo: m[2], n: Number(m[3]) } : null;
 }
