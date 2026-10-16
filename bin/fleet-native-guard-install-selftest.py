@@ -43,7 +43,8 @@ def native_read(binary, repository):
                 entries = client.call('hooks/list', {'cwds': [temporary]})['data']
                 hooks = [hook for entry in entries for hook in entry['hooks'] if hook.get('isManaged')]
                 assert len(hooks) == 2, 'installed guards must survive user hooks=false'
-                assert all(hook['source'] == 'system' and hook['trustStatus'] == 'managed' for hook in hooks)
+                assert all(hook['source'] == 'system' and hook['trustStatus'] == 'managed'
+                           and hook['enabled'] is True for hook in hooks)
             finally:
                 if client is not None:
                     client.close()
