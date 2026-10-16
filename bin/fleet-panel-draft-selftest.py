@@ -113,21 +113,33 @@ class PanelDraftTests(unittest.TestCase):
         screen.get_wch.assert_not_called()
 
     def test_dispatch_reuses_canonical_focus_with_receipt_and_client(self):
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+
+        def send(path, *, stdout, stderr):
+            self.assertIs(sys.stdout, original_stdout)
+            self.assertIs(sys.stderr, original_stderr)
+            self.assertEqual(json.loads(path.read_text()), {"title": "draft"})
+            stdout.write("opened")
+            stderr.write("window: @42\n")
+            return 0
+
         for focus_status in (0, 2, 3, 4):
             with self.subTest(focus_status=focus_status), tempfile.TemporaryDirectory() as directory, \
                     patch.dict(os.environ, {"FLEET_DISPATCH_GO_CMD": "", "FLEET_DISPATCH_SEND_CMD": ""}), \
                     patch.object(dispatch.compose, "send_path", return_value=Path(directory) / "send.json"), \
-                    patch.object(dispatch.subprocess, "run", return_value=SimpleNamespace(
-                        returncode=0, stdout="opened", stderr="window: @42\n")) as run, \
+                    patch.object(dispatch.compose, "send", side_effect=send) as sender, \
+                    patch.object(dispatch.subprocess, "run") as run, \
                     patch.object(fleet_view, "main", return_value=focus_status) as focus:
                 self.assertTrue(dispatch.send({"title": "draft"}, "test-view", "test-client")[0])
-            self.assertEqual(run.call_count, 1)
+            sender.assert_called_once()
+            run.assert_not_called()
             focus.assert_called_once_with(
                 ["go", "test-view", "@42", "--how", "dispatch", "--client", "test-client"], dispatch.quick)
 
     def test_dispatch_does_not_focus_without_a_successful_window_receipt(self):
         for status, receipt in ((0, ""), (0, "window: worker42\n"), (1, "window: @42\n")):
             with self.subTest(status=status, receipt=receipt), tempfile.TemporaryDirectory() as directory, \
+                    patch.dict(os.environ, {"FLEET_DISPATCH_SEND_CMD": "test-sender"}), \
                     patch.object(dispatch.compose, "send_path", return_value=Path(directory) / "send.json"), \
                     patch.object(dispatch.compose, "keep_failed"), patch.object(dispatch, "failed"), \
                     patch.object(dispatch.subprocess, "run", return_value=SimpleNamespace(
@@ -135,6 +147,54 @@ class PanelDraftTests(unittest.TestCase):
                     patch.object(fleet_view, "main") as focus:
                 self.assertEqual(dispatch.send({"title": "draft"}, "test-view")[0], status == 0)
             focus.assert_not_called()
+
+    def test_dispatch_calls_canonical_placement_without_another_python(self):
+        for status in (0, 5):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "send.json"
+                data = dict(title="draft", draft="literal #42", repo="acme/web", agent="codex")
+
+                def place(argv, **options):
+                    self.assertEqual(argv[:4], ["bash", str(BIN / "fleet-client-place.sh"), "acme/web", "scratch"])
+                    self.assertIn("--draft-file", argv)
+                    self.assertNotIn("--body-file", argv)
+                    self.assertNotIn("--task", argv)
+                    staged = Path(argv[argv.index("--draft-file") + 1])
+                    self.assertEqual(staged.read_text(), data["draft"])
+                    os.write(options["stderr"].fileno(), b"placement diagnostic\n")
+                    Path(options["env"]["FLEET_PLACE_RESULT"]).write_text(json.dumps({
+                        "window_id": "@42", "machine": dispatch.socket.gethostname().split(".")[0]}))
+                    return SimpleNamespace(returncode=status, stdout="LOCAL mini\n" if status == 0 else "")
+
+                with patch.dict(os.environ, {"FLEET_DISPATCH_SEND_CMD": "", "FLEET_DISPATCH_GO_CMD": ""}), \
+                        patch.object(dispatch.compose, "send_path", return_value=path), \
+                        patch.object(dispatch.compose, "state_path", return_value=Path(directory) / "state.json"), \
+                        patch.object(dispatch.compose, "compose_log"), \
+                        patch.object(dispatch.subprocess, "run", side_effect=place) as run, \
+                        patch.object(dispatch, "failed") as failed, patch.object(fleet_view, "main") as focus:
+                    self.assertEqual(dispatch.send(data, "test-view")[0], status == 0)
+                self.assertEqual(run.call_count, 1)
+                if status == 0:
+                    focus.assert_called_once()
+                    failed.assert_not_called()
+                else:
+                    focus.assert_not_called()
+                    failed.assert_called_once()
+                    self.assertEqual(failed.call_args.args[2], "placement diagnostic")
+                self.assertEqual(list(Path(directory).glob("fleet-compose-*")), [])
+
+    def test_inprocess_sender_failure_keeps_draft_and_reports_error(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(os.environ, {"FLEET_DISPATCH_SEND_CMD": ""}), \
+                patch.object(dispatch.compose, "send_path", return_value=Path(directory) / "send.json"), \
+                patch.object(dispatch.compose, "send", side_effect=RuntimeError("placement failed")), \
+                patch.object(dispatch.compose, "keep_failed") as keep, \
+                patch.object(dispatch, "failed") as failed, patch.object(fleet_view, "main") as focus:
+            data = {"title": "draft"}
+            self.assertFalse(dispatch.send(data, "test-view")[0])
+            keep.assert_called_once_with(Path(directory) / "send.json")
+        failed.assert_called_once_with(data, "test-view", "RuntimeError: placement failed")
+        focus.assert_not_called()
 
     def test_explicit_codex_draft_tries_warm_then_cold(self):
         responses = [SimpleNamespace(returncode=3, stdout="", stderr=""),

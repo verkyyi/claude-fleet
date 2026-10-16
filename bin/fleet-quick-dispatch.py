@@ -44,7 +44,7 @@ opens on this machine, so an agent it has not installed is grey with why
 
 There is no second road (EPIC #2230 共同约定 1, issue #2618's rule): a ↵ writes
 the payload fleet-compose.py payload() makes — its compose-send.json, its
-compose-state.json for 「上次用的仓库」 — and runs fleet-compose.py --send →
+compose-state.json for 「上次用的仓库」 — and calls fleet-compose.py's send() →
 fleet-client-place.sh <repo> new (the machine that takes it files the issue
 through fleet-issue-file.sh and opens its worker; with no lease it opens through
 this machine's own adapter), and the result goes on the 看台's client as a
@@ -66,7 +66,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import traceback
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
@@ -215,9 +217,21 @@ def send(data, view="", client=""):
     if data.get("repo"):
         compose.write_atomic(compose.state_path(), json.dumps({"repo": data["repo"]}) + "\n")
     seam = os.environ.get("FLEET_DISPATCH_SEND_CMD")
-    argv = (seam.split() if seam else [sys.executable, str(BIN / "fleet-compose.py"), "--send"]) + [str(path)]
     try:
-        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        if seam:
+            out = subprocess.run(seam.split() + [str(path)], stdin=subprocess.DEVNULL,
+                                 capture_output=True, text=True)
+        else:
+            with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout, \
+                    tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr:
+                try:
+                    code = compose.send(path, stdout=stdout, stderr=stderr)
+                except Exception:
+                    traceback.print_exc(file=stderr)
+                    code = 1
+                stdout.seek(0)
+                stderr.seek(0)
+                out = subprocess.CompletedProcess([], code, stdout.read(), stderr.read())
     except OSError as error:
         failed(data, view, str(error))
         return False, tr("compose_failed_fmt", str(error))

@@ -152,6 +152,12 @@ the existing input/redraw deadline. Idle polling and redraw frequency are
 unchanged. The headless draft sender skips loading unused display translations;
 interactive composition remains localized.
 
+The detached dispatch process calls the already-loaded canonical compose sender
+directly, rather than starting another Python interpreter. Placement still runs
+through `fleet-client-place.sh`; each send uses private output files, without
+redirecting process-global stdout/stderr. Placement refusals, receipts, draft
+preservation and repository/client focus retain the same handling.
+
 The raw launcher obtains the validated dispatch envelope and resolved provider
 from one resolver process. Without a client lease or action key, local placement
 skips loading the unused hub connection reader and uses the existing node adapter.
