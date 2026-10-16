@@ -322,8 +322,8 @@ ok "N dash-raw-session --repo o/b claims B's warm window"
 reset_state; mkfleet; mkconf2 1
 warm '@11' o/a "$WORK/wt-a"; warm '@12' o/b "$WORK/wt-b"; warm '@14' o/gone "$WORK/wt-g"
 bash "$POOL" reap tf >/dev/null 2>&1
-grep -q "kill-window -t @14" "$STATE/log" || fail "O an unhosted repo's entry must be retired" "$(cat "$STATE/log")"
-grep -q "kill-window -t @1[12]" "$STATE/log" && fail "O hosted, usable entries must survive the reap" "$(cat "$STATE/log")"
+grep -q "kill-window -t tf-pool:@14" "$STATE/log" || fail "O an unhosted repo's entry must be retired" "$(cat "$STATE/log")"
+grep -q "kill-window -t tf-pool:@1[12]" "$STATE/log" && fail "O hosted, usable entries must survive the reap" "$(cat "$STATE/log")"
 : > "$STATE/log"; out=$(bash "$POOL" status tf 2>&1)
 printf '%s\n' "$out" | grep -q "^@11 .* repo=o/a want=1$" && printf '%s\n' "$out" | grep -q "^@12 .* repo=o/b want=1$" \
   || fail "O status must list each repo's entries with its repo" "$out"
@@ -392,7 +392,7 @@ setopt_ '@11' agent_cfg NEW; setopt_ '@11' agent_ver v1
 out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
 [ "$rc" = 3 ] || fail "S a 待换新 entry (older fleet version) must not be handed out" "rc=$rc out=$out"
 bash "$POOL" reap tf >/dev/null 2>&1
-grep -q "kill-window -t @11" "$STATE/log" || fail "S the reap must retire the old-config entry" "$(cat "$STATE/log")"
+grep -q "kill-window -t tf-pool:@11" "$STATE/log" || fail "S the reap must retire the old-config entry" "$(cat "$STATE/log")"
 reset_state; mkfleet; mkconf 1
 warm '@12' o/a "$WORK/wt-a"; setopt_ '@12' agent_cfg NEW; setopt_ '@12' agent_ver v2
 out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1)
@@ -452,7 +452,7 @@ ok "T2 cgroup limit: high host load + idle cgroup refills; throttled / near-limi
 reset_state; mkfleet; mkconf 1
 warm '@11' o/a "$WORK/wt-a"; warm '@12' o/a "$WORK/wt-b"
 FLEET_LOAD_PROBE_CMD='echo 3.00' bash "$POOL" ensure tf --repo o/a >/dev/null 2>&1
-[ "$(grep -c "kill-window -t @1[12]" "$STATE/log")" = 1 ] || fail "U one of the two entries must be retired" "$(cat "$STATE/log")"
+[ "$(grep -c "kill-window -t tf-pool:@1[12]" "$STATE/log")" = 1 ] || fail "U one of the two entries must be retired" "$(cat "$STATE/log")"
 ok "U a slot over its size shrinks, even while growth is held"
 
 # V: pool off — nothing warms, the node's claim says exit 3, status says want=0.
@@ -512,7 +512,7 @@ out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1)
 ( cd "$MAIN" && echo three > g && git add g && git commit -qm three ) && git -C "$CL" fetch -q origin 2>/dev/null
 reset_state; mkfleet; mkconf 1; warm '@19' o/a "$WORK/wt-x"
 out=$(bash "$POOL" claim tf --repo o/a --agent claude 2>&1); rc=$?
-[ "$rc" = 3 ] && grep -q "kill-window -t @19" "$STATE/log" || fail "X a worktree that cannot fast-forward is retired, not handed out" "rc=$rc out=$out"
+[ "$rc" = 3 ] && grep -q "kill-window -t tf-pool:@19" "$STATE/log" || fail "X a worktree that cannot fast-forward is retired, not handed out" "rc=$rc out=$out"
 ok "X claim fast-forwards the worktree to origin/<base>; a diverged one is retired"
 
 # Y: a warm entry that never opens gives its admission back (issue #2502). The
