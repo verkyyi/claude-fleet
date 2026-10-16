@@ -26,6 +26,7 @@ trace = '''42 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_
 43 sendto(3, "", 0, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("192.0.2.2")}, 16) = -1 ENETUNREACH
 '''
 assert m.network_counts(trace) == dict(external_http=2, other_external=1, blocked_io_uring=0)
+assert m.network_counts('sendto(3, [{nlmsg_type=RTM_GETROUTE}, {rtm_family=AF_INET}], 36, 0, NULL, 0) = 36') == dict(external_http=0, other_external=0, blocked_io_uring=0)
 assert m.network_counts('sendmmsg(3, [{msg_hdr={msg_name={sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.1")}}}, {msg_hdr={msg_name={sa_family=AF_INET6, sin6_port=htons(443), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr)}}}], 2, 0) = -1') == dict(external_http=2, other_external=0, blocked_io_uring=0)
 assert m.network_counts('io_uring_setup(256, {}) = -1 ENOSYS (Function not implemented) (INJECTED)')["blocked_io_uring"] == 1
 for unsafe in ('io_uring_setup(256, {}) = 4', 'io_uring_enter(4, 0, 0, 0) = 0'):

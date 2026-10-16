@@ -62,7 +62,9 @@ def network_counts(trace):
             counts["blocked_io_uring"] += 1
         if "io_uring_enter(" in line:
             raise ValueError("io_uring submission is outside this observer's supported HTTP paths")
-        if "AF_INET" not in line:
+        # Netlink route-query payloads contain rtm_family=AF_INET; only a
+        # sockaddr's sa_family describes a network syscall destination.
+        if not re.search(r'\bsa_family=AF_INET6?\b', line):
             continue
         destinations = re.findall(r'\{sa_family=AF_INET6?[, ].*?\}', line)
         if len(destinations) != len(re.findall(r'sa_family=AF_INET6?\b', line)) or not destinations:
