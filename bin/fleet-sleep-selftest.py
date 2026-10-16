@@ -81,7 +81,10 @@ class SleepTest(unittest.TestCase):
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
         for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_cron.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py','fleet_iso.py',
-                     'fleet-session-wrap.sh','fleet-session-page.py'):
+                     'fleet-session-wrap.sh','fleet-session-page.py',
+                     # The real wrapper always enters the repo supervisor in tmux
+                     # (#4467); its imports are needed even for this no-repo worker.
+                     'fleet_repo_authority.py','fleet_ticket.py','fleet_launch.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         (cls.bin/'fleet-session-wrap.sh').chmod(0o755)   # a wake relaunches through it (issue #1784)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
@@ -141,6 +144,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         (cls.bin/'fleet-lib.sh').write_text('fleet_rotate_lease_file() { printf "%s" '+str(cls.root/'lease')+'; }\n'
             +'fleet_peer_send() { printf "%s\\n" "$2" >> '+str(cls.root/'messages')+'; }\n'
             # The session-limit read (issue #1058): full iff the test wrote <root>/full.
+            +'fleet_current_session() { printf "%s" '+cls.socket+'; }\n'
+            +'fleet_window_repo() { :; }\n'  # fixture worker has no hosted repo
             +'fleet_load_conf() { :; }\n'
             +'fleet_cap_full() { [ -s '+str(cls.root/'full')+' ] && cat '+str(cls.root/'full')+'; }\n')
         cls.tm('-f','/dev/null','new-session','-d','-s',cls.socket,'-x','100','-y','30','sleep 300')

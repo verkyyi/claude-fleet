@@ -5,6 +5,7 @@ The existing operation journal owns dispatch; tmux carries its launch binding.
 No retry queue, process discovery by label, or task database lives here.
 """
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import json
@@ -58,7 +59,7 @@ def check_receipt(context, receipt):
 
 
 def tmux(*args, socket=""):
-    cmd = ["tmux"] + (["-L", socket] if socket else [])
+    cmd = ["tmux"] + (["-S" if os.path.isabs(socket) else "-L", socket] if socket else [])
     return subprocess.run(cmd + list(args), capture_output=True, text=True, check=True, timeout=5).stdout.strip()
 
 
@@ -336,6 +337,13 @@ def held_argv(argv, seed, has_seed, old):
 def supervise(argv):
     pane = os.environ["TMUX_PANE"]
     c = validate_context(json.loads(option(pane, "@launch")))
+    from fleet_task_recovery import native_guard
+    with contextlib.ExitStack() as guard:
+        guard.enter_context(native_guard(c))
+        return supervise_guarded(argv, pane, c, guard)
+
+
+def supervise_guarded(argv, pane, c, guard):
     old_raw = option(pane, "@launch_receipt")
     old = check_receipt(c, json.loads(old_raw)) if old_raw else None
     if option(pane, "@launch_started") and old is None:
@@ -399,6 +407,7 @@ def supervise(argv):
         stamp(pane, "@launch_receipt", receipt)
         tmux("set-option", "-wu", "-t", pane, "@launch_seed")
         verified = True
+        guard.close()  # future stop reconciliation may inspect this incarnation
         status = child.wait()
         # Retire execution ownership or acknowledge a pending cancellation.
         # Explicit success/failure already committed while the session lived;

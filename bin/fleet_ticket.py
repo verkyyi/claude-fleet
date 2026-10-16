@@ -127,12 +127,19 @@ def creds():
     if _CREDS:
         return _CREDS
     url, tok = os.environ.get('CCQUOTA_HUB_URL', ''), os.environ.get('CCQUOTA_TOKEN', '')
+    if tok and not url:
+        raise Fail(4, '入口不通 — CCQUOTA_TOKEN requires its own CCQUOTA_HUB_URL; '
+                      'refusing to choose an endpoint for an explicit identity')
     if not (url and tok):
-        p = subprocess.run(['bash', '-c', '. "$1/fleet-lib.sh" >/dev/null 2>&1; _fleet_hub_env; '
+        # A URL alone is not an authentication source. Ask the existing reader
+        # for ONE complete pair, without letting it fill an inherited half from
+        # node.env. In particular, never attach its broker token to a public URL.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('CCQUOTA_HUB_URL', 'CCQUOTA_TOKEN')}
+        p = subprocess.run(['bash', '-c', '. "$1/fleet-lib.sh" >/dev/null 2>&1 && _fleet_hub_env || exit 1; '
                             'printf "%s\\t%s" "${CCQUOTA_HUB_URL:-}" "${CCQUOTA_TOKEN:-}"', '_', BIN],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        u, _, t = (p.stdout or '').partition('\t')
-        url, tok = url or u, tok or t
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        url, _, tok = (p.stdout or '').partition('\t') if p.returncode == 0 else ('', '', '')
     if not url or not tok:
         raise Fail(4, '入口不通 — no node token here (node.env / CCQUOTA_TOKEN); '
                       'fix: `fleet-hub-node.sh env --write`')

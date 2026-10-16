@@ -105,6 +105,74 @@ func TestNodeTaskAuthorityBoundary(t *testing.T) {
 	t.Logf("fixture API after: %s", b)
 }
 
+// The Tasks page uses committed work results even with no live inventory, and
+// separately sees a later, fenced landing report without changing that result.
+func TestTaskPageConfirmedOutcomeAndLanding(t *testing.T) {
+	h, _, nodes := peerHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	node := nodes["verk4"]
+	if _, err := h.srv.Store.RecordFleetSnapshot(node.id, "fixture-node", "frank", "fixture-machine",
+		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "org/repo", WorkersJSON: "[]"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	worker := wrFleetM4 + "/" + wrFid
+	code, rec := nodeTaskCall(t, h, node.token, http.MethodPost, NodeTasksPath, map[string]any{
+		"authority_version": 1, "token": "page-landing", "title": "Page landing", "ticket_ref": "gh:org/repo#7",
+		"requested_agent": "codex", "resolved_agent": "codex"})
+	if code != 200 {
+		t.Fatal(code, rec)
+	}
+	ref := rec["id"].(string)
+	path := NodeTasksPath + "/" + ref
+	for _, mutation := range []map[string]any{
+		{"kind": "claim", "idempotency_key": "claim", "generation": 1, "worker_id": worker},
+		{"kind": "transition", "idempotency_key": "run", "generation": 1, "expected_worker": worker, "state": "running", "actual_agent": "codex", "evidence": "fixture verified native process"},
+	} {
+		if code, out := nodeTaskCall(t, h, node.token, http.MethodPost, path, map[string]any{"authority_version": 1, "mutation": mutation}); code != 200 {
+			t.Fatal(code, out)
+		}
+	}
+	read := func() map[string]any {
+		t.Helper()
+		list := getFleet(t, h, FleetTasksPath, 200)
+		if list["observed_at"] == "" {
+			t.Fatal("missing observation time", list)
+		}
+		for _, item := range list["tasks"].([]any) {
+			row := item.(map[string]any)
+			if row["id"] == ref {
+				return row
+			}
+		}
+		t.Fatal("missing task", list)
+		return nil
+	}
+	if row := read(); row["state"] != "running" || row["outcome"] != nil || row["pr_state"] != "unverified" || row["actual_agent"] != "codex" || row["live"] != nil {
+		t.Fatal("inventory absence changed work", row)
+	}
+	report := map[string]any{"event_id": "work", "task": ref, "owner": rec["owner"], "ticket_ref": "gh:org/repo#7",
+		"generation": 1, "worker_id": worker, "outcome": "succeeded", "status": "waiting", "evidence": `{"pr":"51","pr_state":"waiting"}`}
+	if code, out := nodeTaskCall(t, h, node.token, http.MethodPost, path+"/reports", report); code != 200 {
+		t.Fatal(code, out)
+	}
+	before := read()
+	if before["outcome"] != "succeeded" || before["pr_state"] != "waiting" || before["pr"] != "51" {
+		t.Fatal(before)
+	}
+	report["event_id"], report["status"], report["evidence"] = "land", "merged", `{"pr":"51","pr_state":"merged"}`
+	if code, out := nodeTaskCall(t, h, node.token, http.MethodPost, path+"/reports", report); code != 200 {
+		t.Fatal(code, out)
+	}
+	after := read()
+	if after["pr_state"] != "merged" || after["outcome"] != before["outcome"] || after["evidence"] != before["evidence"] {
+		t.Fatal("landing changed result", after)
+	}
+	detail := getFleet(t, h, FleetTasksPath+"/"+ref, 200)
+	if detail["pr_state"] != "merged" || detail["outcome"] != "succeeded" {
+		t.Fatal("detail disagrees with list", detail)
+	}
+}
+
 func TestNodeTaskAuthorityRejectsMalformedContract(t *testing.T) {
 	h, _, nodes := peerHarness(t)
 	h.srv.FleetAdmins = []string{"frank"}

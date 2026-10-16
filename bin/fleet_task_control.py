@@ -19,13 +19,15 @@ import fleet_launch as launch
 BIN = Path(__file__).resolve().parent
 
 
-def call(action, task, payload=None, timeout=15):
+def call(action, task, payload=None, timeout=15, stale=False):
     env = dict(os.environ, FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
+    if stale:
+        env["FLEET_TASK_STALE_READ"] = "1"
     result = subprocess.run(["bash", str(BIN / "fleet-task-record.sh"), action, task],
                             input=json.dumps(payload) if payload is not None else None,
                             text=True, capture_output=True, timeout=timeout, env=env)
     if result.returncode:
-        raise ValueError("task authority unavailable/refused")
+        raise ValueError(result.stderr.strip() or "task authority unavailable/refused")
     return json.loads(result.stdout)
 
 
@@ -46,6 +48,12 @@ def wait_task(task, timeout, interval):
                 raise ValueError("task is not authoritative")
         except (ValueError, OSError, subprocess.SubprocessError):
             print("UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized" % task)
+            try:
+                from fleet_task_recovery import Journal
+                cached = Journal().cached(task)
+                print("stale: true\nobserved_at: %s" % cached["observed_at"])
+            except (ValueError, OSError, subprocess.SubprocessError):
+                pass
             return 3
         state = verdict(record)
         if state != "WAITING" or time.monotonic() >= end:
@@ -89,9 +97,24 @@ def report_input(c, t, outcome, summary, evidence, stopped=False, event=""):
 
 def publish_report(r):
     receipt = call("report", r["task"], r)
+    result = deliver_report(r, receipt)
+    if receipt.get("_recovery_event"):
+        from fleet_task_recovery import Journal
+        Journal().ack_report(r["task"], r, receipt.get("_delivery_file", ""))
+    return result
+
+
+def deliver_report(r, receipt):
+    if receipt.get("_recovery_done"):
+        print("COMMITTED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
+        return 0
+    if receipt.get("_delivery_file"):
+        from fleet_task_recovery import Journal
+        if Journal().delivery_pending(receipt["_recovery_event"]):
+            print("QUEUED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
+            return 3
     if receipt["disposition"] not in ("committed", "progress"):
-        print("%s\ntask: %s\nevent_id: %s" % (receipt["disposition"].upper(), r["task"], r["event_id"]))
-        return 3
+        raise ValueError("report disposition %s; reconciliation required" % receipt["disposition"])
     if not r["parent_session"]:
         print("COMMITTED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
         return 0
@@ -103,22 +126,31 @@ def publish_report(r):
     # Existing outbox, including same-machine parents: one durable address and
     # one event ID across reconnects, never a timestamp allocated on each retry.
     suffix = hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
-    payload = dict(task_report=r, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
+    payload = dict(task_report={k: v for k, v in r.items() if k != "_native"}, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
                    msg="[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" %
                    (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"]))
-    command = '. "$1/fleet-lib.sh"; fleet_hub_put child_report "$2" "$3" "$4" "$(cat)"'
-    sent = subprocess.run(["bash", "-c", command, "task-report", str(BIN), r["worker_id"],
-                           r["parent_session"], suffix], input=json.dumps(payload), text=True,
-                          capture_output=True, timeout=15)
-    if sent.returncode:
-        raise ValueError("result committed; delivery unavailable (retry the same event)")
+    if receipt.get("_recovery_event"):
+        payload.update(task_recovery=receipt["_recovery_event"], expires_at=receipt["_recovery_expires"])
+    if receipt.get("_recovery_event"):
+        from fleet_task_recovery import Journal
+        receipt["_delivery_file"] = Journal().put_report(r, payload)
+    else:
+        command = '. "$1/fleet-lib.sh"; fleet_hub_put child_report "$2" "$3" "$4" "$(cat)"'
+        sent = subprocess.run(["bash", "-c", command, "task-report", str(BIN), r["worker_id"],
+                               r["parent_session"], suffix], input=json.dumps(payload), text=True,
+                              capture_output=True, timeout=15)
+        if sent.returncode:
+            raise ValueError("result committed; delivery unavailable (retry the same event)")
     print("QUEUED\ntask: %s\nevent_id: %s\nparent: %s" % (r["task"], r["event_id"], r["parent_session"]))
     return 3
 
 
 def report(pane, state, summary, pr, dry, socket="", outcome=""):
     c = context(pane, socket)
-    t = call("get", c["task"])["task"]
+    observation = call("get", c["task"], stale=True)
+    t = observation["task"]
+    if observation.get("stale"):
+        print("STALE task observation at %s; receipt requires reconciliation" % observation["observed_at"], file=sys.stderr)
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
         raise ValueError("stale report owner/generation")
     if state != "merged" and not outcome:
@@ -155,11 +187,9 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
 
 def finalize(pane):
     c = context(pane)
-    t = call("get", c["task"])["task"]
+    t = call("get", c["task"], stale=True)["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
         raise ValueError("stale finalization generation")
-    if not t.get("outcome") and not t.get("cancel_request"):
-        return 0  # Exit alone never invents a result.
     proof = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt")))
     # A failed process probe is unknown. Only ESRCH or a positively observed
     # different birth/executable proves the witnessed native is gone.
@@ -172,18 +202,14 @@ def finalize(pane):
         if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
             raise ValueError("native execution is still alive")
     evidence = json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}, sort_keys=True)
-    result = 0
-    if not t.get("outcome"):
-        r = report_input(c, t, "cancelled", "Cancellation acknowledged after native stop",
-                         evidence, stopped=True, event=t["cancel_request"] + ".ack")
-        r["cancel_request"] = t["cancel_request"]
-        result = publish_report(r)
-    # Release execution separately. If completion won the cancellation race,
-    # its immutable outcome survives and the same stop proof retires its lease.
+    # Record the stopped native even if a cancel request/result was accepted
+    # while this node was offline. Replay reads the current fenced task before
+    # acknowledging cancellation; exit alone never invents a work outcome.
     event = "stop:" + hashlib.sha256(evidence.encode()).hexdigest()
-    call("mutate", c["task"], dict(kind="stop_ack", idempotency_key=event,
-         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence))
-    return result
+    call("stopped", c["task"], dict(idempotency_key=event,
+         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence,
+         _native=dict(launch=c, pane=pane, socket=launch.option(pane, "socket_path"))))
+    return 0
 
 
 def cancel(task, event):
@@ -312,6 +338,16 @@ def main():
     p.add_argument("--dry", action="store_true")
     args = p.parse_args()
     try:
+        if args.action not in ("receive",) and not args.dry:
+            # Explicit next command, never a resident loop. Failed replay does
+            # not stop a native process or authorize a replacement.
+            from fleet_task_recovery import Journal
+            try:
+                recovery = Journal().replay(budget=5)
+                if recovery["pending"]:
+                    print("RECONCILIATION_PENDING: %d retained receipts" % recovery["pending"], file=sys.stderr)
+            except (ValueError, OSError, subprocess.SubprocessError):
+                pass  # the requested operation below still fails closed
         if args.action == "children": return children(args.task, args.json)
         if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
         if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket, args.outcome)

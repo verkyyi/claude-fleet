@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| 会话只继承入口 URL，ticket reader 把它与代理凭据拼接（#4490） | authority 启动及同会话回退 401，代理凭据被送到错误入口 | 完整显式凭据对直接使用；只有 URL 时由既有 reader 整对读取；孤立 token、reader 失败及显式认证失败均拒绝，不换身份 | `ticket-credential-pair` |
 | 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |
 | ACK 容器重启后沿用旧 PID 或执行上次未完的运行时切换 | 接管错进程、镜像版本被机器更新器改掉 | 每次容器启动独立代号；镜像负责更新时在恢复更新状态之前退出（#3022） | `node-container-restart` |
 | Linux 托管机器的登录没开租约：`fleet-node-linux.py prepare` 写的登录设置（`logins/<login>.env`、凭据存储里的 `node.env`）缺 `CCQUOTA_FLEET_CREDS=1`（linux-a 实见，#3211） | 池子同步把账号放进了共享代理（「hub 1 · here 1」），可节点程序从不替这个登录租：`accounts/` 里没有 `hub:<label>` 标记，`ready` 的 creds 一直 false，入口每次派活都写 `not ready: creds` 把这台排除在外；新开的登录一样 | `prepare`（每次容器启动都跑）新登录写上这一行；旧存储缺它就补上、令牌和其它行逐字不动，登录设置随之带上，节点程序照 Mac 登录的方式租、写标记（#3211） | `linux-login-no-lease` |
@@ -264,6 +265,8 @@
 | 发布靠人手：`fleet-stable.sh move` 挪完就算完，没人看入口、各台机器、本机是不是跟上了，也没有一条命令把「全绿→挪→跟上→验」串起来 | stable 落后 master 越拖越久（2026-10-08 落后 14 个提交 7 小时），客户端修复和节点修复都到不了机器；挪了之后哪台没跟上、哪台体检把它拒了，没人知道，也没有一键退回 | `fleet release`（`bin/fleet-release.sh`）六步各一行：① 目标提交的检查全绿（含 macOS，红了退出 3 并点名）② `fleet-stable.sh move` ③ 入口 `/version` 的 stable 到位 ④ 各台机器（托管机器读更新器的 `current`）先叫醒再等到位，超时点名 ⑤ 本机 install-sync 跟上、doctor 的 install 行 PASS ⑥ 本机体检拒了就自动把 stable 退回，`--rollback` 手动退；每次一行 `logs/release.log`（#2483） | `release-unverified` |
 | 一轮连开几个会话（批次补位、`fleet-await` 一次拉几个） | 新会话要 10–30 秒才显出负载、才进心跳的会话数；这几秒里入口每次挑都选中同一台：两台读数相同时 4 个全落一台，那台被压满、另一台闲着（2026-10-07 之前，EPIC #2074 的指标「一轮连开 4 个时最多落到同一台」= 4） | 入口自己记住刚派出去的：每个 worker_start / resume / move_in 记在目标机器名下 90 秒，或到它心跳里的会话数涨上来为止（一拍只抵一次，机器直接拒掉的立刻忘掉）；judge 按「这些已经在跑」打分——每个算一个核的负载和 1.5 GiB 内存，平分时先看会话数 + 刚派出的，心跳报的 room 也先扣掉它们；审计行多一列 `recent`、理由里写 `N just placed`；没有刚派出的时逐字节照旧，入口重启最坏回到现状（#2077） | `burst-lands-on-one` |
 | 已固定 provider 的派活携带另一个 T，或入口接单后响应丢失（#4392） | 旧 T 被新建记录替换，或本机补开第二个会话，接受身份与进程分离 | 派活前校验 T 与接受 envelope 一致；失败 / 未知返回不再本机补开；hub 关闭时仍可本机解析 provider | `dispatch-identity-fallback` |
+| 原生进程停下后的回执积压，同代次恢复了新进程才重放旧停止证明（#4396） | 仍在运行的同一任务被误确认取消或释放租约 | 恢复与停止重放共享本机锁；重放再次核对窗口绑定、原生 PID / 出生时间 / executable / session，身份改变或无法确认则保留待核对 | `task-stop-replay-resumed` |
+| 入口断线、确认丢失或节点适配器重启，已接受任务的结果未送达（#4396） | 结果丢失、重复提交，或把过期缓存当成新启动许可 | 现有操作账本保留固定事件，重连及下次命令重放；7 天 / 每登录 1000 条，超限保留旧记录并明确待核对；运行进程不受影响 | `task-outage-recovery` |
 | 远端启动回执来自旧代次或另一 provider（#4393） | 错误进程收到任务，旧会话冒领新任务 | 原生进程及会话验证后才交付首条输入；回执绑定 operation、T、owner、generation 与 worker；失去身份只报 unknown | `launch-receipt-fence` |
 | 本机旧任务过最后一道门后暂停，空清单切换仓库权威（#4395） | 暂停的启动在切换后恢复，两个控制方同时执行 | 最后一道门在现有 operation 账本持久预留，与 freeze 串行；未知启动不因超时或空清单清除 | `repo-cutover-inflight` |
 | 用另一死进程或 transfer 前的原生回执排空旧 owner（#4395） | 同一 worker ID 的替代进程仍活着，租约却释放 | 停止证明须匹配冻结时保存的原生身份及当前执行；未绑定、错身份、旧会话均拒绝 | `repo-cutover-stop-binding` |
@@ -543,3 +546,4 @@
 | 只保留 durable 提醒原表就退出唯一 Claude（#4258、#4280） | 表还在但没有执行者，提醒漏发；直接复制成 Fleet timer 又可能重复投递 | 单一 owner 交接（`fleet_transfer_durable.py`）：Fleet 副本先不可执行；路 1 源的原生 CronDelete 回执 + 新 CronList，路 2 隔离（启动门 + 登录下每个 claude 都已登记且不在 HOME）后由控制器读改写；源退出确认后目标 loop 激活，只投一次；没走通则 B 照旧拒绝 | `transfer-durable-owner` |
 | durable 交接中途被杀，或撞上未纳入互锁的 Claude（#4280） | 任务两边都有或两边都没有，或无关原生任务被整表覆盖丢失 | 先写日志再动表；巡检（`fleet-loop.py recover`）按回执和只读表定案：表里还在就归原生，已撤就归 Fleet 并标 attention；无关记录逐字节保留；未知 / 在 HOME 的 claude 在写表前拒绝并报 pid | `transfer-durable-crash` |
 | Codex 无仓库首次启动缺 HOME 信任（#3029、#4258），或 proxy config 符号链接被替换 | 新会话停在信任提示，或信任只留在临时 home；合法单引号 untrusted 被漏读 | 公共启动器与 transfer 共用 TOML 读取和受信节点 HOME 白名单；fill-only 写实际目标，保留符号链接、权限和并发改动；显式不信任与 opt-out 不变 | `codex-home-trust` |
+| 远端缓存、旧 generation/turn 的 idle 被重读成新证据，或把 Stop/MERGED 当作执行空闲（#4434） | 迟到的观察越过正在执行的新 turn，误投递或回收 | 唯一只读 `fleet_runtime.py` 保留原始时间、按 C1/C3 与 turn 全身份比较；过期/断连/身份改变投影 unknown，观察不授予投递或回收许可 | `runtime-stale-idle` |
