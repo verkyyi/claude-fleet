@@ -480,6 +480,9 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   # next tick instead. A builtin redirection: no fork on the per-tool hot path.
   _sockp=${TMUX%%,*}
   [ -n "$_sockp" ] && : > "$_sockp.dirty" 2>/dev/null
+  # Broadcast to all sleeping renderers (#4356/#4357), after the complete state
+  # and dirty marker. tmux latches a signal racing a waiter's registration.
+  tmux wait-for -S fleet-state-changed 2>/dev/null
   # …and the cross-machine hub (issue #1481): touch the login's nudge file so the
   # ccquota agent reports this window NOW instead of on its next 5 s beat. Only
   # when the state actually changed. Inline copy of fleet_hub_nudge() in

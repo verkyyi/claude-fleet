@@ -252,8 +252,11 @@ nrdiag() {
   printf '(now=%s  OLD=%s  MID=%s)\n' "$(date +%s)" "$OLD" "$MID" >&2
 }
 
+# Exercise reconciliation at the observed cadence. The no-client 65s event wait
+# is covered by spinner-wait-selftest.sh; this fixture has no terminal client.
 env FLEET_NEEDS_RECONCILE_SECS=1 FLEET_NEEDS_STRIKE_TTL=120 FLEET_NEEDS_PLAIN_SECS=300 \
-  FLEET_NEEDS_TRACE=1 FLEET_STUCK_WORKING_SECS=0 SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
+  FLEET_NEEDS_TRACE=1 FLEET_STUCK_WORKING_SECS=0 FLEET_SPINNER_WATCH=0 \
+  SPIN_INTERVAL=0.05 sh "$SPINNER" >/dev/null 2>&1 &
 SPIN_PID=$!
 
 wo() { tf show-window-options -t "$1" 2>/dev/null | awk -v k="$2" '$1==k{$1="";sub(/^ /,"");gsub(/^"|"$/,"");print}'; }

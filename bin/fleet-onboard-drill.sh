@@ -57,7 +57,8 @@
 #               panel's key as the client sends it, read off the client's OWN
 #               switch table (dash-keymap.sh --panel switch: the default action,
 #               quickopen — ⌘P — and its code, ESC [ 927 ~), the name typed into
-#               its search line, ⚡ lit (↓ when the words hit a session), Enter:
+#               its search line, ↑ to ⚡, Enter to edit, then explicitly choose
+#               「开窗预填（不发送）」 after the repo/agent cells load:
 #               the session must turn up in the client's `fleet ls --json` (its
 #               name or title). Its panel never coming up, or 「新会话没开起来」,
 #               is a FAIL. THE OLD CLIENT: the writing area (prefix c — ⌘N, the key the client's bar
@@ -712,7 +713,9 @@ panel_code() {
 }
 hexof() { printf '%s' "$1" | od -An -tx1; }
 PANEL_UP='⚡ (新会话|新任务|New session|New task)'
-PANEL_NOMATCH='没有会话叫这句话|no session goes by these words'
+PANEL_COMPOSE='┌─ (新任务|New task) '
+PANEL_DRAFT='开窗预填|Open with draft'
+PANEL_LOADING='正在读取仓库和 Agent|Loading repositories and agents'
 # the panel's ⚡ row that did not open (fleet-ui-lang.sh view_new_failed)
 PANEL_NO='新会话没开起来|the new session did not open'
 # pw_row <name>: the new session's row — the old client's list row on screen;
@@ -743,9 +746,16 @@ pw_row() {
     row_named "$1"
   fi
 }
-# thin_open <words>: the thin client's new session — the panel (its own key), the
-# words, ⚡ lit (words that hit no session light it; one that hit is lit instead,
-# and ↓ is ⚡), ↵. 1 = the panel did not come up within STEP_SECS.
+# The waits share thin_open's original deadline, including the composer/grid.
+thin_panel_wait() {
+  until screen | grep -Eq -- "$1"; do
+    [ "$SECONDS" -lt "$2" ] || { PW_P=$(screen); return 1; }
+    sleep 0.2
+  done
+}
+# thin_open <words> <shot>: search is flat; ↑ from its first hit wraps to ⚡,
+# and from a no-hit ⚡ stays there. Enter only opens the editor (#4433).
+# Normalize the saved focus/draft through its controls, then explicitly open.
 thin_open() {
   local code deadline
   code=$(panel_code) || code=''
@@ -753,15 +763,31 @@ thin_open() {
   # shellcheck disable=SC2046  # one hex byte a word
   keys -H 1b 5b $(hexof "$code") 7e
   deadline=$((SECONDS + STEP_SECS))
-  until screen | grep -Eq -- "$PANEL_UP"; do
-    [ "$SECONDS" -lt "$deadline" ] || { PW_P=$(screen); return 1; }
-    sleep 1
-  done
+  thin_panel_wait "$PANEL_UP" "$deadline" || return 1
   shot "$2-panel"
   keys -l "$1"; sleep 1
-  screen | grep -Eq -- "$PANEL_NOMATCH" || { keys Down; sleep 1; }
+  keys Up
   shot "$2-panel-words"
   keys Enter
+  thin_panel_wait "$PANEL_COMPOSE" "$deadline" || return 1
+  # Controls 1..6 clamp upward to editor 0; editor Up only moves its caret.
+  # Thus this also works after a cancelled draft saved focus on any button.
+  keys Up Up Up Up Up Up Tab Tab Tab Tab Tab Enter
+  thin_panel_wait '写任务，Enter 换行|Write a task; Enter adds a line' "$deadline" || return 1
+  keys -l "$1"
+  keys Tab
+  thin_panel_wait '(仓库|Repo) ‹[^…][^›]*›' "$deadline" || return 1
+  keys Tab Tab
+  thin_panel_wait "$PANEL_DRAFT" "$deadline" || return 1
+  shot "$2-panel-draft"
+  keys Enter
+  # A saved repo can be visible before the async grid is ready. Retry ONLY its
+  # explicit loading refusal; progress, errors or a closed panel never resend.
+  sleep 1
+  while screen | grep -Eq -- "$PANEL_LOADING"; do
+    [ "$SECONDS" -lt "$deadline" ] || { PW_P=$(screen); return 1; }
+    keys Enter; sleep 1
+  done
 }
 # place_wait <text> <row name> <shot prefix>: the writing area (prefix c), the
 # text typed, Enter; the questions on the way each answered with Enter. On the
@@ -846,7 +872,7 @@ eta_row() {
 }
 # new_keys <words>: what the person pressed for a new session, as steps.md says it
 new_keys() {
-  if [ "$THINC" = 1 ]; then printf '⌘P，敲「%s」，⚡ 回车' "$1"; else printf 'prefix c 新任务，敲名字 %s，回车' "$1"; fi
+  if [ "$THINC" = 1 ]; then printf '⌘P，敲「%s」，↑ 回车编辑，清空后预填，选「开窗预填（不发送）」回车' "$1"; else printf 'prefix c 新任务，敲名字 %s，回车' "$1"; fi
 }
 step_scratch() {
   local k said p answered r opening
@@ -872,8 +898,8 @@ step_scratch() {
     row) : ;;
     nopanel)
          shot scratch-nopanel
-         row "按面板键（⌘P）后没有面板：$(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1 | cut -c1-80)" "⌘P" "是 — 瘦客户端开不出新任务面板"
-         failstep scratch "the thin client's panel did not open within ${STEP_SECS}s: $(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1)"; return 1 ;;
+         row "新任务面板或编辑控件未就绪：$(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1 | cut -c1-80)" "$(new_keys "$NAME")" "是 — 瘦客户端开不出新任务面板"
+         failstep scratch "the thin client's panel/composer was not ready within ${STEP_SECS}s: $(printf '%s' "$PW_P" | sed '/^[[:space:]]*$/d' | tail -n 1)"; return 1 ;;
     hostkey)
          shot scratch-hostkey
          said=$(printf '%s\n' "$p" | grep -Eo -- "authenticity of host '[^']*'" | head -n 1)

@@ -6331,6 +6331,15 @@ drill_idle_activity_between_probes() {
   WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
 }
 
+drill_spinner_unwatched_poll() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/spinner-wait-selftest.sh" --quick 2>&1) \
+    || { WHY="unwatched spinner: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人观看不轮询；状态事件两秒内画一次，真实客户端连接后一秒内恢复动画'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
