@@ -228,6 +228,26 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 	if err != nil {
 		return nil, nil, err
 	}
+	// Legacy placement records can retain an owner even after both its lease
+	// and snapshot disappear. An unfinished T is not an empty-repo proof.
+	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE repo = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN ('closed','refused')`, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var worker string
+		if err = rows.Scan(&worker); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		blockers = append(blockers, "legacy task owner is unverified: "+worker)
+		owners = append(owners, RepoLegacyOwner{WorkerID: worker})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, nil, err
+	}
 	rows, err = q.Query(`SELECT id, request FROM fleet_operations WHERE action = 'worker_start' AND status IN ('pending','running','unknown','sent')`)
 	if err != nil {
 		return nil, nil, err

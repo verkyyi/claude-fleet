@@ -331,6 +331,11 @@ backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest FILE`
 old reference/URL in one transaction. No GitHub write or whole-backlog import.
 The returned `hub:owner/repo#M` can be passed as `ticket_ref` on an accepted
 `worker_start`; the accepted task carries it through node launch and reports.
+Brief, comment, evidence and cleanup ticket reads use that accepted reference
+even when the repo's pinned default is GitHub and the hub number collides.
+The manifest projects a later confirmed `task_report` with `status=merged` and
+`pr_state=merged` independently of the original work outcome; waiting or an old
+generation cannot turn that field into a confirmed landing.
 
 Rollback first freezes dispatch. Accepted work must have a terminal outcome
 and no retained execution lease before future starts return to legacy control.

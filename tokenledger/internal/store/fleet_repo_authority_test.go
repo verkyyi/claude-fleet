@@ -155,6 +155,22 @@ func TestRepoAuthorityPausedAfterFinalGate(t *testing.T) {
 	}
 }
 
+func TestRepoAuthorityLegacyTaskWithoutLeaseOrSnapshot(t *testing.T) {
+	s := taskStore(t)
+	_, err := s.CreateFleetTask(FleetTask{Owner: "alice", Repo: "org/a", Title: "old task", WorkerID: "f/old", State: TaskOpen}, "legacy-owner", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.RepoAuthority("org/a")
+	a = repoChange(t, s, a, "freeze")
+	if len(a.Owners) != 1 || a.Owners[0].WorkerID != "f/old" {
+		t.Fatal("unfinished legacy task owner forgotten", a)
+	}
+	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "missing-owner"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal(err)
+	}
+}
+
 func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
 	for _, replacement := range []bool{false, true} {
 		t.Run(fmt.Sprint(replacement), func(t *testing.T) {
