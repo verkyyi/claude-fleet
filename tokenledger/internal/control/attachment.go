@@ -11,6 +11,7 @@ import (
 // stay on the existing authenticated hub/node link; the grant never goes to JS.
 const (
 	CapAttachment       = "attachment-v1"
+	CapTermController   = "term-controller-v1"
 	TypeAttachmentOpen  = "attachment_open"
 	AttachmentDataPath  = "/v1/node/attachment"
 	AttachmentLease     = 15 * time.Second
@@ -28,6 +29,8 @@ type AttachmentOpen struct {
 // Conn identifies the request, Epoch fences its one selected data path. A fresh
 // authorization is required to select relay after negotiation; ready is final.
 type AttachmentGrant struct {
+	TermResume  string                `json:"term_resume,omitempty"`
+	TermTake    bool                  `json:"term_take,omitempty"`
 	Chat        ChatAttachmentRequest `json:"chat,omitempty"`
 	V           int                   `json:"v"`
 	Person      string                `json:"person"`
@@ -70,6 +73,9 @@ func VerifyAttachment(s, key, login, conn, generation string, now time.Time) (At
 		return g, bad
 	}
 	if g.Service == "chat" && !g.Chat.Valid(g.Target) {
+		return g, bad
+	}
+	if g.Service != "term" && (g.TermResume != "" || g.TermTake) {
 		return g, bad
 	}
 	if g.Service != "chat" && g.Chat != (ChatAttachmentRequest{}) {

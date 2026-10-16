@@ -6606,6 +6606,14 @@ drill_chat_direct_admission() {
   SECS=$(since "$t0")
 }
 
+drill_term_controller_ready() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames TestCoreExecTerminalCancellation TestTermPtySignalCleanup' './internal/agent' \
+    '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
+  SECS=$(since "$t0")
+}
+
 # term-other-person (issue #3838, EPIC #3836 C1): a browser terminal reaches only
 # the signed-in person's own home login — never another person, an admin as
 # themselves or through a view, the operator's door, another origin; and the node
@@ -6645,6 +6653,24 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_view_auto_select() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --auto-select 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='目标窗消失时同步关闭本 browser view，不让输入落到自动选中的窗口；home PID 不变'
+  SECS=$(since "$t0")
+}
+
+drill_term_closed_lease() {
+  CAP=30; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --closed-lease 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='已退出 view 的新鲜租约可立即接回；活控制者仍须 Use here；旧清理不碰同名新 session'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_kills_session() {
   CAP=120; local t0 out rc
   t0=$(now)

@@ -137,9 +137,8 @@ browser d1 --worker "$W7"; waitfor 8 attached d1 || fail "D: --worker never atta
 eq "D: --worker lands on it" "$W7" "$(vcur d1)"
 tt kill-window -t "=$TL:b-d1"; WT release --conn d1 >/dev/null
 o=$(WT select --worker deadbeef/fid-gone); eq "D: select records" 0 "$?"
-browser d2; waitfor 8 attached d2 || fail "D: remembered never attached"
-eq "D: a gone remembered worker lands home" "$HW" "$(vcur d2)"
-tt kill-window -t "=$TL:b-d2"; WT release --conn d2 >/dev/null
+o=$(WT attach --conn d2 2>&1); eq "D: gone remembered worker stays ended" 5 "$?"
+WT release --conn d2 >/dev/null
 WT select --worker "$W7" >/dev/null
 browser d3 --shell; waitfor 8 attached d3 || fail "D: --shell never attached"
 eq "D: --shell lands home" "$HW" "$(vcur d3)"

@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"io"
 	"sync"
 )
@@ -15,29 +18,52 @@ import (
 func SetTermHelperForTest(argv func(view, target string) []string) {
 	if argv == nil {
 		startTermHelper, termAttachArgv = defaultStartTermHelper, defaultTermAttachArgv
+		readTermAdmission = defaultReadTermAdmission
 		return
+	}
+	readTermAdmission = func(io.Reader) (termController, error) {
+		return termController{Term: "isolated", Gen: "isolated:1", Epoch: 1}, nil
 	}
 	termAttachArgv = func(_, view, target string) []string { return argv(view, target) }
 	startTermHelper = inProcessTermHelper
 }
 
 var (
-	defaultStartTermHelper = startTermHelper
-	defaultTermAttachArgv  = termAttachArgv
+	defaultReadTermAdmission = readTermAdmission
+	defaultStartTermHelper   = startTermHelper
+	defaultTermAttachArgv    = termAttachArgv
 )
 
-func inProcessTermHelper(_ context.Context, view, target string, cols, rows int) (termHelper, error) {
+// SetNativeTermHelperForTest keeps the real admission and epoch gate; the fixed
+// entry is supplied by an isolated HOME/socket fixture, never a live account.
+func SetNativeTermHelperForTest(argv func(view, target string) []string) {
+	SetTermHelperForTest(argv)
+	readTermAdmission = defaultReadTermAdmission
+}
+
+func inProcessTermHelper(ctx context.Context, view, target string, cols, rows int) (termHelper, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, err := RunTermPty([]string{"--view", view, "--target", target}, inR, outW)
+		args := []string{"--view", view, "--target", target}
+		if req, ok := ctx.Value(termRequestKey{}).(termRequest); ok {
+			if req.Resume != "" {
+				args = append(args, "--resume", req.Resume)
+			}
+			if req.Take {
+				args = append(args, "--take", "1")
+			}
+		}
+		_, err := runTermPty(ctx, args, inR, outW)
 		outW.CloseWithError(err)
 		inR.Close()
 	}()
 	b := make([]byte, 1)
 	if _, err := io.ReadFull(outR, b); err != nil || b[0] != termPtyReady {
+		cancel()
 		inW.Close()
 		<-done
 		if err == nil {
@@ -45,22 +71,35 @@ func inProcessTermHelper(_ context.Context, view, target string, cols, rows int)
 		}
 		return nil, err
 	}
-	return &pipeTermHelper{in: inW, out: outR, done: done}, nil
+	reader := bufio.NewReader(outR)
+	line, err := reader.ReadBytes('\n')
+	var ready control.TermControl
+	if err != nil || json.Unmarshal(line, &ready) != nil {
+		cancel()
+		inW.Close()
+		return nil, errors.New("invalid ready")
+	}
+	return &pipeTermHelper{in: inW, out: reader, output: outR, done: done, ready: ready, cancel: cancel}, nil
 }
 
 type pipeTermHelper struct {
-	in   *io.PipeWriter
-	out  *io.PipeReader
-	done chan struct{}
-	once sync.Once
+	in     *io.PipeWriter
+	out    io.Reader
+	output io.Closer
+	ready  control.TermControl
+	done   chan struct{}
+	once   sync.Once
+	cancel context.CancelFunc
 }
 
+func (p *pipeTermHelper) Ready() control.TermControl  { return p.ready }
 func (p *pipeTermHelper) Read(b []byte) (int, error)  { return p.out.Read(b) }
 func (p *pipeTermHelper) Write(b []byte) (int, error) { return p.in.Write(b) }
 func (p *pipeTermHelper) Close() error {
 	p.once.Do(func() {
+		p.cancel()
 		p.in.Close()
-		go io.Copy(io.Discard, p.out) // drain whatever the terminal still says
+		p.output.Close()
 		<-p.done
 	})
 	return nil

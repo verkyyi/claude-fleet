@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 var testRA = &RunAs{Login: "alice", UID: 501, GID: 20, Home: "/Users/alice"}
@@ -135,6 +136,13 @@ func fakeCore(t *testing.T, refuse string, rc int) (string, chan map[string]any)
 		out := os.NewFile(uintptr(fds[1]), "out")
 		syscall.Close(fds[2])
 		c.Write([]byte(`{"ok": true, "pid": 4242}` + "\n"))
+		if rc == -999 {
+			// A live job whose stdin stays open; only caller disconnect ends it.
+			io.Copy(io.Discard, c)
+			in.Close()
+			out.Close()
+			return
+		}
 		b, _ := io.ReadAll(in)
 		out.Write(append([]byte("got:"), b...))
 		in.Close()
@@ -203,5 +211,40 @@ func TestCoreExecRefused(t *testing.T) {
 	rc, _, errs = runHelper(t, filepath.Join(t.TempDir(), "none.sock"), "")
 	if rc != coreRefusedExit || !strings.Contains(errs, "root core") {
 		t.Fatalf("no core: rc %d stderr %q", rc, errs)
+	}
+}
+
+func TestCoreExecTerminalCancellation(t *testing.T) {
+	sock, got := fakeCore(t, "", -999)
+	stopR, stopW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopR.Close()
+	defer stopW.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCoreExecHelperProcess$")
+	cmd.Env = append(os.Environ(), "FLEET_TEST_CORE_EXEC="+sock, "FLEET_TERM_CANCEL_FD=3")
+	cmd.ExtraFiles = []*os.File{stopR}
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("core request missing")
+	}
+	stopW.Close() // stdin deliberately stays open
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal cancellation waited behind stdin")
 	}
 }
