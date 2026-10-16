@@ -205,6 +205,9 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		if err != nil {
 			return FleetTask{}, err
 		}
+		// Fields omitted from the accepted JSON must not retain the current
+		// row's later ticket/native/result values when replaying acceptance.
+		rec = FleetTask{}
 		if err = json.Unmarshal([]byte(raw), &rec); err != nil {
 			return FleetTask{}, err
 		}
@@ -254,13 +257,15 @@ type TaskMutation struct {
 	SessionKey       string              `json:"session_key,omitempty"`
 	CancelRequest    string              `json:"cancel_request,omitempty"`
 	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
+	TicketRef        string              `json:"ticket_ref,omitempty"` // ticket_link only; accepted input remains immutable
+	FilingID         string              `json:"filing_id,omitempty"`  // durable local filing incarnation, prepare/link only
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
 	// Repo is immutable. Take its authority lock before the task row lock,
 	// in the same order as acceptance/cutover; lifecycle reports remain open.
 	var startRepo string
-	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" {
+	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" || m.Kind == "ticket_prepare" || m.Kind == "ticket_link" {
 		t, e := s.FleetTask(id)
 		if e != nil {
 			return FleetTask{}, e
@@ -275,7 +280,30 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if (m.Kind == "blocker") != (m.Blocker != nil) {
 		return FleetTask{}, ErrTaskInvalid
 	}
+	if m.TicketRef != "" && m.Kind != "ticket_link" {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	if m.FilingID != "" && m.Kind != "ticket_prepare" && m.Kind != "ticket_link" {
+		return FleetTask{}, ErrTaskInvalid
+	}
 	switch m.Kind {
+	case "ticket_prepare", "ticket_link":
+		if !taskFilingIDRE.MatchString(m.FilingID) {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		if m.ExpectedWorker != "" || m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		key := fmt.Sprintf("ticket-file:g%d", m.Generation)
+		if m.Kind == "ticket_link" {
+			key = fmt.Sprintf("ticket-link:g%d", m.Generation)
+			if m.TicketRef == "" {
+				return FleetTask{}, ErrTaskInvalid
+			}
+		}
+		if m.Key != key {
+			return FleetTask{}, ErrTaskInvalid
+		}
 	case "blocker":
 		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
 			return FleetTask{}, ErrTaskInvalid
@@ -357,6 +385,10 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	}
 	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	switch m.Kind {
+	case "ticket_prepare", "ticket_link":
+		if err = s.linkTaskTicketTx(tx, &t, m); err != nil {
+			return FleetTask{}, err
+		}
 	case "blocker":
 		if err = s.applyTaskBlockerTx(tx, t, m.EndpointID, eventID, *m.Blocker, now); err != nil {
 			return FleetTask{}, err

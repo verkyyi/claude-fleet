@@ -476,6 +476,11 @@ DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${EXPLICIT_AGENT:+--agent "$EXPLICIT
   --template "$TEMPLATE_AGENT" --label "$AGENT" --default "${FLEET_AGENT:-}" \
   --accepted "$DISPATCH") || exit 2
 AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+DISPATCH_TASK=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
+if [ -n "$DISPATCH_TASK" ]; then
+  [ -z "$TASK_REF" ] || [ "$TASK_REF" = "$DISPATCH_TASK" ] || { refuse 'task differs from accepted dispatch'; exit 2; }
+  TASK_REF=$DISPATCH_TASK
+fi
 # Codex needs this login's Codex login (`ccquota codex login`): asked for and not
 # there ⇒ refused, never quietly opened as Claude. A spawn the hub may place on
 # another machine is checked by the machine that opens it.
@@ -521,7 +526,7 @@ _spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
   exit "$rc"
 }
 [ "$CLAIMED_HERE" = 1 ] && trap _spawn_back EXIT
-if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ] && [ "$AUTH_MODE" != hub ]; then
+if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ] && [ "$AUTH_MODE" != hub ] && [ -z "$DISPATCH_TASK" ]; then
   _lf=''; [ "$FORCE_FLAG" = 1 ] && _lf=--force
   lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
   case "$lease_rc" in
@@ -1040,7 +1045,7 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
 if [ -n "${FLEET_LAUNCH:-}" ]; then
   _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
-  stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
+  stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH" @task "$TASK_REF")"
 fi
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
