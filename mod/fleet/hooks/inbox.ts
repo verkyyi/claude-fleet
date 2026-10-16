@@ -32,6 +32,8 @@ export type InboxIo = {
   /** Atomic rename; false when the source is gone (the poster cancelled it). */
   claim: (from: string, to: string) => Promise<boolean>
   run: (command: string, args: string) => Promise<void>
+  /** Read-only native observation. This never enters command.run. */
+  query?: (request: Record<string, unknown>) => Promise<void>
 }
 
 /**
@@ -95,11 +97,21 @@ export async function pollInbox(io: InboxIo, dir: string): Promise<number> {
     if (!(await io.claim(`${base}.json`, `${base}.taken`))) continue
     let result: { ok: boolean; error?: string }
     try {
-      const msg = parseMessage(await io.read(`${base}.taken`))
-      if ('error' in msg) result = { ok: false, error: msg.error }
-      else {
-        await io.run(msg.cmd, msg.args)
+      const text = await io.read(`${base}.taken`)
+      let request: Record<string, unknown> | undefined
+      try { request = JSON.parse(text) } catch { /* Keep the command parser's error. */ }
+      if (request?.query !== undefined) {
+        if (request.query !== 'runtime.v1') throw new Error('unsupported query')
+        if (!io.query) throw new Error('runtime query unavailable')
+        await io.query(request)
         result = { ok: true }
+      } else {
+        const msg = parseMessage(text)
+        if ('error' in msg) result = { ok: false, error: msg.error }
+        else {
+          await io.run(msg.cmd, msg.args)
+          result = { ok: true }
+        }
       }
     } catch (err) {
       result = { ok: false, error: errorText(err) }

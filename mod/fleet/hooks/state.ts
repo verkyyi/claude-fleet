@@ -30,6 +30,46 @@ export const WRITE_TIMEOUT_MS = 10_000
 
 const LOOP_TOOLS = new Set(['ScheduleWakeup', 'CronCreate', 'CronDelete'])
 
+// Only accepted C3 executions publish observations. Old sessions keep their
+// display hooks; missing turn/native identity means unknown to the reader.
+let runtimeSequence = 0
+let runtimeTurn: string | undefined
+let runtimeObservation: { state: string; turn_id: string } | undefined
+
+/** An on-demand reply from this native module, never a renewed disk cache. */
+export function runtimeQuery(request: Record<string, unknown>, context: string | undefined, now: number): Record<string, unknown> {
+  const launch = context ? JSON.parse(context) as Record<string, unknown> : undefined
+  const expected = request.launch as Record<string, unknown> | undefined
+  if (!isOpen() || !launch || !expected || typeof expected !== 'object'
+      || Object.keys(launch).length !== Object.keys(expected).length
+      || !Object.keys(launch).every(k => launch[k] === expected[k]) || !runtimeObservation
+      || typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce)
+      || typeof request.deadline !== 'number' || now >= request.deadline || request.deadline - now > 5) {
+    throw new Error('runtime query unavailable or expired')
+  }
+  return { ...runtimeObservation, start: false, sequence: ++runtimeSequence,
+    observed_at: now, query_id: request.nonce }
+}
+
+async function runtimeEvent($: EngineInterface, state: string, turn: string | undefined, start = false): Promise<void> {
+  // Allocate at the native edge, before any await can reorder publishers.
+  const sequence = ++runtimeSequence
+  if (turn && (start || (runtimeObservation?.turn_id === turn
+      && !['idle', 'interrupted'].includes(runtimeObservation.state)))) runtimeObservation = { state, turn_id: turn }
+  try {
+    if (!turn || !(await $.env.get('FLEET_LAUNCH_CONTEXT'))) return
+    const bin = await fleetBin($)
+    if (bin === undefined) return
+    const payload = { state, turn_id: turn, start, sequence,
+      observed_at: (await $.clock.now()) / 1000 }
+    await $.process.run(['python3', `${bin}/fleet_runtime.py`, 'event'], {
+      stdin: JSON.stringify(payload), timeoutMs: WRITE_TIMEOUT_MS,
+    })
+  } catch {
+    // An absent/failed observation expires; it never authorizes an action.
+  }
+}
+
 /** The fleet's bin/ beside this plugin (<install>/mod/fleet → <install>/bin), or
  * undefined outside tmux, where there is no window to write. */
 async function fleetBin($: EngineInterface): Promise<string | undefined> {
@@ -75,7 +115,13 @@ function toolInput(e: Record<string, unknown>): Record<string, unknown> {
 
 export function registerState(on: On): void {
   on('turn.start', async ($, e, next) => {
-    if (isOpen()) await setState($, 'working')
+    if (isOpen()) {
+      if ((e as { agentId?: string }).agentId === undefined) {
+        runtimeTurn = e.turnId
+        await runtimeEvent($, 'active', e.turnId, true)
+      }
+      await setState($, 'working')
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -83,17 +129,24 @@ export function registerState(on: On): void {
     const result = await next(e)
     // set-claude-state.sh's done branch turns this into `looping` when @loop (or a
     // loop ledger) says a Loop is pending — the one place that decides it.
-    if (isOpen() && e.agentId === undefined) await setState($, 'done')
+    if (isOpen() && e.agentId === undefined) {
+      await runtimeEvent($, e.isAborted || e.reason !== 'answer' ? 'interrupted' : 'idle', e.turnId)
+      if (runtimeTurn === e.turnId) runtimeTurn = undefined
+      await setState($, 'done')
+    }
     return result
   }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     if (!isOpen() || e.agentId !== undefined) return next(e)
+    const turn = runtimeTurn
+    await runtimeEvent($, 'ask', turn)
     // The question's own words ride along (issue #1951): @claude_needs_detail.
     await setState($, 'ask', JSON.stringify({ tool_name: 'AskUserQuestion', tool_input: toolInput(e) }))
     try {
       return await next(e)
     } finally {
+      await runtimeEvent($, 'active', turn)
       // Answered, declined or interrupted: the question is no longer open.
       await setState($, 'working')
     }
