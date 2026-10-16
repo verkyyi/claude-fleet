@@ -1185,10 +1185,14 @@ while :; do
   elif [ "$looked" = 0 ]; then
     [ -n "$HB_T" ] || hb_stamp
     set --
-    for sock in $SOCKETS; do set -- "$@" "$TSOCKDIR/$sock"; done
+    for sock in $SOCKETS; do
+      set -- "$@" "$TSOCKDIR/$sock"
+      TMUX_N=$((TMUX_N + 1))  # the helper's wait-for client, counted too
+    done
     _wait=$(python3 "$BIN/fleet-render-watch.py" "$INTERVAL" "$@") || _wait=''
     if [ -n "$_wait" ]; then
       _rd "$_wait" step LEASE_FRAMES
+      LEASE_FRAMES=$((LEASE_FRAMES + step))  # remaining AT wake, not before sleep
     else
       # Broken/missing helper must back off, never become a hot retry loop.
       sleep 65; step=$((HB_EVERY + SOCK_EVERY))
