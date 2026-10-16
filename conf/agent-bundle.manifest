@@ -57,6 +57,7 @@ bin/fleet-agent-bundle.py           tool
 bin/fleet-install-apply.sh          tool
 bin/fleet-hooks-merge.py            tool
 bin/fleet-agent-defaults.py         tool
+bin/fleet-codex-rpc.py              tool
 bin/fleet-agent-team.py             tool
 # its credential scan reads conf/secret-shapes.list through this (#2890)
 bin/fleet_redact.py                 tool

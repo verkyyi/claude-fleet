@@ -58,6 +58,53 @@ requirements, native effective-config checks, upgrade and rollback. Neither
 the renderer nor the guards establish a filesystem sandbox. No launcher bypass
 is removed by this change. See [migration evidence](NATIVE-AGENT-BOUNDARY.md).
 
+## Native default installation (explicit candidate)
+
+The existing default installer can delegate Codex configuration publication to
+the native `config/batchWrite` API instead of editing user TOML itself:
+
+```sh
+python3 bin/fleet-agent-defaults.py apply --root /path/to/fleet \
+  --codex-home /absolute/owned/codex-home --skip claude \
+  --codex-native-remote unix:///absolute/owned/native.sock \
+  --codex-native-peer-pid NATIVE_PID --dry-run
+```
+
+Supply the PID of an already running **idle maintenance backend** for exactly
+that home. The adapter does not discover, start or stop backends. Remove
+`--dry-run` only during an explicit maintenance window with new launches held;
+use `check` instead of `apply` to report missing defaults without writing.
+The existing RPC client verifies the kernel's Unix peer PID (and Linux peer UID), and the native base-user layer must
+name the requested home's `config.toml`. Shared configuration symlinks, wrong
+homes, active backends and malformed/unavailable native responses fail closed;
+there is no silent fallback to the legacy writer. Loaded threads are checked
+before planning and publication, but those reads are **not** an atomic launch
+lock: operational exclusion of concurrent launches is still required.
+
+The source remains `conf/agent-defaults/codex/config.default.toml`, with existing
+override exclusions. Existing top-level values and same-name MCP servers remain
+the user's, including explicit false/empty values. The native parser owns the
+user file; missing values are sent in one batch with its `expectedVersion` and
+`reloadUserConfig=false`. Native version checking is semantic, not a bytewise
+file lock: a comment-only edit need not invalidate it. The probe verifies comment
+preservation and refusal of a stale version after a value changes. No automatic
+retry overwrites a newer configuration. A transport failure after submission can
+leave the result unknown; inspect through native `config/read` before retrying.
+An accepted user-file write does not override higher-priority managed policy.
+
+This mode requires `--skip claude`; Claude installation and the ordinary legacy
+path remain unchanged. Skill completeness checks still run. The shared RPC
+helper ships in the agent bundle and client manifest. Nothing enables this mode
+in normal installation or session startup yet. Full guards, auth, MCP and live
+maintenance acceptance remain prerequisites for adoption and removal of launch
+overrides; this is not a production latency result.
+
+The explicit offline `fleet-native-local-runtime-selftest.py --native-config`
+exercises dry-run, check, native publication/idempotency, wrong PID/home refusal,
+an inert dotted-name MCP entry, semantic conflict handling and loaded-thread
+refusal, then verifies actual local TUI/Worktree ownership. No real credentials,
+inference or external MCP services are used.
+
 ## Context
 
 Run `bash ~/.claude/fleet/bin/fleet-context.sh` inside a Codex worker, or inspect

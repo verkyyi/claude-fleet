@@ -73,7 +73,7 @@ files=$("$PY" "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO"); rc=$?
 [ "$rc" = 0 ] && [ -n "$files" ] && ok "A the manifest expands ($(printf '%s\n' "$files" | wc -l | tr -d ' ') files)" || bad "A files rc=$rc"
 miss=''
 for c in hooks/settings-hooks.json bin/fleet-hook-run.sh conf/agent-defaults/claude/mcp.default.json \
-         bin/mcp-github.sh mod/fleet/.claude-plugin/plugin.json skills/doc-preview/SKILL.md commands/fleet-claim.md; do
+         bin/mcp-github.sh bin/fleet-codex-rpc.py mod/fleet/.claude-plugin/plugin.json skills/doc-preview/SKILL.md commands/fleet-claim.md; do
   printf '%s\n' "$files" | grep -xF >/dev/null "$c" || miss="$miss $c"
 done
 for h in $(grep -o '\.claude/fleet/hooks/[^ "]*' "$REPO/hooks/settings-hooks.json" | sed 's#^\.claude/fleet/##' | sort -u); do
