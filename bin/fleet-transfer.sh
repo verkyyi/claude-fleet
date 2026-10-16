@@ -136,7 +136,11 @@ target_auth() {
   verdict=$(_json_field "$out" verdict); reason=$(_json_field "$out" reason)
   TARGET_AUTH_WAIT="$TO/$(_json_field "$out" profile)"; [ "$TARGET_AUTH_WAIT" != "$TO/" ] || TARGET_AUTH_WAIT="$TO/$(_json_field "$out" label)"
   case "$verdict" in
-    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"; return 0 ;;
+    ok) TARGET_AUTH="ok · $(_json_field "$out" key)"
+        # The one auth resolver validates proxy mirrors and returns the real
+        # account home. Carry it into the arm, package and successor launch.
+        [ "$TO" != codex ] || [ -z "$TARGET_AUTH_HOME" ] || CODEX_TARGET_HOME="$TARGET_AUTH_HOME"
+        return 0 ;;
     unknown) TARGET_AUTH="unknown · $reason"; return 0 ;;
     refuse) TARGET_AUTH_WHY="$reason"; return 1 ;;
   esac

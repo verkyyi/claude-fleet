@@ -6266,6 +6266,16 @@ drill_transfer_durable_crash() {
   SECS=$(since "$started"); WHAT='SIGKILL at write-ahead / table write / withdrawn: the sweep settles one owner, unrelated records intact; unknown Claude refused by pid'
 }
 
+drill_transfer_proxy_home() {
+  CAP=45
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-auth-selftest.py" ProxyHomeAuth >"$WORK/transfer-proxy-home.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
+  bash "$BIN/fleet-transfer-proxy-home-selftest.sh" >>"$WORK/transfer-proxy-home.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='owned proxy mapping; forged/missing/unauthorized targets refuse; clean Stop then native successor bound'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
