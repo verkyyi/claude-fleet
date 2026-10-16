@@ -70,6 +70,7 @@ type TaskReport struct {
 	ParentSession    string `json:"parent_session"`
 	ParentGeneration int64  `json:"parent_generation"`
 	Outcome          string `json:"outcome"`
+	Status           string `json:"status,omitempty"`
 	Evidence         string `json:"evidence"`
 	Summary          string `json:"summary,omitempty"`
 	ExecutionStopped bool   `json:"execution_stopped"`
@@ -85,7 +86,10 @@ type TaskReportReceipt struct {
 func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now time.Time) (TaskReportReceipt, error) {
 	empty := TaskReportReceipt{}
 	if r.EventID == "" || len(r.EventID) > 200 || ParseTaskRef(r.Task) == 0 || r.Generation < 1 || r.Evidence == "" || endpoint == "" ||
-		(r.Outcome != TaskSucceeded && r.Outcome != TaskFailed && r.Outcome != TaskCancelled) {
+		(r.Outcome != "" && r.Outcome != TaskSucceeded && r.Outcome != TaskFailed && r.Outcome != TaskCancelled) {
+		return empty, ErrTaskInvalid
+	}
+	if r.Outcome == "" && (r.Status == "" || r.ExecutionStopped) {
 		return empty, ErrTaskInvalid
 	}
 	if r.Owner != owner {
@@ -143,9 +147,12 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 		return empty, err
 	}
 	disposition := "pending"
+	if r.Outcome == "" {
+		disposition = "progress"
+	}
 	if t.Generation != r.Generation || taskTerminal(t.State) {
 		disposition = "historical"
-	} else if r.ExecutionStopped {
+	} else if r.ExecutionStopped && r.Outcome != "" {
 		if !taskTransition(t.State, r.Outcome) {
 			return empty, ErrTaskConflict
 		}

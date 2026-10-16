@@ -96,7 +96,7 @@ func (s *Server) prepareTaskReportRelay(ep store.Endpoint, r *store.FleetRelay) 
 	if err != nil {
 		return false, err
 	}
-	if receipt.Disposition != "committed" {
+	if receipt.Disposition != "committed" && receipt.Disposition != "progress" {
 		return true, nil
 	}
 	deliver, err := s.Store.TaskReportDeliverable(report)

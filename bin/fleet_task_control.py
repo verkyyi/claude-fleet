@@ -89,7 +89,7 @@ def report_input(c, t, outcome, summary, evidence, stopped=False, event=""):
 
 def publish_report(r):
     receipt = call("report", r["task"], r)
-    if receipt["disposition"] != "committed":
+    if receipt["disposition"] not in ("committed", "progress"):
         print("%s\ntask: %s\nevent_id: %s" % (receipt["disposition"].upper(), r["task"], r["event_id"]))
         return 3
     if not r["parent_session"]:
@@ -103,9 +103,9 @@ def publish_report(r):
     # Existing outbox, including same-machine parents: one durable address and
     # one event ID across reconnects, never a timestamp allocated on each retry.
     suffix = hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
-    payload = dict(task_report=r, child=r["task"], state=r["outcome"].upper(), tier="quiet",
+    payload = dict(task_report=r, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
                    msg="[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" %
-                   (r["task"], r["outcome"].upper(), r["generation"], r["summary"]))
+                   (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"]))
     command = '. "$1/fleet-lib.sh"; fleet_hub_put child_report "$2" "$3" "$4" "$(cat)"'
     sent = subprocess.run(["bash", "-c", command, "task-report", str(BIN), r["worker_id"],
                            r["parent_session"], suffix], input=json.dumps(payload), text=True,
@@ -122,11 +122,15 @@ def report(pane, state, summary, pr, dry, socket=""):
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
         raise ValueError("stale report owner/generation")
     if state != "merged":
-        # failed may describe a red CI gate while work continues. A Stop means
-        # one native turn ended. Neither is an explicit terminal task result.
-        print("%s\ntask: %s\nnote: workflow %s; task outcome is %s" %
-              (verdict(t), c["task"], state, t.get("outcome") or "not committed"))
-        return 3 if not t.get("outcome") else 0
+        # A red CI gate or a completed turn is workflow progress, never a
+        # terminal result. Still notify the exact parent with a fenced event.
+        if t.get("outcome"):
+            print("%s\ntask: %s" % (verdict(t), c["task"])); return 0
+        r = report_input(c, t, "", summary, "workflow: " + state)
+        r["status"] = state
+        if dry:
+            print(json.dumps(r)); return 0
+        return publish_report(r)
     # Keep the existing code-landing gate. Work outcome and code landing can be
     # reported independently using `fleet-task-record.sh report` with a result.
     if pr:
@@ -170,11 +174,11 @@ def finalize(pane):
         if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
             raise ValueError("native execution is still alive")
     if not pending:
-        result = call("mutate", c["task"], dict(kind="cancel_ack", idempotency_key=t["cancel_request"] + ".ack",
-                      generation=c["generation"], expected_worker=c["worker_id"], cancel_request=t["cancel_request"],
-                      execution_stopped=True, evidence=json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")})))
-        print("%s\ntask: %s" % (verdict(result), c["task"]))
-        return 0
+        r = report_input(c, t, "cancelled", "Cancellation acknowledged after native stop",
+                         json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}),
+                         stopped=True, event=t["cancel_request"] + ".ack")
+        r["cancel_request"] = t["cancel_request"]
+        return publish_report(r)
     r = pending
     if any(r.get(k) != c[v] for k, v in (("task", "task"), ("owner", "owner"), ("generation", "generation"), ("worker_id", "worker_id"))):
         raise ValueError("pending result belongs to an old generation")
@@ -209,7 +213,7 @@ def orphan(r, why):
         rows = [json.loads(line) for line in stream if line.strip()]
         if not any(row.get("event_id") == r["event_id"] and row.get("task") == r["task"] for row in rows):
             row = dict(ts=int(time.time()), child_key=r["task"] + ":g" + str(r["generation"]), task=r["task"],
-                       event_id=r["event_id"], state=r["outcome"].upper(), summary=r["summary"],
+                       event_id=r["event_id"], state=(r["outcome"].upper() or "WAITING"), summary=r["summary"],
                        parent=r["parent_session"], reason=why)
             stream.write(json.dumps(row) + "\n")
     print("orphaned → task %s event %s: %s" % (r["task"], r["event_id"], why))
@@ -221,7 +225,7 @@ def receive(file):
     if envelope["from"] != r["worker_id"] or envelope["to"] != r["parent_session"]:
         raise ValueError("relay task identity mismatch")
     t = call("get", r["task"])["task"]
-    if (t["owner"], t["generation"], t["execution_owner"], t.get("outcome")) != (r["owner"], r["generation"], r["worker_id"], r["outcome"]):
+    if (t["owner"], t["generation"], t["execution_owner"], t.get("outcome", "")) != (r["owner"], r["generation"], r["worker_id"], r["outcome"]):
         print("historical child generation; no delivery"); return 0
     if r["parent_task"]:
         parent = call("get", r["parent_task"])["task"]
@@ -257,7 +261,7 @@ def receive(file):
         sentfile = Path(directory) / ".relay-sent"
         if sentfile.exists() and envelope["id"] in sentfile.read_text().splitlines():
             print("already delivered"); return 0
-        msg = "[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" % (r["task"], r["outcome"].upper(), r["generation"], r["summary"])
+        msg = "[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" % (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"])
         if native:
             # No sleeper/peer queue can outlive this generation check. An
             # unavailable inbox leaves the same relay pending on the hub.
