@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| 会话只继承入口 URL，ticket reader 把它与代理凭据拼接（#4490） | authority 启动及同会话回退 401，代理凭据被送到错误入口 | 完整显式凭据对直接使用；只有 URL 时由既有 reader 整对读取；孤立 token、reader 失败及显式认证失败均拒绝，不换身份 | `ticket-credential-pair` |
 | 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |
 | ACK 容器重启后沿用旧 PID 或执行上次未完的运行时切换 | 接管错进程、镜像版本被机器更新器改掉 | 每次容器启动独立代号；镜像负责更新时在恢复更新状态之前退出（#3022） | `node-container-restart` |
 | Linux 托管机器的登录没开租约：`fleet-node-linux.py prepare` 写的登录设置（`logins/<login>.env`、凭据存储里的 `node.env`）缺 `CCQUOTA_FLEET_CREDS=1`（linux-a 实见，#3211） | 池子同步把账号放进了共享代理（「hub 1 · here 1」），可节点程序从不替这个登录租：`accounts/` 里没有 `hub:<label>` 标记，`ready` 的 creds 一直 false，入口每次派活都写 `not ready: creds` 把这台排除在外；新开的登录一样 | `prepare`（每次容器启动都跑）新登录写上这一行；旧存储缺它就补上、令牌和其它行逐字不动，登录设置随之带上，节点程序照 Mac 登录的方式租、写标记（#3211） | `linux-login-no-lease` |
@@ -545,3 +546,4 @@
 | 只保留 durable 提醒原表就退出唯一 Claude（#4258、#4280） | 表还在但没有执行者，提醒漏发；直接复制成 Fleet timer 又可能重复投递 | 单一 owner 交接（`fleet_transfer_durable.py`）：Fleet 副本先不可执行；路 1 源的原生 CronDelete 回执 + 新 CronList，路 2 隔离（启动门 + 登录下每个 claude 都已登记且不在 HOME）后由控制器读改写；源退出确认后目标 loop 激活，只投一次；没走通则 B 照旧拒绝 | `transfer-durable-owner` |
 | durable 交接中途被杀，或撞上未纳入互锁的 Claude（#4280） | 任务两边都有或两边都没有，或无关原生任务被整表覆盖丢失 | 先写日志再动表；巡检（`fleet-loop.py recover`）按回执和只读表定案：表里还在就归原生，已撤就归 Fleet 并标 attention；无关记录逐字节保留；未知 / 在 HOME 的 claude 在写表前拒绝并报 pid | `transfer-durable-crash` |
 | Codex 无仓库首次启动缺 HOME 信任（#3029、#4258），或 proxy config 符号链接被替换 | 新会话停在信任提示，或信任只留在临时 home；合法单引号 untrusted 被漏读 | 公共启动器与 transfer 共用 TOML 读取和受信节点 HOME 白名单；fill-only 写实际目标，保留符号链接、权限和并发改动；显式不信任与 opt-out 不变 | `codex-home-trust` |
+| 远端缓存、旧 generation/turn 的 idle 被重读成新证据，或把 Stop/MERGED 当作执行空闲（#4434） | 迟到的观察越过正在执行的新 turn，误投递或回收 | 唯一只读 `fleet_runtime.py` 保留原始时间、按 C1/C3 与 turn 全身份比较；过期/断连/身份改变投影 unknown，观察不授予投递或回收许可 | `runtime-stale-idle` |

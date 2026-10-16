@@ -115,7 +115,43 @@ func (s *Server) taskAnswered(task *store.FleetTask, out *ClientPlaceResponse) {
 // live word off the inventory (empty when the session is gone or unknown).
 type taskView struct {
 	store.FleetTask
-	Live map[string]any `json:"live,omitempty"`
+	Live    map[string]any `json:"live,omitempty"`
+	PRState string         `json:"pr_state"`
+}
+
+// Use the same owner/generation-fenced landing projection as repo migration.
+// Work can finish before a later merge report; the immutable outcome/evidence
+// must not be rewritten to show that later landing. All reads are local to the
+// hub, once per (owner, repo) in this response, with no GitHub request.
+func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
+	rows := map[string][]map[string]any{}
+	landings := map[[2]string]map[string]map[string]any{}
+	out := make([]taskView, 0, len(tasks))
+	for _, t := range tasks {
+		live := s.taskLive(&t, rows)
+		v := taskView{FleetTask: t, Live: live, PRState: "unverified"}
+		if t.AuthorityVersion == store.TaskAuthorityVersion {
+			key := [2]string{t.Owner, t.Repo}
+			byTask, ok := landings[key]
+			if !ok {
+				items, err := s.Store.RepoTaskInventory(t.Repo, t.Owner)
+				if err != nil {
+					return nil, err
+				}
+				byTask = map[string]map[string]any{}
+				for _, item := range items {
+					byTask[item["task"].(string)] = item
+				}
+				landings[key] = byTask
+			}
+			if p := byTask[t.Ref]; p != nil && p["generation"] == t.Generation && p["worker_id"] == t.ExecutionOwner && p["ticket_ref"] == t.TicketRef {
+				v.PRState, _ = p["pr_state"].(string)
+				v.PR, _ = p["pr"].(string)
+			}
+		}
+		out = append(out, v)
+	}
+	return out, nil
 }
 
 // taskLiveFields are the inventory fields the page shows beside a record.
@@ -179,7 +215,12 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 				httpError(w, http.StatusNotFound, "no such task of yours")
 				return
 			}
-			writeJSON(w, http.StatusOK, taskView{FleetTask: t, Live: s.taskLive(&t, map[string][]map[string]any{})})
+			views, err := s.taskViews([]store.FleetTask{t})
+			if err != nil {
+				httpError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, views[0])
 			return
 		}
 		if what != "issue" || r.Method != http.MethodPost {
@@ -224,11 +265,10 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	rows := map[string][]map[string]any{}
-	out := make([]taskView, 0, len(ts))
-	for i := range ts {
-		live := s.taskLive(&ts[i], rows)
-		out = append(out, taskView{FleetTask: ts[i], Live: live})
+	out, err := s.taskViews(ts)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": out, "observed_at": time.Now().UTC().Format(time.RFC3339)})
 }

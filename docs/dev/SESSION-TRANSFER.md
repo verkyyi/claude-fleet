@@ -396,6 +396,45 @@ command never automatically starts a second writer as a rollback.
 A controller killed outright can leave a `.transfer-lock`; inspect the recorded
 PID and pane before removing that lock. The cleanup protections expire.
 
+### Authority authentication failure before native start
+
+The wrapper and `resume-source.sh` both retain the repo-authority admission gate.
+The ticket client uses an explicit endpoint/token pair as supplied; a URL alone
+uses the existing node/broker reader's complete pair. A token without its endpoint
+is refused, and a rejected explicit pair is never retried as another identity
+(#4490). The fallback changes only the reader subprocess environment.
+
+Publishing the fix does **not** update every existing recovery packet. A packet
+records `source_resume_argv`; its generated `resume-source.sh` embeds the launcher
+and helper paths from the install that created it. If those paths name an old
+version directory, switching `current` leaves them pointing at the old resolver.
+The #4490 rollback fixture generates its packet from the fixed fixture install;
+it does not test recovery through an existing packet pinned to an older install.
+
+Before attempting recovery, the original owner rechecks the retained window's
+repo, issue/task, Fleet identity, source SID, worktree, original launcher arguments
+and packet. Confirm that the previous wrapper and every native writer have
+stopped, and inspect which helper/wrapper/resolver the recovery will actually
+execute. Use the original packet's public recovery entry only when that path
+consumes the fix and all source/idle/lease/authority gates remain intact. A packet
+pinned to an unfixed version remains **BLOCKED** until its recovery owner verifies
+a supported original-SID path. Normal publication alone is not that verification.
+Do not rewrite the packet, alter files in an old live install, invoke internal
+`--run-source` directly, or replace the task to make it appear recovered.
+
+For an initial start that never reached native, the original owner likewise
+verifies that the supported standard wrapper entry resolves to the fixed version
+before using the original task parameters in the same window and worktree. Do
+not dispatch a replacement, change global authentication, or skip admission/leases.
+
+Record the actual native executable/PID and SID in the retained pane, authority
+admission and its native observation receipt, and preserved uncommitted work
+before reporting recovery. A dispatch receipt, shell prompt, or native process
+without its registered SID/authority receipt is insufficient. An ambiguous binding, live writer,
+held recovery lease or renewed authentication refusal leaves the original work
+retained for its owner; it does not authorize repeated starts. A merged fix and
+an isolated fixture do not establish that an affected live task has recovered.
+
 ## Continue a loop on Codex
 
 Add `--loop /private/path/loop.json` to the immediate or after-turn transfer:

@@ -6432,6 +6432,14 @@ drill_codex_mcp_busy() {
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
+drill_runtime_stale_idle() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" Snapshot 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
@@ -6801,6 +6809,15 @@ drill_land_race() {
   [ "$out" = "MERGED MERGED FAILING 2 0" ] || { WHY="three landings at once read [$out], want [MERGED MERGED FAILING 2 0]"; return 1; }
   [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
   WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
+}
+
+# ticket-credential-pair (#4490): no production credentials or network.
+drill_ticket_credential_pair() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_ticket_creds_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='endpoint/token 同源；URL-only 整对读取，token-only/读取失败拒绝，显式 401/403 不换身份'
 }
 
 # ================================================================ run ====}
