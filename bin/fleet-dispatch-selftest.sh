@@ -42,6 +42,9 @@ for hints, expected, source in [({}, "claude", "default"), ({"default":"codex"},
     d=resolve(request_id="fixture-default", **hints)
     assert (d["resolved_agent"],d["agent_source"],d["requested_agent"])==(expected,source,"default"),d
 params=dict(issue=7,repo="org/repo",agent="codex",task="T17",dispatch=accepted)
+params["launch"]=dict(version=1,operation_id="11111111-1111-4111-8111-111111111111",
+ task="T17",owner="alice",generation=3,attempt_id="task:T17:g3",provider="codex",
+ worker_id="22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333")
 validate_write("worker_start",params)
 try:
     validate_write("worker_start",dict(params,agent="claude"))

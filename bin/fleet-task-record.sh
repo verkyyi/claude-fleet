@@ -217,6 +217,11 @@ fi
 applicable || exit 3
 
 case "$cmd" in
+  mutate)
+    is_tref "${1:-}" || usage
+    mutation=$(python3 -c 'import json,sys; print(json.dumps({"authority_version":1,"mutation":json.load(sys.stdin)}))') || exit 2
+    call POST "/v1/node/tasks/$1" "$mutation"
+    exit $? ;;
   new)
     title='' token='' via='' repo='' rule='' issue='' key='' wid='' state=''
     while [ $# -gt 0 ]; do

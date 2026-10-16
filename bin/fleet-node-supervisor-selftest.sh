@@ -3,6 +3,7 @@
 # bin/fleet-node-supervisor.py (children + backoff, one copy per task, the attic
 # sweep, state across a restart, status --check) and fleet-diskguard.sh's
 # FLEET_ORPHAN_ALL_USERS. Cases in bin/fleet-node-supervisor-selftest.py.
+# Also pins bin/fleet-break-it-node-selftest.sh's forget liveness assertion (#4448).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # part 1 of 4 here, the rest in its part files (bin/selftest_part.py, issue #2694)

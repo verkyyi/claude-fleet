@@ -5,13 +5,19 @@ Any supplied fleet socket with a client, OR fleet-client-where's active lease,
 means watched. The lease has one reader; never infer a device/lease here.
 wait-for broadcasts to all CURRENT waiters, and latches one signal with none.
 Register before checking visibility/dirty markers to close the read→wait race.
-An unobserved renderer blocks for 65s (no render polling); dead servers return
-once so the caller can rediscover them. All wait clients are bounded and reaped.
+An unobserved renderer blocks until an event, its caller's maintenance deadline,
+or the 65s discovery fallback. Dead servers return once for rediscovery. All wait
+clients are bounded and reaped; a lease lookup cannot overrun maintenance.
 
-CLI: <frame seconds> <socket path>... → <elapsed frames> <lease frames left>.
+CLI: [--max-frames N] [--since-frame N] <frame seconds> <socket path>...
+     → <elapsed frames> <lease frames left>.
+With --since-frame, also return the monotonic frame at wake; pass it back on the
+next call so time spent doing maintenance counts toward the next deadline too.
+Omitting --max-frames keeps the original 65s wait (#4357's shared interface).
 The shell's hot path may test socket u+x (tmux's server_update_socket bit) and
 the returned lease lifetime without starting this helper on each visible frame.
 """
+import argparse
 import json
 import math
 import os
@@ -27,6 +33,13 @@ import time
 FALLBACK = 65
 CHANNEL = 'fleet-state-changed'
 BIN = Path(__file__).resolve().parent
+
+
+def monotonic():
+    # Python <3.10 on macOS makes time.monotonic() relative to EACH process's
+    # start. Deadlines and the shared lease cache need the same kernel clock
+    # across helper invocations, on both macOS and Linux.
+    return time.clock_gettime(time.CLOCK_MONOTONIC)
 
 
 def attached(sockets):
@@ -51,8 +64,12 @@ def stop(proc):
         proc.stdout.close()
 
 
-def wait(sockets, interval):
-    start = time.monotonic()
+def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
+    start = monotonic()
+    if since_frame is not None:
+        since_frame = since_frame or math.floor(start / interval)
+        timeout -= start - since_frame * interval
+    timeout = min(FALLBACK, max(0, timeout))
     parent = os.getppid()
     cache = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'global/render-watch.json'
     lease_until = 0
@@ -67,8 +84,20 @@ def wait(sockets, interval):
             lease_until = checked_until
     except (OSError, ValueError, KeyError, TypeError):
         pass
+
+    def result():
+        now = monotonic()
+        lease = max(0, math.ceil((lease_until - now) / interval))
+        if since_frame is not None:
+            frame = math.floor(now / interval)
+            return max(0, frame - since_frame), lease, frame
+        return max(1, math.ceil((now - start) / interval)), lease
+
+    if timeout <= 0:
+        return result()  # work already used the budget; no wait clients needed
     children = []
     query = None
+    lease_output = b''
     owner = None
     owner_fd = None
     with selectors.DefaultSelector() as sel:
@@ -91,30 +120,37 @@ def wait(sockets, interval):
                 children.append(proc)
                 sel.register(proc.stdout, selectors.EVENT_READ, 'event')
             if attached(sockets) or lease_until > start:
-                return 1, max(0, math.ceil((lease_until - start) / interval))
+                return result()
             if any(Path(p + '.dirty').exists() for p in sockets):
-                return 1, 0
+                return result()
             if checked_until <= start:
                 query = subprocess.Popen(['bash', str(BIN / 'fleet-client-where.sh'), '--json'],
                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                          start_new_session=True)
                 children.append(query)
                 sel.register(query.stdout, selectors.EVENT_READ, 'lease')
-            while time.monotonic() - start < FALLBACK:
+            while monotonic() - start < timeout:
                 if os.getppid() != parent:
                     break
-                deadline = 3 if query else FALLBACK
-                events = sel.select(max(0, deadline - (time.monotonic() - start)))
+                deadline = min(3, timeout) if query else timeout
+                events = sel.select(max(0, deadline - (monotonic() - start)))
                 if any(key.data in ('event', 'owner') for key, _ in events):
                     break
                 if query and any(key.data == 'lease' for key, _ in events):
+                    # Readiness may be PARTIAL output, not process exit. Never
+                    # communicate()/wait() here: a stalled lease reader must not
+                    # hide state events or consume the maintenance deadline.
+                    chunk = os.read(query.stdout.fileno(), 65536)
+                    if chunk and len(lease_output) + len(chunk) <= 65536:
+                        lease_output += chunk
+                        continue
                     sel.unregister(query.stdout)
-                    out, _ = query.communicate(timeout=1)
+                    stop(query)
                     try:
-                        active = json.loads(out).get('state') == 'active'
+                        active = not chunk and json.loads(lease_output).get('state') == 'active'
                     except (ValueError, AttributeError):
                         active = False
-                    checked_until = time.monotonic() + FALLBACK
+                    checked_until = monotonic() + FALLBACK
                     lease_until = checked_until if active else 0
                     try:
                         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -126,12 +162,11 @@ def wait(sockets, interval):
                     query = None
                     if active:
                         break
-                if query and time.monotonic() - start >= 3:
+                if query and monotonic() - start >= 3:
                     sel.unregister(query.stdout)
                     stop(query)
                     query = None
-            now = time.monotonic()
-            return max(1, math.ceil((now - start) / interval)), max(0, math.ceil((lease_until - now) / interval))
+            return result()
         finally:
             for child in children:
                 stop(child)
@@ -144,4 +179,16 @@ def wait(sockets, interval):
 if __name__ == '__main__':
     # SIGTERM follows the same cleanup path as timeout/exception.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    print(*wait(sys.argv[2:], float(sys.argv[1])))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--max-frames', type=int)
+    parser.add_argument('--since-frame', type=int)
+    parser.add_argument('interval', type=float)
+    parser.add_argument('sockets', nargs='*')
+    args = parser.parse_args()
+    if not math.isfinite(args.interval) or args.interval <= 0 or (
+            args.max_frames is not None and args.max_frames < 1) or (
+            args.since_frame is not None and args.since_frame < 0):
+        parser.error('interval/max-frames must be positive; since-frame nonnegative')
+    print(*wait(args.sockets, args.interval,
+                FALLBACK if args.max_frames is None else args.max_frames * args.interval,
+                args.since_frame))

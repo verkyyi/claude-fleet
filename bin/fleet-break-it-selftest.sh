@@ -4878,6 +4878,14 @@ drill_idle_timeout_starves_merged() {
 # An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
+drill_launch_receipt_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='原生启动回执拒绝旧身份与错误 provider，未验证不交付任务'
+}
+
 drill_dispatch_identity_fallback() {
   CAP=15; local out t0
   t0=$(now)
@@ -6358,6 +6366,15 @@ drill_spinner_unwatched_poll() {
   WHAT='无人观看不轮询；状态事件两秒内画一次，真实客户端连接后一秒内恢复动画'
 }
 
+drill_spinner_maintenance_starved() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/spinner-maintenance-selftest.sh" 2>&1) \
+    || { WHY="unwatched maintenance: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
@@ -6588,12 +6605,37 @@ term_go() {
   fi
 }
 
+# A delayed transcript must not replace a turn started after that read.
+drill_chat_late_history() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  # Production useFleetChat in extras/web-console/src/app/chat/chat.ts and
+  # extras/web-chat/ui/src/chat.ts; browser-attachment CI installs Chromium.
+  [ -f "$ROOT/extras/browser-transport/chat-history.mjs" ] || { WHY='missing late-history browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/chat-history.mjs" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || { WHY="late history replaced a new turn: $out"; return 1; }
+    WHAT='迟到的旧对话不抹掉已完成的新消息；官网和本地各只提交一次'
+  else
+    WHAT='无 Playwright/Chromium：browser-attachment 门运行真实页面演练'
+  fi
+  SECS=$(since "$t0")
+}
+
 # Chat has its own admission and never replays a submitted request.
 drill_chat_direct_admission() {
   CAP=180; local t0
   t0=$(now)
   term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
     '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
+  SECS=$(since "$t0")
+}
+
+drill_term_controller_ready() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames TestCoreExecTerminalCancellation TestTermPtySignalCleanup' './internal/agent' \
+    '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
   SECS=$(since "$t0")
 }
 
@@ -6636,6 +6678,24 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_view_auto_select() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --auto-select 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='目标窗消失时同步关闭本 browser view，不让输入落到自动选中的窗口；home PID 不变'
+  SECS=$(since "$t0")
+}
+
+drill_term_closed_lease() {
+  CAP=30; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --closed-lease 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='已退出 view 的新鲜租约可立即接回；活控制者仍须 Use here；旧清理不碰同名新 session'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_kills_session() {
   CAP=120; local t0 out rc
   t0=$(now)

@@ -29,8 +29,8 @@
 #     sweeps below, fleet-account/migrate, the python helpers) is caught by the
 #     IDLE_READ_SECS re-read, so nothing is later than 1s behind.
 #   · with nobody watching, fleet-render-watch.py waits for fleet-state-changed
-#     (state writes / attach), with a 65s fallback. Maintenance counters advance
-#     by elapsed time on wake; visible frames keep their original cadence.
+#     (state writes / attach), bounded by the NEXT maintenance deadline and a
+#     65s discovery fallback. Visible frames keep their original cadence.
 # Each tmux call is counted (TMUX_N) and the heartbeat publishes the rate.
 #
 # Three throttled side errands ride this loop, because being KeepAlive makes it the
@@ -793,6 +793,7 @@ TICK_STEP=$(awk -v c="$IDLE_TICK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); i
 TICK_SLEEP=$(awk -v s="$TICK_STEP" -v i="$INTERVAL" 'BEGIN{print s*i}')
 step=1
 force_read=0
+WAIT_FRAME=0   # shared helper's monotonic clock; includes work between waits
 
 # DIRTY MARKER (issue #887): `<socket path>.dirty`, i.e. `$TSOCKDIR/<label>.dirty`
 # beside tmux's own socket. set-claude-state.sh creates it after every state write
@@ -848,24 +849,24 @@ while :; do
   # false alarm exactly when the operator is least able to check (issue #677).
   # This branch already sleeps 2s, so an unthrottled stamp here costs one fork/2s.
   # Past the idle grace the sleep is a NAP (issue #1077, idle_nap above).
-  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; FRAME_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
+  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; FRAME_SOCKS=''; NEEDS_SOCKS=''; step=1; WAIT_FRAME=0; continue; fi
   IDLE_T0=''   # a live fleet ends the idle spell
 
   hbc=$((hbc + step))
-  [ "$hbc" -ge "$HB_EVERY" ] && { hbc=0; hb_stamp; }
+  [ "$hbc" -ge "$HB_EVERY" ] && { hbc=$((hbc % HB_EVERY)); hb_stamp; }
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
   if [ "$STUCK_SECS" -gt 0 ]; then
     sc=$((sc + step))
-    [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+    [ "$sc" -ge "$STUCK_EVERY" ] && { sc=$((sc % STUCK_EVERY)); stuck_check; }
   fi
 
   # Throttled degenerate-stream watchdog (issue #1557) — one integer compare per
   # frame; the sweep only over animating fleets (a `working` window animates).
   if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
     dgc=$((dgc + step))
-    [ "$dgc" -ge "$DEGEN_EVERY" ] && { dgc=0; degen_check; }
+    [ "$dgc" -ge "$DEGEN_EVERY" ] && { dgc=$((dgc % DEGEN_EVERY)); degen_check; }
   fi
 
   # Throttled stale-`needs` reconcile (issue #658) — same shape as the sweep above:
@@ -873,7 +874,7 @@ while :; do
   # stamped `needs` (0-2 on a live fleet), at most every NEEDS_SECS.
   if [ "$NEEDS_SECS" -gt 0 ]; then
     nc=$((nc + step))
-    [ "$nc" -ge "$NEEDS_EVERY" ] && { nc=0; needs_check "$NEEDS_SOCKS"; }
+    [ "$nc" -ge "$NEEDS_EVERY" ] && { nc=$((nc % NEEDS_EVERY)); needs_check "$NEEDS_SOCKS"; }
   fi
 
   # Throttled interval-daemon self-heal (issues #636, #639). This daemon is
@@ -894,7 +895,7 @@ while :; do
   # The rate limit, the log and the dash trace all live inside it, per unit.
   kc=$((kc + step))
   if [ "$kc" -ge "$KICK_EVERY" ]; then
-    kc=0
+    kc=$((kc % KICK_EVERY))
     [ -x "$BIN/fleet-daemon-watch.sh" ] && bash "$BIN/fleet-daemon-watch.sh" >/dev/null 2>&1
   fi
 
@@ -1179,28 +1180,52 @@ while :; do
   # sleep one frame; with nothing animating anywhere, the glyph has nothing to
   # draw, so sleep a whole tick and let every throttle count it as TICK_STEP frames.
   if [ -n "$FRAME_SOCKS" ]; then
+    WAIT_FRAME=0
     i=$((i + 1)); [ "$i" -gt "$NFRAMES" ] && i=1
     step=1
     sleep "$INTERVAL"
   elif [ "$looked" = 0 ]; then
     [ -n "$HB_T" ] || hb_stamp
+    # Rendering can wait; maintenance cannot (#4441). Pass the nearest remaining
+    # throttle window, not a fixed 65s sleep followed by catch-up counters. These
+    # are the SAME clocks the checks above consume, including heartbeat/self-heal
+    # even on a fleet with no candidates. No subprocess to compute this bound.
+    _wait_frames=$((HB_EVERY - hbc))
+    _remaining=$((KICK_EVERY - kc))
+    [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    if [ "$STUCK_SECS" -gt 0 ]; then
+      _remaining=$((STUCK_EVERY - sc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$NEEDS_SECS" -gt 0 ]; then
+      _remaining=$((NEEDS_EVERY - nc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
+      _remaining=$((DEGEN_EVERY - dgc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    [ "$_wait_frames" -ge 1 ] || _wait_frames=1
     set --
     for sock in $SOCKETS; do
       set -- "$@" "$TSOCKDIR/$sock"
       TMUX_N=$((TMUX_N + 1))  # the helper's wait-for client, counted too
     done
-    _wait=$(python3 "$BIN/fleet-render-watch.py" "$INTERVAL" "$@") || _wait=''
+    _wait=$(python3 "$BIN/fleet-render-watch.py" --max-frames "$_wait_frames" \
+      --since-frame "$WAIT_FRAME" "$INTERVAL" "$@") || _wait=''
     if [ -n "$_wait" ]; then
-      _rd "$_wait" step LEASE_FRAMES
+      _rd "$_wait" step LEASE_FRAMES WAIT_FRAME
       LEASE_FRAMES=$((LEASE_FRAMES + step))  # remaining AT wake, not before sleep
     else
-      # Broken/missing helper must back off, never become a hot retry loop.
-      sleep 65; step=$((HB_EVERY + SOCK_EVERY))
+      # Broken/missing helper falls back to the original quiet cadence, never a
+      # hot retry loop or a 65s maintenance outage.
+      WAIT_FRAME=0; sleep "$TICK_SLEEP"; step=$TICK_STEP
     fi
     # An event may have landed after the table read but before wait-for. Always
     # read BEFORE drawing on wake; elapsed time advances maintenance throttles.
     force_read=1
   else
+    WAIT_FRAME=0
     step=$TICK_STEP
     sleep "$TICK_SLEEP"
   fi

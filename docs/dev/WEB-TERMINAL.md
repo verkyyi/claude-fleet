@@ -43,11 +43,25 @@ T 沿用授权的 `personal` 或 `worker:<fleet_id>`；C 是本条连接 id。he
 只能清自己的 session id，不能释放新 epoch。`status` 的 id/generation 是持久个人 pane 的身份，
 不同于 hub hello 的节点链路代，也不同于 C5 的 direct/relay 路径 epoch。
 
-C3 仍需把这些状态/控制映射到已授权的 wire hello、Use here 和恢复流程，传回期望 generation，
-并协调原生菜单切换目标后的租约（personal 切到 worker 与直接 worker 入口目前是不同初始租约）。
-逐帧输入/resize 与逻辑目标 epoch 的原子校验、页面重连和无重放由 C3 接续；本接线不声称完成这些验收。
-原生交互由 `fleet-term-attach-selftest.sh` 的隔离真实 PTY 验证，真实 Chromium 页面和 Safari/OS IME
-仍须在部署后另验。
+C3（#3841）把持久身份作为 `term_resume`、明确接管作为 `take=1` 放进节点签名授权。
+helper 经独立 fd 3 通道报告 `term/gen/epoch` 后，节点才允许发送 `ready`；终端输出不能伪造准入。
+节点路径 generation 仍按控制链路换代；页面恢复重新认证节点路径，并用持久 terminal generation
+拒绝已结束/重建的目标。浏览器只在主动点击 Use here 时接管，不重放输入和 resize。
+节点须声明 `term-controller-v1`，旧节点在输入启用前明确拒绝。重建后的会话只经
+「连接当前会话」清除浏览器保存的旧代并重新准入，不调用 renew 或启动任何进程。
+
+Go 的实际 PTY 写入与 resize 和 Python helper 的 take/cleanup 共用 control flock；检查和操作
+在同一临界区。原生菜单和切壳经 helper 的 `switch` 在该锁内取得目标租约并切窗，personal 选中
+worker 后与直接 worker 入口占用同一资源。每帧还检查当前窗口与 pane/PID 身份；tmux 自动
+切窗的同步 hook 立即关闭本 view。旧连接只能释放其捕获的 epoch/session id。
+断线取消走独立管道，不排在输入帧之后；在 root-core 通道上由 core-exec 关闭已有控制连接，
+core 的 TERM 进入 helper 的同一取消路径，不转交第四个 fd 或改变 core 协议。
+有界接收队列施加背压，清理先关闭 PTY 再 wait。
+聊天丢流后只读取原对话，离线期间不重试写入；online 事件恢复读取，不重新提交 turn。
+
+`TestTerminalRecoveryChromium` 在隔离 HOME、tmux socket、身份和真实页面上记录重连与接管 trace，
+与既有 TerminalConsole / Attachment / ChatAttachment Chromium 一起由 browser-attachment 门运行。
+Safari、真实 OS IME、Mac/ACK 网络及部署验证仍须单独记录，不从 CI 或合并推断通过。
 
 ## 帧
 
@@ -105,12 +119,18 @@ C2 接页面；C6 接 Webchat 的请求准入及固定 `chat.sock` 适配器，�
 选择只生效一次；迟到的 direct 成功不能抢回 relay。已就绪的 direct 后来断开，助手只尝试一次
 重新授权的 relay：同目标、同代、携带 `previous` 连接。节点先取消并等待旧附件清理，才启动
 新适配器；同一个前任只能被替换一次。没有输入队列，不重放不确定是否送达的写入。之后的页面
-恢复策略由 C3 负责。这个传输的 epoch 只裁定路径，C4 的逻辑终端控制权仍由页面/服务适配器接入。
+终端页面在断网时暂停、联网后有限退避并重新认证；结束、代变更、授权失效和占用均停止自动尝试。
+新页面要求 `term-controller-v1` 能力及持久 ready 身份；旧节点明确显示需更新。
+传输 epoch 只裁定路径，逻辑终端控制权由上述 helper 和每帧 PTY 检查裁定。
 
 帧 ≤32 KiB；单 peer 接收/发送缓冲 ≤256 KiB，读写背压超限关闭该附件。文本仍为终端控制，
 二进制保持原始字节；页面显示可用 `utf8Stream()` 保留跨帧 UTF-8 状态。审计 `mode` 为
 `direct` 或 `relay`；`bytes_up/down` 是 **hub 转发的数据字节**，direct 必须为 0，不代表终端没有流量。
 选中的候选对类型经 `selected.pair` 返回；不记录候选地址、终端字节、授权或密钥。
+
+聊天页面初次读对话和重连读取都只应用最新的快照；发送新消息后，先前发起的读取即失效，
+即使在回复完成后才返回也不能覆盖新消息。禁 UDP 时较慢的回退不会清空当前对话；断线恢复
+仍然只读记录，不重发消息。官网与本地页面都由 `chat-late-history` 演练覆盖。
 
 ### 网络与部署验证
 

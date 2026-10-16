@@ -14,6 +14,15 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
+func TestAttachmentControllerCapability(t *testing.T) {
+	r := newTermRig(t, true)
+	r.nc.canTermController = false
+	c, status := dialAttachment(t, r, "service=term&target=personal&controller=1", r.alice)
+	if c != nil || status != http.StatusConflict || len(r.starts()) != 0 {
+		t.Fatalf("old node admitted recovery: socket=%v status=%d starts=%v", c, status, r.starts())
+	}
+}
+
 func dialAttachment(t *testing.T, r *termRig, query string, cookie *http.Cookie) (*websocket.Conn, int) {
 	t.Helper()
 	h := http.Header{"Origin": []string{r.origin}}
