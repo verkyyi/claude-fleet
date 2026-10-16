@@ -578,6 +578,45 @@ the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only 
 a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
 release route 404s, the hub as before. BREAK-IT row `release-tampered`.
 
+**Mac lane retention and recovery** (issue #4494). Before pruning a sealed
+release's tree/installers, the hub saves its exact signed manifest and signature
+in `<dir>/chain/<sha>.json` as one atomically replaced object. These small proofs
+are retained independently of the full-release limit; they are not downloadable
+builds. The Mac target stays complete, while intermediate large artifacts still
+expire. A failed proof write retains that release and logs `cannot archive chain
+proof`. Both lane reads and moves verify the anchor/key revocations, repository,
+SHA and each signed `prev`/`seq` edge from the current stable pointer. The Mac
+pointer's seq must match its target; a move cannot lower its recorded seq even
+when the old lane is unreachable. Pointer changes invalidate each replica's
+five-second read cache immediately; other on-volume damage/revocations retain
+that existing cache bound. BREAK-IT: `stable-macos-pruned-chain`.
+
+This does **not** reconstruct a chain already deleted by an older hub. A gap,
+bad signature, foreign chain or mismatched seq keeps the Mac lane unavailable;
+re-publishing that historical Mac target still returns 409. Compatibility is
+unchanged: an unavailable lane means Darwin falls back to Linux stable and
+`/version` omits the Mac fields, **not** that macOS verified that fallback.
+Recovery is a normal forward Mac release: select a fully retained target on the
+current stable chain, pass the existing macOS/ancestry gates via `mac-follow`
+or `fleet-stable.sh move --ref stable-macos`, then let `stable-publish.yml
+ref=stable-macos` publish it. If no such target passes, wait for a new verified
+release; there is no proof-import/force route, and no manual pointer or signature
+repair. A content rollback must be a new signed release sequence and pass the
+Mac gates again.
+
+Deploy/acceptance owner: check the Mac versions already installed before any
+lane change, because returning an older lane can downgrade some clients. Finish
+upgrading **every pruning/serving replica** before relying on this guarantee:
+old replicas ignore proofs and can still remove an unarchived link. Rolling back
+the hub binary also restores that limitation. The shared volume must make a
+completed single-object rename visible before deletion; this is the same
+consistency assumption as `current`/`stable`. Concurrent pruning of a fixed
+published chain is supported; these proofs add no cross-replica transaction or
+ordering for competing publishes (the existing workflow lanes serialize them).
+Verify Darwin's signed body and `X-Ccquota-Release-Ref`, `/version`'s Mac SHA/URL
+and lag on every replica, then repeat after pruning and restarting. This is an
+owner-run rollout, not an automatic repair of a historical pointer.
+
 **A client checks a release with no ccquota** (issue #3162). Beside the base64
 signature, every manifest the hub serves is signed again, as served, in OpenSSH's
 SSHSIG format with the same key (namespace `claude-fleet-release`): the blob in

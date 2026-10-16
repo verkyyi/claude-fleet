@@ -3099,6 +3099,18 @@ drill_browser_import_access_crossed() {
   SECS=$(since "$t0")
 }
 
+# fleet_release.go / fleet_release_macos.go / fleet_release_chain.go: a lagging Mac lane survives
+# retention without retaining every old tree and installer (#4494).
+drill_stable_macos_pruned_chain() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests fleet_release_macos_prune_test.go TestMacLanePrune TestMacLaneProofRefusals \
+    TestMacLaneProofSharedPrune TestMacLaneProofRollback TestMacLaneProofTrust || return 1
+  WHAT='Linux 超过保留数后 Mac 通道仍可验证，旧大制品被清理；Go 门验证共享存储重读与 HTTP'
+  [ "$GO_RAN" = 1 ] && WHAT='Linux 推进九版、保留三版，两份 store 重复清理后重读：Darwin body/header、version 和落后数正确，旧大制品已删（go test）'
+  SECS=$(since "$t0")
+}
+
 # this file runs part 1/2; the rest are its part files (issue #2694)
 : "${BREAK_PART:=1/2}"
 cred_run_drills "$0"
