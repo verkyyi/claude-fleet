@@ -196,11 +196,248 @@ def runtime_ready(status):
     return ready and not status.get('toolsError')
 
 
-def configured_process(pid, config, argv_reader, exe_reader):
+# `bash -c 'exec WORD...'` (issue #4537): the fleet's own MCP launcher
+# (conf/mcp-worker.json) is a shell that execs Python, so the live kernel is
+# Python and its argv is the EXPANDED words. Only this one shape is read: words
+# of literal text, '…' and "…" whose only expansions are $NAME / ${NAME} /
+# ${NAME:-word} inside double quotes. Anything else — another statement, a
+# command substitution, an unquoted expansion, a glob, a tilde, an escape, an
+# option to exec — is not proven and stays an unverified process.
+_SAFE = r'A-Za-z0-9_./,:=@%+-'
+_NAME = r'[A-Za-z_][A-Za-z0-9_]*'
+# Variables bash sets or rewrites itself, so the started process's environment
+# does not say what the shell expanded them to.
+_SHELL_OWNED = {'PWD', 'OLDPWD', 'SHLVL', '_', 'IFS', 'PPID', 'UID', 'EUID', 'RANDOM', 'SECONDS',
+                'LINENO', 'HOSTNAME', 'HOSTTYPE', 'OSTYPE', 'MACHTYPE', 'OPTIND', 'OPTARG', 'PATH'}
+# Present at the shell's start, these could run code or change what `exec` is:
+# BASH_ENV / ENV run a file first, SHELLOPTS / BASHOPTS / POSIXLY_CORRECT turn
+# options on, EXECIGNORE hides programs from the lookup, BASH_FUNC_* (or any
+# value `() {…`) define functions, SSH_CLIENT makes bash read ~/.bashrc.
+_SHELL_HOOKS = ('ENV', 'SHELLOPTS', 'BASHOPTS', 'POSIXLY_CORRECT', 'EXECIGNORE', 'SSH_CLIENT', 'SSH2_CLIENT')
+
+
+def _hooked(names):
+    return any(n in _SHELL_HOOKS or n.startswith('BASH_') for n in names)
+
+
+def _shell_expansion(text, i, names):
+    """Parse one expansion at text[i] == '$'; return (end, node) or None."""
+    m = re.match(r'\$(' + _NAME + r')', text[i:])
+    if m:
+        names.add(m.group(1))
+        return i + m.end(), ('var', m.group(1), None)
+    m = re.match(r'\$\{(' + _NAME + r')(:-)?', text[i:])
+    if not m:
+        return None
+    name = m.group(1)
+    names.add(name)
+    j = i + m.end()
+    if not m.group(2):
+        return (j + 1, ('var', name, None)) if text[j:j + 1] == '}' else None
+    default = []
+    while j < len(text) and text[j] != '}':
+        if text[j] == '$':
+            got = _shell_expansion(text, j, names)
+            if not got or got[1][2] is not None:  # one level of default only
+                return None
+            j, node = got
+            default.append(node)
+            continue
+        lit = re.match('[' + _SAFE + ']+', text[j:])
+        if not lit:
+            return None
+        default.append(('lit', lit.group(0)))
+        j += lit.end()
+    if j >= len(text):
+        return None
+    return j + 1, ('var', name, default)
+
+
+def shell_exec_words(script):
+    """`exec WORD...` as a list of words (each a list of nodes) + the names read, or None."""
+    names = set()
+    words = []
+    i = 0
+    text = script.strip(' \t\n')
+    while i < len(text):
+        while i < len(text) and text[i] in ' \t':
+            i += 1
+        if i >= len(text):
+            break
+        word = []
+        while i < len(text) and text[i] not in ' \t':
+            c = text[i]
+            if c == "'":
+                end = text.find("'", i + 1)
+                if end < 0:
+                    return None
+                word.append(('lit', text[i + 1:end]))
+                i = end + 1
+            elif c == '"':
+                i += 1
+                while i < len(text) and text[i] != '"':
+                    if text[i] == '$':
+                        got = _shell_expansion(text, i, names)
+                        if not got:
+                            return None
+                        i, node = got
+                        word.append(node)
+                        continue
+                    m = re.match('[ ' + _SAFE + ']+', text[i:])
+                    if not m:
+                        return None
+                    word.append(('lit', m.group(0)))
+                    i += m.end()
+                if i >= len(text):
+                    return None
+                i += 1
+            else:
+                m = re.match('[' + _SAFE + ']+', text[i:])
+                if not m:
+                    return None  # an unquoted expansion, glob, ~, \\, ;, | ...
+                word.append(('lit', m.group(0)))
+                i += m.end()
+        words.append(word)
+    if len(words) < 2 or words[0] != [('lit', 'exec')] or any(n[0] != 'lit' for n in words[1]):
+        return None
+    if ''.join(n[1] for n in words[1]).startswith('-'):
+        return None  # exec -a/-c/-l rewrite argv[0] or the environment
+    return words[1:], names
+
+
+def _expand(nodes, env):
+    out = []
+    for node in nodes:
+        if node[0] == 'lit':
+            out.append(node[1])
+            continue
+        _, name, default = node
+        value = env.get(name)
+        if default is not None and not value:
+            value = _expand(default, env)
+        if value is None:
+            raise ValueError('unset')  # bash would expand "", but say nothing we cannot see
+        out.append(value)
+    return ''.join(out)
+
+
+# Codex releases whose stdio MCP environment was MEASURED to be the allowlist +
+# env_vars + env (issue #4537: real app-server, every hook in its environment,
+# none reached the child; one named in env_vars did). Another release gets no
+# shell-exec identity until it is measured and added here.
+SHELL_EXEC_CODEX = ('0.160.1',)
+
+
+def codex_version(client):
+    """The version the live app-server gave in its initialize answer, or None."""
+    agent = (getattr(client, 'initialized', None) or {}).get('userAgent')
+    m = re.match(r'[^/\s]+/(\d+\.\d+\.\d+)(?:[\s;(]|$)', agent) if isinstance(agent, str) else None
+    return m.group(1) if m else None
+
+
+def shell_exec_reader(client, reader):
+    """<reader> for a measured Codex release, else None (the shape stays unverified)."""
+    return reader if codex_version(client) in SHELL_EXEC_CODEX else None
+
+
+def shell_exec_argv(pid, parent, config, env_reader):
+    """(argv, PATH, start token) the configured `bash -c 'exec …'` would exec as <pid>, or None.
+
+    What this proves is that the kernel process is the exec target of the
+    EFFECTIVE config's shell — not a record of that launch: once bash is gone
+    nothing records what it expanded. It holds under these conditions, each
+    checked here or by the caller:
+
+    - the agent is a measured Codex release (its classify calls pass an
+      env_reader only through shell_exec_reader / SHELL_EXEC_CODEX): a
+      0.160.1 stdio MCP child gets Codex's allowlist (HOME, LANG, PATH,
+      TMPDIR, …) + the config's `env_vars` + its `env`, never the rest of
+      Codex's environment — so a shell hook (_SHELL_HOOKS, BASH_*) reaches
+      bash only through `env` / `env_vars`, and neither may name one; nor may
+      the process's own environment, nor may its stdin be a socket (bash then
+      reads ~/.bashrc instead, whatever the environment says). Another Codex
+      release is not trusted until it is measured and listed. Claude hands its
+      MCP children its whole, mutable environment: no proof is offered there.
+    - the agent's own start environment names no hook either (a backstop for
+      the allowlist above, not a proof of what it handed down at runtime;
+      SSH_CLIENT there is normal and is not handed down);
+    - every variable the script expands is, in the process's environment,
+      exactly the config's `env` value, else the agent's, else absent — a
+      launcher between bash and the kernel (macOS's python3 shim rewrites PATH)
+      may change other variables, not these;
+    - the process started after the agent and was not replaced meanwhile.
+    """
+    command = config.get('command')
+    args = config.get('args')
+    extra = config.get('env') or {}
+    forwarded = config.get('env_vars') or []
+    if (env_reader is None or parent is None or not isinstance(command, str)
+            or Path(command).name != 'bash' or not isinstance(args, list) or len(args) != 2
+            or args[0] != '-c' or not isinstance(args[1], str) or not isinstance(extra, dict)
+            or any(not isinstance(k, str) or not isinstance(v, str) for k, v in extra.items())
+            or not isinstance(forwarded, list) or any(not isinstance(n, str) for n in forwarded)):
+        return None
+    parsed = shell_exec_words(args[1])
+    if not parsed:
+        return None
+    words, names = parsed
+    if names & _SHELL_OWNED or any(n.startswith('BASH') for n in names):
+        return None
+    wanted = names | {'PATH'}
+    try:
+        mine = env_reader(pid, wanted)
+        theirs = env_reader(parent, wanted)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    env, origin, birth = mine['values'], theirs['values'], mine['birth']
+    # A socket on stdin (and SHLVL < 2) makes bash read /etc/bashrc + ~/.bashrc
+    # as if started by sshd — no variable shows that, fd 0 survives the exec.
+    if (mine['stdin_socket'] or _hooked(mine['names']) or mine['functions']
+            or _hooked(extra) or _hooked(forwarded)
+            or _hooked(n for n in theirs['names'] if not n.startswith('SSH')) or theirs['functions']
+            or theirs['birth'] > birth):
+        return None
+    for name in names:
+        if name in extra:
+            if env.get(name) != extra[name]:
+                return None
+        elif name in env and env[name] != origin.get(name):
+            return None
+    try:
+        # PATH is only where bash looked the program up: what it was handed, not
+        # the process's own (macOS's python3 shim rewrites that before re-exec).
+        return [_expand(word, env) for word in words], extra.get('PATH', origin.get('PATH')), birth
+    except ValueError:
+        return None
+
+
+def configured_process(pid, config, argv_reader, exe_reader, env_reader=None, parent=None):
     command = config.get('command')
     args = config.get('args') or []
     if not isinstance(command, str) or not isinstance(args, list) or not command:
         return False
+    launched = shell_exec_argv(pid, parent, config, env_reader)
+    if launched is not None:
+        # After exec the shell is gone: compare the kernel's process with what it
+        # would exec. Same rule as a bare configured program below — exact argv,
+        # the program found on the PATH bash was handed, its name, or macOS's
+        # framework Python — so this says which configured server the process
+        # is, never that its script still exists or that it may be restarted.
+        launched, search, birth = launched
+        argv = argv_reader(pid)
+        executable = exe_reader(pid)
+        try:
+            same = env_reader(pid, set())['birth'] == birth  # the number was not reused meanwhile
+        except (OSError, ValueError):
+            same = False
+        program = launched[0]
+        found = shutil.which(program, path=search) if search else None
+        framework_python = (re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', program) is not None
+                            and executable.parts[-4:] == ('Python.app', 'Contents', 'MacOS', 'Python'))
+        if (same and '/' not in program and argv[1:] == launched[1:]
+                and (executable.name == program or framework_python
+                     or (found and executable == Path(found).resolve()))):
+            return True
     argv = argv_reader(pid)
     executable = exe_reader(pid)
     # A bare program name resolves on the VERIFIER's PATH, which need not be the
@@ -288,10 +525,10 @@ def package_child(pid, config, argv_reader, exe_reader):
     return False
 
 
-def matched_services(pid, configured, rows, argv_reader, exe_reader):
+def matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader=None):
     return [(name, conf) for name, conf in configured.items()
             if conf.get('enabled', True) and
-            (configured_process(pid, conf, argv_reader, exe_reader)
+            (configured_process(pid, conf, argv_reader, exe_reader, env_reader, rows.get(pid, (None,))[0])
              or npm_title_process(pid, conf, rows, argv_reader, exe_reader))]
 
 
@@ -349,21 +586,25 @@ def contract_hint(source, approved, name, conf=None):
             % (name, ','.join(listed), conf))
 
 
-def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True):
+def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None):
     # strict=False answers a narrower question (issue #864): not "may this worker
     # hibernate?" but "is this configured MCP service, or something the agent is
     # still running?". An uncontracted, unready or job-owning service is still an
     # MCP service. Claude's historical non-strict walk delegates its tool work
     # to fleet_window_tool_busy. Codex must keep jobs beneath a server visible:
     # only the configured launcher and verified package entrypoint are helpers.
+    # env_reader (fleet_sleep_argv.process_env) lets a `bash -c 'exec …'` launcher
+    # match its exec target (shell_exec_argv, issue #4537) — Codex callers only;
+    # without it that shape stays unverified. Identity is never a contract.
     configured, statuses = inventory
     approved, contract_conf = restartable(source) if strict else (set(), None)
     allowed = set()
     proof = {}
+    basis = {}
     for pid, (parent, _) in rows.items():
         if parent != server_pid:
             continue
-        matches = matched_services(pid, configured, rows, argv_reader, exe_reader)
+        matches = matched_services(pid, configured, rows, argv_reader, exe_reader, env_reader)
         if len(matches) != 1:
             continue
         name, conf = matches[0]
@@ -401,7 +642,16 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
                 raise ValueError('MCP service %s owns a live job/browser beneath its entrypoint' % name)
             allowed.add(child)
         proof[name] = fingerprint(conf)
+        if shell_exec_argv(pid, server_pid, conf, env_reader) is not None:
+            basis[name] = 'shell-exec'
     source['sleep_mcp'] = proof
+    if basis:
+        # How each service was identified, for the record: 'shell-exec' = the
+        # kernel is the exec target of the effective config's shell, under
+        # shell_exec_argv's conditions. Names and the basis only — never a value.
+        source['sleep_mcp_basis'] = basis
+    else:
+        source.pop('sleep_mcp_basis', None)
     return allowed
 
 
