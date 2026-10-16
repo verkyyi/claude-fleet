@@ -44,7 +44,7 @@ const observedWords = (t: Task) => {
 
 const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({ t, ticket, onFile }) => {
   const state = taskStatus(t);
-  const ref = taskTicket(t, ticket?.backend);
+  const ref = taskTicket(t, ticket ? [ticket] : []);
   const pr = taskPR(t);
   const landing = taskLanding(t);
   const mismatch = agentMismatch(t);
@@ -73,7 +73,8 @@ const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({
               ? <Link to={ticketPath(ticket.repo, ticket.number)} className={cn(linkCls, "break-all")}>{ref.backend}:{ref.repo}#{ref.n} ›</Link>
               : ref.backend === "gh" && /^[\w.-]+\/[\w.-]+$/.test(ref.repo) ? <a href={`https://github.com/${ref.repo}/issues/${ref.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
                   {ref.backend}:{ref.repo}#{ref.n} <ArrowUpRight className="inline size-3.5 align-[-2px]" aria-hidden />
-                </a> : <span className="break-all">{ref.backend}:{ref.repo}#{ref.n}</span>
+                </a> : <span className="break-all">{ref.backend ? `${ref.backend}:` : ""}{ref.repo}#{ref.n}
+                  {!ref.backend ? ` · ${tr("来源未知", "location unknown")}` : ""}</span>
           ) : t.repo || t.authority_version ? null : (
             <Button size="sm" variant="outline" className="h-7" onClick={() => onFile(t)}>
               <Plus />{tr("建一张单子", "Open a ticket")}
@@ -190,13 +191,8 @@ export default function TasksPage() {
   }, [ticketList]);
   const repos = useMemo(() => [...new Set(ticketList.map((t) => t.repo))].sort(), [ticketList]);
   const ticketOf = (t: Task) => {
-    const r = taskTicket(t);
-    if (!r) return undefined;
-    if (t.ticket_ref) return byRef.get(`${r.backend}:${r.repo.toLowerCase()}#${r.n}`);
-    // Legacy placement has no backend. Preserve the registered ticket's home
-    // when the existing ticket list has exactly one matching reference.
-    const matches = ticketList.filter((ticket) => ticket.repo.toLowerCase() === r.repo.toLowerCase() && ticket.number === r.n);
-    return matches.length === 1 ? matches[0] : undefined;
+    const r = taskTicket(t, ticketList);
+    return r?.backend ? byRef.get(`${r.backend}:${r.repo.toLowerCase()}#${r.n}`) : undefined;
   };
   const taskList = tasks.data?.tasks || [];
 
