@@ -272,6 +272,25 @@ alone never invents success/failure. Retry needs a terminal result and released
 lease or fresh stopped proof; transfer requires stopped proof. Lease expiry or
 an unavailable node never authorizes replacement.
 
+During a hub outage (#4396), accepted-task reports, cancellation requests and
+verified native-stop receipts remain in the node's existing operation journal.
+`RECONCILIATION_PENDING` means the hub commit is unconfirmed; it is not a work
+result. Reconnect or the next task command replays the same event and generation,
+without replaying command input. The existing relay outbox uses one file per
+receipt and retains it until a positive hub acknowledgement. Running native
+processes survive; new starts, resumes and ownership changes still need the hub.
+Native resume and stop replay share a local exclusion lock. Stop replay also
+rechecks the saved window binding and native incarnation; an earlier process's
+stop proof cannot release a later resume in the same task generation.
+
+Pending receipts are limited to 1,000 per login and a seven-day replay window.
+Overflow refuses the new write; expiry retains the old record and reason as
+`RECONCILIATION_REQUIRED`. Neither grants another owner. Cached task observations
+carry their original `observed_at` and `stale: true` during an outage and never
+authorize a launch or prove success. `fleet-hub-node.sh recovery` lists unresolved
+receipts and overflow evidence; `fleet-hub-node.sh replay` makes one bounded pass.
+These are on-demand commands, with no added daemon or polling cadence.
+
 The node API adds `GET /v1/node/tasks/T<n>/children` and
 `POST /v1/node/tasks/T<n>/reports`. A report carries `event_id`, task, account
 owner, accepted `ticket_ref` (empty for unticketed work), child generation and

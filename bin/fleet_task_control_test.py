@@ -142,8 +142,8 @@ print("200")
         proof = dict(pid=123, birth="one", executable="/native", native_session="sid")
         with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=[dict(task=t),t]) as calls, patch.object(control.launch, "option", return_value=json.dumps(proof)), patch.object(control.launch, "check_receipt", return_value=proof), patch.object(control.os, "kill", side_effect=ProcessLookupError):
             self.assertEqual(control.finalize("@7"), 0)
-            self.assertEqual(calls.call_args.args[0], "mutate")
-            self.assertEqual(calls.call_args.args[2]["kind"], "stop_ack")
+            self.assertEqual(calls.call_args.args[0], "stopped")
+            self.assertTrue(calls.call_args.args[2]["execution_stopped"])
             self.assertNotIn("state", calls.call_args.args[2])
 
     def test_native_alive_cannot_ack_cancel(self):

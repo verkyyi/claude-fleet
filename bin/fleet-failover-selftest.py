@@ -725,11 +725,13 @@ class HardWallBackground(unittest.TestCase):
         self.hard=True
         env={k:v for k,v in os.environ.items() if k!='FLEET_FAILOVER_BG_GRACE'}
         mods={'fleet-sleep.py':vars(self.sleep),'fleet_sleep_argv.py':{'process_argv':lambda pid:self.argv[pid]}}
-        for p in (patch.object(flow.runpy,'run_path',side_effect=lambda f:mods[Path(f).name]),
-                  patch.dict(self.sleep.TRANSFER,process_rows=lambda:rows),
+        # patch.dict copies (and loads) lazy sleep dependencies. Finish that
+        # before mocking shared runpy for failover's two module lookups (#4475).
+        for p in (patch.dict(self.sleep.TRANSFER,process_rows=lambda:rows),
                   patch.dict(self.sleep.MCP,claude_inventory=lambda *a:{},classify=lambda *a:set()),
                   patch.dict(self.sleep.ARGV,process_argv=lambda pid:self.argv[pid],
                              process_executable=lambda pid:Path(self.argv[pid][0])),
+                  patch.object(flow.runpy,'run_path',side_effect=lambda f:mods[Path(f).name]),
                   patch.object(flow,'inspect',return_value=self.source),
                   patch.object(flow,'opt',return_value=''),
                   patch.object(flow,'evidence',return_value=(True,'claude:e')),
