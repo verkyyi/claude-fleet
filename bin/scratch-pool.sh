@@ -199,7 +199,7 @@ EOF
         [ -z "$_r" ] && _wt=$(TM display-message -p -t "$_w" '#{@worktree}' 2>/dev/null) \
           && [ -n "$_wt" ] && [ -n "$(fleet_worktree_repo "$SESS" "$_wt")" ] && continue
         fleet_win_retire "$_w" "$SOCK"
-        TM kill-window -t "$_w" 2>/dev/null
+        TM kill-window -t "$POOL:$_w" 2>/dev/null       # only while still parked (see retire)
       done
       # The cgroup CPU reading grow_hold judges by (issue #3542), sampled once here.
       if [ "$CMD" != reap ] && [ "$REFILL" = 0 ] && [ -z "${FLEET_POOL_CPU_READING:-}" ]; then
@@ -213,15 +213,17 @@ EOF
       # HOME first (issue #3999): its slot is the one ⌘N / ⚡ claim, and a repo
       # slot's pass reaches the network (fetch, worktree) — a remote that does not
       # answer must never starve the slot that needs none.
+      # A slot that could not be confirmed off (exit 3, #4552) is the fan-out's too.
+      _rc=0
       while IFS= read -r _r; do
         [ -n "$_r" ] || continue
         # shellcheck disable=SC2086
-        bash "$0" "$CMD" "$SESS" --repo "$_r" $_pass
+        bash "$0" "$CMD" "$SESS" --repo "$_r" $_pass || { [ "$?" = 3 ] && [ "$CMD" = ensure ] && _rc=3; }
       done <<EOF
 -
 $(fleet_repos "$SESS")
 EOF
-      exit 0 ;;
+      exit "$_rc" ;;
     *) REPO_ARG=$(fleet_repos "$SESS" | head -n1) ;;
   esac
 fi
@@ -239,6 +241,9 @@ fi
 
 WANT="${FLEET_SCRATCH_POOL-$POOL_DEFAULT}"
 [ "$REPO" = - ] && WANT=$(home_want "$WANT")
+# WANT_OFF: switched off on purpose ("" or a 0), as against a value that is no number
+WANT_OFF=0
+case "$WANT" in '') WANT_OFF=1 ;; *[!0-9]*) ;; *) [ "$((10#$WANT))" = 0 ] && WANT_OFF=1 ;; esac
 case "$WANT" in ''|*[!0-9]*) WANT=0;; esac
 AGENT="${AGENT_ARG:-${FLEET_AGENT:-claude}}"
 case "$AGENT" in claude|codex) ;; *) AGENT=claude ;; esac
@@ -314,7 +319,9 @@ wfmt() { local k o=''; for k in "$@"; do o="$o${o:+	}:#{$k}"; done; printf '%s' 
 # agent's (the reap of a slot's default agent retires the others'). An entry's
 # repo is its @repo stamp, else (one warmed before #797) its worktree's origin.
 pool_windows() {
-  local w nr r wt a
+  local w nr r wt a rows
+  # rc 1 when the holding session cannot be listed (absent, or tmux not answering)
+  rows=$(TM list-windows -t "$POOL" -F "$(wfmt window_id @norepo @repo @worktree @pool_agent)" 2>/dev/null) || return 1
   while IFS=$'\t' read -r w nr r wt a; do
     w=${w#:} nr=${nr#:} r=${r#:} wt=${wt#:} a=${a#:}
     [ -n "$w" ] || continue
@@ -327,18 +334,54 @@ pool_windows() {
     if [ "${1:-}" != all ]; then [ "${a:-claude}" = "$AGENT" ] || continue; fi
     printf '%s\n' "$w"
   done <<EOF
-$(TM list-windows -t "$POOL" -F "$(wfmt window_id @norepo @repo @worktree @pool_agent)" 2>/dev/null)
+$rows
 EOF
 }
 
 # retire <wid> — kill the window and free its worktree+branch. Idempotent.
+# Only while it is still PARKED (issue #4552): a claim never takes the slot's
+# lock, so between a pass listing an entry and killing it a claim may have moved
+# it into the fleet — a person's session now. The kill names the window IN the
+# holding session (`<pool>:<wid>`), which tmux refuses ("can't find window") once
+# it lives anywhere else: the test and the kill are one command. Three outcomes —
+#   rc 0  killed here: the worktree is freed;
+#   rc 0  not in the pool any more (claimed, or already gone): left as it is, and
+#         the retired mark this call made taken back — only one it CREATED (an
+#         exclusive create, noclobber: a mark already there, anyone's, is never
+#         written over nor owned), and only while it still holds this call's token;
+#   rc 1  unknown (the server did not answer, or a mark could not be put back):
+#         the worktree and the mark stay.
 retire() {
-  local wid="$1" wt slug
-  wt=$(wopt "$wid" @worktree); slug=$(wopt "$wid" @pool_slug)
-  fleet_win_retire "$wid" "$SOCK"   # the pool's close (#1840)
-  TM kill-window -t "$wid" 2>/dev/null
+  local wid="$1" wt slug fid mark='' tok rows d
+  wt=$(wopt "$wid" @worktree); slug=$(wopt "$wid" @pool_slug); fid=$(wopt "$wid" @fleet_id)
+  if fleet_is_fid "$fid"; then
+    # the pool's close (#1840): fleet_win_retire's mark, created exclusively
+    d=$(fleet_retired_dir); [ -d "$d" ] || mkdir -p "$d" 2>/dev/null
+    tok="scratch-pool $$ $wid $(NOW)"
+    ( set -C; printf '%s\n' "$tok" > "$d/$fid" ) 2>/dev/null && mark="$d/$fid"
+  fi
+  if ! TM kill-window -t "$POOL:$wid" 2>/dev/null; then
+    rows=$(TM list-windows -a -F '#{window_id} #{session_name}' 2>/dev/null) || return 1
+    printf '%s\n' "$rows" | grep -qx "$wid $POOL" && return 1   # still parked: the kill failed
+    [ -z "$mark" ] || unmark "$mark" "$tok" || return 1
+    return 0
+  fi
   [ -n "$MAIN" ] && [ -n "$slug" ] && [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"
   return 0
+}
+# unmark <mark> <token> — take back a retired mark only while it holds <token>:
+# moved aside in one rename (whatever is there now is the moved file), read, and
+# deleted when it is ours. Anyone else's goes back with `ln` (no clobber): back in
+# place, or a mark written in between already stands there — then the side copy
+# goes. Neither (ln failed, nothing there): the side copy is KEPT, rc 1.
+unmark() {
+  local side="$1.unmark.$$"
+  [ -e "$1" ] || return 0
+  mv "$1" "$side" 2>/dev/null || return 1
+  if [ "$(cat "$side" 2>/dev/null)" = "$2" ]; then rm -f "$side"; return 0; fi
+  if ln "$side" "$1" 2>/dev/null || [ -e "$1" ]; then rm -f "$side"; return 0; fi
+  echo "scratch-pool: could not put back the retired mark $1 (kept as $side)" >&2
+  return 1
 }
 
 # ---------------------------------------------------------------- readiness ----
@@ -407,7 +450,9 @@ wait_settled() {
   deadline=$(( $(NOW) + PTIMEOUT ))
   while [ "$(NOW)" -lt "$deadline" ]; do
     TM has-session -t "$POOL" 2>/dev/null || return 1
-    [ "$(wopt "$wid" pane_dead)" = 1 ] && return 1
+    # dead, or gone (a slot switched off retires a warming entry, #4552) — an
+    # empty answer is no window, never a minute's wait for one
+    case "$(wopt "$wid" pane_dead)" in 1|'') return 1 ;; esac
     if [ -z "$rendered_at" ]; then
       [ -n "$(input_line "$wid")" ] && rendered_at=$(NOW)
       sleep 0.5; continue
@@ -449,7 +494,7 @@ warm_input() {
   deadline=$(( $(NOW) + POOL_WARM_TIMEOUT ))
   while [ "$(NOW)" -lt "$deadline" ]; do
     sleep 0.5
-    [ "$(wopt "$wid" pane_dead)" = 1 ] && return 1
+    case "$(wopt "$wid" pane_dead)" in 1|'') return 1 ;; esac
     after=$(input_line "$wid"); rest=${after#*❯}
     case "$rest" in
       *"$POOL_WARM_CH"*)
@@ -708,10 +753,109 @@ cmd_reap() {
   done
 }
 
+# want_now — the slot's size as its conf says it NOW (issue #4552). WANT is read
+# when the pass starts, and a pass can start long before it warms anything: a
+# refill waits out its delay and the slot lock, a retry its backoff. Read again
+# under the lock, from the same files and baseline (_fleet_repo_keys_reset), in a
+# subshell. Prints the size, rc 0; an explicit off ("" or 0) prints 0. rc 1 when
+# it cannot be told — the conf gone, the repo no longer hosted, a value that is no
+# number: the pass then warms nothing AND retires nothing.
+want_now() {
+  local w
+  [ -f "$(fleet_conf_file "$SESS")" ] || return 1
+  w=$( _fleet_repo_keys_reset
+       fleet_load_conf "$SESS" >/dev/null 2>&1
+       if [ "$REPO" != - ]; then fleet_load_repo_conf "$SESS" "$REPO" >/dev/null 2>&1 || exit 1; fi
+       printf ':%s' "${FLEET_SCRATCH_POOL-$POOL_DEFAULT}" ) || return 1
+  w=${w#:}
+  [ "$REPO" = - ] && w=$(home_want "$w")
+  case "$w" in '') w=0 ;; *[!0-9]*) return 1 ;; esac
+  printf '%s' "$((10#$w))"
+}
+
+# pool_lock_free <agent> — wait, without taking it, until no pass that may have
+# read the slot's size holds that agent's lock (FLEET_POOL_LOCK_WAIT, even for a
+# --tick). A holder writes its pid BEFORE it reads the size (cmd_ensure: pool_lock,
+# then want_now), so a lock with no pid yet is a pass that reads it later — after
+# the conf this caller acts on — or a husk: neither warms against it. A live pid
+# is waited for, a dead one is no holder; a pid file there that cannot be read is
+# unknown and waited for too. rc 1 when one is still there at the end.
+pool_lock_free() {
+  local d waited=0 max="${FLEET_POOL_LOCK_WAIT:-300}" holder slot
+  case "$max" in ''|*[!0-9]*) max=300 ;; esac
+  slot=home; [ "$REPO" = - ] || slot=$(fleet_slug "$REPO")
+  d="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$(fleet_slug "$SESS")/pool/$slot-$1.lock"
+  while [ -d "$d" ]; do
+    if [ ! -e "$d/pid" ]; then holder=''
+    else holder=$(cat "$d/pid" 2>/dev/null) || holder=unreadable; fi
+    case "$holder" in
+      '') return 0 ;;                                   # not read the size yet (or a husk)
+      unreadable|*[!0-9]*) ;;                           # unknown: wait, never "free"
+      *) kill -0 "$holder" 2>/dev/null || return 0 ;;
+    esac
+    [ "$waited" -ge "$max" ] && return 1
+    sleep 1; waited=$((waited + 1))
+  done
+  return 0
+}
+
+# pool_absent — rc 0 only when tmux ANSWERS that no holding session exists: it
+# lists its sessions and the pool is not among them. A server that cannot be
+# reached says nothing either way — unknown (rc 1), never "nothing parked".
+pool_absent() {
+  local names
+  names=$(TM list-sessions -F '#{session_name}' 2>/dev/null) || return 1
+  printf '%s\n' "$names" | grep -qxF "$POOL" && return 1
+  return 0
+}
+
+# cmd_drain — retire every parked entry of the slot (see retire). rc 1 when the
+# pool cannot be listed and tmux does not say it is absent, or an entry's outcome
+# is unknown.
+cmd_drain() {
+  local wid set='' rc=0 wins
+  [ -z "$AGENT_ARG" ] && set=all
+  if ! wins=$(pool_windows $set); then
+    pool_absent && return 0                           # nothing parked, by tmux's own answer
+    return 1                                          # unknown: never "drained"
+  fi
+  for wid in $wins; do retire "$wid" || rc=1; done
+  return "$rc"
+}
+# slot_off — the slot is switched off (issue #4552): nothing of it stays parked,
+# ready or not, and nothing of it is published afterwards. Only a pass holding the
+# slot lock publishes (spawn_one), and it reads the size under that lock
+# (want_now). So once the conf says 0: drain (a warming entry dies and its pass
+# gives up at once), wait for whoever holds the lock — it read the size before the
+# conf changed — then drain what it left. A pass that takes the lock later reads 0
+# and warms nothing. The other agents' entries go only on the slot's default pass,
+# as cmd_reap's. rc 3 — not confirmed off (a refill's retry asks again): a holder
+# still there after FLEET_POOL_LOCK_WAIT, or an entry whose outcome is unknown.
+slot_off() {
+  local a agents=$AGENT first=0
+  [ -z "$AGENT_ARG" ] && agents='claude codex'
+  cmd_drain || first=1
+  for a in $agents; do
+    pool_lock_free "$a" || { echo "scratch-pool: $SLOT_NAME/$a: a pass still holds the slot after ${FLEET_POOL_LOCK_WAIT:-300}s — not confirmed off" >&2; return 3; }
+  done
+  # either drain left something it could not account for: not confirmed
+  cmd_drain && [ "$first" = 0 ] || { echo "scratch-pool: $SLOT_NAME: an entry's outcome is unknown (tmux did not answer, or a mark was kept aside) — not confirmed off" >&2; return 3; }
+}
+
 cmd_ensure() {
   local have n wid hold result
-  [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
+  if [ "$WANT" -le 0 ]; then
+    [ "$WANT_OFF" = 1 ] && { slot_off; return; }
+    cmd_reap; return 0                  # a size that is no number: the old reap, nothing more
+  fi
   pool_lock || return 3
+  # The size this pass serves is the one read under the lock (see slot_off).
+  if ! WANT=$(want_now); then
+    pool_unlock
+    echo "scratch-pool: $SLOT_NAME/$AGENT: the pool size cannot be read now — nothing warmed, nothing retired" >&2
+    return 0
+  fi
+  [ "$WANT" -gt 0 ] || { pool_unlock; slot_off; return; }
   acct_memo
   cmd_reap
   # Count what is ready; an entry over the slot's size goes (a lowered
@@ -740,7 +884,10 @@ cmd_ensure() {
 refill_slot() {
   local attempt=0 retry_delay="${FLEET_POOL_REFILL_RETRY_DELAY:-15}" result
   local slot=home holder
-  [ "$WANT" -gt 0 ] || { cmd_reap; return 0; }
+  if [ "$WANT" -le 0 ]; then
+    [ "$WANT_OFF" = 1 ] && { slot_off; return; }
+    cmd_reap; return 0
+  fi
   [ "$REPO" = - ] || slot=$(fleet_slug "$REPO")
   REFILL_LOCKD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleets/$(fleet_slug "$SESS")/pool/$slot-$AGENT.refill.lock"
   holder=$(cat "$REFILL_LOCKD/pid" 2>/dev/null)
@@ -831,10 +978,12 @@ cmd_status() {
 
 case "$CMD" in
   ensure)
-    if [ "$REFILL" = 1 ]; then refill_slot
+    # A slot that could not be confirmed off says so: exit 3 (issue #4552).
+    if [ "$REFILL" = 1 ]; then refill_slot || exit "$?"
     else
       cmd_ensure; result=$?
       [ "$REFILL_PASS" = 1 ] && exit "$result"
+      [ "$result" = 3 ] && [ "$WANT" -le 0 ] && exit 3
     fi ;;
   claim)  cmd_claim || empty ;;
   reap)   cmd_reap ;;

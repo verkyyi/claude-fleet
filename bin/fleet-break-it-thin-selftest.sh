@@ -35,6 +35,9 @@
 #                          C (a Linux node) — no warm entry ever became ready
 #   pool-remote-hangs      bin/scratch-pool.sh + fleet_fetch_bounded (issue #3999):
 #                          a remote that never answers — the HOME slot still fills
+#   pool-off-inflight      bin/scratch-pool.sh want_now / slot_off (issue #4552):
+#                          a pass that read the pool on before it went off —
+#                          nothing warmed, published or left parked afterwards
 #
 # One isolated tmux server (-S under a short /tmp dir), the person's terminals
 # python ptys that answer DA / XTVERSION as iTerm2 and record every byte, the hub a
@@ -399,6 +402,16 @@ drill_pool_remote_hangs() {
   printf '%s\n' "$out" | grep -q '^ok   AA ' || { WHY="leg AA did not run"; return 1; }
   SECS=$(since "$t0")
   WHAT="仓库的远端不答（pod 没有出网代理，git fetch 永远挂着）：一拍里 HOME 槽先补，每次 fetch 最多 FLEET_POOL_FETCH_SECS 秒，这一拍照样跑完"
+}
+
+drill_pool_off_inflight() {
+  CAP=60
+  local t0 out
+  t0=$(now)
+  out=$(POR_LEGS=ABC bash "$BIN/scratch-pool-off-race-selftest.sh" 2>&1) || { WHY=$(printf '%s\n' "$out" | grep -m1 FAIL); return 1; }
+  printf '%s\n' "$out" | grep -q '^ok   C ' || { WHY="leg C did not run"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="补池那一拍已读到「开」、池子随后关掉（还在等锁 / 持锁未开窗 / 窗口正在预热）：关掉那一拍之后什么也不留，迟到的也不再开"
 }
 
 th_cleanup() {
