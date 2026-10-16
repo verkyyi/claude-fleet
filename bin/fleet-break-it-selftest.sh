@@ -6416,6 +6416,14 @@ drill_codex_mcp_busy() {
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
+drill_runtime_stale_idle() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" Snapshot 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

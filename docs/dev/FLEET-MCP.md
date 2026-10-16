@@ -289,6 +289,80 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
+### Read-only provider observations (#4434)
+
+`bin/fleet_runtime.py read --pane %N [--socket fleet]` is the shared local
+entry point (Python: `fleet_runtime.read(pane, context=None, expected=None,
+socket="")`). JSON stdin is `{}`, or `{"launch": <C3 context>, "expected":
+<previous snapshot>}`. It reads only: no resume, turn start, inbox write, task
+transition, cancellation or reclamation. Exit 0 means a known runtime
+observation; exit 2 means unknown. Neither exit authorizes delivery.
+
+The version 1 result separates these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Integer `1`; unsupported versions fail closed. |
+| `identity` | C3's complete `version/operation_id/task/owner/generation/worker_id/provider/attempt_id`, plus `native_session/pid/birth/executable/native_remote/turn_id`. No inferred task or owner for legacy launches. |
+| `source` | `codex:rpc`, `claude:native-event`, or `none`. |
+| `observed_at`, `expires_at` | Unix seconds of the evidence, with a fixed maximum lifetime of 5 seconds. Reading or forwarding a saved snapshot never renews them. |
+| `runtime.state` | `active`, `idle`, `ask`, `approval`, `interrupted`, or `unknown`. A completed native turn is not a successful task result. |
+| `runtime.reason` | Stable rejection reason; empty only for a known observation. |
+| `runtime.socket_ready`, `runtime.thread_ready` | Independent observations. `null` means unverified; socket connection alone never proves a thread or turn exists. Claude has no RPC readiness assertion. |
+| `runtime.first_thread_deadline` | Pane kernel birth plus 45 seconds, fixed across rereads; missing proof after this deadline is unknown, never permission to restart. |
+| `task_result.state` | Independently read C1 outcome, `pending`, or `unknown`; never inferred from Stop, idle, exit or a displayed MERGED label. |
+| `controller_delivery.state` | `unknown`: this observer has no delivery or acceptance receipt. |
+| `reclaim` | Always `eligible: false`, `reason: separate_gates_required`. This observer cannot grant reclamation. |
+
+A read verifies C3's receipt and kernel process/pane binding, reads current C1
+ownership, observes the provider, then repeats both identity and authority
+checks. Codex reuses the existing identity reader and bounded local RPC client:
+metadata-only `thread/read` and `thread/turns/list` (one newest turn,
+`itemsView: notLoaded`). Both reads are repeated to reject a changed turn or
+status. A different SID/cwd, nested thread, unloaded thread, unsupported flags,
+failed turn or unavailable RPC is unknown. An interrupted turn stays interrupted.
+The adapter never fetches full message/tool contents and never resumes a thread.
+
+Claude uses the existing mod's native `turn.start`, `turn.complete` and
+`AskUserQuestion` edges, preserving their actual `turnId`. Only accepted C3
+launches publish one `@runtime_claude` observation through the `event` entry;
+root process ancestry, current native registry SID, receipt, event sequence
+and turn are checked under a local mutex. Late, duplicate, nested or old-turn
+events cannot replace the observation. An aborted/non-answer completion stays
+interrupted; settings `Stop` hooks never publish idle. Native registry idle
+must corroborate a completed turn. These observations expire after 5 seconds:
+long tools, long questions, older idle sessions, absent mods and uninstrumented
+approval dialogs can therefore be **unknown**. There is no timer to renew an
+event and no transcript/display fallback. This conservative limit is part of
+v1, not evidence that the session is ready. A future native query can improve
+coverage without changing consumer safety gates.
+
+For a same-identity reread, supply the complete earlier snapshot as `expected`.
+Every identity field, including native process birth and turn, must match.
+This fresh read may renew RPC evidence; it cannot renew a Claude event's source
+time. `project` with `{"snapshot": <saved>, "expected": <optional previous>}`
+only validates/project ages an existing observation, including remote copies.
+Expiry or a backwards clock returns unknown while retaining evidence times.
+Remote time comparisons assume synchronized clocks; future evidence is refused.
+Neither a reread nor a matching identity is an atomic acceptance fence: a new
+turn can begin immediately afterwards. #4431 owns consumer wiring and must keep
+active-turn/attention/bg/loop/transfer/dirty/unpersisted-work and task acceptance
+gates. C4/C6 retain outcomes, recovery, delivery and stop receipts.
+
+Typical unknown reasons are `missing_launch`, `missing_launch_receipt`,
+`first_thread_timeout`, `task_fence_changed`, `identity_or_authority_unavailable`,
+`endpoint_identity_changed`, `native_identity_changed`, `thread_unavailable`,
+`thread_not_loaded`, `no_turn`, `turn_not_completed`, `rpc_unavailable`,
+`native_changed_during_read`, `identity_changed_during_read`,
+`no_turn_observation`, `event_identity_changed`, `event_expired`,
+`registry_contradicts_event`, `identity_changed`, `expired`, and
+`clock_regressed`. Unknown is a refusal to infer readiness, not a retry order.
+
+Source/fixture verification is separate from native process verification and
+deployment/live acceptance. This interface neither changes the live install nor
+claims the independent #4474 process-cost budget. Native RPC semantics follow
+the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server).
+
 ### Existing-repo authority cutover (#4395)
 
 `fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
