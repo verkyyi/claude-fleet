@@ -411,6 +411,17 @@ chmod +x "$IB/fleet-control-read.sh"
 printf 'FLEET_REPO=acme/web\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
 H=$(hostname -s 2>/dev/null); H=${H%%.*}
 mv "$FLEET_CLIENT_DIR/client.lease" "$WORK/lease.kept" 2>/dev/null
+mkdir -p "$WORK/import-guard"
+cat > "$WORK/import-guard/sitecustomize.py" <<'PY'
+import sys
+
+class RejectHubImports:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "urllib.request":
+            raise RuntimeError("fixture HTTP imports forbidden")
+
+sys.meta_path.insert(0, RejectHubImports())
+PY
 rm -f "$IB/fleet-connect.py"
 cat > "$IB/fleet-connect.py" <<'PY'
 import os
@@ -418,7 +429,7 @@ from pathlib import Path
 Path(os.environ["WORK"], "connect-loaded").write_text("loaded")
 raise RuntimeError("fixture connection reader")
 PY
-FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
+PYTHONPATH="$WORK/import-guard" FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
 eq "I: cold local start exit" 0 "$RC"
 CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no lease must not load the connection reader"
 has "I: the LOCAL line" "$OUT" "LOCAL $H"
@@ -430,7 +441,7 @@ rm -f "$WORK/i.json"
 I_MODE=warm FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x'
 eq "I: a warm start's window" '@18' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
 rm -f "$WORK/i.json"
-I_MODE=scratch FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web scratch --name short --agent codex --draft-file "$WORK/draft.txt"
+PYTHONPATH="$WORK/import-guard" I_MODE=scratch FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web scratch --name short --agent codex --draft-file "$WORK/draft.txt"
 eq "I: cold draft start exit" 0 "$RC"
 eq "I: a cold draft's tab-separated window" '@19' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
 eq "I: a cold draft does not file an issue" '' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("filed", ""))' "$WORK/i.json")"
@@ -441,11 +452,15 @@ has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
 CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && fail "I: a declined start named a window" "$(cat "$WORK/i.json")"
 mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease"
 mv "$FLEET_CLIENT_KEY_FILE" "$WORK/key.kept"
-I_MODE=scratch run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
+PYTHONPATH="$WORK/import-guard" I_MODE=scratch run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
 eq "I: missing key keeps the local route" 0 "$RC"
 CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no key must not load the connection reader"
 mv "$WORK/key.kept" "$FLEET_CLIENT_KEY_FILE"
 rm -f "$WORK/i-args"
+PYTHONPATH="$WORK/import-guard" run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
+eq "I: live lease requires the HTTP implementation" 1 "$RC"
+has "I: HTTP dependency failure is reported" "$ERR" 'fixture HTTP imports forbidden'
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || fail "I: failed HTTP preparation must not launch locally"
 run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
 eq "I: live lease keeps connection-reader failures fail-closed" 1 "$RC"
 CHECKS=$((CHECKS + 1)); [ -f "$WORK/connect-loaded" ] || fail "I: live lease must load the connection reader"

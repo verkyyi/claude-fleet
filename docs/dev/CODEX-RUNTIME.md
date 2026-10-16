@@ -160,7 +160,8 @@ preservation and repository/client focus retain the same handling.
 
 The raw launcher obtains the validated dispatch envelope and resolved provider
 from one resolver process. Without a client lease or action key, local placement
-skips loading the unused hub connection reader and uses the existing node adapter.
+skips loading the unused HTTP/signing modules and hub connection reader, and uses
+the existing node adapter. Draft and attachment validation still precede this decision.
 When both are present, hub errors still fail closed; admission, ownership and
 provider checks remain on the launch path.
 
