@@ -53,6 +53,9 @@ func inProcessTermHelper(ctx context.Context, view, target string, cols, rows in
 			if req.Resume != "" {
 				args = append(args, "--resume", req.Resume)
 			}
+			if req.Renew {
+				args = append(args, "--renew", "1")
+			}
 			if req.Take {
 				args = append(args, "--take", "1")
 			}
@@ -78,6 +81,13 @@ func inProcessTermHelper(ctx context.Context, view, target string, cols, rows in
 		cancel()
 		inW.Close()
 		return nil, errors.New("invalid ready")
+	}
+	if ready.T != "ready" {
+		cancel()
+		inW.Close()
+		outR.Close()
+		<-done
+		return nil, &termAdmissionFailure{ready}
 	}
 	return &pipeTermHelper{in: inW, out: reader, output: outR, done: done, ready: ready, cancel: cancel}, nil
 }

@@ -132,7 +132,7 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	}
 	var h termHelper
 	if service == "term" {
-		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake})
+		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake, Renew: g.TermRenew})
 		h, err = startTermHelper(hctx, "web-"+g.Conn, g.Target, 0, 0)
 		if err != nil {
 			code := "ended"
@@ -142,7 +142,12 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 					break
 				}
 			}
-			_ = writeAttachmentSignal(ctx, ws, control.AttachmentSignal{T: "error", Error: code})
+			failure := control.AttachmentSignal{T: "error", Error: code}
+			var admission *termAdmissionFailure
+			if errors.As(err, &admission) && code == "ended" {
+				failure.Term, failure.TermGen = admission.Term, admission.Gen
+			}
+			_ = writeAttachmentSignal(ctx, ws, failure)
 			return
 		}
 		defer h.Close()

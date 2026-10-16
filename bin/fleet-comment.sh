@@ -159,7 +159,8 @@ fi
 # never sends back into a session (its echo rule) — so the text goes over the
 # peer channel and the comment stays the record.
 peer_fallback=0 raw_body='' hubtk=0
-[ "${FLEET_TICKET_BACKEND:-}" = hub ] || [ "$(fleet_ticket_home "$repo")" = hub ] && hubtk=1
+tid=$(fleet_ticket_ref "$repo" "$num") || exit 1
+[ "${FLEET_TICKET_BACKEND:-}" = hub ] || [ "$tid" = "hub:$(fleet_norm_repo "$repo")#$num" ] && hubtk=1
 if [ "$relay" -eq 1 ] && { [ "$hubtk" = 1 ] || ! fleet_bridge_covers "$repo"; }; then
   peer_fallback=1 relay=0 raw_body="$body"
 fi
@@ -266,7 +267,7 @@ comment_verdict() {
 # as it ran here before. stdout stays exactly the comment URL either way.
 case "${FLEET_TICKET_BACKEND:-}" in
   hub|gh) tkb=$FLEET_TICKET_BACKEND ;;
-  *) if [ "$(fleet_ticket_home "$repo")" = hub ]; then tkb=hub; else tkb=gh; fi ;;
+  *) tkb=${tid%%:*} ;;
 esac
 tid="$tkb:$(fleet_norm_repo "$repo")#$num"
 post_comment() {

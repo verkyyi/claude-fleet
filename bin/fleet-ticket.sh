@@ -135,7 +135,8 @@ case "$verb" in
     r=$(fleet_norm_repo "${1:-}"); n="${2:-}"
     [ -n "$r" ] || die "id: say <owner/name> <N>" 2
     case "$n" in ''|*[!0-9]*) die "id: the number is not a number" 2 ;; esac
-    if [ "$(repo_home "$r")" = hub ]; then printf 'hub:%s#%s\n' "$r" "$n"; else printf 'gh:%s#%s\n' "$r" "$n"; fi ;;
+    [ $# -le 2 ] || { [ $# = 4 ] && [ "$3" = --window ]; } || die "id: optional --window @ID" 2
+    fleet_ticket_ref "$r" "$n" "${FLEET_SESSION:-}" "${4:-}" ;;
 
   url)
     p=$(ticket_parse "${1:-}") || exit 2

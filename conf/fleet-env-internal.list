@@ -1000,3 +1000,6 @@ FLEET_IDLE_SELF_SOCKET             seam: socket path paired with FLEET_IDLE_SELF
 FLEET_IDLE_SELF_WIN                seam: fleet_idle_now's caller window when it has no $TMUX_PANE (#4355)
 FLEET_SIDEBAR_HOST                seam: home-machine hostname in the view and peer tests (#1780)
 FLEET_SWITCH_STATE                path: compose payload/draft state used by the current panel (#1903)
+FLEET_AUTHORITY_START             env handoff: one-use local admission reservation from spawner to session wrapper (#4395)
+FLEET_AUTHORITY_CONTEXT           env handoff: current reservation and native supervisor identity for the startup hook (#4395)
+FLEET_HUB_AUTHORITY_CMD           seam: authority admission command for isolated hub fixtures (#4395)

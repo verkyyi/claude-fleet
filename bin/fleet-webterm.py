@@ -205,6 +205,7 @@ def reading(st):
 def view(st, state):
     v = {"state": state}
     if st:
+        v.update(term=st["id"], gen="%s:%s" % (st["id"], st["generation"]))
         for k in ("id", "generation", "session", "window", "pane", "last_worker"):
             if st.get(k) is not None:
                 v[k] = st[k]
@@ -222,10 +223,20 @@ def cmd_status(args):
 
 def cmd_ensure(args):
     init, renew = "--init" in args, "--renew" in args
+    expected = opt(args, "--expect", re.compile(r"[A-Za-z0-9:-]+"))
     path = os.path.join(state_dir(), "terminal.json")
     with Lock(".lock"):
         st = read_json(path)
         state, sess, sock, win, _ = reading(st)
+        if expected and (not st or expected != "%s:%s" % (st["id"], st["generation"])):
+            out(view(st, "interrupted"), 5)
+        # Explicit recovery from a remembered worker that has ended goes home;
+        # it never restarts that worker or silently selects its replacement.
+        selected_ended = False
+        if renew and st and state == "live" and st.get("last_worker"):
+            selected = worker_live(sess, sock, st["last_worker"])
+            identity = pane_identity(sock, selected) if selected else None
+            selected_ended = not identity or identity != st.get("last_worker_identity")
         if sess is None and init:
             up = os.environ.get("FLEET_WEBTERM_UP_CMD")   # the selftest's seam
             subprocess.run(["sh", "-c", up] if up else
@@ -234,7 +245,7 @@ def cmd_ensure(args):
             state, sess, sock, win, _ = reading(st)
         if sess is None:
             out(view(st, state), RC[state])
-        if state == "live":
+        if state == "live" and not selected_ended:
             out(view(st, state))
         if state == "ended" and not renew:
             out(view(st, state), 5)
@@ -253,7 +264,7 @@ def cmd_ensure(args):
                "generation": int((st or {}).get("generation") or 0) + 1,
                "session": sess, "window": win, "pane": pane, "pane_pid": pid,
                "server_pid": server_pid(sock), "created": int(time.time()),
-               "last_worker": (st or {}).get("last_worker")}
+               "last_worker": None if renew else (st or {}).get("last_worker")}
         tm(sock, "set-option", "-p", "-t", pane, "@webterm_id", new["id"])
         tm(sock, "set-option", "-w", "-t", win, "@webterm_home", new["id"])
         tm(sock, "set-option", "-w", "-t", win, "@reap_policy", "keep")
@@ -391,13 +402,32 @@ def connect(args, conn, target, generation):
         out(view(st, "ended"), 5)
     resume = os.environ.pop("FLEET_TERM_RESUME", "")
     take = os.environ.pop("FLEET_TERM_TAKE", "") == "1"
+    renew = os.environ.pop("FLEET_TERM_RENEW", "") == "1"
     ensure = [sys.executable, __file__, "ensure"]
     if target == "personal" and not st:
         ensure += ["--init"]
-    r = subprocess.run(ensure, stdout=subprocess.PIPE, universal_newlines=True)
+    if renew:
+        if target != "personal" or not resume or take:
+            out({"state": "invalid_renew"}, 2)
+        # Same lock order as attach/switch. A late click cannot renew another
+        # generation; an active browser is never taken over by this action.
+        with Lock("control/.lock"):
+            current = read_json(os.path.join(state_dir(), "terminal.json"))
+            if not current or resume != "%s:%s" % (current["id"], current["generation"]):
+                out(view(current, "interrupted"), 5)
+            lease, rc = control_claim(control_path(target), target, conn, "claim")
+            if rc:
+                out(lease, rc)
+            r = subprocess.run(ensure + ["--renew", "--init", "--expect", resume], stdout=subprocess.PIPE, universal_newlines=True)
+            # The normal attach below claims again. Do not leave a reservation
+            # on an error or a cancelled launch.
+            lease.update(conn=None, ts=0)
+            write_json(control_path(target), lease)
+        resume = ""
+    else:
+        r = subprocess.run(ensure, stdout=subprocess.PIPE, universal_newlines=True)
     if r.returncode:
-        sys.stdout.write(r.stdout)
-        sys.exit(r.returncode)
+        out(json.loads(r.stdout), r.returncode)
     st = json.loads(r.stdout)
     gen = "%s:%s" % (st["id"], st["generation"])
     if worker:
@@ -433,7 +463,7 @@ def connect(args, conn, target, generation):
                 if selected != "personal":
                     worker = worker_live(sess, sock, selected)
                     if not worker or (current.get("last_worker_identity") and current["last_worker_identity"] != pane_identity(sock, worker)):
-                        out({"state": "ended"}, 5)
+                        out(view(current, "ended"), 5)
             window = worker or current["window"]
             identity = pane_identity(sock, window)
             if not identity:

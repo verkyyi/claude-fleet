@@ -61,6 +61,7 @@ type nodeConn struct {
 	attachmentGeneration string
 	canAttachment        bool
 	canTermController    bool
+	canTermRenew         bool
 	canChatAttachment    bool
 	// wire is the endpoint's half of its control channel: the websocket, or
 	// one login's lane on its machine's link (claude-fleet#2333).
@@ -91,8 +92,9 @@ type nodeConn struct {
 	canTest bool
 	// canTask is the hello's CapTask: this node takes the hub's task record
 	// on a start and runs task_issue (claude-fleet#3325).
-	canTask   bool
-	canLaunch bool
+	canTask          bool
+	canLaunch        bool
+	canRepoAuthority bool
 	// canTicket is the hello's CapTicket: this node follows its person's
 	// hub tickets (claude-fleet#2677).
 	canTicket bool
@@ -637,12 +639,12 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	}
 
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
-		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), attachmentGeneration: hp.AttachmentGeneration,
+		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:     hp.HasCap(control.CapCredsep),
 		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
 		canRecycle:     hp.HasCap(control.CapRecycle),

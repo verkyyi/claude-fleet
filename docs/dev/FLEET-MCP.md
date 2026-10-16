@@ -289,6 +289,63 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
+### Existing-repo authority cutover (#4395)
+
+`fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
+manifest: local authority/ticket/forge/landing settings and their digest, hub
+revision, registered hosts and capabilities, legacy owners (including expired
+leases), task outcomes, ticket references and selective mappings. It writes
+nothing. `--freeze`, `--apply`, and `--rollback` each require `--manifest FILE`;
+save a fresh dry-run between stages. Exact retries reuse the same operation key.
+The manifest must name this exact repo/session and unchanged local settings.
+
+Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
+The last local gate reserves a start in the existing operation journal before
+window creation. Freeze, admission and cancellation serialize on the same repo
+lock. A paused launcher, empty inventory or elapsed lease never erases it.
+`--cancel-start RESERVATION` revokes only a never-begun reservation; a racing
+launcher then cannot begin. Started but unobserved execution stays blocked.
+The existing session wrapper consumes each reservation once; resumes and
+transfers through that wrapper require a new admission. Its existing native
+startup hook binds the process/session, and its native wait records stop.
+All registered hosts must advertise `repo_authority_v1` and `launch_v1` before
+freeze; apply also requires fresh post-freeze observations. Unknown/offline
+hosts refuse cutover. Captured legacy owners remain blockers after expiry or
+inventory disappearance. Drain them using the existing stop workflow, then on
+the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
+receipt names worker, native session, PID, birth and executable. It must match
+the native identity saved for that frozen owner in the operation journal;
+an arbitrary dead process or a pre-transfer receipt cannot release a replacement.
+Older owners without that binding refuse freeze before any authority mutation:
+drain/reconcile these on their existing legacy path, then retry preflight.
+This keeps legacy drain available rather than trapping the repo frozen;
+missing observation is not an acknowledgement. The command
+requires ESRCH or a positively observed different process identity; permission
+or probe failure remains unknown. The authenticated node's acknowledgement is
+journalled. It does not stop processes or adopt a live owner automatically.
+
+Apply selects hub task authority without changing `FLEET_TICKETS`,
+`FLEET_FORGE`, or `FLEET_LAND`. New starts require an accepted dispatch on a
+capable node; local dispatch checks the central gate and fails closed on an
+authority outage. Existing ticket integers keep their pinned backend. Selective
+backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest FILE`
+(`--body-file FILE` optional): allocate a new hub ticket and preserve the exact
+old reference/URL in one transaction. No GitHub write or whole-backlog import.
+The returned `hub:owner/repo#M` can be passed as `ticket_ref` on an accepted
+`worker_start`; the accepted task carries it through node launch and reports.
+Brief, comment, evidence and cleanup ticket reads use that accepted reference
+even when the repo's pinned default is GitHub and the hub number collides.
+The manifest projects a later confirmed `task_report` with `status=merged` and
+`pr_state=merged` independently of the original work outcome; waiting or an old
+generation cannot turn that field into a confirmed landing.
+
+Rollback first freezes dispatch. Accepted work must have a terminal outcome
+and no retained execution lease before future starts return to legacy control.
+It keeps task history and ticket mappings; it never mirrors hub results to
+GitHub. Explicit completion with a PR records `work_result` and `pr_state:
+waiting` separately in result evidence. Only the existing merge verdict permits
+`pr_state: merged`. Fixture tests do not establish deployment/live acceptance.
+
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 
 Every session the fleet opens carries its own short-lived credential, and every

@@ -87,6 +87,12 @@ SPAWN="$BIN/dash-issue-session.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/place-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
+cat > "$WORK/authority" <<'AUTH'
+#!/bin/sh
+printf '%s\n' '{"mode":"legacy","reservation":"fixture-local-start"}'
+AUTH
+chmod +x "$WORK/authority"
+export FLEET_HUB_AUTHORITY_CMD="$WORK/authority"
 
 pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }

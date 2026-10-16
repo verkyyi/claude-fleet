@@ -11,6 +11,10 @@ import (
 
 // This pipe is inherited only by the fixed lifecycle helper. Terminal output
 // cannot impersonate admission. Paths never come from a browser or a grant.
+type termAdmissionFailure struct{ control.TermControl }
+
+func (e *termAdmissionFailure) Error() string { return e.TermControl.Err }
+
 type termController struct {
 	ctx   context.Context
 	TTL   int    `json:"ttl"`

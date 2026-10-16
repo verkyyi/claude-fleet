@@ -308,7 +308,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
@@ -4886,6 +4886,22 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_repo_cutover_inflight() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_final_gate_reserves_before_window_creation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='最后一道本机门先持久预留；暂停且没有窗口时，空清单不能证明排空'
+}
+
+drill_repo_cutover_stop_binding() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_unbound_and_wrong_native_receipt_refused 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='未知原生身份及换会话后的旧停止证明均拒绝'
+}
+
 drill_launch_receipt_fence() {
   CAP=15; local out t0
   t0=$(now)
@@ -6703,6 +6719,15 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_personal_renew() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --renew 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='嵌套壳 exit 返回；个人壳 exit 后普通重连保持 ended，显式 renew 后输入可用，其他 worker 不变'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_auto_select() {
   CAP=60; local t0 out rc
   t0=$(now)

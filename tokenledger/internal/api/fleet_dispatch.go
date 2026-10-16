@@ -72,6 +72,9 @@ func resolveDispatch(coding, legacy string, raw any, key string) (*dispatchChoic
 // existing legacy T record is never adopted. Replays compare the full original
 // input, while a task supplied by the authority must still name its generation.
 func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
+	if err := s.repoDispatchGate(w.repo, w.params["dispatch"] != nil); err != nil {
+		return err
+	}
 	if _, draft := w.params["draft"]; draft {
 		return nil
 	} // unsent draft is not accepted work
@@ -141,7 +144,21 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		if err = s.checkTaskParentSession(owner, asString(w.params["origin_wid"])); err != nil {
 			return fault("INVALID_ARGUMENT", "accepted parent must be a stable session identity in this account")
 		}
-		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo,
+		ref := asString(w.params["ticket_ref"])
+		if ref == "" && w.params["issue"] != nil {
+			a, e := s.Store.RepoAuthority(w.repo)
+			if e != nil {
+				return e
+			}
+			if a.Mode == "hub" {
+				backend := "gh"
+				if a.LegacyTickets == "hub" {
+					backend = "hub"
+				}
+				ref = backend + ":" + w.repo + "#" + fmt.Sprint(w.params["issue"])
+			}
+		}
+		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo, TicketRef: ref,
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
 			ResolvedAgent: d.ResolvedAgent, ParentSession: asString(w.params["origin_wid"]), RequestPayload: dispatchPayload(w)},
 			"dispatch:"+owner+":"+d.RequestID, time.Now())
