@@ -418,25 +418,10 @@ class Worker:
             data = source['codex_identity']
             client = RPC(data.get('remote',''),timeout=5)
             try:
-                thread = client.call('thread/read',{'threadId':source['session_id'],'includeTurns':True})['thread']
-                goal=client.call('thread/goal/get',{'threadId':source['session_id']}).get('goal')
-                if goal and goal.get('status')!='complete': raise ValueError('Codex goal is unfinished')
-                quiet_native_children(client,source['session_id'])
+                last = codex_idle_turn(client, source)
                 hooks=client.call('hooks/list',{'cwds':[source['worktree']]})
                 source['hook_trust']=hook_trust(hooks,source['restart_options'])
             finally: client.close()
-            if thread.get('id') != source['session_id'] or thread.get('status',{}).get('type') != 'idle':
-                raise ValueError('Codex is not natively idle')
-            if (not thread.get('cwd') or not thread.get('path')
-                    or Path(thread['cwd']).resolve()!=Path(source['worktree']).resolve()
-                    or Path(thread['path']).resolve()!=Path(source['transcript']).resolve()):
-                raise ValueError('Codex native worktree/history does not match this worker')
-            turns = thread.get('turns') or []
-            if not turns or turns[-1].get('status') != 'completed': raise ValueError('no completed Codex turn')
-            last = turns[-1]
-            if any(item.get('status') not in (None,'completed','failed','declined','interrupted')
-                   for item in last.get('items', [])):
-                raise ValueError('Codex tool is still active or unknown')
             completed = last.get('completedAt')
             if (last.get('id') and type(completed) in (int,float)
                     and math.isfinite(completed) and 0 < completed <= now):
@@ -917,6 +902,8 @@ def quiet_native_children(client,session_id):
     loaded=client.call('thread/loaded/list',{})
     if loaded.get('nextCursor') or not isinstance(loaded.get('data'),list):
         raise ValueError('loaded thread inventory is incomplete')
+    if session_id not in loaded['data']:
+        raise ValueError('native session is no longer loaded')
     for sid in loaded['data']:
         if sid==session_id:continue
         child=client.call('thread/read',{'threadId':sid,'includeTurns':False})['thread']
@@ -925,6 +912,49 @@ def quiet_native_children(client,session_id):
         goal=client.call('thread/goal/get',{'threadId':sid}).get('goal')
         if goal and goal.get('status')!='complete':
             raise ValueError('another thread/subagent has an unfinished goal')
+
+
+def codex_idle_turn(client, source):
+    """The existing sleep native-idle proof, also used by the busy reader.
+
+    This is a synchronous native read, not a cached runtime/task snapshot. The
+    shared observation contract (#4434) remains the delivery controller's owner.
+    """
+    sid = source['session_id']
+    thread = client.call('thread/read', {'threadId': sid, 'includeTurns': True})['thread']
+    if thread.get('id') != sid or thread.get('status', {}).get('type') != 'idle':
+        raise ValueError('Codex is not natively idle')
+    if (not thread.get('cwd') or not thread.get('path')
+            or Path(thread['cwd']).resolve() != Path(source['worktree']).resolve()
+            or Path(thread['path']).resolve() != Path(source['transcript']).resolve()):
+        raise ValueError('Codex native worktree/history does not match this worker')
+    turns = thread.get('turns') or []
+    if not turns or turns[-1].get('status') != 'completed':
+        raise ValueError('no completed Codex turn')
+    last = turns[-1]
+    if any(item.get('status') not in (None, 'completed', 'failed', 'declined', 'interrupted')
+           for item in last.get('items', [])):
+        raise ValueError('Codex tool is still active or unknown')
+    goal = client.call('thread/goal/get', {'threadId': sid}).get('goal')
+    if goal and goal.get('status') != 'complete':
+        raise ValueError('Codex goal is unfinished')
+    quiet_native_children(client, sid)
+    return last
+
+
+def codex_busy_binding(w, source):
+    # Reuse C3's kernel birth/ownership proof; no new identity store or adapter.
+    from fleet_launch import process, inspect
+    data = source['codex_identity']
+    if (data.get('owner') != str(source['pid']) or data.get('session_id') != source['session_id']
+            or data.get('home') != source['home'] or not data.get('remote', '').startswith('unix:///')):
+        raise ValueError('no current Codex native binding')
+    launch = w.opt('@launch')
+    receipt = inspect(json.loads(launch), w.pane, w.session) if launch else None
+    if receipt and receipt['native_session'] != source['session_id']:
+        raise ValueError('Codex launch belongs to another native session')
+    return (tuple(source[k] for k in ('pid', 'session_id', 'home', 'worktree', 'transcript')),
+            data.get('remote'), process(source['pid']), receipt)
 
 
 def quiet_processes(source,config_home=None,background=None,strict=True):
@@ -945,6 +975,12 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
         while pid in rows and pid not in seen and pid!=source['pid']:
             seen.add(pid);pid=rows[pid][0]
     mcp_pids=set()
+    helpers=set()
+    helper_dir=None
+    if not strict and source['agent']=='codex':
+        root_argv=ARGV['process_argv'](source['pid'])
+        if len(root_argv)>1 and Path(root_argv[1]).name=='fleet-codex.sh':
+            helper_dir=Path(root_argv[1]).resolve().parent
     # Non-strict Claude needs no inventory: only a Bash-tool shell counts there,
     # and no MCP server is one — so a missing/odd ~/.claude.json cannot blind it.
     if strict and source['agent']=='claude' and any(pp==source['pid'] for pp,_ in rows.values()):
@@ -953,6 +989,17 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
         # and store (issue #784). Nothing else beneath Claude is infrastructure.
         inventory=MCP['claude_inventory'](ARGV['process_argv'](source['pid']),source['worktree'],config_home)
         mcp_pids=MCP['classify'](source,inventory,rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],**lenient)
+    if source['agent']=='codex' and rows.get(source['pid'],(0,''))[1] in ('codex','codex-real'):
+        # A bound native server can itself be the root, rather than a child of
+        # the shell launcher. It needs the same inventory as a nested server.
+        argv=ARGV['process_argv'](source['pid'])
+        remote=source['codex_identity'].get('remote','')
+        if 'app-server' in argv and '--listen' in argv:
+            if not remote or argv[argv.index('--listen')+1:argv.index('--listen')+2]!=[remote]:
+                raise ValueError('bound Codex server owns a different endpoint')
+            client=RPC(remote,timeout=5)
+            try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],**lenient))
+            finally:client.close()
     while pending:
         parent=pending.pop()
         if parent in seen: continue
@@ -987,9 +1034,15 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
                         finally:client.close()
                 continue
             if pid in mcp_pids:continue
-            if len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py': continue
-            if len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge': continue
-            if comm=='codex-code-mode-host':
+            runtime=len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py'
+            bridge=len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge'
+            if runtime or bridge:
+                if strict: continue  # sleep's existing restartability contract
+                if (helper_dir and Path(argv[1]).resolve()==helper_dir/Path(argv[1]).name
+                        and (parent==source['pid'] or (runtime and '--guard' in argv and parent in helpers))):
+                    helpers.add(pid)
+                    continue
+            if comm in ('codex-code-mode-host','codex-code-mode'):
                 parent_args=ARGV['process_argv'](parent)
                 remote=source['codex_identity'].get('remote','')
                 # The bundled persistent JS host is infrastructure only when
@@ -1014,7 +1067,7 @@ def tool_shell(pid):
     except OSError:return False
 
 
-def child_busy(session,target,pid=0):
+def child_busy(session,target,pid=0,reap=False):
     """The pids a worker's agent still owns beyond its MCP services (issue #864).
 
     A child whose turn ended while a run_in_background test or a PR-gate waiter
@@ -1022,6 +1075,8 @@ def child_busy(session,target,pid=0):
     its parent must not hear otherwise. Same walk hibernation vetoes on, minus the
     restartability contract: an uncontracted MCP server is not work in progress.
     A known Claude pid (fleet_pane_claude_pid) skips the native inspect.
+    reap=True adds native-idle proof only at disposal; a Stop hook runs before
+    the native turn completes and must not wait on its own completion.
     """
     w=Worker(session,target)
     if pid:
@@ -1032,7 +1087,22 @@ def child_busy(session,target,pid=0):
     try:config_home=json.loads(w.opt('@sleep_evidence') or '{}').get('config_home')
     except ValueError:config_home=None
     background=[]
-    quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
+    if source['agent']=='codex' and reap:
+        binding=codex_busy_binding(w,source)
+        client=RPC(source['codex_identity']['remote'],timeout=5)
+        try:
+            turn=codex_idle_turn(client,source)
+            if not turn.get('id'):raise ValueError('no completed Codex turn identity')
+            quiet_processes(source,config_home,background=background,strict=False)
+            # No cached idle or stale launch can waive the process gate. A turn
+            # starting or a replacement session during classification vetoes.
+            if codex_busy_binding(w,w.inspect())!=binding:
+                raise ValueError('Codex binding changed during busy check')
+            if codex_idle_turn(client,source).get('id')!=turn.get('id'):
+                raise ValueError('Codex turn changed during busy check')
+        finally:client.close()
+    else:
+        quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
     return background
 
 
@@ -1307,6 +1377,7 @@ def main():
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
     p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane; digest: the page to redraw')
+    p.add_argument('--reap',action='store_true',help='busy: require current native idle proof before disposal')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
     p.add_argument('--force',action='store_true',help='repark: replace every sleeping page, not only stale ones')
@@ -1365,8 +1436,11 @@ def main():
         return 0
     if a.action=='busy':
         # Exit 0 = busy (prints the pids), 1 = idle, 2 = cannot tell (fleet-sleep:
-        # on stderr). A caller that must not guess treats 2 as idle.
-        pids=child_busy(a.session,a.window or '',a.pid)
+        # on stderr). Unknown retains the window, never permission to reap.
+        try:pids=child_busy(a.session,a.window or '',a.pid,reap=a.reap)
+        except Exception as exc:
+            print('fleet-sleep: '+str(exc),file=sys.stderr)
+            return 2
         if not pids: return 1
         print(' '.join(map(str,pids)))
         return 0
