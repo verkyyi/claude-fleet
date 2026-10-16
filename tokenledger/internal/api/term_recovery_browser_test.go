@@ -62,6 +62,7 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			t.Cleanup(func() { exec.Command("tmux", "-L", sock, "kill-server").Run() })
 			hw := tm("display-message", "-p", "-t", "="+sock+":home", "#{window_id}")
 			tm("set-option", "-w", "-t", hw, "@fleet_role", "home")
+			tm("set-option", "-w", "-t", hw, "remain-on-exit", "on")
 			worker := tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "="+sock+":", "-n", "worker", "exec /bin/sh")
 			tm("set-option", "-w", "-t", worker, "@fleet_id", r.fid)
 			tm("set-option", "-w", "-t", worker, "@fleet_role", "worker")

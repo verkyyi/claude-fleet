@@ -68,7 +68,7 @@ func termPtyArgs(args []string) (view, target string, cols, rows int, err error)
 			if len(v) > 128 || !regexp.MustCompile(`^[A-Za-z0-9:-]*$`).MatchString(v) {
 				return "", "", 0, 0, errors.New("bad resume identity")
 			}
-		case "--take":
+		case "--take", "--renew":
 			if v != "1" {
 				return "", "", 0, 0, errors.New("bad takeover")
 			}

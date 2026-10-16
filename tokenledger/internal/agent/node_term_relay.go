@@ -101,6 +101,7 @@ type termHelper interface {
 type termRequest struct {
 	Resume string
 	Take   bool
+	Renew  bool
 }
 type termRequestKey struct{}
 
@@ -118,6 +119,9 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 	if request, ok := ctx.Value(termRequestKey{}).(termRequest); ok {
 		if request.Resume != "" {
 			args = append(args, "--resume", request.Resume)
+		}
+		if request.Renew {
+			args = append(args, "--renew", "1")
 		}
 		if request.Take {
 			args = append(args, "--take", "1")
@@ -180,9 +184,13 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 	}
 	line, err := p.out.ReadBytes('\n')
 	var ready control.TermControl
-	if err != nil || len(line) > control.TermControlMax || json.Unmarshal(line, &ready) != nil || ready.T != "ready" {
+	if err != nil || len(line) > control.TermControlMax || json.Unmarshal(line, &ready) != nil {
 		p.Close()
 		return nil, errors.New("invalid terminal admission")
+	}
+	if ready.T != "ready" {
+		p.Close()
+		return nil, &termAdmissionFailure{ready}
 	}
 	keepStop = true
 	return &termProc{chatPipe: p, ready: ready, stop: stopW}, nil

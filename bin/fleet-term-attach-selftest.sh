@@ -95,6 +95,41 @@ PY
 }
 waitfor() { local i=0; while [ $i -lt "$2" ]; do eval "$1" && return 0; sleep 0.2; i=$((i + 1)); done; return 1; }
 
+# A nested shell returns; the personal shell itself needs explicit renewal.
+if [ "${1:-}" = --renew ]; then
+  run web-exit personal
+  waitfor 'tt list-clients -t "=$RS@view-wt-web-exit" -F x 2>/dev/null | grep -q x' 75 || bad 'renew: initial attach'
+  GEN=$(python3 -c 'import json,os; s=json.load(open(os.environ["FLEET_CONF_DIR"]+"/webterm/terminal.json")); print("%s:%s"%(s["id"],s["generation"]))')
+  printf 'sh\rexit\rprintf nested-returned > "$HOME/nested"\r' >> "$WORK/web-exit.in"
+  waitfor '[ -f "$HOME/nested" ]' 30 && ok 'nested exit returns to live personal shell' || bad 'nested exit ended personal terminal'
+  printf 'exit\r' >> "$WORK/web-exit.in"
+  wait "$P"
+  run web-no-renew personal; wait "$P"
+  [ "$(cat "$WORK/web-no-renew.rc")" = 5 ] && ok 'ordinary reconnect leaves terminal ended' || bad 'ordinary reconnect renewed'
+  FLEET_TERM_RENEW=1 FLEET_TERM_RESUME="$GEN" run web-renew personal
+  if waitfor 'tt list-clients -t "=$RS@view-wt-web-renew" -F x 2>/dev/null | grep -q x' 30; then
+    printf 'printf renewed > "$HOME/renewed"\r' >> "$WORK/web-renew.in"
+    waitfor '[ -f "$HOME/renewed" ]' 30 && ok 'explicit renew accepts input' || bad 'renew input failed'
+    [ "$(tt display-message -p -t "$W" "#{pane_pid}")" = "$PANEPID" ] && ok 'worker untouched' || bad 'worker changed'
+    RENEWPID=$P
+    FLEET_TERM_RENEW=1 FLEET_TERM_RESUME="$GEN" run web-stale personal; wait "$P"
+    [ "$(cat "$WORK/web-stale.rc")" = 5 ] && ok 'stale renew refused' || bad 'stale renew accepted'
+    FLEET_TERM_RESUME="$GEN" run web-stale-connect personal; wait "$P"
+    [ "$(cat "$WORK/web-stale-connect.rc")" = 5 ] && ok 'stale connect refused' || bad 'stale connect accepted'
+    FLEET_TERM_RENEW=1 FLEET_TERM_RESUME="$GEN" run web-worker-renew worker:fid-1; wait "$P"
+    [ "$(cat "$WORK/web-worker-renew.rc")" = 2 ] && ok 'worker renew refused' || bad 'worker renewed'
+    CURRENT=$(python3 -c 'import json,os; s=json.load(open(os.environ["FLEET_CONF_DIR"]+"/webterm/terminal.json")); print("%s:%s"%(s["id"],s["generation"]))')
+    FLEET_TERM_RENEW=1 FLEET_TERM_RESUME="$CURRENT" run web-occupied personal; wait "$P"
+    [ "$(cat "$WORK/web-occupied.rc")" = 4 ] && ok 'renew never steals live control' || bad 'renew stole control'
+    P=$RENEWPID
+
+  else
+    bad 'explicit renew cannot reopen ended personal terminal'
+  fi
+  kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+  [ "$fails" = 0 ]; exit $?
+fi
+
 # Model a close whose view is gone but whose helper has not finished cleanup.
 if [ "${1:-}" = --closed-lease ]; then
   python3 - "$BIN" "$RS" <<'PY'

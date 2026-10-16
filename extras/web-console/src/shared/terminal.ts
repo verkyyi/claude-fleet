@@ -28,10 +28,12 @@ export function connectTerminal(worker: string | null, options: {
   onBytes: (bytes: Uint8Array) => void;
   onExit: () => void;
   preferRelay?: boolean;
+  renew?: string;
 }) {
   const key = `fleet-terminal:${worker ?? "personal"}`;
-  let resume = "";
-  try { resume = sessionStorage.getItem(key) || ""; } catch { /* private storage unavailable */ }
+  let resume = options.renew || "";
+  let renewing = Boolean(options.renew);
+  try { resume ||= sessionStorage.getItem(key) || ""; } catch { /* private storage unavailable */ }
   let attachment: BrowserAttachment | undefined, timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false, ready = false, serial = 0, failures = 0, previous: string | undefined;
   let relay = Boolean(options.preferRelay), info: Partial<TerminalState> = {};
@@ -60,6 +62,7 @@ export function connectTerminal(worker: string | null, options: {
     const query = new URLSearchParams({ service: "term", controller: "1", errors: "stream", ...(worker === null ? { target: "personal" } : { worker }) });
     if (resume) query.set("term_resume", resume);
     if (take) query.set("take", "1");
+    if (renewing) query.set("renew", "1");
     attachment = new BrowserAttachment({
       url: `/v1/attachment/connect?${query}`, reconnect: false, previous, preferRelay: relay,
       onState(state) {
@@ -68,15 +71,22 @@ export function connectTerminal(worker: string | null, options: {
         if (state.connection) previous = state.connection;
         if (state.state === "ready") {
           if (!state.terminalGeneration || !state.controllerEpoch) { finish("unsupported"); return; }
-          if (resume && state.terminalGeneration && resume !== state.terminalGeneration) { finish("interrupted"); return; }
+          if (!renewing && resume && state.terminalGeneration && resume !== state.terminalGeneration) { finish("interrupted"); return; }
           if (state.terminalGeneration) {
             resume = state.terminalGeneration;
             try { sessionStorage.setItem(key, resume); } catch { /* optional */ }
           }
-          ready = true; failures = 0; publish("ready");
+          renewing = false; ready = true; failures = 0; publish("ready");
         } else if (state.state === "closed") {
           ready = false;
           const error = state.error || "connection_closed";
+          // A lost response to renewal is uncertain. Never repeat a lifecycle
+          // mutation as an ordinary network retry or replay old input.
+          if (renewing && transient.has(error)) { finish("interrupted"); return; }
+          if (error === "ended" && state.terminalGeneration) {
+            resume = state.terminalGeneration;
+            try { sessionStorage.setItem(key, resume); } catch { /* optional */ }
+          }
           if (transient.has(error)) { if (state.mode === "direct") relay = true; schedule(error); }
           else finish(error);
         }
@@ -94,7 +104,7 @@ export function connectTerminal(worker: string | null, options: {
       },
     });
   };
-  const offline = () => { if (!stopped) schedule(); };
+  const offline = () => { if (!stopped) { if (renewing) finish("interrupted"); else schedule(); } };
   const online = () => { if (!stopped && !ready) { clearTimeout(timer); start(); } };
   window.addEventListener("offline", offline); window.addEventListener("online", online);
   const close = () => {

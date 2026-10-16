@@ -50,6 +50,25 @@ func TestAttachmentGrant(t *testing.T) {
 	if _, err := VerifyAttachment(SignTermGrant(TermGrant{}, "test-key"), "test-key", "alice", "request", "incarnation", now); err == nil {
 		t.Fatal("cross-service prefix accepted")
 	}
+	renew := g
+	renew.TermRenew, renew.TermResume = true, "terminal:1"
+	if err := check(renew, "test-key", "alice", "request", "incarnation", now); err != nil {
+		t.Fatal(err)
+	}
+	if SameAttachment(g, renew) {
+		t.Fatal("renewal changed after authorization")
+	}
+	for _, change := range []func(*AttachmentGrant){
+		func(b *AttachmentGrant) { b.Target = "worker:other" },
+		func(b *AttachmentGrant) { b.TermResume = "" },
+		func(b *AttachmentGrant) { b.TermTake = true },
+	} {
+		b := renew
+		change(&b)
+		if check(b, "test-key", "alice", "request", "incarnation", now) == nil {
+			t.Fatal("invalid renewal grant accepted")
+		}
+	}
 	b := g
 	b.Mode = "relay"
 	b.Epoch++
