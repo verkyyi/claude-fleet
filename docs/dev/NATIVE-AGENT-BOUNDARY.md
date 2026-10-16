@@ -1,0 +1,510 @@
+# 原生 Agent 边界迁移
+
+依据：[产品 Blueprint](PRODUCT-DIRECTION.md#fleet-与原生-agent-的最终职责边界)。
+组件类别仍以 [COMPONENTS.md](COMPONENTS.md) 为唯一来源。
+
+## 范围与状态
+
+2026-10-16 操作者确认先写入边界，再按建议推进。首批是能力验证与兼容性盘点，
+不是直接在生产启动参数后附加 `--worktree`，也不同时重写认证、会话系统或资源策略。
+目标是减少 Fleet 重复职责，不承诺仅更换目录创建者就达到 1 秒草稿或 5 秒回复。
+
+国内 drill 保持 Codex-only；Claude 的真实运行验证只在允许的境外环境进行。
+不改变用户 POD 的运行配置，不关闭已有会话，不扩大信任，不改变完整 MCP 和 CPU/auth/权限守卫。
+
+以下源码与探针证据来自隔离候选工作树，按独立 PR 送审；文档先行不表示所有实现已随本文合并或发布。
+旧的 `issue-N` / `scratch-N` 会话继续按既有路径恢复，不批量改名或迁移目录。
+
+## 原生能力依据
+
+- [Codex 官方命令](https://learn.chatgpt.com/docs/developer-commands?surface=cli) 与 [Worktree 文档](https://learn.chatgpt.com/docs/environments/git-worktrees)：验证目标 CLI 的 `--worktree`，不能以桌面能力替代 CLI 证据。
+- [Claude Worktree](https://code.claude.com/docs/en/worktrees) 与 [CLI](https://code.claude.com/docs/en/cli-reference)：原生 `--worktree`、恢复与目录生命周期；默认目录布局不等于 Fleet 的历史布局。
+- [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp)、[App Server](https://learn.chatgpt.com/docs/app-server) 与 [Claude Hooks](https://code.claude.com/docs/en/hooks)：优先原生接口，不为获取状态而默认引入第二套常驻会话引擎。
+
+官方接口会变化。证据须记录真实二进制版本、运行环境、调用方式与功能结果；
+不能仅凭版本号比较或帮助中出现参数就开启生产路径。
+
+## 分批推进
+
+| 批次 | 工作 | 完成条件 |
+|---|---|---|
+| A：Worktree 兼容性 | 核实目标 CLI；以无凭据、无真实模型请求的 Git 夹具检查目录识别、守卫及原生生命周期；核对 native local 与 Fleet private-server 的能力差异，再在受准入约束的 drill 原生会话验证 | 真实目录、仓库、原生会话及账号环境可验证绑定；写入隔离、正常退出、异常恢复、保留修改与回退全部有证据 |
+| B：原生创建适配 | 替换创建入口而非添加第二层创建；保存原生返回的实际路径；旧会话读取保持兼容 | 不双重创建/清理、不依赖目录前缀猜所有者；原生能力不足时明确回退旧实现或拒绝，不回退到可写主检出 |
+| C：启动路径减法 | 对实际路径打点，删除重复解析/读取/调度；评估将非必需 Git 同步移出交互等待 | 与直接启动同机对照，首次与重复样本均保留；基准提交明确，用户要求最新时不能静默用旧代码 |
+| D：事件与生命周期减法 | 按已验证的原生事件替换轮询、屏幕猜测和重复状态机 | 断连/重连、重复或丢失事件、退出/回合结束区别明确；缺失证据显示未知，不误报完成或删除会话 |
+| E：原生插件所有权 | 通过原生 CLI 管理安装与开关，逐步移除每次启动的跨 Agent 翻译与重复 hook/MCP 装配 | 一份插件只有一个安装/加载所有者；既有选择、用户文件、完整 MCP 环境和 hook 信任保持；旧会话有兼容窗口 |
+
+每批只替换已有职责，不新增池、编排或通用 Agent 抽象层。只有完成测量并证明原生能力不足后，
+才另行评审最小兼容实现。旧 hook、工具及配置至少保留 CONTRIBUTING 要求的兼容周期。
+
+## 首批代码盘点
+
+以下为候选和依赖，不是已经批准直接删除的文件清单。
+
+| 入口/能力 | 现状 | 替换条件 |
+|---|---|---|
+| `bin/dash-raw-session.sh` | 先做 authority/admission，再尝试池或分配目录，随后创建窗口；存在准入 reservation 时禁止复用旧原生进程 | 保持准入与身份绑定；原生 Worktree 启动也必须经过此边界，不能删 `_pool_ok` 限制来实现快路径 |
+| `fleet_scratch_alloc` / `fleet_worktree_create`（`bin/fleet-lib.sh`） | 同步 fetch，分配 `scratch-N`，创建 Git worktree 并运行 setup | 原生创建后不再调用一次 Fleet 创建；必须迁移所需 setup 配置，不能无意丢失项目文件、依赖或完整 MCP |
+| `fleet_seat` / `fleet_scratch_key` 与 `bin/fleet-worktree.sh` | 部分座位、路径和身份使用历史命名约定 | 原生目录映射使用明确元数据与 Git 身份验证，不把任意目录前缀当授权 |
+| `hooks/base-readonly-guard.py` | 保护主检出及其真实路径下的后代 | Codex 本次实测生成主检出之外的目录，现有守卫允许；不能因为 Claude 的嵌套布局未适配，就整体放行 `.claude` / `.codex` |
+| `bin/fleet-restore.sh` / `bin/fleet-history.sh` | 恢复使用窗口与会话元数据，并兼容历史布局 | 写入真实工作目录、原生 ID 和账号 home；重启时恢复同一会话，不取最近修改的另一份历史 |
+| `bin/fleet-codex.sh` | 已将恢复参数转成原生 resume/fork | 保留薄适配，删除候选仅是重复外围逻辑；不能声称原生恢复尚未接入 |
+| `bin/fleet-codex-runtime.py` | 默认由 Fleet 启动私有 app-server，再执行 `codex --remote`；固定订阅禁止直接降级 `--no-daemon` | 当前原生 `--worktree` 不支持 remote TUI；先验证原生运行时能否保留账号验证、hook 归属、事件与协作，不能先绕过固定订阅检查 |
+| `worktree-autoclean*` / `fleet-worktree-drop*` | 既有 Fleet 目录回收与安全检查 | 明确唯一清理所有者，原生管理目录不能被旧扫描器误删；未提交、未推送、活动会话及原生锁均纳入验证 |
+| `bin/scratch-prefill.py` | 有界就绪探测与不发送的草稿粘贴 | 尚无已验收的两种 Agent 通用原生未发送草稿入口；不能用 prompt 自动提交代替，也不能仅删等待计时器 |
+
+## 首批证据（2026-10-16）
+
+- 本机：Codex `0.156.0` 帮助提供 `--worktree`；Claude Code `2.1.296` 帮助提供 `--worktree`。这只是能力声明。
+- drill：只读查询实际测试容器，Codex `0.162.1` 帮助提供 `--worktree`。
+  此时 drill 的 Fleet 版本是 `2d86e6dfa8c68efdf971980abaf6e940340b9217`，不是上一轮的 `c48dd07`；本批没有覆盖部署或变更调度。
+- 当前代码盘点工作树基线为 `ee32cb73`。drill 已前移，因此本地兼容夹具与线上验收须分别标注，不能混称同一个版本通过。
+- 新增 `bin/fleet-native-worktree-selftest.sh`：临时 HOME、真实 Git 仓库及两种目录布局；不启动 Agent、不读取凭据、不请求模型、不使用在线 tmux，不注册到 Fleet。
+  同一夹具分别检查本地基线与 drill 已安装版本，各通过 11 项。通过表示现有约束被复现，不表示原生创建已适配。
+- 已复现两处迁移障碍：主检出下的真实嵌套 Worktree 被 base-readonly 守卫拒绝；不含 `scratch-N` 的目录不会生成旧 scratch key。
+  同时确认现有 `fleet_seat` 已能用明确的 issue/工作目录绑定识别无特定名称的 worker，不能把整个座位判断误称为只支持目录名。
+  主检出写入、伪造原生目录名和指向主检出的符号链接仍被拒绝。
+- 此阶段只验证目录布局；后续原生 CLI 证据见下节。完整 MCP 启动、面板重连和 POD 重建恢复仍未验收。
+
+可复现的离线布局检查：
+
+```sh
+bash bin/fleet-native-worktree-selftest.sh
+bash bin/fleet-native-worktree-selftest.sh /path/to/installed/fleet
+```
+
+可选参数只选择被检查的 Fleet 程序目录，所有 Git 写入与夹具提交都在临时目录中。
+不通过时保留错误诊断，不修改被检查安装或放宽守卫。下一步先验证实际原生路径与会话绑定接口，
+再添加最小适配；不能仅因嵌套布局被拒绝就先扩大只读守卫的例外范围。
+
+本批验证记录：
+
+| 检查 | 结果 |
+|---|---|
+| 新增布局夹具，本地 / drill 已安装版本 | 分别 11 项通过；未启动原生 Agent，不代表面板验收 |
+| `bash bin/bash-guard-selftest.sh` | 全部通过 |
+| `bash bin/fleet-worktree-root-selftest.sh` | 9 项通过 |
+| `shellcheck bin/fleet-native-worktree-selftest.sh`、`git diff --check` | 通过 |
+| `bash bin/docs-links-selftest.sh` | 810 个链接检查通过；新增文档的相对链接另行检查通过 |
+| `bash bin/fleet-bin-inventory-selftest.sh` | 工具自测通过，仓库汇总失败：4 个既有 `nogh-task-*` 文件未归类；这些文件未被本批修改，新增夹具正确归入「构建与验证」 |
+
+未宣称全量回归或 CI 通过；本批尚未提交、发布或切换用户会话的创建方式。
+
+## 原生 CLI 生命周期实测（2026-10-16 后续）
+
+新增显式调用的 `bin/fleet-native-worktree-cli-selftest.py`。真实 Codex 在临时 HOME、临时 Git 仓库中运行，
+不继承账号凭据、Fleet 会话或用户配置；仅信任测试仓库，使用 read-only sandbox。
+推理流量定向 `127.0.0.1` 的临时端点，端点始终返回已知的 400 拒绝，不生成模型回答、不执行工具。
+测试结束清理自己的临时目录与端点。此端点只在测试进程存活，不是产品组件或新增代理层。
+
+```sh
+bash bin/fleet-native-worktree-selftest.sh --native-cli
+python3 bin/fleet-native-worktree-cli-selftest.py --codex /path/to/codex --fleet-root /path/to/fleet
+```
+
+默认布局自测仍不启动 Coding Agent。原生探针由操作者显式运行，输出 JSON，保留测试版本、精确原生 ID、
+归一化的目录、每条检查及进程退出状态；不能把预期的 400 和测试报告中的 `pass` 当作模型调用成功。
+
+已在本机 Codex `0.163.0` 和 drill Codex `0.162.1` 分别通过 25 项探针检查：
+
+- `codex exec --worktree` 自行创建 `$CODEX_HOME/worktrees/<生成目录>/<仓库名>`，是主检出之外的 detached Worktree；原生 `session_meta` 保存精确 ID 与真实 cwd。
+- 从已记录目录执行原生 `exec resume <精确ID>` 保留 ID、cwd，不额外创建 Worktree；原生 `exec fork <精确ID> --worktree` 创建不同 ID 与独立目录。
+- 已知的推理失败退出、恢复与分叉之后，原目录的未提交文件仍保留，主检出未改变；所有推理尝试只到无 Authorization 的本机夹具。
+- 实际 Codex 原生路径通过现有 base-readonly 守卫。因此「嵌套 Worktree 必须先改守卫」不适用于这次 Codex 路径，不能据上节布局夹具提前放宽守卫。
+- 两个版本均明确拒绝 `codex --remote … --worktree`：`--worktree is only supported for local sessions`。当前 Fleet 默认路径正是 private app-server + remote TUI。
+- 两个目标二进制导出的含 experimental 字段的 app-server JSON Schema 均未发现以 Worktree 命名的 schema；`ThreadStartParams` / `ThreadForkParams` 相关字段只有 `cwd`，未发现创建 Worktree 的参数。此证据不证明所有未公开接口都不存在，但不足以支持设计一个猜测的创建 RPC。
+
+本次探针测试的是失败退出后的目录/会话生命周期；不是正常模型回合、真实 TUI、完整 MCP、Fleet 准入、生产性能或 POD 重建验收。
+报告中的时间包括刻意制造的推理失败，仅供定位，不能与此前 48.4 秒草稿时间直接对比，也不证明达到 5 秒。
+
+### 下一步由证据决定
+
+先解决运行时所有权，而不是马上给 `dash-raw-session.sh` 附加 `--worktree`：
+
+1. 核查目标二进制实际暴露的原生 app-server 协议，确认是否有受支持的 Worktree 创建/绑定接口；不能猜一个 RPC 或自行复制上游内部实现。
+2. 若需要改用原生 local 运行时，逐项验证固定订阅身份、凭据隔离、SessionStart 所属进程、完整 MCP、原生事件和跨会话投递；不能仅通过 `--no-daemon` 绕开现有订阅证明。
+3. 通过后只保留一处 Worktree 创建者，并把原生 ID / 实际 cwd 投影到 Fleet 已有恢复元数据；删除重复 fetch/alloc，不再另建目录池。
+4. Claude 的目录布局、正常退出清理与恢复独立验收；Codex 的 local/remote 限制不外推到 Claude，国内 drill 不运行 Claude 会话。
+
+当前代码中的原生 SessionStart 已记录 cwd，不需要再造一份会话数据库。
+运行时原生化尚未完成；本阶段保持目标 active，不把探针通过视作架构重构完成。
+
+### 首个运行时兼容性改动
+
+`fleet-codex-runtime.py` 在创建临时 endpoint、调用 prepare 或启动任何子进程之前，
+明确拒绝 private-runtime 路径中的原生 `--worktree`。原先该组合先启动 app-server，
+再由 remote TUI 拒绝；现在保留既有 Fleet 目录创建路径，不以等待或自动降级掩盖不兼容。
+`--` 后的同名字面文本不作为运行时选项，避免把用户文本误当成切换运行时的命令。
+
+已有显式 embedded 路径保持兼容，但固定订阅仍禁止绕过 private-runtime 的身份验证。
+此改动不是启用原生 Worktree，也不是建议用户加 `--no-daemon`。
+`bash bin/fleet-codex-runtime-selftest.sh` 共 12 项通过，其中新增 5 项覆盖早拒绝无子进程、
+prepare/目录分配零调用、字面参数、既有 embedded 透传和固定订阅拒绝。
+测试使用有界假 Agent；真实模型、完整 MCP 与面板验收仍待运行时迁移之后执行。
+
+本次同时重跑布局 11 项、旧 Worktree 9 项、文档 811 链接与两个相关 shell 的 shellcheck，均通过。
+扩大检查 `fleet-codex-selftest.sh` 时，A–F3 通过，G 的「PATH 中不存在 Codex」夹具失败：
+预期 127，实际 1 / `stdin is not a terminal`。该夹具到 G 前已删除其 stub runtime，
+不经过本批修改的 `fleet-codex-runtime.py`；未修改此既有测试，也未宣称整个启动回归通过。
+
+### 原生本地 TUI 与旁路后台不是同一个运行时
+
+在本机 `0.163.0` 和 drill `0.162.1` 上追加了隔离的真实 PTY 探针：临时 HOME/CODEX_HOME、
+临时仓库、无凭据、无真实模型，仅向本机拒绝端点发送固定测试文本。测试显式关闭
+`features.daemon_auto_start`，不安装系统服务，也不连接既有用户 daemon。
+在同一临时 CODEX_HOME 先启动自己拥有的 `app-server --listen unix://`，再启动不带
+`--remote` 的 `codex --worktree`。它不是 Fleet 面板草稿验收，启动文本会提交给测试端点。
+
+两个版本的观测一致：
+
+- 本地 TUI 创建了原生 Worktree，SessionStart 记录精确会话 ID 与新 cwd；hook 继承的是 TUI 的测试标记，而非旁路后台的标记。
+- 旁路后台 `thread/loaded/list` 为空；按同一 ID 调用 `thread/read` 能读到持久历史，但状态为 `notLoaded`。
+- 推理请求仅到临时 `/v1/responses`，无 Authorization，返回预设拒绝；没有真实模型回答或工具执行。
+
+因此，**同一 CODEX_HOME、能读到同一历史，不足以证明后台拥有这个正在运行的会话**。
+不能用旁路后台的 `account/read` 替本地 TUI 证明实际运行身份，也不能据此假定事件和投递已经接通。
+此结论限定于上述配置；尚未验证的自动 daemon 路径不据此判定支持或不支持。
+现有凭据代理路径已经隔离每会话 CODEX_HOME 及其 `app-server-control`，无需再造一层 home 管理。
+
+本轮不采用「本地 TUI 加一个仅用于验证的后台」方案，不改线上运行时或订阅校验。
+探针结束清理自己的进程和端点；本机早期探针一次清理异常后，已通过工作目录与打开文件确认
+残留后台仅属于临时夹具并终止，修正后的本机及 drill 探针正常退出。没有终止用户 daemon 或 Fleet 会话。
+
+## 完整目标的完成账本
+
+### 原生状态事件替代重复查询
+
+源码候选的 `fleet-codex-attention.py` 不再每两秒重新建立 WebSocket 并读取 thread：
+复用到现有私有后台的连接，消费原生 `thread/status/changed`；该连接收到精确线程的状态事件后，
+只读校验降至每 30 秒。此前保留原有两秒读取频率，避免旧版本或不支持事件的后台退化；重连重新证明事件能力。
+不增加服务；常规状态监测不调用 `thread/start` / `thread/resume`，也不增加常驻会话订阅。
+新出现的问题详情仍由既有短连接路径读取，仅重放已加载线程的待处理请求，随后断开。
+这只替换注意力监测；不把失败回合、失联或 `notLoaded` 当作任务成功。
+
+- 本机 `0.163.0` 与 drill `0.162.1` 的隔离真实 app-server 均向未 resume 的连接广播状态事件。
+  测试故意让模型请求在无凭据的本机端点返回 400，观测到 `active → systemError`，不是模型成功验收。
+  同一源码候选在两处均只进行一次 initialize 和初始 thread/read，就消费了后续状态变化；
+  保持原连接，未把失败状态写成 done。报告记录候选 attention / RPC 文件 SHA-256，均与当前工作树匹配。
+- 身份仍按当前 launcher、精确 root UUID、账号 home 和 endpoint 绑定；其他线程事件丢弃。
+  断线、半帧超时、畸形或过量事件只丢弃连接，保留已有需要用户处理的状态，随后重新获取快照。
+- `thread/read` 仍是兜底校验，不以缓存取代账号或准入证明。原生请求的回答与权限处理路径未改动。
+- 60 秒模拟时钟回归中，已证明事件投递的一条空闲会话从原先最多约 30 次连接/读取变为 1 次连接、2 次读取。
+  这是监测调用次数，不是整体 CPU、面板草稿或模型回复的实测提速。
+- 源码候选通过注意力 21 项回归，覆盖真实隔离 tmux 的身份竞态、显式 blocked 保留与未证明事件时的兼容读取；
+  运行时 15 项回归包括空闲/心跳/分片/半帧断线处理，以及 TUI 正常/非零退出时关闭事件连接并清理自己的后台。
+- 追加回归复现并修正了快照期间清空新事件的竞态：若读取期间收到的状态与快照冲突，保留原提示，下一次 tick 重读。
+  不用可能过时的 idle 清空新审批，也不重新显示已经解决的提问；一致的事件无需额外读取。
+
+尚未部署。完整 MCP、真实面板和生产空闲资源对比仍按后续验收矩阵执行。
+
+### 原生插件替代跨 Agent 翻译的证据
+
+[官方 CLI 文档](https://learn.chatgpt.com/docs/cli/reference) 已提供 `codex plugin` 与 marketplace 管理。
+不能继续以「Codex 没有插件系统」作为逐次翻译的设计依据。本机 `0.163.0` 和 drill `0.162.1`
+的临时 HOME/CODEX_HOME 夹具均验证：
+
+- 原生 `plugin marketplace add` 能读取 `.claude-plugin/marketplace.json`；`plugin add/list/remove` 完成安装、启用查询与卸载。
+- 原生安装自行将 Claude `commands/*.md` 转为缓存内的技能；`skills/list` 返回原始技能和转换后的命令技能，均带原生 pluginId。
+- 实测命令技能名称为 `<plugin>:source-command-<command>`，不同于当前 Fleet 桥生成的别名；调用入口不能假定旧名称仍有效。
+- `hooks/list` 发现插件的 SessionStart，来源为 plugin，但信任状态为 untrusted。只发现不代表已经获准执行；不能通过默认绕过信任完成迁移。
+- 探针未创建模型回合、未启动 Claude、不读取用户凭据、不改变 live 插件、系统服务或完整 MCP 配置；只安装并移除夹具插件。
+
+据此，E 批不再设计新的插件清单、命令转换器或 hook 合并器；优先直接使用原生安装器，
+将安装/升级移到用户显式插件操作或受控安装阶段，而不是每次打开会话都重写技能和配置。
+现有 `fleet-codex-plugins.py` 暂为兼容桥，不是新的长期所有者；不能因测试插件可安装就全部删除。
+
+兼容桥已修正一个会破坏所有权的入口：`agent-overrides.json` 中声明 `codex.plugins`
+（或父级 `codex`）后，`sync` 不再装配技能/MCP，`dirs` 现在也不再提供 Claude 插件目录给 hook 合并器。
+此前只有前半生效，用户自行管理 Codex 插件时仍会注入旧 hooks，可能重复执行或绕过原生插件关闭选择。
+三项新增回归先复现该失败，再验证默认覆盖文件、显式父级覆盖与未覆盖时的旧行为；含后续清理用例，兼容桥共 92 项通过。
+这不是自动迁移：不删除旧技能/config，不改用户原生安装，也不替用户信任 hooks；清理与切换仍须完整验收。
+
+新增显式运行的 `bin/fleet-native-plugin-cli-selftest.py`，在全新 HOME/CODEX_HOME 中
+用原生 CLI 安装/卸载临时插件，实际启动夹具 MCP；不使用用户凭据，不创建模型回合，也不修改线上安装。
+本机 `0.163.0` 与 drill `0.162.1` 各通过 106 项检查，三种环境配置结果一致：
+
+| 插件 `.mcp.json` 写法 | 实际 MCP 进程结果 | 迁移结论 |
+|---|---|---|
+| 不声明环境传递 | Fleet 当前使用的七个会话环境变量全部缺失 | 不能直接安装现有插件后删除旧桥 |
+| `env_vars: [变量名, …]` | 七个夹具值全部正确传入 | 可用原生白名单传递，不落盘真实凭据 |
+| `env: {变量名: "${变量名}"}` | 收到 `${变量名}` 字面量，不是环境值 | 不能照搬其他 Agent 的变量插值假设 |
+
+七个变量是 `TMUX`、`TMUX_PANE`、`FLEET_CONF_DIR`、`FLEET_SESSION`、`FLEET_WORKER_CRED`、
+`FLEET_MCP_BIN`、`FLEET_MCP_ORCH`；测试全部使用已知假值，从不读取真实 worker credential。
+这是目标版本的实测兼容证据，不是允许把所有宿主环境转交插件；未来只声明每个插件实际需要的变量名。
+夹具同时验证原生技能、命令转换、hook 的 untrusted 状态及新建空线程后执行标记不存在。
+[原生 hook 信任](https://learn.chatgpt.com/docs/hooks) 必须针对当前定义审阅；本次没有扩大信任，
+该装卸夹具本身不证明受信任 hook 的执行、事件映射或完整 Fleet MCP 工具调用；单独的信任执行验证见后文。
+夹具使用绝对路径指向自己的临时 MCP 程序，未据此宣称插件路径变量或跨机器打包已通过。
+
+追加真实原生客户端验证，不再只看工具清单：
+
+- 通过 `mcpServer/tool/call` 调用夹具工具成功；插件的 `tool_timeout_sec = 1` 能中止等待 2.5 秒的夹具调用。
+  等串行夹具完成旧请求后再调用成功；不声称客户端超时会终止服务器内部工作，也不声称 1 秒是生产超时值。
+- allowlist 夹具读取实际 `fleet-orchestrate/.mcp.json` 的命令/参数，仅在临时副本补 env_vars 和测试超时。
+  真实 `fleet-mcp.py --group orch` 通过原生插件启动，shell 中的 FLEET_MCP_BIN 路径展开正常，七个工具仍可发现。
+- 使用格式故意无效的假 worker 凭据调用 `children`，真实 Fleet MCP 返回 credential malformed / Nothing ran。
+  证明该拒绝路径未被原生 MCP 绕过，不代表有效凭据、Hub 准入或所有工具已验收。
+  HOME/config 均为临时目录，TMUX 指向不存在的夹具 socket；不接入 live tmux，也不修改线上插件。
+- 本机复制工作树 MCP，drill 复制其已安装 MCP，到各自临时 bin 后执行；不修改源文件。
+  原实现的审计日志默认跟随脚本位置，早期探针直接引用安装目录会写入运行日志；现已改为副本运行，
+  并检查 `via=badcred` 审计记录留在临时目录。两者是兼容性验证，不宣称部署了同一源码候选。
+
+原生开关与卸载也在新起的独立 app-server 上验证，不以缓存目录存在代替运行时结果：
+
+- 单次原生 `-c plugins.native-fixture@fleet-probe.enabled=false` 的有效配置确实为 false，
+  技能不再启用，插件 hooks 与 MCP 不再加载；退出后原安装仍为 enabled，未改持久配置。
+- `plugin remove` 后，原生列表、有效配置、技能、hooks 和 MCP 均不再包含该插件。
+  删除的是配置条目本身，不保留「用户卸载过」的标记，因此条目缺失不能作为重新桥接的理由。
+- 不新增 Fleet 插件启停数据库，也不自己实现 Codex 的多层配置合并。
+  一次受控迁移必须覆盖该登录的账号 homes，明确停止旧桥后再交由原生管理；
+  原生安装/启用/关闭/卸载之后，旧桥不得因 Claude 侧仍启用而重新生成技能、MCP 或 hooks。
+  既有 `codex.plugins` override 表达整条桥的退出；显式清理入口见下节，逐 home 的原生迁移验收仍未完成。
+  不采用「看到原生 enabled=true 就自动切换，条目消失就切回 Claude」的推断式方案。
+
+### 一次性旧桥清理
+
+源码候选提供 `fleet-codex-plugins.py retire`，仅作为一次性迁移工具，不在启动或安装链上自动执行。
+它不安装插件、不复制原生状态、不选择模型、不代替 hook 信任，也不自动修改 override。
+操作顺序是：完成目标版本与所需插件的原生验收，保留旧安装与配置回退副本，
+在旧会话已停止且满足至少一个发版周期兼容要求的迁移窗口，明确停止旧桥，再预览并执行清理。
+
+1. 在现有 `agent-overrides.json` 中保留其他配置并加入 `codex.plugins`（父级 `codex` 也有效），
+   确认 `sync` 与 `dirs` 都停止桥接；缺少该覆盖时，清理命令拒绝执行。
+2. 默认覆盖安装器使用的账号 homes；可重复传 `--codex-home` 限定演练范围。
+   单个 home 通过不代表整登录完成迁移；共享 skills/config 符号链接须先人工明确所有者。
+3. 默认只打印预览，审阅后才显式加 `--apply`：
+
+```sh
+python3 bin/fleet-codex-plugins.py retire --codex-home /path/to/test-codex-home
+python3 bin/fleet-codex-plugins.py retire --codex-home /path/to/test-codex-home --apply
+```
+
+可移除对象限定为：
+- `fleet-plugin-*` 链接必须精确指向 Claude 原生安装记录所证明的该 marketplace 技能目录；关闭但仍安装的插件也可证明，查不到记录则拒绝猜测。
+- 命令适配目录必须只有带 Fleet 生成标记的普通 `SKILL.md`；有额外文件或 SKILL.md 自身是链接则拒绝，不使用递归删除。
+- MCP 只移除一对完整、顺序正确、无重复的旧桥 marker block，外部配置与原生插件开关不变。
+
+所有 home 先完成预检再开始写入；不明链接、重复/缺失标记或第二个账号异常，均在写入前拒绝。
+不将预检称为跨文件事务：执行期间仍须避免并发编辑/安装，磁盘写入失败时应保持桥关闭、检查结果并重试。
+原生插件缓存、用户技能、其他 MCP 配置和 Claude 插件源文件不删除；成功后重复执行为零项。
+隔离回归共 92 项通过，含预览不写入、多 home 预检、关闭插件的来源证明、用户文件保留、幂等及旧桥不再生成。
+新增回归复现固定临时文件名被预置符号链接时会改写其他文件的风险；共享写入函数已改为同目录独占创建的随机临时文件，
+保留既有文件权限，原子替换后清理临时文件；sync 与 retire 都不再跟随那个固定临时路径。
+本批没有在任何真实账号 home 执行清理，尚不能称为完成原生所有权切换。
+
+串联验证可显式运行：
+
+```sh
+python3 bin/fleet-native-plugin-cli-selftest.py --retire-bridge --codex /path/to/codex
+```
+
+它在同一个临时 home 中用真实旧桥生成链接、命令适配技能和 MCP marker block，
+安装原生夹具插件，声明退出旧桥，预览并清理；随后实际启动原生 app-server 验证技能、hook 发现、
+MCP 调用与超时。清理后 config 与旧桥生成前的快照逐字一致（快照取自原生插件已安装时）。
+再通过原生关闭/卸载，并重新执行旧桥 sync/dirs，验证三类旧生成物均不复活。
+该选项不创建模型回合、不信任 hooks、不访问 live tmux，不代表全部 Fleet 插件已完成真实身份与业务调用验收。
+drill 使用上传到临时目录的源码候选与原生二进制，不替换已安装 Fleet；报告记录桥代码 SHA-256，避免混用版本证据。
+同一桥源码候选在本机 `0.163.0` 与 drill `0.162.1` 各通过 172 项串联检查；两份报告的桥 SHA-256 均与当前源码匹配。
+
+复测方式（显式使用目标原生二进制，不纳入无 Codex 环境的默认 CI）：
+
+```sh
+python3 bin/fleet-native-plugin-cli-selftest.py --codex /path/to/codex
+```
+
+切换前还须验证：真实 Fleet 插件 MCP 的超时、路径展开与完整调用，原生 hook 信任/变量/事件映射、
+旧命令别名、各账号 home 的独立安装，以及原生关闭后不会被 Claude 同步重新启用。
+同一插件的桥接技能、MCP 与 hooks 必须一并退出，且只清理可证明由 Fleet 生成的旧物；
+用户自建文件与老会话至少保留既有兼容周期。默认不安装 orchestrator/steward/EPIC 等按需角色。
+
+### 实际 orchestration 插件的原生包
+
+候选 `fleet-orchestrate` 0.2.5 新增 `.codex-plugin/plugin.json`，与 Claude 清单保持同名同版本。
+技能和 MCP 仍使用同一实现，不新增工具执行器，也不改变默认安装行为。
+原生清单显式声明七个 `env_vars` 名称及 600 秒工具预算，不保存凭据值。
+
+实际包验收发现共享 `hooks/hooks.json` 含 Claude 专用 `modules` 字段，
+Codex 0.163.0 会拒绝解析整个文件，不能因为夹具 hook 可用就声称真实包兼容。
+最初曾用独立 JSON 保留五个相同命令，随后业务审计发现这些命令在
+`fleet-orchestrator-state.py is_orchestrator` 中明确排除 Codex，旧桥的 `codex-map.json` 也主动过滤。
+因此不把「可发现五个 no-op hooks」作为最终实现：候选已删除第二份 hooks 文件，
+Codex 清单使用 `"hooks": {"hooks": {}}` 显式关闭此插件的默认 hooks 发现。
+Claude 原文件及其 UI 模块不变，平台核心安全 hooks 不受影响。
+原生 inline hooks 覆盖机制见[官方插件说明](https://developers.openai.com/plugins/build/plugins)。
+实测空数组 `"hooks": []` 在 0.163.0 仍回退到默认文件并报解析警告，不能用它代替空 hooks 对象。
+结构回归同时检查原生包与旧桥不引入 Claude 状态逻辑；共享技能明确两种 Agent 的恢复差异。
+Codex 仍使用原生历史/压缩，缺少角色上下文时显式重用技能和 `take_role` 检查当前归属，
+通过 `children` 获取当前业务状态，不扫描 Claude 对话、重建其计时器或自动启动恢复回合。
+
+```sh
+python3 bin/fleet-native-plugin-cli-selftest.py --package --codex /path/to/codex
+```
+
+该模式把整个候选插件原样复制到临时 marketplace，以真实 Codex 安装并启动独立 app-server；
+不重建测试专用清单，不使用真实账号或模型回合。复制的 MCP 实现和审计日志也留在临时目录。
+本机 `0.163.0` 与 drill `0.162.1` 各通过 14 项，原生清单 SHA-256 一致：
+
+- 原生发现 `fleet-orchestrate:fleet-orchestrate` 技能，插件 hooks 为空且没有解析警告，没有自动信任。
+- `.mcp.json` 与 Codex inline MCP 同时存在时，仅一个 `fleet-orch` 启动，七个工具归属原生插件。
+- inline `env_vars` 正常生效；假 worker 凭据调用被真实 MCP 拒绝，业务脚本未执行。
+- 不生成旧桥 MCP 配置块或 Fleet 技能链接，不改线上安装、信任或用户 POD。
+
+另有真实角色链路的隔离测试：
+
+```sh
+python3 bin/fleet-native-plugin-cli-selftest.py --package-role --codex /path/to/codex
+```
+
+本机 `0.163.0` 与 drill `0.162.1` 各通过 22 项。测试创建专用临时 tmux socket，
+复制候选 MCP、角色脚本和 Fleet 库，在临时 HOME 通过真实 mint 代码生成仅对该夹具有效的凭据。
+真实原生插件调用 `take_role` 成功，`roles.held` 与窗口 ID/持久 ID 精确一致；
+`who` 不改写归属，`drop` 清除该角色。更换窗口持久 ID 后，同一签名凭据被拒绝，归属文件不变；
+还原身份并绑定 issue 后，角色脚本返回 3，不能获得编排角色。
+审计区分有效与错误身份且不泄露凭据；结束仅销毁测试 socket 和临时文件，不访问真实 tmux。
+
+`fleet-plugins-selftest.sh` 143 项、`fleet-orchestrator-state-selftest.sh` 54 项通过。
+以上证明真实包加载、隔离身份和角色业务路径，不代表生产账号/Hub 准入、全部工具调用、
+原生安装与 core MCP 的能力判断或完整面板恢复已完成迁移。
+旧桥保持现状，尚不在真实账号启用新包或执行清理。
+
+### 原生 hook 信任与实际执行
+
+本机 `0.163.0` 的独立临时 HOME 中，先在原生 `/hooks` 界面审阅唯一的夹具 SessionStart 命令，
+再用该条目的 trust 操作信任；没有选择全局信任，也没有使用 `--dangerously-bypass-hook-trust`。
+界面将当前定义 hash 记录在原生 `hooks.state` 中，独立 app-server 随后识别为 trusted。
+仅 `thread/start` 没有观察到执行标记，因此不再把创建空线程视为 hook 执行验收。
+
+新增显式回归 `bin/fleet-native-hook-cli-selftest.py`：
+
+```sh
+python3 bin/fleet-native-hook-cli-selftest.py --codex /path/to/codex
+```
+
+本机 `0.163.0` 与 drill `0.162.1` 各通过 34 项；均为临时 home，不修改真实账号信任或插件。
+
+- 夹具安装后 trust 为 untrusted，实际原生 `exec` 启动不会执行该 hook。
+- 测试仅通过原生 `config/value/write` 在临时 home 中记录已审阅夹具的精确 hash，重启后确认 trusted；
+  实际 SessionStart 随后执行，payload 的原生 session ID 与 `thread.started` 一致，source 为 startup。
+- `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` 均指向实际安装目录，两个 DATA 变量一致且非空，
+  已知假的 `FLEET_SESSION` 正常传入。未使用或打印真实 worker credential。
+- 修改安装副本中的 hook 命令定义后，原生状态变为 modified，旧信任不再允许执行；
+  不把该结果扩大成「被调用脚本内容变化一定会使信任失效」。
+- 每阶段都只向自有 localhost 端点请求一次并得到 HTTP 400，三个推理回合故意失败，没有真实模型回复。
+  这验证 hook 生命周期，不代替终端面板、真实身份、PreCompact/PostToolUse 等其他事件或完整业务验收。
+
+目标是由原生 Agent 管理信任状态。上述写入只属于隔离测试，不添加 Fleet 自动信任器或第二份 trust 数据库。
+不能将这个隔离结果扩大成当前 Fleet 启动器已经满足目标：后续源码审计发现
+`fleet-codex.sh` 仍无条件给 TUI 传入 `--dangerously-bypass-hook-trust`，旧测试也明确要求它存在。
+该参数原先服务于 Fleet 内联守卫，并不是只授权 Fleet hooks 的名单。
+
+```sh
+python3 bin/fleet-native-hook-cli-selftest.py --probe-bypass --codex /path/to/codex
+```
+
+本机 `0.163.0` 与 drill `0.162.1` 各通过 47 项：在临时 HOME、原生插件和 localhost 失败推理端点中，
+同一个 untrusted hook 不带参数时不执行，带参数的原生 `exec` 会执行，且原生存储仍显示 untrusted；
+随后精确 hash 信任、定义变化失效仍成立。没有使用真实模型、凭据或线上信任配置。
+上述首轮 47 项证明 embedded/exec 的绕过作用。随后补了独立的真实 remote TUI 验证：
+
+```sh
+python3 bin/fleet-native-hook-cli-selftest.py --remote-tui --probe-bypass --codex /path/to/codex
+```
+
+本机 `0.163.0` 与 drill `0.162.1` 各通过 58 项。每阶段启动自有 app-server，
+原生 TUI 连接该 Unix socket，在自有 PTY 中运行，账号配置及插件都只在临时 HOME。
+非审阅阶段要求原生 `thread/read` 的新线程回合确实 failed，并与实际 hook payload 的 session ID 一致；
+历史线程排除，不用屏幕文字猜测回合成功。失败推理只访问自有 localhost HTTP 400 端点。
+
+- untrusted：TUI 显示原生 hooks 审阅界面，没有执行 hook、没有发送推理请求；测试不确认信任。
+- bypassed：仅 TUI 传入 bypass，后台不带此参数；未信任 hook 仍执行，原生信任记录仍为 untrusted。
+- trusted：只有审阅过的夹具精确 hash 在临时 HOME 被信任，hook 执行，身份与当前原生线程一致。
+- changed：命令定义改动后为 modified，重新出现审阅界面，hook 与推理均未运行。
+
+因此 `server_flags` 不转发参数并不能隔离这个风险，真实 remote TUI 行为已证明 bypass 仍会生效。
+同一探针还确认 CLI `-c hooks.SessionStart=...` 来源为 `sessionFlags`、`isManaged=false`、
+`trustStatus=untrusted`；内联配置不是天然的管理员信任，不能简单删去 bypass 后假设平台守卫照常运行。
+drill 首次 remote 探针在单次推理请求计数断言失败；补充诊断后重跑通过，尚未解释首次计数差异。
+计数断言未放宽，也不把本次功能验证称为重复性或性能验收。
+
+这是推广原生插件前必须解决的条件，不在本批贸然删除该参数，避免现有基础守卫被一起跳过。
+下一步把平台守卫与可选插件信任分离，优先验证原生 managed hooks：
+[官方说明](https://learn.chatgpt.com/docs/hooks)区分管理员托管 hooks 与需审阅的非托管 hooks。
+必须证明平台守卫执行、拒绝和更新行为保持，同时未审阅插件不执行，才能去掉全局绕过。
+不采用自动信任全部插件或关闭全部非托管 hooks 的办法，后者会破坏用户显式安装的扩展。
+真实插件升级仍遵循原生审阅及受控发布；平台强制守卫与可选插件 hooks 不混为一类。
+
+管理员层验收必须使用真正隔离的系统配置环境：本机 Docker 服务当前不可用，drill 的
+`unshare --user --map-root-user --mount true` 被拒绝。没有因此写入在线 `/etc/codex` 或改其权限。
+系统层要求的路径和优先级以[原生托管配置说明](https://learn.chatgpt.com/docs/enterprise/managed-configuration)为准，
+后续需在隔离测试镜像/环境验收，不能把临时 CODEX_HOME 当作系统配置隔离。
+
+### 启动期插件查询减法
+
+旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
+候选改为一次 `sync --print-dirs`：同步技能/MCP 后，把同一份已启用插件列表的 hook 目录交给启动器。
+机器可读 stdout 只含目录，原有同步诊断移到 stderr；不增加缓存、驻留服务或第二份插件状态。
+`sync` 和 `dirs` 旧命令均保留，安装器调用方式不变，原生所有权覆盖仍同时关闭同步与 hook 注入。
+
+`fleet-codex-plugins-selftest.sh` 103 项通过，新增检查无插件不调用 Claude、一次查询、多个目录顺序、
+覆盖后无查询，以及查询失败时不污染 stdout、不删除已有技能/MCP。
+现有插件列表缓存已避免多数 Claude 进程启动，因此这里只声称删去一个 Python 启动及重复读取，
+不将它说成「插件阶段减半」或生产草稿已经达到 1 秒。
+临时 HOME 和受限 PATH 下的 launcher 回归 20 项通过；原生插件退桥串联回归 172 项通过。
+这些仍是源码/隔离证据，不代替部署后实际面板测量；无在线安装或用户配置变更。
+
+### 默认上下文管理交还 Agent
+
+Worktree 的 local/remote 兼容性尚未解决，但默认上下文干预不依赖该迁移，可独立删除默认触发。
+源码候选把 `FLEET_AUTO_HANDOFF_PCT` 与 `FLEET_COMPACT_PREP_PCT` 的未设置值改为 0：
+不再默认在 55% 要求模型写恢复图并输入 `/compact`，也不在 80% 要求新建会话。
+Codex 本身提供自动压缩阈值，未设置使用模型默认值，见
+[官方配置说明](https://learn.chatgpt.com/docs/config-file/config-reference)。本批不写入或修改该原生设置。
+
+- 删除的是 Fleet 默认触发，而非原生压缩、手动交接、跨节点迁移、原生 ID 记录或压缩后任务归属恢复。
+- 用户已经设置的正百分比、Token 阈值、全局/每 Fleet 覆盖继续有效，不编辑线上配置，也不抹掉既有策略。
+- 明确请求的 transfer 在 Stop 仍能获得 ready 信号；默认关闭不能短路正常状态、休眠证据或父会话报告。
+- context 工具、技能和诊断同步说明：默认 50% / 80% 只是用量提示，旧 `WATCH` / `HANDOFF` 枚举为兼容保留，不再命令 Agent 自动交接。
+- 默认 Codex Stop 不再为自动交接重复启动 `fleet-codex-session.py context --pct`；常规遥测和身份验证保留。
+- 旧自动流程保留为显式启用的兼容功能；本批未发布，不代表用户 POD 或 drill 已切换默认行为。
+
+同时修正 context 读数与 Stop 策略的对应关系：显式 Token 阈值按窗口上的原生 `@ctx_limit`
+向上取整、上限 100，覆盖百分比；缺少该窗口大小时与 Stop 一样退回百分比。
+否则 Token-only 配置会被新默认值错误显示为 OFF。只读工具不使用猜测的 200k 窗口激活策略。
+
+源码候选验证：`context-ladder-defaults-selftest.sh` 17 项、`fleet-codex-session-selftest.sh` 15 项、
+`fleet-mcp-selftest.sh` 35 项、`refocus-hook-selftest.sh` 8 项、`fleet-claim-brief-selftest.sh` 26 项通过；
+`auto-handoff-selftest.sh`、`compact-prep-selftest.sh`、`ctx-token-line-selftest.sh`、
+`fleet-context-selftest.sh` 与 `statusline-selftest.sh` 也通过。
+默认路径在 55% / 80% / 99% 不启动 Fleet 压缩或交接，旧计数不重新启用它；
+测试还覆盖显式配置、token-only、覆盖层、手动 transfer ready 和原生遥测读取不再重复启动。
+这些是隔离功能回归，不是线上模型压缩质量或端到端性能验收。
+
+本轮目标是优化 Fleet 与 Agent 的架构边界、消除职责重叠并改善稳定性与性能，
+不缩减为 Worktree 可创建、某个局部测试通过或单次延迟达标。
+
+| 能力域 | 已有证据 | 尚缺的完成证据 |
+|---|---|---|
+| Worktree 与原生运行时 | 真实二进制创建/失败退出/resume/fork 与目录保留；local/remote 冲突已复现 | 受准入保护的实际面板路径替换；唯一创建/清理所有者；正常退出、崩溃和重建恢复 |
+| 历史与上下文 | 原生 ID/cwd 记录及 resume/fork 薄适配；默认阈值强制压缩/换会话已在候选移除，显式旧策略与手动交接回归通过 | 全部恢复/迁移入口盘点；部署后真实会话、原生压缩与旧会话连续性验收 |
+| MCP 与扩展 | 原生安装、命令转换、技能/hook 发现和 MCP 握手已实测；七个会话变量须显式 env_vars，不能假定 env 插值 | 原生安装所有权切换、去重、信任、账号 home 与真实 MCP 路径/超时；完整工具权限和旧会话不回退 |
+| 状态与交互 | private-server 状态/投递接口已验证；候选注意力监测使用原生事件并保留低频只读校验，身份/断线/错误状态回归通过 | 原生运行时迁移后的同等事件；完整面板输入/审批、回合状态与生产资源验收；其他不必要轮询盘点 |
+| 模型与审批 | 边界已写明原生设置与平台准入分层 | 各启动/恢复入口配置一致性、既有用户覆盖值及负向权限验收 |
+| 任务执行与协作 | 保留跨节点基础设施，编排角色不进入默认路径 | 默认安装与会话启动链路的完整审计；可选能力失败不影响普通会话 |
+| 认证与租户隔离 | 已定位固定订阅身份验证依赖 private RPC，未绕过 | 原生运行时下的等价账号/凭据证明、过期刷新、多副本一致性及错误归属拒绝 |
+| 托管、发布与性能 | 本批未改在线部署、资源或用户数据 | CI、真实 drill/两副本/重连/重建验收与正常发布；同配置直接原生启动对照及可重复端到端结果 |
+
+任何一行尚缺证据，均不标记总体目标完成。现有无关回归失败独立记录，不通过降低验收范围消除。
+
+## 验收矩阵
+
+1. **隔离与身份**：独立目录可编辑，主检出与其他用户/会话目录受保护；伪造 `.git`、符号链接、路径逃逸和错误仓库绑定不得获得权限。
+2. **数据保留**：正常退出、异常中断和 POD 重建后，未提交文件、未推送提交、原生会话历史及归属不丢失；退出会话不等价于删除工作目录。
+3. **原生恢复**：准确 resume/fork，账号 home 一致；旧 Fleet 目录和新原生目录均可识别，不套用不兼容的恢复参数。
+4. **真实入口**：终端 Fleet 面板新建 → 原生输入框出现 → 草稿保留且未发送 → 用户明确发送 → 原生完成 → 重连；不能以 `exec` 的一次成功代替。
+5. **保护不退化**：CPU/额度/权限拒绝、凭据失效、仓库不可信、Hub 不可用均保持既有语义；两副本与重试幂等性按需要复测。
+6. **计时**：区分面板派发、准入、fetch、目录创建/setup、窗口、原生输入框、草稿、显式发送及回复；使用单调时钟并明确远端时间的误差。空窗口不是输入框或草稿完成。
+7. **公平对照**：同节点、同资源限制、同仓库提交、同 MCP/模型配置；直接原生启动也要经过等价的运行授权。分别报告首次与重复样本，不用模拟器或本机样本承诺生产延迟。
+8. **推广与回退**：先独立工作树测试和 CI，再 drill 的真实面板，最后用户 POD；保留原版本和旧会话数据，出现身份/数据/权限回归立即停止推广。
+
+本阶段不新增机器、不改资源规格、不改订阅权限、不停用 MCP，也不将现有认证代理的分布式职责交给单个 CLI。
