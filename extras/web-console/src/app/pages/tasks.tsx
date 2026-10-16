@@ -18,75 +18,90 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { sendJSON, useLoad } from "@/shared/api";
 import { usePage } from "../Shell";
-import { PAGES } from "../routes";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
-import { parseRef, ticketPath, ticketState, type Ticket } from "../tickets";
+import { ticketPath, ticketState, type Ticket } from "../tickets";
+import { terminalLink } from "@/shared/terminal";
+import { agentMismatch, taskLanding, taskPR, taskStatus, taskTicket, type Task } from "../task-state";
+import { useTasks } from "../use-tasks";
 
-// One task record as /v1/fleet/tasks answers it, with its session's live word.
-type Live = { key?: string; state?: string; needs?: string; status_kind?: string };
-type Task = {
-  id: string; title: string; via: string; device: string; repo: string;
-  session_key: string; state: string; issue: string; parked: string; asked: string;
-  created_at: string; live?: Live | null;
+const STATUS: Record<string, [string, string]> = {
+  accepted: ["已接收", "Accepted"], starting: ["正在开", "Starting"],
+  running: ["在做", "Working"], waiting: ["等待中", "Waiting"],
+  succeeded: ["已完成", "Completed"], failed: ["失败", "Failed"],
+  cancelled: ["已取消", "Cancelled"], refused: ["没开成", "Didn't start"],
+  unknown: ["还不清楚", "Unknown"],
+};
+const statusWords = (state: string) => tr(...(STATUS[state] || STATUS.unknown));
+const observedWords = (t: Task) => {
+  if (!t.live?.state) return tr("无当前会话观测", "No current session observation");
+  if (t.live.needs || t.live.state.startsWith("needs")) return tr("在问你", "Asking you");
+  const words: Record<string, [string, string]> = {
+    working: ["在做", "Working"], idle: ["空闲", "Idle"], done: ["本轮结束", "Turn ended"],
+    exited: ["会话退出", "Session exited"], blocked: ["被卡住", "Blocked"],
+  };
+  return tr(...(words[t.live.state] || STATUS.unknown));
 };
 
-// The words and colour of where a task stands: its session's own word while
-// the fleet still lists it, else the record's.
-function taskState(t: Task): { label: string; tone: string } {
-  const ok = "text-ok";
-  const ask = "text-clay border-clay-line bg-clay-soft";
-  const quiet = "text-muted-foreground";
-  if (t.parked) return { label: tr("停放", "Parked"), tone: quiet };
-  const live = t.live;
-  if (live?.state) {
-    if (live.needs || live.state.startsWith("needs") || live.status_kind === "blocked") return { label: tr("在问你", "Asking you"), tone: ask };
-    if (live.state === "working") return { label: tr("在做", "Working"), tone: ok };
-    return { label: tr("做完了", "Done"), tone: quiet };
-  }
-  switch (t.state) {
-    case "placing": return { label: tr("正在开", "Starting"), tone: quiet };
-    case "refused": return { label: tr("没开成", "Didn't start"), tone: "text-destructive border-destructive/40" };
-    case "unknown": return { label: tr("还不清楚", "Unknown"), tone: quiet };
-  }
-  return { label: tr("做完了", "Done"), tone: quiet };
-}
-
-// 会话: its page here once it has one (C4), the old page until then
-const sessions = PAGES.find((x) => x.id === "sessions")!;
-
 const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({ t, ticket, onFile }) => {
-  const st = taskState(t);
-  const ref = parseRef(t.issue);
+  const state = taskStatus(t);
+  const ref = taskTicket(t, ticket ? [ticket] : []);
+  const pr = taskPR(t);
+  const landing = taskLanding(t);
+  const mismatch = agentMismatch(t);
+  const tone = state === "failed" || state === "refused" ? "text-destructive border-destructive/40"
+    : state === "running" || state === "succeeded" ? "text-ok" : "text-muted-foreground";
   const key = t.live?.key || t.session_key;
   const meta = [t.via, t.device, ago(t.created_at)].filter(Boolean).join(" · ");
   const linkCls = "text-clay hover:text-clay/80 no-underline";
   return (
-    <Card className="gap-2 py-4">
+    <Card className="gap-2 py-4" data-task-id={t.id}>
       <CardContent className="space-y-2">
         <div className="flex items-start gap-2">
           <span className="text-muted-foreground mt-0.5 font-mono text-xs">{t.id}</span>
           <p className="min-w-0 flex-1 leading-snug font-medium break-words">{t.title}</p>
-          <Badge variant="outline" className={cn("shrink-0 rounded-full", st.tone)}>{st.label}</Badge>
+          <Badge variant="outline" className={cn("shrink-0 rounded-full", tone)}>{statusWords(state)}</Badge>
         </div>
         <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
           {meta ? <span>{meta}</span> : null}
-          {key ? (
-            sessions.page
-              ? <Link to={sessions.path} className={linkCls}>{tr("会话", "Session")} {key} ›</Link>
-              : <a href={sessions.href} className={linkCls}>{tr("会话", "Session")} {key} ›</a>
+          {t.worker_id ? (
+            <Link to={terminalLink(t.worker_id)} className={cn(linkCls, "break-all")}>
+              {tr("会话", "Session")} {key || t.worker_id} ›
+            </Link>
           ) : null}
           {ref ? (
-            ticket
-              ? <Link to={ticketPath(ticket.repo, ticket.number)} className={linkCls}>{tr("单子", "Ticket")} #{ref.n} ›</Link>
-              : <a href={`https://github.com/${ref.repo}/issues/${ref.n}`} target="_blank" rel="noopener noreferrer" className={linkCls}>
-                  {tr("单子", "Ticket")} #{ref.n} <ArrowUpRight className="inline size-3.5 align-[-2px]" aria-hidden />
-                </a>
-          ) : t.repo ? null : (
+            ticket && ticket.backend === ref.backend
+              ? <Link to={ticketPath(ticket.repo, ticket.number)} className={cn(linkCls, "break-all")}>{ref.backend}:{ref.repo}#{ref.n} ›</Link>
+              : ref.backend === "gh" && /^[\w.-]+\/[\w.-]+$/.test(ref.repo) ? <a href={`https://github.com/${ref.repo}/issues/${ref.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
+                  {ref.backend}:{ref.repo}#{ref.n} <ArrowUpRight className="inline size-3.5 align-[-2px]" aria-hidden />
+                </a> : <span className="break-all">{ref.backend ? `${ref.backend}:` : ""}{ref.repo}#{ref.n}
+                  {!ref.backend ? ` · ${tr("来源未知", "location unknown")}` : ""}</span>
+          ) : t.repo || t.authority_version ? null : (
             <Button size="sm" variant="outline" className="h-7" onClick={() => onFile(t)}>
               <Plus />{tr("建一张单子", "Open a ticket")}
             </Button>
           )}
         </div>
+        {mismatch ? <p className="text-destructive text-sm">{tr("代理不一致：实际运行与选择不符。", "Agent mismatch: the verified agent differs from the selection.")}</p> : null}
+        {landing === "waiting" ? <p className="text-clay text-sm">{tr("等待 GitHub · PR 尚未确认合并", "Waiting for GitHub · PR merge is not confirmed")}</p> : null}
+        {landing === "merged" ? <p className="text-ok text-sm">{tr("PR 已合并", "PR merged")}</p> : null}
+        {pr && landing === "unverified" ? <p className="text-muted-foreground text-sm">{tr("PR 合并状态未知", "PR merge status unknown")}</p> : null}
+        {pr ? <a href={pr.url} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "block break-all text-sm")}>
+          PR {pr.repo}#{pr.n} <ArrowUpRight className="inline size-3.5" aria-hidden />
+        </a> : null}
+        <details className="text-muted-foreground text-[13px]">
+          <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">{tr("任务详情", "Task details")}</summary>
+          <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 [&>dd]:break-words">
+            <dt>{tr("请求代理", "Requested agent")}</dt><dd>{t.requested_agent || statusWords("unknown")}</dd>
+            <dt>{tr("确定代理", "Resolved agent")}</dt><dd>{t.resolved_agent || statusWords("unknown")}</dd>
+            <dt>{tr("已核实代理", "Verified actual agent")}</dt><dd>{t.actual_agent || statusWords("unknown")}</dd>
+            <dt>{tr("会话观测", "Session observation")}</dt><dd>{observedWords(t)}</dd>
+            <dt>{tr("任务更新于", "Task updated")}</dt><dd>{t.updated_at || statusWords("unknown")}</dd>
+            {t.generation ? <><dt>{tr("执行代次", "Attempt")}</dt><dd>{t.generation}</dd></> : null}
+            {t.worker_id ? <><dt>{tr("会话身份", "Session identity")}</dt><dd className="break-all!">{t.worker_id}</dd></> : null}
+            {t.cancel_request && state !== "cancelled" ? <><dt>{tr("取消", "Cancellation")}</dt><dd>{tr("已请求，尚未确认停止", "Requested; stopping is not confirmed")}</dd></> : null}
+            {t.parked ? <><dt>{tr("停放", "Parked")}</dt><dd>{t.parked}</dd></> : null}
+          </dl>
+        </details>
       </CardContent>
     </Card>
   );
@@ -161,7 +176,8 @@ export default function TasksPage() {
   usePage(tr("任务", "Tasks"));
   const [qs, setQs] = useSearchParams();
   const tab = qs.get("tab") === "tickets" ? "tickets" : "mine";
-  const tasks = useLoad<{ tasks: Task[] }>("/v1/fleet/tasks");
+  const tasks = useTasks();
+  const stale = tasks.failed || tasks.data?.stale;
   // my own, an admin's too (an admin's list is everyone's without ?mine)
   const tickets = useLoad<{ tickets: Ticket[] }>("/v1/fleet/tickets?mine=1");
   const [filing, setFiling] = useState<Task | null>(null);
@@ -170,11 +186,14 @@ export default function TasksPage() {
   const ticketList = tickets.data?.tickets || [];
   const byRef = useMemo(() => {
     const m = new Map<string, Ticket>();
-    for (const t of ticketList) m.set(`${t.repo.toLowerCase()}#${t.number}`, t);
+    for (const t of ticketList) m.set(`${t.backend}:${t.repo.toLowerCase()}#${t.number}`, t);
     return m;
   }, [ticketList]);
   const repos = useMemo(() => [...new Set(ticketList.map((t) => t.repo))].sort(), [ticketList]);
-  const ticketOf = (t: Task) => { const r = parseRef(t.issue); return r ? byRef.get(`${r.repo.toLowerCase()}#${r.n}`) : undefined; };
+  const ticketOf = (t: Task) => {
+    const r = taskTicket(t, ticketList);
+    return r?.backend ? byRef.get(`${r.backend}:${r.repo.toLowerCase()}#${r.n}`) : undefined;
+  };
   const taskList = tasks.data?.tasks || [];
 
   return (
@@ -187,7 +206,16 @@ export default function TasksPage() {
         </TabsList>
         <TabsContent value="mine">
           {filed ? <p role="status" className="text-ok mb-3 text-sm">{filed}</p> : null}
-          {tasks.loading ? <Loading /> : tasks.failed ? <Failed what={tr("任务", "tasks")} onRetry={tasks.reload} /> : taskList.length ? (
+          {tasks.data ? <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+            <p role={stale ? "status" : undefined} className={stale ? "text-clay" : "text-muted-foreground"}>
+              {stale ? tr("暂时无法更新 · 保留上次确认的状态", "Stale information · showing the last confirmed state") : tr("读取于", "Read at")}
+              {" · "}<time dateTime={tasks.data.observed_at}>{tasks.data.observed_at || statusWords("unknown")}</time>
+            </p>
+            <Button size="sm" variant="outline" disabled={tasks.loading} onClick={tasks.reload}>
+              {tasks.loading ? tr("正在读取…", "Reading…") : stale ? tr("重试读取", "Retry read") : tr("刷新", "Refresh")}
+            </Button>
+          </div> : null}
+          {!tasks.data && tasks.loading ? <Loading /> : !tasks.data && tasks.failed ? <Failed what={tr("任务", "tasks")} onRetry={tasks.reload} /> : taskList.length ? (
             <div className="space-y-3">
               {taskList.map((t) => <TaskCard key={t.id} t={t} ticket={ticketOf(t)} onFile={(x) => { setFiled(""); setFiling(x); }} />)}
             </div>
