@@ -101,6 +101,12 @@ changed identity, an unavailable endpoint or an incomplete native inventory
 also retain it. A legacy embedded launch without a private endpoint therefore
 needs a normal session recovery before this gate can establish that it is idle.
 
+Native `--worktree` is local-session-only in the tested CLI releases and cannot
+be added to this private `--remote` path. The runtime refuses that combination
+before starting its server or invoking launch preparation; it does not silently
+fall back to an unverified local runtime. Existing Fleet-created worktrees remain
+the supported path pending the [native boundary migration](NATIVE-AGENT-BOUNDARY.md).
+
 `FLEET_CODEX_SERVER=0` preserves the embedded launch for troubleshooting; live
 queue delivery then reports that no endpoint is available. An explicitly supplied
 `--remote` endpoint retains its existing lifecycle. Profiles require Python 3.11+
@@ -311,8 +317,31 @@ for same-agent preference, cross-agent fallback, drafts and loop recovery.
 
 ## Operator attention and answers
 
-The private runtime polls the exact live thread's native status every two
-seconds. Waiting for user input or approval sets the dashboard's `needs` state,
+The attention monitor consumes native `thread/status/changed` notifications on
+one connection to the existing private server. Regular status observation does
+not start or resume a thread. Fetching pending question details still uses the
+existing short-lived, loaded-thread-only replay path. Only the exact recorded root UUID is projected into the
+Fleet attention indicator; launcher, account home and endpoint changes discard
+the old connection. Once that connection has delivered a matching native status
+event, an initial read and a 30-second reconciliation cover reconnects or missed
+events. Until event delivery is demonstrated, reads retain the existing
+two-second cadence on the reused connection; older servers do not silently lose
+attention responsiveness. Reconnects must establish event delivery again.
+The supervisor closes the monitor when its TUI exits.
+
+Event processing is bounded; malformed, partial or excessive input drops the
+connection without declaring a request resolved. Unavailable, unloaded and
+failed native states are not successful completion. Existing conditional tmux
+writes still protect replacement launchers and explicit blocked declarations.
+If a status notification received during a reconciliation contradicts its
+snapshot, neither is used to clear attention: the next tick rereads native
+state. Events received during the read are not silently discarded.
+This changes attention monitoring only: native question replies, approval
+decisions, admission, MCP configuration and turn-completion acceptance retain
+their existing checks.
+
+The private runtime observes the exact live thread's native status using the
+event stream and reconciliation above. Waiting for user input or approval sets the dashboard's `needs` state,
 question/permission subtype and bell. Resolving that wait clears only native
 attention; a worker's explicit `blocked` state is preserved. Embedded mode
 (`FLEET_CODEX_SERVER=0`) has no native status/reply channel.
