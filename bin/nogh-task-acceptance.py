@@ -54,10 +54,14 @@ def network_counts(trace):
     All other external attempts, including DNS/SSH, fail the run as well.
     AF_UNIX and local fixture HTTP are allowed. Never trace payloads/argv.
     """
-    counts = dict(external_http=0, other_external=0)
+    counts = dict(external_http=0, other_external=0, blocked_io_uring=0)
     for line in trace.splitlines():
         if "io_uring_setup(" in line:
-            raise ValueError("io_uring is outside this observer's supported HTTP paths")
+            if "= -1 ENOSYS" not in line or "(INJECTED)" not in line:
+                raise ValueError("unfenced io_uring is outside this observer's supported HTTP paths")
+            counts["blocked_io_uring"] += 1
+        if "io_uring_enter(" in line:
+            raise ValueError("io_uring submission is outside this observer's supported HTTP paths")
         if "AF_INET" not in line:
             continue
         destinations = re.findall(r'\{sa_family=AF_INET6?[, ].*?\}', line)
@@ -184,7 +188,8 @@ class Harness:
         log, trace, cli = [self.evidence/(name+suffix) for suffix in (".log", ".network", ".gh")]
         cli.write_text("")
         command = ["strace", "-f", "-qq", "-v", "-s", "0", "-e",
-                   "trace=execve,execveat,connect,sendto,sendmsg,sendmmsg,io_uring_setup", "-o", str(trace),
+                   "trace=execve,execveat,connect,sendto,sendmsg,sendmmsg,io_uring_setup,io_uring_enter",
+                   "-e", "inject=io_uring_setup:error=ENOSYS", "-o", str(trace),
                    sys.executable, str(Path(__file__).resolve()), "--child", str(self.evidence/(name+"-cleanup.json")), *map(str, argv)]
         record = dict(command=list(map(str, argv)), cwd=str(cwd), started_at=utc(), fixture="FAIL", log=log.name)
         deadline = min(timeout, max(0.1, 600 - (time.monotonic()-self.started)))
@@ -212,6 +217,7 @@ class Harness:
         good = code == 0 and valid_output(kind, output, names)
         if name == "deny-probe":
             good = good and counters["external_http"] >= 5 and "AF_INET6" in observed
+            good = good and counters["blocked_io_uring"] >= 1
             good = good and all(s+"(" in observed for s in ("connect", "sendto", "sendmsg", "sendmmsg", "execveat"))
             good = good and "PAYLOAD_MUST_NOT_APPEAR" not in observed
         else:
@@ -254,7 +260,7 @@ class Harness:
               binaries={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.work.glob("*.test")}))
         write(self.evidence/"deny-policy.json", dict(interfaces=sorted(interfaces),
               policy="fresh Linux network namespace; no external interface or route; loopback fixtures only",
-              counters="payload-free strace -v -s0 of descendant connect/sendto/sendmsg/sendmmsg destinations; external 80/443 upper bound for GitHub HTTP; UV_USE_IO_URING=0, any io_uring setup still refused",
+              counters="payload-free strace -v -s0 of descendant connect/sendto/sendmsg/sendmmsg destinations; external 80/443 upper bound for GitHub HTTP; strace inject=io_uring_setup:error=ENOSYS forces observable fallback; any unfenced ring setup/submission refuses",
               cli="execve/execveat gh executable paths (argv/env redacted); independent deny shim exit91; absolute and overridden paths observed",
               exceptions="deny-probe positive controls; pr-gate deliberately denied CLI read then local restored-response fixture"))
         self.run("deny-probe", [sys.executable, ROOT/"bin/nogh-task-deny-probe.py", self.work], expected_cli=2, mocked_cli=2)

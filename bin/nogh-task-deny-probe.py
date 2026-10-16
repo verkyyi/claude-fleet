@@ -34,6 +34,10 @@ gh = override/"gh"
 gh.write_text('#!/bin/sh\nexit 91\n'); gh.chmod(0o700)
 assert subprocess.call(["gh", sentinel.decode()], env=dict(os.environ, PATH=str(override))) == 91
 libc = c.CDLL(None, use_errno=True)
+# Linux x86_64/aarch64 use syscall 425 for io_uring_setup. The observer fences
+# it before the kernel creates a ring; require the actual ENOSYS fallback.
+assert libc.syscall(425, 1, c.create_string_buffer(256)) == -1 and c.get_errno() == errno.ENOSYS
+results.append(dict(probe="io_uring-denied", errno=c.get_errno()))
 pid = os.fork()
 if pid == 0:
     argv = (c.c_char_p*3)(b"gh", sentinel, None)
@@ -70,4 +74,4 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
     results.append(dict(probe="sendmmsg", errno=c.get_errno()))
 
 (work/"evidence/positive-controls.json").write_text(json.dumps(results, indent=2)+"\n")
-print("PASS independent gh PATH/absolute/override/execveat; IPv4/IPv6 TCP, UDP sendto/sendmsg/sendmmsg denied")
+print("PASS independent gh PATH/absolute/override/execveat; IPv4/IPv6 TCP, UDP sendto/sendmsg/sendmmsg denied; io_uring fenced")

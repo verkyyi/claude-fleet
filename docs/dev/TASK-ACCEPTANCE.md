@@ -31,10 +31,12 @@ they do not become control-plane zeros. `strace -v -s0` retains executable paths
 and complete socket destination arrays while suppressing argv, env and payload
 strings. It observes `connect`, `sendto`, `sendmsg`, and `sendmmsg`, including
 failures such as `ENETUNREACH`. Connected-socket destinations are observed at
-connect; unconnected datagrams carry their destination on send. `io_uring` use
-refuses this observer rather than escaping its coverage. The test environment
-sets `UV_USE_IO_URING=0` so Node/libuv uses its observable syscall path (no
-production runtime setting is changed). Unrecognized addresses
+connect; unconnected datagrams carry their destination on send. The test trace
+uses `inject=io_uring_setup:error=ENOSYS` so Node/libuv falls back to observable
+syscalls; its epoll batching would otherwise create a ring even with
+`UV_USE_IO_URING=0`. This affects only traced fixture descendants, never production.
+An explicit probe verifies ENOSYS, the trace records each injected denial, and
+any unfenced ring setup or submission fails acceptance. Unrecognized addresses
 or executable trace formats fail closed.
 
 Non-loopback destinations on ports 80/443 form a conservative upper bound for
