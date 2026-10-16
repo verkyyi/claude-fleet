@@ -273,28 +273,53 @@ fi
 # on issue-9206 shipped side-fix PR #9208 (closing #9207), and --auto reaped the
 # live window mid-EPIC-plan. So an AUTOMATIC reap of an issue head must prove the
 # task is over, one of two ways:
-#   A. the MERGED PR's own closingIssuesReferences names (repo, issue) — free, it
-#      rode in on the PR read above; or
-#   B. the bound issue is not OPEN any more — ONE `gh issue view`, spent only on a
-#      final PR that still has debris and did not pass A.
-# Unknown (gh failed) reads as OPEN: deferring costs a window until the next tick,
+#   A. for GitHub tickets ONLY, the MERGED PR's closingIssuesReferences names
+#      (repo, issue); forge refs cannot close a same-number Hub ticket (#4464); or
+#   B. the ticket door's fresh read of the explicit provider/repo/number returns
+#      the matching ticket CLOSED. MERGED is a PR state, never task completion.
+# Unknown (including missing/mismatched identity) reads as OPEN: deferring costs
+# a window until the next tick,
 # reaping costs a session. Manual cleanup and non-issue heads never get here. Runs
 # BEFORE the grace countdown, so the dash never counts down a reap that cannot
 # happen; instead the window carries a held notice until #N closes.
 issue_open_gate() {
   [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
-  local want c ist verb
+  local want c ist='' verb home tid='' doc
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
-  if [ "$st" = MERGED ]; then
+  # Preserve the door's legacy unset=github default, but an invalid configured
+  # provider or an ambiguous branch/window must not silently select GitHub.
+  home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || home=unknown
+  case "$home" in
+    ''|github|hub) tid=$(bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" 2>/dev/null) || tid='' ;;
+  esac
+  [ "$href" = "$BRANCH" ] || tid=''
+  if [ -n "$WIN" ] && ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then tid=''; fi
+  if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then
     for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
       [ "$c" = "$want" ] && return 0
     done
   fi
-  ist=$(gh issue view "$ISSUE" --repo "$REPO" --json state --jq .state 2>/dev/null)
+  if [ -n "$tid" ] && doc=$(bash "$BIN/fleet-ticket.sh" read "$tid" \
+      --json id,number,url,state --max-age 0 2>/dev/null); then
+    ist=$(printf '%s' "$doc" | python3 -c '
+import json,sys
+d = json.load(sys.stdin)
+tid, number = sys.argv[1:]
+if d.get("number") != int(number):
+    raise ValueError("ticket number mismatch")
+if tid.startswith("hub:"):
+    valid = d.get("_source") == "hub" and d.get("id") == tid
+else:
+    repo = tid[3:].rsplit("#", 1)[0]
+    valid = d.get("_source") != "hub" and (d.get("url") or "").lower() == f"https://github.com/{repo}/issues/{number}".lower()
+if not valid:
+    raise ValueError("ticket identity mismatch")
+print(d.get("state") or "")' "$tid" "$ISSUE" 2>/dev/null) || ist=''
+  fi
   [ "$ist" = CLOSED ] && return 0
   verb=merged; [ "$st" = CLOSED ] && verb=closed
-  note "  #$PR $verb but bound issue #$ISSUE is ${ist:-unknown} and the PR does not close it — automatic cleanup deferred until #$ISSUE closes."
+  note "  #$PR $verb but bound ticket ${tid:-unknown:$want} is ${ist:-unknown}; no authoritative completion — automatic cleanup deferred until #$ISSUE closes."
   if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
     local hold_args=()
     [ -n "${TMUX:-}" ] || hold_args=(--socket-name "$(fleet_socket "$FLEET_SESSION")")

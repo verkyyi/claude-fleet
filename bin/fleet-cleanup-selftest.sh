@@ -102,7 +102,7 @@ if [ "\$sub" = issue ]; then
   printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"
   [ "\$action" = view ] || exit 0
   [ "\${FAKE_ISSUE_FAIL:-0}" = 1 ] && exit 1
-  printf '%s\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
+  printf '{"id":"I_42","number":42,"url":"https://github.com/acme/widgets/issues/42","state":"%s"}\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
 fi
 [ "\$sub" = pr ] || exit 0
 case "\$action" in
