@@ -108,6 +108,7 @@ Everything you hand over on the ⚡ line is first written down by fleet, numbere
 
 - A task in a repository also gets a ticket (a number like `#128`), and the panel shows the ticket number; one tied to no repository shows its T number.
 - The hub's **Tasks** page lists all your task records; a record stays after its session ends.
+- **Completed** means the hub has a confirmed work result. A missing session never implies completion; old records without confirmed task status show **Unknown**. Open **Task details** to see the requested, resolved and verified agent separately from the session observation. A required PR still waiting for merge shows **Waiting for GitHub** beside the work result. If a refresh fails, the open page keeps its last confirmed view and read time, marked stale; **Retry read** only reads again and never starts work.
 - Tell a colleague "the T42 thing" and they can find it on the Tasks page.
 
 ## Reaping: when a session closes
