@@ -83,6 +83,54 @@ def valid_output(kind, output, names=()):
     return bool(re.search(r'\bPASS\b', output))
 
 
+def child_command(argv, cleanup_path):
+    """Own/reap only this command's descendants, including detached test helpers.
+
+    strace -f otherwise waits for an intentionally backgrounded fixture helper
+    after the actual test exited. A Linux subreaper keeps those children ours;
+    never scan a fleet socket, process name or another session's processes.
+    """
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "could not own fixture descendants")
+    code = subprocess.call(argv)
+    cleaned = []
+
+    def children():
+        return [int(p) for p in Path(f"/proc/self/task/{os.getpid()}/children").read_text().split()]
+
+    def reap():
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+                if not pid:
+                    return
+            except ChildProcessError:
+                return
+
+    # Reparenting may reveal a grandchild after its direct parent exits.
+    for sig, limit in ((signal.SIGTERM, 2), (signal.SIGKILL, 2)):
+        until = time.monotonic()+limit
+        while time.monotonic() < until:
+            reap()
+            remaining = children()
+            if not remaining:
+                break
+            for pid in remaining:
+                try:
+                    name = Path(f"/proc/{pid}/comm").read_text().strip()
+                    os.kill(pid, sig)
+                    cleaned.append(dict(pid=pid, command=name, signal=sig, at=utc()))
+                except ProcessLookupError:
+                    pass
+            time.sleep(0.05)
+    reap()
+    remaining = children()
+    write(Path(cleanup_path), dict(command_exit=code, cleanup=cleaned, remaining=remaining))
+    return code if not remaining else 125
+
+
 class Harness:
     def __init__(self, work):
         self.work = work
@@ -112,9 +160,11 @@ class Harness:
     def run(self, name, argv, kind="marker", names=(), timeout=60, expected_cli=0, env=None, cwd=ROOT):
         log, trace, cli = [self.evidence/(name+suffix) for suffix in (".log", ".network", ".gh")]
         cli.write_text("")
-        command = ["strace", "-f", "-qq", "-s", "0", "-e", "trace=connect,sendto", "-o", str(trace), *map(str, argv)]
+        command = ["strace", "-f", "-qq", "-s", "0", "-e", "trace=connect,sendto", "-o", str(trace),
+                   sys.executable, str(Path(__file__).resolve()), "--child", str(self.evidence/(name+"-cleanup.json")), *map(str, argv)]
         record = dict(command=list(map(str, argv)), cwd=str(cwd), started_at=utc(), fixture="FAIL", log=log.name)
         deadline = min(timeout, max(0.1, 600 - (time.monotonic()-self.started)))
+        print("START", name, record["started_at"], flush=True)
         with log.open("w") as output:
             p = subprocess.Popen(command, cwd=cwd, env=dict(self.env, NOGH_GH_LOG=str(cli), **(env or {})),
                                  stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
@@ -205,6 +255,8 @@ class Harness:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 2 and sys.argv[1] == "--child":
+        sys.exit(child_command(sys.argv[3:], sys.argv[2]))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, required=True, help="prepared private directory outside the checkout")
     args = parser.parse_args()

@@ -38,5 +38,15 @@ with tempfile.TemporaryDirectory() as temp:
     import json
     report = json.loads((Path(temp)/"evidence/acceptance.json").read_text())
     assert len(report["rows"]) == 12 and all(r["live"] == "NOT RUN" for r in report["rows"])
+    if sys.platform == "linux":
+        import subprocess
+        cleanup = Path(temp)/"cleanup.json"
+        # A detached helper must be reaped without changing the command's exit.
+        command = [sys.executable, "-c", "import subprocess,sys; subprocess.Popen(['sleep','60'],start_new_session=True); sys.exit(7)"]
+        result = subprocess.run([sys.executable, str(Path(sys.argv[1])/"nogh-task-acceptance.py"),
+                                 "--child", str(cleanup), *command], timeout=10)
+        state = json.loads(cleanup.read_text())
+        assert result.returncode == state["command_exit"] == 7
+        assert state["cleanup"] and not state["remaining"]
 print("PASS acceptance requires executed boundaries and keeps live evidence separate; IPv4/IPv6/CLI/DNS counters fail closed")
 PY

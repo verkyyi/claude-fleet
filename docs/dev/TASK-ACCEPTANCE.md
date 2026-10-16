@@ -33,7 +33,9 @@ separate. Zero counters without a working positive control are not proof.
 The driver runs sequentially, with individual 60/90-second bounds (300 seconds
 for the historical baseline) and a 600-second total command budget. It creates no
 resident service. Existing fixtures own their temporary processes/sockets and
-clean them up; the CI job has an outer 11-minute bound for the acceptance step.
+clean them up; a Linux subreaper additionally ends/reaps detached fixture helpers
+after their test exits, archives that cleanup and preserves the test's exit.
+It addresses only its own descendants. The CI job has an outer 11-minute bound for the acceptance step.
 No load generator is needed. If a later live drill requires load, use only
 `fleet-loadgen.sh`, with a short declared bound and normal admission.
 
@@ -53,7 +55,10 @@ The `task-acceptance-fixtures` CI artifact contains:
 - `pr-gate-commands.json`: denied GitHub read (exit 2, no verdict), followed by
   local restored-response fixtures for PENDING, FAILING, READY. The deliberate
   denied read has its own CLI counter and does not contaminate control zeros.
-- Desktop/mobile portal screenshots and browser read/keyboard assertions.
+- Desktop/mobile portal screenshots and browser read/keyboard assertions. The
+  offline browser fulfils committed assets and API fixtures through Playwright
+  routes, avoiding Chromium's unrelated IPv6 reachability probe; attempted
+  network access is still counted and fails the row.
 
 Raw fixture state directories, credentials and transcripts are not uploaded.
 The harness composes existing store/API, controller, shell and browser seams;

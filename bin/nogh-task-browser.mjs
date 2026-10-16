@@ -1,7 +1,6 @@
 // A9/A12: committed portal build, local API fixtures, desktop/mobile + keyboard.
 // No native provider or deployed UI claim; screenshots are fixture evidence.
 import assert from 'node:assert/strict';
-import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { resolve, dirname, extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,38 +20,44 @@ const tasks = [
 ];
 let offline = false;
 const requests = [];
-const server = http.createServer(async (req, res) => {
-  const path = new URL(req.url, 'http://127.0.0.1').pathname;
-  requests.push({ method: req.method, path });
+const origin = 'http://127.0.0.1:9876';
+async function fixture(route) {
+  const req = route.request();
+  const url = new URL(req.url());
+  assert.equal(url.origin, origin, 'portal attempted another origin');
+  const path = url.pathname;
+  requests.push({ method: req.method(), path });
   if (path.startsWith('/v1/')) {
-    res.setHeader('Content-Type', 'application/json');
-    if (path === '/v1/fleet/tasks' && offline) { res.writeHead(503); res.end('{}'); return; }
+    if (path === '/v1/fleet/tasks' && offline) { await route.fulfill({ status: 503, json: {} }); return; }
     const data = path === '/v1/fleet/tasks' ? { tasks, observed_at: observed }
       : path === '/v1/fleet/tickets' ? { tickets: [] }
       : path === '/v1/me' ? { name: 'Fixture', login: 'fixture', role: 'user' } : {};
-    res.end(JSON.stringify(data)); return;
+    await route.fulfill({ json: data }); return;
   }
   const dist = resolve(root, 'extras/web-console/dist/app');
   const asset = path.startsWith('/app/assets/') ? resolve(dist, path.slice('/app/'.length)) : resolve(dist, 'index.html');
-  if (!asset.startsWith(dist + '/')) { res.writeHead(404); res.end(); return; }
+  if (!asset.startsWith(dist + '/')) { await route.fulfill({ status: 404 }); return; }
   try {
     const body = await readFile(asset);
-    res.setHeader('Content-Type', ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.woff2': 'font/woff2' })[extname(asset)] || 'application/octet-stream');
-    res.end(body);
-  } catch { res.writeHead(404); res.end(); }
-});
-await new Promise(r => server.listen(0, '127.0.0.1', r));
+    const contentType = ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.woff2': 'font/woff2' })[extname(asset)] || 'application/octet-stream';
+    await route.fulfill({ body, contentType });
+  } catch { await route.fulfill({ status: 404 }); }
+}
 let browser;
 const evidence = [];
 try {
   browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
     offline = false;
-    const page = await browser.newPage({ viewport, locale: 'en-US' });
+    // Fulfil the committed assets/API before network resolution. Chromium's
+    // resolver otherwise probes Google's IPv6 DNS address even for loopback;
+    // offline browser routing avoids that unrelated background probe entirely.
+    const page = await browser.newPage({ viewport, locale: 'en-US', offline: true });
+    await page.route('**/*', fixture);
     page.setDefaultTimeout(8000);
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    await page.goto(`http://127.0.0.1:${server.address().port}/app/tasks?lang=en`);
+    await page.goto(`${origin}/app/tasks?lang=en`);
     const card = id => page.locator(`[data-task-id="${id}"]`);
     await card('T1').waitFor();
     assert.match(await card('T1').innerText(), /Completed/);
@@ -67,6 +72,7 @@ try {
     assert.match(await card('T1').innerText(), /Verified actual agent/);
     const tab = page.getByRole('tab', { name: 'Sent by me' });
     await tab.focus(); await page.keyboard.press('ArrowRight');
+    await page.locator('[role="tab"][aria-selected="true"]').filter({ hasText: /^Tickets$/ }).waitFor();
     assert.equal(await page.getByRole('tab', { name: 'Tickets', exact: true }).getAttribute('aria-selected'), 'true');
     await page.keyboard.press('ArrowLeft');
     await card('T1').waitFor();
@@ -88,5 +94,4 @@ try {
   console.log('PASS committed portal: desktop/mobile navigation, keyboard tabs/details, stale confirmed timestamp, honest outcome and PR separation');
 } finally {
   if (browser) await browser.close();
-  await new Promise(r => server.close(r));
 }
