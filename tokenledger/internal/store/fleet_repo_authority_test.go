@@ -88,28 +88,30 @@ func TestRepoAuthorityExpiredOwnerAndNativeStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before, _ := s.FleetSettings()
 	a, _ := s.RepoAuthority("org/a")
+	_, err = s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: "freeze", Revision: 0, Key: "old-unbound", LegacyTickets: "github"}, now)
+	if !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("unbound expired owner froze the repo", err)
+	}
+	unchanged, _ := s.RepoAuthority("org/a")
+	after, _ := s.FleetSettings()
+	if !reflect.DeepEqual(a, unchanged) || !reflect.DeepEqual(before, after) {
+		t.Fatal("refused preflight mutated authority", unchanged)
+	}
+	ack := RepoAuthorityChange{Action: "stop_ack", Revision: 0, Key: "unbound-stop", WorkerID: "f/old", EndpointID: "node-a", Evidence: "unbound native stop"}
+	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); err == nil {
+		t.Fatal("unbound proof accepted")
+	}
+	// Existing legacy stop/release remains available because freeze did not
+	// commit. Once the legacy owner is explicitly drained, staging can retry.
+	if _, err = s.ReleaseLease("org/a", 7, "f/old"); err != nil {
+		t.Fatal(err)
+	}
 	a = repoChange(t, s, a, "freeze")
-	if len(a.Owners) != 1 {
-		t.Fatal("expired owner forgotten", a)
-	}
-	_, err = s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "unsafe"}, now)
-	if !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("expired lease treated as stopped", err)
-	}
-	// Even release/disappearance is insufficient after the owner is captured.
-	_, _ = s.ReleaseLease("org/a", 7, "f/old")
-	_, err = s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "absent"}, now)
-	if !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("absence treated as stopped", err)
-	}
-	ack := RepoAuthorityChange{Action: "stop_ack", Revision: a.Revision, Key: "stop", WorkerID: "f/old", EndpointID: "node-b", Evidence: "fixture native stop"}
-	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); !errors.Is(err, ErrTaskFence) {
-		t.Fatal("foreign node stopped owner", err)
-	}
-	ack.EndpointID = "node-a"
-	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); !errors.Is(err, ErrTaskFence) {
-		t.Fatal("unbound legacy receipt accepted", err)
+	a = repoChange(t, s, a, "apply")
+	if a.Mode != "hub" {
+		t.Fatal(a)
 	}
 }
 
@@ -162,12 +164,12 @@ func TestRepoAuthorityLegacyTaskWithoutLeaseOrSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, _ := s.RepoAuthority("org/a")
-	a = repoChange(t, s, a, "freeze")
-	if len(a.Owners) != 1 || a.Owners[0].WorkerID != "f/old" {
-		t.Fatal("unfinished legacy task owner forgotten", a)
+	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "freeze", Revision: a.Revision, Key: "missing-owner", LegacyTickets: "github"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("unbound legacy T froze", err)
 	}
-	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "missing-owner"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal(err)
+	after, _ := s.RepoAuthority("org/a")
+	if !reflect.DeepEqual(a, after) {
+		t.Fatal("legacy T refusal changed authority", after)
 	}
 }
 
@@ -305,12 +307,13 @@ func TestRepoAuthorityFreezeSerializesClaim(t *testing.T) {
 		_, freezeErr = s.ChangeRepoAuthority("org/race", "alice", RepoAuthorityChange{Action: "freeze", Key: "freeze", LegacyTickets: "github"}, time.Now())
 	}()
 	wg.Wait()
-	if freezeErr != nil || (claimErr != nil && !errors.Is(claimErr, ErrRepoAuthority)) {
-		t.Fatal(freezeErr, claimErr)
-	}
 	a, _ := s.RepoAuthority("org/race")
-	if granted && len(a.Owners) != 1 {
-		t.Fatal("racing owner escaped freeze", a)
+	if granted {
+		if !errors.Is(freezeErr, ErrRepoAuthority) || a.Mode != "legacy" || a.Revision != 0 {
+			t.Fatal("racing unbound owner was frozen", a, freezeErr)
+		}
+	} else if freezeErr != nil || !errors.Is(claimErr, ErrRepoAuthority) || a.Mode != "frozen" {
+		t.Fatal(a, freezeErr, claimErr)
 	}
 }
 

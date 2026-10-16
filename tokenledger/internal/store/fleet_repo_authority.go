@@ -369,6 +369,19 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 	}
 	switch c.Action {
 	case "freeze":
+		// An old native without a saved binding has no safe stop_ack road.
+		// Refuse BEFORE changing authority, so its existing owner can drain on
+		// the legacy road and retry preflight. Never create a permanent freeze.
+		next := a
+		next.Owners = append([]RepoLegacyOwner(nil), a.Owners...)
+		rememberOwners(&next, owners)
+		rememberOwners(&next, c.Owners)
+		for _, o := range next.Owners {
+			if o.Stopped == "" && !o.Native.Valid() {
+				return a, fmt.Errorf("%w: drain/reconcile unbound legacy owner %s before freeze", ErrRepoAuthority, o.WorkerID)
+			}
+		}
+		a = next
 		if a.Mode != "frozen" {
 			if a.Revision == 0 {
 				if c.LegacyTickets != "github" && c.LegacyTickets != "hub" {
@@ -379,8 +392,6 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 			a.Mode = "frozen"
 			a.FrozenAt = now.UTC()
 		}
-		rememberOwners(&a, owners)
-		rememberOwners(&a, c.Owners)
 	case "apply", "rollback":
 		want := "hub"
 		if c.Action == "rollback" {

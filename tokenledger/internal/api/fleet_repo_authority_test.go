@@ -68,6 +68,27 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	}
 	freeze := map[string]any{"action": "freeze", "idempotency_key": "freeze", "expected_revision": 0, "legacy_tickets": "github"}
 	code, a := ticketCall(t, h, auth, http.MethodPost, path, freeze)
+	if code != 409 {
+		t.Fatalf("unbound old owners must drain before freeze: %d %v", code, a)
+	}
+	unchanged, _ := h.srv.Store.RepoAuthority(writeRepo)
+	after, _ = h.srv.Store.FleetSettings()
+	if unchanged.Mode != "legacy" || unchanged.Revision != 0 || !reflect.DeepEqual(before, after) {
+		t.Fatal("unbound preflight changed authority", unchanged)
+	}
+	// A separately observed native launch supplies a trustworthy binding; an
+	// arbitrary caller receipt above could not create one. Bound owners stage.
+	for _, raw := range manifest["legacy_owners"].([]any) {
+		o := raw.(map[string]any)
+		worker, ep := o["worker_id"].(string), o["endpoint_id"].(string)
+		native := &store.RepoNativeIdentity{WorkerID: worker, NativeSession: "fixture-native", PID: 123, Birth: "birth", Executable: "/bin/codex"}
+		for _, action := range []string{"reserve", "begin", "observe"} {
+			if _, err := h.srv.Store.RepoLocalStart(writeRepo, "operator", ep, "observed-"+ep, action, worker, native, time.Now()); err != nil {
+				t.Fatal(action, err)
+			}
+		}
+	}
+	code, a = ticketCall(t, h, auth, http.MethodPost, path, freeze)
 	if code != 200 || a["mode"] != "frozen" {
 		t.Fatalf("freeze: %d %v", code, a)
 	}

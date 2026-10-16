@@ -316,7 +316,9 @@ the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
 receipt names worker, native session, PID, birth and executable. It must match
 the native identity saved for that frozen owner in the operation journal;
 an arbitrary dead process or a pre-transfer receipt cannot release a replacement.
-Older owners without that binding stay blocked: drain these before freezing;
+Older owners without that binding refuse freeze before any authority mutation:
+drain/reconcile these on their existing legacy path, then retry preflight.
+This keeps legacy drain available rather than trapping the repo frozen;
 missing observation is not an acknowledgement. The command
 requires ESRCH or a positively observed different process identity; permission
 or probe failure remains unknown. The authenticated node's acknowledgement is
