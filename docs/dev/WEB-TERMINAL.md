@@ -128,6 +128,10 @@ C2 接页面；C6 接 Webchat 的请求准入及固定 `chat.sock` 适配器，�
 `direct` 或 `relay`；`bytes_up/down` 是 **hub 转发的数据字节**，direct 必须为 0，不代表终端没有流量。
 选中的候选对类型经 `selected.pair` 返回；不记录候选地址、终端字节、授权或密钥。
 
+聊天页面初次读对话和重连读取都只应用最新的快照；发送新消息后，先前发起的读取即失效，
+即使在回复完成后才返回也不能覆盖新消息。禁 UDP 时较慢的回退不会清空当前对话；断线恢复
+仍然只读记录，不重发消息。官网与本地页面都由 `chat-late-history` 演练覆盖。
+
 ### 网络与部署验证
 
 hub 的 `CCQUOTA_ATTACHMENT_STUN` 是空白分隔的 `stun:host:port`，最多 4 个，默认空；
