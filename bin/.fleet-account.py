@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import stat
 import runpy
 import subprocess
 import sys
@@ -370,6 +371,69 @@ def claude_profile(label=''):
     return dict(agent='claude', label=label, key='claude/' + label, login=login)
 
 
+def codex_real_home(home):
+    """Resolve only this login's recorded proxy mirror; never grant a login.
+
+    fleet-session-cred.sh writes the account record and mirrors sessions before
+    launch. A marker alone (even one naming a valid account) proves neither.
+    Keep this at target-auth so old MCP clients need no new argument (#4435).
+    """
+    if not home:
+        return home, False
+    path = Path(home).resolve()
+    conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))).resolve()
+    state = conf / 'cred-proxy'
+    mirrors = state / 'codex-homes'
+    marker = path / '.fleet-real-home'
+    if (mirrors not in path.parents and Path(home).parent.resolve() != mirrors
+            and not marker.exists() and not marker.is_symlink()):
+        return home, False
+
+    def owned(p, directory=False):
+        s = p.lstat()
+        if (s.st_uid != os.getuid() or s.st_mode & 0o022
+                or not (stat.S_ISDIR(s.st_mode) if directory else stat.S_ISREG(s.st_mode))
+                or not s.st_mode & stat.S_IRUSR):
+            raise ValueError('untrusted proxy home ownership or permissions')
+        return s
+
+    try:
+        if path.parent != mirrors or Path(home).is_symlink():
+            raise ValueError('proxy home is outside this login\'s mirror directory')
+        for directory in (conf, state, mirrors, path, state / 'sessions'):
+            owned(directory, directory=True)
+        if (path / '.revoked').exists() or (path / '.revoked').is_symlink():
+            raise ValueError('proxy home is revoked')
+        if owned(marker).st_size > 4096:
+            raise ValueError('invalid real-home marker')
+        raw = marker.read_text().removesuffix('\n')
+        if not raw or '\n' in raw or '\r' in raw or not Path(raw).is_absolute():
+            raise ValueError('invalid real-home marker')
+        real = Path(raw).resolve(strict=True)
+        owned(real, directory=True)
+        default = (Path.home() / '.codex').resolve()
+        pool = Path(os.environ.get('FLEET_CRED_CODEX_HOMES', str(Path.home() / '.codex-accounts'))).resolve()
+        if real == default:
+            label = 'default'
+        elif real.parent == pool:
+            owned(pool, directory=True)
+            label = real.name
+        else:
+            raise ValueError('real home has no account in this login')
+        record = state / 'sessions' / path.name
+        if owned(record).st_size > 16384:
+            raise ValueError('invalid proxy session record')
+        fields = dict(line.split('=', 1) for line in record.read_text().splitlines() if '=' in line)
+        if fields.get('provider') != 'codex' or fields.get('account') != label:
+            raise ValueError('real home differs from the proxy session account')
+        sessions = path / 'sessions'
+        if not sessions.is_symlink() or sessions.resolve(strict=True) != (real / 'sessions').resolve(strict=True):
+            raise ValueError('real home differs from the proxy session store')
+        return str(real), True
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ValueError('cannot verify Codex proxy home mapping: ' + str(error)) from None
+
+
 def codex_proxy_auth(home=''):
     """Check the exact proxy account fleet-session-cred.sh would mint for.
 
@@ -435,6 +499,12 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
             return dict(row, verdict='ok', reason='')
         return dict(row, verdict='refuse', reason='Claude account %s needs a new login (%s)' % (label, login))
     profile_name = profile_name or os.environ.get('FLEET_CODEX_PROFILE', '')
+    if not (profile_name or home or account):
+        home = os.environ.get('FLEET_CODEX_HOME', '')
+    try:
+        home, mirrored = codex_real_home(home)
+    except (OSError, ValueError, RuntimeError) as error:
+        return dict(verdict='refuse', agent=agent, key='', login='unknown', reason=str(error))
     if not (profile_name or account):
         proxy = codex_proxy_auth(home)
         if proxy is not None:
@@ -442,7 +512,7 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
     try:
         rows = profiles()
     except (OSError, ValueError, subprocess.SubprocessError):
-        return dict(verdict='unknown', agent=agent, key='', login='unknown',
+        return dict(verdict='refuse' if mirrored else 'unknown', agent=agent, key='', login='unknown',
                     reason='no ccquota Codex profile registry here; the login cannot be verified')
     if not (profile_name or home or account):
         home = os.environ.get('FLEET_CODEX_HOME', '')
@@ -462,7 +532,7 @@ def target_auth(agent, label='', profile_name='', home='', account=''):
              and (not account or p['account'] == account)]
     if len(found) != 1:
         what = profile_name or account or home
-        if os.environ.get('FLEET_FAILOVER', '0') == '1':
+        if mirrored or os.environ.get('FLEET_FAILOVER', '0') == '1':
             # fleet-codex.sh asks profile() for this home under the planner and exits 1
             return dict(verdict='refuse', agent=agent, key='', login='unknown',
                         reason='no registered Codex profile for %s; the launcher would refuse' % what)
