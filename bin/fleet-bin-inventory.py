@@ -263,10 +263,22 @@ def selftest():
         assert '未归类\t1\n' in summary(rows)
         assert len(list(csv.reader(io.StringIO(tsv(rows)), delimiter='\t'))) == len(rows) + 1
         assert markdown(rows) == markdown(inventory(root))
+        # Both public inventory formats must refuse an unclassified live file
+        # while still printing every row; registering it must clear that gate.
+        def check_cli(expected, rows):
+            for flag, render in (('--summary', summary), ('--tsv', tsv)):
+                result = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                                         '--root', str(root), flag],
+                                        capture_output=True, text=True)
+                assert result.returncode == expected, (flag, result.returncode, result.stderr)
+                assert result.stdout == render(rows), (flag, result.stdout)
+        check_cli(1, rows)
         put('docs/dev/COMPONENTS.md', (root / 'docs/dev/COMPONENTS.md').read_text()
             .replace('`live.sh orphan.sh', '`new.sh live.sh orphan.sh'))
         assert '未归类\t0\n' in summary(inventory(root))
+        check_cli(0, inventory(root))
         print('PASS inventory: runtime/orphan/test-only, inheritance, boundaries, imports, unknown, TSV, deterministic')
+        print('PASS inventory CLI: unknown live file exits 1; mapped file exits 0; summary/TSV retain all files')
 
 
 def main():
