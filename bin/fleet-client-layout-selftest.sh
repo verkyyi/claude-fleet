@@ -65,7 +65,7 @@ t, bg = at(state="needs", kind="perm", q="Bash: git push")
 eq("needs OK: red too", bg, tb.BG_ASK); has("needs OK: its words", t, "! #1894 Bash: git push")
 t, _ = at(state="needs", kind="ask"); has("asking, no words: the title", t, "! #1894 机器上")
 t, bg = at(state="done", pr="merged"); eq("done: no colour", bg, None)
-has("done: ✓ 做完了", t, " ✓ 做完了 · #1894"); has("done: PR 已合并", t, "PR 已合并 · 62%")
+has("done: ✓ 本轮结束", t, " ✓ 本轮结束 · #1894"); has("done: PR 已合并", t, "PR 已合并 · 62%")
 t, bg = at(state="exited"); eq("exited: the line unchanged", bg, None); has("exited: x 已退出", t, " x 已退出 · #1894")
 t, _ = at(state="failed"); has("failed: x 失败", t, " x 失败 · ")
 eq("exited: only the glyph red", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
@@ -128,7 +128,7 @@ import ast, re
 os.environ["FLEET_UI_LANG"] = "en"
 tb._WORDS.clear(); tb.FV._WORDS.clear()
 t, _ = tb.fit(dict(rec, state="done", pr="merged"), 140, now=1060)
-has("en: done", t, " ✓ done · #1894"); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
+has("en: done", t, " ✓ turn ended · #1894"); has("en: PR merged", t, "PR merged · 62% left · Opus 5.5 · high")
 has("en: PR closed", tb.fit(dict(rec, pr="closed"), 140, now=1060)[0], "PR closed")
 has("en: unreachable", tb.fit(rec, 80, down="1", now=1060, pin="direct", tries="3")[0], "mac-b unreachable · retry 3")
 has("en: via relay", tb.fit(rec, 80, route="relay", now=1060)[0], "mac-b via relay")

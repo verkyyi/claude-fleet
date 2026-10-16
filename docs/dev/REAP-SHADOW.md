@@ -104,3 +104,27 @@ C3→read→shadow 的长工具/idle 超 TTL、后台命令、ask/approval 与�
 guardian 未被既有分类器识别时继续保留，不增加按名称豁免。
 这些观察不证明完整原生 gate 已放行。部署、live activation、C8 退役门、#4431
 接受/投递闭环保持独立。
+
+## 显示消费者（#4504）
+
+`fleet_status_evidence.py --pane %N --socket <session>` 做一次显式 shared read；
+`--text` 输出原生面板同一投影。stdin 接受既有 proof，但没有当前完整执行绑定时
+一律显示 current_binding_unavailable，不能凭 worker/FID 匹配认定同代。
+原生面板 Tab → 状态证据沿同一入口读取，后台结果绑定到打开时的 overlay 实例。
+显示前通过 runtime owner 再读完整执行身份和原生状态；generation/SID/turn/state
+变化、复读失败或过期均显示 unknown，仍保留初次 proof 的原时间。
+取消再打开同一行不会接收前一次迟到结果；不增加 inventory/producer 周期探测。
+
+显式读取的私有展示缓存为已有 dash global 下 `status-proof-<session>-<FID>`，
+0600、单行且最多 64 KiB。producer 的可选第 21 列原样携带它，旧客户端忽略，
+没有完整当前 binding 的缓存只能显示 unknown/last-known。缓存不参与任何 gate，
+读取不改变原时间；过期后保留原来源和保留原因。完整 proof 含私有身份，不应公开。
+
+Tasks API 只补充 inventory 的来源、观测时间与 stale，并保留离线 last-known；
+unknown inventory 没有可靠原时间时不补写当前时间。网页沿 C7 展示权威 outcome、
+PR 与 task-blockers.v1 原明细，缺少 native/controller/shadow 来源时明确 unknown。
+它不运行 Python provider adapter，也不宣称与 CLI 有相同的现场可用证据。
+任务结果、PR、部署、live 四层分开；本变更没有开启回收或 controller delivery。
+
+验证分为 producer/shared-proof fixture、原生 curses PTY（模型/authority 为 fixture）、
+CI 与部署/现场。源码回归和真实 PTY 不等于真实模型、C1 投递或部署验收。
