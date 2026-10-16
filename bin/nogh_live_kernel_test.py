@@ -56,10 +56,18 @@ def inside():
                 threading.Thread(target=serve, args=(sock,), daemon=True).start()
         with tempfile.TemporaryDirectory(prefix='c9-kernel-') as temporary:
             probe = Path(temporary) / 'probe.py'
-            probe.write_text('''import ctypes, os, socket, subprocess
+            probe.write_text('''import array, ctypes, os, socket, subprocess
 os.write(198, b'.')
 libc = ctypes.CDLL(None, use_errno=True)
 assert libc.syscall(425, 1, 0) == -1 and ctypes.get_errno() == 38
+left, right = socket.socketpair()
+shared = os.memfd_create('c9-browser-ipc')
+left.sendmsg([b'x'], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [shared]))])
+body, controls, flags, addr = right.recvmsg(1, socket.CMSG_SPACE(4))
+assert body == b'x' and not flags
+received = array.array('i'); received.frombytes(controls[0][2])
+os.write(received[0], b'PRIVATE_PAYLOAD_SENTINEL')
+os.close(received[0]); os.close(shared); left.close(); right.close()
 for family, ip in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
     with socket.socket(family, socket.SOCK_STREAM) as s:
         s.settimeout(1); s.connect((ip, 18443)); assert s.recv(7) == b'allowed'
