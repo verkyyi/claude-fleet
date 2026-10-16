@@ -449,26 +449,22 @@ ok; [ -z "$(fleet_pane_claude_pids 2>/dev/null)" ] || fail "no pids in, nothing 
 # A ZOMBIE is not a Claude (issue #1734): on Linux a just-/exit'ed claude keeps
 # comm=claude until its parent reaps it, and fleet-transfer read that as "another
 # Claude appeared". ps is shimmed so the leg is the same on macOS and Linux.
-zps() {
-  case "$*" in
-    *stat=,comm=*) printf '900 1 Ss zsh\n901 900 Z claude\n910 1 Ss zsh\n911 910 S+ claude\n' ;;
-    *command=*)    printf '900 -zsh\n901 claude\n910 -zsh\n911 claude\n' ;;
-  esac
-}
-zout=$(ps() { zps "$@"; }; fleet_pane_claude_pids 900 910 2>/dev/null)
+mkdir -p "$WORK/ps-shim"
+cat > "$WORK/ps-shim/ps" <<'SH'
+#!/bin/sh
+printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 Z Fri Oct 16 02:00:00 2026 claude\n910 1 Ss Fri Oct 16 02:00:00 2026 zsh\n911 910 S+ Fri Oct 16 02:00:00 2026 claude\n'
+SH
+chmod +x "$WORK/ps-shim/ps"
+zout=$(FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids 900 910 2>/dev/null)
 ok; [ "$zout" = "910 911" ] || fail "a zombie claude must not count; a live one must" "$zout"
-# A cut CJK char in some process's argv (issue #3129): under a UTF-8 locale macOS
-# awk wrote «illegal byte sequence» + the raw 0xe6 to stderr, and fleet-sleep.py /
-# fleet-mcp.py, decoding that strictly, failed every send. The walk is silent now.
-cps() {
-  case "$*" in
-    *stat=,comm=*) printf '900 1 Ss zsh\n901 900 S+ claude\n' ;;
-    *command=*)    printf '900 -zsh\n901 claude\n950 python3 x \346\211\n' ;;
-  esac
-}
-cerr=$( { ps() { cps "$@"; }; LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
+# Invalid bytes from an unrelated process must remain silent (#3129).
+cat > "$WORK/ps-shim/ps" <<'SH'
+#!/bin/sh
+printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 S+ Fri Oct 16 02:00:00 2026 claude\n950 1 S Fri Oct 16 02:00:00 2026 python3 \346\211\n'
+SH
+cerr=$( { FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
 ok; [ -z "$cerr" ] || fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
-cout=$(ps() { cps "$@"; }; LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
+cout=$(FLEET_CLAUDE_COMM= PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
 ok; [ "$cout" = "900 901" ] || fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------

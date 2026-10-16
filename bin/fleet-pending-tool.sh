@@ -48,130 +48,26 @@
 #   2  usage
 #   3  no live Claude under that pane — nothing CAN be pending (target form only)
 #   4  unknown — a non-Claude agent, a live Claude whose transcript could not be
-#      resolved or read, no python3, no tmux, no fleet-lib (target form only). Treat 4 as
+#      resolved or read, no python3, no tmux, unavailable shared reader (target form only). Treat 4 as
 #      "leave it alone".
 #
 # `sh`-wired on purpose: its first caller is a `sh` hook on the Notification path.
 # Fail-safe by construction — on the PATH form any failure (no python3, unreadable
 # transcript, malformed JSON) is silence + exit 1, which leaves every caller on the
 # behaviour it had before it asked.
+# Compatibility entry: the importable module owns both resolution and parsing.
 set -u
-
-usage() { printf 'usage: fleet-pending-tool.sh [-L <socket>] <transcript.jsonl|tmux-target>\n' >&2; exit 2; }
-
-SOCK=''
 case "${1:-}" in
-  -L|--socket) SOCK="${2:-}"; [ -n "$SOCK" ] || usage; shift 2 ;;
-  -*) usage ;;
+  -L|--socket) [ -n "${2:-}" ] && [ -n "${3:-}" ] || exit 2; _target=$3 ;;
+  -*|'') exit 2 ;;
+  *) _target=$1 ;;
 esac
-T="${1:-}"
-[ -n "$T" ] || usage
-
-MODE=path
-if [ ! -f "$T" ]; then
-  # A PATH that isn't there stays the path form (exit 1) — never re-read as a tmux
-  # target. The hook passes `transcript_path` straight through, and a stale/rotated
-  # one must keep costing the subtype, not go looking for a window.
-  case "$T" in
-    /*|./*|../*|*/*) exit 1 ;;
-  esac
-  MODE=target
-fi
-
-# `unknown` — the exit code for "could not find out", which differs per form: the
-# path form owes its hook callers today's fail-safe silence (1); the target form owes
-# its reconcile caller a signal it must not act on (4).
-unknown() { [ "$MODE" = target ] && exit 4; exit 1; }
-
-if [ "$MODE" = target ]; then
-  command -v tmux  >/dev/null 2>&1 || unknown
-  # This oracle understands Claude's process registry and transcript only.
-  # A Codex pane without a Claude PID is UNKNOWN, never a dead worker (#730).
-  if [ -n "$SOCK" ]; then
-    _agent=$(tmux -L "$SOCK" display-message -p -t "$T" '#{@cc_agent}' 2>/dev/null)
-  else
-    _agent=$(tmux display-message -p -t "$T" '#{@cc_agent}' 2>/dev/null)
-  fi
-  case "$_agent" in ''|claude) : ;; *) unknown ;; esac
-  command -v bash  >/dev/null 2>&1 || unknown
-  BIN0=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || unknown
-  [ -n "${BIN0:-}" ] && [ -f "$BIN0/fleet-lib.sh" ] || unknown
-
-  # ONE bash hop for both facts (≈70 ms measured, dominated by the `ps` tree walk).
-  # fleet_pane_claude_pid is the fleet's canonical "is Claude alive in this pane"
-  # gate (#511 — `pane_current_command` reads the shell runner for a session's whole
-  # life on macOS, so it cannot answer this) and it is bash; this script is sh. Same
-  # bash-hop idiom bin/set-claude-state.sh uses for fleet-hook-conf.sh.
-  _probe=$(bash -c '
-    . "$1/fleet-lib.sh" 2>/dev/null || exit 1
-    p=$(fleet_pane_claude_pid "$2" "$3" 2>/dev/null)
-    printf "pid=%s\n" "$p"
-    [ -n "$p" ] && printf "sid=%s\n" "$(fleet_cc_session_id "$p" 2>/dev/null)"
-    exit 0   # a pane with no Claude is an ANSWER (pid=, → 3), not a failed hop
-  ' _ "$BIN0" "$T" "$SOCK" 2>/dev/null) || unknown
-
-  _pid=$(printf '%s\n' "$_probe" | sed -n 's/^pid=//p' | sed -n 1p)
-  [ -n "$_pid" ] || exit 3                       # no Claude here — nothing can be pending
-  _sid=$(printf '%s\n' "$_probe" | sed -n 's/^sid=//p' | sed -n 1p)
-  [ -n "$_sid" ] || unknown                      # alive but unregistered ⇒ don't guess
-
-  # CLAUDE_PROJECTS_DIR mirrors fleet_transcript_dir's override so a selftest can
-  # point the whole lookup at a scratch tree.
-  _found=''
-  for _f in "${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"/*/"$_sid".jsonl; do
-    [ -f "$_f" ] && { _found="$_f"; break; }
-  done
-  [ -n "$_found" ] || unknown
-  T="$_found"
-fi
-
-command -v python3 >/dev/null 2>&1 || unknown
-
-FPT_T="$T" python3 - <<'PY' 2>/dev/null
-import json, os, sys
-
-# Identical rule to bin/fleet-answer.sh and bin/fleet-permission.sh: walk the whole
-# transcript, remember every tool_use in order and every id that got a result, and
-# take the newest id still without one.
-#
-# Exit 4 (not 1) for any failure to READ: "nothing is pending" and "I could not
-# look" are the same silence on stdout, and #658's caller clears a red window on the
-# first. The shell above folds 4 back to 1 for the path form, whose hook callers
-# have always treated an unreadable transcript as "no answer, keep the wording's".
-try:
-    uses, done, order = {}, set(), []
-    with open(os.environ["FPT_T"], encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            if '"tool_use"' not in line and "tool_result" not in line:
-                continue
-            try:
-                o = json.loads(line)
-            except Exception:
-                continue
-            m = o.get("message")
-            if not isinstance(m, dict):
-                continue
-            content = m.get("content")
-            if not isinstance(content, list):
-                continue
-            for c in content:
-                if not isinstance(c, dict):
-                    continue
-                if c.get("type") == "tool_use":
-                    uses[c.get("id")] = c.get("name") or "?"
-                    order.append(c.get("id"))
-                elif c.get("type") == "tool_result":
-                    done.add(c.get("tool_use_id"))
-except Exception:
-    sys.exit(4)
-
-tuid = next((i for i in reversed(order) if i not in done and i is not None), None)
-if tuid is None:
-    sys.exit(1)
-print(uses[tuid])
-PY
-rc=$?
-# 4 = the read itself failed. The path form owes its hooks silence+1; the target
-# form must hand its caller the "don't act" code.
-[ "$rc" = 4 ] && unknown
-exit "$rc"
+_unknown=4
+case "$_target" in */*) _unknown=1 ;; esac
+[ ! -f "$_target" ] || _unknown=1
+command -v python3 >/dev/null 2>&1 || exit "$_unknown"
+# Shell parameter expansion avoids a dirname subprocess on every hook.
+_bin=${0%/*}
+[ "$_bin" != "$0" ] || _bin=.
+[ -f "$_bin/fleet_pending_tool.py" ] || exit "$_unknown"
+exec python3 "$_bin/fleet_pending_tool.py" "$@"

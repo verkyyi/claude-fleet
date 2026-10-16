@@ -390,6 +390,80 @@ deployment/live acceptance. This interface neither changes the live install nor
 claims the independent #4474 process-cost budget. Native RPC semantics follow
 the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server).
 
+### Pending-tool observations (#4474)
+
+`bin/fleet_pending_tool.py` owns the existing Claude transcript oracle and
+pane→Claude BFS. `fleet-pending-tool.sh` and `fleet_pane_claude_pids` remain
+compatibility entries; there is no second provider or background service.
+The Python entry for #4444 is:
+
+```python
+from fleet_pending_tool import observe, read_panes, parse_panes, PANE_FORMAT
+
+# Default transport: two tmux commands and one ps for the whole batch.
+first = observe(lambda: read_panes("fleet"))
+expected = {r["pane"]: r["identity"] for r in first}
+# At the NEXT safety-check deadline, call observe again, never reuse first.
+second = observe(lambda: read_panes("fleet"), expected=expected)
+
+# A consumer with an existing tmux control connection supplies a synchronous
+# command function. Each observation then forks only ONE ps, for every window.
+def reader():
+    return parse_panes(control_command("list-panes", "-a", "-F", PANE_FORMAT))
+results = observe(reader, expected=expected)
+```
+
+`reader` must perform a fresh synchronous read on each invocation, returning
+the requested rows from one socket. `PANE_FIELDS` names socket path, server PID,
+window/pane IDs, pane PID, worker FID, agent and native SID; `PANE_FORMAT` carries
+a final sentinel to preserve empty fields. Grouped-session duplicates are
+deduplicated by socket/pane. Callers may filter to their candidates, retaining
+every field. No binding, process or transcript cache survives `observe`.
+
+Each version-1 result contains `pane`, `code`, `tool`, `reason`, `identity`,
+`observed_at` and `expires_at`. Identity includes socket device/inode, server
+kernel birth/executable, worker FID, window/pane, native PID/birth/executable/SID
+and ancestry to the pane. Native registry PID, SID and published birth
+(`startedAt`/`procStart`) must agree. Missing FID/SID/registry birth is unknown.
+The optional `expected` argument must contain the complete first identities;
+missing or changed entries refuse. It never renews an old observation.
+
+Within one call, processes/argv and each transcript are parsed once. Before
+returning a known result, the reader rechecks the live bindings, socket,
+kernel process identities, registry SID and transcript inode/size/timestamps.
+A failed process scan, PID reuse, process exit, recycled window, other socket,
+malformed transcript or changed identity returns code 4. Transport exceptions
+at the first read propagate: the consumer must retain **all** candidates.
+An observation taking 5 seconds expires, using `fleet_runtime.TTL`; consumers
+must also reject results at or after `expires_at`. No TTL or provider policy is
+added to `fleet_runtime`. Two checks 20 seconds apart collect two process tables.
+
+| Entry / condition | Output and exit/code |
+|---|---|
+| CLI path, newest tool without a matching result | Tool name, 0 (the historical selection order) |
+| CLI path, no pending / absent / unreadable | Silence, 1; malformed JSON lines still skipped |
+| CLI bad arguments | 2 |
+| CLI target, no Claude or no such pane | 3 |
+| CLI target, Codex/other agent or failed resolution/read | 4; malformed/empty transcripts now also refuse |
+| Batch known pending / known no pending | 0 + name / 1; neither means runtime idle |
+| Batch no native, missing birth, stale or unknown identity | 4, retain; no code 3 inference |
+
+`Processes.collect()` uses one bounded `ps` on Linux/macOS; argv comes from the
+existing kernel reader. `fleet_launch.process(pid, ps_row=(ppid, lstart))`
+reuses that row but still checks kernel birth/executable and rejects a changed
+parent/start. Its original one-argument C3 contract and birth format remain.
+`fleet_pane_claude_pids` uses one interpreter plus that one ps, preserving BFS,
+node/bun recognition, explicit fake-shell override and zombie rejection.
+
+The isolated `fleet-pending-tool-selftest.py --cost` exercises two actual checks
+20 seconds apart via a real control connection and prints raw PID/exec traces:
+one control startup plus two ps, regardless of the two-window batch. The default
+CLI transport instead costs two tmux + one ps per observation. Neither count
+includes unrelated consumer maintenance. #4444 still owns spinner wiring and
+its complete default 60-second budget. Real whole-machine idle/busy evidence and
+deployment are separate. Background tools, active loops, children and all #4318
+Stop/reap gates remain required; a `no_pending` result waives none of them.
+
 ### Existing-repo authority cutover (#4395)
 
 `fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private

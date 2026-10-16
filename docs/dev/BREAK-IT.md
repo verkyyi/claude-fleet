@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |
 | 已注册的 GitHub 仓库名含大写（#4495） | 面板新建误报冻结，规范化后的迁移清单又找不到原 overlay | Hub 身份规范化，本地按注册身份定位原 overlay；实际冻结、输入、认证及入口故障保留各自原因 | `repo-authority-case` |
 | 会话只继承入口 URL，ticket reader 把它与代理凭据拼接（#4490） | authority 启动及同会话回退 401，代理凭据被送到错误入口 | 完整显式凭据对直接使用；只有 URL 时由既有 reader 整对读取；孤立 token、reader 失败及显式认证失败均拒绝，不换身份 | `ticket-credential-pair` |
 | 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |

@@ -6440,6 +6440,14 @@ drill_runtime_stale_idle() {
   WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
 }
 
+drill_pending_observation_stale() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-pending-tool-selftest.py" Observation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
+}
+
 drill_repo_authority_case() {
   CAP=90; local t0 out
   t0=$(now)
