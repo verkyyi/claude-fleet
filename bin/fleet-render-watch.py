@@ -400,7 +400,7 @@ class Observer:
                 chunk = os.read(self.query.stdout.fileno(), 65536)
             except BlockingIOError:
                 chunk = None
-            if chunk and len(self.output) + len(chunk) <= 65536:
+            if chunk and len(self.output) + len(chunk) <= 65536 and now < self.query_deadline:
                 self.output += chunk
             elif chunk == b'' or now >= self.query_deadline or chunk:
                 active = False

@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -129,6 +130,28 @@ def main():
             assert not tm('one', 'list-clients') and not tm('two', 'list-clients')
             assert not list((root/('tmux-%s' % os.getuid())).glob('*.render-*'))
             print('PASS spinner termination reaps control clients and registration files', flush=True)
+            # A reader which keeps emitting partial JSON still has a 3s bound;
+            # resident maintenance must not keep this child alive indefinitely.
+            slow = root / 'slow-lease.py'
+            slow.write_text("import sys,time\nfor _ in range(2000):\n sys.stdout.write(' '); sys.stdout.flush(); time.sleep(.01)\n")
+            (root/'bin/fleet-client-where.sh').write_text('#!/bin/sh\nexec ' +
+                shlex.quote(sys.executable) + ' ' + shlex.quote(str(slow)) + '\n')
+            observer = w.Observer()
+            observer.cache.unlink(missing_ok=True)
+            observer.refresh()
+            child = observer.query
+            t0 = time.monotonic()
+            try:
+                def finished():
+                    observer.refresh()
+                    return observer.query is None
+                until(finished, 4.5)
+                assert child.poll() is not None and time.monotonic()-t0 < 4.5
+                assert observer.lease_until == 0
+                print('PASS continuously partial lease query times out and is reaped', flush=True)
+            finally:
+                observer.close()
+
         finally:
             if daemon:
                 os.killpg(daemon.pid, signal.SIGTERM); daemon.wait(timeout=3)
