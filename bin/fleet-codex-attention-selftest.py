@@ -25,6 +25,7 @@ class Fake:
     def __init__(self,request=None,state='active',before=False):
         self.request=copy.deepcopy(request or REQUEST);self.events=[];self.sent=[];self.calls=[];self.closed=False
         self.state=state;self.before=before;self.replayed=False;self.already=False
+        self.socket=None
     def call(self,method,params):
         self.calls.append((method,params))
         if method in ('thread/read','thread/resume'):
@@ -35,7 +36,8 @@ class Fake:
             return {'thread':{'id':SID,'status':{'type':self.state,'activeFlags':['waitingOnUserInput']}}}
         raise AssertionError(method)
     def resolution(self):return {'method':'serverRequest/resolved','params':{'threadId':SID,'requestId':self.request['id']}}
-    def receive(self):
+    def receive(self,nonblocking=False):
+        if nonblocking:return None
         if self.replayed:self.replayed=False;return self.request
         raise TimeoutError('no matching pending request')
     def send(self,value):self.sent.append(value);self.events.append(self.resolution())
@@ -124,15 +126,198 @@ class Attention(unittest.TestCase):
                 mon.tick();self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/ask')
                 # the question's own words, as Claude's needs carry them (#1951)
                 self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'继续？')
-                f.state='idle';mon.next_at=0;mon.tick()
+                f.state='idle';mon.next_at=0;mon.reconcile_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'done/')
                 self.assertEqual(call('display-message','-p','#{@claude_needs_detail}'),'')
                 opt('@codex_attention','ask');opt('@claude_state','needs');opt('@claude_needs','blocked')
-                mon.next_at=0;mon.tick()
+                mon.next_at=0;mon.reconcile_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/blocked')
                 opt('@cc_launcher_pid','456');f.state='active';mon.next_at=0;mon.tick()
                 self.assertEqual(call('display-message','-p','#{@claude_state}/#{@claude_needs}'),'needs/blocked')
+                self.assertTrue(f.closed)
+                mon.close()
         finally:subprocess.run(tm+['kill-server'],capture_output=True)
+
+
+class MonitorEvents(unittest.TestCase):
+    def setUp(self):
+        self.now=100
+        self.data=dict(DATA)
+        self.native=Fake(state='idle')
+        self.options='working||'
+        self.writes=[]
+        self.monitor=a.Monitor(DATA['remote'],{'TMUX_PANE':'%fixture','FLEET_CODEX_LAUNCHER_PID':'123'})
+        def tmux(arguments):
+            if arguments[0]=='display-message':return self.options
+            self.writes.append(arguments)
+            return ''
+        patches=[patch.dict(a.session,identity=lambda *_:dict(self.data),tmux=tmux),
+                 patch.object(a,'request_detail',return_value='fixture question'),
+                 patch.object(a.time,'monotonic',side_effect=lambda:self.now)]
+        for fixture in patches:
+            fixture.start();self.addCleanup(fixture.stop)
+        connection=patch.object(a,'Client',return_value=self.native)
+        self.connect=connection.start();self.addCleanup(connection.stop)
+        self.addCleanup(self.monitor.close)
+
+    def tick(self):
+        self.now+=2
+        self.monitor.tick()
+
+    def status(self,state,flags=(),identifier=SID):
+        return {'method':'thread/status/changed','params':{'threadId':identifier,
+                'status':{'type':state,'activeFlags':list(flags)}}}
+
+    def test_idle_reuses_connection_and_only_reconciles_every_thirty_seconds(self):
+        self.native.events.append(self.status('idle'))
+        for _ in range(30):self.tick()
+        self.assertEqual(self.connect.call_count,1)
+        self.assertEqual(self.native.calls,[('thread/read',{'threadId':SID,'includeTurns':False})]*2)
+        self.assertFalse(self.native.closed)
+        self.assertFalse(self.native.sent)
+        self.assertFalse(self.writes)
+        self.monitor.close()
+        self.assertTrue(self.native.closed)
+
+    def test_unproven_stream_keeps_original_snapshot_cadence(self):
+        for _ in range(3):self.tick()
+        self.assertEqual(self.connect.call_count,1)
+        self.assertEqual(len(self.native.calls),3)
+        self.assertFalse(self.monitor.event_stream)
+
+    def test_native_events_update_exact_thread_without_resuming_or_reading_again(self):
+        self.tick()
+        self.native.events.append(self.status('active',['waitingOnUserInput'],'other-thread'))
+        self.tick();self.assertFalse(self.writes)
+        self.assertFalse(self.monitor.event_stream)
+        self.native.events.append(self.status('active',['waitingOnUserInput']))
+        self.tick()
+        self.assertEqual(len(self.writes),1)
+        self.assertIn('@claude_needs ask',self.writes[-1][-1])
+        self.options='needs|ask|ask'
+        self.native.events.append(self.status('idle'))
+        self.tick()
+        self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertEqual(len(self.native.calls),2)
+        self.assertFalse(self.native.sent)
+
+    def test_disconnect_preserves_attention_and_reconnects_with_snapshot(self):
+        self.tick()
+        self.options='needs|ask|ask'
+        with patch.object(self.monitor,'events',side_effect=EOFError('fixture disconnect')):
+            self.tick()
+        self.assertTrue(self.native.closed)
+        self.assertFalse(self.writes)
+        replacement=Fake(state='idle')
+        self.connect.return_value=replacement
+        self.tick()
+        self.assertEqual(self.connect.call_count,2)
+        self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertEqual(len(replacement.calls),1)
+
+    def test_identity_change_closes_old_stream_before_processing_events(self):
+        self.tick()
+        self.native.events.append(self.status('active',['waitingOnApproval']))
+        self.data['owner']='replacement'
+        self.tick()
+        self.assertTrue(self.native.closed)
+        self.assertFalse(self.writes)
+        self.assertEqual(self.connect.call_count,1)
+
+    def test_account_home_change_rebinds_even_with_same_thread_and_owner(self):
+        self.tick()
+        replacement=Fake(state='idle')
+        self.connect.return_value=replacement
+        self.data['home']='/new-account-home'
+        self.tick()
+        self.assertTrue(self.native.closed)
+        self.assertEqual(self.connect.call_count,2)
+        self.assertEqual(len(replacement.calls),1)
+
+    def test_unloaded_and_failed_threads_never_mean_success(self):
+        self.tick()
+        self.options='needs|ask|ask'
+        for state in ('notLoaded','systemError','future-state'):
+            self.native.events.append(self.status(state))
+            self.tick()
+            self.assertNotIn('@claude_state',self.writes[-1][-1])
+        self.native.events.append({'method':'thread/closed','params':{'threadId':SID}})
+        self.tick()
+        self.assertNotIn('@claude_state',self.writes[-1][-1])
+
+    def test_malformed_or_excessive_events_drop_connection_without_state_changes(self):
+        for backlog in ([{'method':'thread/status/changed','params':{'threadId':SID,'status':'invalid'}}],
+                        [self.status('active',['waitingOnApproval'])]*129):
+            self.monitor.close()
+            self.native=Fake(state='idle')
+            self.connect.return_value=self.native
+            self.tick()
+            self.native.events.extend(backlog)
+            self.tick()
+            self.assertTrue(self.native.closed)
+            self.assertFalse(self.writes)
+
+    def test_initial_snapshot_supersedes_queued_old_events(self):
+        self.native.events.append(self.status('active',['waitingOnApproval']))
+        self.tick()
+        self.assertFalse(self.writes)
+        self.assertFalse(self.native.events)
+
+    def test_status_changing_during_snapshot_cannot_clear_pending_attention(self):
+        self.options='needs|perm|perm'
+        original=self.native.call
+        def racing_read(method,params):
+            result=original(method,params)
+            if method=='thread/read':
+                self.native.events.append(self.status('active',['waitingOnUserInput']))
+                self.native.state='active'
+            return result
+        with patch.object(self.native,'call',side_effect=racing_read):
+            self.tick()
+        self.assertFalse(self.writes)
+        self.assertEqual(self.monitor.reconcile_at,0)
+        self.tick()
+        self.assertIn('@claude_needs ask',self.writes[-1][-1])
+        self.assertEqual(len(self.native.calls),2)
+
+    def test_resolved_attention_during_snapshot_is_not_reintroduced(self):
+        self.native.state='active'
+        original=self.native.call
+        def racing_read(method,params):
+            result=original(method,params)
+            if method=='thread/read':
+                self.native.events.append(self.status('idle'))
+                self.native.state='idle'
+            return result
+        with patch.object(self.native,'call',side_effect=racing_read):
+            self.tick()
+        self.assertFalse(self.writes)
+        self.tick()
+        self.assertFalse(self.writes)
+        self.assertEqual(len(self.native.calls),2)
+
+    def test_matching_event_during_snapshot_needs_no_extra_read(self):
+        original=self.native.call
+        def notified_read(method,params):
+            result=original(method,params)
+            if method=='thread/read':
+                self.native.events.append({'method':'thread/status/changed','params':{
+                    'threadId':SID,'status':copy.deepcopy(result['thread']['status'])}})
+            return result
+        with patch.object(self.native,'call',side_effect=notified_read):
+            self.tick()
+        self.assertTrue(self.monitor.event_stream)
+        self.tick()
+        self.assertEqual(len(self.native.calls),1)
+        self.assertFalse(self.writes)
+
+    def test_new_root_identity_cannot_reuse_old_thread_snapshot(self):
+        self.tick()
+        self.data['session_id']='22222222-2222-4222-8222-222222222222'
+        self.tick()
+        self.assertTrue(self.native.closed)
+        self.assertFalse(self.writes)
+        self.assertIsNone(self.monitor.client)
 
 
 unittest.main(verbosity=2)

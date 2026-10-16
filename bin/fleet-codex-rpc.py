@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import select
 import socket
 import struct
 import sys
@@ -86,9 +87,12 @@ class Client:
     def send(self, value):
         self.frame(json.dumps(value, separators=(',', ':')).encode())
 
-    def receive(self):
+    def receive(self, nonblocking=False):
         chunks = b''
+        fragmented = False
         while True:
+            if nonblocking and not fragmented and not select.select([self.socket], [], [], 0)[0]:
+                return None
             first, second = self.read(2)
             opcode, length = first & 15, second & 127
             if length == 126:
@@ -113,6 +117,7 @@ class Client:
             chunks += payload
             if first & 128:
                 return json.loads(chunks)
+            fragmented = True
 
     def call(self, method, params):
         self.deadline = time.monotonic() + self.timeout

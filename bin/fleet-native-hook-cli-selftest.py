@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Opt-in native hook trust probe; reviewed fixture only, inference rejected locally."""
+import argparse
+import contextlib
+import fcntl
+import http.server
+import json
+import os
+from pathlib import Path
+import pty
+import runpy
+import select
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import threading
+import time
+
+
+HOOK_SCRIPT = '''import json, os, sys
+from pathlib import Path
+payload = json.load(sys.stdin)
+result = {"event": payload.get("hook_event_name"), "source": payload.get("source"),
+          "session_id": payload.get("session_id"),
+          "environment": {name: os.environ.get(name) for name in
+              ("PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA", "FLEET_SESSION")}}
+Path(sys.argv[1]).write_text(json.dumps(result))
+'''
+
+
+def stop(child):
+    if child.poll() is None:
+        os.killpg(child.pid, signal.SIGTERM)
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait(timeout=5)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--codex", default="codex")
+    parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--probe-bypass", action="store_true", help="also test the launcher's hook-trust bypass against an untrusted fixture")
+    parser.add_argument("--remote-tui", action="store_true", help="exercise an actual remote TUI on an owned PTY instead of embedded exec")
+    arguments = parser.parse_args()
+    binary = shutil.which(arguments.codex)
+    if not binary:
+        parser.error("native Codex required; not a default CI test")
+    binary = str(Path(binary).resolve())
+    client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
+    requests, checks = [], []
+
+    def check(condition, name):
+        if not condition:
+            raise AssertionError(name)
+        checks.append(name)
+
+    class Endpoint(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization"))})
+            body = b'{"error":{"message":"offline hook probe; inference disabled"}}'
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *unused):
+            pass
+
+    endpoint = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Endpoint)
+    threading.Thread(target=endpoint.serve_forever, daemon=True).start()
+    try:
+        with tempfile.TemporaryDirectory(prefix="fleet-hook-native-", dir="/tmp") as temporary:
+            root = Path(temporary).resolve()
+            home = root / "home"
+            codex_home = home / ".codex"
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                'model="probe"\nmodel_provider="offline"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+                '[features]\ndaemon_auto_start=false\nhooks=true\nremote_plugin=false\n'
+                '[model_providers.offline]\nname="offline"\n'
+                f'base_url="http://127.0.0.1:{endpoint.server_port}/v1"\n'
+                'wire_api="responses"\nrequires_openai_auth=false\nrequest_max_retries=0\nstream_max_retries=0\n',
+                encoding="utf-8")
+            if arguments.remote_tui:
+                with (codex_home / "config.toml").open("a", encoding="utf-8") as config:
+                    config.write('\n[projects.' + json.dumps(str(root)) + ']\ntrust_level="trusted"\n')
+            environment = {
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "CODEX_HOME": str(codex_home),
+                "TMPDIR": str(root), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
+                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+                "FLEET_SESSION": "fixture-session",
+            }
+            market = root / "market"
+            plugin = market / "plugins/native-hook-fixture"
+            for directory in (market / ".claude-plugin", plugin / ".claude-plugin", plugin / "hooks"):
+                directory.mkdir(parents=True)
+            (market / ".claude-plugin/marketplace.json").write_text(json.dumps({
+                "name": "fleet-hook-probe", "owner": {"name": "Fixture"}, "plugins": [{
+                    "name": "native-hook-fixture", "source": "./plugins/native-hook-fixture", "description": "Offline fixture"}]}))
+            (plugin / ".claude-plugin/plugin.json").write_text(json.dumps({
+                "name": "native-hook-fixture", "version": "0.1.0", "description": "Offline fixture"}))
+            (plugin / "hook.py").write_text(HOOK_SCRIPT, encoding="utf-8")
+            marker = root / "hook-result.json"
+            hook_command = 'python3 "${CLAUDE_PLUGIN_ROOT}/hook.py" ' + str(marker)
+            (plugin / "hooks/hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{
+                "hooks": [{"type": "command", "command": hook_command}]}]}}))
+
+            def command(*values):
+                child = subprocess.Popen([binary, *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                try:
+                    stdout, stderr = child.communicate(timeout=25)
+                except BaseException:
+                    stop(child)
+                    child.communicate(timeout=5)
+                    raise
+                return child.returncode, stdout, stderr
+
+            @contextlib.contextmanager
+            def client(stage, extra_flags=()):
+                socket = root / (stage + ".sock")
+                with (root / (stage + ".log")).open("w", encoding="utf-8") as log:
+                    child = subprocess.Popen([binary, *extra_flags, "app-server", "--listen", "unix://" + str(socket)],
+                                             env=environment, cwd=root, stdin=subprocess.DEVNULL,
+                                             stdout=log, stderr=log, start_new_session=True)
+                    rpc = None
+                    try:
+                        deadline = time.monotonic() + 10
+                        while not socket.exists() and child.poll() is None and time.monotonic() < deadline:
+                            time.sleep(.05)
+                        check(socket.exists() and child.poll() is None, stage + " owned backend ready")
+                        rpc = client_type("unix://" + str(socket), timeout=5)
+                        yield rpc
+                    finally:
+                        try:
+                            if rpc is not None:
+                                rpc.close()
+                        finally:
+                            stop(child)
+
+            def fixture_hook(rpc):
+                entries = rpc.call("hooks/list", {"cwds": [str(root)]})["data"]
+                hooks = [hook for entry in entries for hook in entry["hooks"]
+                         if hook.get("pluginId") == "native-hook-fixture@fleet-hook-probe"]
+                check(len(hooks) == 1 and not hooks[0]["isManaged"], "exactly one non-managed fixture hook")
+                return hooks[0]
+
+            def remote_turn(phase, flags):
+                stage = "turn-" + phase
+                with client(stage) as rpc:
+                    existing_ids = {thread["id"] for thread in rpc.call("thread/list", {"limit": 100})["data"]}
+                    descriptor, slave = pty.openpty()
+                    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 130, 0, 0))
+                    child = None
+                    output = bytearray()
+                    try:
+                        child = subprocess.Popen(
+                            [sys.executable, "-c",
+                             "import fcntl,os,sys,termios; fcntl.ioctl(0,termios.TIOCSCTTY,0); os.execv(sys.argv[1],sys.argv[1:])",
+                             binary, "--remote", "unix://" + str(root / (stage + ".sock")),
+                             "--no-alt-screen", *flags, "Offline hook probe; inference is disabled. Do not run tools."],
+                            env=dict(environment, TERM="xterm-256color"), cwd=root,
+                            stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+                        os.close(slave)
+                        slave = None
+                        deadline = time.monotonic() + 45
+                        while time.monotonic() < deadline and child.poll() is None:
+                            readable, _, _ = select.select([descriptor], [], [], .1)
+                            if readable:
+                                chunk = os.read(descriptor, 65536)
+                                output.extend(chunk)
+                                if b"\x1b[6n" in chunk:
+                                    os.write(descriptor, b"\x1b[1;1R")
+                                if b"\x1b[c" in chunk:
+                                    os.write(descriptor, b"\x1b[?1;2c")
+                            if b"Hooks need review" in output and b"trusting" in output:
+                                return {"review_required": True, "thread_id": None}
+                            if len(requests) > before:
+                                threads = rpc.call("thread/list", {"limit": 10})["data"]
+                                for thread in threads:
+                                    if thread["id"] in existing_ids or thread.get("cwd") != str(root):
+                                        continue
+                                    loaded = rpc.call("thread/read", {"threadId": thread["id"], "includeTurns": True})["thread"]
+                                    turns = loaded.get("turns", [])
+                                    if turns and turns[-1].get("status") == "failed":
+                                        return {"review_required": False, "thread_id": thread["id"]}
+                        raise AssertionError(phase + " remote TUI reached neither review nor failed turn: "
+                                             + output[-1500:].decode(errors="replace"))
+                    finally:
+                        os.close(descriptor)
+                        if child is not None:
+                            try:
+                                child.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                stop(child)
+                        if slave is not None:
+                            os.close(slave)
+
+            result, version, _stderr = command("--version")
+            check(result == 0, "native CLI version")
+            for values in (("plugin", "marketplace", "add", str(market), "--json"),
+                           ("plugin", "add", "native-hook-fixture@fleet-hook-probe", "--json")):
+                result, _stdout, stderr = command(*values)
+                check(result == 0, "native install: " + stderr[-300:] if result else "native install")
+            report = {"scope": "fixture hook trust and execution; deliberately failed local inference, not panel acceptance",
+                      "version": version.strip(), "remote_tui": arguments.remote_tui, "phases": []}
+            if arguments.probe_bypass:
+                inline = 'hooks.SessionStart=[{hooks=[{type="command",command="printf isolated-core-hook"}]}]'
+                with client("inline-classification", ("-c", inline)) as rpc:
+                    entries = rpc.call("hooks/list", {"cwds": [str(root)]})["data"]
+                    inline_hooks = [hook for entry in entries for hook in entry["hooks"]
+                                    if hook.get("source") == "sessionFlags"]
+                    check(len(inline_hooks) == 1, "inline session hook source identified independently of plugin")
+                    check(not inline_hooks[0]["isManaged"] and inline_hooks[0]["trustStatus"] == "untrusted",
+                          "CLI hook configuration is not administrator-managed trust")
+                    report["inline_hook"] = {key: inline_hooks[0][key] for key in ("source", "isManaged", "trustStatus")}
+            trusted_hash = None
+            phases = ("untrusted", "bypassed", "trusted", "changed") if arguments.probe_bypass else ("untrusted", "trusted", "changed")
+            if arguments.remote_tui and arguments.probe_bypass:
+                phases = ("bypassed", "untrusted", "trusted", "changed")
+            for phase in phases:
+                if phase == "changed":
+                    installed = codex_home / "plugins/cache/fleet-hook-probe/native-hook-fixture/0.1.0/hooks/hooks.json"
+                    content = json.loads(installed.read_text())
+                    content["hooks"]["SessionStart"][0]["hooks"][0]["command"] += " changed"
+                    installed.write_text(json.dumps(content))
+                with client(phase) as rpc:
+                    hook = fixture_hook(rpc)
+                    if phase == "trusted":
+                        trusted_hash = hook["currentHash"]
+                        rpc.call("config/value/write", {"keyPath": "hooks.state", "mergeStrategy": "upsert",
+                                 "value": {hook["key"]: {"trusted_hash": trusted_hash}}})
+                    elif phase in ("untrusted", "bypassed"):
+                        check(hook["trustStatus"] == "untrusted", "install does not grant hook trust")
+                    else:
+                        check(hook["trustStatus"] == "modified" and hook["currentHash"] != trusted_hash,
+                              "changed definition requires fresh native review")
+                with client(phase + "-verify") as rpc:
+                    hook = fixture_hook(rpc)
+                    check(hook["trustStatus"] == {"untrusted": "untrusted", "bypassed": "untrusted", "trusted": "trusted", "changed": "modified"}[phase],
+                          phase + " trust persists across native backend restart")
+                if marker.exists():
+                    marker.unlink()
+                before = len(requests)
+                flags = ["--dangerously-bypass-hook-trust"] if phase == "bypassed" else []
+                review_required = False
+                if arguments.remote_tui:
+                    outcome = remote_turn(phase, flags)
+                    review_required = outcome["review_required"]
+                    identifiers = [outcome["thread_id"]] if outcome["thread_id"] else []
+                    check(review_required == (phase in ("untrusted", "changed")),
+                          phase + " remote review gate matches native trust")
+                    check(review_required or bool(identifiers), phase + " remote turn failure has exact native identity")
+                else:
+                    result, stdout, _stderr = command(*flags, "exec", "--json", "--skip-git-repo-check",
+                                                       "Offline hook probe; inference is disabled. Do not run tools.")
+                    events = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
+                    identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
+                    check(result != 0 and any(event.get("type") == "turn.failed" for event in events), phase + " inference intentionally fails")
+                check(len(requests) == before + (0 if review_required else 1),
+                      phase + (" review blocks inference" if review_required else " uses only one local inference request")
+                      + (": " + json.dumps(requests[before:]) if len(requests) != before + (0 if review_required else 1) else ""))
+                observed = json.loads(marker.read_text()) if marker.exists() else None
+                if phase in ("trusted", "bypassed"):
+                    check(observed is not None and observed["event"] == "SessionStart" and observed["source"] == "startup",
+                          phase + " native SessionStart executes")
+                    check(identifiers == [observed["session_id"]], "hook identifies the actual native thread")
+                    inherited = observed["environment"]
+                    installed_root = str(codex_home / "plugins/cache/fleet-hook-probe/native-hook-fixture/0.1.0")
+                    check(inherited["PLUGIN_ROOT"] == inherited["CLAUDE_PLUGIN_ROOT"] == installed_root, "native plugin root aliases agree")
+                    check(inherited["PLUGIN_DATA"] == inherited["CLAUDE_PLUGIN_DATA"] and bool(inherited["PLUGIN_DATA"]), "native plugin data aliases agree")
+                    check(inherited["FLEET_SESSION"] == "fixture-session", "native hook inherits fixture Fleet session")
+                else:
+                    check(observed is None, phase + " hook does not execute")
+                report["phases"].append({"phase": phase, "trust": hook["trustStatus"], "executed": observed is not None,
+                                         "review_required": review_required})
+            check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
+            report.update(checks=checks, passed=len(checks))
+            print(json.dumps(report, indent=2))
+    finally:
+        endpoint.shutdown()
+        endpoint.server_close()
+
+
+if __name__ == "__main__":
+    main()
