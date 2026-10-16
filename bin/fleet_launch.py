@@ -287,10 +287,10 @@ def held_argv(argv, seed, has_seed, old):
         if len(argv) < 2 or argv[-1] != seed:
             raise ValueError("seed does not match the held launch input")
         argv = argv[:-1]  # even a prompt beginning with '-' remains data
-    out, positionals, provider, resume = argv[:1], [], "claude", ""
+    out, positionals, provider, resume, fresh_sid = argv[:1], [], "claude", "", ""
     values = {"--agent", "--as", "--role", "--codex-home", "--codex-profile",
               "--model", "-m", "--effort", "-c", "--append-system-prompt-file",
-              "--permission-mode", "--tools", "--disallowedTools"}
+              "--permission-mode", "--tools", "--disallowedTools", "--session-id"}
     i = 1
     while i < len(argv):
         arg = argv[i]
@@ -306,6 +306,10 @@ def held_argv(argv, seed, has_seed, old):
                 out.append(arg)
             if key == "--agent":
                 provider = value
+            if key == "--session-id":
+                if fresh_sid or not valid_uuid(value):
+                    raise ValueError("invalid explicit native session identity")
+                fresh_sid = value
         elif arg in ("resume", "--resume"):
             i += 1
             if resume or i == len(argv) or not valid_uuid(argv[i]):
@@ -317,12 +321,14 @@ def held_argv(argv, seed, has_seed, old):
         else:
             positionals.append(arg)
         i += 1
+    if fresh_sid and (old or resume):
+        raise ValueError("resume cannot also start a fresh native session")
     if old:
         if resume != old["native_session"] or len(positionals) > 1:
             raise ValueError("interrupted: resume needs the original native session")
     elif positionals:
         raise ValueError("seed does not match the held launch input")
-    return out, provider, resume
+    return out, provider, resume or fresh_sid
 
 
 def supervise(argv):

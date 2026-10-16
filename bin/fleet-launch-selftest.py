@@ -135,6 +135,8 @@ class Supervisor(Receipts):
         self.assertEqual((provider, resume), ("codex", sid))
         got, _, _ = launch.held_argv(["launcher", "--agent", "codex", ""], "", True, None)
         self.assertEqual(got, ["launcher", "--agent", "codex"])
+        got, provider, native = launch.held_argv(["launcher", "--session-id", sid, "input"], "input", True, None)
+        self.assertEqual((got, provider, native), (["launcher", "--session-id", sid], "claude", sid))
         got, _, _ = launch.held_argv(["launcher", "--agent", "codex", "--agent=claude"], "--agent=claude", True, None)
         self.assertEqual(got, ["launcher", "--agent", "codex"])
         for args in (["launcher", "resume", "55555555-5555-4555-8555-555555555555"],
