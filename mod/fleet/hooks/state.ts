@@ -95,8 +95,10 @@ function toolInput(e: Record<string, unknown>): Record<string, unknown> {
 export function registerState(on: On): void {
   on('turn.start', async ($, e, next) => {
     if (isOpen()) {
-      runtimeTurn = e.turnId
-      await runtimeEvent($, 'active', e.turnId, true)
+      if ((e as { agentId?: string }).agentId === undefined) {
+        runtimeTurn = e.turnId
+        await runtimeEvent($, 'active', e.turnId, true)
+      }
       await setState($, 'working')
     }
     return next(e)

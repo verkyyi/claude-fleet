@@ -148,3 +148,13 @@ test('a late completion retains its own turn identity', async ($, on) => {
   expect(events[2].turn_id).toBe('t1')
   expect(events[3].turn_id).toBe('t2')
 })
+
+test('nested native turn starts never replace the root observation', async ($, on) => {
+  const { runs } = engine(on, SUPPORTED.min, { TMUX_PANE: '%7', FLEET_LAUNCH_CONTEXT: '{"version":1}' })
+  await $.session.start(START)
+  await $.turn.start({ text: 'root', turnId: 'root' })
+  await $.turn.start({ text: 'child', turnId: 'child', agentId: 'sub1' } as never)
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [] } as never)
+  const events = runs.filter(r => r.argv[1]?.endsWith('/fleet_runtime.py')).map(r => JSON.parse(r.stdin ?? '{}'))
+  expect(events.map(e => e.turn_id)).toEqual(['root', 'root', 'root'])
+})
