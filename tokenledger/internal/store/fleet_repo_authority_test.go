@@ -148,6 +148,9 @@ func TestRepoAuthorityCollisionAndSelectiveMapping(t *testing.T) {
 	}
 	gh := acceptedTask(t, s, "gh-seven", "gh:org/a#7")
 	hub := acceptedTask(t, s, "hub-eight", m.To)
+	if _, err = s.CreateFleetTask(FleetTask{Owner: "bob", Title: "foreign", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex", TicketRef: "gh:org/a#7"}, "foreign-seven", now); !errors.Is(err, ErrTaskFence) {
+		t.Fatal("colliding hub row hid the original GH owner", err)
+	}
 	if gh.TicketRef != "gh:org/a#7" || hub.TicketRef != m.To {
 		t.Fatal("refs reinterpreted", gh, hub)
 	}

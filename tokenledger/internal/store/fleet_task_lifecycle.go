@@ -149,6 +149,11 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		r, n, _ := taskTicket(t.TicketRef)
 		var ticketOwner, ticketBackend string
 		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ? AND backend = ?`, strings.TrimPrefix(r, "hub:"), n, backend).Scan(&ticketOwner, &ticketBackend)
+		if errors.Is(err, sql.ErrNoRows) && backend == TicketGitHub {
+			// A colliding hub number cannot hide the original GH reference's
+			// owner in the full-ID registry retained by selective adoption.
+			err = tx.QueryRow(`SELECT owner, backend FROM fleet_ticket_index WHERE id = ?`, t.TicketRef).Scan(&ticketOwner, &ticketBackend)
+		}
 		if err == nil && (ticketOwner != t.Owner || ticketBackend != backend) {
 			return FleetTask{}, ErrTaskFence
 		}
