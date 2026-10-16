@@ -180,12 +180,17 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
   const streaming = useRef(false);
   const transport = useRef(new AbortController());
   const follow = useRef<number | undefined>(undefined);
+  const historyRead = useRef(0);
 
   const load = useCallback(async () => {
     clearTimeout(follow.current);
-    if (transport.current.signal.aborted || !navigator.onLine) return;
-    const r = await chatFetch(`${API}/conversation`, { headers: H, signal: transport.current.signal }).catch(() => null);
+    const signal = transport.current.signal;
+    if (signal.aborted || !navigator.onLine || streaming.current) return;
+    const read = ++historyRead.current;
+    const r = await chatFetch(`${API}/conversation`, { headers: H, signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
+    // A newer read or local turn owns the transcript, even after that turn ends.
+    if (signal.aborted || read !== historyRead.current) return;
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
       const code = String(j.code || "");
@@ -229,7 +234,9 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply }: { blocked
     const text = message.content.map((p) => (p.type === "text" ? p.text : "")).join("").trim();
     if (!text) return;
     clearTimeout(follow.current);
+    ++historyRead.current;
     streaming.current = true;
+    setLoaded(true);
     setItems((xs) => [...xs, { t: "user", text }]);
     setAsks([]);
     setBusy(true);

@@ -8,6 +8,7 @@ on:
       - 'bin/fleet_view.py'
       - 'extras/browser-transport/**'
       - 'extras/web-console/**'
+      - 'extras/web-chat/ui/**'
       - '.github/workflows/browser-attachment.yml'
   push:
     branches: [master]
@@ -18,6 +19,7 @@ on:
       - 'bin/fleet_view.py'
       - 'extras/browser-transport/**'
       - 'extras/web-console/**'
+      - 'extras/web-chat/ui/**'
       - '.github/workflows/browser-attachment.yml'
 concurrency:
   group: browser-attachment-${{ github.ref }}
@@ -44,6 +46,9 @@ jobs:
       - run: node terminal-client.mjs
         working-directory: extras/browser-transport
       - run: npx playwright install --with-deps chromium
+        working-directory: extras/browser-transport
+      - name: A late transcript cannot erase a new chat turn
+        run: node chat-history.mjs
         working-directory: extras/browser-transport
       - run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Actual browser to node adapter, UDP denial, no replay and cleanup
