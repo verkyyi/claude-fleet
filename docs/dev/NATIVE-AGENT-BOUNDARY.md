@@ -469,6 +469,15 @@ remote TUI 一次出现两次本地请求；另一次 PRoot 外层退出码为 0
 不能证明上述异常必定由 PRoot 引起。
 后续仍需实际 PreToolUse 拒绝、配置覆盖/升级及完整面板验证，不能据此去掉现有全局 bypass。
 
+交叉验证使用独立 `native-managed-hooks` CI：GitHub-hosted Ubuntu 24.04 一次性 VM，
+固定官方 npm `@openai/codex@0.162.1-linux-x64` 包及 SHA512，不加载真实账号或模型服务。
+先建立私有 mount namespace，只把 owned `/tmp/fleet-managed-system-*` 目录映射到该 namespace
+的 `/etc/codex`，再降回普通用户且设置 no-new-privs，分别运行 exec 与 remote TUI 探针。
+`--managed-system-dir` 拒绝 root、非 GitHub-hosted 环境、非临时/非 owned/非空目录、
+未实际绑定到 `/etc/codex` 或与外层相同的 mount namespace。写入仍只针对 owned 临时路径。
+外层检查自己的 mount namespace 未变且 `/etc/codex` 空目录未收到 fixture 文件，并移除这个
+CI 专用空目录；不会连接集群或修改在线节点。新 CI 的结果必须单独审阅，不由 PRoot 结果推断。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
