@@ -582,8 +582,12 @@ def native_codex_defaults(client, home, want_top, want_srv, blocked, check_only=
     if edits and not check_only:
         if client.call('thread/loaded/list', {})['data']:
             raise ValueError('native backend became active before configuration publication')
-        client.call('config/batchWrite', {'edits': edits, 'expectedVersion': version,
-                                        'filePath': str(target), 'reloadUserConfig': False})
+        published = client.call('config/batchWrite', {'edits': edits, 'expectedVersion': version,
+                                                    'filePath': str(target), 'reloadUserConfig': False})
+        if (not isinstance(published, dict) or published.get('status') not in ('ok', 'okOverridden')
+                or published.get('filePath') != str(target)
+                or not isinstance(published.get('version'), str) or not published['version']):
+            raise ValueError('native publication result is unverified; inspect before retrying')
     return edits
 
 
@@ -600,7 +604,7 @@ def codex_side(a, rep, home, tag, want_top, want_srv, blocked, check):
             client = client_type(a.codex_native_remote, peer_pid=a.codex_native_peer_pid)
             edits = native_codex_defaults(client, home, want_top, want_srv, blocked, check or a.dry_run)
         except (OSError, ValueError, KeyError, TypeError, EOFError):
-            die('native Codex configuration refused; verify the idle backend, home and configuration version; no legacy fallback')
+            die('native Codex configuration not confirmed; verify the idle backend and home, inspect native config before retrying; no legacy fallback')
         finally:
             if client is not None:
                 client.close()
