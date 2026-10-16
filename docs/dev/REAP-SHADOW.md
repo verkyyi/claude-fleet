@@ -37,21 +37,37 @@ JSON 带原生身份，必须留在私有目录；对外只记录脱敏结论与
 | policy | 原 gate 的 `{value: <policy>, satisfied: true}`，使用唯一 `fleet_reap_policy.parse` 校验；keep 永远保留。 |
 | grace | 原 gate 的 `{deadline: <epoch>}` 已到期，且该观察仍有效。 |
 
-`read` 默认只接现有 runtime、pending-tool、task GET 和 children GET。
-其余维度必须由对应 owner 的 reader 提供，签名为 `reader(frozen_identity) -> envelope`。
-reader 必须自己核验其真实 source 的身份、完备性与时间，不能将传入 identity 直接
-盖到无关证据上；聚合器不认证任意 JSON。缺 adapter 的维度逐项保留，不能声明
-一次默认 `--pane` 已完成全部 gate 实测。`report_reader(database, authority_scope)`
-提供 C6 已有 `operations/action=task_receipt` 的 SQLite `mode=ro` 适配器；scope
-取 C6 已核实的 authority hash。它不调用会建表/expire/ack 的 Journal，也不重放。
-重新读到持久记录的观察时间与其原 `evidence_at` 分列；重复 report/错 hub/未知状态保留。
+`read` 默认组合已有 runtime、pending-tool、task/children GET，以及
+`fleet_reap_shadow_local.LocalSources` 的本地读取：通过现有 repo resolver 取得
+配置，读注册工作树/HEAD/upstream，调用 `fleet-input.snapshot`、loop reader、
+rotate lease reader、sleep phase/inbox、outbox、policy/grace 和 C6 只读回执。
+没有 `@repo` 时不调用会回填 stamp 的兼容 resolver；缺 owner 存储目录时保留，
+不会为观察创建 lifecycle 目录。既有本地 helper 使用 named socket，因此本地
+组合只接受与实际 session 同名的 socket；其它 transport 保持逐维 unknown。
+
+进程树只通过 #4474 的 `Processes.collect/proof/ancestry` 读取；该次表传给
+#4318 原有 `quiet_processes` 分类器的私有模块实例，不复制 helper 分类规则。
+Claude 使用严格模式保留未知子进程；Codex 使用已有精确 helper 配置分类。
+收集结束再通过同一个入口读一次树，任何变化使该维 unknown。
+默认 pending-tool 另做自己的独立观察；因此完整 shadow 不宣称仅一次 ps，
+也不属于 #4444 的整轮预算证明。所有读取仅按显式调用发生。
+
+C6 report 适配器使用已有 `operations/action=task_receipt` 的 SQLite `mode=ro`，
+其 authority hash 从既有 `fleet-task-record.sh authority` 取得。它不调用会
+建表/expire/ack 的 Journal，不重放。新观察时间和原 `evidence_at` 分列；重复
+report、错 hub、未知状态保留。controller 接受/投递回执仍未由 #4431 提供，
+`delivery` 在记录本地 inbox 证据后保持 `controller_acceptance_unavailable`。
+
+测试或外部 owner 可通过 `readers` 替换单维 reader；签名为
+`reader(frozen_identity) -> envelope`。reader 必须核验真实 source 的身份、
+完备性和时间，不能将传入 identity 盖到无关证据上；聚合器不认证任意 JSON。
 
 `legacy_reader` 也必须返回 envelope，value 为 `{eligible: bool, reason: string}`；
 必须是现有完整 gate 的当次结论，不能用某个子 gate 代替。没有它、身份不同或证据
 过期时 `comparison=incomparable`。可比较时输出 `agree`、
 `legacy-clear_candidate-retain` 或 `legacy-retain_candidate-clear`，连同全部 source、
 时间、last_known 和 retained 原因。调用方把输出保存到既有私有证据位置；本模块不
-新增影子 journal。当前没有生产 caller 接线，也不声称生产 gate 差异已采集。
+新增影子 journal。本地默认调用既有 `Cleaner.candidate(dry_run=True)` 的完整对应路径，采用 daemon 的 cwd/环境；显式 `--pr N` 则调用既有 `fleet-cleanup.sh --auto --dry-run`。记录它真实返回的结论和 `pre-action-dry-run` 阶段，不把最后的 history/动作边界说成已经执行。当前没有生产 caller 接线，也不声称生产 gate 差异已采集。
 
 ## 失效与动作边界
 

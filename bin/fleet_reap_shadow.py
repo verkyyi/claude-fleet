@@ -56,6 +56,7 @@ def dimension(evidence, identity, now):
     e = evidence if isinstance(evidence, dict) else {}
     d = dict(source=e.get("source", "none"), observed_at=e.get("observed_at"),
              expires_at=e.get("expires_at"), evidence_at=e.get("evidence_at"),
+             raw_evidence=copy.deepcopy(e.get("raw_evidence")),
              last_known=copy.deepcopy(e.get("value")),
              retained=True, reason="missing_evidence")
     if not e:
@@ -184,6 +185,7 @@ def recheck(previous, fresh, now=None):
     p = project(fresh, now=now)
     previous = previous if isinstance(previous, dict) else {}
     p["previous_valid"] = bool(previous.get("version") == 1 and p["fingerprint"]
+        and p["comparison"] != "incomparable" and previous.get("comparison") != "incomparable"
         and previous.get("fingerprint") == p["fingerprint"] and p["identity"] == previous.get("identity")
         and complete(p["identity"]) and runtime.number(previous.get("observed_at"))
         and runtime.number(previous.get("expires_at"))
@@ -247,7 +249,7 @@ def report_reader(database, authority_scope):
     return reader
 
 
-def read(pane, socket="", readers=None, legacy_reader=None):
+def read(pane, socket="", readers=None, legacy_reader=None, pr=None):
     """One explicit collection; no polling, writes, cached provider or new probe.
 
     Reader callbacks consume a frozen runtime identity and return source-owned
@@ -260,6 +262,14 @@ def read(pane, socket="", readers=None, legacy_reader=None):
     i = r.get("identity", {})
     layers = {}
     sources = dict(task=authority_reader("get"), children=authority_reader("children"))
+    try:
+        from fleet_reap_shadow_local import LocalSources
+        local = LocalSources(pane,socket,pr=pr)
+        sources.update(local.readers())
+        if legacy_reader is None:
+            legacy_reader = local.legacy
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        pass  # remote/unknown socket or binding remains unavailable per dimension
     sources.update(readers or {})
     for name, reader in sources.items():
         if name not in DIMENSIONS or name == "pending_tool":
@@ -298,12 +308,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pane", help="explicit pane; absent reads a private evidence bundle on stdin")
     parser.add_argument("--socket", default="")
+    parser.add_argument("--pr", type=int, help="explicit PR for the existing merged/closed dry-run gate")
     parser.add_argument("--previous", help="private previous proof; recheck only, never execute")
     a = parser.parse_args()
     if a.pane:
         if a.previous:
             parser.error("recheck requires a fresh full evidence bundle on stdin")
-        result = read(a.pane, a.socket)
+        result = read(a.pane, a.socket, pr=a.pr)
     else:
         bundle = json.load(sys.stdin)
         if a.previous:

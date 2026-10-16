@@ -147,6 +147,7 @@ class Shadow(unittest.TestCase):
     def test_read_reuses_oracle_and_retains_missing_adapters(self):
         d=fixture()
         with mock.patch.object(shadow.runtime,"read",return_value=d["runtime"]) as native, \
+             mock.patch("fleet_reap_shadow_local.LocalSources",side_effect=ValueError("unknown local source")), \
              mock.patch.object(shadow.pending,"read_panes",return_value=[]) as panes, \
              mock.patch.object(shadow.pending,"observe",side_effect=lambda reader: reader()) as oracle, \
              mock.patch.object(shadow,"raw_call",return_value={}), \
