@@ -99,6 +99,47 @@ image seed, not the login-owned PVC runtime. The preview is informational and
 must not be copied into system policy as an authorization shortcut. See
 [image upgrade and recovery](MANAGED-LINUX.md#upgrade-and-recovery).
 
+The explicit installer candidate reuses the image stager; stage, seed and boot
+do **not** invoke it. An administrator can inspect a protected, already staged
+release with:
+
+```sh
+/usr/bin/python3 -I /opt/fleet/current/extras/managed-node/image-stage.py \
+  guards-install /opt/fleet/current /etc/codex --check
+```
+
+Omitting `--check` atomically installs the requirements. This is an administrative
+operation, not a launch-time repair. Both directories must already exist. The
+release, symlink and ancestor directories, guard scripts and system interpreters
+must be root-owned and not writable by other users. No test-environment variable
+relaxes these checks. The existing verified release publisher remains the source
+of trust; the installer does not perform a new signature verification.
+
+Use the protected root runtime `current` for node-owned installs, or the protected
+image-seed `current` for image-owned personal PODs, **never their writable PVC**.
+The installed commands follow that stable anchor through an update or rollback;
+publishers must retain compatible guard entrypoints. A changed hook table needs
+administrator reconciliation rather than silent replacement. Live rollout,
+rebuild, root-publisher ownership and old-session compatibility remain acceptance
+gates, not results of a temporary fixture.
+
+Installation regenerates the reviewed policy rather than trusting the staged
+preview. It preserves unrelated parsed requirements, refuses conflicting hook
+policy, malformed TOML or unsupported value types, and does not disable optional
+plugin hooks. The first merge canonicalizes TOML formatting and drops comments;
+an identical policy is kept byte-for-byte. Check-only writes nothing. Publication
+uses a directory lock, rechecks the active release and prior bytes, and replaces
+the file atomically. A post-replacement filesystem-sync error can report failure
+after publication: inspect the file before retrying. This is not protection
+against a malicious root administrator or a general policy rollback service.
+
+`fleet-native-guard-install-selftest.py` is an explicit disposable GitHub-hosted
+Linux CI probe: a private mount namespace holds root-owned fixture files, then
+an unprivileged native backend reads them with user hooks disabled. It uses no
+credentials or inference. Local lifecycle tests mock positive root ownership;
+they do not substitute for this native permission/configuration check. Neither
+test activates live policy or removes the launcher's hook-trust bypass.
+
 ## Native default installation (explicit candidate)
 
 The existing default installer can delegate Codex configuration publication to

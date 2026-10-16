@@ -88,7 +88,7 @@
 |---|---|---|
 | Hub（`tokenledger`） | 核心 | 接入、计量与任务调度。 |
 | Web 接入（web-chat / web-console） | 核心 | 产品近期的网页使用入口。 |
-| 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；托管镜像候选沿用版本暂存、种子复制与回退，在既有 staged 元数据内保存未启用的原生守卫预览，不新增安装器。个人 POD 的预览指向镜像种子，不把可写 PVC 当管理层代码；隔离策略仍需独立验收。 |
+| 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；托管镜像候选沿用版本暂存、种子复制与回退，在既有 staged 元数据内保存未启用的原生守卫预览。既有 image stager 增加显式 root-only 守卫安装入口，保留现存策略、冲突拒绝，不自动激活。个人 POD 使用镜像种子，不把可写 PVC 当管理层代码；原生权限 CI 和线上生命周期独立验收。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
 | 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
 | 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连，不替代业务授权验收。不安装 daemon、不改变生产运行时选择。显式原生用量订阅探针仅在隔离夹具和固定版本 CI 验证事件边界，不引入生产订阅服务。原生 Claude Worktree/SessionStart 探针使用固定版本与临时离线夹具，不接管会话生命周期。 |

@@ -966,6 +966,20 @@ Codex 本身提供自动压缩阈值，未设置使用模型默认值，见
 
 任何一行尚缺证据，均不标记总体目标完成。现有无关回归失败独立记录，不通过降低验收范围消除。
 
+### 管理层守卫安装候选：显式操作，不进入启动热路径
+
+复用 `image-stage.py guards-install`，从既有守卫表重新生成配置，仅管理员显式调用；
+暂存预览不是授权材料，stage/seed/boot 均不自动安装。检查 root 所有权、不可由其他用户
+写入的目录/脚本/解释器，保留无关 requirements，遇到现存 hook 策略冲突拒绝覆盖。
+固定到受保护的 `current/hooks`，个人 POD 使用镜像种子，不使用用户可写 PVC。
+不添加新策略引擎、常驻服务或会话启动时扫描；不移除全局 bypass，不部署用户节点。
+
+本批本机生命周期单测为 69 项通过，正向安装的 root 身份采用 mock；新增独立 CI
+探针在一次性 Linux VM 的私有 mount namespace 内验证真实 root 文件和非 root 原生
+读取。后者是否通过以对应 CI 结果为准，不能把单测替代原生验收。更新/回退路径单测
+不等于线上发布、重建、旧会话兼容已经验收。具体命令和限制见
+[原生守卫配置](CODEX-RUNTIME.md#managed-guard-configuration-candidate)。
+
 ## 默认读屏推理退出
 
 `CLASSIFY_BACKEND` 未设置时改为 `off`。默认不再为 Claude 或 Codex 的安静窗口
