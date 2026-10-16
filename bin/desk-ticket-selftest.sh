@@ -43,7 +43,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/testsess/repos" "$WORK/tmp" "$WORK/home"
-for f in dash-raw-session.sh fleet-ticket.sh fleet-lib.sh fleet-gh-lib.sh fleet-ui-lang.sh fleet_reap_policy.py fleet_dispatch.py; do
+for f in dash-raw-session.sh fleet-ticket.sh fleet-lib.sh fleet-gh-lib.sh fleet-ui-lang.sh fleet_reap_policy.py fleet_dispatch.py fleet_launch.py; do
   ln -s "$BIN/$f" "$WORK/bin/$f"
 done
 LOG="$WORK/calls"   # every stand-in appends `<name> <args…>` here

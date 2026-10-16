@@ -405,7 +405,7 @@ def supervise(argv):
             # Only descendants of this Popen are ours. Never close a window
             # found by label/issue or signal a surviving unrelated session.
             stop_created(child, root)
-            if old:
+            if old and not verified:
                 stamp(pane, "@launch_receipt", old)
 
 

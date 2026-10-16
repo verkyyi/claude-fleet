@@ -331,8 +331,12 @@ def send(args):
         # a pane label or a later @codex_identity cannot redirect first input.
         data = dict(session_id=current["native_session"], remote=current.get("native_remote", ""),
                     home=current.get("native_home", ""))
+        cli = current["executable"]
+        if not os.path.isabs(data["home"]):
+            raise ValueError("Codex launch has no verified native home")
     else:
         data = identity(args.pane, args.socket)
+        cli = "codex"
     if not data:
         raise ValueError("no current Codex session identity")
     # --remote is mandatory: an embedded `codex queue` process is not the TUI's
@@ -344,7 +348,7 @@ def send(args):
     if not text.strip():
         raise ValueError("empty message")
     env = dict(os.environ, CODEX_HOME=data["home"])
-    p = subprocess.run(["codex", "queue", "--remote", remote, "--thread", data["session_id"], "--message", text],
+    p = subprocess.run([cli, "queue", "--remote", remote, "--thread", data["session_id"], "--message", text],
                        env=env, text=True, capture_output=True, timeout=15)
     if p.returncode:
         raise ValueError(p.stderr.strip() or "Codex queue failed")

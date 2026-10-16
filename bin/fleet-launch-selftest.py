@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Isolated launch receipts: no live fleet or provider credentials."""
 import copy
+import contextlib
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -251,6 +254,30 @@ class Transfer(Receipts):
     def test_lost_transfer_response_never_retries_or_replaces(self):
         with tempfile.TemporaryDirectory() as directory:
             self.attempt(directory, lost_response=True)
+
+
+class NativeInbox(Receipts):
+    def test_input_uses_verified_executable_endpoint_and_thread(self):
+        spec = importlib.util.spec_from_file_location("codex_session_fixture", Path(__file__).with_name("fleet-codex-session.py"))
+        codex = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(codex)
+        receipt = dict(self.receipt, native_remote="unix:///fixture/native.sock", native_home="/fixture/home")
+        env = dict(FLEET_LAUNCH_DELIVERY=json.dumps(receipt), FLEET_LAUNCH_CONTEXT=json.dumps(self.context))
+        with mock.patch.dict(os.environ, env), mock.patch.object(launch, "inspect", return_value=receipt), \
+             mock.patch.object(codex, "identity", side_effect=AssertionError("pane label must not route first input")), \
+             mock.patch.object(sys, "stdin", io.StringIO("held input")), \
+             mock.patch.object(codex.subprocess, "run", return_value=mock.Mock(returncode=0)) as queue, \
+             contextlib.redirect_stdout(io.StringIO()):
+            codex.send(mock.Mock(pane="%1", socket="isolated"))
+            self.assertEqual(queue.call_args.args[0], ["/fixture/codex", "queue", "--remote", "unix:///fixture/native.sock",
+                             "--thread", self.receipt["native_session"], "--message", "held input"])
+            self.assertEqual(queue.call_args.kwargs["env"]["CODEX_HOME"], "/fixture/home")
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(launch, "inspect", return_value=dict(receipt, native_session="changed")), \
+             mock.patch.object(codex.subprocess, "run") as queue:
+            with self.assertRaisesRegex(ValueError, "changed before delivery"):
+                codex.send(mock.Mock(pane="%1", socket="isolated"))
+            queue.assert_not_called()
 
 
 class Journal(Receipts):
