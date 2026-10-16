@@ -154,7 +154,7 @@ window, launcher and root UUID, so a new session never displays Claude's cwd
 cache or a predecessor's context. The rollout format is an upstream internal
 interface; fixture tests pin the supported 0.154 and 0.162 shapes.
 
-The native usage-event migration is not enabled. A passive status-observer
+The native usage-event migration is not enabled by default. A passive status-observer
 connection does not automatically receive token usage: the offline native
 probe distinguishes initialize/read-only, resume and unsubscribe, and keeps
 last-response usage separate from cumulative totals. It also exercises observer
@@ -163,6 +163,36 @@ the original controller declines the command, and the canary must remain absent.
 `python3 bin/fleet-native-usage-cli-selftest.py --codex /path/to/codex` explicitly;
 it uses an empty HOME and a loopback synthetic endpoint, not real credentials
 or inference. See [subscription evidence and remaining gates](NATIVE-AGENT-BOUNDARY.md#上下文用量不是同一条广播).
+
+**Native usage pilot.** `FLEET_CODEX_NATIVE_USAGE=1` on a candidate private-runtime
+launch lets the existing attention connection subscribe to its exact, already
+loaded root thread using metadata-only `thread/resume`. This is not a second
+server or inference request. The observer never answers approvals or starts a
+turn. It asks the native server to suppress irrelevant item/text deltas on this
+connection only; the original controller and approval clients retain theirs.
+Helpers, title threads, unloaded threads and unknown sources are not subscribed.
+
+The existing Meter projects native last-response usage, context limit, model
+and effort onto the same measurement bus. Cumulative usage and cached input
+are not added to live context. Once valid native usage is available, the
+monitor renews a five-second lease and Meter skips its rollout polling. A fresh
+thread may not yet have a persisted rollout: a rejected resume retains the
+fallback, and a successful subscription does not invent missed usage. Until the
+next usable native event, the old reader remains authoritative. Disconnect,
+malformed events, changed launcher/root/account/endpoint, or a stalled monitor
+restore fallback. This lease measures monitor progress, not upstream model
+health. Missing counts or denominator remain unknown, never fabricated zero.
+Native writes recheck identity and use an owner/root guard in the tmux command
+queue. After fallback, equal native readings are published again rather than
+being suppressed by an obsolete deduplication cache.
+
+Unset the pilot variable for future launches to retain the original behavior.
+This candidate does not change installed environments, hooks, authentication,
+MCP, resource limits or the separate collector/context-command readers.
+Validate with `python3 bin/fleet-native-usage-cli-selftest.py --meter-candidate`:
+it runs the actual Monitor/Meter against a native server, but replaces the tmux
+identity and measurement sink with fixtures. A separate isolated tmux test
+checks write guards. Neither proves real-panel latency or production savings.
 
 **Version pin.** The verified versions live in one constant,
 `SUPPORTED_ROLLOUT_VERSIONS` in `fleet-codex-runtime.py` (prefix match on whole

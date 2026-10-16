@@ -74,14 +74,21 @@ class RuntimeTests(unittest.TestCase):
             'class Monitor:\n'
             ' def __init__(self,remote,env): pass\n'
             ' def tick(self): pass\n'
-            ' def close(self): pathlib.Path(os.environ["RUNTIME_TEST"],"monitor-closed").write_text("closed")\n')
-        for code in ('0','42'):
+            ' def close(self):\n'
+            '  pathlib.Path(os.environ["RUNTIME_TEST"],"monitor-closed").write_text("closed")\n'
+            '  pathlib.Path(os.environ["RUNTIME_TEST"],"meter-linked").write_text(str(hasattr(self,"meter")))\n')
+        (self.root/'fleet-codex-session.py').write_text(
+            'class Meter:\n'
+            ' def __init__(self,env): pass\n'
+            ' def tick(self): pass\n')
+        for code,pilot in (('0',''),('42','0'),('0','1'),('42','1')):
             marker=self.root/'monitor-closed'
             if marker.exists(): marker.unlink()
             result=subprocess.run([sys.executable,str(copied),'--','hello'],
-                                  env=dict(self.env,CLIENT_RC=code),capture_output=True,text=True,timeout=20)
+                                  env=dict(self.env,CLIENT_RC=code,FLEET_CODEX_NATIVE_USAGE=pilot),capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,int(code),result.stderr)
             self.assertEqual(marker.read_text(),'closed')
+            self.assertEqual((self.root/'meter-linked').read_text(),str(pilot=='1'))
             self.assertFalse(pathlib.Path(self.metadata('server')['path']).parent.exists())
 
     def test_native_worktree_refused_before_runtime_setup(self):

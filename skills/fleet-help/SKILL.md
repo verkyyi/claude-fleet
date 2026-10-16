@@ -52,6 +52,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | the list stopped updating, a row cannot be opened | `docs/dev/CLIENT.md` § 「列表停住」 |
 | operator preview of candidate native Codex guard configuration (not installation) | `docs/dev/CODEX-RUNTIME.md` § 「Managed guard configuration (candidate)」 |
 | native Worktree and local runtime ownership migration evidence (not an enablement switch) | `docs/dev/NATIVE-AGENT-BOUNDARY.md` § 「本地 Worktree 与原生后台可以共存，但启动参数决定实际归属」 |
+| Codex native usage pilot, fallback and context readings (not enabled by default) | `docs/dev/CODEX-RUNTIME.md` § 「Context」 |
 
 Read with a targeted range (`grep -n` the heading, then `sed -n` to the next one),
 not the whole file. Nothing in the table fits? `rg -n` across `docs/public/` and `docs/dev/`, including

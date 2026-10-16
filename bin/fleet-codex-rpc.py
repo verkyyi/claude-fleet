@@ -13,7 +13,7 @@ import time
 
 
 class Client:
-    def __init__(self, remote, timeout=10, peer_pid=None):
+    def __init__(self, remote, timeout=10, peer_pid=None, opt_out_notifications=()):
         if not remote.startswith('unix:///'):
             raise ValueError('an explicit local unix:///path endpoint is required')
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -49,8 +49,14 @@ class Client:
             if b' 101 ' not in headers.split(b'\r\n')[0] or fields.get('sec-websocket-accept') != expected:
                 raise ValueError('invalid Codex WebSocket handshake')
             # The live peer's own answer (its userAgent names its version).
+            capabilities = {'experimentalApi': True}
+            if opt_out_notifications:
+                if (not isinstance(opt_out_notifications, (list, tuple))
+                        or not all(isinstance(method, str) and method for method in opt_out_notifications)):
+                    raise ValueError('notification opt-outs must be exact method names')
+                capabilities['optOutNotificationMethods'] = list(opt_out_notifications)
             self.initialized = self.call('initialize', {'clientInfo': {'name': 'claude_fleet', 'version': '1'},
-                                                        'capabilities': {'experimentalApi': True}})
+                                                        'capabilities': capabilities})
             self.send({'method': 'initialized'})
         except Exception:
             self.close()
