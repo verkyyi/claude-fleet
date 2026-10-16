@@ -6823,6 +6823,17 @@ drill_land_race() {
   WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
 }
 
+# worker-inventory-rs (#4508): real adapter with synthetic orphan reports;
+# bin/fleet_control.py must preserve the nested RS/US framing through fleet_status.
+drill_worker_inventory_rs() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_inventory_orphan_report_framing 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='含历史报告 RS/US 的十条 inventory 原样到达 fleet_status，身份、中文、REAPED 报告与观察时间均保留'
+}
+
 # ticket-credential-pair (#4490): no production credentials or network.
 drill_ticket_credential_pair() {
   CAP=15; local t0 out
