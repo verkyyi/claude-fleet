@@ -61,6 +61,8 @@ export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL" "$WORK/bin" "$WORK/logs" "$WORK/shim" "$WORK/tmp"
 : > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 cp "$SPIN_SRC" "$WORK/bin/tmux-spinner.sh"
+cp "$BIN/fleet-render-watch.py" "$WORK/bin/"
+printf '#!/bin/sh\nprintf '\''{"state":"none"}\\n'\''\n' > "$WORK/bin/fleet-client-where.sh"
 CALLS="$WORK/calls"; : > "$CALLS"
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
@@ -201,6 +203,7 @@ r=$(rate 5)
 if le "$r" 1.3; then ok "UNWATCHED: no client, nothing animating → $r tmux calls/s"
 else fail "UNWATCHED: no client, nothing animating → $r tmux calls/s, want ≤ ~1" "$(tail -8 "$CALLS")"; fi
 tl set-window-option -t "$LBL:w1" @claude_state working
+tl wait-for -S fleet-state-changed
 w=$(wait_spin w1 spin 3000)
 if [ "$w" != timeout ]; then ok "UNWATCHED: working → its glyph is written (${w}ms)"
 else fail "UNWATCHED: working → no spinner glyph within 3s"; fi
@@ -211,6 +214,7 @@ r=$(rate 4)
 if le "$r" 1.5; then ok "UNWATCHED: one working window, no client → $r tmux calls/s (no frames)"
 else fail "UNWATCHED: one working window, no client → $r tmux calls/s, want the idle rate" "$(sort "$CALLS" | uniq -c | sort -rn | head -5)"; fi
 tl set-window-option -t "$LBL:w1" @claude_state 'done'
+tl wait-for -S fleet-state-changed
 w=$(wait_spin w1 'done' 3000)
 if [ "$w" != timeout ] && [ "$w" -le 1600 ]; then ok "UNWATCHED: done → ✓ after ${w}ms"
 else fail "UNWATCHED: done → ✓ after ${w}ms, want ≤ ~1 re-read"; fi
