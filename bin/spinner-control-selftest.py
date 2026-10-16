@@ -32,7 +32,7 @@ def until(fn, seconds=4):
 def main():
     with tempfile.TemporaryDirectory(prefix='spincontrol.', dir='/tmp') as tmp:
         root = Path(tmp)
-        for name in ('bin', 'home', 'logs', 'conf/fleets/one', 'conf/fleets/two'):
+        for name in ('bin', 'shim', 'home', 'logs', 'conf/fleets/one', 'conf/fleets/two'):
             (root / name).mkdir(parents=True)
         for source in BIN.iterdir():
             if source.is_file():
@@ -40,9 +40,19 @@ def main():
         for label in ('one', 'two'):
             (root / 'conf/fleets' / label / 'conf').touch()
         (root / 'bin/fleet-client-where.sh').write_text('#!/bin/sh\nprintf \'{"state":"none"}\\n\'\n')
+        # Mark each CLI wait in its server command queue, immediately before
+        # wait-for. Reading the marks back synchronizes the test's ONE broadcast
+        # with both registered consumers instead of guessing startup time.
+        real_tmux = shlex.quote(shutil.which('tmux'))
+        shim = root / 'shim/tmux'
+        shim.write_text('#!/bin/sh\n'
+            'if [ "${1:-}" = -S ] && [ "${3:-}" = wait-for ] && [ "${4:-}" = fleet-state-changed ]; then\n'
+            ' exec ' + real_tmux + ' "$1" "$2" set-option -g "@test_wait_$$" 1 \\; "$3" "$4"\n'
+            'fi\nexec ' + real_tmux + ' "$@"\n')
+        shim.chmod(0o755)
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FLEET_', 'SPIN_', 'CCQUOTA_')) and k not in ('TMUX', 'TMUX_PANE')}
         env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'), TMUX_TMPDIR=tmp,
-                   TMPDIR=tmp, PYTHONDONTWRITEBYTECODE='1')
+                   TMPDIR=tmp, PYTHONDONTWRITEBYTECODE='1', PATH=str(root/'shim') + ':' + env['PATH'])
         os.environ.clear()
         os.environ.update(env)
         # The real navigation condition, with only the outward wake replaced.
@@ -104,7 +114,9 @@ def main():
             for _ in range(2):
                 waiters.append(subprocess.Popen([sys.executable, str(root/'bin/fleet-render-watch.py'),
                     '--max-frames', '200', '.05', *by_path], env=env, stdout=subprocess.PIPE, text=True))
-            time.sleep(.5)
+            until(lambda: all(sum(line.startswith('@test_wait_') for line in
+                                 tm(label, 'show-options', '-g').splitlines()) == 2
+                              for label in ('one', 'two')))
             assert all(p.poll() is None for p in waiters)
             tm('one', 'wait-for', '-S', 'fleet-state-changed')
             for p in waiters:
@@ -127,8 +139,20 @@ def main():
             until(lambda: tm('one', 'list-clients', '-F', '#{client_pid}') not in ('', rows[0]))
             tm('one', 'set-window-option', '-t', '@0', '@claude_state', 'done')
             until(lambda: glyph('one') == '✓')
+            old_server = int(tm('two', 'display-message', '-p', '#{pid}'))
             tm('two', 'kill-server')  # this test's private server
+            # The command can return before Linux finishes detaching the old
+            # control client and closing the listening socket. Starting at that
+            # point connects to the dying server instead of creating its replacement.
+            def server_exited():
+                try:
+                    os.kill(old_server, 0)
+                except ProcessLookupError:
+                    return True
+                return False
+            until(server_exited)
             start('two')
+            assert int(tm('two', 'display-message', '-p', '#{pid}')) != old_server
             until(lambda: bool(glyph('two')), 8)
             assert daemon.poll() is None, (root/'daemon.log').read_text()
             print('PASS killed control client and replaced server reconnect; state recovers', flush=True)
