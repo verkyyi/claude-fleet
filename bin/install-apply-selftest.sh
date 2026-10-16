@@ -157,6 +157,7 @@ echo '{"reparked":"/x"}'
 EOF
 echo 'echo collect' > "$R/bin/tmux-dash-collect.sh"
 echo 'echo spin' > "$R/bin/tmux-spinner.sh"
+echo 'print(1)' > "$R/bin/tmux-spinner.py"
 tmpl() { # $1 unit $2 interval
   cat > "$R/launchd/com.claude-fleet.$1.plist.tmpl" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -272,6 +273,13 @@ C4=$(commit 'spinner script')
 run_ap --from "$C3" --to "$C4"
 contains 'D kicked' "$OUT" 'daemons: kicked spinner'
 ok 'D kickstart -k' "grep -qx 'launchctl kickstart -k gui/$(id -u)/com.claude-fleet.spinner' '$LOG'"
+
+# The entry shell need not change when its resident implementation changes.
+echo 'print(2)' > "$R/bin/tmux-spinner.py"
+C4PY=$(commit 'resident spinner only')
+run_ap --from "$C4" --to "$C4PY"
+contains 'D Python-only change kicked' "$OUT" 'daemons: kicked spinner'
+C4=$C4PY
 
 # --- E. commands (#858) -----------------------------------------------------------
 sed -i.bak 's/^v1$/v2/' "$R/commands/fleet-claim.md"; rm -f "$R/commands/"*.bak

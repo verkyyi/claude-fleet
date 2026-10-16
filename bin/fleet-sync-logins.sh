@@ -36,7 +36,7 @@
 #               system-domain `com.claude-fleet.<login>.*` LaunchDaemons, and any
 #               gui-domain LaunchAgents under ~u/Library/LaunchAgents.
 #            5. verify: zero differing entries, a clean git status at the source
-#               commit, and one tmux-spinner.sh alive (a warning, not a failure —
+#               commit, and one tmux-spinner (sh/py) alive (a warning, not a failure —
 #               a login may simply not run one).
 #
 # Rails:
@@ -689,17 +689,17 @@ kick_daemons() {
 $agents
 EOF
 }
-# spinner_msg <owner> → " · WARN …" unless exactly one tmux-spinner.sh is alive
+# spinner_msg <owner> → " · WARN …" unless exactly one tmux-spinner (sh/py) is alive
 spinner_msg() {
   spinmsg=''
   [ "$spin" -eq 1 ] && command -v "$PGREP" >/dev/null 2>&1 || return 0
   tries=0 alive=0
   while [ "$tries" -lt 5 ]; do
-    alive=$($PGREP -u "$1" -f 'tmux-spinner\.sh' 2>/dev/null | wc -l | tr -d ' ')
+    alive=$($PGREP -u "$1" -f 'tmux-spinner\.(sh|py)' 2>/dev/null | wc -l | tr -d ' ')
     [ "$alive" -eq 1 ] && break
     tries=$((tries + 1)); sleep 1
   done
-  [ "$alive" -eq 1 ] || spinmsg=" · WARN $alive tmux-spinner.sh alive (want 1)"
+  [ "$alive" -eq 1 ] || spinmsg=" · WARN $alive tmux-spinner alive (want 1)"
 }
 
 # The owner-side half of --to-git: one shell, run AS THE LOGIN, so the clone is

@@ -21,7 +21,7 @@ CHECKS=0
 same() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 
 mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/inst/logs" "$WORK/conf"
-for f in set-claude-state.sh classify-sessions.sh tmux-spinner.sh; do
+for f in set-claude-state.sh classify-sessions.sh tmux-spinner.sh tmux-spinner.py fleet-render-watch.py; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 TEST_HOOK="$WORK/inst/bin/set-claude-state.sh"
@@ -47,13 +47,19 @@ if [ "${BLOCK_DURING_CLASSIFY:-0}" = 1 ]; then
 fi
 printf '%s\n' "${CLASSIFY_VERDICT:-STOPPED}"
 SH
-cat > "$WORK/inst/bin/fleet-pending-tool.sh" <<'SH'
-#!/bin/sh
-# Called after the spinner's candidate scan; stamp a new blocker mid-probe.
-env TMUX="$TEST_TMUX" TMUX_PANE="$TEST_PANE" sh "$TEST_HOOK" blocked >/dev/null
-exit 1
-SH
-chmod +x "$WORK/path/tmux" "$WORK/path/claude" "$WORK/inst/bin/fleet-pending-tool.sh"
+cat > "$WORK/inst/bin/fleet_pending_tool.py" <<'PYORACLE'
+import os, subprocess, time
+PANE_FORMAT = '#{pane_id}'
+def parse_panes(text): return [dict(pane=p) for p in text.splitlines()]
+def observe(reader, expected=None):
+    rows = reader()
+    if os.environ.get('BLOCK_DURING_RECONCILE') == '1':
+        subprocess.run(['sh', os.environ['TEST_HOOK'], 'blocked'], check=True,
+                       env=dict(os.environ, TMUX=os.environ['TEST_TMUX'], TMUX_PANE=os.environ['TEST_PANE']))
+    reader()
+    return [dict(pane=r['pane'], code=1, tool='', identity={'pane':r['pane']}, expires_at=time.time()+10) for r in rows]
+PYORACLE
+chmod +x "$WORK/path/tmux" "$WORK/path/claude"
 export TEST_REAL_TMUX TEST_SOCK TEST_HOOK
 PATH="$WORK/path:$PATH"; export PATH
 tf -f /dev/null new-session -d -s fleet704 -n worker 'printf "Blocked fixture screen\n"; exec sleep 300' \
@@ -156,8 +162,10 @@ OLD=$(( $(date +%s) - 600 ))
 tf set-window-option -t "$TEST_PANE" @claude_state_ts "$OLD"
 printf '%s |fleet704:%s:idle|\n' "$(date +%s)" "$WID" > "$WORK/inst/logs/.needs-strikes"
 printf 'FLEET_REPO="test/blocked"\n' > "$WORK/conf/fleet704.conf"
-FLEET_CONF_DIR="$WORK/conf" FLEET_NEEDS_PLAIN_SECS=1 FLEET_NEEDS_RECONCILE_SECS=1 \
-  FLEET_NEEDS_STRIKE_TTL=120 sh "$WORK/inst/bin/tmux-spinner.sh" --needs-check
+for race in 0 1; do
+  BLOCK_DURING_RECONCILE="$race" FLEET_CONF_DIR="$WORK/conf" FLEET_NEEDS_PLAIN_SECS=1 FLEET_NEEDS_RECONCILE_SECS=1 \
+    FLEET_NEEDS_STRIKE_TTL=120 sh "$WORK/inst/bin/tmux-spinner.sh" --needs-check
+done
 same 'in-flight reconcile cannot overwrite a new blocker' "$(state)" needs/blocked
 
 # A4 (#846): a screen read never PROMOTES a quiet window to working. A WORKING

@@ -137,9 +137,9 @@ check '[ -z "$(dts w-table)" ]' 'D: the table window carries no @degenerate_ts'
 check '[ "$(escs "$WORK/keys-idle")" = 0 ]' 'D: a `done` window is never interrupted, whatever its screen'
 
 # --- E: the cadence -------------------------------------------------------------
-dflt=$(sed -n 's/^DEGEN_SECS="\${FLEET_DEGENERATE_SECS:-\([0-9]*\)}"$/\1/p' "$SPINNER")
+dflt=$(sed -n "s/.*self.degen_secs = setting('FLEET_DEGENERATE_SECS', \([0-9]*\)).*/\1/p" "$BIN/tmux-spinner.py")
 check '[ -n "$dflt" ] && [ $(( dflt * 2 )) -le 60 ]' 'E: two default sweeps must fit in 60 s' "default=$dflt"
-grep -q 'degen_check; }' "$SPINNER"; check '[ $? = 0 ]' 'E: the frame loop calls degen_check'
+grep -q 'degen_check=self.degen_secs' "$BIN/tmux-spinner.py"; check '[ $? = 0 ]' 'E: the loop schedules degen_check'
 
 rm -f "$STRIKE_F"
 if [ "$FAIL" -gt 0 ]; then printf 'fleet-degenerate-selftest: %d/%d FAILED\n' "$FAIL" "$CHECKS"; exit 1; fi

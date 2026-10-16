@@ -71,7 +71,7 @@ def audit(fixture, output):
         env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'),
                    TMUX_TMPDIR=tmp, TMPDIR=str(root / 'tmp'),
                    PATH=str(root / 'shim') + ':' + os.environ['PATH'],
-                   PS4='+${SECONDS} ${BASH_SUBSHELL} ')
+                   PS4='+${SECONDS} ${BASH_SUBSHELL} ', SPIN_TRACE='1')
         tmux = shutil.which('tmux')
 
         def tm(*args):
@@ -130,7 +130,7 @@ def audit(fixture, output):
                                 pid, ppid, name = line.split(' ', 2)
                                 commands.append((elapsed, int(pid), int(ppid), name))
                             else:
-                                match = re.match(r'^\+\d* 0? (stuck_check|degen_check|needs_check|hb_stamp)(?: |$)', line)
+                                match = re.match(r'^(?:\+\d* 0? |spinner-check [0-9.]+ )(stuck_check|degen_check|needs_check|hb_stamp|daemon_watch)(?: |$)', line)
                                 if match:
                                     checks[match[1]].append(elapsed)
                                 if re.match(r'^\+\d* 0? bash .*fleet-daemon-watch.sh$', line):
@@ -149,6 +149,18 @@ def audit(fixture, output):
                           count_scope=__doc__)
             (output / (fixture + '.json')).write_text(json.dumps(report, indent=2))
             print(json.dumps({k: v for k, v in report.items() if k not in ('commands', 'count_scope')}, indent=2), flush=True)
+            # A cheap spinner which stopped maintaining the fleet must red too.
+            origin = checks['hb_stamp'][0]
+            for name, expected in dict(stuck_check=[10, 20, 30, 40, 50],
+                                       degen_check=[15, 30, 45], needs_check=[20, 40],
+                                       hb_stamp=[0, 20, 40], daemon_watch=[30]).items():
+                actual = checks[name]
+                assert len(actual) >= len(expected), (name, actual)
+                for at, due in zip(actual, expected):
+                    assert due - .1 <= at-origin <= due+2, (name, due, at-origin)
+            if fixture == 'maintenance':
+                assert report['by_command'].get('ps') == 2, 'both safety observations must be fresh'
+                assert 'needs=needs' in final, 'missing native identity is unknown, never permission to clear'
             return len(unique)
         finally:
             if proc:
