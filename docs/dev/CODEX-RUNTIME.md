@@ -142,6 +142,21 @@ before starting its server or invoking launch preparation; it does not silently
 fall back to an unverified local runtime. Existing Fleet-created worktrees remain
 the supported path pending the [native boundary migration](NATIVE-AGENT-BOUNDARY.md).
 
+An offline native TUI probe now distinguishes local runtime ownership from
+remote-mode restrictions. With an already-running, kernel-verified default
+socket and daemon auto-start enabled in an empty test home, local `--worktree`
+can belong to that server. Adding `--dangerously-bypass-hook-trust` instead
+leaves it outside that server's loaded-thread inventory, despite readable
+history and a running daemon. Run
+`python3 bin/fleet-native-local-runtime-selftest.py --codex /path/to/codex`
+explicitly to reproduce the three-way control. It installs no daemon package
+or service, sends only synthetic loopback requests and cleans up its own
+processes. Test hooks and plugins are disabled to isolate the argument effect;
+this is not permission to disable production safeguards or remove the bypass
+before managed guards and optional native hook trust are verified. Full launch
+arguments, credentials, MCP, session registration and panel delivery remain
+migration gates, not proven by the fixture.
+
 `FLEET_CODEX_SERVER=0` preserves the embedded launch for troubleshooting; live
 queue delivery then reports that no endpoint is available. An explicitly supplied
 `--remote` endpoint retains its existing lifecycle. Profiles require Python 3.11+
