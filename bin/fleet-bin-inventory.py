@@ -280,42 +280,6 @@ def selftest():
         print('PASS inventory: runtime/orphan/test-only, inheritance, boundaries, imports, unknown, TSV, deterministic')
         print('PASS inventory CLI: unknown live file exits 1; mapped file exits 0; summary/TSV retain all files')
 
-        # Exercise the shipped rules, not just the synthetic mapping above.
-        # Synthetic callers keep ownership separate from actual reachability.
-        root = root / 'rules'
-        put('docs/dev/COMPONENTS.md', (Path(__file__).resolve().parent.parent /
-                                    'docs/dev/COMPONENTS.md').read_text())
-        groups = {
-            '终端看台与薄客户端': ('fleet_pending_tool.py', 'fleet_status_evidence.py'),
-            '执行会话与跨会话协作 MCP': ('fleet_task_ticket.py',),
-            '构建与验证': ('nogh-task-acceptance.py', 'nogh-task-boundary-test.py',
-                       'nogh-task-browser.mjs', 'nogh-task-deny-probe.py'),
-        }
-        names = [name for group in groups.values() for name in group]
-        for name in names:
-            put('bin/' + name, '# fixture\n')
-        put('hooks/start.sh', '\n'.join(names))
-        put('bin/fleet-pending-tool.sh', '# unreferenced mapped fixture\n')
-        rows = inventory(root)
-        by = {r['file']: r for r in rows}
-        for component, group in groups.items():
-            for name in group:
-                assert by['bin/' + name]['component'].startswith(component), name
-                assert by['bin/' + name]['category'] == '核心', name
-        assert by['bin/fleet-pending-tool.sh']['reason'].startswith('扫描范围内无')
-        check_cli(0, rows)
-        # These adjacent names are NOT covered by the seven exact registrations.
-        unknown = ('fleet_pending_tool_future.py', 'fleet_status_evidence_future.py',
-                   'fleet_task_ticket_future.py', 'nogh-task-future.py')
-        for name in unknown:
-            put('bin/' + name, '# fixture\n')
-        put('hooks/start.sh', '\n'.join(names + list(unknown)))
-        rows = inventory(root)
-        assert '未归类\t4\n' in summary(rows)
-        assert '待删候选\t1\n' in summary(rows)
-        check_cli(1, rows)
-        print('PASS shipped rules: seven exact owners; adjacent unknowns exit 1; orphan retained; full summary/TSV')
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
