@@ -43,7 +43,8 @@ Pod spec 更新；只有本次 controller 可以 attach 两个固定控制入口
 overlay 固定可信入口、strace 二进制摘要和源码版本。`build_digest()` 的规范化文件
 摘要集合给出 `observer_digest`；同时 pin 每个 workload 文件的 SHA256。
 
-在新的 `c9-<run UUID>` namespace 中，准备以下不可变对象。不要将真实凭据放入
+在新的 `c9-<run UUID>` namespace 中设置 `fleet/c9-purpose: disposable-test` 标签，
+准备以下不可变对象。不要将真实凭据放入
 recipe、Git、命令参数或公开记录。
 
 | 对象名（每个 Pod 名为 `<name>`） | 内容与权限 |
