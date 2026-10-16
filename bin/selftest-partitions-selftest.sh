@@ -37,7 +37,7 @@ families = {
     'fleet-quotawatch': ('SELFTEST_PART', 3),
     'fleet-await-stall': ('SELFTEST_PART', 2),
     'fleet-break-it-cred-sep': ('BREAK_PART', 2),
-    'fleet-break-it-hub': ('BREAK_PART', 2),
+    'fleet-break-it-hub': ('BREAK_PART', 3),
     'fleet-sleep': ('SELFTEST_PART', 3),
 }
 for base, (var, n) in families.items():
