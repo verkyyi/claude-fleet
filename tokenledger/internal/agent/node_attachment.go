@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,7 +90,7 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 		return
 	}
 	// One reader owns the socket in every phase; even a lease message can
-	// never leak into a PTY. Its bounded inbox closes an overproducing peer.
+	// never leak into a PTY. Its bounded inbox applies backpressure to the peer.
 	s := newAuthorizedStream(ctx, cancel, ws, g, key)
 	defer s.Close()
 	go s.read()
@@ -131,8 +132,22 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 	}
 	var h termHelper
 	if service == "term" {
-		h, err = startTermHelper(ctx, "web-"+g.Conn, g.Target, 0, 0)
+		hctx := context.WithValue(ctx, termRequestKey{}, termRequest{Resume: g.TermResume, Take: g.TermTake, Renew: g.TermRenew})
+		h, err = startTermHelper(hctx, "web-"+g.Conn, g.Target, 0, 0)
 		if err != nil {
+			code := "ended"
+			for _, known := range []string{"open_elsewhere", "interrupted", "ended"} {
+				if strings.Contains(err.Error(), known) {
+					code = known
+					break
+				}
+			}
+			failure := control.AttachmentSignal{T: "error", Error: code}
+			var admission *termAdmissionFailure
+			if errors.As(err, &admission) && code == "ended" {
+				failure.Term, failure.TermGen = admission.Term, admission.Gen
+			}
+			_ = writeAttachmentSignal(ctx, ws, failure)
 			return
 		}
 		defer h.Close()
@@ -234,8 +249,6 @@ func (s *authorizedStream) read() {
 		select {
 		case s.in <- attachmentFrame{t, b}:
 		case <-s.ctx.Done():
-			return
-		default:
 			return
 		}
 	}

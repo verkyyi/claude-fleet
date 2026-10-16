@@ -85,21 +85,24 @@ type FleetTask struct {
 	Rule string `json:"rule,omitempty"`
 	// AuthorityVersion 0 keeps the legacy placement record. Version 1 owns
 	// its lifecycle; inventory is only an observation, never an outcome.
-	AuthorityVersion  int    `json:"authority_version,omitempty"`
-	AttemptID         string `json:"attempt_id,omitempty"`
-	Generation        int64  `json:"generation,omitempty"`
-	ExecutionOwner    string `json:"execution_owner,omitempty"`
-	ExecutionEndpoint string `json:"execution_endpoint,omitempty"`
-	RequestedAgent    string `json:"requested_agent,omitempty"`
-	ResolvedAgent     string `json:"resolved_agent,omitempty"`
-	ActualAgent       string `json:"actual_agent,omitempty"`
-	ParentTask        string `json:"parent_task,omitempty"`
-	ParentSession     string `json:"parent_session,omitempty"`
-	TicketRef         string `json:"ticket_ref,omitempty"`
-	LeaseRef          string `json:"lease_ref,omitempty"`
-	Outcome           string `json:"outcome,omitempty"`
-	Evidence          string `json:"evidence,omitempty"`
-	Observation       string `json:"observation,omitempty"`
+	AuthorityVersion  int                    `json:"authority_version,omitempty"`
+	AttemptID         string                 `json:"attempt_id,omitempty"`
+	Generation        int64                  `json:"generation,omitempty"`
+	ExecutionOwner    string                 `json:"execution_owner,omitempty"`
+	ExecutionEndpoint string                 `json:"execution_endpoint,omitempty"`
+	RequestedAgent    string                 `json:"requested_agent,omitempty"`
+	ResolvedAgent     string                 `json:"resolved_agent,omitempty"`
+	ActualAgent       string                 `json:"actual_agent,omitempty"`
+	ParentTask        string                 `json:"parent_task,omitempty"`
+	ParentSession     string                 `json:"parent_session,omitempty"`
+	ParentGeneration  int64                  `json:"parent_generation,omitempty"`
+	CancelRequest     string                 `json:"cancel_request,omitempty"`
+	TicketRef         string                 `json:"ticket_ref,omitempty"`
+	LeaseRef          string                 `json:"lease_ref,omitempty"`
+	Outcome           string                 `json:"outcome,omitempty"`
+	Evidence          string                 `json:"evidence,omitempty"`
+	Blockers          *TaskBlockerProjection `json:"task_blockers,omitempty"`
+	Observation       string                 `json:"observation,omitempty"`
 	// RequestPayload is the accepted dispatch input (JSON). It is immutable;
 	// subsequent generations retain their inputs in the operation journal.
 	RequestPayload  string `json:"request_payload,omitempty"`
@@ -131,12 +134,12 @@ func (s *Store) ensureFleetTasks() error {
 		return err
 	}
 	for _, col := range []string{"attempt_id", "execution_owner", "execution_endpoint", "requested_agent", "resolved_agent", "actual_agent",
-		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request"} {
+		"parent_task", "parent_session", "ticket_ref", "lease_ref", "outcome", "evidence", "observation", "request_payload", "accepted_request", "cancel_request"} {
 		if err := s.addColumn("fleet_tasks", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}
 	}
-	for _, col := range []string{"authority_version", "generation"} {
+	for _, col := range []string{"authority_version", "generation", "parent_generation"} {
 		if err := s.addColumn("fleet_tasks", col, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			return err
 		}
@@ -147,7 +150,7 @@ func (s *Store) ensureFleetTasks() error {
 const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machine, login, worker_id,
 	session_key, operation_id, state, note, issue, pr, asked, parked, rule, created_at, updated_at,
 	authority_version, generation, attempt_id, execution_owner, execution_endpoint, requested_agent, resolved_agent, actual_agent,
-	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request`
+	parent_task, parent_session, ticket_ref, lease_ref, outcome, evidence, observation, request_payload, accepted_request, parent_generation, cancel_request`
 
 // CreateFleetTask writes a new record and returns it with its number. token is
 // the caller's one-time key (the place's idempotency key): writing the same
@@ -260,7 +263,16 @@ func (s *Store) FleetTasksFor(owner string, limit int) ([]FleetTask, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanFleetTasks(rows)
+	ts, err := scanFleetTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range ts {
+		if err = projectTaskBlockers(s.read, &ts[i]); err != nil {
+			return nil, err
+		}
+	}
+	return ts, nil
 }
 
 func (s *Store) fleetTaskBy(where string, arg any) (FleetTask, error) {
@@ -274,6 +286,9 @@ func (s *Store) fleetTaskBy(where string, arg any) (FleetTask, error) {
 	}
 	if len(out) == 0 {
 		return FleetTask{}, sql.ErrNoRows
+	}
+	if err = projectTaskBlockers(s.read, &out[0]); err != nil {
+		return FleetTask{}, err
 	}
 	return out[0], nil
 }
@@ -289,7 +304,7 @@ func scanFleetTasks(rows *sql.Rows) ([]FleetTask, error) {
 			&t.Parked, &t.Rule, &created, &updated,
 			&t.AuthorityVersion, &t.Generation, &t.AttemptID, &t.ExecutionOwner, &t.ExecutionEndpoint, &t.RequestedAgent, &t.ResolvedAgent,
 			&t.ActualAgent, &t.ParentTask, &t.ParentSession, &t.TicketRef, &t.LeaseRef, &t.Outcome, &t.Evidence,
-			&t.Observation, &t.RequestPayload, &t.acceptedRequest); err != nil {
+			&t.Observation, &t.RequestPayload, &t.acceptedRequest, &t.ParentGeneration, &t.CancelRequest); err != nil {
 			return nil, err
 		}
 		t.Ref = TaskRef(t.ID)

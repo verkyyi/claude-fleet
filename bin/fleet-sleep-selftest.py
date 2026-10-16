@@ -18,6 +18,61 @@ BIN=Path(sys.argv.pop(1)).absolute()
 LIB=runpy.run_path(str(BIN/'fleet-sleep.py'))
 
 
+class ModuleLoadingTest(unittest.TestCase):
+    def test_dependencies_load_once_on_first_use(self):
+        dependency = LIB['LazyModule']('fixture.py')
+        with patch.object(runpy, 'run_path', return_value={'value': 42}) as load:
+            self.assertFalse(dependency.loaded)
+            load.assert_not_called()
+            self.assertEqual(dependency['value'], 42)
+            self.assertEqual(dependency['value'], 42)
+            with self.assertRaises(KeyError):
+                dependency['absent']
+            load.assert_called_once_with(str(BIN / 'fixture.py'))
+
+    def test_failed_import_can_retry(self):
+        dependency = LIB['LazyModule']('fixture.py')
+        with patch.object(runpy, 'run_path', side_effect=[OSError('unavailable'), {'value': 42}]):
+            with self.assertRaises(OSError):
+                dependency['value']
+            self.assertFalse(dependency.loaded)
+            self.assertEqual(dependency['value'], 42)
+
+    def test_dependency_overrides_restore_full_module(self):
+        dependency = LIB['LazyModule']('fixture.py')
+        with patch.object(runpy, 'run_path', return_value={'value': 42, 'other': 7}) as load:
+            with patch.dict(dependency, value=99):
+                self.assertEqual(dependency['value'], 99)
+                self.assertEqual(dependency['other'], 7)
+            self.assertEqual(dependency['value'], 42)
+            self.assertEqual(dependency['other'], 7)
+            load.assert_called_once()
+
+
+class WorkerMetadataTest(unittest.TestCase):
+    def test_worker_metadata_uses_three_reads(self):
+        with patch.object(LIB['Worker'], 'tm', side_effect=[
+                '@7|fixture', '%8  \n%9 1 ', '0|0||1|draft | name']) as read:
+            worker = LIB['Worker']('fixture', '@7')
+        self.assertEqual((worker.window, worker.pane), ('@7', '%8'))
+        self.assertEqual(read.call_count, 3)
+
+    def test_foreign_session_and_multiple_workers_are_refused(self):
+        for replies, reason in ((['@7|other'], 'wrong fleet'),
+                                (['@7|fixture', '%8  \n%9  '], 'exactly one worker')):
+            with self.subTest(reason=reason), patch.object(LIB['Worker'], 'tm', side_effect=replies):
+                with self.assertRaisesRegex(ValueError, reason):
+                    LIB['Worker']('fixture', '@7')
+
+    def test_worker_exclusions_survive_batched_reads(self):
+        for metadata in ('1|0||1|task', '0|1||1|task', '0|0|||task',
+                         '0|0||1|home', '0|0||1|plan', 'incomplete'):
+            with self.subTest(metadata=metadata), patch.object(LIB['Worker'], 'tm',
+                    side_effect=['@7|fixture', '%8  ', metadata]):
+                with self.assertRaises(ValueError):
+                    LIB['Worker']('fixture', '@7')
+
+
 class SleepTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -26,7 +81,10 @@ class SleepTest(unittest.TestCase):
         cls.socket='sleep-test-'+str(os.getpid())
         cls.bin=cls.root/'bin'; cls.bin.mkdir()
         for name in ('fleet-sleep.py','.fleet-transfer.py','fleet-input.py','fleet-codex-session.py','fleet-codex-rpc.py','fleet_sleep_argv.py','fleet-loop.py','fleet_cron.py','fleet_sleep_mcp.py','fleet_sleep_park.py','fleet_loop_mark.py','fleet_iso.py',
-                     'fleet-session-wrap.sh','fleet-session-page.py'):
+                     'fleet-session-wrap.sh','fleet-session-page.py',
+                     # The real wrapper always enters the repo supervisor in tmux
+                     # (#4467); its imports are needed even for this no-repo worker.
+                     'fleet_repo_authority.py','fleet_ticket.py','fleet_launch.py'):
             shutil.copyfile(BIN/name,cls.bin/name)
         (cls.bin/'fleet-session-wrap.sh').chmod(0o755)   # a wake relaunches through it (issue #1784)
         cls.wt=cls.root/'scratch-1'; cls.wt.mkdir()
@@ -86,6 +144,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         (cls.bin/'fleet-lib.sh').write_text('fleet_rotate_lease_file() { printf "%s" '+str(cls.root/'lease')+'; }\n'
             +'fleet_peer_send() { printf "%s\\n" "$2" >> '+str(cls.root/'messages')+'; }\n'
             # The session-limit read (issue #1058): full iff the test wrote <root>/full.
+            +'fleet_current_session() { printf "%s" '+cls.socket+'; }\n'
+            +'fleet_window_repo() { :; }\n'  # fixture worker has no hosted repo
             +'fleet_load_conf() { :; }\n'
             +'fleet_cap_full() { [ -s '+str(cls.root/'full')+' ] && cat '+str(cls.root/'full')+'; }\n')
         cls.tm('-f','/dev/null','new-session','-d','-s',cls.socket,'-x','100','-y','30','sleep 300')
@@ -164,6 +224,15 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
         self.assertEqual(dirty.read_text(),'keep these bytes')
         self.cli('wake',self.pane)
         self.assertEqual(json.loads(record.read_text())['resume_count'],1)
+
+    def test_every_nonempty_remote_marker_refuses_local_worker(self):
+        for marker in ('0', '1', 'false', 'other|node'):
+            with self.subTest(marker=marker):
+                self.stamp('@remote', marker)
+                with self.assertRaisesRegex(ValueError, 'proxy onto another machine'):
+                    LIB['Worker'](self.socket, self.pane)
+        self.stamp('@remote', '')
+        self.assertEqual(LIB['Worker'](self.socket, self.pane).pane, self.pane)
 
     def test_native_proof_required(self):
         for proof in ({},dict(self.evidence,pid=self.pid+1),dict(self.evidence,session_id='other'),dict(self.evidence,background_tasks=None),dict(self.evidence,background_tasks=[{'type':'shell'}]),dict(self.evidence,session_crons=[{}]),dict(self.evidence,stop_hook_active=True)):
@@ -571,7 +640,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
                 if method=='thread/goal/get':return {'goal':None}
                 if method=='thread/loaded/list':return {'data':[SleepTest.sid,'child']}
                 sid=args['threadId']
-                return {'thread':{'id':sid,'status':{'type':'idle' if sid==SleepTest.sid else 'active'},'turns':[{'status':'completed'}]}}
+                return {'thread':{'id':sid,'cwd':source['worktree'],'path':source['transcript'],
+                                  'status':{'type':'idle' if sid==SleepTest.sid else 'active'},'turns':[{'status':'completed'}]}}
         with patch.object(worker,'inspect',return_value=source),patch.dict(worker.eligible.__globals__,RPC=Client,source_options=lambda source: []):
             with self.assertRaisesRegex(ValueError,'subagent'):
                 worker.eligible(manual=True)

@@ -21,7 +21,7 @@ device). Read `os`, `terminal`, `caps`, `via`, and `clients` when there are seve
 |---|---|
 | `os` iOS / iPadOS / Android, or `terminal` Termius / Blink, or `caps` only `link` | the **phone**: Termius taps — ⌃ is the Ctrl key on the extra-key row, then `]`, then a letter; a page is a link to tap |
 | `os` macOS with `terminal` iTerm2 (`caps` has `iterm2`) | the **Mac**: one key, ⌘P (everything else is a row in it); a page you can open for them with `mcp__fleet__open` |
-| another terminal (Terminal.app, ssh from elsewhere) | **prefix keys** (prefix /, prefix n …) — `docs/dev/CLIENT.md` «The keys», right-hand column |
+| another terminal (Terminal.app, ssh from elsewhere) | **⌃空格 / F12 / ⌃] p** to open the panel — `docs/dev/CLIENT.md` § 「One key + the panel」 |
 | exit 3 (nobody connected) or the question names another device («用手机怎么…») | ask which device in one short question, or take the one they named |
 
 The question wins over the reading: «手机上怎么…» asked from the Mac is about the phone.
@@ -35,15 +35,15 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | device keys: add, revoke, lost phone | `docs/dev/CLIENT.md` § 「手机：Termius 四样」 (step 4) |
 | changing the home machine | `docs/dev/MULTI-MACHINE-OPS.md` § 「手动换家」 |
 | the address stopped working after the home's internet changed | `docs/dev/MULTI-MACHINE-OPS.md` § 「宽带换了公网地址」 |
-| connecting from the Mac, which machine `fleet` picks, a named machine | `docs/dev/CLIENT.md` § 「On a phone — the same road as the Mac」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
-| ⌘P: what it lists, its row keys, the `>` commands | `docs/dev/CLIENT.md` § 「⌘P — sessions and actions」 |
+| connecting from the Mac, which machine `fleet` picks, a named machine | `docs/public/zh/member/connect.md` § 「电脑上（Mac 或 Linux）」 · `docs/dev/MULTI-MACHINE-OPS.md` § 「6. 速查」 |
+| ⌘P: what it lists, its row keys, where the old `>` actions went | `docs/public/zh/member/usage.md` § 「一个键：总面板」 · `docs/public/zh/member/usage.md` § 「一个会话能做的事」 (Tab opens the selected session's actions) |
 | the one default key (⌘P · ⌃空格 · F12 · ⌃] p), getting another key back or changing one (`FLEET_KEYS_EXTRA` …) | `docs/dev/CLIENT.md` § 「One key + the panel」 |
-| every key of the old client (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …) | `docs/dev/CLIENT.md` § 「The keys」 |
+| former client keys (⌘↑↓ ⌘[ ⌘] ⌘↩ ⌘Q …), their current replacements or optional extras | `docs/dev/CLIENT.md` § 「One key + the panel」 · `docs/public/zh/member/usage.md` § 「一个键：总面板」 |
 | the phone's keys (⌃空格 · F12 · ⌃] p, the letters you can add), tapping them in Termius or Blink | `docs/dev/CLIENT.md` § 「The keys: one, to open the panel」 · `docs/dev/CLIENT.md` § 「Termius (iPhone)」 |
-| a new session | `docs/dev/CLIENT.md` § 「A new session」 · `docs/dev/CLIENT.md` § 「A new session in one command」 |
-| 派一件事 / hand a task to a worker | `docs/dev/CLIENT.md` § 「派一件事」 |
-| a session's state, who is waiting on them | `docs/dev/CLIENT.md` § 「⌘P — sessions and actions」 (the 状态 column, the waiting ones first) · `docs/dev/STATE.md` § 「The states」 |
-| the session's shell | `docs/dev/CLIENT.md` § 「⌃\ — the session's shell, and back」 |
+| a new session | `docs/public/zh/member/usage.md` § 「开一个会话」 · `docs/dev/CLIENT.md` § 「A new session in one command」 |
+| 派一件事 / hand a task to a worker | `docs/public/zh/member/usage.md` § 「开一个会话」 (⚡ opens the editor; 「开窗预填（不发送）」 opens a session with the draft, then the person sends it) |
+| a session's state, who is waiting on them | `docs/public/zh/member/usage.md` § 「会话的状态」 · `docs/dev/STATE.md` § 「The states」 |
+| the session's shell | `docs/public/zh/member/usage.md` § 「一个会话能做的事」 (Tab → 「在它的目录开 shell」; open the panel again to return to the session) |
 | leaving, quitting, coming back to a session | `docs/dev/CLIENT.md` § 「放到后台 and 退出 fleet」 · `docs/dev/CLIENT.md` § 「会话结束了」 |
 | copying text out of a session | `docs/dev/CLIENT.md` § 「复制」 |
 | quota and usage | `docs/dev/CLIENT.md` § 「额度和用量在哪看」 |
@@ -52,7 +52,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | the list stopped updating, a row cannot be opened | `docs/dev/CLIENT.md` § 「列表停住」 |
 
 Read with a targeted range (`grep -n` the heading, then `sed -n` to the next one),
-not the whole file. Nothing in the table fits? `grep -n` across `docs/*.md` and
+not the whole file. Nothing in the table fits? `rg -n` across `docs/public/` and `docs/dev/`, including
 `docs/dev/TERMS.md` for the person's word. The docs do not say it either? Say so
 plainly — never invent a key, a menu item or a page — and file it bare with
 `mcp__fleet__file_issue` (a 「怎么用」 gap in `docs/`), no `spawn`.

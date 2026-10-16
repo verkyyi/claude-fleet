@@ -578,6 +578,45 @@ the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only 
 a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
 release route 404s, the hub as before. BREAK-IT row `release-tampered`.
 
+**Mac lane retention and recovery** (issue #4494). Before pruning a sealed
+release's tree/installers, the hub saves its exact signed manifest and signature
+in `<dir>/chain/<sha>.json` as one atomically replaced object. These small proofs
+are retained independently of the full-release limit; they are not downloadable
+builds. The Mac target stays complete, while intermediate large artifacts still
+expire. A failed proof write retains that release and logs `cannot archive chain
+proof`. Both lane reads and moves verify the anchor/key revocations, repository,
+SHA and each signed `prev`/`seq` edge from the current stable pointer. The Mac
+pointer's seq must match its target; a move cannot lower its recorded seq even
+when the old lane is unreachable. Pointer changes invalidate each replica's
+five-second read cache immediately; other on-volume damage/revocations retain
+that existing cache bound. BREAK-IT: `stable-macos-pruned-chain`.
+
+This does **not** reconstruct a chain already deleted by an older hub. A gap,
+bad signature, foreign chain or mismatched seq keeps the Mac lane unavailable;
+re-publishing that historical Mac target still returns 409. Compatibility is
+unchanged: an unavailable lane means Darwin falls back to Linux stable and
+`/version` omits the Mac fields, **not** that macOS verified that fallback.
+Recovery is a normal forward Mac release: select a fully retained target on the
+current stable chain, pass the existing macOS/ancestry gates via `mac-follow`
+or `fleet-stable.sh move --ref stable-macos`, then let `stable-publish.yml
+ref=stable-macos` publish it. If no such target passes, wait for a new verified
+release; there is no proof-import/force route, and no manual pointer or signature
+repair. A content rollback must be a new signed release sequence and pass the
+Mac gates again.
+
+Deploy/acceptance owner: check the Mac versions already installed before any
+lane change, because returning an older lane can downgrade some clients. Finish
+upgrading **every pruning/serving replica** before relying on this guarantee:
+old replicas ignore proofs and can still remove an unarchived link. Rolling back
+the hub binary also restores that limitation. The shared volume must make a
+completed single-object rename visible before deletion; this is the same
+consistency assumption as `current`/`stable`. Concurrent pruning of a fixed
+published chain is supported; these proofs add no cross-replica transaction or
+ordering for competing publishes (the existing workflow lanes serialize them).
+Verify Darwin's signed body and `X-Ccquota-Release-Ref`, `/version`'s Mac SHA/URL
+and lag on every replica, then repeat after pruning and restarting. This is an
+owner-run rollout, not an automatic repair of a historical pointer.
+
 **A client checks a release with no ccquota** (issue #3162). Beside the base64
 signature, every manifest the hub serves is signed again, as served, in OpenSSH's
 SSHSIG format with the same key (namespace `claude-fleet-release`): the blob in
@@ -1362,6 +1401,70 @@ policies remain as configured in Fleet. GitHub's claim check is not a distribute
 mutex. Requests with different idempotency keys are separate operations;
 cross-node Issue leases and per-principal aggregate worker budgets are future
 work. Existing machine/Fleet capacity limits still apply.
+
+### Verified accepted launches (launch_v1, #4393)
+
+An accepted C2 dispatch requires `launch_v1` on the selected node, including
+placement back onto the calling node. A downlevel node refuses before sending
+work. Legacy requests without an accepted task keep their existing path.
+The hub claims the C1 task execution owner before transport. Its canonical
+operation input stays unchanged for idempotent replay; the node receives an
+additional `params.launch` binding:
+
+```json
+{"version":1,"operation_id":"<UUID>","task":"T1","owner":"<task owner>","generation":1,"worker_id":"<fleet UUID>/<session UUID>","provider":"codex","attempt_id":"task:T1:g1"}
+```
+
+The initial session UUID is the operation UUID. Explicit transfer keeps that
+lifelong session identity and accepts a new operation and task generation.
+`owner` comes from the task record, not the node audit actor. Provider remains
+immutable within a generation.
+
+`fleet_launch.py` starts the selected native CLI with the task seed held back.
+The existing SessionStart hook observes the root process's kernel executable,
+birth time, version probe and native session ID under that launch supervisor.
+Nested native helpers cannot supply or replace its receipt. After checking the
+current C1 owner/generation and recording actual provider evidence, the
+supervisor delivers the seed once through the existing native inbox. Codex
+first input targets the endpoint and thread witnessed by that root hook.
+Missing CLI, missing proof, authority outage or a provider mismatch withholds
+input; rejected launch cleanup can signal only its own process descendants.
+There is no alternate provider or delivery retry queue.
+
+`result.launch_receipt` repeats all binding fields and adds `actual_provider`,
+`native_session`, `pid`, `birth`, `executable`, `observed_at` and `phase`.
+`verified` proves native identity; `delivered` confirms the seed inbox accepted
+it; `ready` is an unseeded launch; `resumed` is the same native conversation
+reattached without resending the original seed. Codex receipts also carry the
+native inbox endpoint and home. These are execution observations, never task
+completion. Child reports, children and await use C1 task state/outcome for
+completion ([task collaboration](FLEET-MCP.md#task-children-and-results-4394)).
+An explicit fenced success/failure commits while this native session remains
+alive; runtime stop and execution-lease release are independent. Cancellation
+acknowledgement and replacement still require confirmed stop/fencing.
+
+Reconnect reads the existing node operation journal and inspects its unique
+worker identity. A lost acknowledgement can recover the surviving receipt;
+a repeated submit never executes a second start. Lost process/session proof
+returns `unknown`/interrupted, retaining ownership for explicit recovery.
+A resume requires the same provider and native session ID. Restore and its
+pullback map carry the launch binding and receipt; no receipt after a previous
+start forbids a fresh rerun. Legacy restore nudges are withheld on this path.
+
+Native switching uses the existing transfer controller: verify the source
+binding and task authority before cutover, confirm the source stopped, then
+accept C1's explicit transfer and claim the next generation. The existing
+private handoff package records the acceptance attempt, and the existing node
+operation journal records the new launch. An ambiguous acceptance or failed
+target retains the task for recovery; it never automatically switches back or
+creates another generation. Old receipts cannot acquire the new generation.
+
+`fleet-launch-selftest` and the API launch tests use isolated fake native
+processes/adapters and the real operation journals. They cover missing CLI,
+mismatch, lost acknowledgement, replay, restart, PID reuse, nested hooks,
+resume and transfer fencing. They are fixture evidence. C9 owns actual remote
+process acceptance; credential readiness (#3401) and Codex restore identity
+(#3955) remain its external prerequisites. A merged fixture is not a live pass.
 
 Remote configuration writes are limited to:
 

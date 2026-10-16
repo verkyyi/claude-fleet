@@ -43,6 +43,9 @@
 # && go build ./cmd/ccquota`) — `--ccquota`, else $NOGH_E2E_CCQUOTA, else SKIP: the
 # selftest gate has none, CI's client-e2e job builds it and runs this.
 # Env: NOGH_E2E_WORK=<dir> keeps the work dir; NOGH_E2E_DEADLINE (default 240s).
+# NOGH_E2E_SUMMARY=<file> archives credential-free fixture counters, including
+# failures, for nogh-task-acceptance.py. The historical seven steps stay separate
+# from EPIC #4390's twelve rows; neither is live provider/deployment evidence.
 #
 # Drives: bin/fleet-install.sh (served), bin/fleet-login.py, bin/fleet-hub-admin.py,
 # bin/fleet-repo.sh, bin/fleet-issue-file.sh, bin/fleet-ticket.sh, bin/fleet_ticket.py,
@@ -125,6 +128,17 @@ waitfor() {
   return 1
 }
 cleanup() {
+  local result=$?
+  if [ -n "${NOGH_E2E_SUMMARY:-}" ]; then
+    python3 - "$NOGH_E2E_SUMMARY" "$result" "$STEPS" "$(ghcalls)" "$(ghhttp)" <<'PY'
+import datetime, json, sys
+from pathlib import Path
+path, code, steps, cli, http = sys.argv[1:]
+Path(path).write_text(json.dumps(dict(at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    kind="fixture", baseline="3570", exit=int(code), steps=int(steps), total=7,
+    github_cli=int(cli or 0), github_http=int(http or 0), live="NOT RUN"), indent=2)+"\n")
+PY
+  fi
   "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null
   for p in "$LOGIN_PID" "$AGENT_PID" "$HUB_PID" "$WX_PID" "$GHAPI_PID"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
   [ "$KEEP" = 1 ] || { chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"; }

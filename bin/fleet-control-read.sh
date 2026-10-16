@@ -72,6 +72,12 @@ workers_busy() {
 }
 
 case "$mode" in
+  launch-inspect)
+    sock=$(fleet_socket "$sess")
+    target=$3
+    case "$target" in fid:*) target=$(fleet_win_for_fid "${target#fid:}" "$sock") || exit 1 ;; esac
+    exec python3 "$BIN/fleet_launch.py" --socket "$sock" --pane "$target" inspect
+    ;;
   inventory)
     # The fleet's OWN identity — its conf's first repo and checkout — is what the
     # controller hashes into the fleet UUID the hub registers. fleet_identity_triplet
@@ -496,6 +502,11 @@ case "$mode" in
       export FLEET_DISPATCH
     fi
 
+    if [ -n "${FLEET_LAUNCH:-}" ]; then
+      # Accepted operations always create a cold, unseeded native process.
+      export FLEET_START_WARM=0
+      command -v "$agent" >/dev/null 2>&1 || { printf 'start: selected provider CLI missing\n' >&2; exit 4; }
+    fi
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
     # or bare name; an unknown/ambiguous one is refused (6) before any gate runs.
     # No $5 → the fleet's only repo (fleet_target_repo, issue #1938) — a fleet

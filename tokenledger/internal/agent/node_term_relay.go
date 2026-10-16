@@ -98,6 +98,13 @@ type termHelper interface {
 	io.ReadWriteCloser
 }
 
+type termRequest struct {
+	Resume string
+	Take   bool
+	Renew  bool
+}
+type termRequestKey struct{}
+
 // startTermHelper starts the helper as the login. A variable only so the tests
 // can run the helper in-process with a throwaway command.
 var startTermHelper = func(ctx context.Context, view, target string, cols, rows int) (termHelper, error) {
@@ -109,10 +116,34 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 	if cols > 0 && rows > 0 {
 		args = append(args, "--cols", fmt.Sprint(cols), "--rows", fmt.Sprint(rows))
 	}
+	if request, ok := ctx.Value(termRequestKey{}).(termRequest); ok {
+		if request.Resume != "" {
+			args = append(args, "--resume", request.Resume)
+		}
+		if request.Renew {
+			args = append(args, "--renew", "1")
+		}
+		if request.Take {
+			args = append(args, "--take", "1")
+		}
+	}
 	cmd := exec.Command(self, args...)
 	if err := prepCmd(ctx, cmd); err != nil {
 		return nil, err
 	}
+	stopR, stopW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer stopR.Close()
+	keepStop := false
+	defer func() {
+		if !keepStop {
+			stopW.Close()
+		}
+	}()
+	cmd.ExtraFiles = []*os.File{stopR}
+	cmd.Env = append(cmd.Environ(), "FLEET_TERM_CANCEL_FD=3")
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -151,18 +182,36 @@ var startTermHelper = func(ctx context.Context, view, target string, cols, rows 
 		}
 		return nil, err
 	}
-	return &termProc{chatPipe: p}, nil
+	line, err := p.out.ReadBytes('\n')
+	var ready control.TermControl
+	if err != nil || len(line) > control.TermControlMax || json.Unmarshal(line, &ready) != nil {
+		p.Close()
+		return nil, errors.New("invalid terminal admission")
+	}
+	if ready.T != "ready" {
+		p.Close()
+		return nil, &termAdmissionFailure{ready}
+	}
+	keepStop = true
+	return &termProc{chatPipe: p, ready: ready, stop: stopW}, nil
 }
 
-// termProc closes the helper gently: its stdin first (it hangs the terminal
-// up and its tmux view goes), then, past termPtyHangup, the kill chatPipe does.
+// termProc cancels through a separate pipe before closing framed stdin;
+// after termPtyHangup it kills a helper that has not finished.
 type termProc struct {
 	*chatPipe
-	once sync.Once
+	ready control.TermControl
+	once  sync.Once
+	stop  io.Closer
 }
+
+func (t *termProc) Ready() control.TermControl { return t.ready }
 
 func (t *termProc) Close() error {
 	t.once.Do(func() {
+		if t.stop != nil {
+			t.stop.Close()
+		}
 		t.in.Close()
 		done := make(chan struct{})
 		go func() { t.cmd.Wait(); close(done) }()
@@ -258,7 +307,11 @@ func spliceTermStream(ctx context.Context, ws attachment.Stream, h termHelper) s
 		defer wcancel()
 		return ws.Write(wctx, typ, b)
 	}
-	if b, _ := json.Marshal(control.TermControl{T: "ready"}); write(websocket.MessageText, b) != nil {
+	ready := control.TermControl{T: "ready"}
+	if admitted, ok := h.(interface{ Ready() control.TermControl }); ok {
+		ready = admitted.Ready()
+	}
+	if b, _ := json.Marshal(ready); write(websocket.MessageText, b) != nil {
 		h.Close()
 		return "the hub went before the terminal was ready"
 	}

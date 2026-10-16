@@ -52,6 +52,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/tmux" <<EOS
 #!/bin/sh
+printf '%s\n' "\$1" >> "$WORK/tmux.calls"
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOS
 cat > "$WORK/bin/claude" <<EOS
@@ -189,5 +190,27 @@ printf '{}' | TMUX_PANE="$P" FLEET_STATE_PRIMARY_SECS=0 sh "$BIN/set-claude-stat
 bash -c '. "$1/fleet-lib.sh"; FLEET_STATE_PRIMARY_SECS=0 fleet_primary_fresh "$2"' _ "$BIN" "$W" \
   && fail "K: fleet_primary_fresh answered fresh with the knob at 0"
 ok "K  OFF: FLEET_STATE_PRIMARY_SECS=0 holds nothing"
+
+reset 'done' '' hook -
+tmux set-option -w -t "$W" @agent_transfer_ready previous \; set-option -w -t "$W" @sleep_evidence previous
+: > "$WORK/tmux.calls"
+hook '' --via mod working
+[ "$(grep -c '^set-window-option$' "$WORK/tmux.calls")" = 1 ] || fail "L: state writes were not batched"
+[ "$(st)" = working//hook ] || fail "L: working state did not land"
+[ -z "$(o @agent_transfer_ready)$(o @sleep_evidence)$(o @claude_needs_detail)" ] || fail "L: stale evidence or detail remains"
+[ "$(o @claude_state_ts)" -gt 1 ] || fail "L: absent detail stopped the command queue before its timestamp"
+hook '' --via mod working
+[ "$(st)" = working//hook ] || fail "L: absent evidence stopped the command queue"
+detail='Review "quoted" text; $(not-a-command) \\ [literal]'
+hook '' --via 7501 needs7501 perm "$detail"
+[ "$(o @claude_needs_detail)" = "$detail" ] || fail "L: batched detail lost literal punctuation"
+[ "$(st)" = needs/perm/7501 ] || fail "L: permission state did not land"
+tmux set-option -w -t "$W" @agent_transfer_ready retained \; set-option -w -t "$W" @sleep_evidence retained \
+  \; set-option -w -t "$W" @claude_wait bg
+hook '' --via mod 'done'
+[ "$(st)" = done//hook ] || fail "L: done state did not land"
+[ "$(o @agent_transfer_ready)/$(o @sleep_evidence)" = retained/retained ] || fail "L: done cleared its evidence"
+[ -z "$(o @claude_wait)$(o @claude_needs_detail)" ] || fail "L: done retained stale wait or detail"
+ok "L  BATCH: one state write preserves evidence, literal detail, unsets and timestamp"
 
 printf 'state-primary selftest: OK (%d legs)\n' "$pass"

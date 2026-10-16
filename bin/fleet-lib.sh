@@ -1142,7 +1142,33 @@ fleet_load_repo_conf() {
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED FLEET_TICKETS"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED FLEET_TICKETS FLEET_TASK_AUTHORITY"
+
+# A capable node checks the hub immediately before new dispatch, including a
+# local scratch without a lease. Hub outage is unknown, never legacy fallback.
+# No hub and no explicit selection remains byte-for-byte the legacy path.
+fleet_repo_authority_guard() {
+  local repo="${1:-}" phase="${2:---gate}" selected="${FLEET_TASK_AUTHORITY:-}" result
+  FLEET_AUTHORITY_RESULT=''; FLEET_AUTHORITY_ERROR=''
+  [ -n "$repo" ] || return 0
+  if [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$selected" ]; then return 0; fi
+  result=$( { _fleet_hub_env
+    if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ]; then "$FLEET_HUB_AUTHORITY_CMD" "$repo" "$phase"
+    else python3 "$BIN/fleet_repo_authority.py" "$repo" "$phase"; fi; } 2>&1 ) || {
+      FLEET_AUTHORITY_ERROR=${result:-'repo authority: check failed without a diagnostic; check node/Hub availability'}
+      printf '%s\n' "$FLEET_AUTHORITY_ERROR" >&2
+      return 1
+    }
+  FLEET_AUTHORITY_RESULT=$result
+  if [ "$phase" = --finish ]; then
+    FLEET_AUTHORITY_START=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reservation", ""))') || {
+      FLEET_AUTHORITY_ERROR='repo authority: invalid Hub response; expected a JSON reservation'
+      return 1
+    }
+    export FLEET_AUTHORITY_START
+  fi
+  printf '%s\n' "$FLEET_AUTHORITY_RESULT"
+}
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
 # the caller's environment): the baseline _fleet_repo_keys_reset restores. A key set
@@ -1244,6 +1270,35 @@ fleet_ticket_home() {
 # call it always made, byte for byte (共同约定 4).
 fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
 
+# Resolve THIS ticket, preserving an accepted worker's immutable qualified ref.
+# The repository's default remains unchanged for new tickets and other workers.
+# A background reader supplies its resolved @window; ambiguity refuses.
+fleet_ticket_ref() {
+  local repo n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" win="${4:-}" row='' wr='' wn='' context='' home tab
+  repo=$(fleet_norm_repo "${1:-}")
+  case "$n" in ''|0|*[!0-9]*) return 2 ;; esac
+  if [ -n "$win" ]; then
+    case "$win" in @*) case "${win#@}" in ''|*[!0-9]*) return 2 ;; esac ;; *) return 2 ;; esac
+    if [ -n "${TMUX:-}" ]; then
+      row=$(tmux display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+    else
+      row=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+    fi
+  else
+    row=$(fleet_pane_fmt '#{@repo}	#{@issue}	#{@launch}')
+  fi
+  tab=$(printf '\t')
+  case "$row" in *"$tab"*"$tab"*) wr=${row%%"$tab"*}; row=${row#*"$tab"}; wn=${row%%"$tab"*}; context=${row#*"$tab"} ;; esac
+  if [ -n "$win" ] && [ -n "$context" ] && { [ "$(fleet_norm_repo "$wr")" != "$repo" ] || [ "$wn" != "$n" ]; }; then return 1; fi
+  if [ -n "$context" ] && [ "$(fleet_norm_repo "$wr")" = "$repo" ] && [ "$wn" = "$n" ]; then
+    printf '%s' "$context" | python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" --ticket-ref "$repo" "$n"
+    return $?
+  fi
+  home=$(fleet_ticket_home "$repo" "$sess") || return 1
+  [ "$home" = hub ] || home=gh
+  printf '%s:%s#%s\n' "$home" "$repo" "$n"
+}
+
 # fleet_ticket_hub_ready → rc 0 when this login reaches a hub its tickets could live
 # on (issue #3739): a hub address and a node token — a separated login's
 # node.pub.env address counts (its token is the broker's). The default a NEW repo
@@ -1280,8 +1335,9 @@ fleet_ticket_claimant() {
 # one with the very `gh` read the reapers always made (共同约定 4: byte for byte).
 # Nothing printed = it could not be read (no gh, the hub down, no such ticket).
 fleet_ticket_state() {
-  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}"
-  if [ "$(fleet_ticket_home "$repo")" = hub ]; then
+  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}" ref
+  ref=$(fleet_ticket_ref "$repo" "$n") || return 1
+  if [ "$ref" = "hub:$(fleet_norm_repo "$repo")#$n" ]; then
     bash "$b/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json state,stateReason,labels 2>/dev/null \
       | python3 -c 'import json,sys
 d = json.load(sys.stdin)
@@ -1632,8 +1688,11 @@ fleet_target_repo() {
   all=$(fleet_repos "$sess")
   [ -n "$all" ] || all=$(fleet_norm_repo "$(fleet_repo_cached "$sess" 2>/dev/null)")
   if [ -n "$want" ]; then
-    printf '%s\n' "$all" | grep -qxF "$want" || return 1
-    printf '%s\n' "$want"; return 0
+    # GitHub casing is identity-equivalent, but local overlay/worktree names
+    # keep their registered spelling. Several matching registrations refuse.
+    r=$(printf '%s\n' "$all" | awk -v want="$want" 'tolower($0) == tolower(want) {print}')
+    [ "$(printf '%s\n' "$r" | grep -c .)" = 1 ] || return 1
+    printf '%s\n' "$r"; return 0
   fi
   if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
      && [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$sess" ]; then
@@ -10136,81 +10195,17 @@ fleet_clip_display() {
 # overrides the registry location so selftests can point it at a scratch tree.
 FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
-# fleet_pane_claude_pids <pane-pid>… — the BATCH form of fleet_pane_claude_pid
-# (issue #706). Resolves MANY panes in THREE forks total — two `ps` snapshots and
-# one awk that walks every tree in-process — where the per-pane form costs one
-# `ps` plus two forked `awk`s for EVERY node it visits. Prints one
-# "<pane-pid> <claude-pid>" line per pane that has a Claude under it; a pane with
-# none prints nothing. Same matching grammar as the single form below, which is a
-# wrapper around this one, so there is exactly ONE walk to keep correct.
-#
-# WHY the fork count is the whole point (issue #706). fleet-model-switch.sh's
-# `--capped --dry-run` cap probe calls this once per window from inside
-# fleet-quotawatch's 60 s tick — and that daemon runs at macOS
-# ProcessType=Background, i.e. QoS BACKGROUND, where a fork costs ~10x what it
-# costs in the foreground (issue #588 measured the same multiplier on bulk I/O
-# and classified this unit as a "pure poller"; the poller had grown a fork-heavy
-# half). Measured on a 9-window fleet: 1.7 s foreground, 21–25 s at background
-# QoS, against a 20 s FLEET_QUOTAWATCH_PROBE_BUDGET — so the probe timed out on
-# 69% of all ticks and 100% of recent ones, and that fleet's model-cap detection
-# was blind for as long as the log goes back. Only 4.4 s of those 21 s was CPU:
-# the rest was fork/exec scheduling latency. Cutting ~12 forks per window to ~0
-# is therefore the fix, and unlike a bigger budget it also scales with fleet size.
-#
-# The two snapshots ride STDIN with a sentinel between them rather than `-v`:
-# awk processes escape sequences in a `-v` assignment, and a command line is
-# exactly the kind of string that carries backslashes. Pane pids are numeric, so
-# those are safe to pass as `-v`.
+# fleet_pane_claude_pids <pane-pid>… — batch pane→Claude lookup (#706, #4474).
+# Prints "<pane-pid> <claude-pid>" per match, skipping zombies. The canonical
+# BFS now lives in fleet_pending_tool.py: shell callers use one Python + one ps;
+# in-process consumers share one ps across the entire observation, with no awk.
+# The single-pane function below wraps this exact walk. FLEET_CLAUDE_COMM is the
+# explicit fake-shell override; native npm/node/bun matching is unchanged.
 fleet_pane_claude_pids() {
   [ "$#" -gt 0 ] || return 0
-  # A ZOMBIE is skipped (issue #1734): on Linux a process that just exited keeps
-  # its comm (`claude`) until its parent reaps it, so a /exit'ed Claude read as
-  # "another Claude appeared" for the few ms before tmux collected it (macOS shows
-  # `<defunct>`, so it never hit there). fleet_pid_alive already treats Z as gone.
-  # LC_ALL=C (issue #3129): any process's argv may hold a CJK char cut mid-
-  # sequence; under a UTF-8 locale macOS awk then writes «illegal byte sequence»
-  # + those raw bytes to stderr, and a caller decoding it strictly failed. Every
-  # pattern here is ASCII, so bytes are exact.
-  { ps -axo pid=,ppid=,stat=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
-  | LC_ALL=C awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
-      /^---CMDS---$/ { sec = 2; next }
-      sec != 2 { if (NF >= 4 && index($3, "Z") == 0) { comm[$1] = $4; kids[$2] = kids[$2] " " $1 } next }
-      { p = $1; $1 = ""; cmd[p] = " " substr($0, 2) " " }
-      function base(s,   k) { k = s; sub(/^.*\//, "", k); return k }
-      # BFS from the pane pid, in the same order the shell form used. `gen` stands
-      # in for `delete seen`: the whole-array delete is a gawk-ism this must not
-      # depend on, and a per-walk generation number is exact on every awk.
-      function walk(root, gen,   q, head, tail, p, b, k, nk, i) {
-        q[1] = root; head = 1; tail = 1
-        while (head <= tail) {
-          p = q[head++]
-          if (seen[p] == gen) continue
-          seen[p] = gen
-          b = base(comm[p])
-          if (b == "claude") return p
-          if (b == "bun" || b ~ /^node[0-9]*$/) {
-            if (index(cmd[p], "claude-code/cli.js") > 0 || index(cmd[p], "/claude ") > 0) return p
-          } else if (b == "bash" || b == "sh" || b == "zsh" || b == "dash") {
-            # a selftest fake `claude` is a script: its comm is the interpreter, so
-            # match ONLY the explicit FLEET_CLAUDE_COMM substring (never a bare
-            # heuristic — a worker s `zsh -c ...fleet-claude.sh...` runner must not
-            # count as Claude). No `next` here: the shell s children still get walked.
-            if (ccomm != "" && index(cmd[p], ccomm) > 0) return p
-          }
-          nk = split(kids[p], k, " ")
-          for (i = 1; i <= nk; i++) if (k[i] != "") q[++tail] = k[i]
-        }
-        return ""
-      }
-      END {
-        np = split(panes, pl, " ")
-        for (i = 1; i <= np; i++) {
-          if (pl[i] == "") continue
-          c = walk(pl[i], i)
-          if (c != "") print pl[i] " " c
-        }
-      }
-    '
+  # The importable pending oracle owns the ONE process walk (#4474).
+  # No shell/awk copy: CLI callers and an in-process batch use the same parser.
+  python3 "${BASH_SOURCE[0]%/*}/fleet_pending_tool.py" --pids "$@" 2>/dev/null
 }
 
 # fleet_pane_claude_pid <tmux-target> [socket] — pid of the Claude process running
@@ -10419,22 +10414,28 @@ fleet_handoff_cycle_live() {
   kill -0 "$pid" 2>/dev/null
 }
 
-# fleet_window_bg_busy <session> <win> [quick] — does <win>'s agent still own a
+# fleet_window_bg_busy <session> <win> [quick] [reap] — does <win>'s agent still own a
 # Bash-tool job (a run_in_background test, a PR-gate waiter) after its turn ended?
 # fleet_child_busy's `bg` half (issue #864), shared with the Stop hook's and the
 # reapers' "still waiting" answer (issue #1370). Exit 0 = busy. [quick]=1 first asks
 # the cheap necessary condition — a Claude agent counts ONLY a Bash-tool shell
 # (`…/shell-snapshots/snapshot-…` in its argv) among its direct children, exactly
 # fleet-sleep.py's non-strict walk — so a pane with none never pays the python walk.
+# [reap]=1 additionally requires native idle and retains unknown Codex identity.
+# A Stop hook must only ask about jobs: its own native turn is still in progress.
 fleet_window_bg_busy() {
-  local sess="${1:-}" win="${2:-}" quick="${3:-}" bin sock='' agent pid=''
+  local sess="${1:-}" win="${2:-}" quick="${3:-}" reap="${4:-}" bin sock='' agent pid='' rc out
   [ -n "$win" ] || return 1
+  [ "$reap" = 1 ] || reap=''
   [ -n "$sess" ] || sess=$(fleet_current_session)
   [ -n "$sess" ] || return 1
   [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1 || return 1
   agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+  if ! { [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1; }; then
+    [ "$agent" = codex ] && [ "$reap" = 1 ] && return 0
+    return 1
+  fi
   [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
   [ "$agent" = codex ] || [ -n "$pid" ] || return 1
   if [ "$quick" = 1 ] && [ -n "$pid" ]; then
@@ -10442,8 +10443,16 @@ fleet_window_bg_busy() {
       | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
       || return 1
   fi
-  python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
-    >/dev/null 2>&1 </dev/null
+  if out=$(python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} ${reap:+--reap} "$win" \
+      2>&1 </dev/null); then return 0; else rc=$?; fi
+  # busy: 1 alone proves idle. In particular a missing/stale Codex identity,
+  # lost native endpoint or failed inventory (2) must never authorize disposal.
+  if [ "$agent" = codex ] && [ "$reap" = 1 ]; then
+    # An interpreter/import crash can also exit 1, with a diagnostic. The normal
+    # idle result is exactly exit 1 with no output, never an exception traceback.
+    [ "$rc" = 1 ] && [ -z "$out" ] || return 0
+  fi
+  return "$rc"
 }
 
 # fleet_window_tool_busy <session> <win> — is a FLEET TOOL CALL <win>'s agent made

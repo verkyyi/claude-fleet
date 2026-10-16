@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 func TestAcceptedCodingAgentDispatch(t *testing.T) {
-	h, _, target, _, _ := twoNodes(t)
+	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)
 	args := map[string]any{"issue": 7, "repo": writeRepo, "idempotency_key": "provider-choice", "coding_agent": "codex"}
 	op := postFleet(t, h, "worker_start", args, 200)
 	if target.count() != 1 {
@@ -21,7 +22,7 @@ func TestAcceptedCodingAgentDispatch(t *testing.T) {
 		t.Fatalf("provider/identity lost: %v", params)
 	}
 	task, err := h.srv.Store.FleetTask(store.ParseTaskRef(d["task"].(string)))
-	if err != nil || task.AuthorityVersion != 1 || task.ActualAgent != "" || task.State != "accepted" || task.AttemptID == "" {
+	if err != nil || task.AuthorityVersion != 1 || task.ActualAgent != "" || task.State != "starting" || task.AttemptID == "" {
 		t.Fatalf("accepted task (not execution proof): %+v %v", task, err)
 	}
 	journal, err := h.srv.Store.FleetOperation(op["operation_id"].(string))
@@ -48,7 +49,7 @@ func TestAcceptedCodingAgentDispatch(t *testing.T) {
 }
 
 func TestCodingAgentRejectsBeforeWork(t *testing.T) {
-	h, first, second, _, _ := twoNodes(t)
+	h, first, second, _, _ := twoNodesCaps(t, control.CapLaunch)
 	for _, pair := range [][2]string{{"unknown", ""}, {"codex", "claude"}, {"", "unknown"}} {
 		postFleet(t, h, "worker_start", map[string]any{"issue": 7, "repo": writeRepo, "idempotency_key": "invalid-provider", "coding_agent": pair[0], "agent": pair[1]}, 400)
 	}
@@ -58,9 +59,9 @@ func TestCodingAgentRejectsBeforeWork(t *testing.T) {
 }
 
 func TestClientCodingAgentKeepsAcceptedChoice(t *testing.T) {
-	h, _, target, _, _ := twoNodes(t)
+	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)
 	lease, key := clientLeaseFor(t, h)
-	target.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@3"}))
+	target.setOpGet(verifiedLaunchFixture)
 	input := map[string]any{"repo": writeRepo, "kind": "scratch", "coding_agent": "codex", "idempotency_key": "client-provider"}
 	status, out := clientPlace(t, h, lease, key, input)
 	if status != 200 || out.Task == "" {
@@ -91,7 +92,7 @@ func TestCodingAgentRequiresCompleteEnvelope(t *testing.T) {
 }
 
 func TestCodingAgentDoesNotAdoptLegacyTask(t *testing.T) {
-	h, first, second, _, _ := twoNodes(t)
+	h, first, second, _, _ := twoNodesCaps(t, control.CapLaunch)
 	legacy, err := h.srv.Store.CreateFleetTask(store.FleetTask{Owner: "fixture", Title: "legacy"}, "legacy-choice", time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -107,8 +108,8 @@ func TestCodingAgentDoesNotAdoptLegacyTask(t *testing.T) {
 func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 	for _, local := range []bool{false, true} {
 		t.Run(map[bool]string{false: "remote", true: "local"}[local], func(t *testing.T) {
-			h, first, target, f5, f4 := twoNodes(t)
-			target.setOpGet(finished("succeeded", map[string]any{"exit": 0, "window": "@7"}))
+			h, first, target, f5, f4 := twoNodesCaps(t, control.CapLaunch)
+			target.setOpGet(verifiedLaunchFixture)
 			tok, fid := h.tokens["mac-d"], f5.FleetID
 			if local {
 				tok, fid = h.tokens["mac-c"], f4.FleetID
@@ -116,7 +117,7 @@ func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 			input := map[string]any{"repo": writeRepo, "kind": "scratch", "fleet_id": fid,
 				"coding_agent": "codex", "idempotency_key": "node-provider"}
 			status, out := placeCall(t, h, tok, input)
-			if status != 200 || out["local"] != local {
+			if status != 200 || out["local"] != false {
 				t.Fatalf("placement: %d %v", status, out)
 			}
 			d := out["dispatch"].(map[string]any)
@@ -126,11 +127,10 @@ func TestNodeCodingAgentAcceptedBeforeLocalOrRemote(t *testing.T) {
 			if st, rec := nodeTaskCall(t, h, tok, "GET", NodeTasksPath+"/"+d["task"].(string), nil); st != 200 || rec["task"].(map[string]any)["resolved_agent"] != "codex" {
 				t.Fatalf("dispatch owner differs from task-record owner: %d %v", st, rec)
 			}
-			if local {
-				if first.count()+target.count() != 0 {
-					t.Fatal("local placement sent work")
-				}
-			} else if target.writes[0]["params"].(map[string]any)["task"] != d["task"] {
+			if first.count()+target.count() != 1 {
+				t.Fatal("accepted placement must use exactly one verified operation, including locally")
+			}
+			if target.writes[0]["params"].(map[string]any)["task"] != d["task"] {
 				t.Fatal("remote task differs")
 			}
 			t.Logf("fixture node local=%t accepted envelope=%v", local, d)

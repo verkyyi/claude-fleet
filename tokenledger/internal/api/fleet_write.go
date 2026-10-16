@@ -406,7 +406,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch", "ticket_ref"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -570,6 +570,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if w.repo != "" {
 			w.params["repo"] = w.repo
+		}
+		if ref, ok := args["ticket_ref"]; ok {
+			v, yes := ref.(string)
+			if !yes || d == nil || !ticketRefMatches(v, w.repo, fmt.Sprint(w.params["issue"])) {
+				err = fault("INVALID_ARGUMENT", "ticket_ref must explicitly match the accepted repo and issue")
+				break
+			}
+			w.params["ticket_ref"] = v
 		}
 		if w.fleetID, err = argString(args, "fleet_id"); err != nil {
 			break
@@ -977,6 +985,18 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		}
 	}
 
+	if acceptedLaunch(w) != nil && !s.canLaunch(ctx, target.EndpointID) {
+		return nil, fault("UNAVAILABLE", "selected node does not support verified launch_v1; nothing was sent")
+	}
+	if tool == "worker_start" && w.repo != "" {
+		a, e := s.Store.RepoAuthority(w.repo)
+		if e != nil {
+			return nil, e
+		}
+		if a.Mode == "hub" && !s.canRepoAuthority(ctx, target.EndpointID) {
+			return nil, fault("UNAVAILABLE", "selected node cannot enforce repo authority; nothing was sent")
+		}
+	}
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,
 		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now}
@@ -1000,6 +1020,16 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		return nil, err
 	}
 
+	launch, err := s.claimLaunch(op, target)
+	if err != nil {
+		b, _ := json.Marshal(map[string]any{"error": errorObject(err)})
+		_ = s.Store.UpdateFleetOperation(op.ID, "failed", string(b), time.Now())
+		return nil, err
+	}
+	// Transport-only binding; original canonical input remains replay-comparable.
+	if launch != nil {
+		w.params["launch"] = launch
+	}
 	envelope := map[string]any{"operation_id": op.ID, "fleet_id": target.FleetID, "action": tool,
 		"params": w.params, "actor": p.Actor}
 	var noted uint64
@@ -1011,6 +1041,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		noted = s.recent.note(target.EndpointID, hb.SessionsCount(), now)
 	}
 	status, result := s.sendWrite(ctx, target, op, envelope)
+	status, result = s.verifyLaunchResult(op, target, status, result)
 	if noted != 0 && status == "failed" {
 		s.recent.forget(target.EndpointID, noted) // refused before anything opened
 	}

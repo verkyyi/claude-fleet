@@ -216,17 +216,29 @@ func (s *Store) CreateFleetTicket(t FleetTicket, number int64, now time.Time) (F
 		return FleetTicket{}, err
 	}
 	defer tx.Rollback()
+	n, err := s.createFleetTicketTx(tx, t, number, now)
+	if err != nil {
+		return FleetTicket{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return FleetTicket{}, err
+	}
+	return s.FleetTicketAt(repo, n)
+}
+
+func (s *Store) createFleetTicketTx(tx *sql.Tx, t FleetTicket, number int64, now time.Time) (int64, error) {
+	repo := NormRepo(t.Repo)
 	// The repo's row is locked by the UPDATE, so a second opener waits here
 	// and reads the number this one left.
 	if _, err := tx.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_ticket_seq (repo, next_n) VALUES (?, 1)`), repo); err != nil {
-		return FleetTicket{}, err
+		return 0, err
 	}
 	if _, err := tx.Exec(`UPDATE fleet_ticket_seq SET next_n = next_n WHERE repo = ?`, repo); err != nil {
-		return FleetTicket{}, err
+		return 0, err
 	}
 	var next int64
 	if err := tx.QueryRow(`SELECT next_n FROM fleet_ticket_seq WHERE repo = ?`, repo).Scan(&next); err != nil {
-		return FleetTicket{}, err
+		return 0, err
 	}
 	n := number
 	if n <= 0 {
@@ -234,21 +246,21 @@ func (s *Store) CreateFleetTicket(t FleetTicket, number int64, now time.Time) (F
 	}
 	var taken int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM fleet_tickets WHERE repo = ? AND num = ?`, repo, n).Scan(&taken); err != nil {
-		return FleetTicket{}, err
+		return 0, err
 	}
 	if taken > 0 {
 		if number > 0 {
-			return FleetTicket{}, ErrTicketTaken
+			return 0, ErrTicketTaken
 		}
 		// A number an import took ahead of the sequence: carry on past it.
 		if err := tx.QueryRow(`SELECT MAX(num) FROM fleet_tickets WHERE repo = ?`, repo).Scan(&n); err != nil {
-			return FleetTicket{}, err
+			return 0, err
 		}
 		n++
 	}
 	if n >= next {
 		if _, err := tx.Exec(`UPDATE fleet_ticket_seq SET next_n = ? WHERE repo = ?`, n+1, repo); err != nil {
-			return FleetTicket{}, err
+			return 0, err
 		}
 	}
 	state := t.State
@@ -260,12 +272,9 @@ func (s *Store) CreateFleetTicket(t FleetTicket, number int64, now time.Time) (F
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		repo, n, t.Owner, TicketHub, "", t.Title, t.Body, state, t.StateReason, labelsJSON(t.Labels), t.Priority,
 		"", "", t.Parent, t.Origin, t.EndpointID, ts, ts); err != nil {
-		return FleetTicket{}, err
+		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
-		return FleetTicket{}, err
-	}
-	return s.FleetTicketAt(repo, n)
+	return n, nil
 }
 
 // RegisterTicket is #2676's registry road, now a gh ticket here: the row is

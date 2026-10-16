@@ -308,7 +308,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash
@@ -4878,6 +4878,62 @@ drill_idle_timeout_starves_merged() {
 # An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
+drill_task_outage_recovery() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-task-recovery-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='断线及重放保留同一任务和进程，超限明确待核对'
+}
+
+drill_task_stop_replay_resumed() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_recovery_test.py" RecoveryTests.test_old_stop_after_native_resume_is_refused 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同一任务恢复了新原生进程，积压的旧停止证明不能释放它'
+}
+
+drill_task_report_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-task-control-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
+}
+
+drill_task_blocker_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_blockers_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
+}
+
+drill_repo_cutover_inflight() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_final_gate_reserves_before_window_creation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='最后一道本机门先持久预留；暂停且没有窗口时，空清单不能证明排空'
+}
+
+drill_repo_cutover_stop_binding() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" RepoAuthorityTests.test_unbound_and_wrong_native_receipt_refused 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='未知原生身份及换会话后的旧停止证明均拒绝'
+}
+
+drill_launch_receipt_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='原生启动回执拒绝旧身份与错误 provider，未验证不交付任务'
+}
+
 drill_dispatch_identity_fallback() {
   CAP=15; local out t0
   t0=$(now)
@@ -6193,6 +6249,15 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
 # verb says 入口不通 and exits 4 — never a quiet fallback to GitHub, which would
 # open a second numbering of the same repo — and the collector's cache stays the
 # last good copy.
+drill_cleanup_ticket_home() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-cleanup-ticket-selftest.sh" 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="Hub/GitHub 数字碰撞按 ticket home 判定；OPEN、离线和身份不明保留，CLOSED 进入后续门"
+}
+
 drill_ticket_hub_down() {
   CAP=30; local d="$WORK/thd" t0 port rc1 rc2 rc3 rc4
   mkdir -p "$d/conf/fleets/fs/repos" "$d/fakebin" "$d/cache" "$d/tmp"
@@ -6374,6 +6439,42 @@ drill_spinner_process_budget() {
     || { WHY="complete default spinner budget: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT='无工作及有维护待办两种隔离场景各完整 60 秒，含启动、等待、全部维护的外部进程各不超过 5 个'
+}
+
+drill_codex_mcp_busy() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" 2>&1) \
+    || { WHY="Codex MCP/helper 回收分类失守: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
+}
+
+drill_runtime_stale_idle() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" Snapshot 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
+}
+
+drill_pending_observation_stale() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-pending-tool-selftest.py" Observation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
+}
+
+drill_repo_authority_case() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_case_test.py" \
+    CaseAuthorityTests.test_gate_and_manifest_use_hub_identity_and_existing_overlay \
+    CaseAuthorityTests.test_panel_new_and_issue_start_keep_worktree_and_registration \
+    CaseAuthorityTests.test_panel_quick_draft_uses_real_compose_and_raw_entry \
+    CaseAuthorityTests.test_refusals_reach_panel_and_issue_without_secret_or_false_freeze 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='大小写注册名通过面板/issue/authority；原 overlay/worktree 保留，真实拒绝原因可见'
 }
 
 # ================================================================ run ====}
@@ -6606,12 +6707,37 @@ term_go() {
   fi
 }
 
+# A delayed transcript must not replace a turn started after that read.
+drill_chat_late_history() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  # Production useFleetChat in extras/web-console/src/app/chat/chat.ts and
+  # extras/web-chat/ui/src/chat.ts; browser-attachment CI installs Chromium.
+  [ -f "$ROOT/extras/browser-transport/chat-history.mjs" ] || { WHY='missing late-history browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/chat-history.mjs" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || { WHY="late history replaced a new turn: $out"; return 1; }
+    WHAT='迟到的旧对话不抹掉已完成的新消息；官网和本地各只提交一次'
+  else
+    WHAT='无 Playwright/Chromium：browser-attachment 门运行真实页面演练'
+  fi
+  SECS=$(since "$t0")
+}
+
 # Chat has its own admission and never replays a submitted request.
 drill_chat_direct_admission() {
   CAP=180; local t0
   t0=$(now)
   term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
     '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
+  SECS=$(since "$t0")
+}
+
+drill_term_controller_ready() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames TestCoreExecTerminalCancellation TestTermPtySignalCleanup' './internal/agent' \
+    '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
   SECS=$(since "$t0")
 }
 
@@ -6654,6 +6780,33 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_personal_renew() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --renew 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='嵌套壳 exit 返回；个人壳 exit 后普通重连保持 ended，显式 renew 后输入可用，其他 worker 不变'
+  SECS=$(since "$t0")
+}
+
+drill_term_view_auto_select() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --auto-select 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='目标窗消失时同步关闭本 browser view，不让输入落到自动选中的窗口；home PID 不变'
+  SECS=$(since "$t0")
+}
+
+drill_term_closed_lease() {
+  CAP=30; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --closed-lease 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='已退出 view 的新鲜租约可立即接回；活控制者仍须 Use here；旧清理不碰同名新 session'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_kills_session() {
   CAP=120; local t0 out rc
   t0=$(now)
@@ -6693,6 +6846,26 @@ drill_land_race() {
   [ "$out" = "MERGED MERGED FAILING 2 0" ] || { WHY="three landings at once read [$out], want [MERGED MERGED FAILING 2 0]"; return 1; }
   [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
   WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
+}
+
+# worker-inventory-rs (#4508): real adapter with synthetic orphan reports;
+# bin/fleet_control.py must preserve the nested RS/US framing through fleet_status.
+drill_worker_inventory_rs() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_inventory_orphan_report_framing 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='含历史报告 RS/US 的十条 inventory 原样到达 fleet_status，身份、中文、REAPED 报告与观察时间均保留'
+}
+
+# ticket-credential-pair (#4490): no production credentials or network.
+drill_ticket_credential_pair() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_ticket_creds_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='endpoint/token 同源；URL-only 整对读取，token-only/读取失败拒绝，显式 401/403 不换身份'
 }
 
 # ================================================================ run ====}

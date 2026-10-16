@@ -301,7 +301,16 @@ assert lines[0][:1] in "┌╭", lines[0]
 assert any(len(l) >= 40 and l[39] in "│┃" for l in lines[1:]), lines
 PY
 [ -n "${FLEET_VIEW_EVIDENCE_PHONE:-}" ] && cp "$W/phone.txt" "$FLEET_VIEW_EVIDENCE_PHONE"
-to send-keys -t o:view Escape; sleep 0.5
+to send-keys -t o:view Escape
+# Escape itself may wait for tmux's default escape-time (500 ms). Do not send
+# the next navigation key until the popup has closed and its freeze is undone.
+closed=''
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [ "$(ti show-options -gqv @popup_open)" = 0 ] && \
+     [ "$(ti display-message -p -t "$W2" '#{pane_in_mode}')" = 0 ]; then closed=1; break; fi
+  sleep 0.2
+done
+[ -n "$closed" ] || fail "G: phone popup did not close and thaw"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "G: go to alpha"
 to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
 for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done

@@ -283,8 +283,10 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start and runs
     # task_issue — the agent lists CapTask, and only then does the hub send them
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
+  replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;
+  recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
@@ -380,6 +382,12 @@ EOF
   bash "$BIN/fleet-peer-queue.sh" note -L "$home" --rid "$RID" --state "$rst" --to "$rto" \
     --kind "$rkind" --via hub --detail "$rdet" || die 75 "could not write the delivery book"
   exit 0
+fi
+
+# Task reports are fenced against task and parent generation before any key
+# resolution or ledger delivery. The hub retains retryable delivery failures.
+if [ "$KIND" = child_report ] && python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("payload", {}).get("task_report") else 1)' "$WORK/in"; then
+  exec python3 "$BIN/fleet_task_control.py" receive --file "$WORK/in"
 fi
 
 home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this machine"

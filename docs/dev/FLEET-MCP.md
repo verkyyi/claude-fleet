@@ -77,7 +77,7 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
 | `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
-| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — a task record waits on its issue's worker; one with no issue answers NO-WORKER naming its session | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
+| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
 | `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
@@ -92,7 +92,7 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
-| `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
+| `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `outcome`? (`succeeded` · `failed`, accepted tasks), `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--outcome O] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
 | `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? `class`? (`normal` · `never:rule\|money\|publish` — issue #2669, docs/DECISIONS.md), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`; with any of the new fields, or the steward on, the body `bin/fleet_decision.py ask-body` writes: 建议 / 不答按 / 截止 + the `fleet:ask v=1` marker), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `steward` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in `decision-<day>.md` + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
 | `take_role` 接 | `role` (`orchestrator` · `steward`), `action`? (`take` default · `steal` · `drop` · `who`) | `fleet-role-take.sh <role> [--steal\|--drop\|--who]` — marks THIS window `@fleet_role_def <role>` and writes the role's one line in `$FLEET_CONF_DIR/global/roles.held` (issue #3114); `fleet_role_holder` is the one reader, `fleet_win_for_key orchestrator` answers the holder. Only a window that binds no issue | 0 taken / dropped / already here (`who`: printed) · 1 `who`: nobody · 2 usage · 3 this window cannot (binds an issue / a panel / no pane) · 4 another window holds it (named) |
@@ -245,6 +245,281 @@ hub task. The operation journal records the accepted task and generation;
 it does not claim a lifecycle transition or populate execution receipts.
 Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
+
+### Task children and results (#4394)
+
+An accepted task (`authority_version: 1`, verified `@launch`) uses its T record
+for `children`, `await` and `report`. `children` without a key uses the calling
+accepted parent; an explicit `T<n>` reads that parent's current generation.
+Its JSON contains `parent`, `parent_session`, `parent_generation`, `children`.
+The legacy ledger's `--since` cursor is refused on this path. An unavailable
+authority returns `UNKNOWN`, never a local-cache success or another launch.
+
+Use `report(state: "waiting", outcome: "succeeded", summary: "…")` for completed
+work without a PR, or `outcome: "failed"` for an explicit final failure. Existing
+`state: "failed"` alone remains workflow progress (for example a red CI check).
+`state: "merged"` requires a confirmed merged PR and commits success. The result
+commits before parent delivery; `QUEUED` describes delivery, while `await T<n>`
+already returns `SUCCEEDED`/`FAILED`. The persistent native CLI may remain alive.
+
+Completion retains the execution lease until an independent confirmed stop.
+`cancel_request` records intent; only the current executor's `cancel_ack` with
+the matching request ID and `execution_stopped: true` may commit cancellation.
+After success/failure, `stop_ack` releases the execution lease without changing
+the outcome. The launch supervisor verifies native exit using its receipt
+(PID, birth, executable) before sending either acknowledgement. Native exit
+alone never invents success/failure. Retry needs a terminal result and released
+lease or fresh stopped proof; transfer requires stopped proof. Lease expiry or
+an unavailable node never authorizes replacement.
+
+During a hub outage (#4396), accepted-task reports, cancellation requests and
+verified native-stop receipts remain in the node's existing operation journal.
+`RECONCILIATION_PENDING` means the hub commit is unconfirmed; it is not a work
+result. Reconnect or the next task command replays the same event and generation,
+without replaying command input. The existing relay outbox uses one file per
+receipt and retains it until a positive hub acknowledgement. Running native
+processes survive; new starts, resumes and ownership changes still need the hub.
+Native resume and stop replay share a local exclusion lock. Stop replay also
+rechecks the saved window binding and native incarnation; an earlier process's
+stop proof cannot release a later resume in the same task generation.
+
+Pending receipts are limited to 1,000 per login and a seven-day replay window.
+Overflow refuses the new write; expiry retains the old record and reason as
+`RECONCILIATION_REQUIRED`. Neither grants another owner. Cached task observations
+carry their original `observed_at` and `stale: true` during an outage and never
+authorize a launch or prove success. `fleet-hub-node.sh recovery` lists unresolved
+receipts and overflow evidence; `fleet-hub-node.sh replay` makes one bounded pass.
+These are on-demand commands, with no added daemon or polling cadence.
+
+The node API adds `GET /v1/node/tasks/T<n>/children` and
+`POST /v1/node/tasks/T<n>/reports`. A report carries `event_id`, task, account
+owner, accepted `ticket_ref` (empty for unticketed work), child generation and
+worker UUID, parent task/session/generation, explicit outcome and evidence.
+The existing operation journal commits and deduplicates the event; stale
+reports remain historical. The existing outbox delivers to the stable parent
+identity and rechecks both generations. Parent retirement produces the existing
+orphan reminder; an unknown destination remains pending. Reconnect preserves
+one event/ledger row even with a different transport ID. Native notification is
+at least once across a crash between inbox delivery and writing its sent marker.
+
+Legacy task records and sessions keep their previous path; a downlevel report
+from an accepted execution is refused. Backlog migration/attachment is C5's
+boundary: these consumers preserve the accepted ticket reference, never infer
+a backend from an issue number. Isolated store/API/consumer tests are fixture
+evidence; deployment and live remote acceptance belong to C9.
+
+### Read-only provider observations (#4434)
+
+`bin/fleet_runtime.py read --pane %N [--socket fleet]` is the shared local
+entry point (Python: `fleet_runtime.read(pane, context=None, expected=None,
+socket="")`). JSON stdin is `{}`, or `{"launch": <C3 context>, "expected":
+<previous snapshot>}`. It observes only: no resume, turn start, command execution,
+task transition, cancellation or reclamation. Exit 0 means a known runtime
+observation; exit 2 means unknown. Neither exit authorizes delivery.
+
+The version 1 result separates these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Integer `1`; unsupported versions fail closed. |
+| `identity` | C3's complete `version/operation_id/task/owner/generation/worker_id/provider/attempt_id`, plus `native_session/pid/birth/executable/native_remote/turn_id`. No inferred task or owner for legacy launches. |
+| `source` | `codex:rpc`, `claude:native-event`, `claude:native-query`, or `none`. |
+| `observed_at`, `expires_at` | Unix seconds of the evidence, with a fixed maximum lifetime of 5 seconds. Reading or forwarding a saved snapshot never renews them. |
+| `runtime.state` | `active`, `idle`, `ask`, `approval`, `interrupted`, or `unknown`. A completed native turn is not a successful task result. |
+| `runtime.reason` | Stable rejection reason; empty only for a known observation. |
+| `runtime.socket_ready`, `runtime.thread_ready` | Independent observations. `null` means unverified; socket connection alone never proves a thread or turn exists. Claude has no RPC readiness assertion. |
+| `runtime.first_thread_deadline` | Pane kernel birth plus 45 seconds, fixed across rereads; missing proof after this deadline is unknown, never permission to restart. |
+| `task_result.state` | Independently read C1 outcome, `pending`, or `unknown`; never inferred from Stop, idle, exit or a displayed MERGED label. |
+| `controller_delivery.state` | `unknown`: this observer has no delivery or acceptance receipt. |
+| `reclaim` | Always `eligible: false`, `reason: separate_gates_required`. This observer cannot grant reclamation. |
+
+A read verifies C3's receipt and kernel process/pane binding, reads current C1
+ownership, observes the provider, then repeats both identity and authority
+checks. Codex reuses the existing identity reader and bounded local RPC client:
+metadata-only `thread/read` and `thread/turns/list` (one newest turn,
+`itemsView: notLoaded`). Both reads are repeated to reject a changed turn or
+status. A different SID/cwd, nested thread, unloaded thread, unsupported flags,
+failed turn or unavailable RPC is unknown. An interrupted turn stays interrupted.
+The adapter never fetches full message/tool contents and never resumes a thread.
+
+Claude uses the existing mod's native `turn.start`, `turn.complete` and
+`AskUserQuestion` edges, preserving their actual `turnId`. Only accepted C3
+launches publish one `@runtime_claude` observation through the `event` entry;
+root process ancestry, current native registry SID, receipt, event sequence
+and turn are checked under a local mutex. Late, duplicate, nested or old-turn
+events cannot replace the observation. An aborted/non-answer completion stays
+interrupted; settings `Stop` hooks never publish idle. Native registry idle
+must corroborate a completed turn. These observations expire after 5 seconds.
+When an event expires, the reader sends one `runtime.v1` query through the
+existing mod inbox callback. A fixed temporary request slot carries a nonce,
+the complete C3 launch context and a 3-second deadline. It never calls
+`command.run`, adds no timer, and creates no recovery journal. The native module
+answers from its current turn-bound state through the same ancestry-checked
+event publisher. Only that nonce's fresh native response can renew evidence;
+rereading a file or the mod heartbeat cannot. This allows long tools and long
+idle periods to be observed without starting a model turn. An inbox occupied
+by a command, an absent/old mod, a lost native process or a changed identity
+returns unknown; it never retries a command or changes recovery state.
+Unknown results retain the rejected event's source, turn and evidence times.
+Claude approval prompts with no native attention edge remain active/unknown,
+never idle. There is no transcript or display fallback.
+
+For a same-identity reread, supply the complete earlier snapshot as `expected`.
+Every identity field, including native process birth and turn, must match.
+This fresh read may obtain new RPC evidence or a new native mod reply; it never
+changes a saved event's source time. `project` with `{"snapshot": <saved>, "expected": <optional previous>}`
+only validates/project ages an existing observation, including remote copies.
+Expiry or a backwards clock returns unknown while retaining evidence times.
+Remote time comparisons assume synchronized clocks; future evidence is refused.
+Neither a reread nor a matching identity is an atomic acceptance fence: a new
+turn can begin immediately afterwards. #4431 owns consumer wiring and must keep
+active-turn/attention/bg/loop/transfer/dirty/unpersisted-work and task acceptance
+gates. C4/C6 retain outcomes, recovery, delivery and stop receipts.
+
+Typical unknown reasons are `missing_launch`, `missing_launch_receipt`,
+`first_thread_timeout`, `task_fence_changed`, `identity_or_authority_unavailable`,
+`endpoint_identity_changed`, `native_identity_changed`, `thread_unavailable`,
+`thread_not_loaded`, `no_turn`, `turn_not_completed`, `rpc_unavailable`,
+`native_changed_during_read`, `identity_changed_during_read`,
+`no_turn_observation`, `event_identity_changed`, `event_expired`,
+`registry_contradicts_event`, `identity_changed`, `expired`, and
+`clock_regressed`. Unknown is a refusal to infer readiness, not a retry order.
+
+Source/fixture verification is separate from native process verification and
+deployment/live acceptance. This interface neither changes the live install nor
+claims the independent #4474 process-cost budget. Native RPC semantics follow
+the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server).
+
+### Pending-tool observations (#4474)
+
+`bin/fleet_pending_tool.py` owns the existing Claude transcript oracle and
+pane→Claude BFS. `fleet-pending-tool.sh` and `fleet_pane_claude_pids` remain
+compatibility entries; there is no second provider or background service.
+The Python entry for #4444 is:
+
+```python
+from fleet_pending_tool import observe, read_panes, parse_panes, PANE_FORMAT
+
+# Default transport: two tmux commands and one ps for the whole batch.
+first = observe(lambda: read_panes("fleet"))
+expected = {r["pane"]: r["identity"] for r in first}
+# At the NEXT safety-check deadline, call observe again, never reuse first.
+second = observe(lambda: read_panes("fleet"), expected=expected)
+
+# A consumer with an existing tmux control connection supplies a synchronous
+# command function. Each observation then forks only ONE ps, for every window.
+def reader():
+    return parse_panes(control_command("list-panes", "-a", "-F", PANE_FORMAT))
+results = observe(reader, expected=expected)
+```
+
+`reader` must perform a fresh synchronous read on each invocation, returning
+the requested rows from one socket. `PANE_FIELDS` names socket path, server PID,
+window/pane IDs, pane PID, worker FID, agent and native SID; `PANE_FORMAT` carries
+a final sentinel to preserve empty fields. Grouped-session duplicates are
+deduplicated by socket/pane. Callers may filter to their candidates, retaining
+every field. No binding, process or transcript cache survives `observe`.
+
+Each version-1 result contains `pane`, `code`, `tool`, `reason`, `identity`,
+`observed_at` and `expires_at`. Identity includes socket device/inode, server
+kernel birth/executable, worker FID, window/pane, native PID/birth/executable/SID
+and ancestry to the pane. Native registry PID, SID and published birth
+(`startedAt`/`procStart`) must agree. Missing FID/SID/registry birth is unknown.
+The optional `expected` argument must contain the complete first identities;
+missing or changed entries refuse. It never renews an old observation.
+
+Within one call, processes/argv and each transcript are parsed once. Before
+returning a known result, the reader rechecks the live bindings, socket,
+kernel process identities, registry SID and transcript inode/size/timestamps.
+A failed process scan, PID reuse, process exit, recycled window, other socket,
+malformed transcript or changed identity returns code 4. Transport exceptions
+at the first read propagate: the consumer must retain **all** candidates.
+An observation taking 5 seconds expires, using `fleet_runtime.TTL`; consumers
+must also reject results at or after `expires_at`. No TTL or provider policy is
+added to `fleet_runtime`. Two checks 20 seconds apart collect two process tables.
+
+| Entry / condition | Output and exit/code |
+|---|---|
+| CLI path, newest tool without a matching result | Tool name, 0 (the historical selection order) |
+| CLI path, no pending / absent / unreadable | Silence, 1; malformed JSON lines still skipped |
+| CLI bad arguments | 2 |
+| CLI target, no Claude or no such pane | 3 |
+| CLI target, Codex/other agent or failed resolution/read | 4; malformed/empty transcripts now also refuse |
+| Batch known pending / known no pending | 0 + name / 1; neither means runtime idle |
+| Batch no native, missing birth, stale or unknown identity | 4, retain; no code 3 inference |
+
+`Processes.collect()` uses one bounded `ps` on Linux/macOS; argv comes from the
+existing kernel reader. `fleet_launch.process(pid, ps_row=(ppid, lstart))`
+reuses that row but still checks kernel birth/executable and rejects a changed
+parent/start. Its original one-argument C3 contract and birth format remain.
+`fleet_pane_claude_pids` uses one interpreter plus that one ps, preserving BFS,
+node/bun recognition, explicit fake-shell override and zombie rejection.
+
+The isolated `fleet-pending-tool-selftest.py --cost` exercises two actual checks
+20 seconds apart via a real control connection and prints raw PID/exec traces:
+one control startup plus two ps, regardless of the two-window batch. The default
+CLI transport instead costs two tmux + one ps per observation. Neither count
+includes unrelated consumer maintenance. #4444 still owns spinner wiring and
+its complete default 60-second budget. Real whole-machine idle/busy evidence and
+deployment are separate. Background tools, active loops, children and all #4318
+Stop/reap gates remain required; a `no_pending` result waives none of them.
+
+### Existing-repo authority cutover (#4395)
+
+`fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
+manifest: local authority/ticket/forge/landing settings and their digest, hub
+revision, registered hosts and capabilities, legacy owners (including expired
+leases), task outcomes, ticket references and selective mappings. It writes
+nothing. `--freeze`, `--apply`, and `--rollback` each require `--manifest FILE`;
+save a fresh dry-run between stages. Exact retries reuse the same operation key.
+The manifest must name this exact repo/session and unchanged local settings.
+
+Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
+The last local gate reserves a start in the existing operation journal before
+window creation. Freeze, admission and cancellation serialize on the same repo
+lock. A paused launcher, empty inventory or elapsed lease never erases it.
+`--cancel-start RESERVATION` revokes only a never-begun reservation; a racing
+launcher then cannot begin. Started but unobserved execution stays blocked.
+The existing session wrapper consumes each reservation once; resumes and
+transfers through that wrapper require a new admission. Its existing native
+startup hook binds the process/session, and its native wait records stop.
+All registered hosts must advertise `repo_authority_v1` and `launch_v1` before
+freeze; apply also requires fresh post-freeze observations. Unknown/offline
+hosts refuse cutover. Captured legacy owners remain blockers after expiry or
+inventory disappearance. Drain them using the existing stop workflow, then on
+the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
+receipt names worker, native session, PID, birth and executable. It must match
+the native identity saved for that frozen owner in the operation journal;
+an arbitrary dead process or a pre-transfer receipt cannot release a replacement.
+Older owners without that binding refuse freeze before any authority mutation:
+drain/reconcile these on their existing legacy path, then retry preflight.
+This keeps legacy drain available rather than trapping the repo frozen;
+missing observation is not an acknowledgement. The command
+requires ESRCH or a positively observed different process identity; permission
+or probe failure remains unknown. The authenticated node's acknowledgement is
+journalled. It does not stop processes or adopt a live owner automatically.
+
+Apply selects hub task authority without changing `FLEET_TICKETS`,
+`FLEET_FORGE`, or `FLEET_LAND`. New starts require an accepted dispatch on a
+capable node; local dispatch checks the central gate and fails closed on an
+authority outage. Existing ticket integers keep their pinned backend. Selective
+backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest FILE`
+(`--body-file FILE` optional): allocate a new hub ticket and preserve the exact
+old reference/URL in one transaction. No GitHub write or whole-backlog import.
+The returned `hub:owner/repo#M` can be passed as `ticket_ref` on an accepted
+`worker_start`; the accepted task carries it through node launch and reports.
+Brief, comment, evidence and cleanup ticket reads use that accepted reference
+even when the repo's pinned default is GitHub and the hub number collides.
+The manifest projects a later confirmed `task_report` with `status=merged` and
+`pr_state=merged` independently of the original work outcome; waiting or an old
+generation cannot turn that field into a confirmed landing.
+
+Rollback first freezes dispatch. Accepted work must have a terminal outcome
+and no retained execution lease before future starts return to legacy control.
+It keeps task history and ticket mappings; it never mirrors hub results to
+GitHub. Explicit completion with a PR records `work_result` and `pr_state:
+waiting` separately in result evidence. Only the existing merge verdict permits
+`pr_state: merged`. Fixture tests do not establish deployment/live acceptance.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 

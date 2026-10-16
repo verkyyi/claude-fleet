@@ -52,6 +52,32 @@ Closing the terminal window does not stop your sessions; type `fleet` next time 
 
 In ⌘P choose **Add a repo…** and fill in `<owner>/<repo>`. The repository goes to `~/projects/<repo>`; from then on, pick it when you start a session, and the session changes code and opens pull requests in its own copy, never touching your main checkout.
 
+GitHub repository names accept either case for task creation and migration;
+existing configuration files and working directories keep their names.
+If creation fails, read the specific reason: `frozen` means migration is still
+in progress, input/registration errors require checking the selected repo,
+`HTTP 401/403` requires checking the host's authentication and permissions, and
+Hub outages require restoring the service before retrying. Casing does not
+require re-adding the repo or manually unfreezing it.
+
+Existing repositories keep their ticket settings. To explicitly move one repo's
+task control to the hub, first save a private migration inventory:
+
+```sh
+~/.claude/fleet/bin/fleet-repo.sh authority owner/repo --session fleet --dry-run > /private/path/repo-manifest.json
+```
+
+Review its hosts, active owners and blockers. Use the same command with
+`--freeze --manifest /private/path/repo-manifest.json` to stop new starts, then
+drain existing owners. Save a fresh `--dry-run` manifest and use `--apply` with
+it only when every host is capable and all legacy owners have confirmed stops.
+Unknown or offline owners block the change. `--rollback` also requires a freeze
+and a fresh manifest; accepted hub tasks must finish and release execution first.
+Keep manifests private: they contain machine and task references.
+
+This changes task control only. Ticket settings, GitHub code hosting and PR
+checks stay in place. A completed task can still have a PR waiting for GitHub.
+
 ## Next
 
 - Everyday use: [Everyday use](../member/usage.md)

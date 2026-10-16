@@ -192,6 +192,12 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			// The test identity's scratch, marked (claude-fleet#2505).
 			caps = append(caps, control.CapTestIdentity)
 		}
+		if rp.launch {
+			caps = append(caps, control.CapLaunch)
+		}
+		if rp.repoAuthority {
+			caps = append(caps, control.CapRepoAuthority)
+		}
 		if rp.task {
 			// The hub's task record on a start (claude-fleet#3325).
 			caps = append(caps, control.CapTask)
@@ -209,7 +215,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	}
 	if a.cfg.FleetTerm {
 		caps = append(caps, control.CapTerm)
-		caps = append(caps, control.CapAttachment)
+		caps = append(caps, control.CapAttachment, control.CapTermController, control.CapTermRenew)
 	}
 	if a.svcRunCapable() {
 		// A service login takes service run attempts (claude-fleet#4086).
@@ -431,6 +437,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 
 	if relayOK {
 		go a.relayOutbox(ctx, conn, rp)
+		if rp.taskRecovery {
+			go a.replayTaskReceipts(ctx, rp.script)
+		}
 	}
 	// fleet-ops: every user pod's reading, up this link (claude-fleet#3734).
 	go a.clusterReadingsLoop(ctx, conn)

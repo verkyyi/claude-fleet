@@ -53,6 +53,14 @@ fail() { printf 'FAIL %s\n' "$1" >&2
          exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+# This fixture mocks the hub lease/placement, including its independent C5
+# authority response. Unknown authority is still refused by the real guard.
+cat > "$WORK/fakebin/authority" <<'AUTH'
+#!/bin/sh
+printf '%s\n' '{"mode":"legacy","reservation":"fixture-local-start"}'
+AUTH
+chmod +x "$WORK/fakebin/authority"
+export FLEET_HUB_AUTHORITY_CMD="$WORK/fakebin/authority"
 GH_LOG="$WORK/gh.log"; TMUX_LOG="$WORK/tmux.log"; GIT_LOG="$WORK/git.log"; DISPLAY_LOG="$WORK/display.log"
 
 # --- fake git: fetch/worktree/branch succeed; worktree+branch ops are LOGGED -------

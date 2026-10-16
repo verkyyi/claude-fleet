@@ -124,7 +124,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 |---|---|---|
 | 终端看台与薄客户端 | 核心 | #3008 合并后的会话访问、列表和交互入口；按设备可选的 iTerm2 集成仍归上表。 |
 | 配置与插件装配 | 核心 | 读取配置、装配代理和可选插件的共用机制；不代表被装配的插件本身必选。 |
-| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话。 |
+| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话；`fleet_launch.py` 在投递任务前验证原生进程和会话，并保留接受代次的恢复边界（#4393）。 |
 
 下面是盘点工具读取的归属规则，按顺序首个匹配；名称前缀必须唯一对应上方组件表。
 模式相对于 `bin/`，以空格分开，支持 shell 风格通配符。不得用 `*` 总兜底把新文件
@@ -140,12 +140,12 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
 | 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
-| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet-compat* fleet_compat* fleet-worker-records*` | 状态、历史与恢复 |
+| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet_compat* fleet-worker-records*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
 | 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
-| 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* dash-repo-add*` | 仓库注册与选择 |
+| 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择任务权威（#4395），没有常驻进程 |
 | 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色与编排状态，下一批处理 |
 | 管家特殊实现 | `fleet-steward* fleet_steward* fleet_decision*` | 巡查及决定单，下一批处理 |
 | EPIC 批次 | `fleet-epic* epic-page* fleet-batch-green*` | 批次工作流 |
@@ -159,15 +159,15 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠与唤醒 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect* fleet-report-stats*` | 收集与账本 |
 | GitHub 工作流 | `fleet-issue-bridge* fleet-issue-cache* fleet-gh* fleet_gh* fleet-webhook* tmux-pr-refresh* fleet-labels*` | GitHub 缓存与桥 |
-| 终端状态与节点连接 | `tmux-spinner* fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接 |
+| 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 调用 render-watch 等待可见性及状态事件 |
 | Hub（ | `fleet-hub* fleet_hub* fleet-login* fleet-logout* fleet-relogin* fleet-users* fleet-tenant* fleet-admin* fleet_admin* hub-session* fleet-route* fleet-connect* fleet-task-record* fleet_cluster_ticket*` | Hub、账号接入及任务记录 |
 | Web 接入 | `fleet-webchat* fleet-webterm* web-console* site-*` | 网页与站点 |
 | 承载节点 | `fleet-node* fleet_node* fleet-spot* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-cn-probe*` | 节点与宿主服务 |
 | 接入中继 | `fleet-relay* fleet-peer-cert* fleet-peer-trust* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |
 | 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |
-| 账号与代理启动 | `fleet-account* .fleet-account* .fleet-failover* fleet-codex* fleet_codex* fleet-claude* fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据 |
+| 账号与代理启动 | `fleet-account* .fleet-account* .fleet-failover* fleet-codex* fleet_codex* fleet-claude* fleet_dispatch.py fleet_launch.py fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据；投递及会话启动入口通过 fleet_dispatch 解析、校验已接受的代理选择 |
 | Fleet MCP（ | `fleet-mcp* fleet-peer-mcp* fleet-phone-mcp* fleet-doctor* fleet-control* fleet_control*` | 工具读写与诊断 |
-| 执行会话与跨会话协作 MCP | `fleet-answer* fleet-await* fleet-children* fleet-comment* fleet-issue-file* fleet-evidence* fleet-pr-* fleet-report-parent* fleet-peer-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet-bind* fleet-draft* fleet-ticket* fleet_ticket* fleet-task* fleet_followup* fleet-wait-reeval* fleet-land* fleet-rules* fleet_rules* fleet-gate-check* fleet-workflow-perms*` | 任务与协作、PR 和合并 |
+| 执行会话与跨会话协作 MCP | `fleet-answer* fleet-await* fleet-children* fleet-comment* fleet-issue-file* fleet-evidence* fleet-pr-* fleet-report-parent* fleet-peer-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet-bind* fleet-draft* fleet-ticket* fleet_ticket* fleet-task* fleet_task_control.py fleet_task_recovery.py fleet_followup* fleet-wait-reeval* fleet-land* fleet-rules* fleet_rules* fleet-gate-check* fleet-workflow-perms*` | 任务与协作、PR 和合并；await/children/report-parent 通过 fleet_task_control.py 协作，task-record/hub-node 通过 fleet_task_recovery.py 保存并重放已接受任务的回执 |
 | 执行会话（ | `fleet-claim-brief* fleet-worker-start-hook* fleet-worktree* fleet-session-wrap* fleet-session-command* fleet-session-shell-agent* fleet-run* dash-issue-session* dash-raw-session* scratch-pool* scratch-prefill* fleet-home-session* fleet-home-template* fleet-lib.sh fleet_iso.py session-shell/* fleet-degenerate*` | 执行会话与共用运行库 |
 | 终端看台与薄客户端 | `fleet fleet-entry* fleet-up* fleet-down* fleet-attach* fleet-term* fleet-thin* fleet_thin* fleet-client* fleet_clientlog* fleet-session-cli* fleet-session-page* fleet-view* fleet_view* fleet-remote-view* fleet-topbar* fleet-list* fleet-keys* fleet_keys* fleet-door* fleet-input* fleet-compose* fleet-quick* fleet-ui-* fleet-palette* fleet-panel* fleet_panel* fleet-pane* fleet-popup* fleet-pending-tool* fleet-human-menu* fleet-window-carry* fleet-alerts* fleet_notify* fleet_needs_detail* fleet_sidefx* dash-* tmux-* .tmux-* reapply-tmux*` | 看台、交互与窗口 |
 | 构建与验证 | `*-selftest* selftest-* run-selftests* ci-* client-e2e* codex-matrix* docs-* fleet-bin-inventory* fleet-break-it* break-it-durations.txt fleet-ci-* fleet-debug* fleet-drill* fleet-shard* fleet-train* fleet-nightly* fleet-macos-watch* fleet-oldcfg* fleet-claim-grounding* no-direct-gh.baseline oss-scan*` | 盘点、构建、回归与发布检查 |

@@ -141,11 +141,19 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
 		return FleetTask{}, err
 	}
+	if err = s.repoStartTx(tx, t.Repo, true); err != nil {
+		return FleetTask{}, err
+	}
 	if t.TicketRef != "" {
 		backend, _, _ := strings.Cut(t.TicketRef, ":")
 		r, n, _ := taskTicket(t.TicketRef)
 		var ticketOwner, ticketBackend string
-		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ?`, strings.TrimPrefix(r, "hub:"), n).Scan(&ticketOwner, &ticketBackend)
+		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ? AND backend = ?`, strings.TrimPrefix(r, "hub:"), n, backend).Scan(&ticketOwner, &ticketBackend)
+		if errors.Is(err, sql.ErrNoRows) && backend == TicketGitHub {
+			// A colliding hub number cannot hide the original GH reference's
+			// owner in the full-ID registry retained by selective adoption.
+			err = tx.QueryRow(`SELECT owner, backend FROM fleet_ticket_index WHERE id = ?`, t.TicketRef).Scan(&ticketOwner, &ticketBackend)
+		}
 		if err == nil && (ticketOwner != t.Owner || ticketBackend != backend) {
 			return FleetTask{}, ErrTaskFence
 		}
@@ -203,6 +211,11 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		rec.ID = id
 		return rec, tx.Commit()
 	}
+	// Snapshot the parent generation only on the first acceptance. Replaying
+	// the original request after a parent restart never re-parents the child.
+	if err = s.bindTaskParentTx(tx, &rec); err != nil {
+		return FleetTask{}, err
+	}
 	rec.AttemptID = taskAttemptID(id, 1)
 	if err = s.saveTaskTx(tx, rec, now); err != nil {
 		return FleetTask{}, err
@@ -218,31 +231,62 @@ func taskAttemptID(id, generation int64) string {
 }
 
 // TaskMutation is one fenced, idempotent command. A retry is allowed only
-// after a terminal result. A transfer requires explicit stopped evidence from
-// the current executor; lease expiry alone never authorizes either command.
+// after a terminal result and release of its pinned execution lease. A transfer
+// requires explicit stopped evidence from the current executor; lease expiry
+// alone never authorizes either command. stop_ack releases a retained terminal
+// execution without changing its task outcome.
 // EndpointID is the authenticated node, not a field to accept from JSON.
 type TaskMutation struct {
-	Key              string `json:"idempotency_key"`
-	Kind             string `json:"kind"` // claim | transition | retry | transfer
-	ExpectedWorker   string `json:"expected_worker"`
-	Generation       int64  `json:"generation"`
-	WorkerID         string `json:"worker_id,omitempty"`
-	EndpointID       string `json:"-"`
-	FleetID          string `json:"-"`
-	State            string `json:"state,omitempty"`
-	ActualAgent      string `json:"actual_agent,omitempty"`
-	RequestedAgent   string `json:"requested_agent,omitempty"`
-	ResolvedAgent    string `json:"resolved_agent,omitempty"`
-	Evidence         string `json:"evidence,omitempty"`
-	ExecutionStopped bool   `json:"execution_stopped,omitempty"`
-	Observation      string `json:"observation,omitempty"`
-	SessionKey       string `json:"session_key,omitempty"`
+	Key              string              `json:"idempotency_key"`
+	Kind             string              `json:"kind"` // claim | transition | retry | transfer | cancel_request | cancel_ack | stop_ack | blocker
+	ExpectedWorker   string              `json:"expected_worker"`
+	Generation       int64               `json:"generation"`
+	WorkerID         string              `json:"worker_id,omitempty"`
+	EndpointID       string              `json:"-"`
+	FleetID          string              `json:"-"`
+	State            string              `json:"state,omitempty"`
+	ActualAgent      string              `json:"actual_agent,omitempty"`
+	RequestedAgent   string              `json:"requested_agent,omitempty"`
+	ResolvedAgent    string              `json:"resolved_agent,omitempty"`
+	Evidence         string              `json:"evidence,omitempty"`
+	ExecutionStopped bool                `json:"execution_stopped,omitempty"`
+	Observation      string              `json:"observation,omitempty"`
+	SessionKey       string              `json:"session_key,omitempty"`
+	CancelRequest    string              `json:"cancel_request,omitempty"`
+	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
+	// Repo is immutable. Take its authority lock before the task row lock,
+	// in the same order as acceptance/cutover; lifecycle reports remain open.
+	var startRepo string
+	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" {
+		t, e := s.FleetTask(id)
+		if e != nil {
+			return FleetTask{}, e
+		}
+		startRepo = t.Repo
+	}
 	// Refuse fields that this command cannot apply, rather than silently
 	// accepting a requested provider/owner change on a transition.
+	if m.CancelRequest != "" && m.Kind != "cancel_ack" {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	if (m.Kind == "blocker") != (m.Blocker != nil) {
+		return FleetTask{}, ErrTaskInvalid
+	}
 	switch m.Kind {
+	case "blocker":
+		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
+			return FleetTask{}, ErrTaskInvalid
+		}
+	case "cancel_request", "cancel_ack", "stop_ack":
+		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.Evidence == "" {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		if m.Kind == "cancel_request" && m.ExecutionStopped {
+			return FleetTask{}, ErrTaskInvalid
+		}
 	case "claim":
 		if m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Evidence != "" || m.ExecutionStopped || m.Observation != "" {
 			return FleetTask{}, ErrTaskInvalid
@@ -266,7 +310,15 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, err
 	}
 	defer tx.Rollback()
+	if startRepo != "" {
+		if err = s.repoStartTx(tx, startRepo, true); err != nil {
+			return FleetTask{}, err
+		}
+	}
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
+		return FleetTask{}, err
+	}
+	if err = s.d.lockKey(tx, "fleet_tasks", "task-blockers:"+owner); err != nil {
 		return FleetTask{}, err
 	}
 	t, err := s.taskInTx(tx, id)
@@ -300,10 +352,35 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, err
 	}
 	if t.Generation != m.Generation || t.ExecutionOwner != m.ExpectedWorker ||
-		(t.ExecutionEndpoint != "" && t.ExecutionEndpoint != m.EndpointID) {
+		(m.Kind != "cancel_request" && t.ExecutionEndpoint != "" && t.ExecutionEndpoint != m.EndpointID) {
 		return FleetTask{}, ErrTaskFence
 	}
+	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	switch m.Kind {
+	case "blocker":
+		if err = s.applyTaskBlockerTx(tx, t, m.EndpointID, eventID, *m.Blocker, now); err != nil {
+			return FleetTask{}, err
+		}
+	case "stop_ack":
+		if !taskTerminal(t.State) || t.ExecutionOwner == "" || !m.ExecutionStopped {
+			return FleetTask{}, ErrTaskConflict
+		}
+		if err = releaseTaskLeaseTx(tx, t); err != nil {
+			return FleetTask{}, err
+		}
+	case "cancel_request":
+		if taskTerminal(t.State) || t.CancelRequest != "" {
+			return FleetTask{}, ErrTaskConflict
+		}
+		t.CancelRequest = m.Key // Intent only: retain execution owner and lease.
+	case "cancel_ack":
+		if taskTerminal(t.State) || t.CancelRequest == "" || t.CancelRequest != m.CancelRequest || !m.ExecutionStopped {
+			return FleetTask{}, ErrTaskConflict
+		}
+		t.State, t.Outcome, t.Evidence = TaskCancelled, TaskCancelled, m.Evidence
+		if err = releaseTaskLeaseTx(tx, t); err != nil {
+			return FleetTask{}, err
+		}
 	case "claim":
 		if t.State != TaskAccepted || t.ExecutionOwner != "" || m.WorkerID == "" || m.FleetID == "" {
 			return FleetTask{}, ErrTaskConflict
@@ -317,6 +394,9 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 			t.LeaseRef = "task:" + t.Ref
 		}
 	case "transition":
+		if m.State == TaskCancelled && t.ExecutionOwner != "" {
+			return FleetTask{}, ErrTaskConflict
+		}
 		if taskTerminal(t.State) {
 			return FleetTask{}, ErrTaskConflict
 		}
@@ -337,15 +417,17 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 				return FleetTask{}, ErrTaskConflict
 			}
 			if taskTerminal(m.State) {
-				if m.Evidence == "" || (t.ExecutionOwner != "" && !m.ExecutionStopped) {
+				if m.Evidence == "" || (m.State == TaskRefused && t.ExecutionOwner != "" && !m.ExecutionStopped) {
 					return FleetTask{}, ErrTaskConflict
 				}
 				if m.State == TaskRefused && t.ActualAgent != "" {
 					return FleetTask{}, ErrTaskConflict
 				}
 				t.Outcome = m.State
-				if err = releaseTaskLeaseTx(tx, t); err != nil {
-					return FleetTask{}, err
+				if m.ExecutionStopped {
+					if err = releaseTaskLeaseTx(tx, t); err != nil {
+						return FleetTask{}, err
+					}
 				}
 			}
 			t.State = m.State
@@ -366,6 +448,17 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		if m.Kind == "retry" && !taskTerminal(t.State) {
 			return FleetTask{}, ErrTaskConflict
 		}
+		if m.Kind == "retry" && !m.ExecutionStopped {
+			// A terminal result alone does not retire the native executor.
+			// Old terminal records already released their lease with stop proof.
+			var held int
+			if err = tx.QueryRow(`SELECT COUNT(*) FROM fleet_leases WHERE task_id = ? AND generation = ?`, t.ID, t.Generation).Scan(&held); err != nil {
+				return FleetTask{}, err
+			}
+			if held != 0 {
+				return FleetTask{}, ErrTaskConflict
+			}
+		}
 		if m.Kind == "transfer" && (t.ExecutionOwner == "" || taskTerminal(t.State) || !m.ExecutionStopped) {
 			return FleetTask{}, ErrTaskConflict
 		}
@@ -380,7 +473,7 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		t.UpdatedAt = now.UTC()
 		t.State, t.RequestedAgent, t.ResolvedAgent = TaskAccepted, m.RequestedAgent, m.ResolvedAgent
 		t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.ActualAgent, t.LeaseRef = "", "", "", "", ""
-		t.Outcome, t.Evidence, t.Observation, t.SessionKey = "", "", "", ""
+		t.Outcome, t.Evidence, t.Observation, t.SessionKey, t.CancelRequest = "", "", "", "", ""
 		t.AttemptID = taskAttemptID(t.ID, t.Generation)
 		if err = taskAttemptTx(tx, t, now); err != nil {
 			return FleetTask{}, err
@@ -395,11 +488,13 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if err = taskAttemptResultTx(tx, t, now); err != nil {
 		return FleetTask{}, err
 	}
+	if err = projectTaskBlockers(tx, &t); err != nil {
+		return FleetTask{}, err
+	}
 	resultJSON, err := json.Marshal(t)
 	if err != nil {
 		return FleetTask{}, err
 	}
-	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	ts := now.UTC().Format(rfc)
 	eventWorker := m.WorkerID
 	if eventWorker == "" {
@@ -409,6 +504,11 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
   VALUES (?, ?, 'task_event', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, eventID, m.FleetID, string(raw), owner, idem, ts, ts, string(resultJSON), eventWorker)
 	if err != nil {
 		return FleetTask{}, err
+	}
+	if (m.Kind == "transition" || m.Kind == "cancel_ack") && taskTerminal(t.State) {
+		if err = s.resolveTaskDependenciesTx(tx, t, eventID, now); err != nil {
+			return FleetTask{}, err
+		}
 	}
 	return t, tx.Commit()
 }
@@ -458,9 +558,9 @@ func releaseTaskLeaseTx(tx *sql.Tx, t FleetTask) error {
 func (s *Store) saveTaskTx(tx *sql.Tx, t FleetTask, now time.Time) error {
 	_, err := tx.Exec(`UPDATE fleet_tasks SET state = ?, generation = ?, execution_owner = ?, execution_endpoint = ?,
   worker_id = ?, requested_agent = ?, resolved_agent = ?, actual_agent = ?, lease_ref = ?, outcome = ?, evidence = ?, observation = ?,
-  attempt_id = ?, session_key = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
+  attempt_id = ?, session_key = ?, parent_task = ?, parent_session = ?, parent_generation = ?, cancel_request = ?, updated_at = ? WHERE id = ? AND owner = ? AND authority_version = 1`,
 		t.State, t.Generation, t.ExecutionOwner, t.ExecutionEndpoint, t.WorkerID, t.RequestedAgent, t.ResolvedAgent, t.ActualAgent,
-		t.LeaseRef, t.Outcome, t.Evidence, t.Observation, t.AttemptID, t.SessionKey, now.UTC().Format(rfc), t.ID, t.Owner)
+		t.LeaseRef, t.Outcome, t.Evidence, t.Observation, t.AttemptID, t.SessionKey, t.ParentTask, t.ParentSession, t.ParentGeneration, t.CancelRequest, now.UTC().Format(rfc), t.ID, t.Owner)
 	return err
 }
 

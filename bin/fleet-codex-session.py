@@ -182,11 +182,22 @@ def bus_fields(stats, home):
 
 
 def hook():
+    payload = None
+    if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
+        from fleet_repo_authority import observe_native
+        payload = json.load(sys.stdin)
+        observe_native(payload)
+    if os.environ.get("FLEET_LAUNCH_CONTEXT"):
+        from fleet_launch import hook as launch_hook
+        if payload is None:
+            payload = json.load(sys.stdin)
+        launch_hook(payload)
     owner = os.environ.get("FLEET_CODEX_LAUNCHER_PID", "")
     pane = os.environ.get("TMUX_PANE", "")
     if not owner.isdigit() or not pane or not os.environ.get("TMUX"):
         return
-    payload = json.load(sys.stdin)
+    if payload is None:
+        payload = json.load(sys.stdin)
     if not isinstance(payload, dict) or not valid_id(payload.get("session_id")):
         return
     current = tmux(["display-message", "-p", "-t", pane,
@@ -289,6 +300,9 @@ def context(args):
                 "transcript": args.transcript or ""}
     stats = telemetry(data)
     pct = stats["pct"]
+    if args.pct:
+        print(pct)
+        return 0 if pct >= 0 else 1
     threshold, armed = 0, False
     if args.pane:
         try:
@@ -314,7 +328,23 @@ def context(args):
 
 
 def send(args):
-    data = identity(args.pane, args.socket)
+    proof = os.environ.get("FLEET_LAUNCH_DELIVERY", "")
+    if proof:
+        from fleet_launch import inspect
+        expected = json.loads(proof)
+        current = inspect(json.loads(os.environ["FLEET_LAUNCH_CONTEXT"]), args.pane, args.socket)
+        if current != expected:
+            raise ValueError("Codex launch identity changed before delivery")
+        # Address the endpoint and thread witnessed by this root native hook;
+        # a pane label or a later @codex_identity cannot redirect first input.
+        data = dict(session_id=current["native_session"], remote=current.get("native_remote", ""),
+                    home=current.get("native_home", ""))
+        cli = current["executable"]
+        if not os.path.isabs(data["home"]):
+            raise ValueError("Codex launch has no verified native home")
+    else:
+        data = identity(args.pane, args.socket)
+        cli = "codex"
     if not data:
         raise ValueError("no current Codex session identity")
     # --remote is mandatory: an embedded `codex queue` process is not the TUI's
@@ -326,7 +356,7 @@ def send(args):
     if not text.strip():
         raise ValueError("empty message")
     env = dict(os.environ, CODEX_HOME=data["home"])
-    p = subprocess.run(["codex", "queue", "--remote", remote, "--thread", data["session_id"], "--message", text],
+    p = subprocess.run([cli, "queue", "--remote", remote, "--thread", data["session_id"], "--message", text],
                        env=env, text=True, capture_output=True, timeout=15)
     if p.returncode:
         raise ValueError(p.stderr.strip() or "Codex queue failed")
@@ -372,6 +402,7 @@ def main():
     parser.add_argument("--identity", default="{}")
     parser.add_argument("--owner", default="")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--pct", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
     try:

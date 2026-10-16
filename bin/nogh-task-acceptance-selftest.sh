@@ -1,0 +1,67 @@
+#!/bin/bash
+# Driver verdict/counter regressions; full boundaries run in task-acceptance.yml.
+# selftest-deps: nogh-task-acceptance.py nogh-task-boundary-test.py nogh-task-browser.mjs nogh-task-deny-probe.py
+set -euo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd)"
+PYTHONDONTWRITEBYTECODE=1 python3 - "$BIN" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+import tempfile
+
+spec = importlib.util.spec_from_file_location("acceptance", Path(sys.argv[1])/"nogh-task-acceptance.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+assert not m.valid_output("go", "PASS\n", ["TestMissing"])
+assert not m.valid_output("go", "--- SKIP: TestMissing (0s)\nPASS\n", ["TestMissing"])
+assert m.valid_output("go", "--- PASS: TestReal (0.01s)\nPASS\n", ["TestReal"])
+assert not m.valid_output("python", "Ran 0 tests\nOK\n")
+assert not m.valid_output("python", "Ran 1 test\nOK (skipped=1)\n")
+assert m.valid_output("python", "Ran 1 test in 0.1s\n\nOK\n")
+assert not m.valid_output("baseline", "steps: 6/7 · gh calls: 0 · github http: 0")
+trace = '''42 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.1")}, 16) = -1 ENETUNREACH
+42 connect(3, {sa_family=AF_INET, sin_port=htons(80), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+43 connect(3, {sa_family=AF_INET6, sin6_port=htons(443), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr)}, 28) = -1 ENETUNREACH
+43 connect(3, {sa_family=AF_INET6, sin6_port=htons(80), inet_pton(AF_INET6, "::ffff:127.0.0.1", &sin6_addr)}, 28) = 0
+43 sendto(3, "", 0, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("192.0.2.2")}, 16) = -1 ENETUNREACH
+'''
+assert m.network_counts(trace) == dict(external_http=2, other_external=1, blocked_io_uring=0)
+assert m.network_counts('sendto(3, [{nlmsg_type=RTM_GETROUTE}, {rtm_family=AF_INET}], 36, 0, NULL, 0) = 36') == dict(external_http=0, other_external=0, blocked_io_uring=0)
+assert m.network_counts('sendmmsg(3, [{msg_hdr={msg_name={sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.1")}}}, {msg_hdr={msg_name={sa_family=AF_INET6, sin6_port=htons(443), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr)}}}], 2, 0) = -1') == dict(external_http=2, other_external=0, blocked_io_uring=0)
+assert m.network_counts('io_uring_setup(256, {}) = -1 ENOSYS (Function not implemented) (INJECTED)')["blocked_io_uring"] == 1
+for unsafe in ('io_uring_setup(256, {}) = 4', 'io_uring_enter(4, 0, 0, 0) = 0'):
+    try:
+        m.network_counts(unsafe)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unobserved ring accepted")
+assert m.gh_executions('''1 execve("/outer/gh", [""...], [""...]) = 0
+2 execve("/fixture/gh", [""...], [""...]) = -1 ENOENT
+3 execveat(AT_FDCWD, "/absolute/gh", [""...], [""...], 0) = 0
+4 execve("/bin/bash", [""...], [""...]) = 0
+''') == ["/outer/gh", "/fixture/gh", "/absolute/gh"]
+try:
+    m.network_counts('connect(3, {sa_family=AF_INET, unrecognized}, 16) = -1')
+except ValueError:
+    pass
+else:
+    raise AssertionError("unknown trace silently counted as zero")
+with tempfile.TemporaryDirectory() as temp:
+    h = m.Harness(Path(temp))
+    assert h.finish() == 1  # empty/missing evidence is never twelve green rows
+    import json
+    report = json.loads((Path(temp)/"evidence/acceptance.json").read_text())
+    assert len(report["rows"]) == 12 and all(r["live"] == "NOT RUN" for r in report["rows"])
+    if sys.platform == "linux":
+        import subprocess
+        cleanup = Path(temp)/"cleanup.json"
+        # A detached helper must be reaped without changing the command's exit.
+        command = [sys.executable, "-c", "import subprocess,sys; subprocess.Popen(['sleep','60'],start_new_session=True); sys.exit(7)"]
+        result = subprocess.run([sys.executable, str(Path(sys.argv[1])/"nogh-task-acceptance.py"),
+                                 "--child", str(cleanup), *command], timeout=10)
+        state = json.loads(cleanup.read_text())
+        assert result.returncode == state["command_exit"] == 7
+        assert state["cleanup"] and not state["remaining"]
+print("PASS acceptance requires executed boundaries and keeps live evidence separate; IPv4/IPv6/CLI/DNS counters fail closed")
+PY

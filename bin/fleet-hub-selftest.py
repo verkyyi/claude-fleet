@@ -48,7 +48,7 @@ class Sandbox:
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
                          "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py",
-                         "fleet-reap-policy.sh", "fleet_reap_policy.py"):
+                         "fleet-reap-policy.sh", "fleet_reap_policy.py", "fleet-orphan-reports.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
         self.tools.mkdir()
@@ -411,6 +411,118 @@ class HubTests(HubFixture):
         finally:
             subprocess.run([*argv, "kill-server"], env=env, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=10)
+
+    def test_inventory_orphan_report_framing(self):
+        """#4508: real adapter -> Control.workers -> fleet_status, no live data."""
+        reports = [dict(ts=int(time.time()) - i, repo="example/project", child_key="issue-%d" % (20 + i),
+                        state=state, pr="", summary="历史结果 %d：中文仍完整" % i)
+                   for i, state in enumerate(("MERGED", "REAPED", "FAILED"))]
+        ledger = self.node.conf / "global/orphan-reports.ndjson"
+        ledger.parent.mkdir(exist_ok=True)
+        ledger.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in reports))
+        original = ledger.read_bytes()
+        fleet = self.node.controller.fleet(self.fleet)
+        for count in (1, 10):
+            with self.subTest(workers=count):
+                identities = [str(uuid.uuid4()) for _ in range(count)]
+                self.node.windows(*[("@%d" % (12 + i), 123 + i, False, "/fixture/中文/issue-%d" % (123 + i),
+                                     "awake", "example/project", identities[i]) for i in range(count)])
+                code, raw, _ = self.node.controller.adapter("workers", "demo")
+                self.assertEqual(code, 0)
+                self.assertEqual((raw.count(b"\n"), raw.count(b"\x1e"), raw.count(b"\x1f")),
+                                 (count, count * 2, count * 18))
+                start = now()
+                direct = self.node.controller.workers(fleet)
+                status = self.call("fleet_status", {"fleet_id": self.fleet})
+                for observed in (direct, status):
+                    self.assertEqual(observed["state"], "running")
+                    self.assertLessEqual(start, observed["observed_at"])
+                    self.assertLessEqual(observed["observed_at"], now())
+                    self.assertEqual(len(observed["workers"]), count)
+                    for i, worker in enumerate(observed["workers"]):
+                        self.assertEqual((worker["window_id"], worker["identity"], worker["worker_id"],
+                                          worker["repo"], worker["worktree"], worker["lifecycle"]),
+                                         ("@%d" % (12 + i), identities[i], self.worker("issue-%d" % (123 + i)),
+                                          "example/project", "/fixture/中文/issue-%d" % (123 + i), "awake"))
+                        parsed = worker["orphan_reports"]
+                        self.assertEqual(len(parsed), 3)
+                        for report, expected in zip(parsed, reports):
+                            self.assertRegex(report["id"], r"^[0-9a-f]{12}$")
+                            self.assertEqual({k: v for k, v in report.items() if k != "id"},
+                                             dict(ts=expected["ts"], repo=expected["repo"], child=expected["child_key"],
+                                                  state=expected["state"], pr="", summary=expected["summary"]))
+                self.assertEqual(direct["workers"], status["workers"])
+        self.assertEqual(ledger.read_bytes(), original)
+        self.assertFalse((ledger.parent / "orphan-reports.read").exists())
+
+    def test_inventory_record_boundaries_and_errors(self):
+        """Exact adapter bytes: LF/CRLF framing, payload controls, fail closed."""
+        # Only the workers byte stream is supplied by this fixture. Discovery,
+        # subprocess execution, row parsing and fleet_status remain real.
+        adapter = self.node.bin / "fleet-control-read.sh"
+        adapter.rename(self.node.bin / "fleet-control-read-real.sh")
+        self.node.script(adapter, '''#!/bin/bash
+if [ "$1" = workers ]; then
+  cat "$FLEET_CONF_DIR/inventory.bytes"
+  exit "$(cat "$FLEET_CONF_DIR/inventory.exit")"
+fi
+exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
+''')
+        rawfile, rcfile = self.node.conf / "inventory.bytes", self.node.conf / "inventory.exit"
+        rcfile.write_text("0")
+        name = "中文\rCR\x1eRS\x1fUS\vVT\fFF\x85NEL\u2028LS\u2029PS"
+        identity = str(uuid.uuid4())
+        row = "\t".join(["@12", "123", "0", "/fixture/issue-123", "done", "claude", "a1", "awake",
+                          "example/project", name, "origin", "", identity]).encode("utf-8")
+        for count in (1, 2):
+            for ending in (b"", b"\n", b"\r\n"):
+                with self.subTest(workers=count, ending=ending):
+                    rawfile.write_bytes((ending or b"\n").join(
+                        row.replace(b"@12", ("@%d" % (12 + i)).encode(), 1) for i in range(count)) + ending)
+                    status = self.call("fleet_status", {"fleet_id": self.fleet})
+                    self.assertEqual(len(status["workers"]), count)
+                    for i, worker in enumerate(status["workers"]):
+                        self.assertEqual((worker["window_id"], worker["name"], worker["identity"], worker["origin_wid"]),
+                                         ("@%d" % (12 + i), name, identity, "origin"))
+        rawfile.write_bytes(b"")
+        empty = self.call("fleet_status", {"fleet_id": self.fleet})
+        self.assertEqual((empty["state"], empty["workers"]), ("running", []))
+        # A blank record, short row or invalid window remains an error, even
+        # after a valid record. Never filter broken rows to obtain a green host.
+        for bad in (b"\n", b"\r\n", row + b"\n\n", row + b"\ninvalid\n", b"@12\t123\n",
+                    row.replace(b"@12", b"not-a-window", 1)):
+            with self.subTest(bad=bad):
+                rawfile.write_bytes(bad)
+                with self.assertRaises(Fault) as caught:
+                    self.call("fleet_status", {"fleet_id": self.fleet})
+                self.assertEqual(caught.exception.code, "PROTOCOL_ERROR")
+        rawfile.write_bytes(row + b"\xff\n")
+        with self.assertRaises(UnicodeDecodeError):
+            self.node.rpc("fleet_status", {"fleet_id": self.fleet})
+        failed = subprocess.run([sys.executable, str(self.node.bin / "fleet-control.py"),
+                                 "--conf-dir", str(self.node.conf), "rpc"],
+                                input=json.dumps(self.node.request("fleet_status", {"fleet_id": self.fleet})),
+                                text=True, capture_output=True, timeout=10)
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual(json.loads(failed.stdout)["error"]["code"], "INTERNAL")
+        self.assertNotIn("result", json.loads(failed.stdout))
+        # An incomplete no-key identity must not acquire a fabricated worker id.
+        rawfile.write_bytes(b"@12\t\t0\t/fixture\tdone\tclaude\ta1\tawake\texample/project\n")
+        self.assertEqual(self.call("fleet_status", {"fleet_id": self.fleet})["workers"], [])
+        rawfile.write_bytes(row + b"\n")
+        for code in (1, 8):
+            rcfile.write_text(str(code))
+            with self.subTest(exit=code), self.assertRaises(Fault) as caught:
+                self.call("fleet_status", {"fleet_id": self.fleet})
+            self.assertEqual(caught.exception.code, "UNAVAILABLE")
+        rcfile.write_text("3")
+        down = self.call("fleet_status", {"fleet_id": self.fleet})
+        self.assertEqual((down["state"], down["workers"]), ("down", []))
+        rcfile.write_text("0")
+        self.offline = True
+        with self.assertRaises(Fault) as caught:
+            self.call("fleet_status", {"fleet_id": self.fleet})
+        self.assertEqual(caught.exception.code, "UNAVAILABLE")
 
     def test_busy_column_marks_a_held_loop_round(self):
         """issue #1607: a `done` window whose @loop still holds a round is busy on

@@ -45,6 +45,13 @@ to open that session directly. **My Terminal** in the sidebar and Sessions heade
 opens your personal terminal. Ended sessions keep their **Resume** action.
 The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
 
+After a brief network outage, input pauses while the page reconnects to the same surviving terminal.
+**Open shell** selects your persistent personal shell. Exiting a nested shell with `exit` or EOF returns to its parent. Exiting the personal shell itself ends the terminal: choose **Reopen terminal** on the same page to start a new personal terminal generation. Exited commands and workers are not restarted. Reopening never takes control from another active tab; use **Use here** separately. Ordinary network recovery reuses the existing terminal. If renewal is unsupported, update the node first.
+
+Uncertain input is never resent. If another tab controls it, choose **Use here** to take control explicitly. If the session has restarted, choose **Connect current session** explicitly; this connects to the existing process without resending previous input.
+An ended environment or expired login stops retries; return to Sessions or sign in again.
+Closing the page preserves the running shell and session.
+
 On nodes supporting browser terminals, **Fleet menu** or **Ctrl+] then p** opens
 the native panel. **Open shell** switches to the shell; click again to return.
 **Cmd/Ctrl+P** still prints, and **Cmd/Ctrl+W** still closes the browser tab.

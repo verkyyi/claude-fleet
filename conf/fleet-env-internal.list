@@ -142,6 +142,14 @@ FLEET_DEPS_SHARE_TIMEOUT           knob: wall-clock budget for one worktree's sh
 FLEET_DISPATCH_AGENTS_HERE         seam: the agents installed here, comma-separated, for ⌘T's agent step (fleet-quick-dispatch.py, #3004)
 FLEET_DISPATCH                     handoff: resolved coding provider and accepted request/task identity across spawn adapters (#4392)
 FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accepted dispatch to this caller-owned temporary file (#4392)
+FLEET_LAUNCH                       handoff: accepted operation/task/owner/generation binding from controller to spawner (#4393)
+FLEET_LAUNCH_CONTEXT               handoff: supervisor binding inherited by native SessionStart proof (#4393)
+FLEET_TASK_RECOVERY_URL            handoff: pinned hub URL for receipt replay, independent of repo authority mode (#4396)
+FLEET_TASK_RECOVERY_RAW            handoff: recovery calls the original task HTTP adapter without recursion (#4396)
+FLEET_TASK_STALE_READ              handoff: allow an observed task cache only for lifecycle receipts, never launches (#4396)
+FLEET_LAUNCH_SUPERVISOR            handoff: native process must descend from this launch supervisor (#4393)
+FLEET_LAUNCH_NATIVE                handoff: exact native session ID required on resume or explicit-ID start (#4393)
+FLEET_LAUNCH_DELIVERY              handoff: verified native receipt pins first Codex input to its executable and inbox (#4393)
 FLEET_PLACE_REQUEST_ID             handoff: stable client placement key across lease reacquisition (#4392)
 FLEET_DISPATCH_GO_CMD              seam: replaces fleet-view-go.sh when a 看台's ⌘T goes to the window it opened (fleet-quick-dispatch.py, #3097)
 FLEET_ENTRY                        knob: a managed machine's entry port on/off — machine.env (root 0600), written by `fleet node install`, not a fleet.conf key (#3070)
@@ -293,7 +301,9 @@ FLEET_CLIENT_XTVERSION             knob: 0 = never ask the terminal its name at 
 FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
+FLEET_CODEX_NATIVE_COMPLETION      handoff: launcher-verified native completion capability for the Stop hook; never inherited or configured
 FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch
+FLEET_CODEX_REMOTE                 handoff: this launch's private Codex app-server endpoint, passed to native hooks
 FLEET_CODEX_READY_CHECK            knob: 0 skips the Codex-login check before a Codex spawn (fleet-lib.sh fleet_codex_ready, #2562)
 FLEET_CODEX_READY_CMD              seam: prints `ccquota codex list` instead of running it (fleet_codex_ready, #2562)
 FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector runs the quotawatch phase inline
@@ -993,3 +1003,6 @@ FLEET_IDLE_SELF_SOCKET             seam: socket path paired with FLEET_IDLE_SELF
 FLEET_IDLE_SELF_WIN                seam: fleet_idle_now's caller window when it has no $TMUX_PANE (#4355)
 FLEET_SIDEBAR_HOST                seam: home-machine hostname in the view and peer tests (#1780)
 FLEET_SWITCH_STATE                path: compose payload/draft state used by the current panel (#1903)
+FLEET_AUTHORITY_START             env handoff: one-use local admission reservation from spawner to session wrapper (#4395)
+FLEET_AUTHORITY_CONTEXT           env handoff: current reservation and native supervisor identity for the startup hook (#4395)
+FLEET_HUB_AUTHORITY_CMD           seam: authority admission command for isolated hub fixtures (#4395)

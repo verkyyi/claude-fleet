@@ -10,6 +10,9 @@
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
 #                     → `T<n>` on stdout. The same token twice is the same record.
 #   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
+#   fleet-task-record.sh children T<n>     → accepted parent generation + children
+#   fleet-task-record.sh report T<n>       ← fenced report JSON on stdin
+#   fleet-task-record.sh mutate T<n>       ← fenced lifecycle command JSON on stdin
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
@@ -70,6 +73,7 @@ call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
+  [ -z "${FLEET_TASK_RECOVERY_URL:-}" ] || [ "$url" = "$FLEET_TASK_RECOVERY_URL" ] || die 1 "task authority changed; reconciliation required"
   # signed once this login has a key (issue #3710), else the token
   resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
@@ -176,12 +180,19 @@ if [ "$cmd" = dispatch ]; then
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2
   t=''
   if applicable; then
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" <<'JSON'
+    parent_wid=''; parent_task=''
+    task_win=$(fleet_pane_fmt '#{window_id}')
+    if [ -n "$task_win" ]; then
+      task_sess=$(fleet_current_session)
+      parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
+      parent_task=$(fleet_pane_fmt '#{@task}')
+    fi
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" "$parent_wid" "$parent_task" <<'JSON'
 import json,sys
-d,title,body,repo,reap,template,rule,draft,note=sys.argv[1:]
+d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
 d=json.loads(d)
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo, rule=rule,
-    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
+    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
 JSON
     ) || exit 2
@@ -216,7 +227,36 @@ fi
 
 applicable || exit 3
 
+if [ "$cmd" = authority ]; then
+  pair=$(fleet_node_pair) || exit 3
+  printf '%s\n' "${pair%%	*}"
+  exit 0
+fi
+# The original HTTP adapter remains the only credential reader. Recovery stores
+# receipts in control/state.sqlite3 and calls this raw road, never a second API.
 case "$cmd" in
+  get|report|mutate|stopped)
+    if [ "${FLEET_TASK_RECOVERY_RAW:-0}" != 1 ]; then
+      is_tref "${1:-}" || usage
+      exec python3 "$BIN/fleet_task_recovery.py" "$cmd" "$1"
+    fi ;;
+esac
+
+case "$cmd" in
+  children)
+    is_tref "${1:-}" || usage
+    call GET "/v1/node/tasks/$1/children"
+    exit $? ;;
+  report)
+    is_tref "${1:-}" || usage
+    report=$(python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)))') || exit 2
+    call POST "/v1/node/tasks/$1/reports" "$report"
+    exit $? ;;
+  mutate)
+    is_tref "${1:-}" || usage
+    mutation=$(python3 -c 'import json,sys; print(json.dumps({"authority_version":1,"mutation":json.load(sys.stdin)}))') || exit 2
+    call POST "/v1/node/tasks/$1" "$mutation"
+    exit $? ;;
   new)
     title='' token='' via='' repo='' rule='' issue='' key='' wid='' state=''
     while [ $# -gt 0 ]; do

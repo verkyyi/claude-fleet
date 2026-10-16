@@ -240,10 +240,16 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
 # all unsupported and none could leave a walled account (issue #2102).
 [ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
 case "$(fleet_win_role "$WIN" "$SOCK")" in panel|home) die 'panel windows cannot be transferred' ;; esac
-[ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
-SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
+_source_meta=$(opt '#{@hub}|#{@cc_agent}|#{@norepo}|#{@issue}|#{@raw}|#{@worktree}') || die 'source metadata unavailable'
+[ "${_source_meta%%|*}" != 1 ] || die 'the hub cannot be transferred'
+_source_meta=${_source_meta#*|}
+SOURCE_AGENT=${_source_meta%%|*}; SOURCE_AGENT=${SOURCE_AGENT:-claude}
+_source_meta=${_source_meta#*|}
+NOREPO=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
+ISSUE=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
+RAW=${_source_meta%%|*}; WT=${_source_meta#*|}
 case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
-NOREPO=$(opt '#{@norepo}'); IDENTITY=''; LEASE_KEY=''
+IDENTITY=''; LEASE_KEY=''
 if [ "$NOREPO" = 1 ]; then
   WT=$(opt '#{pane_current_path}')
   IDENTITY=$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$WT") || exit 1
@@ -251,9 +257,7 @@ if [ "$NOREPO" = 1 ]; then
   MAIN='' FLEET_REPO='' ISSUE=''
   LEASE_KEY="$FLEET_CONF_DIR/session-transitions/$(opt '#{@fleet_id}')"
 else
-ISSUE=$(opt '#{@issue}'); RAW=$(opt '#{@raw}')
 case "$ISSUE" in ''|*[!0-9]*) [ "$RAW" = 1 ] || die 'window is neither an issue worker nor a scratch session' ;; esac
-WT=$(opt '#{@worktree}')
 if [ -z "$WT" ]; then
   # Issue workers predate the scratch-only @worktree stamp. Resolve their real
   # pane cwd, then apply every linked-worktree and source-registry check below.
@@ -290,8 +294,8 @@ fi
 [ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 [ -z "$EXPECT_SID" ] || [ "$EXPECT_SID" = "$SID" ] || die "retry: the window now runs a different conversation ($SID, not $EXPECT_SID); not switching it"
-HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
-STATE=$(opt '#{@claude_state}')
+_source_meta=$(opt '#{@claude_state}|#{@handoff_manifest}') || die 'source metadata unavailable'
+STATE=${_source_meta%%|*}; PREVIOUS=${_source_meta#*|}
 if [ "$INSPECT" = 1 ]; then
   python3 - "$SOURCE_AGENT" "$SID" "$PID" "$TRANSCRIPT" "$CODEX_SOURCE_HOME" "$REGISTRY" "$SESS" "$WIN" "$PANE" "$WT" "$STATE" "$PREVIOUS" "$(opt '#{@cc_account}')" "$(opt '#{@subscription_identity}')" "$(opt '#{@codex_identity}')" <<'PY'
 import json, sys
@@ -303,6 +307,7 @@ print(json.dumps(r))
 PY
   exit $?
 fi
+HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}')
 source_ready() {
   if [ -n "$QUOTA_REQUEST" ]; then
     python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"
@@ -413,6 +418,12 @@ target_support() {
   HOOKS=$(bash "$BIN/fleet-hooks-emit.sh" --target "$TO" --root "$BIN/..") || die 'cannot materialize target guard hooks'
   case "$HOOKS" in *base-readonly-guard.py*bash-guard.py*|*bash-guard.py*base-readonly-guard.py*) : ;; *) die 'Codex guard hooks are incomplete' ;; esac
 }
+# Accepted task switches use the same authority before any source exit.
+TASK_LAUNCH=$(opt '#{@launch}')
+if [ -n "$TASK_LAUNCH" ]; then
+  python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$PANE" transfer-check \
+    || die 'task launch identity/authority is unavailable; source retained'
+fi
 INPUT_VIEW=''
 if [ "$NOREPO" = 1 ] && [ "$PREPARE" != 1 ]; then
   if ! target_auth; then
@@ -686,6 +697,10 @@ ROLLBACK_VALS=()
 for key in "${ROLLBACK_KEYS[@]}"; do ROLLBACK_VALS+=("$(opt "#{$key}")"); done
 rollback() {
   local why=$1 st note cmd back='' got rest i _recovery=''
+  if [ -n "$TASK_LAUNCH" ]; then
+    python3 "$HELPER" state "$BUNDLE" target_failed "$why; task generation requires explicit recovery" || :
+    die "$why; accepted task retained for recovery — no automatic provider rollback"
+  fi
   # The target's last screen + exit status, before the respawn wipes them; it is
   # private to the package (0600) and never copied into a note or an alert.
   TM capture-pane -p -S - -t "$PANE" > "$BUNDLE/pane-target-failed.txt" 2>/dev/null && chmod 600 "$BUNDLE/pane-target-failed.txt"
@@ -767,6 +782,10 @@ rollback() {
 [ -z "$DFID" ] || python3 "$DURABLE" handed "$DFID" || rollback 'durable handover is not settled'
 # The helper quotes metadata as argv; conversation text is only ever data.
 python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the target launcher'
+if [ -n "$TASK_LAUNCH" ]; then
+  python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$PANE" --target "$TO" --bundle "$BUNDLE" transfer-commit \
+    || die 'task generation transfer was refused/unknown; source stopped, no replacement started'
+fi
 # The source agent's measurement-bus stamps go too — ALL of them (issue #3461:
 # @ctx_left / @ctx_ts / @ctx_src were left behind, so the top line read the old
 # agent's context % until the new one's first reading).

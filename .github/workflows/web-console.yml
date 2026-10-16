@@ -47,6 +47,8 @@ jobs:
         run: node --experimental-strip-types src/admin/pool.test.mjs
       - name: Subscription identity join
         run: node test/pool.mjs
+      - name: Task outcome and stale reads
+        run: node --experimental-strip-types test/tasks.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build

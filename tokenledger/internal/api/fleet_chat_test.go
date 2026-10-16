@@ -26,11 +26,12 @@ import (
 // fakeChatService serves /api/* on <conf>/webchat/chat.sock and records what it
 // saw. /api/turn writes one NDJSON line, waits for release, writes the second.
 type fakeChatService struct {
-	mu      sync.Mutex
-	hits    []string // "<method> <path> person=<X-Fleet-Person> cookie=<Cookie>"
-	clients []string // each request's X-Fleet-Client (claude-fleet#4034)
-	release chan struct{}
-	turn    func(w http.ResponseWriter) // set: /api/turn answers this way instead
+	mu           sync.Mutex
+	hits         []string // "<method> <path> person=<X-Fleet-Person> cookie=<Cookie>"
+	clients      []string // each request's X-Fleet-Client (claude-fleet#4034)
+	release      chan struct{}
+	conversation func(w http.ResponseWriter)
+	turn         func(w http.ResponseWriter) // set: /api/turn answers this way instead
 }
 
 func (f *fakeChatService) seen() []string {
@@ -56,6 +57,13 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/api/conversation":
+			f.mu.Lock()
+			conversation := f.conversation
+			f.mu.Unlock()
+			if conversation != nil {
+				conversation(w)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"session":"s1","items":[]}`)
 		case "/api/turn":

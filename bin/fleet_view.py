@@ -1542,6 +1542,15 @@ def go_far(vid, fleet, g, target, meta, client):
     return "peer-wait", 3, m, l, extra
 
 
+def webterm_switch(vid, window):
+    if not vid.startswith("wt-"):
+        return None
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__), "fleet-webterm.py"),
+                        "switch", "--conn", vid[3:], "--window", window],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return r.returncode
+
+
 def go(qo, vid, target, how="go", client="", meta=None, record=True):
     """Switch the 看台 to `target`. rc 0 switched · 3 another machine / login whose
     link is not up yet (C4: its window shown, waiting to land there) · 4 gone ·
@@ -1559,14 +1568,21 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         cached = order_load(vid)
         meta = (cached[1].get(target) if cached else None) or meta
     extra = {}
-    if far:
+    if far and vid.startswith("wt-"):
+        method, rc = "unsupported", 3
+        toast(client, "Open this session from Sessions in the browser")
+    elif far:
         method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
         meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")
     elif not w:
         method, rc = "gone", 4
         toast(client, say("view_gone"))
     else:
-        code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        code = webterm_switch(vid, w)
+        if code is None:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, w))
+        if code:
+            toast(client, "Open elsewhere — use that terminal page to take control")
         method, rc = ("select-window", 0) if code == 0 else ("gone", 4)
     ms = round((time.monotonic() - t0) * 1000, 1)
     rec = {"ts": round(time.time(), 3), "view": vid, "from": before, "to": target,
@@ -1822,9 +1838,12 @@ def open_shell(qo, vid, client="", target=None, meta=None):
     if home:
         _, current = tm("display-message", "-p", "-t", "=" + g + ":", "#{window_id}")
         if current == home:
-            code, _ = tm("last-window", "-t", "=" + g)
+            _, dest = tm("display-message", "-p", "-t", "=" + g + ":{last}", "#{window_id}")
         else:
-            code, _ = tm("select-window", "-t", "=%s:%s" % (g, home))
+            dest = home
+        code = webterm_switch(vid, dest)
+        if code is None:
+            code, _ = tm("select-window", "-t", "=%s:%s" % (g, dest))
         return 0 if code == 0 else 3
     here, me = here_label(row), getpass.getuser()
     if target:
@@ -2026,7 +2045,7 @@ def tkey(key):
     return "'%s'" % key if not re.match(r"^[A-Za-z0-9-]+$", key) else key
 
 
-def key_lines(me, extra=None):
+def key_lines(me, extra=None, browser=False):
     """The commands that rebuild both tables: root copied into fleet-view, then the
     看台's keys (issue #3185, EPIC #3178 C7) — by default ONE action, the panel:
     its ⌘ code (User927, ⌘P on the client) and the phone keys FLEET_KEY_PHONE
@@ -2118,6 +2137,18 @@ def key_lines(me, extra=None):
         lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))
     lines.append("bind-key -T fleet-view %s switch-client -T fleet-view-pfx" % PFX_KEY)
     lines.append("bind-key -T fleet-view-pfx %s send-keys %s" % (PFX_KEY, PFX_KEY))
+    # A browser may switch only through the controller's transaction. Root
+    # and prefix include unfenced next-window, select-pane and command-prompt.
+    if browser:
+        lines += ["unbind-key -q -a -T fleet-webterm", "unbind-key -q -a -T fleet-webterm-pfx",
+                  "bind-key -T fleet-webterm Any send-keys",
+                  "bind-key -T fleet-webterm User927 " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm 'C-\\' " + cmd_of("shell"),
+                  "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
+                  "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
+                  "bind-key -T fleet-webterm WheelUpPane copy-mode -e",
+                  "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
     return lines
 
 
@@ -2136,7 +2167,7 @@ def keys_sig(lines):
     return hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
-def view_keys(me, if_stale=False):
+def view_keys(me, if_stale=False, browser=False):
     """Rebuild both tables. --if-stale (attach --thin, every attach): only when
     fleet-view exists and either its copy of root no longer IS root — a personal
     conf re-sourced after the fleet's moved root, and the 看台's mouse with it — or
@@ -2148,7 +2179,7 @@ def view_keys(me, if_stale=False):
         _, root = tm("list-keys", "-T", "root")
         if rc != 0 or not fv:
             return 0          # never loaded here: attach --thin adds no table (C1's rule)
-        lines = key_lines(me)
+        lines = key_lines(me, browser=browser)
         sig = keys_sig(lines)
         ours = our_keys(lines) | {"C-]"}
         norm = lambda line: " ".join(line.split())
@@ -2163,7 +2194,7 @@ def view_keys(me, if_stale=False):
         if have.strip() == sig and copy == want:
             return 0
     else:
-        lines = key_lines(me)
+        lines = key_lines(me, browser=browser)
         sig = keys_sig(lines)
     import tempfile
     fd, tmp = tempfile.mkstemp(prefix="fleet-view-keys.", suffix=".conf")
@@ -2897,6 +2928,24 @@ class Line:
             self.text += ch
 
 
+def panel_key(screen, timeout_ms, completed=None, inputs=None):
+    read = screen.get_wch if inputs is None else lambda: inputs.read(screen)
+    if completed is None:
+        screen.timeout(timeout_ms)
+        return read()
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        remaining = deadline - time.monotonic()
+        if completed or remaining <= 0:
+            raise curses.error()
+        screen.timeout(min(50, max(1, int(remaining * 1000))))
+        try:
+            return read()
+        except curses.error:
+            if completed or time.monotonic() >= deadline:
+                raise
+
+
 # --- the popup -------------------------------------------------------------------------
 
 # --- the keys issue #3328 took away (EPIC #3178 ⑤) — compat-1v: 下一批删 ----------------------
@@ -3348,10 +3397,10 @@ def _popup(screen, qo, vid, client, forward=""):
         if not clock.written:
             clock.mark("frame")
             clock.done()
-        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
-                           max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
+        timeout_ms = min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
+                         max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000)
         try:
-            ch = inputs.read(screen)
+            ch = panel_key(screen, timeout_ms, job if busy else None, inputs)
         except curses.error:
             continue
         if ch is None:
@@ -3674,7 +3723,7 @@ def main(argv, qo):
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")
             os.environ.pop("TMUX", None)
-        return view_keys(me, "--if-stale" in argv)
+        return view_keys(me, "--if-stale" in argv, browser="--browser" in argv)
     if argv[:1] == ["go"] and len(argv) >= 3:
         vid = view_id(argv[1])
         return go(qo, vid, argv[2], opt(argv, "--how") or "go", opt(argv, "--client")) if vid else 2

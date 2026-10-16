@@ -1,0 +1,278 @@
+import assert from 'node:assert/strict'
+import { mkdir } from 'node:fs/promises'
+import { chromium } from 'playwright'
+
+const { FLEET_TEST_ORIGIN: origin, FLEET_TEST_COOKIE: cookie, FLEET_TEST_WORKER: worker, FLEET_TEST_FIXTURE: fixture } = process.env
+const mode = process.argv[2]
+const dir = `evidence/recovery-${mode}`
+await mkdir(dir, { recursive: true })
+const browser = await chromium.launch({ args: mode === 'relay' ? ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'] : [] })
+const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+const eq = cookie.indexOf('=')
+const auth = { name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: origin }
+await context.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
+await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
+const observe = () => {
+  window.__ready = []; window.__pairs = []; window.__attempts = 0; window.__sent = 0
+  for (const proto of [WebSocket.prototype, RTCDataChannel.prototype]) {
+    const send = proto.send
+    proto.send = function(data) {
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) window.__sent += data.byteLength
+      return send.call(this, data)
+    }
+  }
+  const frame = event => {
+    if (typeof event.data !== 'string') return
+    try {
+      const c = JSON.parse(event.data)
+      if (c.t === 'ready') window.__ready.push(c)
+      if (c.t === 'selected') window.__pairs.push(c)
+    } catch {}
+  }
+  const WS = window.WebSocket
+  window.WebSocket = class extends WS { constructor(...a) { super(...a); if (String(a[0]).includes('/v1/attachment/connect')) window.__attempts++; this.addEventListener('message', frame) } }
+  const create = RTCPeerConnection.prototype.createDataChannel
+  RTCPeerConnection.prototype.createDataChannel = function(...a) { const dc = create.apply(this, a); dc.addEventListener('message', frame); return dc }
+}
+await context.addInitScript(observe)
+const others = []
+const evidence = []
+const state = async () => (await context.request.get(`${fixture}/state`)).json()
+const ready = async page => {
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === 'Fleet menu' && !b.disabled), { timeout: 30000 })
+  return page.evaluate(() => window.__ready.at(-1))
+}
+const wait = async predicate => {
+  const until = Date.now() + 12000
+  while (!await predicate()) { if (Date.now() > until) throw new Error('fixture assertion timed out'); await new Promise(r => setTimeout(r, 100)) }
+}
+try {
+  for (const target of ['personal', 'worker']) {
+    const page = await context.newPage()
+    const url = `${origin}/app/terminal${target === 'worker' ? `?worker=${encodeURIComponent(worker)}` : ''}`
+    await page.goto(url)
+    const first = await ready(page)
+    assert(first?.term && first.gen && first.epoch, 'ready must carry logical identity and controller epoch')
+    const tag = `once_${mode}_${target}`
+    await page.locator('.xterm-helper-textarea').pressSequentially(`printf '%s\\n' ${tag} >> "$HOME/commands"`)
+    await page.locator('.xterm-helper-textarea').press('Enter')
+    await wait(async () => (await state()).commands.includes(tag))
+    await context.setOffline(true)
+    await page.getByText('Reconnecting…', { exact: true }).waitFor()
+    assert(await page.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+    await new Promise(r => setTimeout(r, 5000))
+    await context.setOffline(false)
+    const resumed = await ready(page)
+    assert.equal(resumed.gen, first.gen); assert.equal(resumed.term, first.term)
+    assert(resumed.epoch > first.epoch)
+    const snapshot = await state()
+    assert.equal(snapshot.commands.split('\n').filter(v => v === tag).length, 1)
+    assert.equal(snapshot.home_pid, snapshot.initial_pid)
+    assert.equal(snapshot.worker_pid, snapshot.initial_worker_pid)
+    await page.reload(); const reloaded = await ready(page)
+    assert.equal(reloaded.gen, first.gen)
+    if (target === 'personal') {
+      await page.getByRole('button', { name: 'Fleet menu', exact: true }).click()
+      await new Promise(r => setTimeout(r, 500))
+      await page.locator('.xterm-helper-textarea').pressSequentially('Browser worker')
+      await page.locator('.xterm-helper-textarea').press('Enter')
+      await wait(async () => { const s = await state(); return s.views.includes(`|${s.worker_window}`) })
+      await page.getByRole('button', { name: 'Open shell', exact: true }).click()
+      await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
+      await page.getByRole('button', { name: 'Open shell', exact: true }).click()
+      await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.worker_window}`)) })
+    }
+    // Independent cookie/storage profile: another browser signed in as the same person.
+    const other = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'en-US' })
+    others.push({ context: other, target })
+    await other.addCookies([auth, { name: 'cf_lang', value: 'en', url: origin }])
+    await other.addInitScript(observe)
+    await other.tracing.start({ screenshots: true, snapshots: true, sources: true })
+    const second = await other.newPage(); await second.goto(url)
+    await second.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+    assert(await second.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+    await second.getByRole('button', { name: 'Use here', exact: true }).click()
+    const taken = await ready(second)
+    assert(taken.epoch > reloaded.epoch)
+    await page.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+    await page.close() // old cleanup must not close or resize the winner
+    assert.equal((await ready(second)).epoch, taken.epoch)
+    const pairs = await second.evaluate(() => window.__pairs)
+    assert(pairs.some(p => p.mode === mode))
+    if (mode === 'direct') assert(pairs.some(p => p.pair && p.pair !== 'hub'))
+    await second.screenshot({ path: `${dir}/${target}.png` })
+    assert.equal((await state()).commands.split('\n').filter(v => v === tag).length, 1, 'reopen or takeover replayed input')
+    evidence.push({ independentBrowserProfiles: true, target, first, resumed, taken, commandCount: 1, homePID: snapshot.home_pid, workerPID: snapshot.worker_pid, pairs })
+    if (target === 'personal') {
+      const directEntry = await context.newPage()
+      await directEntry.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+      await directEntry.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+      await directEntry.getByRole('button', { name: 'Use here', exact: true }).click()
+      await ready(directEntry)
+      await second.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+      await directEntry.close()
+    }
+    await second.close()
+  }
+  let page = await context.newPage()
+  await page.goto(`${origin}/app/terminal`)
+  // Closing the renderer does not synchronously finish node-side cleanup. A
+  // still-live old controller must require the same explicit takeover as any
+  // other browser; reopening must never silently steal it or restart the shell.
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b =>
+    (b.textContent === 'Fleet menu' && !b.disabled) || b.textContent === 'Use here'))
+  const closeReopenTakeover = await page.getByRole('button', { name: 'Use here', exact: true }).isVisible()
+  if (closeReopenTakeover) await page.getByRole('button', { name: 'Use here', exact: true }).click()
+  const before = await ready(page)
+  assert.equal(before.gen, evidence[0].first.gen, 'closing all pages and reopening must keep the generation')
+  const reopened = await state()
+  assert.equal(reopened.home_pid, reopened.initial_pid)
+  assert.equal(reopened.worker_pid, reopened.initial_worker_pid)
+  for (const target of ['personal', 'worker']) assert.equal(reopened.commands.split('\n').filter(v => v === `once_${mode}_${target}`).length, 1)
+  await context.request.post(`${fixture}/relay`)
+  await page.getByText('Reconnecting…', { exact: true }).waitFor()
+  assert.equal((await ready(page)).gen, before.gen, 'relay restart must preserve terminal generation')
+  // Keep the personal home independent while the worker process is replaced.
+  await page.getByRole('button', { name: 'Open shell', exact: true }).click()
+  await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
+  const processPage = await context.newPage()
+  await processPage.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+  const oldProcess = await ready(processPage)
+  assert.equal(oldProcess.gen, evidence[1].first.gen, 'reopening the worker must keep its generation')
+  await context.request.post(`${fixture}/worker-respawn`)
+  await processPage.getByRole('alert').waitFor({ timeout: 30000 })
+  assert(await processPage.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+  const processAttempts = await processPage.evaluate(() => window.__attempts)
+  await new Promise(r => setTimeout(r, 2000))
+  assert.equal(await processPage.evaluate(() => window.__attempts), processAttempts, 'process replacement kept retrying')
+  await processPage.getByRole('button', { name: 'Connect current session', exact: true }).click()
+  assert.notEqual((await ready(processPage)).gen, oldProcess.gen, 'explicit action must admit the current process')
+  await processPage.close()
+  // Real shell bytes through the built console, hub, node and native tmux.
+  // Open shell selects the persistent home; an explicitly nested sh returns
+  // to it, while exiting that outer shell ends the personal terminal.
+  const command = async (p, text) => {
+    await p.locator('.xterm-helper-textarea').pressSequentially(text)
+    await p.locator('.xterm-helper-textarea').press('Enter')
+  }
+  const nestedGeneration = (await ready(page)).gen
+  for (const end of ['exit', 'Control+d']) {
+    await command(page, 'sh')
+    if (end === 'exit') await command(page, 'exit')
+    else await page.locator('.xterm-helper-textarea').press(end)
+    const tag = `nested_${mode}_${end}`
+    await command(page, `printf '%s\\n' '${tag}' >> "$HOME/commands"`)
+    await wait(async () => (await state()).commands.includes(tag))
+    assert.equal((await ready(page)).gen, nestedGeneration)
+  }
+  const liveWorkerPID = (await state()).worker_pid
+  for (const end of ['exit', 'Control+d']) {
+    const old = await ready(page)
+    const oldInput = await page.locator(".xterm-helper-textarea").elementHandle()
+    const oldPage = page
+    if (end === 'exit') await command(page, 'exit')
+    else await page.locator('.xterm-helper-textarea').press(end)
+    await page.getByRole('button', { name: 'Reopen terminal', exact: true }).waitFor()
+    assert.equal(await page.locator('.xterm-helper-textarea').count(), 0)
+    const attempts = await page.evaluate(() => window.__attempts)
+    await new Promise(r => setTimeout(r, 700))
+    assert.equal(await page.evaluate(() => window.__attempts), attempts, 'ended terminal auto-retried')
+    // Fresh page with no generation cache must learn the ended identity.
+    const rival = await context.newPage()
+    await rival.goto(`${origin}/app/terminal`)
+    await rival.getByRole('button', { name: 'Reopen terminal', exact: true }).waitFor()
+    await Promise.all([page, rival].map(p => p.getByRole('button', { name: 'Reopen terminal', exact: true }).click()))
+    for (const p of [page, rival]) await p.waitForFunction(() =>
+      [...document.querySelectorAll('button')].some(b => b.textContent === 'Fleet menu' && !b.disabled) || !!document.querySelector('[role="alert"]'))
+    const winners = []
+    for (const p of [page, rival]) if (!await p.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled()) winners.push(p)
+    assert.equal(winners.length, 1, 'concurrent renew must leave exactly one controller')
+    const winner = winners[0], loser = winner === page ? rival : page
+    const current = await ready(winner)
+    assert.equal(current.term, old.term)
+    assert.equal(Number(current.gen.split(':')[1]), Number(old.gen.split(':')[1]) + 1)
+    if (await loser.getByRole('button', { name: 'Connect current session', exact: true }).isVisible()) {
+      await loser.getByRole('button', { name: 'Connect current session', exact: true }).click()
+      await loser.getByRole('button', { name: 'Use here', exact: true }).waitFor()
+    }
+    assert.equal((await ready(winner)).epoch, current.epoch, 'losing renew stole control')
+    const sent = await oldPage.evaluate(() => window.__sent)
+    await oldInput.dispatchEvent('compositionstart', {data:'未提交'})
+    await oldInput.dispatchEvent('compositionend', {data:'未提交'})
+    assert.equal(await oldPage.evaluate(() => window.__sent), sent, 'disposed CJK composition replayed')
+    await oldInput.dispose()
+    await loser.close(); page = winner
+    assert.equal((await state()).worker_pid, liveWorkerPID, "renew restarted worker")
+    const tag = `renewed_${mode}_${end}`
+    await command(page, `printf '%s\\n' '${tag}' >> "$HOME/commands"`)
+    await wait(async () => (await state()).commands.includes(tag))
+    // Old-generation connects and renews are both refused, even with a valid
+    // cookie; no uncertain command is replayed across the generation boundary.
+    for (const renew of [false, true]) {
+      const result = await page.evaluate(({gen, renew}) => new Promise((resolve, reject) => {
+        const q = new URLSearchParams({service:'term', target:'personal', controller:'1', term_resume:gen, ...(renew ? {renew:'1'} : {})})
+        const ws = new WebSocket(`${location.origin.replace('http','ws')}/v1/attachment/connect?${q}`)
+        const timeout = setTimeout(() => { ws.close(); reject(new Error('stale request timeout')) }, 15000)
+        ws.onmessage = event => {
+          const m = JSON.parse(event.data)
+          if (m.t === 'config') { ws.send(JSON.stringify({t:'relay'})); ws.send(JSON.stringify({t:'select', mode:'relay'})) }
+          if (m.t === 'error') { clearTimeout(timeout); ws.close(); resolve(m.error) }
+        }
+      }), {gen:old.gen, renew})
+      assert.equal(result, 'interrupted')
+    }
+    await context.setOffline(true)
+    await page.getByText('Reconnecting…', { exact: true }).waitFor()
+    await context.setOffline(false)
+    assert.equal((await ready(page)).gen, current.gen, 'network recovery renewed again')
+    assert.equal((await state()).commands.split('\n').filter(v => v === tag).length, 1)
+    await page.screenshot({path:`${dir}/renew-${end.replace('+','-')}.png`})
+    evidence.push({personalRenew:end, old:old.gen, current:current.gen, simultaneousControllers:winners.length})
+  }
+  await page.getByRole('button', { name: 'Fleet menu', exact: true }).click()
+  await new Promise(r => setTimeout(r, 500))
+  await page.locator('.xterm-helper-textarea').pressSequentially('Browser worker')
+  await page.locator('.xterm-helper-textarea').press('Enter')
+  await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.worker_window}`)) })
+  await page.getByRole('button', { name: 'Open shell', exact: true }).click()
+  await wait(async () => { const s = await state(); return s.views.split('\n').some(v => v.includes('@view-') && v.endsWith(`|${s.home_window}`)) })
+  const endedWorker = await context.newPage()
+  await endedWorker.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
+  await ready(endedWorker)
+  await command(endedWorker, 'exit')
+  await endedWorker.getByRole('link', {name:'View sessions', exact:true}).waitFor()
+  assert.equal(await endedWorker.getByRole('button', {name:'Reopen terminal', exact:true}).count(), 0)
+  await endedWorker.reload()
+  await endedWorker.getByRole('link', {name:'View sessions', exact:true}).waitFor()
+  assert.equal((await state()).worker_dead, '1', 'ended worker restarted')
+  await endedWorker.close()
+  await context.request.post(`${origin}/logout`, { headers: { Origin: origin } })
+  await page.getByRole('link', { name: 'Sign in', exact: true }).waitFor({ timeout: 20000 })
+  const attempts = await page.evaluate(() => window.__ready.length)
+  await new Promise(r => setTimeout(r, 2000))
+  assert.equal(await page.evaluate(() => window.__ready.length), attempts, 'revoked authentication retried')
+  await context.addCookies([{ ...auth, value: process.env.FLEET_TEST_FRESH_COOKIE }, { name: 'cf_lang', value: 'en', url: origin }])
+  await page.reload(); await ready(page)
+  await context.request.post(`${fixture}/host`)
+  await page.getByRole('alert').waitFor({ timeout: 30000 })
+  assert(await page.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
+  const hostAttempts = await page.evaluate(() => window.__attempts)
+  await new Promise(r => setTimeout(r, 2000))
+  assert.equal(await page.evaluate(() => window.__attempts), hostAttempts, 'host loss kept retrying')
+  await page.close()
+  console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', closeReopenTakeover, relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'ended; no replay', safari: 'pending', osIME: 'pending' }))
+} catch (error) {
+  for (const [i, page] of [context, ...others.map(o => o.context)].flatMap(c => c.pages()).entries()) {
+    console.error('page', i, page.url(), await page.locator('body').innerText());
+    await page.screenshot({ path: `${dir}/failure-${i}.png` });
+  }
+  console.error('fixture', await state());
+  throw error;
+} finally {
+  await context.tracing.stop({ path: `${dir}/trace.zip` })
+  for (const other of others) {
+    await other.context.tracing.stop({ path: `${dir}/trace-controller-${other.target}.zip` })
+    await other.context.close()
+  }
+  await context.close(); await browser.close()
+}

@@ -499,13 +499,20 @@ unset _codex_mcp
 # @codex_identity as `version_warning`. The ccquota relaunch above execs BEFORE
 # this point, so a launch checks once. FLEET_CODEX_VERSION_CHECK=0 = off.
 unset FLEET_CODEX_VERSION_WARNING   # never inherit a parent's verdict
+unset FLEET_CODEX_NATIVE_COMPLETION
 if [ "${FLEET_CODEX_VERSION_CHECK:-1}" != 0 ] && [ -f "$BIN/fleet-codex-runtime.py" ]; then
   _vline=$(python3 "$BIN/fleet-codex-runtime.py" version-check 2>/dev/null)
-  if [ $? = 1 ]; then
+  _vrc=$?
+  if [ "$_vrc" = 1 ]; then
     printf 'fleet-codex: warning: %s\n' "$_vline" >&2
     export FLEET_CODEX_VERSION_WARNING="$_vline"
   fi
-  unset _vline
+  if [ "$_vrc" = 0 ]; then
+    case "$_vline" in
+      'codex 0.162.1 (rollout format verified '*) export FLEET_CODEX_NATIVE_COMPLETION=1 ;;
+    esac
+  fi
+  unset _vline _vrc
 fi
 
 # --- through this login's credential proxy (issue #1972, EPIC #1967 C5) ---------
