@@ -412,9 +412,10 @@ with tempfile.TemporaryDirectory() as temporary:
              'config': {'approval_policy': 'on-request', 'mcp_servers': {'own': {'command': 'keep'}}}}
 
     class Client:
-        def __init__(self, selected=None, active=False, becomes_active=False, reject=False):
+        def __init__(self, selected=None, active=False, becomes_active=False, reject=False, malformed=False):
             self.layer = copy.deepcopy(layer if selected is None else selected)
             self.active, self.becomes_active, self.reject = active, becomes_active, reject
+            self.malformed = malformed
             self.calls = []
 
         def call(self, method, params):
@@ -430,7 +431,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 raise ValueError('native version conflict')
             assert params['filePath'] == str(target) and params['expectedVersion'] == 'version-1'
             assert params['reloadUserConfig'] is False
-            return {}
+            return {} if self.malformed else {'filePath': str(target), 'version': 'version-2', 'status': 'ok'}
 
     top = {'approval_policy': 'never', 'check_for_update_on_startup': False}
     servers = {'own': {'command': 'replace'}, 'missing': {'command': 'fixture'}}
@@ -446,7 +447,8 @@ with tempfile.TemporaryDirectory() as temporary:
     changed = copy.deepcopy(layer)
     changed['name']['file'] = str(home / 'another.config.toml')
     disabled = dict(layer, disabledReason='blocked')
-    for client in (Client(active=True), Client(becomes_active=True), Client(changed), Client(disabled), Client(reject=True)):
+    for client in (Client(active=True), Client(becomes_active=True), Client(changed), Client(disabled),
+                   Client(reject=True), Client(malformed=True)):
         try:
             apply(client, home, top, servers, [])
         except ValueError:
