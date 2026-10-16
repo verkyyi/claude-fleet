@@ -188,6 +188,15 @@ def recheck(previous, fresh, now=None):
         and complete(p["identity"]) and runtime.number(previous.get("observed_at"))
         and runtime.number(previous.get("expires_at"))
         and previous["observed_at"] <= now < previous["expires_at"])
+    # A disconnected fresh read may have no value. Preserve the previous value
+    # strictly as rejected history, never a renewed observation or clear gate.
+    old_dimensions = previous.get("dimensions", {})
+    if isinstance(old_dimensions, dict):
+        for name, d in p["dimensions"].items():
+            old = old_dimensions.get(name)
+            if d["retained"] and d["last_known"] is None and isinstance(old, dict):
+                d["previous_evidence"] = {k: copy.deepcopy(old.get(k)) for k in
+                    ("source", "observed_at", "expires_at", "evidence_at", "last_known")}
     return p
 
 

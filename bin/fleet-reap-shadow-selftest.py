@@ -103,6 +103,10 @@ class Shadow(unittest.TestCase):
         self.assertTrue(p["previous_valid"]);self.assertFalse(p["actionable"])
         d=fixture();d["legacy"]["expires_at"]=102.
         self.assertFalse(shadow.recheck(self.proof(d),d,now=103.)["previous_valid"])
+        disconnected=fixture();del disconnected["layers"]["processes"]
+        p=shadow.recheck(old,disconnected,now=102.)
+        self.assertIn("processes",p["retained"])
+        self.assertEqual(p["dimensions"]["processes"]["previous_evidence"]["observed_at"],100.)
 
     def test_legacy_comparison_requires_same_exact_identity(self):
         d=fixture();d["layers"]["draft"]["value"]="unsent"
