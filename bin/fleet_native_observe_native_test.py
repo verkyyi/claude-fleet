@@ -7,6 +7,7 @@ are real. Authority HTTP and Responses are fixtures, separately covered in Go.
 """
 import argparse
 import base64
+import copy
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -228,6 +229,30 @@ def main():
                     observe.authority.ticket._CREDS = None
                     plan = observe.inspect(pane, socket, pid, sid)
                     assert plan['hooks']['state'] == ('paths-present' if args.keep_install else 'missing')
+                    # Negative identities are exercised against this same live
+                    # native, before any recovery write. A stale birth models a
+                    # reused PID; it is not a claim that the kernel recycled it.
+                    try:
+                        observe.inspect(pane, socket, pid, str(uuid.uuid4()))
+                        raise AssertionError('foreign SID accepted')
+                    except observe.Refusal:
+                        pass
+                    for changed in ('birth', 'phase', 'reservation'):
+                        stale = copy.deepcopy(plan)
+                        if changed == 'birth':
+                            stale['processes']['native']['birth'] += '-prior-lifetime'
+                        elif changed == 'phase':
+                            stale['phase']['turn'] = {'id': 'previous-turn'}
+                        else:
+                            stale['context']['reservation'] = str(uuid.uuid4())
+                        try:
+                            observe.apply(stale)
+                            raise AssertionError('stale native manifest accepted: ' + changed)
+                        except observe.Refusal:
+                            pass
+                    assert server.effects == 0
+                    assert not tmux('show-option', '-wqv', '-t', pane, '@codex_identity')
+                    print('native-foreign-sid-and-stale-birth-turn-reservation: PASS (no observation write)', flush=True)
                     server.lose_ack = True
                     try:
                         observe.apply(plan)
@@ -299,6 +324,7 @@ def main():
                     assert destination.is_absolute() and BIN.parent not in destination.resolve().parents
                     with os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as stream:
                         json.dump(dict(native=True, authority='fixture', provider='fixture', manifest=plan,
+                            foreign_sid_refused=True, stale_manifest_refused=['birth', 'turn', 'reservation'],
                             receipt=result, tool_identity=tool_identity, tool_completed=True, local_partial_retry=True,
                             observe_effects=server.effects, dirty_sha256=hashlib.sha256(dirty).hexdigest(),
                             message_receipt=received, message_consumption=bool(received),
