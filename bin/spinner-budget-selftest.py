@@ -166,8 +166,9 @@ def audit(fixture, output):
             categories = dict(read_query=sum(queries.values()),
                               subscription=by_protocol['refresh-client'],
                               connection=by_protocol['attach-session'],
-                              write=sum(count for name, count in by_protocol.items()
-                                        if name not in queries and name not in ('refresh-client', 'attach-session')))
+                              configuration=by_protocol['set-hook'],
+                              write=by_protocol['set-window-option'] + by_protocol['set-option'])
+            assert sum(categories.values()) == len(protocol), ('unclassified protocol command', by_protocol)
             assert categories['connection'] == 1 and categories['subscription'] >= 1, 'protocol instrumentation missing'
             report = dict(fixture=fixture, seconds=seconds, external_processes=len(unique),
                           by_command=dict(collections.Counter(row[3] for row in unique.values())),
