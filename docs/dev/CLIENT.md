@@ -14,9 +14,12 @@ keyboard on the list.
 There is **one key**: **⌘P** on a Mac (iTerm2), and on a phone or any terminal
 with no ⌘ **⌃空格** (two taps on Termius: Ctrl, space), **F12** (one, once you put
 it on Termius' key row) or **⌃] p**. It opens the panel: every session, and every
-action — a new task or a blank session (its ⚡ row: type the task, ↵), a session's
-shell (Tab on its row), quit fleet (the last row). ⌘P ↵ goes back to the session
-you came from; switching sessions is ⌘P too.
+action. On the ⚡ row, ↵ or Tab opens the editor: write a task, then choose
+「开窗预填（不发送）」 to open a session with that draft and send it there, or
+「开空白会话」 for a blank session. A session's Tab menu opens its shell;
+「退出 fleet」 ends the connection. Open the panel again to return from the
+shell or switch sessions. The current panel's steps and row actions are in
+[日常使用](../public/zh/member/usage.md#一个键总面板).
 
 **The keys that went (issue #3328, EPIC #3178 ⑤ — kept one version):** ⌘↓ ⌘↑ ⌘[
 ⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet for this one version:
@@ -248,15 +251,16 @@ old client's parts, and none of their faults.
 - **The machine the hub picks IS the one you ssh-ed into, as the same login**:
   `fleet-connect.py --argv` answers `local` too — no ssh to itself
   (`FLEET_CONNECT_SELF=ssh` keeps it, for a test of the route).
-- `FLEET_CLIENT=shell fleet` (or `fleet <machine>`) is the old client, kept
-  until the old client goes (EPIC #2999 C11).
+- `fleet <machine>` names the machine to connect to. `FLEET_CLIENT=shell fleet`
+  explains that the old client was retired and starts the same thin loop.
 
 **Your address: no command = the 看台** (issue #3071, EPIC #3067 C5). On your
 home machine's entry port (`ssh -p 22022 <login>@<name>.cf.example.com`, a key
 added on the hub's key page) there is nothing to type: a connection with **no
 command on a terminal** lands in your 看台 — the session you looked at last
-from that key, else the orchestrator (#3060's first screen); ⌃\ there is the
-shell as always. **A command runs exactly as on port 22** — `ssh … ls`, sftp /
+from that key, else the orchestrator (#3060's first screen); open the panel
+with ⌃] p, then use the session's Tab menu for its shell.
+**A command runs exactly as on port 22** — `ssh … ls`, sftp /
 scp / rsync, and the thin client's own attach (it sends the same command it
 always has); **no command and no terminal** (`ssh -T`) is your login shell. It
 is the entry sshd's `ForceCommand`, `bin/fleet-entry.sh` — a dispatch run as
@@ -315,9 +319,8 @@ Blink takes OSC 52, so a copy in a session lands on the iPad.
 *Which taps your own phone needs is confirmed in the C10 drill; the letters
 above are what the 看台 binds.*
 
-The old client's phone layout (one pane, `‹ i/n ›` taps, F1–F4 on Termius'
-extra-key row, issue #1904) lives on under `FLEET_CLIENT=shell` until the old
-client goes.
+The old client's phone layout (`‹ i/n ›` taps and F1–F4, issue #1904) has
+retired. Use the panel keys above on the current client.
 
 ## A new session in one command — `fleet claude` / `fleet codex` (issue #2264)
 
@@ -384,7 +387,8 @@ answer is a person's steps, the reasons live in the sections it points to.
 - 还不行：`fleet debug report`，把它打印的短链接交给运维。
 
 **中文乱码**（中文画成 `_` 或方块）——连入口端口时手机没带 `LANG`。家机器的入口自 #3196
-起自己补 UTF-8（BREAK-IT `entry-no-lang`），断开、重连一次即可。还乱：⌃\ 进 shell 打
+起自己补 UTF-8（BREAK-IT `entry-no-lang`），断开、重连一次即可。还乱：打开面板，选中会话，
+Tab →「在它的目录开 shell」，打
 `locale`，`LC_CTYPE` 不是 `…UTF-8` 就是家机器还没更新到那一版——`fleet doctor` 的
 `install` 行看版本，或 `fleet debug report`。
 
@@ -394,7 +398,8 @@ answer is a person's steps, the reasons live in the sections it points to.
 
 **会话结束了**（`/exit`、⌃C、进程被杀）——窗口留在恢复页：↵ 用同一段对话续上 · r 新开 ·
 q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束（mac-b）。fleet 可以恢复。」
-时，下一次 `fleet` 就回到那个恢复页。⌃D / 关终端只是**放到后台**，会话照跑（上一节）。
+时，下一次 `fleet` 就回到那个恢复页。关终端或面板里选「退出 fleet」只断开连接，会话照跑；
+⌃D 原样交给会话，空输入时可能退出里面的程序（见「和本地 Claude 的键」）。
 
 **额度和用量在哪看**——入口网页：`<入口>/quota`「我的额度」：每个订阅的 5 小时 / 7 天窗、
 什么时候重置、是否用尽；`<入口>/usage`「我的用量」：每天用了多少、个人预算。看台顶行的
