@@ -1067,7 +1067,7 @@ def tool_shell(pid):
     except OSError:return False
 
 
-def child_busy(session,target,pid=0):
+def child_busy(session,target,pid=0,reap=False):
     """The pids a worker's agent still owns beyond its MCP services (issue #864).
 
     A child whose turn ended while a run_in_background test or a PR-gate waiter
@@ -1075,6 +1075,8 @@ def child_busy(session,target,pid=0):
     its parent must not hear otherwise. Same walk hibernation vetoes on, minus the
     restartability contract: an uncontracted MCP server is not work in progress.
     A known Claude pid (fleet_pane_claude_pid) skips the native inspect.
+    reap=True adds native-idle proof only at disposal; a Stop hook runs before
+    the native turn completes and must not wait on its own completion.
     """
     w=Worker(session,target)
     if pid:
@@ -1085,7 +1087,7 @@ def child_busy(session,target,pid=0):
     try:config_home=json.loads(w.opt('@sleep_evidence') or '{}').get('config_home')
     except ValueError:config_home=None
     background=[]
-    if source['agent']=='codex':
+    if source['agent']=='codex' and reap:
         binding=codex_busy_binding(w,source)
         client=RPC(source['codex_identity']['remote'],timeout=5)
         try:
@@ -1375,6 +1377,7 @@ def main():
     p.add_argument('--dry-run',action='store_true')
     p.add_argument('--record',default='')
     p.add_argument('--pid',type=int,default=0,help='busy: the Claude pid already resolved for this pane; digest: the page to redraw')
+    p.add_argument('--reap',action='store_true',help='busy: require current native idle proof before disposal')
     p.add_argument('--dwell',type=float,default=0,help='wake only if the window is still current after this many seconds')
     p.add_argument('--nav',action='store_true',help='wake: from a navigation/attach hook; a no-op unless FLEET_SLEEP_WAKE=dwell')
     p.add_argument('--force',action='store_true',help='repark: replace every sleeping page, not only stale ones')
@@ -1434,7 +1437,7 @@ def main():
     if a.action=='busy':
         # Exit 0 = busy (prints the pids), 1 = idle, 2 = cannot tell (fleet-sleep:
         # on stderr). Unknown retains the window, never permission to reap.
-        try:pids=child_busy(a.session,a.window or '',a.pid)
+        try:pids=child_busy(a.session,a.window or '',a.pid,reap=a.reap)
         except Exception as exc:
             print('fleet-sleep: '+str(exc),file=sys.stderr)
             return 2

@@ -88,7 +88,7 @@ close-on-exit policy; crashes and signal exits remain visible. No shared daemon
 or network listener is started, and no account config is rewritten.
 
 Finished Codex windows can be reaped while their configured MCP servers remain
-running. The busy gate verifies the current launcher/session, a completed idle
+running. The reap gate verifies the current launcher/session, a completed idle
 native turn and exact MCP launch arguments; it excludes only verified service
 entrypoints and bundled helpers. Jobs beneath those processes, active tools,
 unfinished goals/children and active loops still retain the window. Missing or

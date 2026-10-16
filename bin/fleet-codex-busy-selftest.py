@@ -108,7 +108,7 @@ class CodexBusy(unittest.TestCase):
         script = '''. "$1/fleet-lib.sh"
 _fleet_tmux() { printf 'codex\\n'; }
 python3() { return 2; }
-fleet_window_bg_busy fleet @1 1
+fleet_window_bg_busy fleet @1 1 1
 '''
         r = subprocess.run(['bash', '-c', script, '_', str(BIN)], capture_output=True,
                            env=dict(os.environ, FLEET_SKIP_GLOBAL_CONF='1',
@@ -148,11 +148,20 @@ class NativeBusy(CodexBusy):
             p.start(); self.addCleanup(p.stop)
 
     def native_busy(self):
-        return LIB['child_busy']('isolated', '@1')
+        return LIB['child_busy']('isolated', '@1', reap=True)
 
     def test_native_idle_is_rechecked(self):
         self.assertEqual(self.native_busy(), [])
         self.assertEqual(self.reads, 2)
+
+    def test_stop_checks_jobs_before_native_turn_completes(self):
+        self.thread['status']['type'] = 'active'
+        self.assertEqual(LIB['child_busy']('isolated', '@1'), [])
+        self.assertEqual(self.reads, 0)
+        self.rows[104] = (103, 'python')
+        self.argv[104] = [sys.executable, '-c', 'background job']
+        self.exes[104] = Path(sys.executable).resolve()
+        self.assertEqual(LIB['child_busy']('isolated', '@1'), [104])
 
     def test_active_turn_and_in_process_mcp_call_retain(self):
         for state in ('active', 'unknown', 'systemError'):
@@ -336,7 +345,7 @@ class ReapIntegration(unittest.TestCase):
                 self.assertIn('retained:bg', why(child))
                 stamp(child, '@codex_identity', json.dumps(identity))
                 probe = subprocess.run([sys.executable, str(testbin / 'fleet-sleep.py'), 'busy',
-                                        '--session', socket, child], capture_output=True, text=True, env=env)
+                                        '--session', socket, '--reap', child], capture_output=True, text=True, env=env)
                 if probe.returncode != 1:
                     ids = {n: (root / (n + '.pid')).read_text() for n in ('agent', 'native', 'service')}
                     args = LIB['ARGV']['process_argv'](int(ids['service']))
