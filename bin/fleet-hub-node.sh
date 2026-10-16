@@ -283,8 +283,10 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start and runs
     # task_issue — the agent lists CapTask, and only then does the hub send them
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
+  replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;
+  recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;
   deliver) ;;
