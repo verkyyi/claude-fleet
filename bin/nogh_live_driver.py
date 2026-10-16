@@ -91,10 +91,10 @@ class Channel:
         if self.process.poll() is None:
             self.process.terminate()
         try:
-            self.process.wait(timeout=0.3)
+            self.process.wait(timeout=0.1)
         except subprocess.TimeoutExpired:
             self.process.kill()
-            self.process.wait(timeout=0.3)
+            self.process.wait(timeout=0.1)
 
 
 def same_resource(want, actual):
@@ -366,7 +366,7 @@ def run(args):
         for channel in [*channels.values(), *guards.values()]: channel.close()
         if not success and (channels or guards) and plan:
             try:
-                cluster.deadline = started + 54
+                cluster.deadline = started + min(54, plan['budget_seconds'])
                 terminal(cluster, plan, success=False)
                 result['cleanup'] = 'TERMINATED; OWNER RETAINS RESOURCES'
             except BaseException:

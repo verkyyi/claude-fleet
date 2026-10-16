@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import select
 import socket
 import subprocess
 import sys
@@ -109,6 +110,22 @@ os.write(198, b'.' * END_SIZE)
 
 def main():
     signal.alarm(45)
+    if sys.argv[1:] in (['--lifetime-cancel'], ['--lifetime-timeout']):
+        require(os.getpid() == 1, 'ISOLATED_PID1_REQUIRED')
+        read_fd, write_fd = os.pipe()
+        if os.fork() == 0:
+            if os.fork() == 0:
+                os.write(write_fd, b'x')
+            time.sleep(60)
+            os._exit(1)
+        require(os.read(read_fd, 1) == b'x', 'DESCENDANT_NOT_STARTED')
+        print('READY', flush=True)
+        if sys.argv[-1] == '--lifetime-timeout':
+            signal.signal(signal.SIGALRM, lambda *_: os._exit(125))
+            signal.alarm(1)
+            signal.pause()
+        require(sys.stdin.buffer.read(1) == b'x', 'CANCEL_INPUT')
+        os._exit(125)
     if sys.argv[1:] == ['--inside']:
         inside()
         return
@@ -123,6 +140,24 @@ def main():
         if allowed.startswith('FAIL C9 ') and len(allowed) < 200:
             print(allowed, file=sys.stderr)
     require(result.returncode == 0, 'ISOLATED_KERNEL_OR_OBSERVER_TEST_FAILED')
+    for action in ('--lifetime-cancel', '--lifetime-timeout'):
+        child = subprocess.Popen(['sudo', '-n', 'unshare', '--mount', '--pid', '--fork', '--kill-child',
+                                  '--net', '--mount-proc', sys.executable, str(Path(__file__).resolve()), action],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], 3)
+            require(ready and os.read(child.stdout.fileno(), 6) == b'READY\n', 'LIFETIME_NOT_READY')
+            if action == '--lifetime-cancel':
+                child.stdin.write(b'x'); child.stdin.flush()
+            require(child.wait(timeout=3) == 125, 'LIFETIME_EXIT_CHANGED')
+            # Both detached generations inherited stdout. EOF is a kernel
+            # witness that PID1's exit closed ALL namespace descendants.
+            ready, _, _ = select.select([child.stdout], [], [], 1)
+            require(ready and os.read(child.stdout.fileno(), 1) == b'', 'DESCENDANT_SURVIVED_PID1')
+        finally:
+            if child.poll() is None:
+                child.kill(); child.wait(timeout=1)
+            child.stdin.close(); child.stdout.close()
     require(time.monotonic() - started < 45, 'KERNEL_ENTRY_BUDGET')
     print('PASS C9 isolated kernel/observer entry; live NOT RUN')
 

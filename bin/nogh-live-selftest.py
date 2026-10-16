@@ -5,6 +5,7 @@ Each entry includes setup/cleanup and has a 15-second hard bound.
 """
 import importlib.util
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -296,6 +297,9 @@ class Verdict(unittest.TestCase):
             lambda x: x.pop('dns'),
             lambda x: x['node-a'].update(observer='LOST'),
             lambda x: x['node-a'].update(endpoint_uid=str(uuid.uuid4())),
+            lambda x: x['node-a'].update(execution_generation=2),
+            lambda x: x['node-a'].update(generation=0),
+            lambda x: x['node-a']['intervals']['end'].update(github_network=1),
             lambda x: x['node-a']['command_results'].update(identity=1),
             lambda x: x['node-a']['intervals']['deny:github-v6'].clear(),
             lambda x: x['proxy']['gateway'].clear(),
@@ -313,6 +317,52 @@ class Verdict(unittest.TestCase):
         p = plan(); p['row'] = 'A4'; values = proofs(p)
         with self.assertRaises(live.Refused): driver.seal(p, values)
 
+
+class HubIdentity(unittest.TestCase):
+    def setUp(self):
+        self.p = plan()
+        key = b'ed25519 C9-FIXTURE-ONLY\n'
+        self.p['hub']['key_digest'] = 'sha256:' + hashlib.sha256(key).hexdigest()
+        self.responses = {'/v1/fleet/account-key': key, '/v1/me': {'role': 'operator'},
+                          '/version': {'commit': 'a' * 7}, '/v1/nodes': {'nodes': []},
+                          '/v1/fleet/fleet_list': {'fleets': []}, '/v1/fleet/accounts': {'accounts': []}}
+        for ep in self.p['endpoints']:
+            if not ep['binding']: continue
+            b = ep['binding']
+            self.responses['/v1/nodes']['nodes'].append(dict(endpoint_id=b['endpoint_id'],
+                connected=True, compatible=True, machine_id=b['machine_id'], hostname=b['hostname'], os_user=ep['login']))
+            self.responses['/v1/fleet/fleet_list']['fleets'].append(dict(fleet_id=b['fleet_id'],
+                registered=True, availability='online', endpoint_id=b['endpoint_id'],
+                machine_id=b['machine_id'], os_user=ep['login']))
+            self.responses['/v1/fleet/accounts']['accounts'].append(dict(hostname=b['hostname'],
+                login=ep['login'], state='active', principal_id=b['owner'], endpoint_id='different-admin-endpoint'))
+            self.responses['/v1/fleet/fleet_status?fleet_id=' + b['fleet_id']] = dict(source='live',
+                fleet_id=b['fleet_id'], machine_id=b['machine_id'], os_user=ep['login'], machine_name=b['hostname'])
+
+    def get(self, path, raw=False):
+        self.assertNotIn('refresh', path)
+        return self.responses[path]
+
+    def test_exact_normal_identity_and_account_owner_join(self):
+        self.assertEqual(len(identity.verify(self.p, self.get)['endpoints']), 2)
+        self.responses['/v1/fleet/accounts']['accounts'][0]['principal_id'] = 'different-owner'
+        with self.assertRaisesRegex(live.Refused, 'OWNER_CHANGED'):
+            identity.verify(self.p, self.get)
+
+    def test_cold_start_is_retryable_but_mismatch_is_not(self):
+        nodes = self.responses['/v1/nodes']['nodes']
+        nodes[0]['connected'] = False
+        with self.assertRaises(identity.NotReady): identity.verify(self.p, self.get)
+        nodes[0]['machine_id'] = 'wrong-machine'
+        with self.assertRaisesRegex(live.Refused, 'NODE_BINDING_CHANGED'):
+            identity.await_ready(self.p, self.get, seconds=0)
+
+    def test_cached_status_and_changed_key_cannot_be_live(self):
+        status = next(v for k, v in self.responses.items() if k.startswith('/v1/fleet/fleet_status?'))
+        status['source'] = 'cache'
+        with self.assertRaises(identity.NotReady): identity.verify(self.p, self.get)
+        self.responses['/v1/fleet/account-key'] = b'ed25519 WRONG\n'
+        with self.assertRaisesRegex(live.Refused, 'HUB_KEY_CHANGED'): identity.verify(self.p, self.get)
 
 class Templates(unittest.TestCase):
     def test_api_omits_only_known_zero_value_fields(self):
