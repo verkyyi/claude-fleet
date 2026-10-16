@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -97,7 +98,14 @@ def main():
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-            requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization"))})
+            metadata = json.loads(request.get("client_metadata", {}).get("x-codex-turn-metadata", "{}"))
+            requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization")),
+                             "request_kind": metadata.get("request_kind"), "turn_id": metadata.get("turn_id"),
+                             "generate": request.get("generate"),
+                             "input_hash": hashlib.sha256(json.dumps(request.get("input"), sort_keys=True).encode()).hexdigest(),
+                             "input_types": [{"type": item.get("type"), "role": item.get("role")}
+                                             for item in request.get("input", [])],
+                             "keys": sorted(request), "header_names": sorted(self.headers.keys())})
             if tool_fixture["active"]:
                 tool_fixture["requests"].append(request)
                 sequence = len(tool_fixture["requests"])
@@ -458,7 +466,8 @@ def main():
                         check(any(reason in output for output in outputs), phase + " native loop receives the current managed denial reason")
                     report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
-            report.update(checks=checks, passed=len(checks))
+            report.update(checks=checks, passed=len(checks), request_kinds=[
+                {key: request[key] for key in ("request_kind", "generate")} for request in requests])
             print(json.dumps(report, indent=2))
     finally:
         endpoint.shutdown()
