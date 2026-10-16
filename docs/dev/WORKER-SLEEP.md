@@ -180,6 +180,25 @@ to exact stdio launcher argv and kernel executable paths. Supported npm/uv
 entrypoint wrappers are checked separately; additional jobs/browser descendants
 still prevent sleep. Native threads must be idle with no active tool items.
 Only config digests and service names are retained, never MCP credentials.
+
+The fleet's own server is launched through a shell — `bash -c 'exec python3
+"${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py"'` (`conf/mcp-worker.json`)
+— so the live kernel is Python running the expanded path, which can name a
+version since deleted (issue #4537). Under a Codex release whose MCP environment
+was measured (`SHELL_EXEC_CODEX` in `bin/fleet_sleep_mcp.py`, read from the live
+app-server's `initialize` answer) that kernel is identified as the exec target of
+the effective config's shell: exactly `exec WORD…` with `$NAME` / `${NAME:-word}`
+expansions inside double quotes, no shell hook in the config's `env` / `env_vars`,
+the process's environment or the agent's start environment (`BASH_ENV`, `ENV`,
+`SHELLOPTS`, `BASH_FUNC_*`, `SSH_CLIENT`, …), stdin not a socket, every expanded
+variable equal to what the config or the agent hands down, and the same process
+throughout (`shell_exec_argv`). That is identity, not a contract, and not a record
+of the launch: the contract above still decides, and a server whose configured
+path is gone is refused by Codex's own readiness — a restart could not start it.
+Claude hands its servers its whole mutable environment, so it gets no such proof
+and the shape stays an unverified process there. `sleep_mcp_basis` records
+`shell-exec` per service so matched (names only).
+
 After resume, the same configuration and initialized service inventory must be
 available before the worker is declared awake. A changed configuration leaves
 a reviewable failed recovery; a slow service can finish on a later scan.

@@ -1,4 +1,7 @@
-"""Read exact process argv (never shell-split ps output or inspect environment).
+"""Read exact process argv (never shell-split ps output).
+
+The environment is read only through process_env, which hands back names and
+the few values a caller asks for — never the whole block (issue #4537).
 
 Persist only restart options; initial prompts, images and session selectors must
 not be replayed. Unknown syntax defers hibernation rather than weakening policy.
@@ -39,6 +42,80 @@ def process_argv(pid):
     else:
         result=Path('/proc/%s/cmdline'%pid).read_bytes().rstrip(b'\0').split(b'\0')
     return [value.decode('utf-8') for value in result]
+
+
+def process_birth(pid):
+    """The kernel's start time for <pid>: an opaque, ordered token that changes
+    when the number is reused."""
+    if sys.platform=='darwin':
+        libproc=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+        buf=ctypes.create_string_buffer(136)  # struct proc_bsdinfo
+        if libproc.proc_pidinfo(int(pid),3,ctypes.c_uint64(0),buf,136)!=136:  # PROC_PIDTBSDINFO
+            raise OSError(ctypes.get_errno(),'cannot read process start')
+        return struct.unpack_from('QQ',buf.raw,120)  # pbi_start_tvsec, pbi_start_tvusec
+    stat=Path('/proc/%s/stat'%pid).read_text()
+    return (int(stat.rsplit(')',1)[1].split()[19]),)  # field 22, starttime
+
+
+def stdin_is_socket(pid):
+    """Is <pid>'s fd 0 a socket? exec keeps fd 0, so this is also the stdin of
+    whatever exec'd into <pid> — bash reads ~/.bashrc when it is (issue #4537)."""
+    if sys.platform=='darwin':
+        libproc=ctypes.CDLL('/usr/lib/libproc.dylib',use_errno=True)
+        buf=ctypes.create_string_buffer(8*4096)
+        size=libproc.proc_pidinfo(int(pid),1,ctypes.c_uint64(0),buf,len(buf))  # PROC_PIDLISTFDS
+        if size<=0:raise OSError(ctypes.get_errno(),'cannot list process descriptors')
+        for offset in range(0,size,8):
+            fd,kind=struct.unpack_from('iI',buf.raw,offset)  # struct proc_fdinfo
+            if fd==0:return kind==2  # PROX_FDTYPE_SOCKET
+        return False
+    try:return os.readlink('/proc/%s/fd/0'%pid).startswith('socket:')
+    except FileNotFoundError:return False
+
+
+def process_env(pid, names):
+    """What <pid>'s environment block says, narrowed to <names>: a dict of
+    names (every variable present), values ({name: value} for <names> only),
+    functions (names whose value is an exported shell function body), stdin_socket
+    and birth. The block is what execve() was handed unless the process has
+    since rewritten it itself, so it is evidence to check against something
+    else, never history on its own (issue #4537).
+
+    No other value leaves this function: the environment carries credentials
+    and is never logged or persisted.
+    """
+    birth=process_birth(pid)
+    if sys.platform=='darwin':
+        libc=ctypes.CDLL(None,use_errno=True)
+        mib=(ctypes.c_int*3)(1,49,int(pid))  # CTL_KERN, KERN_PROCARGS2
+        size=ctypes.c_size_t(1024*1024)
+        buf=ctypes.create_string_buffer(size.value)
+        if libc.sysctl(mib,3,buf,ctypes.byref(size),None,0):
+            raise OSError(ctypes.get_errno(),'cannot read native environment')
+        raw=buf.raw[:size.value]
+        argc=struct.unpack_from('i',raw)[0]
+        offset=raw.index(b'\0',4)+1
+        while raw[offset:offset+1]==b'\0': offset+=1
+        fields=raw[offset:].split(b'\0')
+        # argv, then the environment up to the first empty string (the apple[] strings follow).
+        entries=[]
+        for field in fields[argc:]:
+            if not field: break
+            entries.append(field)
+    else:
+        entries=[e for e in Path('/proc/%s/environ'%pid).read_bytes().split(b'\0') if e]
+    present=set();values={};functions=set()
+    for entry in entries:
+        key,sep,value=entry.partition(b'=')
+        if not sep: raise ValueError('malformed native environment entry')
+        key=key.decode('utf-8','surrogateescape')
+        present.add(key)
+        if value.startswith(b'() {'): functions.add(key)
+        if key in names: values[key]=value.decode('utf-8')
+    socket=stdin_is_socket(pid)
+    if process_birth(pid)!=birth: raise OSError(3,'process changed while reading its environment')
+    return dict(names=frozenset(present),values=values,functions=frozenset(functions),
+                stdin_socket=socket,birth=birth)
 
 
 def restart_options(argv,agent):

@@ -47,8 +47,9 @@ class Client:
             fields = {k.lower(): v.strip() for k, v in fields.items()}
             if b' 101 ' not in headers.split(b'\r\n')[0] or fields.get('sec-websocket-accept') != expected:
                 raise ValueError('invalid Codex WebSocket handshake')
-            self.call('initialize', {'clientInfo': {'name': 'claude_fleet', 'version': '1'},
-                                     'capabilities': {'experimentalApi': True}})
+            # The live peer's own answer (its userAgent names its version).
+            self.initialized = self.call('initialize', {'clientInfo': {'name': 'claude_fleet', 'version': '1'},
+                                                        'capabilities': {'experimentalApi': True}})
             self.send({'method': 'initialized'})
         except Exception:
             self.close()

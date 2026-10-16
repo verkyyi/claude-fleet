@@ -1029,7 +1029,9 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
             if not remote or argv[argv.index('--listen')+1:argv.index('--listen')+2]!=[remote]:
                 raise ValueError('bound Codex server owns a different endpoint')
             client=RPC(remote,timeout=5)
-            try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],**lenient))
+            # A measured Codex release only: its MCP children's environment is what
+            # shell_exec_argv can account for (issue #4537); Claude's call passes none.
+            try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,source['pid'],ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
             finally:client.close()
     while pending:
         parent=pending.pop()
@@ -1061,7 +1063,7 @@ def quiet_processes(source,config_home=None,background=None,strict=True):
                     children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
                     if children:
                         client=RPC(remote,timeout=5)
-                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],**lenient))
+                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
                         finally:client.close()
                 continue
             if pid in mcp_pids:continue
