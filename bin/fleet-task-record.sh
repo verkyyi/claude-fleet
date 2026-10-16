@@ -191,7 +191,8 @@ if [ "$cmd" = dispatch ]; then
 import json,sys
 d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
 d=json.loads(d)
-print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo, rule=rule,
+repo=repo.lower()
+print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
 JSON

@@ -246,6 +246,36 @@ it does not claim a lifecycle transition or populate execution receipts.
 Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
 
+### Filing after acceptance (#4506)
+
+`task` / `fleet-task-record.sh dispatch --rule N` keep rule number and version
+in immutable `request_payload.rule`; v1 still rejects legacy top-level `rule`
+and `issue` setters. A repo task's unified filer uses two v1 mutations:
+`ticket_prepare` (`ticket-file:g<N>`) pins the authenticated filing endpoint and
+durable local `filing_id`; `ticket_link` (`ticket-link:g<N>`) attaches a full
+`gh:repo#N` or `hub:repo#N` only to that accepted, unclaimed generation. Owner,
+repo, endpoint, filing incarnation and registered ticket ownership are checked.
+The original accepted response, payload, provider and parent remain unchanged.
+
+The node's existing operation journal records filing intent before create.
+Retry the same dispatch with the same input: it reuses the accepted T and ticket.
+A read-only GitHub quota preflight can refuse before any create is sent; natural
+quota recovery then permits the first send. After sending, **every error is
+uncertain**, including rate-limit text, partial success and an empty response.
+This create retains the write queue and gap but disables its automatic retry.
+Only marker reconciliation can recover it; a miss never authorizes another
+create. Lookup includes closed tickets, bounded to 500 rows (five GitHub pages);
+truncation/unavailability and ambiguous markers are explicit failures. Lost local
+journal state cannot authorize a new filing incarnation on the prepared task.
+
+Link failure retains the task and known ticket URL and refuses spawn. Once
+linked, placement uses the authoritative task claim for the issue lease. The
+validated accepted envelope supplies the spawner's task binding; launch admission
+must succeed before the task/launch stamp and native start. An unreadable task is
+never treated as legacy; positively read v0 records retain the legacy filer path.
+Hub tickets and tasks without tickets do not require GitHub for task control.
+These are source contracts, not a backfill of existing worker metadata.
+
 ### Task children and results (#4394)
 
 An accepted task (`authority_version: 1`, verified `@launch`) uses its T record

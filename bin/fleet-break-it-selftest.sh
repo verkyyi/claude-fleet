@@ -4910,6 +4910,14 @@ drill_task_blocker_fence() {
   WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
 }
 
+drill_task_ticket_link() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_ticket_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='接受后的建单与关联幂等恢复，未知发送不重复建单'
+}
+
 drill_repo_cutover_inflight() {
   CAP=15; local out t0
   t0=$(now)

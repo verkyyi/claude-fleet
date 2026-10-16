@@ -48,7 +48,9 @@ JSON
   printf '200'
   exit 0
 fi
-printf '%s\n%s' "$(cat "$ANS" 2>/dev/null || echo '{"id":"T5"}')" "$(cat "$CODE" 2>/dev/null || echo 200)"
+fallback='{"id":"T5"}'
+case " $* " in *' -X GET '*) fallback='{"task":{"id":"T5"}}' ;; esac
+printf '%s\n%s' "$(cat "$ANS" 2>/dev/null || echo "$fallback")" "$(cat "$CODE" 2>/dev/null || echo 200)"
 EOF
 chmod +x "$WORK/curl"
 export FLEET_HUB_CURL="$WORK/curl" CURL_LOG="$WORK/curl.log" ANS="$WORK/ans" CODE="$WORK/code"
