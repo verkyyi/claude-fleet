@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-deps: fleet_pending_tool.py fleet-pending-tool.sh
 # fleet-answer-selftest.sh — hermetic smoke test for bin/fleet-answer.sh (issue #605).
 #
 # Drives the answerer against a FAKE tmux and a HAND-WRITTEN transcript — no tmux
