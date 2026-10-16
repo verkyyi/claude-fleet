@@ -73,7 +73,7 @@ print("200")
             r = dict(task="T8", owner="alice", generation=1, worker_id="child/session", ticket_ref="gh:two/repo#7",
                      parent_task="T7", parent_session="parent/session", parent_generation=2,
                      outcome="succeeded", evidence="fixture stop", execution_stopped=True, event_id="done", summary="done")
-            t = dict(id="T8", owner="alice", generation=1, execution_owner="child/session", outcome="succeeded")
+            t = dict(id="T8", owner="alice", generation=1, execution_owner="child/session", outcome="succeeded", **{k:r[k] for k in ("ticket_ref","parent_task","parent_session","parent_generation")})
             parent = dict(id="T7", owner="alice", generation=2, execution_owner="parent/session")
             f = Path(temp)/"relay.json"
             f.write_text(json.dumps(dict(id="child/session#done", **{"from":"child/session", "to":"parent/session"}, payload=dict(task_report=r))))
@@ -87,6 +87,9 @@ print("200")
             with patch.object(control,"call",side_effect=call), patch.object(control,"context",return_value=dict(task="T7", generation=2, worker_id="parent/session")), patch.object(control.launch,"inspect",return_value=dict(actual_provider="codex")), patch.object(control.subprocess,"run",side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(control.receive(f),0)
                 self.assertEqual(control.receive(f),0)  # lost acknowledgement/reconnect
+                envelope = json.loads(f.read_text()); envelope["id"] += "-different-transport"
+                f.write_text(json.dumps(envelope))
+                self.assertEqual(control.receive(f),0)  # event identity beats transport ID
                 parent["generation"]=3
                 with patch.dict(os.environ, {"FLEET_CONF_DIR":temp}):
                     self.assertEqual(control.receive(f),0)
@@ -95,14 +98,54 @@ print("200")
             self.assertTrue((Path(temp)/"global/orphan-reports.ndjson").exists())
             print("fixture report: event=done, reconnect rows=1, deliveries=1; parent g3 rejected")
 
+    def test_completion_report_delivered_and_awaited_with_retained_native(self):
+        # The native fixture really remains alive across explicit report ->
+        # existing outbox -> await. Hub transaction/relay fencing is covered by
+        # the matching store/API tests; no PR/GitHub or exit inference here.
+        native = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            for outcome in ("succeeded", "failed"):
+                c = dict(task="T8", owner="alice", generation=1, worker_id="child/session")
+                t = dict(id="T8", authority_version=1, owner="alice", generation=1,
+                         execution_owner="child/session", parent_session="parent/session")
+                proof = dict(native_session="retained", actual_provider="codex", pid=native.pid)
+                reports = []
+                def call(action, task, payload=None, **kwargs):
+                    if action == "get": return dict(task=t)
+                    self.assertEqual(action, "report")
+                    self.assertFalse(payload["execution_stopped"])
+                    reports.append(payload)
+                    t["outcome"] = payload["outcome"]
+                    return dict(disposition="committed", task=t)
+                with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), patch.object(control.launch, "option", return_value=json.dumps(proof)), patch.object(control.launch, "check_receipt", return_value=proof), patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as delivery, contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(control.report("@8", "waiting", "Explicit work result", "", False, outcome=outcome), 3)
+                    self.assertEqual(control.wait_task("T8", 1, 1), 0 if outcome == "succeeded" else 1)
+                    self.assertIsNone(native.poll(), "completion killed native session")
+                    self.assertEqual(json.loads(delivery.call_args.kwargs["input"])["task_report"], reports[0])
+                    self.assertIn(outcome.upper(), out.getvalue())
+                print("fixture retained native: report %s committed, delivery queued, await %s, process alive" % (outcome, outcome.upper()))
+        finally:
+            native.terminate()
+            native.wait(timeout=5)
+
+    def test_stop_ack_does_not_republish_completed_work(self):
+        c = dict(task="T7", owner="alice", generation=1, worker_id="fleet/session")
+        t = dict(c, execution_owner="fleet/session", outcome="succeeded", cancel_request="stop")
+        proof = dict(pid=123, birth="one", executable="/native", native_session="sid")
+        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=[dict(task=t),t]) as calls, patch.object(control.launch, "option", return_value=json.dumps(proof)), patch.object(control.launch, "check_receipt", return_value=proof), patch.object(control.os, "kill", side_effect=ProcessLookupError):
+            self.assertEqual(control.finalize("@7"), 0)
+            self.assertEqual(calls.call_args.args[0], "mutate")
+            self.assertEqual(calls.call_args.args[2]["kind"], "stop_ack")
+            self.assertNotIn("state", calls.call_args.args[2])
+
     def test_native_alive_cannot_ack_cancel(self):
         c=dict(task="T7",owner="alice",generation=1,worker_id="fleet/session")
         t=dict(id="T7",owner="alice",generation=1,execution_owner="fleet/session",cancel_request="stop")
         proof=dict(pid=123,birth="one",executable="/native",native_session="sid")
-        with patch.object(control,"context",return_value=c), patch.object(control,"call",side_effect=[dict(task=t),dict(report=None)]) as calls, patch.object(control.launch,"option",side_effect=["",json.dumps(proof)]), patch.object(control.launch,"check_receipt",return_value=proof), patch.object(control.os,"kill"), patch.object(control.launch,"process",return_value=proof):
+        with patch.object(control,"context",return_value=c), patch.object(control,"call",return_value=dict(task=t)) as calls, patch.object(control.launch,"option",return_value=json.dumps(proof)), patch.object(control.launch,"check_receipt",return_value=proof), patch.object(control.os,"kill"), patch.object(control.launch,"process",return_value=proof):
             with self.assertRaisesRegex(ValueError,"still alive"):
                 control.finalize("@7")
-            self.assertEqual(calls.call_count,2)
+            self.assertEqual(calls.call_count,1)
 
 
 if __name__ == "__main__":

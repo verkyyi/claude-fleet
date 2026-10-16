@@ -223,12 +223,14 @@ func taskAttemptID(id, generation int64) string {
 }
 
 // TaskMutation is one fenced, idempotent command. A retry is allowed only
-// after a terminal result. A transfer requires explicit stopped evidence from
-// the current executor; lease expiry alone never authorizes either command.
+// after a terminal result and release of its pinned execution lease. A transfer
+// requires explicit stopped evidence from the current executor; lease expiry
+// alone never authorizes either command. stop_ack releases a retained terminal
+// execution without changing its task outcome.
 // EndpointID is the authenticated node, not a field to accept from JSON.
 type TaskMutation struct {
 	Key              string `json:"idempotency_key"`
-	Kind             string `json:"kind"` // claim | transition | retry | transfer
+	Kind             string `json:"kind"` // claim | transition | retry | transfer | cancel_request | cancel_ack | stop_ack
 	ExpectedWorker   string `json:"expected_worker"`
 	Generation       int64  `json:"generation"`
 	WorkerID         string `json:"worker_id,omitempty"`
@@ -252,7 +254,7 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, ErrTaskInvalid
 	}
 	switch m.Kind {
-	case "cancel_request", "cancel_ack":
+	case "cancel_request", "cancel_ack", "stop_ack":
 		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.Evidence == "" {
 			return FleetTask{}, ErrTaskInvalid
 		}
@@ -320,6 +322,13 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, ErrTaskFence
 	}
 	switch m.Kind {
+	case "stop_ack":
+		if !taskTerminal(t.State) || t.ExecutionOwner == "" || !m.ExecutionStopped {
+			return FleetTask{}, ErrTaskConflict
+		}
+		if err = releaseTaskLeaseTx(tx, t); err != nil {
+			return FleetTask{}, err
+		}
 	case "cancel_request":
 		if taskTerminal(t.State) || t.CancelRequest != "" {
 			return FleetTask{}, ErrTaskConflict
@@ -369,15 +378,17 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 				return FleetTask{}, ErrTaskConflict
 			}
 			if taskTerminal(m.State) {
-				if m.Evidence == "" || (t.ExecutionOwner != "" && !m.ExecutionStopped) {
+				if m.Evidence == "" || (m.State == TaskRefused && t.ExecutionOwner != "" && !m.ExecutionStopped) {
 					return FleetTask{}, ErrTaskConflict
 				}
 				if m.State == TaskRefused && t.ActualAgent != "" {
 					return FleetTask{}, ErrTaskConflict
 				}
 				t.Outcome = m.State
-				if err = releaseTaskLeaseTx(tx, t); err != nil {
-					return FleetTask{}, err
+				if m.ExecutionStopped {
+					if err = releaseTaskLeaseTx(tx, t); err != nil {
+						return FleetTask{}, err
+					}
 				}
 			}
 			t.State = m.State
@@ -397,6 +408,17 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		}
 		if m.Kind == "retry" && !taskTerminal(t.State) {
 			return FleetTask{}, ErrTaskConflict
+		}
+		if m.Kind == "retry" && !m.ExecutionStopped {
+			// A terminal result alone does not retire the native executor.
+			// Old terminal records already released their lease with stop proof.
+			var held int
+			if err = tx.QueryRow(`SELECT COUNT(*) FROM fleet_leases WHERE task_id = ? AND generation = ?`, t.ID, t.Generation).Scan(&held); err != nil {
+				return FleetTask{}, err
+			}
+			if held != 0 {
+				return FleetTask{}, ErrTaskConflict
+			}
 		}
 		if m.Kind == "transfer" && (t.ExecutionOwner == "" || taskTerminal(t.State) || !m.ExecutionStopped) {
 			return FleetTask{}, ErrTaskConflict

@@ -99,6 +99,9 @@
 # by one, exactly as before. `batch` (C5, #939) only RECORDS a quiet report; the
 # digest (bin/fleet-children-flush.sh) delivers it later, merged with its siblings
 # into one `[children-digest]`, and a loud report flushes that digest at once.
+# Accepted task only: --outcome succeeded|failed explicitly finalizes work
+# (summary required), independently of native exit. --state alone is progress
+# except merged, which requires a confirmed PR. Legacy calls stay unchanged.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -107,9 +110,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-STATE='' PR='' VERDICT='' SUMMARY='' DROWS='' DSAMPLE='' WIN='' ORIGIN='' ISSUE='' TITLE='' BRANCH='' KEY='' SOCK='' DRY=0 ONCE=0
+OUTCOME='' STATE='' PR='' VERDICT='' SUMMARY='' DROWS='' DSAMPLE='' WIN='' ORIGIN='' ISSUE='' TITLE='' BRANCH='' KEY='' SOCK='' DRY=0 ONCE=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --outcome)  shift; OUTCOME="${1:-}" ;;
     --state)    shift; STATE="${1:-}" ;;
     --pr)       shift; PR="${1:-}" ;;
     --verdict)  shift; VERDICT="${1:-}" ;;
@@ -171,9 +175,12 @@ case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) 
 # A verified accepted task never falls back to the issue/key report route.
 if [ -n "$(TM display-message -p -t "$target" '#{@launch}' 2>/dev/null)" ]; then
   task_args=(report --pane "$target" --socket "$SOCK" --state "$STATE" --summary "$SUMMARY" --pr "$PR")
+  [ -n "$OUTCOME" ] && task_args+=(--outcome "$OUTCOME")
   [ "$DRY" = 1 ] && task_args+=(--dry)
   exec python3 "$BIN/fleet_task_control.py" "${task_args[@]}"
 fi
+
+[ -z "$OUTCOME" ] || { printf 'fleet-report-parent: --outcome requires an accepted task\n' >&2; exit 2; }
 
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''

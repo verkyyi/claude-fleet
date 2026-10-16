@@ -116,12 +116,12 @@ def publish_report(r):
     return 3
 
 
-def report(pane, state, summary, pr, dry, socket=""):
+def report(pane, state, summary, pr, dry, socket="", outcome=""):
     c = context(pane, socket)
     t = call("get", c["task"])["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
         raise ValueError("stale report owner/generation")
-    if state != "merged":
+    if state != "merged" and not outcome:
         # A red CI gate or a completed turn is workflow progress, never a
         # terminal result. Still notify the exact parent with a fenced event.
         if t.get("outcome"):
@@ -133,24 +133,22 @@ def report(pane, state, summary, pr, dry, socket=""):
         return publish_report(r)
     # Keep the existing code-landing gate. Work outcome and code landing can be
     # reported independently using `fleet-task-record.sh report` with a result.
-    if pr:
+    if state == "merged":
+        if not pr or outcome not in ("", "succeeded"):
+            raise ValueError("merged report requires a PR and a success outcome")
         gate = subprocess.run(["bash", str(BIN / "fleet-pr-verdict.sh"), pr], capture_output=True, text=True, timeout=20)
         if gate.stdout.strip() != "MERGED":
             raise ValueError("PR merge is unconfirmed; task result not recorded")
+    outcome = outcome or "succeeded"
+    if outcome not in ("succeeded", "failed") or not summary.strip():
+        raise ValueError("explicit completion needs succeeded/failed and a summary")
     receipt = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt", socket)))
     evidence = json.dumps(dict(native_session=receipt["native_session"], provider=receipt["actual_provider"],
-                               work_result="succeeded", pr=pr), sort_keys=True)
-    r = report_input(c, t, "succeeded", summary, evidence)
+                               work_result=outcome, pr=pr), sort_keys=True)
+    r = report_input(c, t, outcome, summary, evidence)
     if dry:
         print(json.dumps(r)); return 0
-    saved = call("report", c["task"], r)
-    if saved["disposition"] == "historical":
-        print("HISTORICAL\ntask: %s" % c["task"]); return 0
-    # Intent survives a resumed native conversation in this same window. It is
-    # not a task DB or retry queue; the hub journal already owns the result.
-    launch.tmux("set-option", "-w", "-t", pane, "@task_report", json.dumps(r), socket=socket)
-    print("PENDING\ntask: %s\nevent_id: %s\nnote: work reported; awaiting confirmed native stop" % (c["task"], r["event_id"]))
-    return 3
+    return publish_report(r)
 
 
 def finalize(pane):
@@ -158,9 +156,7 @@ def finalize(pane):
     t = call("get", c["task"])["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
         raise ValueError("stale finalization generation")
-    raw = launch.option(pane, "@task_report")
-    pending = json.loads(raw) if raw else call("pending-report", c["task"]).get("report")
-    if not pending and not t.get("cancel_request"):
+    if not t.get("outcome") and not t.get("cancel_request"):
         return 0  # Exit alone never invents a result.
     proof = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt")))
     # A failed process probe is unknown. Only ESRCH or a positively observed
@@ -173,20 +169,19 @@ def finalize(pane):
         observed = launch.process(proof["pid"])
         if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
             raise ValueError("native execution is still alive")
-    if not pending:
+    evidence = json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}, sort_keys=True)
+    result = 0
+    if not t.get("outcome"):
         r = report_input(c, t, "cancelled", "Cancellation acknowledged after native stop",
-                         json.dumps({k: proof[k] for k in ("pid", "birth", "executable", "native_session")}),
-                         stopped=True, event=t["cancel_request"] + ".ack")
+                         evidence, stopped=True, event=t["cancel_request"] + ".ack")
         r["cancel_request"] = t["cancel_request"]
-        return publish_report(r)
-    r = pending
-    if any(r.get(k) != c[v] for k, v in (("task", "task"), ("owner", "owner"), ("generation", "generation"), ("worker_id", "worker_id"))):
-        raise ValueError("pending result belongs to an old generation")
-    r["event_id"] += ".stopped"
-    r["execution_stopped"] = True
-    r["evidence"] = json.dumps(dict(work=r["evidence"], stopped_native={k: proof[k] for k in
-                                 ("pid", "birth", "executable", "native_session")}), sort_keys=True)
-    return publish_report(r)
+        result = publish_report(r)
+    # Release execution separately. If completion won the cancellation race,
+    # its immutable outcome survives and the same stop proof retires its lease.
+    event = "stop:" + hashlib.sha256(evidence.encode()).hexdigest()
+    call("mutate", c["task"], dict(kind="stop_ack", idempotency_key=event,
+         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence))
+    return result
 
 
 def cancel(task, event):
@@ -227,16 +222,18 @@ def receive(file):
     t = call("get", r["task"])["task"]
     if (t["owner"], t["generation"], t["execution_owner"], t.get("outcome", "")) != (r["owner"], r["generation"], r["worker_id"], r["outcome"]):
         print("historical child generation; no delivery"); return 0
+    if any(t.get(k, "" if k != "parent_generation" else 0) != r[k] for k in ("ticket_ref", "parent_task", "parent_session", "parent_generation")):
+        raise ValueError("relay differs from accepted parent/ticket binding")
     if r["parent_task"]:
         parent = call("get", r["parent_task"])["task"]
         if not parent_matches(r, parent):
             orphan(r, "parent generation retired"); return 0
     # The one resolver, and only the stable worker ID. No issue/name fallback.
-    cmd = '. "$1/fleet-lib.sh"; home=$(fleet_wid_home "wid:$2") || exit 75; sock=$(fleet_socket "$home"); win=$(fleet_win_for_fid "${2#*/}" "$sock") || exit 75; dir=$(children_dir "$home"); printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"'
-    cmd = cmd.replace('home=$(fleet_wid_home', 'task_home=$(fleet_wid_home').replace('"$home"', '"$task_home"')
-    cmd = cmd.replace('. "$1/fleet-lib.sh";', '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh";')
+    cmd = '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; task_home=$(fleet_wid_home "wid:$2") || exit 75; sock=$(fleet_socket "$task_home"); win=$(fleet_win_for_fid "${2#*/}" "$sock") || exit 76; dir=$(children_dir "$task_home"); printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"'
     located = subprocess.run(["bash", "-c", cmd, "task-receive", str(BIN), r["parent_session"]],
                              capture_output=True, text=True, timeout=10)
+    if located.returncode == 76:
+        orphan(r, "parent session retired on its known fleet"); return 0
     if located.returncode:
         return 75
     socket, pane, directory = located.stdout.strip().splitlines()
@@ -259,7 +256,8 @@ def receive(file):
             with path.open("a") as stream:
                 stream.write(json.dumps(dict(r, rid=envelope["id"])) + "\n")
         sentfile = Path(directory) / ".relay-sent"
-        if sentfile.exists() and envelope["id"] in sentfile.read_text().splitlines():
+        sent_key = "task-report:" + hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
+        if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
             print("already delivered"); return 0
         msg = "[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" % (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"])
         if native:
@@ -275,7 +273,7 @@ def receive(file):
         if delivered.returncode:
             return 75
         with sentfile.open("a") as stream:
-            stream.write(envelope["id"] + "\n")
+            stream.write(sent_key + "\n")
     print("reported task %s event %s" % (r["task"], r["event_id"]))
     return 0
 
@@ -292,6 +290,7 @@ def main():
     p.add_argument("--interval", type=int, default=5)
     p.add_argument("--state", default="waiting")
     p.add_argument("--summary", default="")
+    p.add_argument("--outcome", choices=("succeeded", "failed"), default="")
     p.add_argument("--pr", default="")
     p.add_argument("--event", default="")
     p.add_argument("--dry", action="store_true")
@@ -299,7 +298,7 @@ def main():
     try:
         if args.action == "children": return children(args.task, args.json)
         if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
-        if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket)
+        if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket, args.outcome)
         if args.action == "finalize": return finalize(args.pane)
         if args.action == "receive": return receive(args.file)
         if args.action == "cancel":

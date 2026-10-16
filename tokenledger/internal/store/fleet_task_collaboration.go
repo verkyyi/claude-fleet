@@ -57,8 +57,9 @@ func (s *Store) FleetTaskChildren(owner, parent, session string, generation int6
 }
 
 // TaskReport is the node's explicit result, independently scoped to the child
-// and to its accepted parent. ExecutionStopped is an acknowledgement, not intent.
-// A live worker may record intent (pending); only a confirmed stop commits it.
+// and to its accepted parent. Success/failure finalize work even while the native
+// session is retained. ExecutionStopped confirms runtime stop/fencing: cancellation
+// requires it; success/failure only release the execution lease when it is present.
 type TaskReport struct {
 	EventID          string `json:"event_id"`
 	Task             string `json:"task"`
@@ -80,7 +81,7 @@ type TaskReport struct {
 type TaskReportReceipt struct {
 	Report      TaskReport `json:"report"`
 	Task        FleetTask  `json:"task"`
-	Disposition string     `json:"disposition"` // pending | committed | historical
+	Disposition string     `json:"disposition"` // progress | committed | historical
 }
 
 func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now time.Time) (TaskReportReceipt, error) {
@@ -146,22 +147,21 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 	if !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
 	}
-	disposition := "pending"
-	if r.Outcome == "" {
-		disposition = "progress"
-	}
+	disposition := "progress"
 	if t.Generation != r.Generation || taskTerminal(t.State) {
 		disposition = "historical"
-	} else if r.ExecutionStopped && r.Outcome != "" {
+	} else if r.Outcome != "" {
 		if !taskTransition(t.State, r.Outcome) {
 			return empty, ErrTaskConflict
 		}
-		if r.Outcome == TaskCancelled && (t.CancelRequest == "" || r.CancelRequest != t.CancelRequest) {
+		if r.Outcome == TaskCancelled && (!r.ExecutionStopped || t.CancelRequest == "" || r.CancelRequest != t.CancelRequest) {
 			return empty, ErrTaskConflict
 		}
 		t.State, t.Outcome, t.Evidence, t.UpdatedAt = r.Outcome, r.Outcome, r.Evidence, now.UTC()
-		if err = releaseTaskLeaseTx(tx, t); err != nil {
-			return empty, err
+		if r.ExecutionStopped {
+			if err = releaseTaskLeaseTx(tx, t); err != nil {
+				return empty, err
+			}
 		}
 		if err = s.saveTaskTx(tx, t, now); err != nil {
 			return empty, err
@@ -203,26 +203,11 @@ func (s *Store) TaskReportDeliverable(r TaskReport) (bool, error) {
 	return p.Owner == r.Owner && p.Generation == r.ParentGeneration && p.ExecutionOwner == r.ParentSession && !taskTerminal(p.State), nil
 }
 
-// PendingTaskReport recovers a declared result from the existing journal after
-// an adapter/window restart. A terminal generation never needs another intent.
-func (s *Store) PendingTaskReport(t FleetTask) (*TaskReport, error) {
-	rows, err := s.read.Query(`SELECT result FROM fleet_operations WHERE actor = ? AND action = 'task_report' AND idem LIKE ? AND worker_id = ? ORDER BY created DESC, id DESC LIMIT 100`, t.Owner, "task-report:"+t.Ref+":%", t.ExecutionOwner)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
-			return nil, err
-		}
-		var result TaskReportReceipt
-		if err = json.Unmarshal([]byte(raw), &result); err != nil {
-			return nil, err
-		}
-		if result.Disposition == "pending" && result.Report.Generation == t.Generation {
-			return &result.Report, nil
-		}
-	}
-	return nil, rows.Err()
+// A downlevel relay from an accepted execution cannot bypass task fencing.
+// Attempt history keeps this true after transfer, too; legacy sessions have no
+// entry here and continue through their existing report route.
+func (s *Store) TaskExecutionKnown(owner, worker string) (bool, error) {
+	var count int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action = 'task_attempt' AND actor = ? AND worker_id = ?`, owner, worker).Scan(&count)
+	return count > 0, err
 }

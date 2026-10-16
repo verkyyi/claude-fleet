@@ -40,15 +40,6 @@ func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, e
 		}
 		writeJSON(w, 200, map[string]any{"parent": t.Ref, "parent_session": t.ExecutionOwner, "parent_generation": t.Generation, "children": rows})
 	case "reports":
-		if r.Method == http.MethodGet {
-			report, err := s.Store.PendingTaskReport(t)
-			if err != nil {
-				taskWriteError(w, err)
-				return true
-			}
-			writeJSON(w, 200, map[string]any{"report": report})
-			return true
-		}
 		if r.Method != http.MethodPost {
 			httpError(w, 405, "POST only")
 			return true
@@ -85,6 +76,13 @@ func (s *Server) prepareTaskReportRelay(ep store.Endpoint, r *store.FleetRelay) 
 		return false, fault("INVALID_ARGUMENT", "invalid task report")
 	}
 	if payload.Report == nil {
+		known, err := s.Store.TaskExecutionKnown(s.nodeTaskOwner(&ep), r.FromWID)
+		if err != nil {
+			return false, err
+		}
+		if known {
+			return false, fault("INVALID_ARGUMENT", "accepted execution requires a fenced task_report")
+		}
 		return false, nil
 	} // pinned legacy relay
 	report := *payload.Report
@@ -117,4 +115,25 @@ func (s *Server) taskRelayStillCurrent(r store.FleetRelay) (bool, error) {
 		return true, nil
 	}
 	return s.Store.TaskReportDeliverable(*payload.Report)
+}
+
+// An explicit parent session is a lifelong identity from the same account.
+// Parent task/generation binding is then snapshotted transactionally by store.
+func (s *Server) checkTaskParentSession(owner, session string) error {
+	if session == "" {
+		return nil
+	}
+	fid, sid, err := fleetid.ParseWorkerID(session)
+	if err != nil || !fleetid.IsUUID(sid) {
+		return store.ErrTaskFence
+	}
+	fleet, err := s.Store.Fleet(fid)
+	if err != nil {
+		return store.ErrTaskFence
+	}
+	ep, err := s.Store.LiveEndpoint(fleet.EndpointID)
+	if err != nil || s.nodeTaskOwner(ep) != owner {
+		return store.ErrTaskFence
+	}
+	return nil
 }

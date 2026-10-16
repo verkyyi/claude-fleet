@@ -84,11 +84,20 @@ func TestTaskCancelNeedsAcknowledgement(t *testing.T) {
 	if _, err = s.MutateFleetTask(rec.ID, rec.Owner, ack, time.Now()); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("unconfirmed stop: %v", err)
 	}
+	report := TaskReport{EventID: "cancel-report", Task: rec.Ref, Owner: rec.Owner, TicketRef: rec.TicketRef, Generation: rec.Generation, WorkerID: rec.ExecutionOwner, Outcome: TaskCancelled, Evidence: "cancel intent", CancelRequest: request.Key}
+	if _, err = s.RecordFleetTaskReport(rec.Owner, "node-a", report, time.Now()); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("cancel report without stop: %v", err)
+	}
+	report.ExecutionStopped = true
+	report.CancelRequest = "wrong-request"
+	if _, err = s.RecordFleetTaskReport(rec.Owner, "node-a", report, time.Now()); !errors.Is(err, ErrTaskConflict) {
+		t.Fatalf("cancel report wrong request: %v", err)
+	}
 	// Expiry and an unreachable executor cannot hand the task to another node.
 	if yes, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/repo", Issue: 7, WorkerID: "other", FleetID: "other", EndpointID: "other", Force: true}, time.Minute, time.Now().Add(24*time.Hour)); err != nil || yes {
 		t.Fatalf("expiry takeover: %v %v", yes, err)
 	}
-	done := mutateTask(t, s, pending, TaskMutation{Key: "complete", Kind: "transition", State: TaskSucceeded, Evidence: "completion and stop", ExecutionStopped: true})
+	done := mutateTask(t, s, pending, TaskMutation{Key: "complete", Kind: "transition", State: TaskSucceeded, Evidence: "completion with retained native"})
 	ack.ExecutionStopped = true
 	if _, err = s.MutateFleetTask(rec.ID, rec.Owner, ack, time.Now()); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("cancel overwrote completion: %v", err)
@@ -99,7 +108,7 @@ func TestTaskCancelNeedsAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestTaskParentGenerationAndPendingRecovery(t *testing.T) {
+func TestTaskParentGenerationAndRetainedSession(t *testing.T) {
 	s := taskStore(t)
 	p := startTask(t, s, acceptedTask(t, s, "parent", ""))
 	childInput := FleetTask{Owner: p.Owner, Title: "child", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex", ParentSession: p.ExecutionOwner}
@@ -111,18 +120,8 @@ func TestTaskParentGenerationAndPendingRecovery(t *testing.T) {
 	c = mutateTask(t, s, c, TaskMutation{Key: "start", Kind: "transition", State: TaskRunning, ActualAgent: "codex", Evidence: "native", EndpointID: "node-b"})
 	r := TaskReport{EventID: "intent", Task: c.Ref, Owner: c.Owner, Generation: c.Generation, WorkerID: c.ExecutionOwner,
 		ParentTask: p.Ref, ParentSession: p.ExecutionOwner, ParentGeneration: 1, Outcome: TaskSucceeded, Evidence: "work result"}
-	pending, err := s.RecordFleetTaskReport(c.Owner, "node-b", r, time.Now())
-	if err != nil || pending.Disposition != "pending" || pending.Task.Outcome != "" {
-		t.Fatalf("intent: %+v %v", pending, err)
-	}
-	recovered, err := s.PendingTaskReport(c)
-	if err != nil || recovered == nil || recovered.EventID != r.EventID {
-		t.Fatalf("restart: %+v %v", recovered, err)
-	}
-	r.EventID = "intent.stopped"
-	r.ExecutionStopped = true
 	final, err := s.RecordFleetTaskReport(c.Owner, "node-b", r, time.Now())
-	if err != nil || final.Disposition != "committed" {
+	if err != nil || final.Disposition != "committed" || final.Task.Outcome != TaskSucceeded {
 		t.Fatalf("final: %+v %v", final, err)
 	}
 	if yes, err := s.TaskReportDeliverable(r); err != nil || !yes {
@@ -146,5 +145,60 @@ func TestTaskParentGenerationAndPendingRecovery(t *testing.T) {
 	cancelled := mutateTask(t, s, fresh, TaskMutation{Key: "ack", Kind: "cancel_ack", CancelRequest: "request", ExecutionStopped: true, Evidence: "confirmed stop"})
 	if cancelled.Outcome != TaskCancelled {
 		t.Fatalf("ack: %+v", cancelled)
+	}
+}
+
+// Task completion retains the native session and its lease; it is independently
+// observable by await/delivery. Replacement still needs stopped evidence.
+func TestTaskCompletionRetainsExecutionFence(t *testing.T) {
+	for _, outcome := range []string{TaskSucceeded, TaskFailed} {
+		for _, via := range []string{"report", "transition"} {
+			t.Run(outcome+"/"+via, func(t *testing.T) {
+				s := taskStore(t)
+				rec := startTask(t, s, acceptedTask(t, s, "retained", "gh:org/repo#7"))
+				if via == "report" {
+					got, err := s.RecordFleetTaskReport(rec.Owner, "node-a", TaskReport{EventID: "done", Task: rec.Ref, Owner: rec.Owner,
+						TicketRef: rec.TicketRef, Generation: rec.Generation, WorkerID: rec.ExecutionOwner, Outcome: outcome, Evidence: "explicit work result; native retained"}, time.Now())
+					if err != nil || got.Disposition != "committed" {
+						t.Fatalf("completion: %+v %v", got, err)
+					}
+					rec = got.Task
+				} else {
+					rec = mutateTask(t, s, rec, TaskMutation{Key: "done", Kind: "transition", State: outcome, Evidence: "explicit work result; native retained"})
+				}
+				if rec.Outcome != outcome {
+					t.Fatalf("outcome: %+v", rec)
+				}
+				if yes, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/repo", Issue: 7, WorkerID: "other", FleetID: "other", EndpointID: "other", Force: true}, time.Minute, time.Now().Add(24*time.Hour)); err != nil || yes {
+					t.Fatalf("expiry stole retained native: %v %v", yes, err)
+				}
+				retry := TaskMutation{Key: "retry", Kind: "retry", Generation: rec.Generation, ExpectedWorker: rec.ExecutionOwner, EndpointID: "node-a", RequestedAgent: "codex", ResolvedAgent: "codex", Evidence: "explicit retry"}
+				if _, err := s.MutateFleetTask(rec.ID, rec.Owner, retry, time.Now()); !errors.Is(err, ErrTaskConflict) {
+					t.Fatalf("unfenced replacement: %v", err)
+				}
+				stop := TaskMutation{Key: "stop", Kind: "stop_ack", Generation: rec.Generation, ExpectedWorker: rec.ExecutionOwner, EndpointID: "node-a", Evidence: "native stop proof"}
+				if _, err := s.MutateFleetTask(rec.ID, rec.Owner, stop, time.Now()); !errors.Is(err, ErrTaskConflict) {
+					t.Fatalf("unconfirmed stop: %v", err)
+				}
+				stop.ExecutionStopped = true
+				stop.EndpointID = "node-b"
+				if _, err := s.MutateFleetTask(rec.ID, rec.Owner, stop, time.Now()); !errors.Is(err, ErrTaskFence) {
+					t.Fatalf("foreign stop: %v", err)
+				}
+				stop.EndpointID = "node-a"
+				ended, err := s.MutateFleetTask(rec.ID, rec.Owner, stop, time.Now())
+				if err != nil || ended.Outcome != outcome || ended.Evidence != rec.Evidence {
+					t.Fatalf("stop rewrote outcome: %+v %v", ended, err)
+				}
+				next, err := s.MutateFleetTask(rec.ID, rec.Owner, retry, time.Now())
+				if err != nil || next.Generation != rec.Generation+1 {
+					t.Fatalf("fenced retry: %+v %v", next, err)
+				}
+				stop.Key = "late-stop"
+				if _, err = s.MutateFleetTask(rec.ID, rec.Owner, stop, time.Now()); !errors.Is(err, ErrTaskFence) {
+					t.Fatalf("late stop crossed generation: %v", err)
+				}
+			})
+		}
 	}
 }

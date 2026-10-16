@@ -48,7 +48,7 @@ func TestTaskCollaborationAPIAuthority(t *testing.T) {
 	path := NodeTasksPath + "/" + child.Ref
 	r := store.TaskReport{EventID: "result", Task: child.Ref, Owner: child.Owner, TicketRef: child.TicketRef,
 		Generation: 1, WorkerID: child.ExecutionOwner, ParentTask: parent.Ref, ParentSession: parent.ExecutionOwner,
-		ParentGeneration: 1, Outcome: "succeeded", Evidence: "fixture confirmed work and native stop", ExecutionStopped: true}
+		ParentGeneration: 1, Outcome: "succeeded", Evidence: "fixture explicit completion with retained native session"}
 	code, _ := nodeTaskCall(t, h, nodes["verk5"].token, http.MethodPost, path+"/reports", r)
 	if code != 409 {
 		t.Fatalf("parent cannot forge executor report: %d", code)
@@ -79,6 +79,17 @@ func TestTaskCollaborationAPIAuthority(t *testing.T) {
 	}
 	if skip, err := h.srv.prepareTaskReportRelay(*ep, &relay); err != nil || skip {
 		t.Fatalf("relay: %v %v", skip, err)
+	}
+	legacyPayload := relay.Payload
+	relay.Payload = `{"child":"issue-7","state":"MERGED"}`
+	if _, err := h.srv.prepareTaskReportRelay(*ep, &relay); err == nil {
+		t.Fatal("accepted worker bypassed task report fence")
+	}
+	relay.Payload = legacyPayload
+	for _, session := range []string{wrFleetM5 + "/scratch-7", "99999999-9999-4999-8999-999999999999/" + wrFid} {
+		if err := h.srv.checkTaskParentSession(child.Owner, session); err == nil {
+			t.Fatalf("invalid/foreign parent accepted: %s", session)
+		}
 	}
 	relay.ToWID = child.ExecutionOwner
 	if _, err := h.srv.prepareTaskReportRelay(*ep, &relay); err == nil {

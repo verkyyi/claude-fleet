@@ -400,8 +400,9 @@ def supervise(argv):
         tmux("set-option", "-wu", "-t", pane, "@launch_seed")
         verified = True
         status = child.wait()
-        # An explicit work report remains pending until this witnessed native
-        # exits. Failure/outage keeps it unresolved; exit alone creates nothing.
+        # Retire execution ownership or acknowledge a pending cancellation.
+        # Explicit success/failure already committed while the session lived;
+        # native exit alone never creates either work outcome.
         result = subprocess.run([sys.executable, str(BIN / "fleet_task_control.py"), "finalize", "--pane", pane],
                                 capture_output=True, text=True, timeout=45)
         if result.stdout:

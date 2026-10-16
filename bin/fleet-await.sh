@@ -153,7 +153,7 @@ case "$NUM" in T*)
   tget() { printf '%s' "$trec" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
 except ValueError: pass' "$1" 2>/dev/null; }
-  if [ "$trc" -ne 0 ]; then
+  if [ "$trc" -ne 0 ] && { [ "$trc" -ne 3 ] || [ -n "$(fleet_pane_fmt '#{@launch}')" ]; }; then
     printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TASK"
     exit 3
   fi

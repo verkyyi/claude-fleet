@@ -10,6 +10,9 @@
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
 #                     → `T<n>` on stdout. The same token twice is the same record.
 #   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
+#   fleet-task-record.sh children T<n>     → accepted parent generation + children
+#   fleet-task-record.sh report T<n>       ← fenced report JSON on stdin
+#   fleet-task-record.sh mutate T<n>       ← fenced lifecycle command JSON on stdin
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
@@ -227,10 +230,6 @@ case "$cmd" in
   children)
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1/children"
-    exit $? ;;
-  pending-report)
-    is_tref "${1:-}" || usage
-    call GET "/v1/node/tasks/$1/reports"
     exit $? ;;
   report)
     is_tref "${1:-}" || usage

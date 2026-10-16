@@ -77,7 +77,7 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
 | `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
-| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — a task record waits on its issue's worker; one with no issue answers NO-WORKER naming its session | 0 MERGED · 3 TIMEOUT (call again) · others per the script |
+| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
 | `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
@@ -92,7 +92,7 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
-| `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
+| `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `outcome`? (`succeeded` · `failed`, accepted tasks), `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--outcome O] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
 | `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? `class`? (`normal` · `never:rule\|money\|publish` — issue #2669, docs/DECISIONS.md), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`; with any of the new fields, or the steward on, the body `bin/fleet_decision.py ask-body` writes: 建议 / 不答按 / 截止 + the `fleet:ask v=1` marker), **then** `set-claude-state.sh blocked` — stamped even if the comment failed | the comment's; `structuredContent.state` is the stamp's. The answer arrives as the next turn by the existing channels (issue-bridge, a prompt) |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `steward` · `default`), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in `decision-<day>.md` + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
 | `take_role` 接 | `role` (`orchestrator` · `steward`), `action`? (`take` default · `steal` · `drop` · `who`) | `fleet-role-take.sh <role> [--steal\|--drop\|--who]` — marks THIS window `@fleet_role_def <role>` and writes the role's one line in `$FLEET_CONF_DIR/global/roles.held` (issue #3114); `fleet_role_holder` is the one reader, `fleet_win_for_key orchestrator` answers the holder. Only a window that binds no issue | 0 taken / dropped / already here (`who`: printed) · 1 `who`: nobody · 2 usage · 3 this window cannot (binds an issue / a panel / no pane) · 4 another window holds it (named) |
@@ -245,6 +245,49 @@ hub task. The operation journal records the accepted task and generation;
 it does not claim a lifecycle transition or populate execution receipts.
 Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
+
+### Task children and results (#4394)
+
+An accepted task (`authority_version: 1`, verified `@launch`) uses its T record
+for `children`, `await` and `report`. `children` without a key uses the calling
+accepted parent; an explicit `T<n>` reads that parent's current generation.
+Its JSON contains `parent`, `parent_session`, `parent_generation`, `children`.
+The legacy ledger's `--since` cursor is refused on this path. An unavailable
+authority returns `UNKNOWN`, never a local-cache success or another launch.
+
+Use `report(state: "waiting", outcome: "succeeded", summary: "…")` for completed
+work without a PR, or `outcome: "failed"` for an explicit final failure. Existing
+`state: "failed"` alone remains workflow progress (for example a red CI check).
+`state: "merged"` requires a confirmed merged PR and commits success. The result
+commits before parent delivery; `QUEUED` describes delivery, while `await T<n>`
+already returns `SUCCEEDED`/`FAILED`. The persistent native CLI may remain alive.
+
+Completion retains the execution lease until an independent confirmed stop.
+`cancel_request` records intent; only the current executor's `cancel_ack` with
+the matching request ID and `execution_stopped: true` may commit cancellation.
+After success/failure, `stop_ack` releases the execution lease without changing
+the outcome. The launch supervisor verifies native exit using its receipt
+(PID, birth, executable) before sending either acknowledgement. Native exit
+alone never invents success/failure. Retry needs a terminal result and released
+lease or fresh stopped proof; transfer requires stopped proof. Lease expiry or
+an unavailable node never authorizes replacement.
+
+The node API adds `GET /v1/node/tasks/T<n>/children` and
+`POST /v1/node/tasks/T<n>/reports`. A report carries `event_id`, task, account
+owner, accepted `ticket_ref` (empty for unticketed work), child generation and
+worker UUID, parent task/session/generation, explicit outcome and evidence.
+The existing operation journal commits and deduplicates the event; stale
+reports remain historical. The existing outbox delivers to the stable parent
+identity and rechecks both generations. Parent retirement produces the existing
+orphan reminder; an unknown destination remains pending. Reconnect preserves
+one event/ledger row even with a different transport ID. Native notification is
+at least once across a crash between inbox delivery and writing its sent marker.
+
+Legacy task records and sessions keep their previous path; a downlevel report
+from an accepted execution is refused. Backlog migration/attachment is C5's
+boundary: these consumers preserve the accepted ticket reference, never infer
+a backend from an issue number. Isolated store/API/consumer tests are fixture
+evidence; deployment and live remote acceptance belong to C9.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 

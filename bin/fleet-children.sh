@@ -72,10 +72,13 @@ if [ -z "$KEY" ] && [ -n "$(fleet_pane_fmt '#{@launch}')" ]; then
   task_parent=$(fleet_pane_fmt '#{@task}')
 fi
 if [ -n "$task_parent" ]; then
+  [ "$SINCE" = 0 ] || { printf 'fleet-children: --since is a legacy ledger cursor; omit it for task children\n' >&2; exit 2; }
   task_args=(children --task "$task_parent")
   [ "$JSON" = 1 ] && task_args+=(--json)
   python3 "$BIN/fleet_task_control.py" "${task_args[@]}"; task_rc=$?
   [ "$task_rc" = 4 ] || exit "$task_rc"
+  printf 'fleet-children: legacy T record; use its parent session key\n' >&2
+  exit 2
 fi
 
 sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
