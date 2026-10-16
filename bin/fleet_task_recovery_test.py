@@ -389,15 +389,22 @@ print(json.dumps(result)); print("200")
             hub.chmod(0o700)
             for name in ("gh", "curl"):
                 denied = root/name
-                denied.write_text('#!/bin/sh\necho denied >> "$FIXTURE_ROOT/denied"\nexit 91\n')
+                denied.write_text('#!/bin/sh\necho denied >> "$FIXTURE_ROOT/denied.'+name+'"\nexit 91\n')
                 denied.chmod(0o700)
             env = dict(os.environ, FLEET_CONF_DIR=str(conf), FLEET_SKIP_GLOBAL_CONF="1",
                        FLEET_TASK_AUTHORITY="hub", FLEET_HUB_CURL=str(hub), FIXTURE_ROOT=str(root),
                        PATH=str(root)+os.pathsep+os.environ["PATH"])
             for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_TASK_RECOVERY_RAW", "FLEET_TASK_RECOVERY_URL", "FLEET_TASK_STALE_READ"):
                 env.pop(key,None)
+            commands = []
             def cli(args):
-                return subprocess.run(args, env=env, capture_output=True, text=True, timeout=25)
+                import datetime
+                started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=25)
+                commands.append(dict(command=args, started_at=started,
+                                     finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                     exit=result.returncode, stdout=result.stdout, stderr=result.stderr))
+                return result
             result=cli(["bash",str(recovery.BIN/"fleet-task-record.sh"),"get","T7"])
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             (root/"offline").touch()
@@ -423,7 +430,13 @@ print(json.dumps(result)); print("200")
             self.assertEqual(len(events),2)
             self.assertEqual(sum(e.get("outcome")=="succeeded" for e in events.values()),1)
             self.assertEqual(sum(e.get("kind")=="stop_ack" for e in events.values()),1)
-            self.assertFalse((root/"denied").exists())
+            for tool in ("gh", "curl"):
+                self.assertFalse((root/("denied."+tool)).exists(), tool+" was attempted")
+            if os.environ.get("NOGH_ACCEPTANCE_EVIDENCE"):
+                evidence = dict(kind="fixture", native_process=proof, commands=commands, events=events,
+                                github_cli=0, github_http=0, live="NOT RUN")
+                # Do not archive the cached request input, environment or credentials.
+                Path(os.environ["NOGH_ACCEPTANCE_EVIDENCE"], "recovery-native.json").write_text(json.dumps(evidence, indent=2)+"\n")
             print("fixture PUBLIC CLI: mode=hub preserved; offline report rc3; native alive then exited; lost ack/replay twice; terminal commits=1 stop_ack=1; gh=0 GitHub HTTP=0")
         finally:
             if native.poll() is None: native.terminate(); native.wait(timeout=5)

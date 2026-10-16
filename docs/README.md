@@ -30,6 +30,7 @@
 - [CLEANUP.md](dev/CLEANUP.md) · [REAP-SAFETY.md](dev/REAP-SAFETY.md) — 合并后的回收与回收安全
 - [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
 - [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
+- [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手

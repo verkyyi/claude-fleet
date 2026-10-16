@@ -50,7 +50,7 @@ print("200")
             stub.chmod(0o700)
             for tool in ("gh", "curl"):
                 f = root / tool
-                f.write_text('#!/bin/sh\necho denied >> "$DENY_LOG"\nexit 91\n'); f.chmod(0o700)
+                f.write_text('#!/bin/sh\necho denied >> "$DENY_LOG.'+tool+'"\nexit 91\n'); f.chmod(0o700)
             env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ["PATH"], FLEET_CONF_DIR=str(conf),
                        FLEET_SKIP_GLOBAL_CONF="1", FLEET_HUB_CURL=str(stub), CALL_LOG=str(root/"calls"), DENY_LOG=str(root/"denied"))
             for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_LAUNCH_CONTEXT"):
@@ -64,7 +64,8 @@ print("200")
             result = subprocess.run(["bash", str(control.BIN/"fleet-await.sh"), "T7", "--timeout", "1"], env=dict(env, OFFLINE="1"), capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 3, result.stdout+result.stderr)
             self.assertIn("UNKNOWN", result.stdout)
-            self.assertFalse((root/"denied").exists(), "GitHub/default HTTP was attempted")
+            for tool in ("gh", "curl"):
+                self.assertFalse((root/("denied."+tool)).exists(), tool+" was attempted")
             self.assertTrue(all(url.startswith("https://hub.test/") for url in (root/"calls").read_text().splitlines()))
             print("fixture shell: gh=0, GitHub HTTP=0; T7 success, children=1, outage UNKNOWN")
 
