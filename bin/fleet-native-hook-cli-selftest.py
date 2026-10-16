@@ -101,6 +101,7 @@ def main():
             metadata = json.loads(request.get("client_metadata", {}).get("x-codex-turn-metadata", "{}"))
             requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization")),
                              "request_kind": metadata.get("request_kind"), "turn_id": metadata.get("turn_id"),
+                             "session_id": self.headers.get("session_id"),
                              "generate": request.get("generate"),
                              "input_hash": hashlib.sha256(json.dumps(request.get("input"), sort_keys=True).encode()).hexdigest(),
                              "input_types": [{"type": item.get("type"), "role": item.get("role")}
@@ -445,7 +446,8 @@ def main():
                         check(result == 0 and any(event.get("type") == "turn.completed" for event in events),
                               phase + " actual native tool turn completes: " + stderr[-1500:])
                         identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
-                    check(len(requests) == before + 2, phase + " uses exactly two synthetic loopback responses")
+                    check(len(requests) == before + 2, phase + " uses exactly two synthetic loopback responses: "
+                          + json.dumps({"requests": requests[before:], "thread_ids": identifiers}))
                     check(any(tool.get("name") == "exec_command" for tool in tool_fixture["requests"][0].get("tools", [])),
                           phase + " native runtime offers the tool being tested")
                     managed_observed = json.loads(managed_marker.read_text())
