@@ -777,7 +777,7 @@ LC
 # daemon stops its tasks and starts none again, its entry and env go.
 drill_login_remove_managed() {
   CAP=15
-  local sb t0 kpid
+  local sb t0 kpid bpid apid
   sb="$WORK/forget"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/LaunchDaemons"
   grep -q 'account forget "\$LOGIN"' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh no longer has the machine daemon forget the login"; return 1; }
@@ -798,18 +798,27 @@ drill_login_remove_managed() {
   _kp() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("children", {}).get(sys.argv[2]) or {}).get("pid") or "")' \
            "$sb/db/state.json" "$1" 2>/dev/null; }
   _has_kp() { [ -n "$(_kp "$1")" ]; }
-  until_ok 10 _has_kp alice/keep || { WHY="alice's task never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
+  until_ok 10 _has_kp alice/keep && until_ok 10 _has_kp bob/keep \
+    || { WHY="account tasks never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
   kpid=$(_kp alice/keep)
+  bpid=$(_kp bob/keep)
+  _forget_task_running "$kpid" && _forget_task_running "$bpid" \
+    || { WHY="account task fixture is not running before forget"; _forget_unset; return 1; }
   t0=$(now)
   python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
     || { WHY="account forget failed: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
-  kill -0 "$kpid" 2>/dev/null && { WHY="alice's task still runs after forget"; _forget_unset; return 1; }
+  # forget promises stopped, not reaped (#4481): a real TERM'd child can still
+  # have the same PID/birth with stat Z until its daemon's next reap. This must
+  # still reject a live task; do not wait longer or retry forget to hide it.
+  _forget_task_running "$kpid" && { WHY="alice's task still runs after forget"; _forget_unset; return 1; }
   sleep 1
-  [ -z "$(_kp alice/keep)" ] || ! kill -0 "$(_kp alice/keep)" 2>/dev/null \
+  apid=$(_kp alice/keep)
+  [ -z "$apid" ] || ! _forget_task_running "$apid" \
     || { WHY="the daemon started alice's task again after forget"; _forget_unset; return 1; }
   python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); sys.exit(0 if "alice" not in a and a["bob"]["managed"] else 1)' \
     "$sb/db/accounts.json" || { WHY="accounts.json still holds alice (or lost bob)"; _forget_unset; return 1; }
-  [ -n "$(_kp bob/keep)" ] || { WHY="forget stopped bob's task too"; _forget_unset; return 1; }
+  [ "$(_kp bob/keep)" = "$bpid" ] && _forget_task_running "$bpid" \
+    || { WHY="forget stopped or replaced bob's task too"; _forget_unset; return 1; }
   SECS=$(since "$t0")
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"

@@ -54,7 +54,12 @@ cleanup() { tf kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 CHECKS=0
-fail() { printf 'session-wrap FAIL: %s\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
+fail() {
+  printf 'session-wrap FAIL: %s\n' "$1" >&2
+  [ $# -gt 1 ] && printf '%s\n' "$2" >&2
+  case "$1" in *D:*) home_trace failure; cat "$WORK/home.trace" >&2 ;; esac
+  exit 1
+}
 eq() { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; }
 waitfor() {  # <what> <command…> — up to 10s
   local what="$1"; shift
@@ -407,6 +412,17 @@ CHECKS=$((CHECKS + 1)); hook_goes_on || fail "C: a fleet exit (@wrap_quiet) no l
 tf set-option -wu -t sw:c @wrap_quiet
 
 # ------------------------------------------------ D: the resident server -----
+home_trace() {
+  {
+    printf '\nD stage: %s\n' "$1"
+    tf list-panes -t sw:home -F '#{pane_id} pid=#{pane_pid} dead=#{pane_dead} command=#{pane_current_command}'
+    tf show-hooks -w -t sw:home
+    local p; p=$(o home pane_pid)
+    [ -z "$p" ] || ps -o pid=,ppid=,stat=,lstart=,comm= -p "$p"
+    [ -z "${hpid:-}" ] || ps -o pid=,ppid=,stat=,lstart=,comm= -p "$hpid"
+    tf capture-pane -p -t sw:home | sed '/^$/d'
+  } >> "$WORK/home.trace" 2>&1
+}
 (
   PATH="$WORK/tbin:$PATH"; HOME="$WORK"; FLEET_CONF_DIR="$WORK/dconf"; export PATH HOME FLEET_CONF_DIR
   . "$BIN/fleet-lib.sh"
@@ -423,10 +439,17 @@ home_up() { local p; p=$(o home pane_pid); [ -n "$p" ] && [ "$(o home pane_dead)
 home_exit() {
   waitfor "D: home's shell is up" home_up
   hpid=$(o home pane_pid)
+  home_trace before-exit
   for _ in $(seq 1 5); do
     tf send-keys -t sw:home 'exit' Enter
-    for _ in $(seq 1 20); do kill -0 "$hpid" 2>/dev/null && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | cut -c1)" != Z ] || return 0; sleep 0.1; done
+    for _ in $(seq 1 20); do
+      kill -0 "$hpid" 2>/dev/null && [ "$(ps -o stat= -p "$hpid" 2>/dev/null | cut -c1)" != Z ] \
+        || { home_trace exited; return 0; }
+      sleep 0.1
+    done
+    home_trace still-running
   done
+  home_trace exit-unconfirmed
 }
 home_exit
 waitfor "D: home respawned a fresh shell" sh -c "[ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_pid}')\" != '$hpid' ] && [ \"\$('$REAL_TMUX' -S '$SOCK' display-message -p -t sw:home '#{pane_dead}')\" = 0 ]"
