@@ -211,8 +211,14 @@ class Harness:
                 code = 124
         output = log.read_text(errors="replace")
         observed = trace.read_text(errors="replace")
-        counters = network_counts(observed)
-        executions = gh_executions(observed)
+        try:
+            counters = network_counts(observed)
+            executions = gh_executions(observed)
+        except ValueError as exc:
+            record.update(exit=code, finished_at=utc(), observation_error=str(exc), counters=None)
+            self.results[name] = record
+            write(self.evidence/(name+".json"), record)
+            raise
         counters["github_cli"] = len(executions)
         counters["deny_shim_cli"] = len(cli.read_text().splitlines())
         counters["mocked_cli"] = mocked_cli
