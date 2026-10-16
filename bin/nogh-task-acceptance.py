@@ -173,6 +173,7 @@ class Harness:
                         FLEET_CONF_DIR=str(work/"conf"), FLEET_SKIP_GLOBAL_CONF="1",
                         PATH=str(work/"shim")+os.pathsep+self.env["PATH"],
                         PYTHONDONTWRITEBYTECODE="1", GIT_CONFIG_NOSYSTEM="1",
+                        UV_USE_IO_URING="0",
                         GIT_CONFIG_GLOBAL="/dev/null", LANG="C.UTF-8",
                         NOGH_ACCEPTANCE_EVIDENCE=str(self.evidence))
         shim = work / "shim/gh"
@@ -253,7 +254,7 @@ class Harness:
               binaries={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.work.glob("*.test")}))
         write(self.evidence/"deny-policy.json", dict(interfaces=sorted(interfaces),
               policy="fresh Linux network namespace; no external interface or route; loopback fixtures only",
-              counters="payload-free strace -v -s0 of descendant connect/sendto/sendmsg/sendmmsg destinations; external 80/443 upper bound for GitHub HTTP; io_uring refused",
+              counters="payload-free strace -v -s0 of descendant connect/sendto/sendmsg/sendmmsg destinations; external 80/443 upper bound for GitHub HTTP; UV_USE_IO_URING=0, any io_uring setup still refused",
               cli="execve/execveat gh executable paths (argv/env redacted); independent deny shim exit91; absolute and overridden paths observed",
               exceptions="deny-probe positive controls; pr-gate deliberately denied CLI read then local restored-response fixture"))
         self.run("deny-probe", [sys.executable, ROOT/"bin/nogh-task-deny-probe.py", self.work], expected_cli=2, mocked_cli=2)
