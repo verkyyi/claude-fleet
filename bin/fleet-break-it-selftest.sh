@@ -6703,6 +6703,15 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_personal_renew() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --renew 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='嵌套壳 exit 返回；个人壳 exit 后普通重连保持 ended，显式 renew 后输入可用，其他 worker 不变'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_auto_select() {
   CAP=60; local t0 out rc
   t0=$(now)

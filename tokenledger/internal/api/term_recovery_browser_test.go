@@ -62,9 +62,11 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			t.Cleanup(func() { exec.Command("tmux", "-L", sock, "kill-server").Run() })
 			hw := tm("display-message", "-p", "-t", "="+sock+":home", "#{window_id}")
 			tm("set-option", "-w", "-t", hw, "@fleet_role", "home")
+			tm("set-option", "-w", "-t", hw, "remain-on-exit", "on")
 			worker := tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "="+sock+":", "-n", "worker", "exec /bin/sh")
 			tm("set-option", "-w", "-t", worker, "@fleet_id", r.fid)
 			tm("set-option", "-w", "-t", worker, "@fleet_role", "worker")
+			tm("set-option", "-w", "-t", worker, "remain-on-exit", "on")
 			rows := filepath.Join(home, "rows")
 			os.WriteFile(rows, []byte(strings.Join([]string{worker, "working", "x", "wk", " ", "", "0", "", "", "#1", "-", "50%", "ok", "Browser worker", "merged", "", "", "", ""}, "\x1f")+"\n"), 0600)
 			t.Setenv("FLEET_VIEW_ROWS_CMD", "cat '"+rows+"'")
@@ -93,13 +95,20 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 				case "/state":
 					commands, _ := os.ReadFile(filepath.Join(home, "commands"))
 					identity, _ := os.ReadFile(filepath.Join(conf, "webterm/terminal.json"))
-					json.NewEncoder(w).Encode(map[string]any{"commands": string(commands), "identity": string(identity), "home_pid": tm("display-message", "-p", "-t", hw, "#{pane_pid}"), "initial_pid": initialPID, "worker_pid": tm("display-message", "-p", "-t", worker, "#{pane_pid}"), "initial_worker_pid": initialWorkerPID, "views": tm("list-sessions", "-F", "#{session_name}|#{window_id}"), "worker_window": worker, "home_window": hw})
+					json.NewEncoder(w).Encode(map[string]any{"commands": string(commands), "identity": string(identity), "home_pid": tm("display-message", "-p", "-t", hw, "#{pane_pid}"), "initial_pid": initialPID, "worker_pid": tm("display-message", "-p", "-t", worker, "#{pane_pid}"), "initial_worker_pid": initialWorkerPID, "views": tm("list-sessions", "-F", "#{session_name}|#{window_id}"), "worker_dead": tm("display-message", "-p", "-t", worker, "#{pane_dead}"), "worker_window": worker, "home_window": hw})
 				default:
 					http.NotFound(w, req)
 				}
 			}))
 			defer fixture.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+			// UDP denial exercises the real seven-second ICE fallback on every
+			// fresh page. Repeated exit/renew + two-tab races add those bounded
+			// negotiations; allow six minutes without relaxing any assertion.
+			budget := 240 * time.Second
+			if mode == "relay" {
+				budget = 360 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "node", "recovery.mjs", mode)
 			cmd.Dir = filepath.Join(root, "extras/browser-transport")

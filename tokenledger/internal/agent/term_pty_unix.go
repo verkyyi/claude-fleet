@@ -97,6 +97,9 @@ func runTermPty(ctx context.Context, args []string, stdin io.Reader, stdout io.W
 		if args[i] == "--resume" {
 			env = append(env, "FLEET_TERM_RESUME="+args[i+1])
 		}
+		if args[i] == "--renew" {
+			env = append(env, "FLEET_TERM_RENEW=1")
+		}
 		if args[i] == "--take" {
 			env = append(env, "FLEET_TERM_TAKE=1")
 		}
@@ -131,6 +134,11 @@ func runTermPty(ctx context.Context, args []string, stdin io.Reader, stdout io.W
 		termHangup(cmd)
 		master.Close()
 		cmd.Wait()
+		if controller.State != "" {
+			// Admission metadata only; terminal output can never forge this frame.
+			stdout.Write([]byte{termPtyReady})
+			json.NewEncoder(stdout).Encode(control.TermControl{T: "error", Err: controller.State, Term: controller.Term, Gen: controller.Gen})
+		}
 		return 1, err
 	}
 	controller.ctx = ctx
@@ -195,7 +203,7 @@ func termPtyLocaleEnv(env, available []string) ([]string, error) {
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
-		case "TMUX", "TMUX_PANE", "TERM", "FLEET_TERM_CANCEL_FD":
+		case "TMUX", "TMUX_PANE", "TERM", "FLEET_TERM_CANCEL_FD", "FLEET_TERM_RENEW", "FLEET_TERM_RESUME", "FLEET_TERM_TAKE", "FLEET_TERM_ADMISSION_FD":
 			continue
 		case "LANG", "LC_ALL", "LC_CTYPE":
 			want[k] = v

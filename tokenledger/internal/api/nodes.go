@@ -61,6 +61,7 @@ type nodeConn struct {
 	attachmentGeneration string
 	canAttachment        bool
 	canTermController    bool
+	canTermRenew         bool
 	canChatAttachment    bool
 	// wire is the endpoint's half of its control channel: the websocket, or
 	// one login's lane on its machine's link (claude-fleet#2333).
@@ -637,7 +638,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	}
 
 	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
-		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), attachmentGeneration: hp.AttachmentGeneration,
+		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),

@@ -23,6 +23,32 @@ func TestAttachmentControllerCapability(t *testing.T) {
 	}
 }
 
+// Renewal uses the existing authenticated attachment admission in both modes.
+// An old node must refuse the mutation, not silently treat it as reconnect.
+func TestAttachmentRenewAdmission(t *testing.T) {
+	r := newTermRig(t, true)
+	for _, query := range []string{
+		"service=term&worker=" + r.wid + "&renew=1&term_resume=terminal:1",
+		"service=term&target=personal&renew=1",
+		"service=term&target=personal&renew=1&term_resume=terminal:1&take=1",
+	} {
+		c, status := dialAttachment(t, r, query, r.alice)
+		if c != nil || status != 400 {
+			t.Fatalf("invalid renew: %s socket=%v status=%d", query, c, status)
+		}
+	}
+	query := "service=term&target=personal&renew=1&term_resume=terminal:1"
+	c, status := dialAttachment(t, r, query, nil)
+	if c != nil || status != 401 {
+		t.Fatalf("unauthenticated renew: %v %d", c, status)
+	}
+	r.nc.canTermRenew = false
+	c, status = dialAttachment(t, r, query, r.alice)
+	if c != nil || status != 409 || len(r.starts()) != 0 {
+		t.Fatalf("old node renew: %v %d %v", c, status, r.starts())
+	}
+}
+
 func dialAttachment(t *testing.T, r *termRig, query string, cookie *http.Cookie) (*websocket.Conn, int) {
 	t.Helper()
 	h := http.Header{"Origin": []string{r.origin}}
