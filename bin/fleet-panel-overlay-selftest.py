@@ -49,6 +49,25 @@ def fixture(directory):
     v.grid_read = lambda *a: dict(repos=["acme/web", "acme/app"], last="acme/web", agent="codex",
                                 missing={"codex": "Codex unavailable"} if (root / "nomodel").exists() else {}, blocked=[])
     v.facts = lambda f, e: dict(pin=False, life="", keep=False, agent="codex", fid=e["target"], pr="", needs="ask", pane="%1")
+    # A deterministic shared proof behind the actual asynchronous overlay.
+    # Native PTY/curses is real; provider/task authority remains a fixture.
+    reads = []
+    def evidence_read(fleet, row):
+        import runpy
+        import fleet_reap_shadow
+        n = len(reads) + 1
+        reads.append(n)
+        (root / ("read-%d" % n)).write_text(row["target"])
+        until = time.monotonic() + 4
+        while (root / "delay-evidence").exists() and not (root / ("release-%d" % n)).exists() and time.monotonic() < until:
+            time.sleep(.02)
+        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
+        now = time.time()
+        b["runtime"].update(observed_at=now, expires_at=now + 5, source="proof-%d" % n)
+        for d in [*b["layers"].values(), b["legacy"]]:
+            d.update(observed_at=now, expires_at=now + 5)
+        return fleet_reap_shadow.project(b, now=now)
+    v.evidence_read = evidence_read
 
     def log(payload):
         with (root / "actions").open("a") as f:
@@ -263,6 +282,7 @@ class NativeTests(unittest.TestCase):
         # In the still-open original menu: Enter is the original row's go.
         self.keys("Enter")
         self.assertEqual(self.actions(), [{"action": "enter", "target": "@1", "answer": ""}])
+
         self.keys("Tab", "F6", "Down", "Tab", "Enter")
         self.assertEqual(self.actions()[-1]["target"], "@2")
         self.keys("Up", "Tab")
@@ -273,6 +293,29 @@ class NativeTests(unittest.TestCase):
         self.wait("来源已失效")
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
+
+    def test_evidence_cancel_reopen_and_resize(self):
+        (self.root / "delay-evidence").touch()
+        self.keys("Tab", *(["Down"] * 40), "Enter")
+        self.wait("Reading")
+        self.keys("Escape", "Tab", *(["Down"] * 40), "Enter")
+        self.wait("Reading")
+        (self.root / "release-2").touch()
+        self.wait("proof-2")
+        (self.root / "release-1").touch()
+        time.sleep(.25)
+        self.assertIn("proof-2", self.screen())
+        self.assertNotIn("proof-1", self.screen())
+        for width in (189, 100, 80, 60, 48):
+            self.tm("resize-window", "-t", "test", "-x", str(width))
+            time.sleep(.08)
+            self.assertIn("proof-2", self.screen())
+        self.keys("Escape")
+        self.wait("Tab 操作")
+        self.assertEqual(self.actions(), [])
+        self.assertEqual((self.root / "read-1").read_text(), "@1")
+        self.assertEqual((self.root / "read-2").read_text(), "@1")
+        self.evidence.append("PASS evidence: same-row cancel/reopen rejects late result; widths 189/100/80/60/48; zero dispatch")
 
     def test_mouse_prefix_and_overlay_button_keep_origin(self):
         self.keys("Tab")

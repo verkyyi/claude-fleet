@@ -189,3 +189,30 @@ func TestNodeTaskAuthorityRejectsMalformedContract(t *testing.T) {
 		}
 	}
 }
+
+// Native inventory is a separate last-known fact, including when its fleet is
+// absent. Repeated Tasks reads do not renew the original inventory timestamp.
+func TestTaskLastKnownInventoryEvidence(t *testing.T) {
+	h, _, nodes := peerHarness(t)
+	node := nodes["verk4"]
+	at := time.Now().UTC().Add(-3 * time.Minute).Truncate(time.Second)
+	worker := wrFleetM4 + "/" + wrFid
+	raw, _ := json.Marshal([]map[string]any{{"worker_id": worker, "state": "done", "needs": "perm"}})
+	if _, err := h.srv.Store.RecordFleetSnapshot(node.id, "fixture-node", "frank", "fixture-machine",
+		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", State: "ok", WorkersJSON: string(raw)}}, at); err != nil {
+		t.Fatal(err)
+	}
+	task := store.FleetTask{WorkerID: worker, AuthorityVersion: 1}
+	for pass := 0; pass < 2; pass++ {
+		live := h.srv.taskLive(&task, map[string][]map[string]any{})
+		if live["state"] != "done" || live["needs"] != "perm" || live["stale"] != true || live["observed_at"] != at.Format(time.RFC3339Nano) || live["source"] != "inventory" {
+			t.Fatal(live)
+		}
+		if _, err := h.srv.Store.RecordFleetSnapshot(node.id, "fixture-node", "frank", "fixture-machine", nil, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if task.Outcome != "" {
+		t.Fatal("inventory became outcome", task)
+	}
+}

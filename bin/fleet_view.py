@@ -984,6 +984,21 @@ def entries(vid, now=None, hub=True):
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
+        # Optional column 21: an explicit read's shared shadow proof. Older
+        # producers/clients omit/ignore it. Never turn it into an action gate.
+        e["deploy"] = f[19].strip()
+        e["pr"] = f[10].strip()
+        e["status_proof"] = None
+        if len(f) > 20 and len(f[20]) <= 65536:
+            try:
+                proof = json.loads(f[20])
+                worker = proof.get("identity", {}).get("worker_id", "")
+                fid = wins.get(target, ("", "", 0))[0] if local else ""
+                if (local and fid and worker.endswith("/" + fid)) or (not local and worker == target):
+                    e["status_proof"] = proof
+                    e["worker_id"] = worker
+            except (ValueError, AttributeError, TypeError):
+                pass
         if grp == "ended":
             why = say("view_ended_merged") if f[10].strip() in MERGED_PR else \
                 say("view_ended_exited") if state == "exited" else say("view_ended_done")
@@ -2260,6 +2275,72 @@ def facts(fleet, e):
             "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr}
 
 
+def evidence_read(fleet, row):
+    """One user-requested read. Never called by entries/Refresh/inventory.
+
+    Remote rows keep their producer proof; no new remote probe/connection.
+    The existing target resolver/facts guard owns the selected pane.
+    """
+    if row.get("far") or row.get("lost") or row.get("gone"):
+        return row.get("status_proof")
+    before = facts(fleet, row)
+    if not before.get("pane") or not before.get("fid") or before.get("fid") != row.get("fid"):
+        return None
+    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet_status_evidence.py"),
+            "--pane", before["pane"], "--socket", fleet]
+    try:
+        p = subprocess.Popen(argv, env=act_env(fleet), stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        try:
+            out = p.communicate(timeout=30)[0]
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.communicate()
+            return None
+        result = json.loads(out) if p.returncode == 0 else None
+        after = facts(fleet, row)
+        if any(after.get(k) != before.get(k) for k in ("fid", "pane")):
+            return None
+        if not isinstance(result, dict) or not isinstance(result.get("identity"), dict):
+            return None
+        worker = result["identity"].get("worker_id", "")
+        if not worker:
+            return result  # preserve missing-launch/first-thread reasons
+        if not isinstance(worker, str) or not worker.endswith("/" + before["fid"]):
+            return None
+        # View cache only, keyed by lifelong FID, with the source's original
+        # expiry. No launch/task stamps, no inventory/authority mutation.
+        encoded = json.dumps(result, ensure_ascii=True, separators=(",", ":"))
+        if (len(encoded) <= 65536 and re.fullmatch(r"[A-Za-z0-9_.@-]+", fleet)
+                and re.fullmatch(r"[A-Za-z0-9-]+", before["fid"])):
+            path = dash_global() / ("status-proof-" + fleet + "-" + before["fid"])
+            import tempfile
+            fd, tmp = tempfile.mkstemp(prefix=".status-proof-", dir=str(path.parent))
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    stream.write(encoded + "\n")
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        return result
+    except (OSError, ValueError):
+        return None
+
+
+def evidence_lines(row, proof=None):
+    # Lazy: importing the shared readers must not add work to a list refresh.
+    import fleet_status_evidence
+    expected = row.get("target") if row.get("far") else row.get("worker_id")
+    result = fleet_status_evidence.lines(proof, expected_worker=expected, lost=bool(row.get("lost")),
+                                         english=os.environ.get("FLEET_UI_LANG") == "en",
+                                         expected=row.get("evidence_identity"))
+    # Legacy words are labelled as such, never upgraded to native observations.
+    legacy = "本轮结束" if row.get("state") == "done" else row.get("state", "unknown")
+    return ["会话旧观测: " + legacy, "PR: " + (row.get("pr") or "unknown"),
+            "部署/live: " + (row.get("deploy") or "unknown")] + result
+
+
 def live(r):
     return not r.get("far") and not r.get("gone") and r.get("state") not in ("exited",)
 
@@ -2414,6 +2495,8 @@ ACTIONS = [
     # in this terminal (fleet-restore-pick.sh --pick: ↵ there restores one)
     {"id": "history", "label": lambda r: say("view_act_history"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "history", "far": None, "ask": None},
+    {"id": "evidence", "label": lambda r: "状态证据 / Status evidence", "when": lambda r: not r.get("gone"),
+     "local": lambda r, a, f: "evidence", "far": lambda r, a, f: "evidence", "ask": None},
 ]
 ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
@@ -2487,6 +2570,12 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
+    if argv == "evidence":
+        proof = evidence_read(fleet, r)
+        observed = dict(r)
+        if not r.get("far") and not r.get("lost") and isinstance(proof, dict):
+            observed["evidence_identity"] = proof.get("identity")
+        return 0, "\n".join(evidence_lines(observed, proof)), False
     if argv in ("go", "shell") and lost_msg(r):
         return 1, lost_msg(r), False
     if argv == "go":
@@ -3134,6 +3223,7 @@ def _popup(screen, qo, vid, client, forward=""):
     # One anchored overlay: menu, choice, answer or multiline composer.
     # Escape restores its source's search/selection/scroll snapshot.
     mode, mrow, mitems, mat, mtitle, pend, line = "", None, [], 0, "", None, Line()
+    evidence_result = []
     # another machine's action runs off the screen's thread (a hub write waits up
     # to its op's answer): its line lands here, then the list is read again
     landed = []
@@ -3222,6 +3312,19 @@ def _popup(screen, qo, vid, client, forward=""):
         ask_focus = 0
         if overlay:
             overlay.scroll, overlay.follow = 0, True
+        if a["id"] == "evidence":
+            mode = "evidence"
+            # A result belongs to this overlay instance, even after cancel and
+            # reopening the same row. It never retargets another selection.
+            origin = overlay
+            origin.proof = r.get("status_proof")
+            origin.evidence_row = dict(r)
+            origin.reading = not r.get("far") and not r.get("lost")
+            if origin.reading:
+                def read_once():
+                    evidence_result.append((origin, evidence_read(fleet, r)))
+                threading.Thread(target=read_once, daemon=True).start()
+            return False
         ask = act_ask(a, r)
         if value is not None:
             then = (a.get("then") or {}).get(value)
@@ -3248,6 +3351,11 @@ def _popup(screen, qo, vid, client, forward=""):
         return False
 
     while True:
+        if evidence_result:
+            origin, proof = evidence_result.pop(0)
+            if overlay is origin:
+                origin.proof, origin.reading = proof, False
+                origin.evidence_row["evidence_identity"] = proof.get("identity") if isinstance(proof, dict) else None
         if msg_until and time.time() > msg_until:
             msg, msg_until = "", 0
         if landed:
@@ -3337,6 +3445,11 @@ def _popup(screen, qo, vid, client, forward=""):
             if mode in ("menu", "choice"):
                 lines = [(label, ("lit",) if i == mat and overlay.focus else ()) for i, (_, label, _) in enumerate(mitems)]
                 selected = mat
+            elif mode == "evidence":
+                words = (["读取中 / Reading…"] if overlay.reading else []) + evidence_lines(overlay.evidence_row, overlay.proof)
+                for text in words:
+                    wrapped = panel.Editor(text)
+                    lines.extend((wrapped.text[a0:b0], ()) for a0, b0 in wrapped.rows(inner_w, qo.cells))
             elif mode == "ask":
                 prompt = panel.Editor(pend[4])
                 for a0, b0 in prompt.rows(inner_w, qo.cells):
@@ -3489,6 +3602,11 @@ def _popup(screen, qo, vid, client, forward=""):
             else:
                 continue
         if overlay and overlay.focus:
+            if mode == "evidence":
+                if ch in (curses.KEY_UP, curses.KEY_DOWN, "\x10", "\x0e"):
+                    overlay.scroll += -1 if ch in (curses.KEY_UP, "\x10") else 1
+                    overlay.follow = False
+                continue
             if mode in ("menu", "choice"):
                 if ch in ("\t", curses.KEY_BTAB):
                     mat = (mat + (1 if ch == "\t" else -1)) % max(1, len(mitems))
