@@ -1018,7 +1018,11 @@ class H_Accounts(Sandbox):
         kpid = self.child("alice/keep")["pid"]
         r = self.run_sup("account", "release", "alice")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(fns.pid_alive(kpid), "release left the account's KeepAlive unit running")
+        # release waits for execution to end, not the daemon's next reap.
+        # kill(0) still succeeds for a zombie (#4044); Z_ForgetZombie pins
+        # live/zombie/gone and unreadable-ps behavior without a timing retry.
+        self.assertFalse(fns.pid_alive(kpid) and kpid not in fns._zombies([kpid]),
+                         "release left the account's KeepAlive unit running")
         runs = self.task("alice/probe")["runs"]
         time.sleep(0.8)
         self.assertLessEqual(self.task("alice/probe")["runs"], runs + 1, "a released account still runs")

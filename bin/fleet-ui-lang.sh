@@ -552,8 +552,8 @@ fleet_ui_t() {
     en:view_legend_fail) printf 'failed' ;;
     zh:view_legend_work) printf '在干活' ;;
     en:view_legend_work) printf 'working' ;;
-    zh:view_legend_done) printf '做完了' ;;
-    en:view_legend_done) printf 'done' ;;
+    zh:view_legend_done) printf '本轮结束' ;;
+    en:view_legend_done) printf 'turn ended' ;;
     zh:view_legend_idle) printf '空闲' ;;
     en:view_legend_idle) printf 'idle' ;;
     zh:view_legend_lost) printf '失联' ;;
@@ -588,8 +588,8 @@ fleet_ui_t() {
     en:view_ended_merged) printf 'merged' ;;
     zh:view_ended_exited) printf '已退出' ;;
     en:view_ended_exited) printf 'exited' ;;
-    zh:view_ended_done) printf '做完了' ;;
-    en:view_ended_done) printf 'done' ;;
+    zh:view_ended_done) printf '本轮结束' ;;
+    en:view_ended_done) printf 'turn ended' ;;
     zh:view_ended_gone) printf '窗口已回收' ;;
     en:view_ended_gone) printf 'window reaped' ;;
     zh:view_ended_gone_merged) printf '已合并 · 窗口已回收' ;;
@@ -616,8 +616,8 @@ fleet_ui_t() {
     en:view_state_looping) printf 'looping' ;;
     zh:view_state_idle) printf '空闲' ;;
     en:view_state_idle) printf 'idle' ;;
-    zh:view_state_done) printf '做完了' ;;
-    en:view_state_done) printf 'done' ;;
+    zh:view_state_done) printf '本轮结束' ;;
+    en:view_state_done) printf 'turn ended' ;;
     zh:view_state_exited) printf '已退出' ;;
     en:view_state_exited) printf 'exited' ;;
     zh:view_state_sleeping) printf '睡着' ;;

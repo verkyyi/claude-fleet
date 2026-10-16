@@ -1021,8 +1021,12 @@ def account_units(paths, table=None):
 
 def script_of(cmd):
     """The file a command runs: the first argv entry after an interpreter."""
-    for a in cmd[1:] if len(cmd) > 1 and os.path.basename(cmd[0]) in (
-            "bash", "sh", "python3", "python") else cmd[:1]:
+    # sys.executable can name python3.15 (Homebrew/CI) or the framework's
+    # Python. Returning that executable hides the proxy/account script from
+    # recovery and checks trust on the interpreter instead of the script.
+    interpreter = bool(cmd and re.fullmatch(
+        r"bash|sh|python(?:[0-9]+(?:\.[0-9]+)*)?|Python", os.path.basename(cmd[0])))
+    for a in cmd[1:] if len(cmd) > 1 and interpreter else cmd[:1]:
         if not a.startswith("-"):
             return a
     return cmd[0]

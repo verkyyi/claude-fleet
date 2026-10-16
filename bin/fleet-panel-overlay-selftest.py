@@ -49,6 +49,28 @@ def fixture(directory):
     v.grid_read = lambda *a: dict(repos=["acme/web", "acme/app"], last="acme/web", agent="codex",
                                 missing={"codex": "Codex unavailable"} if (root / "nomodel").exists() else {}, blocked=[])
     v.facts = lambda f, e: dict(pin=False, life="", keep=False, agent="codex", fid=e["target"], pr="", needs="ask", pane="%1")
+    # A deterministic shared proof behind the actual asynchronous overlay.
+    # Native PTY/curses is real; provider/task authority remains a fixture.
+    reads = []
+    def evidence_read(fleet, row):
+        import runpy
+        import fleet_reap_shadow
+        n = len(reads) + 1
+        reads.append(n)
+        (root / ("read-%d" % n)).write_text(row["target"])
+        until = time.monotonic() + 4
+        while (root / "delay-evidence").exists() and not (root / ("release-%d" % n)).exists() and time.monotonic() < until:
+            time.sleep(.02)
+        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
+        now = time.time()
+        b["runtime"].update(observed_at=now, expires_at=now + 5, source="proof-%d" % n)
+        for d in [*b["layers"].values(), b["legacy"]]:
+            d.update(observed_at=now, expires_at=now + 5)
+        proof = fleet_reap_shadow.project(b, now=now)
+        if (root / "changed-turn").exists():
+            b["runtime"]["identity"] = dict(b["runtime"]["identity"], turn_id="new-turn")
+        return dict(proof=proof, current=b["runtime"])
+    v.evidence_read = evidence_read
 
     def log(payload):
         with (root / "actions").open("a") as f:
@@ -263,6 +285,7 @@ class NativeTests(unittest.TestCase):
         # In the still-open original menu: Enter is the original row's go.
         self.keys("Enter")
         self.assertEqual(self.actions(), [{"action": "enter", "target": "@1", "answer": ""}])
+
         self.keys("Tab", "F6", "Down", "Tab", "Enter")
         self.assertEqual(self.actions()[-1]["target"], "@2")
         self.keys("Up", "Tab")
@@ -273,6 +296,81 @@ class NativeTests(unittest.TestCase):
         self.wait("来源已失效")
         self.assertEqual(len(self.actions()), count)
         self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
+
+    def test_evidence_cancel_reopen_and_resize(self):
+        (self.root / "delay-evidence").touch()
+        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
+        self.wait("Reading")
+        self.keys("Escape", "Tab", *(["Down"] * 40), "Up", "Enter")
+        self.wait("Reading")
+        (self.root / "release-2").touch()
+        self.wait("proof-2")
+        (self.root / "release-1").touch()
+        time.sleep(.25)
+        self.assertIn("proof-2", self.screen())
+        self.assertNotIn("proof-1", self.screen())
+        for width in (189, 100, 80, 60, 48):
+            self.tm("resize-window", "-t", "test", "-x", str(width))
+            time.sleep(.08)
+            self.assertIn("proof-2", self.screen())
+        self.keys("Escape")
+        self.wait("Tab 操作")
+        self.assertEqual(self.actions(), [])
+        self.assertEqual((self.root / "read-1").read_text(), "@1")
+        self.assertEqual((self.root / "read-2").read_text(), "@1")
+        self.evidence.append("PASS evidence: same-row cancel/reopen rejects late result; widths 189/100/80/60/48; zero dispatch")
+
+    def test_evidence_same_row_new_turn_is_unknown(self):
+        (self.root / "changed-turn").touch()
+        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
+        self.wait("proof-1")
+        self.assertIn("运行: unknown", self.screen())
+        self.assertEqual(self.actions(), [])
+
+    def test_real_producer_cache_roundtrip(self):
+        import runpy
+        import fleet_reap_shadow
+        import fleet_status_evidence
+        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
+        proof = fleet_reap_shadow.project(b, now=101)
+        fid = proof["identity"]["worker_id"].split("/")[1]
+        wid = self.tm("display-message", "-p", "-t", "test", "#{window_id}").strip()
+        for name, value in (("@fleet_id", fid), ("@claude_state", "done"), ("@norepo", "1")):
+            self.tm("set-option", "-w", "-t", wid, name, value)
+        cache = self.root / "tmp" / ".claude-dash" / "global"
+        cache.mkdir(parents=True)
+        path = cache / ("status-proof-test-" + fid)
+        path.write_text(json.dumps(proof) + "\n")
+        env = dict(os.environ, HOME=str(self.root / "home"), TMPDIR=str(self.root / "tmp"),
+                   FLEET_CONF_DIR=str(self.root / "conf"), FLEET_STATUS_G=str(cache),
+                   FLEET_SESSION="test", FLEET_ROWS_UNFOLD="1", TMUX=str(self.root / "sock") + ",0,0")
+        env.pop("TMUX_PANE", None)
+        produced = subprocess.check_output(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--rows"],
+                                          env=env, text=True, timeout=15)
+        matches = [line.split(v.US) for line in produced.split("\n") if line.startswith(wid + v.US)]
+        self.assertTrue(matches, repr(produced))
+        row = matches[0]
+        self.assertEqual(json.loads(row[20]), proof)
+        # The view's second cache must not make a private proof world-readable.
+        view_cache = cache / "view-rows-test"
+        view_cache.write_text("old public cache")
+        view_cache.chmod(0o644)
+        v.atomic_write(view_cache, produced)
+        self.assertEqual(view_cache.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(view_cache.read_text(), produced)
+        with patch.object(v, "view_row", return_value={}), patch.object(v, "view_fleet", return_value="test"), \
+                patch.object(v, "windows", return_value={wid: (fid, "worker", 0)}), \
+                patch.object(v, "produce", return_value=produced), patch.object(v, "names_raw", return_value={}), \
+                patch.object(v, "fleet_only_slug", return_value=""), patch.object(v, "gone_text", return_value=""), \
+                patch.object(v, "fleet_logins", return_value={}), patch.object(v, "conf_word", return_value=""), \
+                patch.object(v, "hub_age", return_value=None):
+            parsed = next(e for e in v.entries("test", hub=False) if e.get("target") == wid)
+        self.assertEqual(parsed["status_proof"], proof)
+        display = fleet_status_evidence.project(parsed["status_proof"], now=102)
+        self.assertTrue(all(r["state"] == "unknown" for r in display["rows"]))
+        self.assertEqual(display["rows"][0]["observed_at"], 100)
+        self.assertEqual(json.loads(path.read_text()), proof)
+        self.evidence.append("PASS real producer cache -> optional column 21 -> parser; original times retained; missing current binding unknown")
 
     def test_mouse_prefix_and_overlay_button_keep_origin(self):
         self.keys("Tab")

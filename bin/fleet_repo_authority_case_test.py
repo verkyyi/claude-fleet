@@ -22,6 +22,7 @@ import fleet_view
 BIN = Path(__file__).resolve().parent
 REGISTERED = "ExampleOrg/Space"
 CANONICAL = "exampleorg/space"
+REPO_CASES = (REGISTERED, CANONICAL, REGISTERED.upper())
 
 
 class CaseAuthorityTests(unittest.TestCase):
@@ -43,7 +44,21 @@ class CaseAuthorityTests(unittest.TestCase):
                         FLEET_MAX_SESSIONS="0", FLEET_GLOBAL_MAX_SESSIONS="0", FLEET_START_WARM="0",
                         FLEET_SCRATCH_POOL="0", FLEET_CODEX_READY_CHECK="0", FLEET_SPAWN_NODE="local",
                         FLEET_SPAWN_OVERLAP="0",
+                        # Exercise real admission with fixture readings, never
+                        # the runner's CPU/memory or its running agents (#4512).
+                        FLEET_CPU_BUSY_PROBE_CMD="echo 0.20", FLEET_LOAD_PROBE_CMD="echo 0.04",
+                        FLEET_MEM_PROBE_CMD="echo 1 66 5 0", FLEET_MEM_TOTAL_MB="16000",
+                        FLEET_MEM_PS_CMD="true",
                         CCQUOTA_TOKEN="fixture-secret", WINDOW_LOG=str(self.windows))
+        self.native_calls = self.root / "native-calls"
+        self.env["NATIVE_LOG"] = str(self.native_calls)
+        for agent in ("claude", "codex"):
+            # The spawner inspects installed plugins; answer that read locally.
+            # Any agent launch attempt fails and is asserted even if swallowed.
+            self.stub(agent, '''if [ "$*" = 'plugin list --json' ]; then echo '[]'; exit 0; fi
+echo "$0 $*" >> "$NATIVE_LOG"; exit 99
+''')
+        self.addCleanup(lambda: self.assertFalse(self.native_calls.exists(), "fixture executed a native agent"))
         self.command("git", "init", "-q", "-b", "master", str(self.main))
         self.command("git", "-C", str(self.main), "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
                      "-c", "commit.gpgsign=false", "commit", "-qm", "fixture", "--allow-empty")
@@ -119,7 +134,7 @@ exit 0
 
     def test_gate_and_manifest_use_hub_identity_and_existing_overlay(self):
         before = self.overlay.read_bytes()
-        for name in (REGISTERED, CANONICAL, REGISTERED.upper()):
+        for name in REPO_CASES:
             with self.subTest(repo=name):
                 result = self.cli(name, "--gate")
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -134,22 +149,45 @@ exit 0
 
     def test_panel_new_and_issue_start_keep_worktree_and_registration(self):
         before = self.overlay.read_bytes()
+        for i, repo in enumerate(REPO_CASES):
+            with self.subTest(repo=repo):
+                rc, message = self.panel_new(repo)
+                self.assertEqual(rc, 0, message)
+                self.command("bash", str(BIN / "dash-issue-session.sh"), str(7 + i), "fixture", "--repo", repo,
+                             "--origin", "hub", "--node", "local", "--agent", "claude")
+                windows = self.windows.read_text()
+                self.assertIn(str(self.root / ("Space-scratch-%d" % (i + 1))), windows)
+                self.assertIn(str(self.root / ("Space-issue-%d" % (7 + i))), windows)
+                self.assertIn(REGISTERED, windows)
+                self.assertEqual(before, self.overlay.read_bytes())
+        reserves = [body for _, body in self.requests if body and body.get("action") == "reserve"]
+        self.assertEqual(len(reserves), 2 * len(REPO_CASES))
+        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path, _ in self.requests))
+
+    def panel_new(self, repo):
         with patch.dict(os.environ, self.env, clear=True), \
                 patch.object(fleet_view, "view_fleet", return_value="fixture"), \
                 patch.object(fleet_view, "go", return_value=0), patch.object(fleet_view, "toast"), \
                 contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(fleet_view.go_new(None, "fixture@view-test", repo=REGISTERED, agent="claude"),
-                             0, err.getvalue())
-        self.command("bash", str(BIN / "dash-issue-session.sh"), "7", "fixture", "--repo", REGISTERED,
-                     "--origin", "hub", "--node", "local", "--agent", "claude")
-        windows = self.windows.read_text()
-        self.assertIn(str(self.root / "Space-scratch-1"), windows)
-        self.assertIn(str(self.root / "Space-issue-7"), windows)
-        self.assertIn(REGISTERED, windows)
-        self.assertEqual(before, self.overlay.read_bytes())
-        reserves = [body for _, body in self.requests if body and body.get("action") == "reserve"]
-        self.assertEqual(len(reserves), 2)
-        self.assertTrue(all("repo=exampleorg%2Fspace" in path for path, _ in self.requests))
+            rc = fleet_view.go_new(None, "fixture@view-test", repo=repo, agent="claude")
+        return rc, err.getvalue()
+
+    def test_busy_cpu_still_refuses_panel_and_issue_without_window(self):
+        # The train's exact failure reading: idle load does not excuse 95% CPU.
+        self.env["FLEET_CPU_BUSY_PROBE_CMD"] = "echo 0.95"
+        before = self.overlay.read_bytes()
+        for repo in REPO_CASES:
+            with self.subTest(repo=repo):
+                panel_rc, message = self.panel_new(repo)
+                result = self.run_command("bash", str(BIN / "dash-issue-session.sh"), "7", "fixture",
+                                          "--repo", repo, "--origin", "hub", "--node", "local", "--agent", "claude")
+                for rc, expected, output in ((panel_rc, 3, message), (result.returncode, 2, result.stderr)):
+                    self.assertEqual(rc, expected, output)
+                    self.assertIn("CPU busy 95% over FLEET_ADMIT_CPU_BUSY=0.8", output)
+                    self.assertIn("load 0.04/core", output)
+                self.assertFalse(self.windows.exists())
+                self.assertEqual(before, self.overlay.read_bytes())
+        self.assertFalse(any(body and body.get("action") == "reserve" for _, body in self.requests))
 
     def test_refusals_reach_panel_and_issue_without_secret_or_false_freeze(self):
         for mode, status, reason, expected in (("frozen", 200, "", "frozen"),

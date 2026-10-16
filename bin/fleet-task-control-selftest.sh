@@ -5,3 +5,4 @@
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 "$BIN/fleet_task_control_test.py"
+python3 "$BIN/fleet_task_blockers_test.py"

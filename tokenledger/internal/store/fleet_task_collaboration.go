@@ -53,7 +53,15 @@ func (s *Store) FleetTaskChildren(owner, parent, session string, generation int6
 	if out == nil {
 		out = []FleetTask{}
 	}
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if err = projectTaskBlockers(s.read, &out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // TaskReport is the node's explicit result, independently scoped to the child
@@ -61,21 +69,22 @@ func (s *Store) FleetTaskChildren(owner, parent, session string, generation int6
 // session is retained. ExecutionStopped confirms runtime stop/fencing: cancellation
 // requires it; success/failure only release the execution lease when it is present.
 type TaskReport struct {
-	EventID          string `json:"event_id"`
-	Task             string `json:"task"`
-	Owner            string `json:"owner"`
-	TicketRef        string `json:"ticket_ref"`
-	Generation       int64  `json:"generation"`
-	WorkerID         string `json:"worker_id"`
-	ParentTask       string `json:"parent_task"`
-	ParentSession    string `json:"parent_session"`
-	ParentGeneration int64  `json:"parent_generation"`
-	Outcome          string `json:"outcome"`
-	Status           string `json:"status,omitempty"`
-	Evidence         string `json:"evidence"`
-	Summary          string `json:"summary,omitempty"`
-	ExecutionStopped bool   `json:"execution_stopped"`
-	CancelRequest    string `json:"cancel_request,omitempty"`
+	EventID          string              `json:"event_id"`
+	Task             string              `json:"task"`
+	Owner            string              `json:"owner"`
+	TicketRef        string              `json:"ticket_ref"`
+	Generation       int64               `json:"generation"`
+	WorkerID         string              `json:"worker_id"`
+	ParentTask       string              `json:"parent_task"`
+	ParentSession    string              `json:"parent_session"`
+	ParentGeneration int64               `json:"parent_generation"`
+	Outcome          string              `json:"outcome"`
+	Status           string              `json:"status,omitempty"`
+	Evidence         string              `json:"evidence"`
+	Summary          string              `json:"summary,omitempty"`
+	ExecutionStopped bool                `json:"execution_stopped"`
+	CancelRequest    string              `json:"cancel_request,omitempty"`
+	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
 }
 
 type TaskReportReceipt struct {
@@ -93,6 +102,9 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 	if r.Outcome == "" && (r.Status == "" || r.ExecutionStopped) {
 		return empty, ErrTaskInvalid
 	}
+	if r.Blocker != nil && (r.Outcome != "" || r.ExecutionStopped || r.CancelRequest != "") {
+		return empty, ErrTaskInvalid
+	}
 	if r.Owner != owner {
 		return empty, ErrTaskFence
 	}
@@ -102,6 +114,9 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 	}
 	defer tx.Rollback()
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
+		return empty, err
+	}
+	if err = s.d.lockKey(tx, "fleet_tasks", "task-blockers:"+owner); err != nil {
 		return empty, err
 	}
 	t, err := s.taskInTx(tx, ParseTaskRef(r.Task))
@@ -150,9 +165,14 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 	if !errors.Is(err, sql.ErrNoRows) {
 		return empty, err
 	}
+	id := fmt.Sprintf("task-report:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	disposition := "progress"
 	if t.Generation != r.Generation || taskTerminal(t.State) {
 		disposition = "historical"
+	} else if r.Blocker != nil {
+		if err = s.applyTaskBlockerTx(tx, t, endpoint, id, *r.Blocker, now); err != nil {
+			return empty, err
+		}
 	} else if r.Outcome != "" {
 		if !taskTransition(t.State, r.Outcome) {
 			return empty, ErrTaskConflict
@@ -174,14 +194,21 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 		}
 		disposition = "committed"
 	}
+	if err = projectTaskBlockers(tx, &t); err != nil {
+		return empty, err
+	}
 	receipt := TaskReportReceipt{r, t, disposition}
 	result, _ := json.Marshal(receipt)
-	id := fmt.Sprintf("task-report:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	ts := now.UTC().Format(rfc)
 	_, err = tx.Exec(`INSERT INTO fleet_operations (id, fleet_id, action, request, actor, idem, status, created, updated, result, worker_id)
         VALUES (?, '', 'task_report', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, id, string(raw), owner, idem, ts, ts, string(result), r.WorkerID)
 	if err != nil {
 		return empty, err
+	}
+	if disposition == "committed" {
+		if err = s.resolveTaskDependenciesTx(tx, t, id, now); err != nil {
+			return empty, err
+		}
 	}
 	return receipt, tx.Commit()
 }

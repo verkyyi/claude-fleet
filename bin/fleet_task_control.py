@@ -38,6 +38,56 @@ def verdict(task):
     return outcome.upper() if outcome in ("succeeded", "failed", "cancelled", "refused") else "WAITING"
 
 
+def blocker_projection(task, stale=False):
+    """Read-only task-blockers.v1. Unknown is never an empty blocker set.
+
+    Native ask/approval, runtime TTL, controller and terminal outcome are separate
+    inputs: none is read or changed here, and this result grants no action.
+    """
+    unknown = dict(version=1, state="unknown", active_ids=[], actionable=False)
+    if not isinstance(task, dict) or stale or task.get("_stale") or task.get("authority_version") != 1:
+        return unknown
+    projection = task.get("task_blockers")
+    if not isinstance(projection, dict) or projection.get("version") != 1 or projection.get("generation") != task.get("generation"):
+        return unknown
+    items = projection.get("items")
+    if not isinstance(items, list):
+        return unknown
+    scope = dict(task=task.get("id"), owner=task.get("owner"), repo=task.get("repo", ""),
+                 ticket_ref=task.get("ticket_ref", ""), generation=task.get("generation"), worker_id=task.get("execution_owner", ""))
+    active, seen, revoked = [], set(), False
+    for item in items:
+        if (not isinstance(item, dict) or item.get("scope") != scope or
+                not isinstance(item.get("blocker_id"), str) or not item["blocker_id"] or
+                item["blocker_id"] in seen or item.get("state") not in ("active", "resolved", "revoked")):
+            return unknown
+        seen.add(item["blocker_id"])
+        if item["state"] == "active": active.append(item["blocker_id"])
+        if item["state"] == "revoked": revoked = True
+    return dict(version=1, state="blocked" if active else "revoked" if revoked else "clear",
+                active_ids=active, actionable=False)
+
+
+def blockers(task):
+    data = call("get", task, stale=True)
+    print(json.dumps(dict(task=task, projection=blocker_projection(data.get("task"), stale=data.get("stale", False)),
+                         task_blockers=data.get("task", {}).get("task_blockers")), ensure_ascii=False))
+    return 0
+
+
+def blocker(pane, command, event, socket=""):
+    """An explicit blocker travels through the accepted task report/outbox."""
+    if not event or not isinstance(command, dict):
+        raise ValueError("blocker needs a stable --event and one JSON command")
+    c = context(pane, socket)
+    t = call("get", c["task"])["task"]
+    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
+        raise ValueError("stale blocker owner/generation")
+    r = report_input(c, t, "", command.get("reason", ""), command.get("evidence", ""), event=event)
+    r.update(blocker=command, status="blocked" if command.get("action") == "create" else "waiting")
+    return publish_report(r)
+
+
 def wait_task(task, timeout, interval):
     end = time.monotonic() + timeout
     while True:
@@ -322,7 +372,7 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("children", "await", "report", "finalize", "cancel", "receive"))
+    p.add_argument("action", choices=("children", "await", "report", "finalize", "cancel", "receive", "blocker", "blockers"))
     p.add_argument("--task", default="")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
@@ -348,6 +398,8 @@ def main():
                     print("RECONCILIATION_PENDING: %d retained receipts" % recovery["pending"], file=sys.stderr)
             except (ValueError, OSError, subprocess.SubprocessError):
                 pass  # the requested operation below still fails closed
+        if args.action == "blockers": return blockers(args.task)
+        if args.action == "blocker": return blocker(args.pane, json.load(sys.stdin), args.event, args.socket)
         if args.action == "children": return children(args.task, args.json)
         if args.action == "await": return wait_task(args.task, max(1, args.timeout), max(1, args.interval))
         if args.action == "report": return report(args.pane, args.state, args.summary, args.pr, args.dry, args.socket, args.outcome)

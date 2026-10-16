@@ -195,7 +195,7 @@ kick_enabled() {
 if [ "$STATUS" = 1 ]; then
   n=0; for _c in $UNITS; do n=$((n + 1)); done
   for u in $UNITS; do
-    ts=$(fleet_daemon_tick_ts "$u" "$ROOT")
+    ts=$(fleet_daemon_tick_ts "$u" "$ROOT" "$STATE")
     kage=$(fleet_daemon_kick_age "$u" "$ROOT")
     thr=$(fleet_daemon_stale_secs "$u")
     if [ "$ts" -le 0 ]; then verdict=never; age=0
@@ -218,7 +218,7 @@ trap '[ -n "$LOCK" ] && rm -rf "$LOCK"' EXIT
 for u in $UNITS; do
   kick_enabled "$u" || continue
 
-  stale=$(fleet_daemon_overdue "$u" "$ROOT")
+  stale=$(fleet_daemon_overdue "$u" "$ROOT" "$STATE")
   if [ -z "$stale" ]; then
     # Ticking again ⇒ whatever we last did worked (or nothing was ever wrong), so
     # the escalation ladder resets. Without this, one bad afternoon would leave

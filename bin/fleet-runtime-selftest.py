@@ -58,6 +58,81 @@ class Snapshot(unittest.TestCase):
             self.assertEqual(runtime.project(s, now=101.)["runtime"]["state"], "unknown")
 
 
+class ConditionalAcceptance(unittest.TestCase):
+    """Unavailable contract only, not a simulation of native atomic acceptance."""
+
+    def setUp(self):
+        self.delivery = "55555555-5555-4555-8555-555555555555"
+        self.snapshot = Snapshot().observation()
+        for target in ("subprocess.run", "subprocess.Popen", "socket.socket", "builtins.open"):
+            p = mock.patch(target, side_effect=AssertionError("unavailable must do no I/O"))
+            p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(runtime.time, "time", return_value=101.)
+        p.start(); self.addCleanup(p.stop)
+
+    def attempt(self, snapshot=None, **kw):
+        args = dict(pane="%7", expected=self.snapshot if snapshot is None else snapshot,
+                    delivery_id=self.delivery, text="private loop message")
+        args.update(kw)
+        result = runtime.accept_if_idle(**args)
+        self.assertEqual(result["state"], "unknown")
+        self.assertFalse(result["submitted"])
+        self.assertIsNone(result["receipt"])
+        self.assertEqual(result["capability"]["state"], "unavailable")
+        self.assertNotIn("private loop message", json.dumps(result))
+        return result
+
+    def test_capability_does_not_guess_from_provider_or_version(self):
+        for provider in ("codex", "claude", "future-provider", None, {}):
+            c = runtime.idle_accept_capability(provider)
+            self.assertEqual(c["version"], 1)
+            self.assertEqual(c["state"], "unavailable")
+            self.assertIsNone(c["native_method"])
+            self.assertEqual(c["support"], "native_atomic_precondition_and_receipt_required")
+
+    def test_previous_idle_observation_neither_provider_sends(self):
+        for provider in ("codex", "claude"):
+            self.snapshot["identity"]["provider"] = provider
+            before = copy.deepcopy(self.snapshot)
+            # A previous read is no authority over a concurrent user turn.
+            result = self.attempt()
+            self.assertEqual(result["reason"], "capability_unavailable")
+            self.assertEqual(result["delivery_id"], self.delivery)
+            self.assertEqual(result["request_identity"], before["identity"])
+            self.assertEqual(self.snapshot, before)
+
+    def test_old_identity_and_late_ack_cannot_create_a_receipt(self):
+        for provider in ("codex", "claude"):
+            for key in self.snapshot["identity"]:
+                old = copy.deepcopy(self.snapshot)
+                old["identity"]["provider"] = provider
+                old["identity"][key] = "old-generation-or-session"
+                old["controller_delivery"] = dict(state="accepted", delivery_id=self.delivery,
+                                                  accepted_turn="late-old-turn")
+                old["capability"] = dict(state="available", native_method="turn/start")
+                self.attempt(old)
+
+    def test_repeat_restart_and_all_blockers_stay_unknown(self):
+        for provider in ("codex", "claude"):
+            self.snapshot["identity"]["provider"] = provider
+            for state in ("idle", "active", "ask", "approval", "interrupted", "unknown"):
+                for gate in ("tool", "bg", "dirty", "recent_input", "transfer", "handoff", "quota", "disconnected"):
+                    s = copy.deepcopy(self.snapshot)
+                    s["runtime"].update(state=state, reason=gate)
+                    a = self.attempt(s)
+                    self.assertEqual(a, self.attempt(s))  # no retry or durable effect
+            for now in (99., 105., 200.):
+                with mock.patch.object(runtime.time, "time", return_value=now):
+                    self.attempt()
+
+    def test_invalid_requests_and_untrusted_receipts_fail_closed(self):
+        for snapshot in ({}, {"version": 2}, {"identity": []}):
+            self.assertEqual(self.attempt(snapshot)["reason"], "invalid_request")
+        for kw in (dict(pane=""), dict(delivery_id=""), dict(text=""), dict(text=123),
+                   dict(text="x" * 65537)):
+            self.assertEqual(self.attempt(**kw)["reason"], "invalid_request")
+
+
 class Provider(unittest.TestCase):
     def setUp(self):
         self.receipt = R.copy()

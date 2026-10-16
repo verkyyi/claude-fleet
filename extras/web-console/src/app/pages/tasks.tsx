@@ -21,7 +21,7 @@ import { usePage } from "../Shell";
 import { Empty, Failed, Loading, PageHeader, ago } from "../parts";
 import { ticketPath, ticketState, type Ticket } from "../tickets";
 import { terminalLink } from "@/shared/terminal";
-import { agentMismatch, taskLanding, taskPR, taskStatus, taskTicket, type Task } from "../task-state";
+import { agentMismatch, taskBlockerItems, taskLanding, taskPR, taskStatus, taskTicket, type Task } from "../task-state";
 import { useTasks } from "../use-tasks";
 
 const STATUS: Record<string, [string, string]> = {
@@ -42,12 +42,13 @@ const observedWords = (t: Task) => {
   return tr(...(words[t.live.state] || STATUS.unknown));
 };
 
-const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({ t, ticket, onFile }) => {
+const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void; stale?: boolean }> = ({ t, ticket, onFile, stale }) => {
   const state = taskStatus(t);
   const ref = taskTicket(t, ticket ? [ticket] : []);
   const pr = taskPR(t);
   const landing = taskLanding(t);
   const mismatch = agentMismatch(t);
+  const blockers = taskBlockerItems(t);
   const tone = state === "failed" || state === "refused" ? "text-destructive border-destructive/40"
     : state === "running" || state === "succeeded" ? "text-ok" : "text-muted-foreground";
   const key = t.live?.key || t.session_key;
@@ -94,8 +95,27 @@ const TaskCard: FC<{ t: Task; ticket?: Ticket; onFile: (t: Task) => void }> = ({
             <dt>{tr("请求代理", "Requested agent")}</dt><dd>{t.requested_agent || statusWords("unknown")}</dd>
             <dt>{tr("确定代理", "Resolved agent")}</dt><dd>{t.resolved_agent || statusWords("unknown")}</dd>
             <dt>{tr("已核实代理", "Verified actual agent")}</dt><dd>{t.actual_agent || statusWords("unknown")}</dd>
-            <dt>{tr("会话观测", "Session observation")}</dt><dd>{observedWords(t)}</dd>
+            <dt>{tr("会话观测", "Session observation")}</dt><dd>
+              {t.live?.stale || stale ? tr("陈旧 / last-known · ", "Stale / last-known · ") : ""}{observedWords(t)}
+              {" · "}{t.live?.source || "unknown"}{" · "}{t.live?.observed_at || "unknown"}
+            </dd>
+            <dt>{tr("运行证据", "Runtime evidence")}</dt><dd>{tr("未知 · inventory 未提供原生同源快照", "Unknown · inventory has no shared native snapshot")}</dd>
+            <dt>{tr("接受/投递", "Acceptance/delivery")}</dt><dd>{tr("未知 · 缺少 controller 回执", "Unknown · controller receipt unavailable")}</dd>
+            <dt>{tr("循环计划", "Loop schedule")}</dt><dd>{tr("未知 · 未提供计划证据，运行不表示已接受", "Unknown · schedule evidence unavailable; running does not mean accepted")}</dd>
+            <dt>{tr("回收保留", "Reap retention")}</dt><dd>{tr("未知 · 未提供同源 proof；不授权关闭", "Unknown · shared proof unavailable; no permission to close")}</dd>
+            <dt>{tr("部署 / 现场", "Deployment / live")}</dt><dd>{tr("未知 · PR 合并不等于上线", "Unknown · PR merged does not mean deployed")}</dd>
+            <dt>{tr("来源", "Source")}</dt><dd>{tr("任务：hub 权威 GET；会话：inventory（与 native runtime 独立）", "Task: authoritative hub GET; session: inventory (separate from native runtime)")}</dd>
             <dt>{tr("任务更新于", "Task updated")}</dt><dd>{t.updated_at || statusWords("unknown")}</dd>
+            <dt>{tr("任务阻塞", "Task blockers")}</dt><dd>
+              {stale ? <p>{tr("陈旧 · 以下仅为 last-known，不代表阻塞已解除", "Stale · last-known only; no blocker resolution inferred")}</p> : null}
+              {blockers === null ? tr("未知 · 缺少本代 task-blockers.v1", "Unknown · current task-blockers.v1 unavailable")
+                : blockers.length === 0 ? tr("本代没有显式阻塞；会话提问和批准独立保留", "No explicit blockers in this generation; questions and approvals remain independent")
+                : blockers.map((b) => <p key={b.blocker_id} className="break-words">
+                  {b.blocker_id}{" · "}{b.state}{b.reason ? ` · ${b.reason}` : ""}{" · "}
+                  {b.resolved_at || b.revoked_at || b.created_at || statusWords("unknown")}
+                </p>)}
+            </dd>
+            {t.asked ? <><dt>{tr("提问 / 批准", "Question / approval")}</dt><dd>{t.asked}</dd></> : null}
             {t.generation ? <><dt>{tr("执行代次", "Attempt")}</dt><dd>{t.generation}</dd></> : null}
             {t.worker_id ? <><dt>{tr("会话身份", "Session identity")}</dt><dd className="break-all!">{t.worker_id}</dd></> : null}
             {t.cancel_request && state !== "cancelled" ? <><dt>{tr("取消", "Cancellation")}</dt><dd>{tr("已请求，尚未确认停止", "Requested; stopping is not confirmed")}</dd></> : null}
@@ -217,11 +237,12 @@ export default function TasksPage() {
           </div> : null}
           {!tasks.data && tasks.loading ? <Loading /> : !tasks.data && tasks.failed ? <Failed what={tr("任务", "tasks")} onRetry={tasks.reload} /> : taskList.length ? (
             <div className="space-y-3">
-              {taskList.map((t) => <TaskCard key={t.id} t={t} ticket={ticketOf(t)} onFile={(x) => { setFiled(""); setFiling(x); }} />)}
+              {taskList.map((t) => <TaskCard key={t.id} t={t} stale={stale} ticket={ticketOf(t)} onFile={(x) => { setFiled(""); setFiling(x); }} />)}
             </div>
           ) : (
-            <Empty icon={<ListChecks />} title={tr("还没派过任务", "No tasks yet")}
-              body={tr("派出去的每件事都会在这里留一条记录，编号以 T 开头。", "Everything you send out leaves a record here, numbered from T.")}
+            <Empty icon={<ListChecks />} title={stale ? tr("任务数量未知", "Task count unknown") : tr("还没派过任务", "No tasks yet")}
+              body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
+                : tr("派出去的每件事都会在这里留一条记录，编号以 T 开头。", "Everything you send out leaves a record here, numbered from T.")}
               action={<Button asChild><Link to="/" className="no-underline">{tr("去派一件", "Send one")}</Link></Button>} />
           )}
         </TabsContent>

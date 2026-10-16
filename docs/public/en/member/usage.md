@@ -51,6 +51,24 @@ Menus and editors cover a small area near their source row; the list stays in pl
 
 Draft text, repository, agent, caret and control focus are stored privately on this machine for this view. They survive cancellation, retargeting and session switches. “Clear draft” or a confirmed successful draft opening clears the text; failures and unconfirmed openings retain it. Repository and agent remain selected. Resize preserves editor state and selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice, keep the overlay inside the real terminal bounds, and retain Tab, F6 and Escape. Long content scrolls inside the overlay.
 
+
+### Inspect status evidence
+
+Select a session, then Tab → “状态证据 / Status evidence”. The read-only overlay
+separates runtime, task result, explicit blockers, loop schedule, acceptance/delivery
+and reap retention, with source and original observation time. A local session is
+read once when this item is opened. Scroll with arrows or the mouse wheel; Escape
+returns and F6 changes focus. Legacy done means “turn ended”. PR merge, deployment
+and live availability remain separate facts.
+
+Expired evidence, unreachable peers and missing current execution identity show
+unknown; last-known is reference only. Refreshing the list never renews evidence.
+Missing controller receipts do not confirm acceptance or delivery. The shadow proof
+never authorizes closing; existing reap checks remain in force. Web Tasks reads
+outcomes and blockers from the hub; native snapshot and reap proof dimensions are
+explicitly unknown where unavailable. Resolving one blocker never clears other
+blockers, questions or approval requests.
+
 ### Session states
 
 The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished windows still open count; reaped records do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.

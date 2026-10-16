@@ -6294,7 +6294,7 @@ try:
 except Exception:
     sys.exit(1)
 ' "$db" 2>/dev/null) && [ -n "$u" ] || return 1
-  [ -f "$(fleet_conf_file "$sess")" ] && _fleet_identity_write "$idf" "$u"
+  if [ "${2:-}" != --read-only ] && [ -f "$(fleet_conf_file "$sess")" ]; then _fleet_identity_write "$idf" "$u"; fi
   printf '%s\n' "${u%%$'\n'*}"
 }
 
@@ -10195,81 +10195,17 @@ fleet_clip_display() {
 # overrides the registry location so selftests can point it at a scratch tree.
 FLEET_CC_SESSIONS_DIR="${FLEET_CC_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
-# fleet_pane_claude_pids <pane-pid>… — the BATCH form of fleet_pane_claude_pid
-# (issue #706). Resolves MANY panes in THREE forks total — two `ps` snapshots and
-# one awk that walks every tree in-process — where the per-pane form costs one
-# `ps` plus two forked `awk`s for EVERY node it visits. Prints one
-# "<pane-pid> <claude-pid>" line per pane that has a Claude under it; a pane with
-# none prints nothing. Same matching grammar as the single form below, which is a
-# wrapper around this one, so there is exactly ONE walk to keep correct.
-#
-# WHY the fork count is the whole point (issue #706). fleet-model-switch.sh's
-# `--capped --dry-run` cap probe calls this once per window from inside
-# fleet-quotawatch's 60 s tick — and that daemon runs at macOS
-# ProcessType=Background, i.e. QoS BACKGROUND, where a fork costs ~10x what it
-# costs in the foreground (issue #588 measured the same multiplier on bulk I/O
-# and classified this unit as a "pure poller"; the poller had grown a fork-heavy
-# half). Measured on a 9-window fleet: 1.7 s foreground, 21–25 s at background
-# QoS, against a 20 s FLEET_QUOTAWATCH_PROBE_BUDGET — so the probe timed out on
-# 69% of all ticks and 100% of recent ones, and that fleet's model-cap detection
-# was blind for as long as the log goes back. Only 4.4 s of those 21 s was CPU:
-# the rest was fork/exec scheduling latency. Cutting ~12 forks per window to ~0
-# is therefore the fix, and unlike a bigger budget it also scales with fleet size.
-#
-# The two snapshots ride STDIN with a sentinel between them rather than `-v`:
-# awk processes escape sequences in a `-v` assignment, and a command line is
-# exactly the kind of string that carries backslashes. Pane pids are numeric, so
-# those are safe to pass as `-v`.
+# fleet_pane_claude_pids <pane-pid>… — batch pane→Claude lookup (#706, #4474).
+# Prints "<pane-pid> <claude-pid>" per match, skipping zombies. The canonical
+# BFS now lives in fleet_pending_tool.py: shell callers use one Python + one ps;
+# in-process consumers share one ps across the entire observation, with no awk.
+# The single-pane function below wraps this exact walk. FLEET_CLAUDE_COMM is the
+# explicit fake-shell override; native npm/node/bun matching is unchanged.
 fleet_pane_claude_pids() {
   [ "$#" -gt 0 ] || return 0
-  # A ZOMBIE is skipped (issue #1734): on Linux a process that just exited keeps
-  # its comm (`claude`) until its parent reaps it, so a /exit'ed Claude read as
-  # "another Claude appeared" for the few ms before tmux collected it (macOS shows
-  # `<defunct>`, so it never hit there). fleet_pid_alive already treats Z as gone.
-  # LC_ALL=C (issue #3129): any process's argv may hold a CJK char cut mid-
-  # sequence; under a UTF-8 locale macOS awk then writes «illegal byte sequence»
-  # + those raw bytes to stderr, and a caller decoding it strictly failed. Every
-  # pattern here is ASCII, so bytes are exact.
-  { ps -axo pid=,ppid=,stat=,comm=; echo '---CMDS---'; ps -axo pid=,command=; } 2>/dev/null \
-  | LC_ALL=C awk -v panes="$*" -v ccomm="${FLEET_CLAUDE_COMM:-}" '
-      /^---CMDS---$/ { sec = 2; next }
-      sec != 2 { if (NF >= 4 && index($3, "Z") == 0) { comm[$1] = $4; kids[$2] = kids[$2] " " $1 } next }
-      { p = $1; $1 = ""; cmd[p] = " " substr($0, 2) " " }
-      function base(s,   k) { k = s; sub(/^.*\//, "", k); return k }
-      # BFS from the pane pid, in the same order the shell form used. `gen` stands
-      # in for `delete seen`: the whole-array delete is a gawk-ism this must not
-      # depend on, and a per-walk generation number is exact on every awk.
-      function walk(root, gen,   q, head, tail, p, b, k, nk, i) {
-        q[1] = root; head = 1; tail = 1
-        while (head <= tail) {
-          p = q[head++]
-          if (seen[p] == gen) continue
-          seen[p] = gen
-          b = base(comm[p])
-          if (b == "claude") return p
-          if (b == "bun" || b ~ /^node[0-9]*$/) {
-            if (index(cmd[p], "claude-code/cli.js") > 0 || index(cmd[p], "/claude ") > 0) return p
-          } else if (b == "bash" || b == "sh" || b == "zsh" || b == "dash") {
-            # a selftest fake `claude` is a script: its comm is the interpreter, so
-            # match ONLY the explicit FLEET_CLAUDE_COMM substring (never a bare
-            # heuristic — a worker s `zsh -c ...fleet-claude.sh...` runner must not
-            # count as Claude). No `next` here: the shell s children still get walked.
-            if (ccomm != "" && index(cmd[p], ccomm) > 0) return p
-          }
-          nk = split(kids[p], k, " ")
-          for (i = 1; i <= nk; i++) if (k[i] != "") q[++tail] = k[i]
-        }
-        return ""
-      }
-      END {
-        np = split(panes, pl, " ")
-        for (i = 1; i <= np; i++) {
-          if (pl[i] == "") continue
-          c = walk(pl[i], i)
-          if (c != "") print pl[i] " " c
-        }
-      }
-    '
+  # The importable pending oracle owns the ONE process walk (#4474).
+  # No shell/awk copy: CLI callers and an in-process batch use the same parser.
+  python3 "${BASH_SOURCE[0]%/*}/fleet_pending_tool.py" --pids "$@" 2>/dev/null
 }
 
 # fleet_pane_claude_pid <tmux-target> [socket] — pid of the Claude process running

@@ -106,6 +106,17 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 			return fault("INVALID_STATE", "accepted task has no dispatch input")
 		}
 		original, _ := payload["dispatch"].(map[string]any)
+		if _, placed := payload["params"]; !placed {
+			// A coordinator accepted the words before filing. Only its explicit
+			// ticket attachment authorizes an issue start; it cannot substitute
+			// another issue or parent when converting those words to placement.
+			if w.params["issue"] != nil && !ticketRefMatches(t.TicketRef, w.repo, fmt.Sprint(w.params["issue"])) {
+				return fault("INVALID_STATE", "issue start requires the accepted task's linked ticket")
+			}
+			if t.ParentSession != asString(w.params["origin_wid"]) {
+				return fault("INVALID_STATE", "parent differs from accepted task")
+			}
+		}
 		if params, ok := payload["params"].(map[string]any); ok {
 			original, _ = params["dispatch"].(map[string]any)
 			// Destination fleet and operation IDs may change at placement; the

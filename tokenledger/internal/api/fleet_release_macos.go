@@ -52,14 +52,10 @@ func (rs *ReleaseStore) macPointer() stablePointer {
 }
 
 // onStableChain: sha is stable, or a release stable once stood on and the
-// chain still reaches (the pointer walked back along prev).
+// signed chain still reaches, including proofs saved before artifact pruning.
 func (rs *ReleaseStore) onStableChain(sha string) bool {
-	for _, s := range rs.chain(rs.stable().SHA) {
-		if s == sha {
-			return true
-		}
-	}
-	return false
+	ch := rs.macChain(rs.stable(), sha)
+	return len(ch) > 0 && ch[len(ch)-1].SHA == sha
 }
 
 // macTTL: how long a read of the Mac lane is trusted (/version asks on every
@@ -73,19 +69,24 @@ func (rs *ReleaseStore) MacStableSHA() string {
 	if rs == nil {
 		return ""
 	}
+	cur, p := rs.stable(), rs.macPointer()
 	rs.pubMu.Lock()
-	if time.Since(rs.macAt) < macTTL {
+	if time.Since(rs.macAt) < macTTL && rs.macStable == cur && rs.macLane == p {
 		sha := rs.macSHA
 		rs.pubMu.Unlock()
 		return sha
 	}
 	rs.pubMu.Unlock()
 	sha := ""
-	if p := rs.macPointer(); p.SHA != "" && rs.Has(p.SHA) && rs.onStableChain(p.SHA) {
-		sha = p.SHA
+	if p.SHA != "" && rs.Has(p.SHA) {
+		ch := rs.macChain(cur, p.SHA)
+		if len(ch) > 0 && ch[len(ch)-1].SHA == p.SHA && ch[len(ch)-1].Seq == p.Seq {
+			sha = p.SHA
+		}
 	}
 	rs.pubMu.Lock()
 	rs.macAt, rs.macSHA = time.Now(), sha
+	rs.macStable, rs.macLane = cur, p
 	rs.pubMu.Unlock()
 	return sha
 }
@@ -109,18 +110,15 @@ func (rs *ReleaseStore) MacLag() (int, time.Time) {
 	if mac == "" {
 		return 0, time.Time{}
 	}
-	ch := rs.chain(rs.stable().SHA)
-	for i, sha := range ch {
-		if sha != mac {
+	ch := rs.macChain(rs.stable(), mac)
+	for i, m := range ch {
+		if m.SHA != mac {
 			continue
 		}
 		if i == 0 {
 			return 0, time.Time{}
 		}
-		if m := rs.manifest(ch[i-1]); m != nil {
-			return i, m.Created
-		}
-		return i, time.Time{}
+		return i, ch[i-1].Created
 	}
 	return 0, time.Time{}
 }
@@ -142,10 +140,10 @@ func (rs *ReleaseStore) moveMac(sha string) (map[string]any, error) {
 		return map[string]any{"status": status, "ref": RefStableMacOS, "sha": sha, "prev": "", "seq": m.Seq}
 	}
 	old := rs.macPointer()
-	if old.SHA == sha {
+	if old.SHA == sha && old.Seq == m.Seq {
 		return out("already"), nil
 	}
-	if old.SHA != "" && rs.onStableChain(old.SHA) && m.Seq < old.Seq {
+	if old.SHA != "" && m.Seq < old.Seq {
 		return nil, publishErr(http.StatusConflict, "%s (#%d) is behind the Mac lane's %s (#%d) — it only moves forward", short(sha), m.Seq, short(old.SHA), old.Seq)
 	}
 	b, _ := json.Marshal(stablePointer{SHA: sha, Seq: m.Seq})

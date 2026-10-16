@@ -1,4 +1,5 @@
 #!/bin/bash
+# selftest-deps: fleet_pending_tool.py fleet-pending-tool.sh
 # fleet-permission-selftest.sh — hermetic smoke test for bin/fleet-permission.sh (issue #640).
 #
 # Drives the reader/refuser against a FAKE tmux and a HAND-WRITTEN transcript — no

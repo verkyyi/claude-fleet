@@ -4902,6 +4902,22 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_task_blocker_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_blockers_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
+}
+
+drill_task_ticket_link() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_ticket_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='接受后的建单与关联幂等恢复，未知发送不重复建单'
+}
+
 drill_repo_cutover_inflight() {
   CAP=15; local out t0
   t0=$(now)
@@ -6406,6 +6422,15 @@ drill_idle_activity_between_probes() {
   WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
 }
 
+drill_hubsess_unwatched_poll() {
+  CAP=25; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/hub-sessions-watch-selftest.py" --quick 2>&1) \
+    || { WHY="unwatched session list: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='常在线客户端不算打开列表；共享事件广播两秒内更新，真实请求恢复两秒节拍，输入相同不重算'
+}
+
 drill_spinner_unwatched_poll() {
   CAP=15; local t0 out
   t0=$(now)
@@ -6424,12 +6449,38 @@ drill_spinner_maintenance_starved() {
   WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
 }
 
+drill_spinner_process_budget() {
+  CAP=150; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-budget-selftest.py" 2>&1) \
+    || { WHY="complete default spinner budget: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无工作及有维护待办两种隔离场景各完整 60 秒，含启动、等待、全部维护的外部进程各不超过 5 个'
+}
+
+drill_spinner_protocol_budget() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-control-selftest.py" 2>&1) \
+    || { WHY="resident protocol invalidation: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；完整 60 秒协议总账与 process-budget 共测'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" 2>&1) \
     || { WHY="Codex MCP/helper 回收分类失守: $out"; return 1; }
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
+}
+
+drill_reap_shadow_race() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-reap-shadow-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同源影子证明按 turn/子进程/lease 失效，未知逐维保留，永不授予动作'
 }
 
 drill_runtime_stale_idle() {
@@ -6440,12 +6491,37 @@ drill_runtime_stale_idle() {
   WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
 }
 
+drill_runtime_idle_accept_unavailable() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='双 provider 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+}
+
+drill_pending_observation_stale() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-pending-tool-selftest.py" Observation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
+}
+
+drill_native_observe_missing() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_native_observe_test.py" Recovery LocalRegistration 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='丢观察与丢确认保留原执行；只有原 kernel/RPC/reservation 的精确确认允许登记'
+}
+
 drill_repo_authority_case() {
   CAP=90; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet_repo_authority_case_test.py" \
     CaseAuthorityTests.test_gate_and_manifest_use_hub_identity_and_existing_overlay \
     CaseAuthorityTests.test_panel_new_and_issue_start_keep_worktree_and_registration \
+    CaseAuthorityTests.test_busy_cpu_still_refuses_panel_and_issue_without_window \
     CaseAuthorityTests.test_panel_quick_draft_uses_real_compose_and_raw_entry \
     CaseAuthorityTests.test_refusals_reach_panel_and_issue_without_secret_or_false_freeze 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
@@ -6821,6 +6897,17 @@ drill_land_race() {
   [ "$out" = "MERGED MERGED FAILING 2 0" ] || { WHY="three landings at once read [$out], want [MERGED MERGED FAILING 2 0]"; return 1; }
   [ ! -s "$d/gh.log" ] || { WHY="gh was called: $(head -1 "$d/gh.log")"; return 1; }
   WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
+}
+
+# worker-inventory-rs (#4508): real adapter with synthetic orphan reports;
+# bin/fleet_control.py must preserve the nested RS/US framing through fleet_status.
+drill_worker_inventory_rs() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_inventory_orphan_report_framing 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='含历史报告 RS/US 的十条 inventory 原样到达 fleet_status，身份、中文、REAPED 报告与观察时间均保留'
 }
 
 # ticket-credential-pair (#4490): no production credentials or network.

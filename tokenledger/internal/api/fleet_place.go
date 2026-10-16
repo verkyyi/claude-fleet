@@ -253,6 +253,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusConflict, errorObject(err)["message"])
 		return
 	}
+	taskOwnsIssueLease := false
 	if req.Dispatch != nil {
 		input := map[string]any{"repo": req.Repo, "node": req.Node, "idempotency_key": req.Dispatch.RequestID,
 			"agent": req.Agent, "dispatch": req.Dispatch}
@@ -283,6 +284,12 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Dispatch = accepted.params["dispatch"].(*dispatchChoice)
 		req.Idem = req.Dispatch.RequestID
+		task, e := s.Store.FleetTask(store.ParseTaskRef(req.Dispatch.Task))
+		if e != nil {
+			httpError(w, http.StatusInternalServerError, e.Error())
+			return
+		}
+		taskOwnsIssueLease = task.TicketRef != ""
 	}
 	pl, err := s.pickNode(p, req.Repo, req.Node, now)
 	if err != nil {
@@ -374,7 +381,10 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		giveBack := func() {}
-		if !scratch {
+		// Accepted launches acquire their pinned lease in claimLaunch, in
+		// the same transaction as the task owner. A legacy handover here would
+		// occupy the linked issue before that authoritative claim can run.
+		if !scratch && !taskOwnsIssueLease {
 			tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
 				FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
 			moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)

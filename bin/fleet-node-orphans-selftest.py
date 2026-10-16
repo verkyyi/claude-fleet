@@ -280,6 +280,26 @@ class Orphans(ct.Sandbox):
         self.assertFalse(sup.account_proc_is(e, "/usr/bin/python3 /tmp/active-job.py " + path))
         self.assertFalse(sup.account_proc_is(e, "/bin/bash " + path + " --handler"))
 
+    def test_versioned_python_script_identity(self):
+        # sys.executable is python3.15 on CI, python3.14 on Homebrew, and
+        # Python in a macOS framework. Exercise these even on /usr/bin/python3.
+        path = os.path.join(self.home, "fleet-webhook.sh")
+        for name in ("python", "python3", "python3.14", "python3.15", "Python"):
+            with self.subTest(interpreter=name):
+                py = "/opt/python/bin/" + name
+                argv = [py, "-I", self.launcher, "shared"]
+                self.assertEqual(sup.script_of(argv), self.launcher)
+                e = sup.account_entry({"name": "webhook", "argv": [py, path],
+                                       "keepalive": True}, "alice",
+                                      (os.getuid(), os.getgid(), self.home), "/usr/local")
+                self.assertEqual(e["script"], path)
+                self.assertTrue(sup.account_proc_is(e, py + " " + path))
+                self.assertFalse(sup.account_proc_is(e, py + " -c payload " + path))
+                self.assertFalse(sup.account_proc_is(e, py + " /other/job.py " + path))
+                self.assertFalse(sup.account_proc_is(e, py + " " + path + " --handler"))
+        for name in ("python-helper", "python3.15-helper", "notpython3.15"):
+            self.assertEqual(sup.script_of([name, path]), name)
+
 
 if __name__ == "__main__":
     unittest.main()

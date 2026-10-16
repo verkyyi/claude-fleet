@@ -491,10 +491,21 @@ if [ "${#labels[@]}" -gt 0 ]; then
 fi
 # The door's write step (fleet-ticket.sh new --filed): GitHub's create through the
 # write throttle, or the hub's POST — the URL on stdout either way.
-url=$(bash "$BIN/fleet-ticket.sh" new --filed "${create_args[@]}" 2>/dev/null); _crc=$?
+_task_linked=0
+if [ -n "$task" ]; then
+  url=$(python3 "$BIN/fleet_task_ticket.py" "$task" "$tkb" "${create_args[@]}"); _crc=$?
+  if [ "$_crc" = 0 ]; then _task_linked=1
+  elif [ "$_crc" = 3 ]; then
+    url=$(bash "$BIN/fleet-ticket.sh" new --filed "${create_args[@]}" 2>/dev/null); _crc=$?
+  fi
+else
+  url=$(bash "$BIN/fleet-ticket.sh" new --filed "${create_args[@]}" 2>/dev/null); _crc=$?
+fi
 rm -f "$_bf"
 [ "$_crc" = 0 ] \
-  || { if [ "$tk_home" = hub ]; then printf 'fleet-issue-file: the hub would not open the ticket in %s (exit %s)\n' "$repo" "$_crc" >&2
+  || { [ -z "$url" ] || printf '%s\n' "$url"
+       if [ -n "$task" ]; then printf 'fleet-issue-file: task %s filing/association incomplete; no spawn; retry the same dispatch\n' "$task" >&2
+       elif [ "$tk_home" = hub ]; then printf 'fleet-issue-file: the hub would not open the ticket in %s (exit %s)\n' "$repo" "$_crc" >&2
        else printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; fi   # no-gh-ok: a message
        [ "$bk_held" = 1 ] && rm -rf "$bk_lock"   # a waiter may take the breakage over
        [ "$_crc" = 4 ] && exit 4
@@ -520,7 +531,7 @@ fi
 
 # --- 4b. --task: hang the issue on the hub's record (issue #3330) ---------------
 # Best-effort: a hub that is down loses the link, never the filed issue.
-if [ -n "$task" ] && [ -n "$num" ]; then
+if [ -n "$task" ] && [ -n "$num" ] && [ "$_task_linked" != 1 ]; then
   bash "$BIN/fleet-task-record.sh" set "$task" --issue "$repo#$num" >/dev/null 2>&1; _trc=$?
   case "$_trc" in
     0) printf 'fleet-issue-file: #%s hung on hub record %s\n' "$num" "$task" >&2 ;;
@@ -544,6 +555,7 @@ if [ "$spawn" = 1 ] && [ -n "$num" ]; then
     # 4 = no live parent (issue #1355): not a backlog-and-move-on refusal — the
     # caller must re-spawn from a pane that can be reported to. The URL is out.
     [ "$_rc" = 4 ] && exit 4
+    [ "$_task_linked" = 1 ] && exit "$_rc"
   fi
 fi
 

@@ -31,9 +31,12 @@
 - [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
 - [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
+- [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
+- [REAP-SHADOW.md](dev/REAP-SHADOW.md) — 同源回收证据聚合、影子差异和 not-actionable 边界
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
+- [NATIVE-OBSERVE.md](dev/NATIVE-OBSERVE.md) — 原 Codex 存活时的只读预检与观察登记，旧 hook / 消息消费分别验收
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
 - [ISSUE-BRIDGE.md](dev/ISSUE-BRIDGE.md) · [WEBHOOK.md](dev/WEBHOOK.md) · [EMIT.md](dev/EMIT.md) — issue 事件、PR / CI 状态、会话事实外送

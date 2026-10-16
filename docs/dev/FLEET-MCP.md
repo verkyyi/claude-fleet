@@ -246,6 +246,36 @@ it does not claim a lifecycle transition or populate execution receipts.
 Actual process verification and lifecycle receipts belong to
 C3; source merge is not evidence of deployment or live acceptance.
 
+### Filing after acceptance (#4506)
+
+`task` / `fleet-task-record.sh dispatch --rule N` keep rule number and version
+in immutable `request_payload.rule`; v1 still rejects legacy top-level `rule`
+and `issue` setters. A repo task's unified filer uses two v1 mutations:
+`ticket_prepare` (`ticket-file:g<N>`) pins the authenticated filing endpoint and
+durable local `filing_id`; `ticket_link` (`ticket-link:g<N>`) attaches a full
+`gh:repo#N` or `hub:repo#N` only to that accepted, unclaimed generation. Owner,
+repo, endpoint, filing incarnation and registered ticket ownership are checked.
+The original accepted response, payload, provider and parent remain unchanged.
+
+The node's existing operation journal records filing intent before create.
+Retry the same dispatch with the same input: it reuses the accepted T and ticket.
+A read-only GitHub quota preflight can refuse before any create is sent; natural
+quota recovery then permits the first send. After sending, **every error is
+uncertain**, including rate-limit text, partial success and an empty response.
+This create retains the write queue and gap but disables its automatic retry.
+Only marker reconciliation can recover it; a miss never authorizes another
+create. Lookup includes closed tickets, bounded to 500 rows (five GitHub pages);
+truncation/unavailability and ambiguous markers are explicit failures. Lost local
+journal state cannot authorize a new filing incarnation on the prepared task.
+
+Link failure retains the task and known ticket URL and refuses spawn. Once
+linked, placement uses the authoritative task claim for the issue lease. The
+validated accepted envelope supplies the spawner's task binding; launch admission
+must succeed before the task/launch stamp and native start. An unreadable task is
+never treated as legacy; positively read v0 records retain the legacy filer path.
+Hub tickets and tasks without tickets do not require GitHub for task control.
+These are source contracts, not a backfill of existing worker metadata.
+
 ### Task children and results (#4394)
 
 An accepted task (`authority_version: 1`, verified `@launch`) uses its T record
@@ -307,6 +337,64 @@ from an accepted execution is refused. Backlog migration/attachment is C5's
 boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
+
+### Conditional idle acceptance capability (#4524)
+
+`fleet_runtime.idle_accept_capability(provider)` (CLI:
+`fleet_runtime.py idle-accept-capability`, JSON stdin `{"provider":"codex"}`)
+returns this adapter's version 1 `idle-accept` capability. **Both `codex` and
+`claude` currently return `state: unavailable`, `native_method: null`.** CLI exit
+2 means unavailable; it is not a native probe. Unknown providers and newer native
+versions remain unavailable until a verified protocol is implemented. An idle
+snapshot, client-supplied capability or installed version never enables delivery.
+
+The bounded Python entry is
+`fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`.
+CLI `fleet_runtime.py accept-if-idle --pane %N [--socket fleet]` takes JSON
+`{"expected":<read/project v1 snapshot>,"delivery_id":<UUID>,"text":<message>}`.
+The explicit pane, complete C3/native/turn identity, UUID and nonempty message
+(at most 65536 characters) are checked for shape only. **Every attempt returns
+`state: unknown`, `submitted: false`, `receipt: null`, exit 2**. A well-formed
+request says `reason: capability_unavailable`; malformed identity/input says
+`invalid_request`. `request_identity` and `delivery_id` echo only the request,
+not an acknowledgement or a fresh observation. The message is never echoed.
+No RPC, peer frame, command, provider reread, queue or ledger write occurs.
+
+Consumers retain their existing pending/uncertain delivery in their own ledger.
+This call does not settle an earlier attempt, prove that an earlier frame was
+never accepted, or authorize a resend. In particular, a cached `accepted` field
+or a late ACK cannot populate `receipt`. Frame-written/queued, accepted and
+completed are different stages; this implementation reaches none of them.
+Consumer attention/tool/bg/draft/recent-input/transfer gates still belong to
+#4431; this interface neither evaluates nor relaxes them. Do not fall back to
+`turn/start`, `turn/steer`, `fleet_peer_send` or the mod's `command.run`.
+
+The missing support is at the provider's native input acceptance boundary:
+
+| Provider / inspected surface | Gap / required support |
+| --- | --- |
+| Codex 0.160.1 exported experimental app-server schema; 0.162.1 counterexample in #4524 | `turn/start` has no completed-idle/observed-turn precondition and can steer an already-active turn. `turn/steer.expectedTurnId` conditions an **active** turn. Message IDs and attribution fields do not establish idle compare-and-accept or a durable deduplication receipt. An upstream native operation must atomically check the idle revision and reject intervening user input. |
+| Claude 2.1.295 peer input / existing mod inbox | The peer `auth` + `user` frame has no expected-turn/revision condition. `fleet_peer_send` exit 0 means frame written; native policy may hold it and the queue may consume it later. Read-only mod queries and queued commands cannot supply an atomic check at native input acceptance. An upstream native conditional enqueue/accept operation and correlated receipt are required. |
+
+The [official app-server protocol documentation](https://developers.openai.com/codex/app-server)
+describes generating the schema from the exact executable version. Neither the
+documentation nor the inspected schema establishes the required atomic idle
+operation. The existing observer remains the supported **read-only** path.
+To enable acceptance, the provider owner must implement a capability-negotiated
+native operation that fences C1/C3 operation/owner/generation/worker, SID/process
+birth and the observed turn/revision, also against intervening input that has
+not started a turn yet. It must bind a delivery ID to the accepted native turn
+and return a queryable/deduplicated outcome across disconnects. Uncertain
+outcomes and old-generation ACKs cannot mutate a new generation. The shared
+adapter must then verify this operation against real native races before any
+consumer uses it; a local lock, two reads or a post-send check cannot substitute.
+
+The BREAK-IT unavailable drill proves zero dispatch/receipt for both providers,
+including repeated requests, old identities and injected late ACKs. It does
+**not** prove supported native atomic acceptance, full loop delivery or live
+deployment. #4431's successful due-delivery and exactly-once acceptance remain
+blocked until that native capability exists; this interface alone cannot close
+those acceptance criteria.
 
 ### Read-only provider observations (#4434)
 
@@ -389,6 +477,80 @@ Source/fixture verification is separate from native process verification and
 deployment/live acceptance. This interface neither changes the live install nor
 claims the independent #4474 process-cost budget. Native RPC semantics follow
 the [Codex app-server documentation](https://learn.chatgpt.com/docs/app-server).
+
+### Pending-tool observations (#4474)
+
+`bin/fleet_pending_tool.py` owns the existing Claude transcript oracle and
+pane→Claude BFS. `fleet-pending-tool.sh` and `fleet_pane_claude_pids` remain
+compatibility entries; there is no second provider or background service.
+The Python entry for #4444 is:
+
+```python
+from fleet_pending_tool import observe, read_panes, parse_panes, PANE_FORMAT
+
+# Default transport: two tmux commands and one ps for the whole batch.
+first = observe(lambda: read_panes("fleet"))
+expected = {r["pane"]: r["identity"] for r in first}
+# At the NEXT safety-check deadline, call observe again, never reuse first.
+second = observe(lambda: read_panes("fleet"), expected=expected)
+
+# A consumer with an existing tmux control connection supplies a synchronous
+# command function. Each observation then forks only ONE ps, for every window.
+def reader():
+    return parse_panes(control_command("list-panes", "-a", "-F", PANE_FORMAT))
+results = observe(reader, expected=expected)
+```
+
+`reader` must perform a fresh synchronous read on each invocation, returning
+the requested rows from one socket. `PANE_FIELDS` names socket path, server PID,
+window/pane IDs, pane PID, worker FID, agent and native SID; `PANE_FORMAT` carries
+a final sentinel to preserve empty fields. Grouped-session duplicates are
+deduplicated by socket/pane. Callers may filter to their candidates, retaining
+every field. No binding, process or transcript cache survives `observe`.
+
+Each version-1 result contains `pane`, `code`, `tool`, `reason`, `identity`,
+`observed_at` and `expires_at`. Identity includes socket device/inode, server
+kernel birth/executable, worker FID, window/pane, native PID/birth/executable/SID
+and ancestry to the pane. Native registry PID, SID and published birth
+(`startedAt`/`procStart`) must agree. Missing FID/SID/registry birth is unknown.
+The optional `expected` argument must contain the complete first identities;
+missing or changed entries refuse. It never renews an old observation.
+
+Within one call, processes/argv and each transcript are parsed once. Before
+returning a known result, the reader rechecks the live bindings, socket,
+kernel process identities, registry SID and transcript inode/size/timestamps.
+A failed process scan, PID reuse, process exit, recycled window, other socket,
+malformed transcript or changed identity returns code 4. Transport exceptions
+at the first read propagate: the consumer must retain **all** candidates.
+An observation taking 5 seconds expires, using `fleet_runtime.TTL`; consumers
+must also reject results at or after `expires_at`. No TTL or provider policy is
+added to `fleet_runtime`. Two checks 20 seconds apart collect two process tables.
+
+| Entry / condition | Output and exit/code |
+|---|---|
+| CLI path, newest tool without a matching result | Tool name, 0 (the historical selection order) |
+| CLI path, no pending / absent / unreadable | Silence, 1; malformed JSON lines still skipped |
+| CLI bad arguments | 2 |
+| CLI target, no Claude or no such pane | 3 |
+| CLI target, Codex/other agent or failed resolution/read | 4; malformed/empty transcripts now also refuse |
+| Batch known pending / known no pending | 0 + name / 1; neither means runtime idle |
+| Batch no native, missing birth, stale or unknown identity | 4, retain; no code 3 inference |
+
+`Processes.collect()` uses one bounded `ps` on Linux/macOS; argv comes from the
+existing kernel reader. `fleet_launch.process(pid, ps_row=(ppid, lstart))`
+reuses that row but still checks kernel birth/executable and rejects a changed
+parent/start. Its original one-argument C3 contract and birth format remain.
+`fleet_pane_claude_pids` uses one interpreter plus that one ps, preserving BFS,
+node/bun recognition, explicit fake-shell override and zombie rejection.
+
+The isolated `fleet-pending-tool-selftest.py --cost` exercises two actual checks
+20 seconds apart via a real control connection and prints raw PID/exec traces:
+one control startup plus two ps, regardless of the two-window batch. The default
+CLI transport instead costs two tmux + one ps per observation. Neither count
+includes unrelated consumer maintenance. #4444 still owns spinner wiring and
+its complete default 60-second budget. Real whole-machine idle/busy evidence and
+deployment are separate. Background tools, active loops, children and all #4318
+Stop/reap gates remain required; a `no_pending` result waives none of them.
 
 ### Existing-repo authority cutover (#4395)
 
