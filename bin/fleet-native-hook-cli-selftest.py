@@ -58,17 +58,12 @@ def main():
     parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--probe-bypass", action="store_true", help="also test the launcher's hook-trust bypass against an untrusted fixture")
     parser.add_argument("--remote-tui", action="store_true", help="exercise an actual remote TUI on an owned PTY instead of embedded exec")
-    managed_options = parser.add_mutually_exclusive_group()
-    managed_options.add_argument("--managed-proot", help="Linux-only trusted fixture path mapping; not a security sandbox or production configuration")
-    managed_options.add_argument("--managed-system-dir", type=Path, help="empty temporary directory already bind-mounted at /etc/codex in an isolated GitHub-hosted CI namespace")
+    parser.add_argument("--managed-system-dir", type=Path, help="empty temporary directory already bind-mounted at /etc/codex in an isolated GitHub-hosted CI namespace")
     arguments = parser.parse_args()
     binary = shutil.which(arguments.codex)
     if not binary:
         parser.error("native Codex required; not a default CI test")
     binary = str(Path(binary).resolve())
-    proot = shutil.which(arguments.managed_proot) if arguments.managed_proot else None
-    if arguments.managed_proot and (sys.platform != "linux" or not proot):
-        parser.error("managed probe requires Linux and an explicitly supplied PRoot executable")
     system_directory = None
     if arguments.managed_system_dir:
         if (sys.platform != "linux" or os.geteuid() == 0 or os.environ.get("GITHUB_ACTIONS") != "true"
@@ -84,7 +79,7 @@ def main():
                 parser.error("managed system fixture must be empty, owned, temporary and bind-mounted in a separate mount namespace")
         except (OSError, ValueError) as error:
             parser.error("invalid managed system fixture: " + str(error))
-    managed_probe = bool(proot or system_directory)
+    managed_probe = bool(system_directory)
     client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
     requests, checks = [], []
     tool_fixture = {"active": False, "requests": []}
@@ -188,13 +183,10 @@ def main():
                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
                 "FLEET_SESSION": "fixture-session",
             }
-            invocation = [binary]
             managed_marker = root / "managed-result.json"
             if managed_probe:
-                system = system_directory or root / "system-codex"
+                system = system_directory
                 managed = root / "managed"
-                if not system_directory:
-                    system.mkdir()
                 managed.mkdir()
                 (managed / "hook.py").write_text(HOOK_SCRIPT, encoding="utf-8")
                 (system / "requirements.toml").write_text(
@@ -205,18 +197,8 @@ def main():
                 mapping_marker = "fleet-probe-" + root.name
                 (system / mapping_marker).write_text("fixture-only", encoding="utf-8")
                 environment["RUST_LOG"] = "codex_hooks=debug"
-                if proot:
-                    check(not Path("/etc/codex", mapping_marker).exists(), "fixture marker absent from host system configuration")
-                    environment["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "")
-                    mapping = [str(Path(proot).resolve()), "-b", str(system) + ":/etc/codex"]
-                    mapped = subprocess.run([*mapping, "/bin/cat", "/etc/codex/" + mapping_marker],
-                                            env=environment, capture_output=True, text=True, timeout=15)
-                    check(mapped.returncode == 0 and mapped.stdout == "fixture-only", "system configuration mapping reaches only fixture child")
-                    check(not Path("/etc/codex", mapping_marker).exists(), "fixture mapping does not publish host system configuration")
-                    invocation = [*mapping, binary]
-                else:
-                    check(Path("/etc/codex", mapping_marker).read_text() == "fixture-only",
-                          "private kernel mount exposes the fixture without PRoot")
+                check(Path("/etc/codex", mapping_marker).read_text() == "fixture-only",
+                      "private kernel mount exposes the fixture without PRoot")
             market = root / "market"
             plugin = market / "plugins/native-hook-fixture"
             for directory in (market / ".claude-plugin", plugin / ".claude-plugin", plugin / "hooks"):
@@ -233,7 +215,7 @@ def main():
                 "hooks": [{"type": "command", "command": hook_command}]}]}}))
 
             def command(*values):
-                child = subprocess.Popen([*invocation, *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
+                child = subprocess.Popen([binary, *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
                 try:
                     stdout, stderr = child.communicate(timeout=25)
@@ -247,7 +229,7 @@ def main():
             def client(stage, extra_flags=()):
                 socket = root / (stage + ".sock")
                 with (root / (stage + ".log")).open("w", encoding="utf-8") as log:
-                    child = subprocess.Popen([*invocation, *extra_flags, "app-server", "--listen", "unix://" + str(socket)],
+                    child = subprocess.Popen([binary, *extra_flags, "app-server", "--listen", "unix://" + str(socket)],
                                              env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                              stdout=log, stderr=log, start_new_session=True)
                     rpc = None
@@ -291,7 +273,7 @@ def main():
                         child = subprocess.Popen(
                             [sys.executable, "-c",
                              "import fcntl,os,sys,termios; fcntl.ioctl(0,termios.TIOCSCTTY,0); os.execv(sys.argv[1],sys.argv[1:])",
-                             *invocation, "--remote", "unix://" + str(root / (stage + ".sock")),
+                             binary, "--remote", "unix://" + str(root / (stage + ".sock")),
                              "--no-alt-screen", *flags, "Run only the offline fixture's test command." if tool_fixture["active"]
                              else "Offline hook probe; inference is disabled. Do not run tools."],
                             env=dict(environment, TERM="xterm-256color"), cwd=root,
@@ -339,7 +321,7 @@ def main():
                 check(result == 0, "native install: " + stderr[-300:] if result else "native install")
             report = {"scope": "offline native hook fixtures; no real model or credentials, not panel acceptance",
                       "version": version.strip(), "remote_tui": arguments.remote_tui,
-                      "managed_mapping": "proot" if proot else "mount-namespace" if system_directory else False, "phases": []}
+                      "managed_mapping": "mount-namespace" if system_directory else False, "phases": []}
             if arguments.probe_bypass:
                 inline = 'hooks.SessionStart=[{hooks=[{type="command",command="printf isolated-core-hook"}]}]'
                 with client("inline-classification", ("-c", inline)) as rpc:
