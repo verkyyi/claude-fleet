@@ -1265,21 +1265,22 @@ fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
 # The repository's default remains unchanged for new tickets and other workers.
 # A background reader supplies its resolved @window; ambiguity refuses.
 fleet_ticket_ref() {
-  local repo n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" win="${4:-}" row='' wr='' wn='' context='' home
+  local repo n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" win="${4:-}" row='' wr='' wn='' context='' home tab
   repo=$(fleet_norm_repo "${1:-}")
   case "$n" in ''|0|*[!0-9]*) return 2 ;; esac
   if [ -n "$win" ]; then
     case "$win" in @*) case "${win#@}" in ''|*[!0-9]*) return 2 ;; esac ;; *) return 2 ;; esac
-    local cmd=(tmux)
-    [ -n "${TMUX:-}" ] || cmd+=(-L "$(fleet_socket "$sess")")
-    row=$("${cmd[@]}" display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+    if [ -n "${TMUX:-}" ]; then
+      row=$(tmux display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+    else
+      row=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+    fi
   else
     row=$(fleet_pane_fmt '#{@repo}	#{@issue}	#{@launch}')
   fi
-  IFS=$'\t' read -r wr wn context <<< "$row"
-  if [ -n "$win$context" ] && [ -n "$context" ] && { [ "$(fleet_norm_repo "$wr")" != "$repo" ] || [ "$wn" != "$n" ]; }; then
-    [ -z "$win" ] || return 1
-  fi
+  tab=$(printf '\t')
+  case "$row" in *"$tab"*"$tab"*) wr=${row%%"$tab"*}; row=${row#*"$tab"}; wn=${row%%"$tab"*}; context=${row#*"$tab"} ;; esac
+  if [ -n "$win" ] && [ -n "$context" ] && { [ "$(fleet_norm_repo "$wr")" != "$repo" ] || [ "$wn" != "$n" ]; }; then return 1; fi
   if [ -n "$context" ] && [ "$(fleet_norm_repo "$wr")" = "$repo" ] && [ "$wn" = "$n" ]; then
     printf '%s' "$context" | python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" --ticket-ref "$repo" "$n"
     return $?

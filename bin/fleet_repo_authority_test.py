@@ -121,13 +121,44 @@ class RepoAuthorityTests(unittest.TestCase):
         with patch.object(migration, "local_settings", return_value=(dict(settings=dict(FLEET_FORGE="none", FLEET_LAND="fleet", FLEET_TICKETS="hub")), Path("fixture"))), \
                 patch.object(migration.ticket, "api", return_value=dict(authority=dict(mode="legacy", revision=0))):
             self.assertEqual(migration.manifest("fixture", "org/a")["local"]["settings"]["FLEET_FORGE"], "none")
-        for mode in ("frozen", "hub"):
+        for mode in ("frozen", "hub", "unknown"):
             with patch.object(migration.ticket, "api", return_value=dict(mode=mode)), patch.dict(os.environ, {"FLEET_LAUNCH": ""}):
                 with self.assertRaises(ValueError):
                     migration.gate("org/a", True)
         with patch.object(migration.ticket, "api", side_effect=migration.ticket.Fail(4, "unavailable")):
             with self.assertRaises(migration.ticket.Fail):
                 migration.gate("org/a", False)
+
+    def test_native_hook_cannot_bind_a_nested_or_wrong_process(self):
+        c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=123)
+        native = dict(pid=456, birth="birth", executable="/bin/codex")
+        with patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(c), "TMUX_PANE": "%1"}), \
+                patch.object(migration.launch, "native_parent", return_value=native), \
+                patch.object(migration.launch, "root_native", return_value=False), \
+                patch.object(migration, "start_call") as write:
+            with self.assertRaises(ValueError):
+                migration.observe_native(dict(hook_event_name="SessionStart", session_id="11111111-1111-4111-8111-111111111111"))
+            write.assert_not_called()
+
+    def test_supervisor_confirms_only_its_own_observed_native_stop(self):
+        c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=os.getpid())
+        native = dict(worker_id="fleet/session", pid=456, birth="birth", executable="/bin/codex", native_session="native")
+        for replaced in (False, True):
+            receipt = dict(c, native_identity=native)
+            if replaced:
+                receipt["reservation"] = "replacement"
+            writes = []
+            with patch.dict(os.environ, {"FLEET_AUTHORITY_START": "start", "TMUX_PANE": "%1"}), \
+                    patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
+                    patch.object(migration.subprocess, "Popen") as child, \
+                    patch.object(migration.signal, "signal"), \
+                    patch.object(migration.launch, "option", return_value=json.dumps(receipt)), \
+                    patch.object(migration.os, "kill", side_effect=ProcessLookupError()), \
+                    patch.object(migration, "start_call", side_effect=lambda r, k, a, **kw: writes.append(a)), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                child.return_value.wait.return_value = 0
+                self.assertEqual(migration.supervise(["fixture-native"]), 0)
+            self.assertEqual(writes, ["begin"] if replaced else ["begin", "stopped"])
 
     def test_stop_receipt_requires_positive_proof(self):
         proof = dict(worker_id="fleet/session", native_session="native", pid=123, birth="birth", executable="/bin/codex")

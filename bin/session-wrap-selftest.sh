@@ -303,7 +303,7 @@ waitfor "u: the page counts the unpushed commits" screen_has u '未推送：2 �
 
 # P (issue #1842 ③): the page itself fails → a plain prompt, never an exit.
 mkdir -p "$WORK/pbin"
-for f in fleet-session-wrap.sh fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/pbin/$f"; done
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet_sleep_park.py; do ln -s "$BIN/$f" "$WORK/pbin/$f"; done
 printf 'import sys\nraise SystemExit(1)\n' > "$WORK/pbin/fleet-session-page.py"
 ln -s "$WORK/wbin/session-end-hook.sh" "$WORK/pbin/session-end-hook.sh"
 mkdir -p "$WORK/pc"; : > "$WORK/pc/argv"
@@ -328,7 +328,7 @@ waitfor "pa: the wrapper returned 0" screen_has pa 'WRAP_RC=0'
 
 # B': the worker credential (issue #1809) — minted per launch, revoked on exit.
 mkdir -p "$WORK/kbin" "$WORK/kconf"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh; do
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh; do
   ln -s "$BIN/$f" "$WORK/kbin/$f"
 done
 cat > "$WORK/cred-launch" <<EOF
@@ -356,7 +356,7 @@ eq "w: a wrapper with no fleet-mcp.py beside it mints nothing" "cred=" "$(sort -
 # the launch is what it was; =1: a per-launch FLEET_CRED_SID on the launch and on
 # the window (@cred_sid), its session record revoked and the option gone at exit.
 mkdir -p "$WORK/xbin"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-session-cred.sh fleet-cred-proxy.sh fleet-cred-proxy.py; do
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-session-cred.sh fleet-cred-proxy.sh fleet-cred-proxy.py; do
   ln -s "$BIN/$f" "$WORK/xbin/$f"
 done
 cat > "$WORK/sid-launch" <<'EOF'

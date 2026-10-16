@@ -286,6 +286,9 @@ issue_open_gate() {
   [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
   local want c ist='' verb ticket_home tid='' doc
+  # Keep #4464's refusal ordering: duplicate windows are refused by the shared
+  # liveness gate below, before cleanup. They are not a ticket selector.
+  case "$WIN" in *$'\n'*) return 0 ;; esac
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
   # Preserve the door's legacy unset=github default, but an invalid configured
   # provider or an ambiguous branch must not silently select GitHub. Window
