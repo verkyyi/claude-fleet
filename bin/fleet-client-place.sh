@@ -238,6 +238,11 @@ def read(path):
         return ""
 
 
+d = os.environ.get("FLEET_CLIENT_DIR") or os.environ.get("TMPDIR") or "/tmp"
+lease = read(os.path.join(d, "client.lease"))
+akey = read(os.environ.get("FLEET_CLIENT_KEY_FILE") or os.path.join(d, "client.key"))
+if not lease or not akey:
+    sys.exit(10)
 fc = connect_module()
 # Every answer leaves one line in the client's place.log (issue #2896,
 # docs/dev/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
@@ -273,10 +278,7 @@ def bye(code, line=""):
 conf = fc.load_hub_conf()
 hub = os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or conf.get("url") or ""
 token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
-d = os.environ.get("FLEET_CLIENT_DIR") or os.environ.get("TMPDIR") or "/tmp"
-lease = read(os.path.join(d, "client.lease"))
-akey = read(os.environ.get("FLEET_CLIENT_KEY_FILE") or os.path.join(d, "client.key"))
-if not hub or not lease or not akey:
+if not hub:
     sys.exit(10)
 
 total = float(os.environ.get("FLEET_CLIENT_PLACE_WAIT") or 60)

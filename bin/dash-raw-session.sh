@@ -440,9 +440,10 @@ if [ -n "$AS_KV" ]; then
   TEMPLATE_AGENT=$(as_kv agent)
   [ -n "$AGENT" ] || AGENT=$TEMPLATE_AGENT
 fi
-DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
+DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --with-agent ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
   --template "$TEMPLATE_AGENT" --default "${FLEET_AGENT:-}" --accepted "$DISPATCH") || exit 2
-AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+AGENT=${DISPATCH%%$'\n'*}
+DISPATCH=${DISPATCH#*$'\n'}
 
 if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }

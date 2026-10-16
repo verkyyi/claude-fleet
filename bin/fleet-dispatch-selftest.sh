@@ -6,6 +6,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 - "$BIN" <<'PY'
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 sys.path.insert(0, sys.argv[1])
 from fleet_dispatch import resolve, placement_check
@@ -14,6 +15,21 @@ import fleet_control
 
 explicit = resolve(["codex"], template="claude", label="claude", default="claude", request_id="fixture-1")
 accepted = dict(explicit, task="T17", generation=3, attempt_id="task:T17:g3")
+dispatch_cli = [sys.executable, str(pathlib.Path(sys.argv[1]) / "fleet_dispatch.py")]
+for provider_name in ("claude", "codex"):
+    invocation = dispatch_cli + ["--agent", provider_name, "--request-id", "fixture-cli"]
+    original = subprocess.run(invocation, text=True, capture_output=True, check=True).stdout
+    combined = subprocess.run(invocation + ["--with-agent"], text=True, capture_output=True, check=True).stdout
+    resolved, envelope = combined.split("\n", 1)
+    assert resolved == provider_name and envelope == original, combined
+combined = subprocess.run(dispatch_cli + ["--with-agent", "--accepted", json.dumps(accepted)],
+                          text=True, capture_output=True, check=True).stdout
+resolved, envelope = combined.split("\n", 1)
+assert resolved == "codex" and json.loads(envelope) == accepted, combined
+for arguments in (["--agent", "claude", "--accepted", json.dumps(accepted)],
+                  ["--agent", "unknown"], ["--request-id", "invalid\nrequest"]):
+    refused = subprocess.run(dispatch_cli + ["--with-agent"] + arguments, text=True, capture_output=True)
+    assert refused.returncode != 0 and not refused.stdout, refused
 assert resolve(["codex"], template="claude", label="claude", default="claude", accepted=accepted) == accepted
 placement_check(accepted, "T17", 0)
 for envelope, task, code in [(explicit,"T9",0), (accepted,"T9",0), (accepted,"T17",1), (accepted,"T17",6)]:

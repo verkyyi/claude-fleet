@@ -131,8 +131,9 @@ The hook's state label is not proof that the native turn has completed.
 
 ## Startup and warm scratch panes
 
-The terminal panel's new-task row opens a scratch with the typed text as an
-**unsent draft**. It does not file an issue, invoke `fleet-claim`, or press Enter.
+The terminal panel's new-task row opens its composer. Activating **Open with
+draft** opens a scratch with the typed text as an **unsent draft**. It does not
+file an issue, invoke `fleet-claim`, or press Enter.
 Repository drafts retain hub placement and a dedicated `draft` field preserves
 the text independently of the shorter window label. The client uses the `draft`
 placement action so an older hub refuses instead of silently losing the text;
@@ -150,6 +151,12 @@ While a launch is pending, the panel checks its result at most every 50 ms withi
 the existing input/redraw deadline. Idle polling and redraw frequency are
 unchanged. The headless draft sender skips loading unused display translations;
 interactive composition remains localized.
+
+The raw launcher obtains the validated dispatch envelope and resolved provider
+from one resolver process. Without a client lease or action key, local placement
+skips loading the unused hub connection reader and uses the existing node adapter.
+When both are present, hub errors still fail closed; admission, ownership and
+provider checks remain on the launch path.
 
 Measure panel acceptance to **draft ready**, then deliberate Enter to first token
 and complete reply separately. Human editing time is not runtime latency. A

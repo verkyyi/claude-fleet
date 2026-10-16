@@ -411,8 +411,16 @@ chmod +x "$IB/fleet-control-read.sh"
 printf 'FLEET_REPO=acme/web\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
 H=$(hostname -s 2>/dev/null); H=${H%%.*}
 mv "$FLEET_CLIENT_DIR/client.lease" "$WORK/lease.kept" 2>/dev/null
+rm -f "$IB/fleet-connect.py"
+cat > "$IB/fleet-connect.py" <<'PY'
+import os
+from pathlib import Path
+Path(os.environ["WORK"], "connect-loaded").write_text("loaded")
+raise RuntimeError("fixture connection reader")
+PY
 FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme/web new --title 'x' --agent codex
 eq "I: cold local start exit" 0 "$RC"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no lease must not load the connection reader"
 has "I: the LOCAL line" "$OUT" "LOCAL $H"
 has "I: the adapter was asked for codex" "$(cat "$WORK/i-args")" "start tf new codex acme/web"
 eq "I: the window it opened" '@17' "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("window_id"))' "$WORK/i.json")"
@@ -431,8 +439,18 @@ I_MODE=no FLEET_PLACE_RESULT="$WORK/i.json" run "$IB/fleet-client-place.sh" acme
 eq "I: a declined start" 5 "$RC"
 has "I: …keeps the spawn's reason on its line" "$OUT" "no Codex login"
 CHECKS=$((CHECKS + 1)); [ -s "$WORK/i.json" ] && fail "I: a declined start named a window" "$(cat "$WORK/i.json")"
+mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease"
+mv "$FLEET_CLIENT_KEY_FILE" "$WORK/key.kept"
+I_MODE=scratch run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
+eq "I: missing key keeps the local route" 0 "$RC"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/connect-loaded" ] || fail "I: no key must not load the connection reader"
+mv "$WORK/key.kept" "$FLEET_CLIENT_KEY_FILE"
+rm -f "$WORK/i-args"
+run "$IB/fleet-client-place.sh" acme/web scratch --agent codex
+eq "I: live lease keeps connection-reader failures fail-closed" 1 "$RC"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/connect-loaded" ] || fail "I: live lease must load the connection reader"
+CHECKS=$((CHECKS + 1)); [ ! -e "$WORK/i-args" ] || fail "I: failed hub preparation must not launch locally"
 rm -rf "$FLEET_CONF_DIR/fleets"
-mv "$WORK/lease.kept" "$FLEET_CLIENT_DIR/client.lease" 2>/dev/null
 
 # --- T. a task (issue #3325): the record first, its number back; 建 GitHub 单 -------------
 rm -f "$WORK/t.json"
