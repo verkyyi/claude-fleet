@@ -332,6 +332,102 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(path.exists())
         print("fixture outbox: concurrent/crash replay keeps one file; positive ack prevents recreation")
 
+    def test_public_report_offline_then_native_exit_and_reconnect(self):
+        import fleet_launch as launch
+        root = Path(self.temp.name)
+        conf = root / "cli-conf"
+        conf.mkdir()
+        (conf/"node.env").write_text("CCQUOTA_HUB_URL=https://fixture.invalid\nCCQUOTA_TOKEN=fixture\n")
+        native = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(45)"])
+        try:
+            op = "11111111-1111-4111-8111-111111111111"
+            fid = "22222222-2222-4222-8222-222222222222"
+            c = dict(version=1, operation_id=op, task="T7", owner="alice", generation=2,
+                     worker_id=op+"/"+fid, provider="codex", attempt_id="task:T7:g2")
+            proof = dict(c, **launch.process(native.pid), native_session=op, actual_provider="codex")
+            opts = {"@launch":json.dumps(c), "@launch_receipt":json.dumps(proof), "@fleet_id":fid,
+                    "socket_path":"/fixture/socket"}
+            (root/"options.json").write_text(json.dumps(opts))
+            task = dict(self.task, execution_owner=c["worker_id"], operation_id=op, request_payload="private input never replayed")
+            (root/"task.json").write_text(json.dumps(task))
+            tmux = root/"tmux"
+            tmux.write_text("#!"+sys.executable+"\n"+'''import json,os,sys
+from pathlib import Path
+opts=json.loads((Path(os.environ["FIXTURE_ROOT"])/"options.json").read_text())
+print(opts[sys.argv[-1][2:-1]])
+''')
+            tmux.chmod(0o700)
+            hub = root/"hub"
+            hub.write_text("#!"+sys.executable+"\n"+'''import json,os,sys
+from pathlib import Path
+root=Path(os.environ["FIXTURE_ROOT"])
+sys.stdin.read()
+assert os.environ["FLEET_TASK_AUTHORITY"] == "hub", "repo mode was overwritten"
+assert os.environ["FLEET_TASK_RECOVERY_URL"] == "https://fixture.invalid", "URL was not pinned"
+assert sys.argv[-1].startswith("https://fixture.invalid/v1/node/tasks/T7")
+if (root/"offline").exists(): sys.exit(7)
+t=json.loads((root/"task.json").read_text())
+if "--data-binary" in sys.argv:
+ p=json.loads(sys.argv[sys.argv.index("--data-binary")+1])
+ events=json.loads((root/"events.json").read_text()) if (root/"events.json").exists() else {}
+ if sys.argv[-1].endswith("/reports"):
+  key=p["event_id"]
+  if key not in events: t["outcome"]=p["outcome"]
+  result=dict(task=t,disposition="committed")
+ else:
+  p=p["mutation"]; key=p["idempotency_key"]
+  assert p["kind"] == "stop_ack" and t["outcome"] == "succeeded"
+  t["execution_stopped"]=True; result=t
+ events.setdefault(key,p)
+ (root/"events.json").write_text(json.dumps(events))
+ (root/"task.json").write_text(json.dumps(t))
+ if (root/"lose-ack").exists():
+  (root/"lose-ack").unlink(); sys.exit(7)
+else: result=dict(task=t)
+print(json.dumps(result)); print("200")
+''')
+            hub.chmod(0o700)
+            for name in ("gh", "curl"):
+                denied = root/name
+                denied.write_text('#!/bin/sh\necho denied >> "$FIXTURE_ROOT/denied"\nexit 91\n')
+                denied.chmod(0o700)
+            env = dict(os.environ, FLEET_CONF_DIR=str(conf), FLEET_SKIP_GLOBAL_CONF="1",
+                       FLEET_TASK_AUTHORITY="hub", FLEET_HUB_CURL=str(hub), FIXTURE_ROOT=str(root),
+                       PATH=str(root)+os.pathsep+os.environ["PATH"])
+            for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_TASK_RECOVERY_RAW", "FLEET_TASK_RECOVERY_URL", "FLEET_TASK_STALE_READ"):
+                env.pop(key,None)
+            def cli(args):
+                return subprocess.run(args, env=env, capture_output=True, text=True, timeout=25)
+            result=cli(["bash",str(recovery.BIN/"fleet-task-record.sh"),"get","T7"])
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            (root/"offline").touch()
+            command=[sys.executable,str(recovery.BIN/"fleet_task_control.py")]
+            result=cli(command+["report","--pane","@7","--outcome","succeeded","--summary","fixture explicit result"])
+            self.assertEqual(result.returncode,3,result.stdout+result.stderr)
+            self.assertIn("RECONCILIATION_PENDING",result.stdout)
+            self.assertIsNone(native.poll())
+            native.terminate(); native.wait(timeout=5)
+            result=cli(command+["finalize","--pane","@7"])
+            self.assertEqual(result.returncode,3,result.stdout+result.stderr)
+            self.assertIn("RECONCILIATION_PENDING",result.stdout)
+            (root/"offline").unlink()
+            (root/"lose-ack").touch()
+            replay=["bash",str(recovery.BIN/"fleet-hub-node.sh"),"replay"]
+            result=cli(replay)
+            self.assertEqual(result.returncode,3,result.stdout+result.stderr)
+            for _ in range(2):
+                result=cli(replay)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                self.assertEqual(json.loads(result.stdout)["pending"],0)
+            events=json.loads((root/"events.json").read_text())
+            self.assertEqual(len(events),2)
+            self.assertEqual(sum(e.get("outcome")=="succeeded" for e in events.values()),1)
+            self.assertEqual(sum(e.get("kind")=="stop_ack" for e in events.values()),1)
+            self.assertFalse((root/"denied").exists())
+            print("fixture PUBLIC CLI: mode=hub preserved; offline report rc3; native alive then exited; lost ack/replay twice; terminal commits=1 stop_ack=1; gh=0 GitHub HTTP=0")
+        finally:
+            if native.poll() is None: native.terminate(); native.wait(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()

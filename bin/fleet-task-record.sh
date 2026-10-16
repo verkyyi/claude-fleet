@@ -73,7 +73,7 @@ call() {
   local m="$1" p="$2" body="${3:-}" pair url tok resp rc code
   pair=$(fleet_node_pair) || die 3 "no node token here"
   url=${pair%%	*}; tok=${pair#*	}
-  [ -z "${FLEET_TASK_AUTHORITY:-}" ] || [ "$url" = "$FLEET_TASK_AUTHORITY" ] || die 1 "task authority changed; reconciliation required"
+  [ -z "${FLEET_TASK_RECOVERY_URL:-}" ] || [ "$url" = "$FLEET_TASK_RECOVERY_URL" ] || die 1 "task authority changed; reconciliation required"
   # signed once this login has a key (issue #3710), else the token
   resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$m" "$url$p" "$tok")" | \
     "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \

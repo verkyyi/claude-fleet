@@ -94,7 +94,7 @@ def raw_call(action, task, payload=None, timeout=15, authority=""):
     env = dict(os.environ, FLEET_TASK_RECOVERY_RAW="1",
                FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
     if authority:
-        env["FLEET_TASK_AUTHORITY"] = authority
+        env["FLEET_TASK_RECOVERY_URL"] = authority
     r = subprocess.run(["bash", str(BIN / "fleet-task-record.sh"), action, task],
                        input=canonical(payload) if payload is not None else None,
                        text=True, capture_output=True, timeout=timeout, env=env)
