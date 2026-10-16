@@ -36,8 +36,9 @@
 # The writing wrappers' raw steps (they compose the body; the door only carries it):
 #   fleet-ticket.sh post <id> (--body T | --body-file F)       → one comment as given, its URL (fleet-comment.sh)
 #   fleet-ticket.sh close <id>                                 → closed, nothing printed (fleet-comment.sh --close)
-#   fleet-ticket.sh new --filed --repo R --title T [--body-file F] [--label L]… [--milestone M]
+#   fleet-ticket.sh new --filed --repo R --title T [--body-file F] [--label L]… [--milestone M] [--once]
 #                                                              → the created ticket's URL (fleet-issue-file.sh)
+#   fleet-ticket.sh create-ready --repo R                     → read-only quota preflight; never creates
 #   fleet-ticket.sh milestone <owner/name> <title>             → ensure a GitHub milestone (hub: none, exit 1)
 #   fleet-ticket.sh find --repo R --marker S                   → `<id>\t<url>` of an open ticket carrying S
 #
@@ -307,16 +308,26 @@ case "$verb" in
     shift
     exec bash "$BIN/fleet-evidence.sh" "$sub" --repo "${p%%	*}" --issue "${p#*	}" "$@" ;;
 
+  create-ready)
+    r=$(fleet_norm_repo "$(opt_repo "$@")")
+    [ -n "$r" ] || die "create-ready: --repo is required" 2
+    [ "$(repo_home "$r")" = hub ] && exit 0
+    remaining=$(gh api rate_limit --jq '.resources.graphql.remaining') || exit 4
+    case "$remaining" in ''|*[!0-9]*) exit 4 ;; esac
+    [ "$remaining" -gt 0 ] || exit 4
+    ;;
+
   new)
     case " $* " in *" --filed "*)
       # The filer's write step (fleet-issue-file.sh composed title, body, labels).
       r=$(fleet_norm_repo "$(opt_repo "$@")")
       [ -n "$r" ] && [ "$(repo_home "$r")" = hub ] && { hub new "$@"; exit $?; }
       # --body-file becomes --body in its own place: gh gets the argv it always got.
-      cargs=()
+      cargs=(); write_once=0
       while [ "$#" -gt 0 ]; do
         case "$1" in
           --filed) shift ;;
+          --once) write_once=1; shift ;;
           --body-file)
             [ -r "${2:-}" ] || die "new: cannot read ${2:-}" 2
             nb=$(cat "$2"; printf x); cargs+=(--body "${nb%x}"); shift 2 ;;
@@ -324,7 +335,7 @@ case "$verb" in
           *) die "new --filed: unknown argument '$1'" 2 ;;
         esac
       done
-      fleet_gh_write issue create ${cargs[@]+"${cargs[@]}"}
+      _FLEET_GH_WRITE_ONCE=$write_once fleet_gh_write issue create ${cargs[@]+"${cargs[@]}"}
       exit $? ;;
     esac
     repo=''; title=''; tbody=''; origin=''; label=desk
@@ -467,11 +478,30 @@ case "$verb" in
     r=$(fleet_norm_repo "$(opt_repo "$@")")
     [ -n "$r" ] || die "find: --repo is required" 2
     [ "$(repo_home "$r")" = hub ] && { hub find "$@"; exit $?; }
-    mk=''
+    mk=''; find_all=0
     while [ "$#" -gt 0 ]; do
-      case "$1" in --marker) mk="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;; *) shift ;; esac
+      case "$1" in --marker) mk="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;; --all) find_all=1; shift ;; *) shift ;; esac
     done
     [ -n "$mk" ] || die "find: --marker is required" 2
+    if [ "$find_all" = 1 ]; then
+      # Reconciliation is bounded (5 pages / 500 issues and PRs), including
+      # closed tickets. rc 4 is INCOMPLETE, never an authoritative absence.
+      for find_page in 1 2 3 4 5; do
+        rows=$(gh api "repos/${r%%/*}/${r#*/}/issues?state=all&per_page=100&sort=created&direction=desc&page=$find_page" \
+                 --jq '"__fleet_count__\t\(length)", (.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))")' 2>/dev/null) || exit 4
+        count=$(printf '%s\n' "$rows" | sed -n 's/^__fleet_count__	//p')
+        case "$count" in ''|*[!0-9]*) exit 4 ;; esac
+        hits=$(printf '%s\n' "$rows" | grep -F -- "$mk" | cut -f1)
+        if [ -n "$hits" ]; then
+          [ "$(printf '%s\n' "$hits" | wc -l | tr -d ' ')" = 1 ] || exit 2
+          printf 'gh:%s#%s\thttps://github.com/%s/issues/%s\n' "$r" "$hits" "$r" "$hits"
+          exit 0
+        fi
+        [ "$count" -lt 100 ] && exit 1
+      done
+      printf 'find: reconciliation incomplete after 500 rows\n' >&2
+      exit 4
+    fi
     rows=$(gh api "repos/${r%%/*}/${r#*/}/issues?state=open&per_page=100&sort=created&direction=desc" \
              --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || exit 1
     n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1)
