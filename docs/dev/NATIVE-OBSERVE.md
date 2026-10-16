@@ -80,6 +80,40 @@ Hub 的精确确认后，用同一份已验证的原始本地身份快照作为 
 有 operation/FID fence，没有 accepted-task generation 字段，不能冒称代际证明。
 带 task generation 的既有消息道路继续使用其原有守卫。
 
+### 缺失固定 hook 后的续接边界
+
+正常消息入口 `fleet-codex-session.py send` 只等待 `codex queue --remote --thread`
+返回。旧安装删除的隔离演练到此有 ACK，原活工具也完成，但没有取得后续同 SID 的
+userMessage/turn；故障停在队列接受到原生消费之间。原配置中的 UserPromptSubmit
+仍执行旧 `set-claude-state.sh working`；Stop 仍执行旧状态、身份与 classifier helper。
+活工具完成后的隔离 pane 实际显示 `Hook failed`（127）与 `Blocked by hook`，
+后者指向已删除的 `fleet-codex-session.py`；这一轮 Stop 未干净完成。
+这不是下一次 UserPromptSubmit 已成功执行的证据。
+它们的路径缺失独立于 Hub 登记，不能用 `observed` 推出 clean Stop 或下一回合可用。
+
+现有入口不能消除这个边界：原生 `thread/resume` 用于重连已加载 thread 和 pending
+请求，不是已验证的 hook 热更新；Fleet 的原生 settings 入口只调整模型。
+[transfer](SESSION-TRANSFER.md) 的 after-turn 必须等 fresh clean Stop；普通
+Codex→Codex 切换是新 conversation，内部 `--native-resume` 目前仅支持 Claude。
+原 SID 的 recovery recipe 要求原 writer 已停止，且其 packet 可能固定旧 helper；
+标准 wrapper resume 还需要新的 one-shot reservation。因此不能把这些入口当成
+保留原 PID/birth/reservation 的补观察，也不能重复 arm 已失败的等待。
+
+若登记后仍不能正常消费，现场 owner 保留原执行和失败回执，将以下最小后续路线交编排
+查重、协调 native/transfer 与 authority 的既有 owner；生命周期实现另单处理：
+
+1. 在隔离副本分别复核正常结束和下一消息的 hook 行为，并验证原生是否存在正式支持的、能保持
+   同 PID/SID 且不削弱守卫的配置更新机制。当前 Fleet 没有已验证的这种入口；只读诊断
+   不能授权修改原固定配置。
+2. 如果原生不能原位更新，只能提出有界的一次续接方案：fresh 证明无活工具、无 pending
+   request/attention/transfer 冲突，保留同 SID、工作树与 worker/FID；受控退出后由当前
+   标准 launcher 续接，明确记录新 kernel lifetime 和新 reservation 与原执行的关系。
+   这会放宽“原进程与原 reservation 不变”，必须由编排和现场 owner 先协调契约，不能
+   重用旧 proof、伪造 accepted generation 或在本入口中自动执行。
+3. 独立后续须在隔离环境证明退出失败不启动第二 writer、启动失败停留/回滚有界、迟到
+   hook 不覆盖新身份，以及同 SID 的正常消息确已消费；只有现场 owner 按新的明确授权
+   执行后才能报告业务恢复。#4510 的发布/live 仍只归 #4486。
+
 ## 隔离验证
 
 `bin/run-selftests.sh fleet-native-observe-selftest.sh` 覆盖严格 ACK、fresh 比较、
