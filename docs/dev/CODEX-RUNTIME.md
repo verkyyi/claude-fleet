@@ -46,6 +46,13 @@ requirements, native effective-config checks, upgrade and rollback. Neither
 the renderer nor the guards establish a filesystem sandbox. No launcher bypass
 is removed by this change. See [migration evidence](NATIVE-AGENT-BOUNDARY.md).
 
+The candidate managed-image stager records this preview in its existing
+`.release/staged.json` metadata, regenerating paths when an image seeds a
+different runtime version. Image-owned personal POD previews use the read-only
+image seed, not the login-owned PVC runtime. The preview is informational and
+must not be copied into system policy as an authorization shortcut. See
+[image upgrade and recovery](MANAGED-LINUX.md#upgrade-and-recovery).
+
 ## Context
 
 Run `bash ~/.claude/fleet/bin/fleet-context.sh` inside a Codex worker, or inspect

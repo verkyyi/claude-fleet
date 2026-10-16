@@ -1038,6 +1038,30 @@ disk's and the updater is at rest (`update.json` phase idle), then starts
 `<disk current>/bin/fleet-node-linux.py foreground`. A container restart never
 puts the image's older version back (BREAK-IT `linux-image-pins-old`).
 
+**Native Codex guard preview (candidate, inactive).** The image stager uses the
+existing hook renderer once during image construction and once when seeding a
+different version. Its TOML output is stored as `codex_managed_preview` in the
+existing `.release/staged.json`; other metadata is preserved. No extra release
+file whitelist, installer or daemon is introduced. Node-owned previews name
+the final version directory, not its `.seed-partial` staging path. Image-owned
+personal POD previews instead name the image's versioned seed: the login's PVC
+runtime is not administrator-owned guard code. An unchanged image does not
+regenerate the preview at every boot or session launch.
+
+Malformed registration, missing or linked guard scripts and failed publication
+stop staging before `current` moves. A retry discards the partial copy through
+the existing seed path; previous versions retain their metadata. Image-owned
+upgrade/rollback previews follow the selected image's seed. Older releases
+without managed-hook registration remain compatible. Rendering requires
+Python 3.11+; the current image's Debian Python meets this requirement.
+
+This metadata is informational, not trusted activation input. It does not write
+`/etc/codex/requirements.toml`, grant hook trust or remove the launcher's bypass.
+Activation must regenerate from the verified administrator-owned release,
+check directory/interpreter ownership and preserve existing policy. Cross-login
+isolation, policy rollback, active-session lifetime and old-version garbage
+collection remain separate gates. See [candidate configuration](CODEX-RUNTIME.md#managed-guard-configuration-candidate).
+
 `FLEET_NODE_UPDATE_OWNER=node` (the image's default) keeps the supervisor's
 `update` task and its restart request, and the machine's node program lists
 `CapRelease`, so a new stable starts the update at once. A switch stages the

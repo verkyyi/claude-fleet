@@ -531,6 +531,14 @@ exec 260 项、remote TUI 283 项，计数包含既有信任和工具阶段，�
 对照/观察夹具。生成器只写 stdout，尚不安装、更改现有 requirements 或删除启动器 bypass。
 操作入口和安装前置条件见 [原生守卫配置](CODEX-RUNTIME.md#managed-guard-configuration-candidate)。
 
+镜像暂存候选复用 `extras/managed-node/image-stage.py`，把预览存在既有
+`.release/staged.json` 的 `codex_managed_preview` 字段，不放行额外的未签名旁路文件。
+构建和异版本 seed 时生成；同版本重启不重复生成。node-owned 预览绑定最终版本路径，
+image-owned 个人 POD 预览绑定镜像种子而非登录用户可写的 PVC。缺守卫、错误登记或写入失败
+不得推进 `current`；旧版兼容、重试和镜像回退走既有机制。此字段不是可信授权来源，
+更不是系统策略已安装；实际激活必须重新从受信发布物生成并验收权限、既有策略合并、
+会话生命周期与版本回收。详见 [镜像更新与恢复](MANAGED-LINUX.md#upgrade-and-recovery)。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
