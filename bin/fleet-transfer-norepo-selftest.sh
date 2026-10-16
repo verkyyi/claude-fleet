@@ -1,4 +1,5 @@
 #!/bin/bash
+# Keep fleet-failover-selftest.py fixtures paired with managed HOME identity refusals.
 # Real private tmux socket/process doubles, plus independent cron delivery state.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
