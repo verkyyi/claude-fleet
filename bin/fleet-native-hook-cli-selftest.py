@@ -48,11 +48,15 @@ def main():
     parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--probe-bypass", action="store_true", help="also test the launcher's hook-trust bypass against an untrusted fixture")
     parser.add_argument("--remote-tui", action="store_true", help="exercise an actual remote TUI on an owned PTY instead of embedded exec")
+    parser.add_argument("--managed-proot", help="Linux-only trusted fixture path mapping; not a security sandbox or production configuration")
     arguments = parser.parse_args()
     binary = shutil.which(arguments.codex)
     if not binary:
         parser.error("native Codex required; not a default CI test")
     binary = str(Path(binary).resolve())
+    proot = shutil.which(arguments.managed_proot) if arguments.managed_proot else None
+    if arguments.managed_proot and (sys.platform != "linux" or not proot):
+        parser.error("managed probe requires Linux and an explicitly supplied PRoot executable")
     client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
     requests, checks = [], []
 
@@ -99,6 +103,30 @@ def main():
                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
                 "FLEET_SESSION": "fixture-session",
             }
+            invocation = [binary]
+            managed_marker = root / "managed-result.json"
+            if proot:
+                system = root / "system-codex"
+                managed = root / "managed"
+                system.mkdir()
+                managed.mkdir()
+                (managed / "hook.py").write_text(HOOK_SCRIPT, encoding="utf-8")
+                (system / "requirements.toml").write_text(
+                    '[features]\nhooks=true\n[hooks]\nmanaged_dir=' + json.dumps(str(managed)) + '\n'
+                    '[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\ntype="command"\ncommand='
+                    + json.dumps("python3 " + str(managed / "hook.py") + " " + str(managed_marker)) + '\n',
+                    encoding="utf-8")
+                mapping_marker = "fleet-probe-" + root.name
+                (system / mapping_marker).write_text("fixture-only", encoding="utf-8")
+                check(not Path("/etc/codex", mapping_marker).exists(), "fixture marker absent from host system configuration")
+                environment["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH", "")
+                environment["RUST_LOG"] = "codex_hooks=debug"
+                mapping = [str(Path(proot).resolve()), "-b", str(system) + ":/etc/codex"]
+                mapped = subprocess.run([*mapping, "/bin/cat", "/etc/codex/" + mapping_marker],
+                                        env=environment, capture_output=True, text=True, timeout=15)
+                check(mapped.returncode == 0 and mapped.stdout == "fixture-only", "system configuration mapping reaches only fixture child")
+                check(not Path("/etc/codex", mapping_marker).exists(), "fixture mapping does not publish host system configuration")
+                invocation = [*mapping, binary]
             market = root / "market"
             plugin = market / "plugins/native-hook-fixture"
             for directory in (market / ".claude-plugin", plugin / ".claude-plugin", plugin / "hooks"):
@@ -115,7 +143,7 @@ def main():
                 "hooks": [{"type": "command", "command": hook_command}]}]}}))
 
             def command(*values):
-                child = subprocess.Popen([binary, *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
+                child = subprocess.Popen([*invocation, *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
                 try:
                     stdout, stderr = child.communicate(timeout=25)
@@ -129,7 +157,7 @@ def main():
             def client(stage, extra_flags=()):
                 socket = root / (stage + ".sock")
                 with (root / (stage + ".log")).open("w", encoding="utf-8") as log:
-                    child = subprocess.Popen([binary, *extra_flags, "app-server", "--listen", "unix://" + str(socket)],
+                    child = subprocess.Popen([*invocation, *extra_flags, "app-server", "--listen", "unix://" + str(socket)],
                                              env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                              stdout=log, stderr=log, start_new_session=True)
                     rpc = None
@@ -149,6 +177,13 @@ def main():
 
             def fixture_hook(rpc):
                 entries = rpc.call("hooks/list", {"cwds": [str(root)]})["data"]
+                if proot:
+                    managed_hooks = [hook for entry in entries for hook in entry["hooks"] if hook.get("isManaged")]
+                    check(len(managed_hooks) == 1 and managed_hooks[0]["source"] == "system"
+                          and managed_hooks[0]["trustStatus"] == "managed",
+                          "system requirements hook has managed trust independently of plugin: "
+                          + json.dumps([{key: hook.get(key) for key in ("source", "isManaged", "trustStatus")}
+                                        for entry in entries for hook in entry["hooks"]]))
                 hooks = [hook for entry in entries for hook in entry["hooks"]
                          if hook.get("pluginId") == "native-hook-fixture@fleet-hook-probe"]
                 check(len(hooks) == 1 and not hooks[0]["isManaged"], "exactly one non-managed fixture hook")
@@ -166,7 +201,7 @@ def main():
                         child = subprocess.Popen(
                             [sys.executable, "-c",
                              "import fcntl,os,sys,termios; fcntl.ioctl(0,termios.TIOCSCTTY,0); os.execv(sys.argv[1],sys.argv[1:])",
-                             binary, "--remote", "unix://" + str(root / (stage + ".sock")),
+                             *invocation, "--remote", "unix://" + str(root / (stage + ".sock")),
                              "--no-alt-screen", *flags, "Offline hook probe; inference is disabled. Do not run tools."],
                             env=dict(environment, TERM="xterm-256color"), cwd=root,
                             stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
@@ -212,7 +247,8 @@ def main():
                 result, _stdout, stderr = command(*values)
                 check(result == 0, "native install: " + stderr[-300:] if result else "native install")
             report = {"scope": "fixture hook trust and execution; deliberately failed local inference, not panel acceptance",
-                      "version": version.strip(), "remote_tui": arguments.remote_tui, "phases": []}
+                      "version": version.strip(), "remote_tui": arguments.remote_tui,
+                      "managed_mapping": bool(proot), "phases": []}
             if arguments.probe_bypass:
                 inline = 'hooks.SessionStart=[{hooks=[{type="command",command="printf isolated-core-hook"}]}]'
                 with client("inline-classification", ("-c", inline)) as rpc:
@@ -250,6 +286,8 @@ def main():
                           phase + " trust persists across native backend restart")
                 if marker.exists():
                     marker.unlink()
+                if managed_marker.exists():
+                    managed_marker.unlink()
                 before = len(requests)
                 flags = ["--dangerously-bypass-hook-trust"] if phase == "bypassed" else []
                 review_required = False
@@ -265,11 +303,25 @@ def main():
                                                        "Offline hook probe; inference is disabled. Do not run tools.")
                     events = [json.loads(line) for line in stdout.splitlines() if line.startswith("{")]
                     identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
-                    check(result != 0 and any(event.get("type") == "turn.failed" for event in events), phase + " inference intentionally fails")
+                    check(result != 0 and any(event.get("type") == "turn.failed" for event in events),
+                          phase + " inference intentionally fails: " + json.dumps({"exit": result, "stderr": _stderr[-1500:], "stdout": stdout[-1500:]}))
                 check(len(requests) == before + (0 if review_required else 1),
                       phase + (" review blocks inference" if review_required else " uses only one local inference request")
                       + (": " + json.dumps(requests[before:]) if len(requests) != before + (0 if review_required else 1) else ""))
                 observed = json.loads(marker.read_text()) if marker.exists() else None
+                if proot:
+                    managed_observed = json.loads(managed_marker.read_text()) if managed_marker.exists() else None
+                    if review_required:
+                        check(managed_observed is None, phase + " review blocks session before either hook executes")
+                    else:
+                        check(managed_observed is not None and managed_observed["event"] == "SessionStart"
+                              and identifiers == [managed_observed["session_id"]],
+                              phase + " managed hook executes on exact native thread independently of plugin trust: "
+                              + json.dumps({"managed": managed_observed, "plugin": observed, "thread_ids": identifiers,
+                                            "completed_phases": report["phases"],
+                                            "hook_logs": [line[-1500:] for path in (codex_home / "log").glob("*.log")
+                                                          for line in path.read_text(errors="replace").splitlines() if "hook" in line.lower()][-10:],
+                                            "native_stderr": _stderr[-1500:] if not arguments.remote_tui else "remote TUI"}))
                 if phase in ("trusted", "bypassed"):
                     check(observed is not None and observed["event"] == "SessionStart" and observed["source"] == "startup",
                           phase + " native SessionStart executes")
@@ -283,6 +335,8 @@ def main():
                     check(observed is None, phase + " hook does not execute")
                 report["phases"].append({"phase": phase, "trust": hook["trustStatus"], "executed": observed is not None,
                                          "review_required": review_required})
+                if proot:
+                    report["phases"][-1]["managed_executed"] = managed_observed is not None
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks))
             print(json.dumps(report, indent=2))
