@@ -54,8 +54,8 @@ jobs:
           assert os.geteuid() != 0 and not Path("/etc/codex").exists()
           mode = os.environ["NATIVE_HOOK_MODE"]
           assert mode in ("exec", "remote-tui")
-          binaries = list(Path(os.environ["RUNNER_TEMP"], "native-codex").glob("**/codex/codex"))
-          assert len(binaries) == 1 and binaries[0].is_file()
+          binary = Path(os.environ["RUNNER_TEMP"], "native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex")
+          assert binary.is_file() and os.access(binary, os.X_OK), "pinned package binary missing"
           namespace = os.stat("/proc/self/ns/mnt").st_ino
           script = Path("bin/fleet-native-hook-cli-selftest.py").resolve()
           subprocess.run(["sudo", "-n", "mkdir", "/etc/codex"], check=True)
@@ -67,7 +67,7 @@ jobs:
                              "--init-groups", "--no-new-privs", "env", "-i", "PATH=/usr/bin:/bin",
                              "GITHUB_ACTIONS=true", "RUNNER_ENVIRONMENT=github-hosted",
                              "FLEET_NATIVE_PARENT_MOUNT_NS=" + str(namespace),
-                             "/usr/bin/python3", str(script), "--codex", str(binaries[0]),
+                             "/usr/bin/python3", str(script), "--codex", str(binary),
                              "--managed-system-dir", system]
                   if mode == "remote-tui":
                       command.append("--remote-tui")
