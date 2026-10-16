@@ -6487,6 +6487,7 @@ drill_repo_authority_case() {
   out=$(python3 "$BIN/fleet_repo_authority_case_test.py" \
     CaseAuthorityTests.test_gate_and_manifest_use_hub_identity_and_existing_overlay \
     CaseAuthorityTests.test_panel_new_and_issue_start_keep_worktree_and_registration \
+    CaseAuthorityTests.test_busy_cpu_still_refuses_panel_and_issue_without_window \
     CaseAuthorityTests.test_panel_quick_draft_uses_real_compose_and_raw_entry \
     CaseAuthorityTests.test_refusals_reach_panel_and_issue_without_secret_or_false_freeze 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
