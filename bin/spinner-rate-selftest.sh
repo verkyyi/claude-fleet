@@ -95,7 +95,11 @@ CLIENT_PID=$!
 _t=0; while [ ! -x "$SOCKP" ] && [ "$_t" -lt 50 ]; do sleep 0.1; _t=$((_t + 1)); done
 [ -x "$SOCKP" ] || { echo "selftest: the client never attached (socket not u+x)"; exit 2; }
 
-PATH="$WORK/shim:$PATH" TMPDIR="$WORK/tmp" SPIN_INTERVAL=0.12 SPIN_HB_SECS=3 \
+# Measure the production cadence. An artificial 3s heartbeat injects maintenance
+# and wait-client restarts into these 4/5s rate windows (#4441); that accelerated
+# deadline is checked separately by spinner-maintenance-selftest.sh. The default
+# 20s heartbeat still runs twice during this test and its format is checked below.
+PATH="$WORK/shim:$PATH" TMPDIR="$WORK/tmp" SPIN_INTERVAL=0.12 \
   sh "$WORK/bin/tmux-spinner.sh" >/dev/null 2>&1 &
 SPIN_PID=$!
 
@@ -129,6 +133,7 @@ printf 'spinner-rate-selftest (%s)\n' "$SPIN_SRC"
 # Warm-up: the first frame writes every window once.
 w=$(wait_spin w1 'done' 5000)
 [ "$w" != timeout ] || { fail "warm-up: the spinner never painted w1 ✓" "$(tail -5 "$CALLS")"; exit 1; }
+hb_initial=$(cat "$WORK/logs/spinner.heartbeat" 2>/dev/null); hb_initial=${hb_initial%% *}
 sleep 1.5
 
 # --- IDLE ----------------------------------------------------------------------
@@ -226,6 +231,11 @@ ep=${hb%% *}
 case "$ep" in
   ''|*[!0-9]*) fail "HB: first token is not an epoch" "got: '$hb'" ;;
   *) ok "HB: first token is the bare epoch ($ep)" ;;
+esac
+case "$hb_initial:$ep" in
+  *[!0-9:]*|:*) fail "HB: cannot compare startup and periodic stamps" "$hb_initial → $ep" ;;
+  *) if [ "$ep" -gt "$hb_initial" ]; then ok "HB: periodic heartbeat advanced beyond startup ($hb_initial → $ep)"
+     else fail "HB: only the startup heartbeat ran" "$hb_initial → $ep"; fi ;;
 esac
 tc=$(printf '%s' "$hb" | sed -n 's/.*tmux_calls_per_s=\([0-9.]*\).*/\1/p')
 if [ -n "$tc" ]; then ok "HB: publishes tmux_calls_per_s=$tc (fleet-doctor's machine line)"

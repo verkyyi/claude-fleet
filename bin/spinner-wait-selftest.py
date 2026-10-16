@@ -227,10 +227,11 @@ def maintenance(root, env, tm, until, calls):
     tm('set-window-option', '-t', 'test:degen', '@claude_state', 'working',
        ';', 'set-window-option', '-t', 'test:degen', '@agent_status_ts', str(int(time.time())))
     # needs at 1s reproduces CI 38827005758 without changing its 30s assertion.
-    # stuck's CHECK interval (10s), degen (15s), heartbeat (20s), watch (30s)
-    # keep their defaults. Only the stuck AGE threshold is reduced for the rig.
+    # stuck's CHECK interval (10s), degen (15s), watch (30s) keep their defaults.
+    # Pin the accelerated 3s heartbeat separately from the default render-rate
+    # budget (spinner-rate-selftest.sh); only the stuck AGE threshold is reduced.
     env = dict(env, FLEET_NEEDS_RECONCILE_SECS='1', FLEET_NEEDS_TRACE='1',
-               FLEET_STUCK_WORKING_SECS='1')
+               FLEET_STUCK_WORKING_SECS='1', SPIN_HB_SECS='3')
     times = {}
     start = len(calls.read_text().splitlines())
     t0 = time.monotonic()
@@ -241,28 +242,91 @@ def maintenance(root, env, tm, until, calls):
         hb = root / 'logs/spinner.heartbeat'
         until(lambda: hb.exists(), 3)
         first_hb = hb.read_text().split()[0]
+        last_hb = first_hb
+        heartbeat_times = []
         while len(times) < 5 and time.monotonic() - t0 < 35:
             elapsed = time.monotonic() - t0
+            current_hb = hb.read_text().split()[0]
+            if current_hb != last_hb:
+                heartbeat_times.append(elapsed)
+                last_hb = current_hb
             states = tm('list-windows', '-t', 'test', '-F', '#{window_name}=#{@claude_state}')
             for key, ok in (
                 ('needs', 'needs=done' in states),
                 ('stuck', 'stuck=done' in states),
                 ('degenerate', (root / 'degen').exists()),
                 ('daemon-watch', (root / 'watch').exists()),
-                ('heartbeat', hb.read_text().split()[0] != first_hb),
+                ('heartbeat', current_hb != first_hb),
             ):
                 if ok:
                     times.setdefault(key, elapsed)
             assert daemon.poll() is None, (root / 'daemon.log').read_text()
             time.sleep(.05)
         for key, bound in (('needs', 6), ('stuck', 24), ('degenerate', 35),
-                           ('heartbeat', 24), ('daemon-watch', 35)):
+                           ('heartbeat', 5), ('daemon-watch', 35)):
             assert key in times and times[key] <= bound, (key, times, (root / 'daemon.log').read_text())
             print('PASS unwatched %s: %.3fs <= %ss' % (key, times[key], bound), flush=True)
         assert len((root / 'probes').read_text().splitlines()) == 2, 'needs must arm, then act'
+        assert len(heartbeat_times) >= 3, heartbeat_times
+        for n, actual in enumerate(heartbeat_times, 1):
+            assert n * 3 - 1 <= actual <= n * 3 + 2, ('heartbeat deadline', n * 3, actual)
+        print('PASS heartbeat deadlines 3/6/9/...s: ' +
+              '/'.join('%.3f' % t for t in heartbeat_times), flush=True)
         count = len(calls.read_text().splitlines()) - start
-        print('MEASURE maintenance enabled (needs=1s): %s external commands / %.1fs; not pure render idle'
+        print('MEASURE maintenance enabled (needs=1s, heartbeat=3s): %s external commands / %.1fs; not pure render idle'
               % (count, time.monotonic() - t0), flush=True)
+    finally:
+        os.killpg(daemon.pid, signal.SIGTERM)
+        daemon.wait(timeout=3)
+    deadline_events(root, env, tm, until, calls)
+
+
+def deadline_events(root, env, tm, until, calls):
+    """Signal immediately before/at/after a real spinner maintenance deadline."""
+    tm('new-window', '-d', '-t', 'test', '-n', 'edge', 'sleep 180')
+    tm('set-window-option', '-t', 'test:edge', '@claude_state', 'done')
+    env = dict(env, SPIN_HB_SECS='3', FLEET_NEEDS_RECONCILE_SECS='20',
+               FLEET_STUCK_WORKING_SECS='120')
+    start = len(calls.read_text().splitlines())
+    with (root / 'edge.log').open('w') as log:
+        daemon = subprocess.Popen(['sh', str(root / 'bin/tmux-spinner.sh')], env=env,
+                                  stdout=log, stderr=log, start_new_session=True)
+    try:
+        previous = 0
+        for offset, state in ((-.05, 'working'), (0, 'done'), (.05, 'working')):
+            found = []
+
+            def next_deadline():
+                for line in reversed(calls.read_text().splitlines()[start:]):
+                    if '\tpython3\t' not in line or '--since-frame' not in line:
+                        continue
+                    args = shlex.split(line.split('\t', 2)[2])
+                    i = args.index('--since-frame')
+                    frame, interval = int(args[i + 1]), float(args[i + 2])
+                    frames = int(args[args.index('--max-frames') + 1])
+                    deadline = (frame + frames) * interval
+                    # Use the helper's actual kernel clock, including on macOS
+                    # Python 3.9. Leave >2s until this deadline when selecting it;
+                    # do not pick short catch-up turns that obscure the edge.
+                    if frame and deadline > previous and deadline - time.clock_gettime(time.CLOCK_MONOTONIC) > 2.5:
+                        found.append(deadline)
+                        return True
+                    return False
+                return False
+
+            until(next_deadline, 10)
+            previous = found[0]
+            time.sleep(max(0, previous + offset - time.clock_gettime(time.CLOCK_MONOTONIC)))
+            signal_at = time.clock_gettime(time.CLOCK_MONOTONIC) - previous
+            tm('set-window-option', '-t', 'test:edge', '@claude_state', state,
+               ';', 'wait-for', '-S', 'fleet-state-changed')
+            def painted():
+                glyph = tm('display-message', '-p', '-t', 'test:edge', '#{@spin}')
+                return glyph == '✓' if state == 'done' else glyph not in ('', '✓')
+            elapsed = until(painted, 2)
+            print('PASS deadline signal offset %+.3fs (target %+.2f): %s painted in %.3fs'
+                  % (signal_at, offset, state, elapsed), flush=True)
+        assert daemon.poll() is None
     finally:
         os.killpg(daemon.pid, signal.SIGTERM)
         daemon.wait(timeout=3)
