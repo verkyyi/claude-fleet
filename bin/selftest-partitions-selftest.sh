@@ -4,6 +4,8 @@
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.sh,
 # fleet-hub-selftest.sh, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
+# Also covers fleet-break-it-cred-sep-selftest.sh, fleet-break-it-hub-selftest.sh
+# and fleet-sleep-selftest.sh (issue #3884).
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -34,6 +36,9 @@ families = {
     'fleet-hub': ('SELFTEST_PART', 4),
     'fleet-quotawatch': ('SELFTEST_PART', 3),
     'fleet-await-stall': ('SELFTEST_PART', 2),
+    'fleet-break-it-cred-sep': ('BREAK_PART', 2),
+    'fleet-break-it-hub': ('BREAK_PART', 2),
+    'fleet-sleep': ('SELFTEST_PART', 3),
 }
 for base, (var, n) in families.items():
     parent = root / (base + '-selftest.sh')
@@ -52,7 +57,7 @@ for base, (var, n) in families.items():
         wrappers[k] = path
     assert set(wrappers) == set(range(2, n + 1)), (base, wrappers)
 
-    if base in ('fleet-cleanup-idle', 'fleet-hub'):
+    if base in ('fleet-cleanup-idle', 'fleet-hub', 'fleet-sleep'):
         # Use unittest discovery itself, including inherited test methods.
         saved = sys.argv[:]
         sys.argv = [str(parent.with_suffix('.py')), str(root)]

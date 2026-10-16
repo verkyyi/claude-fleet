@@ -5,7 +5,9 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/collect-account.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fake" "$WORK/accounts" "$WORK/conf" "$WORK/cache"
-for f in fleet-lib.sh usage-lib.sh fleet-account-truth.sh fleet-account-truth.py fleet-context.sh; do
+for f in fleet-lib.sh usage-lib.sh fleet-account-truth.sh fleet-account-truth.py fleet-context.sh \
+  fleet_pending_tool.py fleet_launch.py fleet_sleep_argv.py fleet_runtime.py \
+  fleet-codex-rpc.py fleet-codex-session.py; do
   [ ! -f "$BIN/$f" ] || cp "$BIN/$f" "$WORK/bin/"
 done
 printf 'token-A\n' > "$WORK/accounts/acctA"
@@ -53,9 +55,14 @@ cat > "$WORK/fake/ps" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >> "$PSLOG"
 case "$*" in
-  *stat=,comm=*) printf '101 1 Ss zsh\n201 101 S claude\n102 1 Ss zsh\n202 102 S claude\n103 1 Ss zsh\n203 103 S codex\n104 1 Ss zsh\n204 104 S claude\n105 1 Ss zsh\n205 105 S claude\n106 1 Ss zsh\n206 106 S claude\n107 1 Ss zsh\n207 107 S claude\n108 1 Ss zsh\n208 108 S claude\n109 1 Ss zsh\n209 109 S claude\n' ;;
-  *comm=*) printf '101 1 zsh\n201 101 claude\n102 1 zsh\n202 102 claude\n103 1 zsh\n203 103 codex\n104 1 zsh\n204 104 claude\n105 1 zsh\n205 105 claude\n106 1 zsh\n206 106 claude\n107 1 zsh\n207 107 claude\n108 1 zsh\n208 108 claude\n109 1 zsh\n209 109 claude\n' ;;
-  *command=*) printf '101 zsh\n201 claude\n102 zsh\n202 claude\n103 zsh\n203 codex\n104 zsh\n204 claude\n105 zsh\n205 claude\n106 zsh\n206 claude\n107 zsh\n207 claude\n108 zsh\n208 claude\n109 zsh\n209 claude\n' ;;
+  '-axo pid=,ppid=,stat=,lstart=,comm=')
+    # The real canonical parser consumes state and a 24-character C-locale birth.
+    for pane in 101 102 103 104 105 106 107 108 109; do
+      agent=claude; [ "$pane" != 103 ] || agent=codex
+      printf '%s 1 Ss Thu Oct 15 10:00:00 2026 zsh\n' "$pane"
+      printf '%s %s S Thu Oct 15 10:00:00 2026 %s\n' "$((pane + 100))" "$pane" "$agent"
+    done ;;
+  *) exit 1 ;;
 esac
 FAKE
 cat > "$WORK/fake/token-probe" <<'FAKE'
@@ -91,10 +98,11 @@ grep -q -- '-L fixture set-window-option -t %1 @cc_account acctA' "$TMLOG" || fa
 grep -q -- '-L fixture set-window-option -t %2 @cc_account acctB' "$TMLOG" || fail 'empty stamp was not healed'
 grep -q -- '-L fixture set-window-option -t %6 @cc_account acctA' "$TMLOG" || fail 'quiet pane stamp was not healed'
 ! grep -q -- 'set-window-option -t %7' "$TMLOG" || fail 'correct stamp triggered redundant tmux write'
-[ "$(wc -l < "$PSLOG" | tr -d ' ')" = 2 ] || fail 'process walk was not batched'
+[ "$(cat "$PSLOG")" = '-axo pid=,ppid=,stat=,lstart=,comm=' ] || fail 'process walk was not one canonical batch'
 ! grep -Eq 'token-A|token-B|unregistered-token' "$WORK/out" "$WORK/err" "$TMLOG" "$ACLOG" || fail 'token leaked to output'
 # Context reports only verified identity, remains read-only, and keeps -q stable.
 : > "$TMLOG"
+: > "$PSLOG"
 out=$(TMUX=fake TMUX_PANE=%1 bash "$WORK/bin/fleet-context.sh" --json)
 printf '%s' "$out" | python3 -c 'import json,sys; assert json.load(sys.stdin)["account"]=="acctA"' || fail 'context JSON lacks verified account'
 out=$(TMUX=fake TMUX_PANE=%1 bash "$WORK/bin/fleet-context.sh")
@@ -102,6 +110,8 @@ case "$out" in *'account   acctA'*'process token'*) ;; *) fail 'context text lac
 ! grep -q set-window-option "$TMLOG" || fail 'context query mutated a stamp'
 out=$(TMUX=fake TMUX_PANE=%1 bash "$WORK/bin/fleet-context.sh" -q)
 [ "$out" = OK ] || fail 'context quiet verdict changed'
+[ "$(wc -l < "$PSLOG" | tr -d ' ')" = 2 ] || fail 'JSON/text context must each read one batch; quiet reads no account'
+[ "$(sort -u "$PSLOG")" = '-axo pid=,ppid=,stat=,lstart=,comm=' ] || fail 'context process query format changed'
 # Exercise both production token readers; no host credentials are inspected.
 python3 - "$BIN/fleet-account-truth.py" "$WORK/accounts" <<'PYTEST'
 import importlib.util, os, pathlib, subprocess, sys

@@ -45,6 +45,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
+BREAK_PART=${BREAK_PART:-1/2}
 
 # sep_login <dir> — a login as a node leaves it, in <dir>/homes/alpha (the
 # FLEET_CREDSEP_PW row in <dir>/pw); sets C (its conf dir)

@@ -1919,4 +1919,6 @@ class ExitDetectionTest(unittest.TestCase):
         self.assertFalse(LIB['source_alive'](data))
 
 
-if __name__=='__main__':unittest.main(verbosity=2)
+if __name__=='__main__':
+    import selftest_part
+    selftest_part.main()
