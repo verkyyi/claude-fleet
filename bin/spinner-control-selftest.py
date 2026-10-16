@@ -151,11 +151,35 @@ def main():
             controls.clear()
             for label in ('one', 'two'):
                 tm(label, 'set-window-option', '-t', '@0', '@worker_lifecycle', '')
+            # Deliver a real subscription event after a window snapshot was
+            # read, before the renderer installs it. The stale snapshot must
+            # not swallow this newer event now that idle reads back off.
+            spinner_source = root / 'bin/tmux-spinner.py'
+            spinner_source.write_text(spinner_source.read_text().replace('def main():', '''
+_read_windows = windows
+def windows(control):
+    rows = _read_windows(control)
+    trigger = BIN.parent / 'read-race'
+    if control.path.endswith('/one') and trigger.exists():
+        trigger.unlink()
+        control.changed = False
+        control.command('set-window-option', '-t', '@0', '@claude_state', 'done')
+        deadline = clock() + 1.5
+        while not control.changed and clock() < deadline:
+            control.pump(deadline - clock())
+        assert control.changed, 'real subscription event was not received'
+    return rows
+
+def main():'''))
             with (root / 'daemon.log').open('w') as log:
                 daemon = subprocess.Popen(['sh', str(root/'bin/tmux-spinner.sh')], env=env,
                     stdout=log, stderr=log, start_new_session=True)
             glyph = lambda label: tm(label, 'display-message', '-p', '-t', '@0', '#{@spin}')
             until(lambda: bool(glyph('one')) and bool(glyph('two')))
+            (root / 'read-race').touch()
+            Path(tm('one', 'display-message', '-p', '#{socket_path}') + '.dirty').touch()
+            until(lambda: glyph('one') == '✓', 2)
+            print('PASS event received during a stale window read is rendered within 2s', flush=True)
             rows = tm('one', 'list-clients', '-F', '#{client_pid}').splitlines()
             assert len(rows) == 1
             os.kill(int(rows[0]), signal.SIGKILL)  # only this test's transport
