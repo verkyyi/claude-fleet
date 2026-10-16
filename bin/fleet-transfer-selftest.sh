@@ -1193,7 +1193,7 @@ PLPROXY
     --after-turn --handoff "$WORK/notes.md" 2>&1) || fail 'valid proxy home must arm without an explicit target home'
   REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
   [ -s "$REQUEST/request.json" ] || fail 'arm returned no durable request'; ok
-  TM set-option -w -t "$WIN" @claude_state done
+  TM set-option -w -t "$WIN" @claude_state "done"
   sleep 1
   kill -0 "$PID" || fail 'arm/stale done was mistaken for clean Stop'; ok
   TM set-option -w -t "$WIN" @claude_state working
