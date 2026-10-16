@@ -502,8 +502,16 @@ def connect(args, conn, target, generation):
         return child.returncode or 0
     finally:
         # A stale connection only disposes its captured view and subprocess;
-        # release the lease iff we still own the very same epoch.
-        closed = not lease or close_view(lease)
+        # release ownership as soon as the view is fenced, before waiting for
+        # its shell's EXIT trap. A fast reopen must not see a cleanup-only owner.
+        with Lock("control/.lock"):
+            closed = not lease or close_view(lease)
+            if closed and lease and "epoch" in lease:
+                current = read_json(path) or {}
+                if (current.get("conn"), current.get("epoch")) == (conn, lease["epoch"]):
+                    release_selected(current)
+                    current.update(conn=None, ts=0)
+                    write_json(path, current)
         if child and child.poll() is None:
             try:
                 # Closing the view makes tmux return. Let the native attach's
@@ -518,12 +526,6 @@ def connect(args, conn, target, generation):
                     child.kill()
                     child.wait()
         if closed and lease and "epoch" in lease:
-            with Lock("control/.lock"):
-                current = read_json(path) or {}
-                if (current.get("conn"), current.get("epoch")) == (conn, lease["epoch"]):
-                    release_selected(current)
-                    current.update(conn=None, ts=0)
-                    write_json(path, current)
             try:
                 os.unlink(connection_path(conn))
             except FileNotFoundError:
@@ -651,6 +653,17 @@ def control_path(target):
 def control_claim(path, target, conn, op):
     L = read_json(path) or {"target": target, "epoch": 0, "conn": None, "ts": 0}
     fresh = L.get("conn") and time.time() - float(L.get("ts") or 0) < lease_secs()
+    if fresh and L["conn"] != conn and all(L.get(k) for k in ("socket", "view", "session", "server_pid")):
+        # A closed view can outlive its lease record while the helper cleans up.
+        # Only a confirmed absence releases it; a failed tmux read stays closed
+        # to new controllers. Compare ids too: a same-name successor is not ours.
+        pid = server_pid(L["socket"])
+        if pid and pid != L["server_pid"]:
+            fresh = False
+        elif pid == L["server_pid"]:
+            rc, sessions = tm(L["socket"], "list-sessions", "-F", "#{session_id}|#{session_name}")
+            if rc == 0 and L["view"] + "|" + L["session"] not in sessions.splitlines():
+                fresh = False
     if op == "claim" and fresh and L["conn"] != conn:
         return {"state": "paused", "target": target, "epoch": L["epoch"]}, 4
     if L.get("conn") != conn or op == "take":

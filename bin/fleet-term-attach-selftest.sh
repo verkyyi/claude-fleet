@@ -95,6 +95,41 @@ PY
 }
 waitfor() { local i=0; while [ $i -lt "$2" ]; do eval "$1" && return 0; sleep 0.2; i=$((i + 1)); done; return 1; }
 
+# Model a close whose view is gone but whose helper has not finished cleanup.
+if [ "${1:-}" = --closed-lease ]; then
+  python3 - "$BIN" "$RS" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("wt", sys.argv[1] + "/fleet-webterm.py")
+wt = importlib.util.module_from_spec(spec); spec.loader.exec_module(wt)
+sock = sys.argv[2]
+name = sock + "@view-wt-old"
+def tm(*a):
+    rc, out = wt.tm(sock, *a)
+    assert rc == 0, (a, rc, out)
+    return out
+tm("new-session", "-d", "-t", sock, "-s", name)
+gid = tm("display-message", "-p", "-t", "=" + name + ":", "#{session_id}")
+path = wt.control_path("personal")
+with wt.Lock("control/.lock"):
+    old, rc = wt.control_claim(path, "personal", "old", "claim")
+    assert rc == 0
+    old.update(socket=sock, view=gid, session=name, server_pid=wt.server_pid(sock))
+    wt.write_json(path, old)
+    assert wt.control_claim(path, "personal", "new", "claim")[1] == 4, "live owner must require Use here"
+    tm("kill-session", "-t", gid)
+    # Same name, different lifelong session id: old cleanup may not close it.
+    tm("new-session", "-d", "-t", sock, "-s", name)
+    new, rc = wt.control_claim(path, "personal", "new", "claim")
+    assert rc == 0, ("closed view still holds its lease", new)
+    assert new["epoch"] == old["epoch"] + 1
+    assert wt.close_view(old)
+    tm("has-session", "-t", "=" + name)
+    assert wt.read_json(path)["conn"] == "new"
+print("PASS closed view releases control immediately; live owner and replacement session remain fenced")
+PY
+  exit $?
+fi
+
 # Feed the SAME bytes as the browser through the actual PTY, never call a menu
 # action directly. The row producer is a fixture; popup, keys and go are real.
 # shellcheck disable=SC2034 # v and before are read by waitfor's eval in this scope
@@ -107,7 +142,8 @@ native() {
   printf 'Browser worker\r' >> "$WORK/$c.in"
   waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$W" ]' 50 \
     && ok "$c menu selects worker" || bad "$c menu did not select worker"
-  sleep 0.4
+  waitfor '[ "$(tt show-options -gqv @popup_open)" = 0 ] && [ "$(tt display-message -p -t "$W" "#{pane_in_mode}")" = 0 ]' 50 \
+    || bad "$c menu did not close and thaw"
   printf '\034' >> "$WORK/$c.in"
   waitfor '[ "$(tt display-message -p -t "$v:" "#{window_id}")" = "$H" ]' 50 \
     && ok "$c shell is persistent home" || bad "$c shell did not select home"
@@ -122,7 +158,8 @@ native() {
   waitfor '[ "$(grep -ao "Browser worker" "$WORK/$c.out" | wc -l | tr -d " ")" -gt "$before" ]' 75 \
     && ok "$c Ctrl+] p opens native menu" || bad "$c prefix menu did not draw"
   printf '\033' >> "$WORK/$c.in"
-  sleep 0.4
+  waitfor '[ "$(tt show-options -gqv @popup_open)" = 0 ] && [ "$(tt display-message -p -t "$W" "#{pane_in_mode}")" = 0 ]' 50 \
+    || bad "$c prefix menu did not close and thaw"
 }
 
 # A worker disappearing must not send pending browser input to tmux's next window.
