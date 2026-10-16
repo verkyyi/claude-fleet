@@ -45,6 +45,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=fleet-break-it-cred-selftest.sh
 BREAK_CRED_LIB=1 . "$BIN/fleet-break-it-cred-selftest.sh"
+# Partition weights: bin/break-it-durations.txt (select every part on changes).
 BREAK_PART=${BREAK_PART:-1/2}
 
 # sep_login <dir> — a login as a node leaves it, in <dir>/homes/alpha (the

@@ -3111,6 +3111,7 @@ drill_stable_macos_pruned_chain() {
   SECS=$(since "$t0")
 }
 
-# this file runs part 1/2; the rest are its part files (issue #2694)
+# This file runs part 1/2 using bin/break-it-durations.txt; the rest are its
+# part files (issue #2694). A weight change must select the whole family.
 : "${BREAK_PART:=1/2}"
 cred_run_drills "$0"

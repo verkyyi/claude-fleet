@@ -43,6 +43,8 @@ families = {
 for base, (var, n) in families.items():
     parent = root / (base + '-selftest.sh')
     source = parent.read_text()
+    if base in ('fleet-break-it-cred-sep', 'fleet-break-it-hub'):
+        assert 'bin/break-it-durations.txt' in source, (base, 'missing weight selection dependency')
     assert re.search(r'\$\{' + var + r':[-=]1/' + str(n) + r'\}', source), base
     wrappers = {}
     for path in root.glob(base + '-*-selftest.sh'):
