@@ -200,8 +200,8 @@
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
 # ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
-# (fleet-break-it-part.py, issue #2694). This file runs 1/7 by default,
-# bin/fleet-break-it-{2..7}-selftest.sh the rest —
+# (fleet-break-it-part.py, issue #2694). This file runs 1/21 by default,
+# bin/fleet-break-it-{2..21}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs, so any
@@ -4902,6 +4902,22 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_task_blocker_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_blockers_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
+}
+
+drill_task_ticket_link() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_ticket_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='接受后的建单与关联幂等恢复，未知发送不重复建单'
+}
+
 drill_repo_cutover_inflight() {
   CAP=15; local out t0
   t0=$(now)
@@ -6406,6 +6422,15 @@ drill_idle_activity_between_probes() {
   WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
 }
 
+drill_hubsess_unwatched_poll() {
+  CAP=25; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/hub-sessions-watch-selftest.py" --quick 2>&1) \
+    || { WHY="unwatched session list: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='常在线客户端不算打开列表；共享事件广播两秒内更新，真实请求恢复两秒节拍，输入相同不重算'
+}
+
 drill_spinner_unwatched_poll() {
   CAP=15; local t0 out
   t0=$(now)
@@ -6424,6 +6449,35 @@ drill_spinner_maintenance_starved() {
   WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
 }
 
+drill_spinner_process_budget() {
+  CAP=55; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-budget-selftest.py" --fixture idle 2>&1) \
+    || { WHY="complete default spinner budget: $out"; return 1; }
+  SECS=$(since "$t0")
+  printf '%s\n' "$out"
+  WHAT='无工作场景真实观察 44 秒；启动与按原周期维护成本分列，协议读取按 44 秒换算，含准备清理 <60 秒'
+}
+
+drill_spinner_process_budget_maintenance() {
+  CAP=55; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-budget-selftest.py" --fixture maintenance 2>&1) \
+    || { WHY="complete pending-maintenance spinner budget: $out"; return 1; }
+  SECS=$(since "$t0")
+  printf '%s\n' "$out"
+  WHAT='有待办场景真实观察 44 秒；20/40 秒两次 fresh 核对与身份保护保留，启动/维护归一化且协议读取 ≤44，含准备清理 <60 秒'
+}
+
+drill_spinner_protocol_budget() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-control-selftest.py" 2>&1) \
+    || { WHY="resident protocol invalidation: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 44 秒独立场景共测'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)
@@ -6432,12 +6486,57 @@ drill_codex_mcp_busy() {
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
+drill_reap_shadow_race() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-reap-shadow-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同源影子证明按 turn/子进程/lease 失效，未知逐维保留，永不授予动作'
+}
+
 drill_runtime_stale_idle() {
   CAP=10; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-runtime-selftest.py" Snapshot 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
+}
+
+drill_runtime_idle_accept_unavailable() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='双 provider 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+}
+
+drill_pending_observation_stale() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-pending-tool-selftest.py" Observation 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
+}
+
+drill_native_observe_missing() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_native_observe_test.py" Recovery LocalRegistration 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='丢观察与丢确认保留原执行；只有原 kernel/RPC/reservation 的精确确认允许登记'
+}
+
+drill_repo_authority_case() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_case_test.py" \
+    CaseAuthorityTests.test_gate_and_manifest_use_hub_identity_and_existing_overlay \
+    CaseAuthorityTests.test_panel_new_and_issue_start_keep_worktree_and_registration \
+    CaseAuthorityTests.test_busy_cpu_still_refuses_panel_and_issue_without_window \
+    CaseAuthorityTests.test_panel_quick_draft_uses_real_compose_and_raw_entry \
+    CaseAuthorityTests.test_refusals_reach_panel_and_issue_without_secret_or_false_freeze 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='大小写注册名通过面板/issue/authority；原 overlay/worktree 保留，真实拒绝原因可见'
 }
 
 # ================================================================ run ====}
@@ -6811,6 +6910,17 @@ drill_land_race() {
   WHAT="三个会话同时自己落地：两个依次并进（后者变基后再检查），检查红的那个不进主干，gh 0 次"
 }
 
+# worker-inventory-rs (#4508): real adapter with synthetic orphan reports;
+# bin/fleet_control.py must preserve the nested RS/US framing through fleet_status.
+drill_worker_inventory_rs() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-hub-selftest.py" HubTests.test_inventory_orphan_report_framing 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='含历史报告 RS/US 的十条 inventory 原样到达 fleet_status，身份、中文、REAPED 报告与观察时间均保留'
+}
+
 # ticket-credential-pair (#4490): no production credentials or network.
 drill_ticket_credential_pair() {
   CAP=15; local t0 out
@@ -6825,10 +6935,10 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/7}
+part=${BREAK_PART:-1/21}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
-    [1-9]/[1-9]|[1-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
+    [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
     *) printf 'fleet-break-it: BREAK_PART=%s is not K/N or all\n' "$part" >&2; exit 2 ;;
   esac
   [ "$pk" -le "$pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$part" >&2; exit 2; }

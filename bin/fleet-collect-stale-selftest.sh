@@ -240,9 +240,9 @@ case "$(bar)" in *"✖  dash · stale"*"↻"*) ok ;; *) fail "10: no trace after
 # every StartInterval unit, quotawatch included, was pended together — so a
 # self-heal wired ONLY into another interval unit would have been asleep next to
 # its patient. Both call sites must stay.
-grep -q 'fleet-daemon-watch.sh' "$BIN/tmux-spinner.sh" \
+grep -q 'fleet-daemon-watch.sh' "$BIN/tmux-spinner.py" \
   || fail "11: the KeepAlive spinner no longer runs the daemon self-heal — the headless path is gone"; ok
-grep -q 'KICK_EVERY' "$BIN/tmux-spinner.sh" \
+grep -q 'daemon_watch=30' "$BIN/tmux-spinner.py" \
   || fail "11: the spinner's self-heal lost its frame throttle"; ok
 grep -q 'fleet-collect-kick.sh' "$BIN/fleet-quotawatch.sh" \
   || fail "11: the quota watch no longer runs the collector self-heal backstop"; ok

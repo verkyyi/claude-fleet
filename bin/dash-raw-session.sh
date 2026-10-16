@@ -406,7 +406,13 @@ if [ "$NOREPO" != 1 ]; then
     unset _all
   fi
   if [ -n "$REPO_ARG" ]; then
-    REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+    if [ -n "$(fleet_repos "$SESS")" ]; then
+      _registered=$(fleet_target_repo "$SESS" "$REPO_ARG") \
+        || { refuse "raw: $REPO_ARG is not a uniquely registered repo this fleet hosts"; exit 1; }
+      REPO_ARG=$_registered
+    else
+      REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+    fi
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
       || { refuse "raw: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
   fi
@@ -450,7 +456,7 @@ if [ "$NOREPO" != 1 ]; then
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
-  || { refuse "repo task authority is frozen or unavailable"; exit 1; }
+  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
 # cap, MAIN) have passed synchronously, so a refusal is immediate and lands on the
@@ -657,7 +663,7 @@ fi
 # A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
 # argument, which only a cold spawn can carry (see the header).
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
-  || { refuse "repo requires accepted hub launch"; exit 1; }
+  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
@@ -680,14 +686,18 @@ if [ "$WARM_ONLY" = 1 ]; then
   case "$win" in @[0-9]*) ;; *) exit 3 ;; esac
   t_window=$(fleet_now_ms)
   warm=1
+  # Read both fields in one round trip, after the claim, preserving empty fields.
+  IFS=$'\t' read -r _warm_wt _wa <<EOF
+$(TM display-message -p -t "$win" $':#{@worktree}\t:#{@cc_agent}' 2>/dev/null)
+EOF
+  _warm_wt=${_warm_wt#:}; _wa=${_wa#:}
   if [ "$NOREPO" != 1 ]; then
-    wt=$(TM display-message -p -t "$win" '#{@worktree}' 2>/dev/null)
+    wt=$_warm_wt
     slug="scratch-${wt##*-scratch-}"
   fi
   # The agent it runs is the one asked for, or it is not handed out (issue #2403):
   # never another agent standing in — closed, and exit 3, so the caller opens the
   # asked-for agent cold. @cc_agent empty = a Claude (only a Codex stamps it).
-  _wa=$(TM display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
   if [ "${_wa:-claude}" != "${AGENT:-${FLEET_AGENT:-claude}}" ]; then
     fleet_win_retire "$win" "$SOCK"
     TM kill-window -t "$win" 2>/dev/null
@@ -895,38 +905,47 @@ fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is rename
 # `--role epic-driver` road still marks @fleet_role_def for one version, so a
 # login whose agents pass has not shipped epic-driver yet keeps its driver able
 # to spawn (# compat-1v: 下一批删).
-[ -n "$AS_KV" ] && TM set-window-option -t "$win" @agent_def "$AS_ARG" \; \
-  set-window-option -t "$win" @agent_def_sha "$(as_kv sha)" \; \
-  set-window-option -t "$win" @agent_spawn "$(as_kv spawn)" 2>/dev/null
-[ "$ROLE" = epic-driver ] && TM set-window-option -t "$win" @fleet_role_def epic-driver 2>/dev/null
+# All of these stamps precede input delivery. Send one argv command list; values
+# stay arguments (including dispatch JSON), never shell/tmux source text.
+window_stamps=()
+stamp_option() {
+  [ "${#window_stamps[@]}" = 0 ] || window_stamps+=(\;)
+  window_stamps+=(set-window-option -t "$win" "$@")
+}
+[ -n "$AS_KV" ] && { stamp_option @agent_def "$AS_ARG"
+  stamp_option @agent_def_sha "$(as_kv sha)"
+  stamp_option @agent_spawn "$(as_kv spawn)"; }
+[ "$ROLE" = epic-driver ] && stamp_option @fleet_role_def epic-driver 2>/dev/null
 # Every repo scratch carries its repo (issue #789), warm or cold.
-[ -n "$REPO_ARG" ] && TM set-window-option -t "$win" @repo "$REPO_ARG" 2>/dev/null
-[ "$PIN" = 1 ] && TM set-window-option -t "$win" @pin 1 2>/dev/null
+[ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null
+[ "$PIN" = 1 ] && stamp_option @pin 1 2>/dev/null
 # When the fleet may close it on its own (issue #1902): the one asked for, else the
 # kind's default — a /loop seed until its loop stops, any other scratch once done
 # and idle 15 minutes (issue #3352; 2 hours before). A no-repo (home) session takes `done:15m` too (issue #2565) —
 # fleet-cleanup-idle.py reads it for such a session as "15 minutes after its agent
 # EXITED": a turn that merely ended is the session waiting for you, not over.
-[ "$TEST_ID" = 1 ] && { TM set-window-option -t "$win" @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
-TM set-window-option -t "$win" @dispatch "$DISPATCH" 2>/dev/null
-[ -n "$TASK_REF" ] && TM set-window-option -t "$win" @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
-# … and a coordinator's record names this session (issue #3330; the hub fills its
-# own starts' from the answer, no hub ⇒ fleet-task-record exits 3).
-[ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
-  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & )
+[ "$TEST_ID" = 1 ] && { stamp_option @test_identity 1 2>/dev/null; [ -n "$REAP" ] || REAP=done:10m; }
+stamp_option @dispatch "$DISPATCH" 2>/dev/null
+[ -n "$TASK_REF" ] && stamp_option @task "$TASK_REF" 2>/dev/null   # the hub's record (#3325)
 if [ -z "$REAP" ]; then
   case "$PROMPT" in /loop|/loop[[:space:]]*) REAP=loop-end ;; *) REAP=done:15m ;; esac
 fi
-[ -n "$REAP" ] && TM set-window-option -t "$win" @reap_policy "$REAP" 2>/dev/null
+[ -n "$REAP" ] && stamp_option @reap_policy "$REAP" 2>/dev/null
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
 # `working`), so one nobody ever typed into is closed after its grace
 # (fleet-cleanup-idle.py `empty`) — never one resumed, seeded or given words.
 [ "$NOREPO" = 1 ] && [ -z "$PROMPT$RESUME_SID$SEED_FILE" ] && [ "$TEST_ID" = 0 ] \
-  && TM set-window-option -t "$win" @prompt_track 1 2>/dev/null
+  && stamp_option @prompt_track 1 2>/dev/null
 # Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
 # pre-warmed with no requester, so its origin is decided at CLAIM time, here.
-[ -n "$ORIGIN" ] && TM set-window-option -t "$win" @origin "$ORIGIN" 2>/dev/null
+[ -n "$ORIGIN" ] && stamp_option @origin "$ORIGIN" 2>/dev/null
+TM ${window_stamps[@]+"${window_stamps[@]}"} 2>/dev/null
+unset window_stamps
+unset -f stamp_option
+# Attach only after the task and provenance stamps are visible to the reader.
+[ -n "$TASK_REF" ] && [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
+  && ( bash "$BIN/fleet-task-record.sh" attach "$TASK_REF" "$win" >/dev/null 2>&1 & )
 # The parent's worker_id (#1420): given verbatim when the parent is on another
 # machine (a hub-placed start, #1541), else derived from the key; a parent on
 # another machine has no generation here (#1538).

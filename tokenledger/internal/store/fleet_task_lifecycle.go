@@ -205,6 +205,9 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 		if err != nil {
 			return FleetTask{}, err
 		}
+		// Fields omitted from the accepted JSON must not retain the current
+		// row's later ticket/native/result values when replaying acceptance.
+		rec = FleetTask{}
 		if err = json.Unmarshal([]byte(raw), &rec); err != nil {
 			return FleetTask{}, err
 		}
@@ -237,29 +240,32 @@ func taskAttemptID(id, generation int64) string {
 // execution without changing its task outcome.
 // EndpointID is the authenticated node, not a field to accept from JSON.
 type TaskMutation struct {
-	Key              string `json:"idempotency_key"`
-	Kind             string `json:"kind"` // claim | transition | retry | transfer | cancel_request | cancel_ack | stop_ack
-	ExpectedWorker   string `json:"expected_worker"`
-	Generation       int64  `json:"generation"`
-	WorkerID         string `json:"worker_id,omitempty"`
-	EndpointID       string `json:"-"`
-	FleetID          string `json:"-"`
-	State            string `json:"state,omitempty"`
-	ActualAgent      string `json:"actual_agent,omitempty"`
-	RequestedAgent   string `json:"requested_agent,omitempty"`
-	ResolvedAgent    string `json:"resolved_agent,omitempty"`
-	Evidence         string `json:"evidence,omitempty"`
-	ExecutionStopped bool   `json:"execution_stopped,omitempty"`
-	Observation      string `json:"observation,omitempty"`
-	SessionKey       string `json:"session_key,omitempty"`
-	CancelRequest    string `json:"cancel_request,omitempty"`
+	Key              string              `json:"idempotency_key"`
+	Kind             string              `json:"kind"` // claim | transition | retry | transfer | cancel_request | cancel_ack | stop_ack | blocker
+	ExpectedWorker   string              `json:"expected_worker"`
+	Generation       int64               `json:"generation"`
+	WorkerID         string              `json:"worker_id,omitempty"`
+	EndpointID       string              `json:"-"`
+	FleetID          string              `json:"-"`
+	State            string              `json:"state,omitempty"`
+	ActualAgent      string              `json:"actual_agent,omitempty"`
+	RequestedAgent   string              `json:"requested_agent,omitempty"`
+	ResolvedAgent    string              `json:"resolved_agent,omitempty"`
+	Evidence         string              `json:"evidence,omitempty"`
+	ExecutionStopped bool                `json:"execution_stopped,omitempty"`
+	Observation      string              `json:"observation,omitempty"`
+	SessionKey       string              `json:"session_key,omitempty"`
+	CancelRequest    string              `json:"cancel_request,omitempty"`
+	Blocker          *TaskBlockerCommand `json:"blocker,omitempty"`
+	TicketRef        string              `json:"ticket_ref,omitempty"` // ticket_link only; accepted input remains immutable
+	FilingID         string              `json:"filing_id,omitempty"`  // durable local filing incarnation, prepare/link only
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
 	// Repo is immutable. Take its authority lock before the task row lock,
 	// in the same order as acceptance/cutover; lifecycle reports remain open.
 	var startRepo string
-	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" {
+	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" || m.Kind == "ticket_prepare" || m.Kind == "ticket_link" {
 		t, e := s.FleetTask(id)
 		if e != nil {
 			return FleetTask{}, e
@@ -271,7 +277,37 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if m.CancelRequest != "" && m.Kind != "cancel_ack" {
 		return FleetTask{}, ErrTaskInvalid
 	}
+	if (m.Kind == "blocker") != (m.Blocker != nil) {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	if m.TicketRef != "" && m.Kind != "ticket_link" {
+		return FleetTask{}, ErrTaskInvalid
+	}
+	if m.FilingID != "" && m.Kind != "ticket_prepare" && m.Kind != "ticket_link" {
+		return FleetTask{}, ErrTaskInvalid
+	}
 	switch m.Kind {
+	case "ticket_prepare", "ticket_link":
+		if !taskFilingIDRE.MatchString(m.FilingID) {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		if m.ExpectedWorker != "" || m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
+			return FleetTask{}, ErrTaskInvalid
+		}
+		key := fmt.Sprintf("ticket-file:g%d", m.Generation)
+		if m.Kind == "ticket_link" {
+			key = fmt.Sprintf("ticket-link:g%d", m.Generation)
+			if m.TicketRef == "" {
+				return FleetTask{}, ErrTaskInvalid
+			}
+		}
+		if m.Key != key {
+			return FleetTask{}, ErrTaskInvalid
+		}
+	case "blocker":
+		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.ExecutionStopped || m.Evidence != "" {
+			return FleetTask{}, ErrTaskInvalid
+		}
 	case "cancel_request", "cancel_ack", "stop_ack":
 		if m.WorkerID != "" || m.State != "" || m.ActualAgent != "" || m.RequestedAgent != "" || m.ResolvedAgent != "" || m.Observation != "" || m.SessionKey != "" || m.Evidence == "" {
 			return FleetTask{}, ErrTaskInvalid
@@ -310,6 +346,9 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
 		return FleetTask{}, err
 	}
+	if err = s.d.lockKey(tx, "fleet_tasks", "task-blockers:"+owner); err != nil {
+		return FleetTask{}, err
+	}
 	t, err := s.taskInTx(tx, id)
 	if err != nil {
 		return FleetTask{}, err
@@ -344,7 +383,16 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		(m.Kind != "cancel_request" && t.ExecutionEndpoint != "" && t.ExecutionEndpoint != m.EndpointID) {
 		return FleetTask{}, ErrTaskFence
 	}
+	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	switch m.Kind {
+	case "ticket_prepare", "ticket_link":
+		if err = s.linkTaskTicketTx(tx, &t, m); err != nil {
+			return FleetTask{}, err
+		}
+	case "blocker":
+		if err = s.applyTaskBlockerTx(tx, t, m.EndpointID, eventID, *m.Blocker, now); err != nil {
+			return FleetTask{}, err
+		}
 	case "stop_ack":
 		if !taskTerminal(t.State) || t.ExecutionOwner == "" || !m.ExecutionStopped {
 			return FleetTask{}, ErrTaskConflict
@@ -472,11 +520,13 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 	if err = taskAttemptResultTx(tx, t, now); err != nil {
 		return FleetTask{}, err
 	}
+	if err = projectTaskBlockers(tx, &t); err != nil {
+		return FleetTask{}, err
+	}
 	resultJSON, err := json.Marshal(t)
 	if err != nil {
 		return FleetTask{}, err
 	}
-	eventID := fmt.Sprintf("task-event:%x", sha256.Sum256([]byte(owner+"\x00"+idem)))
 	ts := now.UTC().Format(rfc)
 	eventWorker := m.WorkerID
 	if eventWorker == "" {
@@ -486,6 +536,11 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
   VALUES (?, ?, 'task_event', ?, ?, ?, 'recorded', ?, ?, ?, ?)`, eventID, m.FleetID, string(raw), owner, idem, ts, ts, string(resultJSON), eventWorker)
 	if err != nil {
 		return FleetTask{}, err
+	}
+	if (m.Kind == "transition" || m.Kind == "cancel_ack") && taskTerminal(t.State) {
+		if err = s.resolveTaskDependenciesTx(tx, t, eventID, now); err != nil {
+			return FleetTask{}, err
+		}
 	}
 	return t, tx.Commit()
 }

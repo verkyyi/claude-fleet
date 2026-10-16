@@ -1603,6 +1603,296 @@ class McpRestartTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'unverified child'):self.classify()
 
 
+    # Issue #4537: conf/mcp-worker.json launches the fleet's own server as
+    # `bash -c 'exec python3 "${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py"'`.
+    # After the exec the kernel is Python running the EXPANDED path — possibly an
+    # install since deleted. Identity comes from the started process's own
+    # environment; the restartability contract is a separate, unchanged gate.
+    SHELL_EXEC='exec python3 "${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py"'
+    FRAMEWORK=Path('/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python')
+
+    def shell_exec_case(self,env=None,script=None,command='bash',args=None):
+        self.config={'fleet':{'command':command,'args':args if args is not None else ['-c',script or self.SHELL_EXEC]}}
+        self.status={'data':[{'name':'fleet','runtimeStatus':'ready','toolsError':None}]}
+        self.rows={2:(1,'Python')}
+        self.argv={2:[str(self.FRAMEWORK),'/gone/old/bin/fleet-mcp.py']}
+        self.exes={2:self.FRAMEWORK}
+        self.env=dict(HOME='/home/x',FLEET_MCP_BIN='/gone/old/bin',PATH='/nowhere') if env is None else env
+        self.parent_env=None  # None: the agent handed down exactly self.env
+        self.births={1:(10,0),2:(20,0)}
+        self.socket_stdin=set()
+        self.env_reads=[]
+
+    def env_reader(self,pid,names):
+        env=self.env if pid!=1 or self.parent_env is None else self.parent_env
+        if isinstance(env,Exception):raise env
+        self.env_reads.append((pid,set(names)))
+        birth=self.births[pid]
+        if callable(birth):birth=birth()
+        return dict(names=frozenset(env),values={k:v for k,v in env.items() if k in names},birth=birth,
+                    functions=frozenset(k for k,v in env.items() if v.startswith('() {')),
+                    stdin_socket=pid in self.socket_stdin)
+
+    def shell_classify(self,env_reader=True,strict=True):
+        return LIB['MCP']['classify'](self.source,LIB['MCP']['inventory'](self.client),self.rows,1,
+                                      lambda pid:self.argv[pid],lambda pid:self.exes[pid],strict=strict,
+                                      env_reader=self.env_reader if env_reader else None)
+
+    def test_shell_exec_launcher_is_identified_from_the_started_environment(self):
+        self.shell_exec_case()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet'):
+            self.assertFalse(Path('/gone/old/bin/fleet-mcp.py').exists())
+            self.assertEqual(self.shell_classify(),{2})
+            self.assertEqual(set(self.source['sleep_mcp']),{'fleet'})
+            self.assertEqual(self.source['sleep_mcp_basis'],{'fleet':'shell-exec'})
+            # Only the names the script reads (+ PATH) are asked for, never the block.
+            self.assertIn((2,{'FLEET_MCP_BIN','HOME','PATH'}),self.env_reads)
+            self.assertIn((1,{'FLEET_MCP_BIN','HOME','PATH'}),self.env_reads)
+            # No env reader (the old call shape) proves nothing: unverified, as before.
+            self.source={}
+            self.assertEqual(self.shell_classify(env_reader=False),set())
+            self.assertNotIn('sleep_mcp_basis',self.source)
+            # The default branch, an absolute bash and an empty override.
+            self.env=dict(HOME='/gone',PATH='/nowhere');self.argv[2][1]='/gone/.claude/fleet/bin/fleet-mcp.py'
+            self.assertEqual(self.shell_classify(),{2})
+            self.env['FLEET_MCP_BIN']=''
+            self.assertEqual(self.shell_classify(),{2})
+            self.config['fleet']['command']='/bin/bash'
+            self.assertEqual(self.shell_classify(),{2})
+
+    def test_shell_exec_identity_is_not_a_restartability_contract(self):
+        self.shell_exec_case()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE=''):
+            with self.assertRaisesRegex(ValueError,'fleet has no restartability contract'):self.shell_classify()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='other,!fleet,plugin:x:y'):
+            with self.assertRaisesRegex(ValueError,'fleet has no restartability contract'):self.shell_classify()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet'):
+            self.status={'data':[{'name':'fleet','runtimeStatus':'starting'}]}
+            with self.assertRaisesRegex(ValueError,'not ready or has unknown'):self.shell_classify()
+            self.status={'data':[]}
+            with self.assertRaisesRegex(ValueError,'not ready or has unknown'):self.shell_classify()
+            self.status={'data':[{'name':'fleet','runtimeStatus':'ready','toolsError':None}]}
+            # A real tool/job beneath the server is still a blocker.
+            self.rows[3]=(2,'python');self.argv[3]=['python3','-c','job'];self.exes[3]=self.FRAMEWORK
+            with self.assertRaisesRegex(ValueError,'unverified child'):self.shell_classify()
+        # Non-strict (busy) still identifies it, and still keeps the job visible.
+        self.source={'agent':'codex'}
+        self.assertEqual(self.shell_classify(strict=False),{2})
+
+    def test_shell_exec_refuses_what_the_started_environment_cannot_prove(self):
+        self.shell_exec_case()
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet'):
+            for env in (dict(HOME='/home/x',FLEET_MCP_BIN='/another/bin'),     # expands elsewhere
+                        dict(PATH='/nowhere'),                                  # nothing to expand
+                        dict(FLEET_MCP_BIN='/gone/old/bin',BASH_ENV='/rc'),     # code ran first
+                        dict(FLEET_MCP_BIN='/gone/old/bin',ENV='/rc'),
+                        dict(FLEET_MCP_BIN='/gone/old/bin',SHELLOPTS='allexport'),
+                        dict(FLEET_MCP_BIN='/gone/old/bin',**{'BASH_FUNC_exec%%':'() { :; }'}),
+                        dict(FLEET_MCP_BIN='/gone/old/bin',python3='() { :; }'),  # bash 3.2's old export form
+                        dict(FLEET_MCP_BIN='/gone/old/bin',EXECIGNORE='*'),
+                        dict(FLEET_MCP_BIN='/gone/old/bin',BASH_COMPAT='31'),
+                        dict(FLEET_MCP_BIN='/gone/old/bin',SSH_CLIENT='1 2 3'),    # ~/.bashrc
+                        OSError(3,'gone'),ValueError('malformed')):
+                self.env=env
+                self.assertEqual(self.shell_classify(),set(),env)
+            self.env=dict(FLEET_MCP_BIN='/gone/old/bin')
+            self.assertEqual(self.shell_classify(),{2})
+            # stdin a socket: bash read /etc/bashrc + ~/.bashrc, which no variable shows.
+            self.socket_stdin={2}
+            self.assertEqual(self.shell_classify(),set())
+            self.socket_stdin=set()
+            # The agent's own ssh session is normal and is not handed down.
+            self.parent_env=dict(FLEET_MCP_BIN='/gone/old/bin',SSH_CLIENT='1 2 3',SSH_TTY='/dev/ttys0')
+            self.assertEqual(self.shell_classify(),{2})
+            self.parent_env=None
+            # The shell's start is proven from the AGENT that launched it: a hook
+            # there may have rewritten the environment and exec'd before the -c
+            # script ran, leaving no trace in the process it left behind.
+            for parent in (dict(FLEET_MCP_BIN='/gone/old/bin',BASH_ENV='/rc'),
+                           dict(FLEET_MCP_BIN='/gone/old/bin',BASHOPTS='x'),
+                           dict(FLEET_MCP_BIN='/gone/old/bin',**{'BASH_FUNC_python3%%':'() { :; }'}),
+                           dict(FLEET_MCP_BIN='/somewhere/else'),               # not what it handed down
+                           dict(),                                              # it had none to hand down
+                           OSError(3,'gone')):
+                self.parent_env=parent
+                self.assertEqual(self.shell_classify(),set(),parent)
+            # An agent may hand down fewer variables than it has, never other values.
+            self.parent_env=dict(FLEET_MCP_BIN='/gone/old/bin',HOME='/h',UNRELATED='x')
+            self.assertEqual(self.shell_classify(),{2})
+            # The config's env is what the shell got, and may carry no hook itself.
+            self.parent_env=dict(HOME='/h');self.config['fleet']['env']={'FLEET_MCP_BIN':'/gone/old/bin'}
+            self.assertEqual(self.shell_classify(),{2})
+            self.config['fleet']['env']={'FLEET_MCP_BIN':'/other/bin'}
+            self.assertEqual(self.shell_classify(),set())
+            self.config['fleet']['env']={'FLEET_MCP_BIN':'/gone/old/bin','BASH_ENV':'/rc'}
+            self.assertEqual(self.shell_classify(),set())
+            self.config['fleet'].pop('env');self.parent_env=None
+            # Codex forwards env_vars by name from its own environment: naming a
+            # hook there (or anything that is not a list of names) proves nothing.
+            for forwarded in (['FLEET_MCP_BIN','BASH_ENV'],['ENV'],['BASH_FUNC_python3%%'],['SSH_CLIENT'],'BASH_ENV',[1]):
+                self.config['fleet']['env_vars']=forwarded
+                self.assertEqual(self.shell_classify(),set(),forwarded)
+            self.config['fleet']['env_vars']=['FLEET_MCP_BIN','TMUX']
+            self.assertEqual(self.shell_classify(),{2})
+            self.config['fleet'].pop('env_vars')
+            # A process started before its parent, or a number reused mid-check.
+            self.births[1]=(30,0)
+            self.assertEqual(self.shell_classify(),set())
+            self.births[1]=(10,0);seen=iter([(20,0),(21,0)]);self.births[2]=lambda:next(seen)
+            self.assertEqual(self.shell_classify(),set())
+            self.births[2]=(20,0)
+            self.assertEqual(self.shell_classify(),{2})
+            # The kernel must be what the shell exec'd: argv exact, program by name.
+            self.argv[2]=[str(self.FRAMEWORK),'/gone/old/bin/fleet-mcp.py','--extra']
+            self.assertEqual(self.shell_classify(),set())
+            self.argv[2]=[str(self.FRAMEWORK),'/gone/old/bin/fleet-mcp.py'];self.exes[2]=Path('/usr/bin/node')
+            self.assertEqual(self.shell_classify(),set())
+            # A shell that has not exec'd yet is the configured launcher; its child is not.
+            self.exes[2]=Path('/bin/bash');self.argv[2]=['bash','-c',self.SHELL_EXEC]
+            self.rows[3]=(2,'Python');self.argv[3]=[str(self.FRAMEWORK),'/gone/old/bin/fleet-mcp.py'];self.exes[3]=self.FRAMEWORK
+            with self.assertRaisesRegex(ValueError,'unverified child'):self.shell_classify()
+
+    def test_shell_exec_parses_only_the_one_proven_shape(self):
+        self.shell_exec_case()
+        refused=['exec python3 $FLEET_MCP_BIN/fleet-mcp.py',                 # unquoted: split + glob
+                 'exec python3 "$(echo /gone/old/bin)/fleet-mcp.py"',
+                 'exec python3 "`echo /gone/old/bin`/fleet-mcp.py"',
+                 'cd /; exec python3 "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'exec python3 "${FLEET_MCP_BIN}/fleet-mcp.py"; true',
+                 'exec python3 "${FLEET_MCP_BIN}/fleet-mcp.py" && true',
+                 'exec -a python3 python3 "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'exec -c python3 "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'exec python3 ~/fleet-mcp.py',
+                 'exec python3 "${PWD}/fleet-mcp.py"',
+                 'exec python3 "${BASH_SOURCE}/fleet-mcp.py"',
+                 'exec python3 "${FLEET_MCP_BIN:=/x}/fleet-mcp.py"',
+                 'exec python3 "${FLEET_MCP_BIN#/}/fleet-mcp.py"',
+                 'exec python3 "${FLEET_MCP_BIN:-${HOME:-/x}}/fleet-mcp.py"',
+                 'exec python3 "${FLEET_MCP_BIN}/fleet-mcp.py',
+                 'exec python3 "${FLEET_MCP_BIN}/fleet\\-mcp.py"',
+                 'exec "py$X" "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'exec /usr/bin/python3 "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'python3 "${FLEET_MCP_BIN}/fleet-mcp.py"',
+                 'exec',
+                 'exec python3 "${FLEET_MCP_BIN}"/*.py']
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet'):
+            for script in refused:
+                self.shell_exec_case(script=script)
+                self.assertEqual(self.shell_classify(),set(),script)
+            for args in (['-lc',self.SHELL_EXEC],['-c',self.SHELL_EXEC,'arg0'],['-c'],[self.SHELL_EXEC]):
+                self.shell_exec_case(args=args)
+                self.assertEqual(self.shell_classify(),set(),args)
+            self.shell_exec_case(command='sh')
+            self.assertEqual(self.shell_classify(),set())
+            for script in ("exec python3 '/gone/old/bin/fleet-mcp.py'",
+                           'exec python3 "$FLEET_MCP_BIN/fleet-mcp.py"',
+                           'exec python3 "${FLEET_MCP_BIN}"/fleet-mcp.py',
+                           '  exec   python3 "${FLEET_MCP_BIN}/fleet-mcp.py"  '):
+                self.shell_exec_case(script=script)
+                self.assertEqual(self.shell_classify(),{2},script)
+
+    def test_shell_exec_ambiguous_configs_prove_nothing(self):
+        self.shell_exec_case()
+        self.config['copy']=dict(self.config['fleet'])
+        self.status['data'].append({'name':'copy','runtimeStatus':'ready'})
+        with patch.dict(os.environ,FLEET_SLEEP_MCP_RESTARTABLE='fleet,copy'):
+            self.assertEqual(self.shell_classify(),set())
+
+    def test_shell_exec_is_offered_to_codex_only(self):
+        # Claude hands its MCP children its whole, mutable environment, so its
+        # classify / resume calls pass no env reader and the shape stays refused.
+        src=(BIN/'fleet-sleep.py').read_text()
+        calls=[line for line in src.splitlines() if "MCP['classify'](" in line]
+        self.assertEqual(len(calls),3)
+        claude=[line for line in calls if 'inventory,rows' in line]
+        self.assertEqual(len(claude),1)
+        self.assertNotIn('env_reader',claude[0])
+        self.assertTrue(all("env_reader=MCP['shell_exec_reader'](client,ARGV['process_env'])" in line for line in calls if line not in claude))
+        # ...and a Codex only for a release whose MCP environment was measured.
+        reader=lambda pid,names:None
+        pick=LIB['MCP']['shell_exec_reader']
+        client=lambda agent:type('C',(),{'initialized':{'userAgent':agent}})()
+        self.assertIs(pick(client('claude_fleet/0.160.1 (Mac OS 27.0.0; arm64) unknown (claude_fleet; 1)'),reader),reader)
+        for agent in ('claude_fleet/0.161.0 (Mac OS)','claude_fleet/0.160.10','codex/0.160.1-alpha','0.160.1',None,7):
+            self.assertIsNone(pick(client(agent),reader),agent)
+        self.assertIsNone(pick(object(),reader))
+        self.assertNotIn('process_env',[l for l in src.splitlines() if "MCP['verify_resume']" in l][0])
+
+    def test_shell_exec_real_kernel_after_the_install_is_deleted(self):
+        # The real readers on a real shell: an agent process starts
+        # `bash -c 'exec …'`, the old install is deleted while it runs, and a
+        # BASH_ENV hook that redirects the exec is refused — in the agent's
+        # environment, in the config's, or added by the agent on its own.
+        agent=self.root/'agent.py'
+        agent.write_text('import json,os,subprocess,sys,time\n'
+                         'import socket\n'
+                         'stdin=socket.socketpair()[0] if sys.argv[3]=="socket" else subprocess.DEVNULL\n'
+                         'c=subprocess.Popen(["bash","-c",sys.argv[1]],env=dict(os.environ,**json.loads(sys.argv[2])),stdin=stdin)\n'
+                         'print(c.pid,flush=True);time.sleep(60)\n')
+        old=self.root/'old'/'bin';evil=self.root/'evil'
+        argv,exe,env_reader=LIB['ARGV']['process_argv'],LIB['ARGV']['process_executable'],LIB['ARGV']['process_env']
+        def launch(agent_env=None,handed=None,stdin='null'):
+            for d in (old,evil):
+                d.mkdir(parents=True,exist_ok=True)
+                (d/'fleet-mcp.py').write_text('import time\ntime.sleep(60)\n')
+            rc=self.root/'rc'
+            rc.write_text('unset BASH_ENV\nexport FLEET_MCP_BIN=%s\nexec python3 "$FLEET_MCP_BIN/fleet-mcp.py"\n'%evil)
+            env={'PATH':os.environ['PATH'],'HOME':str(self.root/'home'),'FLEET_MCP_BIN':str(old),
+                 'SECRET_TOKEN':'never-read',**(agent_env or {})}
+            proc=subprocess.Popen([sys.executable,str(agent),self.SHELL_EXEC,json.dumps(handed or {}),stdin],env=env,
+                                  stdout=subprocess.PIPE,stdin=subprocess.DEVNULL)
+            self.addCleanup(lambda:(proc.kill(),proc.wait(),proc.stdout.close()))
+            pid=int(proc.stdout.readline())
+            self.addCleanup(lambda:subprocess.run(['kill',str(pid)],capture_output=True))
+            # Settled = the same exec'd Python twice in a row: macOS's python3
+            # shim re-execs the framework binary after bash's exec.
+            until=time.monotonic()+10;last=None
+            while time.monotonic()<until:
+                try:now=(exe(pid),argv(pid))
+                except OSError:now=None
+                if now and now==last and now[0].name!='bash' and now[1][-1].endswith('fleet-mcp.py'):break
+                last=now;time.sleep(.2)
+            shutil.rmtree(self.root/'old')
+            return proc.pid,pid
+        conf={'command':'bash','args':['-c',self.SHELL_EXEC]}
+        match=lambda pid,parent,c=conf,reader=env_reader:LIB['MCP']['configured_process'](pid,c,argv,exe,reader,parent)
+        parent,pid=launch()
+        self.assertFalse(old.exists())
+        read=env_reader(pid,{'FLEET_MCP_BIN'})
+        self.assertIn('SECRET_TOKEN',read['names'])
+        self.assertEqual(read['values'],{'FLEET_MCP_BIN':str(old)})   # only what was asked
+        self.assertEqual(read['birth'],LIB['ARGV']['process_birth'](pid))
+        self.assertFalse(read['stdin_socket'])
+        self.assertTrue(match(pid,parent))
+        self.assertFalse(match(pid,parent,reader=None))           # the old call shape proves nothing
+        self.assertFalse(match(pid,None))                          # nor does a missing parent
+        self.assertFalse(match(pid,parent,{'command':'bash','args':['-c',self.SHELL_EXEC.replace('FLEET_MCP_BIN','OTHER_BIN')]}))
+        self.assertFalse(match(pid,parent,{'command':'bash','args':['-c','exec python3 "${FLEET_MCP_BIN}/other.py"']}))
+        hook={'BASH_ENV':str(self.root/'rc')}
+        for agent_env,handed,conf_env in ((hook,None,None),(None,hook,hook),(None,hook,None)):
+            parent,pid=launch(agent_env,handed)
+            c=dict(conf,env=conf_env) if conf_env else conf
+            self.assertFalse(match(pid,parent,c),(agent_env,handed,conf_env))
+            # Whether or not this bash honoured the hook, nothing matches: not the
+            # config, not even the bare words that would expand to the evil path.
+            self.assertFalse(match(pid,parent,{'command':'bash','args':['-c','exec python3 "${FLEET_MCP_BIN}/fleet-mcp.py"']}))
+        # The boundary, pinned: an agent that adds a hook at RUNTIME (not in its
+        # start environment, not in the config) whose hook unsets itself and execs
+        # the very same argv leaves a kernel this function cannot tell apart — it
+        # matches. That is why only Codex callers pass an env reader: Codex 0.160.1
+        # hands an MCP child only its allowlist + env_vars + env (measured), so a
+        # hook can reach bash only through the config, which is checked above.
+        quiet=self.root/'quiet-rc'
+        quiet.write_text('unset BASH_ENV\nexec python3 "$FLEET_MCP_BIN/fleet-mcp.py"\n')
+        parent,pid=launch(None,{'BASH_ENV':str(quiet)})
+        # ran = the hook unset itself; if this bash skipped it, BASH_ENV is still there and refused.
+        self.assertEqual(match(pid,parent),'BASH_ENV' not in env_reader(pid,set())['names'])
+        # A socket on stdin (and SHLVL < 2) makes bash read ~/.bashrc instead —
+        # upstream bash's rshd/sshd rule — and no environment says so; fd 0 does.
+        parent,pid=launch(stdin='socket')
+        self.assertTrue(env_reader(pid,set())['stdin_socket'])
+        self.assertFalse(match(pid,parent))
+
 class ExitDetectionTest(unittest.TestCase):
     def test_unreaped_zombie_counts_as_exited(self):
         # tmux may reap an exited pane process late. BSD ps renames a zombie's

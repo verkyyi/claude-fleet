@@ -1,5 +1,7 @@
 #!/bin/bash
 # needs-reconcile-selftest.sh — the stale-`needs` reconcile (issue #658).
+# selftest-part-of: tmux-spinner.py fleet-render-watch.py
+# selftest-part-of: spinner-budget-selftest.py
 #
 # #640 made a red window say WHY it is red; #656 made it say so correctly. Neither
 # re-reads the stamp afterwards, and `@claude_state` is written on EVENTS only — so a
@@ -80,6 +82,7 @@ export CLAUDE_PROJECTS_DIR="$WORK/projects";   mkdir -p "$CLAUDE_PROJECTS_DIR/pr
 # A fake `claude` is a shell loop, whose comm is the interpreter — FLEET_CLAUDE_COMM
 # is the sanctioned widening for exactly that (fleet_pane_claude_pid).
 export FLEET_CLAUDE_COMM='FLEETFAKECLAUDE'
+export CCQUOTA_FLEET=0
 
 FAIL=0 CHECKS=0
 # FAIL COUNTS, rather than latching at 1: PART B decides whether to print its
@@ -90,7 +93,7 @@ tf() { "$REAL_TMUX" -L fleetR "$@"; }
 
 SPIN_PID=''
 cleanup() {
-  [ -n "$SPIN_PID" ] && kill "$SPIN_PID" 2>/dev/null
+  if [ -n "$SPIN_PID" ]; then kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; fi
   "$REAL_TMUX" -L fleetR kill-server 2>/dev/null
   rm -rf "$WORK"
 }
@@ -145,11 +148,20 @@ mkwin() {
   [ -n "$pid" ] || { fail "fixture: no fake claude resolved under window $name"; return 0; }
   [ -n "$tool" ] || return 0                       # registered=no: the "unknown" case
   sid="sid-$name"
-  printf '{"sessionId":"%s","cwd":"/x"}\n' "$sid" > "$FLEET_CC_SESSIONS_DIR/$pid.json"
+  # The resident oracle requires the native and fleet identities plus birth.
+  python3 - "$pid" "$sid" "$FLEET_CC_SESSIONS_DIR/$pid.json" <<'PYID'
+import json, subprocess, sys, time
+pid, sid, path = sys.argv[1:]
+birth = subprocess.check_output(['ps', '-p', pid, '-o', 'lstart='], text=True).strip()
+started = time.mktime(time.strptime(birth, '%a %b %d %H:%M:%S %Y'))
+with open(path, 'w') as f: json.dump(dict(sessionId=sid, cwd='/x', startedAt=started*1000), f)
+PYID
+  tf set-window-option -t "$name" @fleet_id "$(python3 -c 'import uuid; print(uuid.uuid4())')"
+  tf set-window-option -t "$name" @cc_session_id "$sid"
   mk_transcript "$CLAUDE_PROJECTS_DIR/proj/$sid.jsonl" "$tool" "$ans"
 }
 
-tf new-session -d -s fleetR -n home "while :; do sleep 300; done" \
+tf -f /dev/null new-session -d -s fleetR -n home "while :; do sleep 300; done" \
   || { printf 'selftest: cannot start an isolated tmux server — SKIP\n' >&2; exit 0; }
 
 mkwin w-dead     no  needs perm "$OLD"                          # Claude exited while red
@@ -272,7 +284,7 @@ B_TRIES=60                      # × 0.5s ⇒ ~30s of wall clock, an order of ma
 B_BUDGET=$(( B_TRIES / 2 ))     # over the ~2-3s two passes need even on a loaded box
 B_START=$(date +%s) CONV=''
 for _ in $(seq 1 "$B_TRIES"); do
-  [ "$(st w-dead)" != needs ] && [ "$(st w-stale)" = "done" ] \
+  [ "$(st w-dead)" = needs ] && [ "$(st w-stale)" = "done" ] \
     && [ "$(st w-plainold)" = "done" ] \
     && [ "$(sb w-askfix)" = ask ] && [ "$(sb w-permfix)" = perm ] \
     && { CONV=$(( $(date +%s) - B_START )); break; }
@@ -293,9 +305,9 @@ sleep 3
 FAIL_BEFORE_B="$FAIL"
 
 # The clears.
-CHECKS=$((CHECKS+1)); [ -z "$(st w-dead)" ] \
-  || fail "a red window whose Claude exited must be cleared to idle" "state=$(st w-dead)"
-CHECKS=$((CHECKS+1)); [ -z "$(sb w-dead)" ] || fail "…and its subtype cleared with it" "needs=$(sb w-dead)"
+CHECKS=$((CHECKS+1)); [ "$(st w-dead)" = needs ] \
+  || fail "a pane without a native identity is unknown and must remain needs" "state=$(st w-dead)"
+CHECKS=$((CHECKS+1)); [ "$(sb w-dead)" = perm ] || fail "…and its subtype must remain" "needs=$(sb w-dead)"
 CHECKS=$((CHECKS+1)); [ "$(st w-stale)" = "done" ] \
   || fail "a red 'perm' with nothing pending in the transcript must clear to done" "state=$(st w-stale)"
 CHECKS=$((CHECKS+1)); [ -z "$(sb w-stale)" ] || fail "…and drop the stale reason" "needs=$(sb w-stale)"
@@ -335,7 +347,7 @@ CHECKS=$((CHECKS+1)); [ "$(st w-working)" = working ] \
 # ONE DIRECTION ONLY: nothing that was not red may have BECOME red. Checked as a set
 # difference, not an exact list, so this assertion fails for exactly one reason.
 newreds=$(tf list-windows -a -F '#{window_name} #{@claude_state}' 2>/dev/null \
-  | awk '$2=="needs"{print $1}' | grep -x -e home -e w-dead -e w-stale -e w-plainold -e w-working | tr '\n' ' ')
+  | awk '$2=="needs"{print $1}' | grep -x -e home -e w-stale -e w-plainold -e w-working | tr '\n' ' ')
 CHECKS=$((CHECKS+1)); [ -z "$newreds" ] \
   || fail "the reconcile must only ever CLEAR — these windows were not red and now are" "newly red: $newreds"
 
@@ -360,7 +372,7 @@ CHECKS=$((CHECKS+1)); [ "$npass" -ge 2 ] \
 # arm, the second acts. A wall-clock version of this assertion is worthless — on a
 # fixture this size a single-strike build still takes >2s to converge, so it passes
 # for the wrong reason (which is the very mistake #658 was filed on).
-kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
+kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 rm -f "$STRIKE_F"
 # PART B is done asserting on the two empty-subtype reds that must stay red, and a
 # pass walks its candidates in window order under NEEDS_BUDGET=8 — leaving them red
@@ -416,7 +428,7 @@ CHECKS=$((CHECKS+1)); [ "$(st w-debounce)" = "done" ] \
   || fail "FLEET_NEEDS_STRIKE_TTL must govern the age gate — a strike past 3x the interval but inside the TTL still counts" "state=$(st w-debounce)"
 
 # The knob must switch the whole errand off.
-kill "$SPIN_PID" 2>/dev/null; SPIN_PID=''
+kill "$SPIN_PID" 2>/dev/null; wait "$SPIN_PID" 2>/dev/null; SPIN_PID=''
 tf set-window-option -t w-stale @claude_state needs 2>/dev/null
 tf set-window-option -t w-stale @claude_needs perm 2>/dev/null
 tf set-window-option -t w-stale @claude_state_ts "$OLD" 2>/dev/null
@@ -453,8 +465,8 @@ for w in w-blocked w-block-pnd w-block-unreg w-block-codex; do
   CHECKS=$((CHECKS+1)); [ "$got" = "needs/blocked/$OLD" ] \
     || fail "$w must preserve the declaration and its age beyond the plain-needs dwell" "$got"
 done
-CHECKS=$((CHECKS+1)); [ -z "$(st w-block-dead)" ] && [ -z "$(sb w-block-dead)" ] \
-  || fail "a dead Claude pane clears blocked after two agreeing checks" "state=$(st w-block-dead) needs=$(sb w-block-dead)"
+CHECKS=$((CHECKS+1)); [ "$(st w-block-dead)" = needs ] && [ "$(sb w-block-dead)" = blocked ] \
+  || fail "a missing native identity cannot clear a worker declaration" "state=$(st w-block-dead) needs=$(sb w-block-dead)"
 
 printf '%s checks\n' "$CHECKS"
 [ "$FAIL" = 0 ] || exit 1

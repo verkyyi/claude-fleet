@@ -107,6 +107,15 @@ exec "\$@"
 EOF
 cat > "$WORK/shim/pgrep" <<'EOF'
 #!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -f ]; then
+    # Feed the caller's actual process pattern both old and resident argv.
+    printf '%s\n' 'python3 /install/bin/tmux-spinner.py' | grep -Eq "$2" || exit 1
+    printf '%s\n' 'sh /install/bin/tmux-spinner.sh' | grep -Eq "$2" || exit 1
+    break
+  fi
+  shift
+done
 echo 4242
 EOF
 chmod +x "$WORK/shim/"*

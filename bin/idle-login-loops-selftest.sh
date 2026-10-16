@@ -30,7 +30,9 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/idleloops.XXXXXX")" || exit 2
 LOOPPID=''
-cleanup() { [ -n "$LOOPPID" ] && kill "$LOOPPID" 2>/dev/null; pkill -f "$WORK/" 2>/dev/null; rm -rf "$WORK"; }
+WATCHSOCK=''
+REAL_TMUX="$(command -v tmux)"
+cleanup() { [ -z "$WATCHSOCK" ] || "$REAL_TMUX" -S "$WATCHSOCK" kill-server 2>/dev/null; [ -n "$LOOPPID" ] && kill "$LOOPPID" 2>/dev/null; pkill -f "$WORK/" 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT INT TERM
 
 FAILS=0 CHECKS=0
@@ -115,12 +117,32 @@ else fail "D: unwatched node, IDLE_EVERY=4 → $n rounds in 7s, want 1-2"; fi
 n=$(rounds_in 6 FLEET_HUB_SESSIONS_EVERY=1)
 if [ "$n" -ge 4 ]; then ok "D: an explicit FLEET_HUB_SESSIONS_EVERY=1 is the idle pace too → $n rounds in 6s"
 else fail "D: an explicit FLEET_HUB_SESSIONS_EVERY=1 → $n rounds in 6s, want ≥ 4 (its own pace)"; fi
-# a client attaching mid-nap: the socket goes u+x and the next round comes at once
-: > "$SD/$S"; chmod 600 "$SD/$S"
-( sleep 3; chmod u+x "$SD/$S" ) &
+# A real list request with a client wakes the shared event wait (#4357).
+# An attached socket alone is no longer a list request; keep the original time
+# and count bounds, exercise the production broadcast on a PRIVATE server.
+WATCHSOCK="$SD/$S"
+chmod 700 "$SD"
+TMUX_TMPDIR="$WORK/tt" "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s "$S" 'sleep 30'
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$REAL_TMUX" > "$WORK/bin/tmux"
+python3 - "$REAL_TMUX" "$WATCHSOCK" "$G/hubsess.view" <<'PY_VIEW' &
+import pathlib, subprocess, sys, time
+time.sleep(3)
+client = subprocess.Popen([sys.argv[1], '-S', sys.argv[2], '-C', 'attach'],
+                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+try:
+    pathlib.Path(sys.argv[3]).touch()
+    subprocess.run([sys.argv[1], '-S', sys.argv[2], 'wait-for', '-S', 'fleet-state-changed'], check=True)
+    time.sleep(4)
+finally:
+    client.terminate()
+    client.wait()
+PY_VIEW
+VIEWPID=$!
 n=$(rounds_in 6 FLEET_HUB_SESSIONS_IDLE_EVERY=30)
-if [ "$n" -ge 2 ]; then ok "D: a client attaching (socket u+x) ends the 30 s nap → $n rounds in 6s"
-else fail "D: a client attached mid-nap and the loop slept on → $n rounds in 6s, want ≥ 2"; fi
+wait "$VIEWPID"
+"$REAL_TMUX" -S "$WATCHSOCK" kill-server 2>/dev/null; WATCHSOCK=''
+if [ "$n" -ge 2 ]; then ok "D: a client opens the list mid-wait → $n rounds in 6s"
+else fail "D: a real list request slept on → $n rounds in 6s, want ≥ 2"; fi
 
 # --- E: fleet_is_fid forks nothing -----------------------------------------------------
 out=$(bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1

@@ -223,7 +223,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 
 func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c ticketCaller, repo string) {
 	ep, _ := s.nodeAuthOpt(r)
-	if ep == nil || r.Method != http.MethodPost {
+	if ep == nil || (r.Method != http.MethodPost && r.Method != http.MethodGet) {
 		httpError(w, 403, "local reservation needs its authenticated node")
 		return
 	}
@@ -240,6 +240,20 @@ func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c 
 	}
 	if !hosted {
 		httpError(w, 403, "node does not host this repo")
+		return
+	}
+	if r.Method == http.MethodGet {
+		key := r.URL.Query().Get("reservation")
+		if !idemRE.MatchString(key) {
+			httpError(w, 400, "one explicit reservation is required")
+			return
+		}
+		start, err := s.Store.ReadRepoLocalStart(repo, c.owner, ep.ID, key)
+		if err != nil {
+			httpError(w, 409, "original reservation is unavailable in this scope")
+			return
+		}
+		writeJSON(w, 200, start)
 		return
 	}
 	var in struct {

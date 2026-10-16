@@ -71,10 +71,16 @@ def stamp(pane, key, value):
     tmux("set-option", "-w", "-t", pane, key, json.dumps(value, separators=(",", ":")))
 
 
-def process(pid):
-    """Kernel executable + start time, never argv, environment or a window label."""
-    row = subprocess.run(["ps", "-p", str(pid), "-o", "ppid=,lstart="],
-                         capture_output=True, text=True, check=True, timeout=3).stdout.strip().split(None, 1)
+def process(pid, *, ps_row=None):
+    """Kernel executable + birth. ps_row reuses one observation's ppid/lstart.
+
+    The optional row never substitutes for the kernel birth/executable read.
+    Callers must discard it after that observation; the default C3 path is
+    unchanged. No process or task observation is cached here.
+    """
+    row = list(ps_row) if ps_row is not None else subprocess.run(
+        ["ps", "-p", str(pid), "-o", "ppid=,lstart="],
+        capture_output=True, text=True, check=True, timeout=3).stdout.strip().split(None, 1)
     if len(row) != 2:
         raise ValueError("native process disappeared")
     if sys.platform == "darwin":
@@ -93,10 +99,22 @@ def process(pid):
         if lib.proc_pidinfo(int(pid), 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
             raise ValueError("native process birth unavailable")
         row[1] += ":%d:%d" % (info.start_sec, info.start_usec)
+        kernel_parent, started = info.ids[4], info.start_sec
     else:
         executable = os.readlink("/proc/%d/exe" % pid)
         # Linux start ticks distinguish PID reuse within the same second.
-        row[1] += ":" + Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()[19]
+        fields = Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()
+        row[1] += ":" + fields[19]
+        if ps_row is not None:
+            boot = next(int(line.split()[1]) for line in Path('/proc/stat').read_text().splitlines()
+                        if line.startswith('btime '))
+            kernel_parent, started = int(fields[1]), boot + int(fields[19]) // os.sysconf('SC_CLK_TCK')
+    if ps_row is not None:
+        # A PID can exit/recycle between ps and the kernel read. Never attach a
+        # fresh birth to stale comm/parent data and call it the earlier process.
+        if (kernel_parent != int(row[0]) or ' '.join(time.ctime(started).split()) !=
+                ' '.join(ps_row[1].split())):
+            raise ValueError('process changed during observation')
     return dict(pid=int(pid), ppid=int(row[0]), birth=row[1], executable=executable)
 
 

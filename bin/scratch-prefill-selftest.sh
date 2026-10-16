@@ -17,7 +17,7 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 
-def drive(draft, frames, warm=False, timeout=30, fail_paste=False):
+def drive(draft, frames, warm=False, timeout=30, fail_paste=False, probe_failure=None):
     now = [0.0]
     calls = []
     last = [None]
@@ -26,6 +26,8 @@ def drive(draft, frames, warm=False, timeout=30, fail_paste=False):
         assert argv[:3] == ['tmux', '-L', 'test-fleet'], argv
         args = argv[3:]
         calls.append((now[0], args))
+        if probe_failure:
+            probe_failure(now[0], argv)
         frame = frames(now[0])
         if args[0] == 'display-message' and '-p' in args:
             assert args[3] == '%42', args
@@ -69,6 +71,7 @@ assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 0
 assert any(c[0] == 'set-buffer' and c[-2:] == ['--', text] for _, c in calls)
 assert pastes(calls)[0][1][-2:] == ['-t', '%42']
 assert '-p' in pastes(calls)[0][1] and '-d' in pastes(calls)[0][1]
+assert any(args[0] == 'set-option' and args[-1] == 'delivered unsent' for _, args in calls)
 print('ok warm: exact full Unicode draft, literal shell syntax, one paste and no Enter')
 
 # Prompt first appears while mounting, then the screen changes at t=9. Neither
@@ -84,6 +87,48 @@ assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 11, calls
 calls, rc = drive(text, lambda t: frame('› existing draft\n', command='codex', cx=0))
 assert not pastes(calls)
 print('ok cold cursor paint: wait for the empty prompt cursor, but never overwrite real text')
+
+for operation in ('display-message', 'capture-pane'):
+    def fail_probe(now, argv):
+        if 2 <= now < 3 and argv[3] == operation and (operation != 'display-message' or '-p' in argv):
+            raise subprocess.TimeoutExpired(argv, 5)
+    calls, rc = drive(text, lambda t: frame(), probe_failure=fail_probe)
+    assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 13, calls
+print('ok transient read failure: restart the full cold settling interval before one unsent paste')
+
+ownership_calls = [0]
+def interrupted_ownership(*args):
+    ownership_calls[0] += 1
+    if ownership_calls[0] == 1:
+        raise subprocess.CalledProcessError(1, ['ps'])
+    return True
+with patch.object(mod, 'codex_owns_input', side_effect=interrupted_ownership):
+    calls, rc = drive(text, lambda t: frame('› \n', command='zsh'))
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 10.5, calls
+print('ok disappearing ownership process: re-prove ancestry and settle before delivery')
+
+def fail_all_probes(now, argv):
+    if argv[3] == 'display-message' and '-p' in argv:
+        raise subprocess.CalledProcessError(1, argv)
+calls, rc = drive(text, lambda t: frame(), timeout=2, probe_failure=fail_all_probes)
+assert rc == 0 and not pastes(calls)
+assert any(args[0] == 'display-message' and '-p' not in args for _, args in calls)
+print('ok persistent probe failure: bounded timeout, no paste and explicit notice')
+
+def initial_failure(now, argv):
+    if now == 0 and argv[3] == 'display-message' and '-p' in argv:
+        raise OSError('transient read failure')
+for current in (frame('› existing draft\n', cx=2), frame(state='working'), frame(mode=1)):
+    calls, rc = drive(text, lambda t: current, probe_failure=initial_failure)
+    assert rc == 0 and not pastes(calls)
+print('ok retry preserves existing-input, active-turn and copy-mode guards')
+
+def fail_record(now, argv):
+    if argv[3] == 'set-option':
+        raise subprocess.CalledProcessError(1, argv)
+calls, rc = drive(text, lambda t: frame(), warm=True, probe_failure=fail_record)
+assert rc == 0 and len(pastes(calls)) == 1
+print('ok diagnostic status is best-effort and cannot prevent delivery')
 
 calls, rc = drive(text, lambda t: frame('› \x1b[2mAsk Codex\x1b[22m\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
@@ -145,6 +190,7 @@ calls, rc = drive(' \t\n', lambda t: frame(), warm=True)
 assert not calls
 calls, rc = drive(text, lambda t: frame(), warm=True, fail_paste=True)
 assert rc == 1 and len(pastes(calls)) == 1
+assert any(args[0] == 'set-option' and args[-1] == 'paste failed; not retried' for _, args in calls)
 assert any(c[0] == 'delete-buffer' for _, c in calls)
 print('ok control characters cannot submit; empty drafts and failure cleanup are safe')
 PY

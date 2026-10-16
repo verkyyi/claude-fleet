@@ -852,4 +852,5 @@ class DoneNoPr(Rig):
         self.assertFalse(self.exists())
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    import selftest_part
+    selftest_part.main()

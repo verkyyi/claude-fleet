@@ -383,6 +383,9 @@ fleet_gh_write() {  # fleet_gh_write <gh args…>
       && mv -f "$d/gh-write.$fp.last.$me" "$d/gh-write.$fp.last" 2>/dev/null
     gh "$@" >"$out" 2>"$err"; rc=$?
     [ "$rc" -eq 0 ] && break
+    # A journaled non-idempotent create owns its reconciliation. Keep this
+    # queue/gap, but never infer safe resend from a wrapper's error text.
+    [ "${_FLEET_GH_WRITE_ONCE:-0}" = 1 ] && break
     [ "$(fleet_gh_limit_bucket "$(cat "$err" "$out" 2>/dev/null)")" = secondary ] || break
     [ "$tries" -ge 3 ] && break
     ra=$(cat "$out" "$err" 2>/dev/null | tr -d '\r' | sed -n 's/^[Rr]etry-[Aa]fter: *\([0-9][0-9]*\).*/\1/p' | head -1)

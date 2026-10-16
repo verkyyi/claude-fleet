@@ -52,6 +52,14 @@ Closing the terminal window does not stop your sessions; type `fleet` next time 
 
 In ⌘P choose **Add a repo…** and fill in `<owner>/<repo>`. The repository goes to `~/projects/<repo>`; from then on, pick it when you start a session, and the session changes code and opens pull requests in its own copy, never touching your main checkout.
 
+GitHub repository names accept either case for task creation and migration;
+existing configuration files and working directories keep their names.
+If creation fails, read the specific reason: `frozen` means migration is still
+in progress, input/registration errors require checking the selected repo,
+`HTTP 401/403` requires checking the host's authentication and permissions, and
+Hub outages require restoring the service before retrying. Casing does not
+require re-adding the repo or manually unfreezing it.
+
 Existing repositories keep their ticket settings. To explicitly move one repo's
 task control to the hub, first save a private migration inventory:
 

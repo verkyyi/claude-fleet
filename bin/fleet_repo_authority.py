@@ -21,6 +21,28 @@ import fleet_launch as launch
 BIN = Path(__file__).resolve().parent
 
 
+def repo_identity(value):
+    # Authority takes an explicit owner/repo, not a URL/path. GitHub casing is
+    # identity-equivalent; the local registration's spelling is NOT a path to rename.
+    if not isinstance(value, str):
+        raise ValueError("repo must be an explicit owner/repo string")
+    repo = ticket.norm_repo(value)
+    if not repo or repo != value.lower() or any(p in (".", "..") for p in repo.split("/")):
+        raise ValueError("select one owner/repo explicitly (no URL, path or surrounding whitespace)")
+    return repo
+
+
+def registered_repo(session, repo):
+    # Use the fleet's registration reader; never guess an overlay from the Hub's
+    # lower-case identity, and never fall back to another repo's fleet settings.
+    result = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_target_repo "$2" "$3"',
+                             "_", str(BIN), session, repo], capture_output=True, text=True)
+    registered = result.stdout.strip()
+    if result.returncode or ticket.norm_repo(registered) != repo:
+        raise ValueError("repo registration is unknown or ambiguous; check fleet-repo.sh list --session " + session)
+    return registered
+
+
 def setting(session, repo, key):
     result = subprocess.run(["bash", str(BIN / "fleet-repo.sh"), "get", key,
                              "--session", session, repo, "--tsv"],
@@ -32,6 +54,7 @@ def setting(session, repo, key):
 
 
 def local_settings(session, repo):
+    repo = registered_repo(session, repo_identity(repo))
     values = {k: setting(session, repo, k) for k in
               ("FLEET_TASK_AUTHORITY", "FLEET_TICKETS", "FLEET_FORGE", "FLEET_LAND")}
     # Resolve the repo's own overlay, never the fallback fleet conf.
@@ -48,6 +71,7 @@ def local_settings(session, repo):
 
 
 def manifest(session, repo):
+    repo = repo_identity(repo)
     local, _ = local_settings(session, repo)
     data = ticket.api("GET", "/authority", query={"repo": repo, "rollback": "1"})
     return dict(version=1, repo=repo, session=session, local=local, hub=data,
@@ -108,8 +132,9 @@ def prove_stopped(proof):
 
 
 def gate(repo, finish):
+    repo = repo_identity(repo)
     a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
-    if a.get("mode") not in ("legacy", "frozen", "hub"):
+    if not isinstance(a, dict) or a.get("mode") not in ("legacy", "frozen", "hub"):
         raise ValueError("repo authority is unknown; no local fallback")
     if a["mode"] == "frozen":
         raise ValueError("repo dispatch is frozen; drain/cutover must finish first")
@@ -118,7 +143,7 @@ def gate(repo, finish):
         if os.environ.get("FLEET_LAUNCH"):
             c = launch.validate_context(json.loads(os.environ["FLEET_LAUNCH"]))
             t = launch.current_task(c)
-            if t.get("repo") != repo:
+            if repo_identity(t.get("repo", "")) != repo:
                 raise ValueError("accepted task belongs to another repo")
             ref = t.get("ticket_ref", "")
         elif finish:
@@ -132,7 +157,7 @@ def gate(repo, finish):
 
 
 def start_call(repo, key, action, **fields):
-    return ticket.api("POST", "/authority/start", query={"repo": repo},
+    return ticket.api("POST", "/authority/start", query={"repo": repo_identity(repo)},
                       body=dict(action=action, reservation=key, **fields))
 
 
@@ -202,8 +227,17 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
         proof = prove_stopped(receipt["native_identity"])
         start_call(repo, key, "stopped", native_identity={k: proof[k] for k in NATIVE_KEYS}, execution_stopped=True)
     except (ticket.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        print("repo authority: execution retained: " + str(exc), file=sys.stderr)
+        print("repo authority: execution retained: " + error_reason(exc), file=sys.stderr)
     return rc
+
+
+def match_ticket_ref(repo, number, ref):
+    repo = repo_identity(repo)
+    backend, bound_repo, bound_number = ticket.parse(ref)
+    if (repo_identity(bound_repo) != repo or str(bound_number) != str(number)
+            or ref != "%s:%s#%s" % (backend, bound_repo, number)):
+        raise ValueError("accepted ticket reference differs from this window's binding")
+    return backend
 
 
 def ticket_ref(repo, number):
@@ -213,8 +247,7 @@ def ticket_ref(repo, number):
                                       ("execution_owner", "worker_id"))):
         raise ValueError("ticket identity needs the accepted owner/generation")
     ref = t.get("ticket_ref")
-    if ref not in ("gh:%s#%s" % (repo, number), "hub:%s#%s" % (repo, number)):
-        raise ValueError("accepted ticket reference differs from this window's binding")
+    match_ticket_ref(repo, number, ref)
     print(ref)
 
 
@@ -232,10 +265,12 @@ def main(argv=None):
     p.add_argument("--body-file")
     p.add_argument("--manifest")
     args = p.parse_args(argv)
-    repo = ticket.norm_repo(args.repo)
-    if not repo or repo != args.repo:
-        raise ValueError("select one normalized owner/repo explicitly")
+    repo = repo_identity(args.repo)
+    if args.session and ("/" in args.session or args.session in (".", "..")):
+        raise ValueError("--session must name one fleet")
     if args.gate or args.finish:
+        if args.session:
+            registered_repo(args.session, repo)
         gate(repo, args.finish)
         return
     if args.cancel_start:
@@ -294,6 +329,23 @@ def main(argv=None):
         print(json.dumps(dict(result=result, manifest=manifest(args.session, repo)), indent=2))
 
 
+def error_reason(exc):
+    # A Hub error body is untrusted. Retain its actionable reason, never an
+    # echoed credential (including a pair read by ticket.creds from node.env).
+    message = str(exc)
+    secrets = [v for k, v in os.environ.items()
+               if k.endswith(("TOKEN", "SECRET", "PASSWORD", "CRED", "ASSERT")) and v]
+    if ticket._CREDS:
+        secrets.append(ticket._CREDS[1])
+    for secret in sorted(secrets, key=len, reverse=True):
+        message = message.replace(secret, "[redacted]")
+    if "HTTP 401" in message or "HTTP 403" in message:
+        message += "; check this node's Hub authentication/permissions"
+    elif "HTTP 5" in message:
+        message += "; Hub unavailable, retry after service recovery"
+    return " ".join(message.split())
+
+
 if __name__ == "__main__":
     try:
         if sys.argv[1:2] == ["--supervise"]:
@@ -301,7 +353,10 @@ if __name__ == "__main__":
         if sys.argv[1:2] == ["--ticket-ref"]:
             ticket_ref(*sys.argv[2:])
             sys.exit(0)
+        if sys.argv[1:2] == ["--match-ticket-ref"]:
+            print(match_ticket_ref(*sys.argv[2:]))
+            sys.exit(0)
         main()
     except (ticket.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        print("repo authority: " + str(exc), file=sys.stderr)
+        print("repo authority: " + error_reason(exc), file=sys.stderr)
         sys.exit(getattr(exc, "rc", 1))

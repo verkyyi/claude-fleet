@@ -129,5 +129,21 @@ n=$(printf '%s\n' "$out" | grep -c '^PASS ')
 FLEET_HEAVY=0 sh "$R/bin/run-selftests.sh" --changed base alpha >/dev/null 2>&1
 [ $? -eq 2 ] && ok "--changed + test names is refused" || fail "--changed + names not refused"
 
+# A family edit selects every thin wrapper exactly once, including a new part.
+# Keep the wrappers in the BASE too: otherwise "changed itself" would mask a
+# missing selftest-part-of edge (issue #4500).
+g checkout -q -B s-parts base
+mk_test alpha-2 'selftest-part-of: alpha-selftest.sh'
+mk_test alpha-3 'selftest-part-of: alpha-selftest.sh'
+g add -A && g commit -qm parts && g tag parts-base
+echo changed >> "$R/bin/tool-a.sh"
+g add -A && g commit -qm part-source
+out=$(env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW FLEET_HEAVY=0 \
+      sh "$R/bin/run-selftests.sh" --changed parts-base </dev/null 2>&1); rc=$?
+ran=$(printf '%s\n' "$out" | awk '/^PASS /{print $2}' | sort | tr '\n' ' ')
+[ "$rc" -eq 0 ] && [ "$ran" = 'alpha-2-selftest.sh alpha-3-selftest.sh alpha-selftest.sh portability-selftest.sh ' ] \
+  && ok "a family source selects its parent and every part once" \
+  || fail "family selection: rc=$rc ran=$ran"
+
 [ "$FAILS" -eq 0 ] || { echo "run-selftests-changed-selftest: $FAILS failure(s)"; exit 1; }
 echo "run-selftests-changed-selftest: all green"

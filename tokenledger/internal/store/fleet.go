@@ -344,7 +344,7 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'repo_local_start', 'repo_authority')`,
+	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'task_blocker', 'task_blocker_event', 'repo_local_start', 'repo_authority')`,
 		status, resultJSON, at.UTC().Format(rfc), id)
 	return err
 }
@@ -354,6 +354,24 @@ func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time
 func (s *Store) ensureFleetColumns() error {
 	if err := s.addColumn("fleet_operations", "placement", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+	// Blocker snapshots remain in the existing journal. Indexed scope selects
+	// one task/attempt or one dependency; no issue scan or polling is needed.
+	for _, col := range []string{"task_ref", "dependency_task"} {
+		if err := s.addColumn("fleet_operations", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if err := s.addColumn("fleet_operations", "task_generation", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`CREATE INDEX IF NOT EXISTS fleet_blocker_task ON fleet_operations(action, actor, task_ref, task_generation)`,
+		`CREATE INDEX IF NOT EXISTS fleet_blocker_dependency ON fleet_operations(action, actor, dependency_task, status)`,
+	} {
+		if _, err := s.write.Exec(q); err != nil {
+			return err
+		}
 	}
 	// claude-fleet#1512: every repo a fleet hosts, "" = the agent did not say.
 	if err := s.addColumn("fleet_fleets", "repos_json", "TEXT NOT NULL DEFAULT ''"); err != nil {

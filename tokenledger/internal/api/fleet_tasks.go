@@ -155,7 +155,7 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 }
 
 // taskLiveFields are the inventory fields the page shows beside a record.
-var taskLiveFields = []string{"key", "state", "needs", "status_kind", "status_msg", "ctx_left", "title", "repo", "issue"}
+var taskLiveFields = []string{"key", "state", "needs", "status_kind", "status_msg", "ctx_left", "title", "repo", "issue", "observed_at", "stale", "source"}
 
 func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) map[string]any {
 	if t.WorkerID == "" {
@@ -168,8 +168,20 @@ func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) 
 	ws, ok := rows[fid]
 	if !ok {
 		f, err := s.Store.Fleet(fid)
-		if err == nil && f.Present {
+		if err == nil {
 			_ = json.Unmarshal([]byte(f.WorkersJSON), &ws)
+			// Retain the last inventory when the node disappears. Its original
+			// observation time is not the time of this Tasks GET.
+			for _, w := range ws {
+				if w == nil {
+					continue
+				}
+				if f.State != "unknown" {
+					w["observed_at"] = f.ObservedAt.UTC().Format(time.RFC3339Nano)
+				}
+				w["stale"] = !f.Present || f.State == "unknown" || time.Since(f.ObservedAt) > 2*time.Minute || f.ObservedAt.After(time.Now())
+				w["source"] = "inventory"
+			}
 		}
 		rows[fid] = ws
 	}

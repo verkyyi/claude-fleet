@@ -577,6 +577,15 @@ CHANGED=$(printf '%s\n%s\n' "$ADDED" "$GONE" | sed '/^$/d' | sort -u)
 say "range: $(printf '%s\n' "$CHANGED" | sed '/^$/d' | wc -l | tr -d ' ') path(s) changed"
 fi
 touched() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
+# These Python modules remain loaded in the resident spinner until its restart.
+spinner_changed() {
+  local file
+  for file in tmux-spinner.sh tmux-spinner.py fleet-render-watch.py fleet_pending_tool.py \
+      fleet_launch.py fleet_sleep_argv.py fleet_runtime.py fleet-codex-rpc.py fleet-codex-session.py; do
+    touched "bin/$file" && return 0
+  done
+  return 1
+}
 # is_new <path> — present at --to, absent at --from: an upstream addition, which
 # this login has never had the chance to install (so "not installed" ≠ opted out)
 is_new() { [ -f "$ROOT/$1" ] && ! ver_has "$from" "$1"; }
@@ -615,7 +624,7 @@ daemons_launchd() {
     { [ -z "$SUDO" ] || $SUDO true >/dev/null 2>&1; } || sudo_ok=0
   fi
   local spin=0
-  touched bin/tmux-spinner.sh && [ "$CLIENT_ONLY" = 0 ] && spin=1
+  spinner_changed && [ "$CLIENT_ONLY" = 0 ] && spin=1
   if [ -z "$units" ] && [ "$spin" = 0 ]; then say 'daemons: ok — no daemon change, no reload needed'; return; fi
   if [ "$shape" = system ] && ! command -v plutil >/dev/null 2>&1; then
     fail daemons "system LaunchDaemons need plutil to render — not found"; return
@@ -692,7 +701,7 @@ daemons_launchd() {
 daemons_systemd() {
   local units u f any_file dirty=0 acted=0 unit kind
   units=$(printf '%s\n' "$CHANGED" | sed -En 's#^systemd/claude-fleet-(.*)\.(service|timer)$#\1#p' | sort -u)
-  local spin=0; touched bin/tmux-spinner.sh && [ "$CLIENT_ONLY" = 0 ] && spin=1
+  local spin=0; spinner_changed && [ "$CLIENT_ONLY" = 0 ] && spin=1
   if [ -z "$units" ] && [ "$spin" = 0 ]; then say 'daemons: ok — no daemon change, no reload needed'; return; fi
   local RESTART='' ENABLE='' DISABLE=''
   for u in $units; do

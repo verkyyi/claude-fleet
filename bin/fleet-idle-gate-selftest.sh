@@ -184,20 +184,22 @@ FAKE_LIVE=0 run fleet-quotawatch.sh
 [ -f "$QHB" ] || fail "quotawatch: a fresh wake marker opens the gate: $(tail -3 "$SB/err")"; ok
 
 # --- 10. the spinner's idle nap ------------------------------------------------
-SP="$BIN/tmux-spinner.sh"
-snip=$(sed -n '/^# --- idle nap (issue #1077)/,/^hb_stamp   # once at startup/p' "$SP" | sed '$d')
-[ -n "$snip" ] || fail "spinner: the idle-nap block is missing"; ok
-grep -q 'if \[ -z "\$SOCKETS" \]; then hb_stamp; idle_nap; sleep "\$NAP";' "$SP" \
+SP="$BIN/tmux-spinner.py"
+grep -q 'time.sleep(self.idle_delay(time.time()))' "$SP" \
   || fail "spinner: the no-fleet branch must sleep the idle nap"; ok
-nap() {  # <now> [idle_after] — NAP after a sequence set up by the caller in $SPRE
-  BIN="$BIN" TMPDIR="$WORK" FLEET_DAEMON_IDLE_AFTER="${2:-300}" sh -c "$snip
-$SPRE
-_now=\$1; idle_nap; printf '%s' \"\$NAP\"" _ "$1"
+nap() {  # <now> [idle_after] — same cases against the resident loop's actual method
+  TMPDIR="$WORK" FLEET_DAEMON_IDLE_AFTER="${2:-300}" python3 - "$SP" "$1" <<'PYNAP'
+import runpy, sys
+m = runpy.run_path(sys.argv[1])
+s = m['Spinner'].__new__(m['Spinner'])
+s.idle_t0 = 1000
+s.wake = m['daemon_state_dir'](m['BIN'].parent) / 'wake'
+print(s.idle_delay(int(sys.argv[2])))
+PYNAP
 }
 # the spinner's state dir follows ITS install root (a checkout ⇒ a private dir)
 SW="$(sh -c '. "$1"; fleet_daemon_state_dir "$2"' _ "$LIB" "$BIN/..")/wake"
 mkdir -p "$(dirname "$SW")"; rm -f "$SW"
-SPRE='IDLE_T0=1000'
 [ "$(nap 1100)" = 2 ] || fail "spinner: 2s inside the grace"; ok
 [ "$(nap 1300)" = 60 ] || fail "spinner: the 60s nap past the grace"; ok
 [ "$(nap 1300 0)" = 2 ] || fail "spinner: IDLE_AFTER=0 never naps"; ok
@@ -205,8 +207,8 @@ printf '1250\n' > "$SW"
 [ "$(nap 1300)" = 2 ] || fail "spinner: a wake inside the spell restarts the grace"; ok
 printf '900\n' > "$SW"
 [ "$(nap 1300)" = 60 ] || fail "spinner: a wake older than the spell is ignored"; ok
-grep -q "IDLE_T0=''   # a live fleet ends the idle spell" "$SP" || fail "spinner: a live fleet must reset the spell"; ok
-sh -n "$SP" || fail "spinner: syntax"; ok
+grep -q 'self.idle_t0 = None' "$SP" || fail "spinner: a live fleet must reset the spell"; ok
+python3 -m py_compile "$SP" || fail "spinner: syntax"; ok
 
 # --- 11. who wakes -------------------------------------------------------------
 for f in bin/fleet-up.sh bin/dash-issue-session.sh bin/dash-raw-session.sh shell/cw.zsh; do

@@ -1569,6 +1569,16 @@ drill_node_core_old_code() {
 # login, four of a login with no session, and every spare login's issue-bridge /
 # pr-refresh asking GitHub every 15 s through a stand-in that compiled the
 # supervisor's 8k lines each time.
+drill_node_versioned_python_script() {
+  CAP=15
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-node-orphans-selftest.sh" Orphans.test_versioned_python_script_identity 2>&1) \
+    || { WHY="versioned Python hid the managed script: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="python3.14、python3.15 和框架 Python 仍取实际脚本；账号孤儿匹配保留精确路径与参数，拒绝 inline payload、别的作业和相似解释器名称"
+}
+
 drill_node_restart_shared_orphan() {
   CAP=120
   local t0 out
@@ -1817,6 +1827,6 @@ drill_svc_run_leaks_across_runs() {
   WHAT="同一个服务账号连跑两次：每次一个全新 0700 目录（HOME、work、out、tmp、钥匙都在里面），跑完目录没了、带本次标记的进程（含 setsid 逃出进程组的）全被杀；第二次看不到第一次任何东西；会话环境里没有钥匙、设置禁读钥匙和通行证；被 SIGKILL 的那次由 clean 收尾"
 }
 
-# this file runs part 1/3; the rest are its part files (issue #2694)
-: "${BREAK_PART:=1/3}"
+# this file runs part 1/6; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/6}"
 cred_run_drills "$0"

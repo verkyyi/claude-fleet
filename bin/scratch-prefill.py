@@ -123,7 +123,14 @@ def prefill(socket, pane, draft, warm):
         return subprocess.run(prefix + list(args), stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL, timeout=5, check=True).stdout
 
+    def record(outcome):
+        try:
+            tm("set-option", "-w", "-t", pane, "@scratch_prefill_result", outcome)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     def note(reason):
+        record(reason)
         tm("display-message", "scratch: name not prefilled — " + reason)
 
     # A name is one input line. Drop terminal control bytes (especially CR/LF,
@@ -132,14 +139,21 @@ def prefill(socket, pane, draft, warm):
     text = "".join(c for c in draft if ord(c) >= 32 and not 127 <= ord(c) < 160)
     if not text.strip():
         return
+    record("waiting for input")
     deadline = time.monotonic() + TIMEOUT
     appeared = unchanged = None
     previous = None
     while time.monotonic() < deadline:
-        meta = tm("display-message", "-p", "-t", pane,
-                  "#{pane_dead}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}"
-                  "\t#{@claude_state}\t#{pane_in_mode}").decode().strip().split("\t")
+        try:
+            meta = tm("display-message", "-p", "-t", pane,
+                      "#{pane_dead}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}"
+                      "\t#{@claude_state}\t#{pane_in_mode}").decode().strip().split("\t")
+        except (OSError, subprocess.SubprocessError):
+            appeared = unchanged = previous = None
+            time.sleep(POLL)
+            continue
         if len(meta) != 6 or meta[0] != "0":
+            record("pane is unavailable")
             return
         command, cx, cy, state, mode = meta[1:]
         if state in ("working", "busy", "needs", "looping") or mode != "0":
@@ -148,13 +162,20 @@ def prefill(socket, pane, draft, warm):
         # Native Claude releases may report their version as the process name;
         # npm installs run as node. In particular, never paste into a shell left
         # behind by a failed/exited agent, even if its old prompt is still visible.
-        if (command not in ("claude", "codex", "node")
-                and not re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command)
-                and not codex_owns_input(tm, pane)):
+        try:
+            owned = (command in ("claude", "codex", "node")
+                     or re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command)
+                     or codex_owns_input(tm, pane))
+            screen = (tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
+                      if owned else None)
+        except (OSError, subprocess.SubprocessError):
             appeared = unchanged = previous = None
             time.sleep(POLL)
             continue
-        screen = tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
+        if screen is None:
+            appeared = unchanged = previous = None
+            time.sleep(POLL)
+            continue
         status = input_status(screen, int(cx), int(cy))
         if status == "busy":
             note("input already contains text")
@@ -170,6 +191,10 @@ def prefill(socket, pane, draft, warm):
                 try:
                     tm("set-buffer", "-b", buf, "--", text)
                     tm("paste-buffer", "-p", "-d", "-b", buf, "-t", pane)
+                    record("delivered unsent")
+                except (OSError, subprocess.SubprocessError):
+                    record("paste failed; not retried")
+                    raise
                 finally:
                     try:
                         tm("delete-buffer", "-b", buf)

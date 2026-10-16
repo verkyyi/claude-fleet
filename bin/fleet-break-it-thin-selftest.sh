@@ -410,4 +410,5 @@ th_cleanup() {
   cleanup
 }
 trap th_cleanup EXIT
+: "${BREAK_PART:=1/3}"
 cred_run_drills "$0"

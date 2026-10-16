@@ -280,6 +280,19 @@ bash "$WORK/other/bin/fleet-daemon-watch.sh" --unit ledger-watch >/dev/null 2>&1
   || fail "7: a worktree's watch wrote a kick stamp into the LIVE status bar (the #639 tail)"; ok
 [ "$(kicks)" -eq 0 ] \
   || fail "7: a worktree's watch read the live stamps and kicked the operator's daemon"; ok
+# A sweep may reuse its resolved directory; the next sweep must still see new
+# stamps, and switching roots must still select each root's own stamp (#4444).
+mkdir -p "$sd_dev"
+printf '11\n' > "$G/ledger-watch.tick"
+printf '22\n' > "$sd_dev/ledger-watch.tick"
+# shellcheck disable=SC2016  # evaluated by lib in the child shell
+scope_pair="$(lib 'for root in '"$WORK $WORK/other"'; do d=$(fleet_daemon_state_dir "$root"); fleet_daemon_tick_ts ledger-watch "$root" "$d"; printf " "; done')"
+[ "$scope_pair" = '11 22 ' ] || fail "7: reused state directory crossed roots: $scope_pair"; ok
+printf '33\n' > "$sd_dev/ledger-watch.tick"
+[ "$(lib 'fleet_daemon_tick_ts ledger-watch '"$WORK/other $sd_dev")" = 33 ] \
+  || fail "7: reused state directory cached the stamp contents"; ok
+rm -f "$sd_dev/ledger-watch.tick"
+tick ledger-watch 900
 
 # --------------------------------------------------------------- 8. status ----
 # ONE unit ⇒ the legacy fleet-collect-kick contract, 3 fields. Several ⇒ a table

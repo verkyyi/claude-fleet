@@ -340,7 +340,7 @@ def hub_verb(verb, args):
 
     if verb == 'new':
         o, _ = opts(args, ('repo', 'title', 'body', 'body-file', 'priority', 'parent', 'origin', 'milestone'),
-                    multi=('label',), bools=('filed', 'no-breakage'))
+                    multi=('label',), bools=('filed', 'no-breakage', 'once'))
         repo = norm_repo(o.get('repo', ''))
         title = (o.get('title') or '').strip()
         if not repo:
@@ -404,14 +404,24 @@ def hub_verb(verb, args):
         return 'unlinked' if o.get('remove') else 'linked'
 
     if verb == 'find':
-        o, _ = opts(args, ('repo', 'marker'))
+        o, _ = opts(args, ('repo', 'marker'), bools=('all',))
         repo = norm_repo(o.get('repo', ''))
         if not repo or not o.get('marker'):
             raise Fail(2, 'find: --repo and --marker are required')
-        d = api('GET', '', query={'repo': repo, 'state': 'open', 'limit': '500'})
-        for t in d.get('tickets') or []:
-            if o['marker'] in (t.get('body') or ''):
-                return f'{ticket_id("hub", repo, t.get("number"))}\t{turl(repo, t.get("number"))}'
+        try:
+            d = api('GET', '', query={'repo': repo, 'state': '' if o.get('all') else 'open', 'limit': '500'})
+        except Fail:
+            if o.get('all'):
+                raise Fail(4, 'ticket reconciliation unavailable')
+            raise
+        hits = [t for t in d.get('tickets') or [] if o['marker'] in (t.get('body') or '')]
+        if o.get('all') and len(hits) > 1:
+            raise Fail(2, 'ambiguous ticket marker; reconciliation required')
+        if hits:
+            t = hits[0]
+            return f'{ticket_id("hub", repo, t.get("number"))}\t{turl(repo, t.get("number"))}'
+        if o.get('all') and len(d.get('tickets') or []) >= 500:
+            raise Fail(4, 'ticket reconciliation incomplete after 500 rows')
         raise Fail(1, '')
 
     if verb == 'cache':

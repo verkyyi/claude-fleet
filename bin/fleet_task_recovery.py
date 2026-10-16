@@ -28,7 +28,7 @@ ACTION = "task_receipt"
 # Observations contain identity/control state only, never a task's command input.
 TASK_FIELDS = ("id", "authority_version", "owner", "generation", "execution_owner",
                "resolved_agent", "actual_agent", "attempt_id", "operation_id", "state", "outcome",
-               "cancel_request", "ticket_ref", "parent_task", "parent_session", "parent_generation")
+               "cancel_request", "ticket_ref", "repo", "task_blockers", "parent_task", "parent_session", "parent_generation")
 
 
 class Pending(ValueError):
@@ -165,7 +165,7 @@ class Journal:
     def event(self, action, task, payload):
         if action == "report":
             event = payload.get("event_id")
-        elif action == "stopped" or (action == "mutate" and payload.get("kind") in ("stop_ack", "cancel_request")):
+        elif action == "stopped" or (action == "mutate" and payload.get("kind") in ("stop_ack", "cancel_request", "blocker")):
             event = payload.get("idempotency_key")
         else:
             raise ValueError("only lifecycle receipts may be retained")
@@ -432,7 +432,7 @@ def main():
             if a.action == "ack":
                 j.ack_report(a.task, payload)
                 return 0
-            if a.action == "mutate" and payload.get("kind") != "cancel_request":
+            if a.action == "mutate" and payload.get("kind") not in ("cancel_request", "blocker"):
                 data = j.transport(a.action, a.task, payload)  # never buffer ownership or launch input
             else:
                 data = j.send(a.action, a.task, payload)

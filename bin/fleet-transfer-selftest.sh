@@ -34,6 +34,9 @@ mkdir -p "$IBIN" "$FB" "$WORK/sessions" "$WORK/projects/actual" "$WORK/conf/flee
 for f in fleet_repo_authority.py fleet_launch.py fleet_ticket.py fleet-trust.sh fleet_codex_trust.py fleet-agent-defaults.py fleet_transfer_durable.py fleet_transfer_cron.py fleet_cron.py fleet_loop_mark.py .fleet-transfer-norepo.py fleet-session-wrap.sh fleet-session-page.py fleet-codex-rpc.py fleet-codex-runtime.py fleet-input.py .fleet-account.py .fleet-failover.py fleet-codex-attention.py fleet-codex-session.py fleet-transfer.sh .fleet-transfer.py .fleet-transfer-wait.py fleet-loop.py fleet-sleep.py fleet_sleep_argv.py fleet_sleep_mcp.py fleet_sleep_park.py fleet-lib.sh usage-lib.sh fleet-lang.sh session-end-hook.sh set-claude-state.sh fleet-hook-conf.sh fleet-account.sh fleet_iso.py fleet-alerts.sh fleet-daemon-lib.sh fleet-relogin.sh; do cp "$BIN/$f" "$IBIN/$f"; done
 export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_CC_PROJECTS_DIR="$WORK/projects"
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
+# The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
+# hand-built install complete; an absent module must not impersonate an exit.
+cp "$BIN/fleet_pending_tool.py" "$BIN/fleet_runtime.py" "$IBIN/"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
 # one sees `target auth: unknown` and runs exactly as before.

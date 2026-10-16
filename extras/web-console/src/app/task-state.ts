@@ -6,10 +6,25 @@ export type Task = {
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
   generation?: number; outcome?: string; cancel_request?: string;
+  task_blockers?: { version: number; generation: number; items: TaskBlocker[] };
   requested_agent?: string; resolved_agent?: string; actual_agent?: string;
   pr?: string; pr_state?: string;
-  live?: { key?: string; state?: string; needs?: string; status_kind?: string } | null;
+  live?: { key?: string; state?: string; needs?: string; status_kind?: string;
+    observed_at?: string; source?: string; stale?: boolean } | null;
 };
+export type TaskBlocker = {
+  blocker_id: string; state: "active" | "resolved" | "revoked";
+  reason?: string; created_at?: string; resolved_at?: string; revoked_at?: string;
+};
+
+// Display the authority's items verbatim. This is not blocker_projection or a
+// second eligibility adapter; resolved/revoked items remain visible as history.
+export function taskBlockerItems(t: Task): TaskBlocker[] | null {
+  const b = t.task_blockers;
+  return t.authority_version === 1 && b?.version === 1 && b.generation === t.generation
+    && Array.isArray(b.items) && b.items.every((item) => item && typeof item.blocker_id === "string"
+      && ["active", "resolved", "revoked"].includes(item.state)) ? b.items : null;
+}
 export type TasksResponse = { tasks: Task[]; observed_at?: string; stale?: boolean };
 
 const terminal = new Set(["succeeded", "failed", "cancelled", "refused"]);
@@ -67,6 +82,11 @@ export function taskRead(previous: TaskRead, response: TasksResponse | null, now
   if (!response || !Array.isArray(response.tasks) || response.tasks.some((t) => !t
     || typeof t.id !== "string" || typeof t.title !== "string" || typeof t.created_at !== "string")) {
     return { data: previous.data, failed: true };
+  }
+  if (response.stale && previous.data) {
+    // An incomplete remote answer cannot turn missing rows into a zero count,
+    // nor replace a newer generation with an old cached event.
+    return { data: { ...previous.data, stale: true }, failed: false };
   }
   return { data: { ...response, observed_at: response.observed_at || (response.stale ? undefined : now) }, failed: false };
 }

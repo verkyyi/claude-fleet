@@ -61,7 +61,7 @@ export FLEET_CONF_DIR="$WORK/conf"
 mkdir -p "$FLEET_CONF_DIR/fleets/$LBL" "$WORK/bin" "$WORK/logs" "$WORK/shim" "$WORK/tmp"
 : > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 cp "$SPIN_SRC" "$WORK/bin/tmux-spinner.sh"
-cp "$BIN/fleet-render-watch.py" "$WORK/bin/"
+cp "$BIN/tmux-spinner.py" "$BIN/fleet-render-watch.py" "$BIN/fleet_pending_tool.py" "$BIN/fleet_launch.py" "$BIN/fleet_sleep_argv.py" "$BIN/fleet_runtime.py" "$BIN/fleet-codex-rpc.py" "$BIN/fleet-codex-session.py" "$WORK/bin/"
 printf '#!/bin/sh\nprintf '\''{"state":"none"}\\n'\''\n' > "$WORK/bin/fleet-client-where.sh"
 CALLS="$WORK/calls"; : > "$CALLS"
 cat > "$WORK/shim/tmux" <<EOF
@@ -99,8 +99,8 @@ _t=0; while [ ! -x "$SOCKP" ] && [ "$_t" -lt 50 ]; do sleep 0.1; _t=$((_t + 1));
 # and wait-client restarts into these 4/5s rate windows (#4441); that accelerated
 # deadline is checked separately by spinner-maintenance-selftest.sh. The default
 # 20s heartbeat still runs twice during this test and its format is checked below.
-PATH="$WORK/shim:$PATH" TMPDIR="$WORK/tmp" SPIN_INTERVAL=0.12 \
-  sh "$WORK/bin/tmux-spinner.sh" >/dev/null 2>&1 &
+PATH="$WORK/shim:$PATH" TMPDIR="$WORK/tmp" SPIN_INTERVAL=0.12 SPIN_TRACE=1 \
+  sh "$WORK/bin/tmux-spinner.sh" >/dev/null 2>"$WORK/spinner.trace" &
 SPIN_PID=$!
 
 spin_of() { tl display-message -p -t "$LBL:$1" '#{@spin}'; }
@@ -139,9 +139,9 @@ sleep 1.5
 # --- IDLE ----------------------------------------------------------------------
 # Also count the quiet re-reads (the WFMT read, the only call naming
 # @worker_lifecycle) in the same window: START's bound is one re-read period.
-_ia=$(wc -l < "$CALLS")
+_ia=$(wc -l < "$WORK/spinner.trace")
 r=$(rate 6)
-reads=$(tail -n +$((_ia + 1)) "$CALLS" | grep -c '@worker_lifecycle')
+reads=$(tail -n +$((_ia + 1)) "$WORK/spinner.trace" | grep -c ' windows$')
 if le "$r" 1.3; then ok "IDLE: nothing animating → $r tmux calls/s (≤ ~1)"
 else fail "IDLE: nothing animating → $r tmux calls/s, want ≤ ~1" "$(tail -8 "$CALLS")"; fi
 
@@ -202,7 +202,8 @@ tl set-window-option -t "$LBL:w2" @claude_state 'done'
 
 # --- UNWATCHED (issue #4261) -------------------------------------------------------
 kill "$CLIENT_PID" 2>/dev/null; wait "$CLIENT_PID" 2>/dev/null; CLIENT_PID=''
-_t=0; while [ -x "$SOCKP" ] && [ "$_t" -lt 50 ]; do sleep 0.1; _t=$((_t + 1)); done
+# The internal control client intentionally remains attached; the shared
+# predicate excludes only its recorded PID + client/server generation.
 sleep 1.5
 r=$(rate 5)
 if le "$r" 1.3; then ok "UNWATCHED: no client, nothing animating → $r tmux calls/s"
@@ -261,5 +262,6 @@ TMUX="$SOCKP,1,0" TMUX_PANE="$pane" CLAUDE_CODE_ENTRYPOINT=cli sh "$BIN/set-clau
 if [ -e "$SOCKP.dirty" ]; then ok "MARKER: set-claude-state.sh drops <socket>.dirty on a state write"
 else fail "MARKER: set-claude-state.sh wrote no <socket>.dirty ($SOCKP.dirty)"; fi
 rm -f "$SOCKP.dirty"
+[ "$FAILS" = 0 ] || tail -35 "$WORK/spinner.trace"
 printf '%d/%d checks passed\n' $((CHECKS - FAILS)) "$CHECKS"
 [ "$FAILS" = 0 ]

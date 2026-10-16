@@ -93,7 +93,7 @@ def ccquota(*args):
     return json.loads(run([os.environ.get('FLEET_QUOTA_BIN', 'ccquota'), *args], env=env))
 
 
-def profiles():
+def profiles(read_only=False):
     rows = ccquota('codex', 'list', '--json')
     if not isinstance(rows, list):
         raise ValueError('ccquota codex list --json is unavailable or has an unknown schema')
@@ -125,10 +125,11 @@ def profiles():
                         login_reason=str(login.get('reason') or '')))
     # The ONE judge of a login's validity (EPIC #1665) also leaves the record
     # the status bar reads; a failed stamp never fails the read it rode on.
-    try:
-        stamp_reauth(out)
-    except OSError:
-        pass
+    if not read_only:
+        try:
+            stamp_reauth(out)
+        except OSError:
+            pass
     return out
 
 
@@ -190,8 +191,8 @@ def logins():
                  login=p['login']) for p in profiles()]
 
 
-def profile(name='', home='', account=''):
-    found = [p for p in profiles() if (not name or p['profile'] == name)
+def profile(name='', home='', account='', read_only=False):
+    found = [p for p in (profiles(read_only=True) if read_only else profiles()) if (not name or p['profile'] == name)
              and (not home or p['home'] == str(Path(home).resolve()))
              and (not account or p['account'] == account)]
     if len(found) != 1:
@@ -371,7 +372,7 @@ def claude_profile(label=''):
     return dict(agent='claude', label=label, key='claude/' + label, login=login)
 
 
-def codex_real_home(home):
+def codex_real_home(home, recovery=None):
     """Resolve only this login's recorded proxy mirror; never grant a login.
 
     fleet-session-cred.sh writes the account record and mirrors sessions before
@@ -424,7 +425,10 @@ def codex_real_home(home):
         if owned(record).st_size > 16384:
             raise ValueError('invalid proxy session record')
         fields = dict(line.split('=', 1) for line in record.read_text().splitlines() if '=' in line)
-        if fields.get('provider') != 'codex' or fields.get('account') != label:
+        central = recovery is not None and fields.get('route') == 'central' and fields.get('hub_id')
+        if (fields.get('provider') != 'codex' or (not central and fields.get('account') != label)
+                or (recovery is not None and (path.name != recovery.get('sid')
+                    or any(fields.get(k) != v for k, v in recovery.items() if k != 'sid')))):
             raise ValueError('real home differs from the proxy session account')
         sessions = path / 'sessions'
         if not sessions.is_symlink() or sessions.resolve(strict=True) != (real / 'sessions').resolve(strict=True):
@@ -848,14 +852,15 @@ def check_target(target, quota=True):
     return row
 
 
-def verify_codex_runtime(remote, source=None):
+def verify_codex_runtime(remote, source=None, subscription=None, client=None, read_only=False):
     """Verify the locked profile and native auth/config before sending a task."""
-    expected = read_subscription()
+    expected = read_subscription() if subscription is None else subscription
     if not expected:
         return
-    actual = profile(expected['profile'], expected['home'], expected['account'])
+    actual = (profile(expected['profile'], expected['home'], expected['account'], read_only=True) if read_only
+              else profile(expected['profile'], expected['home'], expected['account']))
     Client = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
-    rpc = Client(remote, timeout=5)
+    rpc = client if client is not None else Client(remote, timeout=5)
     try:
         auth = rpc.call('account/read', {'refreshToken': False})
         account = auth.get('account') or {}
@@ -876,7 +881,8 @@ def verify_codex_runtime(remote, source=None):
                 or not actual.get('email') or (account.get('email') or '').lower() != actual['email'].lower()):
             raise ValueError('private Codex server did not confirm the pinned ChatGPT subscription')
     finally:
-        rpc.close()
+        if client is None:
+            rpc.close()
 
 
 def read_subscription():

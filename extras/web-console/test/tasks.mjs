@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { taskStatus, taskLanding, taskPR, taskTicket, agentMismatch, taskRead } from '../src/app/task-state.ts';
+import { taskStatus, taskLanding, taskPR, taskTicket, agentMismatch, taskRead, taskBlockerItems } from '../src/app/task-state.ts';
 
 const running = { id: 'T7001', title: 'Fixture', created_at: '2026-10-16T06:00:00Z',
   authority_version: 1, state: 'running', requested_agent: 'codex', resolved_agent: 'codex', actual_agent: 'codex' };
@@ -54,8 +54,20 @@ assert.equal(outage.failed, true);
 assert.equal(outage.data, read.data); // unchanged timestamp and confirmed status
 assert.equal(taskRead(read, {}, 'later').data, read.data);
 assert.equal(taskRead(read, { tasks: [null] }, 'later').data, read.data);
-assert.equal(taskRead(read, { tasks: [], stale: true }, 'later').data.observed_at, undefined);
+assert.equal(taskRead(read, { tasks: [], stale: true }, 'later').data.observed_at, read.data.observed_at);
+assert.deepEqual(taskRead(read, { tasks: [], stale: true }, 'later').data.tasks, [running]);
 assert.deepEqual(taskRead(initial, null, 'later'), { data: null, failed: true });
 assert.deepEqual(taskRead(outage, { tasks: [] }, 'reconnected'), { data: { tasks: [], observed_at: 'reconnected' }, failed: false });
 assert.equal(taskRead(initial, { tasks: [running], stale: true }, 'cached').data.stale, true);
 console.log('PASS task authority, retained native sessions, legacy unknown, agent mismatch, PR landing, qualified refs and outage reads');
+
+const blocked = { ...running, generation: 2, task_blockers: { version: 1, generation: 2, items: [
+  { blocker_id: 'one', state: 'resolved' }, { blocker_id: 'two', state: 'active' },
+  { blocker_id: 'three', state: 'revoked' },
+] }, asked: 'still asking', live: { state: 'needs', needs: 'perm' } };
+assert.deepEqual(taskBlockerItems(blocked).map((b) => b.state), ['resolved', 'active', 'revoked']);
+assert.equal(taskStatus(blocked), 'running');
+assert.equal(blocked.asked, 'still asking');
+assert.equal(taskBlockerItems({ ...blocked, generation: 3 }), null);
+assert.equal(taskBlockerItems(running), null);
+assert.equal(taskBlockerItems({ ...blocked, task_blockers: { version: 1, generation: 2, items: [] } }).length, 0);

@@ -11,6 +11,45 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
+func TestRepoAuthorityRecoveryScope(t *testing.T) {
+	h, _, _, f5, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(token string) func(http.Header) {
+		return func(h http.Header) { h.Set("Authorization", "Bearer "+token) }
+	}
+	path := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	worker := f5.FleetID + "/" + wrFid
+	for _, action := range []string{"reserve", "begin"} {
+		code, out := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path,
+			map[string]any{"action": action, "reservation": "original", "worker_id": worker})
+		if code != 200 {
+			t.Fatalf("start %d %v", code, out)
+		}
+	}
+	for _, token := range []string{viewerToken, h.tokens["mac-c"], "foreign"} {
+		if code, _ := ticketCall(t, h, auth(token), http.MethodGet, path+"&reservation=original", nil); code == 200 {
+			t.Fatal("foreign/observer caller read original reservation")
+		}
+	}
+	code, before := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, path+"&reservation=original", nil)
+	if code != 200 || before["phase"] != "starting" {
+		t.Fatal(code, before)
+	}
+	proof := map[string]any{"worker_id": worker, "native_session": "original", "pid": 42, "birth": "birth", "executable": "/bin/codex"}
+	request := map[string]any{"action": "recover-observe", "reservation": "original", "worker_id": worker, "native_identity": proof}
+	code, ack := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
+	if code != 200 || ack["phase"] != "observed" {
+		t.Fatal(code, ack)
+	}
+	code, again := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
+	if code != 200 || !reflect.DeepEqual(ack, again) {
+		t.Fatal("exact replay", code, again)
+	}
+	request["worker_id"] = "foreign/worker"
+	if code, _ := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request); code == 200 {
+		t.Fatal("foreign worker accepted")
+	}
+}
+
 func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
