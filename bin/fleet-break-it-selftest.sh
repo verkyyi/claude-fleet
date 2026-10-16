@@ -6457,6 +6457,14 @@ drill_codex_mcp_busy() {
   SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
+drill_reap_shadow_race() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-reap-shadow-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同源影子证明按 turn/子进程/lease 失效，未知逐维保留，永不授予动作'
+}
+
 drill_runtime_stale_idle() {
   CAP=10; local t0 out
   t0=$(now)
