@@ -16,6 +16,7 @@ sys.path.insert(0, str(BIN))
 import fleet_control
 from fleet_hub_common import Fault, validate_write
 import fleet_view
+import fleet_panel
 
 
 def module(name):
@@ -36,13 +37,26 @@ class PanelDraftTests(unittest.TestCase):
             self.assertEqual(compose.main(["--send", "draft.json", "--repo", "acme/web", "--agent", "codex"]), 4)
         send.assert_called_once_with("draft.json", "acme/web", "", "", "", "codex")
 
-    def test_interactive_compose_keeps_localized_display_strings(self):
+    def test_compose_payload_keeps_localized_display_strings(self):
         with patch.object(compose, "load_text", return_value={"compose_empty": "localized"}) as load, \
-                patch.object(compose.curses, "wrapper") as wrapper:
-            self.assertEqual(compose.main([]), 0)
+                patch.object(compose.Path, "read_text", return_value="draft"), \
+                patch.object(compose, "payload", return_value={}), patch("builtins.print"):
+            self.assertEqual(compose.main(["payload", "draft.txt"]), 0)
         load.assert_called_once_with()
-        wrapper.assert_called_once_with(compose.ui, "")
         self.assertEqual(compose.TEXT["compose_empty"], "localized")
+
+    def test_panel_wait_preserves_bracketed_paste_input(self):
+        for completed in (None, []):
+            with self.subTest(launch_pending=completed is not None):
+                screen = unittest.mock.Mock()
+                inputs = fleet_panel.Input()
+                screen.get_wch.side_effect = list("\x1b[200~line one\nline two\x1b[201~")
+                received = []
+                while inputs.paste is not None or not received:
+                    value = fleet_view.panel_key(screen, 200, completed, inputs)
+                    if value is not None:
+                        received.append(value)
+                self.assertEqual(received, [("paste", "line one\nline two")])
 
     def test_idle_panel_keeps_its_existing_input_wait(self):
         screen = unittest.mock.Mock()

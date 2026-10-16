@@ -28,9 +28,9 @@
 #     DIRTY MARKER below). Every other writer of @claude_state (the classifier, the
 #     sweeps below, fleet-account/migrate, the python helpers) is caught by the
 #     IDLE_READ_SECS re-read, so nothing is later than 1s behind.
-#   · with nothing animating anywhere, the loop ticks every IDLE_TICK_SECS instead
-#     of every frame, and every throttle below counts frame-EQUIVALENTS, so the
-#     stuck/needs/kick/heartbeat cadences do not stretch when it does.
+#   · with nobody watching, fleet-render-watch.py waits for fleet-state-changed
+#     (state writes / attach), bounded by the NEXT maintenance deadline and a
+#     65s discovery fallback. Visible frames keep their original cadence.
 # Each tmux call is counted (TMUX_N) and the heartbeat publishes the rate.
 #
 # Three throttled side errands ride this loop, because being KeepAlive makes it the
@@ -228,18 +228,19 @@ socc=0
 DEAD_EVERY=3   # refreshes between re-probes of a dead label (issue #887, _sock_live)
 deadc=0
 SOCKETS=''
-# --- who is looking (issue #4261) ---------------------------------------------
-# A frame moves a glyph only somebody attached can see. A socket with no client
-# (a spare login, a node nobody's 看台 is on) is read like a quiet one — its glyph
-# written, re-read every IDLE_READ_SECS or on the marker — never 8 frames a second;
-# and with no client on ANY socket the loop ticks UNWATCHED_TICK_SECS, not
-# IDLE_TICK_SECS: the tick is the hook→screen ceiling, and there is no screen. On a
-# shared node that was ~8 logins × a `sleep` + a `tmux` per frame for nobody. tmux
-# itself keeps the answer on its socket file — u+x while a client is attached
-# (server_update_socket) — so it is a builtin test every frame, no fork.
+# --- who is looking (issues #4261, #4356) -------------------------------------
+# Shared predicate with fleet-render-watch.py: ANY fleet client or an active
+# client-where lease. Socket u+x is tmux's own attachment bit, no per-frame fork.
+# The helper refreshes the lease at most once per 65s and returns its lifetime.
 # FLEET_SPINNER_WATCH=0 animates every socket, as before.
 SPIN_WATCH="${FLEET_SPINNER_WATCH:-1}"
-watched() { [ "$SPIN_WATCH" = 0 ] || [ -x "$TSOCKDIR/$1" ]; }
+LEASE_FRAMES=0
+watched() {
+  if [ "$SPIN_WATCH" = 0 ] || [ "$LEASE_FRAMES" -gt 0 ]; then return 0; fi
+  # fleet-render-watch.py's hot path: tmux maintains this bit without a query.
+  for _ws in $SOCKETS; do [ -x "$TSOCKDIR/$_ws" ] && return 0; done
+  return 1
+}
 
 # --- stuck-working demotion (issue #101) ------------------------------------
 # A window pinned at @claude_state=working whose Stop hook was missed (crash /
@@ -785,16 +786,14 @@ fi
 # tick just slept, and every counter advances by it.
 IDLE_READ_SECS=1
 IDLE_TICK_SECS=0.25
-UNWATCHED_TICK_SECS=1   # the tick while no client is attached anywhere (issue #4261)
 IDLE_EVERY=$(awk -v c="$IDLE_READ_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 TICK_STEP=$(awk -v c="$IDLE_TICK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
 # A tick shorter than a frame is not a backoff — never tick faster than the frame.
 [ "$TICK_STEP" -ge 1 ] || TICK_STEP=1
 TICK_SLEEP=$(awk -v s="$TICK_STEP" -v i="$INTERVAL" 'BEGIN{print s*i}')
-UTICK_STEP=$(awk -v c="$UNWATCHED_TICK_SECS" -v i="$INTERVAL" 'BEGIN{f=int(c/i+0.5); if(f<1)f=1; print f}')
-[ "$UTICK_STEP" -ge "$TICK_STEP" ] || UTICK_STEP=$TICK_STEP
-UTICK_SLEEP=$(awk -v s="$UTICK_STEP" -v i="$INTERVAL" 'BEGIN{print s*i}')
 step=1
+force_read=0
+WAIT_FRAME=0   # shared helper's monotonic clock; includes work between waits
 
 # DIRTY MARKER (issue #887): `<socket path>.dirty`, i.e. `$TSOCKDIR/<label>.dirty`
 # beside tmux's own socket. set-claude-state.sh creates it after every state write
@@ -829,6 +828,8 @@ LAST_OTHER='|'   # per-session @attn_other_windows counts published last frame (
 frame='' cyan='' indigo=''   # reassigned each frame via eval below; declared so shellcheck sees them
 
 while :; do
+  LEASE_FRAMES=$((LEASE_FRAMES - step))
+  [ "$LEASE_FRAMES" -ge 0 ] || LEASE_FRAMES=0
   # Refresh the live fleet-socket list on a ~2s throttle; idle cheaply (and keep
   # re-probing) while no fleet is up so a freshly-spawned fleet is picked up fast.
   # Written to a file and read back rather than `$(fleet_sockets)`, so the probes it
@@ -848,24 +849,24 @@ while :; do
   # false alarm exactly when the operator is least able to check (issue #677).
   # This branch already sleeps 2s, so an unthrottled stamp here costs one fork/2s.
   # Past the idle grace the sleep is a NAP (issue #1077, idle_nap above).
-  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; FRAME_SOCKS=''; NEEDS_SOCKS=''; step=1; continue; fi
+  if [ -z "$SOCKETS" ]; then hb_stamp; idle_nap; sleep "$NAP"; LAST='|'; LAST_NEEDS='|'; LAST_OTHER='|'; ANIM_SOCKS=''; FRAME_SOCKS=''; NEEDS_SOCKS=''; step=1; WAIT_FRAME=0; continue; fi
   IDLE_T0=''   # a live fleet ends the idle spell
 
   hbc=$((hbc + step))
-  [ "$hbc" -ge "$HB_EVERY" ] && { hbc=0; hb_stamp; }
+  [ "$hbc" -ge "$HB_EVERY" ] && { hbc=$((hbc % HB_EVERY)); hb_stamp; }
 
   # Throttled stuck-working sweep (issue #101) — near-free per frame (one integer
   # compare); the actual window_activity scan runs only ~every STUCK_CHECK_SECS.
   if [ "$STUCK_SECS" -gt 0 ]; then
     sc=$((sc + step))
-    [ "$sc" -ge "$STUCK_EVERY" ] && { sc=0; stuck_check; }
+    [ "$sc" -ge "$STUCK_EVERY" ] && { sc=$((sc % STUCK_EVERY)); stuck_check; }
   fi
 
   # Throttled degenerate-stream watchdog (issue #1557) — one integer compare per
   # frame; the sweep only over animating fleets (a `working` window animates).
   if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
     dgc=$((dgc + step))
-    [ "$dgc" -ge "$DEGEN_EVERY" ] && { dgc=0; degen_check; }
+    [ "$dgc" -ge "$DEGEN_EVERY" ] && { dgc=$((dgc % DEGEN_EVERY)); degen_check; }
   fi
 
   # Throttled stale-`needs` reconcile (issue #658) — same shape as the sweep above:
@@ -873,7 +874,7 @@ while :; do
   # stamped `needs` (0-2 on a live fleet), at most every NEEDS_SECS.
   if [ "$NEEDS_SECS" -gt 0 ]; then
     nc=$((nc + step))
-    [ "$nc" -ge "$NEEDS_EVERY" ] && { nc=0; needs_check "$NEEDS_SOCKS"; }
+    [ "$nc" -ge "$NEEDS_EVERY" ] && { nc=$((nc % NEEDS_EVERY)); needs_check "$NEEDS_SOCKS"; }
   fi
 
   # Throttled interval-daemon self-heal (issues #636, #639). This daemon is
@@ -894,7 +895,7 @@ while :; do
   # The rate limit, the log and the dash trace all live inside it, per unit.
   kc=$((kc + step))
   if [ "$kc" -ge "$KICK_EVERY" ]; then
-    kc=0
+    kc=$((kc % KICK_EVERY))
     [ -x "$BIN/fleet-daemon-watch.sh" ] && bash "$BIN/fleet-daemon-watch.sh" >/dev/null 2>&1
   fi
 
@@ -922,6 +923,12 @@ while :; do
     #                        dropped its dirty marker; otherwise replay the cache.
     #   slot not ours yet  → read it first (a new fleet, a reshuffled list).
     if [ "$c_sock" != "$sock" ]; then
+      c_anim=0; due=1
+      # Existing servers need the event hook too: an install does not reload a
+      # live session's conf. Indexed hooks coexist with sleeper/pool hooks.
+      tmux -L "$sock" set-hook -g 'client-attached[80]' 'wait-for -S fleet-state-changed' \
+        ';' set-hook -g 'client-detached[80]' 'wait-for -S fleet-state-changed' 2>/dev/null
+    elif [ "$force_read" = 1 ]; then
       c_anim=0; due=1
     elif [ "$c_anim" = 1 ]; then
       due=1
@@ -1167,18 +1174,58 @@ while :; do
     done
   fi
   LAST_OTHER="$NEW_OTHER"
+  force_read=0
 
   # Frame or tick (issue #887): while anything animates, advance the glyph and
   # sleep one frame; with nothing animating anywhere, the glyph has nothing to
   # draw, so sleep a whole tick and let every throttle count it as TICK_STEP frames.
   if [ -n "$FRAME_SOCKS" ]; then
+    WAIT_FRAME=0
     i=$((i + 1)); [ "$i" -gt "$NFRAMES" ] && i=1
     step=1
     sleep "$INTERVAL"
   elif [ "$looked" = 0 ]; then
-    step=$UTICK_STEP
-    sleep "$UTICK_SLEEP"
+    [ -n "$HB_T" ] || hb_stamp
+    # Rendering can wait; maintenance cannot (#4441). Pass the nearest remaining
+    # throttle window, not a fixed 65s sleep followed by catch-up counters. These
+    # are the SAME clocks the checks above consume, including heartbeat/self-heal
+    # even on a fleet with no candidates. No subprocess to compute this bound.
+    _wait_frames=$((HB_EVERY - hbc))
+    _remaining=$((KICK_EVERY - kc))
+    [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    if [ "$STUCK_SECS" -gt 0 ]; then
+      _remaining=$((STUCK_EVERY - sc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$NEEDS_SECS" -gt 0 ]; then
+      _remaining=$((NEEDS_EVERY - nc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
+      _remaining=$((DEGEN_EVERY - dgc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    [ "$_wait_frames" -ge 1 ] || _wait_frames=1
+    set --
+    for sock in $SOCKETS; do
+      set -- "$@" "$TSOCKDIR/$sock"
+      TMUX_N=$((TMUX_N + 1))  # the helper's wait-for client, counted too
+    done
+    _wait=$(python3 "$BIN/fleet-render-watch.py" --max-frames "$_wait_frames" \
+      --since-frame "$WAIT_FRAME" "$INTERVAL" "$@") || _wait=''
+    if [ -n "$_wait" ]; then
+      _rd "$_wait" step LEASE_FRAMES WAIT_FRAME
+      LEASE_FRAMES=$((LEASE_FRAMES + step))  # remaining AT wake, not before sleep
+    else
+      # Broken/missing helper falls back to the original quiet cadence, never a
+      # hot retry loop or a 65s maintenance outage.
+      WAIT_FRAME=0; sleep "$TICK_SLEEP"; step=$TICK_STEP
+    fi
+    # An event may have landed after the table read but before wait-for. Always
+    # read BEFORE drawing on wake; elapsed time advances maintenance throttles.
+    force_read=1
   else
+    WAIT_FRAME=0
     step=$TICK_STEP
     sleep "$TICK_SLEEP"
   fi

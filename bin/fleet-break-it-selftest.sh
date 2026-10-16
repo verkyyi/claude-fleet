@@ -90,7 +90,7 @@
 #                                                   (closeDrillLogins, exit 4; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/internal/api fleet_opening.go (openingETALeft)
 #   opened-login-fleet-silent                       tokenledger/internal/api fleet_opening.go (settling, settleWhy,
-#                                                   openingNotes, openingOver; go test) + bin/fleet-shell.sh first_home
+#                                                   openingNotes, openingOver; go test); client first-open coverage is in the thin drills
 #   stale-admin-opens-login                         tokenledger/internal/api nodes.go (openerFor, CapLoginJoin) +
 #                                                   fleet_accounts.go (dispatchAccounts, noLoginOpenerWhy); go test
 #   heartbeat-sys-blocked                           tokenledger/internal/agent beat_parts.go (sysSampler, asyncReading,
@@ -140,8 +140,6 @@
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
-#   notify-silent                                   bin/fleet_notify.py (beat), bin/fleet-hub-sessions.sh (map_write),
-#                                                   bin/fleet-client-actions.py notify
 #   debug-bundle-leaks-secret                       bin/fleet-doctor-bundle.sh, bin/fleet_redact.py, bin/fleet-redact.awk,
 #                                                   conf/secret-shapes.list, conf/debug-collect.list
 #   debug-upload-no-python-ca                       bin/fleet-debug (report: C1's bundle, /usr/bin/curl upload)
@@ -150,34 +148,6 @@
 #                                                   fleet-status-7501.py pipe, classify-sessions.sh (skip:7501),
 #                                                   fleet_state_carry / fleet_primary_fresh (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py (reconcile.sources)
-# Client half — the real client (bin/fleet → fleet-shell.sh) on isolated -L
-# sockets, an ssh shim for the far end, a python pty as the person's terminal:
-#   client-kill-keys / client-pane-killed / sidebar-ctrl-c / nested-drop
-#                                                   conf/tmux-shell.conf, fleet-sidebar.py,
-#                                                   fleet-remote-view.sh
-#   client-kill-server                              bin/fleet (run again)
-#   hub-unreachable                                 bin/fleet, fleet-client-badge.sh
-#   hub-refused-cert                                fleet-client-lease.py where, fleet-client-where.sh,
-#                                                   fleet-client-badge.sh
-#   cert-expiry-keeper                              bin/fleet-shell.sh (keeper), fleet-login.py renew --on-use hub
-#   cert-expiry-no-client                           bin/fleet-login.py (renew --on-use ssh, use_section), fleet-diskguard.sh --cert, fleet-connect.py --cert-check
-#   offline-list-moves                              tmux-dashboard-rows.sh (lost rows stay put), fleet-sidebar.py
-#   static-forward / proxy-orphan                   bin/fleet-remote-view.sh (run), fleet-shell.sh
-#   reconnect-stale-view / reconnect-mouse          bin/fleet-remote-view.sh (run, open, select)
-#   view-reconnect-shared                           bin/fleet-remote-view.sh (attach, rv_prune)
-#   client-files-swapped                            bin/fleet-client-update.sh (tick), fleet-shell.sh reload
-#   client-unversioned-drift                        bin/fleet-client-update.sh (tick, digest), fleet-shell.sh stamp_ver
-#   client-sidebar-stale-after-update               bin/fleet-sidebar.py (VIEW_STAMP, sync), fleet-shell.sh reload
-#   client-hot-reload                               bin/fleet-client-update.sh (follow), fleet-install-sync.sh
-#                                                   client_follow, fleet-shell.sh reload --from
-#   client-other-login-empty-list                   bin/fleet-hub-sessions.sh (fetch: ETag + its mapping stamp)
-#   hub-restart-where                               bin/fleet-shell.sh (keeper renew), fleet-client-lease.py renew,
-#                                                   fleet-client-where.sh
-#   panel-stale / panel-wrong-window                plugins/fleet-steward/hooks/panels.ts (its tests, when a claude CLI is here),
-#                                                   lifecycle.ts (PANELS_FULL_MS timer, role gate), fleet_steward.py
-#                                                   write_stamp
-#   cmdn-waits-orch                                 bin/fleet-shell.sh portal (home-session --new),
-#                                                   conf/tmux-shell.conf (User928), fleet-sidebar.py with_portal
 #   report-parent-gone                              bin/fleet-report-parent.sh (orphan → global/orphan-reports.ndjson
 #                                                   + fleet-alerts.sh event child-report)
 #   report-parent-remote                            bin/fleet-report-parent.sh (rail 1 → the hub outbox by
@@ -234,15 +204,9 @@
 # bin/fleet-break-it-{2..7}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
-# across each other beyond lazy, idempotent rigs (client_setup, drive), so any
+# across each other beyond lazy, idempotent rigs, so any
 # slice runs on its own.
 set -uo pipefail
-# plain `fleet` is the thin loop since #3007 (EPIC #2999 C10): what runs here is the
-# OLD client's road, kept until C11 deletes it — so it asks for it by name
-export FLEET_CLIENT=shell
-# Every session its own row (issue #2675): the batch view folds a flat list into
-# 「单独的活」 — sidebar-batch-view-selftest.sh pins it; these rows are the old ones.
-export FLEET_SIDEBAR_FOLD=off
 [ $# -gt 0 ] && BREAK_ONLY="$*"
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -253,17 +217,16 @@ REAL_TMUX="$(command -v tmux 2>/dev/null)"
 # never the caller's pane: a drill's `run` loop would take a pane it does not own
 # for a replaced server's and end at once (#2987), and nothing here is that pane's
 unset TMUX TMUX_PANE
+# A worker launched by restore inherits these; each drill chooses its own mode.
+unset RESTORE_UNFINISHED RESTORE_KEEP_DONE RESTORE_ONLY_MAP
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/brk.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
-CSESS="brk$$"                                    # the client's socket label
 cleanup() {
   local s
   for s in "$WORK"/sock-*; do [ -S "$s" ] && "$REAL_TMUX" -S "$s" kill-server 2>/dev/null; done
   for s in kf "kscr$$"; do TMUX_TMPDIR="$WORK/ktt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
   for s in vrn vrc; do TMUX_TMPDIR="$WORK/vt" "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  for s in "$CSESS" "$CSESS-stage" "${CSESS}h" "${CSESS}h-stage" "${CSESS}o" "${CSESS}o-stage" "${CSESS}u" "${CSESS}u-stage" "${CSESS}w" "${CSESS}w-stage" "${CSESS}s" "${CSESS}s-stage"; do "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; done
-  pkill -f "fleet-shell.sh keeper $CSESS" 2>/dev/null
   pkill -f "$WORK/" 2>/dev/null
   [ -n "${BREAK_KEEP:-}" ] && { printf 'kept %s\n' "$WORK" >&2; return; }
   rm -rf "$WORK"
@@ -1928,267 +1891,19 @@ drill_fleet_down_confirm() {
   WHAT="不确认不关（脚本无 --yes、终端输错名字）；--yes 关后 fleet up --undo 两个会话都以原对话回来"
 }
 
-# ===================================================== client: the sandbox }
-
-CLIENT_UP=''
-client_env() {
+# The certificate drills use an isolated home and cache, without a client UI.
+cert_env() {
   export HOME="$WORK/chome" XDG_CONFIG_HOME="$WORK/chome/.config" XDG_CACHE_HOME="$WORK/chome/.cache"
   export FLEET_CONF_DIR="$WORK/chome/.config/claude-fleet" FLEET_SHELL_CACHE="$WORK/ccache"
-  export FLEET_REMOTE_BIN="$BIN" FLEET_REMOTE_VIA_HUB=0 FLEET_SHELL_NO_ATTACH=1
-  export FLEET_HUB_SESSIONS_LOOP_SECS=8 FLEET_HUB_SESSIONS_EVERY=1 FLEET_HUB_SESSIONS_WATCHED_EVERY=1
-  export FLEET_SHELL_WARM=0 FLEET_CLIENT_ACTIONS=0 FLEET_UI_LANG=zh
-  unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION FLEET_SHELL FLEET_HUB_SESSIONS_CLIENT FLEET_SIDEBAR_SOURCE
-  unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_NODE_ALIASES FLEET_SHELL_STAGE
-  export FLEET_HUB_URL=https://hub.example FLEET_REMOTE_SSH_CMD="$WORK/shim/ssh"
-  export FLEET_HUB_SESSIONS_CMD="cat $WORK/sessions.json" FLEET_HUB_SESSIONS_USER=dave
-  # every start a client with no switch history (issue #2739): one drill's opened
-  # rows would make the next start a returning client's — its first screen the
-  # last session or 「新任务」, not the pick's own window these drills break
-  FLEET_SWITCH_STATE=$(mktemp -d "$WORK/cstate.XXXXXX"); export FLEET_SWITCH_STATE
+  unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN
   mkdir -p "$HOME/.ssh" "$FLEET_CONF_DIR"
-}
-client_setup() {
-  [ -n "$CLIENT_UP" ] && return 0
-  CLIENT_UP=1
-  local SB="$WORK/sbin"; mkdir -p "$SB" "$WORK/conf" "$WORK/shim"
-  for f in "$BIN"/*; do [ -f "$f" ] && ln -s "$f" "$SB/${f##*/}"; done
-  for f in "$ROOT"/conf/*; do [ -f "$f" ] && ln -s "$f" "$WORK/conf/${f##*/}"; done
-  rm -f "$SB/fleet-connect.py"
-  cat > "$SB/fleet-connect.py" <<'EOF'
-#!/usr/bin/env python3
-import json, sys
-if "--pick" in sys.argv:
-    print(json.dumps({"machine": "mac-b", "hostname": "mac-c", "reason": "last", "login": "dave",
-                      "machines": [{"alias": "mac-b", "hostname": "mac-c"}]}))
-sys.exit(0)
-EOF
-  chmod +x "$SB/fleet-connect.py"
-  # the far end: an attach paints a line and holds; killing its sleep is a drop
-  cat > "$WORK/shim/ssh" <<EOF
-#!/bin/bash
-op=''
-while [ \$# -gt 0 ]; do
-  case "\$1" in -O) op=\$2; shift 2 ;; -S|-o|-L) shift 2 ;; -*) shift ;; *) break ;; esac
-done
-[ -n "\$op" ] && exit 1
-case "\$*" in
-  *" attach "*) printf 'FAR-END-SESSION\n'; echo \$\$ > "$WORK/attach.pid"; sleep 600 & wait \$!; exit 255 ;;
-  *" watch "*|*" serve "*) sleep 600 ;;
-  *" shell-here "*) sleep 600 ;;   # ⌃\'s far-end shell (#2744): holds like one
-esac
-exit 0
-EOF
-  chmod +x "$WORK/shim/ssh"
-  printf '{"sessions": [], "nodes": [{"machine_name": "mac-c", "availability": "online", "sessions": 0, "observed_at": "2026-10-06T10:00:00Z"}]}\n' > "$WORK/sessions.json"
-}
-# client_start <socket label> [VAR=val…] — `fleet`, as the person types it
-client_start() {
-  local s="$1"; shift
-  # shellcheck disable=SC2163  # "$@" are VAR=val words, exported as given
-  ( client_env; export FLEET_SHELL_SESSION="$s"; [ $# -gt 0 ] && export "$@"
-    "$WORK/sbin/fleet" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
-  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ]
-}
-# attached <socket label> <secs> — a terminal attaches (the hooks draw the frame
-# on attach); true once home has its list and a live right pane
-attached() {
-  python3 - "$REAL_TMUX" "$1" "$2" <<'PY'
-import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
-tmux, sess, secs = sys.argv[1], sys.argv[2], float(sys.argv[3])
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-    os.environ.pop("TMUX", None)
-    os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-def whole():
-    out = subprocess.run([tmux, "-L", sess, "list-panes", "-t", "=" + sess + ":home", "-F",
-                          "#{?@sidebar,L,R}#{pane_dead}"], capture_output=True, text=True).stdout.split()
-    return sorted(out) == ["L0", "R0"]
-ok, end = False, time.time() + secs
-while time.time() < end and not ok:
-    r, _, _ = select.select([fd], [], [], 0.1)
-    if r:
-        try: os.read(fd, 65536)
-        except OSError: break
-    ok = whole()
-try: os.kill(pid, signal.SIGTERM)
-except OSError: pass
-sys.exit(0 if ok else 1)
-PY
-}
-
-# The pty drive: the keys a person presses, run once for four rows.
-DRIVEN=''
-drive() {
-  [ -n "$DRIVEN" ] && return 0
-  DRIVEN=1
-  client_setup
-  client_start "$CSESS" || { printf 'client did not start: %s\n' "$(cat "$WORK/up-$CSESS.err")" > "$WORK/drive.err"; return 1; }
-  python3 - "$REAL_TMUX" "$CSESS" "$WORK" > "$WORK/drive" 2>>"$WORK/drive.err" <<'PY'
-import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
-tmux, sess, work = sys.argv[1:4]
-W, H = 200, 50
-def t(*a, sock=sess):
-    return subprocess.run([tmux, "-L", sock, *a], capture_output=True, text=True).stdout.strip()
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-    os.environ.pop("TMUX", None)
-    os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", H, W, 0, 0))
-def pump(secs):
-    end = time.time() + secs
-    while time.time() < end:
-        r, _, _ = select.select([fd], [], [], 0.05)
-        if r:
-            try: os.read(fd, 65536)
-            except OSError: return
-def key(data, wait=0.6):
-    try: os.write(fd, data)
-    except OSError: pass        # the client died: the frame checks say so
-    pump(wait)
-def until(secs, test):
-    end = time.time() + secs
-    while time.time() < end:
-        if test(): return True
-        pump(0.1)
-    return test()
-def frame():
-    rows = [l.split() for l in t("list-panes", "-t", "=" + sess + ":home", "-F",
-            "#{pane_id} #{pane_pid} #{?@sidebar,1,0} #{pane_dead}").splitlines()]
-    lst = next((r for r in rows if r[2] == "1"), None)
-    right = next((r for r in rows if r[2] != "1"), None)
-    return (lst[0] if lst else "", lst[1] if lst else "", right[0] if right else "",
-            right[1] if right else "", right[3] if right else "")
-def stage():
-    return t("list-windows", "-t", "=" + sess + "-stage", "-F", "x", sock=sess + "-stage").count("x")
-def whole():
-    f = frame()
-    return bool(f[0]) and bool(f[2]) and f[4] == "0"
-def say(k, v):
-    print("%s=%s" % (k, v)); sys.stdout.flush()
-def kill_tree(p):
-    subprocess.run(["pkill", "-9", "-P", p], capture_output=True)
-    try: os.kill(int(p), signal.SIGKILL)
-    except (OSError, ValueError): pass
-try:
-    say("up", "1" if until(15, lambda: frame()[0] != "") else "0")
-    pump(1.0)
-    s0 = stage()
-    # client-kill-keys: prefix x + y, prefix & + y, right-click + X on the list,
-    # the right pane and the status line
-    t0 = time.time(); broke = []
-    for tag, seq in (("prefix x", [b"\x02x", b"y"]), ("prefix &", [b"\x02&", b"y"])):
-        for b in seq: key(b, 1.0)
-        if not whole() or stage() != s0: broke.append(tag)
-    for tag, col, row in (("右键侧栏", 5, 10), ("右键右侧", 120, 10), ("右键状态栏", 3, H)):
-        key(b"\x1b[<2;%d;%dM" % (col, row), 0.2); key(b"\x1b[<2;%d;%dm" % (col, row), 0.4)
-        key(b"X", 1.0); key(b"\x1b", 0.3)
-        if not whole() or stage() != s0: broke.append(tag)
-    say("keys_broke", ",".join(broke)); say("keys_secs", "%.1f" % (time.time() - t0))
-    # sidebar-ctrl-c: ⌃c / ⌃\ / ⌃z reaching the list — no key does since
-    # issue #1950 (it takes none), so the bytes go to its pane directly, as a
-    # client a running server still holds in its old key table would send them
-
-    pump(0.8)   # the right-clicks above settled (the old prefix E's pause)
-    lst, lpid = frame()[:2]
-    t0 = time.time()
-    for b in ("C-c", "C-\\", "C-z"):
-        t("send-keys", "-t", lst, b); time.sleep(0.8)
-    pump(1.0)
-    f = frame()
-    say("cc_same", "1" if f[0] == lst and f[1] == lpid else "0")
-    say("cc_state", subprocess.run(["ps", "-o", "stat=", "-p", lpid], capture_output=True, text=True).stdout.strip())
-    say("cc_secs", "%.1f" % (time.time() - t0))
-    # client-pane-killed: kill -9 the list, then the right pane
-    t0 = time.time(); kill_tree(lpid)
-    say("list_back", "1" if until(5, lambda: frame()[0] != "" and frame()[1] != lpid) else "0")
-    say("list_secs", "%.1f" % (time.time() - t0))
-    rpid = frame()[3]
-    t0 = time.time(); kill_tree(rpid)
-    say("right_back", "1" if until(5, lambda: whole() and frame()[3] != rpid) else "0")
-    say("right_secs", "%.1f" % (time.time() - t0))
-    # nested-drop: the far end's connection ends
-    try:
-        apid = open(os.path.join(work, "attach.pid")).read().strip()
-        subprocess.run(["pkill", "-9", "-P", apid], capture_output=True)
-    except OSError:
-        pass
-    t0 = time.time()
-    seen = until(5, lambda: "回车立即重连" in t("capture-pane", "-p", "-t", "=" + sess + "-stage:", sock=sess + "-stage"))
-    say("drop_note", "1" if seen else "0"); say("drop_secs", "%.1f" % (time.time() - t0))
-    if not seen:   # what the stage window shows instead — a red drill says why
-        cap = t("capture-pane", "-p", "-t", "=" + sess + "-stage:", sock=sess + "-stage")
-        say("drop_pane", " | ".join(l.strip() for l in cap.splitlines() if l.strip())[-400:] or "(no window)")
-    tsw = t("list-panes", "-t", "=" + sess + "-stage:", "-F", "#{pane_id}", sock=sess + "-stage")
-    t("send-keys", "-t", tsw, "C-c", sock=sess + "-stage"); pump(1.0)
-    say("drop_cc_kept", "1" if stage() == s0 else "0")
-finally:
-    try: os.kill(pid, signal.SIGTERM)
-    except OSError: pass
-PY
-}
-r() { sed -n "s/^$1=//p" "$WORK/drive" 2>/dev/null | tail -n 1; }
-driven() {
-  drive || { WHY="the client did not start: $(head -3 "$WORK/drive.err")"; return 1; }
-  [ "$(r up)" = 1 ] || { WHY="the client drew no list: $(head -3 "$WORK/drive.err")"; return 1; }
-}
-
-drill_client_kill_keys() {
-  CAP=15; driven || return 1
-  [ -z "$(r keys_broke)" ] || { WHY="the frame lost a pane after: $(r keys_broke)"; return 1; }
-  SECS=$(r keys_secs); WHAT="prefix x / & / 三处右键 + X 之后侧栏、右侧、远端窗口都在"
-}
-drill_sidebar_ctrl_c() {
-  CAP=10; driven || return 1
-  [ "$(r cc_same)" = 1 ] || { WHY="⌃c / ⌃\\ / ⌃z replaced or ended the list"; return 1; }
-  case "$(r cc_state)" in T*) WHY="⌃z stopped the list ($(r cc_state))"; return 1 ;; esac
-  SECS=$(r cc_secs); WHAT="⌃c ⌃\\ ⌃z 之后还是同一个侧栏进程"
-}
-drill_client_pane_killed() {
-  CAP=5; driven || return 1
-  [ "$(r list_back)" = 1 ] || { WHY="kill -9 the list: no new list within 5 s"; return 1; }
-  [ "$(r right_back)" = 1 ] || { WHY="kill -9 the right pane: not respawned within 5 s"; return 1; }
-  SECS=$(python3 -c 'import sys; print(max(float(a) for a in sys.argv[1:]))' "$(r list_secs)" "$(r right_secs)")
-  WHAT="侧栏 $(r list_secs)s、右侧 $(r right_secs)s 重开"
-}
-drill_nested_drop() {
-  CAP=5; driven || return 1
-  [ "$(r drop_note)" = 1 ] || { WHY="a dropped line does not say 回车立即重连 — the stage shows: $(r drop_pane)"; return 1; }
-  [ "$(r drop_cc_kept)" = 1 ] || { WHY="⌃c in the wait closed the stage's window"; return 1; }
-  SECS=$(r drop_secs); WHAT="断线后停在「回车立即重连」，⌃c 不关窗口"
-}
-drill_client_kill_server() {
-  CAP=20; local t0
-  driven || return 1
-  "$REAL_TMUX" -L "$CSESS" kill-server 2>/dev/null           # the break
-  "$REAL_TMUX" -L "$CSESS" has-session 2>/dev/null && { WHY="kill-server left the client up"; return 1; }
-  t0=$(now)
-  client_start "$CSESS" || { WHY="\`fleet\` again did not start: $(head -3 "$WORK/up-$CSESS.err")"; return 1; }
-  attached "$CSESS" "$CAP" || { WHY="\`fleet\` again: no list + right pane"; return 1; }
-  SECS=$(since "$t0"); WHAT="再敲一次 fleet，侧栏 + 右侧回来"
-}
-drill_hub_unreachable() {
-  CAP=20; local t0 s="${CSESS}h" badge
-  client_setup
-  printf '#!/bin/bash\nexit 1\n' > "$WORK/hubdown"; chmod +x "$WORK/hubdown"
-  t0=$(now)
-  client_start "$s" FLEET_HUB_URL=http://127.0.0.1:9 FLEET_HUB_SESSIONS_CMD="$WORK/hubdown" FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" \
-    || { WHY="the client does not open with the hub out of reach: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  attached "$s" "$CAP" || { WHY="hub out of reach: no list + right pane"; return 1; }
-  SECS=$(since "$t0")
-  badge=$( client_env; FLEET_SHELL_SESSION="$s" FLEET_CLIENT_WHERE_CMD="$WORK/hubdown" FLEET_CLIENT_BADGE_TTL=0 \
-           FLEET_CLIENT_BADGE_CACHE="$WORK/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
-  case "$badge" in *入口连不上*) ;; *) WHY="the bar does not say 入口连不上: [$badge]"; return 1 ;; esac
-  WHAT="客户端照常打开，状态栏写「入口连不上」"
 }
 
 # The hub refuses this machine's certificate (issue #2112): a key id its roster
 # no longer names (the 2026-10-04 move to gh:<id>), an expired certificate. The
 # hub is UP — /healthz 200 — and answers 401; before, the bar said 入口连不上 and
 # sent the person after the network. A fake hub answering 401 「names no one」,
-# the REAL lease → where → badge chain.
+# the REAL lease → where chain (the retired badge is no longer involved).
 # cert_hub <dir> <secs> — a fake hub: /v1/fleet/login/renew signs a fresh 12-hour
 # certificate with <dir>/ca; /v1/fleet/client answers 401 「names no one」 while
 # <dir>/orphan exists, else 404 (no lease door). Its port lands in <dir>/port.
@@ -2228,68 +1943,20 @@ PY
   [ -s "$1/port" ]
 }
 drill_hub_refused_cert() {
-  CAP=15; local t0 sc="$WORK/hrc" port badge wj
+  CAP=15; local t0 sc="$WORK/hrc" port wj
   mkdir -p "$sc"; : > "$sc/orphan"
   cert_hub "$sc" 60 || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
   read -r port < "$sc/port"
   t0=$(now)
-  wj=$( client_env; export FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="${CSESS}r"
+  wj=$( cert_env; export FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok
         unset CCQUOTA_TOKEN CCQUOTA_HUB_URL; bash "$BIN/fleet-client-where.sh" --json 2>&1 )
-  badge=$( client_env; export FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="${CSESS}r"
-           unset CCQUOTA_TOKEN CCQUOTA_HUB_URL
-           FLEET_CLIENT_BADGE_TTL=0 FLEET_CLIENT_BADGE_CACHE="$sc/badge" bash "$BIN/fleet-client-badge.sh" cw=120 )
   SECS=$(since "$t0")
   kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
   case "$wj" in *'"hub": "refused"'*) ;; *) WHY="where --json does not say refused: [$wj]"; return 1 ;; esac
-  case "$badge" in *入口连不上*) WHY="the bar still says 入口连不上 for a 401: [$badge]"; return 1 ;; esac
-  case "$badge" in *'range=user|rescan'*请重新扫码*) ;; *) WHY="the bar does not offer the rescan: [$badge]"; return 1 ;; esac
-  WHAT="入口回 401「names no one」：where 报 hub refused，状态栏橙色「入口不认这台电脑 · 请重新扫码」，可点"
+  WHAT="入口回 401「names no one」：where 报 hub refused，和入口断网分开"
 }
 
-# A shell left open past its certificate (issue #2112): 12 hours, and only a new
-# connection (`fleet-connect.py --enter`) renewed it — a client left overnight
-# went 401 at that minute. The real client (bin/fleet → keeper) with a
-# certificate 30 minutes from its end and a fake hub that renews: the keeper
-# renews it before its hub read (fleet-login.py renew --on-use hub, #3701 — no
-# timer); then the hub stops naming the key id, the replaced certificate file
-# makes the keeper look again at once, and its renew exit 3 is the one thing
-# the person is told.
-drill_cert_expiry_keeper() {
-  CAP=20; local t0 s="${CSESS}k" sc="$WORK/cek" port left
-  client_setup
-  mkdir -p "$sc"; rm -f "$sc/orphan"
-  cert_hub "$sc" $((CAP * 2 + 60)) || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
-  read -r port < "$sc/port"
-  ( client_env; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub"
-    ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
-    ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n dave -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
-  left=$( client_env; python3 "$BIN/fleet-login.py" check )
-  case "$left" in "valid "*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="the 30-minute certificate did not take: [$left]"; return 1 ;; esac
-  t0=$(now)
-  if ! client_start "$s" FLEET_HUB_URL="http://127.0.0.1:$port" FLEET_CLIENT_IDENTITY=test \
-       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
-    kill "$CHUB_PID" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
-  fi
-  for _ in $(seq 1 $((CAP * 10))); do
-    left=$( client_env; python3 "$BIN/fleet-login.py" check ); left=${left#valid }
-    case "$left" in ''|*[!0-9.]*) ;; *) [ "${left%.*}" -gt 39600 ] && break ;; esac
-    sleep 0.1
-  done
-  SECS=$(since "$t0")
-  case "$left" in ''|*[!0-9.]*) left=0 ;; esac
-  if [ "${left%.*}" -le 39600 ]; then
-    "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; kill "$CHUB_PID" 2>/dev/null
-    WHY="the keeper did not renew a certificate 30 minutes from its end (left ${left}s; hub saw: $(tr '\n' ' ' < "$sc/log" 2>/dev/null))"; return 1
-  fi
-  # the hub stops naming the key id: renewing will never help — the person is told
-  : > "$sc/orphan"
-  ( client_env; ssh-keygen -q -s "$sc/ca" -I person:YiLiangHui -n dave -V -1m:+30m "$HOME/.ssh/fleet-cert.pub" )
-  for _ in $(seq 1 $((CAP * 10))); do [ -f "$sc/cache/tmp/client.rescan" ] && break; sleep 0.1; done
-  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
-  kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
-  [ -f "$sc/cache/tmp/client.rescan" ] || { WHY="an orphaned key id: the keeper's renew exit 3 left no rescan mark"; return 1; }
-  WHAT="证书剩 30 分钟：keeper 自己续成 12 小时；入口不认 key id 时只提示一次「请重新扫码」"
-}
+
 
 # No client open for 12 hours (issue #3455): only an open client's keeper (#2112)
 # or a new `fleet` renewed the connection certificate, so a hosting login nobody
@@ -2305,19 +1972,19 @@ drill_cert_expiry_no_client() {
   mkdir -p "$sc"; rm -f "$sc/orphan" "$sc/log"
   cert_hub "$sc" $((CAP * 2 + 60)) || { kill "$CHUB_PID" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$sc/hub.err")"; return 1; }
   read -r port < "$sc/port"
-  ( client_env; mkdir -p "$HOME/.ssh"; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub" \
+  ( cert_env; mkdir -p "$HOME/.ssh"; rm -f "$HOME/.ssh/fleet-cert" "$HOME/.ssh/fleet-cert.pub" "$HOME/.ssh/fleet-cert-cert.pub" \
       "$FLEET_CONF_DIR/cert-renew.last" "$FLEET_CONF_DIR/diskguard/cert-renew.last" "$FLEET_SHELL_CACHE/logs/login.log"
     ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/fleet-cert"
     ssh-keygen -q -s "$sc/ca" -I person:gh:1 -n dave -V -13h:-1h "$HOME/.ssh/fleet-cert.pub" )
-  cc=$( client_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
+  cc=$( cert_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
   case "$cc" in "PASS"$'\t'*已过期*用到时*) ;; *) kill "$CHUB_PID" 2>/dev/null; WHY="an expired, unused certificate is not the doctor's PASS 已过期 · 用到时续: [$cc]"; return 1 ;; esac
   # the tick renews nothing any more
-  ( client_env; FLEET_HUB_URL="http://127.0.0.1:$port" bash "$BIN/fleet-diskguard.sh" --cert ) >/dev/null 2>&1
+  ( cert_env; FLEET_HUB_URL="http://127.0.0.1:$port" bash "$BIN/fleet-diskguard.sh" --cert ) >/dev/null 2>&1
   if [ -s "$sc/log" ]; then
     kill "$CHUB_PID" 2>/dev/null; WHY="the diskguard tick still asked the hub: $(tr '\n' ' ' < "$sc/log")"; return 1
   fi
   # the use: ssh to a fleet machine, through the section fleet-login.py writes
-  ( client_env; python3 - "$BIN/fleet-login.py" > "$sc/ssh_config" <<'PY'
+  ( cert_env; python3 - "$BIN/fleet-login.py" > "$sc/ssh_config" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fleet_login", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
@@ -2325,206 +1992,16 @@ sys.stdout.write(m.use_section([("m1.example", "m1")]) + "Host m1 fleet-m1\n  Ho
 PY
   )
   t0=$(now)
-  ( client_env; FLEET_HUB_URL="http://127.0.0.1:$port" ssh -F "$sc/ssh_config" -G fleet-m1 ) >/dev/null 2>&1
+  ( cert_env; FLEET_HUB_URL="http://127.0.0.1:$port" ssh -F "$sc/ssh_config" -G fleet-m1 ) >/dev/null 2>&1
   SECS=$(since "$t0")
   kill "$CHUB_PID" 2>/dev/null; wait "$CHUB_PID" 2>/dev/null
-  left=$( client_env; python3 "$BIN/fleet-login.py" check ); left=${left#valid }
+  left=$( cert_env; python3 "$BIN/fleet-login.py" check ); left=${left#valid }
   case "$left" in ''|*[!0-9.]*) left=0 ;; esac
   [ "${left%.*}" -gt 39600 ] || { WHY="ssh to a fleet machine did not renew an expired certificate first (left ${left}s; hub saw: $(tr '\n' ' ' 2>/dev/null < "$sc/log"))"; return 1; }
   grep -q 'why=ssh' "$WORK/ccache/logs/login.log" 2>/dev/null || { WHY="login.log does not say why=ssh: $(tail -2 "$WORK/ccache/logs/login.log" 2>/dev/null)"; return 1; }
-  cc=$( client_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
+  cc=$( cert_env; FLEET_HUB_URL='' python3 "$BIN/fleet-connect.py" --cert-check )
   case "$cc" in "PASS"$'\t'*" · 剩 11h"*) ;; *) WHY="the renewed certificate's row does not say the time left: [$cc]"; return 1 ;; esac
   WHAT="没开客户端、证书已过期：doctor 报 PASS「已过期 · 用到时续」，diskguard 一拍不再续；ssh 到 fleet 机器前用设备钥匙续成 12 小时（login.log why=ssh），cert 行写「剩 11h…」"
-}
-
-# The list does not move while a line is down (issue #1882): the real client on
-# its own -L socket, a fake hub serving sessions in two repos on two machines.
-# Before, a lost machine's rows moved into a `─ mac-a 失联 ─` group at the foot and
-# came back when it answered again — the list reshuffled twice. The sidebar pane
-# is captured before / during / after: during, the same lines in the same order,
-# only the lost rows' state glyph `⊘` (issue #2305; the colour is the view's, never in a capture).
-off_hub() {   # the fake hub: `down` = unreachable, else the current answer
-  mkdir -p "$WORK/off"
-  printf '#!/bin/bash\n[ -f "%s/off/down" ] && exit 1\ncat "%s/off/cur.json"\n' "$WORK" "$WORK" > "$WORK/off/hub"
-  chmod +x "$WORK/off/hub"
-  python3 - "$WORK/off" <<'PY'
-import json, sys
-d = sys.argv[1]
-def s(host, key, name, repo, origin=None, state="working"):
-    f = "11111111-2222-3333-4444-55555555555" + ("4" if host == "mac-a" else "5")
-    w = dict(key=key, name=name, repo=repo, state=state, lifecycle="awake", agent="claude")
-    if origin:
-        w["origin_wid"] = f + "/" + origin
-    return dict(worker_id=f + "/" + key, machine_name=host, os_user="dave", fleet_id=f,
-                fleet_name="x", availability="online", worker=w, observed_at="2026-10-06T10:00:00Z")
-rows = [s("mac-b", "acme-app:scratch-1", "app-root", "acme/app", state="looping"),
-        s("mac-a", "acme-app:issue-2", "app-kid", "acme/app", origin="acme-app:scratch-1"),
-        s("mac-a", "acme-app:issue-3", "app-mac-a", "acme/app"),
-        s("mac-b", "acme-tool:issue-4", "tool-mac-b", "acme/tool"),
-        s("mac-a", "acme-tool:issue-5", "tool-mac-a", "acme/tool", state="done"),
-        s("mac-a", "acme-x:scratch-6", "loose-mac-a", None)]
-def node(host, av):
-    return dict(machine_name=host, availability=av, sessions=3, observed_at="2026-10-06T10:00:00Z")
-on = dict(sessions=rows, nodes=[node("mac-a", "online"), node("mac-b", "online")])
-lost = dict(sessions=[dict(r, availability="lost") if r["machine_name"] == "mac-a" else r for r in rows],
-            nodes=[node("mac-a", "lost"), node("mac-b", "online")])
-json.dump(on, open(d + "/on.json", "w")); json.dump(lost, open(d + "/m4lost.json", "w"))
-PY
-  cp "$WORK/off/on.json" "$WORK/off/cur.json"; rm -f "$WORK/off/down" "$WORK/off/stop"
-}
-off_list() {   # the sidebar pane as it reads (text only), blank lines dropped
-  local p
-  p=$("$REAL_TMUX" -L "$1" list-panes -t "=$1:home" -F '#{@sidebar} #{pane_id}' 2>/dev/null | awk '$1 == 1 { print $2; exit }')
-  [ -n "$p" ] && "$REAL_TMUX" -L "$1" capture-pane -p -t "$p" 2>/dev/null | sed -e 's/[[:space:]]*$//' | grep -v '^$'
-}
-# the rows only: from the first row naming a session to the last — the footer
-# (input line, hints) is the bar's business, not the list's
-off_rows() { off_list "$1" | awk '/app-root|app-kid|app-mac-a|tool-mac-b|tool-mac-a|loose-mac-a|\([0-9]+\)$|失联/ { print }' | spin_off; }
-spin_off() { sed -e 's/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/*/g'; }       # the working spinner turns on its own
-# a row's state glyph is masked (`?`): a lost machine's row says so in it — `⊘`
-# (issue #2305) — and that is the one thing allowed to change in place
-off_norm() { LC_ALL=C sed -e 's/^\([^ ]* \) *[^ ][^ ]* /\1? /' -e 's/!//g' -e 's/  */ /g'; }
-off_wait() {   # <socket> <secs> <grep -E pattern> [v] — until the rows (do not) show it
-  local _
-  for _ in $(seq 1 $(($2 * 5))); do
-    if [ "${4:-}" = v ]; then off_rows "$1" | grep -qE "$3" || return 0
-    else off_rows "$1" | grep -qE "$3" && return 0; fi
-    sleep 0.2
-  done
-  return 1
-}
-drill_offline_list_moves() {
-  CAP=30; local s="${CSESS}o" t0 before during
-  client_setup; off_hub
-  # its own cache + TMPDIR (refresher, hub_ok, the remote list): an earlier
-  # drill's client may still run a refresher on the shared ones
-  mkdir -p "$WORK/off/tmp"
-  client_start "$s" FLEET_SHELL_CACHE="$WORK/off/cache" TMPDIR="$WORK/off/tmp" FLEET_HUB_SESSIONS_CMD="$WORK/off/hub" FLEET_HUB_SESSIONS_STALE=12 FLEET_HUB_SESSIONS_LOOP_SECS=150 \
-    || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  # a terminal stays attached for the whole drill (the list is drawn for a
-  # client); it leaves on its own at the stop file or after 150s, never later
-  python3 - "$REAL_TMUX" "$s" "$WORK/off/stop" <<'PY' &
-import os, pty, select, signal, struct, fcntl, sys, termios, time
-tmux, sess, stop = sys.argv[1:4]
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-    os.environ.pop("TMUX", None)
-    os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 160, 0, 0))
-end = time.time() + 150
-while time.time() < end and not os.path.exists(stop):
-    r, _, _ = select.select([fd], [], [], 0.2)
-    if r:
-        try: os.read(fd, 65536)
-        except OSError: break
-try: os.kill(pid, signal.SIGTERM)
-except OSError: pass
-PY
-  off_wait "$s" 30 'loose-mac-a' || { WHY="the hub's rows never reached the list: [$(off_list "$s" | tr '\n' '|')]"; : > "$WORK/off/stop"; return 1; }
-  sleep 1; before=$(off_rows "$s")
-  # 1. one machine lost: the hub says mac-a is lost
-  cp "$WORK/off/m4lost.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '⊘ +app-mac-a' || { WHY="mac-a lost never showed on its rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
-  sleep 1; during=$(off_rows "$s")
-  printf '%s\n' "$during" | grep -qE '⊘ +(app-root|tool-mac-b)' && { WHY="mac-a lost dimmed mac-b's rows too (the hub went stale?): $(printf '%s' "$during" | tr '\n' '|')"; return 1; }
-  case "$during" in *失联*) WHY="a 失联 heading came back: $(printf '%s' "$during" | tr '\n' '|')"; return 1 ;; esac
-  [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
-    || { WHY="mac-a lost moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
-  # 2. the hub unreachable: every row lost, still the same lines
-  cp "$WORK/off/on.json" "$WORK/off/cur.json"
-  off_wait "$s" 20 '⊘ +app-mac-a' v || { WHY="mac-a never came back after its loss"; return 1; }
-  : > "$WORK/off/down"
-  off_wait "$s" 40 '⊘ +(app-root|tool-mac-b)' || { WHY="入口连不上 never dimmed the mac-b rows: $(off_rows "$s" | tr '\n' '|')"; return 1; }
-  sleep 1; during=$(off_rows "$s")
-  [ "$(printf '%s\n' "$during" | off_norm)" = "$(printf '%s\n' "$before" | off_norm)" ] \
-    || { WHY="入口连不上 moved the list: before [$(printf '%s' "$before" | tr '\n' '|')] during [$(printf '%s' "$during" | tr '\n' '|')]"; return 1; }
-  # 3. back: the very lines of before, no `!` left
-  t0=$(now); rm -f "$WORK/off/down"
-  off_wait "$s" "$CAP" '⊘' v || { WHY="the rows stayed lost after the hub answered: $(off_rows "$s" | tr '\n' '|')"; return 1; }
-  [ "$(off_rows "$s")" = "$before" ] || { WHY="back online, the list differs from before: [$(off_rows "$s" | tr '\n' '|')]"; return 1; }
-  SECS=$(since "$t0"); : > "$WORK/off/stop"
-  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null; "$REAL_TMUX" -L "$s-stage" kill-server 2>/dev/null
-  WHAT="mac-a 失联 / 入口连不上：行数、顺序、分组不变，只是状态图标变 ⊘；恢复后与断开前逐行一致"
-}
-
-# ================================ the orchestrator's entry (issue #2619, EPIC #2615 C4) ===
-# ⌘N goes to the orchestrating session (#2616), what waits behind its turn is
-# counted (#2617), and the Codex one / the local shell / the other keys stay as
-# they were. The real client (bin/fleet) on its own -L socket, a terminal held by
-# orch_term, a fake hub whose answer (cur.json) the drill rewrites.
-# orch_json <out> <none|claude|codex> [state] [queue] — the hub's answer: one
-# worker, plus the orchestrator unless none (a queue only when given: a Codex
-# one never counts)
-orch_json() {
-  python3 - "$@" <<'PY'
-import json, sys
-out, kind = sys.argv[1], sys.argv[2]
-state = sys.argv[3] if len(sys.argv) > 3 else "done"
-queue = sys.argv[4] if len(sys.argv) > 4 else ""
-f = "11111111-2222-3333-4444-555555555554"
-def s(key, name, repo, state="working", agent="claude", **extra):
-    w = dict(key=key, name=name, repo=repo, state=state, lifecycle="awake", agent=agent, **extra)
-    return dict(worker_id=f + "/" + key, machine_name="mac-a", os_user="dave", fleet_id=f, fleet_name="x",
-                availability="online", worker=w, observed_at="2026-10-09T10:00:00Z")
-rows = [s("acme-app:issue-3", "app-mac-a", "acme/app")]
-if kind != "none":
-    extra = dict(role="orchestrator")
-    if queue:
-        extra["orch_queue"] = int(queue)
-    rows.append(s("orchestrator", "orchestrator", None, state=state, agent=kind, **extra))
-json.dump(dict(sessions=rows, nodes=[dict(machine_name="mac-a", availability="online", sessions=len(rows),
-                                          observed_at="2026-10-09T10:00:00Z")]), open(out, "w"))
-PY
-}
-# orch_term <socket> <dir> — a terminal attached until <dir>/stop (150 s at most);
-# whatever lands in <dir>/typed is typed into it (orch_type)
-orch_term() {
-  python3 - "$REAL_TMUX" "$1" "$2" <<'PY' &
-import fcntl, os, pty, select, signal, struct, sys, termios, time
-tmux, sess, d = sys.argv[1:4]
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-    os.environ.pop("TMUX", None)
-    os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-typed, stop = os.path.join(d, "typed"), os.path.join(d, "stop")
-end = time.time() + 150
-while time.time() < end and not os.path.exists(stop):
-    if os.path.exists(typed):
-        data = open(typed, "rb").read(); os.remove(typed)
-        try: os.write(fd, data)
-        except OSError: break
-    r, _, _ = select.select([fd], [], [], 0.05)
-    if r:
-        try: os.read(fd, 65536)
-        except OSError: break
-try: os.kill(pid, signal.SIGTERM)
-except OSError: pass
-PY
-}
-orch_type() { printf '%b' "$2" > "$1/typed.tmp" && mv "$1/typed.tmp" "$1/typed"; sleep 0.4; }
-# orch_up <socket> <dir> [VAR=val…] — the client on the dir's hub, a terminal on
-# it, its list drawn; G is its cache dir
-orch_up() {
-  local s="$1" d="$2"; shift 2
-  client_setup
-  mkdir -p "$d/tmp"; rm -f "$d/stop" "$d/typed"
-  client_start "$s" FLEET_SHELL_CACHE="$d/cache" TMPDIR="$d/tmp" FLEET_HUB_SESSIONS_CMD="cat $d/cur.json" \
-    FLEET_HUB_SESSIONS_LOOP_SECS=2 "$@" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  orch_term "$s" "$d"
-  G="$d/cache/tmp/.claude-dash/global"     # the shell's own TMPDIR (its cache) holds the list's files
-  until_ok 30 sh -c "'$REAL_TMUX' -L '$s' list-panes -a -F '#{@sidebar} #{pane_id}' | awk '\$1 == 1 { print \$2; exit }' | xargs -I@ '$REAL_TMUX' -L '$s' capture-pane -p -t @ | grep -q app-mac-a" \
-    || { WHY="the client's list never showed the hub's row"; return 1; }
-}
-orch_down() { : > "$2/stop"; "$REAL_TMUX" -L "$1" kill-server 2>/dev/null; "$REAL_TMUX" -L "$1-stage" kill-server 2>/dev/null; }
-# the stage's window in view: "<@fleet_role> <@cc_agent> <@remote>"
-orch_view() { "$REAL_TMUX" -L "$1-stage" display-message -p -t "=$1-stage:" '#{?@fleet_role,#{@fleet_role},-} #{?@cc_agent,#{@cc_agent},-} #{@remote}' 2>/dev/null; }
-orch_list() {
-  local p
-  p=$("$REAL_TMUX" -L "$1" list-panes -a -F '#{@sidebar} #{pane_id}' 2>/dev/null | awk '$1 == 1 { print $2; exit }')
-  [ -n "$p" ] && "$REAL_TMUX" -L "$1" capture-pane -p -t "$p" 2>/dev/null
 }
 
 # the panels' mod half (issue #2835; the fleet-steward plugin's since #3115):
@@ -2580,233 +2057,7 @@ drill_panel_wrong_window() {
   SECS=$(since "$t0"); WHAT="执行会话窗口装了管家插件：${m}只在接手管家的那个窗口画"
 }
 
-# ② ⌘N waits on no orchestrator (issue #3119): whether one runs or not, ⌘N is a
-# NEW session at once — fleet-shell.sh portal → home-session claude --new
-# (FLEET_PORTAL_NEW_CMD here), never orch_ensure, never the orchestrator's row;
-# the list draws no 「新任务」 row and the bar says 「⌘N 新会话」
-drill_cmdn_waits_orch() {
-  CAP=30; local d="$WORK/on" s="${CSESS}n" t0 n hint
-  mkdir -p "$d"; orch_json "$d/cur.json" claude working
-  cat > "$d/write.sh" <<EOF
-#!/bin/bash
-printf '%s\n' "\$*" >> "$d/write.log"
-printf '{"operation_id": "op-o", "action": "%s", "status": "accepted"}\n' "\$1"
-EOF
-  cat > "$d/new.sh" <<EOF
-#!/bin/bash
-printf 'new %s\n' "\$*" >> "$d/new.log"
-EOF
-  chmod +x "$d/write.sh" "$d/new.sh"; : > "$d/write.log"; : > "$d/new.log"
-  orch_up "$s" "$d" FLEET_HUB_WRITE_CMD="bash $d/write.sh \"\$@\"" FLEET_PORTAL_NEW_CMD="bash $d/new.sh" \
-    || { orch_down "$s" "$d"; return 1; }
-  orch_list "$s" | grep -q '新任务' && { WHY="the list still draws 「新任务」: [$(orch_list "$s" | grep -m1 新任务)]"; orch_down "$s" "$d"; return 1; }
-  hint=$("$REAL_TMUX" -L "$s" display-message -p -t "=$s:" '#{E:@fleet_hint_session}' 2>/dev/null | sed 's/#\[[^]]*\]//g')
-  case "$hint" in *"⌘N 新会话"*) ;; *) WHY="the bar reads [$hint], not ⌘N 新会话"; orch_down "$s" "$d"; return 1 ;; esac
-  # an orchestrator running (the hub lists one), then none: ⌘N is a new session both times
-  t0=$(now); orch_type "$d" '\033[928~'
-  until_ok "$CAP" sh -c "grep -c . '$d/new.log' | grep -qx 1" || { WHY="⌘N with an orchestrator running opened no new session (new.log [$(tr '\n' '|' < "$d/new.log")])"; orch_down "$s" "$d"; return 1; }
-  SECS=$(since "$t0")
-  orch_json "$d/cur.json" none; : > "$G/orch_$s"
-  orch_type "$d" '\033[928~'
-  until_ok 15 sh -c "grep -c . '$d/new.log' | grep -qx 2" || { WHY="⌘N with no orchestrator opened no new session (new.log [$(tr '\n' '|' < "$d/new.log")])"; orch_down "$s" "$d"; return 1; }
-  n=$(grep -c . "$d/new.log")
-  grep -q '^orch_ensure' "$d/write.log" && { WHY="⌘N still asked the hub to open an orchestrator"; orch_down "$s" "$d"; return 1; }
-  case "$(orch_view "$s")" in orchestrator*) WHY="the stage went to the orchestrator: [$(orch_view "$s")]"; orch_down "$s" "$d"; return 1 ;; esac
-  orch_down "$s" "$d"
-  WHAT="⌘N 两次（有编排 / 没编排）各开一个新会话（${n} 次 home-session --new），不叫起、不去编排；列表无「新任务」，底栏「⌘N 新会话」"
-}
 
-# The proxy pane's `run` loop (fleet-remote-view.sh) against an ssh shim: a
-# session on a shared master that re-asks the person's static `RemoteForward`
-# (open-url.sh's 2226) is refused like ssh refuses it (issue #1775); an attach
-# that never returns is what kept a closed pane's loop alive (issue #1704).
-rv_shim() {
-  mkdir -p "$WORK/rv/tmp/warm"
-  cat > "$WORK/rv/ssh" <<'SH'
-#!/bin/bash
-printf '%s\n' "$*" >> "$RV_LOG"
-op='' ctl='' clear=''
-for a in "$@"; do [ "$a" = ClearAllForwardings=yes ] && clear=1; done
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -O) op=$2; shift 2 ;;
-    -o) case "$2" in ControlPath=*) ctl=${2#ControlPath=} ;; esac; shift 2 ;;
-    -S) ctl=$2; mux=1; shift 2 ;;
-    -*) shift ;;
-    *) break ;;
-  esac
-done
-if [ -n "$op" ]; then case "$op" in check) [ -S "$ctl" ]; exit $? ;; *) exit 0 ;; esac; fi
-if [ -n "${mux:-}" ] && [ -z "$clear" ]; then   # the config's RemoteForward 2226, asked again
-  echo 'mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 2226' >&2
-  echo 'muxclient: master forward request failed' >&2
-  exit 255
-fi
-case "$*" in *" attach"*)
-  # the line is down (issue #1876): the connect fails, as ssh says it
-  [ -f "$RV_DIR/down" ] && { echo 'ssh: connect to host m9 port 22: Network is unreachable' >&2; exit 255; }
-  # the far end's tmux turns the mouse on in the pane it draws (issue #1876)
-  [ "${RV_MOUSE:-}" = 1 ] && printf '\033[?1000h\033[?1002h\033[?1006hFAR-END\n'
-  [ "${RV_HANG:-}" = 1 ] && { printf '%s\n' $$ > "$RV_DIR/attach.pid"; exec sleep 300; }; sleep 0.3 ;; esac
-exit 0
-SH
-  chmod +x "$WORK/rv/ssh"
-  python3 -c 'import socket, sys
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/rv/tmp/warm/m9.sock" 2>/dev/null
-  : > "$WORK/rv/ssh.log"; rm -f "$WORK/rv/attach.pid" "$WORK/rv/down"
-}
-RVWID=00000000-0000-0000-0000-000000000000/issue-1
-rv_env() {
-  printf 'HOME=%s TMPDIR=%s FLEET_CONF_DIR=%s FLEET_REMOTE_SSH_CMD=%s RV_LOG=%s RV_DIR=%s FLEET_REMOTE_VIA_HUB=0' \
-    "$WORK/rv" "$WORK/rv/tmp" "$WORK/rv/conf" "$WORK/rv/ssh" "$WORK/rv/ssh.log" "$WORK/rv"
-}
-drill_static_forward() {
-  CAP=5; local t0 n
-  rv_shim; t0=$(now)
-  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
-  env $(rv_env) bash "$BIN/fleet-remote-view.sh" run --shell m9 "$RVWID" > "$WORK/rv/out" 2>&1 < /dev/null
-  n=$(grep -c ' attach' "$WORK/rv/ssh.log")
-  [ "$n" = 1 ] || { WHY="the attach on the warm master was refused and retried ($n attaches): $(tail -n 1 "$WORK/rv/out")"; return 1; }
-  SECS=$(since "$t0"); WHAT="骑共享连接的会话不再重复要 2226，一次 attach 成功"
-}
-drill_proxy_orphan() {
-  CAP=8; local t0 so="$WORK/sock-rv" run att _
-  rv_shim
-  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rv -x 80 -y 20 \
-    "env $(rv_env) RV_HANG=1 bash $BIN/fleet-remote-view.sh run m9 $RVWID"
-  "$REAL_TMUX" -S "$so" new-window -d -t rv: 'sleep 600'
-  for _ in $(seq 1 50); do [ -s "$WORK/rv/attach.pid" ] && break; sleep 0.1; done
-  att=$(cat "$WORK/rv/attach.pid" 2>/dev/null)
-  run=$("$REAL_TMUX" -S "$so" display-message -p -t rv:0 '#{pane_pid}' 2>/dev/null)
-  [ -n "$att" ] && [ -n "$run" ] || { WHY="the proxy's attach never came up"; return 1; }
-  t0=$(now)
-  "$REAL_TMUX" -S "$so" kill-pane -t rv:0                       # the break
-  until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null && ! kill -0 $att 2>/dev/null" \
-    || { kill -KILL "$run" "$att" 2>/dev/null; WHY="the pane is gone, its run loop / attach still live after ${CAP}s"; return 1; }
-  SECS=$(since "$t0"); WHAT="窗格关掉，run 循环和它的 ssh 一起退出"
-}
-
-# The stage server replaced under a live `run` (issue #2987). The loop ignores HUP
-# (a lineage under nohup), so it outlives kill-server; the new server on the same
-# socket reuses its pane id for another window. Before: the orphan wrote its line's
-# @remote_ctl / @remote_down there every round. The recovery: it ends within CAP
-# seconds and writes nothing.
-drill_stage_orphan_run() {
-  CAP=12; local t0 so="$WORK/sock-so" run p0 p1 w
-  rv_shim; : > "$WORK/rv/down"
-  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s so -x 80 -y 20 \
-    "exec env $(rv_env) bash -c 'trap \"\" HUP; exec bash $BIN/fleet-remote-view.sh run m9 $RVWID'"
-  sleep 1
-  run=$("$REAL_TMUX" -S "$so" display-message -p -t so:0 '#{pane_pid}' 2>/dev/null)
-  p0=$("$REAL_TMUX" -S "$so" display-message -p -t so:0 '#{pane_id}' 2>/dev/null)
-  [ -n "$run" ] || { WHY="the proxy's run loop never came up"; return 1; }
-  "$REAL_TMUX" -S "$so" kill-server 2>/dev/null                   # the break
-  sleep 0.5
-  kill -0 "$run" 2>/dev/null || { WHY="the loop did not outlive its server (the break did not happen)"; return 1; }
-  "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s so2 -x 80 -y 20 'sleep 600'
-  p1=$("$REAL_TMUX" -S "$so" display-message -p -t so2:0 '#{pane_id}' 2>/dev/null)
-  [ "$p1" = "$p0" ] || { kill -KILL "$run" 2>/dev/null; WHY="the new server did not reuse $p0 (got $p1)"; return 1; }
-  t0=$(now)
-  until_ok "$CAP" sh -c "! kill -0 $run 2>/dev/null" \
-    || { kill -KILL "$run" 2>/dev/null; WHY="the orphan run loop still runs ${CAP}s after its server was replaced"; return 1; }
-  SECS=$(since "$t0")
-  w=$("$REAL_TMUX" -S "$so" show-options -wqv -t so2:0 @remote_ctl)$("$REAL_TMUX" -S "$so" show-options -wqv -t so2:0 @remote_down)
-  "$REAL_TMUX" -S "$so" kill-server 2>/dev/null
-  [ -z "$w" ] || { WHY="the orphan wrote on the window that now has $p0: [$w]"; return 1; }
-  WHAT="stage 服务器换了，孤儿 run 循环认出窗格不是自己的，什么都不写就退出"
-}
-
-# A dropped line, then a switch (issue #1876). The proxy pane (run --shell, on
-# the warm master) is attached to worker 1; the line goes down (the attach dies,
-# reconnects are refused), comes back while the loop still waits out its
-# back-off, and the person clicks worker 2 of the same machine. Before: `open`
-# saw the warm master answer `-O check`, sent a one-shot `select` that the far
-# end "did" in the fleet session (no view session was live) and kept the pane —
-# whose next round attached worker 1 again. The recovery: the pane attaches
-# worker 2 within CAP seconds of the click.
-rv_tmux() { printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$REAL_TMUX" "$1" > "$WORK/rv/tbin/tmux"; chmod +x "$WORK/rv/tbin/tmux"; }
-rv_drop() {   # <socket> <session> — the line goes down; true once the wait page shows
-  : > "$WORK/rv/down"
-  kill "$(cat "$WORK/rv/attach.pid" 2>/dev/null)" 2>/dev/null
-  until_ok 5 sh -c "\"$REAL_TMUX\" -S \"$1\" capture-pane -p -t \"=$2:\" | grep -q 回车立即重连"
-}
-rv_reconnect_stale_view() {
-  CAP=3; local t0 so="$WORK/sock-rs" wid2="${RVWID%/*}/issue-2" w
-  rv_shim; mkdir -p "$WORK/rv/tbin" "$WORK/rv/tmp/.claude-dash/global"; rv_tmux "$so"
-  printf 'wid:%s\037m9\037online\0372\037acme/app\037working\037claude\037第二个\n' "$wid2" \
-    > "$WORK/rv/tmp/.claude-dash/global/remote_rs"
-  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
-  env $(rv_env) RV_HANG=1 "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rs -x 100 -y 20 \
-    "bash $BIN/fleet-remote-view.sh run --shell m9 $RVWID"
-  w=$("$REAL_TMUX" -S "$so" display-message -p -t '=rs:' '#{window_id}')
-  "$REAL_TMUX" -S "$so" set-window-option -t "$w" @remote "m9:$RVWID"
-  until_ok 5 test -s "$WORK/rv/attach.pid" || { WHY="the proxy's first attach never came up"; return 1; }
-  rv_drop "$so" rs || { WHY="the drop page never showed: $("$REAL_TMUX" -S "$so" capture-pane -p -t '=rs:' | grep . | tr '\n' '|')"; return 1; }
-  rm -f "$WORK/rv/down"; : > "$WORK/rv/ssh.log"        # the line is back; the loop still waits
-  t0=$(now)
-  # shellcheck disable=SC2046
-  env $(rv_env) PATH="$WORK/rv/tbin:$PATH" FLEET_SESSION=rs CCQUOTA_FLEET=1 FLEET_SHELL=1 \
-    bash "$BIN/fleet-remote-view.sh" open "wid:$wid2" > /dev/null 2>&1
-  until_ok "$CAP" sh -c "grep ' attach' \"$WORK/rv/ssh.log\" | tail -n 1 | grep -q 'issue-2'" \
-    || { WHY="the right pane did not follow the switch in ${CAP}s — attached: $(grep -o "attach.*" "$WORK/rv/ssh.log" | tail -n 1 | cut -c1-90); shows: $("$REAL_TMUX" -S "$so" capture-pane -p -t '=rs:' | grep . | tail -n 2 | tr '\n' '|')"; return 1; }
-  SECS=$(since "$t0"); WHAT="断线重连期间切换，右侧立即换到新会话"
-}
-drill_reconnect_stale_view() {   # its own server goes with it: a later drill's shim must not feed it
-  local rc; rv_reconnect_stale_view; rc=$?
-  "$REAL_TMUX" -S "$WORK/sock-rs" kill-server 2>/dev/null
-  return $rc
-}
-# The same drop with the far end's mouse on (issue #1876): the outer tmux keeps
-# handing the pane SGR mouse reports nobody reads, and the wait page echoed them
-# — a drag across the right pane wrote `^[[<32;14;6M…` on the screen. The
-# recovery: the pane's mouse reporting is off and a drag leaves no `[<` behind.
-rv_reconnect_mouse() {
-  CAP=3; local t0 so="$WORK/sock-rm" p cap
-  rv_shim
-  # shellcheck disable=SC2046
-  env $(rv_env) RV_HANG=1 RV_MOUSE=1 "$REAL_TMUX" -S "$so" -f /dev/null new-session -d -s rm -x 100 -y 20 \
-    "bash $BIN/fleet-remote-view.sh run --shell m9 $RVWID"
-  "$REAL_TMUX" -S "$so" set-option -g mouse on
-  p=$("$REAL_TMUX" -S "$so" display-message -p -t '=rm:' '#{pane_id}')
-  until_ok 5 sh -c "[ \"\$(\"$REAL_TMUX\" -S \"$so\" display-message -p -t $p '#{mouse_any_flag}')\" = 1 ]" \
-    || { WHY="the far end's mouse never came on in the pane"; return 1; }
-  t0=$(now)
-  rv_drop "$so" rm || { WHY="the drop page never showed"; return 1; }
-  python3 - "$REAL_TMUX" "$so" <<'PYDRAG'
-import fcntl, os, pty, select, signal, struct, sys, termios, time
-tmux, so = sys.argv[1:3]
-pid, fd = pty.fork()
-if pid == 0:
-    os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-    os.environ.pop("TMUX", None)
-    os.execvp(tmux, [tmux, "-S", so, "attach-session", "-t", "=rm"])
-fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 20, 100, 0, 0))
-def pump(secs):
-    end = time.time() + secs
-    while time.time() < end:
-        r, _, _ = select.select([fd], [], [], 0.05)
-        if r:
-            try: os.read(fd, 65536)
-            except OSError: return
-pump(0.3)                     # inside the wait page's 2 s back-off
-for seq in (b"\x1b[<0;10;5M", b"\x1b[<32;12;5M", b"\x1b[<32;14;6M", b"\x1b[<0;14;6m", b"\x1b[<0;20;8M", b"\x1b[<0;20;8m"):
-    os.write(fd, seq); pump(0.05)
-pump(0.2)
-try: os.kill(pid, signal.SIGTERM)
-except OSError: pass
-PYDRAG
-  "$REAL_TMUX" -S "$so" send-keys -t "$p" -X cancel 2>/dev/null   # a drag the outer tmux took: copy mode
-  cap=$("$REAL_TMUX" -S "$so" capture-pane -p -t "$p")
-  case "$cap" in *'[<'*|*';6M'*|*';5M'*) WHY="the drag left mouse reports on the screen: $(printf '%s' "$cap" | grep -F '[<' | head -n 2 | tr '\n' '|')"; return 1 ;; esac
-  [ "$("$REAL_TMUX" -S "$so" display-message -p -t "$p" '#{mouse_any_flag}')" = 0 ] \
-    || { WHY="the dropped pane still has the far end's mouse reporting on"; return 1; }
-  SECS=$(since "$t0"); WHAT="断线后右侧不再收鼠标上报，拖动、点击不留乱码"
-}
-drill_reconnect_mouse() {   # its own server goes with it: a later drill's shim must not feed it
-  local rc; rv_reconnect_mouse; rc=$?
-  "$REAL_TMUX" -S "$WORK/sock-rm" kill-server 2>/dev/null
-  return $rc
-}
 
 # A reconnect onto the SAME view id while the last connection's attach is still
 # half alive (issue #1907, mac-a 2026-10-06): `run` keeps its view id across
@@ -2871,200 +2122,7 @@ drill_view_reconnect_shared() {
   return $rc
 }
 
-# The client's files replaced under the running client with no reload (issue
-# #1829): a pre-#1781 `start` moved the whole home aside while the shell ran
-# (the person's laptop, 02:31), or the install line wrote it in place. The old
-# proxy loop kept running beside new code that opened a second connection —
-# #1775's refused 2226. The drill: an installed client (its own home, a
-# .client-version) running with its keeper on a 1 s beat; the break is new
-# files in that home; the recovery is the keeper reloading them into the
-# running servers — the stamp moves, the proxy pane is a new process.
-drill_client_files_swapped() {
-  CAP=15; local s="${CSESS}u" H="$WORK/uhome" t0 pp
-  client_setup
-  mkdir -p "$H/bin"
-  cp -P "$WORK"/sbin/* "$H/bin/"
-  for f in fleet-shell.sh fleet-client-update.sh; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
-  ln -s "$WORK/conf" "$H/conf"
-  printf 'version=v1\ncompat=1\ncommit=c0ffee1\nhub=https://hub.example\n' > "$H/.client-version"
-  ( client_env
-    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/ucache" FLEET_CLIENT_LEASE_CMD=false \
-           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
-    mkdir -p "$XDG_CACHE_HOME/claude-fleet/client"; date +%s > "$XDG_CACHE_HOME/claude-fleet/client/checked"
-    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
-  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the installed client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  upid() { "$REAL_TMUX" -L "$s-stage" list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print $1; exit }'; }
-  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_start_command}' 2>/dev/null | grep fleet-remote-view.sh)\" ]" \
-    || { WHY="no proxy pane on the installed client's stage"; return 1; }
-  pp=$(upid)
-  t0=$(now)
-  printf 'version=v2\ncompat=1\ncommit=beef002\nhub=https://hub.example\n' > "$H/.client-version"   # the break
-  until_ok "$CAP" sh -c "[ \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @client_version 2>/dev/null)\" = v2 ]" \
-    || { WHY="the running client still runs what it loaded (@client_version=$("$REAL_TMUX" -L "$s" show-options -gqv @client_version 2>/dev/null)) after ${CAP}s"; return 1; }
-  until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print \$1; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $pp ]" \
-    || { WHY="the old proxy loop ($pp) was kept beside the new code"; return 1; }
-  SECS=$(since "$t0")
-  # update.state is written after the reload returns: a beat after the proxy
-  until_ok 5 grep -q '"phase": "done"' "$WORK/ucache/update.state" || { WHY="no trace of the update: update.state is not done"; return 1; }
-  WHAT="新文件载入正在跑的客户端，旧代理换掉，留下「已更新到」"
-}
 
-# (issue #2145) The same drift on a home with NO .client-version — a client the
-# line put down before the mark existed, or one that lost it: every check above
-# reads the mark, so the running server kept the conf it loaded, silently (the
-# operator's MacBook ran a pre-#1951 tmux.conf: no key hints on the bar, the
-# files on disk new). The break: the client starts on a conf without the hints,
-# then the conf on disk is the new one. Self-heal: the keeper's tick sees the
-# running @client_digest differ from the files' and reloads once idle.
-drill_client_unversioned_drift() {
-  CAP=15; local s="${CSESS}n" H="$WORK/nhome" t0 f
-  client_setup
-  mkdir -p "$H/bin" "$H/conf"
-  cp -P "$WORK"/sbin/* "$H/bin/"
-  for f in fleet-shell.sh fleet-client-update.sh; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
-  for f in "$WORK"/conf/*; do cp -L "$f" "$H/conf/${f##*/}"; done
-  grep -v fleet_hint "$ROOT/conf/tmux-shell.conf" > "$H/conf/tmux-shell.conf"   # the old conf: no key hints
-  rm -f "$H/.client-version"
-  ( client_env
-    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/ncache" FLEET_CLIENT_LEASE_CMD=false \
-           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
-    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
-  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the unversioned client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  [ -z "$("$REAL_TMUX" -L "$s" show-options -gqv @fleet_hint 2>/dev/null)" ] || { WHY="the old conf already carries @fleet_hint"; return 1; }
-  t0=$(now)
-  cp "$ROOT/conf/tmux-shell.conf" "$H/conf/tmux-shell.conf"   # the break: new files under the running client
-  until_ok "$CAP" sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @fleet_hint 2>/dev/null)\" ]" \
-    || { WHY="the running client still runs the conf it loaded (no @fleet_hint) ${CAP}s after the files changed"; return 1; }
-  SECS=$(since "$t0")
-  until_ok 5 grep -q '"phase": "reloaded"' "$WORK/ncache/update.state" || { WHY="no trace of the reload: update.state is not reloaded"; return 1; }
-  WHAT="没有 .client-version 的客户端：按内容认出新文件，空闲时重新载入，留下「已重新载入新文件」"
-}
-
-# (issue #2345) The client updated, the list kept drawing the old code: sync
-# reused a list pane whose @sidebar_version matched VIEW_VERSION — a constant
-# bumped by hand — so a version whose fleet-sidebar.py changed without the bump
-# left the old process running (the operator's MacBook, 5 hours of 「合并后回收」
-# after #2305 landed). The drill: an installed client with its keeper on a 1 s
-# beat and a client attached, so the list is drawn; the break is new files in
-# its home — fleet-sidebar.py changed, VIEW_VERSION as it was, a new
-# .client-version; the recovery is the keeper's reload drawing the list again
-# from the new code (a new list process).
-drill_client_sidebar_stale_after_update() {
-  CAP=20; local s="${CSESS}s" H="$WORK/shome" t0 lp f rc=0
-  client_setup
-  mkdir -p "$H/bin"
-  cp -P "$WORK"/sbin/* "$H/bin/"
-  for f in fleet-shell.sh fleet-client-update.sh fleet-sidebar.py; do rm -f "$H/bin/$f"; cp "$BIN/$f" "$H/bin/$f"; done
-  ln -s "$WORK/conf" "$H/conf"
-  printf 'version=v1\ncompat=1\ncommit=c0ffee1\nhub=https://hub.example\n' > "$H/.client-version"
-  ( client_env
-    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/scache" FLEET_CLIENT_LEASE_CMD=false \
-           FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_IDLE_SECS=0 FLEET_CLIENT_CHECK_SECS=999999
-    mkdir -p "$XDG_CACHE_HOME/claude-fleet/client"; date +%s > "$XDG_CACHE_HOME/claude-fleet/client/checked"
-    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
-  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the installed client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  # a client attached for the whole drill (control mode, fed by a fifo): the list
-  # is drawn only for an attached session, and a reload's sync takes it away otherwise
-  mkfifo "$WORK/sclient.fifo"
-  "$REAL_TMUX" -L "$s" -C attach-session -t "=$s" < "$WORK/sclient.fifo" >/dev/null 2>&1 &
-  local cpid=$!
-  exec 8> "$WORK/sclient.fifo"
-  slist() { "$REAL_TMUX" -L "$s" list-panes -s -t "=$s" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
-  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-clients -F x 2>/dev/null)\" ]" || { WHY="no client attached"; rc=1; }
-  if [ "$rc" = 0 ]; then
-    "$REAL_TMUX" -L "$s" resize-window -t "=$s:" -x 200 -y 50 2>/dev/null
-    "$REAL_TMUX" -L "$s" run-shell -t "=$s:" "bash '$WORK/scache/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :"
-    until_ok 10 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar}' 2>/dev/null | grep -x 1)\" ]" \
-      || { WHY="no list drawn on the installed client"; rc=1; }
-  fi
-  if [ "$rc" = 0 ]; then
-    lp=$(slist)
-    t0=$(now)
-    printf '\n# v2: the list moved, VIEW_VERSION as it was\n' >> "$H/bin/fleet-sidebar.py"   # the break
-    printf 'version=v2\ncompat=1\ncommit=beef002\nhub=https://hub.example\n' > "$H/.client-version"
-    until_ok "$CAP" sh -c "[ \"\$(\"$REAL_TMUX\" -L $s show-options -gqv @client_version 2>/dev/null)\" = v2 ]" \
-      || { WHY="the client never reloaded the new files (@client_version=$("$REAL_TMUX" -L "$s" show-options -gqv @client_version 2>/dev/null))"; rc=1; }
-  fi
-  if [ "$rc" = 0 ]; then
-    until_ok 5 sh -c "p=\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '\$1 == \"1\" { print \$2; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $lp ]" \
-      || { WHY="the list process ($lp) still draws the old code after the reload: $(slist)"; rc=1; }
-    SECS=$(since "$t0")
-  fi
-  exec 8>&-; kill "$cpid" 2>/dev/null
-  [ "$rc" = 0 ] || return 1
-  WHAT="客户端换了新文件：侧栏按内容认出不是自己启动时的代码，重画成新进程"
-}
-
-# (issue #2737) install-sync switched the install under the running client — a
-# checkout-style home (<home> a link into <home>.versions/, no .client-version):
-# the shell's mirror follows the link, but every long-lived part (the list, the
-# confs it sourced, the loops) kept the code it started with, and the only way
-# to the new one was `fleet quit` + `fleet` (the operator's MacBook, 2026-10-09,
-# after #2717). The drill: such a client running with a list drawn and a proxy
-# window; the break is the link switch to a version whose list code moved; the
-# recovery is what install-sync's client_follow runs, `fleet-client-update.sh
-# follow --from <old>`: within 30 s the list is a new process on the new code,
-# the servers, windows, the window in view and the proxy pane are the same.
-drill_client_hot_reload() {
-  CAP=30; local s="${CSESS}h" H="$WORK/hhome" t0 lp sp pp w0 iv v f rc=0
-  client_setup
-  for v in h1 h2; do
-    mkdir -p "$H.versions/$v/bin" "$H.versions/$v/conf"
-    cp -P "$WORK"/sbin/* "$H.versions/$v/bin/"
-    for f in fleet-shell.sh fleet-client-update.sh fleet-sidebar.py; do rm -f "$H.versions/$v/bin/$f"; cp "$BIN/$f" "$H.versions/$v/bin/$f"; done
-    for f in "$WORK"/conf/*; do cp -L "$f" "$H.versions/$v/conf/${f##*/}"; done
-  done
-  printf '\n# h2: the list moved\n' >> "$H.versions/h2/bin/fleet-sidebar.py"
-  ln -s "$H.versions/h1" "$H"
-  hx() { "$REAL_TMUX" -L "$s" "$@"; }
-  hg() { "$REAL_TMUX" -L "$s-stage" "$@"; }
-  ( client_env
-    export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/hcache" FLEET_CLIENT_LEASE_CMD=false \
-           FLEET_CLIENT_LEASE_EVERY=3600 FLEET_CLIENT_CHECK_SECS=999999
-    bash "$H/bin/fleet-shell.sh" >"$WORK/up-$s.out" 2>"$WORK/up-$s.err" )
-  [ "$(cat "$WORK/up-$s.out" 2>/dev/null)" = "$s" ] || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  mkfifo "$WORK/hclient.fifo"
-  hx -C attach-session -t "=$s" < "$WORK/hclient.fifo" >/dev/null 2>&1 &
-  local cpid=$!
-  exec 8> "$WORK/hclient.fifo"
-  hlist() { hx list-panes -s -t "=$s" -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '$1 == "1" { print $2; exit }'; }
-  hproxy() { hg list-panes -s -F '#{pane_pid} #{pane_start_command}' 2>/dev/null | awk '/fleet-remote-view.sh/ { print $1; exit }'; }
-  hwins() { hx list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; hg list-windows -a -F '#{window_id}' 2>/dev/null | sort | tr '\n' ' '; }
-  hview() { hx display-message -p -t "=$s:" '#{window_id}' 2>/dev/null; hg display-message -p -t "=$s-stage:" '#{window_id}' 2>/dev/null; }
-  until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-clients -F x 2>/dev/null)\" ]" || { WHY="no client attached"; rc=1; }
-  if [ "$rc" = 0 ]; then
-    hx resize-window -t "=$s:" -x 200 -y 50 2>/dev/null
-    hx run-shell -t "=$s:" "bash '$WORK/hcache/bin/fleet-sidebar.sh' sync '#{session_id}' >/dev/null 2>&1 || :"
-    until_ok 10 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar}' 2>/dev/null | grep -x 1)\" ]" \
-      || { WHY="no list drawn"; rc=1; }
-  fi
-  if [ "$rc" = 0 ]; then
-    until_ok 5 sh -c "[ -n \"\$(\"$REAL_TMUX\" -L $s-stage list-panes -s -F '#{pane_start_command}' 2>/dev/null | grep fleet-remote-view.sh)\" ]" \
-      || { WHY="no proxy pane on the stage"; rc=1; }
-  fi
-  if [ "$rc" = 0 ]; then
-    lp=$(hlist); pp=$(hproxy); w0=$(hwins); iv=$(hview); sp=$(hx display-message -p -t "=$s:" '#{pid}')
-    t0=$(now)
-    rm -f "$H"; ln -s "$H.versions/h2" "$H"                    # the break: install-sync's link switch
-    ( client_env
-      export FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$WORK/hcache" FLEET_CLIENT_LEASE_CMD=false
-      bash "$H/bin/fleet-client-update.sh" follow --from "$H.versions/h1" >/dev/null 2>&1 )   # its client_follow
-    until_ok "$CAP" sh -c "p=\$(\"$REAL_TMUX\" -L $s list-panes -s -t =$s -F '#{@sidebar} #{pane_pid}' 2>/dev/null | awk '\$1 == \"1\" { print \$2; exit }'); [ -n \"\$p\" ] && [ \"\$p\" != $lp ]" \
-      || { WHY="the list ($lp) still runs the code it started with ${CAP}s after the switch"; rc=1; }
-  fi
-  if [ "$rc" = 0 ]; then
-    SECS=$(since "$t0")
-    [ "$(hx display-message -p -t "=$s:" '#{pid}')" = "$sp" ] || { WHY="the shell's tmux server was replaced"; rc=1; }
-  fi
-  [ "$rc" = 0 ] && { [ "$(hwins)" = "$w0" ] || { WHY="the windows changed: $w0 → $(hwins)"; rc=1; }; }
-  [ "$rc" = 0 ] && { [ "$(hview)" = "$iv" ] || { WHY="the window in view changed"; rc=1; }; }
-  [ "$rc" = 0 ] && { [ "$(hproxy)" = "$pp" ] || { WHY="the proxy pane was respawned (fleet-remote-view.sh did not change)"; rc=1; }; }
-  [ "$rc" = 0 ] && { grep -q '"phase": "reloaded"' "$WORK/hcache/update.state" 2>/dev/null || { WHY="no trace: update.state is not reloaded"; rc=1; }; }
-  exec 8>&-; kill "$cpid" 2>/dev/null
-  hx kill-server 2>/dev/null; hg kill-server 2>/dev/null
-  [ "$rc" = 0 ] || return 1
-  WHAT="安装切了新版：正在跑的客户端原地换新——侧栏新进程跑新代码，服务器、窗口、正在看的、代理都不动"
-}
 
 # A client whose node login is not the name of the computer it sits at (issue
 # #2397): cj's sidebar read 「No sessions」 while the hub listed his five sessions.
@@ -3072,7 +2130,7 @@ drill_client_hot_reload() {
 # hub's ETag beside the empty cache it mapped; the client updated past #2390, but
 # every round after sent that ETag back, the hub's answer for his scope had not
 # moved (no heartbeat in it), and each 304 kept the empty list. The sandbox: the
-# real fleet-hub-sessions.sh in client mode over a connection certificate, a curl
+# real fleet-hub-sessions.sh on a home machine over a connection certificate, a curl
 # that answers 304 to the stored ETag and the body otherwise, and the old code's
 # leftovers on disk — an empty cache and a bare ETag.
 drill_client_other_login_empty_list() {
@@ -3111,7 +2169,7 @@ SHIM
   out=$( unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD FLEET_HUB_SESSIONS_USER FLEET_HUB_SESSIONS_LOCAL \
                FLEET_NODE_ALIASES FLEET_HUB_URL FLEET_CERT XDG_CONFIG_HOME TMUX TMUX_PANE
          export PATH="$sc/bin:$PATH" HOME="$sc/home" TMPDIR="$sc/t" FLEET_CONF_DIR="$sc/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-                CCQUOTA_FLEET=1 CCQUOTA_HUB_URL=http://hub.test FLEET_HUB_SESSIONS_CLIENT="$S"
+                CCQUOTA_FLEET=1 CCQUOTA_HUB_URL=http://hub.test FLEET_HUB_SESSIONS_USER='*'
          bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1
          cat "$TMPDIR/.claude-dash/global/remote_$S" 2>/dev/null )
   SECS=$(since "$t0")
@@ -3119,42 +2177,6 @@ SHIM
     *) WHY="the list stayed empty — the client sent [$(tr '\n' ' ' < "$sc/inm.log")] and kept the old mapping's cache: [$(printf '%s' "$out" | tr '\037\n' '| ')]"; return 1 ;;
   esac
   WHAT="客户端换版后，旧代码存下的 ETag 不再拿去问入口：入口回全量，按新代码重新映射，节点登录名≠本机用户名的会话回到侧栏"
-}
-
-# Same person, two logins on one machine (issue #2430): m9 has alice (the old
-# account, whose connection the client keeps warm) and bob (the new one); the hub
-# placed a session in bob's fleet. Before: the list mapped both rows but kept no
-# login, so opening bob's row rode the warm master as alice and the far end said
-# 「已不在 m9 上」. The recovery: the sessions round remembers each fleet's login,
-# and the proxy's attach goes out as bob — never over alice's warm master.
-drill_two_logins_one_machine() {
-  CAP=10; local sc="$WORK/tl" t0 out S=tl A=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa B=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb line
-  rv_shim; mkdir -p "$WORK/rv/tmp/.claude-dash/global" "$sc"
-  cat > "$sc/sessions.json" <<JSON
-{"sessions": [
-  {"worker_id": "$A/issue-1", "fleet_id": "$A", "machine_name": "m9", "os_user": "alice", "availability": "online",
-   "worker": {"issue": 1, "repo": "acme/app", "state": "done", "agent": "claude", "name": "alice-row"}},
-  {"worker_id": "$B/scratch-1", "fleet_id": "$B", "machine_name": "m9", "os_user": "bob", "availability": "online",
-   "worker": {"state": "done", "agent": "codex", "name": "bob-codex"}}],
- "nodes": [{"machine_name": "m9", "availability": "online", "sessions": 2}]}
-JSON
-  # the warm master to m9 was opened as alice (fleet-connect.py's route file)
-  printf '{"machine": "m9", "kind": "direct", "name": "lan", "login": "alice"}\n' > "$WORK/rv/tmp/warm/m9.sock.route"
-  t0=$(now)
-  ( unset CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_LOCAL FLEET_NODE_ALIASES FLEET_HUB_URL TMUX TMUX_PANE
-    export HOME="$WORK/rv" TMPDIR="$WORK/rv/tmp" FLEET_CONF_DIR="$WORK/rv/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 \
-           FLEET_HUB_SESSIONS_CLIENT="$S" FLEET_HUB_SESSIONS_USER='*' FLEET_HUB_SESSIONS_CMD="cat '$sc/sessions.json'"
-    bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 )
-  out=$(cat "$WORK/rv/tmp/.claude-dash/global/remote_$S" 2>/dev/null)
-  case "$out" in *"wid:$A/issue-1"*"wid:$B/scratch-1"*|*"wid:$B/scratch-1"*"wid:$A/issue-1"*) ;;
-    *) WHY="the list does not show both logins' sessions: [$(printf '%s' "$out" | tr '\037\n' '| ')]"; return 1 ;; esac
-  # shellcheck disable=SC2046  # rv_env is KEY=VALUE words on purpose (no spaces in $WORK)
-  env $(rv_env) bash "$BIN/fleet-remote-view.sh" run --shell m9 "$B/scratch-1" > "$WORK/rv/out" 2>&1 < /dev/null
-  SECS=$(since "$t0")
-  line=$(grep ' attach' "$WORK/rv/ssh.log" | head -n 1)
-  case " $line " in *" -l bob "*) ;; *) WHY="bob's session was opened as someone else: [$line]"; return 1 ;; esac
-  case "$line" in *"warm/m9.sock"*) WHY="bob's session rode alice's warm master: [$line]"; return 1 ;; esac
-  WHAT="同一人两个 login：侧栏两行都在，打开 bob 的会话用 -l bob、不骑 alice 的暖连接"
 }
 
 # ============================================ a fleet's tmux, deleted from a shell ======
@@ -3308,7 +2330,7 @@ drill_conf_keys_lost() {
 # fleet-client-lease.py acquire asks at the test door, as test, marked — and the
 # person's lease and where are unchanged; FLEET_CLIENT_IDENTITY=person is refused
 # 403 with the reason; outside a session the person's acquire is unmarked; and
-# bash-guard refuses a session starting `fleet` / `fleet mac-a` / fleet-shell.sh /
+# bash-guard refuses a session starting `fleet` / `fleet mac-a` / fleet-thin.py /
 # `ssh mac-a fleet` without --test-identity, lets `fleet --test-identity`,
 # `fleet doctor` and the hatch through.
 drill_session_takes_client() {
@@ -3376,14 +2398,15 @@ PY2
   [ "$out" = OK ] || { WHY=${out#WHY=}; WHY="${WHY:-the drive died}"; return 1; }
   # the guard: a session's client start must say --test-identity
   h=( env -u FLEET_HUB FLEET_WORKER_CRED=fwc1.x FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$ROOT/hooks/bash-guard.py" )
-  for cmd in 'fleet' 'fleet mac-a' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-shell.sh" 'ssh mac-a fleet' 'ssh -p 22022 mac-a "fleet shell"' \
+  for cmd in 'fleet' 'fleet mac-a' 'fleet --thin' 'fleet --old' 'FLEET_HUB_URL=https://hub.example fleet' "$BIN/fleet-thin.py" 'ssh mac-a fleet' 'ssh -p 22022 mac-a "fleet shell"' \
              'fleet codex hi' 'fleet claude --node mac-a' "$BIN/fleet-home-session.sh claude"; do
     out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 2 ] || { WHY="bash-guard let a session's [$cmd] through"; return 1; }
     case "$out" in *--test-identity*FLEET_ALLOW_PERSON_CLIENT=1*) ;; *) WHY="bash-guard gave no way out for [$cmd]: [$out]"; return 1 ;; esac
   done
   for cmd in 'fleet --test-identity mac-a' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh mac-a fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet' \
-             'fleet claude --here' 'fleet --test-identity codex hi'; do
+             'fleet claude --here' 'fleet --test-identity codex hi' 'fleet --test-identity --thin' \
+             'FLEET_CLIENT_IDENTITY=test python3 fleet-thin.py' 'python3 fleet-thin.py --help'; do
     out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 0 ] || { WHY="bash-guard refused [$cmd]: [$out]"; return 1; }
   done
@@ -3618,121 +2641,7 @@ PY2
   SECS=$(since "$t0"); WHAT="客户端（入口只写在 [client] 段）用 python 3.9 跑 fleet drill invite：找到入口，纳秒时间照样打出确认码和到期"
 }
 
-# A second client pushes the first off (issue #1932, EPIC #1906 C13): until
-# 2026-10-06 a person held ONE client lease — the iPhone opening took it over and
-# the MacBook fell to its standby screen; on one machine a second `fleet` popped
-# the standby screen on the client already attached. The real client on its own
-# -L socket, its lease a fake keeping the hub's rules (a lease per client, the
-# primary = the latest input — TestClientLeaseTableSeveral pins the hub's own):
-# two terminals attached to the machine, then another device opening its own
-# lease — nobody on standby, this server still renewing — and typing here makes
-# it the primary again.
-drill_second_client() {
-  CAP=45; local t0 s="${CSESS}2" sc="$WORK/sc" out
-  client_setup
-  mkdir -p "$sc/cur"; : > "$sc/log"
-  cat > "$sc/lease" <<EOF
-#!/bin/bash
-h="$sc"; act=\$1; shift; lease=''; dev=''
-while [ \$# -gt 0 ]; do case "\$1" in --lease) lease=\$2; shift 2 ;; --device) dev=\$2; shift 2 ;; *) shift ;; esac; done
-[ "\$act" = device ] && { printf 'MacBook\tFakeTerm\n'; exit 0; }
-echo "\$act \$lease \$dev" >> "\$h/log"
-case "\$act" in
-  acquire) if [ -n "\$lease" ] && [ -f "\$h/cur/\$lease" ]; then n=\$lease; else n=L\$RANDOM\$\$; fi
-           echo "\$dev" > "\$h/cur/\$n"; printf 'active\t%s\t%s\t\t\n' "\$n" "\$dev" ;;
-  renew|input) if [ -f "\$h/cur/\$lease" ]; then
-             [ "\$act" = input ] && echo "\$lease" > "\$h/primary"
-             printf 'active\t%s\t\t\t\n' "\$lease"
-           else printf 'taken_over\t\tiPhone\t\t\n'; fi ;;
-  release) rm -f "\$h/cur/\$lease"; printf 'released\t\t\t\t\n' ;;
-  *) printf 'none\t\t\t\t\n' ;;
-esac
-EOF
-  chmod +x "$sc/lease"
-  # `fleet` again on this machine, as the person types it (the drive runs it
-  # while the first terminal is attached)
-  { printf '#!/bin/bash\n'; declare -f client_env client_start; printf 'WORK=%q\n' "$WORK"
-    # its own cache: the other client drills' keepers live in $WORK/ccache, and
-    # one keeper per cache is the rule
-    printf 'client_start %q FLEET_CLIENT_LEASE_CMD=%q FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE=%q\n' \
-      "$s" "$sc/lease" "$sc/cache"
-  } > "$sc/fleet"; chmod +x "$sc/fleet"
-  t0=$(now)
-  "$sc/fleet" || { WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1; }
-  out=$(python3 - "$REAL_TMUX" "$s" "$sc/cache/tmp" "$sc" <<'PY' 2>&1
-import fcntl, os, pty, select, signal, struct, subprocess, sys, termios, time
-tmux, sess, cl, h = sys.argv[1:5]
-signal.alarm(60)
-kids = []
-def attach():
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.environ.update(TERM="xterm-256color", LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8")
-        os.environ.pop("TMUX", None)
-        os.execvp(tmux, [tmux, "-L", sess, "attach-session", "-t", "=" + sess])
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-    kids.append((pid, fd)); seen.append(b"")
-seen = []
-def pump(secs):
-    end = time.time() + secs
-    while time.time() < end:
-        r, _, _ = select.select([fd for _, fd in kids], [], [], 0.1)
-        for i, (_, fd) in enumerate(kids):
-            if fd in r:
-                try: seen[i] += os.read(fd, 65536)
-                except OSError: pass
-def until(secs, ok):   # pump while waiting: a slow runner's keeper ticks late
-    end = time.time() + secs
-    while time.time() < end:
-        if ok(): return True
-        pump(0.3)
-    return ok()
-def popped(i):   # the standby screen drawn on that terminal
-    return "按回车".encode() in seen[i]
-def standby():
-    return os.path.exists(os.path.join(cl, "client.standby"))
-def lease():
-    try: return open(os.path.join(cl, "client.lease")).read().strip()
-    except OSError: return ""
-def log():
-    return open(os.path.join(h, "log")).read()
-def die(why):
-    print("WHY=" + why); sys.exit(1)
-try:
-    attach(); pump(2.0)
-    subprocess.run([os.path.join(h, "fleet")], capture_output=True, timeout=20)   # `fleet` again
-    attach(); pump(3.0)
-    n = subprocess.run([tmux, "-L", sess, "list-clients", "-F", "x"], capture_output=True, text=True).stdout.count("x")
-    if n != 2: die("two terminals: %d attached" % n)
-    if standby() or popped(0): die("the second terminal sent the first to standby")
-    me = lease()
-    if not me: die("this server holds no lease")
-    # another device opens its own lease, and is the primary
-    r = subprocess.run([os.path.join(h, "lease"), "acquire", "--device", "iPhone"], capture_output=True, text=True).stdout
-    open(os.path.join(h, "primary"), "w").write(r.split("\t")[1] + "\n")
-    # a renewal, or an input (which renews too: tmux may bump a client's
-    # activity on its own, e.g. on attach)
-    held = lambda: log().count("renew " + me) + log().count("input " + me)
-    renews = held()
-    renewed = until(10, lambda: held() > renews)
-    if standby() or popped(0) or popped(1) or lease() != me: die("another device opening its lease put this one on standby")
-    if not renewed: die("this server stopped renewing (lease %s; hub saw: %s)" % (me, " ; ".join(log().splitlines()[-4:])))
-    # typing here (F12, a key nothing binds to an action): the input goes out
-    os.write(kids[0][1], b"\x1b[24~")
-    if not until(10, lambda: open(os.path.join(h, "primary")).read().strip() == me):
-        die("typing here sent no input (the iPhone still primary)")
-    print("OK")
-finally:
-    for pid, _ in kids:
-        try: os.kill(pid, signal.SIGTERM)
-        except OSError: pass
-PY
-)
-  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
-  [ "$(printf '%s\n' "$out" | tail -n 1)" = OK ] || { WHY=$(printf '%s\n' "$out" | sed -n 's/^WHY=//p' | tail -n 1)
-    WHY="${WHY:-the drive died: $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ')}"; return 1; }
-  SECS=$(since "$t0"); WHAT="同一台两个终端 + 另一台设备各自的租约，谁也不进待机；在这里打字它又是主客户端"
-}
+
 
 # ---- phone-squeezes-window (#1933): two clients of one fleet, 160 and 50 columns,
 # each through its own view session (#1489) on the same window, under the node
@@ -3806,102 +2715,7 @@ PY
   SECS=$(since "$t0"); WHAT="160 列与 50 列两个客户端看同一窗口：谁打字跟谁；视图切窗口也按自己的宽度"
 }
 
-# ---- hub-restart-where (#1995): the hub keeps the client leases in memory, so a
-# deploy forgets them; each live client's next renewal re-adopts its own id — but
-# until 2026-10-06 a renewal carried only the lease id, so the re-adopted lease
-# had no device, terminal or caps and fleet-client-where.sh said 未知设备 until
-# the client was opened again. The real client (bin/fleet → fleet-shell.sh's
-# keeper → fleet-client-lease.py) against a fake hub keeping the hub's rules (a
-# renewal of an unknown id is adopted and filled from its body — Go's
-# TestClientLeaseRenewRefillsAfterRestart pins the hub's own): where before, the
-# hub's memory wiped, where after ONE renewal.
-drill_hub_restart_where() {
-  CAP=20; local t0 s="${CSESS}w" sc="$WORK/hrw" out port='' _ hpid
-  client_setup
-  mkdir -p "$sc"
-  cat > "$sc/hub.py" <<'PY'
-import json, signal, sys, threading, time, uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-signal.alarm(int(sys.argv[2]))
-cur, log = {}, open(sys.argv[3], "a", buffering=1)
-def fill(l, b):
-    for k in ("device", "terminal", "os", "via", "host", "version"):
-        if (b.get(k) or "").strip(): l[k] = b[k].strip()
-    if b.get("caps") is not None: l["caps"] = b["caps"]
-    l.setdefault("device", "未知设备")
-class H(BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_POST(self):
-        b = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-        if self.path == "/_restart":
-            cur.clear(); log.write("RESTART\n"); out = {}
-        elif self.path in ("/v1/fleet/client", "/v1/fleet/client/test"):
-            act, lid = b.get("action") or "get", b.get("lease") or ""
-            log.write("%s %s %s\n" % (act, lid, json.dumps({k: v for k, v in b.items() if k not in ("action", "lease")}, ensure_ascii=False)))
-            if act == "acquire":
-                lid = lid if lid in cur else uuid.uuid4().hex[:12]
-                cur.setdefault(lid, {"id": lid})
-            elif act in ("renew", "input"):
-                cur.setdefault(lid, {"id": lid})   # a restart: the same id, adopted
-            if act in ("acquire", "renew", "input"):
-                fill(cur[lid], b); cur[lid]["at"] = time.time()
-                out = {"state": "active", "lease": cur[lid]}
-            elif act == "release":
-                cur.pop(lid, None); out = {"state": "released"}
-            else:
-                p = max(cur.values(), key=lambda l: l["at"], default=None)
-                out = {"state": "active", "lease": p, "clients": [p], "primary": p["id"]} if p else {"state": "none"}
-            if "/test" in self.path: out["identity"] = "test"
-        else:
-            self.send_response(404); self.end_headers(); return
-        d = json.dumps(out).encode()
-        self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(d))); self.end_headers(); self.wfile.write(d)
-    do_GET = lambda self: (self.send_response(404), self.end_headers())
-srv = HTTPServer(("127.0.0.1", 0), H)
-open(sys.argv[1] + ".tmp", "w").write(str(srv.server_address[1])); __import__("os").replace(sys.argv[1] + ".tmp", sys.argv[1])
-srv.serve_forever()
-PY
-  : > "$sc/log"
-  # a busy macOS runner takes seconds to start a python: the start is not timed
-  python3 "$sc/hub.py" "$sc/port" "$((CAP + 90))" "$sc/log" 2>"$sc/hub.err" & hpid=$!
-  for _ in $(seq 1 300); do [ -s "$sc/port" ] && break; sleep 0.1; done
-  { read -r port < "$sc/port"; } 2>/dev/null
-  [ -n "$port" ] || { kill "$hpid" 2>/dev/null; WHY="the fake hub did not start in 30s: $(tail -2 "$sc/hub.err" | tr '\n' ' ')"; return 1; }
-  local hub="http://127.0.0.1:$port" before
-  # where, as a session on this machine reads it
-  hw() { ( client_env; export FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_SHELL_SESSION="$s" FLEET_SHELL_CACHE="$sc/cache"
-           unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_WORKER_CRED FLEET_WORKER_ASSERT FLEET_SEAT FLEET_CLIENT_IDENTITY
-           bash "$BIN/fleet-client-where.sh" 2>&1 ); }
-  if ! client_start "$s" FLEET_HUB_URL="$hub" FLEET_HUB_TOKEN=tok FLEET_CLIENT_DEVICE="Erin's Mac" \
-       LC_TERMINAL=iTerm2 LC_TERMINAL_VERSION=3.6 FLEET_CLIENT_XTVERSION=0 FLEET_CLIENT_IDENTITY=person \
-       FLEET_CLIENT_LEASE_EVERY=1 FLEET_CLIENT_INPUT_EVERY=1 FLEET_SHELL_CACHE="$sc/cache"; then
-    kill "$hpid" 2>/dev/null; WHY="the client did not start: $(head -3 "$WORK/up-$s.err")"; return 1
-  fi
-  out=''
-  for _ in $(seq 1 100); do out=$(hw); case "$out" in *"Erin's Mac"*iTerm2*) break ;; esac; sleep 0.1; done
-  before=$out
-  printf '入口重启前：%s\n' "$out" > "$sc/where.txt"
-  case "$out" in *"Erin's Mac"*iTerm2*) ;; *)
-    kill "$hpid" 2>/dev/null; "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
-    WHY="before the restart where said [$out] (hub saw: $(tail -3 "$sc/log" | tr '\n' ' '))"; return 1 ;; esac
-  # the hub restarts: every lease forgotten
-  curl -s -X POST -d '{}' "$hub/_restart" >/dev/null
-  t0=$(now)
-  printf '入口重启后：%s\n' "$(hw)" >> "$sc/where.txt"
-  for _ in $(seq 1 $((CAP * 10))); do
-    grep -q '^RESTART' "$sc/log" && sed -n '/^RESTART/,$p' "$sc/log" | grep -q '^renew ' && { out=$(hw); [ "$out" = "$before" ] && break; }
-    sleep 0.1
-  done
-  SECS=$(since "$t0")
-  printf '一次续租后：%s\n' "$out" >> "$sc/where.txt"
-  [ -n "${BREAK_WHERE_OUT:-}" ] && cp "$sc/where.txt" "$BREAK_WHERE_OUT"
-  "$REAL_TMUX" -L "$s" kill-server 2>/dev/null
-  sleep 0.3; kill "$hpid" 2>/dev/null; wait "$hpid" 2>/dev/null
-  case "$out" in "$before") ;; *)
-    WHY="after the hub restarted and the client renewed, where said [$out] (renewal sent: $(sed -n '/^RESTART/,$p' "$sc/log" | grep -m1 '^renew '))"; return 1 ;; esac
-  WHAT="入口重启（清空租约）后，客户端下一次续租补上设备 / 终端 / 能力：where 回到 Erin's Mac · iTerm2"
-}
+
 
 drill_hub_deploy_lost_config() {
   # A hub release whose overlay lost its config (#2060): /healthz 200 and the
@@ -5370,8 +4184,8 @@ drill_opened_login_fleet_silent() {
     || { WHY="a refused placement no longer names the login being opened"; return 1; }
   grep -q 'took > openingOver(est)' "$f" \
     || { WHY="an opening far past its machine's ETA no longer fails"; return 1; }
-  grep -q 'FLEET_HOME_FIRST_OPENING_MAX' "$ROOT/bin/fleet-shell.sh" \
-    || { WHY="the client's first session no longer waits while the hub says opening"; return 1; }
+  grep -q 'FLEET_HOME_FIRST_OPENING_MAX' "$ROOT/bin/fleet-thin.py" \
+    || { WHY="the thin client's first session no longer waits while the hub says opening"; return 1; }
   _drill_go_tests 'TestOpenedLoginWithoutFleetIsNotDone TestOpeningPastItsOwnETAFails' \
     "$ROOT/tokenledger/internal/api/fleet_opening_test.go" \
     '开好的登录要等它的 fleet 报上来才算好：之前 opening(stage fleet)，10 分钟后 failed 说缺哪步；放置点名；超过预计 ×3 failed（go test）' || return 1
@@ -5584,7 +4398,7 @@ drill_newcomer_login_no_gh() {
   got=$(HOME="$w/home" FLEET_CONF_DIR="$w/c2" PATH="$w/bin:$PATH" bash "$ROOT/bin/fleet-control-read.sh" ready 2>/dev/null)
   rm -rf "$w"
   case "$got" in *'"ready":false'*'"gh"'*) ;; *) WHY="a login hosting a repo with no gh reads ready: $got"; return 1 ;; esac
-  grep -q 'FLEET_CLIENT_LAYOUT") == "solo"' "$ROOT/bin/fleet-client-place.sh" \
+  grep -q 'home-session.first' "$ROOT/bin/fleet-client-place.sh" \
     || { WHY="fleet-client-place.sh tells a newcomer's client to host here again"; return 1; }
   WHAT='没有仓库、没有 gh 的新登录 → ready；有仓库没 gh → not ready: gh；新人客户端不再被叫去本机 host on（真跑就绪检查）'
   SECS=$(since "$t0")
@@ -6064,6 +4878,22 @@ drill_idle_timeout_starves_merged() {
 # An auto send one machine declines (2026-10-08: mac-d's `fleet discover:
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
+drill_launch_receipt_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='原生启动回执拒绝旧身份与错误 provider，未验证不交付任务'
+}
+
+drill_dispatch_identity_fallback() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-dispatch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='固定 provider 的接受身份不变：拒绝替换 T，也不在入口结果未知后补开本机'
+}
+
 drill_place_declined_not_retried() {
   CAP=120; local t0 d="$WORK/pdecl" out err rc gohalf old_ts now_s
   mkdir -p "$d/g"
@@ -6375,81 +5205,6 @@ drill_cross_send_refused_unseen() {
     || { WHY="the delivery book does not say FAILED: $(tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null)"; return 1; }
   SECS=$(since "$t0")
   WHAT="编排用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
-}
-
-# paste-image-lost (issue #2757): a file dropped into a session on another machine
-# goes through the proxy pane's ssh as its Mac path. The drill runs the pane's own
-# program (fleet-remote-view.sh run --shell) against a fake ssh whose session
-# records what it receives, and whose remote commands run in a sandbox HOME (the
-# node): the session must get the node's inbox path, never the Mac's.
-drill_paste_image_lost() {
-  CAP=10; local d="$WORK/paste" t0 got
-  mkdir -p "$d/mac" "$d/node" "$d/cli"
-  printf 'png-bytes' > "$d/mac/shot one.png"
-  cat > "$d/ssh" <<EOF_SSH
-#!/bin/bash
-for a in "\$@"; do [ "\$a" = -O ] && exit 0; done
-last="\${@: -1}"
-case "\$last" in
-  *fleet-inbox*) HOME="$d/node" exec sh -c "\$last" ;;
-  *" attach "*) cat > "$d/session.in"; exit 0 ;;
-  *) exit 0 ;;
-esac
-EOF_SSH
-  printf '#!/bin/sh\nfor a in "$@"; do case "$a" in ControlPath=*) : > "${a#ControlPath=}" ;; esac; done\n' > "$d/connect"
-  chmod +x "$d/ssh" "$d/connect"
-  t0=$(now)
-  printf '\033[200~%s \033[201~' "$d/mac/shot\\ one.png" \
-    | env -u TMUX -u TMUX_PANE TMPDIR="$d/cli" FLEET_CLIENT_DIR="$d/cli" FLEET_REMOTE_SSH_CMD="$d/ssh" \
-        FLEET_CLIENT_ACTIONS_CONNECT="$d/connect" FLEET_SHELL_WARM=0 FLEET_PASTE_LOG="$d/paste.log" \
-        bash "$BIN/fleet-remote-view.sh" run --shell m9 "11111111-2222-3333-4444-555555555555/issue-7" >/dev/null 2>&1
-  got=$(cat "$d/session.in" 2>/dev/null)
-  case "$got" in
-    *"$d/node/.cache/claude-fleet/inbox/issue-7/"*shot_one.png*) ;;
-    *) WHY="the session got [$(printf '%s' "$got" | tr '\033' '^')] — not a path in its machine's inbox"; return 1 ;;
-  esac
-  case "$got" in *"$d/mac/"*) WHY="the Mac's path still reached the session: $got"; return 1 ;; esac
-  [ "$(cat "$d"/node/.cache/claude-fleet/inbox/issue-7/*shot_one.png 2>/dev/null)" = png-bytes ] \
-    || { WHY="the file did not land in the node's inbox"; return 1; }
-  # off: byte for byte as before
-  printf '\033[200~%s\033[201~' "$d/mac/shot\\ one.png" \
-    | env -u TMUX -u TMUX_PANE TMPDIR="$d/cli" FLEET_CLIENT_DIR="$d/cli" FLEET_REMOTE_SSH_CMD="$d/ssh" FLEET_CLIENT_PASTE=0 \
-        FLEET_CLIENT_ACTIONS_CONNECT="$d/connect" FLEET_SHELL_WARM=0 \
-        bash "$BIN/fleet-remote-view.sh" run --shell m9 "11111111-2222-3333-4444-555555555555/issue-7" >/dev/null 2>&1
-  [ "$(cat "$d/session.in")" = "$(printf '\033[200~%s\033[201~' "$d/mac/shot\\ one.png")" ] \
-    || { WHY="FLEET_CLIENT_PASTE=0 changed the paste"; return 1; }
-  SECS=$(since "$t0"); WHAT="拖入的文件先送到会话那台机器的 inbox，会话收到的是那边的路径；关掉开关逐字节如今天"
-}
-
-# notify-silent (issue #2759, EPIC #2756 C3): the client in the background (⌃D —
-# no terminal attached to anything) and a session on another machine starts
-# asking. Before: the notification rode the bar's status-right job, which tmux
-# runs only for an attached client — nothing rang, ever. Now the client's
-# refresh loop decides it (bin/fleet_notify.py): the next round that brings the
-# row raises ONE notification, no terminal needed.
-drill_notify_silent() {
-  CAP=5; local d="$WORK/ns" t0 F=cccccccc-cccc-4ccc-8ccc-cccccccccccc
-  mkdir -p "$d/home" "$d/t" "$d/conf"
-  printf '{"caps":["notify"]}\n' > "$d/t/client.where.json"
-  printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "%s/out"\n' "$d" > "$d/notifier"; chmod +x "$d/notifier"
-  nsj() { printf '{"sessions":[{"worker_id":"%s/issue-5","fleet_id":"%s","machine_name":"mac-a","os_user":"u","availability":"online","worker":{"issue":5,"repo":"o/r","state":"%s","needs":"%s","detail":"%s","agent":"claude"}}],"nodes":[{"machine_name":"mac-a","availability":"online","sessions":1}]}\n' \
-            "$F" "$F" "$1" "${2:-}" "${3:-}" > "$d/sessions.json"; }
-  nsr() { ( unset TMUX TMUX_PANE CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_LOCAL FLEET_NODE_ALIASES FLEET_HUB_URL FLEET_NOTIFY
-            export HOME="$d/home" TMPDIR="$d/t" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 FLEET_UI_LANG=zh \
-                   FLEET_HUB_SESSIONS_CLIENT=ns FLEET_SHELL_SESSION=ns FLEET_HUB_SESSIONS_USER='*' FLEET_NOTIFY_QUIET=off \
-                   FLEET_HUB_SESSIONS_CMD="cat '$d/sessions.json'" FLEET_CLIENT_NOTIFY_CMD="$d/notifier" FLEET_NOTIFY_LOG="$d/notify.ndjson"
-            bash "$BIN/fleet-hub-sessions.sh" --refresh >/dev/null 2>&1 ); }
-  nsj working; nsr
-  nsj needs ask '要合并 #5 吗？'
-  t0=$(now)
-  nsr
-  until_ok "$CAP" test -s "$d/out" || { WHY="the session asks, no terminal is attached, and nothing rang"; return 1; }
-  SECS=$(since "$t0")
-  [ "$(cat "$d/out")" = '#5 在问你|要合并 #5 吗？ · mac-a' ] || { WHY="the notification says [$(cat "$d/out")]"; return 1; }
-  grep -q '"state": "ask", "sent"' "$d/notify.ndjson" 2>/dev/null || { WHY="logs/notify.ndjson has no sent line: $(cat "$d/notify.ndjson" 2>/dev/null)"; return 1; }
-  nsr; sleep 0.5
-  [ "$(wc -l < "$d/out" | tr -d ' ')" = 1 ] || { WHY="the same question rang again: $(cat "$d/out")"; return 1; }
-  WHAT="客户端在后台、没有终端挂着：别机会话一开始问你，下一拍就弹一条（点了切过去），同一问题不再响"
 }
 
 # debug-bundle-leaks-secret (issue #2890, EPIC #2889 C1): a diagnosis bundle is
@@ -7527,6 +6282,16 @@ drill_transfer_durable_crash() {
   SECS=$(since "$started"); WHAT='SIGKILL at write-ahead / table write / withdrawn: the sweep settles one owner, unrelated records intact; unknown Claude refused by pid'
 }
 
+drill_transfer_proxy_home() {
+  CAP=45
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-auth-selftest.py" ProxyHomeAuth >"$WORK/transfer-proxy-home.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
+  bash "$BIN/fleet-transfer-proxy-home-selftest.sh" >>"$WORK/transfer-proxy-home.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-proxy-home.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='owned proxy mapping; forged/missing/unauthorized targets refuse; clean Stop then native successor bound'
+}
+
 drill_transfer_proxy_auth() {
   CAP=10
   local started; started=$(now)
@@ -7590,6 +6355,24 @@ drill_idle_activity_between_probes() {
     || { WHY="short-lived worker activity certified idle: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
+}
+
+drill_spinner_unwatched_poll() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/spinner-wait-selftest.sh" --quick 2>&1) \
+    || { WHY="unwatched spinner: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人观看不轮询；状态事件两秒内画一次，真实客户端连接后一秒内恢复动画'
+}
+
+drill_spinner_maintenance_starved() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/spinner-maintenance-selftest.sh" 2>&1) \
+    || { WHY="unwatched maintenance: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
 }
 
 # ================================================================ run ====}
@@ -7822,12 +6605,37 @@ term_go() {
   fi
 }
 
+# A delayed transcript must not replace a turn started after that read.
+drill_chat_late_history() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  # Production useFleetChat in extras/web-console/src/app/chat/chat.ts and
+  # extras/web-chat/ui/src/chat.ts; browser-attachment CI installs Chromium.
+  [ -f "$ROOT/extras/browser-transport/chat-history.mjs" ] || { WHY='missing late-history browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/chat-history.mjs" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || { WHY="late history replaced a new turn: $out"; return 1; }
+    WHAT='迟到的旧对话不抹掉已完成的新消息；官网和本地各只提交一次'
+  else
+    WHAT='无 Playwright/Chromium：browser-attachment 门运行真实页面演练'
+  fi
+  SECS=$(since "$t0")
+}
+
 # Chat has its own admission and never replays a submitted request.
 drill_chat_direct_admission() {
   CAP=180; local t0
   t0=$(now)
   term_go 'TestChatAttachmentAdmission TestChatAttachmentRequests' './internal/api' \
     '直连与回退共用聊天准入；单条请求单次执行、节点回执单次退额；断线不重放' || return 1
+  SECS=$(since "$t0")
+}
+
+drill_term_controller_ready() {
+  CAP=180; local t0
+  t0=$(now)
+  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames TestCoreExecTerminalCancellation TestTermPtySignalCleanup' './internal/agent' \
+    '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
   SECS=$(since "$t0")
 }
 
@@ -7870,6 +6678,24 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_view_auto_select() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --auto-select 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='目标窗消失时同步关闭本 browser view，不让输入落到自动选中的窗口；home PID 不变'
+  SECS=$(since "$t0")
+}
+
+drill_term_closed_lease() {
+  CAP=30; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --closed-lease 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='已退出 view 的新鲜租约可立即接回；活控制者仍须 Use here；旧清理不碰同名新 session'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_kills_session() {
   CAP=120; local t0 out rc
   t0=$(now)
@@ -7958,7 +6784,6 @@ $ROWS
 EOF
 if [ "$FAILS" -gt 0 ]; then
   printf 'fleet-break-it selftest: %d FAILED, %d passed\n' "$FAILS" "$PASSES" >&2
-  [ -s "$WORK/drive.err" ] && sed -n '1,10p' "$WORK/drive.err" >&2
   exit 1
 fi
 printf 'fleet-break-it selftest: OK (%d drills green)\n' "$PASSES"

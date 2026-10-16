@@ -6,16 +6,11 @@
 #   B. tmux-dashboard-rows.sh renders a sleeping row with a stamped 42-minute-old
 #      @sleep_since as `z 42m` — in the dash's act (the sidebar: a bare `z`, #1328)
 #      cell — and h/d past an hour/day; an unstamped sleeper keeps the bare `z`.
-#   C. fleet-sidebar-menu.sh --print lists Wake (w) ONLY on a sleeping row, wired
-#      to `fleet-sleep.sh wake <sess> <@id>`; the k toggle reads `保持唤醒` →
-#      keep-awake, or `允许休眠` → allow-sleep once @sleep_keep_awake=1.
+# (C, the old client's row menu with its Wake, went with that client — #3008.)
 #
 # Real tmux on an ISOLATED socket via the PATH shim (never the live server — see
 # dash-marker-selftest.sh). tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
-# The list is drawn on a fleet socket here: on a real node it is the client's
-# only (issue #1713), so the drawer's tests take the seam fleet-sidebar.sh offers.
-export FLEET_SIDEBAR_NODE=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=0
@@ -113,24 +108,5 @@ eq "sidebar: an unstamped sleeper keeps the bare z" "z" "$(glyph_of "$W_u")"
 not_contains "sidebar: an awake row carries no sleep age" "$(glyph_of "$W_a")" "z "
 dash=$(FLEET_SESSION=$S FZF_COLUMNS=180 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | strip)
 contains "dash: the sleeper's act cell reads z 42m" "$(printf '%s\n' "$dash" | grep ' napm ')" " z 42m "
-
-# ── C. menu ────────────────────────────────────────────────────────────────────
-menu() { bash "$BIN/fleet-sidebar.sh" menu "$S" "$1" --print 2>/dev/null; }
-item() { printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { print $2 "\t" $3; exit }'; }
-m=$(menu "$W_m")
-wk=$(item "$m" w)
-eq "menu: a sleeping row lists Wake" "唤醒" "${wk%%	*}"
-contains "menu: Wake runs fleet-sleep.sh wake on this row" "$wk" "fleet-sleep.sh'\\'' wake '\\''$S'\\'' $W_m "
-contains "menu: Wake runs detached" "$wk" "run-shell -b"
-kk=$(item "$m" k)
-eq "menu: the toggle offers keep-awake by default" "保持唤醒" "${kk%%	*}"
-contains "menu: keep-awake runs the controller's own action" "$kk" "keep-awake '\\''$S'\\'' $W_m "
-m=$(menu "$W_a")
-[ -n "$m" ] || fail "menu --print printed nothing for an awake row"
-eq "menu: an awake row has no Wake" "" "$(item "$m" w)"
-tmux set-window-option -t "$W_a" @sleep_keep_awake 1
-kk=$(item "$(menu "$W_a")" k)
-eq "menu: a kept-awake row offers Allow sleep" "允许休眠" "${kk%%	*}"
-contains "menu: allow-sleep runs the controller's own action" "$kk" "allow-sleep '\\''$S'\\'' $W_a "
 
 printf 'sidebar-sleep-selftest: all %d checks passed\n' "$CHECKS"

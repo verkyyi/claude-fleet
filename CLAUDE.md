@@ -196,7 +196,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   session counts, snapshots and restore. **The full-screen list retired**
   (issue #1533): by default no `plan` window is built — a fleet's resting window
   is `home`, a plain shell the task list draws beside (the ⌂ / F9 / prefix g keys
-  that ended on it left the node with #1714; `fleet-sidebar.sh home` and its scripts were deleted with #3732). `FLEET_DASH_WINDOW=1`
+  that ended on it left the node with #1714; the old home/list scripts were deleted with #3732). `FLEET_DASH_WINDOW=1`
   brings the old dash hub back for one batch; adding a panel name means adding
   it everywhere `dash|plan|backlog` is spelled. **A window is told by its
   `@fleet_role` (home | panel | worker), never its name** (issue #1844): the
@@ -205,16 +205,13 @@ one-off drill / audit records do not go in the repo (issue #3576).
   unstamped window prints its name and falls back to the name rule), every opener stamps through
   `fleet_win_role_stamp`, restore reconciles by `@fleet_id` first, and a
   broken-out agent pane (`prefix !`) takes its window's `@` options along
-  (`fleet-window-carry.sh`, the node conf's `window-linked[74]` hook). **The task list is the CLIENT's
-  only** (issue #1713): `fleet-sidebar.sh` draws it on the shell's server
-  (`FLEET_SHELL=1`), never in a node's fleet session — so there is no make-way
-  rule, and a viewer arriving or leaving changes no pane on the node.
-  `FLEET_SIDEBAR_NODE=1` is the drawer's selftest seam, never a setting.
+  (`fleet-window-carry.sh`, the node conf's `window-linked[74]` hook). **The task list is the view's** (#3008): `fleet_view.py` draws
+  the panel on the home machine; the thin client runs no local tmux or sidebar.
   **So are the bar, the popups and every key** (issue #1714): a node's
   `conf/tmux-attention.conf` binds tmux's stock keys only (its "stock restores"
   block re-spells the ones an older version overrode, so a conf reload converges)
   and its status line is one static `请用 fleet` hint (`conf/tmux-bar.conf`); the
-  person's keys live in `conf/tmux-shell.conf`. `fleet-keys-selftest.sh` leg 8
+  person's keys live in `conf/tmux-view.conf`. `fleet-keys-selftest.sh` leg 8
   pins both sides on isolated sockets — root and prefix on a node stay tmux's;
   **a key is added only in the 看台's own tables** (issue #3000, EPIC #2999 C2):
   `conf/tmux-view.conf` (loaded last, after the human layer) sets `user-keys[920..932]`
@@ -626,7 +623,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `@orch_page` (`bin/fleet_steward_say.py` keeps only the plain lines the `[decision]`
   message says), the attention count (`fleet-steward-stats.sh` and the node conf's
   [76] hooks, unset on a reload), the client's steward rows
-  (`fleet-sidebar-steward.sh`), `fleet-role.py render` / `fleet_role_render`, the
+  (`fleet_steward.py`), `fleet-role.py render` / `fleet_role_render`, the
   doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
   only for an agent file that grants `spawn`, `@agent_spawn 1`). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
@@ -1213,8 +1210,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (issues #1470, #1486). `curl -fsSL <hub>/install | sh` serves
   `bin/fleet-install.sh` (hub URL filled in), which fetches `/install/manifest`
   and then `/install/<path>` for every file on it — `bin/fleet`, what it
-  dispatches to, and the SHELL (#1484: `fleet-shell.sh`, the sidebar, the bar,
-  the hub loop, `fleet-lib.sh` whole, `conf/tmux-shell.conf`) — into
+  dispatches to, and the thin client plus its shared helpers — into
   `~/.local/share/claude-fleet/<path>` (the repo's own layout, so `$BIN/../conf`
   resolves), with a two-line `~/.local/bin/fleet` that runs the real one (a
   script, not a symlink: `fleet` finds its siblings in its own `$0` directory,
@@ -1308,7 +1304,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `FLEET_SHELL=1`) and `[node]` (everything but the shell) are `if` guards, so
   every reader that sources the file gets its own sections with no mirror and no
   parser. Credentials never enter it: `bin/fleet-conf.sh migrate` (run by
-  `fleet-install-apply.sh`'s `conf` pass and by the shell's start, `fleet-shell.sh`) moves any
+  `fleet-install-apply.sh`'s `conf` pass and by the client's start, `fleet`) moves any
   `*TOKEN/*SECRET/*PASSWORD` line to `secrets.env` (0600, sourced from
   `[common]`), and node.env / hub.json's token / `~/.ssh/fleet-cert` stay apart.
   It folds the install `fleet.conf`, `fleet.settings`, the one fleet's conf (down

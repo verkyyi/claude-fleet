@@ -35,8 +35,9 @@ func TestAttachmentSDPLimits(t *testing.T) {
 }
 
 func TestAttachmentBackpressureAndEarlyData(t *testing.T) {
-	for _, early := range []bool{true, false} {
-		t.Run(map[bool]string{true: "before-ready", false: "slow-reader"}[early], func(t *testing.T) {
+	for _, mode := range []string{"before-ready", "slow-reader", "short-burst"} {
+		t.Run(mode, func(t *testing.T) {
+			early := mode == "before-ready"
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			client, err := webrtc.NewPeerConnection(webrtc.Configuration{})
@@ -87,10 +88,24 @@ func TestAttachmentBackpressureAndEarlyData(t *testing.T) {
 			if !early {
 				count = 10
 			}
+			data := make([]byte, FrameMax)
+			if mode == "short-burst" {
+				count, data = 50, []byte("x")
+			}
 			for i := 0; i < count; i++ {
-				if err = dc.Send(make([]byte, FrameMax)); err != nil {
+				if err = dc.Send(data); err != nil {
 					break
 				}
+			}
+			if mode == "short-burst" {
+				time.Sleep(100 * time.Millisecond) // the PTY is briefly busy checking its lease
+				for i := 0; i < count; i++ {
+					typ, b, err := peer.Read(ctx)
+					if err != nil || typ != websocket.MessageBinary || string(b) != "x" {
+						t.Fatalf("burst frame %d: %q %v", i, b, err)
+					}
+				}
+				return
 			}
 			select {
 			case <-peer.done:

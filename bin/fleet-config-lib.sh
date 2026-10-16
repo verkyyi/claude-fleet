@@ -351,17 +351,11 @@ fcfg_label_i18n() {
     FLEET_DEGENERATE_LINES) printf '输出退化行数下限' ;;
     FLEET_DEGENERATE_COOLDOWN_SECS) printf '输出退化 Esc 冷却' ;;
     FLEET_DEGENERATE_MARK_SECS) printf '输出退化 ⟲ 标记时长' ;;
-    FLEET_SIDEBAR) printf 'Worker 任务栏' ;;
     FLEET_UI_LANG) printf 'Tmux UI 语言' ;;
-    FLEET_SIDEBAR_WIDTH) printf '任务栏宽度' ;;
     FLEET_SIDEBAR_SOURCE) printf '任务栏列表来源（local|hub）' ;;
     FLEET_DASH_ORDER) printf '列表排序（born|status）' ;;
     FLEET_CLOSE_LANDS_NEXT) printf '关闭任务后落到下一个任务' ;;
-    FLEET_HOME_SIDEBAR_FIRST) printf '⌂/F9 先去任务栏' ;;
     FLEET_DASH_WINDOW) printf '全屏列表窗口（旧 hub）' ;;
-    FLEET_STATUS_QUOTA_PCT) printf '状态栏额度出现线（%%）' ;;
-    FLEET_STATUS_CONTAINER) printf '状态栏容器' ;;
-    FLEET_STATUS_CACHE_SECS) printf '状态栏统计共享秒数' ;;
     FLEET_USAGE_WARN_PCT) printf '用量警告百分比' ;;
     FLEET_USAGE_CRIT_PCT) printf '用量严重百分比' ;;
     FLEET_RATELIMIT_TTL) printf 'Ratelimit 陈旧时间' ;;

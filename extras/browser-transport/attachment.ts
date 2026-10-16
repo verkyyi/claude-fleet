@@ -14,6 +14,9 @@ export type AttachmentState = {
   generation?: string
   connection?: string
   pair?: string
+  terminal?: string
+  terminalGeneration?: string
+  controllerEpoch?: number
   error?: string
   status?: number
   message?: string
@@ -23,6 +26,7 @@ export type AttachmentOptions = {
   /** Same-origin route supplied by the independently authorized service adapter. */
   url: string
   generation?: string
+  previous?: string
   preferRelay?: boolean
   /** Request adapters must never establish a successor for an uncertain write. */
   reconnect?: boolean
@@ -135,7 +139,7 @@ export class BrowserAttachment {
   private start(relay: boolean) {
     const url = new URL(this.url)
     if (this.generation) url.searchParams.set('generation', this.generation)
-    if (this.info.connection) url.searchParams.set('previous', this.info.connection)
+    if (this.info.connection || this.options.previous) url.searchParams.set('previous', this.info.connection || this.options.previous!)
     const ws = new WebSocket(url)
     ws.binaryType = 'arraybuffer'
     const a: Attempt = { ws, offerSent: false, ready: false, ended: false }
@@ -239,11 +243,11 @@ export class BrowserAttachment {
     const n = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength
     if (n > FRAME_MAX) { this.end(a, 'oversized_frame', true); return }
     if (!a.ready) {
-      let ready = false
-      try { ready = typeof data === 'string' && JSON.parse(data).t === 'ready' } catch { /* rejected below */ }
+      let ready = false, meta: { term?: string; gen?: string; epoch?: number } = {}
+      try { if (typeof data === 'string') { meta = JSON.parse(data); ready = JSON.parse(data).t === 'ready' } } catch { /* rejected below */ }
       if (!ready || !a.choice) { this.end(a, 'data_before_ready', true); return }
       a.ready = true; clearTimeout(a.timer)
-      this.publish({ state: 'ready', mode: a.choice })
+      this.publish({ state: 'ready', mode: a.choice, terminal: meta.term, terminalGeneration: meta.gen, controllerEpoch: meta.epoch })
       return
     }
     this.options.onData(data)

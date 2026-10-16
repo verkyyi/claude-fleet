@@ -23,11 +23,6 @@
 #                  trailing ✓, no `· n!`
 #   D. glyphs    — every needs kind and failed draw `!` (the kind rides the
 #                  detail field); preparing/waking spin; a sleeper is a bare `z`
-#   E. widths    — at 26 / 30 / 44 columns the badge is whole, the name ends in
-#                  `…` when it does not fit, a parent row carries no child state
-#   F. degenerate— a one-level fleet with short names paints exactly the old
-#                  `marker glyph tree label` line, and no ↳ parent tag survives
-#   G. auto width— longest row, within 30–44, ≤ ¼ window, worker keeps 80
 #
 # Hermetic: `tmux` is PATH-shimmed to replay a fixture window list (never a live
 # server). No gh, no git, no network. Exit 0 = pass.
@@ -38,8 +33,7 @@ export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-SIDEBAR_PY="$BIN/fleet-sidebar.py"
-[ -f "$ROWS" ] && [ -f "$SIDEBAR_PY" ] || { printf 'selftest: rows/sidebar not found\n' >&2; exit 2; }
+[ -f "$ROWS" ] || { printf 'selftest: rows not found\n' >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dashnest-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
@@ -191,77 +185,6 @@ eq "D: a sleeper is a bare z in the sidebar" "z|" "$(gd n-sleep)"
 for g in '?' '⊘' '⊠' '↺'; do
   hasnt "D: the retired $g glyph appears nowhere in the sidebar" "$(printf '%s\n' "$s" | awk -F"$US" '{print $3}')" "$g"
 done
-
-# ============================================================================
-# E/F/G. the view: widths, the degenerate frame, the auto width
-# ============================================================================
-: > "$WLIST_FILE"
-w 1 小助理小程序邀请码 /w/r-scratch-1 'done'  @1 '' ''        /w/r-scratch-1 ''
-w 2 阿里云月成本评估-ack-节点合并 /w/r-scratch-2 working @2 '' '' /w/r-scratch-2 ''
-w 3 k1 /w/r-issue-31 'done' @3 31 scratch-2 /w/r-issue-31
-w 4 k2 /w/r-issue-32 needs  @4 32 scratch-2 /w/r-issue-32 '' ask
-w 5 k3 /w/r-issue-33 working @5 33 scratch-1 /w/r-issue-33
-side > "$WORK/wide"
-: > "$WLIST_FILE"
-w 1 alpha /w/r-issue-1 working  @1 1 '' /w/r-issue-1
-w 2 beta  /w/r-issue-2 'done'   @2 2 '' /w/r-issue-2
-w 3 gamma /w/r-issue-3 sleeping @3 3 '' /w/r-issue-3
-w 4 delta /w/r-issue-4 needs    @4 4 '' /w/r-issue-4 '' ask
-side > "$WORK/flat"
-out=$(python3 - "$SIDEBAR_PY" "$WORK/wide" "$WORK/flat" <<'PY' 2>&1
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sidebar", sys.argv[1])
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-def load(path):
-    return [m.row_fields(l) for l in open(path, encoding="utf-8").read().split("\n") if l.count("\x1f") >= 4]
-fails = []
-def check(ok, what):
-    if not ok: fails.append(what)
-wide = load(sys.argv[2])
-# E. widths
-for cols in (26, 30, 44):
-    for r in wide:
-        wid, state, glyph, name, tree, badge = r[:6]
-        if wid == "hdr":
-            continue
-        t = m.row_text(" ", glyph, tree, name, badge, cols - 1)
-        check(m.width_of(t) <= cols - 1, "E%d: %s overflows: %r" % (cols, name, t))
-        if badge:
-            check(t.endswith("· " + badge), "E%d: %s lost its badge: %r" % (cols, name, t))
-            check("!" not in t.split(name[:1], 1)[-1].replace(badge, "") or glyph == "!",
-                  "E%d: %s parent row carries child state: %r" % (cols, name, t))
-        if m.width_of(m.row_left(" ", glyph, tree, name)) + (len(badge) + 3 if badge else 0) > cols - 1:
-            check("…" in t, "E%d: a clipped name must end in …: %r" % (cols, t))
-        else:
-            check("…" not in t and name in t, "E%d: a name that fits must be whole: %r" % (cols, t))
-parent = [r for r in wide if r[3].startswith("阿里云")][0]
-check(parent[5] == "1/2", "E: the parent's badge is just k/N: %r" % parent[5])
-t30 = m.row_text(" ", parent[2], parent[4], parent[3], parent[5], 29)
-check(t30.endswith("· 1/2") and "…" in t30, "E30: the long parent keeps 1/2 and clips its name: %r" % t30)
-# F. degenerate: one level, short names, no badge → the old line, byte for byte
-flat = load(sys.argv[3])
-check(len(flat) == 4, "F: a one-level fleet lost rows: %r" % flat)
-for r in flat:
-    wid, state, glyph, name, tree, badge = r[:6]
-    old = " " + " " + glyph + " " + (tree or " ") + " " + name
-    check(m.row_text(" ", glyph, tree, name, badge, 29) == old,
-          "F: %s differs from the old frame: %r vs %r" % (name, m.row_text(" ", glyph, tree, name, badge, 29), old))
-    check("↳" not in name and not badge, "F: %s grew a tag/badge: %r" % (name, r))
-# G. auto width
-check(m.auto_width(flat, 200, 30, 44) == 30, "G: short rows keep the 30 floor")
-need = max(m.row_need(r) for r in wide)
-check(m.auto_width(wide, 200, 30, 44) == min(44, max(30, need)), "G: widens to the longest row")
-check(m.auto_width(wide + [["@9", "", "·", "x" * 80, "", "", "0", ""]], 200, 30, 44) == 44, "G: capped at 44")
-check(m.auto_width(wide, 140, 30, 44) <= 35, "G: never past a quarter of the window")
-check(m.auto_width(wide, 115, 30, 44) == 30, "G: never under the floor, never into the worker's 80")
-k2 = [r for r in wide if r[3] == "k2"][0]
-check(m.detail_line(k2).split(" · ")[0] == "k2" and (not k2[7] or k2[7] not in m.detail_line(k2)),
-      "G: the bar's line leads with the whole name — the kind of ! is @title_info's (#1377): %r" % m.detail_line(k2))
-print("\n".join(fails) if fails else "ok")
-PY
-)
-eq "E/F/G: the view lays rows out right" "ok" "$out" "$out"
-CHECKS=$((CHECKS+20))
 
 # ============================================================================
 # H. why a ↻ row waits (issue #1370): on a `looping` window WFMT carries

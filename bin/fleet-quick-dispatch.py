@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-"""fleet-quick-dispatch.py — ⌘T: 派一件事 (issue #2753). One line, ↵, and a worker is
-on it — from any window of the client: a worker's, the orchestrator's (Claude or
-Codex), a bare shell, a session on another machine.
+"""fleet-quick-dispatch.py — 派一件事 (issue #2753). One line, ↵, and a worker is on
+it — from any window of a thin client's 看台: a worker's, the orchestrator's
+(Claude or Codex), a bare shell, a session on another machine.
 
-    fleet-quick-dispatch.py [--session S]       the popup (conf/tmux-shell.conf's ⌘T /
-                                          prefix t, and ⌘P's first line 「⚡ 派一件事…」,
-                                          open it through the one popup door)
     fleet-quick-dispatch.py --view V [--client C]
-                                          the same popup in a thin client's 看台, on
-                                          its home machine (issue #3004, EPIC #2999
-                                          C7) — no key opens it since issue #3328:
-                                          ⌘P's ⚡ row runs `send` / `grid` / `pick`
+                                          the popup in a thin client's 看台, on its
+                                          home machine (issue #3004, EPIC #2999 C7) —
+                                          no key opens it since issue #3328: ⌘P's ⚡
+                                          row runs `send` / `grid` / `pick` (the old
+                                          client's own ⌘T popup went with it, #3008)
     fleet-quick-dispatch.py payload --title T [--repo R] [--codex | --agent A]
                                           the payload a ↵ would write, as JSON
                                           (the selftest's view)
@@ -42,25 +40,16 @@ is the fleet's effective FLEET_AGENT — dash-agent-prompt.sh `agent`, the one
 resolution — and ↵ on it sends with no --agent at all; another one rides the
 send as `--agent` for this one session only). In a 看台 (--view) the session
 opens on this machine, so an agent it has not installed is grey with why
-(「mac-b 这台没装 codex」) and cannot be picked; the old client cannot know
-where the hub will place it and greys nothing. ↵ sends, esc closes, Tab walks.
+(「mac-b 这台没装 codex」) and cannot be picked. ↵ sends, esc closes, Tab walks.
 
 There is no second road (EPIC #2230 共同约定 1, issue #2618's rule): a ↵ writes
-the SAME payload the writing area writes — fleet-compose.py payload(), its
-compose-send.json, its compose-state.json for 「上次用的仓库」 — and hands the
-task list `compose` on its @sidebar_do queue (F12 wakes it), exactly as the
-writing area's ↵ does. The list draws 「开工中…」, runs fleet-compose.py --send →
+the payload fleet-compose.py payload() makes — its compose-send.json, its
+compose-state.json for 「上次用的仓库」 — and runs fleet-compose.py --send →
 fleet-client-place.sh <repo> new (the machine that takes it files the issue
-through fleet-issue-file.sh and opens its worker), switches to the new session's
-row when it appears, and — the payload says `via: dispatch` — says
-「已建 #N 并开工」. Nothing on the way calls a model or waits behind the
-orchestrator's turn; an old session's /qd (compat-1v, issue #3328) runs `send`
-itself. No list on screen: --send runs from here
-and the popup says how it ended.
-
-In a 看台 there is no list to hand it to: --send runs here (fleet-client-place.sh
-with no lease opens it through this machine's own adapter) and the result goes on
-the 看台's client as a message.
+through fleet-issue-file.sh and opens its worker; with no lease it opens through
+this machine's own adapter), and the result goes on the 看台's client as a
+message. Nothing on the way calls a model or waits behind the orchestrator's
+turn; an old session's /qd (compat-1v, issue #3328) runs `send` itself.
 
 FLEET_DISPATCH_SEND_CMD (tests): replaces `fleet-compose.py --send <payload>`.
 FLEET_DISPATCH_GO_CMD (tests): replaces `fleet-view-go.sh` — a 看台's send that
@@ -216,10 +205,8 @@ def payload(title, repo, codex=False, agent=None):
 
 
 def send(data, view="", client=""):
-    """Write it, hand it on. (ok, words): handed to the list → 「已发出：…」 and
-    the list takes it from there; no list (or a 看台, which has none) → --send
-    here, and how it ended — a 看台 then goes to the window it opened (issue
-    #3097, fleet-view-go.sh). A send that did not open is logged (`dispatch_failed`
+    """Write it, --send it here. (ok, words): how it ended — a 看台 then goes to
+    the window it opened (issue #3097, fleet-view-go.sh). A send that did not open is logged (`dispatch_failed`
     in logs/compose.ndjson) as well as said, never only said."""
     path = compose.send_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,8 +214,6 @@ def send(data, view="", client=""):
         return False, "✗ " + str(path)
     if data.get("repo"):
         compose.write_atomic(compose.state_path(), json.dumps({"repo": data["repo"]}) + "\n")
-    if not view and quick.hand(quick.list_pane(), "compose"):
-        return True, tr("compose_sent_fmt", data["title"])
     seam = os.environ.get("FLEET_DISPATCH_SEND_CMD")
     argv = (seam.split() if seam else [sys.executable, str(BIN / "fleet-compose.py"), "--send"]) + [str(path)]
     try:

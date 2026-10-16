@@ -125,6 +125,28 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		return 2, nil
 	}
 	ask := map[string]any{"repo": rest[0], "node": *node, "origin_wid": *origin, "agent": *agent, "idempotency_key": *key}
+	if *agent != "" && os.Getenv("FLEET_DISPATCH") == "" {
+		if *key == "" {
+			*key = "place-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		}
+		ask["idempotency_key"], ask["coding_agent"] = *key, *agent
+	}
+	if *agent != "" && *agent != "claude" && *agent != "codex" {
+		return 2, errors.New("--agent must be claude or codex")
+	}
+	// The calling adapter resolved this once; local and remote placement carry
+	// the same request key/provider, including an already accepted T generation.
+	if raw := os.Getenv("FLEET_DISPATCH"); raw != "" {
+		var d map[string]any
+		if json.Unmarshal([]byte(raw), &d) != nil {
+			return 2, errors.New("invalid dispatch JSON")
+		}
+		if *key != "" && *key != d["request_id"] {
+			return 2, errors.New("dispatch request key conflicts with --key")
+		}
+		ask["dispatch"], ask["idempotency_key"] = d, d["request_id"]
+	}
+
 	if rest[1] == "scratch" {
 		if !fleetid.IsUUID(rest[2]) {
 			return 2, fmt.Errorf("a scratch start names the asking fleet's UUID, not %q", rest[2])
@@ -180,7 +202,8 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	var out struct {
-		Local     *bool `json:"local"`
+		Local     *bool           `json:"local"`
+		Dispatch  json.RawMessage `json:"dispatch"`
 		Placement struct {
 			Machine string `json:"machine"`
 			Reason  string `json:"reason"`
@@ -211,6 +234,11 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return 1, fmt.Errorf("hub answered HTTP %d with something that is not JSON", resp.StatusCode)
+	}
+	if path := os.Getenv("FLEET_DISPATCH_RESULT"); path != "" && len(out.Dispatch) > 0 && string(out.Dispatch) != "null" {
+		if err := os.WriteFile(path, out.Dispatch, 0600); err != nil {
+			return 1, err
+		}
 	}
 	oneLine := func(s string) string { return strings.Join(strings.Fields(s), " ") }
 	// The machines that declined before the answer (claude-fleet#1610): one

@@ -92,14 +92,6 @@
 #                   hub's row set on the next render; no network; a cache from before
 #                   hub_ok (no file, a stale #ts) renders the very same bytes; the hub
 #                   off ⇒ the no-cache output
-#   P. shell      — the client (FLEET_SHELL=1, no conf, issue #1680): its hub rows
-#                   group under one heading per repo THEY name (2+), sorted, plus
-#                   `无仓库`; ←/→ folds a group through the shell's OWN @repo_fold;
-#                   one repo ⇒ no heading — unless the hub's machines host 2+
-#                   (global/hub_repos, #2285: its heading opens the list); a node on the hub source (no FLEET_SHELL)
-#                   renders the same cache flat, byte for byte as before
-#                   (#1882: a lost machine's rows stay in their repo's group, dimmed —
-#                   the frame is the online one but for the `!`, 入口连不上 included)
 #   E. refresher  — fleet-hub-sessions.sh --refresh keeps YOUR sessions with a
 #                   worker_id: the other machines' (local=0) and, since #1480, this
 #                   fleet's own, marked local=1 with the window that holds them (empty
@@ -260,25 +252,6 @@ eq "B: a local sibling is untouched" "@2|└||1|" "$(srow "$s" C1)"
 eq "B: a local row carries the 9th field too, empty" "12" "$(nfields "$s" C1)"
 eq "B: a remote row has it" "12" "$(nfields "$s" '侧边栏')"
 hasnt "B: no [mac-a] in any name" "$s" "[mac-a"
-# A remote row names its machine (issue #1780; #1475 drew none) — in the bar
-# since issue #2305, as plain words since #3960: the view's own renderer lays the
-# row out exactly as the same row local, row_need asks nothing more, and
-# detail_line says `mac-a` — no `@` mark.
-printf '%s\n' "$s" > "$WORK/srows"
-drawn=$(python3 - "$BIN/fleet-sidebar.py" '侧边栏' "$WORK/srows" <<'PYR'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("sb", sys.argv[1]); sb = importlib.util.module_from_spec(spec); spec.loader.exec_module(sb)
-rows = [sb.row_fields(l) for l in open(sys.argv[3], encoding="utf-8").read().split("\n") if l.count(sb.US) >= 4]
-r = next(x for x in rows if x[3] == sys.argv[2])
-local = r[:8] + [""] + r[9:10]   # the same row local: no machine, its #N (issue #2545)
-text = sb.row_text(" ", r[2], r[4], r[3], r[5], 34)
-print(text, "same" if text == sb.row_text(" ", local[2], local[4], local[3], local[5], 34) else "differs",
-      sb.row_need(r) == sb.row_need(local), " · mac-a" in sb.detail_line(r),
-      "@" in sb.detail_line(r), "mac-a" in sb.detail_line(local), sep="|")
-PYR
-)
-has "B: the bar names a remote row's mac-a as plain words (#1780, #3960), a local row's nothing" "$drawn" "|True|False|False"
-has "B: …and lays the name out exactly as the same row local" "$drawn" "|same|True|"
 h=$(hub)
 has "B: the hub row shows the issue" "$h" "#1423"
 hrow=$(printf '%s\n' "$h" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$2 == w { print $3; exit }')
@@ -289,20 +262,6 @@ w = lambda t: sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in t
 print("\n".join(sorted({str(w(l.split("\x1f")[2])) for l in sys.stdin.read().split("\n")[1:] if l.count("\x1f") >= 2 and not l.startswith("hdr")})))')
 eq "B: every hub session row is the same width, the remote ones included" "136" "$widths"
 hasnt "B: no @title_info is written for a remote row" "$(cat "$TMUX_LOG")" "wid:"
-
-# ============================================================================
-# M. the row MENU names the machine — the one place the list does (#1475)
-# ============================================================================
-menu=$(PATH="$SHIMPATH" FLEET_UI_LANG=zh bash -c '
-  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
-  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-1423" 2>/dev/null)
-eq "M: a remote row's menu is titled with its name and machine (「名称 · 机器」, #1535)" "title	侧边栏 · mac-a" "$(printf '%s\n' "$menu" | head -1)"
-has "M: …and its first item opens the proxy window" "$(printf '%s\n' "$menu" | sed -n 2p | cut -f1,2)" "e	进入（代理窗口）…"
-has "M: …through fleet-remote-view.sh" "$(printf '%s\n' "$menu" | sed -n 2p)" "fleet-remote-view.sh"
-has "M: …open, on that worker_id" "$(printf '%s\n' "$menu" | sed -n 2p)" " open '\\''wid:$F/issue-1423'\\'' "
-eq "M: a row the cache does not hold gets no menu" "" "$(PATH="$SHIMPATH" bash -c '
-  BIN=$1; sess=$2; verb=menu; set -- menu "$2" "$3" --print
-  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-ui-lang.sh"; . "$BIN/fleet-sidebar-menu.sh"' _ "$BIN" "$S" "wid:$F/issue-9999" 2>/dev/null)"
 
 # ============================================================================
 # S. no machine status line (issue #1531)
@@ -466,152 +425,6 @@ eq "L: no hub_ok, a stale #ts (the pre-#1483 cache) — the local source renders
 eq "L: …and so does the hub source" "$ls_" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 stamp_cache "$NOW"
 remote_cache "$NOW"
-
-# ============================================================================
-# P. the shell's list groups by repo (issue #1680)
-# ============================================================================
-# The client has no conf: its repos are the ones the hub's rows name. Client-mode
-# cache (#1484): `#me` empty, every row another machine's (local=0).
-SH="shell$$"
-shell_cache() {
-  { printf '#ts\037%s\n#me\037\n#node\037mac-a\037online\0373\037%s\n' "$NOW" "$NOW"
-    printf 'wid:%s/issue-11\037mac-a\037online\03711\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-21\037mac-a\037online\03721\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$F"
-    printf 'wid:%s/issue-22\037mac-a\037online\03722\037acme/app\037done\037claude\037应用二\037\037\0370\037\n' "$F"
-    printf 'wid:%s/scratch-3\037mac-a\037online\037\037\037working\037claude\037草稿三\037\037\0370\037\n' "$F"
-  } > "$G/remote_$SH"
-}
-shell_side() { PATH="$SHIMPATH" FLEET_SESSION=$SH FLEET_SIDEBAR_SOURCE=hub bash "$ROWS" --sidebar 2>/dev/null | strip; }
-printf '%s\n' "$NOW" > "$G/hub_ok"
-cp "$WLIST_FILE" "$WORK/wlist.keep"; : > "$WLIST_FILE"   # the shell's own windows: proxies, none named
-shell_cache
-flat=$(shell_side)
-eq "P: a node on the hub source (no FLEET_SHELL) — no conf repos, no heading: today's flat list" "" "$(shdrs "$flat")"
-ps=$(FLEET_SHELL=1 shell_side)
-eq "P: the shell — one heading per repo its rows name, sorted, then 无仓库" \
-   "app (2);tool (1);无仓库 (1);" "$(shdrs "$ps")"
-eq "P: …each row under its own repo's heading" "应用二;应用活;工具活;草稿三;" "$(sorder "$ps")"
-eq "P: …a heading's key is its repo (the view's hdr:<owner/name>)" "acme/tool" \
-   "$(printf '%s\n' "$ps" | LC_ALL=C awk -F"$US" '$1 == "hdr" && $4 ~ /^tool/ { print $2; exit }')"
-pf=$(REPO_FOLD=acme-tool FLEET_SHELL=1 shell_side)
-eq "P: the shell's @repo_fold folds that group: ▸ heading, its rows hidden" \
-   "app (2);▸ tool (1);无仓库 (1);" "$(shdrs "$pf")"
-eq "P: …the rest stay" "应用二;应用活;草稿三;" "$(sorder "$pf")"
-# The keep-current rail joins on the ROW key (issue #1697): the shell's current
-# window is a proxy (`@12`) whose row is `wid:…` — the sidebar passes that as
-# FLEET_SIDEBAR_CURRENT_ROW, and a folded group still shows the row being viewed.
-eq "P: the row the shell is viewing stays inside its folded group" "应用二;应用活;工具活;草稿三;" \
-   "$(sorder "$(REPO_FOLD=acme-tool FLEET_SHELL=1 FLEET_SIDEBAR_CURRENT=@12 FLEET_SIDEBAR_CURRENT_ROW="wid:$F/issue-11" shell_side)")"
-eq "P: …the proxy's local window id alone never matched a \`wid:\` row (the #1697 bug)" "应用二;应用活;草稿三;" \
-   "$(sorder "$(REPO_FOLD=acme-tool FLEET_SHELL=1 FLEET_SIDEBAR_CURRENT=@12 shell_side)")"
-: > "$TMUX_LOG"
-PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
-has "P: ← on a shell heading writes the fold to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold acme-tool"
-# 已结束 on the shell (issue #2913): a done no-issue row of the hub's goes under
-# the folded 已结束 heading, the shell's own @repo_fold `ended:open` opens it, and
-# → on the heading writes that token to the shell's own session.
-printf 'wid:%s/scratch-4\037mac-a\037online\037\037\037done\037claude\037完了四\037\037\0370\037\n' "$F" >> "$G/remote_$SH"
-pe=$(FLEET_SHELL=1 shell_side)
-has "P: a done no-issue hub row folds under 已结束 on the shell" "$(shdrs "$pe")" "▸ 已结束 · 还开着 (1);"
-hasnt "P: …hidden while folded" "$(sorder "$pe")" "完了四"
-po=$(REPO_FOLD=ended:open FLEET_SHELL=1 shell_side)
-has "P: the shell's ended:open opens it" "$(sorder "$po")" "完了四"
-hasnt "P: …the heading open" "$(shdrs "$po")" "▸ 已结束"
-: > "$TMUX_LOG"
-PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" expand hdr:ended >/dev/null 2>&1
-has "P: → on 已结束 writes ended:open to the shell's OWN session" "$(cat "$TMUX_LOG")" "set-option -t =$SH: @repo_fold ended:open"
-shell_cache
-: > "$TMUX_LOG"
-PATH="$SHIMPATH" FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" collapse hdr:acme/tool >/dev/null 2>&1
-hasnt "P: …a node with no conf repos writes nothing" "$(cat "$TMUX_LOG")" "@repo_fold"
-LC_ALL=C grep -v 'acme/tool' "$G/remote_$SH" > "$WORK/one" && mv "$WORK/one" "$G/remote_$SH"
-eq "P: one repo among the rows — no repo heading (a one-repo fleet's frame)" "" "$(shdrs "$(FLEET_SHELL=1 shell_side)")"
-# Issue #2285: what groups is the HOSTED count (global/hub_repos — every repo a
-# fleet behind the hub hosts), not how many repos have a session now. 2 hosted,
-# sessions in one ⇒ that repo's heading still opens the list (no empty heading
-# for the other); 1 hosted ⇒ no heading, the bytes of no hub_repos at all.
-one_bytes=$(FLEET_SHELL=1 shell_side)
-printf '#ts\037%s\nacme/app\nacme/tool\n' "$NOW" > "$G/hub_repos"
-p2=$(FLEET_SHELL=1 shell_side)
-eq "P: 2 hosted, one repo among the rows — that repo's heading, then 无仓库 (#2285)" \
-   "app (2);无仓库 (1);" "$(shdrs "$p2")"
-eq "P: …and it is the list's first row" "app (2)" \
-   "$(printf '%s\n' "$p2" | head -1 | LC_ALL=C awk -F"$US" '$1 == "hdr" { print $4 }')"
-printf '#ts\037%s\nacme/app\n' "$NOW" > "$G/hub_repos"
-eq "P: 1 hosted — no heading, byte for byte the frame without hub_repos (#2285)" \
-   "$one_bytes" "$(FLEET_SHELL=1 shell_side)"
-rm -f "$G/hub_repos"
-# Issues #1770/#1882: on the client (`#me` empty) a row with a repo goes to its
-# repo's group, a no-repo row to 无仓库 — and a LOST machine's row STAYS there,
-# dimmed (`mac-a!`): no `─ mac-a 失联 ─` group at the foot, so the list does not
-# reshuffle when a network drops and again when it comes back (#1882). Before
-# #1770 the foot group had no heading on a client and read as 无仓库's rows.
-FP=33333333-4444-5555-6666-888888888888            # a fleet on mac-b
-{ printf '#ts\037%s\n#me\037\n#node\037mac-a\037lost\0371\037%s\n#node\037mac-b\037online\0373\037%s\n' "$NOW" "$((NOW - 600))" "$NOW"
-  printf 'wid:%s/acme-app:issue-41\037mac-b\037online\03741\037acme/app\037working\037claude\037应用活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/acme-tool:issue-42\037mac-b\037online\03742\037acme/tool\037working\037claude\037工具活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/0247d1c0-6d9d-420e-88ac-d867ee7526d1\037mac-b\037online\037\037\037working\037claude\037无仓活\037\037\0370\037\n' "$FP"
-  printf 'wid:%s/acme-app:issue-43\037mac-a\037online\03743\037acme/app\037looping\037claude\037活页\037\037\0370\037\n' "$F"
-} > "$G/remote_$SH"
-lr=$(FLEET_SHELL=1 shell_side)
-eq "P: #1882 — a client's lost machine: its row stays in its repo's group, no lost heading" \
-   "app (2);tool (1);无仓库 (1);" "$(shdrs "$lr")"
-eq "P: #1882 — …in its place, dimmed (mac-a!)" "应用活;活页;工具活;无仓活;|mac-a!" "$(sorder "$lr")|$(srow "$lr" '活页' | cut -d'|' -f5)"
-sed -e "s/^#node\x1fmac-a\x1flost/#node\x1fmac-a\x1fonline/" "$G/remote_$SH" > "$WORK/l" && mv "$WORK/l" "$G/remote_$SH"
-lo=$(FLEET_SHELL=1 shell_side)
-eq "P: #1882 — mac-a back online: the frame is the lost one line by line but for the !" \
-   "$(printf '%s\n' "$lr" | LC_ALL=C sed 's/mac-a!/mac-a/g')" "$lo"
-# the whole entrance silent (hub_ok stale): every row lost, still the same frame
-printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"
-eq "P: #1882 — 入口连不上: every row mac-a!/mac-b!, the frame otherwise unchanged" \
-   "$lo" "$(FLEET_SHELL=1 shell_side | LC_ALL=C sed -e 's/mac-a!/mac-a/g' -e 's/mac-b!/mac-b/g')"
-rm -f "$G/hub_ok"
-
-# K. kinship on the shell (issue #1698): a row's key is `wid:<worker_id>`, its
-# parent `<worker_id>` bare — pass A strips the `wid:` off the key (KEYTAB), so
-# the two spellings meet there; adding `wid:` to the origin instead would break
-# every chain. A child nests under a parent on the SAME machine, on ANOTHER
-# machine (by design, #1423: a worker_id names one session wherever it runs —
-# the sidebar shows the real tree, not a per-machine one) and in another repo
-# (it follows its root's group, #1031, its own repo as a ⇢ tag); a parent whose
-# machine is lost keeps its child nested (#1882 — the list does not move), and a parent
-# no row names (another login's fleet) leaves the child at the top.
-F5=33333333-4444-5555-6666-777777777777            # a fleet on a third machine, mac-b
-{ printf '#ts\037%s\n#me\037\n#node\037mac-a\037online\0373\037%s\n#node\037mac-b\037online\0371\037%s\n' "$NOW" "$NOW" "$NOW"
-  printf 'wid:%s/acme-app:scratch-5\037mac-a\037online\037\037acme/app\037looping\037claude\037父\037\037\0370\037\n' "$F"
-  printf 'wid:%s/acme-app:issue-31\037mac-a\037online\03731\037acme/app\037working\037claude\037同机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
-  printf 'wid:%s/acme-tool:issue-32\037mac-a\037online\03732\037acme/tool\037working\037claude\037跨仓子\037%s/acme-app:scratch-5\037\0370\037\n' "$F" "$F"
-  printf 'wid:%s/acme-app:issue-33\037mac-b\037online\03733\037acme/app\037working\037claude\037跨机子\037%s/acme-app:scratch-5\037\0370\037\n' "$F5" "$F"
-  printf 'wid:%s/acme-app:issue-34\037mac-a\037online\03734\037acme/app\037working\037claude\037孤儿\037%s/acme-app:scratch-9\037\0370\037\n' "$F" "$F5"
-} > "$G/remote_$SH"
-# A client's list is ALL `wid:` rows (issue #1749): it folds like a node's — the
-# parent starts shut (▸, its children hidden), → opens it, ← on a child shuts it
-# again — every bit in the client's own file, nothing written to any tmux.
-ks=$(FLEET_SHELL=1 shell_side)
-eq "K: on a client the parent starts folded" "wid:$F/acme-app:scratch-5|▸|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
-eq "K: …its children hidden" "" "$(srow "$ks" '同机子')"
-kfold() { PATH="$SHIMPATH" FLEET_SHELL=1 FLEET_SESSION=$SH DASH_FOLD_PLAIN=1 bash "$BIN/dash-fold-toggle.sh" "$1" "$2" >/dev/null 2>&1; }
-: > "$TMUX_LOG"
-kfold expand "wid:$F/acme-app:scratch-5"
-ks=$(FLEET_SHELL=1 shell_side)
-eq "K: → opens it" "wid:$F/acme-app:scratch-5|▾|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
-kfold collapse "wid:$F/acme-app:issue-31"
-eq "K: ← on a child shuts the parent's block" "▸" "$(srow "$(FLEET_SHELL=1 shell_side)" '父' | cut -d'|' -f2)"
-hasnt "K: the fold wrote no tmux option" "$(cat "$TMUX_LOG")" "set-"
-kfold expand "wid:$F/acme-app:scratch-5"
-ks=$(FLEET_SHELL=1 shell_side)
-eq "K: the parent is a top row with its fold caret" "wid:$F/acme-app:scratch-5|▾|0" "$(srow "$ks" '父' | cut -d'|' -f1,2,4)"
-eq "K: a child on the same machine nests under it" "wid:$F/acme-app:issue-31|└|1" "$(srow "$ks" '同机子' | cut -d'|' -f1,2,4)"
-eq "K: …a child on ANOTHER machine too (one tree across machines, by design)" "└|1" "$(srow "$ks" '跨机子' | cut -d'|' -f2,4)"
-eq "K: …a child in another repo too, in its root's group" "└|1" "$(srow "$ks" '跨仓子 ⇢too' | cut -d'|' -f2,4)"
-eq "K: a parent no row names leaves its child at the top" " |0" "$(srow "$ks" '孤儿' | cut -d'|' -f2,4)"
-eq "K: …and the children sort right under their parent" "父;" "$(sorder "$ks" | cut -d';' -f1);"
-sed -e "s/^#node\x1fmac-a\x1fonline/#node\x1fmac-a\x1flost/" "$G/remote_$SH" > "$WORK/k" && mv "$WORK/k" "$G/remote_$SH"
-kl=$(FLEET_SHELL=1 shell_side)
-eq "K: the parent's machine lost — the mac-b child stays nested under it (#1882)" "└|1" "$(srow "$kl" '跨机子' | cut -d'|' -f2,4)"
-eq "K: …the same order as online" "$(sorder "$ks")" "$(sorder "$kl")"
-rm -f "$G/remote_$SH" "$G/remote_fold_$SH" "$G/hub_ok"
-mv "$WORK/wlist.keep" "$WLIST_FILE"
 
 # ============================================================================
 # E. refresher
@@ -1068,7 +881,6 @@ cp "$WLIST_FILE" "$WORK/wl.t0"
 wt_ 3  scratch-9  /w/app-scratch-9    'done'   @3  ''    acme/app  acme/app#1949
 hasnt "T: a window still wearing its @epic — its own row says it, no grey one" "$(unset CCQUOTA_FLEET; tside)" "epicstale"
 cp "$WORK/wl.t0" "$WLIST_FILE"
-hasnt "T: the shell reads no local mark" "$(unset CCQUOTA_FLEET; FLEET_SHELL=1 tside)" "epicstale"
 rm -f "$TM"
 eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache
@@ -1129,7 +941,6 @@ eq "U: an unread orphan report — one row, keyed orphanrep:<id>, badged 结果�
 eq "U: …its state orphanrep, the result as its detail, the issue as its cell" "orphanrep|✉|落地了 修好侧栏|#41" \
    "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '$1 ~ /^orphanrep:/ { print $2 "|" $3 "|" $8 "|" $10; exit }')"
 has "U: …under the acme/app heading" "$(printf '%s\n' "$t" | LC_ALL=C awk -F"$US" '{ printf "%s;", $4 }')" "app ("
-hasnt "U: the shell reads no local report" "$(unset CCQUOTA_FLEET; FLEET_SHELL=1 tside)" "orphanrep"
 python3 "$BIN/fleet-orphan-reports.py" read "$OID"
 hasnt "U: read — the row is gone" "$(unset CCQUOTA_FLEET; tside)" "orphanrep"
 rm -f "$OF" "$WORK/conf/global/orphan-reports.read"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-view-actions-selftest.sh — Tab on a row of the 看台's list (issue #3181,
 # EPIC #3178 C3): bin/fleet_view.py's ACTIONS, the old sidebar row menu's actions
-# item for item, each running the SAME script fleet-sidebar-menu.sh ran.
+# item for item, each running the shared session action script.
 #
 # Isolated sockets only: an INNER server is the home machine (a fleet `fl` + its
 # 看台 `fl@view-v1`, as fleet-view-selftest.sh builds them), the rows come through
@@ -11,8 +11,7 @@
 #
 #   A  the table: every letter of the sidebar menu (fleet-ui-lang.sh menu_keys) is
 #      an action here (SIDEBAR_ACTIONS) or a row-less one handed to C2 / C7
-#      (ROWLESS) — one missing is red; every action fleet-sidebar-menu.sh builds
-#      a row item for (`mk <action>`) is in the table
+#      (ROWLESS) — one missing is red; each action declares its required fields
 #   B  view-menu: a done row here gets its actions (no 回答 / 唤醒 / 继续), an
 #      asking row 回答, a sleeping one 唤醒, an ended exited one 恢复, another
 #      machine's row its hub writes (no 置顶 / PR / 唤醒 there)
@@ -119,13 +118,12 @@ qo() { python3 "$BIN/fleet-quickopen.py" "$@"; }
 # --- A: the table against the sidebar menu ---------------------------------------------
 letters=$(FLEET_UI_LANG=zh sh "$BIN/fleet-ui-lang.sh" t menu_keys | awk -F '\t' '{ print $1 }')
 [ -n "$letters" ] || fail "A: no menu_keys"
-built=$(grep -o 'mk [a-z]*' "$BIN/fleet-sidebar-menu.sh" | awk '{ print $2 }' | sort -u)
-PYCHK=$(python3 - "$BIN" "$letters" "$built" <<'EOF'
+PYCHK=$(python3 - "$BIN" "$letters" <<'EOF'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("fleet_view", sys.argv[1] + "/fleet_view.py")
 fv = importlib.util.module_from_spec(spec); spec.loader.exec_module(fv)
 bad = []
-for a in sys.argv[2].split() + sys.argv[3].split():
+for a in sys.argv[2].split():
     if a in fv.ROWLESS:
         continue
     if a not in fv.SIDEBAR_ACTIONS:
@@ -230,7 +228,7 @@ waitfor 'Tab 操作' || fail "D: the list did not reopen"
 screen > "$W/before.txt"
 to send-keys -t o Tab; waitfor '回收…' || fail "D: no menu"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
-waitfor '▶ 回收…' || fail "D: ↓ did not reach 回收: $(screen)"
+waitfor '回收…' || fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
 waitfor '回收「Alpha 做完了」？(y/n)' || fail "D: 回收 did not ask y/n: $(screen)"
 to send-keys -t o n
@@ -247,15 +245,15 @@ screen > "$W/after.txt"
 reset
 to send-keys -t o Tab; waitfor '改名…' || fail "D: no menu (3)"
 for _ in $(seq 1 4); do to send-keys -t o Down; done
-waitfor '▶ 改名…' || fail "D: ↓4 is not 改名: $(screen)"
+waitfor '改名…' || fail "D: ↓4 is not 改名: $(screen)"
 to send-keys -t o Enter
-waitfor '新名字› 新名字' || fail "D: 改名 did not ask on the bottom line, pre-filled: $(screen)"
+waitfor '新名字▏' || fail "D: 改名 did not ask on the bottom line, pre-filled: $(screen)"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || fail "D: Esc did not cancel the rename"
 [ -z "$(calls)" ] || fail "D: a cancelled rename ran «$(calls)»"
 # ⌘P's 置顶 (issue #3517): the session in view has its own line, and ⌃T on the lit
 # row runs the row's own 置顶 — dash-pin-toggle.sh once, the list stays open
-screen | grep -q '📌 置顶当前会话' || fail "D: no 「📌 置顶当前会话」 line: $(screen)"
+screen | grep -q '置顶当前会话' || fail "D: no 「置顶当前会话」 line: $(screen)"
 reset
 to send-keys -t o C-t
 for _ in $(seq 1 40); do [ -n "$(calls)" ] && break; sleep 0.1; done
@@ -265,7 +263,7 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 📌 置顶当前会话 and ⌃T (#3517)"
+pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
@@ -371,7 +369,7 @@ to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
 to send-keys -t o Tab; waitfor '─ Far 在 mac-a' || fail "E: Tab on the far row: $(screen)"
 for _ in $(seq 1 6); do to send-keys -t o Down; done
-waitfor '▶ 停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
+waitfor '停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
 to send-keys -t o Enter
 waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
 [ "$(calls)" = "fleet-row-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"

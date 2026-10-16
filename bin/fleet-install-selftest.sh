@@ -12,7 +12,7 @@
 #                 (bin/fleet-client-mirror.sh --check — the shell half of the Go
 #                 pin, TestFleetClientMatchesBin, #1803); a pack into a sandbox
 #                 copy holds exactly those files, byte for byte; the manifest
-#                 ships the shell (fleet-shell.sh, conf/tmux-shell.conf)
+#                 ships the client (fleet-thin.py, fleet-connect.py)
 #   B. install    `curl … | sh` style (the script on stdin, the hub URL filled
 #                 in, nobody to ask): every manifest file lands under
 #                 ~/.claude/fleet/<path> (the one directory, #1804), identical,
@@ -25,11 +25,11 @@
 #   C. again      a second run changes nothing: no second PATH line
 #   D. refusals   a Windows uname → exit 2 with the WSL note; a download whose
 #                 SHA-256 does not match → exit 1, nothing installed
-#   E. dispatch   from the clean install: with a (fake) tmux ≥ 3.2 on PATH,
-#                 `fleet` runs fleet-shell.sh — the server is started from the
-#                 install root's own bin/ and conf/; with no tmux, `fleet` prints
-#                 the one install hint and exits 1 — no server, no fleet-connect.py
-#                 (the client is the only way in, issue #1628)
+#   E. dispatch   from the clean install, with NO tmux on PATH (the thin client
+#                 needs none here — issue #3008): `fleet` runs the install root's
+#                 fleet-thin.py, which asks its home (the pick a seam,
+#                 FLEET_THIN_ARGV_CMD) for its 看台 over one ssh (a stub that
+#                 records it and ends like a detach)
 #   F. tmux       the install's tmux step (issue #1629), on a PATH holding only
 #                 what the installer needs plus fakes: macOS + brew + no tmux →
 #                 `brew install tmux` once, then ok; no brew → the brew.sh hint,
@@ -63,9 +63,10 @@
 #                 kept until nothing runs from it, then goes on the next run
 #   J. in use     (issue #1900) a rerun on a client the line installed, against
 #                 a hub naming a version: the same version → nothing moves;
-#                 v2 while the client runs → the version in use unchanged by one
-#                 byte, v2 staged whole beside it (.next), and the keeper's idle
-#                 `tick` switches to it (v1 → .prev); v3 with the client closed →
+#                 v2 while an old client (#3008) still runs → the version in use
+#                 unchanged by one byte, v2 staged whole beside it (.next), and
+#                 the next `fleet`'s `start` switches to it (v1 → .prev); v3 with
+#                 the client closed →
 #                 the line switches itself in one rename (v2 → .prev, v1 pruned);
 #                 a run that fails half way stays on v3; .prev rolls back
 #   K. one go     (issue #2260) a hub serving /install/bundle.tar.gz: a fresh
@@ -73,7 +74,7 @@
 #                 one request for the whole client (no file by file), every file
 #                 identical, the bundle's static tmux in
 #                 ~/.local/share/claude-fleet-vendor/bin, which fleet_find_tool
-#                 finds and `fleet` starts the shell with; FLEET_CLIENT_LAYOUT=solo
+#                 finds and `fleet` starts with; no retired layout is written
 #                 in fleet.conf's [client] and the invitation the line carried
 #                 kept 0600 (never printed); the time it took printed; a computer
 #                 with an earlier install → no solo; a bundle that does not match
@@ -137,7 +138,7 @@ grep -vx 'bin/fleet-lang.sh' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "
 FLEET_PACK_VENDOR=0 bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
 [ ! -e "$SBC/pack/bin/fleet-lang.sh" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
   && ok "A a file the manifest dropped leaves the pack" || bad "A a dropped file stayed in the pack"
-for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet-shell.sh bin/fleet-sidebar.py bin/tmux-status.sh conf/tmux-shell.conf; do
+for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet_dispatch.py bin/fleet-thin.py bin/fleet-client-retire.sh conf/fleet-palette.conf; do
   printf '%s\n' "$FILES" | grep -qxF "$must" && ok "A manifest lists $must" || bad "A manifest does not list $must"
 done
 [ "$(awk '!/^[[:space:]]*#/ && $2 == "installer" { print $1 }' "$MANIFEST")" = bin/fleet-install.sh ] \
@@ -217,7 +218,7 @@ done <<EOT
 $FILES
 EOT
 [ -z "$missing" ] && ok "B all $nfiles manifest files installed under $ROOT, identical, bin/ + scripts executable" || bad "B installed files:$missing"
-[ -f "$ROOT/conf/tmux-shell.conf" ] && ok "B conf/tmux-shell.conf beside bin/ (\$BIN/../conf resolves)" || bad "B no conf/tmux-shell.conf under the root"
+[ -f "$ROOT/conf/fleet-palette.conf" ] && ok "B conf/ beside bin/ (\$BIN/../conf resolves)" || bad "B no conf/fleet-palette.conf under the root"
 [ -e "$ROOT/bin/fleet-gone.sh" ] && bad "B a copy the manifest no longer lists survived" || ok "B stale fleet-gone.sh removed"
 echo "$out" | grep -q 'fleet-gone.sh' && ok "B the removal is said" || bad "B removal not mentioned: $out"
 [ -e "$HOME/.local/bin/fleet-connect.py" ] && bad "B the #1470 flat fleet-connect.py survived" || ok "B old flat fleet-connect.py removed from ~/.local/bin"
@@ -264,56 +265,54 @@ rm -f "$WORK/corrupt"
 [ "$rc" = 1 ] && echo "$out" | grep -q '校验不符' && [ ! -e "$HOME/.local/bin/fleet" ] && [ ! -e "$ROOT/bin/fleet" ] \
   && ok "D bad SHA-256 → exit 1, nothing installed" || bad "D corrupt rc=$rc: $out $(ls -R "$ROOT" 2>&1 | head -3)"
 
-# ── E — dispatch from the clean install: fake tmux → the shell; none → connect ─
+# ── E — dispatch from the clean install: the thin client, no tmux needed ─────
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 sh < "$WORK/install.sh" >/dev/null 2>&1 || bad "E reinstall failed"
 export PATH=$SAVED_PATH
-# A tmux that records its argv and answers like one would to a server that is
-# not there: -V 3.4, has-session no, new-session prints a window id.
-TM="$WORK/tmux-shim"; mkdir -p "$TM"
-cat > "$TM/tmux" <<EOT
+NOTMUX="$WORK/notmux"; mkdir -p "$NOTMUX"
+for t in sh sed dirname python3 bash env cat uname id tr tail head grep awk hostname mkdir date rm mv; do
+  p=$(command -v "$t") && ln -sf "$p" "$NOTMUX/$t"
+done
+cat > "$WORK/ptyrun.py" <<'EOPTY'
+import os, select, sys
+# run argv[1:] on a pseudo-terminal of its own (the thin client wants one), its
+# output on stdout once it ends, its exit code ours
+pid, fd = os.forkpty()
+if pid == 0:
+    os.execvp(sys.argv[1], sys.argv[1:])
+out = b""
+while True:
+    r, _, _ = select.select([fd], [], [], 60)
+    if not r:
+        break
+    try:
+        d = os.read(fd, 65536)
+    except OSError:
+        break
+    if not d:
+        break
+    out += d
+_, st = os.waitpid(pid, 0)
+sys.stdout.buffer.write(out)
+sys.exit(os.waitstatus_to_exitcode(st) if hasattr(os, "waitstatus_to_exitcode") else (st >> 8))
+EOPTY
+cat > "$WORK/essh" <<EOT
 #!/bin/sh
-printf '%s\\n' "\$*" >> "$WORK/tmux.log"
-case " \$* " in
-  *" -V "*) echo 'tmux 3.4' ;;
-  *" has-session "*) exit 1 ;;
-  *" new-session "*) echo '@0' ;;
-esac
+printf '%s\\n' "\$*" >> "$WORK/essh.log"
 exit 0
 EOT
-chmod +x "$TM/tmux"
-: > "$WORK/tmux.log"
-# --pick against the fake hub fails (it issues no certificate: POST → 501), so
-# the shell opens with no machine picked — exactly what a clean install with a
-# dead hub does; the server start is what is asserted.
-out=$(cd "$HOME" && PATH="$TM:$PATH" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>"$WORK/e.err"); rc=$?
-[ "$rc" = 0 ] && [ "$out" = fleet-shell ] && ok "E fake tmux: fleet → fleet-shell.sh started the shell server (exit 0, session printed)" \
-  || bad "E fake tmux: rc=$rc out='$out' err=$(tail -3 "$WORK/e.err")"
-grep -q 'new-session' "$WORK/tmux.log" && ok "E the shell asked tmux for its session" || bad "E tmux log: $(cat "$WORK/tmux.log")"
-grep -q -- "-L fleet-shell" "$WORK/tmux.log" && ok "E on its own socket (-L fleet-shell)" || bad "E socket: $(head -3 "$WORK/tmux.log")"
-CACHE="$HOME/.cache/claude-fleet/shell"
-[ -L "$CACHE/bin/fleet-sidebar.py" ] && [ "$CACHE/bin/fleet-sidebar.py" -ef "$ROOT/bin/fleet-sidebar.py" ] \
-  && ok "E the shell's mirror points at the install root's bin/" || bad "E mirror: $(readlink "$CACHE/bin/fleet-sidebar.py" 2>&1)"
-grep -q "$CACHE/bin/tmux-status.sh" "$CACHE/tmux.conf" 2>/dev/null && ok "E tmux.conf written from the root's conf/tmux-shell.conf" \
-  || bad "E tmux.conf: $(head -3 "$CACHE/tmux.conf" 2>&1)"
-grep -q 'set-environment -g FLEET_SIDEBAR_SOURCE .hub.' "$CACHE/tmux.conf" && ok "E the server gets hub mode" || bad "E env in tmux.conf: $(grep set-environment "$CACHE/tmux.conf" | head -3)"
-# no tmux at all: a PATH with only what the dispatcher and connect need
-NOTMUX="$WORK/notmux"; mkdir -p "$NOTMUX"
-for t in sh sed dirname python3 bash env cat ssh ssh-keygen uname; do p=$(command -v "$t") && ln -sf "$p" "$NOTMUX/$t"; done
-# The shell above left detached loops (fleet-shell.sh warm …) whose first act is
-# a has-session; let the log go quiet first, or a late one lands in this leg's
-# log — a race only the start's own speed decided.
-q=0; n=-1
-while [ "$q" -lt 20 ]; do
-  m=$(wc -c < "$WORK/tmux.log"); [ "$m" = "$n" ] && break; n=$m; q=$((q + 1)); sleep 0.5
-done
-: > "$WORK/tmux.log"
-out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$HOME/.local/bin/fleet" 2>&1 </dev/null); rc=$?
-echo "$out" | grep -q 'brew install tmux' && ok "E no tmux: the one install hint" || bad "E no tmux hint: $out"
-[ "$(printf '%s\n' "$out" | grep -c 'install tmux')" = 1 ] && ok "E the hint is ONE line" || bad "E hint lines: $out"
-[ -s "$WORK/tmux.log" ] && bad "E no tmux: a server was asked for anyway: $(cat "$WORK/tmux.log")" || ok "E no tmux: no server started"
-[ "$rc" = 1 ] && ok "E no tmux: exit 1, no fallback" || bad "E no tmux: rc=$rc out=$out"
-echo "$out" | grep -q 'fleet connect' && bad "E no tmux: it went to connect: $out" || ok "E no tmux: fleet-connect.py never ran"
+chmod +x "$WORK/essh"
+cat > "$WORK/eargv" <<EOT
+#!/bin/sh
+printf '{"argv": ["$WORK/essh", "homebox"], "host": 1, "route": {"name": "lan"}}\\n'
+EOT
+: > "$WORK/essh.log"
+out=$(cd "$HOME" && PATH="$NOTMUX" FLEET_NODE_STATE="$WORK/no-node" FLEET_THIN_ARGV_CMD="sh $WORK/eargv" FLEET_THIN_LOG="$WORK/ethin.log" \
+        FLEET_ITERM_KEYS=0 FLEET_CLIENT_UPDATED=1 python3 "$WORK/ptyrun.py" "$HOME/.local/bin/fleet" 2>&1 </dev/null); rc=$?
+[ "$rc" = 0 ] && ok "E no tmux on PATH: fleet opens the client (exit 0)" || bad "E rc=$rc out=$out"
+grep -q 'fleet-remote-view.sh attach --thin' "$WORK/essh.log" && grep -q 'homebox' "$WORK/essh.log" \
+  && ok "E fleet → fleet-thin.py → one ssh to the home for its 看台" || bad "E ssh log: $(cat "$WORK/essh.log") out=$out"
+echo "$out" | grep -q 'install tmux' && bad "E the thin client asked for tmux: $out" || ok "E no tmux hint: the client needs none here"
 
 # ── F — the tmux step ───────────────────────────────────────────────────────
 fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
@@ -515,8 +514,7 @@ HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 echo "$out" | grep -q -e '这台电脑要做什么' -e '接入口吗' && bad "H1 a question was printed: $out" || ok "H1 neither old question is printed"
 [ -f "$H1/.claude/fleet/bin/fleet" ] && [ ! -e "$H1/.claude/fleet/.git" ] && [ "$(hval "$H1" FLEET_HUB_URL)" = "$HUB" ] && [ "$(hval "$H1" FLEET_HOST)" = 0 ] \
   && ok "H1 the base in ~/.claude/fleet, the address written, FLEET_HOST=0" || bad "H1 state: host=$(hval "$H1" FLEET_HOST) hub=$(hval "$H1" FLEET_HUB_URL) $(ls -a "$H1/.claude/fleet" | head -3)"
-[ "$(hval "$H1" FLEET_CLIENT_LAYOUT)" = solo ] && (export FLEET_SHELL=1; . "$H1/.config/claude-fleet/fleet.conf"; [ "${FLEET_CLIENT_LAYOUT:-}" = solo ]) \
-  && ok "H1 a computer the fleet was never on: FLEET_CLIENT_LAYOUT=solo, read by the shell ([client])" || bad "H1 layout: $(grep -n LAYOUT "$H1/.config/claude-fleet/fleet.conf" 2>&1)"
+[ -z "$(hval "$H1" FLEET_CLIENT_LAYOUT)" ] && ok "H1 no retired layout written" || bad "H1 retired layout written"
 before=$(hsnap "$H1"); HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again → not one file changes" \
   || bad "H1 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
@@ -668,24 +666,22 @@ out=$(jinst); rc=$?
   && ok "J client running: the version in use is not changed by one byte" || bad "J in use changed rc=$rc: $out"
 [ "$(cat "$JV/.next" 2>/dev/null)" = v2 ] && [ -f "$JV/v2/.staged" ] && grep -qx version=v2 "$JV/v2/.client-version" \
   && [ "$(tail -n 1 "$JV/v2/bin/fleet")" = '# v2' ] && [ -z "$(jextra v2 .next)" ] \
-  && echo "$out" | grep -q '等你空闲时原地换上' \
+  && echo "$out" | grep -q '下次打开 fleet 时换上' \
   && ok "J …the new version is staged whole beside it (.next = v2), and said" || bad "J staged: $(ls -A "$JV" 2>&1) $out"
 nmiss=''
 for f in $FILES; do cmp -s "$JS/$f" "$JV/v2/$f" || nmiss="$nmiss $f"; done
 [ -z "$nmiss" ] && ok "J …every manifest file is in the new version dir, identical" || bad "J v2 differs:$nmiss"
-# the keeper, once idle, takes it in place: the stock `tick`, the new client's
-# reload stubbed (fleet-client-live-update-selftest drives the real one)
-printf '#!/bin/sh\necho "$@" >> "%s/reload.log"\n' "$J" > "$JV/v2/bin/fleet-shell.sh"
+# the next `fleet` takes it: the stock `start` (the hourly check stamped fresh)
+rm -f "$J/running"
 mkdir -p "$J/state"; date +%s > "$J/state/checked"
 env -i HOME="$JH" XDG_CONFIG_HOME="$JH/.config" PATH="$J/tm:$SYSPATH" TMPDIR="$WORK" \
   FLEET_CLIENT_ROOT="$JR" FLEET_CLIENT_STATE="$J/state" FLEET_SHELL_CACHE="$J/cache" FLEET_CLIENT_UPDATE_STATE="$J/update.state" \
-  bash "$JR/bin/fleet-client-update.sh" tick fleet-shell >/dev/null 2>&1; rc=$?
-[ "$rc" = 4 ] && [ -L "$JR" ] && [ "$JR" -ef "$JV/v2" ] && [ "$(jtail)" = '# v2' ] && [ "$(cat "$JV/.prev" 2>/dev/null)" = v1 ] \
-  && [ ! -e "$JV/.next" ] && grep -q '^reload fleet-shell' "$J/reload.log" 2>/dev/null \
-  && ok "J the keeper, idle: switched to v2 in place (exit 4), v1 kept as .prev" || bad "J keeper rc=$rc: $(ls -la "$JH/.claude" "$JV" 2>&1)"
-cp "$JS/bin/fleet-shell.sh" "$JV/v2/bin/fleet-shell.sh"
+  bash "$JR/bin/fleet-client-update.sh" start >/dev/null 2>&1; rc=$?
+[ "$rc" = 3 ] && [ -L "$JR" ] && [ "$JR" -ef "$JV/v2" ] && [ "$(jtail)" = '# v2' ] && [ "$(cat "$JV/.prev" 2>/dev/null)" = v1 ] \
+  && [ ! -e "$JV/.next" ] \
+  && ok "J the next start: switched to v2 (exit 3), v1 kept as .prev" || bad "J start rc=$rc: $(ls -la "$JH/.claude" "$JV" 2>&1)"
 # v3, client not running: the line switches itself, in one rename
-rm -f "$J/running"; echo v3 > "$J/ver"; echo '# v3' >> "$JS/bin/fleet"
+echo v3 > "$J/ver"; echo '# v3' >> "$JS/bin/fleet"
 out=$(jinst); rc=$?
 [ "$rc" = 0 ] && [ "$JR" -ef "$JV/v3" ] && [ "$(jtail)" = '# v3' ] && [ "$(cat "$JV/.prev")" = v2 ] \
   && [ ! -e "$JV/v1" ] && [ -z "$(jextra v2 v3 .prev)" ] && echo "$out" | grep -q '已整版切到 v3' \
@@ -807,11 +803,7 @@ KV="$KH/.local/share/claude-fleet-vendor/bin/tmux"
   && ok "K the bundle's static tmux is in ~/.local/share/claude-fleet-vendor/bin — no Homebrew" || bad "K vendor tmux: $(ls -la "$(dirname "$KV")" 2>&1) $out"
 ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
 [ "$ft" = "$KV" ] && ok "K fleet_find_tool tmux → the static one" || bad "K fleet_find_tool tmux: $ft"
-: > "$K/tmux.log"
-kout=$(cd "$KH" && env -i HOME="$KH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_CLIENT=shell FLEET_SHELL_NO_ATTACH=1 "$KH/.local/bin/fleet" 2>"$K/fleet.err" </dev/null); krc=$?
-[ "$krc" = 0 ] && [ "$kout" = fleet-shell ] && grep -q 'new-session' "$K/tmux.log" && ! grep -q 'install tmux' "$K/fleet.err" \
-  && ok "K \`fleet\` finds the static tmux (nothing else on PATH) and starts the shell" || bad "K fleet: rc=$krc out=$kout err=$(tail -3 "$K/fleet.err") log=$(head -3 "$K/tmux.log")"
-[ "$(hval "$KH" FLEET_CLIENT_LAYOUT)" = solo ] && ok "K a computer the fleet was never on → FLEET_CLIENT_LAYOUT=solo" || bad "K layout: $(cat "$KH/.config/claude-fleet/fleet.conf" 2>&1)"
+[ -z "$(hval "$KH" FLEET_CLIENT_LAYOUT)" ] && ok "K no retired layout written" || bad "K retired layout written"
 # the newcomer's screen before `fleet` (issue #2347, EPIC #2259): what to type, no fleet word
 kw=$(echo "$out" | grep -E '入口|承载|只协调|扫码' || true)
 [ -z "$kw" ] && echo "$out" | grep -q '^  之后每次只敲：fleet$' && echo "$out" | grep -q '^邀请: 已收下，登录时一起带上$' \

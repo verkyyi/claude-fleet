@@ -7,10 +7,10 @@
 #   tmux     run-shell "sh …/fleet-ui-lang.sh toast '#{client_name}' KEY"
 #   python   fleet-ui-lang.sh dump PREFIX… — every KEY starting with a PREFIX as
 #            KEY NUL TEXT NUL, each printf argument left as a \001 slot
-#            (fleet-sidebar.py reads its strings this way, once, at start)
+#            (fleet_view.py reads its strings this way, once, at start)
 #
-# Today there were four tables (this one, fleet-sidebar.py's TEXT,
-# fleet-sidebar-menu.sh's MENU_KEYS, fleet-keys.sh's whole zh sheet); a string
+# Today there were four tables (this one, fleet_view.py's TEXT,
+# fleet_view.py ACTIONS's MENU_KEYS, fleet-keys.sh's whole zh sheet); a string
 # added anywhere else is a second source again — fleet-ui-lang-selftest.sh greps
 # for one. A key with no entry prints itself, so a typo is visible, never blank.
 #
@@ -659,8 +659,44 @@ fleet_ui_t() {
     zh:view_new_exit_fmt) printf '退出码 %s，没说原因' "${1:-}" ;;
     en:view_new_exit_fmt) printf 'exit %s, no reason given' "${1:-}" ;;
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
-    zh:view_search_ph) printf '搜会话，或直接写一件新任务' ;;
-    en:view_search_ph) printf 'Search sessions, or type a new task' ;;
+    zh:view_count_fmt) printf '会话 %s' "${1:-}" ;;
+    en:view_count_fmt) printf 'Sessions %s' "${1:-}" ;;
+    zh:view_overlay_keys) printf 'Tab/⇧Tab 控件  F6 列表  esc 返回' ;;
+    en:view_overlay_keys) printf 'Tab/S-Tab  F6 list  esc back' ;;
+    zh:view_list_focus_keys) printf '↑↓ 选  Tab 重定位  F6 浮层  esc 返回' ;;
+    en:view_list_focus_keys) printf '↑↓ pick  Tab retarget  F6 overlay  esc back' ;;
+    zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/F6/esc 可用' ;;
+    en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/F6/esc work' ;;
+    zh:view_overlay_gone) printf '来源已失效；请回列表重新选择' ;;
+    en:view_overlay_gone) printf 'Source unavailable; select it again in the list' ;;
+    zh:view_composer) printf '新任务' ;;
+    en:view_composer) printf 'New task' ;;
+    zh:view_draft_ph) printf '写任务，Enter 换行' ;;
+    en:view_draft_ph) printf 'Write a task; Enter adds a line' ;;
+    zh:view_draft_open) printf '开窗预填（不发送）' ;;
+    en:view_draft_open) printf 'Open with draft (not sent)' ;;
+    zh:view_blank_open) printf '开空白会话' ;;
+    en:view_blank_open) printf 'Open blank session' ;;
+    zh:view_draft_clear) printf '清空草稿' ;;
+    en:view_draft_clear) printf 'Clear draft' ;;
+    zh:view_cancel) printf '取消' ;;
+    en:view_cancel) printf 'Cancel' ;;
+    zh:view_confirm) printf '确定' ;;
+    en:view_confirm) printf 'Confirm' ;;
+    zh:view_draft_limit) printf '草稿最多 4000 字，尚未提交' ;;
+    en:view_draft_limit) printf 'Draft limit: 4000 characters; not submitted' ;;
+    zh:view_draft_save_failed) printf '草稿未能保存到磁盘' ;;
+    en:view_draft_save_failed) printf 'Could not save draft to disk' ;;
+    zh:view_draft_agent_gone) printf '所选 Agent 已不可用；请重新选择' ;;
+    en:view_draft_agent_gone) printf 'Selected agent unavailable; choose again' ;;
+    zh:view_draft_repo_gone) printf '所选仓库已不可用；请重新选择' ;;
+    en:view_draft_repo_gone) printf 'Selected repository unavailable; choose again' ;;
+    zh:view_draft_empty) printf '请先写任务，或选择开空白会话' ;;
+    en:view_draft_empty) printf 'Write a task, or choose Open blank session' ;;
+    zh:view_grid_loading) printf '正在读取仓库和 Agent，请稍候' ;;
+    en:view_grid_loading) printf 'Loading repositories and agents; please wait' ;;
+    zh:view_search_ph) printf '搜索会话' ;;
+    en:view_search_ph) printf 'Search sessions' ;;
     zh:view_cmd_blank) printf '⚡ 新会话（空白）' ;;
     en:view_cmd_blank) printf '⚡ New session (blank)' ;;
     zh:view_cmd_task_fmt) printf '⚡ 新任务：%s' "${1:-}" ;;
@@ -729,8 +765,8 @@ fleet_ui_t() {
     # issue #3327 (EPIC #3178 ④): the ⚡ row's keys line, its no-hit note, its progress
     zh:view_keys_match_fmt) printf '↵ 切到 %s  ↓ 到 ⚡ 预填「%s」  esc 关' "${1:-}" "${2:-}" ;;
     en:view_keys_match_fmt) printf '↵ go to %s  ↓ to ⚡ draft "%s"  esc close' "${1:-}" "${2:-}" ;;
-    zh:view_keys_short) printf '↵ 去  Tab 操作  ↑ 到 ⚡  esc 关' ;;
-    en:view_keys_short) printf '↵ go  Tab act  ↑ to ⚡  esc' ;;
+    zh:view_keys_short) printf '↵ 进入/编辑  Tab 操作  ↑↓ 选  esc 关' ;;
+    en:view_keys_short) printf '↵ go/edit  Tab act  ↑↓ pick  esc' ;;
     zh:view_keys_task_short) printf '↵ 开窗预填  Tab 仓库/Agent  esc 关' ;;
     en:view_keys_task_short) printf '↵ go  Tab repo/agent  esc' ;;
     zh:view_keys_task) printf '↵ 开窗预填（不发送）  Tab 仓库 / Agent  esc 关' ;;
@@ -929,7 +965,7 @@ fleet_ui_t() {
     en:toast_sidebar_focus)     printf 'Tasks: type a name ↵ = new session · . = row menu · ↑↓ switch · empty line ←→ fold · with text ←→ move · ↵/Esc worker' ;;
     zh:toast_shell_sidebar)     printf '任务：↑↓ 切换 · ↵ 进入 · . 行菜单 · ? 快捷键 · Esc 返回' ;;
     en:toast_shell_sidebar)     printf 'Tasks: ↑↓ switch · ↵ enter · . row menu · ? keys · Esc back' ;;
-    # the row menu's confirmed reap (fleet-sidebar-reap.sh), off dash-reap's token
+    # the row menu's confirmed reap (fleet_view.py reap action), off dash-reap's token
     zh:reap_done)               printf 'fleet: 已回收' ;;
     en:reap_done)               printf 'fleet: reaped' ;;
     zh:reap_kept)               printf 'fleet: 已回收 — 脏 worktree 已保留在磁盘' ;;
@@ -969,7 +1005,7 @@ fleet_ui_t() {
     en:remote_label_message_fmt) printf 'message %s (on %s)' "${1:-}" "${2:-}" ;;
     zh:remote_label_answer_fmt)  printf '答 %s（在 %s）' "${1:-}" "${2:-}" ;;
     en:remote_label_answer_fmt)  printf 'answer %s (on %s)' "${1:-}" "${2:-}" ;;
-    # --- the task sidebar's own strings (fleet-sidebar.py reads `dump sidebar_`)
+    # --- the task sidebar's own strings (fleet_view.py reads `dump sidebar_`)
     zh:sidebar_new_to_fmt)      printf '新会话 → %s…' "${1:-}" ;;
     en:sidebar_new_to_fmt)      printf 'New session → %s…' "${1:-}" ;;
     zh:sidebar_rename)          printf '改名› ' ;;
@@ -1166,16 +1202,12 @@ fleet_ui_t() {
     en:solo_view_ended_fmt)     printf 'The session has ended (%s).' "${1:-}" ;;
     # 退出 fleet (issue #2349): `fleet quit`, ⌘Q, ⌘K's / the menu's last line — the
     # client's processes here go, the sessions on the machines do not
-    zh:quit_done_fmt)           printf 'fleet 已退出；会话仍在 %s 上运行，`fleet` 重新进入。' "${1:-}" ;;
-    en:quit_done_fmt)           printf 'fleet has quit; the sessions keep running on %s — `fleet` to come back.' "${1:-}" ;;
-    zh:quit_done)               printf 'fleet 已退出；`fleet` 重新进入。' ;;
-    en:quit_done)               printf 'fleet has quit; `fleet` to come back.' ;;
-    zh:quit_none)               printf 'fleet 客户端没在运行。' ;;
-    en:quit_none)               printf 'The fleet client is not running.' ;;
-    zh:client_bg)               printf '客户端在后台运行（`fleet quit` 退出）。' ;;
-    en:client_bg)               printf 'The client is running in the background (`fleet quit` quits it).' ;;
-    zh:client_off)              printf '客户端没在运行（`fleet` 进入）。' ;;
-    en:client_off)              printf 'The client is not running (`fleet` opens it).' ;;
+    zh:retire_done)             printf '旧客户端（#3008 已删除）在这台电脑上留下的进程已停下；`fleet` 打开客户端。' ;;
+    en:retire_done)             printf 'What the old client (deleted in #3008) left running on this computer has stopped; `fleet` opens the client.' ;;
+    zh:retire_none)             printf 'fleet 没有在后台运行：客户端只在打开它的终端里，⌘Q 或关掉终端就退出。' ;;
+    en:retire_none)             printf 'Nothing of fleet runs in the background: the client lives in the terminal that opened it — ⌘Q or close that terminal.' ;;
+    zh:retire_left)             printf '旧客户端（#3008 已删除）还在这台电脑后台运行：`fleet quit` 停掉它。' ;;
+    en:retire_left)             printf 'The old client (deleted in #3008) still runs in the background here: `fleet quit` stops it.' ;;
     # the writing area itself (issue #1953, bin/fleet-compose.py)
     zh:compose_title)           printf '新任务' ;;
     en:compose_title)           printf 'New task' ;;
@@ -1558,7 +1590,7 @@ fleet_ui_t() {
     en:sidebar_ask_restore)     printf 'y reopen first · r restore› ' ;;
     zh:sidebar_ask_keys)        printf '↵ 确定 · esc 取消' ;;
     en:sidebar_ask_keys)        printf '↵ ok · esc cancel' ;;
-    # --- the row menu (fleet-sidebar-menu.sh). menu_keys is THE letter table:
+    # --- the row menu (fleet_view.py ACTIONS). menu_keys is THE letter table:
     # `action<TAB>letter<TAB>what`, read by the menu (mk) and the ? sheet (--keys).
     zh:menu_keys)               printf '%s' 'rename	r	改名 — 在输入行编辑（↵ 应用，esc / 空名称取消）
 pin	t	置顶 / 取消置顶
@@ -1844,14 +1876,14 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_switch_zoom)       printf %s 'zoom the session on the right; again to restore' ;;
     zh:keys_switch_quickopen)  printf %s '快速跳转：打几个字（名字、机器、状态都算），↵ 切过去；不打字 ↵ = 上一个看的' ;;
     en:keys_switch_quickopen)  printf %s 'quick open: type a few letters (name, machine, state), ↵ switches; ↵ on nothing = the one you saw before' ;;
-    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框；FLEET_COMPOSE=1 时是右边的写作区' ;;
-    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input; with FLEET_COMPOSE=1 the writing area on the right' ;;
+    zh:keys_switch_new)        printf %s '新会话：在家里的机器开一个不绑仓库的会话，光标就在它的输入框' ;;
+    en:keys_switch_new)        printf %s 'new session: a no-repo session on your home machine, the cursor in its input' ;;
     zh:keys_switch_fold)       printf %s '展开/收起当前会话的子任务；在子任务上按：收起它的父任务' ;;
     en:keys_switch_fold)       printf %s 'open / shut the sub-tasks of the session in view; on a sub-task: shut its parent' ;;
     zh:keys_switch_switcher)   printf %s '切换会话：全部会话按最近使用排，可搜索；最下面「+ 新会话」和「打开多会话视图」（多会话视图里是「收起侧栏」）' ;;
     en:keys_switch_switcher)   printf %s 'switch session: every session, most recent first, searchable; at the bottom + New session and Open the multi-session view (Hide the list in it)' ;;
-    zh:keys_switch_quit)       printf %s '退出 fleet：关掉这台电脑上客户端的全部进程（侧栏、hub 循环、连接），远端会话照常在机器上跑；fleet 重新进入' ;;
-    en:keys_switch_quit)       printf %s 'quit fleet: every process of the client on this computer goes (the list, the hub loop, the connections); the sessions keep running on their machines; fleet comes back' ;;
+    zh:keys_switch_quit)       printf %s '退出当前客户端连接，会话照常在机器上运行；fleet 重新进入' ;;
+    en:keys_switch_quit)       printf %s 'quit this client connection; sessions keep running on their machines; fleet opens it again' ;;
     zh:keys_single_f1)         printf %s '窄屏（手机）：全屏切换器 —— 在等你的 · 最近 1–9 · 全部，点一行切过去；顶栏点名字同此' ;;
     en:keys_single_f1)         printf %s 'narrow (a phone): the full-screen switcher — waiting on you · recent 1–9 · all, tap a row; tapping the name on the top line too' ;;
     zh:keys_single_f23)        printf %s '窄屏：上一个 / 下一个会话（顶栏 ‹ › 同此）' ;;

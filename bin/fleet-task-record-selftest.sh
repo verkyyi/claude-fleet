@@ -40,6 +40,14 @@ while [ $i -lt ${#args[@]} ]; do
   i=$((i + 1))
 done
 { printf 'argv: %s\n' "$*"; printf 'stdin: %s\n' "$cfg"; printf 'body: %s\n' "$body"; } >> "$CURL_LOG"
+if [[ "$body" == *'"authority_version": 1'* ]]; then
+  python3 - "$body" <<'JSON'
+import json,sys
+x=json.loads(sys.argv[1]); print(json.dumps(dict(x,id="T5",generation=1,attempt_id="task:T5:g1")))
+JSON
+  printf '200'
+  exit 0
+fi
 printf '%s\n%s' "$(cat "$ANS" 2>/dev/null || echo '{"id":"T5"}')" "$(cat "$CODE" 2>/dev/null || echo 200)"
 EOF
 chmod +x "$WORK/curl"

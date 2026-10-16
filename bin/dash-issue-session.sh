@@ -47,11 +47,17 @@ set -uo pipefail
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
 num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+# Repeated explicit flags must agree; reject before any claim/window/worktree.
+set_agent() {
+  case "$1" in claude|codex) ;; *) printf 'dash-issue-session: unknown --agent %s (claude|codex)\n' "$1" >&2; exit 2 ;; esac
+  [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-issue-session: contradictory --agent values\n' >&2; exit 2; }
+  AGENT=$1
+}
 for _a in "$@"; do
   # A value-taking flag (--title <t>) consumes the NEXT arg: _want carries that
   # expectation across one loop turn so the value isn't mistaken for a positional.
   if [ -n "$_want" ]; then
-    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) AGENT="$_a" ;; repo) REPO_ARG="$_a" ;;
+    case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) set_agent "$_a" ;; repo) REPO_ARG="$_a" ;;
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
       resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; words-file) WORDS_FILE="$_a" ;; as) AS_ARG="$_a" ;; task) TASK_REF="$_a" ;; esac
     _want=""; continue
@@ -81,7 +87,7 @@ for _a in "$@"; do
     # (bin/fleet-claude.sh --agent) inside the window command; validated below so
     # only a known token is ever embedded in that command string.
     --agent) _want=agent ;;
-    --agent=*) AGENT="${_a#--agent=}" ;;
+    --agent=*) set_agent "${_a#--agent=}" ;;
     # --repo (issue #789): which of the fleet's repos issue <N> belongs to. REQUIRED
     # once the fleet hosts 2+ repos (issue #12 exists once per repo — never guess);
     # in a one-repo fleet it defaults to that repo and must name it when given.
@@ -160,11 +166,8 @@ case "$AS_ARG" in
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-issue-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
   *) [ -z "$NODE_ARG" ] && NODE_ARG=local ;;   # the agent file is on this machine
 esac
-case "$AGENT" in
-  ''|claude|codex) : ;;
-  *) printf 'dash-issue-session: unknown --agent %s (claude|codex) — using the fleet default\n' "$AGENT" >&2
-     tmux display-message "issues: unknown --agent $AGENT — using the fleet default" 2>/dev/null; AGENT="" ;;
-esac
+[ "$_want" != agent ] || { printf 'dash-issue-session: --agent needs a value\n' >&2; exit 2; }
+EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
   ''|local|pool|any) : ;;
   *) printf 'dash-issue-session: unknown --account %s (local|pool|any) — using the fleet default\n' "$ACCOUNT_ARG" >&2
@@ -172,6 +175,11 @@ case "$ACCOUNT_ARG" in
 esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SELF="$BIN/$(basename "$0")"                   # absolute path for the --async re-invoke
+DISPATCH="${FLEET_DISPATCH:-}"
+if [ -n "$DISPATCH" ]; then
+  DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${AGENT:+--agent "$AGENT"} --accepted "$DISPATCH") || exit 2
+  AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
+fi
 # The reap policy, canonical or refused before any gate runs (issue #1902).
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
@@ -276,7 +284,7 @@ unset _r _rc
 # shipped fleet-worker when it is (deleted = a plain session). Looked for from the
 # repo's checkout — where the worktree's .claude/agents comes from. Its `fleet:`
 # key fills what the spawn left open.
-AS_KV=''
+AS_KV=''; TEMPLATE_AGENT=''
 if [ -n "$AS_ARG" ]; then
   if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
     refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
@@ -294,7 +302,8 @@ if [ -n "$AS_KV" ]; then
     REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$(as_kv reap)") \
       || { refuse "#$num: $(as_kv file): fleet.reap is not a reap policy"; exit "$RC_INFRA"; }
   fi
-  [ -z "$AGENT" ] && case "$(as_kv agent)" in claude|codex) AGENT=$(as_kv agent) ;; esac
+  TEMPLATE_AGENT=$(as_kv agent)
+  [ -n "$AGENT" ] || AGENT=$TEMPLATE_AGENT
 fi
 
 slug="issue-$num"
@@ -445,6 +454,12 @@ if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
     || { refuse "#$num carries both agent:codex and agent:claude — remove one, or pass --agent"; exit "$RC_INFRA"; }
   unset _lbl
 fi
+# Resolve defaults once too. An accepted envelope wins over destination labels,
+# template changes and fleet defaults, including detached re-entry (#4392).
+DISPATCH=$(python3 "$BIN/fleet_dispatch.py" ${EXPLICIT_AGENT:+--agent "$EXPLICIT_AGENT"} \
+  --template "$TEMPLATE_AGENT" --label "$AGENT" --default "${FLEET_AGENT:-}" \
+  --accepted "$DISPATCH") || exit 2
+AGENT=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resolved_agent"])')
 # Codex needs this login's Codex login (`ccquota codex login`): asked for and not
 # there ⇒ refused, never quietly opened as Claude. A spawn the hub may place on
 # another machine is checked by the machine that opens it.
@@ -592,7 +607,15 @@ if [ "$PLACING" = 1 ]; then
         _pre_asg=0
       fi
     fi
-    place_out=$(fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
+    python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
+    _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_DISPATCH="$DISPATCH" fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "$_pw" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
+    if [ -s "$_dispatch_result" ]; then
+      DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
+      TASK_REF=$(printf '%s' "$DISPATCH" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task", ""))')
+    fi
+    rm -f "$_dispatch_result"
+
     _pv=${place_out%%$'\t'*}; _why=''; case "$place_out" in *$'\t'*) _why=${place_out#*$'\t'} ;; esac
     _after=''; case "$_why" in *$'\t'after\ *) _after=${_why##*$'\t'after }; _why=${_why%$'\t'after *} ;; esac
     if [ -n "$_after" ]; then   # <m>:<op>:<exit>,… — the machines that declined first
@@ -660,6 +683,7 @@ if [ "$PLACING" = 1 ]; then
         if [ "$_pv" = 'REFUSED AT_CAPACITY' ] && [ -n "$CAP_HELD" ]; then
           refuse "#$num 都满了 — 没有机器有空位: ${_why#all-full: }"; exit "$RC_CAP"
         fi
+        python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --placement-code "$place_rc" >/dev/null || exit "$RC_INFRA"
         [ "$place_rc" = 4 ] && printf 'dash-issue-session: 没有机器能接 #%s (%s) — 开在本机\n' "$num" "$_why" >&2 ;;
     esac
     unset _pw _u _pv _why _wait _pre_asg _after _a _am _aop _ax
@@ -843,7 +867,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # pane-scoped knob the tail needs must be BAKED into the command. FLEET_SPAWN_TAIL
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
-  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS")"
+  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH") FLEET_LAUNCH=$(shq "${FLEET_LAUNCH:-}")"
   [ "$CLAIMED_HERE" = 1 ] && _bg="$_bg FLEET_SPAWN_CLAIMED=1"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
@@ -998,6 +1022,13 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
+if [ -n "${FLEET_LAUNCH:-}" ]; then
+  _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
+  stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
+fi
+if [ -n "$TASK_REF" ]; then
+  printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
+fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
@@ -1024,7 +1055,8 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 #   and the reapers copy it into the history ledger's origin column before the
 #   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
 #   parent's worker_id outright — the parent lives on another machine.
-_fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
+if [ -n "${_launch_fid:-}" ]; then _fid=$_launch_fid
+else _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''; fi
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")
@@ -1038,6 +1070,7 @@ _sw+=(\; set-window-option -t "$win" @worktree "$wt")
 fleet_is_fid "${ORIGIN_WID#*/}" && _sw+=(\; set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}")
 # - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
 #   window back to check it — the launcher's own stamp comes later, from the pane
+_sw+=(\; set-window-option -t "$win" @dispatch "$DISPATCH")
 [ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
 # - @agent_def / @agent_spawn (issue #3122): the agent file it starts as and whether
 #   that file grants `spawn` (fleet_spawn_refused reads it) — before the agent

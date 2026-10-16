@@ -13,14 +13,14 @@
 #      is one of conf/fleet-palette.conf's.
 #   C. KEY LINES FIT. Every hint_* string, zh and en, is at most 47 columns (a
 #      54-column client's 96% popup, less its border and fzf's 2-column gutter).
-#   D. WIRED. The bound popups' fzf take their key line from fleet_fzf_hint, the
-#      row menu its frame from fleet_menu_style, and a script's popup goes
+#   D. WIRED. The bound popups' fzf take their key line from fleet_fzf_hint, and
+#      a script's popup goes
 #      through fleet_popup / dash-popup.sh (dash-popup-selftest.sh owns the
 #      one-door lint).
 #
 # Drives bin/dash-popup.sh, bin/fleet-popup-lib.sh, bin/fleet-alerts.sh,
 # bin/usage-modal.sh, bin/tmux-issues.sh, bin/tmux-config.sh,
-# bin/fleet-sidebar-menu.sh and bin/fleet-ui-lang.sh.
+# and bin/fleet-ui-lang.sh.
 # tmux absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 
@@ -44,7 +44,7 @@ export FLEET_UI_LANG=zh TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 # --- B. only palette colours --------------------------------------------------
 pal=$(sed -n "s/^%hidden PAL_[A-Z]*='\(#[0-9a-fA-F]*\)'.*/\1/p" "$ROOT/conf/fleet-palette.conf" | tr 'A-F' 'a-f')
 [ -n "$pal" ] || fail "palette: conf/fleet-palette.conf read nothing"
-used=$(bash -c '. "$1/fleet-popup-lib.sh"; fleet_fzf_opts; fleet_menu_style; printf "%s\n" "$FLEET_FZF_OPTS" "${FMENU_STYLE[@]}"' _ "$BIN" \
+used=$(bash -c '. "$1/fleet-popup-lib.sh"; fleet_fzf_opts; printf "%s\n" "$FLEET_FZF_OPTS"' _ "$BIN" \
   | grep -o '#[0-9a-fA-F]\{6\}' | tr 'A-F' 'a-f' | sort -u)
 [ -n "$used" ] || fail "palette: FLEET_FZF_OPTS names no colour"
 for c in $used; do
@@ -78,15 +78,8 @@ for f in tmux-issues.sh tmux-config.sh dash-config-edit.sh fleet-repo-ask.sh; do
   grep -n -- '--border=rounded' "$BIN/$f" | grep -v 'FZF_FRAME=' | grep -qv '^[0-9]*:[[:space:]]*#' \
     && fail "wired: $f draws its own border inside the popup's"
 done
-grep -q 'fleet_menu_style' "$BIN/fleet-sidebar-menu.sh" && grep -q 'FMENU_STYLE\[@\]' "$BIN/fleet-sidebar-menu.sh" \
-  || fail "wired: the row menu does not take the popup frame"
-# The popups' keys are the CLIENT's since issue #1714 (EPIC #1710 C4): prefix /
-# (⌘P; prefix ?'s sheet went with issue #2362) opens through the one door there,
-# and the node opens none (b c u ! retired).
-grep -E '^bind / ' "$ROOT/conf/tmux-shell.conf" | grep -q 'dash-popup\.sh .*--title popup_' \
-  || fail "wired: the client's prefix / does not open through dash-popup.sh with a title"
 grep -v '^[[:space:]]*#' "$ROOT/conf/tmux-attention.conf" | grep -q 'dash-popup\.sh' && fail "wired: the node conf still opens a popup (#1714)"
-echo "ok: wired — hints, frames, the menu and the client's / bind"
+echo "ok: wired — hints and frames; the node conf opens none"
 
 # --- A. 54 columns, for real ---------------------------------------------------
 T() { "$REAL_TMUX" -S "$ISOCK" "$@"; }

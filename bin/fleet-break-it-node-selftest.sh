@@ -133,7 +133,7 @@
 #                         linked ~/.claude/fleet still stood on — every script its agent ran gone
 #   codex-helper-missing  bin/fleet-node-update.py helpers (#3017): codex without its
 #                         codex-code-mode-host beside it runs no shell command
-#   shift-enter-sends     conf/tmux-shell.conf, conf/tmux-shell-stage.conf, conf/tmux-attention.conf
+#   shift-enter-sends     conf/tmux-attention.conf, conf/tmux-view.conf
 #                         (extended keys, #2760): ⇧↵ through the client's three tmux servers
 #   release-fetch-slow    tokenledger/internal/release fetch.go (Fetcher: Cache, Platforms,
 #                         Stall; go test, when a toolchain is here) + bin/fleet-node-update.py
@@ -814,6 +814,13 @@ drill_login_remove_managed() {
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
 }
+_forget_task_running() {
+  # The daemon may reap a zombie between kill(0) and ps (#4448). An empty /
+  # failed ps is not proof either way: recheck existence before calling it live.
+  kill -0 "$1" 2>/dev/null && ! ps -o stat= -p "$1" 2>/dev/null | grep -q '^ *Z' \
+    && kill -0 "$1" 2>/dev/null
+}
+
 # linux-remove-task-running (#3379): `login remove <X> --host <linux machine>`
 # failed at [1c] — the daemon dropped the login, but its fleet-base-sync.sh sat
 # in a `git fetch` hung on the network, and `account forget` only WAITED
@@ -822,36 +829,49 @@ drill_login_remove_managed() {
 # then KILL — this one ignores TERM — and the removal goes on.
 drill_linux_remove_task_running() {
   CAP=20
-  local sb t0 tpid
-  sb="$WORK/forget-hung"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/LaunchDaemons"
-  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
-  printf '#!/bin/bash\ntrap "" TERM\nsleep 300\n' > "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  local sb t0 tpid cpid bpid
+  sb="$WORK/forget-hung"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/Users/bob/.claude/fleet/bin" "$sb/LaunchDaemons"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}, "bob": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" "$sb/Users/bob" > "$sb/passwd.json"
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 300 &\necho "$!" > "$0.child"\nwait\n' > "$sb/Users/alice/.claude/fleet/bin/hung.sh"
   chmod +x "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  printf '#!/bin/bash\nexec sleep 300\n' > "$sb/Users/bob/.claude/fleet/bin/hung.sh"
   printf '{"children": [], "tasks": [], "account": [{"name": "base-sync", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/hung.sh"], "every": 1}]}\n' > "$sb/table.json"
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
     FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' \
     FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1
-  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
+  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 \
+    && python3 "$BIN/fleet-node-supervisor.py" account adopt bob >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
   python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
   printf '%s\n' "$!" >> "$WORK/cred-pids"
   _tp() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("tasks", {}).get(sys.argv[2]) or {}).get("pid") or "")' \
            "$sb/db/state.json" "$1" 2>/dev/null; }
-  _has_tp() { [ -n "$(_tp alice/base-sync)" ]; }
-  until_ok 10 _has_tp || { WHY="alice's task never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
+  _has_tp() { [ -n "$(_tp "$1")" ]; }
+  until_ok 10 _has_tp alice/base-sync && until_ok 10 _has_tp bob/base-sync \
+    && until_ok 10 test -s "$sb/Users/alice/.claude/fleet/bin/hung.sh.child" \
+    || { WHY="tasks never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
   tpid=$(_tp alice/base-sync)
+  bpid=$(_tp bob/base-sync)
+  cpid=$(cat "$sb/Users/alice/.claude/fleet/bin/hung.sh.child")
+  python3 -c 'import os,sys; a,c,b=map(int,sys.argv[1:]); assert os.getpgid(a)==os.getpgid(c)==a; assert os.getpgid(b)==b!=a' \
+    "$tpid" "$cpid" "$bpid" || { WHY="task process groups do not match their recorded pids"; _forget_unset; return 1; }
   t0=$(now)
   python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
     || { WHY="account forget failed on a hung task: $(tail -1 "$sb/forget.out")"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   # ended is ended: a killed run waits as a zombie for the daemon's tick to reap
   # it, and forget no longer waits for that (#4044)
-  kill -0 "$tpid" 2>/dev/null && ! ps -o stat= -p "$tpid" 2>/dev/null | grep -q '^ *Z' \
+  _forget_task_running "$tpid" \
     && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
+  _forget_task_running "$cpid" \
+    && { WHY="alice's task child still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   grep -q 'sent KILL' "$sb/forget.out" || { WHY="forget never said it killed the run: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
-  python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \
-    || { WHY="accounts.json still holds alice"; _forget_unset; return 1; }
+  python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); sys.exit(0 if "alice" not in a and a["bob"]["managed"] else 1)' "$sb/db/accounts.json" \
+    || { WHY="accounts.json still holds alice (or lost bob)"; _forget_unset; return 1; }
+  [ "$(_tp bob/base-sync)" = "$bpid" ] && _forget_task_running "$bpid" \
+    || { WHY="forget stopped or replaced bob's task too"; _forget_unset; return 1; }
   SECS=$(since "$t0")
   _forget_unset
-  WHAT="删号时该登录有个挂住的任务（不理 TERM）：account forget 等不到就对它的进程组 TERM 再 KILL，删号照样完成"
+  WHAT="删号时该登录有个挂住的任务（不理 TERM）：account forget 对它的进程组 TERM 再 KILL，父子退出、别的账号任务不停，删号照样完成"
 }
 _forget_unset() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
@@ -1549,6 +1569,16 @@ drill_node_core_old_code() {
 # login, four of a login with no session, and every spare login's issue-bridge /
 # pr-refresh asking GitHub every 15 s through a stand-in that compiled the
 # supervisor's 8k lines each time.
+drill_node_restart_shared_orphan() {
+  CAP=120
+  local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-node-orphans-selftest.sh" 2>&1) \
+    || { WHY="daemon restart left a shared lock holder / process group: $(printf '%s' "$out" | tail -8 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="隔离代理持有真实 flock：守护接管 exec 后的进程，根核心收回无账的旧锁，连续三次重启仍一份；组长先退后仍收顽固子进程，参数里提及脚本的活动作业不碰"
+}
+
 drill_core_restart_leaks_loops() {
   CAP=120
   local t0 out
@@ -1641,16 +1671,11 @@ drill_managed_login_mod_escapes() {
   WHAT="托管登录版本树里 mod/ 的文件是指向运行时的链接，Claude Code 报 Path escapes plugin directory、mod 不加载：link-tree 对 mod/ 真拷贝，旧树由在发布版的下一拍原地补成拷贝，补好后不再动"
 }
 
-# shift-enter-sends (issue #2760): ⇧↵ typed into the client went through three tmux
-# servers (the client, its stage, the machine's fleet session) none of which asked
-# for extended keys, so it reached Claude as a bare ↵ and sent half a sentence. The
-# drill renders the three real confs as fleet-shell.sh fills them, nests them on
-# sockets of its own, types ⇧↵ (CSI 13;2u) into an outer pty and reads what the
-# session's pane — asking for keys the way Claude Code does — received: ⇧↵ itself;
-# FLEET_KEYS_PARITY=0 (the client's two confs without it) is not ⇧↵, as
-# before. Here, not in fleet-break-it-selftest.sh: that run sits at the gate's cap.
+# shift-enter-sends (#2760): the current node/view must preserve extended keys.
+# Type CSI 13;2u into a real pty attached to an isolated node and read the bytes
+# received by a pane asking for keys the same way Claude Code does.
 drill_shift_enter_sends() {
-  CAP=30; local d t0 got par s ROOT REAL_TMUX
+  CAP=30; local d t0 got s ROOT REAL_TMUX
   ROOT="$(cd "$BIN/.." && pwd)"; REAL_TMUX=$(command -v tmux 2>/dev/null)
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   d=$(mktemp -d /tmp/brk-keys.XXXXXX) || { WHY="mktemp"; return 1; }   # AF_UNIX: a short path
@@ -1671,7 +1696,7 @@ tm, d = sys.argv[1], sys.argv[2]
 pid, fd = pty.fork()
 if pid == 0:
     os.environ.update(TERM="xterm-256color", HOME=d); os.environ.pop("TMUX", None)
-    os.execvp(tm, [tm, "-S", d + "/s", "attach", "-t", "shell"])
+    os.execvp(tm, [tm, "-S", d + "/n", "attach", "-t", "node"])
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
 ANS = ((rb"\x1b\[>0?q", b"\x1bP>|iTerm2 3.6.6\x1b\\"), (rb"\x1b\[>0?c", b"\x1b[>0;95;0c"),
        (rb"\x1b\[0?c", b"\x1b[?62;22c"), (rb"\x1b\[\?996n", b"\x1b[?997;1n"),
@@ -1700,32 +1725,22 @@ print("".join(open(d + "/rec.out").read().split()))
 os.kill(pid, 9)
 PY
   t0=$(now)
-  for par in 1 0; do
     mkdir -p "$d/conf"
-    for s in tmux-shell tmux-shell-stage tmux-attention fleet-palette tmux-bar tmux-node-human tmux-view; do
-      sed -e "s#__BIN__#$BIN#g" -e "s#__PARITY__#$par#g" -e 's#__PREFIX__#C-b#g' -e 's#__STAGE__#kst#g' \
+    for s in tmux-attention fleet-palette tmux-bar tmux-node-human tmux-view; do
+      sed -e "s#__BIN__#$BIN#g" -e 's#__PREFIX__#C-b#g' -e 's#__STAGE__#kst#g' \
           -e 's#__SESS__#ks#g' -e 's#__PASTE__#0#g' -e '/^set-hook -g /d' -e '/^run-shell /d' \
           "$ROOT/conf/$s.conf" > "$d/conf/$s.conf"
     done
     HOME="$d" "$REAL_TMUX" -S "$d/n" -f "$d/conf/tmux-attention.conf" new-session -d -s node -x 96 -y 24 \
       "python3 $d/rec.py $d/rec.out"
     HOME="$d" "$REAL_TMUX" -S "$d/n" set -t node prefix None
-    HOME="$d" "$REAL_TMUX" -S "$d/st" -f "$d/conf/tmux-shell-stage.conf" new-session -d -s stage -x 98 -y 26 \
-      "TMUX= exec $REAL_TMUX -S $d/n attach -t node"
-    HOME="$d" "$REAL_TMUX" -S "$d/s" -f "$d/conf/tmux-shell.conf" new-session -d -s shell -x 100 -y 28 \
-      "TMUX= exec $REAL_TMUX -S $d/st attach -t stage"
     got=$(python3 "$d/term.py" "$REAL_TMUX" "$d" 2>/dev/null)
-    for s in s st n; do "$REAL_TMUX" -S "$d/$s" kill-server 2>/dev/null; done
-    if [ "$par" = 1 ] && [ "$got" != 1b5b31333b3275 ]; then
+    "$REAL_TMUX" -S "$d/n" kill-server 2>/dev/null
+    if [ "$got" != 1b5b31333b3275 ]; then
       rm -rf "$d"; WHY="⇧↵ reached the session as [$got] — not ⇧↵ (1b5b31333b3275; 0d = ↵, it sends)"; return 1
     fi
-    # off: not ⇧↵ — as before (a bare ↵ here; an older tmux drops the key)
-    if [ "$par" = 0 ] && [ "$got" = 1b5b31333b3275 ]; then
-      rm -rf "$d"; WHY="FLEET_KEYS_PARITY=0 still hands ⇧↵ on — not as before"; return 1
-    fi
-  done
   rm -rf "$d"
-  SECS=$(since "$t0"); WHAT="⇧↵ 穿过客户端、stage、节点三层 tmux 到会话还是 ⇧↵（扩展键）；关掉开关就不再是 ⇧↵，如今天"
+  SECS=$(since "$t0"); WHAT="⇧↵ 经当前节点/看台的 tmux 配置到会话仍是 ⇧↵（扩展键）"
 }
 
 # spotlight-on (#3402): a managed Mac with a volume indexing and a person's

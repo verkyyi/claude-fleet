@@ -136,14 +136,15 @@ eq "E: nothing registered: exit 0" 0 "$rc"
 has "E: …and says how to register one" "没有登记的后台服务或定时任务" "$e"
 
 # ------------------------------------------------------------------------- F ----
-H="$WORK/hubs"; mkdir -p "$H/tmp" "$H/conf"
+H="$WORK/hubs"; mkdir -p "$H/tmp" "$H/conf/fleets/services"
+printf 'CCQUOTA_FLEET=1\n' > "$H/conf/fleets/services/conf"
 cat > "$H/nodes.json" <<'EOF'
 {"machines":[{"hostname":"mac-d.x","status":"online","ncpu":4,"services_at":"2026-10-09T07:00:00Z","services":[{"name":"daily-report","kind":"task","login":"carol","state":"failed","last_log_line":"give up"}]},
              {"hostname":"mac-a","status":"online","ncpu":4}],
  "alerts":[{"kind":"service_failed","subject":"mac-d.x/carol/daily-report","raised_at":"2026-10-09T07:01:00Z"},{"kind":"node_lost","subject":"x"}]}
 EOF
 printf '{"sessions":[]}\n' > "$H/s.json"; printf '{"per_account":[]}\n' > "$H/l.json"
-TMPDIR="$H/tmp/" FLEET_CONF_DIR="$H/conf" CCQUOTA_FLEET=1 FLEET_HUB_SESSIONS_CLIENT=fleet-shell \
+TMPDIR="$H/tmp/" FLEET_CONF_DIR="$H/conf" CCQUOTA_FLEET=1 \
   FLEET_HUB_SESSIONS_CMD="cat '$H/s.json'" FLEET_HUB_NODES_CMD="cat '$H/nodes.json'" FLEET_HUB_LIMITS_CMD="cat '$H/l.json'" \
   FLEET_HUB_SUMMARY_EVERY=0 FLEET_LIVE_DIR="$H/none" bash "$BIN/fleet-hub-sessions.sh" --refresh 2>"$H/err" ||
   fail "F: --refresh failed" "$(cat "$H/err")"

@@ -102,13 +102,13 @@ preview ctrl-p alt-p' ;;
 # The task list's keys (issue #896 → #1950): none. The list only shows and taps
 # (EPIC #1949 C1) — its ⌃n ⌃o ⌃s ⌃t ⌃r ⌃i ⌃k, `.`, `?`, the input line and its
 # editing keys went with the `fleet-sidebar` key table; what they did is a verb
-# the list takes off @sidebar_ask (fleet-sidebar.py `act`), and the switcher's
+# the list takes off @sidebar_ask (fleet_view.py `act`), and the switcher's
 # commands reach it there (EPIC #1949 C3). So there is no `sidebar` panel.
 # Switching sessions from anywhere in the client (issue #1903, EPIC #1906 C10).
 # NOT fzf and not ⌃-chords: on the Mac each row is a ⌘ chord that the iTerm2
 # Dynamic Profile `fleet` (bin/fleet-iterm-profile.py, written from THIS table)
 # turns into a private code `ESC [ <code> ~` — codes no terminal sends for a real
-# key — which conf/tmux-shell.conf catches as `user-keys[<code>]` → `User<code>`.
+# key — which conf/tmux-view.conf catches as `user-keys[<code>]` → `User<code>`.
 # Every other terminal reaches the same action with the prefix key in the last
 # column (`F9` is a root key, no prefix). Columns: action, ⌘ glyph, iTerm2 key
 # (`0x<char>-0x<modifier mask>`, as iTerm2 spells its Keyboard Map: 0x100000 ⌘,
@@ -116,10 +116,9 @@ preview ctrl-p alt-p' ;;
 # collides with a ⌘ chord, so nothing here remaps; `list` prints the table as is.
 # bin/fleet-keys-selftest.sh holds it in lockstep with the conf, the sheet and
 # the profile. `new` (issue #1953 → #3119): ⌘N opens a NEW session — a no-repo
-# one on the home machine, its input the keyboard's (fleet-shell.sh portal; a
-# 看台's fleet_view.go_new); with FLEET_COMPOSE=1 the writing area on the right
-# (bin/fleet-compose.py) — prefix c elsewhere, tmux's own new-window key, which
-# the client has no use for.
+# one on the home machine, its input the keyboard's (the 看台's
+# fleet_view.go_new) — prefix c elsewhere, tmux's own new-window key, which the
+# client has no use for.
 # `fold` (issue #2167): ⌘. opens or shuts the sub-tasks of the session in view
 # (on a sub-task: shuts its parent) — the list's caret, from wherever the
 # keyboard is; prefix . elsewhere (tmux's move-window prompt, no use here).

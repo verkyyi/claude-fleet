@@ -46,6 +46,8 @@
 #   H  (issue #3452) ⚡ opens the session but the client's `fleet ls --json` cannot
 #      be read (202937a7's spinner byte, #3444): step 8 FAILs NAMING the list, never
 #      «no question, no row» — drill 30 read that as words sent to the old session
+# UI dependencies: fleet_view.py and fleet_panel.py. The real panel's search,
+# saved composer and explicit draft button are part of this drill's contract.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 DRILL="$BIN/fleet-onboard-drill.sh"
@@ -71,9 +73,30 @@ LOGIN="drill${ID}"
 LOGIN=${LOGIN:0:16}
 FX="odfx${ID}"                 # the node's fleet: its conf dir name = its socket label
 CSOCK="fleet-drill-$LOGIN"     # the drill's own client server
+# kill-server acknowledges the request before all attached clients are gone.
+# Wait for THIS server's PID before reusing its socket (issue #4459); failed
+# shutdown is an error, never a retry of new-session against a dying server.
+stop_server() {
+  local pid
+  pid=$(TMUX='' "$TMUXB" "$@" display-message -p '#{pid}' 2>/dev/null) || return 0
+  TMUX='' "$TMUXB" "$@" kill-server >/dev/null 2>&1 || return 1
+  python3 - "$pid" <<'PY'
+import subprocess, sys, time
+pid = sys.argv[1]
+end = time.monotonic() + 5
+while True:
+    state = subprocess.run(['ps', '-p', pid, '-o', 'stat='], stdout=subprocess.PIPE).stdout.strip()
+    if not state or state.startswith(b'Z'):
+        break  # a zombie has closed its socket too, even under a slow PID 1
+    if time.monotonic() >= end:
+        sys.exit('isolated tmux server %s did not exit after kill-server' % pid)
+    time.sleep(.02)
+PY
+}
 cleanup() {
-  TMUX='' "$TMUXB" -L "$CSOCK" kill-server >/dev/null 2>&1
-  TMUX='' "$TMUXB" -L "$FX" kill-server >/dev/null 2>&1
+  stop_server -L "$CSOCK"
+  stop_server -L "$FX"
+  [ -z "${IN:-}" ] || stop_server -S "$IN"
   rm -rf "$T"
 }
 trap cleanup EXIT
@@ -185,8 +208,7 @@ EOF
 
 # start_client <node home> <machine the list names>
 start_client() {
-  TMUX='' "$TMUXB" -L "$CSOCK" kill-server >/dev/null 2>&1
-  TMUX='' "$TMUXB" -L "$FX" kill-server >/dev/null 2>&1
+  stop_server -L "$CSOCK" && stop_server -L "$FX" || exit 1
   rm -rf "$T/client/st"; mkdir -p "$T/client/st"
   ln -s "$1" "$T/client/st/node"
   printf '%s' "$2" > "$T/client/node-name"
@@ -323,8 +345,7 @@ VC="$T/vconf"
 LH="$T/homes/$LOGIN"
 RHOME="$T/thinhome"
 thin_down() {
-  TMUX='' "$TMUXB" -L "$CSOCK" kill-server >/dev/null 2>&1
-  TMUX='' "$TMUXB" -S "$IN" kill-server >/dev/null 2>&1
+  stop_server -L "$CSOCK" && stop_server -S "$IN"
 }
 mkdir -p "$VC/remote-views" "$T/vg" "$T/vstate" "$RHOME/.claude/fleet/bin" "$LH/.local/share/claude-fleet/bin" "$LH/.local/bin"
 # the client's own switch table, as its install carries it
@@ -373,7 +394,13 @@ unset TMUX TMUX_PANE
 cd "$RHOME" && HOME="$RHOME" exec sh -c "\$last"
 EOF
 # fleet-remote-view.sh attach --thin's stand-in: the 看台 grouped onto fl with the
-# fleet-view key table, its row (the token thin sent), cur, then the attach
+# fleet-view key table and its row (the token thin sent). Like the real attach,
+# say cur AFTER the terminal is initialized, never before exec tmux: tty_start
+# can discard those pending bytes, leaving a visible view with no drawn log.
+cat > "$T/cur.sh" <<'EOF'
+#!/bin/sh
+printf '\033]7502;cur;token=%s;m=home1;l=%s;w=U/f0\007' "$2" "$(id -un)" > "$1"
+EOF
 cat > "$RHOME/.claude/fleet/bin/fleet-remote-view.sh" <<EOF
 #!/bin/bash
 view= token=
@@ -383,7 +410,7 @@ t has-session -t "=fl@view-\$view" 2>/dev/null || t new-session -d -t fl -s "fl@
 t set-option -t "fl@view-\$view" key-table fleet-view
 printf '/dev/null\\tfl\\tthin\\t%s\\t%s\\tcur=U/f0\\troute=lan\\tdevice=\\ttoken=%s\\tfuid=U\\tnode=home1\\n' \\
   "\$(date +%s)" "\$\$" "\$token" > "$VC/remote-views/\$view"
-printf '\\033]7502;cur;token=%s;m=home1;l=%s;w=U/f0\\007' "\$token" "\$(id -un)"
+t set-hook -t "fl@view-\$view" client-attached "run-shell 'sh $T/cur.sh \"#{client_tty}\" \"\$token\"'"
 exec "$TMUXB" -S "$IN" attach -t "fl@view-\$view"
 EOF
 chmod +x "$T/claude.sh" "$T/newsess.sh" "$T/argv.sh" "$T/ssh.sh" "$RHOME/.claude/fleet/bin/fleet-remote-view.sh"
@@ -402,31 +429,106 @@ print(json.dumps([{"name": n, "title": t, "key": "wid:U/" + f, "node": "home1"} 
 EOF
 chmod +x "$LH/.local/bin/fleet"
 
+# Force the first PTY read to happen AFTER attach has initialized its terminal.
+# A cur printed before exec tmux attach can be flushed away (issue #4459).
+# Only scheduling changes: the real thin client, parser and log writer run.
+cat > "$T/late-reader.py" <<'PY'
+import os, pathlib, runpy, subprocess, sys, time
+
+thin, tmux, sock, ready = sys.argv[1:]
+fork = os.fork
+def late_fork():
+    pid = fork()
+    if pid:
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            clients = subprocess.run([tmux, '-S', sock, 'list-clients', '-F', '#{client_session}'],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            if b'fl@view-' in clients.stdout:
+                pathlib.Path(ready).write_text('attached before the first PTY read\n')
+                break
+            time.sleep(.02)
+    return pid
+os.fork = late_fork
+sys.argv = [thin]
+runpy.run_path(thin, run_name='__main__')
+PY
+
+# Fail with enough evidence to separate startup, attach, OSC and screen failures.
+# Never print the registry row: it carries the connection token.
+thin_diag() {
+  printf 'thin fixture: %s\n' "$1" >&2
+  TMUX='' "$TMUXB" -S "$IN" display-message -p 'home pid=#{pid} session=#{session_name}' >&2
+  TMUX='' "$TMUXB" -S "$IN" list-clients -F 'client pid=#{client_pid} session=#{client_session} tty=#{client_tty}' >&2
+  cat "$T/reader.ready" "$LH/.cache/claude-fleet/thin.log" 2>/dev/null >&2
+  TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill 2>/dev/null | sed '/^ *$/d' | tail -n 8 >&2
+  return 1
+}
+
 # start_thin <claude mode>: the home up, the real thin client in the drill's pane
 start_thin() {
-  thin_down
-  rm -rf "$T/new.argv" "$LH/.cache/claude-fleet/thin.log" "$VC/remote-views/"*
+  thin_down || { thin_diag 'shutdown failed'; return 1; }
+  rm -rf "$T/new.argv" "$T/reader.ready" "$LH/.cache/claude-fleet/thin.log" "$VC/remote-views/"*
+  : > "$T/panel.rows"
   printf '%s' "$1" > "$T/claude.mode"
   env -u TMUX -u TMUX_PANE HOME="$T/vhome" FLEET_CONF_DIR="$VC" FLEET_STATUS_G="$T/vg" FLEET_SWITCH_STATE="$T/vstate" \
     FLEET_UI_LANG=zh LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 FLEET_VIEW_NEW_CMD="sh $T/newsess.sh" \
-    FLEET_VIEW_ROWS_CMD=true FLEET_DISPATCH_AGENTS_HERE=claude FLEET_AGENT=claude FLEET_VIEW_REFRESH=0 \
-    "$TMUXB" -S "$IN" -f /dev/null new-session -d -s fl -x 150 -y 36 -n 我的会话 "bash '$T/claude.sh'" || return 1
-  TMUX='' "$TMUXB" -S "$IN" source-file "$ROOT/conf/tmux-view.conf" || return 1
+    FLEET_VIEW_ROWS_CMD="cat '$T/panel.rows'" FLEET_DISPATCH_AGENTS_HERE=claude FLEET_AGENT=claude FLEET_VIEW_REFRESH=0 \
+    "$TMUXB" -S "$IN" -f /dev/null new-session -d -s fl -x 150 -y 36 -n 我的会话 "bash '$T/claude.sh'" \
+    || { thin_diag 'home server creation failed'; return 1; }
+  TMUX='' "$TMUXB" -S "$IN" source-file "$ROOT/conf/tmux-view.conf" \
+    || { thin_diag 'view keys failed'; return 1; }
   mkdir -p "$T/vhome"
   TMUX='' "$TMUXB" -L "$CSOCK" new-session -d -s drill -x 160 -y 40 \
     "env -u XDG_CACHE_HOME -u FLEET_THIN_LOG HOME='$LH' FLEET_THIN_ARGV_CMD='sh $T/argv.sh' FLEET_THIN_UPDATE_CMD=true \
 FLEET_CLIENT_XTVERSION=0 FLEET_ITERM_KEYS=0 FLEET_UI_LANG=zh FLEET_THIN_HUB_PROBE_CMD=true \
-python3 '$BIN/fleet-thin.py'; sleep 600"
+python3 '$T/late-reader.py' '$BIN/fleet-thin.py' '$TMUXB' '$IN' '$T/reader.ready'; sleep 600" \
+    || { thin_diag 'client server creation failed'; return 1; }
   local n=40
   while [ "$n" -gt 0 ]; do
     [ -s "$LH/.cache/claude-fleet/thin.log" ] && TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill | grep -q 'Claude Code' && return 0
     sleep 0.5; n=$((n - 1))
   done
-  return 1
+  thin_diag 'no drawn log and Claude Code screen within 20s'
+}
+pkeys() { TMUX='' "$TMUXB" -L "$CSOCK" send-keys -t drill "$@"; }
+pseen() { TMUX='' "$TMUXB" -L "$CSOCK" capture-pane -p -t drill | grep -Eq -- "$1"; }
+pwait() {
+  local end=$((SECONDS + 20))
+  until pseen "$1"; do
+    [ "$SECONDS" -lt "$end" ] || return 1
+    sleep 0.2
+  done
 }
 ROOT="$(cd "$BIN/.." && pwd)"
 if command -v python3 >/dev/null 2>&1 && start_thin ok; then
   ok 'E: the real thin client is up in the drill pane, on the 看台'
+  [ -s "$T/reader.ready" ] && ok 'E: cur survives attach before the first PTY read' || bad 'E: late reader was not exercised'
+  # Keep a real cancelled draft at control 6 (Cancel), with a newline entered in
+  # its editor. The drill must replace it and normalize focus before opening.
+  pkeys -H 1b 5b 39 32 37 7e
+  if pwait '⚡ 新会话'; then
+    pkeys -l stale; sleep 0.3; pkeys Up Enter
+    if pwait '开窗预填'; then
+      [ ! -s "$T/new.argv" ] && ok 'E: opening the composer does not open a session' || bad 'E: composer opened a session'
+      pkeys Enter; sleep 0.3
+      [ ! -s "$T/new.argv" ] && ok 'E: editor Enter does not open a session' || bad 'E: editor Enter opened a session'
+      pkeys Tab Tab Tab Tab Tab Tab
+      sleep 0.3; pkeys Escape; sleep 0.3; pkeys Escape
+      end=$((SECONDS + 20))
+      while pseen '⚡'; do
+        [ "$SECONDS" -lt "$end" ] || { bad 'E: cancelled panel stayed open'; break; }
+        sleep 0.2
+      done
+      if python3 - "$VC/panel-drafts" <<'PY'
+import json, pathlib, sys
+drafts = [json.loads(p.read_text()) for p in pathlib.Path(sys.argv[1]).glob('*.json')]
+assert len(drafts) == 1 and drafts[0]['text'] == 'stale\n' and drafts[0]['control'] == 6, drafts
+PY
+      then ok 'E: cancelled draft saves newline and button focus'
+      else bad 'E: cancelled draft fixture was not saved'; fi
+    else bad 'E: composer did not appear'; pkeys Escape; fi
+  else bad 'E: panel did not appear'; fi
   out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
   for s in scratch claude-answers; do
     if printf '%s\n' "$out" | grep -Eq "^PASS +$s "; then ok "E: step $s PASS"
@@ -437,7 +539,10 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
     *'--no-repo'*'--draft first'*) ok 'E: ⌘P → ⚡ ran the panel'"'"'s new session with an unsent draft (do new --draft first)' ;;
     *) bad "E: the new-session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
   esac
-  printf '%s\n' "$out" | grep -q '⌘P，敲「first」，⚡ 回车' && ok 'E: steps.md says ⌘P, never prefix c' || bad 'E: steps.md does not name ⌘P'
+  printf '%s\n' "$out" | grep -q '⌘P，敲「first」，↑ 回车编辑，清空后预填，选「开窗预填（不发送）」回车' && ok 'E: steps.md names ⌘P, editing and the explicit draft button' || bad 'E: steps.md does not name the current panel flow'
+  [ "$(wc -l < "$T/new.argv" 2>/dev/null | tr -d ' ')" = 1 ] && ok 'E: the explicit draft button calls the opener exactly once' || bad 'E: duplicate or missing open'
+  grep -Eq -- '--agent claude( |$)' "$T/new.argv" && ok 'E: the loaded default agent is used' || bad 'E: default agent missing'
+  grep -Eq -- '--prompt|stale' "$T/new.argv" && bad 'E: submitted prompt or stale draft escaped' || ok 'E: only the replacement draft is passed, never submitted'
   # tmux's stock new-window (prefix c, drill 29) starts the default shell: no command
   TMUX='' "$TMUXB" -S "$IN" list-windows -t fl -F 'x#{pane_start_command}' | grep -qx x \
     && bad 'E: a bare shell window opened on the home (prefix c?)' || ok 'E: no stray shell window on the home'
@@ -447,12 +552,19 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
   # H (issue #3452): ⚡ opened the session, but the client's `fleet ls` cannot be
   # read — the FAIL names the list, never «no question, no row»
   if start_thin ok; then
+    # A search HIT: ↑ must wrap from the existing session to New, not enter it.
+    ( IFS=$'\037'; row=( '@0' working x existing ' ' '' 0 '' '' '' - 50% ok 'first existing' '' '' '' '' '' ); printf '%s\n' "${row[*]}" ) > "$T/panel.rows"
     echo crash > "$T/ls.mode"
     out=$(drill env FLEET_DRILL_ONLY=8 FLEET_DRILL_STEP_SECS=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
     rm -f "$T/ls.mode"
     if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +fleet ls --json could not be read.*UnicodeDecodeError'; then
       ok 'H: an unreadable fleet ls is named in the FAIL, not «no row»'
-    else bad "H: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
+    else
+      bad "H: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"
+      cat "$T"/fleet-onboard-drill.*/screen-*-scratch-nopanel.txt 2>/dev/null || :
+    fi
+    grep -q 'first existing' "$T"/fleet-onboard-drill.*/screen-*-scratch-panel-words.txt \
+      && ok 'H: the search matched the existing session' || bad 'H: matching session fixture missing'
     case "$(cat "$T/new.argv" 2>/dev/null)" in
       *'--draft first'*) ok 'H: the panel did open the new session' ;;
       *) bad "H: no new session argv: $(cat "$T/new.argv" 2>/dev/null)" ;;
@@ -461,14 +573,42 @@ if command -v python3 >/dev/null 2>&1 && start_thin ok; then
 
   # R (issue #3458): ⚡ ↵ and the home's spawner refuses — the panel says WHY
   # (do new's reason, not a bare 「新会话没开起来」) and the drill's FAIL quotes it
+  # Keep one real connection alive briefly AFTER kill-server replies. A new
+  # session on the same socket must wait for the old server, not race its exit.
+  old_pid=$(TMUX='' "$TMUXB" -S "$IN" display-message -p '#{pid}')
+  python3 - "$TMUXB" "$IN" "$T/held" <<'PY' &
+import pathlib, socket, subprocess, sys, time
+tmux, sock, mark = sys.argv[1:]
+with socket.socket(socket.AF_UNIX) as pin:
+    pin.connect(sock)
+    pathlib.Path(mark).write_text('connected\n')
+    end = time.monotonic() + 5
+    while time.monotonic() < end:
+        probe = subprocess.run([tmux, '-S', sock, 'has-session'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if b'server exited unexpectedly' in probe.stderr:
+            pathlib.Path(mark).write_text('shutdown observed while connection held\n')
+            time.sleep(.3)
+            break
+        time.sleep(.02)
+    else:
+        sys.exit('old server never entered shutdown')
+PY
+  holder=$!
+  end=$((SECONDS + 5))
+  while [ ! -s "$T/held" ] && [ "$SECONDS" -lt "$end" ]; do sleep 0.02; done
+  [ -s "$T/held" ] || bad 'R: exit overlap fixture did not connect'
   if start_thin ok; then
+    wait "$holder" && grep -q '^shutdown observed' "$T/held" \
+      && [ "$(TMUX='' "$TMUXB" -S "$IN" display-message -p '#{pid}')" != "$old_pid" ] \
+      && ok 'R: old server exited before the same socket was rebuilt' || bad 'R: old server still alive or overlap not exercised'
     echo refuse > "$T/new.mode"
     out=$(drill env FLEET_DRILL_ONLY=8 FLEET_DRILL_STEP_SECS=20 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?
     rm -f "$T/new.mode"
     if [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -Eq '^FAIL +scratch +.*新会话没开起来：fleet at capacity: 4/4'; then
       ok 'R: a refused ⚡ open names its reason on the panel and in the FAIL'
     else bad "R: exit $rc: $(printf '%s\n' "$out" | grep -E '^(PASS|FAIL|SKIP)' | head -n 3)"; fi
-  else bad 'R: the thin client did not come up'; fi
+  else bad 'R: the thin client did not come up'; wait "$holder"; fi
 
   if start_thin apierr; then
     out=$(drill env FLEET_DRILL_ONLY=8 bash "$DRILL" --login "$LOGIN" --name first 2>&1); rc=$?

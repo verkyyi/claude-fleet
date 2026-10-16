@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-daemon-watch-selftest.sh — the interval-daemon liveness alarm and its
 # per-unit self-heal (issue #639). Drives the REAL bin/fleet-daemon-lib.sh,
-# bin/fleet-daemon-watch.sh and bin/tmux-status.sh against a fake `launchctl` on
+# bin/fleet-daemon-watch.sh and bin/fleet-alerts.sh's `refresh --kick` against a fake `launchctl` on
 # PATH — no launchd, no tmux server, no network.
 #
 # WHY THIS EXISTS ON TOP OF fleet-collect-stale-selftest.sh. #636/#638 instrumented
@@ -67,7 +67,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES='fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh tmux-status.sh fleet-alerts.sh'
+FILES='fleet-daemon-watch.sh fleet-daemon-lib.sh usage-lib.sh fleet-alerts.sh fleet-palette.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -149,7 +149,8 @@ watch_err() { { bash "$WORK/bin/fleet-daemon-watch.sh" "$@" >/dev/null; } 2>&1; 
 # The bar only COUNTS alerts since issue #1238: render it (TTL 0 = rewrite the
 # alerts file every call), then print the bar, the rows, and the raw file (the
 # unit names ride in the daemon row's `detail`).
-bar()   { local b; b=$(FLEET_ALERTS_TTL=0 bash "$WORK/bin/tmux-status.sh" 2>/dev/null); printf '%s\n' "$b"; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; cat "$G/alerts.ndjson" 2>/dev/null; }
+bar()   { FLEET_CONF_DIR="$WORK/noconf" FLEET_ALERTS_TTL=0 bash "$WORK/bin/fleet-alerts.sh" refresh --kick >/dev/null 2>&1
+          bash "$WORK/bin/fleet-alerts.sh" bar 2>/dev/null; echo; bash "$WORK/bin/fleet-alerts.sh" list --plain 2>/dev/null; cat "$G/alerts.ndjson" 2>/dev/null; }
 # tick <unit> <age-seconds> — stamp a unit as last scheduled that long ago.
 tick()  { printf '%s\n' "$(( $(now) - $2 ))" > "$G/$1.tick"; }
 

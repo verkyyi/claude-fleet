@@ -310,16 +310,15 @@ timeout — Enter on the row (the proxy, a direct ssh) still works. The next
 round that stands rewrites `hub_ok` and everything flips back on its own;
 nothing is restarted. Off hub mode nothing changes; with the hub off the file is
 never written. `dash-remote-rows-selftest.sh` leg L, `tmux-status-selftest.sh`
-legs E/G and `fleet-sidebar-selftest.sh` pin it.
+legs E/G and `fleet-view-selftest.sh` pin it.
 
 **One person, several clients** (issue #1715, EPIC #1710 C5; #1932, EPIC #1906
 C13). The hub keeps a client lease per CLIENT, in memory, at most 4 a person
 (`FLEET_CLIENT_MAX` in the hub's environment): `POST /v1/fleet/client` `{action:
 acquire|renew|input|release|list|revoke|get, lease, device, terminal, version,
 last_input, viewing, target}`, signed under `fleet-client@claude-fleet` like the
-session list (a viewer door may GET). `fleet-shell.sh` takes one when it opens
-(`client_open`, through `bin/fleet-client-lease.py`) and its keeper renews it
-every 15 s; 45 s without a renewal and it lapses. A second client of the same
+session list (a viewer door may GET). `fleet_thin_lease.py` on the home machine maintains a lease for each
+attached thin view; 45 s without a renewal and it lapses. A second client of the same
 person — a MacBook, then an iPhone, then an iPad — takes a lease of its OWN, with
 its own action key: nobody goes to standby. The **primary** is the client typed
 into or tapped last: the keeper reads tmux's `#{client_activity}` every 5 s
@@ -368,8 +367,7 @@ system); a LAN one → matched against the LAN endpoints tailnet devices report
 else 通用终端 (`TERM`). A node reads its OWNER's lease with its own token at
 `GET /v1/node/client` (owner = `PrincipalForLogin`, unowned = the operator's).
 **`bin/fleet-client-where.sh` is the one reader** (EPIC rule 7): the hub's lease,
-or with no hub the fleet-shell client attached here (`client.where.json`, the
-client in use); one line, or `--json` `{state device os terminal caps since via
+or with no hub the thin view attached here; one line, or `--json` `{state device os terminal caps since via
 host source}`; exit 0 named · 3 nobody connected · 1 could not tell. Nothing is
 cached, so a takeover shows on the next call. The fleet mod (`mod/fleet/hooks/where.ts`)
 reads it at session start and every 15 s and keeps it as the last `session`
@@ -384,8 +382,8 @@ THAT client through the hub, never through the session's terminal: the node
 `POST /v1/node/client/actions` `{kind: open_url|show_file|notify, url | rport
 path scheme, file name size inline, title body, links {tailnet, hub}, wait}` with
 its own token (to its owner's lease, the C6 rule; `bin/fleet-client-actions.py
-send`), and the client's action loop (`fleet-shell.sh actions` →
-`fleet-client-actions.py run`) long-polls `POST /v1/fleet/client/actions`
+send`). This hub door remains for compatibility with previous releases.
+The removed client's action loop used to long-poll `POST /v1/fleet/client/actions`
 `{action: poll|done, lease}` with its connection certificate and does it on its
 own device: `open` / `xdg-open` (caps `open_url` / `show_file`); a page on the
 session's machine's loopback (`rport`) first forwarded over the client's ssh
@@ -467,7 +465,7 @@ measures it from a fleet pane on A (ten rounds, median), with the watcher half
 over one ssh to B.
 
 **…and acts on them** (issue #1487, EPIC #1479 C8). A remote row's menu (`.` /
-a second tap; `fleet-sidebar-menu.sh`) offers what a local row's does — 发消息 ·
+a second tap; `fleet_view.py`) offers what a local row's does — 发消息 ·
 答授权 / 回答 · 停 · 继续 · 回收 — and every one is a hub WRITE: the item runs
 `bin/fleet-row-remote.sh <action>` (the asking: a popup for the message text
 and for the answer — `[y]` 批准 / `[n]` 拒绝 on a `⊘` row, the option number on a
@@ -501,103 +499,12 @@ Both menus also list **「新建到 mac-a…」** — one item per other machine
 (`dash-issue-new.sh --node=<m>` → `dash-issue-session.sh --node`, #1475); no
 cache, no item.
 
-**The shell on your own computer** (issue #1484, EPIC #1479 C5) — **the `fleet`
-client, the ONLY way in** (issue #1628). `fleet` / `fleet mac-a` (`bin/fleet` →
-`bin/fleet-shell.sh`) always opens the client; there is no fallback to ssh-ing
-into a machine's own list. No tmux / tmux < 3.2 → one line on installing it,
-exit 1; no terminal (a pipe, a script) → exit 2; a client that fails before its
-attach → one line `客户端起不来：<why>` (fail_start), exit 1 — nothing else opens.
-`fleet connect` is route + ssh only: what the client runs inside, and a
-debugging aid (`fleet connect mac-a --print`); `fleet mac-a --print` is refused,
-naming it. An iPad / iPhone ssh's into any machine with the fleet installed and
-runs `fleet` there: the same client, on that machine, and its bar says
-`客户端在 mac-b 上运行` (`client_where` stamps `@fleet_client_remote` =
-`<tty>|<machine>` when `SSH_CONNECTION` is set; `tmux-status.sh`'s `cr=` draws it
-for that tty's client alone).
-The client's right pane rides the fastest line: a reconnect first tries the
-line remembered last, whatever its age (`FLEET_CONNECT_RETEST=last`, issue
-#2886), and re-measures every route only when that one does not answer; while it
-is on the hub relay the window carries `@remote_route relay` — the bar's
-machine chip reads `mac-a · 中转` — and one direct handshake runs every
-`FLEET_CONNECT_UPGRADE_SECS` (15; `fleet connect --probe-direct`, ~0.1–0.2 s);
-when one answers, the pane waits for the keys to rest `FLEET_REMOTE_IDLE_SECS`
-(2), closes the relay's ControlMaster and reconnects direct in about a second —
-≤ 20 s from the line coming back (a re-measure, `FLEET_CONNECT_RETEST=1`).
-`bin/fleet-client-route-selftest.sh` pins all of it. **A person can pin the line
-instead** (issue #2886): `fleet route <machine> relay|direct|tailscale|<route
-name>|<host[:port]>` (⌘P 连接路线…, `/route` there; `fleet connect --route R`)
-writes `~/.config/claude-fleet/routes`, and from then on every connect to that
-machine — `fleet connect`, the warm master, the right pane — takes that one route:
-no handshake, no measuring, never upgraded; a drop reconnects over it with the
-usual backoff, the page and the top line say 「钉住：中转（手动）· 第 N 次重连」
-(`@remote_pin` / `@remote_tries`; `@remote_via` 「<自动|手动> <route>」 once up),
-and after `FLEET_ROUTE_FAIL_HINT` (5) failures in a row the page suggests `fleet
-route <machine> auto` — it never goes back by itself. `fleet route` alone lists
-every machine, its route and source, and the last handshakes. The shell opens the
-same three things a fleet pane shows, without a fleet on that computer: LEFT the
-hub's list, BOTTOM the hub's bar, RIGHT a direct ssh into the session you look
-at. Nothing is rendered anew — the shell is a composition: its own tmux server
-`-L fleet-shell` (the socket label is the session name, as a fleet's is) holding
-ONE window, `home`: the list pane (`fleet-sidebar.py`, drawn by the conf's hooks,
-`conf/tmux-shell.conf`) on the left, and on the right a nested client of the
-shell's STAGE — a second server, `-L fleet-shell-stage`
-(`conf/tmux-shell-stage.conf`), holding ONE proxy window per machine (`mac-a <name>`,
-`@remote=<node>:<wid>`, `fleet-remote-view.sh run --shell`, so the far end
-registers a shell client and hides its own list and bar, #1485). Switching
-machines is a `select-window` on the stage (issue #1759): tmux repaints every
-client of the server a window op runs on, so only the right pane is redrawn —
-the list, the borders and the bar never are (#1702's window per machine on the
-shell's own server repainted the whole screen on every switch;
-`bin/shell-switch-repaint-selftest.sh` measures the bytes). The stage's own top
-line is the right pane's title — the session, and the machine's 中转 / 失联 / 旧
-(`tmux-status.sh part=title`); the bar is `tmux-status.sh` in hub mode. The data is `fleet-hub-sessions.sh --loop` in **client mode**
-(`FLEET_HUB_SESSIONS_CLIENT=<session>`): one pseudo-fleet, every row remote
-(`local`=0, `#me` empty — this computer is a node at most by coincidence, and
-the shell reaches even its own sessions through a nested attach), signed by the
-device's certificate (`fleet-sessions@claude-fleet` — the hub answers only that
-person's rows, `TestFleetSessionsByDeviceOwnRowsOnly`), into a cache of the
-shell's own (`$TMPDIR` = `~/.cache/claude-fleet/shell/tmp`, so `$FLEET_C` never
-touches a node's). Writes are the row menu's, through `fleet-hub-write.sh`.
-Scripts run from a conf-free mirror of `bin/` (`~/.cache/claude-fleet/shell/bin`,
-one symlink per file — the selftest-shadow-root idea), so on a machine that is
-itself a node the operator's `fleet.conf` cannot override the shell's view. A
-row on the SAME machine as the right pane is selected over that pane's own ssh
-connection — `fleet-remote-view.sh select <wid>` through the ControlMaster the
-pane holds (`@remote_ctl`), no reconnect — and a row on another machine switches
-to that machine's window; the far end of every connection is `fleet connect
-<machine> -o ControlPath=…` (the measured routes, this device's certificate,
-renewed by `--enter` first), or a nested attach when the machine is this
-computer. `fleet connect --pick [MACHINE]` is the certificate + machine-pick
-half of `fleet` as one JSON line, which the shell starts from. Keys: ↑↓ / ↵ / `.`
-/ `?` on the list as in a fleet; `prefix q` (and `prefix h`) the previous
-machine; `prefix E` (or `g` / `Space`) the keyboard onto the list; `prefix z` /
-`[` zoom / scroll the session; `prefix ?` every key; F9 zooms the right pane (this
-computer's, never sent on). These are the ONLY person's keys in the fleet (issue
-#1714): a node's fleet session binds none, draws no bar of its own (one static
-`请用 fleet` hint a direct attach sees) and opens no popup. `~/.config/claude-fleet/shell.conf` holds the knobs
-(`FLEET_SHELL_PREFIX`, `FLEET_NODE_ALIASES`, `FLEET_SHELL_WIDTH`, …).
-`bin/fleet-shell-selftest.sh` is the check: a fake hub, a fake `fleet connect`,
-an ssh shim, an isolated socket. The bar's machine chip reads the sessions
-cache's `#node` line when `hub_nodes` has no row (a certificate identity on a
-hub that predates #1502's `/v1/fleet/summary`): `mac-a ●` rather than `?`.
-
-**Which machine's install is old** (issue #644, EPIC #1524 R4). Every node's
-heartbeat carries its live install's HEAD (`fleet-install-version.sh --json`,
-read by the agent every 5 minutes; `/v1/nodes` lists it as `fleet_version`).
-The refresh loop judges that version, once a round and with local git only,
-against the stable mark this login's install-sync daemon keeps fetched as the
-live install's `refs/tags/stable` (`FLEET_LIVE_DIR`, default `~/.claude/fleet`),
-and writes the word as `hub_nodes`' `ver_state`: `ok`, `old:<n>` (n commits
-behind stable), `ahead:<n>`, `off` (not on stable's line), `?` (a commit this
-checkout has not fetched) or empty — no version reported, no live checkout, no
-local tag: unknown, never drawn as current (the #635 rule). Only `old:<n>`
-shows: the bar's machine chip ends in `· 旧` for the machine the current
-window is on — this one included, a lost one too, at every width — and
-`fleet-doctor`'s `install` row lists every machine (`machines (hub): mac-a at
-a1b2c3d — 3 behind stable (OLD) · mac-b at bc4e8e1 — at stable`), a WARN when
-any is old. No cache (hub off, a certificate identity) draws and prints
-nothing; a cache from before #644 has no word and draws nothing.
-`tmux-status-selftest.sh` G/K and `install-version-selftest.sh` H pin it.
+**The client on your own computer** (#3008). `bin/fleet` opens
+`fleet-thin.py`: one foreground loop and one connection to the home machine.
+It writes the iTerm2 profile on a Mac, forwards portable keys, and reconnects
+using the view's current session identity. The home draws the panel and bar;
+its peerlink daemon owns the connections to other (machine, login) pairs.
+`fleet connect` remains the route/ssh diagnostic entry. See [CLIENT.md](CLIENT.md).
 
 **The one-line install carries the shell** (issue #1486, EPIC #1479 C7; it
 is the ONE install line and asks 只看只派 / 承载 and 接 / 不接, everything in
@@ -608,29 +515,12 @@ GitHub's `stable`, answered 「不接」 — issue #1712,
 image embeds (`tokenledger/internal/api/fleetclient/manifest`, the ONE place the
 client's file set is maintained) — then `/install/<path>` for each, SHA-256
 checked, into `~/.claude/fleet/<path>` (the one directory, #1804): `bin/fleet`,
-`fleet-login.py`, `fleet-connect.py`, and everything the shell runs on that
-computer (`fleet-shell.sh`, `fleet-remote-view.sh`, `fleet-hub-sessions.sh`,
-`fleet-hub-write.sh`, the sidebar scripts, `tmux-dashboard-rows.sh`,
-`tmux-status.sh` with the libs they source — `fleet-lib.sh` whole, since the
-row producer and the hub loop source it unconditionally and a shell-only lib
-would be a second code path in the render loop — and `conf/tmux-shell.conf`),
-in the repo's own `bin/` + `conf/` layout so a script's `$BIN/../conf/…`
-resolves as in a checkout. `~/.local/bin/fleet` is a two-line runner of the
-real one (a script, not a symlink: `fleet` finds its siblings in its own `$0`
-directory, which the conf-free mirror relies on). A file the manifest no longer
-lists is removed, so running the line again is the update. The set was fixed by
-running `fleet-shell-selftest.sh` from a root holding only those files; what a
-node needs (spawning, reaping, the daemons, gh) stays off it, and the shell's
-row menu still lists a few node-only items (新建 / 恢复 / 加仓库) that do
-nothing there — #1518. The repo keeps ONE copy of each file (#1803): a hub
-build first runs `bin/fleet-client-pack.sh`, which copies the manifest's files
-into the gitignored embed dir `fleetclient/pack/` (the Dockerfile refuses an
-empty one), so `bin/fleet-client-pack.sh && docker build -t ccquota tokenledger/`;
-`bin/fleet-client-mirror.sh` only keeps the manifest current (`--check`: every
-path in the repo, no copy committed). `TestFleetClientMatchesBin` and
-`fleet-install-selftest.sh` leg A pin it from both sides, and leg E drives the installed `fleet`: a (fake) tmux ≥ 3.2 →
-`fleet-shell.sh` starts its server from the install root's `bin/` and `conf/`;
-no tmux → the one hint and `fleet-connect.py`. The hub image is deployed by
+`fleet-login.py`, `fleet-connect.py`, `fleet-thin.py` and its shared modules.
+`bin/` and `conf/` are canonical; `fleet-client-pack.sh` copies the manifest's
+files into the ignored Go embed directory before the hub build.
+`fleet-client-mirror.sh --check` verifies that every packaged path exists;
+`TestFleetClientMatchesBin` and `fleet-install-selftest.sh` check the package.
+The hub image is deployed by
 hand — but a client does NOT wait for it (issue #1805): every computer follows
 `refs/tags/stable`. The hub learns what stable names from the CI's publish
 (issue #2772, below); before the first one it looks it up on GitHub (every 5
@@ -850,58 +740,14 @@ a row's merges and stage table on a tap, phone-width. The ledger job never reds 
 red would stop mac-follow) and the move ignores it (`--ignore-check ledger`);
 `fleet-train-ledger-selftest.sh`, `TestTrainBottleneck`, `TestReleaseTrainRunRoute`.
 
-**…and steps into them** (issue #1424, EPIC #1419 C5). Enter on a remote row (the
-dash's `dash-enter.sh`, the sidebar's `jump`) runs `bin/fleet-remote-view.sh open`:
-a **proxy window** `mac-a <name>` (its pane header carries the same `mac-a`, so a
-glance says the keys go elsewhere; issue #1475 — the machine's name alone, no ⇄
-since #1621: a proxy window is known by `@remote`, never its name), marked `@remote=<node>:<worker_id>`, whose pane
-is `ssh -tt <host> fleet-remote-view.sh attach <worker_id>` — on the other machine
-that resolves the worker through `fleet_worker_locate`, selects its window and
-attaches to its fleet session. It is a plain **client** of that session, never a
-grouped or linked session of its own: a second session holding the window would
-list it twice in every `list-windows -a`, and `fleet-peer-send` would call the
-worker AMBIGUOUS while the proxy is open. So there is **one proxy window per
-machine** — Enter on another row of the same machine retargets it. Closing
-the window only drops the connection; a drop reconnects (backing off, and
-alternating with the hub relay `fleet connect --proxy` when one is configured;
-in the shell, `fleet connect` re-measures every route instead, #1628).
-The ssh host is the machine label unless `FLEET_REMOTE_SSH` (`mac-a=mac-a-lan`) maps it.
-
-**The machine has no list of its own to get out of the way** (issue #1713, EPIC
-#1710 C3 — #1475/#1485's make-way rule retired). The task list is the CLIENT's:
-`fleet-sidebar.sh` draws it only on the shell's server (`FLEET_SHELL=1`); a node's
-fleet session draws none, and its next sync reaps a list an older version drew.
-Every proxy (`attach <wid> <view>`) and every shell (`attach --shell`, the `fleet`
-shell of EPIC #1479 C5 — over ssh, or nested on the machine itself in the shell's
-own tmux) still registers its client tty under `$FLEET_CONF_DIR/remote-views/<id>`
-as `<tty> <session> <kind=view|shell> <since> <pid>` (fleet-open reads it), and
-attaches to a view session of its own with status line and prefix off — but a
-client arriving or leaving changes nothing on the node: no status line, prefix,
-marker or hook is touched, and no pane is added, removed or moved. The one thing
-a viewed window gives up is its own top header (#1549, `pane-border-status off`),
-ONE WAY: taken at the attach (and at `select` for a window born since), never
-given back, so the viewer's `mac-a …` header is the one title line and no client
-change resizes a pane. The first attach after the upgrade undoes what the retired
-rule left (`@remote_view_saved` / `@remote_view_solo`, the hidden status line and
-prefix, the global `client-attached[77]` / `client-detached[77]` hooks, a
-session-level hook array that shadowed the fleet's `[71]`–`[73]`); `reconcile` /
-`restore <sess>` do the same, for one version. A registration whose attach shell
-is gone (SIGKILLed before its cleanup) never counts and is pruned at the next
-attach, so a tty the next login reuses is not mistaken for a shell. Never `resize-pane -Z`. The local sidebar
-treats a window with `@remote` as a task window, so Enter on a remote row lands
-in the proxy window with the list still on the left and the other machine's pane
-on the right, one list, never the whole window gone remote. ↑↓ in the list leave
-it like any task; `prefix h` returns to the last local window. Every local rail
-skips a proxy window: no dash row (the remote row stands for it), no session in
-either cap tally, no fleet-restore row, no sleep, failover or rate-limit scrape.
-**fleet-open from the remote session** cannot reach the operator's iTerm2
-directly (it trusts this machine's secret only), so `fleet-open.sh` there sees
-its newest client is a registered view with a spool (`<id>.d`, made only when
-`attach` was given a view id — a shell without one has no spool), drops the
-request in it and prints `unconfirmed` (`sent:proxy` before #3538), and a second ssh session on the proxy's own
-connection (ControlMaster) streams it back here, where the local `fleet-open.sh`
-re-issues it — a url as is, a page on that machine's loopback through an
-`ssh -O forward` on the same connection.
+**Views across machines.** Each device has its own grouped view session on
+the home machine. `fleet-view-go.sh` selects the row by worker identity; a row
+on another machine uses that (machine, login)'s peer window over peerlink.
+The node records the view under `$FLEET_CONF_DIR/remote-views/` and removes its
+registration on exit. Reconnects replace the previous attach for that view
+without changing another device's selection. Direct node sessions keep their
+stock key tables. `fleet-view-peer-selftest.sh` and the peerlink drills cover
+routing, ownership and cleanup.
 
 **One issue, one machine** (issue #1422, EPIC #1419 C3). With `CCQUOTA_FLEET=1`,
 `dash-issue-session.sh` takes the cloud hub's lease on `(repo, issue)` before its
@@ -1516,6 +1362,66 @@ policies remain as configured in Fleet. GitHub's claim check is not a distribute
 mutex. Requests with different idempotency keys are separate operations;
 cross-node Issue leases and per-principal aggregate worker budgets are future
 work. Existing machine/Fleet capacity limits still apply.
+
+### Verified accepted launches (launch_v1, #4393)
+
+An accepted C2 dispatch requires `launch_v1` on the selected node, including
+placement back onto the calling node. A downlevel node refuses before sending
+work. Legacy requests without an accepted task keep their existing path.
+The hub claims the C1 task execution owner before transport. Its canonical
+operation input stays unchanged for idempotent replay; the node receives an
+additional `params.launch` binding:
+
+```json
+{"version":1,"operation_id":"<UUID>","task":"T1","owner":"<task owner>","generation":1,"worker_id":"<fleet UUID>/<session UUID>","provider":"codex","attempt_id":"task:T1:g1"}
+```
+
+The initial session UUID is the operation UUID. Explicit transfer keeps that
+lifelong session identity and accepts a new operation and task generation.
+`owner` comes from the task record, not the node audit actor. Provider remains
+immutable within a generation.
+
+`fleet_launch.py` starts the selected native CLI with the task seed held back.
+The existing SessionStart hook observes the root process's kernel executable,
+birth time, version probe and native session ID under that launch supervisor.
+Nested native helpers cannot supply or replace its receipt. After checking the
+current C1 owner/generation and recording actual provider evidence, the
+supervisor delivers the seed once through the existing native inbox. Codex
+first input targets the endpoint and thread witnessed by that root hook.
+Missing CLI, missing proof, authority outage or a provider mismatch withholds
+input; rejected launch cleanup can signal only its own process descendants.
+There is no alternate provider or delivery retry queue.
+
+`result.launch_receipt` repeats all binding fields and adds `actual_provider`,
+`native_session`, `pid`, `birth`, `executable`, `observed_at` and `phase`.
+`verified` proves native identity; `delivered` confirms the seed inbox accepted
+it; `ready` is an unseeded launch; `resumed` is the same native conversation
+reattached without resending the original seed. Codex receipts also carry the
+native inbox endpoint and home. These are execution observations, never task
+completion. C4 consumers must use C1 task state/outcome for completion.
+
+Reconnect reads the existing node operation journal and inspects its unique
+worker identity. A lost acknowledgement can recover the surviving receipt;
+a repeated submit never executes a second start. Lost process/session proof
+returns `unknown`/interrupted, retaining ownership for explicit recovery.
+A resume requires the same provider and native session ID. Restore and its
+pullback map carry the launch binding and receipt; no receipt after a previous
+start forbids a fresh rerun. Legacy restore nudges are withheld on this path.
+
+Native switching uses the existing transfer controller: verify the source
+binding and task authority before cutover, confirm the source stopped, then
+accept C1's explicit transfer and claim the next generation. The existing
+private handoff package records the acceptance attempt, and the existing node
+operation journal records the new launch. An ambiguous acceptance or failed
+target retains the task for recovery; it never automatically switches back or
+creates another generation. Old receipts cannot acquire the new generation.
+
+`fleet-launch-selftest` and the API launch tests use isolated fake native
+processes/adapters and the real operation journals. They cover missing CLI,
+mismatch, lost acknowledgement, replay, restart, PID reuse, nested hooks,
+resume and transfer fencing. They are fixture evidence. C9 owns actual remote
+process acceptance; credential readiness (#3401) and Codex restore identity
+(#3955) remain its external prerequisites. A merged fixture is not a live pass.
 
 Remote configuration writes are limited to:
 

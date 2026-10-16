@@ -34,8 +34,7 @@
 #                   hub_auth_fail gets a client-where line, a clean read drops it
 #   G5. both refused — exit 4 only when every credential is refused; --json
 #                   carries hub_why (the hub's words)
-#   H. local read — no hub: the fleet-shell client attached on this machine
-#                   (client.where.json); none attached → exit 3
+#   H. no hub, no thin lease → exit 3 (thin leases: fleet-thin-notify-selftest.sh)
 # python3 absent → SKIP (exit 0). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -48,7 +47,6 @@ export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" FLEET_CONF_
 unset TMUX TMUX_PANE FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_HUB_TOKEN FLEET_CLIENT_DEVICE SSH_CONNECTION
 unset LC_TERMINAL LC_TERMINAL_VERSION TERM_PROGRAM TERM_PROGRAM_VERSION FLEET_NODE_ALIASES FLEET_CLIENT_WHERE_CMD
 export FLEET_CLIENT_XTVERSION=0 TERM=xterm-256color
-OUT="fcwO$$"; IN="fcwI$$"
 HUBPID=''
 
 FAIL=0; CHECKS=0
@@ -58,9 +56,6 @@ has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) ;; *) fail "$1 (want '$3')"
 hasnt() { CHECKS=$((CHECKS + 1)); case "$2" in *"$3"*) fail "$1 (must not hold '$3')" "$2" ;; esac; }
 cleanup() {
   [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null
-  if command -v tmux >/dev/null 2>&1; then
-    for s in "$OUT" "$IN"; do tmux -L "$s" kill-server 2>/dev/null; done
-  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -166,7 +161,7 @@ cat > "$WORK/hubread" <<EOF
 cat "$WORK/lease.json"
 EOF
 chmod +x "$WORK/hubread"
-export FLEET_CLIENT_WHERE_CMD="$WORK/hubread" FLEET_SHELL_SESSION="$IN" FLEET_SHELL_CACHE="$WORK/shellcache"
+export FLEET_CLIENT_WHERE_CMD="$WORK/hubread"
 cat > "$WORK/lease.json" <<'EOF'
 {"state":"active","lease":{"id":"L1","device":"MacBook","os":"macOS","terminal":"iTerm2 3.6","via":"local","host":"MacBook","caps":["open_url","show_file","notify","iterm2"],"since":"2026-10-05T12:00:00Z"}}
 EOF
@@ -323,41 +318,12 @@ rm -f "$FLEET_CONF_DIR/node.env"
 w=$(python3 "$BIN/fleet-client-lease.py" where); rc=$?
 eq "G no hub anywhere → nohub" '{"state": "nohub"}' "$w"
 
-# --- H. no hub: the fleet-shell client attached here --------------------------------
+# --- H. no hub and no thin lease: nobody connected ---------------------------------
 printf '{"state":"nohub"}\n' > "$WORK/lease.json"
 line=$(bash "$BIN/fleet-client-where.sh"); rc=$?
-eq "H no server → exit 3" "3" "$rc"
-if command -v tmux >/dev/null 2>&1; then
-  mkdir -p "$WORK/shellcache/tmp"
-  printf '{"device": "LocalMac", "os": "macOS", "terminal": "iTerm2 3.6", "via": "local", "host": "LocalMac", "caps": ["open_url", "show_file", "notify", "iterm2"]}\n' \
-    > "$WORK/shellcache/tmp/client.where.json"
-  tmux -L "$IN" -f /dev/null new-session -d -s "$IN" 'sleep 600'
-  line=$(bash "$BIN/fleet-client-where.sh"); rc=$?
-  eq "H server, no client attached → exit 3" "3" "$rc"
-  # a real attached client: a pane of an outer isolated server attached to it
-  tmux -L "$OUT" -f /dev/null new-session -d -x 120 -y 30 "env -u TMUX tmux -L $IN attach -t $IN"
-  n=50; while [ -z "$(tmux -L "$IN" list-clients 2>/dev/null)" ] && [ "$n" -gt 0 ]; do sleep 0.1; n=$((n - 1)); done
-  line=$(bash "$BIN/fleet-client-where.sh"); rc=$?
-  eq "H attached → exit 0" "0" "$rc"
-  eq "H local line" "LocalMac · macOS · iTerm2 3.6 · 能：打开网页、收文件、系统通知、iTerm2" "$line"
-  j=$(bash "$BIN/fleet-client-where.sh" --json)
-  eq "H source local" "local" "$(jf source)"
-  eq "H no hub → hub nohub" "nohub" "$(jf hub)"
-  [ -n "$(jf since)" ] || fail "H since from the file's mtime"
-  # a client from before #1716: no where saved — its device + tmux's terminal word
-  rm -f "$WORK/shellcache/tmp/client.where.json"
-  c=$(tmux -L "$IN" list-clients -F '#{client_name}' | head -n 1)
-  mkdir -p "$WORK/shellcache/tmp/client.dev"
-  printf 'OldMac\n' > "$WORK/shellcache/tmp/client.dev/$(printf '%s' "$c" | tr -c 'A-Za-z0-9._-' '_')"
-  has "H older client: its device" "$(bash "$BIN/fleet-client-where.sh")" "OldMac"
-  # the hub out of reach: the same local answer
-  printf '#!/bin/bash\nexit 1\n' > "$WORK/hubread"
-  has "H hub out of reach → local" "$(bash "$BIN/fleet-client-where.sh")" "OldMac"
-  j=$(bash "$BIN/fleet-client-where.sh" --json)
-  eq "H hub out of reach → hub down (issue #1779)" "down" "$(jf hub)"
-else
-  printf 'skip H attached legs: no tmux\n'
-fi
+eq "H no client → exit 3" "3" "$rc"
+j=$(bash "$BIN/fleet-client-where.sh" --json)
+eq "H no hub → hub nohub" "nohub" "$(jf hub)"
 
 if [ "$FAIL" -gt 0 ]; then
   printf 'fleet-client-where selftest: %d of %d checks FAILED\n' "$FAIL" "$CHECKS" >&2

@@ -43,7 +43,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/testsess/repos" "$WORK/tmp" "$WORK/home"
-for f in dash-raw-session.sh fleet-ticket.sh fleet-lib.sh fleet-gh-lib.sh fleet-ui-lang.sh fleet_reap_policy.py; do
+for f in dash-raw-session.sh fleet-ticket.sh fleet-lib.sh fleet-gh-lib.sh fleet-ui-lang.sh fleet_reap_policy.py fleet_dispatch.py fleet_launch.py; do
   ln -s "$BIN/$f" "$WORK/bin/$f"
 done
 LOG="$WORK/calls"   # every stand-in appends `<name> <args…>` here
@@ -110,7 +110,7 @@ run_raw() {   # env prefix per leg; args → dash-raw-session.sh
   CALL_LOG="$LOG" NEWWIN_LOG="$NEWWIN_LOG" OPTS_LOG="$OPTS_LOG" FLEET_UI_LANG=zh \
     bash ${XTRACE:+-x} "$WORK/bin/dash-raw-session.sh" "$@" testsess >"$WORK/out" 2>"$WORK/err"
 }
-opts() { grep -v '@norepo_sid\|@fleet_id\|@born' "$OPTS_LOG"; }   # minus what is minted per run
+opts() { sed -E 's/"request_id":"[^"]*"/"request_id":"REQUEST"/' "$OPTS_LOG" | grep -v '@norepo_sid\|@fleet_id\|@born'; }   # minus what is minted per run
 seed() { cat "$(find "$WORK" -name 'task_norepo-*' 2>/dev/null | head -1)" 2>/dev/null; }
 
 # ============================ A: the desk ticket ==============================

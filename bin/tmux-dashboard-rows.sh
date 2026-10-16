@@ -366,14 +366,8 @@ epic_v() { en='' ettl='' ebadge=''
 # The repos this dash shows (issue #793): every hosted one, under `all` (#1034).
 # RMANY=1 only in a fleet hosting 2+ repos; then RHEADS is its group headings
 # (fleet_dash_repo_frame, once a frame); a fleet hosting one repo counts RMANY=0.
-# The shell (FLEET_SHELL=1, issue #1680) has no conf: its repos are the hub rows'
-# own (fleet_dash_repo_frame reads the hub cache), so its list groups and folds
-# like a 2+ repo fleet's. A node's dash outside the sidebar has no hub cache to
-# read, which fleet_dash_repo_frame answers from one directory test.
 RMANY=0; RGRPMAP=''; RHEADS=''; RNREPO=0
-if [ "${FLEET_SHELL:-0}" != 1 ] || [ "$SIDEBAR" = 1 ]; then
-  fleet_dash_repo_frame "${FLEET_SESSION:-}"
-fi
+fleet_dash_repo_frame "${FLEET_SESSION:-}"
 # RGRP=1 iff this frame groups its rows by repo (issue #974): a 2+ repo fleet. A
 # one-repo fleet never groups — its frame stays as it was, heading-free, byte
 # for byte.
@@ -708,11 +702,9 @@ fi
 # machine's come from its node, off the hub cache's epicstale_<sess>
 # (fleet-hub-sessions.sh). Each becomes ONE grey row at the top of its repo's
 # group, `#<N> <title>` badged 没人在跑, keyed `epicstale:<ref>[@<machine>]` — a tap
-# asks to reopen its driver (fleet-sidebar.py). No stale mark ⇒ not one line more.
+# asks to reopen its driver (fleet_view.py). No stale mark ⇒ not one line more.
 ESTALE=''                       # ref US machine US age US slug US N, one a line
-# The shell (FLEET_SHELL=1) reads none here: every row there is a machine's, its
-# marks too — they come off the hub cache like the rest.
-if [ "$SIDEBAR" = 1 ] && [ "${FLEET_SHELL:-0}" != 1 ] && [ -d "$FLEET_CONF_DIR/global/epic-running.d" ]; then
+if [ "$SIDEBAR" = 1 ] && [ -d "$FLEET_CONF_DIR/global/epic-running.d" ]; then
   for _ef in "$FLEET_CONF_DIR/global/epic-running.d/"*; do
     [ -f "$_ef" ] || continue
     case "$_ef" in *.tmp.*) continue ;; esac
@@ -893,13 +885,6 @@ PGRP=-2; PINCNT=0; PINFOLD=0
 # opposite polarity — the token `ended:open` (a slug never holds a `:`) in
 # @repo_fold says it is OPEN; absent ⇒ folded. EGRP sorts below every repo group.
 EGRP=999999; ENDCNT=0; ENDFOLD=1
-# The shell's windows are proxies (no name in WFMT, so pass A never reads their
-# line) and its rows are the hub's: the fold bit is read off its OWN session —
-# one value per client, never per fleet (issue #1680). Read in a one-repo frame
-# too: the 置顶 and 已结束 headings fold there as well.
-if [ "${FLEET_SHELL:-0}" = 1 ] && [ -n "${FLEET_SESSION:-}" ]; then
-  RFOLD=$(tmux show-option -t "=$FLEET_SESSION:" -qv @repo_fold 2>/dev/null) || RFOLD=''
-fi
 case " $RFOLD " in *' pin '*) PINFOLD=1 ;; esac
 case " $RFOLD " in *' ended:open '*) ENDFOLD=0 ;; esac
 if [ "$RGRP" = 1 ] && [ -n "$RFOLD" ]; then
@@ -1757,10 +1742,10 @@ fi
 # already read (orphanrep_read, `<machine>/<id>` a line — the sidebar writes it).
 # Each becomes ONE row under its repo's heading, `<child> <STATE> PR #n` badged
 # 结果给你, keyed `orphanrep:<id>[@<machine>]`; a second tap shows the result and
-# asks to mark it read (fleet-sidebar.py). None ⇒ not one line more.
+# asks to mark it read (fleet_view.py). None ⇒ not one line more.
 if [ "$SIDEBAR" = 1 ]; then
   _orows=''
-  if [ "${FLEET_SHELL:-0}" != 1 ] && [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then
+  if [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then
     while IFS=$'\t' read -r _oid _ots _orepo _ochild _ost _opr _osum; do
       [ -n "$_oid" ] || continue
       _orows+="$_oid$US$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'

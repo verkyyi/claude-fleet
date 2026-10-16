@@ -63,7 +63,7 @@
 #                                    a FLEET_ALERT_FLASH_KINDS kind also flashes
 #                                    on <sock> (or the current server)
 #
-# Sourced (tmux-status.sh does, every 5s per client) it only defines functions;
+# Sourced (fleet-topbar.py does, every 5s per client) it only defines functions;
 # the caller must already have usage-lib.sh + fleet-daemon-lib.sh loaded.
 
 case "${BASH_SOURCE[0]}" in */*) _FA_BIN="${BASH_SOURCE[0]%/*}" ;; *) _FA_BIN=. ;; esac
@@ -270,28 +270,6 @@ _fa_detail() {
   local t="${1:-}"
   [ "${#t}" -gt 120 ] && t="${t:0:119}…"
   printf '%s' "$t"
-}
-
-# _fa_client_needs — the client's needs rows (issue #1951): every
-# $G/needs_<sess> line fleet-hub-sessions.sh writes,
-# `<worker_id> US <subject> US <state|needs> US <node> US <detail>`, becomes
-# `● <subject> · question|permission|blocked|waiting|failed · <node>` with action
-# `jump` and target `wid:<worker_id>`. One file per shell session; a worker listed
-# twice is one row.
-_fa_client_needs() {
-  local f wid subj sub node dt cond seen="|"
-  for f in "$(fleet_usage_cache_dir)"/needs_*; do
-    [ -f "$f" ] || continue
-    while IFS=$_FA_US read -r wid subj sub node dt; do
-      [ -n "$wid" ] || continue
-      case "$seen" in *"|$wid|"*) continue ;; esac
-      seen="$seen$wid|"
-      case "$sub" in ask) cond=question ;; perm) cond=permission ;; blocked) cond=blocked ;; failed) cond=failed ;; *) cond=waiting ;; esac
-      # since=0: the writer carries the row's first sighting (or now)
-      _fa_row "needs-wid-$(_fa_stall_id "$wid")" needs "$subj" "$cond" "$node" 0 jump 0 "wid:$wid" "$(_fa_detail "$dt")"
-    done < "$f"
-  done
-  return 0
 }
 
 # _fa_json <tsv row> → the ndjson line.
@@ -549,12 +527,7 @@ EOF
   fi
 
   # --- needs: sessions waiting for a human, off each window's @claude_state.
-  if [ "${FLEET_SHELL:-0}" = 1 ]; then
-    # The CLIENT (issue #1951): its own server holds no session window — the
-    # sessions are the hub's rows, every machine's. fleet-hub-sessions.sh leaves
-    # their needs beside its cache (`needs_<sess>`), and they become the same rows.
-    _fa_client_needs
-  elif [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+  if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
     # Every optional field has a `-`/0 sentinel: tab is IFS whitespace.
     # `detail` is the question's own words (@claude_needs_detail, issue #1951 —
     # set-claude-state.sh / fleet-codex-attention.py): the client's bar and its

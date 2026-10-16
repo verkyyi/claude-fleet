@@ -808,21 +808,8 @@ INVITE_FILE = os.path.join(CONF_DIR, "invite")
 
 
 def newcomer():
-    """The newcomer's one-session view (FLEET_CLIENT_LAYOUT=solo, which a fresh
-    install writes — claude-fleet#2347): the env, else fleet.conf's last word.
-    On it the screen before the first key carries no fleet words (入口 · 只协调 ·
-    扫码); every other computer reads what it always read."""
-    lay = os.environ.get("FLEET_CLIENT_LAYOUT", "")
-    if not lay:
-        try:
-            with open(os.path.join(CONF_DIR, "fleet.conf")) as f:
-                for line in f:
-                    m = re.match(r"\s*(?:export\s+)?FLEET_CLIENT_LAYOUT=['\"]?([A-Za-z]*)", line)
-                    if m:
-                        lay = m.group(1)
-        except OSError:
-            pass
-    return lay == "solo"
+    """Before the first HOME session, use the short newcomer sign-in wording."""
+    return not os.path.exists(os.path.join(CONF_DIR, "home-session.first"))
 
 
 def pending_invite():

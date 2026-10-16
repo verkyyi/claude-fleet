@@ -546,7 +546,26 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "debug", "task"))
+                            "account_class", "reap", "attachments", "test", "debug", "task", "dispatch", "launch"))
+        if "dispatch" in params:
+            from fleet_dispatch import resolve
+            try:
+                d = resolve([params["agent"]] if params.get("agent") else [], accepted=params["dispatch"])
+                if params.get("task", "") != d.get("task", ""):
+                    raise ValueError("dispatch task does not match start")
+            except (ValueError, TypeError) as e:
+                raise Fault("INVALID_ARGUMENT", str(e)) from e
+        if "launch" in params:
+            from fleet_launch import validate_context
+            try:
+                c = validate_context(params["launch"])
+                d = params.get("dispatch", {})
+                if any(c[k] != d.get(k) for k in ("task", "generation", "attempt_id")) or c["provider"] != d.get("resolved_agent"):
+                    raise ValueError("launch differs from accepted dispatch")
+            except (ValueError, TypeError, KeyError) as e:
+                raise Fault("INVALID_ARGUMENT", str(e)) from e
+        elif params.get("dispatch", {}).get("task"):
+            raise Fault("INVALID_ARGUMENT", "accepted dispatch requires verified launch contract")
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
@@ -614,7 +633,7 @@ def validate_write(action, params):
         if "task" in params:
             if not (isinstance(params["task"], str) and TASK_REF_RE.fullmatch(params["task"])):
                 raise Fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
-            if kind not in ("new", "scratch"):
+            if kind not in ("new", "scratch") and "dispatch" not in params:
                 raise Fault("INVALID_ARGUMENT", "task belongs to a new or scratch start")
         if "attachments" in params:
             # issue #2393: the writing area's files, downloaded by this node's

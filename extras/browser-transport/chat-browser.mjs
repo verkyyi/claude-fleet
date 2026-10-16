@@ -15,6 +15,11 @@ try {
   await context.addCookies([{ name: cookie.slice(0, eq), value: cookie.slice(eq + 1), url: origin }])
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
   const page = await context.newPage()
+  await page.exposeFunction('networkLoss', async () => {
+    await context.setOffline(true)
+    await new Promise(resolve => setTimeout(resolve, 5000))
+    await context.setOffline(false)
+  })
   await page.route('**/chat-test.mjs', route => route.fulfill({ contentType: 'application/javascript', body: script.outputFiles[0].text }))
   await page.goto(`${origin}/healthz`)
   const result = await page.evaluate(async ({ blocked }) => {
@@ -54,16 +59,16 @@ try {
     if (!(await fetchChat('/v1/chat/conversation')).ok) throw new Error('old-node fallback failed')
     window.fetch = nativeFetch
     if (calls.join(',') !== '/api/conversation,/v1/chat/home,/v1/chat/conversation') throw new Error('fallback re-submitted')
-    if (!blocked) {
+    {
       const response = await chatRequest('turn', '{"text":"disconnect-once"}')
       const reader = response.body.getReader()
       await reader.read()
-      peers.at(-1).close()
+      peers.at(-1)?.close()
       sockets.at(-1).close()
       let uncertain = false
       try { while (!(await reader.read()).done) {} } catch (e) { uncertain = e.message.includes('可能已送达') }
       if (!uncertain) throw new Error('lost submission was not visible')
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await window.networkLoss()
       const recovered = await chatRequest('conversation')
       if (!(await recovered.json()).session) throw new Error('conversation did not survive')
     }
@@ -73,6 +78,26 @@ try {
   // A late selected-pair update can publish ready again for the same channel.
   assert.equal(new Set(result.states.map(s => s.connection)).size, 4)
   assert(result.states.every(s => s.mode === (blocked ? 'relay' : 'direct')))
+  // Exercise the production chat page too: online only reads the transcript.
+  await page.addInitScript(() => {
+    window.__chatConnections = []
+    for (const name of ['WebSocket', 'RTCPeerConnection']) {
+      const Original = window[name]
+      window[name] = class extends Original { constructor(...args) { super(...args); window.__chatConnections.push(this) } }
+    }
+  })
+  await page.goto(`${origin}/app`)
+  await page.getByRole('textbox', { name: '输入', exact: true }).fill('ui-once')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await page.getByText('中文-once', { exact: true }).waitFor()
+  await context.setOffline(true)
+  await page.evaluate(() => window.__chatConnections.forEach(c => c.close()))
+  await new Promise(resolve => setTimeout(resolve, 5000))
+  await context.setOffline(false)
+  await page.getByText('recovered-ui-once', { exact: true }).waitFor()
+  await page.reload()
+  await page.getByText('recovered-ui-once', { exact: true }).waitFor()
+  console.log('PASS production chat: 5s offline, online reads original conversation, reopen preserves transcript, no turn replay')
 } finally {
   await context?.tracing.stop({ path: `chat-${blocked ? 'denied' : 'direct'}.zip` }).catch(() => {})
   await browser.close()

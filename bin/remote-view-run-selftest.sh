@@ -8,12 +8,8 @@
 #                 cleanup trap (orphans needed kill -KILL); the first click raced
 #                 the shell's warm master and opened a private one beside it.
 #
-#   A. forwards  — a session on the warm master carries ClearAllForwardings=yes
-#                  (the attach AND the sidecar's watch); a private master carries
-#                  ExitOnForwardFailure=no and keeps the config's forwards
-#   B. warm wait — a warm master still coming up (`<sock>.pending` alive) is waited
-#                  for, not raced; none coming → a private master, and warm.log
-#                  says `private <node>`
+#   A. forwards  — the retained standalone attach uses a private master; the old
+#                  client's warm-master wait and sidecar retired with #3008
 #   C. words     — a refused forward drops the line with 「端口转发被拒…」, never
 #                  ssh's raw `mux_client_forward: …`
 #   D. TERM      — TERM to a `run` whose attach never returns ends the loop AND the
@@ -55,9 +51,9 @@ gone_within() {   # <pid> <secs>
   return 0
 }
 
-mkdir -p "$WORK/tmp/warm" "$WORK/home" "$WORK/conf"
+mkdir -p "$WORK/tmp" "$WORK/home" "$WORK/conf"
 export HOME="$WORK/home" TMPDIR="$WORK/tmp" FLEET_CONF_DIR="$WORK/conf"
-unset TMUX TMUX_PANE FLEET_SHELL_STAGE
+unset TMUX TMUX_PANE
 cat > "$WORK/ssh" <<'EOF'
 #!/bin/bash
 # argv → $FAKE_LOG; -O check = is the control socket there; -O exit = rm it.
@@ -103,31 +99,13 @@ export FLEET_REMOTE_SSH_CMD="$WORK/ssh" FAKE_LOG="$WORK/ssh.log" FAKE_DIR="$WORK
 export FLEET_REMOTE_VIA_HUB=0
 RV="$BIN/fleet-remote-view.sh"
 WID="00000000-0000-0000-0000-000000000000/issue-1"
-bindsock() { python3 -c 'import socket, sys
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$1"; }
-
-# --- A + B. a warm master still coming up is waited for, and ridden clean -------------
+# --- A. the retained standalone run uses a private master -------------------------
 : > "$WORK/ssh.log"
-WS="$WORK/tmp/warm/m9.sock"
-sleep 3 & pend=$!
-printf '%s\n' "$pend" > "$WS.pending"
-( sleep 0.8; bindsock "$WS" ) &
-FAKE_ATTACH_SECS=2 bash "$RV" run --shell m9 "$WID" > "$WORK/a.out" 2>&1 < /dev/null
-kill "$pend" 2>/dev/null
+bash "$RV" run m9 "$WID" > "$WORK/a.out" 2>&1 < /dev/null
 att=$(grep ' attach' "$WORK/ssh.log")
-has 'B: the attach rides the warm master that came up a moment later' "$att" "-S $WS"
-hasnt 'B: …no private master opened beside it' "$att" 'ControlMaster=yes'
-has 'A: a session on the warm master clears the config forwards' "$att" '-o ClearAllForwardings=yes'
-has "A: …so does the sidecar's watch" "$(grep ' watch ' "$WORK/ssh.log")" '-o ClearAllForwardings=yes'
-hasnt 'B: warm.log has no private line' "$(cat "$WORK/tmp/warm/warm.log" 2>/dev/null)" 'private'
-
-: > "$WORK/ssh.log"; rm -f "$WS" "$WS.pending"
-bash "$RV" run --shell m9 "$WID" > "$WORK/b.out" 2>&1 < /dev/null
-att=$(grep ' attach' "$WORK/ssh.log")
-has 'B: nothing warm coming → a private master' "$att" 'ControlMaster=yes'
-has 'A: …which never dies of a forward it cannot get' "$att" '-o ExitOnForwardFailure=no'
-hasnt "A: …and keeps the config's forwards (it is the one that holds them)" "$att" 'ClearAllForwardings'
-has 'B: …and warm.log says so' "$(cat "$WORK/tmp/warm/warm.log" 2>/dev/null)" 'private m9'
+has 'A: a standalone attach opens a private master' "$att" 'ControlMaster=yes'
+has 'A: a refused forward does not end that master' "$att" '-o ExitOnForwardFailure=no'
+hasnt "A: the private master keeps the config's forwards" "$att" 'ClearAllForwardings'
 
 # --- C. a refused forward is said in words -------------------------------------------
 : > "$WORK/ssh.log"; rm -f "$WORK/refused"

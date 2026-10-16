@@ -14,6 +14,7 @@
 **先读**
 
 - [PRODUCT-DIRECTION.md](dev/PRODUCT-DIRECTION.md) — 产品方向与设计原则（后续设计的依据）
+- [BIN-INVENTORY.md](dev/BIN-INVENTORY.md) — 程序归属汇总、静态调用方及待删候选
 - [COMPONENTS.md](dev/COMPONENTS.md) — 组件类别与保留理由（核心 / 按需 / 移除 / 待定）
 - [ARCHITECTURE.md](dev/ARCHITECTURE.md) — 整体设计
 - [INSTALL.md](dev/INSTALL.md) — 安装 / 卸载步骤（CLAUDE.md 让 agent 照它装）
@@ -30,7 +31,9 @@
 - [DRAFT-PR.md](dev/DRAFT-PR.md) — 草稿单：worker 只开草稿 PR，批准后再合
 - [WORKER.md](dev/WORKER.md) — 执行会话说明书的规则背景与排障（开工只读 `/fleet-claim`）
 - [WORKER-SLEEP.md](dev/WORKER-SLEEP.md) — worker 休眠与唤醒
+- [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证拒绝的恢复与验收
 - [SESSION-TRANSFER.md](dev/SESSION-TRANSFER.md) · [CODEX-RUNTIME.md](dev/CODEX-RUNTIME.md) — Claude / Codex 之间换手
+- [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
 - [ISSUE-BRIDGE.md](dev/ISSUE-BRIDGE.md) · [WEBHOOK.md](dev/WEBHOOK.md) · [EMIT.md](dev/EMIT.md) — issue 事件、PR / CI 状态、会话事实外送
 

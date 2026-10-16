@@ -49,6 +49,8 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/fcp-st.XXXXXX")" || exit 2
 mkdir -p "$WORK/tmp"; export TMPDIR="$WORK/tmp"   # the client cache (fleet_logins, #2430) stays in the sandbox
 export HOME="$WORK/home"; mkdir -p "$HOME/.config/claude-fleet"
 export XDG_CONFIG_HOME="$HOME/.config" FLEET_CONF_DIR="$HOME/.config/claude-fleet"
+mkdir -p "$FLEET_CONF_DIR"
+: > "$FLEET_CONF_DIR/home-session.first"
 export FLEET_CLIENT_DIR="$WORK/cl"; mkdir -p "$FLEET_CLIENT_DIR"
 export FLEET_CLIENT_KEY_FILE="$FLEET_CLIENT_DIR/client.key"
 unset FLEET_HUB_URL FLEET_HUB_TOKEN CCQUOTA_FLEET TMUX TMUX_PANE
@@ -322,7 +324,9 @@ has "B: self absent — said so" "$ERR" "你这台（${SELF}）不在入口的�
 # … but not to a newcomer's client, nor beside this login's own place elsewhere
 # (issue #2953): their sessions run on the login the hub opened, and the hint
 # sent them after the wrong computer
-FLEET_CLIENT_LAYOUT=solo run "$P" verkyyi/claude-fleet 17
+rm -f "$FLEET_CONF_DIR/home-session.first"
+run "$P" verkyyi/claude-fleet 17
+: > "$FLEET_CONF_DIR/home-session.first"
 case "$ERR" in *候选*) fail "B: self absent — said to a solo (newcomer) client" "$ERR" ;; esac
 USER=bob run "$P" verkyyi/claude-fleet 17
 case "$ERR" in *候选*) fail "B: self absent — said though this login is a candidate elsewhere" "$ERR" ;; esac

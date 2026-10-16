@@ -3,15 +3,23 @@ on:
   pull_request:
     paths:
       - 'tokenledger/**'
+      - 'bin/fleet-webterm.py'
+      - 'bin/fleet-term-attach.sh'
+      - 'bin/fleet_view.py'
       - 'extras/browser-transport/**'
       - 'extras/web-console/**'
+      - 'extras/web-chat/ui/**'
       - '.github/workflows/browser-attachment.yml'
   push:
     branches: [master]
     paths:
       - 'tokenledger/**'
+      - 'bin/fleet-webterm.py'
+      - 'bin/fleet-term-attach.sh'
+      - 'bin/fleet_view.py'
       - 'extras/browser-transport/**'
       - 'extras/web-console/**'
+      - 'extras/web-chat/ui/**'
       - '.github/workflows/browser-attachment.yml'
 concurrency:
   group: browser-attachment-${{ github.ref }}
@@ -19,7 +27,7 @@ concurrency:
 jobs:
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 16
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -39,11 +47,15 @@ jobs:
         working-directory: extras/browser-transport
       - run: npx playwright install --with-deps chromium
         working-directory: extras/browser-transport
+      - name: A late transcript cannot erase a new chat turn
+        run: node chat-history.mjs
+        working-directory: extras/browser-transport
+      - run: sudo apt-get update && sudo apt-get install -y tmux
       - name: Actual browser to node adapter, UDP denial, no replay and cleanup
         working-directory: tokenledger
         run: |
           set -o pipefail
-          go test -tags browseracceptance -count=1 -v -timeout 7m -run '^Test(Attachment|TerminalConsole|ChatAttachment)Chromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
+          go test -tags browseracceptance -count=1 -v -timeout 10m -run '^Test(Attachment|TerminalConsole|ChatAttachment|TerminalRecovery)Chromium$' ./internal/api 2>&1 | tee ../browser-attachment.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

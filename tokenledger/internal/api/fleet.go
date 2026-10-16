@@ -58,6 +58,9 @@ type fleetPrincipal struct {
 	// Actor names the caller in the journal and the audit log: the viewer,
 	// or "operator" for the shared token (which names nobody).
 	Actor string
+	// TaskOwner uses the task-record door's owner for a node placement. Actor
+	// remains the node/session identity in the dispatch journal and audit.
+	TaskOwner string
 	// Person is the signed-in principal behind the call, "" for the operator's
 	// doors. It picks the grant (claude-fleet#1410): the operator holds every
 	// scope, a person holds Server.FleetPersonScopes.
@@ -734,7 +737,8 @@ func (s *Server) OperationGet(req *http.Request, opID string) (map[string]any, e
 		return nil, err
 	}
 	var reconcileErr error
-	if o.Status != "succeeded" && o.Status != "failed" {
+	_, launch, _ := s.launchContract(o)
+	if (launch && o.Status != "failed") || (o.Status != "succeeded" && o.Status != "failed") {
 		reconcileErr = s.reconcileOperation(ctx, &o)
 	}
 	out := operationView(o)
@@ -769,6 +773,8 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	default:
 		return fault("PROTOCOL_ERROR", "remote operation status is not one this hub knows")
 	}
+	verifiedStatus, verifiedResult := s.verifyLaunchResult(*o, r, remote.Status, string(remote.Result))
+	remote.Status, remote.Result = verifiedStatus, json.RawMessage(verifiedResult)
 	now := time.Now()
 	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
 		return err

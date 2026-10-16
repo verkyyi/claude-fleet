@@ -33,7 +33,7 @@ A sign-in lasts 12 hours, after which this computer renews it by itself; when it
 **⌘P** (iTerm2; in other terminals **⌃Space** or **F12**) opens the panel:
 
 - every session is here — pick a row to switch to it;
-- write a sentence on the top line and it becomes a new task for a new session;
+- select New task and press Enter to open its editor; choose “Open with draft (not sent)”, then review and send it from the new session;
 - when a session stops to ask you something, its row is marked; switch to it and answer.
 
 Closing the terminal window does not stop your sessions; type `fleet` in a terminal next time and everything is where you left it.
@@ -44,6 +44,11 @@ Sign in to the portal, open Sessions, and choose **Terminal** on a running sessi
 to open that session directly. **My Terminal** in the sidebar and Sessions header
 opens your personal terminal. Ended sessions keep their **Resume** action.
 The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
+
+After a brief network outage, input pauses while the page reconnects to the same surviving terminal.
+Uncertain input is never resent. If another tab controls it, choose **Use here** to take control explicitly. If the session has restarted, choose **Connect current session** explicitly; this connects to the existing process without resending previous input.
+An ended environment or expired login stops retries; return to Sessions or sign in again.
+Closing the page preserves the running shell and session.
 
 On nodes supporting browser terminals, **Fleet menu** or **Ctrl+] then p** opens
 the native panel. **Open shell** switches to the shell; click again to return.

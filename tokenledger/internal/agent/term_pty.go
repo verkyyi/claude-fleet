@@ -64,6 +64,14 @@ func termPtyArgs(args []string) (view, target string, cols, rows int, err error)
 			target = v
 		case "--cols":
 			cols, _ = strconv.Atoi(v)
+		case "--resume":
+			if len(v) > 128 || !regexp.MustCompile(`^[A-Za-z0-9:-]*$`).MatchString(v) {
+				return "", "", 0, 0, errors.New("bad resume identity")
+			}
+		case "--take":
+			if v != "1" {
+				return "", "", 0, 0, errors.New("bad takeover")
+			}
 		case "--rows":
 			rows, _ = strconv.Atoi(v)
 		default:

@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
-"""fleet-compose.py — ⌘N: the writing area on the right (issue #1953, EPIC #1949 C4;
-one box and three options since issue #2231, EPIC #2230 C1).
+"""fleet-compose.py — a new task's payload and the ONE way it goes out (issue #1953,
+EPIC #1949 C4; one box and three options since issue #2231, EPIC #2230 C1).
 
-    fleet-compose.py [--session S]        the writing area (curses) — the pane of
-                                          the client stage's `@fleet_role portal`
-                                          window (fleet-shell.sh portal opens it:
-                                          ⌘N / prefix c / a tap on 「新任务」)
     fleet-compose.py --send <payload.json> [--repo R | --no-repo] [--node N]
                      [--agent claude|codex] [--reap P]
                                           the ONE way out: the payload a ↵ wrote,
@@ -18,57 +14,23 @@ one box and three options since issue #2231, EPIC #2230 C1).
                                           #2232; null = auto / the fleet's default).
                                           Prints the place's one line and returns
                                           its code.
-    fleet-compose.py --orch|--steward <session> [--client C] [--boot]
-                                          retired (issue #3118): there is no
-                                          orchestrating or steward seat to jump
-                                          to; an older client's key gets one
-                                          line on C and exit 1 (compat-1v)
     fleet-compose.py payload <text-file> [--repo R | --no-repo] [--node N] [--agent A]
                                           the payload a ↵ on that text would write
                                           ({title, body, attachments, repo, node,
                                           agent}), as JSON — the selftest's view
 
-The writing area: several lines (⇧↵ — the `fleet` iTerm2 profile sends it as
-0x0a, ⌃j — or ⌥↵ makes a new line; ↵ sends), a file dropped on the window (its
-path pasted) is an attachment, esc goes back to the session that was in view.
-Under the box, three options already picked, so ↵ needs none of them (Tab walks
-to them, ↵ / space / ↓ opens one, ↑↓ picks):
-  仓库   every repo the hub says this person's machines host, and 无仓库 · HOME
-         (a session in $HOME, `@norepo`, no issue — the text is its seed).
-         Default: the repo of the session that was in view, else the one the
-         last send went to (compose-state.json beside the draft), else the
-         first. A repo is always an issue: filed on the machine, then its worker.
-  节点   every machine, by sessions running; 只协调 / 维护中 / 失联 greyed.
-         Default: the one the hub's placement picks (fewest running).
-  Agent  claude / codex. Default: FLEET_AGENT.
-A change made by hand is for this send only: a send, esc, or ⌘N (fleet-shell.sh
-portal hands the area ESC[928~) puts the defaults back. What was not changed
-travels as null — the hub picks the machine, the fleet its agent (EPIC #2230
-共同约定 1). The draft is on disk the whole time —
-$XDG_STATE_HOME/claude-fleet/compose-draft (FLEET_SWITCH_STATE overrides the
-directory, as for the switch history), so leaving and coming back, or the client
-restarting, loses nothing.
-
-↵ writes the payload (compose-send.json beside the draft: the first line is the
-title, the whole text the body, every attachment's path listed under it) and
-hands the task list `compose` on its @sidebar_do queue (F12 wakes it, exactly as
-⌘P's pick does): the list draws 「开工中…」 under the 「新任务」 row at once, runs
---send in the background and switches to the new session's row when it appears.
-No list on screen (an older client): --send runs from here. The box empties only
-when the machine said done (issue #2240): the list tells the area how the send
-ended (compose-result.json — {id, ok, why}), and one that did not open — the
-hub out of reach, a refusal, a machine that said no — leaves the text as it was
-written, its reason on the line under the options until the next key, and its
-payload kept as compose-failed.json. Nothing on the way
-spends a token: the issue is filed by fleet-issue-file.sh on the machine, the
-worker opened by its spawn. There is no orchestrating seat to reach from here
-(issue #3118): a session takes that role itself (/fleet-orchestrate).
+Who writes the payload: a thin client's 派一件事 (fleet-quick-dispatch.py, the 看台's
+⌘P ⚡ row) and an old session's /qd. The old client's writing area (⌘N, the
+`--session` curses box, its draft and its told-file) went with that client
+(issue #3008). The payload sits beside the switch state
+($XDG_STATE_HOME/claude-fleet/compose-send.json; FLEET_SWITCH_STATE overrides the
+directory); a send that did not open keeps it as compose-failed.json. Nothing on
+the way spends a token: the issue is filed by fleet-issue-file.sh on the machine,
+the worker opened by its spawn.
 """
-import curses
 import json
 import os
 import re
-import signal
 import socket
 import subprocess
 import sys
@@ -82,10 +44,6 @@ MAX_TITLE = 256       # GitHub's bound — the hub's checkIssueTitle
 MAX_BODY = 4000       # the hub's checkText — what a write may carry
 MAX_SCRATCH = 64      # the hub's checkScratchName
 PLACE_WORDS = ("REMOTE", "LOCAL", "HELD", "REFUSED", "DECLINED", "UNKNOWN")  # fleet-client-place.sh's line
-PORTAL = "new"        # the portal window's @remote: the list's row key for it
-SAVE_EVERY = 1.0      # the draft is written at most this often while typing
-TOLD_EVERY = 0.5      # how often a send in flight looks for its answer (issue #2240)
-TOLD_WAIT = 240       # no answer by then (an older list): the text stays, said so
 
 
 def state_dir():
@@ -96,40 +54,14 @@ def state_dir():
     return Path(base) / "claude-fleet"
 
 
-def draft_path():
-    return state_dir() / "compose-draft"
-
-
 def send_path():
     return state_dir() / "compose-send.json"
-
-
-def result_path():
-    """compose-result.json beside the draft (issue #2240): how a send ended, as
-    the list (or --send from here) saw it — {id, ok, why}. Only a done start
-    clears the box; anything else leaves the text and says why."""
-    return state_dir() / "compose-result.json"
 
 
 def failed_path():
     """compose-failed.json: the payload of the last send that did not open
     (issue #2240) — kept, never unlinked, so nothing written is lost."""
     return state_dir() / "compose-failed.json"
-
-
-def compose_told(cid, ok, why=""):
-    """The writing area told how its send `cid` ended (issue #2240): the list's
-    words when it did not open. The area reads it on its next beat."""
-    return write_atomic(result_path(), json.dumps({"id": cid, "ok": bool(ok), "why": why or ""},
-                                                  ensure_ascii=False) + "\n")
-
-
-def read_told():
-    try:
-        data = json.loads(result_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def keep_failed(path):
@@ -468,243 +400,12 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     return out.returncode
 
 
-def switch_lib():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("fleet_quickopen", str(BIN / "fleet-quickopen.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def previous():
-    """(key, repo heading) of the session that was in view before this one —
-    the history's most recent row that is not the portal."""
-    try:
-        lib = switch_lib()
-        mru = [k for k in lib.load()["mru"] if k != PORTAL]
-        rows = {r["key"]: r for r in lib.read_rows()}
-    except Exception:
-        return "", ""
-    key = mru[0] if mru else ""
-    group = (rows.get(key) or {}).get("group", "")
-    return key, re.sub(r"\s*\(\d+\)$", "", group).strip()
-
-
-class Shell:
-    """The client's own tmux server (`-L <session>`, the list's), seen from the
-    stage: FLEET_COMPOSE_SHELL_SOCK names a socket path instead (the selftest)."""
-
-    def __init__(self, session):
-        sock = os.environ.get("FLEET_COMPOSE_SHELL_SOCK", "")
-        self.cmd = ["tmux", "-S", sock] if sock else (["tmux", "-L", session] if session else [])
-        # the stage — the server this pane is on (its $TMUX); the selftest's
-        # FLEET_COMPOSE_STAGE_SOCK names its socket
-        stage = os.environ.get("FLEET_COMPOSE_STAGE_SOCK", "")
-        self.stage_cmd = ["tmux", "-S", stage] if stage else ["tmux"]
-
-    def stage(self, *args):
-        try:
-            return subprocess.run(self.stage_cmd + list(args), stdin=subprocess.DEVNULL, capture_output=True,
-                                  text=True, timeout=5).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return ""
-
-    def run(self, *args):
-        if not self.cmd:
-            return ""
-        try:
-            return subprocess.run(self.cmd + list(args), stdin=subprocess.DEVNULL, capture_output=True,
-                                  text=True, timeout=5).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return ""
-
-    def list_pane(self):
-        for line in self.run("list-panes", "-a", "-F", "#{pane_id} #{@sidebar}").splitlines():
-            pid, _, flag = line.partition(" ")
-            if flag == "1":
-                return pid
-        return ""
-
-    def hand(self, verb):
-        pane = self.list_pane()
-        if not pane:
-            return False
-        self.run("set-option", "-pa", "-t", pane, "@sidebar_do", verb + " ", ";", "send-keys", "-t", pane, "F12")
-        return True
-
-
-def to_orch(session, client=""):
-    """An older client's ⌘N / 进编排会话 / 进管家会话 (issue #2146, #2735): no seat
-    exists to jump to any more (issue #3118) — one line on the client, exit 1.
-    compat-1v: 下一批删"""
-    msg = tr("compose_orch_none")
-    Shell(session).run("display-message", *(["-c", client] if client else []), msg)
-    print(msg)
-    return 1
-
-def go_back(shell, prev):
-    """esc: the session that was in view — the list's own jump (`jump=<key>`),
-    else the stage's window before this one."""
-    if prev and prev.startswith(("@", "wid:")) and shell.hand("jump=" + prev):
-        return
-    subprocess.run(["tmux", "last-window"], stdin=subprocess.DEVNULL, capture_output=True)
-
-
 # --- the text --------------------------------------------------------------------
-
-def cells(text):
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 0 if unicodedata.combining(c) else 1
-               for c in text)
-
-
-def wrap(line, width):
-    """A logical line as screen rows of at most `width` cells: [(start, end)]."""
-    out, start, used = [], 0, 0
-    for i, c in enumerate(line):
-        w = cells(c)
-        if used + w > width and i > start:
-            out.append((start, i))
-            start, used = i, 0
-        used += w
-    out.append((start, len(line)))
-    return out
-
-
-class Editor:
-    def __init__(self, text=""):
-        self.lines = text.split("\n") if text else [""]
-        self.row = len(self.lines) - 1
-        self.col = len(self.lines[self.row])
-
-    def text(self):
-        return "\n".join(self.lines)
-
-    def clear(self):
-        self.lines, self.row, self.col = [""], 0, 0
-
-    def insert(self, s):
-        for part in re.split(r"(\n)", s.replace("\r\n", "\n").replace("\r", "\n")):
-            if part == "\n":
-                self.newline()
-            elif part:
-                line = self.lines[self.row]
-                self.lines[self.row] = line[:self.col] + part + line[self.col:]
-                self.col += len(part)
-
-    def newline(self):
-        line = self.lines[self.row]
-        self.lines[self.row:self.row + 1] = [line[:self.col], line[self.col:]]
-        self.row, self.col = self.row + 1, 0
-
-    def backspace(self):
-        if self.col:
-            line = self.lines[self.row]
-            self.lines[self.row] = line[:self.col - 1] + line[self.col:]
-            self.col -= 1
-        elif self.row:
-            prev = self.lines[self.row - 1]
-            self.lines[self.row - 1:self.row + 1] = [prev + self.lines[self.row]]
-            self.row, self.col = self.row - 1, len(prev)
-
-    def delete(self):
-        line = self.lines[self.row]
-        if self.col < len(line):
-            self.lines[self.row] = line[:self.col] + line[self.col + 1:]
-        elif self.row + 1 < len(self.lines):
-            self.lines[self.row:self.row + 2] = [line + self.lines[self.row + 1]]
-
-    def move(self, dr=0, dc=0):
-        if dc:
-            self.col += dc
-            if self.col < 0 and self.row:
-                self.row -= 1
-                self.col = len(self.lines[self.row])
-            elif self.col > len(self.lines[self.row]) and self.row + 1 < len(self.lines):
-                self.row, self.col = self.row + 1, 0
-            self.col = max(0, min(self.col, len(self.lines[self.row])))
-        if dr:
-            self.row = max(0, min(len(self.lines) - 1, self.row + dr))
-            self.col = min(self.col, len(self.lines[self.row]))
-
-    def kill_bol(self):
-        self.lines[self.row] = self.lines[self.row][self.col:]
-        self.col = 0
-
-    def kill_eol(self):
-        self.lines[self.row] = self.lines[self.row][:self.col]
-
-    def kill_word(self):
-        line = self.lines[self.row]
-        i = self.col
-        while i and line[i - 1] == " ":
-            i -= 1
-        while i and line[i - 1] != " ":
-            i -= 1
-        self.lines[self.row] = line[:i] + line[self.col:]
-        self.col = i
 
 
 # --- the screen ------------------------------------------------------------------
 
 PAIR_BOX, PAIR_DIM, PAIR_ON, PAIR_GO, PAIR_TOAST = 1, 2, 3, 4, 5
-_SEL = []
-
-
-def sel_on():
-    """The focused option's / menu row's ground: fleet-quickopen's `sel_attr` —
-    PAIR_ON on a truecolour terminal, reverse video elsewhere (issue #3416)."""
-    if not _SEL:
-        _SEL.append(switch_lib().sel_attr(PAIR_ON))
-    return _SEL[0]
-
-
-def read_key(screen):
-    """One key as ("text", s) | ("key", name): a CSI the terminal sent (⇧↵ as
-    CSI-u, bracketed paste's markers) or ⌥↵ (ESC CR) read here, curses' own names
-    for the rest. ("none", "") when nothing came."""
-    k = screen.get_wch() if hasattr(screen, "get_wch") else screen.getch()
-    if isinstance(k, int):
-        if k == -1:
-            return "none", ""
-        names = {curses.KEY_BACKSPACE: "bs", curses.KEY_DC: "del", curses.KEY_LEFT: "left",
-                 curses.KEY_RIGHT: "right", curses.KEY_UP: "up", curses.KEY_DOWN: "down",
-                 curses.KEY_HOME: "home", curses.KEY_END: "end", curses.KEY_RESIZE: "resize",
-                 curses.KEY_BTAB: "btab", curses.KEY_ENTER: "enter"}
-        return "key", names.get(k, "")
-    if k == "\x1b":
-        screen.nodelay(True)
-        seq = ""
-        try:
-            while len(seq) < 16:
-                try:
-                    c = screen.get_wch()
-                except curses.error:
-                    break
-                if isinstance(c, int):
-                    break
-                seq += c
-                if seq in ("\r", "\n") or (seq[:1] == "[" and len(seq) > 1 and seq[-1].isalpha() or seq[-1:] == "~"):
-                    break
-        finally:
-            screen.nodelay(False)
-        if seq in ("\r", "\n", "[13;2u", "[27;2;13~"):
-            return "key", "newline"
-        if seq == "[200~":
-            return "key", "paste_on"
-        if seq == "[201~":
-            return "key", "paste_off"
-        if seq == "[928~":
-            return "key", "portal"   # ⌘N brought the area up (fleet-shell.sh portal)
-        if seq == "":
-            return "key", "esc"
-        return "key", ""
-    codes = {"\r": "enter", "\n": "newline", "\t": "tab", "\x7f": "bs", "\x08": "bs", "\x01": "home",
-             "\x05": "end", "\x15": "kill_bol", "\x0b": "kill_eol", "\x17": "kill_word", "\x04": "del"}
-    if k in codes:
-        return "key", codes[k]
-    if unicodedata.category(k) == "Cc":
-        return "key", ""
-    return "text", k
 
 
 def state_path():
@@ -717,415 +418,6 @@ def last_repo():
         return json.loads(state_path().read_text(encoding="utf-8")).get("repo") or ""
     except (OSError, ValueError, AttributeError):
         return ""
-
-
-def short(repo):
-    return repo.rsplit("/", 1)[-1]
-
-
-def repo_of_group(group, repos):
-    """The heading the session in view sat under (its short name, as the list
-    paints it) → that repo, when exactly one of `repos` answers to it."""
-    hit = [r for r in repos if group and group in (r, short(r))]
-    return hit[0] if len(hit) == 1 else ""
-
-
-def repo_default(group, repos=None, last=None):
-    """仓库's default (issue #2231): the repo of the session that was in view;
-    else the one the last send went to; else the first the hub names. "" =
-    this computer knows no repo (the list resolves it, #1938)."""
-    repos = hub_repos() if repos is None else repos
-    last = last_repo() if last is None else last
-    if not repos:
-        return last
-    return repo_of_group(group, repos) or (last if last in repos else "") or repos[0]
-
-
-def repo_menu(group, repos=None, last=None):
-    """The 「仓库」 menu: (value, label, note, greyed) — every repo the hub says
-    this person's machines host, then 无仓库 · HOME (value None)."""
-    repos = hub_repos() if repos is None else repos
-    last = last_repo() if last is None else last
-    here = repo_of_group(group, repos or [])
-    items = []
-    if not repos:
-        items.append(("", tr("compose_repo_auto"), "", False))
-    for r in repos or []:
-        note = tr("compose_repo_here") if r == here else tr("compose_repo_last") if r == last and not here else \
-            r.split("/", 1)[0]
-        items.append((r, short(r), note, False))
-    items.append((None, tr("compose_repo_home"), tr("compose_repo_home_note"), False))
-    return items
-
-
-def node_menu():
-    """The 「节点」 menu, off the hub's /v1/nodes as the refresh loop cached it
-    (global/hub_nodes, the sidebar's 「开在哪」 too): (host, label, note, greyed)
-    — the machines that can take a session, fewest running first (the first is
-    what the hub's own placement picks), then the ones that cannot, greyed
-    (只协调 · 维护中 · 失联). No machine known: 自动 alone (value "")."""
-    try:
-        with open(os.path.join(status_dir(), "hub_nodes"), encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        lines = []
-    can, cannot = [], []
-    for line in lines:
-        f = line.split("\x1f")
-        if not f[0] or f[0].startswith("#") or len(f) < 6:
-            continue
-        f += [""] * (13 - len(f))
-        label, av, sess, word, host = f[0], f[1], f[5], f[11], f[12] or f[0]
-        if word in ("coord", "maint"):
-            cannot.append((0 if word == "coord" else 1, (host, label, tr("compose_node_" + word), True)))
-        elif av != "online":
-            cannot.append((2, (host, label, tr("compose_node_lost"), True)))
-        else:
-            n = int(sess) if sess.isdigit() else 1 << 30   # `?`: unknown, last
-            can.append((n, sess, host, label))
-    can.sort(key=lambda c: c[0])
-    can = [(host, label, tr("compose_node_rec_fmt" if i == 0 else "compose_node_running_fmt", sess), False)
-           for i, (_, sess, host, label) in enumerate(can)] or [("", tr("compose_node_auto"), "", False)]
-    return can + [item for _, item in sorted(cannot, key=lambda c: c[0])]
-
-
-AGENTS = ("claude", "codex")
-
-
-def agent_default():
-    agent = os.environ.get("FLEET_AGENT") or "claude"
-    return agent if agent in AGENTS else "claude"
-
-
-def agent_menu():
-    dflt = agent_default()
-    return [(a, a, tr("compose_agent_default") if a == dflt else "", False) for a in AGENTS]
-
-
-OPTIONS = ("repo", "node", "agent")
-
-
-def menu_for(kind, group):
-    return {"repo": lambda: repo_menu(group), "node": node_menu, "agent": agent_menu}[kind]()
-
-
-def defaults(group):
-    """The three options as ⌘N shows them (issue #2231): 仓库 — the repo of the
-    session in view, else the last send's; 节点 — the machine the hub picks by
-    load; Agent — FLEET_AGENT. A change made by hand is for this send only."""
-    return {"repo": repo_default(group), "node": node_menu()[0][0], "agent": agent_default()}
-
-
-def pick_label(kind, value, group):
-    for v, label, _, _ in menu_for(kind, group):
-        if v == value:
-            return label
-    return tr("compose_node_auto") if kind == "node" else (value or tr("compose_repo_auto"))
-
-
-def ui(screen, session):
-    os.write(1, b"\x1b[?2004h")   # bracketed paste: a drop is one insert, never a send
-    try:
-        curses.curs_set(1)
-    except curses.error:
-        pass
-    curses.use_default_colors()
-    curses.raw()
-    curses.nonl()               # ↵ is CR (send), ⌃j / ⇧↵ is LF (a new line)
-    for number, fg in ((PAIR_BOX, curses.COLOR_BLUE), (PAIR_DIM, 8 if curses.COLORS > 8 else curses.COLOR_WHITE),
-                       (PAIR_ON, curses.COLOR_BLACK), (PAIR_GO, curses.COLOR_BLUE),
-                       (PAIR_TOAST, curses.COLOR_YELLOW)):
-        try:
-            curses.init_pair(number, fg, curses.COLOR_BLUE if number == PAIR_ON else -1)
-        except curses.error:
-            pass
-    screen.keypad(True)
-    shell = Shell(session)
-    try:
-        draft = draft_path().read_text(encoding="utf-8")
-    except OSError:
-        draft = ""
-    ed = Editor(draft)
-    focus, pasting = "body", False
-    menu, menu_at = None, 0            # the open option's menu: menu_for() rows
-    saved_text, saved_at, dirty_at = draft, (time.strftime("%H:%M") if draft else ""), None
-    toast = ""
-    sending = None                     # the send in flight (issue #2240): {id, text, at}
-    prev, group = previous()
-    pick, touched = defaults(group), set()
-
-    def fresh():
-        """Back to the defaults (⌘N, esc, a send): what was in view now."""
-        nonlocal prev, group, pick, touched, menu, focus
-        prev, group = previous()
-        pick, touched, menu, focus = defaults(group), set(), None, "body"
-
-    def save(force=False):
-        nonlocal saved_text, saved_at, dirty_at
-        text = ed.text()
-        if text == saved_text:
-            dirty_at = None
-            return
-        if not force and dirty_at is not None and time.monotonic() - dirty_at < SAVE_EVERY:
-            return
-        if text.strip():
-            write_atomic(draft_path(), text)
-        else:
-            try:
-                draft_path().unlink()
-            except OSError:
-                pass
-        saved_text, saved_at, dirty_at = text, time.strftime("%H:%M") if text.strip() else "", None
-
-    def hangup(signum, frame):
-        # a respawn (the shell's portal / reload on a new client, issue #2113)
-        # or a closed window: what was typed since the last beat goes to disk first
-        try:
-            save(force=True)
-        finally:
-            raise SystemExit(0)
-
-    for sig in (signal.SIGHUP, signal.SIGTERM):
-        signal.signal(sig, hangup)
-
-    def told():
-        """The send in flight, ended? Done: the box empties and the options go
-        back to their defaults. Anything else: the text stays as it was written
-        and the toast says why and what next, until the next key (issue #2240)."""
-        nonlocal sending, toast
-        data = read_told()
-        if data is not None and data.get("id") == sending["id"]:
-            try:
-                result_path().unlink()
-            except OSError:
-                pass
-            if data.get("ok"):
-                if ed.text() == sending["text"]:
-                    ed.clear()
-                    save(force=True)
-                fresh()
-                toast = ""
-            else:
-                toast = tr("compose_failed_fmt", data.get("why") or tr("compose_failed_unknown"))
-            sending = None
-        elif time.monotonic() - sending["at"] >= TOLD_WAIT:
-            toast = tr("compose_failed_fmt", tr("compose_failed_silent"))
-            sending = None
-
-    def put(y, x, text, attr=0):
-        h, w = screen.getmaxyx()
-        if 0 <= y < h and x < w - 1:
-            try:
-                screen.addstr(y, x, clip(text, w - 1 - x), attr)
-            except curses.error:
-                pass
-
-    def open_menu(kind):
-        nonlocal menu, menu_at, focus
-        focus, menu = kind, menu_for(kind, group)
-        menu_at = next((n for n, m in enumerate(menu) if m[0] == pick[kind]), 0)
-
-    def step(d):
-        nonlocal menu_at
-        for _ in menu:
-            menu_at = (menu_at + d) % len(menu)
-            if not menu[menu_at][3]:
-                return
-
-    while True:
-        h, w = screen.getmaxyx()
-        screen.erase()
-        x0, bw = 3, max(10, w - 7)
-        dim = curses.color_pair(PAIR_DIM)
-        put(1, x0, tr("compose_head"), curses.A_BOLD)
-        if saved_at and ed.text().strip():
-            note = tr("compose_saved_fmt", saved_at)
-            put(1, max(x0, x0 + bw - cells(note)), note, dim)
-        inner = bw - 4
-        rows = []
-        for i, line in enumerate(ed.lines):
-            for s, e in wrap(line, inner):
-                rows.append((i, s, e))
-        box_h = max(6, min(len(rows), max(6, h - 10)))
-        cur = next((n for n, (i, s, e) in enumerate(rows)
-                    if i == ed.row and s <= ed.col <= e and (ed.col < e or e == len(ed.lines[i]) or
-                                                              n + 1 == len(rows) or rows[n + 1][0] != i)), 0)
-        top = max(0, cur - box_h + 1)
-        put(2, x0, "╭" + "─" * (bw - 2) + "╮", curses.color_pair(PAIR_BOX))
-        for y in range(box_h):
-            put(3 + y, x0, "│", curses.color_pair(PAIR_BOX))
-            put(3 + y, x0 + bw - 1, "│", curses.color_pair(PAIR_BOX))
-            n = top + y
-            if n < len(rows):
-                i, s, e = rows[n]
-                put(3 + y, x0 + 2, ed.lines[i][s:e])
-        if not ed.text():
-            put(3, x0 + 3, tr("compose_placeholder"), dim)
-        put(3 + box_h, x0, "╰" + "─" * (bw - 2) + "╯", curses.color_pair(PAIR_BOX))
-        y = 4 + box_h
-        files = attachments(ed.text())
-        if files:
-            put(y, x0 + 2, tr("compose_attach") + " ", dim)
-            put(y, x0 + 3 + cells(tr("compose_attach")),
-                ", ".join(os.path.basename(f) + (tr("compose_attach_big") if too_big(f) else "") for f in files))
-            y += 1
-        # the three options (issue #2231): picked already, ↵ sends as they are
-        x, at_x = x0 + 2, {}
-        for kind in OPTIONS:
-            put(y, x, tr("compose_" + kind) + " ", dim)
-            x += cells(tr("compose_" + kind)) + 1
-            field = " " + pick_label(kind, pick[kind], group) + " ▾ "
-            put(y, x, field, sel_on() if focus == kind else curses.A_BOLD)
-            at_x[kind] = x
-            x += cells(field) + 3
-        go = tr("compose_go_issue")
-        put(y, max(x, x0 + bw - cells(go)), go, curses.color_pair(PAIR_GO) | curses.A_BOLD)
-        put(y + 3 + len(menu) if menu else y + 1, x0 + 2, tr("compose_menu_keys") if menu else tr("compose_keys"), dim)
-        if toast and not menu:
-            put(y + 2, x0 + 2, toast, curses.color_pair(PAIR_TOAST))
-        if menu:
-            # the open option's menu, a box under its field
-            mx = at_x[focus]
-            lw = max(cells(m[1]) for m in menu) + 4
-            mw = min(bw - (mx - x0), max(lw + 3 + max(cells(m[2]) for m in menu) + 3, 24))
-            put(y + 1, mx, "╭" + "─" * (mw - 2) + "╮", curses.color_pair(PAIR_BOX))
-            for n, (value, label, note, grey) in enumerate(menu):
-                row = ("› " if n == menu_at else "  ") + ("✓ " if value == pick[focus] else "  ") + label
-                line = row + " " * max(1, lw + 2 - cells(row)) + note
-                put(y + 2 + n, mx, "│" + " " * (mw - 2) + "│", curses.color_pair(PAIR_BOX))
-                put(y + 2 + n, mx + 1, clip(line, mw - 2),
-                    sel_on() if n == menu_at else dim if grey else 0)
-            put(y + 2 + len(menu), mx, "╰" + "─" * (mw - 2) + "╯", curses.color_pair(PAIR_BOX))
-        # the cursor: in the box on the body, on the option in focus otherwise
-        if focus == "body":
-            i, s, e = rows[cur] if rows else (0, 0, 0)
-            cy, cx = 3 + cur - top, x0 + 2 + cells(ed.lines[i][s:ed.col])
-        elif menu:
-            cy, cx = y + 2 + menu_at, at_x[focus] + 1
-        else:
-            cy, cx = y, at_x[focus] + 1
-        try:
-            screen.move(min(cy, h - 1), min(cx, w - 2))
-        except curses.error:
-            pass
-        screen.refresh()
-
-        # a beat while typing: the draft; while a send is in flight: its answer
-        screen.timeout(int(TOLD_EVERY * 1000) if sending is not None else
-                       int(SAVE_EVERY * 1000) if dirty_at is not None else -1)
-        try:
-            kind, k = read_key(screen)
-        except curses.error:
-            kind, k = "none", ""
-        except KeyboardInterrupt:
-            kind, k = "key", "esc"
-        if kind != "none" and k != "resize" and sending is None:
-            toast = ""         # a failure's words stay until the next key (issue #2240)
-        if sending is not None:
-            told()
-        if kind == "none":
-            save(force=True)   # idle a beat: the draft is on disk
-            continue
-        if k == "portal":
-            fresh()            # ⌘N: the defaults for what was in view now
-            toast = ""
-            continue
-        if menu is not None:
-            # the open menu has the keys
-            if k in ("up", "down"):
-                step(1 if k == "down" else -1)
-            elif k == "enter" or (kind == "text" and k == " "):
-                if not menu[menu_at][3]:
-                    pick[focus] = menu[menu_at][0]
-                    touched.add(focus)
-                    menu = None
-            elif k in ("esc", "tab", "btab"):
-                menu = None
-            continue
-        if kind == "text":
-            if focus != "body" and k == " " and not pasting:
-                open_menu(focus)
-                continue
-            focus = "body"
-            ed.insert(k)
-            toast = ""
-        elif k == "paste_on":
-            pasting, focus = True, "body"
-        elif k == "paste_off":
-            pasting = False
-        elif k in ("newline",) or (k == "enter" and pasting):
-            focus = "body"
-            ed.newline()
-        elif k in ("enter", "down") and focus != "body":
-            open_menu(focus)
-        elif k == "enter":
-            # what was not changed by hand travels as «the default» (null): the
-            # hub picks the machine, the fleet its agent (共同约定 1)
-            data = payload(ed.text(), prev, pick["repo"],
-                           pick["node"] if "node" in touched else None,
-                           pick["agent"] if "agent" in touched else None)
-            if not data:
-                toast = tr("compose_empty")
-                continue
-            if sending is not None:
-                toast = tr("compose_sent_fmt", sending["title"])   # one send at a time
-                continue
-            if not write_atomic(send_path(), json.dumps(data, ensure_ascii=False) + "\n"):
-                toast = "✗ " + str(send_path())
-                continue
-            if data["repo"]:
-                write_atomic(state_path(), json.dumps({"repo": data["repo"]}) + "\n")
-            # The box empties only once the machine said done (issue #2240): until
-            # then the text stays, and a send that does not open says why, here.
-            save(force=True)
-            try:
-                result_path().unlink()
-            except OSError:
-                pass
-            if shell.hand("compose"):
-                toast = tr("compose_sent_fmt", data["title"])
-                sending = {"id": data["id"], "text": ed.text(), "title": data["title"], "at": time.monotonic()}
-            else:
-                out = subprocess.run([sys.executable, str(Path(__file__).absolute()), "--send", str(send_path())],
-                                     stdin=subprocess.DEVNULL, capture_output=True, text=True)
-                if out.returncode == 0:
-                    toast = tr("compose_result_fmt", place_why(out.stdout or out.stderr))
-                    ed.clear()
-                    save(force=True)
-                    fresh()
-                else:
-                    keep_failed(send_path())
-                    toast = tr("compose_failed_fmt", place_why((out.stdout or "") + "\n" + (out.stderr or ""))
-                               or tr("compose_failed_unknown"))
-        elif k == "tab" or k == "btab":
-            ring = ["body"] + list(OPTIONS)
-            at = ring.index(focus) if focus in ring else 0
-            focus = ring[(at + (1 if k == "tab" else -1)) % len(ring)]
-        elif k == "esc":
-            save(force=True)
-            go_back(shell, prev)
-            fresh()
-            continue
-        elif k == "resize":
-            continue
-        elif focus == "body":
-            {"bs": ed.backspace, "del": ed.delete, "left": lambda: ed.move(dc=-1),
-             "right": lambda: ed.move(dc=1), "up": lambda: ed.move(dr=-1), "down": lambda: ed.move(dr=1),
-             "home": lambda: setattr(ed, "col", 0), "end": lambda: setattr(ed, "col", len(ed.lines[ed.row])),
-             "kill_bol": ed.kill_bol, "kill_eol": ed.kill_eol, "kill_word": ed.kill_word}.get(k, lambda: None)()
-        if dirty_at is None and ed.text() != saved_text:
-            dirty_at = time.monotonic()
-
-
-def clip(text, width):
-    out, used = [], 0
-    for c in text:
-        w = cells(c)
-        if used + w > width:
-            break
-        out.append(c)
-        used += w
-    return "".join(out)
 
 
 def main(argv):
@@ -1158,19 +450,8 @@ def main(argv):
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
         return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"])
-    if argv[-1:] == ["--boot"]:   # an older client's ⌘N (issue #2616) — compat-1v
-        argv = argv[:-1]
-    if argv[:1] in (["--orch"], ["--steward"]) and len(argv) in (2, 4) and (len(argv) == 2 or argv[2] == "--client"):
-        return to_orch(argv[1], argv[3] if len(argv) == 4 else "")
-    session = ""
-    if argv[:1] == ["--session"] and len(argv) >= 2:
-        session = argv[1]
-    elif argv:
-        print(__doc__.split("\n\n")[1], file=sys.stderr)
-        return 2
-    os.environ.setdefault("ESCDELAY", "25")
-    curses.wrapper(ui, session)
-    return 0
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

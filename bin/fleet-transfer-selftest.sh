@@ -13,6 +13,10 @@ WORK=$(cd "$WORK" && pwd -P)
 # read or write the operator's pool state or alerts.
 export TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"
 unset FLEET_FAILOVER FLEET_CODEX_HOME FLEET_CODEX_ACCOUNTS FLEET_ACCOUNT_LABEL FLEET_ACCOUNTS_DIR
+if [ "${1:-}" = --proxy-home ]; then
+  export HOME="$WORK/home"; mkdir -p "$HOME"
+  unset CODEX_HOME FLEET_CODEX_PROFILE FLEET_CRED_SID
+fi
 LBL="transfer-selftest-$$-$RANDOM"
 TM() { tmux -L "$LBL" "$@"; }
 cleanup() { TM kill-server 2>/dev/null || :; sleep 0.2; rm -rf "$WORK"; }
@@ -35,7 +39,8 @@ cat > "$FB/ccquota" <<SH
 #!/bin/bash
 case "\$1 \$2" in
   'codex list') [ -f "$WORK/login-state" ] || { echo '[]'; exit 0; }
-     printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "$WORK/codex-home" "\$(cat "$WORK/login-state")" ;;
+     h="$WORK/codex-home"; [ ! -f "$WORK/profile-home" ] || h=\$(cat "$WORK/profile-home")
+     printf '[{"name":"work","home":"%s","account":"codex:acct:1","email":"w@example.invalid","plan":"plus","default":true,"login":{"state":"%s"}}]\n' "\$h" "\$(cat "$WORK/login-state")" ;;
   # issue #1669: the device-auth login the alert's ↵ runs — here it just succeeds
   'codex login') [ "\$3" = work ] && [ "\$4" = --device-auth ] || exit 64
      printf 'Open https://auth.example.invalid/device and enter ABCD-1234\n'; printf 'valid\n' > "$WORK/login-state" ;;
@@ -727,6 +732,7 @@ PYCRONCHECK
   exit 0
 fi
 
+if [ "${1:-}" != --proxy-home ]; then
 spawn 41 issue normal
 TM set-option -wu -t "$WIN" @worktree
 printf 'staged\n' > "$WT/file"; git -C "$WT" add file
@@ -1085,6 +1091,7 @@ rm "$WORK/typing-client"
 TM set-option -w -t "$WIN" @claude_state "done"
 wait_request failed; ok
 ok; kill -0 "$PID" && [ -z "$(field cc_agent)" ] || fail 'old Stop must not release a request after new activity'
+fi
 
 # Codex source fixture: the launcher owns the pane and exits through the real
 # --codex-exit cleanup path. The transfer lease must retain that same window.
@@ -1128,7 +1135,7 @@ spawn_codex() {
   local n=$1 cmd
   WT="$WORK/codex wt '$n"; git -C "$MAIN" worktree add -qb "issue-$n" "$WT" || fail 'Codex worktree'
   SID="11111111-1111-4111-8111-1111111111$n"
-  CHOME="$WORK/codex home's account"; mkdir -p "$CHOME/sessions/2026/09/17"
+  CHOME=${3:-"$WORK/codex home's account"}; mkdir -p "$CHOME/sessions/2026/09/17"
   TRANSCRIPT="$CHOME/sessions/2026/09/17/rollout-$SID.jsonl"
   python3 - "$TRANSCRIPT" "$SID" "$WT" <<'PYSOURCE'
 import json, pathlib, sys
@@ -1150,6 +1157,63 @@ PYSOURCE
   done
   PID=$(field cc_launcher_pid); [ -n "$PID" ] || fail 'Codex launcher identity'
 }
+if [ "${1:-}" = --proxy-home ]; then
+  REAL_HOME="$HOME/.codex"
+  MIRROR="$FLEET_CONF_DIR/cred-proxy/codex-homes/source-fixture"
+  mkdir -p "$REAL_HOME/sessions" "$MIRROR" "$FLEET_CONF_DIR/cred-proxy/sessions"
+  printf '%s\n' "$REAL_HOME" > "$MIRROR/.fleet-real-home"
+  ln -s "$REAL_HOME/sessions" "$MIRROR/sessions"
+  printf 'provider=codex\naccount=default\nroute=direct\n' > "$FLEET_CONF_DIR/cred-proxy/sessions/source-fixture"
+  printf '%s\n' "$REAL_HOME" > "$WORK/profile-home"
+  printf 'valid\n' > "$WORK/login-state"
+  printf 'Continue the same task after this clean Stop.\n' > "$WORK/notes.md"
+  export FLEET_FAILOVER=1
+  spawn_codex 66 normal "$MIRROR"
+  export CODEX_HOME="$MIRROR"
+  # The successor binds a native identity; no API/model or live login is used.
+  cat > "$WORK/codex.pl" <<'PLPROXY'
+use JSON::PP; use Cwd;
+alarm 60;
+my $record = encode_json({owner=>"$$", session_id=>'22222222-2222-4222-8222-222222222222',
+                         home=>$ENV{CODEX_HOME}, cwd=>getcwd()});
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@cc_launcher_pid',"$$");
+system('tmux','set-option','-w','-t',$ENV{TMUX_PANE},'@codex_identity',$record);
+$|=1; print "Codex native successor bound\n";
+while (<STDIN>) { }
+PLPROXY
+  TM set-option -w -t "$WIN" @claude_state working
+  transfer --dry-run && fail 'busy proxy source must refuse immediate transfer'; ok
+  printf 'reauth_required\n' > "$WORK/login-state"
+  transfer --after-turn --handoff "$WORK/notes.md" && fail 'invalid target login must refuse arm'; ok
+  [ -z "$(field agent_transfer_request)" ] && kill -0 "$PID" || fail 'auth refusal altered source'
+  printf 'valid\n' > "$WORK/login-state"
+  SP=$(TM display-message -p -t "$PANE" '#{socket_path}')
+  OUT=$(TMUX="$SP,0,0" TMUX_PANE="$PANE" FLEET_TRANSFER_IDLE_WAIT=20 FLEET_HANDOFF_DEFER_SECS=0 \
+    bash "$IBIN/fleet-transfer.sh" --session "$LBL" --window "$PANE" --to codex \
+    --after-turn --handoff "$WORK/notes.md" 2>&1) || fail 'valid proxy home must arm without an explicit target home'
+  REQUEST=$(printf '%s\n' "$OUT" | sed -n 's/^after-turn request: //p')
+  [ -s "$REQUEST/request.json" ] || fail 'arm returned no durable request'; ok
+  TM set-option -w -t "$WIN" @claude_state "done"
+  sleep 1
+  kill -0 "$PID" || fail 'arm/stale done was mistaken for clean Stop'; ok
+  TM set-option -w -t "$WIN" @claude_state working
+  stop_turn
+  wait_request started; ok
+  fleet_pid_alive "$PID" && fail 'source survived the clean handoff'
+  MANIFEST=$(field handoff_manifest); BUNDLE=${MANIFEST%/*}
+  python3 "$IBIN/.fleet-transfer.py" target-ready "$BUNDLE" "$LBL" "$PANE" >/dev/null \
+    || fail 'armed/started is not proof of native successor binding'; ok
+  python3 - "$MANIFEST" "$MIRROR" "$REAL_HOME" "$WT" "$SID" <<'PYPROXY' || fail 'same-task provenance or normalized launch home lost'
+import json, sys
+m=json.load(open(sys.argv[1]))
+assert m['source']['codex_home']==sys.argv[2] and m['source']['session_id']==sys.argv[5]
+assert m['target']['codex_home']==sys.argv[3] and m['workspace']['path']==sys.argv[4]
+assert m['source_resume_argv'][4]==sys.argv[2]
+PYPROXY
+  ok
+  printf 'fleet-transfer proxy-home selftest: PASS (%s checks; arm and native successor bound separately)\n' "$checks"
+  exit 0
+fi
 spawn_codex 61
 # A visible sidebar must neither block handoff nor become its source pane.
 SIDEBAR=$(TM split-window -hd -t "$PANE" -P -F '#{pane_id}' 'sleep 120')

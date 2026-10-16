@@ -559,11 +559,11 @@ func TestFleetClientMatchesBin(t *testing.T) {
 			t.Errorf("pack/%s differs from %s — run bin/fleet-client-pack.sh", name, name)
 		}
 	}
-	// The shell (claude-fleet#1484) ships: #1486 is what put it on the list.
-	// …and the Agent configuration package (claude-fleet#1725): its list, the
+	// The client ships — the thin one (claude-fleet#3003; the old shell of #1484
+	// went with #3008) — and the Agent configuration package (claude-fleet#1725): its list, the
 	// hook table + shim, a skill, and the mod's manifest under a dot directory
 	// (embedded only through `all:pack`).
-	for _, must := range []string{"bin/fleet", "bin/fleet-shell.sh", "bin/fleet-sidebar.py", "bin/tmux-status.sh", "conf/tmux-shell.conf",
+	for _, must := range []string{"bin/fleet", "bin/fleet-thin.py", "bin/fleet-connect.py", "bin/fleet-client-retire.sh",
 		"conf/agent-bundle.manifest", "bin/fleet-agent-bundle.py", "hooks/settings-hooks.json", "bin/fleet-hook-run.sh",
 		"skills/doc-preview/SKILL.md", "mod/fleet/.claude-plugin/plugin.json"} {
 		if !listed[must] {

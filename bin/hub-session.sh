@@ -52,7 +52,7 @@ BASE="${HUB_CWD:-$HOME}"
 
 # The full-screen list retired (issue #1533). Unless FLEET_DASH_WINDOW=1 brings
 # it back, the fleet's resting window is `home`: a plain shell in BASE that the
-# task list draws beside (fleet-sidebar.py), at the lowest index the hub had. It
+# task list draws beside (fleet_view.py), at the lowest index the hub had. It
 # is not a list of its own — nothing refreshes in it — but a session needs a
 # window that outlives its tasks, or the last one to close would take the fleet
 # and its server with it, and a fleet with no task yet starts one from the list's
