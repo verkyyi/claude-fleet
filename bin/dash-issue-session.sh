@@ -403,7 +403,8 @@ MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit "$RC_INFRA"; }
 REPO="${FLEET_REPO:-$(fleet_origin_url "$MAIN" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
-AUTHORITY=$(fleet_repo_authority_guard "$REPO") || { refuse "repo task authority is frozen or unavailable"; exit "$RC_INFRA"; }
+fleet_repo_authority_guard "$REPO" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
+AUTHORITY=$FLEET_AUTHORITY_RESULT
 AUTH_MODE=''
 [ -z "$AUTHORITY" ] || AUTH_MODE=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')
 # A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3598, EPIC #3570
@@ -415,9 +416,11 @@ TK_ID="hub:$(fleet_norm_repo "$REPO")#$num"
 if [ -n "$AUTHORITY" ]; then
   _accepted_ref=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ticket_ref", ""))')
   if [ -n "$_accepted_ref" ]; then
-    case "$_accepted_ref" in
-      "hub:$REPO#$num") TK_HUB=1; TK_ID="$_accepted_ref" ;;
-      "gh:$REPO#$num") TK_HUB=0; TK_ID="$_accepted_ref" ;;
+    _accepted_backend=$(python3 "$BIN/fleet_repo_authority.py" --match-ticket-ref "$REPO" "$num" "$_accepted_ref") \
+      || { refuse "accepted ticket reference does not match this issue"; exit "$RC_INFRA"; }
+    case "$_accepted_backend" in
+      hub) TK_HUB=1; TK_ID="$_accepted_ref" ;;
+      gh) TK_HUB=0; TK_ID="$_accepted_ref" ;;
       *) refuse "accepted ticket reference does not match this issue"; exit "$RC_INFRA" ;;
     esac
   fi
@@ -1043,7 +1046,7 @@ if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
-fleet_repo_authority_guard "$REPO" --finish >/dev/null || { refuse "repo requires accepted hub launch"; exit "$RC_INFRA"; }
+fleet_repo_authority_guard "$REPO" --finish >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }
 [ -z "${FLEET_AUTHORITY_START:-}" ] || pend="$pend FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }

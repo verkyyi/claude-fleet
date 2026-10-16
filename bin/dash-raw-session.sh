@@ -406,7 +406,13 @@ if [ "$NOREPO" != 1 ]; then
     unset _all
   fi
   if [ -n "$REPO_ARG" ]; then
-    REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+    if [ -n "$(fleet_repos "$SESS")" ]; then
+      _registered=$(fleet_target_repo "$SESS" "$REPO_ARG") \
+        || { refuse "raw: $REPO_ARG is not a uniquely registered repo this fleet hosts"; exit 1; }
+      REPO_ARG=$_registered
+    else
+      REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
+    fi
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
       || { refuse "raw: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
   fi
@@ -450,7 +456,7 @@ if [ "$NOREPO" != 1 ]; then
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
-  || { refuse "repo task authority is frozen or unavailable"; exit 1; }
+  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
 # cap, MAIN) have passed synchronously, so a refusal is immediate and lands on the
@@ -657,7 +663,7 @@ fi
 # A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
 # argument, which only a cold spawn can carry (see the header).
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
-  || { refuse "repo requires accepted hub launch"; exit 1; }
+  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
