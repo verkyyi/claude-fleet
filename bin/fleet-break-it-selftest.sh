@@ -6422,6 +6422,15 @@ drill_idle_activity_between_probes() {
   WHAT='真实 hook 同秒往返、创建后回收均拒绝空闲；只排除调用者，并发观察不吞活动'
 }
 
+drill_hubsess_unwatched_poll() {
+  CAP=25; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/hub-sessions-watch-selftest.py" --quick 2>&1) \
+    || { WHY="unwatched session list: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='常在线客户端不算打开列表；共享事件广播两秒内更新，真实请求恢复两秒节拍，输入相同不重算'
+}
+
 drill_spinner_unwatched_poll() {
   CAP=15; local t0 out
   t0=$(now)

@@ -21,8 +21,8 @@
 #      validator with a new body replaces the rows. A failed fetch keeps rows AND
 #      validator (the cache on disk is what it vouches for; the hub says 304 or
 #      sends the body when it is back); a cache that failed to WRITE drops it.
-#   E. Cadence: --loop refreshes every 2 s while a client is attached to a fleet
-#      session here, every 10 s when nobody is.
+#   E. Cadence: a recent list request AND a client keep the 2 s cadence;
+#      otherwise the default 60 s event-wait fallback applies.
 #   F. Long poll (issue #1526): a watched loop holding a validator sends `wait`;
 #      against a hub that holds, a change lands in the cache within ~1 s of it; a
 #      hub that ignores `wait` (older) gets the 2 s cadence, not a spin; nothing
@@ -70,6 +70,8 @@ if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
 verb="${1:-}"; args="$*"
 case "$verb" in
   display-message) case "$args" in
+      *fleet-wait-ready*) exec sleep 60 ;; # the shared wait kills/reaps this bounded fixture
+      *socket_path*) printf '%s\n' "$WATCH_SOCKET" ;;
       *@claude_state*) printf '%s\n' "${FAKE_PREV:-done/}" ;;
       *) : ;; esac ;;
   set-window-option) printf '%s\n' "$args" >> "${SETOPT_LOG:-/dev/null}" ;;
@@ -81,7 +83,19 @@ exit 0
 SHIM
 chmod +x "$WORK/bin/tmux"
 SHIMPATH="$WORK/bin:$PATH"
-export ATTACHED="$WORK/attached" SETOPT_LOG="$WORK/setopt.log"
+export ATTACHED="$WORK/attached" SETOPT_LOG="$WORK/setopt.log" WATCH_SOCKET="$WORK/watch.sock"
+# Exercise the shared attached() Unix-socket predicate. This fixture has no
+# control transport; u+x is the tmux attached bit, and the explicit request is
+# separate. The real server/broadcast integration lives in hub-sessions-watch.
+python3 - "$WATCH_SOCKET" <<'PY_SOCKET'
+import socket, sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+s.close()
+PY_SOCKET
+chmod 600 "$WATCH_SOCKET"
+view_on() { : > "$ATTACHED"; : > "$G/hubsess.view"; chmod 700 "$WATCH_SOCKET"; }
+view_off() { rm -f "$ATTACHED" "$G/hubsess.view"; chmod 600 "$WATCH_SOCKET"; }
 
 # hook <verb> — the hook as Claude Code runs it, stdin = a Notification payload.
 hook() {
@@ -252,15 +266,16 @@ unset CCQUOTA_HUB_URL
 export FLEET_HUB_SESSIONS_CMD="printf x >> '$WORK/fetches'; printf '%s' '{\"machines\":[],\"count\":0,\"sessions\":[]}'"
 export FLEET_HUB_SESSIONS_LOOP_SECS=5
 rm -f "$WORK/fetches" "$G/hubsess.pid"
-: > "$ATTACHED"
+view_on
 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 n=$(wc -c < "$WORK/fetches" | tr -d ' ')
 CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] || fail "E: watched — a 5 s loop fetched $n times, want ≥ 2 (every 2 s)"
-rm -f "$WORK/fetches" "$ATTACHED" "$G/hubsess.pid"
-PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
-eq  "E: unwatched — a 5 s loop fetches once (every 10 s, as before)" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
 rm -f "$WORK/fetches" "$G/hubsess.pid"
-: > "$ATTACHED"
+view_off
+PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
+eq  "E: unwatched — a 5 s loop fetches once (60 s fallback)" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
+rm -f "$WORK/fetches" "$G/hubsess.pid"
+view_on
 FLEET_HUB_SESSIONS_WATCHED_EVERY=10 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 eq  "E: FLEET_HUB_SESSIONS_WATCHED_EVERY sets the watched cadence" "1" "$(wc -c < "$WORK/fetches" | tr -d ' ')"
 # OFF: the loop is a no-op — nothing fetched, no pid file.
@@ -323,7 +338,7 @@ export CCQUOTA_HUB_URL="http://127.0.0.1:$hubport" FLEET_HUB_SESSIONS_WAIT=3
 nget() { grep -c '^GET' "$WORK/hub2.log" 2>/dev/null || echo 0; }
 
 # a bare --refresh never long-polls, validator or not
-: > "$ATTACHED"
+view_on
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
 eq  "F: --refresh sends no wait (validator held)" 'GET inm="A" wait=- held=n' "$(sed -n 2p "$WORK/hub2.log")"
@@ -331,6 +346,7 @@ eq  "F: …and the row is there"                 "working" "$(row_state)"
 
 # watched loop: the ask carries wait and is held; a change lands within 1 s
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
+view_on
 FLEET_HUB_SESSIONS_LOOP_SECS=4 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null & LOOP_PID=$!
 sleep 1.5
 # One rename, never a rewrite in place (issue #1801): the held ask re-reads this
@@ -349,6 +365,7 @@ CHECKS=$((CHECKS+1)); [ "$n" -le 8 ] || fail "F: a holding hub — $n asks in a 
 
 # an older hub that ignores wait: immediate 304s keep the 2 s cadence, no spin
 : > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"; : > "$WORK/hub2.nowait"
+view_on
 FLEET_HUB_SESSIONS_LOOP_SECS=5 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 n=$(nget)
 CHECKS=$((CHECKS+1)); [ "$n" -ge 2 ] && [ "$n" -le 4 ] || fail "F: a hub ignoring wait — $n asks in a 5 s loop, want 2–4 (every 2 s)" "$(cat "$WORK/hub2.log")"
@@ -359,10 +376,11 @@ rm -f "$WORK/hub2.nowait"
 FLEET_HUB_SESSIONS_LONGPOLL=0 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 hasnt "F: LONGPOLL=0 sends no wait"            "$(cat "$WORK/hub2.log")" 'wait=3'
 has   "F: …but still asks"                     "$(cat "$WORK/hub2.log")" 'wait=-'
-: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid" "$ATTACHED"
+: > "$WORK/hub2.log"; rm -f "$G/hubsess.pid"
+view_off
 FLEET_HUB_SESSIONS_LOOP_SECS=3 PATH="$SHIMPATH" bash "$HUBS" --loop 2>/dev/null
 eq  "F: unwatched — one ask, no wait"          'GET inm="B" wait=- held=n' "$(cat "$WORK/hub2.log")"
 kill "$SRV_PID" 2>/dev/null; wait "$SRV_PID" 2>/dev/null; SRV_PID=''
 
-printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s watched / 10 s idle, long poll)\n' "$CHECKS"
+printf 'PASS: hub-nudge — %d checks (nudge file + mtime, hook change-only, ETag/304 with #ts re-stamp, 2 s viewed / 60 s idle, long poll)\n' "$CHECKS"
 exit 0

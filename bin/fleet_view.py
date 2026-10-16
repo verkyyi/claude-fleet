@@ -422,6 +422,28 @@ def hub_stale(now=None):
     return age is not None and age > fenv("FLEET_HUB_SESSIONS_STALE", 60)
 
 
+def hub_view_request(fleet):
+    """Only a real list read renews the 30s viewing window (#4357).
+
+    Opening a sleeping list broadcasts on the shared channel. Continuing reads
+    renew its timestamp without waking every other renderer on every frame.
+    """
+    g = dash_global()
+    if not fleet or not (g / ('remote_' + fleet)).is_file():
+        return
+    request = g / 'hubsess.view'
+    try:
+        age = time.time() - request.stat().st_mtime
+    except OSError:
+        age = 31
+    try:
+        request.touch()
+    except OSError:
+        return
+    if age < 0 or age > 5:
+        tm('wait-for', '-S', 'fleet-state-changed')
+
+
 def hub_fresh(fleet):
     """The other machines' rows are only as new as global/remote_<fleet>, which
     fleet-hub-sessions.sh's loop keeps — a loop the collector's tick (re)starts. A
@@ -855,6 +877,7 @@ def entries(vid, now=None, hub=True):
     now = time.time() if now is None else now
     row = view_row(vid)
     fleet = view_fleet(vid, row)
+    hub_view_request(fleet)
     here, me = here_label(row), getpass.getuser()
     logins = fleet_logins()
     wins = windows(fleet) if fleet else {}

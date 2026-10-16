@@ -24,9 +24,9 @@
 #               (/v1/limits) — or both from POST /v1/fleet/summary when the
 #               identity is a connection certificate (issue #1502) — on their own cadence, FLEET_HUB_SUMMARY_EVERY
 #               (10s), see refresh_summaries below.
-#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while a client
-#               is attached to any fleet session on this machine — someone is
-#               looking — else every FLEET_HUB_SESSIONS_EVERY (10s), for
+#   --loop      --refresh every FLEET_HUB_SESSIONS_WATCHED_EVERY (2s) while the
+#               shared watcher predicate holds AND a real list read was within
+#               30s; otherwise wait on fleet-state-changed or a 60s fallback, for
 #               FLEET_HUB_SESSIONS_LOOP_SECS (70s), then exit. One at a time (pid
 #               file). The 2 s is half of the 「3 秒内看到」 budget (issue #1481);
 #               the other half is the node reporting a change at once
@@ -45,10 +45,10 @@
 #               later. An answer that was held, or a 200, is asked again at once;
 #               an immediate 304 or a failure (an older hub ignores `wait`) falls
 #               back to the 2 s cadence. FLEET_HUB_SESSIONS_LONGPOLL=0 turns it
-#               off; nobody looking, it is never sent (the 10 s cadence as before).
+#               off; without a recent list request, it is never sent.
 #   --ensure    start a detached --loop unless one is alive (one per cache: the
 #               loop holds global/hubsess.lock — issue #2630; never via nohup). The collector runs this
-#               every tick (60s), so the 10s cadence needs no daemon of its own and a
+#               every tick (60s), so the fallback needs no daemon of its own and a
 #               loop can never outlive the collector by more than one round. Each call
 #               stamps global/hubsess.want, and a running loop goes on to LOOP_SECS
 #               past the newest stamp (issue #3079) — one loop for as long as the
@@ -167,15 +167,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 G="$FLEET_C/global"
 EVERY="${FLEET_HUB_SESSIONS_EVERY:-10}"; case "$EVERY" in ''|*[!0-9]*|0) EVERY=10 ;; esac
 WATCHED_EVERY="${FLEET_HUB_SESSIONS_WATCHED_EVERY:-2}"; case "$WATCHED_EVERY" in ''|*[!0-9]*|0) WATCHED_EVERY=2 ;; esac
-# A NODE's round while nobody is attached to any of its fleets (issue #4261): what
-# it writes is for the dash rows, the 看台's notifications and a parked policy mark —
-# the first two reach only somebody attached, the last tolerates half a minute. So
-# such a round comes every IDLE_EVERY (30 s), not EVERY: each login on a shared
-# machine ran this loop every 10 s for nobody (~200 processes a round). The wait is
-# napped WATCHED_EVERY at a time and ends the moment a client attaches (socket u+x,
-# no fork). An explicit FLEET_HUB_SESSIONS_EVERY is kept as the idle pace too.
+# No real list request: events wake the loop; 60s is only discovery/fallback.
+# Preserve explicit interval overrides (including existing accelerated fixtures).
 IDLE_EVERY="${FLEET_HUB_SESSIONS_IDLE_EVERY:-${FLEET_HUB_SESSIONS_EVERY:+$EVERY}}"
-case "$IDLE_EVERY" in ''|*[!0-9]*|0) IDLE_EVERY=30 ;; esac
+case "$IDLE_EVERY" in ''|*[!0-9]*|0) IDLE_EVERY=60 ;; esac
 ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 # …and what MAPPED that cache (issue #2397): the ETag vouches for the hub's answer,
 # not for the rows this code kept of it. Its second line is this stamp — the code
@@ -183,13 +178,15 @@ ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 # validator under any other stamp is never sent: cj's client, updated to the code
 # that keeps his node login's rows (#2390), kept asking with the ETag the old code
 # had stored beside an empty cache, and every 304 kept the list empty.
-MAPCODE=$(cat "$BIN/fleet-hub-sessions.sh" "$BIN/fleet-lib.sh" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }')
+MAPCODE=$(cat "$BIN/fleet-hub-sessions.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-render-watch.py" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }')
 ETAG_STAMP=''  # this round's stamp (fetch sets it; curl_sessions writes it)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac
 [ "$LP_WAIT" -le 25 ] || LP_WAIT=25
 WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop only
-NAP_SOCKS='' # this login's fleet sockets, as watched() last listed them (issue #4261)
+NAP_SOCKS=() # this login's fleet sockets, as watched() last listed them (issue #4261)
+NAP_PID=''
+FOLLOWUP=0
 LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 NSCOPED=0    # 1 = …over this login's node token: cut to its person's logins (issue #3001)
@@ -409,7 +406,7 @@ fetch() {
   case "$st" in ok\ *) ETAG_STAMP=cert ;; *) ETAG_STAMP=token ;; esac
   node_token && ETAG_STAMP=node
   ETAG_STAMP="map $MAPCODE $ETAG_STAMP node ${FLEET_HUB_SESSIONS_USER:-}"
-  if [ -s "$ETAGF" ] && { read -r etag; IFS= read -r stamp || stamp=''; } < "$ETAGF" && [ -n "$etag" ]; then
+  if [ -s "$G/hubsess.body" ] && [ -s "$ETAGF" ] && { read -r etag; IFS= read -r stamp || stamp=''; } < "$ETAGF" && [ -n "$etag" ]; then
     [ "$stamp" = "$ETAG_STAMP" ] || etag=''
     while IFS=$'\t' read -r sess _c; do
       [ -z "$sess" ] || [ -s "$G/remote_$sess" ] || { etag=''; break; }
@@ -578,7 +575,13 @@ $(local_fleets)
 EOF
   fetch "$json" "$lf"; rc=$?; LAST_FETCH=$rc
   if [ "$rc" = 3 ]; then
-    restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
+    # The validator only covers the hub body, not local windows/parent files.
+    # Remap that retained body when those inputs changed, even on a 304.
+    if [ -s "$G/hubsess.body" ]; then
+      cp "$G/hubsess.body" "$json"; rc=0
+    else
+      restamp "$lf"; rm -f "$json" "$lf" "$mf"; return 0
+    fi
   fi
   if [ "$rc" != 0 ] || [ ! -s "$json" ]; then
     # one line, with how long the hub has been silent (hub_ok is left as it was);
@@ -597,6 +600,7 @@ EOF
   fi
   now=$(date +%s)
   map_write "$json" "$lf" "$mf" "$now" hub "$(rows_user)"; rc=$?
+  if [ "$rc" = 0 ]; then mv -f "$json" "$G/hubsess.body"; fi
   rm -f "$json" "$lf" "$mf"
   # A cache that failed to write is not vouched for: the next fetch takes the body.
   # One that stood is the hub answering: hub_ok (#1483).
@@ -610,8 +614,9 @@ map_write() {
   local json="$1" lf="$2" mf="$3" now="$4" via="$5" user="$6"
   python3 - "$json" "$lf" "$G" "$FLEET_C" "$FLEET_CONF_DIR/control/hub-workers.tsv" \
     "$user" "$(hostname 2>/dev/null)" \
-    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$via" "$(id -un 2>/dev/null)" <<'PY'
-import json, os, re, sys, tempfile, time
+    "${FLEET_NODE_ALIASES:-}" "$now" "$mf" "$BIN" "$via" "$(id -un 2>/dev/null)" "$MAPCODE" <<'PY'
+import hashlib, json, os, re, sys, tempfile, time
+from pathlib import Path
 from datetime import datetime, timezone
 jpath, lpath, gdir, cdir, wpath, user, host, aliases, now, mpath, bindir, via, login = sys.argv[1:14]
 sys.path.insert(0, bindir)
@@ -634,6 +639,53 @@ for line in open(lpath, encoding="utf-8"):
         local.append(dict(sess=p[0], uuid=p[1], multi=p[2] == "1", repos=p[3].split()))
 local_uuids = {f["uuid"] for f in local if f["uuid"]}
 clean = lambda v: re.sub(r"[\t\n\r\x1f]", " ", str(v if v is not None else ""))
+
+# The hub response plus local mapping inputs, not the clock, determine the
+# rows. Verify retained outputs too: deletion/corruption forces a real rebuild.
+def notify_rows(rows):
+    if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(wpath)), "thin-lease.json")):
+        try:
+            import fleet_notify
+            os.environ["FLEET_CONF_DIR"] = os.path.dirname(os.path.dirname(wpath))
+            fleet_notify.beat(rows, gdir, "", sender=[sys.executable, os.path.join(bindir, "fleet_thin_lease.py"), "notify"])
+        except Exception as e:
+            sys.stderr.write("fleet-hub-sessions: notify: %s\n" % e)
+
+memo_path = Path(gdir) / "hubsess.map.json"
+def digest_file(path, rows=False):
+    try:
+        raw = Path(path).read_bytes()
+        if rows and raw.startswith(b"#ts\x1f"):
+            raw = raw.partition(b"\n")[2]
+        return hashlib.sha256(raw).hexdigest()
+    except OSError:
+        return None
+
+parent_paths = sorted({str(Path(cdir) / "fleets" / re.sub(r"[^A-Za-z0-9._-]", "", r.replace("/", "-")) / "parents")
+                       for f in local for r in f["repos"]})
+inputs = [sys.argv[14], user, host, aliases, via, login,
+          digest_file(jpath), digest_file(lpath), digest_file(mpath),
+          [(p, digest_file(p)) for p in parent_paths]]
+key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
+outputs = [wpath, str(Path(gdir) / "fleet_logins")] + [str(Path(gdir) / (pre + f["sess"]))
+           for f in local for pre in ("remote_", "epicstale_", "orphanrep_")]
+def output_digests():
+    return {p: digest_file(p, rows=Path(p).name.startswith("remote_")) for p in outputs}
+try:
+    memo = json.loads(memo_path.read_text())
+    if memo["key"] == key and memo["outputs"] == output_digests():
+        for f in local:
+            path = Path(gdir) / ("remote_" + f["sess"])
+            raw = path.read_text()
+            fd, tmp = tempfile.mkstemp(dir=gdir, prefix=".hubsess.")
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write("#ts\x1f%s\n" % now + raw.partition("\n")[2])
+            os.replace(tmp, path)
+        os.utime(wpath, None)
+        notify_rows(memo["rows"])
+        sys.exit(0)
+except (OSError, ValueError, KeyError, TypeError):
+    pass
 
 # This machine's live windows (issue #1480): (fleet, key) → window id, keyed by
 # the hub's own rule (fleet_hub_common.worker_key, what the node agent reports),
@@ -994,31 +1046,24 @@ for f in local:
 # of this machine's caches, told to the terminal of the 看台 here that holds the
 # person's lease (fleet_thin_lease.py keeps it). Only once a thin 看台 has had a
 # lease here — never one, no book, nothing.
-if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(wpath)), "thin-lease.json")):
-    try:
-        import fleet_notify
-        os.environ["FLEET_CONF_DIR"] = os.path.dirname(os.path.dirname(wpath))
-        fleet_notify.beat(rows, gdir, "", sender=[sys.executable, os.path.join(bindir, "fleet_thin_lease.py"), "notify"])
-    except Exception as e:
-        sys.stderr.write("fleet-hub-sessions: notify: %s\n" % e)
+notify_rows(rows)
+write(str(memo_path), json.dumps(dict(key=key, outputs=output_digests(), rows=rows)))
 PY
 }
 
-# watched — is anyone looking? A client attached to any fleet session on this
-# machine: the dash, a thin client's 看台, another machine's window. Then the loop runs
-# at WATCHED_EVERY; with nobody attached there is no one to show a change to
-# sooner, and the hub is asked every EVERY as before.
+# The shared watcher predicate, qualified by an actual list read in the last 30s.
+# An attached terminal/online lease is not itself an open list (#4357).
 watched() {
-  local sess _c
-  NAP_SOCKS=''   # the sockets idle_nap watches (issue #4261)
+  local sess _c path
+  NAP_SOCKS=()
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
-    NAP_SOCKS="$NAP_SOCKS $sess"
-    [ -n "$(tmux -L "$sess" list-clients 2>/dev/null)" ] && return 0
+    path=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null) || continue
+    [ -z "$path" ] || NAP_SOCKS+=("$path")
   done <<EOF
 $(local_fleets)
 EOF
-  return 1
+  python3 "$BIN/fleet-render-watch.py" --view-active "$G/hubsess.view" 1 ${NAP_SOCKS[@]+"${NAP_SOCKS[@]}"}
 }
 
 # --- The status bar's two summaries (issue #1482, EPIC #1479 C3) ---------------
@@ -1337,7 +1382,7 @@ refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
-  local end every t0 want
+  local end every t0 want left first=1
   # ONE loop per cache, by a lock its holder keeps for life (issue #2630): the
   # pid file alone let two shells' --ensure race past each other (two loops on
   # one cache for hours). Not holding it yet ⇒ re-exec under the lock; someone
@@ -1349,11 +1394,20 @@ loop() {
   unset FLEET_HUBSESS_LOCKED FLEET_HUBSESS_GUARD
   INV_ON=1
   printf '%s\n' "$$" > "$PIDF"
+  trap 'loop_cleanup' EXIT
+  trap 'exit 0' TERM INT
   printf '%s\n' "$MAPCODE" > "$LOOPCODEF.new" 2>/dev/null && mv -f "$LOOPCODEF.new" "$LOOPCODEF"
   end=$(( $(date +%s) + LOOP_SECS ))
   while :; do
     # the lock's holder is gone (SIGKILLed): the lock went with it — stop
     if [ -n "$guard" ] && ! kill -0 "$guard" 2>/dev/null; then break; fi
+    # --ensure extends our life. A long fallback must be cut at the lifetime
+    # boundary, not make the loop exit a whole minute before that boundary.
+    { read -r want < "$WANTF"; } 2>/dev/null || want=0
+    case "$want" in ''|*[!0-9]*) want=0 ;; esac
+    [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
+    [ "$first" = 1 ] || [ "$(date +%s)" -lt "$end" ] || break
+    first=0
     every=$EVERY; WAIT=''
     if watched; then
       every=$WATCHED_EVERY
@@ -1361,8 +1415,13 @@ loop() {
     else
       every=$IDLE_EVERY
     fi
+    : > "$G/hubsess.round.start"
     t0=$(date +%s); LP_SENT=0; LAST_FETCH=1
     refresh_all 2>/dev/null
+    # The node's nudge and the hub's publication are asynchronous. One bounded
+    # follow-up after a local event catches a heartbeat racing the first fetch;
+    # it does not keep an unseen list on a timer thereafter.
+    if [ "$FOLLOWUP" = 1 ]; then every=1; FOLLOWUP=0; fi
     # A thin client's 看台 here (issue #3005): its lease is this machine's to keep.
     thin_lease_beat
     # A long-polled answer paces itself (issue #1526): a 200 (a change) or a
@@ -1371,33 +1430,42 @@ loop() {
     if [ "$LP_SENT" = 1 ] && { [ "$LAST_FETCH" = 0 ] || [ $(( $(date +%s) - t0 )) -ge "$WATCHED_EVERY" ]; }; then
       every=0
     fi
-    # kept alive by the newest --ensure (WANTF): it never outlives the last
-    # caller by more than LOOP_SECS, and never ends while one keeps calling
-    { read -r want < "$WANTF"; } 2>/dev/null || want=0
-    case "$want" in ''|*[!0-9]*) want=0 ;; esac
-    [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
-    [ $(( $(date +%s) + every )) -le "$end" ] || break
-    if [ "$every" -gt "$EVERY" ]; then
-      idle_nap "$every"
-    elif [ "$every" != 0 ]; then
-      sleep "$every"
-    fi
+    left=$(( end - $(date +%s) ))
+    [ "$left" -gt 0 ] || break
+    [ "$every" -le "$left" ] || every=$left
+    [ "$every" = 0 ] || idle_nap "$every"
   done
-  read -r p < "$PIDF" 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0
 }
 
-# idle_nap <secs> — an unwatched node round's wait (issue #4261): WATCHED_EVERY at a
-# time, ended as soon as one of this login's fleet sockets has a client — tmux keeps
-# a socket u+x while one is attached, so the test is a builtin, no fork.
-idle_nap() {
-  local left="$1" d s
-  d="${TMUX_TMPDIR:-/tmp}/tmux-${UID:-$(id -u)}"
-  while [ "$left" -gt 0 ]; do
-    sleep "$WATCHED_EVERY"; left=$(( left - WATCHED_EVERY ))
-    for s in $NAP_SOCKS; do [ -x "$d/$s" ] && return 0; done
-  done
+loop_cleanup() {
+  local p
+  if [ -n "$NAP_PID" ]; then
+    kill "$NAP_PID" 2>/dev/null || :
+    wait "$NAP_PID" 2>/dev/null || :
+  fi
+  rm -f "$G/hubsess.wake.$$"
+  { read -r p < "$PIDF"; } 2>/dev/null && [ "$p" = "$$" ] && rm -f "$PIDF"
   return 0
+}
+
+# Wait on the same broadcast as the spinner. No two-second socket polling.
+# Thin-client lease renewal is maintenance (15s), independent of row refresh;
+# servicing it must not turn an online lease back into an open list.
+idle_nap() {
+  local until=$(( SECONDS + $1 )) left cap reason
+  while [ "$SECONDS" -lt "$until" ]; do
+    left=$(( until - SECONDS )); cap=$left
+    if [ -f "$FLEET_CONF_DIR/thin-lease.json" ] && [ "$cap" -gt 15 ]; then cap=15; fi
+    python3 "$BIN/fleet-render-watch.py" --events-only --max-frames "$cap" \
+      --since "$G/hubsess.round.start" --changed "$G/hubsess.view" \
+      --changed "$FLEET_CONF_DIR/global/hub-nudge" 1 ${NAP_SOCKS[@]+"${NAP_SOCKS[@]}"} > "$G/hubsess.wake.$$" &
+    NAP_PID=$!
+    wait "$NAP_PID"; NAP_PID=''
+    read -r reason < "$G/hubsess.wake.$$" || reason=timeout
+    case "$reason" in event|changed) FOLLOWUP=1; return 0 ;; esac
+    [ "$cap" = "$left" ] || thin_lease_beat
+  done
 }
 
 # thin_lease_beat — the person's client lease for each thin 看台 with a client
