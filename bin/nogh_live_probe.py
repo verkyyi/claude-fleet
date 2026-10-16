@@ -92,7 +92,7 @@ def main(name):
         require(Path('/usr/bin/gh').is_file(), 'GH_TOOL_MISSING')
         if name == 'github-name':
             command = ['/usr/bin/curl', '-fsS', '--connect-timeout', '1', '--max-time', '1',
-                       'https://api.github.com/rate_limit']
+                       'https://api.github.com/rate_limit']  # dist-ok: intentional denied-access control, never code distribution
         elif name == 'execveat':
             pid = os.fork()
             if pid == 0:

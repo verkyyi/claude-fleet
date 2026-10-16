@@ -169,7 +169,7 @@ class Observations(unittest.TestCase):
         self.assertEqual(receipt['live'], 'NOT RUN')
 
     def test_old_generation_late_or_missing_event_is_sticky(self):
-        for change in (dict(generation=0), dict(execution_generation=0), dict(interval=0), dict(seq=3),
+        for change in (dict(generation=0), dict(execution_generation=0), dict(interval=0), dict(seq=4),
                        dict(endpoint_uid=str(uuid.uuid4()))):
             self.setUp(); self.ready()
             with self.assertRaises(live.Refused): self.event('exit', dict(pid=123), **change)
@@ -315,6 +315,15 @@ class Verdict(unittest.TestCase):
 
 
 class Templates(unittest.TestCase):
+    def test_api_omits_only_known_zero_value_fields(self):
+        p = plan(); ep = p['endpoints'][0]; pod = template.pod(p, ep)
+        for key in ('hostNetwork', 'hostPID', 'hostIPC'): pod['spec'].pop(key)
+        pod['spec']['dnsConfig'].pop('searches')
+        for c in pod['spec']['containers'] + pod['spec']['initContainers']: c.pop('tty')
+        template.check_pod(p, ep, pod)
+        pod['spec'].pop('automountServiceAccountToken')
+        with self.assertRaises(live.Refused): template.check_pod(p, ep, pod)
+
     def test_unbound_recipe_has_no_fabricated_object_identity(self):
         p = plan(); p['routes'] = []
         for ep in p['endpoints']:

@@ -20,7 +20,8 @@ PHASES = ('startup', 'identity', 'deny:github-name', 'deny:github-v4', 'deny:git
           'allow:hub', 'allow:provider') + tuple('row:A%d' % n for n in range(1, 13)) + \
          ('row:A4-denied', 'row:A4-restored', 'end')
 MARKER_FD = 198
-TRACE_CALLS = ('process,socket,socketpair,connect,accept,accept4,sendto,sendmsg,sendmmsg,'
+TRACE_CALLS = ('execve,execveat,clone,clone3,fork,vfork,exit,exit_group,wait4,waitid,'
+               'socket,socketpair,bind,recvfrom,connect,accept,accept4,sendto,sendmsg,sendmmsg,'
                'dup,dup2,dup3,fcntl,close,close_range,write,writev,sendfile,splice,recvmsg,recvmmsg,'
                'io_uring_setup,io_uring_enter,pidfd_getfd,unshare,setns')
 STRACE_OPTIONS = ['-f', '-q', '-ttt', '-T', '-v', '-s', '0', '--kill-on-exit',
@@ -186,7 +187,7 @@ class Trace:
             elif 'F_SETFD' in call:
                 self.action((start, 'cloexec', pid, (fd, 'FD_CLOEXEC' in call)))
             return
-        require(name in ('connect', 'sendto', 'sendmsg', 'sendmmsg', 'accept', 'accept4'), 'UNSUPPORTED_SYSCALL')
+        require(name in ('bind', 'recvfrom', 'connect', 'sendto', 'sendmsg', 'sendmmsg', 'accept', 'accept4'), 'UNSUPPORTED_SYSCALL')
         fd_match = re.match(r'\w+\((-?\d+)', call)
         require(fd_match is not None, 'NETWORK_FD')
         fd = int(fd_match[1])
@@ -206,6 +207,12 @@ class Trace:
             ip = ipaddress.ip_address(addr[1])
             ip = getattr(ip, 'ipv4_mapped', None) or ip
             targets.append((str(ip), int(port[1])))
+        if name in ('bind', 'recvfrom'):
+            result = re.search(r'\)\s+= (-?\d+)', call)
+            require(result is not None, 'INBOUND_RESULT')
+            if int(result[1]) >= 0:
+                self.action((start, 'bound' if name == 'bind' else 'received', pid, (fd, targets)))
+            return
         if name in ('accept', 'accept4'):
             result = re.search(r'\)\s+= (-?\d+)', call)
             require(result is not None, 'ACCEPT_RESULT')
@@ -249,6 +256,7 @@ class Trace:
         """
         tables = {self.root: {}}
         pending = {}
+        bound, replies = {}, {}
 
         def descendant(child, parent):
             while child in self.parents and child:
@@ -285,7 +293,7 @@ class Trace:
             elif action == 'dup': touches = [(data[0], data[0], False), (data[1], data[1], True)]
             elif action == 'cloexec': touches = [(data[0], data[0], True)]
             elif action == 'accept': touches = [(data[0], data[0], False), (data[1], data[1], True)]
-            elif action in ('write', 'network'): touches = [(data[0], data[0], False)]
+            elif action in ('write', 'network', 'bound', 'received'): touches = [(data[0], data[0], False)]
             for first, last, write in touches:
                 access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None)
             if action in ('write', 'network') and data[0] in table:
@@ -333,10 +341,25 @@ class Trace:
                 fd, end = data
                 if fd in table and table[fd][0][1] != 'local':
                     self.record(pid, at, end, table[fd][0][1])
+            elif action in ('bound', 'received'):
+                fd, targets = data
+                state = table.get(fd, ([None, 'unknown'], False))[0]
+                if action == 'bound':
+                    bound[id(state)] = targets
+                elif (self.role == 'dns' and state[0] == 'udp' and
+                      bound.get(id(state)) == [(next(e['pod_ip'] for e in self.plan['endpoints']
+                                                    if e['role'] == 'dns'), 53)]):
+                    for ip, port in targets:
+                        if ip in {e['pod_ip'] for e in self.plan['endpoints']}:
+                            replies[(id(state), ip, port)] = until
             elif action == 'network':
                 fd, name, targets, count, local, end, connected, disconnected = data
                 state = table.get(fd, ([None, 'unknown'], False))[0]
                 categories = [self.classify(t, state[0]) for t in targets]
+                for i, target in enumerate(targets):
+                    received = replies.get((id(state), *target))
+                    if received is not None and received <= at and self.role == 'dns' and state[0] == 'udp':
+                        categories[i] = 'allow_dns'
                 if local:
                     require(state[1] == 'local' or name == 'connect', 'SOCKET_FAMILY_CHANGED')
                     categories = ['local']

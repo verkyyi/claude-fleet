@@ -157,11 +157,16 @@ def admission(plan):
 def check_pod(plan, endpoint, actual):
     """Compare all security-relevant expected fields, allowing API defaults only."""
     expected = pod(plan, endpoint)
-    def contains(want, have):
+    omitted_zeroes = {('hostNetwork',), ('hostPID',), ('hostIPC',), ('dnsConfig', 'searches'),
+                      ('containers', '*', 'tty'), ('initContainers', '*', 'tty')}
+    def contains(want, have, path=()):
         if isinstance(want, dict):
-            return isinstance(have, dict) and all(k in have and contains(v, have[k]) for k, v in want.items())
+            return isinstance(have, dict) and all(
+                (k not in have and path + (k,) in omitted_zeroes and not v) or
+                (k in have and contains(v, have[k], path + (k,))) for k, v in want.items())
         if isinstance(want, list):
-            return isinstance(have, list) and len(want) == len(have) and all(contains(x, y) for x, y in zip(want, have))
+            return isinstance(have, list) and len(want) == len(have) and all(
+                contains(x, y, path + ('*',)) for x, y in zip(want, have))
         return want == have
     require(contains(expected['spec'], actual.get('spec')), 'TEST_TEMPLATE_CHANGED')
     spec = actual['spec']

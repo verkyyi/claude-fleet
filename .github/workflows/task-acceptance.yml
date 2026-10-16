@@ -44,6 +44,8 @@ jobs:
         run: bin/nogh-live-selftest.sh
       - name: C9 actual kernel and strace (entry includes cleanup, under 60 seconds)
         run: python3 bin/nogh_live_kernel_test.py
+      - name: C9 actual TLS authority and WebSocket (entry includes cleanup, under 60 seconds)
+        run: python3 bin/nogh_live_http_test.py
       - name: A1–A12 with OS network deny and independent CLI counter
         timeout-minutes: 11
         # Only this new network namespace gets loopback enabled. Drop root before
