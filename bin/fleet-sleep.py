@@ -26,15 +26,39 @@ import time
 import uuid
 
 BIN = Path(__file__).absolute().parent
-TRANSFER = runpy.run_path(str(BIN / '.fleet-transfer.py'))
-INPUT = runpy.run_path(str(BIN / 'fleet-input.py'))
-CODEX = runpy.run_path(str(BIN / 'fleet-codex-session.py'))
+
+
+class LazyModule(dict):
+    def __init__(self, filename):
+        super().__init__()
+        self.filename = filename
+        self.loaded = False
+
+    def load(self):
+        if not self.loaded:
+            self.update(runpy.run_path(str(BIN / self.filename)))
+            self.loaded = True
+
+    def __missing__(self, key):
+        self.load()
+        if key not in self:
+            raise KeyError(key)
+        return self[key]
+
+    def copy(self):
+        self.load()
+        return super().copy()
+
+
+TRANSFER = LazyModule('.fleet-transfer.py')
+INPUT = LazyModule('fleet-input.py')
+CODEX = LazyModule('fleet-codex-session.py')
 RPC = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
-ARGV = runpy.run_path(str(BIN / 'fleet_sleep_argv.py'))
-LOOP = runpy.run_path(str(BIN / 'fleet-loop.py'))
-MCP = runpy.run_path(str(BIN / 'fleet_sleep_mcp.py'))
-PARK = runpy.run_path(str(BIN / 'fleet_sleep_park.py'))
-LOOPMARK = runpy.run_path(str(BIN / 'fleet_loop_mark.py'))
+ARGV = LazyModule('fleet_sleep_argv.py')
+LOOP = LazyModule('fleet-loop.py')
+MCP = LazyModule('fleet_sleep_mcp.py')
+PARK = LazyModule('fleet_sleep_park.py')
+LOOPMARK = LazyModule('fleet_loop_mark.py')
 
 
 def loop_pending(value):
@@ -189,22 +213,29 @@ SESSION_FMT='#{?#{session_group},#{session_group},#{session_name}}'
 class Worker:
     def __init__(self, session, target):
         self.session = session
-        self.window = self.tm('display-message', '-p', '-t', target, '#{window_id}')
+        identity = self.tm('display-message', '-p', '-t', target,
+                           '#{window_id}|' + SESSION_FMT).split('|', 1)
+        if len(identity) != 2: raise ValueError('unknown window')
+        self.window, owner_session = identity
         if not re.fullmatch(r'@\d+', self.window): raise ValueError('unknown window')
         # The fleet a window belongs to is its session's GROUP when it has one
         # (issue #2622): with a client on a grouped view session
         # (`<fleet>@view-<id>`) tmux answers a bare #{session_name} with the
         # view's name, and every worker read `wrong fleet` — nothing slept.
-        if self.tm('display-message','-p','-t',self.window,SESSION_FMT) != session: raise ValueError('wrong fleet')
+        if owner_session != session: raise ValueError('wrong fleet')
         panes = self.tm('list-panes', '-t', self.window, '-F', '#{pane_id} #{@sidebar} #{@dash}').splitlines()
         workers = [p.split()[0] for p in panes if len(p.split()) == 1]
         if len(workers) != 1: raise NotAWorker('requires exactly one worker pane')
         self.pane = workers[0]
-        if self.opt('window_name') in ('dash','plan','backlog','home') or self.opt('@hub') == '1':
+        metadata = self.tm('display-message', '-p', '-t', self.pane,
+                           '#{==:#{@hub},1}|#{!=:#{@remote},}|#{@issue}|#{@raw}|#{window_name}').split('|', 4)
+        if len(metadata) != 5: raise ValueError('worker metadata unavailable')
+        hub, remote, issue, raw, name = metadata
+        if name in ('dash','plan','backlog','home') or hub == '1':
             raise NotAWorker('panel/hub is not a worker')
-        if self.opt('@remote'):
+        if remote == '1':
             raise NotAWorker('a proxy onto another machine is not a worker here')
-        if not self.opt('@issue').isdigit() and self.opt('@raw') != '1':
+        if not issue.isdigit() and raw != '1':
             raise ValueError('not an issue or scratch worker')
         self.directory = root(session)
         self.lockfile = self.directory / ('window-' + self.window[1:] + '.lock')

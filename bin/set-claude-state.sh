@@ -540,10 +540,18 @@ if [ "$sem" = "done" ]; then
   [ -n "$_bin" ] && [ -f "$_bin/fleet-hook-conf.sh" ] \
     && _kv=$(bash "$_bin/fleet-hook-conf.sh" FLEET_AUTO_HANDOFF_PCT FLEET_HANDOFF_DEFER_SECS FLEET_COMPACT_PREP_PCT FLEET_COMPACT_MAX \
          FLEET_AUTO_HANDOFF_TOKENS FLEET_COMPACT_PREP_TOKENS FLEET_HUB_CTX_ACTION FLEET_NOTIFY_CMD 2>/dev/null)
-  _hp=$(printf '%s\n' "$_kv" | sed -n 1p)
-  _ds=$(printf '%s\n' "$_kv" | sed -n 2p)             # typing-deferral window (issue #571)
-  _cp=$(printf '%s\n' "$_kv" | sed -n 3p)             # compact-prep threshold (issue #1269)
-  _cm=$(printf '%s\n' "$_kv" | sed -n 4p)             # compactions before a handoff (issue #1316)
+  {
+    IFS= read -r _hp
+    IFS= read -r _ds
+    IFS= read -r _cp
+    IFS= read -r _cm
+    IFS= read -r _ht
+    IFS= read -r _ct
+    IFS= read -r _ha
+    IFS= read -r _hcmd
+  } <<EOF
+$_kv
+EOF
   # The context ladder's defaults (issue #1571): handoff 80, compact-prep 55, at
   # most 3 compactions — KEEP IN SYNC with conf/fleet.conf.reference, fleet-context.sh,
   # conf/statusline.sh, fleet-doctor.sh and fleet-codex-session.py
@@ -570,8 +578,6 @@ if [ "$sem" = "done" ]; then
   # `sh` script cannot source it; ctx-token-line-selftest.sh pins the lockstep).
   # 0/unset ⇒ the % key; no readable @ctx_limit ⇒ the % key. One tmux read, and
   # only when a token key is set — the unset path is byte-for-byte today's.
-  _ht=$(printf '%s\n' "$_kv" | sed -n 5p)
-  _ct=$(printf '%s\n' "$_kv" | sed -n 6p)
   case "$_ht" in ''|*[!0-9]*) _ht=0 ;; esac
   case "$_ct" in ''|*[!0-9]*) _ct=0 ;; esac
   if [ "$_ht" -gt 0 ] || [ "$_ct" -gt 0 ]; then
@@ -819,7 +825,6 @@ PYCODEX
   # that reads the context back under the line. FLEET_HUB_CTX_ACTION=off turns it
   # off; unset ⇒ notify. The line is the configured handoff line (_hp_conf, tokens
   # converted) — auto-handoff off ⇒ no line ⇒ nothing here. One tmux read.
-  _ha=$(printf '%s\n' "$_kv" | sed -n 7p)
   if [ "$_hp_conf" -gt 0 ] && [ "$_ha" != off ]; then
     _hv=$(tmux display-message -p -t "$TMUX_PANE" '#{@fleet_role}|#{@issue}|#{@raw}|#{@ctx_pct}|#{@ctx_warn}|#{?#{session_group},#{session_group},#{session_name}}|#{window_name}' 2>/dev/null)
     _hrole=${_hv%%|*}; _hv=${_hv#*|}
@@ -837,7 +842,6 @@ PYCODEX
           tmux set-window-option -t "$TMUX_PANE" @ctx_warn 1 2>/dev/null
           [ -f "$_bin/fleet-ladder-log.sh" ] && sh "$_bin/fleet-ladder-log.sh" hub-warn \
             --ctx "$_hctx" --reason ">= $_hp_conf%" </dev/null >/dev/null 2>&1
-          _hcmd=$(printf '%s\n' "$_kv" | sed -n 8p)
           if [ -n "$_hcmd" ]; then
             "$_hcmd" "# 📏 hub context at ${_hctx}%
 The operator window \`${_hsess}:${_hname}\` has reached the ${_hp_conf}% handoff line. Nothing is cleared for you: at a stopping point, run \`/fleet-handoff\` in that pane (the hub's handoff doc goes to FILE storage) and it resumes clean." \
@@ -887,7 +891,12 @@ fi
 # reconciliation. Reusing this installed hook also reaches already-running CLIs.
 if [ "$sem" = 'done' ] && [ -n "${_stop_payload:-}" ]; then
   _bin=$(cd "$(dirname "$0")" && pwd)
-  [ ! -f "$_bin/fleet-sleep.py" ] || printf '%s' "$_stop_payload" \
-    | python3 "$_bin/fleet-sleep.py" hook >/dev/null 2>&1 || :
+  _native_completion=0
+  if [ "${FLEET_CODEX_NATIVE_COMPLETION:-}" = 1 ] && [ "${_agent:-}" = codex ]; then
+    case "${FLEET_CODEX_REMOTE:-}" in unix:///*) _native_completion=1 ;; esac
+  fi
+  if [ "$_native_completion" != 1 ] && [ -f "$_bin/fleet-sleep.py" ]; then
+    printf '%s' "$_stop_payload" | python3 "$_bin/fleet-sleep.py" hook >/dev/null 2>&1 || :
+  fi
 fi
 exit 0

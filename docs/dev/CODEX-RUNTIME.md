@@ -113,6 +113,17 @@ default; `--no-fork` selects `codex resume UUID`. The shared launcher accepts
 account home or exact rollout has been removed, history is review-only. Recovery
 does not copy credentials or silently substitute another account.
 
+For the verified Codex 0.162.1 release on a private Unix app-server, sleep uses
+the native completed turn and its completion timestamp instead of collecting
+duplicate Stop-hook evidence. The launcher sets the internal
+`FLEET_CODEX_NATIVE_COMPLETION` capability only after its version check succeeds;
+inherited capabilities are discarded. Other versions, disabled version checks,
+non-private runtimes and Claude retain the existing Stop evidence path.
+This does not skip sleep eligibility checks: exact conversation, process,
+worktree and transcript binding, native idle state, goals, child agents, tools,
+hook trust, idle grace and empty input are still verified before hibernation.
+Missing native completion evidence refuses sleep rather than guessing.
+
 ## Startup and warm scratch panes
 
 The terminal panel's new-task row opens a scratch with the typed text as an
