@@ -9,12 +9,45 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
+import shutil
 from unittest.mock import patch
 
 BIN = Path(__file__).resolve().parent
 loader = importlib.util.spec_from_file_location('preparation', BIN/'.fleet-transfer-norepo.py')
 prep = importlib.util.module_from_spec(loader)
 loader.loader.exec_module(prep)
+
+
+@unittest.skipUnless(shutil.which('tmux'), 'tmux required')
+class IdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.socket = 'transfer-identity-' + prep.uuid.uuid4().hex[:12]
+        self.tm('-f', '/dev/null', 'new-session', '-d', '-s', 'identity')
+        self.addCleanup(self.tm, 'kill-server')
+        self.pane = self.tm('display-message', '-p', '-t', 'identity:', '#{pane_id}').strip()
+
+    def tm(self, *args):
+        return subprocess.check_output(['tmux', '-L', self.socket, *args], text=True)
+
+    def test_identity_reads_all_fields_in_one_client_without_reinterpreting_values(self):
+        values = dict.fromkeys(prep.FIELDS, '')
+        values.update(fleet_id='11111111-1111-4111-8111-111111111111',
+                      task_line='原样 | \\"quote\\" #{pane_id}\nsecond\tline\x1f end',
+                      origin='scratch-1', norepo='1', fleet_role='worker')
+        for key, value in values.items():
+            if value:
+                self.tm('set-option', '-w', '-t', self.pane, '@' + key, value)
+        with patch.object(prep.subprocess, 'check_output', wraps=subprocess.check_output) as calls:
+            self.assertEqual(prep.identity(self.socket, self.pane), values)
+        self.assertEqual(calls.call_count, 1, 'one identity observation must not spawn a client per field')
+        # Each later observation is fresh: no cross-phase identity cache.
+        self.tm('set-option', '-w', '-t', self.pane, '@origin', 'scratch-2')
+        self.assertEqual(prep.identity(self.socket, self.pane)['origin'], 'scratch-2')
+
+    def test_gone_pane_cannot_validate_as_managed_home(self):
+        values = prep.identity(self.socket, '%999999')
+        with self.assertRaisesRegex(ValueError, 'managed HOME'):
+            prep.validate(values, Path.home())
 
 
 class PreparationTests(unittest.TestCase):

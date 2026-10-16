@@ -19,12 +19,23 @@ FIELDS = ('fleet_id', 'fleet_role', 'fleet_role_def', 'agent_spawn', 'agent_def'
 
 
 def identity(session, pane):
-    result = {}
+    # One fresh tmux command queue per observation. Starting a client for each
+    # field made repeated transfer/readiness checks exceed the Mac recovery
+    # budget. Keep show-options' literal values (including embedded newlines),
+    # separated by an unpredictable boundary rather than parsing option text or
+    # expanding values as formats. No snapshot is reused across safety checks.
+    boundary = 'fleet-identity-' + uuid.uuid4().hex
+    argv = ['tmux', '-L', session]
     for key in FIELDS:
-        result[key] = subprocess.check_output(
-            ['tmux', '-L', session, 'show-options', '-wqv', '-t', pane, '@' + key],
-            text=True, stderr=subprocess.PIPE, timeout=5).rstrip('\n')
-    return result
+        if key != FIELDS[0]:
+            argv.append(';')
+        argv.extend(['show-options', '-wqv', '-t', pane, '@' + key,
+                     ';', 'display-message', '-p', '-t', pane, boundary])
+    output = subprocess.check_output(argv, text=True, stderr=subprocess.PIPE, timeout=5)
+    values = output.split(boundary + '\n')
+    if len(values) != len(FIELDS) + 1 or values[-1] != '':
+        raise ValueError('incomplete or ambiguous managed HOME identity observation')
+    return dict(zip(FIELDS, (value.rstrip('\n') for value in values[:-1])))
 
 
 def validate(values, cwd):
