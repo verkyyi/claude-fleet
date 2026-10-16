@@ -29,8 +29,8 @@
 #     sweeps below, fleet-account/migrate, the python helpers) is caught by the
 #     IDLE_READ_SECS re-read, so nothing is later than 1s behind.
 #   · with nobody watching, fleet-render-watch.py waits for fleet-state-changed
-#     (state writes / attach), with a 65s fallback. Maintenance counters advance
-#     by elapsed time on wake; visible frames keep their original cadence.
+#     (state writes / attach), bounded by the NEXT maintenance deadline and a
+#     65s discovery fallback. Visible frames keep their original cadence.
 # Each tmux call is counted (TMUX_N) and the heartbeat publishes the rate.
 #
 # Three throttled side errands ride this loop, because being KeepAlive makes it the
@@ -1184,18 +1184,39 @@ while :; do
     sleep "$INTERVAL"
   elif [ "$looked" = 0 ]; then
     [ -n "$HB_T" ] || hb_stamp
+    # Rendering can wait; maintenance cannot (#4441). Pass the nearest remaining
+    # throttle window, not a fixed 65s sleep followed by catch-up counters. These
+    # are the SAME clocks the checks above consume, including heartbeat/self-heal
+    # even on a fleet with no candidates. No subprocess to compute this bound.
+    _wait_frames=$((HB_EVERY - hbc))
+    _remaining=$((KICK_EVERY - kc))
+    [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    if [ "$STUCK_SECS" -gt 0 ]; then
+      _remaining=$((STUCK_EVERY - sc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$NEEDS_SECS" -gt 0 ]; then
+      _remaining=$((NEEDS_EVERY - nc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    if [ "$DEGEN_SECS" -gt 0 ] && [ -n "$ANIM_SOCKS" ]; then
+      _remaining=$((DEGEN_EVERY - dgc))
+      [ "$_remaining" -ge "$_wait_frames" ] || _wait_frames=$_remaining
+    fi
+    [ "$_wait_frames" -ge 1 ] || _wait_frames=1
     set --
     for sock in $SOCKETS; do
       set -- "$@" "$TSOCKDIR/$sock"
       TMUX_N=$((TMUX_N + 1))  # the helper's wait-for client, counted too
     done
-    _wait=$(python3 "$BIN/fleet-render-watch.py" "$INTERVAL" "$@") || _wait=''
+    _wait=$(python3 "$BIN/fleet-render-watch.py" --max-frames "$_wait_frames" "$INTERVAL" "$@") || _wait=''
     if [ -n "$_wait" ]; then
       _rd "$_wait" step LEASE_FRAMES
       LEASE_FRAMES=$((LEASE_FRAMES + step))  # remaining AT wake, not before sleep
     else
-      # Broken/missing helper must back off, never become a hot retry loop.
-      sleep 65; step=$((HB_EVERY + SOCK_EVERY))
+      # Broken/missing helper falls back to the original quiet cadence, never a
+      # hot retry loop or a 65s maintenance outage.
+      sleep "$TICK_SLEEP"; step=$TICK_STEP
     fi
     # An event may have landed after the table read but before wait-for. Always
     # read BEFORE drawing on wake; elapsed time advances maintenance throttles.

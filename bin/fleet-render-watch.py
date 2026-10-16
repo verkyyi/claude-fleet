@@ -5,13 +5,17 @@ Any supplied fleet socket with a client, OR fleet-client-where's active lease,
 means watched. The lease has one reader; never infer a device/lease here.
 wait-for broadcasts to all CURRENT waiters, and latches one signal with none.
 Register before checking visibility/dirty markers to close the read→wait race.
-An unobserved renderer blocks for 65s (no render polling); dead servers return
-once so the caller can rediscover them. All wait clients are bounded and reaped.
+An unobserved renderer blocks until an event, its caller's maintenance deadline,
+or the 65s discovery fallback. Dead servers return once for rediscovery. All wait
+clients are bounded and reaped; a lease lookup cannot overrun maintenance.
 
-CLI: <frame seconds> <socket path>... → <elapsed frames> <lease frames left>.
+CLI: [--max-frames N] <frame seconds> <socket path>...
+     → <elapsed frames> <lease frames left>.
+Omitting --max-frames keeps the original 65s wait (#4357's shared interface).
 The shell's hot path may test socket u+x (tmux's server_update_socket bit) and
 the returned lease lifetime without starting this helper on each visible frame.
 """
+import argparse
 import json
 import math
 import os
@@ -51,8 +55,9 @@ def stop(proc):
         proc.stdout.close()
 
 
-def wait(sockets, interval):
+def wait(sockets, interval, timeout=FALLBACK):
     start = time.monotonic()
+    timeout = min(FALLBACK, max(0, timeout))
     parent = os.getppid()
     cache = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'global/render-watch.json'
     lease_until = 0
@@ -69,6 +74,7 @@ def wait(sockets, interval):
         pass
     children = []
     query = None
+    lease_output = b''
     owner = None
     owner_fd = None
     with selectors.DefaultSelector() as sel:
@@ -100,18 +106,25 @@ def wait(sockets, interval):
                                          start_new_session=True)
                 children.append(query)
                 sel.register(query.stdout, selectors.EVENT_READ, 'lease')
-            while time.monotonic() - start < FALLBACK:
+            while time.monotonic() - start < timeout:
                 if os.getppid() != parent:
                     break
-                deadline = 3 if query else FALLBACK
+                deadline = min(3, timeout) if query else timeout
                 events = sel.select(max(0, deadline - (time.monotonic() - start)))
                 if any(key.data in ('event', 'owner') for key, _ in events):
                     break
                 if query and any(key.data == 'lease' for key, _ in events):
+                    # Readiness may be PARTIAL output, not process exit. Never
+                    # communicate()/wait() here: a stalled lease reader must not
+                    # hide state events or consume the maintenance deadline.
+                    chunk = os.read(query.stdout.fileno(), 65536)
+                    if chunk and len(lease_output) + len(chunk) <= 65536:
+                        lease_output += chunk
+                        continue
                     sel.unregister(query.stdout)
-                    out, _ = query.communicate(timeout=1)
+                    stop(query)
                     try:
-                        active = json.loads(out).get('state') == 'active'
+                        active = not chunk and json.loads(lease_output).get('state') == 'active'
                     except (ValueError, AttributeError):
                         active = False
                     checked_until = time.monotonic() + FALLBACK
@@ -144,4 +157,13 @@ def wait(sockets, interval):
 if __name__ == '__main__':
     # SIGTERM follows the same cleanup path as timeout/exception.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    print(*wait(sys.argv[2:], float(sys.argv[1])))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--max-frames', type=int)
+    parser.add_argument('interval', type=float)
+    parser.add_argument('sockets', nargs='*')
+    args = parser.parse_args()
+    if not math.isfinite(args.interval) or args.interval <= 0 or (
+            args.max_frames is not None and args.max_frames < 1):
+        parser.error('interval and max-frames must be positive')
+    print(*wait(args.sockets, args.interval,
+                FALLBACK if args.max_frames is None else args.max_frames * args.interval))

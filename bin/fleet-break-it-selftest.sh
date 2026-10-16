@@ -6350,6 +6350,15 @@ drill_spinner_unwatched_poll() {
   WHAT='无人观看不轮询；状态事件两秒内画一次，真实客户端连接后一秒内恢复动画'
 }
 
+drill_spinner_maintenance_starved() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/spinner-maintenance-selftest.sh" 2>&1) \
+    || { WHY="unwatched maintenance: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
