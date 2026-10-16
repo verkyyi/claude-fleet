@@ -14,6 +14,7 @@
 **先读**
 
 - [PRODUCT-DIRECTION.md](dev/PRODUCT-DIRECTION.md) — 产品方向与设计原则（后续设计的依据）
+- [NATIVE-AGENT-BOUNDARY.md](dev/NATIVE-AGENT-BOUNDARY.md) — 原生 Agent 职责边界的迁移顺序、兼容盘点与验收
 - [BIN-INVENTORY.md](dev/BIN-INVENTORY.md) — 程序归属汇总、静态调用方及待删候选
 - [COMPONENTS.md](dev/COMPONENTS.md) — 组件类别与保留理由（核心 / 按需 / 移除 / 待定）
 - [ARCHITECTURE.md](dev/ARCHITECTURE.md) — 整体设计
