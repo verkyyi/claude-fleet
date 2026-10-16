@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,107 @@ from unittest.mock import patch
 
 import fleet_repo_authority as migration
 import fleet_task_control as control
+
+
+@unittest.skipUnless(shutil.which("tmux"), "tmux is required")
+class PoolAuthorityTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="fleet-authority-", dir="/tmp")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.socket = self.root / "fixture"
+        self.conf = self.root / "conf"
+        self.identities = {
+            "fixture": "11111111-1111-4111-8111-111111111111",
+            "fixture-pool": "22222222-2222-4222-8222-222222222222",
+            "separate-pool": "33333333-3333-4333-8333-333333333333",
+        }
+        self.fid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        self.native_program = shutil.which("true")
+        self.assertIsNotNone(self.native_program)
+        self.panes = {}
+        self.addCleanup(lambda: subprocess.run(["tmux", "-S", str(self.socket), "kill-server"],
+                                              capture_output=True))
+        for session, identity in self.identities.items():
+            directory = self.conf / "fleets" / session
+            directory.mkdir(parents=True)
+            (directory / "identity").write_text(identity + "\n")
+            if session != "fixture-pool":
+                (directory / "conf").write_text('FLEET_REPO="org/a"\n')
+            pane = self.tm("-f", "/dev/null", "new-session", "-d", "-P", "-F", "#{pane_id}",
+                           "-s", session, "-c", str(self.root), "sleep 60")
+            self.panes[session] = pane
+            self.tm("set-option", "-w", "-t", pane, "@fleet_id", self.fid)
+            self.tm("set-option", "-w", "-t", pane, "@repo", "org/a")
+
+    def tm(self, *arguments):
+        return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
+                                       text=True, stderr=subprocess.PIPE).strip()
+
+    def supervise(self, session, expected, hint=None, refuse=False):
+        worker = self.identities[expected] + "/" + self.fid
+        pane = self.panes[session]
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith("FLEET_") and key not in ("TMUX", "TMUX_PANE")}
+        environment.update(HOME=str(self.root), FLEET_CONF_DIR=str(self.conf),
+                           FLEET_SKIP_GLOBAL_CONF="1", CCQUOTA_FLEET="1", TMUX_PANE=pane,
+                           TMUX=str(self.socket) + "," + self.tm("display-message", "-p", "#{pid}") + ",0")
+        if hint is not None:
+            environment["FLEET_LAUNCH_SESSION"] = hint
+        native = dict(worker_id=worker, native_session="native", pid=456,
+                      birth="birth", executable=self.native_program)
+        receipt = dict(repo="org/a", worker_id=worker, reservation="", supervisor=os.getpid(),
+                       native_identity=native)
+        writes = []
+
+        def start(repo, key, action, **fields):
+            self.assertEqual(repo, "org/a")
+            writes.append(action)
+            if action == "reserve":
+                receipt["reservation"] = key
+            elif action == "begin":
+                self.assertEqual(fields["worker_id"], worker)
+                if refuse:
+                    raise migration.ticket.Fail(4, "worker belongs to another node")
+            elif action == "stopped":
+                self.assertEqual(fields["native_identity"], native)
+                self.assertTrue(fields["execution_stopped"])
+
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(migration, "start_call", side_effect=start), \
+                patch.object(migration.signal, "signal"), \
+                patch.object(migration.launch, "option", side_effect=lambda *args: json.dumps(receipt)), \
+                patch.object(migration, "prove_stopped", return_value=native):
+            if refuse:
+                with self.assertRaisesRegex(migration.ticket.Fail, "another node"):
+                    migration.supervise([self.native_program])
+            else:
+                self.assertEqual(migration.supervise([self.native_program]), 0)
+        self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
+        self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
+
+    def test_warm_pool_uses_owning_fleet_with_launch_hint(self):
+        self.supervise("fixture-pool", "fixture", "fixture")
+
+    def test_warm_pool_uses_socket_without_launch_hint(self):
+        self.supervise("fixture-pool", "fixture")
+
+    def test_unrelated_launch_hint_cannot_rebind_pool(self):
+        self.supervise("fixture-pool", "fixture", "separate")
+
+    def test_normal_fleet_ignores_unrelated_launch_hint(self):
+        self.supervise("fixture", "fixture", "separate")
+
+    def test_genuine_fleet_ending_in_pool_keeps_identity(self):
+        self.supervise("separate-pool", "separate-pool", "fixture")
+
+    def test_claimed_window_keeps_its_owning_fleet_identity(self):
+        self.supervise("fixture-pool", "fixture", "fixture")
+        self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
+        self.supervise("fixture-pool", "fixture", "fixture")
+
+    def test_hub_refusal_remains_fatal_after_pool_resolution(self):
+        self.supervise("fixture-pool", "fixture", "fixture", refuse=True)
 
 
 class RepoAuthorityTests(unittest.TestCase):
