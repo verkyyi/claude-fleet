@@ -561,5 +561,9 @@
 | 远端缓存、旧 generation/turn 的 idle 被重读成新证据，或把 Stop/MERGED 当作执行空闲（#4434） | 迟到的观察越过正在执行的新 turn，误投递或回收 | 唯一只读 `fleet_runtime.py` 保留原始时间、按 C1/C3 与 turn 全身份比较；过期/断连/身份改变投影 unknown，观察不授予投递或回收许可 | `runtime-stale-idle` |
 | 读到 idle 后用户先输入，无条件 turn/start 将循环消息 steer 进用户轮，或 peer frame 排队到下一轮（#4524） | 旧空闲条件被消费；frame written 被误记为 accepted，迟到 ACK 或重试污染新代次 | 共享 `fleet_runtime` 显式查询条件接受能力；没有原生原子前置条件与准确回执时返回 unavailable/unknown，零投递、零回执、无无条件回退；消费者 #4431 仍须单独验收 | `runtime-idle-accept-unavailable` |
 | SessionStart 的 authority 观察失败，原生进程仍活着但 SID 登记缺失（#4510） | 重启会改变执行；把 HTTP 200 或旧回执当成功会登记别人的执行 | 当前代码的显式现存原生预检与补观察核对 kernel、RPC 和原 reservation；Hub 精确确认后才登记，失败保留原执行，旧 hook 缺失单列 | `native-observe-missing` |
+| 固定 hook 安装已删除，续接控制器在停止或启动后丢失确认（#4536） | 重试可能启动第二个 writer，或把排队成功当作同 SID 消费 | 独立一次续接 journal 在每次副作用前落盘；未确认原 writer 停止不准入，启动不明保留且不重试；消费另验 | `native-continue-once` |
+| 接续等待或未知停留时 cleanup 越过 rotation TTL，迟到回收命中新执行（#4536） | 删除 dirty/index 或回收后继身份 | cleanup/autoclean 与迁移共用 transition lock；未知接续保留锁，最终回收复核原执行 binding；缺 native 执行门时动作前 unavailable | `native-cleanup-fencing` |
+| 标准 authority hook 错属/丢 ACK、旧 hook 延迟返回，或未确认后继续输入（#4536） | 登记错误身份、覆盖后继三字段，或单次 SessionStart 拒绝后旁路 | reserved 独立读后核 begin/observe；三字段 binding CAS、一次请求 journal；每次普通输入只读核登记，未知拒绝；不视作 Hub fencing | `native-authority-ack` |
+| 稀疏 Codex home 的权限默认值被 composer 补为 remote resume 的显式覆盖（#4536） | 0.160.1 在正常 hook review 后拒绝恢复原任务 | resume 只省去未锁定的 Fleet approval/sandbox 默认补值，交由 native 恢复原权限；显式策略、锁、hooks 保留 | `native-resume-default-permissions` |
 | 回收影子证明复用旧 turn、子进程或 lease 证据，或仅凭 MERGED/Stop 放行（#4503） | 并发开始的新工作被旧证明掩盖 | 只读分层聚合，逐维保留时间/身份/原因；重核变化即失效，始终 not-actionable，旧 gate 独占实际动作 | `reap-shadow-race` |
 | 将 fixture 的 loopback 零计数或 IPv6 安装失败后仍成功的普通 egress guard 当成真实 C9 隔离（#4523） | Hub / 常驻原生树、DNS / proxy 旁路或漏观察被误报为零尝试 | 测试专用入口严格核验目标、代次、网络与观察能力；IPv6 失败关闭，未知 / 不完整观察不产生 live PASS，生产模板不放宽 | `c9-live-unproven` |

@@ -120,7 +120,7 @@ def codex_empty_with_particles(screen, cursor_x, cursor_y, columns):
 
 
 def snapshot(socket, pane, agent=None):
-    base = ['tmux'] + (['-L', socket] if socket else [])
+    base = ['tmux'] + (['-S' if socket.startswith('/') else '-L', socket] if socket else [])
     def tm(*args):
         return subprocess.check_output(base + list(args), timeout=5, stderr=subprocess.PIPE, text=True).rstrip('\n')
     screen = tm('capture-pane', '-e', '-p', '-t', pane)

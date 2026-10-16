@@ -1930,6 +1930,14 @@ def session(a):
     else:
         print("mod\tna")
         for p, v in sorted(s.hand.items()):
+            # Remote resume restores the thread's saved permission policy.
+            # These two convenience defaults would instead become SessionFlags
+            # and Codex 0.160.1 rejects them before opening its hook browser.
+            # Explicit personal/team policy and locks still reach native checks.
+            if (getattr(a, "resume_permissions", False)
+                    and p in ("codex.approval_policy", "codex.sandbox_mode")
+                    and s.rows[p]["source"] == "default" and not s.rows[p]["locked"]):
+                continue
             if p.startswith("codex.mcp."):
                 if not a.no_mcp:
                     print("c\tmcp_servers.%s=%s" % (s.ad.toml_key(p[len("codex.mcp."):]), s.ad.toml_val(v)))
@@ -2086,6 +2094,8 @@ def build_parser():
     ap.add_argument("--mod-off", action="store_true", default=conf_val("FLEET_MOD") == "0", help="session/expected/check: this login runs FLEET_MOD=0")
     ap.add_argument("--no-mcp", action="store_true", help="session: an MCP allowlist governs — hand no servers")
     ap.add_argument("--no-settings", action="store_true", help="session: the caller passed its own --settings")
+    ap.add_argument("--resume-permissions", action="store_true",
+                    help="session codex: restore saved permissions instead of filling unlocked fleet permission defaults")
     ap.add_argument("--write", action="store_true", help="expected: also cache it in global/agent-cfg.expected")
     return ap
 

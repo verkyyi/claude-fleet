@@ -469,6 +469,7 @@ fi
 _cfg_fp=''; _cfg_src=''; _cfg_ver=''; _cfg_man=''; _cfg_locks=''; _cfg_say=''
 if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && command -v python3 >/dev/null 2>&1; then
   _cfg_args=(--lock "${FLEET_AGENT_LOCK:-warn}" --codex-home "${CODEX_HOME:-$HOME/.codex}")
+  [ -z "$_codex_resuming" ] || _cfg_args+=(--resume-permissions)
   [ -n "$_codex_mcp" ] && _cfg_args+=(--no-mcp)
   while IFS=$'\t' read -r _cfg_k _cfg_v; do
     case "$_cfg_k" in
