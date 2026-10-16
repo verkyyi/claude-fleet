@@ -30,7 +30,7 @@ result = {"event": payload.get("hook_event_name"), "source": payload.get("source
           "session_id": payload.get("session_id"),
           "environment": {name: os.environ.get(name) for name in
               ("PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA", "FLEET_SESSION")}}
-Path(sys.argv[1]).write_text(json.dumps(result))
+Path(sys.argv[1] + "." + payload["session_id"]).write_text(json.dumps(result))
 '''
 
 DENY_SCRIPT = '''import json, sys
@@ -95,19 +95,44 @@ def main():
             raise AssertionError(name)
         checks.append(name)
 
+    def hook_result(path, identifiers):
+        result = Path(str(path) + "." + identifiers[0]) if len(identifiers) == 1 else None
+        return json.loads(result.read_text()) if result is not None and result.exists() else None
+
+    def clear_hook_results(path):
+        for result in path.parent.glob(path.name + ".*"):
+            result.unlink()
+
+    def phase_requests(offset, identifiers, expected, phase):
+        current = requests[offset:]
+        primary = [request for request in current if not request["native_title"]]
+        titles = [request for request in current if request["native_title"]]
+        check(len(primary) == expected, phase + " exact primary request count: " + json.dumps(current))
+        check(all(request["thread_id"] in identifiers for request in primary), phase + " requests belong to the exact native thread")
+        check(len(titles) <= (1 if expected else 0)
+              and all(request["thread_id"] and request["thread_id"] not in identifiers for request in titles),
+              phase + " at most one separately identified native title request")
+        return primary
+
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
             metadata = json.loads(request.get("client_metadata", {}).get("x-codex-turn-metadata", "{}"))
+            output_format = request.get("text", {}).get("format", {})
+            title_schema = output_format.get("schema", {})
+            native_title = (metadata.get("thread_source") == "thread_title" and not request.get("tools")
+                            and output_format.get("type") == "json_schema" and title_schema.get("required") == ["title"]
+                            and set(title_schema.get("properties", {})) == {"title"})
             requests.append({"path": self.path, "authorization": bool(self.headers.get("Authorization")),
                              "request_kind": metadata.get("request_kind"), "turn_id": metadata.get("turn_id"),
-                             "session_id": self.headers.get("session_id"),
+                             "thread_id": self.headers.get("thread-id"), "thread_source": metadata.get("thread_source"),
+                             "native_title": native_title,
                              "generate": request.get("generate"),
                              "input_hash": hashlib.sha256(json.dumps(request.get("input"), sort_keys=True).encode()).hexdigest(),
                              "input_types": [{"type": item.get("type"), "role": item.get("role")}
                                              for item in request.get("input", [])],
                              "keys": sorted(request), "header_names": sorted(self.headers.keys())})
-            if tool_fixture["active"]:
+            if tool_fixture["active"] and not native_title:
                 tool_fixture["requests"].append(request)
                 sequence = len(tool_fixture["requests"])
                 if sequence == 1:
@@ -350,10 +375,8 @@ def main():
                     hook = fixture_hook(rpc)
                     check(hook["trustStatus"] == {"untrusted": "untrusted", "bypassed": "untrusted", "trusted": "trusted", "changed": "modified"}[phase],
                           phase + " trust persists across native backend restart")
-                if marker.exists():
-                    marker.unlink()
-                if managed_marker.exists():
-                    managed_marker.unlink()
+                clear_hook_results(marker)
+                clear_hook_results(managed_marker)
                 before = len(requests)
                 flags = ["--dangerously-bypass-hook-trust"] if phase == "bypassed" else []
                 review_required = False
@@ -371,14 +394,13 @@ def main():
                     identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
                     check(result != 0 and any(event.get("type") == "turn.failed" for event in events),
                           phase + " inference intentionally fails: " + json.dumps({"exit": result, "stderr": _stderr[-1500:], "stdout": stdout[-1500:]}))
-                check(len(requests) == before + (0 if review_required else 1),
-                      phase + (" review blocks inference" if review_required else " uses only one local inference request")
-                      + (": " + json.dumps(requests[before:]) if len(requests) != before + (0 if review_required else 1) else ""))
-                observed = json.loads(marker.read_text()) if marker.exists() else None
+                phase_requests(before, identifiers, 0 if review_required else 1, phase)
+                observed = hook_result(marker, identifiers)
                 if managed_probe:
-                    managed_observed = json.loads(managed_marker.read_text()) if managed_marker.exists() else None
+                    managed_observed = hook_result(managed_marker, identifiers)
                     if review_required:
-                        check(managed_observed is None, phase + " review blocks session before either hook executes")
+                        check(not list(managed_marker.parent.glob(managed_marker.name + ".*")),
+                              phase + " review blocks session before either hook executes")
                     else:
                         check(managed_observed is not None and managed_observed["event"] == "SessionStart"
                               and identifiers == [managed_observed["session_id"]],
@@ -398,7 +420,7 @@ def main():
                     check(inherited["PLUGIN_DATA"] == inherited["CLAUDE_PLUGIN_DATA"] and bool(inherited["PLUGIN_DATA"]), "native plugin data aliases agree")
                     check(inherited["FLEET_SESSION"] == "fixture-session", "native hook inherits fixture Fleet session")
                 else:
-                    check(observed is None, phase + " hook does not execute")
+                    check(not list(marker.parent.glob(marker.name + ".*")), phase + " hook does not execute")
                 report["phases"].append({"phase": phase, "trust": hook["trustStatus"], "executed": observed is not None,
                                          "review_required": review_required})
                 if managed_probe:
@@ -428,8 +450,10 @@ def main():
                         config.write_text(config.read_text().replace(previous_reason, reason), encoding="utf-8")
                     with client("tool-" + phase + "-verify") as rpc:
                         fixture_hook(rpc)
-                    for marker_path in (tool_marker, deny_marker, managed_marker, marker):
+                    for marker_path in (tool_marker, deny_marker):
                         marker_path.unlink(missing_ok=True)
+                    clear_hook_results(managed_marker)
+                    clear_hook_results(marker)
                     tool_fixture["requests"] = []
                     before = len(requests)
                     flags = ["-c", 'sandbox_mode="danger-full-access"']
@@ -446,13 +470,13 @@ def main():
                         check(result == 0 and any(event.get("type") == "turn.completed" for event in events),
                               phase + " actual native tool turn completes: " + stderr[-1500:])
                         identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
-                    check(len(requests) == before + 2, phase + " uses exactly two synthetic loopback responses: "
-                          + json.dumps({"requests": requests[before:], "thread_ids": identifiers}))
+                    phase_requests(before, identifiers, 2, phase)
                     check(any(tool.get("name") == "exec_command" for tool in tool_fixture["requests"][0].get("tools", [])),
                           phase + " native runtime offers the tool being tested")
-                    managed_observed = json.loads(managed_marker.read_text())
-                    plugin_observed = json.loads(marker.read_text())
-                    check(identifiers == [managed_observed["session_id"]] == [plugin_observed["session_id"]],
+                    managed_observed = hook_result(managed_marker, identifiers)
+                    plugin_observed = hook_result(marker, identifiers)
+                    check(managed_observed is not None and plugin_observed is not None
+                          and identifiers == [managed_observed["session_id"]] == [plugin_observed["session_id"]],
                           phase + " managed and trusted plugin hooks execute on the actual tool thread")
                     if phase == "allow-control":
                         check(tool_marker.read_text() == "native-guard-canary" and not deny_marker.exists(),
@@ -469,7 +493,7 @@ def main():
                     report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks), request_kinds=[
-                {key: request[key] for key in ("request_kind", "generate")} for request in requests])
+                {key: request[key] for key in ("request_kind", "thread_source", "native_title", "generate")} for request in requests])
             print(json.dumps(report, indent=2))
     finally:
         endpoint.shutdown()
