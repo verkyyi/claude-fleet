@@ -302,11 +302,12 @@ moment its last child goes idle. A pass that changed something runs again (≤ 3
 a grandchild finishing cascades up. Changes log to `logs/reconcile.log` with
 `via=reeval`; `FLEET_WAIT_REEVAL=0` turns it off.
 
-For everything the hooks cannot see, the screen classifier below stays. A hook
+For observations the hooks cannot see, the screen classifier below remains opt-in. A hook
 cannot tell a **clean finish** from a `/loop` paused **between iterations** when
 no schedule was recorded — both look like `Stop` → `done`. And a `done` window may actually hold a pending
 question the Notification filter left untouched. So `done` / `needs` / `looping`
-are *ambiguous, quiet* states worth a second look by an LLM.
+can be ambiguous. Fleet no longer sends their screen text to another model by default;
+native events, explicit pending requests and recorded waits retain their existing paths.
 
 [`bin/classify-sessions.sh`](../../bin/classify-sessions.sh) reads the pane text and
 asks `claude -p --model haiku` to classify it as `STOPPED` / `WAITING` /
@@ -324,7 +325,9 @@ asks `claude -p --model haiku` to classify it as `STOPPED` / `WAITING` /
 **Which model reads the screen is a switch** (issue #1229): `CLASSIFY_BACKEND`,
 set in the install's `fleet.conf` / `fleet.settings` or the environment.
 
-- `haiku` (default) — `claude -p --model haiku`, today's behaviour byte for byte
+- `off` (default) — return before helper authentication, pane capture, model requests,
+  cache creation or state writes. Both Claude and Codex keep native/hook-derived state.
+- `haiku` (opt-in) — `claude -p --model haiku`, the legacy inference behaviour
   (measured p50 6.7s / p95 18s per call, accuracy 0.79 on 39 hand-labelled screens).
 - `jev` — Jev (TypeSafe System One, `POST /v1/systemone`) with the same five rubric
   lines as choice criteria and the same capture as its state: 0.90 on the same
@@ -343,21 +346,26 @@ set in the install's `fleet.conf` / `fleet.settings` or the environment.
   per-confidence buckets, WORKING misreads per side and the disagreement list —
   the week-long shadow run the issue asks for before the default moves.
 
-`bin/classify-backend-selftest.sh` pins all three legs against a loopback fake
-Jev (never a real key or network).
+`bin/classify-backend-selftest.sh` pins default-off and the three explicit backends
+against a loopback fake Jev (never a real key or provider network).
+`bin/classify-default-selftest.sh` also checks the disabled path before authentication,
+capture or cache creation, and keeps `--prep-capture` a standalone text transformation.
 
-Two things trigger it:
+Two compatibility callers remain; classification runs only with an explicit backend:
 
 1. **`classify-hook.sh` on `Stop`** — the real-time path. The moment
    `set-claude-state.sh` stamps `done`, [`bin/classify-hook.sh`](../../bin/classify-hook.sh)
-   backgrounds a `--window` classification so the `done`→`looping`/`needs`
-   correction lands within ~1–2s. It backgrounds the work and exits `0`, so it
-   never slows the turn; it is a no-op if `claude` isn't on `PATH`.
+   backgrounds a `--window` invocation. With the default `off`, it returns without
+   model work. With an explicit backend, it may correct `done`→`looping`/`needs`.
+   The hook exits `0` without waiting for inference; it is a no-op if `claude` isn't on `PATH`.
 2. **The stuck-working demote** (below), which kicks the same classifier to refine
    a window it just demoted.
 
-The classifier is **optional** — everything else works without it; you simply lose
-`looping` detection and false-alarm correction.
+The classifier is **optional and disabled by default**. Only screen-inferred labels
+and corrections are removed from the default path; recorded schedules, explicit waits,
+native status and pending requests are not disabled. Existing backend configuration
+remains effective. The old hook/daemon callers still incur a short-lived shell entry;
+this change does not claim zero process overhead or a verified end-to-end speedup.
 
 ## The floor — native-truth reconcile (#806)
 
@@ -568,7 +576,7 @@ Five writers, one option, exactly one source of truth per window:
 | Writer | When | Writes |
 |---|---|---|
 | `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
-| `classify-sessions.sh` (haiku) | on `Stop`, and after a stuck-demote — ~1–2s / change-gated | `done` / `needs` / `looping` (reason **cleared**) |
+| `classify-sessions.sh` (explicit backend only) | on `Stop`, and after a stuck-demote — disabled by default, change-gated when enabled | `done` / `needs` / `looping` (reason **cleared**) |
 | `fleet-state-reconcile.py` (sleep daemon tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**; then kicks the classifier) |
 | `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s (fallback) | `done` (reason **cleared**; then kicks the classifier) |
 | `tmux-spinner.sh` needs-reconcile | a `needs` window the transcript contradicts, ≥2 checks running | `done` / *(empty)*, or the **reason** re-settled — never a new `needs` |

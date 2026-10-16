@@ -135,7 +135,7 @@ Claude Code hooks (PreToolUse/PostToolUse/Stop/Notification)
 @claude_state on the tmux window ──► spinner daemon (0.12s frames, single
       ▲                               writer, change-detected) ──► dash glyphs
       │  slow, semantic                                            + needs tally
-LLM classifier (haiku, ~5min, change-gated)
+LLM classifier (opt-in, default off, change-gated)
       
 collector daemon (60s) ──► cache files ──► fzf dashboard / backlog panels
   git · gh PRs+issues ·                     (read-only producers, render instantly)
@@ -144,10 +144,10 @@ collector daemon (60s) ──► cache files ──► fzf dashboard / backlog p
 
 Design rules that made it work:
 
-- **Hooks are fast but blind; the LLM is smart but slow.** Hooks give the
-  instant working/done/needs signal; a change-gated haiku classifier later
-  corrects what hooks can't know (e.g. "done" that's actually a `/loop`
-  between iterations). Both write the same `@claude_state`.
+- **Native state first; model inference is opt-in.** Hooks and native reports give
+  working/done/needs signals. Only an explicitly enabled screen classifier adds
+  model-based corrections to `@claude_state`; it is not required for recorded
+  schedules, explicit waits or native pending requests.
 - **One writer per surface.** A single spinner daemon owns all window styling
   (one `tmux source-file` per frame = one repaint); a single collector owns
   every cache file; producers are read-only.
@@ -721,7 +721,7 @@ degrading to a pane-content heuristic.
 | `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused. |
 | peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery. |
 | fleet tools (`status` / `children` / `repos` / `agents` / `spawn` / `await` / `send` · `report` / `ask` / `comment` / `evidence` / `handoff` / `pr_verdict` / `pr_merge` · `brief` / `file_issue` / `gh` / `context` / `transfer` / `where` / `show` / `open`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/dev/FLEET-MCP.md`. `FLEET_MCP=0` turns it off. |
-| Stop classifier (haiku) | ✅ | ✅ | The shared optional helper now uses an agent-aware rubric, including Codex placeholders. Codex Stop invokes it; exact native attention and explicit worker blockers outrank screen inference. Slow verdicts cannot replace a newer launcher or hook state. |
+| Stop classifier (haiku) | opt-in | opt-in | CLASSIFY_BACKEND defaults to off before helper authentication, capture or inference. Explicit haiku/jev/shadow settings preserve the legacy path. Native attention and explicit worker blockers outrank screen inference; slow verdicts cannot replace a newer launcher or hook state. |
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved. |
 | multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins. |
 | subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` reuses fleet-account, ccquota, quotawatch and transfer: eligible same-agent subscription first, then the allowed other agent, otherwise durable waiting. Exact source paths, target authentication, unsent drafts and Fleet loops follow the task. |
@@ -744,7 +744,8 @@ Codex context tracking, recovery/history, handoff, messaging, startup policy,
 warm pools, native account quotas and dashboard answers are implemented in
 [the Codex runtime adapter](docs/dev/CODEX-RUNTIME.md). Account homes must be
 registered separately; quota gating and automatic idle migration are opt-in.
-The shared optional screen classifier still uses a Claude helper. Native
+The shared screen classifier is disabled by default; explicitly enabled backends
+still use or fall back to a Claude helper. Native
 attention and replies require the private worker server, enabled by default.
 
 Codex needs one manual setup step: it asks "Do you trust the contents of this
@@ -766,15 +767,16 @@ watching.
   Window **numbers still shift** when a window closes (`renumber-windows on`),
   so navigate by name — not a memorized index.
 - The `Notification` hook (red/bell) can lag a question by up to ~1 min
-  (Claude Code's idle threshold); the classifier corrects stragglers.
+  (Claude Code's idle threshold); optional screen inference is not enabled by default.
 - Local transcript token counters are a **usage proxy**, aggregated across
   accounts, not a subscription quota or bill. Weights: output×1 + input×0.25 +
   cache-write×0.25 + cache-read×0.02 over rolling 5h/7d windows. With TokenLedger
   configured, the account pool additionally uses **account-wide quota readings**
   from ccquota; these are separate from that local estimate. The usage + account
   modal shows the usage/limit details and the account pool.
-- The classifier spends real (haiku-sized, change-gated) tokens. It is
-  optional; everything else works without it.
+- The classifier spends real (haiku-sized, change-gated) tokens only when
+  explicitly enabled with `CLASSIFY_BACKEND=haiku`, `jev` or `shadow`.
+  The default is `off`; native state and explicit waits remain available.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
   user units (`systemd/` — one always-on service + `.timer`/`.service` pairs,
   `__HOME__`-templated; see `systemd/README.md`).

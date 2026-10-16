@@ -11,7 +11,7 @@
 # no real key, no real credentials.
 #
 # Asserted:
-#   • DEFAULT       no CLASSIFY_BACKEND ⇒ haiku decides, the Jev endpoint is never hit,
+#   • DEFAULT       no CLASSIFY_BACKEND ⇒ no model call; explicit haiku decides,
 #                   no shadow log; an unknown value logs one line and behaves as haiku
 #   • HOST CONF     the test runs from a conf-free re-root, so a host fleet.conf's
 #                   CLASSIFY_BACKEND cannot decide DEFAULT; a planted one would (#1251)
@@ -169,16 +169,22 @@ fresh() {
 }
 run() { bash "$CLS" --window "$ww" || fail "classifier exited non-zero ($*)"; }
 
-# ================================================================ DEFAULT (haiku)
+# ================================================================ DEFAULT (off), explicit haiku
 fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; printf '0\n' > "$WORK/claude-rc"; jev_answer LOOPING 0.99
 run default
+[ "$(ncall)" = 0 ] && [ "$(nreq)" = 0 ] && [ "$(wopt "$ww" @claude_state)" = "done" ] \
+  || fail "default off must preserve state without either model backend"
+[ ! -f "$CCACHE/$ckey.hash" ] && [ ! -s "$LOGF" ] || fail "default off wrote classifier state"
+ok "default off: no model, state change, cache hash or log"
+export CLASSIFY_BACKEND=haiku
+run haiku
 [ "$(wopt "$ww" @claude_state)" = "done" ] || fail "default: state moved to [$(wopt "$ww" @claude_state)]"
 [ "$(ncall)" = 1 ] || fail "default: claude called $(ncall) times, expected 1"
 [ "$(nreq)" = 0 ] || fail "default: the Jev endpoint was hit $(nreq) times with no backend set"
 [ ! -f "$WORK/shadow.ndjson" ] || fail "default: a shadow log was written"
 case " $(cat "$WORK/claude-argv" 2>/dev/null) " in *" --no-session-persistence "*) : ;;
   *) fail "default: the helper claude -p would persist a transcript into the worktree (#1296)" "$(cat "$WORK/claude-argv" 2>/dev/null)" ;; esac
-ok "default backend: haiku decides, Jev endpoint never touched, no shadow log"
+ok "explicit haiku: decides, Jev endpoint never touched, no shadow log"
 ok "the haiku helper runs with --no-session-persistence — no transcript in the worktree (#1296)"
 
 # ================================================================ HOST CONF (#1251)
@@ -303,7 +309,7 @@ ok "jev: WORKING is outside the four criteria (#1252) ⇒ haiku decides, the qui
 grep -q '^WORKING - ' "$WORK/claude-in" && fail "haiku prompt still offers WORKING" "$(head -n 8 "$WORK/claude-in")"
 grep -q '^LOOPING - ' "$WORK/claude-in" || fail "haiku prompt lost the rubric" "$(head -n 8 "$WORK/claude-in")"
 grep -q 'ALREADY ENDED' "$WORK/claude-in" || fail "haiku prompt does not say the turn has ended"
-fresh "done"; printf 'WORKING\n' > "$WORK/claude-out"; unset CLASSIFY_BACKEND
+fresh "done"; printf 'WORKING\n' > "$WORK/claude-out"; export CLASSIFY_BACKEND=haiku
 run haiku-working
 [ "$(wopt "$ww" @claude_state)" = "done" ] || fail "haiku WORKING promoted a quiet window to [$(wopt "$ww" @claude_state)]"
 grep -q 'working-read ignored (screen never promotes; #846)' "$LOGF" || fail "haiku WORKING: no ignored line" "$(cat "$LOGF")"

@@ -102,7 +102,7 @@ hook 'done' '' '--via mod'
 [ "$(st)" = needs/ask ] && ok "S: the mod's turn.complete (no payload: @cc_session_id's transcript) leaves needs/ask" \
   || bad "S: mod done over the open dialog: $(st)"
 rm -f "$WORK/claude.calls"
-env FLEET_MOD=0 CLASSIFY_SETTLE=0 bash "$BIN/classify-sessions.sh" --window "$PANE" >/dev/null 2>&1
+env FLEET_MOD=0 CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku bash "$BIN/classify-sessions.sh" --window "$PANE" >/dev/null 2>&1
 [ "$(st)" = needs/ask ] && [ ! -f "$WORK/claude.calls" ] \
   && ok "S: the screen classifier leaves an open dialog alone (no model call)" \
   || bad "S: classifier: $(st), calls=$(cat "$WORK/claude.calls" 2>/dev/null | wc -l)"

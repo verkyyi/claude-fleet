@@ -475,7 +475,7 @@ FAKECL
 chmod +x "$WORK/fakepath/claude"
 mkdir -p "$WORK/inst/logs"
 PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK/home" TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" \
-  SETOPT_LOG="$SETOPT_LOG" FAKE_PREV='done' FAKE_WID='@1' FAKE_CAP='some screen text\n' CLASSIFY_SETTLE=0 \
+  SETOPT_LOG="$SETOPT_LOG" FAKE_PREV='done' FAKE_WID='@1' FAKE_CAP='some screen text\n' CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku \
   bash "$CLASSIFY" --window '@1' </dev/null
 [ -f "$CLENV" ] || fail "classifier must have called the helper claude (fake never invoked)"
 grep -q '^TMUX=' "$CLENV" && fail "the helper claude -p must NOT inherit TMUX (its hooks would drive the pane), got: $(grep '^TMUX' "$CLENV")"

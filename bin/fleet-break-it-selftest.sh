@@ -5000,7 +5000,7 @@ drill_place_declined_not_retried() {
 # is the 2026-10-09 misreading it is named after, on an isolated server.
 sp_env() {   # <args…> — the sandbox's hooks and lib, against $BREAK_SOCK
   env PATH="$WORK/spbin:$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-    FLEET_CONF_DIR="$WORK/spconf" FLEET_SKIP_GLOBAL_CONF=1 CLASSIFY_SETTLE=0 "$@"
+    FLEET_CONF_DIR="$WORK/spconf" FLEET_SKIP_GLOBAL_CONF=1 CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku "$@"
 }
 sp_start() {   # <session> — a fresh worker window; sets SPW / SPP
   mkdir -p "$WORK/spbin" "$WORK/spconf/global"
