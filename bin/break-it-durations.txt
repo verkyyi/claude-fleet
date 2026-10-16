@@ -449,6 +449,7 @@
 9.2 view-node-restart
 4.0 view-popup-far-bleed
 3.9 view-popup-wide-bleed
+124.0 spinner-process-budget
 0.8 view-reconnect-shared
 0.0 wechat-first-scan-autocreate
 5.3 wedged-socket

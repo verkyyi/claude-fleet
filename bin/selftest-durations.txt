@@ -522,3 +522,5 @@
 4.4 worktree-autoclean-scratch-selftest.sh
 0.3 wt-helpers-close-selftest.sh
 1.4 zsh-local-selftest.sh
+
+8.0 spinner-control-selftest.sh

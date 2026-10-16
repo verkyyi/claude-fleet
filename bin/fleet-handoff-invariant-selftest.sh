@@ -207,7 +207,7 @@ grep -q 'fleet-handoff-invariant.sh' "$BIN/fleet-doctor.sh" \
 grep -q 'backstop_diag' "$CYCLE" \
   && ok "WIRED: fleet-handoff-cycle.sh diagnoses a wait-idle abort" \
   || fail "WIRED: fleet-handoff-cycle.sh lost its wait-idle abort diagnosis"
-grep -q 'spinner.heartbeat' "$SPIN" && grep -q 'spinner.heartbeat' "$BIN/fleet-doctor.sh" \
+grep -q 'spinner.heartbeat' "$BIN/tmux-spinner.py" && grep -q 'spinner.heartbeat' "$BIN/fleet-doctor.sh" \
   && ok "WIRED: the spinner stamps a heartbeat and the doctor reads it" \
   || fail "WIRED: the spinner liveness heartbeat is not stamped and/or not read"
 
@@ -219,6 +219,7 @@ grep -q 'spinner.heartbeat' "$SPIN" && grep -q 'spinner.heartbeat' "$BIN/fleet-d
 # read as alive.
 mkdir -p "$WORK/bin" "$WORK/logs" "$WORK/emptyconf"
 cp "$SPIN" "$WORK/bin/tmux-spinner.sh"
+cp "$BIN/tmux-spinner.py" "$BIN/fleet-render-watch.py" "$WORK/bin/"
 ( FLEET_CONF_DIR="$WORK/emptyconf" SPIN_INTERVAL=0.05 sh "$WORK/bin/tmux-spinner.sh" >/dev/null 2>&1 ) &
 spid=$!
 hb=''

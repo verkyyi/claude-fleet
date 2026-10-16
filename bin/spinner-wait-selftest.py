@@ -9,6 +9,7 @@ separately by --maintenance. A default spinner has heartbeat/self-heal due withi
 import os
 import pathlib
 import pty
+import runpy
 import shlex
 import shutil
 import signal
@@ -30,7 +31,7 @@ def main():
         for d in ('bin', 'logs', 'shim', 'conf/fleets/test', 'tmp', 'home'):
             (root / d).mkdir(parents=True)
         (root / 'conf/fleets/test/conf').touch()
-        for name in ('tmux-spinner.sh', 'fleet-render-watch.py', 'fleet-degenerate.awk'):
+        for name in ('tmux-spinner.sh', 'fleet-degenerate.awk', 'tmux-spinner.py', 'fleet-render-watch.py', 'fleet_pending_tool.py', 'fleet_launch.py', 'fleet_sleep_argv.py', 'fleet_runtime.py', 'fleet-codex-rpc.py', 'fleet-codex-session.py'):
             if (BIN / name).exists():
                 shutil.copy(BIN / name, root / 'bin' / name)
         # Shared-reader seam: never ask a live hub/lease in a drill.
@@ -49,7 +50,7 @@ def main():
         env = dict(os.environ, HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'),
                    TMUX_TMPDIR=tmp, TMPDIR=str(root / 'tmp'),
                    PATH=str(root / 'shim') + ':' + os.environ['PATH'],
-                   CCQUOTA_FLEET='0')
+                   CCQUOTA_FLEET='0', SPIN_TRACE='1')
         env.pop('TMUX', None)
         env.pop('TMUX_PANE', None)
 
@@ -208,7 +209,7 @@ def wait_cleanup(root, env, socket, until, calls):
 def maintenance(root, env, tm, until, calls):
     """Real loops/scans/strikes; only transcript and outward actions are seams."""
     for name, body in {
-        'fleet-pending-tool.sh': 'printf "probe\\n" >> "' + str(root / 'probes') + '"\nexit 1\n',
+
         'classify-sessions.sh': 'exit 0\n',
         'fleet-daemon-watch.sh': 'printf "watch\\n" >> "' + str(root / 'watch') + '"\n',
         'fleet-degenerate.sh': 'printf "degen\\n" >> "' + str(root / 'degen') + '"\n',
@@ -216,6 +217,23 @@ def maintenance(root, env, tm, until, calls):
         script = root / 'bin' / name
         script.write_text('#!/bin/sh\n' + body)
         script.chmod(0o755)
+    # Inject the oracle boundary, not a retired CLI fallback. Production still
+    # runs the actual tmux scan, two observations, identity/stamp checks and writes.
+    (root / 'bin/fleet_pending_tool.py').write_text("""
+import os, time
+from pathlib import Path
+PANE_FORMAT = '#{pane_id}'
+def parse_panes(text): return [dict(pane=p) for p in text.splitlines()]
+def observe(reader, expected=None):
+    rows = reader()
+    with (Path(os.environ['HOME']).parent / 'probes').open('a') as f: f.write('probe\\n')
+    reader()
+    return [dict(pane=r['pane'], code=1, tool='', identity={'pane':r['pane']}, expires_at=time.time()+10) for r in rows]
+""")
+    # The absence-only daemon fast path must delegate when evidence exists.
+    evidence = root / 'tmp/.claude-dash/global'
+    evidence.mkdir(parents=True)
+    (evidence / 'collect.heartbeat').write_text('phase_ts=1\n')
     tm('rename-window', '-t', 'test:0', 'stuck')
     tm('set-window-option', '-t', 'test:stuck', '@claude_state', 'working')
     tm('new-window', '-d', '-t', 'test', '-n', 'needs', 'sleep 180')
@@ -287,28 +305,22 @@ def deadline_events(root, env, tm, until, calls):
     tm('set-window-option', '-t', 'test:edge', '@claude_state', 'done')
     env = dict(env, SPIN_HB_SECS='3', FLEET_NEEDS_RECONCILE_SECS='20',
                FLEET_STUCK_WORKING_SECS='120')
+    control = runpy.run_path(str(root / 'bin/fleet-render-watch.py'))['Control']('test', env=env)
     start = len(calls.read_text().splitlines())
     with (root / 'edge.log').open('w') as log:
         daemon = subprocess.Popen(['sh', str(root / 'bin/tmux-spinner.sh')], env=env,
                                   stdout=log, stderr=log, start_new_session=True)
     try:
         previous = 0
-        for offset, state in ((-.05, 'working'), (0, 'done'), (.05, 'working')):
+        for offset, state in ((-.15, 'working'), (0, 'done'), (.15, 'working')):
             found = []
 
             def next_deadline():
-                for line in reversed(calls.read_text().splitlines()[start:]):
-                    if '\tpython3\t' not in line or '--since-frame' not in line:
+                for line in reversed((root / 'edge.log').read_text().splitlines()):
+                    if not line.startswith('spinner-wait '):
                         continue
-                    args = shlex.split(line.split('\t', 2)[2])
-                    i = args.index('--since-frame')
-                    frame, interval = int(args[i + 1]), float(args[i + 2])
-                    frames = int(args[args.index('--max-frames') + 1])
-                    deadline = (frame + frames) * interval
-                    # Use the helper's actual kernel clock, including on macOS
-                    # Python 3.9. Leave >2s until this deadline when selecting it;
-                    # do not pick short catch-up turns that obscure the edge.
-                    if frame and deadline > previous and deadline - time.clock_gettime(time.CLOCK_MONOTONIC) > 2.5:
+                    deadline = float(line.split()[2])
+                    if deadline > previous and deadline - time.clock_gettime(time.CLOCK_MONOTONIC) > 2.5:
                         found.append(deadline)
                         return True
                     return False
@@ -317,9 +329,13 @@ def deadline_events(root, env, tm, until, calls):
             until(next_deadline, 10)
             previous = found[0]
             time.sleep(max(0, previous + offset - time.clock_gettime(time.CLOCK_MONOTONIC)))
+            control.commands([['set-window-option', '-t', 'test:edge', '@claude_state', state],
+                              ['wait-for', '-S', 'fleet-state-changed']])
             signal_at = time.clock_gettime(time.CLOCK_MONOTONIC) - previous
-            tm('set-window-option', '-t', 'test:edge', '@claude_state', state,
-               ';', 'wait-for', '-S', 'fleet-state-changed')
+            if offset < 0:
+                assert signal_at < 0, ('before-deadline signal arrived late', signal_at)
+            if offset > 0:
+                assert signal_at > 0, ('after-deadline signal arrived early', signal_at)
             def painted():
                 glyph = tm('display-message', '-p', '-t', 'test:edge', '#{@spin}')
                 return glyph == '✓' if state == 'done' else glyph not in ('', '✓')
@@ -328,6 +344,7 @@ def deadline_events(root, env, tm, until, calls):
                   % (signal_at, offset, state, elapsed), flush=True)
         assert daemon.poll() is None
     finally:
+        control.close()
         os.killpg(daemon.pid, signal.SIGTERM)
         daemon.wait(timeout=3)
 

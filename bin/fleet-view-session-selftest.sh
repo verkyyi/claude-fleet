@@ -84,9 +84,7 @@ awk_of() {   # <file> <function> — the awk program text of that function, whit
 }
 lib=$(awk_of "$BIN/fleet-lib.sh" fleet_lw_filter)
 has "B: the lib filter drops view rows and dedups by window id" "$lib" 'index(s, "@view-") || (id in seen)'
-eq "B: tmux-spinner.sh's _lw_filter is the lib's" "$lib" "$(awk_of "$BIN/tmux-spinner.sh" _lw_filter)"
 eq "B: fleet-alerts.sh's _fa_lw filter is the lib's" "$lib" "$(awk_of "$BIN/fleet-alerts.sh" _fa_lw)"
-eq "B: tmux-spinner.sh's _lw_fmt is the lib's" "_lw_fmt() { printf '#{window_id}:#{session_id}:#{session_name} %s' \"\$1\"; }" "$(grep -m1 '^_lw_fmt()' "$BIN/tmux-spinner.sh")"
 has "B: fleet-alerts.sh asks tmux for the same prefix" "$(grep -m1 '^  tmux list-windows -a' "$BIN/fleet-alerts.sh")" '-F "#{window_id}:#{session_id}:#{session_name} $1"'
 # a fake tmux's canned rows — even ones that begin with a window id — pass through untouched
 eq "B: rows that are not fleet_lw_fmt's pass through the filter untouched" "$(printf '@9 done\n@1 %%1 101 acctB\ns1\t@1\tdone\nworking\nworking\n')" "$(printf '@9 done\n@1 %%1 101 acctB\ns1\t@1\tdone\nworking\nworking\n@3:$0:f@view-x a\n@2:$1:f b\n@2:$0:f@view-x b\n' | bash -c '. "$0/fleet-lib.sh"; fleet_lw_filter' "$BIN" | sed '$d')"
@@ -145,12 +143,18 @@ eq "D: fleet_is_view_session" "view fleet" "$(fleet_is_view_session "$V" && echo
 eq "D: fleet_session_canon" "$S $S" "$(fleet_session_canon "$V") $(fleet_session_canon "$S")"
 # the inline copies, on live rows
 raw=$(T list-windows -a -F "$(fleet_lw_fmt '#{session_name} #{window_id} #{window_name}')")
-spin=$(sed -n '/^_lw_filter() {/,/^}/p' "$BIN/tmux-spinner.sh")
-eq "D: tmux-spinner.sh's _lw_filter agrees with fleet_lw_filter on live rows" "$(printf '%s\n' "$raw" | fleet_lw_filter)" "$(printf '%s\n' "$raw" | sh -c "$spin; _lw_filter")"
-# its frame loop's forkless, fileless form (issue #3522): _lw_table + _pop
-spin_t=$(sed -n '/^NL=/,/^'"'"'/p; /^_lw_table() {/,/^}/p; /^_pop() {/,/^}/p' "$BIN/tmux-spinner.sh")
-eq "D: tmux-spinner.sh's _lw_table agrees with fleet_lw_filter on live rows" "$(printf '%s\n' "$raw" | fleet_lw_filter)" \
-   "$(sh -c "$spin_t"'; _lw_table "$1"; printf %s "$W_TABLE"' _ "$raw")"
+spin=$(python3 - "$BIN/tmux-spinner.py" "$S" <<'PYSPIN'
+import runpy, sys
+m = runpy.run_path(sys.argv[1])
+c = m['watch'].Control(sys.argv[2])
+try:
+    for r in m['windows'](c):
+        print(r['session_name'], r['window_id'], r['window_name'])
+finally:
+    c.close()
+PYSPIN
+)
+eq "D: resident spinner agrees with fleet_lw_filter on grouped live rows" "$(printf '%s\n' "$raw" | fleet_lw_filter)" "$spin"
 eq "D: fleet-alerts.sh's _fa_lw agrees with fleet_lw on live rows" "$(fleet_lw '#{session_name} #{window_id} #{window_name}' T)" \
    "$(tmux() { T "$@"; }; eval "$(sed -n '/^_fa_lw() {/,/^}/p' "$BIN/fleet-alerts.sh")"; _fa_lw '#{session_name} #{window_id} #{window_name}')"
 
