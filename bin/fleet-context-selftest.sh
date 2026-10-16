@@ -105,10 +105,10 @@ out=$(FLEET_CTX_WINDOW=1000000 FLEET_CONTEXT_LIMIT=100000 run --transcript "$T" 
 has "retired FLEET_CONTEXT_LIMIT still wins over FLEET_CTX_WINDOW" "$out" '"derived_pct":43'
 
 printf '\n-- BANDS --\n'
-# 42802/200000 = 21% → OK on the default bands: handoff 80 (issue #1571), watch 65.
-out=$(run --transcript "$T" -q); is "21% is OK on the default 65/80 bands" "$out" "OK"
+# 42802/200000 = 21% → OK on the default advisory bands: 50 / 80.
+out=$(run --transcript "$T" -q); is "21% is OK on the default 50/80 bands" "$out" "OK"
 out=$(FLEET_CONTEXT_LIMIT=100000 run --transcript "$T" -q); is "43% still OK" "$out" "OK"
-out=$(FLEET_CONTEXT_LIMIT=70000  run --transcript "$T" -q); is "61% is OK — under the default 65% watch floor" "$out" "OK"
+out=$(FLEET_CONTEXT_LIMIT=70000  run --transcript "$T" -q); is "61% is WATCH on the default advisory bands" "$out" "WATCH"
 out=$(FLEET_CONTEXT_LIMIT=60000  run --transcript "$T" -q); is "71% is WATCH" "$out" "WATCH"
 out=$(FLEET_AUTO_HANDOFF_PCT=0 FLEET_CONTEXT_LIMIT=70000 run --transcript "$T" -q)
 is "auto-handoff 0 falls back to the statusline's 50/80: 61% is WATCH" "$out" "WATCH"
@@ -122,6 +122,18 @@ is "43% is still OK — just under the 45% watch floor" "$out" "OK"
 out=$(FLEET_AUTO_HANDOFF_PCT=60 FLEET_CONTEXT_LIMIT=200000 run --transcript "$T" -q)
 is "threshold 60 leaves 21% OK" "$out" "OK"
 
+out=$(FLEET_AUTO_HANDOFF_TOKENS=110001 FLEET_COMPACT_PREP_TOKENS=70000 FAKE_CTX_LIMIT=200000 run --transcript "$T" --json)
+has "token-only handoff opts in with rounded-up native window percentage" "$out" '"auto_handoff_pct":56'
+has "token-only compact-prep opts in" "$out" '"compact_prep_pct":35'
+out=$(FLEET_AUTO_HANDOFF_PCT=80 FLEET_AUTO_HANDOFF_TOKENS=110000 FAKE_CTX_LIMIT=200000 run --transcript "$T" --json)
+has "token handoff beats an explicit percentage" "$out" '"auto_handoff_pct":55'
+out=$(FLEET_AUTO_HANDOFF_TOKENS=900000 FAKE_CTX_LIMIT=200000 run --transcript "$T" --json)
+has "token percentage clamps at 100" "$out" '"auto_handoff_pct":100'
+out=$(FLEET_AUTO_HANDOFF_TOKENS=110000 FAKE_CTX_LIMIT='' run --transcript "$T" --json)
+has "token-only policy without a native size follows Stop's percentage fallback" "$out" '"auto_handoff_pct":0'
+out=$(FLEET_AUTO_HANDOFF_PCT=60 FLEET_AUTO_HANDOFF_TOKENS=110000 FAKE_CTX_LIMIT='' run --transcript "$T" --json)
+has "token policy with no native size retains an explicit percentage" "$out" '"auto_handoff_pct":60'
+
 printf '\n-- CONF OVERLAY (#561) --\n'
 # The threshold lives in the CONF, and this read must see THIS fleet's overlay — not
 # just the global file, and never only the env (nothing exports the conf into a
@@ -134,9 +146,9 @@ is "per-fleet conf FLEET_AUTO_HANDOFF_PCT=60 (env empty) makes 61% HANDOFF" "$ou
 out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s1 run --transcript "$T")
 has "…and the handoff line reports the conf threshold" "$out" "auto-handoff at 60%"
 out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s2 FLEET_CONTEXT_LIMIT=70000 run --transcript "$T" -q)
-is "another fleet's pane does not see s1's overlay (61% is OK on the default bands)" "$out" "OK"
+is "another fleet's pane does not see s1's overlay (61% is advisory WATCH)" "$out" "WATCH"
 out=$(FLEET_CONF_DIR="$WORK/conf" FAKE_SESSION=s1 FLEET_CONTEXT_LIMIT=70000 run_notmux --transcript "$T" -q)
-is "outside tmux no overlay is loaded (61% is OK on the default bands)" "$out" "OK"
+is "outside tmux no overlay is loaded (61% is advisory WATCH)" "$out" "WATCH"
 
 printf '\n-- STAMP --\n'
 out=$(FAKE_CTX_PCT=91 run --transcript "$T" --json)

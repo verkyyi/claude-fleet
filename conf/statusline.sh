@@ -21,7 +21,7 @@
 #                                           converted against @ctx_limit the way
 #                                           set-claude-state.sh does, #1317) the
 #                                           handoff line is red and 15 points below
-#                                           it is yellow (unset ⇒ 80, #1571); with
+#                                           it is yellow; with
 #                                           it 0 and no _TOKENS, 80 / 50.
 #   100 - @ctx_pct                       → @ctx_left   the context LEFT, % (issue
 #                                           #2431: what the client's top line, `fleet ls` and
@@ -200,7 +200,7 @@ if [[ "$CTX_PCT" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     SL_V=${SL_KV%%$'\n'*}; [[ -n "$SL_V" ]] && SL_PCT=$SL_V
     SL_V=${SL_KV#*$'\n'};  [[ "$SL_V" != "$SL_KV" && -n "$SL_V" ]] && SL_TOK=$SL_V
   fi
-  [[ -z "$SL_PCT" ]] && SL_PCT=80                 # the hook's unset ⇒ 80 (issue #1571)
+  [[ -z "$SL_PCT" ]] && SL_PCT=0
   [[ "$SL_PCT" =~ ^[0-9]+$ ]] || SL_PCT=0
   [[ "$SL_TOK" =~ ^[0-9]+$ ]] || SL_TOK=0
   # A line set in TOKENS wins over the % key, converted against this window's

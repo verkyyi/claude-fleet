@@ -59,7 +59,9 @@ CODEX_HOME; the fresh conversation and manual recovery recipe use that home.
 The rollout, index and uncommitted files remain available. A missing or stale
 identity never selects a Claude transcript or another Codex session.
 
-`FLEET_AUTO_HANDOFF_PCT` also applies to Codex. At a clean Stop above the configured
+`FLEET_AUTO_HANDOFF_PCT` also applies to Codex but defaults to 0 / off: native
+Agent compaction is the normal context-management path. Explicit manual transfer
+does not require enabling auto-handoff. At a clean Stop above an explicitly configured
 threshold, the hook requests notes and this native command; the new launch clears
 the nudge latch. A failed after-turn transfer also releases that latch when the
 same Codex launcher and session are still alive, allowing the next clean Stop to

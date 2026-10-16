@@ -85,8 +85,8 @@ remains the bare context verdict. Codex keeps its existing provider-specific out
 | Verdict | Meaning | Do |
 |---|---|---|
 | `OK` | under the watch band | carry on — no action |
-| `WATCH` | getting full | finish the thread you're on, then `/fleet-handoff`. Don't *start* a broad sweep here — delegate it to the `Explore` subagent instead, so the fan-out lands in its context and not yours (the grounding advice in [`/fleet-claim`](fleet-claim.md) step 4) |
-| `HANDOFF` | at/over the threshold | run `/fleet-handoff` **now**, before the window forces a compaction — a structured handoff preserves task state far better than near-limit auto-compaction |
+| `WATCH` | getting full | report usage; native Agent compaction remains the default. An explicitly enabled Fleet handoff policy may call for finishing this thread before handoff |
+| `HANDOFF` | at/over the advisory or configured threshold | check `auto_handoff_pct`: 0 means advisory only; a positive value enables Fleet's handoff policy. Do not clear or replace a session just because an advisory band is red |
 | `UNKNOWN` | nothing measurable | no `@ctx_pct` stamp on this pane *and* no usage record yet. Say so; don't guess a number |
 
 A verdict computed on `limit=default` deserves the same caution as `UNKNOWN` if
@@ -97,14 +97,18 @@ The bands agree with the auto-handoff nudge rather than competing with it: when
 `FLEET_AUTO_HANDOFF_PCT` is set (issue #330), `HANDOFF` **is** that threshold and
 `WATCH` the 15 points below it, so this read tells you in advance what the Stop
 hook is about to say. With the knob off, the fallback bands are the statusline's
-own colours — yellow at 50%, red at 80%.
+own colours — yellow at 50%, red at 80%. Both Fleet auto-handoff and forced
+compact-prep default to OFF. The Agent owns native compaction; Fleet does not
+change its native threshold or model settings. Existing explicit Fleet thresholds
+and token-based opt-ins remain supported.
 
 ## 3. Report (keep it short)
 
 One line: the percentage, the verdict, and — if it isn't `OK` — what you're doing
 about it. Don't paste the whole block back at the operator; they can see the
-statusline. If the verdict is `HANDOFF`, don't ask whether to hand off: run
-`/fleet-handoff`.
+statusline. Do not turn this read-only check into an automatic handoff unless the
+operator requested it or enabled that policy. In quiet output the verdict alone
+does not establish whether auto-handoff is enabled; use the full or JSON output.
 
 ---
 

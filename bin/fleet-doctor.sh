@@ -3380,10 +3380,10 @@ elif [ -d "$conf_dir" ]; then
     tsees=$(printf '%s\n' "$kv" | sed -n 4p)
     ctsees=$(printf '%s\n' "$kv" | sed -n 5p)
     msees=$(printf '%s\n' "$kv" | sed -n 6p)
-    # the hook's unset defaults (issue #1571): handoff 80, compact-prep 55, cap 3 —
+    # the hook's unset defaults: handoff OFF, compact-prep OFF, cap 3 —
     # only while its conf path is intact (fleet-lib.sh beside it); else OFF, as the
     # hook fails open. KEEP IN SYNC with bin/set-claude-state.sh.
-    if [ -f "$(dirname "$0")/fleet-lib.sh" ]; then d_h=80 d_c=55 d_m=3; else d_h=0 d_c=0 d_m=0; fi
+    if [ -f "$(dirname "$0")/fleet-lib.sh" ]; then d_h=0 d_c=0 d_m=3; else d_h=0 d_c=0 d_m=0; fi
     case "$sees" in '') sees=$d_h ;; *[!0-9]*) sees=0 ;; esac
     case "$dsees" in ''|*[!0-9]*) dsees=30 ;; esac
     case "$csees" in '') csees=$d_c ;; *[!0-9]*) csees=0 ;; esac
