@@ -439,6 +439,36 @@ drill 首次 remote 探针在单次推理请求计数断言失败；补充诊断
 系统层要求的路径和优先级以[原生托管配置说明](https://learn.chatgpt.com/docs/enterprise/managed-configuration)为准，
 后续需在隔离测试镜像/环境验收，不能把临时 CODEX_HOME 当作系统配置隔离。
 
+2026-10-16 补测：测试 POD 的普通用户可跟踪自己创建的子进程，因此增加显式
+`--managed-proot /path/to/proot` 探针选项，用 PRoot 只给测试子进程映射临时
+`/etc/codex` 视图。脚本只在临时目录写 requirements 和 hook，检查映射标记在子进程可见、
+在宿主路径不存在。PRoot 只是受控 fixture 的路径虚拟化，不是安全沙箱，不用于生产，
+也不能提供性能样本；没有修改在线系统配置、seccomp、用户命名空间或账号信任。
+测试工具来自 Debian 官方 HTTPS，按各包下载页的 SHA256 校验后解包在临时目录，不运行系统安装：
+
+| 包 | SHA256 |
+|---|---|
+| [`proot_5.1.0-1.3+b1_amd64.deb`](https://packages.debian.org/trixie/amd64/proot/download) | `7ca9260edf1ca6666f9b33e1da551638055934d673117acd135ff5367f420744` |
+| [`libtalloc2_2.4.3+samba4.22.11+dfsg-0+deb13u1_amd64.deb`](https://packages.debian.org/trixie/amd64/libtalloc2/download) | `b4cc8aa74c8b7c05a64efb6577acc955f522a8e39d8f37fe60b1b3fe6634ce96` |
+
+```sh
+LD_LIBRARY_PATH=/path/to/extracted/usr/lib/x86_64-linux-gnu \
+  python3 bin/fleet-native-hook-cli-selftest.py --codex /path/to/codex \
+  --managed-proot /path/to/extracted/usr/bin/proot
+```
+
+**此组合尚未通过，不是 managed hooks 验收成功。** Codex 0.162.1 的 `hooks/list`
+确认 requirements hook 为 `source=system`、`isManaged=true`、`trustStatus=managed`，
+插件仍独立显示 `untrusted`。但 exec 两次在信任插件后的 managed SessionStart 标记缺失；
+remote TUI 一次出现两次本地请求；另一次 PRoot 外层退出码为 0，原生事件却明确 `turn.failed`。
+保留退出码、精确线程 ID、一次请求和双 hook 执行断言，不通过放宽检查获得绿色。
+这些异常尚不能归因于原生 Codex：需要在不经过 PRoot 的一次性 Linux 环境交叉验证，
+先排除测试工具的退出码/并发进程行为。该选项不进入默认 CI，也不修改生产启动器。
+同一候选不启用路径映射时，本机 Codex 0.163.0 与测试 POD 0.162.1 的
+`--remote-tui --probe-bypass` 各 58 项通过；这只证明既有非 managed 回归仍通过，
+不能证明上述异常必定由 PRoot 引起。
+后续仍需实际 PreToolUse 拒绝、配置覆盖/升级及完整面板验证，不能据此去掉现有全局 bypass。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
