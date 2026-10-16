@@ -298,7 +298,9 @@ FLEET_CLIENT_XTVERSION             knob: 0 = never ask the terminal its name at 
 FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
 FLEET_CODEX_ACCOUNT                handoff: the codex account a launch was assigned
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
+FLEET_CODEX_NATIVE_COMPLETION      handoff: launcher-verified native completion capability for the Stop hook; never inherited or configured
 FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch
+FLEET_CODEX_REMOTE                 handoff: this launch's private Codex app-server endpoint, passed to native hooks
 FLEET_CODEX_READY_CHECK            knob: 0 skips the Codex-login check before a Codex spawn (fleet-lib.sh fleet_codex_ready, #2562)
 FLEET_CODEX_READY_CMD              seam: prints `ccquota codex list` instead of running it (fleet_codex_ready, #2562)
 FLEET_COLLECT_QUOTAWATCH           knob: auto|never — whether the collector runs the quotawatch phase inline
@@ -998,3 +1000,6 @@ FLEET_IDLE_SELF_SOCKET             seam: socket path paired with FLEET_IDLE_SELF
 FLEET_IDLE_SELF_WIN                seam: fleet_idle_now's caller window when it has no $TMUX_PANE (#4355)
 FLEET_SIDEBAR_HOST                seam: home-machine hostname in the view and peer tests (#1780)
 FLEET_SWITCH_STATE                path: compose payload/draft state used by the current panel (#1903)
+FLEET_AUTHORITY_START             env handoff: one-use local admission reservation from spawner to session wrapper (#4395)
+FLEET_AUTHORITY_CONTEXT           env handoff: current reservation and native supervisor identity for the startup hook (#4395)
+FLEET_HUB_AUTHORITY_CMD           seam: authority admission command for isolated hub fixtures (#4395)

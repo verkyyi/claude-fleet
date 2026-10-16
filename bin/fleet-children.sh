@@ -65,6 +65,22 @@ case "$SINCE" in ''|*[!0-9]*) printf 'fleet-children: --since wants a seq number
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 
+# Accepted parents read the task graph. No local key/cache fallback on outage.
+task_parent=''
+case "$KEY" in T[1-9]*) task_parent="$KEY" ;; esac
+if [ -z "$KEY" ] && [ -n "$(fleet_pane_fmt '#{@launch}')" ]; then
+  task_parent=$(fleet_pane_fmt '#{@task}')
+fi
+if [ -n "$task_parent" ]; then
+  [ "$SINCE" = 0 ] || { printf 'fleet-children: --since is a legacy ledger cursor; omit it for task children\n' >&2; exit 2; }
+  task_args=(children --task "$task_parent")
+  [ "$JSON" = 1 ] && task_args+=(--json)
+  python3 "$BIN/fleet_task_control.py" "${task_args[@]}"; task_rc=$?
+  [ "$task_rc" = 4 ] || exit "$task_rc"
+  printf 'fleet-children: legacy T record; use its parent session key\n' >&2
+  exit 2
+fi
+
 sess="$SOCK"; [ -n "$sess" ] || sess=$(fleet_current_session)
 [ -n "$KEY" ] || KEY=$(fleet_origin_key)
 [ -n "$KEY" ] || { printf 'fleet-children: no parent key — run it in a worker/scratch pane, or name one (issue-N / scratch-N)\n' >&2; exit 2; }

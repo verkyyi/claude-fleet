@@ -52,6 +52,20 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
 
 在 ⌘P 里选 **添加仓库…**，填 `<owner>/<repo>`。仓库会放到 `~/projects/<repo>`；之后新建会话时选这个仓库，会话就在它自己的副本里改代码、开 PR，不碰你的主目录。
 
+已有仓库保留原来的单子设置。要明确把一个仓库的任务控制交给 hub，先保存私有迁移清单：
+
+```sh
+~/.claude/fleet/bin/fleet-repo.sh authority owner/repo --session fleet --dry-run > /private/path/repo-manifest.json
+```
+
+检查清单里的承载机器、执行者和阻塞项。把 `--dry-run` 换成
+`--freeze --manifest /private/path/repo-manifest.json`，暂停新开工；让已有执行者结束，
+在原节点确认原生进程已停止。重新保存 `--dry-run`，再带新清单执行 `--apply`。
+节点不具备能力、离线或执行者状态不明时，切换会被拒绝。回退用 `--rollback`，也要先冻结、
+刷新清单，并等 hub 已接受的任务结束且释放执行权。清单包含机器和任务引用，请勿公开。
+
+这只改变任务控制。单子设置、GitHub 代码托管和 PR 检查保持原样；任务完成后，PR 仍可能在等 GitHub。
+
 ## 下一步
 
 - 每天怎么用：[日常使用](../member/usage.md)

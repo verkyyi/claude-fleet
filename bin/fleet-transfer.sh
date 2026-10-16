@@ -240,10 +240,16 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
 # all unsupported and none could leave a walled account (issue #2102).
 [ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
 case "$(fleet_win_role "$WIN" "$SOCK")" in panel|home) die 'panel windows cannot be transferred' ;; esac
-[ "$(opt '#{@hub}')" != 1 ] || die 'the hub cannot be transferred'
-SOURCE_AGENT=$(opt '#{@cc_agent}'); SOURCE_AGENT=${SOURCE_AGENT:-claude}
+_source_meta=$(opt '#{@hub}|#{@cc_agent}|#{@norepo}|#{@issue}|#{@raw}|#{@worktree}') || die 'source metadata unavailable'
+[ "${_source_meta%%|*}" != 1 ] || die 'the hub cannot be transferred'
+_source_meta=${_source_meta#*|}
+SOURCE_AGENT=${_source_meta%%|*}; SOURCE_AGENT=${SOURCE_AGENT:-claude}
+_source_meta=${_source_meta#*|}
+NOREPO=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
+ISSUE=${_source_meta%%|*}; _source_meta=${_source_meta#*|}
+RAW=${_source_meta%%|*}; WT=${_source_meta#*|}
 case "$SOURCE_AGENT" in claude|codex) ;; *) die 'unsupported source agent' ;; esac
-NOREPO=$(opt '#{@norepo}'); IDENTITY=''; LEASE_KEY=''
+IDENTITY=''; LEASE_KEY=''
 if [ "$NOREPO" = 1 ]; then
   WT=$(opt '#{pane_current_path}')
   IDENTITY=$(python3 "$BIN/.fleet-transfer-norepo.py" identity "$SOCK" "$PANE" "$WT") || exit 1
@@ -251,9 +257,7 @@ if [ "$NOREPO" = 1 ]; then
   MAIN='' FLEET_REPO='' ISSUE=''
   LEASE_KEY="$FLEET_CONF_DIR/session-transitions/$(opt '#{@fleet_id}')"
 else
-ISSUE=$(opt '#{@issue}'); RAW=$(opt '#{@raw}')
 case "$ISSUE" in ''|*[!0-9]*) [ "$RAW" = 1 ] || die 'window is neither an issue worker nor a scratch session' ;; esac
-WT=$(opt '#{@worktree}')
 if [ -z "$WT" ]; then
   # Issue workers predate the scratch-only @worktree stamp. Resolve their real
   # pane cwd, then apply every linked-worktree and source-registry check below.
@@ -290,8 +294,8 @@ fi
 [ -n "$CODEX_TARGET_HOME" ] || CODEX_TARGET_HOME="$CODEX_SOURCE_HOME"
 [ -z "$EXPECT" ] || [ "$EXPECT" = "$PANE:$PID:$SID" ] || die 'the armed source pane/process/session changed; leaving it alone'
 [ -z "$EXPECT_SID" ] || [ "$EXPECT_SID" = "$SID" ] || die "retry: the window now runs a different conversation ($SID, not $EXPECT_SID); not switching it"
-HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}'); PREVIOUS=$(opt '#{@handoff_manifest}')
-STATE=$(opt '#{@claude_state}')
+_source_meta=$(opt '#{@claude_state}|#{@handoff_manifest}') || die 'source metadata unavailable'
+STATE=${_source_meta%%|*}; PREVIOUS=${_source_meta#*|}
 if [ "$INSPECT" = 1 ]; then
   python3 - "$SOURCE_AGENT" "$SID" "$PID" "$TRANSCRIPT" "$CODEX_SOURCE_HOME" "$REGISTRY" "$SESS" "$WIN" "$PANE" "$WT" "$STATE" "$PREVIOUS" "$(opt '#{@cc_account}')" "$(opt '#{@subscription_identity}')" "$(opt '#{@codex_identity}')" <<'PY'
 import json, sys
@@ -303,6 +307,7 @@ print(json.dumps(r))
 PY
   exit $?
 fi
+HANDLE=$(opt '#{@wid}'); ORIGIN=$(opt '#{@origin}')
 source_ready() {
   if [ -n "$QUOTA_REQUEST" ]; then
     python3 "$BIN/.fleet-failover.py" validate "$QUOTA_REQUEST" --session "$SESS" --pane "$PANE" --sid "$SID"

@@ -87,6 +87,15 @@ if the supervisor is SIGKILLed. The private socket directory is mode 0700 under
 close-on-exit policy; crashes and signal exits remain visible. No shared daemon
 or network listener is started, and no account config is rewritten.
 
+Finished Codex windows can be reaped while their configured MCP servers remain
+running. The reap gate verifies the current launcher/session, a completed idle
+native turn and exact MCP launch arguments; it excludes only verified service
+entrypoints and bundled helpers. Jobs beneath those processes, active tools,
+unfinished goals/children and active loops still retain the window. Missing or
+changed identity, an unavailable endpoint or an incomplete native inventory
+also retain it. A legacy embedded launch without a private endpoint therefore
+needs a normal session recovery before this gate can establish that it is idle.
+
 `FLEET_CODEX_SERVER=0` preserves the embedded launch for troubleshooting; live
 queue delivery then reports that no endpoint is available. An explicitly supplied
 `--remote` endpoint retains its existing lifecycle. Profiles require Python 3.11+
@@ -113,10 +122,27 @@ default; `--no-fork` selects `codex resume UUID`. The shared launcher accepts
 account home or exact rollout has been removed, history is review-only. Recovery
 does not copy credentials or silently substitute another account.
 
+For the verified Codex 0.162.1 release on a private Unix app-server, sleep uses
+the native completed turn and its completion timestamp instead of collecting
+duplicate Stop-hook evidence. The launcher sets the internal
+`FLEET_CODEX_NATIVE_COMPLETION` capability only after its version check succeeds;
+inherited capabilities are discarded. Other versions, disabled version checks,
+non-private runtimes and Claude retain the existing Stop evidence path.
+This does not skip sleep eligibility checks: exact conversation, process,
+worktree and transcript binding, native idle state, goals, child agents, tools,
+hook trust, idle grace and empty input are still verified before hibernation.
+Missing native completion evidence refuses sleep rather than guessing.
+
+State hooks submit their related tmux option writes in one command queue. Missing
+optional evidence/detail fields do not stop later writes; non-Stop events still
+invalidate old completion evidence, and Stop still evaluates all wait reasons.
+The hook's state label is not proof that the native turn has completed.
+
 ## Startup and warm scratch panes
 
-The terminal panel's new-task row opens a scratch with the typed text as an
-**unsent draft**. It does not file an issue, invoke `fleet-claim`, or press Enter.
+The terminal panel's new-task row opens its composer. Activating **Open with
+draft** opens a scratch with the typed text as an **unsent draft**. It does not
+file an issue, invoke `fleet-claim`, or press Enter.
 Repository drafts retain hub placement and a dedicated `draft` field preserves
 the text independently of the shorter window label. The client uses the `draft`
 placement action so an older hub refuses instead of silently losing the text;
@@ -129,6 +155,24 @@ The panel forwards its resolved agent even when it matches the default, avoiding
 a second selection lookup after Enter. Node-side policy checks still apply.
 Claims still check repository, provider, account home, size and age; a missing
 entry falls back to cold startup. This changes reuse, not pool capacity.
+
+While a launch is pending, the panel checks its result at most every 50 ms within
+the existing input/redraw deadline. Idle polling and redraw frequency are
+unchanged. The headless draft sender skips loading unused display translations;
+interactive composition remains localized.
+
+The detached dispatch process calls the already-loaded canonical compose sender
+directly, rather than starting another Python interpreter. Placement still runs
+through `fleet-client-place.sh`; each send uses private output files, without
+redirecting process-global stdout/stderr. Placement refusals, receipts, draft
+preservation and repository/client focus retain the same handling.
+
+The raw launcher obtains the validated dispatch envelope and resolved provider
+from one resolver process. Without a client lease or action key, local placement
+skips loading the unused HTTP/signing modules and hub connection reader, and uses
+the existing node adapter. Draft and attachment validation still precede this decision.
+When both are present, hub errors still fail closed; admission, ownership and
+provider checks remain on the launch path.
 
 Measure panel acceptance to **draft ready**, then deliberate Enter to first token
 and complete reply separately. Human editing time is not runtime latency. A

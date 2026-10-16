@@ -92,6 +92,15 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	take := r.URL.Query().Get("take") == "1"
+	renew := r.URL.Query().Get("renew") == "1"
+	if renew && (target != control.TermTargetPersonal || resume == "" || take) {
+		refuse(400, "invalid_renew", "renew requires an ended personal terminal identity")
+		return
+	}
+	if renew && !nc.canTermRenew {
+		refuse(409, "unsupported", "update the node to reopen personal terminals")
+		return
+	}
 	previous := r.URL.Query().Get("previous")
 	if len(previous) > 128 || strings.ContainsAny(previous, "/\\ \t\r\n") {
 		refuse(400, "previous", "invalid previous connection")
@@ -135,7 +144,7 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	defer s.termGate.release(person)
 	s.serveAttachment(w, r, attachmentAdmission{person: person, home: home, logical: logical,
 		target: target, epID: epID, node: nc, generation: gen, previous: previous,
-		termResume: resume, termTake: take, service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
+		termResume: resume, termTake: take, termRenew: renew, service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
 		rate: s.TermRelayRateBPS, recheck: recheck})
 }
 
@@ -144,6 +153,7 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 type attachmentAdmission struct {
 	termResume                                                   string
 	termTake                                                     bool
+	termRenew                                                    bool
 	browser                                                      *websocket.Conn
 	person, logical, target, epID, generation, previous, service string
 	home                                                         store.EntryHome
@@ -219,7 +229,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 		},
 		hello: func(id, key string, now time.Time) []byte {
 			signingKey = key
-			grant = control.AttachmentGrant{V: 1, Person: person, Home: home.Machine, Login: home.Login, Node: epID, Service: a.service, TermResume: a.termResume, TermTake: a.termTake, Chat: a.request, Target: target, Conn: id, Previous: previous, Generation: gen, Fingerprint: fp, Mode: mode, Epoch: 1, Iat: now.Unix(), Exp: now.Add(control.AttachmentLease).Unix()}
+			grant = control.AttachmentGrant{V: 1, Person: person, Home: home.Machine, Login: home.Login, Node: epID, Service: a.service, TermResume: a.termResume, TermTake: a.termTake, TermRenew: a.termRenew, Chat: a.request, Target: target, Conn: id, Previous: previous, Generation: gen, Fingerprint: fp, Mode: mode, Epoch: 1, Iat: now.Unix(), Exp: now.Add(control.AttachmentLease).Unix()}
 			b, _ := json.Marshal(control.AttachmentSignal{T: "open", Grant: control.SignAttachment(grant, key), SDP: first.SDP, STUN: stun})
 			return b
 		},
@@ -387,7 +397,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 					}
 					continue
 				case "error":
-					send(control.AttachmentSignal{T: "error", Error: sig.Error})
+					send(control.AttachmentSignal{T: "error", Error: sig.Error, Term: sig.Term, TermGen: sig.TermGen})
 					return
 				case "answer":
 					if selected {

@@ -290,6 +290,16 @@ func (d dialect) claimWrites(tx *sql.Tx, table string) error {
 	return err
 }
 
+// lockKey also locks an absent configuration row. Postgres needs a named
+// transaction lock; SQLite's writer lock already covers absent rows.
+func (d dialect) lockKey(tx *sql.Tx, table, key string) error {
+	if d.pg() {
+		_, err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?))`, key)
+		return err
+	}
+	return d.claimWrites(tx, table)
+}
+
 // forUpdate is the suffix that makes a SELECT inside a claim hold the rows it
 // read until the commit.
 func (d dialect) forUpdate() string {

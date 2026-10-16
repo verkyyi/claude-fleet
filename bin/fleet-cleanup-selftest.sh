@@ -102,7 +102,7 @@ if [ "\$sub" = issue ]; then
   printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"
   [ "\$action" = view ] || exit 0
   [ "\${FAKE_ISSUE_FAIL:-0}" = 1 ] && exit 1
-  printf '%s\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
+  printf '{"id":"I_42","number":42,"url":"https://github.com/acme/widgets/issues/42","state":"%s"}\n' "\${FAKE_ISSUE_STATE:-CLOSED}"; exit 0
 fi
 [ "\$sub" = pr ] || exit 0
 case "\$action" in
@@ -432,7 +432,7 @@ printf 'FLEET_REAP_MIN_AGE=0\n' > "$WORK/conf/testsess.conf"
 tok="$(FAKE_AGENT_AGE=00:10 run_clean merged --auto --dry-run)"
 [ "$tok" = dry:would-clean-merged ] || fail 'age zero must disable just the age check'
 tok="$(WIN_STATE_FAKE=working run_clean merged --auto)"
-[ "$tok" = skip:live ] || fail 'age zero must never override active state'
+[ "$tok" = skip:live ] || fail "age zero must never override active state, got '$tok'" "$(cat "$WORK/err")"
 rm "$WORK/conf/testsess.conf"
 ok 'automatic dry-run, fleet process-age override and zero-age state protection'
 tok="$(FAKE_RESUME_ON_PULL=1 run_clean merged --auto)"

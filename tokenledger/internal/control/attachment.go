@@ -12,6 +12,7 @@ import (
 const (
 	CapAttachment       = "attachment-v1"
 	CapTermController   = "term-controller-v1"
+	CapTermRenew        = "term-renew-v1"
 	TypeAttachmentOpen  = "attachment_open"
 	AttachmentDataPath  = "/v1/node/attachment"
 	AttachmentLease     = 15 * time.Second
@@ -30,6 +31,7 @@ type AttachmentOpen struct {
 // authorization is required to select relay after negotiation; ready is final.
 type AttachmentGrant struct {
 	TermResume  string                `json:"term_resume,omitempty"`
+	TermRenew   bool                  `json:"term_renew,omitempty"`
 	TermTake    bool                  `json:"term_take,omitempty"`
 	Chat        ChatAttachmentRequest `json:"chat,omitempty"`
 	V           int                   `json:"v"`
@@ -75,7 +77,10 @@ func VerifyAttachment(s, key, login, conn, generation string, now time.Time) (At
 	if g.Service == "chat" && !g.Chat.Valid(g.Target) {
 		return g, bad
 	}
-	if g.Service != "term" && (g.TermResume != "" || g.TermTake) {
+	if g.Service != "term" && (g.TermResume != "" || g.TermTake || g.TermRenew) {
+		return g, bad
+	}
+	if g.TermRenew && (g.Target != TermTargetPersonal || g.TermResume == "" || g.TermTake) {
 		return g, bad
 	}
 	if g.Service != "chat" && g.Chat != (ChatAttachmentRequest{}) {
@@ -134,6 +139,8 @@ func SameAttachment(a, b AttachmentGrant) bool {
 }
 
 type AttachmentSignal struct {
+	Term       string   `json:"term,omitempty"`
+	TermGen    string   `json:"term_gen,omitempty"`
 	Status     int      `json:"status,omitempty"`
 	Message    string   `json:"message,omitempty"`
 	TrialLeft  string   `json:"trial_left,omitempty"`

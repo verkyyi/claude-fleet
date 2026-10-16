@@ -449,12 +449,19 @@ func TestTermRelayOrphanReleasesEverything(t *testing.T) {
 		})
 		t.Logf("%s: released in %s", what, time.Since(t0).Round(100*time.Millisecond))
 	}
-	lastOutcome := func() string {
-		rows, _ := r.h.srv.Store.FleetTermSessions(pAlice, 1)
-		if len(rows) == 0 {
-			return ""
-		}
-		return rows[0].Outcome
+	lastOutcome := func(t *testing.T) string {
+		t.Helper()
+		var outcome string
+		// The handler releases streams/slots before RecordTermClose. Observing
+		// cleanup is not a barrier for the audit write we assert below.
+		waitFor(t, 30*time.Second, "terminal close recorded", func() bool {
+			rows, err := r.h.srv.Store.FleetTermSessions(pAlice, 1)
+			if err == nil && len(rows) > 0 {
+				outcome = rows[0].Outcome
+			}
+			return outcome != ""
+		})
+		return outcome
 	}
 
 	t.Run("half-open browser", func(t *testing.T) {
@@ -462,7 +469,7 @@ func TestTermRelayOrphanReleasesEverything(t *testing.T) {
 		defer c.CloseNow()
 		// It stops reading: no pong ever comes back.
 		released(t, "half-open")
-		if o := lastOutcome(); !strings.Contains(o, "stopped answering") {
+		if o := lastOutcome(t); !strings.Contains(o, "stopped answering") {
 			t.Fatalf("outcome %q", o)
 		}
 	})
@@ -478,7 +485,7 @@ func TestTermRelayOrphanReleasesEverything(t *testing.T) {
 		}()
 		send(t, c, websocket.MessageText, []byte(`{"t":"exec","cmd":"id"}`))
 		released(t, "malformed")
-		if o := lastOutcome(); !strings.Contains(o, "malformed") {
+		if o := lastOutcome(t); !strings.Contains(o, "malformed") {
 			t.Fatalf("outcome %q", o)
 		}
 	})

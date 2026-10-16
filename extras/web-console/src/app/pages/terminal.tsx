@@ -53,9 +53,11 @@ export default function TerminalPage() {
   const container = useRef<HTMLDivElement>(null);
   const take = useRef<() => void>(() => {});
   const send = useRef<(text: string) => void>(() => {});
+  const renewal = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const host = container.current!;
+    const renew = renewal.current; renewal.current = undefined;
     const abort = new AbortController();
     let term: Terminal | undefined, fit: FitAddon | undefined;
     let composing = false, ready = false, ended = false, dead = false;
@@ -121,7 +123,7 @@ export default function TerminalPage() {
       setView((v) => ({ ...v, destination: home.machine }));
       if (home.state !== "ok") { fail(home.state || "refused"); return; }
       connection = connectTerminal(worker, {
-        signal: abort.signal,
+        signal: abort.signal, renew,
         onState(state) {
           if (dead || ended) return;
           if (state.state !== "ready") {
@@ -131,7 +133,7 @@ export default function TerminalPage() {
             if (term?.textarea) term.textarea.value = "";
           }
           setView((v) => ({ ...v, ...state }));
-          if (!["connecting", "reconnecting", "ready"].includes(state.state)) { client?.close(); client = undefined; setOffers([]); return; }
+          if (!["connecting", "reconnecting", "ready"].includes(state.state)) { disposeTerminal(); client?.close(); client = undefined; setOffers([]); return; }
           if (state.state === "ready") {
             if (!ready) { disposeTerminal(); ready = true; createTerminal(); }
             if (!client) client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => { client = undefined; if (!dead) setOffers([]); });
@@ -163,9 +165,10 @@ export default function TerminalPage() {
       <Button asChild size="sm" variant="ghost"><Link to="/sessions"><Layers />{tr("会话", "Sessions")}</Link></Button>
     </header>
     {!["connecting", "reconnecting", "ready"].includes(view.state) ? <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border p-4 text-sm">
-      <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
+      <p>{worker === null && view.error === "ended" ? tr("个人终端已结束。可重新打开，已退出的命令不会重启。", "Your personal terminal ended. Reopen it to continue; exited commands will not restart.") : tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
       {view.state === "open-elsewhere" ? <Button size="sm" onClick={() => take.current()}>{tr("在这里使用", "Use here")}</Button> : view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
         : view.error === "no_home" ? <Button asChild size="sm"><Link to="/devices?tab=home">{tr("设备", "Devices")}</Link></Button>
+          : worker === null && view.error === "ended" && view.terminalGeneration ? <Button size="sm" onClick={() => { renewal.current = view.terminalGeneration; setView({ state: "connecting" }); retry((n) => n + 1); }}>{tr("重新打开终端", "Reopen terminal")}</Button>
           : view.error === "interrupted" ? <Button size="sm" onClick={() => { forgetTerminalGeneration(worker); retry((n) => n + 1); }}>{tr("连接当前会话", "Connect current session")}</Button>
           : !["ended", "interrupted"].includes(view.error || "") ? <Button size="sm" onClick={() => retry((n) => n + 1)}>{tr("重新连接", "Reconnect")}</Button>
             : <Button asChild size="sm"><Link to="/sessions">{tr("查看会话", "View sessions")}</Link></Button>}

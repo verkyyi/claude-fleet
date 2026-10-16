@@ -31,6 +31,21 @@ func TestTermPtyAdmissionBeforeReady(t *testing.T) {
 	}
 }
 
+// An ended admission carries the identity to a fresh browser without ever
+// enabling input. The error is not parsed from arbitrary terminal output.
+func TestTermPtyEndedIdentity(t *testing.T) {
+	old := termAttachArgv
+	t.Cleanup(func() { termAttachArgv = old })
+	termAttachArgv = func(_, _, _ string) []string {
+		return []string{"/bin/sh", "-c", `printf '%s\n' '{"state":"ended","term":"test","gen":"test:3"}' >&3`}
+	}
+	var out bytes.Buffer
+	RunTermPty([]string{"--view", "web-ended", "--target", "personal"}, bytes.NewReader(nil), &out)
+	if !bytes.Contains(out.Bytes(), []byte(`"t":"error"`)) || !bytes.Contains(out.Bytes(), []byte(`"gen":"test:3"`)) || bytes.Contains(out.Bytes(), []byte(`"t":"ready"`)) {
+		t.Fatalf("ended admission: %q", out.Bytes())
+	}
+}
+
 // RunTermPty on a real pseudo-terminal (claude-fleet#3838): the one command runs
 // on it, keystrokes and resizes arrive by frame, the output comes back raw, and
 // stdin's end hangs the terminal up — nothing of its process group is left.

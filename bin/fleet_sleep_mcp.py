@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -207,7 +208,14 @@ def configured_process(pid, config, argv_reader, exe_reader):
     # mcp-image under node@22, and the exact-path comparison below called the
     # configured server an unverified job. The same program name running the
     # exact configured argv is that server; a different build of it is not a job.
-    if not os.path.isabs(command) and executable.name == Path(command).name and argv[1:] == args:
+    # macOS's python3 launcher re-execs the framework's Python.app binary.
+    # Keep the exact configured service argv and native parent/inventory checks;
+    # this is not an exemption for arbitrary Python jobs or an absolute command
+    # that points at a different executable.
+    framework_python = (re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', command) is not None
+                        and executable.parts[-4:] == ('Python.app', 'Contents', 'MacOS', 'Python'))
+    if (not os.path.isabs(command) and (executable.name == Path(command).name or framework_python)
+            and argv[1:] == args):
         return True
     resolved = Path(command) if os.path.isabs(command) else Path(shutil.which(command) or '/nonexistent')
     if not resolved.is_file():
@@ -345,8 +353,9 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     # strict=False answers a narrower question (issue #864): not "may this worker
     # hibernate?" but "is this configured MCP service, or something the agent is
     # still running?". An uncontracted, unready or job-owning service is still an
-    # MCP service, so its whole subtree is infrastructure; only the exact-match
-    # identification itself is kept.
+    # MCP service. Claude's historical non-strict walk delegates its tool work
+    # to fleet_window_tool_busy. Codex must keep jobs beneath a server visible:
+    # only the configured launcher and verified package entrypoint are helpers.
     configured, statuses = inventory
     approved, contract_conf = restartable(source) if strict else (set(), None)
     allowed = set()
@@ -358,6 +367,13 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
         if len(matches) != 1:
             continue
         name, conf = matches[0]
+        if not strict and source.get('agent') == 'codex':
+            if statuses is None or not runtime_ready(statuses.get(name, {})):
+                continue  # unknown/unready is not evidence of idle infrastructure
+            allowed.add(pid)
+            allowed.update(child for child, (pp, _) in rows.items() if pp == pid
+                           and package_child(child, conf, argv_reader, exe_reader))
+            continue
         if not strict:
             pending = [pid]
             while pending:

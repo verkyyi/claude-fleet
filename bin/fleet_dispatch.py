@@ -87,6 +87,7 @@ def main():
     p.add_argument("--request-id", default="")
     p.add_argument("--placement-code", type=int)
     p.add_argument("--task", default="")
+    p.add_argument("--with-agent", action="store_true", help="print the resolved agent before the JSON envelope")
     a = p.parse_args()
     try:
         value = resolve(a.agent, a.template, a.label, a.default,
@@ -95,6 +96,8 @@ def main():
             placement_check(value, a.task, a.placement_code)
     except (ValueError, TypeError) as e:
         p.error(str(e))
+    if a.with_agent:
+        print(value["resolved_agent"])
     print(json.dumps(value, separators=(",", ":")))
 
 

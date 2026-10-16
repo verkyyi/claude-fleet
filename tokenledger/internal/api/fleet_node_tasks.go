@@ -42,8 +42,10 @@ import (
 //
 //	idempotency_key, generation, expected_worker, ...}} claims or transitions
 //	it. claim supplies worker_id; transition supplies state/actual_agent/evidence;
-//	retry/transfer supply requested_agent/resolved_agent/evidence. A terminal
-//	result or transfer from an executor requires execution_stopped:true.
+//	retry/transfer supply requested_agent/resolved_agent/evidence. Explicit
+//	success/failure may retain the native session and its lease. stop_ack
+//	releases that terminal execution; cancel_ack/transfer also require
+//	execution_stopped:true. Retry requires release or fresh stopped evidence.
 //
 // Same key/input returns the original response; changed input returns 409.
 // Expected worker and generation fence each write. The node's authenticated
@@ -126,6 +128,9 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 		if in.Mutation == nil && (!codingAgentOK(in.ResolvedAgent) || (in.RequestedAgent != "default" && (!codingAgentOK(in.RequestedAgent) || in.RequestedAgent != in.ResolvedAgent))) {
 			return "invalid or contradictory requested/resolved coding agent"
 		}
+		if err := s.checkTaskParentSession(s.nodeTaskOwner(ep), in.ParentSession); err != nil {
+			return "parent_session requires a stable session UUID in this account"
+		}
 		if in.Mutation != nil {
 			if in.Title != "" || in.RequestedAgent != "" || in.ResolvedAgent != "" || in.TicketRef != "" || in.ParentTask != "" || in.ParentSession != "" || len(in.RequestPayload) != 0 || in.Repo != "" || in.Token != "" || in.Via != "" {
 				return "mutation cannot amend the accepted request"
@@ -145,7 +150,7 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 				if err != nil || !fleetid.IsUUID(sid) {
 					return "authoritative worker_id requires a stable session UUID"
 				}
-				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID {
+				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID && m.Kind != "cancel_request" {
 					return "worker_id names a fleet this node does not report"
 				}
 				m.FleetID = fid
@@ -196,6 +201,9 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
+	if s.nodeTaskCollaboration(w, r, ep, owner, ref) {
+		return
+	}
 	var in nodeTaskWrite
 	if r.Method == http.MethodPost {
 		var raw json.RawMessage

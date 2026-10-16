@@ -317,7 +317,17 @@ var ErrIdemTaken = errors.New("idempotency key already journalled")
 // that loses gets ErrIdemTaken and reads the winner's row, so two calls with
 // one key never both reach a node.
 func (s *Store) InsertFleetOperation(o FleetOperation) error {
-	res, err := s.write.Exec(`INSERT INTO fleet_operations
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if repo, accepted := repoOfStart(o); repo != "" {
+		if err = s.repoStartTx(tx, repo, accepted); err != nil {
+			return err
+		}
+	}
+	res, err := tx.Exec(`INSERT INTO fleet_operations
 		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
 		ON CONFLICT(actor, idem) DO NOTHING`,
@@ -329,12 +339,12 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrIdemTaken
 	}
-	return nil
+	return tx.Commit()
 }
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event')`,
+	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event', 'task_report', 'repo_local_start', 'repo_authority')`,
 		status, resultJSON, at.UTC().Format(rfc), id)
 	return err
 }

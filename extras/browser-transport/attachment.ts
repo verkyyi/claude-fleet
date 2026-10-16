@@ -35,7 +35,7 @@ export type AttachmentOptions = {
   onData: (data: string | ArrayBuffer) => void
 }
 type Signal = { t: string; sdp?: string; stun?: string[]; generation?: string;
-  status?: number; message?: string; trial_left?: string; target?: string; conn?: string; mode?: 'direct' | 'relay'; pair?: string; error?: string }
+  status?: number; message?: string; trial_left?: string; term?: string; term_gen?: string; target?: string; conn?: string; mode?: 'direct' | 'relay'; pair?: string; error?: string }
 type Attempt = {
   ws: WebSocket; pc?: RTCPeerConnection; dc?: RTCDataChannel
   timer?: ReturnType<typeof setTimeout>; offerSent: boolean; choice?: 'direct' | 'relay'
@@ -227,7 +227,7 @@ export class BrowserAttachment {
       case 'selected':
         if (msg.mode !== a.choice) { this.end(a, 'invalid_selection', true); return }
         this.publish({ pair: msg.pair }); return
-      case 'error': this.publish({ status: msg.status, message: msg.message }); this.end(a, msg.error ?? 'refused', true); return
+      case 'error': this.publish({ status: msg.status, message: msg.message, ...(msg.term_gen ? { terminal: msg.term, terminalGeneration: msg.term_gen } : {}) }); this.end(a, msg.error ?? 'refused', true); return
       default: this.data(a, raw)
     }
   }

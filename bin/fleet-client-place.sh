@@ -181,10 +181,12 @@ fi
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
 python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$TASKREF" "$DRAFTF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
-import base64, hashlib, hmac, importlib.util, json, os, re, sys, time, urllib.error, urllib.request
+import os, sys
 
 here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, taskref, draftf = sys.argv[1:19]
 files = sys.argv[19:]
+if files:
+    import base64, hashlib
 body = ""
 draft = ""
 if draftf:
@@ -238,6 +240,12 @@ def read(path):
         return ""
 
 
+d = os.environ.get("FLEET_CLIENT_DIR") or os.environ.get("TMPDIR") or "/tmp"
+lease = read(os.path.join(d, "client.lease"))
+akey = read(os.environ.get("FLEET_CLIENT_KEY_FILE") or os.path.join(d, "client.key"))
+if not lease or not akey:
+    sys.exit(10)
+import hashlib, hmac, importlib.util, json, re, time, urllib.error, urllib.request
 fc = connect_module()
 # Every answer leaves one line in the client's place.log (issue #2896,
 # docs/dev/CLIENT-LOGS.md): the line printed, plus every reason said on stderr —
@@ -273,10 +281,7 @@ def bye(code, line=""):
 conf = fc.load_hub_conf()
 hub = os.environ.get("FLEET_HUB_URL") or fc.machine_conf_hub() or conf.get("url") or ""
 token = os.environ.get("FLEET_HUB_TOKEN") or conf.get("token") or ""
-d = os.environ.get("FLEET_CLIENT_DIR") or os.environ.get("TMPDIR") or "/tmp"
-lease = read(os.path.join(d, "client.lease"))
-akey = read(os.environ.get("FLEET_CLIENT_KEY_FILE") or os.path.join(d, "client.key"))
-if not hub or not lease or not akey:
+if not hub:
     sys.exit(10)
 
 total = float(os.environ.get("FLEET_CLIENT_PLACE_WAIT") or 60)

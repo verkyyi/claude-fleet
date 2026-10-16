@@ -183,9 +183,14 @@ def bus_fields(stats, home):
 
 def hook():
     payload = None
+    if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
+        from fleet_repo_authority import observe_native
+        payload = json.load(sys.stdin)
+        observe_native(payload)
     if os.environ.get("FLEET_LAUNCH_CONTEXT"):
         from fleet_launch import hook as launch_hook
-        payload = json.load(sys.stdin)
+        if payload is None:
+            payload = json.load(sys.stdin)
         launch_hook(payload)
     owner = os.environ.get("FLEET_CODEX_LAUNCHER_PID", "")
     pane = os.environ.get("TMUX_PANE", "")
@@ -295,6 +300,9 @@ def context(args):
                 "transcript": args.transcript or ""}
     stats = telemetry(data)
     pct = stats["pct"]
+    if args.pct:
+        print(pct)
+        return 0 if pct >= 0 else 1
     threshold, armed = 0, False
     if args.pane:
         try:
@@ -394,6 +402,7 @@ def main():
     parser.add_argument("--identity", default="{}")
     parser.add_argument("--owner", default="")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--pct", action="store_true")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
     try:

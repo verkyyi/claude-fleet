@@ -41,6 +41,7 @@ cat > "$WORK/fake/codex" <<SH
 if [ "\$1" = --version ]; then cat "$WORK/codex.version"; exit "\$(cat "$WORK/codex.rc" 2>/dev/null || echo 0)"; fi
 printf '%s\n' "\$*" > "$WORK/launched"
 printf '%s' "\${FLEET_CODEX_VERSION_WARNING:-}" > "$WORK/launch.warn"
+printf '%s' "\${FLEET_CODEX_NATIVE_COMPLETION:-}" > "$WORK/launch.native"
 exit 0
 SH
 chmod +x "$WORK/fake/codex"
@@ -133,5 +134,13 @@ setv 'codex-cli 0.160.0'; launch FLEET_CODEX_VERSION_CHECK=0
 lacks "warning: codex" "$(cat "$WORK/lerr")" "3c: FLEET_CODEX_VERSION_CHECK=0 skips the warning"
 setv 'codex-cli 0.154.0'; launch FLEET_CODEX_VERSION_WARNING=stale
 eq "$(cat "$WORK/launch.warn")" "" "3d: an inherited warning never leaks into a verified launch"
+setv 'codex-cli 0.162.1'; launch
+eq "$(cat "$WORK/launch.native")" 1 "3e: the verified pin enables native completion proof"
+setv 'codex-cli 0.154.0'; launch FLEET_CODEX_NATIVE_COMPLETION=1
+eq "$(cat "$WORK/launch.native")" "" "3f: an older release retains Stop evidence"
+setv 'codex-cli 0.162.2'; launch FLEET_CODEX_NATIVE_COMPLETION=1
+eq "$(cat "$WORK/launch.native")" "" "3g: unverified completion semantics retain Stop evidence"
+setv 'codex-cli 0.162.1'; launch FLEET_CODEX_VERSION_CHECK=0 FLEET_CODEX_NATIVE_COMPLETION=1
+eq "$(cat "$WORK/launch.native")" "" "3h: a disabled version check cannot inherit a capability"
 
 printf 'fleet-codex-version-selftest: PASS (%d checks)\n' "$CHECKS"

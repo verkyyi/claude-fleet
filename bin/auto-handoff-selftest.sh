@@ -144,8 +144,10 @@ run_state() {
       FAKE_ISSUE="${FAKE_ISSUE:-}" FAKE_RAW="${FAKE_RAW:-}" FAKE_CTX="${FAKE_CTX:-}" \
       FAKE_WID="${FAKE_WID:-}" FAKE_CLIENTS="${FAKE_CLIENTS:-}" \
       FAKE_TRANSFER_UNTIL="${FAKE_TRANSFER_UNTIL:-}" FAKE_TRANSFER_REQUEST="${FAKE_TRANSFER_REQUEST:-}" \
+      FLEET_CODEX_NATIVE_COMPLETION="${FAKE_NATIVE_COMPLETION:-}" FLEET_CODEX_REMOTE="${FAKE_NATIVE_REMOTE:-}" \
+      SLEEP_TEST_LOG="$WORK/sleep-hook.log" \
       ${HOOK_ENTRY:+CLAUDE_CODE_ENTRYPOINT=$HOOK_ENTRY} \
-    sh "$STATE" "$@" < /dev/null   # empty stdin → deterministic (no stop_hook_active)
+    sh "$STATE" "$@" < "${FAKE_HOOK_PAYLOAD_FILE:-/dev/null}"
 }
 
 nudged()  { case "$1" in *'"decision":"block"'*) return 0 ;; *) return 1 ;; esac; }
@@ -174,8 +176,9 @@ latched && fail "Codex telemetry must not arm the Claude handoff latch"
 
 # A native measurement emits a Codex handoff command through the same threshold.
 cat > "$WORK/inst/bin/fleet-codex-session.py" <<'PYCODEX'
-import json, os
-print(json.dumps({'pct': int(os.environ['FAKE_CTX'])}))
+import os, sys
+assert '--pct' in sys.argv and '--json' not in sys.argv
+print(int(os.environ['FAKE_CTX']))
 PYCODEX
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && latched || fail 'Codex context must arm its native cycle'
@@ -183,6 +186,34 @@ case "$out" in *'fleet-transfer.sh'*'--after-turn'*) ;; *) fail 'Codex cycle com
 case "$out" in *'/fleet-handoff'*) fail 'Codex must never invoke the Claude slash cycle';; esac
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_ARMED=1 run_state 'done')"
 nudged "$out" && fail 'Codex native cycle must debounce'
+out="$(GPCT=60 FAKE_CTX=59 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail 'Codex below the configured threshold must not hand off'
+out="$(GPCT=60 FAKE_CTX=-1 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail 'Unknown Codex context must not hand off'
+
+cat > "$WORK/inst/bin/fleet-sleep.py" <<'PYSLEEP'
+import os, sys
+from pathlib import Path
+if sys.argv[1:2] == ['hook']:
+    Path(os.environ['SLEEP_TEST_LOG']).write_text('called')
+else:
+    sys.exit(1)
+PYSLEEP
+printf '%s' '{"hook_event_name":"Stop","session_id":"11111111-1111-4111-8111-111111111111"}' > "$WORK/stop.json"
+for fixture in '1 unix:///test codex skip' '0 unix:///test codex hook' '1 tcp://test codex hook' '1 unix:///test claude hook'; do
+  read -r capability endpoint provider expected <<< "$fixture"
+  rm -f "$WORK/sleep-hook.log"
+  out=$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT="$provider" \
+    FAKE_NATIVE_COMPLETION="$capability" FAKE_NATIVE_REMOTE="$endpoint" \
+    FAKE_HOOK_PAYLOAD_FILE="$WORK/stop.json" run_state 'done')
+  nudged "$out" && latched || fail 'Native idle proof must preserve the blocking context guard'
+  if [ "$expected" = skip ]; then
+    [ ! -f "$WORK/sleep-hook.log" ] || fail 'Verified private Codex must not duplicate native idle proof'
+  else
+    [ -f "$WORK/sleep-hook.log" ] || fail 'Claude, legacy and non-private Codex must retain Stop evidence'
+  fi
+done
+rm -f "$WORK/inst/bin/fleet-sleep.py"
 
 # ---- UNSET ≠ OFF: no conf layer sets it → the repo default 80 (issue #1571) ----
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
@@ -255,7 +286,7 @@ out="$(HOOK_ENTRY=sdk-cli GPCT=60 FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_R
 [ -s "$SETOPT_LOG" ] && fail 'a headless child must not release a pending transfer'
 for ev in working busy needs; do
   run_state "$ev" >/dev/null
-  grep -q -- '-u .*@agent_transfer_ready' "$SETOPT_LOG" || fail 'new activity must invalidate the previous transfer Stop'
+  grep -q -- 'set-window-option -[qu]*u[qu]* -t %9 @agent_transfer_ready' "$SETOPT_LOG" || fail 'new activity must invalidate the previous transfer Stop'
 done
 printf 'selftest: AGENT-TRANSFER legs PASS (clean Stop / expired / incomplete / needs / disabled auto-cycle / headless)\n' >&2
 
