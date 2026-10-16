@@ -159,6 +159,13 @@ case "$NUM" in T*)
   tget() { printf '%s' "$trec" | python3 -c 'import json,sys
 try: print((json.load(sys.stdin).get("task") or {}).get(sys.argv[1]) or "")
 except ValueError: pass' "$1" 2>/dev/null; }
+  if [ "$trc" -ne 0 ]; then
+    printf 'UNKNOWN\ntask: %s\nnote: task authority unavailable; no replacement authorized\n' "$TASK"
+    exit 3
+  fi
+  if [ "$(tget authority_version)" = 1 ]; then
+    exec python3 "$BIN/fleet_task_control.py" await --task "$TASK" --timeout "$((TIMEOUT - SECONDS > 0 ? TIMEOUT - SECONDS : 1))" --interval "$INTERVAL"
+  fi
   tiss=''; tkey=''
   if [ "$trc" -eq 0 ]; then tiss=$(tget issue); tkey=$(tget session_key); fi
   case "$tiss" in

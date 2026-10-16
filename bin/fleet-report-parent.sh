@@ -168,6 +168,13 @@ selffid=${row%%|*};  row=${row#*|}
 wtask=${row%%|*};    wname=${row#*|}   # the hub's task record (issue #3330), T<n> or ''
 case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
 
+# A verified accepted task never falls back to the issue/key report route.
+if [ -n "$(TM display-message -p -t "$target" '#{@launch}' 2>/dev/null)" ]; then
+  task_args=(report --pane "$target" --socket "$SOCK" --state "$STATE" --summary "$SUMMARY" --pr "$PR")
+  [ "$DRY" = 1 ] && task_args+=(--dry)
+  exec python3 "$BIN/fleet_task_control.py" "${task_args[@]}"
+fi
+
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
          # an identity-form worker_id (issue #1646) names its session, not a key

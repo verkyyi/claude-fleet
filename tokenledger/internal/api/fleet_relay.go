@@ -170,6 +170,28 @@ func (s *Server) acceptRelay(ctx context.Context, wire nodeWire, ep store.Endpoi
 		refuse(ctx, wire, m.OpID, e["code"], e["message"])
 		return
 	}
+	skip, err := s.prepareTaskReportRelay(ep, &r)
+	if err != nil {
+		// Storage unavailability is retriable: no acknowledgement, keep outbox.
+		if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskConflict) || errors.Is(err, store.ErrTaskInvalid) {
+			refuse(ctx, wire, m.OpID, "CONFLICT", err.Error())
+		}
+		return
+	}
+	if skip {
+		// Keep an explicit undelivered receipt; a retired generation must not
+		// look queued forever after its outbox file is acknowledged.
+		if _, err := s.Store.InsertFleetRelay(r); err != nil {
+			return
+		}
+		if err := s.Store.FinishFleetRelay(r.ID, store.RelayFailed, "historical task/parent generation", time.Now()); err != nil {
+			return
+		}
+		wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = wire.write(wctx, control.Message{Type: control.TypeAck, OpID: m.OpID, Proto: control.Proto})
+		cancel()
+		return
+	}
 	inserted, err := s.Store.InsertFleetRelay(r)
 	if err != nil {
 		// Not stored: the sender keeps it and sends it again. An error
@@ -321,6 +343,15 @@ func (s *Server) dispatchRelays(endpointID string) {
 	nodeOf := map[string]string{}
 	live := map[string]map[string]bool{}
 	for _, r := range rels {
+		current, err := s.taskRelayStillCurrent(r)
+		if err != nil {
+			continue
+		} // unavailable authority is not retirement
+		if !current {
+			// Leave history visible and settle as undelivered, never delivered.
+			_ = s.Store.FinishFleetRelay(r.ID, store.RelayFailed, "historical task/parent generation", now)
+			continue
+		}
 		// The first push always goes: a child report is ledgered on the
 		// parent's machine even when the parent itself is not there. A
 		// relay already pushed waits for its RECIPIENT (claude-fleet#1647):

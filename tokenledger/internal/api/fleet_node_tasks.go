@@ -145,7 +145,7 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 				if err != nil || !fleetid.IsUUID(sid) {
 					return "authoritative worker_id requires a stable session UUID"
 				}
-				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID {
+				if f, err := s.Store.Fleet(fid); err != nil || f.EndpointID != ep.ID && m.Kind != "cancel_request" {
 					return "worker_id names a fleet this node does not report"
 				}
 				m.FleetID = fid
@@ -196,6 +196,9 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
+	if s.nodeTaskCollaboration(w, r, ep, owner, ref) {
+		return
+	}
 	var in nodeTaskWrite
 	if r.Method == http.MethodPost {
 		var raw json.RawMessage

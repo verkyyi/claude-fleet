@@ -334,7 +334,7 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 
 // UpdateFleetOperation records a newer status and result for an operation.
 func (s *Store) UpdateFleetOperation(id, status, resultJSON string, at time.Time) error {
-	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event')`,
+	_, err := s.write.Exec(`UPDATE fleet_operations SET status = ?, result = NULLIF(?, ''), updated = ? WHERE id = ? AND action NOT IN ('task_attempt', 'task_event', 'task_report')`,
 		status, resultJSON, at.UTC().Format(rfc), id)
 	return err
 }

@@ -399,7 +399,14 @@ def supervise(argv):
         stamp(pane, "@launch_receipt", receipt)
         tmux("set-option", "-wu", "-t", pane, "@launch_seed")
         verified = True
-        return child.wait()
+        status = child.wait()
+        # An explicit work report remains pending until this witnessed native
+        # exits. Failure/outage keeps it unresolved; exit alone creates nothing.
+        result = subprocess.run([sys.executable, str(BIN / "fleet_task_control.py"), "finalize", "--pane", pane],
+                                capture_output=True, text=True, timeout=45)
+        if result.stdout:
+            print(result.stdout.strip(), file=sys.stderr)
+        return status
     finally:
         if not verified or child.poll() is None:
             # Only descendants of this Popen are ours. Never close a window
