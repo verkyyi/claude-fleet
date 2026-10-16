@@ -23,6 +23,15 @@ import (
 // Only the worker command and menu's row producer are fixtures. No live Fleet,
 // agent model, account, firewall or host restart is involved.
 func TestTerminalRecoveryChromium(t *testing.T) {
+	// Playwright's installed browser belongs to the runner, while the native
+	// terminal deliberately gets an empty HOME. Resolve its cache before that.
+	if os.Getenv("PLAYWRIGHT_BROWSERS_PATH") == "" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(cache, "ms-playwright"))
+	}
 	for _, mode := range []string{"direct", "relay"} {
 		t.Run(mode, func(t *testing.T) {
 			r := newTermRig(t, true)
@@ -61,10 +70,14 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			t.Setenv("FLEET_VIEW_ROWS_CMD", "cat '"+rows+"'")
 			t.Setenv("FLEET_VIEW_FIRST_CMD", "false")
 			t.Setenv("FLEET_STATUS_G", filepath.Join(home, "global"))
+			for _, key := range []string{"FLEET_VIEW_ROWS_CMD", "FLEET_VIEW_FIRST_CMD", "FLEET_STATUS_G", "FLEET_UI_LANG"} {
+				tm("set-environment", "-g", key, os.Getenv(key))
+			}
 			agent.SetNativeTermHelperForTest(func(view, target string) []string {
 				return []string{"/bin/bash", filepath.Join(root, "bin/fleet-term-attach.sh"), "--view", view, "--target", target}
 			})
 			r.h.srv.ConsoleFS = os.DirFS(filepath.Join(root, "extras/web-console/dist"))
+			initialWorkerPID := tm("display-message", "-p", "-t", worker, "#{pane_pid}")
 			initialPID := tm("display-message", "-p", "-t", hw, "#{pane_pid}")
 			// Failure injection addresses ONLY the disposable test identities/socket.
 			fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -75,10 +88,12 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 					}
 				case "/host":
 					exec.Command("tmux", "-L", sock, "kill-server").Run()
+				case "/worker-respawn":
+					tm("respawn-pane", "-k", "-t", worker, "exec /bin/sh")
 				case "/state":
 					commands, _ := os.ReadFile(filepath.Join(home, "commands"))
 					identity, _ := os.ReadFile(filepath.Join(conf, "webterm/terminal.json"))
-					json.NewEncoder(w).Encode(map[string]any{"commands": string(commands), "identity": string(identity), "home_pid": tm("display-message", "-p", "-t", hw, "#{pane_pid}"), "initial_pid": initialPID, "views": tm("list-sessions", "-F", "#{session_name}|#{window_id}"), "worker_window": worker, "home_window": hw})
+					json.NewEncoder(w).Encode(map[string]any{"commands": string(commands), "identity": string(identity), "home_pid": tm("display-message", "-p", "-t", hw, "#{pane_pid}"), "initial_pid": initialPID, "worker_pid": tm("display-message", "-p", "-t", worker, "#{pane_pid}"), "initial_worker_pid": initialWorkerPID, "views": tm("list-sessions", "-F", "#{session_name}|#{window_id}"), "worker_window": worker, "home_window": hw})
 				default:
 					http.NotFound(w, req)
 				}
@@ -88,7 +103,8 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "node", "recovery.mjs", mode)
 			cmd.Dir = filepath.Join(root, "extras/browser-transport")
-			cmd.Env = append(os.Environ(), "FLEET_TEST_ORIGIN="+r.origin, "FLEET_TEST_COOKIE="+r.alice.Name+"="+r.alice.Value, "FLEET_TEST_WORKER="+r.wid, "FLEET_TEST_FIXTURE="+fixture.URL)
+			fresh := personCookie(pAlice, "alice renewed")
+			cmd.Env = append(os.Environ(), "FLEET_TEST_ORIGIN="+r.origin, "FLEET_TEST_COOKIE="+r.alice.Name+"="+r.alice.Value, "FLEET_TEST_FRESH_COOKIE="+fresh.Value, "FLEET_TEST_WORKER="+r.wid, "FLEET_TEST_FIXTURE="+fixture.URL)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("native Chromium recovery: %v\n%s", err, out)

@@ -8,7 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { Button } from "@/components/ui/button";
 import { tr } from "@/shared/i18n";
 import { browserClient, type BrowserOffer } from "@/shared/terminal-client";
-import { connectTerminal, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
+import { connectTerminal, forgetTerminalGeneration, type TerminalState, FLEET_MENU, FLEET_SHELL, terminalKey } from "@/shared/terminal";
 import { usePage } from "../Shell";
 
 type View = TerminalState & { destination?: string };
@@ -21,7 +21,7 @@ const errors: Record<string, [string, string]> = {
   offline: ["你的机器暂时离线。", "Your machine is offline."],
   maintenance: ["你的机器正在维护，请稍后再试。", "Your machine is under maintenance. Try again later."],
   ended: ["终端已结束。回到会话列表查看状态。", "The terminal ended. Check its state in Sessions."],
-  interrupted: ["运行环境已改变，已停止连接。请回到会话列表。", "The environment changed. Return to Sessions before connecting again."],
+  interrupted: ["运行环境已改变，已停止连接。确认后可连接当前会话。", "The environment changed. You can explicitly connect to the current session."],
   input: ["输入可能只发送了一部分。请重新连接并检查，未发送的内容不会重放。", "Input may be partial. Reconnect and inspect it; unsent input will not be replayed."],
   lease: ["浏览器设备连接已失效，请重新连接。", "This browser's device lease ended. Connect again."],
 };
@@ -113,15 +113,13 @@ export default function TerminalPage() {
     const theme = new MutationObserver(() => { if (term) term.options.theme = terminalTheme(host); });
     theme.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     const start = async () => {
-      void (async () => {
       const response = await fetch("/v1/term/home", { signal: abort.signal, credentials: "same-origin", headers: { Accept: "application/json" } });
       if (dead) return;
       if (response.status === 401) { fail("login"); return; }
       const home = await response.json();
       if (!response.ok) { fail(home.code || "refused"); return; }
       setView((v) => ({ ...v, destination: home.machine }));
-      if (["unsupported", "no_home"].includes(home.state)) fail(home.state);
-      })().catch(() => {});
+      if (home.state !== "ok") { fail(home.state || "refused"); return; }
       connection = connectTerminal(worker, {
         signal: abort.signal,
         onState(state) {
@@ -135,7 +133,7 @@ export default function TerminalPage() {
           setView((v) => ({ ...v, ...state }));
           if (!["connecting", "reconnecting", "ready"].includes(state.state)) { client?.close(); client = undefined; setOffers([]); return; }
           if (state.state === "ready") {
-            disposeTerminal(); ready = true; createTerminal();
+            if (!ready) { disposeTerminal(); ready = true; createTerminal(); }
             if (!client) client = browserClient(worker, (offer) => { if (!dead) setOffers((old) => [...old.slice(-3), offer]); }, () => { client = undefined; if (!dead) setOffers([]); });
           }
         },
@@ -168,7 +166,9 @@ export default function TerminalPage() {
       <p>{tr(...(errors[view.error || ""] || ["无法连接这个终端。请确认登录、机器和会话状态。", "Could not connect. Check your login, machine and session state."]))}</p>
       {view.state === "open-elsewhere" ? <Button size="sm" onClick={() => take.current()}>{tr("在这里使用", "Use here")}</Button> : view.state === "unauthorized" || view.error === "login" ? <Button asChild size="sm"><a href="/app/signin">{tr("登录", "Sign in")}</a></Button>
         : view.error === "no_home" ? <Button asChild size="sm"><Link to="/devices?tab=home">{tr("设备", "Devices")}</Link></Button>
-          : !["ended", "interrupted"].includes(view.error || "") ? <Button size="sm" onClick={() => retry((n) => n + 1)}>{tr("重新连接", "Reconnect")}</Button> : null}
+          : view.error === "interrupted" ? <Button size="sm" onClick={() => { forgetTerminalGeneration(worker); retry((n) => n + 1); }}>{tr("连接当前会话", "Connect current session")}</Button>
+          : !["ended", "interrupted"].includes(view.error || "") ? <Button size="sm" onClick={() => retry((n) => n + 1)}>{tr("重新连接", "Reconnect")}</Button>
+            : <Button asChild size="sm"><Link to="/sessions">{tr("查看会话", "View sessions")}</Link></Button>}
     </div> : null}
     {offers.map((offer) => <p key={offer.id} role="status" className="text-sm break-all">
       {offer.url ? <a href={offer.url} target="_blank" rel="noopener noreferrer" className="underline">{tr("打开链接：", "Open link: ")}{offer.url}</a>

@@ -286,6 +286,7 @@ EOF
     # (`<fleet UUID>/<key>`, fleet_worker_id_key — issue #3007), so rv_select
     # below resolves it the one way (fleet_worker_locate) and answers 3 itself
     if [ -n "$_w" ]; then
+      case "$_v" in wt-*) python3 "$BIN/fleet-webterm.py" switch --conn "${_v#wt-}" --window "$_w"; exit $? ;; esac
       { [ -n "$_c" ] && tmux -L "$_s" switch-client -c "$_c" -t "=$_g:$_w" 2>/dev/null; } \
         || tmux -L "$_s" select-window -t "=$_g:$_w" 2>/dev/null || exit 5
       exit 0
@@ -314,6 +315,7 @@ if [ "${1:-}" = notify-jump ]; then
   # C2's one way a 看台 changes session; it says no (another machine not yet
   # connected, gone) ⇒ this machine's own window, if it has one
   [ -f "$BIN/fleet-view-go.sh" ] && bash "$BIN/fleet-view-go.sh" "$_s" "$_wid" --how notify >/dev/null 2>&1 && exit 0
+  case "$_s" in *@view-wt-*) exit 0 ;; esac # a refused browser lease must stay refused
   _w=$(tmux -S "$2" list-windows -t "=$_s" -F '#{window_id}|#{@fleet_id}|#{@peer_cur}' 2>/dev/null \
     | awk -F '|' -v c="$_wid" -v f="${_wid##*/}" '$2 != "" && $2 == f || $3 == c || $3 == "wid:" c { print $1; exit }')
   [ -n "$_w" ] && tmux -S "$2" select-window -t "=$_s:$_w" 2>/dev/null
@@ -704,6 +706,7 @@ $wid $w $s $fid"
   # `window-size latest`); a bare select-window comes from no client and leaves
   # the window at whoever typed into it last. No client attached → select-window.
   c=''; [ "$tgt" = "$s" ] || c=$(T list-clients -t "=$tgt" -F '#{client_tty}' 2>/dev/null | head -1)
+  case "$view" in wt-*) python3 "$BIN/fleet-webterm.py" switch --conn "${view#wt-}" --window "$w"; return $? ;; esac
   { [ -n "$c" ] && T switch-client -c "$c" -t "=$tgt:$w" 2>/dev/null; } \
     || T select-window -t "=$tgt:$w" 2>/dev/null || { note "cannot select $w"; return 3; }
   rv_hide_border "$w"   # a window spawned since the attach (#1549, #1682)
@@ -1006,7 +1009,9 @@ rv_attach_thin() {
     T set-option -t "$gid" @view_web_home "$bhome" 2>/dev/null
     sp=$(T display-message -p -t "$gid:" '#{socket_path}')
     TMUX="$sp,0,0" python3 "$BIN/fleet-quickopen.py" view-keys
-    T set-option -t "$gid" key-table fleet-view
+    T set-option -t "$gid" key-table fleet-webterm
+    T set-option -t "$gid" prefix None
+    T set-option -t "$gid" prefix2 None
     # A browser attachment is disposable. The captured session id and row pid
     # belong to THIS attach; neither cleanup can hit a replacement connection.
   fi

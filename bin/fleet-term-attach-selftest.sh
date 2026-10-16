@@ -125,6 +125,18 @@ native() {
   sleep 0.4
 }
 
+# A worker disappearing must not send pending browser input to tmux's next window.
+if [ "${1:-}" = --auto-select ]; then
+  run web-auto worker:fid-1
+  waitfor 'tt list-clients -t "=$RS@view-wt-web-auto" -F x 2>/dev/null | grep -q x' 75 || bad "auto-select no controller"
+  sleep 0.4
+  tt kill-window -t "$W"
+  ! tt has-session -t "=$RS@view-wt-web-auto" 2>/dev/null && ok "auto-select closes view synchronously" || bad "auto-select exposed another window"
+  kill -USR1 "$P" 2>/dev/null; wait "$P" 2>/dev/null
+  [ "$(tt display-message -p -t "$H" '#{pane_pid}')" = "$HPID" ] && ok "auto-select preserved home" || bad "auto-select replaced home"
+  [ "$fails" = 0 ]; exit $?
+fi
+
 # A: worker — attached on its window; hang up ⇒ the view goes, the fleet stays.
 run web-a1 worker:fid-1
 if waitfor 'tt has-session -t "=$RS@view-wt-web-a1" 2>/dev/null && [ -n "$(tt list-clients -t "=$RS@view-wt-web-a1" 2>/dev/null)" ]' 50; then
@@ -135,7 +147,8 @@ if waitfor 'tt has-session -t "=$RS@view-wt-web-a1" 2>/dev/null && [ -n "$(tt li
   [ "$cur" = "$W" ] && ok "A it shows the worker's window" || bad "A it shows $cur, want $W"
   [ "$(tt show-options -v -t "$G" destroy-unattached 2>/dev/null)" = on ] \
     && ok "A destroy-unattached is on once attached" || bad "A destroy-unattached is not on"
-  [ "$(tt show-options -v -t "$G" key-table)" = fleet-view ] && ok "A native Fleet keys" || bad "A missing native keys"
+  [ "$(tt show-options -v -t "$G" key-table)" = fleet-webterm ] && ok "A fenced native Fleet keys" || bad "A missing native keys"
+  [ "$(tt show-options -v -t "$G" prefix)" = None ] && ok "A raw tmux switching disabled" || bad "A raw tmux prefix bypass"
   native web-a1
   bash "$BIN/fleet-term-attach.sh" --view web-a1 --target worker:fid-1 > "$WORK/duplicate.out"
   [ "$?" = 5 ] && ok "A duplicate connection refused" || bad "A duplicate connection accepted"

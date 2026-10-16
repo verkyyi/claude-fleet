@@ -140,7 +140,7 @@ def lib(cmd, *a):
     """One fleet-lib.sh function's answer (the one resolver, never a copy);
     its arguments are $2, $3, … — never spliced into the command."""
     r = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; ' + cmd, "_", BIN] + list(a),
-                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
+                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True)
     return r.stdout.strip()
 
 
@@ -154,7 +154,7 @@ def fleet():
 
 def tm(sock, *args):
     r = subprocess.run(["tmux", "-L", sock] + list(args), stdout=subprocess.PIPE,
-                       stderr=subprocess.DEVNULL, universal_newlines=True)
+                       stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, universal_newlines=True)
     return r.returncode, r.stdout.rstrip("\n")
 
 
@@ -296,6 +296,16 @@ def worker_live(sess, sock, wid):
     return None
 
 
+def pane_identity(sock, window):
+    """A window name/fleet_id survives respawn; its running pane does not."""
+    rc, row = tm(sock, "display-message", "-p", "-t", window,
+                 "#{pane_id}|#{pane_pid}|#{pane_dead}|#{@fleet_id}|#{@cc_session_id}|#{@codex_session_id}|#{@claude_state}")
+    parts = row.split("|")
+    if rc or len(parts) != 7 or not parts[1] or parts[2] == "1" or parts[6] == "exited":
+        return None
+    return "|".join(parts[:6])
+
+
 def cmd_attach(args):
     conn = opt(args, "--conn", CONN, need=True)
     worker = opt(args, "--worker")
@@ -380,8 +390,6 @@ def connect(args, conn, target, generation):
     if generation is not None and (not st or str(st.get("generation")) != generation):
         out(view(st, "ended"), 5)
     resume = os.environ.pop("FLEET_TERM_RESUME", "")
-    if resume and (not st or resume != "%s:%s" % (st.get("id"), st.get("generation"))):
-        out({"state": "interrupted"}, 5)
     take = os.environ.pop("FLEET_TERM_TAKE", "") == "1"
     ensure = [sys.executable, __file__, "ensure"]
     if target == "personal" and not st:
@@ -391,6 +399,14 @@ def connect(args, conn, target, generation):
         sys.stdout.write(r.stdout)
         sys.exit(r.returncode)
     st = json.loads(r.stdout)
+    gen = "%s:%s" % (st["id"], st["generation"])
+    if worker:
+        identity = pane_identity(sock, worker)
+        if not identity:
+            out({"state": "ended"}, 5)
+        gen += ":" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+    if resume and resume != gen:
+        out({"state": "interrupted"}, 5)
     if generation is not None and str(st.get("generation")) != generation:
         out(view(st, "ended"), 5)
     sess, sock = fleet()
@@ -416,8 +432,13 @@ def connect(args, conn, target, generation):
                 selected = current.get("last_worker") or "personal"
                 if selected != "personal":
                     worker = worker_live(sess, sock, selected)
-                    if not worker:
+                    if not worker or (current.get("last_worker_identity") and current["last_worker_identity"] != pane_identity(sock, worker)):
                         out({"state": "ended"}, 5)
+            window = worker or current["window"]
+            identity = pane_identity(sock, window)
+            if not identity:
+                out({"state": "ended"}, 5)
+            lease.update(window=window, identity=identity)
             if selected != target:
                 secondary, rc = control_claim(control_path(selected), selected, conn, "take" if take else "claim")
                 if rc: out(secondary, rc)
@@ -437,6 +458,12 @@ def connect(args, conn, target, generation):
                     lease.update(socket=sock, view=gid, session=g, server_pid=server_pid(sock), generation=st["generation"])
                     write_json(path, lease)
                     tm(sock, "set-option", "-t", gid, "@webterm_conn", conn)
+                    tm(sock, "set-option", "-t", gid, "@webterm_window", window)
+                    # tmux may select another window when this worker vanishes.
+                    # A synchronous native hook fences that event before any
+                    # queued browser input can reach the automatically selected pane.
+                    tm(sock, "set-hook", "-t", gid, "session-window-changed[3841]",
+                       "if-shell -F '#{!=:#{window_id},#{@webterm_window}}' 'kill-session -t %s'" % gid)
                     if lease.get("selected_lease"):
                         secondary = read_json(lease["selected_lease"]) or {}
                         secondary.update({k: lease[k] for k in ("socket", "view", "session", "server_pid")})
@@ -447,13 +474,20 @@ def connect(args, conn, target, generation):
                 time.sleep(0.05)
             if not attached:
                 return 1
-        admission({"state": "controller", "term": st["id"], "gen": "%s:%s" % (st["id"], st["generation"]),
+        admission({"state": "controller", "term": st["id"], "gen": gen,
                    "conn": conn, "epoch": lease["epoch"], "lease": path, "ttl": lease_secs(),
                    "lock": os.path.join(state_dir(), "control/.lock")})
         while child.poll() is None and not stopped[0]:
             with Lock("control/.lock"):
                 current = read_json(path) or {}
                 if (current.get("conn"), current.get("epoch")) != (conn, lease["epoch"]):
+                    break
+                rc, window = tm(sock, "display-message", "-p", "-t", lease["view"] + ":", "#{window_id}")
+                if (rc or window != current.get("window") or pane_identity(sock, window) != current.get("identity")
+                        or reading(read_json(os.path.join(state_dir(), "terminal.json")))[0] != "live"):
+                    release_selected(current)
+                    current.update(conn=None, ts=0)
+                    write_json(path, current)
                     break
                 if time.time() - current["ts"] > lease_secs() / 3:
                     current["ts"] = time.time()
@@ -579,6 +613,9 @@ def cmd_switch(args):
         fid, _, home = identity.partition("|")
         if rc or (not fid and not home):
             out({"state": "ended"}, 4)
+        identity = pane_identity(sock, win)
+        if not identity:
+            out({"state": "ended"}, 4)
         target = "personal" if home else "worker:" + fid
         selected = None
         if target != binding["target"]:
@@ -586,6 +623,7 @@ def cmd_switch(args):
             if rc: out(selected, rc)
             selected.update({k: lease[k] for k in ("socket", "view", "session", "server_pid")})
             write_json(control_path(target), selected)
+        tm(sock, "set-option", "-t", gid, "@webterm_window", win)
         rc, _ = tm(sock, "select-window", "-t", gid + ":" + win)
         if rc: out({"state": "ended"}, 4)
         if lease.get("selected_lease") != control_path(target):
@@ -593,6 +631,7 @@ def cmd_switch(args):
         lease.pop("selected_lease", None); lease.pop("selected_epoch", None)
         if selected:
             lease.update(selected_lease=control_path(target), selected_epoch=selected["epoch"])
+        lease.update(window=win, identity=identity)
         write_json(path, lease)
         if binding["target"] == "personal":
             with Lock(".lock"):
@@ -600,6 +639,7 @@ def cmd_switch(args):
                 st = read_json(stpath)
                 if st:
                     st["last_worker"] = None if home else target
+                    st["last_worker_identity"] = None if home else identity
                     write_json(stpath, st)
         out({"state": "controller"})
 

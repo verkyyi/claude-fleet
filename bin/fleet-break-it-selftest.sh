@@ -7878,6 +7878,15 @@ drill_term_relay_orphan() {
 # native `<fleet>@view-wt-web-<id>` that goes with its terminal — never the fleet
 # session, a window, or a worker's process — and nothing new starts.
 # bin/fleet-term-attach-selftest.sh does it on an isolated tmux server.
+drill_term_view_auto_select() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  out=$(bash "$BIN/fleet-term-attach-selftest.sh" --auto-select 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="$out"; return 1; }
+  WHAT='目标窗消失时同步关闭本 browser view，不让输入落到自动选中的窗口；home PID 不变'
+  SECS=$(since "$t0")
+}
+
 drill_term_view_kills_session() {
   CAP=120; local t0 out rc
   t0=$(now)

@@ -16,6 +16,9 @@ export function terminalKey(event: KeyboardEvent, composing: boolean): boolean {
 export type TerminalState = Omit<AttachmentState, "state"> & {
   state: "connecting" | "ready" | "reconnecting" | "open-elsewhere" | "ended" | "unauthorized" | "unsupported" | "closed";
 };
+export function forgetTerminalGeneration(worker: string | null) {
+  try { sessionStorage.removeItem(`fleet-terminal:${worker ?? "personal"}`); } catch { /* optional */ }
+}
 export type TerminalConnection = ReturnType<typeof connectTerminal>;
 const transient = new Set(["connection_closed", "connection_failed", "direct_closed", "direct_failed", "attachment_timeout", "negotiation_failed", "node_unavailable", "home_down", "offline", "rate", "limit"]);
 
@@ -35,6 +38,7 @@ export function connectTerminal(worker: string | null, options: {
   const publish = (state: TerminalState["state"], error?: string) => options.onState({ ...info, state, error });
   const dispose = () => { ++serial; ready = false; clearTimeout(timer); const old = attachment; attachment = undefined; old?.close(); };
   const schedule = (error?: string) => {
+    if (failures >= 6) { finish("offline"); return; }
     dispose(); publish("reconnecting", error);
     if (!navigator.onLine) return;
     const delay = Math.min(15000, 500 * 2 ** Math.min(failures++, 5)) * (0.75 + Math.random() * 0.5);
@@ -53,7 +57,7 @@ export function connectTerminal(worker: string | null, options: {
     if (!navigator.onLine) { schedule(); return; }
     const token = ++serial;
     publish(failures ? "reconnecting" : "connecting");
-    const query = new URLSearchParams({ service: "term", errors: "stream", ...(worker === null ? { target: "personal" } : { worker }) });
+    const query = new URLSearchParams({ service: "term", controller: "1", errors: "stream", ...(worker === null ? { target: "personal" } : { worker }) });
     if (resume) query.set("term_resume", resume);
     if (take) query.set("take", "1");
     attachment = new BrowserAttachment({
@@ -63,6 +67,7 @@ export function connectTerminal(worker: string | null, options: {
         info = { ...info, ...state };
         if (state.connection) previous = state.connection;
         if (state.state === "ready") {
+          if (!state.terminalGeneration || !state.controllerEpoch) { finish("unsupported"); return; }
           if (resume && state.terminalGeneration && resume !== state.terminalGeneration) { finish("interrupted"); return; }
           if (state.terminalGeneration) {
             resume = state.terminalGeneration;

@@ -46,7 +46,7 @@ opens your personal terminal. Ended sessions keep their **Resume** action.
 The page is `/app/terminal`; old `/term?worker=…` links redirect here and keep the target.
 
 After a brief network outage, input pauses while the page reconnects to the same surviving terminal.
-Uncertain input is never resent. If another tab controls it, choose **Use here** to take control explicitly.
+Uncertain input is never resent. If another tab controls it, choose **Use here** to take control explicitly. If the session has restarted, choose **Connect current session** explicitly; this connects to the existing process without resending previous input.
 An ended environment or expired login stops retries; return to Sessions or sign in again.
 Closing the page preserves the running shell and session.
 

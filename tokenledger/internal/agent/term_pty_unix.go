@@ -23,6 +23,18 @@ import (
 
 // RunTermPty is `ccquota term-pty --view <id> --target <target> [--cols N --rows N]`.
 func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Cancellation is a separate pipe, never queued behind terminal frames.
+	if os.Getenv("FLEET_TERM_CANCEL_FD") == "3" {
+		stop := os.NewFile(3, "term-cancel")
+		defer stop.Close()
+		go func() { var b [1]byte; stop.Read(b[:]); cancel() }()
+	}
+	return runTermPty(ctx, args, stdin, stdout)
+}
+
+func runTermPty(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 	view, target, cols, rows, err := termPtyArgs(args)
 	if err != nil {
 		return 2, err
@@ -47,6 +59,7 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 		slave.Close()
 		return 1, err
 	}
+	syscall.CloseOnExec(fd)
 	if err = syscall.SetNonblock(fd, true); err != nil {
 		unix.Close(fd)
 		master.Close()
@@ -101,19 +114,26 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 		controller, err = got.c, got.err
 	case <-time.After(18 * time.Second):
 		err = errors.New("admission_timeout")
+	case <-ctx.Done():
+		err = ctx.Err()
 	}
 	if err != nil {
 		termHangup(cmd)
+		master.Close()
 		cmd.Wait()
 		return 1, err
 	}
+	controller.ctx = ctx
 	if _, err := stdout.Write([]byte{termPtyReady}); err != nil {
 		termHangup(cmd)
+		master.Close()
+		cmd.Wait()
 		return 1, err
 	}
 
 	if err := json.NewEncoder(stdout).Encode(controller.ready()); err != nil {
 		termHangup(cmd)
+		master.Close()
 		cmd.Wait()
 		return 1, err
 	}
@@ -121,12 +141,22 @@ func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
 	var once sync.Once
 	hangup := func() { once.Do(func() { go func() { termHangupWait(cmd, exited) }() }) }
 	go func() {
+		select {
+		case <-ctx.Done():
+			hangup()
+		case <-exited:
+		}
+	}()
+	go func() {
 		termReadFramesControlled(stdin, master, controller)
 		hangup()
 	}()
 	// The terminal's output, until the command (and everything holding the
 	// terminal) is gone: EIO on Linux, EOF elsewhere.
 	_, _ = io.Copy(stdout, master)
+	// Darwin can keep an exiting session leader waiting for its PTY to close.
+	// Release the master before waiting for the child, including admission errors.
+	master.Close()
 	err = cmd.Wait()
 	close(exited)
 	if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
@@ -155,7 +185,7 @@ func termPtyLocaleEnv(env, available []string) ([]string, error) {
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		switch k {
-		case "TMUX", "TMUX_PANE", "TERM":
+		case "TMUX", "TMUX_PANE", "TERM", "FLEET_TERM_CANCEL_FD":
 			continue
 		case "LANG", "LC_ALL", "LC_CTYPE":
 			want[k] = v
@@ -212,7 +242,7 @@ func termReadFramesControlled(r io.Reader, master *os.File, controller termContr
 			}
 			c, rw := int(binary.BigEndian.Uint16(buf[0:])), int(binary.BigEndian.Uint16(buf[2:]))
 			if c >= 1 && c <= control.TermColsMax && rw >= 1 && rw <= control.TermRowsMax {
-				if controller.apply(func() error { return termPTYSize(master, c, rw) }) != nil {
+				if err := controller.apply(func() error { return termPTYSize(master, c, rw) }); err != nil {
 					return
 				}
 			}

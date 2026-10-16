@@ -1,15 +1,18 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"io"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
 
 // This pipe is inherited only by the fixed lifecycle helper. Terminal output
 // cannot impersonate admission. Paths never come from a browser or a grant.
 type termController struct {
+	ctx   context.Context
 	TTL   int    `json:"ttl"`
 	State string `json:"state"`
 	Term  string `json:"term"`

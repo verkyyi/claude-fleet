@@ -2115,6 +2115,17 @@ def key_lines(me, extra=None):
         lines.append("bind-key -T %s %s %s" % (table, tkey(key), c))
     lines.append("bind-key -T fleet-view %s switch-client -T fleet-view-pfx" % PFX_KEY)
     lines.append("bind-key -T fleet-view-pfx %s send-keys %s" % (PFX_KEY, PFX_KEY))
+    # A browser may switch only through the controller's transaction. Root
+    # and prefix include unfenced next-window, select-pane and command-prompt.
+    lines += ["unbind-key -q -a -T fleet-webterm", "unbind-key -q -a -T fleet-webterm-pfx",
+              "bind-key -T fleet-webterm Any send-keys",
+              "bind-key -T fleet-webterm User927 " + cmd_of("quickopen"),
+              "bind-key -T fleet-webterm 'C-\\' " + cmd_of("shell"),
+              "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
+              "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
+              "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
+              "bind-key -T fleet-webterm WheelUpPane copy-mode -e",
+              "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
     return lines
 
 

@@ -21,7 +21,9 @@ func SetTermHelperForTest(argv func(view, target string) []string) {
 		readTermAdmission = defaultReadTermAdmission
 		return
 	}
-	readTermAdmission = func(io.Reader) (termController, error) { return termController{}, nil }
+	readTermAdmission = func(io.Reader) (termController, error) {
+		return termController{Term: "isolated", Gen: "isolated:1", Epoch: 1}, nil
+	}
 	termAttachArgv = func(_, view, target string) []string { return argv(view, target) }
 	startTermHelper = inProcessTermHelper
 }
@@ -40,6 +42,7 @@ func SetNativeTermHelperForTest(argv func(view, target string) []string) {
 }
 
 func inProcessTermHelper(ctx context.Context, view, target string, cols, rows int) (termHelper, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	done := make(chan struct{})
@@ -54,12 +57,13 @@ func inProcessTermHelper(ctx context.Context, view, target string, cols, rows in
 				args = append(args, "--take", "1")
 			}
 		}
-		_, err := RunTermPty(args, inR, outW)
+		_, err := runTermPty(ctx, args, inR, outW)
 		outW.CloseWithError(err)
 		inR.Close()
 	}()
 	b := make([]byte, 1)
 	if _, err := io.ReadFull(outR, b); err != nil || b[0] != termPtyReady {
+		cancel()
 		inW.Close()
 		<-done
 		if err == nil {
@@ -71,18 +75,21 @@ func inProcessTermHelper(ctx context.Context, view, target string, cols, rows in
 	line, err := reader.ReadBytes('\n')
 	var ready control.TermControl
 	if err != nil || json.Unmarshal(line, &ready) != nil {
+		cancel()
 		inW.Close()
 		return nil, errors.New("invalid ready")
 	}
-	return &pipeTermHelper{in: inW, out: reader, done: done, ready: ready}, nil
+	return &pipeTermHelper{in: inW, out: reader, output: outR, done: done, ready: ready, cancel: cancel}, nil
 }
 
 type pipeTermHelper struct {
-	in    *io.PipeWriter
-	out   io.Reader
-	ready control.TermControl
-	done  chan struct{}
-	once  sync.Once
+	in     *io.PipeWriter
+	out    io.Reader
+	output io.Closer
+	ready  control.TermControl
+	done   chan struct{}
+	once   sync.Once
+	cancel context.CancelFunc
 }
 
 func (p *pipeTermHelper) Ready() control.TermControl  { return p.ready }
@@ -90,8 +97,9 @@ func (p *pipeTermHelper) Read(b []byte) (int, error)  { return p.out.Read(b) }
 func (p *pipeTermHelper) Write(b []byte) (int, error) { return p.in.Write(b) }
 func (p *pipeTermHelper) Close() error {
 	p.once.Do(func() {
+		p.cancel()
 		p.in.Close()
-		go io.Copy(io.Discard, p.out) // drain whatever the terminal still says
+		p.output.Close()
 		<-p.done
 	})
 	return nil

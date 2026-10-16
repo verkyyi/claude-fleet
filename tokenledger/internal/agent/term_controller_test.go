@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -69,5 +70,30 @@ func TestTermControllerDelayedFrames(t *testing.T) {
 	c.Conn, c.Epoch = "new", 2
 	if err := c.apply(func() error { acted = true; return nil }); err != nil || !acted {
 		t.Fatal("new epoch was fenced", err)
+	}
+	// A dropped transport cancels independently of its framed stdin. Bytes
+	// already read from that pipe must not drain into the still-owned pane.
+	ctx, cancel := context.WithCancel(context.Background())
+	c.ctx = ctx
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_EX)
+	done = make(chan struct{})
+	go func() {
+		termReadFramesControlled(bytes.NewReader(termFrame(termFrameData, []byte("queued\n"))), master, c)
+		termReadFramesControlled(bytes.NewReader(termResizeFrame(90, 30)), master, c)
+		close(done)
+	}()
+	cancel()
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled frames did not stop")
+	}
+	if n, _ := syscall.Read(slaveFD, b); n > 0 {
+		t.Fatalf("queued input acted: %q", b[:n])
+	}
+	w, err = unix.IoctlGetWinsize(int(master.Fd()), unix.TIOCGWINSZ)
+	if err != nil || w.Col != 80 || w.Row != 24 {
+		t.Fatalf("queued resize acted: %+v %v", w, err)
 	}
 }

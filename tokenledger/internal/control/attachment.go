@@ -11,6 +11,7 @@ import (
 // stay on the existing authenticated hub/node link; the grant never goes to JS.
 const (
 	CapAttachment       = "attachment-v1"
+	CapTermController   = "term-controller-v1"
 	TypeAttachmentOpen  = "attachment_open"
 	AttachmentDataPath  = "/v1/node/attachment"
 	AttachmentLease     = 15 * time.Second

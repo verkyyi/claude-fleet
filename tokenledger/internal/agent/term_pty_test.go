@@ -6,8 +6,9 @@ import (
 	"bufio"
 	"bytes"
 	"io"
-	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -40,7 +41,7 @@ func TestTermPtyRunsTheOneCommand(t *testing.T) {
 	var gotView, gotTarget string
 	termAttachArgv = func(_, view, target string) []string {
 		gotView, gotTarget = view, target
-		return []string{"/bin/sh", "-c", `stty size; while read l; do case "$l" in size) stty size ;; *) echo "got:$l" ;; esac; done`, tok}
+		return []string{"/bin/sh", "-c", `echo "pid:$$"; stty size; while read l; do case "$l" in size) stty size ;; *) echo "got:$l" ;; esac; done`, tok}
 	}
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
@@ -91,8 +92,10 @@ func TestTermPtyRunsTheOneCommand(t *testing.T) {
 	want("41 132")
 	inW.Write(termFrame(termFrameData, []byte("你好\n")))
 	want("got:你好")
-	if out, _ := exec.Command("pgrep", "-f", tok).Output(); len(strings.Fields(string(out))) == 0 {
-		t.Fatal("the command is not running")
+	pidText := strings.Split(strings.Split(seen.String(), "pid:")[1], "\r")[0]
+	pid, err := strconv.Atoi(strings.TrimSpace(pidText))
+	if err != nil || syscall.Kill(pid, 0) != nil {
+		t.Fatalf("the command is not running: %q", pidText)
 	}
 	inW.Close()
 	go func() {
@@ -104,8 +107,8 @@ func TestTermPtyRunsTheOneCommand(t *testing.T) {
 	case <-time.After(termPtyHangup + 3*time.Second):
 		t.Fatal("term-pty did not end after stdin closed")
 	}
-	if out, _ := exec.Command("pgrep", "-f", tok).Output(); len(strings.Fields(string(out))) != 0 {
-		t.Fatalf("processes left after the hang-up: %s", out)
+	if err := syscall.Kill(-pid, 0); err != syscall.ESRCH {
+		t.Fatalf("process group %d left after the hang-up: %v", pid, err)
 	}
 }
 

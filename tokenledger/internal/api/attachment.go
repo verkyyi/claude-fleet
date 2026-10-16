@@ -81,6 +81,10 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		refuse(409, "unsupported", "update the node for direct attachments")
 		return
 	}
+	if r.URL.Query().Get("controller") == "1" && !nc.canTermController {
+		refuse(409, "unsupported", "update the node for terminal recovery")
+		return
+	}
 	gen := nc.attachmentGeneration
 	resume := r.URL.Query().Get("term_resume")
 	if len(resume) > 128 || strings.ContainsAny(resume, "/\\ \t\r\n") {

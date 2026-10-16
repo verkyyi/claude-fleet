@@ -90,7 +90,7 @@ func (a *Agent) openAttachment(parent context.Context, m control.Message, genera
 		return
 	}
 	// One reader owns the socket in every phase; even a lease message can
-	// never leak into a PTY. Its bounded inbox closes an overproducing peer.
+	// never leak into a PTY. Its bounded inbox applies backpressure to the peer.
 	s := newAuthorizedStream(ctx, cancel, ws, g, key)
 	defer s.Close()
 	go s.read()
@@ -244,8 +244,6 @@ func (s *authorizedStream) read() {
 		select {
 		case s.in <- attachmentFrame{t, b}:
 		case <-s.ctx.Done():
-			return
-		default:
 			return
 		}
 	}
