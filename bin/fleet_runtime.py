@@ -98,6 +98,54 @@ def project(snapshot, expected=None, now=None):
     return s
 
 
+def idle_accept_capability(provider):
+    """This adapter's support, not a live probe or an upstream version guess.
+
+    Neither supported native transport has a verified idle compare-and-accept
+    operation. Never infer one from turn/steer's *active* expectedTurnId, a
+    message ID, a successful read, or a peer frame write. New native versions
+    remain unavailable until their acceptance protocol is implemented/tested.
+    """
+    known = isinstance(provider, str) and provider in ("codex", "claude")
+    return dict(version=1, name="idle-accept", provider=provider if known else None,
+                state="unavailable", native_method=None,
+                reason="native_precondition_unavailable" if known else "unsupported_provider",
+                support="native_atomic_precondition_and_receipt_required")
+
+
+def accept_if_idle(pane, expected, delivery_id, text, socket=""):
+    """Bounded fail-closed entry for conditional controller input (#4524).
+
+    Currently NO provider is supported: no transport, reread, queue, receipt or
+    ledger mutation occurs. request_identity is only the caller's claim, never
+    an acknowledgement. The consumer retains its existing pending/uncertain
+    delivery record; this result cannot clear an earlier uncertain attempt.
+    """
+    i = expected.get("identity") if isinstance(expected, dict) else None
+    capability = idle_accept_capability(i.get("provider") if isinstance(i, dict) else None)
+    result = dict(version=1, capability=capability, state="unknown",
+                  reason="capability_unavailable", submitted=False, receipt=None,
+                  delivery_id=None, request_identity=None)
+    try:
+        if (not isinstance(pane, str) or not re.fullmatch(r"%[0-9]+", pane)
+                or not isinstance(socket, str) or not launch.valid_uuid(delivery_id)
+                or not isinstance(text, str) or not text or len(text) > 65536
+                or not isinstance(i, dict) or type(expected.get("version")) is not int
+                or expected["version"] != 1):
+            raise ValueError()
+        c = {k: i[k] for k in launch.IDENTITY}
+        launch.check_receipt(c, dict(i, actual_provider=i.get("provider")))
+        if not isinstance(i.get("turn_id"), str) or not i["turn_id"]:
+            raise ValueError()
+        result["delivery_id"] = delivery_id
+        result["request_identity"] = {k: i.get(k) for k in launch.IDENTITY + NATIVE + ("turn_id",)}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        result["reason"] = "invalid_request"
+    # Even a fresh, valid, completed+idle snapshot cannot enable delivery here.
+    # Do not fall back to turn/start, turn/steer, peer send or command.run.
+    return result
+
+
 def task(context):
     t = launch.task_call(context)
     if (t.get("authority_version") != 1 or any(t.get(k) != v for k, v in (
@@ -366,11 +414,16 @@ def record_event(payload):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=("read", "project", "event"))
+    p.add_argument("command", choices=("read", "project", "event", "idle-accept-capability", "accept-if-idle"))
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
     p.add_argument("--socket", default="")
     a = p.parse_args()
     data = json.load(sys.stdin)
+    if a.command in ("idle-accept-capability", "accept-if-idle"):
+        s = (idle_accept_capability(data.get("provider")) if a.command == "idle-accept-capability" else
+             accept_if_idle(a.pane, data.get("expected"), data.get("delivery_id"), data.get("text"), a.socket))
+        print(json.dumps(s, allow_nan=False, separators=(",", ":")))
+        return 2  # unavailable / unknown, never native acceptance
     if a.command == "event":
         record_event(data)
         return 0

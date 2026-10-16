@@ -338,6 +338,64 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
+### Conditional idle acceptance capability (#4524)
+
+`fleet_runtime.idle_accept_capability(provider)` (CLI:
+`fleet_runtime.py idle-accept-capability`, JSON stdin `{"provider":"codex"}`)
+returns this adapter's version 1 `idle-accept` capability. **Both `codex` and
+`claude` currently return `state: unavailable`, `native_method: null`.** CLI exit
+2 means unavailable; it is not a native probe. Unknown providers and newer native
+versions remain unavailable until a verified protocol is implemented. An idle
+snapshot, client-supplied capability or installed version never enables delivery.
+
+The bounded Python entry is
+`fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`.
+CLI `fleet_runtime.py accept-if-idle --pane %N [--socket fleet]` takes JSON
+`{"expected":<read/project v1 snapshot>,"delivery_id":<UUID>,"text":<message>}`.
+The explicit pane, complete C3/native/turn identity, UUID and nonempty message
+(at most 65536 characters) are checked for shape only. **Every attempt returns
+`state: unknown`, `submitted: false`, `receipt: null`, exit 2**. A well-formed
+request says `reason: capability_unavailable`; malformed identity/input says
+`invalid_request`. `request_identity` and `delivery_id` echo only the request,
+not an acknowledgement or a fresh observation. The message is never echoed.
+No RPC, peer frame, command, provider reread, queue or ledger write occurs.
+
+Consumers retain their existing pending/uncertain delivery in their own ledger.
+This call does not settle an earlier attempt, prove that an earlier frame was
+never accepted, or authorize a resend. In particular, a cached `accepted` field
+or a late ACK cannot populate `receipt`. Frame-written/queued, accepted and
+completed are different stages; this implementation reaches none of them.
+Consumer attention/tool/bg/draft/recent-input/transfer gates still belong to
+#4431; this interface neither evaluates nor relaxes them. Do not fall back to
+`turn/start`, `turn/steer`, `fleet_peer_send` or the mod's `command.run`.
+
+The missing support is at the provider's native input acceptance boundary:
+
+| Provider / inspected surface | Gap / required support |
+| --- | --- |
+| Codex 0.160.1 exported experimental app-server schema; 0.162.1 counterexample in #4524 | `turn/start` has no completed-idle/observed-turn precondition and can steer an already-active turn. `turn/steer.expectedTurnId` conditions an **active** turn. Message IDs and attribution fields do not establish idle compare-and-accept or a durable deduplication receipt. An upstream native operation must atomically check the idle revision and reject intervening user input. |
+| Claude 2.1.295 peer input / existing mod inbox | The peer `auth` + `user` frame has no expected-turn/revision condition. `fleet_peer_send` exit 0 means frame written; native policy may hold it and the queue may consume it later. Read-only mod queries and queued commands cannot supply an atomic check at native input acceptance. An upstream native conditional enqueue/accept operation and correlated receipt are required. |
+
+The [official app-server protocol documentation](https://developers.openai.com/codex/app-server)
+describes generating the schema from the exact executable version. Neither the
+documentation nor the inspected schema establishes the required atomic idle
+operation. The existing observer remains the supported **read-only** path.
+To enable acceptance, the provider owner must implement a capability-negotiated
+native operation that fences C1/C3 operation/owner/generation/worker, SID/process
+birth and the observed turn/revision, also against intervening input that has
+not started a turn yet. It must bind a delivery ID to the accepted native turn
+and return a queryable/deduplicated outcome across disconnects. Uncertain
+outcomes and old-generation ACKs cannot mutate a new generation. The shared
+adapter must then verify this operation against real native races before any
+consumer uses it; a local lock, two reads or a post-send check cannot substitute.
+
+The BREAK-IT unavailable drill proves zero dispatch/receipt for both providers,
+including repeated requests, old identities and injected late ACKs. It does
+**not** prove supported native atomic acceptance, full loop delivery or live
+deployment. #4431's successful due-delivery and exactly-once acceptance remain
+blocked until that native capability exists; this interface alone cannot close
+those acceptance criteria.
+
 ### Read-only provider observations (#4434)
 
 `bin/fleet_runtime.py read --pane %N [--socket fleet]` is the shared local

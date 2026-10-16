@@ -6473,6 +6473,14 @@ drill_runtime_stale_idle() {
   WHAT='过期、倒退时钟、换代、换 turn 与 Stop/MERGED 都不能把旧 idle 变成投递或回收许可'
 }
 
+drill_runtime_idle_accept_unavailable() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='双 provider 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+}
+
 drill_pending_observation_stale() {
   CAP=30; local t0 out
   t0=$(now)
