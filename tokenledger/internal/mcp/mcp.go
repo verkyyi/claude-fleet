@@ -1288,6 +1288,8 @@ func fleetToolSpecs() []toolSpec {
 				"name":  map[string]any{"type": "string", "maxLength": 64, "description": "kind=scratch only: the scratch's name (its window label and unsent first draft)."},
 				"node":  map[string]any{"type": "string", "description": "auto (default) or a machine name from the roster."},
 				"agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"}},
+				"coding_agent": map[string]any{"type": "string", "enum": []string{"claude", "codex"},
+					"description": "Explicit CLI provider, accepted once with this idempotency key; must agree with legacy agent when both are supplied."},
 				"account_class": map[string]any{"type": "string", "enum": []string{"any", "local", "pool"},
 					"description": "The kind of subscription the session runs on: local (the opening login's own), pool (the hub's leased accounts) or any (default, that fleet's pick)."}},
 				"idempotency_key"),

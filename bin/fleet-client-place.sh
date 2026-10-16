@@ -117,13 +117,15 @@ usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
+REQUEST_ID=$(python3 -c 'import uuid; print(uuid.uuid4())') || exit 2
+export FLEET_PLACE_REQUEST_ID="$REQUEST_ID"
 NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; DRAFTF=''; ATTACH=(); NEW=''; TASK=''; VIA=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
     --title) [ $# -ge 2 ] || usage; TITLE=$2; shift 2 ;;
     --name)  [ $# -ge 2 ] || usage; NAME=$2; shift 2 ;;
-    --agent) [ $# -ge 2 ] || usage; AGENT=$2; shift 2 ;;
+    --agent) [ $# -ge 2 ] && [ -n "$2" ] || usage; [ -z "$AGENT" ] || [ "$AGENT" = "$2" ] || usage; AGENT=$2; shift 2 ;;
     # when the fleet may close it on its own (issue #1902) — the new-session
     # question's answer; canonical here, held to its shape by the hub too
     --reap)  [ $# -ge 2 ] || usage; REAP=$2; shift 2 ;;
@@ -279,7 +281,7 @@ if not hub or not lease or not akey:
 
 total = float(os.environ.get("FLEET_CLIENT_PLACE_WAIT") or 60)
 deadline = time.time() + total
-idem = "client-%s-%d" % (lease[:8], time.time_ns())
+idem = os.environ["FLEET_PLACE_REQUEST_ID"]
 
 
 def ask(payload):
@@ -322,6 +324,13 @@ if home:
 for k, v in (("key", key), ("title", title), ("name", name), ("agent", agent), ("reap", reap), ("body", body), ("draft", draft)):
     if v:
         req[k] = v
+if kind not in ("restore", "task_issue"):
+    sys.path.insert(0, here)
+    from fleet_dispatch import resolve
+    req["dispatch"] = resolve([agent] if agent else [], request_id=req["idempotency_key"])
+    req["agent"] = req["dispatch"]["resolved_agent"]
+    if agent:
+        req["coding_agent"] = agent
 if draft:
     req["action"] = "draft"
 if attach:

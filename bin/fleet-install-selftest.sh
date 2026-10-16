@@ -145,7 +145,7 @@ grep -vx 'bin/fleet-lang.sh' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "
 FLEET_PACK_VENDOR=0 bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
 [ ! -e "$SBC/pack/bin/fleet-lang.sh" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
   && ok "A a file the manifest dropped leaves the pack" || bad "A a dropped file stayed in the pack"
-for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet-thin.py bin/fleet-client-retire.sh conf/fleet-palette.conf; do
+for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet_dispatch.py bin/fleet-thin.py bin/fleet-client-retire.sh conf/fleet-palette.conf; do
   printf '%s\n' "$FILES" | grep -qxF "$must" && ok "A manifest lists $must" || bad "A manifest does not list $must"
 done
 [ "$(awk '!/^[[:space:]]*#/ && $2 == "installer" { print $1 }' "$MANIFEST")" = bin/fleet-install.sh ] \

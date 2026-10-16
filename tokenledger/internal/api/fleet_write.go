@@ -406,7 +406,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -547,13 +547,24 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			w.params["issue"] = issue
 		}
 		agent, aerr := argString(args, "agent")
-		if aerr != nil || (agent != "" && agent != "claude" && agent != "codex") {
-			err = fault("INVALID_ARGUMENT", "agent must be claude or codex")
+		coding, cerr := argString(args, "coding_agent")
+		if aerr != nil || cerr != nil {
+			err = fault("INVALID_ARGUMENT", "coding_agent and agent must be strings")
 			break
+		}
+		d, derr := resolveDispatch(coding, agent, args["dispatch"], idem)
+		if derr != nil {
+			err = derr
+			break
+		}
+		if d != nil {
+			w.params["dispatch"] = d
+			agent = d.ResolvedAgent
 		}
 		if agent != "" {
 			w.params["agent"] = agent
 		}
+
 		if w.repo, err = checkRepo(args); err != nil {
 			break
 		}
@@ -629,7 +640,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				err = fault("INVALID_ARGUMENT", "task is a task record's number (T<n>)")
 				break
 			}
-			if kind != "new" && kind != "scratch" {
+			if kind != "new" && kind != "scratch" && w.params["dispatch"] == nil {
 				err = fault("INVALID_ARGUMENT", "task belongs to a new or scratch start")
 				break
 			}
@@ -886,6 +897,11 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		// claude-fleet#3359: the node delivers this prefix to any session's
 		// inbox; only the feedback desk's reply may carry it.
 		return nil, fault("FORBIDDEN", "text must not start with "+FeedbackReplyPrefix)
+	}
+	if tool == "worker_start" {
+		if err := s.acceptDispatch(p, &w); err != nil {
+			return nil, err
+		}
 	}
 	if o, err := s.Store.FleetOperationByIdem(p.Actor, idem); err == nil {
 		return replayed(o, w)

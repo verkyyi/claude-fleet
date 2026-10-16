@@ -490,6 +490,12 @@ case "$mode" in
     FLEET_START_NOTE='（单子和分支稍后会补给你，先开始。）'
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
+    case "$agent" in claude|codex) ;; *) printf 'start: unknown coding agent\n' >&2; exit 2 ;; esac
+    if [ -n "${FLEET_DISPATCH:-}" ]; then
+      FLEET_DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$agent" --accepted "$FLEET_DISPATCH") || exit 2
+      export FLEET_DISPATCH
+    fi
+
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
     # or bare name; an unknown/ambiguous one is refused (6) before any gate runs.
     # No $5 → the fleet's only repo (fleet_target_repo, issue #1938) — a fleet
@@ -675,7 +681,7 @@ case "$mode" in
     fi
     # --print (issue #2237): the window it opened, last on stdout — the controller
     # reads that one window's row back instead of the whole fleet's.
-    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"}
+    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${taskarg:+--task "$taskarg"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at
