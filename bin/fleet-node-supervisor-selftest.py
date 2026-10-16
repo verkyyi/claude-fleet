@@ -3162,11 +3162,11 @@ class Z_ForgetZombie(unittest.TestCase):
         p = subprocess.Popen(["sleep", "30"])
         probe = subprocess.Popen(["bash", "-c", self.drill_probe() + '''
 ps() {
-  printf 'before-ps\\n'
+  printf 'before-ps\\n' >&3
   read -r -t 5 proceed || return 2
   command ps "$@"
 }
-_forget_task_running "$1"
+_forget_task_running "$1" 3>&1
 ''', "probe", str(p.pid)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, universal_newlines=True)
         try:
