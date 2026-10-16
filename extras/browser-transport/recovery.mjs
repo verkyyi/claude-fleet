@@ -108,11 +108,20 @@ try {
     await second.close()
   }
   const page = await context.newPage()
-  await page.goto(`${origin}/app/terminal`); const before = await ready(page)
+  await page.goto(`${origin}/app/terminal`)
+  // Closing the renderer does not synchronously finish node-side cleanup. A
+  // still-live old controller must require the same explicit takeover as any
+  // other browser; reopening must never silently steal it or restart the shell.
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b =>
+    (b.textContent === 'Fleet menu' && !b.disabled) || b.textContent === 'Use here'))
+  const closeReopenTakeover = await page.getByRole('button', { name: 'Use here', exact: true }).isVisible()
+  if (closeReopenTakeover) await page.getByRole('button', { name: 'Use here', exact: true }).click()
+  const before = await ready(page)
   assert.equal(before.gen, evidence[0].first.gen, 'closing all pages and reopening must keep the generation')
   const reopened = await state()
   assert.equal(reopened.home_pid, reopened.initial_pid)
   assert.equal(reopened.worker_pid, reopened.initial_worker_pid)
+  for (const target of ['personal', 'worker']) assert.equal(reopened.commands.split('\n').filter(v => v === `once_${mode}_${target}`).length, 1)
   await context.request.post(`${fixture}/relay`)
   await page.getByText('Reconnecting…', { exact: true }).waitFor()
   assert.equal((await ready(page)).gen, before.gen, 'relay restart must preserve terminal generation')
@@ -145,7 +154,7 @@ try {
   await new Promise(r => setTimeout(r, 2000))
   assert.equal(await page.evaluate(() => window.__attempts), hostAttempts, 'host loss kept retrying')
   await page.close()
-  console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'ended; no replay', safari: 'pending', osIME: 'pending' }))
+  console.log(JSON.stringify({ browser: browser.version(), mode, evidence, closeReopen: 'same PID and generation', closeReopenTakeover, relayRestart: 'same generation', authExpiry: 'stopped', hostLoss: 'ended; no replay', safari: 'pending', osIME: 'pending' }))
 } catch (error) {
   for (const [i, page] of [context, ...others.map(o => o.context)].flatMap(c => c.pages()).entries()) {
     console.error('page', i, page.url(), await page.locator('body').innerText());
