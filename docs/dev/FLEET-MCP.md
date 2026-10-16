@@ -294,8 +294,8 @@ evidence; deployment and live remote acceptance belong to C9.
 `bin/fleet_runtime.py read --pane %N [--socket fleet]` is the shared local
 entry point (Python: `fleet_runtime.read(pane, context=None, expected=None,
 socket="")`). JSON stdin is `{}`, or `{"launch": <C3 context>, "expected":
-<previous snapshot>}`. It reads only: no resume, turn start, inbox write, task
-transition, cancellation or reclamation. Exit 0 means a known runtime
+<previous snapshot>}`. It observes only: no resume, turn start, command execution,
+task transition, cancellation or reclamation. Exit 0 means a known runtime
 observation; exit 2 means unknown. Neither exit authorizes delivery.
 
 The version 1 result separates these fields:
@@ -304,7 +304,7 @@ The version 1 result separates these fields:
 | --- | --- |
 | `version` | Integer `1`; unsupported versions fail closed. |
 | `identity` | C3's complete `version/operation_id/task/owner/generation/worker_id/provider/attempt_id`, plus `native_session/pid/birth/executable/native_remote/turn_id`. No inferred task or owner for legacy launches. |
-| `source` | `codex:rpc`, `claude:native-event`, or `none`. |
+| `source` | `codex:rpc`, `claude:native-event`, `claude:native-query`, or `none`. |
 | `observed_at`, `expires_at` | Unix seconds of the evidence, with a fixed maximum lifetime of 5 seconds. Reading or forwarding a saved snapshot never renews them. |
 | `runtime.state` | `active`, `idle`, `ask`, `approval`, `interrupted`, or `unknown`. A completed native turn is not a successful task result. |
 | `runtime.reason` | Stable rejection reason; empty only for a known observation. |
@@ -330,19 +330,25 @@ root process ancestry, current native registry SID, receipt, event sequence
 and turn are checked under a local mutex. Late, duplicate, nested or old-turn
 events cannot replace the observation. An aborted/non-answer completion stays
 interrupted; settings `Stop` hooks never publish idle. Native registry idle
-must corroborate a completed turn. These observations expire after 5 seconds:
-long tools, long questions, older idle sessions, absent mods and uninstrumented
-approval dialogs can therefore be **unknown**. There is no timer to renew an
-event and no transcript/display fallback. Expired events retain their source,
-turn and evidence timestamps in the unknown result. This implementation has
-not passed the required long-idle acceptance for Claude: a fresh native query
-is still needed before #4431 can rely on it for due delivery. Safe rejection
-of an expired event does not satisfy that availability requirement.
+must corroborate a completed turn. These observations expire after 5 seconds.
+When an event expires, the reader sends one `runtime.v1` query through the
+existing mod inbox callback. A fixed temporary request slot carries a nonce,
+the complete C3 launch context and a 3-second deadline. It never calls
+`command.run`, adds no timer, and creates no recovery journal. The native module
+answers from its current turn-bound state through the same ancestry-checked
+event publisher. Only that nonce's fresh native response can renew evidence;
+rereading a file or the mod heartbeat cannot. This allows long tools and long
+idle periods to be observed without starting a model turn. An inbox occupied
+by a command, an absent/old mod, a lost native process or a changed identity
+returns unknown; it never retries a command or changes recovery state.
+Unknown results retain the rejected event's source, turn and evidence times.
+Claude approval prompts with no native attention edge remain active/unknown,
+never idle. There is no transcript or display fallback.
 
 For a same-identity reread, supply the complete earlier snapshot as `expected`.
 Every identity field, including native process birth and turn, must match.
-This fresh read may renew RPC evidence; it cannot renew a Claude event's source
-time. `project` with `{"snapshot": <saved>, "expected": <optional previous>}`
+This fresh read may obtain new RPC evidence or a new native mod reply; it never
+changes a saved event's source time. `project` with `{"snapshot": <saved>, "expected": <optional previous>}`
 only validates/project ages an existing observation, including remote copies.
 Expiry or a backwards clock returns unknown while retaining evidence times.
 Remote time comparisons assume synchronized clocks; future evidence is refused.

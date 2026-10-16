@@ -50,6 +50,7 @@ import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
+import { runtimeQuery, WRITE_TIMEOUT_MS } from './state'
 
 export const HEARTBEAT_MS = 15_000
 
@@ -93,6 +94,14 @@ function inboxIo($: EngineInterface): InboxIo {
     },
     run: async (command, args) => {
       await $.command.run({ command, args })
+    },
+    query: async request => {
+      const context = await $.env.get('FLEET_LAUNCH_CONTEXT')
+      const payload = runtimeQuery(request, context, (await $.clock.now()) / 1000)
+      const r = await $.process.run(['python3', `${$.plugin.root}/../../bin/fleet_runtime.py`, 'event'], {
+        stdin: JSON.stringify(payload), timeoutMs: WRITE_TIMEOUT_MS,
+      })
+      if (r.exitCode !== 0) throw new Error('native runtime observation refused')
     },
   }
 }

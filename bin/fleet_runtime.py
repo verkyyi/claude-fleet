@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 import fleet_launch as launch
 
@@ -188,6 +189,47 @@ def claude_registry(receipt):
     return r
 
 
+def query_claude(pane, socket, context):
+    """One bounded read request on the existing mod inbox, never a /command.
+
+    One fixed request slot per pane, serialized locally; no new timer or journal.
+    Only a native-ancestry-checked event with this nonce can answer the reader.
+    """
+    sock = Path(launch.option(pane, "socket_path", socket)).name
+    if not sock:
+        raise Unknown("native_query_unavailable")
+    conf = Path(os.environ.get("FLEET_CONF_DIR", str(Path.home() / ".config/claude-fleet")))
+    directory = conf / "global/mod-inbox" / sock / pane[1:]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    base = directory / "runtime-observation"
+    with base.with_suffix(".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Unknown("native_query_busy") from None
+        nonce = uuid.uuid4().hex
+        deadline = time.monotonic() + 3
+        tmp = directory / ".runtime-observation.tmp"
+        paths = [base.with_suffix(s) for s in (".json", ".taken", ".done")]
+        try:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            tmp.write_text(json.dumps(dict(query="runtime.v1", nonce=nonce, launch=context,
+                                           deadline=time.time() + 3)))
+            tmp.replace(paths[0])
+            while time.monotonic() < deadline:
+                event = json.loads(launch.option(pane, "@runtime_claude", socket) or "{}")
+                if event.get("query_id") == nonce:
+                    return event
+                if paths[2].exists():
+                    break
+                time.sleep(.05)
+            raise Unknown("native_query_unavailable")
+        finally:
+            for path in [tmp, *paths]:
+                path.unlink(missing_ok=True)
+
+
 def claude(s, receipt, pane, socket, cwd):
     event = json.loads(launch.option(pane, "@runtime_claude", socket) or "{}")
     if event.get("version") != 1 or not event.get("turn_id"):
@@ -197,14 +239,23 @@ def claude(s, receipt, pane, socket, cwd):
     at = event.get("observed_at")
     if not number(at):
         raise Unknown("invalid_event")
-    s["source"] = "claude:native-event"
+    s["source"] = "claude:native-query" if event.get("query_id") else "claude:native-event"
     s["identity"]["turn_id"] = event["turn_id"]
     # Even a rejected observation keeps its source time and turn. A reader's
     # current clock must never make an expired event look newly observed.
     s["observed_at"] = at
     s["expires_at"] = at + TTL
-    if not 0 <= time.time() - at < TTL:
-        raise Unknown("event_expired")
+    if time.time() < at:
+        raise Unknown("clock_regressed")
+    if time.time() - at >= TTL:
+        event = query_claude(pane, socket, {k: receipt[k] for k in launch.IDENTITY})
+        if event.get("identity") != identity({k: receipt[k] for k in launch.IDENTITY}, receipt):
+            raise Unknown("event_identity_changed")
+        at = event.get("observed_at")
+        if not number(at) or not 0 <= time.time() - at < TTL:
+            raise Unknown("event_expired")
+        s.update(source="claude:native-query", observed_at=at, expires_at=at + TTL)
+        s["identity"]["turn_id"] = event["turn_id"]
     r = claude_registry(receipt)
     if not r.get("cwd") or Path(r["cwd"]).resolve() != Path(cwd).resolve():
         raise Unknown("native_identity_changed")
@@ -292,19 +343,25 @@ def record_event(payload):
         fcntl.flock(lock, fcntl.LOCK_EX)
         old = json.loads(launch.option(pane, "@runtime_claude") or "{}")
         ident = identity(c, r)
+        query = payload.get("query_id")
+        if query is not None and (not isinstance(query, str) or not re.fullmatch(r"[a-f0-9]{32}", query)
+                or payload.get("start") or old.get("identity") != ident
+                or old.get("turn_id") != turn or old.get("state") != payload["state"]):
+            raise Unknown("query_identity_changed")
         if old.get("identity") == ident:
             if at < old.get("observed_at", 0) or sequence <= old.get("sequence", 0):
                 raise Unknown("late_event")
             if not payload.get("start") and turn != old.get("turn_id"):
                 raise Unknown("late_turn_event")
-            if turn == old.get("turn_id") and old.get("state") in ("idle", "interrupted"):
+            if not query and turn == old.get("turn_id") and old.get("state") in ("idle", "interrupted"):
                 raise Unknown("closed_turn_event")
         elif not payload.get("start"):
             raise Unknown("missing_turn_start")
         if launch.inspect(c, pane) != r:
             raise Unknown("event_identity_changed")
         launch.stamp(pane, "@runtime_claude", dict(version=1, identity=ident,
-                     turn_id=turn, state=payload["state"], observed_at=at, sequence=sequence))
+                     turn_id=turn, state=payload["state"], observed_at=at, sequence=sequence,
+                     query_id=query))
 
 
 def main():

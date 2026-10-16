@@ -34,12 +34,33 @@ const LOOP_TOOLS = new Set(['ScheduleWakeup', 'CronCreate', 'CronDelete'])
 // display hooks; missing turn/native identity means unknown to the reader.
 let runtimeSequence = 0
 let runtimeTurn: string | undefined
+let runtimeObservation: { state: string; turn_id: string } | undefined
+
+/** An on-demand reply from this native module, never a renewed disk cache. */
+export function runtimeQuery(request: Record<string, unknown>, context: string | undefined, now: number): Record<string, unknown> {
+  const launch = context ? JSON.parse(context) as Record<string, unknown> : undefined
+  const expected = request.launch as Record<string, unknown> | undefined
+  if (!isOpen() || !launch || !expected || typeof expected !== 'object'
+      || Object.keys(launch).length !== Object.keys(expected).length
+      || !Object.keys(launch).every(k => launch[k] === expected[k]) || !runtimeObservation
+      || typeof request.nonce !== 'string' || !/^[a-f0-9]{32}$/.test(request.nonce)
+      || typeof request.deadline !== 'number' || now >= request.deadline || request.deadline - now > 5) {
+    throw new Error('runtime query unavailable or expired')
+  }
+  return { ...runtimeObservation, start: false, sequence: ++runtimeSequence,
+    observed_at: now, query_id: request.nonce }
+}
+
 async function runtimeEvent($: EngineInterface, state: string, turn: string | undefined, start = false): Promise<void> {
+  // Allocate at the native edge, before any await can reorder publishers.
+  const sequence = ++runtimeSequence
+  if (turn && (start || (runtimeObservation?.turn_id === turn
+      && !['idle', 'interrupted'].includes(runtimeObservation.state)))) runtimeObservation = { state, turn_id: turn }
   try {
     if (!turn || !(await $.env.get('FLEET_LAUNCH_CONTEXT'))) return
     const bin = await fleetBin($)
     if (bin === undefined) return
-    const payload = { state, turn_id: turn, start, sequence: ++runtimeSequence,
+    const payload = { state, turn_id: turn, start, sequence,
       observed_at: (await $.clock.now()) / 1000 }
     await $.process.run(['python3', `${bin}/fleet_runtime.py`, 'event'], {
       stdin: JSON.stringify(payload), timeoutMs: WRITE_TIMEOUT_MS,

@@ -181,7 +181,8 @@ class Provider(unittest.TestCase):
                      turn_id="native-turn", observed_at=100., state="idle", sequence=2)
         self.options["@runtime_claude"] = json.dumps(event)
         registry = dict(sessionId=R["native_session"],pid=42,cwd="/work",status="idle")
-        with mock.patch.object(runtime, "claude_registry", return_value=registry):
+        with mock.patch.object(runtime, "claude_registry", return_value=registry), \
+             mock.patch.object(runtime, "query_claude", side_effect=runtime.Unknown("event_expired")) as query:
             self.assertEqual(self.read()["runtime"]["state"], "idle")
             registry["status"] = "busy"
             self.assertEqual(self.read()["runtime"]["reason"], "registry_contradicts_event")
@@ -193,6 +194,16 @@ class Provider(unittest.TestCase):
             self.assertEqual(expired["observed_at"], 90.)
             self.assertEqual(expired["expires_at"], 95.)
             self.assertEqual(expired["identity"]["turn_id"], "native-turn")
+            fresh = dict(event, observed_at=101., query_id="a" * 32)
+            def answer(*args):
+                self.options["@runtime_claude"] = json.dumps(fresh)
+                return fresh
+            query.side_effect = answer
+            registry["status"] = "idle"
+            renewed = self.read()
+            self.assertEqual(renewed["runtime"]["state"], "idle")
+            self.assertEqual(renewed["source"], "claude:native-query")
+            self.assertEqual(renewed["observed_at"], 101.)
             event["identity"]["generation"] = 2
             self.options["@runtime_claude"] = json.dumps(event)
             self.assertEqual(self.read()["runtime"]["reason"], "event_identity_changed")
@@ -225,6 +236,13 @@ class NativeEvents(unittest.TestCase):
             with self.assertRaises(runtime.Unknown):
                 runtime.record_event(dict(a,turn_id="b",sequence=5,start=False))
             self.assertEqual(saved["state"],"interrupted")
+            runtime.record_event(dict(a,turn_id="b",state="interrupted",sequence=6,
+                                      start=False,query_id="a" * 32))
+            self.assertEqual(saved["query_id"],"a" * 32)
+            for change in (dict(turn_id="a"), dict(state="idle"), dict(start=True)):
+                with self.assertRaises(runtime.Unknown):
+                    runtime.record_event(dict(a,turn_id="b",state="interrupted",sequence=7,
+                                              start=False,query_id="b" * 32) | change)
 
 
 if __name__ == "__main__":
