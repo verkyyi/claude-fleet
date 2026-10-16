@@ -64,7 +64,9 @@ interface; fixture tests pin the supported 0.154 and 0.162 shapes.
 The native usage-event migration is not enabled. A passive status-observer
 connection does not automatically receive token usage: the offline native
 probe distinguishes initialize/read-only, resume and unsubscribe, and keeps
-last-response usage separate from cumulative totals. Run
+last-response usage separate from cumulative totals. It also exercises observer
+reconnection during a held response and a real pending command approval; only
+the original controller declines the command, and the canary must remain absent. Run
 `python3 bin/fleet-native-usage-cli-selftest.py --codex /path/to/codex` explicitly;
 it uses an empty HOME and a loopback synthetic endpoint, not real credentials
 or inference. See [subscription evidence and remaining gates](NATIVE-AGENT-BOUNDARY.md#上下文用量不是同一条广播).
