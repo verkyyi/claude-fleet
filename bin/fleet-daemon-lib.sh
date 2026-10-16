@@ -450,14 +450,18 @@ fleet_daemon_stamp_tick() {
   return 0
 }
 
-# fleet_daemon_tick_ts <unit> [root] — epoch of the unit's last EVIDENCE OF LIFE:
+# fleet_daemon_tick_ts <unit> [root] [state-dir] — epoch of the unit's last EVIDENCE OF LIFE:
 # the newer of its scheduling stamp and its own progress heartbeat (see header).
 # 0 = no evidence ever, which every caller treats as "say nothing": a fresh
 # install, a host that never had this unit (#492 — ledger-watch was missing for
 # months), or a daemon run by hand. Alarming there would only teach people to
 # ignore the alarm.
 fleet_daemon_tick_ts() {
-  _fd_dir=$(fleet_daemon_state_dir "${2:-}")
+  # A single registry sweep can pass the directory it already resolved (#4444).
+  # Keep this explicit and per-call: a process-wide cache would go stale when a
+  # live-root link moves or a caller switches checkouts.
+  _fd_dir=${3:-}
+  [ -n "$_fd_dir" ] || _fd_dir=$(fleet_daemon_state_dir "${2:-}")
   _fd_ts=$(_fleet_daemon_epoch "$_fd_dir/${1:-}.tick")
   _fd_gl="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global"
   # Resolve the source list BEFORE narrowing IFS: fleet_daemon_field splits the
@@ -501,11 +505,11 @@ _fleet_daemon_inflight() {
   fi
 }
 
-# fleet_daemon_overdue <unit> [root] — the evidence age in seconds IFF the unit is
+# fleet_daemon_overdue <unit> [root] [state-dir] — evidence age in seconds IFF the unit is
 # past its threshold; prints NOTHING when it is fresh or has never ticked. Same
 # fail-open shape as fleet_collect_stale_age, which it generalizes.
 fleet_daemon_overdue() {
-  _fd_t=$(fleet_daemon_tick_ts "${1:-}" "${2:-}")
+  _fd_t=$(fleet_daemon_tick_ts "${1:-}" "${2:-}" "${3:-}")
   [ "$_fd_t" -gt 0 ] || return 0
   _fd_a=$(( $(fleet_now) - _fd_t ))
   [ "$_fd_a" -ge "$(fleet_daemon_stale_secs "${1:-}")" ] && printf '%s' "$_fd_a"
