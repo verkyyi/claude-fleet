@@ -7834,7 +7834,7 @@ drill_chat_direct_admission() {
 drill_term_controller_ready() {
   CAP=180; local t0
   t0=$(now)
-  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames' './internal/agent' \
+  term_go 'TestTermPtyAdmissionBeforeReady TestTermControllerDelayedFrames TestCoreExecTerminalCancellation TestTermPtySignalCleanup' './internal/agent' \
     '控制权准入前不发 ready；拒绝的第二标签页不能输入' || return 1
   SECS=$(since "$t0")
 }

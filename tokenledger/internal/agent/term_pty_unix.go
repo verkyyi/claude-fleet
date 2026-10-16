@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,15 +24,24 @@ import (
 
 // RunTermPty is `ccquota term-pty --view <id> --target <target> [--cols N --rows N]`.
 func RunTermPty(args []string, stdin io.Reader, stdout io.Writer) (int, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+	// The root core stops a login's job with TERM when its caller disconnects.
+	// Convert that signal into the same cancellation used by a plain agent.
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP, os.Interrupt)
 	defer cancel()
-	// Cancellation is a separate pipe, never queued behind terminal frames.
-	if os.Getenv("FLEET_TERM_CANCEL_FD") == "3" {
-		stop := os.NewFile(3, "term-cancel")
-		defer stop.Close()
-		go func() { var b [1]byte; stop.Read(b[:]); cancel() }()
-	}
+	defer watchTermCancel(cancel)()
 	return runTermPty(ctx, args, stdin, stdout)
+}
+
+// Cancellation is independent of framed stdin. In core mode fd 3 stays with
+// core-exec, which closes its existing core connection; it is never forwarded
+// into a login or added to the core's three-descriptor protocol.
+func watchTermCancel(cancel func()) func() {
+	if os.Getenv("FLEET_TERM_CANCEL_FD") != "3" {
+		return func() {}
+	}
+	stop := os.NewFile(3, "term-cancel")
+	go func() { var b [1]byte; stop.Read(b[:]); cancel() }()
+	return func() { stop.Close() }
 }
 
 func runTermPty(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) (int, error) {

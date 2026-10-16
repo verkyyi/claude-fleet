@@ -5,7 +5,10 @@ package agent
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -179,4 +182,60 @@ func TestTermGrantSpentOnce(t *testing.T) {
 	if !g.spend("r1", now.Add(termGrantSpentTTL+time.Second)) {
 		t.Fatal("a relay id long expired still remembered")
 	}
+}
+
+// The core's TERM must cancel blocked framed input and close the attach's
+// separate process group, even though no cancellation FD reached the login.
+func TestTermPtySignalCleanup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTermPtySignalHelperProcess$")
+	cmd.Env = append(os.Environ(), "FLEET_TEST_TERM_SIGNAL=1", "FLEET_TERM_CANCEL_FD=")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	r := bufio.NewReader(out)
+	if b, err := r.ReadByte(); err != nil || b != termPtyReady {
+		t.Fatalf("ready %d: %v", b, err)
+	}
+	if _, err := r.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	} // admission metadata
+	line, err := r.ReadString('\n')
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || parseErr != nil {
+		t.Fatalf("child pid %q: %v / %v", line, err, parseErr)
+	}
+	defer syscall.Kill(-pid, syscall.SIGKILL)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, r)
+	cmd.Wait()
+	if ctx.Err() != nil {
+		t.Fatal("TERM did not cancel terminal helper")
+	}
+	if err := syscall.Kill(-pid, 0); err != syscall.ESRCH {
+		t.Fatalf("attach process group survived TERM: %v", err)
+	}
+}
+
+func TestTermPtySignalHelperProcess(t *testing.T) {
+	if os.Getenv("FLEET_TEST_TERM_SIGNAL") == "" {
+		t.Skip("helper")
+	}
+	readTermAdmission = func(io.Reader) (termController, error) { return termController{}, nil }
+	termAttachArgv = func(_, _, _ string) []string { return []string{"/bin/sh", "-c", "echo $$; exec cat"} }
+	code, _ := RunTermPty([]string{"--view", "web-signal", "--target", "personal"}, os.Stdin, os.Stdout)
+	os.Exit(code)
 }

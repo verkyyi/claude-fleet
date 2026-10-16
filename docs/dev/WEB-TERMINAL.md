@@ -54,7 +54,9 @@ Go 的实际 PTY 写入与 resize 和 Python helper 的 take/cleanup 共用 cont
 在同一临界区。原生菜单和切壳经 helper 的 `switch` 在该锁内取得目标租约并切窗，personal 选中
 worker 后与直接 worker 入口占用同一资源。每帧还检查当前窗口与 pane/PID 身份；tmux 自动
 切窗的同步 hook 立即关闭本 view。旧连接只能释放其捕获的 epoch/session id。
-断线取消走独立管道，不排在输入帧之后；有界接收队列施加背压，清理先关闭 PTY 再 wait。
+断线取消走独立管道，不排在输入帧之后；在 root-core 通道上由 core-exec 关闭已有控制连接，
+core 的 TERM 进入 helper 的同一取消路径，不转交第四个 fd 或改变 core 协议。
+有界接收队列施加背压，清理先关闭 PTY 再 wait。
 聊天丢流后只读取原对话，离线期间不重试写入；online 事件恢复读取，不重新提交 turn。
 
 `TestTerminalRecoveryChromium` 在隔离 HOME、tmux socket、身份和真实页面上记录重连与接管 trace，
