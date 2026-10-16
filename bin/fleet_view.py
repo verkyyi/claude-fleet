@@ -2023,7 +2023,7 @@ def tkey(key):
     return "'%s'" % key if not re.match(r"^[A-Za-z0-9-]+$", key) else key
 
 
-def key_lines(me, extra=None):
+def key_lines(me, extra=None, browser=False):
     """The commands that rebuild both tables: root copied into fleet-view, then the
     看台's keys (issue #3185, EPIC #3178 C7) — by default ONE action, the panel:
     its ⌘ code (User927, ⌘P on the client) and the phone keys FLEET_KEY_PHONE
@@ -2117,15 +2117,16 @@ def key_lines(me, extra=None):
     lines.append("bind-key -T fleet-view-pfx %s send-keys %s" % (PFX_KEY, PFX_KEY))
     # A browser may switch only through the controller's transaction. Root
     # and prefix include unfenced next-window, select-pane and command-prompt.
-    lines += ["unbind-key -q -a -T fleet-webterm", "unbind-key -q -a -T fleet-webterm-pfx",
-              "bind-key -T fleet-webterm Any send-keys",
-              "bind-key -T fleet-webterm User927 " + cmd_of("quickopen"),
-              "bind-key -T fleet-webterm 'C-\\' " + cmd_of("shell"),
-              "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
-              "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
-              "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
-              "bind-key -T fleet-webterm WheelUpPane copy-mode -e",
-              "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
+    if browser:
+        lines += ["unbind-key -q -a -T fleet-webterm", "unbind-key -q -a -T fleet-webterm-pfx",
+                  "bind-key -T fleet-webterm Any send-keys",
+                  "bind-key -T fleet-webterm User927 " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm 'C-\\' " + cmd_of("shell"),
+                  "bind-key -T fleet-webterm C-] switch-client -T fleet-webterm-pfx",
+                  "bind-key -T fleet-webterm-pfx p " + cmd_of("quickopen"),
+                  "bind-key -T fleet-webterm-pfx C-] send-keys C-]",
+                  "bind-key -T fleet-webterm WheelUpPane copy-mode -e",
+                  "bind-key -T fleet-webterm WheelDownPane send-keys -M"]
     return lines
 
 
@@ -2144,7 +2145,7 @@ def keys_sig(lines):
     return hashlib.sha1("\n".join(lines).encode("utf-8")).hexdigest()[:16]
 
 
-def view_keys(me, if_stale=False):
+def view_keys(me, if_stale=False, browser=False):
     """Rebuild both tables. --if-stale (attach --thin, every attach): only when
     fleet-view exists and either its copy of root no longer IS root — a personal
     conf re-sourced after the fleet's moved root, and the 看台's mouse with it — or
@@ -2156,7 +2157,7 @@ def view_keys(me, if_stale=False):
         _, root = tm("list-keys", "-T", "root")
         if rc != 0 or not fv:
             return 0          # never loaded here: attach --thin adds no table (C1's rule)
-        lines = key_lines(me)
+        lines = key_lines(me, browser=browser)
         sig = keys_sig(lines)
         ours = our_keys(lines) | {"C-]"}
         norm = lambda line: " ".join(line.split())
@@ -2171,7 +2172,7 @@ def view_keys(me, if_stale=False):
         if have.strip() == sig and copy == want:
             return 0
     else:
-        lines = key_lines(me)
+        lines = key_lines(me, browser=browser)
         sig = keys_sig(lines)
     import tempfile
     fd, tmp = tempfile.mkstemp(prefix="fleet-view-keys.", suffix=".conf")
@@ -3439,7 +3440,7 @@ def main(argv, qo):
         if opt(argv, "--socket"):
             _SOCK[0] = opt(argv, "--socket")
             os.environ.pop("TMUX", None)
-        return view_keys(me, "--if-stale" in argv)
+        return view_keys(me, "--if-stale" in argv, browser="--browser" in argv)
     if argv[:1] == ["go"] and len(argv) >= 3:
         vid = view_id(argv[1])
         return go(qo, vid, argv[2], opt(argv, "--how") or "go", opt(argv, "--client")) if vid else 2

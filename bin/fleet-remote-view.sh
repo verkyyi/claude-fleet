@@ -1008,7 +1008,7 @@ rv_attach_thin() {
     # per-view shell. Load native keys even on a minimally initialized fleet.
     T set-option -t "$gid" @view_web_home "$bhome" 2>/dev/null
     sp=$(T display-message -p -t "$gid:" '#{socket_path}')
-    TMUX="$sp,0,0" python3 "$BIN/fleet-quickopen.py" view-keys
+    TMUX="$sp,0,0" python3 "$BIN/fleet-quickopen.py" view-keys --browser
     T set-option -t "$gid" key-table fleet-webterm
     T set-option -t "$gid" prefix None
     T set-option -t "$gid" prefix2 None

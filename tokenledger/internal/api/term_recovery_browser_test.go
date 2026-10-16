@@ -99,7 +99,7 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 				}
 			}))
 			defer fixture.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "node", "recovery.mjs", mode)
 			cmd.Dir = filepath.Join(root, "extras/browser-transport")

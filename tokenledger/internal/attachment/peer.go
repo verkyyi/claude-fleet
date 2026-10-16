@@ -142,10 +142,15 @@ func Answer(ctx context.Context, offer string, stun []string) (*Peer, string, er
 			if m.IsString {
 				t = websocket.MessageText
 			}
+			// A short keystroke burst can fill eight frames while the PTY is
+			// checking its lease. Bound memory and wait briefly for the consumer;
+			// an actually stalled reader still closes, without dropping live input.
+			timer := time.NewTimer(2 * time.Second)
+			defer timer.Stop()
 			select {
 			case <-p.done:
 			case p.in <- frame{t, append([]byte(nil), m.Data...)}:
-			default:
+			case <-timer.C:
 				go p.Close()
 			}
 		})
