@@ -6225,6 +6225,15 @@ print(o[0].get("child"), o[0].get("state"), o[0].get("pr"), o[0].get("summary"))
 # verb says 入口不通 and exits 4 — never a quiet fallback to GitHub, which would
 # open a second numbering of the same repo — and the collector's cache stays the
 # last good copy.
+drill_cleanup_ticket_home() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-cleanup-ticket-selftest.sh" 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="Hub/GitHub 数字碰撞按 ticket home 判定；OPEN、离线和身份不明保留，CLOSED 进入后续门"
+}
+
 drill_ticket_hub_down() {
   CAP=30; local d="$WORK/thd" t0 port rc1 rc2 rc3 rc4
   mkdir -p "$d/conf/fleets/fs/repos" "$d/fakebin" "$d/cache" "$d/tmp"
@@ -6397,6 +6406,14 @@ drill_spinner_maintenance_starved() {
     || { WHY="unwatched maintenance: $out"; return 1; }
   SECS=$(since "$t0")
   WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
+}
+
+drill_codex_mcp_busy() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" 2>&1) \
+    || { WHY="Codex MCP/helper 回收分类失守: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
 }
 
 # ================================================================ run ====}
