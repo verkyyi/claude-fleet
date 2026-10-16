@@ -28,6 +28,8 @@ with tempfile.TemporaryDirectory() as temp:
     gh = root/"gh"
     gh.write_text('#!/bin/sh\nprintf "%s\\n" "$GATE_ROW"\n')
     gh.chmod(0o700)
+    Path(os.environ["NOGH_ACCEPTANCE_EVIDENCE"], "pr-gate-mock.json").write_text(json.dumps(dict(
+        executables=[str(gh)], purpose="three deliberate restored-response fixture CLI reads; never live GitHub", calls=3))+"\n")
     env["PATH"] = temp+os.pathsep+env["PATH"]
     for checks, expected, verdict in (("pending", 1, "PENDING"), ("fail", 1, "FAILING"), ("pass", 0, "READY")):
         env["GATE_ROW"] = "OPEN\nMERGEABLE\nCLEAN\n\n"+checks+"\n"

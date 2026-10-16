@@ -48,7 +48,7 @@ def write(path, value):
 
 
 def network_counts(trace):
-    """Count attempted non-loopback connect/sendto syscalls, even ENETUNREACH.
+    """Count supplied non-loopback socket destinations, even ENETUNREACH.
 
     HTTP is a conservative superset of GitHub HTTP (external ports 80/443).
     All other external attempts, including DNS/SSH, fail the run as well.
@@ -56,19 +56,41 @@ def network_counts(trace):
     """
     counts = dict(external_http=0, other_external=0)
     for line in trace.splitlines():
+        if "io_uring_setup(" in line:
+            raise ValueError("io_uring is outside this observer's supported HTTP paths")
         if "AF_INET" not in line:
             continue
-        addresses = re.findall(r'(?:inet_addr\(|inet_pton\(AF_INET6, )"([^"]+)"', line)
-        if not addresses:
+        destinations = re.findall(r'\{sa_family=AF_INET6?[, ].*?\}', line)
+        if len(destinations) != len(re.findall(r'sa_family=AF_INET6?\b', line)) or not destinations:
             raise ValueError("unrecognized network trace: " + line)
-        def local(address):
-            ip = ipaddress.ip_address(address)
-            return ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback)
-        if all(local(a) for a in addresses):
-            continue
-        port = re.search(r'(?:sin_port|sin6_port)=htons\((\d+)\)', line)
-        counts["external_http" if port and port[1] in ("80", "443") else "other_external"] += 1
+        for destination in destinations:
+            address = re.search(r'(?:inet_addr\(|inet_pton\(AF_INET6, )"([^"]+)"', destination)
+            port = re.search(r'(?:sin_port|sin6_port)=htons\((\d+)\)', destination)
+            if not address or not port:
+                raise ValueError("unrecognized network destination: " + destination)
+            ip = ipaddress.ip_address(address[1])
+            if ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback):
+                continue
+            counts["external_http" if port[1] in ("80", "443") else "other_external"] += 1
     return counts
+
+
+def gh_executions(trace):
+    """Executable paths are printed in full by strace -s0; argv/env are not.
+
+    Observe successful AND failed exec attempts, regardless of PATH or fixture
+    shim. These fixtures invoke gh as an executable, not sourced shell code.
+    """
+    paths = []
+    for line in trace.splitlines():
+        if not re.search(r'\bexecve(?:at)?\(', line):
+            continue
+        match = re.search(r'\bexecve(?:at)?\((?:[^,]+, )?"([^"]+)"', line)
+        if not match:
+            raise ValueError("unrecognized executable trace: " + line)
+        if Path(match[1]).name == "gh":
+            paths.append(match[1])
+    return paths
 
 
 def valid_output(kind, output, names=()):
@@ -157,10 +179,11 @@ class Harness:
         shim.write_text('#!/bin/sh\nprintf "attempt\\n" >> "$NOGH_GH_LOG"\nexit 91\n')
         shim.chmod(0o700)
 
-    def run(self, name, argv, kind="marker", names=(), timeout=60, expected_cli=0, env=None, cwd=ROOT):
+    def run(self, name, argv, kind="marker", names=(), timeout=60, expected_cli=0, mocked_cli=0, env=None, cwd=ROOT):
         log, trace, cli = [self.evidence/(name+suffix) for suffix in (".log", ".network", ".gh")]
         cli.write_text("")
-        command = ["strace", "-f", "-qq", "-s", "0", "-e", "trace=connect,sendto", "-o", str(trace),
+        command = ["strace", "-f", "-qq", "-v", "-s", "0", "-e",
+                   "trace=execve,execveat,connect,sendto,sendmsg,sendmmsg,io_uring_setup", "-o", str(trace),
                    sys.executable, str(Path(__file__).resolve()), "--child", str(self.evidence/(name+"-cleanup.json")), *map(str, argv)]
         record = dict(command=list(map(str, argv)), cwd=str(cwd), started_at=utc(), fixture="FAIL", log=log.name)
         deadline = min(timeout, max(0.1, 600 - (time.monotonic()-self.started)))
@@ -179,15 +202,31 @@ class Harness:
                     p.wait()
                 code = 124
         output = log.read_text(errors="replace")
-        counters = network_counts(trace.read_text(errors="replace"))
-        counters["github_cli"] = len(cli.read_text().splitlines())
+        observed = trace.read_text(errors="replace")
+        counters = network_counts(observed)
+        executions = gh_executions(observed)
+        counters["github_cli"] = len(executions)
+        counters["deny_shim_cli"] = len(cli.read_text().splitlines())
+        counters["mocked_cli"] = mocked_cli
         good = code == 0 and valid_output(kind, output, names)
         if name == "deny-probe":
-            good = good and counters["external_http"] >= 1
+            good = good and counters["external_http"] >= 5 and "AF_INET6" in observed
+            good = good and all(s+"(" in observed for s in ("connect", "sendto", "sendmsg", "sendmmsg", "execveat"))
+            good = good and "PAYLOAD_MUST_NOT_APPEAR" not in observed
         else:
             good = good and counters["external_http"] == counters["other_external"] == 0
-        good = good and counters["github_cli"] == expected_cli
-        record.update(exit=code, finished_at=utc(), counters=counters, fixture="PASS" if good else "FAIL")
+        good = good and counters["deny_shim_cli"] == expected_cli
+        good = good and counters["github_cli"] == expected_cli+mocked_cli
+        # Deliberate fixture gh replacements are explicitly classified by their
+        # private paths, not broadly exempted whenever a command exits zero.
+        extra_paths = [p for p in executions if p != str(self.work/"shim/gh")]
+        approved = []
+        if name == "pr-gate":
+            approved = json.loads((self.evidence/"pr-gate-mock.json").read_text())["executables"]
+        elif name == "deny-probe":
+            approved = [str(self.work/"probe-override/gh")]
+        good = good and len(extra_paths) == mocked_cli and all(p in approved for p in extra_paths)
+        record.update(exit=code, finished_at=utc(), counters=counters, gh_executables=executions, fixture="PASS" if good else "FAIL")
         self.results[name] = record
         write(self.evidence/(name+".json"), record)
         print(record["fixture"], name, "exit="+str(code), json.dumps(counters), flush=True)
@@ -214,10 +253,10 @@ class Harness:
               binaries={p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.work.glob("*.test")}))
         write(self.evidence/"deny-policy.json", dict(interfaces=sorted(interfaces),
               policy="fresh Linux network namespace; no external interface or route; loopback fixtures only",
-              counters="strace descendant connect/sendto; external 80/443 is an upper bound for GitHub HTTP; all external attempts fail",
-              cli="gh shim exits 91 and counts attempts independently",
+              counters="payload-free strace -v -s0 of descendant connect/sendto/sendmsg/sendmmsg destinations; external 80/443 upper bound for GitHub HTTP; io_uring refused",
+              cli="execve/execveat gh executable paths (argv/env redacted); independent deny shim exit91; absolute and overridden paths observed",
               exceptions="deny-probe positive controls; pr-gate deliberately denied CLI read then local restored-response fixture"))
-        self.run("deny-probe", [sys.executable, "-c", "import socket,subprocess\nr=subprocess.run(['gh','api','/']); assert r.returncode==91\ns=socket.socket(); s.settimeout(1)\ntry: s.connect(('192.0.2.1',443))\nexcept OSError: print('PASS network and CLI denied')\nelse: raise AssertionError('external network reachable')\nfinally: s.close()"], expected_cli=1)
+        self.run("deny-probe", [sys.executable, ROOT/"bin/nogh-task-deny-probe.py", self.work], expected_cli=2, mocked_cli=2)
         if self.results["deny-probe"]["fixture"] != "PASS":
             raise ValueError("deny policy positive control failed")
         self.run("baseline", ["bash", ROOT/"bin/nogh-e2e-selftest.sh", "--ccquota", self.work/"ccquota"], "baseline", timeout=300,
@@ -234,7 +273,7 @@ class Harness:
         self.go("cutover", "api", "TestRepoAuthorityAPICleanCutoverNoGitHub", "TestRepoAuthorityAPIManifestCutoverAndCapabilities")
         self.python("repo-cli", "fleet_repo_authority_test.py")
         self.go("landing", "api", "TestTaskPageConfirmedOutcomeAndLanding")
-        self.run("pr-gate", [sys.executable, ROOT/"bin/nogh-task-boundary-test.py"], expected_cli=1)
+        self.run("pr-gate", [sys.executable, ROOT/"bin/nogh-task-boundary-test.py"], expected_cli=1, mocked_cli=3)
         self.run("projection", ["node", "--experimental-strip-types", ROOT/"extras/web-console/test/tasks.mjs"])
         self.run("browser", ["node", ROOT/"bin/nogh-task-browser.mjs", self.work], timeout=60)
         self.run("thin", ["bash", ROOT/"bin/fleet-thin-selftest.sh"], timeout=60)

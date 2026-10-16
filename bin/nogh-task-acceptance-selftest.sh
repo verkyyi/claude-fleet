@@ -1,6 +1,6 @@
 #!/bin/bash
 # Driver verdict/counter regressions; full boundaries run in task-acceptance.yml.
-# selftest-deps: nogh-task-acceptance.py nogh-task-boundary-test.py nogh-task-browser.mjs
+# selftest-deps: nogh-task-acceptance.py nogh-task-boundary-test.py nogh-task-browser.mjs nogh-task-deny-probe.py
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 PYTHONDONTWRITEBYTECODE=1 python3 - "$BIN" <<'PY'
@@ -26,6 +26,12 @@ trace = '''42 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_
 43 sendto(3, "", 0, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("192.0.2.2")}, 16) = -1 ENETUNREACH
 '''
 assert m.network_counts(trace) == dict(external_http=2, other_external=1)
+assert m.network_counts('sendmmsg(3, [{msg_hdr={msg_name={sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.1")}}}, {msg_hdr={msg_name={sa_family=AF_INET6, sin6_port=htons(443), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr)}}}], 2, 0) = -1') == dict(external_http=2, other_external=0)
+assert m.gh_executions('''1 execve("/outer/gh", [""...], [""...]) = 0
+2 execve("/fixture/gh", [""...], [""...]) = -1 ENOENT
+3 execveat(AT_FDCWD, "/absolute/gh", [""...], [""...], 0) = 0
+4 execve("/bin/bash", [""...], [""...]) = 0
+''') == ["/outer/gh", "/fixture/gh", "/absolute/gh"]
 try:
     m.network_counts('connect(3, {sa_family=AF_INET, unrecognized}, 16) = -1')
 except ValueError:

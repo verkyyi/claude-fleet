@@ -23,12 +23,26 @@ timeouts and unreadable trace formats do not pass. macOS can run the existing
 member fixtures, but cannot claim this Linux network-denied rehearsal.
 
 The namespace has no external interface or route. A failing `gh` shim counts CLI
-attempts; `strace` follows descendant `connect`/`sendto` calls even when the kernel
-returns `ENETUNREACH`. Non-loopback ports 80/443 form a conservative upper bound
-for direct GitHub HTTP attempts. Other external attempts (including DNS and SSH)
-also fail acceptance. Loopback fixture servers remain available. A positive
-control attempts CLI and direct IP access before any row; its counters are kept
-separate. Zero counters without a working positive control are not proof.
+attempts independently of a descendant `execve`/`execveat` observer, which sees
+absolute paths and fixture-overridden `gh` executables too. These fixtures call
+`gh` as an executable, not as sourced shell code. Restored-response mock CLI
+reads are classified by their explicit private executable paths and exact counts;
+they do not become control-plane zeros. `strace -v -s0` retains executable paths
+and complete socket destination arrays while suppressing argv, env and payload
+strings. It observes `connect`, `sendto`, `sendmsg`, and `sendmmsg`, including
+failures such as `ENETUNREACH`. Connected-socket destinations are observed at
+connect; unconnected datagrams carry their destination on send. `io_uring` use
+refuses this observer rather than escaping its coverage. Unrecognized addresses
+or executable trace formats fail closed.
+
+Non-loopback destinations on ports 80/443 form a conservative upper bound for
+direct GitHub HTTP attempts (not a count of successful HTTP requests). Other
+external destinations, including DNS and SSH, also fail acceptance. Loopback
+fixture servers remain available. Positive controls exercise PATH, absolute and
+overridden CLI paths, execveat, IPv4/IPv6 TCP and UDP sendto/sendmsg/sendmmsg before
+any row. They also check that a payload/argv/env sentinel is absent from the
+trace. Their nonzero counters are separate. Zero counters without working
+positive controls are not proof.
 
 The driver runs sequentially, with individual 60/90-second bounds (300 seconds
 for the historical baseline) and a 600-second total command budget. It creates no
