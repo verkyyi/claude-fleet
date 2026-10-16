@@ -469,6 +469,12 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		operator(s.handleSessionCredVerify)
+	case sub == "inspect" && r.Method == http.MethodPost:
+		if ep == nil {
+			sessionCredRefuse(w, http.StatusUnauthorized, "unauthenticated", "the issuing node is required")
+			return
+		}
+		s.inspectSessionCred(w, r, ep)
 	case sub == "bind" && (r.Method == http.MethodGet || r.Method == http.MethodPut):
 		// a session's account binding (claude-fleet#1973, fleet_credproxy.go)
 		if ep != nil {
@@ -482,15 +488,70 @@ func (s *Server) handleSessionCred(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.renewSessionCred(w, r, ep)
-	case sub != "" && !strings.Contains(sub, "/") && sub != "verify" && sub != "renew" && sub != "bind" && r.Method == http.MethodDelete:
+	case sub != "" && !strings.Contains(sub, "/") && sub != "verify" && sub != "renew" && sub != "bind" && sub != "inspect" && r.Method == http.MethodDelete:
 		if ep != nil {
 			s.revokeSessionCred(w, r, sub, ep)
 			return
 		}
 		operator(func(w http.ResponseWriter, r *http.Request) { s.revokeSessionCred(w, r, sub, nil) })
 	default:
-		httpError(w, http.StatusMethodNotAllowed, "POST (issue) · GET (list) · POST /verify · POST /renew · GET|PUT /bind · DELETE /<id>")
+		httpError(w, http.StatusMethodNotAllowed, "POST (issue) · GET (list) · POST /verify · POST /inspect · POST /renew · GET|PUT /bind · DELETE /<id>")
 	}
+}
+
+// inspectSessionCred attests an already held pass without issuing, renewing,
+// choosing an account, or forwarding a provider request. The original pass may
+// have expired, but only a valid held renewal of that SAME scope can prove it.
+func (s *Server) inspectSessionCred(w http.ResponseWriter, r *http.Request, ep *store.Endpoint) {
+	var req struct {
+		Original  string `json:"original"`
+		Effective string `json:"effective"`
+		WorkerID  string `json:"worker_id"`
+		Provider  string `json:"provider"`
+	}
+	refuse := func() {
+		sessionCredRefuse(w, http.StatusForbidden, "unverified", "original credential scope cannot be verified")
+	}
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&req) != nil || req.WorkerID == "" || req.Provider != "codex" {
+		refuse()
+		return
+	}
+	now := time.Now()
+	original, why := s.parseSessionPass(req.Original, now)
+	if original == nil || (why != "" && why != "expired") {
+		refuse()
+		return
+	}
+	v, effective := s.verifySessionCred(req.Effective, original.Principal, req.Provider, true, now)
+	if !v.Valid || effective == nil || original.ID != effective.ID || original.WorkerID != effective.WorkerID ||
+		original.Machine != effective.Machine || original.Principal != effective.Principal ||
+		strings.Join(original.Providers, "\x00") != strings.Join(effective.Providers, "\x00") || effective.WorkerID != req.WorkerID {
+		refuse()
+		return
+	}
+	row, err := s.Store.SessionCredByID(effective.ID)
+	if err != nil || row.EndpointID != ep.ID || row.RevokedAt != nil || !row.ExpiresAt.After(now) ||
+		row.PrincipalID != effective.Principal || row.WorkerID != effective.WorkerID || row.Machine != effective.Machine ||
+		strings.Join(row.Providers, "\x00") != strings.Join(effective.Providers, "\x00") {
+		refuse()
+		return
+	}
+	if principal, err := s.principalOnNode(row.EndpointID, row.Machine, row.OSUser); err != nil || principal != row.PrincipalID {
+		refuse()
+		return
+	}
+	bind, err := s.Store.SessionBindFor(req.WorkerID, req.Provider)
+	if err != nil && !errors.Is(err, store.ErrNoSessionBind) {
+		refuse()
+		return
+	}
+	var binding any
+	if err == nil {
+		binding = bind
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": row.ID, "principal": row.PrincipalID,
+		"worker_id": row.WorkerID, "machine": row.Machine, "endpoint_id": row.EndpointID,
+		"provider": req.Provider, "binding": binding})
 }
 
 // sessionCredIssueRequest is the (optional) body of an issue.

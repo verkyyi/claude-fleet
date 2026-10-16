@@ -22,6 +22,65 @@ type RepoLocalStart struct {
 	Phase       string              `json:"phase"` // reserved | starting | observed | stopped | cancelled
 }
 
+func repoStartID(repo, owner, endpoint, key string) string {
+	sum := sha256.Sum256([]byte(owner + "\x00" + endpoint + "\x00" + repo + "\x00" + key))
+	return fmt.Sprintf("repo-start:%x", sum[:])
+}
+
+// Recovery never reserves or begins an execution. Read the original journal
+// entry under the authenticated scope, including its terminal phase.
+func (s *Store) ReadRepoLocalStart(repo, owner, endpoint, key string) (RepoLocalStart, error) {
+	var start RepoLocalStart
+	var raw string
+	repo = NormRepo(repo)
+	if repo == "" || owner == "" || endpoint == "" || key == "" {
+		return start, ErrTaskInvalid
+	}
+	err := s.read.QueryRow(`SELECT result FROM fleet_operations WHERE id = ? AND action = 'repo_local_start'`, repoStartID(repo, owner, endpoint, key)).Scan(&raw)
+	if err != nil {
+		return start, ErrTaskFence
+	}
+	if err = json.Unmarshal([]byte(raw), &start); err != nil {
+		return start, err
+	}
+	if start.Repo != repo || start.Owner != owner || start.EndpointID != endpoint || start.Reservation != key {
+		return start, ErrTaskFence
+	}
+	if start.Phase == "starting" || start.Phase == "observed" {
+		if err = recoverRepoStartFence(s.read, repoStartID(repo, owner, endpoint, key), start); err != nil {
+			return start, err
+		}
+	}
+	return start, nil
+}
+
+// Legacy reservations have no execution generation. Their creation time cannot
+// order begin calls (or survive clock rollback). Recovery therefore refuses ANY
+// competing history for this worker, including stopped runs. It must not invent
+// a generation. Ordinary native hooks retain their existing protocol.
+func recoverRepoStartFence(q querier, id string, start RepoLocalStart) error {
+	rows, err := q.Query(`SELECT result FROM fleet_operations WHERE action = 'repo_local_start' AND id <> ?`, id)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		var other RepoLocalStart
+		if err = rows.Scan(&raw); err != nil {
+			return err
+		}
+		if err = json.Unmarshal([]byte(raw), &other); err != nil {
+			return err
+		}
+		if other.WorkerID != start.WorkerID || other.WorkerID == "" {
+			continue
+		}
+		return ErrTaskFence
+	}
+	return rows.Err()
+}
+
 func repoLocalStarts(q querier, repo string) ([]RepoLocalStart, error) {
 	rows, err := q.Query(`SELECT result FROM fleet_operations WHERE action = 'repo_local_start'`)
 	if err != nil {
@@ -143,11 +202,24 @@ func (s *Store) RepoLocalStart(repo, owner, endpoint, key, action, worker string
 		}
 		start.WorkerID, start.Phase = worker, "starting"
 	case "observe":
+		fallthrough
+	case "recover-observe":
 		if !native.Valid() || native.WorkerID != start.WorkerID || (start.Phase != "starting" && start.Phase != "observed") {
 			return start, ErrTaskFence
 		}
 		if start.Native != nil && !sameRepoNative(start.Native, native) {
 			return start, ErrTaskFence
+		}
+		if action == "recover-observe" {
+			if worker != start.WorkerID {
+				return start, ErrTaskFence
+			}
+			if err = recoverRepoStartFence(tx, id, start); err != nil {
+				return start, err
+			}
+			if start.Phase == "observed" {
+				return start, nil // exact replay: no timestamp, event or authority write
+			}
 		}
 		start.Native, start.Phase = native, "observed"
 	case "stopped":

@@ -19,6 +19,7 @@
 | 登录 MCP 默认包（context7 / playwright / github / fetch） | 待定 | 待发起人定：当前两种代理的配置仍默认填入四个服务；本批不改变安装包。 |
 | 会话状态钩子（`set-claude-state.sh`） | 核心 | 执行会话仍属核心；工作、等待、退出状态用于恢复和回收，保留既有钩子。 |
 | 会话恢复与事件记录（`classify-hook.sh`、`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 维持会话身份、连续性和生命周期；本批不拆执行会话的恢复与合并流程。 |
+| 存活原生会话的观察登记（`fleet_native_observe.py`） | 核心 | #4510：原执行不重启，fresh 核实原 kernel/RPC/账号/reservation 后补登记；旧 hook 与消息消费单独报告。 |
 | 更新说明（`whats_new` / `bin/fleet-whats-new.sh`） | 按需 | 普通会话不再默认附加「改了什么」；工具保留，用户要看时再读。Claude 和 Codex 的默认钩子均不注册，旧表的 `--hook` 暂留为静默兼容入口（#4324）。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |

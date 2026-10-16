@@ -206,7 +206,7 @@ if [ -n "$SEP_RUN" ]; then
     ensure|port)
       live_pid >/dev/null || { echo "fleet-cred-proxy: separated, and its service is not running ($SEP_RUN)" >&2; exit 1; }
       cat "$SEP_RUN/port"; exit 0 ;;
-    node-token|node-hash|store|unstore|accounts|target-auth)
+    node-token|node-hash|store|unstore|accounts|target-auth|credential-inspect)
       exec python3 -I "$PY" --state "$STATE" "$cmd" "$@" ;;
     relay)   # the minted relay pass on stdin → the proxy's own state (#1974)
       exec python3 -I "$PY" --state "$STATE" relay ;;
@@ -289,7 +289,7 @@ case "$cmd" in
     esac
     exec bash "$BIN/fleet-cred-rollout.sh" status "$@"
     ;;
-  route|mint|rebind|revoke|attach|quota|account-quota|picks|pass|machine|relay-probe)
+  route|mint|rebind|revoke|attach|quota|account-quota|picks|pass|machine|relay-probe|credential-inspect)
     exec python3 -I "$PY" --state "$STATE" "$cmd" "$@"
     ;;
   doctor)
