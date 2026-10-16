@@ -478,6 +478,19 @@ remote TUI 一次出现两次本地请求；另一次 PRoot 外层退出码为 0
 外层检查自己的 mount namespace 未变且 `/etc/codex` 空目录未收到 fixture 文件，并移除这个
 CI 专用空目录；不会连接集群或修改在线节点。新 CI 的结果必须单独审阅，不由 PRoot 结果推断。
 
+第一次 CI 在定位 npm 包中的二进制路径时失败，尚未执行 managed 测试；按实际包布局修正后，
+[CI 38967632989](https://github.com/verkyyi/claude-fleet/actions/runs/38967632989) 的 exec 44 项、
+remote TUI 50 项通过。exec 中未审阅/修改过的插件不执行，managed SessionStart 仍执行；
+remote TUI 的未审阅/修改状态先停在原生审阅门，受信任后 managed 与 plugin 两者均执行。
+这排除了「managed 与插件必然无法共存」的推断，但不把 PRoot 的异常当作已定位的原生缺陷。
+
+下一层探针用两次本地合成 Responses 事件驱动**原生**工具调用，不调用真实模型：
+正对照让 `exec_command` 在临时目录写 canary；随后要求 managed PreToolUse 拦下相同写入，
+核对 Bash 事件、工具调用 ID、原生线程 ID 和返回给原生循环的拒绝原因。还测试
+`features.hooks=false` 覆盖尝试及 managed 命令更新后的新拒绝原因。仅该受控 fixture
+使用 full-access 来排除沙箱自身拒绝造成的假阳性；生产权限、完整 MCP 与守卫配置不变。
+这些新增断言在独立 CI 中运行，是否通过以对应提交的实际结果为准。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
