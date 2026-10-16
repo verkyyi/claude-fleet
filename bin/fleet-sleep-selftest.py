@@ -635,7 +635,8 @@ print(json.dumps(dict(agent='claude',session_id=SID,pid=pid,transcript=TRANSCRIP
                 if method=='thread/goal/get':return {'goal':None}
                 if method=='thread/loaded/list':return {'data':[SleepTest.sid,'child']}
                 sid=args['threadId']
-                return {'thread':{'id':sid,'status':{'type':'idle' if sid==SleepTest.sid else 'active'},'turns':[{'status':'completed'}]}}
+                return {'thread':{'id':sid,'cwd':source['worktree'],'path':source['transcript'],
+                                  'status':{'type':'idle' if sid==SleepTest.sid else 'active'},'turns':[{'status':'completed'}]}}
         with patch.object(worker,'inspect',return_value=source),patch.dict(worker.eligible.__globals__,RPC=Client,source_options=lambda source: []):
             with self.assertRaisesRegex(ValueError,'subagent'):
                 worker.eligible(manual=True)
