@@ -74,6 +74,10 @@ for f in fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-li
 done
 command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
 
+# SELFTEST_PART=all keeps the original sequential execution available.
+part=${SELFTEST_PART:-1/3}
+unset SELFTEST_PART
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/quotawatch-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"     # physical path: the scripts resolve $BIN via pwd, and macOS $TMPDIR is a symlink
 HOLDER=''
@@ -178,11 +182,35 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2
          printf -- '--- stderr ---\n' >&2; cat "$WORK/stderr" >&2 2>/dev/null
          printf -- '--- tmux.calls ---\n' >&2; tail -8 "$WORK/tmux.calls" >&2 2>/dev/null; exit 1; }
 ok()   { CHECKS=$((CHECKS+1)); }
-ccq_calls() { grep -c . "$WORK/ccquota.calls" 2>/dev/null || echo 0; }
-notifies()  { grep -c '^---$' "$WORK/notify.log" 2>/dev/null || echo 0; }
-migrates()  { grep -c "migrate --account 'a'" "$WORK/tmux.calls" 2>/dev/null || echo 0; }
+# A fresh part may have an existing log with zero matches: grep prints its zero
+# even with exit 1. Never append a second zero and break numeric assertions.
+count_log() { if [ -f "$2" ]; then grep -c -- "$1" "$2" || :; else echo 0; fi; }
+ccq_calls() { count_log . "$WORK/ccquota.calls"; }
+notifies()  { count_log '^---$' "$WORK/notify.log"; }
+migrates()  { count_log "migrate --account 'a'" "$WORK/tmux.calls"; }
 hbget()     { sed -n "s/^$2=//p" "$1" | head -1; }
 
+setup_switch() {
+cat > "$WORK/bin/fleet-model-switch.sh" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_SWITCH_LOG"
+# The breadcrumb the real probe keeps (issue #706). Written BEFORE the sleep on
+# purpose: that is the whole point of the file — the probe is tree-killed at the
+# budget, so the only record of where it got to is what it had already written.
+[ -n "${FLEET_MODEL_SWITCH_TRACE:-}" ] && \
+  printf 'step=capture\nwin=3/9\nwid=@7\nelapsed=1\nsteps=t_meta=1 t_capture=1\nname=w3\n' > "$FLEET_MODEL_SWITCH_TRACE"
+if [ "${FAKE_SWITCH_SLEEP:-0}" -gt 0 ]; then
+  sleep "$FAKE_SWITCH_SLEEP"
+  printf 'completed\n' >> "$FAKE_SWITCH_DONE"     # only reached if the kill MISSED
+fi
+exit 0
+FAKE
+chmod +x "$WORK/bin/fleet-model-switch.sh"
+export FAKE_SWITCH_LOG="$WORK/switch.calls" FAKE_SWITCH_DONE="$WORK/switch.done"
+
+}
+
+test_policy() {
 # 1. off — one gate per job (#569) --------------------------------------------
 echo 50 > "$WORK/pct"
 # 1a. neither an accounts pool nor a hub: nothing runs at all.
@@ -367,26 +395,23 @@ run_watch || fail "8c: next tick must exit 0"
 [ "$(migrates)" = "$m" ] || fail "8c: still no migrate"
 ok
 
+}
+
+test_budgets() {
+# Recreate the capped pool left by group 8, without replaying its assertions.
+if [ "$part" != all ]; then
+  iso "$RESET3" > "$WORK/reset"; echo 90 > "$WORK/pct"; echo 95 > "$WORK/pct-b"
+  printf 'b\n' > "$G/account.active"
+  printf '%s\n' "$RESET3" > "$G/quota.ceiling.a"
+  printf '%s\n' "$RESET3" > "$G/quota.ceiling.b"
+  printf 'a\t%s\tccquota: 5-hour window at 90%%\nb\t%s\tccquota: 5-hour window at 95%%\n' \
+    "$RESET3" "$RESET3" > "$G/account.limited"
+fi
 # 9. budgets — a wedged cap probe must not eat the tick (#582) -----------------
 # The shape that broke it live: the sweep probe blocks in tmux for minutes, the
 # tick blows past its own 60s period, the ccquota fetch behind it never runs, and
 # the stamp goes stale — while `launchctl list` still shows exit 0.
-cat > "$WORK/bin/fleet-model-switch.sh" <<'FAKE'
-#!/bin/bash
-printf '%s\n' "$*" >> "$FAKE_SWITCH_LOG"
-# The breadcrumb the real probe keeps (issue #706). Written BEFORE the sleep on
-# purpose: that is the whole point of the file — the probe is tree-killed at the
-# budget, so the only record of where it got to is what it had already written.
-[ -n "${FLEET_MODEL_SWITCH_TRACE:-}" ] && \
-  printf 'step=capture\nwin=3/9\nwid=@7\nelapsed=1\nsteps=t_meta=1 t_capture=1\nname=w3\n' > "$FLEET_MODEL_SWITCH_TRACE"
-if [ "${FAKE_SWITCH_SLEEP:-0}" -gt 0 ]; then
-  sleep "$FAKE_SWITCH_SLEEP"
-  printf 'completed\n' >> "$FAKE_SWITCH_DONE"     # only reached if the kill MISSED
-fi
-exit 0
-FAKE
-chmod +x "$WORK/bin/fleet-model-switch.sh"
-export FAKE_SWITCH_LOG="$WORK/switch.calls" FAKE_SWITCH_DONE="$WORK/switch.done"
+setup_switch
 
 # 9a. probe over budget → killed + reported, and the fetch behind it STILL runs.
 export FAKE_SWITCH_SLEEP=6 FLEET_QUOTAWATCH_PROBE_BUDGET=2
@@ -611,6 +636,10 @@ grep -q 'tick done in .*s/1s' "$WORK/stderr" || fail "11f: the tick line must pr
 [ ! -d "$G/quotawatch.lock" ] || fail "11f: it must release the lock"
 ok
 
+}
+
+test_readings() {
+setup_switch
 # 12. pace — the weekly-pace table + the gentle rebalance (issue #1231) ----------
 # A fresh pool: both 5h windows at 20% in a new reset window, no benches, no
 # markers. a is 6 days from its 7d reset at 65% (elapsed 1/7 ⇒ 85×0.14 = 12 ⇒
@@ -767,5 +796,17 @@ age_at 400; c0=$(ccq_calls); run_watch || fail "14e: tick must exit 0"
 unset FLEET_ACCOUNT_PACE_REBALANCE
 ok
 
-printf 'selftest PASS: fleet-quotawatch — %s groups (off, status, policy 50/72/90 + once-per-window, dry-run, lock skip/supersede/takeover, staleness alarm, fresh-but-empty alarm #684, human secs, nowhere-to-move #567, probe budget/tree-kill/phase breakdown/lock ownership, wedged-tick supersede #582, unreadable-account #628, tick self-budget + wind-down #698, weekly pace + rebalance #1231, statusline readings #1267, mod readings skip the fetch #1338)\n' "$CHECKS"
-exit 0
+}
+
+# Discover groups, including newly added ones; no hand-maintained case list.
+groups=$(sed -n 's/^\(test_[a-z0-9_]*\)() *{.*/\1/p' "$0")
+if [ "$part" != all ]; then
+  # No per-group timings yet: the existing allocator gives equal contiguous slices.
+  # shellcheck disable=SC2086
+  groups=$(python3 "$BIN/fleet-break-it-part.py" "$part" /dev/null $groups) || exit 2
+fi
+for group in $groups; do
+  printf 'group %s: %s\n' "$part" "$group"
+  "$group"
+done
+printf 'fleet-quotawatch selftest: OK (%d checks; part %s)\n' "$CHECKS" "$part"

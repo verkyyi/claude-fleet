@@ -558,7 +558,7 @@ _crd_fns=$(sed -n 's/^\(drill_[a-z0-9_]*\)() *{.*/\1/p' "$1")
 unset BREAK_PART
 if [ -z "${BREAK_ONLY:-}" ] && [ "$_crd_part" != all ]; then
   case "$_crd_part" in
-    [1-9]/[1-9]|[1-9]/[1-9][0-9]) _crd_pk=${_crd_part%/*} _crd_pn=${_crd_part#*/} ;;
+    [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) _crd_pk=${_crd_part%/*} _crd_pn=${_crd_part#*/} ;;
     *) printf 'fleet-break-it: BREAK_PART=%s is not K/N or all\n' "$_crd_part" >&2; exit 2 ;;
   esac
   [ "$_crd_pk" -le "$_crd_pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$_crd_part" >&2; exit 2; }

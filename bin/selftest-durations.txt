@@ -1,3 +1,4 @@
+# Issue #4500: 43 family segments + spinner/needs entries, Ubuntu run 38953452759 at f32832df.
 # selftest-durations.txt — seconds per selftest on an ubuntu CI runner (issue #1390).
 # `run-selftests.sh --shard K/N` packs its shards by these numbers (longest first,
 # each into the lightest shard); a test with no row costs the table's median.
@@ -99,16 +100,31 @@
 16.5 fleet-answer-selftest.sh
 0.1 fleet-attach-selftest.sh
 26.3 fleet-await-selftest.sh
-62.0 fleet-await-stall-selftest.sh
+35.1 fleet-await-stall-2-selftest.sh
+27.7 fleet-await-stall-selftest.sh
 0.1 fleet-base-branch-selftest.sh
 3.4 fleet-base-sync-selftest.sh
 0.8 fleet-bind-selftest.sh
-37.0 fleet-break-it-2-selftest.sh
-52.5 fleet-break-it-3-selftest.sh
-50.0 fleet-break-it-4-selftest.sh
-53.9 fleet-break-it-5-selftest.sh
-45.6 fleet-break-it-6-selftest.sh
-54.3 fleet-break-it-7-selftest.sh
+32.3 fleet-break-it-10-selftest.sh
+34.2 fleet-break-it-11-selftest.sh
+30.7 fleet-break-it-12-selftest.sh
+43.5 fleet-break-it-13-selftest.sh
+30.1 fleet-break-it-14-selftest.sh
+50.7 fleet-break-it-15-selftest.sh
+34.9 fleet-break-it-16-selftest.sh
+37.2 fleet-break-it-17-selftest.sh
+39.8 fleet-break-it-18-selftest.sh
+17.2 fleet-break-it-19-selftest.sh
+42.6 fleet-break-it-2-selftest.sh
+41.5 fleet-break-it-20-selftest.sh
+33.4 fleet-break-it-21-selftest.sh
+12.4 fleet-break-it-3-selftest.sh
+46.6 fleet-break-it-4-selftest.sh
+46.7 fleet-break-it-5-selftest.sh
+39.7 fleet-break-it-6-selftest.sh
+36.9 fleet-break-it-7-selftest.sh
+34.4 fleet-break-it-8-selftest.sh
+36.0 fleet-break-it-9-selftest.sh
 1.7 fleet-break-it-admin-selftest.sh
 30.2 fleet-break-it-ci-selftest.sh
 11.2 fleet-break-it-cluster-selftest.sh
@@ -119,16 +135,21 @@
 0.1 fleet-break-it-entry-selftest.sh
 51.1 fleet-break-it-hub-2-selftest.sh
 50.3 fleet-break-it-hub-selftest.sh
-43.9 fleet-break-it-node-2-selftest.sh
-42.8 fleet-break-it-node-3-selftest.sh
-44.5 fleet-break-it-node-selftest.sh
+23.8 fleet-break-it-node-2-selftest.sh
+30.0 fleet-break-it-node-3-selftest.sh
+35.8 fleet-break-it-node-4-selftest.sh
+31.5 fleet-break-it-node-5-selftest.sh
+29.6 fleet-break-it-node-6-selftest.sh
+30.5 fleet-break-it-node-selftest.sh
 43.9 fleet-break-it-peerlink-selftest.sh
 59.8 fleet-break-it-revoke-selftest.sh
 1.2 fleet-break-it-seats-selftest.sh
-49.4 fleet-break-it-selftest.sh
+41.2 fleet-break-it-selftest.sh
 2.7 fleet-break-it-tenant-selftest.sh
+34.4 fleet-break-it-thin-2-selftest.sh
+30.1 fleet-break-it-thin-3-selftest.sh
 18.9 fleet-break-it-thin-client-selftest.sh
-48.8 fleet-break-it-thin-selftest.sh
+22.9 fleet-break-it-thin-selftest.sh
 18.1 fleet-browser-selftest.sh
 0.0 fleet-charter-selftest.sh
 9.2 fleet-children-flush-selftest.sh
@@ -139,7 +160,10 @@
 3.0 fleet-claude-selftest.sh
 0.2 fleet-claude-stamp-selftest.sh
 6.7 fleet-cleanup-daemon-selftest.sh
-52.7 fleet-cleanup-idle-selftest.sh
+20.8 fleet-cleanup-idle-2-selftest.sh
+26.9 fleet-cleanup-idle-3-selftest.sh
+30.6 fleet-cleanup-idle-4-selftest.sh
+23.5 fleet-cleanup-idle-selftest.sh
 6.3 fleet-cleanup-multirepo-selftest.sh
 29.5 fleet-cleanup-selftest.sh
 2.7 fleet-client-actions-selftest.sh
@@ -241,12 +265,14 @@
 1.0 fleet-hooks-merge-selftest.sh
 9.0 fleet-host-selftest.sh
 0.6 fleet-host-tune-selftest.sh
-29.9 fleet-hub-2-selftest.sh
+29.1 fleet-hub-2-selftest.sh
+32.4 fleet-hub-3-selftest.sh
+27.1 fleet-hub-4-selftest.sh
 3.7 fleet-hub-admin-selftest.sh
 15.1 fleet-hub-image-selftest.sh
 0.5 fleet-hub-node-env-selftest.sh
 1.3 fleet-hub-pool-selftest.sh
-42.1 fleet-hub-selftest.sh
+25.9 fleet-hub-selftest.sh
 0.1 fleet-hub-url-selftest.sh
 3.4 fleet-idle-gate-selftest.sh
 32.4 fleet-install-join-selftest.sh
@@ -335,7 +361,9 @@
 14.4 fleet-quota-carry-selftest.sh
 3.1 fleet-quota-verdict-selftest.sh
 0.0 fleet-quotaguard-selftest.sh
-51.9 fleet-quotawatch-selftest.sh
+29.0 fleet-quotawatch-2-selftest.sh
+14.2 fleet-quotawatch-3-selftest.sh
+16.8 fleet-quotawatch-selftest.sh
 1.0 fleet-reap-live-selftest.sh
 0.1 fleet-reap-target-selftest.sh
 2.7 fleet-relay-cred-selftest.sh
@@ -374,6 +402,7 @@
 55.3 fleet-start-warm-selftest.sh
 9.0 fleet-state-reconcile-selftest.sh
 6.6 fleet-status-7501-selftest.sh
+13.4 fleet-status-lib-selftest.sh
 20.6 fleet-status-replay-selftest.sh
 1.6 fleet-statusline-selftest.sh
 1.8 fleet-steward-conflicts-selftest.sh
@@ -445,7 +474,7 @@
 5.2 multirepo-identity-selftest.sh
 1.5 needs-notify-selftest.sh
 0.8 needs-reason-selftest.sh
-14.0 needs-reconcile-selftest.sh
+12.7 needs-reconcile-selftest.sh
 7.7 new-session-selection-selftest.sh
 0.2 newcomer-cn-selftest.sh
 1.1 no-direct-gh-selftest.sh
@@ -496,7 +525,11 @@
 1.5 site-drill-selftest.sh
 0.3 skill-tools-selftest.sh
 1.3 spawn-origin-gate-selftest.sh
+0.3 spinner-budget-contract-selftest.sh
+8.0 spinner-control-selftest.sh
+40.3 spinner-maintenance-selftest.sh
 23.1 spinner-rate-selftest.sh
+35.8 spinner-wait-selftest.sh
 5.6 state-primary-selftest.sh
 1.1 statusline-selftest.sh
 15.8 sync-logins-selftest.sh
@@ -504,7 +537,6 @@
 0.1 tmux-conf-reload-selftest.sh
 53.9 tmux-config-selftest.sh
 0.0 tmux-guard-selftest.sh
-13.4 fleet-status-lib-selftest.sh
 0.1 tokenledger-isolation-selftest.sh
 0.7 topbar-ctx-selftest.sh
 3.2 topbar-switch-selftest.sh
@@ -522,5 +554,3 @@
 4.4 worktree-autoclean-scratch-selftest.sh
 0.3 wt-helpers-close-selftest.sh
 1.4 zsh-local-selftest.sh
-
-8.0 spinner-control-selftest.sh

@@ -4,8 +4,15 @@
 Private HOME/socket; no live lease or daemon stamps. PATH entry wrappers record
 PID/PPID, not samples. Direct oracle execs are recorded too; interpreter exec
 chains count once per PID. Fixture setup/probes and builtin-only shell forks are
-outside the external-process budget. Both fixtures run the full 60 seconds even
-when the budget is already exceeded, so a red result retains its attribution.
+outside the external-process budget, but inside each entry's wall clock. Each
+fixture observes 44 real seconds, including the default 20/40s fresh checks and
+30s daemon-watch; idle and maintenance are separate BREAK-IT execution slices.
+Startup is a fixed cost (at most three processes). Subsequent processes must be
+the one fresh ps at each due 20s observation: the original 60s reference window
+contains two such observations, so startup + 2 * cost_per_observation stays <=5.
+This is a structural reference for these fixtures, not a measured 5/min rate.
+Protocol read/query counts include startup and scale down to floor(60*44/60)=44.
+Neither counter changes production periods or excludes work from entry timing.
 """
 import argparse
 import collections
@@ -22,9 +29,60 @@ import tempfile
 import time
 
 BIN = Path(__file__).resolve().parent
+OBSERVE_SECONDS = 44
+REFERENCE_SECONDS = 60
+STARTUP_LIMIT = 3
+PERIODS = dict(stuck_check=10, degen_check=15, needs_check=20,
+               hb_stamp=20, daemon_watch=30)
+
+
+def due_times(period, seconds, initial=False):
+    return list(range(0 if initial else period, seconds, period))
+
+
+def check_costs(fixture, commands, checks, read_query):
+    """Fixed launch cost plus unchanged per-maintenance-event cost; no free execs."""
+    startup = [row for row in commands if row[0] < min(PERIODS.values())]
+    recurring = [row for row in commands if row not in startup]
+    assert len(startup) <= STARTUP_LIMIT, ('startup processes', startup)
+    assert collections.Counter(row[3] for row in startup) == {'spinner': 1, 'tmux': 1, 'bash': 1}, ('startup sources', startup)
+    spinner = next(row for row in startup if row[3] == 'spinner')
+    for row in startup:
+        if row[3] == 'spinner':
+            continue  # shell -> Python exec keeps this same PID
+        assert row[2] == spinner[1], ('startup parent', row, spinner)
+        argv = row[4].split()
+        if row[3] == 'tmux':
+            assert argv[:3] == ['-L', 'test', '-C'] and 'attach-session' in argv, ('control source', row)
+        else:
+            assert len(argv) == 2 and Path(argv[0]).name == 'fleet-client-where.sh' and argv[1] == '--json', ('lease source', row)
+    needs = checks['needs_check']
+    observed = [sum(at - .1 <= row[0] <= at + 2 for row in recurring) for at in needs]
+    assert sum(observed) == len(recurring), ('process outside a maintenance observation', recurring, needs)
+    assert all(row[3] == 'ps' for row in recurring), ('unexpected recurring process', recurring)
+    assert all(row[2] == spinner[1] and row[4] == '-axo pid=,ppid=,stat=,lstart=,comm=' for row in recurring), ('fresh process source', recurring)
+    assert all(count <= 1 for count in observed), ('process cost per fresh observation', observed)
+    if fixture == 'maintenance':
+        assert observed == [1, 1], ('both default safety observations must be fresh', observed)
+    else:
+        assert observed == [0, 0], ('idle fixture unexpectedly launched maintenance processes', observed)
+    reference_checks = len(due_times(PERIODS['needs_check'], REFERENCE_SECONDS))
+    projected = len(startup) + reference_checks * max(observed, default=0)
+    assert projected <= 5, ('original startup + reference maintenance budget', projected)
+    query_limit = 60 * OBSERVE_SECONDS // REFERENCE_SECONDS
+    assert read_query <= query_limit, ('read/query budget including startup', read_query, query_limit)
+    return dict(observation_seconds=OBSERVE_SECONDS, startup_processes=len(startup),
+                startup_limit=STARTUP_LIMIT, processes_per_observation=observed,
+                reference_seconds=REFERENCE_SECONDS, reference_observations=reference_checks,
+                projected_reference_processes=projected, reference_process_limit=5,
+                reference_scope='structural first [S,S+60), S before Popen, D initialization > S; not sliding/real 60s',
+                actual_processes=len(commands), actual_processes_per_minute=60 * len(commands) / OBSERVE_SECONDS,
+                startup_sources=startup, fresh_sources=recurring, other_processes=0,
+                protocol_read_query=read_query, protocol_read_query_limit=query_limit)
 
 
 def audit(fixture, output):
+    fixture_start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix='spinbudget.', dir='/tmp') as tmp:
         root = Path(tmp)
         for directory in ('bin', 'logs', 'home', 'conf/fleets/test', 'tmp', 'shim'):
@@ -71,14 +129,14 @@ def audit(fixture, output):
                     continue
                 seen.add(source.name)
                 wrapper = root / 'shim' / source.name
-                wrapper.write_text('#!/bin/sh\nprintf "%s %s %s\\n" "$$" "$PPID" '
-                                   + shlex.quote(source.name) + ' >> ' + shlex.quote(str(fifo))
+                wrapper.write_text('#!/bin/sh\nprintf "%s\\t%s\\t%s\\t%s\\n" "$$" "$PPID" '
+                                   + shlex.quote(source.name) + ' "$*" >> ' + shlex.quote(str(fifo))
                                    + '\nexec ' + shlex.quote(str(source)) + ' "$@"\n')
                 wrapper.chmod(0o755)
         oracle = root / 'bin/fleet-pending-tool.sh'
         real_oracle = root / 'bin/.oracle-real.sh'
         oracle.rename(real_oracle)
-        oracle.write_text('#!/bin/sh\nprintf "%s %s oracle\\n" "$$" "$PPID" >> '
+        oracle.write_text('#!/bin/sh\nprintf "%s\\t%s\\toracle\\t%s\\n" "$$" "$PPID" "$*" >> '
                           + shlex.quote(str(fifo)) + '\nexec '
                           + shlex.quote(str(real_oracle)) + ' "$@"\n')
         oracle.chmod(0o755)
@@ -93,7 +151,7 @@ def audit(fixture, output):
 
         def tm(*args):
             return subprocess.check_output([tmux, '-L', 'test', *args], env=env,
-                                           text=True, stderr=subprocess.DEVNULL).strip()
+                                           text=True, stderr=subprocess.DEVNULL, timeout=2).strip()
 
         proc = None
         try:
@@ -124,15 +182,15 @@ def audit(fixture, output):
                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                     start_new_session=True)
             os.set_blocking(proc.stderr.fileno(), False)
-            commands = [(0, proc.pid, os.getpid(), 'spinner')]
+            commands = [(0, proc.pid, os.getpid(), 'spinner', str(root / 'bin/tmux-spinner.sh'))]
             checks = collections.defaultdict(list)
             protocol = []
             pending = {'exec': b'', 'trace': b''}
             with selectors.DefaultSelector() as selector, (output / (fixture + '-trace.txt')).open('wb') as trace:
                 selector.register(fd, selectors.EVENT_READ, 'exec')
                 selector.register(proc.stderr, selectors.EVENT_READ, 'trace')
-                while time.monotonic() - start < 60:
-                    for key, _ in selector.select(max(0, 60 - (time.monotonic() - start))):
+                while time.monotonic() - start < OBSERVE_SECONDS:
+                    for key, _ in selector.select(max(0, OBSERVE_SECONDS - (time.monotonic() - start))):
                         data = os.read(key.fd, 65536)
                         if not data:
                             raise AssertionError('spinner exited unexpectedly')
@@ -145,8 +203,8 @@ def audit(fixture, output):
                         for raw in lines:
                             line = raw.decode(errors='replace')
                             if key.data == 'exec':
-                                pid, ppid, name = line.split(' ', 2)
-                                commands.append((elapsed, int(pid), int(ppid), name))
+                                pid, ppid, name, argv = line.split('\t', 3)
+                                commands.append((elapsed, int(pid), int(ppid), name, argv))
                             else:
                                 if line.startswith('spinner-protocol '):
                                     protocol.append((elapsed, json.loads(line[len('spinner-protocol '):])))
@@ -183,9 +241,9 @@ def audit(fixture, output):
             print(json.dumps({k: v for k, v in report.items() if k not in ('commands', 'protocol_commands', 'count_scope')}, indent=2), flush=True)
             # A cheap spinner which stopped maintaining the fleet must red too.
             origin = checks['hb_stamp'][0]
-            for name, expected in dict(stuck_check=[10, 20, 30, 40, 50],
-                                       degen_check=[15, 30, 45], needs_check=[20, 40],
-                                       hb_stamp=[0, 20, 40], daemon_watch=[30]).items():
+            assert origin + 40 + 2 < OBSERVE_SECONDS, ('second fresh completion margin', origin)
+            for name, period in PERIODS.items():
+                expected = due_times(period, OBSERVE_SECONDS, initial=name == 'hb_stamp')
                 actual = checks[name]
                 assert len(actual) >= len(expected), (name, actual)
                 for at, due in zip(actual, expected):
@@ -193,28 +251,53 @@ def audit(fixture, output):
             if fixture == 'maintenance':
                 assert report['by_command'].get('ps') == 2, 'both safety observations must be fresh'
                 assert 'needs=needs' in final, 'missing native identity is unknown, never permission to clear'
-            return len(unique)
+                assert 'work=working' in final, 'young work must not require a classifier'
+                ages = tm('list-windows', '-t', 'test', '-F', '#{window_name}=#{window_activity}')
+                work_activity = next(line.split('=', 1)[1] for line in ages.splitlines() if line.startswith('work='))
+                assert time.time() - int(work_activity) < 120, ('fixture working age', work_activity)
+                assert not tm('capture-pane', '-p', '-t', 'test:work'), 'budget fixture must have no repeating screen'
+            assert not list((root / 'tmp/.claude-dash').glob('**/*')), 'budget fixture must have no daemon evidence'
+            report['budget'] = check_costs(fixture, list(unique.values()), checks, categories['read_query'])
         finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)  # reserve bounded cleanup after the work deadline
             if proc:
-                os.killpg(proc.pid, signal.SIGTERM)
-                proc.wait(timeout=5)
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=1)
                 proc.stderr.close()
             subprocess.run([tmux, '-L', 'test', 'kill-server'], env=env,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
             os.close(fd)
+    # The TemporaryDirectory and every fixture process have been cleaned up.
+    report['fixture_wall_seconds'] = time.monotonic() - fixture_start
+    (output / (fixture + '.json')).write_text(json.dumps(report, indent=2))
+    assert report['fixture_wall_seconds'] < 55, ('fixture leaves no entry startup margin', report['fixture_wall_seconds'])
+    print('PASS %s: actual %ss observation; budget %s; prepare/observe/cleanup %.3fs' % (
+        fixture, OBSERVE_SECONDS, json.dumps(report['budget'], sort_keys=True),
+        report['fixture_wall_seconds']), flush=True)
+    return report
 
 
 if __name__ == '__main__':
+    def expired(*_):
+        raise TimeoutError('spinner budget work exceeded 50s; cleaning up within the entry')
+
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, 50)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--fixture', choices=('idle', 'maintenance'), default='idle',
+                        help='one independent slice; both run through the BREAK-IT family')
     args = parser.parse_args()
     if not shutil.which('tmux'):
         raise SystemExit('tmux required for complete spinner budget')
     output = args.output or Path(tempfile.mkdtemp(prefix='spinner-budget-evidence.'))
     output.mkdir(parents=True, exist_ok=True)
-    counts = {fixture: audit(fixture, output) for fixture in ('idle', 'maintenance')}
+    audit(args.fixture, output)
     print('Evidence:', output, flush=True)
-    assert all(count <= 5 for count in counts.values()), 'complete default spinner budget <=5/60s FAILED: %s' % counts
-    queries = {fixture: json.loads((output / (fixture + '.json')).read_text())['protocol_categories']['read_query']
-               for fixture in counts}
-    assert all(count <= 60 for count in queries.values()), 'complete default protocol read/query <=60/60s FAILED: %s' % queries

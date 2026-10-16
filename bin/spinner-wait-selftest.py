@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Real spinner, private HOME/socket, count external commands (not ps samples).
 
-The 60s budget is the shared renderer wait with no maintenance deadline due.
+The default 30s budget is the shared renderer wait with no deadline due.
+Its integer command allowance is floor(5 * observed_seconds / 60), retaining
+the original five-per-minute rate (the existing 4s BREAK-IT smoke allows zero).
 The real spinner keeps ALL maintenance enabled; its deadlines/cost are measured
 separately by --maintenance. A default spinner has heartbeat/self-heal due within
 60s, so its whole-process count is deliberately not labelled pure render idle.
@@ -78,20 +80,24 @@ def main():
                 maintenance(root, env, tm, until, calls)
                 return
             # No due work is a contract of this CALL, not disabled maintenance
-            # in the daemon. Exercise the shared wait itself for a full 60s.
+            # in the daemon. Startup stays outside this existing pure-wait
+            # count; the runner still times fixture setup and cleanup in full.
             waiter = subprocess.Popen([sys.executable, str(root / 'bin/fleet-render-watch.py'),
                                        '.12', socket], env=env, stdout=subprocess.PIPE, text=True)
             until(lambda: 'wait-for' in calls.read_text(), 3)
             time.sleep(.3)
             start = len(calls.read_text().splitlines())
-            seconds = 4 if '--quick' in sys.argv else 60
+            seconds = 4 if '--quick' in sys.argv else 30
+            command_limit = 5 * seconds // 60
             t0 = time.monotonic()
             while time.monotonic() - t0 < seconds:
                 time.sleep(.2)
                 count = len(calls.read_text().splitlines()) - start
-                assert waiter.poll() is None, 'no-deadline wait ended before 60s'
-                assert count <= 5, 'idle renderer spawned %s commands in %.1fs' % (count, time.monotonic()-t0)
-            print('PASS renderer wait, no deadline due: %s external commands / %ss' % (count, seconds), flush=True)
+                assert waiter.poll() is None, 'no-deadline wait ended before %ss' % seconds
+                assert count <= command_limit, 'idle renderer spawned %s commands in %.1fs (limit %s/%ss)' % (
+                    count, time.monotonic()-t0, command_limit, seconds)
+            print('PASS renderer wait, no deadline due: %s external commands / %ss (integer limit %s)' % (
+                count, seconds, command_limit), flush=True)
             tm('wait-for', '-S', 'fleet-state-changed')
             waiter.communicate(timeout=2)
             waiter = None

@@ -1827,6 +1827,6 @@ drill_svc_run_leaks_across_runs() {
   WHAT="同一个服务账号连跑两次：每次一个全新 0700 目录（HOME、work、out、tmp、钥匙都在里面），跑完目录没了、带本次标记的进程（含 setsid 逃出进程组的）全被杀；第二次看不到第一次任何东西；会话环境里没有钥匙、设置禁读钥匙和通行证；被 SIGKILL 的那次由 clean 收尾"
 }
 
-# this file runs part 1/3; the rest are its part files (issue #2694)
-: "${BREAK_PART:=1/3}"
+# this file runs part 1/6; the rest are its part files (issue #2694)
+: "${BREAK_PART:=1/6}"
 cred_run_drills "$0"
