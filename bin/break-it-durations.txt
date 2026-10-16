@@ -1,3 +1,4 @@
+# Spinner budget rows temporarily use macOS targeted measurements; refresh from the PR Ubuntu run before landing.
 # break-it-durations.txt — seconds of wall time per BREAK-IT drill on an ubuntu CI
 # runner (issue #2694). bin/fleet-break-it-part.py balances each break-it test's
 # BREAK_PART slices by these numbers; a drill with no row costs the median.
@@ -383,6 +384,8 @@
 29.6 spare-wash-respawn
 29.5 spare-wash-resume
 45.2 spinner-maintenance-starved
+43.4 spinner-process-budget
+47.2 spinner-process-budget-maintenance
 8.1 spinner-unwatched-poll
 0.1 spotlight-on
 0.2 stable-macos-ahead
@@ -477,7 +480,6 @@
 4.4 view-popup-idle-redraw
 3.9 view-popup-wide-bleed
 0.9 view-reconnect-shared
-124.0 spinner-process-budget
 0.0 wechat-first-scan-autocreate
 5.5 wedged-socket
 2.8 window-killed

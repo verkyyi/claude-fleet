@@ -27,7 +27,7 @@ workflow = (root.parent / '.github/workflows/fleet-hub.yml').read_text()
 assert "run-selftests.sh fleet-hub 'fleet-hub-[0-9]*'" in workflow
 
 families = {
-    'fleet-break-it': ('BREAK_PART', 18),
+    'fleet-break-it': ('BREAK_PART', 21),
     'fleet-break-it-node': ('BREAK_PART', 6),
     'fleet-break-it-thin': ('BREAK_PART', 3),
     'fleet-cleanup-idle': ('SELFTEST_PART', 4),
@@ -82,7 +82,7 @@ for base, (var, n) in families.items():
     assert collections.Counter(x for p in parts for x in p) == collections.Counter(cases), base
     grown = cases + ['new_case_without_duration']
     assert collections.Counter(x for p in split(grown) for x in p) == collections.Counter(grown), base
-    print('PASS %s: %d original cases, %d parts, every case once; growth covered' % (base, len(cases), n))
+    print('PASS %s: %d discovered cases, %d parts, every case once; growth covered' % (base, len(cases), n))
 
 # Execute the actual shell dispatch with harmless groups, so all/default and
 # automatic discovery cannot silently diverge from the metadata above.

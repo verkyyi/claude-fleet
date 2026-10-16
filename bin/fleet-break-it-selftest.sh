@@ -200,8 +200,8 @@
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
 # ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
-# (fleet-break-it-part.py, issue #2694). This file runs 1/18 by default,
-# bin/fleet-break-it-{2..18}-selftest.sh the rest —
+# (fleet-break-it-part.py, issue #2694). This file runs 1/21 by default,
+# bin/fleet-break-it-{2..21}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs, so any
@@ -6450,12 +6450,23 @@ drill_spinner_maintenance_starved() {
 }
 
 drill_spinner_process_budget() {
-  CAP=150; local t0 out
+  CAP=55; local t0 out
   t0=$(now)
-  out=$(python3 "$BIN/spinner-budget-selftest.py" 2>&1) \
+  out=$(python3 "$BIN/spinner-budget-selftest.py" --fixture idle 2>&1) \
     || { WHY="complete default spinner budget: $out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='无工作及有维护待办两种隔离场景各完整 60 秒，含启动、等待、全部维护的外部进程各不超过 5 个'
+  printf '%s\n' "$out"
+  WHAT='无工作场景真实观察 42 秒；启动与按原周期维护成本分列，协议读取按 42 秒换算，含准备清理 <60 秒'
+}
+
+drill_spinner_process_budget_maintenance() {
+  CAP=55; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-budget-selftest.py" --fixture maintenance 2>&1) \
+    || { WHY="complete pending-maintenance spinner budget: $out"; return 1; }
+  SECS=$(since "$t0")
+  printf '%s\n' "$out"
+  WHAT='有待办场景真实观察 42 秒；20/40 秒两次 fresh 核对与身份保护保留，启动/维护归一化且协议读取 ≤42，含准备清理 <60 秒'
 }
 
 drill_spinner_protocol_budget() {
@@ -6464,7 +6475,7 @@ drill_spinner_protocol_budget() {
   out=$(python3 "$BIN/spinner-control-selftest.py" 2>&1) \
     || { WHY="resident protocol invalidation: $out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；完整 60 秒协议总账与 process-budget 共测'
+  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 42 秒独立场景共测'
 }
 
 drill_codex_mcp_busy() {
@@ -6924,7 +6935,7 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/18}
+part=${BREAK_PART:-1/21}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
     [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
