@@ -486,13 +486,21 @@ def rows_cache(fleet):
 
 
 def atomic_write(path, text):
+    import tempfile
+    tmp = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(".%s.%d" % (path.name, os.getpid()))
-        tmp.write_text(text, encoding="utf-8")
+        # Rows may carry a private native proof (#4504). Keep every cached
+        # copy private too, including replacements of an older 0644 cache.
+        fd, tmp = tempfile.mkstemp(prefix=".%s." % path.name, dir=str(path.parent))
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
         os.replace(tmp, path)
     except OSError:
         pass
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def produce(fleet, kept=False):

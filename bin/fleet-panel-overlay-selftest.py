@@ -351,6 +351,13 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(matches, repr(produced))
         row = matches[0]
         self.assertEqual(json.loads(row[20]), proof)
+        # The view's second cache must not make a private proof world-readable.
+        view_cache = cache / "view-rows-test"
+        view_cache.write_text("old public cache")
+        view_cache.chmod(0o644)
+        v.atomic_write(view_cache, produced)
+        self.assertEqual(view_cache.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(view_cache.read_text(), produced)
         with patch.object(v, "view_row", return_value={}), patch.object(v, "view_fleet", return_value="test"), \
                 patch.object(v, "windows", return_value={wid: (fid, "worker", 0)}), \
                 patch.object(v, "produce", return_value=produced), patch.object(v, "names_raw", return_value={}), \
