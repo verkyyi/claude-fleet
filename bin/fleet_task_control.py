@@ -269,16 +269,21 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
         if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
             print("already delivered"); return 0
         msg = "[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" % (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"])
+        delivery_env = dict(os.environ)
         if native:
             # No sleeper/peer queue can outlive this generation check. An
             # unavailable inbox leaves the same relay pending on the hub.
             if native["actual_provider"] == "codex":
+                # Keep the exact generation/native endpoint through the final
+                # send. Re-reading a pane identity alone could target a transfer.
+                delivery_env.update(FLEET_LAUNCH_CONTEXT=json.dumps(c),
+                                    FLEET_LAUNCH_DELIVERY=json.dumps(native))
                 argv = [sys.executable, str(BIN / "fleet-codex-session.py"), "send", "--pane", pane, "--socket", socket]
             else:
                 argv = ["bash", "-c", '. "$1/fleet-lib.sh"; fleet_peer_send "$2" "$(cat)" fleet-report', "task", str(BIN), str(native["pid"])]
         else:
             argv = ["bash", "-c", '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; children_send "" "$2" "$3" "$(cat)"', "task", str(BIN), socket, pane]
-        delivered = subprocess.run(argv, input=msg, capture_output=True, text=True, timeout=20)
+        delivered = subprocess.run(argv, input=msg, capture_output=True, text=True, timeout=20, env=delivery_env)
         if delivered.returncode:
             return 75
         with sentfile.open("a") as stream:

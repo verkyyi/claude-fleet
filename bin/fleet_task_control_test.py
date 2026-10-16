@@ -81,6 +81,8 @@ print("200")
             def run(args, **kwargs):
                 if args[-2:] == [str(control.BIN), "parent/session"]:
                     return subprocess.CompletedProcess(args,0,"socket\n@7\n"+temp+"\n","")
+                self.assertEqual(json.loads(kwargs["env"]["FLEET_LAUNCH_CONTEXT"]), dict(task="T7", generation=2, worker_id="parent/session"))
+                self.assertEqual(json.loads(kwargs["env"]["FLEET_LAUNCH_DELIVERY"]), dict(actual_provider="codex"))
                 sends.append(kwargs.get("input")); return subprocess.CompletedProcess(args,0,"","")
             def call(action, task, *args, **kwargs):
                 return dict(task=parent if task == "T7" else t)
