@@ -4902,6 +4902,14 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_task_blocker_fence() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_blockers_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='独立 blocker 按完整身份投影，原生 attention 和未知/过期观察不清阻塞'
+}
+
 drill_repo_cutover_inflight() {
   CAP=15; local out t0
   t0=$(now)

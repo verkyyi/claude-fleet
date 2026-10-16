@@ -85,23 +85,24 @@ type FleetTask struct {
 	Rule string `json:"rule,omitempty"`
 	// AuthorityVersion 0 keeps the legacy placement record. Version 1 owns
 	// its lifecycle; inventory is only an observation, never an outcome.
-	AuthorityVersion  int    `json:"authority_version,omitempty"`
-	AttemptID         string `json:"attempt_id,omitempty"`
-	Generation        int64  `json:"generation,omitempty"`
-	ExecutionOwner    string `json:"execution_owner,omitempty"`
-	ExecutionEndpoint string `json:"execution_endpoint,omitempty"`
-	RequestedAgent    string `json:"requested_agent,omitempty"`
-	ResolvedAgent     string `json:"resolved_agent,omitempty"`
-	ActualAgent       string `json:"actual_agent,omitempty"`
-	ParentTask        string `json:"parent_task,omitempty"`
-	ParentSession     string `json:"parent_session,omitempty"`
-	ParentGeneration  int64  `json:"parent_generation,omitempty"`
-	CancelRequest     string `json:"cancel_request,omitempty"`
-	TicketRef         string `json:"ticket_ref,omitempty"`
-	LeaseRef          string `json:"lease_ref,omitempty"`
-	Outcome           string `json:"outcome,omitempty"`
-	Evidence          string `json:"evidence,omitempty"`
-	Observation       string `json:"observation,omitempty"`
+	AuthorityVersion  int                    `json:"authority_version,omitempty"`
+	AttemptID         string                 `json:"attempt_id,omitempty"`
+	Generation        int64                  `json:"generation,omitempty"`
+	ExecutionOwner    string                 `json:"execution_owner,omitempty"`
+	ExecutionEndpoint string                 `json:"execution_endpoint,omitempty"`
+	RequestedAgent    string                 `json:"requested_agent,omitempty"`
+	ResolvedAgent     string                 `json:"resolved_agent,omitempty"`
+	ActualAgent       string                 `json:"actual_agent,omitempty"`
+	ParentTask        string                 `json:"parent_task,omitempty"`
+	ParentSession     string                 `json:"parent_session,omitempty"`
+	ParentGeneration  int64                  `json:"parent_generation,omitempty"`
+	CancelRequest     string                 `json:"cancel_request,omitempty"`
+	TicketRef         string                 `json:"ticket_ref,omitempty"`
+	LeaseRef          string                 `json:"lease_ref,omitempty"`
+	Outcome           string                 `json:"outcome,omitempty"`
+	Evidence          string                 `json:"evidence,omitempty"`
+	Blockers          *TaskBlockerProjection `json:"task_blockers,omitempty"`
+	Observation       string                 `json:"observation,omitempty"`
 	// RequestPayload is the accepted dispatch input (JSON). It is immutable;
 	// subsequent generations retain their inputs in the operation journal.
 	RequestPayload  string `json:"request_payload,omitempty"`
@@ -262,7 +263,16 @@ func (s *Store) FleetTasksFor(owner string, limit int) ([]FleetTask, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanFleetTasks(rows)
+	ts, err := scanFleetTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range ts {
+		if err = projectTaskBlockers(s.read, &ts[i]); err != nil {
+			return nil, err
+		}
+	}
+	return ts, nil
 }
 
 func (s *Store) fleetTaskBy(where string, arg any) (FleetTask, error) {
@@ -276,6 +286,9 @@ func (s *Store) fleetTaskBy(where string, arg any) (FleetTask, error) {
 	}
 	if len(out) == 0 {
 		return FleetTask{}, sql.ErrNoRows
+	}
+	if err = projectTaskBlockers(s.read, &out[0]); err != nil {
+		return FleetTask{}, err
 	}
 	return out[0], nil
 }
