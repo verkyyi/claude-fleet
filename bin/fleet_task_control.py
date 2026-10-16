@@ -126,7 +126,7 @@ def deliver_report(r, receipt):
     # Existing outbox, including same-machine parents: one durable address and
     # one event ID across reconnects, never a timestamp allocated on each retry.
     suffix = hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
-    payload = dict(task_report=r, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
+    payload = dict(task_report={k: v for k, v in r.items() if k != "_native"}, child=r["task"], state=(r["outcome"].upper() or "WAITING"), tier="quiet",
                    msg="[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" %
                    (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"]))
     if receipt.get("_recovery_event"):
@@ -207,7 +207,8 @@ def finalize(pane):
     # acknowledging cancellation; exit alone never invents a work outcome.
     event = "stop:" + hashlib.sha256(evidence.encode()).hexdigest()
     call("stopped", c["task"], dict(idempotency_key=event,
-         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence))
+         generation=c["generation"], expected_worker=c["worker_id"], execution_stopped=True, evidence=evidence,
+         _native=dict(launch=c, pane=pane, socket=launch.option(pane, "socket_path"))))
     return 0
 
 

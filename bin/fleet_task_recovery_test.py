@@ -12,12 +12,16 @@ import unittest
 from unittest.mock import patch
 
 import fleet_task_recovery as recovery
+VERIFY_STOPPED = recovery.verify_stopped
 
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        proof = patch.object(recovery, "verify_stopped")
+        proof.start()
+        self.addCleanup(proof.stop)
         self.task = dict(id="T7", authority_version=1, owner="alice", generation=2,
                          execution_owner="fleet/session", resolved_agent="codex", state="running",
                          parent_session="", outcome="", operation_id="accepted-op")
@@ -220,12 +224,67 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.task["outcome"], "succeeded")
         self.assertEqual(set(self.commits), {"stopped"})
 
+    def test_old_stop_after_native_resume_is_refused(self):
+        self.task.update(outcome="succeeded")
+        stop = dict(idempotency_key="old-native-stop", generation=2, expected_worker="fleet/session",
+                    execution_stopped=True, evidence="P1 stopped; P2 later resumed the same generation")
+        with patch.object(recovery, "verify_stopped", create=True, side_effect=recovery.Refused("native incarnation changed")):
+            with self.assertRaises(recovery.Pending):
+                self.j.send("stopped", "T7", stop)
+        self.assertEqual(self.commits, {})
+        self.assertIn("incarnation", self.j.status()["unresolved"][0]["reason"])
+
+    def test_derived_cancel_receipt_rechecks_native_on_replay(self):
+        self.task["cancel_request"] = "cancel"
+        self.j.get("T7")
+        stop = dict(idempotency_key="old-stop", generation=2, expected_worker="fleet/session",
+                    execution_stopped=True, evidence="P1 stopped", _native={})
+        def failed_report(action, task, payload=None, **kwargs):
+            if action == "report":
+                raise ValueError("hub lost before cancellation commit")
+            return self.transport(action, task, payload, **kwargs)
+        with patch.object(self.j,"transport",side_effect=failed_report):
+            with self.assertRaises(recovery.Pending):
+                self.j.send("stopped", "T7", stop)
+        self.assertEqual(self.j.status()["pending"], 2)
+        with patch.object(recovery,"verify_stopped",side_effect=recovery.Refused("P2 resumed")):
+            status = self.j.replay()
+        self.assertEqual({r["status"] for r in status["unresolved"]}, {"unknown"})
+        self.assertEqual(self.commits, {})
+
     def test_cache_never_retains_command_input(self):
         self.task.update(title="private command", request_payload="private command", prompt="private command")
         self.j.get("T7")
         with self.j.store.connect() as db:
             raw = db.execute("SELECT value FROM metadata WHERE key=?", (self.j.cache_key("T7"),)).fetchone()[0]
         self.assertNotIn("private command", raw)
+        self.j.send("mutate", "T7", dict(kind="cancel_request", idempotency_key="private-input",
+                    generation=2, expected_worker="fleet/session", evidence="explicit cancel"))
+        with self.j.store.connect() as db:
+            results = str([r[0] for r in db.execute("SELECT result FROM operations")])
+        self.assertNotIn("private command", results)
+
+    def test_native_incarnation_and_resume_lock(self):
+        import fleet_launch as launch
+        op = "11111111-1111-4111-8111-111111111111"
+        fid = "22222222-2222-4222-8222-222222222222"
+        c = dict(version=1, operation_id=op, task="T7", owner="alice", generation=2,
+                 worker_id=op+"/"+fid, provider="codex", attempt_id="task:T7:g2")
+        proof = dict(pid=77, birth="P1", executable="/native", native_session=op)
+        receipt = dict(c, **proof, actual_provider="codex")
+        payload = dict(generation=2, expected_worker=c["worker_id"], evidence=json.dumps(proof),
+                       _native=dict(launch=c, pane="@7", socket="/fixture/socket"))
+        def option(pane, key, socket):
+            return {"@launch":json.dumps(c), "@launch_receipt":json.dumps(receipt), "@fleet_id":fid}[key]
+        with patch.object(launch,"option",side_effect=option), patch.object(recovery.os,"kill",side_effect=ProcessLookupError):
+            VERIFY_STOPPED(payload, "T7")
+            receipt.update(pid=88,birth="P2")
+            with self.assertRaisesRegex(recovery.Refused,"incarnation"):
+                VERIFY_STOPPED(payload, "T7")
+        with recovery.native_guard(c,self.j.store.root):
+            with self.assertRaises(recovery.Deferred):
+                with recovery.native_guard(c,self.j.store.root):
+                    self.fail("resume and stop both held native fence")
 
     def test_unresolved_stop_does_not_block_another_receipt(self):
         stop = dict(idempotency_key="orphan-stop", generation=2, expected_worker="fleet/session",

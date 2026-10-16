@@ -43,6 +43,53 @@ class Refused(ValueError):
     pass
 
 
+@contextlib.contextmanager
+def native_guard(context, root=None):
+    """Serialize a native resume with reconciliation of its earlier stop."""
+    directory = Path(root or Path(os.environ.get("FLEET_CONF_DIR", Path.home() / ".config/claude-fleet")))
+    if root is None:
+        directory /= "control"
+    directory.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(canonical([context[k] for k in ("task", "generation", "worker_id")]).encode()).hexdigest()
+    with (directory / ("native-" + key + ".lock")).open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise Deferred("native launch/stop reconciliation already in progress") from exc
+        yield
+
+
+def verify_stopped(payload, task):
+    import fleet_launch as launch
+    binding = payload.get("_native", {})
+    try:
+        c = launch.validate_context(binding["launch"])
+        if (c["task"], c["generation"], c["worker_id"]) != (task, payload["generation"], payload["expected_worker"]):
+            raise Refused("stop proof belongs to another task generation")
+        pane, socket = binding["pane"], binding["socket"]
+        if not pane or not socket or not os.path.isabs(socket):
+            raise ValueError("missing native address")
+        if json.loads(launch.option(pane, "@launch", socket)) != c:
+            raise Refused("native launch binding changed")
+        receipt = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt", socket)))
+        if launch.option(pane, "@fleet_id", socket) != c["worker_id"].split("/")[1]:
+            raise Refused("native session owner changed")
+        proof = json.loads(payload["evidence"])
+        if any(proof[k] != receipt[k] for k in ("pid", "birth", "executable", "native_session")):
+            raise Refused("native incarnation changed; old stop proof retired")
+        try:
+            os.kill(proof["pid"], 0)
+        except ProcessLookupError:
+            return
+        observed = launch.process(proof["pid"])
+        if all(observed[k] == proof[k] for k in ("pid", "birth", "executable")):
+            raise Refused("native execution is still alive")
+    except Refused:
+        raise
+    except (KeyError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise Deferred("native stop binding unavailable; reconciliation required") from exc
+
+
 def raw_call(action, task, payload=None, timeout=15, authority=""):
     env = dict(os.environ, FLEET_TASK_RECOVERY_RAW="1",
                FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
@@ -180,7 +227,7 @@ class Journal:
             row = db.execute("SELECT * FROM operations WHERE id=? AND action=?", (eid, ACTION)).fetchone()
         return row
 
-    def send(self, action, task, payload):
+    def send(self, action, task, payload, native_locked=False):
         eid = self.enqueue(action, task, payload)
         row = self.row(eid)
         if row["status"] == "unknown":
@@ -190,7 +237,16 @@ class Journal:
             return dict(saved["receipt"], _recovery_event=eid, _recovery_done=row["status"] == "succeeded",
                         _delivery_file=saved.get("delivery_file", ""), _recovery_expires=row["created"] + RETENTION)
         try:
-            receipt = self.stopped(task, payload) if action == "stopped" else self.transport(action, task, payload)
+            outgoing = {k: v for k, v in payload.items() if k != "_native"}
+            if action == "stopped":
+                receipt = self.stopped(task, payload)
+            elif action == "report" and payload.get("execution_stopped") and not native_locked:
+                c = dict(task=task, generation=payload["generation"], worker_id=payload["worker_id"])
+                with native_guard(c, self.store.root):
+                    verify_stopped(dict(payload, expected_worker=payload["worker_id"]), task)
+                    receipt = self.transport(action, task, outgoing)
+            else:
+                receipt = self.transport(action, task, outgoing)
         except (Deferred, Refused) as exc:
             with self.store.connect() as db:
                 db.execute("UPDATE operations SET status=?,result=? WHERE id=? AND status='pending'",
@@ -209,12 +265,20 @@ class Journal:
         # Minimize retained authority data; task input never enters the outbox.
         if "task" in receipt:
             receipt = dict(receipt, task={k: v for k, v in receipt["task"].items() if k in TASK_FIELDS})
+        elif receipt.get("authority_version") == 1:
+            receipt = {k: v for k, v in receipt.items() if k in TASK_FIELDS}
         with self.store.connect() as db:
             db.execute("UPDATE operations SET status=?, result=?, updated=? WHERE id=? AND status='pending'",
                        ("committed" if action == "report" else "succeeded", canonical(dict(receipt=receipt)), time.time(), eid))
         return dict(receipt, _recovery_event=eid, _recovery_expires=row["created"] + RETENTION)
 
     def stopped(self, task, payload):
+        c = dict(task=task, generation=payload["generation"], worker_id=payload["expected_worker"])
+        with native_guard(c, self.store.root):
+            verify_stopped(payload, task)
+            return self.commit_stopped(task, payload)
+
+    def commit_stopped(self, task, payload):
         t = self.transport("get", task)["task"]
         if (t.get("generation"), t.get("execution_owner")) != (payload["generation"], payload["expected_worker"]):
             raise Refused("stop receipt generation retired")
@@ -226,11 +290,12 @@ class Journal:
             r = report_input(c, t, "cancelled", "Cancellation acknowledged after native stop", payload["evidence"],
                              stopped=True, event=t["cancel_request"] + ".ack")
             r["cancel_request"] = t["cancel_request"]
-            receipt = self.send("report", task, r)
+            r["_native"] = payload.get("_native", {})
+            receipt = self.send("report", task, r, native_locked=True)
             with contextlib.redirect_stdout(sys.stderr):
                 deliver_report(r, receipt)
             self.ack_report(task, r, receipt.get("_delivery_file", ""))
-        return self.transport("mutate", task, dict(payload, kind="stop_ack"))
+        return self.transport("mutate", task, dict({k: v for k, v in payload.items() if k != "_native"}, kind="stop_ack"))
 
     def ack_report(self, task, payload, delivery_file=""):
         eid = self.event("report", task, payload)
@@ -367,7 +432,7 @@ def main():
             if a.action == "ack":
                 j.ack_report(a.task, payload)
                 return 0
-            if a.action == "mutate" and payload.get("kind") not in ("stop_ack", "cancel_request"):
+            if a.action == "mutate" and payload.get("kind") != "cancel_request":
                 data = j.transport(a.action, a.task, payload)  # never buffer ownership or launch input
             else:
                 data = j.send(a.action, a.task, payload)
@@ -375,7 +440,9 @@ def main():
         return 0
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
-        return 3
+        # task-record's callers reserve 3 for "no hub configured". A configured
+        # but unreachable authority must keep the original failure contract.
+        return 3 if a.action in ("status", "replay") else 1
 
 
 if __name__ == "__main__":

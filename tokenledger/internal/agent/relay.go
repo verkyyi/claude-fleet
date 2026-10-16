@@ -210,6 +210,7 @@ func (a *Agent) relayOutboxOnce(ctx context.Context, conn nodeLink, p relayPaths
 			// Preserve the file and a reason, including when quarantine cannot
 			// be written. Expiry is never an acknowledgement or permission.
 			_ = os.WriteFile(file+".why", []byte("expired: task reconciliation required\n"), 0o600)
+			ownPath(file + ".why")
 			continue
 		}
 		st.mu.Lock()
@@ -266,6 +267,7 @@ func (a *Agent) relayAcked(opID string) bool {
 				if err != nil || closeErr != nil {
 					return true
 				}
+				ownPath(f.file + ".acked")
 			}
 		}
 		_ = os.Remove(f.file)

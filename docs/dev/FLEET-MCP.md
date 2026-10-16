@@ -279,6 +279,9 @@ result. Reconnect or the next task command replays the same event and generation
 without replaying command input. The existing relay outbox uses one file per
 receipt and retains it until a positive hub acknowledgement. Running native
 processes survive; new starts, resumes and ownership changes still need the hub.
+Native resume and stop replay share a local exclusion lock. Stop replay also
+rechecks the saved window binding and native incarnation; an earlier process's
+stop proof cannot release a later resume in the same task generation.
 
 Pending receipts are limited to 1,000 per login and a seven-day replay window.
 Overflow refuses the new write; expiry retains the old record and reason as

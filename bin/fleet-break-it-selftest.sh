@@ -4886,6 +4886,14 @@ drill_task_outage_recovery() {
   WHAT='断线及重放保留同一任务和进程，超限明确待核对'
 }
 
+drill_task_stop_replay_resumed() {
+  CAP=15; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_task_recovery_test.py" RecoveryTests.test_old_stop_after_native_resume_is_refused 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='同一任务恢复了新原生进程，积压的旧停止证明不能释放它'
+}
+
 drill_task_report_fence() {
   CAP=15; local out t0
   t0=$(now)

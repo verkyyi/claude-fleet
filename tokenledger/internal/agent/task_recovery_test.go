@@ -14,6 +14,12 @@ import (
 
 func TestTaskReceiptOutboxAckAndExpiry(t *testing.T) {
 	dir := t.TempDir()
+	ra := selfRunAs(t, "recovery", dir)
+	if os.Geteuid() == 0 {
+		ra.UID, ra.GID = 12345, 12345
+	}
+	registerTenant(ra)
+	defer unregisterTenant(ra)
 	a := &Agent{}
 	p := relayPaths{outbox: dir}
 	link := &capLink{}
@@ -43,6 +49,15 @@ func TestTaskReceiptOutboxAckAndExpiry(t *testing.T) {
 	}
 	if ack, err := os.ReadFile(active + ".acked"); err != nil || string(ack) != "active" {
 		t.Fatalf("ack %q %v", ack, err)
+	}
+	for _, marker := range []string{active + ".acked", expired + ".why"} {
+		fi, err := os.Stat(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if owner, ok := fileOwner(fi); !ok || owner != ra.UID {
+			t.Fatalf("receipt marker belongs to wrong login: %s owner=%d want=%d", marker, owner, ra.UID)
+		}
 	}
 	if _, err := os.Stat(active); !os.IsNotExist(err) {
 		t.Fatalf("acked outbox still present: %v", err)
