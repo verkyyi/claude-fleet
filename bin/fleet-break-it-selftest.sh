@@ -6456,7 +6456,7 @@ drill_spinner_process_budget() {
     || { WHY="complete default spinner budget: $out"; return 1; }
   SECS=$(since "$t0")
   printf '%s\n' "$out"
-  WHAT='无工作场景真实观察 42 秒；启动与按原周期维护成本分列，协议读取按 42 秒换算，含准备清理 <60 秒'
+  WHAT='无工作场景真实观察 44 秒；启动与按原周期维护成本分列，协议读取按 44 秒换算，含准备清理 <60 秒'
 }
 
 drill_spinner_process_budget_maintenance() {
@@ -6466,7 +6466,7 @@ drill_spinner_process_budget_maintenance() {
     || { WHY="complete pending-maintenance spinner budget: $out"; return 1; }
   SECS=$(since "$t0")
   printf '%s\n' "$out"
-  WHAT='有待办场景真实观察 42 秒；20/40 秒两次 fresh 核对与身份保护保留，启动/维护归一化且协议读取 ≤42，含准备清理 <60 秒'
+  WHAT='有待办场景真实观察 44 秒；20/40 秒两次 fresh 核对与身份保护保留，启动/维护归一化且协议读取 ≤44，含准备清理 <60 秒'
 }
 
 drill_spinner_protocol_budget() {
@@ -6475,7 +6475,7 @@ drill_spinner_protocol_budget() {
   out=$(python3 "$BIN/spinner-control-selftest.py" 2>&1) \
     || { WHY="resident protocol invalidation: $out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 42 秒独立场景共测'
+  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；协议总账由两个 process-budget 44 秒独立场景共测'
 }
 
 drill_codex_mcp_busy() {
