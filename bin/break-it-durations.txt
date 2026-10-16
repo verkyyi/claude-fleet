@@ -1,4 +1,4 @@
-# Spinner budget rows: Ubuntu run 38951633688 at c3d50912 (issue #4500 short-window integration).
+# Spinner budget rows: Ubuntu run 38953452759 at f32832df (44s windows, issue #4500).
 # break-it-durations.txt — seconds of wall time per BREAK-IT drill on an ubuntu CI
 # runner (issue #2694). bin/fleet-break-it-part.py balances each break-it test's
 # BREAK_PART slices by these numbers; a drill with no row costs the median.
@@ -384,8 +384,8 @@
 29.6 spare-wash-respawn
 29.5 spare-wash-resume
 45.2 spinner-maintenance-starved
-43.0 spinner-process-budget
-43.2 spinner-process-budget-maintenance
+45.1 spinner-process-budget
+45.0 spinner-process-budget-maintenance
 8.1 spinner-unwatched-poll
 0.1 spotlight-on
 0.2 stable-macos-ahead
