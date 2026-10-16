@@ -1,5 +1,6 @@
 #!/bin/bash
 # needs-reconcile-selftest.sh — the stale-`needs` reconcile (issue #658).
+# selftest-part-of: tmux-spinner.py fleet-render-watch.py
 #
 # #640 made a red window say WHY it is red; #656 made it say so correctly. Neither
 # re-reads the stamp afterwards, and `@claude_state` is written on EVENTS only — so a

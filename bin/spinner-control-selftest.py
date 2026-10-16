@@ -86,6 +86,23 @@ def main():
             assert tm('one', 'show-environment', '-g', 'DISPLAY') == 'DISPLAY=keep-server-environment'
             assert not tm('one', 'display-message', '-p', '#{@human_attach}'), 'internal attach woke a sleeper'
             assert not w.attached(by_path, read), 'internal control consumers must not be viewers'
+            observer = w.Observer()
+            reads = []
+            for c in (c1, c2):
+                command = c.command
+                def counted(*args, command=command):
+                    reads.append(args)
+                    return command(*args)
+                c.command = counted
+            try:
+                for _ in range(10):
+                    observer.wait([c1, c2], time.monotonic() + .01)
+                    assert not observer.watched([c1, c2])
+                client_reads = sum(args[0] == 'list-clients' for args in reads)
+                assert client_reads <= 2, ('unchanged clients queried repeatedly', client_reads)
+            finally:
+                observer.close()
+            print('PASS idle resident visibility reuses client rows per connection', flush=True)
             literal = "a ' ; $x"
             # Older tmux versions visually escape $x in command output. Match
             # the native CLI's rendering while still checking quoting and the
@@ -98,9 +115,15 @@ def main():
             # Human control mode is still a watcher, even with the same flags.
             human = subprocess.Popen(['tmux', '-L', 'two', '-C', 'attach', '-E', '-f', 'no-output,ignore-size', '-t', 'two'],
                                      env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+            def observed():
+                observer.wait([c1, c2], time.monotonic())
+                return observer.watched([c1, c2])
+            until(observed, 1)
             until(lambda: w.attached(by_path, read))
             assert tm('two', 'display-message', '-p', '#{@human_attach}') == '1'
             human.stdin.close(); human.wait(timeout=2); human = None
+            until(lambda: not observed(), 1)
+            observer.close()
             assert not w.attached(by_path, read)
             print('PASS multiple sockets/consumers; exact internal identity; human control viewer', flush=True)
             # Legacy CLI consumers must also ignore internal clients. Both
@@ -128,11 +151,35 @@ def main():
             controls.clear()
             for label in ('one', 'two'):
                 tm(label, 'set-window-option', '-t', '@0', '@worker_lifecycle', '')
+            # Deliver a real subscription event after a window snapshot was
+            # read, before the renderer installs it. The stale snapshot must
+            # not swallow this newer event now that idle reads back off.
+            spinner_source = root / 'bin/tmux-spinner.py'
+            spinner_source.write_text(spinner_source.read_text().replace('def main():', '''
+_read_windows = windows
+def windows(control):
+    rows = _read_windows(control)
+    trigger = BIN.parent / 'read-race'
+    if control.path.endswith('/one') and trigger.exists():
+        trigger.unlink()
+        control.changed = False
+        control.command('set-window-option', '-t', '@0', '@claude_state', 'done')
+        deadline = clock() + 1.5
+        while not control.changed and clock() < deadline:
+            control.pump(deadline - clock())
+        assert control.changed, 'real subscription event was not received'
+    return rows
+
+def main():'''))
             with (root / 'daemon.log').open('w') as log:
                 daemon = subprocess.Popen(['sh', str(root/'bin/tmux-spinner.sh')], env=env,
                     stdout=log, stderr=log, start_new_session=True)
             glyph = lambda label: tm(label, 'display-message', '-p', '-t', '@0', '#{@spin}')
             until(lambda: bool(glyph('one')) and bool(glyph('two')))
+            (root / 'read-race').touch()
+            Path(tm('one', 'display-message', '-p', '#{socket_path}') + '.dirty').touch()
+            until(lambda: glyph('one') == '✓', 2)
+            print('PASS event received during a stale window read is rendered within 2s', flush=True)
             rows = tm('one', 'list-clients', '-F', '#{client_pid}').splitlines()
             assert len(rows) == 1
             os.kill(int(rows[0]), signal.SIGKILL)  # only this test's transport

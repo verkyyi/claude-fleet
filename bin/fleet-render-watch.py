@@ -286,6 +286,8 @@ class Control:
         self.block_id = None
         self.replies = collections.deque()
         self.changed = True
+        self.clients_until = 0
+        self.clients = ''
         self.marker = None
         self.path = None
         self.selector = selectors.DefaultSelector()
@@ -333,6 +335,23 @@ class Control:
                 raise OSError('tmux control exited')
             else:
                 self.changed = True
+                if line.startswith(('%client-', '%session-changed', '%sessions-changed')):
+                    self.clients_until = 0
+
+    def read_clients(self):
+        # Attach/detach/session notifications invalidate the rows on this exact
+        # connection. Marker generations are still checked by attached() on
+        # every call, including an internal client's attach→registration race.
+        self.pump()
+        now = monotonic()
+        if now >= self.clients_until:
+            self.clients_until = now + FALLBACK
+            try:
+                self.clients = self.command('list-clients', '-F', CLIENT_FORMAT)
+            except (OSError, ValueError):
+                self.clients_until = 0
+                raise
+        return self.clients
 
     def reply(self, timeout=2):
         deadline = monotonic() + timeout
@@ -397,7 +416,7 @@ class Control:
 class Observer:
     """Resident form of the SAME lease/client predicate as wait().
 
-    No extra daemon or wait client. A 250ms filesystem/visibility check preserves
+    No extra daemon or wait client. A 250ms filesystem check preserves
     the dirty-marker path and lease-cache invalidation (a broadcast without a
     tmux state change). State subscriptions also wake the selector. All waits
     stay bounded by the caller's absolute maintenance deadline.
@@ -463,7 +482,7 @@ class Observer:
         self.refresh()
         by_path = {c.path: c for c in controls}
         return self.lease_until > monotonic() or attached(by_path,
-            lambda path: by_path[path].command('list-clients', '-F', CLIENT_FORMAT))
+            lambda path: by_path[path].read_clients())
 
     def wait(self, controls, deadline):
         with selectors.DefaultSelector() as sel:

@@ -487,6 +487,12 @@ class Spinner:
                 continue
             self.idle_t0 = None
             now = clock()
+            read_due = now >= self.next_read
+            # Maintenance keeps its original deadlines and fresh table reads,
+            # including stuck_check's candidate prefilter. Unwatched rendering
+            # itself needs only notifications/dirty markers and the fallback.
+            maintenance_due = any(now >= due for check, due in self.deadlines.items()
+                                  if check in ('stuck_check', 'needs_check', 'degen_check'))
             for name, c in list(self.controls.items()):
                 try:
                     c.pump()
@@ -494,13 +500,17 @@ class Spinner:
                     dirty = marker.exists()
                     if dirty:
                         marker.unlink(missing_ok=True)  # before fresh read
-                    if c.changed or dirty or now >= self.next_read:
-                        self.tables[name] = windows(c)
+                    if c.changed or dirty or read_due or maintenance_due:
+                        # Preserve notifications arriving with the read's
+                        # response: they may describe a newer state than it.
                         c.changed = False
+                        self.tables[name] = windows(c)
                 except (OSError, ValueError):
                     self.drop(name)
-            if now >= self.next_read:
-                self.next_read = now + .75
+            watched = os.environ.get('FLEET_SPINNER_WATCH') == '0' or self.observer.watched(list(self.controls.values()))
+            now = clock()
+            if read_due or (watched and self.next_read > now + .75):
+                self.next_read = now + (.75 if watched else watch.FALLBACK)
             for check, due in list(self.deadlines.items()):
                 now = clock()
                 if now >= due:
@@ -509,7 +519,6 @@ class Spinner:
                     getattr(self, check)()
                     period = self.periods[check]
                     self.deadlines[check] = due + (math.floor((clock()-due)/period) + 1) * period
-            watched = os.environ.get('FLEET_SPINNER_WATCH') == '0' or self.observer.watched(list(self.controls.values()))
             now = clock()
             if watched and now >= self.next_frame:
                 self.frame = (self.frame + 1) % len(GLYPHS)

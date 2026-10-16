@@ -6458,6 +6458,15 @@ drill_spinner_process_budget() {
   WHAT='无工作及有维护待办两种隔离场景各完整 60 秒，含启动、等待、全部维护的外部进程各不超过 5 个'
 }
 
+drill_spinner_protocol_budget() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-control-selftest.py" 2>&1) \
+    || { WHY="resident protocol invalidation: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无人客户端行复用；多 socket、双消费者与断连重连保持；完整 60 秒协议总账与 process-budget 共测'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)
