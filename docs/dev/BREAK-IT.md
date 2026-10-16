@@ -555,3 +555,4 @@
 | Codex 无仓库首次启动缺 HOME 信任（#3029、#4258），或 proxy config 符号链接被替换 | 新会话停在信任提示，或信任只留在临时 home；合法单引号 untrusted 被漏读 | 公共启动器与 transfer 共用 TOML 读取和受信节点 HOME 白名单；fill-only 写实际目标，保留符号链接、权限和并发改动；显式不信任与 opt-out 不变 | `codex-home-trust` |
 | 远端缓存、旧 generation/turn 的 idle 被重读成新证据，或把 Stop/MERGED 当作执行空闲（#4434） | 迟到的观察越过正在执行的新 turn，误投递或回收 | 唯一只读 `fleet_runtime.py` 保留原始时间、按 C1/C3 与 turn 全身份比较；过期/断连/身份改变投影 unknown，观察不授予投递或回收许可 | `runtime-stale-idle` |
 | SessionStart 的 authority 观察失败，原生进程仍活着但 SID 登记缺失（#4510） | 重启会改变执行；把 HTTP 200 或旧回执当成功会登记别人的执行 | 当前代码的显式现存原生预检与补观察核对 kernel、RPC 和原 reservation；Hub 精确确认后才登记，失败保留原执行，旧 hook 缺失单列 | `native-observe-missing` |
+| 回收影子证明复用旧 turn、子进程或 lease 证据，或仅凭 MERGED/Stop 放行（#4503） | 并发开始的新工作被旧证明掩盖 | 只读分层聚合，逐维保留时间/身份/原因；重核变化即失效，始终 not-actionable，旧 gate 独占实际动作 | `reap-shadow-race` |
