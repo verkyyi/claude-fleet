@@ -84,7 +84,8 @@ def task_matches(t, i):
             and type(t.get("generation")) is int and not t.get("_stale")
             and all(t.get(k) == i.get(v) for k, v in
                     (("id", "task"), ("owner", "owner"), ("generation", "generation"),
-                     ("execution_owner", "worker_id"), ("resolved_agent", "provider"))))
+                     ("execution_owner", "worker_id"), ("resolved_agent", "provider"),
+                     ("operation_id", "operation_id"), ("attempt_id", "attempt_id"))))
 
 
 def clear(name, value, identity, now):

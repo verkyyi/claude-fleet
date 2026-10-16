@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import uuid
+import shlex
 import unittest
 from unittest import mock
 
@@ -26,6 +28,7 @@ def fixture():
     r.update(identity=I.copy(), source="codex:rpc")
     r["runtime"].update(state="idle", reason="")
     task = dict(id="T1", authority_version=1, owner="alice", generation=1,
+                operation_id=C["operation_id"], attempt_id=C["attempt_id"],
                 execution_owner=C["worker_id"], resolved_agent="codex", outcome="succeeded",
                 task_blockers=dict(version=1, generation=1, items=[]))
     values = dict(task=task, report=dict(disposition="committed", outcome="succeeded", event_id="e1",
@@ -124,6 +127,12 @@ class Shadow(unittest.TestCase):
         self.assertIn("runtime",p["retained"])
         d=fixture();d["layers"]["task"]["value"]["id"]="T2"
         self.assertIn("blockers",self.proof(d)["retained"])
+        for key in ("operation_id","attempt_id"):
+            d=fixture();d["layers"]["task"]["value"][key]="foreign"
+            self.assertIn("task",self.proof(d)["retained"])
+        d=fixture();d["layers"]["report"]["value"]["outcome"]="failed"
+        self.assertIn("report",self.proof(d)["retained"])
+        old=self.proof();self.assertFalse(shadow.recheck(old,fixture(),now=99.)["previous_valid"])
 
     def test_real_c6_database_reader_does_not_ack_or_expire(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +199,54 @@ class Shadow(unittest.TestCase):
                     time.sleep(.05)
                 with self.assertRaises(ProcessLookupError): os.kill(child,0)
             self.assertNotEqual(subprocess.run(tm+["list-sessions"],env=env,capture_output=True).returncode,0)
+
+    def test_local_owners_and_real_legacy_dry_run(self):
+        from fleet_reap_shadow_local import LocalSources
+        with tempfile.TemporaryDirectory(prefix="shadow-owners-") as tmp:
+            root=Path(tmp).resolve();main=root/"base";wt=root/"work-scratch-999"
+            session="scratch-shadow-"+uuid.uuid4().hex[:8];tm=["tmux","-L",session]
+            env={k:os.environ[k] for k in ("PATH","LANG","TERM","SHELL","TMPDIR") if k in os.environ}
+            env.update(HOME=str(root),FLEET_CONF_DIR=str(root/"conf"),TMUX="",TMUX_PANE="")
+            def command(*args):
+                return subprocess.check_output(args,env=env,text=True,stderr=subprocess.PIPE).strip()
+            command("git","init","-b","master",str(main))
+            command("git","-C",str(main),"config","user.name","Fixture")
+            command("git","-C",str(main),"config","user.email","fixture@example.invalid")
+            (main/"tracked").write_text("clean\n")
+            command("git","-C",str(main),"add","tracked");command("git","-C",str(main),"commit","-m","fixture")
+            command("git","-C",str(main),"update-ref","refs/remotes/origin/master","HEAD")
+            command("git","-C",str(main),"worktree","add","-b","scratch-999",str(wt))
+            command("git","-C",str(wt),"config","branch.scratch-999.remote",".")
+            command("git","-C",str(wt),"config","branch.scratch-999.merge","refs/heads/master")
+            conf=root/"conf";directory=conf/"fleets"/session;directory.mkdir(parents=True)
+            (directory/"conf").write_text("FLEET_REPO=fixture/reap\nFLEET_MAIN="+shlex.quote(str(main))+"\nFLEET_BASE_BRANCH=master\nFLEET_FORGE=none\n")
+            (conf/"rotating").mkdir();(conf/"control/hub-outbox").mkdir(parents=True)
+            try:
+                command(*tm,"-f","/dev/null","new-session","-d","-s",session,"sleep 30")
+                pane=command(*tm,"display-message","-p","-t",session+":","#{pane_id}")
+                for key,value in {"@repo":"fixture/reap","@raw":"1","@worktree":str(wt),"@reap_policy":"keep",
+                                  "@fleet_id":C["worker_id"].split("/")[1],"@claude_state":"done","@claude_state_ts":str(int(time.time())-1000)}.items():
+                    command(*tm,"set-option","-w","-t",pane,key,value)
+                with mock.patch.dict(os.environ,env,clear=True):
+                    local=LocalSources(pane,session)
+                    local.identity=I;local.config=local.config_read()
+                    self.assertEqual(local.worktree()["unpushed"],False)
+                    (wt/"tracked").write_text("dirty\n")
+                    self.assertFalse(local.worktree()["clean"])
+                    self.assertEqual(local.leases()["transfer"],[])
+                    command(*tm,"set-option","-w","-t",pane,"@migrating","fixture")
+                    local=LocalSources(pane,session);local.identity=I;local.config=local.config_read()
+                    self.assertEqual(local.leases()["migration"],["fixture"])
+                    # A direct owner result, not a caller-invented bool. Keep is
+                    # the actual old path's retained decision without any writes.
+                    local.values={}
+                    options=command(*tm,"show-options","-w","-t",pane)
+                    gate=local.legacy(I)
+                    self.assertFalse(gate["value"]["eligible"])
+                    self.assertIn("Cleaner.candidate",gate["source"])
+                    self.assertEqual(command(*tm,"show-options","-w","-t",pane),options)
+            finally:
+                subprocess.run(tm+["kill-server"],env=env,capture_output=True)
 
 
 if __name__ == "__main__": unittest.main()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One-shot adapters to existing local owners; never a lifecycle controller."""
 import hashlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -179,6 +180,11 @@ class LocalSources:
                 self.values[name]=self.envelope("fleet_rotate_lease_held",None,at,unknown=True,reason="lease_source_unavailable")
         def wake():
             value=[v for v in (self.meta["@worker_lifecycle"],self.meta["@sleep_wake_deferred"]) if v]
+            lock=self.sleep["root"](self.session)/("window-"+self.meta["window_id"][1:]+".lock")
+            if lock.exists():
+                with lock.open("rb") as stream:
+                    try: fcntl.flock(stream,fcntl.LOCK_SH|fcntl.LOCK_NB)
+                    except BlockingIOError: value.append("sleep-wake-delivery-lock-held")
             record=self.meta["@sleep_record"]
             if record:
                 data=json.loads(Path(record).read_text())
@@ -248,8 +254,18 @@ class LocalSources:
                 dry_run=True,policy_only=False,window_repo=True)
             # Use the daemon's cwd/environment, not the observer's worker cwd:
             # candidate() deliberately refuses to close its own calling pane.
-            script='import json,runpy,sys,os; from types import SimpleNamespace; sys.path.insert(0,os.path.dirname(sys.argv[1])); '+\
-                'm=runpy.run_path(sys.argv[1]); m["Cleaner"](SimpleNamespace(**json.loads(sys.argv[2]))).candidate(sys.argv[3])'
+            script='''import json,runpy,sys,os,subprocess
+from types import SimpleNamespace
+sys.path.insert(0,os.path.dirname(sys.argv[1]))
+m=runpy.run_path(sys.argv[1])
+try:
+    m["Cleaner"](SimpleNamespace(**json.loads(sys.argv[2]))).candidate(sys.argv[3])
+except (OSError,ValueError,subprocess.SubprocessError,m["RateLimited"]) as exc:
+    # Cleaner.main's existing policy: a failed source defers this candidate.
+    detail=getattr(exc,"stdout",None) or getattr(exc,"stderr",None) or ""
+    if isinstance(detail,bytes): detail=detail.decode(errors="replace")
+    print("legacy-deferred:"+type(exc).__name__+":"+detail.strip()[:300])
+'''
             result=subprocess.run(["python3","-c",script,str(BIN/"fleet-cleanup-idle.py"),json.dumps(args),self.meta["window_id"]],
                 env=self.env,cwd=self.config["main"],text=True,capture_output=True,timeout=15)
             if result.returncode: raise ValueError("legacy_gate_unavailable")
