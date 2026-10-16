@@ -6494,6 +6494,14 @@ drill_reap_shadow_race() {
   WHAT='同源影子证明按 turn/子进程/lease 失效，未知逐维保留，永不授予动作'
 }
 
+drill_c9_live_unproven() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/nogh-live-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='真实 C9 的缺观察、旧代次、共享目标与 IPv6 失败均拒绝；fixture 证据不升格 live'
+}
+
 drill_runtime_stale_idle() {
   CAP=10; local t0 out
   t0=$(now)

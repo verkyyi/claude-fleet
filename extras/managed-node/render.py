@@ -266,6 +266,72 @@ def entry_annotations(spec):
     return a
 
 
+def c9_egress_guard(image, destinations, ingress=()):
+    """Explicit C9 test profile; never selected by a production template.
+
+    Only a NEW, exclusively owned test pod may use this init container. The
+    C9 admission/binding gate must run before it. No wildcard/CIDR, implicit
+    loopback, general DNS, or previously established outbound connection is
+    allowed. DNS, when used, is an exact route to the run's pinned resolver.
+    Both address families must install and read back; disabled IPv6 is not
+    inferred from an ip6tables error. We never flush another owner's rules.
+    """
+    def checked(routes):
+        result = []
+        for route in routes:
+            if not isinstance(route, dict) or set(route) != {'ip', 'port', 'protocol'}:
+                raise ValueError('C9 route needs only ip, port and protocol')
+            ip = ipaddress.ip_address(route['ip'])
+            port, protocol = route['port'], route['protocol']
+            if ip.is_unspecified or ip.is_multicast or getattr(ip, 'ipv4_mapped', None):
+                raise ValueError('C9 needs a single canonical unicast address')
+            if type(port) is not int or not 1 <= port <= 65535 or protocol not in ('tcp', 'udp'):
+                raise ValueError('C9 route has an invalid transport')
+            result.append((ip, port, protocol))
+        return result
+
+    outgoing, incoming = checked(destinations), checked(ingress)
+    rules = []
+    for family in (4, 6):
+        lines = ['*filter', ':INPUT DROP [0:0]', ':FORWARD DROP [0:0]', ':OUTPUT DROP [0:0]',
+                 ':C9_RESTORED - [0:0]',
+                 '-A INPUT -m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT',
+                 '-A OUTPUT -m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT']
+        for chain, flag, routes in (('OUTPUT', '-d', outgoing), ('INPUT', '-s', incoming)):
+            for ip, port, protocol in routes:
+                if ip.version == family:
+                    lines.append('-A %s %s %s/%d -p %s --dport %d -j ACCEPT' %
+                                 (chain, flag, ip, ip.max_prefixlen, protocol, port))
+        lines += ['-A OUTPUT -j C9_RESTORED', '-A OUTPUT -j REJECT', '-A INPUT -j REJECT', 'COMMIT']
+        rules.append('\n'.join(lines))
+    script = '''set -eu
+# Refuse existing listeners/connections before changing this private namespace.
+sockets=$(ss -H -t -u -a -n)
+[ -z "$sockets" ] || { echo C9_EXISTING_SOCKET >&2; exit 1; }
+ok=
+for b in nft legacy; do
+  command -v iptables-$b-restore >/dev/null 2>&1 || continue
+  command -v ip6tables-$b-restore >/dev/null 2>&1 || continue
+  # A nonempty ruleset belongs to somebody else: do not replace or flush it.
+  current4=$(iptables-$b -S)
+  current6=$(ip6tables-$b -S)
+  printf '%%s\\n' "$current4" | awk '$1 != "-P" { exit 1 }' || exit 1
+  printf '%%s\\n' "$current6" | awk '$1 != "-P" { exit 1 }' || exit 1
+  ok=$b; break
+done
+[ -n "$ok" ] || { echo C9_NO_DUAL_STACK_BACKEND >&2; exit 1; }
+printf '%%s\\n' '%s' | iptables-$ok-restore -w 1
+printf '%%s\\n' '%s' | ip6tables-$ok-restore -w 1
+iptables-$ok -S OUTPUT | grep -qFx -- '-P OUTPUT DROP'
+ip6tables-$ok -S OUTPUT | grep -qFx -- '-P OUTPUT DROP'
+echo C9_GUARD_READY
+''' % tuple(rules)
+    # Reuse the ordinary init container's bounded resources and capability set.
+    guard = egress_guard(image, '192.0.2.53', [], '192.0.2.1/32')
+    guard['command'] = ['/bin/sh', '-ec', script]
+    return guard
+
+
 def _egress_ranges(egress):
     """The egress guard's (dns, blocked, metadata, allow) from an egress dict over EGRESS."""
     eg = dict(EGRESS, **(egress or {}))
