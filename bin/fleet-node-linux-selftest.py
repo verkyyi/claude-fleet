@@ -1647,6 +1647,146 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
             self.assertEqual((runtime / second / '.release/staged.json').read_bytes(), second_preview)
             self.assertFalse(list(Path(temporary).rglob('requirements.toml')))
 
+    def managed_install_fixture(self, root):
+        runtime, system = Path(root, 'runtime'), Path(root, 'system')
+        system.mkdir()
+        first = self.fake_release(runtime, 'a' * 40, 1)
+        self.managed_release(first)
+        shutil.copyfile(BIN / 'fleet-codex-runtime.py', first / 'bin/fleet-codex-runtime.py')
+        current = runtime / 'current'
+        current.symlink_to(first.name)
+        return current, system, first
+
+    def test_managed_guard_install_is_explicit_preserves_policy_and_is_idempotent(self):
+        import tomllib
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            original = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
+                        '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
+            target.write_text(original)
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
+                self.assertEqual(target.read_text(), original)
+                self.assertEqual(image.install_managed_guards(current, system), 'installed')
+                installed = target.read_bytes()
+                policy = tomllib.loads(installed.decode())
+                self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
+                self.assertEqual(policy['mcp_servers'], tomllib.loads(original)['mcp_servers'])
+                self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
+                self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
+                self.assertEqual(len(policy['hooks']['PreToolUse']), 2)
+                self.assertNotIn(source.name, installed.decode())
+                self.assertEqual(image.install_managed_guards(current, system), 'kept')
+                self.assertEqual(target.read_bytes(), installed)
+                second = self.fake_release(current.parent, 'b' * 40, 2)
+                self.managed_release(second)
+                shutil.copyfile(BIN / 'fleet-codex-runtime.py', second / 'bin/fleet-codex-runtime.py')
+                for revision in (second.name, source.name):
+                    image.swap(current, revision)
+                    self.assertEqual(image.install_managed_guards(current, system), 'kept')
+                    self.assertEqual(target.read_bytes(), installed)
+            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_fails_on_conflicting_or_unserializable_policy(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                for original in ('[features]\nhooks=false\n', '[hooks]\nmanaged_dir="/administrator/hooks"\n',
+                                 'features=1\n', 'unclosed=[\n', 'updated=2026-01-01T00:00:00Z\n'):
+                    with self.subTest(original=original):
+                        target.write_text(original)
+                        with self.assertRaises((ValueError, TypeError)):
+                            image.install_managed_guards(current, system)
+                        self.assertEqual(target.read_text(), original)
+                        self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_requires_protected_paths_even_in_test_environment(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            with patch.object(image.os, 'geteuid', return_value=1000), patch.object(image, 'managed_root_owned') as trust:
+                with self.assertRaisesRegex(ValueError, 'administrator'):
+                    image.install_managed_guards(current, system)
+                trust.assert_not_called()
+            with patch.dict(os.environ, FLEET_NODE_TEST='1'), patch.object(image.os, 'geteuid', return_value=0):
+                self.assertFalse(image.managed_root_owned(system))
+            for rejected in (current, system, Path('/usr/bin/python3'), source / 'hooks/bash-guard.py'):
+                with patch.object(image.os, 'geteuid', return_value=0), \
+                        patch.object(image, 'managed_root_owned', side_effect=lambda path: Path(path).resolve() != rejected.resolve()):
+                    with self.assertRaises(ValueError):
+                        image.install_managed_guards(current, system)
+            self.assertFalse((system / 'requirements.toml').exists())
+
+    def test_managed_guard_install_rejects_linked_policy_and_release_inputs(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            outside = Path(temporary, 'outside')
+            outside.write_text('unchanged\n')
+            target = system / 'requirements.toml'
+            target.symlink_to(outside)
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+                target.unlink()
+                mapping = source / 'hooks/codex-map.json'
+                saved = mapping.read_bytes()
+                outside.write_bytes(saved)
+                mapping.unlink()
+                mapping.symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+                self.assertEqual(outside.read_bytes(), saved)
+                mapping.unlink()
+                mapping.write_bytes(saved)
+                (source / '.release/manifest.json').write_text(json.dumps({'sha': 'b' * 40}))
+                with self.assertRaisesRegex(ValueError, 'manifest'):
+                    image.install_managed_guards(current, system)
+            self.assertFalse(target.exists())
+
+    def test_managed_guard_install_aborts_publication_failure_and_admin_race(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            target.write_text('allowed_approval_policies=["on-request"]\n')
+            original = target.read_bytes()
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                with patch.object(image.os, 'replace', side_effect=OSError('fixture publication failure')):
+                    with self.assertRaises(OSError):
+                        image.install_managed_guards(current, system)
+                self.assertEqual(target.read_bytes(), original)
+                allocate = image.tempfile.mkstemp
+                def competing_admin(*args, **kwargs):
+                    target.write_text('allowed_approval_policies=["never"]\n')
+                    return allocate(*args, **kwargs)
+                with patch.object(image.tempfile, 'mkstemp', side_effect=competing_admin):
+                    with self.assertRaisesRegex(ValueError, 'changed before publication'):
+                        image.install_managed_guards(current, system)
+                self.assertEqual(target.read_text(), 'allowed_approval_policies=["never"]\n')
+            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_aborts_changed_active_release(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            second = self.fake_release(current.parent, 'b' * 40, 2)
+            self.managed_release(second)
+            original_run = image.subprocess.run
+            def changed_release(*args, **kwargs):
+                result = original_run(*args, **kwargs)
+                image.swap(current, second.name)
+                return result
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True), \
+                    patch.object(image.subprocess, 'run', side_effect=changed_release):
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+            self.assertFalse((system / 'requirements.toml').exists())
+
     def test_personal_pod_guard_preview_uses_image_seed_across_upgrade_and_rollback(self):
         import tomllib
         image = self.stage_mod()

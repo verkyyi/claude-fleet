@@ -22,8 +22,10 @@ import os
 from pathlib import Path
 import platform
 import re
+import runpy
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -162,6 +164,104 @@ def stage(src, root):
         (dest / '.release/staged.json').write_text(json.dumps(got) + '\n')
     (root / 'current').symlink_to(sha)
     print('image runtime: ' + sha)
+
+
+def managed_root_owned(path):
+    for initial in (Path(path).absolute(), Path(path).resolve()):
+        for candidate in (initial, *initial.parents):
+            try:
+                info = candidate.lstat()
+            except OSError:
+                return False
+            if info.st_uid != 0 or (not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o022):
+                return False
+    return True
+
+
+def install_managed_guards(current, system, check_only=False):
+    """Explicit root-only policy installation; never called by stage/seed/boot."""
+    import tomllib
+    if os.geteuid() != 0:
+        raise ValueError('managed guard installation requires the administrator')
+    current, system = Path(current).absolute(), Path(system).absolute()
+    source = current.resolve()
+    if (current.name != 'current' or not current.is_symlink() or not SHA.fullmatch(source.name)
+            or source.parent != current.parent.resolve() or not release_dir_ok(source)):
+        raise ValueError('managed guards require an existing staged current release')
+    if not system.is_dir() or system.is_symlink():
+        raise ValueError('managed requirements directory must already exist and cannot be linked')
+    required = ('bin/fleet-hooks-emit.sh', 'bin/fleet-codex-runtime.py', 'hooks/codex-map.json',
+                'hooks/settings-hooks.json', '.release/manifest.json', '.release/staged.json')
+    if not all(managed_root_owned(path) for path in (current, system, '/bin/bash', '/usr/bin/python3')):
+        raise ValueError('managed guard paths must be root-owned and not writable by other users')
+    for relative in required:
+        path = source / relative
+        if not path.is_file() or path.resolve() != path or not managed_root_owned(path):
+            raise ValueError('managed guard release input is not a protected regular file: ' + relative)
+    if json.loads((source / '.release/manifest.json').read_text()).get('sha') != source.name:
+        raise ValueError('managed guard manifest does not match the active release')
+    result = subprocess.run(
+        ['/bin/bash', str(source / 'bin/fleet-hooks-emit.sh'), '--target', 'codex-managed',
+         '--managed-dir', str(current / 'hooks'), '--python', '/usr/bin/python3'],
+        env={'PATH': '/usr/bin:/bin'}, cwd=source, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=15, check=True)
+    generated = tomllib.loads(result.stdout)
+    if generated.get('features') != {'hooks': True} or generated['hooks']['managed_dir'] != str(current / 'hooks'):
+        raise ValueError('managed guard renderer produced a different policy destination')
+    for group in generated['hooks']['PreToolUse']:
+        for hook in group['hooks']:
+            argv = shlex.split(hook['command'])
+            if len(argv) != 3 or argv[:2] != ['/usr/bin/python3', '-I']:
+                raise ValueError('managed guards require the isolated system interpreter')
+            script = Path(argv[2])
+            if (script.parent != current / 'hooks' or not script.is_file() or script.is_symlink()
+                    or script.resolve().parent != source / 'hooks' or not managed_root_owned(script)):
+                raise ValueError('managed guard script is not protected inside the active release')
+    serialize = runpy.run_path(str(source / 'bin/fleet-codex-runtime.py'))['toml_value']
+    directory = os.open(system, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(directory, fcntl.LOCK_EX)
+        target = system / 'requirements.toml'
+        if target.is_symlink() or (target.exists() and (not target.is_file() or not managed_root_owned(target))):
+            raise ValueError('existing requirements are not a protected regular file')
+        previous = target.read_bytes() if target.exists() else None
+        previous_stat = target.stat() if previous is not None else None
+        existing = tomllib.loads(previous.decode('utf-8')) if previous is not None else {}
+        features = existing.get('features', {})
+        if not isinstance(features, dict) or features.get('hooks', True) is not True:
+            raise ValueError('existing requirements conflict with managed hooks; nothing changed')
+        if 'hooks' in existing and existing['hooks'] != generated['hooks']:
+            raise ValueError('existing hook policy is not this exact Fleet policy; administrator review required')
+        merged = dict(existing, features=dict(features, hooks=True), hooks=generated['hooks'])
+        output = ''.join(json.dumps(key) + ' = ' + serialize(value) + '\n' for key, value in merged.items()).encode('utf-8')
+        if tomllib.loads(output.decode('utf-8')) != merged:
+            raise ValueError('managed requirements serialization did not preserve policy values')
+        if current.resolve() != source:
+            raise ValueError('active release changed during managed guard validation')
+        if existing == merged:
+            return 'kept'
+        if check_only:
+            return 'would-install'
+        descriptor, temporary = tempfile.mkstemp(prefix='.fleet-requirements-', dir=system)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(output)
+                os.fchmod(stream.fileno(), stat.S_IMODE(previous_stat.st_mode) if previous_stat else 0o644)
+                if previous_stat:
+                    os.fchown(stream.fileno(), previous_stat.st_uid, previous_stat.st_gid)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if (target.is_symlink() or (target.read_bytes() if target.exists() else None) != previous
+                    or current.resolve() != source):
+                raise ValueError('requirements or active release changed before publication')
+            os.replace(temporary, target)
+            os.fsync(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return 'installed'
+    finally:
+        os.close(directory)
 
 
 def release_dir_ok(d):
@@ -307,7 +407,9 @@ if __name__ == '__main__':
         print('\n'.join(need(*rest)))
     elif verb == 'stage' and len(rest) == 2:
         stage(*rest)
+    elif verb == 'guards-install' and (len(rest) == 2 or len(rest) == 3 and rest[2] == '--check'):
+        print(install_managed_guards(*rest[:2], check_only=len(rest) == 3))
     elif len(sys.argv) == 3:   # the old form: <src> <root>
         stage(*sys.argv[1:])
     else:
-        sys.exit('usage: image-stage.py stage <src> <seed> | need <src> <arch> | seed <seed> <root> <state> | boot | live')
+        sys.exit('usage: image-stage.py stage <src> <seed> | need <src> <arch> | seed <seed> <root> <state> | guards-install <current> <system-dir> [--check] | boot | live')

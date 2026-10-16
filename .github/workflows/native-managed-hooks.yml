@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'bin/fleet-native-hook-cli-selftest.py'
+      - 'bin/fleet-native-guard-install-selftest.py'
+      - 'extras/managed-node/image-stage.py'
+      - 'bin/fleet-codex-runtime.py'
       - 'bin/fleet-codex-rpc.py'
       - 'bin/fleet-hooks-emit.sh'
       - 'hooks/settings-hooks.json'
@@ -45,6 +48,11 @@ jobs:
             7232b699d1c87c47a9675950d4c5f7693402fbc9dc22cbe769c97feaf23674821c7cff3f32b853436faa46591714d0f32528f5777eaab88b333fedffe0250959 \
             "$RUNNER_TEMP/codex.tgz" | sha512sum --check --strict
           tar -xzf "$RUNNER_TEMP/codex.tgz" -C "$RUNNER_TEMP/native-codex"
+      - name: Test root-owned installation and native requirements in a private mount namespace
+        if: matrix.mode == 'exec'
+        run: >-
+          python3 bin/fleet-native-guard-install-selftest.py
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
         run: |
