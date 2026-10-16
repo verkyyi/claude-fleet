@@ -195,15 +195,19 @@ def claude(s, receipt, pane, socket, cwd):
     if event.get("identity") != identity({k: receipt[k] for k in launch.IDENTITY}, receipt):
         raise Unknown("event_identity_changed")
     at = event.get("observed_at")
-    if not number(at) or not 0 <= time.time() - at < TTL:
+    if not number(at):
+        raise Unknown("invalid_event")
+    s["source"] = "claude:native-event"
+    s["identity"]["turn_id"] = event["turn_id"]
+    # Even a rejected observation keeps its source time and turn. A reader's
+    # current clock must never make an expired event look newly observed.
+    s["observed_at"] = at
+    s["expires_at"] = at + TTL
+    if not 0 <= time.time() - at < TTL:
         raise Unknown("event_expired")
     r = claude_registry(receipt)
     if not r.get("cwd") or Path(r["cwd"]).resolve() != Path(cwd).resolve():
         raise Unknown("native_identity_changed")
-    s["source"] = "claude:native-event"
-    s["identity"]["turn_id"] = event["turn_id"]
-    # Event time remains the source clock. Reading the file is not a heartbeat.
-    s["observed_at"] = at
     s["runtime"]["thread_ready"] = True
     state = event.get("state")
     if state == "idle" and r.get("status") != "idle":

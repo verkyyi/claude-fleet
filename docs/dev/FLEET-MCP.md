@@ -333,9 +333,11 @@ interrupted; settings `Stop` hooks never publish idle. Native registry idle
 must corroborate a completed turn. These observations expire after 5 seconds:
 long tools, long questions, older idle sessions, absent mods and uninstrumented
 approval dialogs can therefore be **unknown**. There is no timer to renew an
-event and no transcript/display fallback. This conservative limit is part of
-v1, not evidence that the session is ready. A future native query can improve
-coverage without changing consumer safety gates.
+event and no transcript/display fallback. Expired events retain their source,
+turn and evidence timestamps in the unknown result. This implementation has
+not passed the required long-idle acceptance for Claude: a fresh native query
+is still needed before #4431 can rely on it for due delivery. Safe rejection
+of an expired event does not satisfy that availability requirement.
 
 For a same-identity reread, supply the complete earlier snapshot as `expected`.
 Every identity field, including native process birth and turn, must match.

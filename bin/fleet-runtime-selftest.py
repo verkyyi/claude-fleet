@@ -187,7 +187,12 @@ class Provider(unittest.TestCase):
             self.assertEqual(self.read()["runtime"]["reason"], "registry_contradicts_event")
             event["observed_at"] = 90.
             self.options["@runtime_claude"] = json.dumps(event)
-            self.assertEqual(self.read()["runtime"]["reason"], "event_expired")
+            expired = self.read()
+            self.assertEqual(expired["runtime"]["reason"], "event_expired")
+            self.assertEqual(expired["source"], "claude:native-event")
+            self.assertEqual(expired["observed_at"], 90.)
+            self.assertEqual(expired["expires_at"], 95.)
+            self.assertEqual(expired["identity"]["turn_id"], "native-turn")
             event["identity"]["generation"] = 2
             self.options["@runtime_claude"] = json.dumps(event)
             self.assertEqual(self.read()["runtime"]["reason"], "event_identity_changed")
