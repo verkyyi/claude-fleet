@@ -124,7 +124,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 |---|---|---|
 | 终端看台与薄客户端 | 核心 | #3008 合并后的会话访问、列表和交互入口；按设备可选的 iTerm2 集成仍归上表。 |
 | 配置与插件装配 | 核心 | 读取配置、装配代理和可选插件的共用机制；不代表被装配的插件本身必选。 |
-| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话。 |
+| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话；`fleet_launch.py` 在投递任务前验证原生进程和会话，并保留接受代次的恢复边界（#4393）。 |
 
 下面是盘点工具读取的归属规则，按顺序首个匹配；名称前缀必须唯一对应上方组件表。
 模式相对于 `bin/`，以空格分开，支持 shell 风格通配符。不得用 `*` 总兜底把新文件
@@ -165,7 +165,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 承载节点 | `fleet-node* fleet_node* fleet-spot* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-cn-probe*` | 节点与宿主服务 |
 | 接入中继 | `fleet-relay* fleet-peer-cert* fleet-peer-trust* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |
 | 配置与插件装配 | `fleet-conf* fleet_config* fleet-config* fleet-settings* fleet-hook* fleet-agent-bundle* fleet-agent-team* fleet-agent-def* fleet_agent_allow* fleet-plugins* fleet-codex-plugins* fleet-cfg-restart* mcp-fetch* mcp-github*` | 配置与插件注册 |
-| 账号与代理启动 | `fleet-account* .fleet-account* .fleet-failover* fleet-codex* fleet_codex* fleet-claude* fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据 |
+| 账号与代理启动 | `fleet-account* .fleet-account* .fleet-failover* fleet-codex* fleet_codex* fleet-claude* fleet_launch.py fleet-model* fleet-cred* fleet-creds* fleet-credsep* fleet-session-cred* fleet-redact* fleet_redact* fleet-lang*` | 代理、账号与凭据 |
 | Fleet MCP（ | `fleet-mcp* fleet-peer-mcp* fleet-phone-mcp* fleet-doctor* fleet-control* fleet_control*` | 工具读写与诊断 |
 | 执行会话与跨会话协作 MCP | `fleet-answer* fleet-await* fleet-children* fleet-comment* fleet-issue-file* fleet-evidence* fleet-pr-* fleet-report-parent* fleet-peer-send* fleet-permission* fleet-dialog* fleet_dialog* fleet-ask* fleet-bind* fleet-draft* fleet-ticket* fleet_ticket* fleet-task* fleet_followup* fleet-wait-reeval* fleet-land* fleet-rules* fleet_rules* fleet-gate-check* fleet-workflow-perms*` | 任务与协作、PR 和合并 |
 | 执行会话（ | `fleet-claim-brief* fleet-worker-start-hook* fleet-worktree* fleet-session-wrap* fleet-session-command* fleet-session-shell-agent* fleet-run* dash-issue-session* dash-raw-session* scratch-pool* scratch-prefill* fleet-home-session* fleet-home-template* fleet-lib.sh fleet_iso.py session-shell/* fleet-degenerate*` | 执行会话与共用运行库 |

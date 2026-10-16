@@ -737,7 +737,8 @@ func (s *Server) OperationGet(req *http.Request, opID string) (map[string]any, e
 		return nil, err
 	}
 	var reconcileErr error
-	if o.Status != "succeeded" && o.Status != "failed" {
+	_, launch, _ := s.launchContract(o)
+	if (launch && o.Status != "failed") || (o.Status != "succeeded" && o.Status != "failed") {
 		reconcileErr = s.reconcileOperation(ctx, &o)
 	}
 	out := operationView(o)
@@ -772,6 +773,8 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	default:
 		return fault("PROTOCOL_ERROR", "remote operation status is not one this hub knows")
 	}
+	verifiedStatus, verifiedResult := s.verifyLaunchResult(*o, r, remote.Status, string(remote.Result))
+	remote.Status, remote.Result = verifiedStatus, json.RawMessage(verifiedResult)
 	now := time.Now()
 	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
 		return err

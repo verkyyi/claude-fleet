@@ -195,10 +195,15 @@ func postFleet(t *testing.T, h *harness, tool string, args map[string]any, wantS
 // twoNodes is the issue's rig: mac-d and mac-c, the same repo on each, both
 // connected and accepting writes. mac-d is busy (1.0 load per core).
 func twoNodes(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
+	return twoNodesCaps(t)
+}
+
+func twoNodesCaps(t *testing.T, extra ...string) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
 	t.Helper()
 	h := newFleetHarness(t)
-	macD := connectWriteNode(t, h, "mac-d")
-	macC := connectWriteNode(t, h, "mac-c")
+	caps := append([]string{control.CapRead, control.CapWrite}, extra...)
+	macD := connectWriteNodeCaps(t, h, h.enroll(t, "mac-d"), caps...)
+	macC := connectWriteNodeCaps(t, h, h.enroll(t, "mac-c"), caps...)
 	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
 	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
 	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
