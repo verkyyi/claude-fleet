@@ -328,7 +328,14 @@ class Control:
             detail = [l for l in err.decode("utf-8", "replace").splitlines() if l.strip()]
             raise Fault("UNAVAILABLE", "Cannot read fleet windows" + (": " + detail[-1].strip()[-200:] if detail else ""))
         workers = []
-        for line in output.decode("utf-8").splitlines():
+        # The adapter emits LF records; RS/US inside orphanrep are field data
+        # (#4508). splitlines() also splits RS and corrupts the whole inventory.
+        lines = output.decode("utf-8").split("\n")
+        if lines[-1] == "":
+            lines.pop()  # empty response or ONE final LF, never skip blank rows
+        for line in lines:
+            if line.endswith("\r"):
+                line = line[:-1]  # retain CRLF compatibility; interior CR is data
             # The adapter's columns — name, @origin_wid, needs, identity, busy … title —
             # through the one reader both inventories share (issue #1698).
             row = inventory_row(line.split("\t"))
