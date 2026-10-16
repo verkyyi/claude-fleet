@@ -193,6 +193,16 @@ def wait_cleanup(root, env, socket, until, calls):
                     proc.communicate(timeout=3)
     finally:
         reader.write_text(original)
+    cmd = [sys.executable, str(root / 'bin/fleet-render-watch.py'),
+           '--max-frames', '4', '--since-frame', '0', '.05', socket]
+    first = subprocess.check_output(cmd, env=env, text=True).split()
+    time.sleep(.3)  # maintenance consumes the next deadline before we wait again
+    start = len(calls.read_text().splitlines())
+    cmd[-3] = first[2]
+    second = subprocess.check_output(cmd, env=env, text=True).split()
+    assert int(second[0]) >= 6, 'work between waits was lost from the clock'
+    assert len(calls.read_text().splitlines()) == start, 'overdue work started wait/lease clients'
+    print('PASS maintenance time counts toward next deadline; overdue work never waits', flush=True)
 
 
 def maintenance(root, env, tm, until, calls):
