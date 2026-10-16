@@ -22,9 +22,11 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 SHA = re.compile('[0-9a-f]{40}')
@@ -54,6 +56,70 @@ def need(src, arch):
     """The artifact names stage will want from <src>, one a line."""
     spec = json.loads((Path(src) / 'release.json').read_text())
     return [name for _t, _b, name in wanted(spec, arch)]
+
+
+def stage_managed_guards(source, published, staged=None):
+    """Prepare an inactive native configuration inside the version being staged."""
+    source, published = Path(source).resolve(), Path(published).resolve()
+    mapping = source / 'hooks/codex-map.json'
+    if not mapping.exists() and not mapping.is_symlink():
+        marker = source / '.release/staged.json'
+        if marker.is_file() and 'codex_managed_preview' in json.loads(marker.read_text()):
+            raise ValueError('staged managed guard configuration has lost its mapping')
+        return False
+    if not mapping.is_file() or mapping.resolve() != mapping:
+        raise ValueError('managed guard mapping is not a regular release file')
+    declared = json.loads(mapping.read_text())
+    if not isinstance(declared, dict):
+        raise ValueError('managed guard mapping must be an object')
+    if 'managed_commands' not in declared:
+        marker = source / '.release/staged.json'
+        if marker.is_file() and 'codex_managed_preview' in json.loads(marker.read_text()):
+            raise ValueError('staged managed guard configuration has lost its registration')
+        return False
+    import tomllib
+    emitter = source / 'bin/fleet-hooks-emit.sh'
+    metadata = source / '.release'
+    if (not emitter.is_file() or emitter.resolve() != emitter or not metadata.is_dir()
+            or metadata.resolve() != metadata):
+        raise ValueError('managed guard staging requires regular release paths')
+    result = subprocess.run(
+        ['/bin/bash', str(emitter), '--target', 'codex-managed', '--managed-dir', str(published / 'hooks'),
+         '--python', '/usr/bin/python3'],
+        env={'PATH': '/usr/bin:/bin'}, cwd=source, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=15, check=True)
+    rendered = tomllib.loads(result.stdout)
+    if rendered['hooks']['managed_dir'] != str(published / 'hooks'):
+        raise ValueError('managed guard staging produced a different runtime path')
+    for group in rendered['hooks']['PreToolUse']:
+        for hook in group['hooks']:
+            argv = shlex.split(hook['command'])
+            if len(argv) != 3 or argv[:2] != ['/usr/bin/python3', '-I']:
+                raise ValueError('managed guard staging requires the isolated system interpreter')
+            relative = Path(argv[2]).relative_to(published / 'hooks')
+            script = source / 'hooks' / relative
+            if not script.is_file() or script.resolve() != script:
+                raise ValueError('managed guard script is missing or linked outside its release')
+    target = metadata / 'staged.json'
+    if staged is None:
+        if not target.is_file() or target.is_symlink():
+            raise ValueError('managed guard staging requires regular release metadata')
+        staged = json.loads(target.read_text())
+    if not isinstance(staged, dict):
+        raise ValueError('managed guard release metadata must be an object')
+    staged = dict(staged, codex_managed_preview=result.stdout)
+    descriptor, temporary = tempfile.mkstemp(prefix='.codex-managed-', dir=metadata)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            stream.write(json.dumps(staged) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return True
 
 
 def stage(src, root):
@@ -92,7 +158,8 @@ def stage(src, root):
     # it beside root's modules, so without it every ⌘P compiled fleet_view.py again
     subprocess.run([sys.executable, '-I', '-m', 'compileall', '-q', str(dest / 'bin')],
                    stdin=subprocess.DEVNULL, check=False)
-    (dest / '.release/staged.json').write_text(json.dumps(got) + '\n')
+    if not stage_managed_guards(dest, dest, got):
+        (dest / '.release/staged.json').write_text(json.dumps(got) + '\n')
     (root / 'current').symlink_to(sha)
     print('image runtime: ' + sha)
 
@@ -191,7 +258,10 @@ def _seed(seed_root, root, state, force):
         shutil.rmtree(part, ignore_errors=True)
         shutil.rmtree(dest, ignore_errors=True)
         shutil.copytree(seed_root / img[0], part, symlinks=True)
+        stage_managed_guards(part, seed_root / img[0] if force else dest)
         os.rename(part, dest)
+    else:
+        stage_managed_guards(dest, seed_root / img[0] if force else dest)
     if disk is not None:
         swap(root / '.prev', disk[0])
     swap(root / 'current', img[0])
