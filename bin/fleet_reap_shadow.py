@@ -228,8 +228,14 @@ def report_reader(database, authority_scope):
         matches = []
         uri = Path(database).resolve().as_uri() + "?mode=ro"
         with sqlite3.connect(uri, uri=True, timeout=1) as db:
-            rows = db.execute("SELECT request,result,status,updated FROM operations WHERE action='task_receipt'").fetchall()
+            deadline=time.monotonic()+1
+            db.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+            rows = db.execute("SELECT substr(request,1,65537),substr(result,1,65537),status,updated FROM operations WHERE action='task_receipt' LIMIT 1001").fetchall()
+        if len(rows)>1000:
+            raise ValueError("journal_observation_budget_exceeded")
         for request, result, status, updated in rows:
+            if len(request)>65536 or len(result or "")>65536:
+                raise ValueError("journal_record_budget_exceeded")
             req, res = json.loads(request), json.loads(result or "{}")
             payload = req.get("payload", {})
             receipt = res.get("receipt", {})

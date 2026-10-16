@@ -50,7 +50,10 @@ class LocalSources:
             "\x1f".join("#{"+k+"}" for k in FIELDS), socket=self.socket)
         values = text.split("\x1f")
         if len(values) != len(FIELDS):
-            raise ValueError("invalid_local_snapshot")
+            # tmux <=3.4 vis-escapes control separators; same bounded fallback
+            # as Cleaner.snapshot. The end-of-collection comparison still fences
+            # any field that changed during these individual reads.
+            return {key:launch.option(self.pane,key,self.socket) for key in FIELDS}
         return dict(zip(FIELDS,values))
 
     def envelope(self, source, value, at, **kw):
@@ -144,12 +147,20 @@ class LocalSources:
     def outbox(self):
         directory=Path(self.shell('fleet_hub_outbox'))
         if not directory.is_dir(): raise ValueError("outbox_unavailable")
-        result=[]
-        for path in sorted(directory.glob("*.json")) + sorted((directory/"refused").glob("*.json")):
-            data=json.loads(path.read_text())
-            if data.get("from")==self.identity.get("worker_id"):
-                result.append(dict(id=data.get("id"),kind=data.get("kind"),digest=proof.digest(data)))
-        return result
+        result=[];count=0
+        for folder in (directory,directory/"refused"):
+            if not folder.exists(): continue
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    count+=1
+                    if count>1000: raise ValueError("outbox_observation_budget_exceeded")
+                    if not entry.name.endswith(".json"): continue
+                    with open(entry.path) as stream: text=stream.read(65537)
+                    if len(text)>65536: raise ValueError("outbox_record_budget_exceeded")
+                    data=json.loads(text)
+                    if data.get("from")==self.identity.get("worker_id"):
+                        result.append(dict(id=data.get("id"),kind=data.get("kind"),digest=proof.digest(data)))
+        return sorted(result,key=proof.digest)
 
     def collect(self, identity):
         if self.values is not None:
@@ -270,9 +281,10 @@ except (OSError,ValueError,subprocess.SubprocessError,m["RateLimited"]) as exc:
                 env=self.env,cwd=self.config["main"],text=True,capture_output=True,timeout=15)
             if result.returncode: raise ValueError("legacy_gate_unavailable")
             token=result.stdout.strip()
-            eligible=any(line.startswith("would-reap-") for line in token.splitlines())
+            eligible=any(line.startswith(("would-reap-","would-clean:done-no-pr")) for line in token.splitlines())
             source="Cleaner.candidate(dry_run=True)"
-        return self.envelope(source,dict(eligible=eligible,reason=token or "legacy-retained",phase="pre-action-dry-run"),at,
+        return self.envelope(source,dict(eligible=eligible,reason=token or "legacy-retained",phase="pre-action-dry-run",
+            unobserved_final_gates=["history-record/resume-verification","final-native-and-lease-recheck","atomic-action-boundary"]),at,
             unknown=self.snapshot()!=self.meta,reason="local_binding_changed")
 
     def readers(self):

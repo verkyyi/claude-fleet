@@ -42,7 +42,7 @@ JSON 带原生身份，必须留在私有目录；对外只记录脱敏结论与
 配置，读注册工作树/HEAD/upstream，调用 `fleet-input.snapshot`、loop reader、
 rotate lease reader、sleep phase/inbox、outbox、policy/grace 和 C6 只读回执。
 没有 `@repo` 时不调用会回填 stamp 的兼容 resolver；缺 owner 存储目录时保留，
-不会为观察创建 lifecycle 目录。既有本地 helper 使用 named socket，因此本地
+不会为观察创建 lifecycle 目录。旧 tmux 转义分隔符时使用有界逐字段回退，收集末仍比较全部字段。既有本地 helper 使用 named socket，因此本地
 组合只接受与实际 session 同名的 socket；其它 transport 保持逐维 unknown。
 
 进程树只通过 #4474 的 `Processes.collect/proof/ancestry` 读取；该次表传给
@@ -55,7 +55,7 @@ Claude 使用严格模式保留未知子进程；Codex 使用已有精确 helper
 C6 report 适配器使用已有 `operations/action=task_receipt` 的 SQLite `mode=ro`，
 其 authority hash 从既有 `fleet-task-record.sh authority` 取得。它不调用会
 建表/expire/ack 的 Journal，不重放。新观察时间和原 `evidence_at` 分列；重复
-report、错 hub、未知状态保留。controller 接受/投递回执仍未由 #4431 提供，
+report、错 hub、未知状态保留。journal 观察最多 1000 行，每行最多 64 KiB，SQL 扫描有 1 秒 progress deadline；outbox 最多 1000 个目录项，每文件最多 64 KiB，超限返回 unknown。controller 接受/投递回执仍未由 #4431 提供，
 `delivery` 在记录本地 inbox 证据后保持 `controller_acceptance_unavailable`。
 
 测试或外部 owner 可通过 `readers` 替换单维 reader；签名为
@@ -67,7 +67,7 @@ report、错 hub、未知状态保留。controller 接受/投递回执仍未由 
 过期时 `comparison=incomparable`。可比较时输出 `agree`、
 `legacy-clear_candidate-retain` 或 `legacy-retain_candidate-clear`，连同全部 source、
 时间、last_known 和 retained 原因。调用方把输出保存到既有私有证据位置；本模块不
-新增影子 journal。本地默认调用既有 `Cleaner.candidate(dry_run=True)` 的完整对应路径，采用 daemon 的 cwd/环境；显式 `--pr N` 则调用既有 `fleet-cleanup.sh --auto --dry-run`。记录它真实返回的结论和 `pre-action-dry-run` 阶段，不把最后的 history/动作边界说成已经执行。当前没有生产 caller 接线，也不声称生产 gate 差异已采集。
+新增影子 journal。本地默认调用既有 `Cleaner.candidate(dry_run=True)` 的完整对应路径，采用 daemon 的 cwd/环境；显式 `--pr N` 则调用既有 `fleet-cleanup.sh --auto --dry-run`。记录它真实返回的结论（含 no-PR 的 `would-clean:done-no-pr`）和 `pre-action-dry-run` 阶段，输出列出未观察的 history/resume/final-recheck/atomic-action gates，不把最后的 history/动作边界说成已经执行。当前没有生产 caller 接线，也不声称生产 gate 差异已采集。
 
 ## 失效与动作边界
 

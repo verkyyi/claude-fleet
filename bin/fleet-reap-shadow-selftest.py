@@ -152,6 +152,10 @@ class Shadow(unittest.TestCase):
             self.assertEqual(path.read_bytes(),before)
             wrong=shadow.report_reader(path,"other-hub")(I)
             self.assertTrue(wrong["unknown"])
+            with sqlite3.connect(path) as db:
+                db.executemany("INSERT INTO operations VALUES (?,?,?,?,?)",[("task_receipt","{}","{}","pending",50.)]*1001)
+            with self.assertRaisesRegex(ValueError,"budget_exceeded"):
+                shadow.report_reader(path,"scope")(I)
 
     def test_read_reuses_oracle_and_retains_missing_adapters(self):
         d=fixture()
@@ -234,6 +238,16 @@ class Shadow(unittest.TestCase):
                     (wt/"tracked").write_text("dirty\n")
                     self.assertFalse(local.worktree()["clean"])
                     self.assertEqual(local.leases()["transfer"],[])
+                    lease=Path(local.shell('fleet_rotate_lease_file "$2"',str(wt)))
+                    lease.write_text(f"{os.getpid()} {int(time.time())} 900 fixture\n")
+                    self.assertTrue(local.leases()["transfer"])
+                    lease.write_text(f"99999999 {int(time.time())} 900 fixture\n")
+                    self.assertTrue(local.leases()["migration"])  # existing owner is TTL-based, not PID-based
+                    lease.write_text(f"{os.getpid()} 1 1 expired\n")
+                    self.assertEqual(local.leases()["transfer"],[])
+                    lease.write_text("malformed\n")
+                    with self.assertRaisesRegex(ValueError,"malformed_rotation_lease"):local.leases()
+                    lease.unlink()
                     command(*tm,"set-option","-w","-t",pane,"@migrating","fixture")
                     local=LocalSources(pane,session);local.identity=I;local.config=local.config_read()
                     self.assertEqual(local.leases()["migration"],["fixture"])
@@ -245,6 +259,14 @@ class Shadow(unittest.TestCase):
                     self.assertFalse(gate["value"]["eligible"])
                     self.assertIn("Cleaner.candidate",gate["source"])
                     self.assertEqual(command(*tm,"show-options","-w","-t",pane),options)
+                    command(*tm,"set-option","-wu","-t",pane,"@reap_policy")
+                    command(*tm,"set-option","-w","-t",pane,"@raw","0")
+                    command(*tm,"set-option","-w","-t",pane,"@claude_state_ts",str(int(time.time())-10000))
+                    local=LocalSources(pane,session);local.identity=I;local.config=local.config_read();local.values={}
+                    gate=local.legacy(I)
+                    self.assertTrue(gate["value"]["eligible"],gate)
+                    self.assertIn("would-clean:done-no-pr",gate["value"]["reason"])
+                    self.assertTrue(gate["value"]["unobserved_final_gates"])
             finally:
                 subprocess.run(tm+["kill-server"],env=env,capture_output=True)
 
