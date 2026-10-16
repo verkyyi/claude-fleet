@@ -6,6 +6,10 @@ on:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-native-usage-cli-selftest.py'
       - 'bin/fleet-codex-rpc.py'
+      - 'bin/fleet-codex-attention.py'
+      - 'bin/fleet-codex-session.py'
+      - 'bin/fleet-codex-runtime.py'
+      - 'conf/statusline.sh'
       - 'bin/fleet-hooks-emit.sh'
       - 'hooks/settings-hooks.json'
       - 'hooks/codex-map.json'
@@ -50,6 +54,7 @@ jobs:
         if: matrix.mode == 'exec'
         run: |
           timeout 90 python3 bin/fleet-native-usage-cli-selftest.py \
+            --meter-candidate \
             --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash

@@ -13,12 +13,14 @@ import subprocess
 import tempfile
 import threading
 import time
+from unittest.mock import patch
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--meter-candidate', action='store_true', help='also exercise the actual opt-in monitor/meter with an isolated measurement sink')
     arguments = parser.parse_args()
     executable = shutil.which(arguments.codex)
     if not executable:
@@ -27,6 +29,9 @@ def main():
     client_type = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-rpc.py'))['Client']
     requests, checks = [], []
     scenario = {'mode': 'text', 'issued': False, 'started': threading.Event(), 'release': threading.Event()}
+    monitor = meter = None
+    meter_calls, meter_writes, meter_outbound, meter_received = [], [], [], []
+    rollout_reads = []
 
     def check(condition, name):
         if not condition:
@@ -62,6 +67,13 @@ def main():
                       {'type': 'response.output_item.added', 'output_index': 0, 'item': item},
                       {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
                       {'type': 'response.completed', 'response': response}]
+            if item['type'] == 'message':
+                events[1]['item'] = dict(item, content=[], status='in_progress')
+                events[2:2] = [
+                    {'type': 'response.content_part.added', 'output_index': 0, 'content_index': 0,
+                     'item_id': item['id'], 'part': {'type': 'output_text', 'text': '', 'annotations': []}},
+                    {'type': 'response.output_text.delta', 'output_index': 0, 'content_index': 0,
+                     'item_id': item['id'], 'delta': 'offline fixture complete'}]
             body = ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -82,10 +94,14 @@ def main():
                     event = client.events.pop(0) if client.events else client.receive(nonblocking=True)
                     if event is None:
                         break
-                    if event.get('method', '').startswith(('thread/', 'turn/', 'serverRequest/')) or 'id' in event:
+                    if (event.get('method', '').startswith(('thread/', 'turn/', 'serverRequest/'))
+                            or event.get('method') == 'item/agentMessage/delta' or 'id' in event):
                         captured[name].append(event)
                 else:
                     raise AssertionError('native event backlog exceeded fixture budget')
+            if monitor is not None:
+                monitor.tick()
+                meter.tick()
             time.sleep(.02)
         return captured
 
@@ -123,6 +139,7 @@ def main():
                                            env=environment, cwd=root, stdin=subprocess.DEVNULL,
                                            stdout=log, stderr=log, start_new_session=True)
                 clients = {}
+                patches = []
                 try:
                     deadline = time.monotonic() + 10
                     while not endpoint.exists() and backend.poll() is None and time.monotonic() < deadline:
@@ -134,6 +151,39 @@ def main():
                     initial = controller.call('thread/start', {'cwd': str(root), 'model': 'gpt-6.1-sol',
                                                                'approvalPolicy': 'never', 'sandbox': 'read-only'})
                     identifier = initial['thread']['id']
+                    if arguments.meter_candidate:
+                        attention = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-attention.py'))
+                        measurement = attention['session']
+                        data = dict(owner='1234', session_id=identifier, home=str(home), remote='unix://' + str(endpoint))
+                        native_env = dict(TMUX_PANE='%fixture', FLEET_CODEX_LAUNCHER_PID='1234', FLEET_CODEX_NATIVE_USAGE='1')
+                        meter = measurement['Meter'](native_env)
+                        original_rollout = measurement['Meter'].tick.__globals__['rollout']
+                        def counted_rollout(identity):
+                            rollout_reads.append(identity['session_id'])
+                            return original_rollout(identity)
+                        class ObservedClient(client_type):
+                            def call(self, method, params):
+                                meter_calls.append(method)
+                                return super().call(method, params)
+                            def send(self, value):
+                                if 'result' in value or 'error' in value:
+                                    meter_outbound.append(value)
+                                return super().send(value)
+                            def receive(self, nonblocking=False):
+                                event = super().receive(nonblocking=nonblocking)
+                                if event is not None:
+                                    meter_received.append(event.get('method'))
+                                return event
+                        patches = [patch.dict(attention['Monitor'].tick.__globals__, Client=ObservedClient, request_detail=lambda *_: ''),
+                                   patch.dict(measurement, identity=lambda *_: dict(data),
+                                              tmux=lambda command: 'working||' if command[0] == 'display-message' else ''),
+                                   patch.dict(measurement['Meter'].observe.__globals__, identity=lambda *_: dict(data),
+                                              feed=lambda *values, **keywords: meter_writes.append(dict(values[2])),
+                                              rollout=counted_rollout)]
+                        for replacement in patches:
+                            replacement.start()
+                        monitor = attention['Monitor'](data['remote'], native_env)
+                        monitor.meter = meter
                     clients['read_only'].call('thread/read', {'threadId': identifier, 'includeTurns': False})
                     phases = []
                     for index, label in enumerate(('unsubscribed', 'resumed', 'unsubscribed-again'), 1):
@@ -165,8 +215,28 @@ def main():
                         check(snapshot['id'] == identifier and snapshot['cwd'] == str(root), label + ': binding unchanged')
                         phases.append({'phase': label, 'usage_receivers': [name for name, received in events.items()
                                        if any(event.get('method') == 'thread/tokenUsage/updated' for event in received)]})
+                        if meter is not None:
+                            if index == 1 and meter.native_stats is None:
+                                check(bool(rollout_reads) and monitor.subscribed,
+                                      label + ': fresh thread without persisted rollout retains fallback until subscription')
+                            else:
+                                check(meter.native_stats is not None and meter.native_stats['live_tokens'] == 1300,
+                                      label + ': actual candidate meter receives native context')
+                            if index <= 2:
+                                healthy_reads = len(rollout_reads)
+                            else:
+                                check(len(rollout_reads) == healthy_reads, label + ': healthy native meter performs no rollout reads')
+                            check(any(event.get('method') == 'item/agentMessage/delta' for event in events['controller']),
+                                  label + ': controller still receives native message deltas')
+                            check('item/agentMessage/delta' not in meter_received,
+                                  label + ': server suppresses irrelevant deltas only for telemetry connection')
                     check(len(requests) == 3 and all(request['thread_id'] == identifier for request in requests),
                           'exactly three explicit root requests, no extra inference')
+                    if meter is not None:
+                        monitor.close()
+                        check(meter.native_until == 0, 'actual monitor disconnect expires native meter lease')
+                        meter.tick()
+                        check(len(rollout_reads) > healthy_reads, 'actual meter restores rollout after disconnect')
 
                     scenario['mode'] = 'held'
                     active = controller.call('turn/start', {'threadId': identifier, 'input': [
@@ -234,12 +304,28 @@ def main():
                           and all(turn['status'] == 'completed' for turn in snapshot['turns']),
                           'original controller completes all turns without cancellation or replacement')
                     phases.append({'phase': 'approval-reconnect-deny', 'usage_receivers': ['controller', 'read_only']})
+                    if meter is not None:
+                        check(meter.native_stats is not None and meter.native_stats['source'] == 'codex-native',
+                              'candidate meter recovers native input after reconnect')
+                        check(not meter_outbound, 'candidate monitor never answers a server request')
+                        check(set(meter_calls) <= {'initialize', 'thread/read', 'thread/resume'},
+                              'candidate monitor only connects, reads and subscribes')
+                        check(all(stats['live_tokens'] == 1300 for stats in meter_writes if stats.get('source') == 'codex-native'),
+                              'candidate bus never publishes cumulative usage as live context')
                     check(not any(request['authorization'] for request in requests), 'no credentials sent')
                     check(len(controller.call('thread/list', {'limit': 100})['data']) == 1, 'no second native thread created')
                     report = {'version': version, 'scope': 'offline subscription semantics, not production telemetry or panel acceptance',
                               'checks': checks, 'phases': phases}
+                    if meter is not None:
+                        report['meter'] = {'rollout_reads': len(rollout_reads), 'native_bus_updates': sum(
+                            stats.get('source') == 'codex-native' for stats in meter_writes),
+                            'rpc_calls': meter_calls, 'notification_methods': sorted(set(method for method in meter_received if method))}
                 finally:
                     scenario['release'].set()
+                    if monitor is not None:
+                        monitor.close()
+                    for replacement in reversed(patches):
+                        replacement.stop()
                     for client in clients.values():
                         client.close()
                     if backend.poll() is None:

@@ -212,6 +212,8 @@ def run(argv, prepare=None, tick=None):
                 meter = runpy.run_path(str(meter_mod))["Meter"](env)
             except Exception:
                 meter = None
+        if monitor is not None and meter is not None and env.get('FLEET_CODEX_NATIVE_USAGE') == '1':
+            monitor.meter = meter
         # issue #2430: the seed is SUBMITTED — a first sentence left sitting in
         # the composer gets its Enter (bin/fleet-codex-seed.py; reads only).
         seeder = None

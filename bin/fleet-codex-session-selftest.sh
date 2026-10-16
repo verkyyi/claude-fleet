@@ -5,6 +5,7 @@ set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
 import importlib.util, json, os, pathlib, shutil, subprocess, sys, tempfile, unittest
+from unittest import mock
 
 BIN = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location('codex_session', BIN / 'fleet-codex-session.py')
@@ -43,6 +44,95 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(got['model'], 'gpt-fixture')
         self.assertEqual(got['output_tokens'], 40000)
         self.assertEqual(got['transcript'], str(self.path))
+
+    def test_native_usage_drives_existing_bus_and_suppresses_rollout_polling(self):
+        data = dict(self.data, remote='unix:///fixture')
+        meter = cx.Meter(dict(TMUX_PANE='%fixture', FLEET_CODEX_LAUNCHER_PID='1234'))
+        usage = dict(last=dict(totalTokens=120000, inputTokens=100000, cachedInputTokens=90000, outputTokens=20000),
+                     total=dict(totalTokens=9999999), modelContextWindow=300000)
+        settings = dict(model='native-model', effort='high')
+        with mock.patch.object(cx, 'identity', return_value=data), mock.patch.object(cx, 'feed') as feed, \
+                mock.patch.object(cx.time, 'monotonic', return_value=100), mock.patch.object(cx, 'rollout') as rollout:
+            self.assertTrue(meter.observe(data, usage, settings))
+            stats = feed.call_args.args[2]
+            self.assertEqual((stats['pct'], stats['live_tokens'], stats['limit'], stats['model']),
+                             (40, 120000, 300000, 'native-model'))
+            self.assertEqual(feed.call_args.kwargs['expected'], data)
+            self.assertEqual(feed.call_args.args[3], '')
+            self.assertFalse(meter.tick(101))
+            rollout.assert_not_called()
+            self.assertTrue(meter.observe(data, usage, settings))
+            self.assertEqual(feed.call_count, 1)
+            self.assertTrue(meter.observe(data, None, dict(model='changed-model', effort=None)))
+            self.assertEqual(feed.call_args.args[2]['effort'], '')
+            self.assertEqual(feed.call_count, 2)
+            meter.reset_native()
+            self.assertEqual(meter.native_until, 0)
+            self.assertIsNone(meter.native_stats)
+
+    def test_native_unknown_usage_never_becomes_zero_or_extends_a_lease(self):
+        data = dict(self.data, remote='unix:///fixture')
+        meter = cx.Meter(dict(TMUX_PANE='%fixture', FLEET_CODEX_LAUNCHER_PID='1234'))
+        settings = dict(model='native', effort='low')
+        with mock.patch.object(cx, 'identity', return_value=data), mock.patch.object(cx, 'feed') as feed:
+            for usage in (dict(last={}, modelContextWindow=300000), dict(last=dict(totalTokens=True), modelContextWindow=300000),
+                          dict(last=dict(totalTokens=123), modelContextWindow=0), dict(last=dict(totalTokens=-1), modelContextWindow=300000)):
+                self.assertFalse(meter.observe(data, usage, settings))
+                meter.keep_native(data)
+                self.assertEqual(meter.native_until, 0)
+            feed.assert_not_called()
+            self.assertTrue(meter.observe(data, dict(last=dict(inputTokens=100, outputTokens=20), modelContextWindow=300), settings))
+            self.assertEqual(feed.call_args.args[2]['pct'], 40)
+
+    def test_native_binding_rejects_changed_account_root_owner_or_endpoint(self):
+        data = dict(self.data, remote='unix:///fixture')
+        meter = cx.Meter(dict(TMUX_PANE='%fixture', FLEET_CODEX_LAUNCHER_PID='1234'))
+        usage = dict(last=dict(totalTokens=10), modelContextWindow=100)
+        with mock.patch.object(cx, 'feed') as feed:
+            for key, value in (('owner', '999'), ('session_id', OTHER), ('home', '/different'), ('remote', 'unix:///different')):
+                with mock.patch.object(cx, 'identity', return_value=dict(data, **{key: value})):
+                    self.assertFalse(meter.observe(data, usage, dict(model='fixture', effort=None)))
+                    self.assertEqual(meter.native_until, 0)
+            feed.assert_not_called()
+
+    def test_expired_native_lease_restores_existing_rollout_reader(self):
+        data = dict(self.data, remote='unix:///fixture')
+        meter = cx.Meter(dict(TMUX_PANE='%fixture', FLEET_CODEX_LAUNCHER_PID='1234'))
+        with mock.patch.object(cx, 'identity', return_value=data), mock.patch.object(cx, 'feed') as feed, \
+                mock.patch.object(cx.time, 'monotonic', return_value=100):
+            meter.observe(data, dict(last=dict(totalTokens=1), modelContextWindow=100), dict(model='native', effort='low'))
+            self.assertTrue(meter.tick(106))
+            self.assertEqual(feed.call_args.args[2]['source'], 'codex-rollout')
+            self.assertEqual(feed.call_args.args[2]['model'], 'gpt-fixture')
+            self.assertIsNone(meter.native_stats)
+            meter.observe(data, dict(last=dict(totalTokens=1), modelContextWindow=100), dict(model='native', effort='low'))
+            self.assertEqual(feed.call_args.args[2]['source'], 'codex-native')
+            self.assertEqual(feed.call_count, 3)
+
+    @unittest.skipUnless(shutil.which('tmux'), 'tmux unavailable')
+    def test_native_measurement_bus_rechecks_root_in_the_write_queue(self):
+        label = 'native-meter-test-' + str(os.getpid())
+        prefix = ['tmux', '-L', label]
+        def call(*arguments):
+            return subprocess.check_output(prefix + list(arguments), text=True).strip()
+        try:
+            call('new-session', '-d', '-s', 'fixture', 'sleep 60')
+            pane = call('display-message', '-p', '#{pane_id}')
+            data = dict(self.data, remote='unix:///fixture')
+            for key, value in (('@cc_agent', 'codex'), ('@cc_launcher_pid', '1234'),
+                               ('@codex_session_id', SID), ('@codex_identity', json.dumps(data))):
+                call('set-option', '-w', '-t', pane, key, value)
+            environment = dict(TMUX=call('display-message', '-p', '#{socket_path}') + ',1,0', TMUX_PANE=pane)
+            stats = dict(session_id=SID, model="native ' quoted 模型", effort='high', pct=40, live_tokens=120, limit=300)
+            with mock.patch.dict(os.environ, environment):
+                cx.feed(pane, '1234', stats, '', expected=data)
+                self.assertEqual(call('display-message', '-p', '#{@model}'), stats['model'])
+                self.assertEqual(call('display-message', '-p', '#{@ctx_pct}'), '40')
+                call('set-option', '-w', '-t', pane, '@codex_session_id', OTHER)
+                cx.feed(pane, '1234', dict(stats, pct=90, live_tokens=270), '', expected=data)
+                self.assertEqual(call('display-message', '-p', '#{@ctx_pct}'), '40')
+        finally:
+            subprocess.run(prefix + ['kill-server'], capture_output=True)
 
     def test_percent_only_avoids_policy_and_armed_reads(self):
         import contextlib, io, types
