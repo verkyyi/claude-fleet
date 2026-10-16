@@ -418,7 +418,26 @@ def main():
                 tool_fixture.update(active=True, command="printf native-guard-canary > " + shlex.quote(str(tool_marker)))
                 report["tool_phases"] = []
                 reason = "fixture-managed-denial-v1"
-                for phase in ("allow-control", "deny", "local-disable", "updated-guard"):
+                base_requirements = (system / "requirements.toml").read_text()
+                guard_source = (arguments.fleet_root / "hooks/bash-guard.py").read_bytes()
+                (managed / "bash-guard.py").write_bytes(guard_source)
+                check((managed / "bash-guard.py").read_bytes() == guard_source, "real Fleet guard copied without modification")
+                repository = root / "git-fixture"
+                remote = root / "local-remote.git"
+
+                def git(*values):
+                    return subprocess.run(["git", *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
+                                          capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+
+                git("init", "--initial-branch=fixture", str(repository))
+                git("init", "--bare", str(remote))
+                git("-C", str(repository), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+                    "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Owned native guard fixture")
+                fixture_commit = git("-C", str(repository), "rev-parse", "HEAD")
+                force_push = "cd " + shlex.quote(str(repository)) + " && git push --force " + shlex.quote(str(remote))
+                for phase in ("allow-control", "deny", "local-disable", "updated-guard",
+                              "fleet-control", "fleet-deny", "fleet-local-disable", "fleet-allow"):
+                    real_guard_phase = phase.startswith("fleet-")
                     if phase == "deny":
                         managed_hook_count = 2
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
@@ -430,6 +449,18 @@ def main():
                         reason = "fixture-managed-denial-v2"
                         config = system / "requirements.toml"
                         config.write_text(config.read_text().replace(previous_reason, reason), encoding="utf-8")
+                    elif phase == "fleet-control":
+                        managed_hook_count = 1
+                        (system / "requirements.toml").write_text(base_requirements, encoding="utf-8")
+                    elif phase == "fleet-deny":
+                        managed_hook_count = 2
+                        with (system / "requirements.toml").open("a", encoding="utf-8") as config:
+                            config.write('[[hooks.PreToolUse]]\nmatcher="^Bash$"\n[[hooks.PreToolUse.hooks]]\n'
+                                         'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "bash-guard.py")) + '\n')
+                    if real_guard_phase:
+                        git("--git-dir=" + str(remote), "update-ref", "-d", "refs/heads/main")
+                        destination = "fixture-feature" if phase == "fleet-allow" else "main"
+                        tool_fixture["command"] = force_push + " HEAD:refs/heads/" + destination
                     with client("tool-" + phase + "-verify") as rpc:
                         fixture_hook(rpc)
                     for marker_path in (tool_marker, deny_marker):
@@ -439,7 +470,7 @@ def main():
                     tool_fixture["requests"] = []
                     before = len(requests)
                     flags = ["-c", 'sandbox_mode="danger-full-access"']
-                    if phase == "local-disable":
+                    if phase in ("local-disable", "fleet-local-disable"):
                         flags += ["-c", "features.hooks=false"]
                     if arguments.remote_tui:
                         outcome = remote_turn("tool-" + phase, flags, expected_status="completed")
@@ -460,7 +491,22 @@ def main():
                     check(managed_observed is not None and plugin_observed is not None
                           and identifiers == [managed_observed["session_id"]] == [plugin_observed["session_id"]],
                           phase + " managed and trusted plugin hooks execute on the actual tool thread")
-                    if phase == "allow-control":
+                    outputs = [item.get("output", "") for request in tool_fixture["requests"] for item in request.get("input", [])
+                               if item.get("type") == "function_call_output" and item.get("call_id") == "call_fixture"]
+                    if real_guard_phase:
+                        refs = git("--git-dir=" + str(remote), "for-each-ref", "--format=%(objectname) %(refname)")
+                        denied = phase in ("fleet-deny", "fleet-local-disable")
+                        if denied:
+                            check(not refs, phase + " actual Fleet guard prevents the owned local force-push")
+                            check(any("BLOCKED by" in output and "force-push targeting the base branch" in output
+                                      for output in outputs), phase + " native tool result carries the real Fleet exit-2 denial")
+                        else:
+                            check(refs == fixture_commit + " refs/heads/" + destination,
+                                  phase + " native tool really pushes the fixture commit to the owned local remote")
+                            check(not any("BLOCKED by" in output for output in outputs), phase + " allowed native tool is not denied")
+                        report["tool_phases"].append({"phase": phase, "executed": not denied, "denied": denied,
+                                                     "guard_sha256": hashlib.sha256(guard_source).hexdigest()})
+                    elif phase == "allow-control":
                         check(tool_marker.read_text() == "native-guard-canary" and not deny_marker.exists(),
                               "positive control executes the exact harmless write without a deny hook")
                     else:
@@ -469,10 +515,9 @@ def main():
                         check(denied["tool_name"] == "Bash" and denied["tool_use_id"] == "call_fixture"
                               and identifiers == [denied["session_id"]] and denied["tool_input"]["command"] == tool_fixture["command"],
                               phase + " managed hook receives the exact native tool and thread")
-                        outputs = [item.get("output", "") for request in tool_fixture["requests"] for item in request.get("input", [])
-                                   if item.get("type") == "function_call_output" and item.get("call_id") == "call_fixture"]
                         check(any(reason in output for output in outputs), phase + " native loop receives the current managed denial reason")
-                    report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
+                    if not real_guard_phase:
+                        report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks), request_kinds=[
                 {key: request[key] for key in ("request_kind", "thread_source", "native_title", "generate")} for request in requests])
