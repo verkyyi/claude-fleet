@@ -814,6 +814,13 @@ drill_login_remove_managed() {
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
 }
+_forget_task_running() {
+  # The daemon may reap a zombie between kill(0) and ps (#4448). An empty /
+  # failed ps is not proof either way: recheck existence before calling it live.
+  kill -0 "$1" 2>/dev/null && ! ps -o stat= -p "$1" 2>/dev/null | grep -q '^ *Z' \
+    && kill -0 "$1" 2>/dev/null
+}
+
 # linux-remove-task-running (#3379): `login remove <X> --host <linux machine>`
 # failed at [1c] — the daemon dropped the login, but its fleet-base-sync.sh sat
 # in a `git fetch` hung on the network, and `account forget` only WAITED
@@ -822,36 +829,49 @@ drill_login_remove_managed() {
 # then KILL — this one ignores TERM — and the removal goes on.
 drill_linux_remove_task_running() {
   CAP=20
-  local sb t0 tpid
-  sb="$WORK/forget-hung"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/LaunchDaemons"
-  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
-  printf '#!/bin/bash\ntrap "" TERM\nsleep 300\n' > "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  local sb t0 tpid cpid bpid
+  sb="$WORK/forget-hung"; mkdir -p "$sb/Users/alice/.claude/fleet/bin" "$sb/Users/bob/.claude/fleet/bin" "$sb/LaunchDaemons"
+  printf '{"alice": {"uid": %s, "gid": %s, "home": "%s"}, "bob": {"uid": %s, "gid": %s, "home": "%s"}}\n' \
+    "$(id -u)" "$(id -g)" "$sb/Users/alice" "$(id -u)" "$(id -g)" "$sb/Users/bob" > "$sb/passwd.json"
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 300 &\necho "$!" > "$0.child"\nwait\n' > "$sb/Users/alice/.claude/fleet/bin/hung.sh"
   chmod +x "$sb/Users/alice/.claude/fleet/bin/hung.sh"
+  printf '#!/bin/bash\nexec sleep 300\n' > "$sb/Users/bob/.claude/fleet/bin/hung.sh"
   printf '{"children": [], "tasks": [], "account": [{"name": "base-sync", "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/hung.sh"], "every": 1}]}\n' > "$sb/table.json"
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" \
     FLEET_NODE_USERS="$sb/Users" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_TICK=0.2 FLEET_NODE_LAUNCHCTL='' \
     FLEET_NODE_TEST=1 FLEET_NODE_PASSWD="$sb/passwd.json" FLEET_NODE_RELEASE_WAIT=1 FLEET_NODE_FORGET_KILL_WAIT=1
-  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
+  python3 "$BIN/fleet-node-supervisor.py" account adopt alice >/dev/null 2>&1 \
+    && python3 "$BIN/fleet-node-supervisor.py" account adopt bob >/dev/null 2>&1 || { WHY="adopt failed"; _forget_unset; return 1; }
   python3 -I "$BIN/fleet-node-supervisor.py" run 2>>"$sb/sup.err" &
   printf '%s\n' "$!" >> "$WORK/cred-pids"
   _tp() { python3 -c 'import json,sys; print((json.load(open(sys.argv[1])).get("tasks", {}).get(sys.argv[2]) or {}).get("pid") or "")' \
            "$sb/db/state.json" "$1" 2>/dev/null; }
-  _has_tp() { [ -n "$(_tp alice/base-sync)" ]; }
-  until_ok 10 _has_tp || { WHY="alice's task never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
+  _has_tp() { [ -n "$(_tp "$1")" ]; }
+  until_ok 10 _has_tp alice/base-sync && until_ok 10 _has_tp bob/base-sync \
+    && until_ok 10 test -s "$sb/Users/alice/.claude/fleet/bin/hung.sh.child" \
+    || { WHY="tasks never started: $(tail -2 "$sb/sup.err")"; _forget_unset; return 1; }
   tpid=$(_tp alice/base-sync)
+  bpid=$(_tp bob/base-sync)
+  cpid=$(cat "$sb/Users/alice/.claude/fleet/bin/hung.sh.child")
+  python3 -c 'import os,sys; a,c,b=map(int,sys.argv[1:]); assert os.getpgid(a)==os.getpgid(c)==a; assert os.getpgid(b)==b!=a' \
+    "$tpid" "$cpid" "$bpid" || { WHY="task process groups do not match their recorded pids"; _forget_unset; return 1; }
   t0=$(now)
   python3 "$BIN/fleet-node-supervisor.py" account forget alice >"$sb/forget.out" 2>&1 \
     || { WHY="account forget failed on a hung task: $(tail -1 "$sb/forget.out")"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   # ended is ended: a killed run waits as a zombie for the daemon's tick to reap
   # it, and forget no longer waits for that (#4044)
-  kill -0 "$tpid" 2>/dev/null && ! ps -o stat= -p "$tpid" 2>/dev/null | grep -q '^ *Z' \
+  _forget_task_running "$tpid" \
     && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
+  _forget_task_running "$cpid" \
+    && { WHY="alice's task child still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   grep -q 'sent KILL' "$sb/forget.out" || { WHY="forget never said it killed the run: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
-  python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \
-    || { WHY="accounts.json still holds alice"; _forget_unset; return 1; }
+  python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); sys.exit(0 if "alice" not in a and a["bob"]["managed"] else 1)' "$sb/db/accounts.json" \
+    || { WHY="accounts.json still holds alice (or lost bob)"; _forget_unset; return 1; }
+  [ "$(_tp bob/base-sync)" = "$bpid" ] && _forget_task_running "$bpid" \
+    || { WHY="forget stopped or replaced bob's task too"; _forget_unset; return 1; }
   SECS=$(since "$t0")
   _forget_unset
-  WHAT="删号时该登录有个挂住的任务（不理 TERM）：account forget 等不到就对它的进程组 TERM 再 KILL，删号照样完成"
+  WHAT="删号时该登录有个挂住的任务（不理 TERM）：account forget 对它的进程组 TERM 再 KILL，父子退出、别的账号任务不停，删号照样完成"
 }
 _forget_unset() {
   unset FLEET_NODE_STATE FLEET_NODE_LOG FLEET_NODE_RUNTIME FLEET_NODE_DAEMON_DIR FLEET_NODE_USERS FLEET_NODE_TABLE \
