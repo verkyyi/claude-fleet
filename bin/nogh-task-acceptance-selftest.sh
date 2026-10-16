@@ -22,6 +22,7 @@ assert not m.valid_output("baseline", "steps: 6/7 · gh calls: 0 · github http:
 trace = '''42 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("192.0.2.1")}, 16) = -1 ENETUNREACH
 42 connect(3, {sa_family=AF_INET, sin_port=htons(80), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
 43 connect(3, {sa_family=AF_INET6, sin6_port=htons(443), inet_pton(AF_INET6, "2001:db8::1", &sin6_addr)}, 28) = -1 ENETUNREACH
+43 connect(3, {sa_family=AF_INET6, sin6_port=htons(80), inet_pton(AF_INET6, "::ffff:127.0.0.1", &sin6_addr)}, 28) = 0
 43 sendto(3, "", 0, 0, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("192.0.2.2")}, 16) = -1 ENETUNREACH
 '''
 assert m.network_counts(trace) == dict(external_http=2, other_external=1)

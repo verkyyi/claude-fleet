@@ -10,9 +10,11 @@ import hashlib
 import ipaddress
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -59,7 +61,10 @@ def network_counts(trace):
         addresses = re.findall(r'(?:inet_addr\(|inet_pton\(AF_INET6, )"([^"]+)"', line)
         if not addresses:
             raise ValueError("unrecognized network trace: " + line)
-        if all(ipaddress.ip_address(a).is_loopback for a in addresses):
+        def local(address):
+            ip = ipaddress.ip_address(address)
+            return ip.is_loopback or bool(getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback)
+        if all(local(a) for a in addresses):
             continue
         port = re.search(r'(?:sin_port|sin6_port)=htons\((\d+)\)', line)
         counts["external_http" if port and port[1] in ("80", "443") else "other_external"] += 1
@@ -94,6 +99,7 @@ class Harness:
         for directory in ("home", "tmp", "shim", "conf"):
             (work / directory).mkdir(exist_ok=True)
         self.env.update(HOME=str(work/"home"), TMPDIR=str(work/"tmp"),
+                        USER=pwd.getpwuid(os.getuid()).pw_name, LOGNAME=pwd.getpwuid(os.getuid()).pw_name, SHELL="/bin/bash",
                         FLEET_CONF_DIR=str(work/"conf"), FLEET_SKIP_GLOBAL_CONF="1",
                         PATH=str(work/"shim")+os.pathsep+self.env["PATH"],
                         PYTHONDONTWRITEBYTECODE="1", GIT_CONFIG_NOSYSTEM="1",
@@ -147,7 +153,7 @@ class Harness:
 
     def execute(self):
         # No user-set flag can substitute for an actual isolated network stack.
-        interfaces = {p.name for p in Path("/sys/class/net").iterdir()}
+        interfaces = {name for _, name in socket.if_nameindex()}
         if interfaces != {"lo"}:
             raise ValueError("run requires a fresh Linux network namespace with only loopback")
         source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
