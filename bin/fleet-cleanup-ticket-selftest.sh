@@ -103,7 +103,6 @@ done_token() { echo "$*"; }
             run('mismatched ' + str((key, value)), ticket=t)
         run('hub unavailable has no forge fallback', status=503)
         run('unknown provider refuses even matching forge refs', home='typo')
-        run('ambiguous window binding refuses', state='closed', TEST_WIN='@7\n@8')
         run('ambiguous branch refuses', state='closed', TEST_HEAD='issue-42-sidefix')
         run('GitHub matching closing refs preserve fast path', home='github', state='open', expected='passed', GH_STATE='OPEN')
         assert not ghlog.read_text(), 'GitHub fast path did an unnecessary read'

@@ -285,22 +285,22 @@ fi
 issue_open_gate() {
   [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
-  local want c ist='' verb home tid='' doc
+  local want c ist='' verb ticket_home tid='' doc
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
   # Preserve the door's legacy unset=github default, but an invalid configured
-  # provider or an ambiguous branch/window must not silently select GitHub.
-  home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || home=unknown
-  case "$home" in
-    ''|github|hub) tid=$(bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" 2>/dev/null) || tid='' ;;
+  # provider or an ambiguous branch must not silently select GitHub. Window
+  # ambiguity remains the downstream liveness gate's skip:live, in its order.
+  ticket_home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || ticket_home=unknown
+  case "$ticket_home" in
+    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" 2>/dev/null) || tid='' ;;
   esac
   [ "$href" = "$BRANCH" ] || tid=''
-  if [ -n "$WIN" ] && ! [[ "$WIN" =~ ^@[0-9]+$ ]]; then tid=''; fi
   if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then
     for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
       [ "$c" = "$want" ] && return 0
     done
   fi
-  if [ -n "$tid" ] && doc=$(bash "$BIN/fleet-ticket.sh" read "$tid" \
+  if [ -n "$tid" ] && doc=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" read "$tid" \
       --json id,number,url,state --max-age 0 2>/dev/null); then
     ist=$(printf '%s' "$doc" | python3 -c '
 import json,sys
