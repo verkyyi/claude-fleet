@@ -197,6 +197,33 @@ prepare/目录分配零调用、字面参数、既有 embedded 透传和固定�
 
 尚未部署。完整 MCP、真实面板和生产空闲资源对比仍按后续验收矩阵执行。
 
+### 上下文用量不是同一条广播
+
+继续删除轮询前，单独验证[原生用量事件](https://learn.chatgpt.com/docs/app-server)：
+`thread/status/changed` 能到达只初始化的观察连接，不代表
+`thread/tokenUsage/updated` 也会广播给它。新增显式离线探针
+`bin/fleet-native-usage-cli-selftest.py`，使用空 HOME、真实 app-server、三个有界测试回合，
+模型端点仅在 `127.0.0.1` 返回合成 Responses，不带凭据、不执行工具。
+
+本机 Codex `0.163.0` 通过 45 项检查：
+
+- 只初始化以及只做 `thread/read` 的连接没有收到用量事件；创建线程的连接收到。
+- 对已加载的精确线程做 `thread/resume` 后，观察连接收到用量；同一连接
+  `thread/unsubscribe` 后不再收到，原控制连接仍收到。
+- resume 前后线程 ID、model、approvalPolicy、sandbox 保持；只有显式发起的三个回合和
+  三次本机请求，没有第二个线程或观察操作触发的推理。
+- 每回合的 `last.totalTokens` 与累计 `total.totalTokens` 独立核对，分母取原生事件，
+  不把累计用量当上下文，也不从状态广播推断未收到的数值。
+
+固定 Linux `0.162.1` 的同一探针纳入既有 native-managed-hooks CI，必须以该提交的
+结果为准，不能用本机版本代替。此测试不启动真实 TUI，不证明完整 MCP、活动回合中
+重订阅、审批归属、断线重连或跨账号生命周期。下一步若让既有连接订阅用量，须先补齐
+这些边界；本批没有给生产监测器加 resume，也没有提前删除 rollout 计量和兼容读取。
+
+```sh
+python3 bin/fleet-native-usage-cli-selftest.py --codex /path/to/codex
+```
+
 ### 原生插件替代跨 Agent 翻译的证据
 
 [官方 CLI 文档](https://learn.chatgpt.com/docs/cli/reference) 已提供 `codex plugin` 与 marketplace 管理。
