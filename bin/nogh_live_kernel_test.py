@@ -94,8 +94,8 @@ os.write(198, b'.' * END_SIZE)
                             line = source.readline(262145)
                             if not line: break
                             trace.feed(line)
-                except BaseException:
-                    failure.append('ACTUAL_STRACE_FORMAT_REFUSED')
+                except BaseException as exc:
+                    failure.append(str(exc) if isinstance(exc, Refused) else 'ACTUAL_STRACE_FORMAT_REFUSED')
             reader = threading.Thread(target=consume, daemon=True); reader.start()
             proc = subprocess.Popen(['/usr/bin/strace', *STRACE_OPTIONS, '-o', '/proc/self/fd/%d' % write_fd,
                                      sys.executable, str(probe)],
@@ -104,7 +104,9 @@ os.write(198, b'.' * END_SIZE)
             os.close(write_fd); os.close(MARKER_FD)
             code = proc.wait(timeout=8)
             reader.join(timeout=1)
-            require(not reader.is_alive() and not failure, 'ACTUAL_OBSERVER_LOST')
+            require(not reader.is_alive(), 'ACTUAL_OBSERVER_LOST')
+            if failure:
+                raise Refused(failure[0])
             proof = trace.finish(code)
             counts = proof['intervals']['startup']
             require(counts.get('github_network', 0) >= 2 and counts.get('allow_hub', 0) >= 2

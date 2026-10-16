@@ -244,6 +244,11 @@ class TraceMetadata(unittest.TestCase):
         text, fds = observer.descriptor_metadata('execve("/tmp/3<gh>", [], 0) = 0')
         self.assertEqual(text, 'execve("/tmp/3<gh>", [], 0) = 0')
         self.assertEqual(fds, {})
+        text, fds = observer.descriptor_metadata('write(198</dev/null<char 1:3>>, ""..., 1) = 1')
+        self.assertEqual(text, 'write(198, ""..., 1) = 1')
+        text, fds = observer.descriptor_metadata('recvmsg(3, {cmsg_data=[4</memfd:test>(deleted)]}, 0) = 1')
+        self.assertEqual(text, 'recvmsg(3, {cmsg_data=[4]}, 0) = 1')
+        self.assertEqual(fds[4], '/memfd:test (deleted)')
 
     def test_teardown_attempts_are_kept(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) = 3'])

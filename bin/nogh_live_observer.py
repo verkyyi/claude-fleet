@@ -40,10 +40,23 @@ def descriptor_metadata(call):
                 end += 1
             result.append(call[offset:end]); offset = end
             continue
-        found = re.match(r'(\d+)<((?:->|[^<>])*)>', call[offset:]) if call[offset].isdigit() else None
+        found = re.match(r'(\d+)<', call[offset:]) if call[offset].isdigit() else None
         if found:
-            descriptors[int(found[1])] = found[2]
-            result.append(found[1]); offset += found.end()
+            begin = offset + found.end()
+            end, depth = begin, 1
+            while end < len(call) and depth:
+                if call.startswith('->', end):
+                    end += 2; continue
+                if call[end] == '<': depth += 1
+                elif call[end] == '>': depth -= 1
+                end += 1
+            require(depth == 0, 'FD_ANNOTATION_TRUNCATED')
+            annotation = call[begin:end - 1]
+            for suffix in ('(deleted)', ' (deleted)'):
+                if call.startswith(suffix, end):
+                    annotation += ' (deleted)'; end += len(suffix); break
+            descriptors[int(found[1])] = annotation
+            result.append(found[1]); offset = end
         else:
             result.append(call[offset]); offset += 1
     return ''.join(result), descriptors
