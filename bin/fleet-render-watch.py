@@ -106,7 +106,8 @@ def stop(proc):
         proc.stdout.close()
 
 
-def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
+def wait(sockets, interval, timeout=FALLBACK, since_frame=None,
+         events_only=False, since=None, changed=()):
     start = monotonic()
     if since_frame is not None:
         since_frame = since_frame or math.floor(start / interval)
@@ -116,6 +117,7 @@ def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
     cache = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'global/render-watch.json'
     lease_until = 0
     checked_until = 0
+    reason = 'timeout'
     try:
         cached = json.loads(cache.read_text())
         checked_until = float(cached['until'])
@@ -128,6 +130,8 @@ def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
         pass
 
     def result():
+        if events_only:
+            return reason
         now = monotonic()
         lease = max(0, math.ceil((lease_until - now) / interval))
         if since_frame is not None:
@@ -156,16 +160,21 @@ def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
             if owner_fd is not None:
                 sel.register(owner_fd, selectors.EVENT_READ, 'owner')
             for path in sockets:
-                proc = subprocess.Popen(['tmux', '-S', path, 'wait-for', CHANNEL],
+                # The ready line and registration run in one tmux command queue.
+                # Check retained input stamps AFTER this acknowledgement: even if
+                # another consumer took an earlier latched signal, it cannot hide
+                # a change during the list's previous refresh/registration gap.
+                command = (['display-message', '-p', 'fleet-wait-ready', ';'] if events_only else [])
+                proc = subprocess.Popen(['tmux', '-S', path, *command, 'wait-for', CHANNEL],
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                         start_new_session=True)
                 children.append(proc)
-                sel.register(proc.stdout, selectors.EVENT_READ, 'event')
-            if attached(sockets, deadline=start+timeout) or lease_until > start:
+                sel.register(proc.stdout, selectors.EVENT_READ, proc if events_only else 'event')
+            if not events_only and (attached(sockets, deadline=start+timeout) or lease_until > start):
                 return result()
-            if any(Path(p + '.dirty').exists() for p in sockets):
+            if not events_only and any(Path(p + '.dirty').exists() for p in sockets):
                 return result()
-            if checked_until <= start:
+            if not events_only and checked_until <= start:
                 query = subprocess.Popen(['bash', str(BIN / 'fleet-client-where.sh'), '--json'],
                                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                          start_new_session=True)
@@ -177,7 +186,29 @@ def wait(sockets, interval, timeout=FALLBACK, since_frame=None):
                 deadline = min(3, timeout) if query else timeout
                 events = sel.select(max(0, deadline - (monotonic() - start)))
                 if any(key.data in ('event', 'owner') for key, _ in events):
+                    reason = 'event'
                     break
+                if events_only:
+                    for key, _ in events:
+                        proc = key.data
+                        chunk = os.read(proc.stdout.fileno(), 65536)
+                        if chunk:
+                            try:
+                                stamp = Path(since).stat().st_mtime_ns
+                                # Filesystems can give adjacent writes the same
+                                # timestamp (notably Linux within one clock tick).
+                                # Equality is ambiguous: refresh conservatively.
+                                if any(Path(p).exists() and Path(p).stat().st_mtime_ns >= stamp for p in changed):
+                                    reason = 'changed'
+                                    return result()
+                            except (OSError, TypeError):
+                                pass
+                        else:
+                            sel.unregister(proc.stdout)
+                            if proc.wait() == 0:
+                                reason = 'event'
+                                return result()
+                    continue
                 if query and any(key.data == 'lease' for key, _ in events):
                     # Readiness may be PARTIAL output, not process exit. Never
                     # communicate()/wait() here: a stalled lease reader must not
@@ -450,12 +481,41 @@ class Observer:
             self.query = None
 
 
+def view_active(request, sockets):
+    """A real list read within 30s AND the shared client/lease predicate.
+
+    A permanently attached terminal (or online lease) alone never polls lists.
+    Use the same bounded lease reader/cache as the spinner, only when needed.
+    """
+    try:
+        age = time.time() - Path(request).stat().st_mtime
+        if not 0 <= age <= 30:
+            return False
+    except OSError:
+        return False
+    if attached(sockets):
+        return True
+    observer = Observer()
+    try:
+        observer.refresh()
+        while observer.query:
+            select.select([observer.query.stdout], [], [], max(0, observer.query_deadline - monotonic()))
+            observer.refresh()
+        return observer.lease_until > monotonic()
+    finally:
+        observer.close()
+
+
 if __name__ == '__main__':
     # SIGTERM follows the same cleanup path as timeout/exception.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--max-frames', type=int)
     parser.add_argument('--since-frame', type=int)
+    parser.add_argument('--events-only', action='store_true', help='wait for the shared broadcast, even with viewers')
+    parser.add_argument('--since', help='refresh-start stamp; compare inputs after waiter registration')
+    parser.add_argument('--changed', action='append', default=[])
+    parser.add_argument('--view-active', help='exit 0 only with a recent list request and a shared watcher')
     parser.add_argument('interval', type=float)
     parser.add_argument('sockets', nargs='*')
     args = parser.parse_args()
@@ -463,6 +523,9 @@ if __name__ == '__main__':
             args.max_frames is not None and args.max_frames < 1) or (
             args.since_frame is not None and args.since_frame < 0):
         parser.error('interval/max-frames must be positive; since-frame nonnegative')
-    print(*wait(args.sockets, args.interval,
+    if args.view_active:
+        sys.exit(0 if view_active(args.view_active, args.sockets) else 1)
+    answer = wait(args.sockets, args.interval,
                 FALLBACK if args.max_frames is None else args.max_frames * args.interval,
-                args.since_frame))
+                args.since_frame, args.events_only, args.since, args.changed)
+    print(answer) if args.events_only else print(*answer)
