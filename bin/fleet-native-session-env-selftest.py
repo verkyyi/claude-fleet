@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""Explicit offline concurrent-TUI/MCP environment probe; no live Fleet access."""
+import argparse
+import ast
+import fcntl
+import http.server
+import json
+import os
+from pathlib import Path
+import pty
+import runpy
+import select
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import threading
+import time
+
+
+NAMES = ('TMUX', 'TMUX_PANE', 'FLEET_CONF_DIR', 'FLEET_SESSION', 'FLEET_WORKER_CRED',
+         'FLEET_MCP_BIN', 'FLEET_MCP_ORCH')
+MCP = '''import json, os, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    method = request.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2024-11-05', 'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'session-fixture', 'version': '1'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'inspect', 'description': 'Read only fixture identity',
+                            'inputSchema': {'type': 'object', 'properties': {}}}]}
+    elif method == 'tools/call':
+        observed = {'pid': os.getpid(), 'cwd': os.getcwd(),
+                    'environment': {name: os.environ.get(name) for name in sys.argv[1:]},
+                    'metadata': request.get('params', {}).get('_meta')}
+        result = {'content': [{'type': 'text', 'text': json.dumps(observed)}]}
+    elif method == 'resources/list':
+        result = {'resources': []}
+    elif method == 'resources/templates/list':
+        result = {'resourceTemplates': []}
+    else:
+        result = {}
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+'''
+
+
+def launch(binary, base, codex_home, environment, prior_ids, stop, ready):
+    descriptor, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
+    child = None
+    try:
+        try:
+            child = subprocess.Popen([binary, '--cd', str(base), '--worktree',
+                                      'Offline session environment fixture. Do not run tools.'],
+                                     cwd=base, env=environment, stdin=slave, stdout=slave, stderr=slave,
+                                     start_new_session=True)
+        finally:
+            os.close(slave)
+        terminal = bytearray()
+        deadline = time.monotonic() + 30
+        while child.poll() is None and time.monotonic() < deadline:
+            if select.select([descriptor], [], [], .1)[0]:
+                try:
+                    terminal.extend(os.read(descriptor, 65536))
+                except OSError:
+                    break
+                for query, answer in ((b'\x1b[6n', b'\x1b[1;1R'), (b'\x1b[c', b'\x1b[?1;2c'),
+                                      (b'\x1b[>c', b'\x1b[>0;1;0c')):
+                    if query in terminal:
+                        os.write(descriptor, answer)
+                        terminal = terminal.replace(query, b'')
+                terminal = terminal[-32768:]
+            found = []
+            for rollout in codex_home.glob('sessions/**/*.jsonl'):
+                with rollout.open() as stream:
+                    try:
+                        first = json.loads(stream.readline())
+                    except json.JSONDecodeError:
+                        continue
+                if first.get('type') == 'session_meta' and first['payload']['id'] not in prior_ids:
+                    found.append(first['payload'])
+            if len(found) == 1 and ready():
+                return child, descriptor, found[0]
+        raise AssertionError('native TUI did not create one distinct session')
+    except BaseException:
+        stop(child)
+        os.close(descriptor)
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--codex', default='codex')
+    parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    arguments = parser.parse_args()
+    executable = shutil.which(arguments.codex)
+    if not executable:
+        parser.error('native Codex binary is required')
+    binary = str(Path(executable).resolve())
+    client_type = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-rpc.py'))['Client']
+    stop = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-native-local-runtime-selftest.py'))['stop']
+    checks, requests, observations = [], [], []
+
+    def check(condition, message):
+        if not condition:
+            raise AssertionError(message)
+        checks.append(message)
+
+    source = ast.parse((arguments.fleet_root / 'bin/fleet-mcp.py').read_text())
+    declared = [ast.literal_eval(node.value) for node in source.body if isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == 'CODEX_ENV' for target in node.targets)]
+    check(declared == [list(NAMES)], 'fixture tracks the current Fleet MCP environment contract')
+
+    class Endpoint(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get('Content-Length', '0')))
+            requests.append({'path': self.path, 'authorization': bool(self.headers.get('Authorization'))})
+            body = b'{"error":{"message":"offline fixture: inference disabled"}}'
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *unused):
+            pass
+
+    endpoint = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Endpoint)
+    serving = threading.Thread(target=endpoint.serve_forever, daemon=True)
+    serving.start()
+    try:
+        with tempfile.TemporaryDirectory(prefix='fleet-native-env-', dir='/tmp') as temporary:
+            root = Path(temporary).resolve()
+            home, base = root / 'home', root / 'repo'
+            codex_home = home / '.codex'
+            codex_home.mkdir(parents=True)
+            environment = {'HOME': str(home), 'CODEX_HOME': str(codex_home), 'PATH': os.environ['PATH'],
+                           'TMPDIR': str(root), 'TERM': 'xterm-256color',
+                           'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_CACHE_HOME': str(home / '.cache'),
+                           'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
+                           'GIT_AUTHOR_NAME': 'Fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+                           'GIT_COMMITTER_NAME': 'Fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
+
+            def git(*values):
+                return subprocess.check_output(['git', *map(str, values)], env=environment,
+                                               text=True, stderr=subprocess.PIPE, timeout=15).strip()
+
+            git('init', '--quiet', base)
+            (base / 'tracked').write_text('unchanged\n')
+            git('-C', base, 'add', 'tracked')
+            git('-C', base, 'commit', '--quiet', '-m', 'fixture')
+            script = root / 'mcp.py'
+            script.write_text(MCP)
+            names = [*NAMES, 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']
+            (codex_home / 'config.toml').write_text(
+                'model="probe"\nmodel_provider="offline"\napproval_policy="never"\nsandbox_mode="read-only"\n'
+                '[features]\ndaemon_auto_start=true\nhooks=false\nremote_plugin=false\n'
+                '[model_providers.offline]\nname="offline"\n'
+                f'base_url="http://127.0.0.1:{endpoint.server_port}/v1"\n'
+                'wire_api="responses"\nrequires_openai_auth=false\nrequest_max_retries=0\nstream_max_retries=0\n'
+                '[projects.' + json.dumps(str(base)) + ']\ntrust_level="trusted"\n'
+                '[mcp_servers.fixture]\ncommand=' + json.dumps(sys.executable) + '\n'
+                'args=' + json.dumps([str(script), *names]) + '\nenv_vars=' + json.dumps(names) + '\n'
+                'required=true\nstartup_timeout_sec=10\ntool_timeout_sec=5\n')
+            backend_values = {name: 'fixture-backend-' + name.lower() for name in NAMES}
+            version = subprocess.check_output([binary, '--version'], env=environment, text=True,
+                                              stderr=subprocess.PIPE, timeout=10).strip()
+            with (root / 'backend.log').open('w') as logfile:
+                backend = subprocess.Popen([binary, 'app-server', '--listen', 'unix://'], cwd=base,
+                    env=dict(environment, **backend_values), stdin=subprocess.DEVNULL, stdout=logfile,
+                    stderr=logfile, start_new_session=True)
+                children, descriptors, identifiers = [], [], []
+                rpc = None
+                try:
+                    socket = codex_home / 'app-server-control/app-server-control.sock'
+                    deadline = time.monotonic() + 15
+                    while not socket.exists() and backend.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.05)
+                    check(socket.exists() and backend.poll() is None, 'owned native backend starts')
+                    rpc = client_type('unix://' + str(socket), timeout=15, peer_pid=backend.pid)
+                    check(rpc.call('thread/loaded/list', {})['data'] == [], 'backend starts without loaded threads')
+                    for label in ('first', 'second'):
+                        values = {name: 'fixture-' + label + '-' + name.lower() for name in NAMES}
+                        child, descriptor, metadata = launch(binary, base, codex_home,
+                            dict(environment, **values), identifiers, stop, lambda: len(requests) == len(identifiers) + 1)
+                        children.append(child)
+                        descriptors.append(descriptor)
+                        identifiers.append(metadata['id'])
+                        deadline = time.monotonic() + 15
+                        while len(requests) < len(identifiers) and time.monotonic() < deadline:
+                            time.sleep(.05)
+                        check(len(requests) == len(identifiers), label + ': one expected loopback request')
+                        loaded = rpc.call('thread/loaded/list', {})['data']
+                        check(all(identifier in loaded for identifier in identifiers), label + ': all opened TUI threads belong to backend')
+                        check(all(process.poll() is None for process in children), label + ': both TUI lifetimes overlap')
+                        native = rpc.call('thread/read', {'threadId': metadata['id'], 'includeTurns': False})['thread']
+                        check(Path(native['cwd']).resolve().is_relative_to(codex_home / 'worktrees'),
+                              label + ': native worktree remains outside base')
+                        result = rpc.call('mcpServer/tool/call', {'threadId': metadata['id'],
+                            'server': 'fixture', 'tool': 'inspect', 'arguments': {}})
+                        check(not result.get('isError'), label + ': native MCP inspection succeeds')
+                        observed = json.loads(result['content'][0]['text'])
+                        check(all(observed['environment'][name] == backend_values[name] for name in NAMES),
+                              label + ': MCP inherits backend values rather than TUI session values')
+                        check(observed['metadata']['threadId'] == metadata['id'],
+                              label + ': native MCP metadata identifies its requested thread')
+                        check(observed['environment']['CODEX_THREAD_ID'] is None
+                              and observed['environment']['CODEX_SESSION_ID'] is None,
+                              label + ': native thread identity is not injected into inspected MCP environment')
+                        check(Path(observed['cwd']).resolve() == Path(native['cwd']).resolve(),
+                              label + ': MCP working directory matches native worktree')
+                        observations.append({'label': label, 'thread': metadata['id'], **observed})
+                    check(len(set(identifiers)) == 2, 'distinct native roots share the backend')
+                    check(observations[0]['pid'] != observations[1]['pid'], 'each thread has a distinct MCP process')
+                    forged = rpc.call('mcpServer/tool/call', {'threadId': identifiers[0],
+                        'server': 'fixture', 'tool': 'inspect', 'arguments': {},
+                        '_meta': {'threadId': identifiers[1], 'fixtureMarker': 'caller-supplied'}})
+                    forged_result = json.loads(forged['content'][0]['text'])
+                    check(not forged.get('isError') and forged_result['metadata']['threadId'] == identifiers[0],
+                          'native thread routing overrides a forged metadata threadId')
+                    check(forged_result['metadata']['fixtureMarker'] == 'caller-supplied',
+                          'other caller metadata is not an authorization credential')
+                    check(forged_result['pid'] == observations[0]['pid'],
+                          'a repeated first-thread call does not reuse the second thread process')
+                    observations.append({'label': 'forged-metadata', 'thread': identifiers[0], **forged_result})
+                    stop(children[0])
+                    remaining = rpc.call('mcpServer/tool/call', {'threadId': identifiers[1],
+                        'server': 'fixture', 'tool': 'inspect', 'arguments': {}})
+                    remaining_result = json.loads(remaining['content'][0]['text'])
+                    check(children[1].poll() is None and not remaining.get('isError')
+                          and remaining_result['pid'] == observations[1]['pid']
+                          and remaining_result['metadata']['threadId'] == identifiers[1],
+                          'stopping the first TUI does not change second-thread tool ownership')
+                    check(all(not request['authorization'] and request['path'] == '/v1/responses' for request in requests),
+                          'all inference is rejected locally without credentials')
+                    check((base / 'tracked').read_text() == 'unchanged\n' and not git('-C', base, 'status', '--porcelain'),
+                          'base checkout remains unchanged')
+                finally:
+                    for child in children:
+                        stop(child)
+                    for descriptor in descriptors:
+                        os.close(descriptor)
+                    if rpc is not None:
+                        rpc.close()
+                    stop(backend)
+            def exists(pid):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return False
+                return True
+
+            deadline = time.monotonic() + 5
+            while any(exists(observed['pid']) for observed in observations) and time.monotonic() < deadline:
+                time.sleep(.05)
+            check(not any(exists(observed['pid']) for observed in observations), 'owned MCP processes exit with backend cleanup')
+            print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
+                              'scope': 'fixture values only; not live credential or tool authorization acceptance'}, indent=2))
+    finally:
+        endpoint.shutdown()
+        endpoint.server_close()
+        serving.join(timeout=5)
+
+
+if __name__ == '__main__':
+    main()

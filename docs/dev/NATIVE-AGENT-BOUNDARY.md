@@ -238,6 +238,37 @@ python3 bin/fleet-native-local-runtime-selftest.py --codex /path/to/codex
 python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --codex /path/to/codex
 ```
 
+### 共享后台的 MCP 环境不是逐客户端环境
+
+显式探针 `bin/fleet-native-session-env-selftest.py` 同时保留两个真实本地 TUI，
+各自创建原生 Worktree，并验证精确线程都属于同一个、内核 PID 已核对的原生后台。
+三个进程的七项 Fleet 环境变量均赋不同的已知假值；空 HOME 内仅启动无副作用的夹具 MCP，
+模型请求固定在 loopback 返回 400。它不运行真实 Fleet 工具、不读取真实凭据，也不是业务成功验收。
+
+本机 `0.163.0` 与测试节点 `0.162.1` 各 30 项检查通过，测试节点的四个依赖源码哈希与候选一致；确认：
+- 两个线程各有独立 MCP 进程、正确的原生 Worktree cwd，但七项环境值都来自**后台**，不是各自 TUI。
+- 被检查的 MCP 环境没有 `CODEX_THREAD_ID` / `CODEX_SESSION_ID`；工具请求 `_meta.threadId` 带对应原生线程。
+- 对第一线程调用时伪造 `_meta.threadId` 为第二线程，原生仍发出第一线程 ID，且复用第一线程的 MCP 进程；其他自定义 metadata 原样保留。
+- 关闭第一个 TUI 不改变第二线程的工具归属；后台清理后本探针观察到的 MCP 进程退出，基础检出不变。
+
+这是**共享后台迁移的阻断项**，不是现有逐会话私有后台泄露线上凭据的证据。
+此前单后台插件 `env_vars` 测试只证明变量传递，不证明并发客户端身份隔离。
+不得把 `FLEET_WORKER_CRED`、`FLEET_SESSION`、`TMUX_PANE`、角色等会话值作为共享后台默认值，
+也不能靠重写后台环境或按 cwd 猜测归属来替代绑定。
+
+原生线程 ID 是上下文路由线索，不是能力凭据：能访问该账号 RPC 的调用方仍可选择顶层 threadId，
+其他 metadata 也可自行提供。后续须复用既有平台所有权/准入记录和签名能力验证，
+证明原生 root 与 Fleet 会话、账号及能力的对应关系；未知、冲突、过期绑定拒绝执行，
+并覆盖撤销、重连、并发创建和子 Agent。不能另造通用授权引擎或把模型提供的 ID 当证明。
+并发本地 TUI root 如何与已准入的 Fleet 会话可靠关联仍未实现，旧运行时和全部守卫保持。
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --codex /path/to/codex
+```
+
+测试节点及固定版本 CI 必须核对同一源码；完整 MCP、真实凭据、面板、恢复和延迟目标
+另做联合验收，不能由该离线夹具代替。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器
