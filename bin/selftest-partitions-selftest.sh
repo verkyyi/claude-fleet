@@ -3,7 +3,7 @@
 # Reads fleet-break-it-selftest.sh, fleet-break-it-node-selftest.sh,
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.sh,
 # fleet-hub-selftest.sh, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
-# fleet-break-it-part.py, break-it-durations.txt and selftest_part.py.
+# fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -20,6 +20,11 @@ root = Path(sys.argv[1])
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(root))
 import selftest_part
+
+# SDK-dependent cases can fall in any part. The SDK job must discover the whole
+# family too, not silently run only the parent's slice after a repartition.
+workflow = (root.parent / '.github/workflows/fleet-hub.yml').read_text()
+assert "run-selftests.sh fleet-hub 'fleet-hub-[0-9]*'" in workflow
 
 families = {
     'fleet-break-it': ('BREAK_PART', 18),
