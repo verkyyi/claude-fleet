@@ -197,7 +197,7 @@ func TestTaskLastKnownInventoryEvidence(t *testing.T) {
 	node := nodes["verk4"]
 	at := time.Now().UTC().Add(-3 * time.Minute).Truncate(time.Second)
 	worker := wrFleetM4 + "/" + wrFid
-	raw, _ := json.Marshal([]map[string]any{{"worker_id": worker, "state": "done", "needs": "perm"}})
+	raw, _ := json.Marshal([]map[string]any{nil, {"worker_id": worker, "state": "done", "needs": "perm"}})
 	if _, err := h.srv.Store.RecordFleetSnapshot(node.id, "fixture-node", "frank", "fixture-machine",
 		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", State: "ok", WorkersJSON: string(raw)}}, at); err != nil {
 		t.Fatal(err)

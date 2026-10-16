@@ -173,6 +173,9 @@ func (s *Server) taskLive(t *store.FleetTask, rows map[string][]map[string]any) 
 			// Retain the last inventory when the node disappears. Its original
 			// observation time is not the time of this Tasks GET.
 			for _, w := range ws {
+				if w == nil {
+					continue
+				}
 				if f.State != "unknown" {
 					w["observed_at"] = f.ObservedAt.UTC().Format(time.RFC3339Nano)
 				}
