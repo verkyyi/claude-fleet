@@ -21,7 +21,19 @@ const AttachmentPath = "/v1/attachment/connect"
 func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	person, status, code, msg := s.termPerson(r)
-	refuse := func(status int, code, msg string) { s.termRefuse(w, person, "attachment", status, code, msg) }
+	refuse := func(status int, code, msg string) {
+		// Browsers hide failed-upgrade status. Return a terminal status over a
+		// same-origin socket so expired auth is never retried as a network failure.
+		if r.URL.Query().Get("errors") == "stream" && r.Method == http.MethodGet && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && s.termOriginOK(r) {
+			ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+			if err == nil {
+				sendAttachmentSignal(r.Context(), ws, control.AttachmentSignal{T: "error", Status: status, Error: code, Message: msg})
+				ws.Close(websocket.StatusNormalClosure, "refused")
+			}
+			return
+		}
+		s.termRefuse(w, person, "attachment", status, code, msg)
+	}
 	if code != "" {
 		refuse(status, code, msg)
 		return
@@ -69,7 +81,17 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 		refuse(409, "unsupported", "update the node for direct attachments")
 		return
 	}
+	if r.URL.Query().Get("controller") == "1" && !nc.canTermController {
+		refuse(409, "unsupported", "update the node for terminal recovery")
+		return
+	}
 	gen := nc.attachmentGeneration
+	resume := r.URL.Query().Get("term_resume")
+	if len(resume) > 128 || strings.ContainsAny(resume, "/\\ \t\r\n") {
+		refuse(400, "resume", "invalid terminal identity")
+		return
+	}
+	take := r.URL.Query().Get("take") == "1"
 	previous := r.URL.Query().Get("previous")
 	if len(previous) > 128 || strings.ContainsAny(previous, "/\\ \t\r\n") {
 		refuse(400, "previous", "invalid previous connection")
@@ -113,13 +135,15 @@ func (s *Server) handleAttachment(w http.ResponseWriter, r *http.Request) {
 	defer s.termGate.release(person)
 	s.serveAttachment(w, r, attachmentAdmission{person: person, home: home, logical: logical,
 		target: target, epID: epID, node: nc, generation: gen, previous: previous,
-		service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
+		termResume: resume, termTake: take, service: "term", table: &s.termRelays, max: termRelayMax(s.TermRelayMaxPerLogin),
 		rate: s.TermRelayRateBPS, recheck: recheck})
 }
 
 // Service adapters share negotiation and leases, never their admission, data
 // parsers, accounting, or resource budgets.
 type attachmentAdmission struct {
+	termResume                                                   string
+	termTake                                                     bool
 	browser                                                      *websocket.Conn
 	person, logical, target, epID, generation, previous, service string
 	home                                                         store.EntryHome
@@ -195,7 +219,7 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 		},
 		hello: func(id, key string, now time.Time) []byte {
 			signingKey = key
-			grant = control.AttachmentGrant{V: 1, Person: person, Home: home.Machine, Login: home.Login, Node: epID, Service: a.service, Chat: a.request, Target: target, Conn: id, Previous: previous, Generation: gen, Fingerprint: fp, Mode: mode, Epoch: 1, Iat: now.Unix(), Exp: now.Add(control.AttachmentLease).Unix()}
+			grant = control.AttachmentGrant{V: 1, Person: person, Home: home.Machine, Login: home.Login, Node: epID, Service: a.service, TermResume: a.termResume, TermTake: a.termTake, Chat: a.request, Target: target, Conn: id, Previous: previous, Generation: gen, Fingerprint: fp, Mode: mode, Epoch: 1, Iat: now.Unix(), Exp: now.Add(control.AttachmentLease).Unix()}
 			b, _ := json.Marshal(control.AttachmentSignal{T: "open", Grant: control.SignAttachment(grant, key), SDP: first.SDP, STUN: stun})
 			return b
 		},
@@ -362,6 +386,9 @@ func (s *Server) serveAttachment(w http.ResponseWriter, r *http.Request, a attac
 						}
 					}
 					continue
+				case "error":
+					send(control.AttachmentSignal{T: "error", Error: sig.Error})
+					return
 				case "answer":
 					if selected {
 						continue

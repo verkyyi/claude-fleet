@@ -24,6 +24,7 @@ func CoreExec(sock, login string, argv []string) int {
 		return coreRefusedExit
 	}
 	defer conn.Close()
+	defer watchTermCancel(func() { conn.Close() })()
 	line, err := json.Marshal(map[string]any{"op": "exec-as", "args": map[string]any{"login": login, "argv": argv}})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ccquota core-exec: %v\n", err)

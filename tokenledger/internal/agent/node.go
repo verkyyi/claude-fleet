@@ -212,7 +212,7 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 	}
 	if a.cfg.FleetTerm {
 		caps = append(caps, control.CapTerm)
-		caps = append(caps, control.CapAttachment)
+		caps = append(caps, control.CapAttachment, control.CapTermController)
 	}
 	if a.svcRunCapable() {
 		// A service login takes service run attempts (claude-fleet#4086).

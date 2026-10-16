@@ -137,10 +137,11 @@ func VerifyTermGrant(s, tokenHash, login, relay string, now time.Time) (*TermGra
 // resize; from the agent ready (the PTY is up — input may start) and exit;
 // from the hub hello and error.
 type TermControl struct {
-	T    string `json:"t"`
-	Cols int    `json:"cols,omitempty"`
-	Rows int    `json:"rows,omitempty"`
-	Code int    `json:"code,omitempty"`
+	T     string `json:"t"`
+	Epoch uint64 `json:"epoch,omitempty"`
+	Cols  int    `json:"cols,omitempty"`
+	Rows  int    `json:"rows,omitempty"`
+	Code  int    `json:"code,omitempty"`
 	// hello's fields (the hub → browser): which terminal, which generation,
 	// which connection, how it travels.
 	V    int    `json:"v,omitempty"`
@@ -182,7 +183,7 @@ func ParseTermAgentControl(raw []byte) (TermControl, error) {
 	}
 	switch c.T {
 	case "ready":
-		return TermControl{T: "ready"}, nil
+		return c, nil
 	case "exit":
 		return TermControl{T: "exit", Code: c.Code}, nil
 	}

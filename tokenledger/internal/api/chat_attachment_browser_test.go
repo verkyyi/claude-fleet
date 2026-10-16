@@ -20,13 +20,22 @@ func TestChatAttachmentChromium(t *testing.T) {
 		t.Run(map[bool]string{false: "direct", true: "udp-denied"}[blocked], func(t *testing.T) {
 			h, svc, host, login := chatHarness(t)
 			setChatHome(t, h, pAlice, host, login)
+			h.srv.ConsoleFS = os.DirFS("../../../extras/web-console/dist")
 			var turnsStarted atomic.Int32
 			svc.mu.Lock()
+			svc.conversation = func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				if turnsStarted.Load() >= 4 {
+					io.WriteString(w, `{"session":"s1","items":[{"t":"user","text":"ui-once"},{"t":"text","d":"recovered-ui-once"}]}`)
+				} else {
+					io.WriteString(w, `{"session":"s1","items":[]}`)
+				}
+			}
 			svc.turn = func(w http.ResponseWriter) {
 				w.Header().Set("Content-Type", "application/x-ndjson")
 				io.WriteString(w, "{\"t\":\"text\",\"d\":\"中文-once\"}\n")
 				w.(http.Flusher).Flush()
-				if turnsStarted.Add(1) == 3 && !blocked {
+				if turnsStarted.Add(1) >= 3 {
 					// Keep the third turn alive while the browser cuts its transport.
 					time.Sleep(3 * time.Second)
 				} else {
@@ -57,10 +66,7 @@ func TestChatAttachmentChromium(t *testing.T) {
 					turns++
 				}
 			}
-			want := 3
-			if blocked {
-				want = 2
-			}
+			want := 4
 			if turns != want {
 				t.Fatalf("turns %d want %d (replay)", turns, want)
 			}

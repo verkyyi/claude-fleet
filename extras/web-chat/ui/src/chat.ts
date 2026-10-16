@@ -175,7 +175,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
 
   const load = useCallback(async () => {
     clearTimeout(follow.current);
-    if (transport.current.signal.aborted) return;
+    if (transport.current.signal.aborted || !navigator.onLine) return;
     const r = await chatFetch(`${API}/conversation`, { headers: H, signal: transport.current.signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     if (!r || !r.ok) {
@@ -211,7 +211,10 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     primeBrowser();
     const vis = () => { if (!document.hidden && !streaming.current) load(); };
     document.addEventListener("visibilitychange", vis);
-    return () => { transport.current.abort(); clearTimeout(follow.current); document.removeEventListener("visibilitychange", vis); };
+    // Re-read the transcript after connectivity returns; never resubmit a turn.
+    const online = () => { if (!streaming.current) load(); };
+    window.addEventListener("online", online);
+    return () => { transport.current.abort(); clearTimeout(follow.current); document.removeEventListener("visibilitychange", vis); window.removeEventListener("online", online); };
   }, [load]);
 
   const setModel = useCallback((m: string) => { setModelState(m); localStorage.setItem("fwc-model", m); }, []);
