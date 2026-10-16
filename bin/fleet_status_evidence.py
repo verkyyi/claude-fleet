@@ -17,6 +17,18 @@ def obj(value):
     return value if isinstance(value, dict) else {}
 
 
+def delivery_identity(observation, now=None):
+    """Use the owner's fresh reread, not the proof's own asserted identity."""
+    observation = obj(observation)
+    proof = obj(observation.get("proof"))
+    previous = obj(proof.get("runtime"))
+    current = runtime.project(observation.get("current"), expected=previous, now=now)
+    if (obj(current.get("runtime")).get("state") == "unknown"
+            or not shadow.exact(current.get("runtime"), previous.get("runtime"))):
+        return None
+    return current.get("identity")
+
+
 def project(proof=None, now=None, expected_worker=None, lost=False, expected=None):
     now = time.time() if now is None else now
     p = obj(proof)
@@ -112,7 +124,11 @@ def main():
     parser.add_argument("--text", action="store_true")
     args = parser.parse_args()
     proof = shadow.read(args.pane, socket=args.socket) if args.pane else json.load(sys.stdin)
-    print("\n".join(lines(proof, expected=proof.get("identity") if args.pane else None))
+    expected = None
+    if args.pane and args.text:
+        current = runtime.read(args.pane, socket=args.socket, expected=proof.get("runtime"))
+        expected = delivery_identity(dict(proof=proof, current=current))
+    print("\n".join(lines(proof, expected=expected))
           if args.text else json.dumps(proof, ensure_ascii=False))
 
 

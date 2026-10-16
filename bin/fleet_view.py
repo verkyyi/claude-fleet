@@ -2275,6 +2275,21 @@ def facts(fleet, e):
             "fid": f[6], "wname": f[7], "page": f[8] != "", "pane": f[9], "pr": pr}
 
 
+def evidence_command(fleet, argv, payload=None):
+    try:
+        p = subprocess.Popen(argv, env=act_env(fleet), stdin=subprocess.PIPE if payload else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        try:
+            out = p.communicate(input=payload, timeout=30)[0]
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.communicate()
+            return None
+        return json.loads(out) if p.returncode in (0, 2) else None
+    except (OSError, ValueError):
+        return None
+
+
 def evidence_read(fleet, row):
     """One user-requested read. Never called by entries/Refresh/inventory.
 
@@ -2282,30 +2297,29 @@ def evidence_read(fleet, row):
     The existing target resolver/facts guard owns the selected pane.
     """
     if row.get("far") or row.get("lost") or row.get("gone"):
-        return row.get("status_proof")
+        return dict(proof=row.get("status_proof"), current=None)
     before = facts(fleet, row)
     if not before.get("pane") or not before.get("fid") or before.get("fid") != row.get("fid"):
         return None
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet_status_evidence.py"),
             "--pane", before["pane"], "--socket", fleet]
     try:
-        p = subprocess.Popen(argv, env=act_env(fleet), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        try:
-            out = p.communicate(timeout=30)[0]
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.communicate()
-            return None
-        result = json.loads(out) if p.returncode == 0 else None
+        result = evidence_command(fleet, argv)
         after = facts(fleet, row)
         if any(after.get(k) != before.get(k) for k in ("fid", "pane")):
             return None
         if not isinstance(result, dict) or not isinstance(result.get("identity"), dict):
             return None
+        # Explicit action only: reread the complete current execution through
+        # the runtime owner AFTER collection and the row check. Preserve the
+        # original proof times. A changed generation/SID/turn/state is unknown.
+        current = evidence_command(fleet, [sys.executable, str(Path(__file__).absolute().parent / "fleet_runtime.py"),
+                                   "read", "--pane", before["pane"], "--socket", fleet],
+                                   json.dumps(dict(expected=result.get("runtime"))))
+        observation = dict(proof=result, current=current)
         worker = result["identity"].get("worker_id", "")
         if not worker:
-            return result  # preserve missing-launch/first-thread reasons
+            return observation  # preserve missing-launch/first-thread reasons
         if not isinstance(worker, str) or not worker.endswith("/" + before["fid"]):
             return None
         # View cache only, keyed by lifelong FID, with the source's original
@@ -2323,7 +2337,7 @@ def evidence_read(fleet, row):
             finally:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
-        return result
+        return observation
     except (OSError, ValueError):
         return None
 
@@ -2470,6 +2484,8 @@ ACTIONS = [
      "local": lambda r, a, f: sh("fleet-transfer.sh", "--from-panel", "--session", f, "--window", r["target"], "--to",
                                  other_agent(r).lower()),
      "far": far("agent"), "ask": None, "slow": True},
+    {"id": "evidence", "label": lambda r: "状态证据 / Status evidence", "when": lambda r: not r.get("gone"),
+     "local": lambda r, a, f: "evidence", "far": lambda r, a, f: "evidence", "ask": None},
     {"id": "reap", "label": lambda r: say("view_act_reap"), "when": lambda r: not r.get("gone"),
      "local": lambda r, a, f: sh("dash-reap.sh", r["target"], "--yes"), "far": far("reap"), "ask": "key",
      "prompt": lambda r: say("view_ask_reap_fmt", r.get("text") or r.get("name") or r["target"]), "keys": "yYnN",
@@ -2495,8 +2511,6 @@ ACTIONS = [
     # in this terminal (fleet-restore-pick.sh --pick: ↵ there restores one)
     {"id": "history", "label": lambda r: say("view_act_history"), "when": lambda r: True, "rowless": True,
      "local": lambda r, a, f: "history", "far": None, "ask": None},
-    {"id": "evidence", "label": lambda r: "状态证据 / Status evidence", "when": lambda r: not r.get("gone"),
-     "local": lambda r, a, f: "evidence", "far": lambda r, a, f: "evidence", "ask": None},
 ]
 ACTION = {a["id"]: a for a in ACTIONS}
 # The sidebar menu's letters (fleet-ui-lang.sh menu_keys) → the action here; the
@@ -2571,11 +2585,11 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
     if argv == "evidence":
-        proof = evidence_read(fleet, r)
+        import fleet_status_evidence
+        observation = evidence_read(fleet, r) or {}
         observed = dict(r)
-        if not r.get("far") and not r.get("lost") and isinstance(proof, dict):
-            observed["evidence_identity"] = proof.get("identity")
-        return 0, "\n".join(evidence_lines(observed, proof)), False
+        observed["evidence_identity"] = fleet_status_evidence.delivery_identity(observation)
+        return 0, "\n".join(evidence_lines(observed, observation.get("proof"))), False
     if argv in ("go", "shell") and lost_msg(r):
         return 1, lost_msg(r), False
     if argv == "go":
@@ -3352,10 +3366,12 @@ def _popup(screen, qo, vid, client, forward=""):
 
     while True:
         if evidence_result:
-            origin, proof = evidence_result.pop(0)
+            origin, observation = evidence_result.pop(0)
             if overlay is origin:
-                origin.proof, origin.reading = proof, False
-                origin.evidence_row["evidence_identity"] = proof.get("identity") if isinstance(proof, dict) else None
+                import fleet_status_evidence
+                observation = observation or {}
+                origin.proof, origin.reading = observation.get("proof"), False
+                origin.evidence_row["evidence_identity"] = fleet_status_evidence.delivery_identity(observation)
         if msg_until and time.time() > msg_until:
             msg, msg_until = "", 0
         if landed:

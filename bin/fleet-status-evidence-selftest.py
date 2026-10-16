@@ -3,11 +3,14 @@
 import copy
 from pathlib import Path
 import runpy
+import json
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import fleet_status_evidence as display
 import fleet_reap_shadow as shadow
+import fleet_view as view
 
 fixture = runpy.run_path(str(Path(__file__).with_name("fleet-reap-shadow-selftest.py")))["fixture"]
 
@@ -52,6 +55,27 @@ class Display(unittest.TestCase):
             rows = display.project(p, now=102, expected=binding)["rows"]
             self.assertTrue(all(r["state"] == "unknown" for r in rows))
             self.assertEqual(rows[0]["observed_at"], 100)
+
+    def test_real_evidence_read_rereads_owner_after_same_fid_collection(self):
+        p = shadow.project(fixture(), now=101)
+        fid = p["identity"]["worker_id"].split("/")[1]
+        row = dict(target="@1", fid=fid)
+        for change in ({}, dict(turn_id="next"), dict(generation=2, attempt_id="task:T1:g2")):
+            current = copy.deepcopy(p["runtime"])
+            current["identity"].update(change)
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch.object(view, "facts", return_value=dict(fid=fid, pane="%1")), \
+                    patch.object(view, "dash_global", return_value=Path(directory)), \
+                    patch.object(view, "evidence_command", side_effect=[p, current]) as command:
+                observation = view.evidence_read("test", row)
+                self.assertEqual(command.call_count, 2)
+                self.assertIn("fleet_runtime.py", command.call_args.args[1][1])
+                self.assertEqual(json.loads(command.call_args.args[2])["expected"], p["runtime"])
+                binding = display.delivery_identity(observation, now=102)
+                self.assertEqual(binding is None, bool(change))
+                cache = json.loads(next(Path(directory).glob("status-proof-*")).read_text())
+                self.assertEqual(cache, p)
+                self.assertTrue(all(r["state"] == "unknown" for r in display.project(cache, now=102)["rows"]))
 
     def test_blockers_never_clear_attention(self):
         b = fixture(); t = b["layers"]["task"]["value"]

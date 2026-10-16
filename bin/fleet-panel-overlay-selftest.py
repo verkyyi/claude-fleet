@@ -66,7 +66,10 @@ def fixture(directory):
         b["runtime"].update(observed_at=now, expires_at=now + 5, source="proof-%d" % n)
         for d in [*b["layers"].values(), b["legacy"]]:
             d.update(observed_at=now, expires_at=now + 5)
-        return fleet_reap_shadow.project(b, now=now)
+        proof = fleet_reap_shadow.project(b, now=now)
+        if (root / "changed-turn").exists():
+            b["runtime"]["identity"] = dict(b["runtime"]["identity"], turn_id="new-turn")
+        return dict(proof=proof, current=b["runtime"])
     v.evidence_read = evidence_read
 
     def log(payload):
@@ -296,9 +299,9 @@ class NativeTests(unittest.TestCase):
 
     def test_evidence_cancel_reopen_and_resize(self):
         (self.root / "delay-evidence").touch()
-        self.keys("Tab", *(["Down"] * 40), "Enter")
+        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
         self.wait("Reading")
-        self.keys("Escape", "Tab", *(["Down"] * 40), "Enter")
+        self.keys("Escape", "Tab", *(["Down"] * 40), "Up", "Enter")
         self.wait("Reading")
         (self.root / "release-2").touch()
         self.wait("proof-2")
@@ -316,6 +319,49 @@ class NativeTests(unittest.TestCase):
         self.assertEqual((self.root / "read-1").read_text(), "@1")
         self.assertEqual((self.root / "read-2").read_text(), "@1")
         self.evidence.append("PASS evidence: same-row cancel/reopen rejects late result; widths 189/100/80/60/48; zero dispatch")
+
+    def test_evidence_same_row_new_turn_is_unknown(self):
+        (self.root / "changed-turn").touch()
+        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
+        self.wait("proof-1")
+        self.assertIn("运行: unknown", self.screen())
+        self.assertEqual(self.actions(), [])
+
+    def test_real_producer_cache_roundtrip(self):
+        import runpy
+        import fleet_reap_shadow
+        import fleet_status_evidence
+        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
+        proof = fleet_reap_shadow.project(b, now=101)
+        fid = proof["identity"]["worker_id"].split("/")[1]
+        wid = self.tm("display-message", "-p", "-t", "test", "#{window_id}").strip()
+        for name, value in (("@fleet_id", fid), ("@claude_state", "done"), ("@norepo", "1")):
+            self.tm("set-option", "-w", "-t", wid, name, value)
+        cache = self.root / "tmp" / ".claude-dash" / "global"
+        cache.mkdir(parents=True)
+        path = cache / ("status-proof-test-" + fid)
+        path.write_text(json.dumps(proof) + "\n")
+        env = dict(os.environ, HOME=str(self.root / "home"), TMPDIR=str(self.root / "tmp"),
+                   FLEET_CONF_DIR=str(self.root / "conf"), FLEET_STATUS_G=str(cache),
+                   FLEET_SESSION="test", TMUX=str(self.root / "sock") + ",0,0")
+        env.pop("TMUX_PANE", None)
+        produced = subprocess.check_output(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--rows"],
+                                          env=env, text=True, timeout=15)
+        row = next(line.split(v.US) for line in produced.splitlines() if line.startswith(wid + v.US))
+        self.assertEqual(json.loads(row[20]), proof)
+        with patch.object(v, "view_row", return_value={}), patch.object(v, "view_fleet", return_value="test"), \
+                patch.object(v, "windows", return_value={wid: (fid, "worker", 0)}), \
+                patch.object(v, "produce", return_value=produced), patch.object(v, "names_raw", return_value={}), \
+                patch.object(v, "fleet_only_slug", return_value=""), patch.object(v, "gone_text", return_value=""), \
+                patch.object(v, "fleet_logins", return_value={}), patch.object(v, "conf_word", return_value=""), \
+                patch.object(v, "hub_age", return_value=None):
+            parsed = next(e for e in v.entries("test", hub=False) if e.get("target") == wid)
+        self.assertEqual(parsed["status_proof"], proof)
+        display = fleet_status_evidence.project(parsed["status_proof"], now=102)
+        self.assertTrue(all(r["state"] == "unknown" for r in display["rows"]))
+        self.assertEqual(display["rows"][0]["observed_at"], 100)
+        self.assertEqual(json.loads(path.read_text()), proof)
+        self.evidence.append("PASS real producer cache -> optional column 21 -> parser; original times retained; missing current binding unknown")
 
     def test_mouse_prefix_and_overlay_button_keep_origin(self):
         self.keys("Tab")
