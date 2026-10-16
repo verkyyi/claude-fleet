@@ -439,7 +439,7 @@ drill 首次 remote 探针在单次推理请求计数断言失败；补充诊断
 系统层要求的路径和优先级以[原生托管配置说明](https://learn.chatgpt.com/docs/enterprise/managed-configuration)为准，
 后续需在隔离测试镜像/环境验收，不能把临时 CODEX_HOME 当作系统配置隔离。
 
-2026-10-16 补测：测试 POD 的普通用户可跟踪自己创建的子进程，因此增加显式
+2026-10-16 补测历史：测试 POD 的普通用户可跟踪自己创建的子进程，因此曾增加显式
 `--managed-proot /path/to/proot` 探针选项，用 PRoot 只给测试子进程映射临时
 `/etc/codex` 视图。脚本只在临时目录写 requirements 和 hook，检查映射标记在子进程可见、
 在宿主路径不存在。PRoot 只是受控 fixture 的路径虚拟化，不是安全沙箱，不用于生产，
@@ -451,11 +451,8 @@ drill 首次 remote 探针在单次推理请求计数断言失败；补充诊断
 | [`proot_5.1.0-1.3+b1_amd64.deb`](https://packages.debian.org/trixie/amd64/proot/download) | `7ca9260edf1ca6666f9b33e1da551638055934d673117acd135ff5367f420744` |
 | [`libtalloc2_2.4.3+samba4.22.11+dfsg-0+deb13u1_amd64.deb`](https://packages.debian.org/trixie/amd64/libtalloc2/download) | `b4cc8aa74c8b7c05a64efb6577acc955f522a8e39d8f37fe60b1b3fe6634ce96` |
 
-```sh
-LD_LIBRARY_PATH=/path/to/extracted/usr/lib/x86_64-linux-gnu \
-  python3 bin/fleet-native-hook-cli-selftest.py --codex /path/to/codex \
-  --managed-proot /path/to/extracted/usr/bin/proot
-```
+该实验选项已在本 PR 内移除，改用下述原生挂载命名空间 CI；不把未发布的 PRoot 试验路径
+留下作为额外适配层。包哈希仅保留为失败证据的追溯信息。
 
 **此组合尚未通过，不是 managed hooks 验收成功。** Codex 0.162.1 的 `hooks/list`
 确认 requirements hook 为 `source=system`、`isManaged=true`、`trustStatus=managed`，
@@ -463,11 +460,11 @@ LD_LIBRARY_PATH=/path/to/extracted/usr/lib/x86_64-linux-gnu \
 remote TUI 一次出现两次本地请求；另一次 PRoot 外层退出码为 0，原生事件却明确 `turn.failed`。
 保留退出码、精确线程 ID、一次请求和双 hook 执行断言，不通过放宽检查获得绿色。
 这些异常尚不能归因于原生 Codex：需要在不经过 PRoot 的一次性 Linux 环境交叉验证，
-先排除测试工具的退出码/并发进程行为。该选项不进入默认 CI，也不修改生产启动器。
+先排除测试工具的退出码/并发进程行为。该历史试验未进入默认 CI，也未修改生产启动器。
 同一候选不启用路径映射时，本机 Codex 0.163.0 与测试 POD 0.162.1 的
 `--remote-tui --probe-bypass` 各 58 项通过；这只证明既有非 managed 回归仍通过，
 不能证明上述异常必定由 PRoot 引起。
-后续仍需实际 PreToolUse 拒绝、配置覆盖/升级及完整面板验证，不能据此去掉现有全局 bypass。
+当时仍缺实际 PreToolUse 拒绝、配置覆盖/升级及完整面板验证；后续补测见下文，不能只凭此记录去掉全局 bypass。
 
 交叉验证使用独立 `native-managed-hooks` CI：GitHub-hosted Ubuntu 24.04 一次性 VM，
 固定官方 npm `@openai/codex@0.162.1-linux-x64` 包及 SHA512，不加载真实账号或模型服务。
@@ -489,7 +486,23 @@ remote TUI 的未审阅/修改状态先停在原生审阅门，受信任后 mana
 核对 Bash 事件、工具调用 ID、原生线程 ID 和返回给原生循环的拒绝原因。还测试
 `features.hooks=false` 覆盖尝试及 managed 命令更新后的新拒绝原因。仅该受控 fixture
 使用 full-access 来排除沙箱自身拒绝造成的假阳性；生产权限、完整 MCP 与守卫配置不变。
-这些新增断言在独立 CI 中运行，是否通过以对应提交的实际结果为准。
+这些新增断言在独立 CI 中运行。
+
+完整边界探针在 [CI 38968843288](https://github.com/verkyyi/claude-fleet/actions/runs/38968843288)
+通过：exec 99 项、remote TUI 109 项；允许对照实际写入，三个拒绝阶段均未写入，且当前拒绝原因
+到达原生循环。未使用 hook trust bypass，也未关闭非 managed hooks。
+更新场景由新启动的后端读取新版 requirements；不是已运行后端的热更新证明。
+此前 remote 的额外请求已用 `thread_source=thread_title`、独立线程 ID、无工具及 title-only schema
+识别为原生后台标题生成；对应固定版本的实现见
+[thread_title.rs](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/tui/src/app/thread_title.rs)。
+探针对该线程仅返回本地失败、不驱动工具；主线程仍严格要求一次普通请求或两次合成工具请求，
+审阅门前要求零请求。所有 hook 记录按原生 session ID 分开，后台 helper 不能覆盖主线程验收。
+这不是放宽任意重试计数，也没有关闭原生标题能力来获得绿色。
+
+下一批实现边界：把真正的平台强制守卫交给只读管理层；状态/标题跟随原生根线程事件，不将
+所有 Fleet 生命周期钩子一股脑升为全系统强制 hook。上述只是受控 guard fixture，尚未证明
+现有 bash/base-readonly 守卫、跨账号安装和更新回滚的实际接线全部通过；在这些条件通过前，
+不改变现有启动器或宣称可安全删除全局 bypass。完整 MCP、真实面板与性能指标仍独立验收。
 
 ### 启动期插件查询减法
 
