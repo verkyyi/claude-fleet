@@ -6,6 +6,7 @@ on:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-codex-rpc.py'
       - 'hooks/bash-guard.py'
+      - 'hooks/base-readonly-guard.py'
       - '.github/workflows/native-managed-hooks.yml'
   workflow_dispatch:
 

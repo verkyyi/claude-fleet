@@ -41,6 +41,12 @@ print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "permissionDecision": "deny", "permissionDecisionReason": sys.argv[2]}}))
 '''
 
+CAPTURE_SCRIPT = '''import json, sys
+from pathlib import Path
+payload = json.load(sys.stdin)
+Path(sys.argv[1] + "." + payload["session_id"]).write_text(json.dumps(payload))
+'''
+
 
 def stop(child):
     if child.poll() is None:
@@ -131,8 +137,12 @@ def main():
                 tool_fixture["requests"].append(request)
                 sequence = len(tool_fixture["requests"])
                 if sequence == 1:
-                    item = {"type": "function_call", "id": "fc_fixture", "call_id": "call_fixture", "name": "exec_command",
-                            "arguments": json.dumps({"cmd": tool_fixture["command"], "max_output_tokens": 100})}
+                    if tool_fixture.get("patch"):
+                        item = {"type": "custom_tool_call", "id": "fc_fixture", "call_id": "call_fixture", "name": "exec",
+                                "input": "text(await tools.apply_patch(" + json.dumps(tool_fixture["patch"]) + "));"}
+                    else:
+                        item = {"type": "function_call", "id": "fc_fixture", "call_id": "call_fixture", "name": "exec_command",
+                                "arguments": json.dumps({"cmd": tool_fixture["command"], "max_output_tokens": 100})}
                 else:
                     item = {"type": "message", "id": "msg_fixture", "role": "assistant", "status": "completed",
                             "content": [{"type": "output_text", "text": "fixture complete", "annotations": []}]}
@@ -424,6 +434,14 @@ def main():
                 check((managed / "bash-guard.py").read_bytes() == guard_source, "real Fleet guard copied without modification")
                 repository = root / "git-fixture"
                 remote = root / "local-remote.git"
+                worktree = root / "scratch-fixture"
+                alias = root / "base-alias"
+                patch_capture = root / "patch-capture.json"
+                base_guard_source = (arguments.fleet_root / "hooks/base-readonly-guard.py").read_bytes()
+                (managed / "base-readonly-guard.py").write_bytes(base_guard_source)
+                (managed / "capture.py").write_text(CAPTURE_SCRIPT, encoding="utf-8")
+                check((managed / "base-readonly-guard.py").read_bytes() == base_guard_source,
+                      "real Fleet base-readonly guard copied without modification")
 
                 def git(*values):
                     return subprocess.run(["git", *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
@@ -431,13 +449,33 @@ def main():
 
                 git("init", "--initial-branch=fixture", str(repository))
                 git("init", "--bare", str(remote))
+                (repository / "guarded.txt").write_text("original\n", encoding="utf-8")
+                git("-C", str(repository), "add", "guarded.txt")
                 git("-C", str(repository), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
                     "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Owned native guard fixture")
                 fixture_commit = git("-C", str(repository), "rev-parse", "HEAD")
+                git("-C", str(repository), "worktree", "add", "--detach", str(worktree), fixture_commit)
+                alias.symlink_to(repository, target_is_directory=True)
+                environment["FLEET_MAIN"] = str(repository)
+                environment["FLEET_CONF_DIR"] = str(home / "fleet-conf")
                 force_push = "cd " + shlex.quote(str(repository)) + " && git push --force " + shlex.quote(str(remote))
+                add_base = "*** Add File: git-fixture/patch-canary\n+patched\n"
+                add_worktree = "*** Add File: scratch-fixture/patch-canary\n+patched\n"
+                patch_phases = {
+                    "patch-control": add_base,
+                    "patch-deny": add_base,
+                    "patch-local-disable": add_base,
+                    "patch-symlink": "*** Add File: base-alias/patch-canary\n+patched\n",
+                    "patch-update": "*** Update File: git-fixture/guarded.txt\n@@\n-original\n+patched\n",
+                    "patch-delete": "*** Delete File: git-fixture/guarded.txt\n",
+                    "patch-move": "*** Update File: scratch-fixture/guarded.txt\n*** Move to: git-fixture/moved.txt\n@@\n-original\n+patched\n",
+                    "patch-batch": add_worktree + add_base,
+                    "patch-allow": add_worktree,
+                }
                 for phase in ("allow-control", "deny", "local-disable", "updated-guard",
-                              "fleet-control", "fleet-deny", "fleet-local-disable", "fleet-allow"):
+                              "fleet-control", "fleet-deny", "fleet-local-disable", "fleet-allow", *patch_phases):
                     real_guard_phase = phase.startswith("fleet-")
+                    patch_phase = phase in patch_phases
                     if phase == "deny":
                         managed_hook_count = 2
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
@@ -457,10 +495,22 @@ def main():
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
                             config.write('[[hooks.PreToolUse]]\nmatcher="^Bash$"\n[[hooks.PreToolUse.hooks]]\n'
                                          'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "bash-guard.py")) + '\n')
+                    elif phase == "patch-deny":
+                        managed_hook_count = 4
+                        with (system / "requirements.toml").open("a", encoding="utf-8") as config:
+                            config.write('[[hooks.PreToolUse]]\nmatcher="^apply_patch$"\n[[hooks.PreToolUse.hooks]]\n'
+                                         'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "base-readonly-guard.py"))
+                                         + '\n[[hooks.PreToolUse.hooks]]\ntype="command"\ncommand='
+                                         + json.dumps("python3 " + str(managed / "capture.py") + " " + str(patch_capture)) + '\n')
                     if real_guard_phase:
                         git("--git-dir=" + str(remote), "update-ref", "-d", "refs/heads/main")
                         destination = "fixture-feature" if phase == "fleet-allow" else "main"
                         tool_fixture["command"] = force_push + " HEAD:refs/heads/" + destination
+                    if patch_phase:
+                        tool_fixture["patch"] = "*** Begin Patch\n" + patch_phases[phase] + "*** End Patch\n"
+                        for checkout in (repository, worktree):
+                            (checkout / "patch-canary").unlink(missing_ok=True)
+                        clear_hook_results(patch_capture)
                     with client("tool-" + phase + "-verify") as rpc:
                         fixture_hook(rpc)
                     for marker_path in (tool_marker, deny_marker):
@@ -470,7 +520,9 @@ def main():
                     tool_fixture["requests"] = []
                     before = len(requests)
                     flags = ["-c", 'sandbox_mode="danger-full-access"']
-                    if phase in ("local-disable", "fleet-local-disable"):
+                    if patch_phase:
+                        flags += ["-c", 'model="gpt-6.1-sol"']
+                    if phase in ("local-disable", "fleet-local-disable", "patch-local-disable"):
                         flags += ["-c", "features.hooks=false"]
                     if arguments.remote_tui:
                         outcome = remote_turn("tool-" + phase, flags, expected_status="completed")
@@ -484,16 +536,54 @@ def main():
                               phase + " actual native tool turn completes: " + stderr[-1500:])
                         identifiers = [event["thread_id"] for event in events if event.get("type") == "thread.started"]
                     phase_requests(before, identifiers, 2, phase)
-                    check(any(tool.get("name") == "exec_command" for tool in tool_fixture["requests"][0].get("tools", [])),
-                          phase + " native runtime offers the tool being tested")
+                    first_request = tool_fixture["requests"][0]
+                    if patch_phase:
+                        offered = first_request.get("tools", []) + [tool for item in first_request.get("input", [])
+                                  if item.get("type") == "additional_tools" for tool in item.get("tools", [])]
+                        check(any(tool.get("type") == "namespace" and tool.get("name") == "functions"
+                                  and any(child.get("type") == "custom" and child.get("name") == "exec"
+                                          and "apply_patch(input: string)" in child.get("description", "")
+                                          for child in tool.get("tools", [])) for tool in offered),
+                              phase + " native runtime offers code mode with the real apply_patch tool")
+                    else:
+                        check(any(tool.get("name") == "exec_command" for tool in first_request.get("tools", [])),
+                              phase + " native runtime offers the tool being tested")
                     managed_observed = hook_result(managed_marker, identifiers)
                     plugin_observed = hook_result(marker, identifiers)
                     check(managed_observed is not None and plugin_observed is not None
                           and identifiers == [managed_observed["session_id"]] == [plugin_observed["session_id"]],
                           phase + " managed and trusted plugin hooks execute on the actual tool thread")
-                    outputs = [item.get("output", "") for request in tool_fixture["requests"] for item in request.get("input", [])
-                               if item.get("type") == "function_call_output" and item.get("call_id") == "call_fixture"]
-                    if real_guard_phase:
+                    outputs = [json.dumps(item.get("output", ""), ensure_ascii=False)
+                               for request in tool_fixture["requests"] for item in request.get("input", [])
+                               if item.get("type") in ("function_call_output", "custom_tool_call_output")
+                               and item.get("call_id") == "call_fixture"]
+                    if patch_phase:
+                        denied = phase not in ("patch-control", "patch-allow")
+                        check((repository / "guarded.txt").read_text() == "original\n"
+                              and (worktree / "guarded.txt").read_text() == "original\n"
+                              and not (repository / "moved.txt").exists(), phase + " tracked base and worktree files remain intact")
+                        if denied:
+                            check(not (repository / "patch-canary").exists() and not (worktree / "patch-canary").exists(),
+                                  phase + " denied patch leaves no partial writes")
+                            check(any("base-readonly-guard.py" in output and "edit-read-only" in output for output in outputs),
+                                  phase + " native code mode returns the real base-readonly denial")
+                        else:
+                            target = repository if phase == "patch-control" else worktree
+                            other = worktree if phase == "patch-control" else repository
+                            check((target / "patch-canary").read_text() == "patched\n" and not (other / "patch-canary").exists(),
+                                  phase + " actual native patch writes only its permitted target")
+                        captured = hook_result(patch_capture, identifiers)
+                        if phase == "patch-control":
+                            check(captured is None, "patch control has no base-readonly or observer hook")
+                        else:
+                            check(captured is not None and captured["hook_event_name"] == "PreToolUse"
+                                  and captured["tool_name"] == "apply_patch" and bool(captured["tool_use_id"])
+                                  and identifiers == [captured["session_id"]] and captured["cwd"] == str(root)
+                                  and captured["tool_input"]["command"] == tool_fixture["patch"],
+                                  phase + " nested native patch hook carries the exact root thread, cwd and patch")
+                        report["tool_phases"].append({"phase": phase, "executed": not denied, "denied": denied,
+                                                     "guard_sha256": hashlib.sha256(base_guard_source).hexdigest()})
+                    elif real_guard_phase:
                         refs = git("--git-dir=" + str(remote), "for-each-ref", "--format=%(objectname) %(refname)")
                         denied = phase in ("fleet-deny", "fleet-local-disable")
                         if denied:
@@ -516,7 +606,7 @@ def main():
                               and identifiers == [denied["session_id"]] and denied["tool_input"]["command"] == tool_fixture["command"],
                               phase + " managed hook receives the exact native tool and thread")
                         check(any(reason in output for output in outputs), phase + " native loop receives the current managed denial reason")
-                    if not real_guard_phase:
+                    if not real_guard_phase and not patch_phase:
                         report["tool_phases"].append({"phase": phase, "executed": tool_marker.exists(), "denied": deny_marker.exists()})
             check(all(not request["authorization"] for request in requests), "no authorization sent to fixture endpoint")
             report.update(checks=checks, passed=len(checks), request_kinds=[
