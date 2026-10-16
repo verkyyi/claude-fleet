@@ -131,6 +131,7 @@ try {
   const processPage = await context.newPage()
   await processPage.goto(`${origin}/app/terminal?worker=${encodeURIComponent(worker)}`)
   const oldProcess = await ready(processPage)
+  assert.equal(oldProcess.gen, evidence[1].first.gen, 'reopening the worker must keep its generation')
   await context.request.post(`${fixture}/worker-respawn`)
   await processPage.getByRole('alert').waitFor({ timeout: 30000 })
   assert(await processPage.getByRole('button', { name: 'Fleet menu', exact: true }).isDisabled())
