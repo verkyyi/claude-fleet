@@ -234,7 +234,7 @@ def report_reader(database, authority_scope):
         if len(rows)>1000:
             raise ValueError("journal_observation_budget_exceeded")
         for request, result, status, updated in rows:
-            if len(request)>65536 or len(result or "")>65536:
+            if len(request.encode())>65536 or len((result or "").encode())>65536:
                 raise ValueError("journal_record_budget_exceeded")
             req, res = json.loads(request), json.loads(result or "{}")
             payload = req.get("payload", {})

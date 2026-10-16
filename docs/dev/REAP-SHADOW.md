@@ -55,7 +55,7 @@ Claude 使用严格模式保留未知子进程；Codex 使用已有精确 helper
 C6 report 适配器使用已有 `operations/action=task_receipt` 的 SQLite `mode=ro`，
 其 authority hash 从既有 `fleet-task-record.sh authority` 取得。它不调用会
 建表/expire/ack 的 Journal，不重放。新观察时间和原 `evidence_at` 分列；重复
-report、错 hub、未知状态保留。journal 观察最多 1000 行，每行最多 64 KiB，SQL 扫描有 1 秒 progress deadline；outbox 最多 1000 个目录项，每文件最多 64 KiB，超限返回 unknown。controller 接受/投递回执仍未由 #4431 提供，
+report、错 hub、未知状态保留。journal 观察最多 1000 行，每行最多 64 KiB，SQL 扫描有 1 秒 progress deadline；outbox 最多 1000 个目录项，每文件最多 64 KiB；delivery inbox 最多 1000 个目录项，超限返回 unknown。controller 接受/投递回执仍未由 #4431 提供，
 `delivery` 在记录本地 inbox 证据后保持 `controller_acceptance_unavailable`。
 
 测试或外部 owner 可通过 `readers` 替换单维 reader；签名为
@@ -93,8 +93,14 @@ transfer/wake 与新 turn 竞争。fixture 没有 native 模型或真实 task au
 隔离 socket + 临时 HOME 用真实内核进程观察验证树变化，结束后检查 server 和进程退出；
 这仍是进程集成测试，不能写成真实 Claude/Codex 验收。
 
-复用 [PR #4480](https://github.com/verkyyi/claude-fleet/pull/4480) 的 runtime 原生
-证据及其中明确的层级：Claude 原生 mod→reader；Codex 受管 C3→read 的长工具/idle
-单例；Codex 其它场景仅 collector。其模型和 C1 authority 为 fixture，真实 C1
-operation/accepted-launch 投递前回执门禁仍缺证。没有把这些证据升级为本聚合器的
-完整原生 gate 验收。部署、live activation、C8 退役门、#4431 接受/投递闭环保持独立。
+复用 [PR #4480](https://github.com/verkyyi/claude-fleet/pull/4480) 的原生 harness
+方法，在隔离 HOME/socket 下完成 Claude 原生 mod→reader→shadow、Codex 受管
+C3→read→shadow 的长工具/idle 超 TTL、后台命令、ask/approval 与本地迁移标记观察。
+每次 shadow 同时记录既有 pre-action dry-run；源码哈希、观察矩阵和清理结果保留在
+私有证据索引，未完成的尝试单独列出。模型与 C1 task/children authority 为 fixture，
+真实 C1 operation/accepted-launch 投递前回执门禁仍缺证。Claude approval 协议虽
+发生，runtime 保守显示 active；最小 harness 缺少正常会话 stamp，pending-tool
+为 unknown，Codex 的共享 pending-tool oracle 也为 unknown。Codex 测试启动器的
+guardian 未被既有分类器识别时继续保留，不增加按名称豁免。
+这些观察不证明完整原生 gate 已放行。部署、live activation、C8 退役门、#4431
+接受/投递闭环保持独立。

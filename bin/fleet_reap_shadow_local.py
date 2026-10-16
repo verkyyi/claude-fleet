@@ -155,12 +155,21 @@ class LocalSources:
                     count+=1
                     if count>1000: raise ValueError("outbox_observation_budget_exceeded")
                     if not entry.name.endswith(".json"): continue
-                    with open(entry.path) as stream: text=stream.read(65537)
+                    with open(entry.path,"rb") as stream: text=stream.read(65537)
                     if len(text)>65536: raise ValueError("outbox_record_budget_exceeded")
                     data=json.loads(text)
                     if data.get("from")==self.identity.get("worker_id"):
                         result.append(dict(id=data.get("id"),kind=data.get("kind"),digest=proof.digest(data)))
         return sorted(result,key=proof.digest)
+
+    @staticmethod
+    def inbox_names(directory):
+        result=[]
+        with os.scandir(directory) as entries:
+            for count,entry in enumerate(entries,1):
+                if count>1000: raise ValueError("inbox_observation_budget_exceeded")
+                if entry.name.endswith(".json"): result.append(entry.name)
+        return sorted(result)
 
     def collect(self, identity):
         if self.values is not None:
@@ -230,7 +239,7 @@ class LocalSources:
             self.values["report"]=proof.report_reader(self.conf/"control/state.sqlite3",scope)(identity)
         except (*ERRORS, proof.sqlite3.Error): pass
         # Local delivery inbox evidence is useful but not #4431's acceptance ACK.
-        take("delivery","fleet-sleep.inbox",lambda: [p.name for p in self.sleep["Worker"](self.session,self.pane).inbox().glob("*.json")])
+        take("delivery","fleet-sleep.inbox",lambda: self.inbox_names(self.sleep["Worker"](self.session,self.pane).inbox()))
         self.values["delivery"].update(unknown=True,reason="controller_acceptance_unavailable")
         observed=self.values["processes"]
         if isinstance(observed["value"],dict) and observed["value"].get("tree"):

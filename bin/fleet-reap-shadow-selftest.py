@@ -270,5 +270,15 @@ class Shadow(unittest.TestCase):
             finally:
                 subprocess.run(tm+["kill-server"],env=env,capture_output=True)
 
+    def test_delivery_inbox_budget(self):
+        from fleet_reap_shadow_local import LocalSources
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            (root/"one.json").touch()
+            self.assertEqual(LocalSources.inbox_names(root),["one.json"])
+            for n in range(1000): (root/str(n)).touch()
+            with self.assertRaisesRegex(ValueError,"inbox_observation_budget_exceeded"):
+                LocalSources.inbox_names(root)
+
 
 if __name__ == "__main__": unittest.main()
