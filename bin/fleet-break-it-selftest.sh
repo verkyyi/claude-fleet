@@ -6375,6 +6375,14 @@ drill_spinner_maintenance_starved() {
   WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
 }
 
+drill_codex_mcp_busy() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" 2>&1) \
+    || { WHY="Codex MCP/helper 回收分类失守: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT="精确配置的常驻服务可闲置，真实任务及未知身份保留"
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

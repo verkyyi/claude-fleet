@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |
 | ACK 容器重启后沿用旧 PID 或执行上次未完的运行时切换 | 接管错进程、镜像版本被机器更新器改掉 | 每次容器启动独立代号；镜像负责更新时在恢复更新状态之前退出（#3022） | `node-container-restart` |
 | Linux 托管机器的登录没开租约：`fleet-node-linux.py prepare` 写的登录设置（`logins/<login>.env`、凭据存储里的 `node.env`）缺 `CCQUOTA_FLEET_CREDS=1`（linux-a 实见，#3211） | 池子同步把账号放进了共享代理（「hub 1 · here 1」），可节点程序从不替这个登录租：`accounts/` 里没有 `hub:<label>` 标记，`ready` 的 creds 一直 false，入口每次派活都写 `not ready: creds` 把这台排除在外；新开的登录一样 | `prepare`（每次容器启动都跑）新登录写上这一行；旧存储缺它就补上、令牌和其它行逐字不动，登录设置随之带上，节点程序照 Mac 登录的方式租、写标记（#3211） | `linux-login-no-lease` |
 | Mac 托管机器的新登录没开租约：`account adopt` 拼的 `logins/<login>.env` 取自 plist 和凭据存储的 `node.env`，node-join 写的 `node.env` 从不带 `CCQUOTA_FLEET_CREDS=1`（C9 第 22 次演练 `drill10111114` 实见，#3276） | 共享代理的 `tenants.json` 里有这个登录、池子也在，可机器节点程序从不替它起租约：`/var/db/fleet-cred/<login>/accounts/` 空着，日志里没有一行 `credentials:`；新人第一句就是 `403 cred-proxy: this login holds no claude account` | `account_agent`：有凭据存储的登录写上 `CCQUOTA_FLEET_CREDS=1`（已有的值照旧）；守护每 300 s 的租户检查给更早接管的、缺这一行的 `logins/*.env` 补上，令牌和其它行不动，节点程序随之重启、开租（#3276） | `mac-login-no-lease` |
