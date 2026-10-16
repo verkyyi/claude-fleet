@@ -6367,6 +6367,15 @@ drill_spinner_maintenance_starved() {
   WHAT='无人观看且无事件，needs 双次核对、stuck/degenerate、心跳和 daemon-watch 均按原时限运行'
 }
 
+drill_spinner_process_budget() {
+  CAP=150; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/spinner-budget-selftest.py" 2>&1) \
+    || { WHY="complete default spinner budget: $out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='无工作及有维护待办两种隔离场景各完整 60 秒，含启动、等待、全部维护的外部进程各不超过 5 个'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

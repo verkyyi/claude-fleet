@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Count the complete default spinner, including startup and all maintenance.
+
+Private HOME/socket; no live lease or daemon stamps. PATH entry wrappers record
+PID/PPID, not samples. Direct oracle execs are recorded too; interpreter exec
+chains count once per PID. Fixture setup/probes and builtin-only shell forks are
+outside the external-process budget. Both fixtures run the full 60 seconds even
+when the budget is already exceeded, so a red result retains its attribution.
+"""
+import argparse
+import collections
+import json
+import os
+from pathlib import Path
+import re
+import selectors
+import shlex
+import shutil
+import signal
+import subprocess
+import tempfile
+import time
+
+BIN = Path(__file__).resolve().parent
+
+
+def audit(fixture, output):
+    with tempfile.TemporaryDirectory(prefix='spinbudget.', dir='/tmp') as tmp:
+        root = Path(tmp)
+        for directory in ('bin', 'logs', 'home', 'conf/fleets/test', 'tmp', 'shim'):
+            (root / directory).mkdir(parents=True)
+        (root / 'conf/fleets/test/conf').touch()
+        # Copy scripts: even paths derived from __file__ must stay in the sandbox.
+        for source in BIN.iterdir():
+            if source.is_file():
+                shutil.copy2(source, root / 'bin' / source.name)
+        (root / 'bin/fleet-client-where.sh').write_text(
+            '#!/bin/sh\nprintf \'{"state":"none"}\\n\'\n')
+        fifo = root / 'execs'
+        os.mkfifo(fifo)
+        fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        seen = set()
+        for directory in os.get_exec_path():
+            try:
+                entries = list(Path(directory).iterdir())
+            except OSError:
+                continue
+            for source in entries:
+                try:
+                    executable = source.is_file() and os.access(source, os.X_OK)
+                except OSError:
+                    continue
+                if source.name in seen or not executable:
+                    continue
+                seen.add(source.name)
+                wrapper = root / 'shim' / source.name
+                wrapper.write_text('#!/bin/sh\nprintf "%s %s %s\\n" "$$" "$PPID" '
+                                   + shlex.quote(source.name) + ' >> ' + shlex.quote(str(fifo))
+                                   + '\nexec ' + shlex.quote(str(source)) + ' "$@"\n')
+                wrapper.chmod(0o755)
+        oracle = root / 'bin/fleet-pending-tool.sh'
+        real_oracle = root / 'bin/.oracle-real.sh'
+        oracle.rename(real_oracle)
+        oracle.write_text('#!/bin/sh\nprintf "%s %s oracle\\n" "$$" "$PPID" >> '
+                          + shlex.quote(str(fifo)) + '\nexec '
+                          + shlex.quote(str(real_oracle)) + ' "$@"\n')
+        oracle.chmod(0o755)
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(('FLEET_', 'CCQUOTA_', 'CLAUDE_', 'SPIN_'))
+               and key not in ('TMUX', 'TMUX_PANE')}
+        env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'),
+                   TMUX_TMPDIR=tmp, TMPDIR=str(root / 'tmp'),
+                   PATH=str(root / 'shim') + ':' + os.environ['PATH'],
+                   PS4='+${SECONDS} ${BASH_SUBSHELL} ')
+        tmux = shutil.which('tmux')
+
+        def tm(*args):
+            return subprocess.check_output([tmux, '-L', 'test', *args], env=env,
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+
+        proc = None
+        try:
+            tm('-f', '/dev/null', 'new-session', '-d', '-s', 'test', '-n', 'work', 'sleep 180')
+            panes = 1
+            if fixture == 'maintenance':
+                tm('set-window-option', '-t', 'test:work', '@claude_state', 'working')
+                tm('new-window', '-d', '-t', 'test', '-n', 'needs', 'sleep 180')
+                tm('set-window-option', '-t', 'test:needs', '@claude_state', 'needs',
+                   ';', 'set-window-option', '-t', 'test:needs', '@claude_needs', 'perm',
+                   ';', 'set-window-option', '-t', 'test:needs', '@claude_state_ts',
+                   str(int(time.time()) - 600))
+                panes = 2
+            ready = time.monotonic() + 10
+            while tm('list-panes', '-a', '-F', '#{pane_current_command}').splitlines() != ['sleep'] * panes:
+                if time.monotonic() > ready:
+                    raise AssertionError('fixture panes not ready')
+                time.sleep(.05)
+            while True:
+                try:
+                    if not os.read(fd, 65536):
+                        break
+                except BlockingIOError:
+                    break
+            assert not tm('list-clients'), 'must be unwatched'
+            start = time.monotonic()
+            proc = subprocess.Popen(['/bin/sh', '-x', str(root / 'bin/tmux-spinner.sh')],
+                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                    start_new_session=True)
+            os.set_blocking(proc.stderr.fileno(), False)
+            commands = [(0, proc.pid, os.getpid(), 'spinner')]
+            checks = collections.defaultdict(list)
+            pending = {'exec': b'', 'trace': b''}
+            with selectors.DefaultSelector() as selector, (output / (fixture + '-trace.txt')).open('wb') as trace:
+                selector.register(fd, selectors.EVENT_READ, 'exec')
+                selector.register(proc.stderr, selectors.EVENT_READ, 'trace')
+                while time.monotonic() - start < 60:
+                    for key, _ in selector.select(max(0, 60 - (time.monotonic() - start))):
+                        data = os.read(key.fd, 65536)
+                        if not data:
+                            raise AssertionError('spinner exited unexpectedly')
+                        elapsed = round(time.monotonic() - start, 3)
+                        if key.data == 'trace':
+                            trace.write(data)
+                        pending[key.data] += data
+                        lines = pending[key.data].split(b'\n')
+                        pending[key.data] = lines.pop()
+                        for raw in lines:
+                            line = raw.decode(errors='replace')
+                            if key.data == 'exec':
+                                pid, ppid, name = line.split(' ', 2)
+                                commands.append((elapsed, int(pid), int(ppid), name))
+                            else:
+                                match = re.match(r'^\+\d* 0? (stuck_check|degen_check|needs_check|hb_stamp)(?: |$)', line)
+                                if match:
+                                    checks[match[1]].append(elapsed)
+                                if re.match(r'^\+\d* 0? bash .*fleet-daemon-watch.sh$', line):
+                                    checks['daemon_watch'].append(elapsed)
+            seconds = round(time.monotonic() - start, 3)
+            final = tm('list-windows', '-t', 'test', '-F', '#{window_name}=#{@claude_state}')
+            unique = {}
+            for row in commands:
+                unique.setdefault(row[1], row)
+            report = dict(fixture=fixture, seconds=seconds, external_processes=len(unique),
+                          by_command=dict(collections.Counter(row[3] for row in unique.values())),
+                          checks_seconds=dict(checks), commands=commands, final=final,
+                          defaults=dict(stuck_check=10, degen_check=15, needs_check=20,
+                                        heartbeat=20, daemon_watch=30),
+                          seams='private HOME/socket; offline lease; no daemon stamps; no maintenance overrides',
+                          count_scope=__doc__)
+            (output / (fixture + '.json')).write_text(json.dumps(report, indent=2))
+            print(json.dumps({k: v for k, v in report.items() if k not in ('commands', 'count_scope')}, indent=2), flush=True)
+            return len(unique)
+        finally:
+            if proc:
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=5)
+                proc.stderr.close()
+            subprocess.run([tmux, '-L', 'test', 'kill-server'], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.close(fd)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args()
+    if not shutil.which('tmux'):
+        raise SystemExit('tmux required for complete spinner budget')
+    output = args.output or Path(tempfile.mkdtemp(prefix='spinner-budget-evidence.'))
+    output.mkdir(parents=True, exist_ok=True)
+    counts = {fixture: audit(fixture, output) for fixture in ('idle', 'maintenance')}
+    print('Evidence:', output, flush=True)
+    assert all(count <= 5 for count in counts.values()), 'complete default spinner budget <=5/60s FAILED: %s' % counts

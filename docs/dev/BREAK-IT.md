@@ -42,6 +42,7 @@
 | ACK 上的 Linux 托管机器留着一个已删登录的被拒 lane：演练登录删了，`<state>/agent/<login>/lane.json`（`refused` · `WRONG_LOGIN`）还在，就绪探针 `fleet-node-linux.py ready` 见任何被拒 lane 就答 1（linux-a 实见 40 分钟 0/1，#3333） | `externalTrafficPolicy: Local` 的负载均衡把 pod 摘掉，22022 的门对这台上**每个**登录都死了（`ssh-keyscan` broken pipe），手机连不上 | 就绪只看整机（守护健康、ready 标记、node-agent / 共享代理 / sshd 活着）；一个登录的被拒 lane 只在 `status` / doctor 里点名；OS 登录、`accounts.json`、`logins/<login>.env` 都没有它的 lane 不算；`account forget`（`login remove` 与 `fleet-login-remove.sh` 都走它）把 `agent/<login>/` 挪进 `attic/agent-<login>-<UTC>`（#3333） | `linux-stale-lane-door-down` |
 | 没人连接 fleet 时 spinner 仍每秒读窗口、起 sleep，状态栏没有观众仍持续起进程（#4356） | 空闲登录持续消耗进程和 CPU | 共享观看判定（已连接 tmux 客户端或在线客户端租约）；无人时等 `fleet-state-changed`，状态变更和连接事件唤醒，≥60 秒兜底；有人时原节拍 | `spinner-unwatched-poll` |
 | spinner 无人观看、长期没有状态事件时，固定 65 秒等待挡住 needs 双次核对、stuck / degenerate 看门与守护自愈（#4441） | 过时状态不在原时限纠正，两次核对之间超出 strike TTL；有观众才工作的安全维护 | 共享渲染等待以最近维护截止时间为上限；有观众保持原节拍，无到期工作的等待预算与实际维护成本分开记录 | `spinner-maintenance-starved` |
+| 默认 spinner 无人观看仍在维护唤醒时重启 helper、重复扫描与读取时间/hash（#4444） | 完整 60 秒外部进程超过 5 个；纯等待结果不能代表默认 daemon | 未达：保留必要维护时限，完整计入启动、等待和维护；有无待办分别计量 | `spinner-process-budget` |
 | 同登录的非调用者在两次空闲探测之间同秒工作又结束，或创建后回收（#4412） | 前后窗口快照相同，忙过的采样被错误认证为空闲、覆盖上次有效读数 | 状态 hook 按 socket、服务器生命周期和窗口追加活动计数，回收后保留；每个观察者独立比较，变化即拒绝采样（exit 3），只排除精确的调用者身份；不变仍可量 | `idle-activity-between-probes` |
 | 会话里 `/exit`（或 Ctrl+D）退出 | 窗口跟着关，会话从列表消失 | 窗口留下画恢复页（#1784）：↵ 用同一对话 id 续上，r 新开，q 回收 | `session-exit` |
 | 会话里连按 Ctrl+C 退出 | 同上 | 同上，恢复页写「按了 Ctrl+C」 | `session-ctrl-c` |
