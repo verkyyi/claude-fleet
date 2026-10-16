@@ -292,7 +292,7 @@ issue_open_gate() {
   # ambiguity remains the downstream liveness gate's skip:live, in its order.
   ticket_home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || ticket_home=unknown
   case "$ticket_home" in
-    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" 2>/dev/null) || tid='' ;;
+    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" --window "$WIN" 2>/dev/null) || tid='' ;;
   esac
   [ "$href" = "$BRANCH" ] || tid=''
   if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then

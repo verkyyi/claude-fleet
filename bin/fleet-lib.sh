@@ -1261,6 +1261,34 @@ fleet_ticket_home() {
 # call it always made, byte for byte (共同约定 4).
 fleet_ticket_hub() { [ "$(fleet_ticket_home "${1:-}" "${2:-}")" = hub ]; }
 
+# Resolve THIS ticket, preserving an accepted worker's immutable qualified ref.
+# The repository's default remains unchanged for new tickets and other workers.
+# A background reader supplies its resolved @window; ambiguity refuses.
+fleet_ticket_ref() {
+  local repo n="${2:-}" sess="${3:-${FLEET_SESSION:-}}" win="${4:-}" row='' wr='' wn='' context='' home
+  repo=$(fleet_norm_repo "${1:-}")
+  case "$n" in ''|0|*[!0-9]*) return 2 ;; esac
+  if [ -n "$win" ]; then
+    case "$win" in @*) case "${win#@}" in ''|*[!0-9]*) return 2 ;; esac ;; *) return 2 ;; esac
+    local cmd=(tmux)
+    [ -n "${TMUX:-}" ] || cmd+=(-L "$(fleet_socket "$sess")")
+    row=$("${cmd[@]}" display-message -p -t "$win" '#{@repo}	#{@issue}	#{@launch}') || return 1
+  else
+    row=$(fleet_pane_fmt '#{@repo}	#{@issue}	#{@launch}')
+  fi
+  IFS=$'\t' read -r wr wn context <<< "$row"
+  if [ -n "$win$context" ] && [ -n "$context" ] && { [ "$(fleet_norm_repo "$wr")" != "$repo" ] || [ "$wn" != "$n" ]; }; then
+    [ -z "$win" ] || return 1
+  fi
+  if [ -n "$context" ] && [ "$(fleet_norm_repo "$wr")" = "$repo" ] && [ "$wn" = "$n" ]; then
+    printf '%s' "$context" | python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" --ticket-ref "$repo" "$n"
+    return $?
+  fi
+  home=$(fleet_ticket_home "$repo" "$sess") || return 1
+  [ "$home" = hub ] || home=gh
+  printf '%s:%s#%s\n' "$home" "$repo" "$n"
+}
+
 # fleet_ticket_hub_ready → rc 0 when this login reaches a hub its tickets could live
 # on (issue #3739): a hub address and a node token — a separated login's
 # node.pub.env address counts (its token is the broker's). The default a NEW repo
@@ -1297,8 +1325,9 @@ fleet_ticket_claimant() {
 # one with the very `gh` read the reapers always made (共同约定 4: byte for byte).
 # Nothing printed = it could not be read (no gh, the hub down, no such ticket).
 fleet_ticket_state() {
-  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}"
-  if [ "$(fleet_ticket_home "$repo")" = hub ]; then
+  local repo="${1:-}" n="${2:-}" b="${_FLEET_LIB_DIR:-$HOME/.claude/fleet/bin}" ref
+  ref=$(fleet_ticket_ref "$repo" "$n") || return 1
+  if [ "$ref" = "hub:$(fleet_norm_repo "$repo")#$n" ]; then
     bash "$b/fleet-ticket.sh" read "hub:$(fleet_norm_repo "$repo")#$n" --json state,stateReason,labels 2>/dev/null \
       | python3 -c 'import json,sys
 d = json.load(sys.stdin)

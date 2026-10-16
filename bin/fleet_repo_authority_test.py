@@ -39,6 +39,22 @@ class RepoAuthorityTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         migration.stopped_receipt(f, authority)
 
+    def test_accepted_ticket_reference_survives_work_completion(self):
+        c = dict(task="T9", owner="alice", generation=1, worker_id="fleet/session")
+        task = dict(owner="alice", generation=1, execution_owner="fleet/session",
+                    ticket_ref="hub:org/a#8", outcome="succeeded")
+        with patch.object(migration.launch, "validate_context", return_value=c), \
+                patch.object(migration.launch, "task_call", return_value=task):
+            with patch.object(migration.sys, "stdin", io.StringIO("{}")), contextlib.redirect_stdout(io.StringIO()) as out:
+                migration.ticket_ref("org/a", "8")
+            self.assertEqual(out.getvalue().strip(), "hub:org/a#8")
+            for repo, number in (("org/b", "8"), ("org/a", "7")):
+                with patch.object(migration.sys, "stdin", io.StringIO("{}")), self.assertRaises(ValueError):
+                    migration.ticket_ref(repo, number)
+            task["generation"] = 2
+            with patch.object(migration.sys, "stdin", io.StringIO("{}")), self.assertRaises(ValueError):
+                migration.ticket_ref("org/a", "8")
+
     def test_manifest_apply_repeat_rollback_and_repo_b(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

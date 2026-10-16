@@ -308,7 +308,7 @@ printf '%s|%s\n' "\$PWD" "\$*" >> "$WORK/claude-argv"
 printf '────────\n❯ \n────────\n'; exec sleep 600
 EOF
 chmod +x "$WORK/tbin/tmux" "$WORK/tbin/claude"
-for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
+for f in fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-hook-personal.sh fleet_repo_authority.py; do ln -s "$BIN/$f" "$WORK/wbin/$f"; done
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/recycled"\n' "$WORK" > "$WORK/wbin/session-end-hook.sh"
 cat > "$WORK/fake-agent" <<'EOF'
 #!/bin/bash

@@ -196,6 +196,18 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     return rc
 
 
+def ticket_ref(repo, number):
+    c = launch.validate_context(json.load(sys.stdin))
+    t = launch.task_call(c)
+    if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"),
+                                      ("execution_owner", "worker_id"))):
+        raise ValueError("ticket identity needs the accepted owner/generation")
+    ref = t.get("ticket_ref")
+    if ref not in ("gh:%s#%s" % (repo, number), "hub:%s#%s" % (repo, number)):
+        raise ValueError("accepted ticket reference differs from this window's binding")
+    print(ref)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("repo")
@@ -276,6 +288,9 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:2] == ["--supervise"]:
             sys.exit(supervise(sys.argv[3:]))
+        if sys.argv[1:2] == ["--ticket-ref"]:
+            ticket_ref(*sys.argv[2:])
+            sys.exit(0)
         main()
     except (ticket.Fail, ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
         print("repo authority: " + str(exc), file=sys.stderr)
