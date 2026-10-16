@@ -6294,7 +6294,7 @@ try:
 except Exception:
     sys.exit(1)
 ' "$db" 2>/dev/null) && [ -n "$u" ] || return 1
-  [ -f "$(fleet_conf_file "$sess")" ] && _fleet_identity_write "$idf" "$u"
+  if [ "${2:-}" != --read-only ] && [ -f "$(fleet_conf_file "$sess")" ]; then _fleet_identity_write "$idf" "$u"; fi
   printf '%s\n' "${u%%$'\n'*}"
 }
 

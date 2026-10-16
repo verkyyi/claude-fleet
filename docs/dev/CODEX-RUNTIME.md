@@ -6,6 +6,11 @@ sessions. SessionStart records the exact root session UUID, CODEX_HOME,
 transcript path and model in one `@codex_identity` JSON option. Hooks from an old
 launcher cannot overwrite a replacement. Stop refreshes only the current UUID.
 
+When the original native process survives a failed authority observation, use
+the explicit [existing-native observation contract](NATIVE-OBSERVE.md). It keeps
+the original execution and separately reports missing old hooks and unverified
+message consumption; it does not replay SessionStart or resume the session.
+
 ## Context
 
 Run `bash ~/.claude/fleet/bin/fleet-context.sh` inside a Codex worker, or inspect

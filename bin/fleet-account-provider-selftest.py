@@ -350,6 +350,28 @@ class Providers(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'startup feature'):
                 accounts.verify_codex_runtime('unix:///exact.sock')
 
+    def test_observation_profile_is_read_only_and_keeps_verified_rpc_peer(self):
+        calls = []
+        cwd = str(self.root)
+        expected = dict(self.profile, email='fixture@example.com')
+        class Client:
+            def close(self): raise AssertionError('caller owns verified connection')
+            def call(self, method, params):
+                calls.append((method, params))
+                if method == 'account/read':
+                    return dict(account=dict(type='chatgpt', email=expected['email']), requiresOpenaiAuth=True)
+                return dict(thread=dict(id='original', cwd=cwd, modelProvider='openai'))
+        with patch.object(accounts, 'profile', return_value=expected) as profile, patch.object(accounts, 'read_subscription', side_effect=AssertionError('caller environment is not source proof')):
+            accounts.verify_codex_runtime('unix:///original', source=dict(session_id='original', worktree=str(self.root)),
+                                          subscription=expected, client=Client(), read_only=True)
+            self.assertTrue(profile.call_args.kwargs['read_only'])
+            self.assertEqual(calls[0], ('account/read', {'refreshToken': False}))
+        with patch.object(accounts, 'ccquota', return_value=[]), patch.object(accounts, 'stamp_reauth') as stamp:
+            accounts.profiles(read_only=True)
+            stamp.assert_not_called()
+            accounts.profiles()
+            stamp.assert_called_once()
+
 
 
 class CodexLoginReason(unittest.TestCase):

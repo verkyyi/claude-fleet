@@ -6456,6 +6456,14 @@ drill_pending_observation_stale() {
   WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
 }
 
+drill_native_observe_missing() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_native_observe_test.py" Recovery LocalRegistration 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='丢观察与丢确认保留原执行；只有原 kernel/RPC/reservation 的精确确认允许登记'
+}
+
 drill_repo_authority_case() {
   CAP=90; local t0 out
   t0=$(now)

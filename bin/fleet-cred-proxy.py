@@ -2062,9 +2062,64 @@ def no_account_why(cfg, provider):
 
 
 # ---- the control socket ------------------------------------------------------
+def credential_inspect(req, t):
+    """Read-only proof of the original pass; ctl_tenant has checked peer uid.
+
+    Never best()/renew(), pick(), mint(), attach(), or forward here. Responses
+    are a small non-secret scope, never tokens, claims, URLs or error bodies.
+    """
+    refuse = {"ok": False, "err": "original credential scope cannot be verified"}
+    try:
+        expected = req['expected']
+        if req.get('version') != 1 or req.get('provider') != 'codex':
+            return refuse
+        token = req['cred']
+        if is_hub_pass(token):
+            claims = hub_claims(token)  # lookup only; the Hub verifies BOTH signatures
+            if not claims:
+                return refuse
+            with t.passes.lock:
+                effective = t.passes.held.get(claims['id'], token)
+            ne = node_env(getattr(t.cfg, 'node_env', None))
+            # One authoritative pair; an ambient URL is never combined with a
+            # token from another source at this new verification boundary.
+            hub, node = ne.get('CCQUOTA_HUB_URL', '').rstrip('/'), ne.get('CCQUOTA_TOKEN', '')
+            if not hub or not node or not loopback_ok(hub):
+                return refuse
+            request = urllib.request.Request(hub_dial(hub) + '/v1/fleet/session-cred/inspect', method='POST',
+                data=json.dumps(dict(original=token, effective=effective, worker_id=expected['worker_id'], provider='codex')).encode(),
+                headers={'Authorization': 'Bearer ' + node, 'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = json.loads(response.read(32769))
+            if data.get('id') != expected.get('hub_id') or data.get('worker_id') != expected['worker_id']:
+                return refuse
+            return dict(ok=True, scope=dict(kind='central', port=t.cfg.bound_port, **{k: data[k] for k in
+                        ('id', 'principal', 'worker_id', 'machine', 'endpoint_id', 'provider', 'binding')}))
+        with Proxy.lock:
+            claims, why = t.keys.verify(token, live=live_session(t.cfg.state))
+            if why or not claims or (claims.get('lg') and claims['lg'] != t.name):
+                return refuse
+            sid = claims['sid']
+            worker = read_json(os.path.join(t.cfg.state, 'workers.json'), {}).get(sid)
+            wrapper = read_json(os.path.join(t.cfg.state, 'live.json'), {}).get(sid)
+            override = read_json(os.path.join(t.cfg.state, 'bind.json'), {}).get(sid)
+            account = override or claims['acct']
+            if (sid != expected['sid'] or worker != expected['worker_id'] or wrapper != expected['wrap_pid']
+                    or account != expected['account'] or not pid_alive(wrapper)):
+                return refuse
+            if codex_target_auth(t, account).get('verdict') != 'ok':
+                return refuse
+            return dict(ok=True, scope=dict(kind='local', port=t.cfg.bound_port, sid=sid, worker_id=worker, wrap_pid=wrapper,
+                        account=account, original_account=claims['acct'], override=override, tenant=t.name))
+    except Exception:
+        return refuse
+
+
 def ctl_handle(req, t):
     cfg = t.cfg
     op = req.get("op")
+    if op == 'credential-inspect':
+        return credential_inspect(req, t)
     if op == "target-auth":
         return codex_target_auth(t, req.get("account") or "")
     if op == "upstream-rejections":
@@ -2947,6 +3002,7 @@ def main():
     sub.add_parser("accounts")
     a = sub.add_parser("target-auth")
     a.add_argument("--account", required=True)
+    sub.add_parser("credential-inspect")
     sub.add_parser("probe")
     sub.add_parser("relay")
     sub.add_parser("relay-probe")
@@ -2987,6 +3043,11 @@ def main():
     elif a.cmd == "target-auth":
         res = ctl_call(a.state, {"op": "target-auth", "account": a.account})
         print(json.dumps({k: res[k] for k in ("verdict", "reason")}))
+    elif a.cmd == 'credential-inspect':
+        req = json.loads(sys.stdin.read(32769))
+        req['op'] = 'credential-inspect'
+        res = ctl_call(a.state, req)
+        print(json.dumps(dict(scope=res['scope'])))
     elif a.cmd == "probe":
         ctl_call(a.state, {"op": "probe", "data": sys.stdin.read(65536)})
     elif a.cmd == "relay-probe":
