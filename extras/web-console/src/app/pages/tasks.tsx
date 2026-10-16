@@ -240,8 +240,9 @@ export default function TasksPage() {
               {taskList.map((t) => <TaskCard key={t.id} t={t} stale={stale} ticket={ticketOf(t)} onFile={(x) => { setFiled(""); setFiling(x); }} />)}
             </div>
           ) : (
-            <Empty icon={<ListChecks />} title={tr("还没派过任务", "No tasks yet")}
-              body={tr("派出去的每件事都会在这里留一条记录，编号以 T 开头。", "Everything you send out leaves a record here, numbered from T.")}
+            <Empty icon={<ListChecks />} title={stale ? tr("任务数量未知", "Task count unknown") : tr("还没派过任务", "No tasks yet")}
+              body={stale ? tr("当前来源不可用，请重试读取。空的陈旧快照不代表没有任务。", "The source is unavailable. Retry the read; an empty stale snapshot does not mean zero tasks.")
+                : tr("派出去的每件事都会在这里留一条记录，编号以 T 开头。", "Everything you send out leaves a record here, numbered from T.")}
               action={<Button asChild><Link to="/" className="no-underline">{tr("去派一件", "Send one")}</Link></Button>} />
           )}
         </TabsContent>
