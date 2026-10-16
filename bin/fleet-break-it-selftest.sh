@@ -6605,6 +6605,23 @@ term_go() {
   fi
 }
 
+# A delayed transcript must not replace a turn started after that read.
+drill_chat_late_history() {
+  CAP=60; local t0 out rc
+  t0=$(now)
+  # Production useFleetChat in extras/web-console/src/app/chat/chat.ts and
+  # extras/web-chat/ui/src/chat.ts; browser-attachment CI installs Chromium.
+  [ -f "$ROOT/extras/browser-transport/chat-history.mjs" ] || { WHY='missing late-history browser drill'; return 1; }
+  if (cd "$ROOT/extras/browser-transport" && node --input-type=module -e 'import { chromium } from "playwright"; import { existsSync } from "node:fs"; process.exit(existsSync(chromium.executablePath()) ? 0 : 1)') >/dev/null 2>&1; then
+    out=$(node "$ROOT/extras/browser-transport/chat-history.mjs" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || { WHY="late history replaced a new turn: $out"; return 1; }
+    WHAT='迟到的旧对话不抹掉已完成的新消息；官网和本地各只提交一次'
+  else
+    WHAT='无 Playwright/Chromium：browser-attachment 门运行真实页面演练'
+  fi
+  SECS=$(since "$t0")
+}
+
 # Chat has its own admission and never replays a submitted request.
 drill_chat_direct_admission() {
   CAP=180; local t0
