@@ -277,7 +277,7 @@ def hub_repos():
         return None
 
 
-def send(path, repo="", node="", reap="", mode="", agent=""):
+def send(path, repo="", node="", reap="", mode="", agent="", *, stdout=None, stderr=None):
     """The way out (`--send`): the payload to fleet-client-place.sh. Prints its
     line, returns its code. 2 = nothing to send / no repo to send it to. `mode`
     none (--no-repo) beats the payload's repo; a named --repo beats both. The
@@ -285,19 +285,20 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     --agent, else the payload's `node` / `agent`; null or absent = auto / the
     fleet's default (no --agent at all). The text always travels (issue #2231:
     a send never drops what was written)."""
+    errors = sys.stderr if stderr is None else stderr
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        print("fleet-compose: cannot read %s: %s" % (path, error), file=sys.stderr)
+        print("fleet-compose: cannot read %s: %s" % (path, error), file=errors)
         return 2
     title = data.get("title") or ""
     node = node or data.get("node") or "auto"
     agent = agent or data.get("agent") or ""
     if agent not in ("claude", "codex", ""):
-        print("fleet-compose: agent is claude or codex, not %s" % agent, file=sys.stderr)
+        print("fleet-compose: agent is claude or codex, not %s" % agent, file=errors)
         return 2
     if not title:
-        print("fleet-compose: the payload has no title", file=sys.stderr)
+        print("fleet-compose: the payload has no title", file=errors)
         return 2
     if repo:
         mode = "repo"
@@ -310,7 +311,7 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
             if len(repos) == 1:
                 repo = repos[0]
         if "/" not in repo:
-            print("fleet-compose: name the repo (owner/name) — none to go on", file=sys.stderr)
+            print("fleet-compose: name the repo (owner/name) — none to go on", file=errors)
             return 2
     cid = data.get("id") or "%x" % time.time_ns()
     at = int(data.get("at") or time.time())
@@ -321,7 +322,7 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     draft = data.get("draft")
     if draft is not None and (not isinstance(draft, str) or not draft.strip() or len(draft) > MAX_BODY
                               or data.get("body") or data.get("attachments")):
-        print("fleet-compose: draft must be 1-4000 characters without a submitted body or attachments", file=sys.stderr)
+        print("fleet-compose: draft must be 1-4000 characters without a submitted body or attachments", file=errors)
         return 2
     text = draft if draft is not None else data.get("body") or ""
     if draft is None and not norepo and data.get("issue", True):
@@ -365,7 +366,7 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
     os.close(fd)
     env = dict(os.environ, FLEET_PLACE_TIMING=timef, FLEET_PLACE_RESULT=resf)
     try:
-        out = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, env=env)
+        out = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stderr, text=True, env=env)
         timing = read_timing(timef)
         opened = read_opened(resf)
     finally:
@@ -375,17 +376,17 @@ def send(path, repo="", node="", reap="", mode="", agent=""):
                     os.unlink(f)
                 except OSError:
                     pass
-    sys.stdout.write(out.stdout)
+    (sys.stdout if stdout is None else stdout).write(out.stdout)
     # the issue a `new` filed (issue #2753 — ⌘T's 「已建 #N 并开工」), on stderr:
     # stdout stays the place's one line
     num = re.search(r"/issues/(\d+)|^#?(\d+)$|^issue-(\d+)$", opened.get("filed") or "") or \
         re.search(r"(?:^|:)issue-(\d+)$", opened.get("key") or "")
     if out.returncode == 0 and num:
-        print("filed: #%s" % next(g for g in num.groups() if g), file=sys.stderr)
+        print("filed: #%s" % next(g for g in num.groups() if g), file=errors)
     # …and the window it opened on THIS machine (issue #3097 — a 看台's ⌘T goes to it)
     if out.returncode == 0 and re.fullmatch(r"@\d+", opened.get("window_id") or "") \
             and opened.get("machine") == socket.gethostname().split(".")[0]:
-        print("window: %s" % opened["window_id"], file=sys.stderr)
+        print("window: %s" % opened["window_id"], file=errors)
     line = next((l for l in reversed(out.stdout.splitlines()) if l.split(" ", 1)[0] in PLACE_WORDS), "")
     words = line.partition("\t")[0].split()
     remote = words[:1] == ["REMOTE"]
@@ -422,7 +423,8 @@ def last_repo():
 
 def main(argv):
     global TEXT
-    TEXT = load_text()
+    if argv[:1] != ["--send"]:
+        TEXT = load_text()
     if argv[:1] in (["--send"], ["payload"]) and len(argv) >= 2:
         opts = {"--repo": "", "--node": "", "--agent": "", "--reap": ""}
         mode, chosen = "", 0
