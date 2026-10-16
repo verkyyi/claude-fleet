@@ -109,6 +109,8 @@ def prove_stopped(proof):
 
 def gate(repo, finish):
     a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+    if a.get("mode") not in ("legacy", "frozen", "hub"):
+        raise ValueError("repo authority is unknown; no local fallback")
     if a["mode"] == "frozen":
         raise ValueError("repo dispatch is frozen; drain/cutover must finish first")
     ref = ""

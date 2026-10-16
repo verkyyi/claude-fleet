@@ -294,6 +294,10 @@ issue_open_gate() {
   case "$ticket_home" in
     ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" --window "$WIN" 2>/dev/null) || tid='' ;;
   esac
+  # After an explicit authority migration, a vanished window leaves no accepted
+  # task identity to disambiguate an adopted hub number from a legacy GH number.
+  # Keep the worktree until that identity is reconciled, including after rollback.
+  if [ -z "$WIN" ] && [ -n "$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TASK_AUTHORITY 2>/dev/null)" ]; then tid=''; fi
   [ "$href" = "$BRANCH" ] || tid=''
   if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then
     for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do
