@@ -1363,6 +1363,66 @@ mutex. Requests with different idempotency keys are separate operations;
 cross-node Issue leases and per-principal aggregate worker budgets are future
 work. Existing machine/Fleet capacity limits still apply.
 
+### Verified accepted launches (launch_v1, #4393)
+
+An accepted C2 dispatch requires `launch_v1` on the selected node, including
+placement back onto the calling node. A downlevel node refuses before sending
+work. Legacy requests without an accepted task keep their existing path.
+The hub claims the C1 task execution owner before transport. Its canonical
+operation input stays unchanged for idempotent replay; the node receives an
+additional `params.launch` binding:
+
+```json
+{"version":1,"operation_id":"<UUID>","task":"T1","owner":"<task owner>","generation":1,"worker_id":"<fleet UUID>/<session UUID>","provider":"codex","attempt_id":"task:T1:g1"}
+```
+
+The initial session UUID is the operation UUID. Explicit transfer keeps that
+lifelong session identity and accepts a new operation and task generation.
+`owner` comes from the task record, not the node audit actor. Provider remains
+immutable within a generation.
+
+`fleet_launch.py` starts the selected native CLI with the task seed held back.
+The existing SessionStart hook observes the root process's kernel executable,
+birth time, version probe and native session ID under that launch supervisor.
+Nested native helpers cannot supply or replace its receipt. After checking the
+current C1 owner/generation and recording actual provider evidence, the
+supervisor delivers the seed once through the existing native inbox. Codex
+first input targets the endpoint and thread witnessed by that root hook.
+Missing CLI, missing proof, authority outage or a provider mismatch withholds
+input; rejected launch cleanup can signal only its own process descendants.
+There is no alternate provider or delivery retry queue.
+
+`result.launch_receipt` repeats all binding fields and adds `actual_provider`,
+`native_session`, `pid`, `birth`, `executable`, `observed_at` and `phase`.
+`verified` proves native identity; `delivered` confirms the seed inbox accepted
+it; `ready` is an unseeded launch; `resumed` is the same native conversation
+reattached without resending the original seed. Codex receipts also carry the
+native inbox endpoint and home. These are execution observations, never task
+completion. C4 consumers must use C1 task state/outcome for completion.
+
+Reconnect reads the existing node operation journal and inspects its unique
+worker identity. A lost acknowledgement can recover the surviving receipt;
+a repeated submit never executes a second start. Lost process/session proof
+returns `unknown`/interrupted, retaining ownership for explicit recovery.
+A resume requires the same provider and native session ID. Restore and its
+pullback map carry the launch binding and receipt; no receipt after a previous
+start forbids a fresh rerun. Legacy restore nudges are withheld on this path.
+
+Native switching uses the existing transfer controller: verify the source
+binding and task authority before cutover, confirm the source stopped, then
+accept C1's explicit transfer and claim the next generation. The existing
+private handoff package records the acceptance attempt, and the existing node
+operation journal records the new launch. An ambiguous acceptance or failed
+target retains the task for recovery; it never automatically switches back or
+creates another generation. Old receipts cannot acquire the new generation.
+
+`fleet-launch-selftest` and the API launch tests use isolated fake native
+processes/adapters and the real operation journals. They cover missing CLI,
+mismatch, lost acknowledgement, replay, restart, PID reuse, nested hooks,
+resume and transfer fencing. They are fixture evidence. C9 owns actual remote
+process acceptance; credential readiness (#3401) and Codex restore identity
+(#3955) remain its external prerequisites. A merged fixture is not a live pass.
+
 Remote configuration writes are limited to:
 
 | Key | Accepted integer values | Effect |

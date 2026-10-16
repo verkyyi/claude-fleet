@@ -504,7 +504,8 @@ if [ "$BG" = 1 ]; then
     *) owarg="$owarg --desk='$DESK_ARG'" ;;   # sanitized to owner/name below
   esac
   _dispatch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "$DISPATCH") || exit 2
-  fleet_bg "FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
+  _launch_q=$(python3 -c 'import shlex,sys; print(shlex.quote(sys.argv[1]))' "${FLEET_LAUNCH:-}") || exit 2
+  fleet_bg "FLEET_LAUNCH=$_launch_q FLEET_DISPATCH=$_dispatch_q FLEET_SPAWN_FOCUS='${FLEET_SPAWN_FOCUS:-0}' bash '$0'$nfarg$pfarg$dfarg$pinarg$nodearg$owarg --origin='${ORIGIN:-hub}'${AGENT:+ --agent=$AGENT}${ROLE:+ --role=$ROLE}${AS_ARG:+ --as=$AS_ARG}$rarg${TARGET_SESS:+ '$TARGET_SESS'} >/dev/null 2>&1" \
     || { [ -n "$nfarg" ] && rm -f "$nf"; [ -n "$pfarg" ] && rm -f "$pf"; [ -n "$dfarg" ] && rm -f "$df"
          refuse "raw: background dispatch failed"; exit 1; }
   exit 0
@@ -652,12 +653,15 @@ fi
 # through to the original cold path below — the pool is never load-bearing.
 # A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
 # argument, which only a cold spawn can carry (see the header).
+if [ -n "$TASK_REF" ]; then
+  printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
+fi
 warm=0; win=""; slug=""; wt=""
 claimed=""
 # One pool per hosted repo (issue #797): the claim names the scratch's repo, so it
 # only ever gets a window warmed from THAT repo's worktree. A no-repo scratch never
 # claims.
-_pool_ok=1; [ "$NOREPO" = 1 ] && _pool_ok=0
+_pool_ok=1; { [ "$NOREPO" = 1 ] || [ -n "${FLEET_LAUNCH:-}" ]; } && _pool_ok=0
 _pool_repo=$REPO_ARG
 if [ "$WARM_ONLY" = 1 ]; then
   # The node's slot contract (issue #2233): the window id alone, exit 3 = none
@@ -838,6 +842,10 @@ else
     printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
       && launch="$launch \"\$(cat '$tf')\""
   fi
+  if [ -n "${FLEET_LAUNCH:-}" ]; then
+    _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
+    stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
+  fi
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1
@@ -868,6 +876,7 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 fi
 # The session's lifelong identity (issue #1646), warm or cold: a pool window was no
 # session until this claim. Minted once; restore / migrate / move carry it.
+[ -z "${_launch_fid:-}" ] || TM set-window-option -t "$win" @fleet_id "$_launch_fid" 2>/dev/null
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)

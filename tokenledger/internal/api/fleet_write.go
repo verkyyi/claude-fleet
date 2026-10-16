@@ -977,6 +977,9 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		}
 	}
 
+	if acceptedLaunch(w) != nil && !s.canLaunch(ctx, target.EndpointID) {
+		return nil, fault("UNAVAILABLE", "selected node does not support verified launch_v1; nothing was sent")
+	}
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,
 		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now}
@@ -1000,6 +1003,16 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		return nil, err
 	}
 
+	launch, err := s.claimLaunch(op, target)
+	if err != nil {
+		b, _ := json.Marshal(map[string]any{"error": errorObject(err)})
+		_ = s.Store.UpdateFleetOperation(op.ID, "failed", string(b), time.Now())
+		return nil, err
+	}
+	// Transport-only binding; original canonical input remains replay-comparable.
+	if launch != nil {
+		w.params["launch"] = launch
+	}
 	envelope := map[string]any{"operation_id": op.ID, "fleet_id": target.FleetID, "action": tool,
 		"params": w.params, "actor": p.Actor}
 	var noted uint64
@@ -1011,6 +1024,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		noted = s.recent.note(target.EndpointID, hb.SessionsCount(), now)
 	}
 	status, result := s.sendWrite(ctx, target, op, envelope)
+	status, result = s.verifyLaunchResult(op, target, status, result)
 	if noted != 0 && status == "failed" {
 		s.recent.forget(target.EndpointID, noted) // refused before anything opened
 	}

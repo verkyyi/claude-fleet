@@ -867,7 +867,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # pane-scoped knob the tail needs must be BAKED into the command. FLEET_SPAWN_TAIL
   # selects tail-only mode + names the fleet; FLEET_SPAWN_FOCUS is carried through
   # so "focus the new worker when ready" still works (default no-focus otherwise).
-  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH")"
+  _bg="FLEET_SPAWN_TAIL=$(shq "$SESS") FLEET_DISPATCH=$(shq "$DISPATCH") FLEET_LAUNCH=$(shq "${FLEET_LAUNCH:-}")"
   [ "$CLAIMED_HERE" = 1 ] && _bg="$_bg FLEET_SPAWN_CLAIMED=1"
   [ "${FLEET_SPAWN_FOCUS:-0}" = 1 ] && _bg="$_bg FLEET_SPAWN_FOCUS=1"
   # >/dev/null 2>&1 on the detached tail (belt-and-suspenders for issue #401):
@@ -1022,6 +1022,13 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
+if [ -n "${FLEET_LAUNCH:-}" ]; then
+  _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
+  stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
+fi
+if [ -n "$TASK_REF" ]; then
+  printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
+fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
@@ -1048,7 +1055,8 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 #   and the reapers copy it into the history ledger's origin column before the
 #   window dies. @origin_wid: a hub-placed start (issue #1425) was handed its
 #   parent's worker_id outright — the parent lives on another machine.
-_fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''
+if [ -n "${_launch_fid:-}" ]; then _fid=$_launch_fid
+else _fid=$(fleet_fid_mint 2>/dev/null) && fleet_is_fid "$_fid" || _fid=''; fi
 _sw=(set-window-option -t "$win" @issue "$num")
 _sw+=(\; set-window-option -t "$win" @born "$(date +%s)")
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-merged}")

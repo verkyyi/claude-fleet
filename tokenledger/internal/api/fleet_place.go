@@ -286,7 +286,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
 		return
 	}
-	if pl.FleetID == fleetID {
+	if pl.FleetID == fleetID && req.Dispatch == nil {
 		s.placeAudit(p, fleetID, "LOCAL "+nodeLabel(pl.Machine), now)
 		writeJSON(w, http.StatusOK, map[string]any{"local": true, "placement": pl, "dispatch": req.Dispatch})
 		return

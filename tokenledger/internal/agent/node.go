@@ -192,6 +192,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			// The test identity's scratch, marked (claude-fleet#2505).
 			caps = append(caps, control.CapTestIdentity)
 		}
+		if rp.launch {
+			caps = append(caps, control.CapLaunch)
+		}
 		if rp.task {
 			// The hub's task record on a start (claude-fleet#3325).
 			caps = append(caps, control.CapTask)
