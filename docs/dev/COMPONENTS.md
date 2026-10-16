@@ -90,7 +90,7 @@
 | 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；隔离策略不由本表宣称完成。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
 | 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
-| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连，不替代业务授权验收。不安装 daemon、不改变生产运行时选择。 |
+| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连，不替代业务授权验收。不安装 daemon、不改变生产运行时选择。显式原生用量订阅探针仅在隔离夹具和固定版本 CI 验证事件边界，不引入生产订阅服务。 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 按操作者设备能力使用。 |
 | 企业微信通知（wecom-webhook-notify.sh） | 按需 | 用户自行选择的通知集成。 |
 
