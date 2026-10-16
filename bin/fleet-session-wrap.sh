@@ -280,10 +280,13 @@ while :; do
   fi
   if [ "$intmux" = 1 ] && [ -n "$(opt @launch)" ]; then
     PATH="$SHIM_PATH" python3 "$BIN/fleet_launch.py" supervise -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
+  elif [ "$intmux" = 1 ]; then
+    PATH="$SHIM_PATH" python3 "$BIN/fleet_repo_authority.py" --supervise -- "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   else
     PATH="$SHIM_PATH" "$LAUNCH" ${cmd[@]+"${cmd[@]}"}
   fi
   rc=$?
+  unset FLEET_AUTHORITY_START   # a resume requires its own one-shot reservation
   if [ -n "${FLEET_WORKER_CRED:-}" ]; then
     python3 "$BIN/fleet-mcp.py" --cred revoke >/dev/null 2>&1
     unset FLEET_WORKER_CRED

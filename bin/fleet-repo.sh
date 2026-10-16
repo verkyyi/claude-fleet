@@ -6,6 +6,7 @@
 #   fleet-repo.sh remove [--session <sess>] <owner/repo> [--force]
 #   fleet-repo.sh get    [--session <sess>] <KEY> [<owner/repo> | --window <w> | --worktree <dir>] [--tsv]
 #   fleet-repo.sh fold   <from-session> --into <session> [--dry-run] [--wait]
+#   fleet-repo.sh authority <owner/repo> --session <sess> [--dry-run | --freeze | --apply | --rollback] [--manifest FILE]
 #
 # A fleet hosts zero or more repos, every one put the same way: an overlay at
 # $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf, in repos/.order (see fleet_repos
@@ -51,9 +52,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die()   { echo "fleet-repo: $*" >&2; exit 1; }
-usage() { sed -n '4,8p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,9p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
+if [ "$cmd" = authority ]; then exec python3 "$BIN/fleet_repo_authority.py" "$@"; fi
 SESS=""; REPO=""; DIR=""; BASE=""; AS=""; TICKETS=""; FORCE=0; KEY=""; WIN=""; WT=""; TSV=0
 INTO=""; DRY=0; WAIT=0
 if [ "$cmd" = get ]; then KEY="${1:-}"; [ -n "$KEY" ] || usage; shift; fi

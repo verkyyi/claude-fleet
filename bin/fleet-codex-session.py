@@ -183,9 +183,14 @@ def bus_fields(stats, home):
 
 def hook():
     payload = None
+    if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
+        from fleet_repo_authority import observe_native
+        payload = json.load(sys.stdin)
+        observe_native(payload)
     if os.environ.get("FLEET_LAUNCH_CONTEXT"):
         from fleet_launch import hook as launch_hook
-        payload = json.load(sys.stdin)
+        if payload is None:
+            payload = json.load(sys.stdin)
         launch_hook(payload)
     owner = os.environ.get("FLEET_CODEX_LAUNCHER_PID", "")
     pane = os.environ.get("TMUX_PANE", "")

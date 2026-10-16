@@ -175,7 +175,9 @@ fi
 # re-fetch every session then did anyway because `--comments` dumps unstructured
 # text. `--jq` is gh's BUILT-IN jq — no external dependency.
 printf '\n===== issue #%s · %s =====\n' "$issue" "$repo"
-cached_body=$(python3 "$BIN/fleet-issue-cache.py" read "$cwd" "$repo" "$issue" "$want_comments" 2>/dev/null) || cached_body=''
+tid=$(fleet_ticket_ref "$repo" "$issue" "$sess") || { printf 'accepted ticket identity unavailable\n'; exit 5; }
+cached_body=''
+case "$tid" in gh:*) cached_body=$(python3 "$BIN/fleet-issue-cache.py" read "$cwd" "$repo" "$issue" "$want_comments" 2>/dev/null) || cached_body='' ;; esac
 # The ONE read's fields and its gh --jq render, shared by both homes below.
 fields='number,title,state,url,body,labels,assignees,comments'
 jqf='"title: \(.title)",
@@ -204,7 +206,7 @@ claim_line() {
 if [ -n "$cached_body" ]; then
   printf '%s\n' "$cached_body"
   rc=0
-elif fleet_ticket_hub "$repo" "$sess"; then
+elif [ "$tid" = "hub:$(fleet_norm_repo "$repo")#$issue" ]; then
   # A hub ticket (FLEET_TICKETS=hub, issue #3598): read through the door, rendered
   # by the same filter; the claim is the hub's (atomic) — no gh.
   tid="hub:$(fleet_norm_repo "$repo")#$issue"

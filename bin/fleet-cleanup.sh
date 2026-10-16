@@ -286,14 +286,21 @@ issue_open_gate() {
   [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
   local want c ist='' verb ticket_home tid='' doc
+  # Keep #4464's refusal ordering: duplicate windows are refused by the shared
+  # liveness gate below, before cleanup. They are not a ticket selector.
+  case "$WIN" in *$'\n'*) return 0 ;; esac
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
   # Preserve the door's legacy unset=github default, but an invalid configured
   # provider or an ambiguous branch must not silently select GitHub. Window
   # ambiguity remains the downstream liveness gate's skip:live, in its order.
   ticket_home=$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TICKETS) || ticket_home=unknown
   case "$ticket_home" in
-    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" 2>/dev/null) || tid='' ;;
+    ''|github|hub) tid=$(FLEET_SESSION="$FLEET_SESSION" bash "$BIN/fleet-ticket.sh" id "$REPO" "$ISSUE" --window "$WIN" 2>/dev/null) || tid='' ;;
   esac
+  # After an explicit authority migration, a vanished window leaves no accepted
+  # task identity to disambiguate an adopted hub number from a legacy GH number.
+  # Keep the worktree until that identity is reconciled, including after rollback.
+  if [ -z "$WIN" ] && [ -n "$(fleet_repo_conf_get "$FLEET_SESSION" "$REPO" FLEET_TASK_AUTHORITY 2>/dev/null)" ]; then tid=''; fi
   [ "$href" = "$BRANCH" ] || tid=''
   if [ "$tid" = "gh:$want" ] && [ "$st" = MERGED ]; then
     for c in $(printf '%s' "${closes:--}" | tr ',' ' ' | tr '[:upper:]' '[:lower:]'); do

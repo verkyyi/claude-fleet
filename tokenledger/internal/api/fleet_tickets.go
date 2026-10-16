@@ -70,6 +70,10 @@ type ticketCaller struct {
 	node         bool
 }
 
+func ticketRefMatches(ref, repo, number string) bool {
+	return ref == "gh:"+repo+"#"+number || ref == "hub:"+repo+"#"+number
+}
+
 func (c ticketCaller) sees(t store.FleetTicket) bool {
 	return c.all || (c.owner != "" && t.Owner == c.owner)
 }
@@ -169,6 +173,10 @@ func (s *Server) handleFleetTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, FleetTicketsPath), "/")
+	if rest == "authority" || rest == "authority/adopt" || rest == "authority/start" {
+		s.ticketAuthority(w, r, c)
+		return
+	}
 	if rest == "" {
 		switch r.Method {
 		case http.MethodPost:
