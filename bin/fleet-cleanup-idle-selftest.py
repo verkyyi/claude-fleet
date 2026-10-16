@@ -111,7 +111,9 @@ class Rig(unittest.TestCase):
         self.call("git", "-C", str(self.main), "worktree", "add", "-qb", "scratch-7", str(self.wt))
         head = self.call("git", "-C", str(self.main), "rev-parse", "HEAD").strip()
         self.call("git", "-C", str(self.main), "update-ref", "refs/remotes/origin/master", head)
-        (self.root / "conf" / (self.label + ".conf")).write_text(
+        self.conf = self.root / "conf/fleets" / self.label / "conf"
+        self.conf.parent.mkdir(parents=True)
+        self.conf.write_text(
             f'FLEET_REPO=acme/repo\nFLEET_MAIN={shlex.quote(str(self.main))}\nFLEET_REAP_MIN_AGE=0\n')
         self.tm("-f", "/dev/null", "new-session", "-d", "-s", self.label, "-c", str(self.root), "sleep 90")
         self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
@@ -145,8 +147,11 @@ class Rig(unittest.TestCase):
         return self.win in self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split()
 
     def codexify(self):
-        """Make the rig's window a Codex session (issue #3352: the reapers judge
-        Claude and Codex by the same @claude_state / @claude_state_ts)."""
+        """Bind an idle Codex conversation, including #4318's native proof.
+
+        Only RPC replies are fixtures: identity inspection, process ownership,
+        native idle checks, cleanup, history and restore run the real code.
+        """
         home = self.root / "codex-home"
         transcript = home / "sessions/2026/09/17" / ("rollout-" + self.sid + ".jsonl")
         transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -154,8 +159,33 @@ class Rig(unittest.TestCase):
         pid = self.tm("display-message", "-p", "-t", self.win, "#{pane_pid}").strip()
         self.set("@cc_agent", "codex")
         self.set("@cc_launcher_pid", pid)
+        remote = "unix://" + str(self.root / "native.sock")
         self.set("@codex_identity", json.dumps({"session_id": self.sid, "owner": pid,
-                                               "home": str(home), "transcript": str(transcript), "cwd": str(self.wt)}))
+                                               "home": str(home), "transcript": str(transcript),
+                                               "cwd": str(self.wt), "remote": remote}))
+        self.native = self.root / "native.json"
+        self.native.write_text(json.dumps({"remote": remote, "thread": {
+            "id": self.sid, "cwd": str(self.wt), "path": str(transcript),
+            "status": {"type": "idle"},
+            "turns": [{"id": "turn-1", "status": "completed", "items": []}]}}))
+        rpc = self.ibin / "fleet-codex-rpc.py"
+        rpc.unlink()
+        rpc.write_text('import json\nfrom pathlib import Path\n'
+                       + 'RECORD = Path(' + repr(str(self.native)) + ')\n' + '''
+class Client:
+    def __init__(self, remote, **kwargs):
+        if remote != json.loads(RECORD.read_text())['remote']:
+            raise ValueError('foreign fixture endpoint')
+    def close(self): pass
+    def call(self, method, params):
+        thread = json.loads(RECORD.read_text())['thread']
+        if method == 'thread/loaded/list': return {'data': [thread['id']]}
+        if params.get('threadId') != thread['id']:
+            raise ValueError('foreign fixture thread')
+        if method == 'thread/read': return {'thread': thread}
+        if method == 'thread/goal/get': return {'goal': None}
+        raise ValueError('unexpected fixture RPC: ' + method)
+''')
         return transcript
 
     def mature_notice(self):
@@ -185,14 +215,7 @@ class RoundTrip(Rig):
 
     def test_codex_close_and_restore_keeps_exact_identity(self):
         home = self.root / "codex-home"
-        transcript = home / "sessions/2026/09/17" / ("rollout-" + self.sid + ".jsonl")
-        transcript.parent.mkdir(parents=True)
-        transcript.write_text(json.dumps({"type": "session_meta", "payload": {"id": self.sid, "cwd": str(self.wt)}}) + "\n")
-        pid = self.tm("display-message", "-p", "-t", self.win, "#{pane_pid}").strip()
-        self.set("@cc_agent", "codex")
-        self.set("@cc_launcher_pid", pid)
-        self.set("@codex_identity", json.dumps({"session_id": self.sid, "owner": pid,
-                                               "home": str(home), "transcript": str(transcript), "cwd": str(self.wt)}))
+        transcript = self.codexify()
         self.mature_notice()
         self.assertIn("reaped-idle:", self.clean())
         self.call("bash", str(self.ibin / "dash-restore-session.sh"), "landed:scratch:scratch-7", self.label)
@@ -203,6 +226,32 @@ class RoundTrip(Rig):
         self.assertIn("--agent\ncodex\n--codex-home\n" + str(home), args)
         self.assertIn(self.sid, args)
         self.assertTrue(transcript.exists())
+
+    def test_codex_unknown_or_active_native_turn_is_kept(self):
+        self.codexify()
+        identity = self.tm("display-message", "-p", "-t", self.win, "#{@codex_identity}")
+        unbound = json.loads(identity)
+        del unbound["remote"]
+        self.set("@codex_identity", json.dumps(unbound))
+        self.mature_notice()
+        self.assertEqual(self.clean(), "")
+        self.assertTrue(self.exists())  # session_meta alone proves no idle turn
+        self.set("@codex_identity", identity)
+        native = json.loads(self.native.read_text())
+        idle_thread = native["thread"]
+        for change in ({"status": {"type": "active"}},
+                       {"status": {"type": "unknown"}}, {"turns": []},
+                       {"path": str(self.root / "other.jsonl")},
+                       {"turns": [{"id": "turn-1", "status": "completed", "items": [
+                           {"type": "mcpToolCall", "status": "inProgress"}]}]}):
+            with self.subTest(change=change):
+                self.native.write_text(json.dumps(dict(native, thread=dict(idle_thread, **change))))
+                self.assertEqual(self.clean(), "")
+                self.assertTrue(self.exists())
+        self.native.write_text(json.dumps(native))
+        self.mature_notice()
+        self.assertIn("reaped-idle:", self.clean())
+        self.assertFalse(self.exists())
 
     def test_unmerged_pr_requires_strict_ancestor_and_activity_recheck(self):
         self.call("git", "-C", str(self.main), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
@@ -282,7 +331,7 @@ class RoundTrip(Rig):
         self.assertFalse((self.root / "ledger.tsv").exists())
         self.clean("--limit", "0")
         self.assertTrue(self.exists())
-        conf = self.root / "conf" / (self.label + ".conf")
+        conf = self.conf
         original = conf.read_text()
         conf.write_text(original + "FLEET_REAP_IDLE_DONE_MIN=0\n")
         self.clean()
@@ -435,7 +484,7 @@ class ReapPolicy(Rig):
         self.assertIn("reaped-idle:", self.due())
 
     def test_sleep_on_considers_only_windows_with_a_policy(self):
-        conf = self.root / "conf" / (self.label + ".conf")
+        conf = self.conf
         conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
         self.set("@claude_state_ts", str(int(time.time()) - 9000))
         self.due()
@@ -777,7 +826,7 @@ class DoneNoPr(Rig):
     def test_sleep_on_no_policy_closed_ticket_closes(self):
         # #2970: FLEET_SLEEP=on (--policy-only) used to skip every window with no
         # policy; one bound to a closed ticket is closed all the same.
-        conf = self.root / "conf" / (self.label + ".conf")
+        conf = self.conf
         conf.write_text(conf.read_text() + "FLEET_SLEEP=on\n")
         self.ago(9000)
         self.set("@issue", "12")
