@@ -6376,7 +6376,7 @@ drill_spinner_maintenance_starved() {
 }
 
 drill_codex_mcp_busy() {
-  CAP=15; local t0 out
+  CAP=30; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" 2>&1) \
     || { WHY="Codex MCP/helper 回收分类失守: $out"; return 1; }

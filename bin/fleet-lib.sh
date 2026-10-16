@@ -10427,14 +10427,17 @@ fleet_handoff_cycle_live() {
 # (`…/shell-snapshots/snapshot-…` in its argv) among its direct children, exactly
 # fleet-sleep.py's non-strict walk — so a pane with none never pays the python walk.
 fleet_window_bg_busy() {
-  local sess="${1:-}" win="${2:-}" quick="${3:-}" bin sock='' agent pid=''
+  local sess="${1:-}" win="${2:-}" quick="${3:-}" bin sock='' agent pid='' rc out
   [ -n "$win" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   [ -n "$sess" ] || return 1
   [ -n "${TMUX:-}" ] || sock=$(fleet_socket "$sess")
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-  [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1 || return 1
   agent=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{@cc_agent}' 2>/dev/null)
+  if ! { [ -f "$bin/fleet-sleep.py" ] && command -v python3 >/dev/null 2>&1; }; then
+    [ "$agent" = codex ] && return 0
+    return 1
+  fi
   [ "$agent" = codex ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
   [ "$agent" = codex ] || [ -n "$pid" ] || return 1
   if [ "$quick" = 1 ] && [ -n "$pid" ]; then
@@ -10442,8 +10445,16 @@ fleet_window_bg_busy() {
       | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
       || return 1
   fi
-  python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
-    >/dev/null 2>&1 </dev/null
+  if out=$(python3 "$bin/fleet-sleep.py" busy --session "$sess" ${pid:+--pid "$pid"} "$win" \
+      2>&1 </dev/null); then return 0; else rc=$?; fi
+  # busy: 1 alone proves idle. In particular a missing/stale Codex identity,
+  # lost native endpoint or failed inventory (2) must never authorize disposal.
+  if [ "$agent" = codex ]; then
+    # An interpreter/import crash can also exit 1, with a diagnostic. The normal
+    # idle result is exactly exit 1 with no output, never an exception traceback.
+    [ "$rc" = 1 ] && [ -z "$out" ] || return 0
+  fi
+  return "$rc"
 }
 
 # fleet_window_tool_busy <session> <win> — is a FLEET TOOL CALL <win>'s agent made

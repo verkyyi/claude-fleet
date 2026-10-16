@@ -87,6 +87,15 @@ if the supervisor is SIGKILLed. The private socket directory is mode 0700 under
 close-on-exit policy; crashes and signal exits remain visible. No shared daemon
 or network listener is started, and no account config is rewritten.
 
+Finished Codex windows can be reaped while their configured MCP servers remain
+running. The busy gate verifies the current launcher/session, a completed idle
+native turn and exact MCP launch arguments; it excludes only verified service
+entrypoints and bundled helpers. Jobs beneath those processes, active tools,
+unfinished goals/children and active loops still retain the window. Missing or
+changed identity, an unavailable endpoint or an incomplete native inventory
+also retain it. A legacy embedded launch without a private endpoint therefore
+needs a normal session recovery before this gate can establish that it is idle.
+
 `FLEET_CODEX_SERVER=0` preserves the embedded launch for troubleshooting; live
 queue delivery then reports that no endpoint is available. An explicitly supplied
 `--remote` endpoint retains its existing lifecycle. Profiles require Python 3.11+
