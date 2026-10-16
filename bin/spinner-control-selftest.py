@@ -76,7 +76,13 @@ def main():
             assert tm('one', 'show-environment', '-g', 'DISPLAY') == 'DISPLAY=keep-server-environment'
             assert not tm('one', 'display-message', '-p', '#{@human_attach}'), 'internal attach woke a sleeper'
             assert not w.attached(by_path, read), 'internal control consumers must not be viewers'
-            assert c1.commands([['display-message', '-p', "a ' ; $x"], ['display-message', '-p', 'b']]) == "a ' ; $x\nb"
+            literal = "a ' ; $x"
+            # Older tmux versions visually escape $x in command output. Match
+            # the native CLI's rendering while still checking quoting and the
+            # response boundary between both commands.
+            expected = tm('one', 'display-message', '-p', '-l', literal) + '\nb'
+            actual = c1.commands([['display-message', '-p', '-l', literal], ['display-message', '-p', 'b']])
+            assert actual == expected, (actual, expected)
             # A fake protocol marker printed by capture-pane is ordinary output.
             assert c1.command('display-message', '-p', '-l', '%begin 1 2 1') == '%begin 1 2 1'
             # Human control mode is still a watcher, even with the same flags.
