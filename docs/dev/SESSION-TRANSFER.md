@@ -396,6 +396,31 @@ command never automatically starts a second writer as a rollback.
 A controller killed outright can leave a `.transfer-lock`; inspect the recorded
 PID and pane before removing that lock. The cleanup protections expire.
 
+### Authority authentication failure before native start
+
+The wrapper and `resume-source.sh` both retain the repo-authority admission gate.
+The ticket client uses an explicit endpoint/token pair as supplied; a URL alone
+uses the existing node/broker reader's complete pair. A token without its endpoint
+is refused, and a rejected explicit pair is never retried as another identity
+(#4490). The fallback changes only the reader subprocess environment.
+
+After the fix reaches the affected machine through the normal release path, the
+original owner recovers the retained window and worktree. First recheck its repo,
+issue/task, Fleet identity, source SID, original launcher arguments and packet;
+confirm the previous wrapper and every native writer have stopped. For a failed
+handoff, use the original packet's `resume-source.sh` through its normal recovery
+gate (never invoke its internal `--run-source` mode manually). For an initial
+start that never reached native, use the original standard wrapper invocation
+and original task parameters in that same window. Do not dispatch a replacement,
+change global authentication, rewrite the packet, or skip admission/leases.
+
+Record the actual native executable/PID and SID in the retained pane, authority
+admission, and preserved uncommitted work before reporting recovery. A dispatch
+receipt or a shell prompt is insufficient. An ambiguous binding, live writer,
+held recovery lease or renewed authentication refusal leaves the original work
+retained for its owner; it does not authorize repeated starts. A merged fix and
+an isolated fixture do not establish that an affected live task has recovered.
+
 ## Continue a loop on Codex
 
 Add `--loop /private/path/loop.json` to the immediate or after-turn transfer:

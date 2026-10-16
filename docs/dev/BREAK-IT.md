@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| 会话只继承入口 URL，ticket reader 把它与代理凭据拼接（#4490） | authority 启动及同会话回退 401，代理凭据被送到错误入口 | 完整显式凭据对直接使用；只有 URL 时由既有 reader 整对读取；孤立 token、reader 失败及显式认证失败均拒绝，不换身份 | `ticket-credential-pair` |
 | 空闲 Codex 的 MCP/helper 常驻进程被算成后台任务（#4318） | 做完仍 retained:bg；反过来整棵 MCP 子树豁免会漏掉在途任务，查询失败也可能被当作空闲 | 按本次启动身份、原生配置与精确入口排除常驻服务；工具/任务后代、活动 loop、未完子任务、身份未知继续拒绝回收 | `codex-mcp-busy` |
 | ACK 容器重启后沿用旧 PID 或执行上次未完的运行时切换 | 接管错进程、镜像版本被机器更新器改掉 | 每次容器启动独立代号；镜像负责更新时在恢复更新状态之前退出（#3022） | `node-container-restart` |
 | Linux 托管机器的登录没开租约：`fleet-node-linux.py prepare` 写的登录设置（`logins/<login>.env`、凭据存储里的 `node.env`）缺 `CCQUOTA_FLEET_CREDS=1`（linux-a 实见，#3211） | 池子同步把账号放进了共享代理（「hub 1 · here 1」），可节点程序从不替这个登录租：`accounts/` 里没有 `hub:<label>` 标记，`ready` 的 creds 一直 false，入口每次派活都写 `not ready: creds` 把这台排除在外；新开的登录一样 | `prepare`（每次容器启动都跑）新登录写上这一行；旧存储缺它就补上、令牌和其它行逐字不动，登录设置随之带上，节点程序照 Mac 登录的方式租、写标记（#3211） | `linux-login-no-lease` |
