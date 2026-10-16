@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 
 BIN = Path(__file__).resolve().parent
 
@@ -34,16 +35,37 @@ class CredentialStartTests(unittest.TestCase):
                      'fleet_repo_authority.py', 'fleet_ticket.py', 'fleet_launch.py'):
             shutil.copy2(BIN / name, self.install / name)
         self.requests = []
+        self.reads = []
+        self.order = []
+        self.reservation = None
         self.status = 200
         owner = self
 
         class Authority(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                owner.reads.append((self.path, self.headers.get('Authorization'), query))
+                owner.order.append('read')
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(dict(repo='org/a', reservation=owner.reservation,
+                    owner='fixture-owner', endpoint_id='fixture-node', phase='reserved')).encode())
+
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 owner.requests.append((self.path, self.headers.get('Authorization'), body))
+                owner.order.append(body['action'])
+                if body['action'] == 'reserve':
+                    owner.reservation = body['reservation']
                 self.send_response(owner.status)
                 self.end_headers()
-                self.wfile.write(json.dumps({'mode': 'legacy', 'error': 'fixture refusal'}).encode())
+                response = dict(repo='org/a', reservation=owner.reservation,
+                    owner='fixture-owner', endpoint_id='fixture-node',
+                    phase='starting' if body['action'] == 'begin' else 'reserved')
+                if body['action'] == 'begin':
+                    response['worker_id'] = body['worker_id']
+                self.wfile.write(json.dumps(response if owner.status == 200 else
+                                           {'error': 'fixture refusal'}).encode())
 
             def log_message(self, *args):
                 pass
@@ -103,12 +125,17 @@ sys.exit(37)
         self.fail('wrapper did not finish: ' + self.tm('capture-pane', '-p', '-t', self.pane))
 
     def assert_admitted(self, expected):
+        self.assertTrue(self.native_record.exists(), self.tm('capture-pane', '-p', '-S', '-', '-t', self.pane))
         record = json.loads(self.native_record.read_text())
         self.assertEqual(record['argv'], expected)
         self.assertEqual(record['cwd'], str(self.worktree))
         self.assertEqual(record['context']['worker_id'],
                          '11111111-1111-4111-8111-111111111111/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
         self.assertEqual([r[2]['action'] for r in self.requests], ['reserve', 'begin'])
+        self.assertEqual(self.order, ['reserve', 'read', 'begin'])
+        self.assertEqual(len(self.reads), 1)
+        self.assertEqual(self.reads[0][1:], ('Bearer fixture-node',
+                         {'repo': ['org/a'], 'reservation': [self.reservation]}))
         self.assertEqual(self.requests[0][2]['reservation'], self.requests[1][2]['reservation'])
         self.assertTrue(all(r[0].startswith('/v1/fleet/tickets/authority/start?repo=org%2Fa') and
                             r[1] == 'Bearer fixture-node' for r in self.requests))
