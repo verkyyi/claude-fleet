@@ -5,6 +5,7 @@ Only already accepted task reports, cancellation requests and stop receipts are
 replayed. No launch input, ownership grant, executor or task authority lives here.
 """
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -226,7 +227,8 @@ class Journal:
                              stopped=True, event=t["cancel_request"] + ".ack")
             r["cancel_request"] = t["cancel_request"]
             receipt = self.send("report", task, r)
-            deliver_report(r, receipt)
+            with contextlib.redirect_stdout(sys.stderr):
+                deliver_report(r, receipt)
             self.ack_report(task, r, receipt.get("_delivery_file", ""))
         return self.transport("mutate", task, dict(payload, kind="stop_ack"))
 
@@ -337,7 +339,8 @@ class Journal:
                     receipt = self.send(r["action"], r["task"], r["payload"])
                     if r["action"] == "report":
                         from fleet_task_control import deliver_report
-                        deliver_report(r["payload"], receipt)
+                        with contextlib.redirect_stdout(sys.stderr):
+                            deliver_report(r["payload"], receipt)
                         self.ack_report(r["task"], r["payload"], receipt.get("_delivery_file", ""))
                 except Deferred:
                     continue  # an unresolved task never blocks another task's receipts
