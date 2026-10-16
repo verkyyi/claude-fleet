@@ -1149,16 +1149,25 @@ _FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET
 # No hub and no explicit selection remains byte-for-byte the legacy path.
 fleet_repo_authority_guard() {
   local repo="${1:-}" phase="${2:---gate}" selected="${FLEET_TASK_AUTHORITY:-}" result
+  FLEET_AUTHORITY_RESULT=''; FLEET_AUTHORITY_ERROR=''
   [ -n "$repo" ] || return 0
   if [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$selected" ]; then return 0; fi
-  result=$( _fleet_hub_env
+  result=$( { _fleet_hub_env
     if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ]; then "$FLEET_HUB_AUTHORITY_CMD" "$repo" "$phase"
-    else python3 "$BIN/fleet_repo_authority.py" "$repo" "$phase"; fi ) || return 1
+    else python3 "$BIN/fleet_repo_authority.py" "$repo" "$phase"; fi; } 2>&1 ) || {
+      FLEET_AUTHORITY_ERROR=${result:-'repo authority: check failed without a diagnostic; check node/Hub availability'}
+      printf '%s\n' "$FLEET_AUTHORITY_ERROR" >&2
+      return 1
+    }
+  FLEET_AUTHORITY_RESULT=$result
   if [ "$phase" = --finish ]; then
-    FLEET_AUTHORITY_START=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reservation", ""))') || return 1
+    FLEET_AUTHORITY_START=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("reservation", ""))') || {
+      FLEET_AUTHORITY_ERROR='repo authority: invalid Hub response; expected a JSON reservation'
+      return 1
+    }
     export FLEET_AUTHORITY_START
   fi
-  printf '%s\n' "$result"
+  printf '%s\n' "$FLEET_AUTHORITY_RESULT"
 }
 
 # The per-repo keys as they stood when this lib was sourced (global fleet.conf +
@@ -1679,8 +1688,11 @@ fleet_target_repo() {
   all=$(fleet_repos "$sess")
   [ -n "$all" ] || all=$(fleet_norm_repo "$(fleet_repo_cached "$sess" 2>/dev/null)")
   if [ -n "$want" ]; then
-    printf '%s\n' "$all" | grep -qxF "$want" || return 1
-    printf '%s\n' "$want"; return 0
+    # GitHub casing is identity-equivalent, but local overlay/worktree names
+    # keep their registered spelling. Several matching registrations refuse.
+    r=$(printf '%s\n' "$all" | awk -v want="$want" 'tolower($0) == tolower(want) {print}')
+    [ "$(printf '%s\n' "$r" | grep -c .)" = 1 ] || return 1
+    printf '%s\n' "$r"; return 0
   fi
   if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] \
      && [ "$(tmux display-message -p -t "$TMUX_PANE" "$FLEET_SESSION_FMT" 2>/dev/null)" = "$sess" ]; then
