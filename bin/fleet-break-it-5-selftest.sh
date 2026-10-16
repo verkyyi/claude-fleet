@@ -1,12 +1,6 @@
 #!/bin/bash
-# fleet-break-it-5-selftest.sh — part 5 of 7 of bin/fleet-break-it-selftest.sh's
-# drills (issues #2955, #2694). The whole list outgrew the per-test budget, so it
-# runs as seven tests, each its own ceiling and its own durations row: that file
-# runs BREAK_PART=1/7, the parts 2..7 run the rest, sliced by each drill's wall
-# time (bin/break-it-durations.txt). The drills, the lockstep lint and the runner
-# are all there; this file holds none of its own.
-#
+# Part 5/18; cases and fixtures stay in fleet-break-it-selftest.sh.
+# BREAK_PART=all on the parent runs the complete family (issue #4500).
 # selftest-part-of: fleet-break-it-selftest.sh
-#   (run-selftests.sh --changed selects this file whenever it selects that one)
 BIN="$(cd "$(dirname "$0")" && pwd)"
-BREAK_PART=5/7 exec bash "$BIN/fleet-break-it-selftest.sh" "$@"
+BREAK_PART=5/18 exec bash "$BIN/fleet-break-it-selftest.sh" "$@"

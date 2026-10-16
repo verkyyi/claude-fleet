@@ -25,6 +25,10 @@ for f in fleet-await.sh fleet-children.sh fleet-children.py fleet-children-lib.s
 done
 command -v tmux >/dev/null 2>&1 || { printf 'fleet-await-stall selftest: tmux absent — skipped\n'; exit 0; }
 
+# SELFTEST_PART=all keeps the original sequential execution available.
+part=${SELFTEST_PART:-1/2}
+unset SELFTEST_PART
+
 CHECKS=0
 fail() { printf 'fleet-await-stall selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1" "expected: [$2]"$'\n'"got:      [$3]"; }
@@ -87,6 +91,7 @@ collect() { wait "$AWAIT_PID"; RC=$?; OUT=$(cat "$WORK/out"); }
 report() { bash "$SB/fleet-report-parent.sh" -L "$LBL" "$@" >/dev/null 2>&1; }
 STALLF="$WORK/.claude-dash/global/alerts.stall/$LBL-issue-301"
 
+test_ladder_reset() {
 # --- LADDER: five rungs, in order, one row each --------------------------------------
 W=$(child 301 'done')
 await 301 --timeout 40
@@ -130,6 +135,9 @@ eq "a report mid-ladder resets it; the next stall starts at rung 1" \
 has "…said on stderr" 'stall ladder reset' "$(cat "$WORK/err")"
 report --win "$W" --state merged --pr 602; collect
 
+}
+
+test_states_resume() {
 # --- UNKNOWN and BUSY never climb ----------------------------------------------------
 W=$(child 303 -)
 await 303 --timeout 7; collect
@@ -159,4 +167,17 @@ eq "the restarted wait goes on at rung 3, not 1" "1:nudge 2:nudge 3:brief" "$(wa
 has "…and says so" 'resumes at wake 2/5' "$(cat "$WORK/err")"
 report --win "$W" --state merged --pr 606; collect
 
-printf 'fleet-await-stall selftest: OK (%d checks)\n' "$CHECKS"
+}
+
+# Discover groups, including newly added ones; no hand-maintained case list.
+groups=$(sed -n 's/^\(test_[a-z0-9_]*\)() *{.*/\1/p' "$0")
+if [ "$part" != all ]; then
+  # No per-group timings yet: the existing allocator gives equal contiguous slices.
+  # shellcheck disable=SC2086
+  groups=$(python3 "$BIN/fleet-break-it-part.py" "$part" /dev/null $groups) || exit 2
+fi
+for group in $groups; do
+  printf 'group %s: %s\n' "$part" "$group"
+  "$group"
+done
+printf 'fleet-await-stall selftest: OK (%d checks; part %s)\n' "$CHECKS" "$part"

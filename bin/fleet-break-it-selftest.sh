@@ -200,8 +200,8 @@
 # BREAK_PART=K/N runs the K-th of N contiguous slices of this script's drills, in
 # the table's order (issue #2955: the whole list outgrew the gate's 240 s per-test
 # ceiling), balanced by each drill's wall time in bin/break-it-durations.txt
-# (fleet-break-it-part.py, issue #2694). This file runs 1/7 by default,
-# bin/fleet-break-it-{2..7}-selftest.sh the rest —
+# (fleet-break-it-part.py, issue #2694). This file runs 1/18 by default,
+# bin/fleet-break-it-{2..18}-selftest.sh the rest —
 # each its own test, its own ceiling, its own durations row; `BREAK_PART=all` runs
 # every drill in one go. BREAK_ONLY / ids win over the part. Drills keep no state
 # across each other beyond lazy, idempotent rigs, so any
@@ -6837,10 +6837,10 @@ FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill
 PART_IDS=''
-part=${BREAK_PART:-1/7}
+part=${BREAK_PART:-1/18}
 if [ -z "${BREAK_ONLY:-}" ] && [ "$part" != all ]; then
   case "$part" in
-    [1-9]/[1-9]|[1-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
+    [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9]) pk=${part%/*} pn=${part#*/} ;;
     *) printf 'fleet-break-it: BREAK_PART=%s is not K/N or all\n' "$part" >&2; exit 2 ;;
   esac
   [ "$pk" -le "$pn" ] || { printf 'fleet-break-it: BREAK_PART=%s: K is past N\n' "$part" >&2; exit 2; }
