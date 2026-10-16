@@ -554,5 +554,6 @@
 | durable 交接中途被杀，或撞上未纳入互锁的 Claude（#4280） | 任务两边都有或两边都没有，或无关原生任务被整表覆盖丢失 | 先写日志再动表；巡检（`fleet-loop.py recover`）按回执和只读表定案：表里还在就归原生，已撤就归 Fleet 并标 attention；无关记录逐字节保留；未知 / 在 HOME 的 claude 在写表前拒绝并报 pid | `transfer-durable-crash` |
 | Codex 无仓库首次启动缺 HOME 信任（#3029、#4258），或 proxy config 符号链接被替换 | 新会话停在信任提示，或信任只留在临时 home；合法单引号 untrusted 被漏读 | 公共启动器与 transfer 共用 TOML 读取和受信节点 HOME 白名单；fill-only 写实际目标，保留符号链接、权限和并发改动；显式不信任与 opt-out 不变 | `codex-home-trust` |
 | 远端缓存、旧 generation/turn 的 idle 被重读成新证据，或把 Stop/MERGED 当作执行空闲（#4434） | 迟到的观察越过正在执行的新 turn，误投递或回收 | 唯一只读 `fleet_runtime.py` 保留原始时间、按 C1/C3 与 turn 全身份比较；过期/断连/身份改变投影 unknown，观察不授予投递或回收许可 | `runtime-stale-idle` |
+| 读到 idle 后用户先输入，无条件 turn/start 将循环消息 steer 进用户轮，或 peer frame 排队到下一轮（#4524） | 旧空闲条件被消费；frame written 被误记为 accepted，迟到 ACK 或重试污染新代次 | 共享 `fleet_runtime` 显式查询条件接受能力；没有原生原子前置条件与准确回执时返回 unavailable/unknown，零投递、零回执、无无条件回退；消费者 #4431 仍须单独验收 | `runtime-idle-accept-unavailable` |
 | SessionStart 的 authority 观察失败，原生进程仍活着但 SID 登记缺失（#4510） | 重启会改变执行；把 HTTP 200 或旧回执当成功会登记别人的执行 | 当前代码的显式现存原生预检与补观察核对 kernel、RPC 和原 reservation；Hub 精确确认后才登记，失败保留原执行，旧 hook 缺失单列 | `native-observe-missing` |
 | 回收影子证明复用旧 turn、子进程或 lease 证据，或仅凭 MERGED/Stop 放行（#4503） | 并发开始的新工作被旧证明掩盖 | 只读分层聚合，逐维保留时间/身份/原因；重核变化即失效，始终 not-actionable，旧 gate 独占实际动作 | `reap-shadow-race` |
