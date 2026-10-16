@@ -62,6 +62,9 @@ done
 cat > "$WORK/fakebin/tmux" <<'EOF'
 #!/bin/bash
 if [ "${1:-}" = "-L" ] || [ "${1:-}" = "-S" ]; then shift 2; fi
+# Real tmux executes every argv-delimited command in a batch. Log each one
+# separately so the record/option assertions keep checking the resulting writes.
+one() {
 cmd="${1:-}"; [ "$#" -gt 0 ] && shift
 case "$cmd" in
   display-message)
@@ -72,6 +75,14 @@ case "$cmd" in
   new-window)        printf 'NEWWIN %s\n' "$*" >> "$NEWWIN_LOG"; echo '@9' ;;
   set-window-option) printf 'SETOPT %s\n' "$*" >> "$OPTS_LOG" ;;
 esac
+}
+part=()
+for arg in "$@"; do
+  if [ "$arg" = ';' ]; then one ${part[@]+"${part[@]}"}; part=()
+  else part+=("$arg"); fi
+done
+[ "${#part[@]}" = 0 ] || one ${part[@]+"${part[@]}"}
+
 exit 0
 EOF
 cat > "$WORK/fakebin/gh" <<'EOF'
