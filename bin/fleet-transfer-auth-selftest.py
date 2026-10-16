@@ -27,7 +27,7 @@ accounts = module('transfer_accounts', '.fleet-account.py')
 proxy = module('transfer_proxy', 'fleet-cred-proxy.py')
 
 
-class TransferAuth(unittest.TestCase):
+class TransferAuthFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='transfer-auth-', dir='/tmp')
         self.addCleanup(self.tmp.cleanup)
@@ -87,6 +87,8 @@ class TransferAuth(unittest.TestCase):
         self.auth.write_text(json.dumps({'tokens': {'access_token': 'header.' + body + '.private',
                                                    'refresh_token': 'private-refresh', 'account_id': 'fixture'}}))
 
+
+class TransferAuth(TransferAuthFixture):
     def test_shared_proxy_without_local_login(self):
         result = accounts.target_auth('codex')
         self.assertEqual(result['verdict'], 'ok', result)
@@ -161,6 +163,132 @@ class TransferAuth(unittest.TestCase):
         self.assertEqual(accounts.target_auth('codex')['verdict'], 'refuse')
         (self.state / 'pool.json').write_text(json.dumps({'codex:default': 'fixture'}))
         self.assertEqual(accounts.target_auth('codex')['verdict'], 'ok')
+
+
+class ProxyHomeAuth(TransferAuthFixture):
+    """The active proxy mirror is a reference, never an auth verdict (#4435)."""
+    def setUp(self):
+        super().setUp()
+        self.mirror = self.state / 'codex-homes' / 'session-fixture'
+        self.mirror.mkdir(parents=True)
+        self.marker = self.mirror / '.fleet-real-home'
+        self.marker.write_text(str(self.home) + '\n')
+        (self.home / 'sessions').mkdir()
+        (self.mirror / 'sessions').symlink_to(self.home / 'sessions')
+        self.record = self.state / 'sessions' / self.mirror.name
+        self.record.parent.mkdir()
+        self.record.write_text('provider=codex\naccount=default\nroute=direct\n')
+        os.environ['CODEX_HOME'] = str(self.mirror)
+
+    def verdict(self):
+        return accounts.target_auth('codex', home=str(self.mirror))
+
+    def test_active_mirror_uses_real_home(self):
+        result = self.verdict()
+        self.assertEqual(result['verdict'], 'ok', result)
+        self.assertEqual(result['home'], str(self.home))
+        self.assertEqual(result['source'], 'proxy')
+
+    def test_named_account_and_explicit_profile_remain_pinned(self):
+        named = self.root / '.codex-accounts' / 'work'
+        named.parent.mkdir()
+        self.home.rename(named)
+        self.home = named
+        self.marker.write_text(str(named))
+        (self.mirror / 'sessions').unlink()
+        (self.mirror / 'sessions').symlink_to(named / 'sessions')
+        self.record.write_text('provider=codex\naccount=work\nroute=direct\n')
+        (self.auth.parent.parent / 'work').mkdir()
+        self.auth.rename(self.auth.parent.parent / 'work' / 'auth.json')
+        result = self.verdict()
+        self.assertEqual(result['verdict'], 'ok', result)
+        self.assertEqual(result['profile'], 'work')
+        self.assertEqual(accounts.target_auth('codex', home=str(self.mirror),
+                                             profile_name='default')['verdict'], 'refuse')
+
+    def test_local_registry_still_judges_normalized_home(self):
+        (self.conf / 'credsep.json').unlink()
+        for login, expected in [('valid', 'ok'), ('reauth_required', 'refuse')]:
+            with self.subTest(login=login), patch.object(accounts, 'profiles', return_value=[dict(
+                    agent='codex', profile='default', account='fixture', home=str(self.home), login=login)]):
+                result = self.verdict()
+                self.assertEqual(result['verdict'], expected, result)
+                self.assertEqual(result['home'], str(self.home))
+        with patch.object(accounts, 'profiles', return_value=[]):
+            self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_missing_marker_never_falls_back_to_default(self):
+        self.marker.unlink()
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+        (self.conf / 'credsep.json').unlink()
+        with patch.object(accounts, 'profiles', side_effect=OSError('absent')):
+            self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_unreadable_or_unsafe_marker(self):
+        for mode in (0o000, 0o666):
+            with self.subTest(mode=mode):
+                self.marker.chmod(mode)
+                self.assertEqual(self.verdict()['verdict'], 'refuse')
+        self.marker.chmod(0o600)
+        self.marker.unlink()
+        self.marker.symlink_to(self.home / 'marker')
+        (self.home / 'marker').write_text(str(self.home))
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_marker_outside_owned_proxy_tree(self):
+        outside = self.root / 'fake-mirror'
+        outside.mkdir()
+        (outside / '.fleet-real-home').write_text(str(self.home))
+        result = accounts.target_auth('codex', home=str(outside))
+        self.assertEqual(result['verdict'], 'refuse', result)
+
+    def test_symlinked_proxy_directory_cannot_escape(self):
+        self.marker.unlink()
+        (self.mirror / 'sessions').unlink()
+        self.mirror.rmdir()
+        self.mirror.symlink_to(self.home)
+        (self.conf / 'credsep.json').unlink()
+        with patch.object(accounts, 'profiles', side_effect=OSError('absent')):
+            self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_cross_account_and_cross_login_marker(self):
+        other = self.root / '.codex-accounts' / 'other'
+        other.mkdir(parents=True)
+        other_login = self.root / 'another-login' / '.codex'
+        other_login.mkdir(parents=True)
+        for target in (other, other_login, Path('.codex'), self.mirror):
+            with self.subTest(target=target.name):
+                self.marker.write_text(str(target))
+                self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_record_and_mirror_must_agree(self):
+        for record in ('provider=claude\naccount=default\n',
+                       'provider=codex\naccount=other\n', ''):
+            with self.subTest(record=record):
+                self.record.write_text(record)
+                self.assertEqual(self.verdict()['verdict'], 'refuse')
+        self.record.unlink()
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_other_uid_or_writable_directory_refuses(self):
+        with patch.object(accounts.os, 'getuid', return_value=os.getuid() + 1):
+            self.assertEqual(self.verdict()['verdict'], 'refuse')
+        self.mirror.parent.chmod(0o777)
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_forged_marker_cannot_redirect_session_store(self):
+        other = self.root / '.codex-accounts' / 'other'
+        (other / 'sessions').mkdir(parents=True)
+        self.marker.write_text(str(other))
+        self.record.write_text('provider=codex\naccount=other\nroute=direct\n')
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+
+    def test_revoked_mirror_or_missing_lease_refuses(self):
+        (self.mirror / '.revoked').touch()
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
+        (self.mirror / '.revoked').unlink()
+        self.auth.unlink()
+        self.assertEqual(self.verdict()['verdict'], 'refuse')
 
 
 if __name__ == '__main__':
