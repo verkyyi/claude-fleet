@@ -85,9 +85,9 @@ func (rs *ReleaseStore) archiveChainLink(sha string) error {
 	if m.Seq == 0 { // an unpromoted build is not a stable-chain link
 		return nil
 	}
-	if rs.verifyChainLink(sha, p, rs.revocations()) == nil {
-		return fmt.Errorf("unverifiable chain link %s", sha)
-	}
+	// Archiving grants no trust: readers verify every link. Keep even a
+	// revoked signer's original bytes so revocation does not force indefinite
+	// retention of its large artifacts or require signing anything anew.
 	dir := filepath.Join(rs.Dir, releaseChainDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

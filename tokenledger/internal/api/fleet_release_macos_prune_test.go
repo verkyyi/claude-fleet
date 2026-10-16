@@ -298,4 +298,13 @@ func TestMacLaneProofTrust(t *testing.T) {
 	if _, err := reader.moveMac(shas[0]); err == nil {
 		t.Fatal("revoked signer accepted on lane publish")
 	}
+	// Revocation must not disable artifact retention. Another store still
+	// archives only bytes; it does not confer trust on them by pruning.
+	r2, shas2 := macProofRig(t)
+	wrongRoot, _ := newKey(t)
+	pruner := &ReleaseStore{Dir: r2.dir, Root: wrongRoot, Repo: r2.rs.Repo, Keep: 2}
+	pruner.prune()
+	if pruner.Has(shas2[1]) || pruner.MacStableSHA() != "" {
+		t.Fatal("untrusted links either retained artifacts or gained trust by pruning")
+	}
 }
