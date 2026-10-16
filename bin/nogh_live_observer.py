@@ -257,6 +257,13 @@ class Trace:
         tables = {self.root: {}}
         pending = {}
         bound, replies = {}, {}
+        # Keep sanitized socket objects alive through replay: a reused Python
+        # object id must never inherit an old UDP reply permission.
+        states = []
+        def socket_state(protocol, category):
+            state = [protocol, category]
+            states.append(state)
+            return state
 
         def descendant(child, parent):
             while child in self.parents and child:
@@ -310,7 +317,7 @@ class Trace:
                 tables[pid] = {fd: entry for fd, entry in table.items() if not entry[1]}
             elif action == 'socket':
                 fd, protocol, category, cloexec = data
-                table[fd] = ([protocol, category], cloexec)
+                table[fd] = (socket_state(protocol, category), cloexec)
             elif action == 'close':
                 table.pop(data, None)
             elif action == 'range':
@@ -336,7 +343,7 @@ class Trace:
                 if source[0] in ('tcp', 'udp') and (not targets or
                         all(t[0] in {e['pod_ip'] for e in self.plan['endpoints']} for t in targets)):
                     category = 'allow_' + ('provider' if self.role == 'proxy' else 'dns' if self.role == 'dns' else 'hub')
-                table[new] = ([source[0], category], cloexec)
+                table[new] = (socket_state(source[0], category), cloexec)
             elif action == 'write':
                 fd, end = data
                 if fd in table and table[fd][0][1] != 'local':

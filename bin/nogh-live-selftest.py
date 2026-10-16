@@ -399,7 +399,8 @@ class Templates(unittest.TestCase):
 
     def test_proxy_authority_has_no_ambiguous_spelling(self):
         self.assertEqual(adapter.authority('api.example.test:443'), ('api.example.test', 443))
-        for bad in ('api.example.test', 'API.example.test:443', 'a@b:443', 'a:0443', '[::1]:443', 'a.:443'):
+        for bad in ('api.example.test', 'API.example.test:443', 'a@b:443', 'a:0443', '[::1]:443',
+                    '127.0.0.1:443', 'a.:443'):
             with self.assertRaises(live.Refused): adapter.authority(bad)
 
     def test_restored_dns_stays_denied_until_its_interval(self):

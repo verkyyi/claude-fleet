@@ -10,6 +10,7 @@ import base64
 import hashlib
 import http.client
 import http.server
+import ipaddress
 from pathlib import Path
 import socket
 import ssl
@@ -88,6 +89,12 @@ def authority(value):
             and all(c in 'abcdefghijklmnopqrstuvwxyz0123456789-.' for c in host)
             and raw.isdecimal() and str(int(raw)) == raw and 0 < int(raw) < 65536,
             'HTTP_AUTHORITY')
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        require(False, 'HTTP_AUTHORITY')
     return host, int(raw)
 
 
