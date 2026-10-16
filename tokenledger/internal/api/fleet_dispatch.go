@@ -138,6 +138,9 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		if title == "" {
 			title = fmt.Sprintf("%s dispatch", d.ResolvedAgent)
 		}
+		if err = s.checkTaskParentSession(owner, asString(w.params["origin_wid"])); err != nil {
+			return fault("INVALID_ARGUMENT", "accepted parent must be a stable session identity in this account")
+		}
 		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo,
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
 			ResolvedAgent: d.ResolvedAgent, ParentSession: asString(w.params["origin_wid"]), RequestPayload: dispatchPayload(w)},

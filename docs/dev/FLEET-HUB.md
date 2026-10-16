@@ -1398,7 +1398,11 @@ There is no alternate provider or delivery retry queue.
 it; `ready` is an unseeded launch; `resumed` is the same native conversation
 reattached without resending the original seed. Codex receipts also carry the
 native inbox endpoint and home. These are execution observations, never task
-completion. C4 consumers must use C1 task state/outcome for completion.
+completion. Child reports, children and await use C1 task state/outcome for
+completion ([task collaboration](FLEET-MCP.md#task-children-and-results-4394)).
+An explicit fenced success/failure commits while this native session remains
+alive; runtime stop and execution-lease release are independent. Cancellation
+acknowledgement and replacement still require confirmed stop/fencing.
 
 Reconnect reads the existing node operation journal and inspects its unique
 worker identity. A lost acknowledgement can recover the surviving receipt;

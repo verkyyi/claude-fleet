@@ -247,15 +247,21 @@ func TestTaskAuthorityRaces(t *testing.T) {
 		rec, _ = hubs[0].FleetTask(rec.ID)
 		ep := fmt.Sprintf("node-%d", win)
 		rec = mutateTask(t, hubs[win], rec, TaskMutation{Key: "start", Kind: "transition", State: TaskRunning, ActualAgent: "codex", Evidence: "fixture receipt", EndpointID: ep})
+		rec = mutateTask(t, hubs[win], rec, TaskMutation{Key: "cancel", Kind: "cancel_request", EndpointID: ep, Evidence: "cancel requested"})
+		var disposition string
 		errs = race(func(i int) error {
-			state := TaskSucceeded
-			if i == 1 {
-				state = TaskCancelled
+			if i == 0 {
+				receipt, err := hubs[i].RecordFleetTaskReport(rec.Owner, ep, TaskReport{EventID: "complete", Task: rec.Ref, Owner: rec.Owner, Generation: 1, WorkerID: rec.ExecutionOwner, Outcome: TaskSucceeded, Evidence: "explicit result with native retained"}, time.Now())
+				disposition = receipt.Disposition
+				return err
 			}
-			_, err := hubs[i].MutateFleetTask(rec.ID, "alice", TaskMutation{Key: fmt.Sprintf("end-%d", i), Kind: "transition", Generation: 1, ExpectedWorker: rec.ExecutionOwner, EndpointID: ep, State: state, Evidence: "fixture stopped result", ExecutionStopped: true}, time.Now())
+			_, err := hubs[i].MutateFleetTask(rec.ID, rec.Owner, TaskMutation{Key: "ack", Kind: "cancel_ack", Generation: 1, ExpectedWorker: rec.ExecutionOwner, EndpointID: ep, CancelRequest: "cancel", ExecutionStopped: true, Evidence: "confirmed stop"}, time.Now())
 			return err
 		})
-		winner(errs)
+		if errs[0] != nil || (disposition == "committed" && !errors.Is(errs[1], ErrTaskConflict)) || (disposition == "historical" && errs[1] != nil) {
+			t.Fatalf("cancel/report race: %s %v", disposition, errs)
+		}
+
 		final, _ := hubs[0].FleetTask(rec.ID)
 		if !taskTerminal(final.State) || final.Outcome != final.State {
 			t.Fatalf("no terminal outcome: %+v", final)

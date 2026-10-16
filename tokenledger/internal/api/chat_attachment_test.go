@@ -181,6 +181,15 @@ func TestChatAttachmentAdmission(t *testing.T) {
 	if st != 101 {
 		t.Fatal(st)
 	}
+	// Upgrade precedes admission. Wait for its config before racing a second
+	// request against the cap (or closing and waiting for admission release).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, raw, err := c.Read(ctx)
+	cancel()
+	var config control.AttachmentSignal
+	if err != nil || json.Unmarshal(raw, &config) != nil || config.T != "config" {
+		t.Fatalf("first request admission: %s %v", raw, err)
+	}
 	if st := chatAttachmentRefusal(t, h, cookie, query()); st != 429 {
 		t.Fatalf("concurrent cap: %d", st)
 	}

@@ -890,6 +890,8 @@ def tool_report(args):
     argv = [str(BIN / "fleet-report-parent.sh"), "--state", args["state"]]
     if "pr" in args:
         argv += ["--pr", str(args["pr"])]
+    if "outcome" in args:
+        argv += ["--outcome", args["outcome"]]
     if "summary" in args:
         argv += ["--summary", args["summary"]]
     if args.get("dry_run"):
@@ -1362,7 +1364,9 @@ TOOLS = {
                        "(issue #2869).",
         "inputSchema": {"type": "object", "properties": {
             "state": {"type": "string", "enum": ["merged", "blocked", "failed", "stopped", "waiting"],
-                      "description": "How it ended."},
+                      "description": "Workflow status; failed alone is progress, not terminal failure."},
+            "outcome": {"type": "string", "enum": ["succeeded", "failed"],
+                        "description": "Explicit final work result for an accepted task, including no-PR tasks. Needs summary; does not stop its native session."},
             "pr": {"type": "integer", "minimum": 1, "description": "The PR number (merged / failed)."},
             "summary": {"type": "string", "description": "1-3 lines: what changed, what the parent must know."},
             "dry_run": {"type": "boolean", "description": "Print the target and the envelope; send nothing."}},
