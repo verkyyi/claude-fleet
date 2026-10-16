@@ -668,7 +668,8 @@ inputs = [sys.argv[14], user, host, aliases, via, login,
           [(p, digest_file(p)) for p in parent_paths]]
 key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 outputs = [wpath, str(Path(gdir) / "fleet_logins")] + [str(Path(gdir) / (pre + f["sess"]))
-           for f in local for pre in ("remote_", "epicstale_", "orphanrep_")]
+           for f in local for pre in ("remote_", "epicstale_", "orphanrep_",
+                                     "orch_", "orch_all_", "orch_multi_", "steward_all_", "needs_")]
 def output_digests():
     return {p: digest_file(p, rows=Path(p).name.startswith("remote_")) for p in outputs}
 try:
@@ -1054,12 +1055,12 @@ PY
 # The shared watcher predicate, qualified by an actual list read in the last 30s.
 # An attached terminal/online lease is not itself an open list (#4357).
 watched() {
-  local sess _c path
+  local sess _c sockpath
   NAP_SOCKS=()
   while IFS=$'\t' read -r sess _c; do
     [ -n "$sess" ] || continue
-    path=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null) || continue
-    [ -z "$path" ] || NAP_SOCKS+=("$path")
+    sockpath=$(tmux -L "$sess" display-message -p '#{socket_path}' 2>/dev/null) || continue
+    [ -z "$sockpath" ] || NAP_SOCKS+=("$sockpath")
   done <<EOF
 $(local_fleets)
 EOF

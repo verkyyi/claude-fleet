@@ -195,7 +195,10 @@ def wait(sockets, interval, timeout=FALLBACK, since_frame=None,
                         if chunk:
                             try:
                                 stamp = Path(since).stat().st_mtime_ns
-                                if any(Path(p).exists() and Path(p).stat().st_mtime_ns > stamp for p in changed):
+                                # Filesystems can give adjacent writes the same
+                                # timestamp (notably Linux within one clock tick).
+                                # Equality is ambiguous: refresh conservatively.
+                                if any(Path(p).exists() and Path(p).stat().st_mtime_ns >= stamp for p in changed):
                                     reason = 'changed'
                                     return result()
                             except (OSError, TypeError):
