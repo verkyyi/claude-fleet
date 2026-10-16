@@ -11,6 +11,48 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
+func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
+	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
+	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	refresh := func() {
+		for _, f := range []control.Fleet{f5, f4} {
+			if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, "[]", time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	refresh()
+	code, reservation := ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "paused-after-final-gate"})
+	if code != 200 {
+		t.Fatalf("final gate: %d %v", code, reservation)
+	}
+	// Launcher deliberately stays paused here BEFORE new-window/native creation.
+	code, frozen := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-paused", "expected_revision": 0, "legacy_tickets": "github"})
+	if code != 200 {
+		t.Fatalf("freeze: %d %v", code, frozen)
+	}
+	refresh()
+	code, refused := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-paused", "expected_revision": 1})
+	if code != 409 {
+		t.Fatalf("empty fresh snapshot erased a reserved start: %d %v", code, refused)
+	}
+	// The launcher resumes; native creation is behind begin's one-shot CAS.
+	code, _ = ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "begin", "reservation": "paused-after-final-gate", "worker_id": f5.FleetID + "/" + wrFid})
+	if code != 409 {
+		t.Fatal("frozen launcher resumed native execution", code)
+	}
+	code, _ = ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "cancel", "reservation": "paused-after-final-gate"})
+	if code != 200 {
+		t.Fatal("never-begun reservation cannot reconcile", code)
+	}
+	code, applied := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-reconciled", "expected_revision": 1})
+	if code != 200 || applied["mode"] != "hub" {
+		t.Fatalf("reconciled: %d %v", code, applied)
+	}
+}
+
 func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	h, first, target, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }

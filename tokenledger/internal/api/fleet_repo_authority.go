@@ -108,6 +108,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		httpError(w, 500, err.Error())
 		return
 	}
+	inventoryBlockers := append([]string(nil), blockers...)
 	dbBlockers, leaseOwners, err := s.Store.RepoAuthorityBlockers(repo, r.URL.Query().Get("rollback") == "1")
 	if err != nil {
 		httpError(w, 500, err.Error())
@@ -194,6 +195,12 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		if len(nodes) == 0 {
 			httpError(w, 409, "no registered capable host")
 			return
+		}
+		for _, reason := range inventoryBlockers {
+			if !strings.HasPrefix(reason, "legacy execution: ") {
+				httpError(w, 409, "verify every repo host before freeze: "+reason)
+				return
+			}
 		}
 		for _, n := range nodes {
 			if !n.Capable {

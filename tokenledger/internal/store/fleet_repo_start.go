@@ -69,6 +69,25 @@ func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIden
 	return nil
 }
 
+func stopRepoNativeTx(tx *sql.Tx, repo, endpoint string, proof *RepoNativeIdentity, now time.Time) error {
+	starts, err := repoLocalStarts(tx, repo)
+	if err != nil {
+		return err
+	}
+	for _, start := range starts {
+		if start.EndpointID != endpoint || !sameRepoNative(start.Native, proof) {
+			continue
+		}
+		start.Phase = "stopped"
+		b, _ := json.Marshal(start)
+		sum := sha256.Sum256([]byte(start.Owner + "\x00" + endpoint + "\x00" + repo + "\x00" + start.Reservation))
+		if _, err = tx.Exec(`UPDATE fleet_operations SET result = ?, status = 'succeeded', updated = ? WHERE id = ? AND action = 'repo_local_start'`, string(b), now.UTC().Format(rfc), fmt.Sprintf("repo-start:%x", sum[:])); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) RepoLocalStart(repo, owner, endpoint, key, action, worker string, native *RepoNativeIdentity, now time.Time) (RepoLocalStart, error) {
 	repo = NormRepo(repo)
 	if repo == "" || owner == "" || endpoint == "" || key == "" {

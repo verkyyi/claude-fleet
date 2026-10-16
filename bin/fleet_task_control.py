@@ -147,6 +147,7 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
                                work_result=outcome, pr=pr,
                                pr_state="merged" if state == "merged" else "waiting" if pr else "none"), sort_keys=True)
     r = report_input(c, t, outcome, summary, evidence)
+    r["status"] = state  # landing projection is separate from terminal work outcome
     if dry:
         print(json.dumps(r)); return 0
     return publish_report(r)

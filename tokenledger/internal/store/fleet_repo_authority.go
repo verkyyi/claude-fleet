@@ -119,7 +119,47 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 		}
 		out = append(out, map[string]any{"task": TaskRef(id), "authority_version": version, "generation": generation, "worker_id": worker, "ticket_ref": ref, "work_outcome": outcome, "pr": pr, "pr_state": landing})
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	// A later confirmed code landing is already recorded as an owner-fenced
+	// task_report. Project it independently of the immutable terminal outcome;
+	// neither a waiting report nor an earlier generation can overwrite it.
+	byRef := map[string]map[string]any{}
+	for _, item := range out {
+		byRef[item["task"].(string)] = item
+	}
+	reports, err := s.read.Query(`SELECT result FROM fleet_operations WHERE action = 'task_report' AND actor = ? ORDER BY created`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer reports.Close()
+	for reports.Next() {
+		var raw string
+		var receipt TaskReportReceipt
+		if err = reports.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(raw), &receipt) != nil {
+			return nil, ErrTaskInvalid
+		}
+		r := receipt.Report
+		item := byRef[r.Task]
+		if item == nil || r.Generation != item["generation"] || r.WorkerID != item["worker_id"] || r.TicketRef != item["ticket_ref"] || r.Status != "merged" {
+			continue
+		}
+		var proof map[string]any
+		if json.Unmarshal([]byte(r.Evidence), &proof) != nil || proof["pr_state"] != "merged" {
+			continue
+		}
+		pr, ok := proof["pr"].(string)
+		if !ok || pr == "" || (item["pr"] != "" && item["pr"] != pr) {
+			continue
+		}
+		item["pr"], item["pr_state"] = pr, "merged"
+	}
+	return out, reports.Err()
 }
 
 // Serialize authority changes with acceptance, launch journals and lease claims,
@@ -368,6 +408,9 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		}
 		if !matched {
 			return a, ErrTaskFence
+		}
+		if err = stopRepoNativeTx(tx, repo, c.EndpointID, &proof.RepoNativeIdentity, now); err != nil {
+			return a, err
 		}
 		// An authenticated native-stop receipt releases only this legacy owner.
 		_, err = tx.Exec(`DELETE FROM fleet_leases WHERE (repo = ? OR repo = ?) AND worker_id = ? AND endpoint_id = ? AND task_id = 0`, repo, "hub:"+repo, c.WorkerID, c.EndpointID)

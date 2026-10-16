@@ -297,3 +297,30 @@ func TestRepoAuthorityFreezeSerializesClaim(t *testing.T) {
 		t.Fatal("racing owner escaped freeze", a)
 	}
 }
+
+func TestRepoAuthorityLandingAfterWorkCompleted(t *testing.T) {
+	s := taskStore(t)
+	rec := startTask(t, s, acceptedTask(t, s, "landing", "gh:org/a#7"))
+	r := TaskReport{EventID: "work", Task: rec.Ref, Owner: rec.Owner, TicketRef: rec.TicketRef, Generation: rec.Generation, WorkerID: rec.ExecutionOwner, Outcome: TaskSucceeded, Status: "waiting", Evidence: `{"pr":"10","pr_state":"waiting"}`}
+	work, err := s.RecordFleetTaskReport(rec.Owner, rec.ExecutionEndpoint, r, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.RepoTaskInventory("org/a", rec.Owner)
+	if err != nil || len(before) != 1 || before[0]["pr_state"] != "waiting" {
+		t.Fatal(before, err)
+	}
+	r.EventID, r.Status, r.Evidence = "merge", "merged", `{"pr":"10","pr_state":"merged"}`
+	merge, err := s.RecordFleetTaskReport(rec.Owner, rec.ExecutionEndpoint, r, time.Now())
+	if err != nil || merge.Disposition != "historical" {
+		t.Fatal(merge, err)
+	}
+	current, _ := s.FleetTask(rec.ID)
+	if current.Evidence != work.Task.Evidence || current.Outcome != work.Task.Outcome {
+		t.Fatal("landing rewrote work outcome", current)
+	}
+	after, err := s.RepoTaskInventory("org/a", rec.Owner)
+	if err != nil || after[0]["pr_state"] != "merged" || after[0]["work_outcome"] != TaskSucceeded {
+		t.Fatal(after, err)
+	}
+}
