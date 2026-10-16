@@ -173,7 +173,11 @@ func (s *Server) acceptRelay(ctx context.Context, wire nodeWire, ep store.Endpoi
 	skip, err := s.prepareTaskReportRelay(ep, &r)
 	if err != nil {
 		// Storage unavailability is retriable: no acknowledgement, keep outbox.
-		if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskConflict) || errors.Is(err, store.ErrTaskInvalid) {
+		var permanent *FleetFault
+		if errors.As(err, &permanent) {
+			e := errorObject(err)
+			refuse(ctx, wire, m.OpID, e["code"], e["message"])
+		} else if errors.Is(err, store.ErrTaskFence) || errors.Is(err, store.ErrTaskConflict) || errors.Is(err, store.ErrTaskInvalid) {
 			refuse(ctx, wire, m.OpID, "CONFLICT", err.Error())
 		}
 		return

@@ -229,7 +229,16 @@ def receive(file):
         if not parent_matches(r, parent):
             orphan(r, "parent generation retired"); return 0
     # The one resolver, and only the stable worker ID. No issue/name fallback.
-    cmd = '. "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"; task_home=$(fleet_wid_home "wid:$2") || exit 75; sock=$(fleet_socket "$task_home"); win=$(fleet_win_for_fid "${2#*/}" "$sock") || exit 76; dir=$(children_dir "$task_home"); printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"'
+    cmd = r''' . "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"
+task_home=$(fleet_wid_home "wid:$2") || exit 75
+sock=$(fleet_socket "$task_home")
+tmux -L "$sock" has-session -t "=$task_home" 2>/dev/null || exit 75
+win=$(fleet_win_for_fid "${2#*/}" "$sock"); task_rc=$?
+[ "$task_rc" = 1 ] && exit 76
+[ "$task_rc" = 0 ] || exit 75
+dir=$(children_dir "$task_home") || exit 75
+printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
+'''
     located = subprocess.run(["bash", "-c", cmd, "task-receive", str(BIN), r["parent_session"]],
                              capture_output=True, text=True, timeout=10)
     if located.returncode == 76:

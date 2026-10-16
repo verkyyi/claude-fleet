@@ -90,6 +90,12 @@ print("200")
                 envelope = json.loads(f.read_text()); envelope["id"] += "-different-transport"
                 f.write_text(json.dumps(envelope))
                 self.assertEqual(control.receive(f),0)  # event identity beats transport ID
+                with patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([],75,"","")), patch.object(control,"orphan") as orphan:
+                    self.assertEqual(control.receive(f),75)
+                    orphan.assert_not_called()  # unobservable/ambiguous is not retired
+                with patch.object(control.subprocess, "run", return_value=subprocess.CompletedProcess([],76,"","")), patch.object(control,"orphan") as orphan:
+                    self.assertEqual(control.receive(f),0)
+                    orphan.assert_called_once()  # known absent stable identity
                 parent["generation"]=3
                 with patch.dict(os.environ, {"FLEET_CONF_DIR":temp}):
                     self.assertEqual(control.receive(f),0)

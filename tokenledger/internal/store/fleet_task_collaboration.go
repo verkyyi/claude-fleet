@@ -105,6 +105,9 @@ func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now 
 		return empty, err
 	}
 	t, err := s.taskInTx(tx, ParseTaskRef(r.Task))
+	if errors.Is(err, sql.ErrNoRows) {
+		return empty, ErrTaskFence
+	}
 	if err != nil {
 		return empty, err
 	}
