@@ -1,0 +1,59 @@
+name: task-acceptance
+
+on:
+  pull_request:
+    paths: ['bin/**', 'tokenledger/**', 'extras/web-console/**', '.github/workflows/task-acceptance.yml']
+  push:
+    branches: [master]
+    paths: ['bin/**', 'tokenledger/**', 'extras/web-console/**', '.github/workflows/task-acceptance.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: task-acceptance-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: tokenledger/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Prepare offline fixture dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y strace tmux jq
+          mkdir -p "$RUNNER_TEMP/task-acceptance/home"
+          bin/fleet-client-pack.sh
+          cd tokenledger
+          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/task-acceptance/ccquota" ./cmd/ccquota
+          for package in store api agent; do
+            CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/task-acceptance/$package.test" "./internal/$package"
+          done
+          npm install --prefix "$RUNNER_TEMP/task-acceptance/browser" --no-audit --no-fund playwright@1.58.2
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/task-acceptance/browsers" node "$RUNNER_TEMP/task-acceptance/browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: A1–A12 with OS network deny and independent CLI counter
+        timeout-minutes: 11
+        # Only this new network namespace gets loopback enabled. Drop root before
+        # fixtures; pass no runner credentials, live fleet config or SSH agent.
+        run: |
+          sudo unshare --net -- bash -c '
+            ip link set lo up
+            exec setpriv --reuid="$1" --regid="$2" --clear-groups env -i \
+              PATH="$3" HOME="$4/home" PLAYWRIGHT_BROWSERS_PATH="$4/browsers" \
+              python3 "$5/bin/nogh-task-acceptance.py" --work "$4"
+          ' _ "$(id -u)" "$(id -g)" "$PATH" "$RUNNER_TEMP/task-acceptance" "$GITHUB_WORKSPACE"
+      - name: Archive fixture evidence (never deployment/live acceptance)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-acceptance-fixtures
+          path: ${{ runner.temp }}/task-acceptance/evidence
+          if-no-files-found: error
+          retention-days: 14
