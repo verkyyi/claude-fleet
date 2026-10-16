@@ -37,8 +37,15 @@ class IdentityTests(unittest.TestCase):
         for key, value in values.items():
             if value:
                 self.tm('set-option', '-w', '-t', self.pane, '@' + key, value)
+        # tmux versions differ in how show-options renders control characters.
+        # Preserve the established per-field reader's output on each platform,
+        # rather than assuming its rendering is identical to set-option input.
+        expected = {key: self.tm('show-options', '-wqv', '-t', self.pane, '@' + key).rstrip('\n')
+                    for key in prep.FIELDS}
         with patch.object(prep.subprocess, 'check_output', wraps=subprocess.check_output) as calls:
-            self.assertEqual(prep.identity(self.socket, self.pane), values)
+            observed = prep.identity(self.socket, self.pane)
+        for key in prep.FIELDS:
+            self.assertEqual(observed[key], expected[key], key)
         self.assertEqual(calls.call_count, 1, 'one identity observation must not spawn a client per field')
         # Each later observation is fresh: no cross-phase identity cache.
         self.tm('set-option', '-w', '-t', self.pane, '@origin', 'scratch-2')
