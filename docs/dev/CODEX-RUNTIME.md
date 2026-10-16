@@ -11,6 +11,41 @@ the explicit [existing-native observation contract](NATIVE-OBSERVE.md). It keeps
 the original execution and separately reports missing old hooks and unverified
 message consumption; it does not replay SessionStart or resume the session.
 
+## Managed guard configuration (candidate)
+
+The candidate renderer derives native managed hooks from the existing
+`hooks/settings-hooks.json` and `hooks/codex-map.json`. It does not introduce a
+second policy table. `managed_commands` explicitly selects the two reviewed
+guard commands; matchers still come from the source table and Codex mapping.
+
+To inspect the proposed configuration without installing it:
+
+```sh
+bash bin/fleet-hooks-emit.sh --target codex-managed \
+  --managed-dir /opt/fleet-reviewed-guards --python /usr/bin/python3
+```
+
+This prints a TOML fragment only. It does not create paths, copy scripts, read
+credentials, merge administrator policy, or write `/etc/codex`. Do not overwrite
+an existing `requirements.toml` with this fragment. The named directory and
+interpreter are eventual installation paths, not proof of ownership or trust.
+Managed paths must be absolute and normalized; shell quoting preserves spaces
+and apostrophes. Guard commands use an absolute Python interpreter with `-I`.
+
+The fragment requires native hooks and contains only the reviewed PreToolUse
+guards. Missing, duplicated, dropped or unsupported guard wiring fails before
+any output. Plugin directories and partial event selection are rejected.
+Optional plugin hooks retain native review; lifecycle, title and state hooks
+are not promoted to system-managed trust. Existing `codex` and `claude` targets
+retain their output and remain the production launch path.
+
+The native managed-hooks CI consumes this renderer's output for real Bash and
+code-mode file-edit tests. Installation remains gated on administrator-owned
+scripts and interpreter, cross-account isolation, preservation of existing
+requirements, native effective-config checks, upgrade and rollback. Neither
+the renderer nor the guards establish a filesystem sandbox. No launcher bypass
+is removed by this change. See [migration evidence](NATIVE-AGENT-BOUNDARY.md).
+
 ## Context
 
 Run `bash ~/.claude/fleet/bin/fleet-context.sh` inside a Codex worker, or inspect
