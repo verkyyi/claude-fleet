@@ -442,6 +442,14 @@ def main():
                 (managed / "capture.py").write_text(CAPTURE_SCRIPT, encoding="utf-8")
                 check((managed / "base-readonly-guard.py").read_bytes() == base_guard_source,
                       "real Fleet base-readonly guard copied without modification")
+                generated_requirements = subprocess.run(
+                    ["bash", str(arguments.fleet_root / "bin/fleet-hooks-emit.sh"), "--target", "codex-managed",
+                     "--managed-dir", str(managed), "--python", str(Path(sys.executable).resolve())],
+                    env=environment, cwd=root, stdin=subprocess.DEVNULL, capture_output=True,
+                    text=True, timeout=10, check=True).stdout
+                session_fixture = "[[hooks.SessionStart]]" + base_requirements.split("[[hooks.SessionStart]]", 1)[1]
+                generated_with_fixture = generated_requirements + session_fixture
+                report["managed_renderer"] = "fleet-hooks-emit.sh --target codex-managed"
 
                 def git(*values):
                     return subprocess.run(["git", *values], env=environment, cwd=root, stdin=subprocess.DEVNULL,
@@ -487,20 +495,18 @@ def main():
                         reason = "fixture-managed-denial-v2"
                         config = system / "requirements.toml"
                         config.write_text(config.read_text().replace(previous_reason, reason), encoding="utf-8")
-                    elif phase == "fleet-control":
+                    elif phase in ("fleet-control", "patch-control"):
                         managed_hook_count = 1
                         (system / "requirements.toml").write_text(base_requirements, encoding="utf-8")
                     elif phase == "fleet-deny":
-                        managed_hook_count = 2
-                        with (system / "requirements.toml").open("a", encoding="utf-8") as config:
-                            config.write('[[hooks.PreToolUse]]\nmatcher="^Bash$"\n[[hooks.PreToolUse.hooks]]\n'
-                                         'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "bash-guard.py")) + '\n')
+                        managed_hook_count = 3
+                        (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                     elif phase == "patch-deny":
                         managed_hook_count = 4
+                        (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
                             config.write('[[hooks.PreToolUse]]\nmatcher="^apply_patch$"\n[[hooks.PreToolUse.hooks]]\n'
-                                         'type="command"\ncommand=' + json.dumps("python3 " + str(managed / "base-readonly-guard.py"))
-                                         + '\n[[hooks.PreToolUse.hooks]]\ntype="command"\ncommand='
+                                         'type="command"\ncommand='
                                          + json.dumps("python3 " + str(managed / "capture.py") + " " + str(patch_capture)) + '\n')
                     if real_guard_phase:
                         git("--git-dir=" + str(remote), "update-ref", "-d", "refs/heads/main")

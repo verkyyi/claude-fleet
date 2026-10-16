@@ -521,6 +521,16 @@ PreToolUse 输入，也不依赖没有暴露给模型的内部工具。真实 `b
 与完整补丁。观察 hook 只记录测试事件，不实现或替代守卫。这组新断言仍须以对应提交的
 exec / remote TUI CI 为准，不把之前 Bash 守卫的通过结果当作文件编辑验收。
 
+上述实际文件编辑与 Bash 守卫在提交 `ca7da4c0` 的
+[CI 38970582088](https://github.com/verkyyi/claude-fleet/actions/runs/38970582088) 通过：
+exec 260 项、remote TUI 283 项，计数包含既有信任和工具阶段，并非这么多个独立用户场景。
+
+管理层配置开始复用 `fleet-hooks-emit.sh --target codex-managed`：从原有 hook 表及 Codex
+映射读取已审阅的 `managed_commands`，只生成两类 PreToolUse 守卫，不复制策略、引入
+新的常驻程序或自动信任可选插件。原生 CI 改为消费这个实际生成器的输出，手写配置只留在
+对照/观察夹具。生成器只写 stdout，尚不安装、更改现有 requirements 或删除启动器 bypass。
+操作入口和安装前置条件见 [原生守卫配置](CODEX-RUNTIME.md#managed-guard-configuration-candidate)。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。

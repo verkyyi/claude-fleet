@@ -173,4 +173,97 @@ mkdir -p "$WORK/absent/bin"; cp "$EMIT" "$WORK/absent/bin/"
 [ "$?" = 2 ] || fail "a missing source table must exit 2"
 ok "unknown target → 2, malformed source → 3, missing source → 2"
 
+ROOT="$ROOT" WORK="$WORK" python3 - <<'PY' || fail "native managed output contract"
+import copy
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import tomllib
+
+root = Path(os.environ["ROOT"])
+work = Path(os.environ["WORK"]) / "managed-fixture"
+(work / "bin").mkdir(parents=True)
+(work / "hooks").mkdir()
+shutil.copyfile(root / "bin/fleet-hooks-emit.sh", work / "bin/fleet-hooks-emit.sh")
+source = json.loads((root / "hooks/settings-hooks.json").read_text())
+mapping = json.loads((root / "hooks/codex-map.json").read_text())
+environment = {"PATH": os.environ["PATH"], "HOME": str(work), "PYTHONPATH": str(work)}
+(work / "json.py").write_text('raise RuntimeError("untrusted fixture import")\n')
+destination = str(work / "future image's hooks")
+interpreter = str(work / "future Python's bin/python3")
+
+def run(*arguments, table=None, delta=None, expected=0):
+    (work / "hooks/settings-hooks.json").write_text(json.dumps(source if table is None else table))
+    (work / "hooks/codex-map.json").write_text(json.dumps(mapping if delta is None else delta))
+    result = subprocess.run(["bash", str(work / "bin/fleet-hooks-emit.sh"), *arguments],
+                            env=environment, cwd=work, capture_output=True, text=True, timeout=10)
+    assert result.returncode == expected, (arguments, result.returncode, result.stderr)
+    if expected:
+        assert not result.stdout, "invalid managed configuration produced partial output"
+    return result.stdout
+
+arguments = ("--target", "codex-managed", "--managed-dir", destination, "--python", interpreter)
+rendered = run(*arguments)
+assert run(*arguments) == rendered
+requirements = tomllib.loads(rendered)
+assert requirements["features"] == {"hooks": True}
+assert set(requirements) == {"features", "hooks"}
+assert set(requirements["hooks"]) == {"managed_dir", "PreToolUse"}
+assert requirements["hooks"]["managed_dir"] == destination
+groups = requirements["hooks"]["PreToolUse"]
+assert [group["matcher"] for group in groups] == ["Bash", "apply_patch"]
+assert [shlex.split(group["hooks"][0]["command"]) for group in groups] == [
+    [interpreter, "-I", destination + "/bash-guard.py"],
+    [interpreter, "-I", destination + "/base-readonly-guard.py"],
+]
+assert all(group["hooks"][0]["type"] == "command" and len(group["hooks"]) == 1 for group in groups)
+assert not Path(destination).exists() and not Path(interpreter).exists()
+assert "allow_managed_hooks_only" not in rendered and "SessionStart" not in rendered
+extra = copy.deepcopy(source)
+extra["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [
+    {"type": "command", "command": "python3 ~/.claude/fleet/hooks/unreviewed.py"}]})
+assert run(*arguments, table=extra) == rendered
+default = tomllib.loads(run("--target", "codex-managed", "--managed-dir", destination))
+assert shlex.split(default["hooks"]["PreToolUse"][0]["hooks"][0]["command"])[0] == "/usr/bin/python3"
+for flags in (("--target", "codex-managed"),
+              ("--target", "codex-managed", "--managed-dir"),
+              ("--target", "codex-managed", "--managed-dir", ""),
+              ("--target", "codex-managed", "--managed-dir", "/"),
+              ("--target", "codex-managed", "--managed-dir", "relative"),
+              ("--target", "codex-managed", "--managed-dir", "/tmp/../hooks"),
+              ("--target", "codex-managed", "--managed-dir", "/tmp/line\nbreak"),
+              (*arguments, "--python", "relative"), (*arguments, "--python"),
+              (*arguments, "--event", "PreToolUse"), (*arguments, "--plugin-dir", "/optional/plugin"),
+              (*arguments, "--root", "/different/install"),
+              ("--target", "codex", "--managed-dir", destination),
+              ("--target", "claude", "--python", interpreter)):
+    run(*flags, expected=2)
+for mutation in ("missing", "duplicate", "drop", "disabled", "wrong-event", "extra-field", "unmapped"):
+    table, delta = copy.deepcopy(source), copy.deepcopy(mapping)
+    if mutation == "missing":
+        table["hooks"]["PreToolUse"].pop(1)
+    elif mutation == "duplicate":
+        table["hooks"]["PreToolUse"].append(copy.deepcopy(table["hooks"]["PreToolUse"][1]))
+    elif mutation == "drop":
+        delta["drop_commands"]["bash-guard.py"] = "fixture"
+    elif mutation == "disabled":
+        delta["matchers"]["Bash"] = None
+    elif mutation == "wrong-event":
+        table["hooks"]["Stop"].append(table["hooks"]["PreToolUse"].pop(1))
+    elif mutation == "extra-field":
+        table["hooks"]["PreToolUse"][1]["hooks"][0]["async"] = True
+    else:
+        delta.pop("managed_commands")
+    run(*arguments, table=table, delta=delta, expected=3)
+for invalid in ([], [mapping["managed_commands"][0]] * 2, [None], "all"):
+    delta = copy.deepcopy(mapping)
+    delta["managed_commands"] = invalid
+    run(*arguments, delta=delta, expected=3)
+print("native managed renderer: exact guards, import isolation, quoting, deterministic/no writes and 25 rejections passed")
+PY
+ok "native managed output derives only reviewed guards and rejects unsafe or incomplete input"
+
 printf '\nfleet-hooks-emit-selftest: %d checks passed\n' "$pass"

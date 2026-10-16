@@ -40,31 +40,34 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 
-TARGET=''; OUT_ROOT="$ROOT"; ONLY_EVENT=''; PLUGIN_DIRS=''
+TARGET=''; OUT_ROOT="$ROOT"; ONLY_EVENT=''; PLUGIN_DIRS=''; MANAGED_DIR=''; MANAGED_PYTHON=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) TARGET="${2:-}"; shift 2 ;;
     --root)   OUT_ROOT="${2:-}"; shift 2 ;;
     --event)  ONLY_EVENT="${2:-}"; shift 2 ;;
+    --managed-dir) [ -n "${2:-}" ] || { printf 'fleet-hooks-emit: --managed-dir requires a path\n' >&2; exit 2; }; MANAGED_DIR="$2"; shift 2 ;;
+    --python) [ -n "${2:-}" ] || { printf 'fleet-hooks-emit: --python requires a path\n' >&2; exit 2; }; MANAGED_PYTHON="$2"; shift 2 ;;
     --plugin-dir) PLUGIN_DIRS="${PLUGIN_DIRS:+$PLUGIN_DIRS
 }${2:-}"; shift 2 ;;
-    -h|--help) sed -n '2,39p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,39p' "$0"; printf '\n--target codex-managed --managed-dir /absolute/path [--python /usr/bin/python3]\nPrint a requirements.toml fragment only; no installation or policy merge.\n'; exit 0 ;;
     *) printf 'fleet-hooks-emit: unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
 case "$TARGET" in
-  codex|claude) : ;;
-  *) printf 'fleet-hooks-emit: --target must be codex or claude\n' >&2; exit 2 ;;
+  codex|claude|codex-managed) : ;;
+  *) printf 'fleet-hooks-emit: --target must be codex, claude or codex-managed\n' >&2; exit 2 ;;
 esac
 
 SRC="$ROOT/hooks/settings-hooks.json"
 MAP="$ROOT/hooks/codex-map.json"
 [ -r "$SRC" ] || { printf 'fleet-hooks-emit: cannot read %s\n' "$SRC" >&2; exit 2; }
-[ "$TARGET" = codex ] && { [ -r "$MAP" ] || { printf 'fleet-hooks-emit: cannot read %s\n' "$MAP" >&2; exit 2; }; }
+[ "$TARGET" = claude ] || { [ -r "$MAP" ] || { printf 'fleet-hooks-emit: cannot read %s\n' "$MAP" >&2; exit 2; }; }
 
 SRC="$SRC" MAP="$MAP" TARGET="$TARGET" OUT_ROOT="$OUT_ROOT" ONLY_EVENT="$ONLY_EVENT" PLUGIN_DIRS="$PLUGIN_DIRS" \
-python3 - <<'PY'
-import json, os, sys
+MANAGED_DIR="$MANAGED_DIR" MANAGED_PYTHON="$MANAGED_PYTHON" SOURCE_ROOT="$ROOT" \
+python3 -I - <<'PY'
+import json, os, shlex, sys
 
 src, mapf = os.environ["SRC"], os.environ["MAP"]
 target, out_root = os.environ["TARGET"], os.environ["OUT_ROOT"]
@@ -76,6 +79,9 @@ SHIPPED_PREFIX = "~/.claude/fleet"
 
 def die(msg, code=3):
     sys.stderr.write("fleet-hooks-emit: %s\n" % msg); sys.exit(code)
+
+if target != "codex-managed" and (os.environ["MANAGED_DIR"] or os.environ["MANAGED_PYTHON"]):
+    die("--managed-dir and --python require --target codex-managed", 2)
 
 try:
     table = json.load(open(src)).get("hooks", {})
@@ -133,6 +139,60 @@ def re_ver(d):
 
 def toml_str(s):
     return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
+
+if target == "codex-managed":
+    directory = os.environ["MANAGED_DIR"]
+    interpreter = os.environ["MANAGED_PYTHON"] or "/usr/bin/python3"
+    if only or os.environ["PLUGIN_DIRS"] or out_root != os.environ["SOURCE_ROOT"]:
+        die("managed output cannot include --event, --plugin-dir or a rehomed --root", 2)
+    for name, value in (("managed directory", directory), ("Python interpreter", interpreter)):
+        if (not os.path.isabs(value) or value == "/" or os.path.normpath(value) != value
+                or any(ord(character) < 32 or ord(character) == 127 for character in value)):
+            die(name + " must be an absolute normalized path without control characters", 2)
+    required = m.get("managed_commands")
+    if (not isinstance(required, list) or not required or not all(isinstance(command, str) for command in required)
+            or len(required) != len(set(required))):
+        die("managed_commands must explicitly name distinct reviewed guard commands")
+    pending = set(required)
+    selected = []
+    for event, source_groups in table.items():
+        if event not in events:
+            continue
+        for group in source_groups:
+            matcher = group.get("matcher")
+            matcher = matchers.get(matcher, matcher)
+            if matcher is None:
+                continue
+            for hook in group.get("hooks", []):
+                command = hook.get("command")
+                if command not in required:
+                    continue
+                if (event != "PreToolUse" or not isinstance(matcher, str) or not matcher
+                        or set(group) != {"matcher", "hooks"} or set(hook) != {"type", "command"}
+                        or hook["type"] != "command" or command not in pending
+                        or any(drop in command for drop in drops)):
+                    die("reviewed guard has missing, duplicate or unsupported source wiring")
+                try:
+                    tokens = shlex.split(command)
+                except ValueError:
+                    die("reviewed guard command has invalid shell quoting")
+                prefix = SHIPPED_PREFIX + "/hooks/"
+                if (len(tokens) != 2 or tokens[0] != "python3" or not tokens[1].startswith(prefix)
+                        or "/" in tokens[1][len(prefix):] or not tokens[1].endswith(".py")):
+                    die("reviewed guard must be a direct shipped Python hook")
+                script = os.path.join(directory, tokens[1][len(prefix):])
+                selected.append({"matcher": matcher, "hooks": [{"type": "command",
+                                 "command": shlex.join([interpreter, "-I", script])}]})
+                pending.remove(command)
+    if pending:
+        die("reviewed managed guard is absent from the effective Codex hook table")
+    lines = ['[features]', 'hooks = true', '[hooks]', 'managed_dir = ' + json.dumps(directory)]
+    for group in selected:
+        lines.extend(['[[hooks.PreToolUse]]', 'matcher = ' + json.dumps(group["matcher"])])
+        for hook in group["hooks"]:
+            lines.extend(['[[hooks.PreToolUse.hooks]]', 'type = "command"', 'command = ' + json.dumps(hook["command"])])
+    sys.stdout.write("\n".join(lines) + "\n")
+    sys.exit(0)
 
 # Plugin hook tables (issue #3123): each one's groups after the core's, same map.
 plugin_groups = {}

@@ -5,6 +5,9 @@ on:
     paths:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-codex-rpc.py'
+      - 'bin/fleet-hooks-emit.sh'
+      - 'hooks/settings-hooks.json'
+      - 'hooks/codex-map.json'
       - 'hooks/bash-guard.py'
       - 'hooks/base-readonly-guard.py'
       - '.github/workflows/native-managed-hooks.yml'
