@@ -40,6 +40,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--launch-flags', action='store_true', help='also verify per-launch configuration, profiles and permission flags')
     arguments = parser.parse_args()
     executable = shutil.which(arguments.codex)
     if not executable:
@@ -55,8 +56,9 @@ def main():
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get('Content-Length', '0')))
-            requests.append({'path': self.path, 'authorization': bool(self.headers.get('Authorization'))})
+            payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+            requests.append({'path': self.path, 'authorization': bool(self.headers.get('Authorization')),
+                             'model': payload.get('model')})
             body = b'{"error":{"message":"offline runtime fixture: inference disabled"}}'
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
@@ -70,9 +72,33 @@ def main():
     endpoint = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Endpoint)
     serving = threading.Thread(target=endpoint.serve_forever, daemon=True)
     serving.start()
+    scenarios = [('local', False, False, [], 'probe', 'never', 'read-only'),
+                 ('worktree', True, False, [], 'probe', 'never', 'read-only'),
+                 ('worktree-bypass', True, True, [], 'probe', 'never', 'read-only')]
+    if arguments.launch_flags:
+        common_flags = ['-c', 'check_for_update_on_startup=false', '-c', 'features.hooks=true',
+                        '-c', 'project_doc_fallback_filenames=["CLAUDE.md"]']
+        scenarios.extend([
+            ('worktree-config', True, False, common_flags, 'probe', 'never', 'read-only'),
+            ('worktree-config-same-model', True, False, ['-c', 'model="probe"'],
+             'probe', 'never', 'read-only'),
+            ('worktree-config-file', True, False, [], 'probe', 'never', 'read-only'),
+            ('worktree-file-and-native-flags', True, False,
+             ['--model', 'probe-native', '--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'],
+             'probe-native', 'on-request', 'workspace-write'),
+            ('worktree-model-flag', True, False, ['--model', 'probe-model-flag'],
+             'probe-model-flag', 'never', 'read-only'),
+            ('worktree-permissions', True, False, ['--dangerously-bypass-approvals-and-sandbox'],
+             'probe', 'never', 'danger-full-access'),
+            ('worktree-profile', True, False, ['--profile', 'fixture'],
+             'probe-profile', 'on-request', 'workspace-write'),
+            ('worktree-combined', True, False, [*common_flags, '--profile', 'fixture',
+             '--dangerously-bypass-approvals-and-sandbox', '-c', 'model="probe-override"'],
+             'probe-override', 'never', 'danger-full-access')])
     try:
-        for label, worktree, bypass in (('local', False, False), ('worktree', True, False),
-                                        ('worktree-bypass', True, True)):
+        for label, worktree, bypass, extra_flags, expected_model, expected_approval, expected_sandbox in scenarios:
+            expected_owner = not bypass and label not in (
+                'worktree-config', 'worktree-config-same-model', 'worktree-profile', 'worktree-combined')
             with tempfile.TemporaryDirectory(prefix='fleet-local-', dir='/tmp') as temporary:
                 root = Path(temporary).resolve()
                 home = root / 'home'
@@ -102,6 +128,13 @@ def main():
                     f'base_url="http://127.0.0.1:{endpoint.server_port}/v1"\n'
                     'wire_api="responses"\nrequires_openai_auth=false\nrequest_max_retries=0\nstream_max_retries=0\n'
                     '[projects.' + json.dumps(str(base)) + ']\ntrust_level="trusted"\n')
+                (codex_home / 'fixture.config.toml').write_text(
+                    'model="probe-profile"\napproval_policy="on-request"\nsandbox_mode="workspace-write"\n')
+                if label in ('worktree-config-file', 'worktree-file-and-native-flags'):
+                    configuration = codex_home / 'config.toml'
+                    configuration.write_text('check_for_update_on_startup=false\n'
+                                             'project_doc_fallback_filenames=["CLAUDE.md"]\n'
+                                             + configuration.read_text().replace('hooks=false', 'hooks=true'))
                 version = subprocess.check_output([binary, '--version'], env=environment,
                                                   text=True, stderr=subprocess.PIPE, timeout=10).strip()
                 with (root / 'server.log').open('w') as logfile:
@@ -129,7 +162,7 @@ def main():
                         before = len(requests)
                         descriptor, slave = pty.openpty()
                         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
-                        command = [binary, '--cd', str(base)]
+                        command = [binary, '--cd', str(base), *extra_flags]
                         if worktree:
                             command.append('--worktree')
                         if bypass:
@@ -140,7 +173,7 @@ def main():
                                                      stdout=slave, stderr=slave, start_new_session=True)
                         finally:
                             os.close(slave)
-                        metadata = None
+                        metadata = turn_context = None
                         terminal = bytearray()
                         deadline = time.monotonic() + 25
                         while time.monotonic() < deadline and child.poll() is None:
@@ -158,13 +191,17 @@ def main():
                                 terminal = terminal[-32768:]
                             for rollout in codex_home.glob('sessions/**/*.jsonl'):
                                 with rollout.open() as stream:
-                                    try:
-                                        first = json.loads(stream.readline())
-                                    except json.JSONDecodeError:
-                                        continue
-                                if first.get('type') == 'session_meta':
-                                    metadata = first['payload']
-                            if metadata is not None and len(requests) > before:
+                                    for line in stream:
+                                        try:
+                                            record = json.loads(line)
+                                        except json.JSONDecodeError:
+                                            continue
+                                        if record.get('type') == 'session_meta':
+                                            metadata = record['payload']
+                                        if record.get('type') == 'turn_context':
+                                            turn_context = record['payload']
+                            if (metadata is not None and len(requests) > before
+                                    and (not arguments.launch_flags or turn_context is not None)):
                                 break
                         check(child.poll() is None and metadata is not None, label + ': real TUI remains alive with native metadata')
                         check(len(requests) == before + 1 and requests[-1]['path'] == '/v1/responses'
@@ -176,13 +213,28 @@ def main():
                         check(observed['id'] == identifier and Path(observed['cwd']).resolve() == cwd,
                               label + ': native history reports exact root and cwd')
                         check(observed['modelProvider'] == 'offline', label + ': native thread provider is the fixture')
-                        check((identifier in loaded) == (not bypass), label + ': live ownership matches bypass boundary')
-                        check((observed['status']['type'] == 'notLoaded') == bypass,
+                        check((identifier in loaded) == expected_owner, label + ': live ownership matches launch boundary; '
+                              + json.dumps({'loaded': identifier in loaded, 'status': observed['status']}))
+                        check((observed['status']['type'] == 'notLoaded') == (not expected_owner),
                               label + ': readable history does not imply live ownership')
                         statuses = [event['params']['status']['type'] for event in rpc.events
                                     if event.get('method') == 'thread/status/changed'
                                     and event.get('params', {}).get('threadId') == identifier]
-                        check(bool(statuses) == (not bypass), label + ': native status events follow actual owner')
+                        check(bool(statuses) == expected_owner, label + ': native status events follow actual owner')
+                        if arguments.launch_flags:
+                            check(requests[-1]['model'] == expected_model, label + ': request uses selected model')
+                            check(turn_context is not None and turn_context['model'] == expected_model,
+                                  label + ': persisted native turn uses selected model')
+                            check(turn_context['approval_policy'] == expected_approval
+                                  and turn_context['sandbox_policy']['type'] == expected_sandbox,
+                                  label + ': native turn retains requested permission policy: '
+                                  + json.dumps({'approval': turn_context['approval_policy'],
+                                                'sandbox': turn_context['sandbox_policy']['type']}))
+                            unchanged = rpc.call('config/read', {'includeLayers': False})['config']
+                            check(unchanged['model'] == 'probe' and unchanged['model_provider'] == 'offline'
+                                  and unchanged['approval_policy'] == 'never'
+                                  and unchanged['sandbox_mode'] == 'read-only',
+                                  label + ': per-launch flags do not mutate backend base configuration')
                         if worktree:
                             check(cwd != base and cwd.is_relative_to(codex_home / 'worktrees'),
                                   label + ': native worktree is outside base checkout')
@@ -205,7 +257,8 @@ def main():
                         check(backend.poll() is None, label + ': owned backend remains alive until fixture cleanup')
                         phases.append({'phase': label, 'version': version, 'owns_live_thread': identifier in loaded,
                                        'thread_state': observed['status']['type'], 'native_statuses': statuses,
-                                       'worktree': worktree, 'hook_trust_bypass': bypass})
+                                       'worktree': worktree, 'hook_trust_bypass': bypass,
+                                       'flags': extra_flags, 'request_model': requests[-1]['model']})
                     finally:
                         stop(child)
                         if descriptor is not None:

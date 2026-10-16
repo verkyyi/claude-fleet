@@ -203,6 +203,41 @@ bootstrap、update 或 stop，不安装系统服务或包，也不连接现有�
 python3 bin/fleet-native-local-runtime-selftest.py --codex /path/to/codex
 ```
 
+### 逐次配置不是共享后台配置：启动参数矩阵
+
+`--launch-flags` 扩展同一隔离探针，不增加生产运行时。原生 CLI 的参数含义参考
+[官方命令说明](https://learn.chatgpt.com/docs/developer-commands)，以下归属结论来自实测，
+不是根据参数文档推断。每个场景使用独立空 HOME、预先启动且内核 PID 已核对的后台，
+实际 TUI 创建原生 Worktree、发出一次无凭据的 loopback 请求；固定 400 响应禁止推理。
+
+本机 `0.163.0` 与测试节点 `0.162.1` 的 11 个场景、各 250 项检查通过；固定版本 CI
+仍须对提交分别核对。测试节点只运行临时目录探针，未修改在线配置或用户会话：
+
+| 参数/配置变化 | 实际后台拥有线程 | 模型及权限的验证 |
+|---|---|---|
+| 原有普通本地 / Worktree 对照 | 是 | 原生请求模型及 turn_context 与基础配置相符 |
+| Worktree + hook-trust bypass | 否 | 可读历史不等于当前运行时 |
+| Worktree + Fleet 三项普通 `-c` 默认值 | 否 | update 检查、hooks 开关、CLAUDE.md fallback，无真实 hook 脚本 |
+| Worktree + `-c model="probe"`，与后台默认值完全相同 | 否 | 排除仅由配置值不同引起的推测 |
+| 同样三项普通默认值预先放进原生 config.toml，无逐次 `-c` | 是 | 不改变原生后台选择 |
+| 上述配置文件 + 原生 `--model` / `--sandbox` / `--ask-for-approval` | 是 | 当前线程使用指定值，后台基础模型和权限不变 |
+| 仅原生 `--model`，或仅既有 approvals/sandbox bypass 参数 | 是 | 请求/turn_context 使用指定值，后台基础配置不变 |
+| 原生 `--profile fixture`，或 profile + 普通 `-c` + 权限参数组合 | 否 | 原生 profile 与 CLI 覆盖值仍正确生效，但不属于已核对后台 |
+
+因此仅移除 hook-trust bypass 仍不够，不能把已验证的旁路后台身份当作实际线程身份。
+默认值应在原生配置/插件的安装更新边界管理，不在每次启动追加相同 `-c`；逐次模型和权限
+优先原生专用参数。**不能为了共享后台而吞掉用户 profile/覆盖值、把账号合并到同一个 HOME，
+或在已有会话运行时重写其共享配置。** 需要 profile 的路径在完成等价原生运行时身份证明前，
+保留旧的明确支持/拒绝边界，不新增第二套 profile 解释器。
+
+这仍不是完整 Fleet 参数集：真实 managed guards、可选插件、完整 MCP、每会话环境变量、
+订阅/代理凭据、准入与恢复尚未在同一实际启动链路验收；并发不同会话的配置隔离也未由
+逐场景单线程测试证明。保留现有认证与权限守门，不改上线启动方式，不宣称达成延迟目标。
+
+```sh
+python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --codex /path/to/codex
+```
+
 ## 完整目标的完成账本
 
 ### 原生状态事件替代重复查询

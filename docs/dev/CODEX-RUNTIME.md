@@ -11,6 +11,18 @@ the explicit [existing-native observation contract](NATIVE-OBSERVE.md). It keeps
 the original execution and separately reports missing old hooks and unverified
 message consumption; it does not replay SessionStart or resume the session.
 
+The opt-in offline `fleet-native-local-runtime-selftest.py --launch-flags`
+compares native worktree ownership with per-launch config, profiles and dedicated
+model/permission flags. A running daemon and readable history do not prove that
+it owns the TUI: even an unchanged `-c model=...` can select an embedded runtime.
+The configuration-file control and dedicated flags are tested separately, with
+request/turn metadata and unchanged backend defaults. See the
+[launch-boundary matrix](NATIVE-AGENT-BOUNDARY.md#逐次配置不是共享后台配置启动参数矩阵).
+Do not discard user profiles, rewrite a live shared home, or remove fixed-account
+verification to make a session fit the shared-backend path. No launcher behavior
+changes in this probe; full MCP, credentials, guards and concurrent sessions
+still require integrated acceptance.
+
 ## Managed guard configuration (candidate)
 
 The candidate renderer derives native managed hooks from the existing
