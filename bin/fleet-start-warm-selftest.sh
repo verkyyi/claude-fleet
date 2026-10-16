@@ -4,8 +4,8 @@
 # ready window from the warm pool (scratch-pool.sh), submits the person's words
 # into it as the FIRST TURN (dash-raw-session.sh --warm-only → fleet-pane-submit.sh)
 # and answers at once; the issue is filed + bound afterwards, detached
-# (fleet-start-backfill.sh). Same rig as scratch-pool-live-selftest.sh — an
-# isolated `-L` socket, the real session wrapper launching a fake TUI — whose
+# (fleet-start-backfill.sh). Submission uses fleet-pane-submit.py + fleet-input.py.
+# Same rig as scratch-pool-live-selftest.sh — an isolated `-L` socket, the real session wrapper launching a fake TUI — whose
 # input box speaks bracketed paste and logs every submitted turn. The filer and the
 # cold spawner are stubs in a shadow bin/ that log their argv.
 #
@@ -223,7 +223,7 @@ else
 fi
 [ "$tw" -le "$tr" ] && [ "$tr" -le "$tp" ] || fail "A t_window ≤ t_ready ≤ t_prompt" "$out"
 [ ! -s "$WORK/log/spawn" ] || fail "A nothing cold-spawned" "$(cat "$WORK/log/spawn")"
-ok "A new task: warm window in $((tp - t0)) ms (t_window→t_prompt $((tp - tw)) ms), first turn = body + note"
+ok "A new task: warm window in $((tp - t0)) ms (t_window +$((tw - t0)), t_ready +$((tr - t0)); load $load / $cores cores), first turn = body + note"
 
 # ---- B: the paperwork runs afterwards, as that window -------------------------
 for _ in $(seq 1 75); do grep -q "$SESS $win bound #77" "$FLEET_CONF_DIR/control/backfill.log" 2>/dev/null && [ -s "$WORK/log/peer" ] && break; sleep 0.2; done
