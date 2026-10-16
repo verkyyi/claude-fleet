@@ -5,6 +5,7 @@ on:
     paths:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-codex-rpc.py'
+      - 'hooks/bash-guard.py'
       - '.github/workflows/native-managed-hooks.yml'
   workflow_dispatch:
 
