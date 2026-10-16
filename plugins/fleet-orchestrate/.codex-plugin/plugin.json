@@ -1,0 +1,42 @@
+{
+  "name": "fleet-orchestrate",
+  "version": "0.2.5",
+  "description": "Optional Fleet orchestration role, skills and tools. Never installed or started by default; native Codex manages its conversation lifecycle.",
+  "author": {
+    "name": "verkyyi",
+    "url": "https://github.com/verkyyi"
+  },
+  "homepage": "https://github.com/verkyyi/claude-fleet",
+  "repository": "https://github.com/verkyyi/claude-fleet",
+  "license": "MIT",
+  "interface": {
+    "displayName": "Fleet Orchestration",
+    "shortDescription": "Optional orchestration for Fleet sessions",
+    "longDescription": "Discuss work with the operator, then explicitly take an orchestration role and dispatch workers. Never starts a resident orchestrator or installs itself by default.",
+    "developerName": "verkyyi",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": ["Talk through my request before dispatching any work."]
+  },
+  "skills": "./skills/",
+  "hooks": {"hooks": {}},
+  "mcpServers": {
+    "fleet-orch": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec python3 \"${FLEET_MCP_BIN:-$HOME/.claude/fleet/bin}/fleet-mcp.py\" --group orch"
+      ],
+      "env_vars": [
+        "TMUX",
+        "TMUX_PANE",
+        "FLEET_CONF_DIR",
+        "FLEET_SESSION",
+        "FLEET_WORKER_CRED",
+        "FLEET_MCP_BIN",
+        "FLEET_MCP_ORCH"
+      ],
+      "tool_timeout_sec": 600
+    }
+  }
+}

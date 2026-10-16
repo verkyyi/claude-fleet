@@ -352,6 +352,13 @@ for same-agent preference, cross-agent fallback, drafts and loop recovery.
 
 ## Operator attention and answers
 
+Native plugin management is separate from the legacy Claude-to-Codex bridge.
+The verified 0.162.1 and 0.163.0 binaries can install Claude-format marketplaces
+and plugins directly, including native command-to-skill conversion. This does
+not yet authorize removing the bridge: hook trust, MCP environment/timeout
+parity, invocation names and duplicate ownership need migration acceptance.
+See [the native boundary migration](NATIVE-AGENT-BOUNDARY.md).
+
 The attention monitor consumes native `thread/status/changed` notifications on
 one connection to the existing private server. Regular status observation does
 not start or resume a thread. Fetching pending question details still uses the

@@ -2,8 +2,11 @@
 """fleet-codex-plugins.py — a Codex session reads the same plugins (issue #3123,
 EPIC #3111 C12).
 
-Codex has no /plugin. What the Claude side has installed AND enabled of this
-repo's marketplace (fleet-orchestrate · fleet-steward · fleet-epic) — asked of
+This is the legacy cross-agent bridge, not Codex's native plugin manager.
+Verified Codex 0.162.1 and 0.163.0 can install Claude-format plugins natively;
+the bridge remains until single-owner migration and runtime parity are verified.
+What the Claude side has installed AND enabled of this repo's marketplace
+(fleet-orchestrate · fleet-steward · fleet-epic) — asked of
 `claude plugin list --json` through fleet-plugins.py, the one reader; nothing is
 recorded a second time — is carried into each Codex home as far as Codex can take
 it, and what it cannot take is said:
@@ -21,18 +24,18 @@ it, and what it cannot take is said:
               defines outside the block is the login's and never written. The rest
               of the file stays byte for byte; no plugin left ⇒ the block goes and
               the file is what it was.
-  hooks       not written here: bin/fleet-codex.sh hands `dirs` to
+  hooks       not written here: bin/fleet-codex.sh hands `sync --print-dirs` to
               fleet-hooks-emit.sh --plugin-dir, which merges each plugin's
               hooks/hooks.json into the `-c hooks.*` it emits, by
-              hooks/codex-map.json (an event Codex lacks — PreCompact — is dropped
+              hooks/codex-map.json (an event the bridge does not map — PreCompact — is dropped
               with one stderr line).
   agent files read as they are by fleet-agent-def.py (C11): body → instructions,
               `fleet.codex_model` → model.
 
-Not carried (the doctor's `plugins` row lists them): mod interface modules (the
-decision-sheet panel, /qd — Codex gets the `[decision]` text), PreCompact (no such
-event: no pre-compaction snapshot; the restore on resume still runs), an agent
-file's `tools` limits, and /plugin itself.
+Not carried by this bridge (the doctor's `plugins` row lists them): mod interface
+modules (the decision-sheet panel, /qd — Codex gets the `[decision]` text),
+PreCompact (not mapped here), an agent file's `tools` limits, and native plugin
+ownership. These are bridge limitations, not claims that Codex lacks plugins.
 
   sync   [--codex-home D]… [--root R] [--claude C] [--cache F] [--override F] [--dry-run]
          One line per change (`link` · `skill` · `unlink` · `mcp` · `own` · `drop`),
@@ -40,8 +43,16 @@ file's `tools` limits, and /plugin itself.
          skipped (Codex not set up there). `codex.plugins` in agent-overrides.json
          ⇒ nothing. bin/fleet-codex.sh runs it for its CODEX_HOME before every
          launch; fleet-install-apply.sh's agents pass for every home.
-  dirs   [--root R] [--claude C] [--cache F]
+         --print-dirs emits only enabled hook directories on stdout, from the same
+         installed-plugin snapshot; diagnostics go to stderr. No second lookup.
+  dirs   [--root R] [--claude C] [--cache F] [--override F]
          the enabled plugins' directories, one a line (for --plugin-dir).
+         A codex.plugins override also stops this legacy hook injection.
+  retire [--codex-home D]… [--root R] [--claude C] [--override F] [--apply]
+         One-time cleanup after native migration acceptance. Requires the
+         codex.plugins override; previews by default. Removes only proven bridge
+         links, single-file marked adapters and the paired MCP marker block.
+         Preflights every home before changing any; never installs or trusts plugins.
   mention <name> [--codex-home D]
          the name Codex lists $CODEX_HOME/skills/fleet-plugin-<name> under
          (`fleet-orchestrate:fleet-orchestrate` for a linked plugin skill — Codex
@@ -54,11 +65,13 @@ file's `tools` limits, and /plugin itself.
 Exit 0 ok · 1 a home could not be written · 2 usage / unreadable input.
 """
 import argparse
+import contextlib
 import importlib.util
 import json
 import os
 import shutil
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PREFIX = "fleet-plugin-"
@@ -87,9 +100,9 @@ except Exception:  # noqa: BLE001 — a launch never fails over the constants
 
 GAPS = [
     "mod 界面模块（决定单面板、/qd；Codex 收文字版 [decision]）",
-    "PreCompact（Codex 没有这个事件：压缩前存档不做，恢复时补回照做）",
+    "PreCompact（此兼容桥未映射该事件，恢复时补回照做）",
     "agent 文件的 tools 限制",
-    "/plugin 本身（Codex 跟着 Claude 这边装了什么同步）",
+    "原生插件管理（此兼容桥仍跟随 Claude；支持版本可用 /plugins，原生迁移尚未验收）",
 ]
 
 
@@ -231,12 +244,18 @@ def with_block(text, block):
 
 def write(path, text):
     target = os.path.realpath(path)
-    tmp = target + ".fleet-codex-plugins.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    if os.path.exists(target):
-        shutil.copymode(target, tmp)
-    os.replace(tmp, target)
+    descriptor, temporary = tempfile.mkstemp(prefix=".fleet-codex-plugins.", dir=os.path.dirname(target))
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as output:
+            output.write(text)
+        if os.path.exists(target):
+            shutil.copymode(target, temporary)
+        os.replace(temporary, target)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def entry(p):
@@ -376,14 +395,7 @@ def hook_drops(plugs):
     return out
 
 
-def cmd_sync(a):
-    if AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
-        print("unchanged — codex.plugins is this login's own (agent-overrides.json)")
-        return 0
-    plugs = plugins(a)
-    if plugs is None:
-        print("unchanged — cannot tell what the Claude side has installed (no claude / no marketplace)")
-        return 0
+def sync_plugins(a, plugs):
     srv = wanted_servers(plugs)
     total, bad = 0, False
     for home in homes(a):
@@ -402,9 +414,125 @@ def cmd_sync(a):
     return 1 if bad else 0
 
 
+def cmd_sync(a):
+    with contextlib.redirect_stdout(sys.stderr if a.print_dirs else sys.stdout):
+        if AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
+            print("unchanged — codex.plugins is this login's own (agent-overrides.json)")
+            return 0
+        plugs = plugins(a)
+        if plugs is None:
+            print("unchanged — cannot tell what the Claude side has installed (no claude / no marketplace)")
+            return 0
+        result = sync_plugins(a, plugs)
+    if a.print_dirs:
+        for _name, directory in plugs:
+            print(directory)
+    return result
+
+
 def cmd_dirs(a):
+    if AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
+        return 0
     for _n, d in plugins(a) or []:
         print(d)
+    return 0
+
+
+def cmd_retire(a):
+    if not AD.shielded("codex.plugins", AD.override_paths(a.override, [])):
+        print("FAIL    retire requires codex.plugins override; stop the legacy bridge first", file=sys.stderr)
+        return 1
+    plan, known_links = [], None
+
+    def read(path):
+        with open(path, encoding="utf-8", newline="") as source:
+            return source.read()
+
+    def links():
+        market = PL.market(a.root)
+        if market is None:
+            raise ValueError("cannot prove old links without this marketplace")
+        installed, _why = PL.installed(a.claude, market.get("name") or "claude-fleet", "")
+        if installed is None:
+            raise ValueError("cannot prove old links without Claude's installed plugin record")
+        plugins = []
+        for name in PL.ours(market):
+            row = installed.get(name, {})
+            directory = row.get("installPath") or row.get("readFromFolder") or ""
+            if isinstance(directory, str) and os.path.isdir(directory):
+                plugins.append((name, directory))
+        return {name: os.path.realpath(value) for name, (kind, value) in wanted_skills(plugins).items()
+                if kind == "link"}
+
+    try:
+        for home in dict.fromkeys(os.path.realpath(home) for home in homes(a)):
+            if not os.path.isdir(home):
+                continue
+            skills = os.path.join(home, "skills")
+            if os.path.islink(skills):
+                raise ValueError("shared skills symlink needs manual review: " + skills)
+            names = sorted(os.listdir(skills)) if os.path.isdir(skills) else []
+            for name in names:
+                if not name.startswith(PREFIX):
+                    continue
+                path = os.path.join(skills, name)
+                if os.path.islink(path):
+                    if known_links is None:
+                        known_links = links()
+                    if known_links.get(name) != os.path.realpath(path):
+                        raise ValueError("unproven skill link needs manual review: " + path)
+                    plan.append(("link", path, os.readlink(path), None))
+                    continue
+                skill = os.path.join(path, "SKILL.md")
+                if os.path.islink(skill):
+                    raise ValueError("linked SKILL.md needs manual review: " + skill)
+                if not os.path.isfile(skill):
+                    continue
+                content = read(skill)
+                if MARK not in content:
+                    continue
+                if os.listdir(path) != ["SKILL.md"]:
+                    raise ValueError("marked adapter has user files or a linked SKILL.md: " + path)
+                plan.append(("skill", skill, content, None))
+            config = os.path.join(home, "config.toml")
+            if not os.path.lexists(config):
+                continue
+            content = read(config)
+            if BEGIN not in content and END not in content:
+                continue
+            if os.path.islink(config):
+                raise ValueError("shared config symlink needs manual review: " + config)
+            lines = content.split("\n")
+            if lines.count(BEGIN) != 1 or lines.count(END) != 1:
+                raise ValueError("ambiguous MCP markers: " + config)
+            outside, _block, malformed = split_block(content)
+            if malformed:
+                raise ValueError("malformed MCP marker order: " + config)
+            plan.append(("config", config, content, outside))
+        for kind, path, before, _after in plan:
+            if kind == "link":
+                unchanged = os.path.islink(path) and os.readlink(path) == before
+            else:
+                unchanged = not os.path.islink(path) and read(path) == before
+                if kind == "skill":
+                    unchanged = unchanged and os.listdir(os.path.dirname(path)) == ["SKILL.md"]
+            if not unchanged:
+                raise ValueError("changed during retirement preflight: " + path)
+        for kind, path, _before, after in plan:
+            print("retire  %s %s%s" % (kind, path, "" if a.apply else " (preview)"))
+        if a.apply:
+            for kind, path, _before, after in plan:
+                if kind == "config":
+                    write(path, after)
+                else:
+                    os.unlink(path)
+                    if kind == "skill":
+                        os.rmdir(os.path.dirname(path))
+    except (OSError, ValueError) as error:
+        print("FAIL    retire: " + str(error), file=sys.stderr)
+        return 1
+    print("ok — %d bridge artifact(s)%s; native plugins and user files left alone" % (
+        len(plan), " retired" if a.apply else " (preview only; use --apply after review)"))
     return 0
 
 
@@ -450,7 +578,7 @@ def cmd_doctor(a):
 def main(argv):
     ap = argparse.ArgumentParser(prog="fleet-codex-plugins.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd")
-    for c in ("sync", "dirs", "doctor", "mention"):
+    for c in ("sync", "dirs", "retire", "doctor", "mention"):
         p = sub.add_parser(c)
         p.add_argument("--root", default=os.path.dirname(HERE))
         p.add_argument("--claude", default=os.environ.get("FLEET_INSTALL_CLAUDE", "claude"))
@@ -459,14 +587,20 @@ def main(argv):
         p.add_argument("--codex-home", action="append", default=[])
         if c == "mention":
             p.add_argument("name")
-        if c == "sync":
+        if c in ("sync", "dirs", "retire"):
             p.add_argument("--override", default=os.path.join(CONF_DIR, "agent-overrides.json"))
+        if c == "sync":
             p.add_argument("--dry-run", action="store_true")
+            p.add_argument("--print-dirs", action="store_true", help="print only hook directories from the same snapshot; sync diagnostics go to stderr")
+        if c == "retire":
+            p.add_argument("--apply", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "sync":
         return cmd_sync(a)
     if a.cmd == "dirs":
         return cmd_dirs(a)
+    if a.cmd == "retire":
+        return cmd_retire(a)
     if a.cmd == "doctor":
         return cmd_doctor(a)
     if a.cmd == "mention":
