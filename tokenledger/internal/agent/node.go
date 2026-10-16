@@ -195,6 +195,9 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 		if rp.launch {
 			caps = append(caps, control.CapLaunch)
 		}
+		if rp.repoAuthority {
+			caps = append(caps, control.CapRepoAuthority)
+		}
 		if rp.task {
 			// The hub's task record on a start (claude-fleet#3325).
 			caps = append(caps, control.CapTask)

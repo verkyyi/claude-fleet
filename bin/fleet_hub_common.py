@@ -546,7 +546,13 @@ TASK_REF_RE = re.compile(r"T[1-9][0-9]{0,17}")
 def validate_write(action, params):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
-                            "account_class", "reap", "attachments", "test", "debug", "task", "dispatch", "launch"))
+                            "account_class", "reap", "attachments", "test", "debug", "task", "dispatch", "launch", "ticket_ref"))
+        if "ticket_ref" in params:
+            ref = params["ticket_ref"]
+            if not params.get("dispatch") or ref not in (
+                    "gh:%s#%s" % (params.get("repo"), params.get("issue")),
+                    "hub:%s#%s" % (params.get("repo"), params.get("issue"))):
+                raise Fault("INVALID_ARGUMENT", "ticket_ref must match the accepted repo/issue")
         if "dispatch" in params:
             from fleet_dispatch import resolve
             try:

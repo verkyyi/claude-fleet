@@ -81,8 +81,9 @@ type relayPaths struct {
 	test bool
 	// task is whether claude-fleet takes the hub's task record on a start
 	// (claude-fleet#3325); false on one that predates it.
-	task   bool
-	launch bool
+	task          bool
+	launch        bool
+	repoAuthority bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -135,6 +136,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.test = v == "1"
 		case "launch_v1":
 			p.launch = v == "1"
+		case "repo_authority_v1":
+			p.repoAuthority = v == "1"
 		case "task":
 			p.task = v == "1"
 		}

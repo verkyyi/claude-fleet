@@ -169,6 +169,10 @@ func (s *Server) handleFleetTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, FleetTicketsPath), "/")
+	if rest == "authority" || rest == "authority/adopt" {
+		s.ticketAuthority(w, r, c)
+		return
+	}
 	if rest == "" {
 		switch r.Method {
 		case http.MethodPost:

@@ -406,7 +406,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch", "ticket_ref"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -570,6 +570,14 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if w.repo != "" {
 			w.params["repo"] = w.repo
+		}
+		if ref, ok := args["ticket_ref"]; ok {
+			v, yes := ref.(string)
+			if !yes || d == nil || (v != "gh:"+w.repo+"#"+fmt.Sprint(w.params["issue"]) && v != "hub:"+w.repo+"#"+fmt.Sprint(w.params["issue"])) {
+				err = fault("INVALID_ARGUMENT", "ticket_ref must explicitly match the accepted repo and issue")
+				break
+			}
+			w.params["ticket_ref"] = v
 		}
 		if w.fleetID, err = argString(args, "fleet_id"); err != nil {
 			break
@@ -979,6 +987,15 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 
 	if acceptedLaunch(w) != nil && !s.canLaunch(ctx, target.EndpointID) {
 		return nil, fault("UNAVAILABLE", "selected node does not support verified launch_v1; nothing was sent")
+	}
+	if tool == "worker_start" && w.repo != "" {
+		a, e := s.Store.RepoAuthority(w.repo)
+		if e != nil {
+			return nil, e
+		}
+		if a.Mode == "hub" && !s.canRepoAuthority(ctx, target.EndpointID) {
+			return nil, fault("UNAVAILABLE", "selected node cannot enforce repo authority; nothing was sent")
+		}
 	}
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,

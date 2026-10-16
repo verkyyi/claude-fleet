@@ -134,6 +134,9 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return false, Lease{}, nil, err
 	}
+	if err := s.repoStartTx(tx, strings.TrimPrefix(c.Repo, "hub:"), false); err != nil {
+		return false, Lease{}, nil, err
+	}
 
 	ts := at.UTC().Format(rfc)
 	l := Lease{Repo: c.Repo, Issue: c.Issue, WorkerID: c.WorkerID, FleetID: c.FleetID, EndpointID: c.EndpointID,
@@ -329,6 +332,9 @@ func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim
 		return false, err
 	}
 	defer tx.Rollback()
+	if err := s.repoStartTx(tx, strings.TrimPrefix(repo, "hub:"), false); err != nil {
+		return false, err
+	}
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return false, err
 	}

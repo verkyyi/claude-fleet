@@ -289,6 +289,44 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
+### Existing-repo authority cutover (#4395)
+
+`fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
+manifest: local authority/ticket/forge/landing settings and their digest, hub
+revision, registered hosts and capabilities, legacy owners (including expired
+leases), task outcomes, ticket references and selective mappings. It writes
+nothing. `--freeze`, `--apply`, and `--rollback` each require `--manifest FILE`;
+save a fresh dry-run between stages. Exact retries reuse the same operation key.
+The manifest must name this exact repo/session and unchanged local settings.
+
+Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
+All registered hosts must advertise `repo_authority_v1` and `launch_v1` before
+freeze; apply also requires fresh post-freeze observations. Unknown/offline
+hosts refuse cutover. Captured legacy owners remain blockers after expiry or
+inventory disappearance. Drain them using the existing stop workflow, then on
+the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
+receipt names worker, native session, PID, birth and executable. The command
+requires ESRCH or a positively observed different process identity; permission
+or probe failure remains unknown. The authenticated node's acknowledgement is
+journalled. It does not stop processes or adopt a live owner automatically.
+
+Apply selects hub task authority without changing `FLEET_TICKETS`,
+`FLEET_FORGE`, or `FLEET_LAND`. New starts require an accepted dispatch on a
+capable node; local dispatch checks the central gate and fails closed on an
+authority outage. Existing ticket integers keep their pinned backend. Selective
+backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest FILE`
+(`--body-file FILE` optional): allocate a new hub ticket and preserve the exact
+old reference/URL in one transaction. No GitHub write or whole-backlog import.
+The returned `hub:owner/repo#M` can be passed as `ticket_ref` on an accepted
+`worker_start`; the accepted task carries it through node launch and reports.
+
+Rollback first freezes dispatch. Accepted work must have a terminal outcome
+and no retained execution lease before future starts return to legacy control.
+It keeps task history and ticket mappings; it never mirrors hub results to
+GitHub. Explicit completion with a PR records `work_result` and `pr_state:
+waiting` separately in result evidence. Only the existing merge verdict permits
+`pr_state: merged`. Fixture tests do not establish deployment/live acceptance.
+
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 
 Every session the fleet opens carries its own short-lived credential, and every

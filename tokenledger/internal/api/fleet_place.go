@@ -249,6 +249,10 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		p.Worker = c
 	}
 
+	if err := s.repoDispatchGate(req.Repo, req.Dispatch != nil); err != nil {
+		httpError(w, http.StatusConflict, errorObject(err)["message"])
+		return
+	}
 	if req.Dispatch != nil {
 		input := map[string]any{"repo": req.Repo, "node": req.Node, "idempotency_key": req.Dispatch.RequestID,
 			"agent": req.Agent, "dispatch": req.Dispatch}

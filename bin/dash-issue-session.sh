@@ -403,12 +403,25 @@ MAIN="${FLEET_MAIN:-}"
 [ -d "$MAIN/.git" ] || { refuse "fleet.conf: FLEET_MAIN is not a git checkout"; exit "$RC_INFRA"; }
 REPO="${FLEET_REPO:-$(fleet_origin_url "$MAIN" | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')}"
 BASE="${FLEET_BASE_BRANCH:-main}"
+AUTHORITY=$(fleet_repo_authority_guard "$REPO") || { refuse "repo task authority is frozen or unavailable"; exit "$RC_INFRA"; }
+AUTH_MODE=''
+[ -z "$AUTHORITY" ] || AUTH_MODE=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')
 # A repo whose tickets live on the hub (FLEET_TICKETS=hub, issue #3598, EPIC #3570
 # C5): every read, claim and release below goes through the ticket door and never
 # runs gh; an open-PR probe runs only where the repo has GitHub (FLEET_FORGE). Any
 # other repo: TK_HUB=0 and each step is the gh call it always was, byte for byte.
 TK_HUB=0; [ -n "$REPO" ] && fleet_ticket_hub "$REPO" "$SESS" && TK_HUB=1
 TK_ID="hub:$(fleet_norm_repo "$REPO")#$num"
+if [ -n "$AUTHORITY" ]; then
+  _accepted_ref=$(printf '%s' "$AUTHORITY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ticket_ref", ""))')
+  if [ -n "$_accepted_ref" ]; then
+    case "$_accepted_ref" in
+      "hub:$REPO#$num") TK_HUB=1; TK_ID="$_accepted_ref" ;;
+      "gh:$REPO#$num") TK_HUB=0; TK_ID="$_accepted_ref" ;;
+      *) refuse "accepted ticket reference does not match this issue"; exit "$RC_INFRA" ;;
+    esac
+  fi
+fi
 
 # --- Which agent (issue #2562) ------------------------------------------------
 # No --agent: the issue's `agent:codex` / `agent:claude` label picks one; no label
@@ -505,7 +518,7 @@ _spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
   exit "$rc"
 }
 [ "$CLAIMED_HERE" = 1 ] && trap _spawn_back EXIT
-if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ]; then
+if [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -n "$REPO" ] && [ "$AUTH_MODE" != hub ]; then
   _lf=''; [ "$FORCE_FLAG" = 1 ] && _lf=--force
   lease_out=$(fleet_hub_lease acquire "$SESS" "$REPO" "$num" $_lf); lease_rc=$?
   case "$lease_rc" in
@@ -1030,6 +1043,7 @@ if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
+fleet_repo_authority_guard "$REPO" --finish >/dev/null || { refuse "repo requires accepted hub launch"; exit "$RC_INFRA"; }
 win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477

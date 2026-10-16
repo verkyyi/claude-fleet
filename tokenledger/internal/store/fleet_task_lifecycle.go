@@ -141,11 +141,14 @@ func (s *Store) acceptFleetTask(t FleetTask, token string, now time.Time) (Fleet
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
 		return FleetTask{}, err
 	}
+	if err = s.repoStartTx(tx, t.Repo, true); err != nil {
+		return FleetTask{}, err
+	}
 	if t.TicketRef != "" {
 		backend, _, _ := strings.Cut(t.TicketRef, ":")
 		r, n, _ := taskTicket(t.TicketRef)
 		var ticketOwner, ticketBackend string
-		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ?`, strings.TrimPrefix(r, "hub:"), n).Scan(&ticketOwner, &ticketBackend)
+		err = tx.QueryRow(`SELECT owner, backend FROM fleet_tickets WHERE repo = ? AND num = ? AND backend = ?`, strings.TrimPrefix(r, "hub:"), n, backend).Scan(&ticketOwner, &ticketBackend)
 		if err == nil && (ticketOwner != t.Owner || ticketBackend != backend) {
 			return FleetTask{}, ErrTaskFence
 		}
@@ -248,6 +251,16 @@ type TaskMutation struct {
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
+	// Repo is immutable. Take its authority lock before the task row lock,
+	// in the same order as acceptance/cutover; lifecycle reports remain open.
+	var startRepo string
+	if m.Kind == "claim" || m.Kind == "retry" || m.Kind == "transfer" {
+		t, e := s.FleetTask(id)
+		if e != nil {
+			return FleetTask{}, e
+		}
+		startRepo = t.Repo
+	}
 	// Refuse fields that this command cannot apply, rather than silently
 	// accepting a requested provider/owner change on a transition.
 	if m.CancelRequest != "" && m.Kind != "cancel_ack" {
@@ -284,6 +297,11 @@ func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time
 		return FleetTask{}, err
 	}
 	defer tx.Rollback()
+	if startRepo != "" {
+		if err = s.repoStartTx(tx, startRepo, true); err != nil {
+			return FleetTask{}, err
+		}
+	}
 	if err = s.d.claimWrites(tx, "fleet_tasks"); err != nil {
 		return FleetTask{}, err
 	}

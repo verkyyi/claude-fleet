@@ -448,6 +448,8 @@ if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
+  || { refuse "repo task authority is frozen or unavailable"; exit 1; }
 
 # Backgrounded spawn (issues #304, #444): the cheap/authoritative checks above (session
 # cap, MAIN) have passed synchronously, so a refusal is immediate and lands on the
@@ -653,6 +655,8 @@ fi
 # through to the original cold path below — the pool is never load-bearing.
 # A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
 # argument, which only a cold spawn can carry (see the header).
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
+  || { refuse "repo requires accepted hub launch"; exit 1; }
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi

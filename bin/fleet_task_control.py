@@ -144,7 +144,8 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
         raise ValueError("explicit completion needs succeeded/failed and a summary")
     receipt = launch.check_receipt(c, json.loads(launch.option(pane, "@launch_receipt", socket)))
     evidence = json.dumps(dict(native_session=receipt["native_session"], provider=receipt["actual_provider"],
-                               work_result=outcome, pr=pr), sort_keys=True)
+                               work_result=outcome, pr=pr,
+                               pr_state="merged" if state == "merged" else "waiting" if pr else "none"), sort_keys=True)
     r = report_input(c, t, outcome, summary, evidence)
     if dry:
         print(json.dumps(r)); return 0

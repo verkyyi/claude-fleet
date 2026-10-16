@@ -207,6 +207,9 @@ const CapTask = "task"
 // CapLaunch requires process/native-session verification before initial input.
 const CapLaunch = "launch_v1"
 
+// CapRepoAuthority enforces the central repo freeze on local starts too.
+const CapRepoAuthority = "repo_authority_v1"
+
 // CapCredsep is the hello capability an admin node lists when every login its
 // create op opens is credential-separated from the start (claude-fleet#2294):
 // no subscription token in the login's home, its sessions only through the
