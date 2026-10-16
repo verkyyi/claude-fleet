@@ -112,6 +112,8 @@ type ReleaseStore struct {
 	pubOn     bool
 	macAt     time.Time // when MacStableSHA last read the disk (fleet_release_macos.go)
 	macSHA    string
+	macStable stablePointer // cache belongs to these on-volume pointers
+	macLane   stablePointer
 }
 
 type releaseBuild struct {
@@ -619,6 +621,7 @@ func (rs *ReleaseStore) movePointer(sha string, seq int64) error {
 	}
 	rs.pubMu.Lock()
 	rs.pubAt = time.Time{} // PublishedStable reads the new pointer
+	rs.macAt = time.Time{} // a rollback must revalidate the Mac lane too
 	rs.pubMu.Unlock()
 	log.Printf("fleet: release %s is stable #%d", sha[:7], seq)
 	if rs.OnPromote != nil {
@@ -742,6 +745,12 @@ func (rs *ReleaseStore) prune() {
 	}
 	for i, sha := range order {
 		if i >= rs.keep() && !keep[sha] {
+			if m := rs.manifest(sha); m != nil && m.Seq > 0 {
+				if err := rs.archiveChainLink(sha); err != nil {
+					log.Printf("fleet: keep release %s: cannot archive chain proof: %v", short(sha), err)
+					continue
+				}
+			}
 			_ = os.RemoveAll(filepath.Join(rs.Dir, sha))
 		}
 	}
