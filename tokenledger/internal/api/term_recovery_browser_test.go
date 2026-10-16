@@ -101,7 +101,14 @@ func TestTerminalRecoveryChromium(t *testing.T) {
 				}
 			}))
 			defer fixture.Close()
-			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+			// UDP denial exercises the real seven-second ICE fallback on every
+			// fresh page. Repeated exit/renew + two-tab races add those bounded
+			// negotiations; allow six minutes without relaxing any assertion.
+			budget := 240 * time.Second
+			if mode == "relay" {
+				budget = 360 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "node", "recovery.mjs", mode)
 			cmd.Dir = filepath.Join(root, "extras/browser-transport")
