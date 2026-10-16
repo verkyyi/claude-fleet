@@ -343,11 +343,13 @@ class NativeTests(unittest.TestCase):
         path.write_text(json.dumps(proof) + "\n")
         env = dict(os.environ, HOME=str(self.root / "home"), TMPDIR=str(self.root / "tmp"),
                    FLEET_CONF_DIR=str(self.root / "conf"), FLEET_STATUS_G=str(cache),
-                   FLEET_SESSION="test", TMUX=str(self.root / "sock") + ",0,0")
+                   FLEET_SESSION="test", FLEET_ROWS_UNFOLD="1", TMUX=str(self.root / "sock") + ",0,0")
         env.pop("TMUX_PANE", None)
         produced = subprocess.check_output(["bash", str(BIN / "tmux-dashboard-rows.sh"), "--rows"],
                                           env=env, text=True, timeout=15)
-        row = next(line.split(v.US) for line in produced.splitlines() if line.startswith(wid + v.US))
+        matches = [line.split(v.US) for line in produced.split("\n") if line.startswith(wid + v.US)]
+        self.assertTrue(matches, repr(produced))
+        row = matches[0]
         self.assertEqual(json.loads(row[20]), proof)
         with patch.object(v, "view_row", return_value={}), patch.object(v, "view_fleet", return_value="test"), \
                 patch.object(v, "windows", return_value={wid: (fid, "worker", 0)}), \

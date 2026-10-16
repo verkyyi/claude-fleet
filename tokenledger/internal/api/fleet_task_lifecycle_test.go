@@ -212,6 +212,14 @@ func TestTaskLastKnownInventoryEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := h.srv.Store.RecordFleetSnapshot(node.id, "fixture-node", "frank", "fixture-machine",
+		[]store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", State: "unknown", WorkersJSON: "[]"}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	live := h.srv.taskLive(&task, map[string][]map[string]any{})
+	if live["state"] != "done" || live["observed_at"] != nil || live["stale"] != true {
+		t.Fatal("unknown inventory renewed the worker observation", live)
+	}
 	if task.Outcome != "" {
 		t.Fatal("inventory became outcome", task)
 	}

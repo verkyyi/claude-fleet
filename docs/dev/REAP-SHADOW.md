@@ -111,6 +111,8 @@ guardian 未被既有分类器识别时继续保留，不增加按名称豁免�
 `--text` 输出原生面板同一投影。stdin 接受既有 proof，但没有当前完整执行绑定时
 一律显示 current_binding_unavailable，不能凭 worker/FID 匹配认定同代。
 原生面板 Tab → 状态证据沿同一入口读取，后台结果绑定到打开时的 overlay 实例。
+显示前通过 runtime owner 再读完整执行身份和原生状态；generation/SID/turn/state
+变化、复读失败或过期均显示 unknown，仍保留初次 proof 的原时间。
 取消再打开同一行不会接收前一次迟到结果；不增加 inventory/producer 周期探测。
 
 显式读取的私有展示缓存为已有 dash global 下 `status-proof-<session>-<FID>`，
