@@ -40,7 +40,7 @@ func TestTaskBlockerContract(t *testing.T) {
 }
 
 func blockerCommand(work, dep FleetTask, id string) TaskMutation {
-	return TaskMutation{Kind: "blocker", Key: "create-" + id, Generation: work.Generation, ExpectedWorker: work.ExecutionOwner, EndpointID: work.ExecutionEndpoint,
+	return TaskMutation{Kind: "blocker", Key: fmt.Sprintf("create-g%d-%s", work.Generation, id), Generation: work.Generation, ExpectedWorker: work.ExecutionOwner, EndpointID: work.ExecutionEndpoint,
 		Blocker: &TaskBlockerCommand{Version: 1, Action: "create", BlockerID: id, Repo: work.Repo, TicketRef: work.TicketRef, Dependency: blockerScope(dep), Evidence: "fixture dependency grant", Reason: "wait for dependency"}}
 }
 
@@ -90,7 +90,9 @@ func TestTaskBlockerDependencyEvents(t *testing.T) {
 	if _, err := s.MutateFleetTask(work.ID, work.Owner, changed, time.Now()); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("changed replay: %v", err)
 	}
-	mutateTask(t, s, work, blockerCommand(work, b, "two"))
+	two := blockerCommand(work, b, "two")
+	two.Blocker.DependencyPolicy = "terminal-any"
+	mutateTask(t, s, work, two)
 	for i, observation := range []string{"unknown", "stale"} {
 		work = mutateTask(t, s, work, TaskMutation{Kind: "transition", Key: fmt.Sprint("observation", i), Observation: observation})
 		assertBlocker(t, s, work, "one", "active")
@@ -311,4 +313,118 @@ func TestTaskBlockerConcurrentEvents(t *testing.T) {
 func startBlockerGeneration(t *testing.T, s *Store, rec FleetTask) FleetTask {
 	rec = mutateTask(t, s, rec, TaskMutation{Kind: "claim", Key: fmt.Sprintf("claim-g%d", rec.Generation), WorkerID: "fleet-a/session-a", FleetID: "fleet-a"})
 	return mutateTask(t, s, rec, TaskMutation{Kind: "transition", Key: fmt.Sprintf("start-g%d", rec.Generation), State: TaskRunning, ActualAgent: "codex", Evidence: "fixture native receipt"})
+}
+
+func TestTaskBlockerDependencyPolicy(t *testing.T) {
+	for _, outcome := range []string{TaskFailed, TaskCancelled} {
+		t.Run(outcome, func(t *testing.T) {
+			s := taskStore(t)
+			work := startTask(t, s, acceptedTask(t, s, "work", ""))
+			dep := startTask(t, s, acceptedTask(t, s, "dep", ""))
+			mutateTask(t, s, work, blockerCommand(work, dep, "required"))
+			any := blockerCommand(work, dep, "any")
+			any.Blocker.DependencyPolicy = "terminal-any"
+			mutateTask(t, s, work, any)
+			if outcome == TaskCancelled {
+				dep = mutateTask(t, s, dep, TaskMutation{Kind: "cancel_request", Key: "cancel", Evidence: "explicit intent"})
+				mutateTask(t, s, dep, TaskMutation{Kind: "cancel_ack", Key: "done", CancelRequest: "cancel", ExecutionStopped: true, Evidence: "confirmed native stop"})
+			} else {
+				mutateTask(t, s, dep, TaskMutation{Kind: "transition", Key: "done", State: outcome, Evidence: "explicit failure"})
+			}
+			required := assertBlocker(t, s, work, "required", "active")
+			if required.DependencyPolicy != "success-required" || required.Reason != "dependency:"+outcome || required.ResolvedAt != nil || required.RevokedAt != nil {
+				t.Fatalf("failure lost policy/evidence: %+v", required)
+			}
+			anyResult := assertBlocker(t, s, work, "any", "revoked")
+			if anyResult.ResolvedAt != nil || anyResult.RevokedAt == nil {
+				t.Fatal("revoked is not resolved")
+			}
+			// A lost CAS is a conflict, never a successful update or a second audit.
+			tx, err := s.write.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveTaskBlockerTx(tx, anyResult, time.Now()); !errors.Is(err, ErrTaskConflict) {
+				t.Fatalf("closed CAS: %v", err)
+			}
+			_ = tx.Rollback()
+		})
+	}
+}
+
+func TestTaskBlockerOwnerDependencyTransferRaces(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owner-race.db")
+	var hubs [2]*Store
+	for i := range hubs {
+		s, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		if err = s.EnsureNodes(); err != nil {
+			t.Fatal(err)
+		}
+		hubs[i] = s
+	}
+	race := func(a, b func() error) [2]error {
+		var errs [2]error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i, f := range []func() error{a, b} {
+			wg.Add(1)
+			go func(i int, f func() error) { defer wg.Done(); <-start; errs[i] = f() }(i, f)
+		}
+		close(start)
+		wg.Wait()
+		return errs
+	}
+	for round := 0; round < 8; round++ {
+		s := hubs[0]
+		work := startTask(t, s, acceptedTask(t, s, fmt.Sprint("work", round), ""))
+		dep := startTask(t, s, acceptedTask(t, s, fmt.Sprint("dep", round), ""))
+		create := blockerCommand(work, dep, "one")
+		mutateTask(t, s, work, create)
+		close := create
+		cmd := *create.Blocker
+		close.Blocker = &cmd
+		close.Key = "owner-resolve"
+		close.Blocker.Action = "resolve"
+		other := func() error {
+			if round%2 == 0 {
+				_, err := hubs[1].RecordFleetTaskReport(dep.Owner, dep.ExecutionEndpoint, TaskReport{EventID: "done", Task: dep.Ref, Owner: dep.Owner, Generation: dep.Generation, WorkerID: dep.ExecutionOwner, Outcome: TaskSucceeded, Evidence: "dependency committed"}, time.Now())
+				return err
+			}
+			_, err := hubs[1].MutateFleetTask(work.ID, work.Owner, TaskMutation{Kind: "transfer", Key: "transfer", Generation: work.Generation, ExpectedWorker: work.ExecutionOwner, EndpointID: work.ExecutionEndpoint, RequestedAgent: "codex", ResolvedAgent: "codex", ExecutionStopped: true, Evidence: "explicit transfer"}, time.Now())
+			return err
+		}
+		errs := race(func() error { _, err := hubs[0].MutateFleetTask(work.ID, work.Owner, close, time.Now()); return err }, other)
+		if errs[1] != nil || (errs[0] != nil && !errors.Is(errs[0], ErrTaskConflict) && !errors.Is(errs[0], ErrTaskFence)) {
+			t.Fatalf("race: %v", errs)
+		}
+		got, err := s.FleetTask(work.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if round%2 == 0 {
+			closed := assertBlocker(t, s, work, "one", "resolved")
+			audit, err := s.FleetOperation(closed.EventID)
+			if err != nil || (audit.Action != "task_event" && audit.Action != "task_blocker_event") {
+				t.Fatalf("winner audit: %+v %v", audit, err)
+			}
+			var n int
+			if err = s.read.QueryRow(`SELECT COUNT(*) FROM fleet_operations WHERE action='task_blocker_event' AND task_ref=?`, work.Ref).Scan(&n); err != nil || n > 1 {
+				t.Fatalf("duplicate dependency close: %d %v", n, err)
+			}
+		} else {
+			if got.Generation != 2 || len(got.Blockers.Items) != 0 || got.Outcome != "" {
+				t.Fatalf("transfer crossed projection: %+v", got)
+			}
+			got = startBlockerGeneration(t, s, got)
+			fresh := startTask(t, s, acceptedTask(t, s, fmt.Sprint("fresh", round), ""))
+			mutateTask(t, s, got, blockerCommand(got, fresh, "one"))
+			mutateTask(t, s, dep, TaskMutation{Kind: "transition", Key: "late-dependency", State: TaskSucceeded, Evidence: "old dependency completed"})
+			assertBlocker(t, s, got, "one", "active")
+		}
+	}
+	t.Logf("fixture backend=%v: independent writers race owner resolve vs dependency completion and transfer", hubs[0].d)
 }

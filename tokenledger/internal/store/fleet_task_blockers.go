@@ -30,14 +30,15 @@ func blockerScope(t FleetTask) TaskBlockerScope {
 // result for precisely this dependency attempt. URLs, issue numbers and runtime
 // strings are not dependency events. Owner resolve/revoke always needs evidence.
 type TaskBlockerCommand struct {
-	Version    int              `json:"version"`
-	Action     string           `json:"action"`
-	BlockerID  string           `json:"blocker_id"`
-	Repo       string           `json:"repo"`
-	TicketRef  string           `json:"ticket_ref"`
-	Dependency TaskBlockerScope `json:"dependency"`
-	Evidence   string           `json:"evidence"`
-	Reason     string           `json:"reason"`
+	Version          int              `json:"version"`
+	Action           string           `json:"action"`
+	BlockerID        string           `json:"blocker_id"`
+	Repo             string           `json:"repo"`
+	TicketRef        string           `json:"ticket_ref"`
+	Dependency       TaskBlockerScope `json:"dependency"`
+	DependencyPolicy string           `json:"dependency_policy,omitempty"`
+	Evidence         string           `json:"evidence"`
+	Reason           string           `json:"reason"`
 }
 
 type TaskBlocker struct {
@@ -46,6 +47,7 @@ type TaskBlocker struct {
 	Scope            TaskBlockerScope `json:"scope"`
 	CreatedEndpoint  string           `json:"created_endpoint"`
 	Dependency       TaskBlockerScope `json:"dependency"`
+	DependencyPolicy string           `json:"dependency_policy,omitempty"`
 	State            string           `json:"state"` // active | resolved | revoked (not task outcomes)
 	CreatedAt        time.Time        `json:"created_at"`
 	ResolvedAt       *time.Time       `json:"resolved_at,omitempty"`
@@ -110,7 +112,11 @@ func blockerKey(scope TaskBlockerScope, id string) string {
 var blockerToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$`)
 
 func (s *Store) applyTaskBlockerTx(tx *sql.Tx, t FleetTask, endpoint, event string, c TaskBlockerCommand, now time.Time) error {
-	if c.Version != 1 || !blockerToken.MatchString(c.BlockerID) || strings.TrimSpace(c.Evidence) == "" || len(c.Evidence) > 8000 || strings.TrimSpace(c.Reason) == "" || len(c.Reason) > 2000 ||
+	policy := c.DependencyPolicy
+	if policy == "" {
+		policy = "success-required"
+	}
+	if (policy != "success-required" && policy != "terminal-any") || c.Version != 1 || !blockerToken.MatchString(c.BlockerID) || strings.TrimSpace(c.Evidence) == "" || len(c.Evidence) > 8000 || strings.TrimSpace(c.Reason) == "" || len(c.Reason) > 2000 ||
 		(c.Action != "create" && c.Action != "resolve" && c.Action != "revoke") {
 		return ErrTaskInvalid
 	}
@@ -153,7 +159,7 @@ func (s *Store) applyTaskBlockerTx(tx *sql.Tx, t FleetTask, endpoint, event stri
 		if count >= 64 {
 			return ErrTaskConflict
 		}
-		b = TaskBlocker{Version: 1, BlockerID: c.BlockerID, Scope: scope, CreatedEndpoint: endpoint, Dependency: c.Dependency,
+		b = TaskBlocker{Version: 1, BlockerID: c.BlockerID, Scope: scope, CreatedEndpoint: endpoint, Dependency: c.Dependency, DependencyPolicy: policy,
 			State: "active", CreatedAt: now.UTC(), CreationEvidence: c.Evidence, CreationReason: c.Reason, Evidence: c.Evidence, Reason: c.Reason, EventID: event}
 		result, _ := json.Marshal(b)
 		request, _ := json.Marshal(c)
@@ -166,7 +172,7 @@ func (s *Store) applyTaskBlockerTx(tx *sql.Tx, t FleetTask, endpoint, event stri
 		// A dependency may have completed just before registration. Its durable
 		// attempt result is already authoritative; no scan/poll or guessed event.
 		if taskTerminal(dep.State) && dep.Evidence != "" {
-			return s.closeDependencyBlockerTx(tx, b, dep, dep.AttemptID, now)
+			return s.applyDependencyBlockerTx(tx, b, dep, dep.AttemptID, now)
 		}
 		return nil
 	}
@@ -179,7 +185,7 @@ func (s *Store) applyTaskBlockerTx(tx *sql.Tx, t FleetTask, endpoint, event stri
 	if err = json.Unmarshal([]byte(raw), &b); err != nil {
 		return err
 	}
-	if b.Scope != scope || b.Dependency != c.Dependency {
+	if b.Scope != scope || b.Dependency != c.Dependency || b.DependencyPolicy != policy {
 		return ErrTaskFence
 	}
 	if b.State != "active" {
@@ -190,18 +196,25 @@ func (s *Store) applyTaskBlockerTx(tx *sql.Tx, t FleetTask, endpoint, event stri
 		b.State = "revoked"
 	}
 	b.Evidence, b.Reason, b.EventID = c.Evidence, c.Reason, event
-	return saveClosedBlockerTx(tx, b, now)
+	return saveTaskBlockerTx(tx, b, now)
 }
 
-func saveClosedBlockerTx(tx *sql.Tx, b TaskBlocker, now time.Time) error {
+func saveTaskBlockerTx(tx *sql.Tx, b TaskBlocker, now time.Time) error {
 	ts := now.UTC()
 	if b.State == "resolved" {
 		b.ResolvedAt = &ts
-	} else {
+	} else if b.State == "revoked" {
 		b.RevokedAt = &ts
 	}
 	raw, _ := json.Marshal(b)
-	_, err := tx.Exec(`UPDATE fleet_operations SET status = ?, result = ?, updated = ? WHERE id = ? AND action = 'task_blocker' AND status = 'active'`, b.State, string(raw), ts.Format(rfc), blockerJournalID(b.Scope.Owner, blockerKey(b.Scope, b.BlockerID)))
+	res, err := tx.Exec(`UPDATE fleet_operations SET status = ?, result = ?, updated = ? WHERE id = ? AND action = 'task_blocker' AND status = 'active'`, b.State, string(raw), ts.Format(rfc), blockerJournalID(b.Scope.Owner, blockerKey(b.Scope, b.BlockerID)))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return ErrTaskConflict
+	}
 	return err
 }
 
@@ -221,14 +234,14 @@ func (s *Store) resolveTaskDependenciesTx(tx *sql.Tx, dep FleetTask, event strin
 		return err
 	}
 	for _, b := range items {
-		if err = s.closeDependencyBlockerTx(tx, b, dep, event, now); err != nil {
+		if err = s.applyDependencyBlockerTx(tx, b, dep, event, now); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) closeDependencyBlockerTx(tx *sql.Tx, b TaskBlocker, dep FleetTask, event string, now time.Time) error {
+func (s *Store) applyDependencyBlockerTx(tx *sql.Tx, b TaskBlocker, dep FleetTask, event string, now time.Time) error {
 	if b.State != "active" || b.Dependency != blockerScope(dep) {
 		return nil
 	}
@@ -239,14 +252,16 @@ func (s *Store) closeDependencyBlockerTx(tx *sql.Tx, b TaskBlocker, dep FleetTas
 	if blockerScope(t) != b.Scope || t.ExecutionEndpoint != b.CreatedEndpoint || taskTerminal(t.State) || t.CancelRequest != "" {
 		return nil
 	}
-	b.State = "revoked"
+	b.State = "active"
 	if dep.Outcome == TaskSucceeded {
 		b.State = "resolved"
+	} else if b.DependencyPolicy == "terminal-any" {
+		b.State = "revoked"
 	}
 	b.Evidence, b.Reason = dep.Evidence, "dependency:"+dep.Outcome
 	key := blockerKey(b.Scope, b.BlockerID) + ":dependency:" + event
 	b.EventID = blockerJournalID(t.Owner, key)
-	if err = saveClosedBlockerTx(tx, b, now); err != nil {
+	if err = saveTaskBlockerTx(tx, b, now); err != nil {
 		return err
 	}
 	// Retain both the triggering journal event and the resulting blocker in an
@@ -258,7 +273,7 @@ func (s *Store) closeDependencyBlockerTx(tx *sql.Tx, b TaskBlocker, dep FleetTas
 	stamp := now.UTC()
 	if b.State == "resolved" {
 		b.ResolvedAt = &stamp
-	} else {
+	} else if b.State == "revoked" {
 		b.RevokedAt = &stamp
 	}
 	result, _ := json.Marshal(b)
