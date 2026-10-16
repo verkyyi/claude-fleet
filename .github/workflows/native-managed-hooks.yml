@@ -5,6 +5,8 @@ on:
     paths:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-native-local-runtime-selftest.py'
+      - 'bin/fleet-agent-defaults.py'
+      - 'conf/agent-defaults/codex/config.default.toml'
       - 'bin/fleet-codex-rpc.py'
       - 'bin/fleet-hooks-emit.sh'
       - 'hooks/settings-hooks.json'
@@ -49,7 +51,7 @@ jobs:
       - name: Verify local TUI runtime and worktree ownership without credentials
         if: matrix.mode == 'exec'
         run: |
-          timeout 300 python3 bin/fleet-native-local-runtime-selftest.py --launch-flags \
+          timeout 330 python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --native-config \
             --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
