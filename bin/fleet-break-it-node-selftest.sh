@@ -814,6 +814,10 @@ drill_login_remove_managed() {
   _forget_unset
   WHAT="删托管账号前先 account forget：守护停掉它降权跑的任务、不再拉起，accounts.json / logins env 摘掉，别的账号不动"
 }
+_forget_task_running() {
+  kill -0 "$1" 2>/dev/null && ! ps -o stat= -p "$1" 2>/dev/null | grep -q '^ *Z'
+}
+
 # linux-remove-task-running (#3379): `login remove <X> --host <linux machine>`
 # failed at [1c] — the daemon dropped the login, but its fleet-base-sync.sh sat
 # in a `git fetch` hung on the network, and `account forget` only WAITED
@@ -844,7 +848,7 @@ drill_linux_remove_task_running() {
     || { WHY="account forget failed on a hung task: $(tail -1 "$sb/forget.out")"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   # ended is ended: a killed run waits as a zombie for the daemon's tick to reap
   # it, and forget no longer waits for that (#4044)
-  kill -0 "$tpid" 2>/dev/null && ! ps -o stat= -p "$tpid" 2>/dev/null | grep -q '^ *Z' \
+  _forget_task_running "$tpid" \
     && { WHY="alice's hung task still runs after forget"; kill -9 -- -"$tpid" 2>/dev/null; _forget_unset; return 1; }
   grep -q 'sent KILL' "$sb/forget.out" || { WHY="forget never said it killed the run: $(cat "$sb/forget.out")"; _forget_unset; return 1; }
   python3 -c 'import json,sys; sys.exit(0 if "alice" not in json.load(open(sys.argv[1])) else 1)' "$sb/db/accounts.json" \

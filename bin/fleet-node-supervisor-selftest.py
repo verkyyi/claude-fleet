@@ -3149,6 +3149,61 @@ class Z_ForgetZombie(unittest.TestCase):
     """A run that ended but is not reaped yet (stat Z) is not «running»: a
     recycle's forget never waits for the daemon's tick to reap it (#4044)."""
 
+    @staticmethod
+    def drill_probe():
+        # Exercise the assertion used by linux-remove-task-running, independently
+        # of the supervisor's own liveness reader (bin/fleet-break-it-node-selftest.sh).
+        with open(os.path.join(os.path.dirname(__file__), "fleet-break-it-node-selftest.sh")) as f:
+            body = f.read().split("_forget_task_running() {", 1)[1].split("\n}", 1)[0]
+        return "set -uo pipefail\n_forget_task_running() {" + body + "\n}\n"
+
+    def test_drill_reaped_between_reads(self):
+        """#4448: reap a real child AFTER kill(0) but BEFORE ps reads it."""
+        p = subprocess.Popen(["sleep", "30"])
+        probe = subprocess.Popen(["bash", "-c", self.drill_probe() + '''
+ps() {
+  printf 'before-ps\\n'
+  read -r -t 5 proceed || return 2
+  command ps "$@"
+}
+_forget_task_running "$1"
+''', "probe", str(p.pid)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, universal_newlines=True)
+        try:
+            self.assertEqual(probe.stdout.readline(), "before-ps\n")
+            # kill(0) succeeded for this exact pid. Reap it before allowing the
+            # real ps to run: no scheduling luck, retries or added sleep.
+            p.kill()
+            p.wait(timeout=5)
+            out, err = probe.communicate("continue\n", timeout=5)
+            self.assertEqual(probe.returncode, 1, (out, err, "a reaped task is not running"))
+        finally:
+            p.kill()
+            p.wait()
+            if probe.poll() is None:
+                probe.kill()
+            probe.communicate()
+
+    def test_drill_live_zombie_and_gone(self):
+        p = subprocess.Popen(["sleep", "30"])
+
+        def check(want, ps_override=""):
+            r = subprocess.run(["bash", "-c", self.drill_probe() + ps_override
+                                + '\n_forget_task_running "$1"', "probe", str(p.pid)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual(r.returncode, want, r.stderr)
+        try:
+            check(0)                           # a live task still fails the drill
+            check(0, "ps() { return 1; }")    # an unreadable ps never proves exit
+            p.kill()
+            self.assertTrue(until(5, lambda: fns._zombies([p.pid]) == {p.pid}))
+            check(1)                           # exited, awaiting the parent's reap
+            p.wait(timeout=5)
+            check(1)                           # already gone before the first read
+        finally:
+            p.kill()
+            p.wait()
+
     def test_zombie_is_not_running(self):
         p = subprocess.Popen(["sleep", "30"])
         try:
