@@ -36,6 +36,23 @@ def audit(fixture, output):
                 shutil.copy2(source, root / 'bin' / source.name)
         (root / 'bin/fleet-client-where.sh').write_text(
             '#!/bin/sh\nprintf \'{"state":"none"}\\n\'\n')
+        # Record every protocol command in the sandbox, including the initial
+        # argv command list. This adds no process or timing/behaviour override.
+        transport = root / 'bin/fleet-render-watch.py'
+        source = transport.read_text()
+        source = source.replace('        self.proc = subprocess.Popen(args,',
+            "        initial_commands = [[]]\n"
+            "        for arg in args[4:]:\n"
+            "            if arg == ';': initial_commands.append([])\n"
+            "            else: initial_commands[-1].append(arg)\n"
+            "        for cmd in initial_commands:\n"
+            "            print('spinner-protocol ' + json.dumps(cmd), file=sys.stderr, flush=True)\n"
+            '        self.proc = subprocess.Popen(args,')
+        source = source.replace("        line = ' ; '.join",
+            "        for cmd in commands:\n"
+            "            print('spinner-protocol ' + json.dumps(cmd), file=sys.stderr, flush=True)\n"
+            "        line = ' ; '.join")
+        transport.write_text(source)
         fifo = root / 'execs'
         os.mkfifo(fifo)
         fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
@@ -109,6 +126,7 @@ def audit(fixture, output):
             os.set_blocking(proc.stderr.fileno(), False)
             commands = [(0, proc.pid, os.getpid(), 'spinner')]
             checks = collections.defaultdict(list)
+            protocol = []
             pending = {'exec': b'', 'trace': b''}
             with selectors.DefaultSelector() as selector, (output / (fixture + '-trace.txt')).open('wb') as trace:
                 selector.register(fd, selectors.EVENT_READ, 'exec')
@@ -130,6 +148,8 @@ def audit(fixture, output):
                                 pid, ppid, name = line.split(' ', 2)
                                 commands.append((elapsed, int(pid), int(ppid), name))
                             else:
+                                if line.startswith('spinner-protocol '):
+                                    protocol.append((elapsed, json.loads(line[len('spinner-protocol '):])))
                                 match = re.match(r'^(?:\+\d* 0? |spinner-check [0-9.]+ )(stuck_check|degen_check|needs_check|hb_stamp|daemon_watch)(?: |$)', line)
                                 if match:
                                     checks[match[1]].append(elapsed)
@@ -140,6 +160,15 @@ def audit(fixture, output):
             unique = {}
             for row in commands:
                 unique.setdefault(row[1], row)
+            by_protocol = collections.Counter(cmd[0] for _, cmd in protocol)
+            queries = {name: count for name, count in by_protocol.items()
+                       if name.startswith(('list-', 'show-', 'display-', 'capture-'))}
+            categories = dict(read_query=sum(queries.values()),
+                              subscription=by_protocol['refresh-client'],
+                              connection=by_protocol['attach-session'],
+                              write=sum(count for name, count in by_protocol.items()
+                                        if name not in queries and name not in ('refresh-client', 'attach-session')))
+            assert categories['connection'] == 1 and categories['subscription'] >= 1, 'protocol instrumentation missing'
             report = dict(fixture=fixture, seconds=seconds, external_processes=len(unique),
                           by_command=dict(collections.Counter(row[3] for row in unique.values())),
                           checks_seconds=dict(checks), commands=commands, final=final,
@@ -147,8 +176,10 @@ def audit(fixture, output):
                                         heartbeat=20, daemon_watch=30),
                           seams='private HOME/socket; offline lease; no daemon stamps; no maintenance overrides',
                           count_scope=__doc__)
+            report.update(protocol_commands=protocol, protocol_by_command=dict(by_protocol),
+                          protocol_categories=categories, read_query=queries)
             (output / (fixture + '.json')).write_text(json.dumps(report, indent=2))
-            print(json.dumps({k: v for k, v in report.items() if k not in ('commands', 'count_scope')}, indent=2), flush=True)
+            print(json.dumps({k: v for k, v in report.items() if k not in ('commands', 'protocol_commands', 'count_scope')}, indent=2), flush=True)
             # A cheap spinner which stopped maintaining the fleet must red too.
             origin = checks['hb_stamp'][0]
             for name, expected in dict(stuck_check=[10, 20, 30, 40, 50],
@@ -183,3 +214,6 @@ if __name__ == '__main__':
     counts = {fixture: audit(fixture, output) for fixture in ('idle', 'maintenance')}
     print('Evidence:', output, flush=True)
     assert all(count <= 5 for count in counts.values()), 'complete default spinner budget <=5/60s FAILED: %s' % counts
+    queries = {fixture: json.loads((output / (fixture + '.json')).read_text())['protocol_categories']['read_query']
+               for fixture in counts}
+    assert all(count <= 60 for count in queries.values()), 'complete default protocol read/query <=60/60s FAILED: %s' % queries

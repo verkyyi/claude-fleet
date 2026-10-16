@@ -86,6 +86,23 @@ def main():
             assert tm('one', 'show-environment', '-g', 'DISPLAY') == 'DISPLAY=keep-server-environment'
             assert not tm('one', 'display-message', '-p', '#{@human_attach}'), 'internal attach woke a sleeper'
             assert not w.attached(by_path, read), 'internal control consumers must not be viewers'
+            observer = w.Observer()
+            reads = []
+            for c in (c1, c2):
+                command = c.command
+                def counted(*args, command=command):
+                    reads.append(args)
+                    return command(*args)
+                c.command = counted
+            try:
+                for _ in range(10):
+                    observer.wait([c1, c2], time.monotonic() + .01)
+                    assert not observer.watched([c1, c2])
+                client_reads = sum(args[0] == 'list-clients' for args in reads)
+                assert client_reads <= 2, ('unchanged clients queried repeatedly', client_reads)
+            finally:
+                observer.close()
+            print('PASS idle resident visibility reuses client rows per connection', flush=True)
             literal = "a ' ; $x"
             # Older tmux versions visually escape $x in command output. Match
             # the native CLI's rendering while still checking quoting and the
@@ -98,9 +115,15 @@ def main():
             # Human control mode is still a watcher, even with the same flags.
             human = subprocess.Popen(['tmux', '-L', 'two', '-C', 'attach', '-E', '-f', 'no-output,ignore-size', '-t', 'two'],
                                      env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+            def observed():
+                observer.wait([c1, c2], time.monotonic())
+                return observer.watched([c1, c2])
+            until(observed, 1)
             until(lambda: w.attached(by_path, read))
             assert tm('two', 'display-message', '-p', '#{@human_attach}') == '1'
             human.stdin.close(); human.wait(timeout=2); human = None
+            until(lambda: not observed(), 1)
+            observer.close()
             assert not w.attached(by_path, read)
             print('PASS multiple sockets/consumers; exact internal identity; human control viewer', flush=True)
             # Legacy CLI consumers must also ignore internal clients. Both
