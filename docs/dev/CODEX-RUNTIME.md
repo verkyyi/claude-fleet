@@ -124,6 +124,11 @@ worktree and transcript binding, native idle state, goals, child agents, tools,
 hook trust, idle grace and empty input are still verified before hibernation.
 Missing native completion evidence refuses sleep rather than guessing.
 
+State hooks submit their related tmux option writes in one command queue. Missing
+optional evidence/detail fields do not stop later writes; non-Stop events still
+invalidate old completion evidence, and Stop still evaluates all wait reasons.
+The hook's state label is not proof that the native turn has completed.
+
 ## Startup and warm scratch panes
 
 The terminal panel's new-task row opens a scratch with the typed text as an
@@ -140,6 +145,11 @@ The panel forwards its resolved agent even when it matches the default, avoiding
 a second selection lookup after Enter. Node-side policy checks still apply.
 Claims still check repository, provider, account home, size and age; a missing
 entry falls back to cold startup. This changes reuse, not pool capacity.
+
+While a launch is pending, the panel checks its result at most every 50 ms within
+the existing input/redraw deadline. Idle polling and redraw frequency are
+unchanged. The headless draft sender skips loading unused display translations;
+interactive composition remains localized.
 
 Measure panel acceptance to **draft ready**, then deliberate Enter to first token
 and complete reply separately. Human editing time is not runtime latency. A

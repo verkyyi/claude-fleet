@@ -445,33 +445,36 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
   [ "${CCQUOTA_FLEET:-0}" = 1 ] && _hubprev=$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)
   # A tool, new prompt, or needs-attention event invalidates the previous Stop.
   # In particular, a typing hold must not let a later stale `done` stamp reuse it.
-  if [ "$sem" != "done" ]; then
-    tmux set-window-option -u -t "$TMUX_PANE" @agent_transfer_ready 2>/dev/null
-    tmux set-window-option -u -t "$TMUX_PANE" @sleep_evidence 2>/dev/null
-  fi
-  tmux set-window-option -t "$TMUX_PANE" @claude_state "${wstate:-$sem}" 2>/dev/null
+  _write_state() {
+    set --
+    if [ "$sem" != "done" ]; then
+      set -- set-window-option -qu -t "$TMUX_PANE" @agent_transfer_ready \; \
+             set-window-option -qu -t "$TMUX_PANE" @sleep_evidence \;
+    fi
+    set -- "$@" set-window-option -t "$TMUX_PANE" @claude_state "${wstate:-$sem}"
   # …and who said it (issue #2537): the label the rule above ranks.
-  [ -n "$keep_src" ] || tmux set-window-option -t "$TMUX_PANE" @claude_state_src "$src" 2>/dev/null
+    [ -n "$keep_src" ] || set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_src "$src"
   # the `needs` subtype, ALWAYS written beside the state it qualifies (issue #640):
   # a working/done write clears it, so no reader can ever pair a fresh state with a
   # stale reason.
   # …and its question (issue #1951), in the same call: unset when there is none,
   # so a window that never asked carries exactly the options it always did.
-  if [ -n "$detail" ]; then
-    tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
-         set-window-option -t "$TMUX_PANE" @claude_needs_detail "$detail" 2>/dev/null
-  else
-    tmux set-window-option -t "$TMUX_PANE" @claude_needs "$sub" \; \
-         set-window-option -u -t "$TMUX_PANE" @claude_needs_detail 2>/dev/null
-  fi
+    set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_needs "$sub"
+    if [ -n "$detail" ]; then
+      set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_needs_detail "$detail"
+    else
+      set -- "$@" \; set-window-option -qu -t "$TMUX_PANE" @claude_needs_detail
+    fi
   # …and WHY a Stop wrote `looping` (issue #1370) beside it; only a Stop decides it,
   # and a window that waits on nothing carries no option at all.
-  if [ "$sem" = 'done' ]; then
-    if [ -n "$wwait" ]; then tmux set-window-option -t "$TMUX_PANE" @claude_wait "$wwait" 2>/dev/null
-    elif [ -n "$wprev" ]; then tmux set-window-option -u -t "$TMUX_PANE" @claude_wait 2>/dev/null; fi
-  fi
+    if [ "$sem" = 'done' ]; then
+      if [ -n "$wwait" ]; then set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_wait "$wwait"
+      elif [ -n "$wprev" ]; then set -- "$@" \; set-window-option -qu -t "$TMUX_PANE" @claude_wait; fi
+    fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).
-  tmux set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
+    tmux "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
+  }
+  _write_state
   command -v fleet_idle_activity >/dev/null 2>&1 && fleet_idle_activity
   command -v fleet_idle_window_activity >/dev/null 2>&1 && fleet_idle_window_activity
   # Wake the spinner (issue #887). It re-reads a QUIET fleet's windows only ~1/s;

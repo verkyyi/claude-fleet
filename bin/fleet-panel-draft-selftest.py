@@ -30,6 +30,74 @@ dispatch = module("fleet-quick-dispatch")
 
 
 class PanelDraftTests(unittest.TestCase):
+    def test_headless_compose_does_not_load_unused_display_strings(self):
+        with patch.object(compose, "load_text", side_effect=AssertionError("headless send has no display strings")), \
+                patch.object(compose, "send", return_value=4) as send:
+            self.assertEqual(compose.main(["--send", "draft.json", "--repo", "acme/web", "--agent", "codex"]), 4)
+        send.assert_called_once_with("draft.json", "acme/web", "", "", "", "codex")
+
+    def test_interactive_compose_keeps_localized_display_strings(self):
+        with patch.object(compose, "load_text", return_value={"compose_empty": "localized"}) as load, \
+                patch.object(compose.curses, "wrapper") as wrapper:
+            self.assertEqual(compose.main([]), 0)
+        load.assert_called_once_with()
+        wrapper.assert_called_once_with(compose.ui, "")
+        self.assertEqual(compose.TEXT["compose_empty"], "localized")
+
+    def test_idle_panel_keeps_its_existing_input_wait(self):
+        screen = unittest.mock.Mock()
+        screen.get_wch.return_value = "x"
+        self.assertEqual(fleet_view.panel_key(screen, 1000), "x")
+        screen.timeout.assert_called_once_with(1000)
+        screen.get_wch.assert_called_once_with()
+
+    def test_pending_launch_checks_completion_without_redrawing(self):
+        now, completed, waits = [0.0], [], []
+        screen = unittest.mock.Mock()
+        screen.timeout.side_effect = waits.append
+
+        def read():
+            now[0] += waits[-1] / 1000
+            completed.append((0, "opened"))
+            raise fleet_view.curses.error()
+
+        screen.get_wch.side_effect = read
+        with patch.object(fleet_view.time, "monotonic", side_effect=lambda: now[0]):
+            with self.assertRaises(fleet_view.curses.error):
+                fleet_view.panel_key(screen, 200, completed)
+        self.assertEqual(waits, [50])
+        self.assertEqual(completed, [(0, "opened")])
+        screen.refresh.assert_not_called()
+
+    def test_pending_launch_preserves_redraw_deadline_and_keys(self):
+        now, waits = [0.0], []
+        screen = unittest.mock.Mock()
+        screen.timeout.side_effect = waits.append
+
+        def read():
+            now[0] += waits[-1] / 1000
+            raise fleet_view.curses.error()
+
+        screen.get_wch.side_effect = read
+        with patch.object(fleet_view.time, "monotonic", side_effect=lambda: now[0]):
+            with self.assertRaises(fleet_view.curses.error):
+                fleet_view.panel_key(screen, 200, [])
+        self.assertGreaterEqual(now[0], 0.2)
+        self.assertLessEqual(now[0], 0.201)
+        self.assertTrue(all(0 < wait <= 50 for wait in waits))
+        for key in ("\x1b", "x", fleet_view.curses.KEY_RESIZE):
+            screen.get_wch.side_effect = None
+            screen.get_wch.return_value = key
+            self.assertEqual(fleet_view.panel_key(screen, 200, []), key)
+
+    def test_completed_launch_does_not_wait_or_consume_input(self):
+        screen = unittest.mock.Mock()
+        for result in ((0, "opened"), (4, "refused")):
+            with self.assertRaises(fleet_view.curses.error):
+                fleet_view.panel_key(screen, 200, [result])
+        screen.timeout.assert_not_called()
+        screen.get_wch.assert_not_called()
+
     def test_dispatch_reuses_canonical_focus_with_receipt_and_client(self):
         for focus_status in (0, 2, 3, 4):
             with self.subTest(focus_status=focus_status), tempfile.TemporaryDirectory() as directory, \

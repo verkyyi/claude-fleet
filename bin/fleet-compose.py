@@ -1130,7 +1130,8 @@ def clip(text, width):
 
 def main(argv):
     global TEXT
-    TEXT = load_text()
+    if argv[:1] != ["--send"]:
+        TEXT = load_text()
     if argv[:1] in (["--send"], ["payload"]) and len(argv) >= 2:
         opts = {"--repo": "", "--node": "", "--agent": "", "--reap": ""}
         mode, chosen = "", 0

@@ -286,7 +286,7 @@ out="$(HOOK_ENTRY=sdk-cli GPCT=60 FAKE_TRANSFER_UNTIL=9999999999 FAKE_TRANSFER_R
 [ -s "$SETOPT_LOG" ] && fail 'a headless child must not release a pending transfer'
 for ev in working busy needs; do
   run_state "$ev" >/dev/null
-  grep -q -- '-u .*@agent_transfer_ready' "$SETOPT_LOG" || fail 'new activity must invalidate the previous transfer Stop'
+  grep -q -- 'set-window-option -[qu]*u[qu]* -t %9 @agent_transfer_ready' "$SETOPT_LOG" || fail 'new activity must invalidate the previous transfer Stop'
 done
 printf 'selftest: AGENT-TRANSFER legs PASS (clean Stop / expired / incomplete / needs / disabled auto-cycle / headless)\n' >&2
 

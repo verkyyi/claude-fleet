@@ -2878,6 +2878,23 @@ class Line:
             self.text += ch
 
 
+def panel_key(screen, timeout_ms, completed=None):
+    if completed is None:
+        screen.timeout(timeout_ms)
+        return screen.get_wch()
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        remaining = deadline - time.monotonic()
+        if completed or remaining <= 0:
+            raise curses.error()
+        screen.timeout(min(50, max(1, int(remaining * 1000))))
+        try:
+            return screen.get_wch()
+        except curses.error:
+            if completed or time.monotonic() >= deadline:
+                raise
+
+
 # --- the popup -------------------------------------------------------------------------
 
 # --- the keys issue #3328 took away (EPIC #3178 ⑤) — compat-1v: 下一批删 ----------------------
@@ -3240,10 +3257,10 @@ def popup(screen, qo, vid, client, forward=""):
         if not clock.written:
             clock.mark("frame")
             clock.done()
-        screen.timeout(min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
-                           max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000))
+        timeout_ms = min(heal.timeout(False) or 1000, fresh.wait_ms(), 200 if busy or not bolt["ready"] else 1000,
+                         max(50, int((msg_until - time.time()) * 1000)) if msg_until else 1000)
         try:
-            ch = screen.get_wch()
+            ch = panel_key(screen, timeout_ms, job if busy else None)
         except curses.error:
             continue
         msg = ""
