@@ -278,8 +278,9 @@ C locale 回归覆盖竖线、引号、反斜线、JSON 转义及空字段。取
 `--raw-entrypoint` 再把创建一端换成面板实际调用的 `dash-raw-session.sh --native-worktree`：准入、开窗、
 草稿投递都走真实脚本，不再由夹具代建窗口或代按键。本机 60 项检查通过。这条链暴露了两处问题：
 启动命令为 `FLEET_AUTHORITY_START` 加引号时调用了不存在的 `shq`，预留凭据丢失，supervisor 只好再申请一次；
-现在就地转义，测试断言整条链只有创建与恢复各一次预留、准入零错误。另一处是 `scratch-prefill.py` 只认
-Codex 的输入归属，原生 Claude 窗口的草稿永远等不到投递；现在按窗口回执核对 Claude 进程身份与 pane 祖先后投递。
+现在就地转义，测试断言整条链只有创建与恢复各一次预留、准入零错误。另一处是草稿投递：7501 relay 下 Claude pane
+的进程名是 shell，`scratch-prefill.py` 认不出输入归属，草稿永远等不到投递；#4620 改为采信 Agent 自己的
+7501 idle（同时代表归属与输入框就绪），原生创建路径无需另写一套回执核对。
 仍是 loopback 准入，不代表面板到窗口 48 秒的提速已经达成。
 
 ### SessionStart 的目录时序与恢复边界
