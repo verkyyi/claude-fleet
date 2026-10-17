@@ -50,6 +50,7 @@ def main():
     client_type = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-rpc.py'))['Client']
     stop = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-native-local-runtime-selftest.py'))['stop']
     checks, requests, observations, commands, tool_outputs = [], [], {}, {}, {}
+    failures = []
 
     def check(condition, message):
         if not condition:
@@ -87,6 +88,13 @@ def main():
             except FileNotFoundError:
                 result[process.name] = {'absent': True}
         return result
+
+    def record_exit(predicate, message, terminals):
+        try:
+            wait_for(predicate, message)
+        except AssertionError:
+            failures.append(message)
+            observations[message] = process_states(terminals)
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -221,15 +229,18 @@ def main():
                     observations['termination'] = {'response': result, 'remaining': observer.call(
                         'thread/backgroundTerminals/list', {'threadId': identifiers[0]})}
                     check(result['terminated'] is True, 'native exact-thread terminal termination succeeds')
-                    wait_for(lambda: not alive(terminals[0]['fixturePid']), 'terminated first command exits')
+                    record_exit(lambda: not alive(terminals[0]['fixturePid']), 'terminated first command exits', terminals)
                     check(alive(terminals[1]['fixturePid']) and backend.poll() is None,
                           'exact-thread termination leaves the sibling command and backend alive')
-                    observer.call('thread/backgroundTerminals/clean', {'threadId': identifiers[2]})
-                    wait_for(lambda: not alive(terminals[2]['fixturePid']), 'native clean stops the exact third-thread command')
+                    observations['clean_response'] = {'response': observer.call('thread/backgroundTerminals/clean',
+                        {'threadId': identifiers[2]})}
+                    record_exit(lambda: not alive(terminals[2]['fixturePid']),
+                                'native clean stops the exact third-thread command', terminals)
                     check(background(identifiers[2]) == [] and alive(terminals[1]['fixturePid']),
                           'native clean leaves no target terminals and preserves the sibling command')
-                    observer.call('thread/archive', {'threadId': identifiers[1]})
-                    wait_for(lambda: not alive(terminals[1]['fixturePid']), 'native archive stops the second thread background command')
+                    observations['archive'] = {'response': observer.call('thread/archive', {'threadId': identifiers[1]})}
+                    record_exit(lambda: not alive(terminals[1]['fixturePid']),
+                                'native archive stops the second thread background command', terminals)
                     check(backend.poll() is None, 'archiving one thread does not stop the shared backend')
                     check(identifiers[1] not in observer.call('thread/loaded/list', {})['data'],
                           'archived target is no longer loaded')
@@ -245,7 +256,7 @@ def main():
                     observer.call('thread/unarchive', {'threadId': identifiers[1]})
                     restored = observer.call('thread/resume', {'threadId': identifiers[1]})['thread']
                     check(restored['id'] == identifiers[1] and background(identifiers[1]) == [],
-                          'native resume retains thread identity without resurrecting its terminated command')
+                          'native resume retains thread identity with an empty terminal registry')
                     check(all(not request['authorization'] and request['path'] == '/v1/responses' for request in requests),
                           'all model traffic stays on the credential-free loopback fixture')
                 except BaseException:
@@ -259,14 +270,11 @@ def main():
                     if observer is not None:
                         observer.close()
                     stop(backend)
-                    try:
-                        wait_for(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
-                                 'all observed fixture commands exit during cleanup')
-                    except AssertionError:
-                        print(json.dumps({'after_backend_cleanup': process_states(terminals)}), file=sys.stderr)
-                        raise
-            print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
+                    record_exit(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
+                                'all observed fixture commands exit during cleanup', terminals)
+            print(json.dumps({'version': version, 'checks': checks, 'failures': failures, 'observations': observations,
                               'scope': 'native RPC and inert commands only; not subagent, TUI, admission or full-MCP acceptance'}, indent=2))
+            return 1 if failures else 0
     finally:
         endpoint.shutdown()
         endpoint.server_close()
@@ -274,4 +282,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
