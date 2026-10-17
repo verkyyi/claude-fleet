@@ -89,7 +89,7 @@ export PATH="$WORK/bin:$PATH"
 export TMPDIR="$WORK"                       # FLEET_C → $WORK/.claude-dash
 export FLEET_CONF_DIR="$WORK/conf"
 export FLEET_ACCOUNTS_DIR="$WORK/accounts"  # fleet-account.sh reads this
-export CLASSIFY_SETTLE=0
+export CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku
 unset CLASSIFY_SOCK                         # force the bare-`tmux` (PATH shim) path
 unset CLAUDE_CODE_OAUTH_TOKEN
 

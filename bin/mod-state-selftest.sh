@@ -63,7 +63,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
 export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" CLASSIFY_SETTLE=0
-unset CLASSIFY_SOCK CLASSIFY_BACKEND FLEET_MOD FLEET_MOD_ALIVE_SECS CLAUDE_CODE_ENTRYPOINT TMUX TMUX_PANE
+unset CLASSIFY_SOCK FLEET_MOD FLEET_MOD_ALIVE_SECS CLAUDE_CODE_ENTRYPOINT TMUX TMUX_PANE
+export CLASSIFY_BACKEND=haiku
 
 tmux -f /dev/null new-session -d -s fleet-t -x 140 -y 40 || fail "could not start isolated tmux server"
 ww="$(tmux display-message -p '#{window_id}')"

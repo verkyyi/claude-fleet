@@ -30,10 +30,10 @@ args = sys.argv[2:]
 if args and (len(args) != 2 or args[0] != "--inject-key" or args[1] not in keys):
     sys.exit("usage: fleet-default-audit-selftest.sh [--inject-key effortLevel|outputStyle|theme|tui]")
 
-# Reviewed core hooks, not a dynamically generated allowlist. A new registration
-# must be classified before it can enter the default. where/refocus/worker seed
+# Reviewed default hooks, including the disabled classifier compatibility entry.
+# A new registration must be classified before entering the default. where/refocus/worker seed
 # are explicit core exceptions; ordinary-session whats-new is deliberately absent.
-core_hooks = {
+default_hooks = {
     "set-claude-state.sh", "bash-guard.py", "base-readonly-guard.py",
     "artifact-guard.py", "agent-guard.py", "fleet_loop_mark.py",
     "fleet-codex-session.py", "classify-hook.sh", "handoff-latch-reset-hook.sh",
@@ -51,7 +51,7 @@ def unexpected_hooks(table):
         # The installed client wrapper is plumbing, not a second hook.
         paths = [Path(p).name for p in shlex.split(command)
                  if p.endswith((".sh", ".py")) and Path(p).name != "fleet-hook-run.sh"]
-        if h.get("type") != "command" or len(paths) != 1 or paths[0] not in core_hooks:
+        if h.get("type") != "command" or len(paths) != 1 or paths[0] not in default_hooks:
             bad.add(paths[0] if len(paths) == 1 else command or json.dumps(h, sort_keys=True))
     return bad
 

@@ -325,7 +325,11 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_ROTATE_LEASE_TTL=900
 
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
-# ON by default, GLOBALLY. bin/classify-sessions.sh reads a pane and answers in one
+# Screen classification is opt-in: CLASSIFY_BACKEND defaults to off; explicit
+# haiku, jev or shadow retains the legacy model-backed path. Existing settings
+# are preserved. Native state and explicit waits do not require classification.
+#CLASSIFY_BACKEND=off
+# ON by default for explicitly enabled helpers, GLOBALLY. bin/classify-sessions.sh reads a pane and answers in one
 # word (the dash summarizer that shared this flag retired in issue #535). Left unflagged, EVERY such call boots the
 # operator's whole MCP set — 4+ node children, the remote connectors, and a cold `rg`
 # scan: measured at 5.2s and up to 517MB RSS, on every Stop hook in every window. They
