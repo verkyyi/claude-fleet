@@ -98,28 +98,176 @@ def project(snapshot, expected=None, now=None):
     return s
 
 
+# Codex's queue extension starts a queued user message with the core's
+# start_turn_if_idle under a per-thread dispatch lock (refusing an active or
+# pending turn), persists each item with its clientUserMessageId, and stamps
+# that id on the accepted turn's userMessage item (#4617). Verified on 0.162.1.
+CODEX_ACCEPT_MIN = (0, 162)
+CODEX_NOT_IDLE = "thread already has an active or pending turn"
+CODEX_NOT_FOUND = "queued submission not found"
+RECEIPT_PAGES = 20
+RECEIPT_PAGE = 50
+
+
 def idle_accept_capability(provider):
     """This adapter's support, not a live probe or an upstream version guess.
 
-    Neither supported native transport has a verified idle compare-and-accept
-    operation. Never infer one from turn/steer's *active* expectedTurnId, a
-    message ID, a successful read, or a peer frame write. New native versions
-    remain unavailable until their acceptance protocol is implemented/tested.
+    Codex: thread/queue/start is the native start-if-idle; clientUserMessageId
+    is the receipt, readable again after a disconnect. Claude has no native
+    conditional accept reachable from outside the session (#4617): unavailable.
+    Never infer one from turn/start, turn/steer's *active* expectedTurnId, a
+    successful read, or a peer frame write.
     """
     known = isinstance(provider, str) and provider in ("codex", "claude")
+    if provider == "codex":
+        return dict(version=1, name="idle-accept", provider="codex", state="available",
+                    native_method="thread/queue/start", reason="",
+                    support="native_start_if_idle_and_client_message_receipt",
+                    fence=dict(idle="native", turn="precheck"),
+                    min_native_version="%d.%d" % CODEX_ACCEPT_MIN)
     return dict(version=1, name="idle-accept", provider=provider if known else None,
                 state="unavailable", native_method=None,
                 reason="native_precondition_unavailable" if known else "unsupported_provider",
                 support="native_atomic_precondition_and_receipt_required")
 
 
-def accept_if_idle(pane, expected, delivery_id, text, socket=""):
-    """Bounded fail-closed entry for conditional controller input (#4524).
+def _accept_dir():
+    conf = Path(os.environ.get("FLEET_CONF_DIR", str(Path.home() / ".config/claude-fleet")))
+    d = conf / "global/idle-accept"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d
 
-    Currently NO provider is supported: no transport, reread, queue, receipt or
-    ledger mutation occurs. request_identity is only the caller's claim, never
-    an acknowledgement. The consumer retains its existing pending/uncertain
-    delivery record; this result cannot clear an earlier uncertain attempt.
+
+def _journal_write(path, record):
+    tmp = path.with_name("." + path.name + ".tmp")
+    with tmp.open("w") as f:
+        json.dump(record, f, separators=(",", ":"))
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
+
+
+def _prune(directory, now):
+    for f in [*directory.glob("*.json"), *directory.glob("*.lock")]:
+        try:
+            if now - f.stat().st_mtime > 7 * 86400:
+                f.unlink()
+        except OSError:
+            pass
+
+
+def codex_version(client):
+    m = re.search(r"/(\d+)\.(\d+)\.(\d+)", str((getattr(client, "initialized", None) or {}).get("userAgent", "")))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _receipt_rows(rows, delivery_id, anchor, newer):
+    """Scan newest-first rows: ("found"|"anchor"|None, newer, previous)."""
+    for t in rows:
+        if newer is not None:
+            return "found", newer, t.get("id")
+        if t.get("id") == anchor:
+            return "anchor", None, None
+        if any(i.get("type") == "userMessage" and i.get("clientId") == delivery_id
+               for i in t.get("items") or []):
+            newer = t.get("id")
+    return None, newer, None
+
+
+def codex_receipt(client, sid, delivery_id, anchor):
+    """The accepted turn carrying delivery_id, scanning newest-first back to anchor.
+
+    (found, turn_id, previous_turn_id). found None = the scan could not reach the
+    anchor within its bound: never read as "not delivered".
+    """
+    cursor, newer = None, None
+    for _ in range(RECEIPT_PAGES):
+        params = dict(threadId=sid, limit=RECEIPT_PAGE, sortDirection="desc", itemsView="summary")
+        if cursor:
+            params["cursor"] = cursor
+        try:
+            page = client.call("thread/turns/list", params)
+        except ValueError as e:
+            # A thread whose store has no paginated history yet (a young
+            # session): the deprecated full read is the same persisted record.
+            if "not supported" not in str(e) or cursor:
+                raise
+            turns = client.call("thread/read", dict(threadId=sid, includeTurns=True))["thread"].get("turns") or []
+            hit, newer, prev = _receipt_rows(list(reversed(turns)), delivery_id, anchor, None)
+            if hit == "found" or (hit is None and newer is not None):
+                return True, newer, prev
+            return (False, None, None) if hit == "anchor" else (None, None, None)
+        rows = page.get("data") or []
+        hit, newer, prev = _receipt_rows(rows, delivery_id, anchor, newer)
+        if hit == "found":
+            return True, newer, prev
+        if hit == "anchor":
+            return False, None, None
+        cursor = page.get("nextCursor")
+        if not rows or not cursor:
+            break
+    return (True, newer, None) if newer is not None else (None, None, None)
+
+
+def codex_queued(client, sid, delivery_id):
+    cursor = None
+    for _ in range(RECEIPT_PAGES):
+        params = dict(threadId=sid, limit=RECEIPT_PAGE)
+        if cursor:
+            params["cursor"] = cursor
+        page = client.call("thread/queue/list", params)
+        for q in page.get("data") or []:
+            if q.get("clientUserMessageId") == delivery_id:
+                return q.get("id")
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return None
+    raise Unknown("queue_scan_incomplete")
+
+
+def codex_settle(client, sid, qid, delivery_id, anchor, wait=2.0):
+    """Resolve one queued item: (state, reason, turn_id, previous_turn_id).
+
+    start refused as not idle -> delete under the same native dispatch lock:
+    deleted means it never started (rejected); not deleted means the native
+    idle dispatch took it first -> the receipt decides. Never a resend.
+    """
+    try:
+        turn = client.call("thread/queue/start", dict(threadId=sid, queuedSubmissionId=qid))["turn"]
+    except ValueError as e:
+        msg = str(e)
+        if CODEX_NOT_IDLE in msg:
+            if client.call("thread/queue/delete", dict(threadId=sid, queuedSubmissionId=qid)).get("deleted") is True:
+                return "rejected", "native_not_idle", None, None
+        elif CODEX_NOT_FOUND not in msg:
+            return "unknown", "native_start_failed", None, None
+    else:
+        # Started by our own call: the answer names the accepted turn.
+        try:
+            found, tid, prev = codex_receipt(client, sid, delivery_id, anchor)
+        except ValueError:
+            found = None
+        return "accepted", "native_started", turn.get("id"), prev if found and tid == turn.get("id") else None
+    deadline = time.monotonic() + wait
+    while True:
+        found, tid, prev = codex_receipt(client, sid, delivery_id, anchor)
+        if found:
+            return "accepted", "native_idle_dispatch", tid, prev
+        if time.monotonic() >= deadline:
+            return "unknown", "receipt_unconfirmed" if found is False else "receipt_scan_incomplete", None, None
+        time.sleep(.1)
+
+
+def accept_if_idle(pane, expected, delivery_id, text, socket=""):
+    """Conditional controller input: accepted only when the provider natively
+    starts it on an idle session (#4524 contract, #4617 implementation).
+
+    Claude: unavailable, no I/O. Codex: a fresh read must still equal `expected`
+    and be idle, then thread/queue add + start-if-idle; refused -> deleted under
+    the native lock (rejected); a receipt is the accepted turn whose userMessage
+    carries clientId == delivery_id. A per-delivery journal is written before
+    any native write, so a retry after a disconnect resolves the earlier attempt
+    instead of sending again. Unknown is never delivery.
     """
     i = expected.get("identity") if isinstance(expected, dict) else None
     capability = idle_accept_capability(i.get("provider") if isinstance(i, dict) else None)
@@ -141,8 +289,117 @@ def accept_if_idle(pane, expected, delivery_id, text, socket=""):
         result["request_identity"] = {k: i.get(k) for k in launch.IDENTITY + NATIVE + ("turn_id",)}
     except (ValueError, KeyError, TypeError, AttributeError):
         result["reason"] = "invalid_request"
-    # Even a fresh, valid, completed+idle snapshot cannot enable delivery here.
-    # Do not fall back to turn/start, turn/steer, peer send or command.run.
+        return result
+    if capability["state"] != "available":
+        # Do not fall back to turn/start, turn/steer, peer send or command.run.
+        return result
+    try:
+        return _codex_accept(result, pane, expected, delivery_id, text, socket)
+    except Unknown as e:
+        result.update(state="unknown", reason=str(e))
+    except (OSError, EOFError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        result.update(state="unknown", reason="native_unavailable")
+    return result
+
+
+def _codex_accept(result, pane, expected, delivery_id, text, socket):
+    ident = result["request_identity"]
+    fixed = {k: v for k, v in ident.items() if k != "turn_id"}
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    directory = _accept_dir()
+    path = directory / (delivery_id + ".json")
+    with (directory / (delivery_id + ".lock")).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rec = json.loads(path.read_text()) if path.exists() else None
+        if rec is not None:
+            if rec.get("identity") != fixed:
+                raise Unknown("delivery_identity_changed")
+            if rec.get("text_sha256") != digest:
+                result.update(state="rejected", reason="delivery_id_reused")
+                return result
+            result["submitted"] = bool(rec.get("queued"))
+            if rec.get("state") == "accepted":
+                result.update(state="accepted", reason="journal", receipt=dict(rec["receipt"], source="journal"))
+                return result
+        s = read(pane, expected=expected, socket=socket)
+        receipt = launch.inspect({k: ident[k] for k in launch.IDENTITY}, pane, socket)
+        if {k: receipt.get(k) for k in NATIVE} != {k: ident[k] for k in NATIVE}:
+            raise Unknown("native_identity_changed")
+        data = CODEX["identity"](pane, socket)
+        if (data.get("session_id") != ident["native_session"]
+                or data.get("remote") != ident["native_remote"]):
+            raise Unknown("endpoint_identity_changed")
+        sid = ident["native_session"]
+        anchor = rec["anchor"] if rec and rec.get("state") == "pending" else ident["turn_id"]
+        client = RPC(data["remote"], timeout=5)
+        try:
+            v = codex_version(client)
+            if v is None or v[:2] < CODEX_ACCEPT_MIN:
+                raise Unknown("native_version_untested")
+            if rec is not None and rec.get("state") == "pending":
+                # Settle the earlier attempt before anything new: never a blind resend.
+                qid = codex_queued(client, sid, delivery_id)
+                if qid is not None:
+                    st, why, tid, prev = codex_settle(client, sid, qid, delivery_id, anchor)
+                else:
+                    found, tid, prev = codex_receipt(client, sid, delivery_id, anchor)
+                    st, why = (("accepted", "native_receipt") if found else
+                               ("unknown", "receipt_scan_incomplete") if found is None else
+                               ("absent", ""))
+                    if st == "absent" and s["runtime"]["state"] != "idle":
+                        st, why = "unknown", "previous_attempt_unsettled"
+                if st == "accepted":
+                    return _accepted(result, path, rec, sid, tid, prev, anchor, why)
+                if st == "unknown":
+                    result.update(state="unknown", reason=why)
+                    return result
+                rec.update(state="rejected", reason=why or "not_delivered")
+                _journal_write(path, rec)
+            if s["runtime"]["state"] != "idle":
+                result.update(state="rejected", reason="precheck_" + (s["runtime"]["reason"] or s["runtime"]["state"]))
+                return result
+            rec = dict(version=1, delivery_id=delivery_id, identity=fixed, text_sha256=digest,
+                       anchor=ident["turn_id"], native_session=sid, state="pending",
+                       queued=True, created_at=time.time())
+            _prune(directory, time.time())
+            _journal_write(path, rec)
+            result["submitted"] = True
+            try:
+                q = client.call("thread/queue/add", dict(threadId=sid, clientUserMessageId=delivery_id,
+                                                         input=[dict(type="text", text=text)]))["queuedSubmission"]
+            except ValueError:
+                # A refused add wrote nothing natively.
+                rec.update(state="rejected", reason="native_add_refused")
+                _journal_write(path, rec)
+                result.update(state="rejected", reason="native_add_refused", submitted=False)
+                return result
+            if q.get("clientUserMessageId") != delivery_id:
+                raise Unknown("native_receipt_mismatch")
+            rec["queued_submission_id"] = q.get("id")
+            _journal_write(path, rec)
+            st, why, tid, prev = codex_settle(client, sid, q.get("id"), delivery_id, rec["anchor"])
+            if st == "accepted":
+                return _accepted(result, path, rec, sid, tid, prev, rec["anchor"], why)
+            if st == "rejected":
+                rec.update(state="rejected", reason=why)
+                _journal_write(path, rec)
+            result.update(state=st, reason=why)
+            return result
+        finally:
+            client.close()
+
+
+def _accepted(result, path, rec, sid, tid, prev, anchor, why):
+    if not isinstance(tid, str) or not tid:
+        raise Unknown("native_receipt_mismatch")
+    receipt = dict(delivery_id=rec["delivery_id"], method="thread/queue", native_session=sid,
+                   turn_id=tid, previous_turn_id=prev, anchor_turn_id=anchor,
+                   intervening_turn=prev is not None and prev != anchor,
+                   queued_submission_id=rec.get("queued_submission_id"),
+                   accepted_at=time.time(), source="native")
+    rec.update(state="accepted", reason=why, receipt=receipt)
+    _journal_write(path, rec)
+    result.update(state="accepted", reason=why, submitted=True, receipt=receipt)
     return result
 
 
@@ -423,7 +680,7 @@ def main():
         s = (idle_accept_capability(data.get("provider")) if a.command == "idle-accept-capability" else
              accept_if_idle(a.pane, data.get("expected"), data.get("delivery_id"), data.get("text"), a.socket))
         print(json.dumps(s, allow_nan=False, separators=(",", ":")))
-        return 2  # unavailable / unknown, never native acceptance
+        return 0 if s.get("state") in ("available", "accepted") else 2
     if a.command == "event":
         record_event(data)
         return 0

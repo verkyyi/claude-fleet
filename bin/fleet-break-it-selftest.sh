@@ -6522,7 +6522,17 @@ drill_runtime_idle_accept_unavailable() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='双 provider 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+  WHAT='Claude 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+}
+
+drill_runtime_idle_accept_codex() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" CodexIdleAccept 2>&1) || { WHY="$out"; return 1; }
+  # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
+  out=$(bash "$BIN/fleet-idle-accept-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 原生 start-if-idle：忙时被拒且同锁删除、从不补跑；断线后按 clientId 结清，回执跨连接可查，扫不到锚点为 unknown，零重发'
 }
 
 drill_pending_observation_stale() {
