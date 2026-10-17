@@ -1990,6 +1990,12 @@ if [ "$icchk" != 0 ] && [ -f "$_ict" ] && { [ "${_ho_on:-0}" = 1 ] || [ "$icchk"
   icage="${FLEET_IDLE_COST_MAX_AGE:-$(_gconf_val FLEET_IDLE_COST_MAX_AGE)}"; case "$icage" in ''|*[!0-9]*) icage=3600 ;; esac
   icsecs="${FLEET_DOCTOR_IDLE_COST_SECS:-$(_gconf_val FLEET_DOCTOR_IDLE_COST_SECS)}"; case "$icsecs" in ''|*[!0-9]*) icsecs=60 ;; esac
   iclast="$conf_dir/idle-cost/last.json"
+  # the daily readings (issue #4361): global/idle-cost.ndjson, the one file the
+  # daily tick writes and the batch report reads
+  icday=''
+  if icds=$(FLEET_CONF_DIR="$conf_dir" python3 "$(dirname "$0")/fleet-idle-daily.py" summary --days 7 2>/dev/null); then
+    icday=$(printf '%s' "$icds" | awk -F'\t' '{ printf "；每日读数近 7 天 %s 天已量、%s 天未量", $1, $2 }')
+  fi
   # rate · age (s) · the three biggest sources, from a kept reading
   _ic_sum() {
     python3 - "$iclast" <<'EOF_IC' 2>/dev/null
@@ -2003,14 +2009,14 @@ EOF_IC
   if ! icwhy=$(FLEET_CONF_DIR="$conf_dir" bash "$_ict" --idle 2>/dev/null); then
     icprev=''
     [ -f "$iclast" ] && icprev=$(_ic_sum | awk -F'\t' 'NF { printf "；上次空闲读数 %s 个/秒（%d 分钟前）", $1, $2/60 }')
-    info idle-cost "未量（${icwhy:-无法确认整机空闲}）$icprev — 空闲时 \`bash bin/fleet-idle-cost.sh\`"
+    info idle-cost "未量（${icwhy:-无法确认整机空闲}）$icprev — 空闲时 \`bash bin/fleet-idle-cost.sh\`${icday}"
   else
     icfresh=''
     [ -f "$iclast" ] && [ -n "$(find "$iclast" -mmin "-$(( (icage + 59) / 60 ))" 2>/dev/null)" ] && icfresh=1
     icrc=0
     [ -n "$icfresh" ] || { FLEET_CONF_DIR="$conf_dir" bash "$_ict" --secs "$icsecs" >/dev/null 2>&1; icrc=$?; }
     if [ "$icrc" = 3 ]; then
-      info idle-cost "有会话在干活，未量（量的时候有会话开始干活）"
+      info idle-cost "有会话在干活，未量（量的时候有会话开始干活）${icday}"
     elif [ "$icrc" != 0 ] || ! icline=$(_ic_sum) || [ -z "$icline" ]; then
       warn idle-cost "量不出来：\`bash bin/fleet-idle-cost.sh\` 没有留下读数（${iclast}）"
     else
@@ -2019,9 +2025,9 @@ EOF_IC
       iccpu=$(printf '%s' "$icline" | cut -f5)
       ictxt="空闲时每秒新起 ${icr} 个进程，fleet CPU ${iccpu}%（${icw} 秒窗口，$(( ica / 60 )) 分钟前）"
       if awk -v r="$icr" -v w="$icwarn" 'BEGIN{ exit !(r > w) }'; then
-        warn idle-cost "${ictxt}，超过 ${icwarn} 个/秒 — 最多: ${ictop}。全表: \`bash bin/fleet-idle-cost.sh\`"
+        warn idle-cost "${ictxt}，超过 ${icwarn} 个/秒 — 最多: ${ictop}。全表: \`bash bin/fleet-idle-cost.sh\`${icday}"
       else
-        pass idle-cost "${ictxt}，阈值 ${icwarn} — 最多: ${ictop}"
+        pass idle-cost "${ictxt}，阈值 ${icwarn} — 最多: ${ictop}${icday}"
       fi
     fi
   fi
