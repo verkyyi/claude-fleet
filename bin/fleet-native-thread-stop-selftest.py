@@ -16,6 +16,28 @@ import threading
 import time
 
 
+def fixture_host_pid(argv, namespace_pid, proc_root=Path('/proc')):
+    matches = []
+    expected = [os.fsencode(argument) for argument in argv]
+    for process in proc_root.iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            if process.stat().st_uid != os.getuid():
+                continue
+            if (process / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0') != expected:
+                continue
+            namespaces = [line.split()[1:] for line in (process / 'status').read_text().splitlines()
+                          if line.startswith('NSpid:')]
+            if len(namespaces) == 1 and namespaces[0] and int(namespaces[0][-1]) == namespace_pid:
+                matches.append(int(process.name))
+        except (OSError, ValueError):
+            continue
+    if len(matches) != 1:
+        raise AssertionError('expected one owned fixture process with exact argv and namespace PID: ' + repr(matches))
+    return matches[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
@@ -138,8 +160,10 @@ def main():
                         identifier = thread['id']
                         identifiers.append(identifier)
                         rpc.call('thread/name/set', {'threadId': identifier, 'name': 'fixture-' + label})
-                        commands[identifier] = shlex.join([sys.executable, '-c',
-                            'import os,time; print("fixture-pid=" + str(os.getpid()), flush=True); time.sleep(90)'])
+                        command_argv = [sys.executable, '-c',
+                            'import os,time; print("fixture-pid=" + str(os.getpid()), flush=True); time.sleep(90)',
+                            str(root / ('command-' + label))]
+                        commands[identifier] = shlex.join(command_argv)
                         turn = rpc.call('turn/start', {'threadId': identifier, 'input': [
                             {'type': 'text', 'text': 'Run the inert fixture command.', 'text_elements': []}]})['turn']
                         wait_for(lambda: completed(identifier, turn['id']), label + ': native turn completes')
@@ -149,11 +173,12 @@ def main():
                         pids = [int(value) for value in re.findall(r'fixture-pid=(\d+)', json.dumps(outputs))]
                         if len(pids) != 1:
                             raise AssertionError('missing fixture PID in native tool output: ' + repr(outputs))
-                        check(True, label + ': native command output identifies its actual fixture PID')
-                        check(len(listed) == 1 and alive(pids[0]),
+                        check(True, label + ': native command output identifies its namespace PID')
+                        host_pid = fixture_host_pid(command_argv, pids[0]) if sys.platform == 'linux' else pids[0]
+                        check(len(listed) == 1 and alive(host_pid),
                               label + ': completed turn retains a live native background command')
-                        terminals.append(dict(listed[0], fixturePid=pids[0]))
-                        observations[label]['fixturePid'] = pids[0]
+                        terminals.append(dict(listed[0], fixturePid=host_pid))
+                        observations[label].update(fixturePid=host_pid, namespacePid=pids[0])
                     check(len({terminal['fixturePid'] for terminal in terminals}) == 3
                           and len({terminal['processId'] for terminal in terminals}) == 3,
                           'threads have distinct native command processes and handles')

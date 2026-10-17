@@ -26,6 +26,30 @@ def module(name):
 
 
 class LinuxNode(unittest.TestCase):
+    def test_native_stop_fixture_resolves_namespace_pid_without_guessing(self):
+        probe = module('fleet-native-thread-stop-selftest')
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            process = proc / '4242'
+            process.mkdir()
+            argv = ['/usr/bin/python3', '-c', 'fixture', str(proc / 'unique-command')]
+            command = b'\0'.join(os.fsencode(argument) for argument in argv) + b'\0'
+            (process / 'cmdline').write_bytes(command)
+            (process / 'status').write_text('Name:\tpython3\nNSpid:\t4242\t7\n')
+            self.assertEqual(probe.fixture_host_pid(argv, 7, proc), 4242)
+            for arguments, namespace in ((argv, 8), (argv[:-1], 7)):
+                with self.assertRaises(AssertionError):
+                    probe.fixture_host_pid(arguments, namespace, proc)
+            with patch.object(probe.os, 'getuid', return_value=os.getuid() + 1):
+                with self.assertRaises(AssertionError):
+                    probe.fixture_host_pid(argv, 7, proc)
+            duplicate = proc / '4343'
+            duplicate.mkdir()
+            (duplicate / 'cmdline').write_bytes(command)
+            (duplicate / 'status').write_text('NSpid:\t4343\t7\n')
+            with self.assertRaises(AssertionError):
+                probe.fixture_host_pid(argv, 7, proc)
+
     def test_image_carries_native_sandbox_dependency_without_changing_policy(self):
         docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
         runtime = docker.split('FROM ${BASE}', 1)[1]
