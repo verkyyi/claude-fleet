@@ -6,6 +6,7 @@ on:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-native-local-runtime-selftest.py'
       - 'bin/fleet-native-session-env-selftest.py'
+      - 'bin/fleet-native-thread-stop-selftest.py'
       - 'bin/fleet-mcp.py'
       - 'bin/fleet_launch.py'
       - 'bin/fleet-agent-defaults.py'
@@ -65,6 +66,11 @@ jobs:
         if: matrix.mode == 'exec'
         run: >-
           timeout 100 python3 bin/fleet-native-session-env-selftest.py --hooks --fork-seed
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Verify native per-thread background-terminal lifecycle
+        if: matrix.mode == 'exec'
+        run: >-
+          timeout 100 python3 bin/fleet-native-thread-stop-selftest.py
           --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash

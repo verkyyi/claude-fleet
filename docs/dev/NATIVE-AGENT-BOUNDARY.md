@@ -319,6 +319,38 @@ Fleet launch/authority 的旧进程归属检查保持，尚未改为新收据格
 TUI 退出、线程 unloaded 或父源记录被删，都不能单独释放执行额度或宣称任务完成。
 此外须测量完整 MCP 下的准备成本、峰值进程数与原生直启对照；本夹具不证明 1 秒/5 秒目标。
 
+### 回合结束、断连与执行停止不是同一件事
+
+显式隔离探针 `bin/fleet-native-thread-stop-selftest.py` 使用临时 HOME、内核 PID 校验的
+原生后台和无凭据的 loopback 假模型；三个真实原生线程各自运行一个有限时长的休眠命令。
+不访问用户仓库，不启动真实模型调用，也不接管线上会话。
+本机 `0.163.0` 的 37 项检查验证：
+
+- 原生回合已经 completed，但它启动的后台命令仍活着；原生确认取消订阅后，关闭发起
+  RPC 连接也不是即时停止。不能把回合完成、客户端退出或订阅消失映射为额度释放。
+- 对已完成回合调用 `turn/interrupt` 返回没有活动回合，而后台命令仍在运行。
+- `thread/backgroundTerminals/terminate` 按精确 thread/processId 停止一个命令；
+  使用另一个线程的 processId 返回未终止，不误杀兄弟线程。
+- `thread/backgroundTerminals/clean` 停止目标线程的后台命令，不影响兄弟命令。
+- 原生 archive 在夹具中停止目标命令、卸载目标线程，保留其他线程与共享后台；恢复前
+  必须显式 unarchive，再 resume 原 ID，已停止的命令不会复活。
+- `processId` 是原生句柄，不是 OS PID。`osPid` 可以为空；夹具从自己休眠命令的输出取得
+  OS PID，只做存活观察，不把任意原生句柄当 PID 发信号。
+
+```sh
+python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
+```
+
+**职责边界**：Fleet 保留现有准入/owner/generation 的停止意图和撤销栅栏；线程与命令的
+实际控制交给原生接口，不增加自制进程树管理器，也不杀共享后台来关闭一个窗口。
+进入停止前须阻止同一代次继续发起 turn/tool；完成后须有精确 root 与其子 Agent 的终止证据，
+才能更新既有执行收据。单次空列表、archive 成功或 TUI 退出都不是这样的完整证明。
+
+[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server) 明确区分取消订阅的闲置宽限期
+与立即终止；archive 对后代是尝试处理，根请求成功不保证所有后代均归档。
+因此本探针不证明子 Agent、任意脱管子进程、活动 turn 中断、真实 TUI 或完整 MCP 的停止。
+这些门槛以及并发恢复/撤销仍未完成，旧 `prove_stopped` 不因本次探针放宽，生产不启用共享后台。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器
