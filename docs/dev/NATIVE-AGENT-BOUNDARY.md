@@ -151,7 +151,8 @@ prepare/目录分配零调用、字面参数、既有 embedded 透传和固定�
 
 在本机 `0.163.0` 和 drill `0.162.1` 上追加了隔离的真实 PTY 探针：临时 HOME/CODEX_HOME、
 临时仓库、无凭据、无真实模型，仅向本机拒绝端点发送固定测试文本。测试显式关闭
-`features.daemon_auto_start`，不安装系统服务，也不连接既有用户 daemon。
+`features.daemon_auto_start`，同时使用 `--dangerously-bypass-hook-trust` 运行夹具的身份记录 hook；
+这两个条件不能混同。不安装系统服务，也不连接既有用户 daemon。
 在同一临时 CODEX_HOME 先启动自己拥有的 `app-server --listen unix://`，再启动不带
 `--remote` 的 `codex --worktree`。它不是 Fleet 面板草稿验收，启动文本会提交给测试端点。
 
@@ -169,6 +170,73 @@ prepare/目录分配零调用、字面参数、既有 embedded 透传和固定�
 本轮不采用「本地 TUI 加一个仅用于验证的后台」方案，不改线上运行时或订阅校验。
 探针结束清理自己的进程和端点；本机早期探针一次清理异常后，已通过工作目录与打开文件确认
 残留后台仅属于临时夹具并终止，修正后的本机及 drill 探针正常退出。没有终止用户 daemon 或 Fleet 会话。
+
+### 本地 Worktree 与原生后台可以共存，但启动参数决定实际归属
+
+后续逐项对照推翻了「本地 Worktree 必然脱离可验证后台」这一推测；此前只证明了特定配置的旁路问题。
+新增 `bin/fleet-native-local-runtime-selftest.py`：每个场景都是空 HOME、独立仓库和独立前台后台进程，
+先启动原生默认 Unix socket，核对内核 peer PID，再用只读 `app-server daemon version` 确认
+原生发现的 socket 和版本。只有已就绪、同版本的自有后台才启动 TUI；不调用 daemon start、
+bootstrap、update 或 stop，不安装系统服务或包，也不连接现有用户后台。
+
+本机 `0.163.0` 和测试节点 `0.162.1` 的 54 项检查通过；`daemon_auto_start=true` 写在临时配置中，三个场景均关闭
+夹具 hooks 与 remote_plugin，使用同一无凭据的 loopback provider，唯一区别为下表的 CLI 参数：
+
+| 本地 TUI 参数 | 自有后台的 loaded/list | 精确线程读取 | 原生状态通知 |
+|---|---|---|---|
+| 普通本地 TUI | 包含当前 ID | 非 notLoaded | 收到当前线程状态 |
+| `--worktree` | 包含当前 ID | 非 notLoaded、cwd 是原生 Worktree | 收到当前线程状态 |
+| `--worktree --dangerously-bypass-hook-trust` | 不包含当前 ID | 可读历史，但为 notLoaded | 无该线程状态 |
+
+因此，**daemon 显示 running 不够；必须证明实际会话属于被验证的后台**。
+原生目录与原仓库 Git common-dir/commit 相符，退出 TUI 后未提交测试文件保留，主检出不变。
+每场景只有一次预期 400 请求，无凭据、无模型回答、无工具执行；systemError 不是成功完成。
+固定版本 CI 还须对同一提交单独验证，不能从本机外推；测试节点仅运行临时目录夹具，未改在线安装。
+
+下一步是把已经审阅的强制守卫移到只读管理层、可选 hook 交给原生信任，再验证移除全局 bypass 后
+完整 Fleet 启动参数是否仍连接同一个后台。不能现在仅删这个参数：本探针没有验证真实守卫、完整 MCP、
+固定订阅/代理凭据、准入 reservation、SessionStart 归属、面板未发送草稿或重连。
+还需覆盖其它逐次 `-c`/profile/权限参数、共享与每会话 CODEX_HOME、退出和重建恢复。
+不改在线启动路径，不放宽身份校验；保留 private-runtime 早拒绝，直到完整迁移通过。
+
+```sh
+python3 bin/fleet-native-local-runtime-selftest.py --codex /path/to/codex
+```
+
+### 逐次配置不是共享后台配置：启动参数矩阵
+
+`--launch-flags` 扩展同一隔离探针，不增加生产运行时。原生 CLI 的参数含义参考
+[官方命令说明](https://learn.chatgpt.com/docs/developer-commands)，以下归属结论来自实测，
+不是根据参数文档推断。每个场景使用独立空 HOME、预先启动且内核 PID 已核对的后台，
+实际 TUI 创建原生 Worktree、发出一次无凭据的 loopback 请求；固定 400 响应禁止推理。
+
+本机 `0.163.0` 与测试节点 `0.162.1` 的 11 个场景、各 250 项检查通过；固定版本 CI
+仍须对提交分别核对。测试节点只运行临时目录探针，未修改在线配置或用户会话：
+
+| 参数/配置变化 | 实际后台拥有线程 | 模型及权限的验证 |
+|---|---|---|
+| 原有普通本地 / Worktree 对照 | 是 | 原生请求模型及 turn_context 与基础配置相符 |
+| Worktree + hook-trust bypass | 否 | 可读历史不等于当前运行时 |
+| Worktree + Fleet 三项普通 `-c` 默认值 | 否 | update 检查、hooks 开关、CLAUDE.md fallback，无真实 hook 脚本 |
+| Worktree + `-c model="probe"`，与后台默认值完全相同 | 否 | 排除仅由配置值不同引起的推测 |
+| 同样三项普通默认值预先放进原生 config.toml，无逐次 `-c` | 是 | 不改变原生后台选择 |
+| 上述配置文件 + 原生 `--model` / `--sandbox` / `--ask-for-approval` | 是 | 当前线程使用指定值，后台基础模型和权限不变 |
+| 仅原生 `--model`，或仅既有 approvals/sandbox bypass 参数 | 是 | 请求/turn_context 使用指定值，后台基础配置不变 |
+| 原生 `--profile fixture`，或 profile + 普通 `-c` + 权限参数组合 | 否 | 原生 profile 与 CLI 覆盖值仍正确生效，但不属于已核对后台 |
+
+因此仅移除 hook-trust bypass 仍不够，不能把已验证的旁路后台身份当作实际线程身份。
+默认值应在原生配置/插件的安装更新边界管理，不在每次启动追加相同 `-c`；逐次模型和权限
+优先原生专用参数。**不能为了共享后台而吞掉用户 profile/覆盖值、把账号合并到同一个 HOME，
+或在已有会话运行时重写其共享配置。** 需要 profile 的路径在完成等价原生运行时身份证明前，
+保留旧的明确支持/拒绝边界，不新增第二套 profile 解释器。
+
+这仍不是完整 Fleet 参数集：真实 managed guards、可选插件、完整 MCP、每会话环境变量、
+订阅/代理凭据、准入与恢复尚未在同一实际启动链路验收；并发不同会话的配置隔离也未由
+逐场景单线程测试证明。保留现有认证与权限守门，不改上线启动方式，不宣称达成延迟目标。
+
+```sh
+python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --codex /path/to/codex
+```
 
 ## 完整目标的完成账本
 
