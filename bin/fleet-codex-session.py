@@ -309,8 +309,17 @@ def context(args):
             armed = tmux(['display-message', '-p', '-t', args.pane, '#{@handoff_armed}'], args.socket) == '1'
             if os.environ.get('TMUX') and not args.socket:
                 value = subprocess.run(['bash', str(Path(__file__).with_name('fleet-hook-conf.sh')),
-                                        'FLEET_AUTO_HANDOFF_PCT'], capture_output=True, text=True, timeout=3)
-                threshold = int(value.stdout.strip() or '80') if value.returncode == 0 else 0  # unset ⇒ 80 (#1571)
+                                        'FLEET_AUTO_HANDOFF_PCT', 'FLEET_AUTO_HANDOFF_TOKENS'],
+                                       capture_output=True, text=True, timeout=3)
+                if value.returncode == 0:
+                    fields = [line if line.isascii() and line.isdigit() else '0'
+                              for line in value.stdout.splitlines()] + ['0', '0']
+                    threshold = int(fields[0])
+                    tokens = int(fields[1])
+                    if tokens > 0:
+                        limit = int(tmux(['display-message', '-p', '-t', args.pane, '#{@ctx_limit}'], args.socket) or '0')
+                        if limit > 0:
+                            threshold = min(100, (tokens * 100 + limit - 1) // limit)
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
     stats.update(verdict="UNKNOWN" if pct < 0 else "HANDOFF" if pct >= (threshold or 80) else "WATCH" if pct >= 50 else "OK",
@@ -322,7 +331,11 @@ def context(args):
     else:
         print("context   unknown" if pct < 0 else "context   %s%% (%s / %s tokens) src=codex-rollout" % (pct, stats["live_tokens"], stats["limit"]))
         print("session   " + (stats["session_id"] or "unknown") + " · " + (stats["model"] or "unknown model"))
-        print("handoff   fleet-transfer.sh --window PANE --to codex --handoff NOTES --after-turn")
+        if threshold > 0:
+            print("handoff   auto-handoff at %s%%" % threshold)
+        else:
+            print("handoff   auto-handoff OFF — native Agent manages compaction; context bands are advisory")
+        print("manual    fleet-transfer.sh --window PANE --to codex --handoff NOTES --after-turn")
         print("verdict:  " + stats["verdict"])
     return 0 if stats["verdict"] == "OK" else 1
 

@@ -512,10 +512,10 @@ fi
 # ── Auto-handoff nudge (issue #330) ──────────────────────────────────────────
 # At a CLEAN Stop (done), if this session's context has crossed the operator's
 # threshold, emit the Stop-hook block decision that steers the model into
-# /fleet-handoff (cycle) — a structured handoff preserves task state far better
-# than Claude's near-limit auto-compaction. This ONLY adds the trigger; the whole
+# /fleet-handoff (cycle) as an explicit alternative to native Agent compaction.
+# This ONLY adds the opt-in trigger; the whole
 # handoff/clear/resume machinery (commands/fleet-handoff.md + fleet-handoff-cycle.sh)
-# is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (unset ⇒ 80; 0 = OFF; mirrors
+# is reused unchanged. Knobs: FLEET_AUTO_HANDOFF_PCT (unset / 0 = OFF; mirrors
 # FLEET_RUNAWAY_CPU_PCT), or FLEET_AUTO_HANDOFF_TOKENS to set it in tokens used
 # (issue #1317), and FLEET_HANDOFF_DEFER_SECS (the typing hold, issue #571).
 # Only 'done' (the Stop hook) reaches here, so the JSON is only ever emitted in the
@@ -532,7 +532,7 @@ fi
 # script is `sh`-wired and cannot source the bash-only fleet-lib itself; the helper
 # is the bash hop (≈20 ms, once per Stop — never on the per-tool hot path). Any
 # failure of the PATH (helper/lib missing) yields OFF: fail-open, exactly as
-# before. A key nothing sets gets the repo default — 80 (issue #1571).
+# before. A key nothing sets stays OFF; native Agent compaction owns the default.
 if [ "$sem" = "done" ]; then
   _bin=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
   # The language rule this hook's directive ends with (issue #620). This script is
@@ -558,7 +558,7 @@ if [ "$sem" = "done" ]; then
   } <<EOF
 $_kv
 EOF
-  # The context ladder's defaults (issue #1571): handoff 80, compact-prep 55, at
+  # The opt-in context ladder's defaults: handoff OFF, compact-prep OFF, at
   # most 3 compactions — KEEP IN SYNC with conf/fleet.conf.reference, fleet-context.sh,
   # conf/statusline.sh, fleet-doctor.sh and fleet-codex-session.py
   # (context-ladder-defaults-selftest.sh pins all of them). Unset ⇒ the default,
@@ -567,12 +567,10 @@ EOF
   _lad=0
   [ -n "$_bin" ] && [ -f "$_bin/fleet-lib.sh" ] && [ -f "$_bin/fleet-hook-conf.sh" ] && _lad=1
   case "$_hp" in
-    '') if [ "$_lad" = 1 ]; then _hp=80; else _hp=0; fi ;;
-    *[!0-9]*) _hp=0 ;;
+    ''|*[!0-9]*) _hp=0 ;;
   esac
   case "$_cp" in
-    '') if [ "$_lad" = 1 ]; then _cp=55; else _cp=0; fi ;;
-    *[!0-9]*) _cp=0 ;;
+    ''|*[!0-9]*) _cp=0 ;;
   esac
   case "$_cm" in
     '') if [ "$_lad" = 1 ]; then _cm=3; else _cm=0; fi ;;
@@ -754,7 +752,7 @@ PYCODEX
   # (@raw=1, issue #1318 — the long-lived window that drives a whole EPIC, where a
   # handoff's re-grounding costs most); a codex pane, hub, panels, a needs stop and
   # a pending transfer are untouched.
-  # Unset knob ⇒ 55; 0 = off. Past the compaction cap (#1316) the handoff owns it.
+  # Unset knob / 0 = off. Past the compaction cap (#1316) the handoff owns it.
   if [ "$_cp" -gt 0 ] && [ -z "$_cmaxed" ] && [ "$_agent" != codex ] && [ "$handoff_prev" != needs ]; then
     _cissue=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}|#{@raw}|#{@fleet_role}' 2>/dev/null)
     _crole=${_cissue##*|}; _cissue=${_cissue%|*}

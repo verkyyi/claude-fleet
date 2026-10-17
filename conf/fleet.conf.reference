@@ -1655,19 +1655,19 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Auto-handoff threshold (issue #330). When a worker/scratch session's context
 # window crosses this %, its Stop hook (bin/set-claude-state.sh) nudges the model
 # to run the /fleet-handoff cycle automatically (store a durable handoff → /clear
-# → resume clean) instead of waiting for the operator to notice the statusline bar
-# or hitting Claude's lossy near-limit auto-compaction. Reuses the WHOLE existing
+# → resume clean), replacing the default reliance on native Agent compaction.
+# Reuses the WHOLE existing
 # handoff cycle — only the trigger is new. The nudge fires once per session (a
 # @handoff_armed latch, reset at the next SessionStart), only from a clean `done`
 # (never a needs-attention turn), and only on panes that HAVE /fleet-handoff
 # (issue-bound workers + raw scratch; panels and the hub pane are excluded).
-# Spends tokens (the handoff doc + the resume). Default 80 (issue #1571: the
-# ladder is compact in place from 55%, at most 3 times, hand off at 80%); 0 = OFF
+# Spends tokens (the handoff doc + the resume). Default OFF: native Agent
+# compaction owns context management unless the operator opts in; 0 = OFF
 # (mirrors FLEET_RUNAWAY_CPU_PCT). The Stop hook reads it from
 # THIS file (and the per-fleet overlay) via bin/fleet-hook-conf.sh — nothing to
 # export; `fleet-doctor.sh` shows what the hook sees (issue #561).
 # @label=Auto-handoff percent @group=handoff @tier=advanced @scope=fleet @edit=int @unit=%
-#FLEET_AUTO_HANDOFF_PCT=80       # context % that triggers an auto-handoff; 0 = OFF
+#FLEET_AUTO_HANDOFF_PCT=0        # context % that triggers an auto-handoff; 0 = OFF
 
 # Hold the auto-handoff while the OPERATOR IS TYPING at that pane (issue #571). A
 # handoff cycle Esc+`/clear`s the pane a minute after the nudge; typed into an input
@@ -1702,11 +1702,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # and after the compaction the charter comes back with a "check the map" line.
 # Once per climb: re-armed only after the context drops back below this line,
 # ≥ 10 minutes between compactions. Progress shows in the window option
-# @compact_stage (prep / compacting / restored). Workers only; 0 = off. Default
-# 55 (issue #1571): a lower line (35) pinned sessions at 35% and handed them off
-# on the compaction cap alone, never using the upper 60% of the window.
+# @compact_stage (prep / compacting / restored). Workers only; default OFF.
+# Set a positive threshold to opt in; existing configured thresholds are kept.
 # @label=Compact-in-place percent @group=handoff @tier=internal @scope=fleet @edit=int @unit=%
-#FLEET_COMPACT_PREP_PCT=55       # context % that starts an in-place /compact; 0 = OFF
+#FLEET_COMPACT_PREP_PCT=0        # context % that starts an in-place /compact; 0 = OFF
 
 # Compact a session in place at most this many times, then hand it off (issue
 # #1316). Every compaction loses a little detail; by the third or fourth a session

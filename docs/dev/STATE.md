@@ -755,7 +755,8 @@ after that condition has cleared and come back.
 
 - **Auto-handoff nudge (#330).** `set-claude-state.sh`'s `done` branch also emits
   the Stop-hook `block` decision that steers a near-full session into
-  `/fleet-handoff` when context crosses `FLEET_AUTO_HANDOFF_PCT`. It reads the
+  `/fleet-handoff` when context crosses an explicitly enabled `FLEET_AUTO_HANDOFF_PCT`.
+  This is opt-in (default 0 / off); native Agent compaction owns the default. It reads the
   context % from `@ctx_pct`, which [`conf/statusline.sh`](../../conf/statusline.sh)
   stamps on the same window-option bus each render, and the threshold from the
   **conf** — `bin/fleet-hook-conf.sh` (global `fleet.conf` → this fleet's overlay),
@@ -774,7 +775,7 @@ after that condition has cleared and come back.
   the session that just ended.
 - **Compact in place before the handoff (#1269).** The same `done` edge runs a
   three-step compaction for a **worker** or a **scratch** (`@raw=1`, #1318) whose `@ctx_pct` sits in
-  `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (defaults 55 / 80, #1571; handoff 0 =
+  `[FLEET_COMPACT_PREP_PCT, FLEET_AUTO_HANDOFF_PCT)` (both default 0 / off; positive prep opts in, handoff 0 =
   no upper line; either line set as `FLEET_*_TOKENS` is converted against the
   pane's `@ctx_limit` and wins, #1317), tracked in the window option `@compact_stage`:
   `prep` (a `block` asking for a recovery map at `fleet_recovery_map_path`:

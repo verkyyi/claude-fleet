@@ -44,7 +44,7 @@ Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); re
 - **Fix in place** only if ALL hold: blocks your done condition; same repo and deploy path (ships in this PR); small/local, roughly tens of lines with a test; no open issue/live owner; no shared API, protocol, schema, release/deploy or credential contract; name it in one PR-body line.
 - **File and spawn it** if it blocks you but fails any condition: `mcp__fleet__file_issue` (`parent: <your issue>`, `spawn: true`), then `mcp__fleet-orch__await` it (its report comes to you); not worth doing now ⇒ file without `spawn`, `mcp__fleet__ask` + `mcp__fleet__report` (`state: blocked`) naming it.
 - **File bare** if it does not block you: `mcp__fleet__file_issue` (`title`, optional `body`, no `spawn`); related work gets `parent: N`, unrelated work omits `parent`; no outcome report for an unrelated filing.
-- **Hand off before you run out of context.** Use `/fleet-context` or `mcp__fleet__context`: `WATCH` means finish this thread then `/fleet-handoff`, `HANDOFF` means hand off now; don't start another broad sweep.
+- **Let the Agent manage its context.** `/fleet-context` or `mcp__fleet__context` reports usage; with `auto_handoff_pct=0`, `WATCH` / `HANDOFF` are advisory, not instructions to clear or replace the session. Use `/fleet-handoff` when requested or when an explicit Fleet handoff policy is enabled.
 
 **Done = ship it AND land it.** Run these steps in order:
 

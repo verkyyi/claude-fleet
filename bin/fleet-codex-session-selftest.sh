@@ -64,6 +64,48 @@ class SessionTests(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual((result.returncode, result.stdout), (0, '40\n'))
 
+    def test_context_defaults_to_native_compaction_preserving_explicit_policy(self):
+        import contextlib, io, types
+        from unittest.mock import patch
+        args = types.SimpleNamespace(pane='%1', socket='', session='', pct=False, json=True, quiet=False)
+        for configured, expected in (('', 0), ('0', 0), ('80', 80), ('60', 60), ('invalid', 0)):
+            with self.subTest(configured=configured):
+                output = io.StringIO()
+                with patch.dict(os.environ, {'TMUX': '/fixture,1,0'}), \
+                     patch.object(cx, 'identity', return_value=self.data), \
+                     patch.object(cx, 'tmux', return_value=''), \
+                     patch.object(cx.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0, stdout=configured)), \
+                     contextlib.redirect_stdout(output):
+                    cx.context(args)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result['auto_handoff_pct'], expected)
+                self.assertEqual(result['handoff_pct'], expected or 80)
+
+    def test_context_text_distinguishes_manual_transfer_from_automatic_policy(self):
+        result = subprocess.run([sys.executable, str(BIN / 'fleet-codex-session.py'), 'context',
+                                 '--session', SID, '--home', str(self.home), '--pane', ''],
+                                capture_output=True, text=True)
+        self.assertIn('auto-handoff OFF', result.stdout)
+        self.assertIn('native Agent manages compaction', result.stdout)
+        self.assertIn('manual    fleet-transfer.sh', result.stdout)
+
+    def test_context_token_opt_in_matches_stop_policy(self):
+        import contextlib, io, types
+        from unittest.mock import patch
+        args = types.SimpleNamespace(pane='%1', socket='', session='', pct=False, json=True, quiet=False)
+        for configured, limit, expected in (('\n150001', '300000', 51), ('80\n150000', '300000', 50),
+                                             ('\n900000', '300000', 100), ('\n150000', '', 0),
+                                             ('60\n150000', 'bad', 60), ('bad\n150000', '300000', 50)):
+            with self.subTest(configured=configured, limit=limit):
+                output = io.StringIO()
+                with patch.dict(os.environ, {'TMUX': '/fixture,1,0'}), \
+                     patch.object(cx, 'identity', return_value=self.data), \
+                     patch.object(cx, 'tmux', side_effect=lambda argv, socket: limit if argv[-1] == '#{@ctx_limit}' else ''), \
+                     patch.object(cx.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0, stdout=configured)), \
+                     contextlib.redirect_stdout(output):
+                    cx.context(args)
+                self.assertEqual(json.loads(output.getvalue())['auto_handoff_pct'], expected)
+
     def test_effort_turn_context_then_config(self):
         # issue #2431: the turn's effort, else collaboration_mode, else config.toml
         self.assertEqual(cx.telemetry(self.data)['effort'], '')

@@ -30,6 +30,7 @@
 | 更新说明（`whats_new` / `bin/fleet-whats-new.sh`） | 按需 | 普通会话不再默认附加「改了什么」；工具保留，用户要看时再读。Claude 和 Codex 的默认钩子均不注册，旧表的 `--hook` 暂留为静默兼容入口（#4324）。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |
+| 上下文阈值自动干预（Stop 中的 auto-handoff / compact-prep） | 按需 | 原生 Agent 默认负责压缩；Fleet 的两个百分比阈值默认 0，不自动写恢复图、输入 `/compact` 或切换会话。显式百分比/Token 配置保留，手动交接、跨节点迁移和任务归属恢复仍属核心。源码候选已改，尚未发布。 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 不再默认写入或检查；已有块原样保留，用户可用 `fleet-agent-defaults.py strip` 按需删除。执行会话仍由技能携带规则，守卫照常生效（#3125）。 |
 | 命令误操作守卫（`hooks/bash-guard.py` 的删除、强推、广域信号检查） | 核心 | 防止共享宿主上的误操作；不能替代进程或账号隔离。 |
 | 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 基础检出只读和跨会话协作边界保持；`fleet-hooks-emit.sh --target codex-managed` 从既有表生成两项已审阅 Codex 守卫的原生配置，不新增策略引擎。候选生成不等于在线安装，旧入口保留。 |
