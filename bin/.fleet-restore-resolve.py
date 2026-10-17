@@ -29,6 +29,7 @@
 # hub via hub-session.sh (`claude --resume`) rather than as a work window.
 from pathlib import Path
 import sys, glob, os, re, json, uuid
+import subprocess
 
 PANELS = {"plan", "dash", "backlog", "home"}
 HUB = "__HUB__"
@@ -129,6 +130,19 @@ def newest_sid(path, hook_sid=""):
     return thin or "-"
 
 
+saved_launches = {}
+if '--launch-map' in sys.argv:
+    launch_map = Path(sys.argv[sys.argv.index('--launch-map') + 1])
+    for record in launch_map.read_text().splitlines():
+        fields = record.split('\t')
+        if fields[0] != 'LAUNCH' or len(fields) != 4:
+            continue
+        try:
+            saved_launches[fields[1]] = (None if fields[1] in saved_launches else
+                (json.loads(fields[2]), json.loads(fields[3]) if fields[3] else None))
+        except ValueError:
+            saved_launches[fields[1]] = None
+
 groups = []
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -191,6 +205,23 @@ for line in sys.stdin:
         continue
     if name in PANELS:
         continue
+    native_session = ''
+    agent = parts[8] if len(parts) > 8 else ""
+    if fid in saved_launches:
+        saved = saved_launches[fid]
+        if saved is None:
+            continue
+        context, receipt = saved
+        if isinstance(receipt, dict) and 'native_worktree' in receipt:
+            from fleet_launch import restore_native_worktree
+            try:
+                native_session = receipt['native_session']
+                if (norepo_sid is not None or manifest or sleep_record
+                        or (hook_sid and hook_sid != native_session)):
+                    continue
+                restore_native_worktree(context, receipt, path, native_session, agent or 'claude', fid)
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                continue
     # Raw windows have their own scratch worktrees since #290. Only legacy raw
     # windows in the shared base (or an unknown base) remain unsafe to infer by
     # cwd. A live loop supplies exact provenance and keeps its existing exception.
@@ -202,12 +233,13 @@ for line in sys.stdin:
                     or Path(loop_record['worktree']).resolve() != Path(path).resolve()):
                 loop_record = {}
         except (OSError,ValueError,KeyError,TypeError): pass
-    if raw == "1" and not loop_record and not separate_raw_path(path):
+    if raw == "1" and not native_session and not loop_record and not separate_raw_path(path):
         continue
-    agent = parts[8] if len(parts) > 8 else ""
     suffix = ""
     sid = "-"
-    if agent == "codex":
+    if native_session:
+        sid = native_session
+    elif agent == "codex":
         home, transcript = "-", "-"
         try:
             data = json.loads(parts[10])
@@ -262,7 +294,7 @@ for line in sys.stdin:
     # Its own id (the pane's hooks, a no-repo stamp, a loop, a sleep record) or a
     # guess by mtime — two windows in one directory guess the same newest file.
     own = sid != "-" and (sid == hook_sid or norepo_sid is not None
-                          or bool(loop_record) or bool(retained) or agent == "codex")
+                          or bool(loop_record) or bool(retained) or bool(native_session) or agent == "codex")
     groups.append((sid, own, group))
 
 # One conversation is ONE row (issue #3543): two windows naming the same session id

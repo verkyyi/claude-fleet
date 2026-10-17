@@ -6,6 +6,8 @@ on:
       - 'bin/fleet-native-claude-worktree-selftest.py'
       - 'bin/fleet-native-claude-tui-selftest.py'
       - 'bin/fleet-native-create-claude-selftest.py'
+      - 'bin/.fleet-restore-resolve.py'
+      - 'bin/fleet-restore.sh'
       - 'bin/dash-raw-session.sh'
       - 'bin/fleet_launch.py'
       - 'bin/fleet-lib.sh'

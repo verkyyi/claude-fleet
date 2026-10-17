@@ -192,6 +192,16 @@ python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude
 
 ### SessionStart 的目录时序与恢复边界
 
+原生创建候选的恢复复用既有 `LAUNCH` 映射内的 context / receipt，不新增持久化文件类型或第二套目录索引。
+快照解析器只对 receipt 与真实 Git 绑定一致的原生会话接纳主仓库内的 linked worktree；无证明的嵌套目录、
+主检出、错误 provider / window / session 仍拒绝。会话 ID 取原生 receipt，不按最新 transcript 猜测。
+恢复时再次核对窗口行、任务上下文与 Git 身份，再从 receipt 重建 `@native_worktree`，随后仍由既有
+supervisor 校验当前任务所有权和新原生进程。旧 PID 的持久记录不是重启后进程仍活着的证明。
+
+`fleet-native-restore-selftest.sh` 使用独立 tmux 的真实 snapshot/restore 与替代 launcher 验证映射往返和
+错误 ID 不启动；真实 Claude supervisor 夹具另验证临时服务器销毁重建后的精确会话恢复与文件保留。
+这不是完整 POD/账号/MCP/多副本 Hub 验收，也不使原生创建成为默认。旧映射没有原生 receipt 时继续走旧路径。
+
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
 SessionStart 命令。临时 HOME、空 setting sources、假 API key、loopback 拒绝端点、空工具
 及 MCP 保持；发现机器级 Claude 配置目录时拒绝运行。此模式不能继承 `--bare` 的

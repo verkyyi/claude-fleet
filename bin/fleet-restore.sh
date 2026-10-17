@@ -310,13 +310,13 @@ snapshot() {
     # row since issue #3118: nothing reopens it by `ensure` any more.
     # Then (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
-      [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap >> "$tmp" 2>/dev/null
     # Accepted launch identity survives snapshot/restore; absence of native
     # proof is an interrupted start, never permission to rerun the first input.
-    tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@launch}|#{@launch_receipt}' 2>/dev/null \
-      | awk -F'|' '$1 != "" && $2 != "" { printf "LAUNCH\t%s\t%s\t%s\n", $1, $2, $3 }' >> "$tmp"
+    tmux -L "$sock" list-windows -t "$sess" -F $'#{@fleet_id}\t#{@launch}\t#{@launch_receipt}' 2>/dev/null \
+      | awk -F'\t' '$1 != "" && $2 != "" { printf "LAUNCH\t%s\t%s\t%s\n", $1, $2, $3 }' >> "$tmp"
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+      [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" >> "$tmp" 2>/dev/null
     # A desk session (issue #2676) is a no-repo row whose ticket lives in a repo:
     # `DESK<TAB><fleet_id><TAB><owner/name>` rows, appended AFTER every FID/WIN pair
     # (a row between them would unpair it — fleet_restore_wins), restore() stamps
@@ -880,12 +880,21 @@ restore() {
         stamp=$(fleet_win_stamp_cmd @worktree "$wpath")
         [ -n "${wrepo:-}" ] && stamp="$stamp$(fleet_win_stamp_cmd @repo "$wrepo")"
       fi
-      local launch_context='' launch_receipt=''
+      local launch_context='' launch_receipt='' native_intent=''
       case "$wtag" in WIN:?*)
         launch_context=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $3}' "$mf")
         launch_receipt=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $4}' "$mf")
         if [ -n "$launch_context" ]; then
           stamp="$stamp$(fleet_win_stamp_cmd @launch "$launch_context" @launch_receipt "$launch_receipt" @launch_started 1 @fleet_id "${wtag#WIN:}")"
+          if native_intent=$(printf '[%s,%s]' "$launch_context" "${launch_receipt:-null}" \
+              | python3 "$BIN/fleet_launch.py" restore-native-worktree "$wpath" "$wid" "$agent_label" "${wtag#WIN:}"); then
+            [ -z "$native_intent" ] || stamp="$stamp$(fleet_win_stamp_cmd @native_worktree "$native_intent")"
+          else
+            kind=failed
+            cmd='exec "$SHELL"'
+            say "    ⚠ $wname: saved native launch identity is invalid — not resumed"
+            log "refuse $sess/$wname native-launch-identity"
+          fi
         fi ;;
       esac
       cmd="$stamp$cmd"
@@ -993,6 +1002,9 @@ restore() {
         # The outcome (issue #1265) — AFTER the state re-stamp above, so an awaiting
         # window's `needs` is the last word, not the snapshot's state.
         case "$kind" in
+          failed)
+            OSEQ=$((OSEQ + 1))
+            mark_outcome "$OSEQ" "$sock" "$nw" "$sess" "$wname" failed "saved native launch identity is invalid" ;;
           resume)
             tmux -L "$sock" set-window-option -t "$nw" @restore_fresh_cmd "$stamp$fresh_cmd" 2>/dev/null
             OSEQ=$((OSEQ + 1))
