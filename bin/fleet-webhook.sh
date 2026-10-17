@@ -276,7 +276,7 @@ wh_handler() {
   log "handler listening on $URL (events: $EVENTS)"
   # exec: the pid supervise records IS the server — a TERM to a bash wrapper
   # left the python behind on the port, a PPID-1 orphan every restart after
-  # failed to bind (issue #4358, mini2 2026-10-17: 4 days, a crash loop every 30 s)
+  # failed to bind (issue #4358, a managed Mac 2026-10-17: 4 days, a crash loop every 30 s)
   WH_SELF="$0" WH_PORT="$PORT" exec python3 - <<'PY'
 import os, sys, subprocess, http.server, socketserver
 SELF = os.environ["WH_SELF"]; PORT = int(os.environ.get("WH_PORT", "8917"))
