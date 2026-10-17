@@ -106,7 +106,7 @@
 # name and the task bar show both), so this never runs git.
 # Requires: jq on the Claude path (silently exits if absent); none on the mod's.
 
-FROM='' RLTS=''
+FROM='' RLTS='' OWNER='' THREAD=''
 if [[ "${1:-}" == --from ]]; then FROM="${2:-}"; shift 2; fi
 
 US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
@@ -126,6 +126,8 @@ if [[ "$FROM" == mod || "$FROM" == proxy || "$FROM" == codex ]]; then
       rl_reset5=*) RLR5=${kv#*=} ;;
       rl_reset7=*) RLR7=${kv#*=} ;;
       ts=*)        RLTS=${kv#*=} ;;
+      owner=*)     OWNER=${kv#*=} ;;
+      thread=*)    THREAD=${kv#*=} ;;
     esac
   done
   # the proxy feeds quota only: whatever else it might say is not its to say
@@ -274,5 +276,21 @@ if [[ "$RL5" =~ ^[0-9]+$ && "$RL7" =~ ^[0-9]+$ ]]; then
   if [[ -n "$FROM" ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" @rl_src "$FROM")
   else                      ARGS+=(set-window-option -u -t "$TMUX_PANE" @rl_src); fi
 fi
-[[ ${#ARGS[@]} -gt 0 ]] && tmux ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null
+if [[ ${#ARGS[@]} -gt 0 ]]; then
+  if [[ "$FROM" == codex && ( -n "$OWNER" || -n "$THREAD" ) ]]; then
+    [[ "$OWNER" =~ ^[0-9]+$ && "$THREAD" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || exit 0
+    queue=''
+    for argument in "${ARGS[@]}"; do
+      if [[ "$argument" == ';' ]]; then queue+=' ; '
+      else
+        escaped=${argument//\'/\'\\\'\'}
+        queue+=" '$escaped'"
+      fi
+    done
+    guard='#{&&:#{==:#{@cc_agent},codex},#{&&:#{==:#{@cc_launcher_pid},'"$OWNER"'},#{==:#{@codex_session_id},'"$THREAD"'}}}'
+    tmux if-shell -F -t "$TMUX_PANE" "$guard" "$queue" 2>/dev/null
+  else
+    tmux ${ARGS[@]+"${ARGS[@]}"} 2>/dev/null
+  fi
+fi
 exit 0

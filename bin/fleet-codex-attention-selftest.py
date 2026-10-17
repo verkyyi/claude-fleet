@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 BIN=Path(__file__).absolute().parent
 spec=importlib.util.spec_from_file_location('attention',BIN/'fleet-codex-attention.py')
@@ -184,6 +184,113 @@ class MonitorEvents(unittest.TestCase):
         self.assertEqual(self.connect.call_count,1)
         self.assertEqual(len(self.native.calls),3)
         self.assertFalse(self.monitor.event_stream)
+
+    def native_meter(self):
+        self.monitor.native_usage=True
+        self.monitor.meter=Mock()
+        original=self.native.call
+        def capable(method,params):
+            result=original(method,params)
+            result['thread'].update(source='appServer',parentThreadId=None)
+            if method=='thread/resume':result.update(model='native-fixture',reasoningEffort='high')
+            return result
+        self.native.call=capable
+        return self.monitor.meter
+
+    def test_native_meter_reuses_connection_coalesces_exact_usage_and_never_answers(self):
+        meter=self.native_meter()
+        self.tick()
+        self.assertEqual([method for method,_ in self.native.calls],['thread/read','thread/resume'])
+        self.assertEqual(self.connect.call_args.kwargs['opt_out_notifications'],a.TELEMETRY_OPT_OUT)
+        meter.reset_mock()
+        for identifier,count in ((SID,1),('other-thread',999),(SID,2)):
+            self.native.events.append({'method':'thread/tokenUsage/updated','params':{
+                'threadId':identifier,'tokenUsage':{'last':{'totalTokens':count},'modelContextWindow':100}}})
+        self.native.events.append(REQUEST)
+        self.tick()
+        self.assertEqual(meter.observe.call_count,1)
+        self.assertEqual(meter.observe.call_args.args[1]['last']['totalTokens'],2)
+        self.assertEqual(meter.observe.call_args.args[2],{'model':'native-fixture','effort':'high'})
+        self.assertFalse(self.native.sent)
+        self.assertEqual(self.connect.call_count,1)
+        self.monitor.close()
+        meter.reset_native.assert_called()
+
+    def test_native_meter_does_not_load_old_or_helper_threads(self):
+        meter=self.native_meter()
+        for status,source,parent,origin in (('notLoaded','appServer',None,None),('systemError','appServer',None,None),
+                                            ('idle',{'subAgent':'thread_title'},None,None),('idle','appServer','parent',None),
+                                            ('idle','appServer',None,'thread_title')):
+            self.monitor.close();self.monitor.next_at=0
+            def snapshot(method,params):
+                self.assertEqual(method,'thread/read')
+                return {'thread':{'id':SID,'status':{'type':status},'source':source,'parentThreadId':parent,'threadSource':origin}}
+            with patch.object(self.native,'call',side_effect=snapshot):self.tick()
+            self.assertFalse(self.monitor.subscribed)
+        meter.observe.assert_not_called()
+
+    def test_native_meter_malformed_event_or_changed_identity_restores_fallback(self):
+        meter=self.native_meter()
+        self.tick();meter.reset_mock()
+        self.native.events.append({'method':'thread/tokenUsage/updated','params':{'threadId':SID,'tokenUsage':None}})
+        self.tick()
+        self.assertIsNone(self.monitor.client)
+        meter.reset_native.assert_called_once()
+        meter.observe.assert_not_called()
+
+    def test_native_meter_settings_follow_native_events_not_config_guesses(self):
+        meter=self.native_meter()
+        self.tick();meter.reset_mock()
+        self.native.events.append({'method':'thread/settings/updated','params':{
+            'threadId':SID,'threadSettings':{'model':'updated-model','effort':None}}})
+        self.tick()
+        self.assertEqual(meter.observe.call_args.args[2],{'model':'updated-model','effort':None})
+        self.native.events.append({'method':'model/rerouted','params':{'threadId':SID,'toModel':'rerouted-model'}})
+        self.tick()
+        self.assertEqual(meter.observe.call_args.args[2]['model'],'rerouted-model')
+
+    def test_native_meter_closed_or_unloaded_thread_resets_and_rejoins_when_loaded(self):
+        meter=self.native_meter()
+        for event in ({'method':'thread/closed','params':{'threadId':SID}}, self.status('notLoaded')):
+            self.monitor.close();self.monitor.next_at=0
+            self.tick();meter.reset_mock()
+            self.monitor.reconcile_at=self.now+30
+            self.native.events.append(event)
+            self.tick()
+            self.assertFalse(self.monitor.subscribed)
+            meter.reset_native.assert_called_once()
+            meter.keep_native.assert_not_called()
+            self.monitor.reconcile_at=0
+            self.tick()
+            self.assertTrue(self.monitor.subscribed)
+
+    def test_native_meter_resume_failure_keeps_fallback_and_never_starts_a_turn(self):
+        meter=self.native_meter()
+        original=self.native.call
+        def unavailable(method,params):
+            if method=='thread/resume':raise ValueError('no rollout found for fresh thread')
+            return original(method,params)
+        with patch.object(self.native,'call',side_effect=unavailable):self.tick()
+        self.assertIsNone(self.monitor.client)
+        meter.reset_native.assert_called()
+        meter.observe.assert_not_called()
+        self.assertFalse(self.native.sent)
+
+    def test_native_meter_rechecks_identity_and_resume_result_before_observation(self):
+        meter=self.native_meter()
+        original=self.native.call
+        for race in ('identity','thread'):
+            self.data=dict(DATA)
+            def changed(method,params):
+                result=original(method,params)
+                if method=='thread/resume':
+                    if race=='identity':self.data['home']='/replacement-home'
+                    else:result['thread']['id']='replacement-thread'
+                return result
+            with patch.object(self.native,'call',side_effect=changed):self.tick()
+            self.assertIsNone(self.monitor.client)
+            self.assertFalse(self.monitor.subscribed)
+        meter.observe.assert_not_called()
 
     def test_native_events_update_exact_thread_without_resuming_or_reading_again(self):
         self.tick()

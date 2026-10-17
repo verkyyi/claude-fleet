@@ -10,7 +10,12 @@ on:
       - 'bin/fleet_launch.py'
       - 'bin/fleet-agent-defaults.py'
       - 'conf/agent-defaults/codex/config.default.toml'
+      - 'bin/fleet-native-usage-cli-selftest.py'
       - 'bin/fleet-codex-rpc.py'
+      - 'bin/fleet-codex-attention.py'
+      - 'bin/fleet-codex-session.py'
+      - 'bin/fleet-codex-runtime.py'
+      - 'conf/statusline.sh'
       - 'bin/fleet-hooks-emit.sh'
       - 'hooks/settings-hooks.json'
       - 'hooks/codex-map.json'
@@ -66,6 +71,12 @@ jobs:
         run: >-
           timeout 100 python3 bin/fleet-native-session-env-selftest.py --hooks --fork-seed
           --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Verify native usage subscription without credentials or real inference
+        if: matrix.mode == 'exec'
+        run: |
+          timeout 90 python3 bin/fleet-native-usage-cli-selftest.py \
+            --meter-candidate \
+            --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
         run: |
