@@ -351,6 +351,17 @@ python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
 因此本探针不证明子 Agent、任意脱管子进程、活动 turn 中断、真实 TUI 或完整 MCP 的停止。
 这些门槛以及并发恢复/撤销仍未完成，旧 `prove_stopped` 不因本次探针放宽，生产不启用共享后台。
 
+### Linux 沙箱前置条件与线程生命周期分开验收
+
+线程停止探针的 Linux 首轮失败发生在命令启动前：一种环境缺少系统与内置 bwrap，
+另一种环境拒绝 bubblewrap 的网络命名空间操作。这不是“回合 completed 所以工具成功”，
+也不是现有全权限模式不可用的证据；探针继续要求真实命令启动和退出，不降级成无工具的模型回合。
+
+依赖交给发行版包管理器：托管镜像安装 `bubblewrap`，CI 按官方说明准备 bwrap 的
+AppArmor profile，不扩展 Fleet 的工具制品格式来复制上游资源打包。宿主命名空间和容器策略
+仍须独立验收；本次不调整线上 sysctl、capabilities、seccomp 或用户权限。
+细节见[托管节点前置条件](MANAGED-NODE.md#codex-原生-linux-沙箱依赖)。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器

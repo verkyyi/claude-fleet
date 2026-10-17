@@ -26,6 +26,22 @@ def module(name):
 
 
 class LinuxNode(unittest.TestCase):
+    def test_image_carries_native_sandbox_dependency_without_changing_policy(self):
+        docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        runtime = docker.split('FROM ${BASE}', 1)[1]
+        self.assertRegex(runtime, r'apt-get install -y --no-install-recommends[\s\S]*?\bbubblewrap\b')
+        self.assertIn('&& bwrap --version', runtime)
+        workflow = (BIN.parent / '.github/workflows/native-managed-hooks.yml').read_text()
+        self.assertIn('bubblewrap apparmor-profiles apparmor-utils', workflow)
+        self.assertIn('"$RUNNER_ENVIRONMENT" = github-hosted', workflow)
+        self.assertIn('apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict', workflow)
+        self.assertIn('bwrap --unshare-user --unshare-pid --unshare-net --ro-bind / /', workflow)
+        for text in (runtime, workflow):
+            self.assertNotIn('sysctl -w', text)
+            self.assertNotIn('seccomp=unconfined', text)
+            self.assertNotIn('apparmor=unconfined', text)
+            self.assertNotIn('--privileged', text)
+
     def test_linux_paths_and_systemd_environment(self):
         s = module('fleet-node-supervisor')
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {

@@ -265,6 +265,20 @@ root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：
 `fleet doctor --installs`（#2692）一张表列本机的运行时、每个登录安装、每份客户端壳，各自是否等于 stable。
 非托管机器照旧走 install-sync，一字不差。
 
+### Codex 原生 Linux 沙箱依赖
+
+托管容器镜像通过发行版签名包安装 `bubblewrap`，在构建时执行 `bwrap --version` 验证
+可执行文件存在。Codex 优先使用 PATH 上的 `bwrap`，无需为此新增 Fleet 的资源解包协议或
+自制沙箱；见[官方前置条件](https://learn.chatgpt.com/docs/sandboxing#prerequisites)。
+Linux 非容器节点仍由管理员通过发行版包管理器准备依赖，Fleet 启动不自动安装系统软件。
+
+**有依赖不等于可运行。** 选用原生 read-only/workspace-write 时，还需宿主允许所需的
+用户/挂载/网络命名空间及对应安全策略。`user.max_user_namespaces=0`、容器 seccomp 或
+AppArmor 拒绝必须作为独立限制处理；安装包不能修复它们，也不能通过改成全权限来宣称
+原沙箱验收通过。镜像不更改 sysctl、POD capabilities、seccomp、已有用户权限或默认模式。
+GitHub 托管 CI 只按官方 Ubuntu 24.04 指引加载发行版的 bwrap AppArmor profile，保留全局限制，
+先执行只读、无网络的命名空间探针，再运行真实原生线程验收；该步骤不连接生产节点。
+
 ### `release.json`（仓库根，随发布包一起签名）
 
 ```json
