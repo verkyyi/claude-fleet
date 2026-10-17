@@ -103,10 +103,27 @@ class UpgradeResponse(http.client.HTTPResponse):
         return False if self.status == 101 else super()._check_close()
 
 
+def system_context():
+    """External origins verify against the system store, never the test CA.
+
+    The broker exports SSL_CERT_FILE=<test ca.pem> for its workloads, and
+    create_default_context() honours it (#4630). Read OpenSSL's built-in
+    locations instead, which no environment variable moves.
+    """
+    paths = ssl.get_default_verify_paths()
+    cafile = paths.openssl_cafile if paths.openssl_cafile and Path(paths.openssl_cafile).is_file() else None
+    capath = paths.openssl_capath if paths.openssl_capath and Path(paths.openssl_capath).is_dir() else None
+    require(cafile or capath, 'SYSTEM_CA_STORE_MISSING')
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_verify_locations(cafile=cafile, capath=capath)
+    return context
+
+
 class PinnedHTTPS(http.client.HTTPSConnection):
     response_class = UpgradeResponse
     def __init__(self, host, port, address):
-        super().__init__(host, port, timeout=2, context=ssl.create_default_context())
+        super().__init__(host, port, timeout=2, context=system_context())
         self.address = address
 
     def connect(self):
