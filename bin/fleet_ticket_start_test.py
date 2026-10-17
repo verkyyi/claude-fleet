@@ -91,10 +91,10 @@ sys.exit(37)
     def tm(self, *args):
         return self.run_command('tmux', '-S', str(self.socket), *args)
 
-    def launch(self, argv):
+    def launch(self, argv, directory=None):
         # respawn inherits the isolated tmux server's URL-only environment, as
         # the real same-pane recovery does; no parent-shell env-unset shortcut.
-        self.tm('respawn-pane', '-k', '-t', self.pane, '-c', str(self.worktree), shlex.join(argv))
+        self.tm('respawn-pane', '-k', '-t', self.pane, '-c', str(directory or self.worktree), shlex.join(argv))
         end = time.monotonic() + 12
         while time.monotonic() < end:
             if self.tm('display-message', '-p', '-t', self.pane, '#{pane_dead}') == '1':
@@ -121,6 +121,21 @@ sys.exit(37)
         args = ['--agent', 'codex', 'fixture task']
         self.launch([str(self.install / 'fleet-session-wrap.sh'), *args])
         self.assert_admitted(args)
+
+    def test_bound_resume_launches_from_saved_worktree_not_wrapper_cwd(self):
+        self.tm('set-option', '-w', '-t', self.pane, '@worktree', str(self.worktree))
+        args = ['--agent', 'codex', 'resume', 'fixture-session']
+        self.launch([str(self.install / 'fleet-session-wrap.sh'), *args], directory=self.main)
+        self.assert_admitted(args)
+        binding = json.loads(self.native_record.read_text())['context']['worktree']
+        self.assertEqual(binding['root'], str(self.worktree))
+        self.assertEqual(binding['common_dir'], str(self.main / '.git'))
+
+    def test_bound_main_checkout_refuses_without_admission_or_native(self):
+        self.tm('set-option', '-w', '-t', self.pane, '@worktree', str(self.main))
+        self.launch([str(self.install / 'fleet-session-wrap.sh'), '--agent', 'codex'])
+        self.assertFalse(self.native_record.exists())
+        self.assertEqual(self.requests, [])
 
     def test_same_session_source_rollback_from_url_only_tmux(self):
         transcript = self.root / 'source.jsonl'

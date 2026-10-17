@@ -148,12 +148,42 @@ python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude --
 恢复时重新校验当前 Git 注册、仓库身份和原生进程，不用启动主检出、目录前缀或
 `CLAUDE_PROJECT_DIR` 猜测所有权。缺失或错配的目录不得静默以可写主检出替代。
 现有 Fleet restore 已优先使用保存的 `@worktree`，应复用其记录而不是新增恢复数据库。
-此次尚未将实际 hook cwd 绑定到任务/准入 receipt，未切换创建入口，也未证明真实 TUI 的
+该次探针尚未将实际 hook cwd 绑定到任务/准入 receipt，未切换创建入口，也未证明真实 TUI 的
 同等时序；下一步仍须完成上述绑定与恢复拒绝路径，不能以这份离线记录解除上线门槛。
 
 候选工作流 `native-claude-worktree` 在 GitHub-hosted Ubuntu 上分别运行 bare 与实际 hook
 探针，使用官方 npm 平台包固定 `2.1.296` 并校验 SHA-512；不执行安装脚本，不使用账号凭据。
 JSON 结果保存为 CI artifact。工作流存在不等于 Linux 验收通过，结果以对应提交的 job 为准。
+
+### 复用既有回执绑定工作树
+
+后续候选在 `fleet_launch.py` 与既有 local authority supervisor 内实现目录绑定，不新增
+会话数据库、轮询服务、Worktree 创建者或清理者。窗口已有 `@worktree` 时，启动前通过
+真实 Git 解析 root、private git directory 和 common directory，检查 linked-worktree
+注册及 `gitdir` 反向指针。主检出、缺失目录、伪造/符号链接 marker 和错配注册拒绝；
+查询清除继承的 `GIT_*` 重定向、关闭全局/系统 Git 配置，设置有限超时。
+
+- 接受的任务：将三项路径放入既有 `@launch_receipt.worktree`，随既有任务 evidence 保存。
+  SessionStart 的实际 cwd 必须解析为同一绑定。首次验明及投递前重检窗口/目录，不能只凭
+  session ID 和活 PID 发布启动成功或投递 held seed。迟到 hook 不能替换或擦除已保存绑定。
+- 本地准入：同一检查先于 reserve/begin；绑定放入现有 authority context/receipt，真实 hook
+  必须通过目录检查才上报 observe。Hub 原有 PID/session identity 协议不扩展，不把本地
+  路径冒称为 Hub 端验证过的目录授权；既有 legacy 输入投递语义也不因此变成 held-seed 协议。
+- 恢复：新子进程显式使用已验证 root 作为 cwd，不继承 wrapper 留在主检出或其他目录的 cwd。
+  已带绑定的任务回执在路径缺失、换树或变更注册时拒绝启动，不回退主检出、不猜另一会话。
+  原生 ID、账号及任务代次仍由既有机制验证。曾经没有目录绑定的老回执与无仓库路径保持兼容；
+  若窗口有既有 `@worktree`，在下一次受管启动补充绑定，不扫描或改写正在运行的老会话。
+
+真实 Claude hook 探针扩展至 52 项：新增创建/显式目录恢复的 Git 绑定检查，以及从主检出
+恢复时拒绝过早 cwd 的负例。隔离 tmux 的真实 wrapper/local-authority 测试另验证：wrapper
+在主检出时，子进程仍从保存的工作树启动；误将主检出作为绑定时，不调用准入或启动 Agent。
+后者使用假 native 程序，不宣称真实模型或面板验收。Python launch 回归还覆盖 Git 重定向、
+反向指针错配、缺失 Git/超时、窗口换绑、旧回执兼容与缺少原生目录证明时不发布任务启动成功。
+
+这些路径是绑定证据，不是原生生命周期所有者标记，也不是对可写 Git 元数据的租户隔离保证。
+本批尚未切换原生创建入口、取消 Fleet setup、修改默认 MCP 或完成真实 TUI/部署验收。
+后续由原生创建目录时，仍须在同一准入链中校验新路径与所选仓库，再写入这份既有绑定；
+不能直接把一个未知 cwd 当成授权，也不能在已分配的 Fleet 工作树内再创建第二层工作树。
 
 ### 原生清理所有权优先于 Fleet 回收
 
