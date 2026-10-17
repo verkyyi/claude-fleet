@@ -416,6 +416,10 @@ fcfg_label_i18n() {
     FLEET_ORPHAN_LISTEN_SECS) printf '孤儿监听器年龄' ;;
     FLEET_ORPHAN_LISTEN_ACTION) printf '孤儿监听器动作' ;;
     FLEET_ORPHAN_LISTEN_EVERY) printf '孤儿监听器扫描间隔' ;;
+    FLEET_ORPHAN_TREE_SECS) printf '关窗残留进程树年龄' ;;
+    FLEET_ORPHAN_TREE_EVERY) printf '关窗残留进程树扫描间隔' ;;
+    FLEET_SELFTEST_PROC_SECS) printf '自测残留进程年龄' ;;
+    FLEET_SELFTEST_PROC_GLOBS) printf '自测临时根名字' ;;
     FLEET_LISTEN_EXEMPT_RE) printf '监听器豁免规则' ;;
     FLEET_MEMGUARD) printf '内存守护开关' ;;
     FLEET_MEM_SPIKE_GROW_MB) printf '内存暴涨增量 MB' ;;
