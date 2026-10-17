@@ -1096,7 +1096,7 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 
 ## 25. 托管登录的连接证书由运维维护，从不叫人登录（#4594）
 
-被 `account adopt` 接管的登录（accounts.json 里 `managed: true`，`fleet_node_manages` / `bin/fleet_managed.py`）是 fleet 自己的，它的连接证书（`~/.ssh/fleet-cert-cert.pub`，12 小时）也是。连接证书平时只在「用到时」续（#3701），可托管节点上除了国内探针的身份步，几乎没有东西用这个登录的证书：它过期，7 天后设备登记也失效，就只剩扫码一条路——2026-10-13 macmini 上正是这样挡住了 stable 的 `cn:` 关口，还把「请你跑 `fleet login`」升级给了运营者。
+被 `account adopt` 接管的登录（accounts.json 里 `managed: true`，`fleet_node_manages` / `bin/fleet_managed.py`）是 fleet 自己的，它的连接证书（`~/.ssh/fleet-cert-cert.pub`，12 小时）也是。连接证书平时只在「用到时」续（#3701），可托管节点上除了国内探针的身份步，几乎没有东西用这个登录的证书：它过期，7 天后设备登记也失效，就只剩扫码一条路——2026-10-13 一台托管 Mac 上正是这样挡住了 stable 的 `cn:` 关口，还把「请你跑 `fleet login`」升级给了运营者。
 
 - **运维兜底续期**：这个登录的 diskguard 一拍（节点守护以它的身份跑的账号任务）每 `FLEET_MANAGED_CERT_EVERY`（900 秒）跑一次 `fleet-login.py keep`：证书没了 / 低于续期余量，或上次续期超过 `FLEET_KEEP_DEVICE_SECS`（2 天），就用设备钥匙续（login.log `why=keep`，`cert-renew.last`）。入口的设备窗口因此永远到不了 7 天。别的登录上 `keep` 什么也不做——它是 #3701「用到时才续」唯一的例外。`FLEET_MANAGED_CERT_KEEP=0` 关掉。
 - **演练命令先续再判断**：`fleet-drill.sh` 在看 `cert_live` 之前先跑 `fleet-login.py renew --on-use drill`。

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Is this login one a managed node's ops service maintains? (claude-fleet#4594)
 
 The python twin of fleet_node_manages (bin/fleet-daemon-lib.sh): the machine
