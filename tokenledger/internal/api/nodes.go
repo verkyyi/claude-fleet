@@ -769,29 +769,39 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 					payload = string(b)
 				}
 			}
-			if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
-				m.Proto, payload, now); err != nil {
-				log.Printf("node %s: record heartbeat: %v", ep.ID, err)
-			}
-			// A load the node could not read is no point on the trend
-			// (claude-fleet#2798): 读不到 is not a zero.
-			if !hasString(hb.SysUnread, "load") {
-				s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
-			}
-			// The push channel's nodes topic reads again (claude-fleet#2794).
-			s.nodesChanged.fire()
-			// The Fleet Hub registry (claude-fleet#1409): this login's
-			// fleets, re-derived and checked before they are registered.
-			s.nodeBack(*ep, now)
-			if nc.machineLink {
-				s.serviceAlerts(hb.Hostname, hb.Services, now)
-				// The release ledger (claude-fleet#3140): the first beat on a train's sha.
-				if hb.Versions != nil {
-					s.noteReleaseReach(hb.Hostname, hb.Versions.Runtime, now)
+			// The push channel reads the roster and the sessions while this
+			// beat is being recorded; begin/end tell it a read that overlapped
+			// may be half this beat and half the last (claude-fleet#3396).
+			// Deferred, so a panic in between cannot leave it waiting.
+			func() {
+				s.nodesChanged.begin()
+				defer s.nodesChanged.end()
+				s.sessionsChanged.begin()
+				defer s.sessionsChanged.end()
+				if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
+					m.Proto, payload, now); err != nil {
+					log.Printf("node %s: record heartbeat: %v", ep.ID, err)
 				}
-			}
-			s.recordFleets(*ep, hb, nc.canRead, first, now)
-			first = false
+				// A load the node could not read is no point on the trend
+				// (claude-fleet#2798): 读不到 is not a zero.
+				if !hasString(hb.SysUnread, "load") {
+					s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
+				}
+				// The push channel's nodes topic reads again (claude-fleet#2794).
+				s.nodesChanged.fire()
+				// The Fleet Hub registry (claude-fleet#1409): this login's
+				// fleets, re-derived and checked before they are registered.
+				s.nodeBack(*ep, now)
+				if nc.machineLink {
+					s.serviceAlerts(hb.Hostname, hb.Services, now)
+					// The release ledger (claude-fleet#3140): the first beat on a train's sha.
+					if hb.Versions != nil {
+						s.noteReleaseReach(hb.Hostname, hb.Versions.Runtime, now)
+					}
+				}
+				s.recordFleets(*ep, hb, nc.canRead, first, now)
+				first = false
+			}()
 			if s.Spot != nil {
 				// A SPOT node's first beat makes it online; a beat with
 				// sessions — or an unknown count, #1465 — restarts its
@@ -1186,6 +1196,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 	rows, err := s.Store.Nodes()
 	if err != nil {
 		return NodesSnapshot{}, err
+	}
+	if s.nodesRowsHook != nil {
+		s.nodesRowsHook()
 	}
 	out := NodesSnapshot{At: now.UTC(), Machines: []MachineView{}, Nodes: []NodeView{}}
 	// Node kinds and SPOT states (claude-fleet#1428): both tables are empty

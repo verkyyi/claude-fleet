@@ -32,10 +32,44 @@ var fleetSessionsRecheck = 5 * time.Second
 // changeBroadcast wakes every waiter at once: wait() hands out the current
 // channel, fire() closes it and starts a new one. The zero value is ready.
 // last is when it last fired — what a test measures a wake-up from.
+//
+// writing counts recordings in flight (claude-fleet#3396): begin() before a
+// heartbeat's first write, end() after its last, so a reader can tell that
+// what it just read may be half one beat and half the one before.
 type changeBroadcast struct {
-	mu   sync.Mutex
-	ch   chan struct{}
-	last time.Time
+	mu      sync.Mutex
+	ch      chan struct{}
+	last    time.Time
+	writing int
+}
+
+// begin marks a recording in flight; every begin is paired with one end.
+func (b *changeBroadcast) begin() {
+	b.mu.Lock()
+	b.writing++
+	b.mu.Unlock()
+}
+
+// end closes what begin opened. It wakes nobody: fire() does.
+func (b *changeBroadcast) end() {
+	b.mu.Lock()
+	if b.writing > 0 {
+		b.writing--
+	}
+	b.mu.Unlock()
+}
+
+// settled says a read that started when wait() handed out ch saw one
+// consistent state: nothing fired since and no recording is in flight.
+func (b *changeBroadcast) settled(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return false
+	default:
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.writing == 0
 }
 
 func (b *changeBroadcast) wait() <-chan struct{} {
