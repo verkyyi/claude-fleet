@@ -205,6 +205,9 @@
 #   trial-no-subscription                           tokenledger/internal/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
+#   cluster-pod-claude-leak                         tokenledger/internal/api fleet_cred_pod.go (podProvidersOf in
+#                                                   credPolicyOf: fleet.cred_pod_providers, default codex, on u-* /
+#                                                   fleet-linux-* / ccquota-spot-*); go test, when a toolchain is here
 #   trial-host-no-spare                             tokenledger/internal/api fleet_accounts.go (trialMachine: only
 #                                                   machines with a ready spare) + fleet_try.go (no_spare,
 #                                                   trial_no_spare); go test, when a toolchain is here
@@ -2997,6 +3000,21 @@ drill_trial_no_subscription() {
   c11_go_tests fleet_trial_cred_test.go TestTrialCredAllow TestCheckTrialCredAllow || return 1
   WHAT='试用者没有个人白名单 key 也按 fleet.trial.cred_allow（默认 "*"）拿订阅；[] 时排队说「试用暂时没有可用订阅」；转正写成本人的白名单（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='新试用 principal 无 user key ⇒ "*" 放行、列表只放列出的、[] 拒绝且领位回 nosub；本人的列表优先；转正后本人 key 为 "*"、不再是试用者（go test）'
+  SECS=$(since "$t0")
+}
+
+# ---- cluster-pod-claude-leak (#4601): a person's pod read its owner's own
+# allowance as the machine's, so an owner opened to "*" handed every new pod
+# Claude too. Now credPolicyOf gates the provider on every cluster pod machine
+# (fleet.cred_pod_providers, default codex) before any list is read.
+drill_cluster_pod_claude_leak() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+  t0=$(now)
+  grep -q 'p.PodProviders = podProvidersOf(settings, machine)' "$tl/api/fleet_cred_policy.go" 2>/dev/null \
+    || { WHY="credPolicyOf no longer gates the provider on a cluster pod (podProvidersOf)"; return 1; }
+  c11_go_tests fleet_cred_pod_test.go TestClusterPodCodexOnly TestClusterPodOwnListKept TestCheckCredPodProviders || return 1
+  WHAT='集群 POD（u-* / fleet-linux-* / ccquota-spot-*）只放 fleet.cred_pod_providers（默认 codex）：owner 是 "*" 的新 POD 拿得到 Codex、拿不到 Claude（测试按名核对在，Go 门跑它们）'
+  [ "$GO_RAN" = 1 ] && WHAT='owner "*" 的新 POD：Codex 放、Claude 拒（cluster pods are Codex-only）；owner 列表只有 Codex 条目起作用；节点自己的名单照旧；普通机器不受影响；设置 * 关掉（go test）'
   SECS=$(since "$t0")
 }
 

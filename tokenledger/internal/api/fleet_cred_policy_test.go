@@ -690,7 +690,8 @@ func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
 // subscription was denied — the China real-user probe's Codex turns were all
 // 403 until someone listed the pod by hand. With no list of its own it takes
 // its owner's person list; a drill owner reads its creator's; a list written
-// for the pod wins; an ordinary machine is unchanged.
+// for the pod wins; an ordinary machine is unchanged. A pod is a cluster pod:
+// of the owner's list only its Codex entries count (claude-fleet#4601).
 func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
 	h, _, _ := policyRig(t)
 	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
@@ -711,7 +712,7 @@ func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
 		t.Fatalf("unlisted owner's pod leased %v", got)
 	}
 	setPolicy(t, h, "user", pAlice, []string{uuidGmail, uuidCodex})
-	if got, _, _ := leased(t, h, alicePod); !eq(got, "claude/gmail", "codex/default") {
+	if got, _, _ := leased(t, h, alicePod); !eq(got, "codex/default") {
 		t.Fatalf("pod with the owner's list: %v", got)
 	}
 	// An ordinary machine with no list still denies (alice on mac-c has no machine list).
@@ -739,7 +740,7 @@ func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
 	if err := h.srv.Store.SetFleetSetting(trustKey(dpod), TrustTrusted, now); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := leased(t, h, enrollAs(t, h, "drillp-"+dpod, dpod, "drillp")); !eq(got, "claude/gmail", "codex/default") {
+	if got, _, _ := leased(t, h, enrollAs(t, h, "drillp-"+dpod, dpod, "drillp")); !eq(got, "codex/default") {
 		t.Fatalf("drill's pod: %v, want its creator alice's list", got)
 	}
 }
