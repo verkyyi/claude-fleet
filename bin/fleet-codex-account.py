@@ -255,6 +255,16 @@ def candidates(exclude=''):
     return result
 
 
+def recovery(choices):
+    """'one back 10/23 10:44 · two back: not said' — when each account that is
+    below the floor comes back: its fullest window still in force (issue #4606)."""
+    def back(x):
+        resets = [w['resetsAt'] for w in x.get('windows', []) if numeric(w.get('resetsAt'))
+                  and numeric(w.get('usedPercent')) and 100 - w['usedPercent'] <= (x.get('remaining') or 0)]
+        return 'back ' + time.strftime('%m/%d %H:%M', time.localtime(max(resets))) if resets else 'back: not said'
+    return ' · '.join('%s %s' % (x['label'], back(x)) for x in choices if x['state'] == 'low')
+
+
 def choose(exclude='', require_known=False):
     choices = candidates(exclude)
     known = [x for x in choices if x['state'] == 'available']
@@ -263,7 +273,10 @@ def choose(exclude='', require_known=False):
     if unknown and not require_known:
         current = os.environ.get('CODEX_HOME', '')
         return next((x for x in unknown if x['home'] == current), unknown[0])
-    if choices: raise ValueError('no Codex pool account has usable quota' if require_known else 'all Codex pool accounts are below the quota floor')
+    if choices:
+        why = 'no Codex pool account has usable quota' if require_known else 'all Codex pool accounts are below the quota floor'
+        line = recovery(choices)
+        raise ValueError(why + (' — ' + line if line else ''))
     return None
 
 
@@ -277,6 +290,9 @@ def selection():
         choices = candidates()
         if not choices: raise
         selected = max(choices, key=lambda x: x['remaining'] if x['remaining'] is not None else -1)
+        # ungated: still launches, but says so — and when each comes back (issue #4606)
+        print('fleet-codex-account: every Codex pool account is below the quota floor — '
+              + recovery(choices), file=sys.stderr)
     return selected['home'] if selected else home_path(os.environ.get('CODEX_HOME', '~/.codex'))
 
 

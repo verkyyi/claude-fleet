@@ -538,6 +538,20 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
       _fx_home=$(bash "$BIN/fleet-session-cred.sh" codex-home --sid "$FLEET_CRED_SID" --real "$_fx_real_home") \
         || { echo 'fleet-codex: could not make this session a credential-free CODEX_HOME — refusing to launch' >&2; _fx_refused cred; exit 1; }
       export CODEX_HOME="$_fx_home"
+      # the proxy picks this session's account (issue #4606: a separated login's
+      # default home): every account out ⇒ say when each comes back; the gate refuses
+      _fx_out=''
+      if [ "$(sed -n 's/^account=//p' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/cred-proxy/sessions/$FLEET_CRED_SID" 2>/dev/null | tail -n 1)" = proxy ]; then
+        _fx_out=$(bash "$BIN/fleet-session-cred.sh" standing --provider codex) && _fx_out=''
+      fi
+      if [ -n "$_fx_out" ]; then
+        printf 'fleet-codex: %s\n' "$_fx_out" >&2
+        if [ -z "$_codex_resuming" ] && [ "${FLEET_CODEX_QUOTA_GATE:-0}" = 1 ]; then
+          echo 'fleet-codex: FLEET_CODEX_QUOTA_GATE=1 — not launching on an account with no quota' >&2
+          _fx_refused account; exit 2
+        fi
+      fi
+      unset _fx_out
       flags+=(-c 'model_provider="fleet"'
               -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fx_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
               -c 'features.plugins=false' -c 'features.apps=false' -c 'analytics.enabled=false')

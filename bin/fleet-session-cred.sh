@@ -27,7 +27,15 @@
 # SEPARATED (credsep.json, issue #2412) a Claude session names no account: mint
 # asks for a credential bound to the sid alone and the proxy picks the account
 # per request (record `account=proxy`); --account is not passed on, `rebind`
-# exits 2 — only root pins an account. Codex keeps its home's account.
+# exits 2 — only root pins an account. A Codex session of the DEFAULT home
+# (~/.codex, which holds no credential there) is picked the same way (issue
+# #4606: record `account=proxy`); a named home <FLEET_CRED_CODEX_HOMES>/<L>
+# keeps L — the person's pin.
+#   fleet-session-cred.sh standing [--provider codex]
+#        → exit 1 + one line on stdout when EVERY account the proxy may pick is
+#          out (at its limit, or its usage limit answered), each with when it
+#          comes back; exit 0 silent otherwise — an unread account is never out,
+#          and a proxy that cannot say (not separated, older) is exit 0 too
 #   fleet-session-cred.sh codex-home --sid SID --real DIR
 #        → a credential-free CODEX_HOME for this session: every entry of DIR
 #          linked except auth.json (threads, history, skills, trust stay DIR's),
@@ -265,6 +273,22 @@ case "$cmd" in
       rm -f "$err"
       [ -n "$cred" ] || die "the proxy would not mint a session credential"
       rec_set "$sid" account "$account"
+    elif [ "$provider" = codex ] && separated && [ -z "$account" ] \
+         && [ "$(codex_label "${chome:-$HOME/.codex}" 2>/dev/null)" = default ]; then
+      # separated, the default home holds no credential (issue #4606): the proxy
+      # picks the account — skipping one at its limit — and moves the session on
+      # a usage-limit 429. A proxy older than #4606 still wants one: default.
+      err=$(mktemp "${TMPDIR:-/tmp}/fsc-mint.XXXXXX")
+      cred=$(bash "$PROXY" mint --provider codex --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>"$err")
+      if [ -z "$cred" ] && grep -q -- '--account LABEL' "$err"; then
+        account=default
+        cred=$(bash "$PROXY" mint --account default --sid "$sid" ${wid:+--worker "$wid"} --wrap "${FLEET_SESSION_WRAP:-$PPID}" 2>/dev/null)
+      else
+        account=proxy
+      fi
+      rm -f "$err"
+      [ -n "$cred" ] || die "the proxy would not mint a session credential"
+      rec_set "$sid" account "$account"
     else
       if [ -z "$account" ] && [ "$provider" = codex ] && [ -n "$chome" ]; then
         account=$(codex_label "$chome") || account=''
@@ -303,6 +327,24 @@ case "$cmd" in
     esac
     bash "$PROXY" rebind --sid "$sid" --account "$account" >/dev/null || exit 1
     rec_set "$sid" account "$account"
+    ;;
+  standing)
+    case "$provider" in claude|codex) ;; *) die "standing: --provider claude|codex" 2 ;; esac
+    rows=$(bash "$PROXY" standing --provider "$provider" 2>/dev/null) || exit 0
+    printf '%s' "$rows" | FSC_PROVIDER="$provider" python3 -I -c '
+import json, os, sys, time
+try:
+    rows = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if not isinstance(rows, list) or not rows or any(r.get("usable") for r in rows):
+    sys.exit(0)
+def back(r):
+    u = r.get("until") or 0
+    return "back %s" % time.strftime("%m/%d %H:%M", time.localtime(u)) if u else "back: not said"
+print("every %s account is out of quota — %s" % (os.environ["FSC_PROVIDER"].capitalize(),
+      " · ".join("%s %s" % (r.get("acct"), back(r)) for r in rows)))
+sys.exit(1)'
     ;;
   codex-home)
     sid_ok "$sid" && [ -d "$real" ] || die "codex-home: --sid NAME --real DIR" 2

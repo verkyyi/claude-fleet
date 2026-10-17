@@ -123,6 +123,26 @@ class H(BaseHTTPRequestHandler):
                                       "message": "weekly usage limit reached"}}, rl)
                 return self.reply(200, {"via": "direct", "auth": tok}, rl)
             return self.reply(200, {"via": "direct", "auth": h.get("authorization", "")[:20]})
+        if via == "direct-codex":
+            # accts.json {token: {"u7": %, "full": bool, "back": secs}} for Codex too
+            # (issue #4606): the weekly window on every answer, and a usage-limit 429
+            # (its reset in the body, as OpenAI spells it) from a full one; each
+            # token asked is appended to codex-hits
+            tok = h.get("authorization", "")[7:]
+            with open(os.path.join(D, "codex-hits"), "a") as f:
+                f.write(tok + "\n")
+            a = json.load(open(os.path.join(D, "accts.json"))).get(tok) if has("accts.json") else None
+            if a is None:
+                return self.reply(200, {"via": "direct-codex", "auth": tok})
+            now = int(time.time()); r7 = now + int(a.get("back", 86400))
+            rl = {"x-codex-primary-used-percent": "10", "x-codex-primary-window-minutes": "300",
+                  "x-codex-primary-reset-at": str(now + 3600),
+                  "x-codex-secondary-used-percent": str(a["u7"]), "x-codex-secondary-window-minutes": "10080",
+                  "x-codex-secondary-reset-at": str(r7)}
+            if a.get("full"):
+                return self.reply(429, {"error": {"type": "usage_limit_reached", "resets_at": r7,
+                                  "message": "You've hit your usage limit."}}, rl)
+            return self.reply(200, {"via": "direct-codex", "auth": tok}, rl)
         if via == "relay":
             if h.get("x-fleet-relay") != "relaytok":
                 return self.reply(401, {"error": "relay credential"})
