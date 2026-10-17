@@ -106,8 +106,9 @@ const (
 	// unwrapped it (claude-fleet#1417). Nothing is issued meanwhile — there
 	// is no plain key to fall back to — and the hub raises a critical finding.
 	LeaseVaultLocked = "vault_locked"
-	// LeaseNotSeparated: a role=user person's login whose newest heartbeat
-	// does not say credsep=separated (claude-fleet#2295). Nothing is issued —
+	// LeaseNotSeparated: a login whose newest heartbeat does not say
+	// credsep=separated (claude-fleet#2295; every login since #4607, a
+	// role=user person's only under CredsepOptional). Nothing is issued —
 	// its sessions take the proxy's central route instead (/v1/node/self
 	// says so), so they still work but no token lands in the login's home.
 	LeaseNotSeparated = "not_separated"
@@ -118,10 +119,17 @@ const (
 
 // credsepGated says whether principal's login must be refused real tokens
 // because it is not credential-separated (claude-fleet#2295, EPIC #2293).
-// Only a person whose role is user is held to it — an admin, the operator's
-// own principals and anyone who is not a person lease as before (共同约定 4). credsep is the login's newest heartbeat's word; ""
-// (an agent older than #2295) counts as not separated.
+// Separation is not opt-in (claude-fleet#4607): every login is held to it —
+// an admin's, the operator's own principals', anyone's — so no real token is
+// ever written into a home its sessions can read. Only a hub that declared
+// itself a self-hosted one (CredsepOptional, CCQUOTA_FLEET_CREDSEP_OPTIONAL=1)
+// keeps #2295's rule: a person whose role is user, nobody else. credsep is the
+// login's newest heartbeat's word; "" (an agent older than #2295) counts as
+// not separated.
 func (s *Server) credsepGated(principal, credsep string) (bool, error) {
+	if !s.CredsepOptional {
+		return credsep != control.CredsepSeparated, nil
+	}
 	if !isPerson(principal) {
 		return false, nil
 	}
@@ -274,7 +282,8 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 	if gated {
 		deny(http.StatusForbidden, LeaseNotSeparated, principal, "拒发：未隔离 — "+osUser+" on "+firstLabel(host)+
 			" is not credential-separated (credsep="+credsepWord(hb.Credsep)+"); its sessions go through the hub's central proxy. "+
-			"Separate it: sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install --login "+osUser)
+			"On a managed machine its daemon separates it within minutes (credsep-enforce); else, as root: "+
+			"sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install --login "+osUser)
 		return
 	}
 

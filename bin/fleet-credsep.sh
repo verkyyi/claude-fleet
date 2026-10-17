@@ -88,12 +88,20 @@
 #                                           the fix for all: `sudo … machine install
 #                                           --logins managed` (`managed` works for
 #                                           install / join too)
+#   fleet-credsep.sh machine enforce [--logins a,b] [--dry-run]  root: every human
+#                                           fleet login separated — the machine
+#                                           daemon's credsep-enforce task (issue #4607);
+#                                           audit <LOG_BASE>/enforce.log, verdicts
+#                                           /var/db/fleet-node/credsep-enforce.json
+#   fleet-credsep.sh machine enforced [--json]  anyone: the doctor's `credsep-logins`
+#                                           row — FAIL naming every login not separated
 #   fleet-credsep.sh apply [--dry-run]      the install pass: converge on the
-#                                           switch — FLEET_CRED_SEPARATE=1 and not
-#                                           separated → install; 0 and separated →
-#                                           uninstall; separated → refresh the
-#                                           root-owned code copy. No password-less
-#                                           sudo → one line saying what to run.
+#                                           switch — not separated → install;
+#                                           separated → refresh the root-owned code
+#                                           copy; uninstall ONLY with
+#                                           FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0.
+#                                           No password-less sudo → one line saying
+#                                           what to run.
 #
 # Preflight (issue #2273): install / machine install refuse (exit 6, nothing
 # moved) a login whose credential proxy is off or not running, whose live
@@ -109,8 +117,9 @@
 # as root, takes its token down a pipe and runs as the login. A session reading
 # the store or node.env gets "Permission denied". Sessions reach the
 # subscription only through the proxy (FLEET_CRED_PROXY=1, C5's wiring).
-# Config: FLEET_CRED_SEPARATE in fleet.conf [common] (0 = today's files, byte
-# for byte — the default). See docs/dev/CRED-SEPARATE.md.
+# Separation is not opt-in (issue #4607): FLEET_CRED_SEPARATE defaults to 1, and
+# 0 counts only beside FLEET_CREDSEP_OPTIONAL=1 — a declared self-hosted one-person
+# box. See docs/dev/CRED-SEPARATE.md.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -177,7 +186,9 @@ for f in "$BIN/../fleet.conf" "$CONF/fleet.settings" "$CONF/fleet.conf"; do
 done
 set +a
 [ -n "$_env_switch" ] && FLEET_CRED_SEPARATE="$_env_switch"
-export FLEET_CRED_SEPARATE="${FLEET_CRED_SEPARATE:-0}"
+# not opt-in (issue #4607): off only on a box that declared itself self-hosted
+[ "${FLEET_CREDSEP_OPTIONAL:-0}" = 1 ] || FLEET_CRED_SEPARATE=1
+export FLEET_CRED_SEPARATE="${FLEET_CRED_SEPARATE:-1}"
 
 py() { python3 -I "$BIN/fleet-credsep.py" "$@"; }
 root_py() { # the privileged half, through sudo (env seams passed explicitly)
@@ -214,6 +225,7 @@ root_machine() { # the machine verbs (issue #2217): no --login, the logins are n
     ${FLEET_CREDSEP_USERS:+FLEET_CREDSEP_USERS="$FLEET_CREDSEP_USERS"} \
     ${FLEET_CREDSEP_HOMES:+FLEET_CREDSEP_HOMES="$FLEET_CREDSEP_HOMES"} \
     ${FLEET_CRED_SHARED_PORT:+FLEET_CRED_SHARED_PORT="$FLEET_CRED_SHARED_PORT"} \
+    ${FLEET_NODE_STATE:+FLEET_NODE_STATE="$FLEET_NODE_STATE"} \
     python3 -I "$BIN/fleet-credsep.py" machine "$@"
 }
 
@@ -252,9 +264,9 @@ case "$cmd" in
   machine)
     verb="${1:-}"
     case "$verb" in
-      status|managed|proxies) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
-      install|uninstall|refresh|join|leave) ;;
-      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|status|managed|proxies" >&2; exit 2 ;;
+      status|managed|proxies|enforced) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
+      install|uninstall|refresh|join|leave|enforce) ;;
+      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|enforce|status|managed|proxies|enforced" >&2; exit 2 ;;
     esac
     case " $* " in
       *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;
@@ -297,12 +309,13 @@ case "$cmd" in
       [ "$rc" = 0 ] && echo "credsep: ok — $(printf '%s\n' "$out" | tail -1)" \
                     || { echo "credsep: WARN — $(printf '%s\n' "$out" | tail -1)"; exit 1; }
     elif separated; then
+      # reached only on a declared self-hosted box (FLEET_CREDSEP_OPTIONAL=1, issue #4607)
       can_sudo || { echo "credsep: WARN — FLEET_CRED_SEPARATE=0 but separated; undo needs root: sudo bash $BIN/fleet-credsep.sh uninstall"; exit 0; }
       out=$(root_py uninstall ${dry:+"$dry"} 2>&1); rc=$?
       [ "$rc" = 0 ] && echo "credsep: ok — $(printf '%s\n' "$out" | tail -1)" \
                     || { echo "credsep: WARN — $(printf '%s\n' "$out" | tail -1)"; exit 1; }
     else
-      echo "credsep: skip — off (FLEET_CRED_SEPARATE=0)"
+      echo "credsep: skip — off (FLEET_CREDSEP_OPTIONAL=1, FLEET_CRED_SEPARATE=0: a declared self-hosted box)"
     fi
     ;;
   -h|--help|'')

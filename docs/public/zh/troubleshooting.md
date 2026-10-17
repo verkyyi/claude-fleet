@@ -619,6 +619,13 @@ fleet debug report
 - **是什么**：这台机器上所有托管登录是不是都做了凭据隔离。
 - **WARN / FAIL 怎么办**：FAIL 点名没隔离的登录：管理员执行说明里的 `fleet-credsep.sh machine install --logins managed`。
 
+#### `credsep-logins`
+
+来自 `fleet doctor`。
+
+- **是什么**：这台托管机器上每个 fleet 登录是不是都做了凭据隔离。机器守护每 5 分钟自己补一次（`credsep-enforce`），不用谁敲 sudo；没隔离的登录入口一份凭据都不发。
+- **WARN / FAIL 怎么办**：FAIL 点名还没隔离的登录和守护最后一次的原因（比如它的会话还在直接读凭据文件）。等下一轮守护；急的话管理员执行说明里的 `fleet-credsep.sh machine install --logins <登录>`。
+
 #### `credproxy`
 
 来自 `fleet doctor`。

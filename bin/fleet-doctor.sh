@@ -474,7 +474,7 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
     OK)   pass credsep "$_cs_m" ;;
     WARN) warn credsep "$_cs_m" ;;
     FAIL) fail credsep "$_cs_m" ;;   # a managed login not separated (issue #3700)
-    INFO) case "$_cs_m" in off*) ;; *) info credsep "$_cs_m" ;; esac ;;   # off: no row, as before
+    INFO) case "$_cs_m" in off*|"not a node"*) ;; *) info credsep "$_cs_m" ;; esac ;;   # off / no node: no row
     *)    info credsep "$_cs_m" ;;
   esac
   # every login this machine's daemon took over is separated (issue #3700): an
@@ -486,6 +486,15 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
     OK)   pass credsep-all "$_csm_m" ;;
     WARN) warn credsep-all "$_csm_m" ;;
     FAIL) fail credsep-all "$_csm_m" ;;
+  esac
+  # every fleet login on a managed machine separated (issue #4607): the root
+  # daemon's credsep-enforce takes each one in; a login it could not is FAIL,
+  # named, with the daemon's last word. Off a managed machine: INFO, no row.
+  _cse=$(bash "$(dirname "$0")/fleet-credsep.sh" machine enforced 2>&1 | tail -n 1)
+  _cse_m=${_cse#credsep-logins: }; _cse_lv=${_cse_m%% —*}; _cse_m=${_cse_m#* — }
+  case "$_cse_lv" in
+    OK)   pass credsep-logins "$_cse_m" ;;
+    FAIL) fail credsep-logins "$_cse_m" ;;
   esac
   # one credential proxy per machine (issue #3744): beside the shared one, a second
   # proxy holds its own copy of the subscriptions — one the hub deleted stays there

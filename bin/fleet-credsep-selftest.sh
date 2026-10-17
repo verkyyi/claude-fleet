@@ -6,7 +6,8 @@
 # launchctl / systemctl run. The OS half — a real role account, and a session
 # that gets "Permission denied" — is the issue's on-machine evidence, not this.
 #
-#   A  FLEET_CRED_SEPARATE=0: apply does nothing, every file byte for byte
+#   A  FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0: apply does nothing, every file byte
+#      for byte; FLEET_CRED_SEPARATE=0 alone: check FAILs (not opt-in, issue #4607)
 #   B  install: leased credentials, hub-managed Codex auth.json and node.env
 #      move into the store (same bytes); a personal Codex login stays; node.env
 #      becomes a symlink, node.pub.env holds no token; the agent's service now
@@ -56,7 +57,7 @@ cleanup() {
 }
 trap cleanup EXIT
 export HOME="$SB/home" FLEET_CONF_DIR="$SB/home/.config/claude-fleet" XDG_CONFIG_HOME="$SB/home/.config"
-export FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
+export FLEET_NODE_STATE="$SB/node" FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
        FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO=''
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE
@@ -122,13 +123,18 @@ snap() { # every file under the login's tree + the service dir: path, kind, byte
 }
 BEFORE=$(snap)
 
-# ── A: off ⇒ nothing ───────────────────────────────────────────────────────────
-out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1)
-if [ "$out" = "credsep: skip — off (FLEET_CRED_SEPARATE=0)" ] && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db" ]; then
-  pass "A off: apply skips, every file byte for byte, no store"
+# ── A: off ⇒ nothing — only on a declared self-hosted box (issue #4607) ─────────
+out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1)
+if [ "$out" = "credsep: skip — off (FLEET_CREDSEP_OPTIONAL=1, FLEET_CRED_SEPARATE=0: a declared self-hosted box)" ] \
+   && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db" ]; then
+  pass "A off (self-hosted): apply skips, every file byte for byte, no store"
 else fail "A off: '$out'"; fi
-out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1)
-case "$out" in "credsep: INFO — off"*) pass "A off: check is INFO off (the doctor prints no row)" ;; *) fail "A check: $out" ;; esac
+out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1)
+case "$out" in "credsep: INFO — off"*) pass "A off (self-hosted): check is INFO off (the doctor prints no row)" ;; *) fail "A check: $out" ;; esac
+# FLEET_CRED_SEPARATE=0 alone is not a way out: a node login not separated is red
+out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1); rc=$?
+case "$rc:$out" in "1:credsep: FAIL — this login is not separated"*) pass "A FLEET_CRED_SEPARATE=0 alone: check FAILs (not opt-in, #4607)" ;; *) fail "A mandatory check rc=$rc: $out" ;; esac
+[ "$(snap)" = "$BEFORE" ] || fail "A a check changed something"
 
 # ── H: the dry run needs no sudo and changes nothing (issue #2135) ──────────────
 out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" install --dry-run 2>&1); rc=$?
@@ -491,7 +497,7 @@ printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-MAIN","refreshToken":null,
   > "$R/accounts/main.hub/.credentials.json"
 sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:1#" "$R/node.env" && rm -f "$R/node.env.bak"
 rm -f "$C/fleet.conf"
-out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?
+out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?
 case "$rc:$out" in "0:credsep: ok — credsep: OFF"*) pass "G uninstall via apply: $out" ;; *) fail "G rc=$rc: $out" ;; esac
 AFTER=$(snap)
 if [ "$AFTER" = "$BEFORE" ]; then pass "G every file back where it was, byte for byte (and the service definition)"

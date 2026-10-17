@@ -12,10 +12,12 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
-// The lease's credential-separation gate (claude-fleet#2295, EPIC #2293 C2):
-// a role=user person's login gets real tokens only when its newest heartbeat
-// says credsep=separated; an admin's login leases as before; an agent that
-// does not report the field counts as not separated for a user.
+// The lease's credential-separation gate (claude-fleet#2295, EPIC #2293 C2;
+// mandatory since #4607): every login gets real tokens only when its newest
+// heartbeat says credsep=separated — an admin's and the operator's own too; an
+// agent that does not report the field counts as not separated. A hub that
+// declared itself self-hosted (CredsepOptional — the test harness's default,
+// for the lease fixtures) keeps #2295's rule: a role=user person's login only.
 
 // credsepHarness: the vault harness plus a GitHub admin (ivan, id 100)
 // and a listed user (carol, id 400), each with an active login on mac-c, and a
@@ -154,5 +156,85 @@ func TestNodeSelfCarriesCredsepGate(t *testing.T) {
 	credsepBeat(t, h, user, "carol", control.CredsepSeparated)
 	if v := self(user); v.CredsepGate != "" || v.Credsep != control.CredsepSeparated {
 		t.Fatalf("user separated: gate=%q credsep=%q", v.CredsepGate, v.Credsep)
+	}
+}
+
+// Every login is held to it (claude-fleet#4607): an admin's, anyone's —
+// refused while not separated, leased once it is.
+func TestLeaseCredsepMandatory(t *testing.T) {
+	h, user, admin := credsepHarness(t)
+	h.srv.CredsepOptional = false
+	cases := []struct {
+		name, osUser, tok, credsep string
+		want                       int
+	}{
+		{"admin, not separated", "ivan", admin, control.CredsepNot, http.StatusForbidden},
+		{"admin, old agent", "ivan", admin, "", http.StatusForbidden},
+		{"admin, unknown", "ivan", admin, control.CredsepUnknown, http.StatusForbidden},
+		{"admin, separated", "ivan", admin, control.CredsepSeparated, http.StatusOK},
+		{"user, not separated", "carol", user, control.CredsepNot, http.StatusForbidden},
+		{"user, separated", "carol", user, control.CredsepSeparated, http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			credsepBeat(t, h, tc.tok, tc.osUser, tc.credsep)
+			code, ok, refusal := lease(t, h, tc.tok)
+			if code != tc.want {
+				t.Fatalf("lease = %d %v; want %d", code, refusal, tc.want)
+			}
+			if code == http.StatusForbidden && refusal["error"] != LeaseNotSeparated {
+				t.Fatalf("refusal = %v; want %s", refusal, LeaseNotSeparated)
+			}
+			if code == http.StatusOK && len(ok.Credentials) == 0 {
+				t.Fatalf("an OK lease carried nothing: %+v", ok)
+			}
+		})
+	}
+	rows, err := h.srv.Store.CredAuditLog(githubPrincipal(100), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := 0
+	for _, a := range rows {
+		if a.Action == store.CredDeny && strings.Contains(a.Detail, "拒发：未隔离") && a.OSUser == "ivan" {
+			denied++
+		}
+	}
+	if denied != 3 {
+		t.Fatalf("ivan's audit: %d 拒发：未隔离 rows, want 3: %+v", denied, rows)
+	}
+}
+
+// The operator's own principal (no hub_users row) is no exception either, and
+// /v1/node/self tells an admin's unseparated node to route central.
+func TestLeaseCredsepMandatoryOperatorAndSelf(t *testing.T) {
+	h, tok, _ := newVaultHarness(t)
+	h.srv.CredsepOptional = false
+	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt"})
+	credsepBeat(t, h, tok, "alice", control.CredsepNot)
+	if code, _, refusal := lease(t, h, tok); code != http.StatusForbidden || refusal["error"] != LeaseNotSeparated {
+		t.Fatalf("lease = %d %v; want 403 %s", code, refusal, LeaseNotSeparated)
+	}
+	credsepBeat(t, h, tok, "alice", control.CredsepSeparated)
+	if code, _, refusal := lease(t, h, tok); code != http.StatusOK {
+		t.Fatalf("separated lease = %d %v; want 200", code, refusal)
+	}
+
+	h2, _, admin := credsepHarness(t)
+	h2.srv.CredsepOptional = false
+	credsepBeat(t, h2, admin, "ivan", control.CredsepNot)
+	req, _ := http.NewRequest(http.MethodGet, h2.http.URL+"/v1/node/self", nil)
+	req.Header.Set("Authorization", "Bearer "+admin)
+	res, err := h2.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var v NodeView
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&v) != nil {
+		t.Fatalf("/v1/node/self = %d", res.StatusCode)
+	}
+	if v.CredsepGate != LeaseNotSeparated {
+		t.Fatalf("admin not separated: gate=%q; want %s", v.CredsepGate, LeaseNotSeparated)
 	}
 }

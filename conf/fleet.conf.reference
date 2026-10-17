@@ -2536,12 +2536,20 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # account (_fleetcred) owns /var/db/fleet-cred/<login>/ — the leased credentials,
 # Codex auth.json and node.env — and runs the proxy; a session reading them gets
 # "Permission denied". Needs root ONCE (the install pass uses password-less sudo,
-# else prints the command); turning it back to 0 moves every file back.
-# Needs FLEET_CRED_PROXY=1 (sessions reach the subscription only through it).
+# else prints the command; a managed machine's root daemon does it by itself —
+# credsep-enforce). Needs FLEET_CRED_PROXY=1 (sessions reach the subscription
+# only through it). NOT opt-in (issue #4607): the default is 1, and 0 counts only
+# beside FLEET_CREDSEP_OPTIONAL=1 below; the hub leases an unseparated login nothing.
 # @label=Separated credentials @group=disk @tier=internal @scope=global @edit=bool
 # A NEW login (bin/fleet-login-new.sh) is opened with 1 — separated by root at the
 # open, before its first session; the team pool goes into its store (#2294).
-#FLEET_CRED_SEPARATE=0             # 1 = bin/fleet-credsep.sh install (docs/dev/CRED-SEPARATE.md)
+#FLEET_CRED_SEPARATE=1             # bin/fleet-credsep.sh install (docs/dev/CRED-SEPARATE.md)
+# A declared self-hosted one-person box (issue #4607): only with this may a 0 in
+# FLEET_CRED_SEPARATE leave the credentials in the login's own files (and
+# `fleet-login-new.sh --no-credsep` open the old layout). The hub must say the same
+# (CCQUOTA_FLEET_CREDSEP_OPTIONAL=1) or it leases such a login nothing.
+# @label=Credential separation optional @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_CREDSEP_OPTIONAL=0
 
 # `fleet-doctor`'s `spotlight` line (host section, macOS only, issue #1075): WARNs
 # while Spotlight still indexes the data volume, naming `sudo mdutil -a -i off`

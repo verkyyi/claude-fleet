@@ -101,6 +101,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `credpool` | machine | [login-lifecycle] | 共享凭据池：照行内修 |
 | `credsep` | node · machine | [mac-node-enroll] | 凭据隔离：照行内（代理没起 / 该并入整机共享代理）；整机的代码不是这一版 ⇒ `fleet-credsep.py machine refresh`（更新器每轮也做） |
 | `credsep-all` | node | [mac-node-enroll] | 托管登录都做了凭据隔离：FAIL 点名没隔离的、WARN 点名还跑自己代理的；管理员一条 `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine install --logins managed` |
+| `credsep-logins` | node | [mac-node-enroll] | 托管机器上每个 fleet 登录都做了凭据隔离（机器守护 `credsep-enforce` 每 5 分钟自己补，#4607）：FAIL 点名没隔离的和守护最后一次的原因；急用时管理员 `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine install --logins <登录>` |
 | `credproxy` | node | [mac-node-enroll] | 一台机器只跑一个凭据代理：FAIL 点名共享代理之外的代理（各留一份订阅副本，删掉的订阅在那里照样 401）；管理员一条 `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine install --logins managed` |
 | `daemon` | machine | [mac-node-enroll] [release-rules] | 整机守护没装 / 没在跑 / 没重启到 current：重跑 `sudo fleet node install` |
 | `daemons` | node | [mac-node-enroll] | 某个守护没加载：重跑安装，或看它的 launchd 日志 |

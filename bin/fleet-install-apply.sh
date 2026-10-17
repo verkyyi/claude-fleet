@@ -1361,9 +1361,12 @@ fi
 
 # --- credsep (issue #1971, EPIC #1967 C4) ------------------------------------------
 # Converge on FLEET_CRED_SEPARATE: 1 and not separated → install (root once, via
-# password-less sudo; none → one line saying what to run); 0 and separated →
-# uninstall; separated → refresh the root-owned code copy the role account runs.
-# Off and never separated: nothing runs and no line is printed — byte for byte.
+# password-less sudo; none → one line saying what to run); separated → refresh the
+# root-owned code copy the role account runs; uninstall only on a box that declared
+# itself self-hosted (FLEET_CREDSEP_OPTIONAL=1 + 0, issue #4607). Never separated
+# and no line asking for it: nothing runs here — on a managed machine the root
+# daemon's credsep-enforce separates every fleet login, elsewhere the doctor's
+# credsep row is red and the hub leases it nothing.
 if [ -f "$ROOT/bin/fleet-credsep.sh" ] && [ "$BUNDLE" != 1 ]; then
   _cs_cf="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
   if [ -f "$_cs_cf/credsep.json" ] || grep -qs '^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_CRED_SEPARATE=["'"'"']\{0,1\}1' \
