@@ -68,7 +68,7 @@ hasnt() { case "$2" in *"$1"*) fail "$3" "$2" ;; *) ok ;; esac; }
 
 # ---- A + B + C: the files themselves (python: structural, no CLI needed) -----
 out=$(python3 - "$ROOT" <<'PY' 2>&1
-import json, os, re, sys
+import json, os, re, runpy, sys
 root = sys.argv[1]
 bad = []
 m = json.load(open(os.path.join(root, ".claude-plugin", "marketplace.json")))
@@ -145,6 +145,25 @@ for d in dirs:
             if f.endswith((".sh", ".py")):
                 bad.append("B %s: %s — scripts stay in bin/, never copied into a plugin"
                            % (d, os.path.relpath(os.path.join(dp, f), root)))
+native_root = os.path.join(root, "plugins", "fleet-orchestrate")
+native_manifest = json.load(open(os.path.join(native_root, ".codex-plugin", "plugin.json")))
+claude_manifest = json.load(open(os.path.join(native_root, ".claude-plugin", "plugin.json")))
+native_mcp = native_manifest.get("mcpServers", {}).get("fleet-orch", {})
+claude_mcp = json.load(open(os.path.join(native_root, ".mcp.json")))["mcpServers"]["fleet-orch"]
+mcp_constants = runpy.run_path(os.path.join(root, "bin", "fleet-mcp.py"))
+if any(native_manifest.get(key) != claude_manifest.get(key) for key in ("name", "version")):
+    bad.append("B native and Claude plugin identity/version differ")
+if native_manifest.get("skills") != "./skills/" or native_manifest.get("hooks") != {"hooks": {}}:
+    bad.append("B native plugin must reuse shared skills without Claude-only state hooks")
+codex_map = json.load(open(os.path.join(root, "hooks", "codex-map.json")))
+if "fleet-orchestrator-state.py" not in codex_map.get("drop_commands", {}):
+    bad.append("B legacy Codex bridge and native package disagree on orchestration state ownership")
+if any(native_mcp.get(key) != claude_mcp.get(key) for key in ("command", "args")):
+    bad.append("B native MCP must call the same Fleet implementation")
+if native_mcp.get("env_vars") != mcp_constants["CODEX_ENV"] or "env" in native_mcp:
+    bad.append("B native MCP must forward only the agreed environment names")
+if native_mcp.get("tool_timeout_sec") != mcp_constants["CODEX_TOOL_TIMEOUT_S"]:
+    bad.append("B native MCP timeout differs from the supported blocking tool budget")
 # C: the default package
 for d in dirs:
     for s in skills_of[d]:

@@ -28,9 +28,13 @@ One holder per role.
    not mounted — say so (`/plugin install fleet-orchestrate@claude-fleet`, then reopen).
 2. **Read your role and your rules** — this skill's directory: `role.md` (who you are and
    how you work; it ends with your rows of the rule table) and `rules.md` (the dispatch
-   rules, the whole orchestrator table). After a compaction or a resume the plugin's hook
-   hands both back as `[fleet orchestrator role]`, with the saved state — you stay the
-   orchestrator.
+   rules, the whole orchestrator table). Claude Code's optional state hook hands both
+   back after a compaction or resume. Codex retains its native conversation history;
+   this plugin does not replay Claude transcripts, re-arm their timers, or start a
+   recovery turn. If the role instructions are missing after resuming, invoke this
+   skill again: step 1 verifies the current holder before any dispatch. Read current
+   children through `mcp__fleet-orch__children`; do not treat remembered child status
+   as authoritative.
 3. Tell the person in one line that this session orchestrates now.
 
 Giving it back: `mcp__fleet-orch__take_role` with `action: drop`. `action: who` names the

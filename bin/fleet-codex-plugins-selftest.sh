@@ -71,7 +71,7 @@ J
 LIST="$WORK/list.json"
 cat > "$WORK/claude-fake" <<SH
 #!/bin/sh
-[ "\$1 \$2 \$3" = "plugin list --json" ] && exec cat "$LIST"
+[ "\$1 \$2 \$3" = "plugin list --json" ] && { printf 'list\n' >> "$WORK/list.calls"; exec cat "$LIST"; }
 exit 1
 SH
 chmod +x "$WORK/claude-fake"
@@ -91,6 +91,9 @@ has 'unchanged' "$out" "A sync should change nothing"
 cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "A config.toml changed" "$(diff "$WORK/orig.toml" "$HOME_C/config.toml")"; ok
 for e in "$HOME_C/skills"/fleet-plugin-*; do [ -e "$e" ] || [ -L "$e" ] && fail "A a fleet-plugin-* entry appeared" "$e"; done; ok
 [ -z "$(cx dirs)" ] || fail "A dirs printed something"; ok
+out=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -f "$WORK/list.calls" ] || fail "A combined sync queried Claude or emitted paths" "$out"; ok
+has 'unchanged' "$(cat "$WORK/sync.stderr")" "A combined sync diagnostics must go to stderr"
 
 # ---- B: fleet-orchestrate installed ---------------------------------------------
 mkdir -p "$HOME_C/skills/fleet-plugin-mine"
@@ -108,6 +111,11 @@ cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "B --dry-run wrote config
 [ -e "$HOME_C/skills/fleet-plugin-fleet-orchestrate" ] && fail "B --dry-run linked a skill"; ok
 out=$(cx sync); rc=$?
 [ "$rc" = 0 ] || fail "B sync rc $rc" "$out"; ok
+: > "$WORK/list.calls"
+combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
+[ "$rc" = 0 ] && [ "$combined" = "$CACHE/fleet-orchestrate/0.1.0" ] || fail "B combined sync stdout must contain only installed hook paths" "$combined"; ok
+[ "$(wc -l < "$WORK/list.calls" | tr -d ' ')" = 1 ] || fail "B combined sync must read installed plugins exactly once"; ok
+has 'unchanged' "$(cat "$WORK/sync.stderr")" "B combined sync must retain diagnostics on stderr"
 L="$HOME_C/skills/fleet-plugin-fleet-orchestrate"
 [ -L "$L" ] && [ -f "$L/SKILL.md" ] || fail "B the skill is not linked" "$out"; ok
 [ "$(readlink "$L")" = "$CACHE/fleet-orchestrate/0.1.0/skills/fleet-orchestrate" ] || fail "B link target" "$(readlink "$L")"; ok
@@ -168,6 +176,20 @@ nob=$("$EMIT" --target codex --root "$ROOT" --plugin-dir "$CACHE/fleet-epic/0.1.
 # ---- F: commands as adapters; doctor ---------------------------------------------------
 printf '[%s,%s]\n' "$(row fleet-orchestrate true)" "$(row fleet-epic true)" > "$LIST"
 cx sync >/dev/null
+: > "$WORK/list.calls"
+combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
+expected=$(printf '%s\n%s' "$CACHE/fleet-epic/0.1.0" "$CACHE/fleet-orchestrate/0.1.0")
+[ "$rc" = 0 ] && [ "$combined" = "$expected" ] && [ "$(wc -l < "$WORK/list.calls" | tr -d ' ')" = 1 ] \
+  || fail "F combined sync must emit every enabled plugin once, in stable order" "$combined"; ok
+cp "$LIST" "$WORK/list.before"
+cp "$HOME_C/config.toml" "$WORK/config.before-query-failure"
+printf 'not JSON\n' > "$LIST"
+combined=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
+[ "$rc" = 0 ] && [ -z "$combined" ] || fail "F failed plugin query must not turn diagnostics into hook paths" "$combined"; ok
+has 'cannot tell' "$(cat "$WORK/sync.stderr")" "F failed query must explain why sync was skipped"
+cmp -s "$HOME_C/config.toml" "$WORK/config.before-query-failure" && [ -L "$L" ] \
+  || fail "F failed query changed previous MCP or skill artifacts"; ok
+cp "$WORK/list.before" "$LIST"
 A="$HOME_C/skills/fleet-plugin-fleet-epic-run/SKILL.md"
 [ -f "$A" ] && grep -q '<!-- fleet codex plugin skill -->' "$A" && grep -q '^name: fleet-epic-run' "$A" \
   || fail "F fleet-epic-run is not a marked adapter skill" "$(ls "$HOME_C/skills")"; ok
@@ -202,11 +224,100 @@ printf '[%s]\n' "$(row fleet-orchestrate true)" > "$LIST"
 cx sync --override "$FLEET_CONF_DIR/agent-overrides.json" >/dev/null
 [ -L "$L" ] && fail "G codex.plugins override still linked"; ok
 cmp -s "$HOME_C/config.toml" "$WORK/orig.toml" || fail "G override still wrote config.toml"; ok
+out=$(cx dirs); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "G override still injects Claude plugin hooks" "$out"; ok
+: > "$WORK/list.calls"
+out=$(cx sync --print-dirs 2>"$WORK/sync.stderr"); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -s "$WORK/list.calls" ] || fail "G combined sync ignored native ownership override" "$out"; ok
+echo '["codex"]' > "$WORK/parent-override.json"
+out=$(cx dirs --override "$WORK/parent-override.json"); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "G explicit parent override still injects hooks" "$out"; ok
+echo '[]' > "$WORK/no-override.json"
+out=$(cx dirs --override "$WORK/no-override.json"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = "$CACHE/fleet-orchestrate/0.1.0" ] \
+  || fail "G explicit non-override lost legacy hooks" "$out"; ok
 
 # ---- H: wiring ----------------------------------------------------------------------------
 grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-codex.sh" && grep -q -- '--plugin-dir' "$BIN/fleet-codex.sh" \
   || fail "H fleet-codex.sh does not sync / pass --plugin-dir"; ok
+if grep -q 'fleet-codex-plugins.py" sync --print-dirs' "$BIN/fleet-codex.sh" \
+  && ! grep -q 'fleet-codex-plugins.py" dirs' "$BIN/fleet-codex.sh"; then
+  ok
+else
+  fail "H launcher must use a single plugin snapshot"
+fi
 grep -q 'fleet-codex-plugins.py" sync' "$BIN/fleet-install-apply.sh" || fail "H install-apply does not sync"; ok
 grep -q 'fleet-codex-plugins.py' "$BIN/fleet-doctor.sh" || fail "H the doctor's plugins row does not ask"; ok
+
+printf '[%s,%s]\n' "$(row fleet-orchestrate true)" "$(row fleet-epic true)" > "$LIST"
+cx sync --override "$WORK/no-override.json" >/dev/null || fail "retire setup sync"
+cp "$HOME_C/config.toml" "$WORK/retire-before.toml"
+cx retire --override "$WORK/no-override.json" --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an active bridge"; ok
+{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire refusal changed artifacts"; ok
+out=$(cx retire); rc=$?
+[ "$rc" = 0 ] || fail "retire preview failed" "$out"; ok
+has 'preview only' "$out" "retire should default to preview"
+{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire preview changed artifacts"; ok
+
+SECOND="$WORK/second-home"; mkdir -p "$SECOND/skills"
+printf '# untouched second account\n# >>> fleet plugins — bin/fleet-codex-plugins.py sync writes this block; edit outside it >>>\n' > "$SECOND/config.toml"
+python3 "$CP" retire --apply --root "$ROOT" --claude "$WORK/claude-fake" \
+  --codex-home "$HOME_C" --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted malformed second account"; ok
+{ [ -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml"; } || fail "retire edited first home before validating second"; ok
+cat "$WORK/retire-before.toml" "$WORK/retire-before.toml" > "$SECOND/config.toml"
+cx retire --apply --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted duplicate MCP markers"; ok
+rm "$SECOND/config.toml"
+ln -s "$WORK/retire-before.toml" "$SECOND/config.toml"
+cx retire --apply --codex-home "$SECOND" >"$WORK/retire.out" 2>&1 && fail "retire accepted shared config symlink"; ok
+cmp -s "$HOME_C/config.toml" "$WORK/retire-before.toml" || fail "retire changed shared config target"; ok
+rm "$SECOND/config.toml"
+printf '# untouched second account\n' > "$SECOND/config.toml"
+
+ln -s "$HOME_C/skills/own-skill" "$HOME_C/skills/fleet-plugin-personal-link"
+cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an unproven symlink"; ok
+[ -L "$L" ] && [ -L "$HOME_C/skills/fleet-plugin-personal-link" ] || fail "retire removed a link before full preflight"; ok
+rm "$HOME_C/skills/fleet-plugin-personal-link"
+ADAPTER="$HOME_C/skills/fleet-plugin-fleet-epic-run"
+echo personal > "$ADAPTER/notes.txt"
+cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted an adapter with user files"; ok
+[ -f "$ADAPTER/notes.txt" ] && [ -f "$ADAPTER/SKILL.md" ] && [ -L "$L" ] || fail "retire touched adapter user files"; ok
+rm "$ADAPTER/notes.txt"
+mv "$ADAPTER/SKILL.md" "$WORK/linked-skill.md"
+ln -s "$WORK/linked-skill.md" "$ADAPTER/SKILL.md"
+cx retire --apply >"$WORK/retire.out" 2>&1 && fail "retire accepted a linked SKILL.md"; ok
+[ -L "$ADAPTER/SKILL.md" ] && [ -f "$WORK/linked-skill.md" ] || fail "retire touched linked SKILL.md target"; ok
+rm "$ADAPTER/SKILL.md"
+mv "$WORK/linked-skill.md" "$ADAPTER/SKILL.md"
+
+cat >> "$HOME_C/config.toml" <<'T'
+
+[plugins."fleet-feedback@claude-fleet"]
+enabled = false
+T
+cat "$WORK/orig.toml" > "$WORK/retire-expected.toml"
+cat >> "$WORK/retire-expected.toml" <<'T'
+
+[plugins."fleet-feedback@claude-fleet"]
+enabled = false
+T
+mkdir -p "$HOME_C/plugins/cache/native-fixture"
+echo native > "$HOME_C/plugins/cache/native-fixture/keep"
+printf '[%s,%s]\n' "$(row fleet-orchestrate false)" "$(row fleet-epic false)" > "$LIST"
+echo 'outside user file' > "$WORK/outside-user-file"
+ln -s "$WORK/outside-user-file" "$HOME_C/config.toml.fleet-codex-plugins.tmp"
+out=$(cx retire --apply --codex-home "$SECOND"); rc=$?
+[ "$rc" = 0 ] || fail "retire failed for known disabled plugins" "$out"; ok
+[ "$(cat "$WORK/outside-user-file")" = 'outside user file' ] || fail "retire followed a preexisting temporary-file symlink"; ok
+[ ! -L "$HOME_C/config.toml" ] || fail "retire published a temporary-file symlink as config"; ok
+[ ! -L "$L" ] && [ ! -e "$ADAPTER" ] || fail "retire left generated skill artifacts"; ok
+cmp -s "$HOME_C/config.toml" "$WORK/retire-expected.toml" || fail "retire changed non-bridge config"; ok
+[ -f "$HOME_C/skills/own-skill/SKILL.md" ] && [ -f "$HOME_C/plugins/cache/native-fixture/keep" ] || fail "retire touched user/native files"; ok
+[ "$(cat "$SECOND/config.toml")" = '# untouched second account' ] || fail "retire changed the second account"; ok
+out=$(cx retire --apply); rc=$?
+[ "$rc" = 0 ] || fail "retire second apply failed" "$out"; ok
+has '0 bridge artifact(s)' "$out" "retire must be idempotent"
+cx sync >/dev/null || fail "sync after retirement failed"
+{ [ ! -L "$L" ] && cmp -s "$HOME_C/config.toml" "$WORK/retire-expected.toml"; } || fail "sync revived retired bridge artifacts"; ok
+[ -z "$(cx dirs)" ] || fail "dirs revived retired hooks"; ok
 
 echo "fleet-codex-plugins-selftest: PASS ($CHECKS checks)"
