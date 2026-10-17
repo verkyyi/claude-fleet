@@ -240,6 +240,23 @@ python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --codex /path/
 
 ## 完整目标的完成账本
 
+### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器
+
+现有 `fleet-agent-defaults.py apply/check` 新增显式 native-remote/peer-PID 模式，
+只针对一个已存在的 Codex home，要求 `--skip claude` 和独占维护窗口。默认值来源和
+override 排除规则保持，缺失项才提交；通过已有 Unix RPC 客户端核对内核 PID（Linux 同时核对 UID）、
+原生 base-user layer 文件路径和闲置状态，原生 `config/batchWrite` 负责 TOML 写入与
+版本冲突处理。没有新增 TOML 合并器、配置策略表、常驻服务或失败时绕回旧写入器。
+用法和并发边界见 [显式原生默认配置安装](CODEX-RUNTIME.md#native-default-installation-explicit-candidate)。
+
+本机原生 `0.163.0` 的合并矩阵为 12 场景、287 检查；普通默认安装回归新增 native
+协议与拒绝用例，15 组通过。包完整性、Linux 测试节点和固定版本 CI 分别验收，不能
+以本机样本代替。原生版本针对配置语义，并非文件字节 CAS；注释修改仍可保留并写入，
+字段值的并发修改则必须拒绝旧版本。闲置读取不是原子启动锁，尚不自动接入在线安装。
+
+这是后续把稳定默认值从启动参数移到安装边界的候选，不等于已经删掉启动期 `-c`、
+合并账号 home 或解除认证校验。完整 MCP、profile、托管守卫与真正面板路径仍需联合验收。
+
 ### 原生状态事件替代重复查询
 
 源码候选的 `fleet-codex-attention.py` 不再每两秒重新建立 WebSocket 并读取 thread：

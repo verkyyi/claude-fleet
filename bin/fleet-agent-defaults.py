@@ -32,13 +32,20 @@ Credentials never enter a config: the github server's token is taken by
 bin/mcp-github.sh from `gh auth token` when the server starts. No merged file
 carries a token (the selftest greps for one).
 
-The Codex side is edited as TEXT, not re-serialized: a missing top-level key is
+By default the Codex side is edited as TEXT, not re-serialized: a missing top-level key is
 inserted before the first [table], a missing server is appended as its own
 [mcp_servers.<name>] table, and the login's lines stay byte for byte. macOS ships
 python 3.9 (no tomllib), so the scan is a small line reader; when tomllib / tomli
 IS importable the result is parsed before it is written and a parse failure
 writes nothing (exit 2). The ~/.claude.json write takes Claude Code's own
 .claude.json.lock through fleet-hooks-merge.py (never stolen).
+
+Explicit --codex-native-remote / --codex-native-peer-pid delegates Codex writes
+to its native config/batchWrite API. Requires exactly one --codex-home and
+--skip claude, a kernel-verified idle backend for that home, and a maintenance
+window with no concurrent launches. Existing keys/servers are retained; native
+version conflicts refuse without legacy fallback. No loaded-thread hot reload,
+automatic backend startup or default installer behavior change.
 
   apply  [--root R] [--claude-config F] [--claude-md F] [--claude-skills D]
          [--codex-home D]… [--override F] [--skip PATH]… [--dry-run]
@@ -67,7 +74,9 @@ import argparse
 import importlib.util
 import json
 import os
+from pathlib import Path
 import re
+import runpy
 import shutil
 import sys
 
@@ -545,11 +554,68 @@ def claude_side(a, rep, want_mcp, blocked, check):
         rep.kept.append("claude.skills")
 
 
+def native_codex_defaults(client, home, want_top, want_srv, blocked, check_only=False):
+    home = Path(home).resolve()
+    target = home / 'config.toml'
+    if not home.is_dir() or home.stat().st_uid != os.getuid():
+        raise ValueError('native configuration requires an existing owned Codex home')
+    if target.is_symlink() or (target.exists() and (not target.is_file() or target.stat().st_uid != os.getuid())):
+        raise ValueError('native configuration requires an unshared owned configuration file')
+    if client.call('thread/loaded/list', {})['data']:
+        raise ValueError('native configuration requires an idle maintenance backend')
+    layers = client.call('config/read', {'includeLayers': True})['layers']
+    users = [layer for layer in layers or [] if layer.get('name', {}).get('type') == 'user'
+             and not layer['name'].get('profile')]
+    if len(users) != 1 or Path(users[0]['name']['file']) != target:
+        raise ValueError('native backend does not own the requested base Codex home')
+    layer = users[0]
+    existing, version = layer['config'], layer['version']
+    if layer.get('disabledReason') or not isinstance(existing, dict) or not isinstance(version, str) or not version:
+        raise ValueError('native user configuration layer is not writable')
+    servers = existing.get('mcp_servers', {})
+    if not isinstance(servers, dict):
+        raise ValueError('native MCP configuration is not a table')
+    edits = [{'keyPath': toml_key(key), 'value': value, 'mergeStrategy': 'upsert'}
+             for key, value in want_top.items() if key not in existing and not shielded('codex.' + key, blocked)]
+    edits.extend({'keyPath': 'mcp_servers.' + toml_key(name), 'value': value, 'mergeStrategy': 'upsert'}
+                 for name, value in want_srv.items() if name not in servers and not shielded('codex.mcp.' + name, blocked))
+    if edits and not check_only:
+        if client.call('thread/loaded/list', {})['data']:
+            raise ValueError('native backend became active before configuration publication')
+        published = client.call('config/batchWrite', {'edits': edits, 'expectedVersion': version,
+                                                    'filePath': str(target), 'reloadUserConfig': False})
+        if (not isinstance(published, dict) or published.get('status') not in ('ok', 'okOverridden')
+                or published.get('filePath') != str(target)
+                or not isinstance(published.get('version'), str) or not published['version']):
+            raise ValueError('native publication result is unverified; inspect before retrying')
+    return edits
+
+
 def codex_side(a, rep, home, tag, want_top, want_srv, blocked, check):
     if not os.path.isdir(home):
         rep.codex_na.append(home)
         if not check:
             rep.say("absent  %s — Codex is not set up on this login; nothing created" % tilde(home))
+        return
+    if a.codex_native_remote:
+        client = None
+        try:
+            client_type = runpy.run_path(os.path.join(HERE, 'fleet-codex-rpc.py'))['Client']
+            client = client_type(a.codex_native_remote, peer_pid=a.codex_native_peer_pid)
+            edits = native_codex_defaults(client, home, want_top, want_srv, blocked, check or a.dry_run)
+        except (OSError, ValueError, KeyError, TypeError, EOFError):
+            die('native Codex configuration not confirmed; verify the idle backend and home, inspect native config before retrying; no legacy fallback')
+        finally:
+            if client is not None:
+                client.close()
+        for edit in edits:
+            if check:
+                rep.missing['codex'].append('missing    %s %s' % (tag, edit['keyPath']))
+            else:
+                rep.say('set            %s %s (native)' % (tag, edit['keyPath']))
+        if not check:
+            rep.sets['codex'] += len(edits)
+        codex_skill_report(a, rep, home, tag, blocked)
         return
     conf = os.path.join(home, "config.toml")
     text = read_text(conf)
@@ -612,12 +678,15 @@ def codex_side(a, rep, home, tag, want_top, want_srv, blocked, check):
                 die("%s: the merged file would not parse (%s) — nothing written" % (conf, e))
         rep.sets["codex"] += len(top_add) + len(srv_add)
         write_text(conf, new_text, a.dry_run)
-    # skills (count only — the install's codex-skills pass copies them)
+    codex_skill_report(a, rep, home, tag, blocked)
+
+
+def codex_skill_report(a, rep, home, tag, blocked):
     if shielded("codex.skills", blocked):
         rep.kept.append("%s.skills" % tag)
     else:
-        for n in missing_skills(repo_skills(a.root), os.path.join(home, "skills")):
-            rep.missing["skills"].append("missing    %s skill %s" % (tag, n))
+        for name in missing_skills(repo_skills(a.root), os.path.join(home, "skills")):
+            rep.missing["skills"].append("missing    %s skill %s" % (tag, name))
 
 
 FLEET_HOME_PREFIX = "$HOME/.claude/fleet/"
@@ -650,6 +719,8 @@ def main():
     ap.add_argument("--claude-md", default=DEFAULT_CLAUDE_MD)
     ap.add_argument("--claude-skills", default=DEFAULT_CLAUDE_SKILLS, help="'' = do not count Claude skills")
     ap.add_argument("--codex-home", action="append", default=[])
+    ap.add_argument("--codex-native-remote", help="explicit idle local native backend; no automatic launch or fallback")
+    ap.add_argument("--codex-native-peer-pid", type=int, help="expected native backend PID, verified by the kernel")
     ap.add_argument("--override", default=DEFAULT_OVERRIDE)
     ap.add_argument("--skip", action="append", default=[])
     ap.add_argument("--dry-run", action="store_true")
@@ -665,6 +736,13 @@ def main():
             homes.append(h)
 
     blocked = override_paths(a.override, a.skip)
+    if a.codex_native_remote or a.codex_native_peer_pid is not None:
+        if (not a.codex_native_remote or not a.codex_native_remote.startswith('unix:///')
+                or not a.codex_native_peer_pid or a.codex_native_peer_pid < 1
+                or len(a.codex_home) != 1 or len(homes) != 1
+                or not os.path.isdir(homes[0])
+                or not shielded('claude', blocked) or a.action == 'strip'):
+            ap.error('native mode requires one explicit Codex home, local Unix endpoint, positive peer PID and --skip claude; apply/check only')
     if a.action == "strip":
         return strip_docs(a, homes, blocked)
 
