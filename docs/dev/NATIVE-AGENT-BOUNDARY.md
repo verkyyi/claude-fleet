@@ -190,7 +190,26 @@ bash bin/fleet-native-create-selftest.sh
 python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude
 ```
 
-### SessionStart 的目录时序与恢复边界
+### 真实 Fleet 启动器与原生配置验证
+
+`fleet-native-create-claude-selftest.py --fleet-launcher` 在临时 HOME 中复制候选安装，运行实际
+`fleet-claude.sh`、配置 composer、Fleet hook 表、插件和核心 MCP，不再用自制 `--settings` 覆盖原生配置，
+也不传 `--strict-mcp-config` / 空工具集。只关闭夹具的自动预信任，临时仓库仍由原生 TUI 明确接受。
+现有默认服务器名对应本地 stdio 假服务，另有用户级及项目级 MCP；真实第三方服务不在这个夹具中启动。
+
+创建和销毁独立 tmux 后恢复两个阶段分别验证：Fleet receipt、用户 SessionStart hook、配置指纹、
+所有夹具 MCP 的 initialize / tools/list、实际 cwd 和原生进程归属。用户 UserPromptSubmit hook 和
+核心/用户/项目工具定义还须进入 native 请求；本地模型端点只返回 400，不执行工具或使用真实模型凭据。
+每阶段只挂载一个核心 MCP，正常退出后已观测 MCP 进程均须结束；测试不以进程名猜测并清理机器上的其他服务。
+
+这是实际 launcher/config 集成证据，不是第三方 MCP API、生产账号/Hub、完整面板或 POD 重建验收；
+没有证明普通面板已经启用原生创建，也没有证明 1 秒/5 秒目标。核心 MCP 与用户配置保留，不把删工具作为提速办法。
+
+```sh
+python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude --fleet-launcher
+```
+
+### 持久映射恢复
 
 原生创建候选的恢复复用既有 `LAUNCH` 映射内的 context / receipt，不新增持久化文件类型或第二套目录索引。
 快照解析器只对 receipt 与真实 Git 绑定一致的原生会话接纳主仓库内的 linked worktree；无证明的嵌套目录、
@@ -201,6 +220,8 @@ supervisor 校验当前任务所有权和新原生进程。旧 PID 的持久记�
 `fleet-native-restore-selftest.sh` 使用独立 tmux 的真实 snapshot/restore 与替代 launcher 验证映射往返和
 错误 ID 不启动；真实 Claude supervisor 夹具另验证临时服务器销毁重建后的精确会话恢复与文件保留。
 这不是完整 POD/账号/MCP/多副本 Hub 验收，也不使原生创建成为默认。旧映射没有原生 receipt 时继续走旧路径。
+
+### SessionStart 的目录时序与恢复边界
 
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
 SessionStart 命令。临时 HOME、空 setting sources、假 API key、loopback 拒绝端点、空工具

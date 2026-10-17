@@ -6,6 +6,10 @@ on:
       - 'bin/fleet-native-claude-worktree-selftest.py'
       - 'bin/fleet-native-claude-tui-selftest.py'
       - 'bin/fleet-native-create-claude-selftest.py'
+      - 'bin/fleet-claude.sh'
+      - 'bin/fleet-agent-team.py'
+      - 'hooks/settings-hooks.json'
+      - 'conf/mcp-worker.json'
       - 'bin/.fleet-restore-resolve.py'
       - 'bin/fleet-restore.sh'
       - 'bin/dash-raw-session.sh'
@@ -72,6 +76,13 @@ jobs:
             --claude "$RUNNER_TEMP/native-claude/package/claude" \
             > "$RUNNER_TEMP/claude-worktree-supervised.json"
           cat "$RUNNER_TEMP/claude-worktree-supervised.json"
+      - name: Exercise the actual Fleet launcher and composed native configuration
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher \
+            > "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
+          cat "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
