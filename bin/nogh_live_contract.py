@@ -209,7 +209,10 @@ def validate(plan, now=None, *, bound=True):
     keys(probes, 'github_ipv4 github_ipv6 bypass_ipv4 bypass_port', 'PROBE_FIELDS')
     require(address(probes['github_ipv4']).version == 4 and address(probes['github_ipv6']).version == 6
             and address(probes['bypass_ipv4']).version == 4, 'PROBE_ADDRESS')
-    require(type(probes['bypass_port']) is int and 0 < probes['bypass_port'] < 65536, 'PROBE_PORT')
+    # 53 is counted as DNS and 80/443 as GitHub, never as the unknown the
+    # proxy-bypass control must produce (#4630).
+    require(type(probes['bypass_port']) is int and 0 < probes['bypass_port'] < 65536
+            and probes['bypass_port'] not in (53, 80, 443), 'PROBE_PORT')
     require(all((r['ip'], r['port']) not in ((probes['github_ipv4'], 443), (probes['github_ipv6'], 443),
                                            (probes['bypass_ipv4'], probes['bypass_port'])) for r in routes
                 if r['purpose'] != 'github_restored'),

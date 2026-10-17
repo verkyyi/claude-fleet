@@ -20,6 +20,11 @@ PHASES = ('startup', 'identity', 'deny:github-name', 'deny:github-v4', 'deny:git
           'allow:hub', 'allow:provider') + tuple('row:A%d' % n for n in range(1, 13)) + \
          ('row:A4-denied', 'row:A4-restored', 'end')
 MARKER_FD = 198
+
+
+def phase_timeout(phase):
+    """The broker's bound on one phase command; the driver waits this plus a margin."""
+    return 5 if phase.startswith('allow:') else 2 if phase.startswith('deny:') else 30
 TRACE_CALLS = ('execve,execveat,clone,clone3,fork,vfork,exit,exit_group,wait4,waitid,'
                'socket,socketpair,bind,recvfrom,connect,accept,accept4,sendto,sendmsg,sendmmsg,'
                'dup,dup2,dup3,fcntl,close,close_range,write,writev,sendfile,splice,recvmsg,recvmmsg,'

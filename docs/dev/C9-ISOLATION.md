@@ -26,8 +26,8 @@ Pod spec 更新；只有本次 controller 可以 attach 两个固定控制入口
 
 镜像必须有对应的普通登录（UID/GID 均至少 10000）。workload 无 capabilities，
 启用 no-new-privileges；它不能访问 root-only 控制文件、计数通道和代理私钥。
-工作目录和 HOME 是自己拥有的 `/tmp/c9-workload`。这里不创建登录，也不使用
-生产 HOME。所需的已登记配置由 owner 从该测试登录的正常管理产物准备。
+工作目录和 HOME 是自己拥有的 `/tmp/c9-workload`。登录由测试 overlay 构建时创建
+（见下节），不使用生产 HOME。所需的已登记配置由 owner 从该测试登录的正常管理产物准备。
 
 每行预算最多 55 秒；driver 正常工作最多 50 秒，预留退出核验，55 秒硬截止。
 每个原始 Pod 还有 55 秒 active deadline，容器入口也有独立上限。准备镜像、登记
@@ -40,8 +40,24 @@ Pod spec 更新；只有本次 controller 可以 attach 两个固定控制入口
 构建 [测试 overlay](../../extras/managed-node/c9/Dockerfile)，构建上下文为源码根。
 `C9_BASE` 是已验证的 managed-node 镜像 digest，`C9_SOURCE_SHA` 是完整提交 SHA。
 镜像由正常发布入口产出；recipe 中记录最终 OCI digest，不接受 tag。
-overlay 固定可信入口、strace 二进制摘要和源码版本。`build_digest()` 的规范化文件
-摘要集合给出 `observer_digest`；同时 pin 每个 workload 文件的 SHA256。
+overlay 固定可信入口、strace 二进制摘要和源码版本，并创建三个 workload 登录：
+构建参数 `C9_HUB_LOGIN`、`C9_NODE_A_LOGIN`、`C9_NODE_B_LOGIN`（默认 `c9-hub`、
+`c9-node-a`、`c9-node-b`），UID/GID 依次 10001–10003，无 shell、无 HOME；recipe
+中 hub/node 的 `login` 必须与之相同。基础镜像的 `ccquota`/`claude`/`tmux` 链接指向只有
+`boot` 才会填充的磁盘 runtime，这里不运行 `boot`，所以 overlay 把它们改指镜像自带的
+`/opt/claude-fleet/seed/current`（缺任一即构建失败；`codex` 有则链接）。
+
+`build_digest()` 的规范化文件摘要集合给出 `observer_digest`；同时 pin 每个 workload
+文件的 SHA256。三个摘要不用手算：
+
+```sh
+python3 bin/nogh_live_driver.py --test-only digests \
+  --workload ./workload --hub-key ./account-key.txt
+```
+
+输出 `observer_digest`（本检出的 `build_digest()`，须与镜像的源码版本一致）、
+`command_digest`（workload 文件）和 `key_digest`（原样保存的 `/v1/fleet/account-key`
+响应体）。它不读集群、不写文件。
 
 在新的 `c9-<run UUID>` namespace 中设置 `fleet/c9-purpose: disposable-test` 标签，
 准备以下不可变对象。不要将真实凭据放入
@@ -56,7 +72,15 @@ recipe、Git、命令参数或公开记录。
 
 `hub-token` 是测试 Hub 的正常 operator/admin 凭据，不能放进普通 workload Secret。
 `ca.pem` 包含该测试 Hub 和 adapter 的 CA；adapter 证书覆盖精确允许的 HTTPS 域名。
-外部 origin 仍以系统 CA 验证，使用 pin 的 IP 和原域名 SNI。`provider-probe.json`
+broker 把它设为所有服务和动作的 `SSL_CERT_FILE` 等 CA 变量。adapter 连外部 origin 时
+不读这些变量，只用 OpenSSL 内建的系统证书位置（`system_context()`）验证，使用 pin 的
+IP 和原域名 SNI；测试 CA 里不需要也不应混入公共根。
+
+Hub 用该 CA 签发、覆盖 `hub.origin` 主机名的证书直接服务 HTTPS：
+`ccquota hub --addr <ip>:<port> --tls-cert tls.crt --tls-key tls.key`（两者必须同时给出；
+启动时读一次，换证书需重启）。节点 agent 的 WebSocket 走同一个监听。workload 环境的
+`NO_PROXY` 含各 Pod IP 与 `hub.origin` 的主机名，所以按名字连 Hub 的客户端直连 Hub，
+不经 adapter；该名字由 dns 网关按 routes 的 origin 解析到 Hub Pod IP。`provider-probe.json`
 是 owner 选定的真实成功请求，字段为 `url`、`method`（GET/POST）、`headers`、`body`
 （字符串）；它仅存在 root-only Secret 中，成功必须有 2xx 和非空响应。
 
@@ -123,7 +147,7 @@ receipt，不能仅凭导出文件存在判 PASS。捕获证明材料来自哪�
 | `hub` | `origin`（HTTPS，显式端口）、实际 account-key 的 `key_digest`、完整运行提交 `commit` |
 | `endpoints` | 五个角色，逐项 `role/name/login/image/observer_digest/command_digest/tls_cert_digest/binding` |
 | `routes` | render recipe 中必须为空；实际地址由 run 的新鲜 API 读取填入 |
-| `probes` | 本次实际 GitHub IPv4/IPv6、旁路 IPv4 和端口；正控制不能与允许目的重叠 |
+| `probes` | 本次实际 GitHub IPv4/IPv6、旁路 IPv4 和端口；正控制不能与允许目的重叠；旁路端口不能是 53/80/443（会被计为 DNS/GitHub 而不是 unknown，contract 拒绝） |
 
 两节点的 `binding` 含 `endpoint_id/fleet_id/machine_id/hostname/owner`；其余角色为
 null。仅 hub/node 有 `command_digest`，仅 proxy 有 `tls_cert_digest`，其他为 null。
@@ -141,8 +165,9 @@ Hub、proxy 和 DNS 的实际需要（DNS 要有 UDP/TCP 两项），以及正�
 
 1. owner 在授权的测试集群创建 namespace、专用 controller/RBAC、已登记账号产物和
    上述 immutable 对象。controller 需要读取本次 namespace/Pod/artifact 和策略，
-   attach 固定容器，并执行被拒绝的 exec/ephemeral 正控制；不能以泛 RBAC 拒绝代替
-   已安装策略的拒绝。所有其他入口都应在本次资源创建前停止使用它们。
+   attach 固定容器，并执行被拒绝的 exec/ephemeral 正控制。RBAC 必须**允许**
+   `pods/exec` 和 `pods/ephemeralcontainers`，让拒绝来自已安装的 VAP；泛 RBAC 拒绝
+   不能代替策略的拒绝（driver 认的是策略名）。所有其他入口都应在本次资源创建前停止使用它们。
 2. 在私有目录运行 render：
 
    ```sh
@@ -156,7 +181,7 @@ Hub、proxy 和 DNS 的实际需要（DNS 要有 UDP/TCP 两项），以及正�
    List 来省略这个顺序。集群需支持 admissionregistration.k8s.io/v1 的 VAP。
 3. 保存真正的创建输出。若 kubectl 按对象输出多个 JSON，可用 `jq -s
    '{apiVersion:"v1",kind:"List",items:.}'` 只加 List 容器；不能改对象 UID、状态或
-   构造创建回执。等待原始 init guard 正在运行，立即调用：
+   构造创建回执。这就是 `created.json`：`kubectl create -f <Pod 部分> -o json` 的原样输出。等待原始 init guard 正在运行，立即调用：
 
    ```sh
    python3 bin/nogh_live_driver.py --test-only run \
@@ -169,6 +194,9 @@ Hub、proxy 和 DNS 的实际需要（DNS 要有 UDP/TCP 两项），以及正�
 4. driver 核验实际集群/namespace、原始 Pod、digest、策略和 immutable artifact，
    现场证明 exec/ephemeral 被命名策略拒绝，然后绑定 guard。只有双栈安装成功才能
    启动 observed；attach 后 hello 握手防止丢失 ready。
+   driver 等每条回执：控制回执（guard/ready/marked/证据）最多 5 秒；每个阶段的
+   `result` 等该阶段在 broker 中的上限再加 5 秒（deny 2、allow 5、identity 与 row 30，
+   `phase_timeout()`），都不超过整体 deadline。
 5. 等真实 Hub 和两节点的正常身份 API 就绪。Hub key/运行版本、endpoint、fleet、
    machine、login、owner 必须吻合，targeted status 必须来自 live。仅启动未就绪可
    有界重试，身份冲突立即拒绝；没有全量 refresh 或身份修补。
