@@ -154,6 +154,42 @@ onboarding 界面的稳定等待，不能用于启动性能统计。两个界面
 或准入限制，也不能把目录正常删除后回落主检出视为成功恢复。原有 session/window 记录继续复用，
 不为上述差异新增目录生命周期服务。
 
+### 原生创建入口候选：受管任务路径
+
+`dash-raw-session.sh --native-worktree --node local --agent claude --task <accepted-task>`
+是显式候选入口，不是默认安装或普通面板已经切换的声明。它仍要求真实的已接受 dispatch / launch
+上下文、仓库准入及原有 CPU/容量/账号检查；只写创建意图，不运行 `git worktree add`。
+现行有界 fetch 保留，随后记录所选 base ref 的提交；不通过省略版本契约换取速度。
+
+- 原生 Claude 从所选主仓库启动，执行自己的 `--worktree`，并使用原生 `--name` 保留干净会话的退出选择。
+  CLI 参数由既有任务 supervisor 在解析 held input 后加入，seed 不随原生创建命令发送。
+  配置合并、MCP、模型、权限和账号入口不替换；没有为了设置 Worktree 而覆盖 `--settings`、停用 hooks。
+- 创建意图只放在既有 tmux 窗口；实际 `@worktree` 由验证过的 SessionStart hook 写入。
+  校验原生进程/任务代次、仓库 Git 身份、预期目录、base commit 和当前窗口意图之后，才发布运行证据。
+  目录/分支已存在、重定向、Git 查询失败、base 改变或创建者不匹配均拒绝，不静默采用另一个目录。
+- 原生目录名沿用 `scratch-<digits>` 以保留现有读者兼容，名字使用随机标识而不是第二套 Git 分配循环。
+  不预填/补充旧 Worktree 池，不调用旧 allocator/setup，不在失败时使用 Fleet 的删除器回滚原生目录。
+  名字只用于原生调用及旧显示兼容，不作为所有权证明。
+- 从该任务的已保存 receipt 恢复时，要求创建意图与真实 Git 绑定仍然一致；使用精确 native ID，
+  交由原生 `--worktree ... --resume ...` 重新进入同一目录与生命周期。用户已删除的目录不会自动重建，
+  意图或绑定丢失不回落到可写主检出；迟到 hook 不会清空已经保存的创建者证据。
+
+本候选明确拒绝未验证组合：无已接受任务的 local-authority 会话、远程自动选址、Codex、显式旧 setup/
+依赖复制、transfer（含同 provider），以及用这个新建开关打开旧目录。它不静默禁用用户 setup 或降级到旧创建器。
+这些仍是整个迁移的待办，不把只完成一条入口改写为总体目标完成。普通入口与旧会话继续走兼容路径；
+不能在完整面板/MCP/认证/恢复与持久化验收之前把这个开关推广为默认。
+
+显式 `bin/fleet-native-create-claude-selftest.py` 用真实 Claude、独立 tmux socket、临时 HOME/Git
+运行实际 `fleet_launch.supervise` 和实际配置 hook；验证不预创建、创建者证据、窗口绑定、精确 resume、
+新进程 incarnation、同一目录与编辑保留。任务 authority 与 finalize 在夹具内替代，不连生产 Hub，
+因此它不是实际多副本准入/任务回收验收；也不是整个 Fleet launcher、面板或完整 MCP 验收。
+工具及 MCP 为空，模型请求使用假 key 并由 loopback 拒绝，机器级配置存在时拒绝运行。
+
+```sh
+bash bin/fleet-native-create-selftest.sh
+python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude
+```
+
 ### SessionStart 的目录时序与恢复边界
 
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
