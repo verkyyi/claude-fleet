@@ -1291,8 +1291,8 @@ if [ -d "$ROOT/conf/agent-defaults" ] && [ -f "$ROOT/bin/fleet-agent-defaults.py
 else
   say 'agents: skip — no conf/agent-defaults in this version'
 fi
-# The Codex side of the optional plugins (issue #3123, EPIC #3111 C12): Codex has
-# no /plugin, so fleet-codex-plugins.py follows what Claude has installed — the
+# The legacy Codex bridge for optional plugins (issue #3123, EPIC #3111 C12):
+# fleet-codex-plugins.py still follows what Claude has installed — the
 # skills linked into every Codex home as fleet-plugin-*, the MCP servers as one
 # marked block in config.toml (fill only, the rest byte for byte). None installed
 # ⇒ nothing written. The Codex launcher runs the same sync before every launch.

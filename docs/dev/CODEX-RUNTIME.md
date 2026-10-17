@@ -476,3 +476,12 @@ does Fleet queue a continuation after the verified switch. Completed tasks get
 no nudge. The controller rechecks the exact failed turn and source identity;
 queue failures are reported instead of claimed as success. Account-wide limits
 continue through the separate home-migration policy.
+
+## Native plugin migration
+
+Native plugin management is separate from the legacy Claude-to-Codex bridge.
+The verified 0.162.1 and 0.163.0 binaries can install Claude-format marketplaces
+and plugins directly, including native command-to-skill conversion. This does
+not yet authorize removing the bridge: hook trust, MCP environment/timeout
+parity, invocation names and duplicate ownership need migration acceptance.
+See [the native boundary migration](NATIVE-AGENT-BOUNDARY.md).

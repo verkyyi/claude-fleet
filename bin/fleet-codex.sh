@@ -80,7 +80,7 @@
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
 # transferred recurring loop | Fleet adapter / native `/loop` | Fleet adapter | Active Fleet loops keep their ID, cadence and ownership generation across agent/account transfers. Codex uses private RPC; Claude inbox delivery requires transcript acknowledgement. Exact crash restore can reattach active owners; stopped or ambiguous deliveries never replay. Managed HOME transfers can preserve verified session-only calendar jobs, including one-shots.
-# optional plugins (fleet-orchestrate · fleet-steward · fleet-epic) | ✅ `/plugin` | ⚠️ partial | Codex has no plugin system. `bin/fleet-codex-plugins.py sync` follows what the Claude side installed and enabled before every launch: skills linked as `$CODEX_HOME/skills/fleet-plugin-*`, plugin commands as adapter skills, the `.mcp.json` servers as one marked block in `config.toml`, hooks merged by `fleet-hooks-emit.sh --plugin-dir`. Not carried — Codex has no such mechanism: mod interface modules (decision-sheet panel, /qd; Codex gets the `[decision]` text), PreCompact, an agent file's `tools` limits, `/plugin` itself (issue #3123).
+# optional plugins (fleet-orchestrate · fleet-steward · fleet-epic) | ✅ `/plugin` | ⚠️ partial | Legacy bridge pending native plugin migration: `bin/fleet-codex-plugins.py sync` follows what the Claude side installed and enabled before every launch: skills linked as `$CODEX_HOME/skills/fleet-plugin-*`, plugin commands as adapter skills, the `.mcp.json` servers as one marked block in `config.toml`, hooks merged by `fleet-hooks-emit.sh --plugin-dir`. Not carried by this bridge: mod interface modules (decision-sheet panel, /qd; Codex gets the `[decision]` text), PreCompact, an agent file's `tools` limits, native plugin ownership (issue #3123; docs/dev/NATIVE-AGENT-BOUNDARY.md).
 # fleet command seed (`/fleet-claim`) | native | native | Claude Code expands `/fleet-claim`; Codex invokes the installed `$fleet-claim` skill from `$CODEX_HOME/skills/fleet-claim/SKILL.md`. If an old Codex build has no skills, or that home has not been synced, the launcher falls back to the prose expansion.
 # directory trust prompt | pre-granted | trusted-node pre-grant | `bin/fleet-trust.sh` fills missing trust for the fleet checkout and a managed no-repo launch in physical HOME on a trusted node. Codex entries persist through proxy config symlinks; explicit untrusted and pre-trust opt-out remain unchanged. Transfer checks readiness before source exit.
 # red `needs` + bell when a session is blocked on you | ✅ | ✅ | The private-server monitor reads native waitingOnUserInput/waitingOnApproval flags and marks the exact launcher/thread. No Notification hook is needed. Resolved native attention clears only its own subtype; explicit worker blockers survive.
@@ -235,18 +235,17 @@ for a in "$@"; do
 done
 
 # --- the optional plugins (issue #3123) -----------------------------------------
-# The plugins the Claude side has installed (issue #3123, EPIC #3111 C12): Codex
-# has no /plugin, so before each launch fleet-codex-plugins.py syncs THIS home —
+# The plugins the Claude side has installed (issue #3123, EPIC #3111 C12): the
+# legacy bridge fleet-codex-plugins.py still syncs THIS home before each launch —
 # their skills linked in as fleet-plugin-*, their MCP servers as one marked block
 # in config.toml — so a `/name` seed below finds its skill, and each plugin's
 # hooks.json joins the hook table (--plugin-dir). None installed ⇒ nothing
 # written, the table byte for byte as before. FLEET_CODEX_PLUGINS=0 skips it.
 _plugin_args=()
 if [ "${FLEET_CODEX_PLUGINS:-1}" != 0 ] && [ -f "$BIN/fleet-codex-plugins.py" ]; then
-  python3 "$BIN/fleet-codex-plugins.py" sync --codex-home "${CODEX_HOME:-$HOME/.codex}" >/dev/null 2>&1 || true
   while IFS= read -r _pd; do
     [ -n "$_pd" ] && _plugin_args+=(--plugin-dir "$_pd")
-  done < <(python3 "$BIN/fleet-codex-plugins.py" dirs 2>/dev/null)
+  done < <(python3 "$BIN/fleet-codex-plugins.py" sync --print-dirs --codex-home "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null)
 fi
 
 # --- convert a `/name [args]` seed to a native Codex skill when available -------
