@@ -562,3 +562,4 @@
 | 读到 idle 后用户先输入，无条件 turn/start 将循环消息 steer 进用户轮，或 peer frame 排队到下一轮（#4524） | 旧空闲条件被消费；frame written 被误记为 accepted，迟到 ACK 或重试污染新代次 | 共享 `fleet_runtime` 显式查询条件接受能力；没有原生原子前置条件与准确回执时返回 unavailable/unknown，零投递、零回执、无无条件回退；消费者 #4431 仍须单独验收 | `runtime-idle-accept-unavailable` |
 | SessionStart 的 authority 观察失败，原生进程仍活着但 SID 登记缺失（#4510） | 重启会改变执行；把 HTTP 200 或旧回执当成功会登记别人的执行 | 当前代码的显式现存原生预检与补观察核对 kernel、RPC 和原 reservation；Hub 精确确认后才登记，失败保留原执行，旧 hook 缺失单列 | `native-observe-missing` |
 | 回收影子证明复用旧 turn、子进程或 lease 证据，或仅凭 MERGED/Stop 放行（#4503） | 并发开始的新工作被旧证明掩盖 | 只读分层聚合，逐维保留时间/身份/原因；重核变化即失效，始终 not-actionable，旧 gate 独占实际动作 | `reap-shadow-race` |
+| 将 fixture 的 loopback 零计数或 IPv6 安装失败后仍成功的普通 egress guard 当成真实 C9 隔离（#4523） | Hub / 常驻原生树、DNS / proxy 旁路或漏观察被误报为零尝试 | 测试专用入口严格核验目标、代次、网络与观察能力；IPv6 失败关闭，未知 / 不完整观察不产生 live PASS，生产模板不放宽 | `c9-live-unproven` |

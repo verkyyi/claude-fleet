@@ -1,5 +1,6 @@
 # Hub rows: Ubuntu PR run38960548935 at 00faaac8 (all93 drills, issue #3884).
 # Cred-sep rows: complete Ubuntu run38955383651 at f2e86584 (issue #3884).
+# cred-sep-compute-unlinks keeps its slow mode (14.3, Ubuntu run 38873016506; fleet-ack train 39008738829: 14.8/14.7): it is bimodal (1.2 in run 38955383651) and the split must hold on the slow one.
 # Spinner budget rows: Ubuntu run 38953452759 at f32832df (44s windows, issue #4500).
 # break-it-durations.txt — seconds of wall time per BREAK-IT drill on an ubuntu CI
 # runner (issue #2694). bin/fleet-break-it-part.py balances each break-it test's
@@ -89,7 +90,7 @@
 0.6 cred-sep-acct-full
 0.4 cred-sep-bootstrap-fails
 8.5 cred-sep-codex-failover-pin
-1.2 cred-sep-compute-unlinks
+14.3 cred-sep-compute-unlinks
 0.9 cred-sep-pick-refused
 1.2 cred-sep-plain-node-env
 0.8 cred-sep-proxy-off
