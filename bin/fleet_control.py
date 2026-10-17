@@ -95,8 +95,12 @@ class Control:
         # arguments or a calling worker's inherited Fleet overrides.
         # TMUX_TMPDIR is where tmux's own sockets live (issue #2970): the adapter
         # must find the same servers this process does; unset, byte for byte.
+        # The CA trust variables pass too (issue #4625): a hub behind a private CA
+        # (a self-hosted test namespace) is verified through them, and without them
+        # every start's hub read died CERTIFICATE_VERIFY_FAILED. They only add trust
+        # the login already chose; unset, byte for byte.
         allowed = ("HOME", "PATH", "TMPDIR", "TMUX_TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK",
-                   "FLEET_USER_POD")
+                   "FLEET_USER_POD", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "FLEET_CA_BUNDLE")
         env = {key: os.environ[key] for key in allowed if key in os.environ}
         # PATH is inherited but never trusted to be whole (issue #1460): a launchd
         # job — ccquota's agent reading fleet_status for its heartbeat — runs us
