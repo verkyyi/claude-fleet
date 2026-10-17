@@ -48,6 +48,8 @@
 #                         session, a restart adopts instead of doubling
 #   webhook-per-login     bin/fleet-webhook-machine.py (#4358): one webhook forwarder for
 #                         every login, routed by login as that login, idle by change
+#   selftest-leftover-overnight bin/fleet_selftest_procs.py + fleet-selftest-reap.sh (#4360):
+#                         a killed selftest's processes are reaped once their maker is gone
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -1852,6 +1854,20 @@ drill_managed_cert_lapses_idle() {
   fi
   SECS=$(since "$t0")
   WHAT="托管登录证书过期、设备 6 天 23 小时没用：diskguard 一拍用设备钥匙续上（why=keep），入口的设备窗口重新开始；国内探针的身份步随后走证书门、不用令牌；过期证书被演练命令先续再签；设备已过 7 天时一段失败只报一条运维告警；keep · renew · status · 演练 · 体检 cert 行没有一句叫人跑 fleet login"
+}
+
+# ---- selftest-leftover-overnight (#4360, EPIC #4354 C6): a selftest killed
+# before its teardown left its sandbox's processes running for days as PPID=1
+# orphans, the dir long removed. The hourly reaper now kills a tree under a test
+# root once its maker is gone and it is past the age gate; a run in flight keeps it.
+drill_selftest_leftover_overnight() {
+  CAP=30; local t0
+  t0=$(now)
+  if ! bash "$BIN/fleet-selftest-procs-selftest.sh" >"$WORK/selftest-procs.out" 2>&1; then
+    WHY="a selftest leftover was not reaped (or a live one was): $(grep FAIL "$WORK/selftest-procs.out" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="测试临时根下、造它的进程已不在、过了存活阈值的孤儿树（按参数或 cwd 认，目录删了也认）整树先 TERM 后 KILL；年轻的、造它的进程还在的、不在测试根下的、父进程还活着的都不碰；-n 只数不杀"
 }
 
 # ---- svc-run-leaks-across-runs (#4086): service runs (svc:livepage, every
