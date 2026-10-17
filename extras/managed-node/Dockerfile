@@ -63,7 +63,8 @@ ARG DEBIAN_MIRROR= NPM_REGISTRY= PIP_INDEX=
 RUN [ -z "$DEBIAN_MIRROR" ] || sed -i "s#http://deb.debian.org/debian#$DEBIAN_MIRROR#g" /etc/apt/sources.list.d/debian.sources; \
     apt-get update -qq && apt-get install -y --no-install-recommends \
     ca-certificates curl git gh python3 zsh tini procps openssh-client openssh-server \
-    jq ripgrep less sudo passwd iptables xz-utils libevent-2.1-7t64 libncursesw6 locales tzdata \
+    jq ripgrep less sudo passwd iptables xz-utils libevent-2.1-7t64 libncursesw6 locales tzdata bubblewrap \
+    && bwrap --version \
     && rm -rf /var/lib/apt/lists/* \
     && { [ -z "$DEBIAN_MIRROR" ] || sed -i "s#$DEBIAN_MIRROR#http://deb.debian.org/debian#g" /etc/apt/sources.list.d/debian.sources; } \
     && groupadd --gid 499 fleetcred \

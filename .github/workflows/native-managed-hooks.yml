@@ -7,6 +7,7 @@ on:
       - 'bin/fleet-native-local-runtime-selftest.py'
       - 'bin/fleet-native-session-env-selftest.py'
       - 'bin/fleet-native-thread-stop-selftest.py'
+      - 'extras/managed-node/Dockerfile'
       - 'bin/fleet-mcp.py'
       - 'bin/fleet_launch.py'
       - 'bin/fleet-agent-defaults.py'
@@ -41,6 +42,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prepare native Linux sandbox prerequisites on disposable runner
+        if: matrix.mode == 'exec'
+        shell: bash
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles apparmor-utils
+          if test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns &&
+             test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1; then
+            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+              /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          command -v bwrap
+          bwrap --version
+          bwrap --unshare-user --unshare-pid --unshare-net --ro-bind / / \
+            --proc /proc --dev /dev -- /usr/bin/true
       - name: Fetch pinned official Codex package
         shell: bash
         run: |
