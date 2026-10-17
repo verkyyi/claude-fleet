@@ -155,10 +155,15 @@ that layer as overrides, then apply -c flags above it in their original order.
 
 
 def run(argv, prepare=None, tick=None):
-    if '--no-daemon' in argv:
+    options = argv[:argv.index('--')] if '--' in argv else argv
+    if '--no-daemon' in options:
         if os.environ.get('FLEET_CODEX_SUBSCRIPTION'):
             raise ValueError('a pinned subscription requires the verified private runtime')
         return subprocess.call(['codex', *argv])
+    if '--worktree' in options:
+        raise ValueError('native --worktree requires a local Codex session; '
+                         'Fleet private runtime uses --remote and cannot create it. '
+                         'Keep the existing Fleet worktree launch until native runtime migration is verified')
     flags = server_flags(argv)
     # macOS AF_UNIX paths are limited to 104 bytes. TMPDIR may itself exceed
     # that; /tmp + a random 0700 directory is short and private on both OSes.
@@ -233,6 +238,8 @@ def run(argv, prepare=None, tick=None):
             raise RuntimeError('private Codex server exited while the TUI was running')
         return client.returncode if client.returncode >= 0 else 128 - client.returncode
     finally:
+        if monitor is not None:
+            monitor.close()
         # The TUI shares our process group; signal only its exact child PID.
         if client is not None and client.poll() is None:
             client.terminate()

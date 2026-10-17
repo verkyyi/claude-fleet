@@ -5,6 +5,7 @@ set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
 import base64, hashlib, importlib.util, json, os, pathlib, signal, socket, struct, subprocess, sys, tempfile, threading, time, unittest
+from unittest import mock
 
 BIN = pathlib.Path(sys.argv[1])
 RUNTIME = BIN / 'fleet-codex-runtime.py'
@@ -65,6 +66,62 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode,42,result.stderr)
         self.assertFalse(pathlib.Path(self.metadata('server')['path']).parent.exists())
 
+    def test_runtime_closes_event_monitor_on_client_exit(self):
+        copied=self.root/'fleet-codex-runtime.py'
+        copied.write_text(RUNTIME.read_text())
+        (self.root/'fleet-codex-attention.py').write_text(
+            'import os,pathlib\n'
+            'class Monitor:\n'
+            ' def __init__(self,remote,env): pass\n'
+            ' def tick(self): pass\n'
+            ' def close(self): pathlib.Path(os.environ["RUNTIME_TEST"],"monitor-closed").write_text("closed")\n')
+        for code in ('0','42'):
+            marker=self.root/'monitor-closed'
+            if marker.exists(): marker.unlink()
+            result=subprocess.run([sys.executable,str(copied),'--','hello'],
+                                  env=dict(self.env,CLIENT_RC=code),capture_output=True,text=True,timeout=20)
+            self.assertEqual(result.returncode,int(code),result.stderr)
+            self.assertEqual(marker.read_text(),'closed')
+            self.assertFalse(pathlib.Path(self.metadata('server')['path']).parent.exists())
+
+    def test_native_worktree_refused_before_runtime_setup(self):
+        prepare = mock.Mock()
+        with mock.patch.object(runtime.tempfile, 'mkdtemp') as allocate, \
+                mock.patch.object(runtime.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(ValueError, 'native --worktree requires a local Codex session'):
+                runtime.run(['--worktree', 'hello'], prepare=prepare)
+        prepare.assert_not_called()
+        allocate.assert_not_called()
+        spawn.assert_not_called()
+
+    def test_native_worktree_cli_refusal_leaves_no_children(self):
+        result = self.run_cli('--worktree', 'hello')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('native --worktree requires a local Codex session', result.stderr)
+        self.assertFalse((self.root / 'server.json').exists())
+        self.assertFalse((self.root / 'client.json').exists())
+
+    def test_literal_flags_after_separator_do_not_select_runtime(self):
+        for literal in ('--worktree', '--no-daemon'):
+            with self.subTest(literal=literal):
+                result = self.run_cli('--', literal)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.metadata('client')['argv'][-2:], ['--', literal])
+                self.assertFalse(pathlib.Path(self.metadata('server')['path']).parent.exists())
+
+    def test_explicit_embedded_path_remains_unmodified(self):
+        with mock.patch.dict(os.environ, {'FLEET_CODEX_SUBSCRIPTION': ''}), \
+                mock.patch.object(runtime.subprocess, 'call', return_value=7) as launch:
+            self.assertEqual(runtime.run(['--no-daemon', '--worktree']), 7)
+        launch.assert_called_once_with(['codex', '--no-daemon', '--worktree'])
+
+    def test_pinned_subscription_cannot_bypass_private_verification(self):
+        with mock.patch.dict(os.environ, {'FLEET_CODEX_SUBSCRIPTION': 'fixture'}), \
+                mock.patch.object(runtime.subprocess, 'call') as launch:
+            with self.assertRaisesRegex(ValueError, 'pinned subscription requires the verified private runtime'):
+                runtime.run(['--no-daemon', '--worktree'])
+        launch.assert_not_called()
+
     def test_startup_failure_does_not_launch_client(self):
         result=self.run_cli('hello',FAIL_START='1')
         self.assertEqual(result.returncode,1)
@@ -108,6 +165,34 @@ class RuntimeTests(unittest.TestCase):
         args=self.metadata('server')['argv']
         self.assertLess(args.index('model="profile-model"'),args.index('model="override-model"'))
         self.assertTrue(any('fixture-command' in a for a in args))
+
+    def test_rpc_event_poll_handles_idle_ping_fragments_and_disconnect(self):
+        connection,peer=socket.socketpair()
+        client=rpc.Client.__new__(rpc.Client)
+        client.socket=connection
+        client.deadline=time.monotonic()+1
+        try:
+            self.assertIsNone(client.receive(nonblocking=True))
+            peer.sendall(b'\x89\x00')
+            self.assertIsNone(client.receive(nonblocking=True))
+            self.assertEqual(peer.recv(6)[0]&15,10)
+            peer.sendall(b'\x01\x00\x80\x02{}')
+            self.assertEqual(client.receive(nonblocking=True),{})
+            peer.close()
+            with self.assertRaises(EOFError):client.receive(nonblocking=True)
+        finally:
+            client.close();peer.close()
+
+    def test_rpc_partial_event_is_not_an_idle_connection(self):
+        connection,peer=socket.socketpair()
+        client=rpc.Client.__new__(rpc.Client)
+        client.socket=connection
+        client.deadline=time.monotonic()+.02
+        try:
+            peer.sendall(b'\x81')
+            with self.assertRaises(TimeoutError):client.receive(nonblocking=True)
+        finally:
+            client.close();peer.close()
 
     def test_rpc_unix_websocket_frames_and_errors(self):
         path=str(self.root/'rpc.sock')

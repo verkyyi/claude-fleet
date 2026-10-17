@@ -186,16 +186,74 @@ class Monitor:
         self.remote, self.pane = remote, env.get('TMUX_PANE', '')
         self.owner = env.get('FLEET_CODEX_LAUNCHER_PID', '')
         self.next_at = 0
+        self.reconcile_at = 0
+        self.client = None
+        self.binding = None
+        self.event_stream = False
+
+    def close(self):
+        if self.client:
+            try:
+                self.client.close()
+            except OSError:
+                pass
+        self.client = None
+        self.binding = None
+        self.reconcile_at = 0
+        self.event_stream = False
+
+    def events(self, identifier):
+        thread = None
+        self.client.deadline = time.monotonic() + .05
+        for _ in range(128):
+            if self.client.events:
+                event = self.client.events.pop(0)
+            else:
+                event = self.client.receive(nonblocking=True)
+                if event is None:
+                    return thread
+            if not isinstance(event, dict):
+                raise ValueError('invalid native event')
+            params = event.get('params', {})
+            if not isinstance(params, dict) or params.get('threadId') != identifier:
+                continue
+            if event.get('method') == 'thread/status/changed':
+                status = params.get('status')
+                if not isinstance(status, dict) or not isinstance(status.get('type'), str):
+                    raise ValueError('invalid native thread status')
+                if not self.event_stream:
+                    self.event_stream = True
+                    if self.reconcile_at:
+                        self.reconcile_at = time.monotonic() + 30
+                thread = {'id': identifier, 'status': status}
+            elif event.get('method') == 'thread/closed':
+                thread = {'id': identifier, 'status': {'type': 'notLoaded'}}
+        raise ValueError('native event backlog exceeds monitor budget')
 
     def tick(self):
         if not self.pane or not self.owner or time.monotonic() < self.next_at: return
         self.next_at = time.monotonic() + 2
-        client = None
         try:
             data = session['identity'](self.pane)
-            if data.get('owner') != self.owner or data.get('remote') != self.remote: return
-            client = Client(self.remote, timeout=.6)
-            thread = thread_read(client, data)
+            if data.get('owner') != self.owner or data.get('remote') != self.remote:
+                self.close()
+                return
+            binding = tuple(data.get(key) for key in ('owner', 'session_id', 'home', 'remote'))
+            if binding != self.binding:
+                self.close()
+            if self.client is None:
+                self.client = Client(self.remote, timeout=.6)
+                self.binding = binding
+            thread = self.events(data['session_id'])
+            if time.monotonic() >= self.reconcile_at:
+                thread = thread_read(self.client, data)
+                observed = self.events(data['session_id'])
+                if observed is not None and observed.get('status') != thread.get('status'):
+                    self.reconcile_at = 0
+                    return
+                self.reconcile_at = time.monotonic() + (30 if self.event_stream else 2)
+            if thread is None:
+                return
             subtype = kind(thread)
             tm = session['tmux']
             state, why, before = tm(['display-message', '-p', '-t', self.pane,
@@ -226,9 +284,7 @@ class Monitor:
                     with open('/dev/tty','w') as tty: tty.write('\a')
                 except OSError: pass
         except (OSError, ValueError, KeyError, TypeError, EOFError, subprocess.SubprocessError):
-            pass  # Unavailable is not evidence that an outstanding request ended.
-        finally:
-            if client: client.close()
+            self.close()
 
 
 def main():
