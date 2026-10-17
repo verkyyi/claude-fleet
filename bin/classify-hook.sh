@@ -1,13 +1,12 @@
 #!/bin/sh
 # classify-hook.sh — event trigger for real-time single-window state classification.
-# Wired to the Stop Claude Code hook so a stopped turn is disambiguated (done vs
-# looping vs needs) within ~1-2s. This is the ONLY fast path to the purple 'looping'
-# state (the spinner's stuck-working demote is the only other caller of
-# classify-sessions.sh --window).
+# Retained for old Stop hook tables and explicitly enabled screen inference.
+# classify-sessions.sh defaults to off before authentication or screen capture;
+# native state and explicit waits do not require this optional model call.
 #
 # set-claude-state.sh has just stamped this window 'done'; that state is ambiguous
 # (a Stop between loop iterations looks identical to a real finish). We hand the
-# window to classify-sessions.sh --window, which reads the pane and recovers intent.
+# window to classify-sessions.sh --window, which checks the opt-in before reading it.
 #
 # Backgrounds the (LLM) work and exits 0 immediately so it never blocks or slows
 # the turn. No-op outside tmux, and a no-op if `claude` isn't on PATH (the worker

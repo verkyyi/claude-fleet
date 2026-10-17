@@ -3,8 +3,8 @@
 # `claude -p` (haiku). Hooks are fast but semantically blind: a Stop between loop
 # iterations looks like "done"/"needs" when the session is really LOOPING. This
 # reads the pane and recovers the true intent for QUIET windows only. It is the
-# ONLY way the purple 'looping' state gets set. OPTIONAL — everything else works
-# without it; you just won't get looping detection or false-alarm correction.
+# optional screen-based inference path. Disabled by default; native state,
+# explicit waits and recorded schedules remain authoritative without it.
 #
 # One mode:
 #   --window <target>  — classify ONE window now. Fired by bin/classify-hook.sh on
@@ -21,8 +21,9 @@
 #   * Per-window lock so a Stop-hook fire and the spinner's demote can't double-run.
 #
 # Backends (issue #1229) — CLASSIFY_BACKEND, read AFTER fleet-lib.sh so the
-# install's fleet.conf / fleet.settings can set it fleet-wide; the environment wins:
-#   haiku   (default) `claude -p --model haiku` with the RUBRIC — today's behaviour,
+# install's fleet.conf / fleet.settings can set it fleet-wide; config wins:
+#   off     (default) no helper authentication, capture, model call or state write.
+#   haiku   (opt-in) `claude -p --model haiku` with the RUBRIC — legacy behaviour,
 #           byte for byte.
 #   jev     Jev (TypeSafe System One, `POST /v1/systemone`): the SAME five rubric
 #           lines as choice criteria, the SAME capture as its state. Measured on
@@ -43,6 +44,27 @@
 #           confidence buckets, WORKING misreads and the disagreement list.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+
+# prep_capture — drop post-turn residue from the capture (stdin → stdout), issue #1252.
+# The Stop hook that fires this classifier is itself one of the Stop hooks Claude Code
+# is still running, so the frame it reads nearly always carries Claude's LIVE spinner:
+#   ✢ Crunching… (running Stop hooks… 3/4 · 29s · ↓ 1.5k tokens)
+#     ⎿  Tip: Control this session from the Claude mobile app · run /remote-control
+# — 148 of the 312 hand-labelled shadow disagreements, the textbook "a live spinner"
+# the rubric used to call WORKING. It says nothing about the turn (it has ended), so
+# it goes, and so does the rotating Tip under it (a new tip = a new hash = a wasted
+# re-call of an unchanged screen). Everything else is left alone: `✻ Worked for 9s ·
+# done`, "N shell still running" and the agent's own words are real signal.
+prep_capture() {
+  sed -e '/(running Stop hooks/d' -e '/^[[:space:]]*⎿[[:space:]]*Tip:/d'
+}
+if [ "${1:-}" = "--prep-capture" ]; then prep_capture; exit 0; fi
+
+# shellcheck source=/dev/null
+[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
+BACKEND="${CLASSIFY_BACKEND:-off}"
+[ "$BACKEND" != off ] || exit 0
+
 CACHE="$BIN/../logs/.classify-cache"; mkdir -p "$CACHE"
 LOG="$BIN/../logs/classify.log"
 MODEL="${CLASSIFY_MODEL:-haiku}"
@@ -80,8 +102,6 @@ TM() { if [ -n "${CLASSIFY_SOCK:-}" ]; then tmux -L "$CLASSIFY_SOCK" "$@"; else 
 # lapsed on 2026-08-25 the fleet kept working and only this classifier (and the
 # dash's since-retired summary column, #535) went dark. No-op when multi-account is off, or when a token is
 # already inherited (the Stop-hook path runs inside a worker's claude).
-# shellcheck source=/dev/null
-[ -f "$BIN/fleet-lib.sh" ] && . "$BIN/fleet-lib.sh"
 fleet_helper_claude_auth 2>/dev/null || :
 
 # Backend knobs (issue #1229) — read AFTER the lib, so a line in the install's
@@ -89,7 +109,6 @@ fleet_helper_claude_auth 2>/dev/null || :
 # a conf line outranks an inherited environment value: the conf assigns
 # unconditionally). With neither, the environment is read — that is how the
 # selftests and a one-off `CLASSIFY_BACKEND=jev bin/classify-sessions.sh …` drive it.
-BACKEND="${CLASSIFY_BACKEND:-haiku}"
 case "$BACKEND" in
   haiku|jev|shadow) : ;;
   *) printf '%s  %-10s CLASSIFY_BACKEND=%s unknown — using haiku\n' "$(date +%H:%M:%S)" - "$BACKEND" >> "$LOG"
@@ -132,20 +151,6 @@ norm_label() {
     *WORKING*) echo WORKING ;;
     *)         echo UNPARSED ;;
   esac
-}
-
-# prep_capture — drop post-turn residue from the capture (stdin → stdout), issue #1252.
-# The Stop hook that fires this classifier is itself one of the Stop hooks Claude Code
-# is still running, so the frame it reads nearly always carries Claude's LIVE spinner:
-#   ✢ Crunching… (running Stop hooks… 3/4 · 29s · ↓ 1.5k tokens)
-#     ⎿  Tip: Control this session from the Claude mobile app · run /remote-control
-# — 148 of the 312 hand-labelled shadow disagreements, the textbook "a live spinner"
-# the rubric used to call WORKING. It says nothing about the turn (it has ended), so
-# it goes, and so does the rotating Tip under it (a new tip = a new hash = a wasted
-# re-call of an unchanged screen). Everything else is left alone: `✻ Worked for 9s ·
-# done`, "N shell still running" and the agent's own words are real signal.
-prep_capture() {
-  sed -e '/(running Stop hooks/d' -e '/^[[:space:]]*⎿[[:space:]]*Tip:/d'
 }
 
 # jev_ask — the capture on stdin; the RUBRIC's five `WORD - text` lines become the
@@ -418,7 +423,6 @@ classify_one() {
 # or the spinner's stuck-working demote. A bare/unknown invocation is a clean no-op.
 # --prep-capture: the capture cleanup alone, stdin → stdout — what the selftest and a
 # replay of stored captures (~/tools/jev-eval) run to see the exact screen a call sees.
-if [ "${1:-}" = "--prep-capture" ]; then prep_capture; exit 0; fi
 if [ "${1:-}" = "--window" ]; then
   [ -n "${2:-}" ] || exit 0
   sleep "$SETTLE" 2>/dev/null   # settle: let post-turn scheduling text land
