@@ -107,6 +107,33 @@ assert_exit 0 "rm file (no -r)"     "$GUARD" "$(bash_json "$(jstr 'rm -f /tmp/x'
 # ALLOW: `git rm` is not the `rm` command
 assert_exit 0 "git rm -rf"          "$GUARD" "$(bash_json "$(jstr 'git rm -rf .git-old')")"
 
+# BLOCK (with a rewrite hint): rm on a path STARTING with a possibly-empty
+# variable (issue #4637) — denied before Claude Code stops for a person's approval
+assert_exit 2 "rm \$P/*"             "$GUARD" "$(bash_json "$(jstr 'rm -f $P/*')")"
+assert_exit 2 "rm \${P}/x"           "$GUARD" "$(bash_json "$(jstr 'rm -rf ${P}/x')")"
+assert_exit 2 "rm \"\$P\"/x"          "$GUARD" "$(bash_json "$(jstr 'rm -rf "$P"/x')")"
+assert_exit 2 "rm \"\$P/x\""          "$GUARD" "$(bash_json "$(jstr 'rm -f "$P/x"')")"
+assert_exit 2 "rm \"\${P:-}\"/x"      "$GUARD" "$(bash_json "$(jstr 'rm -f "${P:-}"/x')")"
+assert_exit 2 "sudo rm \$1/x"        "$GUARD" "$(bash_json "$(jstr 'sudo rm -f $1/x')")"
+assert_exit 2 "rm \$P/ in 2nd seg"   "$GUARD" "$(bash_json "$(jstr 'cd /tmp && rm -f $P/*')")"
+hint=$(printf '%s' "$(bash_json "$(jstr 'rm -f $P/*')")" | "$PY" "$GUARD" 2>&1 >/dev/null)
+case "$hint" in
+  *'"${P:?}"/*'*) ;;
+  *) printf 'FAIL: rm $P/* deny must carry the "${P:?}"/* rewrite hint — got: %s\n' "$hint" >&2
+     fails=$((fails + 1)) ;;
+esac
+# ALLOW: a guarded expansion, a non-empty default, a literal, a later position,
+# git rm, a single-quoted literal, and an rm inside a quoted message
+assert_exit 0 "rm \"\${P:?}\"/*"      "$GUARD" "$(bash_json "$(jstr 'rm -f "${P:?}"/*')")"
+assert_exit 0 "rm \${P:?}/*"         "$GUARD" "$(bash_json "$(jstr 'rm -f ${P:?}/*')")"
+assert_exit 0 "rm \"\${P:?unset}/x\"" "$GUARD" "$(bash_json "$(jstr 'rm -rf "${P:?unset}/x"')")"
+assert_exit 0 "rm \"\${P:-/tmp/x}\"/*" "$GUARD" "$(bash_json "$(jstr 'rm -f "${P:-/tmp/x}"/*')")"
+assert_exit 0 "rm build/\$P"         "$GUARD" "$(bash_json "$(jstr 'rm -f build/$P')")"
+assert_exit 0 "rm \"\$P\" (no path)"  "$GUARD" "$(bash_json "$(jstr 'rm -rf "$TMP"')")"
+assert_exit 0 "git rm \$P/x"         "$GUARD" "$(bash_json "$(jstr 'git rm $P/x')")"
+assert_exit 0 "rm '\$P/x' literal"   "$GUARD" "$(bash_json "$(jstr "rm -f '\$P/x'")")"
+assert_exit 0 "rm \$P/* in a message" "$GUARD" "$(bash_json "$(jstr 'echo "rm -f $P/*"')")"
+
 # BLOCK: force-push onto the base branch (several forced forms)
 assert_exit 2 "push --force master" "$GUARD" "$(bash_json "$(jstr 'git push --force origin master')")"
 assert_exit 2 "push -f main"        "$GUARD" "$(bash_json "$(jstr 'git push -f origin main')")"

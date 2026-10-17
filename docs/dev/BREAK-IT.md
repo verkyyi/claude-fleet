@@ -15,6 +15,7 @@
 
 | 方式 | 后果（修之前） | 自愈方式 | 演练 |
 |---|---|---|---|
+| 无人值守的会话跑 `rm -f $P/*` 这类开头是变量的 rm 路径（#4637，2026-10-17 worker #4625 实见） | Claude Code 在 bypass 模式下照样弹「Dangerous rm operation on possibly-empty variable path」等人批准，没人答 30 多秒后自动拒绝：每次打断操作者，或会话干等 | bash-guard 在 PreToolUse 先拒（exit 2），理由里写好改法（`"${P:?}"/*`、非空默认值或字面路径），agent 自己改写重跑，不弹框；`${P:?}`、`${P:-/非空}`、`git rm`、单引号字面量、变量不在开头的照常放行 | `rm-empty-var-prompt` |
 | pending-tool 批量读取跨检查复用旧进程、窗口或 transcript（#4474） | 工具已开始或窗口已换代，旧的无 pending 读数仍可能清掉 needs | 每次安全核对重采集；同次共享解析，前后验证 socket/server、worker、pane 与 native birth/SID，过期或缺身份返回 unknown | `pending-observation-stale` |
 | 已注册的 GitHub 仓库名含大写（#4495） | 面板新建误报冻结，规范化后的迁移清单又找不到原 overlay | Hub 身份规范化，本地按注册身份定位原 overlay；实际冻结、输入、认证及入口故障保留各自原因 | `repo-authority-case` |
 | 会话只继承入口 URL，ticket reader 把它与代理凭据拼接（#4490） | authority 启动及同会话回退 401，代理凭据被送到错误入口 | 完整显式凭据对直接使用；只有 URL 时由既有 reader 整对读取；孤立 token、reader 失败及显式认证失败均拒绝，不换身份 | `ticket-credential-pair` |

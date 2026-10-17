@@ -499,3 +499,4 @@
 20.0 cred-enforce-fails-no-lease
 2.0 credsep-warn-cuts-creds
 20.0 cred-gate-counts-unleased
+0.3 rm-empty-var-prompt
