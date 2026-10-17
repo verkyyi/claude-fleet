@@ -1,0 +1,18 @@
+name: tmp-4610 spinner diag (removed before merge)
+on: pull_request
+jobs:
+  diag:
+    if: github.head_ref == 'issue-4610'
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: command -v tmux >/dev/null 2>&1 || brew install tmux; tmux -V; python3 -V
+      - run: |
+          fails=0
+          for i in $(seq 1 15); do
+            echo "=== run $i"
+            python3 bin/spinner-wait-selftest.py --quick > out.txt 2>&1 || { fails=$((fails+1)); cat out.txt; }
+            grep -E '^PASS (state|attach)' out.txt || true
+          done
+          echo "fails=$fails/15"

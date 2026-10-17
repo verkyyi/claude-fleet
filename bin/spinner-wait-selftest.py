@@ -63,7 +63,10 @@ def main():
         def spin():
             return tm('display-message', '-p', '-t', 'test:0', '#{@spin}')
 
+        marks = []
+
         def publish_state(value):
+            marks.append('publish %.6f %s' % (time.monotonic(), value))
             tm('set-window-option', '-t', 'test:0', '@claude_state', value)
             # Match set-claude-state.sh: invalidate before broadcasting. A
             # tmux format subscription can coalesce a fast state round trip;
@@ -77,7 +80,12 @@ def main():
                 if fn():
                     return time.monotonic() - start
                 time.sleep(.02)
-            raise AssertionError('condition timed out after %ss' % limit)
+            # The spinner's own SPIN_TRACE (its waits and table reads, on the
+            # same monotonic clock) says where a late frame went.
+            log = root / 'daemon.log'
+            tail = log.read_text().splitlines()[-60:] if log.exists() else []
+            raise AssertionError('condition timed out after %ss (now %.6f)\n%s' % (
+                limit, time.monotonic(), '\n'.join(marks + tail)))
 
         daemon = client = waiter = None
         master = None
