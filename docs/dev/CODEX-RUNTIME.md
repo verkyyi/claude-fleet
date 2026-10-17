@@ -57,6 +57,17 @@ worktree. No production launch mode is added. Existing admission/capability
 binding and per-thread stop evidence remain required before adoption; neither
 TUI exit nor a shared backend PID alone proves that execution stopped.
 
+The explicit `fleet-native-thread-stop-selftest.py` fixture exercises real native
+background commands against a loopback model. A completed turn and acknowledged
+unsubscribe/connection close do not imply command exit. Native terminal
+terminate/clean can stop an exact thread's commands without stopping a sibling;
+archive also stops the fixture command, but restoring that history requires
+unarchive before resume. Native `processId` is not an OS PID, and `osPid` can be
+null. Do not kill a shared backend to close one session or release quota from an
+empty list alone. Existing admission/revocation fences and complete descendant
+stop evidence are still required; this fixture does not cover active-turn or
+subagent shutdown. See the [execution-stop boundary](NATIVE-AGENT-BOUNDARY.md#回合结束断连与执行停止不是同一件事).
+
 ## Managed guard configuration (candidate)
 
 The candidate renderer derives native managed hooks from the existing
