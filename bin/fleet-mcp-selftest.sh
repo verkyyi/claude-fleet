@@ -50,8 +50,8 @@
 #      holds (via=cred), nothing of the handover leaks to a script or $TMPDIR; a new
 #      version that fails its --probe is refused and the old one keeps serving; a
 #      quiet client is reloaded on the poll; FLEET_MCP_RELOAD=0 never reloads
-#   P  spawn from a worker's seat is refused before anything runs (issue #2960,
-#      fleet_spawn_refused); any other seat runs dash-issue-session.sh as before
+#   P  spawn from any seat — a worker's too — runs dash-issue-session.sh (issue
+#      #4591 lifted #2960's seat gate)
 #   N  the mod's fallback road (issue #2057): `--spec status spawn await` prints
 #      exactly the tools/list entries; `--call <tool> <json>` is one tools/call
 #      from a command line — the same argv to the script, the byte-identical text
@@ -1082,9 +1082,10 @@ EOF
 diff "$WORK/r.want" "$LOG" > "$WORK/r.diff" || fail "R: the task record's tools ran the wrong argv" "$(cat "$WORK/r.diff")"
 ok "R ask → the record (no issue) / mirrored (issue); task → dispatch, words on stdin; await by T<n>; file_issue --task"
 
-# --- P: a worker files, never spawns (issue #2960) ---------------------------
+# --- P: any seat spawns, a worker's too (issue #4591 lifted #2960) ----------
+# Even a lib whose fleet_spawn_refused still refused (an older one) gates nothing:
+# the tool no longer asks it.
 cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
-FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — file it instead'
 fleet_spawn_refused() { [ -n "${FAKE_WORKER_SEAT:-}" ]; }
 SH
 : > "$LOG"
@@ -1092,15 +1093,12 @@ call 130 spawn '{"issue":5}' | FAKE_WORKER_SEAT=1 serve "$WORK/p1"
 call 131 spawn '{"issue":5}' | serve "$WORK/p2"
 python3 - "$WORK/p1" "$WORK/p2" <<'PY' || fail "P: spawn from a worker seat" "$(cat "$WORK/p1" "$WORK/p2")"
 import json, sys
-r1 = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][0]["result"]
-assert r1.get("isError") is True, r1
-t = r1["content"][0]["text"]
-assert "issue #2960" in t and "Nothing ran." in t, t
-r2 = [json.loads(l) for l in open(sys.argv[2]) if l.strip()][0]["result"]
-assert not r2.get("isError") and r2["structuredContent"]["command"] == "dash-issue-session.sh", r2
+for f in sys.argv[1:]:
+    r = [json.loads(l) for l in open(f) if l.strip()][0]["result"]
+    assert not r.get("isError") and r["structuredContent"]["command"] == "dash-issue-session.sh", r
 PY
-[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 1 ] || fail "P: a refused spawn ran its script" "$(cat "$LOG")"
-ok "P spawn: refused from a worker seat (fleet_spawn_refused, nothing ran); any other seat runs it"
+[ "$(grep -c '^dash-issue-session.sh' "$LOG")" = 2 ] || fail "P: both spawns ran their script" "$(cat "$LOG")"
+ok "P spawn: a worker seat and any other run dash-issue-session.sh (no seat gate)"
 
 # --- Q: two groups (issue #3113, EPIC #3111 C2) ------------------------------
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
