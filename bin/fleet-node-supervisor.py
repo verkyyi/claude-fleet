@@ -103,6 +103,13 @@ machine's work ONCE, however many logins the machine carries:
                 its road); a unit that will not unload stays, named; a running
                 fleet-onboard-drill.sh (a process running it, never a command line
                 that merely names it — issue #2991) holds every removal until the next sweep.
+                The admin login's own units with nothing left to do go too (issue
+                #4363, expected.json or not): com.claude-fleet.<admin>.<unit> whose
+                unit this release ships no template for (dispatch), and its
+                install-sync once its ~/.claude/fleet is linked into this root;
+                and a managed login still on its own credential proxy is joined to
+                the shared one (`fleet-credsep.py machine join`, no gap;
+                FLEET_NODE_CREDSEP_JOIN=0 leaves it). One log line before, one after.
                 It also clears a taken-over login that still carries the person's
                 client here (issue #2702): `~/.cache/claude-fleet/shell` or a
                 `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh / the
@@ -3743,7 +3750,10 @@ class attic_lock(object):
 
 def sweep(paths, dry=False):
     with attic_lock(paths):
-        return _sweep(paths, dry)
+        res = _sweep(paths, dry)
+    # outside the attic lock: a join restarts the shared proxy and waits on it
+    res["credsep_join"] = credsep_join_own(paths, res.get("hold") or None, dry)
+    return res
 
 
 def _handwritten(paths, d, n, src):
@@ -4152,14 +4162,16 @@ def _sweep(paths, dry=False):
                     hand.append(h)
     # the admin login's old node agent, once the seat's own is connected (#3725)
     ho = admin_handover(paths, index, stamp, dry)
+    # the admin login's old jobs with nothing left to do (#4363)
+    ao = admin_old_retire(paths, index, stamp, managed, hold if labels is not None else None, dry)
     purged = 0 if dry else attic_purge(paths, index)
-    if not dry and (moved or removed or purged or ho["moved"]):
+    if not dry and (moved or removed or purged or ho["moved"] or ao["moved"]):
         write_json(paths.attic_index, index, 0o600)
     shells = client_shell(paths, listed)
     if not dry and labels is not None:
         shells = retire_client_shells(paths, shells)
     return {"moved": moved, "extra": extra, "removed": removed, "purged": purged, "handwritten": hand,
-            "clientshell": shells, "hold": hold, "handover": ho}
+            "clientshell": shells, "hold": hold, "handover": ho, "admin_old": ao}
 
 
 def attic_purge(paths, index):
@@ -4400,6 +4412,158 @@ def admin_handover_cli(paths, dry=False):
     if any(w.get("stuck") for w in res["waiting"]):
         return 1
     return 3 if res["waiting"] else 0
+
+
+# -- the admin login's old jobs (issue #4363, EPIC #4354 C10): an admin is never
+# taken over (#2842), so the units its early install wrote into the system's
+# LaunchDaemons — com.claude-fleet.<admin>.<unit> — stayed beside the machine's
+# daemon. Two of them have nothing left to do: one whose unit the release no
+# longer ships (dispatch: fleet-dispatch.sh is gone — no
+# launchd/com.claude-fleet.<unit>.plist.tmpl in the runtime), and install-sync
+# once the admin's ~/.claude/fleet is a tree linked into this root (the machine's
+# updater moves it — #3248; its own copy keeps its install-sync). Booted out into
+# the attic like any leftover (7 days, `attic restore`), one log line before and
+# one after. Every other unit of the admin's stays its own. The admin's own node
+# agent (com.ccquota.agent.<admin>) is admin_handover's, above.
+ADMIN_OLD_UNIT = re.compile(r"^com\.claude-fleet\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.plist$")
+
+
+def sweep_say(msg):
+    """One line on the sweep's stderr — the daemon's supervisor.log, the core's
+    core.log when seated, the person's terminal for `sweep`."""
+    sys.stderr.write("%s %s\n" % (iso(now()), msg))
+    sys.stderr.flush()
+
+
+def _linked_into(home, root):
+    """Is <home>/.claude/fleet a version tree linked into <root> (its .fleet-linked
+    mark names it — fleet-node-update.py linked_sha)?"""
+    live = os.path.join(home, ".claude", "fleet")
+    try:
+        if not os.path.islink(live):
+            return False
+        m = read_json(os.path.join(os.path.realpath(live), ".fleet-linked"), None)
+    except OSError:
+        return False
+    return isinstance(m, dict) and bool(m.get("root")) and \
+        os.path.realpath(str(m["root"])) == os.path.realpath(root)
+
+
+def admin_old_jobs(paths, managed=()):
+    """([{login, unit, label, path, why}] to retire, [{login, label, why}] kept) —
+    the admin logins' units in the system's unit directory with nothing left to do."""
+    go, kept = [], []
+    tmpl = os.path.join(paths.runtime, "launchd")
+    shipped = set(os.path.basename(f)[len("com.claude-fleet."):-len(".plist.tmpl")]
+                  for f in glob.glob(os.path.join(tmpl, "com.claude-fleet.*.plist.tmpl")))
+    root = env("FLEET_NODE_ROOT", DEFAULT_ROOT)
+    try:
+        names = sorted(os.listdir(paths.daemon_dir))
+    except OSError:
+        return go, kept
+    for n in names:
+        m = ADMIN_OLD_UNIT.match(n)
+        p = os.path.join(paths.daemon_dir, n)
+        if not m or os.path.islink(p) or not os.path.isfile(p):
+            continue
+        login, unit = m.group(1), m.group(2)
+        ident = account_ident(login)
+        if ident is None or login in managed or not tenant_privileges(login)[0]:
+            continue      # no such login · a taken-over one's units are account adopt's
+        label = _plist_label(p) or n[:-len(".plist")]
+        if unit == "install-sync":
+            if _linked_into(ident[2], root):
+                go.append({"login": login, "unit": unit, "label": label, "path": p,
+                           "why": "%s's ~/.claude/fleet is linked into %s: the machine's updater moves it"
+                                  % (login, root)})
+            else:
+                kept.append({"login": login, "label": label,
+                             "why": "%s's ~/.claude/fleet is its own copy: install-sync is what updates it" % login})
+        elif shipped and unit not in shipped:
+            # an empty launchd/ (a runtime not there) says nothing is shipped: never read as «retired»
+            go.append({"login": login, "unit": unit, "label": label, "path": p,
+                       "why": "this release ships no unit %s (no %s/com.claude-fleet.%s.plist.tmpl)"
+                              % (unit, tmpl, unit)})
+    return go, kept
+
+
+def admin_old_retire(paths, index, stamp, managed=(), hold=None, dry=False):
+    """{"moved": [...], "kept": [...]} — the attic lock held, index the attic's
+    (written by the caller). hold None = not asked yet (sweep_hold, only when
+    there is something to retire)."""
+    go, kept = admin_old_jobs(paths, managed)
+    res = {"moved": [], "kept": kept}
+    if go and hold is None:
+        hold = sweep_hold()
+    for a in go:
+        if hold:
+            res["kept"].append({"login": a["login"], "label": a["label"], "why": "held: %s" % hold})
+            continue
+        sweep_say("admin old job %s (%s): %s — %s" % (a["label"], a["login"], "would retire" if dry else "retiring",
+                                                       a["why"]))
+        ident_ = _attic_id(paths, stamp, index, len(res["moved"]) if dry else 0)
+        e = _retire_unit(paths, paths.daemon_dir, a["path"], a["label"], index, ident_, dry)
+        if not isinstance(e, dict):
+            sweep_say("admin old job %s (%s): stays — %s" % (a["label"], a["login"], e))
+            res["kept"].append({"login": a["login"], "label": a["label"], "why": e, "stuck": True})
+            continue
+        e.update(why=a["why"], login=a["login"])
+        if not dry:
+            sweep_say("admin old job %s (%s): booted out → attic %s (attic restore %s puts it back)"
+                      % (a["label"], a["login"], e["id"], e["id"]))
+        res["moved"].append(e)
+    return res
+
+
+# -- a managed login still on its own credential proxy (issue #4363): every
+# taken-over login is a tenant of the machine's ONE shared proxy (#3700) — the
+# own one (com.claude-fleet.credsep.<login>) plus the resident
+# `fleet-cred-proxy.sh run` the account table keeps for it are one more copy per
+# login. `fleet-credsep.py machine join` is the no-gap road (it puts the login
+# back on its own proxy when the shared one does not take it); the sweep runs it
+# once per such login, one log line before and one after.
+# FLEET_NODE_CREDSEP_JOIN=0 leaves them.
+def credsep_join_own(paths, hold=None, dry=False):
+    """{"joined": [...], "failed": [{login, why}], "skipped": why} — never raises."""
+    res = {"joined": [], "failed": [], "skipped": ""}
+    if env("FLEET_NODE_CREDSEP_JOIN", "1") == "0":
+        res["skipped"] = "FLEET_NODE_CREDSEP_JOIN=0"
+        return res
+    py = env("FLEET_NODE_CREDSEP_PY", os.path.join(paths.runtime, "bin", "fleet-credsep.py"))
+    if not trusted(py):
+        res["skipped"] = "%s is not there / not root's" % py
+        return res
+    try:
+        r = subprocess.run(["/usr/bin/python3", "-I", py, "machine", "managed", "--json"], stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
+        st = (json.loads(r.stdout.strip().splitlines()[-1]) or {}).get("state") or {}
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError, AttributeError) as ex:
+        res["skipped"] = "machine managed: %s" % ex
+        return res
+    own = sorted(l for l, s in st.items() if s == "own" and re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", l))
+    if own and hold is None:
+        hold = sweep_hold()
+    for login in own:
+        if hold:
+            res["failed"].append({"login": login, "why": "held: %s" % hold})
+            continue
+        sweep_say("credsep %s: on its own proxy — %s the shared one (fleet-credsep.py machine join)"
+                  % (login, "would join" if dry else "joining"))
+        try:
+            r = subprocess.run(["/usr/bin/python3", "-I", py, "machine", "join", "--logins", login]
+                               + (["--dry-run"] if dry else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               universal_newlines=True, timeout=env_num("FLEET_NODE_CREDSEP_JOIN_TIMEOUT", 300))
+            rc, out = r.returncode, r.stdout
+        except (OSError, subprocess.SubprocessError) as ex:
+            rc, out = 1, str(ex)
+        last = (out.strip().splitlines() or ["rc %s" % rc])[-1][:200]
+        sweep_say("credsep %s: %s — %s" % (login, "joined" if rc == 0 else "join rc %s, stays on its own proxy" % rc,
+                                           last))
+        if rc == 0:
+            res["joined"].append(login)
+        else:
+            res["failed"].append({"login": login, "why": "rc %s: %s" % (rc, last)})
+    return res
 
 
 # --------------------------------------------------------------- adopt / release --
@@ -8725,6 +8889,16 @@ def main(argv):
             print("%s old admin agent %s -> attic %s" % ("would hand over" if dry else "handed over", x["label"], x["id"]))
         for w in (res.get("handover") or {}).get("waiting") or []:
             print("old admin agent of %s left running: %s" % (w["login"], w["why"]))
+        for x in (res.get("admin_old") or {}).get("moved") or []:
+            print("%s admin old job %s -> attic %s (%s)" % ("would boot out" if dry else "booted out", x["label"], x["id"],
+                                                            x["why"]))
+        for w in (res.get("admin_old") or {}).get("kept") or []:
+            print("admin old job %s left in place: %s" % (w["label"], w["why"]))
+        cj = res.get("credsep_join") or {}
+        for l in cj.get("joined") or []:
+            print("%s %s to the shared credential proxy" % ("would join" if dry else "joined", l))
+        for w in cj.get("failed") or []:
+            print("credsep %s stays on its own proxy: %s" % (w["login"], w["why"]))
         return 0
     if cmd == "admin-handover":
         return admin_handover_cli(paths, dry="--dry-run" in rest)

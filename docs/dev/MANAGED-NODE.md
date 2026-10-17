@@ -1082,6 +1082,23 @@ BREAK-IT：`fleetadmin-token-misissued`（`bin/fleet-break-it-admin-selftest.sh`
 BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）；`bin/fleet-admin-handover-selftest.sh`；
 `bin/fleet-node-update-selftest.py` Q_AdminAgent。
 
+### 23.4 管理员登录的旧定时任务、单独一份的凭据代理（#4363，EPIC #4354 C10）
+
+管理员登录不归 `account adopt`（#2842），它早期装的 `/Library/LaunchDaemons/com.claude-fleet.<admin>.<unit>.plist`
+一直留在整机守护旁边。守护的清扫（入座的经核心的 `sweep`，有没有 expected.json 都做）收掉其中没事可做的两种，
+各进 attic（7 天，`attic restore <id>` 放回），卸载前后各记一行（守护的 supervisor.log / 核心的 core.log）：
+
+- **这一版不再发的单元**：运行时 `launchd/` 里没有 `com.claude-fleet.<unit>.plist.tmpl` 的（`dispatch`——
+  `fleet-dispatch.sh` 早已不在）。运行时 `launchd/` 是空的 / 不在，什么都不当「不再发」。
+- **`install-sync`**：只在该管理员的 `~/.claude/fleet` 是链进本机运行时根的版本树（`.fleet-linked` 指向这个根）时——
+  那时它随整机的更新器走（#3248）；自己的拷贝（git 检出）留着它，`sweep` 写明「own copy」。
+
+其余管理员单元照旧是它自己的；它的旧节点 agent `com.ccquota.agent.<admin>` 只走 §23.3 的座位交接（没座位就一直在——
+它是开号的那个）。另：托管登录里还在**自己的**凭据代理上的（`fleet-credsep.py machine managed --json` 说 `own`），
+清扫跑一次 `fleet-credsep.py machine join --logins <login>`（不断档，共享代理不接就原样回自己的代理），并进整机那份；
+之后账号表也不再为它常驻 `fleet-cred-proxy.sh run`（`account_unit_for`）。`FLEET_NODE_CREDSEP_JOIN=0` 不动。
+新开的登录本来就是共享代理的租户（#3155）。`bin/fleet-admin-old-jobs-selftest.sh`。
+
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）
 
 一台托管机器上每个登录原来各自探一遍同一台机器：内存压力、总内存、每核负载，每次 capacity 读、每次开新会话的准入都探。
