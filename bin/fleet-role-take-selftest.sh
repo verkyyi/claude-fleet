@@ -13,8 +13,8 @@
 #   D  --steal: the second takes it, the first loses its mark, one line names it
 #   E  --drop from a window that does not hold it: exit 4; from the holder: 0,
 #      mark and line gone, --who exit 1
-#   F  a pin grants nothing: a pinned `guide` that took no role is refused a spawn;
-#      once it takes the role it may
+#   F  a pinned `guide` takes the role like any session; spawning was never the
+#      role's to grant since issue #4591 (fleet_spawn_refused refuses nobody)
 #   G  the holder's window goes: its line names nobody — a new taker needs no --steal
 #   H  the old seat (`@fleet_role orchestrator`, # compat-1v) answers while nobody
 #      took the role, and a taker is told it holds it (exit 4)
@@ -28,7 +28,7 @@ L="rtk$$"
 export FLEET_SKIP_GLOBAL_CONF=1 FLEET_UI_QUIET=1 TMPDIR="$WORK"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$L/conf"
-unset TMUX TMUX_PANE FLEET_ALLOW_WORKER_SPAWN
+unset TMUX TMUX_PANE
 HELD="$FLEET_CONF_DIR/global/roles.held"
 
 FAIL=0; CHECKS=0
@@ -68,7 +68,7 @@ ok; [ "$rc" = 0 ] && [ "$(def "$s1")" = orchestrator ] && [ "$(lines)" = 1 ] \
 ok; [ "$(cut -f4 "$HELD")" = "$s1" ] && [ -n "$(cut -f3 "$HELD")" ] || fail "A: the line names the window and its fleet id" "$(cat "$HELD")"
 r=$(lib '' fleet_win_for_key orchestrator); ok; [ "$r" = "$s1" ] || fail "A: fleet_win_for_key orchestrator answers the holder" "$r"
 lib "$(pane "$s1")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 1 ] || fail "A: the holder may spawn" "$rc"
-lib "$(pane "$s2")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 0 ] || fail "A: a scratch that took nothing may not" "$rc"
+lib "$(pane "$s2")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 1 ] || fail "A: a scratch that took nothing may spawn too (issue #4591)" "$rc"
 r=$(take "$s1"); rc=$?; ok; [ "$rc" = 0 ] && case "$r" in *already*) true ;; *) false ;; esac || fail "A: taking it again is 0 「already」" "$rc:$r"
 ok; [ "$(lines)" = 1 ] || fail "A: …still one line" "$(cat "$HELD")"
 
@@ -91,7 +91,7 @@ ok; [ "$rc" = 0 ] && [ "$(def "$s2")" = orchestrator ] && [ -z "$(def "$s1")" ] 
   || fail "D: --steal moves the mark" "$rc:$r:[$(def "$s1")][$(def "$s2")]"
 ok; [ "$(lines)" = 1 ] && [ "$(cut -f4 "$HELD")" = "$s2" ] || fail "D: one line, naming the new holder" "$(cat "$HELD")"
 r=$(lib '' fleet_win_for_key orchestrator); ok; [ "$r" = "$s2" ] || fail "D: the key follows the holder" "$r"
-lib "$(pane "$s1")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 0 ] || fail "D: the old holder may no longer spawn" "$rc"
+lib "$(pane "$s1")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 1 ] || fail "D: the old holder still may spawn (issue #4591)" "$rc"
 
 # --- E --drop ------------------------------------------------------------------
 r=$(take "$s1" --drop); rc=$?; ok; [ "$rc" = 4 ] && [ "$(def "$s2")" = orchestrator ] || fail "E: --drop from a non-holder exits 4, changes nothing" "$rc:$r"
@@ -103,7 +103,7 @@ lib '' fleet_win_for_key orchestrator >/dev/null 2>&1; rc=$?; ok; [ "$rc" = 1 ] 
 
 # --- F a pin grants nothing -----------------------------------------------------
 wg=$(win guide @pin 1 @norepo 1)
-lib "$(pane "$wg")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 0 ] || fail "F: a pinned guide that took no role is refused a spawn" "$rc"
+lib "$(pane "$wg")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 1 ] || fail "F: a pinned guide may spawn (nobody is refused, issue #4591)" "$rc"
 r=$(take "$wg"); rc=$?; ok; [ "$rc" = 0 ] || fail "F: the guide takes the role" "$rc:$r"
 lib "$(pane "$wg")" fleet_spawn_refused; rc=$?; ok; [ "$rc" = 1 ] || fail "F: …then it may spawn" "$rc"
 

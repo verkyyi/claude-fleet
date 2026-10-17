@@ -8,8 +8,7 @@
 #
 # A role is a MARK on an ordinary window, never a kind of window (EPIC #3111 rule 4):
 # any session that binds no issue may take it — a scratch, a no-repo session, the
-# old seat. Taking it stamps `@fleet_role_def <role>` (fleet_spawn_refused lets that
-# window spawn, rule 5) and writes the role's ONE line in
+# old seat. Taking it stamps `@fleet_role_def <role>` and writes the role's ONE line in
 # `$FLEET_CONF_DIR/global/roles.held`; fleet_role_holder (bin/fleet-lib.sh) is the
 # only reader, so `fleet_win_for_key orchestrator` — a child's report, a peer's
 # send — finds whoever holds it now. One holder per role: a second taker is told

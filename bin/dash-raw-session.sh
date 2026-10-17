@@ -900,8 +900,8 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The agent file it starts as, before its agent starts (fleet-claude.sh stamps it
-# again off the file it launched): whether that file grants `spawn` is what
-# fleet_spawn_refused reads (issue #2960, #3122), whichever agent runs it. The old
+# again off the file it launched): whether that file grants `spawn` decides
+# whether its dispatch group mounts (issue #3122), whichever agent runs it. The old
 # `--role epic-driver` road still marks @fleet_role_def for one version, so a
 # login whose agents pass has not shipped epic-driver yet keeps its driver able
 # to spawn (# compat-1v: 下一批删).

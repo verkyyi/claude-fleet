@@ -71,9 +71,9 @@
 #      this session, so spawning a second worker to re-ground it is pure waste.
 #      Mutually exclusive with --spawn (bind THIS session or start another, never
 #      both), and like --spawn a refusal leaves the issue FILED.
-#   5c. --spawn from a WORKER pane is refused (exit 6, issue #2960: only the
-#      orchestrator, the steward and an EPIC driver spawn — fleet_spawn_refused);
-#      a breakage a worker files is queued for the steward, which spawns its fixer.
+#   5c. any pane may --spawn, a worker's too (issue #4591 lifted #2960's refusal);
+#      a breakage a worker files WITHOUT --spawn is queued for the steward, which
+#      spawns its fixer.
 #
 # Prints the created issue URL on stdout (exactly like GitHub's own create) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
@@ -82,9 +82,6 @@
 # caller records an honest FAIL rather than a false success ·
 # 5 --breakage (or auto): the breakage already has an open issue — its URL is on stdout, a
 # 「同一故障」 comment is on it, nothing was filed or spawned (issue #2078).
-# 6 --spawn from a worker pane (issue #2960): a worker files, never spawns —
-# nothing was filed; re-file without --spawn (a --breakage filing is not refused:
-# its spawn is dropped and the steward spawns the fixer, 5c).
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
@@ -184,20 +181,10 @@ fi
 # re-runs from its pane instead of leaving a filed issue with no worker behind.
 [ "$spawn" = 1 ] && fleet_pane_lost \
   && { printf 'fleet-issue-file: --spawn needs the calling pane ($TMUX is set but $TMUX_PANE is not) — the worker would have no parent to report to; run it from your scratch/worker pane\n' >&2; exit 4; }
-# A worker files but never spawns (issue #2960): refused BEFORE anything is
-# filed, so the caller re-files without --spawn. A breakage asked for by name is
-# not refused — the spawn is dropped and the steward spawns its fixer (5c below).
+# A worker pane (issue #4591: it may spawn like any session). A breakage it files
+# WITHOUT --spawn is queued for the steward holder, who spawns its fixer (5c below).
 worker_seat=0
-fleet_spawn_refused && worker_seat=1
-if [ "$spawn" = 1 ] && [ "$worker_seat" = 1 ]; then
-  if [ "$breakage" = 1 ] || [ -n "$breakage_key" ]; then
-    spawn=0
-    printf 'fleet-issue-file: a worker does not spawn (issue #2960) — filing the breakage; the steward spawns its fixer\n' >&2
-  else
-    printf 'fleet-issue-file: --spawn refused: %s\n' "$FLEET_SPAWN_REFUSAL" >&2
-    exit 6
-  fi
-fi
+[ "$(fleet_pane_fmt '#{@fleet_role}' 2>/dev/null)" = worker ] && worker_seat=1
 
 # --priority pN is sugar for the priority:pN LABEL (the backlog sorts by it). Only
 # p0/p1/p2 exist; a bad value is a caller bug, so reject before touching the repo.
@@ -569,14 +556,14 @@ if [ "$bind" = 1 ] && [ -n "$num" ]; then
     || printf 'fleet-issue-file: filed #%s but the bind was refused — it is on the backlog\n' "$num" >&2
 fi
 
-# --- 5c. a worker's breakage: the steward holder spawns its fixer (issue #2960) --
-# One level of delegation: the fixer's parent is the session holding the steward
-# role, never the worker that saw it first. The issue is queued in the fleet's
+# --- 5c. a worker's breakage filed without --spawn: the steward holder spawns its fixer --
+# The worker asked for no spawn, so the fixer's parent is the session holding the
+# steward role (a worker that passes --spawn starts the fixer itself, issue #4591). The issue is queued in the fleet's
 # state dir and the queue drained at once in the background, off this pane
 # (fleet-steward-tick.sh breakage); the holder's beat drains it again if that
 # spawn was refused (no room). Nobody holds the role (issue #3115) ⇒ nobody is
 # spawned: the person is told once and the issue waits in the queue.
-if [ "$worker_seat" = 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ] && [ -n "$_fs" ]; then
+if [ "$worker_seat" = 1 ] && [ "$spawn" != 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ] && [ -n "$_fs" ]; then
   _bq="$(fleet_state_dir "$_fs")/breakage-spawn"
   mkdir -p "$_bq" 2>/dev/null
   printf '%s\t%s\t%s\t%s\n' "$repo" "$num" "$(printf '%s' "$title" | tr '\t\n' '  ')" "$spawn_agent" \
