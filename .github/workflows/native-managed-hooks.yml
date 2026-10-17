@@ -5,6 +5,9 @@ on:
     paths:
       - 'bin/fleet-native-hook-cli-selftest.py'
       - 'bin/fleet-native-local-runtime-selftest.py'
+      - 'bin/fleet-native-session-env-selftest.py'
+      - 'bin/fleet-mcp.py'
+      - 'bin/fleet_launch.py'
       - 'bin/fleet-agent-defaults.py'
       - 'conf/agent-defaults/codex/config.default.toml'
       - 'bin/fleet-codex-rpc.py'
@@ -53,6 +56,16 @@ jobs:
         run: |
           timeout 330 python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --native-config \
             --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Verify concurrent native TUI and MCP session environment ownership
+        if: matrix.mode == 'exec'
+        run: >-
+          timeout 100 python3 bin/fleet-native-session-env-selftest.py --hooks
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Verify native fork correlation, source cleanup and reconnect
+        if: matrix.mode == 'exec'
+        run: >-
+          timeout 100 python3 bin/fleet-native-session-env-selftest.py --hooks --fork-seed
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
         run: |

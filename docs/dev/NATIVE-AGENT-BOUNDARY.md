@@ -238,6 +238,87 @@ python3 bin/fleet-native-local-runtime-selftest.py --codex /path/to/codex
 python3 bin/fleet-native-local-runtime-selftest.py --launch-flags --codex /path/to/codex
 ```
 
+### 共享后台的 MCP 环境不是逐客户端环境
+
+显式探针 `bin/fleet-native-session-env-selftest.py` 同时保留两个真实本地 TUI，
+各自创建原生 Worktree，并验证精确线程都属于同一个、内核 PID 已核对的原生后台。
+三个进程的七项 Fleet 环境变量均赋不同的已知假值；空 HOME 内仅启动无副作用的夹具 MCP，
+模型请求固定在 loopback 返回 400。它不运行真实 Fleet 工具、不读取真实凭据，也不是业务成功验收。
+
+本机 `0.163.0` 与测试节点 `0.162.1` 各 30 项检查通过，测试节点的四个依赖源码哈希与候选一致；确认：
+- 两个线程各有独立 MCP 进程、正确的原生 Worktree cwd，但七项环境值都来自**后台**，不是各自 TUI。
+- 被检查的 MCP 环境没有 `CODEX_THREAD_ID` / `CODEX_SESSION_ID`；工具请求 `_meta.threadId` 带对应原生线程。
+- 对第一线程调用时伪造 `_meta.threadId` 为第二线程，原生仍发出第一线程 ID，且复用第一线程的 MCP 进程；其他自定义 metadata 原样保留。
+- 关闭第一个 TUI 不改变第二线程的工具归属；后台清理后本探针观察到的 MCP 进程退出，基础检出不变。
+
+这是**共享后台迁移的阻断项**，不是现有逐会话私有后台泄露线上凭据的证据。
+此前单后台插件 `env_vars` 测试只证明变量传递，不证明并发客户端身份隔离。
+不得把 `FLEET_WORKER_CRED`、`FLEET_SESSION`、`TMUX_PANE`、角色等会话值作为共享后台默认值，
+也不能靠重写后台环境或按 cwd 猜测归属来替代绑定。
+
+原生线程 ID 是上下文路由线索，不是能力凭据：能访问该账号 RPC 的调用方仍可选择顶层 threadId，
+其他 metadata 也可自行提供。后续须复用既有平台所有权/准入记录和签名能力验证，
+证明原生 root 与 Fleet 会话、账号及能力的对应关系；未知、冲突、过期绑定拒绝执行，
+并覆盖撤销、重连、并发创建和子 Agent。不能另造通用授权引擎或把模型提供的 ID 当证明。
+并发本地 TUI root 如何与已准入的 Fleet 会话可靠关联仍未实现，旧运行时和全部守卫保持。
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --codex /path/to/codex
+```
+
+测试节点及固定版本 CI 必须核对同一源码；完整 MCP、真实凭据、面板、恢复和延迟目标
+另做联合验收，不能由该离线夹具代替。
+
+追加 `--hooks` 检查实际生命周期，而不把 MCP 证据外推为 Hook 已通过：
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --hooks --codex /path/to/codex
+```
+
+只在临时 HOME 为已审阅的无副作用夹具保存原生 trusted hash；闲置夹具后台重新加载后，
+两个 TUI 分别置于独立监督进程下。没有 hook-trust bypass、真实 tmux 或平台准入调用。
+本机 `0.163.0` 与测试节点 `0.162.1` 各通过 48 项检查，五个依赖源码哈希一致；
+SessionStart 提供各自正确的 root/cwd，但十项夹具环境
+（包括 launcher、launch context 和 authority context）全部来自共同后台。
+复用现有 `fleet_launch.native_parent` 的真实进程识别，两个 Hook 均识别为同一个后台；
+它不是任一 TUI 监督进程的后代，因此现有 `root_native` 验证拒绝这条归属证明。
+这不是授权算法错误，也不能通过删除进程归属检查「修复」；共享后台的身份迁移仍未成立。
+
+探针同时纠正就绪条件：原生后台还可能发出内部标题请求，单纯累计两次 HTTP 请求会在
+第二个用户线程尚未进入首回合时提前返回。现在使用测试版本请求中的精确 root cache key
+确认每个线程自己的 loopback 请求；内部请求不计为新会话就绪。这是固定版本夹具关联，
+不是生产授权或新的启动探测协议。此前 MCP 进程/路由结论保留，但请求计数不能证明两条用户回合均已开始。
+
+### 原生 fork 来源可以关联，但不是一次性准入
+
+`--hooks --fork-seed` 扩展隔离并发夹具：通过原生 `thread/start` 创建空源线程，
+用 `thread/name/set` 持久化，再启动真实本地 `codex fork <精确源 ID> --worktree`。
+目录仍由原生创建，不复制上游 Git 实现，不根据最新文件或窗口标题猜测用户线程。
+
+本机 `0.163.0` 的 70 项检查提供以下候选证据：
+- 两个不同源线程分别产生独立用户 root/Worktree；`forkedFromId` 精确保留来源。
+- 同步 SessionStart 中复用已有 Unix RPC 客户端、核对 native-parent 的内核 PID，
+  能读取自己的原生 thread 元数据及 fork 来源，无需等待回调结束后再猜测关联。
+- 原生允许再次 fork 同一个来源。因此源 ID **不是**一次性能力，不能跳过既有 reservation、
+  owner/generation 和 capability 校验；重复或冲突认领必须由现有准入记录拒绝。
+- 创建并命名源线程不发出模型请求，但每个源线程也启动配置的 MCP。这个准备步骤有成本，
+  不能把它称为免费预分配，或在每次启动后无限保留空源线程。
+- 原生 archive 能停止源线程与额外重复 fork 的夹具 MCP；随后原生 delete 删除这些精确拥有的
+  空记录，不影响两个用户 fork。它们的来源 ID 仍可读，工具路由保持正确。
+- 关闭第一条 TUI 后，用原生 resume 精确恢复其 fork，不创建额外 Worktree；第二条 TUI 保持运行。
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --hooks --fork-seed --codex /path/to/codex
+```
+
+这不是已接入的生产新建路径，也不将普通用户会话默认改为 fork。原生关系只能作为现有准入
+记录的关联证据，不能单独授予凭据、选择终端或发布 accepted。共享后台环境仍不是逐会话环境；
+Fleet launch/authority 的旧进程归属检查保持，尚未改为新收据格式。
+接入前必须验证：准入原子认领与撤销、错误账号/后端拒绝、完整 MCP 按 root 取现有权限、
+子 Agent 与恢复，以及共享后台仍存活时如何证明**某一线程**已停止。
+TUI 退出、线程 unloaded 或父源记录被删，都不能单独释放执行额度或宣称任务完成。
+此外须测量完整 MCP 下的准备成本、峰值进程数与原生直启对照；本夹具不证明 1 秒/5 秒目标。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器

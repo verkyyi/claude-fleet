@@ -23,6 +23,40 @@ verification to make a session fit the shared-backend path. No launcher behavior
 changes in this probe; full MCP, credentials, guards and concurrent sessions
 still require integrated acceptance.
 
+## Shared-backend MCP identity (migration gate)
+
+The explicit offline `fleet-native-session-env-selftest.py` keeps two native
+local TUIs alive against one verified backend and calls an inert MCP tool for
+each native worktree. Distinct MCP processes inherit the backend's fixture
+environment, not each client's session values. Native request metadata carries
+the routed thread ID, but this is context, not a credential: an RPC caller can
+still choose the target thread, and arbitrary other metadata survives.
+
+Do not move session-scoped worker credentials, terminal identity or roles into
+a shared backend environment. Adoption requires a verified native-root-to-Fleet
+ownership/capability binding, with the existing authorization and revocation
+checks intact. Concurrent admission correlation is not implemented by this
+probe. Unknown or stale bindings must not execute tools. The current private
+runtime remains unchanged; this result is not evidence of a live credential leak.
+See the [concurrency boundary](NATIVE-AGENT-BOUNDARY.md#共享后台的-mcp-环境不是逐客户端环境).
+
+Add `--hooks` to inspect reviewed fixture SessionStart callbacks under two
+independent TUI supervisors. The existing native-parent verifier identifies
+the shared backend, not either supervisor's descendant; launcher and admission
+context environment also belongs to that backend. Do not remove ancestry checks
+or infer a platform launch binding from a thread ID/cwd. The fixture correlates
+each root's own loopback request instead of counting unrelated title requests.
+
+The additional `--hooks --fork-seed` fixture creates and names empty native
+threads, then runs local `codex fork <id> --worktree`. A synchronous callback can
+read its exact `forkedFromId` through the PID-verified backend. Reusing the source
+is allowed by native Codex, so this relationship is not one-use authorization.
+The fixture also accounts for the source's extra MCP process, retires owned empty
+sources through native archive/delete, and resumes the user fork without another
+worktree. No production launch mode is added. Existing admission/capability
+binding and per-thread stop evidence remain required before adoption; neither
+TUI exit nor a shared backend PID alone proves that execution stopped.
+
 ## Managed guard configuration (candidate)
 
 The candidate renderer derives native managed hooks from the existing
