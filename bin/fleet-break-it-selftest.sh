@@ -6589,6 +6589,20 @@ drill_repo_authority_case() {
   WHAT='大小写注册名通过面板/issue/authority；原 overlay/worktree 保留，真实拒绝原因可见'
 }
 
+drill_rm_empty_var_prompt() {
+  CAP=15; local t0 g j out rc
+  t0=$(now); g="$BIN/../hooks/bash-guard.py"
+  j() { python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
+  out=$(j 'rm -f $P/*' | python3 "$g" 2>&1 >/dev/null); rc=$?
+  [ "$rc" = 2 ] || { WHY="rm -f \$P/* not denied (rc=$rc) — Claude Code would stop for a person"; return 1; }
+  case "$out" in *'"${P:?}"/*'*) ;; *) WHY="deny carries no rewrite hint: $out"; return 1 ;; esac
+  j 'rm -f "${P:?}"/*' | python3 "$g" >/dev/null 2>&1 \
+    || { WHY='rm -f "${P:?}"/* (the rewrite) was refused'; return 1; }
+  j 'git rm $P/x' | python3 "$g" >/dev/null 2>&1 || { WHY='git rm $P/x was refused'; return 1; }
+  SECS=$(since "$t0")
+  WHAT='rm -f $P/* 先被 bash-guard 拒并给出改法；"${P:?}"/* 与 git rm 放行'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call

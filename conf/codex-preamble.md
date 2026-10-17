@@ -34,6 +34,9 @@ Follow it as written, with these translations (they are the only differences):
   work through the `file_issue` tool; converse through issue comments (`comment`);
   open your own PR and land it once `pr_verdict` reads `READY` (`pr_merge`); a
   real blocker is one `ask` call, then stop.
+- **An `rm` path never starts with a bare variable:** write `rm -f "${P:?}"/*`
+  (or a non-empty default, or the literal path), never `rm -f $P/*` — an empty
+  `P` makes it `rm -f /*`, and the fleet's bash guard refuses the bare form.
 - Reply in the language the issue is written in. Keep going until the PR is
   merged or you are genuinely blocked — nothing in this fleet waits to approve you.
 

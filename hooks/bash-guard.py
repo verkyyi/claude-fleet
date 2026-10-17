@@ -102,6 +102,13 @@ def block(reason):
     sys.exit(2)
 
 
+def refuse(reason):
+    """A deny the agent repairs by itself: the reason is a rewrite hint, not an
+    «irreversible, run it in a terminal» verdict (issue #4637)."""
+    sys.stderr.write("⛔ bash-guard.py: %s\n" % reason)
+    sys.exit(2)
+
+
 # --- MASKING -----------------------------------------------------------------
 # Blank out every span that is DATA rather than code, preserving length so all
 # offsets keep indexing the original command. Single quotes, double quotes and
@@ -405,6 +412,20 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
                 block("rm -rf targeting filesystem root or $HOME")
             if re.search(r"(?:^|\s)\S*\.git(?:\s|/|$)", raw_seg):
                 block("rm -rf touching a .git directory (use `git worktree remove`)")
+        # 2b) rm on a path that STARTS with a possibly-empty variable (issue
+        #     #4637): `rm -f $P/*` is `rm -f /*` when P is empty. Claude Code asks
+        #     a person about it even in bypass mode («Dangerous rm operation on
+        #     possibly-empty variable path») and auto-denies ~30 s later when
+        #     nobody answers — an unattended worker just stalls. Denying here, with
+        #     the rewrite in the reason, lets the agent fix the command itself.
+        bad = _rm_empty_var(orig_seg)
+        if bad:
+            refuse(
+                "rm on a path that starts with a possibly-empty variable (%s): "
+                "if it is empty this deletes from /. Rewrite it so an empty value "
+                "fails instead — \"${P:?}\"/* (or ${P:?}/*), a default "
+                "\"${P:-/tmp/x}\"/*, or the literal path — then run it again. "
+                "Claude Code would otherwise stop for a person's approval" % bad)
 
     # 3) Inter-agent messaging must go through the issue-bridge, not a raw
     #    send-keys into a live Claude TUI — send-keys is racy (bracketed-paste
@@ -499,6 +520,45 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
 
     # Operator-specific rails, if the local overlay defines any (never shipped).
     _run_overlay(masked_seg)
+
+
+# `$X/`, `${X}/`, `"$X"/`, `"${X}/…"` at the START of an rm argument. A braced
+# form that cannot expand to nothing — `${X:?…}` / `${X?…}`, or a non-empty
+# default `${X:-…}` / `${X:=…}` — is safe and passes.
+_RM_VAR_RE = re.compile(
+    r'(?:^|\s)"?\$(\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])"?/')
+
+
+def _rm_var_safe(expn):
+    if not expn.startswith("{"):
+        return False
+    m = re.match(r"\{#?[A-Za-z_][A-Za-z0-9_]*(:?)([?=+-])(.*)\}$", expn, re.S)
+    if not m:
+        return False
+    op, rest = m.group(2), m.group(3)
+    if op == "?":
+        return True
+    return op in "-=" and rest.strip("\"'") != ""
+
+
+def _rm_empty_var(orig_seg):
+    """The first rm argument that begins with a possibly-empty variable, or None."""
+    m = re.match(r"\s*(?:sudo\s+|\w+=\S+\s+)*rm\b", orig_seg)
+    if not m:
+        return None
+    args = orig_seg[m.end():]
+    # positions inside single quotes are literal text, never an expansion
+    inq, sq = False, []
+    for ch in args:
+        if ch == "'":
+            inq = not inq
+        sq.append(inq)
+    for v in _RM_VAR_RE.finditer(args):
+        if sq[v.start(1)]:
+            continue
+        if not _rm_var_safe(v.group(1)):
+            return v.group(0).strip()
+    return None
 
 
 # pkill options that take a value (BSD and procps), as a separate token or glued.
