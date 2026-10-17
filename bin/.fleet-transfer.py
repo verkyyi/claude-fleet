@@ -39,9 +39,11 @@ def transition_lock(worktree):
     try: path.mkdir(mode=0o700)
     except FileExistsError: raise ValueError('another transition owns this worktree') from None
     owner=path/'pid'; owner.write_text(str(os.getpid()))
-    try: yield
+    try: yield path
     finally:
-        if owner.exists() and owner.read_text().strip()==str(os.getpid()):
+        # Same durable-request rule as fleet_transition_lock_drop in the shell
+        # library: unknown completion retains ownership for explicit recovery.
+        if not (path/'request').exists() and owner.exists() and owner.read_text().strip()==str(os.getpid()):
             owner.unlink(); path.rmdir()
 
 

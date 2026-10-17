@@ -6553,6 +6553,45 @@ drill_pending_observation_stale() {
   WHAT='同次观测共享，工具变化重新读取；换代、过期、缺失身份及读取失败均 unknown'
 }
 
+drill_native_resume_default_permissions() {
+  CAP=30; local out home t0
+  t0=$(now)
+  home=$(mktemp -d "${TMPDIR:-/tmp}/native-resume-home.XXXXXX") || return 1
+  if out=$(env -i HOME="$home" PATH=/usr/bin:/bin bash "$BIN/fleet-codex-selftest.sh" --resume-defaults 2>&1); then
+    rm -rf "$home"
+  else
+    rm -rf "$home"; WHY="$out"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT='真实composer的resume不注入权限默认覆盖，显式/锁定策略与hooks保留'
+}
+
+drill_native_cleanup_fencing() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-native-cleanup-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal.test_product_entry_refuses_known_missing_capabilities_before_any_action 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='共同transition排他与迟到cleanup绑定检查；缺native能力动作前拒绝'
+}
+
+drill_native_authority_ack() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_native_continue_test.py" AuthorityAck 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet_native_registration_test.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='准确admission ACK；迟到hook不能覆盖后继receipt'
+}
+
+drill_native_continue_once() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal Readiness 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='未知原生元数据与 pending 拒绝；停止/启动失败或丢确认不重放副作用'
+}
+
 drill_native_observe_missing() {
   CAP=15; local t0 out
   t0=$(now)
