@@ -55,7 +55,63 @@ def check_receipt(context, receipt):
             or not isinstance(receipt.get("birth"), str) or not receipt["birth"]
             or not isinstance(receipt.get("executable"), str) or not os.path.isabs(receipt["executable"])):
         raise ValueError("launch has no matching native process/session proof")
+    if "worktree" in receipt:
+        validate_worktree(receipt["worktree"])
     return receipt
+
+
+def validate_worktree(binding):
+    if (not isinstance(binding, dict) or set(binding) != {"root", "git_dir", "common_dir"}
+            or any(not isinstance(value, str) or not os.path.isabs(value)
+                   or any(character in value for character in "\n\r\0") for value in binding.values())):
+        raise ValueError("invalid worktree binding")
+    return binding
+
+
+def worktree_identity(directory):
+    if not isinstance(directory, str) or not os.path.isabs(directory):
+        raise ValueError("native cwd must be an absolute worktree path")
+    cwd = Path(directory).resolve(strict=True)
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    result = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute",
+                             "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+                            env=environment, capture_output=True, text=True, check=True, timeout=2)
+    root, metadata, common = [Path(value).resolve(strict=True) for value in result.stdout.splitlines()]
+    marker = root / ".git"
+    if (not cwd.is_relative_to(root) or metadata.parent != common / "worktrees"
+            or not marker.is_file() or marker.is_symlink()
+            or (metadata / (metadata / "gitdir").read_text().strip()).resolve(strict=True) != marker):
+        raise ValueError("native cwd is not a registered linked worktree")
+    return validate_worktree(dict(root=str(root), git_dir=str(metadata), common_dir=str(common)))
+
+
+def prepare_worktree(pane, previous=None, socket=""):
+    path = option(pane, "@worktree", socket)
+    expected = (previous or {}).get("worktree")
+    if not path:
+        if expected is not None:
+            raise ValueError("saved worktree binding disappeared")
+        return None
+    observed = worktree_identity(path)
+    if Path(path).resolve(strict=True) != Path(observed["root"]):
+        raise ValueError("window worktree must name its registered root")
+    if expected is not None and validate_worktree(expected) != observed:
+        raise ValueError("saved worktree identity changed")
+    return observed
+
+
+def check_worktree_window(pane, expected, socket=""):
+    path = option(pane, "@worktree", socket)
+    if not path or Path(path).resolve(strict=True) != Path(expected["root"]):
+        raise ValueError("window worktree binding changed")
+
+
+def bind_native_worktree(payload, expected):
+    validate_worktree(expected)
+    if worktree_identity(payload.get("cwd")) != expected:
+        raise ValueError("native cwd differs from the bound worktree")
+    return expected
 
 
 def tmux(*args, socket=""):
@@ -192,6 +248,10 @@ def hook(payload):
     if not root_native(p, supervisor):
         raise ValueError("native process is outside this launch")
     receipt = dict(c, **p, native_session=payload.get("session_id"), observed_at=time.time(), phase="verified")
+    worktree = os.environ.get("FLEET_LAUNCH_WORKTREE")
+    if worktree:
+        receipt["worktree"] = bind_native_worktree(payload, json.loads(worktree))
+        check_worktree_window(pane, receipt["worktree"])
     if p["actual_provider"] == "codex":
         receipt.update(native_remote=os.environ.get("FLEET_CODEX_REMOTE", ""),
                        native_home=os.environ.get("CODEX_HOME", ""))
@@ -206,6 +266,8 @@ def hook(payload):
         previous = check_receipt(c, json.loads(old))
         if any(previous[k] != receipt[k] for k in ("pid", "birth", "executable", "native_session")):
             raise ValueError("late or nested hook cannot replace launch identity")
+        if "worktree" in previous and previous["worktree"] != receipt.get("worktree"):
+            raise ValueError("late hook cannot replace worktree identity")
         return
     stamp(pane, "@launch_receipt", receipt)
 
@@ -219,6 +281,8 @@ def inspect(context, pane, socket=""):
         raise ValueError("interrupted: native process identity was lost")
     if not descendant(receipt["pid"], int(option(pane, "pane_pid", socket))):
         raise ValueError("interrupted: native process no longer belongs to this pane")
+    if "worktree" in receipt:
+        prepare_worktree(pane, receipt, socket)
     return dict(receipt, window_id=option(pane, "window_id", socket))
 
 
@@ -378,11 +442,15 @@ def supervise_guarded(argv, pane, c, guard):
     if old:
         seed = ""  # a launch seed is never redelivered on recovery
     current_task(c)  # stale transfers/recovery cannot even start a native process
+    worktree = prepare_worktree(pane, old)
     env = dict(os.environ, FLEET_LAUNCH_CONTEXT=json.dumps(c), FLEET_LAUNCH_SUPERVISOR=str(os.getpid()),
                FLEET_LAUNCH_NATIVE=resume)
+    env.pop("FLEET_LAUNCH_WORKTREE", None)
+    if worktree:
+        env["FLEET_LAUNCH_WORKTREE"] = json.dumps(worktree)
     tmux("set-option", "-wu", "-t", pane, "@launch_receipt")
     tmux("set-option", "-w", "-t", pane, "@launch_started", "1")
-    child = subprocess.Popen(argv, env=env)
+    child = subprocess.Popen(argv, env=env, **({"cwd": worktree["root"]} if worktree else {}))
     root = None
     verified = False
     receipt = None
@@ -393,6 +461,8 @@ def supervise_guarded(argv, pane, c, guard):
         while child.poll() is None and time.monotonic() < deadline:
             try:
                 receipt = inspect(c, pane)
+                if worktree != receipt.get("worktree"):
+                    raise ValueError("native launch did not prove the expected worktree")
                 if descendant(receipt["pid"], child.pid):
                     break
                 receipt = None
@@ -408,6 +478,8 @@ def supervise_guarded(argv, pane, c, guard):
             final = inspect(c, pane)
             if any(final[k] != receipt[k] for k in (*IDENTITY, "native_session", "pid", "birth", "executable")):
                 raise ValueError("launch identity changed before input")
+            if final.get("worktree") != receipt.get("worktree"):
+                raise ValueError("worktree identity changed before input")
             if c["provider"] == "codex" and seed.startswith("/fleet-"):
                 seed = "$" + seed[1:]
             if c["provider"] == "codex":

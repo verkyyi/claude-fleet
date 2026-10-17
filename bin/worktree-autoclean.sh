@@ -203,6 +203,10 @@ process() {
   [ -z "$dir" ] && return
   # skip main worktree and detached / no-branch worktrees
   if [ "$dir" = "$REPO_ROOT" ] || [ -z "$branch" ]; then return; fi
+  local retirement
+  retirement=$(fleet_worktree_retire_metadata "$dir") || {
+    say "KEEP  $branch  ($retirement)"; kept=$((kept+1)); return
+  }
   if printf '%s\n' "$branch" | grep -Eq "$PROTECTED_RE"; then
     say "KEEP  $branch  (protected)"; kept=$((kept+1)); return
   fi

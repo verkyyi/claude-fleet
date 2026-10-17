@@ -90,6 +90,125 @@ bash bin/fleet-native-worktree-selftest.sh /path/to/installed/fleet
 
 未宣称全量回归或 CI 通过；本批尚未提交、发布或切换用户会话的创建方式。
 
+## Claude 原生嵌套 Worktree 的守卫适配
+
+Claude 的原生目录位于主检出之下；不能用目录名白名单来解除只读保护，也不能为了避开
+守卫而继续让 Fleet 再创建一份 Worktree。候选 `base-readonly-guard.py` 只为当前 cwd 的
+真实 linked worktree 放行文件编辑：Git 返回的根目录与 common directory 必须匹配被保护
+仓库，专有 metadata 必须位于该仓库的 worktrees 注册目录，其 `gitdir` 反向指针必须准确
+指向当前根的 `.git` 文件。主检出、其他嵌套工作树、指回主检出的链接、复制/伪造 marker、
+Git 重定向和当前 `.git` 身份文件仍拒绝。验证失败、Git 缺失或超时不授予这个例外。
+
+外部工作树与普通允许路径不增加 Git 查询；只有目标命中受保护主检出、且 cwd 在其内部时
+才验证一次，单次 hook 的多个目标复用结果。不增加缓存、目录创建者、后台服务或清理器。
+此检查防止误写，不把可写的 Git 元数据宣称为租户安全边界；准入、仓库权限和进程绑定另行校验。
+
+显式探针 `bin/fleet-native-claude-worktree-selftest.py` 使用真实 Claude CLI、临时 HOME 和
+临时 Git 仓库。`--bare` 避免读取 OAuth/keychain；只向 loopback 端点发送假 key，端点恒定
+返回 400。工具/MCP 为空，不生成模型回答，不操作用户文件。本机 `2.1.296` 的 18 项检查通过：
+原生只创建一个真实嵌套 Worktree，原生 resume 从主检出恢复同一 session/cwd，不另建目录，
+未提交修改保留；用实际 cwd 直接调用现有 Fleet 守卫，验证自身文件可写、主检出和身份 marker 拒绝。
+
+```sh
+python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude
+bash bin/fleet-native-worktree-selftest.sh
+```
+
+这不是 Fleet 创建入口切换，不是实际 hook 加载或完整 MCP 验收；`--bare` 只属于隔离测试，
+不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
+迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
+
+### SessionStart 的目录时序与恢复边界
+
+显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
+SessionStart 命令。临时 HOME、空 setting sources、假 API key、loopback 拒绝端点、空工具
+及 MCP 保持；发现机器级 Claude 配置目录时拒绝运行。此模式不能继承 `--bare` 的
+“跳过 keychain reads”保证，也不代表完整 Fleet hooks/MCP 或真实认证验收。
+
+```sh
+python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude --with-hooks
+```
+
+本机 Claude `2.1.296` 的 49 项检查通过。此次是原生 CLI 真正调用 hook，不是直接传入
+手写 payload；hook 通过既有 `fleet_launch.native_parent` / `root_native` 验证二进制、
+进程出生时间与夹具 supervisor 归属，没有 mock 进程发现或修改线上 tmux。
+
+| 调用路径 | SessionStart cwd | 后续 native init cwd | 原生 session ID |
+|---|---|---|---|
+| 主检出启动 `--worktree` | 新工作树 | 新工作树 | 新 ID |
+| 主检出执行 `--resume <ID>` | **主检出** | 原工作树 | 同一 ID |
+| 已保存的工作树执行 `--resume <ID>` | 原工作树 | 原工作树 | 同一 ID |
+
+第二条在首次要求 hook 与 init 目录一致的探针中真实失败；因此不能简单把 SessionStart
+的 cwd 当作“恢复已经完成”的工作目录证明。输出保留 `cwd_matches_init` 与两种目录，
+后续版本若修正时序不要求继续出现旧行为。第三条同时验证不新建目录、不重置未提交修改。
+同一原生 session ID 的恢复会产生新的进程 incarnation，旧 PID/birth 不能作为新进程凭证。
+
+据此，原生创建迁移必须保存已验证的实际工作树，并从该目录恢复精确 native ID；
+恢复时重新校验当前 Git 注册、仓库身份和原生进程，不用启动主检出、目录前缀或
+`CLAUDE_PROJECT_DIR` 猜测所有权。缺失或错配的目录不得静默以可写主检出替代。
+现有 Fleet restore 已优先使用保存的 `@worktree`，应复用其记录而不是新增恢复数据库。
+该次探针尚未将实际 hook cwd 绑定到任务/准入 receipt，未切换创建入口，也未证明真实 TUI 的
+同等时序；下一步仍须完成上述绑定与恢复拒绝路径，不能以这份离线记录解除上线门槛。
+
+候选工作流 `native-claude-worktree` 在 GitHub-hosted Ubuntu 上分别运行 bare 与实际 hook
+探针，使用官方 npm 平台包固定 `2.1.296` 并校验 SHA-512；不执行安装脚本，不使用账号凭据。
+JSON 结果保存为 CI artifact。工作流存在不等于 Linux 验收通过，结果以对应提交的 job 为准。
+
+### 复用既有回执绑定工作树
+
+后续候选在 `fleet_launch.py` 与既有 local authority supervisor 内实现目录绑定，不新增
+会话数据库、轮询服务、Worktree 创建者或清理者。窗口已有 `@worktree` 时，启动前通过
+真实 Git 解析 root、private git directory 和 common directory，检查 linked-worktree
+注册及 `gitdir` 反向指针。主检出、缺失目录、伪造/符号链接 marker 和错配注册拒绝；
+查询清除继承的 `GIT_*` 重定向、关闭全局/系统 Git 配置，设置有限超时。
+
+- 接受的任务：将三项路径放入既有 `@launch_receipt.worktree`，随既有任务 evidence 保存。
+  SessionStart 的实际 cwd 必须解析为同一绑定。首次验明及投递前重检窗口/目录，不能只凭
+  session ID 和活 PID 发布启动成功或投递 held seed。迟到 hook 不能替换或擦除已保存绑定。
+- 本地准入：同一检查先于 reserve/begin；绑定放入现有 authority context/receipt，真实 hook
+  必须通过目录检查才上报 observe。Hub 原有 PID/session identity 协议不扩展，不把本地
+  路径冒称为 Hub 端验证过的目录授权；既有 legacy 输入投递语义也不因此变成 held-seed 协议。
+- 恢复：新子进程显式使用已验证 root 作为 cwd，不继承 wrapper 留在主检出或其他目录的 cwd。
+  已带绑定的任务回执在路径缺失、换树或变更注册时拒绝启动，不回退主检出、不猜另一会话。
+  原生 ID、账号及任务代次仍由既有机制验证。曾经没有目录绑定的老回执与无仓库路径保持兼容；
+  若窗口有既有 `@worktree`，在下一次受管启动补充绑定，不扫描或改写正在运行的老会话。
+
+真实 Claude hook 探针扩展至 52 项：新增创建/显式目录恢复的 Git 绑定检查，以及从主检出
+恢复时拒绝过早 cwd 的负例。隔离 tmux 的真实 wrapper/local-authority 测试另验证：wrapper
+在主检出时，子进程仍从保存的工作树启动；误将主检出作为绑定时，不调用准入或启动 Agent。
+后者使用假 native 程序，不宣称真实模型或面板验收。Python launch 回归还覆盖 Git 重定向、
+反向指针错配、缺失 Git/超时、窗口换绑、旧回执兼容与缺少原生目录证明时不发布任务启动成功。
+
+这些路径是绑定证据，不是原生生命周期所有者标记，也不是对可写 Git 元数据的租户隔离保证。
+本批尚未切换原生创建入口、取消 Fleet setup、修改默认 MCP 或完成真实 TUI/部署验收。
+后续由原生创建目录时，仍须在同一准入链中校验新路径与所选仓库，再写入这份既有绑定；
+不能直接把一个未知 cwd 当成授权，也不能在已分配的 Fleet 工作树内再创建第二层工作树。
+
+### 原生清理所有权优先于 Fleet 回收
+
+真实 Claude `2.1.296` 在 linked-worktree 的 Git metadata 内留下 `CLAUDE_BASE` 标记，
+非交互会话结束后仍保留 Git 的 `locked` 文件。旧 `fleet_worktree_drop --force` 直接移动
+目录，绕过 Git 的锁检查；同一原生夹具在父版本复现了这条错误路径。
+
+候选改为由同一 `fleet_worktree_retire_metadata` 读取既有 metadata：存在 Git 锁或当前
+已验证版本的 Claude 标记时拒绝 Fleet 回收，`--force` 仍只覆盖脏目录，不覆盖所有权。
+直接 drop 在移除借用依赖链接、移动目录或同步删除之前检查；autoclean 在记录历史和回收
+脱管进程之前检查；cleanup 与 idle-cleanup 在关窗、写终结历史或更新主检出之前拒绝。
+不判断锁内 PID 是否过期，不替原生 Agent 解锁、删除标记或实现第二套原生清理器。
+
+本机原生夹具扩展至 24 项：锁着时和显式解锁后，Fleet 强制回收都拒绝，目录注册与未提交
+数据保持。Git 锁单独存在时同样保护普通工作树；普通 legacy 工作树在显式解锁后仍能按既有
+路径回收。合成 janitor 测试还覆盖干净且已合并的原生目录不能被自动回收。
+
+`CLAUDE_BASE` 是本次版本实测的保守保留信号，**不是稳定的通用 Agent 所有权 API**；
+其存在只会拒绝删除，不能授予任何权限。新版本仍须重跑原生探针；缺失该标记不证明目录属于
+Fleet。后续创建入口必须把已验证的原生生命周期所有者绑定到现有会话记录。此补丁不证明
+并发创建/锁变化与 legacy 快速移动之间的原子性，也未切换创建入口或完成原生 TUI 删除验收。
+
+依据：[Git Worktree 锁与回收](https://git-scm.com/docs/git-worktree)、
+[Claude 原生 Worktree 生命周期](https://code.claude.com/docs/en/worktrees)。
+
 ## 原生 CLI 生命周期实测（2026-10-16 后续）
 
 新增显式调用的 `bin/fleet-native-worktree-cli-selftest.py`。真实 Codex 在临时 HOME、临时 Git 仓库中运行，
