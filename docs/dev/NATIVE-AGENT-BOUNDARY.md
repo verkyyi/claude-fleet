@@ -197,6 +197,58 @@ prepare/目录分配零调用、字面参数、既有 embedded 透传和固定�
 
 尚未部署。完整 MCP、真实面板和生产空闲资源对比仍按后续验收矩阵执行。
 
+### 上下文用量不是同一条广播
+
+继续删除轮询前，单独验证[原生用量事件](https://learn.chatgpt.com/docs/app-server)：
+`thread/status/changed` 能到达只初始化的观察连接，不代表
+`thread/tokenUsage/updated` 也会广播给它。新增显式离线探针
+`bin/fleet-native-usage-cli-selftest.py`，使用空 HOME、真实 app-server、三个有界测试回合，
+模型端点仅在 `127.0.0.1` 返回合成 Responses，不带凭据、不执行工具。
+
+本机 Codex `0.163.0` 通过 45 项检查：
+
+- 只初始化以及只做 `thread/read` 的连接没有收到用量事件；创建线程的连接收到。
+- 对已加载的精确线程做 `thread/resume` 后，观察连接收到用量；同一连接
+  `thread/unsubscribe` 后不再收到，原控制连接仍收到。
+- resume 前后线程 ID、model、approvalPolicy、sandbox 保持；只有显式发起的三个回合和
+  三次本机请求，没有第二个线程或观察操作触发的推理。
+- 每回合的 `last.totalTokens` 与累计 `total.totalTokens` 独立核对，分母取原生事件，
+  不把累计用量当上下文，也不从状态广播推断未收到的数值。
+
+上述 45 项在提交 `938c46c6` 的固定 Linux `0.162.1`
+[CI 38974315185](https://github.com/verkyyi/claude-fleet/actions/runs/38974315185) 和测试节点临时目录中
+也通过；测试节点探针及 RPC 文件 SHA-256 与提交一致，没有改安装或在线会话。
+
+后续候选扩展至本机 `0.163.0` 的 87 项：本机端点先暂停返回，观察连接在原回合活动时
+订阅、断连、重新订阅；释放响应后原控制连接与观察连接都收到同一回合完成和用量。
+另一次真实代码模式工具调用发起审批，观察连接断连后请求仍待审批，重连只重放原请求；
+它不回答、不批准、不取消。原控制连接明确拒绝，双方收到原生 resolution，临时 canary
+不存在，线程与更改后的 on-request/只读沙箱策略保持。五个显式回合只有六次预期的
+本机 Responses 请求，没有因观察而额外推理或创建第二个线程。
+
+87 项新增断言仍须按新提交的固定版本 CI 和测试节点结果验收，不能沿用 45 项的通过记录。
+此测试不启动真实 TUI，不证明完整 MCP、真实账号隔离、生产窗口身份竞态或性能。
+上述探针本身不改变生产监测器，也没有提前删除 rollout 计量和兼容读取。
+
+```sh
+python3 bin/fleet-native-usage-cli-selftest.py --codex /path/to/codex
+```
+
+后续计量候选以 `FLEET_CODEX_NATIVE_USAGE=1` 显式试验，默认关闭。它复用注意力监测器
+已有连接，不增后台服务：只订阅已加载且身份匹配的根线程，使用原生通知过滤，
+将用量和模型设置交给已有 Meter/计量总线。收到有效用量后暂停 Meter 的 rollout 轮询；
+连接断开、身份改变、事件异常或五秒监测租约到期就恢复旧读取。尚未持久化的新线程
+可能拒绝 resume；重试成功也不能补造错过的用量，须等下一个原生事件。
+审批请求永不由观察者回答，既有认证、完整 MCP、守卫和旧 hook 路径不变。
+
+`--meter-candidate` 将实际 Monitor/Meter 接到离线原生探针，另外验证断线回退、重新订阅、
+稳定阶段不读 rollout、最后一回应用量不混入累计值、原控制端仍收到文本而观察端过滤文本。
+本机 `0.163.0` 和测试节点临时目录中的 `0.162.1` 已各通过 103 项，测试节点六个候选文件
+SHA-256 与工作树一致，未改在线安装；固定版本 CI 仍须对提交后的同一候选单独验收。
+测量出口与 tmux 身份是夹具，真实 tmux 写入竞态另有隔离回归；这些结果不等于
+真实面板或长会话性能通过，也不删除其他 collector/context-command 的兼容读取。
+运行方式、失败回退与停用见 [Codex Context](CODEX-RUNTIME.md#context)。
+
 ### 原生插件替代跨 Agent 翻译的证据
 
 [官方 CLI 文档](https://learn.chatgpt.com/docs/cli/reference) 已提供 `codex plugin` 与 marketplace 管理。

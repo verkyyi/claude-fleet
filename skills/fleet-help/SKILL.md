@@ -51,6 +51,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | Chinese shows as `_` or boxes | `docs/dev/CLIENT.md` § 「中文乱码」 |
 | the list stopped updating, a row cannot be opened | `docs/dev/CLIENT.md` § 「列表停住」 |
 | operator preview of candidate native Codex guard configuration (not installation) | `docs/dev/CODEX-RUNTIME.md` § 「Managed guard configuration (candidate)」 |
+| Codex native usage pilot, fallback and context readings (not enabled by default) | `docs/dev/CODEX-RUNTIME.md` § 「Context」 |
 
 Read with a targeted range (`grep -n` the heading, then `sed -n` to the next one),
 not the whole file. Nothing in the table fits? `rg -n` across `docs/public/` and `docs/dev/`, including

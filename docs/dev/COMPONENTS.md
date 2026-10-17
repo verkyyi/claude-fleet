@@ -35,6 +35,7 @@
 | 文档发布守卫（`hooks/artifact-guard.py`） | 核心 | 轮换账号下 Artifact 的访问归属不可靠，给操作者读的页面通过 doc-preview 送达。 |
 | 会话内 mod（`mod/fleet` 的 usage / where / state） | 核心 | 提供用量、操作者位置及会话状态。 |
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
+| Codex 上下文计量适配（`fleet-codex-session.py` Meter / `conf/statusline.sh`） | 核心 | 将原生读数投影到既有计量总线；显式候选复用注意力连接，收到有效事件时暂停重复 rollout 轮询，失联回退。不新增常驻服务、不默认启用，不改变其他 collector 的待定类别。 |
 | Fleet MCP（status / where / context / open / show） | 核心 | 代理读取状态和向操作者送达内容的统一接口。 |
 | 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 发起人明确保留跨会话协作基础设施；工具权限仍按会话座位控制，不能随编排插件一起删。 |
 | 编排 MCP 挂载组（`conf/mcp-orch.json`） | 按需 | 随编排插件挂载；未来角色模板改造另批实施，底层协作接口保留。 |
@@ -88,7 +89,7 @@
 | 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；隔离策略不由本表宣称完成。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
 | 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
-| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。 |
+| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件；显式原生用量订阅探针仅在隔离夹具和固定版本 CI 验证事件边界，不引入生产订阅服务。 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 按操作者设备能力使用。 |
 | 企业微信通知（wecom-webhook-notify.sh） | 按需 | 用户自行选择的通知集成。 |
 

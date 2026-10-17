@@ -238,11 +238,17 @@ def hook():
     feed(pane, owner, stats, data.get("home", ""))
 
 
-def feed(pane, owner, stats, home):
+def feed(pane, owner, stats, home, expected=None):
     """One reading onto the measurement bus (`statusline.sh --from codex`).
     Re-checked first: a replacement launch that took the window during the
     rollout read is not ours to stamp."""
     fields = bus_fields(stats, home)
+    if expected is not None:
+        actual = identity(pane)
+        if (not valid_id(expected.get('session_id')) or not owner.isdigit()
+                or any(actual.get(key) != expected.get(key) for key in ('owner', 'session_id', 'home', 'remote'))):
+            return
+        fields += ['owner=' + owner, 'thread=' + expected['session_id']]
     if not fields or tmux(["display-message", "-p", "-t", pane,
                            "#{@cc_agent}|#{@cc_launcher_pid}"]) != "codex|" + owner:
         return
@@ -269,9 +275,62 @@ class Meter:
         except ValueError:
             self.every = 5.0
         self.next_at, self.seen = 0.0, None
+        self.native_binding, self.native_stats, self.native_until = None, None, 0.0
+
+    def reset_native(self):
+        self.native_binding, self.native_stats, self.native_until = None, None, 0.0
+        self.next_at, self.seen = 0.0, None
+
+    def keep_native(self, data):
+        binding = tuple(data.get(key) for key in ('owner', 'session_id', 'home', 'remote'))
+        if binding == self.native_binding and self.native_stats is not None:
+            self.native_until = time.monotonic() + 5
+
+    def observe(self, data, usage, settings):
+        if not self.pane or data.get('owner') != self.owner or not valid_id(data.get('session_id')):
+            raise ValueError('native telemetry identity is not this launcher')
+        binding = tuple(data.get(key) for key in ('owner', 'session_id', 'home', 'remote'))
+        if binding != self.native_binding:
+            self.reset_native()
+            self.native_binding = binding
+        stats = dict(self.native_stats or dict(pct=-1, live_tokens=None, limit=None, model='', effort=''))
+        if usage is not None:
+            if not isinstance(usage, dict) or not isinstance(usage.get('last'), dict):
+                raise ValueError('invalid native token usage')
+            last = usage['last']
+            live = number(last.get('totalTokens'))
+            if live is None:
+                inputs, outputs = number(last.get('inputTokens')), number(last.get('outputTokens'))
+                live = inputs + outputs if inputs is not None and outputs is not None else None
+            limit = number(usage.get('modelContextWindow'))
+            if live is None or not limit:
+                self.reset_native()
+                return False
+            stats.update(live_tokens=live, limit=limit, pct=live * 100 // limit)
+        if settings is not None:
+            if (not isinstance(settings, dict) or not isinstance(settings.get('model'), str)
+                    or not settings['model'] or settings.get('effort') is not None and not isinstance(settings['effort'], str)):
+                raise ValueError('invalid native model settings')
+            stats.update(model=settings['model'], effort=settings.get('effort') or '')
+        if stats['pct'] < 0 or not stats['model']:
+            return False
+        stats.update(session_id=data['session_id'], source='codex-native', limit_source='codex')
+        actual = identity(self.pane)
+        if any(actual.get(key) != data.get(key) for key in ('owner', 'session_id', 'home', 'remote')):
+            self.reset_native()
+            return False
+        if stats != self.native_stats:
+            feed(self.pane, self.owner, stats, '', expected=data)
+        self.native_stats = stats
+        self.keep_native(data)
+        return True
 
     def tick(self, now=None):
         now = time.monotonic() if now is None else now
+        if now < self.native_until:
+            return False
+        if self.native_stats is not None:
+            self.reset_native()
         if not self.pane or not self.owner.isdigit() or now < self.next_at:
             return False
         self.next_at = now + self.every

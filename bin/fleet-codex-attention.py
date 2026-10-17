@@ -25,6 +25,10 @@ Client = runpy.run_path(str(BIN / 'fleet-codex-rpc.py'))['Client']
 needs_detail = runpy.run_path(str(BIN / 'fleet_needs_detail.py'))['detail']
 QUESTION = 'item/tool/requestUserInput'
 PERMISSIONS = {'item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval', 'mcpServer/elicitation/request'}
+TELEMETRY_OPT_OUT = ('item/agentMessage/delta', 'item/reasoning/textDelta', 'item/reasoning/summaryTextDelta',
+                     'item/commandExecution/outputDelta', 'item/fileChange/outputDelta', 'item/plan/delta',
+                     'item/started', 'item/completed', 'turn/diff/updated', 'turn/plan/updated',
+                     'hook/started', 'hook/completed', 'rawResponseItem/completed')
 
 
 def kind(thread):
@@ -190,6 +194,12 @@ class Monitor:
         self.client = None
         self.binding = None
         self.event_stream = False
+        self.native_usage = env.get('FLEET_CODEX_NATIVE_USAGE') == '1'
+        self.meter = None
+        self.subscribed = False
+        self.pending_usage = None
+        self.settings = None
+        self.settings_changed = False
 
     def close(self):
         if self.client:
@@ -201,6 +211,12 @@ class Monitor:
         self.binding = None
         self.reconcile_at = 0
         self.event_stream = False
+        self.subscribed = False
+        self.pending_usage = None
+        self.settings = None
+        self.settings_changed = False
+        if self.meter is not None:
+            self.meter.reset_native()
 
     def events(self, identifier):
         thread = None
@@ -228,6 +244,22 @@ class Monitor:
                 thread = {'id': identifier, 'status': status}
             elif event.get('method') == 'thread/closed':
                 thread = {'id': identifier, 'status': {'type': 'notLoaded'}}
+                self.subscribed = False
+                self.pending_usage = None
+                if self.meter is not None:
+                    self.meter.reset_native()
+            elif self.subscribed and event.get('method') == 'thread/tokenUsage/updated':
+                self.pending_usage = params.get('tokenUsage')
+                if not isinstance(self.pending_usage, dict):
+                    raise ValueError('invalid native token usage')
+            elif self.subscribed and event.get('method') == 'thread/settings/updated':
+                self.settings = params.get('threadSettings')
+                if not isinstance(self.settings, dict):
+                    raise ValueError('invalid native model settings')
+                self.settings_changed = True
+            elif self.subscribed and event.get('method') == 'model/rerouted':
+                self.settings = dict(self.settings or {}, model=params.get('toModel'))
+                self.settings_changed = True
         raise ValueError('native event backlog exceeds monitor budget')
 
     def tick(self):
@@ -242,16 +274,41 @@ class Monitor:
             if binding != self.binding:
                 self.close()
             if self.client is None:
-                self.client = Client(self.remote, timeout=.6)
+                options = {'opt_out_notifications': TELEMETRY_OPT_OUT} if self.native_usage and self.meter is not None else {}
+                self.client = Client(self.remote, timeout=.6, **options)
                 self.binding = binding
             thread = self.events(data['session_id'])
             if time.monotonic() >= self.reconcile_at:
                 thread = thread_read(self.client, data)
+                if (self.native_usage and self.meter is not None and not self.subscribed
+                        and thread.get('status', {}).get('type') in ('active', 'idle')
+                        and thread.get('source') in ('cli', 'exec', 'appServer', 'vscode')
+                        and thread.get('parentThreadId') is None and thread.get('threadSource') != 'thread_title'):
+                    current(data, self.pane, '')
+                    resumed = self.client.call('thread/resume', {'threadId': data['session_id'], 'excludeTurns': True})
+                    if resumed['thread']['id'] != data['session_id']:
+                        raise ValueError('native telemetry subscription changed thread')
+                    current(data, self.pane, '')
+                    self.subscribed = True
+                    self.settings = {'model': resumed['model'], 'effort': resumed.get('reasoningEffort')}
+                    self.settings_changed = True
                 observed = self.events(data['session_id'])
                 if observed is not None and observed.get('status') != thread.get('status'):
                     self.reconcile_at = 0
                     return
                 self.reconcile_at = time.monotonic() + (30 if self.event_stream else 2)
+            if self.subscribed:
+                if thread is not None and thread.get('status', {}).get('type') not in ('active', 'idle'):
+                    self.meter.reset_native()
+                    self.pending_usage = None
+                    if thread.get('status', {}).get('type') == 'notLoaded':
+                        self.subscribed = False
+                else:
+                    if self.pending_usage is not None or self.settings_changed:
+                        self.meter.observe(data, self.pending_usage, self.settings)
+                        self.pending_usage = None
+                        self.settings_changed = False
+                    self.meter.keep_native(data)
             if thread is None:
                 return
             subtype = kind(thread)
