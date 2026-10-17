@@ -31,7 +31,7 @@
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 只在执行会话压缩后补回任务说明，保证原任务持续执行（EPIC #4322 统计口径）。 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 不再默认写入或检查；已有块原样保留，用户可用 `fleet-agent-defaults.py strip` 按需删除。执行会话仍由技能携带规则，守卫照常生效（#3125）。 |
 | 命令误操作守卫（`hooks/bash-guard.py` 的删除、强推、广域信号检查） | 核心 | 防止共享宿主上的误操作；不能替代进程或账号隔离。 |
-| 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 基础检出只读和跨会话协作边界保持；`fleet-hooks-emit.sh --target codex-managed` 从既有表生成两项已审阅 Codex 守卫的原生配置，不新增策略引擎。候选生成不等于在线安装，旧入口保留。 |
+| 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 基础检出只读和跨会话协作边界保持；嵌套原生 Worktree 只按 Git 根/common directory/注册反向指针验证当前目录，不按目录名前缀放行，不增加创建或清理所有者。`fleet-hooks-emit.sh --target codex-managed` 从既有表生成两项已审阅 Codex 守卫的原生配置，不新增策略引擎。候选生成不等于在线安装，旧入口保留。 |
 | 文档发布守卫（`hooks/artifact-guard.py`） | 核心 | 轮换账号下 Artifact 的访问归属不可靠，给操作者读的页面通过 doc-preview 送达。 |
 | 会话内 mod（`mod/fleet` 的 usage / where / state） | 核心 | 提供用量、操作者位置及会话状态。 |
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
