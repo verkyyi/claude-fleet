@@ -73,6 +73,12 @@ FLEET_NODE_* seams; nothing touches /Library, /var or a real login.
   W  door-account-locked (#4161): a door account (new, or one an older door made)
      leaves shadow `*`, never useradd's `!` — the door's `UsePAM no` sshd refuses a
      locked account even with its key; a machine login is never touched
+  Y  the idle beat (#4359, EPIC #4354 共同约定 1 · 4): with every login's published
+     working state idle for FLEET_NODE_IDLE_HOLD a task under the cap runs on its
+     stretched clock (×3, at least 60 s; a table's idle_every; memguard only while
+     memory is calm; `"idle": false`, a 300 s task unchanged); a login working, a
+     stale row, a state change since the snapshot or a CI job puts every clock
+     back at once — a fake clock, no wait; status's `idle` line says which
   X  door-strictmodes (#4161): the state dir (the door's 0777 emptyDir) loses its
      group / other write on every entry pass — `StrictModes yes` refuses a key
      under a writable dir; never widened, a sticky dir left
@@ -3251,6 +3257,121 @@ _forget_task_running "$1" 3>&1
         with mock.patch.object(fns.subprocess, "check_output", side_effect=OSError("no ps")), \
                 mock.patch.object(fns, "pid_alive", return_value=False):
             self.assertEqual(fns._zombies([4242]), set(), "a ps that cannot run decides nothing")
+
+
+class Y_IdleBeat(unittest.TestCase):
+    """The idle beat in-process with a fake clock: no daemon, no real wait."""
+
+    def setUp(self):
+        import pwd
+        self.d = tempfile.mkdtemp(prefix="fns-idle.")
+        self.me = pwd.getpwuid(os.getuid()).pw_name
+        self.sess = os.path.join(self.d, "sessions")
+        os.makedirs(self.sess)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("FLEET_NODE_", "FLEET_MACHINE_"))}
+        env.update({"FLEET_NODE_STATE": os.path.join(self.d, "db"), "FLEET_NODE_LOG": os.path.join(self.d, "log"),
+                    "FLEET_NODE_RUNTIME": os.path.join(self.d, "rt"), "FLEET_NODE_TEST": "1",
+                    "FLEET_MACHINE_SESSIONS_DIR": self.sess, "FLEET_NODE_MEM_CALM": "1"})
+        self.patch = mock.patch.dict(os.environ, env, clear=True)
+        self.patch.start()
+        os.makedirs(env["FLEET_NODE_STATE"])
+        self.sup = fns.Supervisor(fns.Paths(), {"children": [], "tasks": []})
+
+    def tearDown(self):
+        self.patch.stop()
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def publish(self, working=0, count=1, ts=None, touch_after=False):
+        ts = time.time() if ts is None else ts
+        mark = os.path.join(self.sess, ".idle-" + self.me)
+        open(mark, "a").close()
+        act = os.lstat(mark).st_mtime_ns
+        with open(os.path.join(self.sess, self.me), "w") as f:
+            f.write("%d %d\nidle-v1 %s\n" % (count, ts, json.dumps(
+                {"ts": ts, "working": working, "unknown": False, "changed": 0, "activity": act})))
+        if touch_after:
+            os.utime(mark, ns=(act + 10 ** 9, act + 10 ** 9))
+
+    def every(self, tk, t):
+        return self.sup.task_every(tk, t)
+
+    def test_idle_stretches_and_busy_restores(self):
+        bridge = {"name": "issue-bridge", "every": 15, "account": "x"}
+        mem = {"name": "memguard", "every": 10}
+        reading = {"name": "machine-reading", "every": 15, "idle_every": 45}
+        keep = {"name": "pinned", "every": 10, "idle": False}
+        slow = {"name": "update", "every": 300}
+        minute = {"name": "diskguard", "every": 60}
+        self.publish(working=0)
+        t0 = time.time()
+        # idle, but not yet for FLEET_NODE_IDLE_HOLD (120 s): the normal clocks
+        self.assertEqual(self.every(bridge, t0), 15)
+        self.assertEqual(self.sup.state["idle"]["idle"], True)
+        t = t0 + 121
+        self.assertEqual(self.every(bridge, t), 60)
+        self.assertEqual(self.every(minute, t), 180)
+        self.assertEqual(self.every(reading, t), 45)
+        self.assertEqual(self.every(keep, t), 10)
+        self.assertEqual(self.every(slow, t), 300)
+        self.assertEqual(self.every(mem, t), 60)
+        # task_due follows the stretched clock
+        self.sup.state["tasks"]["issue-bridge"] = {"last_start": t - 20}
+        self.assertFalse(self.sup.task_due(bridge, t))
+        self.sup.state["tasks"]["issue-bridge"] = {"last_start": t - 61}
+        self.assertTrue(self.sup.task_due(bridge, t))
+        lines = fns.status_lines(fns.Paths(), {"children": [], "tasks": []}, self.sup.state)[1]
+        self.assertTrue(any(l.startswith("idle  yes") for l in lines), lines)
+        # memory not calm: memguard keeps its 10 s
+        os.environ["FLEET_NODE_MEM_CALM"] = "0"
+        self.sup.calm_at = 0
+        self.assertEqual(self.every(mem, t + 1), 10)
+        os.environ["FLEET_NODE_MEM_CALM"] = "1"
+        # a login starts working: every clock back at the next read (≤ 5 s)
+        self.publish(working=2)
+        t2 = t + 6
+        self.assertEqual(self.every(bridge, t2), 15)
+        self.assertIn("working: 2", self.sup.state["idle"]["why"])
+        self.assertTrue(any(l.startswith("idle  no — working") for l in fns.status_lines(
+            fns.Paths(), {"children": [], "tasks": []}, self.sup.state)[1]))
+        # idle again: the hold starts over
+        self.publish(working=0)
+        t3 = t2 + 6
+        self.assertEqual(self.every(bridge, t3), 15)
+        self.assertEqual(self.every(bridge, t3 + 121), 60)
+
+    def test_unknown_is_never_idle(self):
+        t0 = time.time()
+        cases = [
+            ("stale row", lambda: self.publish(ts=time.time() - 400)),
+            ("activity since snapshot", lambda: self.publish(touch_after=True)),
+            ("sessions without a record", lambda: open(os.path.join(self.sess, self.me), "w").write(
+                "2 %d\n" % time.time())),
+        ]
+        for i, (what, make) in enumerate(cases):
+            make()
+            self.sup.idle_read_at = 0
+            self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 1000 * (i + 1)), 15, what)
+            self.assertTrue(self.sup.state["idle"]["why"].startswith("unknown"), (what, self.sup.state["idle"]))
+        # an empty inventory is idle (no login has a session to work in)
+        os.unlink(os.path.join(self.sess, self.me))
+        self.sup.idle_read_at = 0
+        self.every({"name": "b", "every": 15}, t0 + 5000)
+        self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 5200), 60)
+        # a CI job is busy
+        st = os.environ["FLEET_NODE_STATE"]
+        with open(os.path.join(st, "ci.env"), "w") as f:
+            f.write("FLEET_CI_TOKEN=x\n")
+        fns.write_json(os.path.join(st, "ci-runner.json"), {"state": "busy", "at": time.time()}, 0o644)
+        self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 5206), 15)
+        self.assertEqual(self.sup.state["idle"]["why"], "ci: a job running")
+
+    def test_off_switch(self):
+        self.publish(working=0)
+        os.environ["FLEET_NODE_IDLE_BACKOFF"] = "0"
+        t0 = time.time()
+        self.every({"name": "b", "every": 15}, t0)
+        self.assertEqual(self.every({"name": "b", "every": 15}, t0 + 500), 15)
+        self.assertNotIn("idle", self.sup.state)
 
 
 class X_DoorStrictModes(unittest.TestCase):

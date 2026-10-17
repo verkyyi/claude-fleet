@@ -27,6 +27,11 @@ a sandbox lock), the test login a FLEET_NODE_PASSWD entry.
      missing context — refused (exit 1, no step runs); the train's push runs
   G  an admin login is refused (error, nothing minted); SIGTERM takes the runner
      down, deregisters it and says off
+  H  the beat (#4359): fast (FLEET_CI_EVERY) in the loop's first minutes, slow
+     (FLEET_CI_IDLE_EVERY) once FLEET_CI_HOT_SECS pass with no job; a wake (a touch
+     of ci-runner.wake: "just merged") is fast again at once; a job that starts and
+     ends inside one slow beat is still counted (the runner's _diag/Worker_*), never
+     taken for a crash, and makes the beat fast; ci-runner.json's `beat` says which
 """
 import base64
 import hashlib
@@ -134,6 +139,7 @@ while [ ! -e "$HOME/go" ]; do sleep 0.1; done
 . "$HOME/go"   # the job's GITHUB_* context
 rm -f "$HOME/go"
 if /bin/bash -e $ACTIONS_RUNNER_HOOK_JOB_STARTED > "$HOME/hook.out" 2>&1; then
+  mkdir -p _diag && : > _diag/Worker_fake.log   # the real runner's per-job diary
   /bin/sh -c 'sleep 1.5; : Runner.Worker'
   touch "$HOME/step-ran"
 else
@@ -190,7 +196,8 @@ class Box(object):
             "FLEET_NODE_RUNTIME": os.path.join(self.d, "root", "current"),
             "FLEET_NODE_PASSWD": passwd, "FLEET_CI_API": self.gh.url, "FLEET_CI_LOCK": self.lock,
             "FLEET_CI_PRESSURE": "@" + self.pressure, "FLEET_CI_MEM": "64000 128000",
-            "FLEET_CI_LOAD_MAX": "1000", "FLEET_CI_EVERY": "0.3", "FLEET_HEAVY_DIR": self.heavy,
+            "FLEET_CI_LOAD_MAX": "1000", "FLEET_CI_EVERY": "0.3", "FLEET_CI_IDLE_EVERY": "0.3",
+            "FLEET_HEAVY_DIR": self.heavy,
             "GH_TOKEN": "gh-should-never-reach", "CCQUOTA_TOKEN": "cq-should-never-reach",
             "FLEET_CONF_DIR": "/should/never/reach"})
         self.proc = None
@@ -500,6 +507,29 @@ class T(unittest.TestCase):
         self.assertIn("only an admin may", b.book()["why"])
         time.sleep(1)
         self.assertEqual(b.gh.jits(), [])
+
+
+    # H ---------------------------------------------------------------------------
+    def test_h_beat(self):
+        b = self.box
+        b.ci_env("FLEET_CI_TOKEN=%s\n" % TOKEN)
+        b.start(FLEET_CI_IDLE_EVERY="4", FLEET_CI_HOT_SECS="1.5")
+        self.assertTrue(b.wait_state("idle"), b.book())
+        # the first minutes are fast, then slow with no job
+        self.assertTrue(until(10, lambda: b.book().get("beat") == 4), b.book())
+        # a wake ("just merged"): fast at once, not at the end of the slow beat
+        t = time.time()
+        open(os.path.join(b.state, "ci-runner.wake"), "w").close()
+        self.assertTrue(until(3, lambda: b.book().get("beat") == 0.3), b.book())
+        self.assertLess(time.time() - t, 3)
+        self.assertTrue(until(10, lambda: b.book().get("beat") == 4), b.book())
+        # a job inside one slow beat (1.5 s < 4 s): counted, not a crash, fast again
+        b.go()
+        self.assertTrue(until(10, lambda: (b.book().get("runs") or {}).get("total") == 1), b.book())
+        self.assertNotEqual(b.book().get("state"), "error", b.book())
+        self.assertTrue(until(5, lambda: len(b.gh.jits()) == 2), b.gh.reqs)
+        self.assertTrue(until(3, lambda: b.book().get("beat") == 0.3), b.book())
+        self.assertTrue(b.wait_state("idle"), b.book())
 
 
 # --------------------------------------------------------------- drills ----------

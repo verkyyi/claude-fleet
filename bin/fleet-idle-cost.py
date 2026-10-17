@@ -296,41 +296,15 @@ class IdleGuard:
         for name in names:
             if name.startswith(".") or name == self.a.login:
                 continue
-            path = os.path.join(d, name)
             try:
-                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
-                             getattr(os, "O_NONBLOCK", 0))
-                try:
-                    st = os.fstat(fd)
-                    if not stat.S_ISREG(st.st_mode):
-                        raise ValueError("not a regular file")
-                    if os.environ.get("FLEET_MACHINE_SESSIONS_OWNER_CHECK", "1") != "0":
-                        owner = pwd.getpwuid(st.st_uid)
-                        if name not in (owner.pw_name, os.path.basename(owner.pw_dir)):
-                            raise ValueError("wrong owner")
-                    lines = os.read(fd, 65536).decode().splitlines()
-                finally:
-                    os.close(fd)
-                count, ts = [int(x) for x in lines[0].split()[:2]]
-                age = time.time() - ts
-                if count < 0 or age < -60 or age > 300:
-                    raise ValueError("stale inventory")
-                if len(lines) < 2 or not lines[1].startswith("idle-v1 "):
+                st, count, r = read_published(d, name)
+                if r is None:
                     if count or st.st_uid in foreign:
                         raise ValueError("working state not published")
                 else:
-                    r = json.loads(lines[1][8:])
-                    if not 0 <= time.time() - r["ts"] <= 300 or r["unknown"]:
-                        raise ValueError("working state unavailable")
-                    if not isinstance(r["working"], int) or r["working"] < 0:
-                        raise ValueError("invalid working count")
                     if r["working"]:
                         return "working: %s session(s) in login %s" % (r["working"], name)
-                    mark = os.lstat(os.path.join(d, ".idle-" + name))
-                    if not stat.S_ISREG(mark.st_mode) or mark.st_uid != st.st_uid:
-                        raise ValueError("activity marker has wrong owner or type")
-                    if mark.st_mtime_ns != r["activity"]:
-                        raise ValueError("activity since the last working-state snapshot")
+                    mark = published_mark(d, name, st, r)
                     if self.previous is not None and mark.st_mtime_ns >= self.started * 1e9:
                         return "busy interval: activity in login " + name
                     old = self.peer_activity.setdefault(name, mark.st_mtime_ns)
@@ -382,6 +356,84 @@ class IdleGuard:
         reason = self.peers(foreign)
         self.previous = rows
         return reason
+
+
+def read_published(d, name):
+    """One login's published machine-session row (fleet_machine_sessions_publish):
+    (stat, count, working-state record | None when the login publishes none). A
+    file that is not its login's own regular file, garbled or stale, or a record
+    that is stale / unknown / malformed raises ValueError — never zero work."""
+    path = os.path.join(d, name)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) |
+                 getattr(os, "O_NONBLOCK", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("not a regular file")
+        if os.environ.get("FLEET_MACHINE_SESSIONS_OWNER_CHECK", "1") != "0":
+            owner = pwd.getpwuid(st.st_uid)
+            if name not in (owner.pw_name, os.path.basename(owner.pw_dir)):
+                raise ValueError("wrong owner")
+        lines = os.read(fd, 65536).decode().splitlines()
+    finally:
+        os.close(fd)
+    count, ts = [int(x) for x in lines[0].split()[:2]]
+    age = time.time() - ts
+    if count < 0 or age < -60 or age > 300:
+        raise ValueError("stale inventory")
+    if len(lines) < 2 or not lines[1].startswith("idle-v1 "):
+        return st, count, None
+    r = json.loads(lines[1][8:])
+    if not 0 <= time.time() - r["ts"] <= 300 or r["unknown"]:
+        raise ValueError("working state unavailable")
+    if not isinstance(r["working"], int) or r["working"] < 0:
+        raise ValueError("invalid working count")
+    return st, count, r
+
+
+def published_mark(d, name, st, r):
+    """The login's activity marker, checked against its record: a state change
+    since the snapshot (fleet-idle-activity.sh touched it) raises ValueError."""
+    mark = os.lstat(os.path.join(d, ".idle-" + name))
+    if not stat.S_ISREG(mark.st_mode) or mark.st_uid != st.st_uid:
+        raise ValueError("activity marker has wrong owner or type")
+    if mark.st_mtime_ns != r["activity"]:
+        raise ValueError("activity since the last working-state snapshot")
+    return mark
+
+
+def published_idle(d, ci_busy=False):
+    """The machine's idle answer from what every login PUBLISHED — the same rule
+    as IdleGuard.peers, applied to every login, with no tmux, no `ps` and no fork
+    (issue #4359): for a reader that runs on a beat and cannot scan another
+    login's tmux — the node daemon backing its own clocks off. "" = idle, else
+    the reason. A login with sessions but no fresh working-state record, a stale
+    or foreign file, or a state change since its snapshot is NOT idle; so is a CI
+    job (ci_busy: the runner's own word). An empty or missing directory is idle:
+    no login has a session to work in."""
+    if ci_busy:
+        return "ci: a job running"
+    try:
+        names = os.listdir(d)
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return "unknown: machine session inventory unreadable"
+    for name in sorted(names):
+        if name.startswith("."):
+            continue
+        try:
+            st, count, r = read_published(d, name)
+            if r is None:
+                if count:
+                    raise ValueError("working state not published")
+                continue
+            if r["working"]:
+                return "working: %s session(s) in login %s" % (r["working"], name)
+            published_mark(d, name, st, r)
+        except (OSError, ValueError, KeyError, IndexError, TypeError) as e:
+            return "unknown: login %s (%s)" % (name, e)
+    return ""
 
 
 def fork_counter():

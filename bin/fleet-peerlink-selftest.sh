@@ -33,6 +33,11 @@
 #   K. exec/fwd — (issue #3538) `exec` runs one command over an up link's master (rc 3
 #                 for none / down); `fwd` adds `-L <port>:127.0.0.1:<rport>`, prints
 #                 the port, cancels it at FLEET_OPEN_PAGE_SECS; refused → rc 1
+#   L. quiet    — (issue #4359) past FLEET_PEERLINK_ACTIVE_SECS with nothing going on
+#                 the keeper beats every FLEET_PEERLINK_IDLE_TICK: no `-O check`, no
+#                 hub ask between; a `sock` request wakes it at once (beat back to
+#                 TICK, the link checked); a master that dies while quiet is rebuilt
+#                 within seconds; the links stay up throughout; the doctor stays ok
 #
 # No network: bin/fleet-peerlink-fake-ssh.py plays ssh, a script plays
 # fleet-peer-cert.sh.
@@ -117,6 +122,8 @@ links_is() { [ "$(links)" = "$1" ]; }
 all_closed() { [ -z "$(links)" ] && [ "$(masters_alive)" = 0 ]; }
 masters_alive() { awk '$1 == "master" { print $4 }' "$B/fs/log" 2>/dev/null | while read -r p; do kill -0 "$p" 2>/dev/null && echo "$p"; done | wc -l | tr -d ' '; }
 ME=$(id -un)
+# legs A–K pin the 2 s beat; leg L the quiet one (issue #4359)
+export FLEET_PEERLINK_IDLE_TICK=2
 
 # --- A. want ------------------------------------------------------------------
 box a 1 mac-a:bob mac-a:carol "home:$ME" home:dave mac-n:bob:lost "mac-b:-"
@@ -348,7 +355,49 @@ K_FWD_RC=255 kpl fwd mac-d "$(id -un)" 8765 >/dev/null 2>&1; [ $? = 1 ] && ok ||
 kpl fwd mac-n x 8765 >/dev/null 2>&1; [ $? = 3 ] && ok || fail "K: fwd over a link that is down must be rc 3"
 kpl fwd mac-d "$(id -un)" 99999 >/dev/null 2>&1; [ $? = 2 ] && ok || fail "K: fwd to a bad port must be rc 2"
 
+# ---- L. quiet (issue #4359): the keeper looks every IDLE_TICK, a request wakes it ----------
+box l 0
+export FLEET_PEERLINK_ACTIVE_SECS=1 FLEET_PEERLINK_IDLE_TICK=30 FLEET_PEERLINK_PEERS_SECS=1
+cat > "$B/ssh" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >> "$B/ssh.calls"
+exec python3 "$BIN/fleet-peerlink-fake-ssh.py" "\$@"
+EOS
+chmod +x "$B/ssh"
+: > "$B/peers.calls"
+sed -i.bak 's|^cat "|printf x >> "'"$B"'/peers.calls"; cat "|' "$B/peers.sh"
+export FLEET_PEERLINK_SSH="$B/ssh"
+peers mac-a:bob:entry=203.0.113.4/22022
+beat() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("beat"))' "$B/conf/peerlink/state.json" 2>/dev/null; }
+beat_is() { [ "$(beat)" = "$1" ]; }
+checks() { grep -c -- ' -O check ' "$B/ssh.calls" 2>/dev/null || true; }
+checks_over() { [ "$(checks)" -gt "$1" ]; }
+link_rebuilt() {   # link_rebuilt <old pid>: up again on another master
+  python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["links"][0]; sys.exit(not (l["phase"] == "up" and str(l["pid"]) != sys.argv[2]))' \
+    "$B/conf/peerlink/state.json" "$1" 2>/dev/null
+}
+start
+until_ok 10 links_is "mac-a@bob:up" || fail "L: the link never came up: $(links)"
+until_ok 6 beat_is 30.0 && ok || fail "L: nothing going on, the beat is $(beat), want 30.0"
+c0=$(checks); h0=$(wc -c < "$B/peers.calls" | tr -d ' ')
+sleep 4
+c1=$(checks); h1=$(wc -c < "$B/peers.calls" | tr -d ' ')
+[ "$c1" = "$c0" ] && [ "$h1" = "$h0" ] && ok || fail "L: quiet, yet $((c1 - c0)) -O check and $((h1 - h0)) hub asks in 4 s"
+links_is "mac-a@bob:up" && ok || fail "L: a quiet keeper let the link go: $(links)"
+python3 "$PL" status --check >/dev/null && ok || fail "L: the doctor on a quiet keeper: $(python3 "$PL" status --check)"
+# a request: the keeper looks now
+python3 "$PL" sock mac-a bob >/dev/null || fail "L: sock on an up link"
+c2=$(checks)
+until_ok 2 beat_is 2.0 && ok || fail "L: a request did not wake the keeper (beat $(beat))"
+until_ok 2 checks_over "$c2" && ok || fail "L: woken, the keeper checked nothing"
+# quiet again; a master that dies is rebuilt within seconds, not at the quiet beat
+until_ok 6 beat_is 30.0 || fail "L: not quiet again: $(beat)"
+p1=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.argv[1]))["links"]][0])' "$B/conf/peerlink/state.json")
+kill "$p1" 2>/dev/null
+until_ok 6 link_rebuilt "$p1" && ok || fail "L: a master killed while quiet was not rebuilt: $(links)"
+stop; unset FLEET_PEERLINK_ACTIVE_SECS FLEET_PEERLINK_PEERS_SECS; export FLEET_PEERLINK_IDLE_TICK=2
+
 [ -n "${PEERLINK_SHOW:-}" ] && cat "$WORK/doctor-rows.txt"
 
 if [ "$FAILS" -gt 0 ]; then printf 'fleet-peerlink selftest: %d FAILED, %d passed\n' "$FAILS" "$CHECKS" >&2; exit 1; fi
-printf 'selftest OK: fleet-peerlink (%d checks — want · linger · doctor · sock · pane · units · routes · all · switch · list · exec/fwd)\n' "$CHECKS"
+printf 'selftest OK: fleet-peerlink (%d checks — want · linger · doctor · sock · pane · units · routes · all · switch · list · exec/fwd · quiet)\n' "$CHECKS"
