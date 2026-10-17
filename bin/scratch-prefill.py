@@ -5,8 +5,12 @@ Args: socket-label pane-id name-file warm(0|1). The caller owns the window;
 this helper owns and removes the temporary name file and tmux paste buffer.
 Cold readiness follows scratch-pool.sh: a painted prompt alone is too early,
 so wait for a stable screen AND ten seconds since the empty prompt appeared.
+An agent that says so itself (OSC 7501 idle, @agent_status — issue #2536) needs
+no guess: its own word stands for both who owns the pane and that its input is
+up, so the draft goes in once the empty prompt holds for one poll.
 """
 
+import json
 import os
 from pathlib import Path
 import re
@@ -21,6 +25,23 @@ POLL = 0.5
 SETTLE = 10
 STABLE = 4
 TIMEOUT = 120
+META = ("#{pane_dead}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}"
+        "\t#{@claude_state}\t#{pane_in_mode}\t#{@agent_status}")
+RECHECK = 1.5  # after a paste: an input still empty swallowed it — paste once more
+
+
+def agent_says_idle(raw, state):
+    """The agent's own OSC 7501 report (the relay's @agent_status, cleared by the
+    wrapper before every launch): idle/done from a known agent app, and the
+    session not exited — a shell left behind by an exited agent never counts."""
+    if state == "exited" or not raw:
+        return False
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        return False
+    return (isinstance(report, dict) and report.get("state") in ("idle", "done")
+            and report.get("app") in ("claude-code", "codex"))
 
 
 def has_input(line, start):
@@ -116,6 +137,22 @@ def codex_owns_input(tm, pane):
     return False
 
 
+def paste(tm, pane, text, record):
+    buf = "scratch-draft-" + str(os.getpid())
+    try:
+        tm("set-buffer", "-b", buf, "--", text)
+        tm("paste-buffer", "-p", "-d", "-b", buf, "-t", pane)
+        record("delivered unsent")
+    except (OSError, subprocess.SubprocessError):
+        record("paste failed; not retried")
+        raise
+    finally:
+        try:
+            tm("delete-buffer", "-b", buf)
+        except subprocess.CalledProcessError:
+            pass
+
+
 def prefill(socket, pane, draft, warm):
     prefix = ["tmux", "-L", socket]
 
@@ -145,17 +182,16 @@ def prefill(socket, pane, draft, warm):
     previous = None
     while time.monotonic() < deadline:
         try:
-            meta = tm("display-message", "-p", "-t", pane,
-                      "#{pane_dead}\t#{pane_current_command}\t#{cursor_x}\t#{cursor_y}"
-                      "\t#{@claude_state}\t#{pane_in_mode}").decode().strip().split("\t")
+            meta = tm("display-message", "-p", "-t", pane, META).decode().strip("\n").split("\t")
         except (OSError, subprocess.SubprocessError):
             appeared = unchanged = previous = None
             time.sleep(POLL)
             continue
-        if len(meta) != 6 or meta[0] != "0":
+        if len(meta) != 7 or meta[0] != "0":
             record("pane is unavailable")
             return
-        command, cx, cy, state, mode = meta[1:]
+        command, cx, cy, state, mode, status_raw = meta[1:]
+        native = agent_says_idle(status_raw, state)
         if state in ("working", "busy", "needs", "looping") or mode != "0":
             note("session is already in use")
             return
@@ -163,7 +199,7 @@ def prefill(socket, pane, draft, warm):
         # npm installs run as node. In particular, never paste into a shell left
         # behind by a failed/exited agent, even if its old prompt is still visible.
         try:
-            owned = (command in ("claude", "codex", "node")
+            owned = (native or command in ("claude", "codex", "node")
                      or re.fullmatch(r"\d+\.\d+\.\d+[\w.-]*", command)
                      or codex_owns_input(tm, pane))
             screen = (tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
@@ -186,21 +222,23 @@ def prefill(socket, pane, draft, warm):
                 appeared = now
             if unchanged is None or screen != previous:
                 unchanged = now
-            if warm or (now - appeared >= SETTLE and now - unchanged >= STABLE):
-                buf = "scratch-draft-" + str(os.getpid())
-                try:
-                    tm("set-buffer", "-b", buf, "--", text)
-                    tm("paste-buffer", "-p", "-d", "-b", buf, "-t", pane)
-                    record("delivered unsent")
-                except (OSError, subprocess.SubprocessError):
-                    record("paste failed; not retried")
-                    raise
-                finally:
+            if (warm or (native and previous == screen)
+                    or (now - appeared >= SETTLE and now - unchanged >= STABLE)):
+                paste(tm, pane, text, record)
+                if native and not warm:
+                    # The agent's word can land a beat before its input is mounted;
+                    # a swallowed paste leaves the prompt EMPTY. Re-paste only then:
+                    # any text there (ours or the person's) is never pasted over.
+                    time.sleep(RECHECK)
                     try:
-                        tm("delete-buffer", "-b", buf)
-                    except subprocess.CalledProcessError:
-                        pass
-                return  # Deliberately no Enter, no seed argument, no retry paste.
+                        cx, cy = tm("display-message", "-p", "-t", pane, META).decode().strip("\n").split("\t")[2:4]
+                        after = tm("capture-pane", "-p", "-e", "-t", pane).decode("utf-8", "replace")
+                    except (OSError, ValueError, subprocess.SubprocessError):
+                        return
+                    if input_status(after, int(cx), int(cy)) == "empty":
+                        paste(tm, pane, text, record)
+                        record("delivered unsent (second paste)")
+                return  # Deliberately no Enter, no seed argument.
         else:
             appeared = unchanged = None
         previous = screen

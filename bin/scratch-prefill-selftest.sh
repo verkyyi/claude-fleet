@@ -57,8 +57,8 @@ def drive(draft, frames, warm=False, timeout=30, fail_paste=False, probe_failure
     return calls, rc
 
 
-def frame(screen='❯ \x1b[2;90mTry a task\x1b[0m\n', command='claude', cx=2, state='', cy=0, mode=0, dead=0):
-    return f'{dead}\t{command}\t{cx}\t{cy}\t{state}\t{mode}\n', screen
+def frame(screen='❯ \x1b[2;90mTry a task\x1b[0m\n', command='claude', cx=2, state='', cy=0, mode=0, dead=0, status=''):
+    return f'{dead}\t{command}\t{cx}\t{cy}\t{state}\t{mode}\t{status}\n', screen
 
 
 def pastes(calls):
@@ -137,6 +137,40 @@ assert rc == 0 and len(pastes(calls)) == 1
 calls, rc = drive(text, lambda t: frame('›\n', command='codex'), warm=True)
 assert rc == 0 and len(pastes(calls)) == 1
 print('ok Claude/Codex: both prompt glyphs, versioned process and styled ghosts')
+
+# The agent's own OSC 7501 word (#2536): a Claude pane under the status relay is
+# shell-named, so the process name proves nothing. Its idle report stands for
+# both ownership and a mounted input: one stable poll, no ten-second settle.
+IDLE = '{"state":"idle","kind":"","msg":"","app":"claude-code","ts":1}'
+def native(swallow=0, **kw):
+    pasted = [0]
+    def saw(now, argv):
+        if argv[3] == 'paste-buffer':
+            pasted[0] += 1
+    def frames(t):
+        typed = pasted[0] > swallow
+        return frame('❯ timing\n' if typed else '❯ \n', command='zsh', cx=10 if typed else 2,
+                     **dict(dict(status=IDLE, state='done'), **kw))
+    return saw, frames
+saw, frames = native()
+calls, rc = drive(text, frames, probe_failure=saw)
+assert rc == 0 and len(pastes(calls)) == 1 and pastes(calls)[0][0] == 0.5, calls
+assert any(args[0] == 'set-option' and args[-1] == 'delivered unsent' for _, args in calls)
+saw, frames = native(swallow=1)
+calls, rc = drive(text, frames, probe_failure=saw)
+assert rc == 0 and [t for t, _ in pastes(calls)] == [0.5, 0.5 + mod.RECHECK], calls
+assert any(args[0] == 'set-option' and args[-1] == 'delivered unsent (second paste)' for _, args in calls)
+saw, frames = native(swallow=5)
+calls, rc = drive(text, frames, probe_failure=saw)
+assert rc == 0 and len(pastes(calls)) == 2, 'a second swallowed paste is never retried again'
+for bad in (dict(state='exited'), dict(status=IDLE.replace('claude-code', 'other')),
+            dict(status=IDLE.replace('"idle"', '"working"')), dict(status='not json')):
+    saw, frames = native(**bad)
+    calls, rc = drive(text, frames, timeout=20, probe_failure=saw)
+    assert rc == 0 and not pastes(calls), bad
+calls, rc = drive(text, lambda t: frame('❯ my words\n', command='zsh', cx=12, status=IDLE))
+assert rc == 0 and not pastes(calls)
+print('ok native 7501 idle: shell-named Claude owns its input, one stable poll, one re-paste only into an empty input')
 
 with patch.object(mod, 'codex_owns_input', return_value=True):
     calls, rc = drive(text, lambda t: frame('› \n', command='zsh'), warm=True)

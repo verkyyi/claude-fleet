@@ -470,6 +470,23 @@ reset_scratch
 WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name label --prompt 'explicit seed'
 [ -s "$PREFILL_LOG" ] && fail "P an explicit --prompt takes precedence over the name draft"
 
+# ============== A2: the admission reservation reaches the launch ==============
+# A repo under task authority: --finish reserves once at the hub and the launch
+# line carries that reservation, so the session does not reserve a second time.
+# It was quoted through a shq this script never defined: the line lost it.
+cat > "$WORK/fakebin/fake-authority" <<'SH'
+#!/bin/bash
+[ "$2" = --finish ] && printf '{"mode": "legacy", "reservation": "1111-it'"'"'s"}\n' || printf '{"mode": "legacy"}\n'
+SH
+chmod +x "$WORK/fakebin/fake-authority"
+reset_scratch
+FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/fakebin/fake-authority" \
+  WINS=plan FLEET_MAX_SESSIONS=0 run_raw
+grep -q 'shq' "$WORK/err" && fail "A2 the launch quoting must not call an undefined shq" "$(cat "$WORK/err")"
+grep -qF "FLEET_AUTHORITY_START='1111-it'\\''s'" "$NEWWIN_LOG" \
+  || fail "A2 the launch line lost the admission reservation" "$(cat "$NEWWIN_LOG")"
+ok "A2 the hub reservation from --finish is carried, shell-quoted, onto the launch line"
+
 cat > "$WORK/bin/scratch-pool.sh" <<'SH'
 #!/bin/bash
 [ "${1:-}" = claim ] && printf '@9\tscratch-1\t%s/main-scratch-1\n' "$FLEET_MAIN"

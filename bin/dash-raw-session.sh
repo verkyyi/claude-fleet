@@ -864,7 +864,7 @@ else
     _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
     stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
   fi
-  [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START=$(shq "$FLEET_AUTHORITY_START") $launch"
+  [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START='$(printf '%s' "$FLEET_AUTHORITY_START" | sed "s/'/'\\\\''/g")' $launch"
   win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
     || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1
