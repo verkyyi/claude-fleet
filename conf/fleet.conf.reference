@@ -608,6 +608,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Codex native skills @group=spawn @tier=advanced @scope=fleet @edit=enum @options=auto,0,1
 #FLEET_CODEX_NATIVE_SKILLS=auto
 
+# Pilot: a Codex window's context % and model come from the native event stream
+# on the runtime's existing monitor connection instead of rereading the session
+# (rollout) file; a disconnect falls back to the rollout reader. Off by default.
+# @label=Codex native usage pilot @group=spawn @tier=advanced @scope=fleet @edit=bool
+#FLEET_CODEX_NATIVE_USAGE=0
+
 # Optional account home for this Codex fleet. It must already exist and contain
 # that account's native login/config; saved-session recovery retains its own home.
 # @label=Codex account home @group=spawn @tier=advanced @scope=fleet @edit=str

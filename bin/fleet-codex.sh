@@ -127,6 +127,9 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
   [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
   unset _fx_sess
 fi
+# The native usage pilot (#4557) is read by the private runtime from its
+# environment; a conf value reaches it only exported. Off unless set to 1.
+if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAGE=1; else unset FLEET_CODEX_NATIVE_USAGE; fi
 
 if ! command -v codex >/dev/null 2>&1; then
   printf 'fleet-codex: FLEET_AGENT=codex but `codex` is not on PATH — install OpenAI Codex CLI (npm i -g @openai/codex) and `codex login`, or set FLEET_AGENT back to claude.\n' >&2
