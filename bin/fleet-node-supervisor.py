@@ -12,7 +12,7 @@ machine's work ONCE, however many logins the machine carries:
                 While a child's OLD LaunchDaemon is still installed, launchd owns
                 it and this daemon only reports it (`legacy`) — 共同约定 5.
   * tasks     — the machine-level periodic jobs (diskguard, memguard, the orphan
-                watchdog, Spotlight off on a Mac …), each run as at most ONE copy: a task still running
+                watchdog, Spotlight off and a static desktop on a Mac …), each run as at most ONE copy: a task still running
                 when it is due again is skipped, and every run holds
                 `locks/<task>.lock`, so a hand-run `tick` cannot double it either.
   * accounts  — the account-level jobs (issue #2332, C4): ONE table, read from
@@ -845,6 +845,15 @@ def default_table(paths):
             *([{"name": "spotlight", "every": 3600, "timeout": 300,
                 "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-spotlight.sh"), "off", "--tick"],
                 "core": {"op": "power", "args": {"profile": "spotlight-off"}}}]
+              if MAC else []),
+            # A static desktop on a headless managed Mac (#4362): a login running the
+            # Aerial wallpaper with no display connected gets a solid picture and no
+            # screen saver, once (<state>/wallpaper/<login>; switched back by hand =
+            # the person's choice, only the doctor's `wallpaper` row says so). At the
+            # daemon's start and hourly; FLEET_KEEP_WALLPAPER=1 / wallpaper.keep skip it.
+            *([{"name": "wallpaper", "every": 3600, "timeout": 120,
+                "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-wallpaper.sh"), "off", "--tick"],
+                "core": {"op": "power", "args": {"profile": "wallpaper-off"}}}]
               if MAC else []),
             # The one updater (C6, #2334): every part of the machine to the hub's
             # release, or none. A switch ends in a restart request (below). A new

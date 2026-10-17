@@ -848,7 +848,7 @@ EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
   | `exec-as` | login, argv | 以该登录身份跑一次，回 rc 与输出；argv[0] 必须是 `<current>/bin/` 下 root 的文件（runas.go prepCmd 的规矩搬进核心）。请求行随带调用方的 stdin / stdout / stderr（SCM_RIGHTS，恰好 3 个，#3669）时就在它们上跑：先回 `{ok, pid}`、结束回 `{exit}`，连接一断即停整个进程组 |
   | `kill` | pid | 只限受管登录的进程或核心自己的任务 |
   | `memguard` | level | `fleet-memguard.sh --once`（once · report） |
-  | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`） |
+  | `power` | profile | `spotlight-off`（Mac：`fleet-spotlight.sh off --tick`）· `wallpaper-off`（Mac：`fleet-wallpaper.sh off --tick`，#4362） |
   | `switch` | sha | `<state>/staging/<sha>/`（降权更新器放的，#3670）或 `<root>/<sha>/`：staging 先**整份复制**成 root 自己的 `<root>/.incoming-<sha>`（新 inode、权限重置），按它 `staged.json` 的表从已验的工件填 `<root>/tools/`，再用核心自己的公钥 `<state>/release.pub` 复核签名（纯 Python Ed25519，`bin/fleet_ed25519.py`，不靠它要换掉的 ccquota）和每个文件的大小、摘要，清单外只认更新器自己的产物；`bin/ccquota` 用机器的固定身份签（`fleet_node_codesign.py`），移进 `<root>/<sha>/`，信任锚按发布教的更新（链里锚直接担保的根 → 新锚、旧的留 `.prev`；吊销的 id 只增——锚只由核心写，#3835），再 `.prev` = 旧、`current` = 新 |
   | `rollback` | — | `current` ⇄ `.prev`，目标同样复核 |
   | `update` | step | 降权更新器的 root 一半（#3670）：`<current>/bin/fleet-node-update.py root <step>` 以 root 跑——`outside`（启动缓存、管理员 agent 的 ccquota 与重启、各登录的工具链接）· `credsep`（代码副本刷新 + 池同步）· `prune`（清旧版本）；只收名字，不收 argv |

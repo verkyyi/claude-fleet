@@ -392,6 +392,7 @@
 45.0 spinner-process-budget-maintenance
 8.1 spinner-unwatched-poll
 0.1 spotlight-on
+0.1 wallpaper-aerial
 0.2 stable-macos-ahead
 0.1 stable-macos-pruned-chain
 0.2 stable-push-no-workflows

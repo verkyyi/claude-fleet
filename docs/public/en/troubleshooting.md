@@ -1018,6 +1018,13 @@ From `fleet doctor`.
 - **What it is**: whether Spotlight is still indexing the disk. It competes with sessions for CPU and disk.
 - **On WARN / FAIL**: `sudo mdutil -a -i off` (to undo: `sudo mdutil -a -i on`).
 
+#### `wallpaper`
+
+From `fleet doctor` (managed Macs only).
+
+- **What it is**: whether a host with no display attached still runs a dynamic (Aerial) desktop. Nobody sees it, yet it keeps using CPU. The machine daemon checks hourly and, with no display connected, switches each login to the system's solid-colour picture and turns its screen saver off — once per login; a machine with a display is left alone.
+- **On WARN / FAIL**: `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` changes it now. A login the row names as switched back by hand was changed back on purpose; fleet leaves it. To keep the dynamic desktop: `sudo touch /var/db/fleet-node/wallpaper.keep`.
+
 #### `siri`
 
 From `fleet doctor`.

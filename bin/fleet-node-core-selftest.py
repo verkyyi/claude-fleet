@@ -388,7 +388,7 @@ class E_Kill(Sandbox):
 
 class F_Fixed(Sandbox):
     def test_memguard_power(self):
-        for n in ("fleet-memguard.sh", "fleet-spotlight.sh"):
+        for n in ("fleet-memguard.sh", "fleet-spotlight.sh", "fleet-wallpaper.sh"):
             with open(os.path.join(self.bin, n), "w") as f:
                 f.write('#!/bin/bash\necho "%s $* ${FLEET_MEM_SPIKE_ACTION:-kill}" >> %s/fixed.log\n'
                         % (n, self.d))
@@ -397,11 +397,12 @@ class F_Fixed(Sandbox):
         self.assertEqual(self.req("memguard", {"level": "once"}).get("rc"), 0)
         self.assertEqual(self.req("memguard", {"level": "report"}).get("rc"), 0)
         self.assertEqual(self.req("power", {"profile": "spotlight-off"}).get("rc"), 0)
+        self.assertEqual(self.req("power", {"profile": "wallpaper-off"}).get("rc"), 0)
         self.assertIn("refused", self.req("memguard", {"level": "kill-all"}))
         self.assertIn("refused", self.req("power", {"profile": "shutdown"}))
         got = open(os.path.join(self.d, "fixed.log")).read().splitlines()
         self.assertEqual(got, ["fleet-memguard.sh --once kill", "fleet-memguard.sh --once report",
-                               "fleet-spotlight.sh off --tick kill"])
+                               "fleet-spotlight.sh off --tick kill", "fleet-wallpaper.sh off --tick kill"])
 
     def test_no_home(self):
         # launchd starts the core with no HOME: a `set -u` script must still get one (#3556)

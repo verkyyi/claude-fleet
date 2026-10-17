@@ -1191,7 +1191,7 @@ class G_DefaultTable(Sandbox):
                     del os.environ[k]
         names = [x["name"] for x in t["tasks"]]
         self.assertEqual(names, ["diskguard", "memguard", "orphans", "shared-dirs", "machine-reading"]
-                         + (["spotlight"] if fns.MAC else []) + ["update"])
+                         + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update"])
         by = {x["name"]: x for x in t["tasks"]}
         self.assertIsNone(t["account"], "the account table is the runtime's templates")
         self.assertEqual(by["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
