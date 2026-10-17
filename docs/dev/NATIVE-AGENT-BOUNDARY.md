@@ -1066,6 +1066,14 @@ exec 260 项、remote TUI 283 项，计数包含既有信任和工具阶段，�
 对照/观察夹具。生成器只写 stdout，尚不安装、更改现有 requirements 或删除启动器 bypass。
 操作入口和安装前置条件见 [原生守卫配置](CODEX-RUNTIME.md#managed-guard-configuration-candidate)。
 
+镜像暂存候选复用 `extras/managed-node/image-stage.py`，把预览存在既有
+`.release/staged.json` 的 `codex_managed_preview` 字段，不放行额外的未签名旁路文件。
+构建和异版本 seed 时生成；同版本重启不重复生成。node-owned 预览绑定最终版本路径，
+image-owned 个人 POD 预览绑定镜像种子而非登录用户可写的 PVC。缺守卫、错误登记或写入失败
+不得推进 `current`；旧版兼容、重试和镜像回退走既有机制。此字段不是可信授权来源，
+更不是系统策略已安装；实际激活必须重新从受信发布物生成并验收权限、既有策略合并、
+会话生命周期与版本回收。详见 [镜像更新与恢复](MANAGED-LINUX.md#upgrade-and-recovery)。
+
 ### 启动期插件查询减法
 
 旧启动路径连续运行 `sync` 与 `dirs` 两个 Python 进程，各自读取覆盖配置和已安装插件。
@@ -1122,6 +1130,20 @@ Codex 本身提供自动压缩阈值，未设置使用模型默认值，见
 | 托管、发布与性能 | 本批未改在线部署、资源或用户数据 | CI、真实 drill/两副本/重连/重建验收与正常发布；同配置直接原生启动对照及可重复端到端结果 |
 
 任何一行尚缺证据，均不标记总体目标完成。现有无关回归失败独立记录，不通过降低验收范围消除。
+
+### 管理层守卫安装候选：显式操作，不进入启动热路径
+
+复用 `image-stage.py guards-install`，从既有守卫表重新生成配置，仅管理员显式调用；
+暂存预览不是授权材料，stage/seed/boot 均不自动安装。检查 root 所有权、不可由其他用户
+写入的目录/脚本/解释器，保留无关 requirements，遇到现存 hook 策略冲突拒绝覆盖。
+固定到受保护的 `current/hooks`，个人 POD 使用镜像种子，不使用用户可写 PVC。
+不添加新策略引擎、常驻服务或会话启动时扫描；不移除全局 bypass，不部署用户节点。
+
+本批本机生命周期单测为 69 项通过，正向安装的 root 身份采用 mock；新增独立 CI
+探针在一次性 Linux VM 的私有 mount namespace 内验证真实 root 文件和非 root 原生
+读取。后者是否通过以对应 CI 结果为准，不能把单测替代原生验收。更新/回退路径单测
+不等于线上发布、重建、旧会话兼容已经验收。具体命令和限制见
+[原生守卫配置](CODEX-RUNTIME.md#managed-guard-configuration-candidate)。
 
 ## 默认读屏推理退出
 

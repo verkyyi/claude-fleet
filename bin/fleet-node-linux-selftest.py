@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import json
 import re
+import shutil
 import hashlib
 import subprocess
 import sys
@@ -1505,6 +1506,7 @@ class LinuxNode(unittest.TestCase):
             src, dest = Path(d, 'src'), Path(d, 'dest')
             artifacts = src / '.release/artifacts'
             artifacts.mkdir(parents=True)
+            self.managed_release(src)
             names = ('ccquota', 'claude', 'codex', 'tmux', 'codex-code-mode-host')
             manifest = {'sha': 'a' * 40, 'artifacts': []}
             for name in names:
@@ -1522,10 +1524,21 @@ class LinuxNode(unittest.TestCase):
                 m.stage(src, dest)
             self.assertFalse(dest.exists())
             helper.write_bytes(original)
+            incomplete = Path(d, 'incomplete')
+            refused = Path(d, 'refused')
+            shutil.copytree(src, incomplete)
+            (incomplete / 'hooks/base-readonly-guard.py').unlink()
+            with self.assertRaisesRegex(ValueError, 'script is missing'):
+                m.stage(incomplete, refused)
+            self.assertFalse((refused / 'current').exists())
+            self.assertFalse((refused / manifest['sha'] / '.release/staged.json').exists())
             m.stage(src, dest)
             installed = dest / 'current/tools/bin/codex-code-mode-host'
             self.assertEqual(installed.read_bytes(), original)
             self.assertTrue(installed.stat().st_mode & 0o111)
+            import tomllib
+            preview = tomllib.loads(json.loads((dest / 'current/.release/staged.json').read_text())['codex_managed_preview'])
+            self.assertEqual(preview['hooks']['managed_dir'], str((dest / manifest['sha'] / 'hooks').resolve()))
 
     def test_prepare_image_context_has_every_helper(self):
         """#3554: a ccquota whose --pinned drops helpers (older than #3017) made
@@ -1582,6 +1595,301 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
         (d / '.release/manifest.json').write_text(json.dumps({'sha': sha, 'seq': seq}))
         (d / 'bin/fleet-node-linux.py').write_text('# ' + sha)
         return d
+
+    @staticmethod
+    def managed_release(destination):
+        for relative in ('bin/fleet-hooks-emit.sh', 'hooks/codex-map.json', 'hooks/settings-hooks.json',
+                         'hooks/bash-guard.py', 'hooks/base-readonly-guard.py'):
+            target = Path(destination) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(BIN.parent / relative, target)
+
+    def test_managed_guard_preview_relocates_and_rolls_back_with_runtime(self):
+        import tomllib
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'runtime', 'state'))
+            state.mkdir()
+            first, second = 'a' * 40, 'b' * 40
+            for sequence, revision in enumerate((first, second), 1):
+                release = self.fake_release(seed, revision, sequence)
+                self.managed_release(release)
+                (release / '.release/staged.json').write_text(json.dumps({'existing': {'sequence': sequence}}))
+                self.assertTrue(image.stage_managed_guards(release, release))
+            image.swap(seed / 'current', first)
+            self.assertEqual(image.seed(seed, runtime, state), 'seeded')
+            preview_path = runtime / first / '.release/staged.json'
+            first_preview = preview_path.read_bytes()
+            preview = tomllib.loads(json.loads(first_preview)['codex_managed_preview'])
+            self.assertEqual(json.loads(first_preview)['existing'], {'sequence': 1})
+            self.assertEqual(sorted(path.name for path in preview_path.parent.iterdir()), ['manifest.json', 'staged.json'])
+            self.assertEqual(preview['hooks']['managed_dir'], str((runtime / first / 'hooks').resolve()))
+            self.assertNotIn('.seed-partial', first_preview.decode())
+            self.assertNotIn(str(seed), first_preview.decode())
+            self.assertEqual(preview_path.stat().st_mode & 0o777, 0o644)
+            with patch.object(image.subprocess, 'run', side_effect=AssertionError('unchanged image must not regenerate')):
+                self.assertEqual(image.seed(seed, runtime, state), 'kept')
+            image.swap(seed / 'current', second)
+            self.assertEqual(image.seed(seed, runtime, state), 'newer')
+            self.assertEqual(os.readlink(runtime / '.prev'), first)
+            self.assertEqual(preview_path.read_bytes(), first_preview)
+            second_preview = (runtime / second / '.release/staged.json').read_bytes()
+            self.assertEqual(tomllib.loads(json.loads(second_preview)['codex_managed_preview'])['hooks']['managed_dir'],
+                             str((runtime / second / 'hooks').resolve()))
+            image.swap(seed / 'current', first)
+            self.assertEqual(image.seed(seed, runtime, state), 'kept')
+            self.assertEqual(os.readlink(runtime / 'current'), second)
+            self.assertEqual(image.seed(seed, runtime, state, force=True), 'newer')
+            self.assertEqual(os.readlink(runtime / 'current'), first)
+            self.assertEqual(os.readlink(runtime / '.prev'), second)
+            self.assertEqual(tomllib.loads(json.loads(preview_path.read_text())['codex_managed_preview'])['hooks']['managed_dir'],
+                             str((seed / first / 'hooks').resolve()))
+            self.assertEqual((runtime / second / '.release/staged.json').read_bytes(), second_preview)
+            self.assertFalse(list(Path(temporary).rglob('requirements.toml')))
+
+    def managed_install_fixture(self, root):
+        runtime, system = Path(root, 'runtime'), Path(root, 'system')
+        system.mkdir()
+        first = self.fake_release(runtime, 'a' * 40, 1)
+        self.managed_release(first)
+        shutil.copyfile(BIN / 'fleet-codex-runtime.py', first / 'bin/fleet-codex-runtime.py')
+        current = runtime / 'current'
+        current.symlink_to(first.name)
+        return current, system, first
+
+    def test_managed_guard_install_is_explicit_preserves_policy_and_is_idempotent(self):
+        import tomllib
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            original = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
+                        '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
+            target.write_text(original)
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
+                self.assertEqual(target.read_text(), original)
+                self.assertEqual(image.install_managed_guards(current, system), 'installed')
+                installed = target.read_bytes()
+                policy = tomllib.loads(installed.decode())
+                self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
+                self.assertEqual(policy['mcp_servers'], tomllib.loads(original)['mcp_servers'])
+                self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
+                self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
+                self.assertEqual(len(policy['hooks']['PreToolUse']), 2)
+                self.assertNotIn(source.name, installed.decode())
+                self.assertEqual(image.install_managed_guards(current, system), 'kept')
+                self.assertEqual(target.read_bytes(), installed)
+                second = self.fake_release(current.parent, 'b' * 40, 2)
+                self.managed_release(second)
+                shutil.copyfile(BIN / 'fleet-codex-runtime.py', second / 'bin/fleet-codex-runtime.py')
+                for revision in (second.name, source.name):
+                    image.swap(current, revision)
+                    self.assertEqual(image.install_managed_guards(current, system), 'kept')
+                    self.assertEqual(target.read_bytes(), installed)
+            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_fails_on_conflicting_or_unserializable_policy(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                for original in ('[features]\nhooks=false\n', '[hooks]\nmanaged_dir="/administrator/hooks"\n',
+                                 'features=1\n', 'unclosed=[\n', 'updated=2026-01-01T00:00:00Z\n'):
+                    with self.subTest(original=original):
+                        target.write_text(original)
+                        with self.assertRaises((ValueError, TypeError)):
+                            image.install_managed_guards(current, system)
+                        self.assertEqual(target.read_text(), original)
+                        self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_requires_protected_paths_even_in_test_environment(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            with patch.object(image.os, 'geteuid', return_value=1000), patch.object(image, 'managed_root_owned') as trust:
+                with self.assertRaisesRegex(ValueError, 'administrator'):
+                    image.install_managed_guards(current, system)
+                trust.assert_not_called()
+            with patch.dict(os.environ, FLEET_NODE_TEST='1'), patch.object(image.os, 'geteuid', return_value=0):
+                self.assertFalse(image.managed_root_owned(system))
+            for rejected in (current, system, Path('/usr/bin/python3'), source / 'hooks/bash-guard.py'):
+                with patch.object(image.os, 'geteuid', return_value=0), \
+                        patch.object(image, 'managed_root_owned', side_effect=lambda path: Path(path).resolve() != rejected.resolve()):
+                    with self.assertRaises(ValueError):
+                        image.install_managed_guards(current, system)
+            self.assertFalse((system / 'requirements.toml').exists())
+
+    def test_managed_guard_install_rejects_linked_policy_and_release_inputs(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, source = self.managed_install_fixture(temporary)
+            outside = Path(temporary, 'outside')
+            outside.write_text('unchanged\n')
+            target = system / 'requirements.toml'
+            target.symlink_to(outside)
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+                target.unlink()
+                mapping = source / 'hooks/codex-map.json'
+                saved = mapping.read_bytes()
+                outside.write_bytes(saved)
+                mapping.unlink()
+                mapping.symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+                self.assertEqual(outside.read_bytes(), saved)
+                mapping.unlink()
+                mapping.write_bytes(saved)
+                (source / '.release/manifest.json').write_text(json.dumps({'sha': 'b' * 40}))
+                with self.assertRaisesRegex(ValueError, 'manifest'):
+                    image.install_managed_guards(current, system)
+            self.assertFalse(target.exists())
+
+    def test_managed_guard_install_aborts_publication_failure_and_admin_race(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            target.write_text('allowed_approval_policies=["on-request"]\n')
+            original = target.read_bytes()
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                with patch.object(image.os, 'replace', side_effect=OSError('fixture publication failure')):
+                    with self.assertRaises(OSError):
+                        image.install_managed_guards(current, system)
+                self.assertEqual(target.read_bytes(), original)
+                allocate = image.tempfile.mkstemp
+                def competing_admin(*args, **kwargs):
+                    target.write_text('allowed_approval_policies=["never"]\n')
+                    return allocate(*args, **kwargs)
+                with patch.object(image.tempfile, 'mkstemp', side_effect=competing_admin):
+                    with self.assertRaisesRegex(ValueError, 'changed before publication'):
+                        image.install_managed_guards(current, system)
+                self.assertEqual(target.read_text(), 'allowed_approval_policies=["never"]\n')
+            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
+    def test_managed_guard_install_aborts_changed_active_release(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            current, system, _source = self.managed_install_fixture(temporary)
+            second = self.fake_release(current.parent, 'b' * 40, 2)
+            self.managed_release(second)
+            original_run = image.subprocess.run
+            def changed_release(*args, **kwargs):
+                result = original_run(*args, **kwargs)
+                image.swap(current, second.name)
+                return result
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True), \
+                    patch.object(image.subprocess, 'run', side_effect=changed_release):
+                with self.assertRaises(ValueError):
+                    image.install_managed_guards(current, system)
+            self.assertFalse((system / 'requirements.toml').exists())
+
+    def test_personal_pod_guard_preview_uses_image_seed_across_upgrade_and_rollback(self):
+        import tomllib
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'login-runtime', 'state'))
+            state.mkdir()
+            first, second = 'a' * 40, 'b' * 40
+            for sequence, revision in enumerate((first, second), 1):
+                self.managed_release(self.fake_release(seed, revision, sequence))
+            for revision in (first, second, first):
+                image.swap(seed / 'current', revision)
+                image.seed(seed, runtime, state, force=True)
+                marker = json.loads((runtime / revision / '.release/staged.json').read_text())
+                preview = marker['codex_managed_preview']
+                self.assertEqual(tomllib.loads(preview)['hooks']['managed_dir'], str((seed / revision / 'hooks').resolve()))
+                self.assertNotIn(str(runtime), preview)
+                self.assertEqual(os.readlink(runtime / 'current'), revision)
+            self.assertFalse(list(Path(temporary).rglob('requirements.toml')))
+
+    def test_managed_guard_staging_failure_preserves_current_and_retries(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            seed, runtime, state = (Path(temporary, name) for name in ('seed', 'runtime', 'state'))
+            state.mkdir()
+            first, second = 'a' * 40, 'b' * 40
+            self.fake_release(seed, first, 1)
+            candidate = self.fake_release(seed, second, 2)
+            self.managed_release(candidate)
+            image.swap(seed / 'current', first)
+            self.assertEqual(image.seed(seed, runtime, state), 'seeded')
+            (candidate / 'hooks/bash-guard.py').unlink()
+            image.swap(seed / 'current', second)
+            with self.assertRaisesRegex(ValueError, 'script is missing'):
+                image.seed(seed, runtime, state)
+            self.assertEqual(os.readlink(runtime / 'current'), first)
+            self.assertFalse((runtime / '.prev').exists())
+            self.assertFalse((runtime / second).exists())
+            self.assertTrue((runtime / (second + '.seed-partial')).is_dir())
+            self.managed_release(candidate)
+            self.assertEqual(image.seed(seed, runtime, state), 'newer')
+            self.assertEqual(os.readlink(runtime / 'current'), second)
+            self.assertEqual(os.readlink(runtime / '.prev'), first)
+            self.assertFalse((runtime / (second + '.seed-partial')).exists())
+
+    def test_managed_guard_preview_rejects_links_and_preserves_previous_on_write_failure(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            release = self.fake_release(Path(temporary), 'a' * 40, 1)
+            self.managed_release(release)
+            target = release / '.release/staged.json'
+            previous = json.dumps({'codex_managed_preview': 'previous inactive preview', 'existing': 'kept'})
+            target.write_text(previous)
+            with patch.object(image.os, 'replace', side_effect=OSError('fixture publication interrupted')):
+                with self.assertRaisesRegex(OSError, 'publication interrupted'):
+                    image.stage_managed_guards(release, release)
+            self.assertEqual(target.read_text(), previous)
+            self.assertFalse(list((release / '.release').glob('.codex-managed-*')))
+            guard = release / 'hooks/bash-guard.py'
+            outside = Path(temporary, 'outside.py')
+            guard.replace(outside)
+            guard.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, 'script is missing or linked'):
+                image.stage_managed_guards(release, release)
+            self.assertEqual(target.read_text(), previous)
+            self.assertEqual(outside.read_bytes(), (BIN.parent / 'hooks/bash-guard.py').read_bytes())
+            mapping = release / 'hooks/codex-map.json'
+            mapping.unlink()
+            mapping.symlink_to(BIN.parent / 'hooks/codex-map.json')
+            with self.assertRaisesRegex(ValueError, 'mapping is not a regular'):
+                image.stage_managed_guards(release, release)
+            mapping.unlink()
+            with self.assertRaisesRegex(ValueError, 'lost its mapping'):
+                image.stage_managed_guards(release, release)
+            mapping.symlink_to(Path(temporary, 'absent-mapping.json'))
+            with self.assertRaisesRegex(ValueError, 'mapping is not a regular'):
+                image.stage_managed_guards(release, release)
+
+    def test_managed_guard_preview_preserves_legacy_release_and_rejects_bad_registration(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary:
+            release = self.fake_release(Path(temporary), 'a' * 40, 1)
+            self.assertFalse(image.stage_managed_guards(release, release))
+            self.managed_release(release)
+            mapping = release / 'hooks/codex-map.json'
+            declared = json.loads(mapping.read_text())
+            declared.pop('managed_commands')
+            mapping.write_text(json.dumps(declared))
+            self.assertFalse(image.stage_managed_guards(release, release))
+            declared['managed_commands'] = []
+            mapping.write_text(json.dumps(declared))
+            with self.assertRaises(subprocess.CalledProcessError):
+                image.stage_managed_guards(release, release)
+            mapping.write_text('[]')
+            with self.assertRaisesRegex(ValueError, 'mapping must be an object'):
+                image.stage_managed_guards(release, release)
+            self.assertNotIn('codex_managed_preview', json.loads((release / '.release/staged.json').read_text()))
+            self.managed_release(release)
+            self.assertTrue(image.stage_managed_guards(release, release))
+            declared = json.loads(mapping.read_text())
+            declared.pop('managed_commands')
+            mapping.write_text(json.dumps(declared))
+            with self.assertRaisesRegex(ValueError, 'lost its registration'):
+                image.stage_managed_guards(release, release)
 
     def test_restart_never_goes_back_to_image(self):
         """BREAK-IT linux-image-pins-old: the image is A; the updater moved the

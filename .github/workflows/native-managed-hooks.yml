@@ -11,6 +11,9 @@ on:
       - 'bin/fleet-agent-defaults.py'
       - 'conf/agent-defaults/codex/config.default.toml'
       - 'bin/fleet-native-usage-cli-selftest.py'
+      - 'bin/fleet-native-guard-install-selftest.py'
+      - 'extras/managed-node/image-stage.py'
+      - 'bin/fleet-codex-runtime.py'
       - 'bin/fleet-codex-rpc.py'
       - 'bin/fleet-codex-attention.py'
       - 'bin/fleet-codex-session.py'
@@ -77,6 +80,11 @@ jobs:
           timeout 90 python3 bin/fleet-native-usage-cli-selftest.py \
             --meter-candidate \
             --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Test root-owned installation and native requirements in a private mount namespace
+        if: matrix.mode == 'exec'
+        run: >-
+          python3 bin/fleet-native-guard-install-selftest.py
+          --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
         run: |
