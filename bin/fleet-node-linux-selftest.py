@@ -26,6 +26,70 @@ def module(name):
 
 
 class LinuxNode(unittest.TestCase):
+    def test_native_stop_fixture_ancestry_is_bounded_metadata_only(self):
+        probe = module('fleet-native-thread-stop-selftest')
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid in range(1, 20):
+                process = proc / str(pid)
+                process.mkdir()
+                (process / 'stat').write_text(f'{pid} (fixture ) name) S {pid - 1} 1 1 0')
+                (process / 'status').write_text(f'Name:\tfixture\nPPid:\t{pid - 1}\nNSpid:\t{pid}\n')
+                (process / 'cmdline').write_text('private-parent-argument')
+                (process / 'environ').write_text('private-parent-environment')
+            lineage = probe.fixture_ancestry(3, proc)
+            self.assertEqual([entry['pid'] for entry in lineage], [3, 2, 1])
+            self.assertNotIn('private-parent', json.dumps(lineage))
+            self.assertEqual(len(probe.fixture_ancestry(19, proc)), 16)
+            (proc / '2/stat').write_text('2 (fixture) S 3 1 1 0')
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1], {'pid': 3, 'cycle': True})
+            (proc / '2/stat').unlink()
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1],
+                             {'pid': 2, 'unavailable': 'FileNotFoundError'})
+            (proc / '2/stat').write_text('incomplete')
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1],
+                             {'pid': 2, 'unavailable': 'IndexError'})
+
+    def test_native_stop_fixture_resolves_namespace_pid_without_guessing(self):
+        probe = module('fleet-native-thread-stop-selftest')
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            process = proc / '4242'
+            process.mkdir()
+            argv = ['/usr/bin/python3', '-c', 'fixture', str(proc / 'unique-command')]
+            command = b'\0'.join(os.fsencode(argument) for argument in argv) + b'\0'
+            (process / 'cmdline').write_bytes(command)
+            (process / 'status').write_text('Name:\tpython3\nNSpid:\t4242\t7\n')
+            self.assertEqual(probe.fixture_host_pid(argv, 7, proc), 4242)
+            for arguments, namespace in ((argv, 8), (argv[:-1], 7)):
+                with self.assertRaises(AssertionError):
+                    probe.fixture_host_pid(arguments, namespace, proc)
+            with patch.object(probe.os, 'getuid', return_value=os.getuid() + 1):
+                with self.assertRaises(AssertionError):
+                    probe.fixture_host_pid(argv, 7, proc)
+            duplicate = proc / '4343'
+            duplicate.mkdir()
+            (duplicate / 'cmdline').write_bytes(command)
+            (duplicate / 'status').write_text('NSpid:\t4343\t7\n')
+            with self.assertRaises(AssertionError):
+                probe.fixture_host_pid(argv, 7, proc)
+
+    def test_image_carries_native_sandbox_dependency_without_changing_policy(self):
+        docker = (BIN.parent / 'extras/managed-node/Dockerfile').read_text()
+        runtime = docker.split('FROM ${BASE}', 1)[1]
+        self.assertRegex(runtime, r'apt-get install -y --no-install-recommends[\s\S]*?\bbubblewrap\b')
+        self.assertIn('&& bwrap --version', runtime)
+        workflow = (BIN.parent / '.github/workflows/native-managed-hooks.yml').read_text()
+        self.assertIn('bubblewrap apparmor-profiles apparmor-utils', workflow)
+        self.assertIn('"$RUNNER_ENVIRONMENT" = github-hosted', workflow)
+        self.assertIn('apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict', workflow)
+        self.assertIn('bwrap --unshare-user --unshare-pid --unshare-net --ro-bind / /', workflow)
+        for text in (runtime, workflow):
+            self.assertNotIn('sysctl -w', text)
+            self.assertNotIn('seccomp=unconfined', text)
+            self.assertNotIn('apparmor=unconfined', text)
+            self.assertNotIn('--privileged', text)
+
     def test_linux_paths_and_systemd_environment(self):
         s = module('fleet-node-supervisor')
         with patch.object(s, 'MAC', False), patch.dict(os.environ, {
