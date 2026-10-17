@@ -464,6 +464,7 @@
 0.1 trial-host-no-spare
 0.1 trial-idle-while-opening
 0.1 trial-no-subscription
+0.1 cluster-pod-claude-leak
 0.1 trial-pause-not-recycled
 0.1 trial-seat-no-home
 0.1 trial-slot-held

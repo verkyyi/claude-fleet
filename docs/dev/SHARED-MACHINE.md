@@ -225,6 +225,16 @@ an administrator reviews and activates the migration. Both grants live on the hu
   admin console's 订阅池 → 谁能用 lists the services as their own group, one
   switch each (an `all` rule is shown, not switched). `GET` answers them as
   `services` (issue #4085).
+- **A cluster pod** (a person's pod `u-<nonce>` — drill pods too — the ACK
+  worker `fleet-linux-*`, a SPOT pod `ccquota-spot-*`) is one provider's
+  (issue #4601): its machine layer passes the hub setting
+  `fleet.cred_pod_providers` (default `codex`; `fleet hub set`, one `hub_audit`
+  row) before any list. A person's pod with no list of its own reads its
+  owner's person list as the machine's (issue #4290) — an owner's `"*"` is then
+  every Codex subscription, an owner's list only its Codex entries — so a new
+  pod needs nobody to list it; Claude there is refused «cluster pods are
+  Codex-only». A list written for the pod still applies, under the same gate;
+  `*` lifts it.
 - **Where.** One resolver in the hub: the node lease (a forbidden account is
   answered as `withdrawn`, and the agent removes its copy — on a shared proxy
   from that login's index only, `fleet-cred-proxy.py unstore`), the pool

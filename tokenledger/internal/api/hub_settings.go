@@ -189,6 +189,8 @@ var hubSettings = map[string]hubSetting{
 		check: checkIntSetting(TrialIdleWarnKey, 30, 3600, defaultTrialIdleWarnSecs)},
 	TrialIdleKey: {def: "240", help: "a trial with no input for this many seconds gives its machine back; the conversation is kept 24 h (claude-fleet#4060)",
 		check: checkIntSetting(TrialIdleKey, 60, 7200, defaultTrialIdleSecs)},
+	CredPodProvidersKey: {def: credPodProvidersDef, help: "the subscription providers every cluster pod (u-<nonce>, fleet-linux-*, ccquota-spot-*) may use, whatever its owner's allowance: comma-separated (codex, claude), or * for no limit (claude-fleet#4601)",
+		check: checkCredPodProviders},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
 	ClustersKey: {def: "", help: "the clusters that keep spare pods (claude-fleet#3553): each one's name as its fleet-ops reports it, comma-separated; with fleet.spares on and the account key set, a newcomer placed there is handed a ready pod",

@@ -109,6 +109,9 @@ type credPolicy struct {
 	// NodeUnknown: some machine has a policy but this endpoint's machine
 	// cannot be named — denied rather than unrestricted.
 	NodeUnknown bool
+	// PodProviders: the machine is a cluster pod and only these providers may
+	// be used on it (fleet.cred_pod_providers, claude-fleet#4601); nil = no gate.
+	PodProviders map[string]bool
 }
 
 // normSubID is a subscription ID as compared: a Claude UUID lowercased.
@@ -212,6 +215,7 @@ func credPolicyOf(settings map[string]string, machine, principal string) credPol
 	}
 	if machine != "" {
 		p.Node = credAllowOf(settings, credNodeKey(machine))
+		p.PodProviders = podProvidersOf(settings, machine)
 	} else if anyNodePolicy(settings) {
 		p.NodeUnknown = true
 	}
@@ -222,7 +226,9 @@ func credPolicyOf(settings map[string]string, machine, principal string) credPol
 }
 
 // Restricted says whether anything narrows this (machine, person).
-func (p credPolicy) Restricted() bool { return p.Node.Set || p.User.Set || p.NodeUnknown }
+func (p credPolicy) Restricted() bool {
+	return p.Node.Set || p.User.Set || p.NodeUnknown || p.PodProviders != nil
+}
 
 // check is "" when subscription uuid of provider may be used, else why not.
 func (p credPolicy) check(provider, uuid string, aliases ...string) string {
@@ -231,6 +237,9 @@ func (p credPolicy) check(provider, uuid string, aliases ...string) string {
 	}
 	if p.NodeUnknown {
 		return "this machine's identity is unknown (no enrolled name) and machine allowlists are in force"
+	}
+	if why := p.podProviderWhy(provider); why != "" {
+		return why
 	}
 	u := normSubID(uuid)
 	who := "person " + p.Principal
