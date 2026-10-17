@@ -268,6 +268,10 @@ if [ -n "$BRANCH" ]; then
   fi
 fi
 
+if [ -n "$WT" ] && [ -d "$WT" ] && ! _retirement=$(fleet_worktree_retire_metadata "$WT"); then
+  note "  worktree retained: $_retirement"; done_token skip:protected; exit 0
+fi
+
 # --- the bound-issue gate (issue #1156) ---------------------------------------
 # "A PR from branch issue-<N> merged" is NOT "task #N is done": a research worker
 # on issue-9206 shipped side-fix PR #9208 (closing #9207), and --auto reaped the
@@ -659,6 +663,10 @@ fi
 DROP_FORCE="--force"
 teardown() {
   [ -z "$BRANCH" ] && { note "  head $href is not a branch we may reap — nothing to do."; return 0; }
+  local retirement
+  if [ -n "$WT" ] && [ -d "$WT" ] && ! retirement=$(fleet_worktree_retire_metadata "$WT"); then
+    note "  worktree retained before teardown: $retirement"; done_token skip:protected; return 1
+  fi
   local self_win cwd
   self_win=$(ftmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)
   cwd=$(pwd -P 2>/dev/null)
@@ -715,6 +723,7 @@ teardown() {
     case "$drop" in
       trashed:*|removed:*|gone) note "  worktree $drop" ;;
       dirty) note "  worktree $WT went dirty under us — KEPT (issue #544); worktree-autoclean.sh owns it." ;;
+      error:locked|error:native-owned) note "  worktree retained for its owner: $drop"; done_token skip:protected; return 1 ;;
       *) note "  worktree drop failed for $WT ($drop) — worktree-autoclean.sh will reap it." ;;
     esac
   fi

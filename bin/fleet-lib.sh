@@ -5492,6 +5492,21 @@ fleet_base_off_branch() {
   printf '%s\n' "$cur"
 }
 
+fleet_worktree_retire_metadata() {
+  local metadata
+  if ! metadata=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null); then
+    printf 'error:not-a-worktree\n'; return 2
+  fi
+  [ -n "$metadata" ] || { printf 'error:not-a-worktree\n'; return 2; }
+  if [ -e "$metadata/CLAUDE_BASE" ] || [ -L "$metadata/CLAUDE_BASE" ]; then
+    printf 'error:native-owned\n'; return 2
+  fi
+  if [ -e "$metadata/locked" ] || [ -L "$metadata/locked" ]; then
+    printf 'error:locked\n'; return 2
+  fi
+  printf '%s\n' "$metadata"
+}
+
 # fleet_worktree_drop <main> <worktree-dir> [--force] — retire a worktree WITHOUT
 # paying for its bytes. Prints exactly one token; rc 0 ⇔ the worktree is gone from
 # `git worktree list`:
@@ -5531,6 +5546,9 @@ fleet_worktree_drop() {
     printf 'gone\n'; return 0
   fi
 
+  local gd l
+  gd=$(fleet_worktree_retire_metadata "$dir") || { printf '%s\n' "$gd"; return 2; }
+
   if [ "$force" != 1 ]; then
     local st rc
     st=$(git -C "$dir" status --porcelain 2>/dev/null); rc=$?
@@ -5542,8 +5560,6 @@ fleet_worktree_drop() {
   # checkout goes as a link — removed here, before the tree moves, so neither the
   # trash sweep's rm -rf nor the `worktree remove` fallback below ever holds a path
   # into the base's live tree. Only what fleet-deps-link recorded, and only a link.
-  local gd l
-  gd=$(git -C "$dir" rev-parse --absolute-git-dir 2>/dev/null)
   if [ -n "$gd" ] && [ -f "$gd/fleet-deps-links" ]; then
     while IFS= read -r l; do
       case "$l" in ''|/*|..|../*|*/../*|*/..) continue ;; esac

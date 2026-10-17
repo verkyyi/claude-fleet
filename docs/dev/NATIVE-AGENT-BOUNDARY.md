@@ -118,6 +118,30 @@ bash bin/fleet-native-worktree-selftest.sh
 不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
 迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
 
+### 原生清理所有权优先于 Fleet 回收
+
+真实 Claude `2.1.296` 在 linked-worktree 的 Git metadata 内留下 `CLAUDE_BASE` 标记，
+非交互会话结束后仍保留 Git 的 `locked` 文件。旧 `fleet_worktree_drop --force` 直接移动
+目录，绕过 Git 的锁检查；同一原生夹具在父版本复现了这条错误路径。
+
+候选改为由同一 `fleet_worktree_retire_metadata` 读取既有 metadata：存在 Git 锁或当前
+已验证版本的 Claude 标记时拒绝 Fleet 回收，`--force` 仍只覆盖脏目录，不覆盖所有权。
+直接 drop 在移除借用依赖链接、移动目录或同步删除之前检查；autoclean 在记录历史和回收
+脱管进程之前检查；cleanup 与 idle-cleanup 在关窗、写终结历史或更新主检出之前拒绝。
+不判断锁内 PID 是否过期，不替原生 Agent 解锁、删除标记或实现第二套原生清理器。
+
+本机原生夹具扩展至 24 项：锁着时和显式解锁后，Fleet 强制回收都拒绝，目录注册与未提交
+数据保持。Git 锁单独存在时同样保护普通工作树；普通 legacy 工作树在显式解锁后仍能按既有
+路径回收。合成 janitor 测试还覆盖干净且已合并的原生目录不能被自动回收。
+
+`CLAUDE_BASE` 是本次版本实测的保守保留信号，**不是稳定的通用 Agent 所有权 API**；
+其存在只会拒绝删除，不能授予任何权限。新版本仍须重跑原生探针；缺失该标记不证明目录属于
+Fleet。后续创建入口必须把已验证的原生生命周期所有者绑定到现有会话记录。此补丁不证明
+并发创建/锁变化与 legacy 快速移动之间的原子性，也未切换创建入口或完成原生 TUI 删除验收。
+
+依据：[Git Worktree 锁与回收](https://git-scm.com/docs/git-worktree)、
+[Claude 原生 Worktree 生命周期](https://code.claude.com/docs/en/worktrees)。
+
 ## 原生 CLI 生命周期实测（2026-10-16 后续）
 
 新增显式调用的 `bin/fleet-native-worktree-cli-selftest.py`。真实 Codex 在临时 HOME、临时 Git 仓库中运行，

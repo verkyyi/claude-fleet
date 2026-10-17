@@ -162,5 +162,34 @@ case "$tok" in trashed:*) ;; *) fail "10 shim expected trashed:<path>, got '$tok
 listed "$WT4" && fail "10 shim did not prune the admin entry"
 ok "10 bin/fleet-worktree-drop.sh mirrors the library from the command line"
 
+WT_LOCKED="$(mkwt retained-lock)" || fail "locked fixture creation"
+git -C "$MAIN" worktree lock --reason 'fixture owner' "$WT_LOCKED" || fail "lock fixture"
+for flag in '' --force; do
+  tok="$(fleet_worktree_drop "$MAIN" "$WT_LOCKED" ${flag:+"$flag"})"; rc=$?
+  [ "$rc" = 2 ] && [ "$tok" = error:locked ] || fail "Git lock must survive $flag" "$rc $tok"
+  [ -d "$WT_LOCKED" ] || fail "locked worktree was moved"
+  listed "$WT_LOCKED" || fail "locked worktree was unregistered"
+done
+ok "11 Git lock blocks ordinary and forced retirement"
+git -C "$MAIN" worktree unlock "$WT_LOCKED" || fail "unlock fixture"
+tok="$(fleet_worktree_drop "$MAIN" "$WT_LOCKED")" || fail "explicitly unlocked legacy worktree may retire" "$tok"
+ok "12 explicit Git unlock restores ordinary legacy retirement"
+
+WT_NATIVE="$(mkwt retained-native)" || fail "native fixture creation"
+NATIVE_META=$(git -C "$WT_NATIVE" rev-parse --absolute-git-dir)
+git -C "$WT_NATIVE" rev-parse HEAD > "$NATIVE_META/CLAUDE_BASE"
+ln -s "$MAIN" "$WT_NATIVE/node_modules"
+printf '.\n' > "$NATIVE_META/fleet-deps-links"
+for flag in '' --force; do
+  tok="$(fleet_worktree_drop "$MAIN" "$WT_NATIVE" ${flag:+"$flag"})"; rc=$?
+  [ "$rc" = 2 ] && [ "$tok" = error:native-owned ] || fail "native owner must survive $flag" "$rc $tok"
+  [ -L "$WT_NATIVE/node_modules" ] || fail "native dependency link changed"
+  listed "$WT_NATIVE" || fail "native worktree was unregistered"
+done
+ok "13 native ownership blocks retirement even without a lock, before dependency cleanup"
+tok="$(bash "$SHIM" "$MAIN" "$WT_NATIVE" --force)"; rc=$?
+[ "$rc" = 2 ] && [ "$tok" = error:native-owned ] || fail "shim must preserve native ownership" "$rc $tok"
+ok "14 CLI shim cannot force retirement of native-owned worktrees"
+
 printf '\nselftest OK: %s assertions passed (O(1) worktree teardown, issue #586)\n' "$pass"
 exit 0
