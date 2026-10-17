@@ -34,14 +34,14 @@ trap cleanup EXIT
 # the old client's own script: a loop, and a `quit` that returns at once
 printf '#!/bin/bash\n[ "$1" = quit ] && exit 0\nwhile :; do sleep 1; done\n' > "$C/bin/fleet-shell.sh"
 alive() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' '); case "$st" in ''|Z*) return 1 ;; esac; return 0; }
-gone() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do alive "$1" || return 0; sleep 0.5; done; return 1; }
+gone() { local _; for _ in 1 2 3 4 5 6 7 8 9 10; do alive "$1" || return 0; sleep 0.5; done; return 1; }
 # old [stage-only] — the old client up: the stage server, the main server whose
 # pane attaches the stage (its viewer), a warm loop and one warm line
 old() {
   tmux -L fleet-shell-stage new-session -d -s fleet-shell-stage -x 80 -y 24 'sleep 600' || fail "tmux: stage"
   tmux -L fleet-shell new-session -d -s fleet-shell -x 80 -y 24 \
     "env -u TMUX -u TMUX_PANE tmux -L fleet-shell-stage attach-session -t =fleet-shell-stage" || fail "tmux: main"
-  local i; for i in 1 2 3 4 5 6 7 8 9 10; do
+  local _; for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -n "$(tmux -L fleet-shell-stage list-clients -F x 2>/dev/null)" ] && break; sleep 0.3
   done
   [ -n "$(tmux -L fleet-shell-stage list-clients -F x 2>/dev/null)" ] || fail "the viewer never attached the stage"
@@ -66,7 +66,7 @@ bash "$BIN/fleet-client-retire.sh" running; eq "A: nothing runs after" 1 "$?"
 old
 # a person's client: a pty of its own (a tmux on another socket holds it)
 tmux -L fleet-shell-person new-session -d -s p -x 80 -y 24 "env -u TMUX -u TMUX_PANE tmux -L fleet-shell attach-session -t =fleet-shell"
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for _ in 1 2 3 4 5 6 7 8 9 10; do
   [ "$(tmux -L fleet-shell list-clients -F x 2>/dev/null | wc -l | tr -d ' ')" -ge 1 ] && break; sleep 0.3
 done
 bash "$BIN/fleet-client-retire.sh" stop --quiet --if-unattached; eq "C: a person looking → left alone (exit 3)" 3 "$?"
