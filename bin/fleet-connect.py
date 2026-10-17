@@ -198,6 +198,21 @@ def _clientlog():
 fleet_clientlog = _clientlog()
 
 
+def managed_login():
+    """A login the managed node's ops service maintains (claude-fleet#4594,
+    bin/fleet_managed.py, loaded by path like fleet_clientlog): its cert row
+    never tells the person to run `fleet login`. Absent ⇒ False."""
+    try:
+        import importlib.util
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet_managed.py")
+        spec = importlib.util.spec_from_file_location("fleet_managed", here)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.managed()
+    except Exception:
+        return False
+
+
 def clog(event, machine="", route="", ms="", result="", reason=""):
     """One line in the client's connect.log (docs/dev/CLIENT-LOGS.md); never fails."""
     if fleet_clientlog:
@@ -1926,6 +1941,17 @@ def renew_last():
 def renew_said():
     """What the last renewal said, for the doctor's cert row."""
     last = renew_last()
+    if managed_login():
+        # the ops service keeps it (fleet-login.py keep on the diskguard tick):
+        # whatever it says, nothing here is the person's to do
+        if last is None:
+            return "托管登录：运维每 15 分钟检查一次、用设备钥匙自动续期，不需要你登录"
+        rc, ago, why = last
+        if rc == "3":
+            return "上次续被入口拒绝（%d 分钟前，因 %s）：设备登记失效，已报运维处理 — 不需要你登录或扫码" % (ago, why)
+        if rc != "0":
+            return "上次续失败（%d 分钟前，因 %s，exit %s）— 运维会自动续期，不需要你登录" % (ago, why, rc)
+        return "运维自动续期（上次 %d 分钟前，因 %s）" % (ago, why)
     if last is None:
         return "用到时（fleet 连接 / ssh 到机器 / 客户端读入口）用设备钥匙续"
     rc, ago, why = last
@@ -1952,7 +1978,7 @@ def cert_check(hub, timeout=6):
     try:
         out = subprocess.run(["ssh-keygen", "-L", "-f", cert], capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError):
-        return "FAIL", "%s 读不出来（ssh-keygen -L）— 跑 `fleet login`" % cert
+        return "FAIL", "%s 读不出来（ssh-keygen -L）— %s" % (cert, "运维会自动续期（托管登录，不需要你登录）" if managed_login() else "跑 `fleet login`")
     names, inp = [], False
     for line in out.splitlines():  # "Principals:" then one name a line, until the next "Key: value"
         t = line.strip()

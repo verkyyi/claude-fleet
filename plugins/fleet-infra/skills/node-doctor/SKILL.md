@@ -79,7 +79,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `brew` | node | [mac-node-prep] | Homebrew 目录权限：照行内修 |
 | `cache` | machine | [release-rules] | 装机缓存的 claude 不是 release.json 的：更新器下一轮补 |
 | `ccquota` | machine | [hub-deploy] [release-rules] | 发布版带错了 ccquota：按 stable 重新部署入口镜像，再让列车发下一版 |
-| `cert` | node | [mac-node-enroll] | 连接证书入口不认：`fleet login` 重签，或重跑 `fleet node install --join` |
+| `cert` | node | [mac-node-enroll] | 托管登录（`account adopt` 接管的）：运维自动续期（diskguard 一拍的 `fleet-login.py keep`，#4594），设备钥匙也续不了是运维的 breakage，**从不叫人 `fleet login`**；其它登录入口不认：`fleet login` 重签，或重跑 `fleet node install --join` |
 | `channel` | node | [release-rules] | Mac 通道落后 stable 超过 2 小时：macOS 那半红了或没跑——看列车的 macOS 段，绿了再 `fleet-stable.sh move --ref stable-macos` |
 | `cnpath` | node | [release-rules] | 国内真实用户路径（深圳客户端 → 门/中转 → 测试 pod）上次巡检不通或超过 12 小时没走：看 `~/.config/claude-fleet/global/cn-probe/last.txt` 卡在哪层和它开的 breakage 单；stable 前移在单关掉或复测转绿前被拦（docs/dev/CN-PROBE.md） |
 | `checkout` | node | [node-doctor] | 基础 checkout 不在 base 分支：照行内命令移走占着它的 worktree |

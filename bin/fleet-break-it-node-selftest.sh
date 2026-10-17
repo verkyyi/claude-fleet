@@ -152,6 +152,9 @@
 #   managed-login-mod-escapes  bin/fleet-node-update.py _build_tree / _copy_heal +
 #                         follow_installs (#2964): the mod's files were links into the
 #                         runtime, Claude Code refused it (Path escapes plugin directory)
+#   managed-cert-lapses-idle bin/fleet-login.py keep + bin/fleet-diskguard.sh managed_cert_watch +
+#                         bin/fleet-drill.sh + bin/fleet_managed.py (#4594, bin/fleet-managed-cert-selftest.sh):
+#                         a managed login's certificate and 7-day device window ran out unused
 #   svc-run-leaks-across-runs bin/fleet-svc-local.sh + bin/fleet-svc-runner.py (#4086,
 #                         bin/fleet-svc-local-selftest.sh): a service run on a Mac
 #                         service login reads, or leaves for, the next workspace's run
@@ -1824,6 +1827,22 @@ drill_webhook_per_login() {
   fi
   SECS=$(since "$t0")
   WHAT="两个登录一份程序：各自的转发以各自身份跑、进 /u/<login>；投递只到那个登录、陌生登录 404；转发死了退避重起并补齐；空闲几拍一次重扫都没有、改了配置只重扫那个登录；会话归零就停它的转发；宿主醒来一拍内恢复并强制补齐；TERM 收干净、SIGKILL 留下的转发下次启动按账本收掉；第二份拿不到锁；守护表里登录不再起 webhook 单元（入座 / 关掉时照旧）"
+}
+
+# ---- managed-cert-lapses-idle (#4594): a login a managed node took over is the
+# ops service's — its connection certificate too — and nothing else uses it, so
+# on-use renewal let it run out and, seven idle days later, the device; the cn
+# probe then asked the operator to run `fleet login`. Now its diskguard tick
+# keeps it (fleet-login.py keep), the drill renews on use, and nothing on such a
+# login tells a person to log in.
+drill_managed_cert_lapses_idle() {
+  CAP=60; local t0
+  t0=$(now)
+  if ! bash "$BIN/fleet-managed-cert-selftest.sh" >"$WORK/managed-cert.out" 2>&1; then
+    WHY="a managed login's certificate lapsed, or someone was asked to log in: $(grep FAIL "$WORK/managed-cert.out" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="托管登录证书过期、设备 6 天 23 小时没用：diskguard 一拍用设备钥匙续上（why=keep），入口的设备窗口重新开始；国内探针的身份步随后走证书门、不用令牌；过期证书被演练命令先续再签；设备已过 7 天时一段失败只报一条运维告警；keep · renew · status · 演练 · 体检 cert 行没有一句叫人跑 fleet login"
 }
 
 # ---- svc-run-leaks-across-runs (#4086): service runs (svc:livepage, every

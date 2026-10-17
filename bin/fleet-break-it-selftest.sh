@@ -1895,6 +1895,7 @@ drill_fleet_down_confirm() {
 cert_env() {
   export HOME="$WORK/chome" XDG_CONFIG_HOME="$WORK/chome/.config" XDG_CACHE_HOME="$WORK/chome/.cache"
   export FLEET_CONF_DIR="$WORK/chome/.config/claude-fleet" FLEET_SHELL_CACHE="$WORK/ccache"
+  export FLEET_NODE_STATE="$WORK/chome/no-node"   # not a managed login (#4594), whatever this machine is
   unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_SESSION CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN
   mkdir -p "$HOME/.ssh" "$FLEET_CONF_DIR"
 }

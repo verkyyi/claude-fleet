@@ -89,6 +89,9 @@ bin/fleet_tls.py
 # the client's own record (#2896): connect / place / keeper / login logs, and the
 # ONE credential-shape table every redactor reads
 bin/fleet_clientlog.py
+# is this login one a managed node's ops service maintains (#4594): fleet login /
+# connect never tell its person to log in
+bin/fleet_managed.py
 # `fleet doctor --bundle <dir>` (#2890): the diagnosis bundle, its awk redactor
 # (no python needed) and the one list of files it may read; fleet_redact.py
 # rides the agent bundle below
