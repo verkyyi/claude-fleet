@@ -395,4 +395,80 @@ HOME="$LOGIN" CLAUDE_CONFIG_DIR='' CODEX_HOME="$LOGIN/.codex" FLEET_CODEX_HOME='
   || fail 'sandbox HOME instruction files gained fleet rules'
 ok '14 sandbox HOME default apply: CLAUDE.md 0 · AGENTS.md 0 fleet lines'
 
+python3 - "$SCRIPT" <<'PY' || fail 'native default writer contracts'
+import copy
+from pathlib import Path
+import runpy
+import sys
+import tempfile
+
+apply = runpy.run_path(sys.argv[1])['native_codex_defaults']
+with tempfile.TemporaryDirectory() as temporary:
+    home = Path(temporary).resolve()
+    target = home / 'config.toml'
+    target.write_text('# never edited by the adapter\n')
+    original = target.read_bytes()
+    layer = {'name': {'type': 'user', 'file': str(target)}, 'version': 'version-1',
+             'config': {'approval_policy': 'on-request', 'mcp_servers': {'own': {'command': 'keep'}}}}
+
+    class Client:
+        def __init__(self, selected=None, active=False, becomes_active=False, reject=False, malformed=False):
+            self.layer = copy.deepcopy(layer if selected is None else selected)
+            self.active, self.becomes_active, self.reject = active, becomes_active, reject
+            self.malformed = malformed
+            self.calls = []
+
+        def call(self, method, params):
+            self.calls.append((method, params))
+            if method == 'thread/loaded/list':
+                active = self.active or self.becomes_active and len(self.calls) > 1
+                return {'data': ['busy'] if active else []}
+            if method == 'config/read':
+                assert params == {'includeLayers': True}
+                return {'layers': [self.layer]}
+            assert method == 'config/batchWrite'
+            if self.reject:
+                raise ValueError('native version conflict')
+            assert params['filePath'] == str(target) and params['expectedVersion'] == 'version-1'
+            assert params['reloadUserConfig'] is False
+            return {} if self.malformed else {'filePath': str(target), 'version': 'version-2', 'status': 'ok'}
+
+    top = {'approval_policy': 'never', 'check_for_update_on_startup': False}
+    servers = {'own': {'command': 'replace'}, 'missing': {'command': 'fixture'}}
+    client = Client()
+    edits = apply(client, home, top, servers, [])
+    assert [edit['keyPath'] for edit in edits] == ['check_for_update_on_startup', 'mcp_servers.missing']
+    assert all(edit['mergeStrategy'] == 'upsert' for edit in edits)
+    assert target.read_bytes() == original
+    for check_only, blocked in ((True, []), (False, ['codex'])):
+        client = Client()
+        apply(client, home, top, servers, blocked, check_only)
+        assert not any(method == 'config/batchWrite' for method, _ in client.calls)
+    changed = copy.deepcopy(layer)
+    changed['name']['file'] = str(home / 'another.config.toml')
+    disabled = dict(layer, disabledReason='blocked')
+    for client in (Client(active=True), Client(becomes_active=True), Client(changed), Client(disabled),
+                   Client(reject=True), Client(malformed=True)):
+        try:
+            apply(client, home, top, servers, [])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('unsafe native update accepted')
+        assert target.read_bytes() == original
+    target.unlink()
+    other = home / 'other.toml'
+    other.write_text('keep=true\n')
+    target.symlink_to(other)
+    client = Client()
+    try:
+        apply(client, home, top, servers, [])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('shared configuration symlink accepted')
+    assert not client.calls and other.read_text() == 'keep=true\n'
+PY
+ok '15 native writer delegates atomic publication, preserves own values and refuses unsafe targets'
+
 printf 'PASS  fleet-agent-defaults-selftest (%d checks)\n' "$pass"

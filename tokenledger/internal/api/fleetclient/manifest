@@ -250,6 +250,7 @@ bin/fleet-agent-bundle.py
 bin/fleet-install-apply.sh
 bin/fleet-hooks-merge.py
 bin/fleet-agent-defaults.py
+bin/fleet-codex-rpc.py
 bin/fleet-agent-team.py
 bin/fleet_redact.py
 bin/fleet-config.py

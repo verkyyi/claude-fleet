@@ -41,6 +41,7 @@ def main():
     parser.add_argument('--codex', default='codex')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--launch-flags', action='store_true', help='also verify per-launch configuration, profiles and permission flags')
+    parser.add_argument('--native-config', action='store_true', help='also exercise explicit native default installation in an idle fixture')
     arguments = parser.parse_args()
     executable = shutil.which(arguments.codex)
     if not executable:
@@ -95,6 +96,8 @@ def main():
             ('worktree-combined', True, False, [*common_flags, '--profile', 'fixture',
              '--dangerously-bypass-approvals-and-sandbox', '-c', 'model="probe-override"'],
              'probe-override', 'never', 'danger-full-access')])
+    if arguments.native_config:
+        scenarios.append(('worktree-native-config', True, False, [], 'probe', 'never', 'read-only'))
     try:
         for label, worktree, bypass, extra_flags, expected_model, expected_approval, expected_sandbox in scenarios:
             expected_owner = not bypass and label not in (
@@ -157,6 +160,80 @@ def main():
                         check(state['cliVersion'] == state['appServerVersion'] and state['managedCodexVersion'] is None,
                               label + ': same native build without a managed package installation')
                         check(rpc.call('thread/loaded/list', {})['data'] == [], label + ': backend initially owns no threads')
+                        if label == 'worktree-native-config':
+                            configuration = codex_home / 'config.toml'
+                            original = configuration.read_bytes()
+                            installer = arguments.fleet_root / 'bin/fleet-agent-defaults.py'
+                            install_args = ['--root', str(arguments.fleet_root), '--codex-home', str(codex_home),
+                                            '--codex-native-remote', 'unix://' + str(socket_path),
+                                            '--codex-native-peer-pid', str(backend.pid), '--skip', 'claude',
+                                            '--skip', 'codex.mcp', '--skip', 'codex.skills',
+                                            '--override', str(root / 'no-overrides.json')]
+
+                            def install(action, extra=()):
+                                return subprocess.run(['python3', str(installer), action, *install_args, *extra],
+                                                      env=environment, cwd=base, capture_output=True, text=True, timeout=15)
+
+                            preview = install('apply', ['--dry-run'])
+                            check(preview.returncode == 0 and configuration.read_bytes() == original,
+                                  label + ': native installer dry-run writes nothing: ' + preview.stderr)
+                            check(install('check').returncode == 1, label + ': native check reports missing defaults')
+                            wrong_peer = install('apply', ['--codex-native-peer-pid', str(backend.pid + 100000)])
+                            check(wrong_peer.returncode == 2 and configuration.read_bytes() == original,
+                                  label + ': mismatched kernel peer cannot install defaults')
+                            applied = install('apply')
+                            check(applied.returncode == 0, label + ': native installer applies missing defaults: ' + applied.stderr)
+                            installed = configuration.read_bytes()
+                            check(installed != original and b'check_for_update_on_startup = false' in installed,
+                                  label + ': native writer publishes defaults')
+                            check(install('apply').returncode == 0 and configuration.read_bytes() == installed,
+                                  label + ': native installation is byte-idempotent')
+                            check(install('check').returncode == 0, label + ': native check confirms filled defaults')
+                            native_apply = runpy.run_path(str(installer))['native_codex_defaults']
+                            other_home = root / 'another-home'
+                            other_home.mkdir()
+                            try:
+                                native_apply(rpc, other_home, {'check_for_update_on_startup': False}, {}, [])
+                            except ValueError:
+                                wrong_home = True
+                            else:
+                                wrong_home = False
+                            check(wrong_home and not (other_home / 'config.toml').exists(),
+                                  label + ': native backend cannot configure a different home')
+                            layers = rpc.call('config/read', {'includeLayers': True})['layers']
+                            user = next(layer for layer in layers if layer['name'].get('type') == 'user'
+                                        and not layer['name'].get('profile'))
+                            configuration.write_bytes(installed + b'\n# preserve concurrent comment\n')
+                            rpc.call('config/batchWrite', {'filePath': str(configuration),
+                                'expectedVersion': user['version'], 'reloadUserConfig': False,
+                                'edits': [{'keyPath': 'project_doc_fallback_filenames', 'value': ['CLAUDE.md'],
+                                           'mergeStrategy': 'upsert'}]})
+                            check(b'# preserve concurrent comment' in configuration.read_bytes(),
+                                  label + ': comment-only edits survive native publication, not a bytewise version contract')
+                            fixture_servers = {'native.fixture': {'command': '/usr/bin/false', 'enabled': False}}
+                            check(len(native_apply(rpc, codex_home, {}, fixture_servers, [])) == 1,
+                                  label + ': native writer installs an inert dotted-name MCP fixture')
+                            check(native_apply(rpc, codex_home, {}, fixture_servers, []) == [],
+                                  label + ': native MCP installation is idempotent')
+                            installed = configuration.read_bytes()
+                            layers = rpc.call('config/read', {'includeLayers': True})['layers']
+                            user = next(layer for layer in layers if layer['name'].get('type') == 'user'
+                                        and not layer['name'].get('profile'))
+                            changed = installed.replace(b'model_reasoning_effort = "high"', b'model_reasoning_effort = "low"')
+                            check(changed != installed, label + ': concurrent edit changes a configuration value')
+                            configuration.write_bytes(changed + b'\n# concurrent fixture edit\n')
+                            concurrent = configuration.read_bytes()
+                            try:
+                                rpc.call('config/batchWrite', {'filePath': str(configuration),
+                                    'expectedVersion': user['version'], 'reloadUserConfig': False,
+                                    'edits': [{'keyPath': 'check_for_update_on_startup', 'value': True,
+                                               'mergeStrategy': 'replace'}]})
+                            except ValueError:
+                                conflict = True
+                            else:
+                                conflict = False
+                            check(conflict and configuration.read_bytes() == concurrent,
+                                  label + ': native stale-version refusal preserves concurrent user edit')
                         config = rpc.call('config/read', {'includeLayers': False})['config']
                         check(config['model_provider'] == 'offline', label + ': backend configuration uses only fixture provider')
                         before = len(requests)
@@ -221,6 +298,10 @@ def main():
                                     if event.get('method') == 'thread/status/changed'
                                     and event.get('params', {}).get('threadId') == identifier]
                         check(bool(statuses) == expected_owner, label + ': native status events follow actual owner')
+                        if label == 'worktree-native-config':
+                            previous = configuration.read_bytes()
+                            check(install('apply').returncode == 2 and configuration.read_bytes() == previous,
+                                  label + ': loaded native thread prevents configuration installation')
                         if arguments.launch_flags:
                             check(requests[-1]['model'] == expected_model, label + ': request uses selected model')
                             check(turn_context is not None and turn_context['model'] == expected_model,
