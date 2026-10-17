@@ -194,7 +194,7 @@ def main():
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            if arguments.raw_entrypoint and self.path == '/v1/node/client':
+            if self.path == '/v1/node/client':  # the launcher's client-lease lookup, not admission
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -572,7 +572,8 @@ def main():
                         check(True, phase + ': native exit leaves no observed MCP process alive')
                 check((repository / 'tracked.txt').read_text() == 'fixture\n', 'base checkout contents are unchanged')
                 if arguments.local_authority:
-                    check(not admission_errors, 'ordinary authority accepts every exact native identity transition')
+                    check(not admission_errors, 'ordinary authority accepts every exact native identity transition'
+                          + ('' if not admission_errors else ': ' + '; '.join(admission_errors)))
                     check(len(reservations) == 2 and all(row['state'] == 'stopped' for row in reservations.values()),
                           'creation and exact resume each finish their own admission reservation')
                     check([row['action'] for row in admission_events] == ['reserve', 'begin', 'observe', 'stopped'] * 2,
