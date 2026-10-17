@@ -103,7 +103,8 @@ grep -q "^forward alice o/a http://127.0.0.1:$P/u/alice $MPID$" "$S/home/alice/r
   && grep -q "^forward bob o/b http://127.0.0.1:$P/u/bob $MPID$" "$S/home/bob/rec" \
   && ok "A each login's forward runs as it, into /u/<login> on the one listener" \
   || fail "A forward lines: $(grep forward "$S"/home/*/rec | tr '\n' '|')"
-n=$(pgrep -P $$ -f fleet-webhook | grep -c .)
+# the program, not this script: `$(…)` is a child of $$ whose argv names this file
+n=$(pgrep -P $$ -f 'fleet-webhook-machine[.]py run' | grep -c .)
 [ "$n" = 1 ] && ok "A one fleet-webhook process (the program; every forward is its child, no second copy)" \
   || fail "A process count $n"
 
