@@ -185,6 +185,20 @@ def observe_native_worktree(pane, payload, intent, expected=None):
     return observed
 
 
+def restore_native_worktree(context, receipt, directory, session, provider, fleet_id):
+    if not isinstance(receipt, dict) or "native_worktree" not in receipt:
+        return None
+    check_receipt(context, receipt)
+    if (directory != receipt["worktree"]["root"] or session != receipt["native_session"]
+            or provider != context["provider"] or fleet_id != context["worker_id"].split("/")[1]):
+        raise ValueError("restore row differs from its native launch receipt")
+    intent = receipt["native_worktree"]
+    check_native_repository(intent)
+    if worktree_identity(directory) != receipt["worktree"]:
+        raise ValueError("restored native worktree lost its saved Git binding")
+    return intent
+
+
 def prepare_worktree(pane, previous=None, socket=""):
     path = option(pane, "@worktree", socket)
     expected = (previous or {}).get("worktree")
@@ -696,7 +710,7 @@ def transfer_commit(pane, socket, target, bundle):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "native-worktree"))
+    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "native-worktree", "restore-native-worktree"))
     p.add_argument("--socket", default="")
     p.add_argument("--pane", default="")
     p.add_argument("--target", default="")
@@ -704,6 +718,16 @@ def main():
     p.add_argument("argv", nargs=argparse.REMAINDER)
     a = p.parse_args()
     try:
+        if a.mode == "restore-native-worktree":
+            if len(a.argv) != 4:
+                raise ValueError("restore-native-worktree requires directory, session, provider and fleet identity")
+            saved = json.load(sys.stdin)
+            if not isinstance(saved, list) or len(saved) != 2:
+                raise ValueError("restore-native-worktree requires saved context and receipt")
+            intent = restore_native_worktree(*saved, *a.argv)
+            if intent:
+                print(json.dumps(intent))
+            return 0
         if a.mode == "native-worktree":
             if len(a.argv) != 2:
                 raise ValueError("native-worktree requires repository and base branch")

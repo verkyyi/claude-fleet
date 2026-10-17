@@ -28,7 +28,18 @@ def supervise_fixture(root, resume):
         launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
     arguments = [str(root / 'launcher'), '--model', 'claude-sonnet-4-6']
     if resume:
-        previous = json.loads(launch.option(pane, '@launch_receipt'))
+        saved_context, previous = json.loads((root / 'saved-launch.json').read_text())
+        if saved_context != context:
+            raise ValueError('fixture saved task context changed')
+        fleet_id = context['worker_id'].split('/')[1]
+        intent = launch.restore_native_worktree(context, previous, previous['worktree']['root'],
+                                               previous['native_session'], 'claude', fleet_id)
+        launch.stamp(pane, '@launch', context)
+        launch.stamp(pane, '@launch_receipt', previous)
+        launch.stamp(pane, '@native_worktree', intent)
+        launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', fleet_id)
+        launch.tmux('set-option', '-w', '-t', pane, '@worktree', previous['worktree']['root'])
+        launch.tmux('set-option', '-w', '-t', pane, '@launch_started', '1')
         arguments += ['--resume', previous['native_session']]
 
     def task_call(bound, mutation=None):
@@ -182,7 +193,12 @@ def main():
                 tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                 for phase in ('create', 'resume'):
                     if phase == 'resume':
-                        tmux('respawn-pane', '-t', '%0', '-c', str(repository), shlex.join(helper + ['--resume-fixture']))
+                        (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
+                        tmux('kill-server')
+                        check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
+                        tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
+                             shlex.join(helper + ['--resume-fixture']))
+                        tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                     def ready():
                         raw = tmux('display-message', '-p', '-t', '%0', '#{@launch_receipt}')
                         if not raw:

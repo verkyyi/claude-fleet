@@ -191,6 +191,35 @@ class NativeCreation(unittest.TestCase):
         self.assertEqual(published.call_count, 1)
         stopped.assert_not_called()
 
+    def test_restore_reconstructs_intent_only_from_exact_saved_binding(self):
+        binding = self.create()
+        self.observe()
+        receipt = json.loads(self.options['@launch_receipt'])
+        arguments = [str(self.path), receipt['native_session'], 'claude', self.context['worker_id'].split('/')[1]]
+        self.git('-C', str(self.path), 'commit', '--allow-empty', '-qm', 'retained user work')
+        self.assertEqual(launch.restore_native_worktree(self.context, receipt, *arguments), self.intent)
+        for index, replacement in enumerate((str(self.main), '55555555-5555-4555-8555-555555555555', 'codex', 'another-window')):
+            altered = arguments.copy()
+            altered[index] = replacement
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                launch.restore_native_worktree(self.context, receipt, *altered)
+        altered = copy.deepcopy(receipt)
+        altered['worktree']['git_dir'] = binding['git_dir'] + '-replaced'
+        with self.assertRaisesRegex(ValueError, 'Git binding'):
+            launch.restore_native_worktree(self.context, altered, *arguments)
+        altered = copy.deepcopy(self.context)
+        altered['generation'] = 2
+        altered['attempt_id'] = 'task:T1:g2'
+        with self.assertRaises(ValueError):
+            launch.restore_native_worktree(altered, receipt, *arguments)
+        (self.path / '.git').unlink()
+        with self.assertRaises(ValueError):
+            launch.restore_native_worktree(self.context, receipt, *arguments)
+
+    def test_restore_leaves_legacy_and_unverified_launches_on_existing_path(self):
+        for receipt in (None, dict(self.context, **self.native)):
+            self.assertIsNone(launch.restore_native_worktree(self.context, receipt, str(self.main), '-', 'claude', '-'))
+
     def test_unverified_transfer_refuses_before_mutating_task_ownership(self):
         self.create()
         self.observe()
