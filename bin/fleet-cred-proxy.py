@@ -1514,9 +1514,13 @@ class Proxy(BaseHTTPRequestHandler):
                  if (r != "relay" or (self.cfg.relay_url and relay_pass(self.cfg))) and (r != "central" or (self.cfg.central_url and hubcred))]
         if not order:
             # permanent: 403, which neither client retries (never a 503)
-            self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route")
+            # name the router's word and its reason (issue #4623: a separated
+            # login the hub gated as not_separated read only «no usable route»)
+            trust, twhy = self.router.trust or "unknown", self.router.trust_why or "-"
+            self.log(ev="deny", sid=sid, path=path.split("?")[0], why="no usable route — trust %s (%s)" % (trust, twhy))
             return self.fail(403, "this machine routes central (untrusted) and this session has no "
-                             "hub session credential (or no central proxy is configured)", "permission_error")
+                             "hub session credential (or no central proxy is configured) — trust %s: %s"
+                             % (trust, twhy), "permission_error")
         last, tried = None, list(skipped)
         for i, route in enumerate(order):
             nxt = order[i + 1] if i + 1 < len(order) else None
