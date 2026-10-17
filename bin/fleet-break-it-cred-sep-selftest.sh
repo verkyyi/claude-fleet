@@ -706,7 +706,7 @@ FR
 # #4622: a tenant of the shared proxy, separated, judged NOT. Its own fleet.conf
 # named FLEET_HUB_URL (only root's settings set it: the proxy writes
 # ignored.<login>), `check` WARNed, and the agent read every check WARN as
-# credsep=not — the hub refused macmini's 24haowan / fleetu12 / fleetu13 every
+# credsep=not — the hub refused three of one managed machine's tenants every
 # lease and its gate counted them, with clients, pods, root and a deleted user,
 # as 11 unseparated logins. `judge` is the heartbeat's word: not only on a leak.
 drill_cred_separated_judged_not() {

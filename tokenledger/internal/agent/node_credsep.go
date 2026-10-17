@@ -19,7 +19,7 @@ import (
 // separated, 3 not, one line why — never a second copy here. A script older
 // than the verb (exit 2, «unknown command») is asked the old way: status says
 // separated (exit 0) AND check passes (exit 0). The old way read any doctor
-// WARN as not separated — on macmini a tenant whose own fleet.conf named
+// WARN as not separated — on a managed machine a tenant whose own fleet.conf named
 // FLEET_HUB_URL (the shared proxy ignores it) was refused every lease.
 // The hub leases a login real tokens only on "separated".
 
