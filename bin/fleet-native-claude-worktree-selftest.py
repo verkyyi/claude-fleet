@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Explicit credential-free Claude native Worktree probe; no live Fleet access."""
+"""Explicit isolated Claude Worktree probe; model requests rejected locally."""
 import argparse
 import http.server
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,16 +13,41 @@ import tempfile
 import threading
 
 
+def capture_hook(destination, fleet_root, supervisor):
+    sys.path.insert(0, str(fleet_root / 'bin'))
+    import fleet_launch
+    payload = json.load(sys.stdin)
+    native = fleet_launch.native_parent()
+    if not fleet_launch.root_native(native, supervisor):
+        raise ValueError('hook native process is outside the fixture supervisor')
+    record = {key: payload.get(key) for key in ('hook_event_name', 'source', 'session_id', 'cwd')}
+    record.update(process=native, hook_cwd=os.getcwd(), project_dir=os.environ.get('CLAUDE_PROJECT_DIR'))
+    with destination.open('x') as output:
+        json.dump(record, output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--claude', default='claude')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--with-hooks', action='store_true', help='explicit non-bare offline SessionStart probe')
+    parser.add_argument('--capture-hook', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--supervisor', type=int, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
+    if arguments.capture_hook:
+        if not arguments.supervisor or arguments.supervisor <= 0:
+            parser.error('hook capture requires its fixture supervisor')
+        capture_hook(arguments.capture_hook, arguments.fleet_root, arguments.supervisor)
+        return
     executable = shutil.which(arguments.claude)
     if not executable:
         parser.error('native Claude binary is required')
     binary = str(Path(executable).resolve())
-    checks, requests = [], []
+    checks, requests, hooks = [], [], []
+    if arguments.with_hooks:
+        for managed in (Path('/Library/Application Support/ClaudeCode'), Path('/etc/claude-code')):
+            if managed.exists():
+                parser.error('non-bare fixture requires a host without machine-managed Claude configuration')
 
     def check(condition, message):
         if not condition:
@@ -70,12 +96,21 @@ def main():
                         for field in git('-C', repo, 'worktree', 'list', '--porcelain', '-z').split('\0')
                         if field.startswith('worktree ')}
 
-            def execute(label, *options):
+            def execute(label, *options, directory=None):
                 previous = len(requests)
-                result = subprocess.run([binary, '--bare', '-p', '--output-format', 'stream-json',
+                mode = ['--bare']
+                hook_path = root / (label + '-hook.json')
+                if arguments.with_hooks:
+                    command = shlex.join([sys.executable, str(Path(__file__).resolve()),
+                        '--fleet-root', str(arguments.fleet_root.resolve()), '--capture-hook', str(hook_path),
+                        '--supervisor', str(os.getpid())])
+                    settings = {'hooks': {'SessionStart': [{'hooks': [
+                        {'type': 'command', 'command': command, 'timeout': 15}]}]}}
+                    mode = ['--setting-sources', '', '--settings', json.dumps(settings)]
+                result = subprocess.run([binary, *mode, '-p', '--output-format', 'stream-json',
                                          '--verbose', '--tools', '', '--strict-mcp-config',
                                          '--model', 'claude-sonnet-4-6', *options, 'offline fixture'],
-                                        cwd=repo, env=environment, text=True, capture_output=True, timeout=40)
+                                        cwd=directory or repo, env=environment, text=True, capture_output=True, timeout=40)
                 records = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
                 initial = [record for record in records if record.get('type') == 'system'
                            and record.get('subtype') == 'init']
@@ -86,6 +121,28 @@ def main():
                 check(len(requests) > previous, label + ': native request reaches the loopback endpoint')
                 check(initial[0]['tools'] == [] and initial[0]['mcp_servers'] == [],
                       label + ': fixture cannot execute tools or MCP')
+                if arguments.with_hooks:
+                    check(hook_path.is_file(), label + ': native CLI actually executes the configured hook')
+                    observed = json.loads(hook_path.read_text())
+                    check(observed['hook_event_name'] == 'SessionStart'
+                          and observed['source'] == ('startup' if label == 'create' else 'resume'),
+                          label + ': native hook reports the expected lifecycle event')
+                    check(observed['session_id'] == initial[0]['session_id'],
+                          label + ': hook session matches native initialization')
+                    observed.update(phase=label, native_cwd=initial[0]['cwd'],
+                        cwd_matches_init=Path(observed['cwd']).resolve() == Path(initial[0]['cwd']).resolve())
+                    if label != 'resume':
+                        check(observed['cwd_matches_init'],
+                              label + ': hook cwd matches the actual native Worktree')
+                    else:
+                        check(Path(observed['cwd']).resolve() in (repo, Path(initial[0]['cwd']).resolve()),
+                              label + ': hook reports either launch cwd or restored native cwd')
+                    check(Path(observed['hook_cwd']).resolve() == Path(observed['cwd']).resolve(),
+                          label + ': hook process cwd agrees with its payload')
+                    check(observed['process']['actual_provider'] == 'claude'
+                          and observed['process']['executable'] == binary,
+                          label + ': existing Fleet verifier identifies the real native ancestor')
+                    hooks.append(observed)
                 return initial[0]
 
             git('init', '-q', repo)
@@ -105,6 +162,17 @@ def main():
             check(worktrees() == {repo, worktree}, 'resume does not create a second Worktree')
             check((worktree / 'tracked.txt').read_text() == 'uncommitted fixture work\n',
                   'native resume preserves uncommitted work')
+            if arguments.with_hooks:
+                check(hooks[0]['process']['pid'] != hooks[1]['process']['pid']
+                      or hooks[0]['process']['birth'] != hooks[1]['process']['birth'],
+                      'native resume preserves session identity but changes process incarnation')
+                restored = execute('resume-worktree', '--resume', created['session_id'], directory=worktree)
+                check(restored['session_id'] == created['session_id']
+                      and Path(restored['cwd']).resolve() == worktree,
+                      'explicit Worktree resume keeps the exact native session and directory')
+                check(worktrees() == {repo, worktree}
+                      and (worktree / 'tracked.txt').read_text() == 'uncommitted fixture work\n',
+                      'explicit Worktree resume does not recreate or reset native data')
             metadata = Path(git('-C', worktree, 'rev-parse', '--absolute-git-dir'))
             check((metadata / 'CLAUDE_BASE').is_file(), 'native creator records its ownership marker')
             check((metadata / 'locked').is_file(), 'native print-mode Worktree retains its Git lock')
@@ -133,8 +201,10 @@ def main():
             check(all(request['fixture_key'] and request['path'].startswith('/v1/messages') for request in requests),
                   'observed model requests use only the fake key and loopback endpoint')
             print(json.dumps({'version': created['claude_code_version'], 'checks': checks,
-                              'scope': 'bare print-mode creation/resume and direct guard checks only; '
-                                       'not TUI, hook loading, full MCP, authentication or Fleet launch acceptance'}, indent=2))
+                              'hooks': hooks,
+                              'scope': ('non-bare print-mode with actual fixture SessionStart hooks; '
+                                        if arguments.with_hooks else 'bare print-mode without hook loading; ')
+                                       + 'not TUI, full MCP, authentication or Fleet launch acceptance'}, indent=2))
     finally:
         endpoint.shutdown()
         endpoint.server_close()
