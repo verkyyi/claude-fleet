@@ -66,6 +66,22 @@ def pod(plan, endpoint):
                 labels=labels(plan, role)), spec=spec)
 
 
+# A request with no subresource (a Pod CREATE) has NO subResource key: CEL
+# errors on it and failurePolicy Fail denies the Pod, so every read is has()-
+# guarded (live, #4625).
+# One container's rule, applied to containers and initContainers SEPARATELY: the
+# API server types the two lists apart, so `containers + initContainers` has no
+# `_+_` overload and the whole policy fails its typeChecking (live, #4625).
+CONTAINER_RULE = ("c.image in %s && "
+                  "!has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) && "
+                  "c.securityContext.allowPrivilegeEscalation == false && "
+                  "(!has(c.securityContext.privileged) || !c.securityContext.privileged) && "
+                  "c.securityContext.readOnlyRootFilesystem && c.securityContext.capabilities.drop == ['ALL'] && "
+                  "c.securityContext.seccompProfile.type == 'RuntimeDefault' && "
+                  "(!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') && "
+                  "!has(c.securityContext.seLinuxOptions)")
+
+
 def admission(plan):
     """One run's explicit API-server contract; not a production exception.
 
@@ -78,12 +94,12 @@ def admission(plan):
     names = '[' + ','.join(repr(e['name']) for e in plan['endpoints']) + ']'
     images = '[' + ','.join(repr(e['image']) for e in plan['endpoints']) + ']'
     expressions = [
-        ("request.operation != 'CONNECT' || (request.subResource == 'attach' && "
+        ("request.operation != 'CONNECT' || (has(request.subResource) && request.subResource == 'attach' && "
          "object.container in ['egress-guard', 'observed'] && request.name in " + names +
          " && request.userInfo.username == " + repr(plan['controller']) +
          " && (!has(object.tty) || !object.tty))",
          'C9 forbids exec and port-forward; control is attach to the fixed supervisor only'),
-        ("request.subResource != 'ephemeralcontainers'", 'C9 forbids injected processes'),
+        ("!has(request.subResource) || request.subResource != 'ephemeralcontainers'", 'C9 forbids injected processes'),
         ("request.resource.resource != 'pods' || request.operation in ['CONNECT', 'DELETE'] || ("
          "object.metadata.name in " + names + " && object.spec.restartPolicy == 'Never' && "
          "object.spec.activeDeadlineSeconds <= 55 && object.spec.automountServiceAccountToken == false && "
@@ -102,19 +118,13 @@ def admission(plan):
          "object.spec.containers[0].securityContext.capabilities.add == "
          "(object.spec.containers[0].args == ['proxy'] ? " + repr(OBSERVER_CAPS + ['NET_ADMIN']) +
          " : " + repr(OBSERVER_CAPS) + ") && "
-         "(object.spec.containers + object.spec.initContainers).all(c, c.image in " + images + " && "
-         "!has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) && "
-         "c.securityContext.allowPrivilegeEscalation == false && "
-         "(!has(c.securityContext.privileged) || !c.securityContext.privileged) && "
-         "c.securityContext.readOnlyRootFilesystem && c.securityContext.capabilities.drop == ['ALL'] && "
-         "c.securityContext.seccompProfile.type == 'RuntimeDefault' && "
-         "(!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') && "
-         "!has(c.securityContext.seLinuxOptions)) && "
+         + " && ".join("object.spec.%s.all(c, %s)" % (field, CONTAINER_RULE % images)
+                       for field in ('containers', 'initContainers')) + " && "
          "object.spec.volumes.all(v, !has(v.hostPath) && !has(v.persistentVolumeClaim) && "
          "!has(v.projected) && (has(v.emptyDir) || has(v.configMap) || has(v.secret))))",
          'C9 permits only its bounded, exclusive observer template'),
         ("request.resource.resource != 'pods' || request.operation != 'UPDATE' || "
-         "request.subResource == 'status' || object.spec == oldObject.spec", 'C9 pod spec is immutable'),
+         "(has(request.subResource) && request.subResource == 'status') || object.spec == oldObject.spec", 'C9 pod spec is immutable'),
         ("!(request.resource.resource in ['configmaps','secrets']) || "
          "(request.operation != 'DELETE' && has(object.immutable) && object.immutable)",
          'C9 artifacts are immutable and cannot be replaced while the policy is installed'),

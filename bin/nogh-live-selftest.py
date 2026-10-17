@@ -328,6 +328,15 @@ class TraceMetadata(unittest.TestCase):
         ]).finish(0)
         with self.assertRaises(live.Refused):
             self.make_trace(['recvmsg(3, {msg_control=[{cmsg_type=SCM_RIGHTS, cmsg_data=[4<TCP:[192.0.2.1:10->203.0.113.1:443]>]}]}, 0) = 1'])
+        # tmux's client hands the server its standard fds; -yy decodes a
+        # character device as path<char M:N> (live, #4625). Accepted; a block
+        # device or a socket inside the same shape is still refused.
+        self.make_trace([
+            'recvmsg(3<UNIX-STREAM:[111->222]>, {msg_control=[{cmsg_type=SCM_RIGHTS, cmsg_data=[7</dev/null<char 1:3>>, 8</dev/pts/0<char 136:0>>]}]}, 0) = 1',
+        ]).finish(0)
+        for bad in ('7</dev/sda<block 8:0>>', '7</dev/null<char 1:3><TCP:[192.0.2.1:10->203.0.113.1:443]>>'):
+            with self.assertRaises(live.Refused):
+                self.make_trace(['recvmsg(3, {msg_control=[{cmsg_type=SCM_RIGHTS, cmsg_data=[' + bad + ']}]}, 0) = 1'])
 
     def test_fd_annotations_never_rewrite_quoted_exec_names(self):
         text, fds = observer.descriptor_metadata('execve("/tmp/3<gh>", [], 0) = 0')
@@ -354,6 +363,45 @@ class TraceMetadata(unittest.TestCase):
         trace.exited.add(8)
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
             trace.finish(0)
+
+    def test_inert_close_beside_a_sibling_fork_is_ordered_enough(self):
+        # live (#4625): a Go agent's thread closes a pipe while another forks.
+        # No socket is made, dropped or copied, so attribution cannot change.
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(7, 1.3, 1.6, 'fork() = 9')
+        trace.decode(8, 1.4, 1.5, 'close(5) = 0')
+        trace.decode(8, 1.42, 1.45, 'dup2(6, 7) = 7')
+        trace.exited.update({8, 9})
+        trace.finish(0)
+        # ...but a socket made, or a tracked socket closed, beside the fork is not
+        for racing in ('socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 5', 'close(3) = 0', 'dup2(3, 6) = 6'):
+            trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+            trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+            trace.decode(7, 1.3, 1.6, 'fork() = 9')
+            trace.decode(8, 1.4, 1.5, racing)
+            trace.exited.update({8, 9})
+            with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
+                trace.finish(0)
+
+    def test_call_cut_off_by_process_exit_is_a_failed_attempt(self):
+        # live (#4625): a thread inside a syscall when a sibling exit_groups.
+        trace = observer.Trace(plan(), 'node-a')
+        for line in ('7 1.000 execve("/usr/bin/python3", [""...], 0x1) = 0 <0.001>',
+                     '7 1.010 write(198, ""..., 1) = 1 <0.001>',
+                     '7 1.100 clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8 <0.001>',
+                     '8 1.200 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3 <0.001>',
+                     '8 1.300 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("203.0.113.1")}, 16 <unfinished ...>',
+                     '7 1.400 wait4(-1,  <unfinished ...>',
+                     '7 1.500 <... wait4 resumed> <unfinished ...>) = ?',
+                     '8 1.500 <... connect resumed> <unfinished ...>) = ?',
+                     '8 1.600 +++ exited with 0 +++',
+                     '7 2.000 write(198, ""..., %d) = %d <0.001>' % ((observer.PHASES.index('end') + 1,) * 2),
+                     '7 2.100 +++ exited with 0 +++'):
+            trace.feed(line + '\n')
+        self.assertEqual(trace.finish(0)['intervals']['startup']['github_network'], 1)
+        with self.assertRaises(live.Refused):  # a resume with nothing pending stays refused
+            observer.Trace(plan(), 'node-a').feed('7 1.0 <... wait4 resumed> <unfinished ...>) = ?\n')
 
     def test_fork_alias_reconnect_during_write_refuses(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
@@ -493,6 +541,20 @@ class Templates(unittest.TestCase):
         for pod in pods:
             mounts = pod['spec']['containers'][0]['volumeMounts']
             self.assertTrue(any(m.get('subPath') == 'resolv.conf' for m in mounts))
+        # The API server types containers and initContainers apart: a `+` of the
+        # two has no CEL overload and failed the -pods policy's typeChecking live
+        # (#4625). Each list carries the same container rule on its own.
+        expressions = [v['expression'] for o in objects if o['kind'] == 'ValidatingAdmissionPolicy'
+                       for v in o['spec']['validations']]
+        self.assertFalse(any('containers + object.spec.initContainers' in e for e in expressions))
+        rule = [e for e in expressions if 'object.spec.containers.all(c, ' in e]
+        self.assertEqual(len(rule), 1)
+        self.assertIn('object.spec.initContainers.all(c, ' + template.CONTAINER_RULE.split(' %s')[0], rule[0])
+        # A Pod CREATE carries no subResource key; an unguarded read errors and
+        # failurePolicy Fail denied all five Pods live (#4625).
+        for e in expressions:
+            reads = e.count('request.subResource')
+            self.assertEqual(reads, 2 * e.count('has(request.subResource)'), e)
 
     def test_extra_process_and_capability_surfaces_refuse(self):
         p = plan(); ep = next(e for e in p['endpoints'] if e['role'] == 'node-a')
