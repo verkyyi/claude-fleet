@@ -43,7 +43,8 @@ name: hub-deploy
 # in the summary, RUNBOOK.md has the restore). Every run writes a summary (old →
 # new, the commits between, schema changes, env changes, snapshot, rollback),
 # comments on issue $HUB_DEPLOY_NOTIFY_ISSUE (repo variable; unset = silent),
-# and repo variable HUB_DEPLOY_PAUSED=1 stops the train's call from deploying.
+# and the pause switch (repo variable HUB_DEPLOY_PAUSED=1, or an open issue
+# labelled hub-deploy-paused — bin/fleet-hub-pause.sh) stops the train's call.
 #
 # No long-lived credential exists for it, in this repo or anywhere: the deploy
 # job runs in environment `prod` (master only) and
@@ -87,7 +88,7 @@ on:
         default: ''
     outputs:
       deployed:
-        description: "success = the hub runs prod-<sha> and answers healthy; empty = nothing deployed (paused: HUB_DEPLOY_PAUSED=1)"
+        description: "success = the hub runs prod-<sha> and answers healthy; empty = nothing deployed (paused: bin/fleet-hub-pause.sh)"
         value: ${{ jobs.deploy.outputs.deployed }}
       digest:
         description: "phase build: the digest of prod-<sha7> — built here, or the same sha's image already there"
@@ -170,37 +171,46 @@ jobs:
             echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
           fi
 
-  # The pause switch (issue #2013): repo variable HUB_DEPLOY_PAUSED=1 and the
-  # release train's call deploys nothing — this job goes green, says 已暂停 on the
+  # The pause switch (issues #2013, #4621): the release train's call deploys
+  # nothing while repo variable HUB_DEPLOY_PAUSED=1 (as read when the run was
+  # QUEUED — GitHub fixes `vars` then) or an open issue is labelled
+  # hub-deploy-paused (read NOW, so it also stops a train already waiting in the
+  # lane; `bin/fleet-hub-pause.sh on|off`). This job goes green, says 已暂停 on the
   # summary, and the deploy job is skipped (the train then publishes nothing: it
-  # needed the hub). A person's workflow_dispatch is never paused: that is how you
-  # deploy (or roll back) by hand while automatic releases are off.
+  # needed the hub); the label unreadable is red. A person's workflow_dispatch is
+  # never paused: that is how you deploy (or roll back) by hand while automatic
+  # releases are off.
   gate:
     if: github.event_name != 'pull_request' && inputs.phase != 'build'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+      issues: read
     outputs:
       go: ${{ steps.pause.outputs.paused != 'true' }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
+          sparse-checkout: bin/fleet-hub-pause.sh
+          sparse-checkout-cone-mode: false
       - name: Paused?
         id: pause
         env:
           PAUSED: ${{ vars.HUB_DEPLOY_PAUSED }}
           INPUT_SHA: ${{ inputs.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # automatic releases pause: the release train's call (any event)
-          if [ "$PAUSED" = 1 ] && [ -n "$INPUT_SHA" ]; then
-            echo "paused=true" >> "$GITHUB_OUTPUT"
+          bash bin/fleet-hub-pause.sh check --repo "$GITHUB_REPOSITORY" --sha "$INPUT_SHA" --var "$PAUSED" || exit 1
+          if grep -q '^paused=true$' "$GITHUB_OUTPUT"; then
+            why=$(sed -n 's/^why=//p' "$GITHUB_OUTPUT" | tail -1)
             { echo "## hub-deploy · ⏸ 已暂停"
               echo
-              echo "仓库变量 \`HUB_DEPLOY_PAUSED=1\`：发布列车这一趟（\`${INPUT_SHA:0:7}\`）没有部署入口。"
-              echo "恢复自动发布：删掉这个变量（或改成别的值）；要现在发这一版：Actions → hub-deploy → Run workflow。"
+              echo "${why}：发布列车这一趟（\`${INPUT_SHA:0:7}\`）没有部署入口。"
+              echo "恢复自动发布：\`bin/fleet-hub-pause.sh off\`（关掉带 \`hub-deploy-paused\` 标签的单），并删掉仓库变量 \`HUB_DEPLOY_PAUSED\`；要现在发这一版：Actions → hub-deploy → Run workflow。"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::hub-deploy paused (HUB_DEPLOY_PAUSED=1) — the release train's call deployed nothing"
-          else
-            echo "paused=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::hub-deploy paused (${why}) — the release train's call deployed nothing"
           fi
 
   # The train's hub image, built BESIDE its tests (issue #3867, EPIC #3863 C4):

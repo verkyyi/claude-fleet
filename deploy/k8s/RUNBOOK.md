@@ -243,7 +243,7 @@ kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
 
 停写从第 2 步算到第 4 步两份新 pod 就绪；读一直不停（旧 pod 只读服务到新 pod 接手）。
 
-1. **停自动发布，合切换 PR**：`gh variable set HUB_DEPLOY_PAUSED --body 1 --repo verkyyi/claude-fleet`，再合并
+1. **停自动发布，合切换 PR**：`bin/fleet-hub-pause.sh on --why <原因>`（已在车道里排着的列车也拦得住；仓库变量只拦设了之后才排队的），再合并
    上面第 4 条的切换 PR（暂停中，什么都不发）。
 2. **只读**：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY=1`（滚一次）。
    起来后 `curl -s https://<hub>/healthz` 带 `"mode":"read-only"`；写接口一律 `503` + `Retry-After: 15`，
@@ -256,7 +256,7 @@ kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
          'read -r U; CCQUOTA_DB_URL="$U" ccquota db migrate --from /data/ccquota.db --verify'
    ```
    有任何 `DIFF` 它自己回滚、退出码 1 —— 不往下走：`kubectl -n new-deploy set env deploy/ccquota-hub CCQUOTA_READONLY-`
-   回到原样，revert 切换 PR，删掉 `HUB_DEPLOY_PAUSED`。
+   回到原样，revert 切换 PR，`bin/fleet-hub-pause.sh off`。
 4. **换成两份**（管理员 kubeconfig，在切换 PR 合并后的 master 干净 checkout 里；这是唯一一次手工 apply——
    用线上正在跑的镜像，不发新版本）：
    ```bash
@@ -271,18 +271,18 @@ kubectl -n new-deploy exec $POD -c ccquota -- rm $SNAP
    就绪才走。判据：`kubectl -n new-deploy get pod -l app=ccquota-hub` 两份 Ready；`/healthz` 不再有 `mode`；
    `kubectl -n new-deploy logs deploy/ccquota-hub -c ccquota | grep 'database: Postgres'`；
    `curl -s -X POST https://<hub>/v1/deploy-probe` 回 200。
-5. **恢复自动发布**：`gh variable delete HUB_DEPLOY_PAUSED --repo verkyyi/claude-fleet`。之后第一次真发布的
+5. **恢复自动发布**：`bin/fleet-hub-pause.sh off`。之后第一次真发布的
    hub-deploy 摘要里 `downtime_seconds=<n>` 那一行就是这批的上线证据，应为 0。
 6. **旧盘留 7 天**：PVC `ccquota-data` 不再在渲染里，但 apply 从不删东西，它和 `/data/ccquota.db` 原样留着。
    第 7 天：`kubectl -n new-deploy delete pvc ccquota-data`（管理员）。
 
 ### 3. 退回（7 天内）
 
-1. `gh variable set HUB_DEPLOY_PAUSED --body 1 --repo verkyyi/claude-fleet`，revert 切换 PR（`components: [sqlite]` 回来）。
+1. `bin/fleet-hub-pause.sh on --why <原因>`（已在车道里排着的列车也拦得住；仓库变量只拦设了之后才排队的），revert 切换 PR（`components: [sqlite]` 回来）。
 2. 管理员 kubeconfig，在 revert 后的 master 上，同第 4 步的 `LIVE` / `kubectl kustomize … | sed … | kubectl apply -f -`，
    再 `kubectl -n new-deploy delete pdb ccquota-hub`（apply 不删它；单份上留着它会挡住节点排空）。
    这一次是 `Recreate`：两份停掉、单份挂盘起来，30–60 秒不可用。
-3. `kubectl -n new-deploy rollout status deploy/ccquota-hub`，`/healthz` 200 后删掉 `HUB_DEPLOY_PAUSED`。
+3. `kubectl -n new-deploy rollout status deploy/ccquota-hub`，`/healthz` 200 后`bin/fleet-hub-pause.sh off`。
 
 hub 回到 `/data/ccquota.db`，也就是第 2 步只读那一刻的数据。⚠️ 切过去之后写进 Postgres 的东西不在旧库里，
 没有反向搬家；所以退回要早——发现不对就在当晚退。

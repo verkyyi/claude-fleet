@@ -143,10 +143,13 @@ and whether it rolled back. The logic lives in
 [`.github/actions/hub-release/release.sh`](../../.github/actions/hub-release/release.sh)
 (`--selftest` runs on every PR).
 
-**Pause** — repo variable `HUB_DEPLOY_PAUSED=1`
-(`gh variable set HUB_DEPLOY_PAUSED --body 1`): the release train's call deploys
-nothing (its summary says 已暂停, and a train that needed the hub publishes
-nothing). Delete the variable (`gh variable delete HUB_DEPLOY_PAUSED`) to resume —
+**Pause** — `bin/fleet-hub-pause.sh on --why <words>` (an open issue labelled
+`hub-deploy-paused`): the release train's call deploys nothing (its summary says
+已暂停, and a train that needed the hub publishes nothing). The gate reads the
+label when it RUNS, so a train already waiting in the lane is stopped too; the
+older repo variable `HUB_DEPLOY_PAUSED=1` still pauses, but GitHub fixes `vars`
+when a run is queued, so it misses a train queued before it was set (#4621).
+`bin/fleet-hub-pause.sh off` (and delete the variable, if set) to resume —
 the commits merged while paused go out with the next train, or run the workflow
 by hand. A manual
 `workflow_dispatch` is never paused.
