@@ -4,7 +4,7 @@
 #
 # A dynamic (Aerial) desktop on a Mac mini with no display attached costs ~10–15%
 # of a core all day — WallpaperAerialsExtension decoding video through
-# VTDecoderXPCService, WindowServer compositing it — and nobody sees it (mini2,
+# VTDecoderXPCService, WindowServer compositing it — and nobody sees it (a host Mac mini,
 # 2026-10-15). So on a managed Mac with NO display connected, each login running
 # the Aerial extension gets the system's own solid-colour picture and its screen
 # saver off, ONCE: a login changed before (<state>/wallpaper/<login>) is never

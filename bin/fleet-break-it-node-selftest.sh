@@ -1814,7 +1814,7 @@ EOF
 }
 
 # wallpaper-aerial (#4362): a headless managed Mac running the Aerial desktop for a
-# login (mini2, 2026-10-15: ~10–15% of a core, nobody looking). The doctor's row
+# login (a host Mac mini, 2026-10-15: ~10–15% of a core, nobody looking). The doctor's row
 # WARNs; one `off` (the machine daemon's task) sets the static picture as that login
 # once, and the row reads PASS. Switched back by hand, a second pass changes nothing.
 drill_wallpaper_aerial() {
