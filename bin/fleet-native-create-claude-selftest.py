@@ -262,6 +262,11 @@ def main():
             def screen():
                 return tmux('capture-pane', '-p', '-t', '%0', '-S', '-100')
 
+            def prompt_shows(value):
+                rows = screen().splitlines()
+                return any(' '.join(row.split()) == '❯ ' + value and following.lstrip().startswith('─')
+                           for row, following in zip(rows, rows[1:]))
+
             def config_events():
                 path = root / 'config-events.jsonl'
                 return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
@@ -414,7 +419,7 @@ def main():
                         (worktree / 'tracked.txt').write_text('retained fixture\n')
                         check(not requests, 'native startup sends no model request before explicit input')
                         tmux('send-keys', '-t', '%0', '-l', 'offline fixture')
-                        wait(lambda: 'offline fixture' in screen(), 'native unsent draft was not visible')
+                        wait(lambda: prompt_shows('offline fixture'), 'native unsent draft was not visible in its input line')
                         check(not requests, 'visible native draft remains unsent until Enter')
                         tmux('send-keys', '-t', '%0', 'Enter')
                         wait(lambda: 'offline fixture rejection' in screen(), 'fixture model request was not rejected')
@@ -424,6 +429,7 @@ def main():
                                   'native user prompt hook survives Fleet hook composition')
                     receipt = observed
                     tmux('send-keys', '-t', '%0', '-l', '/exit')
+                    wait(lambda: prompt_shows('/exit'), phase + ': native exit command was not rendered in its input line')
                     tmux('send-keys', '-t', '%0', 'Enter')
                     wait(lambda: 'Keep worktree' in screen(), phase + ': native exit chooser missing')
                     tmux('send-keys', '-t', '%0', 'Enter')
