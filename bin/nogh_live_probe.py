@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import struct
 import subprocess
@@ -12,7 +13,7 @@ import ssl
 import urllib.parse
 import urllib.request
 
-from nogh_live_contract import read_private, require
+from nogh_live_contract import Refused, read_private, require, write_private
 
 
 def receive(sock, size):
@@ -137,5 +138,13 @@ def main(name):
 if __name__ == '__main__':
     try:
         main(sys.argv[1])
-    except BaseException:
+    except BaseException as exc:
+        # Only the fixed code (an identifier) crosses to the broker, so a live
+        # control failure says WHICH check failed (#4625); never a message.
+        code = str(exc) if isinstance(exc, Refused) and re.fullmatch(r'[A-Z0-9_]{1,64}', str(exc)) \
+            else type(exc).__name__.upper()[:64]
+        try:
+            write_private(Path('/run/fleet-c9/control.refusal'), code)
+        except BaseException:
+            pass
         sys.exit(1)

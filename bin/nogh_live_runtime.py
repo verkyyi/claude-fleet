@@ -10,6 +10,7 @@ import ctypes
 import hashlib
 import importlib.util
 import json
+import re
 import os
 import pwd
 from pathlib import Path
@@ -130,6 +131,18 @@ def marker(phase):
     with os.fdopen(fd, 'w') as target:
         target.write(phase)
     os.replace(path, STATE / 'phase')
+
+
+DETAIL = re.compile(r'[A-Z0-9_]{1,64}(?:@[a-z][a-z0-9_]{0,31})?')
+
+
+def control_refusal():
+    """A control probe's refusal code, left in the root-only state dir (#4625)."""
+    try:
+        value = read_private(STATE / 'control.refusal')
+    except (OSError, ValueError):
+        return ''
+    return value if isinstance(value, str) and DETAIL.fullmatch(value) else ''
 
 
 def private_process():
@@ -279,6 +292,9 @@ def broker(role):
             else:
                 command = [sys.executable, str(ROOT / 'nogh_live_runtime.py'), 'work', role, phase]
             control = phase == 'identity' or phase.startswith(('deny:', 'allow:'))
+            if control:
+                try: (STATE / 'control.refusal').unlink()
+                except FileNotFoundError: pass
             p = subprocess.Popen(command, stdin=subprocess.DEVNULL, close_fds=True,
                                  **(dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                     if control else output[phase]), **({} if control else identity))
@@ -286,7 +302,12 @@ def broker(role):
                 code = p.wait(timeout=phase_timeout(phase))
             except subprocess.TimeoutExpired:
                 p.kill(); p.wait(); code = 124
-            emit(dict(type='result', phase=phase, exit=code))
+            result = dict(type='result', phase=phase, exit=code)
+            if control and code:
+                refusal = control_refusal()
+                if refusal:
+                    result['refusal'] = refusal  # the probe's own code, nothing else (#4625)
+            emit(result)
             require(code == 0, 'ACTION_FAILED')
         elif action == 'finish':
             require(phase == requested == 'end', 'END_MARKER_REQUIRED')
@@ -405,8 +426,10 @@ def supervise(role):
                             require(value.get('type') in ('ready', 'marked', 'result')
                                     and value.get('phase') in PHASES, 'BROKER_FORMAT')
                             if value['type'] == 'result':
-                                require(set(value) == {'type', 'phase', 'exit'} and type(value['exit']) is int,
-                                        'BROKER_FORMAT')
+                                require(set(value) - {'refusal'} == {'type', 'phase', 'exit'}
+                                        and type(value['exit']) is int
+                                        and ('refusal' not in value or (isinstance(value['refusal'], str)
+                                             and DETAIL.fullmatch(value['refusal']))), 'BROKER_FORMAT')
                                 results[value['phase']] = value['exit']
                             else:
                                 require(set(value) == {'type', 'phase'}, 'BROKER_FORMAT')
@@ -456,7 +479,11 @@ def main():
         # The exception may originate in a JSON value, executable or syscall;
         # only this constant crosses the evidence boundary.
         code = str(exc) if isinstance(exc, Refused) else 'C9_RUNTIME_UNAVAILABLE'
-        emit(dict(type='failure', code=code, live='NOT RUN'))
+        record = dict(type='failure', code=code, live='NOT RUN')
+        detail = getattr(exc, 'detail', '')
+        if isinstance(detail, str) and DETAIL.fullmatch(detail):
+            record['detail'] = detail  # identifiers only (#4625)
+        emit(record)
         return 125
 
 

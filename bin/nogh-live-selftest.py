@@ -364,6 +364,24 @@ class TraceMetadata(unittest.TestCase):
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
             trace.finish(0)
 
+    def test_refusal_names_its_check_and_syscall_only(self):
+        # A live run keeps no raw trace: the failure record says WHICH check
+        # refused and on WHICH syscall, as identifiers — never the line (#4625).
+        trace = observer.Trace(plan(), 'node-a')
+        with self.assertRaises(live.Refused) as caught:
+            trace.feed('7 1.0 <... wait4 resumed> <unfinished ...>) = ?\n')
+        self.assertEqual(str(caught.exception), 'TRACE_FORMAT_OR_COVERAGE')
+        self.assertEqual(caught.exception.detail, 'UNMATCHED_RESUME@wait4')
+        trace = observer.Trace(plan(), 'node-a')
+        with self.assertRaises(live.Refused) as caught:
+            trace.feed('7 1.0 connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("/secret/path")}, 16) = 0\n')
+        self.assertNotIn('secret', caught.exception.detail)
+        self.assertRegex(caught.exception.detail, r'^[A-Z0-9_]+@connect$')
+        import nogh_live_runtime as runtime
+        self.assertTrue(runtime.DETAIL.fullmatch('UNMATCHED_RESUME@wait4'))
+        for bad in ('x', 'A B', 'CODE@/etc/passwd', 'CODE@Upper', 'A' * 65):
+            self.assertIsNone(runtime.DETAIL.fullmatch(bad), bad)
+
     def test_inert_close_beside_a_sibling_fork_is_ordered_enough(self):
         # live (#4625): a Go agent's thread closes a pipe while another forks.
         # No socket is made, dropped or copied, so attribution cannot change.
