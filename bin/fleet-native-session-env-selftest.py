@@ -54,22 +54,39 @@ path = pathlib.Path(sys.argv[2]) / (payload['session_id'] + '.json')
 path.with_suffix('.started').write_text(json.dumps(payload))
 launch = runpy.run_path(sys.argv[1])
 observed = {'payload': payload,
-            'environment': {name: os.environ.get(name) for name in sys.argv[3:]}}
+            'environment': {name: os.environ.get(name) for name in sys.argv[4:]}}
 try:
     observed['native'] = launch['native_parent']()
+    if sys.argv[3]:
+        client_type = runpy.run_path(sys.argv[3])['Client']
+        socket = pathlib.Path(os.environ['CODEX_HOME']) / 'app-server-control/app-server-control.sock'
+        client = client_type('unix://' + str(socket), timeout=3, peer_pid=observed['native']['pid'])
+        try:
+            observed['thread'] = client.call('thread/read', {'threadId': payload['session_id'], 'includeTurns': False})['thread']
+        finally:
+            client.close()
 except Exception as error:
     observed['error'] = str(error)
 path.write_text(json.dumps(observed))
 '''
 
 
-def launch(binary, base, codex_home, environment, prior_ids, stop, ready, supervised=False):
+def process_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def launch(binary, base, codex_home, environment, prior_ids, stop, ready, supervised=False, fork_from='', resume_from=''):
     descriptor, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
     child = None
     try:
         try:
-            command = [binary, '--cd', str(base), '--worktree',
+            operation = ['resume', resume_from] if resume_from else ['fork', fork_from] if fork_from else []
+            command = [binary, *operation, '--cd', str(base), *([] if resume_from else ['--worktree']),
                        'Offline session environment fixture. Do not run tools.']
             if supervised:
                 command = [sys.executable, '-c',
@@ -100,7 +117,8 @@ def launch(binary, base, codex_home, environment, prior_ids, stop, ready, superv
                         first = json.loads(stream.readline())
                     except json.JSONDecodeError:
                         continue
-                if first.get('type') == 'session_meta' and first['payload']['id'] not in prior_ids:
+                if first.get('type') == 'session_meta' and (
+                        first['payload']['id'] == resume_from if resume_from else first['payload']['id'] not in prior_ids):
                     found.append(first['payload'])
             if len(found) == 1 and ready(found[0]['id']):
                 return child, descriptor, found[0]
@@ -116,7 +134,10 @@ def main():
     parser.add_argument('--codex', default='codex')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument('--hooks', action='store_true', help='also inspect reviewed SessionStart hook environment and native ancestry')
+    parser.add_argument('--fork-seed', action='store_true', help='with --hooks, inspect native forks of explicitly named empty threads')
     arguments = parser.parse_args()
+    if arguments.fork_seed and not arguments.hooks:
+        parser.error('--fork-seed requires --hooks')
     executable = shutil.which(arguments.codex)
     if not executable:
         parser.error('native Codex binary is required')
@@ -125,6 +146,7 @@ def main():
     stop = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-native-local-runtime-selftest.py'))['stop']
     checks, requests, observations = [], [], []
     hook_observations = []
+    seed_observations = []
     lifecycle_names = (*NAMES, 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_LAUNCH_CONTEXT', 'FLEET_AUTHORITY_CONTEXT')
     launch_api = runpy.run_path(str(arguments.fleet_root / 'bin/fleet_launch.py')) if arguments.hooks else None
 
@@ -196,7 +218,8 @@ def main():
                 hook_script = root / 'hook.py'
                 hook_script.write_text(HOOK)
                 command = shlex.join([sys.executable, str(hook_script),
-                    str(arguments.fleet_root / 'bin/fleet_launch.py'), str(hook_results), *lifecycle_names])
+                    str(arguments.fleet_root / 'bin/fleet_launch.py'), str(hook_results),
+                    str(arguments.fleet_root / 'bin/fleet-codex-rpc.py') if arguments.fork_seed else '', *lifecycle_names])
                 with (codex_home / 'config.toml').open('a') as configuration:
                     configuration.write('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
                                         'type="command"\ncommand=' + json.dumps(command) + '\n')
@@ -207,7 +230,7 @@ def main():
                 backend = subprocess.Popen([binary, 'app-server', '--listen', 'unix://'], cwd=base,
                     env=dict(environment, **backend_values), stdin=subprocess.DEVNULL, stdout=logfile,
                     stderr=logfile, start_new_session=True)
-                children, descriptors, identifiers = [], [], []
+                children, descriptors, identifiers, seeds = [], [], [], []
                 rpc = None
                 try:
                     socket = codex_home / 'app-server-control/app-server-control.sock'
@@ -246,11 +269,23 @@ def main():
                         check(rpc is not None and rpc.call('thread/loaded/list', {})['data'] == [],
                               'reviewed fixture restarts on the exact idle native backend')
                     for label in ('first', 'second'):
+                        seed_id = ''
+                        if arguments.fork_seed:
+                            seed = rpc.call('thread/start', {'cwd': str(base)})['thread']
+                            seed_id = seed['id']
+                            seeds.append(seed_id)
+                            rpc.call('thread/name/set', {'threadId': seed_id, 'name': 'fixture-' + label})
+                            check(Path(seed['path']).is_file(), label + ': native naming persists the empty fork source')
+                            seed_inspection = rpc.call('mcpServer/tool/call', {'threadId': seed_id,
+                                'server': 'fixture', 'tool': 'inspect', 'arguments': {}})
+                            check(not seed_inspection.get('isError'), label + ': empty source also starts configured MCP')
+                            seed_observations.append({'label': label, 'thread': seed_id,
+                                **json.loads(seed_inspection['content'][0]['text'])})
                         values = {name: 'fixture-' + label + '-' + name.lower() for name in lifecycle_names}
                         child, descriptor, metadata = launch(binary, base, codex_home,
-                            dict(environment, **values), identifiers, stop,
+                            dict(environment, **values), [*identifiers, *seeds], stop,
                             lambda identifier: any(request['cache_key'] == identifier for request in requests),
-                            supervised=arguments.hooks)
+                            supervised=arguments.hooks, fork_from=seed_id)
                         children.append(child)
                         descriptors.append(descriptor)
                         identifiers.append(metadata['id'])
@@ -260,6 +295,9 @@ def main():
                         check(all(identifier in loaded for identifier in identifiers), label + ': all opened TUI threads belong to backend')
                         check(all(process.poll() is None for process in children), label + ': both TUI lifetimes overlap')
                         native = rpc.call('thread/read', {'threadId': metadata['id'], 'includeTurns': False})['thread']
+                        if arguments.fork_seed:
+                            check(native['forkedFromId'] == seed_id and native['id'] != seed_id,
+                                  label + ': native fork retains its exact preallocated source')
                         check(Path(native['cwd']).resolve().is_relative_to(codex_home / 'worktrees'),
                               label + ': native worktree remains outside base')
                         result = rpc.call('mcpServer/tool/call', {'threadId': metadata['id'],
@@ -284,10 +322,11 @@ def main():
                                     'requests': requests, 'thread': native,
                                     'hooks': rpc.call('hooks/list', {'cwds': [native['cwd']]})}))
                             hook_result = json.loads(result_path.read_text())
-                            check('native' in hook_result, label + ': reviewed SessionStart executes: '
+                            check('native' in hook_result and not hook_result.get('error'), label + ': reviewed SessionStart executes: '
                                   + str(hook_result.get('error', 'ok')))
                             payload, native = hook_result['payload'], hook_result['native']
-                            check(payload['hook_event_name'] == 'SessionStart' and payload['source'] == 'startup'
+                            check(payload['hook_event_name'] == 'SessionStart'
+                                  and payload['source'] == ('fork' if arguments.fork_seed else 'startup')
                                   and payload['session_id'] == metadata['id'],
                                   label + ': native SessionStart carries the exact root')
                             check(Path(payload['cwd']).resolve() == Path(observed['cwd']).resolve(),
@@ -302,8 +341,44 @@ def main():
                                   label + ': shared backend fails the existing per-launch supervisor ancestry check')
                             hook_observations.append({'label': label, 'thread': metadata['id'],
                                                       'supervisor': child.pid, **hook_result})
+                            if arguments.fork_seed:
+                                check(hook_result['thread']['id'] == metadata['id']
+                                      and hook_result['thread']['forkedFromId'] == seed_id,
+                                      label + ': synchronous hook can read its exact native fork source')
+                                check(observed['pid'] != seed_observations[-1]['pid'],
+                                      label + ': empty source and user fork have separate MCP processes')
                     check(len(set(identifiers)) == 2, 'distinct native roots share the backend')
                     check(observations[0]['pid'] != observations[1]['pid'], 'each thread has a distinct MCP process')
+                    if arguments.fork_seed:
+                        check(len(set(seeds)) == 2, 'each fixture launch has a distinct named source')
+                        check(all(hook['thread']['forkedFromId'] == seed for hook, seed in zip(hook_observations, seeds)),
+                              'concurrent fork relationships do not cross source identities')
+                        check(not any(request['cache_key'] in seeds for request in requests),
+                              'source creation and naming do not start model requests')
+                        duplicate = rpc.call('thread/fork', {'threadId': seeds[0], 'cwd': str(base)})['thread']
+                        check(duplicate['forkedFromId'] == seeds[0] and duplicate['id'] not in identifiers,
+                              'native permits another fork of the same source; source identity is not one-use authorization')
+                        duplicate_inspection = rpc.call('mcpServer/tool/call', {'threadId': duplicate['id'],
+                            'server': 'fixture', 'tool': 'inspect', 'arguments': {}})
+                        check(not duplicate_inspection.get('isError'), 'duplicate fixture fork also owns a native MCP process')
+                        seed_observations.append({'label': 'duplicate', 'thread': duplicate['id'],
+                            **json.loads(duplicate_inspection['content'][0]['text'])})
+                        for source_id in [*seeds, duplicate['id']]:
+                            rpc.call('thread/archive', {'threadId': source_id})
+                        deadline = time.monotonic() + 5
+                        while any(process_exists(item['pid']) for item in seed_observations) and time.monotonic() < deadline:
+                            time.sleep(.05)
+                        check(not any(process_exists(item['pid']) for item in seed_observations),
+                              'native archive retires all source and duplicate MCP processes')
+                        loaded = rpc.call('thread/loaded/list', {})['data']
+                        check(not any(source_id in loaded for source_id in [*seeds, duplicate['id']])
+                              and all(identifier in loaded for identifier in identifiers),
+                              'source retirement leaves both intended user forks loaded')
+                        for source_id in [*seeds, duplicate['id']]:
+                            rpc.call('thread/delete', {'threadId': source_id})
+                        check(all(rpc.call('thread/read', {'threadId': identifier, 'includeTurns': False})['thread']['forkedFromId'] == seed
+                                  for identifier, seed in zip(identifiers, seeds)),
+                              'native deletion of owned empty sources preserves both fork identities')
                     forged = rpc.call('mcpServer/tool/call', {'threadId': identifiers[0],
                         'server': 'fixture', 'tool': 'inspect', 'arguments': {},
                         '_meta': {'threadId': identifiers[1], 'fixtureMarker': 'caller-supplied'}})
@@ -323,6 +398,25 @@ def main():
                           and remaining_result['pid'] == observations[1]['pid']
                           and remaining_result['metadata']['threadId'] == identifiers[1],
                           'stopping the first TUI does not change second-thread tool ownership')
+                    if arguments.fork_seed:
+                        worktrees = git('-C', base, 'worktree', 'list', '--porcelain')
+                        prior_requests = sum(request['cache_key'] == identifiers[0] for request in requests)
+                        child, descriptor, metadata = launch(binary, base, codex_home, environment, [], stop,
+                            lambda identifier: sum(request['cache_key'] == identifier for request in requests) > prior_requests,
+                            supervised=True, resume_from=identifiers[0])
+                        children.append(child)
+                        descriptors.append(descriptor)
+                        check(metadata['id'] == identifiers[0], 'native TUI resume keeps the exact fork after source deletion')
+                        resumed = rpc.call('mcpServer/tool/call', {'threadId': identifiers[0],
+                            'server': 'fixture', 'tool': 'inspect', 'arguments': {}})
+                        resumed_observation = json.loads(resumed['content'][0]['text'])
+                        check(not resumed.get('isError') and resumed_observation['metadata']['threadId'] == identifiers[0]
+                              and resumed_observation['cwd'] == observations[0]['cwd'],
+                              'resumed fork tools retain the exact root and worktree')
+                        check(git('-C', base, 'worktree', 'list', '--porcelain') == worktrees,
+                              'native TUI resume creates no extra worktree')
+                        check(children[1].poll() is None, 'resuming the first fork leaves the second TUI alive')
+                        observations.append({'label': 'resumed', 'thread': identifiers[0], **resumed_observation})
                     check(all(not request['authorization'] and request['path'] == '/v1/responses' for request in requests),
                           'all inference is rejected locally without credentials')
                     check((base / 'tracked').read_text() == 'unchanged\n' and not git('-C', base, 'status', '--porcelain'),
@@ -335,19 +429,13 @@ def main():
                     if rpc is not None:
                         rpc.close()
                     stop(backend)
-            def exists(pid):
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    return False
-                return True
-
             deadline = time.monotonic() + 5
-            while any(exists(observed['pid']) for observed in observations) and time.monotonic() < deadline:
+            while any(process_exists(observed['pid']) for observed in [*observations, *seed_observations]) and time.monotonic() < deadline:
                 time.sleep(.05)
-            check(not any(exists(observed['pid']) for observed in observations), 'owned MCP processes exit with backend cleanup')
+            check(not any(process_exists(observed['pid']) for observed in [*observations, *seed_observations]), 'owned MCP processes exit with backend cleanup')
             print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
                               'hooks': hook_observations,
+                              'seeds': seed_observations,
                               'scope': 'fixture values only; not live credential or tool authorization acceptance'}, indent=2))
     finally:
         endpoint.shutdown()
