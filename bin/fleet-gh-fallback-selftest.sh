@@ -72,6 +72,17 @@ r=$(sed -n 's/^reset=//p' "$m"); [ "$r" -gt "$now" ] && [ "$r" -le "$((now + 700
 rm -f "$FLEET_STATE_DIR"/gh-limit.*
 ok "shared marker: reset/source/at, atomic, expires, secondary holds all, default hold"
 
+# A read-only install (no logs/, cannot make one — the managed runtime, issue #4633):
+# the default log path is skipped without a word on stderr.
+if [ "$(id -u)" != 0 ]; then
+  mkdir -p "$WORK/roinst/bin"; chmod 555 "$WORK/roinst"
+  err=$( (unset FLEET_GH_LOG; _FLEET_GH_LIB_DIR="$WORK/roinst/bin"; fleet_gh_log limited bucket=graphql src=t; echo "rc=$?") 2>&1 )
+  chmod 755 "$WORK/roinst"
+  [ "$err" = "rc=0" ] || fail "read-only install: fleet_gh_log quiet, rc 0" "$err"
+  [ -e "$WORK/roinst/logs" ] && fail "read-only install: no logs/ made"
+  ok "read-only install: the gh-limit log is skipped silently"
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
   printf 'skip CLI layers: no jq on PATH to run the real --jq programs\n'
   printf 'PASS fleet-gh-fallback-selftest (%d checks, CLI layers skipped)\n' "$pass"; exit 0
