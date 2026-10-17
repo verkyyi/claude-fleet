@@ -5448,10 +5448,10 @@ fleet_worktree_setup() {
 # symlink stays the operator's choice. Under fleet_timebox
 # (FLEET_DEPS_SHARE_TIMEOUT, 60 s), silent on both streams, always rc 0 — a
 # failure is the old way (install as usual), never a failed spawn.
-# FLEET_DEPS_SHARE=0 turns it off.
+# FLEET_DEPS_SHARE=1 opts into this optional setup work.
 fleet_worktree_deps_share() {
   local main="${1:-}" wt="${2:-}" budget bin
-  [ "${FLEET_DEPS_SHARE:-1}" = 0 ] && return 0
+  [ "${FLEET_DEPS_SHARE:-0}" = 1 ] || return 0
   [ -d "$wt" ] || return 0
   budget="${FLEET_DEPS_SHARE_TIMEOUT:-60}"
   case "$budget" in ''|*[!0-9]*) budget=60 ;; esac

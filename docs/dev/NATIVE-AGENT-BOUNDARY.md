@@ -185,6 +185,39 @@ JSON 结果保存为 CI artifact。工作流存在不等于 Linux 验收通过�
 后续由原生创建目录时，仍须在同一准入链中校验新路径与所选仓库，再写入这份既有绑定；
 不能直接把一个未知 cwd 当成授权，也不能在已分配的 Fleet 工作树内再创建第二层工作树。
 
+### 创建前 setup 的减法与迁移边界
+
+盘点发现即使没有配置 `FLEET_WORKTREE_SETUP`，旧 `fleet_worktree_setup` 仍默认调用
+依赖共享助手：扫描锁文件和其他工作树，尝试克隆已有 `node_modules`，单次有界预算为
+60 秒。这是 Fleet 的额外准备工作，不是原生 Agent 必需的启动步骤，也不是原生 CLI
+会自动替项目安装依赖的证据。
+
+候选将自动共享改为显式 `FLEET_DEPS_SHARE=1`。未设置、空值、0 或非法值时，在调用
+timebox/助手之前直接返回，不扫描、不克隆、不产生共享记录。已有显式 1、自定义
+`FLEET_WORKTREE_SETUP`、直接执行 `fleet-deps-share.sh` 与 `--status` 均保留；不删除或
+修改已有依赖树，不改 `FLEET_BASE_DEPS` 的显式/链接配置语义。Claude 与 Codex 共用的
+旧目录分配入口都获得此减法，旧会话不需要重开。分类表将这些现有辅助工具归为按需，
+不是新增组件或另一套依赖安装器。
+
+这只证明默认启动少一轮预处理，不证明任务总耗时必然下降：依赖尚未安装时，首次项目
+命令仍可能需要安装。依赖克隆加速的环境应显式保留 `FLEET_DEPS_SHARE=1`，并以完整项目
+测试对照再决定是否关闭；不能用窗口更快出现掩盖后续安装时间。本批不修改任何已有登录配置。
+
+下一步原生创建不能简单接回同一串 Fleet setup：
+
+| 原职责 | 归属与边界 |
+|---|---|
+| 跟踪文件 checkout、分支及原生工作树注册 | 交给已验收的原生创建者；Fleet 不再先分配一层工作树 |
+| 项目依赖安装 | 项目自己的命令和包管理器缓存；Fleet 不默认扫描、复制或安装 |
+| 明确选用的预复制/共享 | 保留按需工具；不能把 `.worktreeinclude` 的文件复制误称为 lockfile 校验或 COW 克隆 |
+| 本地忽略文件 | Claude 支持项目显式 `.worktreeinclude`；不替用户生成宽泛规则或自动复制凭据 |
+| 现有自定义 setup | 不静默丢弃；特别是生成 Agent 配置/MCP 的 setup，不能迁到配置已加载后的 SessionStart 假装等价 |
+| 起点与新鲜度 | Claude 的 native `fresh`/`head` 不等于任意 Fleet base 分支；显式最新代码要求不得被其缓存/失败回退静默替代 |
+
+上述原生能力依据 [Claude Worktree 文档](https://code.claude.com/docs/en/worktrees)，尚非
+本批真实创建入口的完整验收。本批只移除默认依赖预处理，不改模型、权限、准入、完整 MCP、
+仓库起点或 fetch 策略，也不宣称达到 1 秒/5 秒目标。
+
 ### 原生清理所有权优先于 Fleet 回收
 
 真实 Claude `2.1.296` 在 linked-worktree 的 Git metadata 内留下 `CLAUDE_BASE` 标记，

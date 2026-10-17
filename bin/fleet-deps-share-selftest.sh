@@ -23,8 +23,8 @@
 #   IGNORE    node_modules not git-ignored ⇒ `skipped:not-ignored`, status clean.
 #   PNPM/UV/GO  pnpm with no source ⇒ `pnpm-store`; uv.lock ⇒ `uv-cache`; go.mod ⇒
 #             `go-modcache` — recorded, nothing written into the worktree.
-#   SETUP     fleet_worktree_create runs it on every new worktree; FLEET_DEPS_SHARE=0
-#             does not; a share that cannot clone still creates the worktree.
+#   SETUP     automatic sharing is opt-in; explicit setup and direct sharing stay
+#             available; a share that cannot clone still creates the worktree.
 #   NATIVE    the real clone of this filesystem (clonefile on macOS, reflink on
 #             Linux) either clones or says `skipped:no-clone` — never a full copy.
 #
@@ -192,13 +192,40 @@ ok "IGNORE: node_modules not git-ignored ⇒ skipped, status clean"
 
 # ---- SETUP: through fleet_worktree_create --------------------------------------------
 drop_wts
-W=$(fleet_worktree_create "$MAIN" scratch-71 "") || fail "SETUP: worktree not created"
+W=$(FLEET_DEPS_SHARE=1 fleet_worktree_create "$MAIN" scratch-71 "") || fail "SETUP: worktree not created"
 [ -d "$W/node_modules" ] && rec "$W" | grep -qx "clone:copy \\. $MAIN" || fail "SETUP: create did not share" "$(rec "$W")"
 drop_wts; W=$(FLEET_DEPS_SHARE=0 fleet_worktree_create "$MAIN" scratch-72 "") || fail "SETUP: worktree not created (off)"
 [ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || fail "SETUP: FLEET_DEPS_SHARE=0 still shared"
-W=$(FLEET_DEPS_SHARE_CLONE=off fleet_worktree_create "$MAIN" scratch-73 "") || fail "SETUP: a failing share blocked the worktree"
+W=$(FLEET_DEPS_SHARE=1 FLEET_DEPS_SHARE_CLONE=off fleet_worktree_create "$MAIN" scratch-73 "") || fail "SETUP: a failing share blocked the worktree"
 [ -d "$W" ] && [ ! -e "$W/node_modules" ] || fail "SETUP: no-clone left something"
-ok "SETUP: every new worktree shares; FLEET_DEPS_SHARE=0 off; a failing share never blocks the worktree"
+ok "SETUP: explicit sharing works; 0 disables; a failing share never blocks the worktree"
+
+W=$(fleet_worktree_create "$MAIN" scratch-74 "") || fail "DEFAULT: worktree not created"
+[ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] || fail "DEFAULT: unselected dependency sharing ran"
+(
+  fleet_timebox() { printf 'unexpected share\n' >> "$WORK/unexpected-share"; }
+  unset FLEET_DEPS_SHARE
+  fleet_worktree_deps_share "$MAIN" "$W"
+  for setting in '' 0 invalid; do
+    FLEET_DEPS_SHARE=$setting fleet_worktree_deps_share "$MAIN" "$W"
+  done
+)
+[ ! -e "$WORK/unexpected-share" ] || fail "DEFAULT: unselected sharing started its helper"
+ok "DEFAULT: unset, empty, zero and invalid selections do not start the sharing helper"
+
+export SETUP_CALLS="$WORK/custom-setup-calls"
+cat > "$WORK/custom-setup" <<'SH'
+#!/bin/sh
+printf '%s|%s|%s\n' "$PWD" "$1" "$2" >> "$SETUP_CALLS"
+touch "$1/setup-ran"
+SH
+chmod +x "$WORK/custom-setup"
+W=$(FLEET_WORKTREE_SETUP="$WORK/custom-setup" fleet_worktree_create "$MAIN" scratch-75 "") \
+  || fail "CUSTOM: worktree not created"
+[ "$(cat "$SETUP_CALLS")" = "$W|$W|$MAIN" ] && [ -f "$W/setup-ran" ] \
+  && [ ! -e "$W/node_modules" ] && [ "$(rec "$W")" = "none ." ] \
+  || fail "CUSTOM: explicit setup changed or implicitly opted into dependency sharing"
+ok "CUSTOM: explicit project setup runs once without enabling dependency sharing"
 
 # ---- NATIVE: this filesystem's own clone ------------------------------------------------
 drop_wts
