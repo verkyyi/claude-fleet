@@ -22,6 +22,7 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" SHELL=/bin/sh FLEET_SKIP_GLOBAL_CONF=1
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null PYTHONDONTWRITEBYTECODE=1
+export LANG=C LC_ALL=C
 export GIT_AUTHOR_NAME=Fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
 export GIT_COMMITTER_NAME=Fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
 unset QUIET FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_LAUNCH FLEET_DISPATCH FLEET_AUTHORITY_START
@@ -31,6 +32,9 @@ for source in "$BIN"/* "$BIN"/.[!.]*; do
 done
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
+if [ -f '$WORK/fail-capture' ]; then
+  case "\$*" in *'F#{q:@fleet_id}'*) exit 9 ;; esac
+fi
 exec '$REAL_TMUX' -S '$WORK/tmux.sock' "\$@"
 EOF
 chmod +x "$WORK/shim/tmux"
@@ -143,6 +147,43 @@ if kind == 'AUTHORITY':
     mapping.write_text(original)
 PY
 cp "$MAP" "$WORK/good-map"
+python3 - "$BIN/.fleet-restore-resolve.py" "$WINDOW" <<'PY'
+import json
+import shlex
+import subprocess
+import sys
+
+command = [sys.executable, sys.argv[1], '--snapshot-metadata']
+fleet_id = '33333333-3333-4333-8333-333333333333'
+sample = json.dumps({'value': 'pipe| quote\' " slash\\ newline\n tab\t 中文 $(false) `false` #{window_id}'})
+subprocess.run(['tmux', 'set-option', '-w', '-t', sys.argv[2], '@fixture_metadata', sample], check=True)
+encoded = subprocess.check_output(['tmux', 'display-message', '-p', '-t', sys.argv[2],
+    'F' + fleet_id + ' L#{q:@fixture_metadata} R#{q:@fixture_metadata} A#{q:@fixture_metadata}'], text=True)
+result = subprocess.run(command, input=encoded, capture_output=True, text=True, check=True)
+assert result.stdout.splitlines() == ['\t'.join(('LAUNCH', fleet_id, sample, sample)),
+                                    '\t'.join(('AUTHORITY', fleet_id, sample))]
+empty = subprocess.run(command, input='F L R A\n', capture_output=True, text=True, check=True)
+assert not empty.stdout
+valid = shlex.join(('F' + fleet_id, 'L' + sample, 'R', 'A')) + '\n'
+for broken in ('F L R\n', 'F L R A extra\n', 'F L R "A\n', 'F L{} R A\n',
+               'F' + fleet_id + ' X{} R A\n', shlex.join(('F' + fleet_id, 'Lbad\trow', 'R', 'A')) + '\n'):
+    result = subprocess.run(command, input=valid + broken, capture_output=True, text=True)
+    assert result.returncode and not result.stdout, (broken, result)
+PY
+: > "$WORK/fail-capture"
+if bash "$WORK/bin/fleet-restore.sh" --snapshot > "$WORK/capture-failed.log" 2>&1; then
+  echo 'FAIL: metadata capture failure was accepted' >&2
+  exit 1
+fi
+rm "$WORK/fail-capture"
+cmp "$MAP" "$WORK/good-map"
+tmux set-option -w -t "$WINDOW" @fleet_id invalid-identity
+if bash "$WORK/bin/fleet-restore.sh" --snapshot > "$WORK/parse-failed.log" 2>&1; then
+  echo 'FAIL: malformed metadata was accepted' >&2
+  exit 1
+fi
+cmp "$MAP" "$WORK/good-map"
+tmux set-option -w -t "$WINDOW" @fleet_id 33333333-3333-4333-8333-333333333333
 tmux kill-window -t "$WINDOW"
 FLEET_RESTORE_PROBE_SECS=2 bash "$WORK/bin/fleet-restore.sh" > "$WORK/restore.log"
 cmp "$WORK/intent" <(tr -d '\n' < "$WORK/restored-intent")

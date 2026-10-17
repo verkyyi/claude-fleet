@@ -265,6 +265,16 @@ supervisor 校验当前任务所有权和新原生进程。旧 PID 的持久记�
 独立 tmux server 销毁后精确 resume、新进程身份、目录与编辑保留、完整原生配置和已观测 MCP 退出。
 两类证据分别覆盖映射与真实运行；不能合称为真实生产面板或 POD 的完整端到端验收。
 
+新增 `--restore-entrypoint` 隔离模式把两类证据串联：真实 session wrapper 启动 Claude，原生退出并选择
+Keep 后调用实际 snapshot，销毁专用 tmux server，再由实际 restore 和 wrapper 恢复同一原生会话。
+本机 57 项检查通过，覆盖新的进程身份、既有编辑、原生配置、MCP 和真实退出页；Linux CI 同步增加此路径。
+夹具仅关闭退出页自动回收及快速退出分支，便于断言页面保留，不修改生产默认值或恢复探针时限。
+准入仍为 loopback fixture，模型端点拒绝假凭据请求；不等同于生产认证、真实模型回复、运行中崩溃或面板性能验收。
+
+该整链测试发现 tmux 3.7b 在无 UTF-8 locale 的环境下也会将格式内的 Tab 转为下划线，导致回执未进入快照。
+候选改为一次批量读取 shell-quoted、带字段前缀的可打印格式，由 Python 解析，绝不执行字段内容；磁盘映射格式不变。
+C locale 回归覆盖竖线、引号、反斜线、JSON 转义及空字段。取值或解析失败时保留原映射并报错，不发布残缺快照。
+
 ### SessionStart 的目录时序与恢复边界
 
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
