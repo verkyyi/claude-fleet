@@ -168,7 +168,7 @@ FLEET_RESTORE_PROBE_SECS=2 bash "$WORK/bin/fleet-restore.sh" > "$WORK/refused.lo
 [ "$(tmux display-message -p -t native:saved '#{@restore_outcome}')" = failed ]
 [ "$(tmux display-message -p -t native:saved '#{@native_worktree}')" = '' ]
 if [ "$MODE" = --local-authority ]; then
-  for invalid in empty missing-intent duplicate conflicting; do
+  for invalid in empty missing-intent duplicate conflicting extra-field; do
     tmux kill-window -t native:saved
     python3 - "$WORK/good-map" "$MAP" "$invalid" <<'PY'
 from pathlib import Path
@@ -183,6 +183,8 @@ for row in rows:
         row[2] = '{}'
     elif sys.argv[3] == 'duplicate':
         rows.append(row.copy())
+    elif sys.argv[3] == 'extra-field':
+        row.append('unexpected')
     else:
         rows.append(['LAUNCH', row[1], '', ''])
     break

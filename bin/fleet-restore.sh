@@ -887,7 +887,7 @@ restore() {
         launch_context=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $3}' "$mf")
         launch_receipt=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $4}' "$mf")
         authority_receipt=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "AUTHORITY" && $2 == id {print $3}' "$mf")
-        authority_count=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "AUTHORITY" && $2 == id {n++} END {print n+0}' "$mf")
+        authority_count=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "AUTHORITY" && $2 == id {n++; if (NF != 3) bad=1} END {print bad ? -1 : n+0}' "$mf")
         if [ -n "$launch_context" ] && [ "$authority_count" = 0 ]; then
           stamp="$stamp$(fleet_win_stamp_cmd @launch "$launch_context" @launch_receipt "$launch_receipt" @launch_started 1 @fleet_id "${wtag#WIN:}")"
           if native_intent=$(printf '[%s,%s]' "$launch_context" "${launch_receipt:-null}" \
