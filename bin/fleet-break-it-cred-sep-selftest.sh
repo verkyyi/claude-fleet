@@ -50,6 +50,8 @@
 #   credsep-warn-cuts-creds    bin/fleet-credsep.py check (exit 4 = separated, warns; 1 only
 #                              when it is not), tokenledger credsepJudge (go test
 #                              TestCredsepJudge), bin/fleet-cred-proxy.py deny reason — #4623
+#   cred-gate-counts-unleased  tokenledger api leaseServes / the cred-ttl gate item (go test
+#                              TestGateCredsepCountsOnlyLeasedLogins) — #4622
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -866,6 +868,33 @@ drill_credsep_warn_cuts_creds() {
   fi
   SECS=$(since "$t0")
   WHAT="已隔离登录 check 出 WARN（代理忽略了自己 fleet.conf 的 FLEET_HUB_URL）：退出 4 = 已隔离带警告，代理仍报 separated、入口照发；库可读才是 1；deny 写明 trust 原因；$gohalf"
+}
+
+# #4622: after #4615 the hub's gate item 7 (cred-ttl) counted 11 logins as not
+# separated — client computers, the logins in cluster pods, root / _fleetadmin and
+# a deleted user among them: none of them is ever leased pool credentials, so the
+# count said nothing anyone could act on. It counts leaseServes' logins only.
+drill_cred_gate_counts_unleased() {
+  CAP=90
+  local t0 out rc
+  t0=$(now)
+  grep -q 'func (s \*Server) leaseServes(' "$ROOT/tokenledger/internal/api/fleet_creds.go" 2>/dev/null \
+    && grep -q 's.leaseServes(n)' "$ROOT/tokenledger/internal/api/fleet_gate.go" 2>/dev/null \
+    || { WHY="the gate's cred-ttl item no longer asks leaseServes"; return 1; }
+  grep -q 'func TestGateCredsepCountsOnlyLeasedLogins(' "$ROOT/tokenledger/internal/api/fleet_credsep_test.go" 2>/dev/null \
+    || { WHY="TestGateCredsepCountsOnlyLeasedLogins is gone"; return 1; }
+  WHAT="门禁 cred-ttl 只数会被发池凭据的登录（客户端、pod、系统账号、已删用户不算）：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestGateCredsepCountsOnlyLeasedLogins"
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestGateCredsepCountsOnlyLeasedLogins$' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go test did not run"; return 1 ;;
+      0:*) WHAT="门禁 cred-ttl 只数会被发池凭据的登录：客户端、集群 pod 的登录、root / _fleetadmin、已删用户都不算（go test ok）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go test is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
 }
 
 cred_run_drills "$0"
