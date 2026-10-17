@@ -119,6 +119,15 @@ bash ~/.claude/fleet/bin/fleet-credsep.sh status
 bash ~/.claude/fleet/bin/fleet-credsep.sh check       # the doctor's `credsep` row
 ```
 
+`check` exits **1** only when the login is not separated — no store, or the
+store / a credential / node.env readable by it — which the heartbeat reports as
+`credsep=not` and the hub answers by leasing nothing. A separated login whose row
+warns for any other reason (the proxy ignored a line of the login's own
+`fleet.conf`, root's settings not written yet, the proxy not running, …) exits
+**4** and stays `separated` (issue #4623: on 2026-10-17 such a warning cut a
+separated login off every credential). When the proxy has no road it says why:
+the deny line and the 403 carry its trust word and reason.
+
 ### A new login: separated from its first moment (issue #2294, EPIC #2293 C1)
 
 `bin/fleet-login-new.sh --apply` — the hub's account op, and the spare logins of

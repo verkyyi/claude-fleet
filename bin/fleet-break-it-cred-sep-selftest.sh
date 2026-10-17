@@ -47,6 +47,9 @@
 #   cred-enforce-fails-no-lease  bin/fleet-credsep.py machine enforce (refused → --force past the
 #                              grace, failed → retry later) / enforced / check, tokenledger
 #                              credsepGated (go test TestLeaseCredsepMandatory) — #4607
+#   credsep-warn-cuts-creds    bin/fleet-credsep.py check (exit 4 = separated, warns; 1 only
+#                              when it is not), tokenledger credsepJudge (go test
+#                              TestCredsepJudge), bin/fleet-cred-proxy.py deny reason — #4623
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -818,6 +821,51 @@ drill_cred_central_trusted_pod() {
     || { WHY="fleet-cred-proxy-selftest leg D2: $(printf '%s\n' "$out" | grep -m 3 -E 'D2' | tr '\n' '|')"; return 1; }
   SECS=$(since "$t0")
   WHAT="个人 pod（不租凭据、指名中心代理）被入口判可信：代理仍走 central、不读凭据文件；租凭据的登录照旧不走 central"
+}
+
+# ---- credsep-warn-cuts-creds (#4623): 2026-10-17, the M4's verky login WAS
+# separated, but a stray FLEET_HUB_URL in its own fleet.conf made `check` print a
+# WARN and exit 1; the agent read that 1 as «not», the hub (#4607: every login
+# gated) leased it nothing, and its seven sessions each got a permanent 403
+# «no usable route». A warning is not «not separated»: check exits 4 for a
+# separated login that warns and 1 only when credentials are readable; the agent
+# keys «not» on 1 alone; a deny names the router's trust reason.
+drill_credsep_warn_cuts_creds() {
+  CAP=60
+  local sb="$WORK/sepwarn" t0 out rc me run gohalf; me=$(id -un)
+  sep_self "$sb" "$(printf 'CCQUOTA_HUB_URL=http://127.0.0.1:1\nCCQUOTA_TOKEN=ccq_WARN_SECRET\n')" || return 1
+  run=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$C/credsep.json")
+  mkdir -p "$run"; echo 18999 > "$run/port"
+  printf 'FLEET_HUB_URL %s/fleet.conf\n' "$C" > "$run/ignored.$me"
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(chmod 000 "$R"; env $SEPENV FLEET_CRED_SEPARATE=1 python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?; chmod 700 "$R"
+  [ "$rc" = 4 ] && printf '%s' "$out" | grep -q '^credsep: WARN — the proxy ignored FLEET_HUB_URL' \
+    || { WHY="a separated login whose proxy ignored a line did not answer «separated, warns» (exit 4; rc $rc): $out"; return 1; }
+  # a real separation failure (the store readable) stays exit 1 — the hub's «not»
+  # shellcheck disable=SC2086
+  out=$(env $SEPENV FLEET_CRED_SEPARATE=1 python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'CAN read' \
+    || { WHY="a readable store is not exit 1 (rc $rc): $out"; return 1; }
+  # the proxy's deny names why it has no route
+  grep -q 'why="no usable route — trust %s' "$BIN/fleet-cred-proxy.py" \
+    || { WHY="fleet-cred-proxy.py's deny does not carry the trust reason"; return 1; }
+  # the agent's half: check exit 4 → separated, 1 → not
+  gohalf="代理一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestCredsepJudge"
+  grep -q '"separated, check warns", true, 0, 4, control.CredsepSeparated' "$ROOT/tokenledger/internal/agent/node_credsep_test.go" 2>/dev/null \
+    || { WHY="TestCredsepJudge no longer pins «warns ⇒ separated»"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestCredsepJudge$' ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
+      0:*) gohalf="代理一半：go test TestCredsepJudge ok（警告仍算已隔离）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="已隔离登录 check 出 WARN（代理忽略了自己 fleet.conf 的 FLEET_HUB_URL）：退出 4 = 已隔离带警告，代理仍报 separated、入口照发；库可读才是 1；deny 写明 trust 原因；$gohalf"
 }
 
 cred_run_drills "$0"

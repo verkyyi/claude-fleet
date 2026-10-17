@@ -22,7 +22,10 @@
 #   fleet-credsep.sh uninstall [--dry-run]  undo: every file back where it was
 #                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)
-#   fleet-credsep.sh check                  the doctor's `credsep` row
+#   fleet-credsep.sh check                  the doctor's `credsep` row: exit 0 ok ·
+#                                           1 not separated (credentials readable) ·
+#                                           4 separated, but the row warns — never the
+#                                           hub's «not» (issue #4623)
 #   fleet-credsep.sh served                 does the proxy hand this login a
 #                                           credential now (issue #4247): exit 0
 #                                           yes · 3 no (the shared proxy does not

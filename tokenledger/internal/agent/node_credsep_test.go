@@ -35,7 +35,8 @@ func TestCredsepJudge(t *testing.T) {
 	}{
 		{"no claude-fleet", false, 0, 0, control.CredsepUnknown},
 		{"separated, check passes", true, 0, 0, control.CredsepSeparated},
-		{"separated, check warns", true, 0, 1, control.CredsepNot},
+		{"separated, check warns", true, 0, 4, control.CredsepSeparated}, // claude-fleet#4623
+		{"separated, credentials readable", true, 0, 1, control.CredsepNot},
 		{"not separated", true, 3, 0, control.CredsepNot},
 		{"status broke", true, 2, 0, control.CredsepUnknown},
 		{"check broke", true, 0, 2, control.CredsepUnknown},

@@ -14,8 +14,12 @@ import (
 // The heartbeat's credsep (claude-fleet#2295, EPIC #2293 共同约定 1): is this
 // login's subscription out of its own reach? The ONE judgement is the
 // claude-fleet script's — `fleet-credsep.sh status` says separated (exit 0)
-// AND `fleet-credsep.sh check` passes (exit 0) — never a second copy here.
-// The hub leases a role=user person's login real tokens only on "separated".
+// AND `fleet-credsep.sh check` does not say otherwise (exit 0, or 4: separated
+// but the doctor's row warns — claude-fleet#4623) — never a second copy here.
+// The hub leases every login real tokens only on "separated" (#4607), so a
+// warning that has nothing to do with separation (a line the proxy ignored,
+// root's settings not written yet) must never read as "not": on the M4 it cut
+// a separated login off every credential.
 
 var credsepScript = filepath.Join(".claude", "fleet", "bin", "fleet-credsep.sh")
 
@@ -24,6 +28,9 @@ const (
 	// verdict is re-asked at most this often; the beats between carry it.
 	credsepInterval = 5 * time.Minute
 	credsepTimeout  = 20 * time.Second
+	// credsepCheckWarned is `check`'s exit for a separated login whose row
+	// warns (claude-fleet#4623); 1 is kept for "not separated".
+	credsepCheckWarned = 4
 )
 
 // credsepCommand is the seam the tests replace.
@@ -78,10 +85,10 @@ func credsepJudge(ctx context.Context, home string) string {
 		return control.CredsepUnknown
 	}
 	switch credsepRun(ctx, home, script, "check") {
-	case 0:
+	case 0, credsepCheckWarned:
 		return control.CredsepSeparated
 	case 1:
-		return control.CredsepNot // separated, but the doctor's row warns
+		return control.CredsepNot // credentials readable by the login after all
 	}
 	return control.CredsepUnknown
 }

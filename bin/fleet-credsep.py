@@ -3263,8 +3263,15 @@ def node_login(conf, home):
         or bool(leftovers(conf, home, None))
 
 
+WARNED = 4   # check: separated, but the row warns (issue #4623) — never the hub's «not»
+
+
 def check(a):
-    """One doctor line: credsep: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 WARN/FAIL."""
+    """One doctor line: credsep: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 not
+    separated (no store, or credentials readable by this login: the hub's «not»),
+    WARNED (4) separated but the row warns or fails on something else — the proxy
+    not running, a line it ignored, root's settings missing, … (issue #4623: one
+    such WARN once cut a separated login off every credential)."""
     conf = a.conf_dir
     home = os.path.expanduser("~")
     rec = record(conf)
@@ -3326,24 +3333,24 @@ def check(a):
     if not port:
         print("credsep: WARN — separated, but the proxy is not running (no %s/port): sessions have no subscription"
               % rec["run"])
-        return 1
+        return WARNED
     note = ""
     if subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         note = " · note: this login has password-less sudo, which reaches any file"
     if not want and not rec.get("shared"):
         print("credsep: WARN — FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0 but this login is still separated; "
               "uninstall: bash %s/fleet-credsep.sh uninstall" % HERE)
-        return 1
+        return WARNED
     if not rec.get("shared") and shared_rec():
         print("credsep: WARN — separated on its own proxy, but this machine runs the shared one: one more service "
               "for nothing. Join it (sudo, no gap): bash %s/fleet-credsep.sh machine join --logins %s" % (HERE, me))
-        return 1
+        return WARNED
     rconf = os.path.join(rec.get("lib") or LIB, me + ".conf")
     if not os.path.exists(rconf):
         print("credsep: WARN — separated, but root's proxy settings %s are not written yet: the proxy has no "
               "upstream / hub setting beyond its defaults. Re-run (sudo): bash %s/fleet-credsep.sh %s"
               % (rconf, HERE, "machine refresh" if rec.get("shared") else "install"))
-        return 1
+        return WARNED
     if rec.get("shared"):
         srec = shared_rec() or {}
         live, _ = shared_unserved(srec)
@@ -3352,7 +3359,7 @@ def check(a):
                   "it (it started before the login joined, and was never restarted): no session here gets a "
                   "credential. The machine daemon restarts it within a tick; if this stays, an admin: sudo bash "
                   "%s/fleet-credsep.sh machine refresh" % HERE)
-            return 1
+            return WARNED
         try:
             lv = open(os.path.join(srec.get("run") or SHARED_RUN, "version")).read().strip()
         except OSError:
@@ -3361,7 +3368,7 @@ def check(a):
             print("credsep: WARN — the machine's shared proxy runs version %s, its record says %s: a login that "
                   "joined since it started may not be served. An admin: sudo bash %s/fleet-credsep.sh machine refresh"
                   % (lv, srec["version"], HERE))
-            return 1
+            return WARNED
     try:
         ign = [l.split(" ", 1) for l in open(os.path.join(rec["run"], "ignored." + me)).read().splitlines() if l]
     except OSError:
@@ -3370,7 +3377,7 @@ def check(a):
         print("credsep: WARN — the proxy ignored %s (only root's %s sets these, issue #2290). If the change is "
               "yours: sudo bash %s/fleet-credsep.sh install --adopt; otherwise delete the line(s)"
               % (", ".join("%s from %s" % (k, f) for k, f in ign[:4]), rconf, HERE))
-        return 1
+        return WARNED
     print("credsep: OK — %s unreadable here (Permission denied), %sproxy on 127.0.0.1:%d as %s%s"
           % (R, "the machine's shared " if rec.get("shared") else "", port, rec["role"], note))
     return 0

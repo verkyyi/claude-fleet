@@ -411,9 +411,10 @@ const CredsepSeparated = "separated"
 const CredsepCentral = "central"
 
 // Heartbeat.Credsep's other words (claude-fleet#2295): CredsepNot — the
-// login is not separated, or it is but `fleet-credsep.sh check` warns;
-// CredsepUnknown — the script is missing or could not be run. The hub leases
-// a role=user person's login real tokens only on CredsepSeparated.
+// login is not separated, or `fleet-credsep.sh check` finds its credentials
+// readable after all (exit 1; a mere warning, exit 4, stays separated —
+// claude-fleet#4623); CredsepUnknown — the script is missing or could not be
+// run. The hub leases every login real tokens only on CredsepSeparated (#4607).
 const (
 	CredsepNot     = "not"
 	CredsepUnknown = "unknown"
@@ -866,8 +867,8 @@ type Heartbeat struct {
 
 	// Credsep is this login's credential separation as `fleet-credsep.sh
 	// status` + `check` judge it (claude-fleet#2295, EPIC #2293 共同约定 1):
-	// CredsepSeparated only when status says separated AND check passes,
-	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
+	// CredsepSeparated only when status says separated AND check passes or
+	// merely warns (claude-fleet#4623), CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
 	// #2295 — the hub reads that as not separated for a role=user person.
 	Credsep string `json:"credsep,omitempty"`
 	// CredServed says whether the proxy hands this login a credential right
