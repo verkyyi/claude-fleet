@@ -458,13 +458,20 @@ fi
 BASE="${FLEET_BASE_BRANCH:-master}"
 if [ "$NATIVE_WT" = 1 ]; then
   [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
-    && [ "$NODE_ARG" = local ] && [ -n "$TASK_REF" ] && [ -n "${FLEET_LAUNCH:-}" ] \
+    && [ "$NODE_ARG" = local ] \
     && [ "$WARM_ONLY" = 0 ] && [ -z "$WT_ARG$RESUME_SID" ] \
-    || { refuse "raw: native worktree requires a fresh local accepted Claude task"; exit 2; }
+    || { refuse "raw: native worktree requires a fresh local Claude repository session"; exit 2; }
   [ -z "${FLEET_WORKTREE_SETUP:-}" ] && [ "${FLEET_DEPS_SHARE:-0}" != 1 ] \
     || { refuse "raw: native worktree requires migrating explicit Fleet setup/dependency sharing first"; exit 2; }
-  python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null \
-    || { refuse "raw: native worktree requires the accepted task dispatch"; exit 2; }
+  if [ -n "$TASK_REF${FLEET_LAUNCH:-}" ]; then
+    [ -n "$TASK_REF" ] && [ -n "${FLEET_LAUNCH:-}" ] \
+      && python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null \
+      || { refuse "raw: native worktree requires the accepted task dispatch"; exit 2; }
+  else
+    { [ "${CCQUOTA_FLEET:-0}" = 1 ] || [ -n "${FLEET_TASK_AUTHORITY:-}" ]; } \
+      && [ -z "$PROMPT$SEED_FILE" ] \
+      || { refuse "raw: native local creation requires repository admission and an unsubmitted draft"; exit 2; }
+  fi
 fi
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }

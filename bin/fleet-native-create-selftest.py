@@ -11,6 +11,7 @@ import unittest
 from unittest import mock
 
 import fleet_launch as launch
+import fleet_repo_authority as authority
 
 
 class NativeCreation(unittest.TestCase):
@@ -228,6 +229,146 @@ class NativeCreation(unittest.TestCase):
                 with self.subTest(provider=provider), self.assertRaisesRegex(ValueError, 'native Claude worktree transfer'):
                     launch.transfer_commit('%1', '', provider, str(self.root / 'unused'))
             authority.assert_not_called()
+
+    def local_context(self):
+        return dict(repo='acme/widgets', worker_id=self.context['worker_id'],
+                    reservation='66666666-6666-4666-8666-666666666666', supervisor=12,
+                    native_worktree=self.intent)
+
+    def observe_local(self, context, observe):
+        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_CONTEXT': json.dumps(context)}), \
+                mock.patch.object(launch, 'native_parent', return_value=self.native), \
+                mock.patch.object(launch, 'root_native', return_value=True), \
+                mock.patch.object(launch, 'tmux', side_effect=self.tmux), \
+                mock.patch.object(authority, 'start_call', side_effect=observe):
+            authority.observe_native(self.payload)
+
+    def test_local_native_hook_binds_only_after_authority_observation(self):
+        binding = self.create()
+        context = self.local_context()
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            self.observe_local(context, mock.Mock(side_effect=ValueError('unavailable')))
+        self.assertNotIn('@worktree', self.options)
+        observe = mock.Mock()
+        self.observe_local(context, observe)
+        self.assertEqual(observe.call_args.args, ('acme/widgets', context['reservation'], 'observe'))
+        receipt = json.loads(self.options['@authority_receipt'])
+        self.assertEqual(receipt['worktree'], binding)
+        self.assertEqual(receipt['native_worktree'], self.intent)
+        self.git('-C', str(self.path), 'commit', '--allow-empty', '-qm', 'user work')
+        self.observe_local(context, observe)
+        changed = copy.deepcopy(context)
+        changed['native_worktree']['commit'] = '0' * 40
+        with self.assertRaisesRegex(ValueError, 'replace native creation intent'):
+            self.observe_local(changed, observe)
+        self.native['birth'] = 'replaced-process'
+        with self.assertRaisesRegex(ValueError, 'late local hook'):
+            self.observe_local(context, observe)
+        self.assertEqual(json.loads(self.options['@authority_receipt']), receipt)
+
+    def test_local_native_supervisor_admits_before_creation_and_requires_exact_resume(self):
+        actions, started = [], []
+        reservations = []
+        child = mock.Mock()
+        child.wait.return_value = 0
+        worker = self.context['worker_id']
+        def start(repo, reservation, action, **fields):
+            self.assertEqual(repo, 'acme/widgets')
+            if action == 'reserve':
+                reservations.append(reservation)
+            self.assertEqual(reservation, reservations[-1])
+            actions.append(action)
+        def run(arguments, **options):
+            if arguments[:2] == ['bash', '-c']:
+                return subprocess.CompletedProcess(arguments, 0, 'acme/widgets\t' + worker, '')
+            return self.command_run(arguments, **options)
+        def popen(arguments, **options):
+            self.assertEqual(actions[-1], 'begin')
+            started.append(arguments)
+            self.assertEqual(options['cwd'], str(self.main))
+            self.assertNotIn('FLEET_AUTHORITY_START', options['env'])
+            for variable in ('FLEET_LAUNCH_CREATE', 'FLEET_LAUNCH_WORKTREE', 'FLEET_LAUNCH_CONTEXT'):
+                self.assertNotIn(variable, options['env'])
+            if not self.path.exists():
+                self.create()
+            self.observe_local(json.loads(options['env']['FLEET_AUTHORITY_CONTEXT']), start)
+            return child
+        process_api = types.SimpleNamespace(**vars(subprocess))
+        process_api.run, process_api.Popen = run, popen
+        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_START': '',
+                'FLEET_LAUNCH_CREATE': 'inherited', 'FLEET_LAUNCH_WORKTREE': 'inherited',
+                'FLEET_LAUNCH_CONTEXT': 'inherited'}), \
+                mock.patch.object(authority, 'subprocess', process_api), \
+                mock.patch.object(authority.signal, 'signal'), \
+                mock.patch.object(authority, 'start_call', side_effect=start), \
+                mock.patch.object(authority, 'prove_stopped', side_effect=lambda proof: proof), \
+                mock.patch.object(launch, 'same_process', return_value=False):
+            self.assertEqual(authority.supervise(['launcher', '--agent', 'claude']), 0)
+            self.assertEqual(actions, ['reserve', 'begin', 'observe', 'stopped'])
+            self.assertEqual(started[0], ['launcher', '--agent', 'claude', '--worktree', self.intent['name'], '--name', self.intent['name']])
+            with mock.patch.object(launch, 'same_process', return_value=True), \
+                    self.assertRaisesRegex(ValueError, 'reconnect instead'):
+                authority.supervise(['launcher', '--resume', self.payload['session_id']])
+            saved = self.options['@authority_receipt']
+            wrong = json.loads(saved)
+            wrong['worker_id'] = 'another-worker'
+            self.options['@authority_receipt'] = json.dumps(wrong)
+            with self.assertRaisesRegex(ValueError, 'another repository or worker'):
+                authority.supervise(['launcher', '--resume', self.payload['session_id']])
+            self.options['@authority_receipt'] = saved
+            self.native['birth'] = 'new-incarnation'
+            self.assertEqual(authority.supervise(['launcher', '--agent', 'claude', '--resume', self.payload['session_id']]), 0)
+            self.assertEqual(actions, ['reserve', 'begin', 'observe', 'stopped'] * 2)
+            before = len(started)
+            for arguments in (['launcher', '--agent', 'claude'], ['launcher', '--agent', 'codex'],
+                              ['launcher', '--resume', '55555555-5555-4555-8555-555555555555']):
+                with self.assertRaises(ValueError):
+                    authority.supervise(arguments)
+            self.assertEqual(len(started), before)
+            del self.options['@native_worktree']
+            with self.assertRaisesRegex(ValueError, 'lost its creation intent'):
+                authority.supervise(['launcher', '--resume', self.payload['session_id']])
+
+    def test_local_native_supervisor_refuses_missing_authority_or_submitted_input(self):
+        process_api = types.SimpleNamespace(**vars(subprocess))
+        process_api.run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, '', ''))
+        process_api.Popen, process_api.execvpe = mock.Mock(), mock.Mock()
+        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1'}), \
+                mock.patch.object(authority, 'subprocess', process_api), \
+                mock.patch.object(authority.os, 'execvpe') as execute, \
+                mock.patch.object(authority, 'start_call') as start:
+            with self.assertRaisesRegex(ValueError, 'explicit repository admission'):
+                authority.supervise(['launcher'])
+            execute.assert_not_called()
+            process_api.run.return_value.stdout = 'acme/widgets\t' + self.context['worker_id']
+            with self.assertRaisesRegex(ValueError, 'seed'):
+                authority.supervise(['launcher', 'submitted input'])
+            process_api.Popen.assert_not_called()
+            start.assert_not_called()
+
+    def test_local_native_begin_refusal_never_starts_or_creates(self):
+        reservation = self.local_context()['reservation']
+        process_api = types.SimpleNamespace(**vars(subprocess))
+        process_api.Popen = mock.Mock()
+        def run(arguments, **options):
+            if arguments[:2] == ['bash', '-c']:
+                return subprocess.CompletedProcess(arguments, 0, 'acme/widgets\t' + self.context['worker_id'], '')
+            return self.command_run(arguments, **options)
+        process_api.run = run
+        actions = []
+        def start(repo, key, action, **fields):
+            self.assertEqual(key, reservation)
+            actions.append(action)
+            if action == 'begin':
+                raise ValueError('frozen fixture')
+        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_START': reservation}), \
+                mock.patch.object(authority, 'subprocess', process_api), \
+                mock.patch.object(authority, 'start_call', side_effect=start), \
+                self.assertRaisesRegex(ValueError, 'frozen fixture'):
+            authority.supervise(['launcher'])
+        self.assertEqual(actions, ['begin', 'cancel'])
+        self.assertFalse(self.path.exists())
+        process_api.Popen.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -525,5 +525,36 @@ WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent cl
 [ ! -s "$NEWWIN_LOG" ] || fail "Q unaccepted native task must not open a window"
 ok "Q native accepted entry delegates creation, preserves background dispatch, refuses unsupported setup and unaccepted starts"
 
+cat > "$WORK/authority" <<'SH'
+#!/bin/bash
+[ "${AUTHORITY_REFUSE:-}" != "$2" ] || { printf 'fixture authority refused\n' >&2; exit 1; }
+printf '{"mode":"legacy","reservation":"11111111-1111-4111-8111-111111111111"}\n'
+SH
+chmod +x "$WORK/authority"
+for mode in direct background; do
+  native_args=(); [ "$mode" != background ] || native_args=(--bg)
+  FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" WINS=plan FLEET_MAX_SESSIONS=0 \
+    run_raw --native-worktree --node local --agent claude --name 'native local draft' ${native_args[@]+"${native_args[@]}"} \
+    || fail "R native local spawn refused ($mode)" "$(cat "$WORK/err")"
+  grep -qF -- "-c $MAIN " "$NEWWIN_LOG" || fail "R local native launch must use the admitted base"
+  grep -q '@native_worktree' "$NEWWIN_LOG" || fail "R missing local native intent"
+  grep -q '@worktree' "$OPTS_LOG" && fail "R local launch must wait for the native worktree hook"
+  grep -q 'scratch-pool.sh' "$RS_LOG" && fail "R native local launch must not refill the legacy pool"
+  grep -qF '$(cat' "$NEWWIN_LOG" && fail "R local draft became a submitted seed"
+  check_draft 'native local draft' 0
+  [ "$(git -C "$MAIN" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "R Fleet allocated a local worktree"
+done
+for phase in --gate --finish; do
+  AUTHORITY_REFUSE="$phase" FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" \
+    WINS=plan FLEET_MAX_SESSIONS=0 run_raw --native-worktree --node local --agent claude
+  [ ! -s "$NEWWIN_LOG" ] || fail "R refused authority opened a native window ($phase)"
+  grep -q 'fixture authority refused' "$WORK/err" || fail "R missing authority refusal ($phase)"
+done
+FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/authority" WINS=plan FLEET_MAX_SESSIONS=0 \
+  run_raw --native-worktree --node local --agent claude --prompt 'must not submit'
+[ ! -s "$NEWWIN_LOG" ] || fail "R native local seed must be refused"
+grep -q 'unsubmitted draft' "$WORK/err" || fail "R missing seed refusal"
+ok "R native local direct/background drafts preserve admission and refuse submitted seeds"
+
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

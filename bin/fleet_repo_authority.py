@@ -169,13 +169,34 @@ def observe_native(payload):
     native = launch.native_parent()
     if not launch.valid_uuid(payload.get("session_id")) or not launch.root_native(native, c["supervisor"]):
         raise ValueError("local reservation does not own this native execution")
-    if "worktree" in c:
+    binding = c.get("worktree")
+    intent = c.get("native_worktree")
+    pane = os.environ["TMUX_PANE"]
+    if intent:
+        if native["actual_provider"] != "claude":
+            raise ValueError("local native worktree creation requires Claude")
+        previous_raw = launch.option(pane, "@authority_receipt")
+        previous = json.loads(previous_raw) if previous_raw else {}
+        if previous.get("reservation") == c["reservation"]:
+            if previous.get("native_worktree") != intent:
+                raise ValueError("late local hook cannot replace native creation intent")
+            previous_proof = previous.get("native_identity", {})
+            if any(previous_proof.get(key) != native[key] for key in ("pid", "birth", "executable")) \
+                    or previous_proof.get("native_session") != payload["session_id"]:
+                raise ValueError("late local hook cannot replace native identity")
+            binding = previous.get("worktree", binding)
+        binding = launch.observe_native_worktree(pane, payload, intent, binding)
+    elif binding:
         launch.bind_native_worktree(payload, c["worktree"])
-        launch.check_worktree_window(os.environ["TMUX_PANE"], c["worktree"])
+        launch.check_worktree_window(pane, c["worktree"])
     proof = {k: native[k] for k in ("pid", "birth", "executable")}
     proof.update(worker_id=c["worker_id"], native_session=payload["session_id"])
     start_call(c["repo"], c["reservation"], "observe", native_identity=proof)
-    launch.stamp(os.environ["TMUX_PANE"], "@authority_receipt", dict(c, native_identity=proof))
+    receipt = dict(c, native_identity=proof)
+    if intent:
+        receipt["worktree"] = binding
+        launch.tmux("set-option", "-w", "-t", pane, "@worktree", binding["root"])
+    launch.stamp(pane, "@authority_receipt", receipt)
 
 
 def supervise(argv):
@@ -198,10 +219,32 @@ f=$(fleet_window_fid "$s" "$TMUX_PANE") || exit 1
 printf '%s\\t%s/%s' "$r" "$u" "$f"
 '''
     result = subprocess.run(["bash", "-c", script, "_", str(BIN)], capture_output=True, text=True, check=True)
+    pane = os.environ["TMUX_PANE"]
+    native_raw = launch.option(pane, "@native_worktree")
+    saved = launch.option(pane, "@authority_receipt")
+    saved_receipt = json.loads(saved) if saved else None
+    if not native_raw and isinstance(saved_receipt, dict) and saved_receipt.get("native_worktree"):
+        raise ValueError("native recovery lost its creation intent")
     if not result.stdout:
+        if native_raw:
+            raise ValueError("native creation requires explicit repository admission")
         os.execvpe(argv[0], argv, os.environ)
     repo, worker = result.stdout.strip().split("\t")
-    worktree = launch.prepare_worktree(os.environ["TMUX_PANE"])
+    previous = None
+    intent = None
+    if native_raw:
+        previous = saved_receipt
+        if previous:
+            if previous.get("repo") != repo or previous.get("worker_id") != worker or not previous.get("native_worktree"):
+                raise ValueError("native recovery belongs to another repository or worker")
+            if launch.same_process(previous["native_identity"]):
+                raise ValueError("original native execution is alive; reconnect instead")
+        argv, provider, _ = launch.held_argv(argv, "", False, previous["native_identity"] if previous else None)
+        worktree = launch.prepare_worktree(pane, previous)
+        intent = launch.prepare_native_worktree(pane, provider, worktree, previous)
+        argv += ["--worktree", intent["name"], "--name", intent["name"]]
+    else:
+        worktree = launch.prepare_worktree(pane)
     key = os.environ.get("FLEET_AUTHORITY_START") or str(uuid.uuid4())
     if not os.environ.get("FLEET_AUTHORITY_START"):
         start_call(repo, key, "reserve")
@@ -218,13 +261,19 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     c = dict(repo=repo, worker_id=worker, reservation=key, supervisor=os.getpid())
     if worktree:
         c["worktree"] = worktree
+    if intent:
+        c["native_worktree"] = intent
     env = dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(c))
     env.pop("FLEET_AUTHORITY_START", None)
+    if intent:
+        for variable in ("FLEET_LAUNCH_CREATE", "FLEET_LAUNCH_WORKTREE", "FLEET_LAUNCH_CONTEXT"):
+            env.pop(variable, None)
     # The terminal delivers these signals to the child too. Keep the waiter
     # alive to save a confirmed native stop; an interrupted waiter is UNKNOWN.
     for sig in (signal.SIGINT, signal.SIGQUIT):
         signal.signal(sig, lambda *_: None)
-    child = subprocess.Popen(argv, env=env, **({"cwd": worktree["root"]} if worktree else {}))
+    directory = intent["root"] if intent else worktree["root"] if worktree else None
+    child = subprocess.Popen(argv, env=env, **({"cwd": directory} if directory else {}))
     rc = child.wait()
     try:
         receipt = json.loads(launch.option(os.environ["TMUX_PANE"], "@authority_receipt"))
