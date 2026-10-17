@@ -152,11 +152,12 @@ case "$3" in list-windows|display-message|capture-pane) ;; *) exit 91 ;; esac
     rows = [line.split("\t") for line in call_log.read_text().splitlines()]
     counts = collections.Counter(row[3] for row in rows if row[0] == "tmux")
     assert counts == {"list-windows": 1, "capture-pane": 22}, counts
-    assert sum(row[0] == "ps" for row in rows) == 2, rows
+    assert [row for row in rows if row[0] == "ps"] == [
+        ["ps", "-axo", "pid=,ppid=,stat=,lstart=,comm="]], rows
     assert ledger.read_bytes() == before, "dry-run changed the ledger"
     assert all(not path.read_bytes() for path in work.glob("typed-*")), "typed into a pane"
     print(f"model-switch-scale: 24 windows, 8 selected, 4 busy + 4 recovered refused; "
-          f"23 tmux calls (1 metadata + 22 captures), 2 ps snapshots; probe {elapsed:.3f}s")
+          f"23 tmux calls (1 metadata + 22 captures), 1 canonical ps snapshot; probe {elapsed:.3f}s")
 finally:
     subprocess.run([real_tmux, "-L", label, "kill-server"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)

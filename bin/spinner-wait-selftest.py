@@ -63,6 +63,14 @@ def main():
         def spin():
             return tm('display-message', '-p', '-t', 'test:0', '#{@spin}')
 
+        def publish_state(value):
+            tm('set-window-option', '-t', 'test:0', '@claude_state', value)
+            # Match set-claude-state.sh: invalidate before broadcasting. A
+            # tmux format subscription can coalesce a fast state round trip;
+            # the producer's dirty marker preserves that edge for the spinner.
+            pathlib.Path(socket + '.dirty').touch()
+            tm('wait-for', '-S', 'fleet-state-changed')
+
         def until(fn, limit):
             start = time.monotonic()
             while time.monotonic() - start < limit:
@@ -108,12 +116,10 @@ def main():
                                           env=env, stdout=log, stderr=log, start_new_session=True)
             until(lambda: bool(spin()), 5)
             time.sleep(1)
-            tm('set-window-option', '-t', 'test:0', '@claude_state', 'done',
-               ';', 'wait-for', '-S', 'fleet-state-changed')
+            publish_state('done')
             elapsed = until(lambda: spin() == '✓', 2)
             print('PASS state event → done: %.3fs' % elapsed, flush=True)
-            tm('set-window-option', '-t', 'test:0', '@claude_state', 'working',
-               ';', 'wait-for', '-S', 'fleet-state-changed')
+            publish_state('working')
             until(lambda: spin() != '✓', 2)
             frozen = spin()
             time.sleep(.35)

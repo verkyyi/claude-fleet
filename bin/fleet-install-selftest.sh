@@ -90,6 +90,8 @@
 #                 K) → no request at all
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 7
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-install-selftest.XXXXXX") || exit 2
 HUB_PID=""
 cleanup() {
@@ -117,6 +119,11 @@ MANIFEST="$CLIENT/manifest"
 # the download list: every manifest path but the installer's
 FILES=$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$MANIFEST")
 
+hval() { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" "$1/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' "; }
+
+SYSPATH="/usr/bin:/bin:/usr/sbin:/sbin:$(dirname "$(command -v git)")"
+
+if selftest_section 1; then
 # ── A — one copy: the manifest names repo files, a build packs them ─────────
 if out=$(bash "$BIN/fleet-client-mirror.sh" --check 2>&1); then ok "A every manifest path is in the repo, no copy under fleetclient/"
 else bad "A fleet-client-mirror.sh --check: $out"; fi
@@ -143,6 +150,8 @@ for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet_dispatch
 done
 [ "$(awk '!/^[[:space:]]*#/ && $2 == "installer" { print $1 }' "$MANIFEST")" = bin/fleet-install.sh ] \
   && ok "A the manifest's installer is bin/fleet-install.sh" || bad "A installer line: $(grep installer "$MANIFEST")"
+
+fi
 
 # ── the fake hub: /install/manifest + /install/<path> with X-Ccquota-Sha256 ──
 cat > "$WORK/hub.py" <<'PYEOF'
@@ -197,8 +206,9 @@ printf '#!/usr/bin/env python3\n# claude-fleet#1470 flat copy\n' > "$HOME/.local
 printf '#!/bin/sh\necho not ours\n' > "$HOME/.local/bin/fleet-login.py"   # no marker: someone else's, left alone
 # A PATH without ~/.local/bin, so the rc line is needed.
 SAVED_PATH=$PATH
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+if selftest_section 1; then export PATH="/usr/bin:/bin:/usr/sbin:/sbin"; fi
 
+if selftest_section 1; then
 # ── B — piped install ────────────────────────────────────────────────────────
 out=$(sh < "$WORK/install.sh" 2>&1); rc=$?
 export PATH=$SAVED_PATH
@@ -314,6 +324,15 @@ grep -q 'fleet-remote-view.sh attach --thin' "$WORK/essh.log" && grep -q 'homebo
   && ok "E fleet → fleet-thin.py → one ssh to the home for its 看台" || bad "E ssh log: $(cat "$WORK/essh.log") out=$out"
 echo "$out" | grep -q 'install tmux' && bad "E the thin client asked for tmux: $out" || ok "E no tmux hint: the client needs none here"
 
+fi
+
+if [ "$SELFTEST_SECTION" = 2 ] || [ "$SELFTEST_SECTION" = 7 ]; then
+  # F originally follows E's clean reinstall. Prepare that installed client
+  # before using F's deliberately restricted tool PATH for dependency checks.
+  sh < "$WORK/install.sh" > "$WORK/f-install.out" 2>&1 \
+    || bad "F fixture install: $(cat "$WORK/f-install.out")"
+fi
+if selftest_section 2 7; then
 # ── F — the tmux step ───────────────────────────────────────────────────────
 fnbody() { awk '/^fc_tmux_ok\(\) \{/{p=1} p{print} p&&/^}/{exit}' "$1"; }
 lib_fn=$(fnbody "$BIN/fleet-client-lib.sh")
@@ -342,6 +361,7 @@ frun() {  # <extra PATH dirs> <env…> — one install with the tmux step on; ou
   rm -rf "$F/brewbin" "$F/sys"; : > "$F/brew.log"; : > "$F/apt.log"
   out=$(env PATH="$dirs:$F/sys:$FARM" FLEET_INSTALL_NO_DEPS= FC_BREW_DIRS= "$@" sh < "$WORK/install.sh" 2>&1); rc=$?
 }
+if selftest_section 2; then
 frun "$F/brew" FC_OS=darwin
 [ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.5a' \
   && ok "F macOS + brew, no tmux → brew install tmux once, then ok" || bad "F brew: rc=$rc log=$(cat "$F/brew.log") out=$out"
@@ -357,6 +377,8 @@ mktmux "$F/t31" 3.1
 frun "$F/t31:$F/brew" FC_OS=darwin
 [ "$rc" = 0 ] && [ "$(grep -c '^install tmux$' "$F/brew.log")" = 1 ] && echo "$out" | grep -q '3.1 低于 3.2' \
   && ok "F tmux 3.1 counts as none → brew install tmux" || bad "F tmux 3.1: rc=$rc log=$(cat "$F/brew.log") out=$out"
+fi
+if selftest_section 7; then
 frun "$F/apt" FC_OS=linux FLEET_INSTALL_SUDO="$F/sudo/sudo -n"
 [ "$rc" = 0 ] && [ "$(grep -c 'install -y -qq tmux' "$F/apt.log")" = 1 ] && echo "$out" | grep -q '^tmux: ok 3.4' \
   && ok "F Linux + apt-get + passwordless sudo → apt-get install tmux once, then ok" || bad "F apt: rc=$rc log=$(cat "$F/apt.log") out=$out"
@@ -373,6 +395,10 @@ out=$(env PATH="$F/brew:$FARM" FC_OS=darwin FC_BREW_DIRS= sh -s -- --no-deps < "
 [ "$rc" = 0 ] && [ ! -s "$F/brew.log" ] && echo "$out" | grep -q '^tmux: skipped (--no-deps)' \
   && ok "F sh -s -- --no-deps → skipped" || bad "F --no-deps: rc=$rc out=$out"
 
+fi
+fi
+
+if selftest_section 3; then
 # ── G — no hub (#1712, #1804): the same script from GitHub's stable ──────────
 # The source is this repo over file:// (FLEET_INSTALL_SRC — the raw.githubusercontent
 # layout: the manifest at its repo path, each file at its own). Nobody to ask.
@@ -422,6 +448,9 @@ out=$(env -u FLEET_HUB_URL HOME="$GH3" XDG_CONFIG_HOME="$GH3/.config" PATH="$SYS
 [ "$rc" = 2 ] && echo "$out" | grep -q 'FLEET_HUB_URL' && [ ! -e "$GH3/.claude/fleet" ] \
   && ok "G 接 asked ahead with no address → exit 2, naming FLEET_HUB_URL, nothing installed" || bad "G hub=1 no url: rc=$rc $out"
 
+fi
+
+if selftest_section 4; then
 # ── H — the two questions, on a pseudo-terminal ─────────────────────────────
 # A fake `stable`: this tree's manifest files + bin/fleet-up.sh (the part that
 # runs sessions), a bootstrap stub with its own done-marker (as the real one)
@@ -505,7 +534,6 @@ hinstall() {
 }
 # hsnap <home> — every file but the git internals, with its checksum
 hsnap() { (cd "$1" && find . -path ./.claude/fleet/.git -prune -o -type f -print | LC_ALL=C sort | while IFS= read -r f; do printf '%s %s\n' "$(cksum < "$f")" "$f"; done); }
-hval() { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" "$1/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' "; }
 
 # H1 the hub's copy on a terminal: nothing asked → 只看只派 + 接
 H1="$WORK/h1/home"; mkdir -p "$H1"
@@ -589,6 +617,9 @@ out=$(env -i HOME="$I1" PATH="$SYSPATH" SHELL=/bin/zsh TMPDIR="$WORK" FLEET_INST
       FLEET_INSTALL_NO_AGENTS=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_ASK=0 sh < "$WORK/install.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ ! -e "$OLDT.versions" ] && ok "I …and go on the next run once nothing runs from them" || bad "I versions left: rc=$rc $(ls "$I1/.local/share") $out"
 
+fi
+
+if selftest_section 5; then
 # ── J — a rerun on a client in use: whole versions, never in place (#1900) ──
 # Its own fake hub: /version names a version (a file the leg rewrites) and the
 # files come from a copy of the manifest's, so a "new version" is a changed copy.
@@ -699,6 +730,9 @@ ln -sfn "$JV/$(cat "$JV/.prev")" "$JR"
   && ok "J .prev rolls back: ln -sfn <versions>/<.prev> <home> → v2" || bad "J rollback: $(jtail)"
 kill "$JHUB_PID" 2>/dev/null; wait "$JHUB_PID" 2>/dev/null
 
+fi
+
+if selftest_section 6; then
 # ── K — the whole client in one go, and a tmux that needs no Homebrew (#2260) ─
 # Its own fake hub: /install/bundle.tar.gz is the manifest + every file it lists
 # + vendor/tmux (a fake static tmux) as one tar, SHA-256 in the header, like the
@@ -879,6 +913,8 @@ linstall "$LH2"; rm -f "$K/debug429"
   && cmp -s "$LH2/.claude/fleet/bin/fleet" "$REPO/bin/fleet" \
   && ok "L the hub answering 429 → no ticket, the install still done, exit 0" || bad "L 429: rc=$rc $(ls "$LH2/.config/claude-fleet" 2>&1) $out"
 kill "$KHUB_PID" 2>/dev/null
+
+fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-install-selftest" || echo "FAIL fleet-install-selftest"
 exit "$fail"

@@ -29,6 +29,8 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 4
 SCRIPT="$BIN/fleet-migrate.sh"
 [ -f "$SCRIPT" ] || { printf 'selftest: %s not found\n' "$SCRIPT" >&2; exit 2; }
 
@@ -237,6 +239,21 @@ TM set-window-option -t "$w1" @epic 'acme/repo#7'
 sleep 1.5
 diag() { printf 'windows: %s\nlaunched: %s\ntyped: %s\n' "$(TM list-windows -t "$SESS" -F '#{window_id}:#{window_name}' | tr '\n' ' ')" "$(cat "$WORK/launched" 2>/dev/null)" "$(cat "$WORK/typed" 2>/dev/null)"; }
 
+cat > "$FB/manual-quota" <<'EOS'
+#!/bin/bash
+[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
+state="${TMPDIR}/.claude-dash/global"
+mkdir -p "$state"
+date +%s > "$state/account.quota.ts.$$"
+mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
+printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
+EOS
+chmod +x "$FB/manual-quota"
+export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
+
+SP=$(TM display-message -p '#{socket_path}')
+
+if selftest_section 1; then
 # --- whoami: token truth (A) beats a wrong stamp, and heals it
 TM set-window-option -t "$w1" @cc_account acctB
 ok; [ "$(bash "$SCRIPT" whoami --session "$SESS" "$w1")" = acctA ] || fail "whoami must read the token (acctA) not the stamp (acctB)"
@@ -257,7 +274,7 @@ ok; grep -q 'no window to report on' "$WORK/w.err" || fail "whoami must say WHY 
 ok; ! grep -qi 'unbound variable' "$WORK/w.err" || fail "whoami walked an empty array again (#703): $(cat "$WORK/w.err")"
 
 # Inside a pane of THIS fleet ⇒ that pane's own window, in the same bare-label form.
-SP=$(TM display-message -p '#{socket_path}'); P1=$(TM display-message -p -t "$w1" '#{pane_id}')
+P1=$(TM display-message -p -t "$w1" '#{pane_id}')
 ok; [ "$(env TMUX="$SP,0,0" TMUX_PANE="$P1" bash "$SCRIPT" whoami 2>/dev/null)" = acctA ] \
   || fail "bare whoami inside a pane must report THAT window's account"
 
@@ -283,17 +300,6 @@ ok; TM display-message -p -t "$w1" '#{pane_pid}' >/dev/null 2>&1 || fail "dry-ru
 
 # Operator-selected destinations can cross the 85% automatic ceiling, but a
 # fresh reading at/above 95% (or an unknown reading) must refuse before /exit.
-cat > "$FB/manual-quota" <<'EOS'
-#!/bin/bash
-[ "$1" = quota ] && [ "$2" = --refresh ] || exit 2
-state="${TMPDIR}/.claude-dash/global"
-mkdir -p "$state"
-date +%s > "$state/account.quota.ts.$$"
-mv "$state/account.quota.ts.$$" "$state/account.quota.ts"
-printf 'acctA\t2\t25\t75\t0\t0\t0\nacctB\t3\t%s\t%s\t0\t0\t0\n' "${FAKE_MANUAL_PCT:-89}" "$((100 - ${FAKE_MANUAL_PCT:-89}))"
-EOS
-chmod +x "$FB/manual-quota"
-export FLEET_MANUAL_ACCOUNT_BIN="$FB/manual-quota"
 ok; out=$(FAKE_MANUAL_PCT=89 bash "$SCRIPT" --session "$SESS" --target-account acctB --dry-run "$w1")
 printf '%s' "$out" | grep -q 'would /exit' || fail "89% explicit target must be previewable: $out"
 ok; FAKE_MANUAL_PCT=95 bash "$SCRIPT" --session "$SESS" --target-account acctB "$w1" >"$WORK/manual-block.out" 2>&1 \
@@ -382,6 +388,19 @@ ok; printf '%s' "$out" | grep -q 'moved 2, skipped 1' || fail "summary must be '
 out=$(bash "$SCRIPT" --session "$SESS" --idle 2>&1)
 ok; printf '%s' "$out" | grep -q 'nothing to move' || fail "--idle after the move must find nothing (all working or on B): $out"
 
+fi
+
+if [ "$SELFTEST_SECTION" = 4 ]; then
+  # The first section already checks A -> B and the no-hook exit. Start here
+  # with that resulting process layout, without repeating those migrations.
+  TM respawn-pane -k -t "$w1" "$FB/runner-hook-b sid-1111"
+  TM set-window-option -t "$w1" @cc_account acctB
+  TM respawn-pane -k -t "$w3" "$FB/fakeshell"
+  nw1=$w1
+  unset FLEET_MANUAL_ACCOUNT_BIN
+  sleep 1.5
+fi
+if selftest_section 4; then
 # --- --stuck + --force-bg (issue #873). A walled worker whose failover request is
 # stuck — here on a background command — is the dash key's target. Rig: w5 on A
 # (benched; B active) with a live `sleep 97` child, marked @quota_stuck=1; w2 is
@@ -491,6 +510,9 @@ ok; [ "$(sed -n '1p' "$WORK/manual-env")" = acctA ] || fail 'launcher must be pi
 ok; sed -n '2p' "$WORK/manual-env" | grep -q '"agent":"claude","label":"acctA"' || fail 'launcher must receive the Claude target binding'
 ok; [ "$(bash "$BIN/fleet-account.sh" active)" = acctB ] || fail 'manual move must leave global active account unchanged'
 
+fi
+
+if selftest_section 2; then
 # ============================================================================
 # 3. the caller's OWN window (issue #1474)
 # ============================================================================
@@ -619,6 +641,9 @@ rp=$(bash "$BIN/fleet-report-parent.sh" -L "$LBL" --win "$kid" --state blocked -
 ok; printf '%s' "$rp" | grep -q "would send to scratch-7 ($nw9," \
   || fail "a child's report must address the RESUMED parent window $nw9: $rp"
 
+fi
+
+if selftest_section 3; then
 # --- a Loop between rounds rides the move (issue #2189): its ScheduleWakeup lived
 # in the process the /exit ends; the transcript says what it had pending, and the
 # resume's first turn is `/loop <that input>` — the person's text whole, a quote
@@ -733,6 +758,8 @@ PY
 )
 ok; printf '%s\n' "$vout" | grep -qF "$NM" && ! printf '%s\n' "$vout" | grep -q "^ended	$NM" \
   || fail "#3444: ⌘P (fleet_view.entries) must list it outside 已结束: $vout"
+
+fi
 
 cleanup; trap - EXIT
 printf 'fleet-migrate selftest: OK (%d checks)\n' "$CHECKS"

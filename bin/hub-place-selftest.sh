@@ -82,11 +82,75 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 3
 SPAWN="$BIN/dash-issue-session.sh"
 [ -x "$SPAWN" ] || { echo "selftest: $SPAWN missing/not executable" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/place-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
+# Read-only identity evidence before fixture exports/PATH changes. This is a
+# creation-time snapshot, not a cleanup receipt; missing/unknown is not success.
+if python3 - "$WORK" "${TMUX_TMPDIR:-}" "${FLEET_SELFTEST_ROOT:-}" "$$" "$SELFTEST_SECTION" 2>/dev/null <<'RESOURCE_RECORD'
+import json, os, stat, sys, time
+
+record = {"event": "hub-place-resources", "version": 1,
+          "entry": "hub-place-selftest.sh", "section": sys.argv[5],
+          "phase": "after_work_trap_before_fixture_environment", "cleanup_verified": False,
+          "shell_pid": int(sys.argv[4]), "reader_pid": os.getpid(),
+          "reader_ppid": os.getppid(), "wall_ns": time.time_ns(), "resources": []}
+sources = (("WORK", sys.argv[1], "this entry mktemp result", "place-selftest."),
+           ("TMUX_TMPDIR", sys.argv[2], "inherited TMUX_TMPDIR", "selftest-tt."),
+           ("FLEET_SELFTEST_ROOT", sys.argv[3], "inherited FLEET_SELFTEST_ROOT", "fleet-selftest-root."))
+for name, raw, source, prefix in sources:
+    item = {"name": name, "source": source, "raw": None, "canonical": None,
+            "raw_identity": None, "canonical_identity": None, "status": "missing"}
+    record["resources"].append(item)
+    if not raw:
+        continue
+    # Bound before JSON escaping; overlong paths are missing evidence, not
+    # truncated strings that a later reader could mistake for a cleanup target.
+    if len(os.fsencode(raw)) > 1024:
+        item["status"] = "raw_path_too_long"
+        continue
+    item["raw"] = raw
+    if not os.path.isabs(raw):
+        item["status"] = "unknown_source_relative_path"
+        continue
+    try:
+        canonical = os.path.realpath(raw)
+        if len(os.fsencode(canonical)) > 1024:
+            item["status"] = "canonical_path_too_long"
+            continue
+        item["canonical"] = canonical
+        original, resolved = os.stat(raw), os.stat(canonical)
+        item["raw_identity"] = {"dev": original.st_dev, "inode": original.st_ino}
+        item["canonical_identity"] = {"dev": resolved.st_dev, "inode": resolved.st_ino}
+        # Only check the known directory-name shape; this does not authenticate
+        # an inherited directory's creator or authorize any cleanup operation.
+        if not all(os.path.basename(p).startswith(prefix) for p in (raw, canonical)):
+            item["status"] = "unknown_source_name"
+        elif not stat.S_ISDIR(original.st_mode) or not stat.S_ISDIR(resolved.st_mode):
+            item["status"] = "not_directory"
+        elif item["raw_identity"] != item["canonical_identity"]:
+            item["status"] = "identity_changed_during_read"
+        else:
+            item["status"] = "observed"
+    except (OSError, ValueError) as exc:
+        item.update(status="read_error", error_type=type(exc).__name__, errno=getattr(exc, "errno", None))
+record["complete"] = (record["reader_ppid"] == record["shell_pid"]
+                      and all(r["status"] == "observed" for r in record["resources"]))
+record["read_end_wall_ns"] = time.time_ns()
+line = "hub-place-resources " + json.dumps(record, ensure_ascii=True, separators=(",", ":"))
+if len(line.encode("ascii")) + 1 > 65536:
+    line = 'hub-place-resources {"complete":false,"status":"record_too_large"}'
+print(line, flush=True)
+RESOURCE_RECORD
+then
+  :
+else
+  printf 'hub-place-resources {"complete":false,"status":"reader_failed","reader_exit":%s,"shell_pid":%s,"section":"%s"}\n' "$?" "$$" "$SELFTEST_SECTION"
+fi
 cat > "$WORK/authority" <<'AUTH'
 #!/bin/sh
 printf '%s\n' '{"mode":"legacy","reservation":"fixture-local-start"}'
@@ -240,6 +304,7 @@ UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_M
 WID="$UUID/acme-widgets:issue-258"   # keys carry the repo (issue 1939)
 REMOTE_LINE=$'REMOTE mac-a op_42 accepted\tchose mac-a (score 0.875, load 0.10/core); mac-b excluded: load 1.00/core > 0.8'
 
+if selftest_section 1; then
 # ===== OFF: CCQUOTA_FLEET unset ⇒ nothing runs, byte-identical ====================
 CLAIM_STATE=$'0\tOPEN' run_spawn 258
 base=$(snap)
@@ -259,7 +324,12 @@ err_has 'needs the hub'                          || fail "NOHUB says why"
 tmux_has 'new-window'                            && fail "NOHUB must not open it here instead"
 ok "NOHUB --node <other machine> without the hub → refused, not silently local"
 
+fi
+
+# Parts 2/3 need the same hub seam without replaying OFF assertions.
 export CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" FLEET_HUB_PLACE_CMD="$PLACE"
+
+if selftest_section 1; then
 
 # ===== REMOTE: placed on mac-a ⇒ nothing here, lease kept ============================
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258
@@ -427,6 +497,9 @@ CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET='' FLEET_HUB_PLACE_CMD='' FLEET_HUB_LEASE_C
 [ "$(snap)" = "$base" ]                          || fail "SPAWN_NODE with the hub off must change nothing" "$(diff <(printf '%s\n' "$base") <(snap))"
 ok "SPAWN_NODE off → byte-identical (the knob is never read without the hub)"
 
+fi
+
+if selftest_section 2; then
 # ===== issue #1586: the outcome of a REMOTE start comes back ======================
 DISPATCH="$WORK/conf/fleets/testsess/children/issue-77.dispatch"
 rm -f "$DISPATCH"
@@ -663,6 +736,9 @@ err_has 'hub unreachable'                        && fail "TOKEN-less is not 「h
 rm -f "$WORK/fakebin/ccquota"
 ok "TOKEN node.env's token reaches the place command only; none → refused"
 
+fi
+
+if selftest_section 3; then
 # ===== SCRATCH (issue #1541, EPIC #1529 R3): a raw scratch session is placed too ===
 # The same seams (FLEET_HUB_PLACE_CMD / FLEET_HUB_LEASE_CMD, the fake git / gh /
 # tmux), the real dash-raw-session.sh + fleet-lib.sh. A scratch has no issue: the
@@ -814,4 +890,6 @@ grep -q -- '--node=' "$TMUX_LOG"                 && fail "SCRATCH-BG hub off: th
 export CCQUOTA_FLEET=1
 ok "SCRATCH BG --bg carries --node / --origin-wid to the background pass; hub off carries nothing"
 
-printf 'hub-place-selftest: %s checks passed\n' "$pass"
+fi
+
+printf 'hub-place-selftest: %s checks passed (selected section %s/3)\n' "$pass" "$SELFTEST_SECTION"

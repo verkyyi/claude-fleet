@@ -47,8 +47,19 @@ pass=0
 ok()   { pass=$((pass + 1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2
          [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2
-         printf -- '--- spawn.err ---\n%s\n--- agent ---\n%s\n' "$(cat "$WORK/spawn.err" 2>/dev/null)" \
-           "$(cat "$WORK"/agent-* 2>/dev/null)" >&2
+         printf 'cold-reader socket=%q issue=%q wid=%q work=%q\n' \
+           "$SESS" "${READ_ISSUE:-}" "${win:-}" "$WORK" >&2
+         # Existing spawn samples only: no new clock/query in the measured path.
+         # T1 is spawn-command return, not the fill/launcher completion time.
+         printf 'cold-spawn-samples shell_pid=%s socket=%q spawn_issue=%q reader_issue=%q reader_wid=%q T0=%q T1=%q spawn_rc=%q\n' \
+           "$$" "$SESS" "${SPAWN_ISSUE:-}" "${READ_ISSUE:-}" "${win:-}" "${T0:-}" "${T1:-}" "${SRC:-}" >&2
+         # Keep file boundaries: another agent's ready line proves nothing about 11.
+         local file
+         for file in "$WORK/spawn.out" "$WORK/spawn.err" "$WORK/reader.log" "$WORK"/agent-*; do
+           [ -f "$file" ] || continue
+           printf -- '--- file=%q ---\n' "$file" >&2
+           cat "$file" >&2
+         done
          exit 1; }
 now() { python3 -c 'import time; print("%.3f" % time.time())'; }
 
@@ -71,16 +82,29 @@ printf '#!/bin/sh\nexit 0\n' > "$WORK/fakebin/gh"
 # prompt through (the hook is the real set-claude-state.sh, as Claude runs it).
 cat > "$WORK/fakebin/agent" <<'AGENT'
 #!/bin/bash
-w=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}')
+w=$(tmux display-message -p -t "$TMUX_PANE" '#{@issue}' 2>"$AGENT_LOG-writer-$$.issue.err")
+issue_rc=$?
 out="$AGENT_LOG-$w"
 { printf 't_boot=%s\n' "$(python3 -c 'import time; print("%.3f" % time.time())')"
   [ -f CLAUDE.md ] && echo boot_claude=1 || echo boot_claude=0
   [ -f src/big.txt ] && echo boot_big=1 || echo boot_big=0
   printf 'pending=%s\n' "${FLEET_WT_PENDING:-}"; } > "$out"
+printf 'writer_pid=%s pane=%q socket=%q issue_rc=%s issue=%q out=%q\n' \
+  "$$" "$TMUX_PANE" "${TMUX%%,*}" "$issue_rc" "$w" "$out" >> "$out"
 sleep "$BOOT"
 sh "$STATE_HOOK" working </dev/null
+prompt_rc=$?
 { printf 't_ready=%s\n' "$(python3 -c 'import time; print("%.3f" % time.time())')"
   [ -f src/big.txt ] && echo ready_big=1 || echo ready_big=0; } >> "$out"
+printf 'prompt_rc=%s\n' "$prompt_rc" >> "$out"
+# A later location observation, after the original boot/ready samples. It is
+# not evidence of the window's location when the single @issue read happened.
+location_begin=$(python3 -c 'import time; print("%.6f" % time.time())')
+location=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id} #{socket_path}' 2>"$AGENT_LOG-writer-$$.location.err")
+location_rc=$?
+location_end=$(python3 -c 'import time; print("%.6f" % time.time())')
+printf 'writer_location_begin=%s end=%s rc=%s wid_socket=%q\n' \
+  "$location_begin" "$location_end" "$location_rc" "$location" >> "$out"
 sleep 60
 AGENT
 chmod +x "$WORK/fakebin/gh" "$WORK/fakebin/agent"
@@ -90,6 +114,68 @@ export FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp"
 env PATH="$WORK/fakebin:$PATH" FLEET_WRAP_LAUNCH="$WORK/fakebin/agent" FLEET_WRAP_FAST_FAIL=0 \
   AGENT_LOG="$WORK/agent" BOOT=2.5 STATE_HOOK="$BIN/set-claude-state.sh" \
   tmux -L "$SESS" -f /dev/null new-session -d -s "$SESS" -n home || fail "setup: tmux"
+
+# This synchronous read is after setup/trap and before the first spawn/T0.
+# It never reads @issue or participates in the agent's boot/ready samples.
+python3 - "$WORK" "${TMUX_TMPDIR:-}" "${FLEET_SELFTEST_ROOT:-}" "$SESS" "$$" <<'RESOURCE_RECORD' || exit 2
+import json, os, stat, subprocess, sys, time
+
+record = dict(event="cold-resources", version=1, shell_pid=int(sys.argv[5]),
+              reader_pid=os.getpid(), reader_ppid=os.getppid(), wall_ns=time.time_ns(),
+              phase="after_setup_before_first_spawn_timing", cleanup_verified=False,
+              socket_label=sys.argv[4], resources=[], complete=False)
+def path_record(name, raw, source, socket=False):
+    item = dict(name=name, source=source, raw=None, canonical=None, status="missing")
+    if raw and len(os.fsencode(raw)) <= 1024 and os.path.isabs(raw):
+        item["raw"] = raw
+        try:
+            canonical = os.path.realpath(raw)
+            if len(os.fsencode(canonical)) > 1024:
+                raise ValueError("canonical path too long")
+            item["canonical"] = canonical
+            a, b = os.stat(raw), os.stat(canonical)
+            item["raw_identity"] = dict(dev=a.st_dev, inode=a.st_ino)
+            item["canonical_identity"] = dict(dev=b.st_dev, inode=b.st_ino)
+            kind = stat.S_ISSOCK if socket else stat.S_ISDIR
+            item["status"] = ("observed" if kind(a.st_mode) and kind(b.st_mode)
+                              and (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+                              else "type_or_identity_mismatch")
+        except (OSError, ValueError) as exc:
+            item.update(status="read_error", error_type=type(exc).__name__,
+                        errno=getattr(exc, "errno", None))
+    elif raw:
+        item["status"] = "unknown_or_overlong_path"
+    record["resources"].append(item)
+
+path_record("WORK", sys.argv[1], "actual WORK after original canonicalization")
+path_record("TMUX_TMPDIR", sys.argv[2], "inherited TMUX_TMPDIR")
+path_record("FLEET_SELFTEST_ROOT", sys.argv[3], "inherited FLEET_SELFTEST_ROOT")
+try:
+    # One actual private-server query; no guessed /tmp socket path.
+    p = subprocess.run(["tmux", "-L", sys.argv[4], "display-message", "-p",
+                        "-t", sys.argv[4], "#{pid}|#{socket_path}|#{session_name}"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3)
+    record["socket_query_rc"] = p.returncode
+    if p.returncode or len(p.stdout) > 4096 or len(p.stderr) > 4096:
+        raise ValueError("socket query failed or output exceeded bound")
+    pid, socket_path, session = p.stdout.decode().strip().split("|")
+    if not pid.isdigit() or session != sys.argv[4]:
+        raise ValueError("socket server/session identity mismatch")
+    record["server_pid"] = int(pid)
+    path_record("SOCKET", socket_path, "actual isolated tmux display-message", socket=True)
+except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    record["socket_error"] = type(exc).__name__
+record["complete"] = (record["reader_ppid"] == record["shell_pid"]
+                      and len(record["resources"]) == 4
+                      and all(x["status"] == "observed" for x in record["resources"]))
+record["read_end_wall_ns"] = time.time_ns()
+line = "cold-resources " + json.dumps(record, ensure_ascii=True, separators=(",", ":"))
+if len(line.encode("ascii")) + 1 > 65536:
+    line = 'cold-resources {"complete":false,"status":"record_too_large"}'
+    record["complete"] = False
+print(line, flush=True)
+sys.exit(0 if record["complete"] else 2)
+RESOURCE_RECORD
 
 # spawn <issue> [env…] — the real spawn, headless into $SESS, its start time kept
 spawn() {
@@ -103,9 +189,18 @@ spawn() {
     >"$WORK/spawn.out" 2>"$WORK/spawn.err"
   SRC=$?
   T1=$(now)
+  SPAWN_ISSUE=$n # identify these existing T0/T1 samples, after both were taken
 }
-field() { sed -n "s/^$2=//p" "$WORK/agent-$1" 2>/dev/null | tail -1; }
-wait_ready() { local i=0; while [ -z "$(field "$1" t_ready)" ] && [ $i -lt 150 ]; do sleep 0.1; i=$((i + 1)); done; }
+field() {
+  local file="$WORK/agent-$1" value rc
+  value=$(sed -n "s/^$2=//p" "$file" 2>"$WORK/reader.err" | tail -1); rc=$?
+  printf 'reader elapsed=%s socket=%q issue=%q wid=%q file=%q key=%q rc=%s value=%q stderr=%q\n' \
+    "$SECONDS" "$SESS" "$1" "${win:-}" "$file" "$2" "$rc" "$value" \
+    "$(<"$WORK/reader.err")" >> "$WORK/reader.log"
+  printf '%s\n' "$value"
+  return "$rc"
+}
+wait_ready() { READ_ISSUE=$1; local i=0; while [ -z "$(field "$1" t_ready)" ] && [ $i -lt 150 ]; do sleep 0.1; i=$((i + 1)); done; }
 secs() { python3 -c "print('%.2f' % ($2 - $1))"; }
 le() { python3 -c "import sys; sys.exit(0 if $1 <= $2 else 1)"; }
 

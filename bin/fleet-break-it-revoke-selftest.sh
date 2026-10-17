@@ -21,7 +21,8 @@
 # a revocation is a new version of <dir>/list.json. The hub's own list — what
 # writes it, the long poll waking, off adds nothing — is pinned by
 # tokenledger/internal/api/fleet_revocations_test.go, run here when a Go
-# toolchain is. The door: a sandbox sshd on 127.0.0.1 trusting a throwaway CA
+# toolchain is present and BREAK_GO != 0, otherwise by tokenledger.yml.
+# The door: a sandbox sshd on 127.0.0.1 trusting a throwaway CA
 # with RevokedKeys = the KRL the supervisor writes; no sshd that starts here ⇒
 # the KRL is asked with `ssh-keygen -Q` instead (said in the PASS line).
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -223,11 +224,19 @@ drill_relay_revocations_hub_down() {
   kill "$RC" 2>/dev/null; wait "$RC" 2>/dev/null
   rev_checker "$d" RELAY_CHECK_CACHE_S=1 RELAY_CHECK_GRACE_S=60 || return 1
   code=$(relay_ask frl1.A); [ "$code" = 403 ] || { WHY="checker restarted, hub away: the revoked A → $code (the kept list was not read)"; return 1; }
-  # the hub's own list, for real (when a Go toolchain is here)
-  if command -v go >/dev/null 2>&1 && [ -d "$ROOT/tokenledger" ]; then
+  # The shell/Go split is the same as the other credential drills (#3970).
+  # Keep the independent Go gate's exact coverage visible even on shell-only CI.
+  local test
+  for test in OffAddsNothing RelayCred LongPollWakes CredRevokeAndLift Cert Prune; do
+    grep -q "^func TestRevocations${test}(" "$ROOT/tokenledger/internal/api/fleet_revocations_test.go" \
+      || { WHY="the hub half's TestRevocations${test} is gone"; return 1; }
+  done
+  gohalf="；六条 TestRevocations 测试按名核对在，由 Go 门（tokenledger.yml）独立执行"
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1 && [ -d "$ROOT/tokenledger" ]; then
     local gout
     gout=$(cd "$ROOT/tokenledger" && go test -count=1 -run '^TestRevocations' ./internal/api 2>&1)
     case "$?:$gout" in
+      0:*'no tests to run'*) WHY="the hub half's TestRevocations tests did not run"; return 1 ;;
       0:*) gohalf="；入口半边 go test -run TestRevocations 通过" ;;
       *) WHY="the hub half: $(printf '%s' "$gout" | grep -E -- '--- FAIL|FAIL|Error' | head -3 | tr '\n' ' ')"; return 1 ;;
     esac

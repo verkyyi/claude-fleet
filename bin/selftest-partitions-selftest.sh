@@ -4,7 +4,8 @@
 # fleet-break-it-thin-selftest.sh, fleet-cleanup-idle-selftest.sh,
 # fleet-hub-selftest.sh, fleet-quotawatch-selftest.sh, fleet-await-stall-selftest.sh,
 # fleet-break-it-part.py, break-it-durations.txt, selftest_part.py and fleet-hub.yml.
-# Also covers fleet-break-it-cred-sep-selftest.sh (issue #3884).
+# Also covers fleet-break-it-cred-sep-selftest.sh, fleet-break-it-hub-selftest.sh
+# and fleet-sleep-selftest.sh (issue #3884).
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -36,14 +37,28 @@ families = {
     'fleet-quotawatch': ('SELFTEST_PART', 3),
     'fleet-await-stall': ('SELFTEST_PART', 2),
     'fleet-break-it-cred-sep': ('BREAK_PART', 2),
+    'fleet-break-it-hub': ('BREAK_PART', 3),
+    'fleet-sleep': ('SELFTEST_PART', 3),
 }
+# A part regrouped into several entries (issue #3884): fleet-cleanup-idle's
+# part 4/4 runs as wrappers 4..8, each `SELFTEST_PART=4/4` with its own
+# default argv group of whole cases. Every such wrapper must name its group —
+# a bare 4/4 beside them would rerun the whole part, every grouped case twice —
+# and the groups together must be exactly that part's cases, each once.
+regrouped = {'fleet-cleanup-idle': 4}
+
+def default_argv(text):
+    m = re.search(r'^if \[ "\$#" -eq 0 \]; then\n\s*set -- (.*?)\nfi$', text, re.M | re.S)
+    return m[1].replace('\\\n', ' ').split() if m else []
+
 for base, (var, n) in families.items():
     parent = root / (base + '-selftest.sh')
     source = parent.read_text()
-    if base == 'fleet-break-it-cred-sep':
+    if base in ('fleet-break-it-cred-sep', 'fleet-break-it-hub'):
         assert 'bin/break-it-durations.txt' in source, (base, 'missing weight selection dependency')
     assert re.search(r'\$\{' + var + r':[-=]1/' + str(n) + r'\}', source), base
     wrappers = {}
+    groups = []
     for path in root.glob(base + '-*-selftest.sh'):
         if not re.fullmatch(re.escape(base) + r'-\d+-selftest.sh', path.name):
             continue
@@ -52,11 +67,17 @@ for base, (var, n) in families.items():
         match = re.search(var + r'=(\d+)/(\d+) exec bash', text)
         assert match and int(match[2]) == n, path
         k = int(match[1])
+        if regrouped.get(base) == k:
+            argv = default_argv(text)
+            assert argv, (path, 'a regrouped part names its whole cases')
+            groups.append((path, argv))
+            wrappers.setdefault(k, path)
+            continue
         assert k not in wrappers, path
         wrappers[k] = path
     assert set(wrappers) == set(range(2, n + 1)), (base, wrappers)
 
-    if base in ('fleet-cleanup-idle', 'fleet-hub'):
+    if base in ('fleet-cleanup-idle', 'fleet-hub', 'fleet-sleep'):
         # Use unittest discovery itself, including inherited test methods.
         saved = sys.argv[:]
         sys.argv = [str(parent.with_suffix('.py')), str(root)]
@@ -86,6 +107,14 @@ for base, (var, n) in families.items():
     assert collections.Counter(x for p in parts for x in p) == collections.Counter(cases), base
     grown = cases + ['new_case_without_duration']
     assert collections.Counter(x for p in split(grown) for x in p) == collections.Counter(grown), base
+    if base in regrouped:
+        want = [c.split('.', 1)[1] for c in parts[regrouped[base] - 1]]
+        named = [c for _, argv in groups for c in argv]
+        assert len(named) == len(set(named)), (base, 'a case in two groups', named)
+        assert collections.Counter(named) == collections.Counter(want), \
+            (base, 'groups != part', sorted(set(want) - set(named)), sorted(set(named) - set(want)))
+        print('PASS %s: part %d/%d regrouped into %d entries, %d cases, every case once'
+              % (base, regrouped[base], n, len(groups), len(want)))
     print('PASS %s: %d discovered cases, %d parts, every case once; growth covered' % (base, len(cases), n))
 
 # Execute the actual shell dispatch with harmless groups, so all/default and

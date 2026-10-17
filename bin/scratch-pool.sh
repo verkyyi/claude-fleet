@@ -361,7 +361,7 @@ retire() {
     ( set -C; printf '%s\n' "$tok" > "$d/$fid" ) 2>/dev/null && mark="$d/$fid"
   fi
   if ! TM kill-window -t "$POOL:$wid" 2>/dev/null; then
-    rows=$(TM list-windows -a -F '#{window_id} #{session_name}' 2>/dev/null) || return 1
+    rows=$(TM list-windows -a -F '#{window_id} #{session_name}' 2>/dev/null) || return 1 # view-ok: raw pool membership after a refused kill; fleet_lw can drop this linked window's pool row
     printf '%s\n' "$rows" | grep -qx "$wid $POOL" && return 1   # still parked: the kill failed
     [ -z "$mark" ] || unmark "$mark" "$tok" || return 1
     return 0

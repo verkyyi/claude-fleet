@@ -44,6 +44,8 @@
 # only be planted as it), so the outside-files sweep runs ONLY inside the root.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 2
 W=$(mktemp -d "${TMPDIR:-/tmp}/login-reset-selftest.XXXXXX") || exit 2
 W=$(cd "$W" && pwd -P)
 trap 'rm -rf "${W:?}"' EXIT INT TERM HUP
@@ -195,6 +197,7 @@ last2() { tail -n 2 "$W/out" | paste -sd'|' -; }
 has() { grep -Fq -- "$2" "$1" && ok "$3" || fail "$3"; }
 gone() { [ ! -e "$1" ] && ok "$2" || fail "$2 ($1 is still there)"; }
 
+if selftest_section 1; then
 # ---- A: dry run ----
 fixture
 run "$L"
@@ -275,6 +278,9 @@ run boss --apply; [ "$RC" = 3 ] && ok 'F an admin: 3' || fail "F boss: $RC"
 RS_ADMIN_UID=$U run "$L" --apply; [ "$RC" = 3 ] && ok 'F the caller itself: 3' || fail "F self: $RC"
 run "$L" --bogus; [ "$RC" = 2 ] && ok 'F a bad option: 2' || fail "F bogus: $RC"
 
+fi
+
+if selftest_section 2; then
 # ---- K: the node token kept (issue #4195) ----
 keep_fixture() {
   fixture
@@ -397,5 +403,7 @@ has "$RS_LOG" "new-adir $GD euid=0" 'R the rejoin runs as root under the gate to
 FLEET_LOGIN_TEST_EUID=0 run "$L" --apply
 [ "$RC" = 3 ] && [ ! -s "$RS_LOG" ] && ok 'R root with no gate dir: 3, nothing run' || fail "R root with no gate dir: $RC"
 
+fi
+
 [ "$FAILS" = 0 ] || { printf 'fleet-login-reset-selftest: %s FAILED\n' "$FAILS"; exit 1; }
-printf 'fleet-login-reset-selftest: PASS\n'
+printf 'fleet-login-reset-selftest: PASS (section %s/2)\n' "$SELFTEST_SECTION"

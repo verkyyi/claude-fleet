@@ -2,7 +2,9 @@
 """Real list loop, private HOME/socket: requests, broadcast, memo and cleanup.
 
 selftest-part-of: fleet-hub-sessions.sh fleet-render-watch.py fleet_view.py tmux-spinner.py
-Default idle observation is a real 60 seconds; --quick is the BREAK-IT drill.
+Default idle observation is a real 32 seconds; --quick is the BREAK-IT drill.
+The 60s deadline/lease/view boundaries are checked on production paths under a
+controlled clock, explicitly STRUCTURAL, not claimed as a real-minute sample.
 No network or live fleet, and no changes to spinner's maintenance deadlines.
 """
 import json
@@ -18,6 +20,7 @@ import time
 
 BIN = Path(__file__).resolve().parent
 TMUX = shutil.which('tmux')
+ENTRY_START = time.monotonic()
 
 
 def until(fn, secs=2):
@@ -33,6 +36,7 @@ def main():
     if not TMUX:
         print('SKIP tmux absent')
         return
+    runpy.run_path(str(BIN / 'hub-sessions-watch-schedule-selftest.py'), run_name='__main__')
     with tempfile.TemporaryDirectory(prefix='hubsess-watch.', dir='/tmp') as tmp:
         root = Path(tmp)
         for d in ('bin', 'home', 'conf/fleets/test', 'conf/global', '.claude-dash/global', 'logs'):
@@ -69,7 +73,7 @@ def main():
                    FLEET_HUB_SESSIONS_LONGPOLL='0')
         def tm(*args):
             return subprocess.check_output([TMUX, '-L', 'test', *args], env=env,
-                                           text=True, stderr=subprocess.DEVNULL).strip()
+                                           text=True, stderr=subprocess.DEVNULL, timeout=3).strip()
         def fetches():
             try:
                 return (root / 'fetches').read_text().splitlines()
@@ -90,11 +94,17 @@ def main():
                                     env=env, stdout=log, stderr=log, start_new_session=True)
             procs.append(loop)
             until(lambda: bool(fetches()), 5)
-            seconds = 5 if '--quick' in sys.argv else 60
+            initial = len(fetches())
+            assert initial == 1, 'expected one startup fetch: %s' % initial
+            seconds = 5 if '--quick' in sys.argv else 32
+            observed_at = time.monotonic()
             time.sleep(seconds)
+            observed = time.monotonic() - observed_at
             count = len(fetches())
-            assert count <= (1 if seconds == 5 else 2), 'no view: %d refreshes in %ds' % (count, seconds)
-            print('PASS no-view %d refreshes/%ds (attached + active lease)' % (count, seconds), flush=True)
+            assert count == initial, 'no view: %d extra refreshes in %.3fs' % (count - initial, observed)
+            print('PASS no-view real %.3fs: startup=%d subsequent=%d (attached + active lease); '
+                  'not a measured 60s/rate or protocol/exec cost sample' %
+                  (observed, initial, count - initial), flush=True)
             # Run the actual resident spinner alongside the list. Its existing
             # maintenance defaults stay enabled, independently of this loop.
             tm('set-window-option', '-t', 'test:0', '@claude_state', 'working')
@@ -186,6 +196,8 @@ def main():
             print((root / 'loop.log').read_text(), file=sys.stderr)
             raise
         finally:
+            # A work alarm must not interrupt the bounded cleanup below.
+            signal.alarm(0)
             # The lock wrapper gives its child a separate process group. Reap
             # that exact sandbox group as well, including a refresh in flight.
             try:
@@ -197,10 +209,10 @@ def main():
                 if p.poll() is None:
                     p.terminate()
                 try:
-                    p.wait(timeout=3)
+                    p.wait(timeout=.5)
                 except subprocess.TimeoutExpired:
                     p.kill()
-                    p.wait()
+                    p.wait(timeout=.5)
                 if p.stdin:
                     p.stdin.close()
                 if p.stdout:
@@ -210,4 +222,14 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    def deadline(signum, frame):
+        raise TimeoutError('watch entry exceeded 50s work deadline; cleanup still required')
+    signal.signal(signal.SIGALRM, deadline)
+    signal.alarm(50)  # reserve time for finally; never stretch production periods
+    try:
+        main()
+    finally:
+        signal.alarm(0)
+    elapsed = time.monotonic() - ENTRY_START
+    assert elapsed < 58, 'watch entry including preparation/finally: %.3fs' % elapsed
+    print('PASS complete watch entry including preparation/finally %.3fs <58s' % elapsed)

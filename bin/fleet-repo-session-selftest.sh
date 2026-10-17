@@ -29,6 +29,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 4
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -47,6 +49,10 @@ printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
 # The agent: records its argv and what its OWN window said at launch, then idles.
 cat > "$WORK/bin/claude" <<EOF
 #!/bin/bash
+# Launcher plugin discovery is a CLI read, not one of the recorded sessions.
+case "\${1:-} \${2:-} \${3:-}" in
+  'plugin list --json'|'plugin marketplace list') printf '[]\n'; exit 0 ;;
+esac
 w=\$(tmux display-message -p -t "\$TMUX_PANE" '#{window_id}')
 printf '%s\n' "\$*" > "$WORK/rec/\$w.args"
 tmux display-message -p -t "\$TMUX_PANE" '#{@repo}|#{@norepo}|#{@worktree}' > "$WORK/rec/\$w.seen"
@@ -101,6 +107,7 @@ spawn() { bash "$BIN/dash-issue-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"; }
 raw()   { bash "$BIN/dash-raw-session.sh" "$@" >"$WORK/out" 2>"$WORK/err"; }
 newest() { tmux list-windows -t "$1" -F '#{window_id}' | tail -1; }
 
+if selftest_section 1; then
 # ---- A. issue spawn --------------------------------------------------------------
 spawn 12 "$S"; rc=$?
 eq "A 2+ repos, no --repo → refused (infra)" "$rc" 1
@@ -161,6 +168,10 @@ case "$(opt "$wS" window_name)" in scratch-*) ok "C repo scratch name is bare (#
 case "$(opt "$wN" window_name)" in *·*) fail "C a no-repo session has no repo tag: $(opt "$wN" window_name)" ;;
   *) ok "C no-repo name untagged" ;; esac
 
+fi
+
+if selftest_section 4; then
+# Bare starts need only the shared two-repo fixture, not the issue windows.
 raw "$S"; w=$(newest "$S")
 eq "C current repo all → no-repo" "$(opt "$w" @norepo)" 1
 printf 'o/b\n' > "$FLEET_CONF_DIR/fleets/$S/current-repo"   # the retired picker's (#1034)
@@ -168,6 +179,9 @@ raw "$S"; w=$(newest "$S")
 eq "C a stale current-repo file → still no-repo" "$(opt "$w" @norepo)" 1
 rm -f "$FLEET_CONF_DIR/fleets/$S/current-repo"
 
+fi
+
+if selftest_section 1; then
 # ---- D. keys -------------------------------------------------------------------------
 inpane() {   # $1=window — run the rest as if inside that window's pane
   local w="$1"; shift
@@ -195,6 +209,18 @@ case "$(opt "$wD" pane_start_command)" in *set-option*@repo*o/d*) ok "F one-repo
 eq "F one-repo window's @repo" "$(opt "$wD" @repo)" o/d
 eq "F one-repo worktree" "$(opt "$wD" @worktree)" "$WORK/mainD-issue-5"
 
+fi
+
+# Restore starts with the same bindings, without re-running spawn assertions.
+if [ "$SELFTEST_SECTION" = 2 ]; then
+  spawn 12 "$S" --repo o/b || fail 'restore fixture: issue spawn'
+  wB=$(wins_for "$S" 12 | head -1)
+  raw --no-repo "$S" || fail 'restore fixture: no-repo spawn'
+  wN=$(newest "$S"); nsid=$(opt "$wN" @norepo_sid)
+  spawn 5 "$D" || fail 'restore fixture: one-repo spawn'
+  wait_rec "$wB" && wait_rec "$wN" || fail 'restore fixture: launcher'
+fi
+if selftest_section 2; then
 # ---- E. restore round-trip -------------------------------------------------------------
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 MS="$FLEET_CONF_DIR/fleets/$S/restore.map"; MD="$FLEET_CONF_DIR/fleets/$D/restore.map"
@@ -235,6 +261,14 @@ else
   fail "E old row not restored"
 fi
 
+fi
+
+if [ "$SELFTEST_SECTION" = 3 ]; then
+  raw --repo o/b "$S" || fail 'resume fixture: scratch spawn'
+  wS=$(newest "$S")
+  wait_rec "$wS" || fail 'resume fixture: launcher'
+fi
+if selftest_section 3; then
 # ---- G. a fleet with no repo (issue #1937): a bare spawn is a no-repo session ----
 Z=fz
 mkdir -p "$FLEET_CONF_DIR/fleets/$Z"
@@ -284,6 +318,8 @@ case "$(cat "$WORK/rec/$wG.args" 2>/dev/null)" in *--resume*) fail "H resumed a 
   *) fail "H gone-transcript args: $(cat "$WORK/rec/$wG.args" 2>/dev/null)" ;; esac
 raw --repo o/b --worktree "$WORK/nope-scratch-9" --seed-file "$WORK/seed.txt" "$S" \
   && fail "H a gone --worktree opened a window" || ok "H a gone --worktree is refused"
+
+fi
 
 [ "$FAILS" = 0 ] && { printf 'PASS fleet-repo-session-selftest\n'; exit 0; }
 printf '%s failure(s)\n' "$FAILS" >&2; exit 1

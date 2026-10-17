@@ -63,6 +63,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 5
 [ -x "$BIN/dash-reap.sh" ] || { printf 'selftest: %s missing/not executable\n' "$BIN/dash-reap.sh" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
 
@@ -72,6 +74,37 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/dr-selftest.XXXXXX")" || exit 2
 # transcript-dir name — a symlinked $WORK would encode to a dir that never matches.
 trap 'rm -rf "$WORK"' EXIT
 WORK="$(cd "$WORK" && pwd -P)"
+
+# Evidence for this part's setup and the enclosing normal runner. This reads
+# only the three supplied paths, before the fakes or per-call TMPDIR exist.
+python3 - "$WORK" "${TMUX_TMPDIR:-}" "${FLEET_SELFTEST_ROOT:-}" "$$" "$SELFTEST_SECTION" <<'RESOURCE_RECORD' || exit 2
+import json, os, stat, sys, time
+r = dict(event="dash-reap-resources", shell_pid=int(sys.argv[4]), section=sys.argv[5],
+         reader_pid=os.getpid(), reader_ppid=os.getppid(), wall_ns=time.time_ns(),
+         cleanup_verified=False, resources=[])
+for name, path in zip(("WORK", "TMUX_TMPDIR", "FLEET_SELFTEST_ROOT"), sys.argv[1:4]):
+    item = dict(name=name, raw=None, canonical=None, status="missing")
+    r["resources"].append(item)
+    if not path or not os.path.isabs(path) or len(os.fsencode(path)) > 1024:
+        continue
+    item["raw"] = path
+    try:
+        real = os.path.realpath(path)
+        if len(os.fsencode(real)) > 1024:
+            raise ValueError("canonical path too long")
+        item["canonical"] = real
+        a, b = os.stat(path), os.stat(real)
+        item["raw_identity"] = dict(dev=a.st_dev, inode=a.st_ino)
+        item["canonical_identity"] = dict(dev=b.st_dev, inode=b.st_ino)
+        item["status"] = ("observed" if stat.S_ISDIR(a.st_mode) and stat.S_ISDIR(b.st_mode)
+                          and (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else "mismatch")
+    except (OSError, ValueError) as exc:
+        item.update(status="read_error", error_type=type(exc).__name__)
+r["complete"] = r["reader_ppid"] == r["shell_pid"] and all(x["status"] == "observed" for x in r["resources"])
+r["read_end_wall_ns"] = time.time_ns()
+print("dash-reap-resources " + json.dumps(r, ensure_ascii=True, separators=(",", ":")), flush=True)
+sys.exit(0 if r["complete"] else 2)
+RESOURCE_RECORD
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf '%s\n' "$2" >&2; exit 1; }
 
@@ -121,6 +154,7 @@ chk() { # <label> <expect-token> <expect-rc> ... args to fleet_reap_ok
   [ "$rc" = "$wantrc" ] || fail "fleet_reap_ok $label: rc $rc want $wantrc"
 }
 
+if selftest_section 1; then
 chk "zero-commit-sha" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" "$MASTER" ""
 chk "zero-commit-ref" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 "$MASTER" "$BASE_BR" ""
 chk "zero-commit-head-ref" unmerged 1 "$WORK/wt17" "$BASEDIR" issue-17 issue-17 "$BASE_BR" ""
@@ -132,6 +166,8 @@ chk "clean+merged-PR" merged-pr 0 "$WORK/wt2" "$BASEDIR" issue-2 "$H2" "$MASTER"
 chk "clean+unmerged" unmerged 1 "$WORK/wt2" "$BASEDIR" issue-2 "$H2" "$MASTER" ""
 chk "dirty" dirty 1 "$WORK/wt3" "$BASEDIR" issue-3 "$H3" "$MASTER" "issue-3"
 chk "empty-wtdir+ancestor" ancestor 0 "" "$BASEDIR" issue-1 "$H1" "$MASTER" ""
+
+fi
 
 # --- B. dash-reap.sh with fakes -----------------------------------------------
 mkdir -p "$WORK/fakepath" "$WORK/rt"
@@ -256,6 +292,7 @@ run_reap() { # <ISS> <args...> — run dash-reap with the fakes + this base chec
 # run_reap, capturing the #596 result token (stdout) and the exit status.
 run_reap_tok() { TOK="$(run_reap "$@")"; RC=$?; }
 
+if selftest_section 1; then
 # #565: even a merged/idle row must reject shifting indexes and extra targets.
 for bad in 5 :6 s1:8 worker-name; do
   : > "$TMLOG"; : > "$GHLOG"
@@ -349,6 +386,9 @@ grep -q 'CONFIRM' "$TMLOG" || fail "unmerged ⌃x should ask y/n first (confirm-
 grep -q 'KILL' "$TMLOG" && fail "unmerged ⌃x must not kill the window before confirm"
 [ -d "$WORK/wt2" ] || fail "unmerged worktree must be kept"
 
+fi
+
+if selftest_section 2; then
 # B4: ⌃x on clean+merged (issue-1, ancestor) → full reap, BACKGROUNDED (issue #304):
 # the slow git remove + gh close run via run-shell -b (an --exec re-exec), so the ⌃x
 # bind returns instantly; the fake tmux runs the dispatched command so we still see
@@ -477,6 +517,9 @@ grep -q 'CLOSE' "$GHLOG" && fail "scratch reap must NOT close any issue (no @iss
 awk -F'\t' '$2=="scratch-9"{exit !($5 ~ /^[0-9a-f]{7,}$/)}' "$LEDGER" \
   || fail "the scratch-9 row must carry the worktree HEAD sha (recorded pre-removal)" "$(cat "$LEDGER")"
 
+fi
+
+if selftest_section 3; then
 # B8c: ⌃x on a scratch row WITH a DIRTY worktree → ask y/n (confirm-before) first (#289
 # one-key rule); do NOT close the window or touch the worktree yet.
 git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
@@ -622,6 +665,9 @@ grep -q 'KILL' "$TMLOG" || fail "--yes on a dirty scratch should close the windo
 [ "$TOK" = "reaped:keep" ] || fail "--yes on a dirty scratch must print reaped:keep (got [$TOK]) (#596)"
 [ "$(srows scratch-12)" = 1 ] || fail "a --yes scratch disposal must index the session (#466+#596)" "$(cat "$LEDGER")"
 
+fi
+
+if selftest_section 4; then
 # --- E. sleepers + truthful results (issue #1244) ------------------------------
 # Every fixture is a clean strict ancestor of base (merged, no confirm needed).
 for n in 20 21 22 23 24 25; do
@@ -710,13 +756,44 @@ KILL_FAILS=1 run_reap_tok 25 @9
 [ -s "$GHLOG" ] && fail "a failed kill must not close the issue"
 rm -f "$WORK/fakepath/python3"
 
+fi
+
+if selftest_section 5; then
 # --- F. a reap that judges right (issue #1542, R4 of EPIC #1529) ---------------
 # Five legs, one per source issue. A REAL bounded agent (sleep, invoked as
 # `claude`, via a symlink) stands under the fake pane, so the real probe meets a young agent.
 iso_ago() { python3 -c 'import sys,time;print(time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime(time.time()-int(sys.argv[1]))))' "$1"; }
 mkdir -p "$WORK/agentbin"; ln -s "$(command -v sleep)" "$WORK/agentbin/claude"   # a copy is SIGKILLed by macOS signing
 "$WORK/agentbin/claude" 60 & AG=$!
-trap 'kill "$AG" 2>/dev/null; rm -rf "$WORK"' EXIT
+AG_JOINED=0
+AG_WAITED=0
+AG_PID=$AG
+cleanup_agent_fixture() {
+  local original_rc=$? wait_rc=0 remove_rc=0
+  trap - EXIT
+  if [ "$AG_WAITED" = 0 ]; then
+    # Only our still-unwaited direct child, never a pid read from a fleet row.
+    # Keep the original TERM; wait also on the failed-assertion EXIT path.
+    kill "$AG" 2>/dev/null
+    wait "$AG" 2>/dev/null; wait_rc=$?
+    AG_WAITED=1
+    case "$wait_rc" in 0|143) AG_JOINED=1 ;; esac
+    printf 'dash-reap-agent-cleanup pid=%s wait_rc=%s joined=%s original_rc=%s\n' \
+      "$AG_PID" "$wait_rc" "$AG_JOINED" "$original_rc"
+  fi
+  if [ "$AG_JOINED" = 1 ]; then
+    rm -rf "$WORK"; remove_rc=$?
+  else
+    remove_rc=1  # retain the private fixture on unknown wait/ownership
+  fi
+  printf 'dash-reap-cleanup section=5 pid=%s joined=%s remove_rc=%s work=%q exists=%s original_rc=%s\n' \
+    "$AG_PID" "$AG_JOINED" "$remove_rc" "$WORK" "$([ -e "$WORK" ] && echo 1 || echo 0)" "$original_rc"
+  if [ "$AG_JOINED" != 1 ] || [ "$remove_rc" != 0 ] || [ -e "$WORK" ]; then
+    [ "$original_rc" != 0 ] || original_rc=1
+  fi
+  exit "$original_rc"
+}
+trap cleanup_agent_fixture EXIT
 for n in 30 31 32 34; do
   git -C "$BASEDIR" worktree add -q -b "issue-$n" "$WORK/wt$n" >/dev/null 2>&1
   git -C "$WORK/wt$n" commit --allow-empty -qm "work$n"
@@ -782,6 +859,12 @@ grep -q 'EDIT .*--remove-assignee @me' "$GHLOG" || fail "the claim must be relea
 grep -q 'COMMENT .*never started' "$GHLOG" || fail "the note must say it never started (#867)" "$(cat "$GHLOG")"
 grep -q 'fleet:no-relay' "$GHLOG" || fail "the reap note must carry the no-relay marker"
 kill "$AG" 2>/dev/null; wait "$AG" 2>/dev/null
+AG_WAIT_RC=$?
+AG_WAITED=1
+case "$AG_WAIT_RC" in 0|143) AG_JOINED=1 ;; esac
+printf 'dash-reap-agent-cleanup pid=%s wait_rc=%s joined=%s phase=original_success_cleanup\n' \
+  "$AG_PID" "$AG_WAIT_RC" "$AG_JOINED"
+[ "$AG_JOINED" = 1 ] || fail "owned agent wait did not yield a known exit; preserve fixture"
 
 # --- C. interactive terminal handoff (#451), asynchronous cleanup (#304) ------
 # execute() yields fzf's terminal for the inline confirm. B4 above still asserts
@@ -792,5 +875,7 @@ grep -Fq '$DASH_KEY_REAP:execute(' "$DASH" \
 grep -Fq 'dash-reap.sh {2} --bg)' "$DASH" \
   || fail "the dash bind must ask for the backgrounded tail explicitly (#1244)"
 
-printf 'selftest PASS: reap gates, confirmation/cancel, ledger, async cleanup, CLI results, refused-popup fallback, R4 judgement (#1542)\n'
+fi
+
+printf 'dash-reap selftest PASS: selected section %s/5 (all preserves the original sequence)\n' "$SELFTEST_SECTION"
 exit 0

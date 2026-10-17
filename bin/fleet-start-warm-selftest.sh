@@ -52,6 +52,8 @@
 # tmux / python3 / git absent → SKIP (exit 0).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-sections.sh"
+selftest_sections 2
 for t in tmux python3 git; do command -v "$t" >/dev/null 2>&1 || { echo "fleet-start-warm: $t absent — SKIP"; exit 0; }; done
 REAL_TMUX=''
 for t in $(type -ap tmux); do case "$t" in */tmux-shim/*) continue ;; esac; REAL_TMUX=$t; break; done
@@ -190,8 +192,10 @@ warm_up() {  # every slot one ready entry
 turns() { python3 -c 'import json,sys; [print(json.loads(l)["turn"]) for l in open(sys.argv[1])]' "$FAKE_TURNS" 2>/dev/null; }
 warm_up || fail "the pool did not come up" "$(bash "$POOL" status "$SESS" 2>&1)"
 
-# ---- A: a new task, answered from the warm o/a slot ---------------------------
 NOTE='（单子和分支稍后会补给你，先开始。）'
+
+if selftest_section 1; then
+# ---- A: a new task, answered from the warm o/a slot ---------------------------
 body=$'修侧栏的刷新图标\n第二行：它转个不停'
 t0=$(ms)
 out=$(printf '%s' "$body" | bash "$CR" start "$SESS" new claude o/a '' '' '修侧栏的刷新图标' 2>"$WORK/errA"); rc=$?
@@ -324,6 +328,9 @@ first=$(printf '%s\n' "$out" | head -1); logl=$(printf '%s\n' "$out" | sed -n 2p
 case "$logl" in *'succeeded window=@5 timing t_accepted='*' t_prompt=1200 t_ready=1100 t_window=1000') ;; *) fail "F ops.log carries the timing" "$logl" ;; esac
 ok "F the controller: window_id / key / timing / filed=pending; ops.log has the timing line"
 
+fi
+
+if selftest_section 2; then
 # ---- G: an unseeded HOME start (`fleet claude`, issue #2339) takes the HOME entry
 warm_up || fail "G the pool did not refill" "$(bash "$POOL" status "$SESS" 2>&1)"
 : > "$WORK/log/spawn"; : > "$FAKE_TURNS"
@@ -527,4 +534,6 @@ PY
 [ "$(printf '%s\n' "$out" | sed -n 4p)" = 'succeeded @7 []' ] || fail "N claude unchanged" "$out"
 ok "N the controller: another agent than asked is closed and the start failed; claude unchanged"
 
-printf 'fleet-start-warm: %d passed\n' "$pass"
+fi
+
+printf 'fleet-start-warm: %d passed (section %s/2)\n' "$pass" "$SELFTEST_SECTION"
