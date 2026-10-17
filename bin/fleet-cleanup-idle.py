@@ -551,10 +551,12 @@ class Cleaner:
             if not any("worktree " + wt in record.splitlines() for record in records):
                 self.say(window, "skip:foreign-worktree", key)
                 return False
-            held = run("bash", "-c", '. "$1/fleet-lib.sh"; if fleet_rotate_lease_held "$2"; then echo held; fi',
+            held = run("bash", "-c", '. "$1/fleet-lib.sh"; '
+                       'metadata=$(fleet_worktree_retire_metadata "$2") || { printf "%s" "$metadata"; exit 0; }; '
+                       'if fleet_rotate_lease_held "$2"; then echo held; fi',
                        "idle-reap", str(BIN), wt)
             if held:
-                self.say(window, "skip:busy", key + " rotation")
+                self.say(window, "skip:busy", key + " " + ("rotation" if held == "held" else held))
                 return False
             try:
                 branch = run("git", "-C", wt, "symbolic-ref", "-q", "--short", "HEAD")

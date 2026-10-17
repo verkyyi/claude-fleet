@@ -105,6 +105,21 @@ def main():
             check(worktrees() == {repo, worktree}, 'resume does not create a second Worktree')
             check((worktree / 'tracked.txt').read_text() == 'uncommitted fixture work\n',
                   'native resume preserves uncommitted work')
+            metadata = Path(git('-C', worktree, 'rev-parse', '--absolute-git-dir'))
+            check((metadata / 'CLAUDE_BASE').is_file(), 'native creator records its ownership marker')
+            check((metadata / 'locked').is_file(), 'native print-mode Worktree retains its Git lock')
+            drop = arguments.fleet_root / 'bin/fleet-worktree-drop.sh'
+            for label in ('locked', 'explicitly-unlocked'):
+                if label == 'explicitly-unlocked':
+                    git('-C', repo, 'worktree', 'unlock', worktree)
+                result = subprocess.run(['bash', str(drop), str(repo), str(worktree), '--force'],
+                    env=dict(environment, FLEET_CONF_DIR=str(home / 'fleet-conf')), cwd=root,
+                    text=True, capture_output=True, timeout=20)
+                check(result.returncode == 2 and result.stdout.strip() == 'error:native-owned',
+                      label + ': Fleet forced retirement defers to the native owner')
+                check(worktrees() == {repo, worktree}
+                      and (worktree / 'tracked.txt').read_text() == 'uncommitted fixture work\n',
+                      label + ': native registration and uncommitted data remain intact')
             guard = arguments.fleet_root / 'hooks/base-readonly-guard.py'
             for label, target, expected in (('own file', worktree / 'tracked.txt', 0),
                                             ('base file', repo / 'tracked.txt', 2),

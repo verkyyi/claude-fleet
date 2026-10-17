@@ -1407,6 +1407,21 @@ class DoneNoPr(Rig):
         self.assertIn("scratch-7", self.call("git", "-C", str(self.main), "branch", "--list", "scratch-7"))
         self.assertIn(self.sid, (self.root / "ledger.tsv").read_text())   # recorded first
 
+    def test_native_owned_worktree_keeps_window_and_data(self):
+        self.ago(7300)
+        metadata = Path(self.call("git", "-C", str(self.wt), "rev-parse", "--absolute-git-dir").strip())
+        (metadata / "CLAUDE_BASE").write_text(self.call("git", "-C", str(self.wt), "rev-parse", "HEAD"))
+        self.assertIn("error:native-owned", self.clean())
+        self.assertTrue(self.exists())
+        self.assertTrue(self.listed())
+
+    def test_git_locked_worktree_keeps_window_and_data(self):
+        self.ago(7300)
+        self.call("git", "-C", str(self.main), "worktree", "lock", str(self.wt))
+        self.assertIn("error:locked", self.clean())
+        self.assertTrue(self.exists())
+        self.assertTrue(self.listed())
+
     def test_codex_worker_closes_like_a_claude_one(self):
         # Issue #3352: a Codex worker whose issue closed with no PR goes the same
         # road, on the same state stamps.
