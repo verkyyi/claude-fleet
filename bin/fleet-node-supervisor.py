@@ -311,6 +311,9 @@ LEFTOVER_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.).*\.plist\..+$")
 # an account unit (issue #2332). cred-proxy-shared has no template — it is listed
 # so an account's adopt never boots the machine's proxy out.
 MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
+# Account units the machine's own child replaces while it runs (issue #4358): the
+# webhook forwarder, one for every login (webhook_machine_child).
+WEBHOOK_UNITS = ("webhook",)
 # The locale every child is started in (issue #3514): macOS always has
 # en_US.UTF-8, a slim Linux image only C.UTF-8 — there en_US.UTF-8 named a locale
 # that does not exist, perl warned on every call and python's setlocale raised,
@@ -2183,7 +2186,9 @@ class Supervisor(object):
         self.logroot = os.path.join(self.p.log, "node") if self.seated else self.p.log
 
     # -- the account half (#2332): entries built from the one table, per managed login
-    def account_entries(self):
+    def account_entries(self, retired=False):
+        """Every account unit of every login it runs; retired: instead, the units
+        the machine runs itself now (#4358), whose old copies the sweep stops."""
         t = now()
         if self.units is None or t - self.units_at >= 60:
             self.units = account_units(self.p, self.table)
@@ -2192,6 +2197,8 @@ class Supervisor(object):
         if not self.units:
             return out
         brew = brew_prefix()
+        # the machine's one forwarder serves every login (#4358): no login runs its own
+        gone = WEBHOOK_UNITS if self.webhook_machine_on() else ()
         for login, why in managed_accounts(self.p).items():
             if why:
                 continue
@@ -2203,8 +2210,17 @@ class Supervisor(object):
                     self.dirty = True
                 continue
             for u in self.units:
+                if (u["name"] in gone) != retired:
+                    continue
                 out.append(account_entry(account_unit_for(u, ident[2]), login, ident, brew))
         return out
+
+    def webhook_machine_on(self):
+        """The machine's one webhook forwarder runs (#4358): never seated — the
+        seat cannot run as a login itself, so there each login keeps its unit —
+        and FLEET_NODE_WEBHOOK=0 is the old road, a copy per login."""
+        return (not self.seated and env("FLEET_NODE_WEBHOOK", "1") != "0"
+                and trusted(webhook_machine_script(self.p)))
 
     def service_entries(self):
         """The login-level register (#2525): every valid, enabled entry of a login
@@ -2242,6 +2258,7 @@ class Supervisor(object):
         entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
         # the test runner (#3144) only where ci.env is — off, no child at all
         entry += [ci_child(self.p)] if ci_on(self.p) else []
+        entry += [webhook_machine_child(self.p)] if self.webhook_machine_on() else []
         return (list(self.table["children"]) + entry + [e for e in self.account_entries() if e.get("keepalive")]
                 + self.service_entries())
 
@@ -2504,7 +2521,8 @@ class Supervisor(object):
                 or env("FLEET_NODE_STRAY_SWEEP", "1") == "0":
             return
         self.strays_at = t
-        units = [e for e in self.account_entries() if e.get("keepalive")]
+        # …and a unit the machine now runs once (#4358): a login's own copy is a stray
+        units = [e for e in self.account_entries() + self.account_entries(retired=True) if e.get("keepalive")]
         if not units:
             return
         try:
@@ -5307,6 +5325,19 @@ def ci_child(paths):
     return {"name": "ci-runner",
             "cmd": ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-ci-runner.py"), "loop"],
             "requires": [ci_env_path(paths)], "reload": ci_env_path(paths), "note": "#3144"}
+
+
+def webhook_machine_script(paths):
+    return os.path.join(paths.runtime, "bin", "fleet-webhook-machine.py")
+
+
+def webhook_machine_child(paths):
+    """The machine's ONE webhook forwarder (issue #4358, EPIC #4354 C4): one
+    localhost listener for every login it took over, each login's forwards and
+    routes run as that login. While it runs, no login runs the `webhook` unit."""
+    return {"name": "webhook-machine",
+            "cmd": ["/usr/bin/python3", "-I", webhook_machine_script(paths), "run"],
+            "note": "#4358"}
 
 
 def ci_summary(paths):

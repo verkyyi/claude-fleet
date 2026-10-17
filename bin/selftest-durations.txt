@@ -440,6 +440,7 @@
 5.5 fleet-wait-reeval-selftest.sh
 9.5 fleet-wait-selftest.sh
 11.1 fleet-wait-webhook-selftest.sh
+16.0 fleet-webhook-machine-selftest.sh
 3.6 fleet-webhook-selftest.sh
 1.8 fleet-win-name-selftest.sh
 1.7 fleet-worker-records-selftest.sh
