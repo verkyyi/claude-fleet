@@ -363,6 +363,10 @@ class Worktrees(Receipts):
                 mock.patch.object(launch, "option", return_value=str(self.worktree)), \
                 mock.patch.object(authority, "start_call") as observed, \
                 mock.patch.object(launch, "stamp") as stamped:
+            for invalid in ({}, None):
+                with mock.patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(dict(context, worktree=invalid))}), \
+                        self.assertRaisesRegex(ValueError, "invalid worktree binding"):
+                    authority.observe_native(dict(payload, cwd=str(self.worktree)))
             for cwd in (str(self.main), str(self.other)):
                 with self.subTest(cwd=cwd), self.assertRaises(ValueError):
                     authority.observe_native(dict(payload, cwd=cwd))

@@ -186,7 +186,7 @@ def observe_native(payload):
                 raise ValueError("late local hook cannot replace native identity")
             binding = previous.get("worktree", binding)
         binding = launch.observe_native_worktree(pane, payload, intent, binding)
-    elif binding:
+    elif "worktree" in c:
         launch.bind_native_worktree(payload, c["worktree"])
         launch.check_worktree_window(pane, c["worktree"])
     proof = {k: native[k] for k in ("pid", "birth", "executable")}
