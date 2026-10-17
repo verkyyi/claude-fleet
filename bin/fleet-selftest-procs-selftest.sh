@@ -3,7 +3,7 @@
 # stay overnight (issue #4360, EPIC #4354 C6): bin/fleet_selftest_procs.py and the
 # step bin/fleet-selftest-reap.sh runs it as (hourly, on the diskguard tick).
 #
-# The gap: a sandbox's processes outlived their run — mini2 had
+# The gap: a sandbox's processes outlived their run — a host machine had
 # `…/T/fns.yyu6qtxh/Users/alice/.claude/fleet/bin/keep.sh` (fleet-node-supervisor-
 # selftest.py's account child) alive 2 days 15 hours and 13 `-zsh` shells sitting
 # in removed `fleet-selftest-root.*` shadows for 4–6 days; the reaper removed the

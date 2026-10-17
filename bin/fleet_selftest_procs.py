@@ -4,7 +4,7 @@
 A selftest builds its sandbox under a mktemp root ($TMPDIR, /tmp) and starts real
 processes from it — a supervisor, its account children, a planted stray copy. A
 run killed before its teardown (or a teardown that misses one) leaves them as
-PPID=1 orphans that run for days: on 2026-10-15 mini2 had
+PPID=1 orphans that run for days: on 2026-10-15 a host machine had
 `…/T/fns.yyu6qtxh/Users/alice/.claude/fleet/bin/keep.sh` alive 2 days 15 hours,
 its sandbox dir long gone. fleet-selftest-reap.sh removes the dirs and the tmux
 servers; this removes the processes.
