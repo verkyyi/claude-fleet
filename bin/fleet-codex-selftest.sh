@@ -480,5 +480,22 @@ run '/fleet-claim'
 [ "$(ran)" = claude ] && hasprefix '--mcp-config=.*/conf/mcp-worker\.json$' || fail "I the Claude launch lacks the same server" "$(argv1l)"
 ok "I Codex: -c mcp_servers.fleet (from conf/mcp-worker.json, TMUX env forwarded); Claude: --mcp-config of that file; FLEET_MCP=0 off"
 
+# ============================================================================
+# J. the native usage pilot (#4557): the runtime reads FLEET_CODEX_NATIVE_USAGE from
+#    its environment, so a fleet conf's 1 must reach the Codex launch exported; off
+#    (unset, or anything but 1 — even inherited) reaches it as nothing at all.
+# ============================================================================
+# its own fake: an earlier leg replaced the shared one with a recorder of argv only
+printf '#!/bin/sh\nprintf codex > "%s/ran"\nprintf "%%s\\n" "${FLEET_CODEX_NATIVE_USAGE-unset}" > "%s/nusage"\nexit 0\n' "$WORK" "$WORK" > "$WORK/fakebin/codex"; chmod +x "$WORK/fakebin/codex"
+printf 'FLEET_AGENT="codex"\nFLEET_CODEX_NATIVE_USAGE=1\n' > "$WORK/conf/fleets/f1/conf"
+rm -f "$WORK/nusage"; run '/fleet-claim'
+[ "$(ran)" = codex ] && [ "$(cat "$WORK/nusage")" = 1 ] || fail "J conf 1 did not reach the Codex launch" "$(cat "$WORK/nusage" 2>/dev/null) $(cat "$WORK/err")"
+printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f1/conf"
+rm -f "$WORK/nusage"; run '/fleet-claim'
+[ "$(cat "$WORK/nusage")" = unset ] || fail "J the pilot must be off by default" "$(cat "$WORK/nusage")"
+rm -f "$WORK/nusage"; FLEET_CODEX_NATIVE_USAGE=0 run '/fleet-claim'
+[ "$(cat "$WORK/nusage")" = unset ] || fail "J a 0 must not reach the runtime" "$(cat "$WORK/nusage")"
+ok "J FLEET_CODEX_NATIVE_USAGE=1 in the fleet conf reaches the Codex launch; default and 0 reach it as unset"
+
 printf '\nselftest OK: %s assertions passed (FLEET_AGENT / fleet-codex.sh, issue #547)\n' "$pass"
 exit 0
