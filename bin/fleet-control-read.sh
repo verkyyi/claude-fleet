@@ -388,9 +388,12 @@ case "$mode" in
     # a repo — the seed one too — reads the issue, pushes and opens a PR, so
     # `repo_ready` / `repo_missing` are the verdict with gh asked whenever the
     # login hosts any repo, and the hub reads them for a start that names one.
+    # A repo with no GitHub (FLEET_FORGE=none, issue #3600) needs no gh at all
+    # (issue #4645): «GitHub blocked» means no gh exec, so a login whose every
+    # hosted repo is forge-none never runs gh here and gh is neither met nor
+    # missing for it. A login hosting no repo still asks, as before.
     missing=''
     gh_ok=false
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
     creds=false
     adir="${FLEET_ACCOUNTS_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/accounts}"
     for f in "$adir"/*; do
@@ -421,16 +424,24 @@ case "$mode" in
     checkouts=true
     nrepos=0
     nall=0
+    nnone=0
     while IFS=$'\t' read -r s _c; do
       [ -n "$s" ] || continue
       while IFS= read -r r; do
         [ -n "$r" ] || continue
-        nall=$((nall + 1))
-        fleet_repo_is_seed "$s" "$r" || nrepos=$((nrepos + 1))
+        if [ "$(fleet_repo_forge "$r" "$s")" = none ]; then
+          nnone=$((nnone + 1))
+        else
+          nall=$((nall + 1))
+          fleet_repo_is_seed "$s" "$r" || nrepos=$((nrepos + 1))
+        fi
         m=$( fleet_load_conf "$s" >/dev/null 2>&1; fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1; printf '%s' "${FLEET_MAIN:-}" )
         [ -n "$m" ] && [ -d "$m" ] || { checkouts=false; missing="$missing checkout:$s/${r##*/}"; }
       done < <(fleet_repos "$s" 2>/dev/null)
     done < <(fleet_each_conf)
+    if [ "$nall" -gt 0 ] || [ "$nnone" -eq 0 ]; then
+      if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
+    fi
     gh_met=$gh_ok; [ "$gh_ok" = true ] || [ "$nrepos" -gt 0 ] || gh_met=true
     [ "$gh_met" = true ] || missing="gh$missing"
     ready=false; [ "$gh_met" = true ] && [ "$creds" = true ] && [ "$checkouts" = true ] && ready=true
