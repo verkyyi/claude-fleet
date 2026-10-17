@@ -86,12 +86,17 @@ def supervise_fixture(root, resume, local_authority=False):
     arguments = [str(root / 'launcher'), '--model', 'claude-sonnet-4-6']
     if local_authority:
         if resume:
-            previous = json.loads(launch.option(pane, '@authority_receipt'))
+            previous = json.loads((root / 'saved-authority.json').read_text())
+            intent = authority.restore_native_worktree(previous, previous['worktree']['root'],
+                previous['native_identity']['native_session'], 'claude', context['worker_id'].split('/')[1], context['repo'])
+            launch.stamp(pane, '@authority_receipt', previous)
+            launch.stamp(pane, '@native_worktree', intent)
+            launch.tmux('set-option', '-w', '-t', pane, '@worktree', previous['worktree']['root'])
             arguments += ['--resume', previous['native_identity']['native_session']]
         else:
             launch.stamp(pane, '@native_worktree', json.loads((root / 'intent.json').read_text()))
-            launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
-            launch.tmux('set-option', '-w', '-t', pane, '@repo', context['repo'])
+        launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
+        launch.tmux('set-option', '-w', '-t', pane, '@repo', context['repo'])
         result = authority.supervise(arguments)
         (root / ('resume-exit' if resume else 'create-exit')).write_text(str(result))
         return result
@@ -362,14 +367,14 @@ def main():
                     event_offset = len(config_events()) if phase == 'resume' else 0
                     if phase == 'resume':
                         if arguments.local_authority:
-                            tmux('respawn-pane', '-t', '%0', '-c', str(repository), shlex.join(helper + ['--resume-fixture']))
+                            (root / 'saved-authority.json').write_text(tmux('display-message', '-p', '-t', '%0', '#{@authority_receipt}'))
                         else:
                             (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
-                            tmux('kill-server')
-                            check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
-                            tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
-                                 shlex.join(helper + ['--resume-fixture']))
-                            tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
+                        tmux('kill-server')
+                        check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
+                        tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
+                             shlex.join(helper + ['--resume-fixture']))
+                        tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                     def ready():
                         observed = read_receipt()
                         if arguments.local_authority:

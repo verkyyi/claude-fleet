@@ -370,6 +370,34 @@ class NativeCreation(unittest.TestCase):
         self.assertFalse(self.path.exists())
         process_api.Popen.assert_not_called()
 
+    def test_local_restore_requires_exact_saved_native_and_git_identity(self):
+        self.create()
+        self.observe_local(self.local_context(), mock.Mock())
+        receipt = json.loads(self.options['@authority_receipt'])
+        arguments = [str(self.path), self.payload['session_id'], 'claude',
+                     self.context['worker_id'].split('/')[1], 'acme/widgets']
+        self.git('-C', str(self.path), 'commit', '--allow-empty', '-qm', 'retained user commit')
+        self.assertEqual(authority.restore_native_worktree(receipt, *arguments), self.intent)
+        for index, replacement in enumerate((str(self.main), '55555555-5555-4555-8555-555555555555',
+                                             'codex', 'another-window', 'another/repository')):
+            altered = arguments.copy()
+            altered[index] = replacement
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                authority.restore_native_worktree(receipt, *altered)
+        for key, value in (('native_identity', None), ('worker_id', []), ('reservation', 'invalid')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                authority.restore_native_worktree(dict(receipt, **{key: value}), *arguments)
+        altered = copy.deepcopy(receipt)
+        altered['native_identity']['worker_id'] = 'another-worker'
+        with self.assertRaises(ValueError):
+            authority.restore_native_worktree(altered, *arguments)
+        altered = copy.deepcopy(receipt)
+        altered['worktree']['git_dir'] += '-replaced'
+        with self.assertRaisesRegex(ValueError, 'Git binding'):
+            authority.restore_native_worktree(altered, *arguments)
+        with self.assertRaisesRegex(ValueError, 'no native creation intent'):
+            authority.restore_native_worktree({}, *arguments)
+
 
 if __name__ == '__main__':
     unittest.main()
