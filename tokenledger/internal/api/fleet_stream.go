@@ -52,6 +52,17 @@ var fleetStreamPing = 20 * time.Second
 // fleetStreamCoalesce is the least time between two events of a topic.
 var fleetStreamCoalesce = time.Second
 
+// A read a heartbeat overlapped may be half that beat and half the one before
+// (claude-fleet#3396: the roster's rows read old, its load history in memory
+// already new) — a frame that differs from the last and would take the
+// topic's second, the true one a second behind it. Such a read is not sent:
+// it is read again fleetStreamReread later, at most fleetStreamRereads times
+// in a row, and then sent as read — a hub beaten without pause still talks.
+var (
+	fleetStreamReread  = 10 * time.Millisecond
+	fleetStreamRereads = 3
+)
+
 // streamFrame is one event's data.
 type streamFrame struct {
 	ObservedAt *time.Time `json:"observed_at"`
@@ -253,11 +264,13 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Per topic: the validator last sent, when, and whether it was woken
-	// and not read yet.
+	// Per topic: the validator last sent, when, whether it was woken and
+	// not read yet, and how many reads in a row a beat overlapped.
 	last := map[string]string{}
 	sentAt := map[string]time.Time{}
 	dirty := map[string]bool{}
+	torn := map[string]int{}
+	casts := map[string]*changeBroadcast{"nodes": &s.nodesChanged, "sessions": &s.sessionsChanged}
 	for _, t := range topics {
 		dirty[t] = true
 	}
@@ -294,10 +307,24 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			dirty[t] = false
+			var since <-chan struct{}
+			b := casts[t]
+			if b != nil {
+				since = b.wait()
+			}
 			body, observed, err := read(t, now)
 			if err != nil {
 				continue // the recheck tries again
 			}
+			if b != nil && !b.settled(since) && torn[t] < fleetStreamRereads {
+				torn[t]++
+				dirty[t] = true
+				if wait == 0 || fleetStreamReread < wait {
+					wait = fleetStreamReread
+				}
+				continue
+			}
+			torn[t] = 0
 			v := streamValidator(body)
 			if v != "" && v == last[t] {
 				continue
@@ -315,6 +342,9 @@ func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
 		if wait > 0 && flushC == nil {
 			flushT = time.NewTimer(wait)
 			flushC = flushT.C
+		} else if wait > 0 && wait < fleetStreamCoalesce && flushT.Stop() {
+			// A re-read comes before a pending second's flush.
+			flushT.Reset(wait)
 		}
 		return true
 	}

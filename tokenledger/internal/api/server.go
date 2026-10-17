@@ -245,6 +245,10 @@ type Server struct {
 
 	// fleetScopeHook replaces fleetScope in tests (claude-fleet#1409).
 	fleetScopeHook func(*http.Request) (func(hostname, osUser string) bool, error)
+	// nodesRowsHook runs in tests between the roster's row read and the
+	// in-memory parts read after it (claude-fleet#3396): where a beat that
+	// lands mid-read tears the snapshot.
+	nodesRowsHook func()
 	// certLoginsHook replaces the logins issueCert signs for, in tests that
 	// split signing from checking on purpose (claude-fleet#2456).
 	certLoginsHook func(pid string, logins []string) []string

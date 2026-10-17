@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket/wsjson"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 )
@@ -191,6 +194,121 @@ func TestFleetStreamOnlyOnChange(t *testing.T) {
 	}
 	if !strings.Contains(second.data, `"load1":8`) {
 		t.Errorf("the coalesced event = %s; want the last beat's load", second.data)
+	}
+}
+
+// A beat recorded while the stream reads the roster tears that read: the rows
+// read before the beat, the load history after it (claude-fleet#3396). The
+// torn frame is never sent — it would take the topic's second and hold the
+// true one a second behind — the next event is the beat's, within a second.
+func TestFleetStreamTornRead(t *testing.T) {
+	streamTiming(t, 50*time.Millisecond, time.Hour)
+	h := newFleetHarness(t)
+	var armed atomic.Bool
+	var a *fakeNode
+	hb := control.Heartbeat{Hostname: "mac-d", OSUser: "alice", MachineID: machineA, Load1: 1.5, NCPU: 8, ObservedAt: time.Now()}
+	h.srv.nodesRowsHook = func() {
+		if !armed.CompareAndSwap(true, false) {
+			return
+		}
+		// The beat lands between the row read and the rest of the read.
+		before := h.srv.nodesChanged.lastFired()
+		next := hb
+		next.Load1 = 6.25
+		m, _ := control.New(control.TypeHeartbeat, next)
+		m.Proto = control.Proto
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := wsjson.Write(ctx, a.conn, m); err != nil {
+			t.Errorf("beat mid-read: %v", err)
+			return
+		}
+		for deadline := time.Now().Add(3 * time.Second); !h.srv.nodesChanged.lastFired().After(before); {
+			if time.Now().After(deadline) {
+				t.Error("the mid-read beat was never recorded")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	a = connectFakeNode(t, h, "mac-d", false)
+	beat(t, a.conn, control.Proto, hb)
+	waitFor(t, 3*time.Second, "node heard", func() bool { return len(roster(t, h).Nodes) == 1 && roster(t, h).Nodes[0].LastHeartbeat != nil })
+	waitFor(t, 3*time.Second, "load history", func() bool { return len(h.srv.loadHist.series("mac-d", time.Now())) == 1 })
+
+	ch := openStream(t, h, "", "?topics=nodes")
+	nextEvent(t, ch, "nodes", 3*time.Second)
+	armed.Store(true) // the next recheck's read is torn
+	ev := nextEvent(t, ch, "nodes", 3*time.Second)
+	if armed.Load() {
+		t.Fatal("the read was never torn")
+	}
+	if !strings.Contains(ev.data, `"load1":6.25`) || strings.Contains(ev.data, `"load1":1.5`) {
+		t.Errorf("nodes event after a torn read = %s; want the beat's load only", ev.data)
+	}
+	if d := ev.at.Sub(h.srv.nodesChanged.lastFired()); d > time.Second {
+		t.Errorf("nodes event %v after the beat was recorded; want ≤ 1 s", d)
+	}
+}
+
+// A hub that is always recording a beat still talks, and does not spin: a
+// read is redone a bounded number of times, then sent as read.
+func TestFleetStreamTornReadBounded(t *testing.T) {
+	streamTiming(t, 50*time.Millisecond, time.Hour)
+	h := newFleetHarness(t)
+	var reads atomic.Int64
+	h.srv.nodesRowsHook = func() { reads.Add(1) }
+	a := connectFakeNode(t, h, "mac-d", false)
+	hb := control.Heartbeat{Hostname: "mac-d", OSUser: "alice", MachineID: machineA, Load1: 1.5, NCPU: 8, ObservedAt: time.Now()}
+	beat(t, a.conn, control.Proto, hb)
+	waitFor(t, 3*time.Second, "node heard", func() bool { return len(roster(t, h).Nodes) == 1 && roster(t, h).Nodes[0].LastHeartbeat != nil })
+
+	// A recording that never ends: every read from here on overlaps one.
+	h.srv.nodesChanged.begin()
+	t.Cleanup(h.srv.nodesChanged.end)
+	ch := openStream(t, h, "", "?topics=nodes")
+	if ev := nextEvent(t, ch, "nodes", time.Second); !strings.Contains(ev.data, `"load1":1.5`) {
+		t.Errorf("first nodes event = %s", ev.data)
+	}
+	time.Sleep(1100 * time.Millisecond) // out of the first event's second
+	hb.Load1 = 6.25
+	beat(t, a.conn, control.Proto, hb)
+	ev := nextEvent(t, ch, "nodes", 3*time.Second)
+	if !strings.Contains(ev.data, `"load1":6.25`) {
+		t.Errorf("nodes event under endless recording = %s; want the new load", ev.data)
+	}
+	if d := ev.at.Sub(h.srv.nodesChanged.lastFired()); d > time.Second {
+		t.Errorf("nodes event %v after the beat was recorded; want ≤ 1 s", d)
+	}
+	// One second of rechecks (20 at 50 ms), each read at most 1+rereads times.
+	n0 := reads.Load()
+	time.Sleep(time.Second)
+	if n, max := reads.Load()-n0, int64(30*(1+fleetStreamRereads)); n > max {
+		t.Errorf("%d roster reads in a second under endless recording; want ≤ %d (no spin)", n, max)
+	}
+}
+
+func TestChangeBroadcastSettled(t *testing.T) {
+	var b changeBroadcast
+	ch := b.wait()
+	if !b.settled(ch) {
+		t.Error("idle broadcast not settled")
+	}
+	b.begin()
+	if b.settled(ch) {
+		t.Error("settled with a recording in flight")
+	}
+	b.end()
+	if !b.settled(ch) {
+		t.Error("not settled after end")
+	}
+	b.fire()
+	if b.settled(ch) {
+		t.Error("settled though it fired since the read began")
+	}
+	b.end() // an unpaired end never goes below zero
+	if !b.settled(b.wait()) {
+		t.Error("an unpaired end left it unsettled")
 	}
 }
 
