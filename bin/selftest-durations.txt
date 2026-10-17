@@ -130,7 +130,7 @@
 11.2 fleet-break-it-cluster-selftest.sh
 7.2 fleet-break-it-core-selftest.sh
 26.6 fleet-break-it-cred-selftest.sh
-28.5 fleet-break-it-cred-sep-selftest.sh
+86.6 fleet-break-it-cred-sep-selftest.sh
 15.4 fleet-break-it-cred-shared-selftest.sh
 0.1 fleet-break-it-entry-selftest.sh
 51.1 fleet-break-it-hub-2-selftest.sh
@@ -144,7 +144,7 @@
 43.9 fleet-break-it-peerlink-selftest.sh
 59.8 fleet-break-it-revoke-selftest.sh
 1.2 fleet-break-it-seats-selftest.sh
-41.2 fleet-break-it-selftest.sh
+53.9 fleet-break-it-selftest.sh
 2.7 fleet-break-it-tenant-selftest.sh
 34.4 fleet-break-it-thin-2-selftest.sh
 30.1 fleet-break-it-thin-3-selftest.sh
