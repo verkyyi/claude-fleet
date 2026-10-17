@@ -20,7 +20,7 @@ def capture_hook(destination, fleet_root, supervisor):
     native = fleet_launch.native_parent()
     if not fleet_launch.root_native(native, supervisor):
         raise ValueError('hook native process is outside the fixture supervisor')
-    record = {key: payload.get(key) for key in ('hook_event_name', 'source', 'session_id', 'cwd')}
+    record = {key: payload.get(key) for key in ('hook_event_name', 'source', 'session_id', 'cwd', 'transcript_path')}
     record.update(process=native, hook_cwd=os.getcwd(), project_dir=os.environ.get('CLAUDE_PROJECT_DIR'))
     try:
         expected = os.environ.get('FLEET_LAUNCH_WORKTREE')
