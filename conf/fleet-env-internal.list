@@ -149,6 +149,7 @@ FLEET_DISPATCH                     handoff: resolved coding provider and accepte
 FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accepted dispatch to this caller-owned temporary file (#4392)
 FLEET_LAUNCH                       handoff: accepted operation/task/owner/generation binding from controller to spawner (#4393)
 FLEET_LAUNCH_CONTEXT               handoff: supervisor binding inherited by native SessionStart proof (#4393)
+FLEET_LAUNCH_CREATE                handoff: supervisor-validated native Claude worktree creation intent, never a user override
 FLEET_TASK_RECOVERY_URL            handoff: pinned hub URL for receipt replay, independent of repo authority mode (#4396)
 FLEET_TASK_RECOVERY_RAW            handoff: recovery calls the original task HTTP adapter without recursion (#4396)
 FLEET_TASK_STALE_READ              handoff: allow an observed task cache only for lifecycle receipts, never launches (#4396)
