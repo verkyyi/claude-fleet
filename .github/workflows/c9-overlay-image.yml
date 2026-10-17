@@ -3,7 +3,9 @@
 # machine. It sits on the released managed-node image of the same commit (the
 # `node image` status the train leaves, issue #4180) and is pushed ONLY as
 # <repo>:c9-<sha>; C9-ISOLATION.md's recipe then names it by digest.
-# Same runner, buildkitd, OIDC role and environment as the train's node image.
+# Same OIDC role and environment as the train's node image; built on a GitHub
+# runner with buildx like its `node tools` job (the fleet-ack runner takes only
+# the train — its job gate refuses any other workflow).
 name: c9 overlay image
 
 on:
@@ -33,14 +35,14 @@ concurrency:
 jobs:
   build:
     name: c9 overlay
-    runs-on: fleet-ack
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     environment: node-image
     permissions:
       contents: read
       id-token: write
     env:
-      BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
+      BUILD_REPO: ${{ vars.NODE_IMAGE_REPO }}
       GH_TOKEN: ${{ github.token }}
       IN_SHA: ${{ inputs.sha }}
       LOGIN_A: ${{ inputs.node_a_login }}
@@ -73,26 +75,21 @@ jobs:
       - uses: ./.github/actions/hub-acr
         with:
           role: gha-claudefleet-node-image
+      - uses: docker/setup-buildx-action@v3
       - name: build and push <repo>:c9-<sha>
         id: build
         env:
           SHA: ${{ steps.src.outputs.sha }}
           BASE: ${{ steps.src.outputs.base }}
         run: |
-          set -uo pipefail
-          : "${BUILDKIT_HOST:?BUILDKIT_HOST is not set (the cluster buildkitd)}"
-          tls=(); [ -z "${BUILDKIT_TLSDIR:-}" ] || tls=(--tlsdir "$BUILDKIT_TLSDIR")
-          out=$(mktemp -d)
-          buildctl --addr "$BUILDKIT_HOST" ${tls[@]+"${tls[@]}"} build \
-            --frontend dockerfile.v0 \
-            --local context=. --local dockerfile=extras/managed-node/c9 \
-            --opt platform=linux/amd64 \
-            --opt build-arg:C9_BASE="$BASE" --opt build-arg:C9_SOURCE_SHA="$SHA" \
-            --opt build-arg:C9_HUB_LOGIN="$LOGIN_HUB" \
-            --opt build-arg:C9_NODE_A_LOGIN="$LOGIN_A" --opt build-arg:C9_NODE_B_LOGIN="$LOGIN_B" \
-            --output "type=image,name=$BUILD_REPO:c9-$SHA,push=true" \
-            --metadata-file "$out/meta.json" --progress plain || exit 1
-          digest=$(jq -r '."containerimage.digest" // empty' "$out/meta.json")
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --push \
+            -f extras/managed-node/c9/Dockerfile \
+            --build-arg C9_BASE="$BASE" --build-arg C9_SOURCE_SHA="$SHA" \
+            --build-arg C9_HUB_LOGIN="$LOGIN_HUB" \
+            --build-arg C9_NODE_A_LOGIN="$LOGIN_A" --build-arg C9_NODE_B_LOGIN="$LOGIN_B" \
+            -t "$BUILD_REPO:c9-$SHA" .
+          digest=$(docker buildx imagetools inspect "$BUILD_REPO:c9-$SHA" --format '{{json .Manifest}}' | jq -r .digest)
           printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || { echo "::error::pushed, but no digest"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           {
