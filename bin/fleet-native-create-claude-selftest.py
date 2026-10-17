@@ -322,8 +322,11 @@ def main():
 
             def tmux(*options):
                 targeted = [pane_target if option == '%0' else option for option in options]
-                return subprocess.check_output(['tmux', '-S', str(socket), '-f', os.devnull, *targeted],
-                                               env=environment, stderr=subprocess.PIPE, text=True, timeout=10).strip()
+                try:
+                    return subprocess.check_output(['tmux', '-S', str(socket), '-f', os.devnull, *targeted],
+                                                   env=environment, stderr=subprocess.PIPE, text=True, timeout=10).strip()
+                except subprocess.CalledProcessError as error:
+                    raise AssertionError('tmux ' + ' '.join(targeted[:2]) + ' failed: ' + (error.stderr or '').strip()) from error
 
             def restore_command(option):
                 script = home / '.claude/fleet/bin/fleet-restore.sh'
