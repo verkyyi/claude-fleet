@@ -1018,6 +1018,13 @@ fleet debug report
 - **是什么**：Spotlight 还在不在索引磁盘。它会和会话抢 CPU 和磁盘。
 - **WARN / FAIL 怎么办**：`sudo mdutil -a -i off`（撤回：`sudo mdutil -a -i on`）。
 
+#### `wallpaper`
+
+来自 `fleet doctor`（只在托管 Mac 上出现）。
+
+- **是什么**：不接显示器的承载机还在不在跑动态（Aerial）桌面。没人看得见，却一直占着一部分 CPU。整机守护每小时检查一次，没有显示器时把每个登录换成系统自带的纯色图并关掉屏幕保护——每个登录只换一次；接了显示器的机器不碰。
+- **WARN / FAIL 怎么办**：`sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off` 立即换。行里点名「手动换回」的登录是有人特意换回去的，fleet 不再改；要保留动态桌面：`sudo touch /var/db/fleet-node/wallpaper.keep`。
+
 #### `siri`
 
 来自 `fleet doctor`。
