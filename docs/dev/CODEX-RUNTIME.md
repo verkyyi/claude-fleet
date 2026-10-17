@@ -47,6 +47,16 @@ context environment also belongs to that backend. Do not remove ancestry checks
 or infer a platform launch binding from a thread ID/cwd. The fixture correlates
 each root's own loopback request instead of counting unrelated title requests.
 
+The additional `--hooks --fork-seed` fixture creates and names empty native
+threads, then runs local `codex fork <id> --worktree`. A synchronous callback can
+read its exact `forkedFromId` through the PID-verified backend. Reusing the source
+is allowed by native Codex, so this relationship is not one-use authorization.
+The fixture also accounts for the source's extra MCP process, retires owned empty
+sources through native archive/delete, and resumes the user fork without another
+worktree. No production launch mode is added. Existing admission/capability
+binding and per-thread stop evidence remain required before adoption; neither
+TUI exit nor a shared backend PID alone proves that execution stopped.
+
 ## Managed guard configuration (candidate)
 
 The candidate renderer derives native managed hooks from the existing

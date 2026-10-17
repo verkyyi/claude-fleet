@@ -289,6 +289,36 @@ SessionStart 提供各自正确的 root/cwd，但十项夹具环境
 确认每个线程自己的 loopback 请求；内部请求不计为新会话就绪。这是固定版本夹具关联，
 不是生产授权或新的启动探测协议。此前 MCP 进程/路由结论保留，但请求计数不能证明两条用户回合均已开始。
 
+### 原生 fork 来源可以关联，但不是一次性准入
+
+`--hooks --fork-seed` 扩展隔离并发夹具：通过原生 `thread/start` 创建空源线程，
+用 `thread/name/set` 持久化，再启动真实本地 `codex fork <精确源 ID> --worktree`。
+目录仍由原生创建，不复制上游 Git 实现，不根据最新文件或窗口标题猜测用户线程。
+
+本机 `0.163.0` 的 70 项检查提供以下候选证据：
+- 两个不同源线程分别产生独立用户 root/Worktree；`forkedFromId` 精确保留来源。
+- 同步 SessionStart 中复用已有 Unix RPC 客户端、核对 native-parent 的内核 PID，
+  能读取自己的原生 thread 元数据及 fork 来源，无需等待回调结束后再猜测关联。
+- 原生允许再次 fork 同一个来源。因此源 ID **不是**一次性能力，不能跳过既有 reservation、
+  owner/generation 和 capability 校验；重复或冲突认领必须由现有准入记录拒绝。
+- 创建并命名源线程不发出模型请求，但每个源线程也启动配置的 MCP。这个准备步骤有成本，
+  不能把它称为免费预分配，或在每次启动后无限保留空源线程。
+- 原生 archive 能停止源线程与额外重复 fork 的夹具 MCP；随后原生 delete 删除这些精确拥有的
+  空记录，不影响两个用户 fork。它们的来源 ID 仍可读，工具路由保持正确。
+- 关闭第一条 TUI 后，用原生 resume 精确恢复其 fork，不创建额外 Worktree；第二条 TUI 保持运行。
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --hooks --fork-seed --codex /path/to/codex
+```
+
+这不是已接入的生产新建路径，也不将普通用户会话默认改为 fork。原生关系只能作为现有准入
+记录的关联证据，不能单独授予凭据、选择终端或发布 accepted。共享后台环境仍不是逐会话环境；
+Fleet launch/authority 的旧进程归属检查保持，尚未改为新收据格式。
+接入前必须验证：准入原子认领与撤销、错误账号/后端拒绝、完整 MCP 按 root 取现有权限、
+子 Agent 与恢复，以及共享后台仍存活时如何证明**某一线程**已停止。
+TUI 退出、线程 unloaded 或父源记录被删，都不能单独释放执行额度或宣称任务完成。
+此外须测量完整 MCP 下的准备成本、峰值进程数与原生直启对照；本夹具不证明 1 秒/5 秒目标。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器
