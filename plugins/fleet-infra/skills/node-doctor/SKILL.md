@@ -197,6 +197,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `trust` | node | [node-doctor] | 仓库目录没被 Claude Code 信任：照行内 grant |
 | `update` | node | [release-rules] | 整机更新器报错：/var/log/fleet-node/update.log，`fleet doctor --machine` |
 | `versions` | machine | [release-rules] | 只报状态：本机留着几个发布版、占多少盘 |
+| `wallpaper` | node | [mac-node-prep] | 不接显示器的托管 Mac 还在跑动态桌面：守护每小时换一次（只换一次）；现在就换 `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off`，换回过的是人的选择 |
 | `webhook` | node | [node-doctor] | webhook 缺 gh / gh-webhook 扩展 / python3：照行内装 |
 | `wtroot` | node | [node-doctor] | worktree 根目录：照行内修 |
 | `信任框` | node | [node-doctor] | 只报状态：没预信任时新会话会停在信任框 |
