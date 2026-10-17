@@ -823,7 +823,7 @@ drill_cred_central_trusted_pod() {
   WHAT="个人 pod（不租凭据、指名中心代理）被入口判可信：代理仍走 central、不读凭据文件；租凭据的登录照旧不走 central"
 }
 
-# ---- credsep-warn-cuts-creds (#4623): 2026-10-17, the M4's verky login WAS
+# ---- credsep-warn-cuts-creds (#4623): 2026-10-17, a separated login on one Mac WAS
 # separated, but a stray FLEET_HUB_URL in its own fleet.conf made `check` print a
 # WARN and exit 1; the agent read that 1 as «not», the hub (#4607: every login
 # gated) leased it nothing, and its seven sessions each got a permanent 403
