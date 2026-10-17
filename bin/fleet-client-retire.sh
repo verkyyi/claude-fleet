@@ -36,15 +36,23 @@ labels() {
     tmux -L "$l" list-sessions >/dev/null 2>&1 && printf '%s\n' "$l"
   done
 }
-# pids — this login's processes running from the old client's mirror (the path
-# rides the environment, so the awk's own argv never matches it)
+# pids — this login's processes running from the old client's mirror, and its
+# warm lines: an ssh master whose ControlPath is in the cache's tmp/ (issue #4283
+# — the warm loop opened one every 5 s with ControlPersist=10m, ~120 at a time,
+# each holding a hub relay on the relay route until TOO_MANY). The paths ride the
+# environment, so the awk's own argv never matches them.
 pids() {
-  ps -axo pid=,user=,command= 2>/dev/null | RETIRE_PAT="$CACHE/bin/" awk -v u="$(id -un)" -v me=$$ \
-    '$2 == u && $1 != me && index($0, ENVIRON["RETIRE_PAT"]) { print $1 }'
+  ps -axo pid=,user=,command= 2>/dev/null | RETIRE_PAT="$CACHE/bin/" RETIRE_TMP="ControlPath=$CACHE/tmp/" \
+    awk -v u="$(id -un)" -v me=$$ \
+    '$2 == u && $1 != me && (index($0, ENVIRON["RETIRE_PAT"]) || index($0, ENVIRON["RETIRE_TMP"])) { print $1 }'
 }
+# attached — someone looks at one of its servers. A `-stage` server's client is
+# the old client's own viewer inside the main server (fleet-shell.sh attached it
+# there), never a person: counting it held every unattended client forever (#4283)
 attached() {
   local l
   for l in $(labels); do
+    case "$l" in *-stage) continue ;; esac
     [ -n "$(tmux -L "$l" list-clients -F '#{client_name}' 2>/dev/null)" ] && return 0
   done
   return 1

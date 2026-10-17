@@ -78,7 +78,11 @@
 # What it leaves on the pod: one closed ticket and its task record per run; the
 # Codex sessions it opened are closed — by the client's `fleet close`, else on the
 # pod by their lifelong id (fleet-worker-stop.sh fid:); one that still stands is
-# kept in <runs>/.left-sessions and stopped first by the next run (issue #4304). The client keeps its own connect cache
+# kept in <runs>/.left-sessions and stopped first by the next run (issue #4304).
+# On the client it leaves no line open: before the steps and after them it stops
+# what the deleted two-pane client still runs for the test login and closes every
+# `fleet-connect.py` / fleet-alias ssh of that login (each a hub relay on the
+# relay route — 8 of them made the hub say TOO_MANY, issue #4283). The client keeps its own connect cache
 # (that is the person's state). No credential is printed or passed in an argv.
 set -uo pipefail
 
@@ -205,6 +209,41 @@ case "$out" in PASS*) pass cert "$(printf '%s' "$out" | cut -f2-)" ;;
 out=$(on_client "timeout $TMO fleet connect --pick $MACHINE")
 case "$out" in *"\"machine\": \"$MACHINE\""*|*"\"hostname\": \"$MACHINE\""*) pass list "the hub lists $MACHINE for $AS" ;;
   *) fail list "the hub does not list $MACHINE for $AS: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')" machine_not_listed env "$out"; verdict ;; esac
+
+# lines_sweep <when> — the test login's lines on the client, swept (issue #4283):
+# what the deleted two-pane client still runs there (its warm loop opened an ssh
+# master every 5 s, ~120 alive at once, each a hub relay on the relay route, until
+# the hub said TOO_MANY: already 8 relays open), then every process still holding
+# a line to a machine — `fleet-connect.py`, an ssh with a fleet host alias — that
+# names this login's home. Run before the steps (an earlier run's or the old
+# client's) and after them (this run's): a run leaves no line, so no relay, open.
+lines_script() {
+  cat <<'EOS'
+B=$HOME/.claude/fleet/bin
+C=${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell
+if [ -d "$C/bin" ] && [ -f "$B/fleet-client-retire.sh" ] && bash "$B/fleet-client-retire.sh" running 2>/dev/null; then
+  if bash "$B/fleet-client-retire.sh" stop --quiet </dev/null >/dev/null 2>&1; then echo "OLD stopped"; else echo "OLD left"; fi
+fi
+lp() {
+  ps -u "$(id -un)" -o pid=,args= 2>/dev/null | LH="$HOME/" awk -v me=$$ '$1 != me && index($0, ENVIRON["LH"]) &&
+    (index($0, "fleet-connect" ".py") || (($2 == "ssh" || $2 ~ /\/ssh$/) && index($0, "HostKeyAlias=" "fleet-"))) { print }'
+}
+p=$(lp | awk '{ print $1 }')
+[ -z "$p" ] || { lp | cut -c1-160 | sed 's/^ */LINE /'; kill $p 2>/dev/null; sleep 1; p=$(lp | awk '{ print $1 }'); [ -z "$p" ] || kill -9 $p 2>/dev/null; }
+echo "LINES $(lp | wc -l | tr -d ' ')"
+EOS
+}
+lines_sweep() {
+  local when=$1 out n left
+  out=$(lines_script | on_client_s)
+  case "$out" in *'OLD stopped'*) say "INFO lines:$when stopped the old two-pane client still running for $AS on the client (fleet-client-retire.sh)" ;;
+    *'OLD left'*) say "INFO lines:$when the old two-pane client still runs for $AS on the client — fleet-client-retire.sh could not stop it" ;; esac
+  n=$(printf '%s\n' "$out" | grep -c '^LINE ')
+  left=$(printf '%s\n' "$out" | sed -n 's/^LINES //p' | tail -n 1)
+  [ "$n" -eq 0 ] || say "INFO lines:$when closed $n line process(es) $AS still had open on the client (each a hub relay on the relay route): $(printf '%s\n' "$out" | sed -n 's/^LINE //p' | head -n 3 | awk '{ $1 = ""; print substr($0, 2, 80) }' | tr '\n' ';')"
+  [ "${left:-0}" = 0 ] || say "INFO lines:$when $left line process(es) of $AS are still open on the client after a KILL"
+}
+lines_sweep before
 
 # table + auto: one run, measured afresh. A forced route PINS the machine
 # (`--route` = `fleet route <machine> <route>`, remembered), so every run here
@@ -534,5 +573,6 @@ for r in $ROUTES; do
   layer_on codex && codex_step "$r"
 done
 layer_on task && task_step
+lines_sweep after
 
 verdict

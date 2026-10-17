@@ -44,7 +44,7 @@
 #   N  the probe leaves none of its sessions on the pod: the client's `fleet close`
 #      failing, the pod stops each by its fleet id; neither working, the key is
 #      kept and the next run stops it first
-# CNP_LEG=<H|I|J|K|L|M|N> runs one of these alone (the BREAK-IT drills do).
+# CNP_LEG=<H|I|J|K|L|M|N|O> runs one of these alone (the BREAK-IT drills do).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/cnprobe-st.XXXXXX")
@@ -106,6 +106,7 @@ case "$sub" in
     : > "$d/$s.out"; perl -e 'setpgrp(0, 0); exec @ARGV' bash -c "$1" > "$d/$s.out" 2>&1 < /dev/null &
     echo $! > "$d/$s.pid" ;;
   capture-pane) s=x; while [ $# -gt 0 ]; do [ "$1" = -t ] && s=$2; shift; done; cat "$d/$s.out" 2>/dev/null ;;
+  list-sessions|has-session|list-clients) exit 1 ;;   # no other server here (fleet-client-retire.sh asks)
 esac
 exit 0
 SH
@@ -131,6 +132,8 @@ case "$1 $2" in
       refused) echo "fleet: could not open a session: REFUSED AT_CAPACITY all-full: every machine is at its session cap or pausing new sessions — $M: 机器暂停接新：负载过高"; exit 1 ;;
     esac
     echo "${CNP_NEWKEY:-scratch-9}" >> "$K"
+    # a line the session's road leaves behind, out of the pane's group (#4283)
+    [ -z "${CNP_LEAK:-}" ] || perl -e 'setpgrp(0, 0); sleep 600' -- "$HOME/.claude/fleet/bin/fleet-connect.py" "$M" </dev/null >/dev/null 2>&1 &
     echo "GPT-6.1-Sol high · ~ ? for shortcuts"
     case "${CNP_SCENARIO:-answer}" in
       403) sleep 1; echo "■ unexpected status 403 Forbidden: cred-proxy: no upstream credential for account default, url: http://127.0.0.1:35583/codex/responses" ;;
@@ -474,6 +477,36 @@ leg_N() {   # the probe closes every session it opened: the client's close, else
   [ ! -s "$R/runs/.left-sessions" ] || fail "N: the leftover list kept a stopped session"
 }
 
+leg_O() {   # a run leaves no line open on the client (#4283): the old client stopped, every line closed
+  rig
+  local C="$R/home/.cache/claude-fleet/shell" wp sp cp op p
+  mkdir -p "$C/bin" "$C/tmp/warm"
+  printf '#!/bin/bash\n[ "$1" = quit ] && exit 0\nwhile :; do sleep 1; done\n' > "$C/bin/fleet-shell.sh"
+  alive() { local st; st=$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' '); case "$st" in ''|Z*) return 1 ;; esac; return 0; }
+  # the old client's warm loop and one of its lines; a relay line; another login's line
+  bash "$C/bin/fleet-shell.sh" warm fleet-shell </dev/null >/dev/null 2>&1 & wp=$!
+  ( exec -a ssh perl -e 'sleep 600' -- -o "ControlPath=$C/tmp/warm/u-test1.sock" -o HostKeyAlias=fleet-u-test1 u-test1 ) & sp=$!
+  ( exec perl -e 'sleep 600' -- "$R/home/.claude/fleet/bin/fleet-connect.py" u-test1 ) & cp=$!
+  ( exec -a ssh perl -e 'sleep 600' -- -o HostKeyAlias=fleet-u-test1 -i "$WORK/other/.ssh/fleet-cert" u-test1 ) & op=$!
+  disown "$wp" "$sp" "$cp" "$op" 2>/dev/null
+  sleep 1
+  CNP_SCENARIO=answer CNP_LEAK=1 FLEET_RETIRE_GRACE=1 probe_run
+  CHECKS=$((CHECKS + 1)); alive "$op" || fail "O: another login's line was closed"
+  kill "$op" 2>/dev/null
+  eq "O: the walk itself passes" 0 "$PRC"
+  contains "O: the old client is stopped before the steps" "$POUT" "INFO lines:before stopped the old two-pane client"
+  contains "O: an earlier line is closed before the steps" "$POUT" "INFO lines:before closed 1 line process(es)"
+  contains "O: the line this run left is closed after them" "$POUT" "INFO lines:after closed 1 line process(es)"
+  lacks "O: nothing stands after a KILL" "$POUT" "still open on the client after a KILL"
+  sleep 1
+  for p in $wp $sp $cp; do alive "$p" && fail "O: process $p of the test login still runs: $(ps -o args= -p "$p")"; done
+  CHECKS=$((CHECKS + 1))
+  [ -z "$(ps -axo args= | grep -F "$R/home/.claude/fleet/bin/fleet-connect.py" | grep -v grep)" ] || fail "O: a fleet-connect line of the test login is left"
+  # a clean client: nothing said
+  CNP_SCENARIO=answer probe_run
+  lacks "O: a clean client → no lines line" "$POUT" "INFO lines:"
+}
+
 if [ -n "${CNP_LEG:-}" ]; then
   W="$BIN/fleet-cn-probe-watch.sh"
   "leg_$CNP_LEG"
@@ -632,7 +665,7 @@ out=$(bash "$E" ensure --repo o/r --stable $SHA 2>&1); rc=$?
 eq "G: no Deployment, no manifest → 1" 1 "$rc"; contains "G: says so" "$out" "no FLEET_CN_PROBE_POD_MANIFEST"
 
 # --- H..K: the probe itself, offline (issue #4303) -----------------------------
-for leg in H I J K L M N; do "leg_$leg"; done
+for leg in H I J K L M N O; do "leg_$leg"; done
 
 # --- L. a drill person made again gets its own allowlist (issue #4290) ---------------
 cat > "$WORK/shim/ssh" <<SH

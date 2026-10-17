@@ -4623,6 +4623,20 @@ drill_cn_probe_env_masked() { cnprobe_leg I 60 "ensure 失败 ⇒ 本轮 env · 
 # throttle (6 h after a green) before anyone could count three greens.
 drill_cn_probe_silent_stall() { cnprobe_leg M 60 "手动 --now 的绿也进 history.ndjson；节流 / 锁占用按理由只记一次；主人已死的锁当场接管并记下；--recover 之后每个 tick 是一轮恢复验证，3 次通过即止，回到节流"; }
 drill_cn_probe_sessions_left() { cnprobe_leg N 120 "客户端 fleet close 失败 ⇒ pod 上按 fleet id 停掉（fleet-worker-stop.sh fid:）；两条路都不行 ⇒ 记进 .left-sessions，下一轮先收"; }
+# ---- cn-probe-relays-left (#4283): the deleted two-pane client kept running on
+# the drill login; its warm loop held ~120 ssh lines, each a hub relay on the
+# relay route, and the hub said TOO_MANY. The thin client retires an unattended
+# old client, retire stops its warm lines and ignores the stage's own viewer, and
+# the probe leaves no line open on the client.
+drill_cn_probe_relays_left() {
+  cnprobe_leg O 120 "x" || return 1
+  local s1=$SECS t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-client-retire-selftest.sh" 2>&1) \
+    || { WHY="$(printf '%s\n' "$out" | grep -E 'selftest FAIL' | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(python3 -c 'import sys; print("%.1f" % (float(sys.argv[1]) + float(sys.argv[2])))' "$s1" "$(since "$t0")")
+  WHAT="旧客户端（warm 循环 + 它的 ssh 主连接）在探针前被退役、本轮留下的 fleet-connect 线路在探针后被关，别的登录的线路不碰；stage 上旧 viewer 自己的 attach 不算有人在看；薄客户端起来时在后台退役没人看的旧客户端"
+}
 drill_cn_recover_miscount() { cnprobe_leg L 60 "重复触发只一轮；崩掉的一轮 abandoned 不计；红 / env / 半截 / 版本读不到或不符 / 时钟倒退都不计；换向量从 1 重数；3 次独立完整通过才 done；6 轮 / 时限到即 exhausted"; }
 
 # ---- heartbeat-sys-blocked (#2798): the beat ran the fleet probe before it
