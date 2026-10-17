@@ -208,6 +208,17 @@ reserve / begin；缺少准入、冻结或不可用时拒绝，不退回直接�
 源码回归使用真实临时 Git 仓库及替代进程/准入，覆盖直接和后台启动、草稿保留、拒绝、observe/stop
 身份连续性和精确 resume；不把这些模拟证据等同于普通路径的真实 Claude、完整 MCP、生产 Hub 或延迟验收。
 
+独立的真实运行夹具 `fleet-native-create-claude-selftest.py --fleet-launcher --local-authority`
+进一步使用实际 Claude、Fleet 启动器、配置合并、原生 hooks 与核心 MCP，普通仓库 supervisor 不作替换。
+准入 HTTP 服务仅在临时本机回环端口模拟，使用虚构 token，并检查仓库/worker、reservation 的
+reserve → begin → observe → stopped 顺序，以及 observe 时进程真实存活、stopped 时同一身份已停止。
+创建前准入时原生目录必须不存在；创建及同窗口精确 resume 各有独立 reservation，不构造 accepted task。
+
+本夹具的 resume 只重启已经正常退出的独立测试 pane，保留原窗口 receipt，不销毁窗口并伪造持久恢复。
+两阶段均保留核心、用户与项目 MCP 和用户 hooks；native Keep 保留编辑，原生退出后已观测 MCP 全部结束。
+原生输入框先显示未发送草稿，明确 Enter 后才允许模型请求；模型端点只以假凭据返回测试拒绝，不运行模型任务。
+这补充了普通路径的真实运行集成证据，但仍不证明 gate/finish、生产 Hub、第三方 MCP、面板入口、POD 恢复或性能目标。
+
 ### 真实 Fleet 启动器与原生配置验证
 
 `fleet-native-create-claude-selftest.py --fleet-launcher` 在临时 HOME 中复制候选安装，运行实际

@@ -14,6 +14,7 @@ on:
       - 'bin/fleet-restore.sh'
       - 'bin/dash-raw-session.sh'
       - 'bin/fleet_launch.py'
+      - 'bin/fleet_repo_authority.py'
       - 'bin/fleet-lib.sh'
       - 'bin/fleet-worktree-drop.sh'
       - 'hooks/base-readonly-guard.py'
@@ -83,6 +84,13 @@ jobs:
             --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher \
             > "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
           cat "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
+      - name: Exercise ordinary repository admission with the actual Fleet launcher
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority \
+            > "$RUNNER_TEMP/claude-worktree-local-authority.json"
+          cat "$RUNNER_TEMP/claude-worktree-local-authority.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

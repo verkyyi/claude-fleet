@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in real Claude/tmux creation proof; task authority and finalization are fixture stubs."""
+"""Opt-in real Claude/tmux creation proof with isolated task or repository authority fixtures."""
 import argparse
 import http.server
 import json
@@ -15,9 +15,11 @@ import tempfile
 import threading
 import time
 import types
+import urllib.parse
 from unittest import mock
 
 import fleet_launch as launch
+import fleet_repo_authority as authority
 
 
 def fixture_event(root, event):
@@ -78,14 +80,25 @@ def configure_fleet_launcher(root, home, repository, environment, binary):
     return expected
 
 
-def supervise_fixture(root, resume):
+def supervise_fixture(root, resume, local_authority=False):
     context = json.loads((root / 'context.json').read_text())
     pane = os.environ['TMUX_PANE']
+    arguments = [str(root / 'launcher'), '--model', 'claude-sonnet-4-6']
+    if local_authority:
+        if resume:
+            previous = json.loads(launch.option(pane, '@authority_receipt'))
+            arguments += ['--resume', previous['native_identity']['native_session']]
+        else:
+            launch.stamp(pane, '@native_worktree', json.loads((root / 'intent.json').read_text()))
+            launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
+            launch.tmux('set-option', '-w', '-t', pane, '@repo', context['repo'])
+        result = authority.supervise(arguments)
+        (root / ('resume-exit' if resume else 'create-exit')).write_text(str(result))
+        return result
     if not resume:
         launch.stamp(pane, '@launch', context)
         launch.stamp(pane, '@native_worktree', json.loads((root / 'intent.json').read_text()))
         launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
-    arguments = [str(root / 'launcher'), '--model', 'claude-sonnet-4-6']
     if resume:
         saved_context, previous = json.loads((root / 'saved-launch.json').read_text())
         if saved_context != context:
@@ -129,6 +142,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--claude', default='claude')
     parser.add_argument('--fleet-launcher', action='store_true')
+    parser.add_argument('--local-authority', action='store_true')
     parser.add_argument('--mcp-fixture', help=argparse.SUPPRESS)
     parser.add_argument('--hook-fixture', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--fixture-root', type=Path, help=argparse.SUPPRESS)
@@ -143,7 +157,9 @@ def main():
                                                   session=payload['session_id']))
         return 0
     if arguments.supervise_fixture:
-        return supervise_fixture(arguments.supervise_fixture, arguments.resume_fixture)
+        return supervise_fixture(arguments.supervise_fixture, arguments.resume_fixture, arguments.local_authority)
+    if arguments.local_authority and not arguments.fleet_launcher:
+        parser.error('--local-authority requires --fleet-launcher')
     for managed in (Path('/Library/Application Support/ClaudeCode'), Path('/etc/claude-code')):
         if managed.exists():
             parser.error('fixture requires a host without machine-managed Claude configuration')
@@ -152,6 +168,7 @@ def main():
     binary = str(Path(shutil.which(arguments.claude)).resolve())
     terminal_type = runpy.run_path(str(launch.BIN / 'fleet-native-claude-tui-selftest.py'))['Terminal']
     checks, requests, requested_tools = [], [], []
+    admission_events, admission_errors, reservations = [], [], {}
 
     def check(condition, message):
         if not condition:
@@ -161,6 +178,48 @@ def main():
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+            if self.path.startswith('/v1/fleet/tickets/authority/start'):
+                try:
+                    if not arguments.local_authority or self.headers.get('Authorization') != 'Bearer fixture-authority-only':
+                        raise ValueError('unexpected authority credential or mode')
+                    if urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query) != {'repo': [context['repo']]}:
+                        raise ValueError('unexpected authority repository')
+                    key, action = payload['reservation'], payload['action']
+                    if not launch.valid_uuid(key):
+                        raise ValueError('invalid reservation')
+                    previous = reservations.get(key)
+                    if action == 'reserve' and previous is None:
+                        reservations[key] = dict(state='reserved')
+                    elif action == 'begin' and previous and previous['state'] == 'reserved':
+                        if payload['worker_id'] != context['worker_id']:
+                            raise ValueError('different admitted worker')
+                        previous['state'] = 'started'
+                    elif action == 'observe' and previous and previous['state'] in ('started', 'observed'):
+                        proof = payload['native_identity']
+                        if proof['worker_id'] != context['worker_id'] or not launch.same_process(proof):
+                            raise ValueError('observation has no matching live native process')
+                        if previous.get('proof', proof) != proof:
+                            raise ValueError('observation changed native identity')
+                        previous.update(state='observed', proof=proof)
+                    elif action == 'stopped' and previous and previous['state'] == 'observed':
+                        if (payload['native_identity'] != previous['proof'] or not payload['execution_stopped']
+                                or launch.same_process(previous['proof'])):
+                            raise ValueError('stop lacks the exact stopped native proof')
+                        previous['state'] = 'stopped'
+                    else:
+                        raise ValueError('invalid authority transition')
+                    admission_events.append(dict(payload, worktree_exists=worktree.exists()))
+                    body = json.dumps({'reservation': key}).encode()
+                    code = 200
+                except (KeyError, ValueError) as error:
+                    admission_errors.append(str(error))
+                    body, code = json.dumps({'error': str(error)}).encode(), 409
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             requested_tools.append([tool.get('name') for tool in payload.get('tools', [])])
             requests.append(self.headers.get('x-api-key') == 'fixture-not-a-credential')
             body = b'{"type":"error","error":{"type":"invalid_request_error","message":"offline fixture rejection"}}'
@@ -257,6 +316,16 @@ def main():
                 task='T1', owner='fixture', generation=1,
                 worker_id='22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333',
                 provider='claude', attempt_id='task:T1:g1')
+            if arguments.local_authority:
+                context = dict(repo='acme/widgets', worker_id=context['worker_id'])
+                fleet_config = Path(environment['FLEET_CONF_DIR']) / 'fleets/fixture'
+                (fleet_config / 'repos').mkdir(parents=True)
+                (fleet_config / 'conf').write_text('FLEET_TASK_AUTHORITY="legacy"\n')
+                (fleet_config / 'identity').write_text(context['worker_id'].split('/')[0] + '\n')
+                (fleet_config / 'repos/acme-widgets.conf').write_text(
+                    'FLEET_REPO="acme/widgets"\nFLEET_MAIN=' + shlex.quote(str(repository)) + '\nFLEET_BASE_BRANCH="master"\n')
+                environment.update(CCQUOTA_HUB_URL=f'http://127.0.0.1:{endpoint.server_port}',
+                                   CCQUOTA_TOKEN='fixture-authority-only', FLEET_TASK_AUTHORITY='legacy')
             (root / 'intent.json').write_text(json.dumps(intent))
             (root / 'context.json').write_text(json.dumps(context))
             hook_command = shlex.join([sys.executable, str(launch.BIN / 'fleet-codex-session.py'), 'hook'])
@@ -269,6 +338,15 @@ def main():
                 (root / 'launcher').write_text(launcher)
             (root / 'launcher').chmod(0o700)
             helper = [sys.executable, str(Path(__file__).resolve()), '--supervise-fixture', str(root)]
+            if arguments.local_authority:
+                helper += ['--local-authority']
+            receipt_option = '@authority_receipt' if arguments.local_authority else '@launch_receipt'
+            def read_receipt():
+                raw = tmux('display-message', '-p', '-t', '%0', '#{' + receipt_option + '}')
+                observed = json.loads(raw) if raw else {}
+                if arguments.local_authority and observed:
+                    observed = dict(observed, **observed['native_identity'])
+                return observed
             receipt = None
             mcp_proofs = []
             try:
@@ -278,20 +356,22 @@ def main():
                 for phase in ('create', 'resume'):
                     event_offset = len(config_events()) if phase == 'resume' else 0
                     if phase == 'resume':
-                        (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
-                        tmux('kill-server')
-                        check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
-                        tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
-                             shlex.join(helper + ['--resume-fixture']))
-                        tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
+                        if arguments.local_authority:
+                            tmux('respawn-pane', '-t', '%0', '-c', str(repository), shlex.join(helper + ['--resume-fixture']))
+                        else:
+                            (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
+                            tmux('kill-server')
+                            check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
+                            tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
+                                 shlex.join(helper + ['--resume-fixture']))
+                            tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                     def ready():
-                        raw = tmux('display-message', '-p', '-t', '%0', '#{@launch_receipt}')
-                        if not raw:
-                            return False
-                        observed = json.loads(raw)
+                        observed = read_receipt()
+                        if arguments.local_authority:
+                            return bool(observed) and (not receipt or observed['reservation'] != receipt['reservation'])
                         return observed.get('phase') == ('ready' if phase == 'create' else 'resumed')
                     wait(ready, phase + ': native process/worktree receipt was not verified')
-                    observed = json.loads(tmux('display-message', '-p', '-t', '%0', '#{@launch_receipt}'))
+                    observed = read_receipt()
                     check(observed['native_worktree'] == intent, phase + ': receipt proves the exact creation intent')
                     check(observed['worktree'] == launch.worktree_identity(str(worktree)),
                           phase + ': receipt matches the actual registered native directory')
@@ -332,7 +412,10 @@ def main():
                         check((worktree / 'tracked.txt').read_text() == 'retained fixture\n', 'supervised resume retains edits')
                     else:
                         (worktree / 'tracked.txt').write_text('retained fixture\n')
+                        check(not requests, 'native startup sends no model request before explicit input')
                         tmux('send-keys', '-t', '%0', '-l', 'offline fixture')
+                        wait(lambda: 'offline fixture' in screen(), 'native unsent draft was not visible')
+                        check(not requests, 'visible native draft remains unsent until Enter')
                         tmux('send-keys', '-t', '%0', 'Enter')
                         wait(lambda: 'offline fixture rejection' in screen(), 'fixture model request was not rejected')
                         if arguments.fleet_launcher:
@@ -352,9 +435,21 @@ def main():
                              phase + ': MCP process survived native exit', timeout=5)
                         check(True, phase + ': native exit leaves no observed MCP process alive')
                 check((repository / 'tracked.txt').read_text() == 'fixture\n', 'base checkout contents are unchanged')
-                mutations = [json.loads(line) for line in (root / 'mutations.jsonl').read_text().splitlines()]
-                check(len(mutations) == 2 and all(row['state'] == 'running' for row in mutations),
-                      'fixture authority sees only verified running observations, never a fabricated task success')
+                if arguments.local_authority:
+                    check(not admission_errors, 'ordinary authority accepts every exact native identity transition')
+                    check(len(reservations) == 2 and all(row['state'] == 'stopped' for row in reservations.values()),
+                          'creation and exact resume each finish their own admission reservation')
+                    check([row['action'] for row in admission_events] == ['reserve', 'begin', 'observe', 'stopped'] * 2,
+                          'ordinary admission precedes each verified observation and stopped report')
+                    check(not any(row['worktree_exists'] for row in admission_events[:2])
+                          and all(row['worktree_exists'] for row in admission_events[2:]),
+                          'initial admission completes before native directory creation; resume retains it')
+                    check(not tmux('display-message', '-p', '-t', '%0', '#{@launch}'),
+                          'ordinary native creation never fabricates an accepted task context')
+                else:
+                    mutations = [json.loads(line) for line in (root / 'mutations.jsonl').read_text().splitlines()]
+                    check(len(mutations) == 2 and all(row['state'] == 'running' for row in mutations),
+                          'fixture authority sees only verified running observations, never a fabricated task success')
                 check(bool(requests) and all(requests), 'all received model requests carry only the fake fixture key')
                 if arguments.fleet_launcher:
                     check(not any(row.get('method') == 'tools/call' for row in config_events()), 'offline rejection executes no fixture MCP tool')
@@ -363,7 +458,8 @@ def main():
                     for name in expected_servers:
                         check(any(str(tool).startswith('mcp__' + name + '__') for names in requested_tools for tool in names),
                               name + ': configured MCP tool definition reaches the native model request')
-                print(json.dumps(dict(version=version, checks=checks, authority='fixture-stub', finalization='fixture-stub',
+                print(json.dumps(dict(version=version, checks=checks, authority='loopback-local-stub' if arguments.local_authority else 'fixture-stub',
+                                      finalization='native-stop' if arguments.local_authority else 'fixture-stub',
                                       launcher='fleet' if arguments.fleet_launcher else 'fixture'), indent=2))
             finally:
                 if socket.exists():
