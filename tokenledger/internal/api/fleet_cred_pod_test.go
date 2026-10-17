@@ -65,7 +65,7 @@ func TestClusterPodCodexOnly(t *testing.T) {
 		t.Fatalf("ordinary machine: %v", got)
 	}
 	// The shared ACK worker: a hand-written list naming Claude still gets Codex only.
-	const ack = "fleet-linux-0"
+	const ack = "fleet-linux-3"
 	if err := h.srv.Store.AdoptAccount(pa, ack, now); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestClusterPodCodexOnly(t *testing.T) {
 	}
 	ackTok := enrollAs(t, h, "alice-"+ack, ack, pa.Login)
 	if got, _, _ := leased(t, h, ackTok); !eq(got, "codex/default") {
-		t.Fatalf("fleet-linux-0: %v", got)
+		t.Fatalf("fleet-linux-3: %v", got)
 	}
 	// The setting widens it on purpose, audited like any hub setting.
 	if code, out := h.post(t, "/v1/fleet/settings", map[string]string{"key": CredPodProvidersKey, "value": "claude , codex"}); code != http.StatusOK {
@@ -139,18 +139,18 @@ func TestCheckCredPodProviders(t *testing.T) {
 		}
 	}
 	for m, want := range map[string]bool{
-		"u-3wnuf3v654": true, "u-drillcn4150": true, "fleet-linux-0": true, "fleet-linux-0.fleet-workers": true,
-		"ccquota-spot-ab12": true, "mac-c": false, "fleet-linux-": false, "mini2": false, "": false,
+		"u-abcd1234": true, "u-drillx1": true, "fleet-linux-3": true, "fleet-linux-3.fleet-workers": true,
+		"ccquota-spot-ab12": true, "mac-c": false, "fleet-linux-": false, "mac-b": false, "": false,
 	} {
 		if got := isClusterPodMachine(m); got != want {
 			t.Errorf("isClusterPodMachine(%q) = %v", m, got)
 		}
 	}
 	// A stored value that does not parse never widens it.
-	if p := podProvidersOf(map[string]string{CredPodProvidersKey: "bogus"}, "u-3wnuf3v654"); len(p) != 1 || !p["codex"] {
+	if p := podProvidersOf(map[string]string{CredPodProvidersKey: "bogus"}, "u-abcd1234"); len(p) != 1 || !p["codex"] {
 		t.Errorf("bad stored value: %v", p)
 	}
-	if p := podProvidersOf(map[string]string{CredPodProvidersKey: "*"}, "u-3wnuf3v654"); p != nil {
+	if p := podProvidersOf(map[string]string{CredPodProvidersKey: "*"}, "u-abcd1234"); p != nil {
 		t.Errorf("* still gates: %v", p)
 	}
 	if p := podProvidersOf(nil, "mac-c"); p != nil {
