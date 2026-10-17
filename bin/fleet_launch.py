@@ -57,6 +57,12 @@ def check_receipt(context, receipt):
         raise ValueError("launch has no matching native process/session proof")
     if "worktree" in receipt:
         validate_worktree(receipt["worktree"])
+    if "native_worktree" in receipt:
+        intent = validate_native_worktree(receipt["native_worktree"])
+        if (receipt["actual_provider"] != "claude" or "worktree" not in receipt
+                or receipt["worktree"]["root"] != str(native_worktree_path(intent))
+                or receipt["worktree"]["common_dir"] != intent["common_dir"]):
+            raise ValueError("native worktree receipt differs from its creation intent")
     return receipt
 
 
@@ -84,6 +90,113 @@ def worktree_identity(directory):
             or (metadata / (metadata / "gitdir").read_text().strip()).resolve(strict=True) != marker):
         raise ValueError("native cwd is not a registered linked worktree")
     return validate_worktree(dict(root=str(root), git_dir=str(metadata), common_dir=str(common)))
+
+
+def native_git(root, *arguments):
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    return subprocess.run(["git", "-C", root, *arguments], env=environment, capture_output=True,
+                          text=True, check=True, timeout=5).stdout.strip()
+
+
+def validate_native_worktree(intent):
+    if (not isinstance(intent, dict) or set(intent) != {"root", "common_dir", "base", "commit", "name"}
+            or any(not isinstance(value, str) or not value or any(character in value for character in "\n\r\t\0")
+                   for value in intent.values())
+            or not all(os.path.isabs(intent[key]) for key in ("root", "common_dir"))
+            or not re.fullmatch(r"scratch-[1-9][0-9]{0,14}", intent["name"])
+            or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", intent["commit"])
+            or not intent["base"].startswith("refs/")):
+        raise ValueError("invalid native worktree intent")
+    return intent
+
+
+def native_worktree_path(intent):
+    return Path(intent["root"]) / ".claude" / "worktrees" / intent["name"]
+
+
+def check_native_repository(intent):
+    validate_native_worktree(intent)
+    root = Path(intent["root"])
+    values = native_git(str(root), "rev-parse", "--path-format=absolute", "--show-toplevel",
+                        "--absolute-git-dir", "--git-common-dir").splitlines()
+    if (root.resolve(strict=True) != root or len(values) != 3 or values !=
+            [str(root), intent["common_dir"], intent["common_dir"]]
+            or Path(intent["common_dir"]).resolve(strict=True) != root / ".git"
+            or not (root / ".git").is_dir()):
+        raise ValueError("native creation repository identity changed")
+    for directory in (root / ".claude", root / ".claude/worktrees", native_worktree_path(intent)):
+        if directory.is_symlink():
+            raise ValueError("native worktree location cannot follow a symlink")
+
+
+def new_native_worktree(root, base):
+    root = str(Path(root).resolve(strict=True))
+    remote = native_git(root, "remote").splitlines()
+    reference = "refs/remotes/origin/" + base if "origin" in remote else "refs/heads/" + base
+    commit = native_git(root, "rev-parse", "--verify", "--end-of-options", reference + "^{commit}")
+    intent = dict(root=root, common_dir=str(Path(root) / ".git"), base=reference, commit=commit,
+                  name="scratch-" + str(1 + int(uuid.uuid4().hex[:12], 16)))
+    check_native_repository(intent)
+    return intent
+
+
+def prepare_native_worktree(pane, provider, worktree, previous=None):
+    raw = option(pane, "@native_worktree")
+    if not raw:
+        if previous and "native_worktree" in previous:
+            raise ValueError("native creation intent disappeared")
+        return None
+    intent = validate_native_worktree(json.loads(raw))
+    if provider != "claude":
+        raise ValueError("native worktree creation requires Claude")
+    check_native_repository(intent)
+    path = native_worktree_path(intent)
+    if previous:
+        if (previous.get("native_worktree") != intent or not worktree
+                or worktree["root"] != str(path) or worktree["common_dir"] != intent["common_dir"]):
+            raise ValueError("native worktree recovery lost its saved binding")
+    else:
+        if worktree or path.exists() or native_git(intent["root"], "branch", "--list", "worktree-" + intent["name"]):
+            raise ValueError("native creation cannot adopt a pre-existing worktree or branch")
+        if native_git(intent["root"], "rev-parse", "--verify", "--end-of-options",
+                      intent["base"] + "^{commit}") != intent["commit"]:
+            raise ValueError("native creation base changed before launch")
+    return intent
+
+
+def observe_native_worktree(pane, payload, intent, expected=None):
+    if json.loads(option(pane, "@native_worktree")) != validate_native_worktree(intent):
+        raise ValueError("native creation intent changed")
+    check_native_repository(intent)
+    observed = worktree_identity(payload.get("cwd"))
+    if (observed["root"] != str(native_worktree_path(intent))
+            or observed["common_dir"] != intent["common_dir"]):
+        raise ValueError("native creator entered another worktree or repository")
+    if expected:
+        if observed != expected:
+            raise ValueError("native recovery changed worktree identity")
+        check_worktree_window(pane, expected)
+    else:
+        if option(pane, "@worktree") not in ("", observed["root"]):
+            raise ValueError("native creation window already names another worktree")
+        if native_git(observed["root"], "rev-parse", "HEAD") != intent["commit"]:
+            raise ValueError("native creator used a different base commit")
+    return observed
+
+
+def restore_native_worktree(context, receipt, directory, session, provider, fleet_id):
+    if not isinstance(receipt, dict) or "native_worktree" not in receipt:
+        return None
+    check_receipt(context, receipt)
+    if (directory != receipt["worktree"]["root"] or session != receipt["native_session"]
+            or provider != context["provider"] or fleet_id != context["worker_id"].split("/")[1]):
+        raise ValueError("restore row differs from its native launch receipt")
+    intent = receipt["native_worktree"]
+    check_native_repository(intent)
+    if worktree_identity(directory) != receipt["worktree"]:
+        raise ValueError("restored native worktree lost its saved Git binding")
+    return intent
 
 
 def prepare_worktree(pane, previous=None, socket=""):
@@ -248,8 +361,18 @@ def hook(payload):
     if not root_native(p, supervisor):
         raise ValueError("native process is outside this launch")
     receipt = dict(c, **p, native_session=payload.get("session_id"), observed_at=time.time(), phase="verified")
+    old = option(pane, "@launch_receipt")
+    previous = check_receipt(c, json.loads(old)) if old else None
     worktree = os.environ.get("FLEET_LAUNCH_WORKTREE")
-    if worktree:
+    native_worktree = os.environ.get("FLEET_LAUNCH_CREATE")
+    if native_worktree:
+        if p["actual_provider"] != "claude":
+            raise ValueError("native worktree creator is not Claude")
+        intent = validate_native_worktree(json.loads(native_worktree))
+        expected_worktree = json.loads(worktree) if worktree else (previous or {}).get("worktree")
+        receipt["worktree"] = observe_native_worktree(pane, payload, intent, expected_worktree)
+        receipt["native_worktree"] = intent
+    elif worktree:
         receipt["worktree"] = bind_native_worktree(payload, json.loads(worktree))
         check_worktree_window(pane, receipt["worktree"])
     if p["actual_provider"] == "codex":
@@ -261,14 +384,16 @@ def hook(payload):
     if expected and expected != receipt["native_session"]:
         raise ValueError("resume changed native session identity")
     check_receipt(c, receipt)
-    old = option(pane, "@launch_receipt")
-    if old:
-        previous = check_receipt(c, json.loads(old))
+    if previous:
         if any(previous[k] != receipt[k] for k in ("pid", "birth", "executable", "native_session")):
             raise ValueError("late or nested hook cannot replace launch identity")
         if "worktree" in previous and previous["worktree"] != receipt.get("worktree"):
             raise ValueError("late hook cannot replace worktree identity")
+        if "native_worktree" in previous and previous["native_worktree"] != receipt.get("native_worktree"):
+            raise ValueError("late hook cannot replace native creation intent")
         return
+    if native_worktree:
+        tmux("set-option", "-w", "-t", pane, "@worktree", receipt["worktree"]["root"])
     stamp(pane, "@launch_receipt", receipt)
 
 
@@ -283,6 +408,8 @@ def inspect(context, pane, socket=""):
         raise ValueError("interrupted: native process no longer belongs to this pane")
     if "worktree" in receipt:
         prepare_worktree(pane, receipt, socket)
+    if "native_worktree" in receipt and json.loads(option(pane, "@native_worktree", socket)) != receipt["native_worktree"]:
+        raise ValueError("native creation intent changed after observation")
     return dict(receipt, window_id=option(pane, "window_id", socket))
 
 
@@ -443,14 +570,21 @@ def supervise_guarded(argv, pane, c, guard):
         seed = ""  # a launch seed is never redelivered on recovery
     current_task(c)  # stale transfers/recovery cannot even start a native process
     worktree = prepare_worktree(pane, old)
+    native_worktree = prepare_native_worktree(pane, asked, worktree, old)
     env = dict(os.environ, FLEET_LAUNCH_CONTEXT=json.dumps(c), FLEET_LAUNCH_SUPERVISOR=str(os.getpid()),
                FLEET_LAUNCH_NATIVE=resume)
     env.pop("FLEET_LAUNCH_WORKTREE", None)
+    env.pop("FLEET_LAUNCH_CREATE", None)
     if worktree:
         env["FLEET_LAUNCH_WORKTREE"] = json.dumps(worktree)
+    directory = worktree["root"] if worktree else None
+    if native_worktree:
+        env["FLEET_LAUNCH_CREATE"] = json.dumps(native_worktree)
+        argv += ["--worktree", native_worktree["name"], "--name", native_worktree["name"]]
+        directory = native_worktree["root"]
     tmux("set-option", "-wu", "-t", pane, "@launch_receipt")
     tmux("set-option", "-w", "-t", pane, "@launch_started", "1")
-    child = subprocess.Popen(argv, env=env, **({"cwd": worktree["root"]} if worktree else {}))
+    child = subprocess.Popen(argv, env=env, **({"cwd": directory} if directory else {}))
     root = None
     verified = False
     receipt = None
@@ -461,7 +595,12 @@ def supervise_guarded(argv, pane, c, guard):
         while child.poll() is None and time.monotonic() < deadline:
             try:
                 receipt = inspect(c, pane)
-                if worktree != receipt.get("worktree"):
+                if native_worktree:
+                    if receipt.get("native_worktree") != native_worktree:
+                        raise ValueError("native launch did not prove its creation intent")
+                    if worktree and receipt.get("worktree") != worktree:
+                        raise ValueError("native recovery did not prove its saved worktree")
+                elif worktree != receipt.get("worktree"):
                     raise ValueError("native launch did not prove the expected worktree")
                 if descendant(receipt["pid"], child.pid):
                     break
@@ -528,6 +667,8 @@ def transfer_check(pane, socket):
 def transfer_commit(pane, socket, target, bundle):
     c = validate_context(json.loads(option(pane, "@launch", socket)))
     old = check_receipt(c, json.loads(option(pane, "@launch_receipt", socket)))
+    if "native_worktree" in old:
+        raise ValueError("native Claude worktree transfer needs a verified provider handoff")
     if same_process(old):
         raise ValueError("source is still alive; no replacement authorized")
     current_task(c)
@@ -569,7 +710,7 @@ def transfer_commit(pane, socket, target, bundle):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit"))
+    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "native-worktree", "restore-native-worktree"))
     p.add_argument("--socket", default="")
     p.add_argument("--pane", default="")
     p.add_argument("--target", default="")
@@ -577,6 +718,22 @@ def main():
     p.add_argument("argv", nargs=argparse.REMAINDER)
     a = p.parse_args()
     try:
+        if a.mode == "restore-native-worktree":
+            if len(a.argv) != 4:
+                raise ValueError("restore-native-worktree requires directory, session, provider and fleet identity")
+            saved = json.load(sys.stdin)
+            if not isinstance(saved, list) or len(saved) != 2:
+                raise ValueError("restore-native-worktree requires saved context and receipt")
+            intent = restore_native_worktree(*saved, *a.argv)
+            if intent:
+                print(json.dumps(intent))
+            return 0
+        if a.mode == "native-worktree":
+            if len(a.argv) != 2:
+                raise ValueError("native-worktree requires repository and base branch")
+            intent = new_native_worktree(*a.argv)
+            print(intent["name"] + "\t" + str(native_worktree_path(intent)) + "\t" + json.dumps(intent))
+            return 0
         if a.mode == "admit":
             d = json.load(sys.stdin)
             if d.get("task"):

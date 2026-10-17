@@ -132,7 +132,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; DESK_ARG=""; TASK_REF=""; ROLE=""; AS_ARG=""; AS_SOFT=0; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -238,6 +238,7 @@ while [ "$#" -gt 0 ]; do
     --seed-file=*) SEED_FILE="${1#--seed-file=}"; shift ;;
     --worktree)    WT_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --worktree=*)  WT_ARG="${1#--worktree=}"; shift ;;
+    --native-worktree) NATIVE_WT=1; shift ;;
     *)             TARGET_SESS="$1"; shift ;;
   esac
 done
@@ -455,6 +456,23 @@ if [ "$NOREPO" != 1 ]; then
   [ -d "$MAIN/.git" ] || { refuse "raw: FLEET_MAIN is not a git checkout — set it in fleet.conf"; exit 1; }
 fi
 BASE="${FLEET_BASE_BRANCH:-master}"
+if [ "$NATIVE_WT" = 1 ]; then
+  [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
+    && [ "$NODE_ARG" = local ] \
+    && [ "$WARM_ONLY" = 0 ] && [ -z "$WT_ARG$RESUME_SID" ] \
+    || { refuse "raw: native worktree requires a fresh local Claude repository session"; exit 2; }
+  [ -z "${FLEET_WORKTREE_SETUP:-}" ] && [ "${FLEET_DEPS_SHARE:-0}" != 1 ] \
+    || { refuse "raw: native worktree requires migrating explicit Fleet setup/dependency sharing first"; exit 2; }
+  if [ -n "$TASK_REF${FLEET_LAUNCH:-}" ]; then
+    [ -n "$TASK_REF" ] && [ -n "${FLEET_LAUNCH:-}" ] \
+      && python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null \
+      || { refuse "raw: native worktree requires the accepted task dispatch"; exit 2; }
+  else
+    { [ "${CCQUOTA_FLEET:-0}" = 1 ] || [ -n "${FLEET_TASK_AUTHORITY:-}" ]; } \
+      && [ -z "$PROMPT$SEED_FILE" ] \
+      || { refuse "raw: native local creation requires repository admission and an unsubmitted draft"; exit 2; }
+  fi
+fi
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 
@@ -505,6 +523,7 @@ if [ "$BG" = 1 ]; then
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
+  [ "$NATIVE_WT" = 1 ] && owarg="$owarg --native-worktree"
   [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
     *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
@@ -674,6 +693,7 @@ claimed=""
 # claims.
 _pool_ok=1; { [ "$NOREPO" = 1 ] || [ -n "${FLEET_LAUNCH:-}" ]; } && _pool_ok=0
 [ -z "${FLEET_AUTHORITY_START:-}" ] || _pool_ok=0
+[ "$NATIVE_WT" = 0 ] || _pool_ok=0
 _pool_repo=$REPO_ARG
 if [ "$WARM_ONLY" = 1 ]; then
   # A pre-existing native process cannot consume a new admission reservation.
@@ -730,6 +750,13 @@ elif [ -n "$WT_ARG" ]; then
   case "${slug#scratch-}" in ''|*[!0-9]*) refuse "raw: --worktree $WT_ARG is not a scratch worktree"; exit 1 ;; esac
   [ -d "$WT_ARG" ] && [ -e "$WT_ARG/.git" ] || { refuse "raw: --worktree $WT_ARG is gone"; exit 1; }
   wt=$WT_ARG
+elif [ "$NATIVE_WT" = 1 ]; then
+  fleet_fetch_bounded "$MAIN" "$BASE"
+  native_alloc=$(python3 "$BIN/fleet_launch.py" native-worktree "$MAIN" "$BASE") \
+    || { refuse "raw: could not prepare native worktree creation"; exit 1; }
+  IFS=$'\t' read -r slug wt native_intent <<EOF
+$native_alloc
+EOF
 elif [ "$warm" = 0 ]; then
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
@@ -851,7 +878,11 @@ else
     stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"} \
               ${DESK_N:+@desk 1 @issue "$DESK_N" @repo "$DESK_REPO"})
   elif [ -n "$REPO_ARG" ]; then
-    stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
+    if [ "$NATIVE_WT" = 1 ]; then
+      stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @native_worktree "$native_intent")
+    else
+      stamp=$(fleet_win_stamp_cmd @repo "$REPO_ARG" @worktree "$wt")
+    fi
   fi
   [ "$NOREPO" != 1 ] && [ -n "$rsid" ] && launch="$launch --resume $rsid"
   if [ -n "$PROMPT" ]; then
@@ -865,8 +896,9 @@ else
     stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
   fi
   [ -z "${FLEET_AUTHORITY_START:-}" ] || launch="FLEET_AUTHORITY_START='$(printf '%s' "$FLEET_AUTHORITY_START" | sed "s/'/'\\\\''/g")' $launch"
-  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" "$stamp$launch; exec \$SHELL") \
-    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
+  launch_dir=$wt; [ "$NATIVE_WT" = 0 ] || launch_dir=$MAIN
+  win=$(TM new-window -d -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$launch_dir" "$stamp$launch; exec \$SHELL") \
+    || { [ "$NOREPO" = 1 ] || [ -n "$WT_ARG" ] || [ "$NATIVE_WT" = 1 ] || fleet_scratch_free "$MAIN" "$slug" "$wt"
          [ -n "$DESK_ID" ] && bash "$BIN/fleet-ticket.sh" state "$DESK_ID" closed --reason not_planned >/dev/null 2>&1
          # Say WHY when it is the server (issue #2477): the line rides into
          # the hub's DECLINED / UNKNOWN answer as the refusal.
@@ -890,7 +922,7 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
     fi
   else
     TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
-    TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null # so ⌃x can resolve+reap the worktree
+    [ "$NATIVE_WT" = 1 ] || TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
   fi
 fi
 # The session's lifelong identity (issue #1646), warm or cold: a pool window was no
@@ -1015,7 +1047,7 @@ fi
 # So the refill waits first — `--delay`, which scratch-pool.sh applies INSIDE the
 # pool-enabled gate so that with the pool off this whole line costs nothing.
 # run-shell -b because it is slow either way.
-TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
+[ "$NATIVE_WT" = 1 ] || TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
 
 # The headless caller's receipt (issue #1541, --print): the window, its name, its
 # worktree — what the hub's node reads back as the start's window — and its
