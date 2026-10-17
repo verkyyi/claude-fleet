@@ -1947,6 +1947,13 @@ printf '@9\\t4242\\t/fixture/moved\\n'
                 controller.workers({"name": "demo", "fleet_id": self.fleet, "agent": "claude"})
         self.assertEqual(caught.exception.code, "UNAVAILABLE")
         self.assertIn("tmux: command not found", str(caught.exception))
+        # a private CA reaches the adapter's children (issue #4625); a token never does
+        with patch.dict(os.environ, SSL_CERT_FILE="/run/ca.pem", CURL_CA_BUNDLE="/run/ca.pem",
+                        FLEET_CA_BUNDLE="/run/ca.pem", CCQUOTA_TOKEN="not-for-child"):
+            env = controller.environment()
+        for key in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "FLEET_CA_BUNDLE"):
+            self.assertEqual(env.get(key), "/run/ca.pem")
+        self.assertNotIn("CCQUOTA_TOKEN", env)
 
     def test_audit_records_denials_and_contains_no_secrets(self):
         with self.assertRaises(Fault):
