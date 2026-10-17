@@ -101,7 +101,10 @@ What changes with it:
   terminal. iTerm2's own selection still works with its bypass modifier (⌥-drag).
 - **⌘P and the 看台's keys** are tmux key tables, read before the pane — unchanged.
 
-`FLEET_AUTO_HANDOFF_PCT` requests a native Codex context cycle at a clean Stop.
+`FLEET_AUTO_HANDOFF_PCT` is opt-in (default 0 / off). Without an explicit Fleet
+threshold, Codex owns native compaction and Fleet does not request a replacement
+conversation at 80% context. Existing positive thresholds still request a Codex
+context cycle at a clean Stop; no native model or compaction setting is rewritten.
 Write durable notes and run `fleet-transfer.sh --window PANE --to codex
 --handoff NOTES --after-turn`. The existing transfer controller retains the
 account home, transcript provenance and worktree. See [session transfer](SESSION-TRANSFER.md).

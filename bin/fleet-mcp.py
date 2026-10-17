@@ -1546,9 +1546,10 @@ TOOLS = {
             "repo": REPO},
             "required": ["kind", "number"], "additionalProperties": False}}),
     "context": (tool_context, {
-        "description": "How full is THIS session's context window (bin/fleet-context.sh): the percentage and a "
-                       "verdict on the auto-handoff bands — OK · WATCH (finish this thread, then hand off) · "
-                       "HANDOFF (now). Exit 0 OK · 1 any other verdict · 2 nothing to read.",
+        "description": "How full is THIS session's context window (bin/fleet-context.sh): the percentage and "
+                       "context bands — OK · WATCH · HANDOFF. With auto_handoff_pct=0 (default), bands are "
+                       "advisory: native Agent compaction owns context; do not automatically hand off. "
+                       "Exit 0 OK · 1 any other verdict · 2 nothing to read.",
         "inputSchema": {"type": "object", "properties": {
             "json": {"type": "boolean", "description": "The machine-readable form."}},
             "additionalProperties": False}}),

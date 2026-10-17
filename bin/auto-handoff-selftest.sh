@@ -117,9 +117,9 @@ write_confs() {
   {
     printf '# global fleet.conf (selftest)\nFLEET_GLOBAL_MAX_SESSIONS=3\n'
     if [ -n "${GPCT:-}" ]; then printf 'FLEET_AUTO_HANDOFF_PCT=%s\n' "$GPCT"
-    else                        printf '#FLEET_AUTO_HANDOFF_PCT=80       # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
+    else                        printf '#FLEET_AUTO_HANDOFF_PCT=0        # context %% that triggers an auto-handoff; 0 = OFF\n'; fi
     [ -n "${GDEFER:-}" ] && printf 'FLEET_HANDOFF_DEFER_SECS=%s\n' "$GDEFER"
-    # In-place compaction (issue #1269) shares this Stop and defaults ON at 55%;
+    # In-place compaction (issue #1269) shares this Stop and defaults OFF;
     # these legs are about the handoff alone, so it is off here —
     # bin/compact-prep-selftest.sh owns that path.
     printf 'FLEET_COMPACT_PREP_PCT=0\n'
@@ -135,6 +135,7 @@ write_confs() {
 # come from GPCT/FPCT (written to disk), the fake tmux's answers from FAKE_*.
 run_state() {
   : > "$SETOPT_LOG"
+  rm -f "$SETOPT_LOG.telemetry"
   write_confs
   env -i PATH="$HOOK_PATH" HOME="$WORK/home" TMPDIR="$WORK/tmp" \
       TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" \
@@ -178,10 +179,12 @@ latched && fail "Codex telemetry must not arm the Claude handoff latch"
 cat > "$WORK/inst/bin/fleet-codex-session.py" <<'PYCODEX'
 import os, sys
 assert '--pct' in sys.argv and '--json' not in sys.argv
+open(os.environ['SETOPT_LOG'] + '.telemetry', 'a').write('read\n')
 print(int(os.environ['FAKE_CTX']))
 PYCODEX
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
 nudged "$out" && latched || fail 'Codex context must arm its native cycle'
+[ -f "$SETOPT_LOG.telemetry" ] || fail 'Explicit handoff must retain native telemetry validation'
 case "$out" in *'fleet-transfer.sh'*'--after-turn'*) ;; *) fail 'Codex cycle command missing';; esac
 case "$out" in *'/fleet-handoff'*) fail 'Codex must never invoke the Claude slash cycle';; esac
 out="$(GPCT=60 FAKE_CTX=65 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_ARMED=1 run_state 'done')"
@@ -215,13 +218,18 @@ for fixture in '1 unix:///test codex skip' '0 unix:///test codex hook' '1 tcp://
 done
 rm -f "$WORK/inst/bin/fleet-sleep.py"
 
-# ---- UNSET ≠ OFF: no conf layer sets it → the repo default 80 (issue #1571) ----
+# ---- UNSET = OFF: native Agent compaction owns the default --------------------
 out="$(FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
-nudged "$out" || fail "no conf sets the threshold → the default 80 must nudge at 95%, got: '$out'"
-case "$out" in *'>= 80%'*) : ;; *) fail "the unset threshold must read as the 80 default, got: '$out'";; esac
-latched || fail "the default line must set the latch"
+nudged "$out" && fail "no conf sets the threshold: must not nudge even at 95%, got: '$out'"
+latched && fail "the default must not set the handoff latch"
 out="$(FAKE_CTX=79 FAKE_ISSUE=561 run_state 'done')"
-nudged "$out" && fail "under the default 80 (79%) must NOT nudge, got: '$out'"
+nudged "$out" && fail "no conf at 79% must not nudge, got: '$out'"
+out="$(FAKE_CTX=99 FAKE_ISSUE=561 FAKE_AGENT=codex run_state 'done')"
+nudged "$out" && fail "Codex must use native compaction unless handoff is explicitly enabled"
+latched && fail "the default Codex path must not arm a handoff"
+[ ! -f "$SETOPT_LOG.telemetry" ] || fail 'Default Stop must not spawn the duplicate Codex handoff telemetry reader'
+out="$(FAKE_CTX=99 FAKE_ISSUE=561 FAKE_AGENT=codex FAKE_TRANSFER_UNTIL=$(( $(date +%s) + 60 )) FAKE_TRANSFER_REQUEST=manual-native-transfer run_state 'done')"
+grep -q '@agent_transfer_ready manual-native-transfer' "$SETOPT_LOG" || fail "default-off handoff must preserve an explicitly requested transfer"
 
 # ---- explicit 0 in the global conf → off ---------------------------------------
 out="$(GPCT=0 FAKE_CTX=95 FAKE_ISSUE=561 run_state 'done')"
@@ -376,10 +384,8 @@ out="$(env -i PATH="$HOOK_PATH" HOME="$WORK/nohome" TMPDIR="$WORK/tmp" \
       FAKE_PREV='done' FAKE_ISSUE=561 FAKE_CTX=95 \
     sh "$WORK/inst/bin/set-claude-state.sh" 'done' < /dev/null 2>&1)"; rc=$?
 [ "$rc" = 0 ] || fail "with no conf anywhere the hook must still exit 0 (never block a turn), rc=$rc: '$out'"
-# A machine with no conf lines runs the same ladder as one that writes 55/80/3
-# (issue #1571): at 95% the handoff at its built-in 80% owns the Stop.
-case "$out" in *'>= 80% auto-handoff threshold'*) : ;;
-  *) fail "with no conf anywhere the default 80 must nudge at 95%, got: '$out'" ;; esac
+nudged "$out" && fail "with no conf anywhere native compaction must retain ownership at 95%"
+latched && fail "with no conf anywhere the handoff latch must stay clear"
 grep -q '@claude_state done' "$SETOPT_LOG" || fail "with no conf the hook must still stamp @claude_state done"
 
 # ---- BROKEN INSTALL (fleet-lib.sh missing beside the hook) → fail-open, rc 0 -----
@@ -505,8 +511,8 @@ out="$(GPCT=0 FPCT=45 run_doctor)"
 case "$out" in *PASS*'auto-handoff at 45%'*'hook sees 45'*) : ;;
   *) fail "doctor: per-fleet 45 over global 0 must read 'at 45% (hook sees 45 …)', got: '$out'";; esac
 out="$(run_doctor)"
-case "$out" in *PASS*'auto-handoff at 80%'*'hook sees 80'*) : ;;
-  *) fail "doctor: nothing set must read PASS 'auto-handoff at 80% (hook sees 80 …)' — the #1571 default, got: '$out'";; esac
+case "$out" in *PASS*'auto-handoff OFF'*'hook sees 0'*) : ;;
+  *) fail "doctor: nothing set must read PASS 'auto-handoff OFF (hook sees 0 …)', got: '$out'";; esac
 out="$(GPCT=0 run_doctor)"
 case "$out" in *PASS*'auto-handoff OFF'*) : ;;
   *) fail "doctor: an explicit 0 must read PASS 'auto-handoff OFF', got: '$out'";; esac
@@ -528,7 +534,7 @@ mv "$WORK/inst/bin/fleet-lib.sh.off" "$WORK/inst/bin/fleet-lib.sh"
 case "$out" in *WARN*'hook sees 0'*'inert'*) : ;;
   *) fail "doctor: conf 60 but the hook resolves 0 must WARN 'hook sees 0 — nudge inert', got: '$out'";; esac
 
-printf 'selftest: DOCTOR leg PASS (hook-eye view of the threshold: 60/45/default 80/OFF/inert)\n' >&2
+printf 'selftest: DOCTOR leg PASS (hook-eye view of the threshold: 60/45/default OFF/inert)\n' >&2
 
 # ---- MEASURE: the statusline stamps @ctx_pct (skip if jq absent) --------------
 if command -v jq >/dev/null 2>&1; then

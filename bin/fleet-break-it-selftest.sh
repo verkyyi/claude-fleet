@@ -1736,7 +1736,8 @@ hw_env() {   # <args…> — the sandbox's hooks and lib, against sock-hw
 }
 drill_human_step_reopen() {
   CAP=60; BREAK_SOCK="$WORK/sock-hw"; local d="$WORK/hw" w p t0 st why out
-  mkdir -p "$d/conf/global" "$d/ms-playwright-mcp"
+  mkdir -p "$d/conf/global" "$d/conf/fleets/hw" "$d/ms-playwright-mcp"
+  printf 'FLEET_AUTO_HANDOFF_PCT=80\n' > "$d/conf/fleets/hw/conf"
   printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
   # The pane: the browser Playwright opened (its own argv, the pane's child) and the agent.
   nt -f /dev/null new-session -d -s hw -n issue-9 -x 100 -y 30 \

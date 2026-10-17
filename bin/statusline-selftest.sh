@@ -145,8 +145,8 @@ expect() { # <want> <pct> [size] [VAR=val …]
   local want="$1"; shift; local got; got=$(band_of "$@")
   [ "$got" = "$want" ] || fail "D: band for % $1 ($*) should be $want, got '$got'" "$(log)"
 }
-expect ok 64;  expect watch 65;  expect watch 79;  expect handoff 80
-ok "D nothing set: the default handoff line 80 (issue #1571) → 65 / 80"
+expect ok 49;  expect watch 50;  expect watch 79;  expect handoff 80
+ok "D nothing set: advisory 50 / 80 bands, no automatic handoff policy"
 expect ok 49 200000 FLEET_AUTO_HANDOFF_PCT=0; expect watch 50 200000 FLEET_AUTO_HANDOFF_PCT=0; expect handoff 80 200000 FLEET_AUTO_HANDOFF_PCT=0
 ok "D auto-handoff 0: the 50 / 80 fallback bands"
 expect handoff 30 200000 FLEET_AUTO_HANDOFF_PCT=30; expect watch 15 200000 FLEET_AUTO_HANDOFF_PCT=30; expect ok 14 200000 FLEET_AUTO_HANDOFF_PCT=30

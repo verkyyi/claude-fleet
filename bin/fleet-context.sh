@@ -42,10 +42,10 @@
 #
 # Verdicts (the `verdict:` line, one token):
 #   OK        plenty of headroom            → carry on
-#   WATCH     getting full                  → finish the current thread, then hand off
-#   HANDOFF   at/over the threshold         → run /fleet-handoff now
+#   WATCH     getting full                  → advisory unless a policy is enabled
+#   HANDOFF   at/over the threshold         → check the explicit handoff policy
 #   UNKNOWN   nothing measurable yet        → no statusline stamp, no usage record
-# Bands: HANDOFF is FLEET_AUTO_HANDOFF_PCT (issue #330; unset ⇒ 80, issue #1571)
+# Bands: HANDOFF is FLEET_AUTO_HANDOFF_PCT (unset / 0 ⇒ advisory bands only)
 # and WATCH the 15 points below it — so this read agrees with the nudge that will
 # fire anyway. With it OFF (=0), the fallback bands are the statusline's own colours
 # (conf/statusline.sh: yellow at 50%, red at 80%).
@@ -206,13 +206,19 @@ else pct=-1; src="none"
 fi
 
 # --- verdict ------------------------------------------------------------------
-# The ladder's repo defaults (issue #1571): handoff 80, compact-prep 55, at most
+# The opt-in ladder's defaults: handoff OFF, compact-prep OFF, at most
 # 3 compactions — KEEP IN SYNC with bin/set-claude-state.sh and conf/fleet.conf.reference
 # (context-ladder-defaults-selftest.sh pins them). 0 = off, as in the hook.
-thr="${FLEET_AUTO_HANDOFF_PCT:-80}"
+thr="${FLEET_AUTO_HANDOFF_PCT:-0}"
 case "$thr" in ''|*[!0-9]*) thr=0 ;; esac
-cprep="${FLEET_COMPACT_PREP_PCT:-55}"
+cprep="${FLEET_COMPACT_PREP_PCT:-0}"
 case "$cprep" in ''|*[!0-9]*) cprep=0 ;; esac
+if [ -n "${FLEET_AUTO_HANDOFF_TOKENS:-}" ]; then
+  _line=$(fleet_ctx_line "$FLEET_AUTO_HANDOFF_TOKENS" "${stamp_limit:-0}" 2>/dev/null) && thr=$_line
+fi
+if [ -n "${FLEET_COMPACT_PREP_TOKENS:-}" ]; then
+  _line=$(fleet_ctx_line "$FLEET_COMPACT_PREP_TOKENS" "${stamp_limit:-0}" 2>/dev/null) && cprep=$_line
+fi
 cmax="${FLEET_COMPACT_MAX:-3}"
 case "$cmax" in ''|*[!0-9]*) cmax=0 ;; esac
 if [ "$thr" -gt 0 ]; then
@@ -224,6 +230,11 @@ if   [ "$pct" -lt 0 ];        then verdict="UNKNOWN"; why="no @ctx_pct stamp and
 elif [ "$pct" -ge "$hand" ];  then verdict="HANDOFF"; why="at/over ${hand}% — run /fleet-handoff now, before the window forces a compaction"
 elif [ "$pct" -ge "$warn" ];  then verdict="WATCH";   why="past ${warn}% — finish this thread, then /fleet-handoff rather than starting a broad sweep"
 else                               verdict="OK";      why="under ${warn}% — carry on"
+fi
+if [ "$thr" -eq 0 ]; then
+  case "$verdict" in
+    HANDOFF|WATCH) why="context usage advisory only — native Agent manages compaction; Fleet handoff is opt-in" ;;
+  esac
 fi
 
 if [ "$quiet" = "1" ]; then
