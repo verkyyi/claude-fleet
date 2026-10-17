@@ -2469,6 +2469,21 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Idle-cost doctor window @group=disk @tier=internal @scope=global @edit=int @unit=s
 #FLEET_DOCTOR_IDLE_COST_SECS=60
 
+# The daily idle reading (issue #4361): the diskguard tick tries once every
+# FLEET_IDLE_DAILY_EVERY seconds until the day has one reading of
+# FLEET_IDLE_DAILY_SECS seconds, taken only while idle, into
+# global/idle-cost.ndjson (kept FLEET_IDLE_DAILY_KEEP_DAYS days); over
+# FLEET_IDLE_COST_WARN ⇒ one issue a machine a day. A host only; 1 forces it on
+# any computer, 0 turns it off.
+# @label=Daily idle reading @group=disk @tier=internal @scope=global @edit=bool
+#FLEET_IDLE_DAILY=
+# @label=Daily idle reading retry @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_IDLE_DAILY_EVERY=900
+# @label=Daily idle reading window @group=disk @tier=internal @scope=global @edit=int @unit=s
+#FLEET_IDLE_DAILY_SECS=60
+# @label=Daily idle readings kept @group=disk @tier=internal @scope=global @edit=int @unit=d
+#FLEET_IDLE_DAILY_KEEP_DAYS=30
+
 # macOS fseventsd RSS (MB) at which `fleet-doctor`'s `machine` check WARNs and the
 # diskguard --watch tick sends its once-a-day reminder (issue #889): a bloated
 # fseventsd stalls every new session 6-8s at spawn. Report-only — the fleet never

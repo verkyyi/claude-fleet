@@ -161,7 +161,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect* fleet-report-stats*` | 收集与账本 |
 | GitHub 工作流 | `fleet-issue-bridge* fleet-issue-cache* fleet-gh* fleet_gh* fleet-webhook* tmux-pr-refresh* fleet-labels*` | GitHub 缓存与桥 |
 | 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 的 shell 入口加载配置后 exec Python 主循环，复用 render-watch 的常驻 control transport、可见性和有界等待 |
-| Hub（ | `fleet-hub* fleet_hub* fleet-login* fleet-logout* fleet-relogin* fleet-users* fleet-tenant* fleet-admin* fleet_admin* hub-session* fleet-route* fleet-connect* fleet-task-record* fleet_cluster_ticket*` | Hub、账号接入及任务记录 |
+| Hub（ | `fleet-hub* fleet_hub* fleet-login* fleet-logout* fleet-relogin* fleet-users* fleet-tenant* fleet-admin* fleet_admin* hub-session* fleet-route* fleet-connect* fleet-task-record* fleet_cluster_ticket* fleet_managed.py` | Hub、账号接入及任务记录 |
 | Web 接入 | `fleet-webchat* fleet-webterm* web-console* site-*` | 网页与站点 |
 | 承载节点 | `fleet-node* fleet_node* fleet-spot* fleet-provisioner* fleet-host* fleet-machine* fleet-svc* fleet-service* fleet-services* fleet-job* fleet_job* fleet-daemon* fleet-launchd* fleet-cn-probe*` | 节点与宿主服务 |
 | 接入中继 | `fleet-relay* fleet-peer-cert* fleet-peer-trust* fleet-trust* fleet_ed25519* fleet_tls*` | 中继与节点信任 |

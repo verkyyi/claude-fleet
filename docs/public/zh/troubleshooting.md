@@ -648,6 +648,7 @@ fleet debug report
 
 - **是什么**：整机空闲时每秒新起的进程数、fleet 的 CPU 开销和最多的来源。无 working 会话且无 CI 作业时才量，量读数的会话本身除外；其它登录的状态缺失或过期也显示「未量」。
 - **WARN / FAIL 怎么办**：默认超过 50 个/秒时 WARN。运行 `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` 取 60 秒读数，`--json` 给报告用，`--idle` 只查能否量，`--last` 看上次结果。来源排名来自 0.2 秒采样，来源速率为估计值，极短命进程可能漏采。不要停掉正在干活的会话来制造空闲；等它们自然空闲再量。
+- **每天一次**：承载机每天空闲时自动量一次，记进 `~/.config/claude-fleet/global/idle-cost.ndjson`（保留 30 天；整天都不空闲记一行「未量」），这一行末尾的「每日读数近 7 天 …」就读它；超过阈值时同一台机器一天最多开一张单，列出前三个来源。`python3 ~/.claude/fleet/bin/fleet-idle-daily.py show` 看最近 7 天。
 
 #### `memory`
 

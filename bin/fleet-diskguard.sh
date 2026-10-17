@@ -56,6 +56,8 @@
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
 #   --tree-watch      run only the closed-window orphan-tree backstop (what --watch
 #                     also does, issue #4360)
+#   --idle-daily      run only the daily idle reading's try (what --watch also does,
+#                     issue #4361): bin/fleet-idle-daily.py tick, detached, when due
 #   --docprev-watch   run only the doc-preview revive: docs shared but its server.py
 #                     gone ⇒ share.sh --ensure (what --watch also does, issue #3988)
 #   --brew-watch      run only the Homebrew keg-permission pass (what --watch also
@@ -564,6 +566,44 @@ tree_watch() {
   printf '%s\n' "$nowt" > "$st" 2>/dev/null
   out="$(bash "$BIN/fleet-window-reap.sh" --aged "$TREE_SECS" 2>/dev/null)"
   [ -n "$out" ] && printf '%s\n' "$out" | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S') /" >> "$GDIR/tree-reaped.log" 2>/dev/null
+  return 0
+}
+
+# idle_daily_watch — the idle reading in the daily check-up (issue #4361, EPIC #4354
+# C7): once a day, while the machine is idle (fleet_idle_now), bin/fleet-idle-daily.py
+# takes one fleet-idle-cost.sh reading into global/idle-cost.ndjson and files ONE
+# ordinary issue a machine a day when it is over FLEET_IDLE_COST_WARN; a day never
+# idle gets a 「未量」 line. Until its gate file's epoch the tick reads that file and
+# the clock, nothing else — the gate is closed all day once today has its reading. The issue goes to the
+# first hosted repo whose base checkout carries bin/fleet-idle-cost.sh and
+# bin/fleet-stable.sh (business repos never); none ⇒ measured, not filed. Detached:
+# a reading is a 60 s window. FLEET_IDLE_DAILY=0 turns it off.
+idle_daily_watch() {
+  [ "${FLEET_IDLE_DAILY:-}" = 0 ] && return 0
+  [ -f "$BIN/fleet-idle-daily.py" ] && [ -f "$BIN/fleet-idle-cost.sh" ] || return 0
+  local gate="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/idle-cost.gate" g='' nowt s r repo=''
+  [ -f "$gate" ] && read -r g < "$gate" 2>/dev/null
+  case "$g" in ''|*[!0-9]*) g=0 ;; esac
+  nowt="$(now)"
+  [ "$nowt" -ge "$g" ] 2>/dev/null || return 0
+  if type fleet_load_conf >/dev/null 2>&1; then
+    for s in $(fleet_sockets 2>/dev/null); do
+      [ -f "$(fleet_conf_file "$s")" ] || continue
+      repo=$( fleet_load_conf "$s" >/dev/null 2>&1
+        fleet_repos "$s" | while IFS= read -r r; do
+          [ -n "$r" ] || continue
+          ( fleet_load_repo_conf "$s" "$r" >/dev/null 2>&1
+            [ -n "${FLEET_MAIN:-}" ] && [ -f "$FLEET_MAIN/bin/fleet-idle-cost.sh" ] && [ -f "$FLEET_MAIN/bin/fleet-stable.sh" ] ) && { echo "$r"; break; }
+        done )
+      [ -n "$repo" ] && break
+    done
+  fi
+  mkdir -p "$GDIR" 2>/dev/null
+  # the knobs a sourced conf set but did not export
+  ( FLEET_IDLE_COST_WARN="${FLEET_IDLE_COST_WARN:-}" FLEET_IDLE_DAILY="${FLEET_IDLE_DAILY:-}" \
+    FLEET_IDLE_DAILY_EVERY="${FLEET_IDLE_DAILY_EVERY:-}" FLEET_IDLE_DAILY_SECS="${FLEET_IDLE_DAILY_SECS:-}" \
+    FLEET_IDLE_DAILY_KEEP_DAYS="${FLEET_IDLE_DAILY_KEEP_DAYS:-}" python3 "$BIN/fleet-idle-daily.py" tick ${repo:+--repo "$repo"} 2>/dev/null \
+      | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S') /" >> "$GDIR/idle-daily.log" 2>/dev/null & ) 2>/dev/null
   return 0
 }
 
@@ -1119,6 +1159,9 @@ case "${1:-}" in
   --tree-watch)
     tree_watch
     ;;
+  --idle-daily)
+    idle_daily_watch
+    ;;
   --docprev-watch)
     docprev_watch
     ;;
@@ -1148,6 +1191,7 @@ EOF2
     inbox_watch                                   # what clients sent gone sessions (#2757), throttled
     selftest_watch                                # selftests' tmux debris + processes (#2970, #4360), hourly
     tree_watch                                    # a closed window's trees its hook missed (#4360)
+    idle_daily_watch                              # one idle reading a day, over ⇒ one issue (#4361)
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
