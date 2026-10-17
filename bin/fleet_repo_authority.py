@@ -169,6 +169,9 @@ def observe_native(payload):
     native = launch.native_parent()
     if not launch.valid_uuid(payload.get("session_id")) or not launch.root_native(native, c["supervisor"]):
         raise ValueError("local reservation does not own this native execution")
+    if "worktree" in c:
+        launch.bind_native_worktree(payload, c["worktree"])
+        launch.check_worktree_window(os.environ["TMUX_PANE"], c["worktree"])
     proof = {k: native[k] for k in ("pid", "birth", "executable")}
     proof.update(worker_id=c["worker_id"], native_session=payload["session_id"])
     start_call(c["repo"], c["reservation"], "observe", native_identity=proof)
@@ -198,6 +201,7 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     if not result.stdout:
         os.execvpe(argv[0], argv, os.environ)
     repo, worker = result.stdout.strip().split("\t")
+    worktree = launch.prepare_worktree(os.environ["TMUX_PANE"])
     key = os.environ.get("FLEET_AUTHORITY_START") or str(uuid.uuid4())
     if not os.environ.get("FLEET_AUTHORITY_START"):
         start_call(repo, key, "reserve")
@@ -212,13 +216,15 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
             pass
         raise
     c = dict(repo=repo, worker_id=worker, reservation=key, supervisor=os.getpid())
+    if worktree:
+        c["worktree"] = worktree
     env = dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(c))
     env.pop("FLEET_AUTHORITY_START", None)
     # The terminal delivers these signals to the child too. Keep the waiter
     # alive to save a confirmed native stop; an interrupted waiter is UNKNOWN.
     for sig in (signal.SIGINT, signal.SIGQUIT):
         signal.signal(sig, lambda *_: None)
-    child = subprocess.Popen(argv, env=env)
+    child = subprocess.Popen(argv, env=env, **({"cwd": worktree["root"]} if worktree else {}))
     rc = child.wait()
     try:
         receipt = json.loads(launch.option(os.environ["TMUX_PANE"], "@authority_receipt"))

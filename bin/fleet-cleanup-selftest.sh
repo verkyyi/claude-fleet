@@ -54,7 +54,7 @@ pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
-mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/leases" "$WORK/dash"
+mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/leases" "$WORK/dash" "$WORK/metadata"
 ORDER_LOG="$WORK/order"; PULL_LOG="$WORK/pull"; LEDGER="$WORK/ledger.tsv"
 
 # --- fake git: no-op success; log teardown ops + the base pull in order --------
@@ -85,6 +85,7 @@ case "\${1:-}" in
   # janitor asks git whether a tip past the merged head still landed)
   merge-base) case "\${FAKE_TIP:-}" in ''|deadbeef|cafe1234) : ;; *) exit 1 ;; esac ;;
   rev-parse)
+    [ "\${2:-}" = --absolute-git-dir ] && { printf '%s\n' "$WORK/metadata"; exit 0; }
     case "\$*" in *origin/*) printf '%s\n' "\${FAKE_BASE_TIP:-deadbeef}"; exit 0 ;; esac
     printf '%s\n' "\${FAKE_TIP:-deadbeef}" ;;
   *) : ;;                                             # fetch → succeed silently
@@ -273,6 +274,19 @@ tok="$(run_clean merged)"; err="$(cat "$WORK/err")"
 [ ! -s "$ORDER_LOG" ] && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail 'transfer lease allowed teardown' "$err"
 ok 'MERGED worker with transfer lease → skip:live, no teardown'
 rm "$TRANSFER_LEASE"
+
+for marker in locked CLAUDE_BASE; do
+  touch "$WORK/metadata/$marker"
+  for mode in '' --auto; do
+    : > "$LEDGER"
+    tok="$(run_clean merged ${mode:+"$mode"})"
+    [ "$tok" = skip:protected ] || fail "$marker must prevent $mode cleanup" "$tok"
+    [ ! -s "$ORDER_LOG" ] && [ ! -s "$PULL_LOG" ] && [ ! -s "$LEDGER" ] \
+      && [ -f "$WORK/wt-issue-42/keep.txt" ] || fail "$marker cleanup mutated window, worktree, base or ledger"
+  done
+  rm "$WORK/metadata/$marker"
+  ok "$marker retains window, worktree and ledger in manual and automatic cleanup"
+done
 
 # Automatic cleanup waits for GitHub mergedAt, before ANY mutation. Old/missing
 # closedAt must not become a substitute clock for a recent/missing mergedAt.

@@ -33,7 +33,7 @@
 | 上下文阈值自动干预（Stop 中的 auto-handoff / compact-prep） | 按需 | 原生 Agent 默认负责压缩；Fleet 的两个百分比阈值默认 0，不自动写恢复图、输入 `/compact` 或切换会话。显式百分比/Token 配置保留，手动交接、跨节点迁移和任务归属恢复仍属核心。源码候选已改，尚未发布。 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 不再默认写入或检查；已有块原样保留，用户可用 `fleet-agent-defaults.py strip` 按需删除。执行会话仍由技能携带规则，守卫照常生效（#3125）。 |
 | 命令误操作守卫（`hooks/bash-guard.py` 的删除、强推、广域信号检查） | 核心 | 防止共享宿主上的误操作；不能替代进程或账号隔离。 |
-| 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 基础检出只读和跨会话协作边界保持；`fleet-hooks-emit.sh --target codex-managed` 从既有表生成两项已审阅 Codex 守卫的原生配置，不新增策略引擎。候选生成不等于在线安装，旧入口保留。 |
+| 执行会话守卫（`bash-guard.py` 的 tmux/桥接规则、`base-readonly-guard.py`、`agent-guard.py`） | 核心 | 基础检出只读和跨会话协作边界保持；嵌套原生 Worktree 只按 Git 根/common directory/注册反向指针验证当前目录，不按目录名前缀放行，不增加创建或清理所有者。`fleet-hooks-emit.sh --target codex-managed` 从既有表生成两项已审阅 Codex 守卫的原生配置，不新增策略引擎。候选生成不等于在线安装，旧入口保留。 |
 | 文档发布守卫（`hooks/artifact-guard.py`） | 核心 | 轮换账号下 Artifact 的访问归属不可靠，给操作者读的页面通过 doc-preview 送达。 |
 | 会话内 mod（`mod/fleet` 的 usage / where / state） | 核心 | 提供用量、操作者位置及会话状态。 |
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
@@ -76,7 +76,7 @@
 | 凭据代理（cred-proxy） | 核心 | 会话访问订阅的统一入口。 |
 | 额度观察（quotawatch） | 核心 | 提供用量及额度可见性。 |
 | 版本维护（install-sync / base-sync） | 核心 | 跟随稳定版本及维护基础检出；版本激活由既有发布流程负责。 |
-| 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 维持共享宿主稳定，回收退出会话资源。 |
+| 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 维持共享宿主稳定，回收退出会话资源；Git 锁和已识别的原生 Worktree 所有权先于 Fleet 回收，不能因目录干净/已合并或 `--force` 而接管原生清理。 |
 | 休眠（sleep） | 待定 | 待发起人定：核对执行会话休眠与承载模型的关系。 |
 | 收集与账本观察（collect / ledger-watch） | 待定 | 待发起人定：逐项区分计量、恢复必需的数据和可选遥测。 |
 | GitHub 工作流（issue-bridge / pr-refresh / webhook） | 核心 | 执行会话保持核心的拍板覆盖草稿按需建议；本批保留 issue 交接和 PR 合并门。 |
@@ -91,7 +91,7 @@
 | 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；隔离策略不由本表宣称完成。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
 | 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
-| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连，不替代业务授权验收。不安装 daemon、不改变生产运行时选择。显式原生用量订阅探针仅在隔离夹具和固定版本 CI 验证事件边界，不引入生产订阅服务。 |
+| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连，不替代业务授权验收。不安装 daemon、不改变生产运行时选择。显式原生用量订阅探针仅在隔离夹具和固定版本 CI 验证事件边界，不引入生产订阅服务。原生 Claude Worktree/SessionStart 探针使用固定版本与临时离线夹具，不接管会话生命周期。 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 按操作者设备能力使用。 |
 | 企业微信通知（wecom-webhook-notify.sh） | 按需 | 用户自行选择的通知集成。 |
 
@@ -134,7 +134,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 |---|---|---|
 | 终端看台与薄客户端 | 核心 | #3008 合并后的会话访问、列表和交互入口；按设备可选的 iTerm2 集成仍归上表。 |
 | 配置与插件装配 | 核心 | 读取配置、装配代理和可选插件的共用机制；显式 Codex 原生默认值安装候选复用原生配置层及 batchWrite，平台只选缺失项和既有排除项，不另写用户 TOML。尚不自动启用；不代表被装配的插件本身必选。 |
-| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话；`fleet_launch.py` 在投递任务前验证原生进程和会话，并保留接受代次的恢复边界（#4393）。 |
+| 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话；`fleet_launch.py` 在投递任务前验证原生进程、会话及既有窗口绑定的 Git 工作树，并保留接受代次的恢复边界（#4393）；不接管原生目录创建或清理。 |
 
 下面是盘点工具读取的归属规则，按顺序首个匹配；名称前缀必须唯一对应上方组件表。
 模式相对于 `bin/`，以空格分开，支持 shell 风格通配符。不得用 `*` 总兜底把新文件

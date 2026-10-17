@@ -1,0 +1,57 @@
+name: native-claude-worktree
+
+on:
+  pull_request:
+    paths:
+      - 'bin/fleet-native-claude-worktree-selftest.py'
+      - 'bin/fleet_launch.py'
+      - 'bin/fleet-lib.sh'
+      - 'bin/fleet-worktree-drop.sh'
+      - 'hooks/base-readonly-guard.py'
+      - '.github/workflows/native-claude-worktree.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-claude-worktree-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-claude:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch pinned official Claude package
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-claude"
+          curl --fail --location --max-time 120 \
+            https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.296.tgz \
+            --output "$RUNNER_TEMP/claude.tgz"
+          printf '%s  %s\n' \
+            fa6d35bab81e96723e549c4f68a3c42b4c22c60ab8dae67c3de09a524e6d5fff18a0306f4a60bf4445501b68d07c902bf1dc6e9e98c9eb4d05bcbadc8f55964f \
+            "$RUNNER_TEMP/claude.tgz" | sha512sum --check --strict
+          tar -xzf "$RUNNER_TEMP/claude.tgz" -C "$RUNNER_TEMP/native-claude"
+      - name: Exercise native creation, resume and actual SessionStart hooks
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(id -u)" != 0
+          python3 bin/fleet-native-claude-worktree-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" \
+            > "$RUNNER_TEMP/claude-worktree-bare.json"
+          python3 bin/fleet-native-claude-worktree-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --with-hooks \
+            > "$RUNNER_TEMP/claude-worktree-hooks.json"
+          cat "$RUNNER_TEMP/claude-worktree-bare.json" "$RUNNER_TEMP/claude-worktree-hooks.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-claude-worktree-evidence
+          path: ${{ runner.temp }}/claude-worktree-*.json
+          if-no-files-found: ignore

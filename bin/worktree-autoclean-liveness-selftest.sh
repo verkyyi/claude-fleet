@@ -60,6 +60,11 @@ git -C "$BASE" worktree add -q -b issue-200  "$WORK/base-issue-200"  >/dev/null 
 git -C "$BASE" worktree add -q -b scratch-9  "$WORK/base-scratch-9"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-8  "$WORK/base-scratch-8"  >/dev/null 2>&1
 git -C "$BASE" worktree add -q -b scratch-7  "$WORK/base-scratch-7"  >/dev/null 2>&1
+git -C "$BASE" worktree add -q -b retained-lock "$WORK/base-retained-lock" >/dev/null 2>&1
+git -C "$BASE" worktree lock --reason 'fixture owner' "$WORK/base-retained-lock"
+git -C "$BASE" worktree add -q -b retained-native "$WORK/base-retained-native" >/dev/null 2>&1
+native_metadata=$(git -C "$WORK/base-retained-native" rev-parse --absolute-git-dir)
+git -C "$WORK/base-retained-native" rev-parse HEAD > "$native_metadata/CLAUDE_BASE"
 # Keep the ancestry path independently eligible, so the liveness/lease
 # assertions cannot pass merely because tip == base now refuses automatic reap.
 git -C "$BASE" commit --allow-empty -qm base-advance
@@ -166,6 +171,8 @@ ok "DRY: live worker kept by @issue identity (cwd-independent); prefix cwd fallb
 
 # ============================ REAL RUN: reap only the dead ================
 run_wac >/dev/null
+[ -d "$WORK/base-retained-lock" ] || fail "Git-locked worktree must remain untouched"
+[ -d "$WORK/base-retained-native" ] || fail "native-owned unlocked worktree must remain untouched"
 [ -d "$WORK/base-issue-100" ] || fail "real run must KEEP live worker issue-100 (false-reap regression)"
 [ -d "$WORK/base-scratch-9" ] || fail "real run must KEEP live-in-subdir scratch-9"
 [ -d "$WORK/base-scratch-7" ] || fail "real run must KEEP scratch-7 (a server is cwd'd inside, #509)"
