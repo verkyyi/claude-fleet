@@ -66,6 +66,19 @@ def pod(plan, endpoint):
                 labels=labels(plan, role)), spec=spec)
 
 
+# One container's rule, applied to containers and initContainers SEPARATELY: the
+# API server types the two lists apart, so `containers + initContainers` has no
+# `_+_` overload and the whole policy fails its typeChecking (live, #4625).
+CONTAINER_RULE = ("c.image in %s && "
+                  "!has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) && "
+                  "c.securityContext.allowPrivilegeEscalation == false && "
+                  "(!has(c.securityContext.privileged) || !c.securityContext.privileged) && "
+                  "c.securityContext.readOnlyRootFilesystem && c.securityContext.capabilities.drop == ['ALL'] && "
+                  "c.securityContext.seccompProfile.type == 'RuntimeDefault' && "
+                  "(!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') && "
+                  "!has(c.securityContext.seLinuxOptions)")
+
+
 def admission(plan):
     """One run's explicit API-server contract; not a production exception.
 
@@ -102,14 +115,8 @@ def admission(plan):
          "object.spec.containers[0].securityContext.capabilities.add == "
          "(object.spec.containers[0].args == ['proxy'] ? " + repr(OBSERVER_CAPS + ['NET_ADMIN']) +
          " : " + repr(OBSERVER_CAPS) + ") && "
-         "(object.spec.containers + object.spec.initContainers).all(c, c.image in " + images + " && "
-         "!has(c.lifecycle) && !has(c.livenessProbe) && !has(c.readinessProbe) && !has(c.startupProbe) && "
-         "c.securityContext.allowPrivilegeEscalation == false && "
-         "(!has(c.securityContext.privileged) || !c.securityContext.privileged) && "
-         "c.securityContext.readOnlyRootFilesystem && c.securityContext.capabilities.drop == ['ALL'] && "
-         "c.securityContext.seccompProfile.type == 'RuntimeDefault' && "
-         "(!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') && "
-         "!has(c.securityContext.seLinuxOptions)) && "
+         + " && ".join("object.spec.%s.all(c, %s)" % (field, CONTAINER_RULE % images)
+                       for field in ('containers', 'initContainers')) + " && "
          "object.spec.volumes.all(v, !has(v.hostPath) && !has(v.persistentVolumeClaim) && "
          "!has(v.projected) && (has(v.emptyDir) || has(v.configMap) || has(v.secret))))",
          'C9 permits only its bounded, exclusive observer template'),

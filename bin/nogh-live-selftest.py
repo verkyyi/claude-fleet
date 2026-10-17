@@ -493,6 +493,15 @@ class Templates(unittest.TestCase):
         for pod in pods:
             mounts = pod['spec']['containers'][0]['volumeMounts']
             self.assertTrue(any(m.get('subPath') == 'resolv.conf' for m in mounts))
+        # The API server types containers and initContainers apart: a `+` of the
+        # two has no CEL overload and failed the -pods policy's typeChecking live
+        # (#4625). Each list carries the same container rule on its own.
+        expressions = [v['expression'] for o in objects if o['kind'] == 'ValidatingAdmissionPolicy'
+                       for v in o['spec']['validations']]
+        self.assertFalse(any('containers + object.spec.initContainers' in e for e in expressions))
+        rule = [e for e in expressions if 'object.spec.containers.all(c, ' in e]
+        self.assertEqual(len(rule), 1)
+        self.assertIn('object.spec.initContainers.all(c, ' + template.CONTAINER_RULE.split(' %s')[0], rule[0])
 
     def test_extra_process_and_capability_surfaces_refuse(self):
         p = plan(); ep = next(e for e in p['endpoints'] if e['role'] == 'node-a')
