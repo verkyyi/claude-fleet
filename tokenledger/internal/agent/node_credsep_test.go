@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,19 +13,24 @@ import (
 )
 
 // fakeCredsep writes a fleet-credsep.sh under home that exits status / check
-// with the given codes.
+// with the given codes and has no judge verb — a script older than #4622.
 func fakeCredsep(t *testing.T, home string, status, check int) {
+	t.Helper()
+	writeCredsep(t, home, "case \"$1\" in status) exit "+strconv.Itoa(status)+" ;; check) exit "+strconv.Itoa(check)+" ;; esac\nexit 2\n")
+}
+
+func writeCredsep(t *testing.T, home, body string) {
 	t.Helper()
 	p := filepath.Join(home, credsepScript)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/bin/bash\ncase \"$1\" in status) exit " + strconv.Itoa(status) + " ;; check) exit " + strconv.Itoa(check) + " ;; esac\nexit 2\n"
-	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+	if err := os.WriteFile(p, []byte("#!/bin/bash\n"+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
 
+// A script older than judge is asked the old way: status + check.
 func TestCredsepJudge(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -46,10 +52,37 @@ func TestCredsepJudge(t *testing.T) {
 			if tc.script {
 				fakeCredsep(t, home, tc.status, tc.check)
 			}
-			if got := credsepJudge(ctx, home); got != tc.want {
-				t.Fatalf("credsepJudge = %q; want %q", got, tc.want)
+			if got, why := credsepJudge(ctx, home); got != tc.want || why != "" {
+				t.Fatalf("credsepJudge = %q, %q; want %q and no why", got, why, tc.want)
 			}
 		})
+	}
+}
+
+// claude-fleet#4622: judge is the word. A tenant whose check WARNs on a key
+// the shared proxy ignored (exit 1) but whose judge says separated is
+// separated — the old way read it as not and the hub refused every lease.
+func TestCredsepJudgeVerb(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, body, want, why string
+	}{
+		{"tenant with a check WARN", "case \"$1\" in judge) echo 'separated — /var/db/fleet-cred/u unreadable here'; exit 0 ;; status) exit 0 ;; check) exit 1 ;; esac\nexit 2\n",
+			control.CredsepSeparated, "separated — /var/db/fleet-cred/u unreadable here"},
+		{"a leak", "case \"$1\" in judge) echo 'not — credentials readable at login paths: x'; echo more; exit 3 ;; esac\nexit 0\n",
+			control.CredsepNot, "not — credentials readable at login paths: x"},
+		{"judge broke", "case \"$1\" in judge) exit 1 ;; esac\nexit 0\n", control.CredsepUnknown, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCredsep(t, home, tc.body)
+			if got, why := credsepJudge(ctx, home); got != tc.want || why != tc.why {
+				t.Fatalf("credsepJudge = %q, %q; want %q, %q", got, why, tc.want, tc.why)
+			}
+		})
+	}
+	if got := credsepLine(strings.Repeat("é", 300)); len([]rune(got)) != credsepWhyMax {
+		t.Fatalf("why not bounded: %d runes", len([]rune(got)))
 	}
 }
 

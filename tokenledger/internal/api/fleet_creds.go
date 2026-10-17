@@ -143,6 +143,37 @@ func (s *Server) credsepGated(principal, credsep string) (bool, error) {
 	return credsep != control.CredsepSeparated, nil
 }
 
+// leaseServes says whether the lease would hand n's login pool credentials
+// were it separated (claude-fleet#4622) — the logins the gate's cred-ttl item
+// counts. It mirrors handleNodeCredentials' refusals before the credsep gate,
+// plus what is never a person's node login: a lost row, a machine link, a
+// cluster pod (a person's u-<nonce> or the shared workers: their sessions take
+// the central route, nothing lands on the node), a SPOT node, a login that only
+// coordinates (a client computer: 登录即认人, compute off), an untrusted
+// machine, a system account (root, _<name>), a login with no active fleet
+// account (a deleted user: no_principal) or a revoked one.
+func (s *Server) leaseServes(n NodeView) bool {
+	if n.Status == "lost" || n.MachineLink || n.UserPod || n.Kind == store.NodeKindEphemeral ||
+		isClusterPodMachine(n.Hostname) || n.ComputeOff || n.Trust != TrustTrusted || systemLogin(n.OSUser) {
+		return false
+	}
+	if s.Store == nil {
+		return true
+	}
+	principal, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
+	if err != nil {
+		return !errors.Is(err, store.ErrNoPrincipal) // a read error still counts the login
+	}
+	rev, err := s.Store.RevokedFor(n.Hostname, principal)
+	return err != nil || rev == nil
+}
+
+// systemLogin is a machine's own account, never a person's login: root, or a
+// name macOS reserves for a service (_fleetadmin, _fleetnode, _fleetcred).
+func systemLogin(login string) bool {
+	return login == "root" || strings.HasPrefix(login, "_")
+}
+
 // credsepWord is how a heartbeat's credsep reads in an audit line.
 func credsepWord(v string) string {
 	if v == "" {
@@ -281,7 +312,8 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	if gated {
 		deny(http.StatusForbidden, LeaseNotSeparated, principal, "拒发：未隔离 — "+osUser+" on "+firstLabel(host)+
-			" is not credential-separated (credsep="+credsepWord(hb.Credsep)+"); its sessions go through the hub's central proxy. "+
+			" is not credential-separated (credsep="+credsepWord(hb.Credsep)+optional(": "+hb.CredsepWhy, hb.CredsepWhy != "")+
+			"); its sessions go through the hub's central proxy. "+
 			"On a managed machine its daemon separates it within minutes (credsep-enforce); else, as root: "+
 			"sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install --login "+osUser)
 		return

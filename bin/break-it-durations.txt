@@ -497,3 +497,4 @@
 1.5 cred-new-login-unseparated
 3.0 cred-existing-unseparated
 20.0 cred-enforce-fails-no-lease
+20.0 cred-separated-judged-not
