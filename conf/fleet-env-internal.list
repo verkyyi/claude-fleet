@@ -654,6 +654,7 @@ FLEET_WH_BACKOFF_CAP               knob: internal pacing/limit, safe in-code def
 FLEET_WH_FORWARD_CMD               seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_WH_HOOKS_LIST_CMD            seam: an injectable command/path for tests (fleet-webhook.sh)
 FLEET_WH_HOOK_DEL_CMD              seam: an injectable command/path for tests (fleet-webhook.sh)
+FLEET_WH_MACHINE_PID               env handoff: the machine's one forwarder names itself as a login's handler (fleet-webhook-machine.py → fleet-webhook.sh --forward, #4358)
 FLEET_WH_HOOK_HOST                 seam: the relay host a forwarder hook is recognised by (fleet-webhook.sh)
 FLEET_WH_NOW_FILE                  seam: a fixed clock for the webhook backoff
 FLEET_WH_SLEEP_CMD                 seam: an injectable command/path for tests (fleet-webhook.sh)

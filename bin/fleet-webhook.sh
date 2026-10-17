@@ -71,6 +71,21 @@
 #                       with a catch-up refresh on (re)connect), reap departed
 #   --once              with supervise: run a single handler-start + reconcile, then
 #                       exit (used by the selftest / a manual poke)
+#   --forward R --url U one forward for repo R into U, run AS the login by the
+#                       machine's one forwarder (bin/fleet-webhook-machine.py, issue
+#                       #4358): reap R's orphaned hook, stamp the pidfiles and the
+#                       reconnect mark, then exec `gh webhook forward` — its pid stays
+#                       this one, a child of the machine program, never an orphan
+#   --catchup R [--force] the catch-up refresh after a (re)connect (issue #410);
+#                       --force skips the throttle (a host wake)
+#
+# ONE PER MACHINE (issue #4358, EPIC #4354 C4). On a managed machine the node
+# daemon runs bin/fleet-webhook-machine.py ONCE for every login it took over: one
+# localhost listener (/u/<login>), each login's forwards and routes run as that
+# login through the modes above. A supervise started for a login the machine's
+# copy already serves logs one line and exits 0 (compat for one version — the
+# daemon no longer starts it; `webhook-machine.logins` in the daemon's state dir
+# says who is served). Elsewhere this supervisor runs as before.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -259,7 +274,10 @@ EOF
 wh_handler() {
   command -v python3 >/dev/null 2>&1 || { log "--handler needs python3"; exit 2; }
   log "handler listening on $URL (events: $EVENTS)"
-  WH_SELF="$0" WH_PORT="$PORT" python3 - <<'PY'
+  # exec: the pid supervise records IS the server — a TERM to a bash wrapper
+  # left the python behind on the port, a PPID-1 orphan every restart after
+  # failed to bind (issue #4358, mini2 2026-10-17: 4 days, a crash loop every 30 s)
+  WH_SELF="$0" WH_PORT="$PORT" exec python3 - <<'PY'
 import os, sys, subprocess, http.server, socketserver
 SELF = os.environ["WH_SELF"]; PORT = int(os.environ.get("WH_PORT", "8917"))
 class H(http.server.BaseHTTPRequestHandler):
@@ -500,6 +518,48 @@ EOF
   done
 }
 
+# ===================== the machine's one forwarder (issue #4358) ===============
+# One forward for repo $1 into url $2, run as the login by bin/fleet-webhook-machine.py:
+# the same reap + reconnect mark wh_spawn_forward does, then EXEC the forward so the
+# machine program's child is the forward itself (no wrapper to orphan it). The
+# pidfiles fleet_wh_live reads (fleet-gh-lib.sh) say "forwarding" as before: this
+# pid, and the machine program's as the handler (FLEET_WH_MACHINE_PID).
+wh_forward_exec() { # $1=repo $2=url
+  local repo="$1" url="$2" slug
+  [ -n "$repo" ] && [ -n "$url" ] || { log "--forward needs a repo and --url"; return 2; }
+  case "$url" in http://127.0.0.1:*) ;; *) log "--forward: refusing non-localhost url $url"; return 2 ;; esac
+  slug=$(fleet_slug "$repo")
+  wh_reap_forwarder_hook "$repo"
+  echo "$$" > "$FWD/$slug.pid" 2>/dev/null || :
+  case "${FLEET_WH_MACHINE_PID:-}" in ''|*[!0-9]*) ;; *) echo "$FLEET_WH_MACHINE_PID" > "$HANDLER_PIDF" 2>/dev/null || : ;; esac
+  rm -f "$FWD/$slug.fails" "$FWD/$slug.until" 2>/dev/null || :
+  fleet_wh_mark "$repo" repo reconnect || :
+  log "forward up: $repo → $url (pid $$, the machine's forwarder)"
+  exec >>"$LOGP/webhook.forward.log" 2>&1
+  if [ -n "$FWD_CMD" ]; then
+    # shellcheck disable=SC2086  # a selftest seam: a command line
+    exec $FWD_CMD --repo "$repo" --events "$EVENTS" --url "$url"
+  fi
+  command -v gh >/dev/null 2>&1 || { log "gh not found — cannot forward $repo"; exit 1; }
+  if [ -n "$SECRET" ]; then
+    exec gh webhook forward --repo "$repo" --events "$EVENTS" --url "$url" --secret "$SECRET"
+  fi
+  exec gh webhook forward --repo "$repo" --events "$EVENTS" --url "$url"
+}
+
+# Does the machine's one forwarder serve this login? Its state file
+# (<daemon state>/webhook-machine.logins: "<pid> <epoch>", then a login a line,
+# root's, 0644) names a live pid and this login. Pure reads but one `ps`.
+wh_machine_serves() {
+  local f="${FLEET_NODE_STATE:-/var/db/fleet-node}/webhook-machine.logins" pid _t me
+  [ -r "$f" ] || return 1
+  me="${USER:-$(id -un 2>/dev/null)}"; [ -n "$me" ] || return 1
+  read -r pid _t < "$f" 2>/dev/null || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  ps -p "$pid" >/dev/null 2>&1 || return 1
+  tail -n +2 "$f" 2>/dev/null | grep -qx -- "$me"
+}
+
 # =============================== supervise =====================================
 wh_handler_alive() { local p=''; read -r p 2>/dev/null < "$HANDLER_PIDF"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 wh_start_handler() {
@@ -551,6 +611,10 @@ wh_sleep_or_wake() {
 }
 
 wh_supervise() {
+  if wh_machine_serves; then
+    log "the machine's one forwarder serves this login (issue #4358) — this copy exits"
+    return 0
+  fi
   # Singleton is guaranteed in production by launchd KeepAlive / systemd, so a stale
   # handler pidfile from a killed run is the only real hazard — a second bind fails
   # loudly in the handler log. Clear any stale handler pid up front.
@@ -583,7 +647,7 @@ wh_supervise() {
 # sourced context, and the guard runs it only when sourced (BASH_SOURCE != $0).
 if [ "${BASH_SOURCE[0]:-$0}" != "$0" ]; then return 0 2>/dev/null || true; fi
 
-MODE=supervise EVENT=''
+MODE=supervise EVENT='' REPO='' FURL='' FORCE=0
 ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -593,7 +657,11 @@ while [ "$#" -gt 0 ]; do
     --desired)    MODE=desired;   shift; ARGS=("$@"); break ;;
     --reconcile)  MODE=reconcile; shift; ARGS=("$@"); break ;;
     --once)       WEBHOOK_ONCE=1 ;;
-    -h|--help)    sed -n '2,68p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --forward)    MODE=forward; REPO="${2:-}"; shift ;;
+    --catchup)    MODE=catchup; REPO="${2:-}"; shift ;;
+    --url)        FURL="${2:-}"; shift ;;
+    --force)      FORCE=1 ;;
+    -h|--help)    sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)           log "unknown flag: $1"; exit 2 ;;
     *)            log "unexpected argument: $1"; exit 2 ;;
   esac
@@ -605,5 +673,9 @@ case "$MODE" in
   handler)    wh_handler ;;
   desired)    wh_desired_repos ${ARGS[@]+"${ARGS[@]}"} ;;
   reconcile)  wh_reconcile   ${ARGS[@]+"${ARGS[@]}"} ;;
+  forward)    wh_forward_exec "$REPO" "$FURL" ;;
+  catchup)    [ -n "$REPO" ] || { log "--catchup needs a repo"; exit 2; }
+              [ "$FORCE" = 1 ] && rm -f "$FWD/$(fleet_slug "$REPO").catchup" 2>/dev/null
+              wh_catchup "$REPO" ;;
   supervise)  wh_supervise ;;
 esac

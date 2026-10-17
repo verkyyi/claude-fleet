@@ -381,5 +381,43 @@ eq 'uneventful idle returns 0 (no wake)'          "$?" 0
 echo 1000 > "$CLK"; : > "$MARK"; wsw
 eq 'suspend across a chunk returns 1 (early wake)' "$?" 1
 
-printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff · catch-up · every-repo · wake)\n' "$pass"
+# --- THE MACHINE'S ONE FORWARDER: --forward / --catchup (issue #4358) ---------
+# bin/fleet-webhook-machine.py runs these as the login. --forward reaps the repo's
+# orphaned relay hook, writes the pidfiles fleet_wh_live reads (its own pid — the
+# exec keeps it — and the machine program's as the handler), stamps the reconnect
+# mark, then EXECs the forward with the URL it was given; a non-localhost URL is
+# refused. --catchup runs the throttled catch-up; --force skips the throttle.
+MST="$WORK/mstate"; MDL="$WORK/mdel.log"; : > "$MDL"
+cat > "$WORK/mfwd.sh" <<EOF
+#!/bin/sh
+echo "\$*" > "$WORK/mfwd.args"
+exec sleep 600
+EOF
+chmod +x "$WORK/mfwd.sh"
+printf '#!/bin/sh\nprintf "77\\ttrue\\t502\\thttps://webhook-forwarder.github.com/hook\\n"\n' > "$WORK/mhooks.sh"
+printf '#!/bin/sh\necho "$2" >> "%s"\n' "$MDL" > "$WORK/mdel.sh"
+chmod +x "$WORK/mhooks.sh" "$WORK/mdel.sh"
+FLEET_WEBHOOK_STATE_DIR="$MST" FLEET_WH_FORWARD_CMD="$WORK/mfwd.sh" FLEET_WH_MACHINE_PID=4242 \
+  FLEET_WH_HOOKS_LIST_CMD="$WORK/mhooks.sh" FLEET_WH_HOOK_DEL_CMD="$WORK/mdel.sh" \
+  bash "$WH" --forward acme/widgets --url http://127.0.0.1:8999/u/alice 2>/dev/null &
+MF=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -f "$WORK/mfwd.args" ] && break; sleep 0.1; done
+eq '--forward execs the forward with the given url' "$(cat "$WORK/mfwd.args" 2>/dev/null)" \
+  "--repo acme/widgets --events pull_request,check_run,check_suite,status,issues --url http://127.0.0.1:8999/u/alice"
+eq '--forward: its pidfile is the forward itself (exec)' "$(cat "$MST/forwards/acme-widgets.pid")" "$MF"
+eq '--forward: the handler is the machine program'       "$(cat "$MST/handler.pid")" 4242
+eq '--forward reaped the orphaned relay hook first'      "$(cat "$MDL")" 77
+[ -f "$MST/events/acme-widgets/repo" ] || fail '--forward left no reconnect mark'; ok
+kill "$MF" 2>/dev/null; wait "$MF" 2>/dev/null
+FLEET_WEBHOOK_STATE_DIR="$MST" FLEET_WH_FORWARD_CMD="$WORK/mfwd.sh" FLEET_WH_HOOKS_LIST_CMD="$NOHOOKS" \
+  bash "$WH" --forward acme/widgets --url http://example.com/x >/dev/null 2>&1
+eq '--forward refuses a non-localhost url' "$?" 2
+: > "$REC"
+mcu() { FLEET_WEBHOOK_STATE_DIR="$MST" FLEET_PR_REFRESH_CMD="$WORK/recorder.sh" FLEET_ISSUES_REFRESH_CMD="$WORK/recorder.sh" \
+          bash "$WH" --catchup acme/widgets "$@" >/dev/null 2>&1; }
+mcu; mcu; eq '--catchup is throttled (two calls, one catch-up)' "$(grep -c . "$REC")" 2
+mcu --force; eq '--catchup --force skips the throttle (a wake)' "$(grep -c . "$REC")" 4
+grep -q 'exec python3 - <<' "$WH" || fail 'the handler no longer execs python (a TERM would orphan it on the port)'; ok
+
+printf 'selftest PASS: %d assertions (routing · no-write · HMAC · selection · reconcile · reap · backoff · catch-up · every-repo · wake · machine modes)\n' "$pass"
 exit 0
