@@ -2544,8 +2544,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # A NEW login (bin/fleet-login-new.sh) is opened with 1 — separated by root at the
 # open, before its first session; the team pool goes into its store (#2294).
 #FLEET_CRED_SEPARATE=1             # bin/fleet-credsep.sh install (docs/dev/CRED-SEPARATE.md)
-# A declared self-hosted one-person box (issue #4607): only with this may
-# FLEET_CRED_SEPARATE=0 leave the credentials in the login's own files (and
+# A declared self-hosted one-person box (issue #4607): only with this may a 0 in
+# FLEET_CRED_SEPARATE leave the credentials in the login's own files (and
 # `fleet-login-new.sh --no-credsep` open the old layout). The hub must say the same
 # (CCQUOTA_FLEET_CREDSEP_OPTIONAL=1) or it leases such a login nothing.
 # @label=Credential separation optional @group=disk @tier=internal @scope=global @edit=bool
