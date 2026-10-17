@@ -9,10 +9,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: command -v tmux >/dev/null 2>&1 || brew install tmux; tmux -V; python3 -V
       - run: |
-          fails=0
-          for i in $(seq 1 15); do
-            echo "=== run $i"
-            python3 bin/spinner-wait-selftest.py --quick > out.txt 2>&1 || { fails=$((fails+1)); cat out.txt; }
-            grep -E '^PASS (state|attach)' out.txt || true
+          for i in 1 2 3 4; do
+            echo "=== part run $i"
+            bin/run-selftests.sh fleet-break-it-selftest.sh > out.txt 2>&1 || true
+            grep -nE 'spinner-unwatched|^FAIL' out.txt | cut -c1-200
+            grep -q '^FAIL  spinner-unwatched' out.txt && sed -n '/^FAIL  spinner-unwatched/,/^PASS  [a-z]/p' out.txt | head -150
           done
-          echo "fails=$fails/15"
