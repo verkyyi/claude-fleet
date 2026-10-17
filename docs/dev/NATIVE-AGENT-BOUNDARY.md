@@ -118,6 +118,42 @@ bash bin/fleet-native-worktree-selftest.sh
 不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
 迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
 
+### 交互终端的原生目录生命周期
+
+显式探针 `bin/fleet-native-claude-tui-selftest.py` 在自有 PTY 中运行真实 CLI，不使用
+print-mode，也不启动 Fleet 面板。HOME、Git 仓库及信任均限于临时夹具；通过原生 onboarding
+和信任界面确认该夹具，不预写用户的信任配置，不使用 bypass 参数。机器级配置存在时拒绝运行。
+模型端点只绑定 loopback，所有请求用假 key 并返回 400，工具及 MCP 为空；不代表真实模型、
+完整 MCP、生产账号或 Fleet 准入验收。非 bare 模式仍不能承诺跳过 macOS keychain reads。
+
+```sh
+python3 bin/fleet-native-claude-tui-selftest.py --claude /path/to/claude
+```
+
+Claude `2.1.296` 的实际交互行为区分目录名和会话显示名：
+
+- `--worktree <name>` 只给目录命名；没有显示名且没有修改的会话正常退出后，原生会删除目录及分支。
+  另加 `--name <title>` 的干净会话则提供保留选择。不能把窗口存在或 Worktree 有名字等同于持久保留。
+- 含修改、未跟踪文件和未推送提交的夹具退出时显示 Keep/Remove；Keep 保留数据及原生所有权证据。
+  只有明确选择 Remove 才删除该目录及分支，目录内指向外部的符号链接目标不被删除。
+- Keep 后从保存目录执行 `--resume <ID>` 能恢复相同 ID 和 Git 绑定，但正常退出不再出现
+  Worktree 清理选择；`--worktree <name> --resume <ID>` 从原仓库重新进入同一原生目录，
+  不另建一层 Worktree，并恢复原生 Keep/Remove 选择。两种路径不能混称为相同生命周期。
+- 中断测试在原生 transcript 的 user/assistant 记录已经可读后，才终止自有 CLI 进程；
+  从已保存目录按精确 ID 恢复，检查未提交数据及 Git 绑定不变。这不证明首帧出现后立即崩溃、
+  未落盘消息、宿主机断电或 POD 重建的恢复；首次未等 transcript 可读就中断时实际出现了
+  `No conversation found`，不能隐藏该持久化边界。
+
+探针等待真实 SessionStart 证据，不将输入框先绘制视为 hook 已完成。测试键盘节奏包含
+onboarding 界面的稳定等待，不能用于启动性能统计。两个界面提示词可能触发多个原生 API
+请求；证据逐个记录假 key 与请求路径，不把“两个提示词”误报为“只有两个 HTTP 请求”。
+固定版本 Linux CI 使用同一探针并保存 JSON；以对应提交的终态结果为准。
+
+这批只补齐原生行为证据，未切换创建或恢复入口。下一步适配必须明确选择原生生命周期，
+由原生处理其 Keep/Remove；不能由 Fleet 截断退出提示后自行删目录，不能为恢复删除 held-seed
+或准入限制，也不能把目录正常删除后回落主检出视为成功恢复。原有 session/window 记录继续复用，
+不为上述差异新增目录生命周期服务。
+
 ### SessionStart 的目录时序与恢复边界
 
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'bin/fleet-native-claude-worktree-selftest.py'
+      - 'bin/fleet-native-claude-tui-selftest.py'
       - 'bin/fleet_launch.py'
       - 'bin/fleet-lib.sh'
       - 'bin/fleet-worktree-drop.sh'
@@ -49,6 +50,13 @@ jobs:
             --claude "$RUNNER_TEMP/native-claude/package/claude" --with-hooks \
             > "$RUNNER_TEMP/claude-worktree-hooks.json"
           cat "$RUNNER_TEMP/claude-worktree-bare.json" "$RUNNER_TEMP/claude-worktree-hooks.json"
+      - name: Exercise interactive native keep, remove and crash recovery
+        shell: bash
+        run: |
+          python3 bin/fleet-native-claude-tui-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" \
+            > "$RUNNER_TEMP/claude-worktree-tui.json"
+          cat "$RUNNER_TEMP/claude-worktree-tui.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
