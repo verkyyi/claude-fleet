@@ -154,17 +154,15 @@ var gateHubJudge = map[string]func(s *Server, nodes []NodeView, detail bool) (bo
 				long = append(long, c.name+" "+durWords(c.ttl))
 			}
 		}
-		// every login that leases, managed or not (claude-fleet#4607); a
-		// machine link, a person's pod (central, nothing leased) and a SPOT
-		// node are not logins of a person's machine
+		// every login the lease would hand pool credentials to, managed or
+		// not (claude-fleet#4607, #4622): leaseServes — not a client, a pod,
+		// a system account or a deleted user
 		var open []string
 		for _, n := range nodes {
-			if n.MachineLink || n.UserPod || n.Kind == store.NodeKindEphemeral || n.Status == "lost" {
+			if !s.leaseServes(n) || n.Credsep == control.CredsepSeparated {
 				continue
 			}
-			if n.Credsep != control.CredsepSeparated {
-				open = append(open, n.Hostname+"/"+n.OSUser)
-			}
+			open = append(open, n.Hostname+"/"+n.OSUser)
 		}
 		var why []string
 		if len(long) > 0 {
