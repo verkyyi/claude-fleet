@@ -2723,8 +2723,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Worktree setup timeout @group=spawn @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_WORKTREE_SETUP_TIMEOUT=120
 
-# Share the dependency trees this login already installed (issue #3403). Every new
-# worktree runs bin/fleet-deps-share.sh after the setup hook above: a lockfile dir
+# Optionally share dependency trees this login already installed (issue #3403).
+# Off by default: native agents/project commands use the package manager normally.
+# With FLEET_DEPS_SHARE=1, new worktrees run bin/fleet-deps-share.sh after the setup
+# hook above: a lockfile dir
 # whose lockfile is byte-identical to the base checkout's — or another worktree's —
 # and whose node_modules was installed from it gets that node_modules as a
 # copy-on-write clone (APFS clonefile; `cp --reflink=always` on Linux), an
@@ -2734,9 +2736,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # done and the install runs as usual; nothing is ever installed by it. pnpm / uv /
 # Go keep their per-login stores and are only recorded. Each worktree's answer is in
 # <git-dir>/fleet-deps-share (`fleet-deps-share.sh --status <wt>`) and one line of
-# logs/deps-share.log. Same login only, never across logins. 0 = off.
+# logs/deps-share.log. Same login only, never across logins. Only 1 enables it.
+# An explicit existing 1 remains enabled; unset/empty/0 runs no share scan or clone.
+# Direct fleet-deps-share.sh invocation and explicit FLEET_WORKTREE_SETUP remain available.
 # @label=Share dependency trees @group=spawn @tier=internal @scope=fleet @edit=bool
-#FLEET_DEPS_SHARE=1
+#FLEET_DEPS_SHARE=0
 
 # Keep the BASE checkout's dependencies current with master (issue #961). The link
 # above only proves the LOCKFILES match — and base-sync fast-forwards the base every

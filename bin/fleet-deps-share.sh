@@ -11,9 +11,9 @@
 # monorepo's core/admin-frontend: `npm ci` in a second worktree wrote 41,778 files
 # and 298 MB; an APFS clone of the first one's tree took 0.33 s and 12 MB.
 #
-# fleet_worktree_setup (fleet-lib.sh) runs this on EVERY new worktree, after the
-# optional FLEET_WORKTREE_SETUP hook, under a timebox; FLEET_DEPS_SHARE=0 turns it
-# off. It never installs anything: a repo that installs nothing at worktree time
+# With FLEET_DEPS_SHARE=1, fleet_worktree_setup (fleet-lib.sh) runs this on new
+# worktrees after the optional FLEET_WORKTREE_SETUP hook, under a timebox.
+# Direct invocation remains explicit opt-in. It never installs anything: a repo that installs nothing at worktree time
 # still installs nothing — what an install would reproduce is cloned in, the rest
 # is left to install as usual. Same login only: every source is this login's base
 # checkout or one of its worktrees, every cache this login's own.
