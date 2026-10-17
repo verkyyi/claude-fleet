@@ -4295,7 +4295,9 @@ drill_spare_wash_resume() {
     || { WHY="no bin/fleet-login-reset.sh: remove --recycle has nothing to wash a login with"; return 1; }
   grep -q -- '--recycle)' "$ROOT/bin/fleet-login-remove.sh" \
     || { WHY="fleet-login-remove.sh has no --recycle: the hub's reset op fails at its first word"; return 1; }
-  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+  # The full reset matrix remains covered by parts 1+2; this drill owns
+  # the A–F wash/resume/refusal path.
+  out=$(SELFTEST_PART=1 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   WHAT="每类种一样 → 洗完 reset: clean + credsep: separated；留一个进程 → dirty processes；重新加入失败 → dirty rejoin；半路杀掉同 op 再跑续完、只一份存档（沙盒真跑检查器）"
   SECS=$(since "$t0")
@@ -4314,7 +4316,9 @@ drill_recycle_rejoins() {
     || { WHY="fleet-login-reset.sh no longer keeps the root-held node token: every recycle re-joins"; return 1; }
   grep -q 'logins/\$LOGIN.env' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh keeps a token without asking whether only the machine daemon ever served it"; return 1; }
-  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+  # The full reset matrix remains covered by parts 1+2; this drill owns
+  # the K/G/H/T/R keep-node/quiesce path.
+  out=$(SELFTEST_PART=2 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   printf '%s\n' "$out" | grep -q '^ok   K not served by the machine daemon' \
     || { WHY="fleet-login-reset-selftest.sh has no keep leg (K)"; return 1; }
@@ -4544,7 +4548,9 @@ drill_spare_wash_respawn() {
     || { WHY="fleet-login-reset.sh no longer quiesces the login before the wash's clock"; return 1; }
   grep -q 'launchctl bootout "user/\$UIDT"' "$ROOT/bin/fleet-login-reset.sh" \
     || { WHY="fleet-login-reset.sh's quiesce no longer boots out the login's user domain"; return 1; }
-  out=$(bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
+  # The full reset matrix remains covered by parts 1+2; this drill owns
+  # the K/G/H/T/R keep-node/quiesce path.
+  out=$(SELFTEST_PART=2 bash "$ROOT/bin/fleet-login-reset-selftest.sh" 2>&1) \
     || { WHY="fleet-login-reset-selftest.sh is red: $(printf '%s\n' "$out" | grep -m1 'FAIL')"; return 1; }
   WHAT='停完之后、洗号之前 launchd 又给该 uid 拉起 distnoted → 洗号记时钟前再 bootout + 杀一轮、旧家挪走后再一轮：reset: clean（沙盒真跑检查器，旧脚本此处报 dirty processes）'
   SECS=$(since "$t0")
