@@ -79,12 +79,12 @@ D="$WORK/inst"; mkdir -p "$D/bin"; export FLEET_NODE_STATE="$WORK/no-node"   # n
 cp "$BIN/fleet" "$D/bin/fleet"
 printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$*" "${FLEET_RETIRE_OLD:-}" >> "%s/retire.calls"\n' "$WORK" > "$D/bin/fleet-client-retire.sh"
 printf 'import sys\n' > "$D/bin/fleet-thin.py"
-calls() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/retire.calls" ] && break; sleep 0.2; done; cat "$WORK/retire.calls" 2>/dev/null; }
+calls() { local _; for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$WORK/retire.calls" ] && break; sleep 0.2; done; cat "$WORK/retire.calls" 2>/dev/null; }
 rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1
 eq "D: the client start retires the old client, unattended only" "stop --quiet --if-unattached|" "$(calls)"
 rm -f "$WORK/retire.calls"; FLEET_RETIRE_OLD=0 FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1; sleep 1
 eq "D: FLEET_RETIRE_OLD=0 → not asked" "" "$(cat "$WORK/retire.calls" 2>/dev/null)"
-rm -rf "$C/bin"; rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1; sleep 1
+rm -rf "${C:?}/bin"; rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1; sleep 1
 eq "D: no old client's cache → not asked (byte for byte as before)" "" "$(cat "$WORK/retire.calls" 2>/dev/null)"
 
 printf 'fleet-client-retire-selftest OK (%d checks)\n' "$CHECKS"
