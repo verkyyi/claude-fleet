@@ -622,6 +622,13 @@ func runHub(args []string) error {
 			"The URL becomes https://<node>.<tailnet>.ts.net")
 	tlsHost := fs.String("tls-host", "", "the name to get a certificate for (default: detected from tailscale status)")
 	insecurePublic := fs.Bool("insecure-public", false, "acknowledge binding to a public address without TLS in front")
+	tlsCert := fs.String("tls-cert", "",
+		"serve every --addr listener over HTTPS with this PEM certificate\n"+
+			"(chain first) instead of plain HTTP; needs --tls-key. For a\n"+
+			"certificate you issue yourself -- a private CA in a test\n"+
+			"namespace, say (claude-fleet#4630). Read once at start: restart to\n"+
+			"rotate it. --https-addr (tailscale) is separate and unaffected")
+	tlsKey := fs.String("tls-key", "", "the PEM private key for --tls-cert")
 	pricingFile := fs.String("pricing", "", "path to a pricing override file")
 	pollInterval := fs.Int("limits-poll-interval", 120, "seconds between agents' limit polls")
 	retentionDays := fs.Int("retention-days", 90, "days of raw events to keep (0 disables pruning)")
@@ -724,6 +731,12 @@ func runHub(args []string) error {
 	addrs := splitList(*addr)
 	if len(addrs) == 0 {
 		return errors.New("--addr is empty")
+	}
+	// Before any database is opened: a missing or mismatched pair is a
+	// typo, and should not cost a migration first.
+	staticTLS, err := loadStaticTLS(*tlsCert, *tlsKey)
+	if err != nil {
+		return err
 	}
 	for _, a := range addrs {
 		if err := checkExposure(a, *token, *noAuth, *insecurePublic); err != nil {
@@ -1085,13 +1098,22 @@ func runHub(args []string) error {
 		hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		servers = append(servers, hs)
 
-		log.Printf("ccquota hub listening on %s (db %s)", a, dbFile)
+		scheme := "http"
+		if staticTLS != nil {
+			scheme = "https"
+			hs.TLSConfig = staticTLS
+		}
+		log.Printf("ccquota hub listening on %s (%s, db %s)", a, scheme, dbFile)
 		if *token != "" {
 			// The token itself is deliberately NOT logged: hub.log is readable
 			// by anyone on the machine and gets pasted into bug reports.
-			log.Printf("  dashboard: http://%s/?token=<viewer token>", a)
+			log.Printf("  dashboard: %s://%s/?token=<viewer token>", scheme, a)
 		}
-		go func() { errCh <- hs.Serve(ln) }()
+		if staticTLS != nil {
+			go func() { errCh <- hs.ServeTLS(ln, "", "") }()
+		} else {
+			go func() { errCh <- hs.Serve(ln) }()
+		}
 	}
 
 	if *httpsAddr != "" {
@@ -1365,6 +1387,23 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// loadStaticTLS reads --tls-cert/--tls-key (claude-fleet#4630): neither ⇒ nil
+// (plain HTTP, as before); one without the other, or a pair that does not
+// load, is an error before anything binds.
+func loadStaticTLS(certFile, keyFile string) (*tls.Config, error) {
+	if certFile == "" && keyFile == "" {
+		return nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, errors.New("--tls-cert and --tls-key go together: pass both or neither")
+	}
+	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("--tls-cert/--tls-key: %w", err)
+	}
+	return &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}, nil
 }
 
 // checkExposure refuses the combination that quietly puts an unauthenticated

@@ -19,10 +19,11 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 
 from nogh_live_contract import Refused, canonical, fingerprint, read_private, require, validate, write_private
 from nogh_live_evidence import Capture, launches
-from nogh_live_observer import MARKER_FD, PHASES, STRACE_OPTIONS, Trace
+from nogh_live_observer import MARKER_FD, PHASES, STRACE_OPTIONS, Trace, phase_timeout
 
 STATE = Path('/run/fleet-c9')
 WORKLOAD = Path('/opt/fleet-c9/workload')
@@ -138,6 +139,22 @@ def private_process():
     return libc
 
 
+def workload_environment(plan, proxy_url):
+    """Proxy and CA settings every service and action inherits from the broker.
+
+    NO_PROXY carries the hub origin's host as well as the endpoints' Pod IPs: a
+    client that dials the hub by NAME (the node agent, the fleet tools) would
+    otherwise reach the proxy, be refused and count as unknown (#4630).
+    """
+    hub = urllib.parse.urlsplit(plan['hub']['origin']).hostname
+    direct = [e['pod_ip'] for e in plan['endpoints']] + [hub]
+    env = dict(HTTP_PROXY=proxy_url, HTTPS_PROXY=proxy_url, http_proxy=proxy_url, https_proxy=proxy_url,
+               NO_PROXY=','.join(direct), no_proxy=','.join(direct))
+    for name in ('SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'GIT_SSL_CAINFO'):
+        env[name] = '/run/c9-credentials/ca.pem'
+    return env
+
+
 def workload_identity(ep):
     """Normal test login, never root or an identity capable of reaching root."""
     account = pwd.getpwnam(ep['login'])
@@ -205,10 +222,7 @@ def broker(role):
     for key in list(os.environ):
         if key.lower() in ('http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'):
             os.environ.pop(key)
-    os.environ.update(HTTP_PROXY=proxy_url, HTTPS_PROXY=proxy_url, http_proxy=proxy_url,
-                      https_proxy=proxy_url, NO_PROXY=','.join(e['pod_ip'] for e in plan['endpoints']))
-    for name in ('SSL_CERT_FILE', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS', 'GIT_SSL_CAINFO'):
-        os.environ[name] = '/run/c9-credentials/ca.pem'
+    os.environ.update(workload_environment(plan, proxy_url))
     identity = workload_identity(ep) if role in ('hub', 'node-a', 'node-b') else None
     started, phase = False, 'startup'
     children = []
@@ -269,7 +283,7 @@ def broker(role):
                                  **(dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                     if control else output[phase]), **({} if control else identity))
             try:
-                code = p.wait(timeout=5 if phase.startswith('allow:') else 2 if phase.startswith('deny:') else 30)
+                code = p.wait(timeout=phase_timeout(phase))
             except subprocess.TimeoutExpired:
                 p.kill(); p.wait(); code = 124
             emit(dict(type='result', phase=phase, exit=code))

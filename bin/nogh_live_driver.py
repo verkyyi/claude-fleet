@@ -8,6 +8,7 @@ attaches only to the fixed trusted entrypoints, then requires terminal Pods.
 """
 import argparse
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,9 +20,19 @@ import time
 
 from nogh_live_contract import (COUNTERS, Refused, ROLES, canonical, fingerprint, read_private,
                                 require, validate, write_private, bind_observed)
-from nogh_live_observer import PHASES
+from nogh_live_observer import PHASES, phase_timeout
 from nogh_live_evidence import check as check_evidence, row_coverage
 from nogh_live_render import admission, check_pod, render
+
+
+# A control reply (guard, ready, marked, evidence) comes at once; a phase
+# result waits for the broker's own bound on that phase (#4630: a fixed 5 s
+# could not carry a real row or the hub's identity readiness).
+REPLY_SECONDS = 5
+
+
+def reply_seconds(expected, phase):
+    return phase_timeout(phase) + REPLY_SECONDS if expected == 'result' else REPLY_SECONDS
 
 
 def schedule(row):
@@ -72,7 +83,8 @@ class Channel:
 
     def receive(self, expected, phase=None):
         while b'\n' not in self.buffer:
-            ready, _, _ = select.select([self.process.stdout], [], [], self.cluster.remaining(5))
+            ready, _, _ = select.select([self.process.stdout], [], [],
+                                        self.cluster.remaining(reply_seconds(expected, phase)))
             require(ready, 'OBSERVER_CHANNEL_TIMEOUT')
             block = os.read(self.process.stdout.fileno(), 65536)
             require(block, 'OBSERVER_CHANNEL_EOF')
@@ -386,18 +398,40 @@ def run(args):
         print(json.dumps({k: result[k] for k in ('config', 'installed', 'live', 'cleanup')}))
 
 
+def digests(workload=None, hub_key=None):
+    """The recipe's hand-computed fields (#4630), from the same code the guard
+    checks: observer_digest is runtime.build_digest over this checkout's files.
+    created.json is not computed: it is `kubectl create -f <render output>
+    -o json`'s own response, kept unedited."""
+    from nogh_live_runtime import build_digest
+    file_digest = lambda path: 'sha256:' + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    result = dict(observer_digest=build_digest())
+    if workload:
+        result['command_digest'] = file_digest(workload)
+    if hub_key:
+        require(Path(hub_key).read_bytes().startswith(b'ed25519 '), 'HUB_KEY_FORMAT')
+        result['key_digest'] = file_digest(hub_key)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     template = sub.add_parser('render')
     template.add_argument('--recipe', required=True)
     template.add_argument('--output', required=True)
+    sums = sub.add_parser('digests', help='print the recipe digests from local files; reads no cluster')
+    sums.add_argument('--workload', help='the workload binary baked at /opt/fleet-c9/workload (command_digest)')
+    sums.add_argument('--hub-key', help="the hub's /v1/fleet/account-key response body, saved as is (key_digest)")
     live = sub.add_parser('run')
     for field in ('recipe', 'routes', 'created', 'evidence', 'kubeconfig'):
         live.add_argument('--' + field, required=True)
     parser.add_argument('--test-only', action='store_true', required=True)
     args = parser.parse_args()
     require(args.test_only, 'EXPLICIT_TEST_ONLY_REQUIRED')
+    if args.action == 'digests':
+        print(json.dumps(digests(args.workload, args.hub_key), indent=1, sort_keys=True))
+        return 0
     if args.action == 'render':
         write_private(args.output, dict(apiVersion='v1', kind='List', items=render(read_private(args.recipe), True)))
         return 0

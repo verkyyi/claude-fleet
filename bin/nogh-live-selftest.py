@@ -533,6 +533,101 @@ class Templates(unittest.TestCase):
             self.assertEqual(read.call_count, 1)
 
 
+class LiveRowEntry(unittest.TestCase):
+    """#4630: the entry must be able to carry a real row, not only fixtures."""
+
+    def test_phase_result_waits_for_the_phase_bound_not_five_seconds(self):
+        from types import SimpleNamespace
+        self.assertEqual(driver.reply_seconds('result', 'row:A1'), observer.phase_timeout('row:A1') + 5)
+        self.assertGreaterEqual(driver.reply_seconds('result', 'row:A7'), 30)
+        self.assertGreaterEqual(driver.reply_seconds('result', 'identity'), 30)  # await_ready's 10 s fits
+        self.assertEqual(driver.reply_seconds('result', 'deny:gh-path'), 2 + 5)
+        self.assertEqual(driver.reply_seconds('marked', 'row:A1'), 5)
+        asked = []
+        cluster = SimpleNamespace(remaining=lambda cap: asked.append(cap) or cap)
+        read, write = os.pipe()
+        try:
+            channel = driver.Channel.__new__(driver.Channel)
+            channel.cluster, channel.buffer, channel.total = cluster, bytearray(), 0
+            channel.process = SimpleNamespace(stdout=os.fdopen(read, 'rb', buffering=0))
+            os.write(write, live.canonical(dict(type='result', phase='row:A3', exit=0)) + b'\n')
+            self.assertEqual(channel.receive('result', 'row:A3')['exit'], 0)
+            self.assertEqual(asked, [35])
+        finally:
+            os.close(write); channel.process.stdout.close()
+
+    def test_hub_name_bypasses_the_proxy_and_workloads_get_the_test_ca(self):
+        import nogh_live_runtime as runtime
+        p = plan()
+        env = runtime.workload_environment(p, 'http://192.0.2.99:3128')
+        direct = env['NO_PROXY'].split(',')
+        self.assertIn('hub.test', direct)
+        self.assertTrue({e['pod_ip'] for e in p['endpoints']} <= set(direct))
+        self.assertEqual(env['no_proxy'], env['NO_PROXY'])
+        self.assertEqual(env['HTTPS_PROXY'], 'http://192.0.2.99:3128')
+        self.assertEqual(env['SSL_CERT_FILE'], '/run/c9-credentials/ca.pem')
+
+    def test_proxy_upstream_verifies_against_the_system_store_not_ssl_cert_file(self):
+        import ssl
+        calls = []
+
+        def honours_env(*_):
+            raise AssertionError('honours SSL_CERT_FILE')
+
+        with tempfile.TemporaryDirectory(prefix='c9-ca-') as temp:
+            system = Path(temp) / 'system.pem'; system.write_text('')
+            store = Path(temp) / 'certs'; store.mkdir()
+            paths = ssl.DefaultVerifyPaths(None, None, 'SSL_CERT_FILE', str(system), 'SSL_CERT_DIR', str(store))
+            with patch.object(ssl.SSLContext, 'load_verify_locations',
+                              lambda self, cafile=None, capath=None, cadata=None: calls.append((cafile, capath))), \
+                    patch.object(ssl.SSLContext, 'load_default_certs', honours_env), \
+                    patch.object(ssl.SSLContext, 'set_default_verify_paths', honours_env), \
+                    patch.object(adapter.ssl, 'get_default_verify_paths', return_value=paths), \
+                    patch.dict(os.environ, SSL_CERT_FILE=str(Path(temp) / 'test-ca.pem')):
+                context = adapter.system_context()
+                self.assertEqual(calls, [(str(system), str(store))])
+                self.assertTrue(context.check_hostname)
+                self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+                gone = ssl.DefaultVerifyPaths(None, None, '', str(Path(temp) / 'no.pem'), '', str(Path(temp) / 'no'))
+                with patch.object(adapter.ssl, 'get_default_verify_paths', return_value=gone):
+                    with self.assertRaises(live.Refused): adapter.system_context()
+        self.assertIn('context=system_context()', (ROOT / 'bin/nogh_live_http.py').read_text())
+
+    def test_overlay_has_workload_logins_and_a_seeded_toolchain(self):
+        import re
+        text = (ROOT / 'extras/managed-node/c9/Dockerfile').read_text()
+        logins = dict(re.findall(r'^ARG (C9_(?:HUB|NODE_A|NODE_B)_LOGIN)=(\S+)$', text, re.M))
+        self.assertEqual(len(logins), 3)
+        self.assertTrue(all(live.NAME.fullmatch(v) for v in logins.values()))
+        self.assertIn('id=10001;', text)
+        self.assertIn('useradd --uid "$id" --gid "$id"', text)
+        self.assertIn('groupadd --gid "$id"', text)
+        self.assertIn('seed=/opt/claude-fleet/seed/current', text)
+        for tool in ('tmux', 'claude'):
+            self.assertIn('for t in tmux claude;', text)
+        self.assertIn('ln -sfn "$seed/bin/ccquota" /usr/local/bin/ccquota', text)
+        self.assertNotIn('/var/db/fleet-node/runtime/current', text)
+
+    def test_bypass_port_cannot_be_a_dns_or_github_port(self):
+        for port in (53, 80, 443):
+            p = plan(); p['probes']['bypass_port'] = port
+            with self.assertRaises(live.Refused) as refused: live.validate(p)
+            self.assertEqual(str(refused.exception), 'PROBE_PORT')
+        live.validate(plan())
+
+    def test_digests_are_the_values_the_guard_and_identity_check(self):
+        import nogh_live_runtime as runtime
+        with tempfile.TemporaryDirectory(prefix='c9-digest-') as temp:
+            work = Path(temp) / 'workload'; work.write_bytes(b'#!/bin/sh\n')
+            key = Path(temp) / 'key'; key.write_bytes(b'ed25519 AAAA\n')
+            got = driver.digests(str(work), str(key))
+            self.assertEqual(got['observer_digest'], runtime.build_digest())
+            self.assertEqual(got['command_digest'], 'sha256:' + hashlib.sha256(b'#!/bin/sh\n').hexdigest())
+            self.assertEqual(got['key_digest'], 'sha256:' + hashlib.sha256(b'ed25519 AAAA\n').hexdigest())
+            key.write_bytes(b'{"error":"x"}')
+            with self.assertRaises(live.Refused): driver.digests(None, str(key))
+
+
 if __name__ == "__main__":
     signal.alarm(15)
     unittest.main()
