@@ -83,7 +83,8 @@ class PoolAuthorityTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(migration, "start_call", side_effect=start), \
                 patch.object(migration.signal, "signal"), \
-                patch.object(migration.launch, "option", side_effect=lambda *args: json.dumps(receipt)), \
+                patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
+                             json.dumps(receipt) if key == "@authority_receipt" else ""), \
                 patch.object(migration, "prove_stopped", return_value=native):
             if refuse:
                 with self.assertRaisesRegex(migration.ticket.Fail, "another node"):
@@ -254,7 +255,8 @@ class RepoAuthorityTests(unittest.TestCase):
                     patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
                     patch.object(migration.subprocess, "Popen") as child, \
                     patch.object(migration.signal, "signal"), \
-                    patch.object(migration.launch, "option", return_value=json.dumps(receipt)), \
+                    patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
+                                 json.dumps(receipt) if key == "@authority_receipt" else ""), \
                     patch.object(migration.os, "kill", side_effect=ProcessLookupError()), \
                     patch.object(migration, "start_call", side_effect=lambda r, k, a, **kw: writes.append(a)), \
                     contextlib.redirect_stderr(io.StringIO()):

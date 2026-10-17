@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -175,7 +176,7 @@ class Supervisor(Receipts):
         observed = dict(self.receipt, pid=43, birth="resumed-process")
         argv = ["launcher", "--agent", "codex", "resume", self.receipt["native_session"], "automatic nudge"]
         with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
-             mock.patch.object(launch, "option", side_effect=lambda p,k: opts.get(k,"")), \
+             mock.patch.object(launch, "option", side_effect=lambda p,k,*args: opts.get(k,"")), \
              mock.patch.object(launch, "same_process", return_value=False), \
              mock.patch.object(launch, "current_task"), \
              mock.patch.object(launch, "tmux"), \
@@ -209,6 +210,212 @@ class Supervisor(Receipts):
             stamp.assert_not_called()
             with self.assertRaisesRegex(ValueError, "cannot replace"):
                 launch.hook(dict(hook_event_name="SessionStart", session_id="55555555-5555-4555-8555-555555555555"))
+
+
+class Worktrees(Receipts):
+    def setUp(self):
+        super().setUp()
+        temporary = tempfile.TemporaryDirectory(prefix="fleet-bound-worktree-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.main = self.root / "repository"
+        self.worktree = self.main / ".claude/worktrees/opaque"
+        self.other = self.root / "other"
+        self.environment = dict(PATH=os.environ["PATH"], HOME=str(self.root),
+            GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+            GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+        self.git("init", "-q", str(self.main))
+        self.git("-C", str(self.main), "commit", "--allow-empty", "-qm", "fixture")
+        for directory in (self.worktree, self.other):
+            self.git("-C", str(self.main), "worktree", "add", "--detach", "-q", str(directory))
+        self.binding = launch.worktree_identity(str(self.worktree))
+
+    def git(self, *arguments):
+        return subprocess.run(["git", *arguments], env=self.environment, capture_output=True,
+                              text=True, check=True, timeout=10).stdout.strip()
+
+    def test_real_registered_identity_and_subdirectory(self):
+        subdirectory = self.worktree / "source"
+        subdirectory.mkdir()
+        self.assertEqual(launch.worktree_identity(str(subdirectory)), self.binding)
+        self.assertEqual(self.binding["common_dir"], str(self.main / ".git"))
+        self.assertEqual(launch.worktree_identity(str(self.other))["root"], str(self.other))
+        with self.assertRaises(ValueError):
+            launch.worktree_identity(str(self.main))
+
+    def test_identity_ignores_git_environment_redirection(self):
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(self.main / ".git"),
+                "GIT_WORK_TREE": str(self.main), "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "core.worktree", "GIT_CONFIG_VALUE_0": str(self.other)}):
+            self.assertEqual(launch.worktree_identity(str(self.worktree)), self.binding)
+
+    def test_backlink_and_symlink_marker_are_not_identity(self):
+        backlink = Path(self.binding["git_dir"]) / "gitdir"
+        original = backlink.read_text()
+        backlink.write_text(str(self.other / ".git") + "\n")
+        with self.assertRaises(ValueError):
+            launch.worktree_identity(str(self.worktree))
+        backlink.write_text(original)
+        marker = self.worktree / ".git"
+        marker.unlink()
+        marker.symlink_to(self.other / ".git")
+        with self.assertRaises(ValueError):
+            launch.worktree_identity(str(self.worktree))
+
+    def test_saved_binding_rejects_missing_changed_and_nonroot_window(self):
+        previous = dict(self.receipt, worktree=self.binding)
+        for path in ("", str(self.other), str(self.main)):
+            with self.subTest(path=path), mock.patch.object(launch, "option", return_value=path):
+                with self.assertRaises(ValueError):
+                    launch.prepare_worktree("%1", previous)
+        with mock.patch.object(launch, "option", return_value=str(self.worktree)):
+            self.assertEqual(launch.prepare_worktree("%1", previous), self.binding)
+            changed = dict(previous, worktree=dict(self.binding, common_dir=str(self.other)))
+            with self.assertRaises(ValueError):
+                launch.prepare_worktree("%1", changed)
+        subdirectory = self.worktree / "source"
+        subdirectory.mkdir()
+        with mock.patch.object(launch, "option", return_value=str(subdirectory)):
+            with self.assertRaises(ValueError):
+                launch.prepare_worktree("%1")
+
+    def test_malformed_binding_and_missing_git_fail_closed(self):
+        for binding in (None, {}, dict(self.binding, root="relative"), dict(self.binding, owner="guess")):
+            with self.subTest(binding=binding), self.assertRaises(ValueError):
+                launch.check_receipt(self.context, dict(self.receipt, worktree=binding))
+        for failure in (FileNotFoundError(), subprocess.TimeoutExpired("git", 2)):
+            with mock.patch.object(launch.subprocess, "run", side_effect=failure):
+                with self.assertRaises(type(failure)):
+                    launch.worktree_identity(str(self.worktree))
+
+    def test_native_hook_binds_only_expected_registered_worktree(self):
+        opts = {"@launch": json.dumps(self.context), "@worktree": str(self.worktree)}
+        native = {key: self.receipt[key] for key in ("pid", "birth", "executable", "actual_provider")}
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_LAUNCH_CONTEXT": json.dumps(self.context),
+                "FLEET_LAUNCH_SUPERVISOR": "12", "FLEET_LAUNCH_WORKTREE": json.dumps(self.binding)}), \
+                mock.patch.object(launch, "option", side_effect=lambda pane,key,*args: opts.get(key,"")), \
+                mock.patch.object(launch, "native_parent", return_value=native), \
+                mock.patch.object(launch, "root_native", return_value=True), \
+                mock.patch.object(launch, "stamp") as stamped:
+            payload = dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"])
+            for cwd in (str(self.main), str(self.other), None):
+                with self.subTest(cwd=cwd), self.assertRaises(ValueError):
+                    launch.hook(dict(payload, cwd=cwd))
+            stamped.assert_not_called()
+            launch.hook(dict(payload, cwd=str(self.worktree)))
+            self.assertEqual(stamped.call_args.args[2]["worktree"], self.binding)
+            stamped.reset_mock()
+            opts["@worktree"] = str(self.other)
+            with self.assertRaises(ValueError):
+                launch.hook(dict(payload, cwd=str(self.worktree)))
+            stamped.assert_not_called()
+
+    def test_resume_passes_saved_root_and_requires_hook_proof(self):
+        previous = dict(self.receipt, worktree=self.binding)
+        observed = dict(previous, pid=43, birth="new")
+        opts = {"@launch_receipt": json.dumps(previous), "@launch_started": "1"}
+        child = mock.Mock(pid=12)
+        child.poll.return_value = None
+        child.wait.return_value = 0
+        for prove in (True, False):
+            receipt = dict(observed)
+            if not prove:
+                receipt.pop("worktree")
+            ticks = iter(range(1000))
+            with self.subTest(prove=prove), \
+                    mock.patch.object(launch, "option", side_effect=lambda pane,key,*args: opts.get(key,"")), \
+                    mock.patch.object(launch, "same_process", return_value=False), \
+                    mock.patch.object(launch, "prepare_worktree", return_value=self.binding), \
+                    mock.patch.object(launch, "current_task"), mock.patch.object(launch, "tmux"), \
+                    mock.patch.object(launch, "process", return_value=dict(observed, pid=12)), \
+                    mock.patch.object(launch, "inspect", return_value=receipt), \
+                    mock.patch.object(launch, "descendant", return_value=True), \
+                    mock.patch.object(launch, "publish") as published, mock.patch.object(launch, "stamp"), \
+                    mock.patch.object(launch, "stop_created"), \
+                    mock.patch.object(launch.subprocess, "Popen", return_value=child) as started, \
+                    mock.patch.object(launch.subprocess, "run") as finalized, \
+                    mock.patch.object(launch.time, "monotonic", side_effect=lambda: next(ticks)), \
+                    mock.patch.object(launch.time, "sleep"):
+                command = ["launcher", "--agent", "codex", "resume", previous["native_session"]]
+                with contextlib.ExitStack() as guard:
+                    if prove:
+                        self.assertEqual(launch.supervise_guarded(command, "%1", self.context, guard), 0)
+                        published.assert_called_once()
+                        finalized.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(ValueError, "no matching"):
+                            launch.supervise_guarded(command, "%1", self.context, guard)
+                        published.assert_not_called()
+                        finalized.assert_not_called()
+                self.assertEqual(started.call_args.kwargs["cwd"], str(self.worktree))
+                self.assertEqual(json.loads(started.call_args.kwargs["env"]["FLEET_LAUNCH_WORKTREE"]), self.binding)
+
+    def test_local_authority_refuses_before_observe_and_keeps_local_binding(self):
+        import fleet_repo_authority as authority
+        context = dict(repo="org/a", worker_id=self.context["worker_id"], reservation="fixture",
+                       supervisor=12, worktree=self.binding)
+        native = {key: self.receipt[key] for key in ("pid", "birth", "executable")}
+        payload = dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"])
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_AUTHORITY_CONTEXT": json.dumps(context)}), \
+                mock.patch.object(launch, "native_parent", return_value=native), \
+                mock.patch.object(launch, "root_native", return_value=True), \
+                mock.patch.object(launch, "option", return_value=str(self.worktree)), \
+                mock.patch.object(authority, "start_call") as observed, \
+                mock.patch.object(launch, "stamp") as stamped:
+            for cwd in (str(self.main), str(self.other)):
+                with self.subTest(cwd=cwd), self.assertRaises(ValueError):
+                    authority.observe_native(dict(payload, cwd=cwd))
+            observed.assert_not_called()
+            stamped.assert_not_called()
+            authority.observe_native(dict(payload, cwd=str(self.worktree)))
+            observed.assert_called_once()
+            self.assertEqual(observed.call_args.args[2], "observe")
+            self.assertEqual(stamped.call_args.args[2]["worktree"], self.binding)
+
+    def test_bad_directory_refuses_before_reservation_or_start(self):
+        import fleet_repo_authority as authority
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
+                mock.patch.object(authority.subprocess, "run",
+                    return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
+                mock.patch.object(launch, "prepare_worktree", side_effect=ValueError("changed")), \
+                mock.patch.object(authority, "start_call") as admission, \
+                mock.patch.object(authority.subprocess, "Popen") as started:
+            with self.assertRaisesRegex(ValueError, "changed"):
+                authority.supervise(["launcher"])
+            admission.assert_not_called()
+            started.assert_not_called()
+
+    def test_inspection_rechecks_window_and_git_binding(self):
+        receipt = dict(self.receipt, worktree=self.binding)
+        opts = {"@launch": json.dumps(self.context), "@launch_receipt": json.dumps(receipt),
+                "@fleet_id": self.context["worker_id"].split("/")[1], "pane_pid": "11",
+                "@worktree": str(self.worktree), "window_id": "@1"}
+        with mock.patch.object(launch, "option", side_effect=lambda pane,key,*args: opts.get(key,"")), \
+                mock.patch.object(launch, "same_process", return_value=True), \
+                mock.patch.object(launch, "descendant", return_value=True):
+            self.assertEqual(launch.inspect(self.context, "%1")["worktree"], self.binding)
+            opts["@worktree"] = str(self.other)
+            with self.assertRaises(ValueError):
+                launch.inspect(self.context, "%1")
+            opts["@worktree"] = str(self.worktree)
+            (Path(self.binding["git_dir"]) / "gitdir").write_text(str(self.other / ".git") + "\n")
+            with self.assertRaises(ValueError):
+                launch.inspect(self.context, "%1")
+
+    def test_late_hook_cannot_erase_bound_worktree(self):
+        opts = {"@launch": json.dumps(self.context),
+                "@launch_receipt": json.dumps(dict(self.receipt, worktree=self.binding))}
+        native = {key: self.receipt[key] for key in ("pid", "birth", "executable", "actual_provider")}
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_LAUNCH_CONTEXT": json.dumps(self.context),
+                "FLEET_LAUNCH_SUPERVISOR": "12", "FLEET_LAUNCH_WORKTREE": ""}), \
+                mock.patch.object(launch, "option", side_effect=lambda pane,key,*args: opts.get(key,"")), \
+                mock.patch.object(launch, "native_parent", return_value=native), \
+                mock.patch.object(launch, "root_native", return_value=True), \
+                mock.patch.object(launch, "stamp") as stamped:
+            with self.assertRaisesRegex(ValueError, "worktree identity"):
+                launch.hook(dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"]))
+            stamped.assert_not_called()
 
 
 class Transfer(Receipts):

@@ -22,6 +22,12 @@ def capture_hook(destination, fleet_root, supervisor):
         raise ValueError('hook native process is outside the fixture supervisor')
     record = {key: payload.get(key) for key in ('hook_event_name', 'source', 'session_id', 'cwd')}
     record.update(process=native, hook_cwd=os.getcwd(), project_dir=os.environ.get('CLAUDE_PROJECT_DIR'))
+    try:
+        expected = os.environ.get('FLEET_LAUNCH_WORKTREE')
+        record['worktree'] = (fleet_launch.bind_native_worktree(payload, json.loads(expected)) if expected
+                              else fleet_launch.worktree_identity(payload.get('cwd')))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        record['worktree_refused'] = True
     with destination.open('x') as output:
         json.dump(record, output)
 
@@ -99,8 +105,11 @@ def main():
             def execute(label, *options, directory=None):
                 previous = len(requests)
                 mode = ['--bare']
+                native_environment = dict(environment)
                 hook_path = root / (label + '-hook.json')
                 if arguments.with_hooks:
+                    if hooks:
+                        native_environment['FLEET_LAUNCH_WORKTREE'] = json.dumps(hooks[0]['worktree'])
                     command = shlex.join([sys.executable, str(Path(__file__).resolve()),
                         '--fleet-root', str(arguments.fleet_root.resolve()), '--capture-hook', str(hook_path),
                         '--supervisor', str(os.getpid())])
@@ -110,7 +119,8 @@ def main():
                 result = subprocess.run([binary, *mode, '-p', '--output-format', 'stream-json',
                                          '--verbose', '--tools', '', '--strict-mcp-config',
                                          '--model', 'claude-sonnet-4-6', *options, 'offline fixture'],
-                                        cwd=directory or repo, env=environment, text=True, capture_output=True, timeout=40)
+                                        cwd=directory or repo, env=native_environment,
+                                        text=True, capture_output=True, timeout=40)
                 records = [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
                 initial = [record for record in records if record.get('type') == 'system'
                            and record.get('subtype') == 'init']
@@ -142,6 +152,13 @@ def main():
                     check(observed['process']['actual_provider'] == 'claude'
                           and observed['process']['executable'] == binary,
                           label + ': existing Fleet verifier identifies the real native ancestor')
+                    if observed['cwd_matches_init']:
+                        check(observed.get('worktree', {}).get('root') == str(Path(initial[0]['cwd']).resolve())
+                              and (not hooks or observed['worktree'] == hooks[0]['worktree']),
+                              label + ': real hook validates the registered Worktree binding')
+                    else:
+                        check(observed.get('worktree_refused') and 'worktree' not in observed,
+                              label + ': premature base cwd cannot acquire a Worktree binding')
                     hooks.append(observed)
                 return initial[0]
 
