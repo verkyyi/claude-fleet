@@ -5665,9 +5665,13 @@ def ci_summary(paths):
     stale = max(CI_BOOK_STALE, beat * 1.5 + 30) if isinstance(beat, (int, float)) else CI_BOOK_STALE
     if not isinstance(book, dict) or now() - (book.get("at") or 0) > stale:
         return {"state": "off", "why": "the loop is not running", "at": now()}
-    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last", "beat")
+    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last", "beat", "runtime", "pid")
            if book.get(k) is not None}
     out.setdefault("state", "off")
+    # a loop on an older release than `current` (#4603): a switch did not restart it
+    cur = runtime_sha(paths)
+    if cur and re.match(r"^[0-9a-f]{40}$", str(out.get("runtime") or "")) and out["runtime"] != cur:
+        out["stale"] = cur
     return out
 
 
@@ -5681,7 +5685,9 @@ def ci_line(paths):
     return "ci-runner  %s%s · login %s · runs %d (%d failed) · last %s%s" % (
         s.get("state"), (" — %s" % s["why"]) if s.get("why") else "", s.get("login") or CI_DEFAULT_LOGIN,
         runs.get("total") or 0, runs.get("failed") or 0, iso(last.get("at")),
-        (" rc=%s %ss" % (last.get("rc"), last.get("secs"))) if last.get("at") else "")
+        (" rc=%s %ss" % (last.get("rc"), last.get("secs"))) if last.get("at") else "") + (
+        " · old code: pid %s loaded %s, current is %s — the daemon starts it again on current"
+        % (s.get("pid") or "?", s["runtime"][:12], s["stale"][:12]) if s.get("stale") else "")
 
 
 def ci_login(paths):

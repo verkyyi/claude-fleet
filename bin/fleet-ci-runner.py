@@ -104,6 +104,9 @@ import urllib.error
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# the release this process loaded (the runtime link resolved at import, #4603):
+# its book says it, and status WARNs once `current` has moved past it
+LOADED = os.path.basename(os.path.realpath(os.path.join(HERE, "..")))
 _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.join(HERE, "fleet-node-supervisor.py"))
 sup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sup)
@@ -561,7 +564,8 @@ class Loop(object):
         self.book_path = sup.ci_book_path(paths)
         old = sup.read_json(self.book_path, {}) or {}
         self.book = {"state": "off", "why": "starting", "since": now(), "at": now(),
-                     "runs": old.get("runs") or {"total": 0, "failed": 0}, "last": old.get("last")}
+                     "runs": old.get("runs") or {"total": 0, "failed": 0}, "last": old.get("last"),
+                     "runtime": LOADED, "pid": os.getpid()}
         self.run = None
         self.ident = None
         self.next_try = 0
@@ -829,7 +833,7 @@ def status(paths, rest):
     line = sup.ci_line(paths)
     if "--check" in rest:
         print(line.split(None, 1)[1] if line else "")
-        return 0 if s.get("state") in ("idle", "busy", "paused") else 1
+        return 0 if s.get("state") in ("idle", "busy", "paused") and not s.get("stale") else 1
     print(line)
     return 0
 

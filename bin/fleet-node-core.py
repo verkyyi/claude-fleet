@@ -1024,6 +1024,11 @@ class Core(object):
             return [shared]
         full = " ".join(ent["cmd"])
         tail = " ".join(ent["cmd"][1:])
+        # macOS's /usr/bin/python3 execs the framework's .../MacOS/Python, so the
+        # live argv[0] is not the table's (#4603): the script and its arguments,
+        # run directly or by a plain interpreter, are the job too
+        script = sup.script_of(ent["cmd"])
+        args = ent["cmd"][ent["cmd"].index(script) + 1:] if script in ent["cmd"] else None
         out = []
         try:
             ps = subprocess.run(["/bin/ps", "-axo", "pid=,uid=,command="], capture_output=True, text=True,
@@ -1038,7 +1043,8 @@ class Core(object):
             pid, cmd = int(parts[0]), parts[2].strip()
             if pid == os.getpid():
                 continue
-            if cmd == full or (tail and cmd.endswith(" " + tail) and os.path.basename(ent["cmd"][0]) in cmd):
+            if cmd == full or (tail and cmd.endswith(" " + tail) and os.path.basename(ent["cmd"][0]) in cmd) \
+                    or (args is not None and sup.script_process_is(script, args, cmd)):
                 out.append(pid)
         return out
 
@@ -1092,15 +1098,21 @@ class Core(object):
         if mine:
             return {"error": "running", "pid": mine.pid}
         left = self.strays(ent)
-        if left and ent["name"] == "cred-proxy-shared":
-            # Its launcher exec'd AND dropped uid. Only the named, validated
-            # proxy whose parent is gone may be replaced at start; an active
-            # daemon's child remains its own. Stop also recognises it above.
+        if left:
+            # An orphan (PPID 1) no book of this core holds is what an earlier core
+            # ran: a core restart — every release switch — forgot it, its stand-in
+            # is gone (this start is the daemon asking again), and it runs the old
+            # code; answering "running" kept it forever (#4603, as #4231 for the
+            # account units). It goes and a fresh copy starts on `current`. A live
+            # root daemon's child (its parent alive) remains its own. The shared
+            # proxy exec'd AND dropped uid: only the named, validated one.
             for pid in left:
-                if sup.pid_parent(pid) != 1 or sup.shared_proxy_pid(ent) != pid:
+                if sup.pid_parent(pid) != 1 or (ent["name"] == "cred-proxy-shared"
+                                                and sup.shared_proxy_pid(ent) != pid):
                     return {"error": "running (left by the root daemon)", "pid": pid}
+            for pid in left:
                 stop_group(pid, group=sup.child_group(pid))
-                self.log(self.tl.uid, "machine", a, "stopped orphan shared proxy pid %d" % pid)
+                self.log(self.tl.uid, "machine", a, "stopped orphan pid %d (an earlier core's copy)" % pid)
             left = self.strays(ent)
         if left:
             return {"error": "running (left by the root daemon)", "pid": left[0]}

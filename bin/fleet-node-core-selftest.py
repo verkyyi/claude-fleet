@@ -746,6 +746,49 @@ class K_Machine(Sandbox):
             self.assertIn("refused", self.req("machine", args), args)
         self.assertFalse(os.path.exists(marker))
 
+    def test_orphan_of_an_earlier_core(self):
+        """#4603: a release switch restarts the core, which forgets the machine jobs
+        it ran — they run on as orphans (PPID 1) on the old code. macOS's
+        /usr/bin/python3 execs the framework's .../MacOS/Python, so the live argv[0]
+        is not the table's: the core saw no stray, answered every start with a new
+        copy that lost the job's own lock (the test runner) or ran beside it (the
+        revocation follower). Now it is found, and a start replaces it."""
+        script = os.path.join(self.bin, "fleet-pyloop.py")
+        with open(script, "w") as f:
+            f.write("import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+                    "while True:\n    time.sleep(0.2)\n")
+        with open(os.path.join(self.d, "table.json"), "w") as f:
+            json.dump({"children": [{"name": "pyloop", "cmd": [sys.executable, "-I", script, "loop"]}],
+                       "tasks": [], "account": []}, f)
+        fw = os.path.join(self.d, "fw")
+        os.makedirs(fw)
+        os.symlink(sys.executable, os.path.join(fw, "Python"))
+        # an earlier core's job: its own session, its parent gone
+        out = subprocess.check_output([sys.executable, "-c",
+                                       "import subprocess, sys; p = subprocess.Popen([sys.argv[1], '-I', sys.argv[2], 'loop'],"
+                                       " start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,"
+                                       " stderr=subprocess.DEVNULL); print(p.pid)", os.path.join(fw, "Python"), script])
+        orphan = int(out.decode().strip())
+        alive = lambda pid: subprocess.call(["kill", "-0", str(pid)], stderr=subprocess.DEVNULL) == 0
+        try:
+            ppid = subprocess.check_output(["ps", "-o", "ppid=", "-p", str(orphan)]).decode().strip()
+            if ppid != "1":
+                self.skipTest("an orphan here is reparented to %s, not 1 (a subreaper)" % ppid)
+            self.serve()
+            r = self.req("machine", {"job": "pyloop", "action": "start"})
+            self.assertTrue(r.get("ok") and r.get("pid") and r["pid"] != orphan, r)
+            self.assertTrue(until(10, lambda: not alive(orphan)), "the earlier core's copy outlived the start")
+            self.assertIn("stopped orphan pid %d" % orphan, self.log())
+            self.assertTrue(alive(r["pid"]), "no fresh copy")
+            # a second start finds the fresh one, which is this core's: no new copy
+            self.assertEqual(self.req("machine", {"job": "pyloop", "action": "start"}).get("error"), "running")
+            r2 = self.req("machine", {"job": "pyloop", "action": "stop"})
+            self.assertTrue(r2.get("ok"), r2)
+            self.assertTrue(until(10, lambda: not alive(r["pid"])))
+        finally:
+            if alive(orphan):
+                os.kill(orphan, signal.SIGKILL)
+
     def test_sweep_entry_report(self):
         self.machine_table()
         self.serve()

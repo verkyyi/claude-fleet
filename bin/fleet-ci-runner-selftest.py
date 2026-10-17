@@ -8,7 +8,8 @@ a sandbox lock), the test login a FLEET_NODE_PASSWD entry.
 
   A  off: no ci.env ⇒ no child, no `ci_runner` in state.json, no status line,
      `status --check` 2; a ci.env ⇒ the child, its word in state.json, the line,
-     the login among the tenants; a stale word reads `off`
+     the login among the tenants; a stale word reads `off`; a loop on an older
+     release than `current` WARNs (#4603)
   B  ci.env: neither credential ⇒ error; a half-named App ⇒ error; FLEET_CI_RUNNERS=0
      ⇒ paused, nothing minted
   C  the App: a JWT openssl signed with the App key verifies against its public
@@ -303,6 +304,18 @@ class T(unittest.TestCase):
             fns.write_json(fns.ci_book_path(p), {"state": "idle", "at": time.time() - 999})
             self.assertEqual(fns.ci_summary(p)["state"], "off")
             self.assertEqual(b.status("--check").returncode, 1)
+            # a loop on an older release than `current` (#4603) ⇒ WARN, naming both
+            cur, old_sha = "a" * 40, "b" * 40
+            os.makedirs(os.path.join(b.d, "root", cur))
+            os.symlink(cur, os.path.join(b.d, "root", "current"))
+            fns.write_json(fns.ci_book_path(p), {"state": "idle", "at": time.time(), "runtime": cur, "pid": 7})
+            self.assertNotIn("stale", fns.ci_summary(p))
+            self.assertEqual(b.status("--check").returncode, 0)
+            fns.write_json(fns.ci_book_path(p), {"state": "idle", "at": time.time(), "runtime": old_sha, "pid": 7})
+            self.assertEqual(fns.ci_summary(p)["stale"], cur)
+            r = b.status("--check")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("old code: pid 7 loaded bbbbbbbbbbbb, current is aaaaaaaaaaaa", r.stdout)
         finally:
             os.environ.clear()
             os.environ.update(old)
