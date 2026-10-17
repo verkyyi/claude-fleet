@@ -4,15 +4,15 @@ jobs:
   diag:
     if: github.head_ref == 'issue-4610'
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
       - run: command -v tmux >/dev/null 2>&1 || brew install tmux; tmux -V; python3 -V
       - run: |
           git fetch -q --depth=1 origin refs/tags/stable-macos:refs/tags/stable-macos || true
-          ( for n in $(seq 1 120); do echo "--- sample $n $(date +%T) $(uptime)"; ps -axo pid,ppid,pcpu,etime,command | sort -k3 -nr | head -8 | cut -c1-200; sleep 10; done ) > samples.txt 2>&1 &
-          bin/run-selftests.sh --changed 8b63bca26e8d624b7e716c77a6f60a4a81394f29 --shard 1/4 > out.txt 2>&1 || true
+          ( for n in $(seq 1 300); do echo "--- sample $n $(date +%T) $(uptime)"; ps -axo pid,ppid,pcpu,etime,command | sort -k3 -nr | head -8 | cut -c1-200; sleep 15; done ) > samples.txt 2>&1 &
+          bin/run-selftests.sh --changed 8b63bca26e8d624b7e716c77a6f60a4a81394f29 --shard 1/4 2>&1 | tee out.txt || true
           grep -nE '^(FAIL|TIMEOUT)' out.txt | cut -c1-200
           sed -n '/^FAIL  spinner-unwatched/,/^PASS  [a-z]/p' out.txt | head -200
           grep -nE '^=== fleet-break-it-selftest|^(PASS|FAIL) +fleet-break-it-selftest' out.txt
