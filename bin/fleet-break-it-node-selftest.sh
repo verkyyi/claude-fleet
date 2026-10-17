@@ -163,6 +163,9 @@
 #   spotlight-on          bin/fleet-spotlight.sh + the machine daemon's `spotlight` task +
 #                         bin/fleet-doctor.sh's `spotlight` row (#3402): Spotlight indexes
 #                         every worktree and a knowledge agent burns a core on a managed Mac
+#   wallpaper-aerial      bin/fleet-wallpaper.sh + the machine daemon's `wallpaper` task +
+#                         bin/fleet-doctor.sh's `wallpaper` row (#4362): a headless managed
+#                         Mac decodes an Aerial desktop nobody sees
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -1808,6 +1811,44 @@ EOF
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="after off the row still reads rc $rc: $out"; return 1; }
   WHAT="卷在索引、知识代理 99% 跑了 7 小时：体检 spotlight 行 WARN 写明两处；守护的 off 一次关掉卷索引、停掉代理，行回到 PASS"
+}
+
+# wallpaper-aerial (#4362): a headless managed Mac running the Aerial desktop for a
+# login (mini2, 2026-10-15: ~10–15% of a core, nobody looking). The doctor's row
+# WARNs; one `off` (the machine daemon's task) sets the static picture as that login
+# once, and the row reads PASS. Switched back by hand, a second pass changes nothing.
+drill_wallpaper_aerial() {
+  CAP=10
+  local sb t0 rc out
+  sb="$WORK/wallpaper"; mkdir -p "$sb/state" "$sb/bin"; : > "$sb/state/machine.env"; : > "$sb/pic.png"
+  printf '501 frank 2-01:00:00 4.3 /x/WallpaperAerialsExtension\n501 frank 2-01:00:00 2.1 /x/VTDecoderXPCService\n' > "$sb/ps"
+  # launchctl asuser <uid> sudo -u <login> -H <cmd> …: the osascript call stops the Aerial rows
+  cat > "$sb/bin/launchctl" <<EOF
+#!/bin/bash
+echo "\$*" >> "$sb/calls"
+case "\$7" in osascript) : > "$sb/ps"; echo 1 ;; esac
+EOF
+  chmod +x "$sb/bin/"*
+  wall() { FLEET_NODE_STATE="$sb/state" FLEET_NODE_TEST=1 FLEET_WALLPAPER_LAUNCHCTL="$sb/bin/launchctl" \
+           FLEET_WALLPAPER_SUDO=sudo FLEET_WALLPAPER_OSASCRIPT=osascript FLEET_WALLPAPER_DEFAULTS=defaults \
+           FLEET_WALLPAPER_PS="cat $sb/ps" FLEET_WALLPAPER_DISPLAYS="echo 0" FLEET_WALLPAPER_IMAGE="$sb/pic.png" \
+           bash "$BIN/fleet-wallpaper.sh" "$@"; }
+  grep -q '"fleet-wallpaper.sh"), "off", "--tick"' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="the machine daemon runs no wallpaper task"; return 1; }
+  grep -q 'warn wallpaper' "$BIN/fleet-doctor.sh" || { WHY="fleet-doctor.sh has no wallpaper row"; return 1; }
+  out=$(wall status --check); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'WallpaperAerialsExtension(frank) 4.3%' \
+    || { WHY="Aerial busy with no display, yet the row is not WARN naming it (rc $rc): $out"; return 1; }
+  t0=$(now)
+  wall off --tick >/dev/null || { WHY="off --tick failed"; return 1; }
+  out=$(wall status --check); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="after off the row still reads rc $rc: $out"; return 1; }
+  [ "$(grep -c osascript "$sb/calls")" = 1 ] || { WHY="the picture was not set exactly once: $(cat "$sb/calls")"; return 1; }
+  printf '501 frank 2-01:00:00 4.3 /x/WallpaperAerialsExtension\n' > "$sb/ps"
+  wall off --tick >/dev/null
+  [ "$(grep -c osascript "$sb/calls")" = 1 ] || { WHY="a login switched back by hand was changed again"; return 1; }
+  WHAT="没接显示器、动态桌面占着 CPU：体检 wallpaper 行 WARN；守护的 off 以该登录换成静态图一次，行回到 PASS，人换回后不再改"
 }
 
 # ---- per-login-machine-loops (#3546, EPIC #3500 C1): every login on one managed

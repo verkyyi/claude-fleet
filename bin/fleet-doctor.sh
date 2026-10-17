@@ -2144,6 +2144,18 @@ if [ -f "$_nspot" ]; then
     1) warn spotlight "$spline" ;;
   esac
 fi
+# A static desktop on a headless managed Mac (issue #4362): the machine daemon's
+# `wallpaper` task changes a login's Aerial desktop once. WARN: WallpaperAerialsExtension /
+# VTDecoderXPCService busy for 10 minutes with no display connected (a login switched
+# back by hand is named and left). Not a managed Mac ⇒ no row.
+_nwall="$(dirname "$0")/fleet-wallpaper.sh"
+if [ -f "$_nwall" ]; then
+  wpline=$(bash "$_nwall" status --check 2>/dev/null); wprc=$?
+  case "$wprc" in
+    0) pass wallpaper "$wpline" ;;
+    1) warn wallpaper "$wpline" ;;
+  esac
+fi
 # The home machine's standing connections to the other machines (issue #3002,
 # EPIC #2999 C5): one line per link (machine@login · route · age · round trip ·
 # failures). WARN: a link failing its check past 60 s, a wrong login, a second

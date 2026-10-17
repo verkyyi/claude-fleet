@@ -49,7 +49,8 @@ holds the wire half). The table, written here and nowhere else:
                           · tenants (sudo -l -U, the sudoers files) · lanes (the
                           refused lanes in the node program's books)
   memguard {level}        fleet-memguard.sh --once as root (once · report)
-  power    {profile}      spotlight-off (macOS): fleet-spotlight.sh off --tick
+  power    {profile}      spotlight-off (macOS): fleet-spotlight.sh off --tick ·
+                          wallpaper-off (macOS): fleet-wallpaper.sh off --tick
   switch   {sha}          the release in <state>/staging/<sha>/ (the seated
                           updater's, #3670) or <root>/<sha>/ (a root updater's):
                           staging is first COPIED to root's own <root>/.incoming-<sha>
@@ -174,7 +175,9 @@ LEVELS = ("once", "report")
 MACHINE_ACTIONS = ("start", "stop", "held", "hup")
 REPORTS = ("table", "fda", "tenants", "lanes")
 MACHINE = "@machine"     # the book's login for a machine job: no login is spelled so
-PROFILES = ("spotlight-off",)
+# profile -> the root script that does it (macOS)
+PROFILES = {"spotlight-off": ("fleet-spotlight.sh", ["off", "--tick"]),
+            "wallpaper-off": ("fleet-wallpaper.sh", ["off", "--tick"])}
 # the seated updater's root half (#3670): `fleet-node-update.py root <step>`,
 # step -> its time limit
 UPDATE_STEPS = {"outside": 900, "credsep": 400, "prune": 600}
@@ -1197,7 +1200,8 @@ class Core(object):
             raise Refused(None, "profile %r — one of %s" % (a["profile"], ", ".join(PROFILES)))
         if not MAC and not testing():
             raise Refused(None, "no %s on this system" % a["profile"])
-        return self.root_script("fleet-spotlight.sh", ["off", "--tick"], {}, 300)
+        script, args = PROFILES[a["profile"]]
+        return self.root_script(script, args, {}, 300)
 
     def op_switch(self, conn, a):
         sha = a["sha"]
