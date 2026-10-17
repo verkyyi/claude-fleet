@@ -1,3 +1,5 @@
+# Cred-sep rows: complete Ubuntu run38955383651 at f2e86584 (issue #3884).
+# cred-sep-compute-unlinks keeps its slow mode (14.3, Ubuntu run 38873016506; fleet-ack train 39008738829: 14.8/14.7): it is bimodal (1.2 in run 38955383651) and the split must hold on the slow one.
 # Spinner budget rows: Ubuntu run 38953452759 at f32832df (44s windows, issue #4500).
 # break-it-durations.txt — seconds of wall time per BREAK-IT drill on an ubuntu CI
 # runner (issue #2694). bin/fleet-break-it-part.py balances each break-it test's
@@ -64,18 +66,18 @@
 0.7 conf-keys-lost
 8.3 core-restart-leaks-loops
 0.4 cred-central-down
-7.9 cred-central-failover-pin
-25.0 cred-central-trusted-pod
+8.5 cred-central-failover-pin
+26.2 cred-central-trusted-pod
 4.8 cred-in-user-pod
 4.1 cred-leaked-from-session
-0.2 cred-login-removed-leftovers
-0.5 cred-managed-unseparated
+0.3 cred-login-removed-leftovers
+0.6 cred-managed-unseparated
 0.1 cred-migration-client
-1.4 cred-new-login-not-tenant
+1.5 cred-new-login-not-tenant
 6.7 cred-own-to-shared
 0.3 cred-pass-lapsed
 0.0 cred-policy-empties-machine
-11.8 cred-pool-delete-stale-proxy
+13.0 cred-pool-delete-stale-proxy
 2.4 cred-pool-dup
 0.9 cred-pool-follows-hub
 0.5 cred-probe-wrong
@@ -85,18 +87,18 @@
 1.1 cred-revoked-still-works
 0.3 cred-second-proxy
 0.6 cred-sep-acct-full
-0.3 cred-sep-bootstrap-fails
-8.0 cred-sep-codex-failover-pin
+0.4 cred-sep-bootstrap-fails
+8.5 cred-sep-codex-failover-pin
 14.3 cred-sep-compute-unlinks
 0.9 cred-sep-pick-refused
-1.0 cred-sep-plain-node-env
-0.7 cred-sep-proxy-off
-0.4 cred-sep-rejoin-plain
-0.8 cred-sep-stale-agent
+1.2 cred-sep-plain-node-env
+0.8 cred-sep-proxy-off
+0.5 cred-sep-rejoin-plain
+0.9 cred-sep-stale-agent
 0.2 cred-sep-sudo-root
 7.5 cred-session-expire
 2.9 cred-shared-down
-0.7 cred-upstream-tenant-override
+0.8 cred-upstream-tenant-override
 0.0 cred-user-pod-unlisted
 0.0 credential-quota-unbound
 6.3 credsep-stale-after-switch
@@ -345,7 +347,7 @@
 0.5 root-core-update-step
 0.3 root-core-wrong-peer
 0.6 root-in-user-pod
-0.3 root-log-in-home
+0.4 root-log-in-home
 0.2 route-lan-elsewhere
 4.7 runtime-gc-admin-tree
 0.2 runtime-stale-idle

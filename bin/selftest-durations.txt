@@ -130,7 +130,8 @@
 11.2 fleet-break-it-cluster-selftest.sh
 7.2 fleet-break-it-core-selftest.sh
 26.6 fleet-break-it-cred-selftest.sh
-28.5 fleet-break-it-cred-sep-selftest.sh
+37.4 fleet-break-it-cred-sep-2-selftest.sh
+36.8 fleet-break-it-cred-sep-selftest.sh
 15.4 fleet-break-it-cred-shared-selftest.sh
 0.1 fleet-break-it-entry-selftest.sh
 51.1 fleet-break-it-hub-2-selftest.sh
