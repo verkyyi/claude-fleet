@@ -538,6 +538,8 @@ for mode in direct background; do
     || fail "R native local spawn refused ($mode)" "$(cat "$WORK/err")"
   grep -qF -- "-c $MAIN " "$NEWWIN_LOG" || fail "R local native launch must use the admitted base"
   grep -q '@native_worktree' "$NEWWIN_LOG" || fail "R missing local native intent"
+  grep -qF "FLEET_AUTHORITY_START='11111111-1111-4111-8111-111111111111'" "$NEWWIN_LOG" \
+    || fail "R raw launcher lost the original admission reservation" "$(cat "$NEWWIN_LOG")"
   grep -q '@worktree' "$OPTS_LOG" && fail "R local launch must wait for the native worktree hook"
   grep -q 'scratch-pool.sh' "$RS_LOG" && fail "R native local launch must not refill the legacy pool"
   grep -qF '$(cat' "$NEWWIN_LOG" && fail "R local draft became a submitted seed"

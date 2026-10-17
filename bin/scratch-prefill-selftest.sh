@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('prefill', sys.argv[1])
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

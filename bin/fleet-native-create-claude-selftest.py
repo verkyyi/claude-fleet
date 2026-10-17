@@ -154,6 +154,7 @@ def main():
     parser.add_argument('--fleet-launcher', action='store_true')
     parser.add_argument('--local-authority', action='store_true')
     parser.add_argument('--restore-entrypoint', action='store_true')
+    parser.add_argument('--raw-entrypoint', action='store_true')
     parser.add_argument('--mcp-fixture', help=argparse.SUPPRESS)
     parser.add_argument('--hook-fixture', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--fixture-root', type=Path, help=argparse.SUPPRESS)
@@ -170,6 +171,8 @@ def main():
     if arguments.supervise_fixture:
         return supervise_fixture(arguments.supervise_fixture, arguments.resume_fixture,
                                  arguments.local_authority, arguments.restore_entrypoint)
+    if arguments.raw_entrypoint and not arguments.restore_entrypoint:
+        parser.error('--raw-entrypoint requires --restore-entrypoint')
     if arguments.restore_entrypoint and not arguments.local_authority:
         parser.error('--restore-entrypoint requires --local-authority')
     if arguments.local_authority and not arguments.fleet_launcher:
@@ -190,7 +193,26 @@ def main():
         checks.append(message)
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if arguments.raw_entrypoint and self.path == '/v1/node/client':
+                self.send_response(404)
+                self.end_headers()
+                return
+            valid = (arguments.raw_entrypoint and self.path.startswith('/v1/fleet/tickets/authority?')
+                     and self.headers.get('Authorization') == 'Bearer fixture-authority-only'
+                     and urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                     == {'repo': [context['repo']], 'gate': ['1']})
+            if not valid:
+                admission_errors.append('unexpected authority gate request: ' + self.path)
+            body = json.dumps({'mode': 'legacy'} if valid else {'error': 'unexpected gate'}).encode()
+            self.send_response(200 if valid else 409)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_POST(self):
+            nonlocal intent, worktree
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
             if self.path.startswith('/v1/fleet/tickets/authority/start'):
                 try:
@@ -205,6 +227,20 @@ def main():
                     if action == 'reserve' and previous is None:
                         reservations[key] = dict(state='reserved')
                     elif action == 'begin' and previous and previous['state'] == 'reserved':
+                        if arguments.raw_entrypoint and len(reservations) == 1:
+                            worker = payload['worker_id'].split('/')
+                            if len(worker) != 2 or worker[0] != context['worker_id'].split('/')[0] or not launch.valid_uuid(worker[1]):
+                                raise ValueError('raw entrypoint minted a different node identity')
+                            windows = [row.split('|', 1) for row in tmux('list-windows', '-t', 'fixture',
+                                '-F', '#{@fleet_id}|#{@native_worktree}').splitlines()]
+                            matched = [row[1] for row in windows if len(row) == 2 and row[0] == worker[1]]
+                            if len(matched) != 1:
+                                raise ValueError('raw admission lacks one matching native window')
+                            intent = launch.validate_native_worktree(json.loads(matched[0]))
+                            if intent['root'] != str(repository):
+                                raise ValueError('raw admission names another repository')
+                            worktree = launch.native_worktree_path(intent)
+                            context['worker_id'] = payload['worker_id']
                         if payload['worker_id'] != context['worker_id']:
                             raise ValueError('different admitted worker')
                         previous['state'] = 'started'
@@ -268,7 +304,10 @@ def main():
             if arguments.restore_entrypoint:
                 shim = root / 'tmux-bin'
                 shim.mkdir()
-                real_tmux = str(Path(shutil.which('tmux')).resolve())
+                # The fleet's own tmux-shim execs the first other tmux on PATH --
+                # this shim -- so resolve past it or the two exec each other forever.
+                real_tmux = next(str(c.resolve()) for c in (Path(d) / 'tmux' for d in os.environ['PATH'].split(os.pathsep))
+                                 if c.is_file() and os.access(c, os.X_OK) and c.parent.name != 'tmux-shim')
                 (shim / 'tmux').write_text('#!/bin/sh\ncase "$1" in\n'
                     '  -L) [ "$2" = fixture ] || exit 2; shift 2 ;;\n'
                     '  -S) [ "$2" = ' + shlex.quote(str(socket)) + ' ] || exit 2; shift 2 ;;\n'
@@ -313,7 +352,10 @@ def main():
                     if predicate():
                         return
                     time.sleep(0.1)
-                raise AssertionError(label + '\n' + screen())
+                raise AssertionError(label + '\n' + screen() + '\n' + json.dumps(
+                    dict(admission_events=admission_events, admission_errors=admission_errors, reservations=reservations))
+                    + '\n' + tmux('display-message', '-p', '-t', '%0',
+                        '#{pane_current_command}|#{cursor_x}|#{cursor_y}|#{@claude_state}|#{@scratch_prefill_result}'))
 
             git('init', '-q', '-b', 'master', repository)
             (repository / 'tracked.txt').write_text('fixture\n')
@@ -361,7 +403,7 @@ def main():
                 context = dict(repo='acme/widgets', worker_id=context['worker_id'])
                 fleet_config = Path(environment['FLEET_CONF_DIR']) / 'fleets/fixture'
                 (fleet_config / 'repos').mkdir(parents=True)
-                (fleet_config / 'conf').write_text('FLEET_TASK_AUTHORITY="legacy"\n')
+                (fleet_config / 'conf').write_text('FLEET_TASK_AUTHORITY="legacy"\nFLEET_MODEL="claude-sonnet-4-6"\n')
                 (fleet_config / 'identity').write_text(context['worker_id'].split('/')[0] + '\n')
                 (fleet_config / 'repos/acme-widgets.conf').write_text(
                     'FLEET_REPO="acme/widgets"\nFLEET_MAIN=' + shlex.quote(str(repository)) + '\nFLEET_BASE_BRANCH="master"\n')
@@ -394,7 +436,24 @@ def main():
             mcp_proofs = []
             try:
                 check(not worktree.exists(), 'Fleet has not allocated a directory before the native supervisor starts')
-                tmux('new-session', '-d', '-s', 'fixture', '-n', 'saved', '-x', '120', '-y', '32', '-c', str(repository), shlex.join(helper))
+                if arguments.raw_entrypoint:
+                    tmux('new-session', '-d', '-s', 'fixture', '-n', 'dash', '-x', '120', '-y', '32',
+                         '-c', str(repository), 'sleep 120')
+                    script = home / '.claude/fleet/bin/dash-raw-session.sh'
+                    result = subprocess.run(['bash', str(script), '--native-worktree', '--node', 'local',
+                        '--agent', 'claude', '--repo', context['repo'], '--origin', 'hub', '--print',
+                        '--name', 'saved', '--draft', 'native fixture request', 'fixture'], env=environment,
+                        capture_output=True, text=True, timeout=90)
+                    if result.returncode:
+                        raise AssertionError('actual raw entrypoint failed: ' + result.stdout + result.stderr)
+                    rows = result.stdout.strip().splitlines()
+                    if len(rows) != 1 or len(rows[0].split('\t')) != 4:
+                        raise AssertionError('raw entrypoint returned no unique window receipt: ' + result.stdout)
+                    created = rows[0].split('\t')
+                    pane_target = tmux('display-message', '-p', '-t', created[0], '#{pane_id}')
+                    check(True, 'actual raw entrypoint admits and creates one native window')
+                else:
+                    tmux('new-session', '-d', '-s', 'fixture', '-n', 'saved', '-x', '120', '-y', '32', '-c', str(repository), shlex.join(helper))
                 tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                 for phase in ('create', 'resume'):
                     event_offset = len(config_events()) if phase == 'resume' else 0
@@ -475,8 +534,14 @@ def main():
                     else:
                         (worktree / 'tracked.txt').write_text('retained fixture\n')
                         check(not requests, 'native startup sends no model request before explicit input')
-                        tmux('send-keys', '-t', '%0', '-l', 'offline fixture')
-                        wait(lambda: prompt_shows('offline fixture'), 'native unsent draft was not visible in its input line')
+                        draft = 'native fixture request' if arguments.raw_entrypoint else 'offline fixture'
+                        if not arguments.raw_entrypoint:
+                            tmux('send-keys', '-t', '%0', '-l', draft)
+                        wait(lambda: prompt_shows(draft), 'native unsent draft was not visible in its input line')
+                        if arguments.raw_entrypoint:
+                            check(created[2:] == [str(worktree), observed['worker_id'].split('/')[1]],
+                                  'raw window receipt matches the admitted native directory and worker')
+                            check(True, 'actual creation entrypoint delivers the draft without fixture keystrokes')
                         check(not requests, 'visible native draft remains unsent until Enter')
                         tmux('send-keys', '-t', '%0', 'Enter')
                         wait(lambda: 'offline fixture rejection' in screen(), 'fixture model request was not rejected')
@@ -532,16 +597,23 @@ def main():
                 print(json.dumps(dict(version=version, checks=checks, authority='loopback-local-stub' if arguments.local_authority else 'fixture-stub',
                                       finalization='native-stop' if arguments.local_authority else 'fixture-stub',
                                       recovery='actual-snapshot-and-wrapper' if arguments.restore_entrypoint else 'receipt-validator',
+                                      creation='actual-raw-entrypoint' if arguments.raw_entrypoint else 'supervisor',
                                       launcher='fleet' if arguments.fleet_launcher else 'fixture'), indent=2))
             finally:
+                fixture_processes = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True, timeout=5)
+                fixture_proofs = [launch.process(int(row.split(None, 1)[0])) for row in fixture_processes.splitlines()
+                                  if str(home / '.claude/fleet/bin/') in row]
                 if socket.exists():
                     tmux('kill-server')
-                for proof in mcp_proofs:
+                for proof in mcp_proofs + fixture_proofs:
                     if launch.same_process(proof):
                         try:
                             os.kill(proof['pid'], signal.SIGTERM)
                         except ProcessLookupError:
                             pass
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and any(launch.same_process(proof) for proof in fixture_proofs):
+                    time.sleep(0.1)
     finally:
         endpoint.shutdown()
         endpoint.server_close()

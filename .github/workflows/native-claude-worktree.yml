@@ -98,6 +98,13 @@ jobs:
             --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority --restore-entrypoint \
             > "$RUNNER_TEMP/claude-worktree-restore-entrypoint.json"
           cat "$RUNNER_TEMP/claude-worktree-restore-entrypoint.json"
+      - name: Exercise the actual panel creation entrypoint (dash-raw-session.sh)
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority --restore-entrypoint --raw-entrypoint \
+            > "$RUNNER_TEMP/claude-worktree-raw-entrypoint.json"
+          cat "$RUNNER_TEMP/claude-worktree-raw-entrypoint.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
