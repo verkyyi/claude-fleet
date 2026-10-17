@@ -148,8 +148,13 @@ class NativeCreation(unittest.TestCase):
         self.options['@launch_seed'] = str(seed)
         child = mock.Mock(pid=12)
         child.poll.return_value = None
-        child.wait.return_value = 0
         started, deliveries = [], []
+
+        def finish(*arguments, **options):
+            child.poll.return_value = 0
+            return 0
+
+        child.wait.side_effect = finish
 
         def popen(arguments, **options):
             self.assertFalse(self.path.exists())
@@ -176,6 +181,7 @@ class NativeCreation(unittest.TestCase):
                 mock.patch.object(launch, 'descendant', return_value=True), \
                 mock.patch.object(launch, 'current_task'), \
                 mock.patch.object(launch, 'publish') as published, \
+                mock.patch.object(launch, 'stop_created') as stopped, \
                 mock.patch.object(launch, 'subprocess', process_api):
             self.assertEqual(launch.supervise(['launcher', '--agent', 'claude', 'held fixture input']), 0)
         self.assertEqual(started[0][0], ['launcher', '--agent', 'claude', '--worktree', self.intent['name'],
@@ -183,6 +189,7 @@ class NativeCreation(unittest.TestCase):
         self.assertEqual(started[0][1]['cwd'], str(self.main))
         self.assertEqual(deliveries, ['held fixture input'])
         self.assertEqual(published.call_count, 1)
+        stopped.assert_not_called()
 
     def test_unverified_transfer_refuses_before_mutating_task_ownership(self):
         self.create()
