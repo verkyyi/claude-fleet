@@ -40,6 +40,13 @@
 #   cred-central-trusted-pod   bin/fleet-cred-proxy.py (Router.leases_nothing: a pod with
 #                              nothing leased in routes central even when the hub says
 #                              trusted) — fleet-cred-proxy-selftest.sh leg D2 (#4290)
+#   cred-new-login-unseparated  bin/fleet-login-new.sh (--no-credsep refused), bin/fleet-credsep.py
+#                              install (conf_ensure: no ~/.config) — issue #4607
+#   cred-existing-unseparated  bin/fleet-credsep.py machine enforce / enforced (human_logins,
+#                              fleet_login), bin/fleet-node-supervisor.py credsep-enforce — #4607
+#   cred-enforce-fails-no-lease  bin/fleet-credsep.py machine enforce (refused → --force past the
+#                              grace, failed → retry later) / enforced / check, tokenledger
+#                              credsepGated (go test TestLeaseCredsepMandatory) — #4607
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -553,6 +560,144 @@ drill_cred_managed_unseparated() {
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credsep-managed: OK' \
     || { WHY="every managed login separated, yet the machine row is not OK (rc $rc): $out"; return 1; }
   WHAT="托管登录没做凭据隔离：check 与整机 credsep-managed 行都是 FAIL 并点名、给出一条修法；machine install --logins managed 之后 node.env 进了隔离库，整机行转 OK"
+}
+
+# enf_env <sb> — the sandbox's credsep seams for a machine verb (alpha = sep_login)
+enf_env() {
+  local sb="$1"
+  printf '%s' "FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_CREDSEP_LOG_BASE=$sb/log"
+  printf ' %s' "FLEET_CREDSEP_LIB=$sb/lib FLEET_CREDSEP_DAEMON_DIR=$sb/daemons FLEET_CREDSEP_ROLE=$(id -un)"
+  printf ' %s' "FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_SUDO= FLEET_CREDSEP_PW=$sb/pw FLEET_CREDSEP_SVC=0"
+  printf ' %s' "FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_JOIN_WAIT=1 FLEET_NODE_STATE=$sb/node"
+  printf ' %s' "FLEET_CREDSEP_HOMES=$sb/homes FLEET_CRED_SHARED_PORT=$(cred_deadport) FLEET_CRED_ROLLOUT_WAIT=1"
+  printf ' %s' "PATH=$sb/shim:$PATH FAKE_SVC_LOG=$sb/svc.log FAKE_DAEMONS=$sb/daemons"
+}
+
+# #4607: a login opened without separation. `fleet-login-new.sh --no-credsep` used
+# to hand out the old layout — every pool token readable by the login's sessions —
+# on a word; and a login with no ~/.config at all (mini2's fleetu14, 2026-10-17)
+# died FileNotFoundError on credsep.json's temp file mid-install.
+drill_cred_new_login_unseparated() {
+  CAP=20
+  local sb="$WORK/newunsep" t0 out rc env h c
+  mkdir -p "$sb/db" "$sb/node"
+  t0=$(now)
+  out=$(env -u FLEET_CREDSEP_OPTIONAL bash "$BIN/fleet-login-new.sh" newbie --full-name N --no-credsep 2>&1); rc=$?
+  [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'every login is credential-separated' \
+    || { WHY="fleet-login-new.sh --no-credsep was not refused (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  # a login with nothing in its home but the fleet install: no ~/.config
+  h="$sb/homes/fresh"; c="$h/.config/claude-fleet"
+  mkdir -p "$h/.claude/fleet/bin" "$sb/daemons" "$sb/shim"
+  printf 'fresh:1999982:%s:%s\n' "$(id -g)" "$h" > "$sb/pw"
+  env=$(enf_env "$sb")
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$h" python3 -I "$BIN/fleet-credsep.py" install --login fresh --fresh \
+    --conf-dir "$c" --install-dir "$h/.claude/fleet" 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="install --fresh on a login with no ~/.config failed (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  [ -f "$c/credsep.json" ] && [ "$(python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$c")" = 700 ] \
+    && grep -q '^export FLEET_CRED_SEPARATE=1$' "$c/fleet.conf" && grep -q '^export FLEET_CRED_PROXY=1$' "$c/fleet.conf" \
+    || { WHY="no conf dir 0700 / fleet.conf / credsep.json after the install: $(ls -la "$c" 2>&1 | tr '\n' ' ')"; return 1; }
+  WHAT="开新登录不隔离：--no-credsep 没声明自托管直接拒（exit 2）；连 ~/.config 都没有的登录 install --fresh 先建 0700 的配置目录和 fleet.conf，再写 credsep.json"
+}
+
+# #4607: logins that were never separated — opened before #2294, by hand, put back
+# (2026-10-17: fleetu9 · fleet-ci on one machine, 24haowan · fleetu14 on another).
+# Separation waited for a person to type a sudo, so it never happened; the node
+# program wrote the pool's real tokens and node.env into their homes. The machine
+# daemon's credsep-enforce takes every human fleet login in by itself and leaves a
+# CI runner / a plain account alone.
+drill_cred_existing_unseparated() {
+  CAP=30
+  local sb="$WORK/existunsep" t0 out rc env
+  sep_login "$sb"
+  mkdir -p "$sb/node" "$sb/homes/runner" "$sb/homes/svc/.claude/fleet"
+  printf 'runner:1999983:%s:%s\n' "$(id -g)" "$sb/homes/runner" >> "$sb/pw"           # a CI runner: no fleet mark
+  printf 'svc:1999984:%s:%s:/usr/bin/false\n' "$(id -g)" "$sb/homes/svc" >> "$sb/pw"  # no login shell
+  env=$(enf_env "$sb")
+  t0=$(now)
+  grep -q ccq_BOOT_SECRET "$C/node.env" || { WHY="the rig: alpha's node.env holds no token"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="machine enforce failed (rc $rc): $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; return 1; }
+  [ -L "$C/node.env" ] && [ -f "$sb/db/alpha/node.env" ] && [ ! -e "$C/accounts/a1.hub/.credentials.json" ] \
+    || { WHY="after enforce alpha's node.env / lease are still its own files: $(ls -lR "$C" | head -20 | tr '\n' ' ')"; return 1; }
+  python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["logins"]; sys.exit(0 if l.get("alpha",{}).get("verdict")=="separated" and set(l)=={"alpha"} else 1)' \
+    "$sb/node/credsep-enforce.json" 2>/dev/null \
+    || { WHY="the status file does not say alpha separated (and nobody else): $(cat "$sb/node/credsep-enforce.json" 2>&1 | tr '\n' ' ')"; return 1; }
+  grep -q '"login": "alpha"' "$sb/log/enforce.log" && grep -q '"verdict": "separated"' "$sb/log/enforce.log" \
+    || { WHY="no audit line for alpha in enforce.log: $(cat "$sb/log/enforce.log" 2>&1)"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env python3 -I "$BIN/fleet-credsep.py" machine enforced 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credsep-logins: OK' \
+    || { WHY="every fleet login separated, yet the doctor row is not OK (rc $rc): $out"; return 1; }
+  grep -q '"credsep-enforce"' "$BIN/fleet-node-supervisor.py" \
+    || { WHY="the machine daemon no longer runs credsep-enforce"; return 1; }
+  WHAT="没隔离的现有登录：守护的 credsep-enforce 自己把它收进隔离库（node.env、租约都搬走），审计一行、状态文件写 separated；CI 账号和不能登录的账号不碰；doctor credsep-logins 行 OK"
+}
+
+# #4607: separating a login fails (its live sessions still read the files, or the
+# install rolls back). It must be loud — the task fails, the doctor row is red and
+# names it — be tried again (with --force once the grace is over, the failed one
+# after the retry wait), and meanwhile the hub leases it nothing, admin or not.
+drill_cred_enforce_fails_no_lease() {
+  CAP=60
+  local sb="$WORK/enfail" t0 out rc env gohalf calls
+  sep_login "$sb"
+  mkdir -p "$sb/node"
+  cat > "$sb/fake-run.sh" <<'FR'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FR_LOG"
+echo "preflight: alpha — 2 of its 2 live sessions do not talk to the proxy yet"
+exit "${FR_RC:-6}"
+FR
+  env=$(enf_env "$sb")
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $env FR_LOG="$sb/calls" FLEET_CREDSEP_ENFORCE_RUN="bash $sb/fake-run.sh" \
+    python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'NOT separated: alpha' \
+    || { WHY="a refused separation did not fail the task naming alpha (rc $rc): $out"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env python3 -I "$BIN/fleet-credsep.py" machine enforced 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credsep-logins: FAIL .*NOT separated: alpha' \
+    && printf '%s' "$out" | grep -q 'live sessions' \
+    || { WHY="the doctor row is not a FAIL naming alpha with the daemon's last word (rc $rc): $out"; return 1; }
+  # past the grace: the next try goes on with --force
+  # shellcheck disable=SC2086
+  env $env FR_LOG="$sb/calls" FR_RC=1 FLEET_CREDSEP_ENFORCE_GRACE=0 FLEET_CREDSEP_ENFORCE_RUN="bash $sb/fake-run.sh" \
+    python3 -I "$BIN/fleet-credsep.py" machine enforce >/dev/null 2>&1
+  # a failed (rolled-back) one waits the retry: no third call
+  # shellcheck disable=SC2086
+  env $env FR_LOG="$sb/calls" FLEET_CREDSEP_ENFORCE_RUN="bash $sb/fake-run.sh" \
+    python3 -I "$BIN/fleet-credsep.py" machine enforce >/dev/null 2>&1
+  calls=$(cat "$sb/calls")
+  [ "$(printf '%s\n' "$calls" | wc -l | tr -d ' ')" = 2 ] && printf '%s\n' "$calls" | sed -n 2p | grep -q -- '--force' \
+    || { WHY="tries were not refused → --force past the grace → wait after a failure: $(printf '%s' "$calls" | tr '\n' '|')"; return 1; }
+  [ "$(grep -c '"login": "alpha"' "$sb/log/enforce.log")" = 2 ] \
+    || { WHY="the audit does not carry each try: $(cat "$sb/log/enforce.log" 2>&1)"; return 1; }
+  # the login's own row is red too
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credsep: FAIL — this login is not separated' \
+    || { WHY="an unseparated node login's check is not FAIL (rc $rc): $out"; return 1; }
+  # the hub's half: no lease to an unseparated login, an admin's too
+  gohalf="入口一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestLeaseCredsepMandatory"
+  grep -q 'func TestLeaseCredsepMandatory(' "$ROOT/tokenledger/internal/api/fleet_credsep_test.go" 2>/dev/null \
+    || { WHY="the hub half's TestLeaseCredsepMandatory is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestLeaseCredsepMandatory' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test TestLeaseCredsepMandatory ok（管理员没隔离也拒发）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="补隔离失败：任务失败并点名、doctor credsep-logins 与本登录 credsep 都是 FAIL；拒了的过宽限期带 --force 再试，失败的等重试间隔；$gohalf"
 }
 
 # ---- cred-sep-codex-failover-pin (#3713): a separated login's Codex keeps no

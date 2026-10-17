@@ -81,8 +81,10 @@
 #      check OK, the one judgement, EPIC #2293 convention 1), `credsep: pending
 #      — <why>` (separated, but check not OK yet: the proxy still starting) — and
 #      a status that is not separated FAILS the run (exit 1). --no-credsep skips
-#      7b (and prints `credsep: off`): the old layout, for a machine whose fleet
-#      predates credsep.
+#      7b (and prints `credsep: off`): the old layout — refused (exit 2) unless the
+#      environment says FLEET_CREDSEP_OPTIONAL=1, a declared self-hosted one-person
+#      box (issue #4607: separation is not opt-in; the hub leases an unseparated
+#      login nothing, and a managed machine's daemon would separate it anyway).
 #   8. on a MANAGED machine (step 7 linked the install to <root>/current):
 #      `sudo python3 <root>/current/bin/fleet-node-supervisor.py account adopt
 #      <login>` instead — the machine daemon runs a managed login's account tasks
@@ -242,6 +244,9 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$LOGIN" ] || usage
+# Separation is not opt-in (issue #4607): the old layout only on a box that said so
+[ "$CREDSEP" = 1 ] || [ "${FLEET_CREDSEP_OPTIONAL:-0}" = 1 ] \
+  || die2 "--no-credsep: every login is credential-separated (issue #4607) — the old layout only on a declared self-hosted box (FLEET_CREDSEP_OPTIONAL=1)"
 # A leading digit is allowed (macOS permits it; `acme` opened on a second
 # machine, issue #2105) — an all-digit name is not: it reads as a uid.
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \

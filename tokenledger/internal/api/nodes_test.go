@@ -32,8 +32,11 @@ func newFleetHarness(t *testing.T) *harness {
 	if err := st.SetFleetSetting(CredPolicyModeKey, "legacy", time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	// The lease fixtures predate every login being credential-separated
+	// (claude-fleet#4607): they run as a self-hosted hub, #2295's rule. The
+	// mandatory gate itself is pinned in fleet_credsep_test.go.
 	srv := &Server{Store: st, Pricing: pricing.Default(), ViewerToken: viewerToken,
-		LiveStore: NewLive(), Fleet: true}
+		LiveStore: NewLive(), Fleet: true, CredsepOptional: true}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return &harness{srv: srv, http: ts, tokens: map[string]string{}}

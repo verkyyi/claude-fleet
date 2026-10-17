@@ -109,6 +109,17 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 	if ok, why := judge("cred-ttl", managed); !ok {
 		t.Fatalf("cred-ttl all good: %s", why)
 	}
+	// every login counts, managed or not (claude-fleet#4607) — but not a
+	// person's pod, a SPOT node, a machine link or a lost machine
+	others := append(managed,
+		NodeView{Hostname: "laptop", OSUser: "carol", Status: "online", Credsep: control.CredsepNot},
+		NodeView{Hostname: "pod-1", OSUser: "dave", Status: "online", UserPod: true},
+		NodeView{Hostname: "spot-1", OSUser: "erin", Status: "online", Kind: store.NodeKindEphemeral},
+		NodeView{Hostname: "mac-z", OSUser: "", Status: "online", MachineLink: true},
+		NodeView{Hostname: "gone", OSUser: "fay", Status: "lost"})
+	if ok, why := judge("cred-ttl", others); ok || !strings.Contains(why, "laptop/carol") || !strings.Contains(why, "1 个登录") {
+		t.Fatalf("cred-ttl, an unmanaged login not separated: %v %s", ok, why)
+	}
 }
 
 func TestGateNodeFold(t *testing.T) {

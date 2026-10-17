@@ -494,3 +494,6 @@
 1.4 window-renamed
 0.1 wx-relay-forged
 0.0 zsh-guard-fleet-label
+1.5 cred-new-login-unseparated
+3.0 cred-existing-unseparated
+20.0 cred-enforce-fails-no-lease

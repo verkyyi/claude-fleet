@@ -863,6 +863,17 @@ def default_table(paths):
             # checks into <state>/staging and asks the root core to switch
             {"name": "update", "every": env_num("FLEET_NODE_UPDATE_EVERY", 300), "timeout": 1800, "seat": True,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-node-update.py"), "tick"]},
+            # Every fleet login separated, by the machine itself (#4607): one not
+            # separated (an old login, one a person opened by hand, one put back) is
+            # taken into the credential store as a tenant of the shared proxy —
+            # nobody types a sudo. Root's job (no "seat": a seated daemon asks the
+            # core to run it by this name). Each try is a line of
+            # /var/log/fleet-cred/enforce.log, the verdicts <state>/credsep-enforce.json,
+            # which the doctor's credsep-logins row reads; a login it cannot take
+            # in fails the task and stays red there.
+            {"name": "credsep-enforce", "every": env_num("FLEET_CREDSEP_ENFORCE_EVERY", 300), "timeout": 900,
+             "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-credsep.py"), "machine", "enforce"],
+             "env": {"FLEET_NODE_STATE": paths.state}},
         ],
         # None = the runtime's launchd templates (account_units); a table file may
         # give the list itself, in account_units' shape.
@@ -4914,6 +4925,31 @@ def account_adopt(paths, login, dry=False, rejoin=False):
     return 0
 
 
+def adopt_credsep(paths, login):
+    """A login just taken over is separated before its first session here
+    (issue #4607): `fleet-credsep.py machine enforce --logins <it>` at once,
+    not at the next credsep-enforce tick. Its verdict is printed; a login it
+    could not take in stays on the task's list (and the doctor's red row) —
+    the adopt itself stands. FLEET_NODE_CREDSEP_CMD replaces the command
+    (selftest); under FLEET_NODE_TEST without it nothing runs."""
+    seam = env("FLEET_NODE_CREDSEP_CMD", "")
+    if not seam and env("FLEET_NODE_TEST", "") == "1":
+        return None
+    py = os.path.join(paths.runtime, "bin", "fleet-credsep.py")
+    if not os.path.isfile(py):
+        py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-credsep.py")
+    cmd = (seam.split() if seam else ["/usr/bin/python3", "-I", py]) + ["machine", "enforce", "--logins", login]
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=900,
+                           env=dict(os.environ, FLEET_NODE_STATE=paths.state))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print("credsep: %s — not separated yet (%s); the credsep-enforce task tries again" % (login, e))
+        return 1
+    last = [l for l in r.stdout.splitlines() if l.strip()][-1:] or ["rc %d" % r.returncode]
+    print("credsep: %s — %s" % (login, last[0]))
+    return r.returncode
+
+
 def adopt_follow(paths, login):
     """Taken over = its install taken over too (issues #2714, #2774): the
     release's updater links the login's tools and makes its ~/.claude/fleet a
@@ -8628,6 +8664,8 @@ def main(argv):
         rc = None
         if sub == "adopt" and len(rest) > 1:
             rc = account_adopt(paths, rest[1], dry="--dry-run" in rest, rejoin="--rejoin" in rest)
+            if rc == 0 and "--dry-run" not in rest:
+                adopt_credsep(paths, rest[1])
         elif sub == "release" and len(rest) > 1:
             rc = account_release(paths, rest[1], force="--force" in rest)
         elif sub == "forget" and len(rest) > 1:

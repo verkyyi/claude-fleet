@@ -1,7 +1,52 @@
 # Separated credentials — 可信机器上，凭据放在会话碰不到的地方
 
-Issue #1971 · EPIC #1967 C4. Switch: `FLEET_CRED_SEPARATE` (fleet.conf `[common]`,
-default `0`).
+Issue #1971 · EPIC #1967 C4. **Not opt-in** (issue #4607): every login is
+separated — every one there is, and every one opened from now on. `FLEET_CRED_SEPARATE`
+(fleet.conf `[common]`) defaults to `1`; `0` counts only beside
+`FLEET_CREDSEP_OPTIONAL=1`, a declared self-hosted one-person box (and the hub then
+says `CCQUOTA_FLEET_CREDSEP_OPTIONAL=1`, else it leases that login nothing).
+
+## Every login, by the machine itself (issue #4607)
+
+Separation used to wait for a person to type one sudo per login, so on
+2026-10-17 four fleet logins on two machines had never been separated — the node
+program had written the pool's real Claude `.credentials.json`, Codex `auth.json`
+(refresh token included) and `node.env`'s node token into their homes. Four
+rails now:
+
+1. **A new login is separated before its first session** — `fleet-login-new.sh`
+   7b (below); `--no-credsep` is refused (exit 2) unless the environment says
+   `FLEET_CREDSEP_OPTIONAL=1`. `account adopt` separates the login it takes over
+   at once (`machine enforce --logins <it>`), not at the next tick.
+2. **An existing one is taken in by root's daemon** — the node supervisor's
+   `credsep-enforce` task (every 5 minutes, `FLEET_CREDSEP_ENFORCE_EVERY`) runs
+   `fleet-credsep.py machine enforce`: every human fleet login here (a login shell,
+   a home under `/Users` · `/home`, a person's uid, and a fleet install / conf dir
+   in it, a node token the daemon holds for it, or taken over by it — a CI runner
+   or a plain account is none of these and is left alone) that is not separated
+   becomes a tenant of the shared proxy (`machine install --logins <it>`); one on
+   its own proxy joins. A login with nothing running as it, or nothing a session
+   reads to move (no lease, no `node.env`, no proxy key), skips the preflight. A
+   missing `~/.config/claude-fleet` is made 0700 as the login's, a missing
+   `fleet.conf` written with `FLEET_CRED_PROXY=1` + `FLEET_CRED_SEPARATE=1`.
+   Each attempt is one JSON line of `/var/log/fleet-cred/enforce.log` (the audit);
+   the verdicts are `/var/db/fleet-node/credsep-enforce.json` (0644, no secret).
+   A preflight refusal (live sessions still reading the files) is tried again each
+   tick and, past `FLEET_CREDSEP_ENFORCE_GRACE` (24 h — the hub has been refusing
+   the login every lease meanwhile), with `--force`; a failed install rolls itself
+   back and is tried again after `FLEET_CREDSEP_ENFORCE_RETRY` (1 h). The way out
+   is root's alone: `/var/db/fleet-node/credsep.optional`, a login per line, or `*`.
+3. **The hub leases an unseparated login nothing** — every login, an admin's and
+   the operator's own included (below, «The hub's backstop»).
+4. **It is red until it holds** — the login's `credsep` row is FAIL for a node
+   login not separated (a login with no `node.env` is leased nothing: no row); the
+   machine's `credsep-logins` row (`fleet-credsep.sh machine enforced`, anyone)
+   FAILs naming every one with the daemon's last word; the steward's health watch
+   files a new FAIL row as an issue; the hub's `cred-ttl` gate item counts every
+   login that leases, not only managed ones.
+
+BREAK-IT rows `cred-new-login-unseparated`, `cred-existing-unseparated`,
+`cred-enforce-fails-no-lease`.
 
 ## What it does
 
@@ -12,7 +57,7 @@ Every session of that login (the model, its tools, a plugin) can read them, and
 
 Separated, a **role account** owns all of it:
 
-| | today (`0`) | separated (`1`) |
+| | unseparated (before #4607) | separated (`1`) |
 |---|---|---|
 | Claude lease | `~/.config/claude-fleet/accounts/<l>.hub/.credentials.json` | `/var/db/fleet-cred/<login>/accounts/<l>.hub/.credentials.json` |
 | Codex lease (refresh token `hub-managed`) | `~/.codex/auth.json`, `~/.codex-accounts/<l>/auth.json` | `/var/db/fleet-cred/<login>/codex/{default,<l>}/auth.json` |
@@ -63,9 +108,12 @@ the hub's credentials.
 ## Turning it on / off
 
 ```sh
-# fleet.conf [common]
-FLEET_CRED_SEPARATE=1
-# then the next sync (install pass `credsep`) — or by hand:
+# a managed machine: nothing to type — the daemon's credsep-enforce does it
+sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine enforce --dry-run   # what it would do
+bash ~/.claude/fleet/bin/fleet-credsep.sh machine enforced                 # the doctor's credsep-logins row
+# elsewhere — FLEET_CRED_SEPARATE=1 written in fleet.conf [common] (the doctor is
+# red until then), then the next sync (install pass `credsep`, password-less sudo)
+# — or by hand:
 bash ~/.claude/fleet/bin/fleet-credsep.sh install     # needs password-less sudo ONCE
 bash ~/.claude/fleet/bin/fleet-credsep.sh status
 bash ~/.claude/fleet/bin/fleet-credsep.sh check       # the doctor's `credsep` row
@@ -102,7 +150,10 @@ From then on the login never needs sudo.
 ### The hub's backstop: no token to a user's login that is not separated (issue #2295, EPIC #2293 C2)
 
 Should step 7b not have happened — an old script, a by-hand override, a login put
-back — the hub still holds the line. Every heartbeat carries `credsep`
+back — the hub still holds the line. Since #4607 it holds it for **every** login:
+the rule below reads "a GitHub person whose role is user" only on a hub that declared
+itself self-hosted (`CCQUOTA_FLEET_CREDSEP_OPTIONAL=1`); elsewhere an admin's and the
+operator's own login are refused the same way. Every heartbeat carries `credsep`
 (`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh status`
 **and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes). For a
 GitHub person whose role is **user**, `/v1/node/credentials` issues real tokens only
@@ -111,7 +162,8 @@ credential audit records 「拒发：未隔离」. An agent too old to send the 
 as not separated. `/v1/node/self` then carries `credsep_gate: not_separated`, and the
 login's proxy reads it as an untrusted machine: every session goes **central**
 (the hub's proxy, no credential file read) — slower, but it works, and nothing ever
-lands in `accounts/*.hub/`. Admin and operator logins lease exactly as before.
+lands in `accounts/*.hub/`. (Under `CCQUOTA_FLEET_CREDSEP_OPTIONAL=1` only: admin and
+operator logins lease exactly as before.)
 
 ### Rolling it out on a machine (issue #2135, EPIC #2133 C5)
 

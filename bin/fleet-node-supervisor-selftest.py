@@ -1191,8 +1191,12 @@ class G_DefaultTable(Sandbox):
                     del os.environ[k]
         names = [x["name"] for x in t["tasks"]]
         self.assertEqual(names, ["diskguard", "memguard", "orphans", "shared-dirs", "machine-reading"]
-                         + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update"])
+                         + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update", "credsep-enforce"])
         by = {x["name"]: x for x in t["tasks"]}
+        # #4607: every fleet login separated by the daemon itself, root's job
+        self.assertEqual(by["credsep-enforce"]["cmd"][-2:], ["machine", "enforce"])
+        self.assertTrue(by["credsep-enforce"]["cmd"][-3].endswith("/fleet-credsep.py"))
+        self.assertNotIn("seat", by["credsep-enforce"], "root's job, never the seat's")
         self.assertIsNone(t["account"], "the account table is the runtime's templates")
         self.assertEqual(by["diskguard"]["env"]["FLEET_ORPHAN_CPU_PCT"], "0", "orphans would run twice")
         self.assertEqual(by["orphans"]["env"]["FLEET_ORPHAN_ALL_USERS"], "1")

@@ -14,6 +14,9 @@ front; install / uninstall run as ROOT (it calls them through `sudo -n`).
     machine join  [--logins a,b|all] [--dry-run]    (root: an own-mode login onto the shared proxy, no gap)
     machine leave --logins a,b [--dry-run]          (root: the way back, onto its own proxy)
     machine status [--json]                         (anyone)
+    machine enforce [--logins a,b|all] [--dry-run]  (root: every human login separated — the machine
+                                                     daemon's credsep-enforce task, issue #4607)
+    machine enforced [--json]                       (anyone: the doctor's credsep-logins row)
 
 MACHINE MODE (issue #2217): on a managed node ONE credential proxy serves every
 login — the role account runs it (com.claude-fleet.cred-proxy-shared /
@@ -147,15 +150,24 @@ def sh(*cmd, check=True, quiet=False):
 
 def getpw(name):
     """pwd.getpwnam — or, in the selftest's sandbox (FLEET_CREDSEP_TEST=1), a row
-    of FLEET_CREDSEP_PW (`name:uid:gid:home`): two logins on one real user."""
+    of FLEET_CREDSEP_PW (`name:uid:gid:home[:shell]`): two logins on one real user."""
+    for r in sandbox_pw():
+        if r.pw_name == name:
+            return r
+    return pwd.getpwnam(name)
+
+
+def sandbox_pw():
+    """The selftest's FLEET_CREDSEP_PW rows (FLEET_CREDSEP_TEST=1 only), else []."""
     f = os.environ.get("FLEET_CREDSEP_PW")
+    out = []
     if TEST and f and os.path.isfile(f):
         for line in open(f):
             r = line.strip().split(":")
-            if len(r) == 4 and r[0] == name:
-                return argparse.Namespace(pw_name=r[0], pw_uid=int(r[1]), pw_gid=int(r[2]), pw_dir=r[3],
-                                          pw_shell="/bin/sh", sandbox=True)
-    return pwd.getpwnam(name)
+            if len(r) in (4, 5):
+                out.append(argparse.Namespace(pw_name=r[0], pw_uid=int(r[1]), pw_gid=int(r[2]), pw_dir=r[3],
+                                              pw_shell=r[4] if len(r) == 5 else "/bin/sh", sandbox=True))
+    return out
 
 
 def chown(path, user, follow=True):
@@ -675,6 +687,7 @@ def install(a):
                install_dir=os.path.abspath(a.install_dir or ""), codex_homes=codex_homes(conf, home))
     if os.path.lexists(os.path.join(conf, "credsep.json")) and os.path.isfile(os.path.join(R, "meta.json")):
         say("credsep: already separated —", R, "(refreshing the code copy and services)")
+    conf_ensure(login, conf, home, pw)
     created = ensure_role()
     say("role:", ROLE, "(created)" if created else "(exists)")
     mkdir(ROOT_BASE, 0o755, "root" if os.geteuid() == 0 else login)
@@ -853,6 +866,58 @@ def install(a):
     say("credsep: ON —", R, "(%s only%s)" % (ROLE, ", the machine's shared proxy" if shared else ""))
 
 
+FLEET_CONF_MIN = (
+    "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    "# Written by fleet-credsep.py install (issue #4607): this login had none when its\n"
+    "# credentials were separated — every login is, from its first session on.\n"
+    "\n# ---- [common] ----\n"
+    "export FLEET_CRED_PROXY=1\n"
+    "export FLEET_CRED_SEPARATE=1\n"
+    '_fcs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/secrets.env"; [ -f "$_fcs" ] && . "$_fcs"; unset _fcs\n'
+    "\n# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----\n"
+    'if [ "${FLEET_SHELL:-0}" = 1 ]; then\n:\nfi  # ---- [client] end ----\n'
+    "\n# ---- [node] — the shell (FLEET_SHELL=1) does not read this section ----\n"
+    'if [ "${FLEET_SHELL:-0}" != 1 ]; then\n:\nfi  # ---- [node] end ----\n')
+
+
+def conf_ensure(login, conf, home, pw):
+    """The login's conf dir, and a fleet.conf in it, before anything is written
+    there (issue #4607: mini2's fleetu14 had no ~/.config, and credsep.json's
+    temp file died FileNotFoundError mid-install). Each missing directory from
+    the home down is made 0700 AS the login's (never root's, never through a
+    link the login planted); a missing fleet.conf gets FLEET_CRED_PROXY=1 +
+    FLEET_CRED_SEPARATE=1, so its first session already talks to the proxy."""
+    if DRY:
+        if not os.path.isdir(conf):
+            say("    would make", conf, "(0700, %s's)" % login)
+        if not os.path.isfile(os.path.join(conf, "fleet.conf")):
+            say("    would write", os.path.join(conf, "fleet.conf"), "(FLEET_CRED_PROXY=1, FLEET_CRED_SEPARATE=1)")
+        return
+    base, conf = os.path.abspath(home), os.path.abspath(conf)
+    if not (conf + "/").startswith(base.rstrip("/") + "/"):
+        if not os.path.isdir(conf):
+            die("%s is not under %s's home %s — not made" % (conf, login, base))
+    else:
+        p = base
+        for part in os.path.relpath(conf, base).split(os.sep):
+            p = os.path.join(p, part)
+            try:
+                st = os.lstat(p)
+            except FileNotFoundError:
+                os.mkdir(p, 0o700)
+                os.chmod(p, 0o700)
+                if os.geteuid() == 0:
+                    os.lchown(p, pw.pw_uid, pw.pw_gid)
+                say("conf: made %s (0700, %s's)" % (p, login))
+                continue
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+                die("%s is not a plain directory — the conf dir is not made through it" % p)
+    fc = os.path.join(conf, "fleet.conf")
+    if not os.path.lexists(fc):
+        put(fc, FLEET_CONF_MIN, 0o600, pw.pw_name)
+        say("conf: %s written (FLEET_CRED_PROXY=1, FLEET_CRED_SEPARATE=1 — it had none)" % fc)
+
+
 def adopt(a):
     """install --adopt (issue #2290): root takes the login's current upstream /
     hub settings into <LIB>/<login>.conf — after the person checked them — and
@@ -972,6 +1037,40 @@ def os_agent(cmd):
     return cmd.startswith(OS_AGENT_DIRS)
 
 
+def login_procs(login):
+    """-> (every command running as the login, those that are not macOS's own
+    per-user agents)."""
+    pw = getpw(login)
+    r = subprocess.run(["ps", "-U", str(pw.pw_uid), "-o", "comm="], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL, text=True)
+    cmds = [l.strip() for l in r.stdout.splitlines() if l.strip()]
+    return cmds, [c for c in cmds if not os_agent(c)]
+
+
+def nothing_to_move(conf, home):
+    """True when the login holds nothing an install would take from under a
+    session (issue #4607): no leased credential, no node.env, no node key, no
+    proxy signing key of its own — a login that never was a node (mini2's
+    24haowan and fleetu14, 2026-10-17: no fleet.conf, no ~/.config even)."""
+    if leftovers(conf, home, None):
+        return False
+    return not any(os.path.lexists(os.path.join(conf, f)) for f in ("node.env", "node.key", "cred-proxy/key"))
+
+
+def preflight_skip(login, conf, home):
+    """-> why the preflight has nothing to protect here, else "" (issue #4607).
+    Its questions are about sessions reading the files that move: with no
+    process of the login running, or nothing to move, there is no such session."""
+    if not PREFLIGHT:
+        return ""
+    _, ours = login_procs(login)
+    if not ours:
+        return "nothing runs as %s" % login
+    if nothing_to_move(conf, home):
+        return "%s holds no credential, node.env or proxy key — nothing a session reads moves" % login
+    return ""
+
+
 def fresh_gate(login, force):
     """--fresh (issue #2294): a login fleet-login-new.sh has JUST opened. The
     preflight's questions (is its proxy on, do its sessions all use it) have no
@@ -979,11 +1078,7 @@ def fresh_gate(login, force):
     the one thing to make sure of is that it IS fresh: no process runs as it."""
     if DRY or not PREFLIGHT:
         return
-    pw = getpw(login)
-    r = subprocess.run(["ps", "-U", str(pw.pw_uid), "-o", "comm="], stdout=subprocess.PIPE,
-                       stderr=subprocess.DEVNULL, text=True)
-    cmds = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-    ours = [c for c in cmds if not os_agent(c)]
+    cmds, ours = login_procs(login)
     if not ours:
         say("preflight: ok — %s is fresh (nothing runs as it%s): the proxy comes first, then its sessions"
             % (login, "" if not cmds else "; %d macOS per-user agent(s) only" % len(cmds)))
@@ -1639,6 +1734,216 @@ def machine_logins(spec):
     return out
 
 
+# ---- every login separated, by the machine itself (issue #4607) -------------------
+# Separation is not opt-in: the machine daemon (fleet-node-supervisor.py's
+# `credsep-enforce` task, root) runs `machine enforce` every few minutes. Every
+# human login here — a login shell, a home under the homes dir, not a system or
+# role account — that is not separated is taken in (`machine install --logins
+# <it>`: the store, a tenant of the shared proxy); one separated on its own proxy
+# joins the shared one. Nobody types a sudo. Each attempt is one line of
+# <LOG_BASE>/enforce.log (the audit), the verdicts are <NODE_STATE>/credsep-enforce.json
+# (0644, no secret: anyone's doctor reads it — `machine enforced`). A refused
+# preflight (live sessions that still read the files) is tried again each tick
+# and, past FLEET_CREDSEP_ENFORCE_GRACE (24 h), with --force: by then the hub has
+# been refusing the login any lease (its backstop) and the files it would keep
+# are only a leak. A failed install is rolled back by install itself and tried
+# again after FLEET_CREDSEP_ENFORCE_RETRY (1 h).
+# The one way out is root's own word: <NODE_STATE>/credsep.optional, a login per
+# line (or `*`: this whole machine is a self-hosted one-person box).
+ENFORCE_STATUS = os.path.join(NODE_STATE, "credsep-enforce.json")
+ENFORCE_OPTIONAL = os.path.join(NODE_STATE, "credsep.optional")
+NOLOGIN = ("/usr/bin/false", "/bin/false", "/sbin/nologin", "/usr/sbin/nologin", "/usr/bin/nologin", "")
+
+
+def human_logins():
+    """-> sorted [(login, home)] of every human fleet login on this machine: a
+    login shell, a home directly under the homes dir, a uid of a person (macOS ≥
+    500, Linux ≥ 1000), not a `_` / role account, and a fleet login
+    (fleet_login). The sandbox's FLEET_CREDSEP_PW rows stand in for pwd (uid
+    ignored there)."""
+    homes = E("FLEET_CREDSEP_HOMES", "/Users" if MAC else "/home").rstrip("/")
+    floor = 500 if MAC else 1000
+    rows = sandbox_pw() if TEST and os.environ.get("FLEET_CREDSEP_PW") else pwd.getpwall()
+    out = {}
+    for p in rows:
+        if not SAFE.match(p.pw_name) or p.pw_name.startswith("_") or p.pw_name in (ROLE, "root", "nobody"):
+            continue
+        if (p.pw_shell or "").strip() in NOLOGIN:
+            continue
+        if not getattr(p, "sandbox", False) and (p.pw_uid < floor or p.pw_uid >= 60000):
+            continue
+        if os.path.dirname(p.pw_dir.rstrip("/")) != homes:
+            continue
+        if not fleet_login(p.pw_name, p.pw_dir):
+            continue
+        out[p.pw_name] = p.pw_dir
+    return sorted(out.items())
+
+
+def fleet_login(login, home):
+    """A login the fleet runs on, or will (issue #4607): a fleet install or conf
+    dir in its home, a node token the machine daemon holds for it, or the daemon
+    took it over. A CI runner or a plain person's account is none of these — it
+    is never leased anything, so there is nothing to separate (2026-10-17:
+    fleet-ci, minilinux)."""
+    marks = [os.path.join(home, ".claude", "fleet"), os.path.join(home, ".config", "claude-fleet"),
+             os.path.join(NODE_STATE, "logins", login + ".env")]
+    for m in marks:
+        try:
+            os.lstat(m)
+            return True
+        except PermissionError:
+            return True         # a home we cannot look into: counted, its state read from the store
+        except OSError:
+            pass
+    return login in managed_logins()
+
+
+def enforce_optional():
+    """root's own list of logins left unseparated on purpose ('*' = all), or
+    None when it is not root's alone (a file anyone could plant says nothing)."""
+    try:
+        st = os.lstat(ENFORCE_OPTIONAL)
+    except OSError:
+        return set()
+    if not stat.S_ISREG(st.st_mode) or (st.st_mode & 0o022) or (st.st_uid != 0 and not TEST):
+        say("enforce: %s is not root's alone (owner/mode) — ignored" % ENFORCE_OPTIONAL)
+        return set()
+    return {l.strip() for l in open(ENFORCE_OPTIONAL) if l.strip() and not l.startswith("#")}
+
+
+def enforce_audit(row):
+    """One JSON line per attempt in <LOG_BASE>/enforce.log — who, what, the verdict."""
+    if DRY:
+        return
+    try:
+        mkdirs(LOG_BASE)
+        fd = os.open(os.path.join(LOG_BASE, "enforce.log"),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        with os.fdopen(fd, "a") as f:
+            f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError as e:
+        say("enforce: audit line not written (%s)" % e)
+
+
+def enforce_run(argv):
+    """Run one of our own machine verbs as a child (its own MOVED / CUR / rollback):
+    -> (rc, its output's last lines). FLEET_CREDSEP_ENFORCE_RUN (selftest) runs that
+    command with the verb's argv instead."""
+    seam = os.environ.get("FLEET_CREDSEP_ENFORCE_RUN") if TEST else None
+    cmd = shlex.split(seam) + argv if seam else [sys.executable, "-I", os.path.abspath(__file__)] + argv
+    try:
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                           timeout=int(E("FLEET_CREDSEP_ENFORCE_TIMEOUT", "600")))
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    lines = [l for l in (r.stdout or "").splitlines() if l.strip()]
+    pre = [l for l in lines if l.startswith("preflight: ") and "ok —" not in l and "skipped:" not in l]
+    return r.returncode, " | ".join((pre[:3] if r.returncode == 6 and pre else []) + lines[-2:])[:600]
+
+
+def machine_enforce(a):
+    """Every human login separated (issue #4607). -> 0 when every one is (or
+    is root's declared exception), 1 when any is not (named on stdout and in the
+    status file), 2 when it cannot run."""
+    now_ = int(time.time())
+    grace = int(E("FLEET_CREDSEP_ENFORCE_GRACE", "86400"))
+    retry = int(E("FLEET_CREDSEP_ENFORCE_RETRY", "3600"))
+    try:
+        prev = json.load(open(ENFORCE_STATUS)).get("logins") or {}
+    except (OSError, ValueError, AttributeError):
+        prev = {}
+    opt = enforce_optional()
+    want = [l for l in a.logins.split(",") if l] if a.logins not in ("", "all") else None
+    logins = [(l, h) for l, h in human_logins() if want is None or l in want]
+    out, bad = {}, []
+    shared = shared_on()
+    for login, home in logins:
+        p = prev.get(login) or {}
+        st = store_state(login)
+        row = {"state": st, "at": now_}
+        if "*" in opt or login in opt:
+            row.update(verdict="optional", why="root's %s names it" % ENFORCE_OPTIONAL)
+        elif st == "shared" or (st == "own" and not shared):
+            row["verdict"] = "separated"
+        elif st == "unknown":
+            row.update(verdict="unknown", why="its store cannot be read here")
+            bad.append(login)
+        elif p.get("next") and now_ < p["next"] and p.get("verdict") == "failed":
+            row.update({k: p[k] for k in ("verdict", "why", "rc", "since", "next", "tries") if k in p})
+            bad.append(login)
+        else:
+            argv = ["machine", "join" if st == "own" else "install", "--logins", login]
+            since = p.get("since") or now_
+            force = st == "none" and p.get("verdict") == "refused" and now_ - since >= grace
+            if force:
+                argv.append("--force")
+            if DRY:
+                say("enforce: %s — %s: would run %s" % (login, st, " ".join(argv)))
+                row.update(verdict="would", why=" ".join(argv))
+                out[login] = row
+                continue
+            rc, tail = enforce_run(argv)
+            if rc == 0 and store_state(login) == "shared":
+                row.update(verdict="separated", via=argv[1] + (" --force" if force else ""), separated_at=now_)
+            else:
+                row.update(verdict="refused" if rc == 6 else "failed", rc=rc, why=tail, since=since,
+                           tries=int(p.get("tries") or 0) + 1)
+                if rc != 6:
+                    row["next"] = now_ + retry
+                bad.append(login)
+            enforce_audit({"at": now_, "login": login, "action": " ".join(argv), "rc": rc,
+                           "verdict": row["verdict"], "detail": tail})
+        out[login] = row
+        say("enforce: %s — %s%s" % (login, row["verdict"], ": %s" % row["why"] if row.get("why") else ""))
+    if not DRY:
+        mkdirs(NODE_STATE)
+        put(ENFORCE_STATUS, json.dumps({"at": now_, "issue": 4607, "logins": out}, indent=1, sort_keys=True) + "\n",
+            0o644, "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+    if bad:
+        say("enforce: NOT separated: %s" % ", ".join(bad))
+        return 1
+    say("enforce: every human login separated (%d)" % len(logins))
+    return 0
+
+
+def machine_enforced(a):
+    """Anyone: the doctor's `credsep-logins` row, off the daemon's status file
+    and what the stores say NOW. credsep-logins: OK|FAIL|INFO — … ; exit 0 OK/INFO, 1 FAIL."""
+    try:
+        doc = json.load(open(ENFORCE_STATUS))
+    except (OSError, ValueError):
+        doc = None
+    if doc is None and not managed_logins():
+        # no machine daemon here: each login's own `credsep` row speaks for it
+        print("credsep-logins: INFO — not a managed machine (no %s)" % ENFORCE_STATUS)
+        return 0
+    logins = human_logins()
+    opt = enforce_optional()
+    st = {l: store_state(l) for l, _ in logins}
+    if a.json:
+        print(json.dumps({"status": doc, "state": st}))
+    none = [l for l, _ in logins if st[l] == "none" and "*" not in opt and l not in opt]
+    rows = (doc or {}).get("logins") or {}
+    if none:
+        why = "; ".join("%s: %s" % (l, (rows.get(l) or {}).get("why") or (rows.get(l) or {}).get("verdict")
+                                     or "never tried") for l in none[:6])
+        print("credsep-logins: FAIL — %d of %d login(s) here NOT separated: %s — their sessions can read what the "
+              "node leases them. The machine daemon separates each one (credsep-enforce, %s); last word: %s. "
+              "By hand (root): sudo bash %s/fleet-credsep.sh machine install --logins %s"
+              % (len(none), len(logins), ", ".join(none), ENFORCE_STATUS if doc else "not run yet", why,
+                 HERE, ",".join(none)))
+        return 1
+    if not logins:
+        print("credsep-logins: INFO — no human login here")
+        return 0
+    age = int(time.time()) - int((doc or {}).get("at") or 0)
+    print("credsep-logins: OK — every login separated (%d)%s%s" % (
+        len(logins), " · root's exception: %s" % ", ".join(sorted(opt)) if opt else "",
+        " · daemon last ran %ds ago" % age if doc else " · no daemon pass recorded yet"))
+    return 0
+
+
 def machine_install(a):
     """One sudo for the whole machine: every named login joins the shared proxy
     (its credentials move into the store, its own proxy goes, FLEET_CRED_PROXY=1),
@@ -1646,7 +1951,16 @@ def machine_install(a):
     rows = machine_logins(a.logins)
     if not rows:
         die("machine install: no login to join (--logins a,b, or a login with ~/.claude/fleet)", 2)
-    preflight_gate([(l, c) for l, c, _ in rows if not os.path.lexists(paths(l)[0])], a.force)
+    gate = []
+    for l, c, h in rows:
+        if os.path.lexists(paths(l)[0]):
+            continue
+        why = "" if DRY else preflight_skip(l, c, h)
+        if why:
+            say("preflight: %s — skipped: %s" % (l, why))
+        else:
+            gate.append((l, c))
+    preflight_gate(gate, a.force)
     created = ensure_role()
     say("role:", ROLE, "(created)" if created else "(exists)")
     pre = {"service": os.path.exists(SHARED_PATH), "rec": shared_rec() is not None}
@@ -2942,26 +3256,42 @@ def denied(path):
         return True
 
 
+def node_login(conf, home):
+    """A login the hub leases to (issue #4607): a node token here (node.env /
+    node.pub.env), or a lease already on disk."""
+    return any(os.path.lexists(os.path.join(conf, f)) for f in ("node.env", "node.pub.env")) \
+        or bool(leftovers(conf, home, None))
+
+
 def check(a):
     """One doctor line: credsep: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 WARN/FAIL."""
     conf = a.conf_dir
     home = os.path.expanduser("~")
     rec = record(conf)
-    want = os.environ.get("FLEET_CRED_SEPARATE", "0") == "1"
     me = pwd.getpwuid(os.getuid()).pw_name
+    # separation is not opt-in (issue #4607): FLEET_CRED_SEPARATE=0 counts only
+    # beside an explicit FLEET_CREDSEP_OPTIONAL=1 (a self-hosted one-person box),
+    # or root's own credsep.optional naming this login
+    opt = os.environ.get("FLEET_CREDSEP_OPTIONAL") == "1" or bool({"*", me} & enforce_optional())
+    want = not opt or os.environ.get("FLEET_CRED_SEPARATE", "1") == "1"
     if not rec and me in managed_logins():
         # a managed login is always separated (issue #3700): exit 1 = the hub's «not»
         print("credsep: FAIL — this login is managed but not separated: its sessions can read node.env and the "
               "relay pass and act as this machine. An admin separates it (one sudo): sudo bash "
               "%s/fleet-credsep.sh machine install --logins %s" % (HERE, me))
         return 1
+    if not rec and want and not node_login(conf, home):
+        print("credsep: INFO — not a node (no node.env here, not taken over by a machine daemon): nothing is "
+              "leased to this login, so nothing to separate — it is separated the moment it joins")
+        return 0
     if not rec:
         if want:
-            print("credsep: WARN — FLEET_CRED_SEPARATE=1 but this login is not separated: its sessions can read "
-                  "the leased credentials and node.env. Install (needs sudo once): bash %s/fleet-credsep.sh install"
-                  % HERE)
+            print("credsep: FAIL — this login is not separated: its sessions can read the leased credentials and "
+                  "node.env, and the hub leases it none (拒发：未隔离). On a managed machine the daemon separates it "
+                  "within minutes (credsep-enforce); else, once (root): sudo bash %s/fleet-credsep.sh install" % HERE)
             return 1
-        print("credsep: INFO — off (FLEET_CRED_SEPARATE=0): credentials in this login's own files, as before")
+        print("credsep: INFO — off (FLEET_CREDSEP_OPTIONAL=1, FLEET_CRED_SEPARATE=0): credentials in this login's "
+              "own files — a declared self-hosted box")
         return 0
     R = rec["root"]
     bad = [p for p in (R, os.path.join(R, "node.env"), os.path.join(R, "accounts")) if not denied(p)]
@@ -3001,8 +3331,8 @@ def check(a):
     if subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         note = " · note: this login has password-less sudo, which reaches any file"
     if not want and not rec.get("shared"):
-        print("credsep: WARN — FLEET_CRED_SEPARATE=0 but this login is still separated; uninstall: bash "
-              "%s/fleet-credsep.sh uninstall" % HERE)
+        print("credsep: WARN — FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0 but this login is still separated; "
+              "uninstall: bash %s/fleet-credsep.sh uninstall" % HERE)
         return 1
     if not rec.get("shared") and shared_rec():
         print("credsep: WARN — separated on its own proxy, but this machine runs the shared one: one more service "
@@ -3087,6 +3417,7 @@ def main():
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
     mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "leave", "pooldup", "pool-sync",
+                                     "enforce", "enforced",
                                           "managed", "proxies"))
     mc.add_argument("--logins", default="all")
     mc.add_argument("--dry-run", action="store_true")
@@ -3134,12 +3465,14 @@ def main():
             return machine_managed(a)
         if a.verb == "proxies":
             return machine_proxies(a)
+        if a.verb == "enforced":
+            return machine_enforced(a)
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
         return {"install": machine_install, "uninstall": machine_uninstall, "refresh": machine_refresh,
                 "join": machine_join, "leave": machine_leave, "pooldup": machine_pooldup,
-                "pool-sync": machine_pool_sync}[a.verb](a)
+                "pool-sync": machine_pool_sync, "enforce": machine_enforce}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
         DRY = a.dry_run
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
@@ -3158,7 +3491,13 @@ def main():
         if fresh and a.fresh:
             fresh_gate(a.login, a.force)
         elif fresh:
-            preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
+            pw_ = getpw(a.login)
+            why = preflight_skip(a.login, os.path.abspath(a.conf_dir),
+                                 pw_.pw_dir if not TEST or getattr(pw_, "sandbox", False) else os.environ["HOME"])
+            if why:
+                say("preflight: %s — skipped: %s" % (a.login, why))
+            else:
+                preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
         # A login just opened on a machine that runs the shared proxy is one more
         # tenant of it (issue #3155): an own proxy beside it served the new login
         # nothing the shared one leases, and its check WARNs «join it» forever.

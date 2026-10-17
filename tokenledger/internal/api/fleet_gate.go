@@ -154,9 +154,12 @@ var gateHubJudge = map[string]func(s *Server, nodes []NodeView, detail bool) (bo
 				long = append(long, c.name+" "+durWords(c.ttl))
 			}
 		}
+		// every login that leases, managed or not (claude-fleet#4607); a
+		// machine link, a person's pod (central, nothing leased) and a SPOT
+		// node are not logins of a person's machine
 		var open []string
 		for _, n := range nodes {
-			if n.Role != store.NodeRoleManaged || n.MachineLink || n.Status == "lost" {
+			if n.MachineLink || n.UserPod || n.Kind == store.NodeKindEphemeral || n.Status == "lost" {
 				continue
 			}
 			if n.Credsep != control.CredsepSeparated {
@@ -169,7 +172,7 @@ var gateHubJudge = map[string]func(s *Server, nodes []NodeView, detail bool) (bo
 		}
 		if len(open) > 0 {
 			sort.Strings(open)
-			w := fmt.Sprintf("%d 个托管登录没做凭据隔离", len(open))
+			w := fmt.Sprintf("%d 个登录没做凭据隔离", len(open))
 			if detail {
 				w += "：" + strings.Join(open, "、")
 			}
@@ -178,7 +181,7 @@ var gateHubJudge = map[string]func(s *Server, nodes []NodeView, detail bool) (bo
 		if len(why) > 0 {
 			return false, strings.Join(why, "；")
 		}
-		return true, "每种凭据 ≤ 12h，托管登录都做了凭据隔离"
+		return true, "每种凭据 ≤ 12h，每个登录都做了凭据隔离"
 	},
 }
 
