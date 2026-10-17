@@ -352,6 +352,12 @@ python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
 因此本探针不证明子 Agent、任意脱管子进程、活动 turn 中断、真实 TUI 或完整 MCP 的停止。
 这些门槛以及并发恢复/撤销仍未完成，旧 `prove_stopped` 不因本次探针放宽，生产不启用共享后台。
 
+Linux 固定版本 `0.162.1` 的反例进一步收紧这一门槛：在原生 read-only 沙箱内，
+`terminate` 返回成功且后台命令列表变空后，精确关联的夹具命令仍是 sleeping，停止共享后台后
+也未退出，不能解释成僵尸进程。探针分别收集 terminate、clean、archive 与最终清理的退出
+证据；一条失败不再遮住后两条，但任意一条失败都保持整体非零退出，不用原生成功响应代替
+实际退出。CI 另用同一夹具对照固定的 `0.163.0`，不修改发布版本、不把对照通过当生产验收。
+
 ### Linux 沙箱前置条件与线程生命周期分开验收
 
 线程停止探针的 Linux 首轮失败发生在命令启动前：一种环境缺少系统与内置 bwrap，
