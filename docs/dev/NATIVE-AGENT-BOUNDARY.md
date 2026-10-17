@@ -269,6 +269,26 @@ python3 bin/fleet-native-session-env-selftest.py --codex /path/to/codex
 测试节点及固定版本 CI 必须核对同一源码；完整 MCP、真实凭据、面板、恢复和延迟目标
 另做联合验收，不能由该离线夹具代替。
 
+追加 `--hooks` 检查实际生命周期，而不把 MCP 证据外推为 Hook 已通过：
+
+```sh
+python3 bin/fleet-native-session-env-selftest.py --hooks --codex /path/to/codex
+```
+
+只在临时 HOME 为已审阅的无副作用夹具保存原生 trusted hash；闲置夹具后台重新加载后，
+两个 TUI 分别置于独立监督进程下。没有 hook-trust bypass、真实 tmux 或平台准入调用。
+本机 `0.163.0` 与测试节点 `0.162.1` 各通过 48 项检查，五个依赖源码哈希一致；
+SessionStart 提供各自正确的 root/cwd，但十项夹具环境
+（包括 launcher、launch context 和 authority context）全部来自共同后台。
+复用现有 `fleet_launch.native_parent` 的真实进程识别，两个 Hook 均识别为同一个后台；
+它不是任一 TUI 监督进程的后代，因此现有 `root_native` 验证拒绝这条归属证明。
+这不是授权算法错误，也不能通过删除进程归属检查「修复」；共享后台的身份迁移仍未成立。
+
+探针同时纠正就绪条件：原生后台还可能发出内部标题请求，单纯累计两次 HTTP 请求会在
+第二个用户线程尚未进入首回合时提前返回。现在使用测试版本请求中的精确 root cache key
+确认每个线程自己的 loopback 请求；内部请求不计为新会话就绪。这是固定版本夹具关联，
+不是生产授权或新的启动探测协议。此前 MCP 进程/路由结论保留，但请求计数不能证明两条用户回合均已开始。
+
 ## 完整目标的完成账本
 
 ### 默认配置发布交给原生 API，而不是继续扩展用户 TOML 编辑器

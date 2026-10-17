@@ -40,6 +40,13 @@ probe. Unknown or stale bindings must not execute tools. The current private
 runtime remains unchanged; this result is not evidence of a live credential leak.
 See the [concurrency boundary](NATIVE-AGENT-BOUNDARY.md#共享后台的-mcp-环境不是逐客户端环境).
 
+Add `--hooks` to inspect reviewed fixture SessionStart callbacks under two
+independent TUI supervisors. The existing native-parent verifier identifies
+the shared backend, not either supervisor's descendant; launcher and admission
+context environment also belongs to that backend. Do not remove ancestry checks
+or infer a platform launch binding from a thread ID/cwd. The fixture correlates
+each root's own loopback request instead of counting unrelated title requests.
+
 ## Managed guard configuration (candidate)
 
 The candidate renderer derives native managed hooks from the existing

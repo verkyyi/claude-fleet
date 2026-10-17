@@ -10,6 +10,7 @@ from pathlib import Path
 import pty
 import runpy
 import select
+import shlex
 import shutil
 import struct
 import subprocess
@@ -47,16 +48,33 @@ for line in sys.stdin:
         result = {}
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
 '''
+HOOK = '''import json, os, pathlib, runpy, sys
+payload = json.load(sys.stdin)
+path = pathlib.Path(sys.argv[2]) / (payload['session_id'] + '.json')
+path.with_suffix('.started').write_text(json.dumps(payload))
+launch = runpy.run_path(sys.argv[1])
+observed = {'payload': payload,
+            'environment': {name: os.environ.get(name) for name in sys.argv[3:]}}
+try:
+    observed['native'] = launch['native_parent']()
+except Exception as error:
+    observed['error'] = str(error)
+path.write_text(json.dumps(observed))
+'''
 
 
-def launch(binary, base, codex_home, environment, prior_ids, stop, ready):
+def launch(binary, base, codex_home, environment, prior_ids, stop, ready, supervised=False):
     descriptor, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 120, 0, 0))
     child = None
     try:
         try:
-            child = subprocess.Popen([binary, '--cd', str(base), '--worktree',
-                                      'Offline session environment fixture. Do not run tools.'],
+            command = [binary, '--cd', str(base), '--worktree',
+                       'Offline session environment fixture. Do not run tools.']
+            if supervised:
+                command = [sys.executable, '-c',
+                           'import subprocess,sys; raise SystemExit(subprocess.call(sys.argv[1:]))', *command]
+            child = subprocess.Popen(command,
                                      cwd=base, env=environment, stdin=slave, stdout=slave, stderr=slave,
                                      start_new_session=True)
         finally:
@@ -84,7 +102,7 @@ def launch(binary, base, codex_home, environment, prior_ids, stop, ready):
                         continue
                 if first.get('type') == 'session_meta' and first['payload']['id'] not in prior_ids:
                     found.append(first['payload'])
-            if len(found) == 1 and ready():
+            if len(found) == 1 and ready(found[0]['id']):
                 return child, descriptor, found[0]
         raise AssertionError('native TUI did not create one distinct session')
     except BaseException:
@@ -97,6 +115,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
     parser.add_argument('--fleet-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--hooks', action='store_true', help='also inspect reviewed SessionStart hook environment and native ancestry')
     arguments = parser.parse_args()
     executable = shutil.which(arguments.codex)
     if not executable:
@@ -105,6 +124,9 @@ def main():
     client_type = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-rpc.py'))['Client']
     stop = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-native-local-runtime-selftest.py'))['stop']
     checks, requests, observations = [], [], []
+    hook_observations = []
+    lifecycle_names = (*NAMES, 'FLEET_CODEX_LAUNCHER_PID', 'FLEET_LAUNCH_CONTEXT', 'FLEET_AUTHORITY_CONTEXT')
+    launch_api = runpy.run_path(str(arguments.fleet_root / 'bin/fleet_launch.py')) if arguments.hooks else None
 
     def check(condition, message):
         if not condition:
@@ -118,8 +140,9 @@ def main():
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            self.rfile.read(int(self.headers.get('Content-Length', '0')))
-            requests.append({'path': self.path, 'authorization': bool(self.headers.get('Authorization'))})
+            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+            requests.append({'path': self.path, 'authorization': bool(self.headers.get('Authorization')),
+                             'cache_key': body.get('prompt_cache_key')})
             body = b'{"error":{"message":"offline fixture: inference disabled"}}'
             self.send_response(400)
             self.send_header('Content-Type', 'application/json')
@@ -159,7 +182,7 @@ def main():
             names = [*NAMES, 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']
             (codex_home / 'config.toml').write_text(
                 'model="probe"\nmodel_provider="offline"\napproval_policy="never"\nsandbox_mode="read-only"\n'
-                '[features]\ndaemon_auto_start=true\nhooks=false\nremote_plugin=false\n'
+                '[features]\ndaemon_auto_start=true\nhooks=' + str(arguments.hooks).lower() + '\nremote_plugin=false\n'
                 '[model_providers.offline]\nname="offline"\n'
                 f'base_url="http://127.0.0.1:{endpoint.server_port}/v1"\n'
                 'wire_api="responses"\nrequires_openai_auth=false\nrequest_max_retries=0\nstream_max_retries=0\n'
@@ -167,7 +190,17 @@ def main():
                 '[mcp_servers.fixture]\ncommand=' + json.dumps(sys.executable) + '\n'
                 'args=' + json.dumps([str(script), *names]) + '\nenv_vars=' + json.dumps(names) + '\n'
                 'required=true\nstartup_timeout_sec=10\ntool_timeout_sec=5\n')
-            backend_values = {name: 'fixture-backend-' + name.lower() for name in NAMES}
+            hook_results = root / 'hook-results'
+            if arguments.hooks:
+                hook_results.mkdir()
+                hook_script = root / 'hook.py'
+                hook_script.write_text(HOOK)
+                command = shlex.join([sys.executable, str(hook_script),
+                    str(arguments.fleet_root / 'bin/fleet_launch.py'), str(hook_results), *lifecycle_names])
+                with (codex_home / 'config.toml').open('a') as configuration:
+                    configuration.write('[[hooks.SessionStart]]\n[[hooks.SessionStart.hooks]]\n'
+                                        'type="command"\ncommand=' + json.dumps(command) + '\n')
+            backend_values = {name: 'fixture-backend-' + name.lower() for name in lifecycle_names}
             version = subprocess.check_output([binary, '--version'], env=environment, text=True,
                                               stderr=subprocess.PIPE, timeout=10).strip()
             with (root / 'backend.log').open('w') as logfile:
@@ -184,17 +217,45 @@ def main():
                     check(socket.exists() and backend.poll() is None, 'owned native backend starts')
                     rpc = client_type('unix://' + str(socket), timeout=15, peer_pid=backend.pid)
                     check(rpc.call('thread/loaded/list', {})['data'] == [], 'backend starts without loaded threads')
+                    if arguments.hooks:
+                        entries = rpc.call('hooks/list', {'cwds': [str(base)]})['data']
+                        hooks = [hook for entry in entries for hook in entry['hooks']]
+                        check(len(hooks) == 1 and hooks[0]['trustStatus'] == 'untrusted',
+                              'only the inert fixture hook is present and initially untrusted')
+                        hook = hooks[0]
+                        rpc.call('config/value/write', {'keyPath': 'hooks.state', 'mergeStrategy': 'upsert',
+                            'value': {hook['key']: {'trusted_hash': hook['currentHash']}}})
+                        entries = rpc.call('hooks/list', {'cwds': [str(base)]})['data']
+                        hooks = [hook for entry in entries for hook in entry['hooks']]
+                        check(len(hooks) == 1 and hooks[0]['trustStatus'] == 'trusted',
+                              'exact reviewed fixture hash has native trust without bypass')
+                        rpc.close()
+                        rpc = None
+                        stop(backend)
+                        check(backend.poll() is not None, 'idle fixture backend stops before loading reviewed hook trust')
+                        backend = subprocess.Popen([binary, 'app-server', '--listen', 'unix://'], cwd=base,
+                            env=dict(environment, **backend_values), stdin=subprocess.DEVNULL, stdout=logfile,
+                            stderr=logfile, start_new_session=True)
+                        deadline = time.monotonic() + 15
+                        while backend.poll() is None and time.monotonic() < deadline:
+                            try:
+                                rpc = client_type('unix://' + str(socket), timeout=2, peer_pid=backend.pid)
+                                break
+                            except (OSError, ValueError, EOFError):
+                                time.sleep(.05)
+                        check(rpc is not None and rpc.call('thread/loaded/list', {})['data'] == [],
+                              'reviewed fixture restarts on the exact idle native backend')
                     for label in ('first', 'second'):
-                        values = {name: 'fixture-' + label + '-' + name.lower() for name in NAMES}
+                        values = {name: 'fixture-' + label + '-' + name.lower() for name in lifecycle_names}
                         child, descriptor, metadata = launch(binary, base, codex_home,
-                            dict(environment, **values), identifiers, stop, lambda: len(requests) == len(identifiers) + 1)
+                            dict(environment, **values), identifiers, stop,
+                            lambda identifier: any(request['cache_key'] == identifier for request in requests),
+                            supervised=arguments.hooks)
                         children.append(child)
                         descriptors.append(descriptor)
                         identifiers.append(metadata['id'])
-                        deadline = time.monotonic() + 15
-                        while len(requests) < len(identifiers) and time.monotonic() < deadline:
-                            time.sleep(.05)
-                        check(len(requests) == len(identifiers), label + ': one expected loopback request')
+                        check(sum(request['cache_key'] == metadata['id'] for request in requests) == 1,
+                              label + ': one loopback request for the exact native root')
                         loaded = rpc.call('thread/loaded/list', {})['data']
                         check(all(identifier in loaded for identifier in identifiers), label + ': all opened TUI threads belong to backend')
                         check(all(process.poll() is None for process in children), label + ': both TUI lifetimes overlap')
@@ -215,6 +276,32 @@ def main():
                         check(Path(observed['cwd']).resolve() == Path(native['cwd']).resolve(),
                               label + ': MCP working directory matches native worktree')
                         observations.append({'label': label, 'thread': metadata['id'], **observed})
+                        if arguments.hooks:
+                            result_path = hook_results / (metadata['id'] + '.json')
+                            if not result_path.is_file():
+                                raise AssertionError(label + ': missing hook result: ' + json.dumps({
+                                    'files': {path.name: path.read_text() for path in hook_results.iterdir()},
+                                    'requests': requests, 'thread': native,
+                                    'hooks': rpc.call('hooks/list', {'cwds': [native['cwd']]})}))
+                            hook_result = json.loads(result_path.read_text())
+                            check('native' in hook_result, label + ': reviewed SessionStart executes: '
+                                  + str(hook_result.get('error', 'ok')))
+                            payload, native = hook_result['payload'], hook_result['native']
+                            check(payload['hook_event_name'] == 'SessionStart' and payload['source'] == 'startup'
+                                  and payload['session_id'] == metadata['id'],
+                                  label + ': native SessionStart carries the exact root')
+                            check(Path(payload['cwd']).resolve() == Path(observed['cwd']).resolve(),
+                                  label + ': hook cwd matches its native worktree')
+                            check(hook_result['environment'] == backend_values,
+                                  label + ': lifecycle environment comes from backend rather than TUI')
+                            check(native['pid'] == backend.pid and native['actual_provider'] == 'codex'
+                                  and Path(native['executable']).resolve() == Path(binary),
+                                  label + ': existing native-parent verifier identifies the backend')
+                            check(launch_api['same_process'](native), label + ': hook native process identity still holds')
+                            check(not launch_api['root_native'](native, child.pid),
+                                  label + ': shared backend fails the existing per-launch supervisor ancestry check')
+                            hook_observations.append({'label': label, 'thread': metadata['id'],
+                                                      'supervisor': child.pid, **hook_result})
                     check(len(set(identifiers)) == 2, 'distinct native roots share the backend')
                     check(observations[0]['pid'] != observations[1]['pid'], 'each thread has a distinct MCP process')
                     forged = rpc.call('mcpServer/tool/call', {'threadId': identifiers[0],
@@ -260,6 +347,7 @@ def main():
                 time.sleep(.05)
             check(not any(exists(observed['pid']) for observed in observations), 'owned MCP processes exit with backend cleanup')
             print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
+                              'hooks': hook_observations,
                               'scope': 'fixture values only; not live credential or tool authorization acceptance'}, indent=2))
     finally:
         endpoint.shutdown()
