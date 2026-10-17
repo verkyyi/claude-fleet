@@ -118,6 +118,43 @@ bash bin/fleet-native-worktree-selftest.sh
 不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
 迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
 
+### SessionStart 的目录时序与恢复边界
+
+显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
+SessionStart 命令。临时 HOME、空 setting sources、假 API key、loopback 拒绝端点、空工具
+及 MCP 保持；发现机器级 Claude 配置目录时拒绝运行。此模式不能继承 `--bare` 的
+“跳过 keychain reads”保证，也不代表完整 Fleet hooks/MCP 或真实认证验收。
+
+```sh
+python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude --with-hooks
+```
+
+本机 Claude `2.1.296` 的 49 项检查通过。此次是原生 CLI 真正调用 hook，不是直接传入
+手写 payload；hook 通过既有 `fleet_launch.native_parent` / `root_native` 验证二进制、
+进程出生时间与夹具 supervisor 归属，没有 mock 进程发现或修改线上 tmux。
+
+| 调用路径 | SessionStart cwd | 后续 native init cwd | 原生 session ID |
+|---|---|---|---|
+| 主检出启动 `--worktree` | 新工作树 | 新工作树 | 新 ID |
+| 主检出执行 `--resume <ID>` | **主检出** | 原工作树 | 同一 ID |
+| 已保存的工作树执行 `--resume <ID>` | 原工作树 | 原工作树 | 同一 ID |
+
+第二条在首次要求 hook 与 init 目录一致的探针中真实失败；因此不能简单把 SessionStart
+的 cwd 当作“恢复已经完成”的工作目录证明。输出保留 `cwd_matches_init` 与两种目录，
+后续版本若修正时序不要求继续出现旧行为。第三条同时验证不新建目录、不重置未提交修改。
+同一原生 session ID 的恢复会产生新的进程 incarnation，旧 PID/birth 不能作为新进程凭证。
+
+据此，原生创建迁移必须保存已验证的实际工作树，并从该目录恢复精确 native ID；
+恢复时重新校验当前 Git 注册、仓库身份和原生进程，不用启动主检出、目录前缀或
+`CLAUDE_PROJECT_DIR` 猜测所有权。缺失或错配的目录不得静默以可写主检出替代。
+现有 Fleet restore 已优先使用保存的 `@worktree`，应复用其记录而不是新增恢复数据库。
+此次尚未将实际 hook cwd 绑定到任务/准入 receipt，未切换创建入口，也未证明真实 TUI 的
+同等时序；下一步仍须完成上述绑定与恢复拒绝路径，不能以这份离线记录解除上线门槛。
+
+候选工作流 `native-claude-worktree` 在 GitHub-hosted Ubuntu 上分别运行 bare 与实际 hook
+探针，使用官方 npm 平台包固定 `2.1.296` 并校验 SHA-512；不执行安装脚本，不使用账号凭据。
+JSON 结果保存为 CI artifact。工作流存在不等于 Linux 验收通过，结果以对应提交的 job 为准。
+
 ### 原生清理所有权优先于 Fleet 回收
 
 真实 Claude `2.1.296` 在 linked-worktree 的 Git metadata 内留下 `CLAUDE_BASE` 标记，
