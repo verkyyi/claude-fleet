@@ -631,7 +631,7 @@ drill_hub_pause_train_queued() {
   d=$(mktemp -d "${TMPDIR:-/tmp}/hub-pause.XXXXXX"); t0=$(now)
   # a fake gh: the open issues labelled hub-deploy-paused are $d/issues, $d/down = the API is down
   printf '#!/bin/bash\n[ ! -e "%s/down" ] || exit 1\ncat "%s/issues" 2>/dev/null\n' "$d" "$d" > "$d/gh"; chmod +x "$d/gh"
-  chk() { out=$(GH="$d/gh" FLEET_HUB_PAUSE_RETRY_SECS=0 GITHUB_OUTPUT= bash "$BIN/fleet-hub-pause.sh" check --repo o/r "$@" 2>&1); rc=$?; }
+  chk() { out=$(GH="$d/gh" FLEET_HUB_PAUSE_RETRY_SECS=0 GITHUB_OUTPUT='' bash "$BIN/fleet-hub-pause.sh" check --repo o/r "$@" 2>&1); rc=$?; }
   # the variable reached the run (set before it was queued): paused
   chk --sha abc1234 --var 1
   [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^paused=true$' || { WHY="HUB_DEPLOY_PAUSED=1 did not pause: $rc $out"; rm -rf "$d"; return 1; }
