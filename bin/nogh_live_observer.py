@@ -100,6 +100,19 @@ class Trace:
             return
         if call.startswith('--- SIG'):
             return  # no payload, signal text or si_* fields retained
+        # A thread still inside a syscall when another thread's exit_group (or
+        # an execve) ends its process: strace closes the pending call with no
+        # result. It is that call's end, decoded as a FAILED call — a cut-off
+        # connect still counts as an attempt, nothing counts as completed
+        # (live, #4625).
+        ended = re.fullmatch(r'<\.\.\. (\w+) resumed> <unfinished \.\.\.>\) = \?', call)
+        if ended:
+            require(pid in self.pending, 'UNMATCHED_RESUME')
+            start, prefix = self.pending.pop(pid)
+            self.pending_bytes -= len(prefix) + len('<unfinished ...>')
+            require(prefix.startswith(ended[1] + '('), 'RESUME_CHANGED_SYSCALL')
+            self.decode(pid, start, at, prefix.rstrip(', ') + ') = -1 EINTR (cut off by process exit)')
+            return
         if '<unfinished ...>' in call:
             require(pid not in self.pending, 'NESTED_UNFINISHED')
             self.pending_bytes += len(call)
@@ -184,7 +197,7 @@ class Trace:
                         # sockets. Their kernel-decoded type cannot send IP
                         # traffic. Internet sockets need OFD alias provenance;
                         # until supported, refuse instead of guessing a zero.
-                        require(re.fullmatch(r'(?:/[^<>]+|pipe:\[\d+\]|anon_inode:\[[^]]+\]|'
+                        require(re.fullmatch(r'(?:/[^<>]+(?:<char \d+:\d+>)?|pipe:\[\d+\]|anon_inode:\[[^]]+\]|'
                                              r'UNIX(?:-STREAM|-DGRAM|-SEQPACKET)?:\[[^]]+\])', annotation)
                                 and 'io_uring' not in annotation, 'FD_TRANSFER_UNSUPPORTED')
                         self.action((start, 'socket', pid, (fd, None, 'local', 'MSG_CMSG_CLOEXEC' in call)))
@@ -325,17 +338,25 @@ class Trace:
                 child = self.parents[child]
             return False
 
-        def access(key, first, last, write, at, until, pid, new_child=None):
+        def access(key, first, last, write, at, until, pid, new_child=None, inert=False):
             active = [item for item in pending.get(key, []) if item[0] > at]
-            for end, old_first, old_last, old_write, old_pid, old_child in active:
+            whole = first == 0 and last == 2 ** 32
+            for end, old_first, old_last, old_write, old_pid, old_child, old_inert in active:
                 if pid == old_pid or last < old_first or old_last < first or not (write or old_write):
                     continue
                 # A child can run before clone/vfork returns; that causal
                 # ordering is known, unlike a sibling mutating the fork snapshot.
                 if old_child is not None and descendant(pid, old_child):
                     continue
+                # An inert touch (it can neither make, drop nor copy a socket:
+                # every socket enters through a traced call) racing a sibling's
+                # whole-table fork/exec cannot change any attribution. Against a
+                # touch on the same fd it is still ordered (live, #4625: Go and
+                # bash close pipes while a sibling forks or execs).
+                if (inert and old_first == 0 and old_last == 2 ** 32) or (old_inert and whole):
+                    continue
                 require(False, 'FD_ORDER_AMBIGUOUS')
-            active.append((until, first, last, write, pid, new_child))
+            active.append((until, first, last, write, pid, new_child, inert))
             pending[key] = active
 
         for at, action, pid, data, until in sorted(self.actions, key=lambda e: e[0]):
@@ -354,8 +375,11 @@ class Trace:
             elif action == 'cloexec': touches = [(data[0], data[0], True)]
             elif action == 'accept': touches = [(data[0], data[0], False), (data[1], data[1], True)]
             elif action in ('write', 'network', 'bound', 'received'): touches = [(data[0], data[0], False)]
+            inert = (action == 'close' and data not in table) or \
+                (action == 'cloexec' and data[0] not in table) or \
+                (action == 'dup' and data[0] not in table and data[1] not in table)
             for first, last, write in touches:
-                access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None)
+                access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None, inert)
             if action in ('write', 'network') and data[0] in table:
                 # dup and fork retain the same open-file-description even when
                 # their FD tables differ. A concurrent connect/disconnect makes
