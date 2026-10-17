@@ -338,63 +338,104 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
-### Conditional idle acceptance capability (#4524)
+### Conditional idle acceptance (#4524, #4617)
 
 `fleet_runtime.idle_accept_capability(provider)` (CLI:
 `fleet_runtime.py idle-accept-capability`, JSON stdin `{"provider":"codex"}`)
-returns this adapter's version 1 `idle-accept` capability. **Both `codex` and
-`claude` currently return `state: unavailable`, `native_method: null`.** CLI exit
-2 means unavailable; it is not a native probe. Unknown providers and newer native
-versions remain unavailable until a verified protocol is implemented. An idle
-snapshot, client-supplied capability or installed version never enables delivery.
+returns this adapter's version 1 `idle-accept` capability — what the adapter
+implements, not a live probe:
 
-The bounded Python entry is
-`fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`.
+| provider | `state` | `native_method` | notes |
+| --- | --- | --- | --- |
+| `codex` | `available` (exit 0) | `thread/queue/start` | `fence: {idle: native, turn: precheck}`, `min_native_version: 0.162`; the live call re-checks the app-server's version |
+| `claude` · anything else | `unavailable` (exit 2) | `null` | no native conditional accept reachable from outside the session; follow-up #4618 |
+
+The entry is `fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`;
 CLI `fleet_runtime.py accept-if-idle --pane %N [--socket fleet]` takes JSON
-`{"expected":<read/project v1 snapshot>,"delivery_id":<UUID>,"text":<message>}`.
-The explicit pane, complete C3/native/turn identity, UUID and nonempty message
-(at most 65536 characters) are checked for shape only. **Every attempt returns
-`state: unknown`, `submitted: false`, `receipt: null`, exit 2**. A well-formed
-request says `reason: capability_unavailable`; malformed identity/input says
-`invalid_request`. `request_identity` and `delivery_id` echo only the request,
-not an acknowledgement or a fresh observation. The message is never echoed.
-No RPC, peer frame, command, provider reread, queue or ledger write occurs.
+`{"expected":<read/project v1 snapshot>,"delivery_id":<UUID>,"text":<message>}`
+and exits 0 only on `accepted`. The explicit pane, complete C3/native/turn
+identity, UUID and nonempty message (≤ 65536 characters) are checked first
+(`invalid_request`). The message is never echoed.
 
-Consumers retain their existing pending/uncertain delivery in their own ledger.
-This call does not settle an earlier attempt, prove that an earlier frame was
-never accepted, or authorize a resend. In particular, a cached `accepted` field
-or a late ACK cannot populate `receipt`. Frame-written/queued, accepted and
-completed are different stages; this implementation reaches none of them.
-Consumer attention/tool/bg/draft/recent-input/transfer gates still belong to
-#4431; this interface neither evaluates nor relaxes them. Do not fall back to
-`turn/start`, `turn/steer`, `fleet_peer_send` or the mod's `command.run`.
+**Result** (v1): `state` `accepted` · `rejected` · `unknown`, a `reason`,
+`submitted` (a native queue item was written, by this or an earlier attempt —
+the queued stage, never acceptance), `receipt` (only when accepted),
+`delivery_id`, `request_identity`. A receipt is
+`{delivery_id, method: "thread/queue", native_session, turn_id, previous_turn_id,
+anchor_turn_id, intervening_turn, queued_submission_id, accepted_at, source}` —
+`turn_id` is the native turn whose `userMessage.clientId == delivery_id`;
+`source` is `native`, or `journal` when a repeated call is answered from the
+record of an earlier acceptance.
 
-The missing support is at the provider's native input acceptance boundary:
+**Codex protocol.** The app-server's queue extension starts a queued user
+message through the core's `start_turn_if_idle`, under a per-thread dispatch
+lock that `thread/queue/delete` also takes, refusing an active **or pending**
+turn; every item is persisted with its `clientUserMessageId`, which the accepted
+turn's `userMessage` item carries as `clientId` (codex `rust-v0.162.1`:
+`ext/queue/src/service.rs`, `app-server/src/request_processors/thread_queue_processor.rs`).
+One call:
 
-| Provider / inspected surface | Gap / required support |
-| --- | --- |
-| Codex 0.160.1 exported experimental app-server schema; 0.162.1 counterexample in #4524 | `turn/start` has no completed-idle/observed-turn precondition and can steer an already-active turn. `turn/steer.expectedTurnId` conditions an **active** turn. Message IDs and attribution fields do not establish idle compare-and-accept or a durable deduplication receipt. An upstream native operation must atomically check the idle revision and reject intervening user input. |
-| Claude 2.1.295 peer input / existing mod inbox | The peer `auth` + `user` frame has no expected-turn/revision condition. `fleet_peer_send` exit 0 means frame written; native policy may hold it and the queue may consume it later. Read-only mod queries and queued commands cannot supply an atomic check at native input acceptance. An upstream native conditional enqueue/accept operation and correlated receipt are required. |
+1. A per-delivery lock and journal (`$FLEET_CONF_DIR/global/idle-accept/<delivery_id>.json`,
+   no message text — its sha256 only; pruned after 7 days). A journal for
+   another C3/native identity ⇒ `unknown delivery_identity_changed`; the same id
+   with other text ⇒ `rejected delivery_id_reused`; an accepted one ⇒ answered
+   from the journal, no native call.
+2. A fresh `read(pane, expected=expected)` (the #4434 reader, full identity
+   including `turn_id`), the receipt's native fields and the endpoint re-checked;
+   a native version below 0.162 ⇒ `unknown native_version_untested`, no write.
+3. An earlier **pending** attempt is settled first, never resent: its queue
+   item (found by `clientUserMessageId`) goes through step 5; no item ⇒ the
+   receipt scan decides (found ⇒ accepted; anchor reached and the session idle ⇒
+   not delivered; otherwise `unknown`).
+4. Not idle at the precheck ⇒ `rejected precheck_<reason|state>`, nothing written.
+   Otherwise the journal is written `pending` (fsync) **before**
+   `thread/queue/add` (`clientUserMessageId = delivery_id`). An idle session's
+   queue starts the item on the add itself.
+5. Settle: `thread/queue/start` → started ⇒ `accepted native_started`;
+   refused as not idle ⇒ `thread/queue/delete` under the same lock —
+   `deleted: true` ⇒ `rejected native_not_idle` (it can never run later);
+   `deleted: false` or "not found" ⇒ the native idle dispatch took it ⇒ the
+   receipt scan (bounded wait) ⇒ `accepted native_idle_dispatch`, else `unknown`.
+   A transport error after the add ⇒ `unknown`, journal stays `pending`.
 
-The [official app-server protocol documentation](https://developers.openai.com/codex/app-server)
-describes generating the schema from the exact executable version. Neither the
-documentation nor the inspected schema establishes the required atomic idle
-operation. The existing observer remains the supported **read-only** path.
-To enable acceptance, the provider owner must implement a capability-negotiated
-native operation that fences C1/C3 operation/owner/generation/worker, SID/process
-birth and the observed turn/revision, also against intervening input that has
-not started a turn yet. It must bind a delivery ID to the accepted native turn
-and return a queryable/deduplicated outcome across disconnects. Uncertain
-outcomes and old-generation ACKs cannot mutate a new generation. The shared
-adapter must then verify this operation against real native races before any
-consumer uses it; a local lock, two reads or a post-send check cannot substitute.
+The receipt scan reads `thread/turns/list` (`itemsView: summary`, newest
+first) back to the anchor turn (the `expected` turn of the first attempt), at
+most 20 pages of 50; a young thread whose store has no paginated history falls
+back to `thread/read includeTurns`. Not reaching the anchor ⇒ `unknown
+receipt_scan_incomplete`, never "not delivered".
 
-The BREAK-IT unavailable drill proves zero dispatch/receipt for both providers,
-including repeated requests, old identities and injected late ACKs. It does
-**not** prove supported native atomic acceptance, full loop delivery or live
-deployment. #4431's successful due-delivery and exactly-once acceptance remain
-blocked until that native capability exists; this interface alone cannot close
-those acceptance criteria.
+What is native-atomic and what is not: **idle** (no active or pending turn) is
+checked by Codex at acceptance; the **turn revision** is checked by the
+precheck only — Codex has no expected-last-turn parameter. A user turn that
+starts *and finishes* between the precheck and the acceptance therefore cannot
+be refused; the receipt says so (`intervening_turn: true`, `previous_turn_id`).
+The loop message then still runs as its own turn on an idle session — never
+steered into the user's turn (#4524's counterexample). A typed-but-unsent draft
+is not native state; the consumer's draft / recent-input gates stay #4431's, as
+do attention / tool / bg / transfer. `unknown` is never delivery and never a
+reason to resend; consumers keep their own pending record until a call answers
+`accepted` or `rejected`. Never fall back to `turn/start`, `turn/steer`,
+`fleet_peer_send` or the mod's `command.run`.
+
+**Claude (unavailable, #4618).** From outside the session: the peer `auth` +
+`user` frame has no expected-turn condition (`fleet_peer_send` exit 0 = frame
+written; #4524's counterexample), the mod inbox runs `/commands` only. Inside the
+session, `$.prompt.submit` is the engine's own "a turn of its own once idle" but
+only waits — no refusal, no cancel, no turn id back. #4618 is the design (a
+`prompt.submit` hook that drops the plugin's own submission at entry when the
+fence moved) and must be verified on a real Claude before `claude` turns
+`available`.
+
+**Verification.** `fleet-runtime-selftest.py` `CodexIdleAccept` drives the full
+`accept_if_idle` path through a fake app-server with the semantics the real one
+showed (BREAK-IT `runtime-idle-accept-codex`); `fleet-idle-accept-native-selftest.sh`
+runs `codex_settle` / `codex_receipt` / `codex_queued` against a real
+`codex app-server` ≥ 0.162 (loopback model fixture, isolated HOME; SKIP where no
+such codex is installed, as on CI): idle ⇒ accepted with the receipt readable
+from a new connection; busy ⇒ refused, deleted, never run; disconnect after the
+add while busy ⇒ the retry settles the same item; the native idle edge first ⇒
+the retry finds the receipt (`intervening_turn`). Neither is a fleet pane with a
+C3 launch, a loop due tick or a live deployment — #4431 owns that acceptance.
 
 ### Read-only provider observations (#4434)
 

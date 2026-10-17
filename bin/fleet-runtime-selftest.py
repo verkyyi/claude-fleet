@@ -59,14 +59,17 @@ class Snapshot(unittest.TestCase):
 
 
 class ConditionalAcceptance(unittest.TestCase):
-    """Unavailable contract only, not a simulation of native atomic acceptance."""
+    """Claude (and any unknown provider): unavailable, no I/O, no receipt."""
 
     def setUp(self):
         self.delivery = "55555555-5555-4555-8555-555555555555"
         self.snapshot = Snapshot().observation()
+        self.snapshot["identity"]["provider"] = "claude"
         for target in ("subprocess.run", "subprocess.Popen", "socket.socket", "builtins.open"):
             p = mock.patch(target, side_effect=AssertionError("unavailable must do no I/O"))
             p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(runtime, "RPC", side_effect=AssertionError("unavailable must not connect"))
+        p.start(); self.addCleanup(p.stop)
         p = mock.patch.object(runtime.time, "time", return_value=101.)
         p.start(); self.addCleanup(p.stop)
 
@@ -78,59 +81,317 @@ class ConditionalAcceptance(unittest.TestCase):
         self.assertEqual(result["state"], "unknown")
         self.assertFalse(result["submitted"])
         self.assertIsNone(result["receipt"])
-        self.assertEqual(result["capability"]["state"], "unavailable")
+        if result["reason"] != "invalid_request":
+            self.assertNotEqual(result["capability"]["state"], "available")
         self.assertNotIn("private loop message", json.dumps(result))
         return result
 
     def test_capability_does_not_guess_from_provider_or_version(self):
-        for provider in ("codex", "claude", "future-provider", None, {}):
+        for provider in ("claude", "future-provider", None, {}):
             c = runtime.idle_accept_capability(provider)
             self.assertEqual(c["version"], 1)
             self.assertEqual(c["state"], "unavailable")
             self.assertIsNone(c["native_method"])
             self.assertEqual(c["support"], "native_atomic_precondition_and_receipt_required")
+        c = runtime.idle_accept_capability("codex")
+        self.assertEqual((c["state"], c["native_method"]), ("available", "thread/queue/start"))
+        self.assertEqual(c["fence"], dict(idle="native", turn="precheck"))
 
-    def test_previous_idle_observation_neither_provider_sends(self):
-        for provider in ("codex", "claude"):
-            self.snapshot["identity"]["provider"] = provider
-            before = copy.deepcopy(self.snapshot)
-            # A previous read is no authority over a concurrent user turn.
-            result = self.attempt()
-            self.assertEqual(result["reason"], "capability_unavailable")
-            self.assertEqual(result["delivery_id"], self.delivery)
-            self.assertEqual(result["request_identity"], before["identity"])
-            self.assertEqual(self.snapshot, before)
+    def test_previous_idle_observation_claude_never_sends(self):
+        before = copy.deepcopy(self.snapshot)
+        # A previous read is no authority over a concurrent user turn.
+        result = self.attempt()
+        self.assertEqual(result["reason"], "capability_unavailable")
+        self.assertEqual(result["delivery_id"], self.delivery)
+        self.assertEqual(result["request_identity"], before["identity"])
+        self.assertEqual(self.snapshot, before)
 
     def test_old_identity_and_late_ack_cannot_create_a_receipt(self):
-        for provider in ("codex", "claude"):
-            for key in self.snapshot["identity"]:
-                old = copy.deepcopy(self.snapshot)
-                old["identity"]["provider"] = provider
-                old["identity"][key] = "old-generation-or-session"
-                old["controller_delivery"] = dict(state="accepted", delivery_id=self.delivery,
-                                                  accepted_turn="late-old-turn")
-                old["capability"] = dict(state="available", native_method="turn/start")
-                self.attempt(old)
+        for key in self.snapshot["identity"]:
+            if key == "provider":
+                continue
+            old = copy.deepcopy(self.snapshot)
+            old["identity"][key] = "old-generation-or-session"
+            old["controller_delivery"] = dict(state="accepted", delivery_id=self.delivery,
+                                              accepted_turn="late-old-turn")
+            old["capability"] = dict(state="available", native_method="turn/start")
+            self.attempt(old)
 
     def test_repeat_restart_and_all_blockers_stay_unknown(self):
-        for provider in ("codex", "claude"):
-            self.snapshot["identity"]["provider"] = provider
-            for state in ("idle", "active", "ask", "approval", "interrupted", "unknown"):
-                for gate in ("tool", "bg", "dirty", "recent_input", "transfer", "handoff", "quota", "disconnected"):
-                    s = copy.deepcopy(self.snapshot)
-                    s["runtime"].update(state=state, reason=gate)
-                    a = self.attempt(s)
-                    self.assertEqual(a, self.attempt(s))  # no retry or durable effect
-            for now in (99., 105., 200.):
-                with mock.patch.object(runtime.time, "time", return_value=now):
-                    self.attempt()
+        for state in ("idle", "active", "ask", "approval", "interrupted", "unknown"):
+            for gate in ("tool", "bg", "dirty", "recent_input", "transfer", "handoff", "quota", "disconnected"):
+                s = copy.deepcopy(self.snapshot)
+                s["runtime"].update(state=state, reason=gate)
+                a = self.attempt(s)
+                self.assertEqual(a, self.attempt(s))  # no retry or durable effect
+        for now in (99., 105., 200.):
+            with mock.patch.object(runtime.time, "time", return_value=now):
+                self.attempt()
 
     def test_invalid_requests_and_untrusted_receipts_fail_closed(self):
-        for snapshot in ({}, {"version": 2}, {"identity": []}):
-            self.assertEqual(self.attempt(snapshot)["reason"], "invalid_request")
-        for kw in (dict(pane=""), dict(delivery_id=""), dict(text=""), dict(text=123),
-                   dict(text="x" * 65537)):
-            self.assertEqual(self.attempt(**kw)["reason"], "invalid_request")
+        for provider in ("claude", "codex"):
+            for snapshot in ({}, {"version": 2}, {"identity": []}):
+                self.assertEqual(self.attempt(snapshot)["reason"], "invalid_request")
+            self.snapshot["identity"]["provider"] = provider
+            for kw in (dict(pane=""), dict(delivery_id=""), dict(text=""), dict(text=123),
+                       dict(text="x" * 65537)):
+                self.assertEqual(self.attempt(**kw)["reason"], "invalid_request")
+
+
+class FakeCodex:
+    """The queue semantics the real Codex 0.162.1 app-server showed (#4617):
+    add on an idle thread starts at once; start on a busy thread is refused;
+    delete and every start share one dispatch lock; an idle edge drains the head.
+    """
+
+    def __init__(self):
+        self.turns = [dict(id="turn-1", clientId=None)]
+        self.queue = []
+        self.active = None
+        self.seq = 1
+        self.delivered = []
+        self.calls = []
+        self.version = "0.162.1"
+        self.young = False       # store without paginated history yet
+        self.fail = {}           # method -> exception, once
+        self.before = {}         # method -> callable, once, before handling
+
+    def next_id(self, kind):
+        self.seq += 1
+        return "%s-%d" % (kind, self.seq)
+
+    def start_turn(self, client_id, text=""):
+        t = dict(id=self.next_id("turn"), clientId=client_id)
+        self.turns.append(t)
+        self.active = t["id"]
+        if client_id:
+            self.delivered.append(client_id)
+        return t
+
+    def user_turn(self):
+        return self.start_turn(None)
+
+    def finish(self):
+        self.active = None
+        if self.queue:  # the native idle edge drains the head
+            q = self.queue.pop(0)
+            self.start_turn(q["clientUserMessageId"])
+            self.active = None
+
+    def call(self, method, params):
+        self.calls.append(method)
+        if method in self.before:
+            self.before.pop(method)()
+        if method in self.fail:
+            raise self.fail.pop(method)
+        if method == "thread/queue/add":
+            q = dict(id=self.next_id("q"), clientUserMessageId=params["clientUserMessageId"],
+                     input=params["input"])
+            self.queue.append(q)
+            if self.active is None:
+                self.queue.remove(q)
+                self.start_turn(q["clientUserMessageId"])
+                self.active = None
+            return dict(queuedSubmission=q)
+        if method == "thread/queue/start":
+            q = [x for x in self.queue if x["id"] == params["queuedSubmissionId"]]
+            if not q:
+                raise ValueError("queued submission not found: " + params["queuedSubmissionId"])
+            if self.active is not None:
+                raise ValueError("thread already has an active or pending turn")
+            self.queue.remove(q[0])
+            t = self.start_turn(q[0]["clientUserMessageId"])
+            self.active = None
+            return dict(turn=dict(id=t["id"], status="inProgress", items=[]))
+        if method == "thread/queue/delete":
+            q = [x for x in self.queue if x["id"] == params["queuedSubmissionId"]]
+            for x in q:
+                self.queue.remove(x)
+            return dict(deleted=bool(q))
+        if method == "thread/queue/list":
+            return dict(data=list(self.queue), nextCursor=None)
+        if method == "thread/read":
+            assert params["includeTurns"] is True
+            return dict(thread=dict(id=params["threadId"], turns=[
+                dict(id=t["id"], items=[dict(type="userMessage", clientId=t["clientId"])]) for t in self.turns]))
+        if method == "thread/turns/list":
+            if self.young:
+                raise ValueError("list_turns is not supported yet")
+            self.assertDesc(params)
+            off = int(params.get("cursor") or 0)
+            rows = list(reversed(self.turns))[off:off + params["limit"]]
+            nxt = str(off + len(rows)) if off + len(rows) < len(self.turns) else None
+            return dict(data=[dict(id=t["id"], items=[dict(type="userMessage", clientId=t["clientId"])])
+                              for t in rows], nextCursor=nxt)
+        raise AssertionError("unexpected native call " + method)
+
+    @staticmethod
+    def assertDesc(params):
+        assert params["sortDirection"] == "desc" and params["itemsView"] == "summary", params
+
+
+class CodexIdleAccept(unittest.TestCase):
+    """accept_if_idle through the fake app-server; the real binary is
+    fleet-idle-accept-native-selftest.sh."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.native = FakeCodex()
+        self.snapshot = Snapshot().observation()
+        self.state = "idle"
+        self.delivery = "66666666-6666-4666-8666-666666666666"
+        client = mock.Mock()
+        client.call.side_effect = self.native.call
+        client.initialized = property(lambda _: None)
+        type(client).initialized = mock.PropertyMock(
+            side_effect=lambda: dict(userAgent="claude_fleet/%s (Mac OS; arm64)" % self.native.version))
+        self.client = client
+
+        def read(pane, context=None, expected=None, socket=""):
+            s = copy.deepcopy(self.snapshot)
+            s["identity"]["turn_id"] = self.native.turns[-1]["id"]
+            s["runtime"]["state"] = "active" if self.native.active else self.state
+            if expected is not None and expected["identity"] != s["identity"]:
+                s["runtime"].update(state="unknown", reason="identity_changed")
+            return s
+        patches = [mock.patch.dict(os.environ, FLEET_CONF_DIR=self.tmp.name),
+                   mock.patch.object(runtime, "read", side_effect=read),
+                   mock.patch.object(runtime, "RPC", return_value=client),
+                   mock.patch.object(runtime.launch, "inspect", side_effect=lambda *a: R.copy()),
+                   mock.patch.dict(runtime.CODEX, identity=lambda *a: dict(
+                       session_id=R["native_session"], remote=R["native_remote"], home=R["native_home"])),
+                   mock.patch.object(runtime.time, "sleep", return_value=None)]
+        for p in patches:
+            p.start(); self.addCleanup(p.stop)
+
+    def expected(self):
+        s = copy.deepcopy(self.snapshot)
+        s["identity"]["turn_id"] = self.native.turns[-1]["id"]
+        return s
+
+    def accept(self, expected=None, text="loop due message", delivery=None):
+        r = runtime.accept_if_idle("%7", expected or self.expected(), delivery or self.delivery, text)
+        self.assertNotIn(text, json.dumps(r))
+        return r
+
+    def test_idle_session_accepts_once_with_a_receipt(self):
+        r = self.accept()
+        self.assertEqual((r["state"], r["submitted"]), ("accepted", True))
+        self.assertEqual(r["receipt"]["turn_id"], self.native.turns[-1]["id"])
+        self.assertEqual(r["receipt"]["previous_turn_id"], "turn-1")
+        self.assertFalse(r["receipt"]["intervening_turn"])
+        self.assertEqual(self.native.delivered, [self.delivery])
+        # The same delivery again is answered from the journal: no second native write.
+        again = self.accept()
+        self.assertEqual((again["state"], again["receipt"]["turn_id"], again["receipt"]["source"]),
+                         ("accepted", r["receipt"]["turn_id"], "journal"))
+        self.assertEqual(self.native.calls.count("thread/queue/add"), 1)
+        self.assertEqual(self.native.delivered, [self.delivery])
+
+    def test_user_turn_after_the_precheck_is_refused_and_deleted(self):
+        expected = self.expected()
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        r = self.accept(expected)
+        self.assertEqual((r["state"], r["reason"], r["receipt"]), ("rejected", "native_not_idle", None))
+        self.assertEqual(self.native.queue, [])
+        self.native.finish()
+        self.assertEqual(self.native.delivered, [])
+
+    def test_refusal_then_native_idle_dispatch_is_an_accepted_receipt(self):
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.native.before["thread/queue/delete"] = self.native.finish
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("accepted", "native_idle_dispatch"))
+        self.assertTrue(r["receipt"]["intervening_turn"])
+        self.assertEqual(self.native.delivered, [self.delivery])
+
+    def test_our_own_start_names_the_accepted_turn(self):
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.native.before["thread/queue/start"] = lambda: setattr(self.native, "active", None)
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("accepted", "native_started"))
+        self.assertEqual(r["receipt"]["turn_id"], self.native.turns[-1]["id"])
+        self.assertEqual(r["receipt"]["previous_turn_id"], self.native.turns[-2]["id"])
+        self.assertTrue(r["receipt"]["intervening_turn"])
+        self.assertEqual(self.native.delivered, [self.delivery])
+
+    def test_young_thread_reads_the_receipt_from_the_full_record(self):
+        self.native.young = True
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.native.before["thread/queue/delete"] = self.native.finish
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("accepted", "native_idle_dispatch"))
+        self.assertTrue(r["receipt"]["intervening_turn"])
+        self.assertIn("thread/read", self.native.calls)
+
+    def test_precheck_not_idle_or_changed_turn_writes_nothing(self):
+        expected = self.expected()
+        self.native.user_turn()
+        for e in (expected, self.expected()):
+            r = self.accept(e)
+            self.assertEqual(r["state"], "rejected")
+            self.assertTrue(r["reason"].startswith("precheck_"))
+        self.assertNotIn("thread/queue/add", self.native.calls)
+        self.assertFalse(Path(self.tmp.name, "global/idle-accept", self.delivery + ".json").exists())
+
+    def test_disconnect_after_add_never_resends(self):
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.native.fail["thread/queue/start"] = EOFError("socket closed")
+        r = self.accept()
+        self.assertEqual((r["state"], r["submitted"], r["receipt"]), ("unknown", True, None))
+        self.assertEqual(len(self.native.queue), 1)
+        # Still busy: the retry settles the same queued item, refused and deleted.
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("rejected", "precheck_active"))
+        self.assertEqual(self.native.calls[-2:], ["thread/queue/start", "thread/queue/delete"])
+        self.assertEqual(self.native.queue, [])
+        self.native.finish()
+        r = self.accept()
+        self.assertEqual(r["state"], "accepted")
+        self.assertEqual(self.native.delivered, [self.delivery])
+
+    def test_disconnect_while_native_dispatch_took_it_reads_the_receipt(self):
+        self.native.fail["thread/queue/start"] = EOFError("socket closed")
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.assertEqual(self.accept()["state"], "unknown")
+        self.native.finish()  # the native queue starts it on its own
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("accepted", "native_receipt"))
+        self.assertEqual(self.native.calls.count("thread/queue/add"), 1)
+        self.assertEqual(self.native.delivered, [self.delivery])
+
+    def test_unreachable_anchor_is_unknown_never_a_resend(self):
+        self.native.fail["thread/queue/start"] = EOFError("socket closed")
+        self.native.before["thread/queue/add"] = self.native.user_turn
+        self.accept()
+        self.native.queue.clear()  # gone without a trace we can read
+        for _ in range(runtime.RECEIPT_PAGES * runtime.RECEIPT_PAGE + 1):
+            self.native.turns.insert(0, dict(id=self.native.next_id("old"), clientId=None))
+        self.native.active = None
+        path = Path(self.tmp.name, "global/idle-accept", self.delivery + ".json")
+        rec = json.loads(path.read_text()); rec["anchor"] = "turn-gone"; path.write_text(json.dumps(rec))
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("unknown", "receipt_scan_incomplete"))
+        self.assertEqual(self.native.calls.count("thread/queue/add"), 1)
+
+    def test_old_generation_reused_id_and_untested_version_refuse(self):
+        self.accept()
+        old = self.expected(); old["identity"].update(generation=2, attempt_id="task:T1:g2")
+        self.assertEqual(self.accept(old)["reason"], "delivery_identity_changed")
+        self.assertEqual(self.accept(text="another message")["reason"], "delivery_id_reused")
+        self.native.version = "0.161.9"
+        other = "77777777-7777-4777-8777-777777777777"
+        r = self.accept(delivery=other)
+        self.assertEqual((r["state"], r["reason"], r["submitted"]), ("unknown", "native_version_untested", False))
+        self.assertEqual(self.native.calls.count("thread/queue/add"), 1)
+
+    def test_endpoint_or_native_identity_change_refuses(self):
+        with mock.patch.object(runtime.launch, "inspect", side_effect=lambda *a: dict(R, birth="reused")):
+            self.assertEqual(self.accept()["reason"], "native_identity_changed")
+        with mock.patch.dict(runtime.CODEX, identity=lambda *a: dict(session_id="x", remote=R["native_remote"])):
+            self.assertEqual(self.accept()["reason"], "endpoint_identity_changed")
+        self.assertNotIn("thread/queue/add", self.native.calls)
 
 
 class Provider(unittest.TestCase):
