@@ -6,7 +6,16 @@ way to the sessions working on the same machine. The machine daemon
 (bin/fleet-node-supervisor.py) runs `loop` as its `ci-runner` child, as root, and
 only while <state>/ci.env exists — no ci.env, nothing runs and nothing changes.
 
-Every FLEET_CI_EVERY seconds (20) the loop:
+Every beat the loop does the steps below. The beat is FLEET_CI_EVERY (20 s) while
+there is something to do — a job running, one taken or ended within
+FLEET_CI_HOT_SECS (600), the loop's own first minutes, or a wake (a touch of
+<state>/ci-runner.wake: "a merge just happened, look now") — and
+FLEET_CI_IDLE_EVERY (120 s) otherwise (issue #4359, EPIC #4354 共同约定 4). A
+runner already waiting is registered with GitHub, so a queued job reaches it at
+once whatever the beat; the slow beat only delays the NEXT mint, by at most
+FLEET_CI_IDLE_EVERY. Between beats the loop forks nothing: a runner that exits
+(its job done) ends the wait at once (a waitpid), as does the wake file (a stat).
+The beat in use is ci-runner.json's `beat`:
 
   1. reads ci.env (root's, 0600 — anything else is refused): a GitHub App that may
      manage this repo's runners and nothing else (Administration: write) — its id,
@@ -44,7 +53,7 @@ Every FLEET_CI_EVERY seconds (20) the loop:
      and kills whatever the login still runs. One runner at a time
      (FLEET_CI_RUNNERS: 0 = paused, otherwise 1).
 
-Its word — state idle | busy | paused | error | off, why, runs, last — is
+Its word — state idle | busy | paused | error | off, why, runs, last, beat — is
 <state>/ci-runner.json (0644, no secret), which the daemon copies into
 state.json `ci_runner` (status line, the node program's heartbeat → the hub's
 GET /v1/fleet/ci-runners) and `status --check` reads for the doctor's
@@ -65,7 +74,9 @@ ci.env keys (each also from the environment, which wins — a test's seam):
   FLEET_CI_RUNNERS      0 = paused · 1 (default; more is 1)
   FLEET_CI_WORKFLOWS    the workflow files a job may come from (release-train.yml mac-follow.yml)
   FLEET_CI_LABELS       extra labels (space separated) beside self-hosted · <OS> · <arch> · fleet-ci
-  FLEET_CI_EVERY        seconds between beats (20)
+  FLEET_CI_EVERY        seconds between beats while there is work (20)
+  FLEET_CI_IDLE_EVERY   seconds between beats when there is none (120; never under FLEET_CI_EVERY)
+  FLEET_CI_HOT_SECS     how long after a job (or the loop's start, or a wake) the beat stays fast (600)
   FLEET_CI_MAX_SECS     a job's cap (10800) · FLEET_CI_IDLE_SECS an idle runner's (3600)
   FLEET_CI_LOAD_MAX     load per core above which it yields (0.75)
   FLEET_CI_FREE_PCT     the floor, % of RAM never handed out (10, at least 2048 MB)
@@ -172,6 +183,8 @@ def read_cfg(paths):
             {"arm64": "ARM64", "aarch64": "ARM64"}.get(platform.machine().lower(), "X64"), "fleet-ci"]
     c.labels = base + [l for l in get("FLEET_CI_LABELS").split() if l not in base]
     c.every = _num(get("FLEET_CI_EVERY", "20"), 20, 0.2)
+    c.idle_every = max(c.every, _num(get("FLEET_CI_IDLE_EVERY", "120"), 120, 0.2))
+    c.hot_secs = _num(get("FLEET_CI_HOT_SECS", "600"), 600, 0)
     c.max_secs = _num(get("FLEET_CI_MAX_SECS", "10800"), 10800, 1)
     c.idle_secs = _num(get("FLEET_CI_IDLE_SECS", "3600"), 3600, 1)
     c.load_max = _num(get("FLEET_CI_LOAD_MAX", "0.75"), 0.75, 0)
@@ -520,6 +533,15 @@ class Run(object):
         pat = os.environ.get("FLEET_CI_WORKER_PAT", "Runner.Worker")
         return any(pat in cmd for cmd in sup.descendant_cmds(self.proc.pid))
 
+    def took(self):
+        """Whether a job ran, read off the runner's own diary (no fork): the real
+        runner writes _diag/Worker_*.log for each job its Runner.Worker runs. A job
+        that started and ended between two slow beats is still counted (#4359)."""
+        try:
+            return any(n.startswith("Worker_") for n in os.listdir(os.path.join(self.rundir, "_diag")))
+        except OSError:
+            return False
+
     def stop(self):
         for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
             try:
@@ -545,6 +567,37 @@ class Loop(object):
         self.next_try = 0
         self.fails = 0
         self.stopping = False
+        self.hot_until = now()      # the beat is fast until then (set by a job, a wake, the start)
+        self.wake_seen = self.wake_mtime()
+
+    # -- the beat (issue #4359)
+    def wake_path(self):
+        return os.path.join(self.p.state, "ci-runner.wake")
+
+    def wake_mtime(self):
+        try:
+            return os.stat(self.wake_path()).st_mtime
+        except OSError:
+            return 0.0
+
+    def woken(self):
+        """A wake file newer than the last one seen: rc True once per touch."""
+        m = self.wake_mtime()
+        if m and m != self.wake_seen:
+            self.wake_seen = m
+            return True
+        return False
+
+    def heat(self, c):
+        self.hot_until = max(self.hot_until, now() + (c.hot_secs if c is not None else 600))
+
+    def beat(self, c):
+        """The seconds to the next beat: fast while there is work, slow otherwise."""
+        if c is None:
+            return 20
+        if self.run is not None and self.run.busy_since is not None:
+            return c.every
+        return c.every if now() < self.hot_until else c.idle_every
 
     # -- the word
     def say(self, state, why="", **kw):
@@ -626,7 +679,7 @@ class Loop(object):
 
     def finish(self, c, rc, why=""):
         r, self.run = self.run, None
-        took = r.busy_since is not None
+        took = r.busy_since is not None or r.took()
         secs = int(now() - (r.busy_since or r.started))
         runs = self.book.setdefault("runs", {"total": 0, "failed": 0})
         if took:
@@ -640,6 +693,8 @@ class Loop(object):
         kill_login(r.ident)
         log("runner %s ended rc=%s after %ss%s%s" % (r.name, rc, secs, " (a job)" if took else " (no job)",
                                                    (" — " + why) if why else ""))
+        if took:
+            self.heat(c)
         if not took and not why:
             # it ended without a job and not because we stopped it: GitHub refused
             # the config, the runner crashed — never mint again at once
@@ -661,12 +716,13 @@ class Loop(object):
             elif self.run.busy():
                 if self.run.busy_since is None:
                     self.run.busy_since = now()
+                self.heat(c)
                 if now() - self.run.busy_since > c.max_secs:
                     self.run.stop()
                     self.finish(c, self.run.proc.returncode, why="the job ran past FLEET_CI_MAX_SECS")
                 else:
                     self.say("busy", "a job since %s" % sup.iso(self.run.busy_since), login=c.login)
-                    return c.every
+                    return self.beat(c)
             else:
                 why = tight(c)
                 if why or c.runners == 0 or now() - self.run.started > c.idle_secs:
@@ -675,35 +731,35 @@ class Loop(object):
                                 if c.runners else "FLEET_CI_RUNNERS=0")
                     if why or c.runners == 0:
                         self.say("paused", why or "FLEET_CI_RUNNERS=0", login=c.login)
-                        return c.every
+                        return self.beat(c)
                 else:
                     self.say("idle", "waiting for a job as %s" % self.run.name, login=c.login)
-                    return c.every
+                    return self.beat(c)
         if self.run is None and now() < self.next_try:
-            return min(c.every, self.next_try - now())
+            return min(self.beat(c), self.next_try - now())
         if c.runners == 0:
             self.say("paused", "FLEET_CI_RUNNERS=0", login=c.login)
-            return c.every
+            return self.beat(c)
         why = tight(c)
         if why:
             self.say("paused", why, login=c.login)
-            return c.every
+            return self.beat(c)
         ident, err = ensure_login(c)
         if ident is None:
             self.backoff(err)
-            return c.every
+            return self.beat(c)
         self.ident = ident
         tree, err = runner_tree()
         if tree is None:
             self.backoff(err)
-            return c.every
+            return self.beat(c)
         self.run, err = self.mint(c, ident, tree)
         if self.run is None:
             self.backoff(err)
-            return c.every
+            return self.beat(c)
         self.fails = 0
         self.say("idle", "waiting for a job as %s" % self.run.name, login=c.login)
-        return c.every
+        return self.beat(c)
 
     def main(self):
         lk = os.open(os.path.join(self.p.state, "ci-runner.lock"), os.O_RDWR | os.O_CREAT, 0o600)
@@ -720,21 +776,37 @@ class Loop(object):
             signal.signal(s, on_signal)
         # a loop killed outright left its runner and <home>/runner behind
         c, _ = read_cfg(self.p)
+        self.heat(c)        # its first minutes are fast: a restart is often a new release mid-train
         if c is not None:
             ident = sup.account_ident(c.login)
             if ident:
                 kill_login(ident)
                 shutil.rmtree(os.path.join(ident[2], "runner"), ignore_errors=True)
         while not self.stopping:
+            if self.woken():
+                self.heat(read_cfg(self.p)[0])
+                log("woken — the fast beat for FLEET_CI_HOT_SECS")
             try:
                 wait = self.step()
             except Exception as e:  # one bad beat must never end the loop
                 log("beat failed: %r" % e)
                 self.say("error", "beat failed: %s" % e)
                 wait = 20
-            end = now() + max(wait, 0.2)
+            wait = max(wait, 0.2)
+            beat = round(wait, 3)
+            if self.book.get("beat") != beat:
+                self.book["beat"] = beat
+                sup.write_json(self.book_path, self.book, 0o644)
+            # between beats nothing forks (issue #4359): a runner that ended (a
+            # waitpid) or a wake (a stat) ends the wait at once
+            end = now() + wait
+            tick = 0.2 if wait <= 5 else 1.0
             while not self.stopping and now() < end:
-                time.sleep(0.2)
+                time.sleep(min(tick, max(end - now(), 0.01)))
+                if self.run is not None and self.run.proc.poll() is not None:
+                    break
+                if self.wake_mtime() != self.wake_seen:
+                    break
         if self.run:
             c, _ = read_cfg(self.p)
             self.run.stop()

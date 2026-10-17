@@ -42,7 +42,18 @@ to a standing key; the links already up go on (`peerlink-hub-down`).
                               from here without a tailnet); cancelled after N s
                               (FLEET_OPEN_PAGE_SECS, 1800) or with the master; rc 3 = no link
 
-What to connect, every beat (FLEET_PEERLINK_TICK, 2 s) — FLEET_PEERLINK_MODE, the
+When it looks (issue #4359, EPIC #4354 共同约定 4): every FLEET_PEERLINK_TICK (2 s)
+while something is going on — its first FLEET_PEERLINK_ACTIVE_SECS (60 s), a thin view
+attached, a link connecting or rebuilt, a request — and otherwise once every
+FLEET_PEERLINK_IDLE_TICK (300 s): every link checked, the hub asked for your logins, a
+down link retried. A request needs no beat: `sock` · `exec` · `fwd` · `pane` touch
+peerlink/.wake, which the keeper (a stat a second, no fork) answers at once — the
+links checked, a down one rebuilt now — and stays quick for the active window. A master
+that dies or a control file that goes is still seen within a second (no fork either).
+The links stay up as before (#3482): only the looking slows. state.json's `beat` says
+which; the keeper re-stamps its ts every few seconds, so a quiet keeper is not "gone".
+
+What to connect, every beat — FLEET_PEERLINK_MODE, the
 environment else fleet.conf's line (issue #3482):
 
   all (the default)   one link per OTHER login of the same person: the hub's
@@ -117,6 +128,7 @@ D = os.path.join(CONF, "peerlink")
 STATE = os.path.join(D, "state.json")
 PEERS = os.path.join(D, "peers.json")
 LOCK = os.path.join(D, ".lock")
+WAKE = os.path.join(D, ".wake")
 RUNS = os.path.join(D, "runs")
 VIEWS = os.path.join(CONF, "remote-views")
 # fleet-lib.sh's FLEET_C, spelled the same way
@@ -131,6 +143,8 @@ BACKOFF_MAX = fenv("FLEET_PEERLINK_BACKOFF_MAX", 30)
 STALE = fenv("FLEET_PEERLINK_STALE", 30)          # state older than this: the keeper is not running
 BAD_WARN = fenv("FLEET_PEERLINK_BAD_WARN", 60)    # a link failing its check this long: WARN
 PEERS_SECS = fenv("FLEET_PEERLINK_PEERS_SECS", 60)  # how often the hub is asked for your logins
+IDLE_TICK = max(TICK, fenv("FLEET_PEERLINK_IDLE_TICK", 300))  # the quiet beat (#4359)
+ACTIVE_SECS = fenv("FLEET_PEERLINK_ACTIVE_SECS", 60)  # how long a request / event keeps the 2 s beat
 MAX_EVENTS = 50
 
 
@@ -566,6 +580,10 @@ class Keeper:
         self.peers_err = ""
         self.peers_at = 0.0
         self.peers_job = None       # ([result], started) while an ask runs
+        self.active_until = time.time() + ACTIVE_SECS   # the 2 s beat until then (#4359)
+        self.wake_seen = wake_mtime()
+        self.beat_secs = TICK
+        self.saved_at = 0.0
         cached = read_json(PEERS, {})
         if isinstance(cached.get("peers"), list):
             self.peers = cached["peers"]
@@ -603,6 +621,7 @@ class Keeper:
             return False
 
     def event(self, l, what):
+        self.active_until = max(self.active_until, time.time() + ACTIVE_SECS)
         self.events.append({"ts": round(time.time(), 3), "machine": l.machine, "login": l.login, "what": what})
         self.events = self.events[-MAX_EVENTS:]
         sys.stderr.write("fleet-peerlink: %s %s\n" % (l.name(), what))
@@ -817,8 +836,9 @@ class Keeper:
         links = [self.links[k].dump() for k in sorted(self.links)]
         write_json(STATE, {"v": 1, "pid": os.getpid(), "ts": round(now, 3), "me": home_label(),
                            "login": me_login(), "views": self.views, "hub_down": self.hub_down,
-                           "mode": self.mode, "peers_err": self.peers_err,
+                           "mode": self.mode, "peers_err": self.peers_err, "beat": self.beat_secs,
                            "links": links, "events": self.events})
+        self.saved_at = time.time()
 
     def refresh_peers(self, now):
         """Ask the hub for your logins every PEERS_SECS, off the beat (a thread):
@@ -841,7 +861,7 @@ class Keeper:
             elif not err:
                 self.peers = None       # no hub here (rc 3): nothing to go by
             return
-        if self.peers_at and now - self.peers_at < PEERS_SECS:
+        if self.peers_at and now - self.peers_at < (PEERS_SECS if now < self.active_until else max(PEERS_SECS, IDLE_TICK)):
             return
         self.peers_at = now
         res = []
@@ -850,6 +870,8 @@ class Keeper:
 
     def beat(self, now):
         self.views = live_thin_views()
+        if self.views:
+            self.active_until = max(self.active_until, now + ACTIVE_SECS)
         self.mode = mode()
         self.refresh_peers(now)
         peers = peer_map(self.peers)
@@ -903,6 +925,13 @@ class Keeper:
                 self.drop(l, "关闭：管理者退出", now)
         self.save(now)
 
+    def woken(self):
+        m = wake_mtime()
+        if m and m != self.wake_seen:
+            self.wake_seen = m
+            return True
+        return False
+
     def heartbeat(self):
         os.makedirs(RUNS, exist_ok=True)
         p = os.path.join(RUNS, str(os.getpid()))
@@ -927,25 +956,73 @@ class Keeper:
                         sys.stderr.write("fleet-peerlink: %s now belongs to pid %s — this keeper quits\n" % (LOCK, holder))
                         return 0      # its masters are the new keeper's to adopt
                 self.heartbeat()
+                if self.woken():
+                    # a request (#4359): look now, and a down link is tried now
+                    self.active_until = max(self.active_until, now + ACTIVE_SECS)
+                    for l in self.links.values():
+                        if l.phase == "down":
+                            l.next_try = min(l.next_try, now)
                 if env("FLEET_PEERLINK", "1") != "0":
                     self.beat(now)
-                self.save(now)
-                busy = any(l.phase in ("connecting", "verifying") or (l.phase == "down" and l.next_try - now < TICK)
+                active = time.time() < self.active_until
+                busy = any(l.phase in ("connecting", "verifying") or
+                           (active and l.phase == "down" and l.next_try - now < TICK)
                            for l in self.links.values())
-                end = time.time() + (0.2 if busy else TICK)
+                self.beat_secs = 0.2 if busy else TICK if active else IDLE_TICK
+                self.save(now)
+                end = time.time() + self.beat_secs
+                # the quiet beat polls once a second, never forking
+                step = 0.1 if active or busy else 1.0
                 while not stop and time.time() < end:
-                    time.sleep(0.1)
+                    time.sleep(step)
                     # the cheap half of the check between beats: a vanished file or
                     # master is acted on at once, not at the next beat
                     if any(l.phase == "up" and (not os.path.exists(l.sock) or not l.alive())
                            for l in self.links.values()):
                         break
                     # the hub's answer is in: act on new routes now, not a beat later
+                    # (an unchanged answer is only booked — #4359: no beat for it)
                     if self.peers_job and self.peers_job[0]:
+                        before = json.dumps(self.peers, sort_keys=True)
+                        self.refresh_peers(time.time())
+                        if json.dumps(self.peers, sort_keys=True) != before:
+                            break
+                    # a channel probe answered (#4359): a failed one is acted on now,
+                    # a good one only booked
+                    done = [l for l in self.links.values() if l.probe and l.probe[0]]
+                    if any(l.probe[0][0] != 0 for l in done):
                         break
+                    for l in done:
+                        l.rtt_ms, l.probe = l.probe[0][1], None
+                    # a request (#4359)
+                    if wake_mtime() != self.wake_seen:
+                        break
+                    # quiet, the state's ts still says "running" (STALE)
+                    if time.time() - self.saved_at >= max(1.0, STALE / 3):
+                        self.save(time.time())
         finally:
             unlink(os.path.join(RUNS, str(os.getpid())))
         self.close_all()
+        return 0
+
+
+def wake():
+    """Tell the keeper someone wants a link now (issue #4359): touch peerlink/.wake.
+    It answers within a second, checks the links and rebuilds a down one at once."""
+    try:
+        fd = os.open(WAKE, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            os.utime(fd if os.utime in os.supports_fd else WAKE, None)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def wake_mtime():
+    try:
+        return os.stat(WAKE).st_mtime_ns
+    except OSError:
         return 0
 
 
@@ -973,6 +1050,7 @@ def cmd_sock(args):
     if len(args) != 2 or not (safe(args[0]) and safe(args[1])):
         sys.stderr.write("usage: fleet-peerlink.py sock <machine> <login>\n")
         return 2
+    wake()
     s = healthy_sock(args[0], args[1])
     if not s:
         return 1
@@ -1029,11 +1107,13 @@ def cmd_pane(args):
         sys.stderr.write("usage: fleet-peerlink.py pane <machine> <login> <view>\n")
         return 2
     machine, login, view = args
+    wake()
     base = "bash %s/fleet-remote-view.sh attach --thin --view %s" % (remote_bin(), shlex.quote(via_view(view)))
     said, pause = False, 0.5
     while True:
         s = healthy_sock(machine, login)
         if not s:
+            wake()      # waiting on it: the keeper rebuilds it now, not at its quiet beat
             if not said:
                 sys.stdout.write("\r\n正在连 %s（%s）…\r\n" % (machine, login))
                 sys.stdout.flush()
@@ -1177,6 +1257,7 @@ def cmd_exec(args):
     if len(args) != 1 or not words or not safe(args[0]) or (login and not safe(login)):
         sys.stderr.write("usage: fleet-peerlink.py exec <machine> [--login <l>] -- <words…>\n")
         return 2
+    wake()
     hit = link_for(args[0], login)
     if not hit:
         sys.stderr.write("fleet-peerlink: no link up to %s\n" % args[0])
@@ -1204,6 +1285,7 @@ def cmd_fwd(args):
             or not 0 < int(args[2]) < 65536 or not secs.isdigit():
         sys.stderr.write("usage: fleet-peerlink.py fwd <machine> <login> <rport> [--secs N]\n")
         return 2
+    wake()
     hit = link_for(args[0], args[1])
     if not hit:
         sys.stderr.write("fleet-peerlink: no link up to %s@%s\n" % (args[1], args[0]))

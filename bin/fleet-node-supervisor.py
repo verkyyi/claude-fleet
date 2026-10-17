@@ -208,6 +208,16 @@ Seams (sandbox tests, docs/dev/BREAK-IT.md `node-supervisor-dead`):
   FLEET_NODE_TABLE      a JSON {"children": [...], "tasks": [...]} that REPLACES the
                         built-in table
   FLEET_NODE_TICK (1 s)  FLEET_NODE_BACKOFF_MAX (60)  FLEET_NODE_BACKOFF_RESET (60)
+  FLEET_NODE_IDLE_BACKOFF (1)  the idle beat (issue #4359, EPIC #4354 共同约定 4): once the
+                        machine has been idle FLEET_NODE_IDLE_HOLD (120 s) — no login's
+                        published working state says working or unknown, no CI job
+                        (fleet-idle-cost.py published_idle: files only, no fork) — a task
+                        under FLEET_NODE_IDLE_CAP (300 s) runs every
+                        min(max(every × FLEET_NODE_IDLE_FACTOR (3), FLEET_NODE_IDLE_FLOOR
+                        (60)), FLEET_NODE_IDLE_CAP) instead (a table entry's `idle_every`
+                        wins; `"idle": false` keeps its clock); memguard only while the
+                        kernel says memory is calm (read in-process). Busy again ⇒ the
+                        normal clocks at once. 0 = off. status's `idle` line says which.
   FLEET_NODE_ATTIC_DAYS (7)  FLEET_NODE_SWEEP_EVERY (3600)  FLEET_NODE_HEARTBEAT_STALE (120)
   FLEET_NODE_WATCHDOG_SECS (300)  a loop that has not come round this long logs the
                         phase it is stuck in, dumps its stacks and exits 70 for launchd
@@ -823,7 +833,9 @@ def default_table(paths):
             # machine.json, which a login with FLEET_MACHINE_TASKS=off reads instead
             # of probing for itself. "seat": a seated daemon writes it as itself
             # into the cluster/ root made for it (seat_share); no root needed.
-            {"name": "machine-reading", "every": 15, "timeout": 30, "seat": True,
+            # Idle (#4359): every 45 s — inside the readers' 60 s bound
+            # (FLEET_MACHINE_READING_SECS), so none of them probes for itself.
+            {"name": "machine-reading", "every": 15, "idle_every": 45, "timeout": 30, "seat": True,
              "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-machine-tasks.py"), "tick",
                      "--out", os.path.join(paths.state, "cluster")]},
             # Spotlight off on a managed Mac (#3402): every volume's index and each
@@ -1560,6 +1572,53 @@ def login_sessions(ident, t=None, asleep=False):
     return int(w[0])
 
 
+_IDLE_MOD = []
+
+
+def machine_idle_reason(paths):
+    """The empty string when the machine is idle, else why not (issue #4359): every login's
+    published working state through fleet-idle-cost.py's published_idle (C1's
+    rule, #4355 — loaded from beside this file, never a copy) plus the test
+    runner's own word (busy = a job). Anything unreadable is a reason."""
+    try:
+        if not _IDLE_MOD:
+            import importlib.util
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-idle-cost.py")
+            spec = importlib.util.spec_from_file_location("fleet_idle_cost", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _IDLE_MOD.append(mod)
+        ci = ci_summary(paths) if ci_on(paths) else None
+        return _IDLE_MOD[0].published_idle(machine_sessions_dir(), ci_busy=bool(ci and ci.get("state") == "busy"))
+    except Exception as e:  # never idle on a reader that failed
+        return "unknown: %s" % e
+
+
+def memory_calm():
+    """True when the kernel says memory is calm, read in-process (no fork): macOS's
+    kern.memorystatus_vm_pressure_level is 1 (sysctlbyname); Linux's MemAvailable
+    is at least 20% of MemTotal. Anything else — or no answer — False.
+    FLEET_NODE_MEM_CALM (tests): 1 / 0."""
+    seam = os.environ.get("FLEET_NODE_MEM_CALM")
+    if seam in ("0", "1"):
+        return seam == "1"
+    try:
+        if sys.platform == "darwin":
+            import ctypes
+            import ctypes.util
+            libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+            v, n = ctypes.c_int(0), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+            if libc.sysctlbyname(b"kern.memorystatus_vm_pressure_level", ctypes.byref(v), ctypes.byref(n),
+                                 None, ctypes.c_size_t(0)) != 0:
+                return False
+            return v.value == 1
+        with open("/proc/meminfo") as fh:
+            mi = dict((l.split(":")[0], int(l.split()[1])) for l in fh if ":" in l and len(l.split()) > 1)
+        return mi["MemAvailable"] >= 0.2 * mi["MemTotal"]
+    except Exception:
+        return False
+
+
 def account_proc_is(ent, cmd):
     """Does a `ps` command line read as this account unit's own process? The
     state records the wrapper's line (`/bin/sh -c ACCOUNT_SH …`), but ACCOUNT_SH
@@ -2175,6 +2234,10 @@ class Supervisor(object):
         self.units = None
         self.units_at = 0
         self.sessions = {}    # (login, asleep) -> (read at, count | None) — a session unit's gate (#3671)
+        self.idle_read_at = 0.0   # the idle beat (#4359): when published_idle was last read
+        self.idle_why = "starting"  # its last answer ("" = idle)
+        self.idle_since = None    # since when it has said idle
+        self.calm_at, self.calm = 0.0, False   # memory_calm(), read at most every 5 s
         self.busy_at = {}     # (login, asleep) -> the last time its count was above 0
         self.strays_at = 0
         # the seat (#3668): this daemon runs as _fleetnode and asks the root core
@@ -2749,6 +2812,43 @@ class Supervisor(object):
         self.dirty = True
 
     # -- tasks
+    # -- the idle beat (issue #4359, EPIC #4354 共同约定 1 · 4)
+    def idle_backoff(self, t):
+        """True while the machine has been idle FLEET_NODE_IDLE_HOLD (120 s): read
+        off what every login published (fleet-idle-cost.py published_idle — C1's
+        one idle rule, files only) at most every FLEET_NODE_IDLE_READ_SECS (5 s).
+        Busy, unknown or unreadable = not idle, and the normal clocks at once."""
+        if env("FLEET_NODE_IDLE_BACKOFF", "1") == "0":
+            return False
+        if t - self.idle_read_at >= env_num("FLEET_NODE_IDLE_READ_SECS", 5):
+            self.idle_read_at = t
+            why = machine_idle_reason(self.p)
+            if why != self.idle_why:
+                self.idle_since = t if not why else None
+                self.idle_why = why
+                self.state["idle"] = {"idle": not why, "why": why, "since": self.idle_since or t}
+                self.dirty = True
+        if self.idle_why or self.idle_since is None:
+            return False
+        return t - self.idle_since >= env_num("FLEET_NODE_IDLE_HOLD", 120)
+
+    def task_every(self, tk, t):
+        """A task's clock now: its `every`, stretched while idle_backoff holds."""
+        every = float(tk.get("every", 60))
+        cap = env_num("FLEET_NODE_IDLE_CAP", 300)
+        if every >= cap or tk.get("want") or tk.get("idle") is False or not self.idle_backoff(t):
+            return every
+        if tk.get("name") == "memguard" and not tk.get("account"):
+            # the memory guard backs off only while the kernel says memory is calm
+            if t - self.calm_at >= 5:
+                self.calm_at, self.calm = t, memory_calm()
+            if not self.calm:
+                return every
+        ie = tk.get("idle_every")
+        if ie is None:
+            ie = min(max(every * env_num("FLEET_NODE_IDLE_FACTOR", 3), env_num("FLEET_NODE_IDLE_FLOOR", 60)), cap)
+        return max(every, float(ie))
+
     def task_due(self, tk, t):
         ts = self.state["tasks"].get(tk["name"]) or {}
         if tk.get("want"):
@@ -2756,7 +2856,7 @@ class Supervisor(object):
             w = want_stamp(tk["want"])
             return w > 0 and w != ts.get("want_seen")
         since = t - (ts.get("last_start") or 0)
-        if since >= float(tk.get("every", 60)):
+        if since >= self.task_every(tk, t):
             return True
         # A new stable pushed by the hub (issue #3146) runs the update now; its
         # 5-minute clock stays as the fallback for a push that never came.
@@ -5191,6 +5291,11 @@ def status_lines(paths, table, state):
               sv.get("starts") or 0)]
     if wedged_line(state):
         out.append(wedged_line(state))
+    idl = state.get("idle")
+    if isinstance(idl, dict) and env("FLEET_NODE_IDLE_BACKOFF", "1") != "0":
+        out.append("idle  %s" % ("yes · since %s ago · clocks under %ss stretch after %ss" % (
+            ago(idl.get("since")), int(env_num("FLEET_NODE_IDLE_CAP", 300)), int(env_num("FLEET_NODE_IDLE_HOLD", 120)))
+            if idl.get("idle") else "no — %s" % (idl.get("why") or "?")))
     cl = core_line(paths)
     if cl:
         down = (state.get("core") or {}).get("down_since")
@@ -5346,9 +5451,12 @@ def ci_summary(paths):
     if not ci_on(paths):
         return None
     book = read_json(ci_book_path(paths), None)
-    if not isinstance(book, dict) or now() - (book.get("at") or 0) > CI_BOOK_STALE:
+    # a slow beat (#4359) writes its word once a beat: stale past 1.5 beats + 30 s
+    beat = book.get("beat") if isinstance(book, dict) else None
+    stale = max(CI_BOOK_STALE, beat * 1.5 + 30) if isinstance(beat, (int, float)) else CI_BOOK_STALE
+    if not isinstance(book, dict) or now() - (book.get("at") or 0) > stale:
         return {"state": "off", "why": "the loop is not running", "at": now()}
-    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last")
+    out = {k: book.get(k) for k in ("state", "why", "at", "since", "login", "runs", "last", "beat")
            if book.get(k) is not None}
     out.setdefault("state", "off")
     return out
