@@ -218,6 +218,29 @@ RELAY_MISSING_SECS = int(os.environ.get("FLEET_CRED_RELAY_RETRY_SECS") or 60)
 RELAY_MISSING_MAX_SECS = int(os.environ.get("FLEET_CRED_RELAY_RETRY_MAX_SECS") or 120)
 # never through the hub broker (EPIC #1967 route ④): the subscription pool
 HUB_DENY = ("/v1/node/credentials",)
+# What a session may reach under /codex/ (issue #4611): the provider-relative paths
+# Codex CLI (0.162) calls on its model provider, each with its methods — nothing
+# else of chatgpt.com/backend-api/codex is forwarded. ONE list: the same line is
+# tokenledger/internal/credproxy CodexAllowSpec (TestCodexAllowMatchesPython).
+CODEX_ALLOW_SPEC = "POST responses, POST responses/compact, GET models"
+CODEX_ALLOW = {}
+for _m, _p in (_x.split() for _x in CODEX_ALLOW_SPEC.split(",")):
+    CODEX_ALLOW.setdefault(_p, set()).add(_m)
+
+
+def codex_refused(method, path):
+    """-> why a /codex/ request is refused, or "" (issue #4611): one spelling per
+    path — no %, \\, //, ./ or ../ (hub_broker's rule) — on the list, by its method."""
+    import posixpath
+    bare = path.split("?")[0]
+    if "%" in bare or "\\" in bare or posixpath.normpath(bare) != bare:
+        return "not a plain /codex/ path"
+    meths = CODEX_ALLOW.get(bare[len("/codex/"):])
+    if meths is None:
+        return "%s is not a path Codex CLI uses" % bare
+    if method not in meths:
+        return "%s %s is not a request Codex CLI makes" % (method, bare)
+    return ""
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
                 "unsupported_region", "request not allowed",
                 "not available in your country", "not available in your region")
@@ -1330,6 +1353,11 @@ class Proxy(BaseHTTPRequestHandler):
         if path.startswith("/hub/"):
             return self.hub_broker(inbound, path[len("/hub"):], body, t0)
         provider = "codex" if path.startswith("/codex/") else "claude"
+        if provider == "codex":
+            why = codex_refused(self.command, path)
+            if why:
+                self.log(ev="deny", path=path.split("?")[0], why=why)
+                return self.fail(403, why, "permission_error")
         seen = sorted("%s=%s" % (k, red(k, v)) for k, v in inbound.items())
         tok = ""
         if inbound.get("authorization", "").lower().startswith("bearer "):

@@ -27,6 +27,10 @@
 #   cred-pool-follows-hub   bin/fleet-credsep.py machine pool-sync + bin/fleet-cred-proxy.py
 #                       pool-drop (issue #2850): the hub puts / revokes a pool token, the
 #                       pool follows in one sync (bin/fleet-node-update.py sync_pool runs it)
+#   cred-codex-path-open    bin/fleet-cred-proxy.py codex_refused / CODEX_ALLOW_SPEC (issue #4611):
+#                       only the paths Codex CLI uses go on; every other path, spelling or
+#                       method is a 403 that never reaches chatgpt.com (the hub's half:
+#                       go test ./internal/credproxy TestCodexPathAllowList)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -563,6 +567,45 @@ drill_spare_not_tenant() {
     || { WHY="the daemon's next starts took it over again: $(grep -c 'took over' "$sb/shared.err")"; spare_down; return 1; }
   spare_down
   WHAT="共享代理是守护丢了的孤儿（只服务 alpha），备用 beta 加入后重启没落地：beta 的 mint 回「has not joined」、machine status 报 NOT SERVED: beta；守护再起一份时认出占锁的是旧租户表，TERM 接管，beta 拿到凭据、请求 200，alpha 原凭据照用，之后的起动不再接管"
+}
+
+# cred-codex-path-open (issue #4611): a session asks its proxy for /codex/<anything>.
+# Before, any suffix was glued onto chatgpt.com/backend-api/codex and sent with the
+# shared subscription's token. Now only the list goes on; the rest is a 403 with
+# ev=deny and nothing reaches the far end. The Claude half is untouched.
+drill_cred_codex_path_open() {
+  CAP=10
+  local tok code t0 n0 c m p
+  cred_rig codexpath trusted reachable || return 1
+  mkdir -p "$CD/.codex-accounts/a1"
+  printf '{"tokens":{"access_token":"cx-REAL-a1","account_id":"acct-a1"}}' > "$CD/.codex-accounts/a1/auth.json"
+  cred_serve || return 1
+  tok=$(cred_ctl mint --account a1 --sid s-cx) || { WHY="mint failed"; return 1; }
+  cx() {   # <method> <path as sent> → the status
+    curl -s -m 10 --path-as-is -o "$CD/cx.out" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $tok" \
+      -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$CP$2" 2>/dev/null
+  }
+  t0=$(now)
+  for c in 'POST /codex/responses' 'POST /codex/responses/compact' 'GET /codex/models?client_version=0.162.1'; do
+    m=${c%% *}; p=${c#* }
+    code=$(cx "$m" "$p"); [ "$code" = 200 ] || { WHY="$c → $code, want 200: $(cat "$CD/cx.out")"; return 1; }
+  done
+  grep -q '^direct-codex /direct-codex/models?client_version=0.162.1$' "$CD/hits" \
+    || { WHY="models did not reach the far end with its query: $(grep codex "$CD/hits" | tr '\n' ' ')"; return 1; }
+  n0=$(grep -c '^direct-codex ' "$CD/hits")
+  for c in 'GET /codex/wham/usage' 'POST /codex/tasks/list' 'POST /codex/../v1/messages' 'POST /codex/%2e%2e/wham/usage' \
+           'POST /codex/responses%2Fcompact' 'POST /codex//responses' 'POST /codex/./responses' 'POST /codex/responses/' \
+           'POST /codex/responses\x' 'GET /codex/responses' 'DELETE /codex/responses' 'PUT /codex/models'; do
+    m=${c%% *}; p=${c#* }
+    code=$(cx "$m" "$p"); [ "$code" = 403 ] || { WHY="$c → $code, want 403: $(cat "$CD/cx.out")"; return 1; }
+  done
+  SECS=$(since "$t0")
+  [ "$(grep -c '^direct-codex ' "$CD/hits")" = "$n0" ] \
+    || { WHY="a refused path reached chatgpt.com: $(grep '^direct-codex ' "$CD/hits" | tail -n +"$((n0 + 1))" | tr '\n' ' ')"; return 1; }
+  [ "$(grep -c '"ev": "deny".*"/codex/' "$CD/proxy.log")" -ge 12 ] \
+    || { WHY="the refusals left $(grep -c '"ev": "deny"' "$CD/proxy.log") ev=deny lines, want 12"; return 1; }
+  [ "$(cred_req "$tok" "$CD/r")" = 200 ] || { WHY="the Claude half broke: $(cat "$CD/r")"; return 1; }
+  WHAT="/codex/ 只放行 POST responses · POST responses/compact · GET models（查询串照带）；wham/usage、tasks/list、..、%2e%2e、//、./、尾斜杠、反斜杠、清单外方法共 12 种一律 403、记 ev=deny、chatgpt.com 一个没收到；Claude 照常 200"
 }
 
 cred_run_drills "$0"

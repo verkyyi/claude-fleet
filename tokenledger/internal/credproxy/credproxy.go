@@ -46,6 +46,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -380,8 +381,57 @@ func (p *Proxy) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok\n") })
 	mux.HandleFunc("/v1/proxy/anthropic/", func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, Claude) })
-	mux.HandleFunc("/v1/proxy/codex/", func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, Codex) })
-	return mux
+	codex := func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, Codex) }
+	mux.HandleFunc("/v1/proxy/codex/", codex)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// past the mux's own clean-and-redirect: a /codex/ path is judged by
+		// codexRefused as it was sent, a 403 — never a 301 to its clean spelling
+		if strings.HasPrefix(r.URL.EscapedPath(), "/v1/proxy/codex/") {
+			codex(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// CodexAllowSpec is what a session may reach under /v1/proxy/codex/ (claude-fleet#4611):
+// the provider-relative paths Codex CLI (0.162) calls on its model provider, each
+// with its methods. ONE list: bin/fleet-cred-proxy.py's CODEX_ALLOW_SPEC is the
+// same line (TestCodexAllowMatchesPython).
+const CodexAllowSpec = "POST responses, POST responses/compact, GET models"
+
+var codexAllow = func() map[string]map[string]bool {
+	m := map[string]map[string]bool{}
+	for _, e := range strings.Split(CodexAllowSpec, ",") {
+		f := strings.Fields(e)
+		if m[f[1]] == nil {
+			m[f[1]] = map[string]bool{}
+		}
+		m[f[1]][f[0]] = true
+	}
+	return m
+}()
+
+// codexRefused says why a /v1/proxy/codex/ request is refused, or "": one
+// spelling per path — no %, \, //, ./ or ../ (the node broker's rule), never an
+// absolute URI — on the list, by its method.
+func codexRefused(r *http.Request) string {
+	const pfx = "/v1/proxy/codex/"
+	if !strings.HasPrefix(r.RequestURI, "/") {
+		return "absolute-URI proxying disabled"
+	}
+	bare := r.URL.EscapedPath()
+	if strings.ContainsAny(bare, "%\\") || path.Clean(bare) != bare || !strings.HasPrefix(bare, pfx) {
+		return "not a plain /v1/proxy/codex/ path"
+	}
+	meths, ok := codexAllow[strings.TrimPrefix(bare, pfx)]
+	if !ok {
+		return bare + " is not a path Codex CLI uses"
+	}
+	if !meths[r.Method] {
+		return r.Method + " " + bare + " is not a request Codex CLI makes"
+	}
+	return ""
 }
 
 // resolve answers from the cache, the hub, or — when the hub cannot answer —
@@ -467,6 +517,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	if len(body) > maxBody {
 		a.status, a.why = refuse(w, provider, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body too large")
 		return
+	}
+	if provider == Codex {
+		if why := codexRefused(r); why != "" {
+			a.status, a.why = refuse(w, provider, http.StatusForbidden, "permission_error", why)
+			return
+		}
 	}
 	pass := ""
 	if h := r.Header.Get("Authorization"); len(h) > 7 && strings.EqualFold(h[:7], "bearer ") {
