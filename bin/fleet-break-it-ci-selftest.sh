@@ -38,6 +38,9 @@
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
 #                       before the deploy (another sha's build, a hand push): the
 #                       deploy phase refuses it — digest and revision (#3867)
+#   hub-pause-train-queued  HUB_DEPLOY_PAUSED set while a train waited in the lane:
+#                       GitHub fixed `vars` at queue time; the gate also reads an open
+#                       hub-deploy-paused issue live, unreadable ⇒ red (#4621)
 #   train-call-permissions  a caller job grants less than a job of the workflow it
 #                       calls asks (even one its `if:` skips): GitHub refuses the
 #                       whole train at parse time (startup_failure, #3908);
@@ -609,6 +612,44 @@ drill_train_hub_backwards() {
   [ "$rc" != 0 ] && [ "$(dep)" != true ] || { WHY="a hub commit the checkout cannot place still decided ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="入口已在 TRAIN_SHA 跳过；入口被手动部署到它之后或分叉的提交：不部署、写 hub superseded、这步绿；入口落后照常部署；只改控制台照常部署、只改 web-chat/ui 不部署；读不到 /version 或认不出提交：红，不盲部署"
+}
+
+# The pause switch must hold a train that is ALREADY queued (issue #4621): run
+# 39036174481 was queued 13:20:46, HUB_DEPLOY_PAUSED=1 set 13:22:33, and its gate
+# (13:34) read the variable empty — GitHub fixes `vars` when a run is queued — and
+# deployed the hub. fleet-hub-pause.sh check also reads an open issue labelled
+# hub-deploy-paused when the gate runs; that read failing is red.
+drill_hub_pause_train_queued() {
+  CAP=30
+  local t0 d out rc wf
+  wf="$BIN/../.github/workflows/hub-deploy.yml"
+  awk '/^  gate:/{g=1} g&&/^  [a-z]/&&!/^  gate:/{g=0} g' "$wf" > "${TMPDIR:-/tmp}/hubgate.$$"
+  grep -q 'bin/fleet-hub-pause.sh check --repo "$GITHUB_REPOSITORY" --sha "$INPUT_SHA" --var "$PAUSED"' "${TMPDIR:-/tmp}/hubgate.$$" \
+    && grep -q 'issues: read' "${TMPDIR:-/tmp}/hubgate.$$" \
+    || { WHY="hub-deploy.yml's gate does not run fleet-hub-pause.sh check with issues: read"; rm -f "${TMPDIR:-/tmp}/hubgate.$$"; return 1; }
+  rm -f "${TMPDIR:-/tmp}/hubgate.$$"
+  d=$(mktemp -d "${TMPDIR:-/tmp}/hub-pause.XXXXXX"); t0=$(now)
+  # a fake gh: the open issues labelled hub-deploy-paused are $d/issues, $d/down = the API is down
+  printf '#!/bin/bash\n[ ! -e "%s/down" ] || exit 1\ncat "%s/issues" 2>/dev/null\n' "$d" "$d" > "$d/gh"; chmod +x "$d/gh"
+  chk() { out=$(GH="$d/gh" FLEET_HUB_PAUSE_RETRY_SECS=0 GITHUB_OUTPUT='' bash "$BIN/fleet-hub-pause.sh" check --repo o/r "$@" 2>&1); rc=$?; }
+  # the variable reached the run (set before it was queued): paused
+  chk --sha abc1234 --var 1
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^paused=true$' || { WHY="HUB_DEPLOY_PAUSED=1 did not pause: $rc $out"; rm -rf "$d"; return 1; }
+  # the train already queued (variable empty in its snapshot), a pause issue open: paused
+  printf '#4700 入口自动部署已暂停\n' > "$d/issues"; chk --sha abc1234 --var ''
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^paused=true$' && printf '%s' "$out" | grep -q '#4700' \
+    || { WHY="a queued train with a hub-deploy-paused issue open was not paused: $rc $out"; rm -rf "$d"; return 1; }
+  # a person's dispatch (no train sha) is never paused
+  chk --var 1
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^paused=false$' || { WHY="a person's dispatch was paused: $rc $out"; rm -rf "$d"; return 1; }
+  # nothing open, variable empty: deploys
+  : > "$d/issues"; chk --sha abc1234 --var ''
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^paused=false$' || { WHY="no pause still paused: $rc $out"; rm -rf "$d"; return 1; }
+  # the switch unreadable: red, never a blind deploy
+  : > "$d/down"; chk --sha abc1234 --var ''
+  [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^paused=true$' || { WHY="an unreadable pause switch did not go red: $rc $out"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="变量在列车排队后才设（vars 排队时就定了）：门在运行时读到开着的 hub-deploy-paused 单 ⇒ 暂停、不部署入口；变量排队前设了也暂停；手动 dispatch 不受影响；读不到暂停开关 ⇒ 红，不盲部署"
 }
 
 # The repo is public (EPIC #3569): a PR that adds an internal address used to merge

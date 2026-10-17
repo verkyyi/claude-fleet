@@ -24,6 +24,7 @@ curl -fsS <HUB_URL>/version         # 现在跑的 version（prod-<sha7>）、co
 curl -fsS -o /dev/null -w '%{http_code}\n' <HUB_URL>/healthz
 gh run list --repo verkyyi/claude-fleet --workflow release-train.yml --limit 5
 gh run list --repo verkyyi/claude-fleet --workflow hub-deploy.yml --limit 5
+~/.claude/fleet/bin/fleet-hub-pause.sh status --repo verkyyi/claude-fleet
 gh variable list --repo verkyyi/claude-fleet | grep -E 'HUB_DEPLOY_PAUSED|HUB_DEPLOY_NOTIFY_ISSUE'
 ```
 
@@ -39,7 +40,7 @@ gh variable list --repo verkyyi/claude-fleet | grep -E 'HUB_DEPLOY_PAUSED|HUB_DE
 3. **手动回退**：同一入口，`tag` 填 `<OLD_TAG>`：
    `gh workflow run hub-deploy.yml --repo verkyyi/claude-fleet -f tag=<OLD_TAG>`。用 master 的清单部署那份镜像。
    **跨过了库迁移**：还要恢复对应快照（`/data/backup-hubdeploy-<UTC>-<tag>.db`），照 `deploy/k8s/RUNBOOK.md`「快照与恢复」做，需要集群管理员的 kubeconfig。
-4. **暂停 / 恢复**列车的部署：`gh variable set HUB_DEPLOY_PAUSED --repo verkyyi/claude-fleet --body 1`；恢复 `gh variable delete HUB_DEPLOY_PAUSED --repo verkyyi/claude-fleet`。
+4. **暂停 / 恢复**列车的部署：`~/.claude/fleet/bin/fleet-hub-pause.sh on --repo verkyyi/claude-fleet --why <原因>`（开一张带 `hub-deploy-paused` 标签的单，门运行时读，已在车道里排着的那趟也拦得住）；恢复 `fleet-hub-pause.sh off --repo verkyyi/claude-fleet`。旧的仓库变量 `HUB_DEPLOY_PAUSED=1` 仍算暂停，但 GitHub 在 run 排队时就定下 `vars`，拦不住设之前已排队的车（#4621）。
 5. **演练回退**：Run workflow，勾 `simulate_unhealthy`，`tag` = 任一不是现役的旧标签；它部署、判失败、回到现役镜像并变红。
 6. **从不**手动 `kubectl apply -k overlays/prod`：清单里的标签是占位，sqlite 形态下入口会停掉。要重部署就跑 workflow。
 
@@ -54,5 +55,5 @@ gh variable list --repo verkyyi/claude-fleet | grep -E 'HUB_DEPLOY_PAUSED|HUB_DE
 
 - 健康检查或滚动失败时任务**自动**把镜像设回之前那份、等它健康、然后变红——只回镜像，清单仍是 master 的，已跑的迁移不撤。
 - 自动回退之后或要回到更早：照「步骤」3 手动回退；跨迁移恢复快照。
-- 暂停误开了：删掉 `HUB_DEPLOY_PAUSED`，暂停期间合进来的随下一班列车走，或手动跑一次。
+- 暂停误开了：`fleet-hub-pause.sh off`（变量设了也删掉），暂停期间合进来的随下一班列车走，或手动跑一次。
 - 回退后入口与 stable 不同源：修好原因后让下一班列车把两者带回同一提交，不要再手动移 stable。

@@ -775,7 +775,7 @@ jobs:
           echo "$v"
           img=$(printf '%s' "$v" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version") or "")')
           if [ "$PLANNED" = true ] && [ "$DEPLOYED" != success ]; then
-            echo "::error::the hub needed prod-${TRAIN_SHA:0:7} and its deploy did not run (${DEPLOYED:-?}: HUB_DEPLOY_PAUSED=1?) — nothing published; the next train starts over"; exit 1
+            echo "::error::the hub needed prod-${TRAIN_SHA:0:7} and its deploy did not run (${DEPLOYED:-?}: paused? bin/fleet-hub-pause.sh status) — nothing published; the next train starts over"; exit 1
           fi
           if [ "$DEPLOYED" = success ] && [ "$img" != "prod-${TRAIN_SHA:0:7}" ]; then
             echo "::error::this train deployed prod-${TRAIN_SHA:0:7} but the hub answers $img — another deploy overtook it; the next train starts over"; exit 1
