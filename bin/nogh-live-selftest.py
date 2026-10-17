@@ -10,7 +10,9 @@ import json
 import os
 from pathlib import Path
 import signal
+import selectors
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -24,6 +26,7 @@ import nogh_live_render as template
 import nogh_live_identity as identity
 import nogh_live_http as adapter
 import nogh_live_gateway as gateway
+import nogh_live_evidence as evidence
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("render", ROOT / "extras/managed-node/render.py")
@@ -94,6 +97,92 @@ def plan():
     p['routes'].append(dict(**{'from': 'proxy', 'to': 'forge-origin'}, purpose='forge',
                             ip='198.51.100.2', port=443, protocol='tcp', origin='https://forge.test:443'))
     return p
+
+
+class WorkloadEvidence(unittest.TestCase):
+    def record(self, kind='business'):
+        return dict(kind=kind, name='test-api-result', data=dict(observed='fixture-only'))
+
+    def capture(self, p=None):
+        return evidence.Capture(p or plan(), 'node-a')
+
+    def finish(self, capture):
+        for key in capture.streams:
+            capture.feed(key, b'')
+        return capture.finish()
+
+    def test_real_inherited_stdout_stderr_are_bound_to_launch_and_original_pod(self):
+        p = plan(); capture = self.capture(p)
+        selector = selectors.DefaultSelector()
+        process = None
+        try:
+            outputs = capture.pipes()
+            # A detached descendant inherits only the chosen launch's streams.
+            # Its late record must be retained after the direct child exits.
+            command = ('import json,os,time; child=os.fork(); '
+                       'os._exit(0) if child else None; time.sleep(0.02); '
+                       'os.write(1,(json.dumps(%r)+"\\n").encode()); '
+                       'os.write(2,(json.dumps(%r)+"\\n").encode())' %
+                       (self.record(), self.record('native')))
+            process = subprocess.Popen([sys.executable, '-c', command], stdin=subprocess.DEVNULL,
+                                       close_fds=True, **outputs['row:A1'])
+            capture.close_writers()
+            for fd, key in capture.readers.items():
+                selector.register(fd, selectors.EVENT_READ, key)
+            deadline = time.monotonic() + 2
+            while selector.get_map():
+                self.assertLess(time.monotonic(), deadline)
+                for key, _ in selector.select(0.05):
+                    block = os.read(key.fd, 65536)
+                    capture.feed(key.data, block)
+                    if not block: selector.unregister(key.fd)
+            self.assertEqual(process.wait(timeout=1), 0)
+            bundle = capture.finish()
+            proof = dict(workload_evidence_digest=live.fingerprint(bundle))
+            evidence.check(p, 'node-a', bundle, proof)
+            evidence.row_coverage(p, {'node-a': bundle})
+            self.assertEqual({r['stream'] for r in bundle['records']}, {'stdout', 'stderr'})
+            self.assertEqual({r['launch'] for r in bundle['records']}, {'row:A1'})
+            ep = next(e for e in p['endpoints'] if e['role'] == 'node-a')
+            self.assertEqual(bundle['endpoint_uid'], ep['uid'])
+            self.assertEqual(bundle['run_id'], p['run_id'])
+            self.assertEqual(bundle['row'], 'A1')
+            for field, changed in [('endpoint_uid', str(uuid.uuid4())), ('row', 'A2'), ('run_id', str(uuid.uuid4()))]:
+                bad = dict(bundle, **{field: changed})
+                with self.assertRaises(live.Refused): evidence.check(p, 'node-a', bad, proof)
+            bad = copy.deepcopy(bundle); bad['records'][0]['body']['data']['observed'] = 'changed'
+            with self.assertRaises(live.Refused): evidence.check(p, 'node-a', bad, proof)
+        finally:
+            selector.close(); capture.close()
+            if process is not None and process.poll() is None:
+                process.kill(); process.wait(timeout=1)
+
+    def test_output_limit_partial_line_missing_eof_and_unstructured_output_refuse(self):
+        with self.assertRaises(live.Refused): self.capture().finish()
+        for raw in (b'not JSON\n', b'\xff\n', b'x' * (evidence.MAX_LINE + 1),
+                    live.canonical(self.record()), b'{}\n'):
+            capture = self.capture()
+            with self.assertRaises(live.Refused):
+                capture.feed(('row:A1', 'stdout'), raw)
+                self.finish(capture)
+        capture = self.capture()
+        with self.assertRaises(live.Refused):
+            capture.feed(('row:A1', 'stdout'), b'x' * (evidence.MAX_BYTES + 1))
+        capture = self.capture()
+        with self.assertRaises(live.Refused):
+            for _ in range(evidence.MAX_RECORDS + 1):
+                capture.feed(('row:A1', 'stdout'), live.canonical(self.record()) + b'\n')
+
+    def test_exit_zero_empty_or_missing_restored_evidence_cannot_substitute(self):
+        p = plan(); capture = self.capture(p)
+        bundle = self.finish(capture)
+        with self.assertRaises(live.Refused): evidence.row_coverage(p, {'node-a': bundle})
+        p['row'] = 'A4'; capture = self.capture(p)
+        for phase in ('row:A4', 'row:A4-denied'):
+            for kind in ('business', 'native'):
+                capture.feed((phase, 'stdout'), live.canonical(self.record(kind)) + b'\n')
+        with self.assertRaises(live.Refused):
+            evidence.row_coverage(p, {'node-a': self.finish(capture)})
 
 
 class Binding(unittest.TestCase):

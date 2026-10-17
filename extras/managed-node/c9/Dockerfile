@@ -8,7 +8,8 @@ USER root
 RUN apt-get update -qq && apt-get install -y --no-install-recommends strace iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY bin/nogh_live_contract.py bin/nogh_live_observer.py bin/nogh_live_runtime.py \
-     bin/nogh_live_gateway.py bin/nogh_live_probe.py bin/nogh_live_http.py bin/nogh_live_identity.py /usr/local/lib/fleet-c9/
+     bin/nogh_live_gateway.py bin/nogh_live_probe.py bin/nogh_live_http.py bin/nogh_live_identity.py \
+     bin/nogh_live_evidence.py /usr/local/lib/fleet-c9/
 COPY extras/managed-node/render.py /usr/local/lib/fleet-c9/managed-render.py
 COPY deploy/k8s/egress/base/fleet-egress.py /usr/local/lib/fleet-c9/fleet-egress.py
 RUN C9_SOURCE_SHA="$C9_SOURCE_SHA" python3 -c 'import hashlib,json,os,pathlib,re; s=os.environ["C9_SOURCE_SHA"]; assert re.fullmatch("[a-f0-9]{40}",s); p=pathlib.Path("/usr/local/lib/fleet-c9/c9-build.json"); p.write_text(json.dumps(dict(source_sha=s,strace_sha256=hashlib.sha256(pathlib.Path("/usr/bin/strace").read_bytes()).hexdigest())))' \

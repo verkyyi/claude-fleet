@@ -20,7 +20,8 @@ import subprocess
 import sys
 import time
 
-from nogh_live_contract import Refused, canonical, read_private, require, validate, write_private
+from nogh_live_contract import Refused, canonical, fingerprint, read_private, require, validate, write_private
+from nogh_live_evidence import Capture, launches
 from nogh_live_observer import MARKER_FD, PHASES, STRACE_OPTIONS, Trace
 
 STATE = Path('/run/fleet-c9')
@@ -48,7 +49,8 @@ def binding(plan, role):
 
 def build_digest():
     files = ('nogh_live_runtime.py', 'nogh_live_contract.py', 'nogh_live_observer.py',
-             'nogh_live_gateway.py', 'nogh_live_probe.py', 'nogh_live_http.py', 'nogh_live_identity.py')
+             'nogh_live_gateway.py', 'nogh_live_probe.py', 'nogh_live_http.py', 'nogh_live_identity.py',
+             'nogh_live_evidence.py')
     hashes = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files}
     return 'sha256:' + hashlib.sha256(canonical(hashes)).hexdigest()
 
@@ -158,13 +160,19 @@ def work(role, phase):
 
 def broker(role):
     """Traced control parent. All services and actions are its descendants."""
+    output = json.loads(os.environ.pop('C9_EVIDENCE_FDS'))
+    output_fds = {fd for streams in output.values() for fd in streams.values()}
     for path in list(Path('/proc/self/fd').iterdir()):
         fd = int(path.name)
-        if fd > 2 and fd != MARKER_FD:
+        if fd > 2 and fd != MARKER_FD and fd not in output_fds:
             try: os.close(fd)
             except OSError: pass
     libc = private_process()
     plan = read_private(STATE / 'plan.json')
+    require(set(output) == set(launches(plan, role)) and all(
+        set(streams) == {'stdout', 'stderr'} and all(type(fd) is int and fd > 2 and fd != MARKER_FD
+                                                   for fd in streams.values())
+        for streams in output.values()), 'EVIDENCE_PIPE_BINDING')
     ep = next(e for e in plan['endpoints'] if e['role'] == role)
     if role in ('hub', 'node-a', 'node-b'):
         require('sha256:' + hashlib.sha256(WORKLOAD.read_bytes()).hexdigest() == ep['command_digest'],
@@ -239,7 +247,7 @@ def broker(role):
                 if identity is not None:
                     children.append(subprocess.Popen([sys.executable, str(ROOT / 'nogh_live_runtime.py'),
                                                    'work', role, 'start'], stdin=subprocess.DEVNULL,
-                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                 **output['start'],
                                                  close_fds=True, **identity))
                 emit(dict(type='result', phase=phase, exit=0))
                 continue
@@ -256,9 +264,10 @@ def broker(role):
                 continue  # fixed gateway remains independently observed
             else:
                 command = [sys.executable, str(ROOT / 'nogh_live_runtime.py'), 'work', role, phase]
-            p = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, close_fds=True,
-                                 **({} if phase == 'identity' or phase.startswith(('deny:', 'allow:')) else identity))
+            control = phase == 'identity' or phase.startswith(('deny:', 'allow:'))
+            p = subprocess.Popen(command, stdin=subprocess.DEVNULL, close_fds=True,
+                                 **(dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    if control else output[phase]), **({} if control else identity))
             try:
                 code = p.wait(timeout=5 if phase.startswith('allow:') else 2 if phase.startswith('deny:') else 30)
             except subprocess.TimeoutExpired:
@@ -270,7 +279,7 @@ def broker(role):
             if identity is not None:
                 stopped = subprocess.run([sys.executable, str(ROOT / 'nogh_live_runtime.py'),
                                           'work', role, 'stop'], stdin=subprocess.DEVNULL,
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         **output['stop'],
                                          timeout=2, close_fds=True, **identity)
                 require(stopped.returncode == 0, 'NORMAL_STOP_FAILED')
             # Stop only direct children we created; namespace PID1 handles any
@@ -307,14 +316,19 @@ def supervise(role):
     os.dup2(marker_write, MARKER_FD, inheritable=True)
     os.close(marker_write)
     trace = Trace(plan, role)
+    capture = Capture(plan, role)
+    evidence_fds = capture.pipes()
     argv = ['/usr/bin/strace', *STRACE_OPTIONS, '-o', '/proc/self/fd/%d' % write_fd,
             sys.executable, str(Path(__file__).resolve()), 'broker', role]
     process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               pass_fds=(write_fd, MARKER_FD), close_fds=True)
+                               pass_fds=(write_fd, MARKER_FD, *capture.writers.values()), close_fds=True,
+                               env=dict(os.environ, C9_EVIDENCE_FDS=json.dumps(evidence_fds)))
+    capture.close_writers()
     os.close(write_fd); os.close(MARKER_FD)
     selector = selectors.DefaultSelector()
     streams = {read_fd: 'trace', marker_read: 'marker', sys.stdin.fileno(): 'input',
                process.stdout.fileno(): 'output', process.stderr.fileno(): 'error'}
+    streams.update(capture.readers)
     for fd, name in streams.items():
         os.set_blocking(fd, False); selector.register(fd, selectors.EVENT_READ, name)
     buffers = {name: bytearray() for name in streams.values()}
@@ -328,6 +342,12 @@ def supervise(role):
             for key, _ in selector.select(min(0.2, max(0, deadline - time.monotonic()))):
                 fd, name = key.fd, key.data
                 block = os.read(fd, 65536)
+                if isinstance(name, tuple):
+                    capture.feed(name, block)
+                    if not block:
+                        selector.unregister(fd)
+                        drained.add(name)
+                    continue
                 if not block:
                     selector.unregister(fd)
                     drained.add(name)
@@ -377,22 +397,25 @@ def supervise(role):
                             else:
                                 require(set(value) == {'type', 'phase'}, 'BROKER_FORMAT')
                             emit(value)
-            if process.poll() is not None and {'trace', 'output', 'error', 'marker'} <= drained:
+            if process.poll() is not None and {'trace', 'output', 'error', 'marker', *capture.streams} <= drained:
                 break
         code = process.wait(timeout=1)
         require({'trace', 'output', 'error', 'marker'} <= drained and trace_eof and not errors
                 and not any(buffers[k] for k in ('trace', 'output', 'input')), 'OBSERVER_LOST')
         proof = trace.finish(code)
+        evidence = capture.finish()
         proof.update(type='observation', role=role, endpoint_uid=ep['uid'], generation=plan['generation'],
                      execution_generation=ep['execution_generation'], plan_digest=validate(plan),
-                     command_results=results, gateway=gateway)
+                     command_results=results, gateway=gateway, workload_evidence_digest=fingerprint(evidence))
         write_private(STATE / 'observation.json', proof)
+        emit(evidence)
         emit(proof)
         return 0
     finally:
         # In this entrypoint we ARE the exclusive test PID1. Its exit closes the
         # namespace; never use a host process scan, kill(-1), or a shared cgroup.
         selector.close()
+        capture.close()
         if process.poll() is None:
             process.terminate()
         for fd in (read_fd, marker_read):

@@ -64,8 +64,48 @@ recipe、Git、命令参数或公开记录。
 `stop` 正常停止它自己的服务。A4 还接收 `row:A4-denied`、`row:A4-restored`，分别执行
 实际被拒绝和恢复后的 GitHub PR 门读取。后台服务、native 和子任务必须继承这棵树；
 不能调用 Kubernetes exec、宿主守护、共享 tmux server 或其他运行中的测试资源。
-workload 退出 0 只是命令完成，不能自己宣告 C9 PASS。业务证据由 owner 在受支持的
-任务/权威 API 上核验；driver 不接受 workload 自报网络计数。
+workload 退出 0 只是命令完成，不能自己宣告 C9 PASS。业务/原生证据必须由这棵受观察
+的树通过正常任务/权威 API、官方 native RPC 和本 Pod 的内核读取取得，按下述
+stdout/stderr JSONL 接口导出；driver 不接受 workload 自报网络计数。
+
+## 逐行业务与原生证据导出
+
+`start`、各个 `row:*`、`stop` 的 stdout/stderr 是正式导出接口。每行是一个 UTF-8
+JSON 对象，以换行结尾，字段恰好为：
+
+| 字段 | 内容 |
+|---|---|
+| `kind` | `business`、`native` 或 `diagnostic` |
+| `name` | 1–128 字符的证据名称，例如实际读取的 API 或本机核验项 |
+| `data` | 非空对象；owner 从实际响应/内核读数选择的无凭据字段 |
+
+workload 应在本行命令中读取并输出真实材料：`business` 保留对应任务/操作 ID、请求
+结果与该行断言需要的状态；`native` 保留实际 SID、PID、kernel birth、executable、
+cwd、官方 RPC 与 authority/start 读取的关联字段及其读取来源。具体字段和逐行断言
+仍按完整 C9，不能用 `{"ok":true}` 或 exit 0 代替。采集器、业务客户端、native 和
+浏览器都必须留在原 observed 后代树中；此接口不允许边界外补跑采集或补造记录。
+原始身份材料只留在私有证据目录，不贴到 issue/PR。凭据、Authorization、环境变量
+转储、原始 trace 和带秘密的业务日志不得输出；owner 的 workload 负责在输出前选择
+无凭据字段，接口不是任意原始日志的脱敏器。其他服务日志需由树内 workload 在源头
+关闭或转换为无凭据的 `diagnostic` 记录；非 JSON 输出使本次运行失败。
+
+每个角色所有启动命令及两个流合计最多 128 KiB、512 条，每条换行前最多 4096 字节。
+supervisor 持续消费每个启动命令独立的匿名管道，所有后代继承该命令的 stdout/stderr；
+管道无网络 listener、文件投递或 exec RPC。后台 `start` 服务晚输出仍标为 `start`，
+不会冒充某个 row 的证据。每条记录的 `seq/launch/stream` 由 supervisor 添加；整个
+bundle 绑定 `run_id/row/generation/role/endpoint_uid/execution_generation/plan_digest`。
+`endpoint_uid` 是原始创建响应和新鲜 GET 已核实的 Pod UID，不能由 workload 自报。
+不同流的 `seq` 仅表示收取顺序，不是跨进程发生时间。
+
+所有证据管道 EOF、无残行、整树 trace 完整后才发出 bundle；其 SHA256 写入独立
+observation 的 `workload_evidence_digest`。driver 再核绑定和摘要，将五个角色写入
+0600 的 `workload-evidence.json`（proxy/dns 无 workload，records 为空），总摘要写入
+`receipt.json`。正式行命令至少需一份 `business` 和一份 `native` 记录，可分属不同
+角色；A4 的 `row:A4`、`row:A4-denied`、`row:A4-restored` 分别要求，不能互相填补。
+空输出、超界、残行、缺 EOF、身份/摘要变化均拒绝，不截断成成功。已完整收到的 bundle
+在后续行覆盖/终态检查失败时仍保留；未完整收到则不产出完整导出文件。必须联合读取
+receipt，不能仅凭导出文件存在判 PASS。捕获证明材料来自哪个受观察的执行树，并不
+证明其业务陈述为真；owner 仍须核对实际材料与 C9 每条断言。
 
 ## recipe 与路由
 
@@ -161,11 +201,40 @@ A4 的 GitHub 路线最初不安装、DNS 也不回答；仅 `row:A4-restored` �
 成功需原始 Pod 全部 Succeeded、原始 imageID、restartCount 0、正常退出和完整流
 关闭。失败/取消只关闭自己打开的 attach；独占 PID 1 退出及 Pod deadline 约束其
 后代。driver 随后在剩余预算内核对原始 UID 的终态，不 delete 资源、不按宿主 PID
-扫描杀进程；无法证明终止时回执明确 `NOT VERIFIED`，退出 125。owner 根据真实 UID
-检查并通过正常管理入口清理保留的对象，最后卸载该 run 的策略，不能把未知清理状态
+扫描杀进程；无法证明终止时回执明确 `NOT VERIFIED`，退出 125。不能把未知清理状态
 转写为成功。
 
-证据包含 0600 `manifest.json`、`observations.json` 和 `receipt.json`。回执分列
+证据包含 0600 `manifest.json`、`observations.json`、`workload-evidence.json` 和
+`receipt.json`。回执分列
 `config/installed/live/cleanup`，成功矩阵是 `g3_g4:PASS`、`live:OBSERVED`、
 `c9:OWNER VERDICT REQUIRED`。owner 还须结合每行实际业务/原生证据给出 C9 判定。
 CI 的离线契约、私有 Linux namespace 和本地 TLS 测试均不是 live 证据。
+
+## owner 的正常资源清理顺序
+
+清理使用原 namespace UID 和原 Pod UID，仍由 #4486 的正常管理入口执行；driver
+不提供 delete/apply。不能先删除 Secret/ConfigMap：`-artifacts` 策略明确拒绝 DELETE。
+也不能先卸全部策略再杀仍运行的 Pod。准确顺序为：
+
+1. 以新鲜 GET 核验五个原 Pod UID 的终态、imageID、restartCount 和容器终止状态。
+   成功需全部 Succeeded/exit 0；失败清理允许 Failed，但不能因此改写验收结果。
+   保存这些 API 终态材料、创建响应、绑定 manifest、observations、workload evidence
+   和 receipt 到集群外私有目录，并核对摘要。缺失或替换的 UID 不算原执行已终止。
+2. 保持四组 VAP/binding 原样，使用带原 namespace UID precondition 的正常 namespace
+   DELETE 请求进入清理。新鲜 GET 必须仍为该 UID 且有 `deletionTimestamp`、
+   `status.phase: Terminating`；NamespaceLifecycle 此时拒绝在该 namespace CREATE
+   新资源。停止本 run 的其他管理调用，撤销专用 controller 的 attach/RBAC 授权，
+   禁止复用 namespace 名称。此处“关闭准入”是阻止新的执行，不是卸载拒绝策略。
+3. 在原策略保护下让 namespace controller 清除已终止的 Pod，或按原 Pod UID
+   precondition 正常删除；Pod DELETE 本就被策略允许。用新鲜 API 证明 namespace
+   仍为原 UID/Terminating 且 Pod 列表为空。artifact 删除被拒绝、namespace 暂时
+   无法完成删除是这个顺序中的预期状态，不能靠移除 finalizer 绕过。
+4. 只有第 1–3 步证据齐全后，移除 `fleet-c9-<run UUID>-artifacts` 的 binding，再
+   移除同名 policy，使 namespace controller 能正常删除 immutable ConfigMap/Secret
+   及其余 namespace 对象。保留 `-pods/-attach/-exec` 三组策略，确认 namespace GET
+   返回 NotFound；若删除未完成，查明阻碍，不移除 namespace finalizer、不宣告已清理。
+5. namespace 已消失后，移除本 run 剩余三组 binding/policy 及正常管理入口所创建的
+   namespace 外专用 RBAC 等管理产物，记录实际清理结果。最后才解除名称保留。
+
+任一步无法证明时保留相应拒绝策略和私有证据，清理标为未验证。资源回收不改变既有
+C9 判定，也不能把新的同名 Pod/namespace 当成原对象来补齐成功。

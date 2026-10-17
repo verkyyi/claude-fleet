@@ -20,6 +20,7 @@ import time
 from nogh_live_contract import (COUNTERS, Refused, ROLES, canonical, fingerprint, read_private,
                                 require, validate, write_private, bind_observed)
 from nogh_live_observer import PHASES
+from nogh_live_evidence import check as check_evidence, row_coverage
 from nogh_live_render import admission, check_pod, render
 
 
@@ -340,7 +341,15 @@ def run(args):
             if phase != 'end':
                 for channel in channels.values():
                     require(channel.receive('result', phase).get('exit') == 0, 'CONTROL_OR_ROW_FAILED')
+        bundles = {role: channel.receive('workload-evidence') for role, channel in channels.items()}
         proofs = {role: channel.receive('observation') for role, channel in channels.items()}
+        for role, bundle in bundles.items():
+            check_evidence(plan, role, bundle, proofs[role])
+        # Retain complete exports even if a later row/terminal gate fails. Their
+        # capture status is distinct from the run receipt and business verdict.
+        write_private(evidence / 'workload-evidence.json', bundles)
+        result['workload_evidence_digest'] = fingerprint(bundles)
+        row_coverage(plan, bundles)
         for channel in channels.values():
             require(channel.process.wait(timeout=cluster.remaining(2)) == 0 and not channel.buffer,
                     'OBSERVATION_CHANNEL_NOT_CLOSED')
