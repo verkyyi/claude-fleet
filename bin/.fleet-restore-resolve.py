@@ -30,6 +30,39 @@
 from pathlib import Path
 import sys, glob, os, re, json, uuid
 import subprocess
+import shlex
+
+
+def snapshot_metadata(stream):
+    rows = []
+    for encoded in stream:
+        fields = shlex.split(encoded)
+        if len(fields) != 4 or any(not field.startswith(prefix)
+                                  for field, prefix in zip(fields, ('F', 'L', 'R', 'A'))):
+            raise ValueError('invalid snapshot metadata framing')
+        fleet_id, context, receipt, authority = (field[1:] for field in fields)
+        if any(character in value for value in (fleet_id, context, receipt, authority)
+               for character in ('\t', '\n', '\r', '\0')):
+            raise ValueError('snapshot metadata contains a row delimiter')
+        if not context and not authority:
+            continue
+        if not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', fleet_id):
+            raise ValueError('snapshot metadata has no canonical fleet identity')
+        if context:
+            rows.append('\t'.join(('LAUNCH', fleet_id, context, receipt)))
+        if authority:
+            rows.append('\t'.join(('AUTHORITY', fleet_id, authority)))
+    return rows
+
+
+if sys.argv[1:] == ['--snapshot-metadata']:
+    try:
+        metadata_rows = snapshot_metadata(sys.stdin)
+    except ValueError as error:
+        sys.exit(str(error))
+    if metadata_rows:
+        print('\n'.join(metadata_rows))
+    sys.exit(0)
 
 PANELS = {"plan", "dash", "backlog", "home"}
 HUB = "__HUB__"

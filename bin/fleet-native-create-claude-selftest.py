@@ -80,7 +80,7 @@ def configure_fleet_launcher(root, home, repository, environment, binary):
     return expected
 
 
-def supervise_fixture(root, resume, local_authority=False):
+def supervise_fixture(root, resume, local_authority=False, restore_entrypoint=False):
     context = json.loads((root / 'context.json').read_text())
     pane = os.environ['TMUX_PANE']
     arguments = [str(root / 'launcher'), '--model', 'claude-sonnet-4-6']
@@ -97,6 +97,11 @@ def supervise_fixture(root, resume, local_authority=False):
             launch.stamp(pane, '@native_worktree', json.loads((root / 'intent.json').read_text()))
         launch.tmux('set-option', '-w', '-t', pane, '@fleet_id', context['worker_id'].split('/')[1])
         launch.tmux('set-option', '-w', '-t', pane, '@repo', context['repo'])
+        if restore_entrypoint:
+            launch.tmux('set-option', '-w', '-t', pane, '@raw', '1')
+            launch.tmux('set-option', '-w', '-t', pane, '@cc_agent', 'claude')
+            wrapper = root / 'home/.claude/fleet/bin/fleet-session-wrap.sh'
+            return subprocess.call(['bash', str(wrapper), *arguments[1:]])
         result = authority.supervise(arguments)
         (root / ('resume-exit' if resume else 'create-exit')).write_text(str(result))
         return result
@@ -148,6 +153,7 @@ def main():
     parser.add_argument('--claude', default='claude')
     parser.add_argument('--fleet-launcher', action='store_true')
     parser.add_argument('--local-authority', action='store_true')
+    parser.add_argument('--restore-entrypoint', action='store_true')
     parser.add_argument('--mcp-fixture', help=argparse.SUPPRESS)
     parser.add_argument('--hook-fixture', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--fixture-root', type=Path, help=argparse.SUPPRESS)
@@ -162,7 +168,10 @@ def main():
                                                   session=payload['session_id']))
         return 0
     if arguments.supervise_fixture:
-        return supervise_fixture(arguments.supervise_fixture, arguments.resume_fixture, arguments.local_authority)
+        return supervise_fixture(arguments.supervise_fixture, arguments.resume_fixture,
+                                 arguments.local_authority, arguments.restore_entrypoint)
+    if arguments.restore_entrypoint and not arguments.local_authority:
+        parser.error('--restore-entrypoint requires --local-authority')
     if arguments.local_authority and not arguments.fleet_launcher:
         parser.error('--local-authority requires --fleet-launcher')
     for managed in (Path('/Library/Application Support/ClaudeCode'), Path('/etc/claude-code')):
@@ -244,6 +253,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='fleet-native-create-', dir='/tmp') as temporary:
             root = Path(temporary).resolve()
             home, repository, socket = root / 'home', root / 'repository', root / 'tmux.sock'
+            pane_target = '%0'
             home.mkdir()
             environment = dict(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / '.claude'),
                 FLEET_CONF_DIR=str(home / 'fleet-conf'), PATH=os.environ['PATH'], TMPDIR=str(root),
@@ -255,14 +265,35 @@ def main():
                 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', DISABLE_AUTOUPDATER='1')
             if arguments.fleet_launcher:
                 environment.pop('CLAUDE_CONFIG_DIR')
+            if arguments.restore_entrypoint:
+                shim = root / 'tmux-bin'
+                shim.mkdir()
+                real_tmux = str(Path(shutil.which('tmux')).resolve())
+                (shim / 'tmux').write_text('#!/bin/sh\ncase "$1" in\n'
+                    '  -L) [ "$2" = fixture ] || exit 2; shift 2 ;;\n'
+                    '  -S) [ "$2" = ' + shlex.quote(str(socket)) + ' ] || exit 2; shift 2 ;;\n'
+                    'esac\nexec ' + shlex.join([real_tmux, '-S', str(socket)]) + ' "$@"\n')
+                (shim / 'tmux').chmod(0o700)
+                environment.update(PATH=str(shim) + os.pathsep + environment['PATH'], SHELL='/bin/sh',
+                                   FLEET_EXIT_CLOSE_SECS='0', FLEET_WRAP_FAST_FAIL='0')
 
             def git(*options):
                 return subprocess.check_output(['git', *map(str, options)], env=environment,
                                                stderr=subprocess.PIPE, text=True, timeout=15).strip()
 
             def tmux(*options):
-                return subprocess.check_output(['tmux', '-S', str(socket), '-f', os.devnull, *options],
+                targeted = [pane_target if option == '%0' else option for option in options]
+                return subprocess.check_output(['tmux', '-S', str(socket), '-f', os.devnull, *targeted],
                                                env=environment, stderr=subprocess.PIPE, text=True, timeout=10).strip()
+
+            def restore_command(option):
+                script = home / '.claude/fleet/bin/fleet-restore.sh'
+                result = subprocess.run(['bash', str(script), option], env=environment, text=True,
+                                        capture_output=True, timeout=90)
+                if result.returncode:
+                    raise AssertionError('actual restore entrypoint failed: ' + result.stdout + result.stderr)
+                check(True, 'actual restore entrypoint succeeds: ' + option)
+                return result.stdout
 
             def screen():
                 return tmux('capture-pane', '-p', '-t', '%0', '-S', '-100')
@@ -350,6 +381,8 @@ def main():
             helper = [sys.executable, str(Path(__file__).resolve()), '--supervise-fixture', str(root)]
             if arguments.local_authority:
                 helper += ['--local-authority']
+            if arguments.restore_entrypoint:
+                helper += ['--restore-entrypoint']
             receipt_option = '@authority_receipt' if arguments.local_authority else '@launch_receipt'
             def read_receipt():
                 raw = tmux('display-message', '-p', '-t', '%0', '#{' + receipt_option + '}')
@@ -361,20 +394,39 @@ def main():
             mcp_proofs = []
             try:
                 check(not worktree.exists(), 'Fleet has not allocated a directory before the native supervisor starts')
-                tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository), shlex.join(helper))
+                tmux('new-session', '-d', '-s', 'fixture', '-n', 'saved', '-x', '120', '-y', '32', '-c', str(repository), shlex.join(helper))
                 tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                 for phase in ('create', 'resume'):
                     event_offset = len(config_events()) if phase == 'resume' else 0
                     if phase == 'resume':
-                        if arguments.local_authority:
+                        if arguments.restore_entrypoint:
+                            restore_command('--snapshot')
+                            mapping = (fleet_config / 'restore.map').read_text()
+                            saved = [row.split('\t') for row in mapping.splitlines() if row.startswith('AUTHORITY\t')]
+                            if len(saved) != 1 or json.loads(saved[0][2])['reservation'] != receipt['reservation']:
+                                raise AssertionError('actual snapshot lost the ordinary admission receipt:\n' + mapping)
+                            check(True, 'actual snapshot persists the observed ordinary admission receipt')
+                        elif arguments.local_authority:
                             (root / 'saved-authority.json').write_text(tmux('display-message', '-p', '-t', '%0', '#{@authority_receipt}'))
                         else:
                             (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
                         tmux('kill-server')
                         check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
-                        tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
-                             shlex.join(helper + ['--resume-fixture']))
-                        tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
+                        if arguments.restore_entrypoint:
+                            tmux('new-session', '-d', '-s', 'fixture', '-n', 'dash', '-x', '120', '-y', '32',
+                                 '-c', str(repository), 'sleep 120')
+                            report = restore_command('--restore')
+                            windows = [row.split('|') for row in tmux('list-windows', '-t', 'fixture',
+                                '-F', '#{@fleet_id}|#{pane_id}').splitlines()]
+                            restored = [row[1] for row in windows if len(row) == 2 and row[0] == context['worker_id'].split('/')[1]]
+                            check(len(restored) == 1, 'actual restore reconstructs exactly one matching native window')
+                            pane_target = restored[0]
+                            check(tmux('display-message', '-p', '-t', '%0', '#{@restore_outcome}') == 'resumed',
+                                  'actual restore reports a native prompt, not a bare shell: ' + report.strip())
+                        else:
+                            tmux('new-session', '-d', '-s', 'fixture', '-x', '120', '-y', '32', '-c', str(repository),
+                                 shlex.join(helper + ['--resume-fixture']))
+                            tmux('set-option', '-w', '-t', '%0', 'remain-on-exit', 'on')
                     def ready():
                         observed = read_receipt()
                         if arguments.local_authority:
@@ -438,8 +490,16 @@ def main():
                     tmux('send-keys', '-t', '%0', 'Enter')
                     wait(lambda: 'Keep worktree' in screen(), phase + ': native exit chooser missing')
                     tmux('send-keys', '-t', '%0', 'Enter')
-                    wait(lambda: tmux('display-message', '-p', '-t', '%0', '#{pane_dead}') == '1', phase + ': native exit did not finish')
-                    check((root / (phase + '-exit')).read_text() == '0', phase + ': native supervisor exits successfully')
+                    if arguments.restore_entrypoint:
+                        wait(lambda: tmux('display-message', '-p', '-t', '%0', '#{@wrap_exit_rc}|#{@claude_state}') == '0|exited',
+                             phase + ': actual wrapper did not observe native exit')
+                        check(tmux('display-message', '-p', '-t', '%0', '#{@claude_state}') == 'exited',
+                              phase + ': actual wrapper retains the exited session rather than deleting its window')
+                        check(tmux('display-message', '-p', '-t', '%0', '#{pane_dead}') == '0',
+                              phase + ': actual wrapper remains available for explicit reconnection')
+                    else:
+                        wait(lambda: tmux('display-message', '-p', '-t', '%0', '#{pane_dead}') == '1', phase + ': native exit did not finish')
+                        check((root / (phase + '-exit')).read_text() == '0', phase + ': native supervisor exits successfully')
                     check(worktree.is_dir(), phase + ': native Keep retains the worktree')
                     if arguments.fleet_launcher:
                         wait(lambda: not any(launch.same_process(proof) for proof in mcp_proofs),
@@ -471,6 +531,7 @@ def main():
                               name + ': configured MCP tool definition reaches the native model request')
                 print(json.dumps(dict(version=version, checks=checks, authority='loopback-local-stub' if arguments.local_authority else 'fixture-stub',
                                       finalization='native-stop' if arguments.local_authority else 'fixture-stub',
+                                      recovery='actual-snapshot-and-wrapper' if arguments.restore_entrypoint else 'receipt-validator',
                                       launcher='fleet' if arguments.fleet_launcher else 'fixture'), indent=2))
             finally:
                 if socket.exists():

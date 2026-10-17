@@ -312,10 +312,12 @@ snapshot() {
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
     # Accepted launch identity survives snapshot/restore; absence of native
     # proof is an interrupted start, never permission to rerun the first input.
-    tmux -L "$sock" list-windows -t "$sess" -F $'#{@fleet_id}\t#{@launch}\t#{@launch_receipt}' 2>/dev/null \
-      | awk -F'\t' '$1 != "" && $2 != "" { printf "LAUNCH\t%s\t%s\t%s\n", $1, $2, $3 }' >> "$tmp"
-    tmux -L "$sock" list-windows -t "$sess" -F $'#{@fleet_id}\t#{?@native_worktree,#{@authority_receipt},}' 2>/dev/null \
-      | awk -F'\t' '$1 != "" && $2 != "" { printf "AUTHORITY\t%s\t%s\n", $1, $2 }' >> "$tmp"
+    if ! tmux -L "$sock" list-windows -t "$sess" -F 'F#{q:@fleet_id} L#{q:@launch} R#{q:@launch_receipt} A#{?@native_worktree,#{q:@authority_receipt},}' 2>/dev/null \
+      | python3 "$BIN/.fleet-restore-resolve.py" --snapshot-metadata >> "$tmp"; then
+      log "snapshot $sess: metadata capture failed; preserving prior map"
+      rm -f "$tmp"
+      return 1
+    fi
     { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
     } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" >> "$tmp" 2>/dev/null
