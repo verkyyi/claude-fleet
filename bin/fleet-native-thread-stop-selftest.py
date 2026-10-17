@@ -16,6 +16,50 @@ import threading
 import time
 
 
+def fixture_host_pid(argv, namespace_pid, proc_root=Path('/proc')):
+    matches = []
+    expected = [os.fsencode(argument) for argument in argv]
+    for process in proc_root.iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            if process.stat().st_uid != os.getuid():
+                continue
+            if (process / 'cmdline').read_bytes().rstrip(b'\0').split(b'\0') != expected:
+                continue
+            namespaces = [line.split()[1:] for line in (process / 'status').read_text().splitlines()
+                          if line.startswith('NSpid:')]
+            if len(namespaces) == 1 and namespaces[0] and int(namespaces[0][-1]) == namespace_pid:
+                matches.append(int(process.name))
+        except (OSError, ValueError):
+            continue
+    if len(matches) != 1:
+        raise AssertionError('expected one owned fixture process with exact argv and namespace PID: ' + repr(matches))
+    return matches[0]
+
+
+def fixture_ancestry(pid, proc_root=Path('/proc')):
+    result, visited = [], set()
+    while pid > 0 and len(result) < 16:
+        if pid in visited:
+            result.append({'pid': pid, 'cycle': True})
+            break
+        visited.add(pid)
+        process = proc_root / str(pid)
+        try:
+            stat = (process / 'stat').read_text()
+            fields = stat.rsplit(') ', 1)[1].split()
+            parent = int(fields[1])
+            result.append({'pid': pid, 'stat': stat,
+                           'status': [line for line in (process / 'status').read_text().splitlines()
+                                      if line.split(':', 1)[0] in ('Name', 'State', 'PPid', 'Uid', 'NSpid')]})
+        except (OSError, ValueError, IndexError) as error:
+            result.append({'pid': pid, 'unavailable': type(error).__name__})
+            break
+        pid = parent
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
@@ -28,6 +72,7 @@ def main():
     client_type = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-codex-rpc.py'))['Client']
     stop = runpy.run_path(str(arguments.fleet_root / 'bin/fleet-native-local-runtime-selftest.py'))['stop']
     checks, requests, observations, commands, tool_outputs = [], [], {}, {}, {}
+    failures = []
 
     def check(condition, message):
         if not condition:
@@ -49,6 +94,30 @@ def main():
         except ProcessLookupError:
             return False
         return True
+
+    def process_states(terminals):
+        if sys.platform != 'linux':
+            return {}
+        result = {}
+        for terminal in terminals:
+            process = Path('/proc') / str(terminal['fixturePid'])
+            try:
+                result[process.name] = {
+                    'status': [line for line in (process / 'status').read_text().splitlines()
+                               if line.split(':', 1)[0] in ('Name', 'State', 'PPid', 'Uid', 'NSpid')],
+                    'stat': (process / 'stat').read_text(),
+                    'argv': (process / 'cmdline').read_bytes().decode(errors='replace').split('\0'),
+                    'ancestry': fixture_ancestry(terminal['fixturePid'])}
+            except FileNotFoundError:
+                result[process.name] = {'absent': True}
+        return result
+
+    def record_exit(predicate, message, terminals):
+        try:
+            wait_for(predicate, message)
+        except AssertionError:
+            failures.append(message)
+            observations[message] = process_states(terminals)
 
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
@@ -138,8 +207,10 @@ def main():
                         identifier = thread['id']
                         identifiers.append(identifier)
                         rpc.call('thread/name/set', {'threadId': identifier, 'name': 'fixture-' + label})
-                        commands[identifier] = shlex.join([sys.executable, '-c',
-                            'import os,time; print("fixture-pid=" + str(os.getpid()), flush=True); time.sleep(90)'])
+                        command_argv = [sys.executable, '-c',
+                            'import os,time; print("fixture-pid=" + str(os.getpid()), flush=True); time.sleep(90)',
+                            str(root / ('command-' + label))]
+                        commands[identifier] = shlex.join(command_argv)
                         turn = rpc.call('turn/start', {'threadId': identifier, 'input': [
                             {'type': 'text', 'text': 'Run the inert fixture command.', 'text_elements': []}]})['turn']
                         wait_for(lambda: completed(identifier, turn['id']), label + ': native turn completes')
@@ -149,14 +220,16 @@ def main():
                         pids = [int(value) for value in re.findall(r'fixture-pid=(\d+)', json.dumps(outputs))]
                         if len(pids) != 1:
                             raise AssertionError('missing fixture PID in native tool output: ' + repr(outputs))
-                        check(True, label + ': native command output identifies its actual fixture PID')
-                        check(len(listed) == 1 and alive(pids[0]),
+                        check(True, label + ': native command output identifies its namespace PID')
+                        host_pid = fixture_host_pid(command_argv, pids[0]) if sys.platform == 'linux' else pids[0]
+                        check(len(listed) == 1 and alive(host_pid),
                               label + ': completed turn retains a live native background command')
-                        terminals.append(dict(listed[0], fixturePid=pids[0]))
-                        observations[label]['fixturePid'] = pids[0]
+                        terminals.append(dict(listed[0], fixturePid=host_pid))
+                        observations[label].update(fixturePid=host_pid, namespacePid=pids[0])
                     check(len({terminal['fixturePid'] for terminal in terminals}) == 3
                           and len({terminal['processId'] for terminal in terminals}) == 3,
                           'threads have distinct native command processes and handles')
+                    observations['before_stop'] = process_states(terminals)
                     for identifier in identifiers:
                         unsubscribed = rpc.call('thread/unsubscribe', {'threadId': identifier})
                         check(unsubscribed['status'] == 'unsubscribed', 'native acknowledges removal of the owning subscription')
@@ -177,16 +250,21 @@ def main():
                           'native terminal termination rejects a process routed through the wrong thread')
                     result = observer.call('thread/backgroundTerminals/terminate', {
                         'threadId': identifiers[0], 'processId': terminals[0]['processId']})
+                    observations['termination'] = {'response': result, 'remaining': observer.call(
+                        'thread/backgroundTerminals/list', {'threadId': identifiers[0]})}
                     check(result['terminated'] is True, 'native exact-thread terminal termination succeeds')
-                    wait_for(lambda: not alive(terminals[0]['fixturePid']), 'terminated first command exits')
+                    record_exit(lambda: not alive(terminals[0]['fixturePid']), 'terminated first command exits', terminals)
                     check(alive(terminals[1]['fixturePid']) and backend.poll() is None,
                           'exact-thread termination leaves the sibling command and backend alive')
-                    observer.call('thread/backgroundTerminals/clean', {'threadId': identifiers[2]})
-                    wait_for(lambda: not alive(terminals[2]['fixturePid']), 'native clean stops the exact third-thread command')
+                    observations['clean_response'] = {'response': observer.call('thread/backgroundTerminals/clean',
+                        {'threadId': identifiers[2]})}
+                    record_exit(lambda: not alive(terminals[2]['fixturePid']),
+                                'native clean stops the exact third-thread command', terminals)
                     check(background(identifiers[2]) == [] and alive(terminals[1]['fixturePid']),
                           'native clean leaves no target terminals and preserves the sibling command')
-                    observer.call('thread/archive', {'threadId': identifiers[1]})
-                    wait_for(lambda: not alive(terminals[1]['fixturePid']), 'native archive stops the second thread background command')
+                    observations['archive'] = {'response': observer.call('thread/archive', {'threadId': identifiers[1]})}
+                    record_exit(lambda: not alive(terminals[1]['fixturePid']),
+                                'native archive stops the second thread background command', terminals)
                     check(backend.poll() is None, 'archiving one thread does not stop the shared backend')
                     check(identifiers[1] not in observer.call('thread/loaded/list', {})['data'],
                           'archived target is no longer loaded')
@@ -202,11 +280,12 @@ def main():
                     observer.call('thread/unarchive', {'threadId': identifiers[1]})
                     restored = observer.call('thread/resume', {'threadId': identifiers[1]})['thread']
                     check(restored['id'] == identifiers[1] and background(identifiers[1]) == [],
-                          'native resume retains thread identity without resurrecting its terminated command')
+                          'native resume retains thread identity with an empty terminal registry')
                     check(all(not request['authorization'] and request['path'] == '/v1/responses' for request in requests),
                           'all model traffic stays on the credential-free loopback fixture')
                 except BaseException:
                     print(json.dumps({'checks': checks, 'observations': observations, 'requests': requests,
+                                      'process_states': process_states(terminals),
                                       'backend_log': (root / 'backend.log').read_text()[-6000:]}), file=sys.stderr)
                     raise
                 finally:
@@ -215,10 +294,11 @@ def main():
                     if observer is not None:
                         observer.close()
                     stop(backend)
-                    wait_for(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
-                             'all observed fixture commands exit during cleanup')
-            print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
+                    record_exit(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
+                                'all observed fixture commands exit during cleanup', terminals)
+            print(json.dumps({'version': version, 'checks': checks, 'failures': failures, 'observations': observations,
                               'scope': 'native RPC and inert commands only; not subagent, TUI, admission or full-MCP acceptance'}, indent=2))
+            return 1 if failures else 0
     finally:
         endpoint.shutdown()
         endpoint.server_close()
@@ -226,4 +306,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

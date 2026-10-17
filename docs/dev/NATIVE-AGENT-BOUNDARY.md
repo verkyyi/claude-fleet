@@ -334,8 +334,9 @@ TUI 退出、线程 unloaded 或父源记录被删，都不能单独释放执行
 - `thread/backgroundTerminals/clean` 停止目标线程的后台命令，不影响兄弟命令。
 - 原生 archive 在夹具中停止目标命令、卸载目标线程，保留其他线程与共享后台；恢复前
   必须显式 unarchive，再 resume 原 ID，已停止的命令不会复活。
-- `processId` 是原生句柄，不是 OS PID。`osPid` 可以为空；夹具从自己休眠命令的输出取得
-  OS PID，只做存活观察，不把任意原生句柄当 PID 发信号。
+- `processId` 是原生句柄，不是 OS PID。`osPid` 可以为空；夹具命令输出的是其所在命名空间的
+  PID。Linux 下须由宿主 `/proc` 的所属用户、精确 argv（含唯一临时标记）与 `NSpid` 一致匹配
+  到唯一宿主 PID，匹配缺失或冲突都失败。只做存活观察，不把原生句柄或沙箱内 PID 当宿主 PID。
 
 ```sh
 python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
@@ -350,6 +351,27 @@ python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
 与立即终止；archive 对后代是尝试处理，根请求成功不保证所有后代均归档。
 因此本探针不证明子 Agent、任意脱管子进程、活动 turn 中断、真实 TUI 或完整 MCP 的停止。
 这些门槛以及并发恢复/撤销仍未完成，旧 `prove_stopped` 不因本次探针放宽，生产不启用共享后台。
+
+Linux 固定版本 `0.162.1` 的反例进一步收紧这一门槛：在原生 read-only 沙箱内，
+`terminate` 返回成功且后台命令列表变空后，精确关联的夹具命令仍是 sleeping，停止共享后台后
+也未退出，不能解释成僵尸进程。探针分别收集 terminate、clean、archive 与最终清理的退出
+证据；一条失败不再遮住后两条，但任意一条失败都保持整体非零退出，不用原生成功响应代替
+实际退出。同一夹具在固定 `0.163.0` 上也出现全部四项退出失败，因此单纯升级这一版本不能
+解除阻断；发布版本保持不变。这与上游 [Linux 沙箱遗留进程报告](https://github.com/openai/codex/issues/51615)
+的现象相似，但不能仅凭相似现象认定同一根因。探针在停止前和失败后只读记录有限深度的
+进程父链、进程组、会话及启动时间；不读取祖先进程参数或环境、不发信号、不把父链采样当作
+权限或完成收据。原生成功响应仍不能替代实际退出。
+
+### Linux 沙箱前置条件与线程生命周期分开验收
+
+线程停止探针的 Linux 首轮失败发生在命令启动前：一种环境缺少系统与内置 bwrap，
+另一种环境拒绝 bubblewrap 的网络命名空间操作。这不是“回合 completed 所以工具成功”，
+也不是现有全权限模式不可用的证据；探针继续要求真实命令启动和退出，不降级成无工具的模型回合。
+
+依赖交给发行版包管理器：托管镜像安装 `bubblewrap`，CI 按官方说明准备 bwrap 的
+AppArmor profile，不扩展 Fleet 的工具制品格式来复制上游资源打包。宿主命名空间和容器策略
+仍须独立验收；本次不调整线上 sysctl、capabilities、seccomp 或用户权限。
+细节见[托管节点前置条件](MANAGED-NODE.md#codex-原生-linux-沙箱依赖)。
 
 ## 完整目标的完成账本
 

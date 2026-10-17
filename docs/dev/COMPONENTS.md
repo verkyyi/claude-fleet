@@ -85,7 +85,7 @@
 |---|---|---|
 | Hub（`tokenledger`） | 核心 | 接入、计量与任务调度。 |
 | Web 接入（web-chat / web-console） | 核心 | 产品近期的网页使用入口。 |
-| 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境；隔离策略不由本表宣称完成。 |
+| 承载节点（managed-node / spot-node） | 核心 | 提供任务执行环境，镜像通过发行版包交付原生沙箱的 bubblewrap 依赖，不另造资源协议或沙箱；依赖存在不代表宿主隔离策略已验收。 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 支持现有接入路径，保持凭据只在启动时读取的边界。 |
 | 网页主题（fleet-theme） | 核心 | Web 产品共享界面。 |
 | 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 仓库内部质量保障，不是给使用者默认启用的插件。显式原生 local-runtime 探针验证 TUI/Worktree/后台实际归属；launch-flags 矩阵核对逐次配置边界；session-env 探针核对并发 MCP/Hook 归属及可选 fork 来源、原生清理和重连；thread-stop 探针核对原生后台命令的逐线程停止，不替代业务授权或子 Agent 终止验收。不安装 daemon、不改变生产运行时选择。 |

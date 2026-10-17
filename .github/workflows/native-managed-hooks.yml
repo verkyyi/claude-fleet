@@ -7,6 +7,7 @@ on:
       - 'bin/fleet-native-local-runtime-selftest.py'
       - 'bin/fleet-native-session-env-selftest.py'
       - 'bin/fleet-native-thread-stop-selftest.py'
+      - 'extras/managed-node/Dockerfile'
       - 'bin/fleet-mcp.py'
       - 'bin/fleet_launch.py'
       - 'bin/fleet-agent-defaults.py'
@@ -41,6 +42,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prepare native Linux sandbox prerequisites on disposable runner
+        id: native_sandbox
+        if: matrix.mode == 'exec'
+        shell: bash
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap apparmor-profiles apparmor-utils
+          if test -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns &&
+             test "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1; then
+            sudo install -m 0644 /usr/share/apparmor/extra-profiles/bwrap-userns-restrict \
+              /etc/apparmor.d/bwrap-userns-restrict
+            sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          command -v bwrap
+          bwrap --version
+          bwrap --unshare-user --unshare-pid --unshare-net --ro-bind / / \
+            --proc /proc --dev /dev -- /usr/bin/true
       - name: Fetch pinned official Codex package
         shell: bash
         run: |
@@ -72,6 +92,20 @@ jobs:
         run: >-
           timeout 100 python3 bin/fleet-native-thread-stop-selftest.py
           --codex "$RUNNER_TEMP/native-codex/package/vendor/x86_64-unknown-linux-musl/bin/codex"
+      - name: Compare native lifecycle against pinned Codex 0.163.0
+        if: always() && matrix.mode == 'exec' && steps.native_sandbox.outcome == 'success'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-codex-comparison"
+          curl --fail --location --max-time 120 \
+            https://registry.npmjs.org/@openai/codex/-/codex-0.163.0-linux-x64.tgz \
+            --output "$RUNNER_TEMP/codex-comparison.tgz"
+          printf '%s  %s\n' \
+            bb045a3acad8a202d085cc4033f1a8796af0d1021610c468edcf6033cb0a02f89591940796ef6444b2793e4b9f6d5f800468f2660230885749d0b089d0de9ef3 \
+            "$RUNNER_TEMP/codex-comparison.tgz" | sha512sum --check --strict
+          tar -xzf "$RUNNER_TEMP/codex-comparison.tgz" -C "$RUNNER_TEMP/native-codex-comparison"
+          timeout 100 python3 bin/fleet-native-thread-stop-selftest.py \
+            --codex "$RUNNER_TEMP/native-codex-comparison/package/vendor/x86_64-unknown-linux-musl/bin/codex"
       - name: Test managed and optional hooks without PRoot or credentials
         shell: bash
         run: |
