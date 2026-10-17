@@ -882,7 +882,7 @@ FLEET_CONF_MIN = (
 
 def conf_ensure(login, conf, home, pw):
     """The login's conf dir, and a fleet.conf in it, before anything is written
-    there (issue #4607: mini2's fleetu14 had no ~/.config, and credsep.json's
+    there (issue #4607: a managed machine's newest login had no ~/.config, and credsep.json's
     temp file died FileNotFoundError mid-install). Each missing directory from
     the home down is made 0700 AS the login's (never root's, never through a
     link the login planted); a missing fleet.conf gets FLEET_CRED_PROXY=1 +
@@ -1050,8 +1050,8 @@ def login_procs(login):
 def nothing_to_move(conf, home):
     """True when the login holds nothing an install would take from under a
     session (issue #4607): no leased credential, no node.env, no node key, no
-    proxy signing key of its own — a login that never was a node (mini2's
-    24haowan and fleetu14, 2026-10-17: no fleet.conf, no ~/.config even)."""
+    proxy signing key of its own — a login that never was a node (two logins
+    on one machine, 2026-10-17: no fleet.conf, no ~/.config even)."""
     if leftovers(conf, home, None):
         return False
     return not any(os.path.lexists(os.path.join(conf, f)) for f in ("node.env", "node.key", "cred-proxy/key"))
@@ -1785,7 +1785,7 @@ def fleet_login(login, home):
     dir in its home, a node token the machine daemon holds for it, or the daemon
     took it over. A CI runner or a plain person's account is none of these — it
     is never leased anything, so there is nothing to separate (2026-10-17:
-    fleet-ci, minilinux)."""
+    a CI runner's account, a plain one)."""
     marks = [os.path.join(home, ".claude", "fleet"), os.path.join(home, ".config", "claude-fleet"),
              os.path.join(NODE_STATE, "logins", login + ".env")]
     for m in marks:

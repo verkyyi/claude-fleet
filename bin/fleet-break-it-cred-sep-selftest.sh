@@ -575,7 +575,7 @@ enf_env() {
 
 # #4607: a login opened without separation. `fleet-login-new.sh --no-credsep` used
 # to hand out the old layout — every pool token readable by the login's sessions —
-# on a word; and a login with no ~/.config at all (mini2's fleetu14, 2026-10-17)
+# on a word; and a login with no ~/.config at all (one managed machine's newest login, 2026-10-17)
 # died FileNotFoundError on credsep.json's temp file mid-install.
 drill_cred_new_login_unseparated() {
   CAP=20
@@ -602,7 +602,7 @@ drill_cred_new_login_unseparated() {
 }
 
 # #4607: logins that were never separated — opened before #2294, by hand, put back
-# (2026-10-17: fleetu9 · fleet-ci on one machine, 24haowan · fleetu14 on another).
+# (2026-10-17: four logins on two machines).
 # Separation waited for a person to type a sudo, so it never happened; the node
 # program wrote the pool's real tokens and node.env into their homes. The machine
 # daemon's credsep-enforce takes every human fleet login in by itself and leaves a
