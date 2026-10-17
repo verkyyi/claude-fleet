@@ -23,6 +23,11 @@
 #                                           (--dry-run, no sudo: the steps back)
 #   fleet-credsep.sh status [--json]        separated or not (exit 3 = not)
 #   fleet-credsep.sh check                  the doctor's `credsep` row
+#   fleet-credsep.sh judge                  the heartbeat's word (issue #4622):
+#                                           exit 0 separated · 3 not — not only
+#                                           when a credential is in this login's
+#                                           reach; a WARN of `check` that is no
+#                                           leak stays separated. One line why
 #   fleet-credsep.sh served                 does the proxy hand this login a
 #                                           credential now (issue #4247): exit 0
 #                                           yes · 3 no (the shared proxy does not
@@ -285,6 +290,7 @@ case "$cmd" in
     fi
     py check --conf-dir "$CONF" ;;
   served) py served --conf-dir "$CONF" ;;
+  judge) py judge --conf-dir "$CONF" ;;
   rootlogs) py rootlogs ;;
   apply)
     dry=''; [ "${1:-}" = --dry-run ] && dry=--dry-run

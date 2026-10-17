@@ -2972,7 +2972,7 @@ drill_spare_unserved_handed() {
     || { WHY="fleet-credsep.py has no served verb: nothing says whether the proxy serves this login"; return 1; }
   grep -q 'credsepRun(ctx, home, script, "served")' "$tl/agent/node_credsep.go" 2>/dev/null \
     || { WHY="the agent no longer asks fleet-credsep.sh served (credsepServed)"; return 1; }
-  grep -q 'hb.CredServed = fp.credsep, fp.served' "$tl/agent/beat_parts.go" 2>/dev/null \
+  grep -qE 'hb\.Credsep, (hb\.CredsepWhy, )?hb\.CredServed = fp\.credsep, (fp\.credWhy, )?fp\.served' "$tl/agent/beat_parts.go" 2>/dev/null \
     || { WHY="the heartbeat no longer carries cred_served (beat_parts.go fill)"; return 1; }
   grep -q '!unserved\[r.EndpointID\]' "$tl/api/fleet_spare.go" 2>/dev/null \
     || { WHY="deadSpares no longer counts a live fleet the proxy does not serve as none"; return 1; }

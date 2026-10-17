@@ -96,8 +96,8 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 	}
 	gateCredLifetimes = func(*Server) []gateCred { return []gateCred{{"会话通行证", 4 * time.Hour}} }
 	managed := []NodeView{
-		{Hostname: "mac-a", OSUser: "alice", Role: store.NodeRoleManaged, Status: "online", Credsep: control.CredsepSeparated},
-		{Hostname: "mac-a", OSUser: "bob", Role: store.NodeRoleManaged, Status: "online", Credsep: control.CredsepNot},
+		{Hostname: "mac-a", OSUser: "alice", Role: store.NodeRoleManaged, Status: "online", Trust: TrustTrusted, Credsep: control.CredsepSeparated},
+		{Hostname: "mac-a", OSUser: "bob", Role: store.NodeRoleManaged, Status: "online", Trust: TrustTrusted, Credsep: control.CredsepNot},
 	}
 	if ok, why := judge("cred-ttl", managed); ok || !strings.Contains(why, "mac-a/bob") {
 		t.Fatalf("cred-ttl, bob not separated: %v %s", ok, why)
@@ -112,7 +112,7 @@ func TestGateHubJudgesBothWays(t *testing.T) {
 	// every login counts, managed or not (claude-fleet#4607) — but not a
 	// person's pod, a SPOT node, a machine link or a lost machine
 	others := append(managed,
-		NodeView{Hostname: "laptop", OSUser: "carol", Status: "online", Credsep: control.CredsepNot},
+		NodeView{Hostname: "laptop", OSUser: "carol", Status: "online", Trust: TrustTrusted, Credsep: control.CredsepNot},
 		NodeView{Hostname: "pod-1", OSUser: "dave", Status: "online", UserPod: true},
 		NodeView{Hostname: "spot-1", OSUser: "erin", Status: "online", Kind: store.NodeKindEphemeral},
 		NodeView{Hostname: "mac-z", OSUser: "", Status: "online", MachineLink: true},

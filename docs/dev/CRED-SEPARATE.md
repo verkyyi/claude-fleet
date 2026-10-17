@@ -154,8 +154,15 @@ back — the hub still holds the line. Since #4607 it holds it for **every** log
 the rule below reads "a GitHub person whose role is user" only on a hub that declared
 itself self-hosted (`CCQUOTA_FLEET_CREDSEP_OPTIONAL=1`); elsewhere an admin's and the
 operator's own login are refused the same way. Every heartbeat carries `credsep`
-(`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh status`
-**and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes). For a
+(`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh judge`
+(issue #4622; asked at most every 5 minutes): `not` only when a credential is in
+the login's own reach — no store, a store it can read, a credential back at a login
+path — and its one line why rides along as `credsep_why`, quoted by the refusal and
+the gate's detail. A `check` WARN that is no leak (a key the proxy ignored, the proxy
+down — `served` says that) stays `separated`; before #4622 the agent read `status`
+**and** `check` (exit 0 both ⇒ `separated`), and still does for a script without
+`judge`. The gate's cred-ttl item counts only the logins the lease would serve
+(`leaseServes`: not a client, a cluster pod, a system account or a deleted user). For a
 GitHub person whose role is **user**, `/v1/node/credentials` issues real tokens only
 while that word is `separated`; otherwise it answers 403 `not_separated` and the
 credential audit records 「拒发：未隔离」. An agent too old to send the field counts
@@ -425,7 +432,7 @@ proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
 ## Files
 
 `bin/fleet-credsep.sh` (front) · `bin/fleet-credsep.py` (install / uninstall /
-status / check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
+status / check / judge) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `agent`) · `bin/fleet-cred-proxy.py` (separated mode: `store`, `probe`,
 `node-token`, `node-hash`, `/hub/` broker, peer-uid gate) ·
 `tokenledger/internal/agent/node_credstore.go` (the agent's `store` client) ·

@@ -238,3 +238,68 @@ func TestLeaseCredsepMandatoryOperatorAndSelf(t *testing.T) {
 		t.Fatalf("admin not separated: gate=%q; want %s", v.CredsepGate, LeaseNotSeparated)
 	}
 }
+
+// claude-fleet#4622: the gate's cred-ttl item counts only the logins the lease
+// would hand pool credentials to — never a client computer (compute off,
+// untrusted), a cluster pod's login (central; the hub's u-<nonce> rows carry
+// no UserPod flag of their own), a system account (root, _fleetadmin), or a
+// deleted user (no active fleet account). A counted one carries its agent's
+// why in the detail.
+func TestGateCredsepCountsOnlyLeasedLogins(t *testing.T) {
+	h, user, admin := credsepHarness(t)
+	oldTTL := gateCredLifetimes
+	t.Cleanup(func() { gateCredLifetimes = oldTTL })
+	gateCredLifetimes = func(*Server) []gateCred { return []gateCred{{"会话通行证", 4 * time.Hour}} }
+	epOf := func(tok string) string {
+		ep, err := h.srv.Store.EndpointByTokenHash(HashToken(tok))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ep.ID
+	}
+	row := func(host, login, credsep string) NodeView {
+		return NodeView{EndpointID: "ep-" + login, Hostname: host, OSUser: login, Status: "online", Trust: TrustTrusted, Credsep: credsep}
+	}
+	carol := row("mac-c", "carol", control.CredsepNot)
+	carol.EndpointID, carol.CredsepWhy = epOf(user), "not — credentials readable at login paths: x"
+	ivan := row("mac-c", "ivan", control.CredsepSeparated)
+	ivan.EndpointID = epOf(admin)
+	client := row("MacBookPro.example", "carol", "")
+	client.ComputeOff, client.Trust = true, TrustUntrusted
+	nodes := []NodeView{carol, ivan, client,
+		row("u-3wnuf3v654", "carol", control.CredsepNot), // a person's pod
+		row("mac-c", "root", ""),
+		row("mac-c", "_fleetadmin", control.CredsepUnknown),
+		row("mac-c", "ghost", control.CredsepUnknown), // deleted: no fleet account
+	}
+	ok, why := gateHubJudge["cred-ttl"](h.srv, nodes, true)
+	if ok || !strings.Contains(why, "1 个登录") || !strings.Contains(why, "mac-c/carol（not — credentials readable") {
+		t.Fatalf("cred-ttl = %v %s; want only mac-c/carol, with its why", ok, why)
+	}
+	nodes[0].Credsep = control.CredsepSeparated
+	if ok, why := gateHubJudge["cred-ttl"](h.srv, nodes, true); !ok {
+		t.Fatalf("cred-ttl with every leased login separated: %s", why)
+	}
+}
+
+// The refusal quotes the agent's why (claude-fleet#4622).
+func TestLeaseCredsepRefusalSaysWhy(t *testing.T) {
+	h, user, _ := credsepHarness(t)
+	ep, err := h.srv.Store.EndpointByTokenHash(HashToken(user))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := h.srv.Store.NodeConnected(ep.ID, "mac-c", "carol", "test", control.Proto, 60000, now); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: "carol", Credsep: control.CredsepNot,
+		CredsepWhy: "not — no credsep.json", ObservedAt: now})
+	if err := h.srv.Store.NodeHeartbeat(ep.ID, "mac-c", "carol", "", control.Proto, string(raw), now); err != nil {
+		t.Fatal(err)
+	}
+	code, _, refusal := lease(t, h, user)
+	if code != http.StatusForbidden || !strings.Contains(refusal["message"], "credsep=not: not — no credsep.json") {
+		t.Fatalf("lease = %d %v; want the why in the refusal", code, refusal)
+	}
+}

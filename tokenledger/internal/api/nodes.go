@@ -1027,6 +1027,8 @@ type NodeView struct {
 	// routes every session central.
 	Credsep     string `json:"credsep,omitempty"`
 	CredsepGate string `json:"credsep_gate,omitempty"`
+	// CredsepWhy is the agent's line beside Credsep (claude-fleet#4622).
+	CredsepWhy string `json:"credsep_why,omitempty"`
 	// Gate is the login's newest machine half of the public gate
 	// (claude-fleet#3574): conf/public-gate.tsv's where=node rows as
 	// fleet-gate-check.sh --local judged them; absent from an older agent.
@@ -1508,7 +1510,7 @@ func nodeView(n store.Node, now time.Time) NodeView {
 		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
 		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
 		v.Installs = hb.Installs
-		v.Credsep = hb.Credsep
+		v.Credsep, v.CredsepWhy = hb.Credsep, hb.CredsepWhy
 		v.Gate = hb.Gate
 		v.LoginsRefused = hb.LoginsRefused
 		v.SysAt, v.SysUnread, v.FleetAt = hb.SysAt, hb.SysUnread, hb.FleetAt

@@ -3263,6 +3263,34 @@ def node_login(conf, home):
         or bool(leftovers(conf, home, None))
 
 
+def judge(a):
+    """The heartbeat's word (issue #4622): separated · not, and why, one line.
+    `not` only when this login's credentials are in its own reach — no store
+    (nothing separated), the store readable from here, or a credential back at
+    a login path (node.env a plain file again included). A doctor WARN that is
+    not a leak — the proxy ignored a key from the login's own files, root's
+    settings not written yet, its own proxy beside a shared one, a proxy that is
+    not running — is still separated: `served` says whether it is served, the
+    `check` row says what to tidy. Exit 0 separated · 3 not."""
+    conf = a.conf_dir
+    home = os.path.expanduser("~")
+    rec = record(conf)
+    if not rec:
+        print("not — no credsep.json in %s: credentials in this login's own files" % conf)
+        return 3
+    R = rec["root"]
+    bad = [p for p in (R, os.path.join(R, "node.env"), os.path.join(R, "accounts")) if not denied(p)]
+    if bad:
+        print("not — this login can read %s: the store is not out of its reach" % ", ".join(bad))
+        return 3
+    left = leftovers(conf, home, rec)
+    if left:
+        print("not — credentials readable at login paths: %s" % ", ".join(left[:4]))
+        return 3
+    print("separated — %s unreadable here%s" % (R, " (the machine's shared proxy)" if rec.get("shared") else ""))
+    return 0
+
+
 def check(a):
     """One doctor line: credsep: OK|WARN|FAIL|INFO — … ; exit 0 OK/INFO, 1 WARN/FAIL."""
     conf = a.conf_dir
@@ -3394,6 +3422,7 @@ def main():
     s = sub.add_parser("status"); s.add_argument("--conf-dir", required=True); s.add_argument("--json", action="store_true")
     c = sub.add_parser("check"); c.add_argument("--conf-dir", required=True)
     sv = sub.add_parser("served"); sv.add_argument("--conf-dir", required=True)
+    jd = sub.add_parser("judge"); jd.add_argument("--conf-dir", required=True)
     rl = sub.add_parser("relog")
     rl.add_argument("--login", required=True)
     rl.add_argument("--conf-dir", default="")
@@ -3525,6 +3554,8 @@ def main():
             return 5
     if a.cmd == "served":
         return served(a)
+    if a.cmd == "judge":
+        return judge(a)
     return status(a) if a.cmd == "status" else check(a)
 
 

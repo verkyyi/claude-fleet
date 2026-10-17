@@ -865,11 +865,18 @@ type Heartbeat struct {
 	HostKeys []string `json:"host_keys,omitempty"`
 
 	// Credsep is this login's credential separation as `fleet-credsep.sh
-	// status` + `check` judge it (claude-fleet#2295, EPIC #2293 共同约定 1):
-	// CredsepSeparated only when status says separated AND check passes,
-	// CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
-	// #2295 — the hub reads that as not separated for a role=user person.
+	// judge` says it (claude-fleet#4622; before it, status + check —
+	// claude-fleet#2295, EPIC #2293 共同约定 1): CredsepNot only when a
+	// credential is in the login's own reach, CredsepUnknown when the script
+	// is missing or could not run. A script older than `judge` is asked the
+	// old way: CredsepSeparated only when status says separated AND check
+	// passes. Absent from an agent older than #2295 — the hub reads that as
+	// not separated.
 	Credsep string `json:"credsep,omitempty"`
+	// CredsepWhy is judge's one line beside the word (claude-fleet#4622):
+	// what the hub's 拒发：未隔离 and the gate's detail quote. Absent from an
+	// agent or a script older than #4622.
+	CredsepWhy string `json:"credsep_why,omitempty"`
 	// CredServed says whether the proxy hands this login a credential right
 	// now (claude-fleet#4247): `fleet-credsep.sh served` — false for a tenant
 	// the machine's running shared proxy does not serve (#4245), or a login

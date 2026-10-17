@@ -47,6 +47,9 @@
 #   cred-enforce-fails-no-lease  bin/fleet-credsep.py machine enforce (refused → --force past the
 #                              grace, failed → retry later) / enforced / check, tokenledger
 #                              credsepGated (go test TestLeaseCredsepMandatory) — #4607
+#   cred-separated-judged-not  bin/fleet-credsep.py judge, tokenledger agent credsepJudge (go test
+#                              TestCredsepJudgeVerb), api leaseServes / cred-ttl gate (go test
+#                              TestGateCredsepCountsOnlyLeasedLogins) — #4622
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -698,6 +701,60 @@ FR
   fi
   SECS=$(since "$t0")
   WHAT="补隔离失败：任务失败并点名、doctor credsep-logins 与本登录 credsep 都是 FAIL；拒了的过宽限期带 --force 再试，失败的等重试间隔；$gohalf"
+}
+
+# #4622: a tenant of the shared proxy, separated, judged NOT. Its own fleet.conf
+# named FLEET_HUB_URL (only root's settings set it: the proxy writes
+# ignored.<login>), `check` WARNed, and the agent read every check WARN as
+# credsep=not — the hub refused three of one managed machine's tenants every
+# lease and its gate counted them, with clients, pods, root and a deleted user,
+# as 11 unseparated logins. `judge` is the heartbeat's word: not only on a leak.
+drill_cred_separated_judged_not() {
+  CAP=60
+  local sb="$WORK/judged" t0 out rc env run gohalf
+  sep_login "$sb"
+  mkdir -p "$sb/node"
+  env=$(enf_env "$sb")
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine install --logins alpha 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ -f "$C/credsep.json" ] || { WHY="the rig: alpha did not join the shared proxy (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  run=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"])' "$C/credsep.json")
+  mkdir -p "$run"; printf '18923\n' > "$run/port"
+  printf 'FLEET_HUB_URL %s\n' "$C/fleet.conf" > "$run/ignored.alpha"
+  chmod 000 "$sb/db/alpha"     # the role account's 0700 store, as the login sees it
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credsep: WARN' \
+    || { WHY="the rig: the tenant's check should WARN on an ignored key (rc $rc): $out"; chmod 700 "$sb/db/alpha"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" judge --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^separated — ' \
+    || { WHY="a separated tenant whose check only WARNs is judged not (rc $rc): $out"; chmod 700 "$sb/db/alpha"; return 1; }
+  # a real leak is still not: a pool credential back at a login path
+  mkdir -p "$C/accounts/a1.hub"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-LEAK"}}' > "$C/accounts/a1.hub/.credentials.json"
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" judge --conf-dir "$C" 2>&1); rc=$?
+  [ "$rc" = 3 ] && printf '%s' "$out" | grep -q '^not — credentials readable at login paths' \
+    || { WHY="a credential back in the home is judged separated (rc $rc): $out"; chmod 700 "$sb/db/alpha"; return 1; }
+  chmod 700 "$sb/db/alpha"
+  grep -q '"judge"' "$ROOT/tokenledger/internal/agent/node_credsep.go" 2>/dev/null \
+    || { WHY="the agent no longer asks fleet-credsep.sh judge"; return 1; }
+  # the Go halves: the agent takes judge's word; the gate counts only leased logins
+  gohalf="Go 两半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestCredsepJudgeVerb、TestGateCredsepCountsOnlyLeasedLogins"
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^(TestCredsepJudgeVerb|TestGateCredsepCountsOnlyLeasedLogins)$' ./internal/agent ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go halves did not run"; return 1 ;;
+      0:*) gohalf="Go 两半 ok：agent 认 judge 的字，门禁只数会被发池凭据的登录" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="a Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="已隔离的租户 check 只是 WARN（代理忽略了它自己 fleet.conf 的 FLEET_HUB_URL）：judge 仍说 separated；凭据回到家里才说 not；$gohalf"
 }
 
 # ---- cred-sep-codex-failover-pin (#3713): a separated login's Codex keeps no
