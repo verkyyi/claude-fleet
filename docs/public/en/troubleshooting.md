@@ -619,6 +619,13 @@ From `fleet doctor`.
 - **What it is**: whether every managed login on this machine has credential separation.
 - **On WARN / FAIL**: a FAIL names the logins without it: an admin runs the explanation's `fleet-credsep.sh machine install --logins managed`.
 
+#### `credsep-logins`
+
+From `fleet doctor`.
+
+- **What it is**: whether every fleet login on this managed machine has credential separation. The machine daemon separates any that does not by itself every 5 minutes (`credsep-enforce`) — nobody types a sudo; the hub leases an unseparated login nothing.
+- **On WARN / FAIL**: a FAIL names each login still not separated and the daemon's last word (say, its sessions still read the credential files). Wait for the next round; if it is urgent an admin runs the explanation's `fleet-credsep.sh machine install --logins <login>`.
+
 #### `credproxy`
 
 From `fleet doctor`.
