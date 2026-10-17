@@ -1093,3 +1093,13 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 - **一份读数**：守护的 `machine-reading` 任务每 15 秒用 `fleet-lib.sh` 自己的探测算一次，写 `<state>/cluster/machine.json`（0644，一次 rename；入座的守护以 `_fleetnode` 写，目录 root 的、只有它的组能写）。用户 pod 不跑它：那是集群的一份。
 - **开关**：被守护托管的登录，install-apply 往它的 fleet.conf 写 `FLEET_MACHINE_TASKS=off`（放回时收回这一行）。这样的登录探内存 / 负载时先看自己 `$FLEET_CONF_DIR/cluster/machine.json`（用户 pod 里是入口推来的那份，#3734），再看机器那份（root 的状态目录，和 accounts.json 同一个信任），60 秒内（`FLEET_MACHINE_READING_SECS`）；过期、空值、没有，就照旧自己探。没开关的机器一个字节不变。
 - 实测（云上那台 Linux 托管机器，#3515 之后）：这类重复的整机探测每登录不到 0.5 秒 CPU / 分钟；每登录的大头是要用他自己身份的循环（hub-sessions 循环、tmux 服务器、节点 agent 的 rpc、collect / pr-refresh / cleanup），归 #3544。云上那一半（#3734）：集群的一个 fleet-ops（`render.py --ops`）每 15 秒按每个用户 pod 自己 `fleet` 容器的用量 / limit 算一份读数（它自己的 cgroup，不是宿主的），经它的 `cluster_ops` 链路送入口，入口推进那个 pod 登录的 `$FLEET_CONF_DIR/cluster/machine.json`（docs/dev/MANAGED-LINUX.md «fleet-ops»）。Linux 上 `load_per_core` 现在总是空（#3733，原有的探测问题）。
+
+## 25. 托管登录的连接证书由运维维护，从不叫人登录（#4594）
+
+被 `account adopt` 接管的登录（accounts.json 里 `managed: true`，`fleet_node_manages` / `bin/fleet_managed.py`）是 fleet 自己的，它的连接证书（`~/.ssh/fleet-cert-cert.pub`，12 小时）也是。连接证书平时只在「用到时」续（#3701），可托管节点上除了国内探针的身份步，几乎没有东西用这个登录的证书：它过期，7 天后设备登记也失效，就只剩扫码一条路——2026-10-13 macmini 上正是这样挡住了 stable 的 `cn:` 关口，还把「请你跑 `fleet login`」升级给了运营者。
+
+- **运维兜底续期**：这个登录的 diskguard 一拍（节点守护以它的身份跑的账号任务）每 `FLEET_MANAGED_CERT_EVERY`（900 秒）跑一次 `fleet-login.py keep`：证书没了 / 低于续期余量，或上次续期超过 `FLEET_KEEP_DEVICE_SECS`（2 天），就用设备钥匙续（login.log `why=keep`，`cert-renew.last`）。入口的设备窗口因此永远到不了 7 天。别的登录上 `keep` 什么也不做——它是 #3701「用到时才续」唯一的例外。`FLEET_MANAGED_CERT_KEEP=0` 关掉。
+- **演练命令先续再判断**：`fleet-drill.sh` 在看 `cert_live` 之前先跑 `fleet-login.py renew --on-use drill`。
+- **续不了是运维的事**：设备钥匙也续不了（exit 3：设备过了窗口 / 不认识）时，每段连续失败只报一条 `breakage` 告警，写明由运维重新登记；节点令牌重新登记设备的入口路见 #4595。
+- **措辞**：托管登录上 `fleet login` 的输出、`fleet-drill.sh`、体检 cert 行都不叫人跑 `fleet login` / 扫码，只说「运维会自动续期」/「已报运维处理」。
+- 演练：BREAK-IT `managed-cert-lapses-idle`（`bin/fleet-managed-cert-selftest.sh`）。

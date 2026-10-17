@@ -126,6 +126,21 @@ for line in sys.stdin:
 sys.exit(0)'
 }
 
+# Renewed when USED (claude-fleet#3701, #4594): the drill is a use — the cn probe's
+# identity step runs it every few hours, and on a machine where nothing else uses
+# this login's certificate a bare cert_live let it run out. So the device key
+# renews it first (only under the margin; FLEET_DRILL_RENEW_CMD is the seam, `:`
+# none). FLEET_CERT names another key: fleet-login.py renews only its own.
+# A managed login (fleet_node_manages) is the ops service's: nothing here tells
+# its person to run `fleet login`.
+NOCERT_WORD='run fleet login'
+[ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/fleet-daemon-lib.sh"
+  fleet_node_manages 2>/dev/null && NOCERT_WORD='运维会自动续期（托管登录，不需要你登录或扫码）'; }
+if [ "$SUB" != approve ] && [ -z "${FLEET_CERT:-}" ] && [ -f "$CERT_KEY" ]; then
+  if [ -n "${FLEET_DRILL_RENEW_CMD:-}" ]; then bash -c "$FLEET_DRILL_RENEW_CMD" >/dev/null 2>&1 </dev/null || :
+  else python3 "$BIN/fleet-login.py" renew --quiet --on-use drill >/dev/null 2>&1 </dev/null || :; fi
+fi
+
 OUT=$(mktemp "${TMPDIR:-/tmp}/fleet-drill.XXXXXX") || exit 1
 trap 'rm -f "$OUT"' EXIT
 if [ "$SUB" = approve ]; then
@@ -153,7 +168,7 @@ print(json.dumps(d))' "$TTLS" "$CERT_PUB" "$sig" "$ts" "$SUBJ") || exit 1
   else
     TOK="${CCQUOTA_VIEWER_TOKEN:-}"
     [ -n "$TOK" ] || { [ -r "$HOME/.ccquota/viewer-token" ] && read -r TOK < "$HOME/.ccquota/viewer-token"; } || TOK=''
-    [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — run fleet login) and no operator token — nothing sent"; exit 2; }
+    [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — $NOCERT_WORD) and no operator token — nothing sent"; exit 2; }
     body=$(python3 -c 'import json,sys; d={"ttl_seconds":int(sys.argv[1])}
 if sys.argv[2]: d["subject"]=sys.argv[2]
 print(json.dumps(d))' "$TTLS" "$SUBJ") || exit 1
@@ -174,7 +189,7 @@ print(json.dumps(d))' \
 else
   TOK="${CCQUOTA_VIEWER_TOKEN:-}"
   [ -n "$TOK" ] || { [ -r "$HOME/.ccquota/viewer-token" ] && read -r TOK < "$HOME/.ccquota/viewer-token"; } || TOK=''
-  [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — run fleet login) and no operator token — nothing sent"; exit 2; }
+  [ -n "$TOK" ] || { note "no live connection certificate ($CERT_PUB — $NOCERT_WORD) and no operator token — nothing sent"; exit 2; }
   body=$(python3 -c 'import json,sys; d={"host":sys.argv[1],"login":sys.argv[2],"ttl_seconds":int(sys.argv[3])}
 if sys.argv[4]: d["home"]=sys.argv[4]
 print(json.dumps(d))' "$HOST" "$LOGIN" "$TTLS" "$HOME_M") || exit 1

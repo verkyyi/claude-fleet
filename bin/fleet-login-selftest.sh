@@ -39,6 +39,10 @@
 #   U. on-use    `renew --on-use WHY` asks only under 20% of 12h, prints `left N`,
 #                counts the renewal (login.log why=, cert-renew.last) and the ssh
 #                section renews before a fleet machine (#3701)
+#   V. keep      (#4594) `keep` is a managed login's ops keep-alive: not managed →
+#                nothing asked; fresh → nothing; under the margin or the last
+#                renewal past FLEET_KEEP_DEVICE_SECS → renewed why=keep; a device
+#                the hub calls idle → exit 3, and no output says `fleet login`
 #   K. if-under  `renew --if-under SECS` asks nothing while more is left (and
 #                with no certificate at all), renews when less is; --quiet
 #                orphan → exit 3 and silent (the client keeper's call)
@@ -166,6 +170,8 @@ export HOME="$SB/home" XDG_CONFIG_HOME="$SB/home/.config"
 # The legs before L run as a terminal with no screen (the QR); L–Q choose.
 export FLEET_LOGIN_BROWSER=0
 unset SSH_CONNECTION SSH_TTY FLEET_HUB_TOKEN
+# never this machine's managed-node record (#4594): V names its own
+export FLEET_NODE_STATE="$SB/nostate"
 # A fake browser opener for L–Q: records its argv, answers $SB/open.rc.
 mkdir -p "$SB/fakebin"
 for o in open xdg-open; do
@@ -321,6 +327,36 @@ grep -q '^Match originalhost fleet-\*.* exec ".*fleet-login.py.* renew --quiet -
   && grep -q '^Host ' "$HOME/.ssh/fleet-ssh-config" \
   && ok "U the ssh section renews before a fleet machine, then the hub's Host blocks" || bad "U ssh section: $(head -5 "$HOME/.ssh/fleet-ssh-config")"
 python3 "$BIN/fleet-login.py" renew --on-use 'no way' >/dev/null 2>&1 && bad "U a bad --on-use word was taken" || ok "U --on-use takes a word only"
+
+# ── V — keep: the ops service keeps a managed login's cert and device (#4594) ──
+mkdir -p "$SB/state"; LAST="$XDG_CONFIG_HOME/claude-fleet/cert-renew.last"
+rm -f "$SB/renew.json"
+start_hub
+out="$(FLEET_NODE_STATE="$SB/state" FLEET_INSTALL_LOGIN=alice FLEET_RENEW_BELOW_SECS=86400 python3 "$BIN/fleet-login.py" keep --quiet 2>&1)"; rc=$?
+[ "$rc" = 0 ] && [ "$out" = "keep: not managed" ] && [ ! -e "$SB/renew.json" ] && ok "V not managed → nothing asked" || bad "V unmanaged rc=$rc: $out"
+printf '{"alice": {"managed": true}}\n' > "$SB/state/accounts.json"
+export FLEET_NODE_STATE="$SB/state" FLEET_INSTALL_LOGIN=alice
+printf '%s 0 ssh\n' "$(date +%s)" > "$LAST"
+out="$(python3 "$BIN/fleet-login.py" keep --quiet 2>&1)"; rc=$?
+[ "$rc" = 0 ] && case "$out" in "keep: fresh (left "*) true ;; *) false ;; esac && [ ! -e "$SB/renew.json" ] \
+  && ok "V managed, fresh and lately renewed → nothing asked" || bad "V fresh rc=$rc: $out"
+out="$(FLEET_RENEW_BELOW_SECS=86400 python3 "$BIN/fleet-login.py" keep --quiet 2>&1)"; rc=$?
+read -r _ urc uwhy < "$LAST" 2>/dev/null
+[ "$rc" = 0 ] && [ "$out" = "keep: renewed" ] && [ -s "$SB/renew.json" ] && [ "$urc $uwhy" = "0 keep" ] \
+  && ok "V managed, under the margin → renewed by the device key, why=keep" || bad "V margin rc=$rc: $out last=$(cat "$LAST")"
+rm -f "$SB/renew.json"; printf '%s 0 keep\n' "$(( $(date +%s) - 200000 ))" > "$LAST"
+out="$(python3 "$BIN/fleet-login.py" keep --quiet 2>&1)"; rc=$?
+[ "$rc" = 0 ] && [ "$out" = "keep: renewed" ] && [ -s "$SB/renew.json" ] \
+  && ok "V the last renewal older than two days → renewed (the 7-day device window never lapses)" || bad "V device-window rc=$rc: $out"
+touch "$SB/idle"; rm -f "$SB/renew.json"
+out="$(FLEET_RENEW_BELOW_SECS=86400 python3 "$BIN/fleet-login.py" keep 2>&1)"; rc=$?
+out2="$(FLEET_RENEW_BELOW_SECS=86400 python3 "$BIN/fleet-login.py" renew 2>&1; python3 "$BIN/fleet-login.py" status 2>&1)"
+stop_hub
+rm -f "$SB/idle"
+[ "$rc" = 3 ] && echo "$out" | grep -q '运维' && ok "V a device the hub calls idle → exit 3, the ops word" || bad "V idle rc=$rc: $out"
+echo "$out$out2" | sed 's/fleet login: //g' | grep -q 'fleet login' && bad "V a managed login was told to run fleet login: $out $out2" || ok "V no managed output says fleet login"
+export FLEET_NODE_STATE="$SB/nostate"; unset FLEET_INSTALL_LOGIN
+start_hub; python3 "$BIN/fleet-login.py" renew --quiet >/dev/null 2>&1; stop_hub   # a fresh certificate again
 
 # ── G — a 5xx between two polls is a blip, not a «no» (#1901) ──
 rm -f "$HOME/.ssh/fleet-cert-cert.pub"; touch "$SB/blip"

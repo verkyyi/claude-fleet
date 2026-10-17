@@ -3,6 +3,7 @@
 
     fleet login [--hub URL] [--invert] [--no-include] [--qr]
     fleet login renew [--hub URL] [--quiet] [--if-under SECS] [--on-use WHY]
+    fleet login keep [--hub URL] [--quiet]       a managed login's ops keep-alive
     fleet login status
     fleet login check
     fleet login hub [--hub URL]                  print the hub URL it would use
@@ -59,7 +60,20 @@ keeper, just before it reads the hub), `ssh` (the `Match exec` this writes into
 prints `left <secs>` (`left none`: no certificate) on stdout once done. Every
 renewal it ASKS for is one login.log line with `why=<WHY>`, and its result is
 `<conf>/cert-renew.last` (`<epoch> <rc> <why>`) for the doctor's cert row —
-nothing renews on a timer.
+nothing renews on a timer — but for one kind of login.
+
+`keep` is that exception (claude-fleet#4594): a login a managed node's daemon
+took over (`account adopt`, fleet_managed.py) is the ops service's to maintain,
+and nobody may be asked to run `fleet login` for it. Nothing else uses such a
+login's certificate, so on-use renewal alone let it run out and, seven idle
+days later, the device registration too. Its diskguard tick — an account task
+the node daemon runs demoted to the login — calls `keep`, which renews by the
+device key when the certificate is under the margin (or missing), or when the
+last renewal is older than FLEET_KEEP_DEVICE_SECS (172800, two days: well inside
+the hub's seven), with why=keep. On any other login it does nothing (`keep: not
+managed`, exit 0). Exit 0 renewed or fresh · 3 the device key cannot renew (an
+ops matter — the tick raises one breakage alert; the person is never asked) ·
+1 transient (hub out of reach). One line on stdout: `keep: <what>`.
 
 `node` is the scan half of `fleet node join` (claude-fleet#1627): the same key,
 start, QR, page and poll, with purpose=node — the page reads 「把 <机器名> 加为
@@ -104,6 +118,10 @@ try:  # the ONE TLS context for the hub: every CA source this computer has (clau
     fleet_tls.install()
 except ImportError:
     fleet_tls = None
+try:  # is this login one the managed node's ops service maintains (claude-fleet#4594)
+    import fleet_managed
+except ImportError:
+    fleet_managed = None
 try:  # the client's own record: login.log (claude-fleet#2896, docs/dev/CLIENT-LOGS.md)
     import fleet_clientlog
 except ImportError:
@@ -180,6 +198,20 @@ CLIENT_NAMESPACE = "fleet-client@claude-fleet"
 RESCAN_REFUSALS = ("names no one this hub knows", "not signed by this hub")
 # Exit code: this device has to scan again.
 NEEDS_SCAN = 3
+
+
+def managed_login():
+    """A login the managed node's ops service maintains (claude-fleet#4594):
+    nothing here may tell its person to run `fleet login`."""
+    return bool(fleet_managed and fleet_managed.managed())
+
+
+def scan_word(what="需要重新扫码"):
+    """What to say when the device key cannot renew: 「<what>：fleet login」, or
+    on a managed login the ops service's word — never a scan for the person."""
+    if managed_login():
+        return "设备登记失效，%s" % fleet_managed.OPS_LAPSED
+    return "%s：fleet login" % what
 
 
 def show(*a):
@@ -661,7 +693,7 @@ def _renew(hub, quiet, include, said):
         why = cert_refused(hub)
         if why:
             # renewed, and still refused: the identity it renews is gone (#2112)
-            say("续期拿到了证书，但入口不认它（%s）— 需要重新扫码：fleet login" % why)
+            say("续期拿到了证书，但入口不认它（%s）— %s" % (why, scan_word()))
             return NEEDS_SCAN
         say("✓ 证书已续期（%s 前有效，账号 %s）%s" % (res.get("valid_before", "?"), ",".join(res.get("principals", [])),
                                                "；ssh 配置已 Include" if added else ""))
@@ -674,7 +706,7 @@ def _renew(hub, quiet, include, said):
         say("入口正在更新，一分钟内回来 — 稍后再试")
         return 1
     if code in (403, 404) or res.get("code") in ("unknown_device", "device_revoked", "device_idle", "no_account"):
-        say("需要重新扫码：%s" % why)
+        say("%s（%s）" % (scan_word(), why) if managed_login() else "需要重新扫码：%s" % why)
         return NEEDS_SCAN
     say("续期失败（HTTP %d）：%s" % (code, why))
     return 1
@@ -1140,9 +1172,59 @@ def cmd_renew(argv):
     return rc
 
 
+def keep_every():
+    try:
+        v = float(os.environ.get("FLEET_KEEP_DEVICE_SECS", ""))
+        if v > 0:
+            return v
+    except ValueError:
+        pass
+    return 172800.0
+
+
+def last_renewed():
+    """Epoch of the last renewal cert-renew.last says succeeded, or None."""
+    try:
+        with open(renew_last_path()) as f:
+            p = f.read().split()
+        return int(p[0]) if len(p) > 1 and p[1] == "0" else None
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def cmd_keep(argv):
+    """The ops keep-alive of a managed login's certificate and device (#4594)."""
+    hub_arg, quiet = "", False
+    it = iter(argv)
+    for a in it:
+        if a == "--hub":
+            hub_arg = next(it, "")
+        elif a.startswith("--hub="):
+            hub_arg = a.split("=", 1)[1]
+        elif a in ("-q", "--quiet"):
+            quiet = True
+        else:
+            die("unknown option " + a)
+    if not managed_login():
+        print("keep: not managed")
+        return 0
+    if not (os.path.exists(KEY) and os.path.exists(KEY + ".pub")):
+        # never signed in here: nothing the device key can keep (and nothing to ask)
+        print("keep: no device key")
+        return 0
+    left, last = cert_remaining(), last_renewed()
+    due = left is None or left < renew_below() or last is None or time.time() - last > keep_every()
+    if not due:
+        print("keep: fresh (left %d)" % left)
+        return 0
+    rc = renew(hub_url(hub_arg), quiet, True, "keep")
+    print({0: "keep: renewed", NEEDS_SCAN: "keep: ops (the device key cannot renew)"}.get(rc, "keep: failed (rc %d)" % rc))
+    return rc
+
+
 def cmd_status(_argv):
     if not os.path.exists(CERT):
-        print("no certificate (%s) — run: fleet login" % CERT)
+        print("no certificate (%s) — %s" % (CERT, fleet_managed.OPS_WORD if managed_login() else "run: fleet login"))
         return 1
     # 登录即登记 (claude-fleet#2212): a computer logged in before it, with no
     # node.env yet, gets its node pass here — silently, no scan.
@@ -1177,6 +1259,8 @@ def main(argv):
         return cmd_check(argv[1:])
     if argv and argv[0] == "renew":
         return cmd_renew(argv[1:])
+    if argv and argv[0] == "keep":
+        return cmd_keep(argv[1:])
     if argv and argv[0] == "node":
         return cmd_node(argv[1:])
     if argv and argv[0] == "node-pass":

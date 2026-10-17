@@ -45,7 +45,8 @@ run() {
   shift
   : > "$T/curl.log"
   out=$(env PATH="$T/shim:$PATH" HOME="$T/home" FLEET_CONF_DIR="$T/conf" CURL_LOG="$T/curl.log" \
-        CCQUOTA_VIEWER_TOKEN='' CCQUOTA_HUB_URL='' FLEET_HUB_URL='' ${envs[@]+"${envs[@]}"} bash "$SH" "$@" 2>&1); rc=$?
+        CCQUOTA_VIEWER_TOKEN='' CCQUOTA_HUB_URL='' FLEET_HUB_URL='' FLEET_DRILL_RENEW_CMD=: FLEET_NODE_STATE="$T/nostate" \
+        ${envs[@]+"${envs[@]}"} bash "$SH" "$@" 2>&1); rc=$?
   if [ "$rc" = "$want" ] && printf '%s\n' "$out" | grep -Eq -- "$re"; then ok "$label (exit $rc)"
   else bad "$label: exit $rc (want $want): $(printf '%s' "$out" | head -n 4)"; fi
 }
@@ -124,6 +125,31 @@ if grep -q '^HDR Authorization' "$T/curl.log"; then bad 'trial: a live cert stil
 run 0 '兑换链接' 'trial-again by the cert door' SIGNED="$T/signed" CURL_ANSWER=trial -- trial-again trial-0123456789abcdef
 if grep -Eq '^fleet-drill [0-9]+ trial 0 trial-0123456789abcdef$' "$T/signed" 2>/dev/null; then ok 'trial-again signs the subject after the rest'
 else bad "trial-again signed: $(cat "$T/signed" 2>/dev/null)"; fi
+
+# renewed on use (issue #4594): an expired certificate is renewed by the device key
+# BEFORE the drill decides — then it takes the cert door, no token, no person
+cat > "$T/shim/ssh-keygen" <<'EOF'
+#!/bin/bash
+case "$1" in
+  -L) if [ -e "$RENEWED" ]; then echo '        Valid: from 2026-01-01T00:00:00 to 2999-01-01T00:00:00'
+      else echo '        Valid: from 2026-01-01T00:00:00 to 2026-01-02T00:00:00'; fi ;;
+  -Y) msg=$(cat); printf '%s\n' "$msg" > "$SIGNED"; echo '-----BEGIN SSH SIGNATURE-----'; echo 'c2ln'; echo '-----END SSH SIGNATURE-----' ;;
+esac
+EOF
+rm -f "$T/renewed" "$T/signed"
+run 2 'no live connection' 'an expired cert, no renewal: the token door, refused' RENEWED="$T/renewed" -- invite --host mac-a
+run 0 'fleet-onboard-drill.sh' 'an expired cert is renewed on use, then signs' RENEWED="$T/renewed" SIGNED="$T/signed" \
+  FLEET_DRILL_RENEW_CMD="touch '$T/renewed'" -- invite --host mac-a --login drillx1
+[ -e "$T/renewed" ] && grep -Eq '^fleet-drill [0-9]+ invite mac-a drillx1 0$' "$T/signed" 2>/dev/null && ! grep -q '^HDR Authorization' "$T/curl.log" \
+  && ok 'renewed before cert_live: the cert door, no token' || bad "renew on use: renewed=$([ -e "$T/renewed" ] && echo yes) signed=$(cat "$T/signed" 2>/dev/null)"
+grep -q 'fleet-login.py" renew --quiet --on-use drill' "$SH" && ok 'the default renewal is fleet-login.py renew --on-use drill' || bad 'the default renewal is not --on-use drill'
+# a managed login (accounts.json managed: true) is never told to run fleet login
+mkdir -p "$T/state"; printf '{"drilluser": {"managed": true}}\n' > "$T/state/accounts.json"
+rm -f "$T/renewed"
+run 2 '运维会自动续期' 'a managed login: the ops word' RENEWED="$T/renewed" FLEET_NODE_STATE="$T/state" FLEET_INSTALL_LOGIN=drilluser -- invite --host mac-a
+out=$(env PATH="$T/shim:$PATH" HOME="$T/home" FLEET_CONF_DIR="$T/conf" CURL_LOG="$T/curl.log" RENEWED="$T/renewed" CCQUOTA_VIEWER_TOKEN='' \
+  FLEET_DRILL_RENEW_CMD=: FLEET_NODE_STATE="$T/state" FLEET_INSTALL_LOGIN=drilluser bash "$SH" invite --host mac-a 2>&1)
+if printf '%s' "$out" | grep -q 'fleet login'; then bad "a managed login was told to run fleet login: $out"; else ok 'a managed login is never told to run fleet login'; fi
 
 # approve: the drill's scan — the code (from the environment) is the only
 # credential sent, even with a token and a live cert right here

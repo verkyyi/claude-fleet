@@ -590,6 +590,44 @@ brew_watch() {
 # --on-use`. A hosting login's own hub reads ride its node token, not the
 # certificate, so nothing here needs one fresh: an unused certificate simply
 # runs out, and the doctor's cert row says the next use renews it.
+#
+# ONE exception, the ops service's (issue #4594): a login the managed node's
+# daemon took over (fleet_node_manages — `account adopt`) is maintained by the
+# fleet, never by its person, and nothing else uses its certificate. Left to
+# on-use renewal it ran out, and seven idle days later so did the device
+# registration — then only a scan could bring it back, and a probe asked the
+# operator to run `fleet login`. So this tick (an account task the node daemon
+# runs demoted to the login) calls `fleet-login.py keep` every
+# FLEET_MANAGED_CERT_EVERY (900 s): it renews by the device key under the margin
+# and at least every two days. What the key cannot renew (exit 3) is ONE
+# `breakage` alert per streak, in the ops service's words — never a question to
+# the person. FLEET_MANAGED_CERT_KEEP=0 turns it off; not managed ⇒ nothing.
+# FLEET_MANAGED_CERT_ALERT_CMD is the alert's seam (bin/fleet-managed-cert-selftest.sh).
+managed_cert_watch() {
+  [ "${FLEET_MANAGED_CERT_KEEP:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-login.py" ] && type fleet_node_manages >/dev/null 2>&1 || return 0
+  fleet_node_manages || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-managed-cert" last nowt
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "${FLEET_MANAGED_CERT_EVERY:-900}" ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  ( ( out=$(tmo 60 python3 "$BIN/fleet-login.py" keep --quiet 2>&1 </dev/null); rc=$?
+      printf '%s rc=%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$rc" "${out//$'\n'/ | }" >> "$GDIR/managed-cert.log" 2>/dev/null
+      streak="$GDIR/managed-cert.alerted"
+      if [ "$rc" = 3 ]; then
+        [ -e "$streak" ] && exit 0
+        : > "$streak"
+        sock=$(fleet_sockets 2>/dev/null | head -n 1)
+        bash "${FLEET_MANAGED_CERT_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sock:+-L "$sock"} breakage \
+          "fleet: managed login $(fleet_daemon_login)'s connection certificate can no longer be renewed by its device key — the ops service must re-register it (nobody on this login is asked to log in)" \
+          >/dev/null 2>&1 || :
+      elif [ "$rc" = 0 ]; then
+        rm -f "$streak" 2>/dev/null
+      fi ) & ) 2>/dev/null
+  return 0
+}
 transcript_watch() {
   [ "${FLEET_TRANSCRIPT_ARCHIVE:-1}" = 0 ] && return 0
   [ -x "$BIN/fleet-transcript-archive.sh" ] || return 0
@@ -1085,6 +1123,7 @@ EOF2
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)
     cn_probe_watch                                # the China real-user path, every few hours (#4180)
+    managed_cert_watch                            # a managed login's cert + device kept alive by ops (#4594)
     batch_green_watch                             # a driverless batch's green PRs: say how many (#3369)
     feedback_watch                                # /fleet-feedback's outbox: send what waited (#3358)
     docprev_watch                                 # doc-preview's server gone with docs shared: restart it (#3988)
