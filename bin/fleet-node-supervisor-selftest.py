@@ -83,11 +83,13 @@ import os
 import plistlib
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import traceback
 from unittest import mock
 
 BIN = os.path.dirname(os.path.abspath(__file__))
@@ -107,9 +109,303 @@ def until(secs, fn, step=0.05):
     return fn()
 
 
+class DiagnosticLog:
+    """Bound the added failure evidence, including traceback and command output."""
+    marker = "\n[diagnostic truncated: 65536-byte total limit]\n"
+
+    def __init__(self, sink=None):
+        self.left = 65536 - len(self.marker.encode())
+        self.truncated = False
+        self.sink = sys.stderr if sink is None else sink
+
+    def write(self, text):
+        data = text.encode("utf-8", errors="replace")
+        kept = data[:self.left].decode("utf-8", errors="ignore")
+        self.sink.write(kept)
+        self.left -= len(kept.encode())
+        if len(data) > len(kept.encode()) and not self.truncated:
+            self.sink.write(self.marker)
+            self.truncated = True
+            self.left = 0
+        return len(text)
+
+    def flush(self):
+        self.sink.flush()
+
+
+def diagnostic_output(value):
+    data = value if isinstance(value, bytes) else (value or "").encode("utf-8", errors="replace")
+    text = data[:4096].decode("utf-8", errors="replace")
+    return text + ("\n[command output truncated at 4096 bytes]" if len(data) > 4096 else "")
+
+
+def diagnostic_files(sandbox, log, active_files=()):
+    # The fixed paths take priority. Do not walk an unbounded log directory or
+    # follow links; stop after 16 candidate files / 64 directory entries.
+    names = ["sup.err", "sup.out", "launchctl.log", "stuck.txt", "db/state.json",
+             "db/logins/alice/services/webchat.json"]
+    names.extend(os.path.relpath(path, sandbox) for path in active_files)
+    pending = [os.path.join(sandbox, "log")]
+    seen = 0
+    while pending and len(names) < 16 and seen < 64:
+        directory = pending.pop()
+        try:
+            if not stat.S_ISDIR(os.lstat(directory).st_mode):
+                continue
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    seen += 1
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        names.append(os.path.relpath(entry.path, sandbox))
+                    if len(names) >= 16 or seen >= 64:
+                        break
+        except OSError as exc:
+            print("supervisor-scan " + repr(exc), file=log)
+    if pending or len(names) >= 16 or seen >= 64:
+        print("[file enumeration truncated: 16 files / 64 entries]", file=log)
+    for name in names:
+        if log.truncated:
+            break
+        path = os.path.join(sandbox, name)
+        print("supervisor-file " + path, file=log)
+        try:
+            # Recheck after open; NONBLOCK avoids blocking on a replaced FIFO.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    print("[not a regular file]", file=log)
+                    continue
+                size = min(8192, log.left)
+                data = source.read(size)
+                print(data.decode("utf-8", errors="replace"), file=log)
+                if os.fstat(source.fileno()).st_size > len(data):
+                    print("[file truncated: read %d bytes, per-file limit 8192]" % len(data), file=log)
+        except OSError as exc:
+            print(repr(exc), file=log)
+
+
+# Independent complete entries. Default four-way stride omits only these;
+# all/explicit unittest names retain them. No runner or production selector change.
+BOUNDED_CASES = {
+    "O_SweepRemoves.test_a_core_gone_from_launchd_is_put_back": "core-recovery",
+    "U_OnDemand.test_ensure_registers_starts_and_waits": "ensure-register",
+    "U_OnDemand.test_ensure_after_idle": "ensure-idle",
+    "U_OnDemand.test_ensure_after_stop": "ensure-stop",
+}
+
+
+def budget_module():
+    if "supervisor_test_budget" not in sys.modules:
+        spec = importlib.util.spec_from_file_location("supervisor_test_budget",
+            os.path.join(BIN, "fleet-node-supervisor-selftest-budget.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    return sys.modules["supervisor_test_budget"]
+
+
+_STRIDE_DISCOVERY = False
+
+
+def load_tests(loader, tests, pattern):
+    # Unittest invokes this hook for module discovery, not explicit case names.
+    # Keep selftest_part's original four-way stride over the remaining methods.
+    if _STRIDE_DISCOVERY:
+        import selftest_part
+        return unittest.TestSuite(t for t in selftest_part._flat(tests)
+            if ".".join(t.id().split(".")[-2:]) not in BOUNDED_CASES)
+    return tests
+
+
 class Sandbox(unittest.TestCase):
+    def run(self, result=None):
+        key = type(self).__name__ + "." + self._testMethodName
+        if key not in BOUNDED_CASES and not getattr(self, "budget_counterexample", False):
+            return super().run(result)
+        mod = budget_module()
+        self.budget = mod.ACTIVE or mod.Budget(mod.shared_now())
+        self.procs, self.owned_hosts, self.owned_dirs = [], [], []
+        self.diagnostic_calls, self.diagnostic_calls_omitted = [], 0
+        self.diagnostic_stage = "before setUp"
+        self.diagnostic_log = DiagnosticLog(getattr(self, "diagnostic_sink", None))
+        self.cleanup_count = 0
+        self.cleanup_complete = False
+        self.first_exception = None
+        # Register before even creating the first directory: unittest runs this
+        # after a failed setUp too. The unchanged legacy tearDown is bypassed.
+        self.addCleanup(self.cleanup_bounded)
+        try:
+            return super().run(result)
+        finally:
+            try:
+                print("supervisor-entry " + json.dumps({"case": self.id(),
+                    "elapsed": self.budget.elapsed(), "cleanup_complete": self.cleanup_complete,
+                    "cleanup_count": self.cleanup_count}), file=sys.stderr, flush=True)
+            finally:
+                if mod.ACTIVE is None:
+                    self.budget.close()
+
+    def phase_call(self, phase, call):
+        if not hasattr(self, "budget"):
+            return call()
+        self.diagnostic_stage = phase
+        try:
+            return call()
+        except BaseException:
+            failure = sys.exc_info()
+            if self.first_exception is None:
+                self.first_exception = failure[1]
+            self.diagnose(failure)
+            raise  # retain the exact original exception, including setUp failure
+
+    def _callSetUp(self):
+        return self.phase_call("setUp", super()._callSetUp)
+
+    def _callTestMethod(self, method):
+        return self.phase_call("body", lambda: super(Sandbox, self)._callTestMethod(method))
+
+    def _callTearDown(self):
+        return self.phase_call("tearDown", super()._callTearDown)
+
+    def diagnose(self, failure):
+        try:
+            self.budget.arm(self.budget.DIAGNOSTIC, "diagnostic")
+            log = self.diagnostic_log
+            print("supervisor-diagnostic " + json.dumps({
+                "case": self.id(), "stage": self.diagnostic_stage,
+                "wall": time.time(), "elapsed": self.budget.elapsed(),
+                "sandbox": getattr(self, "d", None),
+                "supervisors": [{"pid": p.pid, "rc": p.poll()} for p in self.procs],
+            }), file=log, flush=True)
+            traceback.print_exception(*failure, file=log)
+            print("supervisor-calls " + json.dumps({"calls": self.diagnostic_calls,
+                "omitted": self.diagnostic_calls_omitted}), file=log, flush=True)
+            if hasattr(self, "d"):
+                recent = self.owned_hosts[-4:]
+                diagnostic_files(self.d, log,
+                    [item[key] for item in recent for key in ("stdout", "stderr")])
+        except BaseException as diagnostic_error:
+            # Even a diagnostic deadline must not replace the original error.
+            print("[diagnostic incomplete: %s; original exception retained]"
+                  % type(diagnostic_error).__name__, file=sys.stderr, flush=True)
+        finally:
+            self.budget.arm(self.budget.DIRECTORIES, "cleanup")
+
+    def own_directory(self, **kwargs):
+        with budget_module().registration():
+            path = tempfile.mkdtemp(**kwargs)
+            st = os.lstat(path)
+            self.owned_dirs.append((path, st.st_dev, st.st_ino))
+        return path
+
+    def cleanup_bounded(self):
+        self.cleanup_count += 1
+        self.budget.arm(self.budget.DIRECTORIES, "terminate/join/directories")
+        errors = []
+        try:
+            # Parent owns only these actual Popen handles. Each host reaps its
+            # own direct children, including services with separate sessions.
+            for item in self.owned_hosts:
+                p = item["proc"]
+                if p.poll() is None:
+                    p.terminate()
+            for item in self.owned_hosts:
+                p = item["proc"]
+                try:
+                    p.wait(timeout=self.budget.left(self.budget.HOST_JOIN))
+                except subprocess.TimeoutExpired:
+                    # The host should have force-reaped at t=49. A missing
+                    # receipt is a cleanup failure, never guessed via state PID.
+                    p.kill()
+                    p.wait(timeout=self.budget.left(self.budget.DIRECTORIES))
+                    errors.append("host %s missed join deadline" % p.pid)
+                mod = budget_module()
+                joined_at = mod.shared_now()
+                try:
+                    with open(item["journal"]) as src:
+                        receipt = json.load(src)
+                    if (receipt.get("host") != p.pid or receipt.get("start") != self.budget.start
+                            or not receipt.get("complete") or receipt.get("rc") != p.returncode):
+                        raise AssertionError("wrong owner/incomplete child joins")
+                    if receipt.get("rc") in (124, 125):
+                        raise AssertionError("host exhausted budget or failed cleanup")
+                    if item["daemon"] and p.returncode not in (0, 143):
+                        raise AssertionError("supervisor exited unexpectedly: %s" % p.returncode)
+                    mod.verify_host_clock(receipt, self.budget.start, item["dispatched_at"], joined_at)
+                    kept = dict(receipt, parent_observation={"dispatched_at": item["dispatched_at"],
+                                "joined_at": joined_at, "clock_identity": mod.clock_identity()})
+                    record = "supervisor-owned-joined " + json.dumps(kept) + "\n"
+                    # An essential receipt must survive in full before its
+                    # sandbox is removed. Exhaustion retains that directory and
+                    # fails; a truncated diagnostic is never a joined receipt.
+                    if self.diagnostic_log.truncated or len(record.encode()) > self.diagnostic_log.left:
+                        raise AssertionError("host receipt exceeds remaining evidence budget")
+                    self.diagnostic_log.write(record)
+                    self.diagnostic_log.flush()
+                    if mod.ENVELOPE_RECORD is not None:
+                        mod.ENVELOPE_RECORD.save_host(kept)
+                except (OSError, ValueError, AssertionError) as exc:
+                    errors.append("host %s: %s" % (p.pid, exc))
+        except BaseException as exc:
+            errors.append("cleanup exception: " + type(exc).__name__)
+            # The original body/setUp error remains in unittest's result. One
+            # last bounded cleanup phase cannot rearm an already expired 42s
+            # diagnostic timer and replace that exception with another alarm.
+            self.budget.arm(self.budget.FINISH, "cleanup failure evidence")
+            traceback.print_exception(*sys.exc_info(), file=self.diagnostic_log)
+            raise
+        finally:
+            # Removal is identity checked, including partial setUp's short home.
+            # Do not delete evidence if a host may still be alive.
+            if not errors and all(item["proc"].poll() is not None for item in self.owned_hosts):
+                for path, device, inode in reversed(self.owned_dirs):
+                    try:
+                        st = os.lstat(path)
+                        if (st.st_dev, st.st_ino) != (device, inode) or not stat.S_ISDIR(st.st_mode):
+                            raise AssertionError("private directory identity changed: " + path)
+                        shutil.rmtree(path)
+                    except (OSError, AssertionError) as exc:
+                        errors.append(str(exc))
+            else:
+                errors.append("ownership/join incomplete: private directories retained")
+        self.budget.arm(self.budget.FINISH, "final result")
+        self.cleanup_complete = not errors
+        print("supervisor-cleanup " + json.dumps({"case": self.id(),
+            "elapsed": self.budget.elapsed(), "errors": errors,
+            "directories": [p for p, _, _ in self.owned_dirs]}), file=sys.stderr, flush=True)
+        if budget_module().ENVELOPE_RECORD is not None:
+            budget_module().ENVELOPE_RECORD.save_cleanup({"case": self.id(),
+                "count": self.cleanup_count, "complete": self.cleanup_complete, "errors": errors,
+                "hosts": len(self.owned_hosts), "at": budget_module().shared_now(),
+                "directories": [{"path": p, "device": device, "inode": inode}
+                                for p, device, inode in self.owned_dirs]})
+        if errors:
+            raise AssertionError("CLEANUP_INCOMPLETE: " + "; ".join(errors))
+
+    def owned_host(self, args, env, out_name, err_name):
+        mod = budget_module()
+        journal = os.path.join(self.d, "owned-%d.json" % len(self.owned_hosts))
+        env = dict(env, SUPERVISOR_TEST_JOURNAL=journal)
+        out_path, err_path = os.path.join(self.d, out_name), os.path.join(self.d, err_name)
+        # Files avoid a full pipe blocking a daemon or an unbounded communicate.
+        with open(out_path, "a") as out, open(err_path, "a") as err:
+            with mod.registration():
+                dispatched_at = mod.shared_now()
+                p = mod.launch(self.budget, self.procs,
+                    mod.host_argv(self.budget.start, dispatched_at, args),
+                    env=env, stdout=out, stderr=err)
+                self.owned_hosts.append(dict(proc=p, journal=journal, stdout=out_path,
+                    stderr=err_path, daemon=list(args) == ["run"], dispatched_at=dispatched_at))
+        return p
+
+    def wait_for(self, secs, fn):
+        return self.budget.until(secs, fn) if hasattr(self, "budget") else until(secs, fn)
+
     def setUp(self):
-        self.d = tempfile.mkdtemp(prefix="fns.")
+        self.d = (self.own_directory(prefix="fns.") if hasattr(self, "budget")
+                  else tempfile.mkdtemp(prefix="fns."))
         self.env = dict(os.environ)
         for k in list(self.env):
             if k.startswith("FLEET_NODE_"):
@@ -129,6 +425,8 @@ class Sandbox(unittest.TestCase):
         self.procs = []
 
     def tearDown(self):
+        if hasattr(self, "budget"):
+            return  # early addCleanup owns all paths, also on failed setUp
         for p in self.procs:
             if p.poll() is None:
                 p.send_signal(signal.SIGTERM)
@@ -158,13 +456,70 @@ class Sandbox(unittest.TestCase):
 
     def run_sup(self, *args, **kw):
         e = dict(self.env, **kw.pop("env", {}))
-        return subprocess.run([sys.executable, SUP] + list(args), env=e, capture_output=True,
-                              text=True, timeout=60)
+        begin = time.time()
+        if hasattr(self, "budget"):
+            seq = len(self.owned_hosts)
+            p = self.owned_host(args, e, "cli-%d.out" % seq, "cli-%d.err" % seq)
+            try:
+                p.wait(timeout=min(60, self.budget.left()))
+            except subprocess.TimeoutExpired as exc:
+                self.record_diagnostic_call(dict(stage=self.diagnostic_stage, args=args,
+                    begin=begin, end=time.time(), timeout=exc.timeout,
+                    stdout_path=self.owned_hosts[-1]["stdout"], stderr_path=self.owned_hosts[-1]["stderr"]))
+                raise budget_module().BudgetExceeded(
+                    "FIXTURE_BUDGET_EXHAUSTED nested CLI/observation; incomplete") from exc
+            streams = []
+            for path in (self.owned_hosts[-1]["stdout"], self.owned_hosts[-1]["stderr"]):
+                with open(path, "rb") as source:
+                    data = source.read(65537)
+                if len(data) > 65536:
+                    raise AssertionError("CLI output exceeds test evidence limit: " + path)
+                streams.append(data.decode("utf-8", errors="replace"))
+            result = subprocess.CompletedProcess([sys.executable, SUP, *args], p.returncode, *streams)
+            self.record_diagnostic_call(dict(stage=self.diagnostic_stage, args=args,
+                begin=begin, end=time.time(), rc=result.returncode,
+                stdout=diagnostic_output(result.stdout), stderr=diagnostic_output(result.stderr)))
+            return result
+        try:
+            result = subprocess.run([sys.executable, SUP] + list(args), env=e, capture_output=True,
+                                    text=True, timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            if hasattr(self, "diagnostic_calls"):
+                self.record_diagnostic_call(dict(stage=self.diagnostic_stage, args=args,
+                    begin=begin, end=time.time(), timeout=exc.timeout,
+                    stdout=diagnostic_output(exc.stdout), stderr=diagnostic_output(exc.stderr)))
+            raise
+        if hasattr(self, "diagnostic_calls"):
+            self.record_diagnostic_call(dict(stage=self.diagnostic_stage, args=args,
+                begin=begin, end=time.time(), rc=result.returncode,
+                stdout=diagnostic_output(result.stdout), stderr=diagnostic_output(result.stderr)))
+        return result
+
+    def record_diagnostic_call(self, call):
+        if len(self.diagnostic_calls) < 16:
+            self.diagnostic_calls.append(call)
+        else:
+            self.diagnostic_calls_omitted += 1
+
+    def trace_stage(self, stage):
+        self.diagnostic_stage = stage
+        print("supervisor-stage " + json.dumps(dict(case=self.id(), stage=stage,
+            wall=time.time(), sandbox=self.d,
+            elapsed=self.budget.elapsed() if hasattr(self, "budget") else None)),
+            file=sys.stderr, flush=True)
 
     def start(self, **extra):
         e = dict(self.env, **extra)
-        p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=subprocess.DEVNULL,
-                             stderr=open(os.path.join(self.d, "sup.err"), "a"))
+        if hasattr(self, "budget"):
+            return self.owned_host(["run"], e, "sup.out", "sup.err")
+        output = (open(os.path.join(self.d, "sup.out"), "a")
+                  if hasattr(self, "diagnostic_calls") else subprocess.DEVNULL)
+        try:
+            p = subprocess.Popen([sys.executable, SUP, "run"], env=e, stdout=output,
+                                 stderr=open(os.path.join(self.d, "sup.err"), "a"))
+        finally:
+            if hasattr(output, "close"):
+                output.close()
         self.procs.append(p)
         return p
 
@@ -442,6 +797,16 @@ class O_SweepRemoves(Sandbox):
             {"name": "w", "cmd": ["/bin/bash", ok], "legacy": "com.claude-fleet.w-legacy",
              "requires": [os.path.join(self.d, "nowhere")]}])
 
+        if hasattr(self, "budget"):
+            # Same fake contract and log, no shell/grep descendant to orphan on
+            # an interrupted launchctl call. This is not production launchctl.
+            with open(self.env["FLEET_NODE_LAUNCHCTL"], "w") as out:
+                out.write("#!" + sys.executable + "\nimport sys\n"
+                    + "with open(%r, 'a') as f: f.write(' '.join(sys.argv[1:]) + '\\n')\n" % self.lclog
+                    + "if sys.argv[1] != 'print': sys.exit(0)\n"
+                    + "with open(%r) as f: labels = f.read().splitlines()\n" % self.stuck
+                    + "sys.exit(0 if sys.argv[2].split('/')[-1] in labels else 113)\n")
+
     def plist(self, d, label, **kw):
         p = os.path.join(d, label + ".plist")
         with open(p, "wb") as f:
@@ -555,14 +920,20 @@ class O_SweepRemoves(Sandbox):
         self.plist(self.dd, "com.claude-fleet.node-core")
         self.env["FLEET_NODE_CORE_SOCK"] = os.path.join(self.d, "core.sock")
         self.env["FLEET_NODE_SWEEP_EVERY"] = "100000"
+        self.trace_stage('O initial status')
         st = self.run_sup("status").stdout
         self.assertIn("core        NOT ANSWERING", st)
+        self.trace_stage('O start supervisor')
         self.start()
         want = "bootstrap system %s" % os.path.join(self.dd, "com.claude-fleet.node-core.plist")
-        self.assertTrue(until(10, lambda: os.path.exists(self.lclog) and want in open(self.lclog).read()),
+        self.trace_stage('O bootstrap within 10s')
+        self.assertTrue(self.wait_for(10, lambda: os.path.exists(self.lclog) and want in open(self.lclog).read()),
                         "the daemon did not put the core back")
-        self.assertTrue(until(5, lambda: (self.state().get("core") or {}).get("down_since")))
+        self.trace_stage('O down_since within 5s')
+        self.assertTrue(self.wait_for(5, lambda: (self.state().get("core") or {}).get("down_since")))
+        self.trace_stage('O status reflects daemon')
         self.assertIn("(the daemon's word)", self.run_sup("status").stdout)
+        self.trace_stage('O exactly one NOT ANSWERING warning')
         log = open(os.path.join(self.d, "sup.err")).read()
         self.assertEqual(log.count("core NOT ANSWERING"), 1, log)
 
@@ -2839,7 +3210,8 @@ class U_OnDemand(Sandbox):
     def setUp(self):
         Sandbox.setUp(self)
         # a unix socket path is ≤ 104 bytes: the home lives under a short /tmp dir
-        self.short = tempfile.mkdtemp(prefix="fw.", dir="/tmp")
+        self.short = (self.own_directory(prefix="fw.", dir="/tmp") if hasattr(self, "budget")
+                      else tempfile.mkdtemp(prefix="fw.", dir="/tmp"))
         self.home = os.path.join(self.short, "alice")
         os.makedirs(self.home)
         with open(os.path.join(self.d, "passwd.json"), "w") as f:
@@ -2849,7 +3221,8 @@ class U_OnDemand(Sandbox):
 
     def tearDown(self):
         Sandbox.tearDown(self)
-        shutil.rmtree(self.short, ignore_errors=True)
+        if not hasattr(self, "budget"):
+            shutil.rmtree(self.short, ignore_errors=True)
 
     def svc(self, *args, **kw):
         return self.run_sup("service", *args, **kw)
@@ -2898,41 +3271,78 @@ while not os.path.exists(idle):
 os.unlink(idle); os.unlink(s); sys.exit(75)
 """)
         with open(p, "w") as f:
-            f.write('#!/bin/bash\n[ "$1" = serve ] || exit 2\nexec %s -I "$(dirname "$0")/serve.py"\n'
-                    % sys.executable)
+            import shlex
+            f.write('#!/bin/bash\n[ "$1" = serve ] || exit 2\nexec %s -I %s\n'
+                    % (shlex.quote(sys.executable), shlex.quote(os.path.join(b, "serve.py"))))
         os.chmod(p, 0o755)
         return p, os.path.join(self.home, ".config", "claude-fleet", "webchat", "idle")
 
-    def test_ensure_registers_starts_and_waits(self):
-        self.assertEqual(self.svc("ensure", "--login", "alice", "--name", "sms").returncode, 2,
-                         "a name off the on-demand table was ensured")
+    def registered_webchat(self):
         p, idle = self.stub_webchat()
         self.start()
+        self.trace_stage("U registered ready (3 tries)")
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("registered · ready", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # U2; real prerequisite in each scene
+        self.assertIn("registered · ready", r.stdout)  # U3
         ent = json.load(open(os.path.join(self.d, "db", "logins", "alice", "services", "webchat.json")))
-        self.assertEqual(ent["exec"], [p, "serve"])
-        self.assertEqual(ent["paths"], [os.path.join(self.home, ".config", "claude-fleet", "webchat")])
-        self.assertEqual(ent["state"], "enabled")
+        self.assertEqual(ent["exec"], [p, "serve"])  # U4
+        self.assertEqual(ent["paths"], [os.path.join(self.home, ".config", "claude-fleet", "webchat")])  # U5
+        self.assertEqual(ent["state"], "enabled")  # U6
+        return idle
+
+    def running_webchat(self):
+        idle = self.registered_webchat()
+        self.trace_stage("U running ready (3 tries)")
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("running · ready", r.stdout, r.stderr)
-        # #3737: a fixed 4s lifetime races the client's scheduling on busy CI.
-        # Keep serving through both ready checks, then request the real exit 75.
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # U7
+        self.assertIn("running · ready", r.stdout, r.stderr)  # U8
+        return idle
+
+    def test_ensure_registers_starts_and_waits(self):
+        self.trace_stage("U reject unknown name")
+        self.assertEqual(self.svc("ensure", "--login", "alice", "--name", "sms").returncode, 2,
+                         "a name off the on-demand table was ensured")  # U1
+        self.running_webchat()
+
+    def idle_restarted_webchat(self):
+        # This is a real prefix of each caller's own service history, not a
+        # result borrowed from the independent idle entry or a prewritten state.
+        idle = self.running_webchat()
+        # #3737: explicit exit, not a fixed service lifetime racing ensure.
+        self.trace_stage("U request exit 75 and await idle")
         with open(idle, "w"):
             pass
-        self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "idle"), self.services())
-        self.assertEqual(self.child("svc:alice/webchat").get("last_rc"), fns.SVC_IDLE_RC)
+        self.assertTrue(self.wait_for(15, lambda: self.services()["webchat"]["status"] == "idle"),
+                        self.services())  # U9; original diagnostic status query retained
+        self.assertEqual(self.child("svc:alice/webchat").get("last_rc"), fns.SVC_IDLE_RC)  # U10
+        # Also retain a real no-autostart interval before explicit ensure.
+        before = self.child("svc:alice/webchat").get("restarts") or 0
+        time.sleep(1.5)
+        self.assertFalse(fns.pid_alive(self.child("svc:alice/webchat").get("pid")))
+        self.assertEqual(self.child("svc:alice/webchat").get("restarts") or 0, before)
+        self.assertEqual(self.services()["webchat"]["status"], "idle")
+        self.trace_stage("U idle restart ready (3 tries)")
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("started · ready", r.stdout)
-        # stopped by hand: ensure enables it
-        self.assertEqual(self.svc("stop", "--login", "alice", "--name", "webchat").returncode, 0)
-        self.assertTrue(until(15, lambda: self.services()["webchat"]["status"] == "stopped"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # U11
+        self.assertIn("started · ready", r.stdout)  # U12
+
+    def test_ensure_after_idle(self):
+        self.idle_restarted_webchat()
+
+    def test_ensure_after_stop(self):
+        # Stop the service AFTER its real exit75/idle/ensure restart, in this
+        # same sandbox and daemon. A fresh registered service is not equivalent.
+        self.idle_restarted_webchat()
+        self.trace_stage("U explicit stop and await stopped")
+        self.assertEqual(self.svc("stop", "--login", "alice", "--name", "webchat").returncode, 0)  # U13
+        self.assertTrue(self.wait_for(15, lambda: self.services()["webchat"]["status"] == "stopped"))  # U14
+        ent_path = os.path.join(self.d, "db", "logins", "alice", "services", "webchat.json")
+        self.assertEqual(json.load(open(ent_path))["state"], "stopped")
+        self.trace_stage("U stopped restart ready (3 tries)")
         r = self.svc("ensure", "--login", "alice", "--name", "webchat", "--wait", "3")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("started · ready", r.stdout, r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # U15
+        self.assertIn("started · ready", r.stdout, r.stderr)  # U16
+        self.assertEqual(json.load(open(ent_path))["state"], "enabled")
 
     def test_start_races_a_service_call(self):
         # #3648: `service ensure` made db/ between the daemon's look and its make —
@@ -3360,6 +3770,198 @@ class W_DoorAccountLocked(unittest.TestCase):
             self.assertEqual(fns.door_account("bob"), "usermod: no shadow")
 
 
+def budget_cleanup_counterexample():
+    """One deliberately failing setup; run only after the reviewer's release.
+
+    expected_setup_budget_failure is preliminary: control finally and the
+    caller's clock close must also finish before accepting the expected exit1.
+    It is not an O/U business PASS. Any failed counterexample check raises.
+    """
+    import io
+    mod = budget_module()
+    control_dir = None
+    control = None
+    case = None
+    recorder = mod.ENVELOPE_RECORD
+    primary = None
+    control_record = {"directory": None, "pid": None, "signals": [], "waits": [],
+                      "untouched_before_cleanup": False, "joined": False, "errors": []}
+
+    class Capture(unittest.TestResult):
+        def addError(self, test, err):
+            self.original_error = err[1]
+            super().addError(test, err)
+
+    class PartialSetup(Sandbox):
+        budget_counterexample = True
+        body_called = False
+        teardown_called = False
+
+        def setUp(self):
+            Sandbox.setUp(self)
+            self.table(children=[{"name": "owned", "cmd": ["/bin/sleep", "300"]}])
+            self.start()
+            self.assertTrue(self.wait_for(5, lambda: self.child("owned").get("pid")),
+                            "controlled setup did not create its child")
+            self.observed_child = {"pid": self.child("owned")["pid"], "at": mod.shared_now()}
+            self.observed_child["live"] = fns.pid_alive(self.observed_child["pid"])
+            self.assertTrue(self.observed_child["live"], "controlled child was not actually alive")
+            # Force bounded evidence, without filling a pipe or changing a
+            # production timeout. The state/real supervisor already exist.
+            with open(os.path.join(self.d, "sup.out"), "a") as out:
+                out.write("controlled diagnostic payload\n" * 4096)
+            self.injection_limit = self.budget.elapsed() + 0.03
+            self.assertLess(self.injection_limit, mod.Budget.WORK,
+                            "real body budget exhausted before controlled injection")
+            try:
+                self.budget.arm(self.injection_limit, "controlled partial setUp")
+                time.sleep(0.2)  # real wall-deadline notification into failed setUp
+            except mod.BudgetExceeded as exc:
+                self.injected = exc
+                self.injected_at = mod.shared_now()
+                raise
+            self.fail("controlled timer did not fire")
+
+        def test_body(self):
+            self.body_called = True
+            self.fail("body ran after failed setUp")
+
+        def tearDown(self):
+            self.teardown_called = True
+            super().tearDown()
+
+    try:
+        with mod.registration():
+            control_dir = tempfile.mkdtemp(prefix="fns-control.")
+            st = os.lstat(control_dir)
+            control_record["directory"] = {"path": control_dir, "device": st.st_dev, "inode": st.st_ino}
+        marker = os.path.join(control_dir, "marker")
+        with open(marker, "w") as out:
+            out.write("independent control\n")
+        marker_stat = os.lstat(marker)
+        control_record["marker"] = {"device": marker_stat.st_dev, "inode": marker_stat.st_ino}
+        with mod.registration():
+            control = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"],
+                                       start_new_session=True)
+            control_record.update(pid=control.pid, created_at=mod.shared_now())
+        control_pid = control.pid
+        assert os.getpgid(control_pid) == control_pid
+        control_record["pgid"] = control_pid
+        if recorder is not None:
+            recorder.save_control_start(control_record)
+        case = PartialSetup("test_body")
+        case.diagnostic_sink = io.StringIO()
+        result = Capture()
+        case.run(result)
+        diagnostic = case.diagnostic_sink.getvalue()
+        sys.stderr.write(diagnostic)
+        sys.stderr.flush()
+        assert len(diagnostic.encode()) <= 65536
+        assert "[file truncated:" in diagnostic
+        assert "FIXTURE_BUDGET_EXHAUSTED" in diagnostic
+        assert not result.wasSuccessful() and len(result.errors) == 1, result.errors
+        assert result.original_error is case.injected is case.first_exception
+        assert "phase=controlled partial setUp" in str(case.injected)
+        assert mod.ACTIVE.start + case.injection_limit <= case.injected_at < mod.ACTIVE.start + mod.Budget.WORK
+        assert not case.body_called and not case.teardown_called
+        assert case.cleanup_count == 1 and case.cleanup_complete
+        assert all(not os.path.lexists(path) for path, _, _ in case.owned_dirs)
+        assert all(item["proc"].returncode is not None for item in case.owned_hosts)
+        assert control.pid == control_pid and control.poll() is None
+        assert open(marker).read() == "independent control\n"
+        last_marker = os.lstat(marker)
+        assert (last_marker.st_dev, last_marker.st_ino) == (marker_stat.st_dev, marker_stat.st_ino)
+        control_record.update(untouched_before_cleanup=True, checked_at=mod.shared_now(),
+                              marker_identity_unchanged=True, marker_content_unchanged=True)
+        expected = {
+            "case_exit": 1, "original_exception_preserved": True,
+            "cleanup_once": True, "all_owned_joined": True,
+            "private_directories_removed": True, "control_untouched": True,
+            "diagnostic_bytes": len(diagnostic.encode()), "diagnostic_limit": 65536,
+            "file_truncated": "[file truncated:" in diagnostic,
+            "budget_diagnostic": "FIXTURE_BUDGET_EXHAUSTED" in diagnostic,
+            "exception_type": type(case.injected).__name__, "exception": str(case.injected),
+            "exception_object": id(case.injected), "setup_error_count": len(result.errors),
+            "body_called": case.body_called, "teardown_called": case.teardown_called,
+            "cleanup_count": case.cleanup_count, "observed_child": case.observed_child,
+            "injection_limit": case.injection_limit, "injected_at": case.injected_at,
+        }
+        print("expected_setup_budget_failure " + json.dumps(expected), flush=True)
+        if recorder is not None:
+            recorder.save_expected(expected, diagnostic)
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        # The control resource has its own explicit owner/handle. It was never
+        # handed to the fixture cleanup. Include its removal in outer timing.
+        cleanup_error = None
+        try:
+            if control is not None:
+                if control.poll() is None:
+                    event = {"signal": "TERM", "before": mod.shared_now()}
+                    control_record["signals"].append(event)
+                    try:
+                        with mod.registration():
+                            control.terminate()
+                            event["after"] = mod.shared_now()
+                    except BaseException as exc:
+                        cleanup_error = exc
+                        control_record["errors"].append("control TERM: " + repr(exc)[:2048])
+                wait = {"started": mod.shared_now(), "deadline": min(mod.shared_now() + 2,
+                    mod.ACTIVE.start + mod.Budget.DIRECTORIES)}
+                control_record["waits"].append(wait)
+                try:
+                    control.wait(timeout=max(0, wait["deadline"] - mod.shared_now()))
+                    wait["joined"] = True
+                except subprocess.TimeoutExpired:
+                    wait.update(joined=False, outcome="timeout", ended=mod.shared_now())
+                    event = {"signal": "KILL", "before": mod.shared_now()}
+                    control_record["signals"].append(event)
+                    try:
+                        with mod.registration():
+                            control.kill()  # only this actual independent control Popen
+                            event["after"] = mod.shared_now()
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+                        control_record["errors"].append("control KILL: " + repr(exc)[:2048])
+                    last = {"started": mod.shared_now(), "deadline": mod.ACTIVE.start + mod.Budget.FINISH}
+                    control_record["waits"].append(last)
+                    control.wait(timeout=mod.ACTIVE.left(mod.Budget.FINISH))
+                    last.update(joined=True, ended=mod.shared_now())
+                finally:
+                    wait.setdefault("ended", mod.shared_now())
+                control_record.update(joined=True, rc=control.returncode)
+            if control_dir is not None:
+                st = os.lstat(control_dir)
+                own = control_record["directory"]
+                assert stat.S_ISDIR(st.st_mode) and (st.st_dev, st.st_ino) == (own["device"], own["inode"])
+                shutil.rmtree(control_dir)
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+            control_record["errors"].append(repr(exc)[:2048])
+        finally:
+            try:
+                control_record.update(directory_removed=control_dir is None or not os.path.lexists(control_dir),
+                    ended=mod.shared_now(), elapsed=mod.ACTIVE.elapsed(),
+                    primary_exception=None if primary is None else repr(primary)[:2048])
+                print("counterexample-control-cleanup " + json.dumps(control_record), flush=True)
+                if recorder is not None:
+                    recorder.save_control(control_record)
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+            if cleanup_error is not None and primary is None:
+                raise cleanup_error
+            # When both fail, preserve the original exception. The control
+            # receipt/error or its absence makes final acceptance impossible.
+    return 1  # deliberately retains the budget failure's nonzero entry result
+
+
 if __name__ == "__main__":
     import selftest_part  # SELFTEST_PART=K/N runs one slice of the cases (issue #2694)
+    if os.environ.get("SELFTEST_PART", "all") not in ("", "all") and len(sys.argv) == 1:
+        _STRIDE_DISCOVERY = True
     selftest_part.main()
