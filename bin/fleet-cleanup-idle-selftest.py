@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
+import time
+RIG_IMPORT_START = time.monotonic()
 import argparse
 import importlib.util
 import json
@@ -8,10 +10,11 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -22,6 +25,483 @@ from fleet_reap_notice import notice
 spec = importlib.util.spec_from_file_location("idle", BIN / "fleet-cleanup-idle.py")
 idle = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(idle)
+
+
+class RigBudgetExceeded(RuntimeError):
+    """Incomplete fixture evidence, never a production timeout or a PASS."""
+
+
+class RigCalls:
+    """Only this selftest's calls; one allowance for part 4 or its setup example.
+
+    40/50 are measured from this Python process's start/import, NOT the normal
+    runner's start. External /usr/bin/time remains the complete-entry gate.
+    Original 20s call limits remain ceilings, not fresh per-command allowances.
+    No runner alarm, signal handler, production timeout or outer grace changes.
+    """
+    def __init__(self, start, mode="normal-part4"):
+        self.start = start
+        self.mode = mode
+        self.children = []
+        self.errors = []
+        self.receipts = []
+        self.secondary_errors = []
+        self.cleanup_receipts = []
+        self.servers = []  # actual foreground tmux handles, distinct from clients
+
+    @staticmethod
+    def error_text(exc):
+        try:
+            return repr(exc)[:1024]
+        except BaseException:
+            return "<exception repr unavailable>"
+
+    def diagnostic_error(self, phase, exc):
+        # No diagnostic I/O here: stderr itself may be the failed resource.
+        item = dict(phase=phase, error_type=type(exc).__name__, detail=self.error_text(exc))
+        self.secondary_errors.append(item)
+        self.errors.append("diagnostic evidence incomplete: " + repr(item))
+
+    def remaining(self, cleanup=False):
+        left = self.start + (50 if cleanup else 40) - time.monotonic()
+        if left <= 0:
+            raise RigBudgetExceeded("shared fixture %s allowance exhausted" %
+                                    ("cleanup" if cleanup else "body"))
+        return left
+
+    @staticmethod
+    def server_absent(pid):
+        # Independent visibility check; this never substitutes for an owned wait.
+        try:
+            os.kill(pid, 0)
+            return False
+        except ProcessLookupError:
+            return True
+
+    def run(self, args, env, *, cleanup=False, check=True):
+        limit = min(20, self.remaining(cleanup))
+        record = dict(event="idle-rig-child", argv=list(args), owner=os.getpid(),
+                      born=time.monotonic(), shared_start=self.start,
+                      phase="cleanup" if cleanup else "body", timeout=limit,
+                      joined=False, group_policy="inherits entry group; signal direct Popen only")
+        # Files avoid a descendant retaining a PIPE and blocking communicate().
+        # They are anonymous, close before return and never become cleanup targets.
+        out = err = p = None
+        stdout = stderr = None
+        try:
+            out = tempfile.TemporaryFile()
+            err = tempfile.TemporaryFile()
+            # Retain the original entry group: runner TERM/KILL/backstop still
+            # reaches this call. Never create an escape group or signal Perl.
+            p = subprocess.Popen(args, env=env, stdout=out, stderr=err)
+            self.children.append(p)  # actual Popen, not a sampled/reconstructed PID
+            record.update(pid=p.pid, parent_pgid=os.getpgrp())
+            try:
+                p.wait(timeout=min(limit, self.remaining(cleanup)))
+            except BaseException as exc:
+                # Only the actual unreaped Popen child; no group/descendant kill.
+                # A timeout is incomplete evidence even if this child is joined.
+                self.errors.append("call interrupted; descendant exit not inferred: " + self.error_text(exc))
+                try:
+                    if p.poll() is None:
+                        p.terminate()
+                        record["term_completed"] = time.monotonic()
+                        try:
+                            p.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            # Never shorten the five seconds to fit a nominal budget.
+                            if time.monotonic() < record["term_completed"] + 5:
+                                raise RuntimeError("direct child grace incomplete")
+                            record["kill_time"] = time.monotonic()
+                            p.kill()
+                            p.wait(timeout=2)
+                    else:
+                        p.wait()
+                except BaseException as join_exc:
+                    self.errors.append("direct child stop/join incomplete: " + self.error_text(join_exc))
+                raise  # same object and traceback; guarded diagnostics run below
+            if check and p.returncode:
+                # Establish the command failure before any output read/close.
+                # finally fills whichever streams were actually recovered.
+                raise subprocess.CalledProcessError(p.returncode, args)
+        finally:
+            original = sys.exc_info()[1]
+            record.update(ended=time.monotonic(), rc=None if p is None else p.returncode,
+                          joined=p is not None and p.returncode is not None)
+            values = {}
+            for name, f in (("stdout", out), ("stderr", err)):
+                if f is None:
+                    continue
+                phase = name + ".tell"
+                try:
+                    size = f.tell()
+                    record[name + "_bytes"] = size
+                    phase = name + ".seek"
+                    f.seek(0)
+                    phase = name + ".read"
+                    values[name] = f.read(65536).decode("utf-8", "replace")
+                    if size > 65536:
+                        self.errors.append("command output truncated: %d bytes" % size)
+                except BaseException as read_exc:
+                    self.diagnostic_error(phase, read_exc)
+                finally:
+                    try:
+                        f.close()
+                        record[name + "_closed"] = True
+                    except BaseException as close_exc:
+                        record[name + "_closed"] = False
+                        self.diagnostic_error(name + ".close", close_exc)
+            stdout, stderr = values.get("stdout"), values.get("stderr")
+            if isinstance(original, (subprocess.TimeoutExpired, subprocess.CalledProcessError)):
+                original.output, original.stderr = stdout, stderr
+            if p is not None and not record["joined"]:
+                self.errors.append("owned direct call exit unproven: %s" % p.pid)
+            record["secondary_errors"] = list(self.secondary_errors)
+            self.receipts.append(record)
+            try:
+                print("idle-rig-child " + json.dumps(record, ensure_ascii=True),
+                      file=sys.stderr, flush=True)
+            except BaseException as log_exc:
+                self.diagnostic_error("child-receipt.output", log_exc)
+                record["secondary_errors"] = list(self.secondary_errors)
+            # Never raise a side error over a pending primary exception. Without
+            # one, incomplete evidence still fails and prevents fixture deletion.
+            if original is None and self.errors:
+                raise RuntimeError("fixture child evidence incomplete: " + repr(self.errors))
+        self.remaining(cleanup)
+        return subprocess.CompletedProcess(args, p.returncode, stdout, stderr)
+
+    def finish(self):
+        original = sys.exc_info()[1]
+        record = dict(event="idle-rig-calls-final", start=self.start,
+                      ended=time.monotonic(), errors=self.errors,
+                      interpreter=dict(executable=sys.executable, version=sys.version,
+                                       subprocess_source=subprocess.__file__),
+                      secondary_errors=self.secondary_errors,
+                      fixture_cleanup=[{key: value for key, value in item.items()
+                                        if key not in ("stdout", "stderr")}
+                                       for item in self.cleanup_receipts],
+                      children=len(self.children),
+                      all_joined=all(p.returncode is not None for p in self.children),
+                      servers=[s.record for s in self.servers],
+                      all_servers_joined=all(s.record.get("joined") is True
+                                             for s in self.servers),
+                      group_policy="entry group unchanged; no descendant-join inference")
+        record["within_internal_cleanup_allowance"] = record["ended"] < self.start + 50
+        self.final_receipt = record
+        try:
+            print("idle-rig-calls-final " + json.dumps(record), file=sys.stderr, flush=True)
+        except BaseException as log_exc:
+            self.diagnostic_error("calls-final.output", log_exc)
+        if (self.errors or not record["all_joined"] or not record["all_servers_joined"]
+                or not record["within_internal_cleanup_allowance"]):
+            # A pending nonzero failure stays the primary. SystemExit(0) is a
+            # success path and cannot turn missing diagnostics into acceptance.
+            if original is None or (isinstance(original, SystemExit)
+                                    and original.code in (None, 0)):
+                raise RuntimeError("fixture command/cleanup evidence incomplete")
+        return record
+
+
+class OwnedRigServer:
+    """One isolated fixture server, using tmux's native -D/Popen wait contract.
+
+    -D accepts no command and temporarily disables exit-empty. The original
+    new-session client still creates the session; activate() restores and reads
+    back the default before any test body. No background observer or new group.
+    """
+    def __init__(self, calls, label, env):
+        self.calls, self.label, self.env = calls, label, env
+        self.process = None
+        self.streams = {}
+        self.socket = None
+        self.expected = None
+        self.parent_fd = None
+        self.closed = False
+        self.record = dict(event="idle-rig-server", owner=os.getpid(), label=label,
+                           shared_start=calls.start, joined=False,
+                           group_policy="entry group unchanged; actual direct Popen only")
+        calls.servers.append(self)  # register before files, Popen or polling
+
+    def start(self):
+        try:
+            self._start()
+        except BaseException as exc:
+            self.record["start_error"] = self.calls.error_text(exc)
+            self.calls.errors.append("foreground startup incomplete: " + self.calls.error_text(exc))
+            raise
+
+    def _start(self):
+        end = time.monotonic() + min(20, self.calls.remaining())
+        if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
+            raise RuntimeError("unknown SIGCHLD contract; refuse server creation")
+        base = self.env.get("TMUX_TMPDIR")
+        if not base or not os.path.isabs(base):
+            raise RuntimeError("owned server needs the recorded private TMUX_TMPDIR")
+        if (not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW") or
+                os.stat not in os.supports_dir_fd or os.unlink not in os.supports_dir_fd or
+                os.stat not in os.supports_follow_symlinks):
+            raise RuntimeError("descriptor-relative socket ownership contract unavailable")
+        self.record["private_root"] = self.private_directory(base)
+        # Documented -L layout, NOT a discovered or guessed cleanup target.
+        self.expected = os.path.join(base, "tmux-%d" % os.getuid(), self.label)
+        if len(os.fsencode(self.expected)) > 1024 or os.path.lexists(self.expected):
+            raise RuntimeError("private socket already present/invalid; refuse startup")
+        self.record.update(expected_socket=self.expected, executable=shutil.which("tmux", path=self.env.get("PATH")),
+                           sigchld="SIG_DFL", born=time.monotonic())
+        for name in ("stdout", "stderr"):
+            self.streams[name] = tempfile.TemporaryFile()
+        args = ["tmux", "-D", "-L", self.label, "-f", "/dev/null"]
+        self.calls.remaining()
+        self.process = subprocess.Popen(args, env=self.env, stdin=subprocess.DEVNULL,
+                                        stdout=self.streams["stdout"], stderr=self.streams["stderr"])
+        self.record.update(argv=args, pid=self.process.pid, parent_pgid=os.getpgrp(), process_created=True)
+        print("idle-rig-server-start " + json.dumps(self.record), file=sys.stderr, flush=True)
+        while not os.path.lexists(self.expected):
+            if self.process.poll() is not None:
+                raise RuntimeError("foreground server exited before its socket")
+            left = min(end - time.monotonic(), self.calls.remaining())
+            if left <= 0:
+                raise subprocess.TimeoutExpired(args, 20)
+            time.sleep(min(0.01, left))
+        parent = self.private_directory(os.path.dirname(self.expected))
+        if parent["canonical"] != os.path.join(self.record["private_root"]["canonical"],
+                                               "tmux-%d" % os.getuid()):
+            raise RuntimeError("socket parent is outside the recorded private directory")
+        self.record["socket_parent"] = parent
+        self.parent_fd = os.open(parent["canonical"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        self.record["parent_fd"] = self.parent_fd
+        self.check_directories()
+        if self.process.poll() is not None:
+            raise RuntimeError("foreground socket type/lifecycle unknown")
+        self.record["startup_socket"] = self.socket_identity(self.expected)
+
+    @staticmethod
+    def node_identity(st):
+        return dict(dev=st.st_dev, inode=st.st_ino, mode=st.st_mode,
+                    uid=st.st_uid, gid=st.st_gid)
+
+    @classmethod
+    def private_directory(cls, raw):
+        if not os.path.isabs(raw) or len(os.fsencode(raw)) > 1024:
+            raise RuntimeError("unknown private directory path")
+        canonical = os.path.realpath(raw)
+        st = os.lstat(raw)
+        identity = cls.node_identity(st)
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or
+                st.st_mode & 0o077 or st.st_mode & 0o300 != 0o300 or
+                cls.node_identity(os.lstat(canonical)) != identity):
+            raise RuntimeError("private directory type/owner/mode/alias unknown")
+        return dict(raw=raw, canonical=canonical, **identity)
+
+    def check_directories(self):
+        for key in ("private_root", "socket_parent"):
+            expected = self.record[key]
+            if self.private_directory(expected["raw"]) != expected:
+                raise RuntimeError("private socket directory identity changed; retain")
+        held = self.node_identity(os.fstat(self.parent_fd))
+        if any(held[k] != self.record["socket_parent"][k] for k in held):
+            raise RuntimeError("held socket directory does not match its path; retain")
+
+    def socket_identity(self, raw):
+        canonical = os.path.realpath(raw)
+        if (os.path.basename(raw) != self.label or
+                canonical != os.path.join(self.record["socket_parent"]["canonical"], self.label)):
+            raise RuntimeError("socket raw/canonical binding changed; retain")
+        st = os.stat(self.label, dir_fd=self.parent_fd, follow_symlinks=False)
+        identity = self.node_identity(st)
+        if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.geteuid() or
+                self.node_identity(os.lstat(raw)) != identity or
+                self.node_identity(os.lstat(canonical)) != identity):
+            raise RuntimeError("socket type/owner/aliases changed; retain")
+        return dict(raw=raw, canonical=canonical, ctime_ns=st.st_ctime_ns, **identity)
+
+    def bind(self, socket):
+        observed = self.record["startup_socket"]
+        self.check_directories()
+        current = self.socket_identity(socket["raw"])
+        if (socket["server_pid"] != self.process.pid or
+                any(socket[k] != current[k] for k in current if k in socket) or
+                any(current[k] != observed[k] for k in observed if k != "raw")):
+            raise RuntimeError("tmux server/socket does not match actual Popen; retain evidence")
+        self.record["server_pgid"] = os.getpgid(self.process.pid)
+        if self.record["server_pgid"] != self.record["parent_pgid"]:
+            raise RuntimeError("foreground server left the entry group; retain evidence")
+        # Snapshot the binding: the control caller later adds its finally
+        # receipt to its own dictionary; it must not mutate this identity.
+        self.socket = dict(socket, **{k: v for k, v in current.items() if k not in socket})
+        self.record["socket"] = self.socket
+        return dict(self.socket)
+
+    def remove_owned_socket(self):
+        """Only after real successful wait and client joins, never by PID alone.
+
+        The held directory confines unlink to this fixture's one basename.
+        Checks + unlink are NOT atomic CAS: an uncooperative same-UID writer
+        can replace that name between them. The test's private writer contract
+        excludes such concurrent mutation; observed drift always refuses.
+        """
+        item = dict(outcome="pending", phase="exit-and-client-gate", unlink_attempted=False,
+                    complete=False, started=time.monotonic())
+        self.record["socket_cleanup"] = item
+        p = self.process
+        if (p is None or p.returncode != 0 or self.record.get("joined") is not True or
+                "wait_ended" not in self.record or not self.calls.server_absent(p.pid) or
+                self.socket is None or self.parent_fd is None or
+                any(child.returncode is None for child in self.calls.children) or self.calls.errors):
+            raise RuntimeError("socket unlink lacks successful owned wait/client/exit evidence")
+        item.update(server_joined=True, server_pid_absent=True,
+                    clients_joined=len(self.calls.children), phase="directory-identity")
+        self.check_directories()
+        socket = self.socket
+        raw_present = os.path.lexists(socket["raw"])
+        canonical_present = os.path.lexists(socket["canonical"])
+        item.update(raw_present_before=raw_present, canonical_present_before=canonical_present)
+        if raw_present != canonical_present:
+            raise RuntimeError("socket aliases disagree; refuse unlink")
+        if raw_present:
+            item["phase"] = "socket-identity"
+            current = self.socket_identity(socket["raw"])
+            if any(current[k] != socket[k] for k in current):
+                raise RuntimeError("original socket identity changed; refuse unlink")
+            self.check_directories()
+            # Last descriptor-relative no-follow check. This narrows the race;
+            # it does not make unlinkat conditional on this dev/inode.
+            st = os.stat(self.label, dir_fd=self.parent_fd, follow_symlinks=False)
+            if (self.node_identity(st) != {k: socket[k] for k in self.node_identity(st)} or
+                    st.st_ctime_ns != socket["ctime_ns"]):
+                raise RuntimeError("socket changed before unlink; retain")
+            self.calls.remaining(cleanup=True)
+            item.update(phase="unlink", unlink_attempted=True)
+            os.unlink(self.label, dir_fd=self.parent_fd)
+            item["outcome"] = "removed_owned_socket"
+        else:
+            # Absence must also hold within the retained original parent.
+            try:
+                os.stat(self.label, dir_fd=self.parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                item["outcome"] = "already_absent"
+            else:
+                raise RuntimeError("socket absent by path but present in original parent")
+        item["phase"] = "after-unlink-or-absence"
+        self.check_directories()
+        self.record["raw_socket_present"] = os.path.lexists(socket["raw"])
+        self.record["canonical_socket_present"] = os.path.lexists(socket["canonical"])
+        self.record["server_pid_absent"] = self.calls.server_absent(p.pid)
+        if (self.record["raw_socket_present"] or self.record["canonical_socket_present"] or
+                not self.record["server_pid_absent"]):
+            raise RuntimeError("socket/server evidence changed after cleanup; retain")
+        item.update(phase="complete", complete=True, ended=time.monotonic())
+
+    def activate(self):
+        # Restore -f /dev/null's original exit-empty default after new-session.
+        self.calls.run(["tmux", "-N", "-L", self.label, "set-option", "-s", "exit-empty", "on"], self.env)
+        value = self.calls.run(["tmux", "-N", "-L", self.label, "show-options", "-sv", "exit-empty"], self.env)
+        self.record["exit_empty"] = value.stdout.strip()
+        if self.record["exit_empty"] != "on":
+            raise RuntimeError("original exit-empty semantics not restored")
+
+    def close(self):
+        if self.closed:
+            raise RuntimeError("owned server cleanup invoked twice")
+        self.closed = True
+        p = self.process
+        try:
+            if p is None:
+                # No Popen exists: no PID/socket deletion is authorized.
+                self.record.update(joined=True, process_created=False)
+                return self.record
+            if self.socket is None:
+                raise RuntimeError("server identity not bound; retain socket/fixture")
+            socket = self.socket
+            self.check_directories()
+            if p.poll() is None and os.path.lexists(socket["raw"]):
+                current = self.socket_identity(socket["raw"])
+                if any(current[k] != socket[k] for k in current):
+                    raise RuntimeError("owned socket replaced; refuse socket command")
+                client = self.calls.run(["tmux", "-S", socket["raw"], "kill-server"],
+                                        self.env, cleanup=True, check=True)
+                self.record["kill_client_rc"] = client.returncode
+            self.record["wait_started"] = time.monotonic()
+            p.wait(timeout=min(20, self.calls.remaining(cleanup=True)))
+            self.record.update(wait_ended=time.monotonic(), joined=True, rc=p.returncode)
+            # Process exit does not unlink a Unix-domain socket name. Only the
+            # creation/parent identity and all real joins permit that next step.
+            self.record["server_pid_absent"] = self.calls.server_absent(p.pid)
+            if p.returncode != 0 or not self.record["server_pid_absent"]:
+                raise RuntimeError("owned server exit not established; retain socket")
+            self.remove_owned_socket()
+            self.calls.remaining(cleanup=True)
+        except BaseException as exc:
+            self.record["error"] = self.calls.error_text(exc)
+            if "socket_cleanup" in self.record:
+                self.record["socket_cleanup"]["error"] = self.calls.error_text(exc)
+            self.calls.errors.append("owned server cleanup incomplete: " + self.calls.error_text(exc))
+            try:
+                # Only the actual still-unreaped child. This is failure cleanup,
+                # not acceptance or authority to delete an unknown socket.
+                if p is not None:
+                    if p.poll() is None:
+                        p.terminate()
+                        self.record["term_completed"] = time.monotonic()
+                        try:
+                            p.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            if time.monotonic() < self.record["term_completed"] + 5:
+                                raise RuntimeError("foreground child grace incomplete")
+                            self.record["kill_time"] = time.monotonic()
+                            p.kill()
+                            p.wait(timeout=2)
+                    else:
+                        p.wait()
+            except BaseException as stop_exc:
+                self.calls.diagnostic_error("server.stop-wait", stop_exc)
+            raise  # keep the original failure object/traceback
+        finally:
+            original = sys.exc_info()[1]
+            self.record.update(ended=time.monotonic(), rc=None if p is None else p.returncode,
+                               joined=p is None or p.returncode is not None)
+            for name, stream in self.streams.items():
+                phase = "server." + name + ".tell"
+                try:
+                    size = stream.tell()
+                    self.record[name + "_bytes"] = size
+                    phase = "server." + name + ".seek"
+                    stream.seek(0)
+                    phase = "server." + name + ".read"
+                    self.record[name] = stream.read(65536).decode("utf-8", "replace")
+                    if size > 65536:
+                        raise RuntimeError("foreground server output truncated")
+                except BaseException as read_exc:
+                    self.calls.diagnostic_error(phase, read_exc)
+                finally:
+                    try:
+                        stream.close()
+                        self.record[name + "_closed"] = True
+                    except BaseException as close_exc:
+                        self.record[name + "_closed"] = False
+                        self.calls.diagnostic_error("server." + name + ".close", close_exc)
+            if self.parent_fd is not None:
+                self.record["parent_fd_close_attempted"] = True
+                try:
+                    os.close(self.parent_fd)
+                    self.parent_fd = None
+                    self.record["parent_fd_closed"] = True
+                except BaseException as close_exc:
+                    self.record["parent_fd_closed"] = False
+                    self.calls.diagnostic_error("server.parent-fd.close", close_exc)
+            try:
+                print("idle-rig-server-final " + json.dumps(self.record), file=sys.stderr, flush=True)
+            except BaseException as log_exc:
+                self.calls.diagnostic_error("server-final.output", log_exc)
+            if original is None and self.calls.errors:
+                raise RuntimeError("server evidence incomplete; retain fixture")
+        return self.record
+
+
+# Other parts/all retain their existing call path. The controlled example installs
+# its own RigCalls with the example's earlier start; it never resets per Rig/case.
+RIG_CALLS = RigCalls(RIG_IMPORT_START) if os.environ.get("SELFTEST_PART") == "4/4" else None
 
 
 class NoticeTests(unittest.TestCase):
@@ -75,9 +555,43 @@ class NoticeTests(unittest.TestCase):
 
 class Rig(unittest.TestCase):
     """An isolated tmux server + repo + scratch worktree (no tests of its own)."""
+    last_cleanup = None
+
     def setUp(self):
+        self.phase = "setUp"
+        self.calls = RIG_CALLS
+        self.socket_record = None
+        self.server = None
+        self.server_creation_attempted = False
+        self.cleanup_calls = 0
+        self.root_identity = None
+        self.previous_cleanup = Rig.last_cleanup
+        if self.calls is not None:
+            # Admission BEFORE creating another root. A failed/expired entry
+            # cannot accumulate unidentifiable later fixtures via unittest.
+            self.calls.remaining()
+            if self.calls.errors:
+                raise RuntimeError("prior fixture evidence incomplete; refuse new fixture")
         self.tmp = tempfile.TemporaryDirectory(prefix="idle-reap-")
+        # unittest skips tearDown if setUp fails. Register before identity I/O;
+        # a failed identity capture retains this exact directory, never guesses.
+        self.addCleanup(self.cleanup_rig)
         self.root = Path(self.tmp.name).resolve()
+        root_lstat = os.lstat(self.tmp.name)
+        root_stat = self.root.stat()
+        if not stat.S_ISDIR(root_lstat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+            raise RuntimeError("unknown fixture directory type")
+        self.root_identity = (root_stat.st_dev, root_stat.st_ino)
+        if self.calls is not None:
+            try:
+                self.diagnostic(root_created=dict(raw=self.tmp.name, canonical=str(self.root),
+                                dev=root_stat.st_dev, inode=root_stat.st_ino,
+                                lstat_dev=root_lstat.st_dev, lstat_inode=root_lstat.st_ino,
+                                lstat_mode=root_lstat.st_mode, stat_mode=root_stat.st_mode),
+                                shared_start=self.calls.start)
+            except BaseException as exc:
+                self.calls.diagnostic_error("root-created.output", exc)
+                raise
         self.main = self.root / "main"
         self.wt = self.root / "repo-scratch-7"
         self.label = "idle-reap-test-" + str(os.getpid())
@@ -88,6 +602,23 @@ class Rig(unittest.TestCase):
                         FLEET_HISTORY_LEDGER=str(self.root / "ledger.tsv"),
                         CLAUDE_PROJECTS_DIR=str(self.root / "projects"),
                         FLEET_REAP_MIN_AGE="0")
+        if self.calls is not None:
+            self.calls.remaining()
+            resources = []
+            for name, value in (("WORK", self.tmp.name),
+                                ("TMUX_TMPDIR", self.env.get("TMUX_TMPDIR")),
+                                ("FLEET_SELFTEST_ROOT", self.env.get("FLEET_SELFTEST_ROOT"))):
+                item = dict(name=name, raw=value, status="missing")
+                if value and os.path.isabs(value) and len(os.fsencode(value)) <= 1024:
+                    st = os.stat(value)
+                    item.update(canonical=os.path.realpath(value), dev=st.st_dev,
+                                inode=st.st_ino, status="observed")
+                resources.append(item)
+            self.diagnostic(resources=resources, call_mode=self.calls.mode,
+                            shared_start=self.calls.start)
+            required = resources if self.calls.mode == "normal-part4" else resources[:2]
+            if any(item["status"] != "observed" for item in required):
+                raise RuntimeError("fixture or runner resource identity missing")
         (self.root / "conf").mkdir()
         self.ibin = self.root / "install/bin"
         self.ibin.mkdir(parents=True)
@@ -126,16 +657,152 @@ class Rig(unittest.TestCase):
         self.sid = "11111111-1111-4111-8111-111111111111"
         self.transcript = self.tdir / (self.sid + ".jsonl")
         self.transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "research"}}) + "\n")
+        self.phase = "rig-ready"
 
     def tearDown(self):
-        subprocess.run(["tmux", "-L", self.label, "kill-server"], capture_output=True)
-        self.tmp.cleanup()
+        # One existing case explicitly tears down and rebuilds this same Rig.
+        # Drain now, so the old callback cannot target the next setUp's fixture.
+        # unittest also drains after a failed setUp, when tearDown is skipped.
+        self.doCleanups()
+
+    def diagnostic(self, **detail):
+        print("idle-rig " + json.dumps(dict(
+            case=self.id(), phase=self.phase, wall=time.time(),
+            socket_label=getattr(self, "label", None),
+            socket_dir=getattr(self, "env", {}).get("TMUX_TMPDIR", "/tmp"),
+            session=getattr(self, "label", None), root=str(getattr(self, "root", "")),
+            previous_cleanup=getattr(self, "previous_cleanup", None), **detail),
+            default=str), file=sys.stderr, flush=True)
+
+    def cleanup_rig(self):
+        self.phase = "cleanup"
+        self.cleanup_calls += 1
+        if self.calls is not None:
+            return self.cleanup_owned_rig()
+        result = dict(case=self.id(), wall=time.time(), socket_label=getattr(self, "label", None))
+        try:
+            if hasattr(self, "label"):
+                # The original PID-scoped private label is deliberately unchanged.
+                p = subprocess.run(["tmux", "-L", self.label, "kill-server"], capture_output=True, text=True)
+                result.update(rc=p.returncode, stdout=p.stdout, stderr=p.stderr)
+        except OSError as exc:
+            result["error"] = repr(exc)
+            raise
+        finally:
+            try:
+                self.tmp.cleanup()
+            finally:
+                result["root_removed"] = not Path(self.tmp.name).exists()
+                Rig.last_cleanup = result
+                self.diagnostic(cleanup=result)
+
+    def socket_identity(self):
+        p = self.calls.run(["tmux", "-N", "-L", self.label, "display-message", "-p",
+                            "-t", self.label, "#{pid}|#{socket_path}"], self.env)
+        server, raw = p.stdout.strip().split("|")
+        if not server.isdigit() or not os.path.isabs(raw) or len(os.fsencode(raw)) > 1024:
+            raise RuntimeError("unknown isolated tmux identity")
+        st = os.stat(raw)
+        self.socket_record = dict(server_pid=int(server), raw=raw,
+                                  canonical=os.path.realpath(raw), dev=st.st_dev,
+                                  inode=st.st_ino)
+        self.socket_record = self.server.bind(self.socket_record)
+        self.diagnostic(socket_created=self.socket_record)
+
+    def cleanup_owned_rig(self):
+        result = dict(case=self.id(), wall=time.time(), socket_label=getattr(self, "label", None),
+                      cleanup_calls=self.cleanup_calls, socket=getattr(self, "socket_record", None),
+                      root_raw=self.tmp.name, root_identity=self.root_identity,
+                      root_removed=False)
+        # The same dict is finalized after deletion and emitted by calls.finish.
+        # Failure diagnostics run BEFORE deletion, so their failure keeps WORK.
+        self.calls.cleanup_receipts.append(result)
+        try:
+            try:
+                self.prepare_owned_rig_cleanup(result)
+            finally:
+                original = sys.exc_info()[1]
+                result["diagnostic_phase"] = "before-root-removal"
+                if original is not None:
+                    result["error"] = self.calls.error_text(original)
+                try:
+                    self.diagnostic(cleanup=result)
+                except BaseException as diagnostic_exc:
+                    self.calls.diagnostic_error("cleanup-finally.output", diagnostic_exc)
+                    result["diagnostic_error"] = self.calls.secondary_errors[-1]
+                    if original is None:
+                        raise
+            self.tmp.cleanup()
+            result["root_removed"] = not os.path.lexists(self.tmp.name)
+            if not result["root_removed"]:
+                raise RuntimeError("fixture root remains")
+        except BaseException as exc:
+            result["error"] = self.calls.error_text(exc)
+            self.calls.errors.append("Rig cleanup incomplete: " + self.calls.error_text(exc))
+            # A failure to detach is secondary too; never replace this exception.
+            try:
+                self.tmp._finalizer.detach()
+                result["automatic_removal_detached"] = True
+            except BaseException as detach_exc:
+                self.calls.diagnostic_error("cleanup-finalizer.detach", detach_exc)
+                result["automatic_removal_detached"] = False
+            raise
+        finally:
+            Rig.last_cleanup = result
+
+    def prepare_owned_rig_cleanup(self, result):
+        if self.server is not None:
+            # close() always retains its actual wait/FD receipt, even if it fails.
+            result["server"] = self.server.record
+            server = self.server.close()
+            result.update(rc=server["rc"], server_joined=server["joined"],
+                          socket_paths_absent=(server.get("raw_socket_present") is False and
+                                               server.get("canonical_socket_present") is False),
+                          server_pid_absent=server.get("server_pid_absent"),
+                          server_wait="actual foreground Popen.wait; separate path/PID checks")
+        else:
+            result["socket_cleanup"] = "no server Popen created; no socket command"
+        if any(p.returncode is None for p in self.calls.children) or self.calls.errors:
+            raise RuntimeError("unjoined/unknown owned call; retain fixture")
+        self.calls.remaining(cleanup=True)
+        if self.root_identity is None:
+            raise RuntimeError("fixture root creation identity missing; retain exact directory")
+        ls = os.lstat(self.tmp.name)
+        st = self.root.stat()
+        if (not stat.S_ISDIR(ls.st_mode) or
+                (ls.st_dev, ls.st_ino) != self.root_identity or
+                (st.st_dev, st.st_ino) != self.root_identity or
+                os.path.realpath(self.tmp.name) != str(self.root)):
+            raise RuntimeError("fixture root identity changed; retain")
 
     def call(self, *args):
-        return subprocess.check_output(args, env=self.env, text=True, stderr=subprocess.PIPE, timeout=20)
+        try:
+            if self.calls is not None:
+                return self.calls.run(args, self.env).stdout
+            return subprocess.check_output(args, env=self.env, text=True, stderr=subprocess.PIPE, timeout=20)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            try:
+                self.diagnostic(argv=args, rc=getattr(exc, "returncode", None),
+                                stdout=exc.stdout, stderr=exc.stderr, error=repr(exc))
+            except BaseException as diagnostic_exc:
+                if self.calls is not None:
+                    self.calls.diagnostic_error("original-failure.output", diagnostic_exc)
+            raise
 
     def tm(self, *args):
-        return self.call("tmux", "-L", self.label, *args)
+        creating = "new-session" in args
+        if creating and self.calls is not None:
+            self.server_creation_attempted = True
+            if self.server is None:
+                self.server = OwnedRigServer(self.calls, self.label, self.env)
+                self.server.start()
+        # A failed foreground startup must not silently fall back to a daemon.
+        options = ("-N",) if self.calls is not None else ()
+        answer = self.call("tmux", *options, "-L", self.label, *args)
+        if creating and self.calls is not None:
+            self.socket_identity()
+            self.server.activate()
+        return answer
 
     def set(self, key, value):
         self.tm("set-option", "-w", "-t", self.win, key, value)
@@ -853,4 +1520,8 @@ class DoneNoPr(Rig):
 
 if __name__ == "__main__":
     import selftest_part
-    selftest_part.main()
+    try:
+        selftest_part.main()
+    finally:
+        if RIG_CALLS is not None:
+            RIG_CALLS.finish()
