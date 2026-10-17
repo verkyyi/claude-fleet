@@ -14,8 +14,9 @@ unguarded.
 This closes the gap generically: deny Edit/Write/MultiEdit/NotebookEdit whose
 target is inside the fleet's base checkout (FLEET_MAIN). Worktree siblings
 (`<repo>-issue-N`, `scratch-N`) sit NEXT TO the base, not under it, so a worker
-editing its own worktree passes; only a write into the base checkout itself is
-denied.
+editing its own worktree passes. A nested linked worktree is allowed only when
+Git's resolved root/common directory and the metadata backlink identify the
+current worktree. Its Git identity marker and the rest of the base stay protected.
 
 Register it (matcher "Edit|Write|MultiEdit|NotebookEdit") — see
 hooks/settings-hooks.json.
@@ -143,6 +144,36 @@ def _under(path, base):
     return p == base or p.startswith(base + os.sep)
 
 
+def _nested_worktree(cwd, base):
+    if not _under(cwd, base) or os.path.realpath(cwd) == base:
+        return None
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    try:
+        result = subprocess.run(
+            ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--show-toplevel",
+             "--absolute-git-dir", "--git-common-dir"],
+            env=environment, capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode != 0:
+            return None
+        root, metadata, common = [os.path.realpath(value) for value in result.stdout.splitlines()]
+        base_git = os.path.realpath(os.path.join(base, ".git"))
+        marker = os.path.join(root, ".git")
+        if (root == base or not _under(root, base) or not _under(cwd, root)
+                or not os.path.isdir(base_git) or common != base_git
+                or os.path.dirname(metadata) != os.path.join(base_git, "worktrees")
+                or os.path.islink(marker) or not os.path.isfile(marker)):
+            return None
+        with open(os.path.join(metadata, "gitdir")) as stream:
+            backlink = stream.read().strip()
+        if os.path.realpath(os.path.join(metadata, backlink)) != marker:
+            return None
+        return root
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -171,9 +202,16 @@ def main():
     if not bases:
         allow()  # not in a fleet → nothing to protect
 
+    cwd = data.get("cwd") or os.getcwd()
+    nested = {}
     for path in paths:
         for base in bases:
             if _under(path, base):
+                if base not in nested:
+                    nested[base] = _nested_worktree(cwd, base)
+                root = nested[base]
+                if root and _under(path, root) and os.path.realpath(path) != os.path.join(root, ".git"):
+                    continue
                 block(os.path.realpath(path), base)
     allow()
 

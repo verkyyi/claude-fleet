@@ -90,6 +90,34 @@ bash bin/fleet-native-worktree-selftest.sh /path/to/installed/fleet
 
 未宣称全量回归或 CI 通过；本批尚未提交、发布或切换用户会话的创建方式。
 
+## Claude 原生嵌套 Worktree 的守卫适配
+
+Claude 的原生目录位于主检出之下；不能用目录名白名单来解除只读保护，也不能为了避开
+守卫而继续让 Fleet 再创建一份 Worktree。候选 `base-readonly-guard.py` 只为当前 cwd 的
+真实 linked worktree 放行文件编辑：Git 返回的根目录与 common directory 必须匹配被保护
+仓库，专有 metadata 必须位于该仓库的 worktrees 注册目录，其 `gitdir` 反向指针必须准确
+指向当前根的 `.git` 文件。主检出、其他嵌套工作树、指回主检出的链接、复制/伪造 marker、
+Git 重定向和当前 `.git` 身份文件仍拒绝。验证失败、Git 缺失或超时不授予这个例外。
+
+外部工作树与普通允许路径不增加 Git 查询；只有目标命中受保护主检出、且 cwd 在其内部时
+才验证一次，单次 hook 的多个目标复用结果。不增加缓存、目录创建者、后台服务或清理器。
+此检查防止误写，不把可写的 Git 元数据宣称为租户安全边界；准入、仓库权限和进程绑定另行校验。
+
+显式探针 `bin/fleet-native-claude-worktree-selftest.py` 使用真实 Claude CLI、临时 HOME 和
+临时 Git 仓库。`--bare` 避免读取 OAuth/keychain；只向 loopback 端点发送假 key，端点恒定
+返回 400。工具/MCP 为空，不生成模型回答，不操作用户文件。本机 `2.1.296` 的 18 项检查通过：
+原生只创建一个真实嵌套 Worktree，原生 resume 从主检出恢复同一 session/cwd，不另建目录，
+未提交修改保留；用实际 cwd 直接调用现有 Fleet 守卫，验证自身文件可写、主检出和身份 marker 拒绝。
+
+```sh
+python3 bin/fleet-native-claude-worktree-selftest.py --claude /path/to/claude
+bash bin/fleet-native-worktree-selftest.sh
+```
+
+这不是 Fleet 创建入口切换，不是实际 hook 加载或完整 MCP 验收；`--bare` 只属于隔离测试，
+不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
+迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
+
 ## 原生 CLI 生命周期实测（2026-10-16 后续）
 
 新增显式调用的 `bin/fleet-native-worktree-cli-selftest.py`。真实 Codex 在临时 HOME、临时 Git 仓库中运行，
