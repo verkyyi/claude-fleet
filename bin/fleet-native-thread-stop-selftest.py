@@ -72,6 +72,22 @@ def main():
             return False
         return True
 
+    def process_states(terminals):
+        if sys.platform != 'linux':
+            return {}
+        result = {}
+        for terminal in terminals:
+            process = Path('/proc') / str(terminal['fixturePid'])
+            try:
+                result[process.name] = {
+                    'status': [line for line in (process / 'status').read_text().splitlines()
+                               if line.split(':', 1)[0] in ('Name', 'State', 'PPid', 'Uid', 'NSpid')],
+                    'stat': (process / 'stat').read_text(),
+                    'argv': (process / 'cmdline').read_bytes().decode(errors='replace').split('\0')}
+            except FileNotFoundError:
+                result[process.name] = {'absent': True}
+        return result
+
     class Endpoint(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
@@ -202,6 +218,8 @@ def main():
                           'native terminal termination rejects a process routed through the wrong thread')
                     result = observer.call('thread/backgroundTerminals/terminate', {
                         'threadId': identifiers[0], 'processId': terminals[0]['processId']})
+                    observations['termination'] = {'response': result, 'remaining': observer.call(
+                        'thread/backgroundTerminals/list', {'threadId': identifiers[0]})}
                     check(result['terminated'] is True, 'native exact-thread terminal termination succeeds')
                     wait_for(lambda: not alive(terminals[0]['fixturePid']), 'terminated first command exits')
                     check(alive(terminals[1]['fixturePid']) and backend.poll() is None,
@@ -232,6 +250,7 @@ def main():
                           'all model traffic stays on the credential-free loopback fixture')
                 except BaseException:
                     print(json.dumps({'checks': checks, 'observations': observations, 'requests': requests,
+                                      'process_states': process_states(terminals),
                                       'backend_log': (root / 'backend.log').read_text()[-6000:]}), file=sys.stderr)
                     raise
                 finally:
@@ -240,8 +259,12 @@ def main():
                     if observer is not None:
                         observer.close()
                     stop(backend)
-                    wait_for(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
-                             'all observed fixture commands exit during cleanup')
+                    try:
+                        wait_for(lambda: not any(alive(terminal['fixturePid']) for terminal in terminals),
+                                 'all observed fixture commands exit during cleanup')
+                    except AssertionError:
+                        print(json.dumps({'after_backend_cleanup': process_states(terminals)}), file=sys.stderr)
+                        raise
             print(json.dumps({'version': version, 'checks': checks, 'observations': observations,
                               'scope': 'native RPC and inert commands only; not subagent, TUI, admission or full-MCP acceptance'}, indent=2))
     finally:
