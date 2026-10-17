@@ -33,6 +33,14 @@ STRACE_OPTIONS = ['-f', '-q', '-ttt', '-T', '-v', '-s', '0', '-yy', '--kill-on-e
                   '-e', 'trace=' + TRACE_CALLS, '-e', 'inject=io_uring_setup:error=ENOSYS']
 
 
+def diagnostic(exc, where=''):
+    """A refusal's own code (or the exception class) and a syscall NAME —
+    identifiers only, safe to print beside the fixed code (#4625)."""
+    inner = str(exc) if isinstance(exc, Refused) and re.fullmatch(r'[A-Z0-9_]{1,64}', str(exc)) \
+        else type(exc).__name__.upper()[:64]
+    return inner + ('@' + where if re.fullmatch(r'[a-z][a-z0-9_]{0,31}', where or '') else '')
+
+
 def descriptor_metadata(call):
     """Separate kernel-decoded -yy FD annotations without changing strings."""
     result, descriptors, offset = [], {}, 0
@@ -81,9 +89,15 @@ class Trace:
     def feed(self, line):
         try:
             self._feed(line)
-        except (ValueError, TypeError, IndexError, OverflowError):
+        except (ValueError, TypeError, IndexError, OverflowError) as exc:
             self.failed = 'TRACE_FORMAT_OR_COVERAGE'
-            raise Refused(self.failed) from None
+            refused = Refused(self.failed)
+            # Which check and which syscall, as identifiers only: a live run
+            # keeps no raw trace, so without this a refusal is undiagnosable
+            # (#4625). Never the line, an argument or a path.
+            call = re.match(r'\s*\d+\s+\d+\.\d+\s+(?:<\.\.\. )?([a-z][a-z0-9_]{0,31})\b', line)
+            refused.detail = diagnostic(exc, call[1] if call else '')
+            raise refused from None
 
     def _feed(self, line):
         require(not self.failed, 'TRACE_ALREADY_FAILED')
