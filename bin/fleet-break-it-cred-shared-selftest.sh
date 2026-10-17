@@ -13,6 +13,9 @@
 #                       login names no account; only root pins; bin/fleet-session-cred.sh rebind
 #   cred-sep-acct-full  bin/fleet-cred-proxy.py pick_account / repick / limit_until (issue
 #                       #2412): a quota 429 moves the same request to the account with room
+#   cred-sep-codex-full bin/fleet-cred-proxy.py held / standing / limit_until + the default
+#                       home unpinned (issue #4606), bin/fleet-session-cred.sh mint / standing:
+#                       a Codex session skips the account whose usage limit is spent
 #   cred-own-to-shared  bin/fleet-credsep.py machine join / leave (issue #2432): a login on its
 #                       own proxy joins the shared one with no gap, and goes back
 #   cred-pool-dup       bin/fleet-cred-proxy.py pool_held / pool_resolve / store, bin/fleet-credsep.py
@@ -97,7 +100,7 @@ shared_up() {
   export FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
     FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$me" \
     FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$SB/pw" \
-    FLEET_CRED_SHARED_PORT="$port" FLEET_CRED_ANTHROPIC_URL="$CU/direct-anthropic"
+    FLEET_CRED_SHARED_PORT="$port" FLEET_CRED_ANTHROPIC_URL="$CU/direct-anthropic" FLEET_CRED_CODEX_URL="$CU/direct-codex"
   bash "$BIN/fleet-credsep.sh" machine install --logins alpha >"$SB/install.out" 2>&1 \
     || { WHY="machine install failed: $(tail -2 "$SB/install.out" | tr '\n' ' ')"; return 1; }
   python3 -I "$SB/lib/fleet-credsep-launch.py" shared 2>>"$SB/launch.err" &
@@ -109,7 +112,8 @@ shared_up() {
 shared_down() {
   kill "$(cat "$SB/run/.shared/pid" 2>/dev/null)" 2>/dev/null
   unset FLEET_CREDSEP_ROOT_BASE FLEET_CREDSEP_RUN_BASE FLEET_CREDSEP_LOG_BASE FLEET_CREDSEP_LIB FLEET_CREDSEP_DAEMON_DIR \
-    FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT
+    FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT \
+    FLEET_CRED_CODEX_URL
 }
 # acct_of <token> → the account a session credential names ("" = none)
 acct_of() { python3 -c 'import base64, json, sys
@@ -172,6 +176,66 @@ drill_cred_sep_acct_full() {
   grep -q '"ev": "acct_switch"' "$SB/log/alpha.log" || { WHY="no acct_switch in the log"; shared_down; return 1; }
   shared_down
   WHAT="会话所在的 $first 周限满（429）：代理把它标到重置、同一请求改走 $other 直接 200，会话凭据不变、不退出不续；后续请求留在 $other"
+}
+
+# cred-sep-codex-full (issue #4606): two Codex subscriptions on a separated login,
+# `default` with its weekly usage limit spent, `JoyGao` with room. Before, every
+# Codex session was minted for the account its HOME is — the default home, so
+# `default` — and opened onto «You've hit your usage limit … Oct 23rd» while
+# JoyGao sat idle; nothing moved it. Now the default home's session is the
+# proxy's to place, like a Claude one: the usage-limit 429 marks `default` out
+# until its reset and the SAME request runs on JoyGao; a session minted after
+# (or one minted for `default` before #4606) never touches the spent account;
+# every account out ⇒ `fleet-session-cred.sh standing` names when each is back.
+drill_cred_sep_codex_full() {
+  CAP=10
+  local s0 s1 s2 code t0 n out rc full_hits
+  shared_up codexfull || return 1
+  for L in default JoyGao; do
+    mkdir -p "$SB/db/alpha/codex/$L"
+    printf '{"tokens":{"access_token":"tok-%s","refresh_token":"r","account_id":"acc-%s"}}' "$L" "$L" > "$SB/db/alpha/codex/$L/auth.json"
+  done
+  printf '{"tok-default":{"u7":100,"full":true,"back":518400},"tok-JoyGao":{"u7":80}}' > "$CD/accts.json"
+  creq() { curl -s -m 30 -o "$2" -w '%{http_code}' -X POST -H "Authorization: Bearer $1" \
+    -H 'content-type: application/json' -d '{"model":"gpt-5","input":[]}' "http://127.0.0.1:$CP/codex/responses" 2>/dev/null; }
+  fail() { WHY="$1"; shared_down; return 1; }
+  # s0 lands on JoyGao (unread accounts tie, the name breaks it) and reads it at 80 %
+  # (under the 85 % ceiling), so the next pick goes to the UNREAD `default` — the
+  # repro's account, at its limit, which a proxy just started knows nothing about
+  s0=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider codex --sid s0 2>&1)
+  case "$s0" in fcp1.*) ;; *) fail "codex mint with no account was refused: $s0"; return 1 ;; esac
+  [ -z "$(acct_of "$s0")" ] || { fail "the default home's credential names $(acct_of "$s0")"; return 1; }
+  [ "$(creq "$s0" "$SB/r")" = 200 ] && grep -q tok-JoyGao "$SB/r" || { fail "s0: $(cat "$SB/r")"; return 1; }
+  s1=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider codex --sid s1 2>&1)
+  t0=$(now)
+  code=$(creq "$s1" "$SB/r")
+  SECS=$(since "$t0")
+  [ "$code" = 200 ] && grep -q tok-JoyGao "$SB/r" \
+    || { fail "the spent account's usage limit reached the session ($code): $(cat "$SB/r")"; return 1; }
+  grep -q '"ev": "acct_switch"' "$SB/log/alpha.log" || { fail "no acct_switch in the log"; return 1; }
+  # a credential the old launcher minted for the default home: the proxy's to place too
+  s2=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --account default --sid s2 2>&1)
+  full_hits=$(grep -c '^tok-default$' "$CD/codex-hits")
+  [ "$(creq "$s2" "$SB/r")" = 200 ] && grep -q tok-JoyGao "$SB/r" || { fail "s2 (minted for default): $(cat "$SB/r")"; return 1; }
+  [ "$(grep -c '^tok-default$' "$CD/codex-hits")" = "$full_hits" ] || { fail "a new session asked the spent account again"; return 1; }
+  # the launcher's road: the default home's mint names no account, the record says proxy
+  mkdir -p "$SB/homes/alpha/.codex"
+  out=$(HOME="$SB/homes/alpha" FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" mint \
+        --provider codex --sid s3 --codex-home "$SB/homes/alpha/.codex" 2>&1) || { fail "fleet-session-cred.sh mint: $out"; return 1; }
+  [ "$(sed -n 's/^account=//p' "$CA/cred-proxy/sessions/s3")" = proxy ] && [ -z "$(acct_of "${out##*	}")" ] \
+    || { fail "the default home was bound to an account: $(cat "$CA/cred-proxy/sessions/s3")"; return 1; }
+  out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" standing --provider codex); rc=$?
+  [ "$rc" = 0 ] && [ -z "$out" ] || { fail "standing with JoyGao free said rc $rc: $out"; return 1; }
+  # both spent: the 429 reaches the session after ONE resend, and standing says when each is back
+  printf '{"tok-default":{"u7":100,"full":true,"back":518400},"tok-JoyGao":{"u7":100,"full":true,"back":7200}}' > "$CD/accts.json"
+  n=$(wc -l < "$CD/codex-hits")
+  code=$(creq "$s0" "$SB/r")
+  [ "$code" = 429 ] && [ $(( $(wc -l < "$CD/codex-hits") - n )) -le 2 ] || { fail "all spent: $code after $(( $(wc -l < "$CD/codex-hits") - n )) asks"; return 1; }
+  out=$(FLEET_CONF_DIR="$CA" FLEET_CRED_PROXY=1 bash "$BIN/fleet-session-cred.sh" standing --provider codex); rc=$?
+  [ "$rc" = 1 ] && case "$out" in *"default back "[0-9]*"JoyGao back "[0-9]*|*"JoyGao back "[0-9]*"default back "[0-9]*) true ;; *) false ;; esac \
+    || { fail "all spent: standing rc $rc: $out"; return 1; }
+  shared_down
+  WHAT="隔离登录两个 Codex 号、default 周限用完：default home 的会话由代理挑号，撞 usage limit 的 429 当场换 JoyGao 重发 200；之后新开的、旧式绑 default 的会话都不再碰 default；全用完时 standing 说「${out}」"
 }
 
 # cred-own-to-shared (issue #2432): a login separated on its OWN proxy

@@ -75,6 +75,21 @@ for line in sys.stdin:
         with patch.dict(os.environ,FLEET_CODEX_QUOTA_GATE='1'):
             with self.assertRaises(ValueError):a.selection()
 
+    def test_exhausted_account_skipped_and_all_out_says_when_each_returns(self):
+        # issue #4606: one account weekly-full, one with room -> the one with room;
+        # both full -> the refusal names when each comes back
+        back = time.time() + 6 * 86400
+        self.quota(0, 100, reset=back); self.quota(1, 30)
+        self.assertEqual(a.selection(), self.homes[1])
+        self.quota(1, 100, reset=back + 3600)
+        with patch.dict(os.environ, FLEET_CODEX_QUOTA_GATE='1'):
+            with self.assertRaises(ValueError) as raised: a.selection()
+        msg = str(raised.exception)
+        for label, at in (('one', back), ('two', back + 3600)):
+            self.assertIn('%s back %s' % (label, time.strftime('%m/%d %H:%M', time.localtime(at))), msg)
+        a.cache_path(self.homes[1]).unlink()       # unread is never out
+        self.assertEqual(a.selection(), self.homes[1])
+
     def test_window_lengths_are_native_and_resets_are_unknown(self):
         self.quota(duration=10080)
         s=a.status(self.homes[0]);self.assertEqual(s['windows'][0]['windowDurationMins'],10080)

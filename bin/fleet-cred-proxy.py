@@ -84,6 +84,12 @@ request runs on the account with the most room, and a quota 429 moves the SAME
 request there (limited until its reset) — no exit, no resume. A credential
 minted before #2412 that names an account runs on it, as before. ctl `picks`
 says which account each session is on (read-only). Not separated: no pick.
+A Codex session of a separated login is picked the same way (issue #4606) —
+unless it names an account home of its own (FLEET_CODEX_HOME=<homes>/<L>, a
+pin): the default home holds no credential there, so a credential naming
+`default` (or none) is the proxy's to place. ctl `standing` says, per account
+the login holds, whether a pick may land there and when one that is out comes
+back — the launch's «every account is out» line.
 
 ROUTES (EPIC #1967 共同约定 1) — decided ONLY by the hub's record of this
 machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
@@ -1080,6 +1086,8 @@ class Tenant:
     # the next request runs on the one with the most room, the session none the
     # wiser. Unread accounts rank in the middle (PICK_UNKNOWN).
     def held(self, provider):
+        if provider == "codex":
+            return tenant_labels(self.cfg, "codex")   # the pool's and the store's own homes
         out = {k.split(":", 1)[1] for k in pool_index(self.cfg) if k.startswith(provider + ":")}
         if provider == "claude":
             acc = self.cfg.accounts
@@ -1145,6 +1153,25 @@ class Tenant:
                      used="-" if u is None else round(u), full=not good)
         return nxt
 
+    def standing(self, provider):
+        """-> one row per account this login holds (issue #4606): {acct, usable,
+        used (%, None unread), until (epoch: when one that is out comes back; 0 =
+        not out, or not said), paused}. Unread is never out."""
+        now, rows = time.time(), []
+        for a in self.held(provider):
+            u = self.used(provider, a, now)
+            until = Proxy.limited.get((provider, a), 0)
+            until = until if until > now else 0
+            rd = Proxy.reads.get((provider, a)) or {}
+            for pk, rk in (("rl5h", "rl_reset5"), ("rl7d", "rl_reset7")):
+                v, r = _num(rd.get(pk)), _num(rd.get(rk))
+                if v is not None and r and r > now and v >= self.cfg.pick_ceiling:
+                    until = max(until, r)
+            rows.append({"acct": a, "usable": self.usable(provider, a, now),
+                         "used": None if u is None else round(u, 1), "until": int(until),
+                         "paused": (provider, a) in self.paused})
+        return rows
+
     def repick(self, provider, sid, acct, until):
         """A quota 429 on <acct>: limited until <until>; -> the account to retry
         on, or None (nowhere better: the 429 goes to the session)."""
@@ -1171,8 +1198,20 @@ def limit_until(provider, headers, body, now=None):
                                           "anthropic-ratelimit-unified-5h-reset",
                                           "anthropic-ratelimit-unified-7d-reset")]
     else:
-        quota = "usage_limit" in text
+        # Codex's usage limit (issue #4606): `usage_limit_reached`, its reset in
+        # the body (resets_at / resets_in_seconds) — or a window at 100 %
+        full = [w for w in ("primary", "secondary") if (_num(h.get("x-codex-%s-used-percent" % w)) or 0) >= 100]
+        quota = "usage_limit" in text or bool(full)
         resets = [_num(h.get("x-codex-%s-reset-at" % w)) for w in ("primary", "secondary")]
+        resets += [now + s for s in (_num(h.get("x-codex-%s-reset-after-seconds" % w)) for w in full) if s]
+        try:
+            err = json.loads(body or b"{}").get("error") or {}
+        except (ValueError, AttributeError):
+            err = {}
+        if isinstance(err, dict):
+            resets.append(_num(err.get("resets_at")))
+            if _num(err.get("resets_in_seconds")):
+                resets.append(now + _num(err["resets_in_seconds"]))
     if not quota:
         return now + 60
     future = [r for r in resets if r and r > now]
@@ -1326,7 +1365,14 @@ class Proxy(BaseHTTPRequestHandler):
                 self.log(ev="renew", kind="local", sid=sid)
         # root's pin (bind.json) first, then the account a credential minted
         # before #2412 names; a credential that names none: the proxy picks
-        acct = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid) or claims.get("acct") or ""
+        pin = read_json(os.path.join(self.cfg.state, "bind.json"), {}).get(sid)
+        acct = pin or claims.get("acct") or ""
+        if not pin and provider == "codex" and self.cfg.store and acct == "default":
+            # separated, the default Codex home holds no credential (issue #4606):
+            # a session minted for it — before #4606, or by an older launcher — is
+            # the proxy's to place, so a weekly-full `default` is skipped and a
+            # usage-limit 429 moves it; a named home (<homes>/<L>) stays its pin
+            acct = ""
         self.auto = not acct and bool(self.cfg.store)
         if self.auto:
             acct = self.t.pick_account(provider, sid)
@@ -2143,6 +2189,8 @@ def ctl_handle(req, t):
             if acct:
                 t.log(ev="mint_account_ignored", sid=req.get("sid") or "-", acct=acct)
             acct = ""
+        elif cfg.store and req.get("provider") == "codex" and not acct:
+            pass    # the default home's session (issue #4606): the proxy picks, as for Claude
         elif not acct or "/" in acct or acct.startswith("."):
             return {"ok": False, "err": "mint: --account LABEL"}
         sid = req.get("sid") or "s-" + secrets.token_hex(4)
@@ -2385,6 +2433,15 @@ def ctl_handle(req, t):
         return {"ok": True, "quota": q}
     if op == "account-quota":
         return {"ok": True, "accounts": account_quota(t)}
+    if op == "standing":
+        # issue #4606, read-only: may a pick land on each account, and when does
+        # one that is out come back — percentages and times, never a token
+        if not cfg.store:
+            return {"ok": False, "err": "standing: not separated (the login picks its own account)"}
+        prov = req.get("provider") or "codex"
+        if prov not in POOL_FILE:
+            return {"ok": False, "err": "standing: --provider claude|codex"}
+        return {"ok": True, "provider": prov, "accounts": t.standing(prov)}
     if op == "picks":
         # which account the proxy runs each of this login's sessions on (issue #2412): read-only
         with Proxy.lock:
@@ -2992,6 +3049,8 @@ def main():
     sub.add_parser("quota")
     sub.add_parser("account-quota")
     sub.add_parser("picks")
+    g = sub.add_parser("standing")
+    g.add_argument("--provider", default="codex", choices=("claude", "codex"))
     u = sub.add_parser("status")
     u.add_argument("--json", action="store_true")
     sub.add_parser("machine")
@@ -3072,6 +3131,8 @@ def main():
     elif a.cmd == "picks":
         res = ctl_call(a.state, {"op": "picks"})
         print(json.dumps({"picks": res["picks"], "pinned": res["pinned"]}, sort_keys=True))
+    elif a.cmd == "standing":
+        print(json.dumps(ctl_call(a.state, {"op": "standing", "provider": a.provider})["accounts"], sort_keys=True))
     elif a.cmd == "account-quota":
         res = ctl_call(a.state, {"op": "account-quota"})
         if "accounts" not in res:      # an older proxy: no such op

@@ -261,7 +261,22 @@ proof that a bucket meters all uses of that normal model.
 account is below that floor; without the gate, a fully depleted pool still lets
 an operator launch. This gate is independent of Claude's ccquota gate. Warm
 claims use the same selected home. Quotas are included-usage headroom; Fleet
-does not redeem reset credits or change billing settings.
+does not redeem reset credits or change billing settings. Either way a pool
+that is all below the floor is said at launch, naming when each account comes
+back (issue #4606).
+
+On a credential-separated login (`credsep.json`, `FLEET_CRED_PROXY=1`) the
+default home (`~/.codex`) holds no credential, so a session started there names
+no account: the credential proxy picks one per session, as it does for Claude
+(issue #4606, issue #2412) — skipping an account at its limit, keeping a session
+on its account while it has room, and on a `usage_limit_reached` 429 marking that
+account out until its reset and sending the same request on one with room.
+`fleet-cred-proxy.sh standing --provider codex` says which accounts a pick may
+land on and when an exhausted one comes back; when none may, the launch prints
+that line, and `FLEET_CODEX_QUOTA_GATE=1` refuses it. A named home
+(`FLEET_CODEX_HOME=~/.codex-accounts/<L>`) stays pinned to `<L>`. The central
+road skips the same accounts on the hub (its pick by headroom and the cluster
+proxy's 429 rebind).
 
 To recover an idle worker into a healthy account:
 
