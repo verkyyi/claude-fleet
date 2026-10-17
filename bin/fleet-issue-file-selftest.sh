@@ -703,7 +703,7 @@ FAKE_FLEET_ROLE=worker TMUX_PANE=%9 run_brk w4 --title "master 又红" --breakag
 nw=$(cat "$WORK/out-w4"); nw=${nw##*/}
 q="$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw"
 [ "$(cat "$WORK/rc-w4")" = 0 ] && [ ! -s "$SPAWN_LOG" ] && [ -f "$q" ] \
-  && [ "$(cut -f1,2 "$q")" = "acme/widgets	$nw" ] && grep -q 'the steward spawns' "$WORK/err-w4" \
+  && [ "$(cut -f1,2 "$q")" = "acme/widgets	$nw" ] && grep -q 'queued for the steward' "$WORK/err-w4" \
   || fail "W4 a worker's breakage: filed, not spawned, queued for the steward" "$(cat "$WORK/err-w4"; ls -R "$WORK/conf/fleets" 2>&1)"
 : > "$SPAWN_LOG"
 FAKE_FLEET_ROLE='orchestrator|||orchestrator' TMUX_PANE=%9 run_brk w5 --title "另一处红" --breakage-key k-orch --spawn
