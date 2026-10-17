@@ -376,6 +376,7 @@ class Worktrees(Receipts):
     def test_bad_directory_refuses_before_reservation_or_start(self):
         import fleet_repo_authority as authority
         with mock.patch.dict(os.environ, {"TMUX_PANE": "%1"}), \
+                mock.patch.object(launch, "option", return_value=""), \
                 mock.patch.object(authority.subprocess, "run",
                     return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
                 mock.patch.object(launch, "prepare_worktree", side_effect=ValueError("changed")), \

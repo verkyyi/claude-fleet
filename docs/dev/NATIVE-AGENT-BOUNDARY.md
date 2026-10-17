@@ -190,6 +190,24 @@ bash bin/fleet-native-create-selftest.sh
 python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude
 ```
 
+### 原生创建入口候选：普通仓库准入路径
+
+显式 `--native-worktree --node local --agent claude` 也可用于没有 accepted task 的普通仓库会话，
+但必须启用既有仓库准入。入口仍执行 gate / finish，既有一次性 authority supervisor 执行
+reserve / begin；缺少准入、冻结或不可用时拒绝，不退回直接执行、不伪造任务。
+本批没有改变面板的默认创建方式，也没有新增后台目录服务。
+
+- Claude 原生创建目录，Fleet 复用同一套创建意图和真实 Git 绑定验证；authority observe 成功后才写入实际目录。
+- PID、进程出生标识、可执行文件、原生会话 ID 与目录意图在同一 reservation 内不可替换。
+  退出必须以同一个 reservation 和已证明停止的原生身份报告，不把窗口消失作为停止证明。
+- 保留未发送草稿，暂不接受此路径上的初始 prompt / seed；不为省时跳过准入、提前提交内容或使用旧目录池。
+- 同一窗口的精确原生 resume 复用已有 receipt；活进程要求重连，错仓库/窗口/会话及丢失意图均拒绝。
+- 当前 snapshot 的 `LAUNCH` 行只覆盖 accepted task；普通路径的 `@authority_receipt` 持久恢复尚未接入。
+  因此本候选不能用于默认推广或声称已完成 POD 重建恢复，必须先补该恢复协议与真实面板验收。
+
+源码回归使用真实临时 Git 仓库及替代进程/准入，覆盖直接和后台启动、草稿保留、拒绝、observe/stop
+身份连续性和精确 resume；不把这些模拟证据等同于普通路径的真实 Claude、完整 MCP、生产 Hub 或延迟验收。
+
 ### 真实 Fleet 启动器与原生配置验证
 
 `fleet-native-create-claude-selftest.py --fleet-launcher` 在临时 HOME 中复制候选安装，运行实际
