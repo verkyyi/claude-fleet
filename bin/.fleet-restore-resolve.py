@@ -131,10 +131,18 @@ def newest_sid(path, hook_sid=""):
 
 
 saved_launches = {}
+saved_authorities = {}
 if '--launch-map' in sys.argv:
     launch_map = Path(sys.argv[sys.argv.index('--launch-map') + 1])
     for record in launch_map.read_text().splitlines():
         fields = record.split('\t')
+        if fields[0] == 'AUTHORITY' and len(fields) >= 2:
+            try:
+                saved_authorities[fields[1]] = (None if fields[1] in saved_authorities or len(fields) != 3
+                                                else json.loads(fields[2]))
+            except ValueError:
+                saved_authorities[fields[1]] = None
+            continue
         if fields[0] != 'LAUNCH' or len(fields) != 4:
             continue
         try:
@@ -207,6 +215,20 @@ for line in sys.stdin:
         continue
     native_session = ''
     agent = parts[8] if len(parts) > 8 else ""
+    if fid in saved_authorities:
+        receipt = saved_authorities[fid]
+        if not isinstance(receipt, dict) or 'native_worktree' not in receipt or fid in saved_launches:
+            continue
+        if 'native_worktree' in receipt:
+            from fleet_repo_authority import restore_native_worktree
+            try:
+                native_session = receipt['native_identity']['native_session']
+                if (norepo_sid is not None or manifest or sleep_record
+                        or (hook_sid and hook_sid != native_session)):
+                    continue
+                restore_native_worktree(receipt, path, native_session, agent or 'claude', fid, lead)
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                continue
     if fid in saved_launches:
         saved = saved_launches[fid]
         if saved is None:

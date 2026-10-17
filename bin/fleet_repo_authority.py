@@ -199,6 +199,33 @@ def observe_native(payload):
     launch.stamp(pane, "@authority_receipt", receipt)
 
 
+def restore_native_worktree(receipt, directory, session, provider, fleet_id, repo):
+    if not isinstance(receipt, dict):
+        raise ValueError("invalid saved repository authority receipt")
+    if "native_worktree" not in receipt:
+        raise ValueError("saved repository receipt has no native creation intent")
+    proof = receipt.get("native_identity", {})
+    if not isinstance(proof, dict) or not isinstance(receipt.get("worker_id"), str):
+        raise ValueError("invalid saved native repository identity")
+    worker = receipt.get("worker_id", "").split("/")
+    if (provider != "claude" or repo_identity(receipt.get("repo", "")) != repo_identity(repo)
+            or len(worker) != 2 or not all(launch.valid_uuid(part) for part in worker)
+            or worker[1] != fleet_id or proof.get("worker_id") != receipt["worker_id"]
+            or not launch.valid_uuid(receipt.get("reservation"))
+            or not launch.valid_uuid(session) or proof.get("native_session") != session
+            or type(proof.get("pid")) is not int or proof["pid"] <= 0
+            or not isinstance(proof.get("birth"), str) or not proof["birth"]
+            or not isinstance(proof.get("executable"), str) or not os.path.isabs(proof["executable"])):
+        raise ValueError("restore row differs from its native repository authority receipt")
+    intent = launch.validate_native_worktree(receipt["native_worktree"])
+    binding = launch.validate_worktree(receipt.get("worktree"))
+    launch.check_native_repository(intent)
+    if (directory != binding["root"] or directory != str(launch.native_worktree_path(intent))
+            or binding["common_dir"] != intent["common_dir"] or launch.worktree_identity(directory) != binding):
+        raise ValueError("restored local native worktree lost its saved Git binding")
+    return intent
+
+
 def supervise(argv):
     # All existing restart/transfer roads already use the session wrapper. This
     # is a one-shot admission and its native wait, not another runtime observer.
@@ -405,6 +432,11 @@ if __name__ == "__main__":
     try:
         if sys.argv[1:2] == ["--supervise"]:
             sys.exit(supervise(sys.argv[3:]))
+        if sys.argv[1:2] == ["--restore-native-worktree"]:
+            restored = restore_native_worktree(json.load(sys.stdin), *sys.argv[2:])
+            if restored:
+                print(json.dumps(restored))
+            sys.exit(0)
         if sys.argv[1:2] == ["--ticket-ref"]:
             ticket_ref(*sys.argv[2:])
             sys.exit(0)

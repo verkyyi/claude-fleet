@@ -202,8 +202,9 @@ reserve / begin；缺少准入、冻结或不可用时拒绝，不退回直接�
   退出必须以同一个 reservation 和已证明停止的原生身份报告，不把窗口消失作为停止证明。
 - 保留未发送草稿，暂不接受此路径上的初始 prompt / seed；不为省时跳过准入、提前提交内容或使用旧目录池。
 - 同一窗口的精确原生 resume 复用已有 receipt；活进程要求重连，错仓库/窗口/会话及丢失意图均拒绝。
-- 当前 snapshot 的 `LAUNCH` 行只覆盖 accepted task；普通路径的 `@authority_receipt` 持久恢复尚未接入。
-  因此本候选不能用于默认推广或声称已完成 POD 重建恢复，必须先补该恢复协议与真实面板验收。
+- snapshot 的 `LAUNCH` 行覆盖 accepted task；普通原生路径把已有 `@authority_receipt` 保存为同一映射中的
+  `AUTHORITY` 行。恢复须核对仓库、worker/window、原生会话和真实 Git 绑定，不从最新 transcript 猜测。
+  这仍是显式候选，不等于真实面板或 POD 重建验收，不能据此默认推广。
 
 源码回归使用真实临时 Git 仓库及替代进程/准入，覆盖直接和后台启动、草稿保留、拒绝、observe/stop
 身份连续性和精确 resume；不把这些模拟证据等同于普通路径的真实 Claude、完整 MCP、生产 Hub 或延迟验收。
@@ -214,10 +215,11 @@ reserve / begin；缺少准入、冻结或不可用时拒绝，不退回直接�
 reserve → begin → observe → stopped 顺序，以及 observe 时进程真实存活、stopped 时同一身份已停止。
 创建前准入时原生目录必须不存在；创建及同窗口精确 resume 各有独立 reservation，不构造 accepted task。
 
-本夹具的 resume 只重启已经正常退出的独立测试 pane，保留原窗口 receipt，不销毁窗口并伪造持久恢复。
+本夹具的 resume 保存已有 receipt 后销毁独立测试 tmux server，再通过实际恢复校验重建窗口绑定。
+它不保留旧窗口选项、不重新创建目录；真实 `fleet-restore.sh` 的 snapshot/restore 映射另有替代 launcher 夹具验证。
 两阶段均保留核心、用户与项目 MCP 和用户 hooks；native Keep 保留编辑，原生退出后已观测 MCP 全部结束。
 原生输入框先显示未发送草稿，明确 Enter 后才允许模型请求；模型端点只以假凭据返回测试拒绝，不运行模型任务。
-这补充了普通路径的真实运行集成证据，但仍不证明 gate/finish、生产 Hub、第三方 MCP、面板入口、POD 恢复或性能目标。
+这些证据仍不等于完整生产恢复入口；gate/finish、生产 Hub、第三方 MCP、实际面板/POD 恢复和性能目标仍需验收。
 
 ### 真实 Fleet 启动器与原生配置验证
 
@@ -249,6 +251,19 @@ supervisor 校验当前任务所有权和新原生进程。旧 PID 的持久记�
 `fleet-native-restore-selftest.sh` 使用独立 tmux 的真实 snapshot/restore 与替代 launcher 验证映射往返和
 错误 ID 不启动；真实 Claude supervisor 夹具另验证临时服务器销毁重建后的精确会话恢复与文件保留。
 这不是完整 POD/账号/MCP/多副本 Hub 验收，也不使原生创建成为默认。旧映射没有原生 receipt 时继续走旧路径。
+
+普通原生仓库会话的 `AUTHORITY<TAB>fleet_id<TAB>receipt` 记录同样只扩展现有 restore map，不新增数据库、
+目录生命周期服务或另一份历史。快照仅收集带原生创建意图的普通准入窗口，旧非原生会话映射不变。
+已有增量快照指纹也包含原生意图与准入回执，单独更新 reservation/进程证明不会被误判为无变化而跳过。
+解析器与恢复启动前都校验该记录；重复、损坏、缺少意图、与 `LAUNCH` 冲突、错仓库/provider/window/session
+以及 Git 绑定变化均拒绝，不能把缺少证明降级成普通 cwd 恢复。pullback 保留同一回执，不制造替代身份。
+恢复后的 supervisor 仍需当前节点准入并核对 worker；旧 reservation 不是新的启动许可，旧 PID 不是存活证明，
+本批不自动确认崩溃前尚未上报的停止状态、不改变 Hub 的冻结/迁移规则。
+
+`fleet-native-restore-selftest.sh` 同时运行 accepted-task 与 ordinary-authority 两种实际映射流程，
+覆盖精确回执往返、JSON 含竖线、错误会话以及坏/空/重复/冲突回执不启动。真实 Claude 普通准入夹具再验证
+独立 tmux server 销毁后精确 resume、新进程身份、目录与编辑保留、完整原生配置和已观测 MCP 退出。
+两类证据分别覆盖映射与真实运行；不能合称为真实生产面板或 POD 的完整端到端验收。
 
 ### SessionStart 的目录时序与恢复边界
 

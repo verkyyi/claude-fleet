@@ -1,6 +1,11 @@
 #!/bin/bash
-# selftest-deps: fleet-restore.sh fleet_launch.py fleet-lib.sh .fleet-restore-resolve.py
+# selftest-deps: fleet-restore.sh fleet_launch.py fleet_repo_authority.py fleet-lib.sh .fleet-restore-resolve.py
 set -euo pipefail
+case "${1:-}" in
+  '') bash "$0" --accepted-task; bash "$0" --local-authority; exit ;;
+  --accepted-task|--local-authority) MODE=$1 ;;
+  *) exit 2 ;;
+esac
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { echo 'SKIP: tmux unavailable'; exit 0; }
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/native-restore.XXXXXX")
@@ -35,11 +40,12 @@ cat > "$WORK/bin/fleet-session-wrap.sh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> '$WORK/argv'
 tmux display-message -p -t "\$TMUX_PANE" '#{@native_worktree}' > '$WORK/restored-intent'
+tmux display-message -p -t "\$TMUX_PANE" '#{@authority_receipt}' > '$WORK/restored-authority'
 printf '❯ \n'
 exec sleep 120
 EOF
 chmod +x "$WORK/bin/fleet-session-wrap.sh"
-PYTHONPATH="$BIN" python3 - "$WORK" <<'PY'
+PYTHONPATH="$BIN" python3 - "$WORK" "$MODE" <<'PY'
 import json
 from pathlib import Path
 import subprocess
@@ -61,6 +67,12 @@ context = dict(version=1, operation_id='11111111-1111-4111-8111-111111111111', t
 receipt = dict(context, actual_provider='claude', pid=123, birth='saved-fixture-process',
     executable='/fixture/claude', native_session='44444444-4444-4444-8444-444444444444',
     worktree=launch.worktree_identity(str(worktree)), native_worktree=intent, phase='ready')
+if sys.argv[2] == '--local-authority':
+    proof = {key: receipt[key] for key in ('worker_id', 'native_session', 'pid', 'birth', 'executable')}
+    proof['birth'] = 'saved|fixture-process'
+    receipt = dict(repo='acme/widgets', worker_id=context['worker_id'], supervisor=12,
+                   reservation='66666666-6666-4666-8666-666666666666', native_identity=proof,
+                   worktree=receipt['worktree'], native_worktree=intent)
 (root / 'intent').write_text(json.dumps(intent))
 (root / 'context').write_text(json.dumps(context))
 (root / 'receipt').write_text(json.dumps(receipt))
@@ -75,34 +87,70 @@ tmux set-option -w -t "$WINDOW" @cc_agent claude
 tmux set-option -w -t "$WINDOW" @raw 1
 tmux set-option -w -t "$WINDOW" @repo acme/widgets
 tmux set-option -w -t "$WINDOW" @worktree "$(cat "$WORK/path")"
-tmux set-option -w -t "$WINDOW" @launch "$(cat "$WORK/context")"
-tmux set-option -w -t "$WINDOW" @launch_receipt "$(cat "$WORK/receipt")"
+if [ "$MODE" = --local-authority ]; then
+  tmux set-option -w -t "$WINDOW" @authority_receipt "$(cat "$WORK/receipt")"
+else
+  tmux set-option -w -t "$WINDOW" @launch "$(cat "$WORK/context")"
+  tmux set-option -w -t "$WINDOW" @launch_receipt "$(cat "$WORK/receipt")"
+fi
 tmux set-option -w -t "$WINDOW" @native_worktree "$(cat "$WORK/intent")"
 bash "$WORK/bin/fleet-restore.sh" --snapshot
 MAP="$FLEET_CONF_DIR/fleets/native/restore.map"
-python3 - "$MAP" "$WORK/receipt" "$BIN/.fleet-restore-resolve.py" <<'PY'
+if [ "$MODE" = --local-authority ]; then
+  : > "$FLEET_CONF_DIR/fleets/native/.snapshot-key"
+  bash "$WORK/bin/fleet-restore.sh" --snapshot --if-changed
+  python3 - "$WORK/receipt" <<'PY'
+import json
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+receipt = json.loads(path.read_text())
+receipt['reservation'] = '77777777-7777-4777-8777-777777777777'
+path.write_text(json.dumps(receipt))
+PY
+  tmux set-option -w -t "$WINDOW" @authority_receipt "$(cat "$WORK/receipt")"
+  bash "$WORK/bin/fleet-restore.sh" --snapshot --if-changed
+fi
+python3 - "$MAP" "$WORK/receipt" "$BIN/.fleet-restore-resolve.py" "$MODE" <<'PY'
 import json
 from pathlib import Path
 import subprocess
 import sys
-rows = [line.split('\t') for line in Path(sys.argv[1]).read_text().splitlines() if line.startswith('LAUNCH\t')]
-assert len(rows) == 1 and json.loads(rows[0][3]) == json.loads(Path(sys.argv[2]).read_text())
-receipt = json.loads(rows[0][3])
+kind = 'AUTHORITY' if sys.argv[4] == '--local-authority' else 'LAUNCH'
+rows = [line.split('\t') for line in Path(sys.argv[1]).read_text().splitlines() if line.startswith(kind + '\t')]
+assert len(rows) == 1 and json.loads(rows[0][-1]) == json.loads(Path(sys.argv[2]).read_text())
+receipt = json.loads(rows[0][-1])
+session_id = (receipt['native_identity'] if kind == 'AUTHORITY' else receipt)['native_session']
 directory = receipt['worktree']['root']
 fleet_id = rows[0][1]
 command = [sys.executable, sys.argv[3], receipt['native_worktree']['root'], '--fid', '--sid', '--lead']
-def resolve(session, include_map=True):
+def resolve(session, include_map=True, repo='acme/widgets'):
     arguments = command + (['--launch-map', sys.argv[1]] if include_map else [])
-    row = f'{fleet_id}|{session}|acme/widgets|saved|{directory}|-|done|-|-|1||claude\n'
+    row = f'{fleet_id}|{session}|{repo}|saved|{directory}|-|done|-|-|1||claude\n'
     return subprocess.run(arguments, input=row, text=True, capture_output=True, check=True).stdout
-assert receipt['native_session'] in resolve('')
+assert session_id in resolve('')
 assert 'WIN\t' not in resolve('55555555-5555-4555-8555-555555555555')
 assert 'WIN\t' not in resolve('', include_map=False)
+if kind == 'AUTHORITY':
+    assert 'WIN\t' not in resolve('', repo='other/repo')
+    mapping = Path(sys.argv[1])
+    original = mapping.read_text()
+    without = '\n'.join(line for line in original.splitlines() if not line.startswith('AUTHORITY\t')) + '\n'
+    for broken in (original + '\t'.join(rows[0]) + '\n', without + f'AUTHORITY\t{fleet_id}\t{{}}\n',
+                   without + f'AUTHORITY\t{fleet_id}\tinvalid-json\n', original + f'LAUNCH\t{fleet_id}\t{{}}\t{{}}\n'):
+        mapping.write_text(broken)
+        assert 'WIN\t' not in resolve(''), broken
+    mapping.write_text(original)
 PY
+cp "$MAP" "$WORK/good-map"
 tmux kill-window -t "$WINDOW"
 FLEET_RESTORE_PROBE_SECS=2 bash "$WORK/bin/fleet-restore.sh" > "$WORK/restore.log"
 cmp "$WORK/intent" <(tr -d '\n' < "$WORK/restored-intent")
 grep -qx -- '--resume 44444444-4444-4444-8444-444444444444' "$WORK/argv"
+if [ "$MODE" = --local-authority ]; then
+  cmp "$WORK/receipt" <(tr -d '\n' < "$WORK/restored-authority")
+  [ "$(tmux display-message -p -t native:saved '#{@launch}')" = '' ]
+fi
 [ "$(tmux display-message -p -t native:saved '#{@restore_outcome}')" = resumed ]
 tmux kill-window -t native:saved
 python3 - "$MAP" <<'PY'
@@ -119,4 +167,30 @@ FLEET_RESTORE_PROBE_SECS=2 bash "$WORK/bin/fleet-restore.sh" > "$WORK/refused.lo
 [ "$(wc -l < "$WORK/argv" | tr -d ' ')" = 1 ]
 [ "$(tmux display-message -p -t native:saved '#{@restore_outcome}')" = failed ]
 [ "$(tmux display-message -p -t native:saved '#{@native_worktree}')" = '' ]
-echo 'PASS native restore: actual snapshot/restore, exact receipt, no duplicate state, mismatched session refuses before launch'
+if [ "$MODE" = --local-authority ]; then
+  for invalid in empty missing-intent duplicate conflicting; do
+    tmux kill-window -t native:saved
+    python3 - "$WORK/good-map" "$MAP" "$invalid" <<'PY'
+from pathlib import Path
+import sys
+rows = [line.split('\t') for line in Path(sys.argv[1]).read_text().splitlines()]
+for row in rows:
+    if row[0] != 'AUTHORITY':
+        continue
+    if sys.argv[3] == 'empty':
+        row[2] = ''
+    elif sys.argv[3] == 'missing-intent':
+        row[2] = '{}'
+    elif sys.argv[3] == 'duplicate':
+        rows.append(row.copy())
+    else:
+        rows.append(['LAUNCH', row[1], '', ''])
+    break
+Path(sys.argv[2]).write_text('\n'.join('\t'.join(row) for row in rows) + '\n')
+PY
+    FLEET_RESTORE_PROBE_SECS=2 bash "$WORK/bin/fleet-restore.sh" > "$WORK/refused.log" 2>&1
+    [ "$(wc -l < "$WORK/argv" | tr -d ' ')" = 1 ]
+    [ "$(tmux display-message -p -t native:saved '#{@restore_outcome}')" = failed ]
+  done
+fi
+echo "PASS native restore $MODE: actual snapshot/restore, exact receipt, no duplicate state, mismatched session refuses before launch"
