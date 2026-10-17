@@ -1161,7 +1161,8 @@ eq "G: a tab inside the window name is absorbed — kept as the tab it is (#1698
 export HOME="$WORK/home2"; mkdir -p "$HOME"
 # gh "logged in" iff a marker file exists — the controller hands the adapter an
 # allowlisted environment, so an env var would not reach the shim through it
-printf '#!/bin/sh\n[ "$1 $2" = "auth status" ] && [ -e "%s/gh-ok" ] && exit 0\nexit 1\n' "$WORK" > "$WORK/bin/gh"
+# every call is counted in gh.calls (issue #4645: a forge-none-only login runs none)
+printf '#!/bin/sh\necho "$*" >> "%s/gh.calls"\n[ "$1 $2" = "auth status" ] && [ -e "%s/gh-ok" ] && exit 0\nexit 1\n' "$WORK" "$WORK" > "$WORK/bin/gh"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/security"
 chmod +x "$WORK/bin/gh" "$WORK/bin/security"
 rdy() { PATH="$SHIMPATH" bash "$CREAD" ready 2>/dev/null | python3 -c 'import json, sys
@@ -1213,6 +1214,24 @@ print("%s|%s|%s" % (r["ready"], r["repo_ready"], ",".join(r["repo_missing"])))' 
 eq "R: fleet_control.py hands repo_ready on" "True|False|gh" "$got"
 printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-seed/fleets/solo$$/repos/o-own.conf"
 eq "R: the seed plus a repo of its own, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-seed" rdy)"
+# a repo with no GitHub (FLEET_FORGE=none, #3600) needs no gh (#4645): a login
+# whose every hosted repo is forge-none runs gh not even once, and gh is neither
+# missing nor needed for a start on it; a GitHub repo beside it asks as today
+ghn() { [ -f "$WORK/gh.calls" ] && wc -l < "$WORK/gh.calls" | tr -d ' ' || echo 0; }
+mkdir -p "$WORK/conf-none/fleets/solo$$/repos"
+printf 'FLEET_SESSION=solo%s\n' "$$" > "$WORK/conf-none/fleets/solo$$/conf"
+printf 'FLEET_REPO=o/bare\nFLEET_MAIN=%s\nFLEET_FORGE="none"\nFLEET_LAND="fleet"\n' "$WORK/seedmain" > "$WORK/conf-none/fleets/solo$$/repos/o-bare.conf"
+rm -f "$WORK/gh.calls"
+eq "R: only forge-none repos hosted, no gh login: ready, gh not named" "True|False|True|True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
+eq "R: only forge-none repos hosted: a repo start is ready too" "True|" "$(FLEET_CONF_DIR="$WORK/conf-none" rrdy)"
+eq "R: only forge-none repos hosted: gh never exec'd" "0" "$(ghn)"
+rm -f "$WORK/gh.calls"
+eq "R: a GitHub repo hosted, no gh login: not ready, gh named" "False|False|True|True|gh" "$(rdy)"
+eq "R: a GitHub repo hosted: gh asked once, as before" "1" "$(ghn)"
+printf 'FLEET_REPO=o/own\nFLEET_MAIN=%s\n' "$WORK/seedmain" > "$WORK/conf-none/fleets/solo$$/repos/o-own.conf"
+rm -f "$WORK/gh.calls"
+eq "R: forge-none beside a GitHub repo, no gh login: not ready, gh named" "False|False|True|True|gh" "$(FLEET_CONF_DIR="$WORK/conf-none" rdy)"
+eq "R: forge-none beside a GitHub repo: gh asked once" "1" "$(ghn)"
 # a person's pod holds no credential by design (render.py --cred-central, #3554 /
 # #4185): node.env says CCQUOTA_FLEET_CREDS=0 and fleet.conf names the central
 # proxy — that road is its credential, or a bare `fleet` never gets its first
