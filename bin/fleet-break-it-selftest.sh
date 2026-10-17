@@ -6535,6 +6535,16 @@ drill_runtime_idle_accept_codex() {
   WHAT='Codex 原生 start-if-idle：忙时被拒且同锁删除、从不补跑；断线后按 clientId 结清，回执跨连接可查，扫不到锚点为 unknown，零重发'
 }
 
+drill_loop_due_display_gate() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-loop-selftest.py" IdleDispatchTests 2>&1) || { WHY="$out"; return 1; }
+  # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
+  out=$(bash "$BIN/fleet-loop-idle-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 accepted 才记，rejected 仍到期，unknown 同 id 结清，Claude 不投'
+}
+
 drill_pending_observation_stale() {
   CAP=30; local t0 out
   t0=$(now)

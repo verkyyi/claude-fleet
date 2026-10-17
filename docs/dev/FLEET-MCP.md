@@ -415,7 +415,9 @@ is not native state; the consumer's draft / recent-input gates stay #4431's, as
 do attention / tool / bg / transfer. `unknown` is never delivery and never a
 reason to resend; consumers keep their own pending record until a call answers
 `accepted` or `rejected`. Never fall back to `turn/start`, `turn/steer`,
-`fleet_peer_send` or the mod's `command.run`.
+`fleet_peer_send` or the mod's `command.run`. The first consumer is the
+loop's due wakeup (`fleet-loop.py`, #4431; docs/dev/SESSION-TRANSFER.md «When
+a due wakeup is sent»).
 
 **Claude (unavailable, #4618).** From outside the session: the peer `auth` +
 `user` frame has no expected-turn condition (`fleet_peer_send` exit 0 = frame

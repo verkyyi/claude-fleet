@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import uuid
 from unittest.mock import patch
 
 loader = importlib.util.spec_from_file_location('fleet_loop', Path(__file__).with_name('fleet-loop.py'))
@@ -198,7 +199,8 @@ class LoopTests(unittest.TestCase):
         self.patches = [patch.object(loop, 'Rpc', FakeRpc),
                         patch.object(loop, 'current'),
                         patch.object(loop, 'pane', side_effect=lambda _, fmt: self.state if fmt == '#{@claude_state}' else self.transfer if fmt == '#{@agent_transfer_request}' else self.handoff),
-                        patch.object(loop, 'tm', side_effect=lambda *_: self.clients)]
+                        patch.object(loop, 'tm', side_effect=lambda *_: self.clients),
+                        patch.object(loop, 'wait_reasons', return_value=[])]
         for p in self.patches: p.start()
         self.addCleanup(lambda: [p.stop() for p in reversed(self.patches)])
         self.addCleanup(self.temp.cleanup)
@@ -475,6 +477,178 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(self.messages,[])
 
 
+
+class IdleDispatchTests(unittest.TestCase):
+    """#4431: a due wakeup follows fresh native idle, never the panel's done/looping word.
+
+    Two tiers. A pane with a C3 launch goes through fleet_runtime: a fresh v1 read,
+    then accept_if_idle (Codex) or capability_unavailable (Claude, #4618); only
+    `accepted` counts. A pane without one keeps its original road (legacy_unfenced).
+    """
+    def setUp(self):
+        LoopTests.setUp(self)
+        owner = self
+        self.opts = {'#{@claude_state}': 'looping'}
+        self.waits, self.accepts = [], []
+        self.snap = dict(state='idle', reason='', provider='codex', sid=SID)
+        self.accept = 'accepted'
+
+        class Runtime:
+            @staticmethod
+            def read(pane, context=None, expected=None, socket=''):
+                s = owner.snap
+                return dict(version=1, observed_at=time.time(), expires_at=time.time() + 5,
+                            identity=dict(provider=s['provider'], native_session=s['sid'],
+                                          generation=3, turn_id='user-turn-1'),
+                            runtime=dict(state=s['state'], reason=s['reason']))
+
+            @staticmethod
+            def idle_accept_capability(provider):
+                ok = provider == 'codex'
+                return dict(state='available' if ok else 'unavailable',
+                            reason='' if ok else 'native_precondition_unavailable')
+
+            @staticmethod
+            def accept_if_idle(pane, expected, delivery_id, text, socket=''):
+                owner.accepts.append((delivery_id, text))
+                st = owner.accept
+                return dict(state=st, delivery_id=delivery_id, submitted=st != 'rejected',
+                            reason={'accepted': 'native_started', 'unknown': 'receipt_scan_incomplete',
+                                    'rejected': 'native_not_idle'}[st],
+                            receipt=dict(turn_id='loop-turn-%d' % len(owner.accepts),
+                                         intervening_turn=False) if st == 'accepted' else None)
+
+        for p in (patch.object(loop, 'pane', side_effect=lambda _, f: owner.opts.get(f, '')),
+                  patch.object(loop, 'wait_reasons', side_effect=lambda r: list(owner.waits)),
+                  patch.object(loop, '_runtime', return_value=Runtime)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def read(self): return json.loads(self.path.read_text())
+
+    def c3(self, agent='codex'):
+        self.opts['#{@launch}'] = json.dumps(dict(provider=agent))
+        r = self.read(); r['agent'] = agent; loop.save(self.path, r)
+        p = patch.object(loop.runpy, 'run_path', return_value={'snapshot': lambda *_, **kw: {'state': 'empty'}})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_stop_looping_own_loop_legacy_codex_delivers_once(self):
+        loop.dispatch(self.path, now=10000)
+        self.assertEqual(len(self.messages), 1)
+        r = self.read()
+        self.assertEqual((r['deliveries'], r['accepted_turn'], r['deferred_reason'], r['due_since']),
+                         (1, 'accepted-turn-1', None, None))
+        self.assertEqual(r['last_attempt']['fence'], 'legacy_unfenced')
+        loop.dispatch(self.path, now=10001)
+        self.assertEqual(len(self.messages), 1)
+
+    def test_real_waits_defer_with_reason_then_deliver_once(self):
+        for waits, why in ((['bg'], 'wait:bg'), (['tool', 'children'], 'wait:tool,children'), (['unknown'], 'wait:unknown')):
+            self.waits = waits
+            loop.dispatch(self.path, now=10000)
+            self.assertEqual((self.messages, self.read()['deferred_reason']), ([], why))
+        self.assertEqual(self.read()['due_since'], 10000)
+        self.waits = []
+        loop.dispatch(self.path, now=10005)
+        loop.dispatch(self.path, now=10006)
+        self.assertEqual(len(self.messages), 1)
+        self.assertIsNone(self.read()['due_since'])
+
+    def test_attention_turn_transfer_and_input_gates_keep_their_reasons(self):
+        cases = (({'#{@claude_state}': 'needs'}, 'attention'),
+                 ({'#{@claude_state}': 'working'}, 'active_turn'),
+                 ({'#{@claude_state}': 'exited'}, 'state:exited'),
+                 ({'#{@agent_transfer_request}': '/private/req'}, 'transfer'),
+                 ({'#{@quota_failover}': '1'}, 'quota'),
+                 ({'#{@handoff_armed}': '1'}, 'handoff'),
+                 ({'#{@worker_lifecycle}': 'waking'}, 'lifecycle'))
+        for extra, why in cases:
+            self.opts = dict({'#{@claude_state}': 'done'}, **extra)
+            loop.dispatch(self.path, now=10000)
+            self.assertEqual((self.messages, self.read()['deferred_reason']), ([], why), extra)
+        self.opts = {'#{@claude_state}': 'done'}
+        self.clients = '9990|@2'
+        loop.dispatch(self.path, now=10000)
+        self.assertEqual(self.read()['deferred_reason'], 'recent_input')
+        self.clients = ''
+        r = self.read(); r['agent'] = 'codex'; loop.save(self.path, r)
+        with patch.object(loop.runpy, 'run_path', return_value={'snapshot': lambda *_, **kw: {'state': 'draft'}}):
+            loop.dispatch(self.path, now=10000)
+        self.assertEqual((self.messages, self.read()['deferred_reason']), ([], 'input_draft'))
+
+    def test_c3_codex_accepted_exactly_once_never_turn_start(self):
+        self.c3()
+        loop.dispatch(self.path, now=10000)
+        loop.dispatch(self.path, now=10001)
+        r = self.read()
+        self.assertEqual((len(self.accepts), self.messages), (1, []))
+        self.assertEqual((r['deliveries'], r['accepted_turn'], r['last_turn_id'], r['status']),
+                         (1, 'loop-turn-1', 'loop-turn-1', 'active'))
+        a = r['last_attempt']
+        self.assertEqual((a['fence'], a['state'], a['delivery_id'], a['native_session'], a['task_generation']),
+                         ('native_idle', 'accepted', self.accepts[0][0], SID, 3))
+        self.assertNotIn('pending_delivery', r)
+
+    def test_c3_unknown_keeps_pending_and_settles_the_same_delivery(self):
+        self.c3()
+        self.accept = 'unknown'
+        loop.dispatch(self.path, now=10000)
+        r = self.read()
+        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason']),
+                         ('delivering', 0, 'unknown:receipt_scan_incomplete'))
+        self.accept = 'accepted'
+        loop.dispatch(self.path, now=10001)
+        loop.dispatch(self.path, now=10002)
+        self.assertEqual(len(self.accepts), 2)
+        self.assertEqual(self.accepts[0], self.accepts[1])  # same id + text: a settle, never a new send
+        self.assertEqual((self.read()['deliveries'], self.read()['status']), (1, 'active'))
+
+    def test_c3_rejected_stays_due_and_retries_as_a_new_delivery(self):
+        self.c3()
+        self.accept = 'rejected'
+        loop.dispatch(self.path, now=10000)
+        r = self.read()
+        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason'], r['schedule']['next_run_at']),
+                         ('active', 0, 'rejected:native_not_idle', 0))
+        self.accept = 'accepted'
+        loop.dispatch(self.path, now=10010)
+        self.assertNotEqual(self.accepts[0][0], self.accepts[1][0])
+        self.assertEqual(self.read()['deliveries'], 1)
+
+    def test_c3_claude_capability_unavailable_never_writes_the_inbox(self):
+        self.c3('claude')
+        self.snap['provider'] = 'claude'
+        with patch.object(loop, 'deliver_claude') as inbox, \
+                patch.object(loop.runpy, 'run_path', return_value={'snapshot': lambda *_, **kw: {'state': 'empty'}}):
+            loop.dispatch(self.path, now=10000)
+        self.assertEqual((inbox.call_count, self.accepts), (0, []))
+        self.assertEqual(self.read()['deferred_reason'], 'capability_unavailable:native_precondition_unavailable')
+        self.assertEqual(self.read()['status'], 'active')
+
+    def test_stale_busy_or_foreign_snapshot_never_delivers(self):
+        self.c3()
+        for snap, why in ((dict(state='unknown', reason='expired'), 'runtime:unknown:expired'),
+                          (dict(state='active'), 'runtime:active'),
+                          (dict(state='approval'), 'runtime:approval'),
+                          (dict(sid='f' * 36), 'runtime:identity_changed')):
+            self.snap = dict(self.snap, **snap)
+            loop.dispatch(self.path, now=10000)
+            self.assertEqual((self.accepts, self.read()['deferred_reason']), ([], why), snap)
+            self.snap = dict(state='idle', reason='', provider='codex', sid=SID)
+
+    def test_pending_delivery_of_another_generation_or_session_is_never_resent(self):
+        self.c3()
+        for stale in (dict(generation=7), dict(native_session='f' * 36)):
+            r = self.read()
+            r.update(status='delivering', generation=1,
+                     pending_delivery=dict(dict(delivery_id=str(uuid.uuid4()), text='x', due_ids=[],
+                                                generation=1, native_session=SID), **stale))
+            loop.save(self.path, r)
+            loop.dispatch(self.path, now=10000)
+            self.assertEqual((self.accepts, self.read()['status']), ([], 'paused'))
+
+
 class BridgeTest(unittest.TestCase):
     def test_private_server_tui_bind_delivery_and_exit(self):
         with tempfile.TemporaryDirectory(prefix='fleet-loop-bridge-') as tmp:
@@ -496,7 +670,7 @@ if a[2:3]==['display-message']:
  if f=='#{pane_pid}':print('42')
  elif f=='#{pane_dead}':print('0')
  elif f=='#{@claude_state}':print('done')
- elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}','#{@worker_lifecycle}'):print('')
+ elif f in ('#{@agent_transfer_request}','#{@handoff_armed}','#{@quota_failover}','#{@agent_transfer_until}','#{@worker_lifecycle}','#{@launch}'):print('')
  elif f=='#{cursor_x} #{cursor_y} #{pane_width}':print('2 0 80')
  elif f=='#{@codex_identity}':print(json.dumps({'session_id':'12345678-1234-1234-1234-123456789abc'}))
  else:print('isolated|@2|42|codex|'+r+'/manifest.json|'+r)
