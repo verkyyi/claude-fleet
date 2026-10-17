@@ -800,6 +800,7 @@ FLEET_NODE_HOSTED_CACHE            path: the node-hosted client's temp cache (de
 FLEET_NODE_RUNTIME                 path: the managed machine's runtime link (default /Library/Application Support/claude-fleet/current) — the node-hosted client runs from its bin/ (#2720)
 FLEET_RETIRE_GRACE                 pacing: seconds fleet-node-shell-retire.sh waits between TERM and KILL for a client process (default 3, #2702)
 FLEET_RETIRE_QUIT_WAIT             pacing: seconds fleet-node-shell-retire.sh gives the login's own `fleet quit` (default 20, #2702)
+FLEET_RETIRE_OLD                   hatch: 0 = bare `fleet` leaves the deleted two-pane client running instead of retiring it unattended in the background (default 1, #4283)
 FLEET_NODE_INSTALL_OS              seam: overrides `uname -s` in fleet-node-install.sh (#2330)
 FLEET_NODE_INSTALL_ARCH            seam: overrides `uname -m` in fleet-node-install.sh (#2330)
 FLEET_NODE_PYTHON                  seam: the python3 fleet-node-install.sh runs (default /usr/bin/python3, #2330)
