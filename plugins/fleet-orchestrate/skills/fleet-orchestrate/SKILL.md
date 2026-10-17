@@ -18,7 +18,7 @@ One holder per role.
 1. **`mcp__fleet-orch__take_role`** (`role: orchestrator`). It marks this window
    (`@fleet_role_def orchestrator`) and records it as the one holder
    (`$FLEET_CONF_DIR/global/roles.held`): a child's `[child-report]` and a peer's send to
-   `orchestrator` find you, and this window may spawn (a worker window may not — #2960).
+   `orchestrator` find you, and this window may spawn (any session may — #4591).
    - exit 0 — taken (or already yours): go on.
    - exit 4 — another session holds it; the output names it (key · window). Tell the
      person who is orchestrating and **stop** — never take it over unasked. Only when the
@@ -102,12 +102,12 @@ over a worker's issue. A worker's outcome comes back to you as a `[child-report]
 it, tell the person what landed in one line if they are here, and do not reply to the
 report. `mcp__fleet-orch__children` is the one place to read them all.
 
-A worker never spawns (issue #2960) — the second level is yours. A `BLOCKED` report that
+A worker may spawn its own blocker (issue #4591), but it may also leave that to you. A `BLOCKED` report that
 names an issue the worker filed under its own (`parent: <its issue>`) is a question for
 you: worth it now → spawn that issue yourself (`mcp__fleet-orch__spawn`, it reports here) and,
 once it lands, tell the blocked worker to go on (`mcp__fleet-orch__send` `issue:<N>`); not now
-→ the queue, and tell the worker so. A red base a worker files is the steward's: it spawns
-the fixer on its own.
+→ the queue, and tell the worker so. A red base a worker files without spawning is the steward's: it
+spawns the fixer on its own.
 
 ### 派给谁 — Claude or Codex (issue #2562; rules 6–8)
 

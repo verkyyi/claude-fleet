@@ -1096,7 +1096,7 @@ fleet_is_fid "${ORIGIN_WID#*/}" && _sw+=(\; set-window-option -t "$win" @origin_
 _sw+=(\; set-window-option -t "$win" @dispatch "$DISPATCH")
 [ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
 # - @agent_def / @agent_spawn (issue #3122): the agent file it starts as and whether
-#   that file grants `spawn` (fleet_spawn_refused reads it) — before the agent
+#   that file grants `spawn` (its dispatch group mounts) — before the agent
 #   starts; fleet-claude.sh stamps the same off the file it launched
 if [ -n "$AS_KV" ]; then
   _sw+=(\; set-window-option -t "$win" @agent_def "$AS_ARG")

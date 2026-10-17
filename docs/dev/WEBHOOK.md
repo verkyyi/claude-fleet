@@ -119,6 +119,44 @@ repo on polling alone (or `=1` there to opt in just that repo). A fleet with no
 `repos/` overlay forwards its one `FLEET_REPO` exactly as before.
 `fleet-repo.sh get FLEET_WEBHOOK <owner/repo>` prints what a repo resolves to.
 
+## One per machine on a managed machine (issue #4358)
+
+On a machine the node daemon manages (`fleet node install`, the logins it took
+over with `account adopt`), the daemon runs **one** forwarder for every login —
+`bin/fleet-webhook-machine.py`, its child `webhook-machine` — and no login runs
+the `webhook` account unit:
+
+- **One listener** on 127.0.0.1 (`FLEET_NODE_WEBHOOK_PORT`, 8917 — taken ⇒ any
+  free port; the program writes both ends of the URL). Each login's forwards
+  point at `/u/<login>`; a delivery there runs that login's
+  `fleet-webhook.sh --route` *as the login* (its HOME, conf, HMAC secret, its
+  single-writer refreshers). An unknown login is 404 and routed nowhere.
+- **Per login, as the login**: `--desired` (its live fleets, its per-repo
+  opt-in), `--forward <repo> --url …` (reaps the orphaned relay hook, writes the
+  pidfiles `fleet_wh_live` reads, execs `gh webhook forward` — the forward is the
+  program's own child, its own process group), `--catchup <repo> [--force]`.
+  Two logins forwarding one repo stay two forwards, as before.
+- **Served** while the daemon would run the login's `session` units (a session
+  count above 0, or none it can read; 0 for `FLEET_NODE_SESSION_HOLD` ⇒ stopped).
+- **Idle by change**: the loop wakes on a delivery, a child exiting (SIGCHLD) or
+  every `FLEET_NODE_WEBHOOK_TICK` (60 s), when it only `stat`s: a login is
+  rescanned when its conf files or tmux sockets changed, on a wake, and every
+  `FLEET_NODE_WEBHOOK_RESCAN` (600 s). A dead forward restarts after 5 s … 300 s
+  (doubling; one that lived 30 s starts over).
+- **Sleep → wake** (#410, unchanged in meaning): the wall clock running ahead of
+  the monotonic one by `FLEET_NODE_WEBHOOK_WAKE_SLACK` (5 s) is a host wake —
+  backoffs cleared, every login rescanned, the next catch-up forced; restored
+  within one tick (a forward the sleep killed wakes the loop sooner).
+- **Books**: `<daemon state>/webhook-machine.logins` (pid, then who is served —
+  `fleet-webhook.sh`'s supervise reads it and exits for a served login, compat
+  for one version) and `webhook-machine.json` (port, forwards, their groups — a
+  SIGKILLed copy's forwards are stopped by the next start from it, never by name).
+  `fleet-webhook-machine.py status` prints it.
+- **The old road** stays where the daemon is *seated* (`_fleetnode` cannot run
+  as a login itself) and with `FLEET_NODE_WEBHOOK=0`; an unmanaged login runs
+  `fleet-webhook.sh` as below. The old copies a login still runs are stopped by
+  the daemon's stray sweep.
+
 ## Enable it
 
 Per fleet, in `~/.config/claude-fleet/<session>.conf` (or the global `fleet.conf`):

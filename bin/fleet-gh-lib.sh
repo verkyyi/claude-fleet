@@ -725,7 +725,9 @@ _fleet_wh_pid_live() {  # _fleet_wh_pid_live <pidfile>
   local p
   p=$(cat "$1" 2>/dev/null) || return 1
   case "$p" in ''|*[!0-9]*) return 1 ;; esac
-  kill -0 "$p" 2>/dev/null
+  # the machine's one forwarder (issue #4358) is root's: kill -0 on another
+  # user's pid says EPERM, which is alive — ps tells
+  kill -0 "$p" 2>/dev/null || ps -p "$p" >/dev/null 2>&1
 }
 
 fleet_wh_live() {  # fleet_wh_live <repo>

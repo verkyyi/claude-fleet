@@ -46,6 +46,8 @@
 #                         login probed the machine for itself; one table, one reading now;
 #                         + bin/fleet-node-supervisor.py (#3671): session units only with a
 #                         session, a restart adopts instead of doubling
+#   webhook-per-login     bin/fleet-webhook-machine.py (#4358): one webhook forwarder for
+#                         every login, routed by login as that login, idle by change
 #   service-killed        bin/fleet-node-supervisor.py's login-level register (#2525):
 #                         a registered service is kill -9'd / dies at start
 #   service-login-moved   bin/fleet-node-supervisor.py `service move` + `account release`,
@@ -1817,6 +1819,20 @@ drill_per_login_machine_loops() {
   fi
   SECS=$(since "$t0")
   WHAT="新加的后台循环没在 node-tasks.tsv 登记就报红；标 machine 的模板不按登录跑；整机读数 15 秒一份，FLEET_MACHINE_TASKS=off 的登录直接读它、自己一次也不探，过期、空值或没有就照旧自己探；标 session 的单元只在登录有会话时跑，守护被 kill -9 后认领活着的单元、不再多起一份，孤儿副本被清，未跑完的任务不重复"
+}
+
+# ---- webhook-per-login (#4358, EPIC #4354 C4): every login on a managed machine
+# ran its own webhook forwarder, all binding one port, an orphaned handler on it.
+# bin/fleet-webhook-machine.py is one for every login: routed by login as that
+# login, forwards its own children, idle by change, a wake within a tick.
+drill_webhook_per_login() {
+  CAP=60; local t0
+  t0=$(now)
+  if ! bash "$BIN/fleet-webhook-machine-selftest.sh" >"$WORK/webhook-machine.out" 2>&1; then
+    WHY="the machine's one forwarder broke: $(grep FAIL "$WORK/webhook-machine.out" | head -3 | tr '\n' ' ')"; return 1
+  fi
+  SECS=$(since "$t0")
+  WHAT="两个登录一份程序：各自的转发以各自身份跑、进 /u/<login>；投递只到那个登录、陌生登录 404；转发死了退避重起并补齐；空闲几拍一次重扫都没有、改了配置只重扫那个登录；会话归零就停它的转发；宿主醒来一拍内恢复并强制补齐；TERM 收干净、SIGKILL 留下的转发下次启动按账本收掉；第二份拿不到锁；守护表里登录不再起 webhook 单元（入座 / 关掉时照旧）"
 }
 
 # ---- svc-run-leaks-across-runs (#4086): service runs (svc:livepage, every

@@ -31,7 +31,7 @@ is `fleet.codex_model`; the tool list does not carry over (Codex has none).
   ship [--dir D] [--check]        install the agent files the fleet core ships
                                   (conf/agent-defaults/claude/agents/*.md) into the
                                   login's ~/.claude/agents — see «ship» below
-  spawn-tools <name> [--dir D]    exit 0 when its tools grant `spawn` (issue #2960)
+  spawn-tools <name> [--dir D]    exit 0 when its tools grant `spawn` (issue #3122)
 
 `--dir` is the session's working directory (default: the cwd) — where the
 project layer is looked for. `--no-agent-flag` is the fallback for a Claude Code
@@ -39,10 +39,11 @@ without `--agent` (the launcher asks `claude --help` once per binary): the
 model, the tools and the body ride `--model` / `--tools` /
 `--disallowedTools` / `--append-system-prompt-file` instead.
 
-A spawn may run only when its file grants the `spawn` tool (EPIC #3111 共同约定 5,
-issue #2960): no `tools` list (every tool) or a list naming it — `spawn`,
+The dispatch group (the `spawn` tool) is mounted only when the file grants it
+(EPIC #3111 共同约定 5): no `tools` list (every tool) or a list naming it — `spawn`,
 `mcp__<server>__spawn`, `mcp__<server>` or `mcp__<server>__*` — and no
-`disallowedTools` entry taking it away. The shipped `fleet-worker` takes it away.
+`disallowedTools` entry taking it away. The shipped `fleet-worker` grants it
+(issue #4591); no session is refused a spawn by its seat.
 
 «ship»: the core ships `fleet-worker` (the issue-bound execution session — the
 spawn's default) and, until its own plugin carries it, `fleet-debugger`. Each is

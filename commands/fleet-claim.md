@@ -25,7 +25,7 @@ Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); re
 - Delegate broad read-only searches to `Explore` / `Plan` / `claude-code-guide` where available; no writing subagent or `isolation: worktree` (`hooks/agent-guard.py`); implementation belongs to this worker.
 - Read targeted symbol ranges and `git log -p --follow` / `git log -S`, not whole files for narrow questions; enough grounding matters more than brevity.
 - Read issues/PRs/checks through `mcp__fleet__gh` (`kind: issue|pr|checks`, `number`, `fields`, `max_age`); use `max_age: 0` or bare `gh` only for data the cache cannot supply; the merge gate is always `mcp__fleet__pr_verdict`.
-- Waiting on another worker: `mcp__fleet-orch__await` (`issue: N`) if the dispatch group is mounted; `TIMEOUT` (3) means call again, `NO-WORKER` means it cannot spawn for you; otherwise read with `mcp__fleet__gh`, and report blocked if this prevents completion.
+- Waiting on another worker: `mcp__fleet-orch__await` (`issue: N`) if the dispatch group is mounted; `TIMEOUT` (3) means call again, it spawns one if none is live; otherwise read with `mcp__fleet__gh`, and report blocked if this prevents completion.
 
 ### Before you touch code: the 「改动前」 capture
 
@@ -40,9 +40,9 @@ Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); re
 - To reach a peer use `mcp__fleet-orch__send` (`to: issue:<N>`, `text`) where mounted, or `mcp__fleet__comment` (`mode: to-worker`); read the delivery receipt/stderr, never assume a posted comment arrived.
 - Never address a peer by `<sess>:<idx>` or drive its pane with `tmux send-keys` (`hooks/bash-guard.py`); `FLEET_ALLOW_SENDKEYS=1` is for fleet plumbing only; isolated test sockets may be driven freely.
 - Close a no-PR/research issue with `mcp__fleet__comment` (`close: true`), never bare `gh issue close --comment`.
-- **Spot something else? Three moves — and spawning is none of them**: workers cannot spawn or use `bind` (`fleet_spawn_refused` / `bin/fleet-bind.sh`); one worktree, one issue, one PR.
+- **Spot something else? Three moves**: a worker may spawn (#4591) but never `bind` (`bin/fleet-bind.sh`); one worktree, one issue, one PR.
 - **Fix in place** only if ALL hold: blocks your done condition; same repo and deploy path (ships in this PR); small/local, roughly tens of lines with a test; no open issue/live owner; no shared API, protocol, schema, release/deploy or credential contract; name it in one PR-body line.
-- **File and ask the parent** if it blocks you but fails any condition: `mcp__fleet__file_issue` (`parent: <your issue>`, no `spawn`), then `mcp__fleet__ask` + `mcp__fleet__report` (`state: blocked`) naming it.
+- **File and spawn it** if it blocks you but fails any condition: `mcp__fleet__file_issue` (`parent: <your issue>`, `spawn: true`), then `mcp__fleet-orch__await` it (its report comes to you); not worth doing now ⇒ file without `spawn`, `mcp__fleet__ask` + `mcp__fleet__report` (`state: blocked`) naming it.
 - **File bare** if it does not block you: `mcp__fleet__file_issue` (`title`, optional `body`, no `spawn`); related work gets `parent: N`, unrelated work omits `parent`; no outcome report for an unrelated filing.
 - **Hand off before you run out of context.** Use `/fleet-context` or `mcp__fleet__context`: `WATCH` means finish this thread then `/fleet-handoff`, `HANDOFF` means hand off now; don't start another broad sweep.
 

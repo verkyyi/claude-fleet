@@ -66,20 +66,19 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `Explore` / `Plan` / `claude-code-guide`, and never `isolation: worktree`
   (a fork worktree is edit-blocked by the base guard). `FLEET_ALLOW_SUBAGENT=1`
   is the operator's escape hatch.
-- **Only a coordinator spawns; a worker files** (issue #2960) — one level of
-  delegation, like the subagent rule. The orchestrator, the steward and a session
-  whose agent file grants `spawn` (an EPIC driver — `@agent_spawn 1`, issue #3122)
-  spawn; a `@fleet_role worker` pane is refused by ONE rule, `fleet_spawn_refused`
-  (`bin/fleet-lib.sh`) — the filer's `--spawn` exits 6 with nothing filed, the
-  `spawn` tool refuses, `fleet-await.sh` waits but answers NO-WORKER rather than
-  start one. No pane / an unstamped window / the pinned `guide` pass;
-  `FLEET_ALLOW_WORKER_SPAWN=1` is the operator's hatch. A worker fixes in place,
-  files with `--parent` and reports `blocked` (its driver or the orchestrator
-  spawns it), or files bare; a red base a worker files is queued under the fleet's
-  `breakage-spawn/` and spawned by `fleet-steward-tick.sh breakage` (the filer at
-  once, the diskguard tick after, any steward mode) with the steward — else the
-  hub — as parent. `fleet-issue-file-selftest.sh` W, `fleet-await-selftest.sh`
-  SEAT, `fleet-mcp-selftest.sh` P, `fleet-steward-selftest.sh` W.
+- **Any session spawns, a worker too** (issue #4591 lifted #2960's
+  one-level rule). The filer's `--spawn`, the `spawn` / `task` tools and
+  `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only
+  bounds. `fleet_spawn_refused` (`bin/fleet-lib.sh`) answers "may spawn" for one
+  version (`# compat-1v`). The shipped `fleet-worker` grants `spawn`, so its
+  dispatch group mounts (`@agent_spawn 1`). A grandchild reports to the worker
+  that spawned it; a reaped worker's reports climb to the nearest live ancestor
+  (`fleet_live_ancestor`, #1352), else the person's reminder (#3117). A red base
+  a worker files WITHOUT `--spawn` is still queued under the fleet's
+  `breakage-spawn/` and spawned by `fleet-steward-tick.sh breakage` with the
+  steward — else the hub — as parent. `fleet-issue-file-selftest.sh` W,
+  `fleet-await-selftest.sh` SEAT, `fleet-mcp-selftest.sh` P,
+  `spawn-origin-gate-selftest.sh` F, `fleet-steward-selftest.sh` W.
 - **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
   **every one put the same way** (issue #1937): `fleets/<sess>/repos/<slug>.conf`,
   ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go
@@ -568,9 +567,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `--steal` moves it (the old holder's mark goes). `fleet_role_holder`
   (`bin/fleet-lib.sh`) is the only reader — `fleet_win_for_key orchestrator|steward`
   asks it; the old seat's `@fleet_role orchestrator` answers only while no line
-  names another (`# compat-1v`). A pin grants nothing: `fleet_spawn_refused` lets a
-  worker window spawn for its agent file or its taken role, never for being a
-  pinned `guide`. The state relay (`fleet-orchestrator-state.py`) is registered
+  names another (`# compat-1v`). The state relay (`fleet-orchestrator-state.py`) is registered
   only by the plugin's `hooks/hooks.json` (`--skill-dir ${CLAUDE_PLUGIN_ROOT}/…`),
   writes only for the holder and hands back the skill's `role.md` + `rules.md` on
   SessionStart; the built-in rule rows live in the plugins' `skills/*/rules.md`

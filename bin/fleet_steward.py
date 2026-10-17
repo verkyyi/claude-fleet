@@ -19,8 +19,8 @@ deadline, no spawn, no merge, no park, no health issue, no sheet and no
 is not the holder's (fleet_role_holder, bin/fleet-lib.sh — fleet_decision.
 steward_holder is its Python door; seam FLEET_STEWARD_HOLDER_CMD).
 
-`breakage` spawns the fixer of a red base branch a WORKER filed (issue #2960: a
-worker files, never spawns): fleet-issue-file.sh queues it under the fleet's
+`breakage` spawns the fixer of a red base branch a WORKER filed without spawning
+it (issue #2960; a worker may spawn it itself since #4591): fleet-issue-file.sh queues it under the fleet's
 state dir (`breakage-spawn/`) and drains at once; the holder's beat drains the
 rest. Parent: the steward holder. No holder ⇒ the person is told once
 (`fleet-alerts.sh event breakage`) and the issue stays queued, nobody spawned.
@@ -876,8 +876,8 @@ def cmd_breakage(a):
 
 
 def drain_breakage(sess, quiet=False):
-    """A red base branch a WORKER filed (issue #2960): a worker files, never spawns,
-    so its fixer is spawned here — one level deep, parented to the steward holder.
+    """A red base branch a WORKER filed without spawning it (issue #2960, #4591):
+    its fixer is spawned here — one level deep, parented to the steward holder.
     fleet-issue-file.sh queues `<slug>-<N>` (repo · number · title · agent) under the
     fleet's state dir and drains at once; the holder's beat drains the rest. NOBODY
     holds the steward role (EPIC #3111 C4) ⇒ nothing is spawned: the issue is filed,

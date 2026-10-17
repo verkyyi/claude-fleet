@@ -546,6 +546,7 @@
 8.6 fleet-wait-selftest.sh
 11.1 fleet-wait-webhook-selftest.sh
 7.1 fleet-webchat-selftest.sh
+16.0 fleet-webhook-machine-selftest.sh
 3.6 fleet-webhook-selftest.sh
 18.4 fleet-webterm-selftest.sh
 2.3 fleet-win-name-selftest.sh

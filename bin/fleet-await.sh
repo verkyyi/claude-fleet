@@ -511,8 +511,6 @@ fi
 
 if [ -z "$wid" ]; then
   [ "$SPAWN" = 1 ] || finish NO-WORKER "#$NUM has no live worker (--no-spawn)"
-  # A worker waits on a session that exists, never spawns one (issue #2960).
-  fleet_spawn_refused && finish NO-WORKER "#$NUM has no live worker, and $FLEET_SPAWN_REFUSAL"
   sargs=("$NUM" "$sess" --origin "$KEY")
   [ -n "$TASK" ] && sargs+=(--task "$TASK")   # the record's worker carries @task (#3330)
   [ -n "$REPO_ARG" ] && sargs+=(--repo "$REPO_ARG")

@@ -597,35 +597,16 @@ fleet_pane_fmt() {
 # the operator's current pane. A daemon (no $TMUX at all) is not this.
 fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 
-# fleet_spawn_refused — rc 0 when the CALLER is a worker pane, which may file an
-# issue but never spawn a session (issue #2960): one level of delegation. A worker
-# window spawns only when the agent file it started as grants the `spawn` tool
-# (@agent_spawn 1, stamped by fleet-claude.sh off bin/fleet-agent-def.py — EPIC
-# #3111 共同约定 5, issue #3122: the shipped epic-driver does, fleet-worker does
-# not) or it took over orchestrating / stewarding (@fleet_role_def orchestrator |
-# steward, stamped only by take_role — bin/fleet-role-take.sh, issue #3114). An old
-# window's @fleet_role_def epic-driver still passes for one version (# compat-1v:
-# 下一批删). Anything outside a fleet pane spawns too (a daemon, the operator's own
-# shell, an unstamped window). A pin grants nothing (EPIC #3111 rule 5): the
-# onboarding guide that used to pass as a pinned `guide` window takes the role
-# like any other session. Ten workers once spawned their own: the driver could not
-# count the grandchildren and their reports went to parked parents.
-# FLEET_ALLOW_WORKER_SPAWN=1 is the operator's hatch. The filer, the `spawn` tool
-# and fleet-await.sh's spawn ask here; FLEET_SPAWN_REFUSAL is what they say.
-# shellcheck disable=SC2034  # read by the filer, fleet-await.sh and fleet-mcp.py
-FLEET_SPAWN_REFUSAL='a worker does not spawn sessions (issue #2960) — fix it in place when it blocks your own done condition and is small, local and yours; else file it without spawning: with --parent <your issue> and report blocked to your parent when it blocks you, bare when it does not; a red base branch: file it --breakage and the steward spawns its fixer'
-fleet_spawn_refused() {
-  [ "${FLEET_ALLOW_WORKER_SPAWN:-0}" = 1 ] && return 1
-  local r role def grant
-  r=$(fleet_pane_fmt '#{@fleet_role}|#{@fleet_role_def}|#{@agent_spawn}') || return 1
-  IFS='|' read -r role def grant <<EOF
-$r
-EOF
-  [ "$role" = worker ] || return 1
-  [ "$grant" = 1 ] && return 1
-  case "$def" in orchestrator|steward|epic-driver) return 1 ;; esac
-  return 0
-}
+# fleet_spawn_refused — never refuses (rc 1) since issue #4591: any session —
+# a worker too — may spawn. It used to refuse a worker pane (issue #2960: one level
+# of delegation); the caps and the claim dedup stay in the spawners, and a
+# grandchild's report reaches its parent, else the nearest live ancestor
+# (fleet_live_ancestor, issue #1352), else the person (issue #3117). Kept so a
+# caller from the previous version still answers "may spawn".
+# compat-1v: 下一批删
+# shellcheck disable=SC2034
+FLEET_SPAWN_REFUSAL=''
+fleet_spawn_refused() { return 1; }
 
 # --- who holds a role (issue #3114, EPIC #3111 rule 4) ------------------------------
 # A role is a MARK on an ordinary window, never a kind of window: take_role
