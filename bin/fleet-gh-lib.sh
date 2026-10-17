@@ -75,8 +75,11 @@ fleet_gh_state_dir() {
 
 fleet_gh_log() {  # fleet_gh_log <event> [k=v …] — best effort, never fails a caller
   local f="${FLEET_GH_LOG:-${_FLEET_GH_LIB_DIR:-.}/../logs/gh-limit.log}"
-  mkdir -p "$(dirname "$f")" 2>/dev/null
-  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$f" 2>/dev/null
+  # A read-only install (the managed runtime under /Library/…, issue #4633) has no
+  # logs/ and cannot make one: skip silently. The 2>/dev/null must wrap the group —
+  # a bare `>> "$f" 2>/dev/null` reports the failed open before stderr is moved.
+  { mkdir -p "$(dirname "$f")" && [ -w "$(dirname "$f")" ] &&
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$f"; } 2>/dev/null
   return 0
 }
 
