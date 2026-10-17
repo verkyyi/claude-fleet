@@ -12,6 +12,11 @@
 #                                   window when it goes — nothing closed, no sweep
 #   fleet-window-reap.sh --once     one sweep now, print what was reaped
 #   fleet-window-reap.sh --dry      print what a sweep would reap, kill nothing
+#   fleet-window-reap.sh --aged S [--dry]  the timed backstop (issue #4360, the
+#                                   diskguard tick): one sweep of the same targets,
+#                                   only trees whose top is ≥ S seconds old — a
+#                                   close whose hook never ran (a server killed
+#                                   under it, a reboot) is reaped within the hour
 #
 # Knobs:
 #   FLEET_WINDOW_REAP=0             turn the close-time sweep off (--hook no-ops)
@@ -44,9 +49,9 @@ inbox_sweep() {   # $1 = kill|dry
   return 0
 }
 
-sweep() {   # $1 = kill|dry
-  inbox_sweep "$1"
-  local out; out="$(fleet_reap_orphan_trees "$1" 2)"
+sweep() {   # $1 = kill|dry  [$2 = min age, seconds]
+  [ -n "${2:-}" ] || inbox_sweep "$1"
+  local out; out="$(fleet_reap_orphan_trees "$1" 2 "${2:-0}")"
   [ -n "$out" ] || return 0
   printf '%s\n' "$out"
   [ "$1" = kill ] || return 0
@@ -96,6 +101,9 @@ case "${1:-}" in
     else FLEET_WINDOW_REAP_FG=1 nohup "$0" --hook >/dev/null 2>&1 & fi ;;
   --once) sweep kill ;;
   --dry)  sweep dry ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  --aged)
+    case "${2:-}" in ''|*[!0-9]*) exit 2 ;; esac
+    if [ "${3:-}" = --dry ]; then sweep dry "$2"; else sweep kill "$2"; fi ;;
+  *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
 exit 0

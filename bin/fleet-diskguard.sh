@@ -54,6 +54,8 @@
 #                     a row is absent when the machine will not say.
 #   --orphan-listeners print the orphaned-listener reap candidates (dry run)
 #   --listen-watch    run only the orphaned-listener sweep (what --watch also does)
+#   --tree-watch      run only the closed-window orphan-tree backstop (what --watch
+#                     also does, issue #4360)
 #   --docprev-watch   run only the doc-preview revive: docs shared but its server.py
 #                     gone ⇒ share.sh --ensure (what --watch also does, issue #3988)
 #   --brew-watch      run only the Homebrew keg-permission pass (what --watch also
@@ -91,6 +93,9 @@
 #                           (default 21600 = 6h; 0 = sweep OFF) — issue #1154
 #   FLEET_ORPHAN_LISTEN_ACTION kill | notify              (default kill)
 #   FLEET_ORPHAN_LISTEN_EVERY  min seconds between sweeps (default 300)
+#   FLEET_ORPHAN_TREE_SECS  a closed window's orphaned tree (fleet_orphan_trees) older
+#                           than this is reaped by the tick (default 3600; 0 = off)
+#   FLEET_ORPHAN_TREE_EVERY min seconds between those sweeps (default 600)
 #   FLEET_LISTEN_EXEMPT_RE  extra ERE of argv never counted/reaped as a listener
 #   FLEET_FSEVENTSD_WARN_CPU fseventsd %CPU that counts as pegged (default 90)
 #   FLEET_METRICS           0 = no per-minute machine-metrics row (default 1) — #1294
@@ -157,6 +162,8 @@ FSEV_MB="${FLEET_FSEVENTSD_WARN_MB:-1024}"
 LISTEN_SECS="${FLEET_ORPHAN_LISTEN_SECS:-21600}"
 LISTEN_ACTION="${FLEET_ORPHAN_LISTEN_ACTION:-kill}"
 LISTEN_EVERY="${FLEET_ORPHAN_LISTEN_EVERY:-300}"
+TREE_SECS="${FLEET_ORPHAN_TREE_SECS:-3600}"
+TREE_EVERY="${FLEET_ORPHAN_TREE_EVERY:-600}"
 FSEV_CPU="${FLEET_FSEVENTSD_WARN_CPU:-90}"
 FILES_PCT="${FLEET_FILES_WARN_PCT:-80}"
 PTY_PCT="${FLEET_PTY_WARN_PCT:-80}"
@@ -521,7 +528,9 @@ inbox_watch() {
 # running and the dead socket files beside the fleets' own, swept once an hour by
 # fleet-selftest-reap.sh (never `default`, never a `fleet*` socket; a live server
 # only when it is a test's — `selftest`-named or `-f /dev/null` with no client —
-# and past its age gate). FLEET_SELFTEST_REAP=0 turns it off.
+# and past its age gate) — and, since issue #4360, the processes a killed run left
+# running from its test root (orphaned, its maker gone, ≥ FLEET_SELFTEST_PROC_SECS).
+# FLEET_SELFTEST_REAP=0 turns it off.
 selftest_watch() {
   [ "${FLEET_SELFTEST_REAP:-1}" != 0 ] || return 0
   [ -x "$BIN/fleet-selftest-reap.sh" ] || return 0
@@ -532,8 +541,29 @@ selftest_watch() {
   [ $((nowt - last)) -ge 3600 ] 2>/dev/null || return 0
   printf '%s\n' "$nowt" > "$st" 2>/dev/null
   out="$(bash "$BIN/fleet-selftest-reap.sh" 2>/dev/null)"
-  case "$out" in *"reaped 0 dead socket(s), 0 live selftest server(s), 0 orphan"*|'') ;;
+  case "$out" in *"reaped 0 dead socket(s), 0 live selftest server(s), 0 orphan temp dir(s), 0 orphan process"*|'') ;;
     *) printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$out" >> "$GDIR/selftest-reaped.log" 2>/dev/null ;; esac
+  return 0
+}
+
+# tree_watch — the close-time sweep's backstop (issue #4360): fleet-window-reap.sh
+# kills a closed window's orphaned trees when tmux runs its hook; a close whose
+# hook never ran (the server died under it, a reboot, a worktree removed by hand)
+# left them running — an issue-3637 web-chat server for 2 days 22 hours. Every
+# TREE_EVERY seconds the same targets (fleet_orphan_trees: PPID=1, cwd in a fleet
+# worktree / session scratchpad nobody works in, no rotation lease, nothing exempt)
+# are reaped once their top is ≥ TREE_SECS old. FLEET_ORPHAN_TREE_SECS=0 turns it off.
+tree_watch() {
+  { [ "$TREE_SECS" -gt 0 ]; } 2>/dev/null || return 0
+  [ -x "$BIN/fleet-window-reap.sh" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local st="$GDIR/last-tree-sweep" last nowt out
+  nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge "$TREE_EVERY" ] 2>/dev/null || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  out="$(bash "$BIN/fleet-window-reap.sh" --aged "$TREE_SECS" 2>/dev/null)"
+  [ -n "$out" ] && printf '%s\n' "$out" | sed "s/^/$(date '+%Y-%m-%dT%H:%M:%S') /" >> "$GDIR/tree-reaped.log" 2>/dev/null
   return 0
 }
 
@@ -1086,6 +1116,9 @@ case "${1:-}" in
   --listen-watch)
     listen_watch
     ;;
+  --tree-watch)
+    tree_watch
+    ;;
   --docprev-watch)
     docprev_watch
     ;;
@@ -1113,7 +1146,8 @@ EOF2
     fseventsd_watch                               # fseventsd bloat reminder (#889), report-only
     listen_watch                                  # orphaned-listener sweep (#1154), throttled
     inbox_watch                                   # what clients sent gone sessions (#2757), throttled
-    selftest_watch                                # selftests' tmux debris (#2970), hourly
+    selftest_watch                                # selftests' tmux debris + processes (#2970, #4360), hourly
+    tree_watch                                    # a closed window's trees its hook missed (#4360)
     crash_watch                                   # metrics row + reboot harvest (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted

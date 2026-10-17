@@ -22,6 +22,8 @@
 #                server.py), survive a sweep.
 #   • LEASE      an orphan in a worktree under a rotation lease (#550) survives.
 #   • OFF        FLEET_WINDOW_REAP=0 makes --hook a no-op.
+#   • AGED       fleet-diskguard.sh --tree-watch (the tick's backstop, issue #4360)
+#                spares a tree younger than FLEET_ORPHAN_TREE_SECS, reaps one past it.
 #
 # Hermetic: the claude root is a temp dir (FLEET_CLAUDE_TMP_ROOT) and every sweep
 # is narrowed to the test's WORK dir (FLEET_WINDOW_REAP_ROOT), so a real orphan on
@@ -124,6 +126,17 @@ FLEET_WINDOW_REAP=0 FLEET_WINDOW_REAP_FG=1 bash "$BIN/fleet-window-reap.sh" --ho
 alive "$P_OFF" || fail "OFF: FLEET_WINDOW_REAP=0 still reaped"
 ok "OFF: FLEET_WINDOW_REAP=0 makes the hook a no-op"
 kill_tree "$P_OFF"
+
+# ── AGED (issue #4360): the diskguard tick's backstop for a close whose hook never
+# ran — the same targets, only once the top is old enough; a young one is spared.
+orphan "$WT3"; P_AGED="$ORPHAN"
+FLEET_ORPHAN_TREE_SECS=3600 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
+alive "$P_AGED" || fail "AGED: a tree younger than FLEET_ORPHAN_TREE_SECS was reaped"
+sleep 2
+FLEET_ORPHAN_TREE_SECS=1 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
+wait_gone 5 "$P_AGED" || fail "AGED: the tick did not reap an aged orphan tree" "$(cat "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null)"
+grep -q "reaped $P_AGED " "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null || fail "AGED: no line in tree-reaped.log"
+ok "AGED: the diskguard tick reaps a closed window's orphan tree past its age gate, spares a young one"
 
 # ── CLOSE / NEIGHBOR / SCRATCHPAD (a private tmux server, the real hooks) ───────
 T() { tmux -S "$SOCK" -f /dev/null "$@"; }

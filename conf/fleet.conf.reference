@@ -2236,6 +2236,23 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # Log: ~/.config/claude-fleet/diskguard/selftest-reaped.log. 0 = off.
 # @label=Selftest tmux sweep @group=disk @tier=internal @scope=global @edit=bool
 #FLEET_SELFTEST_REAP=1
+# The same hourly pass kills what a killed selftest left RUNNING (issue #4360): a
+# tree whose top is ours, reparented to init, with its argv or cwd under a test
+# root (`fleet-selftest-root.*`, `*selftest*`, `fns.*` in $TMPDIR or /tmp), no live
+# process outside it naming that root, older than this. 0 = leave processes alone.
+# @label=Selftest orphan process age @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_SELFTEST_PROC_SECS=3600
+# @label=Selftest root names @group=disk @tier=internal @scope=global @edit=str
+#FLEET_SELFTEST_PROC_GLOBS="fleet-selftest-root.* fleet-selftest-* *selftest* fns.* fns-*"
+
+# A closed window's orphaned process trees (issue #1298) are killed when tmux runs
+# its close hook; the diskguard tick reaps the ones a missed hook left (issue
+# #4360) — same targets (fleet_orphan_trees), only once the top is this old.
+# Log: ~/.config/claude-fleet/diskguard/tree-reaped.log. 0 = off.
+# @label=Orphan tree age @group=disk @tier=advanced @scope=global @edit=int @unit=sec
+#FLEET_ORPHAN_TREE_SECS=3600
+# @label=Orphan tree sweep interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_ORPHAN_TREE_EVERY=600
 # `fleet-doctor`'s `testtmux` line WARNs past this many live selftest servers…
 # @label=Doctor test-server limit @group=disk @tier=internal @scope=global @edit=int
 #FLEET_DOCTOR_TESTTMUX_LIVE=0

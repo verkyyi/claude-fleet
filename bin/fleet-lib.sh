@@ -4947,15 +4947,18 @@ EOT
   done
 }
 
-# fleet_reap_orphan_trees [kill|dry] [grace] — kill each candidate's WHOLE tree
-# from its top (fleet_kill_tree: TERM, grace, KILL, re-enumerated). One line each:
-# "reaped|would reap <top> <kind> cwd=<cwd> age=<s>s argv=<argv>".
+# fleet_reap_orphan_trees [kill|dry] [grace] [minage] — kill each candidate's WHOLE
+# tree from its top (fleet_kill_tree: TERM, grace, KILL, re-enumerated). One line
+# each: "reaped|would reap <top> <kind> cwd=<cwd> age=<s>s argv=<argv>". [minage]
+# (seconds, default 0) spares a younger top — the timed backstop's gate (#4360).
 fleet_reap_orphan_trees() {
-  local mode="${1:-kill}" grace="${2:-2}" top age kind key cwd cmdline verb=reaped
+  local mode="${1:-kill}" grace="${2:-2}" minage="${3:-0}" top age kind key cwd cmdline verb=reaped
   [ "$mode" = dry ] && verb='would reap'
+  case "$minage" in ''|*[!0-9]*) minage=0 ;; esac
   fleet_orphan_trees | while IFS="$(printf '\t')" read -r top age kind key cwd cmdline; do
     [ "$top" -gt 1 ] 2>/dev/null || continue
     [ "$top" = "$$" ] && continue
+    [ "${age:-0}" -ge "$minage" ] 2>/dev/null || continue
     [ "$mode" = dry ] || fleet_kill_tree "$top" "$grace" >/dev/null 2>&1
     printf '%s %s %s cwd=%s age=%ss argv=%.160s\n' "$verb" "$top" "$kind" "$cwd" "$age" "$cmdline"
   done

@@ -225,6 +225,34 @@ def load_tests(loader, tests, pattern):
     return tests
 
 
+def sweep(*dirs):
+    """Kill every process of ours whose argv names one of <dirs> (issue #4360): a
+    child the supervisor started, a planted stray copy, a grandchild — whatever the
+    state file no longer names. A sandbox path is ours alone, so nothing else matches."""
+    keys = set()
+    for d in dirs:
+        if d:
+            keys.update({d.rstrip("/") + "/", os.path.realpath(d).rstrip("/") + "/"})
+    if not keys:
+        return
+    out = subprocess.run(["ps", "-axo", "pid=,uid=,command="], capture_output=True, text=True).stdout
+    pids = []
+    for line in out.splitlines():
+        f = line.split(None, 2)
+        if len(f) < 3 or not f[0].isdigit() or f[1] != str(os.getuid()):
+            continue
+        if int(f[0]) != os.getpid() and any(k in f[2] for k in keys):
+            pids.append(int(f[0]))
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        if sig == signal.SIGTERM and pids:
+            time.sleep(0.2)
+
+
 class Sandbox(unittest.TestCase):
     def run(self, result=None):
         key = type(self).__name__ + "." + self._testMethodName
@@ -447,6 +475,7 @@ class Sandbox(unittest.TestCase):
                     os.kill(cs["pid"], signal.SIGKILL)
                 except OSError:
                     pass
+        sweep(self.d, getattr(self, "short", None))
         shutil.rmtree(self.d, ignore_errors=True)
 
     def table(self, children=(), tasks=()):

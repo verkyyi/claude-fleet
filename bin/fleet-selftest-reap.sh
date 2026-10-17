@@ -27,6 +27,13 @@
 #                          e.g. a looping-fzf orphan) + remove the socket.
 #   3. ORPHAN temp dirs  — a `*selftest*` mktemp dir older than the age gate: kill
 #                          any tmux server on its inner `tmux.sock`, then rm -rf it.
+#   4. ORPHAN processes  — a tree whose top is ours, reparented to init (its maker
+#                          is gone), older than FLEET_SELFTEST_PROC_SECS, with its
+#                          argv or cwd under a test root (`fleet-selftest-root.*`,
+#                          `*selftest*`, `fns.*` … in a mktemp root) and no live
+#                          process outside it naming that root: TERM, then KILL
+#                          (bin/fleet_selftest_procs.py, issue #4360 — a removed
+#                          dir does not stop what ran from it).
 #
 # Modes:
 #   (default)     reap; print a one-line summary of what was reaped
@@ -34,6 +41,7 @@
 #   --count       read-only, no age gate, one line `live=<n> dead=<n>`: live
 #                 selftest servers + dead sockets (fleet-doctor's `testtmux` row)
 #   --age MINS    override the age gate for live servers + temp dirs
+#   --proc-age S  override the orphan-process age gate (seconds)
 #   -v|--verbose  print each item as it is handled
 #   -h|--help
 #
@@ -44,6 +52,10 @@
 #                                 (default ${TMUX_TMPDIR:-/tmp}/tmux-$UID).
 #   FLEET_SELFTEST_REAP_ROOTS     space-separated mktemp roots to sweep for
 #                                 orphan temp dirs (default "$TMPDIR /tmp").
+#   FLEET_SELFTEST_PROC_SECS      orphan-process age gate in seconds (default
+#                                 3600; 0 = leave processes alone).
+#   FLEET_SELFTEST_PROC_GLOBS     test-root names (default `fleet-selftest-root.*
+#                                 fleet-selftest-* *selftest* fns.* fns-*`).
 # (The two path overrides exist to scope the reaper and to let its own hermetic
 #  selftest sandbox every path — the defaults are what you want in production.)
 #
@@ -55,6 +67,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 
 AGE="${FLEET_SELFTEST_REAP_MIN_AGE:-30}"
+PROC_AGE="${FLEET_SELFTEST_PROC_SECS:-3600}"
 DRY=0; VERBOSE=0; COUNT=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -63,12 +76,14 @@ while [ $# -gt 0 ]; do
     --count)      COUNT=1 ;;
     --age)        AGE="${2:-$AGE}"; shift ;;
     --age=*)      AGE="${1#*=}" ;;
-    -h|--help)    sed -n '2,51p' "$0"; exit 0 ;;
+    --proc-age)   PROC_AGE="${2:-$PROC_AGE}"; shift ;;
+    -h|--help)    sed -n '2,64p' "$0"; exit 0 ;;
     *)            printf 'fleet-selftest-reap: unknown arg %s\n' "$1" >&2; exit 0 ;;
   esac
   shift
 done
 case "$AGE" in ''|*[!0-9]*) AGE=30 ;; esac   # non-numeric → back to the default
+case "$PROC_AGE" in ''|*[!0-9]*) PROC_AGE=3600 ;; esac
 [ "$COUNT" = 1 ] && { DRY=1; VERBOSE=0; AGE=0; }
 
 TMUX="$(command -v tmux 2>/dev/null)"
@@ -82,7 +97,7 @@ SOCKDIR="${FLEET_SELFTEST_REAP_SOCKDIR:-${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)}"
 ROOTS="${FLEET_SELFTEST_REAP_ROOTS:-${TMPDIR:-/tmp} /tmp}"
 [ "$COUNT" = 1 ] && ROOTS=''          # the count is about sockets only
 
-sockets=0; servers=0; dirs=0        # reaped counters
+sockets=0; servers=0; dirs=0; procs=0   # reaped counters
 say()  { [ "$VERBOSE" = 1 ] && printf '  %s\n' "$*"; return 0; }
 alive() { "$TMUX" -S "$1" ls >/dev/null 2>&1; }   # server behind this socket is up?
 # stale <path> — true when <path>'s mtime is older than the age gate (spares a
@@ -98,6 +113,20 @@ test_server() {
   case " $(ps -o command= -p "$pid" 2>/dev/null) " in *" -f /dev/null "*) return 0 ;; esac
   return 1
 }
+
+# --- 4 (first): orphaned processes under a test root ----------------------------
+# Before the dirs go: a process keeps running from a removed dir, and its argv
+# still names it, so order is not needed for the match — only for the log.
+if [ "$COUNT" != 1 ] && [ "$PROC_AGE" -gt 0 ] && command -v python3 >/dev/null 2>&1 \
+   && [ -f "$BIN/fleet_selftest_procs.py" ]; then
+  pmode=reap; [ "$DRY" = 1 ] && pmode=list
+  # shellcheck disable=SC2086
+  pout="$(python3 "$BIN/fleet_selftest_procs.py" "$pmode" --min-age "$PROC_AGE" $ROOTS 2>/dev/null)"
+  if [ -n "$pout" ]; then
+    procs=$(printf '%s\n' "$pout" | grep -c .)
+    [ "$VERBOSE" = 1 ] && printf '%s\n' "$pout" | sed 's/^/  orphan process /'
+  fi
+fi
 
 # --- 1 & 2: sockets in the tmux socket dir -----------------------------------
 # NEVER `default` — that is the production fleet's shared server.
@@ -170,6 +199,6 @@ done
 
 [ "$COUNT" = 1 ] && { printf 'live=%d dead=%d\n' "$servers" "$sockets"; exit 0; }
 verb="reaped"; [ "$DRY" = 1 ] && verb="would reap"
-printf 'fleet-selftest-reap: %s %d dead socket(s), %d live selftest server(s), %d orphan temp dir(s)\n' \
-  "$verb" "$sockets" "$servers" "$dirs"
+printf 'fleet-selftest-reap: %s %d dead socket(s), %d live selftest server(s), %d orphan temp dir(s), %d orphan process tree(s)\n' \
+  "$verb" "$sockets" "$servers" "$dirs" "$procs"
 exit 0
