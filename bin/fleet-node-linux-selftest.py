@@ -26,6 +26,30 @@ def module(name):
 
 
 class LinuxNode(unittest.TestCase):
+    def test_native_stop_fixture_ancestry_is_bounded_metadata_only(self):
+        probe = module('fleet-native-thread-stop-selftest')
+        with tempfile.TemporaryDirectory() as temporary:
+            proc = Path(temporary)
+            for pid in range(1, 20):
+                process = proc / str(pid)
+                process.mkdir()
+                (process / 'stat').write_text(f'{pid} (fixture ) name) S {pid - 1} 1 1 0')
+                (process / 'status').write_text(f'Name:\tfixture\nPPid:\t{pid - 1}\nNSpid:\t{pid}\n')
+                (process / 'cmdline').write_text('private-parent-argument')
+                (process / 'environ').write_text('private-parent-environment')
+            lineage = probe.fixture_ancestry(3, proc)
+            self.assertEqual([entry['pid'] for entry in lineage], [3, 2, 1])
+            self.assertNotIn('private-parent', json.dumps(lineage))
+            self.assertEqual(len(probe.fixture_ancestry(19, proc)), 16)
+            (proc / '2/stat').write_text('2 (fixture) S 3 1 1 0')
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1], {'pid': 3, 'cycle': True})
+            (proc / '2/stat').unlink()
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1],
+                             {'pid': 2, 'unavailable': 'FileNotFoundError'})
+            (proc / '2/stat').write_text('incomplete')
+            self.assertEqual(probe.fixture_ancestry(3, proc)[-1],
+                             {'pid': 2, 'unavailable': 'IndexError'})
+
     def test_native_stop_fixture_resolves_namespace_pid_without_guessing(self):
         probe = module('fleet-native-thread-stop-selftest')
         with tempfile.TemporaryDirectory() as temporary:

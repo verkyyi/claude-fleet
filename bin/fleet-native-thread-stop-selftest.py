@@ -38,6 +38,28 @@ def fixture_host_pid(argv, namespace_pid, proc_root=Path('/proc')):
     return matches[0]
 
 
+def fixture_ancestry(pid, proc_root=Path('/proc')):
+    result, visited = [], set()
+    while pid > 0 and len(result) < 16:
+        if pid in visited:
+            result.append({'pid': pid, 'cycle': True})
+            break
+        visited.add(pid)
+        process = proc_root / str(pid)
+        try:
+            stat = (process / 'stat').read_text()
+            fields = stat.rsplit(') ', 1)[1].split()
+            parent = int(fields[1])
+            result.append({'pid': pid, 'stat': stat,
+                           'status': [line for line in (process / 'status').read_text().splitlines()
+                                      if line.split(':', 1)[0] in ('Name', 'State', 'PPid', 'Uid', 'NSpid')]})
+        except (OSError, ValueError, IndexError) as error:
+            result.append({'pid': pid, 'unavailable': type(error).__name__})
+            break
+        pid = parent
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', default='codex')
@@ -84,7 +106,8 @@ def main():
                     'status': [line for line in (process / 'status').read_text().splitlines()
                                if line.split(':', 1)[0] in ('Name', 'State', 'PPid', 'Uid', 'NSpid')],
                     'stat': (process / 'stat').read_text(),
-                    'argv': (process / 'cmdline').read_bytes().decode(errors='replace').split('\0')}
+                    'argv': (process / 'cmdline').read_bytes().decode(errors='replace').split('\0'),
+                    'ancestry': fixture_ancestry(terminal['fixturePid'])}
             except FileNotFoundError:
                 result[process.name] = {'absent': True}
         return result
@@ -206,6 +229,7 @@ def main():
                     check(len({terminal['fixturePid'] for terminal in terminals}) == 3
                           and len({terminal['processId'] for terminal in terminals}) == 3,
                           'threads have distinct native command processes and handles')
+                    observations['before_stop'] = process_states(terminals)
                     for identifier in identifiers:
                         unsubscribed = rpc.call('thread/unsubscribe', {'threadId': identifier})
                         check(unsubscribed['status'] == 'unsubscribed', 'native acknowledges removal of the owning subscription')
