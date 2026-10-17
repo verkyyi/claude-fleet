@@ -334,8 +334,9 @@ TUI 退出、线程 unloaded 或父源记录被删，都不能单独释放执行
 - `thread/backgroundTerminals/clean` 停止目标线程的后台命令，不影响兄弟命令。
 - 原生 archive 在夹具中停止目标命令、卸载目标线程，保留其他线程与共享后台；恢复前
   必须显式 unarchive，再 resume 原 ID，已停止的命令不会复活。
-- `processId` 是原生句柄，不是 OS PID。`osPid` 可以为空；夹具从自己休眠命令的输出取得
-  OS PID，只做存活观察，不把任意原生句柄当 PID 发信号。
+- `processId` 是原生句柄，不是 OS PID。`osPid` 可以为空；夹具命令输出的是其所在命名空间的
+  PID。Linux 下须由宿主 `/proc` 的所属用户、精确 argv（含唯一临时标记）与 `NSpid` 一致匹配
+  到唯一宿主 PID，匹配缺失或冲突都失败。只做存活观察，不把原生句柄或沙箱内 PID 当宿主 PID。
 
 ```sh
 python3 bin/fleet-native-thread-stop-selftest.py --codex /path/to/codex
