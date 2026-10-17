@@ -4,7 +4,17 @@ on:
   pull_request:
     paths:
       - 'bin/fleet-native-claude-worktree-selftest.py'
+      - 'bin/fleet-native-claude-tui-selftest.py'
+      - 'bin/fleet-native-create-claude-selftest.py'
+      - 'bin/fleet-claude.sh'
+      - 'bin/fleet-agent-team.py'
+      - 'hooks/settings-hooks.json'
+      - 'conf/mcp-worker.json'
+      - 'bin/.fleet-restore-resolve.py'
+      - 'bin/fleet-restore.sh'
+      - 'bin/dash-raw-session.sh'
       - 'bin/fleet_launch.py'
+      - 'bin/fleet_repo_authority.py'
       - 'bin/fleet-lib.sh'
       - 'bin/fleet-worktree-drop.sh'
       - 'hooks/base-readonly-guard.py'
@@ -49,6 +59,52 @@ jobs:
             --claude "$RUNNER_TEMP/native-claude/package/claude" --with-hooks \
             > "$RUNNER_TEMP/claude-worktree-hooks.json"
           cat "$RUNNER_TEMP/claude-worktree-bare.json" "$RUNNER_TEMP/claude-worktree-hooks.json"
+      - name: Exercise interactive native keep, remove and crash recovery
+        shell: bash
+        run: |
+          python3 bin/fleet-native-claude-tui-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" \
+            > "$RUNNER_TEMP/claude-worktree-tui.json"
+          cat "$RUNNER_TEMP/claude-worktree-tui.json"
+      - name: Exercise the actual native creation supervisor
+        shell: bash
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y tmux
+          fi
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" \
+            > "$RUNNER_TEMP/claude-worktree-supervised.json"
+          cat "$RUNNER_TEMP/claude-worktree-supervised.json"
+      - name: Exercise the actual Fleet launcher and composed native configuration
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher \
+            > "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
+          cat "$RUNNER_TEMP/claude-worktree-fleet-launcher.json"
+      - name: Exercise ordinary repository admission with the actual Fleet launcher
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority \
+            > "$RUNNER_TEMP/claude-worktree-local-authority.json"
+          cat "$RUNNER_TEMP/claude-worktree-local-authority.json"
+      - name: Exercise actual snapshot, restore and session wrapper entrypoints
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority --restore-entrypoint \
+            > "$RUNNER_TEMP/claude-worktree-restore-entrypoint.json"
+          cat "$RUNNER_TEMP/claude-worktree-restore-entrypoint.json"
+      - name: Exercise the actual panel creation entrypoint (dash-raw-session.sh)
+        shell: bash
+        run: |
+          python3 bin/fleet-native-create-claude-selftest.py \
+            --claude "$RUNNER_TEMP/native-claude/package/claude" --fleet-launcher --local-authority --restore-entrypoint --raw-entrypoint \
+            > "$RUNNER_TEMP/claude-worktree-raw-entrypoint.json"
+          cat "$RUNNER_TEMP/claude-worktree-raw-entrypoint.json"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

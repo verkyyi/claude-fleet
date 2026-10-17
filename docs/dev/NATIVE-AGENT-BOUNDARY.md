@@ -118,6 +118,171 @@ bash bin/fleet-native-worktree-selftest.sh
 不能进入生产默认参数。真实 TUI 的退出/保留/删除、native cwd 与 Fleet 任务身份关联、现有 setup
 迁移、旧会话恢复与统一清理所有权仍须验收。国内节点的 Codex-only 范围与线上配置保持不变。
 
+### 交互终端的原生目录生命周期
+
+显式探针 `bin/fleet-native-claude-tui-selftest.py` 在自有 PTY 中运行真实 CLI，不使用
+print-mode，也不启动 Fleet 面板。HOME、Git 仓库及信任均限于临时夹具；通过原生 onboarding
+和信任界面确认该夹具，不预写用户的信任配置，不使用 bypass 参数。机器级配置存在时拒绝运行。
+模型端点只绑定 loopback，所有请求用假 key 并返回 400，工具及 MCP 为空；不代表真实模型、
+完整 MCP、生产账号或 Fleet 准入验收。非 bare 模式仍不能承诺跳过 macOS keychain reads。
+
+```sh
+python3 bin/fleet-native-claude-tui-selftest.py --claude /path/to/claude
+```
+
+Claude `2.1.296` 的实际交互行为区分目录名和会话显示名：
+
+- `--worktree <name>` 只给目录命名；没有显示名且没有修改的会话正常退出后，原生会删除目录及分支。
+  另加 `--name <title>` 的干净会话则提供保留选择。不能把窗口存在或 Worktree 有名字等同于持久保留。
+- 含修改、未跟踪文件和未推送提交的夹具退出时显示 Keep/Remove；Keep 保留数据及原生所有权证据。
+  只有明确选择 Remove 才删除该目录及分支，目录内指向外部的符号链接目标不被删除。
+- Keep 后从保存目录执行 `--resume <ID>` 能恢复相同 ID 和 Git 绑定，但正常退出不再出现
+  Worktree 清理选择；`--worktree <name> --resume <ID>` 从原仓库重新进入同一原生目录，
+  不另建一层 Worktree，并恢复原生 Keep/Remove 选择。两种路径不能混称为相同生命周期。
+- 中断测试在原生 transcript 的 user/assistant 记录已经可读后，才终止自有 CLI 进程；
+  从已保存目录按精确 ID 恢复，检查未提交数据及 Git 绑定不变。这不证明首帧出现后立即崩溃、
+  未落盘消息、宿主机断电或 POD 重建的恢复；首次未等 transcript 可读就中断时实际出现了
+  `No conversation found`，不能隐藏该持久化边界。
+
+探针等待真实 SessionStart 证据，不将输入框先绘制视为 hook 已完成。测试键盘节奏包含
+onboarding 界面的稳定等待，不能用于启动性能统计。两个界面提示词可能触发多个原生 API
+请求；证据逐个记录假 key 与请求路径，不把“两个提示词”误报为“只有两个 HTTP 请求”。
+固定版本 Linux CI 使用同一探针并保存 JSON；以对应提交的终态结果为准。
+
+这批只补齐原生行为证据，未切换创建或恢复入口。下一步适配必须明确选择原生生命周期，
+由原生处理其 Keep/Remove；不能由 Fleet 截断退出提示后自行删目录，不能为恢复删除 held-seed
+或准入限制，也不能把目录正常删除后回落主检出视为成功恢复。原有 session/window 记录继续复用，
+不为上述差异新增目录生命周期服务。
+
+### 原生创建入口候选：受管任务路径
+
+`dash-raw-session.sh --native-worktree --node local --agent claude --task <accepted-task>`
+是显式候选入口，不是默认安装或普通面板已经切换的声明。它仍要求真实的已接受 dispatch / launch
+上下文、仓库准入及原有 CPU/容量/账号检查；只写创建意图，不运行 `git worktree add`。
+现行有界 fetch 保留，随后记录所选 base ref 的提交；不通过省略版本契约换取速度。
+
+- 原生 Claude 从所选主仓库启动，执行自己的 `--worktree`，并使用原生 `--name` 保留干净会话的退出选择。
+  CLI 参数由既有任务 supervisor 在解析 held input 后加入，seed 不随原生创建命令发送。
+  配置合并、MCP、模型、权限和账号入口不替换；没有为了设置 Worktree 而覆盖 `--settings`、停用 hooks。
+- 创建意图只放在既有 tmux 窗口；实际 `@worktree` 由验证过的 SessionStart hook 写入。
+  校验原生进程/任务代次、仓库 Git 身份、预期目录、base commit 和当前窗口意图之后，才发布运行证据。
+  目录/分支已存在、重定向、Git 查询失败、base 改变或创建者不匹配均拒绝，不静默采用另一个目录。
+- 原生目录名沿用 `scratch-<digits>` 以保留现有读者兼容，名字使用随机标识而不是第二套 Git 分配循环。
+  不预填/补充旧 Worktree 池，不调用旧 allocator/setup，不在失败时使用 Fleet 的删除器回滚原生目录。
+  名字只用于原生调用及旧显示兼容，不作为所有权证明。
+- 从该任务的已保存 receipt 恢复时，要求创建意图与真实 Git 绑定仍然一致；使用精确 native ID，
+  交由原生 `--worktree ... --resume ...` 重新进入同一目录与生命周期。用户已删除的目录不会自动重建，
+  意图或绑定丢失不回落到可写主检出；迟到 hook 不会清空已经保存的创建者证据。
+
+本候选明确拒绝未验证组合：远程自动选址、Codex、显式旧 setup/
+依赖复制、transfer（含同 provider），以及用这个新建开关打开旧目录。它不静默禁用用户 setup 或降级到旧创建器。
+这些仍是整个迁移的待办，不把只完成一条入口改写为总体目标完成。普通面板默认入口与旧会话继续走兼容路径；
+不能在完整面板/MCP/认证/恢复与持久化验收之前把这个开关推广为默认。
+
+显式 `bin/fleet-native-create-claude-selftest.py` 用真实 Claude、独立 tmux socket、临时 HOME/Git
+运行实际 `fleet_launch.supervise` 和实际配置 hook；验证不预创建、创建者证据、窗口绑定、精确 resume、
+新进程 incarnation、同一目录与编辑保留。任务 authority 与 finalize 在夹具内替代，不连生产 Hub，
+因此它不是实际多副本准入/任务回收验收；也不是整个 Fleet launcher、面板或完整 MCP 验收。
+工具及 MCP 为空，模型请求使用假 key 并由 loopback 拒绝，机器级配置存在时拒绝运行。
+
+```sh
+bash bin/fleet-native-create-selftest.sh
+python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude
+```
+
+### 原生创建入口候选：普通仓库准入路径
+
+显式 `--native-worktree --node local --agent claude` 也可用于没有 accepted task 的普通仓库会话，
+但必须启用既有仓库准入。入口仍执行 gate / finish，既有一次性 authority supervisor 执行
+reserve / begin；缺少准入、冻结或不可用时拒绝，不退回直接执行、不伪造任务。
+本批没有改变面板的默认创建方式，也没有新增后台目录服务。
+
+- Claude 原生创建目录，Fleet 复用同一套创建意图和真实 Git 绑定验证；authority observe 成功后才写入实际目录。
+- PID、进程出生标识、可执行文件、原生会话 ID 与目录意图在同一 reservation 内不可替换。
+  退出必须以同一个 reservation 和已证明停止的原生身份报告，不把窗口消失作为停止证明。
+- 保留未发送草稿，暂不接受此路径上的初始 prompt / seed；不为省时跳过准入、提前提交内容或使用旧目录池。
+- 同一窗口的精确原生 resume 复用已有 receipt；活进程要求重连，错仓库/窗口/会话及丢失意图均拒绝。
+- snapshot 的 `LAUNCH` 行覆盖 accepted task；普通原生路径把已有 `@authority_receipt` 保存为同一映射中的
+  `AUTHORITY` 行。恢复须核对仓库、worker/window、原生会话和真实 Git 绑定，不从最新 transcript 猜测。
+  这仍是显式候选，不等于真实面板或 POD 重建验收，不能据此默认推广。
+
+源码回归使用真实临时 Git 仓库及替代进程/准入，覆盖直接和后台启动、草稿保留、拒绝、observe/stop
+身份连续性和精确 resume；不把这些模拟证据等同于普通路径的真实 Claude、完整 MCP、生产 Hub 或延迟验收。
+
+独立的真实运行夹具 `fleet-native-create-claude-selftest.py --fleet-launcher --local-authority`
+进一步使用实际 Claude、Fleet 启动器、配置合并、原生 hooks 与核心 MCP，普通仓库 supervisor 不作替换。
+准入 HTTP 服务仅在临时本机回环端口模拟，使用虚构 token，并检查仓库/worker、reservation 的
+reserve → begin → observe → stopped 顺序，以及 observe 时进程真实存活、stopped 时同一身份已停止。
+创建前准入时原生目录必须不存在；创建及同窗口精确 resume 各有独立 reservation，不构造 accepted task。
+
+本夹具的 resume 保存已有 receipt 后销毁独立测试 tmux server，再通过实际恢复校验重建窗口绑定。
+它不保留旧窗口选项、不重新创建目录；真实 `fleet-restore.sh` 的 snapshot/restore 映射另有替代 launcher 夹具验证。
+两阶段均保留核心、用户与项目 MCP 和用户 hooks；native Keep 保留编辑，原生退出后已观测 MCP 全部结束。
+原生输入框先显示未发送草稿，明确 Enter 后才允许模型请求；模型端点只以假凭据返回测试拒绝，不运行模型任务。
+这些证据仍不等于完整生产恢复入口；gate/finish、生产 Hub、第三方 MCP、实际面板/POD 恢复和性能目标仍需验收。
+
+### 真实 Fleet 启动器与原生配置验证
+
+`fleet-native-create-claude-selftest.py --fleet-launcher` 在临时 HOME 中复制候选安装，运行实际
+`fleet-claude.sh`、配置 composer、Fleet hook 表、插件和核心 MCP，不再用自制 `--settings` 覆盖原生配置，
+也不传 `--strict-mcp-config` / 空工具集。只关闭夹具的自动预信任，临时仓库仍由原生 TUI 明确接受。
+现有默认服务器名对应本地 stdio 假服务，另有用户级及项目级 MCP；真实第三方服务不在这个夹具中启动。
+
+创建和销毁独立 tmux 后恢复两个阶段分别验证：Fleet receipt、用户 SessionStart hook、配置指纹、
+所有夹具 MCP 的 initialize / tools/list、实际 cwd 和原生进程归属。用户 UserPromptSubmit hook 和
+核心/用户/项目工具定义还须进入 native 请求；本地模型端点只返回 400，不执行工具或使用真实模型凭据。
+每阶段只挂载一个核心 MCP，正常退出后已观测 MCP 进程均须结束；测试不以进程名猜测并清理机器上的其他服务。
+
+这是实际 launcher/config 集成证据，不是第三方 MCP API、生产账号/Hub、完整面板或 POD 重建验收；
+没有证明普通面板已经启用原生创建，也没有证明 1 秒/5 秒目标。核心 MCP 与用户配置保留，不把删工具作为提速办法。
+
+```sh
+python3 bin/fleet-native-create-claude-selftest.py --claude /path/to/claude --fleet-launcher
+```
+
+### 持久映射恢复
+
+原生创建候选的恢复复用既有 `LAUNCH` 映射内的 context / receipt，不新增持久化文件类型或第二套目录索引。
+快照解析器只对 receipt 与真实 Git 绑定一致的原生会话接纳主仓库内的 linked worktree；无证明的嵌套目录、
+主检出、错误 provider / window / session 仍拒绝。会话 ID 取原生 receipt，不按最新 transcript 猜测。
+恢复时再次核对窗口行、任务上下文与 Git 身份，再从 receipt 重建 `@native_worktree`，随后仍由既有
+supervisor 校验当前任务所有权和新原生进程。旧 PID 的持久记录不是重启后进程仍活着的证明。
+
+`fleet-native-restore-selftest.sh` 使用独立 tmux 的真实 snapshot/restore 与替代 launcher 验证映射往返和
+错误 ID 不启动；真实 Claude supervisor 夹具另验证临时服务器销毁重建后的精确会话恢复与文件保留。
+这不是完整 POD/账号/MCP/多副本 Hub 验收，也不使原生创建成为默认。旧映射没有原生 receipt 时继续走旧路径。
+
+普通原生仓库会话的 `AUTHORITY<TAB>fleet_id<TAB>receipt` 记录同样只扩展现有 restore map，不新增数据库、
+目录生命周期服务或另一份历史。快照仅收集带原生创建意图的普通准入窗口，旧非原生会话映射不变。
+已有增量快照指纹也包含原生意图与准入回执，单独更新 reservation/进程证明不会被误判为无变化而跳过。
+解析器与恢复启动前都校验该记录；重复、损坏、缺少意图、与 `LAUNCH` 冲突、错仓库/provider/window/session
+以及 Git 绑定变化均拒绝，不能把缺少证明降级成普通 cwd 恢复。pullback 保留同一回执，不制造替代身份。
+恢复后的 supervisor 仍需当前节点准入并核对 worker；旧 reservation 不是新的启动许可，旧 PID 不是存活证明，
+本批不自动确认崩溃前尚未上报的停止状态、不改变 Hub 的冻结/迁移规则。
+
+`fleet-native-restore-selftest.sh` 同时运行 accepted-task 与 ordinary-authority 两种实际映射流程，
+覆盖精确回执往返、JSON 含竖线、错误会话以及坏/空/重复/冲突回执不启动。真实 Claude 普通准入夹具再验证
+独立 tmux server 销毁后精确 resume、新进程身份、目录与编辑保留、完整原生配置和已观测 MCP 退出。
+两类证据分别覆盖映射与真实运行；不能合称为真实生产面板或 POD 的完整端到端验收。
+
+新增 `--restore-entrypoint` 隔离模式把两类证据串联：真实 session wrapper 启动 Claude，原生退出并选择
+Keep 后调用实际 snapshot，销毁专用 tmux server，再由实际 restore 和 wrapper 恢复同一原生会话。
+本机 57 项检查通过，覆盖新的进程身份、既有编辑、原生配置、MCP 和真实退出页；Linux CI 同步增加此路径。
+夹具仅关闭退出页自动回收及快速退出分支，便于断言页面保留，不修改生产默认值或恢复探针时限。
+准入仍为 loopback fixture，模型端点拒绝假凭据请求；不等同于生产认证、真实模型回复、运行中崩溃或面板性能验收。
+
+该整链测试发现 tmux 3.7b 在无 UTF-8 locale 的环境下也会将格式内的 Tab 转为下划线，导致回执未进入快照。
+候选改为一次批量读取 shell-quoted、带字段前缀的可打印格式，由 Python 解析，绝不执行字段内容；磁盘映射格式不变。
+C locale 回归覆盖竖线、引号、反斜线、JSON 转义及空字段。取值或解析失败时保留原映射并报错，不发布残缺快照。
+
+`--raw-entrypoint` 再把创建一端换成面板实际调用的 `dash-raw-session.sh --native-worktree`：准入、开窗、
+草稿投递都走真实脚本，不再由夹具代建窗口或代按键。本机 60 项检查通过。这条链暴露了两处问题：
+启动命令为 `FLEET_AUTHORITY_START` 加引号时调用了不存在的 `shq`，预留凭据丢失，supervisor 只好再申请一次；
+现在就地转义，测试断言整条链只有创建与恢复各一次预留、准入零错误。另一处是草稿投递：7501 relay 下 Claude pane
+的进程名是 shell，`scratch-prefill.py` 认不出输入归属，草稿永远等不到投递；#4620 改为采信 Agent 自己的
+7501 idle（同时代表归属与输入框就绪），原生创建路径无需另写一套回执核对。
+仍是 loopback 准入，不代表面板到窗口 48 秒的提速已经达成。
+
 ### SessionStart 的目录时序与恢复边界
 
 显式 `--with-hooks` 模式取消夹具的 `--bare`，只加载通过 `--settings` 指定的临时
