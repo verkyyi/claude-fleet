@@ -135,6 +135,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 终端看台与薄客户端 | 核心 | #3008 合并后的会话访问、列表和交互入口；按设备可选的 iTerm2 集成仍归上表。 |
 | 配置与插件装配 | 核心 | 读取配置、装配代理和可选插件的共用机制；显式 Codex 原生默认值安装候选复用原生配置层及 batchWrite，平台只选缺失项和既有排除项，不另写用户 TOML。尚不自动启用；不代表被装配的插件本身必选。 |
 | 账号与代理启动 | 核心 | Claude/Codex 的启动、账号选择、凭据隔离及信任校验，承载现有执行会话；`fleet_launch.py` 在投递任务前验证原生进程、会话及既有窗口绑定的 Git 工作树，并保留接受代次的恢复边界（#4393）；不接管原生目录创建或清理。 |
+| 项目依赖复用 | 按需 | 显式选择的依赖克隆/链接辅助；默认新会话不扫描或预复制依赖，不替代项目安装命令和包管理器缓存；保留已有显式配置与旧命令。 |
 
 下面是盘点工具读取的归属规则，按顺序首个匹配；名称前缀必须唯一对应上方组件表。
 模式相对于 `bin/`，以空格分开，支持 shell 风格通配符。不得用 `*` 总兜底把新文件
@@ -164,7 +165,8 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 操作者终端集成 | `fleet-iterm* fleet-tcc*` | 设备集成 |
 | 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota*` | 订阅代理 |
 | 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
-| 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-deps-* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install*` | 安装、版本与包 |
+| 项目依赖复用 | `fleet-deps-*` | 显式依赖克隆/链接，不属于默认会话启动 |
+| 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install*` | 安装、版本与包 |
 | 宿主清理与保护 | `fleet-cleanup* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-crash-harvest* fleet-park* fleet_park*` | 资源、退出与停放 |
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠与唤醒 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect* fleet-report-stats*` | 收集与账本 |
