@@ -1842,6 +1842,86 @@ def enforce_run(argv):
     return r.returncode, " | ".join((pre[:3] if r.returncode == 6 and pre else []) + lines[-2:])[:600]
 
 
+def sweep_leftovers(login, home):
+    """A separated login whose credentials are back at its login paths (issue
+    #4643: 2026-10-09 an agent with no store leased a real Claude token into
+    one's accounts/<l>.hub/ and it sat there a week; `check` only WARNed). Root
+    moves each one into the store — a lease file to where install puts it, the
+    copy already there kept (the home's goes to backup/leftover-<UTC>/), a pool
+    label's token to <store>/accounts/<l> with the `store:` marker left behind —
+    never following a link the login planted, never printing a value. A plain
+    node.env is reconcile's (its merge + the agent restart). -> (moved, left):
+    the login paths emptied, the ones still holding a credential."""
+    R = paths(login)[0]
+    try:
+        meta = json.load(open(os.path.join(R, "meta.json")))
+    except (OSError, ValueError):
+        meta = {}
+    conf = meta.get("conf_dir") or os.path.join(home, ".config", "claude-fleet")
+    left = leftovers(conf, home, record(conf))
+    if not left:
+        return [], []
+    ne = os.path.join(conf, "node.env")
+    acc = os.path.join(conf, "accounts")
+    ch = meta.get("codex_homes") or codex_homes(conf, home)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    root_home = os.path.realpath(home)
+    moved, rest = [], []
+    for f in left:
+        if f == ne:
+            rest.append(f)
+            continue
+        rel = os.path.relpath(f, home)
+        if os.path.islink(f) or not os.path.realpath(f).startswith(root_home + os.sep):
+            say("enforce: %s — %s is a link / leaves the home: not followed" % (login, f))
+            rest.append(f)
+            continue
+        parent, base = os.path.dirname(f), os.path.basename(f)
+        marker = None
+        if base == ".credentials.json" and os.path.dirname(parent) == acc:
+            dst = os.path.join(R, "accounts", os.path.basename(parent), base)
+        elif base == "auth.json":
+            label = "default" if parent == os.path.join(home, ".codex") else os.path.basename(parent)
+            dst = os.path.join(R, "codex", label, base)
+        elif parent == acc and SAFE.match(base):
+            dst, marker = os.path.join(R, "accounts", base), "store:%s\n" % base
+        else:
+            dst = None
+        if dst is None or os.path.lexists(dst):
+            dst = os.path.join(R, "backup", "leftover-" + stamp, rel)
+        if DRY:
+            say("enforce: %s — would move %s → %s" % (login, f, dst))
+            moved.append(f)
+            continue
+        try:
+            fd = os.open(f, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as h:
+                data = h.read()
+            mkdirs(os.path.dirname(dst), 0o700)
+            put(dst, data, 0o600, ROLE)
+            top = os.path.join(R, os.path.relpath(dst, R).split(os.sep)[0])
+            sub = os.path.join(top, os.path.relpath(dst, top).split(os.sep)[0])
+            if sub != dst:
+                chown_tree(sub, ROLE)       # accounts/<l>.hub · codex/<l> · backup/leftover-<UTC>
+            os.unlink(f)
+            if marker:
+                put(f, marker, 0o600, login)
+        except OSError as e:
+            say("enforce: %s — %s not moved (%s)" % (login, f, e))
+            rest.append(f)
+            continue
+        say("enforce: %s — %s moved into the store (%s)" % (login, f, os.path.relpath(dst, R)))
+        moved.append(f)
+    if ne in rest and not DRY:
+        rc, tail = enforce_run(["reconcile", "--login", login, "--conf-dir", conf])
+        if rc == 0 and (os.path.islink(ne) or not os.path.isfile(ne)):
+            rest.remove(ne)
+            moved.append(ne)
+        else:
+            say("enforce: %s — node.env not reconciled (rc %s): %s" % (login, rc, tail))
+    return moved, rest
+
+
 def machine_enforce(a):
     """Every human login separated (issue #4607). -> 0 when every one is (or
     is root's declared exception), 1 when any is not (named on stdout and in the
@@ -1866,6 +1946,15 @@ def machine_enforce(a):
             row.update(verdict="optional", why="root's %s names it" % ENFORCE_OPTIONAL)
         elif st == "shared" or (st == "own" and not shared):
             row["verdict"] = "separated"
+            moved, rest = sweep_leftovers(login, home)
+            if moved or rest:
+                # separated, yet credentials were back at the login's paths (#4643)
+                row.update(leftovers_moved=moved, leftovers_left=rest)
+                enforce_audit({"at": now_, "login": login, "action": "leftovers into the store", "rc": 1 if rest else 0,
+                               "verdict": "leaked" if rest else "moved", "moved": moved, "left": rest})
+                if rest:
+                    row.update(verdict="leaked", why="credentials at login paths not moved: %s" % ", ".join(rest[:4]))
+                    bad.append(login)
         elif st == "unknown":
             row.update(verdict="unknown", why="its store cannot be read here")
             bad.append(login)

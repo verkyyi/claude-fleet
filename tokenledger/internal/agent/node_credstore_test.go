@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -156,5 +157,46 @@ func TestCredVerdictOffWithoutStore(t *testing.T) {
 	}
 	if _, err := a.credCycle(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// claude-fleet#4643: a separated login (credsep.json in its conf dir) whose
+// agent has no credential store writes no pool credential into the home — on
+// 2026-10-09 one did, and a separated login read a real Claude token for a week.
+// A login that is not separated still gets its files, byte for byte.
+func TestSeparatedLoginNoStoreWritesNothingHome(t *testing.T) {
+	exp := time.Now().Add(8 * time.Hour).UTC().Truncate(time.Second)
+	body := fmt.Sprintf(`{"credentials":[
+	 {"provider":"claude","account":"icloud","expires_at":%q,"access":{"access_token":"sk-ant-oat01-LEAK","scopes":["user:inference"]}},
+	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":"cx-LEAK","id_token":"idt","account_id":"acct-1"}}]}`,
+		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
+	home := t.TempDir()
+	conf := filepath.Join(home, ".config", "claude-fleet")
+	if err := os.MkdirAll(conf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(conf, "credsep.json"), []byte(`{"root":"/var/db/fleet-cred/x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := credAgent(fakeVaultHub(t, 200, body), home)
+	if _, err := a.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join(conf, "accounts", "icloud.hub", ".credentials.json"),
+		filepath.Join(home, ".codex-accounts", "work", "auth.json"),
+	} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Fatalf("a separated login with no store got %s written into its home", p)
+		}
+	}
+
+	plain := t.TempDir()
+	b := credAgent(fakeVaultHub(t, 200, body), plain)
+	if _, err := b.credCycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".config", "claude-fleet", "accounts", "icloud.hub", ".credentials.json")); err != nil {
+		t.Fatalf("a login that is not separated lost its lease file: %v", err)
 	}
 }

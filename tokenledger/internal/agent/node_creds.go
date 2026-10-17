@@ -304,6 +304,12 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	claude := 0
 	written := map[string]int{}
 	failed := 0
+	// claude-fleet#4643: a separated login (credsep.json) whose agent has no
+	// credential store — an agent started some other way than the credsep
+	// launcher — would lease the pool's tokens back into the home, where every
+	// session of the login reads them. Nothing goes there; the store or nowhere.
+	sink := a.credSink()
+	homeBarred := sink == nil && a.loginSeparated()
 	for _, c := range lease.Credentials {
 		if c.Error != "" || c.Access == nil {
 			failed++
@@ -316,9 +322,17 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		var werr error
 		switch c.Provider {
 		case "claude":
-			werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType, a.credSink())
+			if homeBarred {
+				werr = errSeparatedNoStore
+			} else {
+				werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType, sink)
+			}
 		case "codex":
-			werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now, a.credSink())
+			if homeBarred {
+				werr = errSeparatedNoStore
+			} else {
+				werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now, sink)
+			}
 		case "github":
 			werr = writeGHHosts(a.ghConfigDir(), c.Access.User, c.Access.Token)
 		default:
@@ -647,6 +661,33 @@ func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
 		a.credReported[rj.Fingerprint] = true
 	}
 	return &l, nil
+}
+
+// errSeparatedNoStore is a lease refused at the home (claude-fleet#4643).
+var errSeparatedNoStore = errors.New("this login is separated (credsep.json) but this agent has no credential store " +
+	"(CCQUOTA_FLEET_CRED_STORE) — not writing a pool credential into the home; restart it through the credsep launcher")
+
+// loginSeparated: the login this agent leases for carries credsep.json — the
+// login-readable record fleet-credsep.py install writes (the same mark
+// nodesig.LoginKeyPath reads) — in its conf dir: the machine tenant's
+// RunAs conf dir, the accounts dir's parent, or the default under its home.
+func (a *Agent) loginSeparated() bool {
+	dirs := []string{filepath.Dir(a.credAccountsDir())}
+	if a.cfg.RunAs != nil {
+		dirs = append(dirs, a.cfg.RunAs.confDir())
+	}
+	if a.cfg.Home != "" {
+		dirs = append(dirs, filepath.Join(a.cfg.Home, ".config", "claude-fleet"))
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(d, "credsep.json")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Agent) credAccountsDir() string {

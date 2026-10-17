@@ -50,6 +50,9 @@
 #   credsep-warn-cuts-creds    bin/fleet-credsep.py check (exit 4 = separated, warns; 1 only
 #                              when it is not), tokenledger credsepJudge (go test
 #                              TestCredsepJudge), bin/fleet-cred-proxy.py deny reason — #4623
+#   cred-sep-home-leak         bin/fleet-credsep.py machine enforce (sweep_leftovers) / check,
+#                              tokenledger agent loginSeparated (go test
+#                              TestSeparatedLoginNoStoreWritesNothingHome) — #4643
 #   cred-gate-counts-unleased  tokenledger api leaseServes / the cred-ttl gate item (go test
 #                              TestGateCredsepCountsOnlyLeasedLogins) — #4622
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -874,6 +877,72 @@ drill_credsep_warn_cuts_creds() {
 # separated — client computers, the logins in cluster pods, root / _fleetadmin and
 # a deleted user among them: none of them is ever leased pool credentials, so the
 # count said nothing anyone could act on. It counts leaseServes' logins only.
+# ---- cred-sep-home-leak (#4643): 2026-10-09 an agent started without the credential
+# store leased a real Claude token back into a SEPARATED login's
+# accounts/<l>.hub/.credentials.json; `check` WARNed, credsep-enforce saw a store and
+# wrote «separated», and the token sat readable in the home for a week. Now the
+# daemon's next pass moves it into the store (audited, no value logged), the login's
+# check is clean again, and the agent no longer writes there at all (the Go half).
+drill_cred_sep_home_leak() {
+  CAP=90
+  local sb="$WORK/homeleak" t0 out rc env gohalf
+  sep_login "$sb"
+  mkdir -p "$sb/node"
+  env=$(enf_env "$sb")
+  t0=$(now)
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ ! -e "$C/accounts/a1.hub/.credentials.json" ] \
+    || { WHY="the rig: alpha did not get separated (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  # the leak: a lease back at the login path, one the store already has, one it lacks
+  mkdir -p "$C/accounts/icloud.hub" "$C/accounts/a1.hub"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-LEAKED","refreshToken":null}}' > "$C/accounts/icloud.hub/.credentials.json"
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-LEAK2","refreshToken":null}}' > "$C/accounts/a1.hub/.credentials.json"
+  # shellcheck disable=SC2086
+  out=$(chmod 000 "$sb/db/alpha"; env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?; chmod 700 "$sb/db/alpha"
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'credentials are back at login paths' \
+    || { WHY="the rig: a leaked lease does not make check say so (rc $rc): $out"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ ! -e "$C/accounts/icloud.hub/.credentials.json" ] && [ ! -e "$C/accounts/a1.hub/.credentials.json" ] \
+    || { WHY="a separated login's leaked leases are still in its home after enforce (rc $rc): $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; return 1; }
+  grep -q LEAKED "$sb/db/alpha/accounts/icloud.hub/.credentials.json" 2>/dev/null \
+    || { WHY="the leaked icloud lease did not land in the store's accounts/icloud.hub"; return 1; }
+  grep -rqs LEAK2 "$sb/db/alpha/backup/" && grep -q BOOT "$sb/db/alpha/accounts/a1.hub/.credentials.json" \
+    || { WHY="the store's own a1 lease was not kept with the home copy set aside in backup/"; return 1; }
+  [ "$rc" = 0 ] || { WHY="enforce after moving every leftover is not 0 (rc $rc): $out"; return 1; }
+  grep -q '"action": "leftovers into the store"' "$sb/log/enforce.log" && grep -q '"verdict": "moved"' "$sb/log/enforce.log" \
+    || { WHY="no audit line for the leftovers moved: $(tail -2 "$sb/log/enforce.log" 2>&1)"; return 1; }
+  ! grep -q 'LEAK' "$sb/log/enforce.log" || { WHY="a token value reached enforce.log"; return 1; }
+  # shellcheck disable=SC2086
+  out=$(chmod 000 "$sb/db/alpha"; env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" check --conf-dir "$C" 2>&1); rc=$?; chmod 700 "$sb/db/alpha"
+  printf '%s' "$out" | grep -q 'back at login paths' && { WHY="check still sees credentials at login paths: $out"; return 1; }
+  [ "$rc" != 1 ] || { WHY="after the sweep check still says «not separated» (rc 1): $out"; return 1; }
+  # a link the login planted is never followed
+  ln -s "$sb/pw" "$C/accounts/icloud.hub/.credentials.json"
+  # shellcheck disable=SC2086
+  out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
+  [ -L "$C/accounts/icloud.hub/.credentials.json" ] && [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'not followed' \
+    || { WHY="a planted link was followed or not named (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  rm -f "$C/accounts/icloud.hub/.credentials.json"
+  gohalf="agent 一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestSeparatedLoginNoStoreWritesNothingHome"
+  grep -q 'func TestSeparatedLoginNoStoreWritesNothingHome(' "$ROOT/tokenledger/internal/agent/node_credstore_test.go" 2>/dev/null \
+    || { WHY="the agent half's TestSeparatedLoginNoStoreWritesNothingHome is gone"; return 1; }
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestSeparatedLoginNoStoreWritesNothingHome$' ./internal/agent 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
+      0:*) gohalf="agent 一半：go test ok（已隔离、没有凭据库就一份也不写进家）" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="已隔离登录的家里又出现池凭据：credsep-enforce 下一轮搬进隔离库（库里已有的留着、家里那份进 backup/），审计一行不带值，check 回到干净；登录放的软链不跟、点名；$gohalf"
+}
+
 drill_cred_gate_counts_unleased() {
   CAP=90
   local t0 out rc
