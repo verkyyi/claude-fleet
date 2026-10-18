@@ -1,6 +1,6 @@
 #!/bin/bash
 # Original part 4/4, group 1/5: complete DoneNoPr driver/recent cases (#3884, #4637).
-# Parent SELFTEST_PART=all still runs all 40 cases; original parts 1-3 stay put.
+# Parent SELFTEST_PART=all still runs all 41 cases; original parts 1-3 stay put.
 # selftest-part-of: fleet-cleanup-idle-selftest.sh
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # Explicit argv keeps its original meaning. Default discovery uses this group.
