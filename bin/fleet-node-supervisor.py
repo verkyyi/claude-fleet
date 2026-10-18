@@ -5134,7 +5134,7 @@ def adopt_follow(paths, login):
     try:
         r = subprocess.run(["/usr/bin/python3", "-I", upd, "follow", login], stdin=subprocess.DEVNULL,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-                           timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200) + 60)
+                           timeout=1200 + 60)
     except (OSError, subprocess.SubprocessError) as e:
         print("  its install follows the release on the next update tick (%s)" % e)
         return

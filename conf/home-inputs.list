@@ -1,0 +1,50 @@
+# conf/home-inputs.list — the files of a release that a login's
+# fleet-install-apply.sh (--tree-from / --tree-to) reads to write THAT login's
+# home: settings, hooks, agents, skills, commands, codex, plugins, daemons, the
+# tmux confs it re-sources (issue #4670, EPIC #4667 C3).
+#
+# fleet-node-update.py hashes these per release (home_hash): a switch or a
+# rollback enters a login (`point`, as the login) only when the target's hash
+# differs from the one that login was last applied with — a version that changes
+# only the rest of bin/ enters no login at all. A release with no list ⇒ every
+# login is entered, as before. A new pass in install-apply that reads a file
+# names it here (fleet-node-update-selftest.py J_OneSwitch lints the `touched`
+# names and the spinner list).
+#
+# `dir/` = every file under it; anything else = one path.
+.claude-plugin/
+commands/
+conf/
+hooks/
+launchd/
+plugins/
+skills/
+systemd/
+bin/fleet-install-apply.sh
+bin/fleet-agent-def.py
+bin/fleet-agent-defaults.py
+bin/fleet-agent-team.py
+bin/fleet-codex-plugins.py
+bin/fleet-conf.sh
+bin/fleet-credsep.sh
+bin/fleet-hooks-merge.py
+bin/fleet-migrate-layout.sh
+bin/fleet-plugins.py
+bin/fleet-ui-refresh.sh
+bin/mcp-github.sh
+# the ui pass: a change re-sources the fleet's tmux servers
+bin/dash-keymap.sh
+bin/fleet-quickopen.py
+bin/fleet_view.py
+bin/tmux-dashboard.sh
+bin/tmux-dashboard-rows.sh
+# the daemons pass kicks the spinner when one of these moved (spinner_changed)
+bin/tmux-spinner.sh
+bin/tmux-spinner.py
+bin/fleet-render-watch.py
+bin/fleet_pending_tool.py
+bin/fleet_launch.py
+bin/fleet_sleep_argv.py
+bin/fleet_runtime.py
+bin/fleet-codex-rpc.py
+bin/fleet-codex-session.py

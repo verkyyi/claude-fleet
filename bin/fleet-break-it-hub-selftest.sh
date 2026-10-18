@@ -17,7 +17,7 @@
 #   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
 #   empty-fleet-not-restored                        bin/fleet-sessions-snapshot.sh, fleet-restore.sh --auto
 #   empty-fleet-disk-floor                          bin/fleet-restore.sh home_floor_gb, fleet-sessions-snapshot-selftest.sh H2
-#   node-update-sessions                            bin/fleet-node-update.py (sessions save / restore)
+#   switch-no-session-save                          bin/fleet-node-update.py (one switch, no login entered), conf/home-inputs.list
 #   release-unverified                              bin/fleet-release.sh (fleet-release-selftest.sh's sandbox)
 #   hub-release-downtime                            .github/actions/hub-release/probe.sh (downtime_seconds),
 #                                                   release.sh shape, deploy/k8s/base (2 replicas, rolling,
@@ -455,13 +455,13 @@ drill_empty_fleet_disk_floor() {
   WHAT="空闲盘低于负载线（5 GB < 12）：没会话的 fleet 照样拉回 home，restore 和 --auto 都是；0 GB 不拉；有会话的仍挡"
 }
 
-drill_node_update_sessions() {
+drill_switch_no_session_save() {
   CAP=90; local t0 out
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-sessions 2>&1) \
-    || { WHY="fleet-node-update J_Sessions: $(printf '%s' "$out" | grep -m1 -E 'Error|FAIL')"; return 1; }
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-one-switch 2>&1) \
+    || { WHY="fleet-node-update J_OneSwitch: $(printf '%s' "$out" | grep -m1 -E 'Error|FAIL')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="更新器切换前对每个托管登录 save，提交 / 回退后 restore 并记进 update.log"
+  WHAT="换版只切 current：会话不存不开，只改 bin/ 的一版不进任何登录，登录的 ~/.claude/fleet 已是新版"
 }
 
 drill_view_node_restart() {
