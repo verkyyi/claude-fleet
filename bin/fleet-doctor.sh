@@ -4078,7 +4078,7 @@ EOF
   if [ -n "$rb_ov" ]; then
     rb_set=''
     for rb_k in $(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$rb_ov" | awk '!s[$0]++'); do
-      case " FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_TICKETS " in *" $rb_k "*) continue ;; esac
+      case "$rb_k" in FLEET_REPO|FLEET_MAIN|FLEET_BASE_BRANCH|FLEET_TICKETS) continue ;; esac
       rb_v=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" "$rb_k")
       rb_fv=$(_conf_val "$rb_cf" "$rb_k"); [ -n "$rb_fv" ] || rb_fv=$(_gconf_val "$rb_k")
       case "$rb_k" in *TOKEN*|*SECRET*|*PASSW*|*CRED*|*_KEY|*APIKEY*) rb_v='<hidden>'; rb_fv='' ;; esac
