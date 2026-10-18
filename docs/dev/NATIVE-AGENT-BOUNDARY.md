@@ -851,57 +851,14 @@ python3 bin/fleet-native-plugin-cli-selftest.py --codex /path/to/codex
 切换前还须验证：真实 Fleet 插件 MCP 的超时、路径展开与完整调用，原生 hook 信任/变量/事件映射、
 旧命令别名、各账号 home 的独立安装，以及原生关闭后不会被 Claude 同步重新启用。
 同一插件的桥接技能、MCP 与 hooks 必须一并退出，且只清理可证明由 Fleet 生成的旧物；
-用户自建文件与老会话至少保留既有兼容周期。默认不安装 orchestrator/steward/EPIC 等按需角色。
+用户自建文件与老会话至少保留既有兼容周期。默认不安装 EPIC 等按需插件；orchestrator / steward 是会话模板，人起才有。
 
-### 实际 orchestration 插件的原生包
+### 实际 orchestration 插件的原生包（已退役）
 
-候选 `fleet-orchestrate` 0.2.5 新增 `.codex-plugin/plugin.json`，与 Claude 清单保持同名同版本。
-技能和 MCP 仍使用同一实现，不新增工具执行器，也不改变默认安装行为。
-原生清单显式声明七个 `env_vars` 名称及 600 秒工具预算，不保存凭据值。
-
-实际包验收发现共享 `hooks/hooks.json` 含 Claude 专用 `modules` 字段，
-Codex 0.163.0 会拒绝解析整个文件，不能因为夹具 hook 可用就声称真实包兼容。
-最初曾用独立 JSON 保留五个相同命令，随后业务审计发现这些命令在
-`fleet-orchestrator-state.py is_orchestrator` 中明确排除 Codex，旧桥的 `codex-map.json` 也主动过滤。
-因此不把「可发现五个 no-op hooks」作为最终实现：候选已删除第二份 hooks 文件，
-Codex 清单使用 `"hooks": {"hooks": {}}` 显式关闭此插件的默认 hooks 发现。
-Claude 原文件及其 UI 模块不变，平台核心安全 hooks 不受影响。
-原生 inline hooks 覆盖机制见[官方插件说明](https://developers.openai.com/plugins/build/plugins)。
-实测空数组 `"hooks": []` 在 0.163.0 仍回退到默认文件并报解析警告，不能用它代替空 hooks 对象。
-结构回归同时检查原生包与旧桥不引入 Claude 状态逻辑；共享技能明确两种 Agent 的恢复差异。
-Codex 仍使用原生历史/压缩，缺少角色上下文时显式重用技能和 `take_role` 检查当前归属，
-通过 `children` 获取当前业务状态，不扫描 Claude 对话、重建其计时器或自动启动恢复回合。
-
-```sh
-python3 bin/fleet-native-plugin-cli-selftest.py --package --codex /path/to/codex
-```
-
-该模式把整个候选插件原样复制到临时 marketplace，以真实 Codex 安装并启动独立 app-server；
-不重建测试专用清单，不使用真实账号或模型回合。复制的 MCP 实现和审计日志也留在临时目录。
-本机 `0.163.0` 与 drill `0.162.1` 各通过 14 项，原生清单 SHA-256 一致：
-
-- 原生发现 `fleet-orchestrate:fleet-orchestrate` 技能，插件 hooks 为空且没有解析警告，没有自动信任。
-- `.mcp.json` 与 Codex inline MCP 同时存在时，仅一个 `fleet-orch` 启动，七个工具归属原生插件。
-- inline `env_vars` 正常生效；假 worker 凭据调用被真实 MCP 拒绝，业务脚本未执行。
-- 不生成旧桥 MCP 配置块或 Fleet 技能链接，不改线上安装、信任或用户 POD。
-
-另有真实角色链路的隔离测试：
-
-```sh
-python3 bin/fleet-native-plugin-cli-selftest.py --package-role --codex /path/to/codex
-```
-
-本机 `0.163.0` 与 drill `0.162.1` 各通过 22 项。测试创建专用临时 tmux socket，
-复制候选 MCP、角色脚本和 Fleet 库，在临时 HOME 通过真实 mint 代码生成仅对该夹具有效的凭据。
-真实原生插件调用 `take_role` 成功，`roles.held` 与窗口 ID/持久 ID 精确一致；
-`who` 不改写归属，`drop` 清除该角色。更换窗口持久 ID 后，同一签名凭据被拒绝，归属文件不变；
-还原身份并绑定 issue 后，角色脚本返回 3，不能获得编排角色。
-审计区分有效与错误身份且不泄露凭据；结束仅销毁测试 socket 和临时文件，不访问真实 tmux。
-
-`fleet-plugins-selftest.sh` 143 项、`fleet-orchestrator-state-selftest.sh` 54 项通过。
-以上证明真实包加载、隔离身份和角色业务路径，不代表生产账号/Hub 准入、全部工具调用、
-原生安装与 core MCP 的能力判断或完整面板恢复已完成迁移。
-旧桥保持现状，尚不在真实账号启用新包或执行清理。
+`fleet-orchestrate` 曾带一份 Codex 原生包，并用 `fleet-native-plugin-cli-selftest.py --package` /
+`--package-role` 验收真实包加载与角色链路。编排改成普通会话模板（`spawn agent:orchestrator`，#4340）后，
+插件只剩一版空的已下架条目，角色脚本与这两种验收方式一并删除；没有角色要接，
+Codex 会话也只用原生历史/压缩和 `children` 取当前业务状态。
 
 ### 原生 hook 信任与实际执行
 
