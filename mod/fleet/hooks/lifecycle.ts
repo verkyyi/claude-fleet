@@ -23,6 +23,9 @@
 // module timer for the same reason: the pickup a handoff posts right after its
 // /clear must still be taken.
 //
+// Accept (issue #4618): an `idle.v1` request on the same inbox is accept.ts's —
+// the precheck and the wait run here, the submit and its entry check there.
+//
 // Where (issue #1716): the same module reads bin/fleet-client-where.sh at the
 // start and every WHERE_POLL_MS; where.ts puts the line in the context.
 //
@@ -50,7 +53,8 @@ import { SPEC_TIMEOUT_MS, binDir, fallbackSpecs, specArgv } from './tools'
 import { MODEL_POLL_MS, STATUSLINE_TIMEOUT_MS, claimModelFeed, feedArgv, modelMoved, resetModelFeed } from './usage'
 import { MOD_VERSION, isSupported } from './version'
 import { WHERE_POLL_MS, WHERE_TIMEOUT_MS, takeWhere, whereArgv } from './where'
-import { runtimeQuery, WRITE_TIMEOUT_MS } from './state'
+import { noteSessionBoundary, runtimeQuery, WRITE_TIMEOUT_MS } from './state'
+import { ACCEPT, acceptOutcome, acceptSessionEnded, beginAccept, parseAccept } from './accept'
 
 export const HEARTBEAT_MS = 15_000
 
@@ -58,6 +62,8 @@ export const HEARTBEAT_MS = 15_000
 const EXITS = new Set(['prompt_input_exit', 'logout', 'other'])
 
 const status = atom({ plugin: 'fleet', key: 'status' } as const, null as FleetModStatus | null)
+// accept.ts's own ref: bumping it redraws the band, whose hook submits the slot.
+const acceptKick = atom({ plugin: 'fleet', key: 'acceptKick' } as const, 0)
 
 // Module state: a reload is a fresh module, and session.start fires again.
 let timer: Timer | undefined
@@ -102,6 +108,21 @@ function inboxIo($: EngineInterface): InboxIo {
         stdin: JSON.stringify(payload), timeoutMs: WRITE_TIMEOUT_MS,
       })
       if (r.exitCode !== 0) throw new Error('native runtime observation refused')
+    },
+    // Conditional idle acceptance (accept.ts): refused at once, or the slot
+    // queued and the band's redraw kicked; waits for the entry boundary's answer.
+    accept: async request => {
+      const parsed = parseAccept(request, await $.env.get('FLEET_LAUNCH_CONTEXT'), (await $.clock.now()) / 1000)
+      if ('error' in parsed) throw new Error(parsed.error)
+      if (inbox === undefined) throw new Error('no inbox')
+      const refused = beginAccept(parsed, inbox)
+      if (refused !== undefined) return refused
+      await update($, acceptKick, n => n + 1)
+      for (;;) {
+        const o = acceptOutcome(parsed, (await $.clock.now()) / 1000)
+        if (o !== undefined) return o
+        await $.clock.sleep(50)
+      }
     },
   }
 }
@@ -223,6 +244,8 @@ export function registerLifecycle(on: On): void {
     await setOptions($, {
       '@mod_state': state,
       '@mod_ver': MOD_VERSION,
+      // fleet_runtime.accept_if_idle offers a Claude pane only what its mod answers.
+      '@mod_accept': supported ? ACCEPT : null,
       // Out of range never beats: clear one a previous load left behind.
       ...(supported ? {} : { '@mod_alive': null }),
     })
@@ -235,6 +258,11 @@ export function registerLifecycle(on: On): void {
   }).catch(($, e, next) => next(e))
 
   on('session.end', async ($, e, next) => {
+    if (isOpen()) {
+      // A /clear or /resume: no earlier turn is the one a conditional prompt follows.
+      noteSessionBoundary()
+      acceptSessionEnded()
+    }
     if (isOpen() && EXITS.has(e.reason)) {
       timer?.cancel()
       timer = undefined
@@ -246,6 +274,7 @@ export function registerLifecycle(on: On): void {
       whereTimer = undefined
       await setOptions($, {
         '@mod_alive': null,
+        '@mod_accept': null,
       })
     }
     return next(e)

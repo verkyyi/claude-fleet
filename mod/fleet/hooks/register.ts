@@ -15,6 +15,7 @@
 
 import type { Register } from 'claude-code'
 
+import { registerAccept } from './accept'
 import { registerCompose } from './compose'
 import { registerLifecycle } from './lifecycle'
 import { registerProgress } from './progress'
@@ -29,4 +30,5 @@ export const register: Register = on => {
   registerProgress(on)
   registerCompose(on)
   registerTools(on)
+  registerAccept(on)
 }

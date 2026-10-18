@@ -338,7 +338,7 @@ boundary: these consumers preserve the accepted ticket reference, never infer
 a backend from an issue number. Isolated store/API/consumer tests are fixture
 evidence; deployment and live remote acceptance belong to C9.
 
-### Conditional idle acceptance (#4524, #4617)
+### Conditional idle acceptance (#4524, #4617, #4618)
 
 `fleet_runtime.idle_accept_capability(provider)` (CLI:
 `fleet_runtime.py idle-accept-capability`, JSON stdin `{"provider":"codex"}`)
@@ -348,7 +348,8 @@ implements, not a live probe:
 | provider | `state` | `native_method` | notes |
 | --- | --- | --- | --- |
 | `codex` | `available` (exit 0) | `thread/queue/start` | `fence: {idle: native, turn: precheck}`, `min_native_version: 0.162`; the live call re-checks the app-server's version |
-| `claude` · anything else | `unavailable` (exit 2) | `null` | no native conditional accept reachable from outside the session; follow-up #4618 |
+| `claude` | `available` (exit 0) | `mod/prompt.submit` | `fence: {idle: entry_boundary, turn: entry_boundary}`, `min_native_version: 2.1.295`, `min_mod_version: 0.6.0`; a pane whose mod does not stamp `@mod_accept idle.v1` is refused per call (`rejected mod_accept_unavailable`, nothing sent) |
+| anything else | `unavailable` (exit 2) | `null` | no conditional accept in this adapter |
 
 The entry is `fleet_runtime.accept_if_idle(pane, expected, delivery_id, text, socket="")`;
 CLI `fleet_runtime.py accept-if-idle --pane %N [--socket fleet]` takes JSON
@@ -361,9 +362,10 @@ identity, UUID and nonempty message (≤ 65536 characters) are checked first
 `submitted` (a native queue item was written, by this or an earlier attempt —
 the queued stage, never acceptance), `receipt` (only when accepted),
 `delivery_id`, `request_identity`. A receipt is
-`{delivery_id, method: "thread/queue", native_session, turn_id, previous_turn_id,
-anchor_turn_id, intervening_turn, queued_submission_id, accepted_at, source}` —
-`turn_id` is the native turn whose `userMessage.clientId == delivery_id`;
+`{delivery_id, method: "thread/queue" | "mod/prompt.submit", native_session, turn_id,
+previous_turn_id, anchor_turn_id, intervening_turn, queued_submission_id, accepted_at, source}` —
+`turn_id` is the native turn whose `userMessage.clientId == delivery_id` (Codex), or the
+turn the mod saw start with this prompt (Claude);
 `source` is `native`, or `journal` when a repeated call is answered from the
 record of an earlier acceptance.
 
@@ -419,16 +421,77 @@ reason to resend; consumers keep their own pending record until a call answers
 loop's due wakeup (`fleet-loop.py`, #4431; docs/dev/SESSION-TRANSFER.md «When
 a due wakeup is sent»).
 
-**Claude (unavailable, #4618).** From outside the session: the peer `auth` +
-`user` frame has no expected-turn condition (`fleet_peer_send` exit 0 = frame
-written; #4524's counterexample), the mod inbox runs `/commands` only. Inside the
-session, `$.prompt.submit` is the engine's own "a turn of its own once idle" but
-only waits — no refusal, no cancel, no turn id back. #4618 is the design (a
-`prompt.submit` hook that drops the plugin's own submission at entry when the
-fence moved) and must be verified on a real Claude before `claude` turns
-`available`.
+**Claude protocol (#4618).** Nothing outside the session can condition an
+entry: the peer `auth` + `user` frame has no expected-turn condition
+(`fleet_peer_send` exit 0 = frame written; #4524's counterexample) and the mod
+inbox's `command.run` runs `/commands` only. Inside it, the fleet mod (≥ 0.6.0,
+`mod/fleet/hooks/accept.ts`) uses what the engine verifiably gives (2.1.295,
+`fleet-idle-accept-claude-selftest.sh`):
 
-**Verification.** `fleet-runtime-selftest.py` `CodexIdleAccept` drives the full
+- `$.prompt.submit` is a turn of its own once idle, never folded into a running
+  one; called while a turn runs, the `prompt.submit` hooks run when it is
+  dequeued, right before it enters — **the entry boundary**;
+- a `prompt.submit` hook's `{ drop }` keeps it out: no turn, never re-queued;
+  the call resolves `{ drop }`;
+- while one prompt's chain runs, a person's Enter waits behind it (never
+  between the hook's check and the entry);
+- a `$` call made from a module **timer** skips every hook of its own plugin —
+  so the submit is made from an engine frame: the inbox poll bumps an atom and
+  the band's redraw (`ui.render` AbovePrompt) calls `$.prompt.submit`, which the
+  plugin's own `prompt.submit` hook then sees (`origin {kind: plugin, name: fleet}`).
+
+One call: steps 1 and the journal as for Codex (`method: mod/prompt.submit`,
+the request's `deadline` recorded). An earlier **pending** attempt is settled
+by its receipt first — the mod's durable `idle-accept-<delivery_id>.receipt`
+beside the inbox (names the turn), else the hidden-context line
+`fleet idle-accept receipt delivery_id=<id>` in the session's transcript (a
+delivery whose turn id is unknown ⇒ `unknown receipt_turn_unknown`); neither,
+and the attempt's deadline + grace has passed ⇒ it never ran (the mod drops a
+fleet prompt that matches no live slot) ⇒ a new attempt; no transcript to read
+⇒ `unknown`. Then: no `@mod_accept idle.v1` on the pane ⇒ `rejected
+mod_accept_unavailable`; a fresh `read` not idle ⇒ `rejected precheck_…`;
+otherwise the journal goes `pending` and ONE request goes to the inbox's fixed
+slot (`idle-accept.json`, a nonce, the C3 launch, `delivery_id`,
+`expected_turn` = the read's turn, the text, `deadline` = now + 5 s). The mod:
+
+1. refuses a launch / nonce / id / deadline that does not hold (`ok: false` ⇒
+   `rejected mod_refused`); takes the one slot (`slot_busy` otherwise);
+2. **precheck in-process**: the last finished main turn is `expected_turn`,
+   finished `idle`, none running, no `session.end` (a `/clear`, a `/resume`)
+   since ⇒ else `rejected precheck_not_idle`, nothing submitted;
+3. queues the slot and redraws the band; the render hook submits (`asUser`);
+   no redraw by the deadline ⇒ `rejected not_submitted` (never handed over);
+4. **at the entry boundary**, its `prompt.submit` hook checks again, after its
+   last await: the same live slot, the deadline, step 2's fence, the prompt box
+   empty (a person's draft ⇒ `draft_present`) — any miss ⇒ `{ drop }` ⇒
+   `rejected <why>`; passed ⇒ the receipt line rides as hidden `context`, and
+   the turn that starts is the answer: `accepted native_entry` + `turn_id`,
+   `previous_turn_id = expected_turn`, the durable receipt written;
+5. handed over and unanswered 3 s past the deadline ⇒ `unknown entry_unanswered`;
+   a late arrival then finds no live slot and is dropped.
+
+The python side waits deadline + 3 s grace + 2 s; a request the mod never took
+is withdrawn by the same rename the mod claims with (`rejected not_taken`);
+taken and unanswered ⇒ `unknown`, the journal `pending`. Never `command.run`,
+a peer frame, or a bare `$.prompt.submit` from a timer.
+
+What is checked where: **idle**, the **turn revision** and the **draft** are
+all checked at the entry boundary, in the engine's own serialized submit path —
+unlike Codex there is no window for a person's turn between the check and the
+entry (`intervening_turn` is always false). What the mod cannot see stays
+#4431's gates (attention / tool / bg / transfer — none of which is idle in its
+own turn bookkeeping anyway).
+
+**Verification.** Claude: `fleet-runtime-selftest.py` `ClaudeIdleAccept` /
+`ClaudePostAccept` (the journal, the settle, the inbox slot on real files) and
+`mod/fleet/tests/accept.test.tsx` (the mod's precheck, entry drop, receipt);
+`fleet-idle-accept-claude-selftest.sh` runs the REAL engine (≥ 2.1.295, a copy
+of mod/fleet, a loopback model, isolated HOME; SKIP elsewhere): idle ⇒ accepted,
+the receipt durable and in the hidden context; a person's turn running ⇒
+refused before any submit, never run after; a draft ⇒ dropped at entry, the
+draft untouched, never re-queued; a person's Enter racing the request ⇒ either
+refused or the loop's turn first, never after; `/clear` ⇒ refused (BREAK-IT
+`runtime-idle-accept-claude`). Codex: `fleet-runtime-selftest.py` `CodexIdleAccept` drives the full
 `accept_if_idle` path through a fake app-server with the semantics the real one
 showed (BREAK-IT `runtime-idle-accept-codex`); `fleet-idle-accept-native-selftest.sh`
 runs `codex_settle` / `codex_receipt` / `codex_queued` against a real

@@ -546,8 +546,9 @@ def deliver_fenced(path, r, now):
 
     Only `accepted` (the native turn carrying this delivery id) is a delivery.
     unknown keeps the pending delivery and settles it with the same id and text on
-    a later tick; rejected keeps the wakeup due. No capability (Claude until
-    #4618) ⇒ nothing is sent and the ledger says so. Never turn/start or peer send.
+    a later tick; rejected keeps the wakeup due. No capability ⇒ nothing is sent
+    and the ledger says so (Claude: the mod's entry-boundary accept, #4618).
+    Never turn/start or peer send.
     """
     rt = _runtime()
     sock = r['fleet']['session']

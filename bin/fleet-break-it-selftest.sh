@@ -6537,7 +6537,17 @@ drill_runtime_idle_accept_unavailable() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-runtime-selftest.py" ConditionalAcceptance 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='Claude 缺原生条件接受能力时零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+  WHAT='缺条件接受能力的 provider 零投递、零回执；旧 idle/代次、迟到 ACK、重复及未知门均不能授权'
+}
+
+drill_runtime_idle_accept_claude() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-runtime-selftest.py" ClaudeIdleAccept ClaudePostAccept 2>&1) || { WHY="$out"; return 1; }
+  # The real engine where claude >= 2.1.295 is installed (SKIP elsewhere).
+  out=$(bash "$BIN/fleet-idle-accept-claude-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Claude 入口边界条件接受：忙时预检拒、不提交；草稿/换轮/clear/超时在 prompt.submit 入口 drop、不补投；回执落盘且在 hidden context，断线后按回执结清，零重发'
 }
 
 drill_runtime_idle_accept_codex() {
@@ -6557,7 +6567,7 @@ drill_loop_due_display_gate() {
   # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
   out=$(bash "$BIN/fleet-loop-idle-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 accepted 才记，rejected 仍到期，unknown 同 id 结清，Claude 不投'
+  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 accepted 才记，rejected 仍到期，unknown 同 id 结清，缺能力不投'
 }
 
 drill_pending_observation_stale() {

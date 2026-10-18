@@ -58,13 +58,20 @@ class Snapshot(unittest.TestCase):
             self.assertEqual(runtime.project(s, now=101.)["runtime"]["state"], "unknown")
 
 
+REAL_CAPABILITY = runtime.idle_accept_capability
+
+
 class ConditionalAcceptance(unittest.TestCase):
-    """Claude (and any unknown provider): unavailable, no I/O, no receipt."""
+    """A provider the adapter has no accept for: unavailable, no I/O, no receipt.
+    (Claude had none until #4618 — stood in for here; its own: ClaudeIdleAccept.)"""
 
     def setUp(self):
         self.delivery = "55555555-5555-4555-8555-555555555555"
         self.snapshot = Snapshot().observation()
         self.snapshot["identity"]["provider"] = "claude"
+        p = mock.patch.object(runtime, "idle_accept_capability",
+                              side_effect=lambda provider: REAL_CAPABILITY("future-provider"))
+        p.start(); self.addCleanup(p.stop)
         for target in ("subprocess.run", "subprocess.Popen", "socket.socket", "builtins.open"):
             p = mock.patch(target, side_effect=AssertionError("unavailable must do no I/O"))
             p.start(); self.addCleanup(p.stop)
@@ -87,17 +94,20 @@ class ConditionalAcceptance(unittest.TestCase):
         return result
 
     def test_capability_does_not_guess_from_provider_or_version(self):
-        for provider in ("claude", "future-provider", None, {}):
-            c = runtime.idle_accept_capability(provider)
+        for provider in ("future-provider", None, {}, "Claude"):
+            c = REAL_CAPABILITY(provider)
             self.assertEqual(c["version"], 1)
             self.assertEqual(c["state"], "unavailable")
             self.assertIsNone(c["native_method"])
             self.assertEqual(c["support"], "native_atomic_precondition_and_receipt_required")
-        c = runtime.idle_accept_capability("codex")
+        c = REAL_CAPABILITY("codex")
         self.assertEqual((c["state"], c["native_method"]), ("available", "thread/queue/start"))
         self.assertEqual(c["fence"], dict(idle="native", turn="precheck"))
+        c = REAL_CAPABILITY("claude")
+        self.assertEqual((c["state"], c["native_method"]), ("available", "mod/prompt.submit"))
+        self.assertEqual(c["fence"], dict(idle="entry_boundary", turn="entry_boundary"))
 
-    def test_previous_idle_observation_claude_never_sends(self):
+    def test_previous_idle_observation_without_capability_never_sends(self):
         before = copy.deepcopy(self.snapshot)
         # A previous read is no authority over a concurrent user turn.
         result = self.attempt()
@@ -136,6 +146,178 @@ class ConditionalAcceptance(unittest.TestCase):
             for kw in (dict(pane=""), dict(delivery_id=""), dict(text=""), dict(text=123),
                        dict(text="x" * 65537)):
                 self.assertEqual(self.attempt(**kw)["reason"], "invalid_request")
+
+
+class ClaudeIdleAccept(unittest.TestCase):
+    """accept_if_idle for Claude: the mod's inbox answer stood in for; the real
+    engine is fleet-idle-accept-claude-selftest.sh, the mod's half its own tests."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.inbox = Path(self.tmp.name) / "inbox"
+        self.inbox.mkdir()
+        self.projects = Path(self.tmp.name) / "projects"
+        (self.projects / "-repo").mkdir(parents=True)
+        self.snapshot = Snapshot().observation()
+        self.snapshot["identity"]["provider"] = "claude"
+        self.delivery = "77777777-7777-4777-8777-777777777777"
+        self.state, self.advert, self.posts, self.now = "idle", "idle.v1", [], 101.
+        self.answer = lambda req: dict(ok=True, state="accepted", reason="native_entry", nonce=req["nonce"],
+                                       delivery_id=req["delivery_id"], turn_id="turn-2",
+                                       previous_turn_id=req["expected_turn"])
+
+        def read(pane, context=None, expected=None, socket=""):
+            s = copy.deepcopy(self.snapshot)
+            s["runtime"]["state"] = self.state
+            return s
+
+        def post(directory, request, wait):
+            self.posts.append(request)
+            a = self.answer(request)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        opts = {"@mod_accept": lambda: self.advert}
+        patches = [mock.patch.dict(os.environ, FLEET_CONF_DIR=self.tmp.name, FLEET_CC_PROJECTS_DIR=str(self.projects)),
+                   mock.patch.object(runtime, "read", side_effect=read),
+                   mock.patch.object(runtime, "claude_inbox", return_value=self.inbox),
+                   mock.patch.object(runtime, "claude_post_accept", side_effect=post),
+                   mock.patch.object(runtime.launch, "inspect", side_effect=lambda *a: R.copy()),
+                   mock.patch.object(runtime.launch, "option", side_effect=lambda pane, name, socket="": opts[name]()),
+                   mock.patch.object(runtime.time, "time", side_effect=lambda: self.now)]
+        for p in patches:
+            p.start(); self.addCleanup(p.stop)
+
+    def accept(self, text="loop due message"):
+        r = runtime.accept_if_idle("%7", self.snapshot, self.delivery, text)
+        self.assertNotIn(text, json.dumps(r))
+        return r
+
+    def test_idle_accepts_once_with_the_mods_turn(self):
+        r = self.accept()
+        self.assertEqual((r["state"], r["submitted"], r["receipt"]["turn_id"]), ("accepted", True, "turn-2"))
+        self.assertEqual((r["receipt"]["method"], r["receipt"]["previous_turn_id"]), ("mod/prompt.submit", "turn-1"))
+        req = self.posts[0]
+        self.assertEqual((req["accept"], req["expected_turn"], req["delivery_id"]), ("idle.v1", "turn-1", self.delivery))
+        self.assertEqual(req["launch"], dict(C, provider="claude"))
+        self.assertTrue(0 < req["deadline"] - self.now <= runtime.CLAUDE_ACCEPT_WINDOW)
+        again = self.accept()
+        self.assertEqual((again["state"], again["receipt"]["source"], len(self.posts)), ("accepted", "journal", 1))
+
+    def test_no_mod_advert_or_not_idle_sends_nothing(self):
+        self.advert = ""
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"], r["submitted"]), ("rejected", "mod_accept_unavailable", False))
+        self.advert, self.state = "idle.v1", "active"
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"], r["submitted"]), ("rejected", "precheck_active", False))
+        self.assertEqual(self.posts, [])
+
+    def test_entry_drop_is_rejected_and_a_retry_may_post_again(self):
+        self.answer = lambda req: dict(ok=True, state="rejected", reason="draft_present", nonce=req["nonce"],
+                                       delivery_id=req["delivery_id"])
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"], r["submitted"], r["receipt"]), ("rejected", "draft_present", True, None))
+        self.accept()
+        self.assertEqual(len(self.posts), 2)
+
+    def test_unanswered_is_settled_by_its_receipt_never_resent(self):
+        self.answer = lambda req: runtime.Unknown("entry_unanswered")
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"]), ("unknown", "entry_unanswered"))
+        # Within the window: still unsettled, no second post.
+        self.assertEqual(self.accept()["reason"], "previous_attempt_unsettled")
+        self.assertEqual(len(self.posts), 1)
+        # The turn's hidden context names it, no receipt file: delivered, turn unknown.
+        sid = R["native_session"]
+        t = self.projects / "-repo" / (sid + ".jsonl")
+        t.write_text(json.dumps(dict(type="user", message=dict(content=[
+            dict(type="text", text=runtime.CLAUDE_RECEIPT_PREFIX + self.delivery)]))) + "\n")
+        self.assertEqual(self.accept()["reason"], "receipt_turn_unknown")
+        # The mod's durable receipt names the turn.
+        (self.inbox / ("idle-accept-%s.receipt" % self.delivery)).write_text(json.dumps(dict(
+            state="accepted", delivery_id=self.delivery, turn_id="turn-9")))
+        r = self.accept()
+        self.assertEqual((r["state"], r["reason"], r["receipt"]["turn_id"]), ("accepted", "mod_receipt", "turn-9"))
+        self.assertEqual(len(self.posts), 1)
+
+    def test_past_its_window_with_no_receipt_it_never_ran(self):
+        self.answer = lambda req: runtime.Unknown("entry_unanswered")
+        self.accept()
+        sid = R["native_session"]
+        (self.projects / "-repo" / (sid + ".jsonl")).write_text('{"type":"user"}\n')
+        self.now += runtime.CLAUDE_ACCEPT_WINDOW + runtime.CLAUDE_ACCEPT_GRACE + runtime.CLAUDE_ACCEPT_POLL + 1
+        self.answer = lambda req: dict(ok=True, state="accepted", reason="native_entry", nonce=req["nonce"],
+                                       delivery_id=req["delivery_id"], turn_id="turn-3",
+                                       previous_turn_id=req["expected_turn"])
+        r = self.accept()
+        self.assertEqual((r["state"], r["receipt"]["turn_id"], len(self.posts)), ("accepted", "turn-3", 2))
+        # No transcript to read: never "not delivered".
+        self.delivery = "88888888-8888-4888-8888-888888888888"
+        self.answer = lambda req: runtime.Unknown("entry_unanswered")
+        self.accept()
+        (self.projects / "-repo" / (sid + ".jsonl")).unlink()
+        self.now += 60
+        self.assertEqual(self.accept()["reason"], "receipt_scan_incomplete")
+
+    def test_reused_delivery_id_with_other_text_is_refused(self):
+        self.accept()
+        self.assertEqual(self.accept(text="another message")["reason"], "delivery_id_reused")
+        self.assertEqual(len(self.posts), 1)
+
+    def test_an_answer_for_another_turn_is_not_a_receipt(self):
+        self.answer = lambda req: dict(ok=True, state="accepted", reason="native_entry", nonce=req["nonce"],
+                                       delivery_id=req["delivery_id"], turn_id="turn-2", previous_turn_id="other")
+        self.assertEqual(self.accept()["state"], "unknown")
+
+
+class ClaudePostAccept(unittest.TestCase):
+    """claude_post_accept on real files, a thread playing the mod's inbox poll."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.d = Path(self.tmp.name)
+        self.req = dict(accept="idle.v1", nonce="c" * 32, delivery_id="99999999-9999-4999-8999-999999999999")
+
+    def mod(self, answer, take=True):
+        import threading
+
+        def run():
+            for _ in range(200):
+                try:
+                    (self.d / "idle-accept.json").rename(self.d / "idle-accept.taken") if take else None
+                    break
+                except FileNotFoundError:
+                    runtime.time.sleep(.01)
+            if answer is not None:
+                (self.d / "idle-accept.done").write_text(json.dumps(answer))
+        t = threading.Thread(target=run)
+        t.start()
+        self.addCleanup(t.join)
+
+    def test_answered(self):
+        self.mod(dict(ok=True, state="accepted", nonce=self.req["nonce"], delivery_id=self.req["delivery_id"]))
+        self.assertEqual(runtime.claude_post_accept(self.d, self.req, 3)["state"], "accepted")
+        self.assertEqual(sorted(p.name for p in self.d.iterdir()), ["idle-accept.lock"])
+
+    def test_never_taken_is_rejected_and_withdrawn(self):
+        r = runtime.claude_post_accept(self.d, self.req, .2)
+        self.assertEqual((r["state"], r["reason"]), ("rejected", "not_taken"))
+        self.assertFalse((self.d / "idle-accept.json").exists())
+
+    def test_taken_unanswered_is_unknown(self):
+        self.mod(None)
+        with self.assertRaises(runtime.Unknown):
+            runtime.claude_post_accept(self.d, self.req, .5)
+
+    def test_refused_and_mismatched(self):
+        self.mod(dict(ok=False, error="launch_changed"))
+        self.assertEqual(runtime.claude_post_accept(self.d, self.req, 3)["reason"], "mod_refused")
+        self.mod(dict(ok=True, state="accepted", nonce="d" * 32, delivery_id=self.req["delivery_id"]))
+        with self.assertRaises(runtime.Unknown):
+            runtime.claude_post_accept(self.d, self.req, 3)
 
 
 class FakeCodex:

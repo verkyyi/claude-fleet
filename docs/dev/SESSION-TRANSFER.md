@@ -481,8 +481,9 @@ typing / an unsent draft still hold it. Then two tiers. A pane with a C3 launch
 `accept_if_idle` (docs/dev/FLEET-MCP.md «Conditional idle acceptance»): only
 `accepted` counts a delivery; `rejected` keeps the wakeup due; `unknown` keeps
 `pending_delivery` and the next tick settles it with the same delivery id and
-text, never a new send; a provider without the capability (Claude, #4618) is
-not sent at all. A pane without C3 — a local spawn without `FLEET_LAUNCH`, and
+text, never a new send; a provider without the capability is not sent at all
+(Claude has it since #4618 through the fleet mod; a pane whose mod lacks it is
+`rejected`, still due). A pane without C3 — a local spawn without `FLEET_LAUNCH`, and
 this transfer bridge — keeps the original road (Codex `thread/read` idle +
 `turn/start`, Claude inbox + transcript ack): `last_attempt.fence` says
 `legacy_unfenced`, which is **not** an atomic accept. The ledger carries

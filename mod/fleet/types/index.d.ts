@@ -34,6 +34,8 @@ declare module 'claude-code' {
       progress: ProgressSnapshot | null
       /** Alert keys standing now and already toasted (`kid:issue-12`, `pr:34`). */
       alerts: string[]
+      /** Bumped when a conditional idle accept is queued: the band's redraw submits it (#4618). */
+      acceptKick: number
     }
   }
 }

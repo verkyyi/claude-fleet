@@ -34,6 +34,8 @@ export type InboxIo = {
   run: (command: string, args: string) => Promise<void>
   /** Read-only native observation. This never enters command.run. */
   query?: (request: Record<string, unknown>) => Promise<void>
+  /** Conditional idle acceptance (accept.ts, #4618): its outcome rides the .done. */
+  accept?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
 /**
@@ -95,12 +97,16 @@ export async function pollInbox(io: InboxIo, dir: string): Promise<number> {
   for (const seq of pending(names)) {
     const base = `${dir}/${seq}`
     if (!(await io.claim(`${base}.json`, `${base}.taken`))) continue
-    let result: { ok: boolean; error?: string }
+    let result: { ok: boolean; error?: string; [k: string]: unknown }
     try {
       const text = await io.read(`${base}.taken`)
       let request: Record<string, unknown> | undefined
       try { request = JSON.parse(text) } catch { /* Keep the command parser's error. */ }
-      if (request?.query !== undefined) {
+      if (request?.accept !== undefined) {
+        if (request.accept !== 'idle.v1') throw new Error('unsupported accept')
+        if (!io.accept) throw new Error('idle accept unavailable')
+        result = { ok: true, ...(await io.accept(request)) }
+      } else if (request?.query !== undefined) {
         if (request.query !== 'runtime.v1') throw new Error('unsupported query')
         if (!io.query) throw new Error('runtime query unavailable')
         await io.query(request)
