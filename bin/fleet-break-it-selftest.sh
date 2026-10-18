@@ -3146,11 +3146,9 @@ SH
 # GitHub does; stable (at c1) is moved onto c2, which changes a workflow → exit 4,
 # the reason said as no workflows permission, the tag left.
 drill_stable_push_no_workflows() {
-  CAP=30; local t0 d out rc c1 f
-  for f in release-train.yml; do
-    grep -q 'token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}' "$ROOT/.github/workflows/$f" \
-      || { WHY="$f's checkout does not push with STABLE_PUSH_TOKEN"; return 1; }
-  done
+  CAP=30; local t0 d out rc c1
+  grep -q 'token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}' "$ROOT/.github/workflows/release-train.yml" \
+    || { WHY="release-train.yml's checkout does not push with STABLE_PUSH_TOKEN"; return 1; }
   d="$WORK/nowf"; mkdir -p "$d/shim" "$d/seed"
   cat > "$d/shim/gh" <<SH
 #!/bin/sh

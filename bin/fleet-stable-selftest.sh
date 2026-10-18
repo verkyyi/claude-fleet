@@ -358,7 +358,7 @@ done
 eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 run move --ref nope
 eq "Q: --ref takes stable" 2 "$RC"
-C24=$(commit twentyfour); push
+commit twentyfour >/dev/null; push
 C25=$(commit twentyfive); push
 printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
 run move "$C25" --ref stable
