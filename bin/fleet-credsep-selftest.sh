@@ -61,10 +61,11 @@ cleanup() {
 }
 trap cleanup EXIT
 export HOME="$SB/home" FLEET_CONF_DIR="$SB/home/.config/claude-fleet" XDG_CONFIG_HOME="$SB/home/.config"
+SPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 export FLEET_NODE_STATE="$SB/node" FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
        FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
-       FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+       FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$SPORT"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE
 C=$FLEET_CONF_DIR R="$SB/db/$ME"
 mkdir -p "$C/accounts/main.hub" "$HOME/.codex" "$HOME/.codex-accounts/work" "$HOME/.codex-accounts/mine" \
@@ -200,7 +201,7 @@ if grep -q "^ExecStart=.*fleet-credsep-launch.py.* agent $ME\$" "$AGENT_DEF.d/cr
   pass "B the agent's service starts the launcher (root, no UserName)"
 else fail "B agent service: $(cat "$AGENT_DEF" "$AGENT_DEF.d/credsep.conf" 2>/dev/null | head -20)"; fi
 { [ -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] || [ -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ]; } \
-  && ! ls "$SB/daemons" | grep -q "credsep\.$ME\|credsep-$ME" \
+  && ! compgen -G "$SB/daemons/*credsep[.-]$ME*" >/dev/null \
   && pass "B the machine's shared proxy service is written; no proxy of the login's own (#4674)" \
   || fail "B proxy service: $(ls "$SB/daemons")"
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1)

@@ -195,13 +195,14 @@ mkdir -p "$FLEET_LOGIN_HOMES"
 # (the run dir holds the proxy's ctl.sock: a short /tmp path, AF_UNIX caps it at 104 bytes)
 SRUN=$(mktemp -d /tmp/lns.XXXXXX) || exit 2
 ME=$(/usr/bin/id -un)
+SPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN" \
        FLEET_CREDSEP_LOG_BASE="$WORK/credsep/log" FLEET_CREDSEP_LIB="$WORK/credsep/lib" \
        FLEET_CREDSEP_DAEMON_DIR="$WORK/credsep/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
        FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0 \
        FLEET_CREDSEP_JOIN_WAIT=0 FLEET_NODE_STATE="$WORK/credsep/node" \
-       FLEET_CRED_SHARED_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+       FLEET_CRED_SHARED_PORT="$SPORT"
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
 for l in frank victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24acme qen qix; do

@@ -195,10 +195,11 @@ drill_cred_upstream_tenant_override() {
   # the login is a tenant of the machine's shared proxy (#4674: no proxy of its
   # own); the proxy's upstream is the process's — the sandbox launcher hands its
   # FLEET_CRED_* through — never a line of the login's own file
+  local sport; sport=$(cred_deadport)
   ( export HOME="$sb/home" FLEET_CONF_DIR="$c" FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" \
       FLEET_CREDSEP_LOG_BASE="$sb/log" FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" \
       FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
-      FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$(cred_deadport)"
+      FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$sport"
     bash "$BIN/fleet-credsep.sh" install >"$sb/install.out" 2>&1
     printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\nFLEET_CRED_CENTRAL_URL=%s/central\nFLEET_HUB_URL=%s\n' \
       "$evil" "$evil" "$evil" >> "$c/fleet.conf"
