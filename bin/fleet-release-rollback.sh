@@ -51,7 +51,7 @@ if [ -z "$repo" ]; then
 fi
 base=$($GH api "repos/$repo" --jq .default_branch 2>/dev/null) || base=''
 [ -n "$base" ] || base=master
-[ -n "$remote" ] || remote="https://github.com/$repo.git"
+[ -n "$remote" ] || remote="https://github.com/$repo.git"   # dist-ok: a rollback IS a revert PR pushed to the repo on GitHub, not the fleet fetching its own code
 
 # 1. the change
 pr='' title=''
