@@ -609,51 +609,42 @@ fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 FLEET_SPAWN_REFUSAL=''
 fleet_spawn_refused() { return 1; }
 
-# --- who holds a role (issue #3114, EPIC #3111 rule 4) ------------------------------
-# A role is a MARK on an ordinary window, never a kind of window: take_role
-# (bin/fleet-role-take.sh, the dispatch group's `take_role` tool) stamps
-# `@fleet_role_def orchestrator|steward` on a window that binds no issue and writes
-# ONE line per role into `$FLEET_CONF_DIR/global/roles.held` — the only record of
-# who holds it:  <role> TAB <fleet session> TAB <@fleet_id> TAB <window id> TAB <epoch>
-# fleet_role_holder is the only reader; fleet_win_for_key orchestrator|steward asks it.
-FLEET_ROLES_TAKEN='orchestrator steward'
-fleet_roles_held_file() { printf '%s/global/roles.held' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; }
-
-# fleet_role_holder <role> [<sock>] → the window id holding <role> on this fleet's
-# server. rc 0 + the id · rc 1 nobody · rc 2 ambiguous (one stderr line). In order:
-#   ① the roles.held line, while its window lives (by @fleet_id, else its id) and
-#     still carries the mark — a line whose window went is nobody's;
-#   ② a window carrying the mark with no line (a restored window, a hand stamp);
-#   ③ an old resident seat's `@fleet_role <role>` (the seat is gone, issue #3118;
-#     never written again — # compat-1v: 下一批删).
-fleet_role_holder() {
-  local role="${1:-}" sock="${2:-}" rows f line fid wid hits n
-  case " $FLEET_ROLES_TAKEN " in *" $role "*) : ;; *) return 1 ;; esac
+# --- the `agent:<name>` address (EPIC #4333 C8, issue #4341) -----------------------
+# fleet_win_for_agent <name> [<sock>] → the live window started from the agent file
+# <name> (@agent_def, issue #3122) on this fleet's server. rc 0 + the id · rc 1 none
+# · rc 2 several (one stderr line — two sessions from one template is allowed, and
+# then the address is ambiguous, never a pick). A warm-pool window never answers.
+fleet_win_for_agent() {
+  local name="${1:-}" sock="${2:-}" rows hits n
+  case "$name" in ''|*[!A-Za-z0-9._:-]*) return 1 ;; esac
   if [ -n "$sock" ]; then
-    rows=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}|#{@fleet_id}' tmux -L "$sock")
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}|#{@fleet_role_def}|#{@fleet_role}' tmux -L "$sock")   # compat-1v: 下一批删 (cols 4-5)
   else
-    rows=$(fleet_lw '#{window_id}|#{@fleet_role}|#{@fleet_role_def}|#{@fleet_id}')
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}|#{@fleet_role_def}|#{@fleet_role}')   # compat-1v: 下一批删 (cols 4-5)
   fi
-  f=$(fleet_roles_held_file)
-  if [ -f "$f" ]; then
-    line=$(awk -F'\t' -v r="$role" '$1 == r { l = $0 } END { print l }' "$f" 2>/dev/null)
-    if [ -n "$line" ]; then
-      fid=$(printf '%s' "$line" | cut -f3); wid=$(printf '%s' "$line" | cut -f4)
-      hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$role" -v f="$fid" -v w="$wid" '
-        $3 != r { next } f != "" && $4 == f { print $1; exit } $1 == w { c = $1 } END { if (c != "") print c }' | head -1)
-      [ -n "$hits" ] && { printf '%s' "$hits"; return 0; }
-    fi
-  fi
-  hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$role" '
-    $3 == r { d = d $1 "\n" } $2 == r { o = o $1 "\n" }
-    END { printf "%s", (d != "" ? d : o) }')
+  hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$name" '
+    $3 == "1" { next }
+    $2 == r { print $1; next }
+    ($4 == r || $5 == r) && r !~ /^(home|panel|worker)$/ { print $1 }   # compat-1v: 下一批删 — an old role mark
+  ' | awk '!seen[$0]++')
   n=$(printf '%s' "$hits" | grep -c .)
   case "$n" in
     0) return 1 ;;
     1) printf '%s' "$hits"; return 0 ;;
   esac
-  printf 'fleet: %s is ambiguous — %s windows hold the role %s\n' "$role" "$n" "$role" >&2
+  printf 'fleet: agent:%s is ambiguous — %s sessions run it\n' "$name" "$n" >&2
   return 2
+}
+
+# fleet_agent_addr <target> → `agent:<name>` for an agent address, rc 1 otherwise.
+# The two bare words an older session still sends to are read as the agent files of
+# the same name for one version. # compat-1v: 下一批删
+fleet_agent_addr() {
+  case "${1:-}" in
+    agent:?*) printf '%s' "$1" ;;
+    orchestrator|steward) printf 'agent:%s' "$1" ;;   # compat-1v: 下一批删
+    *) return 1 ;;
+  esac
 }
 
 # fleet_claude_has_agent_flag <claude binary> — rc 0 when that Claude Code knows
@@ -5905,23 +5896,20 @@ fleet_win_stamp_cmd() {
 # rather than a bare key that could name another repo's window.
 fleet_origin_key() {
   [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || return 0
-  local o iss owt pth k pre rdef
+  local o iss owt pth k pre fid
   o=$(tmux display-message -p -t "$TMUX_PANE" \
-        '#{@fleet_role_def}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_id}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
-  rdef=${o%%|*}; o=${o#*|}
-  # The orchestrating session (issue #2129): no issue, no scratch, no repo — its
-  # key is the literal `orchestrator`, the one fleet_win_for_key answers to.
-  [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }
-  [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }   # issue #2670
+  fid=${o%%|*}; o=${o#*|}
+  # A session with no key of its own — no issue, no scratch, no repo: a session
+  # template opened bare, a person's own no-repo session — answers to its IDENTITY
+  # (issue #4341): its spawns name it as their parent and every child reports back
+  # to it. home and the panels are no session: nothing, ≡ the hub.
+  case "${o%%|*}" in home|panel) fid='' ;; esac
+  fleet_is_fid "$fid" || fid=''
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
-  # A session that TOOK the role (issue #3114 — `@fleet_role_def`, never the old
-  # seat's `@fleet_role`) and has no key of its own answers to the role's name
-  # (issue #3439): before, its spawns read as the hub's and every child it
-  # dispatched reported to nobody. take_role refuses a window that binds an issue.
-  case "$rdef" in orchestrator|steward) ;; *) rdef='' ;; esac
-  pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || { printf '%s' "$rdef"; return 0; }
+  pre=$(_fleet_key_prefix "$(fleet_current_session)" "$TMUX_PANE") || { printf '%s' "$fid"; return 0; }
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
@@ -5936,7 +5924,7 @@ fleet_origin_key() {
   # cwd is the base checkout never keys as a scratch.
   k=$(fleet_scratch_key "$owt")
   [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
-  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$rdef"; fi
+  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$fid"; fi
   return 0
 }
 
@@ -5987,15 +5975,14 @@ fleet_origin_gate() {
   local sess="${1:-}" ex="${2:-}" o="${3:-}" ow="${4:-}" v
   [ "${FLEET_ORIGIN_GATE:-1}" = 0 ] && return 0   # seam: a test whose subject is not the parent
   [ -n "$ow" ] && return 0
-  # `--origin hub` is the operator's own word (issue #2623: from the orchestrator's
-  # pane canon stamps `orchestrator` for it — the caller itself, never refused).
+  # `--origin hub` is the operator's own word.
   [ "$ex" = hub ] && return 0
   if [ -z "$ex" ] && fleet_pane_lost; then
     printf 'cannot tell who is spawning — $TMUX is set but $TMUX_PANE is not; run it from a scratch/worker pane, or pass --origin hub (you, the operator) / --origin <key>'
     return 4
   fi
   case "$o" in
-    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*|orchestrator|steward) ;;
+    issue-[0-9]*|scratch-[0-9]*|*:issue-[0-9]*|*:scratch-[0-9]*) ;;
     *) return 0 ;;
   esac
   v=$(fleet_worker_locate "wid:$o" "$sess" 2>/dev/null)
@@ -6017,8 +6004,7 @@ fleet_origin_gate() {
 #                `↳cd-conductor-scratch-52` tag and no parent. So an explicit value
 #                is CANONICALIZED: `…-scratch-<N>`/`scratch-<N>` → scratch-<N>,
 #                `…issue-<N>` → issue-<N>; a canonical key and the known literals
-#                pass through (`hub` → empty: stamp nothing, issue #896 — `orchestrator` when
-#                that is the detected key, issue #2623); anything else yields to <detected> when there is
+#                pass through (`hub` → empty: stamp nothing, issue #896); anything else yields to <detected> when there is
 #                one (a stderr warning names the swap — a Claude caller sees it in
 #                its tool output) and is otherwise kept as a free-form label
 #                (`↳<label>`, no nesting — how a source-fleet name renders).
@@ -6051,16 +6037,11 @@ fleet_origin_canon() {
   fi
   [ -n "$det" ] && [ -n "$tgt" ] && [ -n "$src" ] && [ "$src" != "$tgt" ] && det=$src
   [ -z "$ex" ] && { printf '%s' "$det"; return 0; }
-  # `orchestrator` (issue #2129) is a key, the fleet's one orchestrating session —
-  # never repo-qualified, never swapped for a detected one.
-  case "$ex" in autofill|bridge|orchestrator|steward) printf '%s' "$ex"; return 0 ;; esac
+  case "$ex" in autofill|bridge) printf '%s' "$ex"; return 0 ;; esac
   # `hub` (issue #896): the caller IS the hub's ⌃s by another road — the worker
   # sidebar's input line runs inside a worker's window, so detection would nest
-  # the new session under that worker. Empty ≡ hub, whatever was detected —
-  # except the orchestrator's own pane (issue #2623): it spawns on the person's
-  # behalf, and a batch driver it starts with `--origin hub` is still ITS child,
-  # whose ship report must come back to it.
-  [ "$ex" = hub ] && { [ "$det" = orchestrator ] && printf 'orchestrator'; return 0; }
+  # the new session under that worker. Empty ≡ hub, whatever was detected.
+  [ "$ex" = hub ] && return 0
   k=$(fleet_scratch_key "$ex")                    # scratch-<N> and *-scratch-<N>
   if [ -z "$k" ]; then
     case "$ex" in
@@ -6134,19 +6115,14 @@ _fleet_wfk_repo_ok() {
 fleet_win_for_key() {
   local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess pool fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
+  # `agent:<name>` (issue #4341): the session started from that agent file.
+  case "$key" in agent:?*) fleet_win_for_agent "${key#agent:}" "$sock"; return $? ;; esac
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
-    orchestrator|steward)
-      # The fleet's one orchestrating session (issue #1957), and its steward (issue
-      # #2670): the @fleet_role, on this fleet's server — no number to recycle, no
-      # repo to qualify it. The role's HOLDER answers first (issue #3117, EPIC #3111
-      # rule 4): an ordinary window that took the role carries `@fleet_role_def <role>`
-      # (C3's take_role); only when none does is the old seat's @fleet_role read
-      # (# compat-1v: 下一批删) — so a report finds whoever holds the role now.
-      # fleet_role_holder is the one reader (issue #3114): the roles.held record.
+    orchestrator|steward)   # compat-1v: 下一批删 — an old child's @origin; fid comes first
       [ -z "$pre" ] || return 1
-      fleet_role_holder "$key" "$sock"
+      fleet_win_for_agent "$key" "$sock"
       return $? ;;
     *) return 1 ;;
   esac
@@ -6433,8 +6409,8 @@ fleet_win_retire() {
 
 # fleet_parked <owner/name> <N> — rc 0 when that issue's session is PARKED (issue
 # #2671, EPIC #2668 C3): a park closed its window to free the place and reopens it
-# itself when what it waits for arrives, so a restore never does. (The steward's
-# parker left with #4339; the book is still read.)
+# itself when what it waits for arrives, so a restore never does. (The parker
+# left with #4339; the book is still read.)
 # global/park.idx is the book's index, one `<owner/name>#<N> TAB fid` per parked issue.
 fleet_parked() {
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
@@ -6551,7 +6527,7 @@ _fleet_wid_split() {
   if [ -n "$u" ]; then
     fleet_is_fid "$u" || return 1
   fi
-  if ! fleet_is_fid "$k" && [ "$k" != orchestrator ] && [ "$k" != steward ]; then   # #2129 · #2670
+  if ! fleet_is_fid "$k"; then
     printf '%s' "$k" | grep -Eqx '([A-Za-z0-9][A-Za-z0-9._-]{0,127}:)?(issue|scratch)-[1-9][0-9]{0,9}' || return 1
   fi
   printf '%s\t%s' "$u" "$k"
@@ -7167,7 +7143,7 @@ fleet_worker_locate() {
   local t="${1:-}" sess="${2:-}" sp u k home w node rc
   [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)
   case "$t" in
-    wid:*|*/*|issue-*|scratch-*|orchestrator|steward) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
+    wid:*|*/*|issue-*|scratch-*) sp=$(_fleet_wid_split "$t") || { echo unknown; return 2; } ;;
     *) sp='' ;;
   esac
   if [ -n "$sp" ]; then
@@ -7291,8 +7267,14 @@ say("failed:unconfirmed", 5, "still %s on the node after %ss — not counted as 
 fleet_stamp_origin_wid() {
   local s="${1:-}" w="${2:-}" o="${3:-}" k="${4:-}" pf ow
   [ -n "$w" ] && _fleet_wid_split "$o" >/dev/null || return 0
-  fleet_is_fid "$o" && return 0          # @origin is a key, never an identity
-  pf=$(_fleet_key_fid "$s" "$o" "$k") || pf=''
+  # A parent with no key of its own is named by its identity already (issue #4341):
+  # it IS @origin_fid, and the worker_id is its fleet's UUID + it — only while a
+  # window here wears it (one from elsewhere came with its own --origin-wid).
+  if fleet_is_fid "$o"; then
+    fleet_win_for_fid "$o" "$k" >/dev/null 2>&1 || return 0
+    pf=$o
+  else pf=$(_fleet_key_fid "$s" "$o" "$k") || pf=''
+  fi
   if [ -n "$pf" ]; then
     if [ -n "$k" ]; then tmux -L "$k" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null
     else _fleet_tmux "$s" set-window-option -t "$w" @origin_fid "$pf" 2>/dev/null; fi
@@ -7337,7 +7319,7 @@ fleet_origin_win() {
     [ "$rc" -eq 1 ] || return "$rc"
   fi
   [ -n "$po" ] || return 1
-  fleet_win_for_key "$po" "$k"
+  fleet_win_for_addr "$po" "$k"
 }
 
 # fleet_parent_addr <sess> <pane> → the fleet-peer-send.sh target of <pane>'s
@@ -7975,8 +7957,7 @@ fleet_slug() {
 # fleet_from_role [<explicit>] — resolve the posting role: an explicit value wins
 # (a caller can force it), else the durable FLEET_HUB env (hub-session.sh exports
 # it, surviving a Bash-tool subshell) ⇒ 'operator', else fleet_seat() ⇒ 'worker',
-# else the pane's @fleet_role when it is orchestrator / steward (issue #2786 — the
-# rule-marker share counts `role=orchestrator` filings), else the generic word 'fleet'. Pure env — only the WORD carries identity (the
+# else the generic word 'fleet' (no session wears a role's name, issue #4341). Pure env — only the WORD carries identity (the
 # charter scrub: never $(hostname) / $USER).
 fleet_from_role() {
   local explicit="${1:-}"
@@ -7986,10 +7967,6 @@ fleet_from_role() {
   seat=$(fleet_seat 2>/dev/null)
   case "$seat" in
     worker)  printf 'worker';  return ;;
-  esac
-  seat=$(fleet_pane_fmt '#{@fleet_role}' 2>/dev/null)
-  case "$seat" in
-    orchestrator|steward) printf '%s' "$seat"; return ;;
   esac
   printf 'fleet'
 }
@@ -8333,7 +8310,7 @@ EOF
 }
 
 # ---- the desk: a ticket for work with no code to change (issue #2676) --------
-# A session the orchestrator (or the person, `--origin hub`) opens with no repo
+# A session another session (or the person, `--origin hub`) opens with no repo
 # gets a ticket all the same: filed in the desk repo with the `desk` label, the
 # window stamped `@issue N` `@repo <desk>` `@desk 1` and still `@norepo 1` — no
 # workspace. So the bridge (which matches a window by its own @repo + @issue)
@@ -10622,29 +10599,26 @@ fleet_human_hold_note() {
 # @origin carries; nothing when it has none. fleet_origin_key's rule, for any
 # window rather than only the caller's pane.
 fleet_window_okey() {
-  local sess="${1:-}" t="${2:-}" o iss owt pth k pre rdef
+  local sess="${1:-}" t="${2:-}" o iss owt pth k pre fid
   [ -n "$t" ] || return 0
   o=$(_fleet_tmux "$sess" display-message -p -t "$t" \
-        '#{@fleet_role_def}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
+        '#{@fleet_id}|#{@fleet_role}|#{@issue}|#{@worktree}|#{pane_current_path}' 2>/dev/null)
   [ -n "$o" ] || return 0
-  rdef=${o%%|*}; o=${o#*|}
-  [ "${o%%|*}" = orchestrator ] && { printf 'orchestrator'; return 0; }   # issue #2129
-  [ "${o%%|*}" = steward ] && { printf 'steward'; return 0; }             # issue #2670
+  fid=${o%%|*}; o=${o#*|}
+  # No key of its own ⇒ its identity — fleet_origin_key's rule (issue #4341); home
+  # and the panels have none.
+  case "${o%%|*}" in home|panel) fid='' ;; esac
+  fleet_is_fid "$fid" || fid=''
   o=${o#*|}
   iss=${o%%|*}; o=${o#*|}; owt=${o%%|*}; pth=${o#*|}
-  # A session that TOOK the role (issue #3114, `@fleet_role_def`) and has no key of
-  # its own answers to the role's name — fleet_origin_key's rule (issue #3439). Read
-  # here too (issue #3520): without it a relay to the orchestrator by identity found
-  # its window and still answered «not now», and the hub pushed it again forever.
-  case "$rdef" in orchestrator|steward) ;; *) rdef='' ;; esac
-  pre=$(_fleet_key_prefix "$sess" "$t") || { printf '%s' "$rdef"; return 0; }
+  pre=$(_fleet_key_prefix "$sess" "$t") || { printf '%s' "$fid"; return 0; }
   case "$iss" in
     ''|*[!0-9]*) : ;;
     *) printf '%sissue-%s' "$pre" "$iss"; return 0 ;;
   esac
   k=$(fleet_scratch_key "$owt")
   [ -z "$k" ] && k=$(fleet_scratch_key "$pth")
-  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$rdef"; fi
+  if [ -n "$k" ]; then printf '%s%s' "$pre" "$k"; else printf '%s' "$fid"; fi
   return 0
 }
 

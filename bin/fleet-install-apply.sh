@@ -1010,7 +1010,7 @@ if [ "$PLUGIN" = 1 ]; then
 fi
 
 # --- plugins (issue #3112, EPIC #3111 C1) -------------------------------------------
-# Orchestration, the steward and EPIC batches are standard plugins of this repo's
+# EPIC batches and the other optional parts are standard plugins of this repo's
 # marketplace; /plugin installs them, never the sync. Here: add the marketplace
 # (from $ROOT as spelled — ~/.claude/fleet, never its resolved version dir), and
 # keep what a login already used working (carry-over, before the commands/skills

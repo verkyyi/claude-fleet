@@ -80,8 +80,8 @@ R="${E}0m"; US=$'\x1f'
 # the fleet version it runs, so 待换新 costs no field and no fork either.
 # Last (issue #1902): an empty slot where a remote row carries its title
 # (#1921 — a local one is looked up below), then @reap_policy.
-# No session is special (issue #3119): the window holding the orchestrator or
-# the steward is a row like any other — no `home` name, no hidden row.
+# No session is special (issues #3119, #4341): a session from any template is
+# a row like any other — no `home` name, no hidden row.
 # After @reap_policy (issue #1958): @epic, `<owner/name>#<N>` on the window that
 # drives a running EPIC (fleet-epic-heartbeat.sh stamps it) — the row is then the
 # EPIC's: its parent issue's number + title, badged landed/members (epic_v).

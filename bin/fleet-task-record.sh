@@ -20,7 +20,7 @@
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
 #                     [--spawn] [--reap P] [--agent A] [--draft] [--pr-note TEXT]
-#                     → the orchestrator's `task` tool: the record FIRST (`T<n>` on
+#                     → the `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
 #                       fleet-issue-file.sh --task T<n> (+ --spawn: its worker,
 #                       stamped @task; the URL on stdout after the T); no repo +
@@ -35,9 +35,9 @@
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
-# Who calls it: the orchestrator's `task` tool (a record first, an issue only for
+# Who calls it: the `task` tool (a record first, an issue only for
 # a development task — fleet-issue-file.sh --task), the spawners (`--task`
-# attaches the new window), the steward's ask / park (a question or a park on the
+# attaches the new window), a session's ask / park (a question or a park on the
 # record: a session with no issue writes them ONLY here, one with an issue mirrors
 # them), an EPIC driver (each member's read-only record, fleet-epic-floor.sh), and
 # fleet-await.sh (`T<n>` → the record's session).
@@ -161,7 +161,7 @@ if [ "$cmd" = dispatch ]; then
   [ -z "$draft" ] || [ -n "$repo" ] || die 2 "--draft needs --repo: a draft PR lives in a repo"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
-  # One token per (caller, words): the orchestrator asking twice is one record.
+  # One token per (caller, words): a session asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
   # Resolve the definition's provider before acceptance, independently of its

@@ -14,6 +14,8 @@
 #             <pid>                                     → that Claude process
 #             <session-uuid>                            → the process running it
 #             wid:<worker_id> / wid:<key>               → that worker, wherever it lives
+#             agent:<name>                              → the session started from that agent file
+#                                                         (none here ⇒ your parent, else your person's reminder)
 #   <text>    the message; `-` or omitted → read stdin (multi-line ok)
 #   -L        tmux socket label for a tmux target when run outside the fleet
 #             ($TMUX unset); inside a pane bare tmux is already the right server.
@@ -143,14 +145,6 @@ hub_send() {
   where=${node%:lost}; where=${where:-another machine}
   [ -n "${TMUX:-}" ] && mysess=$(fleet_current_session 2>/dev/null)
   [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
-  # The orchestrator / steward key is no worker_id the hub accepts (issue #2729:
-  # every `<uuid>/orchestrator` message was refused INVALID_ARGUMENT, unseen): such
-  # a pane sends as its identity, `<uuid>/<fleet_id>` — what its worker assertion
-  # names too — else as the person at this login.
-  case "${me#*/}" in orchestrator|steward)
-    me=$(fleet_worker_id "$mysess" "$TMUX_PANE" 2>/dev/null) || me=''
-    fleet_is_fid "${me#*/}" || me='' ;;
-  esac
   if [ -z "$me" ]; then
     [ -n "$mysess" ] || mysess=$(fleet_sender_session "$SOCK" 2>/dev/null)
     me=$(fleet_operator_sender "$mysess" 2>/dev/null)
@@ -276,6 +270,39 @@ case "$tgt" in
     esac ;;
 esac
 
+# --- an agent address with nobody running it (issue #4341) ------------------------
+# agent_fallback <name> — `agent:<name>` and no session runs that agent file here:
+# the message is never dropped with exit 0. It goes to the SENDER's parent
+# (fleet_parent_addr: identity first), said on stderr and in the text; with no
+# parent, to the person's reminder (global/orphan-reports.ndjson — what the sidebar
+# and the entry read) plus one alert. Exit 0 either way: somebody has it.
+agent_fallback() {
+  local a="$1" ms='' p='' f row me='' sockl
+  if [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; then
+    ms=$(fleet_current_session 2>/dev/null)
+    [ -n "$ms" ] && p=$(fleet_parent_addr "$ms" "$TMUX_PANE" 2>/dev/null) || p=''
+    [ -n "$ms" ] && me=$(fleet_window_okey "$ms" "$TMUX_PANE" 2>/dev/null)
+  fi
+  if [ -n "$p" ]; then
+    printf 'fleet-peer-send: no session runs agent:%s — sent to your parent instead\n' "$a" >&2
+    exec bash "$0" ${SOCK:+-L "$SOCK"} "$p" "[发给 agent:$a 的消息——没有会话在跑它，转给你]
+$text"
+  fi
+  f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/orphan-reports.ndjson"
+  mkdir -p "${f%/*}" 2>/dev/null
+  row=$(OR_CHILD="${me:-operator}" OR_TO="agent:$a" OR_SUM="$text" python3 -c 'import json, os, time
+e = os.environ
+print(json.dumps({"ts": int(time.time()), "child_key": e["OR_CHILD"], "state": "MESSAGE", "pr": "",
+                  "summary": e["OR_SUM"][:600], "parent": e["OR_TO"]}, ensure_ascii=False))' 2>/dev/null) \
+    && printf '%s\n' "$row" >> "$f" 2>/dev/null \
+    || die 1 "no session runs agent:$a, and the person's reminder could not be written; nothing sent"
+  sockl="$SOCK"; [ -n "$sockl" ] || [ -z "$ms" ] || sockl=$(fleet_socket "$ms" 2>/dev/null)
+  bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event ${sockl:+-L "$sockl"} child-report \
+    "fleet: 发给 agent:$a 的消息没有会话收，交给你: $(printf '%s' "$text" | head -1 | cut -c1-160)" >/dev/null 2>&1 || :
+  printf 'rerouted → 你的提醒 (%s): no session runs agent:%s\n' "$f" "$a"
+  exit 0
+}
+
 # --- identity → one live window (issues #1046, #1537) -----------------------------
 # ONE resolver, fleet_win_for_key: issue:<N> / #<N> / issue-<N> → the key
 # `issue-<N>` (`<slug>:issue-<N>` with --repo, and a 2+ repo fleet REFUSES the bare
@@ -292,13 +319,14 @@ case "$tgt" in
   scratch-*)
     case "${tgt#scratch-}" in ''|*[!0-9]*) die 2 "bad scratch target '$tgt' (want scratch-<N>)" ;; esac
     key="$tgt" ;;
-  orchestrator|steward) key="$tgt" ;;   # the orchestrating session (#2129), its steward (#2670)
+  agent:?*) key="$tgt" ;;   # the session started from that agent file (issue #4341)
+  orchestrator|steward) key=$(fleet_agent_addr "$tgt") ;;   # compat-1v: 下一批删 — an older session's bare word
   @*|%*|*-*-*-*-*) ;;
   *:*) die 2 "'$tgt' is a window position or name (<sess>:<idx> / <sess>:<name>) — a closing window renumbers it onto someone else; address the worker as issue:<N>, scratch-<N> or wid:<key>" ;;
   *[!0-9]*) die 2 "'$tgt' is a window name, not an address (tmux prefix-matches names); use issue:<N>, scratch-<N> or wid:<key>" ;;
 esac
 if [ -n "$key" ]; then
-  [ -n "$REPO" ] && [ "$key" != orchestrator ] && [ "$key" != steward ] && key="$(fleet_slug "$(fleet_norm_repo "$REPO")"):$key"
+  case "$key" in agent:*) ;; *) [ -n "$REPO" ] && key="$(fleet_slug "$(fleet_norm_repo "$REPO")"):$key" ;; esac
   if [ -n "$SOCK" ]; then socks="$SOCK"
   elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
   else socks=$(fleet_sockets); fi
@@ -327,7 +355,8 @@ EOF
     # through the hub, its repo checked on arrival; ENDED, it says when and how.
     # `-L` pins one fleet of THIS machine (the hub's own inject, a node's deliver,
     # a script that named its socket): no detour for it.
-    if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ] && [ "$key" != orchestrator ] && [ "$key" != steward ]; then
+    case "$key" in agent:*) agent_fallback "${key#agent:}" ;; esac
+    if [ "${CCQUOTA_FLEET:-0}" = 1 ] && [ -z "$SOCK" ]; then
       full=$(fleet_hub_wid "" "$key" 2>/dev/null)         || { [ "${key#*:}" != "$key" ] && full=$(fleet_hub_wid "" "${key#*:}" 2>/dev/null); } || full=''
       if [ -n "$full" ] && ! fleet_wid_home "wid:$full" >/dev/null 2>&1; then
         HUB_REPO=$(sender_repo "$key")

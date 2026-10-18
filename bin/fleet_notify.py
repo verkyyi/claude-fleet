@@ -8,7 +8,7 @@ The ONE place that decides a notification. A thin client's HOME machine
 over every row of its caches — so it runs whether a terminal is attached or not.
 
 What counts, per row (a session on any machine — no session is special: the
-orchestrator's decision-sheet count left with the resident seat, issue #3118):
+old decision-sheet count left with the resident seat, issue #3118):
   ask    `needs` perm / ask / auth / anything but blocked — 在问你; sound; the phone too
   stuck  `needs` blocked, or `failed` — 卡住; sound; the phone too
   done   `done` from anything else — 做完; no sound, never

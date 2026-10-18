@@ -490,11 +490,12 @@ migrate_one_body() {
   # new window without them was a role-less, policy-less session nothing closed.
   # Read now, stamped on the new window below; a window with no role is a worker
   # (every opener stamps one, #1844 — only a hub, never migrated, is anything
-  # else; an old seat's orchestrator / steward is written as worker, issue #3118). Ephemeral state (@claude_*, @loop, @ctx_*) is not
+  # else; any other word — an old seat's — is written as worker, issues #3118 #4341).
+  # Ephemeral state (@claude_*, @loop, @ctx_*) is not
   # carried: the resumed agent stamps its own.
   local role o v cpairs=()
   role=$(wopt "$wid" '#{@fleet_role}'); role=${role:-worker}
-  case "$role" in orchestrator|steward) role=worker ;; esac   # the old seat's stamp is never written again (issue #3118)
+  case "$role" in home|panel|worker) ;; *) role=worker ;; esac   # an old seat's word is never written again
   for o in $MIGRATE_CARRY; do
     v=$(wopt "$wid" "#{$o}")
     [ -n "$v" ] && cpairs+=("$o" "$v")

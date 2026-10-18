@@ -6,7 +6,7 @@
 #   home   the thin client's home: fleet session $PR_HS on `-L $PR_HS`, workers
 #          l1 l2, the C5 keeper (fleet-peerlink.py run) and a 看台 `v1` attached
 #          from a TERMINAL server (`-L $PR_TL`, its pane = the person's screen)
-#   far1   another machine: fleet session $PR_FS1, workers a b + an orchestrator
+#   far1   another machine: fleet session $PR_FS1, workers a b + a scratch (orch)
 #   far2   a third: fleet session $PR_FS2, worker c
 #
 # Each machine is its own FLEET_CONF_DIR / TMPDIR / HOME (`pr_env <m>` prints them as
@@ -44,7 +44,7 @@ pr_sock() { case "$1" in home) printf '%s' "$PR_HS" ;; far1) printf '%s' "$PR_FS
 pr_in() { local m="$1"; shift; env -u TMUX -u TMUX_PANE $(pr_env "$m") "$@"; }   # run as <machine>
 
 # pr_machine <label> <machine id> <window>… — a fleet session whose windows each
-# print `SCREEN-<label>-<window>` and sleep; `orch` is the orchestrator.
+# print `SCREEN-<label>-<window>` and sleep; `orch` is a scratch (scratch-7, the by-key case).
 pr_machine() {
   local m="$1" mid="$2" s d w wid u; shift 2
   s=$(pr_sock "$m"); d="$PR_WORK/m/$m"
@@ -60,7 +60,8 @@ PY
   pr_t "$m" set-option -g status off
   for w in "$@"; do
     wid=$(pr_t "$m" new-window -d -P -F '#{window_id}' -t "=$s:" -n "$w" "printf 'SCREEN-$m-$w\n'; while :; do sleep 300; done")
-    if [ "$w" = orch ]; then pr_t "$m" set-option -w -t "$wid" @fleet_role orchestrator \; set-option -w -t "$wid" @fleet_id "fid-$w"
+    if [ "$w" = orch ]; then pr_t "$m" set-option -w -t "$wid" @fleet_role worker \; set-option -w -t "$wid" @fleet_id "fid-$w" \; \
+      set-option -w -t "$wid" @raw 1 \; set-option -w -t "$wid" @worktree "$PR_WORK/wt/app-scratch-7"
     else pr_t "$m" set-option -w -t "$wid" @fleet_role worker \; set-option -w -t "$wid" @fleet_id "fid-$w"; fi
     eval "PR_W_${m}_$w=\$wid"
   done
@@ -95,7 +96,7 @@ EOF
   # the hub's rows on home: your sessions on far1 and far2 (same login)
   local g="$PR_WORK/m/home/tmp/.claude-dash/global" u
   { printf '#me%shome\n' "$PR_US"
-    for u in "$PR_U_far1/fid-a far1" "$PR_U_far1/fid-b far1" "$PR_U_far1/orchestrator far1" "$PR_U_far2/fid-c far2"; do
+    for u in "$PR_U_far1/fid-a far1" "$PR_U_far1/fid-b far1" "$PR_U_far1/scratch-7 far1" "$PR_U_far2/fid-c far2"; do
       set -- $u
       printf 'wid:%s%s%s%sonline%s1%sacme/app%sworking%sclaude%sn%s%s%s0\n' "$1" "$PR_US" "$2" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US" "$PR_US"
     done

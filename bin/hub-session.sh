@@ -6,7 +6,7 @@
 #
 # The hub is DASH-ONLY — it never spawns a Claude session. Earlier versions split
 # a persistent `claude` in below the dash (the "hub pane", issue #439, itself the
-# successor to the steward seat). That pane came back on its OWN, unasked: the ⌂
+# successor to an older seat). That pane came back on its OWN, unasked: the ⌂
 # home tap, F9 and prefix+g all fall back here when they find no pane to focus,
 # and `fleet-up`/`fleet-restore` rebuilt it on every fresh fleet and every crash
 # recovery. An operator who closed it got it back on the next tap. It is gone: the

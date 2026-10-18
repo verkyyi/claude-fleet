@@ -300,14 +300,12 @@ snapshot() {
     # it is another machine's session, never one to `claude --resume` here. So
     # does a 看台's PEER window (@peer, @fleet_role panel — issue #3829): its pane
     # is an ssh onto another machine, and with no session of its own the resolver
-    # guessed one by mtime — $HOME's newest transcript, an old orchestrator
+    # guessed one by mtime — $HOME's newest transcript, an old no-repo
     # conversation that a reboot then reopened under a deleted login's name.
     # Leading-most field (issue #1902): @reap_policy — when the fleet may close the
     # session. The resolver writes it as a `REAP<TAB><fleet_id><TAB><policy>` row
     # before the window's FID row (identity-keyed; fleet_restore_wins skips it), and
     # restore() stamps it back. A window with no policy writes no row.
-    # An old resident orchestrator / steward window (issue #1957) is an ordinary
-    # row since issue #3118: nothing reopens it by `ensure` any more.
     # Then (issue #1296): @cc_session_id, the pane's own session id as
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
     # Accepted launch identity survives snapshot/restore; absence of native
@@ -587,40 +585,6 @@ pullback_run() {
 }
 
 # ----------------------------------------------------------------- restore ----
-# role_handback <sock> <window> <its fid> [<the record's fid>] — a role comes back
-# with the session that held it (issue #3829). take_role's record
-# (global/roles.held: role · fleet · fid · window · ts) names its holder by
-# @fleet_id, and restore stamps the identity back — but fleet_role_holder also
-# wants the window's `@fleet_role_def` mark, which lives on the window and died
-# with the server, so after a reboot nobody held the role until a person stole
-# it. A restored window whose identity a line names gets the mark back, and the
-# line its new window id. The 4th argument is the record's fid when the
-# conversation came back in another window (a person resumed it by hand): the
-# line then follows it to that window's identity. A role someone took since is
-# another fid, so it is never taken back.
-role_handback() {
-  local sock="$1" w="$2" fid="$3" of="${4:-$3}" f r lk tmp i=0
-  case "$fid$of" in *[!A-Za-z0-9-]*|'') return 0 ;; esac
-  f=$(fleet_roles_held_file); [ -f "$f" ] || return 0
-  r=$(awk -F'\t' -v f="$of" '$3 == f { print $1 }' "$f" 2>/dev/null)
-  [ -n "$r" ] || return 0
-  lk="$f.lock"
-  while ! mkdir "$lk" 2>/dev/null; do
-    i=$((i + 1)); [ "$i" -ge 50 ] && { rm -rf "$lk"; continue; }
-    sleep 0.1
-  done
-  tmp="$f.tmp.$$"
-  awk -F'\t' -v OFS='\t' -v f="$of" -v nf="$fid" -v w="$w" '$3 == f { $3 = nf; $4 = w } { print }' "$f" > "$tmp" \
-    && mv -f "$tmp" "$f"
-  rm -f "$tmp"; rmdir "$lk" 2>/dev/null
-  local one
-  for one in $r; do
-    tmux -L "$sock" set-window-option -t "$w" @fleet_role_def "$one" 2>/dev/null
-    log "role $one → $w (fid $fid) — handed back on restore"
-    say "    ↺ $one: back on $w"
-  done
-}
-
 restore() {
   local dry="${1:-}"
   mkdir -p "$RDIR"
@@ -711,7 +675,7 @@ restore() {
       fi
       # A PARKED session (issue #2671) gave its place back on purpose and waits for
       # something; its wake reopens it, on the same conversation, when it arrives —
-      # a restore (after a reboot, a lost server) never does. (The steward's parker
+      # a restore (after a reboot, a lost server) never does. (The parker
       # left with #4339; the book is still honoured for a session parked before.)
       if [ -n "${wrepo:-}" ] && [ "$wrepo" != - ] && fleet_parked "$wrepo" "$wissue"; then
         say "    · $wname: parked — not reopened"
@@ -729,16 +693,6 @@ restore() {
       # still that session, and a name is only the fallback for a map row or a
       # window with no identity.
       case "$wtag" in WIN:?*) [ -n "$livefid" ] && printf '%s\n' "$livefid" | grep -qxF "${wtag#WIN:}" && continue ;; esac
-      # Its conversation already runs in a live window under another identity (a
-      # person resumed it by hand before this pass): a role it held goes with it
-      # to that window (#3829) — the row itself is skipped just below.
-      if [ -z "$dry" ] && [ -n "$wid" ] && [ "$wid" != - ] && printf '%s\n' "$livesid" | grep -qxF "$wid"; then
-        case "$wtag" in WIN:?*)
-          _lw=$(tmux -L "$sock" list-windows -t "$sess" -F '#{window_id}|#{@fleet_id}|#{@cc_session_id}|#{@norepo_sid}' 2>/dev/null \
-                | awk -F'|' -v s="$wid" '$3 == s || $4 == s { print $1 "|" $2; exit }')
-          [ -n "${_lw#*|}" ] && role_handback "$sock" "${_lw%%|*}" "${_lw#*|}" "${wtag#WIN:}" ;;
-        esac
-      fi
       # A name is not an identity (issue #789) — A#12 and B#12 are both `issue-12` —
       # so a live window counts only when it also sits in this row's worktree.
       [ -n "$livewins" ] && printf '%s\n' "$livewt" | grep -qxF "$wname|$wpath" && continue
@@ -979,8 +933,6 @@ restore() {
           awk -F'\t' -v f="${wtag#WIN:}" '$1 == "PIN" && $2 == f { found = 1; exit } END { exit !found }' "$mf" 2>/dev/null \
             && tmux -L "$sock" set-window-option -t "$nw" @pin 1 2>/dev/null ;;
         esac
-        # Its role (issue #3829): take_role's record, by identity.
-        case "$wtag" in WIN:?*) role_handback "$sock" "$nw" "${wtag#WIN:}" ;; esac
         fleet_win_role_stamp "$nw" worker "$sock"   # by role, not name (#1844)
         # Re-stamp the spawn provenance too (issue #503) so a crash-restored
         # worker keeps its dash grouping; old maps (pre-#503, 8-field WIN rows)

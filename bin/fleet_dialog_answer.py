@@ -44,8 +44,8 @@ Seams (selftest): FLEET_DIALOG_PROJECTS (the transcripts' root, default
 FLEET_DIALOG_POST_CMD (argv `<repo> <N> note`, the body on stdin, instead of
 fleet-comment.sh for the issue comment).
 
-`--by session` is a session answering on the charter's word; `--by steward` is its
-old name, read as session for one version.
+`--by session` is a session answering on the charter's word (an older caller's old
+name for it is read as session for one version).
 """
 import argparse
 import datetime as dt
@@ -269,7 +269,7 @@ def main(argv=None):
     p.add_argument("target")
     p.add_argument("--fp", required=True)
     p.add_argument("--pick", action="append", required=True)
-    p.add_argument("--by", default="person", choices=("person", "session", "default", "steward"))
+    p.add_argument("--by", default="person", choices=("person", "session", "default", "steward"))  # compat-1v: 下一批删
     p.add_argument("--basis", default="")
     p.add_argument("--issue", default="")
     p.add_argument("--session", default="")

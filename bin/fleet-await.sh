@@ -78,7 +78,7 @@
 # in your ledger.
 #
 # `T<n>` (issue #3330) is a hub task record: the record's issue (a development task
-# the orchestrator dispatched, or an EPIC member) is waited on exactly as `<N>`
+# a session dispatched, or an EPIC member) is waited on exactly as `<N>`
 # with its repo, and the verdict carries a `task: T<n>` line. A record with no
 # issue yet — a no-repo session — is NO-WORKER (5) naming its session: its report
 # lands in your ledger all the same (children). No hub here: NO-WORKER too.

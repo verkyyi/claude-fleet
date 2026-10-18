@@ -226,7 +226,7 @@ case "$verb" in
     printf '%s\n' "$want" ;;
 
   edit)
-    # A desk ticket's body is its list (the steward's 「待你动手」, issue #2672):
+    # A desk ticket's body is its list (the old 「待你动手」 list, issue #2672):
     # replaced whole, through the one write throttle.
     p=$(ticket_parse "${1:-}") || exit 2
     [ "$(ticket_backend "$1")" = hub ] && { hub edit "$@"; exit $?; }

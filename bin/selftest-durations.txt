@@ -586,7 +586,7 @@
 0.2 nogh-task-acceptance-selftest.sh
 5.8 notify-selftest.sh
 13.5 operator-send-selftest.sh
-3.1 orchestrator-parent-selftest.sh
+3.1 keyless-parent-selftest.sh
 0.5 origin-selftest.sh
 12.8 orphan-listener-reap-selftest.sh
 3.3 orphan-proc-reap-selftest.sh

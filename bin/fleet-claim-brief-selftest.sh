@@ -251,8 +251,8 @@ has "on another machine" || fail "a remote parent must be named as reachable thr
 if has 'not a live-window key'; then fail "a remote parent is not un-addressable" "$OUT"; fi
 ok "ORIGIN a parent on another machine reads as reachable through the hub (#3439)"
 GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=orchestrator run "$WORK/widgets-issue-12"
-has 'origin: orchestrator (spawned by the session holding' || fail "the orchestrator is a parent to report to" "$OUT"
-ok "ORIGIN orchestrator reads as a parent to report to (#3439)"
+has 'origin: orchestrator (an older parent' || fail "an older child's word origin is still a parent to report to" "$OUT"
+ok "ORIGIN an older child's word origin reads as a parent to report to (compat-1v, #4341)"
 GH_ASSIGNEES=dave FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=$PFID run "$WORK/widgets-issue-12"
 if has 'not a live-window key'; then fail "an identity origin is an address" "$OUT"; fi
 ok "ORIGIN an identity origin is an address (#3439)"

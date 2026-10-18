@@ -51,7 +51,9 @@ pr_attach
 pr_wait 10 eval '[ -n "$(pr_peer far1)" ] && [ -n "$(pr_peer far2)" ]' && ok || fail "A: no peer windows after the attach: $(pr_t home list-windows -a -F '#{session_name} #{window_name} #{@peer}')"
 P1=$(pr_peer far1); P2=$(pr_peer far2)
 [ "$(pr_t home display-message -p -t "$P1" '#{@fleet_role}')" = panel ] && ok || fail "A: a peer window is not a panel"
-pr_wait 15 sh -c "'$REAL_TMUX' -L '$PR_HS' capture-pane -p -t '$P1' | grep -q SCREEN-far1-orch" && ok \
+# nowhere named: the far 看台 shows that session's own current window (no session
+# is anyone's home, issue #4341)
+pr_wait 15 sh -c "'$REAL_TMUX' -L '$PR_HS' capture-pane -p -t '$P1' | grep -q SCREEN-far1-home" && ok \
   || fail "A: far1's window never drew far1: $(pr_t home capture-pane -p -t "$P1" | tr -s '\n' | head -3)"
 pr_wait 10 sh -c "'$REAL_TMUX' -L '$PR_HS' capture-pane -p -t '$P2' | grep -q SCREEN-far2-home" && ok \
   || fail "A: far2's window never drew far2: $(pr_t home capture-pane -p -t "$P2" | tr -s '\n' | head -3)"
@@ -83,8 +85,8 @@ pr_go "$PR_U_far1/fid-b" && pr_wait 5 shows SCREEN-far1-b && ok || fail "B: far1
 # a far row the hub names by its KEY (`<fleet UUID>/<key>`, the readable alias
 # fleet_worker_id_key — what remote_<sess> carries), not its @fleet_id: the far
 # end resolves it as rv_select does (issue #3007: the fast path answered 3, gone)
-pr_go "$PR_U_far1/orchestrator" && pr_wait 5 shows SCREEN-far1-orch && ok \
-  || fail "B: far1 by key (orchestrator): $(last) / $(pr_screen | tr -s '\n' | head -2)"
+pr_go "$PR_U_far1/scratch-7" && pr_wait 5 shows SCREEN-far1-orch && ok \
+  || fail "B: far1 by key (scratch-7): $(last) / $(pr_screen | tr -s '\n' | head -2)"
 pr_wait 10 pr_up_link far2
 pr_go "$PR_U_far2/fid-c" && [ "$(pr_cur)" = "$P2" ] && pr_wait 5 shows SCREEN-far2-c && ok || fail "B: far2/c: $(last)"
 pr_go "$PR_W_home_l2" && pr_wait 5 shows SCREEN-home-l2 && ok || fail "B: back home: $(last)"

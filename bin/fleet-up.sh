@@ -274,9 +274,8 @@ HUB_SESSION="$NAME" HUB_CWD="$HUB_DIR" bash "$BIN/hub-session.sh"
 # session starts with ONLY the hub (hub-session.sh already selected it). tmux
 # needs an initial window to create the session; we drop it once the hub exists.
 tmux -L "$SOCK" kill-window -t "$workwin" 2>/dev/null || true
-# No orchestrating or steward seat is opened here (issue #3118): a role is
-# a session template a person opens (spawn agent:orchestrator / agent:steward), never a window
-# the fleet keeps open.
+# No coordinating seat is opened here (issue #3118): coordinating is a session
+# template a person opens (spawn agent:<name>), never a window the fleet keeps open.
 
 # --- first fleet on this login: open the guide, pinned (issue #1169) ---
 # A newcomer does not know /fleet-onboard exists, so their first fleet comes up

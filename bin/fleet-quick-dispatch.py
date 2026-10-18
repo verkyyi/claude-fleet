@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fleet-quick-dispatch.py — 派一件事 (issue #2753). One line, ↵, and a worker is on
-it — from any window of a thin client's 看台: a worker's, the orchestrator's
+it — from any window of a thin client's 看台: a worker's, a no-repo session's
 (Claude or Codex), a bare shell, a session on another machine.
 
     fleet-quick-dispatch.py --view V [--client C]
@@ -48,7 +48,7 @@ compose-state.json for 「上次用的仓库」 — and calls fleet-compose.py's
 fleet-client-place.sh <repo> new (the machine that takes it files the issue
 through fleet-issue-file.sh and opens its worker; with no lease it opens through
 this machine's own adapter), and the result goes on the 看台's client as a
-message. Nothing on the way calls a model or waits behind the orchestrator's
+message. Nothing on the way calls a model or waits behind another session's
 turn; an old session's /qd (compat-1v, issue #3328) runs `send` itself.
 
 FLEET_DISPATCH_SEND_CMD (tests): replaces `fleet-compose.py --send <payload>`.

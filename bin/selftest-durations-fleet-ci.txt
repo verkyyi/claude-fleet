@@ -375,7 +375,7 @@
 0.1 newcomer-cn-selftest.sh
 7.5 notify-selftest.sh
 13.0 operator-send-selftest.sh
-1.2 orchestrator-parent-selftest.sh
+1.2 keyless-parent-selftest.sh
 0.6 origin-selftest.sh
 13.0 orphan-listener-reap-selftest.sh
 3.9 orphan-proc-reap-selftest.sh

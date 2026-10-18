@@ -31,7 +31,7 @@
 # (a token, a cookie, a code, a key never lands — the credential files are never
 # read at all). With no --run-dir, a run dir of its own under
 # FLEET_CN_PROBE_RUNS (default $FLEET_CONF_DIR/global/cn-probe/runs) — the
-# orchestrator's standalone road. Prints `DIAG <path>` and one line a key.
+# standalone road. Prints `DIAG <path>` and one line a key.
 # Exit 0 written · 2 usage. Same knobs as the probe (FLEET_CN_PROBE_CLIENT · _KEY ·
 # _KNOWN_HOSTS · _LOGIN · _MACHINE · _KUBECTL · _POD_NS); FLEET_CN_PROBE_DIAG_TIMEOUT
 # bounds each source (30 s); FLEET_CN_PROBE_DIAG_SOURCES = --sources. Selftest

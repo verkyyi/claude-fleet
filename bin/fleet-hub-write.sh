@@ -44,7 +44,7 @@
 #                            curl's stdin config, never its argv. The hub acts as the
 #                            login's OWNER — only their workers, the worker tools only
 #                            — and audits the machine. A machine's own daemons (the
-#                            steward, the idle reaper) never borrow a person's
+#                            idle reaper) never borrow a person's
 #                            12-hour certificate. A hub older than that door (401),
 #                            or a worker not the owner's (404) while a viewer token /
 #                            a valid certificate is here, falls through to 2 / 3.

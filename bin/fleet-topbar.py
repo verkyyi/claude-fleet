@@ -411,8 +411,6 @@ def node_record(kv):
         rec.update(stamp_ctx(p))   # this machine's own window: its stamps are the freshest reading
         if rec["state"] == "needs":
             rec["q"] = asked(sock, win) or rec.get("q", "")
-    if p[12] == "orchestrator" and not rec.get("title"):
-        rec["title"] = say("sidebar_portal")
     down = ""
     if peer and (kv.get("pd") == "1" or peer_down(str(reg.parent), pnode, plogin)):
         down = "1"

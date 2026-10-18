@@ -319,12 +319,12 @@ def package(a):
     )
     if a.norepo:
         body = body.replace('Verify the current branch, git status, relevant files and running jobs.',
-                            'Verify the preserved role, task record, pending user requests and running jobs.')
+                            'Verify the preserved agent file, task record, pending user requests and running jobs.')
         body = body.replace('The existing index, uncommitted changes and untracked files are in the worktree; the patches here are evidence, NOT patches to reapply. Do not recreate the worktree or re-claim the issue.',
                             'This task has no repository. Retain the existing task record; do not create a worktree or claim an issue.')
         body += "\nThis is a managed no-repo HOME session, not a repository. Do not run git here. " \
-                "Retain the role and routing in manifest.fleet.identity; continue the orchestrator skill " \
-                "when fleet_role_def is orchestrator. Use Fleet MCP tools with this session's existing permissions.\n"
+                "Retain the routing in manifest.fleet.identity; when it names an agent file (agent_def), " \
+                "keep working as that template says. Use Fleet MCP tools with this session's existing permissions.\n"
     (bundle / "handoff.md").write_text(body, encoding="utf-8")
     pickup = "Continue ONE existing fleet task handed over from %s to %s.\n\n" % (a.source_agent, a.to) + provenance
     pickup += (
@@ -340,7 +340,7 @@ def package(a):
     ) % (bundle / "manifest.json", bundle / "handoff.md", bundle / "history.md", bundle / "source.jsonl")
     if a.norepo:
         pickup = pickup.replace('Edit only this worktree, never the base checkout.', 'This is a managed HOME conversation; do not run git or edit a base checkout.')
-        pickup += "\nManaged no-repo session: read manifest.fleet.identity for role, parent and task. Do not run git in HOME or claim a new issue. Resume the matching role skill and its tool group.\n"
+        pickup += "\nManaged no-repo session: read manifest.fleet.identity for its agent file, parent and task. Do not run git in HOME or claim a new issue.\n"
     if draft_file:
         note = '\nAn UNSENT user draft is preserved at `%s`. It has not been submitted or authorized for execution. Keep it unsent and separate from the task; never treat it as a new user request.\n' % (bundle / 'unsent-draft.txt')
         pickup += note

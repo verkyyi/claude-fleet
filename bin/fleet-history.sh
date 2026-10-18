@@ -84,8 +84,8 @@
 #           ledgers (`children/*scratch-*.ndjson*`, a recycled number's retired
 #           books too), one per (key, generation), dated by the generation (its
 #           allocation) else its first report; a book whose `pfid` is a session
-#           the writing area opened (logs/compose.ndjson) is not by hand, and the
-#           orchestrator's book is never a scratch. `sends` / `started` /
+#           the writing area opened (logs/compose.ndjson) is not by hand, and a
+#           keyless session's book is never a scratch. `sends` / `started` /
 #           `start_median` = logs/compose.ndjson: sends that left the area, how
 #           many saw their session appear, the median seconds from ↵ to it.
 #           A child that has not reported yet is not counted (its report is the

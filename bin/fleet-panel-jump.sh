@@ -2,7 +2,7 @@
 # fleet-panel-jump.sh — a panel's 「到 …」 button (EPIC #2831; issues #2833, #2834):
 # show the window a key names to whoever is looking at THIS window.
 #
-#   fleet-panel-jump.sh <key> [--pane <%id>]   orchestrator · steward · <slug>:issue-<N> · scratch-<N> …
+#   fleet-panel-jump.sh <key> [--pane <%id>]   agent:<name> · <slug>:issue-<N> · scratch-<N> …
 #
 # `--pane` names whose viewers move (default $TMUX_PANE) — the batches pane's
 # 「到驱动」 passes its own (issue #2833).

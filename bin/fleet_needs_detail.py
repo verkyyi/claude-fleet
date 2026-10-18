@@ -108,7 +108,7 @@ def from_transcript(path):
 
 
 # ---- the open dialog itself (issue #2958) ---------------------------------------
-# The steward's decision row and the guarded answer channel
+# The old decision row and the guarded answer channel
 # (bin/fleet_dialog_answer.py) read the SAME thing: the newest AskUserQuestion with
 # no result — its tool_use_id, every question with its options' labels — and name
 # it by a fingerprint, so an answer is only ever pressed into the dialog the row
