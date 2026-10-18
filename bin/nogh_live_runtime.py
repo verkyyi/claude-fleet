@@ -427,8 +427,11 @@ def supervise(role):
                     else:
                         value = json.loads(line)
                         if value.get('type') == 'gateway':
-                            require(role in ('dns', 'proxy') and set(value) ==
-                                    {'type', 'source', 'category', 'phase'}, 'GATEWAY_FORMAT')
+                            require(role in ('dns', 'proxy') and set(value) - {'detail'} ==
+                                    {'type', 'source', 'category', 'phase'}
+                                    and ('detail' not in value or (isinstance(value['detail'], str)
+                                                                   and DETAIL.fullmatch(value['detail']))),
+                                    'GATEWAY_FORMAT')
                             require(value['source'] in {e['role'] for e in plan['endpoints']}
                                     and value['category'] in ('github_network', 'unknown', 'allow_provider',
                                                               'allow_forge', 'allow_dns', 'allow_github_restored',
