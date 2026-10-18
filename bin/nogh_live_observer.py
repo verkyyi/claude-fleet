@@ -76,8 +76,15 @@ def descriptor_metadata(call):
 
 
 class Trace:
-    def __init__(self, plan, role, max_events=100000):
+    # Lines are only counted; what is KEPT is bounded apart: categorised events
+    # and fd actions. A real node launching Codex passed 100,000 LINES inside
+    # one row live (#4625), so the line bound is the run's, not the memory's.
+    MAX_LINES = 1500000
+    MAX_ACTIONS = 1000000
+
+    def __init__(self, plan, role, max_events=100000, max_lines=MAX_LINES, max_actions=MAX_ACTIONS):
         self.plan, self.role, self.max_events = plan, role, max_events
+        self.max_lines, self.max_actions = max_lines, max_actions
         self.routes = {(r['ip'], r['port'], r['protocol']): r['purpose']
                        for r in plan['routes'] if r['from'] == role}
         self.root = None
@@ -102,7 +109,7 @@ class Trace:
     def _feed(self, line):
         require(not self.failed, 'TRACE_ALREADY_FAILED')
         self.lines += 1
-        require(len(line) <= 262144 and self.lines <= self.max_events, 'TRACE_LIMIT')
+        require(len(line) <= 262144 and self.lines <= self.max_lines, 'TRACE_LIMIT')
         # -f -o uses a numeric PID prefix, even for the original tracee.
         match = re.fullmatch(r'\s*(\d+)\s+(\d+\.\d+)\s+(.*)\n?', line.rstrip('\n'))
         require(match is not None, 'TRACE_PREFIX')
@@ -320,6 +327,7 @@ class Trace:
                                                      connected, disconnected)))
 
     def action(self, value):
+        require(len(self.actions) < self.max_actions, 'ACTION_LIMIT')
         self.actions.append((*value, self.action_end))
 
     def classify(self, target, protocol):

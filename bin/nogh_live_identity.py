@@ -60,10 +60,13 @@ def reader(plan):
                 raise NotReady() from None
             raise
         except urllib.error.URLError as exc:
-            if isinstance(exc.reason, (ConnectionRefusedError, TimeoutError)):
+            # Reset/aborted while a starting hub is busy under the observer
+            # was seen live too (#4625): transient, bounded by the window.
+            if isinstance(exc.reason, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError,
+                                       TimeoutError)):
                 raise NotReady() from None
             raise
-        except TimeoutError:
+        except (TimeoutError, ConnectionResetError, ConnectionAbortedError):
             # A read that times out AFTER the connection is a bare TimeoutError,
             # not a URLError: the same not-yet-ready, never a refusal (#4625).
             raise NotReady() from None

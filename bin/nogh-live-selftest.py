@@ -382,6 +382,22 @@ class TraceMetadata(unittest.TestCase):
             trace.feed(line + '\n')
         trace.finish(0)
 
+    def test_line_bound_is_apart_from_what_is_kept(self):
+        # live (#4625): a node launching Codex wrote >100,000 lines in one row.
+        trace = observer.Trace(plan(), 'node-a', max_lines=5, max_actions=2)
+        for n in range(4):
+            trace.feed('7 1.%03d close(9) = -1 EBADF (Bad file descriptor) <0.001>\n' % n)
+        with self.assertRaises(live.Refused) as caught:
+            for n in range(4):
+                trace.feed('7 2.%03d close(9) = -1 EBADF (Bad file descriptor) <0.001>\n' % n)
+        self.assertEqual(caught.exception.detail, 'TRACE_LIMIT@close')
+        trace = observer.Trace(plan(), 'node-a', max_actions=2)
+        with self.assertRaises(live.Refused) as caught:
+            for n in range(3):
+                trace.feed('7 1.%03d close(%d) = 0 <0.001>\n' % (n, 10 + n))
+        self.assertEqual(caught.exception.detail, 'ACTION_LIMIT@close')
+        self.assertGreater(observer.Trace.MAX_LINES, 1000000)
+
     def test_refusal_names_its_check_and_syscall_only(self):
         # A live run keeps no raw trace: the failure record says WHICH check
         # refused and on WHICH syscall, as identifiers — never the line (#4625).
