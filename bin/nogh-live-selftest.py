@@ -361,11 +361,20 @@ class TraceMetadata(unittest.TestCase):
         trace.decode(8, 1.4, 1.5, 'close(4) = 0')
         trace.decode(8, 1.7, 1.8, 'write(4, ""..., 1) = 1')
         trace.exited.add(8)
+        # The close may have come first (fd 4 untracked, then reused): replay keeps
+        # the accepted socket, so the write is COUNTED, never hidden (#4625).
+        self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
+        # A socket already tracked, closed beside a creation onto it, still refuses:
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_FILES) = 8')
+        trace.decode(7, 1.3, 1.6, 'dup2(3, 3) = 3')
+        trace.decode(8, 1.4, 1.5, 'close(3) = 0')
+        trace.exited.add(8)
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS') as caught:
             trace.finish(0)
         # which two touches collided, as identifiers the record may carry (#4625)
         import nogh_live_runtime as runtime
-        self.assertEqual(caught.exception.detail, 'CLOSE@accept')
+        self.assertEqual(caught.exception.detail, 'CLOSE@dup')
         self.assertTrue(runtime.DETAIL.fullmatch(caught.exception.detail))
 
     def test_resumed_call_rejoins_like_an_uninterrupted_one(self):
@@ -498,11 +507,31 @@ class TraceMetadata(unittest.TestCase):
         trace.decode(7, 1.60, 1.61, 'write(4, ""..., 1) = 1')
         trace.exited.add(8)
         self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
-        # ...but a close that starts after an accept onto its fd is still ambiguous
+        # ...and a close that starts after an accept onto its (untracked) fd keeps
+        # the accepted socket too: its traffic is counted (#4625: CLOSE@socket)
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
         trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
         trace.decode(7, 1.30, 1.50, 'accept(3, NULL, NULL) = 4')
         trace.decode(8, 1.32, 1.40, 'close(4) = 0')
+        trace.decode(7, 1.60, 1.61, 'write(4, ""..., 1) = 1')
+        trace.exited.add(8)
+        self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
+
+    def test_close_racing_a_socket_made_on_that_untracked_fd_keeps_it(self):
+        # live (#4625): CLOSE@socket. The new socket's traffic stays counted.
+        trace = self.make_trace([])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(7, 1.30, 1.50, 'socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 4')
+        trace.decode(8, 1.32, 1.40, 'close(4) = 0')
+        trace.decode(7, 1.60, 1.61, 'connect(4, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("203.0.113.1")}, 16) = 0')
+        trace.decode(7, 1.70, 1.71, 'write(4, ""..., 1) = 1')
+        trace.exited.add(8)
+        self.assertEqual(trace.finish(0)['intervals']['startup']['github_network'], 2)
+        # ...but closing a socket that was ALREADY tracked beside a creation still refuses
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(7, 1.30, 1.50, 'dup2(3, 3) = 3')
+        trace.decode(8, 1.32, 1.40, 'close(3) = 0')
         trace.exited.add(8)
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
             trace.finish(0)

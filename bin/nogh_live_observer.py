@@ -397,13 +397,14 @@ class Trace:
 
         creations = ('accept', 'socket', 'dup')
 
-        def access(key, first, last, write, at, until, pid, new_child=None, inert=False, kind=''):
-            """Refuse an ambiguous overlap; return the forks a new fd may also have reached."""
+        def access(key, first, last, write, at, until, pid, new_child=None, inert=False, kind='', fresh=False):
+            """Refuse an ambiguous overlap; return the forks a new fd may also have reached and
+            whether this close must leave a socket a sibling was making on that fd."""
             active = [item for item in pending.get(key, []) if item[0] > at]
             whole = first == 0 and last == 2 ** 32
             single = first == last
-            reached = []
-            for end, old_first, old_last, old_write, old_pid, old_child, old_inert, old_kind in active:
+            reached, keep = [], False
+            for end, old_first, old_last, old_write, old_pid, old_child, old_inert, old_kind, old_fresh in active:
                 if pid == old_pid or last < old_first or old_last < first or not (write or old_write):
                     continue
                 # A child can run before clone/vfork returns; that causal
@@ -440,13 +441,22 @@ class Trace:
                     continue
                 if kind == 'fork' and old_kind in creations and old_write and old_first == old_last:
                     continue
+                # A close of fd N starting while a sibling's call makes a socket at N
+                # that was NOT tracked before it (live, #4625: CLOSE@socket): the
+                # close came first (an untracked fd, then N reused) or closed the new
+                # socket. Replay keeps the socket, so its traffic is counted, never
+                # hidden. A close of a socket that was already tracked still refuses.
+                if kind == 'close' and old_kind in creations and old_fresh and single \
+                        and old_first == old_last == first:
+                    keep = True
+                    continue
                 # Which two kinds of touch collided, as identifiers (live, #4625).
                 refused = Refused('FD_ORDER_AMBIGUOUS')
                 refused.detail = '%s@%s' % ((kind or 'TOUCH').upper(), old_kind or 'touch')
                 raise refused
-            active.append((until, first, last, write, pid, new_child, inert, kind))
+            active.append((until, first, last, write, pid, new_child, inert, kind, fresh))
             pending[key] = active
-            return reached
+            return reached, keep
 
         for at, action, pid, data, until in sorted(self.actions, key=lambda e: e[0]):
             require(pid in tables, 'FD_OWNER_UNKNOWN')
@@ -467,10 +477,13 @@ class Trace:
             inert = (action == 'close' and data not in table) or \
                 (action == 'cloexec' and data[0] not in table) or \
                 (action == 'dup' and data[0] not in table and data[1] not in table)
-            reached = []
+            reached, keep = [], False
+            made = data[0] if action == 'socket' else data[1] if action in ('accept', 'dup') else None
             for first, last, write in touches:
-                reached += access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None,
-                                  inert, action + ('_inert' if inert else ''))
+                got, held = access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None,
+                                   inert, action + ('_inert' if inert else ''),
+                                   fresh=write and first == last == made and made not in table)
+                reached += got; keep = keep or held
             if action in ('write', 'network') and data[0] in table:
                 # dup and fork retain the same open-file-description even when
                 # their FD tables differ. A concurrent connect/disconnect makes
@@ -492,7 +505,8 @@ class Trace:
                     if child in tables and tables[child] is not table:
                         tables[child].setdefault(fd, table[fd])
             elif action == 'close':
-                table.pop(data, None)
+                if not keep:
+                    table.pop(data, None)
             elif action == 'range':
                 first, last, cloexec = data
                 for fd in list(table):
