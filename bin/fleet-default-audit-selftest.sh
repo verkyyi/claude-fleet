@@ -39,6 +39,8 @@ default_hooks = {
     "fleet-codex-session.py", "classify-hook.sh", "handoff-latch-reset-hook.sh",
     "fleet-where-hook.sh", "fleet-worker-start-hook.sh", "fleet-emit.sh",
     "refocus-hook.sh", "fleet-history.sh", "precompact-hook.sh", "session-end-hook.sh",
+    # StopFailure: a turn an API error cut off goes on by itself (#4714)
+    "fleet-stream-resume.sh",
 }
 
 def hooks(data):
