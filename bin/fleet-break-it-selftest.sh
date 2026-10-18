@@ -4903,6 +4903,16 @@ drill_launch_receipt_fence() {
   WHAT='原生启动回执拒绝旧身份与错误 provider，未验证不交付任务'
 }
 
+# An accepted task that opens on THIS machine had no launch binding — the hub
+# binds only a remote start — and both spawners refused it (issue #4754).
+drill_local_task_unbound() {
+  CAP=30; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/local-task-launch-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='本机开的 accepted task 自己经入口 claim 拿到启动绑定，带 @launch 开窗；认领被拒不开窗'
+}
+
 drill_dispatch_identity_fallback() {
   CAP=15; local out t0
   t0=$(now)

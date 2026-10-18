@@ -1402,6 +1402,16 @@ lifelong session identity and accepts a new operation and task generation.
 `owner` comes from the task record, not the node audit actor. Provider remains
 immutable within a generation.
 
+The hub binds only a start it sends to another machine. An accepted task that
+opens on the dispatching machine — placement answered `LOCAL`, or a no-repo /
+seeded session that is never placed — binds itself (issue #4754):
+`fleet_launch.py local` reads the record (still `accepted`, no executor, the
+envelope's generation / attempt / provider), mints one UUID as operation and
+session identity under this fleet's UUID, and claims the task through the
+node's fenced `claim` mutation (`/v1/node/tasks/<T>`) before any window opens;
+from there the binding is the remote one (`@launch`, supervise, receipt). A
+refused claim or a changed record refuses the spawn — never an unbound start.
+
 `fleet_launch.py` starts the selected native CLI with the task seed held back.
 The existing SessionStart hook observes the root process's kernel executable,
 birth time, version probe and native session ID under that launch supervisor.

@@ -286,6 +286,7 @@
 | 原生进程停下后的回执积压，同代次恢复了新进程才重放旧停止证明（#4396） | 仍在运行的同一任务被误确认取消或释放租约 | 恢复与停止重放共享本机锁；重放再次核对窗口绑定、原生 PID / 出生时间 / executable / session，身份改变或无法确认则保留待核对 | `task-stop-replay-resumed` |
 | 入口断线、确认丢失或节点适配器重启，已接受任务的结果未送达（#4396） | 结果丢失、重复提交，或把过期缓存当成新启动许可 | 现有操作账本保留固定事件，重连及下次命令重放；7 天 / 每登录 1000 条，超限保留旧记录并明确待核对；运行进程不受影响 | `task-outage-recovery` |
 | 远端启动回执来自旧代次或另一 provider（#4393） | 错误进程收到任务，旧会话冒领新任务 | 原生进程及会话验证后才交付首条输入；回执绑定 operation、T、owner、generation 与 worker；失去身份只报 unknown | `launch-receipt-fence` |
+| 已被入口接受的派活开在本机：入口放置选中本机（`LOCAL`），或无仓库 / 带 prompt 的会话从不放置（#4754，#4453 回归） | 启动绑定只有入口的远端开窗路才给（`FLEET_LAUNCH`），本机开的两个开窗脚本 admit 一律拒绝 `launch: unsupported launch contract`：单建了、记录写了，会话没起来，`task` 派活与「用 task 起编排模板会话」都不能 | 本机开时开窗脚本自己拿绑定：`fleet_launch.py local` 读记录（必须仍是 accepted、代次 / attempt / provider 与 envelope 一致、无执行者），以一个新 UUID 作 operation 与会话身份（worker_id = 本 fleet UUID / 它），经入口带围栏的 `claim` 把这次启动定为任务的执行者，再照远端路盖 `@launch` 由 supervise 验进程、发回执；认领被拒或记录已变 ⇒ 拒绝、不开窗，绝不无凭证开；envelope 不带 T（停放唤醒）⇒ 不碰入口，照旧 | `local-task-unbound` |
 | 本机旧任务过最后一道门后暂停，空清单切换仓库权威（#4395） | 暂停的启动在切换后恢复，两个控制方同时执行 | 最后一道门在现有 operation 账本持久预留，与 freeze 串行；未知启动不因超时或空清单清除 | `repo-cutover-inflight` |
 | 用另一死进程或 transfer 前的原生回执排空旧 owner（#4395） | 同一 worker ID 的替代进程仍活着，租约却释放 | 停止证明须匹配冻结时保存的原生身份及当前执行；未绑定、错身份、旧会话均拒绝 | `repo-cutover-stop-binding` |
 | 同号跨仓库或换代后，旧 child report / cancel 回执按本地 key 归属（#4394） | 新 parent 收到旧结果，取消未确认就当成功，过期租约补开重复执行 | T + owner + generation + parent session 先落任务账；显式完成不等 native 退出，仍保留执行租约；历史事件不更新新一代，取消及替换等停止确认 | `task-report-fence` |

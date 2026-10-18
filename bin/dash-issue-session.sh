@@ -1045,6 +1045,15 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # @seed_words (issue #3331): the first turn is the person's words, so the
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
+# An accepted task opening HERE (issue #4754): the hub binds only a remote start,
+# so a local one claims the task itself and carries the same launch binding —
+# refused, never opened unbound.
+if [ -n "$TASK_REF" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
+  _fu=$(fleet_uuid "$SESS" 2>/dev/null) || _fu=''   # none: `local` refuses a tasked dispatch
+  FLEET_LAUNCH=$(printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" local "$_fu") \
+    || { refuse "#$num: $TASK_REF could not be claimed for a local launch"; exit "$RC_INFRA"; }
+  [ -z "$FLEET_LAUNCH" ] || export FLEET_LAUNCH   # empty: the dispatch carries no task
+fi
 if [ -n "${FLEET_LAUNCH:-}" ]; then
   _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
   stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "$tf" @fleet_id "$_launch_fid" @dispatch "$DISPATCH" @task "$TASK_REF")"

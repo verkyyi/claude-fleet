@@ -433,6 +433,35 @@ def current_task(c):
     return t
 
 
+def local_launch(d, fleet_uuid):
+    """An accepted task that opens on THIS machine (issue #4754).
+
+    The hub binds a remote start in claimLaunch; a local one (placement LOCAL,
+    or a scratch that is never placed) gets the same binding here: the operation
+    and the session identity are one fresh UUID, as the hub's are, and the hub's
+    own fenced claim makes this worker the task's owner before any window opens.
+    No claim, no binding: never a start without the authority's word.
+    """
+    if not d.get("task"):
+        return None
+    if not valid_uuid(fleet_uuid):
+        raise ValueError("local accepted launch needs this fleet's UUID")
+    t = task_call({"task": d["task"]})
+    if (t.get("authority_version") != 1 or t.get("generation") != d.get("generation")
+            or t.get("attempt_id") != d.get("attempt_id") or t.get("resolved_agent") != d.get("resolved_agent")
+            or t.get("state") != "accepted" or t.get("execution_owner") or t.get("outcome")):
+        raise ValueError("accepted task is not open for a local launch")
+    op = str(uuid.uuid4())
+    c = validate_context(dict(version=1, operation_id=op, task=d["task"], owner=t.get("owner"),
+                              generation=d["generation"], worker_id=fleet_uuid + "/" + op,
+                              provider=d["resolved_agent"], attempt_id=d["attempt_id"]))
+    t = task_call(c, dict(kind="claim", idempotency_key="launch-claim:" + op,
+                          generation=c["generation"], worker_id=c["worker_id"]))
+    if t.get("generation") != c["generation"] or t.get("execution_owner") != c["worker_id"]:
+        raise ValueError("task claim did not make this launch its owner")
+    return c
+
+
 def publish(c, receipt):
     current_task(c)  # idempotent event replay alone cannot authorize old work
     proof = {k: v for k, v in receipt.items() if k != "window_id"}
@@ -710,7 +739,7 @@ def transfer_commit(pane, socket, target, bundle):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "native-worktree", "restore-native-worktree"))
+    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "local", "native-worktree", "restore-native-worktree"))
     p.add_argument("--socket", default="")
     p.add_argument("--pane", default="")
     p.add_argument("--target", default="")
@@ -733,6 +762,13 @@ def main():
                 raise ValueError("native-worktree requires repository and base branch")
             intent = new_native_worktree(*a.argv)
             print(intent["name"] + "\t" + str(native_worktree_path(intent)) + "\t" + json.dumps(intent))
+            return 0
+        if a.mode == "local":
+            if len(a.argv) != 1:
+                raise ValueError("local requires this fleet's UUID")
+            c = local_launch(json.load(sys.stdin), a.argv[0])
+            if c:
+                print(json.dumps(c, separators=(",", ":")))
             return 0
         if a.mode == "admit":
             d = json.load(sys.stdin)
