@@ -224,8 +224,8 @@ class Road(Base):
         creator = self.spawn()
         foreign = dict(self.record, createdByPid=creator.pid, createdByProcStart=D.proc_start(creator.pid))
         self.store.write_text(json.dumps(dict(tasks=[foreign])))
-        with self.assertRaises(D.Refused):
-            D.inspect(self.home, self.source.pid, '2.1.295')
+        # Another live session's record is its own: never staged here (#4758).
+        self.assertEqual(D.inspect(self.home, self.source.pid, '2.1.295')['records'], [])
         self.assertFalse(D.journal_path(FID).exists())
 
     def test_third_party_holder_refuses_and_names_it(self):
@@ -255,6 +255,62 @@ class Road(Base):
         self.assertEqual(D.gate(FID), 'drop')
         self.assertEqual(self.state(), 'returned')
         self.assertEqual(D.owner(D.read(D.journal_path(FID))), 'native')
+
+
+class Orphan(Base):
+    """A durable task another, gone session left in HOME (#4758): it neither
+    holds this session's switch nor moves with it; it is named and left alone."""
+    def setUp(self):
+        super().setUp()
+        dead = self.spawn()
+        self.dead_start = D.proc_start(dead.pid)
+        dead.kill()
+        dead.wait()
+        self.orphan = dict(self.record, id='0rphan01', createdBySessionId='long-gone',
+                           createdByPid=dead.pid, createdByProcStart=self.dead_start)
+
+    def check(self, tasks, pid=None):
+        import fleet_transfer_cron as C
+        import contextlib
+        import io
+        self.store.write_text(json.dumps(dict(tasks=tasks)))
+        before, err = self.store.read_bytes(), io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                C.check_durable_store(FID, self.source.pid if pid is None else pid)
+        finally:
+            self.assertEqual(self.store.read_bytes(), before)     # never touched
+        return err.getvalue()
+
+    def test_orphan_does_not_hold_the_switch(self):
+        note = self.check([self.orphan])
+        self.assertIn('0rphan01', note)
+        self.assertIn('gone', note)
+        self.assertIn('long-gone', note)
+
+    def test_live_foreign_task_does_not_hold_the_switch(self):
+        other = self.spawn()
+        foreign = dict(self.record, id='f0reign1', createdByPid=other.pid,
+                       createdByProcStart=D.proc_start(other.pid))
+        self.assertIn('live pid %d' % other.pid, self.check([foreign]))
+
+    def test_own_or_unproven_task_still_refuses_and_says_which(self):
+        unknown = {k: v for k, v in self.record.items() if not k.startswith('createdByP')}
+        for tasks, pid in (([self.orphan, self.record], None), ([unknown], None), ([self.orphan], 0)):
+            with self.assertRaises(ValueError) as caught:
+                self.check(tasks, pid)
+            msg = str(caught.exception)
+            self.assertIn('execution owner', msg)
+            self.assertIn('fires ', msg)
+            self.assertIn('CronDelete', msg)
+            self.assertIn((unknown if tasks == [unknown] else tasks[-1])['id'], msg)
+        self.assertNotIn('0rphan01', msg.split(':', 1)[0])
+
+    def test_orphan_never_stages_with_the_source(self):
+        self.store.write_text(json.dumps(dict(tasks=[self.orphan])))
+        self.assertEqual(D.inspect(self.home, self.source.pid, '9.9.9')['records'], [])
+        self.store.write_text(json.dumps(dict(tasks=[self.orphan, self.record])))
+        self.assertEqual(D.inspect(self.home, self.source.pid, '2.1.295')['records'], [self.record])
 
 
 class Failures(Base):
