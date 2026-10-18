@@ -463,7 +463,7 @@ fi
 if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   # the old way out, said once (issue #4675): it does nothing now.  # compat-1v: 下一批删
   if [ -n "${FLEET_CREDSEP_OPTIONAL:-}" ] || [ "${FLEET_CRED_SEPARATE:-}" = 0 ]; then
-    warn credsep-conf "fleet.conf 里还有 FLEET_CREDSEP_OPTIONAL / FLEET_CRED_SEPARATE=0 — 已删除（#4675），不再起作用：每个登录都隔离；从 fleet.conf 删掉这两行"
+    warn credsep "fleet.conf 里还有 FLEET_CREDSEP_OPTIONAL / FLEET_CRED_SEPARATE=0 — 已删除（#4675），不再起作用：每个登录都隔离；从 fleet.conf 删掉这两行"
   fi
   _cs=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-credsep.sh" check 2>&1 | tail -n 1)
   _cs_m=${_cs#credsep: }; _cs_lv=${_cs_m%% —*}; _cs_m=${_cs_m#* — }
