@@ -257,6 +257,39 @@ run --agent codex --resume abc
 hasarg --dangerously-bypass-approvals-and-sandbox && fail "D remote resume must retain native permissions without unsupported overrides" "$(argv1l)"
 ok "D --resume/--continue/--from-pr/--fork-session/--model → claude on a codex fleet; explicit --agent still wins"
 
+# D2. full access from config.toml, not a CLI flag (issue #4724): held as a flag it
+# is a session override, and Codex refuses every in-TUI /resume on the private
+# runtime («Permission overrides are not supported when resuming a remote task»).
+# bin/fleet-codex-posture.py says when the login's config.toml already gives it.
+ln -s "$BIN/fleet-codex-posture.py" "$IBIN/fleet-codex-posture.py"
+cp "$CODEX_HOME/config.toml" "$WORK/codex.d2"
+printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\n' > "$WORK/posture"
+cat "$WORK/posture" "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
+run '/fleet-claim'
+[ "$(ran)" = codex ] || fail "D2 codex must run" "$(cat "$WORK/err")"
+hasarg --dangerously-bypass-approvals-and-sandbox && fail "D2 config.toml already gives full access — no CLI permission override" "$(argv1l)"
+argv1l | grep -E '^(approval_policy|sandbox_mode)=' >/dev/null && fail "D2 no -c permission override either" "$(argv1l)"
+hasarg --dangerously-bypass-hook-trust || fail "D2 hook-trust bypass stays" "$(argv1l)"
+FLEET_CODEX_POSTURE_FROM_CONFIG=0 run '/fleet-claim'
+hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 FLEET_CODEX_POSTURE_FROM_CONFIG=0 keeps the old flag" "$(argv1l)"
+run -s read-only '/fleet-claim'
+hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a caller permission flag keeps the old launch" "$(argv1l)"
+printf 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n' | cat - "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
+run '/fleet-claim'
+hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 config.toml without full access keeps the flag" "$(argv1l)"
+printf 'approval_policy = "never"\nsandbox_mode = "danger-full-access"\nprofile = "p"\n' | cat - "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
+run '/fleet-claim'
+hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a profile can move the posture — keep the flag" "$(argv1l)"
+cat "$WORK/posture" "$WORK/codex.d2" > "$CODEX_HOME/config.toml"
+mkdir -p "$WORK/wt/repo-issue-42/.codex"; printf 'sandbox_mode = "read-only"\n' > "$WORK/wt/repo-issue-42/.codex/config.toml"
+run '/fleet-claim'
+hasarg --dangerously-bypass-approvals-and-sandbox || fail "D2 a project .codex/config.toml above the user's keeps the flag" "$(argv1l)"
+rm -f "$WORK/wt/repo-issue-42/.codex/config.toml"; rmdir "$WORK/wt/repo-issue-42/.codex"
+run --agent codex --resume abc
+hasarg --dangerously-bypass-approvals-and-sandbox && fail "D2 a resume never carries the flag" "$(argv1l)"
+rm -f "$IBIN/fleet-codex-posture.py"; cp "$WORK/codex.d2" "$CODEX_HOME/config.toml"
+ok "D2 config.toml full access ⇒ no CLI permission override (in-TUI /resume works); anything that can move it keeps the flag (#4724)"
+
 # ============================================================================
 # E. FLEET_CODEX_MODEL → -m (+ @cc_model); caller -m wins; empty = no -m
 # ============================================================================
