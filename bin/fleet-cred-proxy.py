@@ -1309,19 +1309,19 @@ class Proxy(BaseHTTPRequestHandler):
         """-> the tenant a request is for (None: the shared proxy cannot tell)."""
         if cls.fixed or not cls.tenants:
             return cls.fixed or cls.T
+        # one tenant (a person's pod, issue #4674): its sessions' hub passes are
+        # never registered (no credsep.json — the hub checks them), and what its
+        # per-login proxy minted before the switch names no login: the same state
+        # dir, the same key, so that tenant takes both
+        one = next(iter(cls.tenants.values())) if len(cls.tenants) == 1 else None
         if is_hub_pass(tok):
             c = hub_claims(tok)
             for t in cls.tenants.values():
                 if c and c["id"] in t.passes.held:
                     return t
-            return None
+            return one
         lg = tok_login(tok)
-        if not lg and len(cls.tenants) == 1:
-            # one tenant (a person's pod, issue #4674): a credential its per-login
-            # proxy minted before the switch names no login — the same state dir,
-            # the same key, so that tenant's key verifies it
-            return next(iter(cls.tenants.values()))
-        return cls.tenants.get(lg or "")
+        return cls.tenants.get(lg) if lg else one
 
     def fail(self, code, msg, typ="authentication_error", ecode="", extra=None):
         err = {"type": typ, "message": "cred-proxy: " + msg}

@@ -5,7 +5,8 @@
 # the providers (direct), the Singapore relay, the cluster's central proxy and
 # the hub's /v1/node/self — all on 127.0.0.1, sandbox HOME + FLEET_CONF_DIR.
 #
-#   A  FLEET_CRED_PROXY=0: no proxy process, no port, no socket (the degenerate)
+#   A  FLEET_CRED_PROXY=0: no proxy process, no port, no socket (the degenerate);
+#      the per-login launcher's old entry `run` starts nothing (issue #4674)
 #   B  direct  — trusted + reachable: Claude + Codex, real token put in, x-api-key
 #                dropped, chatgpt-account-id overwritten, body byte for byte, streamed
 #   C  relay   — probe unreachable: Claude + Codex via the relay with X-Fleet-Relay
@@ -16,8 +17,11 @@
 #   E  a region 403 on direct moves the SAME request to relay (route_switch logged)
 #   F  three sessions at once never cross accounts; rebind / revoke
 #   G  rails: ctl.sock 0600, 127.0.0.1 only, no token in the log
-#   H  the daemon entry (`run`): starts the proxy when on, stops it when the
-#      config turns off, and a SIGKILLed launcher takes the proxy with it
+#   H  the machine mode a person's pod runs (issue #4674): the same proxy as
+#      `serve --shared` with the login its one tenant (fleet-node-linux.py's
+#      POD_PROXY writes its file), on the login's old cred-proxy/ — the same
+#      port; a session's hub pass from before the switch goes on, a new one goes
+#      central (Codex + Claude); nothing is read from a credential file
 #   I  an upstream 401 (token_revoked) on a Codex home's token lands in that
 #      home's .ccquota-upstream.json for `ccquota codex list` (issue #1920), a
 #      2xx clears it, and the record holds no token
@@ -61,14 +65,12 @@ fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
 # ── A: switched off ⇒ no process ─────────────────────────────────────────────
 out=$(FLEET_CRED_PROXY=0 bash "$BIN/fleet-cred-proxy.sh" ensure 2>&1); rc=$?
 [ "$rc" = 3 ] && pass "A off: ensure refuses (exit 3)" || fail "A off: ensure rc=$rc ($out)"
-FLEET_CRED_PROXY=0 FLEET_CRED_PROXY_IDLE_SECS=1 bash "$BIN/fleet-cred-proxy.sh" run >/dev/null 2>&1 &
-RUNPID=$!
-sleep 3
-kids=$(pgrep -P "$RUNPID" -f fleet-cred-proxy.py 2>/dev/null | wc -l | tr -d ' ')
-if [ "$kids" = 0 ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/port" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ]; then
-  pass "A off: run starts no proxy (no port, no socket)"
-else fail "A off: run started something (kids=$kids)"; ls -la "$FLEET_CONF_DIR/cred-proxy" 2>&1; fi
-kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null
+for sw in 0 1; do
+  out=$(FLEET_CRED_PROXY=$sw bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
+  if [ "$rc" = 0 ] && [ -z "$out" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/port" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ]; then
+    pass "A run (FLEET_CRED_PROXY=$sw): the per-login launcher's old entry exits 0, starts nothing (#4674)"
+  else fail "A run (FLEET_CRED_PROXY=$sw) rc=$rc: $out"; ls -la "$FLEET_CONF_DIR/cred-proxy" 2>&1; fi
+done
 
 # ── the fake far end ─────────────────────────────────────────────────────────
 cat > "$SB/fake.py" <<'PY'
@@ -520,25 +522,52 @@ case "$dl" in WARN*"用量没报上入口"*) pass "L doctor WARNs: usage not rea
 mv "$FLEET_CONF_DIR/node.env.off" "$FLEET_CONF_DIR/node.env"
 bwait '"err": ""' && pass "L the token back → the next flush clears it" || fail "L err never cleared"
 
-# ── H: the daemon entry ──────────────────────────────────────────────────────
+# ── H: the machine mode a person's pod runs (issue #4674) ────────────────────
+# The pod's login no longer runs a proxy of its own: the node daemon's child runs
+# `fleet-cred-proxy.py serve --shared <conf>/cred-proxy/machine.json`, written by
+# fleet-node-linux.py's POD_PROXY (driven here as it is there), on the same dir.
+OLDPORT=$PORT
+# a pod session carries its hub pass itself (fleet-session-cred.sh mint, central)
+HP=$(python3 -c 'import base64, json, time; n = int(time.time())
+c = json.dumps({"v": 1, "id": "pod-pass", "iat": n, "exp": n + 3600}).encode()
+print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")')
+echo untrusted > "$SB/trust"; CP route --refresh >/dev/null 2>&1
+jx=$(R /codex/responses "$HP")
+check H central codex "$jx" a1 || fail "H before the switch: the per-login proxy did not take the pod's pass"
 kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''
 i=0; while [ -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-up() { [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null; }
-waitfor() { local i=0; while [ "$i" -lt 300 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
-FLEET_CRED_PROXY_IDLE_SECS=1 bash "$BIN/fleet-cred-proxy.sh" run --max-seconds 120 >/dev/null 2>&1 & RUNPID=$!
-if waitfor up && [ "$(cat "$FLEET_CONF_DIR/cred-proxy/port")" = "$PORT" ]; then
-  pass "H run: on → proxy up, on the same port as before ($PORT)"
-else fail "H run did not start the proxy (or moved its port)"; fi
-sed -i.bak 's/^FLEET_CRED_PROXY=1$/FLEET_CRED_PROXY=0/' "$FLEET_CONF_DIR/fleet.conf"
-if waitfor sh -c "! kill -0 \$(cat '$FLEET_CONF_DIR/cred-proxy/pid' 2>/dev/null) 2>/dev/null" && kill -0 "$RUNPID" 2>/dev/null; then
-  pass "H run: config turned off → proxy stopped, launcher idles"
-else fail "H run: the proxy outlived FLEET_CRED_PROXY=0"; fi
-mv "$FLEET_CONF_DIR/fleet.conf.bak" "$FLEET_CONF_DIR/fleet.conf"
-waitfor up || fail "H run: did not come back on"
-pp=$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)
-kill -9 "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null; RUNPID=''
-if waitfor sh -c "! kill -0 $pp 2>/dev/null"; then pass "H a SIGKILLed launcher takes its proxy with it"
-else fail "H proxy $pp outlived its launcher"; kill "$pp" 2>/dev/null; fi
+printf 'CCQUOTA_FLEET_CREDS=0\n' >> "$FLEET_CONF_DIR/node.env"     # a pod: nothing is leased in
+out=$(python3 -I - "$BIN/fleet-node-linux.py" "$FLEET_CONF_DIR" "$HOME" "$(id -u)" "$(id -un)" "$U/central" <<'PY' 2>&1
+import re, subprocess, sys
+src = open(sys.argv[1]).read()
+code = eval("(" + re.search(r"POD_PROXY = \((.*?)\)\n\n\ndef pod_login_open", src, re.S).group(1) + ")")
+subprocess.check_call([sys.executable, "-c", code] + sys.argv[2:])
+PY
+) || fail "H POD_PROXY did not write the pod's machine file: $out"
+MJ="$FLEET_CONF_DIR/cred-proxy/machine.json"
+# FLEET_CREDSEP_TEST: the sandbox's plain-http loopback hub (a pod's is its in-cluster Service)
+FLEET_CREDSEP_TEST=1 python3 -I "$BIN/fleet-cred-proxy.py" serve --shared "$MJ" --max-seconds 120 2>"$SB/machine.err" & PROXY_PID=$!
+i=0; while ! { [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && [ -s "$FLEET_CONF_DIR/cred-proxy/pid" ] \
+               && [ "$(cat "$FLEET_CONF_DIR/cred-proxy/pid")" = "$PROXY_PID" ]; } && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+st=$(CP status --json 2>&1)
+case "$st" in *'"shared": true'*) pass "H the pod's machine proxy serves (serve --shared, one tenant: $(id -un))" ;;
+  *) fail "H machine mode did not come up: $st $(tail -3 "$SB/machine.err")" ;; esac
+[ "$(CP port 2>&1)" = "$OLDPORT" ] && pass "H the same port as the per-login proxy it replaced ($OLDPORT)" \
+  || fail "H port moved: $(CP port 2>&1) (want $OLDPORT)"
+r=$(CP route --refresh --provider codex); case "$r" in central*) ;; *) fail "H route (pod): $r" ;; esac
+mv "$SB/codex-homes" "$SB/codex-homes.away"; mv "$FLEET_CONF_DIR/accounts" "$FLEET_CONF_DIR/accounts.away"
+jx=$(R /codex/responses "$HP")
+check H central codex "$jx" a1 && pass "H the session's hub pass from before the switch goes on, unregistered (central)"
+HP2=$(python3 -c 'import base64, json, time; n = int(time.time())
+c = json.dumps({"v": 1, "id": "pod-pass-2", "iat": n, "exp": n + 3600}).encode()
+print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")')
+jx=$(R /codex/responses "$HP2"); jc=$(R /v1/messages "$HP2")
+check H central codex "$jx" a1 && check H central claude "$jc" a1 && pass "H a new session's hub pass goes central (Codex + Claude)"
+echo trusted > "$SB/trust"
+mv "$SB/codex-homes.away" "$SB/codex-homes"; mv "$FLEET_CONF_DIR/accounts.away" "$FLEET_CONF_DIR/accounts"
+grep -h '"ev": "fwd"' "$SB/proxy.log" "$FLEET_CONF_DIR/logs/cred-proxy.log" 2>/dev/null | grep '"route": "central"' | grep -q '"cred": "file"' \
+  && fail "H a central request read a credential file"
+kill "$PROXY_PID" 2>/dev/null; PROXY_PID=''
 
 # ── K: no getfqdn on bind (issue #2319) ──────────────────────────────────────
 out=$(python3 -I - "$BIN/fleet-cred-proxy.py" <<'PY' 2>&1
