@@ -9,11 +9,12 @@ import asyncio
 import ipaddress
 import json
 from pathlib import Path
+import re
 import struct
 import sys
 import threading
 
-from nogh_live_contract import canonical, origin, read_private, require, write_private
+from nogh_live_contract import Refused, canonical, origin, read_private, require, write_private
 from nogh_live_observer import PHASES
 
 ROOT = Path(__file__).resolve().parent
@@ -55,12 +56,15 @@ class Policy:
         require(phase in PHASES, 'GATEWAY_PHASE')
         return phase
 
-    def record(self, source, category, before):
+    def record(self, source, category, before, detail=None):
         require(source in self.sources, 'FOREIGN_GATEWAY_SOURCE')
         # A request crossing a phase transition contaminates both intervals.
         with self.output_lock:
             for phase in sorted({before, self.phase()}):
                 value = dict(type='gateway', source=self.sources[source], category=category, phase=phase)
+                if detail:
+                    # WHY a DNS request is unknown, as an identifier, never the name (#4625).
+                    value['detail'] = detail
                 sys.stdout.buffer.write(canonical(value) + b'\n')
             sys.stdout.buffer.flush()
 
@@ -86,7 +90,7 @@ class Policy:
         if host in self.restored_hosts and before != 'row:A4-restored':
             addresses = None
         if addresses is None:
-            self.record(source, 'github_network' if github(host) else 'unknown', before)
+            self.record(source, 'github_network' if github(host) else 'unknown', before, 'DNS_NAME')
             return struct.pack('!6H', ident, 0x8183, 1, 0, 0, 0) + packet[12:offset]
         family = 4 if qtype == 1 else 6
         packed = [ipaddress.ip_address(ip).packed for ip in sorted(addresses)
@@ -95,6 +99,15 @@ class Policy:
         header = struct.pack('!6H', ident, 0x8180, 1, len(packed), 0, 0)
         answer = b''.join(b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 0, len(ip)) + ip for ip in packed)
         return header + packet[12:offset] + answer
+
+
+def dns_reason(exc, transport):
+    """A refused DNS request's reason as an identifier: the check's own code
+    (DNS_TYPE, DNS_FORMAT, …), else the transport and the exception class."""
+    code = str(exc)
+    if isinstance(exc, Refused) and re.fullmatch(r'[A-Z0-9_]{1,40}', code):
+        return code
+    return ('DNS_%s_%s' % (transport, type(exc).__name__.upper()))[:64]
 
 
 class DNSDatagram(asyncio.DatagramProtocol):
@@ -107,10 +120,10 @@ class DNSDatagram(asyncio.DatagramProtocol):
     def datagram_received(self, packet, addr):
         try:
             self.transport.sendto(self.policy.dns(packet, addr[0]), addr)
-        except Exception:
+        except Exception as exc:
             # Malformed requests are never silently accepted as no attempts.
             if addr[0] in self.policy.sources:
-                self.policy.record(addr[0], 'unknown', self.policy.phase())
+                self.policy.record(addr[0], 'unknown', self.policy.phase(), dns_reason(exc, 'UDP'))
 
 
 async def dns_tcp(policy, reader, writer):
@@ -121,8 +134,8 @@ async def dns_tcp(policy, reader, writer):
         packet = await asyncio.wait_for(reader.readexactly(size), 1)
         answer = policy.dns(packet, source)
         writer.write(struct.pack('!H', len(answer)) + answer); await writer.drain()
-    except Exception:
-        if source in policy.sources: policy.record(source, 'unknown', policy.phase())
+    except Exception as exc:
+        if source in policy.sources: policy.record(source, 'unknown', policy.phase(), dns_reason(exc, 'TCP'))
     finally:
         writer.close()
 

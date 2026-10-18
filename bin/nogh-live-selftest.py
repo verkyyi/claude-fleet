@@ -866,6 +866,27 @@ class Templates(unittest.TestCase):
             with patch.object(policy, 'phase', return_value=phase), patch.object(policy, 'record'):
                 self.assertEqual(policy.dns(query, source)[3] & 15, status)
 
+    def test_unknown_dns_says_why_never_the_name(self):
+        # live (#4625): node-a's A8 lookups read only `unknown`; the record now
+        # says which check refused them, as an identifier — never the name.
+        import struct
+        p = plan(); policy = gateway.Policy(p, 'dns')
+        source = p['endpoints'][0]['pod_ip']
+        name = b'\x06secret\x07example\x03com\x00'
+        records = []
+        with patch.object(policy, 'phase', return_value='row:A8'), \
+             patch.object(policy, 'record', side_effect=lambda *a: records.append(a)):
+            policy.dns(struct.pack('!6H', 1, 0x100, 1, 0, 0, 0) + name + b'\x00\x01\x00\x01', source)
+            with self.assertRaises(live.Refused) as caught:
+                policy.dns(struct.pack('!6H', 2, 0x100, 1, 0, 0, 0) + name + b'\x00\x41\x00\x01', source)
+        self.assertEqual(records[0][1:], ('unknown', 'row:A8', 'DNS_NAME'))
+        self.assertEqual(gateway.dns_reason(caught.exception, 'UDP'), 'DNS_TYPE')
+        self.assertEqual(gateway.dns_reason(TimeoutError(), 'TCP'), 'DNS_TCP_TIMEOUTERROR')
+        import nogh_live_runtime as runtime
+        for reason in ('DNS_NAME', 'DNS_TYPE', 'DNS_TCP_TIMEOUTERROR'):
+            self.assertTrue(runtime.DETAIL.fullmatch(reason))
+        self.assertNotIn('secret', ''.join(map(str, records)))
+
     def test_terminal_wait_retries_only_original_running_status(self):
         from types import SimpleNamespace
         cluster = SimpleNamespace(remaining=lambda cap: 0)

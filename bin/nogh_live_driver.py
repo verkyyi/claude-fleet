@@ -258,7 +258,9 @@ def seal(plan, proofs):
     for ep in plan['endpoints']:
         proof = proofs[ep['role']]
         for event in proof.get('gateway', []):
-            require(ep['role'] in ('dns', 'proxy') and set(event) == {'type', 'source', 'category', 'phase'}
+            require(ep['role'] in ('dns', 'proxy') and set(event) - {'detail'} == {'type', 'source', 'category', 'phase'}
+                    and ('detail' not in event or (isinstance(event['detail'], str)
+                                                   and re.fullmatch(r'[A-Z0-9_]{1,64}', event['detail'])))
                     and event['source'] in ROLES and event['phase'] in phases and event['category'] in allowed,
                     'GATEWAY_COVERAGE')
             counts = matrix[event['source']][event['phase']]
