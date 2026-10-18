@@ -32,8 +32,10 @@ def pod(plan, endpoint):
     common = dict(image=endpoint['image'], imagePullPolicy='IfNotPresent', env=env, stdin=True,
                   stdinOnce=True, tty=False, terminationMessagePolicy='File',
                   terminationMessagePath='/dev/termination-log',
-                  resources=dict(requests=dict(cpu='100m', memory='128Mi'),
-                                 limits=dict(cpu='2', memory='2Gi')))
+                  # ephemeral-storage bounded so a run can never press a node's
+                  # disk: two containers, at most 2Gi a Pod (#4625).
+                  resources=dict(requests={'cpu': '100m', 'memory': '128Mi', 'ephemeral-storage': '128Mi'},
+                                 limits={'cpu': '2', 'memory': '2Gi', 'ephemeral-storage': '1Gi'}))
     state = dict(name='c9-state', mountPath='/run/fleet-c9')
     guard = dict(common, name='egress-guard', command=['/usr/local/bin/fleet-c9-guard'], args=[role],
                  securityContext=security(GUARD_CAPS), volumeMounts=[state])
@@ -62,6 +64,11 @@ def pod(plan, endpoint):
                          dict(name='control', secret=dict(secretName=name + '-control', defaultMode=0o400))])
     if role == 'proxy':
         spec['volumes'].append(dict(name='proxy-private', secret=dict(secretName=name + '-tls', defaultMode=0o400)))
+    if 'placement' in plan:
+        # Only onto the owner's named test node(s), never a production one (#4625).
+        spec['nodeSelector'] = dict(plan['placement']['node_selector'])
+        spec['tolerations'] = [dict(key=t['key'], operator='Equal', value=t['value'], effect='NoSchedule')
+                               for t in plan['placement']['tolerations']]
     return dict(apiVersion='v1', kind='Pod', metadata=dict(name=name, namespace=plan['namespace'],
                 labels=labels(plan, role)), spec=spec)
 
@@ -178,7 +185,18 @@ def check_pod(plan, endpoint, actual):
             return isinstance(have, list) and len(want) == len(have) and all(
                 contains(x, y, path + ('*',)) for x, y in zip(want, have))
         return want == have
-    require(contains(expected['spec'], actual.get('spec')), 'TEST_TEMPLATE_CHANGED')
+    # The API server adds the default not-ready / unreachable NoExecute
+    # tolerations to every Pod: each rendered toleration must be there, and
+    # those defaults are the only others allowed (#4625).
+    want_tol = expected['spec'].pop('tolerations', [])
+    have_tol = (actual.get('spec') or {}).get('tolerations') or []
+    defaults = {'node.kubernetes.io/not-ready', 'node.kubernetes.io/unreachable'}
+    require(all(t in have_tol for t in want_tol) and all(
+        t in want_tol or (t.get('key') in defaults and t.get('effect') == 'NoExecute'
+                          and t.get('operator') == 'Exists' and set(t) <= {'key', 'operator', 'effect', 'tolerationSeconds'})
+        for t in have_tol), 'TEST_TEMPLATE_CHANGED')
+    require(contains(expected['spec'], {k: v for k, v in (actual.get('spec') or {}).items() if k != 'tolerations'}),
+            'TEST_TEMPLATE_CHANGED')
     spec = actual['spec']
     for c in spec['containers'] + spec['initContainers']:
         require(not any(c.get(k) for k in ('lifecycle', 'livenessProbe', 'readinessProbe', 'startupProbe')),
