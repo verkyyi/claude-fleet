@@ -220,6 +220,7 @@ usage() {
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
 LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 RECYCLE=0
+GH_LOGIN='gh auth login'  # no-gh-ok: the sign-in the letters tell a person to run
 while [ $# -gt 0 ]; do
   case "$1" in
     --full-name) [ $# -ge 2 ] || usage; FULL=$2; shift 2 ;;
@@ -1100,7 +1101,7 @@ EOF
 6. 还要你自己做的
 
    - Codex：ccquota codex login personal --device-auth（按提示批准设备码）
-   - GitHub：gh auth login（用你自己的账号；仓库都不在 GitHub 上就不用）
+   - GitHub：${GH_LOGIN}（用你自己的账号；仓库都不在 GitHub 上就不用）
 
 这封信里没有密码：登录只用钥匙。连不上、要重设密码，找开号人${ADMIN:+ $ADMIN}。
 EOF
@@ -1201,7 +1202,7 @@ EOF
 6. Still yours to do
 
    - Codex: ccquota codex login personal --device-auth   (approve the device code)
-   - GitHub: gh auth login   (your own account — only for repos on GitHub)
+   - GitHub: ${GH_LOGIN}   (your own account — only for repos on GitHub)
 
 There is no password in this letter: you log in with the key. Can't get in, or need
 a password reset — ask the admin${ADMIN:+ ($ADMIN)}.
@@ -1242,7 +1243,7 @@ if [ "$DAEMONS" = 0 ]; then
 fi
 i=$((i + 1)); say "  $i. as $LOGIN: ccquota codex login personal --device-auth   — approve the device code"
 say "     (never copy ~/.codex/auth.json between logins)"
-i=$((i + 1)); say "  $i. as $LOGIN: gh auth login   — their own GitHub identity (only for repos on GitHub)"
+i=$((i + 1)); say "  $i. as $LOGIN: ${GH_LOGIN}   — their own GitHub identity (only for repos on GitHub)"
 i=$((i + 1)); say "  $i. on the hub: ccquota enroll --name $MACHINE-$LOGIN   — give $LOGIN the token privately"
 say "     (then docs/dev/SHARED-MACHINE.md step 4: the ccquota agent)"
 if [ "$DAEMONS" = 1 ]; then

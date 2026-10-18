@@ -455,7 +455,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
       GATE_CS=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
             '"\(.assignees|length)\t\(.state)", tojson') || GATE_CS=''
     else
-      GATE_CS=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+      GATE_CS=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
             --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || GATE_CS=''
     fi
     case "$GATE_CS" in
@@ -521,7 +521,7 @@ _spawn_back() {  # EXIT: a non-zero exit gives back what this spawn took
       bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" --release >/dev/null 2>&1 \
         && printf 'dash-issue-session: #%s 的认领已撤回 — 再派不用 --force\n' "$num" >&2
     elif [ "$CLAIMED_HERE" = 1 ] && [ -n "$REPO" ] \
-       && gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
+       && fleet_gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
       printf 'dash-issue-session: #%s 的 GitHub 认领已撤回 — 再派不用 --force\n' "$num" >&2
     fi
   fi
@@ -622,10 +622,10 @@ if [ "$PLACING" = 1 ]; then
         _pre_asg=0
       fi
     elif [ "$ASYNC_FLAG" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && command -v gh >/dev/null 2>&1; then
-      _pre_asg=$(gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
+      _pre_asg=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees --jq '.assignees|length' 2>/dev/null)
       # A claim an earlier send left with no session behind it (issue #1610).
       if [ "${_pre_asg:-0}" != 0 ] && [ "$FORCE_FLAG" != 1 ] && _stale_claim \
-         && gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
+         && fleet_gh issue edit "$num" --repo "$REPO" --remove-assignee @me >/dev/null 2>&1; then
         printf 'dash-issue-session: #%s 的认领是上次派活留下的死认领（没开成、哪台都没有会话）— 已收回，不用 --force\n' "$num" >&2
         _pre_asg=0
       fi
@@ -768,7 +768,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   _nopr=0; [ "$(fleet_repo_forge "$REPO" "$SESS")" = none ] && _nopr=1
   if [ "$_nopr" = 1 ]; then rm -f "$_prf"; _prf=''; fi
   if [ -n "$_prf" ]; then
-    gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
+    fleet_gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' </dev/null >"$_prf" 2>/dev/null &
     _prp=$!
   fi
   if [ -n "$GATE_CS" ]; then cs=$GATE_CS
@@ -776,7 +776,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
     cs=$(fleet_ticket_view "$REPO" "$num" assignees,state,number,title,url,body,labels,comments \
           '"\(.assignees|length)\t\(.state)", tojson') || cs=''
   else
-    cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
+    cs=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees,state,number,title,url,body,labels,comments \
           --jq '"\(.assignees|length)\t\(.state)", tojson' 2>/dev/null) || cs=''
   fi
   case "$cs" in
@@ -786,7 +786,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
   n_assignee="${n_assignee//[^0-9]/}"
   if [ -n "$_prp" ]; then wait "$_prp" 2>/dev/null; n_open_pr=$(cat "$_prf" 2>/dev/null)
   elif [ "$_nopr" = 1 ]; then n_open_pr=0
-  else n_open_pr=$(gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null); fi
+  else n_open_pr=$(fleet_gh pr list --repo "$REPO" --head "$slug" --state open --json number --jq 'length' 2>/dev/null); fi
   [ -n "$_prf" ] && rm -f "$_prf"
   unset _prf _prp _nopr
   n_open_pr="${n_open_pr//[^0-9]/}"
@@ -821,7 +821,7 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
       *) issue_json='' ;;   # the hub did not answer: spawn anyway, as a gh outage does
     esac
     unset _co _crc
-  elif gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
+  elif fleet_gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
     # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
     [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
   else
@@ -851,7 +851,7 @@ if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
   if [ -z "$title" ] && [ "$TK_HUB" = 1 ]; then title=$(fleet_ticket_view "$REPO" "$num" title .title) || title=''
-  elif [ -z "$title" ]; then title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); fi
+  elif [ -z "$title" ]; then title=$(fleet_gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); fi
 fi
 # An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue
 # #2355): fleet_issue_win_name reads it off the body the gate just read, one

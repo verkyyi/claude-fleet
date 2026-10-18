@@ -683,12 +683,12 @@ fleet_ui_t() {
     en:repo_add_notcheckout_fmt) printf '✗ %s already exists and is not a git repo — move it away and try again' "${1:-}" ;;
     zh:repo_add_invalid_fmt)    printf '✗ 这不像一个仓库：%s —— 写 owner/name，或粘贴 GitHub 链接' "${1:-}" ;;
     en:repo_add_invalid_fmt)    printf '✗ That is not a repo: %s — type owner/name or paste a GitHub link' "${1:-}" ;;
-    zh:repo_add_net)            printf '✗ 拉不到 GitHub，网络不通 —— 网络好了再试一次' ;;
+    zh:repo_add_net)            printf '✗ 拉不到 GitHub，网络不通 —— 网络好了再试一次' ;;  # no-gh-ok: a hint
     en:repo_add_net)            printf '✗ Cannot reach GitHub — the network is down; try again once it is back' ;;
     zh:repo_add_notfound_fmt)   printf '✗ GitHub 上找不到 %s —— 看看名字拼对没有；私有仓库要你有权限' "${1:-}" ;;
     en:repo_add_notfound_fmt)   printf '✗ GitHub has no %s — check the spelling; a private repo needs your access' "${1:-}" ;;
-    zh:repo_add_auth)           printf '✗ GitHub 还没登录（或登录过期了）—— 先在终端运行 gh auth login，再试一次' ;;
-    en:repo_add_auth)           printf '✗ Not signed in to GitHub (or the sign-in expired) — run gh auth login in a terminal, then try again' ;;
+    zh:repo_add_auth)           printf '✗ GitHub 还没登录（或登录过期了）—— 先在终端运行 gh auth login，再试一次' ;;  # no-gh-ok: a hint
+    en:repo_add_auth)           printf '✗ Not signed in to GitHub (or the sign-in expired) — run gh auth login in a terminal, then try again' ;;  # no-gh-ok: a hint
     zh:repo_add_clone)          printf '✗ 没拉下来 —— 原因见上面几行 git 的输出' ;;
     en:repo_add_clone)          printf '✗ The pull failed — the git lines above say why' ;;
     zh:repo_add_write)          printf '✗ 登记没写进去（磁盘满了，或没有写权限）' ;;

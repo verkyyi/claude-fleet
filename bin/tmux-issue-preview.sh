@@ -45,7 +45,7 @@ if [ ! -s "$cache" ] || [ $(( now - last )) -ge "$TTL" ]; then
   if [ "$TK_HUB" = 1 ]; then
     raw=$(fleet_ticket_view "$REPO" "$num" number,title,state,body,labels,milestone,assignees,comments,url) || raw=''
   else
-  raw=$(gh issue view "$num" --repo "$REPO" \
+  raw=$(fleet_gh issue view "$num" --repo "$REPO" \
     --json number,title,state,body,labels,milestone,assignees,comments,url 2>/dev/null)
   fi
   if [ -n "$raw" ]; then
@@ -61,5 +61,5 @@ fi
 if command -v python3 >/dev/null 2>&1; then
   FZF_PREVIEW_COLUMNS="${FZF_PREVIEW_COLUMNS:-60}" python3 "$BIN/.tmux-issue-preview-render.py" < "$cache"
 elif [ "$TK_HUB" != 1 ]; then
-  gh issue view "$num" --repo "$REPO" 2>/dev/null | head -60
+  fleet_gh issue view "$num" --repo "$REPO" 2>/dev/null | head -60
 fi

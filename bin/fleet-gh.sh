@@ -5,6 +5,7 @@
 #   fleet-gh.sh issue view <N> [--repo R] [--json f1,f2] [--max-age S]
 #   fleet-gh.sh pr view    <N> [--repo R] [--json f1,f2] [--max-age S]
 #   fleet-gh.sh pr checks  <N> [--repo R] [--json f1,f2] [--max-age S]
+#   fleet-gh.sh run <gh args…>   fleet_gh for a POSIX-sh / non-lib caller (#3721)
 #
 # The daemons already poll GitHub for every repo a fleet hosts — the collector
 # every ~60-90s (open issues), pr-refresh every ~15s (every PR's state + CI) — and
@@ -64,12 +65,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 
 die() { printf 'fleet-gh: %s\n' "$1" >&2; exit 2; }
 
+# `run`: a plain gh call through the GitHub layer (issue #3721) — gh's own output
+# and exit code; a FLEET_FORGE=none target is refused (fleet_gh, fleet-gh-lib.sh).
+if [ "${1:-}" = run ]; then shift; fleet_gh "$@"; exit $?; fi
+
 [ "$#" -ge 2 ] || { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 case "$1 $2" in
   "issue view") kind=issue ;;
   "pr view")    kind="pr" ;;
   "pr checks")  kind=checks ;;
-  -h*|--help*)  sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h*|--help*)  sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) die "unsupported: $1 $2 (issue view | pr view | pr checks)" ;;
 esac
 sub1=$1 sub2=$2; shift 2
@@ -79,7 +84,7 @@ while [ "$#" -gt 0 ]; do
     --repo|-R) shift; repo="${1:-}" ;;
     --json)    shift; fields="${1:-}"; JSON_GIVEN=1 ;;
     --max-age) shift; max_age="${1:-}" ;;
-    -h|--help) sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)        die "unknown flag $1" ;;
     *)         N="${1##*/}"; N="${N#\#}" ;;   # 12, #12, or a …/issues/12 URL
   esac

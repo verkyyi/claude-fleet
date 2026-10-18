@@ -138,8 +138,9 @@ if [ "$(fleet_repo_land "$repo" "$sess")" = fleet ]; then
   printf 'land: fleet  (no PR: pr_verdict → pr_merge with no pr — bin/fleet-land.sh rebases onto %s, runs the repo check %s, fast-forwards)\n' \
     "$base" "$(c=$(fleet_repo_conf_get "$sess" "$repo" FLEET_CHECK_CMD); [ -n "$c" ] && printf '`%s`' "$c" || printf '(none registered — 没跑检查)')"
 else
-  printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — gh pr merge --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
-  "$(fleet_merge_method)" "$(fleet_merge_method)"
+  _gh_merge='gh pr merge'  # no-gh-ok: the command the brief names
+  printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — %s --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
+  "$(fleet_merge_method)" "$_gh_merge" "$(fleet_merge_method)"
 fi
 printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
   "$issue" "${at_issue:-none}" "${wt_issue:-none}" \
@@ -227,13 +228,13 @@ else
   # brief, and a stray gh notice folded into it would read as issue content.
   gherr="${TMPDIR:-/tmp}/fleet-claim-brief.$$.err"
   trap 'rm -f "$gherr"' EXIT
-  if body=$(gh issue view "$issue" --repo "$repo" --json "$fields" --jq "$jqf" 2>"$gherr") \
+  if body=$(fleet_gh issue view "$issue" --repo "$repo" --json "$fields" --jq "$jqf" 2>"$gherr") \
      && [ -n "$body" ]; then
     printf '%s\n' "$body"
     rc=0
     # Parsed off the header line the single read already printed.
     claim_line "$(printf '%s\n' "$body" | sed -n 's/^assignees: //p' | head -1)" \
-      "gh issue edit $issue --repo $repo --add-assignee @me"
+      "gh issue edit $issue --repo $repo --add-assignee @me"  # no-gh-ok: the claim command it prints
   else
     printf 'gh: could not read issue #%s in %s — %s\n' "$issue" "$repo" \
       "$(tr '\n' ' ' < "$gherr" 2>/dev/null)"
@@ -254,8 +255,8 @@ case "$_itext" in
     case "$_dst" in
       approved) printf 'draft: APPROVED — land it by the normal gate (pr_verdict → pr_merge), then report merged.\n' ;;
       rejected) printf 'draft: REJECTED — the PR was closed; read the reason on the issue, do not reopen it.\n' ;;
-      *)        printf 'draft: WAITING — open the PR as a DRAFT (gh pr create --draft), take the after-evidence,\n'
-                printf '       then report state=waiting with the PR link, and STOP. Never gh pr ready, never merge:\n'
+      *)        printf 'draft: WAITING — open the PR as a DRAFT (gh pr create --draft), take the after-evidence,\n'  # no-gh-ok: a message
+                printf '       then report state=waiting with the PR link, and STOP. Never gh pr ready, never merge:\n'  # no-gh-ok: a message
                 printf '       pr_merge refuses it (DRAFT-ONLY) until `fleet-draft.sh approve %s`.\n' "$issue" ;;
     esac
     _dnote=$(printf '%s\n' "$_dscan" | sed '1d')

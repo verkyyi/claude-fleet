@@ -24,7 +24,7 @@ FLEET_SESSION=$(fleet_current_session); export FLEET_SESSION
 REPO=$(fleet_backlog_repo "$FLEET_SESSION" "$ROWREPO")
 [ -z "$REPO" ] && { tmux display-message "backlog: no repo resolved — cannot close #$num"; exit 1; }
 # A hub repo's ticket closes through the door (issue #3598, EPIC #3570 C5): no gh.
-CLOSE_CMD="gh issue close '$num' --repo '$REPO'"
+CLOSE_CMD="bash '$BIN/fleet-gh.sh' run issue close '$num' --repo '$REPO'"
 if fleet_ticket_hub "$REPO" "$FLEET_SESSION"; then
   CLOSE_CMD="bash '$BIN/fleet-ticket.sh' state 'hub:$(fleet_norm_repo "$REPO")#$num' closed"
 else

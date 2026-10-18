@@ -436,7 +436,7 @@ case "$mode" in
       done < <(fleet_repos "$s" 2>/dev/null)
     done < <(fleet_each_conf)
     if [ "$nall" -gt 0 ] || [ "$nnone" -eq 0 ]; then
-      if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
+      if command -v gh >/dev/null 2>&1 && fleet_gh auth status >/dev/null 2>&1; then gh_ok=true; fi
     fi
     gh_met=$gh_ok; [ "$gh_ok" = true ] || [ "$nrepos" -gt 0 ] || gh_met=true
     [ "$gh_met" = true ] || missing="gh$missing"

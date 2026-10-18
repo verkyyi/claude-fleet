@@ -466,7 +466,7 @@ cmd_record() {
   # Derive PR metadata from GitHub (best-effort; tolerate a missing/removed PR).
   local title="" sha="" mergedat_gh=""
   if [ -n "$pr" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
-    local meta; meta=$(gh pr view "$pr" --repo "$repo" \
+    local meta; meta=$(fleet_gh pr view "$pr" --repo "$repo" \
       --json title,mergedAt,mergeCommit \
       -q '[.title, (.mergedAt//""), (.mergeCommit.oid//"")] | @tsv' 2>/dev/null)
     if [ -n "$meta" ]; then

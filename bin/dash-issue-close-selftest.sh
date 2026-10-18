@@ -31,6 +31,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- state --
 mkdir -p "$WORK/bin" "$WORK/fp" "$WORK/tmp/.claude-dash/fleets/fake-repo" "$WORK/tmp/.claude-dash/global"
 ln -s "$SRC" "$WORK/bin/dash-issue-close.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$(dirname "$LIB")/fleet-gh.sh" "$WORK/bin/fleet-gh.sh"; ln -s "$(dirname "$LIB")/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # the GitHub layer (#3721)
 printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/tmux-dash-collect.sh"; chmod +x "$WORK/bin/tmux-dash-collect.sh"
 
 FD="$WORK/tmp/.claude-dash/fleets/fake-repo"
@@ -74,7 +75,7 @@ grep -q $'\t#101\t' "$ISSUES" && fail "A #101 row must be dropped from the issue
 grep -q $'\t#102\t' "$ISSUES" || fail "A unrelated #102 row must be kept" "$(cat "$ISSUES")"
 ok "A optimistic drop is synchronous (row gone, siblings kept)"
 
-grep -q "gh issue close '101'" "$RSLOG" || fail "B gh close must be dispatched via run-shell -b (backgrounded)" "$(cat "$RSLOG")"
+grep -q "run issue close '101'" "$RSLOG" || fail "B gh close must be dispatched via run-shell -b (backgrounded)" "$(cat "$RSLOG")"
 ok "B gh close is backgrounded via run-shell -b, not inline"
 
 grep -q "issue close 101" "$GHLOG" || fail "C the backgrounded job must actually run gh issue close" "$(cat "$GHLOG")"

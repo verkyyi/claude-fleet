@@ -578,7 +578,7 @@ bridge_relay() {
     if [ "$(fleet_ticket_home "$repo")" = hub ]; then   # the ticket door (#3597)
       state=$(fleet_ticket_state "$repo" "$issue" | cut -f1)
     else
-      state=$(gh issue view "$issue" --repo "$repo" --json state -q .state 2>/dev/null)
+      state=$(fleet_gh issue view "$issue" --repo "$repo" --json state -q .state 2>/dev/null)
     fi
     if [ "$state" = OPEN ]; then
       target=$(bridge_fleet_for_repo "$repo")
@@ -798,12 +798,12 @@ poll_worker_channel() {
   # overlap). Else list as before — and publish it.
   elif ! { fleet_gh_share_on && bridge_adopt_rows "$repo" "$since"; }; then
     # shellcheck disable=SC2016  # $-vars below are jq bindings, not shell
-    rows=$(gh api -H "Accept: application/vnd.github+json" \
+    rows=$(fleet_gh api -H "Accept: application/vnd.github+json" \
       "repos/$repo/issues/comments?since=$since&per_page=100&sort=updated&direction=asc" \
       --jq '.[] | [ (.id|tostring), .author_association, (.user.login // ""),
                     (.issue_url|split("/")|last), .updated_at, (.body|@base64) ] | @tsv' \
       2>/dev/null) || { fleet_gh_share_put "$repo" comments 0 /nonexistent comments
-                        log "$slug: gh api failed — skip this tick"; return 0; }
+                        log "$slug: gh api failed — skip this tick"; return 0; }  # no-gh-ok: a log line
     fleet_gh_share_on && bridge_publish_rows "$repo" "$since" "$rows"
   fi
 

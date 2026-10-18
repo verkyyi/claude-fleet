@@ -93,7 +93,7 @@ clone_reason() {
   case "$low" in
     *"could not resolve to a repository"*|*"repository not found"*|*"returned error: 404"*|*"http 404"*|*"not found (http"*)
       echo notfound ;;
-    *"gh auth login"*|*"authentication failed"*|*"permission denied (publickey)"*|*"could not read username"*|*"bad credentials"*|*"http 401"*|*"returned error: 403"*)
+    *"gh auth login"*|*"authentication failed"*|*"permission denied (publickey)"*|*"could not read username"*|*"bad credentials"*|*"http 401"*|*"returned error: 403"*)  # no-gh-ok: matches gh's own error text
       echo auth ;;
     *"could not resolve host"*|*"resolve host"*|*"failed to connect"*|*"timed out"*|*"connection refused"*|*"network is unreachable"*|*"no route to host"*|*"connection reset"*|*"error connecting to"*|*"dial tcp"*|*"tls handshake"*|*"ssl"*|*"name resolution"*|*"no such host"*|*"unable to access"*)
       echo net ;;

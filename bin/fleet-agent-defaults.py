@@ -29,7 +29,7 @@ agent), `claude.mcp` / `codex.mcp` (all servers), `claude.mcp.<name>` /
 `claude.skills` / `codex.skills`, or a bare `<name>` = that server on both agents.
 
 Credentials never enter a config: the github server's token is taken by
-bin/mcp-github.sh from `gh auth token` when the server starts. No merged file
+bin/mcp-github.sh from the gh CLI (`auth token`) when the server starts. No merged file
 carries a token (the selftest greps for one).
 
 By default the Codex side is edited as TEXT, not re-serialized: a missing top-level key is

@@ -57,7 +57,7 @@ if [ "$mode" = commit ] && [ "$TK_HUB" = 1 ]; then
   exit 0
 fi
 if [ "$mode" = commit ]; then
-  cur_labels=$(gh issue view "$num" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null)
+  cur_labels=$(fleet_gh issue view "$num" --repo "$REPO" --json labels -q '.labels[].name' 2>/dev/null)
   # edit_args always carries --repo, so its expansion is safe under set -u even when
   # no labels are removed (bash 3.2 chokes on an empty declared-array expansion).
   edit_args=(--repo "$REPO")
@@ -67,7 +67,7 @@ if [ "$mode" = commit ]; then
 $cur_labels
 EOF
   [ -n "$commit_target" ] && edit_args+=(--add-label "priority:$commit_target")
-  if ! gh issue edit "$num" "${edit_args[@]}" >/dev/null 2>&1; then
+  if ! fleet_gh issue edit "$num" "${edit_args[@]}" >/dev/null 2>&1; then
     tmux display-message "failed to set priority on #$num"   # corrects the optimistic toast
     exit 1
   fi

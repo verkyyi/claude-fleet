@@ -378,7 +378,7 @@ wh_hooks_list() { # $1=repo
   local repo="$1"
   if [ -n "$WH_HOOKS_LIST_CMD" ]; then $WH_HOOKS_LIST_CMD "$repo"; return; fi
   command -v gh >/dev/null 2>&1 || return 0
-  gh api "repos/$repo/hooks" \
+  fleet_gh api "repos/$repo/hooks" \
     --jq '.[] | [(.id|tostring), (.active|tostring), ((.last_response.code // "")|tostring), (.config.url // "")] | @tsv' \
     2>/dev/null
 }
@@ -388,7 +388,7 @@ wh_hook_delete() { # $1=repo $2=id
   local repo="$1" id="$2"
   if [ -n "$WH_HOOK_DEL_CMD" ]; then $WH_HOOK_DEL_CMD "$repo" "$id"; return; fi
   command -v gh >/dev/null 2>&1 || return 1
-  gh api -X DELETE "repos/$repo/hooks/$id" >/dev/null 2>&1
+  fleet_gh api -X DELETE "repos/$repo/hooks/$id" >/dev/null 2>&1
 }
 
 # Reap every FORWARDER hook (config.url host = the relay) for repo R. Called before

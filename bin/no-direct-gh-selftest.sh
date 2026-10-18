@@ -55,6 +55,23 @@ printf 'subprocess.run(["gh", "api"])\ngh_out = "gh pr list"\n' > "$T/bin/e.py"
 got=$(direct "$T" | tr '\n' ' ')
 [ "$got" = 'bin/a.sh bin/e.py ' ] || { echo "no-direct-gh: the counter misreads its fixtures: [$got]" >&2; exit 1; }
 
+# the GitHub layer itself (issue #3721): fleet_gh (bin/fleet-gh-lib.sh, sourced by
+# bin/fleet-lib.sh) is gh byte for byte, and refuses a FLEET_FORGE=none target
+# without running gh; `fleet-gh.sh run` is the same road for a non-lib caller.
+mkdir -p "$T/conf/fleets/f/repos" "$T/fp"
+printf 'FLEET_FORGE="none"\n' > "$T/conf/fleets/f/repos/o-nogh.conf"
+printf '#!/bin/sh\necho "gh:$*"\n' > "$T/fp/gh"; chmod +x "$T/fp/gh"
+lay=$(env -i HOME="$T" PATH="$T/fp:/usr/bin:/bin" FLEET_CONF_DIR="$T/conf" bash -c '. "$1/fleet-lib.sh"
+  fleet_gh pr list -R o/gh; echo "rc=$?"
+  fleet_gh issue view 1 --repo o/nogh 2>/dev/null; echo "rc=$?"
+  fleet_gh api "repos/o/nogh/pulls?state=open" 2>/dev/null; echo "rc=$?"
+  fleet_gh issue list --repo=o/nogh 2>/dev/null; echo "rc=$?"
+  fleet_gh auth status; echo "rc=$?"' _ "$BIN" | tr '\n' ' ')
+[ "$lay" = 'gh:pr list -R o/gh rc=0 rc=78 rc=78 rc=78 gh:auth status rc=0 ' ] \
+  || { echo "no-direct-gh: fleet_gh misroutes: [$lay]" >&2; exit 1; }
+lay=$(env -i HOME="$T" PATH="$T/fp:/usr/bin:/bin" FLEET_CONF_DIR="$T/conf" bash "$BIN/fleet-gh.sh" run pr view 3 --repo o/nogh 2>/dev/null; echo "rc=$?")
+[ "$lay" = 'rc=78' ] || { echo "no-direct-gh: fleet-gh.sh run reached gh for a none repo: [$lay]" >&2; exit 1; }
+
 now=$(direct "$ROOT")
 base=$(grep -vE '^[[:space:]]*(#|$)' "$BASE" | LC_ALL=C sort)
 new=$(LC_ALL=C comm -23 <(printf '%s\n' "$now" | sed '/^$/d') <(printf '%s\n' "$base" | sed '/^$/d'))

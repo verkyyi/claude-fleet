@@ -535,7 +535,7 @@ pullback_pending() {
 pullback_merged() {
   case "${2:-}" in ''|*[!0-9]*) return 1 ;; esac
   [ -n "${1:-}" ] && command -v gh >/dev/null 2>&1 || return 1
-  local n; n=$(gh pr list -R "$1" --state merged --head "issue-$2" --json number -q 'length' 2>/dev/null)
+  local n; n=$(fleet_gh pr list -R "$1" --state merged --head "issue-$2" --json number -q 'length' 2>/dev/null)
   case "$n" in ''|0|*[!0-9]*) return 1 ;; esac
   return 0
 }

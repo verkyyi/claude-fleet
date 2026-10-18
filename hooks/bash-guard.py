@@ -491,7 +491,7 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
         issue = _comment_issue_number(masked_seg[m.end():])
         if issue is None:
             block(
-                "raw gh issue-comment from a fleet pane, and the issue could not "
+                "raw gh issue-comment from a fleet pane, and the issue could not "  # no-gh-ok: a message
                 "be read as a plain number to rewrite it. Post through "
                 "`~/.claude/fleet/bin/fleet-comment.sh <issue> --note --body …` "
                 "(or --to-worker to deliberately drive the bound worker)"
@@ -689,7 +689,7 @@ def _sendkeys_targets_fleet(masked_seg):
 
 
 def _comment_issue_number(rest):
-    """The issue positional of `gh issue comment …`, or None if it is not a bare
+    """The issue positional of a gh `issue comment …`, or None if it is not a bare
     number (a URL would be mangled by the wrapper's digit-strip, so refuse)."""
     toks = rest.split()
     skip_val = {"--body", "-b", "--body-file", "-f", "--repo", "-r", "--editor"}

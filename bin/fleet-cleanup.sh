@@ -182,7 +182,7 @@ reap_socket() { [ -n "${TMUX:-}" ] || fleet_socket "$FLEET_SESSION"; }
 # (issue #544): a session that spoke AFTER its PR closed is working ON the close,
 # not abandoned by it. Use sentinels: Bash read collapses empty TSV fields.
 pr_fields() {
-  gh pr view "$1" --repo "$REPO" \
+  fleet_gh pr view "$1" --repo "$REPO" \
     --json state,headRefOid,headRefName,closedAt,mergedAt,closingIssuesReferences \
     --jq '[.state, .headRefOid, .headRefName, (.closedAt // "-"), (.mergedAt // "-"),
            ([.closingIssuesReferences[]? | "\(.repository.owner.login)/\(.repository.name)#\(.number)"]

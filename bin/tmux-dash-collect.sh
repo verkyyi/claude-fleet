@@ -208,7 +208,7 @@ fetch_issues_for() {
     fi
     if [ -n "$inc" ]; then
       :
-    elif gh issue list --repo "$rp" --state open --limit 300 \
+    elif fleet_gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | ($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       2>/dev/null | utf8_scrub > "$raw"; then
@@ -238,7 +238,7 @@ fetch_issues_for() {
     if [ "$inc" = 3 ] && [ -f "$FD/parents" ] \
        && [ $(( $(now) - $(_fleet_gh_mtime "$FD/parents" || echo 0) )) -lt "${FLEET_GH_PARENTS_TTL:-600}" ]; then
       :
-    elif gh api graphql --paginate \
+    elif fleet_gh api graphql --paginate \
       -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number repository{nameWithOwner}}}}}}' \
       -F owner="$owner" -F name="$name" \
       --jq '.data.repository.issues.nodes[]|select(.parent!=null and ((.parent.repository.nameWithOwner // "")|ascii_downcase) == ("'"$rp"'"|ascii_downcase))|"\(.number)\t\(.parent.number)"' \
