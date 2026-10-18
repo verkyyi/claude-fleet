@@ -277,7 +277,7 @@ case "$mode" in
       [ "$wbf" = failed ] || wbf=''
       wepic=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wepic" in *[!A-Za-z0-9/._#-]*|*'#'*'#'*) wepic='' ;; *'#'[0-9]*) ;; *) wepic='' ;; esac
-      wrole=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
+      wrow=${wrow%$'\t'*}   # the old role column, always empty (issue #4341)
       wdet=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       wreap=${wrow##*$'\t'}; wrow=${wrow%$'\t'*}
       case "$wreap" in *[!A-Za-z0-9:.+-]*) wreap='' ;; esac
@@ -347,7 +347,7 @@ case "$mode" in
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      orole=''   # column 20 is always empty (issue #4341); $wrole only keeps the split
+      orole=''   # column 20 is always empty (issue #4341)
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin"
     done <<<"$rows"
     ;;
