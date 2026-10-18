@@ -260,7 +260,7 @@ sudo grep -c 'GET /v1/relay/check' /var/log/caddy/access.log   # 换版后应只
 FLEET_CRED_RELAY_URL=https://relay.example.com
 ```
 
-本机代理的启动器（`fleet-cred-proxy.sh run` / `ensure`）发现配了转发、又没有
+代理要通行证时节点守护以那个登录跑的 `cred-relay`（`fleet-cred-proxy.sh relay-tick`；客户端电脑上 `ensure`；每登录的启动器 `run` 已随 #4674 删掉）发现配了转发、又没有
 `FLEET_CRED_RELAY_TOKEN` 时，自己跑 `fleet-relay-cred.sh fetch`：入口还认就保留（`KEPT`），
 不认了就重领；之后只在代理请求时再领（`relay-want`：没有、快用完、到 80%、被中转拒，#3561——不再定时复核）。代理每个请求现读这个文件，
 重领不用重启。没有通行证时 relay 路不参与选路（`route` 的说明里写「no relay pass」）。

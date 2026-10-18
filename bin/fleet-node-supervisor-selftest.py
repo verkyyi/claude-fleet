@@ -1311,7 +1311,11 @@ class H_Accounts(Sandbox):
         import glob as g
         tmpl = set(os.path.basename(x)[len("com.claude-fleet."):-len(".plist.tmpl")]
                    for x in g.glob(os.path.join(os.path.dirname(BIN), "launchd", "*.plist.tmpl")))
-        self.assertEqual(set(units), tmpl - {"memguard"}, "every template but the machine's is an account unit")
+        self.assertEqual(set(units) - set(fns.ACCOUNT_BUILTIN), tmpl - {"memguard"},
+                         "every template but the machine's is an account unit")
+        # no per-login proxy (issue #4674): its template is gone; cred-relay is built in
+        self.assertNotIn("cred-proxy", units)
+        self.assertEqual(units["cred-relay"]["argv"][-1], "relay-tick")
         # the autofill dispatcher's template is gone (issue #3120): no account
         # runs it, and nothing keeps a unit the runtime no longer carries
         self.assertNotIn("dispatch", units)
@@ -1341,12 +1345,15 @@ class H_Accounts(Sandbox):
                 self.assertEqual((e["env"]["LANG"], e["env"]["LC_ALL"]), (want, want), plat)
 
     def test_shared_proxy_login_keeps_no_resident_launcher(self):
-        # issue #3524: a login on the machine's shared proxy runs no resident
-        # `fleet-cred-proxy.sh run` — its relay pass is kept by a task instead,
-        # run only when the shared proxy asks (issue #3561: no clock); a login
-        # still on its own proxy keeps the resident one
-        unit = {"name": "cred-proxy", "keepalive": True, "out": "/dev/null", "err": "/dev/null",
-                "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-cred-proxy.sh", "run"], "env": {}}
+        # issue #4674: no login runs a proxy of its own — the account table has no
+        # `cred-proxy` (an old table's row is None, never run); a login on the
+        # machine's shared proxy has its relay pass kept by `cred-relay`, run only
+        # when the shared proxy asks (issue #3561: no clock); a login not on it has
+        # no `cred-relay` either
+        old = {"name": "cred-proxy", "keepalive": True, "out": "/dev/null", "err": "/dev/null",
+               "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-cred-proxy.sh", "run"], "env": {}}
+        unit = fns.cred_relay_unit()
+        self.assertIn("cred-relay", fns.ACCOUNT_BUILTIN)
         for who, rec in (("alice", {"separated": True, "shared": True, "run": "/var/run/fleet-cred/.shared"}),
                          ("bob", None)):
             conf = os.path.join(self.home(who), ".config", "claude-fleet")
@@ -1354,6 +1361,8 @@ class H_Accounts(Sandbox):
             if rec:
                 with open(os.path.join(conf, "credsep.json"), "w") as f:
                     json.dump(rec, f)
+        for who in ("alice", "bob"):
+            self.assertIsNone(fns.account_unit_for(old, self.home(who)), "no per-login proxy, for anyone")
         a = fns.account_entry(fns.account_unit_for(unit, self.home("alice")), "alice",
                               (501, 20, self.home("alice")), "/opt/homebrew")
         self.assertNotIn("keepalive", a, "a shared-proxy login keeps no resident launcher")
@@ -1374,15 +1383,12 @@ class H_Accounts(Sandbox):
         self.assertFalse(due(), "a request already run is not run again")
         os.utime(want, ns=(fns.want_stamp(want) + 10 ** 9, fns.want_stamp(want) + 10 ** 9))
         self.assertTrue(due(), "a new request is due")
-        self.assertEqual(unit["argv"][-1], "run", "the table's unit is not changed in place")
-        b = fns.account_entry(fns.account_unit_for(unit, self.home("bob")), "bob",
-                              (502, 20, self.home("bob")), "/opt/homebrew")
-        self.assertTrue(b.get("keepalive"))
-        self.assertEqual((b["name"], b["cmd"][-1]), ("bob/cred-proxy", "run"))
-        # an unreadable record is not shared: the resident unit stays
+        self.assertNotIn("want", unit, "the table's unit is not changed in place")
+        self.assertIsNone(fns.account_unit_for(unit, self.home("bob")), "not on the shared proxy: no cred-relay")
+        # an unreadable record is not shared: still none
         with open(os.path.join(self.home("bob"), ".config", "claude-fleet", "credsep.json"), "w") as f:
             f.write("{not json")
-        self.assertIs(fns.account_unit_for(unit, self.home("bob")), unit)
+        self.assertIsNone(fns.account_unit_for(unit, self.home("bob")))
 
     def test_runs_as_account_and_isolated(self):
         self.acct_script("alice", "probe.sh",

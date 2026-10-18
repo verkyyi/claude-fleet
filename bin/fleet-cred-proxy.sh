@@ -287,7 +287,7 @@ def j(k):
 st, rc, rx = j("FCD_ST"), j("FCD_RC"), j("FCD_RX")
 NAME = {"direct": "direct 直连", "relay": "relay 经新加坡转发", "central": "central 交给中心代理"}
 TRUST = {"trusted": "可信", "untrusted": "不可信", "unknown": "可信与否不知道"}
-lv, notes = "PASS", []
+lv, notes, gone = "PASS", [], False
 trust = st.get("trust") or "unknown"
 if trust == "unknown":
     lv = "WARN"
@@ -321,7 +321,7 @@ elif st.get("separated"):
     lv = "WARN"
     parts.append("own 自己的隔离代理（每登录代理已删，#4674：等 credsep-enforce 接进整机代理）")
 elif os.environ.get("FCD_HOST") == "1":
-    lv = "FAIL"
+    gone = True     # a FAIL nothing below may soften
     parts.append("per-login 每登录代理（已删，#4674：管理员 machine install 接进整机代理）")
 else:
     parts.append("client 客户端 fleet run 代理（只走中心路）")
@@ -342,7 +342,7 @@ if bg.get("err"):
 if bg.get("misses"):
     lv = "WARN"
     notes.append("%d 个成功回答读不出用量（最近：%s）" % (bg["misses"], bg.get("miss_why", "")))
-print("%s\t%s%s" % (lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
+print("%s\t%s%s" % ("FAIL" if gone else lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
 DOC
     ;;
   -h|--help|'')

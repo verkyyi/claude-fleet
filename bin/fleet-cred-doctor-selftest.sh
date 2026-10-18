@@ -10,7 +10,9 @@
 #   C  trusted + unreachable  → PASS, relay 经新加坡转发（trusted + unreachable）
 #   D  untrusted              → PASS, central 交给中心代理（untrusted (hub: untrusted)）
 #   E  a hub pass the hub will not renew (500) → WARN 通行证续签失败
-#   F  the proxy is dead      → FAIL 代理没在跑
+#   F  the proxy is dead      → a client computer: INFO (fleet run starts it); a host
+#      (FLEET_HOST=1) with no machine proxy: FAIL, naming machine install (#4674)
+#   H  a host's login with a per-login proxy still serving → FAIL (the road is gone, #4674)
 #   G  bin/fleet-doctor.sh itself carries the row (B's text, PASS)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -105,7 +107,7 @@ PORT=$out
 
 # ── B / C / D: the three kinds of machine ────────────────────────────────────
 expect "B trusted + reachable" 0 PASS "可信（hub: trusted）" "Claude 走 direct 直连（trusted + reachable）" "Codex 同路" \
-  "代理 pid" "127.0.0.1:$PORT" "凭据隔离 关" "续签 正常"
+  "代理 pid" "127.0.0.1:$PORT" "client 客户端 fleet run 代理" "续签 正常"
 probe unreachable
 expect "C trusted + unreachable" 0 PASS "Claude 走 relay 经新加坡转发（trusted + unreachable）"
 echo untrusted > "$SB/trust"
@@ -127,10 +129,18 @@ dr=$(FLEET_CRED_PROXY=1 sh "$BIN/fleet-doctor.sh" 2>/dev/null | grep -E '^[[:spa
 case "$dr" in *WARN*cred*'Claude 走 direct 直连（trusted + reachable）'*) pass "G fleet-doctor: $(printf '%s' "$dr" | sed 's/^ *//')" ;;
   *) fail "G fleet-doctor: wanted the cred row (WARN — E's failed renewal is the newest), got [$dr]" ;; esac
 
+# ── H: a host's login still on a per-login proxy (#4674) ─────────────────────
+out=$(FLEET_HOST=1 row 1)
+case "$out" in "FAIL	"*"per-login 每登录代理（已删，#4674"*) pass "H host + per-login proxy: FAIL — $(printf '%s' "$out" | cut -f2- | cut -c1-80)" ;;
+  *) fail "H host + per-login proxy: $out" ;; esac
+
 # ── F: the proxy is dead ─────────────────────────────────────────────────────
 kill "$(cat "$FLEET_CONF_DIR/cred-proxy/pid")" 2>/dev/null
 i=0; while kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-expect "F proxy dead" 0 FAIL "代理没在跑"
+expect "F proxy dead (client)" 0 INFO "代理没在跑" "fleet run"
+out=$(FLEET_HOST=1 row 1)
+case "$out" in "FAIL	"*"没接整机代理"*"machine install"*) pass "F proxy dead (host): FAIL naming machine install" ;;
+  *) fail "F proxy dead (host): $out" ;; esac
 
 [ -n "${CRED_DOCTOR_OUT:-}" ] && cp "$SB/rows" "$CRED_DOCTOR_OUT"
 [ "$FAIL" = 0 ] && { printf 'fleet-cred-doctor selftest: OK\n'; exit 0; }

@@ -77,7 +77,7 @@ fleet hub unset fleet.person_budget.gh:1234567              # no limit
 
 Self-hosted, with the operator token, `fleet config budget` works too: with no argument it lists each person's usage and limit; `fleet config budget gh:1234567 5h=200k week=2M` sets one, `… off` removes it.
 
-**Quota is counted only when a session goes through the credential proxy.** On hosted machines it is on for every account by default; on a self-hosted machine run `fleet cred-proxy enable` once in each account (`--all-logins` turns it on for every account on the machine at once) — an account without it is neither counted nor stopped.
+**Quota is counted only when a session goes through the credential proxy.** On hosted machines it is on for every account by default; on a self-hosted machine an admin runs `fleet cred-proxy enable --machine` once — every account becomes a tenant of the machine's one proxy. An account not on it is neither counted nor stopped.
 
 ## Seeing who used how much
 

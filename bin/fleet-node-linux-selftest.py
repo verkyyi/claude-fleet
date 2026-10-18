@@ -682,7 +682,8 @@ class LinuxNode(unittest.TestCase):
         """#3757 (EPIC #3500 C16): a person's pod is its one login. pod-etc writes
         the image's passwd / group plus that login, and refuses a name or number
         the image has (root's above all); the daemon's table there is the node
-        program alone (no task, no shared proxy, no sshd); `login open` opens only
+        program and the machine's proxy run as the login (no task, no sshd —
+        issue #4674: the same `serve --shared`, never a per-login proxy); `login open` opens only
         that login — any other name is 3 with nothing written — and remove is
         refused; only that uid may run the program. Off = as before."""
         lin = module('fleet-node-linux')
@@ -722,10 +723,15 @@ class LinuxNode(unittest.TestCase):
             with patch.dict(os.environ, pod), self.assertRaises(lin.Refuse):
                 lin.pod_etc(_ns(base=str(base), out=os.path.join(d, 'bad')))
             self.assertFalse(os.path.exists(os.path.join(d, 'bad')))
-        # the daemon as the login: the node program alone
+        # the daemon as the login: the node program and the machine's proxy (#4674)
         with patch.object(s, 'MAC', False), patch.dict(os.environ, dict(pod, FLEET_NODE_UPDATE_OWNER='image')):
             t = s.default_table(s.Paths())
-            self.assertEqual(([c['name'] for c in t['children']], t['tasks']), (['node-agent'], []))
+            self.assertEqual(([c['name'] for c in t['children']], t['tasks']), (['node-agent', 'cred-proxy-shared'], []))
+            px = t['children'][1]
+            spec = os.path.join(s.Paths().users, 'fleetu7', '.config', 'claude-fleet', 'cred-proxy', 'machine.json')
+            self.assertEqual(px['cmd'][-3:], ['serve', '--shared', spec], 'the same serve --shared, as the login')
+            self.assertTrue(px['cmd'][-4].endswith('/bin/fleet-cred-proxy.py'))
+            self.assertEqual(px['requires'], [spec], 'waits for the tenants file login open writes')
             # …up with no login yet: the hub's create comes down its own link (#3554)
             self.assertEqual(t['children'][0]['requires'], [str(Path(s.Paths().state, 'machine.env'))])
             self.assertEqual(s.node_environment().get('FLEET_POD_LOGIN'), 'fleetu7')

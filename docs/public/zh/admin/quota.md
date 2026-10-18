@@ -76,7 +76,7 @@ fleet hub unset fleet.person_budget.gh:1234567              # 取消上限
 
 自托管有操作者令牌时也可以 `fleet config budget`：不带参数列出每个人的用量和上限，`fleet config budget gh:1234567 5h=200k week=2M` 设，`… off` 取消。
 
-**额度只在会话经过凭据代理时才算得上**。托管机器上每个账号都默认开着；自托管机器在每个账号上执行一次 `fleet cred-proxy enable`（`--all-logins` 一次开整台机器的账号），没开的账号用量不计、也不会被拦。
+**额度只在会话经过凭据代理时才算得上**。托管机器上每个账号都默认开着；自托管机器由管理员执行一次 `fleet cred-proxy enable --machine`，整台机器的账号都接上机器唯一的那个代理；没接上的账号用量不计、也不会被拦。
 
 ## 看谁用了多少
 
