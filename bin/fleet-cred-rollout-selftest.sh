@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
-# fleet-cred-rollout-selftest.sh — `fleet cred-proxy enable|disable|status`
-# (bin/fleet-cred-rollout.sh, issue #2134, EPIC #2133 C4) on a sandbox login:
-# sandbox HOME + FLEET_CONF_DIR, a real launcher (bin/fleet-cred-proxy.sh run)
-# and its proxy on loopback, a process table from a fixture file.
+# fleet-cred-rollout-selftest.sh — `fleet cred-proxy status` and its switch
+# (bin/fleet-cred-rollout.sh, issue #2134, EPIC #2133 C4; issue #4674) on a
+# sandbox login: sandbox HOME + FLEET_CONF_DIR, a proxy on loopback, a process
+# table from a fixture file.
 #
 #   A  off (the degenerate): status reads `off · - · sessions 0/4` and changes
-#      no byte; the launcher runs no proxy
-#   B  enable: `export FLEET_CRED_PROXY=1` under [common], the running launcher
-#      is nudged (USR1 — its own re-read is 600s away) and the proxy is up in seconds;
-#      status counts only the sessions that talk to THIS proxy
-#   C  disable: fleet.conf byte for byte as before enable, the proxy stops
-#   D  twice more, on a conf that already holds FLEET_CRED_PROXY=0 in [node] and a
-#      FLEET_CRED_RELAY_URL, with --relay-url: each key put back where it was —
-#      byte for byte after both round trips
-#   E  switched on by hand (nothing remembered): disable writes FLEET_CRED_PROXY=0
-#   F  --all-logins: fleet-sync-logins.sh --cred-proxy runs each other login's
-#      own fleet-cred-rollout.sh as that login (its HOME / FLEET_CONF_DIR), and
-#      status ends with the machine's `all:` line
-#   G  rails: no fleet.conf → exit 3 and nothing written; --relay-url with a
-#      credential in it is refused; status prints no environment value
+#      no byte; no proxy runs
+#   B  on, with the machine's proxy this login is a tenant of: status counts the
+#      sessions that talk to it — on its port, or on the login's OLD port it took
+#      over (issue #2324) — and no other
+#   C  a login's own enable / disable left with the per-login proxy (#4674):
+#      exit 2 naming the machine's switch (--machine), not a byte written; the
+#      old `run` entry starts nothing
+#   F  --all-logins: fleet-sync-logins.sh --cred-proxy status runs each other
+#      login's own fleet-cred-rollout.sh as that login (its HOME /
+#      FLEET_CONF_DIR), and status ends with the machine's `all:` line; its
+#      --cred-proxy enable is refused
+#   G  rails: status prints no environment value; status --ctl still reaches the
+#      control socket's status
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d /tmp/crst.XXXXXX)   # short: the proxy's ctl.sock must fit AF_UNIX's 104 bytes
 SB=$(cd "$SB" && pwd -P)
-RUNPID=''
+PXPID=''
 cleanup() {
-  [ -n "$RUNPID" ] && kill "$RUNPID" 2>/dev/null
+  [ -n "$PXPID" ] && kill "$PXPID" 2>/dev/null
   kill "$(cat "$SB/conf/cred-proxy/pid" 2>/dev/null)" 2>/dev/null
   rm -rf "$SB"
 }
@@ -38,7 +37,7 @@ export FLEET_CRED_ROLLOUT_WAIT=120 FLEET_CRED_ROLLOUT_PROCS="$SB/procs"
 FAIL=0
 pass() { printf 'PASS %s\n' "$*"; }
 fail() { printf 'FAIL %s\n' "$*"; FAIL=1; }
-waitfor() { local i=0; while [ "$i" -lt 200 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+waitfor() { local i=0; while [ "$i" -lt 300 ]; do "$@" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
 up() { [ -S "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ] && kill -0 "$(cat "$FLEET_CONF_DIR/cred-proxy/pid" 2>/dev/null)" 2>/dev/null; }
 R() { bash "$BIN/fleet-cred-rollout.sh" "$@"; }
 
@@ -85,74 +84,51 @@ fi  # ---- [node] end ----
 CONF
 cp "$FLEET_CONF_DIR/fleet.conf" "$SB/orig.conf"
 
-# the login's daemon: idles 600s between re-reads — only the nudge can be in time
-# (a slow runner — macOS CI — takes many seconds to start a proxy at all)
-FLEET_CRED_PROXY_IDLE_SECS=600 bash "$BIN/fleet-cred-proxy.sh" run --max-seconds 900 >/dev/null 2>&1 & RUNPID=$!
-waitfor test -s "$FLEET_CONF_DIR/cred-proxy/launcher.pid" || fail "launcher wrote no launcher.pid"
-
 # ── A: off ─────────────────────────────────────────────────────────────────
 out=$(R status); rc=$?
 if [ "$rc" = 0 ] && [ "$out" = 'off · - · sessions 0/4' ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && ! up; then
   pass "A off: '$out', conf untouched, no proxy"
 else fail "A off: rc=$rc out='$out'"; fi
 
-# ── B: enable ──────────────────────────────────────────────────────────────
-t0=$(date +%s)
-out=$(R enable 2>&1); rc=$?
-t1=$(date +%s)
-if grep -qx 'export FLEET_CRED_PROXY=1' "$FLEET_CONF_DIR/fleet.conf" \
-   && [ "$(sed -n '/^# ---- \[common\] ----$/{n;p;}' "$FLEET_CONF_DIR/fleet.conf")" = 'export FLEET_CRED_PROXY=1' ]; then
-  pass "B enable: FLEET_CRED_PROXY=1 written under [common]"
-else fail "B enable: conf is"; cat "$FLEET_CONF_DIR/fleet.conf"; fi
-if [ "$rc" = 0 ] && up && [ $((t1 - t0)) -lt 300 ]; then
-  pass "B enable: launcher nudged, proxy up in $((t1 - t0))s (its own re-read is 600s away)"
-else fail "B enable: rc=$rc up=$(up && echo y || echo n) $((t1 - t0))s — $out"; fi
-case "$out" in *'doctor cred:'*) pass "B enable: prints the doctor's cred row" ;; *) fail "B enable: no cred row — $out" ;; esac
-PORT=$(cat "$FLEET_CONF_DIR/cred-proxy/port"); procs "$PORT"
+# ── C: a login's own switch is gone (#4674) ────────────────────────────────
+for v in enable disable; do
+  out=$(R "$v" 2>&1); rc=$?
+  if [ "$rc" = 2 ] && case "$out" in *"fleet cred-proxy $v --machine"*) true ;; *) false ;; esac \
+     && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && ! up; then
+    pass "C $v: a login has no proxy of its own to $v — exit 2, names --machine, nothing written"
+  else fail "C $v rc=$rc: $out"; fi
+done
+out=$(R enable --all-logins 2>&1); rc=$?
+[ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && pass "C enable --all-logins: exit 2 too" || fail "C --all-logins rc=$rc: $out"
+out=$(bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && ! up && pass "C the per-login launcher's old entry \`run\` exits 0, starts nothing" || fail "C run rc=$rc: $out"
+
+# ── B: on, through the proxy this login's sessions use ─────────────────────
+printf 'export FLEET_CRED_PROXY=1\n' >> "$FLEET_CONF_DIR/fleet.conf"
+# the machine's proxy with this login its one tenant, answering its old port too
+OLD=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+python3 -c 'import json,os,sys; c,old=sys.argv[1],int(sys.argv[2]); st=os.path.join(c,"cred-proxy")
+json.dump({"state":st,"run":st,"user":"me","version":"-","port":0,"tenants":[{"login":"me","uid":os.getuid(),
+"state":st,"accounts":os.path.join(c,"accounts"),"codex_auth":os.path.join(c,"auth.json"),"codex_homes":os.path.join(c,"ch"),
+"node_env":os.path.join(c,"node.env"),"probe":os.path.join(c,"node-probe.json"),"legacy_port":old,"settings":{}}]},
+open(os.path.join(c,"machine.json"),"w"))' "$FLEET_CONF_DIR" "$OLD"
+mkdir -p "$FLEET_CONF_DIR/cred-proxy"
+python3 -I "$BIN/fleet-cred-proxy.py" serve --shared "$FLEET_CONF_DIR/machine.json" --max-seconds 300 2>"$SB/proxy.err" & PXPID=$!
+waitfor up || fail "B the proxy did not start: $(cat "$SB/proxy.err")"
+PORT=$(cat "$FLEET_CONF_DIR/cred-proxy/port" 2>/dev/null); procs "$PORT"
+printf '%s\t%s\n' claude "claude ANTHROPIC_BASE_URL=http://127.0.0.1:$OLD HOME=/x" >> "$SB/procs"
+waitfor sh -c "bash '$BIN/fleet-cred-proxy.sh' status --json 2>/dev/null | grep -q '\"legacy_port\": $OLD'" \
+  || fail "B the proxy never bound the old port $OLD: $(bash "$BIN/fleet-cred-proxy.sh" status --json 2>&1)"
 out=$(R status)
 case "$out" in
   'on · down ·'*|'on · - ·'*) fail "B status: route missing — $out" ;;
-  'on · '*' · sessions 2/4') pass "B status: '$out' (only this proxy's port counts)" ;;
+  'on · '*' · sessions 3/5') pass "B status: '$out' (its port and its old port count, no other)" ;;
   *) fail "B status: $out" ;;
 esac
 case "$out" in *"$SECRET"*|*fcp1.*) fail "G status printed an environment value" ;; *) pass "G status prints counts only" ;; esac
-
-# ── C: disable ─────────────────────────────────────────────────────────────
-out=$(R disable 2>&1); rc=$?
-if [ "$rc" = 0 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf"; then
-  pass "C disable: fleet.conf byte for byte as before"
-else fail "C disable: rc=$rc — $out"; diff "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf"; fi
-if ! up; then pass "C disable: proxy stopped"; else fail "C disable: proxy still up"; fi
-case "$(R status)" in 'off · - · sessions '*) pass "C status reads off" ;; *) fail "C status: $(R status)" ;; esac
-ls "$FLEET_CONF_DIR/cred-proxy"/rollout.prior* >/dev/null 2>&1 && fail "C disable left a rollout.prior record" || pass "C no record left behind"
-
-# ── D: two round trips over keys that are already there ────────────────────
-sed -e 's|^FLEET_MAX_SESSIONS=9$|FLEET_MAX_SESSIONS=9\nFLEET_CRED_PROXY=0|' \
-    -e 's|^FLEET_HOST=1$|FLEET_HOST=1\nFLEET_CRED_RELAY_URL=http://old.example/relay  # kept|' \
-    "$SB/orig.conf" > "$FLEET_CONF_DIR/fleet.conf"
-cp "$FLEET_CONF_DIR/fleet.conf" "$SB/orig2.conf"
-ok=1
-for round in 1 2; do
-  R enable --relay-url http://127.0.0.1:9/relay >/dev/null 2>&1 || { ok=0; echo "round $round enable failed"; }
-  grep -qx 'export FLEET_CRED_PROXY=1' "$FLEET_CONF_DIR/fleet.conf" \
-    && grep -qx 'export FLEET_CRED_RELAY_URL="http://127.0.0.1:9/relay"' "$FLEET_CONF_DIR/fleet.conf" \
-    && [ "$(grep -c 'FLEET_CRED_PROXY=' "$FLEET_CONF_DIR/fleet.conf")" = 1 ] || { ok=0; echo "round $round conf:"; cat "$FLEET_CONF_DIR/fleet.conf"; }
-  up || { ok=0; echo "round $round: proxy not up"; }
-  R disable >/dev/null 2>&1 || { ok=0; echo "round $round disable failed"; }
-  cmp -s "$SB/orig2.conf" "$FLEET_CONF_DIR/fleet.conf" || { ok=0; diff "$SB/orig2.conf" "$FLEET_CONF_DIR/fleet.conf"; }
-done
-[ "$ok" = 1 ] && pass "D two enable/disable round trips, keys in place: byte for byte" || fail "D round trips"
-
-# ── E: switched on by hand ─────────────────────────────────────────────────
+bash "$BIN/fleet-cred-proxy.sh" status --ctl >/dev/null 2>&1; [ $? != 2 ] && pass "G status --ctl still reaches the control socket's status" || fail "G status --ctl"
+kill "$PXPID" 2>/dev/null; wait "$PXPID" 2>/dev/null; PXPID=''
 cp "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf"
-printf 'FLEET_CRED_PROXY=1\n' >> "$FLEET_CONF_DIR/fleet.conf"
-R disable >/dev/null 2>&1
-if [ "$(grep -c 'FLEET_CRED_PROXY=' "$FLEET_CONF_DIR/fleet.conf")" = 1 ] && grep -qx 'export FLEET_CRED_PROXY=0' "$FLEET_CONF_DIR/fleet.conf" \
-   && [ "$(R status | cut -d' ' -f1)" = off ]; then
-  pass "E nothing remembered: disable writes FLEET_CRED_PROXY=0 in place"
-else fail "E"; cat "$FLEET_CONF_DIR/fleet.conf"; fi
-cp "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf"
-kill "$RUNPID" 2>/dev/null; wait "$RUNPID" 2>/dev/null; RUNPID=''
 
 # ── F: --all-logins ────────────────────────────────────────────────────────
 SRC="$SB/src"; mkdir -p "$SRC"
@@ -185,26 +161,11 @@ if printf '%s\n' "$out" | grep -qx "$me: off · - · sessions 0/4" \
    && printf '%s\n' "$out" | grep -qx 'all: on 0/2 logins · sessions 0/8' && [ "$rc" = 6 ]; then
   pass "F status --all-logins: each login's own line, the stale install named, the all: line (rc 6)"
 else fail "F status --all-logins rc=$rc:"; printf '%s\n' "$out"; fi
-# enable on alice only (no launcher there: the daemon step is the seam), then back
-out=$(FLEET_CRED_ROLLOUT_DAEMON=true FLEET_CRED_ROLLOUT_WAIT=0 bash "$SB/sync.sh" --cred-proxy enable --logins alice 2>&1)
-if grep -qx 'export FLEET_CRED_PROXY=1' "$SB/homes/alice/.config/claude-fleet/fleet.conf" \
-   && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" \
-   && printf '%s\n' "$out" | grep -q '^alice: cred-proxy: fleet.conf: FLEET_CRED_PROXY=1'; then
-  pass "F --cred-proxy enable --logins alice: alice's own fleet.conf, as alice; this login untouched"
-else fail "F enable alice:"; printf '%s\n' "$out"; cat "$SB/homes/alice/.config/claude-fleet/fleet.conf"; fi
-FLEET_CRED_ROLLOUT_DAEMON=true FLEET_CRED_ROLLOUT_WAIT=0 bash "$SB/sync.sh" --cred-proxy disable --logins alice >/dev/null 2>&1
-cmp -s "$SB/alice.conf" "$SB/homes/alice/.config/claude-fleet/fleet.conf" \
-  && pass "F --cred-proxy disable: alice's conf byte for byte" || fail "F alice disable"
+out=$(bash "$SB/sync.sh" --cred-proxy enable --logins alice 2>&1); rc=$?
+[ "$rc" = 2 ] && cmp -s "$SB/alice.conf" "$SB/homes/alice/.config/claude-fleet/fleet.conf" \
+  && pass "F --cred-proxy enable: refused (a login has no proxy of its own to switch), alice untouched" \
+  || fail "F sync enable rc=$rc: $out"
 unset FLEET_SYNC_LOGINS_SUDO FLEET_SYNC_LOGINS_ME FLEET_LIVE_DIR
-
-# ── G: rails ───────────────────────────────────────────────────────────────
-mv "$FLEET_CONF_DIR/fleet.conf" "$SB/held.conf"
-R enable >/dev/null 2>&1; rc=$?
-[ "$rc" = 3 ] && [ ! -e "$FLEET_CONF_DIR/fleet.conf" ] && pass "G no fleet.conf: enable exits 3, writes nothing" || fail "G no conf rc=$rc"
-mv "$SB/held.conf" "$FLEET_CONF_DIR/fleet.conf"
-R enable --relay-url 'https://user:pw@relay.example/x' >/dev/null 2>&1; rc=$?
-[ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && pass "G a credential in --relay-url is refused (exit 2)" || fail "G relay url rc=$rc"
-bash "$BIN/fleet-cred-proxy.sh" status --ctl >/dev/null 2>&1; [ $? != 2 ] && pass "G status --ctl still reaches the control socket's status" || fail "G status --ctl"
 
 [ "$FAIL" = 0 ] && echo "fleet-cred-rollout-selftest: OK" || echo "fleet-cred-rollout-selftest: FAILED"
 exit "$FAIL"

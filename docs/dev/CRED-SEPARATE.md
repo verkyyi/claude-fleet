@@ -226,13 +226,16 @@ before install and after uninstall.
 
 On a **managed node** (mac-a mac-d, mac-b mac-c) the per-login wiring above meant one
 LaunchDaemon and one sudo per login, credentials separated login by login, and
-every login on its own proxy version. There the machine runs **one** shared
-proxy instead; laptops and client-only computers keep a proxy per login.
+every login on its own proxy version. Every machine now runs **one** shared
+proxy (issue #4674: no login runs a proxy of its own — not the separated
+`com.claude-fleet.credsep.<login>`, not the unseparated `com.claude-fleet.cred-proxy`;
+a person's pod runs the same `serve --shared` as its login). Only a client-only
+computer starts `fleet run`'s central proxy on demand.
 
 ```sh
 fleet cred-proxy status  --machine        # shared · _fleetcred · on k/N logins · sessions a/b
 fleet cred-proxy enable  --machine        # every login with ~/.claude/fleet (or --logins a,b)
-fleet cred-proxy disable --machine        # back to a proxy per login, byte for byte
+fleet cred-proxy disable --machine        # every login's files back in its home, byte for byte
 ```
 
 `enable --machine` is `fleet-credsep.sh machine install`: ONE sudo for the whole
@@ -300,9 +303,13 @@ A login separated before the machine had the shared proxy runs its own one
 `mode: shared`). `machine status` names it (`own proxy: …`), the login's
 `credsep check` WARNs, and one command moves it over with no gap:
 
+
+No login is made an own proxy any more (issue #4674) and there is no way back
+(`machine leave` left with it): `join` is how the last ones leave, and the
+node daemon's `credsep-enforce` runs it every tick.
+
 ```sh
 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine join  --logins a,b   # --dry-run first; no --logins = every own-mode login
-sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine leave --logins a     # the way back
 ```
 
 `join`, in this order: the store becomes a tenant (`mode: shared`, its old port

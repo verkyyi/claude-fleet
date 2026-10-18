@@ -648,9 +648,10 @@ def login_open(a):
     # The relay pass is the proxy's second road, never a reason to undo a login
     # (#3213): the hub mints it only for a login whose account is ACTIVE, and a
     # login the hub's create op is making is still `creating` here — so a 403 is
-    # expected on every create. The login's fleet-cred-proxy.sh mints it later
-    # (relay_fetch, as on a Mac: asked again every minute or two while it has
-    # none, then a re-probe — #3423); until then the relay road is simply off.
+    # expected on every create. The login's `cred-relay` mints it later (the
+    # shared proxy asks — relay-want.<login> — and the node daemon runs
+    # fleet-cred-proxy.sh relay-tick as the login, then a re-probe — #3423,
+    # #3561, #4674); until then the relay road is simply off.
     try:
         relay = request(hub, '/v1/node/relay-credential', ne['CCQUOTA_TOKEN'], {})
     except HubHTTPError as e:
@@ -694,12 +695,29 @@ POD_CONF = (
     '+("FLEET_HUB_INTERNAL_URL="+hi+"\\n" if hi else ""))')
 
 
+# The pod's machine proxy (issue #4674): the same `fleet-cred-proxy.py serve
+# --shared` a managed machine runs, its one tenant the login, routing central —
+# no per-login proxy. Its run and state dir is the login's old cred-proxy/ (the
+# port, signing key and held passes stay: sessions running before the switch go
+# on). The supervisor's pod child serves it once this file is there. Written as
+# the login. argv: conf dir, home, uid, login, central URL.
+POD_PROXY = (
+    'import json,os,sys; c,h,u,l,cu=sys.argv[1:6]; st=os.path.join(c,"cred-proxy"); '
+    'os.makedirs(st,mode=0o700,exist_ok=True); os.makedirs(os.path.join(c,"logs"),exist_ok=True); '
+    'spec={"state":st,"run":st,"user":l,"version":"-","port":0,"tenants":[{"login":l,"uid":int(u),"state":st,'
+    '"log":os.path.join(c,"logs","cred-proxy.log"),"accounts":os.path.join(c,"accounts"),'
+    '"codex_auth":os.path.join(h,".codex","auth.json"),"codex_homes":os.path.join(h,".codex-accounts"),'
+    '"node_env":os.path.join(c,"node.env"),"probe":os.path.join(c,"node-probe.json"),'
+    '"settings":{"FLEET_CRED_CENTRAL_URL":cu}}]}; f=os.path.join(st,"machine.json"); '
+    'open(f+".tmp","w").write(json.dumps(spec,indent=1,sort_keys=True)+"\\n"); os.replace(f+".tmp",f)')
+
+
 def pod_login_open(a):
     """`login open` on a person's own pod (#3757), run AS its login: only the
     name the pod was made for (anything else exists already: 3); no useradd
-    (pod-etc wrote its passwd line), no fleetcred store, no shared proxy — its
-    node token in its own conf dir, its own proxy routing central, nothing
-    leased. Ends `credsep: central`."""
+    (pod-etc wrote its passwd line), no fleetcred store — its node token in its
+    own conf dir, the pod's machine proxy (one tenant: this login) routing
+    central, nothing leased. Ends `credsep: central`."""
     want = os.environ.get('FLEET_POD_LOGIN', '')
     if a.name != want:
         raise Refuse('this pod is %s\'s alone: %s is never opened here' % (want, a.name), rc=3)
@@ -780,6 +798,7 @@ def pod_login_open(a):
     # central (#3547): nothing is ever leased into this pod
     ne['CCQUOTA_FLEET_CREDS'] = '0'
     private_write(token_path, ''.join(k + '=' + v + '\n' for k, v in ne.items()), *me)
+    as_tenant(s, login, ['python3', '-c', POD_PROXY, str(conf), str(home), str(uid), login, central_url()])
     s.write_login_env(paths, login, dict(ne, FLEET_CONF_DIR=str(conf)))
     os.environ['FLEET_NODE_ADOPT_FOLLOW'] = '0'
     if s.account_adopt(paths, login):

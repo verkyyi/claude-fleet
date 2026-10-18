@@ -98,6 +98,11 @@ def check(root=ROOT):
     except OSError:
         src = ""
     tasks = set(re.findall(r'"name":\s*"([a-z0-9-]+)"', src))
+    # account units the supervisor defines itself, no template (issue #4674)
+    m = re.search(r'^ACCOUNT_BUILTIN = \(([^)]*)\)', src, re.M)
+    builtin = set(re.findall(r'"([a-z0-9-]+)"', m.group(1))) if m else set()
+    units |= builtin
+    tasks -= builtin
     for u in sorted(units - {n for n, k, _, _ in rows if k == "unit"}):
         out.append("%s: launchd template with no row — machine or login?" % u)
     for t in sorted(tasks - {n for n, k, _, _ in rows if k == "machine"}):

@@ -499,7 +499,7 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
   # one credential proxy per machine (issue #3744): beside the shared one, a second
   # proxy holds its own copy of the subscriptions — one the hub deleted stays there
   # and its sessions get 401. Off the shared proxy and unmanaged: INFO, no row.
-  _cpx=$(bash "$(dirname "$0")/fleet-credsep.sh" machine proxies 2>&1 | tail -n 1)
+  _cpx=$(FLEET_CREDSEP_HOST="$_ho_on" bash "$(dirname "$0")/fleet-credsep.sh" machine proxies 2>&1 | tail -n 1)
   _cpx_m=${_cpx#credproxy: }; _cpx_lv=${_cpx_m%% —*}; _cpx_m=${_cpx_m#* — }
   case "$_cpx_lv" in
     OK)   pass credproxy "$_cpx_m" ;;

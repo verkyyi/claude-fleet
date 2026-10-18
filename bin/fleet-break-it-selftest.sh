@@ -4648,6 +4648,7 @@ drill_new_login_unseparated() {
   out=$(FLEET_CREDSEP_ROOT_BASE="$d/db" FLEET_CREDSEP_RUN_BASE="$d/run" FLEET_CREDSEP_LOG_BASE="$d/log" \
         FLEET_CREDSEP_LIB="$d/lib" FLEET_CREDSEP_DAEMON_DIR="$d/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
         FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$d/pw" \
+        FLEET_CREDSEP_JOIN_WAIT=0 FLEET_NODE_STATE="$d/node" \
         bash "$BIN/fleet-credsep.sh" install --login brkfresh --fresh --pool-src "$d/pool" --install-dir "$d/inst" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
   grep -rq 'tok-POOL' "$d/homes/brkfresh" && { WHY="a pool token is readable in the new login's home: $(grep -rl tok-POOL "$d/homes/brkfresh")"; return 1; }

@@ -2,8 +2,9 @@
 # fleet-cred-relay-retry-selftest.sh — a login opened while its account is still
 # `creating` gets its relay pass with no hand step (issue #3423).
 #
-# The real launcher (`bin/fleet-cred-proxy.sh run`, separated) in a Linux
-# tenant's exact shape: its fleet.conf says only FLEET_CRED_PROXY=1 /
+# The real `bin/fleet-cred-proxy.sh relay-tick` — the one road left (issue #4674
+# deleted the per-login launcher `run`): the node daemon runs it as the login
+# when the machine's shared proxy asks — in a Linux tenant's exact shape: its fleet.conf says only FLEET_CRED_PROXY=1 /
 # FLEET_CRED_SEPARATE=1 (the relay URL is root's <LIB>/<login>.conf, which only
 # the proxy reads), node.env is the store's unreadable link and the hub switch
 # CCQUOTA_FLEET=1 is in node.pub.env alone. A fake shared proxy answers the
@@ -11,23 +12,21 @@
 # refuses POST /v1/node/relay-credential with 403 until the account is active.
 #
 # The pass is renewed on REQUEST, never on a clock (issue #3561, EPIC #3500
-# C19): the proxy writes relay-want[.<login>] in its run dir (missing · used ·
-# 80% · refused) and the launcher / relay-tick answers each request once. Here
-# the test writes those requests, as the proxy would.
+# C19): the proxy writes relay-want.<login> in its run dir (missing · used ·
+# 80% · refused) and relay-tick answers each request once. Here the test writes
+# those requests, as the proxy would.
 #
 # What it pins:
-#   A. boot      the proxy is not up yet → no hub call
+#   A. boot      the proxy is not up yet → no hub call, whatever is asked
 #   B. creating  a `missing` request → 403 → nothing kept, no re-probe, and no
 #                second ask until the proxy asks again (its clock, not ours)
 #   C. active    the next request ISSUES: the pass kept 0600, handed to the
 #                proxy, and the probe re-run at once (FLEET_CRED_REPROBE_CMD)
-#   D. held      no request → the hub is never asked, however long it runs;
-#                an `80%` request mints a new pass (--force), not a check
+#   D. held      no request → the hub is never asked, however many passes;
+#                an `80%` / `used` request mints a new pass (--force), not a check;
+#                the last answered request is kept in cred-proxy/relay-keep
 #   E. no relay  a proxy with no relay road → the hub is never asked
-#   F. relay-tick  a login on the SHARED proxy has no resident launcher (issue
-#                #3524): the node daemon runs `relay-tick` when the proxy asks
-#                (relay-want.<login>) — one answer per request, the last one
-#                answered kept in cred-proxy/relay-keep between passes
+#   F. run       the per-login launcher's old entry starts nothing (#4674)
 # No network, no tmux; everything is a file or a unix socket under one tmp dir.
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -103,16 +102,14 @@ tenant() { # tenant <dir> — a Linux tenant's conf dir, as fleet-node-linux.py 
   local c=$1
   mkdir -p "$c" "$c.run"
   printf '# ---- [common] ----\nFLEET_CRED_PROXY=1\nFLEET_CRED_SEPARATE=1\n' > "$c/fleet.conf"
-  printf '{"separated": true, "run": "%s"}\n' "$c.run" > "$c/credsep.json"
+  printf '{"separated": true, "shared": true, "run": "%s"}\n' "$c.run" > "$c/credsep.json"
   ln -s "$W/store-not-yours/node.env" "$c/node.env"
   printf 'CCQUOTA_HUB_URL=http://127.0.0.1:9\nCCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE=1\n' > "$c/node.pub.env"
 }
-launch() { # launch <conf dir> — the real launcher, on short clocks
+tick() { # tick <conf dir> — one relay-tick pass, as the node daemon runs it
   HOME="$W/home" FLEET_CONF_DIR="$1" FLEET_SKIP_GLOBAL_CONF=1 FLEET_HUB_CURL="$W/curl" \
-    FLEET_CRED_PROXY_IDLE_SECS=1 \
     FLEET_CRED_REPROBE_CMD="echo probed >> '$1/reprobed'" \
-    bash "$BIN/fleet-cred-proxy.sh" run </dev/null >"$1.out" 2>&1 &
-  PIDS="$PIDS $!"
+    bash "$BIN/fleet-cred-proxy.sh" relay-tick </dev/null >>"$1.out" 2>&1
 }
 WANT_T=$(( $(date +%s) - 1000 ))
 want() { # want <file> <reason> — the proxy's request, each one a newer mtime
@@ -130,79 +127,56 @@ until_() { # until_ <secs> <cmd…> — poll every 0.2 s
 }
 mkdir -p "$W/home"
 
+ME=$(id -un)
 # ---- A. boot: the proxy is not up yet ----------------------------------------
-C="$W/t1"; tenant "$C"
-launch "$C"
-sleep 2
+C="$W/t1"; tenant "$C"; WF="$C.run/relay-want.$ME"
+tick "$C" || fail "A: relay-tick exit $?"; ok
+want "$WF" missing; tick "$C"
 [ "$(calls)" = 0 ] || fail "A: the hub was asked with no proxy to say it has a relay ($(calls) calls)"; ok
 python3 -I "$W/ctl.py" "$C.run" "$W/ctl1.log" 1 & PIDS="$PIDS $!"
 until_ 10 test -S "$C.run/ctl.sock" || fail "A: the fake proxy did not start"
 
 # ---- B. creating: a `missing` request, 403 -----------------------------------
-want "$C.run/relay-want" missing
-until_ 15 calls_ge 1 || fail "B: the request was not answered within 15 s ($(calls) calls; $(cat "$C.out"))"; ok
-grep -qx status "$W/ctl1.log" || fail "B: the launcher never asked its proxy whether a relay is configured"; ok
+want "$WF" missing; tick "$C"
+[ "$(calls)" = 1 ] || fail "B: the request was not answered ($(calls) calls; $(cat "$C.out"))"; ok
+grep -qx status "$W/ctl1.log" || fail "B: relay-tick never asked its proxy whether a relay is configured"; ok
 [ ! -e "$C/cred-proxy/relay.token" ] || fail "B: a pass kept while the hub refused"; ok
 [ ! -e "$C/reprobed" ] || fail "B: re-probed with no pass"; ok
-sleep 3
+tick "$C"; tick "$C"
 [ "$(calls)" = 1 ] || fail "B: asked again with no new request ($(calls) calls) — a clock of its own?"; ok
 
 # ---- C. active: the next request issues, the proxy gets it, the probe re-runs --
 : > "$W/active"
-want "$C.run/relay-want" missing
-until_ 15 test -s "$C.run/relay.got" || fail "C: no pass reached the proxy within 15 s of the request ($(calls) calls; $(cat "$C.out"))"; ok
-[ "$(cat "$C.run/relay.got")" = frl1.abc ] || fail "C: the proxy got '$(cat "$C.run/relay.got")'"; ok
+want "$WF" missing; tick "$C"
+[ "$(cat "$C.run/relay.got" 2>/dev/null)" = frl1.abc ] || fail "C: no pass reached the proxy ($(calls) calls; $(cat "$C.out"))"; ok
 [ "$(cat "$C/cred-proxy/relay.token" 2>/dev/null)" = frl1.abc ] || fail "C: the login does not keep the pass"; ok
 case "$(ls -l "$C/cred-proxy/relay.token" | cut -c1-10)" in -rw-------) ok ;; *) fail "C: the pass is not 0600" ;; esac
 until_ 10 test -s "$C/reprobed" || fail "C: no re-probe after the pass landed"; ok
-until_ 5 grep -q 'relay (missing): relay: ISSUED' "$C.out" || fail "C: the launcher's log does not say why it renewed ($(cat "$C.out"))"; ok
+grep -q 'relay (missing): relay: ISSUED' "$C.out" || fail "C: relay-tick's log does not say why it renewed ($(cat "$C.out"))"; ok
+[ -s "$C/cred-proxy/relay-keep" ] || fail "C: the answered request is not kept between passes"; ok
 
-# ---- D. held: no request, no ask; an 80% request mints anew --------------------
-n=$(calls); sleep 4
+# ---- D. held: no request, no ask; an 80% / used request mints anew -------------
+n=$(calls); tick "$C"; tick "$C"
 [ "$(calls)" = "$n" ] || fail "D: a held pass was asked for with no request ($n → $(calls))"; ok
 [ "$(wc -l < "$C/reprobed" | tr -d ' ')" = 1 ] || fail "D: re-probed more than once"; ok
-want "$C.run/relay-want" 80%
-until_ 15 calls_ge $((n + 1)) || fail "D: an 80% request did not mint a new pass ($(calls) calls; $(cat "$C.out"))"; ok
-until_ 5 grep -q 'relay (80%): relay: ISSUED' "$C.out" || fail "D: the 80% renewal is not in the log"; ok
+want "$WF" 80%; tick "$C"
+[ "$(calls)" = $((n + 1)) ] || fail "D: an 80% request did not mint a new pass ($(calls) calls; $(cat "$C.out"))"; ok
+grep -q 'relay (80%): relay: ISSUED' "$C.out" || fail "D: the 80% renewal is not in the log"; ok
+want "$WF" used; tick "$C"
+[ "$(calls)" = $((n + 2)) ] || fail "D: a 'used' request did not mint a new pass ($(calls) calls)"; ok
 
 # ---- E. no relay road: the hub is never asked ---------------------------------
 rm -f "$W/calls"
-C="$W/t2"; tenant "$C"
+C="$W/t2"; tenant "$C"; WF="$C.run/relay-want.$ME"
 python3 -I "$W/ctl.py" "$C.run" "$W/ctl2.log" 0 & PIDS="$PIDS $!"
 until_ 10 test -S "$C.run/ctl.sock" || fail "E: the fake proxy did not start"
-launch "$C"
-until_ 10 grep -sqx status "$W/ctl2.log" || fail "E: the launcher never asked its proxy"; ok
-want "$C.run/relay-want" missing
-sleep 3
+want "$WF" missing; tick "$C"
+grep -sqx status "$W/ctl2.log" || fail "E: relay-tick never asked its proxy"; ok
 [ "$(calls)" = 0 ] || fail "E: the hub was asked with no relay road ($(calls) calls)"; ok
 
-# ---- F. relay-tick: one answer per request, the last one kept between passes --
-rm -f "$W/calls" "$W/active"
-C="$W/t3"; tenant "$C"
-printf '{"separated": true, "shared": true, "run": "%s"}\n' "$C.run" > "$C/credsep.json"
-WF="$C.run/relay-want.$(id -un)"
-tick() {
-  HOME="$W/home" FLEET_CONF_DIR="$C" FLEET_SKIP_GLOBAL_CONF=1 FLEET_HUB_CURL="$W/curl" \
-    FLEET_CRED_REPROBE_CMD="echo probed >> '$C/reprobed'" \
-    bash "$BIN/fleet-cred-proxy.sh" relay-tick </dev/null >>"$C.out" 2>&1
-}
-tick; rc=$?
-[ "$rc" = 0 ] || fail "F: relay-tick exit $rc"; ok
-[ "$(calls)" = 0 ] || fail "F: asked the hub with no request"; ok
-python3 -I "$W/ctl.py" "$C.run" "$W/ctl3.log" 1 & PIDS="$PIDS $!"
-until_ 10 test -S "$C.run/ctl.sock" || fail "F: the fake proxy did not start"
-want "$WF" missing; tick
-[ "$(calls)" = 1 ] || fail "F: the request was not answered ($(calls) calls; $(cat "$C.out"))"; ok
-[ -s "$C/cred-proxy/relay-keep" ] || fail "F: the answered request is not kept between passes"; ok
-tick
-[ "$(calls)" = 1 ] || fail "F: one request answered twice ($(calls) calls)"; ok
-: > "$W/active"; want "$WF" missing; tick
-[ "$(cat "$C.run/relay.got" 2>/dev/null)" = frl1.abc ] || fail "F: no pass reached the shared proxy ($(calls) calls; $(cat "$C.out"))"; ok
-n=$(calls); tick
-[ "$(calls)" = "$n" ] || fail "F: a held pass was asked for with no request ($n → $(calls))"; ok
-want "$WF" used; tick
-[ "$(calls)" = $((n + 1)) ] || fail "F: a 'used' request did not mint a new pass ($n → $(calls))"; ok
-# no resident launcher is left behind by a pass
+# ---- F. the per-login launcher is gone (#4674) --------------------------------
+out=$(HOME="$W/home" FLEET_CONF_DIR="$C" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "F: run did something (rc $rc): $out"; ok
 pgrep -f "fleet-cred-proxy.sh relay-tick" >/dev/null && fail "F: a relay-tick outlived its pass"; ok
 
 printf 'fleet-cred-relay-retry selftest: PASS (%d checks)\n' "$CHECKS"

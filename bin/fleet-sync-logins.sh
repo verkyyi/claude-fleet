@@ -2,7 +2,7 @@
 # fleet-sync-logins.sh [--dry-run] [--logins a,b] [--include-off] [--force]
 #                      [--source <dir>] [--homes <dir>] [--summary]
 #                      [--to-git [--origin <url>]]
-#                      [--cred-proxy enable|disable|status]
+#                      [--cred-proxy status]
 #   — keep every login's ~/.claude/fleet on ONE machine at the same commit
 #     (issue #1069); --to-git turns a copy install into a git clone (issue #1121).
 #
@@ -90,8 +90,9 @@
 # sync: the converted login sits at the version it had; a following plain run
 # brings it forward like any other checkout.
 #
-# --cred-proxy enable|disable|status (issue #2134) — no sync: for every other
-# login's install found here, run ITS OWN bin/fleet-cred-rollout.sh <verb> as
+# --cred-proxy status (issue #2134; a login's own enable / disable left with
+# #4674) — no sync: for every other
+# login's install found here, run ITS OWN bin/fleet-cred-rollout.sh status as
 # that login (its HOME and FLEET_CONF_DIR), and print each line it says as
 # `<login>: <line>`. This is how `fleet cred-proxy … --all-logins` reaches the
 # other logins; an install without the script needs a plain sync first (said so,
@@ -155,8 +156,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$credp" in
-  ''|enable|disable|status) ;;
-  *) echo 'fleet-sync-logins: --cred-proxy takes enable, disable or status' >&2; exit 2 ;;
+  ''|status) ;;
+  *) echo 'fleet-sync-logins: --cred-proxy takes status (a login has no proxy of its own to switch, #4674)' >&2; exit 2 ;;
 esac
 if [ -n "$credp" ] && { [ "$summary" -eq 1 ] || [ "$togit" -eq 1 ]; }; then
   echo 'fleet-sync-logins: --cred-proxy runs alone (no --summary / --to-git)' >&2; exit 2

@@ -525,7 +525,8 @@ bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
 # ── N: a login just opened joins the machine's shared proxy (issue #3155) ─────────
 # fleet-login-new.sh's 7b runs `install --login <new> --fresh`: on a machine that
 # runs the shared proxy the new login is a TENANT of it — never an own proxy the
-# shared one's leases never reach. With no shared proxy: an own one, as before.
+# shared one's leases never reach. With no shared proxy: it brings the machine's
+# one up, its first tenant — no login gets a proxy of its own (issue #4674).
 newlogin() { # <login> <uid> → a home outside the homes dir (snap stays as it is)
   local H="$SB/new/$1"
   mkdir -p "$H/.config/claude-fleet" "$H/.claude/fleet/bin"
@@ -545,13 +546,15 @@ sys.exit(0 if m.get("mode")=="shared" and r.get("shared") and r["run"].endswith(
   && pass "N a fresh login on a shared machine: a tenant of the shared proxy (record names it), no own proxy" \
   || fail "N fresh gamma rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
 bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
-out=$(HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" install --login delta --fresh \
+out=$(FLEET_CREDSEP_JOIN_WAIT=0 HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" install --login delta --fresh \
   --conf-dir "$SB/new/delta/.config/claude-fleet" --install-dir "$SB/new/delta/.claude/fleet" 2>&1); rc=$?
-python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); sys.exit(0 if m.get("mode") != "shared" else 1)' "$SB/db/delta/meta.json" 2>/dev/null \
-  && [ "$rc" = 0 ] && compgen -G "$SB/daemons/*credsep*delta*" >/dev/null \
-  && case "$out" in *"joins it as a tenant"*) false ;; *) true ;; esac \
-  && pass "N no shared proxy: a fresh login gets its own proxy, as before" \
+python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); s=json.load(open(sys.argv[2]))
+sys.exit(0 if m.get("mode") == "shared" and s.get("logins") == ["delta"] else 1)' "$SB/db/delta/meta.json" "$SB/db/.shared.json" 2>/dev/null \
+  && [ "$rc" = 0 ] && ! compgen -G "$SB/daemons/*credsep*delta*" >/dev/null \
+  && { [ -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] || [ -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ]; } \
+  && pass "N no shared proxy: a fresh login brings the machine's one up as its first tenant — no own proxy (#4674)" \
   || fail "N fresh delta rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
+bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
 HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" uninstall --login delta --conf-dir "$SB/new/delta/.config/claude-fleet" >/dev/null 2>&1
 HOME="$SB/new/gamma" python3 -I "$BIN/fleet-credsep.py" uninstall --login gamma --conf-dir "$SB/new/gamma/.config/claude-fleet" >/dev/null 2>&1
 

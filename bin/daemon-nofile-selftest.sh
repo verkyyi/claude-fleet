@@ -21,7 +21,10 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
 WANT=65536
 
-for u in webhook spinner cred-proxy; do
+# the credential proxy has no per-login unit any more (issue #4674): the machine's
+# one runs under the node daemon, whose own definition carries the limit its
+# children inherit — its start line is still pinned below
+for u in webhook spinner; do
   f="$ROOT/launchd/com.claude-fleet.$u.plist.tmpl"
   [ -f "$f" ] || fail "$f missing"
   for k in SoftResourceLimits HardResourceLimits; do

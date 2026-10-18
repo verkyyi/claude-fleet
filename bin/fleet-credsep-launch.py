@@ -4,7 +4,9 @@ agent (issue #1971, EPIC #1967 C4). Run by ROOT, from the root-owned copy
 bin/fleet-credsep.sh installs; never from a login's own checkout.
 
     fleet-credsep-launch.py proxy <login>
-        The credential proxy, as the role account (_fleetcred / fleetcred):
+        compat-1v: 下一批删 — a login's OWN proxy (issue #4674: none is made any
+        more; one left from before runs here until credsep-enforce's `machine
+        join` takes it onto the shared one). As the role account (_fleetcred / fleetcred):
         reads <root>/meta.json, takes the proxy's port / timings from the
         login's fleet.conf + secrets.env (PARSED, never sourced — this is root
         reading a file the login writes) and everything that names an upstream,
@@ -364,7 +366,7 @@ def main():
     pw_login = getpw(login)
     login_home = os.environ["HOME"] if os.environ.get("FLEET_CREDSEP_TEST") == "1" else pw_login.pw_dir
 
-    if mode == "proxy":
+    if mode == "proxy":     # compat-1v: 下一批删 (issue #4674)
         if meta.get("mode") == "shared":
             die("%s is a tenant of the machine's shared proxy (fleet-credsep-launch.py shared)" % login)
         pw_role = pwd.getpwnam(role)

@@ -31,8 +31,8 @@
 #                              bin/fleet-doctor.sh credsep · credsep-all rows (issue #3700)
 #   cred-pool-delete-stale-proxy  bin/fleet-cred-proxy.py (prune · a 401 runs on the next
 #                              account), tokenledger agent pruneCreds + TypeCreds (issue #3744)
-#   cred-second-proxy          bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
-#                              credproxy row (issue #3744)
+#   cred-per-login-proxy-left  bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
+#                              credproxy row (issues #3744, #4674)
 #   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
 #                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 #   cred-central-failover-pin  bin/fleet-claude.sh / bin/fleet-codex.sh (a person's pod routes
@@ -85,31 +85,36 @@ sep_install() {
     bash "$BIN/fleet-credsep.sh" machine install --logins alpha "$@" 2>&1); RC=$?
 }
 
-# The very order of 2026-10-07: the credentials moved while the login's proxy was
-# not on and its sessions read the files. The preflight refuses, nothing moves.
+# The very order of 2026-10-07: the credentials moved while the login's sessions
+# read the files themselves. The preflight refuses, nothing moves. (Its old first
+# step — «turn the login's own proxy on» — left with the per-login proxy, #4674:
+# the proxy it joins is the machine's, and install switches FLEET_CRED_PROXY on.)
 drill_cred_sep_proxy_off() {
   CAP=20
   local sb="$WORK/sepoff" t0
   sep_login "$sb"
+  # one live Claude session that reads the files (no ANTHROPIC_BASE_URL to a proxy)
+  printf 'claude\tclaude --resume x HOME=%s\n' "$sb/homes/alpha" > "$sb/procs"
   t0=$(now)
-  FLEET_CREDSEP_SVC=0 sep_install "$sb"
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb"
   SECS=$(since "$t0")
-  [ "$RC" = 6 ] || { WHY="the proxy is off, yet machine install went on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
-  printf '%s' "$OUT" | grep -q 'cred-proxy enable' || { WHY="refused without saying what to do first: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"; return 1; }
+  [ "$RC" = 6 ] || { WHY="a session reads the files, yet machine install went on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$OUT" | grep -q '1 of its 1 live sessions read the credential files themselves' \
+    || { WHY="refused without saying which sessions: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"; return 1; }
   [ ! -e "$sb/db/alpha" ] && [ -f "$C/accounts/a1.hub/.credentials.json" ] && [ ! -L "$C/node.env" ] \
     && ! grep -q FLEET_CRED_PROXY "$C/fleet.conf" || { WHY="refused, yet something moved: $(ls -a "$sb/db" "$C" 2>&1 | tr '\n' ' ')"; return 1; }
-  # a running EPIC batch on the login: refused too, even with the proxy on
-  printf 'export FLEET_CRED_PROXY=1\n' >> "$C/fleet.conf"
+  # a running EPIC batch on the login: refused too, with no session reading files
   mkdir -p "$C/global/epic-running.d"
   printf 'epoch: %s\nepic: 9\nsession: s\ntick: 1\n' "$(date +%s)" > "$C/global/epic-running.d/o-r-9"
-  FLEET_CREDSEP_SVC=0 sep_install "$sb"
+  : > "$sb/procs"
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb"
   [ "$RC" = 6 ] && printf '%s' "$OUT" | grep -q 'EPIC batch' \
     || { WHY="an EPIC batch runs on the login, yet no refusal naming it (rc $RC): $(printf '%s' "$OUT" | grep preflight | tr '\n' ' ')"; return 1; }
   # --force: the person's (or the agent's, on purpose) way past it
-  FLEET_CREDSEP_SVC=0 sep_install "$sb" --force
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb" --force
   [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q 'preflight: --force' && [ -f "$sb/db/alpha/node.env" ] \
     || { WHY="--force did not go on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
-  WHAT="代理没开就 machine install：安装前自检拒绝（exit 6，什么都没搬），说先 fleet cred-proxy enable；本登录有 EPIC 批次在跑也拒；--force 才过"
+  WHAT="还有会话自己读凭据文件就 machine install：安装前自检拒绝（exit 6，什么都没搬），点名几个会话；本登录有 EPIC 批次在跑也拒；--force 才过"
 }
 
 # A login as a node leaves it: a leased credential, node.env, fleet.conf, the
@@ -187,18 +192,22 @@ drill_cred_upstream_tenant_override() {
   printf 'CCQUOTA_TOKEN=ccq_TENANT_NODE_SECRET\n' > "$c/node.env"      # its hub: FLEET_HUB_URL
   printf '{"anthropic":"reachable","openai":"reachable"}\n' > "$c/node-probe.json"
   t0=$(now)
+  # the login is a tenant of the machine's shared proxy (#4674: no proxy of its
+  # own); the proxy's upstream is the process's — the sandbox launcher hands its
+  # FLEET_CRED_* through — never a line of the login's own file
+  local sport; sport=$(cred_deadport)
   ( export HOME="$sb/home" FLEET_CONF_DIR="$c" FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" \
       FLEET_CREDSEP_LOG_BASE="$sb/log" FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" \
-      FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO=''
+      FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
+      FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$sport"
     bash "$BIN/fleet-credsep.sh" install >"$sb/install.out" 2>&1
-    # root's settings: the real upstream; the login's own file: its listener
-    printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\n' "$good" >> "$sb/lib/$me.conf"
     printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\nFLEET_CRED_CENTRAL_URL=%s/central\nFLEET_HUB_URL=%s\n' \
       "$evil" "$evil" "$evil" >> "$c/fleet.conf"
-    exec python3 -I "$BIN/fleet-credsep-launch.py" proxy "$me" ) 2>"$sb/launch.err" &
+    export FLEET_CRED_ANTHROPIC_URL="$good/direct-anthropic"
+    exec python3 -I "$BIN/fleet-credsep-launch.py" shared ) 2>"$sb/launch.err" &
   printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 30 test -s "$sb/run/$me/port" || { WHY="the proxy did not start: $(tail -3 "$sb/install.out" "$sb/launch.err" | tr '\n' ' ')"; return 1; }
-  port=$(cat "$sb/run/$me/port")
+  until_ok 30 test -s "$sb/run/.shared/port" || { WHY="the proxy did not start: $(tail -3 "$sb/install.out" "$sb/launch.err" | tr '\n' ' ')"; return 1; }
+  port=$(cat "$sb/run/.shared/port")
   tok=$(HOME="$sb/home" FLEET_CONF_DIR="$c" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid t1 2>&1)
   for i in 1 2; do
     curl -s -m 20 -o "$sb/resp" -X POST -H "Authorization: Bearer $tok" -H 'content-type: application/json' \
@@ -210,7 +219,7 @@ drill_cred_upstream_tenant_override() {
     || { WHY="root's upstream never served the request: $(cat "$sb/resp" 2>/dev/null) $(tail -2 "$sb/launch.err" | tr '\n' ' ')"; return 1; }
   grep -q 'ignored FLEET_CRED_ANTHROPIC_URL' "$sb/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$sb/launch.err" \
     || { WHY="the launcher did not say what it ignored: $(tr '\n' ' ' < "$sb/launch.err")"; return 1; }
-  WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走 root 配置的上游；启动器写明 ignored"
+  WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走整机代理的上游；启动器写明 ignored"
 }
 
 # root-log-in-home (issue #2296): launchd / systemd open a root job's stdout file
@@ -289,7 +298,8 @@ drill_cred_login_removed_leftovers() {
   printf 'brkgone:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$sb/homes/brkgone" > "$sb/pw"
   set -- FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
     FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
-    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw"
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
+    FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0
   out=$(env "$@" bash "$BIN/fleet-credsep.sh" install --login brkgone --fresh --pool-src "$sb/pool" --install-dir "$sb/inst" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the rig: install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
   mkdir -p "$sb/log/brkgone"; : > "$sb/log/brkgone.log"; : > "$sb/log/brkgone.launch.log"; : > "$sb/lib/brkgone.conf"
@@ -768,14 +778,19 @@ drill_cred_pool_delete_stale_proxy() {
   WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话"
 }
 
-# ---- cred-second-proxy (#3744): beside the machine's shared proxy, a managed
-# machine still ran two logins' own separated proxies (the role account's `serve`) — each with its own copy of the subscriptions, one of them the deleted
-# one — and nothing said so. `machine proxies` (the doctor's credproxy row) reads
-# the process table: a second proxy is a FAIL naming it; a worktree's / a sandbox's
-# test copy is nobody's proxy; a per-login machine (no shared proxy, unmanaged) is INFO.
-drill_cred_second_proxy() {
+# ---- cred-per-login-proxy-left (#3744, #4674): a machine runs ONE credential
+# proxy — the shared one, every login its tenant; a person's pod runs the same
+# `serve --shared` as its login. Anything else is a proxy left from the per-login
+# road (#4674 deleted it): a login's own separated proxy (the role account's
+# `serve`), a login's unseparated `serve`, a pod's old `serve --parent-watch` —
+# each its own copy of the subscriptions, one the hub deleted stays there.
+# `machine proxies` (the doctor's credproxy row) reads the process table: any such
+# proxy is a FAIL naming it — with a shared proxy or without one, on a pod too; a
+# worktree's / a sandbox's test copy is nobody's proxy; a client computer (not a
+# host) running `fleet run`'s central-only proxy is INFO.
+drill_cred_per_login_proxy_left() {
   CAP=10
-  local sb="$WORK/secondproxy" t0 out rc lib env
+  local sb="$WORK/perloginproxy" t0 out rc lib env
   mkdir -p "$sb/run/alice" "$sb/run/.shared" "$sb/db" "$sb/node"
   lib="$sb/lib dir"
   printf '435\n' > "$sb/run/alice/pid"
@@ -784,29 +799,46 @@ drill_cred_second_proxy() {
     printf '47283 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve --shared /var/db/fleet-cred/.shared/tenants.json\n' "$lib"
     printf '435 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve\n' "$lib"
     printf '62916 alice /usr/bin/python3 -I /home/alice/projects/repo-issue-1/bin/fleet-cred-proxy.py serve\n'
-    printf '47373 alice /bin/bash /home/alice/.claude/fleet/bin/fleet-cred-proxy.sh run\n'
   } > "$sb/ps"
   env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_NODE_STATE=$sb/node FLEET_CREDSEP_PS=$sb/ps"
   t0=$(now)
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
-  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the shared one: own proxy of alice (pid 435' \
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the machine.s one: own proxy of alice (pid 435' \
     && ! printf '%s' "$out" | grep -q 62916 \
-    || { WHY="a second proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
+    || { WHY="a login's own proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
   grep -q 'machine proxies' "$BIN/fleet-doctor.sh" || { WHY="the doctor reads no credproxy row"; return 1; }
   sed -i.bak '/^435 /d' "$sb/ps"
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the shared one (pid 47283' \
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the machine.s (pid 47283' \
     || { WHY="the shared proxy alone is not OK (rc $rc): $out"; return 1; }
+  # no shared proxy, nothing managed: two logins' per-login proxies are no longer «just INFO»
   rm -f "$sb/db/.shared.json"
-  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n9 bob /usr/bin/python3 -I /home/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --parent-watch\n10 bob /usr/bin/python3 -I /home/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 2 credential proxies besides the machine.s one: per-login proxy of alice (pid 9' \
+    || { WHY="per-login proxies on a machine with no shared proxy are not a FAIL (rc $rc): $out"; return 1; }
+  # a person's pod: its login's old per-login proxy is a FAIL; the pod's `serve --shared` is OK
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --parent-watch\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_NODE_PROFILE=user-pod python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the machine.s one: per-login proxy of alice (pid 9' \
+    || { WHY="a pod's per-login proxy is not a FAIL (rc $rc): $out"; return 1; }
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --shared /home/alice/.config/claude-fleet/cred-proxy/machine.json\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_NODE_PROFILE=user-pod python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine' \
+    || { WHY="a pod's machine-mode proxy is not OK (rc $rc): $out"; return 1; }
+  # a client computer (not a host): `fleet run`'s central-only proxy is INFO
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_CREDSEP_HOST=0 python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — per-login proxies' \
-    || { WHY="a per-login machine (no shared proxy, unmanaged) is not INFO (rc $rc): $out"; return 1; }
-  WHAT="共享代理之外机器上还跑着登录自己的代理：credproxy 行 FAIL 并点名（pid · 登录）；只剩共享代理转 OK；工作区里的测试副本不算；没有共享代理的单登录机器只是 INFO"
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — a client computer' \
+    || { WHY="a client computer's fleet run proxy is not INFO (rc $rc): $out"; return 1; }
+  WHAT="整机代理之外还跑着按登录的代理（登录自己的隔离代理、未隔离的 serve、pod 的旧 serve）：有没有整机代理、在不在 pod 上都 FAIL 点名；只剩整机那一个转 OK；工作区里的测试副本不算；客户端电脑上 fleet run 的代理只是 INFO"
 }
 
 # ---- cred-central-trusted-pod (#4290): a person's pod (node.env

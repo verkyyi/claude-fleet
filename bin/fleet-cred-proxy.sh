@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# fleet-cred-proxy.sh — this login's credential proxy, started and kept (issue #1970,
-# EPIC #1967 C3). The proxy itself is bin/fleet-cred-proxy.py; this reads the
-# machine's config and decides whether it runs at all.
+# fleet-cred-proxy.sh — this login's road to the machine's credential proxy (issue
+# #1970, EPIC #1967 C3; issue #4674). The proxy itself is bin/fleet-cred-proxy.py.
+# A machine runs ONE: the shared one (bin/fleet-credsep.sh machine install, every
+# login its tenant), or on a person's pod the same `serve --shared` run by its
+# login (the node daemon's child). No login runs a proxy of its own any more
+# (#4674 deleted the per-login launcher, its launchd / systemd units and the
+# account table's row); only a client computer (not a host — FLEET_HOST!=1) still
+# starts `fleet run`'s central-only proxy on demand (`ensure`).
 #
-#   fleet-cred-proxy.sh run       the daemon's entry (com.claude-fleet.cred-proxy,
-#                                 KeepAlive / claude-fleet-cred-proxy.service).
-#                                 FLEET_CRED_PROXY!=1 → no proxy process: the
-#                                 launcher only re-reads the config every
-#                                 FLEET_CRED_PROXY_IDLE_SECS (60) and starts one
-#                                 when it turns on; turned off → the proxy stops.
-#                                 A proxy that dies is restarted within
-#                                 FLEET_CRED_PROXY_WATCH_SECS (2) + a 2s breath.
+#   fleet-cred-proxy.sh run       compat-1v: 下一批删 — the per-login launcher's old
+#                                 entry: exits 0 at once (an old unit that still
+#                                 names it starts nothing)
 #   fleet-cred-proxy.sh relay-tick  separated / shared only: answer the shared
 #                                 proxy's request for a relay pass, then exit — what
 #                                 the node daemon runs for a login on the machine's
 #                                 shared proxy, only when the proxy asks (issues
 #                                 #3524, #3561). Elsewhere a no-op.
-#   fleet-cred-proxy.sh ensure    start it detached when it is on and not running
-#                                 (a computer with no daemon — a client-only one);
-#                                 prints the port. Exit 3 = switched off.
+#   fleet-cred-proxy.sh ensure    the port of the proxy this login's sessions use;
+#                                 on a client computer (not a host) it starts
+#                                 `fleet run`'s proxy detached when none runs. A
+#                                 host with none: exit 1, naming the one fix
+#                                 (machine install). Exit 3 = switched off.
 #   fleet-cred-proxy.sh port      the port sessions use (exit 1 = not running)
 #   fleet-cred-proxy.sh route|mint|rebind|revoke|attach|quota|account-quota|picks|standing|relay-probe …
 #                                 the control socket — see fleet-cred-proxy.py
@@ -33,14 +35,13 @@
 #   fleet-cred-proxy.sh pass         a session's hub pass (fcp-h1., on STDIN) filed
 #                                 under this login at the machine's shared proxy
 #                                 (issue #2217; fleet-session-cred.sh does it)
-#   fleet-cred-proxy.sh enable|disable [--all-logins] · status [--all-logins]
+#   fleet-cred-proxy.sh status [--all-logins]
 #   fleet-cred-proxy.sh enable|disable|status --machine
 #                                 the machine's ONE shared proxy (issue #2217) —
-#                                 bin/fleet-cred-rollout.sh
-#                                 the switch for this login (and every other login
-#                                 on the machine): bin/fleet-cred-rollout.sh, issue
-#                                 #2134 — `fleet cred-proxy …`. `status --json` /
-#                                 `status --ctl` is the control socket's status.
+#                                 bin/fleet-cred-rollout.sh, `fleet cred-proxy …`
+#                                 (a login's own enable / disable left with #4674).
+#                                 `status --json` / `status --ctl` is the control
+#                                 socket's status.
 #   fleet-cred-proxy.sh doctor    fleet-doctor's `cred` row (issue #1975): ONE line
 #                                 `<PASS|WARN|FAIL>` TAB `<text>` — trust, the road
 #                                 each agent takes and why, the proxy, credsep, renewal.
@@ -50,8 +51,9 @@
 # wiring byte for byte, the default), FLEET_CRED_PROXY_PORT, FLEET_CRED_RELAY_URL,
 # FLEET_CRED_RELAY_TOKEN (secrets.env — never fleet.conf; unset = the pass
 # fleet-relay-cred.sh mints for this login, kept in the state dir — #1974),
-# FLEET_CRED_CENTRAL_URL (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock 0600,
-# key, bind.json, revoked, trust.json). Log: logs/cred-proxy.log (redacted).
+# FLEET_CRED_CENTRAL_URL (default: the hub). State: $FLEET_CONF_DIR/cred-proxy/ (port, ctl.sock,
+# key, bind.json, revoked, trust.json — a pod's machine proxy keeps its one tenant
+# here). Log: logs/cred-proxy.log (redacted).
 #
 # Shared (issue #2217 — `fleet-credsep.sh machine install`; credsep.json says
 # "shared": true) is the same as separated below, with ONE proxy for the whole
@@ -60,9 +62,9 @@
 #
 # Separated (issue #1971 — bin/fleet-credsep.sh; $FLEET_CONF_DIR/credsep.json
 # says so): the proxy is NOT this login's to run — the role account's service
-# runs it — so `run` only idles, `ensure` / `port` read its port from the run
-# dir, and the control commands talk to its socket there (the proxy checks our
-# uid). Plus three that only exist there:
+# runs it — so `ensure` / `port` read its port from the run dir, and the control
+# commands talk to its socket there (the proxy checks our uid). Plus three that
+# only exist there:
 #   fleet-cred-proxy.sh node-token   → `<broker url>\t<fcpn1.…>` (the hub broker)
 #   fleet-cred-proxy.sh node-hash    → sha256 of the node token (fleet-mcp)
 #   fleet-cred-proxy.sh probe <file> → hand the proxy a fresh node-probe.json
@@ -74,7 +76,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 PY="$BIN/fleet-cred-proxy.py"
 CONF="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 STATE="$CONF/cred-proxy"
-IDLE="${FLEET_CRED_PROXY_IDLE_SECS:-60}"
 
 load_conf() { # the machine's one file (#1623) + the install's; the env wins over neither — same order as every daemon
   local f
@@ -102,9 +103,8 @@ fi
 # here: fleet-relay-cred.sh fetch (--force for a renewal), handed to the proxy
 # over `relay`. A NEW pass re-probes at once (FLEET_CRED_REPROBE_CMD, default
 # fleet-node-probe.sh --quiet): the probe taken before it said `direct` from a
-# CN egress, and that verdict is what closes compute. The launcher also asks
-# once at boot (`fetch` keeps a pass the hub still takes).
-RELAY_SEEN='' RELAY_WHY='' RELAY_BOOT=1
+# CN egress, and that verdict is what closes compute.
+RELAY_SEEN='' RELAY_WHY='' RELAY_BOOT=0
 RELAY_RUN=${SEP_RUN:-$STATE}
 # relay_configured → rc 0 when this login's proxy has a relay road. Separated
 # (credsep), the URL is root's <LIB>/<login>.conf, which only the proxy reads —
@@ -120,7 +120,7 @@ try: sys.exit(0 if json.load(sys.stdin).get("relay") else 1)
 except Exception: sys.exit(2)'
 }
 # relay_due → rc 0 when the proxy asked for a pass since the last answer
-# (RELAY_WHY = its reason; the launcher's first look = boot)
+# (RELAY_WHY = its reason; RELAY_BOOT=1 = ask once regardless: boot)
 relay_due() {
   local w='' f st
   if [ "$RELAY_BOOT" = 1 ]; then RELAY_BOOT=0 RELAY_WHY=boot; return 0; fi
@@ -182,24 +182,18 @@ load_conf
 [ -n "$_FCP_ENV_SWITCH" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"
 export FLEET_CONF_DIR="$CONF"
 
+# compat-1v: 下一批删 — the per-login launcher (#4674): an old launchd / systemd
+# unit or account-table row that still names it starts nothing
+[ "$cmd" = run ] && exit 0
+
 if [ -n "$SEP_RUN" ]; then
   export FLEET_CRED_CTL_DIR="$SEP_RUN"
   case "$cmd" in
-    run)   # the role account's service runs the proxy; this one has nothing to start
-      trap 'exit 0' TERM INT
-      # it still keeps the relay pass (#1974): minted as this login, handed over
-      # by fleet-relay-cred.sh's separated push
-      while :; do
-        [ "$(switch_now)" = 1 ] && relay_due && relay_fetch
-        sleep "$IDLE" & wait $! 2>/dev/null
-        [ -f "$CONF/credsep.json" ] || exec "$0" run "$@"
-      done ;;
     relay-tick)   # ONE answer to the shared proxy's request, then exit (issues
       # #3524, #3561): a login on the machine's shared proxy has no resident
       # launcher — the node daemon runs this as the login when the proxy wrote
       # relay-want.<login>. The last request answered lives in $STATE/relay-keep.
       mkdir -p "$STATE" && chmod 700 "$STATE"
-      RELAY_BOOT=0
       read -r RELAY_SEEN 2>/dev/null < "$STATE/relay-keep"
       case "${RELAY_SEEN:-}" in *[!0-9]*) RELAY_SEEN='' ;; esac
       [ "$(switch_now)" = 1 ] && relay_due && relay_fetch
@@ -228,46 +222,18 @@ case "$cmd" in
     exit 0 ;;
   node-token|node-hash|probe|store|unstore|relay)
     echo "fleet-cred-proxy: $cmd: not separated (bin/fleet-credsep.sh)" >&2; exit 3 ;;
-  run)
-    child=''; on_now=0; seen=-1; nap=''
-    stop_child() { [ -n "$child" ] && kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; child=''; }
-    trap 'stop_child; rm -f "$STATE/launcher.pid"; exit 0' TERM INT
-    # USR1 = re-read the switch NOW (issue #2134): `fleet cred-proxy enable|disable`
-    # (bin/fleet-cred-rollout.sh) nudges the launcher it finds in launcher.pid, so a
-    # flip takes effect in seconds, not on the next $IDLE re-read
-    trap 'seen=-1' USR1
-    mkdir -p "$STATE" && chmod 700 "$STATE" && printf '%s\n' "$$" > "$STATE/launcher.pid"
-    # Two clocks (issue #1975): the config is re-read every $IDLE seconds, the
-    # proxy is looked at every $WATCH — a dead proxy is every session's next
-    # request on this login, so it comes back within seconds, not a minute.
-    WATCH="${FLEET_CRED_PROXY_WATCH_SECS:-2}"
-    while :; do
-      # this login just joined the machine's shared proxy (issue #2217): let go
-      # of the port now — the shared one takes it over for our sessions
-      [ -f "$CONF/credsep.json" ] && { stop_child; rm -f "$STATE/launcher.pid"; exec "$0" run "$@"; }
-      if [ "$seen" -lt 0 ] || [ $(( $(date +%s) - seen )) -ge "$IDLE" ]; then
-        on_now=$(switch_now); seen=$(date +%s)
-        [ "$on_now" = 1 ] && relay_due && relay_fetch
-      fi
-      if [ "$on_now" = 1 ]; then
-        if [ -z "$child" ] || ! kill -0 "$child" 2>/dev/null; then
-          [ -n "$child" ] && { wait "$child" 2>/dev/null; sleep 2; }   # crashed: a short breath, then again
-          python3 -I "$PY" serve --parent-watch "$@" &
-          child=$!
-        fi
-        sleep "$WATCH" &
-      else
-        stop_child
-        sleep "$IDLE" &
-      fi
-      nap=$!
-      wait "$nap" 2>/dev/null
-      kill "$nap" 2>/dev/null   # a USR1 cut the nap short: no stray sleep left behind
-    done
-    ;;
   ensure)
     on || { echo "fleet-cred-proxy: off (FLEET_CRED_PROXY=${FLEET_CRED_PROXY:-0})" >&2; exit 3; }
-    if ! live_pid >/dev/null; then
+    if ! live_pid >/dev/null && [ "${FLEET_HOST:-0}" = 1 ]; then
+      # a host runs ONE proxy, the machine's (issue #4674): no login starts its own
+      if [ -f "$STATE/machine.json" ]; then
+        echo "fleet-cred-proxy: the pod's machine proxy is not running ($STATE) — the node daemon restarts it" >&2
+      else
+        echo "fleet-cred-proxy: this login is on no machine proxy, and no login runs its own (#4674) — an admin joins it: sudo bash $BIN/fleet-credsep.sh machine install --logins $(id -un)" >&2
+      fi
+      exit 1
+    fi
+    if ! live_pid >/dev/null; then   # a client computer: `fleet run`'s central-only proxy
       mkdir -p "$STATE" && chmod 700 "$STATE"
       relay_fetch >&2
       nohup python3 -I "$PY" serve "$@" </dev/null >/dev/null 2>&1 &
@@ -298,16 +264,20 @@ case "$cmd" in
   doctor)
     on || exit 3
     if ! live_pid >/dev/null; then
-      if [ "$(uname -s)" = Darwin ]; then kick="launchctl kickstart -k gui/$(id -u)/com.claude-fleet.cred-proxy"
-      else kick="systemctl --user restart claude-fleet-cred-proxy"; fi
-      printf 'FAIL\t代理没在跑：这台登录上的会话用不了订阅（启动器 2 秒内会拉起；没起来看 logs/cred-proxy.log，%s）\n' "$kick"
+      if [ "${FLEET_HOST:-0}" != 1 ]; then
+        printf 'INFO\t代理没在跑：客户端电脑上 fleet run 开会话时才起\n'
+      elif [ -f "$STATE/machine.json" ]; then
+        printf 'FAIL\t代理没在跑：pod 的整机代理由节点守护拉起（看 logs/cred-proxy.log、fleet node status）\n'
+      else
+        printf 'FAIL\t这个登录没接整机代理，每登录代理已删（#4674）：会话用不了订阅 — 管理员一条 sudo bash %s/fleet-credsep.sh machine install --logins %s\n' "$BIN" "$(id -un)"
+      fi
       exit 0
     fi
     st=$(python3 -I "$PY" --state "$STATE" status --json 2>&1) || { printf 'FAIL\t代理不回话：%s\n' "$st"; exit 0; }
     rc=$(python3 -I "$PY" --state "$STATE" route --provider claude --json 2>/dev/null)
     rx=$(python3 -I "$PY" --state "$STATE" route --provider codex --json 2>/dev/null)
     FCD_MS=$(python3 -I "$BIN/fleet-credsep.py" machine status --json 2>/dev/null) \
-    FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_SEP="${FLEET_CRED_SEPARATE:-0}" python3 -I - <<'DOC'
+    FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_HOST="${FLEET_HOST:-0}" python3 -I - <<'DOC'
 import json, os, time
 def j(k):
     try:
@@ -317,7 +287,7 @@ def j(k):
 st, rc, rx = j("FCD_ST"), j("FCD_RC"), j("FCD_RX")
 NAME = {"direct": "direct 直连", "relay": "relay 经新加坡转发", "central": "central 交给中心代理"}
 TRUST = {"trusted": "可信", "untrusted": "不可信", "unknown": "可信与否不知道"}
-lv, notes = "PASS", []
+lv, notes, gone = "PASS", [], False
 trust = st.get("trust") or "unknown"
 if trust == "unknown":
     lv = "WARN"
@@ -346,15 +316,15 @@ if st.get("shared"):
         lv = "WARN"
         notes.append("共享代理落后本安装：管理员登录 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine refresh")
 elif st.get("separated"):
-    parts.append("per-login 每登录代理")
-    parts.append("凭据隔离 开")
-elif os.environ.get("FCD_SEP") == "1":
+    # compat-1v: 下一批删 — a login still on its own separated proxy until the
+    # node daemon's credsep-enforce joins it (machine join, #4674)
     lv = "WARN"
-    parts.append("per-login 每登录代理")
-    parts.append("凭据隔离 应开未开（看 credsep 行）")
+    parts.append("own 自己的隔离代理（每登录代理已删，#4674：等 credsep-enforce 接进整机代理）")
+elif os.environ.get("FCD_HOST") == "1":
+    gone = True     # a FAIL nothing below may soften
+    parts.append("per-login 每登录代理（已删，#4674：管理员 machine install 接进整机代理）")
 else:
-    parts.append("per-login 每登录代理")
-    parts.append("凭据隔离 关")
+    parts.append("client 客户端 fleet run 代理（只走中心路）")
 rn = st.get("renew") or {}
 if rn.get("err") and rn.get("last_err", 0) >= rn.get("last_ok", 0):
     lv = "WARN"
@@ -372,7 +342,7 @@ if bg.get("err"):
 if bg.get("misses"):
     lv = "WARN"
     notes.append("%d 个成功回答读不出用量（最近：%s）" % (bg["misses"], bg.get("miss_why", "")))
-print("%s\t%s%s" % (lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
+print("%s\t%s%s" % ("FAIL" if gone else lv, " · ".join(parts), ("；" + "；".join(notes)) if notes else ""))
 DOC
     ;;
   -h|--help|'')

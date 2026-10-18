@@ -5,8 +5,11 @@
 # its conf and sudo.
 #
 #   fleet-credsep.sh install [--dry-run|--force]
-#                                           separate (needs `sudo -n`, once;
-#                                           --dry-run needs none: what it would do)
+#                                           separate: this login a tenant of the
+#                                           machine's shared proxy — the machine's
+#                                           first brings it up; no login gets a
+#                                           proxy of its own (#4674). Needs `sudo
+#                                           -n`, once; --dry-run needs none
 #   fleet-credsep.sh install --adopt        root takes the login's upstream / hub
 #                                           settings into root's <LIB>/<login>.conf
 #                                           (the only place the proxy reads them,
@@ -66,8 +69,8 @@
 #                                           the machine's ONE shared proxy (issue
 #                                           #2217): every login (default: each with
 #                                           ~/.claude/fleet) a tenant of it — one
-#                                           sudo for the machine; uninstall = back
-#                                           to a proxy per login, byte for byte;
+#                                           sudo for the machine; uninstall = every
+#                                           login's files back, byte for byte;
 #                                           refresh = follow this install's code
 #   fleet-credsep.sh machine join [--logins a,b] [--dry-run]
 #                                           a login separated on its OWN proxy
@@ -75,10 +78,9 @@
 #                                           the shared one with no gap: the shared
 #                                           proxy answers for it first, the agent's
 #                                           leases follow, then the own proxy goes
-#                                           (kept in the store's backup/) — issue #2432
-#   fleet-credsep.sh machine leave --logins a,b
-#                                           the way back: its own proxy again, on
-#                                           its old port with its own key
+#                                           (kept in the store's backup/) — issue #2432;
+#                                           the last own ones' road (`machine leave`,
+#                                           the way back, left with #4674)
 #   fleet-credsep.sh machine status [--json]  anyone: shared or per-login, as whom,
 #                                           which logins, the version
 #   fleet-credsep.sh machine proxies [--json] anyone: the doctor's `credproxy` row —
@@ -268,8 +270,8 @@ case "$cmd" in
     verb="${1:-}"
     case "$verb" in
       status|managed|proxies|enforced) exec python3 -I "$BIN/fleet-credsep.py" machine "$@" ;;
-      install|uninstall|refresh|join|leave|enforce) ;;
-      *) echo "fleet-credsep: machine install|uninstall|refresh|join|leave|enforce|status|managed|proxies|enforced" >&2; exit 2 ;;
+      install|uninstall|refresh|join|enforce) ;;
+      *) echo "fleet-credsep: machine install|uninstall|refresh|join|enforce|status|managed|proxies|enforced" >&2; exit 2 ;;
     esac
     case " $* " in
       *" --dry-run "*) [ "$(id -u)" = 0 ] || { python3 -I "$BIN/fleet-credsep.py" machine "$@"; exit $?; } ;;

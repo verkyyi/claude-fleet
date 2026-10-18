@@ -1098,7 +1098,7 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 其余管理员单元照旧是它自己的；它的旧节点 agent `com.ccquota.agent.<admin>` 只走 §23.3 的座位交接（没座位就一直在——
 它是开号的那个）。另：托管登录里还在**自己的**凭据代理上的（`fleet-credsep.py machine managed --json` 说 `own`），
 清扫跑一次 `fleet-credsep.py machine join --logins <login>`（不断档，共享代理不接就原样回自己的代理），并进整机那份；
-之后账号表也不再为它常驻 `fleet-cred-proxy.sh run`（`account_unit_for`）。`FLEET_NODE_CREDSEP_JOIN=0` 不动。
+（#4674 起没有任何登录常驻自己的代理：账号表里没有 `cred-proxy` 这一行了，共享代理的租户只在代理要通行证时跑 `cred-relay`。）`FLEET_NODE_CREDSEP_JOIN=0` 不动。
 新开的登录本来就是共享代理的租户（#3155）。`bin/fleet-admin-old-jobs-selftest.sh`。
 
 ## 24. 机器级的活只跑一份（EPIC #3500 C1，#3546）

@@ -195,11 +195,14 @@ mkdir -p "$FLEET_LOGIN_HOMES"
 # (the run dir holds the proxy's ctl.sock: a short /tmp path, AF_UNIX caps it at 104 bytes)
 SRUN=$(mktemp -d /tmp/lns.XXXXXX) || exit 2
 ME=$(/usr/bin/id -un)
+SPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 export FLEET_CREDSEP_ROOT_BASE="$WORK/credsep/db" FLEET_CREDSEP_RUN_BASE="$SRUN" \
        FLEET_CREDSEP_LOG_BASE="$WORK/credsep/log" FLEET_CREDSEP_LIB="$WORK/credsep/lib" \
        FLEET_CREDSEP_DAEMON_DIR="$WORK/credsep/daemons" FLEET_CREDSEP_ROLE="$ME" \
        FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
-       FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0
+       FLEET_CREDSEP_PW="$WORK/credsep/pw" FLEET_LOGIN_CREDSEP_WAIT=0 \
+       FLEET_CREDSEP_JOIN_WAIT=0 FLEET_NODE_STATE="$WORK/credsep/node" \
+       FLEET_CRED_SHARED_PORT="$SPORT"
 unset FLEET_CRED_SEPARATE FLEET_CRED_PROXY
 mkdir -p "$WORK/credsep/daemons"
 for l in frank victor2 pam dora eve fay gus hal ian jo kai kim lee lou max ned nohome oda oli pat pia quin pru pry uma vee wen lena 24acme qen qix; do
@@ -451,7 +454,8 @@ contains "M the hub reads the verdict last" "$(printf '%s\n' "$BOUT" | tail -n 1
 # the login's account judge reads a pool label as usable (the picker names it,
 # and the proxy then mints for it) — a `hub:` marker with no lease file would not
 eq "M the account judge: beta usable" "beta	valid" "$(FLEET_CONF_DIR="$CD" FLEET_STATE_DIR="$WORK/acct-state" python3 "$BIN/.fleet-account.py" claude-login beta 2>&1)"
-# the proxy, as launchd would start it (root's code copy), against a fake far end
+# the machine's one proxy, as its service starts it (root's code copy), against a
+# fake far end — frank is its tenant (#4674: no login gets a proxy of its own)
 cat > "$WORK/fake.py" <<'PY2'
 import json, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -474,18 +478,29 @@ PY2
 python3 "$WORK/fake.py" "$WORK" & FPID=$!
 for _ in $(seq 1 300); do [ -s "$WORK/fake.port" ] && break; sleep 0.1; done
 FP=$(cat "$WORK/fake.port" 2>/dev/null)
-# the upstream comes from root's settings only (issue #2290), which install wrote
+# root's settings for frank (issue #2290), which install wrote; the shared proxy's
+# upstream is the process's (the sandbox launcher hands its FLEET_CRED_* through)
 [ -f "$FLEET_CREDSEP_LIB/frank.conf" ] || fail "M install wrote no root settings $FLEET_CREDSEP_LIB/frank.conf"
-printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\n' "$FP" >> "$FLEET_CREDSEP_LIB/frank.conf"
-HOME="$WORK/admin" python3 -I "$FLEET_CREDSEP_LIB/fleet-credsep-launch.py" proxy frank 2>"$WORK/launch.err" & LPID=$!
-for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/frank/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/frank/ctl.sock" ] && break; sleep 0.1; done
-PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/frank/port" 2>/dev/null)
+# every login here is one uid (the sandbox): the launcher writes the tenants file,
+# and the proxy serves frank alone from it — a control socket tells logins by uid
+HOME="$WORK/admin" FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP" \
+  python3 -I "$FLEET_CREDSEP_LIB/fleet-credsep-launch.py" shared 2>"$WORK/launch.err" & LPID=$!
+TF="$FLEET_CREDSEP_ROOT_BASE/.shared/tenants.json"
+for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/.shared/port" ] && break; sleep 0.1; done
+kill "$(cat "$FLEET_CREDSEP_RUN_BASE/.shared/pid" 2>/dev/null)" "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["tenants"]=[t for t in d["tenants"] if t["login"]=="frank"]; json.dump(d, open(sys.argv[2],"w"))' \
+  "$TF" "$WORK/frank-tenants.json" || fail "M the launcher wrote no tenants file: $(cat "$WORK/launch.err")"
+rm -f "$FLEET_CREDSEP_RUN_BASE/.shared/port"
+HOME="$WORK/admin" FLEET_CREDSEP_TEST=1 FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP" \
+  python3 -I "$FLEET_CREDSEP_LIB/fleet-cred-proxy.py" serve --shared "$WORK/frank-tenants.json" --max-seconds 120 2>>"$WORK/launch.err" & LPID=$!
+for _ in $(seq 1 300); do [ -s "$FLEET_CREDSEP_RUN_BASE/.shared/port" ] && [ -S "$FLEET_CREDSEP_RUN_BASE/.shared/ctl.sock" ] && break; sleep 0.1; done
+PORT=$(cat "$FLEET_CREDSEP_RUN_BASE/.shared/port" 2>/dev/null)
 [ -n "$PORT" ] || fail "M the proxy did not start: $(cat "$WORK/launch.err" | tr "\n" " ")"
 tok=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-cred-proxy.sh" mint --account beta --sid s1 2>&1)
 case "$tok" in fcp1.*) ;; *) fail "M mint: $tok" ;; esac
 code=$(curl -s --max-time 60 -o "$WORK/l.body" -w '%{http_code}' -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages")
 eq "M a session's request is answered through the proxy" 200 "$code"
-contains "M ... carrying the store's token, which the login never held" "$(cat "$WORK/fake.log" 2>/dev/null)" "POST /v1/messages auth=Bearer tok-beta"
+contains "M ... carrying the store's token, which the login never held" "$(cat "$WORK/fake.log" 2>/dev/null)" "POST /v1/messages auth=Bearer tok-"
 kill "$LPID" "$FPID" 2>/dev/null; wait "$LPID" "$FPID" 2>/dev/null; LPID='' FPID=''
 # a pool token put back at the login's path is a leak the doctor names (the
 # store made unreadable the way the role account's 0700 makes it — here the

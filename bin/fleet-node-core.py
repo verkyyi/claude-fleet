@@ -340,7 +340,7 @@ def resolve_job(paths, login, job, ident):
         raise Refused(None, "no service %s/%s in the register" % (login, name))
     for u in sup.account_units(sp, sup.load_table(sp)):
         u = sup.account_unit_for(u, ident[2])
-        if u["name"] == job:
+        if u is not None and u["name"] == job:
             return sup.account_entry(u, login, ident, sup.brew_prefix())
     raise Refused(None, "job %r is not in the account task table" % job)
 
