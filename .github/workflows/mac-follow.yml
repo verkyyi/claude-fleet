@@ -1,48 +1,30 @@
 name: mac follow
 
-# The macOS half, AFTER the release (issue #3869, EPIC #3863 C6).
+# The macOS half on one stable commit, by hand (issue #3869, EPIC #3863 C6).
 #
-# Until #3869 the release train ran the macOS shards on TRAIN_SHA and shipped
-# nothing until they were green — 12 of 24 red trains one day were red on macOS,
-# and a Mac-only red held every Linux machine for 11 hours. Now stable means
-# "Linux has verified it" and a Mac follows refs/tags/stable-macos (#3868):
+# There is ONE release line (issue #4671): every Mac follows refs/tags/stable, and
+# no check holds a release on a Mac (#4663) — each Mac verifies its own install
+# (the updater's machine doctor after the switch, rolled back to .prev on a new
+# FAIL), and the nightly full suite (selftests-macos.yml) is the BSD half. This
+# workflow is a dispatch only: the full macOS suite on a stable commit (default
+# refs/tags/stable; the dispatch's `sha` must be stable or behind it), on OUR Macs
+# first (bin/fleet-train-macos.sh pick) and GitHub's otherwise, its verdict left
+# on the commit as the status `mac follow: macOS`. It moves nothing.
 #
-#   * a release train that ends green starts this (workflow_run); a dispatch with
-#     `sha` re-runs it on that stable commit. concurrency `mac-follow`,
-#     cancel-in-progress false — one running, one waiting, a newer one replaces
-#     the waiting one, never the running one.
-#   * `board` reads refs/tags/stable (or the dispatch's sha, which must be stable
-#     or behind it) and refs/tags/stable-macos: the lane already there ⇒ `skip`,
-#     nothing runs. Else the shards test `--changed <lane>` on that commit (the
-#     whole suite while there is no lane), on OUR Macs first (bin/fleet-train-macos.sh
-#     pick, as the train did since #3145) and GitHub's otherwise, as wide as
-#     bin/fleet-train-plan.sh prices it.
-#   * `follow` leaves the verdict on the commit as the status `mac follow: macOS`
-#     (fleet-stable.sh gate 5 reads it), and on green moves the lane:
-#     `fleet-stable.sh move --ref stable-macos <sha> --train <this run>` (gates 1 · 2
-#     · M not ahead of stable · 5 this run's macOS jobs), then dispatches
-#     stable-publish.yml with ref=stable-macos — the hub's Mac lane, which only
-#     takes a release already on its stable chain.
-#   * our runner refusing the job (its job gate older than #3869, which a Mac only
-#     gets once this goes green — the lane carries it), or failing to run the gate
-#     at all (a runner older than #4152 handed it the runtime's path with its
-#     space, `/bin/bash: /Library/Application: No such file or directory`), is not
-#     a red: `follow` sees either line in the failed shard's log, dispatches this
-#     workflow again on the same sha with `runners: github` and cancels this run
-#     (no verdict).
-#   * red ⇒ the lane stays: every Mac keeps the previous version (and a Mac whose
-#     switch fails its own doctor rolls back, #2334). bin/fleet-macos-watch.sh (the
-#     diskguard tick) reads THIS workflow's `macOS / shard *` jobs and files one
-#     breakage issue per fingerprint, and says once when the lane has been held
-#     back by a red for more than 2 hours (FLEET_MACOS_STALE_SECS).
+#   * our runner refusing the job (its job gate older than #3869), or failing to
+#     run the gate at all (a runner older than #4152 handed it the runtime's path
+#     with its space, `/bin/bash: /Library/Application: No such file or
+#     directory`), is not a red: `follow` sees either line in the failed shard's
+#     log, dispatches this workflow again on the same sha with `runners: github`
+#     and cancels this run (no verdict).
+#   * bin/fleet-macos-watch.sh (the diskguard tick) reads THIS workflow's
+#     `macOS / shard *` jobs and files one breakage issue per fingerprint.
 #
-# Never a gate of Linux: nothing here touches refs/tags/stable or the hub's stable.
+# Never a gate: nothing here touches refs/tags/stable or the hub's stable.
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('mac follow @ {0}', inputs.sha || 'stable') || 'mac follow' }}
 
-# Since #4663 a dispatch only: the Mac lane moves WITH stable in the release train
-# (fleet-stable.sh move --ref stable-macos --with-stable), each Mac verifies its own
-# install, and the nightly full suite (selftests-macos.yml) is the BSD half. This run
-# 30 days before had 1 success in 40 and held every Mac for hours.
+# A dispatch only since #4663 (this run had 1 success in 40 and held every Mac for
+# hours while it gated the Mac lane, which #4671 removed).
 on:
   workflow_dispatch:
     inputs:
@@ -84,26 +66,20 @@ jobs:
         with:
           ref: master
           fetch-depth: 0
-      - name: stable and the Mac lane
+      - name: the stable commit
         id: lane
         env:
           WANT: ${{ inputs.sha || '' }}
         run: |
           stable=$(git ls-remote origin refs/tags/stable | awk 'NF { print $1; exit }')
-          lane=$(git ls-remote origin refs/tags/stable-macos | awk 'NF { print $1; exit }')
-          [ -n "$stable" ] || { echo "::error::no refs/tags/stable — nothing to follow"; exit 1; }
+          [ -n "$stable" ] || { echo "::error::no refs/tags/stable — nothing to test"; exit 1; }
           sha=${WANT:-$stable}
           git fetch -q origin "$sha" 2>/dev/null || true
           sha=$(git rev-parse --verify "$sha^{commit}") || { echo "::error::unknown commit $WANT"; exit 1; }
-          git merge-base --is-ancestor "$sha" "$stable" || { echo "::error::${sha:0:7} is ahead of stable ${stable:0:7} — the Mac lane never leads stable"; exit 1; }
-          skip=false
-          if [ -n "$lane" ] && git merge-base --is-ancestor "$sha" "$lane" 2>/dev/null; then skip=true; fi
-          printf 'sha=%s\nlane=%s\nskip=%s\n' "$sha" "$lane" "$skip" >> "$GITHUB_OUTPUT"
-          if [ "$skip" = true ]; then
-            say="Mac 通道已在 \`${lane:0:7}\`（含 \`${sha:0:7}\`）——不用跟"
-          else
-            say="跟 \`${sha:0:7}\`：Mac 通道在 \`${lane:0:7}\`${lane:+，测 --changed ${lane:0:7}}${lane:-（还没有通道，测全量）}"
-          fi
+          git merge-base --is-ancestor "$sha" "$stable" || { echo "::error::${sha:0:7} is ahead of stable ${stable:0:7} — this tests a release"; exit 1; }
+          # one release line (#4671): no lane to test --changed against — the full suite
+          printf 'sha=%s\nlane=\nskip=false\n' "$sha" >> "$GITHUB_OUTPUT"
+          say="测 \`${sha:0:7}\`（全量）"
           echo "### 🍎 $say" >> "$GITHUB_STEP_SUMMARY"; echo "$say"
       - name: pick the macOS runners
         # issue #3145: our own Macs when the hub says one is there, else GitHub's.
@@ -204,12 +180,10 @@ jobs:
     if: always() && needs.board.outputs.skip == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # STABLE_PUSH_TOKEN may be the release-sign environment's secret (issue #3912)
-    environment: release-sign
     permissions:
-      contents: write   # refs/tags/stable-macos (STABLE_PUSH_TOKEN, else GITHUB_TOKEN)
+      contents: read
       statuses: write   # `mac follow: macOS` on the commit
-      actions: write    # --train reads this run's jobs; dispatches stable-publish.yml
+      actions: write    # reads this run's jobs; dispatches itself again on GitHub's Macs
       id-token: write   # the train's ledger (#3870): its Mac stage, this run's OIDC
     env:
       SHA: ${{ needs.board.outputs.sha }}
@@ -219,14 +193,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      # The lane's tag push rides this credential: a range that changes
-      # .github/workflows/* needs workflows permission, which GITHUB_TOKEN never
-      # has (issue #3912) — STABLE_PUSH_TOKEN when set, else GITHUB_TOKEN.
       - uses: actions/checkout@v4
         with:
           ref: master
           fetch-depth: 0
-          token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}
       - name: our runner refused it?
         # an older job gate on our Mac (it admits release-train.yml only), or an
         # older runner whose gate path split at the space (#4152): not the BSD
@@ -259,20 +229,7 @@ jobs:
               || echo "::warning::could not leave the 'mac follow: macOS' status on $SHA"
           fi
           echo "### 🍎 macOS \`${SHA:0:7}\`: ${MACOS}（${WHERE}：${WHY}）" >> "$GITHUB_STEP_SUMMARY"
-          [ "$MACOS" = success ] || { echo "::error::macOS is $MACOS on ${SHA:0:7} — every Mac stays on the previous version; fleet-macos-watch.sh files it"; exit 1; }
-      - name: move the Mac lane
-        run: |
-          set +e
-          sh bin/fleet-stable.sh move "$SHA" --ref stable-macos --train "$GITHUB_RUN_ID" \
-            --dir . --repo "$GITHUB_REPOSITORY" > out.txt 2>&1
-          rc=$?
-          cat out.txt
-          { echo "### stable-macos → \`${SHA:0:7}\`"; echo '```'; cat out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          [ "$rc" = 0 ] || exit "$rc"
-          # the hub's Mac lane: the publishing workflow's own OIDC (the hub takes no other)
-          gh workflow run stable-publish.yml --repo "$GITHUB_REPOSITORY" --ref master -f "sha=$SHA" -f ref=stable-macos \
-            || { echo "::error::stable-macos moved but stable-publish.yml (ref=stable-macos) was not dispatched — run it by hand"; exit 1; }
-          echo "publish: dispatched stable-publish.yml (ref=stable-macos) for ${SHA:0:7}"
+          [ "$MACOS" = success ] || { echo "::error::macOS is $MACOS on ${SHA:0:7} — fleet-macos-watch.sh files it"; exit 1; }
       # The Mac half onto the train run that started this (issue #3870): one
       # `mac follow` stage on the /trains board — how long after the train the
       # Macs got it, or that they did not. Bookkeeping: never reds the job.
@@ -283,7 +240,7 @@ jobs:
           JOB: ${{ job.status }}
           FLEET_HUB_URL: https://claudefleet.24haowan.com   # oss-ok: the hub the train publishes to, as the release job spells it (#3870)
         run: |
-          # the macOS half red, or green with the lane not moved ⇒ failure
+          # the macOS half red ⇒ failure
           case "$MACOS:$JOB" in
             (success:success) concl=success ;;
             (failure:*|success:*) concl=failure ;;

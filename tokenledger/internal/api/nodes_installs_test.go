@@ -34,7 +34,7 @@ func TestMachineInstallsFoldAndJudge(t *testing.T) {
 			Install: &control.InstallItem{Version: "-"},
 			Client:  &control.InstallItem{Version: instA[:7]}}}})
 
-	got := pk.judged(instB, "")
+	got := pk.judged(instB)
 	if got.Stable != instB || got.Runtime.Version != instB || !*got.Runtime.AtStable {
 		t.Fatalf("runtime = %+v stable %s", got.Runtime, got.Stable)
 	}
@@ -56,25 +56,25 @@ func TestMachineInstallsFoldAndJudge(t *testing.T) {
 	n := int64(600)
 	pk.stable = instB
 	pk.runtime = &control.InstallItem{Version: instA, BehindSecs: &n}
-	if g := pk.judged(instB, ""); g.Runtime.BehindSecs == nil || *g.Runtime.BehindSecs != 600 {
+	if g := pk.judged(instB); g.Runtime.BehindSecs == nil || *g.Runtime.BehindSecs != 600 {
 		t.Fatalf("behind kept: %+v", g.Runtime)
 	}
-	if g := pk.judged(instA, ""); g.Runtime.BehindSecs != nil || !*g.Runtime.AtStable {
+	if g := pk.judged(instA); g.Runtime.BehindSecs != nil || !*g.Runtime.AtStable {
 		t.Fatalf("at the hub's stable, no 落后: %+v", g.Runtime)
 	}
 	pk.stable = instA[:7]
-	if g := pk.judged(instB, ""); g.Runtime.BehindSecs != nil || *g.Runtime.AtStable {
+	if g := pk.judged(instB); g.Runtime.BehindSecs != nil || *g.Runtime.AtStable {
 		t.Fatalf("another stable's 落后 kept: %+v", g.Runtime)
 	}
 	pk.stable, pk.runtime = "", &control.InstallItem{Version: instB}
 
-	// the Mac lane: judged against its commit
-	pk.lane = "stable-macos"
-	if g := pk.judged(instB, instA); g.Stable != instA || *g.Runtime.AtStable {
-		t.Fatalf("mac lane: stable %s runtime %+v", g.Stable, g.Runtime)
+	// an older script's Mac lane is not read: judged against stable (claude-fleet#4671)
+	pk.add(&control.Installs{Lane: "stable-macos"})
+	if g := pk.judged(instB); g.Stable != instB || !*g.Runtime.AtStable || g.Lane != "" {
+		t.Fatalf("one release line: stable %s lane %q runtime %+v", g.Stable, g.Lane, g.Runtime)
 	}
 	// no hub stable: the script's word stands
-	if g := pk.judged("", ""); !*g.Logins[1].Shell.AtStable || g.Runtime.AtStable != nil {
+	if g := pk.judged(""); !*g.Logins[1].Shell.AtStable || g.Runtime.AtStable != nil {
 		t.Fatalf("no stable: %+v %+v", g.Logins[1].Shell, g.Runtime)
 	}
 }

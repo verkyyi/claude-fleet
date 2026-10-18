@@ -27,9 +27,9 @@
 #                    client still follows the hub to the new stable; `fleet
 #                    update stable` is the hub's word, and «unknown» when the
 #                    hub does not say — GitHub never asked (issue #2773)
-#   C3. Mac lane     (issue #3868) /version names client_version_macos: a
-#                    FLEET_PLATFORM=darwin install takes it, linux takes stable;
-#                    no such field → stable for both
+#   C3. one line     (issue #4671) an older hub's /version still names
+#                    client_version_macos: a FLEET_PLATFORM=darwin install and
+#                    `fleet update stable` take stable all the same
 #   D. proxy down    the hub's client_url fails → the install fails; nothing
 #                    comes from GitHub behind the hub (issue #2773)
 #   E. 承载 follows  a checkout + `fleet update tick --root`: stable moved → the
@@ -180,24 +180,19 @@ mv "$GH/api.off" "$GH/api"
 [ "$rc" = 1 ] && [ -z "$s" ] && ok "C2 a hub that does not say: stable unknown, GitHub never asked" || bad "C2 hub silent: rc=$rc [$s]"
 mv "$HUBD/version.off" "$HUBD/version"
 
-# --- C3. the Mac lane (issue #3868) ---------------------------------------------
-# the hub names stable S4 and the Mac lane S3: a Mac installs (and `fleet update
-# stable` says) S3, a linux computer S4; a hub with no _macos field → S4 for both
+# --- C3. one release line (issue #4671) ------------------------------------------
+# an older hub names stable S4 and a Mac lane S3: a Mac installs (and `fleet
+# update stable` says) S4 — the _macos field is not read
 printf '{"version":"prod-abc1234","commit":"abc1234","client_version":"%s","stable":"%s","client_url":"%s","client_version_macos":"%s","client_url_macos":"%s","client_compat":1,"min_client_compat":0}\n' \
   "$S4" "$S4" "$HUB/proxy/$S4" "$S3" "$HUB/proxy/$S3" > "$HUBD/version"
 sandbox c3m
 out=$(envrun FLEET_PLATFORM=darwin FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(cv version)" = "$S3" ] && [ "$(release_of "$ROOT")" = "$S3" ] \
-  && ok "C3 a Mac installs the hub's Mac lane ($S3), not stable" \
+[ "$rc" = 0 ] && [ "$(cv version)" = "$S4" ] && [ "$(release_of "$ROOT")" = "$S4" ] \
+  && ok "C3 a Mac installs stable ($S4), not an older hub's Mac lane" \
   || bad "C3 Mac install: rc=$rc cv=$(cv version) out=$(printf '%s' "$out" | tail -3)"
 s=$(envrun FLEET_PLATFORM=darwin FLEET_HUB_URL="$HUB" bash "$ROOT/bin/fleet-update.sh" stable 2>&1)
-[ "$s" = "$S3" ] && ok "C3 fleet update stable on a Mac: its lane ($s)" || bad "C3 Mac fleet update stable: [$s]"
-sandbox c3l
-out=$(envrun FLEET_PLATFORM=linux FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(cv version)" = "$S4" ] && ok "C3 linux installs stable ($S4)" || bad "C3 linux install: rc=$rc cv=$(cv version)"
-hub_version "$S4"; sandbox c3n
-out=$(envrun FLEET_PLATFORM=darwin FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(cv version)" = "$S4" ] && ok "C3 no Mac lane: a Mac installs stable ($S4)" || bad "C3 no lane: rc=$rc cv=$(cv version)"
+[ "$s" = "$S4" ] && ok "C3 fleet update stable on a Mac: stable ($s)" || bad "C3 Mac fleet update stable: [$s]"
+hub_version "$S4"
 
 # --- D. the hub's proxy down: never GitHub behind it (issue #2773) ------------------
 stable "$S4"; hub_version "$S4" "$HUB/no-such-proxy/$S4"

@@ -476,7 +476,6 @@ func (s *Server) handleReleaseStats(w http.ResponseWriter, r *http.Request) {
 		if sha, ok := s.Releases.PublishedStable(); ok {
 			out.Lanes.Stable = sha
 		}
-		out.Lanes.StableMacOS = s.Releases.MacStableSHA()
 	}
 	lanes := out.Lanes
 	out.runStats = computeRunStats(runs, repo)

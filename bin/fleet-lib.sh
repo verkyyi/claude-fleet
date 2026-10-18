@@ -144,8 +144,8 @@ _FLEET_LIB_DIR="$_flib_here"
 # shellcheck source=/dev/null
 [ ! -f "$_FLEET_LIB_DIR/fleet-idle-activity.sh" ] || . "$_FLEET_LIB_DIR/fleet-idle-activity.sh"
 unset _flib_here
-# The release lanes' one reader, fleet_stable_ref_for (issue #3868), lives in the
-# versions lib — POSIX, sourced by the client and the installer too.
+# The versions lib (fleet.versions/<sha> housekeeping) — POSIX, sourced by the
+# client and the installer too. One release line (issue #4671): no lane reader.
 # shellcheck source=fleet-versions-lib.sh
 [ -f "$_FLEET_LIB_DIR/fleet-versions-lib.sh" ] && . "$_FLEET_LIB_DIR/fleet-versions-lib.sh"
 

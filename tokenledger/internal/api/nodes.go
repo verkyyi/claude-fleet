@@ -1369,10 +1369,10 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		}
 	}
 	if len(installs) > 0 {
-		stable, mac := s.stableCommit(), s.Releases.MacStableSHA()
+		stable := s.stableCommit()
 		for h, pk := range installs {
 			if m := machines[h]; m != nil {
-				m.Installs = pk.judged(stable, mac)
+				m.Installs = pk.judged(stable)
 			}
 		}
 	}

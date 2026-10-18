@@ -18,10 +18,9 @@ name: release train
 #     empty and ends within the minute.
 #   * the tests are the shared matrix (selftests-shards.yml), `--changed <stable>`:
 #     Linux on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
-#   * the macOS half is NOT the train's (issue #3869, EPIC #3863 C6): stable means
-#     "Linux has verified it", and a Mac follows refs/tags/stable-macos (#3868).
-#     Since #4663 `release` moves that lane WITH stable (fleet-stable.sh move
-#     --ref stable-macos --with-stable): no release waits on macOS. Each Mac
+#   * the macOS half is NOT the train's (issue #3869, EPIC #3863 C6), and there is
+#     ONE release line (issue #4671): every Mac follows refs/tags/stable too —
+#     the Mac lane (#3868) is gone. No release waits on macOS. Each Mac
 #     verifies its own install (the updater's machine doctor after the switch,
 #     rolled back on a new FAIL); the nightly full macOS suite (selftests-macos.yml)
 #     files what it finds through fleet-macos-watch.sh. mac-follow.yml (#3869) is a
@@ -60,7 +59,7 @@ name: release train
 #                   (#3140) — `--commit` the stage: check, sign, one POST; no
 #                   stage or an expired one ⇒ the whole publish — then
 #                   `fleet-stable.sh move TRAIN_SHA --train <run>`:
-#                   its CI gate reads THIS run's jobs (gate 5 is the Mac lane's), its ccquota gate
+#                   its CI gate reads THIS run's jobs (macOS holds no release, #4671), its ccquota gate
 #                   holds the hub to TRAIN_SHA's source; no --force, ever.
 #       `node tools` / `node image` (issue #3855) the managed node image of that
 #                   release: the Dockerfile's tools stage pushed from a GitHub
@@ -587,7 +586,7 @@ jobs:
             echo "| 本趟片数 | ${nsh:-?} 片$([ -z "$SLOTS" ] || echo "（空机位 $SLOTS）") |"
             echo "| 预计 | 合计 ${PRED:-?}s，最重一片 ${HEAVY:-?}s |"
             echo "| 实际最慢一片 | $([ -n "$slow" ] && echo "${slow#* } · ${slow%% *}s" || echo '?') |"
-            echo "| macOS | Mac 通道随 stable 一起动；每台 Mac 装好后自检（#4663） |"
+            echo "| macOS | 一条版本线：Mac 跟同一个 stable，装好后自检（#4663、#4671） |"
             echo "| precheck | $GATE |"
             echo "| 隔离 | $QUAR · $REC |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -747,7 +746,7 @@ jobs:
       LOST: ${{ needs.linux-rescue-plan.outputs.covers == 'true' && needs.linux-rescue-plan.outputs.lost || '' }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      # Both tag pushes below (the stable move and the Mac lane's) ride the
+      # The stable tag push below rides the
       # checkout's credential. GitHub refuses a tag move whose range changes
       # .github/workflows/* from a token without workflows permission, which
       # GITHUB_TOKEN never has (issue #3912) — so the push uses STABLE_PUSH_TOKEN
@@ -873,22 +872,6 @@ jobs:
           fi
           [ "$rc" != 0 ] || echo "moved=true" >> "$GITHUB_OUTPUT"
           exit $rc
-
-      # The Mac lane moves WITH stable (issue #4663): no release waits on macOS any
-      # more — the hub's lane first (else it would keep serving a Mac the old one),
-      # then the tag, onto the stable this step just moved (--with-stable: gates 1,
-      # 2 and M, never 5). Each Mac verifies its own install (fleet-node-update.py's
-      # machine doctor after the switch, rolled back on a new FAIL); the nightly
-      # full macOS suite files what it finds. Linux is out either way, so a red here
-      # warns and leaves the Macs one release behind until the next train.
-      - name: move the Mac lane with stable
-        if: steps.move.outputs.moved == 'true'
-        continue-on-error: true
-        run: |
-          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . --ref stable-macos \
-            && sh bin/fleet-stable.sh move "$TRAIN_SHA" --ref stable-macos --with-stable --dir . --repo "$GITHUB_REPOSITORY" \
-            && echo "### Mac 通道随 stable → \`${TRAIN_SHA:0:7}\`" >> "$GITHUB_STEP_SUMMARY" \
-            || { echo "::warning::the Mac lane did not follow stable to ${TRAIN_SHA:0:7} — the Macs stay one release behind until the next train"; exit 1; }
 
   ledger:
     # Every run into the hub's ledger, shipped or not (issue #3870, EPIC #3863 C7 —

@@ -1,8 +1,7 @@
 #!/bin/sh
 # fleet-stable.sh show | move [<sha>] [--dry-run] [--precheck] [--allow-no-checks] [--force]
-#                 [--ref stable|stable-macos] [--seed]
 #                 [--dir <checkout>] [--remote <name>] [--branch <trunk>]
-#                 [--repo <owner/name>] [--timeout <s>] [--macos-timeout <s>]
+#                 [--repo <owner/name>] [--timeout <s>]
 #                 [--ignore-check <name>]... [--train <run id>]
 #   — the "stable" mark every install follows (issue #1118, EPIC #1117 C1).
 #
@@ -48,26 +47,12 @@
 #               not green). --force moves anyway and appends one line to
 #               logs/stable-move.log (FLEET_STABLE_LOG): the operator's call, on
 #               the record (EPIC #2074 决定 2);
-#            5. the BSD half is green ON THE TARGET (issue #2286): since the macOS
-#               job left the PR (it runs on master after the merge), this is the
-#               one place it gates anything. The newest run of the macOS workflow
-#               (FLEET_STABLE_MACOS_WORKFLOW, default selftests-macos.yml) that is
-#               about the target — a push / nightly run whose head is the target,
-#               or a dispatch whose name says `@ <target sha>` — must be completed
-#               + success; a cancelled run (a newer push superseded it) counts as
-#               none. Red REFUSES (reason `macos:`); a run still going is waited
-#               for; NO run (path-filtered, cancelled) dispatches the FULL suite on
-#               exactly the target (`gh workflow run … -f sha=<target>`) and waits
-#               for it, up to --macos-timeout (default 5400s: ten full
-#               shards in two waves of five — issues #2638, #2659) — a run
-#               that does not finish in time refuses. --dry-run never dispatches or waits:
-#               no green run = refused. --force moves past it and logs one line,
-#               like gate 4. A target whose tree has no such workflow has no BSD
-#               half to wait for and passes. A green follower on the target
-#               (issue #3869: mac-follow.yml runs the BSD half on each stable after
-#               the release and leaves the commit status `mac follow: macOS`; a
-#               release train left `release train: macOS` before #3869) counts as
-#               its BSD half when no macOS workflow run is about it.
+#            5. (retired) the BSD half no longer holds a release (issues #4663,
+#               #4671): one release line — every Mac follows stable and verifies
+#               its own install (fleet-node-update.py's machine doctor after the
+#               switch, rolled back to .prev on a new FAIL); the nightly full
+#               macOS suite files what it finds (fleet-macos-watch.sh). The
+#               `macOS …` jobs on a commit are still no verdict here.
 #            6. a tree that ships the machine updater (bin/fleet-node-update.py,
 #               issue #2334) carries a release.json its one validator accepts
 #               (`fleet-node-update.py check-release`): what every managed machine
@@ -112,36 +97,9 @@
 #               passes — filed all the same, re-walked hourly.
 #               FLEET_STABLE_CN_GATE=0 turns it off. Runs on --precheck too, so a
 #               red path stops a train before its tests.
-#          Gate 5 is not stable's once a Mac lane exists (issue #3868, EPIC #3863
-#          共同约定 4): with refs/tags/stable-macos on the remote, stable means
-#          "Linux has verified it", a Mac follows the lane, and the BSD half gates
-#          the lane's move instead (below) — said, never waited for. No such tag ⇒
-#          gate 5 holds stable exactly as before.
-#
-#   move --ref stable-macos [<sha>]   the Mac lane (issue #3868): every Mac — a
-#          machine, a client on one — follows it (fleet_stable_ref_for). Default
-#          target: the current stable. Refuses unless gates 1 and 2 hold for the
-#          lane's own old value (on trunk, forward only), and:
-#            M. NEVER AHEAD OF STABLE — the target is stable or an ancestor of it
-#               (stable must exist): a Mac never runs what Linux has not verified;
-#            5. the BSD half is green on the target, as above (--train <run> reads
-#               that run's macOS jobs).
-#          Gates 3, 4, 6, 7, 8 are stable's and were passed when the target was
-#          stable. Pushes refs/tags/stable-macos with the same lease; outside CI it
-#          dispatches stable-publish.yml with ref=stable-macos (the hub's lane).
-#          --precheck runs 1, 2 and M.
-#          --seed (issue #3869, the release train's first lane): only while there is
-#          NO refs/tags/stable-macos, and only onto stable itself — gate 5 is not
-#          asked, because that stable passed it when it moved (before the lane, the
-#          BSD half gated stable). A lane already there ⇒ said, exit 0, nothing
-#          pushed. The train seeds it at the stable it boarded, before its stable
-#          move stops asking macOS: a Mac stays there until mac-follow.yml moves it.
-#          --with-stable (issue #4663 — the release train, right after its stable
-#          move): the lane goes WITH stable, onto stable itself and nothing else,
-#          lane or no lane; gates 1, 2 and M hold as ever, gate 5 is not asked. The
-#          BSD half no longer holds a release: each Mac verifies its own install
-#          (fleet-node-update.py's machine doctor after the switch, rolled back on
-#          a new FAIL), and the nightly full suite files what it finds.
+#          There is ONE release line (issue #4671): refs/tags/stable-macos and
+#          its `--ref stable-macos` / `--seed` / `--with-stable` moves are gone —
+#          those words are said and exit 0 for one version (an older caller).
 #
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
@@ -150,16 +108,16 @@
 #          --precheck (issue #3141, the release train's gate step) runs only the
 #          gates a train cannot get from its own jobs — 1 on trunk, 2 forward only,
 #          4 oldcfg, 6 release.json, 7 artifacts — and never pushes, dispatches or
-#          waits: the train's own Linux / macOS jobs are its CI, and the hub it
+#          waits: the train's own Linux jobs are its CI, and the hub it
 #          deploys (C3) is its ccquota. 0 = every one passed (or nothing to move).
-#          --train <run id> (issue #3142, the release train's own move): gates 3
-#          and 5 read THAT workflow run's jobs (gh api …/actions/runs/<id>/jobs),
+#          --train <run id> (issue #3142, the release train's own move): gate 3
+#          reads THAT workflow run's jobs (gh api …/actions/runs/<id>/jobs),
 #          never the commit's check runs — the train boarded TRAIN_SHA, but its
 #          check runs belong to the commit that queued it, and a derived run's red
 #          (an old publish, another move) is not this train's. Every job but the
-#          ones --ignore-check names must be completed green, at least one; its
-#          `macOS …` jobs are gate 5's and need at least one, all green. Every
-#          other gate (1, 2, 4, 6, 7, 8) runs as on any move.
+#          ones --ignore-check names must be completed green, at least one (its
+#          `macOS …` jobs are no verdict). Every other gate (1, 2, 4, 6, 7, 8)
+#          runs as on any move.
 #          After the push, outside CI, dispatches stable-publish.yml for the
 #          target (issue #2772): the hub takes stable only from that publish.
 #
@@ -174,10 +132,10 @@
 # Exit codes:
 #   show  0 tag read (CURRENT/BEHIND/OFFTRUNK) · 1 NONE · 2 UNKNOWN / usage
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
-#         3 refused (not on trunk / backward / CI not green / oldcfg red / macos not
-#           green / release.json missing or invalid / a pinned artifact not on
-#           the hub / the hub's ccquota not the target's or behind it / a Mac lane
-#           ahead of stable) · 4 push failed
+#         3 refused (not on trunk / backward / CI not green / oldcfg red /
+#           release.json missing or invalid / a pinned artifact not on the hub /
+#           the hub's ccquota not the target's or behind it / the China path
+#           red) · 4 push failed
 #           (lease lost to a concurrent move, no push rights, or — said as
 #           such — no workflows permission for a range that changes
 #           .github/workflows, issue #3912)
@@ -185,7 +143,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run="" seed=0 with_stable=0
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 ignore_check="" train_run="" lane_word=""
 cmd="" target=""
 TAG=stable
 US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
@@ -207,12 +165,11 @@ while [ "$#" -gt 0 ]; do
     --branch)          shift; branch="${1:-}" ;;
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
-    --macos-timeout)   shift; macos_timeout="${1:-5400}" ;;
+    --macos-timeout)   shift ;;   # compat-1v: 下一批删 — gate 5 is retired (#4671)
     --ignore-check)    shift; ignore_check="$ignore_check${1:-}$US" ;;   # repeats
-    --ref)             shift
-                       case "${1:-}" in stable|stable-macos) TAG="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
-    --seed)            seed=1 ;;
-    --with-stable)     with_stable=1 ;;
+    --ref)             shift   # one release line (#4671): stable is the only tag
+                       case "${1:-}" in stable) ;; stable-macos) lane_word="--ref stable-macos" ;; *) die "--ref takes stable" ;; esac ;;
+    --seed|--with-stable) lane_word=$1 ;;   # compat-1v: 下一批删 (the Mac lane's, #3868/#4663)
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -223,10 +180,12 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
-[ "$seed" -eq 0 ] || [ "$TAG" = stable-macos ] || die "--seed seeds the Mac lane: --ref stable-macos"
-[ "$with_stable" -eq 0 ] || [ "$TAG" = stable-macos ] || die "--with-stable moves the Mac lane: --ref stable-macos"
+if [ -n "$lane_word" ]; then
+  # an older caller moving the Mac lane: there is none any more (issue #4671)
+  printf 'fleet-stable: %s — there is no Mac lane (one release line, issue #4671): every Mac follows stable; nothing to move\n' "$lane_word"
+  exit 0
+fi
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
-case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=5400 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
 
 # git's own stall abort bounds every network call — macOS has no timeout(1).
@@ -494,77 +453,11 @@ oldcfg_gate() {   # oldcfg_gate <old> <new>
   refuse "oldcfg: an old session of stable $(short "$1") would break on $(short "$2") — fix the findings above (CONTRIBUTING «老会话兼容», #2068), or --force to move anyway (logged)"
 }
 
-# 5. The BSD half, on the target (issue #2286).
-MACOS_WF="${FLEET_STABLE_MACOS_WORKFLOW:-selftests-macos.yml}"
-# The newest run of the macOS workflow ABOUT <sha>, as
-# "status<TAB>conclusion<TAB>event<TAB>id": a non-PR run whose head is <sha>, or a
-# dispatch named `… @ <sha>` (a dispatch attaches to the branch head, so its name
-# is the only place the commit is). Cancelled runs are skipped — superseded by a
-# newer push, they say nothing. Prints nothing when there is none; rc 2 = unread.
-macos_row() {   # macos_row <slug> <sha>
-  _rows=$(gh api "repos/$1/actions/workflows/$MACOS_WF/runs?per_page=100" \
-    --jq '.workflow_runs[] | [.head_sha, .status, (.conclusion // ""), .event, (.id|tostring), (.display_title // "")] | @tsv') || return 2
-  printf '%s\n' "$_rows" | awk -F'\t' -v sha="$2" '
-    NF < 5 || $4 ~ /^pull_request/ || $3 == "cancelled" { next }
-    $1 == sha || $6 ~ ("@ " sha "$") { print $2 "\t" $3 "\t" $4 "\t" $5; exit }'
-}
-# A follower's verdict on <sha>: the commit status mac-follow.yml leaves on the
-# stable it tested, "mac follow: macOS" (issue #3869), or the one a release train
-# left before the macOS half moved out of it, "release train: macOS" (issue #3141)
-# — the newest of either wins (GitHub lists statuses newest first). Prints a
-# macos_row-shaped "completed<TAB>success|failure<TAB>train<TAB>-" or nothing.
-TRAIN_MACOS_CONTEXT="mac follow: macOS"
-train_row() {   # train_row <slug> <sha>
-  _st=$(gh api "repos/$1/commits/$2/statuses?per_page=100" \
-    --jq ".[] | select(.context == \"$TRAIN_MACOS_CONTEXT\" or .context == \"release train: macOS\") | .state" 2>/dev/null | head -n 1)
-  case "$_st" in
-    success)       printf 'completed\tsuccess\ttrain\t-\n' ;;
-    failure|error) printf 'completed\tfailure\ttrain\t-\n' ;;
-  esac
-}
-macos_pace() { _p="${FLEET_STABLE_MACOS_POLL:-30}"; case "$_p" in ''|*[!0-9]*|0) _p=30 ;; esac; printf '%s' "$_p"; }
-macos_gate() {   # macos_gate <old> <new> <slug>
-  if ! git -C "$dir" cat-file -e "$2:.github/workflows/$MACOS_WF" 2>/dev/null; then
-    printf 'macos: %s carries no .github/workflows/%s — no BSD half to wait for\n' "$(short "$2")" "$MACOS_WF"; return 0
-  fi
-  _row=$(macos_row "$3" "$2") || die "could not read the $MACOS_WF runs on $3 (gh auth?)"
-  [ -n "$_row" ] || _row=$(train_row "$3" "$2")
-  if [ -z "$_row" ]; then
-    if [ "$force" -eq 1 ]; then force_log "$1" "$2" macos "no macOS run on the target" "the BSD half (no run)"; return 0; fi
-    [ "$dry" -eq 0 ] || refuse "macos: no green macOS run on $(short "$2") yet — a real move dispatches the full suite on it and waits; --dry-run does neither"
-    gh workflow run "$MACOS_WF" --repo "$3" --ref "$branch" -f "sha=$2" >/dev/null 2>&1 ||
-      refuse "macos: no macOS run on $(short "$2") and the dispatch failed (gh workflow run $MACOS_WF -f sha=$2) — no evidence the BSD half is green"
-    printf 'macos: no run on %s — dispatched the full suite on it; waiting up to %ss\n' "$(short "$2")" "$macos_timeout" >&2
-  fi
-  _waited=0 _said=''
-  while :; do
-    case "$_row" in completed"	"*) break ;; esac
-    [ -z "$_row" ] || [ -n "$_said" ] || { printf 'macos: run %s on %s is %s — waiting\n' "$(printf '%s' "$_row" | cut -f4)" "$(short "$2")" "${_row%%	*}" >&2; _said=1; }
-    if [ "$dry" -eq 1 ] && [ -n "$_row" ]; then
-      refuse "macos: the macOS run on $(short "$2") is still ${_row%%	*} — --dry-run does not wait"
-    fi
-    if [ "$_waited" -ge "$macos_timeout" ]; then
-      [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "not finished in ${macos_timeout}s" "the BSD half (unfinished)"; return 0; }
-      refuse "macos: the macOS run on $(short "$2") did not finish in ${macos_timeout}s — run move again later (it waits for the same run)"
-    fi
-    sleep "$(macos_pace)"; _waited=$((_waited + $(macos_pace)))
-    _row=$(macos_row "$3" "$2") || _row=''
-  done
-  _concl=$(printf '%s' "$_row" | cut -f2) _ev=$(printf '%s' "$_row" | cut -f3) _id=$(printf '%s' "$_row" | cut -f4)
-  if [ "$_concl" = success ]; then
-    if [ "$_ev" = train ]; then printf 'macos: green on %s (mac-follow / a release train tested it)\n' "$(short "$2")"; return 0; fi
-    printf 'macos: green on %s (run %s, %s)\n' "$(short "$2")" "$_id" "$_ev"; return 0
-  fi
-  [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "run $_id $_concl" "the BSD half ($_concl)"; return 0; }
-  [ "$_ev" != train ] || refuse "macos: the macOS half on $(short "$2") is $_concl (status \"$TRAIN_MACOS_CONTEXT\") — fix it (its breakage issue), or --force to move anyway (logged)"
-  refuse "macos: the newest macOS run on $(short "$2") is $_concl (run $_id, $_ev: https://github.com/$3/actions/runs/$_id) — fix it (its breakage issue), or --force to move anyway (logged)"
-}
-
 # 9. The China real-user path (issue #4180): the newest `cn path` status on the
 # CURRENT stable — the release every client, login and pod runs now.
 CN_CONTEXT="cn path"
 cn_gate() {   # cn_gate <old> <new>
-  [ "${FLEET_STABLE_CN_GATE:-1}" != 0 ] && [ "$TAG" = stable ] && [ -n "$1" ] || return 0
+  [ "${FLEET_STABLE_CN_GATE:-1}" != 0 ] && [ -n "$1" ] || return 0
   _s=${slug:-$(repo_slug)}; [ -n "$_s" ] || return 0
   _row=$(gh api "repos/$_s/commits/$1/statuses?per_page=100" \
     --jq "[.[] | select(.context == \"$CN_CONTEXT\")][0] | [.state, (.target_url // \"-\"), (.description // \"\")] | @tsv" 2>/dev/null | head -n 1)
@@ -598,21 +491,10 @@ cn_gate() {   # cn_gate <old> <new>
 }
 
 # --train <run id> (issue #3142): the train's own jobs, "status conclusion name"
-# one per line — gates 3 and 5 for a move the release train makes.
+# one per line — gate 3 for a move the release train makes.
 train_jobs() {   # train_jobs <slug> <run id>
   gh api --paginate "repos/$1/actions/runs/$2/jobs?per_page=100" \
     --jq '.jobs[] | "\(.status) \(.conclusion) \(.name)"'
-}
-train_macos_gate() {   # train_macos_gate <old> <new> <jobs: the run's macOS lines>
-  _n=$(printf '%s\n' "$3" | awk 'NF' | wc -l | tr -d ' ')
-  _bad=$(printf '%s\n' "$3" | awk 'NF && !($1 == "completed" && $2 == "success")')
-  if [ "$_n" -gt 0 ] && [ -z "$_bad" ]; then
-    printf 'macos: green on %s (%s macOS job(s) of train run %s)\n' "$(short "$2")" "$_n" "$train_run"; return 0
-  fi
-  if [ "$_n" -eq 0 ]; then _why="train run $train_run ran no macOS job"
-  else printf '%s\n' "$_bad" | sed 's/^/  not green: /' >&2; _why="train run $train_run's macOS half is not green"; fi
-  [ "$force" -eq 0 ] || { force_log "$1" "$2" macos "$_why" "the BSD half (train)"; return 0; }
-  refuse "macos: $_why on $(short "$2") — this train ships nothing; the next one starts on the next merge"
 }
 
 # After a move, hand the hub the new stable (issue #2772, EPIC #2770 C2): the hub
@@ -627,35 +509,19 @@ PUBLISH_WF=${FLEET_STABLE_PUBLISH_WORKFLOW:-stable-publish.yml}
 publish_dispatch() {   # publish_dispatch <new> <slug>
   [ "${GITHUB_ACTIONS:-}" = true ] && return 0
   git -C "$dir" cat-file -e "$1:.github/workflows/$PUBLISH_WF" 2>/dev/null || return 0
-  if [ "$TAG" = stable ]; then set -- "$1" "$2"; else set -- "$1" "$2" -f "ref=$TAG"; fi
-  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" ${3:+"$3"} ${4:+"$4"} >/dev/null 2>&1; then
-    printf 'publish: dispatched %s for %s (%s) — the hub takes it from there\n' "$PUBLISH_WF" "$(short "$1")" "$TAG"
+  if gh workflow run "$PUBLISH_WF" --repo "$2" --ref "$branch" -f "sha=$1" >/dev/null 2>&1; then
+    printf 'publish: dispatched %s for %s — the hub takes it from there\n' "$PUBLISH_WF" "$(short "$1")"
   else
-    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s%s) — %s moved, the hub has not; run it by hand\n' \
-      "$PUBLISH_WF" "$2" "$1" "${4:+ -f $4}" "$TAG" >&2
+    printf 'fleet-stable: publish NOT dispatched (gh workflow run %s --repo %s -f sha=%s) — stable moved, the hub has not; run it by hand\n' \
+      "$PUBLISH_WF" "$2" "$1" >&2
   fi
-}
-
-# M. The Mac lane never leads stable (issue #3868): <new> is stable or behind it.
-lane_gate() {   # lane_gate <new>
-  _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
-  [ -n "$_st" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane only ever names a commit stable has reached"
-  have_commit "$_st" || die "could not fetch the stable commit $(short "$_st")"
-  git -C "$dir" merge-base --is-ancestor "$1" "$_st" ||
-    refuse "M: $(short "$1") is ahead of stable $(short "$_st") — the Mac lane never leads stable (a Mac never runs what Linux has not verified)"
-  printf 'lane: %s is %s stable %s\n' "$(short "$1")" "$([ "$1" = "$_st" ] && echo at || echo behind)" "$(short "$_st")"
 }
 
 do_move() {
   old=$(remote_stable) || die "could not read refs/tags/$TAG from $remote — not moving blind"
   fetch_trunk || die "could not fetch $remote/$branch"
   tip=$(git -C "$dir" rev-parse --verify "refs/remotes/$remote/$branch^{commit}") || die "no $remote/$branch"
-  if [ -z "$target" ] && [ "$TAG" = stable-macos ]; then
-    # the Mac lane's default target is stable itself (issue #3868)
-    new=$(remote_stable stable) || die "could not read refs/tags/stable from $remote — not moving the Mac lane blind"
-    [ -n "$new" ] || refuse "M: no refs/tags/stable on $remote — the Mac lane follows stable, and there is none"
-    have_commit "$new" || die "could not fetch the stable commit $(short "$new")"
-  elif [ -z "$target" ]; then new="$tip"
+  if [ -z "$target" ]; then new="$tip"
   else
     have_commit "$target" || :
     new=$(git -C "$dir" rev-parse -q --verify "$target^{commit}") || die "unknown commit $target"
@@ -663,19 +529,6 @@ do_move() {
 
   git -C "$dir" merge-base --is-ancestor "$new" "$tip" ||
     refuse "$(short "$new") is not on $remote/$branch — stable only ever names a trunk commit"
-  if [ "$seed" -eq 1 ]; then
-    # the Mac lane's first value (issue #3869): stable itself, which passed gate 5
-    # when it moved — never asked again, never anything else
-    if [ -n "$old" ]; then
-      printf 'seed: the Mac lane is already at %s — nothing to seed\n' "$(short "$old")"; exit 0
-    fi
-    _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
-    [ -n "$_st" ] && [ "$_st" = "$new" ] ||
-      refuse "M: --seed only starts the Mac lane at stable ($(short "${_st:-none}")), not $(short "$new")"
-    printf 'seed: no Mac lane yet — it starts at stable %s (that stable passed the BSD half when it moved)\n' "$(short "$new")"
-    slug=$(repo_slug)
-    push_tag
-  fi
   if [ -n "$old" ]; then
     have_commit "$old" || die "could not fetch the current stable commit $(short "$old")"
     if [ "$old" = "$new" ]; then
@@ -685,27 +538,6 @@ do_move() {
       refuse "$(short "$new") does not descend from the current stable $(short "$old") — stable only moves FORWARD"
   fi
 
-  if [ "$TAG" = stable-macos ]; then
-    lane_gate "$new"
-    if [ "$precheck" -eq 1 ]; then
-      if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
-      printf 'precheck: %s %s -> %s passes on trunk / forward / not ahead of stable — no tag pushed\n' "$TAG" "$from" "$(short "$new")"
-      exit 0
-    fi
-    slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
-    if [ "$with_stable" -eq 1 ]; then
-      _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
-      [ "$_st" = "$new" ] ||
-        refuse "M: --with-stable moves the Mac lane onto stable ($(short "${_st:-none}")) only, not $(short "$new")"
-      printf 'macos: the lane moves with stable to %s — the BSD half holds no release (each Mac verifies its own install; the nightly files a red)\n' "$(short "$new")"
-    elif [ -n "$train_run" ]; then
-      runs=$(train_jobs "$slug" "$train_run") || die "could not read the jobs of train run $train_run on $slug (gh auth?)"
-      train_macos_gate "$old" "$new" "$(printf '%s\n' "$runs" | awk 'NF && $3 == "macOS"')"
-    else
-      macos_gate "$old" "$new" "$slug"
-    fi
-    push_tag
-  fi
   if [ "$precheck" -eq 1 ]; then
     release_gate "$old" "$new"
     artifacts_gate "$old" "$new"
@@ -721,13 +553,9 @@ do_move() {
   else
     runs=$(check_runs "$slug" "$new") || die "could not read check runs for $(short "$new") on $slug (gh auth?)"
   fi
-  train_macos=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
-    BEGIN { k = split(ign, a, "\037"); for (i = 1; i <= k; i++) if (a[i] != "") skip[a[i]] = 1 }
-    NF && $3 == "macOS" { n = $0; sub(/^[^ ]+ [^ ]+ /, "", n); if (!(n in skip)) print }')
   # The macOS shards (`macOS shard K`, and the shared matrix's `macOS / shard K` —
-  # issue #3141) are gate 5's (issue #2286): a push run a later push cancelled
-  # is no verdict, and a running one is waited for there, not refused here.
-  # So is every run --ignore-check names (the CI job running this move).
+  # issue #3141) are no verdict: the BSD half holds no release (issues #4663,
+  # #4671). Neither is every run --ignore-check names (the CI job running this move).
   runs=$(printf '%s\n' "$runs" | awk -v ign="$ignore_check" '
     BEGIN { k = split(ign, a, "\037"); for (i = 1; i <= k; i++) if (a[i] != "") skip[a[i]] = 1 }
     NF && !($3 == "macOS" && ($4 == "shard" || ($4 == "/" && $5 == "shard"))) {
@@ -752,11 +580,6 @@ do_move() {
   ccquota_gate "$old" "$new"
   cn_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
-  if lane=$(remote_stable stable-macos) && [ -n "$lane" ]; then
-    # a Mac lane exists (issue #3868): the BSD half gates IT, not stable
-    printf 'macos: a Mac lane exists (refs/tags/stable-macos at %s) — the BSD half gates that lane'"'"'s move, not stable (Linux-verified)\n' "$(short "$lane")"
-  elif [ -n "$train_run" ]; then train_macos_gate "$old" "$new" "$train_macos"
-  else macos_gate "$old" "$new" "$slug"; fi
   push_tag
 }
 
@@ -766,8 +589,7 @@ push_tag() {
   lease="refs/tags/$TAG:$old"
   if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
   printf '%s: %s -> %s  (%s)\n' "$TAG" "$from" "$(short "$new")" "$(subject "$new")"
-  if [ "$TAG" != stable ]; then :
-  elif [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
+  if [ -n "$train_run" ]; then printf 'checks: %s job(s) of train run %s green\n' "$total" "$train_run"
   else printf 'checks: %s green on %s\n' "$total" "$slug"; fi
   if [ "$old" ]; then printf 'forward: +%s commit(s)\n' "$(git -C "$dir" rev-list --count "$old..$new")"; fi
   if [ "$dry" -eq 1 ]; then

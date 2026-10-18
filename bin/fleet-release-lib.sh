@@ -35,39 +35,27 @@ fleet_rel_hub_url() {
   case "$u" in http://*|https://*) printf '%s' "${u%/}" ;; esac
 }
 
-# fleet_rel_http <url> <out> <timeout> [<headers out>] — the HTTP code curl got
-# (000 = no answer); the body in <out>, curl's last error line in REL_ERR
+# fleet_rel_http <url> <out> <timeout> — the HTTP code curl got (000 = no
+# answer); the body in <out>, curl's last error line in REL_ERR
 fleet_rel_http() {
   local code
   REL_ERR=''
-  if [ -n "${4:-}" ]; then
-    code=$(curl -sS --max-time "$3" -D "$4" -o "$2" -w '%{http_code}' "$1" 2>"$2.err") || :
-  else
-    code=$(curl -sS --max-time "$3" -o "$2" -w '%{http_code}' "$1" 2>"$2.err") || :
-  fi
+  code=$(curl -sS --max-time "$3" -o "$2" -w '%{http_code}' "$1" 2>"$2.err") || :
   REL_ERR=$(tail -n 1 "$2.err" 2>/dev/null)
   rm -f "$2.err"
   case "$code" in ''|*[!0-9]*) code=000 ;; esac
   printf '%s' "$code"
 }
 
-# fleet_rel_stable <hub> <timeout> [<platform>] — what the hub calls stable:
-# REL_SHA REL_SEQ (a HINT: unsigned here; the fetch below verifies the real one).
-# With a platform (issue #3868: only one whose fleet_stable_refs names a lane —
-# a Mac) it asks ?platform=<it> and REL_REF is the lane the hub served
-# (X-Ccquota-Release-Ref: stable-macos, else stable — an older hub ignores the
-# question and serves stable). No platform ⇒ the request as before.
+# fleet_rel_stable <hub> <timeout> — what the hub calls stable: REL_SHA REL_SEQ
+# (a HINT: unsigned here; the fetch below verifies the real one). Every platform
+# asks the same (one release line, issue #4671).
 # rc 0 · 3 the hub keeps no releases (404) · 1 no answer (REL_ERR says why)
 fleet_rel_stable() {
-  local f code out q='' hd=''
-  REL_SHA='' REL_SEQ='' REL_REF=stable
+  local f code out
+  REL_SHA='' REL_SEQ=''
   f=$(mktemp "${TMPDIR:-/tmp}/fleet-rel-stable.XXXXXX") || return 1
-  [ -z "${3:-}" ] || { q="?platform=$3"; hd="$f.hdr"; }
-  code=$(fleet_rel_http "$1/v1/fleet/release/stable$q" "$f" "$2" "$hd")
-  if [ -n "$hd" ]; then
-    grep -qi '^x-ccquota-release-ref: *stable-macos' "$hd" 2>/dev/null && REL_REF=stable-macos
-    rm -f "$hd"
-  fi
+  code=$(fleet_rel_http "$1/v1/fleet/release/stable" "$f" "$2")
   case "$code" in
     200) ;;
     404) rm -f "$f"; return 3 ;;
@@ -87,8 +75,6 @@ print(s, q)' "$f" 2>/dev/null)
   [ -n "$out" ] || { REL_ERR='the hub answered /v1/fleet/release/stable with no release'; return 1; }
   # shellcheck disable=SC2034  # read by the caller (fleet-install-sync.sh, fleet-host-install.sh)
   REL_SHA=${out%% *} REL_SEQ=${out#* }
-  # shellcheck disable=SC2034
-  REL_REF=$REL_REF
   return 0
 }
 

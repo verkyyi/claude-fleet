@@ -93,11 +93,9 @@
 #                    upgrades the others too (own first); FLEET_NODE_FOLLOW=0 →
 #                    off; no agent → none; dry-run prints, calls only --dry-run;
 #                    no fleet-node-upgrade.sh → no node record (the degenerate)
-#   X. Mac lane      (issue #3868) stable=C7, stable-macos=C6: FLEET_PLATFORM=
-#                    darwin stops at C6 (`channel: stable-macos`), linux goes to
-#                    C7; no stable-macos → both to C7, no channel line; a lane
-#                    behind HEAD is refused — over git and over the hub
-#                    (?platform=darwin, asked only by a Mac)
+#   X. one line      (issue #4671) stable=C7 and an old refs/tags/stable-macos
+#                    =C6: FLEET_PLATFORM=darwin goes to C7 like linux, no channel
+#                    line; over the hub a Mac asks no ?platform= and takes stable
 #   K. registry      plist StartInterval / systemd timer / daemon table agree
 #
 # The switch itself is bin/fleet-versions-lib.sh (fleet_versions_point /
@@ -983,12 +981,10 @@ rm -f "$UW/nostore"
 n=$(wc -l < "$UW/hub.log" | tr -d " "); run2 FLEET_DIST_SOURCE=github
 eq "U: FLEET_DIST_SOURCE=github never asks the hub" "$n" "$(wc -l < "$UW/hub.log" | tr -d ' ')"
 eq "U: …follows the tag, current on it" current "$(st2 result)"
-# --- X. the Mac lane (issue #3868, EPIC #3863 C5) ------------------------------------------------
-# stable = C7, stable-macos = C6: a darwin install stops at C6 (state channel:
-# stable-macos), a linux one goes to C7; with no stable-macos both go to C7 and
-# the state carries no channel line — the git road and the hub road alike.
-lane() { git --git-dir="$BARE" update-ref refs/tags/stable-macos "$1"; }
-unlane() { git --git-dir="$BARE" update-ref -d refs/tags/stable-macos; }
+# --- X. one release line (issue #4671) ----------------------------------------------------------
+# stable = C7 and an old refs/tags/stable-macos = C6 still on the remote: a
+# darwin install follows stable to C7 like a linux one, its state carries no
+# channel line — the git road and the hub road alike (no ?platform= asked).
 xinst() { # <name> — a fresh install at C5 with its own conf dir
   rm -rf "${WORK:?}/${1:?}" "$WORK/$1.versions" "$WORK/conf-$1"; mkdir -p "$WORK/conf-$1/fleets/f1"
   printf 'FLEET_REPO=o/r\n' > "$WORK/conf-$1/fleets/f1/conf"
@@ -1002,38 +998,19 @@ xrun() { # <name> <platform> [env…] — one tick of that install as <platform>
 }
 xst() { sed -n "s/^$2: //p" "$WORK/conf-$1/global/install-sync.state" | head -1; }
 xup() { git -C "$WORK/$1" rev-parse HEAD; }
-stable "$C7"; lane "$C6"
+stable "$C7"; git --git-dir="$BARE" update-ref refs/tags/stable-macos "$C6"
 xinst xmac; xrun xmac darwin FLEET_DIST_SOURCE=github
 eq "X: a Mac switched" switched "$(xst xmac result)"
-eq "X: …to the Mac lane, not stable" "$C6" "$(xup xmac)"
-eq "X: …its state names the channel" stable-macos "$(xst xmac channel)"
-xinst xlin; xrun xlin linux FLEET_DIST_SOURCE=github
-eq "X: linux follows stable past the lane" "$C7" "$(xup xlin)"
-eq "X: …no channel line for stable" "" "$(xst xlin channel)"
-grep -q '^channel:' "$WORK/conf-xlin/global/install-sync.state" && fail "X: a linux state wrote a channel line"; CHECKS=$((CHECKS + 1))
-xrun xmac darwin FLEET_DIST_SOURCE=github
-eq "X: the Mac stays on its lane" current "$(xst xmac result)"
-unlane; xrun xmac darwin FLEET_DIST_SOURCE=github
-eq "X: no stable-macos → the Mac follows stable" "$C7" "$(xup xmac)"
-grep -q '^channel:' "$WORK/conf-xmac/global/install-sync.state" && fail "X: no lane, yet a channel line"; CHECKS=$((CHECKS + 1))
-# a lane behind a Mac that took stable first: refused like any backward stable
-lane "$C6"; xrun xmac darwin FLEET_DIST_SOURCE=github
-eq "X: a lane behind HEAD is refused, never a move back" refused "$(xst xmac result)"
-eq "X: …HEAD untouched" "$C7" "$(xup xmac)"
-# the hub road: ?platform=darwin
+eq "X: …to stable, not the old Mac lane" "$C7" "$(xup xmac)"
+grep -q '^channel:' "$WORK/conf-xmac/global/install-sync.state" && fail "X: a Mac state wrote a channel line"; CHECKS=$((CHECKS + 1))
+git --git-dir="$BARE" update-ref -d refs/tags/stable-macos
+# the hub road: a Mac asks what everyone asks
 printf '%s\n' "$PIN0" > "$UW/key"
-rel "$C6" 5 "$C5"; rel "$C7" 6 "$C6"; hubstable "$C7"; printf '%s\n' "$C6" > "$UW/rel/stable-macos"
+rel "$C6" 5 "$C5"; rel "$C7" 6 "$C6"; hubstable "$C7"
 xinst xhmac; xrun xhmac darwin FLEET_HUB_URL="$HUBU"
 eq "X: hub: a Mac switched" switched "$(xst xhmac result)"
-contains "X: hub: …to the lane's release" "$(git -C "$WORK/xhmac" log -1 --format=%s)" "fleet-release: $C6 seq=5"
-eq "X: hub: …its state names the channel" stable-macos "$(xst xhmac channel)"
-contains "X: hub: it asked for its platform" "$(cat "$UW/hub.log")" "/v1/fleet/release/stable?platform=darwin"
-n=$(grep -c 'stable?platform' "$UW/hub.log")
-xinst xhlin; xrun xhlin linux FLEET_HUB_URL="$HUBU"
-contains "X: hub: linux took stable" "$(git -C "$WORK/xhlin" log -1 --format=%s)" "fleet-release: $C7 seq=6"
-eq "X: hub: …asking exactly as before (no platform)" "$n" "$(grep -c 'stable?platform' "$UW/hub.log")"
-rm -f "$UW/rel/stable-macos"; xrun xhmac darwin FLEET_HUB_URL="$HUBU"
-contains "X: hub: no lane → the Mac takes stable" "$(git -C "$WORK/xhmac" log -1 --format=%s)" "fleet-release: $C7 seq=6"
+contains "X: hub: …to stable's release" "$(git -C "$WORK/xhmac" log -1 --format=%s)" "fleet-release: $C7 seq=6"
+eq "X: hub: no ?platform= asked" 0 "$(grep -c 'stable?platform' "$UW/hub.log")"
 eq "X: hub: …no channel line" "" "$(xst xhmac channel)"
 kill "$UPID" 2>/dev/null
 

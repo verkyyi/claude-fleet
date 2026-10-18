@@ -578,31 +578,13 @@ the hub's copy or (`--dir`) an installed one. GitHub is the hub's business only 
 a restarted hub that cannot reach it still serves what it stored. No key ⇒ every
 release route 404s, the hub as before. BREAK-IT row `release-tampered`.
 
-**Mac lane retention and recovery** (issue #4494). Before pruning a sealed
-release's tree/installers, the hub saves its exact signed manifest and signature
-in `<dir>/chain/<sha>.json` as one atomically replaced object. These small proofs
-are retained independently of the full-release limit; they are not downloadable
-builds. The Mac target stays complete, while intermediate large artifacts still
-expire. A failed proof write retains that release and logs `cannot archive chain
-proof`. Both lane reads and moves verify the anchor/key revocations, repository,
-SHA and each signed `prev`/`seq` edge from the current stable pointer. The Mac
-pointer's seq must match its target; a move cannot lower its recorded seq even
-when the old lane is unreachable. Pointer changes invalidate each replica's
-five-second read cache immediately; other on-volume damage/revocations retain
-that existing cache bound. BREAK-IT: `stable-macos-pruned-chain`.
-
-This does **not** reconstruct a chain already deleted by an older hub. A gap,
-bad signature, foreign chain or mismatched seq keeps the Mac lane unavailable;
-re-publishing that historical Mac target still returns 409. Compatibility is
-unchanged: an unavailable lane means Darwin falls back to Linux stable and
-`/version` omits the Mac fields, **not** that macOS verified that fallback.
-Recovery is a normal forward Mac release: select a fully retained target on the
-current stable chain, pass the existing macOS/ancestry gates via `mac-follow`
-or `fleet-stable.sh move --ref stable-macos`, then let `stable-publish.yml
-ref=stable-macos` publish it. If no such target passes, wait for a new verified
-release; there is no proof-import/force route, and no manual pointer or signature
-repair. A content rollback must be a new signed release sequence and pass the
-Mac gates again.
+**One release line** (issue #4671). There is no Mac lane: `…/stable` serves
+stable whatever `?platform=` an older client asks, `/version` carries no
+`client_version_macos` / `client_url_macos` / `stable_macos_behind*`, and a
+publish with `ref=stable-macos` (an older train or dispatch) is answered
+`{"status":"retired"}` with nothing done for one version. An older hub's
+`<dir>/stable-macos` pointer and `<dir>/chain/` proofs (#3868, #4494) are left on
+the volume unread.
 
 Deploy/acceptance owner: check the Mac versions already installed before any
 lane change, because returning an older lane can downgrade some clients. Finish
@@ -771,7 +753,7 @@ ledger, the node image and the Mac half (`stageOffPath`) never are — so the ru
 summary page prints the same 「卡在…」 line. The stats add `merge_to_stable_p50/p95`
 (a merge's commit → the end of the first shipped run carrying it),
 `runs_started` / `runs_shipped`, `run_p50_secs`, `runs_slow` / `runs_slow_said`,
-`lanes` (stable · stable-macos) and `runs[]` (each with its stages, offsets,
+`lanes` (stable) and `runs[]` (each with its stages, offsets,
 budgets, `bottleneck`, `conclusion`, `mac`) — `trains` stays the count it was. The
 admin page — the console's 发布 (`/admin/release`, claude-fleet#3937; the old
 `/trains` moves there) — draws them: four KPIs, the two lanes, one time bar a run against the 5-minute line,

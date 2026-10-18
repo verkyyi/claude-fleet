@@ -947,7 +947,7 @@ type Versions struct {
 // from. AtStable is the script's own judgement against the stable it knew
 // (nil = it knew none); the hub re-judges against its own stable.
 type Installs struct {
-	Lane    string         `json:"lane,omitempty"` // stable · stable-macos
+	Lane    string         `json:"lane,omitempty"` // compat-1v: an older script's stable · stable-macos, unread (#4671)
 	Stable  string         `json:"stable,omitempty"`
 	Runtime *InstallItem   `json:"runtime,omitempty"`
 	Logins  []LoginInstall `json:"logins,omitempty"`

@@ -19,10 +19,6 @@ on:
       sha:
         description: the commit stable names (default the stable tag's)
         required: false
-      ref:
-        description: stable, or stable-macos — the hub's Mac lane (issue #3868)
-        required: false
-        default: stable
 
 permissions:
   contents: read
@@ -47,21 +43,19 @@ jobs:
       - name: publish to the hub
         env:
           SHA: ${{ inputs.sha }}
-          REF: ${{ inputs.ref }}
           FLEET_HUB_URL: https://claudefleet.24haowan.com
         run: |
-          case "${REF:-stable}" in stable|stable-macos) ;; *) echo "::error::ref is stable or stable-macos, not $REF"; exit 1 ;; esac
           if [ -z "$SHA" ]; then
-            git fetch -q origin "+refs/tags/${REF:-stable}:refs/tags/${REF:-stable}"
-            SHA=$(git rev-parse "${REF:-stable}^{commit}")
+            git fetch -q origin "+refs/tags/stable:refs/tags/stable"
+            SHA=$(git rev-parse "stable^{commit}")
           fi
           case "$SHA" in *[!0-9a-f]*|'') echo "::error::not a commit sha: $SHA"; exit 1 ;; esac
           set +e
-          bash bin/fleet-release-publish.sh "$SHA" --dir . --ref "${REF:-stable}" > pub.txt 2>&1
+          bash bin/fleet-release-publish.sh "$SHA" --dir . > pub.txt 2>&1
           rc=$?
           cat pub.txt
           {
-            echo "### publish \`${SHA:0:7}\` (${REF:-stable}) → hub"
+            echo "### publish \`${SHA:0:7}\` → hub"
             echo '```'
             cat pub.txt
             echo '```'

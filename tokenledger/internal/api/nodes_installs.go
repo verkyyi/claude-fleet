@@ -11,7 +11,7 @@ import (
 // A machine's 「安装」 (claude-fleet#2697): every heard login's beat carries
 // its own reading of fleet-installs.sh — the machine runtime, its login
 // install, its client shell and client install. The machine folds them: the
-// runtime and the lane from the newest reading that has one, each login from
+// runtime from the newest reading that has one, each login from
 // its own newest, then every item judged against the stable this hub follows.
 
 type installsLogin struct {
@@ -20,11 +20,11 @@ type installsLogin struct {
 }
 
 type installsPick struct {
-	lane, stable string
-	runtime      *control.InstallItem
-	runtimeAt    time.Time
-	at           time.Time
-	logins       map[string]installsLogin
+	stable    string
+	runtime   *control.InstallItem
+	runtimeAt time.Time
+	at        time.Time
+	logins    map[string]installsLogin
 }
 
 func (p *installsPick) add(in *control.Installs) {
@@ -34,9 +34,6 @@ func (p *installsPick) add(in *control.Installs) {
 	}
 	if at.After(p.at) || p.at.IsZero() {
 		p.at = at
-		if in.Lane != "" {
-			p.lane = in.Lane
-		}
 		if in.Stable != "" {
 			p.stable = in.Stable
 		}
@@ -51,18 +48,15 @@ func (p *installsPick) add(in *control.Installs) {
 	}
 }
 
-// judged is the machine's installs with every at_stable the hub's own: the
-// Mac lane's commit for a machine on it (when the hub names one), else
-// stable. With no stable here the scripts' own word stands.
-func (p *installsPick) judged(stable, mac string) *control.Installs {
+// judged is the machine's installs with every at_stable the hub's own:
+// stable, on every platform (one release line, claude-fleet#4671). With no
+// stable here the scripts' own word stands.
+func (p *installsPick) judged(stable string) *control.Installs {
 	want := stable
-	if p.lane == "stable-macos" && mac != "" {
-		want = mac
-	}
 	if want == "" {
 		want = p.stable
 	}
-	out := &control.Installs{Lane: p.lane, Stable: want}
+	out := &control.Installs{Stable: want}
 	if !p.at.IsZero() {
 		at := p.at
 		out.At = &at
