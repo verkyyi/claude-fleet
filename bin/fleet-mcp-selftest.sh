@@ -57,6 +57,10 @@
 #      from a command line — the same argv to the script, the byte-identical text
 #      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
 #      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
+#   S  a fleet of two repos (issue #4761): send narrows issue:<N> by `repo`, by a
+#      `<slug>:issue-<N>` key, else by the caller window's own repo; fid:<uuid> / a bare
+#      @fleet_id goes as wid:<uuid>; spawn / await with no repo take the caller's;
+#      a caller with no repo, or a one-repo fleet, hands the script no --repo
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
 #      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task
 #      (take_role listed by neither, still answered — issue #4334);
@@ -224,7 +228,7 @@ import json, sys
 rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
         13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "acme/app, acme/lib",
-        17: "takes no arguments", 18: "issue:<N>, scratch-<N>, agent:<name> or parent", 19: "unknown tool",
+        17: "takes no arguments", 18: "agent:<name>, fid:<uuid> or parent", 19: "unknown tool",
         20: "must be an integer"}
 for i, why in want.items():
     res = rows[i]["result"]
@@ -1271,5 +1275,61 @@ sc = r["structuredContent"]
 assert sc["exit"] == 2 and "retired" in sc["stderr"] and "spawn agent:orchestrator" in sc["stderr"], sc
 PY
 ok "Q2 take_role is on no server's list and still answered: retired, nothing marked (one version)"
+
+# --- S: a fleet of two repos (issue #4761) -------------------------------------
+cp "$WORK/bin/fleet-lib.sh" "$WORK/lib.keep"
+cat >> "$WORK/bin/fleet-lib.sh" <<'SH'
+fleet_repos() { printf 'acme/app\n'; [ -n "${FAKE_ONE_REPO:-}" ] || printf 'acme/lib\n'; }
+fleet_slug() { printf '%s' "${1//\//-}"; }
+fleet_target_repo() { [ -n "${FAKE_CALLER_REPO:-}" ] || return 4; printf '%s\n' "$FAKE_CALLER_REPO"; }
+SH
+FID=0f1e2d3c-4b5a-4697-8a8b-9c0d1e2f3a4b
+: > "$LOG"
+{
+  call 170 send '{"to":"issue:99","text":"a"}'
+  call 171 send '{"to":"acme-lib:issue-99","text":"b"}'
+  call 172 send '{"to":"issue:99","repo":"acme/lib","text":"c"}'
+  call 173 send '{"to":"fid:'"$FID"'","text":"d"}'
+  call 174 send '{"to":"'"$FID"'","text":"e"}'
+  call 175 send '{"to":"scratch-3","text":"f"}'
+  call 176 spawn '{"issue":5}'
+  call 177 await '{"issue":5,"timeout":5}'
+  call 178 send '{"to":"nope-repo:issue-1","text":"x"}'
+  call 179 send '{"to":"acme-lib:issue-99","repo":"acme/app","text":"x"}'
+  call 180 send '{"to":"agent:steward","repo":"acme/app","text":"x"}'
+} | FAKE_CALLER_REPO=acme/app serve "$WORK/s1"
+python3 - "$WORK/s1" <<'PY' || fail "S: a two-repo send / spawn / await answered wrong" "$(cat "$WORK/s1")"
+import json, sys
+rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+for i in range(170, 178):
+    assert not rows[i].get("isError"), (i, rows[i])
+for i, why in {178: "names no repo this fleet hosts", 179: "but repo is", 180: "issue:<N> / scratch-<N> target only"}.items():
+    assert rows[i].get("isError") and why in rows[i]["content"][0]["text"], (i, rows[i])
+PY
+want=$(cat <<EOF
+fleet-peer-send.sh --repo acme/app issue:99 -
+fleet-peer-send.sh --repo acme/lib issue-99 -
+fleet-peer-send.sh --repo acme/lib issue:99 -
+fleet-peer-send.sh wid:$FID -
+fleet-peer-send.sh wid:$FID -
+fleet-peer-send.sh scratch-3 -
+dash-issue-session.sh 5 --repo acme/app
+fleet-await.sh 5 --timeout 5 --repo acme/app
+EOF
+)
+got=$(grep -v '^fleet-repo.sh list$' "$LOG")
+[ "$got" = "$want" ] || fail "S: the scripts ran with the wrong argv" "$(printf 'want:\n%s\ngot:\n%s\n' "$want" "$got")"
+ok "S two repos: issue:<N> takes repo, a <slug>: key, else the caller's repo; fid:<uuid> → wid:; spawn/await take the caller's repo"
+# A caller with no repo of its own, or a fleet of one repo: no --repo is invented.
+for leg in norepo onerepo; do
+  : > "$LOG"
+  { call 181 send '{"to":"issue:99","text":"a"}'; call 182 spawn '{"issue":5}'; } \
+    | if [ "$leg" = onerepo ]; then FAKE_ONE_REPO=1 FAKE_CALLER_REPO=acme/app serve "$WORK/s2"; else serve "$WORK/s2"; fi
+  got=$(grep -v '^fleet-repo.sh list$' "$LOG")
+  [ "$got" = "$(printf 'fleet-peer-send.sh issue:99 -\ndash-issue-session.sh 5')" ] \
+    || fail "S: $leg handed the script a repo it did not ask for" "$got"
+done
+ok "S a caller with no repo, or a one-repo fleet: the scripts get no --repo (their own rule, byte for byte)"
+cp "$WORK/lib.keep" "$WORK/bin/fleet-lib.sh"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"
