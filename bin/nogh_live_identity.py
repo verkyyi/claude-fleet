@@ -17,6 +17,10 @@ import urllib.request
 from nogh_live_contract import require
 
 
+# The live node read's own bound (above); the readiness window is await_ready's.
+LIVE_READ_TIMEOUT = 6
+
+
 class NotReady(Exception):
     """An exact original identity exists but its startup is not yet complete."""
 
@@ -42,8 +46,12 @@ def reader(plan):
     def get(path, raw=False):
         require(path.startswith('/') and not path.startswith('//'), 'API_PATH')
         request = urllib.request.Request(base + path, headers={'Authorization': 'Bearer ' + token})
+        # A live fleet_status is the hub asking the node, whose fleet-control
+        # read runs under the observer's strace: measured live well past 2 s
+        # (#4625). Every other read is the hub's own.
+        timeout = LIVE_READ_TIMEOUT if path.startswith('/v1/fleet/fleet_status') else 2
         try:
-            with opener.open(request, timeout=2) as response:
+            with opener.open(request, timeout=timeout) as response:
                 require(response.status == 200 and response.geturl() == base + path, 'API_RESPONSE')
                 body = response.read(1024 * 1024 + 1)
                 require(len(body) <= 1024 * 1024, 'API_RESPONSE_LIMIT')
@@ -55,6 +63,10 @@ def reader(plan):
             if isinstance(exc.reason, (ConnectionRefusedError, TimeoutError)):
                 raise NotReady() from None
             raise
+        except TimeoutError:
+            # A read that times out AFTER the connection is a bare TimeoutError,
+            # not a URLError: the same not-yet-ready, never a refusal (#4625).
+            raise NotReady() from None
         return body if raw else json.loads(body)
     return get
 
@@ -110,7 +122,7 @@ def verify(plan, get):
     return dict(hub_commit=commit, hub_key_digest=plan['hub']['key_digest'], endpoints=observed)
 
 
-def await_ready(plan, get, seconds=10):
+def await_ready(plan, get, seconds=20):
     deadline = time.monotonic() + seconds
     while True:
         try:
