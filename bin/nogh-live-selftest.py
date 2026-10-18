@@ -364,6 +364,20 @@ class TraceMetadata(unittest.TestCase):
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
             trace.finish(0)
 
+    def test_resumed_call_rejoins_like_an_uninterrupted_one(self):
+        # live (#4625): strace's unfinished prefix ends `0,  <unfinished` (two
+        # spaces); a resumed socketpair's fds must read as the plain call's.
+        trace = observer.Trace(plan(), 'node-a')
+        for line in ('7 1.000 execve("/usr/bin/python3", [""...], 0x1) = 0 <0.001>',
+                     '7 1.010 write(198, ""..., 1) = 1 <0.001>',
+                     '7 1.100 socketpair(AF_UNIX, SOCK_STREAM, 0,  <unfinished ...>',
+                     '7 1.200 <... socketpair resumed>[8<UNIX:[11->12]>, 9<UNIX:[12->11]>]) = 0 <0.001>',
+                     '7 1.300 write(9<UNIX:[12->11]>, ""..., 1) = 1 <0.001>',
+                     '7 2.000 write(198, ""..., %d) = %d <0.001>' % ((observer.PHASES.index('end') + 1,) * 2),
+                     '7 2.100 +++ exited with 0 +++'):
+            trace.feed(line + '\n')
+        trace.finish(0)
+
     def test_refusal_names_its_check_and_syscall_only(self):
         # A live run keeps no raw trace: the failure record says WHICH check
         # refused and on WHICH syscall, as identifiers — never the line (#4625).
