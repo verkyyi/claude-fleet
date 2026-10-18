@@ -85,31 +85,36 @@ sep_install() {
     bash "$BIN/fleet-credsep.sh" machine install --logins alpha "$@" 2>&1); RC=$?
 }
 
-# The very order of 2026-10-07: the credentials moved while the login's proxy was
-# not on and its sessions read the files. The preflight refuses, nothing moves.
+# The very order of 2026-10-07: the credentials moved while the login's sessions
+# read the files themselves. The preflight refuses, nothing moves. (Its old first
+# step — «turn the login's own proxy on» — left with the per-login proxy, #4674:
+# the proxy it joins is the machine's, and install switches FLEET_CRED_PROXY on.)
 drill_cred_sep_proxy_off() {
   CAP=20
   local sb="$WORK/sepoff" t0
   sep_login "$sb"
+  # one live Claude session that reads the files (no ANTHROPIC_BASE_URL to a proxy)
+  printf 'claude\tclaude --resume x HOME=%s\n' "$sb/homes/alpha" > "$sb/procs"
   t0=$(now)
-  FLEET_CREDSEP_SVC=0 sep_install "$sb"
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb"
   SECS=$(since "$t0")
-  [ "$RC" = 6 ] || { WHY="the proxy is off, yet machine install went on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
-  printf '%s' "$OUT" | grep -q 'cred-proxy enable' || { WHY="refused without saying what to do first: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"; return 1; }
+  [ "$RC" = 6 ] || { WHY="a session reads the files, yet machine install went on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$OUT" | grep -q '1 of its 1 live sessions read the credential files themselves' \
+    || { WHY="refused without saying which sessions: $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"; return 1; }
   [ ! -e "$sb/db/alpha" ] && [ -f "$C/accounts/a1.hub/.credentials.json" ] && [ ! -L "$C/node.env" ] \
     && ! grep -q FLEET_CRED_PROXY "$C/fleet.conf" || { WHY="refused, yet something moved: $(ls -a "$sb/db" "$C" 2>&1 | tr '\n' ' ')"; return 1; }
-  # a running EPIC batch on the login: refused too, even with the proxy on
-  printf 'export FLEET_CRED_PROXY=1\n' >> "$C/fleet.conf"
+  # a running EPIC batch on the login: refused too, with no session reading files
   mkdir -p "$C/global/epic-running.d"
   printf 'epoch: %s\nepic: 9\nsession: s\ntick: 1\n' "$(date +%s)" > "$C/global/epic-running.d/o-r-9"
-  FLEET_CREDSEP_SVC=0 sep_install "$sb"
+  : > "$sb/procs"
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb"
   [ "$RC" = 6 ] && printf '%s' "$OUT" | grep -q 'EPIC batch' \
     || { WHY="an EPIC batch runs on the login, yet no refusal naming it (rc $RC): $(printf '%s' "$OUT" | grep preflight | tr '\n' ' ')"; return 1; }
   # --force: the person's (or the agent's, on purpose) way past it
-  FLEET_CREDSEP_SVC=0 sep_install "$sb" --force
+  FLEET_CRED_ROLLOUT_PROCS="$sb/procs" FLEET_CREDSEP_SVC=0 sep_install "$sb" --force
   [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q 'preflight: --force' && [ -f "$sb/db/alpha/node.env" ] \
     || { WHY="--force did not go on (rc $RC): $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"; return 1; }
-  WHAT="代理没开就 machine install：安装前自检拒绝（exit 6，什么都没搬），说先 fleet cred-proxy enable；本登录有 EPIC 批次在跑也拒；--force 才过"
+  WHAT="还有会话自己读凭据文件就 machine install：安装前自检拒绝（exit 6，什么都没搬），点名几个会话；本登录有 EPIC 批次在跑也拒；--force 才过"
 }
 
 # A login as a node leaves it: a leased credential, node.env, fleet.conf, the

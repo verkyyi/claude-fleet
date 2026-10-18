@@ -1315,7 +1315,13 @@ class Proxy(BaseHTTPRequestHandler):
                 if c and c["id"] in t.passes.held:
                     return t
             return None
-        return cls.tenants.get(tok_login(tok) or "")
+        lg = tok_login(tok)
+        if not lg and len(cls.tenants) == 1:
+            # one tenant (a person's pod, issue #4674): a credential its per-login
+            # proxy minted before the switch names no login — the same state dir,
+            # the same key, so that tenant's key verifies it
+            return next(iter(cls.tenants.values()))
+        return cls.tenants.get(lg or "")
 
     def fail(self, code, msg, typ="authentication_error", ecode="", extra=None):
         err = {"type": typ, "message": "cred-proxy: " + msg}

@@ -1332,10 +1332,10 @@ def own_tool(pw, name):
 
 def preflight(login, conf):
     """-> [why not] for a login about to have its credentials moved. The order is
-    the whole point (#2135): its proxy runs FIRST and every live session already
-    talks to it, else the move takes the subscription from under them — mac-a,
-    2026-10-07. And never under a running EPIC batch: its members are sessions
-    on this login. Read AS the login, with the login's own scripts."""
+    the whole point (#2135): every live session already talks to a proxy, else
+    the move takes the subscription from under them — mac-a, 2026-10-07. And
+    never under a running EPIC batch: its members are sessions on this login.
+    Read AS the login, with the login's own scripts."""
     pw = getpw(login)
     why = []
     rc, line = as_login(pw, conf, ["/bin/bash", own_tool(pw, "fleet-cred-rollout.sh"), "status"])
@@ -1345,14 +1345,13 @@ def preflight(login, conf):
     if rc or not m:
         why.append("the proxy's status could not be read (%s)" % (line or "rc %d" % rc))
     else:
-        sw, route, n, t = m.group(1), m.group(2), int(m.group(3)), int(m.group(4))
-        if sw != "on":
-            why.append("its credential proxy is off — first, as %s: fleet cred-proxy enable" % login)
-        elif route in ("down", "-", "?"):
-            why.append("its credential proxy is on but not running (route %s) — fleet cred-proxy status / doctor" % route)
+        # no login runs a proxy of its own (#4674): the one it joins is the
+        # machine's, and install switches FLEET_CRED_PROXY on — what still loses
+        # the subscription is a live session that reads the files itself
+        n, t = int(m.group(3)), int(m.group(4))
         if n < t:
-            why.append("%d of its %d live sessions do not talk to the proxy yet — they would lose the "
-                       "subscription (fleet-account.sh migrate, or reopen them)" % (t - n, t))
+            why.append("%d of its %d live sessions read the credential files themselves (not through a "
+                       "proxy) — they would lose the subscription: let them end, or reopen them" % (t - n, t))
     rc, out = as_login(pw, conf, ["/bin/bash", "-c", '. "$1" >/dev/null 2>&1; fleet_epic_running_fresh',
                                   "_", own_tool(pw, "fleet-lib.sh")])
     if rc == 0 and out.strip():
@@ -1545,6 +1544,8 @@ def as_login(pw, conf, argv):
         return 0, ""
     env = {"HOME": pw.pw_dir if not TEST else os.environ["HOME"], "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
            "LANG": "en_US.UTF-8", "FLEET_CONF_DIR": conf}
+    if TEST and os.environ.get("FLEET_CRED_ROLLOUT_PROCS"):
+        env["FLEET_CRED_ROLLOUT_PROCS"] = os.environ["FLEET_CRED_ROLLOUT_PROCS"]   # the process table, in the sandbox
 
     def drop():
         if os.geteuid() == 0:

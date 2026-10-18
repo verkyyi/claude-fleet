@@ -32,7 +32,7 @@
 base-sync	unit	login	git fetch of the login's own base checkouts, with its own credentials
 cleanup	unit	login	reaps the login's landed worktrees and windows (its tmux, its prmap)
 collect	unit	login	the dash collector for the login's tmux server
-cred-proxy	unit	login	the login's credential proxy (a relay to the shared one when the machine has it)
+cred-relay	unit	login	the login's relay pass, renewed when the machine's shared proxy asks (no template: the supervisor's ACCOUNT_BUILTIN, #4674)
 diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog is the machine's
 install-sync	unit	login	follows stable for the login's install (a managed login answers off · follows the runtime)
 issue-bridge	unit	worker	relays the login's issue comments into its sessions: nothing to relay into with no worker window

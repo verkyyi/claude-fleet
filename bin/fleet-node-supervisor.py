@@ -23,11 +23,12 @@ machine's work ONCE, however many logins the machine carries:
                 unit as a task, a KeepAlive unit (spinner, webhook) as a child.
                 The template's own interval, environment and log paths; the log
                 is opened by the demoted process, never by root. One account's
-                failing task never touches another's. An account on the machine's
-                shared credential proxy (credsep.json "shared") runs no resident
-                `cred-proxy`: its relay pass is renewed by `cred-relay`
-                (`fleet-cred-proxy.sh relay-tick`, issue #3524) — run only when
-                the shared proxy asks (`relay-want.<login>`, issue #3561).
+                failing task never touches another's. No account runs a proxy of
+                its own (issue #4674): an account on the machine's shared
+                credential proxy (credsep.json "shared") has its relay pass
+                renewed by `cred-relay` (`fleet-cred-proxy.sh relay-tick`, issues
+                #3524, #4674 — ACCOUNT_BUILTIN, no template) — run only when the
+                shared proxy asks (`relay-want.<login>`, issue #3561).
                 A unit conf/node-tasks.tsv marks `session` (spinner, webhook)
                 runs only while the login's collector publishes a session count
                 above 0 (issue #3671); a restart adopts a live account unit by its
@@ -328,6 +329,11 @@ LEFTOVER_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.).*\.plist\..+$")
 # an account unit (issue #2332). cred-proxy-shared has no template — it is listed
 # so an account's adopt never boots the machine's proxy out.
 MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
+# Account units with no launchd template (issue #4674): the per-login proxy's
+# template is gone, and what it still did for a login on the shared proxy — renew
+# its relay pass when the proxy asks — is this one (fleet-machine-tasks.py
+# reads the names: a row of kind unit each).
+ACCOUNT_BUILTIN = ("cred-relay",)
 # Account units the machine's own child replaces while it runs (issue #4358): the
 # webhook forwarder, one for every login (webhook_machine_child).
 WEBHOOK_UNITS = ("webhook",)
@@ -914,10 +920,12 @@ def default_table(paths):
     if pod_own():
         # …and once it runs as its login (#3757): no task at all — the runtime is
         # the image's, nothing is leased — and of the children the node program
-        # alone: no shared proxy (the login's own is an account unit), sshd is
-        # the pod's other container
+        # and the machine's proxy (issue #4674): the same `serve --shared` a
+        # managed machine runs, as the login, its one tenant routing central
+        # (pod_login_open writes <conf>/cred-proxy/machine.json); sshd is the
+        # pod's other container
         table["tasks"] = []
-        table["children"] = [c for c in table["children"] if c["name"] == "node-agent"]
+        table["children"] = [c for c in table["children"] if c["name"] == "node-agent"] + pod_proxy_child(paths)
         # …which starts with no login: the hub's create for the pod's one login
         # comes down this program's own machine link, so it may not wait for a
         # logins/*.env only that create writes (#3554 — the pod sat pending)
@@ -944,6 +952,20 @@ def pod_own():
     """A person's pod run as its one login (render.py --user-pod --login, #3757):
     the whole daemon is that login, nothing in it is root."""
     return user_pod() and bool(env("FLEET_POD_LOGIN", ""))
+
+
+def pod_proxy_child(paths):
+    """[the pod's machine proxy child] — waits for its tenants file (issue #4674)."""
+    login = env("FLEET_POD_LOGIN", "")
+    ident = account_ident(login)
+    home = ident[2] if ident else os.path.join(paths.users, login)
+    conf = os.path.join(home, ".config", "claude-fleet")
+    spec = os.path.join(conf, "cred-proxy", "machine.json")
+    py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else (shutil.which("python3") or "python3")
+    return [{"name": "cred-proxy-shared",
+             "cmd": [py, "-I", os.path.join(paths.runtime, "bin", "fleet-cred-proxy.py"), "serve", "--shared", spec],
+             "env": {"FLEET_CONF_DIR": conf, "HOME": home},
+             "requires": [spec]}]
 
 
 def pod_self_uid(login):
@@ -1058,7 +1080,22 @@ def account_units(paths, table=None):
             # `orphans` task — an account copy would notify twice
             ent["env"]["FLEET_ORPHAN_CPU_PCT"] = "0"
         out.append(ent)
+    out.append(cred_relay_unit())
     return out
+
+
+def cred_relay_unit():
+    """The login's relay pass, renewed when the machine's shared proxy asks
+    (`<run>/relay-want.<login>`, issues #3524, #3561): `fleet-cred-proxy.sh
+    relay-tick` as the login. No clock — account_unit_for gives it its request
+    file, and leaves it out for a login not on the shared proxy."""
+    pyc = "__HOME__/Library/Caches/claude-fleet/pycache" if MAC else "__HOME__/.cache/claude-fleet/pycache"
+    return {"name": "cred-relay", "timeout": 600,
+            "argv": ["/bin/bash", "__HOME__/.claude/fleet/bin/fleet-cred-proxy.sh", "relay-tick"],
+            "env": {"HOME": "__HOME__", "LANG": "en_US.UTF-8", "PYTHONPYCACHEPREFIX": pyc,
+                    "PATH": "__HOME__/.local/bin:__BREW_PREFIX__/bin:__BREW_PREFIX__/sbin:"
+                            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"},
+            "out": "/dev/null", "err": "__HOME__/.config/claude-fleet/logs/cred-proxy.launchd.log"}
 
 
 def script_of(cmd):
@@ -1690,26 +1727,22 @@ def on_shared_proxy(home):
 
 
 def account_unit_for(unit, home):
-    """The unit as this login runs it. A login on the shared proxy keeps no
-    resident `fleet-cred-proxy.sh run` (issue #3524): the shared proxy already
-    answers its sessions — on its old port too (#2217) — so all that launcher did
-    there was keep the login's relay pass. That pass is renewed only when it is
-    needed (issue #3561, EPIC #3500 C19): the shared proxy writes
-    `<run>/relay-want.<login>` — the pass is missing, was used with < 20 % of its
-    life left, or reached 80 % of it — and the daemon runs `cred-relay`
-    (`relay-tick`, as the login) once per request. No clock: an idle login costs
-    nothing. Leaving the shared proxy brings the resident unit back on the next
-    tick."""
-    run = shared_proxy_run(home) if unit["name"] == "cred-proxy" and unit.get("keepalive") else ""
-    if not run:
+    """The unit as this login runs it, or None: not for this login. A login runs no
+    proxy of its own (issue #4674 — an old table's `cred-proxy` is None). Its relay
+    pass is renewed only when it is needed (issue #3561, EPIC #3500 C19): the
+    shared proxy writes `<run>/relay-want.<login>` — the pass is missing, was used
+    with < 20 % of its life left, or reached 80 % of it — and the daemon runs
+    `cred-relay` (`relay-tick`, as the login) once per request. No clock: an idle
+    login costs nothing; a login not on the shared proxy has no `cred-relay`."""
+    if unit["name"] == "cred-proxy":
+        return None
+    if unit["name"] != "cred-relay":
         return unit
-    argv = list(unit["argv"])
-    if argv and argv[-1] == "run":
-        argv[-1] = "relay-tick"
-    else:
-        argv.append("relay-tick")
+    run = shared_proxy_run(home)
+    if not run:
+        return None
     u = dict((k, v) for k, v in unit.items() if k not in ("keepalive", "every"))
-    u.update(name="cred-relay", argv=argv, want=os.path.join(run, "relay-want.{login}"), timeout=600)
+    u["want"] = os.path.join(run, "relay-want.{login}")
     return u
 
 
@@ -2305,7 +2338,9 @@ class Supervisor(object):
             for u in self.units:
                 if (u["name"] in gone) != retired:
                     continue
-                out.append(account_entry(account_unit_for(u, ident[2]), login, ident, brew))
+                u = account_unit_for(u, ident[2])
+                if u is not None:
+                    out.append(account_entry(u, login, ident, brew))
         return out
 
     def webhook_machine_on(self):
