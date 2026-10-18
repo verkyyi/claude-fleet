@@ -589,8 +589,8 @@ drill_spare_not_tenant() {
 # exists but a restart did not serve is restarted for ONCE, not every tick.
 drill_cred_shared_restart_loop() {
   CAP=10
-  local sb me uid gid t0 out
-  me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/rloop"
+  local sb me uid gid port t0 out
+  me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/rloop"; port=$(cred_deadport)
   mkdir -p "$sb/daemons"
   for L in alpha ghost beta; do
     mkdir -p "$sb/homes/$L/.config/claude-fleet" "$sb/homes/$L/.claude/fleet/bin"
@@ -600,7 +600,7 @@ drill_cred_shared_restart_loop() {
   export FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
     FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
     FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
-    FLEET_CRED_SHARED_PORT="$(cred_deadport)"
+    FLEET_CRED_SHARED_PORT="$port"
   rloop_down() {
     unset FLEET_CREDSEP_ROOT_BASE FLEET_CREDSEP_RUN_BASE FLEET_CREDSEP_LOG_BASE FLEET_CREDSEP_LIB FLEET_CREDSEP_DAEMON_DIR \
       FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_PREFLIGHT FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT
