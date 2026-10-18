@@ -104,7 +104,7 @@ if [ -n "$rsha" ]; then
       fi
       exit 0
     fi
-    err "~/.claude/fleet could not be linked to $NROOT/current (rc $rc: $(printf '%s' "$out" | tail -n 1)) — trying the hub"
+    err "$ROOT could not be linked to $NROOT/current (rc $rc: $(printf '%s' "$out" | tail -n 1)) — trying the hub"
     [ -L "$ROOT" ] && [ -z "$(linked_sha "$ROOT")" ] && rm -f "$ROOT"
   fi
 fi
