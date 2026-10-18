@@ -400,10 +400,11 @@ e=$(tn) || { sleep 1; e=$(tn); } || { echo "CODEX notmux $(printf '%s' "$e" | tr
 st=wait t0=$(date +%s) err=''
 # term — a definite terminal error the NEW session itself shows (issue #4303):
 # an HTTP refusal the agent gave up on, a refused key. The prompt's echo, a
-# retrying line, 408 / 429 (retried by the agent) are never one.
+# retrying line, 408 / 429 (retried by the agent) are never one. The account's
+# own usage limit is one too (issue #4596): no answer comes before its reset.
 term() {
   printf '%s\n' "$1" | grep -vF -- '只回一个词' | grep -viE 'reconnect|re-connect|retrying|retry in' | tr '\n' ' ' |
-    grep -Eo 'unexpected status [0-9]{3}[^■›│]{0,220}|Permission denied \(publickey[^)]*\)|certificate (is )?(expired|revoked|not (yet )?valid)[^.]{0,80}' |
+    grep -Eo "unexpected status [0-9]{3}[^■›│]{0,220}|Permission denied \(publickey[^)]*\)|certificate (is )?(expired|revoked|not (yet )?valid)[^.]{0,80}|You've hit your usage limit[^■›│]{0,200}" |
     grep -vE '^unexpected status (408|429)' | head -n 1 | sed 's/[[:space:]][[:space:]]*/ /g; s/ $//'
 }
 while [ $(( $(date +%s) - t0 )) -lt "$SECS" ]; do
@@ -424,7 +425,7 @@ fleet route "$M" auto >/dev/null 2>&1
 EOS
 }
 codex_step() {
-  local r=$1 w out st scr term why
+  local r=$1 w out st scr term why cls
   w=CNP$(od -An -N3 -tu4 /dev/urandom 2>/dev/null | tr -dc 0-9 | cut -c1-6)
   out=$(codex_script "$r" "$w" | on_client_s)
   st=$(printf '%s\n' "$out" | grep '^CODEX ' | tail -n 1)
@@ -438,14 +439,16 @@ codex_step() {
   case "${2:-}" in
     answered) pass "codex:$r" "a new Codex session answered $w in ${3:-?}s" "$out" ;;
     error)    # the session's own refusal: say it at once, by what it said
+      cls=product
       case "$term" in
+        *'hit your usage limit'*) why=codex_quota_exhausted cls=env ;;   # the account's, not the path's (#4596)
         *'no upstream credential'*) why=upstream_no_credential ;;
         *'no subscription account'*) why=upstream_no_subscription ;;
         'unexpected status '*) why=upstream_http_$(printf '%s' "$term" | awk '{print $3}') ;;
         *'Permission denied'*|*certificate*) why=cert_refused ;;
         *) why=session_error ;;
       esac
-      fail "codex:$r" "the new Codex session ended its turn with an error after ${3:-?}s: $term" "$why" product "$out" ;;
+      fail "codex:$r" "the new Codex session ended its turn with an error after ${3:-?}s: $term" "$why" "$cls" "$out" ;;
     exited)
       case "$scr" in
         *'REFUSED AT_CAPACITY'*) why=admit_refused ;;

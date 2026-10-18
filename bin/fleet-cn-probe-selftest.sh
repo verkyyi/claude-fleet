@@ -137,6 +137,7 @@ case "$1 $2" in
     echo "GPT-6.1-Sol high · ~ ? for shortcuts"
     case "${CNP_SCENARIO:-answer}" in
       403) sleep 1; echo "■ unexpected status 403 Forbidden: cred-proxy: no upstream credential for account default, url: http://127.0.0.1:35583/codex/responses" ;;
+      quota) sleep 1; echo "■ You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Oct 23rd, 2026 5:44 PM." ;;
       sub403) sleep 1; echo "■ unexpected status 403 Forbidden: no subscription account for this session: no codex account in the vault for drill-x that this machine's allowlists permit: pool/default" ;;
       slow) sleep 2; echo "⚠ stream error: unexpected status 429 Too Many Requests; retrying 1/5 in 2s"; sleep 3; echo "$w" ;;
       answer) sleep 1; echo "$w" ;;
@@ -188,6 +189,12 @@ leg_H() {   # a session's own terminal error ends the wait; nothing else does
   # another 403 is another reason: never one bucket for every 403
   CNP_SCENARIO=sub403 FLEET_CN_PROBE_ANSWER=300 probe_run
   eq "H: a 403 «no subscription account» → its own reason" upstream_no_subscription "$(rj 'r["reason_code"]')"
+  # the account's usage limit: said at once, the account's (env), never the path's (#4596)
+  CNP_SCENARIO=quota FLEET_CN_PROBE_ANSWER=300 probe_run
+  eq "H: a usage-limit screen → its own reason" codex_quota_exhausted "$(rj 'r["reason_code"]')"
+  eq "H: …class env" env "$(rj 'r["class"]')"
+  cs=$(rj '[s["secs"] for s in r["stages"] if s["layer"] == "codex:entry"][0]')
+  CHECKS=$((CHECKS + 1)); [ "$cs" -le 10 ] || fail "H: the codex wait lasted ${cs}s after a usage-limit screen (> 10 s)"
   CNP_SCENARIO=slow probe_run
   eq "H: a slow answer behind a retried 429 → 通" 0 "$PRC"
   contains "H: …answered" "$POUT" "PASS codex:entry a new Codex session answered"
