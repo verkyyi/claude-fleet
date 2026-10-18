@@ -72,8 +72,10 @@
 #      Mutually exclusive with --spawn (bind THIS session or start another, never
 #      both), and like --spawn a refusal leaves the issue FILED.
 #   5c. any pane may --spawn, a worker's too (issue #4591 lifted #2960's refusal);
-#      a breakage a worker files WITHOUT --spawn is queued for the steward, which
-#      spawns its fixer.
+#      a NEW breakage a worker files WITHOUT --spawn spawns nobody (issue #4337): the
+#      person is alerted (fleet-alerts.sh event breakage) and the worker's parent
+#      session told (fleet-peer-send.sh, fid first) — an orchestrator or steward
+#      session there spawns its fixer, else it waits for the person.
 #
 # Prints the created issue URL on stdout (exactly like GitHub's own create) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
@@ -182,7 +184,7 @@ fi
 [ "$spawn" = 1 ] && fleet_pane_lost \
   && { printf 'fleet-issue-file: --spawn needs the calling pane ($TMUX is set but $TMUX_PANE is not) — the worker would have no parent to report to; run it from your scratch/worker pane\n' >&2; exit 4; }
 # A worker pane (issue #4591: it may spawn like any session). A breakage it files
-# WITHOUT --spawn is queued for the steward holder, who spawns its fixer (5c below).
+# WITHOUT --spawn is announced to the person and its parent (5c below).
 worker_seat=0
 [ "$(fleet_pane_fmt '#{@fleet_role}' 2>/dev/null)" = worker ] && worker_seat=1
 
@@ -556,19 +558,25 @@ if [ "$bind" = 1 ] && [ -n "$num" ]; then
     || printf 'fleet-issue-file: filed #%s but the bind was refused — it is on the backlog\n' "$num" >&2
 fi
 
-# --- 5c. a worker's breakage filed without --spawn: the steward holder spawns its fixer --
-# The worker asked for no spawn, so the fixer's parent is the session holding the
-# steward role (a worker that passes --spawn starts the fixer itself, issue #4591). The issue is queued in the fleet's
-# state dir and the queue drained at once in the background, off this pane
-# (fleet-steward-tick.sh breakage); the holder's beat drains it again if that
-# spawn was refused (no room). Nobody holds the role (issue #3115) ⇒ nobody is
-# spawned: the person is told once and the issue waits in the queue.
-if [ "$worker_seat" = 1 ] && [ "$spawn" != 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ] && [ -n "$_fs" ]; then
-  _bq="$(fleet_state_dir "$_fs")/breakage-spawn"
-  mkdir -p "$_bq" 2>/dev/null
-  printf '%s\t%s\t%s\t%s\n' "$repo" "$num" "$(printf '%s' "$title" | tr '\t\n' '  ')" "$spawn_agent" \
-    > "$_bq/$(fleet_slug "$repo")-$num" 2>/dev/null \
-    && printf 'fleet-issue-file: #%s queued for the steward — its holder spawns the fixer (none: the person is told; wait with await %s)\n' "$num" "$num" >&2
-  ( env -u TMUX_PANE -u TMUX bash "$BIN/fleet-steward-tick.sh" breakage --session "$_fs" >/dev/null 2>&1 & ) 2>/dev/null
+# --- 5c. a worker's breakage filed without --spawn: the person and the parent told --
+# Nobody spawns its fixer by itself any more (issue #4337, EPIC #4333 拍板 3): the
+# person gets one breakage alert, the worker's parent session one message (an
+# orchestrator / steward session there may spawn it), and the issue waits — no
+# queue. A parent that cannot be told is said on stderr; the filing stands.
+if [ "$worker_seat" = 1 ] && [ "$spawn" != 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ]; then
+  _bt=$(printf '%s' "$title" | tr '\t\n' '  ')
+  bash "$BIN/fleet-alerts.sh" event breakage \
+    "fleet: base red — $repo#$num filed ($_bt); nobody spawned its fixer: spawn it, or let an orchestrator / steward session" \
+    >/dev/null 2>&1 \
+    || printf 'fleet-issue-file: #%s filed, but the breakage alert could not be raised\n' "$num" >&2
+  _pt=''
+  [ -n "$_fs" ] && _pt=$(fleet_parent_addr "$_fs" "${TMUX_PANE:-}")
+  if [ -n "$_pt" ]; then
+    _ps=$(printf '[breakage] the base is red — filed %s#%s: %s\nNobody spawned its fixer. Spawn it (spawn issue %s), or tell the person.\n' \
+            "$repo" "$num" "$_bt" "$num" | bash "$BIN/fleet-peer-send.sh" "$_pt" - 2>&1 | head -n 1)
+    printf 'fleet-issue-file: #%s — nobody spawns its fixer; the person alerted, parent told: %s\n' "$num" "$_ps" >&2
+  else
+    printf 'fleet-issue-file: #%s — nobody spawns its fixer; the person alerted (no parent session to tell)\n' "$num" >&2
+  fi
 fi
 exit 0

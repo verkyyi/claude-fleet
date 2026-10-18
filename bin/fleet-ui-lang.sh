@@ -196,8 +196,6 @@ fleet_ui_t() {
     en:steward_dialog_say_fmt)  printf 'batch %s waits on you in a choice dialog: %s' "${1:-}" "${2:-}" ;;
     zh:steward_stalled_item_fmt) printf '批次 %s 的驱动没在走：心跳停了 %s 分钟，窗口「%s」还在 — 去看看它停在哪' "${1:-}" "${2:-}" "${3:-}" ;;
     en:steward_stalled_item_fmt) printf 'the driver of batch %s is not moving: no heartbeat for %s min, window “%s” still open — go and see where it stopped' "${1:-}" "${2:-}" "${3:-}" ;;
-    zh:steward_dialog_basis_default) printf '到点按建议项（Recommended）走' ;;
-    en:steward_dialog_basis_default) printf 'past its deadline, the recommended option' ;;
     zh:steward_dialog_basis_person) printf '人在决定单上答' ;;
     en:steward_dialog_basis_person) printf 'the person answered on the sheet' ;;
     zh:steward_card_deferred_fmt) printf '延后 %s 条（本拍写满了）' "${1:-}" ;;
@@ -2006,6 +2004,13 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     en:keys_config_06)         printf %s 'refresh now' ;;
     zh:keys_config_07)         printf %s '关闭' ;;
     en:keys_config_07)         printf %s 'close' ;;
+    # an ask's hints under its question (issue #4337, bin/fleet-mcp.py ask): nothing acts on them
+    zh:ask_hint_suggest)        printf '建议：%s' "${1:-}" ;;
+    en:ask_hint_suggest)        printf 'suggested: %s' "${1:-}" ;;
+    zh:ask_hint_default)        printf '没人答时：%s（仅提示，不会自动执行）' "${1:-}" ;;
+    en:ask_hint_default)        printf 'if nobody answers: %s (a hint — nothing goes ahead by itself)' "${1:-}" ;;
+    zh:ask_hint_due)            printf '希望在此前答复：%s' "${1:-}" ;;
+    en:ask_hint_due)            printf 'wanted by: %s' "${1:-}" ;;
     # the decision format (issue #2669, bin/fleet_decision.py; docs/dev/DECISIONS.md)
     zh:decision_suggest_fmt)    printf '建议：%s' "${1:-}" ;;
     en:decision_suggest_fmt)    printf 'suggested: %s' "${1:-}" ;;

@@ -74,8 +74,8 @@ Background and incident references are in [WORKER.md](../docs/dev/WORKER.md); re
 - **Open a page in the operator's browser with `fleet-open`, never `open`**: `mcp__fleet__open` (`target: URL|:port[/path]|file`); `share.sh --open` combines hosting/opening; interpret `sent:iterm2`, `sent:tunnel`, `fallback:copied` per that skill.
 - **A temp server binds 127.0.0.1 and dies with your work**: e.g. `python3 -m http.server --bind 127.0.0.1`, `vite --host 127.0.0.1`, `next dev -H 127.0.0.1`; stop it afterward, never widen its bind to share.
 - **An `rm` path never starts with a bare variable**: `rm -f "${P:?}"/*`, never `$P/*` (bash-guard denies it, #4637).
-- **Blocked = say why, never stall silently.** Unblock yourself when possible; otherwise `mcp__fleet__ask` (`question`, `kind: permission` only for needed authorization, `suggest` with reason, `default`/`due` if different from suggestion/4h), then `mcp__fleet__report` (`state: blocked`, `summary`, `pr` if one exists), then stop.
-- Questions about rules/money/publishing never default: set `class: never:rule|never:money|never:publish`; a new turn clears blocked state, so ask again before stopping if its input did not resolve the blocker.
+- **Blocked = say why, never stall silently.** Unblock yourself when possible; otherwise `mcp__fleet__ask` (`question`, `kind: permission` only for needed authorization, `suggest` with reason; `default`/`due` are hints only — nobody answers at a deadline), then `mcp__fleet__report` (`state: blocked`, `summary`, `pr` if one exists), then stop.
+- The question also goes to your parent session (the result's `parent` says whether it was told); a new turn clears blocked state, so ask again before stopping if its input did not resolve the blocker.
 - Record a direct operator decision with `mcp__fleet__comment`, first line `决定（直达）：<what>`.
 - **A `[child-report]` arriving in YOUR pane: acknowledge, don't take over.** Note it and return to your issue; no reply, opening its PR or adopting its follow-up; if needed read `mcp__fleet__status` or `mcp__fleet-orch__children` ONCE; only clear a blocker that is actually yours, in your worktree or by filing.
 

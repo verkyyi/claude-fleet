@@ -7335,6 +7335,22 @@ fleet_origin_win() {
   fleet_win_for_key "$po" "$k"
 }
 
+# fleet_parent_addr <sess> <pane> → the fleet-peer-send.sh target of <pane>'s
+# PARENT (issue #4337): `wid:<worker_id>` when it lives on another machine (its
+# @origin_wid names a fleet not configured here, issue #3439), else its live window
+# here (fleet_origin_win: identity first, key second). rc 1 when it has none.
+fleet_parent_addr() {
+  local s="${1:-}" p="${2:-}" ow w
+  [ -n "$p" ] || return 1
+  ow=$(_fleet_tmux "$s" display-message -p -t "$p" '#{@origin_wid}' 2>/dev/null)
+  if [ -n "$ow" ]; then
+    fleet_wid_home "$ow" "$s" >/dev/null 2>&1
+    [ "$?" = 1 ] && { printf 'wid:%s' "$ow"; return 0; }
+  fi
+  w=$(fleet_origin_win "$s" "$p" 2>/dev/null) && [ -n "$w" ] || return 1
+  printf '%s' "$w"
+}
+
 # fleet_restore_wins <restore.map> → its WIN rows, the way restore() reads them: a
 # `FID<TAB><fleet_id>` row (issue #1646, written just before its window's WIN row)
 # tags that row, whose column 1 then reads `WIN:<fleet_id>`; every other column is

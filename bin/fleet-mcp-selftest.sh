@@ -405,6 +405,9 @@ assert (a["command"], a["exit"], a["issue"]) == ("fleet-comment.sh", 0, 1807), a
 assert a["body"] == "⛔ blocked: which repo owns this?", a
 assert (a["state"]["command"], a["state"]["exit"]) == ("set-claude-state.sh", 0), a
 assert "set-claude-state.sh" in rows[81]["content"][0]["text"], rows[81]
+# the parent gets a copy (issue #4337): sent over send to: parent, the receipt in the result
+assert a["parent"]["delivered"] and a["parent"]["receipt"].startswith("sent -> @77 ([ask] issue #1807 — ⛔ blocked: which repo owns this?"), a
+assert "parent: sent -> @77" in rows[81]["content"][0]["text"], rows[81]
 assert sc(82)["issue"] == 77 and sc(82)["body"] == "⛔ blocked — needs authorization: push to prod?", sc(82)
 assert sc(83)["stdout"].startswith("https://github.com/acme/app/issues/1808"), sc(83)
 assert sc(91)["exit"] == 3, sc(91)                                                     # check findings = data
@@ -416,9 +419,11 @@ fleet-report-parent.sh --state merged --pr 42 --summary landed it
 fleet-comment.sh 1807 --note --body-file -
 <<<⛔ blocked: which repo owns this?>
 set-claude-state.sh blocked
+fleet-peer-send.sh @77 -
 fleet-comment.sh 77 --note --body-file -
 <<<⛔ blocked — needs authorization: push to prod?>
 set-claude-state.sh blocked
+fleet-peer-send.sh @77 -
 fleet-comment.sh 1808 --note --body-file -
 <<<line one
 line "two" $HOME `x`>
@@ -1008,32 +1013,42 @@ cli "$WORK/n.u4" --call spawn '{}' extra; rc=$?
 [ "$rc" = 2 ] || fail "N: --call with a fourth word exited $rc, want 2"
 ok "N --call refusals (type · unhosted repo · unknown argument · unknown tool): exit 1, the reason on stdout, nothing ran; non-JSON / a list / no tool / an extra word: exit 2"
 
-# --- O: ask carries the decision format (issue #2669) -------------------------
-# With bin/fleet_decision.py beside it: a field ⇒ 建议 / 不答按 / 截止 + the
-# fleet:ask marker; no field + nobody holding the steward role ⇒ today's body byte
-# for byte; no field + a holder (take_role, issue #3115) ⇒ the marker, a row that
-# waits (「等你」).
-cp "$BIN/fleet_decision.py" "$BIN/fleet_iso.py" "$BIN/fleet_ticket.py" "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
+# --- O: ask's hints, and nobody answers at a deadline (issue #4337) ------------
+# suggest / default / due ⇒ plain lines under the question off THE string table,
+# no fleet:ask marker anything acts on; no field ⇒ the bare question byte for byte,
+# whoever holds what; class is accepted and changes nothing. The parent gets the
+# question + the hints over send; a parent that cannot be told is said, not fatal.
+cp "$BIN/fleet-ui-lang.sh" "$WORK/bin/"
+SEND_OK='text=$(cat); printf "sent -> %s (%s)\n" "$1" "$text"'
+fake fleet-peer-send.sh "$SEND_OK"   # leg K left its assertion recorder here
 : > "$LOG"
 {
   call 120 ask '{"question":"which repo owns this?"}'
-  call 121 ask '{"question":"20 or 50?","suggest":"20","due":"90m"}'
-} | FLEET_STEWARD_HOLDER_CMD='' FLEET_UI_LANG=zh serve "$WORK/o"
-{ call 122 ask '{"question":"which repo owns this?"}'; } | FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_UI_LANG=zh serve "$WORK/o2"
-python3 - "$WORK/o" "$WORK/o2" <<'PY' || fail "O: ask with the decision format" "$(cat "$WORK/o" "$WORK/o2")"
+  call 121 ask '{"question":"20 or 50?","suggest":"20","due":"90m","default":"20","class":"never:money"}'
+} | FLEET_UI_LANG=zh serve "$WORK/o"
+fake fleet-peer-send.sh 'cat >/dev/null; echo "fleet-peer-send: parent is not a live session" >&2; exit 1'
+{ call 122 ask '{"question":"nobody?"}'; } | FLEET_UI_LANG=zh serve "$WORK/o2"
+fake fleet-peer-send.sh "$SEND_OK"
+python3 - "$WORK/o" "$WORK/o2" <<'PY' || fail "O: ask's hints / parent copy" "$(cat "$WORK/o" "$WORK/o2")"
 import json, sys
 rows = {}
 for f in sys.argv[1:]:
-    rows.update({r["id"]: r["result"]["structuredContent"] for r in (json.loads(l) for l in open(f) if l.strip())})
-assert rows[120]["body"] == "⛔ blocked: which repo owns this?", rows[120]
-b = rows[121]["body"]
-assert b.startswith("⛔ blocked: 20 or 50?\n\n- 建议：20\n- 不答按：20\n- 截止：") and "<!-- fleet:ask v=1 id=" in b, b
-assert " kind=normal " in b and " suggest=20 " in b, b
-b = rows[122]["body"]
-assert b.startswith("⛔ blocked: which repo owns this?\n\n- 不答按：等你\n\n<!-- fleet:ask v=1 "), b
+    rows.update({r["id"]: r["result"] for r in (json.loads(l) for l in open(f) if l.strip())})
+sc = lambda i: rows[i]["structuredContent"]
+assert sc(120)["body"] == "⛔ blocked: which repo owns this?", sc(120)
+b = sc(121)["body"]
+assert b == "⛔ blocked: 20 or 50?\n\n- 建议：20\n- 没人答时：20（仅提示，不会自动执行）\n- 希望在此前答复：90m", b
+assert "fleet:ask" not in b, b
+r = sc(121)["parent"]["receipt"]
+assert r.startswith("sent -> @77 ([ask] issue #1807 — ⛔ blocked: 20 or 50?") and "- 建议：20" in r, r
+p = sc(122)["parent"]
+assert not rows[122].get("isError") and p["delivered"] is False and "not a live session" in p["why"], sc(122)
+assert sc(122)["exit"] == 0 and sc(122)["state"]["exit"] == 0, sc(122)
+assert "parent: not told" in rows[122]["content"][0]["text"] and "waits for the person" in rows[122]["content"][0]["text"], rows[122]
 PY
-rm -f "$WORK/bin/fleet_decision.py" "$WORK/bin/fleet_iso.py" "$WORK/bin/fleet_ticket.py" "$WORK/bin/fleet-ui-lang.sh"
-ok "O ask: a field ⇒ 建议/不答按/截止 + fleet:ask marker; steward off + no field ⇒ today's body; steward on ⇒ 等你 row"
+rm -f "$WORK/bin/fleet-ui-lang.sh"
+[ "$(grep -c '^fleet-peer-send.sh @77 -$' "$LOG")" = 3 ] || fail "O: each ask told the parent once" "$(cat "$LOG")"
+ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the bare question; the parent gets a copy; an unreachable parent is said, not fatal"
 
 # --- R: the hub task record (issue #3330) -------------------------------------
 # ask in a window with no issue but a record ⇒ the question on the RECORD only (no
@@ -1069,9 +1084,11 @@ PY
 cat > "$WORK/r.want" <<'EOF'
 fleet-task-record.sh set T7 --asked ⛔ blocked: which one?
 set-claude-state.sh blocked
+fleet-peer-send.sh @77 -
 fleet-comment.sh 1807 --note --body-file -
 <<<⛔ blocked: push?>
 set-claude-state.sh blocked
+fleet-peer-send.sh @77 -
 fleet-task-record.sh set T7 --asked ⛔ blocked: push?
 fleet-task-record.sh dispatch --title 看看风扇 --body-file - --rule 1 --spawn
 <<<为什么一直转>

@@ -889,11 +889,43 @@ def tool_report(args):
 
 
 ASK_HEAD = {"question": "⛔ blocked: ", "permission": "⛔ blocked — needs authorization: "}
-ASK_FIELDS = ("suggest", "default", "due", "class")
-try:   # the decision format's one reader / writer (issue #2669), beside this file
-    import fleet_decision
-except ImportError:   # a half-synced install: ask posts today's body
-    fleet_decision = None
+
+
+_UI = {}
+
+
+def ui_t(key, arg):
+    """One string off THE table (bin/fleet-ui-lang.sh dump), read once a process; a
+    key it lacks shows itself, never a blank."""
+    if not _UI:
+        try:
+            out = run(["sh", str(BIN / "fleet-ui-lang.sh"), "dump", "ask_hint_"], check=False,
+                      timeout=STATUS_TIMEOUT_S).stdout
+        except Exception:   # any failure: the key shows itself
+            out = ""
+        parts = out.split("\0")
+        _UI.update(zip(parts[0::2], parts[1::2]))
+        _UI.setdefault("", "")
+    return _UI.get(key, key + ": \x01").replace("\x01", arg, 1)
+
+
+def ask_hints(args):
+    """The suggestion / default / deadline lines under a question (issue #4337):
+    hints for whoever answers — nobody answers at the deadline any more (EPIC #4333
+    拍板 2), so they carry no marker anything acts on. `class` is accepted and unused."""
+    return ["- " + ui_t("ask_hint_" + k, args[k]) for k in ("suggest", "default", "due") if args.get(k)]
+
+
+def ask_parent(where, head, hints):
+    """A copy of the question for the session that spawned this one (issue #4337),
+    over `send` to: parent (fid first). No parent, or it cannot be reached ⇒ said in
+    the result; the question is on the record and the window is red either way."""
+    text = "\n".join(["[ask] %s — %s" % (where, head)] + hints
+                     + ["Answer it there (a reply on it, or send to this session), or tell the person."])
+    try:
+        return send_message("parent", text)
+    except (Refused, ToolFault) as e:
+        return {"delivered": False, "why": str(e)}
 
 
 def tool_ask(args):
@@ -902,6 +934,7 @@ def tool_ask(args):
     # the record ALONE (「问过你」); with one it is mirrored there. Neither ⇒ as before.
     task = pane_task() if "issue" not in args else ""
     head = ASK_HEAD[args.get("kind", "question")] + args["question"]
+    hints = ask_hints(args)
     if not issue and task:
         rec = task_asked(task, head)
         if rec["exit"] != 0:
@@ -909,18 +942,10 @@ def tool_ask(args):
                           % (task, (rec.get("stderr") or "no hub here").strip() or "exit %d" % rec["exit"]))
         red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
         red["command"] = "set-claude-state.sh"
-        return dict(rec, task=task, body=head, state=red)
+        return dict(rec, task=task, body=head, state=red, parent=ask_parent("task " + task, head, hints))
     if not issue:
         raise Refused("this window has no bound issue to ask on — pass issue, or ask in your reply")
-    body = head
-    fields = [k for k in ASK_FIELDS if k in args]
-    if fields or (fleet_decision and fleet_decision.steward_on()):
-        # the decision format (issue #2669): one marker the steward reads back;
-        # no field and no steward ⇒ the body above, byte for byte
-        if fleet_decision is None:
-            raise Refused("this install has no bin/fleet_decision.py — ask again without %s" % ", ".join(fields))
-        body, _ = fleet_decision.ask_body(args["question"], args.get("suggest"), args.get("default"),
-                                          args.get("due"), args.get("class"), args.get("kind", "question"))
+    body = "\n".join([head, ""] + hints) if hints else head
     said = stdin_script([str(BIN / "fleet-comment.sh"), issue, "--note", "--body-file", "-"], body,
                         WRITE_TIMEOUT_S)
     # The red stamp goes on whether or not the comment posted: the session IS
@@ -928,7 +953,7 @@ def tool_ask(args):
     # to prevent. stdin pinned shut — `blocked` reads no hook payload.
     red = stdin_script(["sh", str(BIN / "set-claude-state.sh"), "blocked"], "", STATUS_TIMEOUT_S)
     red["command"] = "set-claude-state.sh"
-    out = dict(said, issue=int(issue), body=body, state=red)
+    out = dict(said, issue=int(issue), body=body, state=red, parent=ask_parent("issue #" + issue, head, hints))
     mirror = task_asked(task, head)
     if mirror is not None:
         out["task"], out["record"] = task, mirror
@@ -1365,23 +1390,21 @@ TOOLS = {
                        "(set-claude-state.sh blocked) until the next prompt arrives. A session with no issue but "
                        "a hub task record (@task) puts the question on the record instead (「问过你」, "
                        "bin/fleet-task-record.sh — issue #3330); one with both mirrors it there. The answer comes back as "
-                       "your next turn, by the existing channels. Then end your turn — do not spin. Give "
-                       "suggest (+ default / due): with the steward installed and someone holding its seat, "
-                       "past the deadline it answers with the suggestion; otherwise the question waits for "
-                       "the person (bin/fleet_decision.py, docs/dev/DECISIONS.md).",
+                       "your next turn, by the existing channels. A copy goes to the session that spawned this "
+                       "one (send to: parent, issue #4337); no parent ⇒ the question waits for the person. Then "
+                       "end your turn — do not spin. suggest / default / due are written under the question as "
+                       "hints; nobody answers at a deadline by itself (EPIC #4333).",
         "inputSchema": {"type": "object", "properties": {
             "question": {"type": "string", "description": "What you need, and why you cannot go on without it."},
             "kind": {"type": "string", "enum": ["question", "permission"],
                      "description": "question (default) or permission (an authorization you need)."},
-            "suggest": {"type": "string", "description": "What you would decide, and why (docs/dev/DECISIONS.md)."},
+            "suggest": {"type": "string", "description": "What you would decide, and why."},
             "default": {"type": "string",
-                        "description": "What happens if nobody answers by the deadline (default: the suggestion)."},
+                        "description": "A hint: what you would do if nobody answers (nothing does it by itself)."},
             "due": {"type": "string",
-                    "description": "Deadline: an ISO time or a duration (90m, 4h); default 4h, a night deadline "
-                                   "(23:00-08:00) moves to 09:00."},
+                    "description": "A hint: by when you need the answer (written as given; nothing fires at it)."},
             "class": {"type": "string", "enum": ["normal", "never:rule", "never:money", "never:publish"],
-                      "description": "never:* = this is never decided by default (a fleet rule, money, "
-                                     "publishing); a keyword in the question makes it never all the same."},
+                      "description": "Accepted for old callers and unused: nothing is decided by default any more."},
             "issue": dict(ISSUE, description="Ask on this issue instead of the window's bound one.")},
             "required": ["question"], "additionalProperties": False}}),
     "answer_dialog": (tool_answer_dialog, {
@@ -1511,7 +1534,8 @@ TOOLS = {
                        "gets 「未注明规则」 (issue #2786). "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
                        "5 the breakage already has an open issue (URL printed) · 1 failure. A breakage a worker files "
-                       "without spawn is spawned by the steward holder.",
+                       "without spawn is filed, the person alerted and the parent session told — nobody "
+                       "spawns its fixer by itself (issue #4337).",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string"},
             "body": {"type": "string", "description": "The issue body, Markdown."},
@@ -1702,7 +1726,14 @@ def report(data):
 
 
 def ask_text(data):
-    return report(data) + "\n\n" + report(data["state"])
+    text = report(data) + "\n\n" + report(data["state"])
+    p = data.get("parent")
+    if p is not None:
+        text += "\n\nparent: " + (p.get("receipt") or ("sent" if p.get("delivered") else "queued")
+                                   if p.get("delivered") or p.get("queued") else
+                                   "not told — " + (p.get("receipt") or p.get("why") or "?")
+                                   + " (the question waits for the person)")
+    return text
 
 
 def status_text(data):

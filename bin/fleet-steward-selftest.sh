@@ -16,7 +16,7 @@
 #      [decision] of 2 rows; the decide count stamped is 2; a second `sheet` with
 #      the same rows sends nothing
 #   C  a never:* row: `answer --by steward` refuses it
-#   D  a due row is answered by its default at the beat (C1's apply_due) once
+#   D  a due row is NOT answered at the beat (issue #4337): nobody defaults it, it stays open
 #   E  a write storm: past FLEET_STEWARD_WRITES the answers wait a beat — the card
 #      says 延后 N, the next beat posts them, never more than the budget a beat
 #   F  not due: the every-minute caller returns 4 with no lock and no read
@@ -187,21 +187,22 @@ TICK answer --row "$r14" --text '不开' >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q never "$WORK/err" && ! grep -q "row=$r14" "$ST_GH/o-r-14.json" \
   && ok "C: a never:money row — answer --by steward refuses it" || bad "C: rc=$rc $(cat "$WORK/err")"
 
-# D — a due row is answered by its default, once
+# D — a due row is not answered by its default (issue #4337, EPIC #4333 拍板 2)
 ask 15 '日志留几天？' --suggest '7 天' --due 2000-01-01T00:00:00Z
 needs 15
 TICK beat --holder --force >/dev/null 2>&1
 TICK beat --holder --force >/dev/null 2>&1
 nd=$(grep -c 'by=default' "$ST_GH/o-r-15.json")
-[ "$nd" = 1 ] && grep -q 'fleet:default-decided' "$ST_GH/o-r-100.json" \
-  && ok "D: a due row answered by its default once + 默认拍板 on the parent" || bad "D: defaults posted $nd times"
+st15=$(python3 -c 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["rows"].values() if r.get("item", "").startswith("日志")][0]["state"])' "$STATE")
+[ "$nd" = 0 ] && ! grep -q 'fleet:default-decided' "$ST_GH/o-r-100.json" 2>/dev/null && [ "$st15" = open ] \
+  && ok "D: a due row is not answered by its default — it stays open" || bad "D: defaults posted $nd times, state $st15"
 
 # M — who closed a row (issue #2834): the patrol panel's 自答 / 默认拍板 count
 by_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["rows"][sys.argv[2]].get("by", "-"))' "$STATE" "$1"; }
 r15=$(rowid 日志)
 ndef=$(python3 -c 'import json,sys,time; d=json.load(open(sys.argv[1])); print(d["counts"][time.strftime("%Y-%m-%d")].get("default", 0))' "$STATE")
-[ "$(by_of "$r11")" = steward ] && [ "$(by_of "$r12")" = person ] && [ "$(by_of "$r15")" = default ] && [ "$ndef" = 1 ] \
-  && ok "M: rows[id].by — steward · person · default, today's counts carry the default" \
+[ "$(by_of "$r11")" = steward ] && [ "$(by_of "$r12")" = person ] && [ "$(by_of "$r15")" = - ] && [ "$ndef" = 0 ] \
+  && ok "M: rows[id].by — steward · person, a due row closed by nobody, no default counted" \
   || bad "M: by r11=$(by_of "$r11") r12=$(by_of "$r12") r15=$(by_of "$r15") default count=$ndef"
 python3 -c 'import json,sys
 d=json.load(open(sys.argv[1]))
