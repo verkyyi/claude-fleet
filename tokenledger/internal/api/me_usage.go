@@ -29,9 +29,6 @@ import (
 // Where it went:
 //   - a task is the (repo, issue) the row was spent in (git_repo + the
 //     issue-N branch);
-//   - a row on no task whose session holds the orchestrator or the steward
-//     (the worker's @fleet_role) is one row, kind "orch" — only a row that
-//     names its worker_id can say so, and a transcript names none;
 //   - every other row is the one kind "none" row, which is always there —
 //     so each breakdown sums to the range's total;
 //   - a batch is the task's parent issue (IssueMeta); unknown = not in one.
@@ -46,7 +43,6 @@ const (
 	workIssue = "issue"
 	workRepo  = "repo"
 	workEpic  = "epic"
-	workOrch  = "orch"
 	workNone  = "none"
 )
 
@@ -460,11 +456,10 @@ func modelHumanName(id string) string {
 	return id
 }
 
-// meSession is what the hub knows of a pool row's session: its key, whether
-// it holds the orchestrator or the steward, and where it ran.
+// meSession is what the hub knows of a pool row's session: its key and where
+// it ran.
 type meSession struct {
 	key   string
-	coord bool
 	node  string
 	login string
 }
@@ -498,29 +493,10 @@ func (s *Server) meSessions(rows []store.PoolUsage) map[string]meSession {
 				continue
 			}
 			key, _ := wk["key"].(string)
-			out[wid] = meSession{key: key, coord: isCoordinator(wk), node: fl.Hostname, login: fl.OSUser}
+			out[wid] = meSession{key: key, node: fl.Hostname, login: fl.OSUser}
 		}
 	}
 	return out
-}
-
-// isCoordinator is whether an inventory row is the window holding the
-// orchestrator or the steward: an older node's role=orchestrator|steward, a
-// newer one's coordinator flag (fleet_hub_common.py, claude-fleet#3227), or
-// the orchestrator's own columns (orch_*), which only that window carries.
-func isCoordinator(wk map[string]any) bool {
-	if r, _ := wk["role"].(string); r == "orchestrator" || r == "steward" {
-		return true
-	}
-	if c, _ := wk["coordinator"].(bool); c {
-		return true
-	}
-	for k, v := range wk {
-		if strings.HasPrefix(k, "orch_") && v != nil {
-			return true
-		}
-	}
-	return false
 }
 
 // meUsageWork splits rows three ways. Each breakdown's tokens sum to the
@@ -556,8 +532,6 @@ func (s *Server) meUsageWork(ctx context.Context, rows []store.PoolUsage) MeUsag
 			if se.key == "" {
 				se.key = fmt.Sprintf("issue-%d", u.Issue)
 			}
-		case se.coord:
-			a = get(workOrch, MeUsageItem{Kind: workOrch})
 		default:
 			a = get(workNone, MeUsageItem{Kind: workNone})
 		}
@@ -630,14 +604,11 @@ func (s *Server) meUsageWork(ctx context.Context, rows []store.PoolUsage) MeUsag
 	return out
 }
 
-// sortWork: tasks largest first, then the orchestrator's row, then "none".
+// sortWork: tasks largest first, then "none".
 func sortWork(xs []MeUsageItem) {
 	rank := func(k string) int {
-		switch k {
-		case workOrch:
+		if k == workNone {
 			return 1
-		case workNone:
-			return 2
 		}
 		return 0
 	}

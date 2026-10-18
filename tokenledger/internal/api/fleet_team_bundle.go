@@ -104,23 +104,16 @@ const personHookScriptMax = 32 << 10
 
 var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// A person's role overlays and rule table (claude-fleet#2784, EPIC #2781 C3):
-// `roles` is {<role>: overlay} — the agents/<role>.md text, or the same as an
-// object — for the four roles there are, each at most 16 KiB; `rules` is the
-// rows that override the built-in table by number — a Markdown table in
-// conf/role-rules.default.md's format, or a list of rows (bin/fleet_rules.py,
-// C5, owns a row's shape and refuses a layer it cannot read) — at most 32 KiB.
-// Since claude-fleet#2787 the hub refuses (422) an overlay or a row that every
-// machine would refuse, through internal/rolemerge — the merge's Go copy.
-// Both are the personal layer's alone; the team layer takes no roles this batch.
-const (
-	personRoleMax  = 16 << 10
-	personRulesMax = 32 << 10
-)
-
-var (
-	personRoles = map[string]bool{"orchestrator": true, "steward": true, "worker": true, "epic-driver": true}
-)
+// A person's rule table (claude-fleet#2784, EPIC #2781 C3): `rules` is the
+// rows that override the built-in table by number — a Markdown table or a
+// list of rows — at most 32 KiB; the hub refuses (422) a row no machine could
+// read (internal/rolemerge). The person's layer alone.
+//
+// `roles` (the role overlays) left with the person's role layer
+// (claude-fleet#3130): an older client's PUT that still carries it is taken
+// and the key dropped — never checked, never stored, never shown.
+// compat-1v: 下一批拒（422）.
+const personRulesMax = 32 << 10
 
 // validateBundle is validateTeamBundle for either layer: a person's layer
 // (claude-fleet#1856) takes the same allow-list plus hook_scripts — the
@@ -132,13 +125,16 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	if err := dec.Decode(&b); err != nil || b == nil {
 		return "", errors.New("bundle must be a JSON object")
 	}
+	if personal {
+		delete(b, "roles") // compat-1v
+	}
 	for k := range b {
-		if personal && (k == "hook_scripts" || k == "roles" || k == "rules" || k == "ui_lang") {
+		if personal && (k == "hook_scripts" || k == "rules" || k == "ui_lang") {
 			continue
 		}
 		if !teamBundleKeys[k] {
 			if personal {
-				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, roles, rules, ui_lang)", k)
+				return "", fmt.Errorf("bundle: %q is not part of a personal configuration (only mcp, hooks, skills, claude_settings, codex_config, hook_scripts, rules, ui_lang)", k)
 			}
 			return "", fmt.Errorf("bundle: %q is not something a team hands out (only mcp, hooks, skills, claude_settings, codex_config)", k)
 		}
@@ -147,6 +143,9 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	dec = json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	_ = dec.Decode(&all)
+	if personal {
+		delete(all, "roles") // compat-1v
+	}
 	obj := func(k string) (map[string]any, error) {
 		v, ok := all[k]
 		if !ok {
@@ -249,35 +248,6 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 		}
 		if len(txt) > personHookScriptMax {
 			return "", fmt.Errorf("bundle.hook_scripts.%s is over 32 KiB", n)
-		}
-	}
-	roles, err := obj("roles")
-	if err != nil {
-		return "", err
-	}
-	for n, v := range roles {
-		if !personRoles[n] {
-			return "", fmt.Errorf("bundle.roles.%s is not a role (orchestrator, steward, worker, epic-driver)", n)
-		}
-		switch v.(type) {
-		case string, map[string]any:
-		default:
-			return "", fmt.Errorf("bundle.roles.%s must be the overlay's text or an object", n)
-		}
-		raw, _ := json.Marshal(v)
-		if len(raw) > personRoleMax {
-			return "", fmt.Errorf("bundle.roles.%s is over 16 KiB", n)
-		}
-		// What every machine would refuse (fleet-role.py check_overlay), the
-		// hub refuses first (claude-fleet#2787) — a credential is the scan's below.
-		if ov, err := rolemerge.Decode(raw); err == nil {
-			front, body, err := rolemerge.OverlayOf(ov)
-			if err != nil {
-				return "", fmt.Errorf("bundle.roles.%s: %v", n, err)
-			}
-			if why := rolemerge.CheckOverlay(n, front, body); why != "" && !strings.HasPrefix(why, "carries something credential-shaped") {
-				return "", fmt.Errorf("bundle.roles.%s: %s", n, why)
-			}
 		}
 	}
 	if rules, ok := all["rules"]; ok {

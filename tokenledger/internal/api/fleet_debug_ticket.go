@@ -89,9 +89,6 @@ type DebugTickets struct {
 	// Login is CCQUOTA_FLEET_DEBUG_LOGIN, <machine>/<login>: where a
 	// debugger session opens ("" = none opens; a report goes unfinished).
 	Login string
-	// Notify is CCQUOTA_FLEET_DEBUG_NOTIFY, <machine>/<login>: the one login
-	// whose node may read the feed (the orchestrator's).
-	Notify string
 	// ShapesFile is conf/secret-shapes.list's path when the hub carries no
 	// client pack (tests); "" = the pack's copy.
 	ShapesFile string

@@ -50,9 +50,6 @@ import (
 //	GET    /v1/node/debug/<id>/hub.json    (same) what the hub knows of this person
 //	POST   /v1/node/debug/<id>/page        (same) the four sections → the page
 //	POST   /v1/node/debug/<id>/propose     (same) one thing to change, for the person to nod at
-//	GET    /v1/node/debug/feed?after=<t>   (the orchestrator's login, CCQUOTA_FLEET_DEBUG_NOTIFY)
-//	                                                  what changed — the steward's beat turns
-//	                                                  it into one line for the orchestrator
 //
 // A report lives in <CCQUOTA_FLEET_DEBUG_DIR>/<id>/ — bundle.tar.gz, hub.json,
 // result.json, page.html — written in place (the directory is an object
@@ -965,10 +962,6 @@ func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	rest := strings.TrimPrefix(r.URL.Path, NodeDebugPrefix)
-	if rest == "feed" {
-		s.debugFeed(w, r, ep)
-		return
-	}
 	id, what, _ := strings.Cut(rest, "/")
 	if !debugIDRe.MatchString(id) {
 		httpError(w, http.StatusNotFound, "no such report")
@@ -1063,51 +1056,6 @@ func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpError(w, http.StatusNotFound, "GET <id>/bundle · <id>/hub.json, POST <id>/page · <id>/propose")
 	}
-}
-
-// debugFeed: what changed after `after` (RFC 3339), for the orchestrator's
-// login alone (CCQUOTA_FLEET_DEBUG_NOTIFY) — its steward's beat says each in
-// one line to the orchestrator. Anyone else: 404, as if there were no feed.
-func (s *Server) debugFeed(w http.ResponseWriter, r *http.Request, ep *store.Endpoint) {
-	machine, login, ok := strings.Cut(s.Debug.Notify, "/")
-	if !ok || r.Method != http.MethodGet || ep.OSUser != login || !sameMachine(ep.Hostname, machine) {
-		httpError(w, http.StatusNotFound, "no feed for this login")
-		return
-	}
-	var after time.Time
-	if a := r.URL.Query().Get("after"); a != "" {
-		t, err := time.Parse(time.RFC3339Nano, a)
-		if err != nil {
-			httpError(w, http.StatusBadRequest, "after is an RFC 3339 time")
-			return
-		}
-		after = t
-	}
-	reps, err := s.Store.DebugReportsUpdatedAfter(after, 100)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	out := make([]map[string]any, 0, len(reps))
-	for _, rep := range reps {
-		who := rep.Owner
-		if who == "" && len(rep.FP) >= 8 {
-			who = "fp " + rep.FP[:8]
-		}
-		m := map[string]any{"id": rep.ID, "state": rep.State, "state_word": debugStateWord(rep.State), "who": who,
-			"url": s.hubURL(r) + DebugShortPrefix + rep.ID, "updated_at": rep.UpdatedAt.UTC().Format(time.RFC3339Nano)}
-		if rep.Cause != "" {
-			m["cause"] = rep.Cause
-		}
-		if rep.Why != "" {
-			m["why"] = rep.Why
-		}
-		if len(rep.Ours) > 0 {
-			m["ours"] = rep.Ours
-		}
-		out = append(out, m)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"reports": out})
 }
 
 // ── the templates (styled like doc-preview: GitHub's markdown look) ──────

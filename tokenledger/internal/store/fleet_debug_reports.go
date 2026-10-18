@@ -12,9 +12,9 @@ import (
 // bundle a computer sent up — which ticket sent it, its sha256 (the same bytes
 // again are the same report), where it is in its life (uploaded → queued |
 // diagnosing → concluded | unfinished) and, once the debugger answered, the
-// one line the orchestrator is told plus what it asks us to change (ours —
-// the page's last section, and every debug_propose since). updated_at moves on
-// every change: it is the cursor the orchestrator's feed reads by. The bundle and the rendered page live in
+// cause plus what it asks us to change (ours — the page's last section, and
+// every debug_propose since). updated_at moves on every change. The bundle and
+// the rendered page live in
 // CCQUOTA_FLEET_DEBUG_DIR/<id>/, never in the database; the row is what says
 // they exist. Seven days after the upload both go (PruneDebugReports).
 //
@@ -236,26 +236,6 @@ func (s *Store) AddDebugProposal(id, text string, at time.Time) (bool, error) {
 		return false, err
 	}
 	return true, tx.Commit()
-}
-
-// DebugReportsUpdatedAfter is every report changed after t, oldest change
-// first — the orchestrator's feed.
-func (s *Store) DebugReportsUpdatedAfter(t time.Time, limit int) ([]DebugReport, error) {
-	rows, err := s.read.Query(`SELECT `+debugReportCols+` FROM fleet_debug_reports WHERE updated_at > ? ORDER BY updated_at LIMIT ?`,
-		debugTime(t), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []DebugReport
-	for rows.Next() {
-		r, err := scanDebugReport(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *r)
-	}
-	return out, rows.Err()
 }
 
 func oursJSON(ours []string) string {

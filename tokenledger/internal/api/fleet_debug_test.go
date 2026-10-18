@@ -31,7 +31,7 @@ import (
 
 // debugReportHarness: debug tickets on, the repo's own shape table, the
 // debugger's start replaced by a recorder, and a node enrolled as the
-// debugger's login ("dbg") and one as the orchestrator's ("orch").
+// debugger's login ("dbg") and one as another login on the same machine ("other").
 type debugStarts struct {
 	mu    sync.Mutex
 	seeds []string
@@ -56,8 +56,7 @@ func debugReportHarness(t *testing.T) (*harness, *debugClock, *debugStarts) {
 	starts := &debugStarts{}
 	h.srv.Debug.ShapesFile = filepath.Join("..", "..", "..", "conf", "secret-shapes.list")
 	h.srv.Debug.Start = starts.start
-	h.srv.Debug.Notify = "mac-e/heidi"
-	for label, who := range map[string][2]string{"dbg": {"mac-e", "fleetdebug"}, "orch": {"mac-e", "heidi"}} {
+	for label, who := range map[string][2]string{"dbg": {"mac-e", "fleetdebug"}, "other": {"mac-e", "heidi"}} {
 		h.enroll(t, label)
 		ident := model.Identity{AccountUUID: "acct-" + label, Hostname: who[0], OSUser: who[1]}
 		if err := h.srv.Store.UpsertAccount(ident, "max", ""); err != nil {
@@ -289,7 +288,7 @@ func TestDebugBundleToPage(t *testing.T) {
 	}
 
 	// the node doors: only the login the report was sent to
-	if code, _ := debugNode(t, h, "orch", "GET", NodeDebugPrefix+id+"/bundle", nil); code != 404 {
+	if code, _ := debugNode(t, h, "other", "GET", NodeDebugPrefix+id+"/bundle", nil); code != 404 {
 		t.Fatalf("another login read the bundle: %d", code)
 	}
 	if code, body := debugNode(t, h, "dbg", "GET", NodeDebugPrefix+id+"/bundle", nil); code != 200 || body != string(bundle) {
@@ -326,7 +325,7 @@ func TestDebugBundleToPage(t *testing.T) {
 			t.Fatalf("%s: publish = %d %s", c.name, code, body)
 		}
 	}
-	if code, _ := debugNode(t, h, "orch", "POST", NodeDebugPrefix+id+"/page", goodResult); code != 404 {
+	if code, _ := debugNode(t, h, "other", "POST", NodeDebugPrefix+id+"/page", goodResult); code != 404 {
 		t.Fatalf("another login published: %d", code)
 	}
 	if code, body := debugNode(t, h, "dbg", "POST", NodeDebugPrefix+id+"/page", goodResult); code != 200 || !strings.Contains(body, "concluded") {
@@ -353,7 +352,7 @@ func TestDebugBundleToPage(t *testing.T) {
 		t.Fatalf("请你做's commands = %v", codes)
 	}
 
-	// propose: a line for the orchestrator, never twice
+	// propose: one thing to change, never twice
 	for i := 0; i < 2; i++ {
 		if code, body := debugNode(t, h, "dbg", "POST", NodeDebugPrefix+id+"/propose", map[string]string{"text": "client 连续失败时自动提示"}); code != 200 {
 			t.Fatalf("propose = %d %s", code, body)
@@ -362,25 +361,6 @@ func TestDebugBundleToPage(t *testing.T) {
 	rep, _ := h.srv.Store.DebugReport(id)
 	if len(rep.Ours) != 2 || rep.Ours[1] != "client 连续失败时自动提示" {
 		t.Fatalf("ours = %v", rep.Ours)
-	}
-
-	// the feed: the orchestrator's login only
-	if code, _ := debugNode(t, h, "dbg", "GET", NodeDebugPrefix+"feed", nil); code != 404 {
-		t.Fatalf("the debugger's login read the feed: %d", code)
-	}
-	code, body = debugNode(t, h, "orch", "GET", NodeDebugPrefix+"feed", nil)
-	var feed struct {
-		Reports []map[string]any `json:"reports"`
-	}
-	_ = json.Unmarshal([]byte(body), &feed)
-	if code != 200 || len(feed.Reports) != 1 || feed.Reports[0]["state"] != "concluded" ||
-		!strings.Contains(fmt.Sprint(feed.Reports[0]["cause"]), "证书库") || feed.Reports[0]["who"] != "fp aaaaaaaa" {
-		t.Fatalf("feed = %d %s", code, body)
-	}
-	after := feed.Reports[0]["updated_at"].(string)
-	code, body = debugNode(t, h, "orch", "GET", NodeDebugPrefix+"feed?after="+after, nil)
-	if code != 200 || strings.Contains(body, id) {
-		t.Fatalf("the feed after its cursor = %d %s", code, body)
 	}
 
 	// the admin deletes it: gone, the page a 404 (C6's teardown)

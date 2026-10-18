@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// OMap is a JSON object that keeps its keys' order — python's dict, which the
-// merge leans on (mcpServers comes out in the order its servers went in).
+// OMap is a JSON object that keeps its keys' order — python's dict, as the
+// frontmatter and a bundle's `rules` are read.
 type OMap struct {
 	Keys []string
 	Vals map[string]any
@@ -172,7 +172,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 
 // Canonical is v as JSON with every object's keys sorted and nothing escaped
 // that need not be — python's json.dumps(v, sort_keys=True, ensure_ascii=False,
-// separators=(',', ':')), what two copies of the merge are compared by.
+// separators=(',', ':')) — a rule cell that is not a string.
 func Canonical(v any) string {
 	var b strings.Builder
 	canon(&b, v)

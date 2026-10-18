@@ -457,7 +457,7 @@ kubectl -n new-deploy get pvc ccquota-debug        # Bound 之后才合并带挂
 
 - 桶里的 `debug/` 前缀要先有（OSS CSI 挂子目录前要求它存在）：在挂着 `/releases` 的 pod 里
   `mkdir -p /releases/debug` 一次即可，之后入口只经 `/debug` 读写它。
-- 上线后入口日志：`fleet: debug tickets on, bundles in /debug; debugger (none); feed to (none)`；
+- 上线后入口日志：`fleet: debug tickets on, bundles in /debug; debugger (none)`；
   `curl -s -o /dev/null -w '%{http_code}' https://hub.example.com/v1/fleet/debug/ticket` 是 401（无票），
   不再是 404。
 - `CCQUOTA_FLEET_DEBUG_LOGIN` / `_NOTIFY`（`<machine>/<login>`）等诊断员登录建好后再配；

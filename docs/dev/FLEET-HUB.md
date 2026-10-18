@@ -1838,10 +1838,9 @@ What the ticket is for (EPIC #2889 C4, `tokenledger/internal/api/fleet_debug.go`
   state_word, why?, url, uploaded_at, started_at?, finished_at?, took_secs?, cause?}`;
   `GET /v1/fleet/debug/reports` the admin's seven days, and `fleet hub debug-ticket
   --list` prints them under the tickets, 送达 → 出结论 as `took`.
-- **The orchestrator's line** — `GET /v1/node/debug/feed?after=<t>` answers only
-  `CCQUOTA_FLEET_DEBUG_NOTIFY`'s login (the orchestrator's). Nothing on a node reads
-  it any more: the steward's beat that turned it into lines left with #4339 (and
-  `fleet-debug-desk.py feed` with it); what the debugger asks us to change (`ours`,
+- **No orchestrator's line** — the feed (`/v1/node/debug/feed`, `CCQUOTA_FLEET_DEBUG_NOTIFY`)
+  left with the seat (#3130; the steward's beat that read it, with #4339); the
+  variable is ignored. What the debugger asks us to change (`ours`,
   `debug_propose`) is on the report's page, an issue only through `file_issue`.
 - **Off** — no `CCQUOTA_FLEET_DEBUG_DIR` — none of these routes exists
   (`TestDebugReportsOffAddsNothing`). BREAK-IT `debug-page-stuck`.

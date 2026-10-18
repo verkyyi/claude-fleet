@@ -459,19 +459,15 @@ func loadFleetDebug(srv *api.Server) error {
 		return errors.New("CCQUOTA_FLEET_DEBUG_DIR is set but CCQUOTA_FLEET_DEBUG_KEY is missing or shorter than 32 bytes")
 	}
 	// The reports (claude-fleet#2893): CCQUOTA_FLEET_DEBUG_LOGIN is where a
-	// debugger session opens, CCQUOTA_FLEET_DEBUG_NOTIFY whose node reads the
-	// feed the orchestrator is told from — each <machine>/<login>; unset, no
-	// debugger opens (a report goes unfinished, to the admin) / no feed.
+	// debugger session opens, <machine>/<login>; unset, no debugger opens (a
+	// report goes unfinished, to the admin). CCQUOTA_FLEET_DEBUG_NOTIFY, the
+	// orchestrator's feed, left with the seat (claude-fleet#3130) and is ignored.
 	login := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_LOGIN"))
-	notify := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_NOTIFY"))
-	for name, v := range map[string]string{"CCQUOTA_FLEET_DEBUG_LOGIN": login, "CCQUOTA_FLEET_DEBUG_NOTIFY": notify} {
-		if m, l, ok := strings.Cut(v, "/"); v != "" && (!ok || m == "" || l == "" || strings.Contains(l, "/")) {
-			return fmt.Errorf("%s=%q: want <machine>/<login>", name, v)
-		}
+	if m, l, ok := strings.Cut(login, "/"); login != "" && (!ok || m == "" || l == "" || strings.Contains(l, "/")) {
+		return fmt.Errorf("CCQUOTA_FLEET_DEBUG_LOGIN=%q: want <machine>/<login>", login)
 	}
-	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key), Login: login, Notify: notify}
-	log.Printf("fleet: debug tickets on, bundles in %s; debugger %s; feed to %s", dir,
-		orNone(login), orNone(notify))
+	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key), Login: login}
+	log.Printf("fleet: debug tickets on, bundles in %s; debugger %s", dir, orNone(login))
 	return nil
 }
 

@@ -368,11 +368,6 @@ type Server struct {
 	Feedback *FeedbackDesk
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
-	// roleTreeFn replaces where the merged roles view reads the built-in
-	// definitions from (claude-fleet#2787) in tests; nil = the release
-	// store's stable tree, cached per sha in roleTree.
-	roleTreeFn func() (sha string, files map[string][]byte, note string)
-	roleTree   roleTreeCache
 
 	// Spot starts and releases SPOT execution nodes in the hub's cluster
 	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
@@ -618,9 +613,6 @@ func (s *Server) routes() *routeMux {
 		// person's sign-in, each scoped to its own by the handler.
 		mux.HandleFunc(FleetTicketsPath, s.handleFleetTickets)
 		mux.HandleFunc(FleetTicketsPath+"/", s.handleFleetTickets)
-		// The person's one orchestrator (claude-fleet#2117) is gone (#3118): an
-		// older node still asks, and is told 「没有编排」 — compat-1v.
-		mux.HandleFunc("/v1/node/orchestrator", s.handleNodeOrchestrator)
 		// The direct door (claude-fleet#3068): a home machine reads its list
 		// and sends its record with the machine's token.
 		mux.HandleFunc(control.EntryKeysNodePath, s.handleNodeEntryKeys)
@@ -681,8 +673,6 @@ func (s *Server) routes() *routeMux {
 		// Each person's own layer (claude-fleet#1856): the same doors, each
 		// reading and writing its own; the operator reads and restores.
 		mux.HandleFunc(control.PersonBundlePath, s.handleFleetPersonBundle)
-		// The merged roles + rule table, read-only (claude-fleet#2787).
-		mux.HandleFunc(control.PersonBundlePath+"/roles", s.handleFleetPersonBundle)
 		// Each person's keys, address name and home for the direct door
 		// (claude-fleet#3068): authenticated by the handler, off by default.
 		mux.HandleFunc(control.EntryKeysPath, s.handleEntryKeys)
