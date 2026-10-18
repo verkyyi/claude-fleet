@@ -224,8 +224,8 @@ path — a launchd unit, a tmux bind, a hook command — can point into it.
 
 ### Dependencies
 
-tmux ≥ 3.2 · [fzf](https://github.com/junegunn/fzf) ≥ 0.45 (the dashboard binds
-use `transform`) · [gh](https://cli.github.com/) (authed — only for repos on GitHub; a repo at any other git address needs none) · python3 ·
+tmux ≥ 3.2 · [fzf](https://github.com/junegunn/fzf) ≥ 0.59 (the node's pickers use
+`--no-input`; the legacy dash wants 0.61 for `--ghost`) · [gh](https://cli.github.com/) (authed — only for repos on GitHub; a repo at any other git address needs none) · python3 ·
 [Claude Code](https://claude.com/claude-code) (the `claude` CLI; also used by
 the two optional LLM daemons). Soft: perl `Time::HiRes` (sharper dash spinner).
 
