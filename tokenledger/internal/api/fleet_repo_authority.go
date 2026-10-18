@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -218,6 +219,13 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		httpError(w, code, err.Error())
 		return
 	}
+	if change.Action == "freeze" || change.Action == "apply" || change.Action == "rollback" {
+		// Every host of the repo, not only the caller's, re-reads its overlay
+		// (claude-fleet#4730). One that is offline hears it on its first beat.
+		for _, n := range nodes {
+			go s.pushRepoAuthority(n.Endpoint, a)
+		}
+	}
 	writeJSON(w, 200, a)
 }
 
@@ -302,4 +310,49 @@ func (s *Server) repoDispatchGate(repo string, accepted bool) error {
 		return fault("INVALID_STATE", "repo task authority requires an unfrozen accepted dispatch")
 	}
 	return nil
+}
+
+// pushRepoAuthority tells one host that repo a's authority moved
+// (claude-fleet#4730). A host that did not list CapRepoAuthority, or is
+// offline, is skipped: it is told on its next connection's first beat.
+func (s *Server) pushRepoAuthority(endpointID string, a store.RepoAuthority) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if !s.canRepoAuthority(ctx, endpointID) {
+		return
+	}
+	msg, err := control.New(control.TypeRepoAuthority, control.RepoAuthority{Repo: a.Repo, Mode: a.Mode, Revision: a.Revision})
+	if err != nil {
+		return
+	}
+	if err := s.SendNodeWrite(ctx, endpointID, msg); err != nil && !errors.Is(err, ErrNodeOffline) {
+		log.Printf("node %s: repo authority %s: %v", endpointID, a.Repo, err)
+	}
+}
+
+// pushRepoAuthorities runs on a capable connection's first beat: every repo
+// this endpoint's fleets host whose authority has ever moved is told once, so
+// a host offline at the cutover converges when it comes back. A repo that
+// never moved sends nothing — byte for byte as before (claude-fleet#4730).
+func (s *Server) pushRepoAuthorities(endpointID string) {
+	fs, err := s.Store.Fleets()
+	if err != nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, f := range fs {
+		if f.EndpointID != endpointID {
+			continue
+		}
+		for _, r := range append([]string{f.Repo}, f.Repos...) {
+			r = store.NormRepo(r)
+			if r == "" || seen[r] {
+				continue
+			}
+			seen[r] = true
+			if a, err := s.Store.RepoAuthority(r); err == nil && a.Revision > 0 {
+				s.pushRepoAuthority(endpointID, a)
+			}
+		}
+	}
 }

@@ -122,6 +122,14 @@ const (
 	// to anyone else's. The payload names the ticket and the change, never its
 	// words: the node reads them by number. Nothing moves → never sent.
 	TypeTicket = "ticket"
+	// TypeRepoAuthority is the hub's word that a repo's task authority moved
+	// (claude-fleet#4730): a freeze, apply or rollback, sent to every
+	// connected host of that repo whose hello listed CapRepoAuthority, and on
+	// each such connection's first beat for every repo it hosts that has had
+	// a transition. Only a wake-up: the node re-reads the mode with its own
+	// credential (fleet-hub-node.sh authority-sync) and rewrites its overlay's
+	// FLEET_TASK_AUTHORITY; the payload's mode is never written as is.
+	TypeRepoAuthority = "repo_authority"
 	// TypeCreds is the hub's word that the credentials a node may lease
 	// changed (claude-fleet#3744): a subscription stored, deleted, paused or
 	// resumed, a machine or person revoked or lifted. Sent the moment it
@@ -506,6 +514,13 @@ type Ticket struct {
 	Number    int64  `json:"number"`
 	Kind      string `json:"kind"` // comment | state | claim | edit
 	CommentID int64  `json:"comment_id,omitempty"`
+}
+
+// RepoAuthority is the payload of TypeRepoAuthority.
+type RepoAuthority struct {
+	Repo     string `json:"repo"`
+	Mode     string `json:"mode"`
+	Revision int64  `json:"revision"`
 }
 
 // Release is the payload of TypeRelease: the stable release and its signed

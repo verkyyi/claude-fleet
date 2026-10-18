@@ -431,6 +431,8 @@ type Agent struct {
 	// The pushed person's version (claude-fleet#2784, node_team.go).
 	personState *teamFollow
 	personOnce  sync.Once
+	// The pushed repo authority moves (claude-fleet#4730, node_repo_authority.go).
+	authority authorityFollow
 	// The pushed stable release (claude-fleet#3146, node_release.go).
 	rel releaseFollow
 	// moveIn is where a moved-in session's transcript bundle is downloaded
