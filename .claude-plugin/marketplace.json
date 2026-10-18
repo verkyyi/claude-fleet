@@ -14,7 +14,7 @@
     {
       "name": "fleet-orchestrate",
       "source": "./plugins/fleet-orchestrate",
-      "description": "Take the orchestrator role in any session that holds no issue (/fleet-orchestrate) and hand work to worker sessions."
+      "description": "Open an orchestrator session (/fleet-orchestrate — the orchestrator agent file) that hands work to worker sessions."
     },
     {
       "name": "fleet-steward",

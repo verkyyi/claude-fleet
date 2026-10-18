@@ -143,8 +143,11 @@ p=$(FLEET_RULES_DEFAULT="$WORK/broken.md" R prompt orchestrator 2>/dev/null)
 # --- H the words live in the table only ------------------------------------------------
 grep -q '付费 · 花钱' "$ROOT/docs/dev/DECISIONS.md" && bad "H: docs/dev/DECISIONS.md still lists keywords" \
   || { grep -q 'role-rules.default.md' "$ROOT/docs/dev/DECISIONS.md" && ok "H: docs/dev/DECISIONS.md points at the rule table" || bad "H: DECISIONS.md names no table"; }
-R body orchestrator | grep -q '几处独立改动或跨仓库' && bad "H: the orchestrator's body still spells the shapes" \
-  || ok "H: the orchestrator's body says 按规则表派, the shapes are the table's"
+# the orchestrator is a session template now (issue #4335, EPIC #4333 decision 7): the
+# rows it really uses are in its own body, and it writes no 「按规则 N」 any more
+R body orchestrator | grep -q '几处独立改动或跨仓库' && ! R body orchestrator | grep -q '按规则' \
+  && ok "H: the orchestrator template spells its shapes itself, no 按规则 N" \
+  || bad "H: the orchestrator template must carry its shapes and no 按规则 N"
 
 # --- I the rows beside the skills (issue #3114) -----------------------------------------
 OR="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md"

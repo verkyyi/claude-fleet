@@ -207,6 +207,7 @@ conf/agent-defaults/claude/CLAUDE.default.md
 conf/agent-defaults/claude/mcp.default.json
 conf/agent-defaults/claude/agents/fleet-debugger.md
 conf/agent-defaults/claude/agents/fleet-worker.md
+conf/agent-defaults/claude/agents/orchestrator.md
 conf/agent-defaults/codex/AGENTS.default.md
 conf/agent-defaults/codex/config.default.toml
 bin/mcp-github.sh

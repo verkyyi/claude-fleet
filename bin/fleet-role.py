@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The role definitions agents/orchestrator.md · steward.md, and the rule table.
+"""The role definitions agents/steward.md · the orchestrator template, and the rule table.
 
 What is left of the role engine (issue #2782) after EPIC #3111: a session started
 AS something is a standard agent file (bin/fleet-agent-def.py, `--as <name>` →
@@ -43,6 +43,20 @@ def agents_dir():
         if os.path.isdir(os.path.join(root, 'agents')):
             return os.path.join(root, 'agents')
     return os.path.join(ROOT, 'agents')
+
+
+def def_path(role):
+    """agents/<role>.md, else the core's shipped agent file of that name — the
+    orchestrator is a session template now (issue #4335, EPIC #4333 C2), shipped
+    as conf/agent-defaults/claude/agents/orchestrator.md like fleet-worker."""
+    path = os.path.join(agents_dir(), role + '.md')
+    if os.path.isfile(path) or os.environ.get('FLEET_ROLE_AGENTS_DIR'):
+        return path
+    for root in (ROOT, os.path.dirname(os.path.dirname(os.path.realpath(__file__)))):
+        alt = os.path.join(root, 'conf', 'agent-defaults', 'claude', 'agents', role + '.md')
+        if os.path.isfile(alt):
+            return alt
+    return path
 
 
 def conf_dir():
@@ -96,7 +110,7 @@ def parse(text):
 def load(role):
     if role not in ROLES:
         raise RoleError('no such role: %s (roles: %s)' % (role, ' '.join(ROLES)))
-    path = os.path.join(agents_dir(), role + '.md')
+    path = def_path(role)
     try:
         with open(path, 'rb') as f:
             raw = f.read()
@@ -139,7 +153,7 @@ def parse(text):
 def load(role):
     if role not in ROLES:
         raise RoleError('no such role: %s (roles: %s)' % (role, ' '.join(ROLES)))
-    path = os.path.join(agents_dir(), role + '.md')
+    path = def_path(role)
     try:
         with open(path, 'rb') as f:
             raw = f.read()
