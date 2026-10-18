@@ -74,11 +74,10 @@ one-off drill / audit records do not go in the repo (issue #3576).
   dispatch group mounts (`@agent_spawn 1`). A grandchild reports to the worker
   that spawned it; a reaped worker's reports climb to the nearest live ancestor
   (`fleet_live_ancestor`, #1352), else the person's reminder (#3117). A red base
-  a worker files WITHOUT `--spawn` is still queued under the fleet's
-  `breakage-spawn/` and spawned by `fleet-steward-tick.sh breakage` with the
-  steward — else the hub — as parent. `fleet-issue-file-selftest.sh` W,
+  a worker files WITHOUT `--spawn` is filed, the person alerted and the parent
+  told — nobody spawns its fixer by itself (issue #4337). `fleet-issue-file-selftest.sh` W,
   `fleet-await-selftest.sh` SEAT, `fleet-mcp-selftest.sh` P,
-  `spawn-origin-gate-selftest.sh` F, `fleet-steward-selftest.sh` W.
+  `spawn-origin-gate-selftest.sh` F.
 - **A fleet hosts zero or more GitHub repos** (issue #788, switched on in #795),
   **every one put the same way** (issue #1937): `fleets/<sess>/repos/<slug>.conf`,
   ordered by `repos/.order` — `fleet-up.sh` and `bin/fleet-repo.sh add` both go
@@ -392,12 +391,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/fleet-task-record.sh` (`/v1/node/tasks`, the node token on curl's stdin) —
   the orchestrator's `task` tool opens the record FIRST and only a development
   task then files its issue (`fleet-issue-file.sh --task T<n>`, the worker stamped
-  `@task`); a child report carries `task`, `await` takes `T<n>`, the steward's
+  `@task`); a child report carries `task`, `await` takes `T<n>`, a session's
   `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
   and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue
-  is parked and remembered by its record** (issue #3387): `fleet_park.py` books it
-  as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
+  is parked and remembered by its record** (issue #3387; the steward's parker that
+  wrote the book left with #4339, the readers stay): a park books it as `T<n>` (stop by `fid:`, no GitHub write, 「停放」 on the record alone, wait
   `task:T<n>`; restore skips it by `fleet_parked_fid`) and wakes it through
   `dash-raw-session.sh --resume <sid> --seed-file … --task T<n>` (its kept scratch
   worktree via `--worktree`, else `--no-repo`); the history ledger's col 15 is the
@@ -479,11 +478,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reads (`get` · `body` · `prompt` · `sha`) and the rule table — its `render` left
   with the seats it launched (issue #3118). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
   `fleet-role-selftest.sh`.
-- **This repo is a plugin marketplace; orchestration, the steward and EPIC
-  batches are its optional plugins** (issue #3112, EPIC #3111 C1).
+- **This repo is a plugin marketplace; orchestration and EPIC batches are its
+  optional plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
-  `plugins/fleet-orchestrate` · `plugins/fleet-steward` · `plugins/fleet-epic`
-  (steward and epic depend on orchestrate), each a standard plugin (skills ·
+  `plugins/fleet-orchestrate` · `plugins/fleet-epic` (epic depends on orchestrate;
+  `plugins/fleet-steward` is an empty 已下架 entry for one version, issue #4339 —
+  `fleet-plugins.py`'s `RETIRED`, never defaulted, the doctor says 可卸), each a standard plugin (skills ·
   commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
   Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
   the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
@@ -585,7 +585,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the steward** (issue #4336, C3): `conf/agent-defaults/claude/agents/steward.md`, a
   patrol checklist over generic tools only (agents · gh · send / answer_dialog ·
   spawn · pr_verdict / pr_merge) on its own `/loop` — no `take_role`, no
-  `fleet-steward-tick.sh`, no sheet; `/fleet-steward` only opens one (`--as steward`),
+  tick program, no sheet; a person opens one with `spawn agent:steward` (the
+  `/fleet-steward` skill left with its plugin, #4339),
   and `agents/` is gone. `bin/fleet-role.py get|body|prompt|sha <role>` is the one
   reader, and `prompt` (the body + the role's rule-table rows) is what the plugins'
   `skills/*/role.md` copy byte for byte (`fleet-role-selftest.sh` B) — the text a
@@ -596,7 +597,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `roles` view left with C11 (issue #3122). The repo root is the plugin root:
   `plugin.json` says `"agents": []`, so the definitions never register as plugin
   subagents.
-- **How the orchestrator dispatches and what the steward may answer is ONE rule
+- **How the orchestrator dispatches is ONE rule
   table** (issue #2786, EPIC #2781 C5): the plugins' `skills/*/rules.md` (issue #3114;
   `conf/role-rules.default.md` their one-version union) (编号 · 角色 ·
   条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
@@ -605,8 +606,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reused, a new one starts at 100, a layer with a bad row is not used at all).
   `fleet-role.py prompt <role>` appends the role's rows to its body (≤ 40 lines;
   the plugins' `skills/*/role.md` are its copies);
-  `fleet_decision.classify` reads the `ask` rows' `never:<class>` keywords
-  (`NEVER_WORDS` is only the backstop). A dispatch carries `rule: N` (`--rule N`):
+  the `ask` rows carry each `never:<class>`'s keywords (`fleet_rules.never_words`;
+  the steward's rows left with #4339, their numbers unused). A dispatch carries `rule: N` (`--rule N`):
   the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=<version> -->`, every
   version kept as `roles/rules-<v>.md` (`fleet-role.py rules --version`); an
   orchestrator filing with none gets 「未注明规则」 + `logs/rules.log`, never a
@@ -621,16 +622,14 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `TestNoOrchestratorEndpoint`), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
-  launchers are gone (their quiet shells left with #3576). A person who wants the role types `/fleet-orchestrate` or
-  `/fleet-steward` in any session that binds no issue (take_role, above); closed is
-  closed. Gone with the seat: the mod's role section, exit guard and queue count
+  launchers are gone (their quiet shells left with #3576). A person who wants the role types `/fleet-orchestrate` (or spawns
+  `agent:steward`); closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
   (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
   (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
   client's `orch_*` / `steward_all_*` files, the steward's hosted page and
-  `@orch_page` (`bin/fleet_steward_say.py` keeps only the plain lines the `[decision]`
-  message says), the attention count (`fleet-steward-stats.sh` and the node conf's
-  [76] hooks, unset on a reload), the client's steward rows
-  (`fleet_steward.py`), `fleet-role.py render` / `fleet_role_render`, the
+  `@orch_page`, the attention count (`fleet-steward-stats.sh` and the node conf's
+  [76] hooks, unset on a reload), the client's steward rows,
+  `fleet-role.py render` / `fleet_role_render`, the
   doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
   only for an agent file that grants `spawn`, `@agent_spawn 1`). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
@@ -641,21 +640,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   seat → `@fleet_role worker` + the taken mark + its roles.held line (the
   conversation runs on), an old steward seat stopped and retired, an old driver
   `@agent_def epic-driver`, a pinned window `@reap_policy keep` once. BREAK-IT `role-auto-reopen-off`.
-  What the fleet-steward plugin does once a session holds the role is unchanged and
-  lives in its skill: the beat with no model (`fleet-steward-tick.sh beat --holder`,
-  refusing rc 3 for nobody / a bare beat / another window; nobody holds it ⇒ nothing
-  is answered, spawned, merged, parked or filed, a worker's red base is filed and
-  the person told once), the health watch (`fleet_steward_health.py`, BREAK-IT
-  `health-silent-pass`), the decision sheet and the patrol / batches panes off the
-  books' change stamp (BREAK-IT `panel-stale`, `panel-wrong-window`), a stalled
-  driver's dialog answered only through `bin/fleet-dialog-answer.sh`, and parking — a
-  stuck worker asked for its handoff, its window retired with the worktree kept, its
-  issue `blocked` with ONE `<!-- fleet:park … -->` comment, reopened on the same
-  conversation when its condition holds (`bin/fleet_park.py`, `FLEET_STEWARD_PARK=0`
-  off; BREAK-IT `park-lost-progress`, `park-restored-by-restore`). GitHub writes ≤
-  `FLEET_STEWARD_WRITES` a beat (BREAK-IT `steward-write-storm`); the holder closed ⇒
-  nothing happens by itself (`steward-exited`). `fleet-steward-selftest.sh`,
-  `fleet-park-selftest.sh`, `dialog-wait-selftest.sh`.
+  The fleet-steward plugin and the programs behind it — the beat, the health watch,
+  the decision sheet, the patrol / batches panes, parking, the followup list — are
+  gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and
+  a stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
+  session`; its trail is the 代答记录 `fleets/<sess>/answers/answers-<day>.md`).
+  `dialog-wait-selftest.sh`.
 - **Navigate by name, not index.** The hub/dashboard is placed at the lowest
   index once, at spawn; numbers still shift when a window closes
   (`renumber-windows on`).

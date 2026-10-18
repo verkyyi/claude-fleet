@@ -22,7 +22,6 @@
 - [TERMS.md](dev/TERMS.md) — 术语表
 - [BREAK-IT.md](dev/BREAK-IT.md) — 已知的每一种弄坏方式、后果、自愈与演练
 - [PATROLS.md](dev/PATROLS.md) — 自动开单、提醒和定时巡检的清单：一个入口、一种指纹、一处巡检
-- [DECISIONS.md](dev/DECISIONS.md) — 决定的格式、默认拍板
 
 **会话与工具**
 

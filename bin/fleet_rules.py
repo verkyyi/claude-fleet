@@ -2,14 +2,13 @@
 """fleet_rules.py — THE one reader of the rule table (issue #2786, EPIC #2781 C5).
 
 How the orchestrator dispatches (one worker / an EPIC / a driver / the queue /
-just an answer, when Codex, what a subagent may do) and what the steward may
-answer on its own, by default, or never (auto / default / ask) are ONE numbered
-table. Three layers, low → high, merged by number:
+just an answer, when Codex, what a subagent may do) is ONE numbered table (the
+steward's rows 13–19 · 21 left with its tick program, issue #4339 — numbers kept
+unused). Three layers, low → high, merged by number:
 
-  自带   the plugins' skill dirs: plugins/fleet-orchestrate/skills/fleet-orchestrate/
-         rules.md (the orchestrator's rows) + plugins/fleet-steward/skills/
-         fleet-steward/rules.md (the steward's) — issue #3114: the rows live beside
-         the skill that reads them. conf/role-rules.default.md is their union, kept
+  自带   the plugin's skill dir: plugins/fleet-orchestrate/skills/fleet-orchestrate/
+         rules.md (the orchestrator's rows) — issue #3114: the rows live beside
+         the skill that reads them. conf/role-rules.default.md is its copy, kept
          one version for the hub's roles view (# compat-1v: 下一批删);
          fleet-rules-selftest.sh holds the two in step.
   你的   $FLEET_CONF_DIR/person-bundle.json `rules`   (the person's layer, C3
@@ -23,8 +22,7 @@ NEW row starts at 100. A layer with any row that cannot be read is not used at
 all (the rest stand), and says why under `problems`.
 
 An `ask` row whose 动作 names `never:<rule|money|publish>` carries that class's
-keywords: bin/fleet_decision.py's classify reads them instead of its own list
-(the code's list is the backstop when the table cannot be read).
+keywords (never_words).
 
 The merged table's version is the content address of its rows; every version a
 machine renders is kept as $FLEET_CONF_DIR/roles/rules-<v>.md, so a ticket's
@@ -56,8 +54,7 @@ def conf_dir():
         os.path.expanduser('~'), '.config', 'claude-fleet')
 
 
-SKILL_RULES = ('plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md',
-               'plugins/fleet-steward/skills/fleet-steward/rules.md')
+SKILL_RULES = ('plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md',)
 
 
 def _roots():
@@ -223,7 +220,7 @@ def load(person=None):
 
 
 def never_words(table):
-    """{class: (keyword, …)} off the table's `ask` rows — what classify matches."""
+    """{class: (keyword, …)} off the table's `ask` rows."""
     out = {c: [] for c in CLASSES}
     for r in table['rows']:
         if r['tier'] == 'ask' and r['cls'] in out:

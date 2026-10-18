@@ -169,15 +169,7 @@ else
   v=$(claude plugin validate "$PO" 2>&1) || fail "D: claude plugin validate plugins/fleet-orchestrate failed" "$v"
   q=$(cd "$PO" && claude plugin test . 2>&1) || fail "D: claude plugin test plugins/fleet-orchestrate failed" "$q"
   case "$q" in *'Enter sends exactly once through ⌘P'*) : ;; *) fail "D: the /qd forward tests (plugins/fleet-orchestrate/tests/qd.test.tsx, #2618 · #3114 · #3328) did not run" "$q" ;; esac
-  # the panels live in the fleet-steward plugin (issue #3115): its own validate + tests
-  PS="$BIN/../plugins/fleet-steward"
-  v=$(claude plugin validate "$PS" 2>&1) || fail "D: claude plugin validate plugins/fleet-steward failed" "$v"
-  p=$(cd "$PS" && claude plugin test . 2>&1) || fail "D: claude plugin test plugins/fleet-steward failed" "$p"
-  case "$p" in *'(fail)'*|*' 0 pass'*) fail "D: plugins/fleet-steward tests reported a failure" "$p" ;; esac
-  case "$p" in *'a moved stamp reads once'*) : ;; *) fail "D: the panels tests (plugins/fleet-steward/tests/panels.test.ts, #2835) did not run" "$p" ;; esac
-  case "$p" in *'narrow (#2836): 120 columns opens nothing unasked'*) : ;; *) fail "D: the narrow-screen /sheet tests (plugins/fleet-steward/tests/sheet.test.tsx, #2836) did not run" "$p" ;; esac
-  case "$p" in *'taken mid-session starts them'*) : ;; *) fail "D: the holder tests (plugins/fleet-steward/tests/panels.test.ts, #3115) did not run" "$p" ;; esac
-  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools + quick dispatch + steward panels + narrow /sheet + holder covered)"
+  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools + quick dispatch covered)"
 fi
 
 # --- E: the fallback tools — one implementation, in bin/fleet-mcp.py (issue #2057) ---
@@ -208,13 +200,10 @@ python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 for f in Lifecycle Usage State Progress Compose Tools Accept; do
   grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
-# the panels are the fleet-steward plugin's (issue #3115): this mod registers none of them
+# the steward's panels left with its plugin (issue #4339): nothing wires them anywhere
 grep -qE 'register(Panels|Sheet|Patrol|Batches)' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
-  && fail "E: mod/fleet still wires the steward's panels — they are plugins/fleet-steward/hooks/'s"
-for f in Panels Sheet Patrol Batches; do
-  grep -q "^  register$f(on)\$" "$BIN/../plugins/fleet-steward/hooks/register.ts" || fail "E: the fleet-steward plugin no longer wires register$f"
-done
-grep -q '"\./register.ts"' "$BIN/../plugins/fleet-steward/hooks/hooks.json" || fail "E: the fleet-steward plugin does not load hooks/register.ts"
+  && fail "E: mod/fleet wires the steward's panels — they were deleted (issue #4339)"
+[ -e "$BIN/../plugins/fleet-steward/hooks" ] && fail "E: plugins/fleet-steward/hooks is back — the plugin is retired (issue #4339)"
 # The resident orchestrator's parts left the mod with its seat (issue #3118): no
 # role section, no exit guard, no queue count — the mod puts no role in any prompt.
 for _gone in orchestrator.ts exit-guard.ts queue.ts qd.ts; do

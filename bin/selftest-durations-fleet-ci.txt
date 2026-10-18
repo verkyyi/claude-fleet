@@ -166,7 +166,6 @@
 1.9 fleet-debug-drill-selftest.sh
 3.4 fleet-debug-prompt-selftest.sh
 7.5 fleet-debug-selftest.sh
-2.0 fleet-decision-selftest.sh
 2.4 fleet-degenerate-selftest.sh
 7.6 fleet-deps-link-selftest.sh
 4.5 fleet-diskguard-selftest.sh
@@ -272,7 +271,6 @@
 1.6 fleet-orchestrator-state-selftest.sh
 2.3 fleet-palette-selftest.sh
 0.5 fleet-panel-jump-selftest.sh
-4.6 fleet-park-selftest.sh
 3.1 fleet-peer-cert-selftest.sh
 0.1 fleet-peer-mcp-selftest.sh
 4.5 fleet-peer-send-identity-selftest.sh
@@ -325,10 +323,6 @@
 7.0 fleet-status-7501-selftest.sh
 15.8 fleet-status-replay-selftest.sh
 2.1 fleet-statusline-selftest.sh
-1.7 fleet-steward-conflicts-selftest.sh
-12.9 fleet-steward-followup-selftest.sh
-2.6 fleet-steward-sample-selftest.sh
-18.3 fleet-steward-selftest.sh
 13.8 fleet-switch-selftest.sh
 3.0 fleet-tenant-scan-selftest.sh
 35.6 fleet-timebox-kill-selftest.sh

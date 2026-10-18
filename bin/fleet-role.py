@@ -4,8 +4,8 @@
 What is left of the role engine (issue #2782) after EPIC #3111: a session started
 AS something is a standard agent file (bin/fleet-agent-def.py, `--as <name>` →
 `claude --agent <name>`); the orchestrator and the steward are such files now
-(issues #4335, #4336 — EPIC #4333 C2 · C3), and /fleet-orchestrate · /fleet-steward
-only open one. The two launchers
+(issues #4335, #4336 — EPIC #4333 C2 · C3); /fleet-orchestrate opens the first,
+`spawn agent:steward` the second (the steward plugin left with #4339). The two launchers
 that rendered a role onto a resident window — and their FLEET_ORCH_* /
 FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL knobs — went with the seat (issue #3118).
 

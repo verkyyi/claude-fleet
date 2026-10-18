@@ -6431,8 +6431,9 @@ fleet_win_retire() {
 }
 
 # fleet_parked <owner/name> <N> — rc 0 when that issue's session is PARKED (issue
-# #2671, EPIC #2668 C3): bin/fleet_park.py closed its window to free the place and
-# reopens it itself when what it waits for arrives, so a restore never does.
+# #2671, EPIC #2668 C3): a park closed its window to free the place and reopens it
+# itself when what it waits for arrives, so a restore never does. (The steward's
+# parker left with #4339; the book is still read.)
 # global/park.idx is the book's index, one `<owner/name>#<N> TAB fid` per parked issue.
 fleet_parked() {
   [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1

@@ -6,8 +6,9 @@
 # rendered a role onto a resident window went with the seat (issue #3118).
 #
 #   C  the steward template: generic tools only, no seat/tick/sheet (issue #4336)
-#   B  the bodies: orchestrator / steward prompt ≡ the plugins' skills/*/role.md
-#      (the body + the role's rule-table rows, issue #2786), the body ≤ 60 lines,
+#   B  the bodies: orchestrator prompt ≡ the plugin's skills/*/role.md (the body +
+#      the role's rule-table rows, issue #2786); the steward has no plugin (retired,
+#      issue #4339) — its template is all of it; the body ≤ 60 lines,
 #      name / description / model / effort; a role that is not orchestrator /
 #      steward is refused
 #   E  the repo root is the plugin root: plugin.json says "agents": [] so the
@@ -33,9 +34,6 @@ R() { python3 "$BIN/fleet-role.py" "$@"; }
 cmp -s <(R prompt orchestrator) "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" \
   && ok "B: orchestrator prompt ≡ plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" \
   || bad "B: the orchestrator template + the rule table and plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
-cmp -s <(R prompt steward) "$ROOT/plugins/fleet-steward/skills/fleet-steward/role.md" \
-  && ok "B: steward prompt ≡ plugins/fleet-steward/skills/fleet-steward/role.md" \
-  || bad "B: the steward template + the rule table and plugins/fleet-steward/skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > plugins/fleet-steward/skills/fleet-steward/role.md"
 for r in orchestrator steward; do
   n=$(R body $r | wc -l | tr -d ' ')
   cap=60
@@ -54,13 +52,14 @@ miss=''; for w in mcp__fleet__agents mcp__fleet__gh mcp__fleet-orch__send mcp__f
   case "$sb" in *"$w"*) ;; *) miss="$miss $w" ;; esac
 done
 [ -z "$miss" ] && ok "C: the steward's patrol names its generic tools" || bad "C: the steward's patrol lacks:$miss"
-hit=''; for w in fleet-steward-tick take_role fleet_steward fleet-park decision- 'steward.delta'; do
+hit=''; for w in fleet-steward-tick take_role 'fleet_stew''ard' fleet-park decision- 'steward.delta'; do
   case "$sb" in *"$w"*) hit="$hit $w" ;; esac
 done
 [ -z "$hit" ] && ok "C: no seat, tick program, park or sheet in the steward" || bad "C: the steward still names:$hit"
-grep -q -- '--as steward' "$ROOT/plugins/fleet-steward/skills/fleet-steward/SKILL.md" \
-  && ! grep -q 'take_role' "$ROOT/plugins/fleet-steward/skills/fleet-steward/SKILL.md" \
-  && ok "C: /fleet-steward only opens a steward session" || bad "C: /fleet-steward must open one (--as steward), never take_role"
+# the plugin is retired (issue #4339): an empty plugin for one version, no skill, no pane
+[ "$(ls -A "$ROOT/plugins/fleet-steward")" = .claude-plugin ] \
+  && ok "C: plugins/fleet-steward is empty (retired) — the template is the steward" \
+  || bad "C: plugins/fleet-steward still carries parts: $(ls -A "$ROOT/plugins/fleet-steward")"
 
 R body nobody >/dev/null 2>&1; [ $? = 2 ] && ok "B: an unknown role is refused (exit 2)" || bad "B: unknown role not refused"
 R body worker >/dev/null 2>&1; [ $? = 2 ] && ok "B: worker is an agent file now, not a role here (exit 2)" || bad "B: worker still a role"

@@ -6,7 +6,7 @@ This is the legacy cross-agent bridge, not Codex's native plugin manager.
 Verified Codex 0.162.1 and 0.163.0 can install Claude-format plugins natively;
 the bridge remains until single-owner migration and runtime parity are verified.
 What the Claude side has installed AND enabled of this repo's marketplace
-(fleet-orchestrate · fleet-steward · fleet-epic) — asked of
+(fleet-orchestrate · fleet-epic · …) — asked of
 `claude plugin list --json` through fleet-plugins.py, the one reader; nothing is
 recorded a second time — is carried into each Codex home as far as Codex can take
 it, and what it cannot take is said:

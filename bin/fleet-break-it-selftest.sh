@@ -60,9 +60,6 @@
 #                                                   bin/fleet-migrate.sh (cfg_update_nudge, the /loop rearm)
 #   fleet-down-confirm                              bin/fleet-down.sh (confirm, --yes), fleet-up.sh --undo,
 #                                                   fleet-restore.sh --undo
-#   decision-never-defaulted                        bin/fleet_decision.py (classify, is_due, apply_due)
-#   steward-exited                                  bin/fleet_steward.py beat --holder / breakage / sheet (no holder ⇒ nothing)
-#   steward-write-storm                             bin/fleet_steward.py (State.budget_left, do_answer, flush_deferred)
 #   breakage-three-filers                           bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
 #                                                   fleet_breakage_find (fleet-lib.sh)
 #   breakage-no-flag                                bin/fleet-issue-file.sh (no auto road, #4271), fleet-mcp.py file_issue
@@ -2005,61 +2002,6 @@ PY
   case "$cc" in "PASS"$'\t'*" · 剩 11h"*) ;; *) WHY="the renewed certificate's row does not say the time left: [$cc]"; return 1 ;; esac
   WHAT="没开客户端、证书已过期：doctor 报 PASS「已过期 · 用到时续」，diskguard 一拍不再续；ssh 到 fleet 机器前用设备钥匙续成 12 小时（login.log why=ssh），cert 行写「剩 11h…」"
 }
-
-# the panels' mod half (issue #2835; the fleet-steward plugin's since #3115):
-# panels.test.ts alone, when a claude CLI can run it here
-panel_mod_test() {
-  local d="$1" tf="${3:-panels.test.ts}" out m
-  command -v claude >/dev/null 2>&1 || return 2
-  m="$d/mod-${tf%%.*}"
-  mkdir -p "$m" && cp -R "$ROOT/plugins/fleet-steward/." "$m/" \
-    && find "$m/tests" -type f ! -name "$tf" ! -name '*-fixture.ts' -delete
-  out=$(cd "$m" && claude plugin test . 2>&1)
-  case "$out" in *"(pass) $2"*) return 0 ;; esac
-  WHY="$tf «$2» did not pass: $(printf '%s' "$out" | grep -E 'fail|error' | head -3 | tr '\n' ' ')"; return 1
-}
-
-# the steward saves its books but the change stamp does not move (a writer that
-# bypasses State.save, a stamp it cannot write): the panels still draw the new
-# books within one full read (≤ 10 s), and every State.save() moves the stamp
-drill_panel_stale() {
-  CAP=30; local d="$WORK/ps" t0 s0 s1 m='' rc full
-  mkdir -p "$d/conf/global"; t0=$(now)
-  full=$(sed -n "s/^export const PANELS_FULL_MS = \([0-9_]*\).*/\1/p" "$ROOT/plugins/fleet-steward/hooks/panels.ts" | tr -d _)
-  [ -n "$full" ] && [ "$full" -le 10000 ] || { WHY="PANELS_FULL_MS is [$full], want ≤ 10000"; return 1; }
-  grep -q 'every(PANELS_FULL_MS' "$ROOT/plugins/fleet-steward/hooks/panels.ts" || { WHY="panels.ts starts no full-read timer"; return 1; }
-  # the stamp half: two saves, two moves
-  s0=$(FLEET_CONF_DIR="$d/conf" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save(); print(open(f.gdir() / "steward.stamp").read().split()[0])' "$BIN" 2>/dev/null)
-  s1=$(FLEET_CONF_DIR="$d/conf" python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as f; f.State().save(); print(open(f.gdir() / "steward.stamp").read().split()[0])' "$BIN" 2>/dev/null)
-  [ -n "$s0" ] && [ "$s1" = $((s0 + 1)) ] || { WHY="State.save() did not move steward.stamp: [$s0] → [$s1]"; return 1; }
-  panel_mod_test "$d" 'panels: a writer that forgets the stamp is drawn within the full read (panel-stale)'; rc=$?
-  [ "$rc" = 1 ] && return 1
-  [ "$rc" = 0 ] && m='mod：戳不动、10 秒整读画出新账 · '
-  SECS=$(since "$t0"); WHAT="账变了戳没动：${m}兜底整读 ${full} ms · 每次 save 戳 +1"
-}
-
-# a worker (or scratch / driver) window loads the plugin: it must not register
-# /sheet, open a panel or stat one file of the steward's books; a window that
-# binds no issue but does not hold the steward role stats roles.held only
-drill_panel_wrong_window() {
-  CAP=30; local d="$WORK/pw" t0 rc m=''
-  mkdir -p "$d"; t0=$(now)
-  grep -q 'return !/^\\d+$/.test(self.issue)' "$ROOT/plugins/fleet-steward/hooks/panels.ts" \
-    || { WHY="panelsWanted lets a window that binds an issue in"; return 1; }
-  panel_mod_test "$d" 'panels: a worker window stats nothing and registers no /sheet (panel-wrong-window)'; rc=$?
-  [ "$rc" = 1 ] && return 1
-  [ "$rc" = 0 ] && m='mod：worker 窗口零 stat、无 /sheet · '
-  # the decision sheet (issue #2832): never opened, never @sheet_pane, outside the holder's window
-  panel_mod_test "$d" 'sheet: a worker window opens no sheet, stamps no @sheet_pane and draws nothing of it (panel-wrong-window)' sheet.test.tsx; rc=$?
-  [ "$rc" = 1 ] && return 1
-  [ "$rc" = 0 ] && m="${m}无决定单、无 @sheet_pane · "
-  panel_mod_test "$d" 'panels: a window that does not hold the role stats roles.held only; /sheet says nobody here holds it'; rc=$?
-  [ "$rc" = 1 ] && return 1
-  [ "$rc" = 0 ] && m="${m}没接手的窗口只 stat roles.held · "
-  SECS=$(since "$t0"); WHAT="执行会话窗口装了管家插件：${m}只在接手管家的那个窗口画"
-}
-
-
 
 # A reconnect onto the SAME view id while the last connection's attach is still
 # half alive (issue #1907, mac-a 2026-10-06): `run` keeps its view id across
@@ -5061,135 +5003,6 @@ drill_status_question_lost() {
   [ "$st" = needs/ask/7501 ] || { WHY="the Stop right after the question left [$st] — 在问你 flashed to 完成"; return 1; }
   [ "$(o "$SPW" @claude_needs_detail)" = "$words" ] || { WHY="the question's words are gone: [$(o "$SPW" @claude_needs_detail)]"; return 1; }
   SECS=$(since "$t0"); WHAT="问问题：needs/ask 和原话在 Stop 之后还在"
-}
-
-# decision-never-defaulted (issue #2669, EPIC #2668 C1): a money question the
-# worker labelled `normal`, with a suggestion, long past its deadline. The
-# steward's `due --apply` must post nothing — on the worker's issue or its parent.
-drill_decision_never_defaulted() {
-  CAP=10; local t0 g="$WORK/dnd" q
-  mkdir -p "$g"
-  printf '#!/bin/sh\ncat "%s/$2.json" 2>/dev/null || echo "[]"\n' "$g" > "$g/comments"
-  printf '#!/bin/sh\ncat >/dev/null; echo "$3 $1#$2" >> "%s/posts"; echo posted\n' "$g" > "$g/post"
-  printf '#!/bin/sh\necho "o/n#1"\n' > "$g/parent"
-  chmod +x "$g/comments" "$g/post" "$g/parent"
-  dnd() { env FLEET_UI_LANG=zh FLEET_DECISION_TZ=UTC FLEET_DECISION_COMMENTS_CMD="$g/comments" \
-              FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_PARENT_CMD="$g/parent" python3 "$BIN/fleet_decision.py" "$@"; }
-  q=$(dnd ask-body --question '要不要开一台云机器把抓取跑完？' --suggest '开一台，跑完就关' --class normal \
-        --now 2026-10-09T10:00:00+00:00) || { WHY="ask-body failed"; return 1; }
-  python3 -c 'import json, sys; json.dump([{"body": sys.argv[1], "url": "https://github.com/o/n/issues/2#c1"}], open(sys.argv[2], "w"))' \
-    "$q" "$g/2.json"
-  t0=$(now)
-  dnd due --repo o/n --issue 2 --now 2026-10-12T10:00:00+00:00 --apply >/dev/null 2>&1
-  [ ! -s "$g/posts" ] || { WHY="a money question labelled normal was defaulted: $(cat "$g/posts")"; return 1; }
-  dnd render --rows <(dnd parse --repo o/n --issue 2) | grep -q '永不默认：花钱' \
-    || { WHY="its row does not say 永不默认：花钱"; return 1; }
-  SECS=$(since "$t0"); WHAT="标成 normal 的花钱问题过期三天：一条都没贴，行写「等你（永不默认：花钱）」"
-}
-
-# steward-exited (issue #2670; rewritten by #3115, EPIC #3111 C4): the window that
-# took the steward role is closed (by hand, a crash, a kill). Before C4 the
-# diskguard tick reopened a steward and its beat went on answering, spawning and
-# merging with nobody there; now the role is a mark on a window, the beat runs
-# only in that window's own loop (`beat --holder`), and nothing reopens it. So the
-# moment the holder goes NOTHING happens by itself any more (and since #4337 a due
-# question is answered by nobody even while it holds): a worker's red base is filed but no fixer spawned (the person told
-# once), no sheet, no state written — until someone types /fleet-steward again.
-drill_steward_exited() {
-  CAP=10; BREAK_SOCK="$WORK/sock-sx"; local t0 w g="$WORK/sxg" p0 rc
-  mkdir -p "$g/conf/fleets/sx/repos" "$g/conf/fleets/sx/breakage-spawn" "$g/conf/global"
-  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/sx/repos/o-r.conf"
-  printf '#!/bin/sh\ncat "%s/c-$2.json" 2>/dev/null || printf "{\\"comments\\": []}\\n"\n' "$g" > "$g/comments"
-  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2 $3" >> "%s/posts"; echo posted\n' "$g" > "$g/post"
-  printf '#!/bin/sh\necho "$*" >> "%s/spawns"\n' "$g" > "$g/spawn"
-  printf '#!/bin/sh\necho "$*" >> "%s/alerts"\n' "$g" > "$g/alert"
-  printf '#!/bin/sh\n:\n' > "$g/none"
-  chmod +x "$g/comments" "$g/post" "$g/spawn" "$g/alert" "$g/none"
-  nt -f /dev/null new-session -d -s sx -n home -x 100 -y 30 'exec sh' || { WHY="cannot start the isolated tmux server"; return 1; }
-  w=$(nt new-window -d -P -F '#{window_id}' -t sx: -n scratch-1 'exec sleep 600')
-  nt set-option -w -t "$w" @fleet_role worker; nt set-option -w -t "$w" @fleet_role_def steward
-  # mkrow <N> — a worker's ask on o/r#N, past its deadline, already on the steward's books
-  mkrow() { python3 -c '
-import json, os, sys
-sys.path.insert(0, sys.argv[1])
-import fleet_decision as fd
-p, g, n = sys.argv[2], sys.argv[3], sys.argv[4]
-body, row = fd.ask_body("q%s?" % n, "yes", None, "2000-01-01T00:00:00Z")
-url = "https://github.com/o/r/issues/%s#issuecomment-1" % n
-json.dump({"comments": [{"body": body, "url": url}]}, open(os.path.join(g, "c-%s.json" % n), "w"))
-d = json.load(open(p)) if os.path.exists(p) else {"v": 1, "rows": {}, "beat": {"n": 0, "writes": 0}}
-d["rows"][row["id"]] = dict(row, src="gh:o/r#%s" % n, url=url, state="open")
-d.pop("next_at", None)
-json.dump(d, open(p, "w"))' "$BIN" "$g/conf/global/steward.state.json" "$g" "$1"; }
-  sxb() { env -u TMUX -u TMUX_PANE PATH="$WORK/tbin:$PATH" BREAK_SOCK="$BREAK_SOCK" FLEET_CONF_DIR="$g/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-            FLEET_UI_LANG=zh FLEET_DECISION_COMMENTS_CMD="$g/comments" FLEET_DECISION_POST_CMD="$g/post" \
-            FLEET_DECISION_PARENT_CMD="$g/none" FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/none" \
-            FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_DOCTOR_CMD="$g/none" \
-            FLEET_STEWARD_IDLE_CMD="$g/none" FLEET_STEWARD_SPAWN_CMD="$g/spawn" FLEET_STEWARD_ALERT_CMD="$g/alert" \
-            FLEET_STEWARD_PAGE_SHARE=0 FLEET_STEWARD_DEBUG=0 \
-            python3 "$BIN/fleet_steward.py" "$@" --session sx; }
-  # held: a due row is answered by nobody, held or not (issue #4337); a queued red
-  # base (one a pre-#4337 filer left — fleet-issue-file.sh writes none any more) is
-  # drained, its fixer spawned under the holder (the holder's loop runs it).
-  mkrow 10
-  sxb beat --holder --force > "$g/beat.out" 2>&1
-  printf 'o/r\t9\tmaster 红\t\n' > "$g/conf/fleets/sx/breakage-spawn/o-r-9"
-  sxb breakage > "$g/brk.out" 2>&1
-  local s0; s0=$(cat "$g/spawns" 2>/dev/null | grep -c .)
-  [ "$s0" -ge 1 ] || { WHY="with a holder the queued red base spawned nothing — the drill proves nothing: $(cat "$g/beat.out" "$g/brk.out")"; return 1; }
-  p0=$(cat "$g/posts" 2>/dev/null | grep -c .)
-  [ "$p0" = 0 ] || { WHY="a held beat answered a due row by its default: $(cat "$g/posts")"; return 1; }
-  nt kill-window -t "$w"                          # the break
-  t0=$(now)
-  mkrow 11
-  printf 'o/r\t12\tmaster 红\t\n' > "$g/conf/fleets/sx/breakage-spawn/o-r-12"
-  cp "$g/conf/global/steward.state.json" "$g/state.before"
-  sxb beat --holder --force >/dev/null 2>&1; rc=$?
-  sxb breakage >/dev/null 2>&1
-  sxb sheet --force > "$g/sheet.out" 2>&1
-  [ "$rc" = 3 ] || { WHY="the beat ran with nobody holding the role (rc $rc)"; return 1; }
-  [ "$(cat "$g/posts" 2>/dev/null | grep -c .)" = "$p0" ] || { WHY="a due row was answered after the holder went: $(cat "$g/posts")"; return 1; }
-  [ "$(cat "$g/spawns" | grep -c .)" = "$s0" ] || { WHY="a fixer was spawned with no holder: $(cat "$g/spawns")"; return 1; }
-  [ "$(grep -c . "$g/alerts" 2>/dev/null)" = 1 ] || { WHY="the red base was not told once: [$(cat "$g/alerts" 2>/dev/null)]"; return 1; }
-  cmp -s "$g/state.before" "$g/conf/global/steward.state.json" || { WHY="the steward's books moved with no holder"; return 1; }
-  grep -q '没人接手管家' "$g/sheet.out" || { WHY="sheet with no holder: $(cat "$g/sheet.out")"; return 1; }
-  [ "$(nt list-windows -t sx -F '#{@fleet_role_def}' | grep -cx steward)" = 0 ] || { WHY="something reopened a steward"; return 1; }
-  ! grep -q 'fleet-steward-tick.sh" beat' "$BIN/fleet-diskguard.sh" || { WHY="the diskguard tick still runs the beat"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="接手管家的窗口关了：到期问题不答、红主干不派修复（只提醒一次）、不写决定单和账本，也没有谁把它开回来"
-}
-
-# steward-write-storm (issue #2670, EPIC #2668 共同约定 7): one beat wants to write
-# more answers than its budget (a loop answering the same rows, a backlog of
-# questions). Every write goes through the beat's budget (FLEET_STEWARD_WRITES,
-# 20): the rest wait for the next beat, the card says 延后 N — never a flood.
-drill_steward_write_storm() {
-  CAP=30; local t0 g="$WORK/sws" i n st
-  mkdir -p "$g/conf/fleets/sw/repos"
-  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/sw/repos/o-r.conf"
-  printf '#!/bin/sh\nprintf "{\\"comments\\": []}\\n"\n' > "$g/comments"
-  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2 $3" >> "%s/posts"; echo posted\n' "$g" > "$g/post"
-  printf '#!/bin/sh\n:\n' > "$g/none"
-  chmod +x "$g/comments" "$g/post" "$g/none"
-  st="$g/conf/global/steward.state.json"; mkdir -p "$g/conf/global"
-  python3 -c '
-import json, sys
-rows = {"r%d" % i: {"id": "r%d" % i, "item": "q%d" % i, "src": "gh:o/r#%d" % (i + 10), "state": "open", "kind": "normal",
-                    "default": "yes", "due": "", "url": ""} for i in range(12)}
-json.dump({"v": 1, "rows": rows, "beat": {"n": 1, "writes": 0}}, open(sys.argv[1], "w"))' "$st"
-  sw() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_DECISION_COMMENTS_CMD="$g/comments" \
-           FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/none" \
-           FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_DOCTOR_CMD="$g/none" \
-           FLEET_STEWARD_IDLE_CMD="$g/none" python3 "$BIN/fleet_steward.py" "$@" --session sw; }
-  t0=$(now)
-  # the default budget is 20; the drill storms a budget of 8 with 12 answers
-  for i in $(seq 0 11); do FLEET_STEWARD_WRITES=8 sw answer --row "r$i" --text yes >/dev/null 2>&1; done
-  n=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
-  [ "$n" = 8 ] || { WHY="one beat wrote $n comments, budget 8"; return 1; }
-  FLEET_STEWARD_WRITES=8 sw beat --holder --force > "$g/card" 2>&1
-  [ "$(grep -c . "$g/posts")" = 12 ] || { WHY="the next beat did not post the deferred four: $(grep -c . "$g/posts")"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="一拍想写 12 条（预算 8）：落 8、延后 4，下一拍先补上"
 }
 
 # cross-send-refused-unseen (issue #2729): the orchestrator's message to a worker

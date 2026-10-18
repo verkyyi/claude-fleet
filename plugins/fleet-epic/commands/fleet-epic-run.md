@@ -480,10 +480,10 @@ survives a context boundary the same way everything else here does:
    line each** (issue #2672) — the person's reminders, which step 5's report
    names again; no other session reads or runs them (EPIC #4333 C5):
 
-   ```sh
-   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind stable     --what '挪稳定版到 <sha>'
-   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind hub-deploy --what '重部署入口：C8 的 /v1/fleet/tickets'
-   python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind human      --what 'iPad 上真环境走一遍' --due 2026-10-12
+   ```
+   <!-- fleet:followup kind=stable what=挪稳定版到 <sha> -->
+   <!-- fleet:followup kind=hub-deploy what=重部署入口：C8 的 /v1/fleet/tickets -->
+   <!-- fleet:followup kind=human due=2026-10-12 what=iPad 上真环境走一遍 -->
    ```
 
    `stable` — the person runs `fleet-stable.sh move` (its own gates decide);

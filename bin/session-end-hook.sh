@@ -292,7 +292,7 @@ if [ "${1:-}" = "--exec" ]; then
   wname=$(tmux display-message -p -t "$win" '#{window_name}' 2>/dev/null)
   # @origin rides along as the row's provenance (issue #503) — read pre-kill.
   worigin=$(tmux display-message -p -t "$win" '#{@origin}' 2>/dev/null)
-  # A park's stop (issue #2949): fleet_park.py stamps @parking before its /exit.
+  # A park's stop (issue #2949): a park stamps @parking before its /exit.
   # Parked means it comes back — the row is still recorded, but the issue stays
   # OPEN and the worktree stays where the park book says it is, merged PR or not.
   parking=$(tmux display-message -p -t "$win" '#{@parking}' 2>/dev/null)

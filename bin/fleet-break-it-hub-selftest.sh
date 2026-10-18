@@ -117,17 +117,12 @@
 #   pod-disk-node-tmp                               fleet_disk_target (fleet-lib.sh), fleet-diskguard.sh --free /
 #                                                   --gate, scratch-pool.sh pool_free_gb, fleet-alerts.sh (a df shim)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
-#   followup-stable-storm                           bin/fleet_followup.py (merge, execute, holding) on the
-#                                                   steward's beat (bin/fleet_steward.py)
-#   park-lost-progress / park-restored-by-restore   bin/fleet_park.py, fleet-restore.sh (fleet_parked) — through
-#                                                   bin/fleet-park-selftest.sh's sandbox (its own isolated tmux socket)
 #   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
 #   dist-bad-signature                              bin/dist-no-github-selftest.sh bad-signature (the hub's release
 #                                                   refused by ccquota → fetch-failed, still the old version, no GitHub)
 #   bootstrap-reaches-github                        bin/dist-no-github-selftest.sh --strict bootstrap bootstrap-hub
 #                                                   (a new login on a managed machine / with only a hub: no GitHub, #2775)
-#   health-silent-pass                              bin/fleet_steward_health.py (the steward's beat), fleet-doctor.sh --json
 #   hub-stream-silent                               extras/web-console/src/shared/sessions.ts (watchdog, backoff, poll
 #                                                   fallback, by name) + internal/api fleet_stream.go (ping, scope;
 #                                                   go test, when a toolchain is here)
@@ -145,7 +140,7 @@
 #   debug-page-stuck                                tokenledger/internal/api fleet_debug.go (debugTick: no page in 15
 #                                                   minutes ⇒ unfinished, to the admin; seven days ⇒ gone; the upload
 #                                                   re-checked against the shape table; go test, when a toolchain is
-#                                                   here) + bin/fleet_steward.py debug_step (the orchestrator's line)
+#                                                   here)
 #   feedback-identity-public                        tokenledger/internal/api fleet_feedback_github.go (feedbackIssueBody:
 #                                                   the ONE public template; App token never logged; go test, when a
 #                                                   toolchain is here)
@@ -1806,132 +1801,6 @@ drill_hubsess_daemon_nohup() {
   WHAT="nohup 退出、两次 --ensure 加一个 --loop 同时起：${SECS}s 内恰好一个 loop，持锁，--status 看得见"
 }
 
-# followup-stable-storm (issue #2672, EPIC #2668 C4): four batches end the same
-# day, each closing comment says 「move stable」, and one batch is still running.
-# The drill closes four EPICs with a stable followup while a batch holds the
-# install: two beats move nothing; once the hold lifts ONE move runs, the list
-# has ONE row, and every batch is written back.
-drill_followup_stable_storm() {
-  CAP=30; local t0 g="$WORK/fss" n m w
-  mkdir -p "$g/conf/fleets/fs/repos" "$g/gh"
-  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/fs/repos/o-r.conf"
-  printf '#!/bin/sh\nf="%s/gh/$2.json"; [ -f "$f" ] && cat "$f" || printf "{\\"state\\":\\"OPEN\\",\\"comments\\":[]}\\n"\n' "$g" > "$g/issue"
-  printf '#!/bin/sh\necho run >> "%s/moves"\n' "$g" > "$g/move"
-  printf '#!/bin/sh\n[ -f "%s/held" ]\n' "$g" > "$g/hold"
-  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2" >> "%s/posts"\n' "$g" > "$g/post"
-  printf '#!/bin/sh\ncase "$1" in new) printf "gh:o/r#9\\turl\\n" ;; esac\n' > "$g/ticket"
-  printf '#!/bin/sh\nprintf "{\\"seq\\": 0, \\"children\\": []}\\n"\n' > "$g/children"
-  printf '#!/bin/sh\n:\n' > "$g/none"
-  chmod +x "$g/issue" "$g/move" "$g/hold" "$g/post" "$g/ticket" "$g/children" "$g/none"
-  fs() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_STEWARD_FOLLOWUP_SYNC=1 \
-           FLEET_STEWARD_ISSUE_CMD="$g/issue" FLEET_STEWARD_STABLE_CMD="$g/move" FLEET_STEWARD_HOLD_CMD="$g/hold" \
-           FLEET_STEWARD_TICKET_CMD="$g/ticket" FLEET_DECISION_POST_CMD="$g/post" FLEET_DECISION_COMMENTS_CMD="$g/none" \
-           FLEET_STEWARD_WINDOWS_CMD="$g/none" FLEET_STEWARD_CHILDREN_CMD="$g/children" FLEET_STEWARD_SEND_CMD="$g/none" \
-           FLEET_STEWARD_STAMP_CMD="$g/none" FLEET_STEWARD_STAMP_TODO_CMD="$g/none" \
-           FLEET_STEWARD_DOCTOR_CMD="$g/none" FLEET_STEWARD_IDLE_CMD="$g/none" \
-           python3 "$BIN/fleet_steward.py" "$@" --session fs; }
-  : > "$g/held"
-  for n in 11 12 13 14; do
-    m=$(python3 "$BIN/fleet_followup.py" mark --kind stable --what "挪稳定版（#${n}）")
-    python3 -c 'import json,sys; json.dump({"state":"CLOSED","comments":[{"body":"后续：move stable\n"+sys.argv[1],"url":"u"}]}, open(sys.argv[2],"w"))' "$m" "$g/gh/$n.json"
-    fs followups --watch "o/r#$n" >/dev/null
-  done
-  t0=$(now)
-  fs beat --holder --force >/dev/null 2>&1; fs beat --holder --force >/dev/null 2>&1
-  [ ! -s "$g/moves" ] || { WHY="stable moved while a batch holds the install"; return 1; }
-  rm -f "$g/held"
-  fs beat --holder --force >/dev/null 2>&1; fs beat --holder --force >/dev/null 2>&1
-  n=$(grep -c . "$g/moves" 2>/dev/null || echo 0)
-  [ "$n" = 1 ] || { WHY="four batches' 「move stable」 ran $n moves (want one)"; return 1; }
-  w=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
-  [ "$w" = 4 ] || { WHY="the run was written back on $w of four batches"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="四个批次各留「move stable」、一个批次还在跑：在跑时一次不挪，放开后只挪一次，四个批次都回写"
-}
-
-# ---- park-* (#2671, EPIC #2668 C3): parking a stuck session. The sandbox is
-# bin/fleet-park-selftest.sh's — its own isolated tmux socket, a real worktree with
-# a bare remote, seams for GitHub / the peer channel / the spawn — run once, read
-# by both drills.
-park_run() {
-  [ -f "$WORK/park.out" ] || bash "$BIN/fleet-park-selftest.sh" > "$WORK/park.out" 2>&1
-}
-park_need() { # park_need <PASS line fragment>…
-  local f
-  for f in "$@"; do
-    grep -q "^PASS  $f" "$WORK/park.out" && continue
-    WHY="no PASS for: $f — $(grep -m 3 '^FAIL' "$WORK/park.out" | tr '\n' '|')"
-    return 1
-  done
-}
-
-# park-lost-progress: the session never answers the handoff request. Past the grace
-# the fleet keeps the screen, pushes the branch, keeps the worktree (uncommitted
-# file included), and the wake comes back on the same conversation.
-drill_park_lost_progress() {
-  CAP=120; local t0; t0=$(now)
-  park_run
-  park_need "C no handoff past the grace" "C its comment points at the kept screen" "C its branch is pushed" \
-            "B the worktree stays" "B the screen is kept" "D reopened on the SAME conversation" \
-            "D its first turn reads the handoff" || return 1
-  SECS=$(since "$t0")
-  WHAT="不回话的会话过了宽限：屏幕存档、分支推上、工作区连未提交的都在；条件满足同一对话接回、首轮读交接"
-}
-
-# park-restored-by-restore: a reboot's restore runs off a map taken while the
-# parked session was still open. It must leave that one closed (and say so), and
-# still take an ordinary lost window beside it; --auto's pull-back sees it retired.
-drill_park_restored_by_restore() {
-  CAP=120; local t0; t0=$(now)
-  park_run
-  park_need "B the window is retired" "B fleet_parked o/r 7" "H restore leaves the parked one closed" \
-            "H restore does nothing else with it" "H an ordinary lost window still takes" || return 1
-  SECS=$(since "$t0")
-  WHAT="拿停放前的地图恢复：停放的不重开（写 parked），旁边普通丢的照走恢复；拉回认 retired 不碰"
-}
-
-# health-silent-pass (issue #2674, EPIC #2668 C6): a systemic fault arrives
-# quietly — a doctor row goes PASS→FAIL, and every sleep is refused (#2622's
-# `wrong fleet`) while sessions sit idle. The steward's beat files ONE issue for
-# each, once: the next beat with the fault still there writes nothing more.
-drill_health_silent_pass() {
-  CAP=30; local t0 g="$WORK/hsp" at old
-  mkdir -p "$g/conf/fleets/hp/repos"
-  printf 'FLEET_REPO="o/r"\n' > "$g/conf/fleets/hp/repos/o-r.conf"
-  printf '#!/bin/sh\n:\n' > "$g/none"
-  printf '#!/bin/sh\ncat "%s/doctor.json"\n' "$g" > "$g/doctor"
-  printf '#!/bin/sh\ncat "%s/idle.txt"\n' "$g" > "$g/idle"
-  printf '#!/bin/sh\nn=$(( $(grep -c . "%s/issues" 2>/dev/null || echo 0) + 1 ))\nprintf "%%s\\t%%s\\n" "$n" "$(tr "\\n" " ")" >> "%s/issues"\necho "https://github.com/$1/issues/$n"\n' "$g" "$g" > "$g/file"
-  printf '#!/bin/sh\ngrep -F -- "$2" "%s/issues" 2>/dev/null | head -1 | cut -f1\n' "$g" > "$g/find"
-  printf '#!/bin/sh\ncat >/dev/null; echo "$1#$2" >> "%s/posts"\n' "$g" > "$g/post"
-  chmod +x "$g/none" "$g/doctor" "$g/idle" "$g/file" "$g/find" "$g/post"
-  hp() { env FLEET_CONF_DIR="$g/conf" FLEET_UI_LANG=zh FLEET_STEWARD_HOLDER_CMD='echo @9' FLEET_SLEEP=observe \
-           FLEET_DECISION_COMMENTS_CMD="$g/none" FLEET_DECISION_POST_CMD="$g/post" FLEET_STEWARD_WINDOWS_CMD="$g/none" \
-           FLEET_STEWARD_CHILDREN_CMD="$g/none" FLEET_STEWARD_SEND_CMD="$g/none" FLEET_STEWARD_STAMP_CMD="$g/none" \
-           FLEET_STEWARD_DOCTOR_CMD="$g/doctor" FLEET_STEWARD_IDLE_CMD="$g/idle" FLEET_STEWARD_SLEEP_LOG="$g/sleep.log" \
-           FLEET_STEWARD_CLEANUP_LOG="$g/cleanup.log" FLEET_STEWARD_HEALTH_REPO=o/f FLEET_STEWARD_HEALTH_EVERY=0 FLEET_STEWARD_HEALTH_CONFIRM=1 \
-           FLEET_STEWARD_HEALTH_FILE_CMD="$g/file" FLEET_STEWARD_HEALTH_FIND_CMD="$g/find" FLEET_STEWARD_IDLE_SECS=60 \
-           python3 "$BIN/fleet_steward.py" beat --holder --force --session hp >/dev/null 2>&1; }
-  printf '{"rows": [{"level": "PASS", "row": "qwatch", "msg": "quota cache fresh"}]}\n' > "$g/doctor.json"
-  : > "$g/idle.txt"
-  hp
-  [ ! -s "$g/issues" ] || { WHY="a healthy baseline filed: $(cat "$g/issues")"; return 1; }
-  t0=$(now)
-  printf '{"rows": [{"level": "FAIL", "row": "qwatch", "msg": "quota cache is FRESH BUT EMPTY — the last 1746 reads returned no rows"}]}\n' > "$g/doctor.json"
-  old=$(( $(date +%s) - 600 )); at=$(date '+%Y-%m-%dT%H:%M:%S')
-  printf '@1\tworker\tdone\t%s\t\t\tissue-1\n@2\tworker\tdone\t%s\t\t\tissue-2\n' "$old" "$old" > "$g/idle.txt"
-  printf '{"session": "hp", "window": "@1", "at": "%s", "skip": "wrong fleet"}\n{"session": "hp", "window": "@2", "at": "%s", "skip": "wrong fleet"}\n' \
-    "$at" "$at" > "$g/sleep.log"
-  hp
-  SECS=$(since "$t0")
-  [ "$(grep -c . "$g/issues" 2>/dev/null)" = 2 ] && grep -q 'key=qwatch:' "$g/issues" && grep -q 'key=idle-sleep:hp' "$g/issues" \
-    || { WHY="one beat after the fault: issues [$(cat "$g/issues" 2>/dev/null)]"; return 1; }
-  hp
-  [ "$(grep -c . "$g/issues")" = 2 ] && [ ! -s "$g/posts" ] || { WHY="the fault still there next beat wrote again"; return 1; }
-  WHAT="体检 PASS→FAIL、休眠全被拒：同一拍各立一张单，下一拍仍在不再写"
-}
-
-
 # ---- dist-no-github (#2776, EPIC #2770 C6): GitHub out of reach and stable moved —
 # every install still reaches the new version from the hub alone. The sandbox is
 # bin/dist-no-github-selftest.sh's (git insteadOf + a curl proxy into a recorder,
@@ -2116,7 +1985,7 @@ drill_debug_ticket_replayed() {
 # or a bundle arrives still holding a credential. The page would read 「诊断员
 # 正在看」 forever and the person would wait. The hub moves a report with no page
 # 15 minutes after its debugger was asked (or with none opened) to 没看完 — the
-# page says it went to the admin, the orchestrator is told in one line — refuses
+# page says it went to the admin — refuses
 # a bundle with anything credential-shaped in any file (400, the file named),
 # and deletes everything seven days on. Go tests by name (run with a toolchain).
 drill_debug_page_stuck() {
@@ -2128,13 +1997,11 @@ drill_debug_page_stuck() {
   grep -q 'debugPageLimit = 15 \* time.Minute' "$f" || { WHY="the debugger's page limit is no longer 15 minutes"; return 1; }
   grep -q 'if hit := debugShapeHit(shapes, string(files\[n\])); hit != "" {' "$f" \
     || { WHY="the upload no longer holds every file of the bundle against the shape table"; return 1; }
-  grep -q 'send(sess, "orchestrator", ln)' "$ROOT/bin/fleet_steward.py" \
-    || { WHY="the steward's beat no longer tells the orchestrator a report's outcome"; return 1; }
   for t in $tests; do
     grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_debug_test.go" 2>/dev/null \
       || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_debug_test.go"; return 1; }
   done
-  WHAT='诊断员没开成 / 中途死了 / 15 分钟没交页 → 没看完、转给管理员、编排会话一行；包里还有凭据 → 400 说哪个文件；7 天后全删（测试按名核对在，Go 门跑它们）'
+  WHAT='诊断员没开成 / 中途死了 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；7 天后全删（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?

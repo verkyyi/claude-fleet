@@ -32,9 +32,8 @@
 // The orchestrator's role section (#2582), its band strings and its queue count
 // (#2617) left with the resident seat (issue #3118): nothing here reads a role.
 //
-// Panels (issue #2835) — the decision sheet, the patrol, the batches — are the
-// fleet-steward plugin's mod module since issue #3115 (EPIC #3111 C4), drawn only
-// in the window that took the steward role; this mod starts none of them.
+// Panels (issue #2835) — the decision sheet, the patrol, the batches — left with
+// the steward's tick program (issue #4339); this mod starts none.
 //
 // Tools (issue #2057): a session the launcher gave no fleet tool service (no
 // FLEET_MCP_SERVER=1 — launched before #1828) gets the mod's three fallback tools

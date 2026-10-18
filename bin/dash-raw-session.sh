@@ -93,7 +93,7 @@
 # start passes it) files none: the record is its ticket, stamped `@task T<n>`.
 #
 # --resume <sid> + --seed-file <f> [+ --worktree <dir>] (issue #3387): a PARKED
-# session with no issue coming back (bin/fleet_park.py's wake) — the scratch
+# session with no issue coming back (a park's wake; the parker left with #4339) — the scratch
 # counterpart of dash-issue-session.sh --resume. The window opens on the same
 # conversation (`--resume <sid>`, Claude only, and only while its transcript is
 # still in the project dir of where it ran — $HOME for --no-repo, else the

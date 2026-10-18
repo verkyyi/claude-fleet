@@ -14,23 +14,22 @@
 #      fleet_epic_agent (the charter's agent), each member's 上线证据 line, before /
 #      after evidence (the EPIC resolved off the hub's parent), a member labelled
 #      blocked and unlabelled, a comment on the parent; tick 2 closes a member
-#   S. the steward: fleet_decision.parent_of / fetch_comments, the health card's
-#      find_open, fleet_breakage_find, fleet_park's issue condition, the mcp `gh`
-#      tool's issue read (fleet-gh.sh issue view) — all off the hub
+#   S. the shared reads: fleet_breakage_find, the mcp `gh` tool's issue read
+#      (fleet-gh.sh issue view) — off the hub (the steward's own reads left with
+#      its tick program, issue #4339)
 #   T. report: fleet-evidence.sh list --epic shows both members' evidence
 #   Z. 0 gh calls through all of it
 #   N. degenerate: a repo with no FLEET_TICKETS keeps its gh: id and its gh argv
 #
 # Drives: bin/fleet-ticket.sh, bin/fleet_ticket.py, bin/fleet-evidence.sh,
 # bin/fleet-epic-preflight.sh, bin/fleet-labels-seed.sh, bin/fleet-issue-file.sh,
-# bin/fleet-gh.sh, bin/fleet_decision.py, bin/fleet_steward_health.py,
-# bin/fleet_park.py, bin/fleet_followup.py, fleet_sub_issues / fleet_epic_agent /
+# bin/fleet-gh.sh, fleet_sub_issues / fleet_epic_agent /
 # fleet_breakage_find (bin/fleet-lib.sh).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 for f in fleet-ticket.sh fleet_ticket.py fleet-evidence.sh fleet-epic-preflight.sh fleet-labels-seed.sh \
-         fleet-issue-file.sh fleet-gh.sh fleet-lib.sh fleet_decision.py fleet_steward_health.py fleet_park.py; do
+         fleet-issue-file.sh fleet-gh.sh fleet-lib.sh; do
   [ -f "$BIN/$f" ] || { echo "selftest: $f missing" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 absent — SKIP" >&2; exit 0; }
@@ -188,28 +187,16 @@ subs=$(L fleet_sub_issues acme/app "$E_N")
 [ "$subs" = "$(printf 'acme/app\t2\tclosed\nacme/app\t3\topen')" ] || fail "R tick 2 reads the landed member" "$subs"
 ok "R run: members + states · agents · 上线证据 lines · before/after under the EPIC · blocked label · parent comment · tick 2"
 
-# ============================ S: the steward's reads ============================
-par=$(P 'import fleet_decision as fd; print(fd.parent_of("acme/app", 3))') || fail "S parent_of"
-[ "$par" = "('acme/app', '1')" ] || fail "S fleet_decision.parent_of off the hub" "$par"
-cm=$(P 'import fleet_decision as fd; print(len(fd.fetch_comments("acme/app", 1)))') || fail "S fetch_comments"
-[ "$cm" = 1 ] || fail "S the decision sheet reads the parent's comments" "$cm"
-src=$(P 'import fleet_decision as fd; print(fd._src("", "acme/app", 3))')
-[ "$src" = 'hub:acme/app#3' ] || fail "S a decision row's src is the hub id" "$src"
-src=$(P 'import fleet_decision as fd; print(fd._src("http://h/fleet/tickets/acme/app/3#comment-1"))')
-[ "$src" = 'hub:acme/app#3' ] || fail "S a hub comment URL reads back as its ticket" "$src"
+# ============================ S: the shared reads ===============================
 mk='<!-- fleet:health key=disk -->'
 T comment "hub:acme/app#3" --note --body "x" >/dev/null 2>&1
 [ "$(T edit 'hub:acme/app#3' --body "health card $mk")" = edited ] || fail "S a ticket carrying a marker"
-fo=$(P "import fleet_steward_health as h; h.MARK = '<!-- fleet:health key=%s -->'; print(h.find_open('acme/app', 'disk'))")
-[ "$fo" = 3 ] || fail "S the health card's find_open off the hub" "$fo"
 L eval 'fleet_breakage_marker() { printf "<!-- fleet:health key=disk -->"; }; fleet_breakage_find acme/app k' >"$WORK/bf" 2>&1 \
   || fail "S fleet_breakage_find off the hub" "$(cat "$WORK/bf")"
 grep -q "/fleet/tickets/acme/app/3\$" "$WORK/bf" || fail "S fleet_breakage_find prints the ticket's URL" "$(cat "$WORK/bf")"
-pk=$(P 'import fleet_park as p; print(p.check("issue:acme/app#2:closed"), p.check("issue:acme/app#3:closed"))')
-[ "$pk" = "(True, 'closed') (False, 'open')" ] || fail "S a park's issue condition read off the hub" "$pk"
 j=$(B fleet-gh.sh issue view 3 --repo acme/app --json state,title) || fail "S fleet-gh.sh issue view (the mcp gh tool)"
 case "$j" in *'"state": "OPEN"'*'"title": "成员 2"'*) ;; *) fail "S the mcp gh tool's issue read answers off the hub" "$j" ;; esac
-ok "S steward: parent_of · comments · row src · health find_open · breakage find · park condition · gh tool"
+ok "S shared reads: breakage find · gh tool"
 
 # ============================ T: report =========================================
 rep=$(B fleet-evidence.sh list --session fs --repo acme/app --epic "$E_N" 2>&1) || fail "T the report's list" "$rep"

@@ -19,7 +19,7 @@
     {
       "name": "fleet-steward",
       "source": "./plugins/fleet-steward",
-      "description": "Open a steward session (/fleet-steward — the steward agent file) that keeps watch on its own /loop: answers what a batch charter says, spawns a red base's fixer, lands a green driverless batch."
+      "description": "已下架 · retired (EPIC #4333): the steward is a session template now — spawn agent:steward. Kept one version so an installed copy updates to this empty one; uninstall it."
     },
     {
       "name": "fleet-epic",
