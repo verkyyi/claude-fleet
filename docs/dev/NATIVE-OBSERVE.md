@@ -114,6 +114,20 @@ Codex→Codex 切换是新 conversation，内部 `--native-resume` 目前仅支�
    hook 不覆盖新身份，以及同 SID 的正常消息确已消费；只有现场 owner 按新的明确授权
    执行后才能报告业务恢复。#4510 的发布/live 仍只归 #4486。
 
+续接控制器（`bin/fleet_native_continue.py`，#4536 落护栏，#4775 接原消息）的原消息
+**不再作为 resume 首条普通字符串**：计划可带 `message {operation, text}`，只在新
+lifetime 已 `bound`（原 writer 已停、新 PID/birth 与同 SID 已确认）之后，经
+`fleet_runtime.accept_if_idle` 以 `operation` 作 delivery_id（Codex 的
+`clientUserMessageId`）投递；之后另开连接按该 id 重读持久 thread，找到同一 turn 才记
+`consumed`、`message_consumption_verified`。丢 ACK / 重复调用 / `delivery-unconfirmed`
+再次 apply 时由 runtime 的逐投递 journal 按回执结清，绝不新发；`delivery-rejected`
+是原生未启动、仍欠；已 accepted 但重读未确认（`consumption-unconfirmed`）只重读不再投。
+自动入口仍返回 unavailable：缺 `continuous-execution-gate`（旧固定 hook 失效后的
+timeout/kill、precompaction、非普通输入/goal 的 fail-closed 门）与
+`missing-config-mcp-stop`（missing-config-path / MCP-not-ready 的受支持 drain/stop，
+`strict` 拒绝不变，#4537）；原消息一项列在 `pending_native_evidence`，待真实 Codex 隔离
+演练取证后才算数。
+
 ## 隔离验证
 
 `bin/run-selftests.sh fleet-native-observe-selftest.sh` 覆盖严格 ACK、fresh 比较、

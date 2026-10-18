@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 import fleet_native_continue as continuation
@@ -31,6 +32,12 @@ class Backend:
     def reserve(self, plan, reservation): return self.step("reserve")
     def launch(self, plan, reservation): return self.step("launch")
     def bound(self, plan, reservation): return self.step("bound")
+    def deliver(self, plan, record):
+        if self.fail == "deliver-rejected":
+            self.calls.append("deliver")
+            raise continuation.Rejected("precheck_active")
+        return self.step("deliver")
+    def consumed(self, plan, record): return self.step("consumed")
 
 
 class Journal(unittest.TestCase):
@@ -54,7 +61,9 @@ class Journal(unittest.TestCase):
             self.assertFalse(result['stop_submitted'])
             self.assertFalse(result['new_admission_requested'])
             self.assertIn('continuous-execution-gate', result['missing_capabilities'])
-            self.assertIn('original-message-operation', result['missing_capabilities'])
+            self.assertIn('missing-config-mcp-stop', result['missing_capabilities'])
+            # Wired after binding, but real Codex evidence is still owed (#4775).
+            self.assertIn('original-message-operation', result['pending_native_evidence'])
             inspect.assert_not_called(); read.assert_not_called(); execute.assert_not_called()
             self.assertFalse(self.path.exists())
 
@@ -89,6 +98,72 @@ class Journal(unittest.TestCase):
                 if failing in ("preflight", "stop", "stopped"):
                     self.assertNotIn("launch", calls)
                     self.assertNotIn("reserve", calls)
+
+    def message_plan(self):
+        return dict(self.plan, message={"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": "继续"})
+
+    def test_original_message_goes_after_binding_and_is_verified_once(self):
+        plan, backend = self.message_plan(), Backend()
+        first = continuation.execute(self.path, plan, backend)
+        self.assertEqual(first["state"], "consumed")
+        self.assertTrue(first["message_consumption_verified"])
+        self.assertEqual(backend.calls, ["preflight", "stop", "stopped", "reserve", "launch", "bound",
+                                         "deliver", "consumed"])
+        calls = backend.calls[:]
+        self.assertEqual(continuation.execute(self.path, plan, backend), first)
+        self.assertEqual(continuation.deliver(self.path, first, backend), first)
+        self.assertEqual(backend.calls, calls)
+
+    def test_message_never_reaches_an_unbound_or_unconfirmed_target(self):
+        for failing in ("stop", "stopped", "reserve", "launch", "bound"):
+            with self.subTest(failing=failing):
+                backend = Backend(failing)
+                record = continuation.execute(self.path.with_name(failing + ".json"), self.message_plan(), backend)
+                self.assertNotIn("deliver", backend.calls)
+                self.assertFalse(record["message_consumption_verified"])
+                self.assertEqual(continuation.deliver(self.path.with_name(failing + ".json"), record, backend), record)
+                self.assertNotIn("deliver", backend.calls)
+
+    def test_lost_delivery_ack_settles_by_the_same_operation_never_a_new_one(self):
+        plan = self.message_plan()
+        record = continuation.execute(self.path, plan, Backend("deliver"))
+        self.assertEqual(record["state"], "delivery-unconfirmed")
+        self.assertFalse(record["message_consumption_verified"])
+        seen = []
+        class Settle(Backend):
+            def deliver(self, plan, record):
+                seen.append(plan["message"]["operation"])
+                return self.step("deliver")
+        backend = Settle()
+        again = continuation.deliver(self.path, continuation.read(self.path), backend)
+        self.assertEqual(again["state"], "consumed")
+        self.assertEqual(seen, [plan["message"]["operation"]])
+        self.assertEqual(backend.calls, ["deliver", "consumed"])
+
+    def test_rejected_delivery_is_still_owed_and_consumption_only_reverified(self):
+        plan = self.message_plan()
+        record = continuation.execute(self.path, plan, Backend("deliver-rejected"))
+        self.assertEqual(record["state"], "delivery-rejected")
+        self.assertFalse(record["message_consumption_verified"])
+        record = continuation.deliver(self.path, record, Backend("consumed"))
+        self.assertEqual(record["state"], "consumption-unconfirmed")
+        backend = Backend()
+        record = continuation.deliver(self.path, record, backend)
+        self.assertEqual(backend.calls, ["consumed"])
+        self.assertTrue(record["message_consumption_verified"])
+        result = continuation.reconcile(record, None)
+        self.assertEqual(result["state"], "consumed")
+        self.assertTrue(result["message_consumption_verified"])
+
+    def test_malformed_original_message_refuses_before_any_effect(self):
+        for bad in ({"operation": "not-a-uuid", "text": "x"}, {"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": ""},
+                    {"operation": "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77", "text": "x", "extra": 1}):
+            with self.subTest(bad=bad):
+                backend = Backend()
+                with self.assertRaises(ValueError):
+                    continuation.execute(self.path, dict(self.plan, message=bad), backend)
+                self.assertEqual(backend.calls, [])
+                self.assertFalse(self.path.exists())
 
     def test_crashed_launch_intent_cannot_start_second_writer(self):
         record = {"version": 1, "plan": self.plan, "state": "launch-requested"}
@@ -131,6 +206,71 @@ class Journal(unittest.TestCase):
         count = len(backend.calls)
         continuation.execute(self.path, self.plan, backend)
         self.assertEqual(len(backend.calls), count)
+
+
+class OriginalMessage(unittest.TestCase):
+    """Native.deliver/consumed against a stubbed runtime: identity fence, answers, re-read."""
+    OP = "0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77"
+
+    def setUp(self):
+        self.plan = {"binding": {"pane": "%7", "socket": "/tmp/s", "@worktree": "/w"},
+                     "proof": {"native_session": "sid", "pid": 41}, "routing": {"r": 1},
+                     "workspace": {"files_sha256": "x"}, "message": {"operation": self.OP, "text": "继续"}}
+        self.record = {"bound": {"native_identity": {"pid": 42, "birth": "b", "executable": "e"}}}
+        self.ident = {"native_session": "sid", "pid": 42, "birth": "b", "executable": "e", "native_remote": "r"}
+        rt = continuation.observe.runtime
+        for target, value in ((continuation, "routing"), (continuation, "workspace")):
+            patcher = patch.object(target, value, return_value=self.plan[value])
+            patcher.start(); self.addCleanup(patcher.stop)
+        self.read = patch.object(rt, "read", side_effect=lambda *a, **k: {"version": 1, "identity": dict(self.ident)})
+        self.read.start(); self.addCleanup(self.read.stop)
+
+    def accept(self, answer):
+        return patch.object(continuation.observe.runtime, "accept_if_idle", return_value=answer)
+
+    def test_original_lifetime_or_another_sid_never_gets_the_message(self):
+        for change in ({"pid": 41}, {"native_session": "other"}, {"birth": "older"}):
+            with self.subTest(change=change):
+                self.ident.update(change)
+                with self.accept({}) as accept, self.assertRaises(ValueError):
+                    continuation.Native().deliver(self.plan, self.record)
+                accept.assert_not_called()
+                self.ident.update(native_session="sid", pid=42, birth="b")
+
+    def test_rejected_is_owed_unknown_is_never_consumed(self):
+        with self.accept({"state": "rejected", "reason": "precheck_active"}), self.assertRaises(continuation.Rejected):
+            continuation.Native().deliver(self.plan, self.record)
+        for answer in ({"state": "unknown", "reason": "receipt_unconfirmed"},
+                       {"state": "accepted", "delivery_id": self.OP, "receipt": {"delivery_id": "other", "native_session": "sid", "turn_id": "t"}},
+                       {"state": "accepted", "delivery_id": self.OP, "receipt": {"delivery_id": self.OP, "native_session": "sid"}}):
+            with self.subTest(answer=answer), self.accept(answer), self.assertRaises(ValueError) as caught:
+                continuation.Native().deliver(self.plan, self.record)
+            self.assertNotIsInstance(caught.exception, continuation.Rejected)
+        receipt = {"delivery_id": self.OP, "native_session": "sid", "turn_id": "t9", "anchor_turn_id": "t8"}
+        with self.accept({"state": "accepted", "delivery_id": self.OP, "receipt": receipt}) as accept:
+            out = continuation.Native().deliver(self.plan, self.record)
+        self.assertEqual(accept.call_args.args[2:4], (self.OP, "继续"))
+        self.assertEqual(out["receipt"]["turn_id"], "t9")
+
+    def test_consumption_is_an_independent_reread_of_the_same_turn(self):
+        rt = continuation.observe.runtime
+        record = dict(self.record, deliver={"receipt": {"turn_id": "t9", "anchor_turn_id": "t8"}})
+        client = unittest.mock.MagicMock()
+        for found, ok in (((True, "t9", "t8"), True), ((True, "t10", "t9"), False),
+                          ((None, None, None), False), ((False, None, None), False)):
+            with self.subTest(found=found), \
+                    patch.dict(rt.CODEX, identity=lambda *a: {"session_id": "sid", "remote": "r"}), \
+                    patch.object(rt, "RPC", return_value=client) as rpc, \
+                    patch.object(rt, "codex_receipt", return_value=found) as receipt:
+                if ok:
+                    out = continuation.Native().consumed(self.plan, record)
+                    self.assertEqual(out["turn_id"], "t9")
+                    self.assertEqual(rpc.call_args.kwargs["peer_pid"], 42)
+                    self.assertEqual(receipt.call_args.args[1:], ("sid", self.OP, "t8"))
+                else:
+                    with self.assertRaises(ValueError):
+                        continuation.Native().consumed(self.plan, record)
+                client.close.assert_called()
 
 
 class Readiness(unittest.TestCase):
