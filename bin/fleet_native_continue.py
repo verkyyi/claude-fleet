@@ -2,8 +2,11 @@
 """Guarded prototype for one-shot legacy Codex continuation.
 
 Automatic preflight/apply return unavailable before any target read or effect:
-the native execution and original-message operation contracts are still missing.
-The isolated controller saves intent before each effect; replay never retries.
+the native continuous-execution gate and the missing-config/MCP stop contract
+are still missing. The isolated controller saves intent before each effect;
+replay never retries one. The original message is not a resume prompt: once the
+new lifetime is bound it goes through the runtime's idle accept under its own
+operation id, and only an independently re-read receipt counts as consumed.
 """
 import argparse
 import hashlib
@@ -33,7 +36,15 @@ ROUTING = ('@fleet_id', '@repo', '@issue', '@raw', '@worktree', '@task', '@origi
 CONFLICTS = ('@handoff_armed', '@agent_transfer_request', '@worker_lifecycle', '@loop')
 UNCONFIRMED = {'preflight': 'source-retained', 'stop': 'stop-unconfirmed',
                'stopped': 'stop-unconfirmed', 'reserve': 'admission-unconfirmed',
-               'launch': 'launch-unconfirmed', 'bound': 'target-unconfirmed'}
+               'launch': 'launch-unconfirmed', 'bound': 'target-unconfirmed',
+               'deliver': 'delivery-unconfirmed', 'consumed': 'consumption-unconfirmed'}
+# A message stage may be re-entered: the runtime's per-delivery journal settles
+# an earlier attempt by its receipt before any new native write (#4617).
+MESSAGE_RESUMABLE = ('bound', 'delivery-rejected', 'delivery-unconfirmed', 'consumption-unconfirmed')
+
+
+class Rejected(ValueError):
+    """The native refused the delivery: nothing was started, still owed."""
 
 
 def save(path, value):
@@ -69,6 +80,7 @@ def execute(path, plan, backend, transition=None):
         record = read(path)
         require(record.get('plan') == plan, 'operation already belongs to another source')
         return record
+    message(plan)   # a malformed original message refuses before any effect
     record = dict(version=1, plan=plan, reservation=str(uuid.uuid4()), state='prepared',
                   message_consumption_verified=False, new_kernel_lifetime_requested=True,
                   new_kernel_lifetime_verified=False)
@@ -97,6 +109,52 @@ def execute(path, plan, backend, transition=None):
     save(path, record)
     if transition is not None:
         (transition / 'request').unlink()
+    return deliver(path, record, backend)
+
+
+def message(plan):
+    """The original message's operation, or None for a continuation without one."""
+    m = plan.get('message')
+    if m is None:
+        return None
+    require(isinstance(m, dict) and set(m) == {'operation', 'text'}
+            and isinstance(m['operation'], str) and str(uuid.UUID(m['operation'])) == m['operation']
+            and isinstance(m['text'], str) and 0 < len(m['text']) <= 65536,
+            'original message needs exactly an operation UUID and its text')
+    return m
+
+
+def deliver(path, record, backend):
+    """Hand the original message to the bound lifetime, then verify consumption.
+
+    Never before the new lifetime is bound: the original writer is stopped and
+    the target is confirmed first, so the message cannot reach the old process.
+    The operation id is the runtime's delivery_id (Codex clientUserMessageId), so
+    a lost ACK or a repeated call settles the earlier attempt instead of sending
+    again. Rejected = provably not started (still owed); unknown is never consumed.
+    """
+    if message(record['plan']) is None or record.get('state') not in MESSAGE_RESUMABLE:
+        return record
+    require(record.get('new_kernel_lifetime_verified') is True and 'bound' in record,
+            'original message waits for a confirmed new lifetime')
+    # A delivery already accepted is only re-verified, never handed over again.
+    stages = ('consumed',) if record.get('state') == 'consumption-unconfirmed' else ('deliver', 'consumed')
+    for stage in stages:
+        record.update(state=stage + '-requested', stage=stage)
+        save(path, record)
+        try:
+            record[stage] = getattr(backend, stage)(record['plan'], record)
+            save(path, record)
+        except Rejected:
+            record['state'] = 'delivery-rejected'
+            save(path, record)
+            return record
+        except Exception:
+            record['state'] = UNCONFIRMED[stage]
+            save(path, record)
+            return record
+    record.update(state='consumed', message_consumption_verified=True)
+    save(path, record)
     return record
 
 
@@ -108,16 +166,19 @@ def protected_execute(path, plan, backend):
             require(record.get('plan') == plan, 'operation already belongs to another source')
             if record.get('stage') in ('stop', 'stopped', 'reserve', 'launch', 'bound') and record.get('state') != 'bound':
                 save(lock / 'request', dict(kind='native-continuation', journal=str(path), source=plan['proof']))
-            return record
+            return deliver(path, record, backend)
         return execute(path, plan, backend, transition=lock)
 
 
 def automatic_capability():
-    # Normal returned-error hooks are not a fail-closed native execution gate;
-    # the standard initial prompt also has no original-operation association.
-    # No environment override: isolated interface probes cannot enable product.
+    # Normal returned-error hooks are not a fail-closed native execution gate,
+    # and a missing-config/MCP-not-ready source has no supported drain/stop proof
+    # (the strict gate's refusal stays, #4537). The original message rides idle
+    # accept after binding (deliver/consumed), but counts only once a real Codex
+    # run shows it. No environment override: isolated probes cannot enable product.
     return dict(state='unavailable', reason='native-continuation-capability-missing',
-                missing_capabilities=['continuous-execution-gate', 'original-message-operation'],
+                missing_capabilities=['continuous-execution-gate', 'missing-config-mcp-stop'],
+                pending_native_evidence=['original-message-operation'],
                 stop_submitted=False, new_admission_requested=False,
                 message_consumption_verified=False)
 
@@ -126,7 +187,12 @@ def reconcile(record, backend):
     """Read current evidence once. Never repair stamps, save or retry effects."""
     result = dict(state='target-unconfirmed', journal_state=record['state'],
                   new_kernel_lifetime_verified=False, message_consumption_verified=False)
-    if not all(k in record for k in ('stopped', 'reserve')) or record.get('stage') not in ('launch', 'bound'):
+    if record.get('state') == 'consumed' and record.get('message_consumption_verified') is True:
+        # The journal's own independent re-read; reconcile never repeats it.
+        result.update(state='consumed', new_kernel_lifetime_verified=True,
+                      message_consumption_verified=True, consumed=record.get('consumed'))
+        return result
+    if not all(k in record for k in ('stopped', 'reserve')) or record.get('stage') not in ('launch', 'bound', 'deliver', 'consumed'):
         result['state'] = record['state']
         return result
     try:
@@ -388,6 +454,51 @@ class Native:
             return dict(authority_receipt=receipt, native_identity=proof, workspace=plan['workspace'])
         return check() if seconds == 0 else wait_for(check, seconds)
 
+    def target(self, plan, record):
+        """The bound lifetime, read fresh: same SID, the bound PID/birth, never the original."""
+        row, bound = plan['binding'], record['bound']['native_identity']
+        snap = observe.runtime.read(row['pane'], socket=row['socket'])
+        ident = snap.get('identity') or {}
+        require(ident.get('native_session') == plan['proof']['native_session']
+                and all(ident.get(k) == bound.get(k) for k in ('pid', 'birth', 'executable'))
+                and ident.get('pid') != plan['proof']['pid'], 'message target is not the bound new lifetime')
+        require(routing(row) == plan['routing'], 'target routing changed before delivery')
+        return snap
+
+    def deliver(self, plan, record):
+        m = message(plan)
+        snap = self.target(plan, record)
+        # The continuation hands over the same tree it stopped; the turn may change it.
+        require(workspace(plan['binding']['@worktree']) == plan['workspace'], 'worktree changed before delivery')
+        result = observe.runtime.accept_if_idle(plan['binding']['pane'], snap, m['operation'], m['text'],
+                                                plan['binding']['socket'])
+        if result.get('state') == 'rejected':
+            raise Rejected(result.get('reason') or 'rejected')
+        receipt = result.get('receipt') or {}
+        require(result.get('state') == 'accepted' and result.get('delivery_id') == m['operation']
+                and receipt.get('delivery_id') == m['operation']
+                and receipt.get('native_session') == plan['proof']['native_session']
+                and isinstance(receipt.get('turn_id'), str) and receipt['turn_id'],
+                'original message delivery unconfirmed')
+        return dict(operation=m['operation'], receipt=receipt,
+                    native_identity={k: snap['identity'].get(k) for k in observe.runtime.NATIVE})
+
+    def consumed(self, plan, record):
+        """An independent read of the bound thread: the accepted turn carries the
+        operation as its userMessage clientId. The delivery's own answer is not it."""
+        m, accepted = message(plan), record['deliver']['receipt']
+        self.target(plan, record)
+        row, sid = plan['binding'], plan['proof']['native_session']
+        data = observe.runtime.CODEX['identity'](row['pane'], row['socket'])
+        require(data.get('session_id') == sid, 'target native identity changed')
+        client = observe.runtime.RPC(data['remote'], timeout=5, peer_pid=record['bound']['native_identity']['pid'])
+        try:
+            found, turn, _ = observe.runtime.codex_receipt(client, sid, m['operation'], accepted.get('anchor_turn_id'))
+        finally:
+            client.close()
+        require(found is True and turn == accepted['turn_id'], 'original message consumption unconfirmed')
+        return dict(operation=m['operation'], turn_id=turn, native_session=sid, source='native-reread')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -419,7 +530,7 @@ def main():
     if args.reconcile:
         result = reconcile(read(args.reconcile), Native())
         print(json.dumps(result, indent=2))
-        return 0 if result['state'] == 'bound' else 1
+        return 0 if result['state'] in ('bound', 'consumed') else 1
     plan = read(args.apply)
     with observe.target_lock(plan):
         root = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet'))) / 'native-continuations'
@@ -431,8 +542,8 @@ def main():
         print(json.dumps(dict(journal=str(path), state=record['state'], stage=record.get('stage'),
                               new_kernel_lifetime_requested=True,
                               new_kernel_lifetime_verified=record.get('new_kernel_lifetime_verified', False),
-                              message_consumption_verified=False), indent=2))
-        return 0 if record['state'] == 'bound' else 1
+                              message_consumption_verified=record.get('message_consumption_verified', False)), indent=2))
+        return 0 if record['state'] == ('consumed' if message(plan) else 'bound') else 1
 
 
 if __name__ == '__main__':
