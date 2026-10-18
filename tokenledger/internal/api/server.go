@@ -310,13 +310,20 @@ type Server struct {
 	// FLEET_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off; zero is
 	// the default.
 	UsageSilentAfter time.Duration
+	// PoolUsageSilentAfter is how long a person's passes may keep resolving
+	// at the credential proxy with no pool_usage row before
+	// pool_usage_silent is raised (claude-fleet#3233;
+	// FLEET_POOL_USAGE_SILENT_ALERT_SECS, 30 min). Negative turns it off;
+	// zero is the default.
+	PoolUsageSilentAfter time.Duration
 	// NotifyCmd is the hub's FLEET_NOTIFY_CMD (claude-fleet#4007): a notifier
 	// run as `<cmd> "<message>"` — the node's convention — when svc_degraded
 	// is raised; empty = the alert is only logged and recorded. Notify, when
 	// set, replaces it (tests).
-	NotifyCmd   string
-	Notify      func(msg string)
-	usageSilent usageSilentWatch
+	NotifyCmd       string
+	Notify          func(msg string)
+	usageSilent     usageSilentWatch
+	poolUsageSilent poolUsageSilentWatch
 
 	// SSHCA signs people's connection certificates (claude-fleet#1412),
 	// loaded from CCQUOTA_FLEET_SSH_CA_KEY — a file from its own k8s Secret,

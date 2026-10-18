@@ -303,6 +303,7 @@
 32.8 pool-remote-hangs
 0.4 pool-stale-handed-out
 0.1 pool-usage-node-dropped
+0.1 pool-usage-silent
 0.1 pool-usage-unattributed
 0.6 pretrust-norepo
 0.6 preview-no-code

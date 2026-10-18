@@ -92,6 +92,9 @@
 #   pool-usage-unattributed                         tokenledger/internal/api fleet_person_budget.go (handleCredProxyUsage,
 #                                                   poolUsagePass) + internal/store pool_usage.go + internal/credproxy
 #                                                   usage.go (go test, when a toolchain is here)
+#   pool-usage-silent                               tokenledger/internal/api fleet_pool_usage_silent.go (notePoolResolve,
+#                                                   PoolUsageSilentTick) + fleet_credproxy.go (resolve) + internal/store
+#                                                   pool_usage.go (PoolUsageLastAt; go test, when a toolchain is here)
 #   pool-usage-node-dropped                         tokenledger/internal/api fleet_person_budget.go (handleNodeUsage,
 #                                                   recordUsage, unownedUsage) + bin/fleet-cred-proxy.py (Budget,
 #                                                   Meter.split) + bin/fleet-session-cred.sh (--worker; go test, when a toolchain is here)
@@ -2090,6 +2093,43 @@ drill_pool_usage_unattributed() {
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='池子用量一笔一行：只认通行证的人与会话（无 / 伪造 / 自报不符 → 403 不写），repo/issue 取自租约，编排记给登录主人，个人上限读同一张表且与旧桶口径相等（go test）' ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+}
+
+# ---- pool-usage-silent (#3233, EPIC #3225): requests keep going out on the
+# subscription pool and their usage stops landing — the proxy's report broke,
+# or the hub refuses it. Nothing said so: a person's usage stood still for
+# three days until someone looked. The hub sees both halves — every resolve the
+# proxy asks before it forwards, every pool_usage row — and raises
+# pool_usage_silent on a person whose passes kept resolving past
+# FLEET_POOL_USAGE_SILENT_ALERT_SECS with no row in that time; a row, or the
+# proxy going quiet, clears it. Go tests by name (run with a toolchain).
+drill_pool_usage_silent() {
+  CAP=120; local t0 out rc t
+  local tests='TestPoolUsageSilentRaisedWhenResolvesGoUnbilled TestPoolUsageSilentQuietWhenBilledOrIdle TestPoolUsageSilentFromResolves TestPoolUsageSilentAfterFromEnv'
+  local tl="$ROOT/tokenledger/internal"
+  t0=$(now)
+  grep -q 's.notePoolResolve(c.Principal, now)' "$tl/api/fleet_credproxy.go" 2>/dev/null \
+    || { WHY="the hub no longer counts a resolve the credential proxy was answered"; return 1; }
+  grep -q 's.PoolUsageSilentTick(now, false)' "$tl/api/fleet_alerts.go" \
+    || { WHY="the alerts sweep no longer runs the pool_usage_silent check"; return 1; }
+  grep -q 'srv.PoolUsageSilentAfter = api.PoolUsageSilentAfterFromEnv()' "$ROOT/tokenledger/cmd/ccquota/hub.go" \
+    || { WHY="the hub no longer reads FLEET_POOL_USAGE_SILENT_ALERT_SECS"; return 1; }
+  for t in $tests; do
+    grep -q "^func $t(" "$tl/api/fleet_pool_usage_silent_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is not in tokenledger/internal/api/fleet_pool_usage_silent_test.go"; return 1; }
+  done
+  WHAT='代理一直在为某人放行、池子用量却没进账超 30 分钟 → pool_usage_silent；记账一到 / 代理不再放行即清（测试按名核对在，Go 门跑它们）'
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
+      0:*) WHAT='某人的通行证在代理处连续解析超阈值、pool_usage 一行没有 → pool_usage_silent；伪造通行证不算；一笔记账 / 代理停问即清；正常记账、零散使用、关掉时不报（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac

@@ -20,6 +20,14 @@ const AlertUsageSilent = "usage_silent"
 // first report the login files under a person.
 const AlertPoolUsageUnowned = "pool_usage_unowned"
 
+// AlertPoolUsageSilent: a person whose session passes the cluster credential
+// proxy kept resolving for longer than the threshold while no pool_usage row
+// landed under them (claude-fleet#3233) — subject the principal. Requests are
+// going out on the pool and nobody is billed for them: the proxy's usage
+// report broke, or the hub refuses it. Cleared by the first row, or once the
+// proxy stops asking.
+const AlertPoolUsageSilent = "pool_usage_silent"
+
 // LastUsageAt is the newest turn the hub holds from (endpoint, os_user,
 // source) at or after since — zero when there is none. Read off the hourly
 // rollup, whose key leads with the hour, so the sweep never scans the raw

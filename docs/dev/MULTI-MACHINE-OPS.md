@@ -222,12 +222,13 @@ linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf �
 - 本机网络一变（换 Wi-Fi、睡醒、插回网线；macOS 路由套接字 / Linux netlink）**立刻**重试，退避清零。
 - 接上后第一拍就是完整状态（所有会话、负载、版本），不等下一个周期。
 
-**入口记的两类告警**（`fleet_alerts` 表，读：`GET /v1/fleet/fleet_alerts`）：
+**入口记的告警**（`fleet_alerts` 表，读：`GET /v1/fleet/fleet_alerts`）：
 
 | kind | 什么时候出现 | 什么时候消除 | 入口做什么 |
 |---|---|---|---|
 | `node_lost` | 一台机器 **120 秒**没报到（`FLEET_NODE_LOST_ALERT_SECS`；从入口自己启动时起算，入口重启不会把所有机器都记失联；维护中的机器不记） | 它下一次报到 | 只记，`raised_at` / `cleared_at` 就是这次断开的起止 |
 | `lease_conflict` | 一台机器**重连后第一拍**带着一个会话，而这张单的认领此刻在别的 worker 手里（它不在时被重开 / 强取了） | 两边重新一致：认领没了、回到它手里，或它不再报这个会话 | 只记两边是谁（`holder` / `reporter`：机器、worker_id、fleet），**谁也不杀、认领不动**——留哪个由你决定（第 3 节第 3 条） |
+| `pool_usage_silent` | 某人的会话通行证在集群凭据代理处连续被解析 **30 分钟**（`FLEET_POOL_USAGE_SILENT_ALERT_SECS`，`0` 关），这段时间里却没有一笔 `pool_usage` 进账——请求在走订阅池，上报断了（#3233） | 一笔用量进账，或代理不再为他解析（停用超 5 分钟） | 只记（主题是那个人），去看代理日志里的 `usage report:` 错误 |
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" "$HUB/v1/fleet/fleet_alerts" | python3 -m json.tool
