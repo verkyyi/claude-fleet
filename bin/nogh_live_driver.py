@@ -176,6 +176,12 @@ def preflight(cluster, recipe, created):
                     actual['metadata'].get('resourceVersion'), 'IMMUTABLE_ARTIFACT_REQUIRED')
             # Credential bytes are neither retained in evidence nor emitted.
             anchors.append(dict(kind=kind, metadata=actual['metadata'], immutable=True))
+    if 'image_pull_secret' in recipe:
+        actual = cluster.get('Secret', recipe['image_pull_secret'], recipe['namespace'])
+        require(actual.get('immutable') is True and actual.get('type') == 'kubernetes.io/dockerconfigjson'
+                and set(actual.get('data', {})) == {'.dockerconfigjson'} and actual['metadata'].get('uid')
+                and actual['metadata'].get('resourceVersion'), 'PULL_SECRET_REQUIRED')
+        anchors.append(dict(kind='Secret', metadata=actual['metadata'], immutable=True))
     pods = cluster.command(['get', 'pods', '--namespace', recipe['namespace'], '-o', 'json'])['items']
     require({p['metadata']['name'] for p in pods} == set(originals), 'FOREIGN_TEST_WORKLOAD')
     plan = copy.deepcopy(recipe)

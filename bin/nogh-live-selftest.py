@@ -726,6 +726,25 @@ class Templates(unittest.TestCase):
             p['placement'] = bad
             with self.assertRaises(live.Refused): live.validate(p)
 
+    def test_one_named_pull_secret_and_nothing_else(self):
+        # live (#4625): Kubernetes 1.36 makes a credential-less Pod re-pull an
+        # image first pulled with credentials. A plan may name ONE pull secret.
+        p = plan(); ep = p['endpoints'][0]
+        bare = template.pod(p, ep)
+        self.assertNotIn('imagePullSecrets', bare['spec'])
+        smuggled = json.loads(json.dumps(bare)); smuggled['spec']['imagePullSecrets'] = [dict(name='c9-image-pull')]
+        with self.assertRaises(live.Refused): template.check_pod(p, ep, smuggled)
+        p['image_pull_secret'] = 'c9-image-pull'
+        live.validate(p)
+        pod = template.pod(p, ep)
+        self.assertEqual(pod['spec']['imagePullSecrets'], [dict(name='c9-image-pull')])
+        template.check_pod(p, ep, json.loads(json.dumps(pod)))
+        for other in ([dict(name='c9-image-pull'), dict(name='another')], [dict(name='another')], []):
+            changed = json.loads(json.dumps(pod)); changed['spec']['imagePullSecrets'] = other
+            with self.assertRaises(live.Refused): template.check_pod(p, ep, changed)
+        p['image_pull_secret'] = 'acr-credential-x'
+        with self.assertRaises(live.Refused): live.validate(p)
+
     def test_unbound_recipe_has_no_fabricated_object_identity(self):
         p = plan(); p['routes'] = []
         for ep in p['endpoints']:
