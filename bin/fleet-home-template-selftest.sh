@@ -33,7 +33,8 @@ mode() { python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode &
 runtime() { mkdir -p "$W/rt/$1/bin"; rm -f "$W/rt/current"; ln -s "$W/rt/$1" "$W/rt/current"; }
 # the stub of a login's first minute: what install + bootstrap leave in $HOME
 # shellcheck disable=SC2016 # expanded by the build's bash
-GOOD='mkdir -p "$HOME/.claude/fleet.versions/v/bin" "$HOME/.config/claude-fleet/global" "$HOME/.ssh" "$HOME/.claude/projects/x" "$HOME/projects/claude-fleet"
+GOOD='mkdir -p "$HOME/.claude/fleet.versions/v/bin" "$HOME/.config/claude-fleet/global" "$HOME/.ssh" "$HOME/.claude/projects/x" "$HOME/projects/claude-fleet" "$HOME/.config/claude-fleet/pycache/p"
+: > "$HOME/.config/claude-fleet/pycache/p/m.pyc"
 ln -s "$HOME/.claude/fleet.versions/v" "$HOME/.claude/fleet"
 printf "source %s/.claude/fleet/conf/tmux.conf\n" "$HOME" > "$HOME/.tmux.conf"
 printf "{\"userID\": \"abc\", \"numStartups\": 3, \"theme\": \"dark\", \"projects\": {\"%s/projects/claude-fleet\": {}}}\n" "$HOME" > "$HOME/.claude.json"
@@ -49,7 +50,7 @@ runtime "$S1"
 FLEET_HOME_TEMPLATE_BUILD_CMD="$GOOD" python3 "$T" build > "$W/out" 2>&1; rc=$?
 [ "$rc" = 0 ] && grep -q "^built ${S1:0:12}" "$W/out" && ok 'A built' || { cat "$W/out"; fail "A build: $rc"; }
 H="$W/tpl/$S1/home"
-for g in .config/claude-fleet/fleet.conf .config/claude-fleet/global/bootstrapped .ssh .claude/projects; do
+for g in .config/claude-fleet/fleet.conf .config/claude-fleet/global/bootstrapped .ssh .claude/projects .config/claude-fleet/pycache; do
   [ ! -e "$H/$g" ] && ok "A scrubbed: $g" || fail "A not scrubbed: $g"
 done
 [ -f "$H/.config/claude-fleet/global/bootstrap.applied" ] && ok 'A the apply mark stays (the clone skips the full apply)' || fail 'A the apply mark is gone'
