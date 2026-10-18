@@ -162,9 +162,9 @@ file is the ambient login, which *is* local.
 ## How it runs
 
 Two things authenticate against the pool, not one. The obvious one is a **worker
-session**. The other is the fleet's own **helper `claude -p` call** — the
-looping-detector (`bin/classify-sessions.sh`; the dash summarizer that shared the
-wire retired in issue #535) — which routes through `fleet_helper_claude_auth`
+session**. The other is the fleet's own **helper `claude -p` call** — today the
+sleep digest (`bin/fleet-sleep.py`; the looping-detector and the dash summarizer
+that shared the wire retired in issues #2543 and #535) — which routes through `fleet_helper_claude_auth`
 (`bin/fleet-lib.sh`) and pick up the same ACTIVE-account token, *unless* one is
 already in the environment: the Stop-hook path runs as a child of a worker's
 claude and must keep THAT worker's account rather than re-resolving `active`

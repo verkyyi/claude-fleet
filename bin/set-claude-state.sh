@@ -13,7 +13,7 @@ set -u  # POSIX sh: pipefail is bash-only (dash has none)
 [ -n "${TMUX:-}" ] || exit 0
 [ -n "${TMUX_PANE:-}" ] || exit 0
 # A HEADLESS claude is NOT this pane's session (issue #571). A `claude -p` helper —
-# the Stop-hook classifier (bin/classify-sessions.sh), or any headless claude a
+# the sleep digest (bin/fleet-sleep.py), or any headless claude a
 # worker spawns from its Bash tool — inherits the pane's TMUX/TMUX_PANE *and* the
 # global hooks, so its own Stop landed here: it flipped the pane's @claude_state,
 # and (worse) read the PANE's @ctx_pct, got the auto-handoff block decision meant
@@ -123,7 +123,7 @@ wprev=''          # the @claude_wait already on the window (cleared when it laps
 #
 # FRESHNESS BY CONSTRUCTION: it is written on EVERY non-`leave` state write, so it
 # can never outlive the @claude_state it describes. The other two writers of
-# @claude_state (bin/classify-sessions.sh, the spinner's stale-working demote)
+# @claude_state (the spinner's stale-working demote, the native reconcile)
 # clear it for the same reason. Readers consult it only while the state is `needs`.
 sub=''
 # …and WHAT it asks (issue #1951): @claude_needs_detail, the question's own words
@@ -369,8 +369,8 @@ fi
 # is told apart on the hook's own stdin (`hook_event_name`), parsed ONLY once the pane
 # is known to be blocked. The ordinary per-tool path pays one tmux read, no JSON parse.
 # @claude_state_ts is left alone with the state, so the dash's "Nm ago" is how long
-# the worker has been blocked. bin/classify-sessions.sh and the spinner's reconcile
-# honour the subtype the same way (they skip it; only `dead` clears it).
+# the worker has been blocked. The spinner's reconcile
+# honours the subtype the same way (they skip it; only `dead` clears it).
 case "$sem" in
   working|done)
     if [ "$(tmux display-message -p -t "$TMUX_PANE" '#{@claude_state}/#{@claude_needs}' 2>/dev/null)" = needs/blocked ]; then

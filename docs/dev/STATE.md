@@ -9,10 +9,12 @@ it is rendered, and the backstops that correct it** when the fast signal is wron
 or when it was right once and nothing has re-checked it since.
 
 The design rule underneath it all (see [ARCHITECTURE.md](ARCHITECTURE.md) and the
-README): **hooks are fast but semantically blind; the LLM is smart but slow.**
-Hooks give the instant signal on every turn edge; a change-gated haiku classifier
-later corrects what a hook cannot know. Both write the **same** window option, so
-there is exactly one source of truth per window.
+README): **the agent's own report outranks the hooks, and nothing guesses below them.**
+The agent says its state over OSC 7501 (issue #2537); hooks give the instant signal
+on every turn edge; the native reconcile and the spinner only demote a stale
+`working`. All write the **same** window option, so there is exactly one source of
+truth per window. (The change-gated haiku screen classifier that once corrected
+what a hook could not know retired with issue #2543.)
 
 ## The states
 
@@ -48,7 +50,7 @@ glyphs below.
 | `ask` | an `AskUserQuestion` | `?` | answer it from the dash — `⌃k`, no attach |
 | `perm` | a **permission prompt** | `⊘` | only a human may approve one; `⌃k` shows you *what* is blocked |
 | `blocked` | a worker-declared blocker (#704) | `⊠` | read the issue's `⛔ blocked` comment and send a new prompt when resolved |
-| *(empty)* | anything else (the classifier's `WAITING`/`ERROR`, an unrecognized `Notification`) | `!` | go look |
+| *(empty)* | anything else (an unrecognized `Notification`; an older window's screen-read verdict) | `!` | go look |
 
 `ask` arrives at `set-claude-state.sh` free, off the `PreToolUse` `tool_name`. The
 `Notification` leg costs one transcript read, and **#656 is why the wording could
@@ -76,16 +78,14 @@ answer channel that is not there.
 **Freshness is by construction, not by timestamp.** `@claude_needs` is written on
 *every* non-`leave` state write — a `working`/`done` write clears it — and the other
 writers of `@claude_state`
-([`classify-sessions.sh`](../../bin/classify-sessions.sh), the spinner's
-stale-`working` demote) clear it as well. So no reader can ever pair a fresh state
+(the spinner's stale-`working` demote, the native reconcile) clear it as well. So no reader can ever pair a fresh state
 with a stale reason, and readers consult it only while the state is `needs`.
 Pinned end to end by [`bin/needs-reason-selftest.sh`](../../bin/needs-reason-selftest.sh).
 
 **Worker-declared blockers persist across the rest of the turn (#704).** The
 charter uses `sh ~/.claude/fleet/bin/set-claude-state.sh blocked`, which stamps
 `needs/blocked` and rings. Ordinary `PreToolUse`, `PostToolUse`, `Stop` and benign
-idle notifications preserve both the red and its timestamp. A classifier skips
-it, including when the declaration arrives during its model call. An idle
+idle notifications preserve both the red and its timestamp. An idle
 transcript cannot expire it: a blocked worker has stopped with no tool pending.
 The reconcile also re-checks the stamp after its probe before applying a verdict.
 
@@ -117,7 +117,7 @@ Claude Code fires shell **hooks** on turn edges. Each one runs
 | `PostToolUse` | `working` | `working` |
 | `UserPromptSubmit` | `working` | `working` |
 | `Notification` | `needs bell` | `needs` + bell (**except** the benign idle prompt → *leave as-is*); the subtype (`perm` / `ask`) comes from the transcript, not the wording (#656) |
-| `Stop` | `done` | `done` (then hands off to `classify-hook.sh`) |
+| `Stop` | `done` | `done` |
 
 The `working`/`done` results above preserve an existing `needs/blocked`, except
 for `UserPromptSubmit`, which clears it. `AskUserQuestion` still takes precedence.
@@ -195,9 +195,9 @@ discriminations so the fast signal does not cry wolf:
 - **Benign idle prompt → *leave*.** Claude Code emits an idle
   `Notification` (*"Claude is waiting for your input"*) ~60s after **any** session
   goes idle. Unfiltered, that would flip every finished window to `needs` + bell
-  and clobber the classifier's verdict. The `needs` path substring-matches the
+  and clobber the Stop's `done`. The `needs` path substring-matches the
   wording; a match writes **nothing** (state `leave`) — it just drops the bell —
-  so whatever the Stop-hook classifier decided stays authoritative. Anything
+  so whatever the Stop decided stays authoritative. Anything
   unrecognized keeps `needs` + bell (the safe direction: an idle session rings
   rather than a real prompt being silently missed).
 
@@ -242,7 +242,7 @@ live jobs today:
 > in sync with `bin/fleet-lib.sh`) and applies one batched `tmux -L <sock>
 > source-file` per fleet per frame.
 
-## The slow path — the haiku classifier (corrects what hooks can't know)
+## Recorded waits — `@loop` and `@claude_wait`
 
 **The deterministic half: `@loop`** (issue #1331). A `/loop` is not invisible to
 the hooks after all — the agent schedules its own next round with `ScheduleWakeup`
@@ -253,8 +253,7 @@ or `CronCreate`, and a PostToolUse hook (`bin/fleet_loop_mark.py hook`, matcher
 by `next + max(600, ttl/2)` has stopped; a recurring cron lapses after 7 days. A
 `fleet-loop.py` ledger that will still deliver counts too. `fleet_window_loop`
 (shell) / `fleet_loop_mark.status` (Python) is the one answer. The Stop hook stamps
-`looping` instead of `done` while it is active; the classifier's `STOPPED` read
-defers to it; `fleet-reap-live.py` answers `retained:loop` before any age or state
+`looping` instead of `done` while it is active; `fleet-reap-live.py` answers `retained:loop` before any age or state
 gate; the dash's `k/N` and `fleet-children.sh` count only `done` with no Loop
 (sleeping / preparing / waking are quiet, not finished). A Codex worker has no
 such tools — its `@loop` stays empty and nothing changes for it.
@@ -281,8 +280,7 @@ quiet window is unfinished. At every Stop (and at the mod's own `done` report)
 
 `@claude_wait` only explains `looping` — no new state value — and a Stop with no
 reason removes it, so a window that waits on nothing carries exactly the options
-it always did. The classifier's `STOPPED` read defers to all three, the reapers
-answer `retained:children` / `retained:bg`, and the sidebar's selected-row line
+it always did. The reapers answer `retained:children` / `retained:bg`, and the sidebar's selected-row line
 says `等子任务 k/N` / `后台命令在跑`. When the last child lands (its child-report is
 a new turn) or the job ends (its task notification is too), the next Stop is `done`.
 
@@ -290,8 +288,8 @@ a new turn) or the job ends (its task notification is too), the next Stop is `do
 window that stopped before #1370 was synced, a parent whose last child just went
 idle, or a job that ended without waking its agent would otherwise keep the edge's
 answer until its next turn. `fleet_window_reeval` re-asks `fleet_window_wait` for a
-window that is `done`, or `looping` WITH a `@claude_wait` (a reasonless `looping` is
-the classifier's screen read and is left), and rewrites only `done` ↔ `looping` +
+window that is `done`, or `looping` WITH a `@claude_wait` (a reasonless `looping` —
+an older window's screen-read verdict — is left), and rewrites only `done` ↔ `looping` +
 `@claude_wait` — never `working`/`needs`, never a sleep transition, never
 `@claude_state_ts` (nothing ran in the pane); the write re-checks the state
 server-side. `bin/fleet-wait-reeval.sh` drives it from three places: every
@@ -302,70 +300,14 @@ moment its last child goes idle. A pass that changed something runs again (≤ 3
 a grandchild finishing cascades up. Changes log to `logs/reconcile.log` with
 `via=reeval`; `FLEET_WAIT_REEVAL=0` turns it off.
 
-For observations the hooks cannot see, the screen classifier below remains opt-in. A hook
-cannot tell a **clean finish** from a `/loop` paused **between iterations** when
-no schedule was recorded — both look like `Stop` → `done`. And a `done` window may actually hold a pending
-question the Notification filter left untouched. So `done` / `needs` / `looping`
-can be ambiguous. Fleet no longer sends their screen text to another model by default;
-native events, explicit pending requests and recorded waits retain their existing paths.
-
-[`bin/classify-sessions.sh`](../../bin/classify-sessions.sh) reads the pane text and
-asks `claude -p --model haiku` to classify it as `STOPPED` / `WAITING` /
-`LOOPING` / `ERROR`, then writes the reconciled `@claude_state` (`done` / `needs`
-/ `looping` / `needs`). It is heavily gated so it is cheap and safe:
-
-- **State gate** — it only ever classifies windows already in `done` / `needs` /
-  `looping`. A `working` window is never touched (the hook heartbeat is trusted).
-- **Change-hash gate** — it hashes the visible pane and skips the LLM call when
-  the screen is unchanged since last check, so a static/parked window costs **zero
-  tokens**.
-- **Per-window lock** — a `mkdir` lock so a Stop-hook fire and a spinner demote
-  can't double-run the same window.
-
-**Which model reads the screen is a switch** (issue #1229): `CLASSIFY_BACKEND`,
-set in the install's `fleet.conf` / `fleet.settings` or the environment.
-
-- `off` (default) — return before helper authentication, pane capture, model requests,
-  cache creation or state writes. Both Claude and Codex keep native/hook-derived state.
-- `haiku` (opt-in) — `claude -p --model haiku`, the legacy inference behaviour
-  (measured p50 6.7s / p95 18s per call, accuracy 0.79 on 39 hand-labelled screens).
-- `jev` — Jev (TypeSafe System One, `POST /v1/systemone`) with the same five rubric
-  lines as choice criteria and the same capture as its state: 0.90 on the same
-  screens at 124ms p50, and 100% on the 28/39 it was ≥0.7 confident about — so a
-  verdict under `CLASSIFY_JEV_MIN_CONF` (0.7) **falls back to haiku**, as does a
-  missing key (`TYPESAFE_API_KEY`, else `~/.config/typesafe/api_key`), a request
-  that fails or exceeds `CLASSIFY_JEV_TIMEOUT` (1s), or an unparseable answer — each
-  with one `classify.log` line. With no key it is exactly `haiku`. A verdict line
-  Jev decided carries `via=jev conf=…`; the #846 rule (a WORKING read never promotes
-  a quiet window) applies to it too.
-- `shadow` — haiku decides exactly as `haiku`; Jev is asked the same capture and
-  `{ts, window, hook_state, haiku, jev, conf, hash, latencies}` is appended to
-  `logs/classify-shadow.ndjson` (0600; the capture text only on a disagreement, so
-  the rows to hand-label are self-contained). Window state is never touched by
-  the Jev half. `bin/classify-shadow-report.py [--labels FILE]` prints agreement,
-  per-confidence buckets, WORKING misreads per side and the disagreement list —
-  the week-long shadow run the issue asks for before the default moves.
-
-`bin/classify-backend-selftest.sh` pins default-off and the three explicit backends
-against a loopback fake Jev (never a real key or provider network).
-`bin/classify-default-selftest.sh` also checks the disabled path before authentication,
-capture or cache creation, and keeps `--prep-capture` a standalone text transformation.
-
-Two compatibility callers remain; classification runs only with an explicit backend:
-
-1. **`classify-hook.sh` on `Stop`** — the real-time path. The moment
-   `set-claude-state.sh` stamps `done`, [`bin/classify-hook.sh`](../../bin/classify-hook.sh)
-   backgrounds a `--window` invocation. With the default `off`, it returns without
-   model work. With an explicit backend, it may correct `done`→`looping`/`needs`.
-   The hook exits `0` without waiting for inference; it is a no-op if `claude` isn't on `PATH`.
-2. **The stuck-working demote** (below), which kicks the same classifier to refine
-   a window it just demoted.
-
-The classifier is **optional and disabled by default**. Only screen-inferred labels
-and corrections are removed from the default path; recorded schedules, explicit waits,
-native status and pending requests are not disabled. Existing backend configuration
-remains effective. The old hook/daemon callers still incur a short-lived shell entry;
-this change does not claim zero process overhead or a verified end-to-end speedup.
+What a hook cannot see and nobody recorded — a `/loop` paused between iterations
+with no schedule, a plain-text question at Stop — reads `done`. The screen
+classifier that used to send the pane to a model to guess it (`classify-sessions.sh`,
+its `CLASSIFY_BACKEND` haiku / jev / shadow backends, the Stop hook
+`classify-hook.sh`) was off by default from #4551 and is deleted (issue #2543);
+`classify-hook.sh` stays one version as a quiet exit-0 shell for an older session's
+Stop hook table. Only sourced states take the default path: the agent's 7501
+report, the hooks, recorded waits, native status and pending requests.
 
 ## The floor — native-truth reconcile (#806)
 
@@ -380,9 +322,8 @@ live fleet socket, whatever `FLEET_SLEEP` says:
   `procStart`, written by the TUI itself with no hook involved. A `working` window
   whose record says `idle`, when both that idle status and the `working` stamp are
   at least `FLEET_STATE_IDLE_SECS` (default **30s**) old, has no turn running —
-  either its turn ended without a `Stop`, or the classifier promoted a screen it
-  misread after Claude had already stopped: it is demoted to `done`, the reason
-  cleared, and the classifier kicked to refine it exactly as the demoter does.
+  its turn ended without a `Stop`: it is demoted to `done` and the reason
+  cleared.
   `busy`, `shell`, a stamp younger than the grace (a turn the TUI has not marked
   yet), or a record whose pid is gone or reused are all left alone.
 - **Codex (bound)** — the private app-server RPC: thread `idle` with its last turn
@@ -410,16 +351,14 @@ the same windows. Pinned by
 ## The backstop — stuck-working demotion (#101)
 
 A window pinned at `working` whose `Stop` hook was **missed** (a crash, a race, a
-turn that didn't emit `Stop`) would otherwise stay `working` *forever* — and the
-classifier deliberately skips `working` windows. The spinner daemon catches this
+turn that didn't emit `Stop`) would otherwise stay `working` *forever*. The spinner daemon catches this
 **marker-agnostically**: a genuinely-working Claude session repaints its pane at
 least once a second (the elapsed-time counter ticks), so tmux's `window_activity`
 stays fresh; a stopped pane freezes and its activity goes stale.
 
 So a `working` window whose `window_activity` age exceeds
 `FLEET_STUCK_WORKING_SECS` (default **120s**) across **two consecutive** checks
-(a 2-strike debounce) is provably idle → demoted to `done`, and the classifier is
-kicked to refine it into `done` / `needs` / `looping`. The large threshold + the
+(a 2-strike debounce) is provably idle → demoted to `done`. The large threshold + the
 debounce make a false demote of a live session effectively impossible. Set
 `FLEET_STUCK_WORKING_SECS=0` to disable. Since #806 this is the **fallback** for a
 worker with neither a registry record nor a bound endpoint; the reconcile above is
@@ -491,19 +430,16 @@ Three rails make this safe to run unattended:
 
 - **One direction only.** It never creates a `needs` and never re-reddens a window;
   inferring a red out of band is the hook's job, and a second guesser would only
-  manufacture false alarms. It also does *not* kick the classifier afterwards (the
-  stuck-`working` demote does): the classifier can return `needs` off a stale screen,
-  which would re-redden what was just cleared, every tick.
+  manufacture false alarms.
 - **Strong evidence clears fast; weak evidence clears slowly** (#699). `ask`/`perm`
   are *defined* by a pending `tool_use` (#656 settles both off this very oracle), so
   "nothing pending" refutes the stamp outright — clear at the ordinary grace. A
   **plain `needs`** (empty subtype) is a judgement about the *screen*, and #658 read
   that as no evidence at all: it required `ask`/`perm`, so a plain `needs` produced
   **no verdict** and nothing could ever clear it. That stranded an entire red path,
-  not a few legacy stamps — an empty subtype is what
-  [`classify-sessions.sh`](../../bin/classify-sessions.sh) writes (it clears the subtype
-  by design, #640), and the classifier only ever runs at **Stop**, where a pending
-  `tool_use` cannot exist. Clearing it on the same 20s grace is no better, because
+  not a few legacy stamps — an empty subtype is what the screen classifier wrote
+  (it cleared the subtype by design, #640; retired with #2543), and it only ever
+  ran at **Stop**, where a pending `tool_use` cannot exist. Clearing it on the same 20s grace is no better, because
   that red is a real **category**: a worker that ends its turn asking the operator a
   question *in prose* is genuinely waiting on a human with nothing open. So the empty
   subtype gets its own, far longer age, `FLEET_NEEDS_PLAIN_SECS` (default **900s**).
@@ -571,18 +507,17 @@ PART B goes red, so a flake there arrives with its own evidence.
 
 ## Who writes `@claude_state` — the whole picture
 
-Five writers, one option, exactly one source of truth per window:
+Four writers, one option, exactly one source of truth per window:
 
 | Writer | When | Writes |
 |---|---|---|
 | `set-claude-state.sh` (hooks) | every turn edge — instant | `working` / `done` / `needs` (+ the `@claude_needs` reason) |
-| `classify-sessions.sh` (explicit backend only) | on `Stop`, and after a stuck-demote — disabled by default, change-gated when enabled | `done` / `needs` / `looping` (reason **cleared**) |
-| `fleet-state-reconcile.py` (sleep daemon tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**; then kicks the classifier) |
-| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s (fallback) | `done` (reason **cleared**; then kicks the classifier) |
+| `fleet-state-reconcile.py` (sleep daemon tick, #806) | a `working` window whose agent is natively idle since after the stamp, or has no agent process | `done` (reason **cleared**) |
+| `tmux-spinner.sh` stuck-demote | a `working` pane frozen ≥120s (fallback) | `done` (reason **cleared**) |
 | `tmux-spinner.sh` needs-reconcile | a `needs` window the transcript contradicts, ≥2 checks running | `done` / *(empty)*, or the **reason** re-settled — never a new `needs` |
 
 Only the hook knows *why* a window went red, so only the hook **invents**
-`@claude_needs`; the classifier and the stuck-demote clear it rather than let a stale
+`@claude_needs`; the reconcile and the stuck-demote clear it rather than let a stale
 `ask`/`perm` ride a state they just rewrote, and the reconcile only ever corrects it
 against the same transcript the hook read.
 
@@ -592,16 +527,16 @@ Claude Code hooks (PreToolUse / PostToolUse / UserPromptSubmit / Stop / Notifica
       ▼
 set-claude-state.sh  ─►  @claude_state + @claude_state_ts + @claude_needs  (window options)
       ▲                        │  state bus (one source of truth per window)
-      │  slow, semantic        ├──────────────► fzf dashboard  (tmux-dashboard-rows.sh)
-LLM classifier (haiku)         │                 self-contained glyph renderer
-  classify-sessions.sh         ├──────────────► spinner daemon (tmux-spinner.sh, 0.12s)
-  · on Stop (classify-hook.sh) │                 needs tally  →  ● N badge  (@attn_needs)
-  · change-gated + locked      └──────────────► (@attn_other_windows — unrendered since #980)
+      │                        ├──────────────► fzf dashboard  (tmux-dashboard-rows.sh)
+      │                        │                 self-contained glyph renderer
+      │                        ├──────────────► spinner daemon (tmux-spinner.sh, 0.12s)
+      │                        │                 needs tally  →  ● N badge  (@attn_needs)
+      │                        └──────────────► (@attn_other_windows — unrendered since #980)
       ▲
       │
    native-truth reconcile (sleep daemon, #806): a working window whose agent's own
-                                          registry/RPC says idle since the stamp → done → re-classify
-   stuck-working demote (spinner, #101): a working pane frozen ≥120s → done → re-classify (fallback)
+                                          registry/RPC says idle since the stamp → done
+   stuck-working demote (spinner, #101): a working pane frozen ≥120s → done (fallback)
    stale-needs reconcile (spinner, #658): a `needs` the TRANSCRIPT contradicts → cleared
                                           (or its reason re-settled) — never re-reddened
 ```
@@ -686,11 +621,8 @@ while it is open, `working` once answered; `ScheduleWakeup` / `CronCreate` /
 payload (same writer, same value, whichever arrives first). Every state write is
 `set-claude-state.sh --via mod <working|done|ask>`: the state write alone —
 stdin pinned to `/dev/null`, no Stop decision, no bell, no parent report; the
-Stop hook still owns those. Subagent turns are skipped. With the mod alive,
-`classify-sessions.sh --window` (the Stop-hook fire and the spinner's demote
-alike) makes no capture and no model call and logs `skip:mod` in
-`logs/classify.log`; a Codex window or a dead/off mod is classified as before.
-`bin/mod-state-selftest.sh` holds both paths.
+Stop hook still owns those. Subagent turns are skipped.
+`bin/mod-state-selftest.sh` holds the bash half.
 
 ### The command inbox — commands run, not typed (#1337)
 
@@ -763,7 +695,7 @@ after that condition has cleared and come back.
   never the hook's environment, which nothing exports into (#561). That is a
   separate feature that happens to ride the `done` state edge — see the inline
   comments in `set-claude-state.sh`. Two rails around it (#571): a **headless**
-  `claude -p` child (`CLAUDE_CODE_ENTRYPOINT≠cli` — the Stop-hook classifier, a
+  `claude -p` child (`CLAUDE_CODE_ENTRYPOINT≠cli` — the sleep digest, a
   worker's own helper) is not the pane's session, so `set-claude-state.sh` and
   `handoff-latch-reset-hook.sh` exit before touching any window option (its Stop
   used to read the pane's `@ctx_pct`, nudge *itself* into `/fleet-handoff` and

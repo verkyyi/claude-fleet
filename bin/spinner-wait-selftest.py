@@ -229,8 +229,6 @@ def wait_cleanup(root, env, socket, until, calls):
 def maintenance(root, env, tm, until, calls):
     """Real loops/scans/strikes; only transcript and outward actions are seams."""
     for name, body in {
-
-        'classify-sessions.sh': 'exit 0\n',
         'fleet-daemon-watch.sh': 'printf "watch\\n" >> "' + str(root / 'watch') + '"\n',
         'fleet-degenerate.sh': 'printf "degen\\n" >> "' + str(root / 'degen') + '"\n',
     }.items():

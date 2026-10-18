@@ -467,8 +467,9 @@ fleet_model_limited_until() {
 }
 
 # --- helper `claude -p` auth: ride the account POOL, not the ambient login (#497)
-# The screen-classifier helper (bin/classify-sessions.sh — the dash summarizer that
-# shared this wire retired in issue #535) shells out to `claude -p`. Left bare, that call authenticates from the machine's
+# A fleet helper `claude -p` (today the sleep digest, bin/fleet-sleep.py; the screen
+# classifier that first needed this wire retired in issue #2543, the dash summarizer
+# in #535). Left bare, that call authenticates from the machine's
 # AMBIENT login — the macOS Keychain entry / ~/.claude credentials — which is a
 # DIFFERENT credential from the one every worker runs on: bin/fleet-claude.sh exports
 # CLAUDE_CODE_OAUTH_TOKEN for the active pool account before exec'ing claude, exactly
@@ -3205,13 +3206,13 @@ fleet_transcript_dir() {
 }
 
 # Is this transcript one of the FLEET'S OWN helper `claude -p` calls, not a session
-# a human ran? The status classifier (and, until issue #535, the dashboard
-# summarizer) runs from INSIDE a window's worktree, so its transcripts land in the
-# SAME project dir as the session they describe — and it runs on every Stop, so
-# they are usually the NEWEST file there. Recognise them by their own rubric text
-# (RUBRIC= in bin/classify-sessions.sh; fleet-history-selftest.sh pins that string
-# against the file so the two cannot drift apart silently). The summarizer's rubric
-# stays in the list below: its transcripts outlive the retired script on disk.
+# a human ran? The status classifier (until issue #2543) and the dashboard
+# summarizer (until #535) ran from INSIDE a window's worktree, so their transcripts
+# land in the SAME project dir as the session they describe — and the classifier
+# ran on every Stop, so they are often the NEWEST file there. Recognise them by
+# their own rubric text: both scripts are gone, but their transcripts outlive them
+# on disk, so the rubrics stay in the list below (fleet-history-selftest.sh pins
+# each prefix).
 # Canonical copy — bin/fleet-history.sh (indexing) and bin/worktree-autoclean.sh
 # (the conversation-scratch keep gate) both key off it.
 #

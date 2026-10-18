@@ -1,9 +1,9 @@
 #!/bin/bash
 # blocked-state-selftest.sh — a worker's declared blocker survives the turn (#704).
-# Real tmux, on an isolated socket; fake classifier/oracle responses. No live Claude.
+# Real tmux, on an isolated socket; fake oracle responses. No live Claude.
 # Drive the same hook arguments as settings-hooks.json, including the PostToolUse
 # of the declaring Bash call, the later report call and Stop. Slow-reader races are
-# deterministic: the fake helper stamps blocked before returning its old verdict.
+# deterministic: the fake oracle stamps blocked before returning its old verdict.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -21,9 +21,9 @@ CHECKS=0
 same() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 
 mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/conf/logs"
-# the classifier's cache and the spinner's strikes are the login's records (#4668)
+# the spinner's strikes are the login's records (#4668)
 export FLEET_CONF_DIR="$WORK/conf"
-for f in set-claude-state.sh classify-sessions.sh tmux-spinner.sh tmux-spinner.py fleet-render-watch.py; do
+for f in set-claude-state.sh tmux-spinner.sh tmux-spinner.py fleet-render-watch.py; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 TEST_HOOK="$WORK/inst/bin/set-claude-state.sh"
@@ -40,15 +40,6 @@ cat > "$WORK/path/tmux" <<'SH'
 case "${1:-}" in -L|-S) shift 2 ;; esac
 exec "$TEST_REAL_TMUX" -S "$TEST_SOCK" "$@"
 SH
-cat > "$WORK/path/claude" <<'SH'
-#!/bin/sh
-cat >/dev/null
-printf 'called\n' >> "$TEST_CALLS"
-if [ "${BLOCK_DURING_CLASSIFY:-0}" = 1 ]; then
-  env TMUX="$TEST_TMUX" TMUX_PANE="$TEST_PANE" sh "$TEST_HOOK" blocked >/dev/null
-fi
-printf '%s\n' "${CLASSIFY_VERDICT:-STOPPED}"
-SH
 cat > "$WORK/inst/bin/fleet_pending_tool.py" <<'PYORACLE'
 import os, subprocess, time
 PANE_FORMAT = '#{pane_id}'
@@ -61,15 +52,14 @@ def observe(reader, expected=None):
     reader()
     return [dict(pane=r['pane'], code=1, tool='', identity={'pane':r['pane']}, expires_at=time.time()+10) for r in rows]
 PYORACLE
-chmod +x "$WORK/path/tmux" "$WORK/path/claude"
+chmod +x "$WORK/path/tmux"
 export TEST_REAL_TMUX TEST_SOCK TEST_HOOK
 PATH="$WORK/path:$PATH"; export PATH
 tf -f /dev/null new-session -d -s fleet704 -n worker 'printf "Blocked fixture screen\n"; exec sleep 300' \
   || { printf 'blocked-state: cannot start isolated tmux server\n' >&2; exit 1; }
 TEST_PANE=$(tf display-message -p -t fleet704:worker '#{pane_id}')
 TEST_TMUX="$TEST_SOCK,1,0"
-TEST_CALLS="$WORK/calls"
-export TEST_PANE TEST_TMUX TEST_CALLS
+
 tf set-window-option -t "$TEST_PANE" @issue 704
 tf set-window-option -t "$TEST_PANE" @ctx_pct 99
 snapshot() { tf display-message -p -t "$TEST_PANE" '#{@claude_state}/#{@claude_needs}/#{@claude_state_ts}'; }
@@ -115,10 +105,6 @@ same 'blocked Stop emits no auto-handoff nudge' "$(cat "$WORK/hook.out")" ''
 hook needs '{"hook_event_name":"Notification","notification_type":"idle_prompt"}'
 same 'idle notification preserves blocked' "$(snapshot)" "$BLOCKED"
 
-CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
-same 'classifier preserves blocked before calling the helper' "$(snapshot)" "$BLOCKED"
-[ ! -f "$TEST_CALLS" ] || fail 'blocked screen must not spend a classifier call'
-
 
 # Invalid/missing/nested event data cannot masquerade as a new prompt.
 for payload in '' 'not-json' '{"tool_response":{"hook_event_name":"UserPromptSubmit"},"hook_event_name":"PostToolUse"}'; do
@@ -145,18 +131,7 @@ tf set-window-option -t "$TEST_PANE" @claude_needs blocked
 hook "$POST" '{"hook_event_name":"PostToolUse"}'
 same 'a stale subtype on working is not sticky' "$(state)" working/
 
-# A classifier already in flight must not erase a later worker declaration.
-hook needs
-BLOCK_DURING_CLASSIFY=1 CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
-[ -s "$TEST_CALLS" ] || fail 'race fixture never called the classifier helper'
-same 'in-flight classifier cannot overwrite a new blocker' "$(state)" needs/blocked
 WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
-KEY=$(printf '%s' "$WID" | tr '/:@' '___')
-[ ! -f "$WORK/conf/logs/.classify-cache/$KEY.hash" ] || fail 'discarded classifier verdict must stay unhashed'
-hook "$PROMPT" '{"hook_event_name":"UserPromptSubmit"}'
-hook needs
-CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
-same 'classifier still handles ordinary needs' "$(state)" done/
 
 # Two agreeing idle probes cannot apply an old verdict to a new blocked stamp.
 hook needs
@@ -169,18 +144,5 @@ for race in 0 1; do
     FLEET_NEEDS_STRIKE_TTL=120 sh "$WORK/inst/bin/tmux-spinner.sh" --needs-check
 done
 same 'in-flight reconcile cannot overwrite a new blocker' "$(state)" needs/blocked
-
-# A4 (#846): a screen read never PROMOTES a quiet window to working. A WORKING
-# verdict on a done window (a stale frame re-reddening what #806/#101 demoted)
-# spends a call but changes nothing; only the UserPromptSubmit hook starts a turn.
-tf set-window-option -t "$TEST_PANE" @claude_state "done"
-tf set-window-option -t "$TEST_PANE" @claude_needs ''
-tf set-window-option -t "$TEST_PANE" @claude_state_ts 123
-A4WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
-A4KEY=$(printf '%s' "$A4WID" | tr '/:@' '___')
-rm -f "$WORK/conf/logs/.classify-cache/$A4KEY.hash" "$TEST_CALLS"
-CLASSIFY_VERDICT=WORKING CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
-[ -s "$TEST_CALLS" ] || fail 'A4 fixture never called the classifier helper'
-same 'a WORKING screen read never promotes a quiet window' "$(state)" done/
 
 printf 'blocked-state-selftest: OK (%s checks)\n' "$CHECKS"

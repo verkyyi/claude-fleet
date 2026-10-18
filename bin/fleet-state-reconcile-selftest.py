@@ -26,6 +26,8 @@ class ReconcileTest(unittest.TestCase):
         cls.bin = cls.root / 'bin'; cls.bin.mkdir()
         shutil.copyfile(BIN / 'fleet-state-reconcile.py', cls.bin / 'fleet-state-reconcile.py')
         shutil.copyfile(BIN / 'fleet-input.py', cls.bin / 'fleet-input.py')
+        # The retired screen classifier (issue #2543): a planted copy proves the
+        # reconcile no longer hands a demoted window to it.
         fake = cls.bin / 'classify-sessions.sh'
         fake.write_text('#!/bin/bash\nprintf "%s %s\\n" "${CLASSIFY_SOCK:-}" "$*" >> ' + str(cls.root / 'classify.log') + '\n')
         fake.chmod(0o755)
@@ -108,16 +110,15 @@ class ReconcileTest(unittest.TestCase):
     def heartbeat(self):
         return dict(line.split('=', 1) for line in (self.cache / 'reconcile.heartbeat').read_text().splitlines() if '=' in line)
 
-    def test_native_idle_after_the_stamp_demotes_and_reclassifies(self):
+    def test_native_idle_after_the_stamp_demotes(self):
         wid, pane = self.window(**{'@claude_needs': 'ask'})
         self.record(wid, pane, status='idle', since=time.time() - 10)
         before = int(time.time()); self.run_cli()
         state, needs, ts = self.state(wid)
         self.assertEqual((state, needs), ('done', ''))
         self.assertGreaterEqual(int(ts), before)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not (self.root / 'classify.log').exists(): time.sleep(.05)
-        self.assertEqual((self.root / 'classify.log').read_text().split(), [self.socket, '--window', wid])
+        time.sleep(.3)
+        self.assertFalse((self.root / 'classify.log').exists(), 'the reconcile still launched the screen classifier')
         self.assertIn('native idle', self.log.read_text())
         self.assertEqual((self.heartbeat()['working'], self.heartbeat()['demoted']), ('1', '1'))
 

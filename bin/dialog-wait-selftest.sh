@@ -2,11 +2,11 @@
 # dialog-wait-selftest.sh — a session waiting on a choice dialog is SEEN, and can be
 # answered through one guarded road (issue #2958).
 #
-#   S  the state (bin/set-claude-state.sh, bin/classify-sessions.sh, isolated tmux):
+#   S  the state (bin/set-claude-state.sh, isolated tmux):
 #      a looping driver whose /loop wake opens an AskUserQuestion reads needs/ask;
 #      a Stop and the mod's turn.complete arriving while the transcript still holds
-#      it unanswered leave it needs/ask; the screen classifier leaves it (no model
-#      call); answered (tool_result + PostToolUse) and stopped ⇒ looping again
+#      it unanswered leave it needs/ask; answered (tool_result + PostToolUse) and
+#      stopped ⇒ looping again
 #   C  the channel (bin/fleet_dialog_answer.py → bin/fleet-answer.sh) against a fake
 #      dialog in an isolated tmux: answered + confirmed + the trail (the answer log
 #      代答记录, record-only comment); `--by steward` is read as session (one version); a fingerprint that differs ⇒ 3, nothing pressed; a label
@@ -95,11 +95,6 @@ hook 'done' "$STOP"
 hook 'done' '' '--via mod'
 [ "$(st)" = needs/ask ] && ok "S: the mod's turn.complete (no payload: @cc_session_id's transcript) leaves needs/ask" \
   || bad "S: mod done over the open dialog: $(st)"
-rm -f "$WORK/claude.calls"
-env FLEET_MOD=0 CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku bash "$BIN/classify-sessions.sh" --window "$PANE" >/dev/null 2>&1
-[ "$(st)" = needs/ask ] && [ ! -f "$WORK/claude.calls" ] \
-  && ok "S: the screen classifier leaves an open dialog alone (no model call)" \
-  || bad "S: classifier: $(st), calls=$(cat "$WORK/claude.calls" 2>/dev/null | wc -l)"
 answered toolu_A '我来部署 (Recommended)'
 hook working '{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion"}'
 [ "$(st)" = working/ ] || bad "S: after the answer: $(st)"

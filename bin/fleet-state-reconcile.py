@@ -12,8 +12,8 @@ every minute, so the fact has to come from the agent itself:
   * A bound Codex worker reports thread status over its private app-server RPC.
 
 A `working` window whose agent has been natively idle since AFTER the working
-stamp, for at least FLEET_STATE_IDLE_SECS, is demoted to `done` and handed to the
-classifier to refine (done|needs|looping). A window with no agent process under
+stamp, for at least FLEET_STATE_IDLE_SECS, is demoted to `done` (the screen
+classifier that used to refine it retired with issue #2543). A window with no agent process under
 its pane at all is demoted with reason `exited`. This pass only demotes; it never
 promotes, never touches needs/blocked, panels, or a window in a sleep transition.
 
@@ -338,10 +338,6 @@ def demote(session, row, reason, dry, log):
         return False
     with open(log, 'a') as out:
         out.write(line + '\n')
-    # Refine done|needs|looping out of band, exactly as the spinner's demote does.
-    env = dict(os.environ, CLASSIFY_SOCK=session)
-    subprocess.run(['sh', '-c', '"$0" "$@" >/dev/null 2>&1 </dev/null &', 'bash',
-                    str(BIN / 'classify-sessions.sh'), '--window', row['window']], env=env, timeout=10)
     return True
 
 

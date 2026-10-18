@@ -44,7 +44,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE="$BIN/../conf/statusline.sh"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 [ -f "$STATUSLINE" ] || { printf 'selftest: %s not found\n' "$STATUSLINE" >&2; exit 2; }
@@ -59,7 +59,7 @@ SESS='s1'
 # global conf) relative to its OWN path, so copying the pieces here makes the global
 # conf $WORK/inst/fleet.conf — hermetic wherever this runs (a live install's bin
 # has a real sibling fleet.conf with the operator's real threshold).
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh classify-sessions.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 STATE="$WORK/inst/bin/set-claude-state.sh"
@@ -464,30 +464,6 @@ PATH="$WORK/fakepath:$PATH" TMUX='fake,1,0' TMUX_PANE="$PANE" SETOPT_LOG="$SETOP
   CLAUDE_CODE_ENTRYPOINT=sdk-cli FLEET_LATCH_RESET_SOURCE=clear sh "$RESET" < /dev/null
 [ -s "$SETOPT_LOG" ] && fail "a headless child's SessionStart must not reset the latch or stamp the marker, log: $(cat "$SETOPT_LOG")"
 printf 'selftest: RESET-headless leg PASS (sdk-cli SessionStart touches nothing)\n' >&2
-
-# ---- CLASSIFIER HELPER runs `claude -p` OUTSIDE tmux (issue #571) ----------------
-# Belt to the headless guard's suspenders: bin/classify-sessions.sh strips TMUX and
-# TMUX_PANE from the helper's environment, so every fleet hook (`[ -n "$TMUX" ] ||
-# exit 0`) no-ops inside it whatever Claude Code's env markers say. A fake `claude`
-# records the environment it was handed.
-CLASSIFY="$WORK/inst/bin/classify-sessions.sh"
-CLENV="$WORK/classify-claude.env"; rm -f "$CLENV"
-cat > "$WORK/fakepath/claude" <<FAKECL
-#!/bin/sh
-env > "$CLENV"
-cat >/dev/null
-printf 'STOPPED\n'
-FAKECL
-chmod +x "$WORK/fakepath/claude"
-mkdir -p "$WORK/inst/logs"
-PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK/home" TMUX="$WORK/fake-sock,1,0" TMUX_PANE="$PANE" \
-  SETOPT_LOG="$SETOPT_LOG" FAKE_PREV='done' FAKE_WID='@1' FAKE_CAP='some screen text\n' CLASSIFY_SETTLE=0 CLASSIFY_BACKEND=haiku \
-  bash "$CLASSIFY" --window '@1' </dev/null
-[ -f "$CLENV" ] || fail "classifier must have called the helper claude (fake never invoked)"
-grep -q '^TMUX=' "$CLENV" && fail "the helper claude -p must NOT inherit TMUX (its hooks would drive the pane), got: $(grep '^TMUX' "$CLENV")"
-grep -q '^TMUX_PANE=' "$CLENV" && fail "the helper claude -p must NOT inherit TMUX_PANE, got: $(grep '^TMUX' "$CLENV")"
-rm -f "$WORK/fakepath/claude"
-printf 'selftest: CLASSIFIER-ENV leg PASS (helper claude -p sees no TMUX/TMUX_PANE)\n' >&2
 
 # ---- DOCTOR: evaluates the threshold the way the hook does (issue #561) ---------
 # The doctor line is the regression tripwire: it compares what the conf files SAY

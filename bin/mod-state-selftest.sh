@@ -2,14 +2,11 @@
 # mod-state-selftest.sh — the session reports its own state (issue #1336, EPIC #1334 C2).
 #
 # The fleet mod (mod/fleet/hooks/state.ts) says turn.start / turn.complete / an open
-# AskUserQuestion through `set-claude-state.sh --via mod`, and the screen classifier
-# stands down for a window whose mod is alive. Its plugin half is
+# AskUserQuestion through `set-claude-state.sh --via mod` (the screen classifier that
+# stood down for a live mod retired with issue #2543). Its plugin half is
 # mod/fleet/tests/state.test.ts (run by fleet-mod-selftest.sh's leg D); this is the
 # bash half, on an isolated tmux socket (PATH shim, never the live server):
 #
-#   CLASSIFY   fleet_mod_alive true  ⇒ classify-sessions.sh --window makes NO model
-#              call, leaves the state, logs one `skip:mod` line;
-#              stale beat / no beat / FLEET_MOD=0 ⇒ exactly today: one call, verdict applied
 #   VIA-MOD    working → working; ask → needs/ask; done → done; done with a pending
 #              @loop → looping — the same state write the hooks make
 #   STATE-ONLY a `--via mod done` past the auto-handoff line prints NO Stop decision and
@@ -22,16 +19,15 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-# Conf-free shadow root (#1251): classify.log / .classify-cache / fleet.conf are
-# $BIN/..-relative, so a direct run must not touch the live install's.
+# Conf-free shadow root (#1251): fleet.conf is $BIN/..-relative, so a direct run
+# must not read the live install's.
 if [ "${_MODSTATE_SELFTEST_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _MODSTATE_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
   sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
-CLS="$BIN/classify-sessions.sh"
 SCS="$BIN/set-claude-state.sh"
-for f in "$CLS" "$SCS" "$BIN/fleet-lib.sh" "$BIN/fleet_loop_mark.py"; do
+for f in "$SCS" "$BIN/fleet-lib.sh" "$BIN/fleet_loop_mark.py"; do
   [ -f "$f" ] || { printf 'selftest: %s not found\n' "$f" >&2; exit 2; }
 done
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
@@ -49,22 +45,15 @@ cat > "$WORK/bin/tmux" <<EOS
 #!/bin/sh
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOS
-cat > "$WORK/bin/claude" <<EOS
-#!/bin/sh
-echo call >> "$WORK/claude-calls"
-cat > /dev/null
-cat "$WORK/claude-out" 2>/dev/null
-EOS
-chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"
+chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH"
 
 cleanup() { tmux kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" CLASSIFY_SETTLE=0
-unset CLASSIFY_SOCK FLEET_MOD FLEET_MOD_ALIVE_SECS CLAUDE_CODE_ENTRYPOINT TMUX TMUX_PANE
-export CLASSIFY_BACKEND=haiku
+export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf"
+unset FLEET_MOD FLEET_MOD_ALIVE_SECS CLAUDE_CODE_ENTRYPOINT TMUX TMUX_PANE
 
 tmux -f /dev/null new-session -d -s fleet-t -x 140 -y 40 || fail "could not start isolated tmux server"
 ww="$(tmux display-message -p '#{window_id}')"
@@ -74,33 +63,7 @@ tmux respawn-pane -k -t "$ww" "printf 'recap of the turn\nall done\n'; sleep 300
 i=0; while [ "$i" -lt 40 ] && [ -z "$(tmux capture-pane -p -t "$ww" | tr -d '[:space:]')" ]; do i=$((i+1)); sleep 0.1; done
 
 wopt()  { tmux show-options -w -t "$ww" -v "$1" 2>/dev/null; }
-ncall() { [ -f "$WORK/claude-calls" ] && wc -l < "$WORK/claude-calls" | tr -d ' ' || echo 0; }
-CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"; LOGF="$FLEET_CONF_DIR/logs/classify.log"; mkdir -p "$CCACHE"
-ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
-fresh() {   # fresh <state> <@mod_alive or ''>
-  tmux set-window-option -t "$ww" @claude_state "$1"; tmux set-window-option -t "$ww" @claude_needs ''
-  if [ -n "$2" ]; then tmux set-window-option -t "$ww" @mod_alive "$2"; else tmux set-window-option -u -t "$ww" @mod_alive; fi
-  rm -f "$CCACHE/$ckey.hash" "$WORK/claude-calls"; : > "$LOGF"
-}
-classify() { bash "$CLS" --window "$ww" || fail "classifier exited non-zero"; }
-printf 'WAITING\n' > "$WORK/claude-out"
 now=$(date +%s)
-
-# ================================================================ CLASSIFY
-fresh 'done' "$((now - 3))"; classify
-[ "$(ncall)" = 0 ] || fail "CLASSIFY: a live mod must not cost a model call (got $(ncall))"
-[ "$(wopt @claude_state)" = 'done' ] || fail "CLASSIFY: a live mod's state was overwritten to [$(wopt @claude_state)]"
-grep -q ' skip:mod$' "$LOGF" || fail "CLASSIFY: no skip:mod line" "$(cat "$LOGF")"
-ok "CLASSIFY mod alive: no model call, state kept, one skip:mod line"
-
-for leg in stale none off; do
-  case "$leg" in stale) fresh 'done' "$((now - 100))" ;; none) fresh 'done' '' ;; off) fresh 'done' "$((now - 3))" ;; esac
-  if [ "$leg" = off ]; then FLEET_MOD=0 classify; else classify; fi
-  [ "$(ncall)" = 1 ] || fail "CLASSIFY $leg: expected today's one model call, got $(ncall)"
-  [ "$(wopt @claude_state)" = needs ] || fail "CLASSIFY $leg: the verdict was not applied [$(wopt @claude_state)]"
-  grep -q 'skip:mod' "$LOGF" && fail "CLASSIFY $leg: skip:mod logged without a live mod"
-done
-ok "CLASSIFY stale beat / no beat / FLEET_MOD=0: exactly today — one call, verdict applied"
 
 # ================================================================ VIA-MOD
 scs() { TMUX="$SOCK,1,0" TMUX_PANE="$pane" sh "$SCS" "$@" </dev/null; }

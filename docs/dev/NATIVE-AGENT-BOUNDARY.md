@@ -1147,6 +1147,10 @@ Codex 本身提供自动压缩阈值，未设置使用模型默认值，见
 
 ## 默认读屏推理退出
 
+（后续：屏幕分类器已随 #2543 整个删掉——`classify-sessions.sh` 及其 backend、
+`CLASSIFY_*` 设置都不再存在；`classify-hook.sh` 只留一个静默退出的壳，供旧会话的
+Stop hook 表调用一版。下面是 #4551 当时的记录。）
+
 `CLASSIFY_BACKEND` 未设置时改为 `off`。默认不再为 Claude 或 Codex 的安静窗口
 挑选 helper 凭据、抓取屏幕、调用另一个模型或写分类缓存/状态。原生状态事件、显式
 pending request、已记录的调度与等待、CPU/auth/trust 保护保持原路径。

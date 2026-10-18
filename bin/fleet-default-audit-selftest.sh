@@ -30,13 +30,13 @@ args = sys.argv[2:]
 if args and (len(args) != 2 or args[0] != "--inject-key" or args[1] not in keys):
     sys.exit("usage: fleet-default-audit-selftest.sh [--inject-key effortLevel|outputStyle|theme|tui]")
 
-# Reviewed default hooks, including the disabled classifier compatibility entry.
+# Reviewed default hooks.
 # A new registration must be classified before entering the default. where/refocus/worker seed
 # are explicit core exceptions; ordinary-session whats-new is deliberately absent.
 default_hooks = {
     "set-claude-state.sh", "bash-guard.py", "base-readonly-guard.py",
     "artifact-guard.py", "agent-guard.py", "fleet_loop_mark.py",
-    "fleet-codex-session.py", "classify-hook.sh", "handoff-latch-reset-hook.sh",
+    "fleet-codex-session.py", "handoff-latch-reset-hook.sh",
     "fleet-where-hook.sh", "fleet-worker-start-hook.sh", "fleet-emit.sh",
     "refocus-hook.sh", "fleet-history.sh", "precompact-hook.sh", "session-end-hook.sh",
     # StopFailure: a turn an API error cut off goes on by itself (#4714)

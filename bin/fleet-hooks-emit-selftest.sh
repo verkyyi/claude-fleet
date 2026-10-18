@@ -79,7 +79,7 @@ grep -q 'artifact-guard' "$WORK/codex.tsv" \
 grep -q 'agent-guard' "$WORK/codex.tsv" \
   && fail "agent-guard.py reached codex, which has no Agent tool" "$cdx"
 grep -q 'classify-hook' "$WORK/codex.tsv" \
-  || fail "Codex Stop must invoke the agent-aware screen classifier" "$cdx"
+  && fail "the retired screen classifier (issue #2543) is still wired on Codex Stop" "$cdx"
 grep -q 'handoff-latch-reset-hook\|session-end-hook' "$WORK/codex.tsv" \
   && fail "Claude handoff or reason-based cleanup reached a Codex thread lifecycle hook" "$cdx"
 grep '^SessionStart' "$WORK/codex.tsv" | grep -q 'fleet-emit.sh session.start' \
