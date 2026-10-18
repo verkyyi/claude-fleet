@@ -217,6 +217,8 @@ skills/doc-preview/SKILL.md
 skills/doc-preview/render.mjs
 skills/doc-preview/server.py
 skills/doc-preview/share.sh
+skills/doc-preview/vendor/LICENSE.marked.md
+skills/doc-preview/vendor/marked.esm.js
 skills/fleet-add-repo/SKILL.md
 skills/fleet-help/SKILL.md
 skills/fleet-open/SKILL.md

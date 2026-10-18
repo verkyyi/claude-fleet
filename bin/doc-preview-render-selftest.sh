@@ -2,8 +2,10 @@
 # doc-preview-render-selftest.sh — the doc-preview skill's renderer contract
 # (skills/doc-preview/render.mjs), hermetic: no tailscale, no server, no network.
 #
-#   • MARKDOWN  `page` wraps the source in the GitHub-styled viewer (client-side
-#               marked) and titles the entry from the first `# H1`.
+#   • MARKDOWN  `page` renders the source HERE (vendor/marked.esm.js) into a static
+#               page that loads nothing from a CDN (issue #1189) — tables in their
+#               own scroll box, headings with an id and the 一、/1. number mark — and
+#               titles the entry from the first `# H1`.
 #   • HTML      (issue #526) an .html source is served AS-IS — byte-identical —
 #               titled from its <title> (else the file name), same entry json, so
 #               a dashboard or an interactive page has a tailnet home too and the
@@ -34,8 +36,43 @@ render() { ID="$1" HREF="/d/$1/" ADDED="2026-09-02 13:00" SESSION="t" DISP="repo
 # markdown → wrapped viewer, H1 title
 printf '# Design note\n\nhello **md**\n' > "$WORK/a.md"
 render md1 "$WORK/a.md" || fail "page(md) exited non-zero"
-contains "md: served page is the viewer wrapper" "$(cat "$WORK/serve/d/md1/index.html")" "marked"
+contains "md: body rendered at share time" "$(cat "$WORK/serve/d/md1/index.html")" "<p>hello <strong>md</strong></p>"
 eq "md: title from H1" "Design note" "$(title_of "$WORK/entries/md1.json")"
+
+# markdown renders with no CDN (issue #1189): no external script / stylesheet, a wide
+# table in its .tbl box, heading ids, numbered h2, task items, escaped code, raw HTML kept
+cat > "$WORK/z.md" <<'MD'
+# 拆分方案
+
+## 一、现状
+
+| 接口 | 路径 | 限流 |
+|---|---|---:|
+| 创建订单 | `/open/v2/order/create` | 600 |
+
+## 2. 迁移
+
+- [x] 评审
+- [ ] 压测
+
+```sh
+echo "<b>" && x=1
+```
+
+<details><summary>附</summary>raw</details>
+MD
+render zh "$WORK/z.md" || fail "page(md zh) exited non-zero"
+Z="$(cat "$WORK/serve/d/zh/index.html")"
+CHECKS=$((CHECKS + 1)); ! printf '%s' "$Z" | grep -Eqi '<(script|link)[^>]+(src|href)="https?:' || fail "md: the page must load no external script or stylesheet"
+CHECKS=$((CHECKS + 1)); ! printf '%s' "$Z" | grep -Eq 'marked\.parse|atob\(' || fail "md: no client-side Markdown rendering left"
+contains "md: table in its scroll box" "$Z" '<div class="tbl"><table>'
+contains "md: right-aligned cell" "$Z" '<td align="right">600</td>'
+contains "md: numbered CJK h2 with id" "$Z" '<h2 id="一现状" class="numbered"><span class="hn">一</span><span class="ht">现状</span></h2>'
+contains "md: numbered arabic h2" "$Z" '<span class="hn">2</span><span class="ht">迁移</span>'
+contains "md: task list item" "$Z" '<li class="task-list-item"><input checked="" disabled="" type="checkbox">'
+contains "md: code escaped" "$Z" 'echo &quot;&lt;b&gt;&quot; &amp;&amp; x=1'
+contains "md: raw html kept" "$Z" '<details><summary>附</summary>raw</details>'
+eq "md: CJK title" "拆分方案" "$(title_of "$WORK/entries/zh.json")"
 
 # html → verbatim, <title> title
 printf '<!doctype html>\n<html><head><title>CD throughput dashboard</title></head>\n<body><h1>dash</h1><script>let x=1</script></body></html>\n' > "$WORK/b.html"
@@ -75,6 +112,6 @@ CHECKS=$((CHECKS + 1)); cmp -s "$WORK/b.html" "$WORK/serve/d/h1/index.html" || f
 eq "repage(html): title refreshed" "v2" "$(title_of "$WORK/entries/h1.json")"
 # repage keeps markdown wrapped
 node "$R" repage "$WORK/entries/md1.json" "$WORK/serve/d/md1/index.html" >/dev/null || fail "repage(md) exited non-zero"
-contains "repage(md): still the viewer wrapper" "$(cat "$WORK/serve/d/md1/index.html")" "marked"
+contains "repage(md): still rendered at share time" "$(cat "$WORK/serve/d/md1/index.html")" "<p>hello <strong>md</strong></p>"
 
 printf 'doc-preview-render-selftest OK (%d checks)\n' "$CHECKS"
