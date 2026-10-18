@@ -90,7 +90,7 @@ fleet debug report
 
 来自 `fleet doctor`。
 
-- **是什么**：节点上的旧版面板要 fzf 0.45 以上。
+- **是什么**：节点上的旧版面板（待办列表、仓库选择）要 fzf 0.59 以上；开着旧全屏列表（`FLEET_DASH_WINDOW=1`）要 0.61 以上，低于 0.61 只给 WARN。
 - **WARN / FAIL 怎么办**：`brew install fzf`（或包管理器）。只用新客户端（⌘P）的话不影响会话本身。
 
 #### `perl`

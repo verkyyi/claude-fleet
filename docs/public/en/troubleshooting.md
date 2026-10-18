@@ -90,7 +90,7 @@ From `fleet doctor` and `fleet doctor --machine`.
 
 From `fleet doctor`.
 
-- **What it is**: the old panel on a node needs fzf 0.45 or later.
+- **What it is**: the old panels on a node (the backlog, the repo picker) need fzf 0.59 or later; the legacy full-screen list (`FLEET_DASH_WINDOW=1`) needs 0.61, and below that you only get a WARN.
 - **On WARN / FAIL**: `brew install fzf` (or the package manager). If you only use the new client (⌘P), sessions themselves are not affected.
 
 #### `perl`

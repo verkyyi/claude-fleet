@@ -35,7 +35,7 @@
 # Esc/Ctrl-C INSTANTLY (exit 130), and folds a pasted block into its single-line query
 # — fixing the CJK double-echo, the 1-second-Esc, and the paste bugs the old hand-rolled
 # `read -rsn1` loop (read_title/read_paste + utf8_len/bytelen) structurally couldn't. The
-# fleet already mandates fzf (≥0.45) and uses it for the dash/backlog/config popups.
+# fleet already mandates fzf (≥0.59, `fleet doctor`) and uses it for the backlog/config popups.
 
 # Force a UTF-8 locale so any title handling below (the create channel, the window/branch
 # naming, the optimistic cache row) treats a CJK/emoji title as whole CHARACTERS, not raw

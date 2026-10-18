@@ -12,7 +12,8 @@
 #
 # Dependency truth (keep in sync with README.md#dependencies and docs/dev/INSTALL.md):
 #   tmux ≥ 3.2   core — the whole thing is a tmux session
-#   fzf  ≥ 0.45  dash — the dashboard binds use `transform` (fzf 0.45+)
+#   fzf  ≥ 0.59  popups — backlog / repo pickers use `--no-input` (fzf 0.59);
+#                the legacy dash (FLEET_DASH_WINDOW=1) also `--ghost` (0.61)
 #   gh (authed)  backlog + PR/CI map (unauthed → panels silently empty)
 #   python3      collector context% + usage caches
 #   claude       the sessions you run
@@ -560,13 +561,16 @@ else
   fail tmux "not found — the fleet is a tmux session (need ≥ 3.2)"
 fi
 
-# --- fzf ≥ 0.45 (dashboard) ---
+# --- fzf ≥ 0.59 (popups; --no-input) · ≥ 0.61 for the legacy dash (--ghost) ---
 if command -v fzf >/dev/null 2>&1; then
   v=$(fzf --version 2>/dev/null | awk '{print $1}')
-  if [ -n "$v" ] && vge "$v" 0.45; then pass fzf "$v (≥ 0.45)"
-  else fail fzf "$v — need ≥ 0.45; dash binds use \`transform\` (prefix+g breaks below)"; fi
+  if [ -z "$v" ] || ! vge "$v" 0.59; then
+    fail fzf "$v — need ≥ 0.59; the backlog and repo pickers use \`--no-input\` and do not start below"
+  elif ! vge "$v" 0.61; then
+    warn fzf "$v — the legacy dash (FLEET_DASH_WINDOW=1) needs ≥ 0.61 for \`--ghost\`; everything else is fine"
+  else pass fzf "$v (≥ 0.61)"; fi
 else
-  fail fzf "not found — need ≥ 0.45 for the prefix+g dashboard"
+  fail fzf "not found — need ≥ 0.59 for the backlog and repo pickers"
 fi
 
 # --- GitHub rows only when a repo is GitHub's (issue #3600) ---
