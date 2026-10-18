@@ -189,7 +189,7 @@ inpane() {   # $1=window — run the rest as if inside that window's pane
 }
 eq "D origin key, 2+ repos (issue)" "$(inpane "$wB" fleet_origin_key)" o-b:issue-12
 eq "D origin key, 2+ repos (scratch)" "$(inpane "$wS" fleet_origin_key)" "o-b:$(basename "$(opt "$wS" @worktree)" | sed 's/^mainB-//')"
-eq "D origin key, no-repo session → none" "$(inpane "$wN" fleet_origin_key)" ""
+eq "D origin key, no-repo session → its identity (issue #4341)" "$(inpane "$wN" fleet_origin_key)" "$(opt "$wN" @fleet_id)"
 eq "D qualified key → B's window" "$(fleet_win_for_key o-b:issue-12 "$S")" "$wB"
 eq "D qualified key → A's window" "$(fleet_win_for_key o-a:issue-12 "$S")" "$wA"
 fleet_win_for_key o-c:issue-12 "$S" >/dev/null && fail "D an unhosted slug matched a window" || ok "D an unhosted slug matches nothing"

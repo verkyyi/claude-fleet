@@ -301,20 +301,15 @@ waitfor "xz: the line is drawn" screen_has xz '会话已结束 · ↵ 重开'
 sleep 2
 CHECKS=$((CHECKS + 1)); screen_has xz '秒后关闭' && fail "xz: FLEET_EXIT_CLOSE_SECS=0 still counted down"
 eq "xz: nothing recycled" "$r0" "$(recycles)"
-# a crash, and the orchestrator's own exit: never
+# a crash: never (an old role word on a window changes nothing, issue #4341 —
+# every session alike, so no leg for it)
 WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xc 0
 waitfor "xc: first launch" launches xc 1
 printf kill > "$WORK/xc/mode"; : > "$WORK/xc/go"
 waitfor "xc: the crash line" screen_has xc '会话意外退出'
-WRAP_ENV=FLEET_EXIT_CLOSE_SECS=1 win xo 0
-waitfor "xo: first launch" launches xo 1
-tf set-option -w -t sw:xo @fleet_role orchestrator
-printf rc0 > "$WORK/xo/mode"; : > "$WORK/xo/go"
-waitfor "xo: the line is drawn" screen_has xo '会话已结束'
 sleep 2
 CHECKS=$((CHECKS + 1)); screen_has xc '秒后关闭' && fail "xc: a crash counted down"
-CHECKS=$((CHECKS + 1)); screen_has xo '秒后关闭' && fail "xo: the orchestrator counted down"
-eq "xc/xo: nothing recycled" "$r0" "$(recycles)"
+eq "xc: nothing recycled" "$r0" "$(recycles)"
 
 # U (issue #1842 ①): commits on no remote are counted on the page.
 git init -q --bare "$WORK/u-origin.git"
