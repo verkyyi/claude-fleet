@@ -17,6 +17,7 @@
 #   session-exit / session-ctrl-c / session-killed   bin/fleet-session-wrap.sh
 #   session-ctrl-z                                  bin/fleet-session-wrap.sh (the TSTP guard)
 #   resume-fails-fast / codex-no-id                 bin/fleet-session-wrap.sh, fleet-session-page.py
+#   codex-resume-override                           bin/fleet-codex.sh, fleet-codex-posture.py
 #   merged-then-commit / q-releases-claim           bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
@@ -479,6 +480,28 @@ drill_codex_no_id() {
   [ "$(sed -n 3p "$c/argv")" = "--agent codex resume T-9" ] || { WHY="with the window's thread: ↵ ran [$(sed -n 3p "$c/argv")], not resume T-9"; return 1; }
   grep -q -- '--last' "$c/argv" && { WHY="a relaunch ran resume --last"; return 1; }
   SECS=$(since "$t0"); WHAT="无 id：↵ 新开；有本窗口 thread：续它；从不 resume --last"
+}
+
+# A fresh fleet Codex whose login's config.toml already carries the fleet's posture
+# (the shipped conf/agent-defaults/codex/config.default.toml) must launch with NO
+# session permission override: Codex refuses every in-TUI /resume on the private
+# remote runtime while one is set («Permission overrides are not supported when
+# resuming a remote task», #4724). A fake codex records the argv the real one gets.
+drill_codex_resume_override() {
+  CAP=15; local d="$WORK/cxpost" t0 a
+  mkdir -p "$d/bin" "$d/home" "$d/cwd" "$d/conf"
+  printf '#!/bin/sh\nfor a; do printf "%%s\\n" "$a"; done > "%s/argv"\n' "$d" > "$d/bin/codex"; chmod +x "$d/bin/codex"
+  cp "$ROOT/conf/agent-defaults/codex/config.default.toml" "$d/home/config.toml"
+  t0=$(now)
+  ( cd "$d/cwd" && env -i PATH="$d/bin:$PATH" HOME="$d" CODEX_HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
+      FLEET_MCP=0 FLEET_AGENT_CFG=0 FLEET_CODEX_VERSION_CHECK=0 bash "$BIN/fleet-codex.sh" hi ) >"$d/out" 2>&1
+  [ -s "$d/argv" ] || { WHY="codex never ran: $(tail -n 2 "$d/out" | tr '\n' ' ')"; return 1; }
+  for a in --dangerously-bypass-approvals-and-sandbox --yolo -a -s --ask-for-approval --sandbox; do
+    grep -qxF -- "$a" "$d/argv" && { WHY="a fresh launch carries the session override $a — /resume is refused"; return 1; }
+  done
+  grep -Eq '^(approval_policy|sandbox_mode)=' "$d/argv" && { WHY="a fresh launch carries a -c permission override — /resume is refused"; return 1; }
+  grep -qxF -- --dangerously-bypass-hook-trust "$d/argv" || { WHY="the hook-trust bypass went missing"; return 1; }
+  SECS=$(since "$t0"); WHAT="默认 config.toml 已给满权限：新开 Codex 不带会话权限覆盖，会话里的 /resume 可用"
 }
 
 # ---- the recovery page's q, on the real session-end-hook (#1842 ① ②) ----------

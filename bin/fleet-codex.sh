@@ -35,9 +35,12 @@
 #     so window cleanup follows a successful CLI process exit instead (#730).
 #     Hooks need persisted trust in Codex; the fleet vets its own, so
 #     --dangerously-bypass-hook-trust.
-#   * Posture: --dangerously-bypass-approvals-and-sandbox — the same footing as a
-#     bypassPermissions Claude worker (nobody is watching a fleet pane to approve;
-#     the hooks are the rails). A stricter workspace-write sandbox is a follow-up
+#   * Posture: full access (approval_policy=never + sandbox_mode=danger-full-access)
+#     — the same footing as a bypassPermissions Claude worker (nobody is watching a
+#     fleet pane to approve; the hooks are the rails). Taken from the login's own
+#     config.toml when it already says so (the fleet's shipped default), else
+#     --dangerously-bypass-approvals-and-sandbox: as a CLI flag it would block
+#     every in-TUI /resume on the private runtime (issue #4724). A stricter workspace-write sandbox is a follow-up
 #     (issue #548): it may also fence AF_UNIX (the tmux socket every fleet script
 #     talks to) and the worktree's `.git` gitdir under the base checkout, and
 #     `codex sandbox` could not be driven here to prove either way.
@@ -75,7 +78,7 @@
 # Capability | Claude Code | Codex | Why
 # worktree per task · `@issue` binding · claim-at-spawn · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic.
 # hook state signals → dash colours (busy / working / done) | ✅ | ✅ | Codex's hook system *is* Claude Code's schema — same event names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on codex-cli 0.154). This launcher inlines the fleet's own hooks as `-c hooks.<Event>=[…]`.
-# bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | `--dangerously-bypass-approvals-and-sandbox` + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit.
+# bypass-permissions guardrails (bash-guard · base-checkout read-only) | ✅ | ✅ | full access from config.toml (else `--dangerously-bypass-approvals-and-sandbox`, issue #4724) + `--dangerously-bypass-hook-trust`; the base-checkout guard matches `apply_patch` on Codex where Claude matches Edit/Write/MultiEdit.
 # session keeps ONE language (non-English sessions stay non-English) | ✅ | ✅ | `bin/fleet-claim-brief.sh` ends every worker's preamble with the seed rule, and every text the fleet injects later (resume nudge, quota warning, child report, auto-handoff directive) carries its own — one English sentence per injection point instead of a translated nudge per language (issue #620, `bin/fleet-lang.sh`). Codex additionally has the rule in `conf/codex-preamble.md`, where it originated.
 # project instructions file | `CLAUDE.md` | `AGENTS.md` | `-c project_doc_fallback_filenames=["CLAUDE.md"]` makes a Codex worker read this repo's `CLAUDE.md` when it has no `AGENTS.md`.
 # worker model pinned at spawn | `FLEET_MODEL` | `FLEET_CODEX_MODEL` | Two knobs on purpose: Codex model names are not Claude aliases, so `FLEET_MODEL` never reaches a Codex pane.
@@ -427,9 +430,6 @@ if [ -n "${TMUX_PANE:-}" ] && command -v fleet_window_repo >/dev/null 2>&1; then
   unset _fx_repo
 fi
 unset _fx_fleet
-# Remote resume retains the native thread's permission policy and rejects CLI
-# permission overrides. Only a fresh thread needs Fleet's initial full access.
-[ -n "$_codex_resuming" ] || flags=(--dangerously-bypass-approvals-and-sandbox ${flags[@]+"${flags[@]}"})
 
 # --- model: FLEET_CODEX_MODEL → -m, unless the caller already chose one ---------
 launch_model=''
@@ -508,6 +508,23 @@ if [ "${FLEET_AGENT_CFG:-1}" != 0 ] && [ -f "$BIN/fleet-agent-team.py" ] && comm
   unset _cfg_args _cfg_k _cfg_v _cfg_locks _cfg_say
 fi
 unset _codex_mcp
+
+# --- full access for a fresh thread (issue #4724) -------------------------------
+# Remote resume retains the native thread's permission policy and rejects CLI
+# permission overrides, so a resume never carries the flag. A fresh thread needs
+# the fleet's full access — but held as a CLI flag it is a SESSION override, and
+# Codex then refuses every in-TUI /resume on the private runtime («Permission
+# overrides are not supported when resuming a remote task»). When the login's own
+# config.toml already says approval_policy=never + sandbox_mode=danger-full-access
+# (the fleet's shipped default) and nothing above it moves that, the posture is
+# the same without the flag; fleet-codex-posture.py decides, anything else keeps it.
+if [ -z "$_codex_resuming" ]; then
+  if [ "${FLEET_CODEX_POSTURE_FROM_CONFIG:-1}" = 0 ] || [ ! -f "$BIN/fleet-codex-posture.py" ] \
+     || ! python3 "$BIN/fleet-codex-posture.py" check --home "${CODEX_HOME:-$HOME/.codex}" --cwd "$PWD" \
+          -- ${flags[@]+"${flags[@]}"} ${pass[@]+"${pass[@]}"} >/dev/null 2>&1; then
+    flags=(--dangerously-bypass-approvals-and-sandbox ${flags[@]+"${flags[@]}"})
+  fi
+fi
 
 # --- version drift: warn once per launch, never block (issue #1079) ------------
 # fleet reads context% from Codex's rollout file, a format verified only on the
