@@ -139,7 +139,10 @@ class Trace:
             start, prefix = self.pending.pop(pid)
             self.pending_bytes -= len(prefix) + len('<unfinished ...>')
             require(prefix.startswith(resumed[1] + '('), 'RESUME_CHANGED_SYSCALL')
-            self.decode(pid, start, at, prefix + resumed[2])
+            # strace leaves the unfinished prefix as `…, 0,  <unfinished` (two
+            # spaces): rejoin it with one, as the uninterrupted call prints it
+            # (live, #4625: a resumed socketpair's fds went unread).
+            self.decode(pid, start, at, re.sub(r',\s+$', ', ', prefix) + resumed[2])
             return
         duration = re.search(r' <(\d+\.\d+)>$', call)
         until = at + (float(duration[1]) if duration else 0)
