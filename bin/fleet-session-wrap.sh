@@ -170,7 +170,7 @@ fi
 
 # Why a relaunch died at once, read off what it left on the pane: conversation |
 # auth | '' — and its last line, for the page's detail row.
-fail_why=''; fail_line=''
+fail_why=''; fail_line=''; fail_told=''
 read_failure() {
   local txt esc
   esc=$(printf '\033')
@@ -405,6 +405,16 @@ while :; do
   [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s agent=%s sid=%s rc=%s secs=%s failed=%s why=%s unpushed=%s detail=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$agent" "${sid:--}" "$rc" "$dur" \
     "${failed:--}" "${fail_why:--}" "$unp" "$(printf '%s' "${fail_line:-}" | tr '\n' ' ' | cut -c1-200)" >> "$xlog" 2>/dev/null
+  # A worker that did not come up tells whoever spawned it (issue #4702) — once a
+  # streak: a refused launch presses ↵ by itself every 15 s–5 min, and a launch
+  # that runs again ends the streak. Before this the parent heard nothing and took
+  # the silent window for one that had finished.
+  if [ -z "$failed" ]; then fail_told=''
+  elif [ -z "$fail_told" ] && [ -n "$(opt @issue)" ]; then
+    fail_told=1
+    ( FLEET_FAIL_SUM="the session did not start: ${failed} failed (${fail_why:-rc $rc})${fail_line:+ — $(printf '%s' "$fail_line" | cut -c1-160)}; its window waits on the recovery page — retry it there or reap it"
+      bash "$BIN/fleet-report-parent.sh" --state failed --win "$TMUX_PANE" --summary "$FLEET_FAIL_SUM" ) >/dev/null 2>&1 &
+  fi
   python3 "$BIN/fleet-session-page.py" ${pargs[@]+"${pargs[@]}"}
   act=$?
   case "$act" in 10|11|12|13|14) ;; *) plain_page "$rc"; act=$? ;; esac

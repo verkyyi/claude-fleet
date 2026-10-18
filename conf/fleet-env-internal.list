@@ -1023,3 +1023,4 @@ FLEET_AUTHORITY_CONTEXT           env handoff: current reservation and native su
 FLEET_HUB_AUTHORITY_CMD           seam: authority admission command for isolated hub fixtures (#4395)
 FLEET_STREAM_RESUME_FG            seam: wait in the foreground for the stream-resume selftest (#4714)
 FLEET_STREAM_RESUME_SEND_CMD      seam: the stream-resume sender (fleet-peer-send.sh) in its selftest (#4714)
+FLEET_STREAM_RESUME_REPORT_CMD    seam: the stream-resume give-up report (fleet-report-parent.sh) in its selftest (#4702)

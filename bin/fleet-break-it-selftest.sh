@@ -6424,6 +6424,20 @@ drill_rm_empty_var_prompt() {
   WHAT='rm -f $P/* 先被 bash-guard 拒并给出改法；"${P:?}"/* 与 git rm 放行'
 }
 
+# stuck-worker-unseen (#4702): a worker the stream resume gives up on — or whose
+# launch is refused — tells its parent once, instead of looking finished.
+drill_stuck_worker_unseen() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-stream-resume-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
+  printf '%s' "$out" | grep -q '^PASS  H the budget spent → one failed report' \
+    || { WHY="the give-up report leg did not run: $(printf '%s' "$out" | grep ' H ' | tr '\n' ' ')"; return 1; }
+  grep -q 'fleet-report-parent.sh" --state failed --win "$TMUX_PANE"' "$BIN/fleet-session-wrap.sh" \
+    || { WHY="fleet-session-wrap.sh no longer reports a refused launch"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='worker 被 API 错误停住、自动续接用完或错误不可续：给父会话报一次 failed（停在提示符、不是做完了）；rate_limit 和人的会话不报；起动被拒的 worker 一串也只报一次'
+}
+
 # ================================================================ run ====}
 
 # A landing only GitHub could name (issue #3601, EPIC #3570 C8): with every gh call
