@@ -21,7 +21,8 @@ A Codex session reads the same file: the body becomes its instructions
 (`-c model_instructions_file=<a content-addressed copy of the body>`), the model
 is `fleet.codex_model`; the tool list does not carry over (Codex has none).
 
-  find <name> [--dir D]           the file's path (exit 1: none — stderr says where it looked)
+  find <name> [--dir D] [--for claude|codex]
+                                  the file's path (exit 1: none — stderr says where it looked)
   launch <name> [--dir D] [--agent claude|codex] [--no-agent-flag]
                                   what the launcher starts it with, `key<TAB>value`
                                   lines: file · sha · name · model · spawn (0|1) ·
@@ -31,10 +32,15 @@ is `fleet.codex_model`; the tool list does not carry over (Codex has none).
   ship [--dir D] [--check]        install the agent files the fleet core ships
                                   (conf/agent-defaults/claude/agents/*.md) into the
                                   login's ~/.claude/agents — see «ship» below
-  spawn-tools <name> [--dir D]    exit 0 when its tools grant `spawn` (issue #3122)
+  spawn-tools <name> [--dir D] [--for claude|codex]
+                                  exit 0 when its tools grant `spawn` (issue #3122)
 
 `--dir` is the session's working directory (default: the cwd) — where the
-project layer is looked for. `--no-agent-flag` is the fallback for a Claude Code
+project layer is looked for. `--for` is the agent the answer serves (default
+claude; `launch --agent codex` implies codex): a Codex start never runs the
+Claude CLI to ask which plugins are installed — it takes the last answer cached
+here, whatever its age, else looks in the two directories only (issue #4726: a
+Codex-only egress region cannot reach Anthropic). `--no-agent-flag` is the fallback for a Claude Code
 without `--agent` (the launcher asks `claude --help` once per binary): the
 model, the tools and the body ride `--model` / `--tools` /
 `--disallowedTools` / `--append-system-prompt-file` instead.
@@ -153,10 +159,12 @@ def _project_dirs(start):
     return out
 
 
-def _plugin_dirs():
+def _plugin_dirs(ask=True):
     """Each installed plugin's agents/ — `claude plugin list --json` (the one
     place Claude Code says what is installed; FLEET_AGENT_PLUGINS_CMD is the
-    selftest's seam). A plugin agent answers to `<name>` and `<plugin>:<name>`."""
+    selftest's seam). A plugin agent answers to `<name>` and `<plugin>:<name>`.
+    ask=False (a Codex start, #4726): the cached answer, stale or not, else none —
+    never the command."""
     cmd = os.environ.get('FLEET_AGENT_PLUGINS_CMD') or 'claude plugin list --json'
     # asked once per change of what is installed (the plugins dir and settings.json
     # move when /plugin installs, enables or removes one): a spawn costs no node start
@@ -173,10 +181,12 @@ def _plugin_dirs():
     try:
         with open(cache) as f:
             c = json.load(f)
-        if c.get('stamp') == stamp:
+        if c.get('stamp') == stamp or not ask:
             rows = c.get('rows')
     except (OSError, ValueError, AttributeError):
         pass
+    if rows is None and not ask:
+        return []
     if rows is None:
         try:
             out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15).stdout
@@ -224,7 +234,7 @@ def _match(d, name, plugin=''):
     return None
 
 
-def find(name, start=None):
+def find(name, start=None, for_agent='claude'):
     if not NAME_RE.match(name or ''):
         raise AgentError('not an agent name: %r' % name)
     looked = []
@@ -233,7 +243,7 @@ def find(name, start=None):
         p = _match(d, name)
         if p:
             return p
-    for pid, d in _plugin_dirs():
+    for pid, d in _plugin_dirs(ask=for_agent != 'codex'):
         looked.append(d)
         p = _match(d, name, pid)
         if p:
@@ -292,8 +302,8 @@ def body_copy(d):
     return dst
 
 
-def launch(name, start=None, agent='claude', agent_flag=True):
-    d = load(find(name, start))
+def launch(name, start=None, agent='claude', agent_flag=True, for_agent=None):
+    d = load(find(name, start, for_agent or agent))
     fr, fl = d['front'], d['fleet']
     model = str(fr.get('model') or '')
     out = [('file', d['path']), ('sha', d['sha']), ('name', name),
@@ -405,7 +415,7 @@ def main(argv):
     opts, pos, i = {}, [], 0
     while i < len(rest):
         a = rest[i]
-        if a in ('--dir', '--agent') and i + 1 < len(rest):
+        if a in ('--dir', '--agent', '--for') and i + 1 < len(rest):
             opts[a], i = rest[i + 1], i + 2
             continue
         if a in ('--check', '--no-agent-flag'):
@@ -417,16 +427,20 @@ def main(argv):
             pos.append(a)
         i += 1
     try:
+        for_agent = opts.get('--for')
+        if for_agent not in (None, 'claude', 'codex'):
+            raise AgentError('--for must be claude|codex')
         if cmd == 'find' and len(pos) == 1:
-            print(find(pos[0], opts.get('--dir')))
+            print(find(pos[0], opts.get('--dir'), for_agent or 'claude'))
         elif cmd == 'launch' and len(pos) == 1:
             agent = opts.get('--agent', 'claude')
             if agent not in ('claude', 'codex'):
                 raise AgentError('--agent must be claude|codex')
-            for k, v in launch(pos[0], opts.get('--dir'), agent, not opts.get('--no-agent-flag')):
+            for k, v in launch(pos[0], opts.get('--dir'), agent, not opts.get('--no-agent-flag'),
+                               'codex' if agent == 'codex' else for_agent):
                 print('%s\t%s' % (k, v))
         elif cmd == 'spawn-tools' and len(pos) == 1:
-            return 0 if grants_spawn(load(find(pos[0], opts.get('--dir')))['front']) else 1
+            return 0 if grants_spawn(load(find(pos[0], opts.get('--dir'), for_agent or 'claude'))['front']) else 1
         elif cmd == 'ship' and not pos:
             for ln in ship(opts.get('--dir'), opts.get('--check', False)):
                 print(ln)

@@ -257,8 +257,10 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # rule, however many repos the fleet hosts (issue #1943): --repo, which must be
 # hosted; else the fleet's only repo; several ⇒ refuse, the caller asks.
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
+# A start already known to be Codex never asks the Claude CLI for plugins (#4726).
+AS_FOR=claude; [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] && AS_FOR=codex
 if [ -n "$AS_ARG" ] && [ -z "$REPO_ARG" ]; then
-  REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" 2>/dev/null \
+  REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
 fi
 _rc=0; _r=$(unset TMUX_PANE; fleet_target_repo "$SESS" "$REPO_ARG") || _rc=$?
@@ -289,9 +291,9 @@ if [ -n "$AS_ARG" ]; then
   if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG"; then
     refuse "#$num: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit "$RC_INFRA"
   fi
-  AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" 2>&1) \
+  AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>&1) \
     || { refuse "#$num: ${AS_KV##*fleet-agent-def: }"; exit "$RC_INFRA"; }
-elif AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" 2>/dev/null); then
+elif AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null); then
   AS_ARG=fleet-worker
 else
   AS_KV=''
