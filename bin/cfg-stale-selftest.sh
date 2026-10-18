@@ -13,7 +13,8 @@
 #                  `done`, idle ≥ FLEET_CFG_RESTART_IDLE session qualifies — a
 #                  Codex one alike (issue #1896); working / needs / looping /
 #                  recent / ok / unknown never; nor a Loop the hook never marked
-#                  that the transcript still holds (issue #2189)
+#                  that the transcript still holds (issue #2189); nor a finished
+#                  one its @reap_policy hands to the idle reaper (issue #4764)
 #   D. tick      — fleet-cfg-restart.sh (fleet-migrate.sh faked): auto hands the
 #                  eligible window to `--cfg-stale`, never the working one, at most
 #                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
@@ -139,6 +140,21 @@ eq "C: a Codex session → reopened alike (#1896)" "rc=0"                "$(why 
 eq "C: current configuration → nothing"        "ok rc=1"              "$(why "$WOK")"
 eq "C: no fingerprint → nothing"               "unknown rc=1"         "$(why "$WNONE")"
 eq "C: a panel → nothing"                      "panel rc=1"           "$(why "$(T display-message -p -t "$S:home" '#{window_id}')")"
+# A finished session its @reap_policy hands to the idle reaper (issue #4764): a
+# reopen restarts the idle clock that closes it, so `done:10m` never came due.
+WRD=$(mk reapdone done bbbbbbbbbbbb);  T set-option -w -t "$WRD" @reap_policy done:10m
+WRL=$(mk reaploop done bbbbbbbbbbbb);  T set-option -w -t "$WRL" @reap_policy loop-end
+WRA=$(mk reapat done bbbbbbbbbbbb);    T set-option -w -t "$WRA" @reap_policy at:2020-01-01T00:00:00Z
+WRF=$(mk reapfut done bbbbbbbbbbbb);   T set-option -w -t "$WRF" @reap_policy at:2099-01-01T00:00:00Z
+WRM=$(mk reapmrg done bbbbbbbbbbbb);   T set-option -w -t "$WRM" @reap_policy merged
+WRK=$(mk reapkeep done bbbbbbbbbbbb);  T set-option -w -t "$WRK" @reap_policy keep
+eq "C: done:<dur> + done → left to the reaper (#4764)" "reap rc=1" "$(why "$WRD")"
+eq "C: loop-end + done → left to the reaper"           "reap rc=1" "$(why "$WRL")"
+eq "C: an at: already reached → left to the reaper"    "reap rc=1" "$(why "$WRA")"
+eq "C: an at: still ahead → reopen"                    "rc=0"      "$(why "$WRF")"
+eq "C: merged → reopen (the merged janitor's, not idle)" "rc=0"    "$(why "$WRM")"
+eq "C: keep → reopen"                                  "rc=0"      "$(why "$WRK")"
+for w in "$WRD" "$WRL" "$WRA" "$WRF" "$WRM" "$WRK"; do T kill-window -t "$w"; done
 # A Loop the PostToolUse hook never marked (issue #2189): no @loop, but the
 # transcript holds a pending ScheduleWakeup — the judge reads it, says `looping`,
 # and writes the missing @loop; a lapsed one is no Loop.

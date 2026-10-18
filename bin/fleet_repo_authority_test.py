@@ -51,7 +51,7 @@ class PoolAuthorityTests(unittest.TestCase):
         return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
                                        text=True, stderr=subprocess.PIPE).strip()
 
-    def supervise(self, session, expected, hint=None, refuse=False):
+    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False):
         worker = self.identities[expected] + "/" + self.fid
         pane = self.panes[session]
         environment = {key: value for key, value in os.environ.items()
@@ -88,13 +88,21 @@ class PoolAuthorityTests(unittest.TestCase):
                     repo=query['repo'], reservation=query['reservation'], owner='owner', endpoint_id='node', phase='reserved')), \
                 patch.object(migration.signal, "signal"), \
                 patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
-                             json.dumps(receipt) if key == "@authority_receipt" else ""), \
-                patch.object(migration, "prove_stopped", return_value=native):
+                             json.dumps(receipt) if key == "@authority_receipt" and not no_receipt else ""), \
+                patch.object(migration, "prove_stopped", return_value=native), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
             if refuse:
                 with self.assertRaisesRegex(migration.ticket.Fail, "another node"):
                     migration.supervise([self.native_program])
             else:
                 self.assertEqual(migration.supervise([self.native_program]), 0)
+        if no_receipt:
+            # The agent exited before it was observed (issue #4764): one plain
+            # reason, never a JSON parse error, and no stopped claim.
+            self.assertIn("no local native receipt", err.getvalue())
+            self.assertNotIn("Expecting value", err.getvalue())
+            self.assertEqual(writes, ["reserve", "begin"])
+            return
         self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
         self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
 
@@ -117,6 +125,9 @@ class PoolAuthorityTests(unittest.TestCase):
         self.supervise("fixture-pool", "fixture", "fixture")
         self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
         self.supervise("fixture-pool", "fixture", "fixture")
+
+    def test_missing_receipt_says_why(self):
+        self.supervise("fixture", "fixture", no_receipt=True)
 
     def test_hub_refusal_remains_fatal_after_pool_resolution(self):
         self.supervise("fixture-pool", "fixture", "fixture", refuse=True)

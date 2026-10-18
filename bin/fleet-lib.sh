@@ -10336,7 +10336,7 @@ fleet_cfg_state() {
 # fleet_cfg_restart_why <session> <win> [idle-secs] — may <win> be reopened onto
 # the current configuration NOW (issue #1783)? Exit 0 = yes. Else exit 1 and ONE
 # word on stdout says why not: gone · panel · remote · unknown · ok ·
-# state:<s> · recent · asleep · handoff · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
+# state:<s> · recent · asleep · reap · handoff · looping · bg · tool · human. The ONE judge — fleet-cfg-restart.sh
 # picks with it and fleet-migrate.sh --cfg-stale asks it again right before /exit,
 # so a session that started a turn in between is never interrupted. Only a
 # session — Claude or Codex alike (issue #1896) — whose @agent_cfg differs from
@@ -10346,17 +10346,20 @@ fleet_cfg_state() {
 # job and no fleet tool call (issue #1880) still
 # running. needs/blocked never
 # qualify: a pending question is the operator's, and a reopen would drop it; a
-# Codex loop between rounds reads `looping`, never `done`.
+# Codex loop between rounds reads `looping`, never `done`. A finished session its
+# own @reap_policy hands to the idle reaper (done / loop-end / an `at:` reached —
+# fleet_reap_policy.py idle-owned, issue #4764) reads `reap`: a reopen would
+# restart the very idle clock that closes it, so `done:10m` never came due.
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h rp
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{@reap_policy}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
   ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
   ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}; slp=${o%%|*}; o=${o#*|}
-  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; nm=${o#*|}
+  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
@@ -10364,11 +10367,15 @@ fleet_cfg_restart_why() {
   case "$FCFG_STATE" in stale|renew|broken) ;; *) echo "$FCFG_STATE"; return 1 ;; esac
   [ -z "$slp" ] || { echo asleep; return 1; }
   [ "$st" = "done" ] || { echo "state:${st:-none}"; return 1; }
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+  if [ -n "$rp" ] && [ -f "$bin/fleet_reap_policy.py" ] \
+     && python3 "$bin/fleet_reap_policy.py" idle-owned "$rp" >/dev/null 2>&1; then
+    echo reap; return 1
+  fi
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( $(date +%s) - ts )) -ge "$idle" ] || { echo recent; return 1; }
   # A handoff cycle is about to /clear it (issue #2937): the reopen would race it.
   fleet_handoff_cycle_live "$sess" "$win" && { echo handoff; return 1; }
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
   if [ -n "$lp" ] && [ -f "$bin/fleet_loop_mark.py" ] \
      && python3 "$bin/fleet_loop_mark.py" status --value "$lp" >/dev/null 2>&1; then
     echo looping; return 1

@@ -381,7 +381,12 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     child = subprocess.Popen(argv, env=env, **({"cwd": directory} if directory else {}))
     rc = child.wait()
     try:
-        receipt = json.loads(launch.option(os.environ["TMUX_PANE"], "@authority_receipt"))
+        raw = launch.option(os.environ["TMUX_PANE"], "@authority_receipt")
+        if not (raw or "").strip():
+            # The agent exited before its native start was observed (a refused
+            # launch, issue #4764): say so, never a bare JSON parse error.
+            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed" % rc)
+        receipt = json.loads(raw)
         if any(receipt.get(k) != v for k, v in c.items()):
             raise ValueError("local native receipt was replaced or never observed")
         proof = prove_stopped(receipt["native_identity"])
