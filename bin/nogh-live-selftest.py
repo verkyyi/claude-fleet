@@ -483,6 +483,34 @@ class TraceMetadata(unittest.TestCase):
         trace.exited.update({8} | set(range(100, 120)) | set(range(200, 220)))
         trace.finish(0)
 
+    def test_killed_inside_a_syscall_is_a_cut_off_call(self):
+        # live (#4625): SIGKILL at stop leaves `???(` (no syscall number: the
+        # tracee was already dying, so nothing ran) and results printed `= ?`.
+        def run(lines, exited=True):
+            trace = observer.Trace(plan(), 'node-a')
+            for line in ('7 1.000 execve("/usr/bin/python3", [""...], 0x1) = 0 <0.001>',
+                         '7 1.010 write(198, ""..., 1) = 1 <0.001>',
+                         '7 1.100 clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8 <0.001>',
+                         '8 1.110 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3 <0.001>',
+                         *lines,
+                         '7 2.000 write(198, ""..., %d) = %d <0.001>' % ((observer.PHASES.index('end') + 1,) * 2),
+                         *(['8 2.050 +++ killed by SIGKILL +++'] if exited else []),
+                         '7 2.100 +++ exited with 0 +++'):
+                trace.feed(line + '\n')
+            return trace.finish(0)
+        run(['8 1.200 ???( <unfinished ...>'])
+        run(['8 1.200 ???()           = ?'])
+        run(['8 1.200 fcntl(1, F_DUPFD_CLOEXEC, 0 <unfinished ...>', '8 1.300 <... fcntl resumed>) = ? <unavailable>'])
+        # a cut-off close leaves the socket tracked; a cut-off connect is an attempt
+        self.assertEqual(run(['8 1.200 close(3) = ? <0.001>',
+                              '8 1.300 connect(3, {sa_family=AF_INET, sin_port=htons(443), '
+                              'sin_addr=inet_addr("203.0.113.1")}, 16) = ?'])['intervals']['startup']['github_network'], 1)
+        for lines, exited in ((['8 1.200 ???( <unfinished ...>', '8 1.300 close(4) = 0'], True),
+                              (['8 1.200 ???( <unfinished ...>'], False),
+                              (['8 1.200 ???(1, 2) = 0'], True)):
+            with self.assertRaises(live.Refused):
+                run(lines, exited)
+
     def test_fork_alias_reconnect_during_write_refuses(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
         trace.decode(7, 1.2, 1.21, 'fork() = 8')
