@@ -233,6 +233,7 @@ FLEET_STATE_PRIMARY_SECS           knob: how long the agent's OSC 7501 report ho
 FLEET_SUBMIT_WAIT_SECS             knob: seconds the first turn waits for an idle, empty input before giving up (fleet-pane-submit.sh, 5, #2234)
 FLEET_SUBMIT_CONFIRM_SECS          knob: seconds the first turn is watched after its Enter, re-pressing Enter while the text sits in the box (fleet-pane-submit.sh, 6, #2430)
 FLEET_CODEX_PLUGINS                knob: 0 = a Codex launch leaves its CODEX_HOME alone instead of syncing the plugins Claude has installed (fleet-codex-plugins.py, on, #3123)
+FLEET_CODEX_POSTURE_FROM_CONFIG    knob: 0 = a fresh Codex always carries --dangerously-bypass-approvals-and-sandbox, even when config.toml already gives full access (fleet-codex-posture.py, on, #4724)
 FLEET_CODEX_SEED_CONFIRM           knob: 0 = never press Enter for a Codex seed left in the composer (fleet-codex-seed.py, on, #2430)
 FLEET_CODEX_SEED_SECS              knob: seconds a Codex launch watches its composer for the unsent seed (fleet-codex-seed.py, 30, #2430)
 FLEET_CODEX_SEED_TICK              test seam: the seed watcher's poll interval when run standalone (fleet-codex-seed.py, 1 s, #2430)
