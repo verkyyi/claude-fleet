@@ -412,6 +412,14 @@ class Trace:
                 # bash close pipes while a sibling forks or execs).
                 if (inert and old_first == 0 and old_last == 2 ** 32) or (old_inert and whole):
                     continue
+                # A sibling's close of an UNTRACKED fd N racing a call that makes a
+                # socket at N (live, #4625: ACCEPT@close_inert). Either the close came
+                # first (N was an untracked fd, then reused) or it closed the new
+                # socket. Replay keeps the socket: later traffic on N is then counted,
+                # never hidden; a close of a TRACKED socket still refuses.
+                if old_kind == 'close_inert' and write and kind in ('accept', 'socket', 'dup') \
+                        and first == last == old_first == old_last:
+                    continue
                 # Which two kinds of touch collided, as identifiers (live, #4625).
                 refused = Refused('FD_ORDER_AMBIGUOUS')
                 refused.detail = '%s@%s' % ((kind or 'TOUCH').upper(), old_kind or 'touch')

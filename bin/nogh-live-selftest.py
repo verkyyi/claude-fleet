@@ -470,6 +470,25 @@ class TraceMetadata(unittest.TestCase):
             with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
                 trace.finish(0)
 
+    def test_untracked_close_racing_an_accept_on_that_fd_keeps_the_socket(self):
+        # live (#4625): ACCEPT@close_inert. Traffic on the accepted fd is counted.
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(8, 1.30, 1.40, 'close(4) = 0')
+        trace.decode(7, 1.32, 1.50, 'accept(3, NULL, NULL) = 4')
+        trace.decode(7, 1.60, 1.61, 'write(4, ""..., 1) = 1')
+        trace.exited.add(8)
+        self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
+        # ...but closing a TRACKED socket beside an accept onto it still refuses
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3',
+                                 'socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 4'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(8, 1.30, 1.40, 'close(4) = 0')
+        trace.decode(7, 1.32, 1.50, 'accept(3, NULL, NULL) = 4')
+        trace.exited.add(8)
+        with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
+            trace.finish(0)
+
     def test_call_cut_off_by_process_exit_is_a_failed_attempt(self):
         # live (#4625): a thread inside a syscall when a sibling exit_groups.
         trace = observer.Trace(plan(), 'node-a')
