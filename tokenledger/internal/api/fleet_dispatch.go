@@ -75,6 +75,11 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 	if err := s.repoDispatchGate(w.repo, w.params["dispatch"] != nil); err != nil {
 		return err
 	}
+	if ref := asString(w.params["ticket_ref"]); ref != "" {
+		if err := s.checkTicketBackend(ref, w.repo, fmt.Sprint(w.params["issue"])); err != nil {
+			return err
+		}
+	}
 	if _, draft := w.params["draft"]; draft {
 		return nil
 	} // unsent draft is not accepted work

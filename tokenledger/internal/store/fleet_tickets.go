@@ -557,3 +557,21 @@ func scanFleetTickets(rows *sql.Rows) ([]FleetTicket, error) {
 	}
 	return out, rows.Err()
 }
+
+// TicketBackends answers where (repo, n) lives as far as the hub knows: the
+// backend of its own row ("" when it holds none) and whether the repo has any
+// ticket whose home is the hub (claude-fleet#4654: a ticket_ref's backend is
+// checked against these, never just carried).
+func (s *Store) TicketBackends(repo string, n int64) (row string, repoHub bool, err error) {
+	repo = NormRepo(repo)
+	err = s.read.QueryRow(`SELECT backend FROM fleet_tickets WHERE repo = ? AND num = ?`, repo, n).Scan(&row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", false, err
+	}
+	var one int
+	err = s.read.QueryRow(`SELECT 1 FROM fleet_tickets WHERE repo = ? AND backend = 'hub' LIMIT 1`, repo).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return row, false, nil
+	}
+	return row, err == nil, err
+}
