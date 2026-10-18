@@ -107,6 +107,11 @@ cat > "$WORK/wbin/session-end-hook.sh" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/recycled"
 EOF
+cat > "$WORK/wbin/fleet-report-parent.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$WORK/reported"
+EOF
+chmod +x "$WORK/wbin/fleet-report-parent.sh"
 cat > "$WORK/fake-launch" <<'EOF'
 #!/bin/bash
 # The agent: logs its argv, stamps the session id the way the hooks do, waits
@@ -122,6 +127,7 @@ else
   tmux set-option -w -t "$TMUX_PANE" @cc_session_id SID-1
   tmux set-option -w -t "$TMUX_PANE" @cc_agent claude
 fi
+[ -e "$CTL/issue" ] && tmux set-option -w -t "$TMUX_PANE" @issue "$(cat "$CTL/issue")"
 [ "$(cat "$CTL/mode" 2>/dev/null)" = fast ] && exit 3
 if [ "$(cat "$CTL/mode" 2>/dev/null)" = refuse ]; then   # the launcher's own refusal (#2404)
   echo 'fleet-claude: FLEET_CRED_PROXY=1 but no session credential could be had from the proxy — refusing to launch' >&2
@@ -232,6 +238,22 @@ printf fast > "$WORK/rf/mode"; tf send-keys -t sw:rf Enter
 waitfor "rf: ↵ relaunched" launches rf 2
 eq "rf: ↵ retries the SAME launch (the spawn's argv)" "--agent claude the seed prompt" "$(sed -n 2p "$WORK/rf/argv")"
 waitfor "rf: a plain fast failure on the retry is the caller's again" screen_has rf 'WRAP_RC=3'
+
+CHECKS=$((CHECKS + 1)); [ ! -s "$WORK/reported" ] || fail "rf: a window bound to no issue told a parent: $(cat "$WORK/reported")"
+
+# RW (issue #4702): a WORKER whose launch is refused tells the session that spawned
+# it — once a streak: the retry refused again says nothing more.
+mkdir -p "$WORK/rw"; printf refuse > "$WORK/rw/mode"; printf 77 > "$WORK/rw/issue"
+win rw 5
+waitfor "rw: state exited" state_is rw exited
+waitfor "rw: the parent was told" grep -sq -- '--state failed' "$WORK/reported"
+CHECKS=$((CHECKS + 1)); grep -q -- "--state failed --win %[0-9]* --summary the session did not start: launch failed (cred)" "$WORK/reported" \
+  || fail "rw: the report: $(cat "$WORK/reported")"
+tf send-keys -t sw:rw Enter
+waitfor "rw: ↵ relaunched" launches rw 2
+waitfor "rw: refused again" screen_has rw '重试启动'
+sleep 0.5
+eq "rw: the same streak reports once" 1 "$(grep -c -- '--state failed' "$WORK/reported")"
 
 # q: recycle through the SessionEnd hook.
 win q 0
