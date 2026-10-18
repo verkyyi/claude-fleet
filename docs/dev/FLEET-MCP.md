@@ -500,7 +500,10 @@ such codex is installed, as on CI): idle ⇒ accepted with the receipt readable
 from a new connection; busy ⇒ refused, deleted, never run; disconnect after the
 add while busy ⇒ the retry settles the same item; the native idle edge first ⇒
 the retry finds the receipt (`intervening_turn`). Neither is a fleet pane with a
-C3 launch, a loop due tick or a live deployment — #4431 owns that acceptance.
+C3 launch, a loop due tick or a live deployment — #4431 owns that acceptance;
+its due tick runs end to end against the real engines in
+`fleet-loop-idle-native-selftest.sh` (Codex) and `fleet-loop-idle-claude-selftest.sh`
+(Claude + the fleet mod, #4658).
 
 ### Read-only provider observations (#4434)
 

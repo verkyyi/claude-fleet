@@ -482,8 +482,9 @@ class IdleDispatchTests(unittest.TestCase):
     """#4431: a due wakeup follows fresh native idle, never the panel's done/looping word.
 
     Two tiers. A pane with a C3 launch goes through fleet_runtime: a fresh v1 read,
-    then accept_if_idle, or capability_unavailable where the adapter has none; only
-    `accepted` counts. A pane without one keeps its original road (legacy_unfenced).
+    then accept_if_idle — Codex and Claude alike (#4658), capability_unavailable
+    only for a provider the adapter has none for; only `accepted` counts. A pane
+    without one keeps its original road (legacy_unfenced).
     """
     def setUp(self):
         LoopTests.setUp(self)
@@ -504,7 +505,7 @@ class IdleDispatchTests(unittest.TestCase):
 
             @staticmethod
             def idle_accept_capability(provider):
-                ok = provider == 'codex'
+                ok = provider in ('codex', 'claude')
                 return dict(state='available' if ok else 'unavailable',
                             reason='' if ok else 'native_precondition_unavailable')
 
@@ -616,13 +617,62 @@ class IdleDispatchTests(unittest.TestCase):
         self.assertNotEqual(self.accepts[0][0], self.accepts[1][0])
         self.assertEqual(self.read()['deliveries'], 1)
 
-    def test_c3_claude_capability_unavailable_never_writes_the_inbox(self):
+    def claude(self):
         self.c3('claude')
         self.snap['provider'] = 'claude'
-        with patch.object(loop, 'deliver_claude') as inbox, \
-                patch.object(loop.runpy, 'run_path', return_value={'snapshot': lambda *_, **kw: {'state': 'empty'}}):
-            loop.dispatch(self.path, now=10000)
-        self.assertEqual((inbox.call_count, self.accepts), (0, []))
+        inbox = patch.object(loop, 'deliver_claude', side_effect=AssertionError('legacy inbox on a C3 pane'))
+        inbox.start()
+        self.addCleanup(inbox.stop)
+
+    def test_c3_claude_accepted_through_the_runtime_never_the_inbox(self):
+        self.claude()
+        loop.dispatch(self.path, now=10000)
+        loop.dispatch(self.path, now=10001)
+        r = self.read()
+        self.assertEqual((len(self.accepts), self.messages), (1, []))
+        self.assertEqual((r['deliveries'], r['accepted_turn'], r['status'], r['deferred_reason']),
+                         (1, 'loop-turn-1', 'active', None))
+        a = r['last_attempt']
+        self.assertEqual((a['fence'], a['state'], a['delivery_id'], a['native_session']),
+                         ('native_idle', 'accepted', self.accepts[0][0], SID))
+        self.assertNotIn('pending_delivery', r)
+        self.assertNotIn('delivery_offset', r)  # the legacy transcript road never ran
+
+    def test_c3_claude_unknown_settles_the_same_delivery_rejected_stays_due(self):
+        self.claude()
+        self.accept = 'unknown'
+        loop.dispatch(self.path, now=10000)
+        self.assertEqual((self.read()['status'], self.read()['deliveries']), ('delivering', 0))
+        self.accept = 'accepted'
+        loop.dispatch(self.path, now=10001)
+        self.assertEqual(self.accepts[0], self.accepts[1])  # a settle, never a new send
+        self.assertEqual(self.read()['deliveries'], 1)
+        r = self.read(); r['schedule']['next_run_at'] = 0; loop.save(self.path, r)
+        self.accept = 'rejected'
+        loop.dispatch(self.path, now=10010)
+        r = self.read()
+        self.assertEqual((r['status'], r['deliveries'], r['deferred_reason'], r['schedule']['next_run_at']),
+                         ('active', 1, 'rejected:native_not_idle', 0))
+
+    def test_defer_while_a_fenced_claude_delivery_is_pending_never_reads_the_legacy_ack(self):
+        r = self.read()
+        r.update(agent='claude', status='delivering',
+                 pending_delivery=dict(delivery_id=str(uuid.uuid4()), text='x', due_ids=[],
+                                       generation=0, native_session=SID))
+        loop.save(self.path, r)
+        with patch.dict(os.environ, FLEET_LOOP_RECORD=str(self.path)), \
+                patch.object(loop, 'current', lambda r: None), \
+                patch.object(loop, 'claude_identity', return_value={'session_id': SID}), \
+                patch.object(loop, 'acknowledge_claude', side_effect=AssertionError('legacy ack')):
+            with self.assertRaisesRegex(ValueError, 'not active'):
+                loop.command(argparse.Namespace(command='defer', seconds=600, prompt_file=None))
+        self.assertEqual(self.read()['status'], 'delivering')
+
+    def test_c3_provider_without_an_accept_is_never_sent(self):
+        self.c3()
+        self.snap['provider'] = 'gemini'
+        loop.dispatch(self.path, now=10000)
+        self.assertEqual((self.accepts, self.messages), ([], []))
         self.assertEqual(self.read()['deferred_reason'], 'capability_unavailable:native_precondition_unavailable')
         self.assertEqual(self.read()['status'], 'active')
 
