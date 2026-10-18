@@ -679,7 +679,41 @@ def parent_window():
     return wid
 
 
-def send_message(to, text):
+def repo_for_slug(slug):
+    """The hosted repo whose fleet_slug is <slug> (a `<slug>:issue-<N>` key), or "" — through
+    fleet_repos, the one list (issue #4761)."""
+    try:
+        sess = current_session()
+    except ToolFault:
+        return ""
+    r = lib('fleet_repos "$1" | while IFS= read -r r; do [ "$(fleet_slug "$r")" = "$2" ] && printf "%s\\n" "$r"; done',
+            check=False, args=(sess, slug))
+    hits = [l for l in r.stdout.splitlines() if l.strip()]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def caller_repo():
+    """The CALLER window's own repo when the fleet hosts 2+ repos (fleet_target_repo's
+    step 2, issue #4761): an issue number a repo-bound session names without a repo is
+    its own repo's. One repo, or a window with none ⇒ "" — the script's own rule, byte
+    for byte (a bare key in a 2+ repo fleet still refuses there)."""
+    try:
+        sess = current_session()
+    except ToolFault:
+        return ""
+    r = lib('[ "$(fleet_repos "$1" | grep -c .)" -ge 2 ] && fleet_target_repo "$1"', check=False, args=(sess,))
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def repo_or_caller(args):
+    """--repo <args.repo> (checked hosted), else the caller window's repo, else nothing."""
+    if args.get("repo") is not None:
+        return check_repo(args)
+    r = caller_repo()
+    return ["--repo", r] if r else []
+
+
+def send_message(to, text, repo=None):
     if not isinstance(to, str) or not to.strip():
         raise Refused("to is required")
     if not isinstance(text, str) or not text.strip():
@@ -687,13 +721,37 @@ def send_message(to, text):
     target = to.strip()
     if target in OLD_ROLE_ORIGINS:
         target = "agent:" + target      # compat-1v: 下一批删 — the bare word an older session sends to
+    # `<slug>:issue-<N>` (issue #4761): the repo-qualified key fleet_win_for_key speaks —
+    # its slug picks the repo, handed to the script as --repo.
+    m = re.match(r"^([A-Za-z0-9._-]+):((?:issue|scratch)-[0-9]+)$", target)
+    if m:
+        named = repo_for_slug(m.group(1))
+        if not named:
+            raise Refused('"%s" names no repo this fleet hosts (the slug is owner-name)' % m.group(1))
+        if repo is not None and repo != named:
+            raise Refused("to names %s but repo is %s" % (named, repo))
+        repo, target = named, m.group(2)
+    # A session with no key of its own answers to its identity (issue #4341): `fid:<uuid>`
+    # or the bare @fleet_id goes to the script as `wid:<uuid>` (fleet_win_for_fid).
+    fid = target[4:] if target.startswith("fid:") else target
+    if FID_RE.match(fid):
+        target = "wid:" + fid
     if target != "parent" and not re.match(
             r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}"
-            r"|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, scratch-<N>, agent:<name> or parent")
+            r"|wid:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}|[@%][A-Za-z0-9_.:-]+)$", target):
+        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, agent:<name>, fid:<uuid> or parent")
+    is_issue = re.match(r"^(issue:|#|issue-)[0-9]+$", target) is not None
+    if repo is not None:
+        if not is_issue and not target.startswith("scratch-"):
+            raise Refused("repo narrows an issue:<N> / scratch-<N> target only")
+        argv_repo = check_repo({"repo": repo})
+    else:
+        # An issue number with no repo is the CALLER's repo's (issue #4761).
+        r = caller_repo() if is_issue else ""
+        argv_repo = ["--repo", r] if r else []
     if target == "parent":
         target = parent_window()
-    result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text, check=False,
+    result = run(["bash", str(BIN / "fleet-peer-send.sh")] + argv_repo + [target, "-"], input_text=text, check=False,
                  timeout=STATUS_TIMEOUT_S, env=hub_env(ASSERT_RELAY_TTL_S))
     # Exit 3 = queued (issue #1647): the peer cannot take it now; it is delivered
     # when it can. Not delivered — and not an error either.
@@ -767,7 +825,7 @@ def tool_repos(_args):
 
 
 def tool_spawn(args):
-    repo = check_repo(args)
+    repo = repo_or_caller(args)   # no repo: the caller window's own (issue #4761)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
     as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
     if args.get("draft") or args.get("pr_note"):   # issue #3715: mark the ticket draft-only first
@@ -789,7 +847,7 @@ def tool_await(args):
         raise Refused("await takes issue or task (T<n>, issue #3330) — exactly one")
     if "task" in args and "repo" in args:
         raise Refused("a task record names its own repo — drop repo")
-    repo = check_repo(args)
+    repo = check_repo(args) if "task" in args else repo_or_caller(args)
     t = args.get("timeout", AWAIT_DEFAULT_S)
     target = args["task"] if "task" in args else str(args["issue"])
     return script([str(BIN / "fleet-await.sh"), target, "--timeout", str(t)] + repo,
@@ -840,7 +898,7 @@ def tool_agents(_args):
 
 
 def tool_send(args):
-    return send_message(args.get("to"), args.get("text"))
+    return send_message(args.get("to"), args.get("text"), args.get("repo"))
 
 
 def tool_take_role(args):
@@ -1229,7 +1287,7 @@ PR_NUM = {"type": "integer", "minimum": 1,
                          "issue whose branch issue-<N> lands; left out, the window's branch."}
 REPO = {"type": "string", "pattern": r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
         "description": "owner/name of a repo THIS fleet hosts (the repos tool lists them). "
-                       "Omit for the fleet's default repo."}
+                       "Omit for your own window's repo, else the fleet's only one."}
 NO_ARGS = {"type": "object", "properties": {}, "additionalProperties": False}
 # A hub task record (issue #3325): T<n>.
 TASK_REF = {"type": "string", "pattern": "^T[1-9][0-9]{0,9}$", "description": "A hub task record, T<n>."}
@@ -1333,9 +1391,12 @@ TOOLS = {
             "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
-                       "to is issue:<N>, scratch-<N>, agent:<name> (the session started from that agent "
-                       "file; none running ⇒ your parent, else the person's reminder) or parent.",
-        "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
+                       "to is issue:<N> (in a fleet of several repos: narrowed by repo, else your own "
+                       "window's repo), <slug>:issue-<N>, scratch-<N>, agent:<name> (the session started "
+                       "from that agent file; none running ⇒ your parent, else the person's reminder), "
+                       "fid:<uuid> (a session by its identity — one with no issue) or parent.",
+        "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
+                                                         "repo": REPO},
                         "required": ["to", "text"], "additionalProperties": False}}),
     "report": (tool_report, {
         "description": "报 — tell the session that SPAWNED this one how it ended (bin/fleet-report-parent.sh). "
