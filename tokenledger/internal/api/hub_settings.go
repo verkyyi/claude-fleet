@@ -199,7 +199,7 @@ var hubSettings = map[string]hubSetting{
 		check: onOff(UserPodRollKey, "on")},
 	UserPodRollBatchKey: {def: "2", help: "at most this many person pods rolled per batch, a batch every 10 minutes (claude-fleet#4174)",
 		check: checkIntSetting(UserPodRollBatchKey, 1, 20, 2)},
-	SpareMaxKey: {def: "2", help: "at most this many spare logins per machine, within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
+	SpareMaxKey: {def: "1", help: "this many spare logins per machine, 0–2 (claude-fleet#4673), within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
 		check: checkSpareMax},
 	MachineNamesKey: {def: "", help: "the short name every client shows a machine by: hostname=name, comma-separated (mac-a.local=mac-a, mac-b.local=mac-b)",
 		check: func(_ *Server, v string) (string, string) {

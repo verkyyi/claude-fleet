@@ -174,6 +174,7 @@ func TestSpareTargetFollowsDesiredState(t *testing.T) {
 	enablePeople(t, h)
 	spareFleet(t, h)
 	setHubSetting(t, h.srv, SparesKey, "on")
+	setHubSetting(t, h.srv, SpareMaxKey, "") // the default (a shared pg leg keeps settings)
 	target := func(host string) int {
 		t.Helper()
 		pic, err := h.srv.sparePicture(host)
