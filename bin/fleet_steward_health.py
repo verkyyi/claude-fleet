@@ -142,7 +142,7 @@ def sleep_mode(sess):
 
 
 def sleep_log():
-    return Path(os.environ.get("FLEET_STEWARD_SLEEP_LOG") or (BIN.parent / "logs" / "sleep.log"))
+    return Path(os.environ.get("FLEET_STEWARD_SLEEP_LOG") or (Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / "sleep.log"))
 
 
 def scan_since(sess, since):
@@ -178,7 +178,7 @@ def reaps_since(sess, since):
     """The cleanup daemon's closes for `sess` since (its log stamps HH:MM:SS
     only: dates are walked back from the file's mtime, a later clock = a day
     earlier)."""
-    p = Path(os.environ.get("FLEET_STEWARD_CLEANUP_LOG") or (BIN.parent / "logs" / "cleanup.launchd.log"))
+    p = Path(os.environ.get("FLEET_STEWARD_CLEANUP_LOG") or (Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / "cleanup.launchd.log"))
     try:
         mtime = p.stat().st_mtime
         with open(str(p), "rb") as f:

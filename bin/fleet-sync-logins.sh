@@ -730,7 +730,6 @@ g config "branch.$branch.remote" origin && g config "branch.$branch.merge" "refs
 if [ -s "$carry" ]; then
   rsync -a --files-from="$carry" "$old/" "$new/" || fail 'carrying the local files failed'
 fi
-mkdir -p "$new/logs"
 mv "$old" "$bak" || fail "cannot move $old aside"
 mv "$new" "$old" || { mv "$bak" "$old"; rm -rf "$new"; printf 'to-git: cannot move the clone into place; %s restored\n' "$old" >&2; exit 1; }
 exit 0

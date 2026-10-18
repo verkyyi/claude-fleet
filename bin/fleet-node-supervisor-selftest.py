@@ -1329,7 +1329,7 @@ class H_Accounts(Sandbox):
         self.assertTrue(e["env"]["PATH"].startswith("/Users/alice/.local/bin:/opt/homebrew/bin"))
         self.assertEqual(e["env"]["FLEET_CONF_DIR"], "/Users/alice/.config/claude-fleet")
         self.assertEqual(e["cmd"][4], "/dev/null")
-        self.assertEqual(e["cmd"][5], "/Users/alice/.claude/fleet/logs/base-sync.launchd.log")
+        self.assertEqual(e["cmd"][5], "/Users/alice/.config/claude-fleet/logs/base-sync.launchd.log")   # the login's records (#4668)
         self.assertNotIn("__HOME__", json.dumps(e))
         # The locale (issue #3514): the plists say en_US.UTF-8, which a slim Linux
         # image lacks — there every account unit gets C.UTF-8; macOS keeps its own.

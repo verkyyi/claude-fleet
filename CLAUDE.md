@@ -729,8 +729,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/run-selftests.sh` re-runs the suite from a throwaway **shadow install
   root** (`bin/selftest-shadow-root.sh`): `bin/` mirrored file-by-file as
   symlinks inside a REAL dir so `$BIN/..` stays inside the shadow, no
-  `fleet.conf` beside it, an empty `logs/` and `FLEET_CONF_DIR`, and every
-  `FLEET_*`/`CCQUOTA_*` variable stripped from the environment. So a new selftest
+  `fleet.conf` beside it, the root and `bin/` READ-ONLY with an empty
+  `FLEET_CONF_DIR` the one writable place, and every `FLEET_*`/`CCQUOTA_*`
+  variable stripped from the environment. **The install is read-only** (issue
+  #4668): every record a login writes — logs, heartbeats, ledgers — is
+  `$FLEET_CONF_DIR/logs`, never `$BIN/../logs`; `portability-selftest.sh` PART 4
+  reds on a write into the install (`# install-write-ok: <why>` excepts a line). So a new selftest
   needs no "unset the operator's config" preamble of its own — and must not add
   one; and a test that builds its OWN sandbox `bin/` + `fleet.conf` keeps working,
   because the isolation is a root swap, not an env override.

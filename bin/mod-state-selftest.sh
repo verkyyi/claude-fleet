@@ -27,7 +27,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ "${_MODSTATE_SELFTEST_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _MODSTATE_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
-  rm -rf "$_root"; exit "$_rc"
+  sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
 CLS="$BIN/classify-sessions.sh"
 SCS="$BIN/set-claude-state.sh"
@@ -75,7 +75,7 @@ i=0; while [ "$i" -lt 40 ] && [ -z "$(tmux capture-pane -p -t "$ww" | tr -d '[:s
 
 wopt()  { tmux show-options -w -t "$ww" -v "$1" 2>/dev/null; }
 ncall() { [ -f "$WORK/claude-calls" ] && wc -l < "$WORK/claude-calls" | tr -d ' ' || echo 0; }
-CCACHE="$BIN/../logs/.classify-cache"; LOGF="$BIN/../logs/classify.log"; mkdir -p "$CCACHE"
+CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"; LOGF="$FLEET_CONF_DIR/logs/classify.log"; mkdir -p "$CCACHE"
 ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
 fresh() {   # fresh <state> <@mod_alive or ''>
   tmux set-window-option -t "$ww" @claude_state "$1"; tmux set-window-option -t "$ww" @claude_needs ''
@@ -117,6 +117,7 @@ scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = looping ] || fail "
 tmux set-window-option -u -t "$ww" @loop
 ok "VIA-MOD: working / needs+ask / done / looping-on-@loop, written by set-claude-state.sh"
 
+chmod u+w "$BIN/.." 2>/dev/null   # this test's own shadow, read-only as built (#4668): the conf is planted beside bin/
 # ================================================================ STATE-ONLY
 printf 'FLEET_AUTO_HANDOFF_PCT=50\nFLEET_HANDOFF_DEFER_SECS=0\n' > "$BIN/../fleet.conf"
 tmux set-window-option -t "$ww" @ctx_pct 90

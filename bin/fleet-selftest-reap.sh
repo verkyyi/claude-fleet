@@ -191,6 +191,7 @@ for root in $ROOTS; do
       [ -e "$d/tmux.sock" ] && "$TMUX" -S "$d/tmux.sock" kill-server 2>/dev/null
       # …and any server in a TMUX_TMPDIR it held (run-selftests.sh's per-test dir)
       for s in "$d"/tmux-*/*; do [ -S "$s" ] && "$TMUX" -S "$s" kill-server 2>/dev/null; done
+      chmod u+w "$d" 2>/dev/null; [ -L "$d/bin" ] || chmod u+w "$d/bin" 2>/dev/null   # a read-only shadow root (#4668)
       rm -rf "$d" 2>/dev/null
     fi
     dirs=$((dirs + 1))

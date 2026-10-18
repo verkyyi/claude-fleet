@@ -26,7 +26,6 @@
 #               p50=<ms|-> max=<ms|->` of ↵ → 能打字
 # Exit 0; 2 = usage.
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
 
 LAST=20; NODE=''; SUMMARY=0; LOGS=()
 while [ $# -gt 0 ]; do
@@ -45,7 +44,7 @@ if [ "${#LOGS[@]}" -eq 0 ]; then
   if [ -n "${FLEET_COMPOSE_LOG:-}" ]; then
     LOGS=("$FLEET_COMPOSE_LOG")
   else
-    LOGS=("$BIN/../logs/compose.ndjson" "$HOME/.local/share/claude-fleet/logs/compose.ndjson")
+    LOGS=("${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/compose.ndjson" "$HOME/.local/share/claude-fleet/logs/compose.ndjson")
   fi
 fi
 DB="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/control/state.sqlite3"

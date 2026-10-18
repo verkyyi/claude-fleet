@@ -121,7 +121,7 @@ check that the limit took:
 
 ```sh
 grep -h 'nofile=' ~/.config/claude-fleet/hub/logs/hub.stderr.log \
-  ~/.claude/fleet/logs/webhook.launchd.log ~/.claude/fleet/logs/spinner.launchd.log | tail -3
+  ~/.config/claude-fleet/logs/webhook.launchd.log ~/.config/claude-fleet/logs/spinner.launchd.log | tail -3
 ```
 
 A plist change only applies after the daemon is reloaded. Re-run the install

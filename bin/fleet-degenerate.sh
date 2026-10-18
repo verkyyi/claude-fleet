@@ -65,8 +65,8 @@ case "$dts" in ''|*[!0-9]*) dts=0 ;; esac
 TM set-window-option -t "$WIN" @degenerate_ts "$now" 2>/dev/null
 TM send-keys -t "$PANE" Escape 2>/dev/null || exit 0
 
-mkdir -p "$BIN/../logs" 2>/dev/null
-LOG="$BIN/../logs/degenerate.log"
+mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
+LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/degenerate.log"
 printf '%s  %-24s Escape -> %s  rows=%s unit=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" \
   "$SOCK:$WIN" "$PANE" "${ROWS:-?}" "${SAMPLE:-?}" >> "$LOG" 2>/dev/null
 [ -f "$LOG" ] && [ "$(wc -l < "$LOG")" -gt 300 ] && \

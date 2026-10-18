@@ -401,7 +401,7 @@ EOF
   fi
   [ -n "$TODO" ] || exit 0
 
-  LOG="${FLEET_BASE_DEPS_LOG:-$BIN/../logs/base-deps.log}"
+  LOG="${FLEET_BASE_DEPS_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/base-deps.log}"
   ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
   # Failing dirs whose lockfile has not moved are not retried (issue #1026): the

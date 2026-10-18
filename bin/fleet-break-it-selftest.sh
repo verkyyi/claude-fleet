@@ -1040,7 +1040,7 @@ drill_epic_fresh_switched() {
   r=$(epic_st "$d" result)
   head=$(git -C "$d/install" rev-parse HEAD); stable=$(git --git-dir="$d/origin.git" rev-parse stable)
   [ "$r" = deferred ] || { WHY="a fresh mark and the tick still ran: result=$r (install at $(printf '%.7s' "$head"), stable $(printf '%.7s' "$stable"))"; return 1; }
-  grep -q ' switched ' "$d/install/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
+  grep -q ' switched ' "$d/conf/logs/install-sync.log" 2>/dev/null && { WHY="the log has a switched line under a fresh mark"; return 1; }
   [ "$head" != "$stable" ] || { WHY="the install moved to stable under a fresh mark"; return 1; }
   epic_hb "$d" --clear 1935 >/dev/null 2>&1                   # the batch ends
   epic_tick "$d" >"$d/tick2.out" 2>&1
@@ -1085,7 +1085,7 @@ drill_epic_hold_uncapped() {
     || { WHY="a batch past the cap still held the switch: $(epic_st "$d" result) $(epic_st "$d" reason)"; return 1; }
   [ "$(grep -c '^2140 --repo o/r --note' "$d/notes.log" 2>/dev/null)" = 1 ] \
     || { WHY="the release was not noted once on the EPIC: [$(cat "$d/notes.log" 2>/dev/null)]"; return 1; }
-  grep -q ' epic-released ' "$d/install/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
+  grep -q ' epic-released ' "$d/conf/logs/install-sync.log" 2>/dev/null || { WHY="no epic-released log line"; return 1; }
   SECS=$(since "$t0"); WHAT="有活的批次挡同一 stable 满 2 小时：放行 switched，EPIC 上一条记录型说明，日志 epic-released"
 }
 
@@ -1149,11 +1149,11 @@ drill_doctor_stricter_rollback() {
     export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     c="$d/c"; git clone -q "$d/origin.git" "$c" 2>/dev/null
-    printf '[ -f "$(dirname "$0")/../logs/old-evidence" ] && echo "  FAIL  state    sleep judgments (last hour): wrong fleet x784"\nexit 0\n' > "$c/bin/fleet-doctor.sh"
+    printf '[ -f "${FLEET_CONF_DIR:-}/logs/old-evidence" ] && echo "  FAIL  state    sleep judgments (last hour): wrong fleet x784"\nexit 0\n' > "$c/bin/fleet-doctor.sh"
     git -C "$c" add -A && git -C "$c" commit -qm three && git -C "$c" push -q origin master
     git --git-dir="$d/origin.git" update-ref refs/tags/stable master
   ) >/dev/null 2>&1
-  touch "$d/install/logs/old-evidence"            # the old daemons' last hour
+  mkdir -p "$d/conf/logs"; touch "$d/conf/logs/old-evidence"   # the old daemons' last hour (the login's records, #4668)
   t0=$(now)
   epic_tick "$d" >"$d/tick.out" 2>&1
   [ "$(epic_st "$d" result)" = switched ] \
@@ -4999,9 +4999,9 @@ drill_status_agent_not_up() {
   st=$(sp_state)
   [ "$st" = working//hook ] || { WHY="with no live 7501 report the prompt's hook did not land: [$st] — the window reads unknown"; return 1; }
   nt set-option -wu -t "$SPW" @agent_status \; set-option -wu -t "$SPW" @agent_status_ts \; set-option -w -t "$SPW" @claude_state 'done'
-  # its unchanged-screen hash lives under $BIN/../logs, which a rerun of this part
-  # shares: the same window id + screen from the last run would read «seen» (#4232)
-  rm -f "$BIN/../logs/.classify-cache/$(printf '%s' "$SPW" | tr '/:@' '___').hash"
+  # its unchanged-screen hash lives under the conf dir's logs/, which a rerun of this
+  # part shares: the same window id + screen from the last run would read «seen» (#4232)
+  rm -f "$WORK/spconf/logs/.classify-cache/$(printf '%s' "$SPW" | tr '/:@' '___').hash"
   sp_env bash "$BIN/classify-sessions.sh" --window "$SPW"
   [ -f "$WORK/sp-claude-calls" ] || { WHY="the screen classifier was skipped although the agent never spoke"; return 1; }
   sp_env python3 "$BIN/fleet-state-reconcile.py" --registry "$WORK/spreg" --cache-dir "$WORK/spcache" \

@@ -37,7 +37,7 @@ for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
 HOOK="$WORK/inst/bin/precompact-hook.sh"
 REFOCUS="$WORK/inst/bin/refocus-hook.sh"
 GCONF="$WORK/inst/fleet.conf"
-LOG="$WORK/inst/logs/context-ladder.log"
+LOG="$WORK/conf/logs/context-ladder.log"
 OPTS="$WORK/opts"
 WT="$WORK/widgets-issue-12"
 git -C "$WT" init -q -b issue-12 2>/dev/null || { git -C "$WT" init -q && git -C "$WT" checkout -q -b issue-12; }

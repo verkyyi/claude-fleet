@@ -118,7 +118,7 @@ script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 # The fix is ONE prelude here, not a per-test unset list (which always misses one, and
 # misses every test written after it): re-run the whole suite from a SHADOW install
 # root — a mirror of this one, with bin/ as a real dir of symlinks so `..` stays
-# honest, an empty logs/, and NO fleet.conf — with the FLEET_*/CCQUOTA_* environment
+# honest, read-only (no logs/ — records are $FLEET_CONF_DIR/logs), and NO fleet.conf — with the FLEET_*/CCQUOTA_* environment
 # stripped on the way in (the conf's second route; see below). See
 # bin/selftest-shadow-root.sh for why the file half is a ROOT SWAP and not an env knob
 # pointing every load site at /dev/null: such a knob would also neutralise the sandbox
@@ -131,11 +131,12 @@ script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 if [ -z "${FLEET_SELFTEST_ROOT:-}" ] && [ -z "${FLEET_SELFTEST_NO_SHADOW:-}" ]; then
   shadow=$("$script_dir/selftest-shadow-root.sh") || {
     echo "run-selftests: could not build the hermetic shadow root" >&2; exit 2; }
-  # The temp root holds only symlinks and empty dirs, so this rm never reaches the
-  # real tree. INT/TERM/HUP as well as EXIT: a ^C mid-suite must not leave litter,
-  # and must stop the run rather than fall through to the summary.
-  trap 'rm -rf "$shadow"' EXIT
-  trap 'rm -rf "$shadow"; exit 130' INT TERM HUP
+  # The temp root holds only symlinks and the conf dir, so this rm never reaches the
+  # real tree; it is read-only (#4668), so the builder's --rm takes it away.
+  # INT/TERM/HUP as well as EXIT: a ^C mid-suite must not leave litter, and must
+  # stop the run rather than fall through to the summary.
+  trap 'sh "$script_dir/selftest-shadow-root.sh" --rm "$shadow"' EXIT
+  trap 'sh "$script_dir/selftest-shadow-root.sh" --rm "$shadow"; exit 130' INT TERM HUP
 
   # The conf reaches the suite by a SECOND route, and the shadow root closes only the
   # first (issue #660). A fleet conf may `export` its keys — the live one exports
@@ -231,8 +232,10 @@ export FLEET_ADMIT=0
 # Every collector tick publishes this login's session count to a MACHINE-level dir
 # the other logins' caps read (issue #1301). A test tick counting its own fake fleet
 # must never land there — it would overwrite the operator's real row for up to the
-# stale bound. A throwaway dir, inside the shadow root when there is one.
-FLEET_MACHINE_SESSIONS_DIR="${FLEET_SELFTEST_ROOT:-${TMPDIR:-/tmp}/fleet-selftest-$$}/machine-sessions"
+# stale bound. A throwaway dir, inside the shadow root's conf dir when there is one
+# (the shadow itself is read-only, #4668).
+FLEET_MACHINE_SESSIONS_DIR="${FLEET_SELFTEST_ROOT:+$FLEET_SELFTEST_ROOT/conf-dir}"
+FLEET_MACHINE_SESSIONS_DIR="${FLEET_MACHINE_SESSIONS_DIR:-${TMPDIR:-/tmp}/fleet-selftest-$$}/machine-sessions"
 export FLEET_MACHINE_SESSIONS_DIR
 
 # The PER-FLEET confs are the same leak one directory over (issue #660): fleet_load_conf

@@ -5403,7 +5403,7 @@ fleet_worktree_fill() {
 # The stock one is bin/fleet-deps-link.sh (borrow the base's node_modules).
 #
 # It can never cost the spawn: every outcome — not found, non-zero, timed out — is
-# one line in <install>/logs/worktree-setup.log and rc 0 here. Its streams go to
+# one line in $FLEET_CONF_DIR/logs/worktree-setup.log and rc 0 here. Its streams go to
 # that log too, because fleet_worktree_create must stay silent on both (#401/#446).
 # A relative path resolves against the install root (`bin/fleet-deps-link.sh`), a
 # bare name against bin/, a leading ~/ against $HOME. Unset (the default) = no-op.
@@ -5421,7 +5421,7 @@ fleet_worktree_setup() {
     */*)   cmd="$(dirname "$bin")/$cmd" ;;
     *)     cmd="$bin/$cmd" ;;
   esac
-  log="${FLEET_WORKTREE_SETUP_LOG:-$(dirname "$bin")/logs/worktree-setup.log}"
+  log="${FLEET_WORKTREE_SETUP_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/worktree-setup.log}"
   mkdir -p "$(dirname "$log")" 2>/dev/null
   {
     printf '%s start %s (%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$wt" "$cmd"

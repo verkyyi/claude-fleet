@@ -1237,7 +1237,7 @@ def _direct_seat(cwd):
 
 def _bypass_log(verdict, issue, script, tool):
     path = os.environ.get("FLEET_MCP_BYPASS_LOG", "").strip() or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "logs", "mcp-bypass.log")
+        os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "logs", "mcp-bypass.log")
     import time
     line = "%s\t%s\tissue=%s\tscript=%s\ttool=%s\n" % (
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), verdict,

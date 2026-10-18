@@ -20,7 +20,9 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; tf show-window-options -t "$TEST_PANE" >&
 CHECKS=0
 same() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1: expected '$3', got '$2'"; }
 
-mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/inst/logs" "$WORK/conf"
+mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/conf/logs"
+# the classifier's cache and the spinner's strikes are the login's records (#4668)
+export FLEET_CONF_DIR="$WORK/conf"
 for f in set-claude-state.sh classify-sessions.sh tmux-spinner.sh tmux-spinner.py fleet-render-watch.py; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
@@ -150,7 +152,7 @@ BLOCK_DURING_CLASSIFY=1 CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/ins
 same 'in-flight classifier cannot overwrite a new blocker' "$(state)" needs/blocked
 WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
 KEY=$(printf '%s' "$WID" | tr '/:@' '___')
-[ ! -f "$WORK/inst/logs/.classify-cache/$KEY.hash" ] || fail 'discarded classifier verdict must stay unhashed'
+[ ! -f "$WORK/conf/logs/.classify-cache/$KEY.hash" ] || fail 'discarded classifier verdict must stay unhashed'
 hook "$PROMPT" '{"hook_event_name":"UserPromptSubmit"}'
 hook needs
 CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
@@ -160,7 +162,7 @@ same 'classifier still handles ordinary needs' "$(state)" done/
 hook needs
 OLD=$(( $(date +%s) - 600 ))
 tf set-window-option -t "$TEST_PANE" @claude_state_ts "$OLD"
-printf '%s |fleet704:%s:idle|\n' "$(date +%s)" "$WID" > "$WORK/inst/logs/.needs-strikes"
+printf '%s |fleet704:%s:idle|\n' "$(date +%s)" "$WID" > "$WORK/conf/logs/.needs-strikes"
 printf 'FLEET_REPO="test/blocked"\n' > "$WORK/conf/fleet704.conf"
 for race in 0 1; do
   BLOCK_DURING_RECONCILE="$race" FLEET_CONF_DIR="$WORK/conf" FLEET_NEEDS_PLAIN_SECS=1 FLEET_NEEDS_RECONCILE_SECS=1 \
@@ -176,7 +178,7 @@ tf set-window-option -t "$TEST_PANE" @claude_needs ''
 tf set-window-option -t "$TEST_PANE" @claude_state_ts 123
 A4WID=$(tf display-message -p -t "$TEST_PANE" '#{window_id}')
 A4KEY=$(printf '%s' "$A4WID" | tr '/:@' '___')
-rm -f "$WORK/inst/logs/.classify-cache/$A4KEY.hash" "$TEST_CALLS"
+rm -f "$WORK/conf/logs/.classify-cache/$A4KEY.hash" "$TEST_CALLS"
 CLASSIFY_VERDICT=WORKING CLASSIFY_BACKEND=haiku CLASSIFY_SETTLE=0 bash "$WORK/inst/bin/classify-sessions.sh" --window "$TEST_PANE"
 [ -s "$TEST_CALLS" ] || fail 'A4 fixture never called the classifier helper'
 same 'a WORKING screen read never promotes a quiet window' "$(state)" done/

@@ -36,7 +36,7 @@ pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
-mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
+mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
@@ -157,7 +157,7 @@ git -C "$BASE" show-ref --verify -q refs/heads/scratch-1 && fail "real run shoul
 [ -d "$WORK/base-scratch-6" ] || fail "real run must KEEP conversation-only scratch-6"
 [ -d "$WORK/base-issue-7" ]   || fail "real run must KEEP dirty issue-7"
 # surface markers exist for the three kept experiments
-SURF="$WORK/logs/.scratch-surfaced"
+SURF="$WORK/conf/logs/.scratch-surfaced"
 [ "$(ls -1 "$SURF" 2>/dev/null | wc -l | tr -d ' ')" = 3 ] || fail "exactly three scratch surface markers expected" "$(ls -la "$SURF" 2>/dev/null)"
 # notify fired for scratch-2 + scratch-3 + scratch-6
 grep -q 'scratch-2 kept (unmerged work)' "$EVENTS" || fail "scratch-2 should have surfaced a notify" "$(cat "$EVENTS")"

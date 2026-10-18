@@ -2847,7 +2847,7 @@ def serve(a):
     cfg.timeout = int(env("FLEET_CRED_PROXY_TIMEOUT", "600"))
     cfg.quota_push_secs = float(env("FLEET_CRED_QUOTA_PUSH_SECS", "2"))
     if not cfg.log:
-        cfg.log = env("FLEET_CRED_PROXY_LOG", os.path.join(os.path.dirname(BIN), "logs", "cred-proxy.log"))
+        cfg.log = env("FLEET_CRED_PROXY_LOG", os.path.join(conf_dir(), "logs", "cred-proxy.log"))
     if shared:
         cfg.run_user = shared.get("user") or ""
         cfg.version = shared.get("version") or ""

@@ -52,7 +52,7 @@ def env_on(name, default="1"):
 
 
 def log_path():
-    return os.environ.get("FLEET_NOTIFY_LOG") or os.path.join(os.path.dirname(HERE), "logs", "notify.ndjson")
+    return os.environ.get("FLEET_NOTIFY_LOG") or os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "logs", "notify.ndjson")
 
 
 def log(rec):

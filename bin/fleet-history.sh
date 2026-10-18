@@ -129,14 +129,14 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 
 
 # --- ledger location: per-fleet (a fleet ≡ a repo), durable across reboots -----
-# ~/.claude/fleet/logs survives a TMPDIR wipe; keyed by repo slug so two fleets
+# $FLEET_CONF_DIR/logs survives a TMPDIR wipe (and never lands in the install, #4668); keyed by repo slug so two fleets
 # on one machine don't share a ledger. Override the whole path for tests.
 ledger_path() {
   local repo="${1:-}"
   if [ -n "${FLEET_HISTORY_LEDGER:-}" ]; then printf '%s' "$FLEET_HISTORY_LEDGER"; return; fi
   local slug; slug=$(fleet_slug "$repo" 2>/dev/null)
   [ -z "$slug" ] && slug="default"
-  printf '%s' "$HOME/.claude/fleet/logs/landed_${slug}.tsv"
+  printf '%s' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/landed_${slug}.tsv"
 }
 
 # strip TAB/CR/LF so a free-text field can't break the TSV row layout.
@@ -1567,7 +1567,7 @@ cmd_drafts() {
   done
   case "$days" in ''|*[!0-9]*) echo "fleet-history drafts: --days is a number" >&2; return 2;; esac
   DR_CONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}" \
-  DR_LOG="${FLEET_COMPOSE_LOG:-$BIN/../logs/compose.ndjson}" \
+  DR_LOG="${FLEET_COMPOSE_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/compose.ndjson}" \
   python3 - "$days" "$json" <<'PY'
 import calendar, glob, json, os, re, statistics, sys, time
 days, as_json = int(sys.argv[1]), sys.argv[2] == "1"

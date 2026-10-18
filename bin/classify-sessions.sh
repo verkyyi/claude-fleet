@@ -65,8 +65,8 @@ if [ "${1:-}" = "--prep-capture" ]; then prep_capture; exit 0; fi
 BACKEND="${CLASSIFY_BACKEND:-off}"
 [ "$BACKEND" != off ] || exit 0
 
-CACHE="$BIN/../logs/.classify-cache"; mkdir -p "$CACHE"
-LOG="$BIN/../logs/classify.log"
+CACHE="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/.classify-cache"; mkdir -p "$CACHE"
+LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/classify.log"
 MODEL="${CLASSIFY_MODEL:-haiku}"
 SETTLE="${CLASSIFY_SETTLE:-0.5}"   # let the "scheduled/waiting" line render before capture
 
@@ -119,7 +119,7 @@ JEV_URL="${CLASSIFY_JEV_URL:-https://api.typesafe.ai/v1/systemone}"
 JEV_MODEL="${CLASSIFY_JEV_MODEL:-jev-latest}"
 JEV_TIMEOUT="${CLASSIFY_JEV_TIMEOUT:-1}"
 JEV_KEY_FILE="${CLASSIFY_JEV_KEY_FILE:-$HOME/.config/typesafe/api_key}"
-SHADOW_LOG="${CLASSIFY_SHADOW_LOG:-$BIN/../logs/classify-shadow.ndjson}"
+SHADOW_LOG="${CLASSIFY_SHADOW_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/classify-shadow.ndjson}"
 SHADOW_MAX_MB="${CLASSIFY_SHADOW_MAX_MB:-64}"   # over this, keep the newest 20000 rows
 
 # The rubric has NO `WORKING` choice (issue #1252). Every screen it sees is a QUIET

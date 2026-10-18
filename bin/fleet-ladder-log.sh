@@ -45,9 +45,9 @@
 # captured them before the step changed them — the handoff cycle's /clear zeroes the
 # count). --socket targets `tmux -L S` for a caller outside the pane's $TMUX.
 #
-# THE FILE. `$FLEET_HANDOFF_LOG_DIR/context-ladder.log`, else `<bin>/../logs/` — the
-# same directory as handoff-cycle.log (on an install both are ~/.claude/fleet/logs;
-# under the selftest shadow root it is the shadow's empty logs/). Tab-separated,
+# THE FILE. `$FLEET_HANDOFF_LOG_DIR/context-ladder.log`, else `$FLEET_CONF_DIR/logs/` — the
+# same directory as handoff-cycle.log (never the install, #4668; under the
+# selftest shadow root it is the shadow's own empty conf dir). Tab-separated,
 # one row per step, the column list in the `#` header written when it is created:
 #
 #   epoch  time  step  session  pane  window  ctx_pct  count  reason
@@ -64,7 +64,6 @@
 # is its JSON decision).
 set -u
 
-BIN=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 MAX="${FLEET_LADDER_LOG_MAX_BYTES:-1048576}"
 case "$MAX" in ''|*[!0-9]*) MAX=1048576 ;; esac
 
@@ -129,7 +128,7 @@ clean() { printf '%s' "$1" | tr '\t\n\r' '   '; }
 sess=$(clean "${sess:--}"); win=$(clean "${win:--}"); REASON=$(clean "${REASON:--}")
 [ -n "$sess" ] || sess=-; [ -n "$win" ] || win=-; [ -n "$REASON" ] || REASON=-
 
-DIR="${FLEET_HANDOFF_LOG_DIR:-$BIN/../logs}"
+DIR="${FLEET_HANDOFF_LOG_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}"
 mkdir -p "$DIR" 2>/dev/null || exit 0
 LOG="$DIR/context-ladder.log"
 if [ ! -s "$LOG" ]; then

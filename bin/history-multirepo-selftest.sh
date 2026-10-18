@@ -58,7 +58,7 @@ mkdir -p "$FLEET_C/global"
 printf '%s\t%s\t%s\n' "$M" o-a o/a "$D" o-c o/c > "$FLEET_C/global/sessmap"
 
 # ledger rows: when key title pr sha wt tdir sid summary state origin
-LOGS="$HOME/.claude/fleet/logs"; mkdir -p "$LOGS"
+LOGS="$FLEET_CONF_DIR/logs"; mkdir -p "$LOGS"   # the login's records (#4668)
 row() { printf '%s\t%s\t%s\t%s\tdeadbeef\t-\t-\t-\t-\t%s\t%s\n' "$@"; }
 { row 2026-09-20T10:00:00Z 12 alpha-twelve 101 landed -
   row 2026-09-20T12:00:00Z 30 alpha-parent -   closed-unlanded -; } > "$LOGS/landed_o-a.tsv"

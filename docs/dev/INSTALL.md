@@ -153,7 +153,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
    (`sh bin/fleet-trust.sh grant --main <FLEET_MAIN>`).
 
 2. **Copy to the install dir.** Canonical: `~/.claude/fleet/`. Copy `bin/`,
-   `conf/`, `shell/`, `fleet.conf.example`, `requirements-mcp.txt` there; `mkdir -p ~/.claude/fleet/logs`;
+   `conf/`, `shell/`, `fleet.conf.example`, `requirements-mcp.txt` there; `mkdir -p ~/.config/claude-fleet/logs` (records never go in the install, #4668);
    `chmod +x ~/.claude/fleet/bin/*.sh`. Prefer a **git clone** of the public repo
    at that path over a copy when `git` is available: a clone knows its commit
    and can follow the repo on its own; a copy can be turned into one later with

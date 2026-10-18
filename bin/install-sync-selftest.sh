@@ -206,7 +206,7 @@ run() { OUT=$(bash "$IS" --root "$CO" "$@" 2>&1); RC=$?; }
 st() { sed -n "s/^$1: //p" "$STATE" | head -1; }
 applies() { grep -c '^apply ' "$LOG"; }
 doctors() { grep -c '^doctor$' "$LOG"; }
-lastlog() { tail -1 "$CO/logs/install-sync.log"; }
+lastlog() { tail -1 "$CONF/logs/install-sync.log"; }
 
 # --- A. forward (and the migration to the versions layout, #1894) --------------------
 V="$CO.versions"
@@ -355,13 +355,13 @@ OUT=$(bash "$HB" --clear x 2>&1); RC=$?; eq "O: --clear x is a usage error" 2 "$
 # the whole point (#2062): the disk gate open, stable moving, a fresh mark → the
 # tick is deferred and the version does not move — on every tick, never switched
 rm "$WORK/gate-closed"; bash "$HB" 1117 --tick 5 --repo o/r --session f1 >/dev/null 2>&1; stable "$C3a"
-: > "$CO/logs/install-sync.log"; run; run
+: > "$CONF/logs/install-sync.log"; run; run
 eq "O: a fresh mark holds the switch" deferred "$(st result)"
 eq "O: HEAD still at C3" "$C3" "$(hd)"
 eq "O: the link untouched" "$V/$C3" "$(readlink "$CO")"
 [ -e "$V/$C3a" ] && fail "O: a version was checked out under a fresh mark"; CHECKS=$((CHECKS + 1))
-eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CO/logs/install-sync.log")"
-eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CO/logs/install-sync.log")"
+eq "O: no switched line while the mark is fresh" 0 "$(grep -c ' switched ' "$CONF/logs/install-sync.log")"
+eq "O: two ticks, two deferred lines" 2 "$(grep -c ' deferred ' "$CONF/logs/install-sync.log")"
 run --dry-run
 contains "O: dry-run defers too" "$OUT" "deferred: EPIC batch running"
 # the batch ends: its loop clears its own mark; the next tick would switch
@@ -418,14 +418,14 @@ eq "O2: no note before the cap" 0 "$(grep -c '^note ' "$WORK/notes.log")"
 [ -f "$CONF/global/epic-hold.d/.since" ] || fail "O2: no login hold clock written"; CHECKS=$((CHECKS + 1))
 printf 'since: %s\nstable: %s\nreleased: -\n' "$(date +%s)" "$C3" > "$CONF/global/epic-hold.d/o-r-1117"
 printf 'since: %s\n' "$(( $(date +%s) - 700 ))" > "$CONF/global/epic-hold.d/.since"
-: > "$CO/logs/install-sync.log"; run
+: > "$CONF/logs/install-sync.log"; run
 eq "O2: past the cap = switched" switched "$(st result)"
 eq "O2: …to stable" "$C3a" "$(hd)"
 eq "O2: ONE note on the EPIC" 1 "$(grep -c '^note ' "$WORK/notes.log")"
 contains "O2: …on the EPIC, record-only" "$(cat "$WORK/notes.log")" "note 1117 --repo o/r --note --from fleet --body-file"
 contains "O2: …says from which version to which" "$(cat "$WORK/notes.log")" "\`$(short "$C3")\` → \`$(short "$C3a")\`"
 contains "O2: …and who" "$(cat "$WORK/notes.log")" "$(id -un)@"
-contains "O2: a released log line" "$(cat "$CO/logs/install-sync.log")" "epic-released $(short "$C3")..$(short "$C3a") epic=1117"
+contains "O2: a released log line" "$(cat "$CONF/logs/install-sync.log")" "epic-released $(short "$C3")..$(short "$C3a") epic=1117"
 contains "O2: the state says released" "$(st epic)" "released (已放行：挡满 10m 封顶) epic=1117"
 eq "O2: the clock records the release" "$C3a" "$(sed -n 's/^released: //p' "$CONF/global/epic-hold.d/o-r-1117")"
 [ -e "$CONF/global/epic-hold.d/.since" ] && fail "O2: at stable the login's hold clock was kept"; CHECKS=$((CHECKS + 1))
@@ -581,7 +581,7 @@ printf '%s\n---\n' "\$1" >> "$NLOG"
 EOF
 chmod +x "$NOTE"; : > "$NLOG"
 sends() { grep -c '^---$' "$NLOG"; }
-nlog() { grep -c ' notified ' "$CO/logs/install-sync.log"; }
+nlog() { grep -c ' notified ' "$CONF/logs/install-sync.log"; }
 nrun() { OUT=$(FLEET_NOTIFY_CMD="$NOTE" bash "$IS" --root "$CO" "$@" 2>&1); RC=$?; }
 me=$(id -un)
 C8=$(commit eight); C9=$(commit nine); C10=$(commit ten)
@@ -598,7 +598,7 @@ contains "P: says the result + reason" "$(cat "$NLOG")" "**refused**: tracked lo
 contains "P: says how to silence it" "$(cat "$NLOG")" "FLEET_INSTALL_SYNC=0"
 eq "P: key = login why stable" "$me refused/dirty $C8" "$(st notified)"
 t=$(st notified_at); case "$t" in ''|-|*[!0-9]*) fail "P: notified_at not an epoch: [$t]" ;; esac; CHECKS=$((CHECKS + 1))
-contains "P: the send log line" "$(grep ' notified ' "$CO/logs/install-sync.log" | tail -1)" " notified $(short "$C7")..$(short "$C8") $me refused/dirty $C8 via notify.sh"
+contains "P: the send log line" "$(grep ' notified ' "$CONF/logs/install-sync.log" | tail -1)" " notified $(short "$C7")..$(short "$C8") $me refused/dirty $C8 via notify.sh"
 eq "P: one send log line" 1 "$(nlog)"
 # fetch-failed in between neither sends nor forgets
 git -C "$CO" remote set-url origin "$WORK/nowhere.git"; nrun
@@ -709,7 +709,7 @@ eq "Q: node upgraded" upgraded "$(st node)"
 eq "Q: one upgrade, own login, hub first, rollback armed" "nodeup $C20 --dist --rollback --logins $me" "$(grep '^nodeup .*--rollback' "$LOG" | tail -1)"
 eq "Q: reason = the done line" "done: 1/1 login(s) on prod-$(short "$C20")" "$(st node_reason)"
 contains "Q: node log line after the tick's" "$(lastlog)" "node-upgraded "
-contains "Q: tick line still there" "$(tail -2 "$CO/logs/install-sync.log" | head -1)" " switched "
+contains "Q: tick line still there" "$(tail -2 "$CONF/logs/install-sync.log" | head -1)" " switched "
 n=$(nodeups); qrun
 eq "Q: current" current "$(st result)"; eq "Q: node current" current "$(st node)"
 eq "Q: current agent → no upgrade call" "$n" "$(nodeups)"
@@ -848,17 +848,17 @@ eq "S: --retry tries it again" rolled-back "$(st result)"
 eq "S: …the doctor ran again" 2 "$(doctors)"
 rm -f "$WORK/old-evidence"
 # settle: the sleep tick is awaited (≤ the budget) before the doctor after the switch
-mkdir -p "$CO/logs"; touch -t 200001010000 "$CO/logs/sleep.log"
+mkdir -p "$CONF/logs"; touch -t 200001010000 "$CONF/logs/sleep.log"   # the login's records (#4668)
 stable "$S3"; OUT=$(FLEET_INSTALL_SETTLE_SECS=0 bash "$IS" --root "$CO" 2>&1)
 eq "S: settle: switched" switched "$(st result)"
 contains "S: settle: no tick within the budget is said, not judged" "$OUT" "no sleep tick within 0s of the switch"
-touch -t 200001010000 "$CO/logs/sleep.log"
-( sleep 2; touch "$CO/logs/sleep.log" ) &
+touch -t 200001010000 "$CONF/logs/sleep.log"
+( sleep 2; touch "$CONF/logs/sleep.log" ) &
 stable "$S4"; t0=$(date +%s); OUT=$(FLEET_INSTALL_SETTLE_SECS=30 bash "$IS" --root "$CO" 2>&1); t1=$(date +%s); wait
 eq "S: settle: switched after the tick" switched "$(st result)"
 not_contains "S: settle: the tick came" "$OUT" "no sleep tick within"
 [ $((t1 - t0)) -lt 25 ] || fail "S: settle waited the whole budget ($((t1 - t0))s) though the tick came"; CHECKS=$((CHECKS + 1))
-rm -f "$CO/logs/sleep.log"
+rm -f "$CONF/logs/sleep.log"
 # …and the real doctor's two windowed rows, cut out of bin/fleet-doctor.sh and run
 # on a sandbox: the old hour's `wrong fleet` and a cache older than the switch
 # FAIL without FLEET_DOCTOR_SINCE, and do not with it.
@@ -878,10 +878,10 @@ with open(sys.argv[1], "w") as f:
     for _ in range(9): f.write(json.dumps({"at": at(900), "skip": "wrong fleet"}) + "\n")
     for _ in range(2): f.write(json.dumps({"at": at(1), "state": "idle"}) + "\n")
 EOP
-dout=$(CCQUOTA_FLEET=1 sh "$DD/bin/doc.sh" 2>&1)
+dout=$(FLEET_CONF_DIR="$DD" CCQUOTA_FLEET=1 sh "$DD/bin/doc.sh" 2>&1)
 contains "S: doctor, no window: the old hour's wrong fleet FAILs" "$dout" "FAIL state sleep judgments (last hour): 11 judgments/hr"
 contains "S: doctor, no window: the old cache FAILs" "$dout" "FAIL hub-sessions loop none · cache 12499s"
-dout=$(CCQUOTA_FLEET=1 FLEET_DOCTOR_SINCE=$(( $(date +%s) - 60 )) sh "$DD/bin/doc.sh" 2>&1)
+dout=$(FLEET_CONF_DIR="$DD" CCQUOTA_FLEET=1 FLEET_DOCTOR_SINCE=$(( $(date +%s) - 60 )) sh "$DD/bin/doc.sh" 2>&1)
 contains "S: doctor since the switch: only its samples" "$dout" "PASS state sleep judgments (since the switch, last hour): 2 judgments/hr"
 contains "S: doctor since the switch: an older cache is a WARN" "$dout" "WARN hub-sessions loop none · cache 12499s — no round since the switch yet"
 not_contains "S: doctor since the switch: no FAIL" "$dout" "FAIL"
@@ -920,7 +920,7 @@ run2
 eq "U: tick exits 0" 0 "$RC"
 eq "U: switched from the hub" switched "$(st2 result)"
 contains "U: the reason says from hub + its seq" "$(st2 reason)" "from hub (seq 5"
-contains "U: the log line says from hub" "$(tail -1 "$CO2/logs/install-sync.log")" "switched $(short "$C5")..$(short "$C6") $(short "$C5") -> $(short "$C6") from hub"
+contains "U: the log line says from hub" "$(tail -1 "$CONF2/logs/install-sync.log")" "switched $(short "$C5")..$(short "$C6") $(short "$C5") -> $(short "$C6") from hub"
 eq "U: the version dir is the upstream sha" "$V2/$C6" "$(readlink "$CO2")"
 eq "U: HEAD is the imported release" "fleet-release: $C6 seq=5" "$(up2)"
 eq "U: …kept by refs/fleet/rel/<sha>" "$(git -C "$CO2" rev-parse HEAD)" "$(git -C "$CO2" rev-parse "refs/fleet/rel/$C6")"

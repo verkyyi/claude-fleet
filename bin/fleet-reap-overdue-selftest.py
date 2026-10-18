@@ -90,7 +90,7 @@ class Overdue(unittest.TestCase):
             (root / "logs").mkdir()
             (root / "logs" / "landed_acme-app.tsv").write_text(
                 "2026-10-11T14:05:53Z\t3321\tt\t3323\n2026-10-11T15:00:00Z\t3321\tt\t3323\n")
-            with patch.object(od, "BIN", root / "bin"):
+            with patch.dict("os.environ", {"FLEET_CONF_DIR": str(root)}):   # the login's records (#4668)
                 self.assertEqual(od.landed_at("acme/app"), {"3321": 1791727553})
 
     def test_no_fleet_prints_nothing_with_if_fleet(self):

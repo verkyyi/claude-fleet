@@ -515,7 +515,7 @@ waitfor 20 gone || die 'the window is still there after the cleanup tick' "$(cat
 [ ! -d "$WT" ] || die 'the worktree is still there' "$(cat "$WORK/err")"
 ! git -C "$MAIN" rev-parse --verify -q "refs/heads/issue-$N" >/dev/null || die 'the branch issue-<N> is still there' "$(cat "$WORK/err")"
 # the resume ledger (fleet-history.sh): key N, state landed, the landing commit git named
-LEDGER="$HOME/.claude/fleet/logs/landed_$(fleet_slug "$R").tsv"
+LEDGER="$FLEET_CONF_DIR/logs/landed_$(fleet_slug "$R").tsv"   # the login's records, never the install (#4668)
 awk -F'\t' -v n="$N" '$2 == n && $10 == "landed" && $5 ~ /^[0-9a-f]{40}$/' "$LEDGER" 2>/dev/null | grep -q . \
   || die 'no landed row for the reaped session in the history ledger' "$(cat "$LEDGER" 2>&1; cat "$WORK/err")"
 [ "$(ghcalls)" = 0 ] || die 'the cleanup asked gh' "$(cat "$GHLOG")"

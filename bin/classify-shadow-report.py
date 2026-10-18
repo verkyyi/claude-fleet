@@ -39,7 +39,7 @@ def main(argv):
         elif a in ("-h", "--help"): print(__doc__); return 0
         else: path = a
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "classify-shadow.ndjson")
+        path = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet"), "logs", "classify-shadow.ndjson")
     try:
         rows = [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
     except FileNotFoundError:

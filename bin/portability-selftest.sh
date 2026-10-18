@@ -406,6 +406,70 @@ iso2epoch() {
 SH
 ok; want split-fallback.sh gnu-opt
 
+# ============================================================================
+# PART 4 — the install is read-only (issue #4668)
+# ============================================================================
+# Every record a login writes — logs, heartbeats, ledgers, pages — is its own
+# $FLEET_CONF_DIR's; the install (`$BIN/..`, a managed login's link tree, the
+# machine's runtime) is never written. Reds on a path into the install's logs/ or
+# epic-pages/ in any spelling the repo uses (`$BIN/../logs`, `$(dirname "$0")/../logs`,
+# `$ROOT/logs`, `~/.claude/fleet/logs`, `BIN.parent / "logs"`, `"..", "logs"`) and on
+# any write (`>` `>>` `mkdir` `touch` `tee`) aimed at `$BIN/..`. Comment lines are
+# skipped; a deliberate one marks its line `# install-write-ok: <why>`.
+cat > "$WORK/installro.py" <<'PY'
+import re, sys
+NAMES = r'(?:logs|epic-pages)\b'
+RULES = [
+    ('install-logs', re.compile(r'(?:\$\{?(?:BIN|BIN_DIR|ROOT|HERE)\}?|\$\(dirname "?\$0"?\))/(?:\.\./)?' + NAMES)),
+    ('install-logs', re.compile(r'\.claude/fleet/' + NAMES)),
+    ('install-logs', re.compile(r'\b(?:BIN|HERE|ROOT)\.parent\s*/\s*[\'"]' + NAMES)),
+    ('install-logs', re.compile(r'[\'"]\.\.[\'"]\s*,\s*[\'"]' + NAMES)),
+    ('install-logs', re.compile(r'dirname\((?:BIN|HERE)\)\s*,\s*[\'"]' + NAMES)),
+    ('install-write', re.compile(r'(?:>>?|\bmkdir(?:\s+-p)?|\btouch|\btee(?:\s+-a)?)\s+"?(?:\$\{?BIN\}?|\$\(dirname "?\$0"?\))/\.\./')),
+]
+for path in sys.argv[1:]:
+    try:
+        lines = open(path, encoding='utf-8', errors='replace').read().splitlines()
+    except OSError:
+        continue
+    for n, line in enumerate(lines, 1):
+        t = line.lstrip()
+        if t.startswith('#') or t.startswith('//') or 'install-write-ok:' in line:
+            continue
+        for code, rx in RULES:
+            if rx.search(line):
+                print('%s:%d: %s: %s' % (path, n, code, t[:160]))
+                break
+PY
+ro_files=$(find -L "$ROOT/bin" "$ROOT/hooks" "$ROOT/launchd" "$ROOT/systemd" -type f \
+             \( -name '*.sh' -o -name '*.py' -o -name '*.tmpl' -o -name '*.service' -o -name '*.ts' \) 2>/dev/null \
+           | grep -v -e '/[^/]*-selftest[^/]*$' | sort)   # by basename: the shadow root's own name says selftest
+ok; [ -n "$ro_files" ] || fail "install-ro: found nothing to scan under $ROOT"
+ro_hits=$(printf '%s\n' "$ro_files" | tr '\n' '\0' | xargs -0 python3 "$WORK/installro.py")
+ok; [ -z "$ro_hits" ] || fail "a write into the install (issue #4668: records are \$FLEET_CONF_DIR/logs, the install is read-only):
+$ro_hits
+(a deliberate one marks its line \`# install-write-ok: <why>\`)"
+cat > "$WORK/ro-bad.sh" <<'SH'
+#!/bin/sh
+LOG="$BIN/../logs/x.log"
+echo hi >> "$(dirname "$0")/../state"
+mkdir -p "$ROOT/logs"
+SH
+cat > "$WORK/ro-bad.py" <<'PY'
+LOG = BIN.parent / "logs" / "x.log"
+P = os.path.join(os.path.dirname(__file__), "..", "logs", "y")
+PY
+cat > "$WORK/ro-good.sh" <<'SH'
+#!/bin/sh
+# the old $BIN/../logs is gone — a comment may say so
+LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/x.log"
+[ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
+mkdir -p "$ROOT/logs"   # install-write-ok: a fixture that says why
+SH
+ok; [ "$(python3 "$WORK/installro.py" "$WORK/ro-bad.sh" | wc -l | tr -d ' ')" = 3 ] || fail "install-ro: the three bad shell shapes must each red"
+ok; [ "$(python3 "$WORK/installro.py" "$WORK/ro-bad.py" | wc -l | tr -d ' ')" = 2 ] || fail "install-ro: the two bad python shapes must each red"
+ok; [ -z "$(python3 "$WORK/installro.py" "$WORK/ro-good.sh")" ] || fail "install-ro: a comment, a conf-dir path, a read and a marked line stay green"
+
 # The fleet's versions come from the hub only (issue #2776, EPIC #2770): a new
 # GitHub fetch in bin/ rides this always-run lint group (dist-source-selftest.sh).
 ok; dist_out=$(bash "$BIN/dist-source-selftest.sh" 2>&1) || fail "dist-source:

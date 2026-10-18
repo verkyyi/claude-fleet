@@ -208,7 +208,7 @@ printf '1250\n' > "$SW"
 printf '900\n' > "$SW"
 [ "$(nap 1300)" = 60 ] || fail "spinner: a wake older than the spell is ignored"; ok
 grep -q 'self.idle_t0 = None' "$SP" || fail "spinner: a live fleet must reset the spell"; ok
-python3 -m py_compile "$SP" || fail "spinner: syntax"; ok
+python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$SP" || fail "spinner: syntax"; ok   # no __pycache__ in a read-only bin/ (#4668)
 
 # --- 11. who wakes -------------------------------------------------------------
 for f in bin/fleet-up.sh bin/dash-issue-session.sh bin/dash-raw-session.sh shell/cw.zsh; do

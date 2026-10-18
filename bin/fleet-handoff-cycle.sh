@@ -109,7 +109,7 @@ POLL="${FLEET_HANDOFF_POLL:-2}"                      # poll interval (s)
 # literal stays the fallback for a lib-less install.
 PICKUP_CMD="${FLEET_HANDOFF_PICKUP_CMD:-$(command -v fleet_cmd >/dev/null 2>&1 \
   && fleet_cmd fleet-handoff pickup || printf '/fleet-handoff pickup')}"
-LOG_DIR="${FLEET_HANDOFF_LOG_DIR:-$HOME/.claude/fleet/logs}"
+LOG_DIR="${FLEET_HANDOFF_LOG_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}"
 DEFER_SECS="${FLEET_HANDOFF_DEFER_SECS:-30}"          # operator hold (issue #571): a keypress
 case "$DEFER_SECS" in ''|*[!0-9]*) DEFER_SECS=30 ;; esac   # at THIS window within this many s
                                                     # holds the clear; 0 = off
@@ -298,9 +298,9 @@ ladder_fail() {
 # Snapshot the stuck.log trace BEFORE waiting so the comparison afterwards is exact
 # rather than a timestamp guess — that log records HH:MM:SS with no date, which
 # cannot be aged reliably.
-STUCK_LOG="$BIN/../logs/stuck.log"
+STUCK_LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/stuck.log"
 [ -f "$STUCK_LOG" ] || STUCK_LOG="$LOG_DIR/stuck.log"
-SPIN_HB="$BIN/../logs/spinner.heartbeat"
+SPIN_HB="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/spinner.heartbeat"
 [ -f "$SPIN_HB" ] || SPIN_HB="$LOG_DIR/spinner.heartbeat"
 # The spinner keys its log by "<socket>:<window_id>"; match the window half.
 stuck_sig() { [ -n "${WID:-}" ] && grep -F ":$WID " "$STUCK_LOG" 2>/dev/null | tail -1; }

@@ -525,6 +525,36 @@ if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR
   fi
   unset _mt
 fi
+# The login's records leave the install (issue #4668): the install is read-only,
+# every log / heartbeat / ledger is $FLEET_CONF_DIR/logs. <install>/logs — a real
+# directory, or a link tree's link into ../.shared/logs (compat-1v: 下一批删) —
+# is moved there, every apply, until nothing is left in it: an entry the conf dir
+# lacks moves as is; a log / ndjson / tsv it has keeps its own lines after the
+# old ones; any other (a heartbeat, a cache) is the newer writer's and the old
+# copy goes. The daemons' StandardErrorPath needs the directory before a load.
+_ld="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
+if [ "$DRY" != 1 ]; then
+  mkdir -p "$_ld" 2>/dev/null || fail conf "cannot make $_ld"
+  _ln=0
+  if [ -d "$ROOT/logs" ]; then   # install-write-ok: the one-time move out
+    for _le in "$ROOT/logs"/* "$ROOT/logs"/.[!.]*; do   # install-write-ok: the one-time move out
+      [ -e "$_le" ] || [ -L "$_le" ] || continue
+      _lb=${_le##*/}
+      if [ ! -e "$_ld/$_lb" ]; then mv "$_le" "$_ld/$_lb" 2>/dev/null && _ln=$((_ln + 1))
+      else
+        case $_lb in
+          *.log|*.ndjson|*.tsv) [ -f "$_le" ] && [ -f "$_ld/$_lb" ] && cat "$_ld/$_lb" >> "$_le" 2>/dev/null \
+                                  && mv -f "$_le" "$_ld/$_lb" 2>/dev/null && _ln=$((_ln + 1)) ;;
+          *) rm -rf "${_le:?}" 2>/dev/null ;;
+        esac
+      fi
+    done
+    [ -L "$ROOT/logs" ] || rmdir "$ROOT/logs" 2>/dev/null   # install-write-ok: the one-time move out
+  fi
+  [ "$_ln" = 0 ] || say "conf: moved $_ln record(s) out of the install into $_ld (#4668)"
+  unset _ln _le _lb
+fi
+unset _ld
 }
 if [ "$CONFONLY" = 1 ]; then
   conf_pass
@@ -656,7 +686,7 @@ daemons_launchd() {
     local verb=reloaded; [ -f "$dst" ] || verb=added
     if [ "$shape" = system ] && [ "$sudo_ok" = 0 ]; then
       # keep the rendered plist where the printed commands can find it
-      pend="$ROOT/logs/install-apply-pending"
+      pend="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/install-apply-pending"
       if [ "$DRY" = 0 ] && mkdir -p "$pend" && cp "$tmp" "$pend/$label.plist"; then
         need_root="$need_root; sudo install -m 644 $pend/$label.plist $dst"
       else

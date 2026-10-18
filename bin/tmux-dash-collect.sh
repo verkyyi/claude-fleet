@@ -87,7 +87,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # Background reads shared per repo (issues #1271, #3529): guarded — an install or
 # a sandbox without the gh lib just fetches, as it always has.
 # shellcheck source=/dev/null
-_FLEET_GH_LIB_DIR="$BIN"   # the lib would fork dirname to find itself (#888)
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"

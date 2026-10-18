@@ -36,7 +36,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # reads its backend from `$BIN/../fleet.conf` (fleet-lib.sh), and a conf line
 # outranks the environment — so run straight from the live install, where the
 # operator set CLASSIFY_BACKEND=jev, this test measured the HOST, not the code.
-# It also keeps `$BIN/../logs` (classify.log, .classify-cache) off the live
+# It also keeps `$FLEET_CONF_DIR/logs` (classify.log, .classify-cache) off the live
 # fleet's state. The gate already does this (run-selftests.sh); this covers a
 # direct run, and costs one ~100ms mirror when nested.
 if [ "${_HELPER_AUTH_SELFTEST_ROOT:-}" != "$BIN" ]; then
@@ -44,7 +44,7 @@ if [ "${_HELPER_AUTH_SELFTEST_ROOT:-}" != "$BIN" ]; then
   # Spell the marker the way the child computes $BIN (logical pwd) — a `//` from
   # macOS's trailing-slash $TMPDIR here once never matched, and recursed (#1305).
   _HELPER_AUTH_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
-  rm -rf "$_root"; exit "$_rc"
+  sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
 LIB="$BIN/fleet-lib.sh"
 CLS="$BIN/classify-sessions.sh"
@@ -149,7 +149,7 @@ done
 wopt() { tmux show-options -w -t "$1" -v "$2" 2>/dev/null; }
 
 # --- CLASSIFY-NO-POISON: the two rails on the state classifier -------------------
-CCACHE="$BIN/../logs/.classify-cache"
+CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"
 ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
 rm -f "$CCACHE/$ckey.hash"
 printf 'Failed to authenticate: OAuth session expired and could not be refreshed\n' > "$WORK/claude-out"

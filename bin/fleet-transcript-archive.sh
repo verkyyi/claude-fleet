@@ -80,7 +80,7 @@ referenced_ids() {
   {
     [ -d "$FLEET_CONF_DIR/fleets" ] && find "$FLEET_CONF_DIR/fleets" -maxdepth 4 -type f -name 'restore.map*' 2>/dev/null |
       while IFS= read -r f; do cat "$f" 2>/dev/null; done
-    for f in "$BIN/../logs"/landed_*.tsv "$HOME/.claude/fleet/logs"/landed_*.tsv "${FLEET_HISTORY_LEDGER:-}"; do
+    for f in "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"/landed_*.tsv "$HOME/.claude/fleet/logs"/landed_*.tsv "${FLEET_HISTORY_LEDGER:-}"; do   # install-write-ok: a read of the old place, compat-1v: 下一批删
       [ -n "$f" ] && [ -f "$f" ] && cat "$f" 2>/dev/null
     done
     # Every running Claude process — fleet pane or not — via its session registry.

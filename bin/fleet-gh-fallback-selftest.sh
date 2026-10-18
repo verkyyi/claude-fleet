@@ -72,15 +72,18 @@ r=$(sed -n 's/^reset=//p' "$m"); [ "$r" -gt "$now" ] && [ "$r" -le "$((now + 700
 rm -f "$FLEET_STATE_DIR"/gh-limit.*
 ok "shared marker: reset/source/at, atomic, expires, secondary holds all, default hold"
 
-# A read-only install (no logs/, cannot make one — the managed runtime, issue #4633):
-# the default log path is skipped without a word on stderr.
+# The log lives in the login's conf dir, never the install (issue #4668), and a conf
+# dir that cannot take it (read-only) is skipped without a word on stderr.
 if [ "$(id -u)" != 0 ]; then
-  mkdir -p "$WORK/roinst/bin"; chmod 555 "$WORK/roinst"
-  err=$( (unset FLEET_GH_LOG; _FLEET_GH_LIB_DIR="$WORK/roinst/bin"; fleet_gh_log limited bucket=graphql src=t; echo "rc=$?") 2>&1 )
-  chmod 755 "$WORK/roinst"
-  [ "$err" = "rc=0" ] || fail "read-only install: fleet_gh_log quiet, rc 0" "$err"
-  [ -e "$WORK/roinst/logs" ] && fail "read-only install: no logs/ made"
-  ok "read-only install: the gh-limit log is skipped silently"
+  mkdir -p "$WORK/roconf"; chmod 555 "$WORK/roconf"
+  err=$( (unset FLEET_GH_LOG; FLEET_CONF_DIR="$WORK/roconf"; fleet_gh_log limited bucket=graphql src=t; echo "rc=$?") 2>&1 )
+  chmod 755 "$WORK/roconf"
+  [ "$err" = "rc=0" ] || fail "read-only conf dir: fleet_gh_log quiet, rc 0" "$err"
+  [ -e "$WORK/roconf/logs" ] && fail "read-only conf dir: no logs/ made"
+  ( unset FLEET_GH_LOG; FLEET_CONF_DIR="$WORK/rwconf"; fleet_gh_log limited bucket=graphql src=t )
+  grep -q 'limited bucket=graphql' "$WORK/rwconf/logs/gh-limit.log" 2>/dev/null \
+    || fail "the gh-limit log is \$FLEET_CONF_DIR/logs/gh-limit.log"
+  ok "the gh-limit log is the conf dir's; a read-only one is skipped silently"
 fi
 
 if ! command -v jq >/dev/null 2>&1; then

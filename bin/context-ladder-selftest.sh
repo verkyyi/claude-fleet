@@ -38,7 +38,7 @@ STATE="$WORK/inst/bin/set-claude-state.sh"
 REFOCUS="$WORK/inst/bin/refocus-hook.sh"
 LADDER="$WORK/inst/bin/fleet-ladder-log.sh"
 GCONF="$WORK/inst/fleet.conf"
-LOG="$WORK/inst/logs/context-ladder.log"     # the default dir: <bin>/../logs
+LOG="$WORK/conf/logs/context-ladder.log"     # the default dir: $FLEET_CONF_DIR/logs (#4668)
 OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"
 git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
 printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\nFLEET_BASE_BRANCH=trunk\n' "$WORK" > "$WORK/conf/fleets/s1/conf"

@@ -199,7 +199,7 @@
 #   node_failed_at: <epoch>|-  node_fail_stable: <sha>|-  node_notified: <key>|-
 #   team: <fleet-agent-team.py's last line>|-
 #   epic: <holding|released|idle …: what the EPIC gate saw this tick>|-
-# Log: $ROOT/logs/install-sync.log, ONE line per tick —
+# Log: $FLEET_CONF_DIR/logs/install-sync.log (never the install, #4668), ONE line per tick —
 #   <UTC> <result> <from>..<to> <reason>
 # — plus ONE `node-<node result>` line in the same shape when the agent step
 # did something (upgraded / failed / backoff / delegated / deferred / check-failed)
@@ -296,7 +296,7 @@ STATE_DIR="$CONF_DIR/global"
 STATE="$STATE_DIR/install-sync.state"
 HOLDD="$STATE_DIR/epic-hold.d"
 LOCK="$STATE_DIR/install-sync.lock"
-LOGF="$ROOT/logs/install-sync.log"
+LOGF="$CONF_DIR/logs/install-sync.log"; mkdir -p "$CONF_DIR/logs" 2>/dev/null
 # the remote the hub road took away (issue #2773), kept for one version
 ORIGIN_BAK="$STATE_DIR/install-origin.bak"
 
@@ -362,7 +362,6 @@ write_state() { # $1 result $2 reason
 }
 
 log_line() { # $1 result $2 reason
-  [ -d "$ROOT/logs" ] || mkdir -p "$ROOT/logs" 2>/dev/null || return 0
   local via=''
   [ "$NOW" = 1 ] && via=' · pushed'
   printf '%s %s %s..%s %s%s\n' "$(utc)" "$1" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
@@ -442,7 +441,6 @@ One notice per (login · reason · stable); it re-arms once this login follows a
   fi
   NOTIFIED="$key"; NOTIFIED_AT=$(now)
   cmd=${FLEET_NOTIFY_CMD%% *}; cmd=${cmd##*/}
-  [ -d "$ROOT/logs" ] || mkdir -p "$ROOT/logs" 2>/dev/null || return 0
   printf '%s notified %s..%s %s via %s\n' "$(utc)" "$(short "${FROM:-${HEAD_SHA:-?}}")" \
     "$(short "${TO:-${HEAD_SHA:-?}}")" "$key" "$cmd" >> "$LOGF" 2>/dev/null
   say "notified ($key) via $cmd"
@@ -738,7 +736,7 @@ settle() {
   case "$budget" in ''|*[!0-9]*) budget=90 ;; esac
   [ -f "$ROOT/bin/fleet-hub-sessions.sh" ] \
     && bash "$ROOT/bin/fleet-hub-sessions.sh" --ensure >/dev/null 2>&1 </dev/null
-  slog="$ROOT/logs/sleep.log"
+  slog="$CONF_DIR/logs/sleep.log"
   [ -f "$slog" ] || return 0
   end=$(( t0 + budget ))
   while :; do

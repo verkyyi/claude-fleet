@@ -223,11 +223,11 @@ CHECKS=$((CHECKS+1)); [ "$rc" = 2 ] || fail "oracle: no argument must exit 2 (us
 # on nothing (issue #675) — see nrdiag below for why a red run without it is not
 # diagnosable. The two log files are cleared first: this test is not the only one in
 # a shadow root that starts the spinner (attn-signal, fleet-collect-stale and
-# fleet-handoff-invariant all sort BEFORE it and share $BIN/../logs), so without the
+# fleet-handoff-invariant all sort BEFORE it and share $FLEET_CONF_DIR/logs), so without the
 # rm both the trace and the strike table would open on someone else's leftovers.
-STRIKE_F="$BIN/../logs/.needs-strikes"
-TRACE_F="$BIN/../logs/needs.log"
-mkdir -p "$BIN/../logs" 2>/dev/null
+STRIKE_F="$FLEET_CONF_DIR/logs/.needs-strikes"
+TRACE_F="$FLEET_CONF_DIR/logs/needs.log"
+mkdir -p "$FLEET_CONF_DIR/logs" 2>/dev/null
 rm -f "$STRIKE_F" "$TRACE_F"
 
 # nrdiag <why> — the evidence #675 asked for, printed when PART B goes red.

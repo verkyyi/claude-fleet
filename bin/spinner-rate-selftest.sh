@@ -58,7 +58,7 @@ tl() { "$REAL_TMUX" -L "$LBL" "$@"; }
 # A private fleet: conf dir with one fleet whose label is our socket, a throwaway
 # bin/ holding only the spinner (so no fleet.conf, no daemon-watch, logs in $WORK).
 export FLEET_CONF_DIR="$WORK/conf"
-mkdir -p "$FLEET_CONF_DIR/fleets/$LBL" "$WORK/bin" "$WORK/logs" "$WORK/shim" "$WORK/tmp"
+mkdir -p "$FLEET_CONF_DIR/fleets/$LBL" "$WORK/bin"  "$FLEET_CONF_DIR/logs" "$WORK/shim" "$WORK/tmp"
 : > "$FLEET_CONF_DIR/fleets/$LBL/conf"
 cp "$SPIN_SRC" "$WORK/bin/tmux-spinner.sh"
 cp "$BIN/tmux-spinner.py" "$BIN/fleet-render-watch.py" "$BIN/fleet_pending_tool.py" "$BIN/fleet_launch.py" "$BIN/fleet_sleep_argv.py" "$BIN/fleet_runtime.py" "$BIN/fleet-codex-rpc.py" "$BIN/fleet-codex-session.py" "$WORK/bin/"
@@ -133,7 +133,7 @@ printf 'spinner-rate-selftest (%s)\n' "$SPIN_SRC"
 # Warm-up: the first frame writes every window once.
 w=$(wait_spin w1 'done' 5000)
 [ "$w" != timeout ] || { fail "warm-up: the spinner never painted w1 ✓" "$(tail -5 "$CALLS")"; exit 1; }
-hb_initial=$(cat "$WORK/logs/spinner.heartbeat" 2>/dev/null); hb_initial=${hb_initial%% *}
+hb_initial=$(cat "$FLEET_CONF_DIR/logs/spinner.heartbeat" 2>/dev/null); hb_initial=${hb_initial%% *}
 sleep 1.5
 
 # --- IDLE ----------------------------------------------------------------------
@@ -227,7 +227,7 @@ else fail "UNWATCHED: done → ✓ after ${w}ms, want ≤ ~1 re-read"; fi
 
 # --- HB ------------------------------------------------------------------------
 sleep 3.5
-hb=$(cat "$WORK/logs/spinner.heartbeat" 2>/dev/null)
+hb=$(cat "$FLEET_CONF_DIR/logs/spinner.heartbeat" 2>/dev/null)
 ep=${hb%% *}
 case "$ep" in
   ''|*[!0-9]*) fail "HB: first token is not an epoch" "got: '$hb'" ;;

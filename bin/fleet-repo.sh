@@ -248,7 +248,7 @@ PY
   for p in "$FLEET_CONF_DIR/restore/$f.map" "$FLEET_CONF_DIR/restore/$f-pool.map"; do
     [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
   done
-  p="${FLEET_HUB_VISITS_LOGDIR:-$BIN/../logs}/hub-visits-$(printf '%s' "$f" | tr -c 'A-Za-z0-9._-' '_').log"
+  p="${FLEET_HUB_VISITS_LOGDIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}/hub-visits-$(printf '%s' "$f" | tr -c 'A-Za-z0-9._-' '_').log"
   [ -f "$p" ] && printf 'archive\thub\t%s\n' "$p"
   for p in "$g/dash_view_$f" "$g/dash_fold_rows_$f" "$g/backlog_show_bound_$f" \
            "$g/spawn_last_ms_$f" "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \

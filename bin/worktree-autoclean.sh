@@ -65,7 +65,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
   fleet_daemon_stamp_tick worktree-autoclean "$BIN/.."; }
 
 . "$BIN/fleet-lib.sh"
-LOGDIR="$BIN/../logs"; mkdir -p "$LOGDIR"
+LOGDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"; mkdir -p "$LOGDIR"
 LOG="$LOGDIR/worktree-autoclean.log"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }

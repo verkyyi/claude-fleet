@@ -95,7 +95,7 @@ both_up() { [ -n "$(fwd_pid alice o/a)" ] && [ -n "$(fwd_pid bob o/a)" ] && [ -n
 
 # ---- A: one program for every login --------------------------------------------
 start
-until_ok 15 both_up || { fail "A the forwards never came up: $(tail -5 "$S/machine.err")"; exit 1; }
+until_ok 15 both_up || { fail "A the forwards never came up: $(tail -20 "$S/machine.err") · state: $(cat "$JF" 2>/dev/null) · alice: $(cat "$S/home/alice/rec" 2>/dev/null)"; exit 1; }
 served "alice bob " && ok "A one program serves alice and bob (webhook-machine.logins)" || fail "A served list: $(cat "$LF")"
 [ "$(head -1 "$LF" | cut -d' ' -f1)" = "$MPID" ] && ok "A the list names the program's pid" || fail "A pid line: $(head -1 "$LF")"
 P=$(port)

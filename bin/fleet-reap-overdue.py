@@ -103,7 +103,7 @@ def landed_at(repo):
     """issue → the epoch its landing was recorded (logs/landed_<slug>.tsv)."""
     got = {}
     try:
-        text = (BIN.parent / "logs" / ("landed_%s.tsv" % slug(repo))).read_text()
+        text = (Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / ("landed_%s.tsv" % slug(repo))).read_text()
     except OSError:
         return got
     for line in text.splitlines():
@@ -125,7 +125,7 @@ def daemon_word(key):
     cache = _LOG
     if "lines" not in cache:
         try:
-            with open(BIN.parent / "logs" / "cleanup.launchd.log", "rb") as f:
+            with open((Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / "cleanup.launchd.log"), "rb") as f:
                 f.seek(0, 2)
                 f.seek(max(0, f.tell() - 400000))
                 cache["lines"] = f.read().decode("utf-8", "replace").splitlines()

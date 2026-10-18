@@ -85,7 +85,7 @@ if [ -n "$rsha" ]; then
     [ -f "$upd" ] || upd="$here/fleet-node-update.py"
     out=$(FLEET_NODE_ROOT="$NROOT" python3 -I "$upd" link-tree "$rsha" --no-apply 2>&1 </dev/null); rc=$?
     if [ "$rc" = 0 ] && [ "$(linked_sha "$ROOT")" = "$rsha" ]; then
-      mkdir -p "$ROOT/logs" 2>/dev/null
+      mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
       made runtime "$rsha" "linked to this machine's runtime $NROOT/$rsha (no fetch)"
       if [ -f "$here/fleet-daemon-lib.sh" ]; then
         # shellcheck source=fleet-daemon-lib.sh

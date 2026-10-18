@@ -397,7 +397,7 @@ elif [ "$role" = orchestrator ]; then
   case "$body" in
     *'<!-- fleet:rule '*) ;;
     *) _rule_add='未注明规则'
-       _rl="${FLEET_RULES_LOG:-$BIN/../logs/rules.log}"
+       _rl="${FLEET_RULES_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/rules.log}"
        mkdir -p "$(dirname "$_rl")" 2>/dev/null
        printf '%s\tunmarked\trepo=%s\ttitle=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$repo" \
          "$(printf '%s' "$title" | tr '\t\n' '  ')" >> "$_rl" 2>/dev/null

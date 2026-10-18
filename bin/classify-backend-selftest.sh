@@ -43,7 +43,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # reads its backend from `$BIN/../fleet.conf` (fleet-lib.sh), and a conf line
 # outranks the environment — so run straight from the live install, where the
 # operator set CLASSIFY_BACKEND=jev, this test measured the HOST, not the code.
-# It also keeps `$BIN/../logs` (classify.log, .classify-cache) off the live
+# It also keeps `$FLEET_CONF_DIR/logs` (classify.log, .classify-cache) off the live
 # fleet's state. The gate already does this (run-selftests.sh); this covers a
 # direct run, and costs one ~100ms mirror when nested.
 if [ "${_CLASSIFY_SELFTEST_ROOT:-}" != "$BIN" ]; then
@@ -51,7 +51,7 @@ if [ "${_CLASSIFY_SELFTEST_ROOT:-}" != "$BIN" ]; then
   # Spell the marker the way the child computes $BIN (logical pwd) — a `//` from
   # macOS's trailing-slash $TMPDIR here once never matched, and recursed (#1305).
   _CLASSIFY_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
-  rm -rf "$_root"; exit "$_rc"
+  sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
 CLS="$BIN/classify-sessions.sh"
 REP="$BIN/classify-shadow-report.py"
@@ -155,7 +155,7 @@ CAP="$(tmux capture-pane -p -t "$ww" | sed '/^[[:space:]]*$/d' | tail -35)"
 HASH="$(printf '%s' "$CAP" | cksum | awk '{print $1}')"
 
 wopt()  { tmux show-options -w -t "$1" -v "$2" 2>/dev/null; }
-CCACHE="$BIN/../logs/.classify-cache"; LOGF="$BIN/../logs/classify.log"; mkdir -p "$CCACHE"
+CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"; LOGF="$FLEET_CONF_DIR/logs/classify.log"; mkdir -p "$CCACHE"
 ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
 nreq()  { n=0; for f in "$WORK"/req/*.json; do [ -e "$f" ] && n=$((n+1)); done; echo "$n"; }
 ncall() { [ -f "$WORK/claude-calls" ] && wc -l < "$WORK/claude-calls" | tr -d ' ' || echo 0; }
@@ -192,6 +192,7 @@ ok "the haiku helper runs with --no-session-persistence — no transcript in the
 # CLASSIFY_BACKEND cannot have decided it. Then prove that is load-bearing: the
 # same leg with a conf line planted beside this bin/ DOES flip, so the leak is
 # real and the re-root above is what closes it (not a stale assertion).
+chmod u+w "$BIN/.." 2>/dev/null   # this test's own shadow, read-only as built (#4668): the conf is planted beside bin/
 [ ! -e "$BIN/../fleet.conf" ] || fail "host conf: the selftest root carries a fleet.conf — the DEFAULT leg would read the host's backend"
 printf 'CLASSIFY_BACKEND=jev\n' > "$BIN/../fleet.conf"
 fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; printf '0\n' > "$WORK/claude-rc"; jev_answer LOOPING 0.99

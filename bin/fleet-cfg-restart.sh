@@ -69,7 +69,7 @@ case "$POLICY" in auto|ask|off) ;; *) POLICY=auto ;; esac
 IDLE="${FLEET_CFG_RESTART_IDLE:-600}"; case "$IDLE" in ''|*[!0-9]*) IDLE=600 ;; esac
 MAX="${FLEET_CFG_RESTART_MAX:-1}";     case "$MAX" in ''|*[!0-9]*) MAX=1 ;; esac
 MIGRATE="${FLEET_CFG_RESTART_MIGRATE:-$BIN/fleet-migrate.sh}"   # selftest seam
-LOG="$BIN/../logs/cfg-restart.log"
+LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/cfg-restart.log"
 
 if [ $# -gt 0 ]; then sockets=$*; else sockets=$(fleet_sockets); fi
 fleet_cfg_expected_load; fleet_cfg_broken_load

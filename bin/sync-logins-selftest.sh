@@ -417,7 +417,7 @@ eq "bob: old copy kept whole" "" "$(for f in bin/a.sh fleet.conf .fleet-synced-f
 ok "bob: no half-built clone left" '[ -z "$(ls -d "$H"/bob/.claude/fleet.to-git.* 2>/dev/null)" ]'
 eq "erin: HEAD = source HEAD (unmarked copy)" "$C7" "$(g "$E" rev-parse HEAD)"
 eq "erin: fleet.conf carried" "FLEET_REPO=erin/z" "$(cat "$E/fleet.conf")"
-ok "erin: logs dir exists even though the copy had none" '[ -d "$E/logs" ]'
+ok "erin: no logs dir made in the install (records are the conf dir's, #4668)" '[ ! -e "$E/logs" ]'
 contains "to-git: bob's daemons kicked" "$(cat "$WORK/launchctl.log")" "kickstart -k system/com.claude-fleet.bob.spinner"
 ok "to-git: staging cleaned up" '[ -z "$(ls "$WORK/tmp")" ]'
 
