@@ -31,6 +31,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- state --
 mkdir -p "$WORK/bin" "$WORK/fp" "$WORK/tmp/.claude-dash/fleets/fake-repo" "$WORK/tmp/.claude-dash/global"
 ln -s "$SRC" "$WORK/bin/dash-issue-close.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
+ln -s "$(dirname "$LIB")/fleet-gh.sh" "$WORK/bin/fleet-gh.sh"; ln -s "$(dirname "$LIB")/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # the GitHub layer (#3721)
 printf '#!/bin/bash\nexit 0\n' > "$WORK/bin/tmux-dash-collect.sh"; chmod +x "$WORK/bin/tmux-dash-collect.sh"
 
 FD="$WORK/tmp/.claude-dash/fleets/fake-repo"
