@@ -5,16 +5,9 @@ name: web-console
 # the hub image as is, so no machine builds it and the page never reaches a CDN.
 # This job rebuilds it from the lockfile and fails when the committed dist is
 # not exactly what the sources make, or when it loads from another origin.
+# No master `push` run (issue #4663): its PR ran this on the change already, and a
+# post-merge re-run only re-checked it beside the release train.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'extras/web-console/**'
-      - 'extras/browser-transport/attachment.ts'
-      - 'extras/fleet-theme/**'
-      - 'extras/browser-transport/**'
-      - 'bin/web-console-pack.sh'
-      - '.github/workflows/web-console.yml'
   pull_request:
     paths:
       - 'extras/web-console/**'

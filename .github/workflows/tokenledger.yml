@@ -13,15 +13,10 @@ name: tokenledger
 #   - every step runs with working-directory tokenledger/, which is its own Go
 #     module (github.com/verkyyi/claude-fleet/tokenledger) — there is no go.mod
 #     at the repo root.
-#   - `push` is master-only, like selftests.yml: a branch push would only
-#     duplicate its PR's run.
-
+#   - no `push` run (issue #4663; a branch push only duplicated its PR's run):
+#     its PR ran this on the change already, and the release train builds the
+#     hub from the merged commit anyway.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'tokenledger/**'
-      - '.github/workflows/tokenledger.yml'
   pull_request:
     paths:
       - 'tokenledger/**'

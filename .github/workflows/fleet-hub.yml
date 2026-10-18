@@ -3,26 +3,20 @@ name: fleet-hub-mcp
 # Hub registry / SSH bridge / MCP / OAuth selftest (bin/fleet-hub-selftest.py).
 #
 # CI is shared by one free account (20 jobs, 5 macOS — issue #2034), so:
-#   - `push` is master-only, like selftests.yml: a branch push only duplicated
-#     its PR's run.
-#   - a re-push to a PR cancels that PR's stale run; master runs always finish.
-#   - macOS runs on master pushes and on demand, not per PR. The test is Python
-#     in temp fixtures; the BSD / bash 3.2 half of the shell it drives is
-#     already checked per PR by selftests-macos.yml (--changed), so a PR-time
-#     macOS leg here only queued in front of those shards.
-
+#   - no `push` run (issue #4663; a branch push only duplicated its PR's run,
+#     #2034): its PR ran this on the change already, and a master re-run only
+#     re-checked it beside the release train.
+#   - a re-push to a PR cancels that PR's stale run.
+#   - macOS runs nightly and on demand, not per PR. The test is Python in temp
+#     fixtures; a PR-time macOS leg here only queued in front of the Mac shards.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'bin/fleet*'
-      - 'requirements-mcp.txt'
-      - '.github/workflows/fleet-hub.yml'
   pull_request:
     paths:
       - 'bin/fleet*'
       - 'requirements-mcp.txt'
       - '.github/workflows/fleet-hub.yml'
+  schedule:
+    - cron: '41 20 * * *'   # 04:41 CST — the macOS leg
   workflow_dispatch:
 
 concurrency:

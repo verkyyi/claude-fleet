@@ -1,18 +1,13 @@
 name: shellcheck
 
-# `push` is master-only (a branch push only duplicated its PR's run) and a
-# re-push to a PR cancels its stale run — issue #2034.
+# The PR gate lints only the *.sh the PR adds or modifies (issue #4663), each with
+# -x (it follows what it sources), so each file's verdict is the full run's — in
+# seconds instead of 8.5 min; bin/ci-shellcheck.sh --changed says why, and checks
+# the whole tree when the lint's own config changes. No master push run: it
+# re-linted a tree its PR had just linted (41 runs, 368 min in 15 h). The whole
+# tree runs nightly and on dispatch (a sourced lib's change shows in its
+# sourcers there). A re-push to a PR cancels its stale run — issue #2034.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'bin/**'
-      - 'hooks/**'
-      - 'shell/**'
-      - 'extras/**'
-      - '.shellcheckrc'
-      - '.shellcheck-version'
-      - '.github/workflows/shellcheck.yml'
   pull_request:
     paths:
       - 'bin/**'
@@ -22,6 +17,9 @@ on:
       - '.shellcheckrc'
       - '.shellcheck-version'
       - '.github/workflows/shellcheck.yml'
+  schedule:
+    - cron: '23 21 * * *'   # 05:23 CST, the whole tree
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -32,6 +30,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # a PR's checkout is its merge commit: HEAD^1 is the base it merges onto
+          fetch-depth: 2
 
       - name: Install pinned shellcheck
         run: |
@@ -49,19 +50,15 @@ jobs:
           rm -rf "shellcheck-v${VER}"
 
       - name: Lint shell scripts
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           shellcheck --version
-          # Lint every *.sh under the script dirs. shell/cw.zsh is deliberately
-          # excluded — shellcheck only supports sh/bash/dash/ksh, not zsh. Per-file
-          # shell comes from each shebang; baseline disables live in .shellcheckrc.
-          # --severity=warning: gate on real problems (unquoted vars, unguarded cd,
-          # syntax errors) — not info-level heuristics like SC2317/SC2329 that flag
-          # correct trap/dispatch code as "unreachable".
-          count=$(find bin hooks shell extras -name '*.sh' | wc -l)
-          if [ "$count" -eq 0 ]; then
-            echo "no shell scripts found — nothing to lint" >&2
-            exit 1
-          fi
-          echo "Checking $count script(s):"
-          find bin hooks shell extras -name '*.sh' | sort | sed 's/^/  /'
-          find bin hooks shell extras -name '*.sh' -print0 | sort -z | xargs -0 shellcheck --severity=warning
+          # Every *.sh under the script dirs, each from its own shebang; baseline
+          # disables live in .shellcheckrc. --severity=warning: gate on real problems
+          # (unquoted vars, unguarded cd, syntax errors) — not info-level heuristics
+          # like SC2317/SC2329 that flag correct trap/dispatch code as "unreachable".
+          # The PR gate: only what the PR touches (issue #4663); nightly: everything.
+          set --
+          [ "$EVENT" != pull_request ] || set -- --changed HEAD^1
+          sh bin/ci-shellcheck.sh --jobs "$(nproc)" "$@"

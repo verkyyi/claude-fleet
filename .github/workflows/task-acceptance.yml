@@ -1,10 +1,9 @@
 name: task-acceptance
 
+# No master `push` run (issue #4663): its PR ran this on the change already, and a
+# post-merge re-run only re-checked it beside the release train.
 on:
   pull_request:
-    paths: ['bin/**', 'tokenledger/**', 'extras/web-console/**', '.github/workflows/task-acceptance.yml']
-  push:
-    branches: [master]
     paths: ['bin/**', 'tokenledger/**', 'extras/web-console/**', '.github/workflows/task-acceptance.yml']
   workflow_dispatch:
 

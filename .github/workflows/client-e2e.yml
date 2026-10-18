@@ -17,20 +17,11 @@ name: client-e2e
 # GitHub at all: WeChat sign-in, a repo at an ssh address, ticket → session →
 # fleet's own landing → cleanup → report, with a `gh` that must never be called.
 #
-# ubuntu on every PR and every push to master (a merge); macOS nightly (and on
-# demand) — the BSD / bash 3.2 / Homebrew-tmux half, on its own clock so it
-# never queues behind the selftests' macOS shards (18:17 UTC).
-
+# ubuntu on every PR (no master push re-run since issue #4663: its PR ran it on
+# the change already) and nightly; macOS nightly (and on demand) — the BSD /
+# bash 3.2 / Homebrew-tmux half, on its own clock (18:17 UTC).
 on:
   pull_request:
-    paths:
-      - 'bin/**'
-      - 'shell/**'
-      - 'conf/**'
-      - 'tokenledger/**'
-      - '.github/workflows/client-e2e.yml'
-  push:
-    branches: [master]
     paths:
       - 'bin/**'
       - 'shell/**'

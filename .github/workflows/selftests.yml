@@ -16,11 +16,14 @@ name: selftests
 # ONLY THE RELATED TESTS, ONCE PER COMMIT (issue #1374). Every PR used to run the
 # full suite three times — the branch push, the pull_request on the same commit,
 # and the merge into master — 18 shard jobs for one change. Now:
-#   - `push` is master-only, so a branch push no longer duplicates its PR's run;
-#   - both triggers run `run-selftests.sh --changed <base>`, which selects the tests
+#   - no `push` run at all (issue #4663): a branch push duplicated its PR's run
+#     (#1374), and master's re-ran a subset of what the release train runs on the
+#     same commit anyway (`--changed <stable>` ⊇ `--changed <before>`) — 18 shard
+#     jobs a merge, queued beside the train and every open PR;
+#   - the PR runs `run-selftests.sh --changed <base>`, which selects the tests
 #     whose source names a changed file (or a changed library function) plus the
 #     always-run lint group, and prints each pick as `select: <test> ← <reason>`.
-#     A PR's base is its target branch; a master push's is the commit before it.
+#     A PR's base is its target branch.
 #     A change to the harness itself (this file, the runner) falls back to the
 #     full suite; so does a base that cannot be resolved.
 #   - the selection is usually smaller than the matrix: a spare shard passes
@@ -30,8 +33,7 @@ name: selftests
 # stays FULL, as the backstop for what a selector misses.
 
 on:
-  push:
-    branches: [master]
+  pull_request:
     paths:
       - 'bin/**'
       # Guard hooks the selftests drive from OUTSIDE bin/ (bash-guard-selftest.sh
@@ -64,22 +66,6 @@ on:
       - 'fleet.conf.example'
       - '.github/workflows/selftests.yml'
       - '.github/workflows/selftests-shards.yml'
-  pull_request:
-    paths:
-      - 'bin/**'
-      - 'hooks/**'
-      - 'conf/**'
-      - 'launchd/**'
-      - 'systemd/**'
-      - '.claude-plugin/**'
-      - 'commands/**'
-      - 'skills/**'
-      - 'shell/**'
-      - 'extras/**'
-      - 'mod/**'
-      - 'fleet.conf.example'
-      - '.github/workflows/selftests.yml'
-      - '.github/workflows/selftests-shards.yml'
   # The full suite on a runner set of our own, by hand (issue #3864): e.g. runs_on
   # ["fleet-ack"] + the cluster mirror, before the release train is pointed there.
   workflow_dispatch:
@@ -97,7 +83,7 @@ on:
         type: string
         default: ''
 
-# A re-push to a PR makes its in-flight run stale; master runs always finish.
+# A re-push to a PR makes its in-flight run stale; a dispatch always finishes.
 concurrency:
   group: selftests-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -140,12 +126,11 @@ jobs:
     # three times in a row with every test green; 18 predicts ~340s.
     uses: ./.github/workflows/selftests-shards.yml
     with:
-      # The base --changed diffs against (issue #1374): the PR's target branch,
-      # or on a master push the commit before it. An all-zero `before` (a new
-      # branch) does not resolve, and the runner falls back to the full suite.
-      base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-      # a dispatch (issue #3864) names its runners, mirror and width; the PR gate and
-      # master's push run keep ubuntu-latest and the 18 below
+      # The base --changed diffs against (issue #1374): the PR's target branch; a
+      # dispatch has none and runs the full suite.
+      base: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+      # a dispatch (issue #3864) names its runners, mirror and width; the PR gate
+      # keeps ubuntu-latest and the 18 below
       sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
       runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
       mirror: ${{ inputs.mirror || '' }}
