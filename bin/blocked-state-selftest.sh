@@ -59,7 +59,7 @@ tf -f /dev/null new-session -d -s fleet704 -n worker 'printf "Blocked fixture sc
   || { printf 'blocked-state: cannot start isolated tmux server\n' >&2; exit 1; }
 TEST_PANE=$(tf display-message -p -t fleet704:worker '#{pane_id}')
 TEST_TMUX="$TEST_SOCK,1,0"
-
+export TEST_PANE TEST_TMUX
 tf set-window-option -t "$TEST_PANE" @issue 704
 tf set-window-option -t "$TEST_PANE" @ctx_pct 99
 snapshot() { tf display-message -p -t "$TEST_PANE" '#{@claude_state}/#{@claude_needs}/#{@claude_state_ts}'; }
