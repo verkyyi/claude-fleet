@@ -241,25 +241,27 @@ root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：
 `CapRelease` 的连接发 `release {sha, seq}`；整机节点程序（§6）对已在 / 已过的 seq 不理，否则写 `<state>/update-now`
 （内容 = sha，root 0644，一次 rename），守护每秒看一眼，有就立刻起 `update`（照旧持锁、照旧医生验收、照旧回退），起跑时消掉；
 目标仍是更新器自己读的入口 stable，推送只是叫醒，只前进。没托管的登录由它自己的 agent 跑一次
-`fleet-install-sync.sh --now`。定时不动：推送丢了，下一次定时照样切到（BREAK-IT `release-push-lost`）。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
-`~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接
-（与 `bin/selftest-shadow-root.sh` 同一做法：目录是真的、文件是链接，所以 `$BIN/..` 落在登录自己的目录里——
-`fleet.versions/.shared/` 只为旧版本链入 `logs/`，读一个版本——`# compat-1v`）。**安装目录只读**（#4668）：登录写的每一条记录（日志、心跳、台账）都在它自己的 `$FLEET_CONF_DIR/logs`，`fleet-install-apply.sh` 的 conf 一步把安装目录里剩下的 `logs/` 搬过去；守护模板的 `StandardErrorPath` 也指向 `~/.config/claude-fleet/`；Python 的字节码（`PYTHONPYCACHEPREFIX`）是缓存，放缓存目录（macOS `~/Library/Caches/claude-fleet/pycache`，其他 `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/pycache`，#4692），不进会被快照、搬迁的设置目录——旧版写进 `$FLEET_CONF_DIR/pycache` 的由 conf 一步删掉，拷整个家目录的几处（move-to-pod、家模板、登录归档）也都排除它。`portability-selftest.sh` PART 4 对 `bin/` 里任何写进安装目录的路径即红，selftest 的影子根也是只读的。字节只在 `<root>/<sha>/` 存一份，
-登录目录只是链接（< 1 MB），毫秒级建好——唯一的例外是 `mod/`：整棵真拷贝（几百 KB），因为 Claude Code 解析插件文件的真实路径、
-拒绝落在 `--plugin-dir` 之外的（「Path escapes plugin directory」），之前建的树由在发布版的下一拍原地补成拷贝（#2964）；最后写的 `.fleet-linked`（`{sha, root}`）是「这棵树完整、属于哪一版」的记号。
-建它的是更新器的 `link-tree <sha>`，**降权到该登录**（它的 HOME / TMPDIR / `FLEET_CONF_DIR`）运行：建树 → 一次 rename 切
-`~/.claude/fleet`（普通目录先收成版本布局）→ 跑新版的 `fleet-install-apply.sh --tree-from <旧版本目录> --tree-to <新>`
-（两目录比较模式：链接树里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
-**机器换版时所有登录同时换**：切换那一拍（`current` 换完、请守护重启之前）每个托管登录 `link-tree` 到新版；
-体检 FAIL 整机退回时每个登录一起退回；提交后、以及每拍处于发布版时，没链接到 `current` 的登录（被手动指回一份
-独立旧副本、开号时那份自己的拷贝）重新链接（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
+`fleet-install-sync.sh --now`。定时不动：推送丢了，下一次定时照样切到（BREAK-IT `release-push-lost`）。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774；#4669，EPIC #4667 C2）：
+**一个直指 `<root>/current` 的链接**——每台一份，登录名下不建树、不存版本目录。`current` 一换，每个登录就跟着换了；
+`$BIN/..` 是 root 的只读发布目录。**安装目录只读**（#4668）：登录写的每一条记录（日志、心跳、台账）都在它自己的 `$FLEET_CONF_DIR/logs`，`fleet-install-apply.sh` 的 conf 一步把安装目录里剩下的 `logs/` 搬过去；守护模板的 `StandardErrorPath` 也指向 `~/.config/claude-fleet/`；Python 的字节码（`PYTHONPYCACHEPREFIX`）是缓存，放缓存目录（macOS `~/Library/Caches/claude-fleet/pycache`，其他 `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/pycache`，#4692），不进会被快照、搬迁的设置目录——旧版写进 `$FLEET_CONF_DIR/pycache` 的由 conf 一步删掉，拷整个家目录的几处（move-to-pod、家模板、登录归档）也都排除它。`portability-selftest.sh` PART 4 对 `bin/` 里任何写进安装目录的路径即红，selftest 的影子根也是只读的。
+mod 不再按登录拷贝：`fleet_mod_dir` 给 `--plugin-dir` 的是 `<root>/<sha>/mod/fleet` 的**真实路径**（`pwd -P`），
+Claude Code 解析插件文件真实路径时都落在目录内（不报「Path escapes plugin directory」，#2964），会话一直用起步时那一版的 mod，
+它的 argv 点名这一版，`process_releases` 保这一版不被清（BREAK-IT `managed-login-mod-escapes`）。
+把登录接上去的是更新器的 `point <sha>`，**降权到该登录**（它的 HOME / TMPDIR / `FLEET_CONF_DIR`）运行：普通目录先挪进
+`fleet.versions/`（不删）→ 旧布局的 `fleet.versions/.shared/logs` 并进 `$FLEET_CONF_DIR/logs` → 一次 rename 把
+`~/.claude/fleet` 指向 `<root>/current` → 跑新版的 `fleet-install-apply.sh --tree-from <root>/<旧> --tree-to <root>/<新>`
+（两目录比较模式：发布目录里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
+**机器换版时所有登录同时换**：`current` 一动就都换了，切换那一拍（请守护重启之前）每个托管登录各跑一次 apply；
+体检 FAIL 整机退回时随 `current` 一起退回、各跑一次 apply；提交后、以及每拍处于发布版时，不是指向 `current` 的登录（被手动指回一份
+独立旧副本、开号时那份自己的拷贝、#2774 的旧链接树）重新指回（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
 `FLEET_NODE_UPDATE_RETRY` 后再试（`FLEET_NODE_UPDATE_FOLLOW=0` 关）。登录自己的 `fleet-install-sync.sh` 在托管登录上答
 `off · managed · 跟随 <root>/current (<sha>)`（这次是对的：更新器负责），不再自己去取——以前（#2688 / #2714）它按提交
 从 GitHub 取对象、每个登录各存一份。`account adopt` 接管那一刻**当场同步**做一次 `fleet-node-update.py follow <login>`
-（`FLEET_NODE_ADOPT_FOLLOW=0` 关）；`account release` 先把链接目录换回一份**独立副本**（拷贝而非链接，一个
+（`FLEET_NODE_ADOPT_FOLLOW=0` 关）；`account release` 先把链接换回一份**独立副本**（拷贝，一个
 `fleet-release: <sha> seq=<n>` 提交的 checkout，放手后它的 install-sync 走入口那条路自己活），再放回它自己的服务。
-被某个登录版本树链接着的 `<root>/<sha>` 过了保留期也不删（`.prev` 与 7 天保留都按「有人还在用」算）；登录自己退下来的
-链接树留 `FLEET_INSTALL_VERSIONS_KEEP_SECS`（7 天，给还在跑旧文件的会话），下次 `link-tree` 时清。
+旧布局留下的 `fleet.versions/<…>`（#2774 的链接树、install-sync 时代的检出、挪开的副本）在登录指向 `current` 后一律退役，
+`FLEET_INSTALL_VERSIONS_KEEP_SECS`（7 天，给还在跑旧文件的会话）后删，删空了连 `fleet.versions` 一起删（`# compat-1v`）；
+旧名 `link-tree <sha>` 读一个版本，等于 `point`。
 旧的 fleet-shell.sh 钉在某个版本目录的客户端壳镜像（`~/.cache/claude-fleet/shell/{bin,conf}` → `fleet.versions/<key>/…`）
 每拍改走登录链接（`~/.claude/fleet/…`），随安装一起动。
 `fleet doctor --installs`（#2692）一张表列本机的运行时、每个登录安装、每份客户端壳，各自是否等于 stable。
@@ -323,27 +325,27 @@ root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：
 `<state>/update.json` 记阶段，被杀后下一轮照记录做完（BREAK-IT `node-update-half`）：
 
 1. **目标**：`expected.json` 的 `release`（§3 期望状态），否则入口 `/version` 的 `stable`。
-2. **不为批次推迟**（#2934）：切换只换 `current/` 和守护，在跑的会话不受影响（各在 `fleet.versions/<sha>`），所以默认有 EPIC 批次在跑也照常切换——批次跨版本由 `/fleet-epic-run` 自己记（`fleet-epic-floor.sh`，报告写「本批跨了几个版本」），`status` 写 `hold    off`。`FLEET_EPIC_HOLD_CAP_SECS=<秒>` 是可选开关：设了之后任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长这么久——整机一个钟，从第一次 deferred 起算，换批次、换 stable 都不重开，到达目标版本才清（#2843）；超封顶照常切换，更新器以各登录身份在每个在挡批次的 EPIC 上留一条记录型说明。托管登录的 install-sync 不再自己挡第二次。每拍记下第一次看到目标版本的时间（`update.json` 的 `target_seen`），`fleet doctor --installs` 据此写「落后 stable 多久」，超过 30 分钟 WARN。签名：`status` 打出钉住的 key 指纹与当前发布版的签名 key 指纹；取包验签失败是 doctor 的 `key` FAIL（附入口现在的 key：同一把 = 读到两次构建的半对，ccquota 已自动重读一次；不同 = 入口换了钥匙，需重钉）。
+2. **不为批次推迟**（#2934）：切换只换 `current/` 和守护，在跑的会话不受影响（各自留在起步时的版本上），所以默认有 EPIC 批次在跑也照常切换——批次跨版本由 `/fleet-epic-run` 自己记（`fleet-epic-floor.sh`，报告写「本批跨了几个版本」），`status` 写 `hold    off`。`FLEET_EPIC_HOLD_CAP_SECS=<秒>` 是可选开关：设了之后任何托管账号有「有活」的 EPIC 批次在跑（#2247 的 `fleet_epic_holding`）→ `deferred`，最长这么久——整机一个钟，从第一次 deferred 起算，换批次、换 stable 都不重开，到达目标版本才清（#2843）；超封顶照常切换，更新器以各登录身份在每个在挡批次的 EPIC 上留一条记录型说明。托管登录的 install-sync 不再自己挡第二次。每拍记下第一次看到目标版本的时间（`update.json` 的 `target_seen`），`fleet doctor --installs` 据此写「落后 stable 多久」，超过 30 分钟 WARN。签名：`status` 打出钉住的 key 指纹与当前发布版的签名 key 指纹；取包验签失败是 doctor 的 `key` FAIL（附入口现在的 key：同一把 = 读到两次构建的半对，ccquota 已自动重读一次；不同 = 入口换了钥匙，需重钉）。
 3. **取包**：`ccquota release fetch --artifacts`（C7，只问入口、验钉住的公钥 `<state>/release.pub`）→ 装 ccquota 和各工具 → 写 `.release/staged.json`。没有这个标记的目录 = 没装完，删掉重取。取包可续传（#2701）：只取 `release.json` 为本机平台钉住的制品（`--pinned`），每个落 `<root>/.fetch/<sha256>.part`、断了用 Range 接着取，只有 30 秒没有一个字节才算断、没有整包 deadline；取之前把工具缓存和当前 / 上一版的制品按 sha256 硬链进去，同字节的不再下；有进展的失败不退避，下一轮接着取。进度写 `<state>/fetch.progress`（`status` 打最后一行，`fleet node install` 边取边打印）。不认这些参数的旧 ccquota 照旧整包取。
-4. **切换**：每个托管账号（降权、它自己的 HOME / TMPDIR）先跑新版的 `fleet-sessions-snapshot.sh save`，把没做完的会话钉进它的 `global/sessions.snapshot`（#2484）→ 记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）、每个托管登录的 `~/.claude/fleet`（`link-tree` + 两目录 apply，#2774）→ 请守护重启。
+4. **切换**：每个托管账号（降权、它自己的 HOME / TMPDIR）先跑新版的 `fleet-sessions-snapshot.sh save`，把没做完的会话钉进它的 `global/sessions.snapshot`（#2484）→ 记下当前（旧版）的机器体检 FAIL 作基线 → `.prev` = 旧版、`current` = 新版（各一次 rename）→ 开号缓存、账号链接、共享凭据代理的代码副本（`machine refresh`）、每个托管登录的两目录 apply（`~/.claude/fleet` 本就指向 `current`，#4669；没指过去的先 `point`）→ 请守护重启。
 5. **验证**（下一轮，新代码，`FLEET_NODE_UPDATE_SETTLE` 30 秒后）：机器体检（`fleet doctor --machine`）比基线多出 FAIL
    （判之前先 `machine refresh` 一次：由不认识 credsep 的旧更新器换上来的版本，副本还是旧的）
    → `current` 切回 `.prev`，缓存、链接、代理副本、每个托管登录的 `~/.claude/fleet` 一起回，这一版记 `skip`（回退的原因只是一条已成过去时的签名失败就当拍重试，否则 `FLEET_NODE_UPDATE_SKIP_RETRY` 6 小时后再试、同一版每回退一次翻倍、最多一周；`0` = stable 再动之前不重试——#2906）。机器体检的 `key` 行只认比最近一次验过章的取包更新的签名失败；入口的 torn read（入口给的钥匙 = 钉住的）只 WARN，不作回退依据，再请守护重启；否则 `committed`。提交或回退之后每个托管账号跑那一版的 `fleet-sessions-snapshot.sh restore`：钉住的会话按原名、原目录、原对话经 `fleet-restore.sh` 开回（已关单 / 已删目录 / fleet-down 的不开），回来几个、缺哪个记进 `update.log`（BREAK-IT `node-update-sessions`；`FLEET_NODE_UPDATE_SESSIONS=0` 关）。
-6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删，还有托管登录的版本树链接着的也不删（#2774）；没有发布版再引用的工具缓存一起清。
+6. 退下来的版本留 7 天（`FLEET_NODE_UPDATE_KEEP_SECS`），`current` / `.prev` 永不删，还有某个登录的旧链接树（#2774，`# compat-1v`）还站着的也不删；没有发布版再引用的工具缓存一起清。
 
 ### 机器体检
 
 `fleet doctor --machine`（= `fleet-node-update.py doctor`）一行一个部件：`runtime` `ccquota` `claude` `codex` `tmux`
 （各自 `--version` 必须含 `release.json` 的版本，否则 FAIL）、`daemon`（守护在跑且跑的是 `current` 那一版，否则 FAIL）、
-每个子进程、`cache`、`credsep`（机器有共享凭据代理时：副本 ≠ 发布版 FAIL；代理的 `version` ≠ 副本、等 `FLEET_NODE_CREDSEP_WAIT` 15 秒后仍是 FAIL；读不到 WARN）、每个托管账号的链接（WARN）与它的 `~/.claude/fleet`（`install`：链接到 `current` 的同一 sha 才 PASS；独立副本——哪怕同一 sha——、落后、读不出 WARN — #2688 / #2774），最后一行 `version … — 各部件 = 发布版声明`。
+每个子进程、`cache`、`credsep`（机器有共享凭据代理时：副本 ≠ 发布版 FAIL；代理的 `version` ≠ 副本、等 `FLEET_NODE_CREDSEP_WAIT` 15 秒后仍是 FAIL；读不到 WARN）、每个托管账号的链接（WARN）与它的 `~/.claude/fleet`（`install`：`~/.claude/fleet` → `<root>/current` 才 PASS；独立副本——哪怕同一 sha——、旧链接树、落后、读不出 WARN — #2688 / #4669），最后一行 `version … — 各部件 = 发布版声明`。
 退出码 = FAIL 数。普通 `fleet doctor` 多一行 `update`（最后一轮的结果；失败 / 回退 / 跳过时 WARN）。
 
 ### 新旧并存
 
 - 没有 `update.json` 的机器：体检没有 `update` 行，`--machine` 只说「不是托管机器」。
 - 旧守护没有 `update` 任务、不认 `update-restart.json`：新守护第一次由 C1 / C8 装上后才开始自己更新。
-- 开号缓存的 git 镜像一半（`claude-fleet.git`）退役（#2775）：新登录第一次装走 `fleet-login-install.sh`——托管机器上直接 `link-tree` 到 `<root>/current`（不取任何东西），`fleet-login-new.sh` 第 8 步改为 `account adopt`（不再给托管机器上的新登录渲染逐登录的 LaunchDaemon）；没有运行时才找入口的签名 stable，都没有（开发者机器）才 `git clone`。`refresh --from` 照收不用（一版），旧镜像留在盘上没人读；Claude Code 那一半照旧。
-- 托管账号自己的 `~/.claude/fleet`（守护替它跑的每个账号任务都是 `__HOME__/.claude/fleet/bin/…`）**是**更新器搬的（#2774）：一棵链接到 `<root>/<sha>/` 的目录树，随机器一起换、一起退。第一次换到带 #2774 的版本时，切换由旧更新器做（它还不链接登录），新代码在下一拍验证提交后把每个登录链接过去；在那之前登录仍是 #2688 / #2714 留下的那份自己的 worktree，`install` 行 WARN「its own copy, not linked to the runtime」。登录自己的 install-sync 在托管登录上答 `off · managed · 跟随 <root>/current`；`<root>/current` 还没有时答 `off · managed — … names none yet`。当场跟上：`sudo python3 <root>/current/bin/fleet-node-update.py follow <login>`。旧会话手上的绝对路径（`fleet.versions/<old>/…`）在 7 天保留期内仍在；链接树里文件的 `realpath` 落在 `<root>/<sha>/`（只读、共用），写东西的脚本一律写 `$FLEET_CONF_DIR`，从不经 `$BIN/..`（#4668）。
+- 开号缓存的 git 镜像一半（`claude-fleet.git`）退役（#2775）：新登录第一次装走 `fleet-login-install.sh`——托管机器上 `~/.claude/fleet` 直接链到 `<root>/current`（#4669，不取任何东西），`fleet-login-new.sh` 第 8 步改为 `account adopt`（不再给托管机器上的新登录渲染逐登录的 LaunchDaemon）；没有运行时才找入口的签名 stable，都没有（开发者机器）才 `git clone`。`refresh --from` 照收不用（一版），旧镜像留在盘上没人读；Claude Code 那一半照旧。
+- 托管账号自己的 `~/.claude/fleet`（守护替它跑的每个账号任务都是 `__HOME__/.claude/fleet/bin/…`）**是**更新器搬的（#2774；#4669 起是一个直指 `<root>/current` 的链接，随机器一起换、一起退）。第一次换到带 #4669 的版本时，切换由旧更新器做（它还按登录建树），新代码在下一拍把每个登录指向 `current`；在那之前 `install` 行 WARN「an older per-login tree, not a link to <root>/current」。登录自己的 install-sync 在托管登录上答 `off · managed · 跟随 <root>/current`；`<root>/current` 还没有时答 `off · managed — … names none yet`。当场跟上：`sudo python3 <root>/current/bin/fleet-node-update.py follow <login>`。旧会话手上的绝对路径（`fleet.versions/<old>/…`）在 7 天保留期内仍在；`~/.claude/fleet` 的 `realpath` 是 `<root>/<sha>/`（只读、共用），写东西的脚本一律写 `$FLEET_CONF_DIR`，从不经 `$BIN/..`（#4668）。
 
 ## 8. 一条命令装成托管机器（C1，#2330）
 
@@ -930,7 +932,7 @@ BREAK-IT：`personal-account-runs-machine-service`（`bin/fleet-break-it-seats-s
   | 入口：host key、`<state>/entry/keys/*`、`sshd -t`、`com.apple.access_ssh`、审计 | `entry {}`（一次 converge + audit） |
   | FDA 探针、tenants 的 sudo 读、各登录 lane 的拒绝 | `report {kind}`：`table` · `fda`（核心这条链有没有完全磁盘访问——删号的是它）· `tenants` · `lanes`，只读、不收参数 |
   | memguard、Spotlight | 已在表里（`memguard` · `power`） |
-  | 更新器（#3670） | 以 `_fleetnode` 自己跑（任务表里 `"seat": true`）：取发布、验签进 `<state>/staging/<sha>/`（工具不进根缓存，`staged.json` 记下每个工具链接要哪个工件），切换 / 回滚请核心 `switch` / `rollback`；root 的一半——启动缓存、管理员 agent 的 ccquota 副本与 kickstart、各登录的工具链接、credsep 代码副本、清理旧版本——请 `update {step}`；各登录的 link-tree、会话快照、读登录家里的安装状态经 `exec-as`（`link-tree` · `sessions` · `install-state`）；没有核心就一轮都不跑 |
+  | 更新器（#3670） | 以 `_fleetnode` 自己跑（任务表里 `"seat": true`）：取发布、验签进 `<state>/staging/<sha>/`（工具不进根缓存，`staged.json` 记下每个工具链接要哪个工件），切换 / 回滚请核心 `switch` / `rollback`；root 的一半——启动缓存、管理员 agent 的 ccquota 副本与 kickstart、各登录的工具链接、credsep 代码副本、清理旧版本——请 `update {step}`；各登录指向 current 与 apply、会话快照、读登录家里的安装状态经 `exec-as`（`point` · `sessions` · `install-state`）；没有核心就一轮都不跑 |
   | account adopt / release / forget | 不在表里，维持：只有人用 sudo 做 |
 
   守护自己只排班、记账、读人人可读的东西；`report table` 每分钟取一次（核心不在时用上一份）。
@@ -1090,7 +1092,7 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 
 - **这一版不再发的单元**：运行时 `launchd/` 里没有 `com.claude-fleet.<unit>.plist.tmpl` 的（`dispatch`——
   `fleet-dispatch.sh` 早已不在）。运行时 `launchd/` 是空的 / 不在，什么都不当「不再发」。
-- **`install-sync`**：只在该管理员的 `~/.claude/fleet` 是链进本机运行时根的版本树（`.fleet-linked` 指向这个根）时——
+- **`install-sync`**：只在该管理员的 `~/.claude/fleet` 站在本机运行时根上（直指 `<root>/current` 的链接，#4669；或 `.fleet-linked` 指向这个根的旧版本树）时——
   那时它随整机的更新器走（#3248）；自己的拷贝（git 检出）留着它，`sweep` 写明「own copy」。
 
 其余管理员单元照旧是它自己的；它的旧节点 agent `com.ccquota.agent.<admin>` 只走 §23.3 的座位交接（没座位就一直在——

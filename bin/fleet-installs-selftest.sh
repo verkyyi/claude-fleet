@@ -162,7 +162,11 @@ rm "$H/jade/.claude/fleet/bin/fleet-lib.sh"
 printf '{"sha": "%s", "root": "%s", "at": 1}\n' "$S1" "$WORK/root" > "$H/jade/.claude/fleet/.fleet-linked"
 FLEET_INSTALLS_STABLE=$S1 run
 has "G: the .fleet-linked mark is the runtime" "$OUT" "jade           1111111  = stable  来源 runtime"
-rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan" "$H/jade"
+# issue #4669: a managed login's ~/.claude/fleet is ONE link to <runtime>/current
+mkdir -p "$H/kira/.claude"; ln -s "$WORK/root/current" "$H/kira/.claude/fleet"
+FLEET_INSTALLS_STABLE=$S1 run
+has "G: a link to the runtime's current is its sha, the runtime's" "$OUT" "kira           1111111  = stable  来源 runtime"
+rm -rf "$H/erin" "$H/frank" "$H/gina" "$H/hana" "$H/ivan" "$H/jade" "$H/kira"
 
 # --- B. all at stable → 0; no stable → 2 -------------------------------------------
 rm -rf "$H/bob"

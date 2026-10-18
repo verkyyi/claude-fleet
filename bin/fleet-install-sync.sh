@@ -944,20 +944,21 @@ main() {
   # __HOME__/.claude/fleet/bin/…, so a login whose tick said off sat on the copy
   # it was bootstrapped with (issue #2688: mac-d's carol, no fleet-service.sh, its
   # fleet-answer.sh answering «no live pane»). #2688 had it follow the MACHINE's
-  # release over git; since issue #2774 (EPIC #2770 C4) the updater does it: it makes
-  # this login's ~/.claude/fleet a tree of links into the runtime's <root>/<sha>/
-  # (fleet-node-update.py link-tree) and moves it in the same switch as the
-  # machine — so this tick has nothing left to do here and says so, naming what
-  # the install follows. Its own git road for a managed login is gone (the
-  # objects came from GitHub).
-  # A login NOT taken over whose install is a tree linked into the runtime (an
-  # admin bootstrapped by link-tree) is the updater's too (issue #3248): its git
-  # road could only refuse — the tree is no checkout — and it sat on a release
-  # the runtime later pruned. The updater re-links it with the machine now.
+  # release over git; since issue #2774 (EPIC #2770 C4) the updater does it, and
+  # since issue #4669 (EPIC #4667 C2) this login's ~/.claude/fleet is ONE link to
+  # the runtime's <root>/current — it moves with the machine's switch itself — so
+  # this tick has nothing left to do here and says so, naming what the install
+  # follows. Its own git road for a managed login is gone (the objects came from
+  # GitHub).
+  # A login NOT taken over whose install stands on the runtime (an admin
+  # bootstrapped from it) is the updater's too (issue #3248): its git road could
+  # only refuse — no checkout — and it sat on a release the runtime later pruned.
   MANAGED_SHA='' MARKW=stable
-  local linked_root
+  local linked_root pointed=0
+  [ "$(readlink "$ROOT" 2>/dev/null)" = "$NODE_ROOT/current" ] && pointed=1
+  # an older per-login linked tree (#2774) names its root in .fleet-linked (compat-1v: 下一批删)
   linked_root=$(cat "$(cd "$ROOT" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null | sed -n 's/.*"root": *"\([^"]*\)".*/\1/p')
-  if { command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; } \
+  if { command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; } || [ "$pointed" = 1 ] \
      || { [ -n "$linked_root" ] && [ "$(cd "$linked_root" 2>/dev/null && pwd -P)" = "$(cd "$NODE_ROOT" 2>/dev/null && pwd -P)" ]; }; then
     MANAGED_SHA=$(managed_release)
     DEFERRED_SINCE=''
@@ -966,10 +967,10 @@ main() {
     fi
     local lk at
     lk=$(cat "$(cd "$ROOT" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null | sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p')
-    if [ "$lk" = "$MANAGED_SHA" ]; then at="linked to it"
-    elif [ -n "$lk" ]; then at="linked to $(short "$lk") — the updater moves it on its next tick"
-    else at="not linked yet (an own copy at $(short "$HEAD_SHA")) — the updater links it on its next tick"; fi
-    finish off "managed · 跟随 $NODE_ROOT/current ($(short "$MANAGED_SHA")): the machine updater (fleet-node-update.py) links this install to the runtime and moves it with the machine; $at"
+    if [ "$pointed" = 1 ]; then at="a link to it"
+    elif [ -n "$lk" ]; then at="an older tree linked to $(short "$lk") — the updater points it at current on its next tick"
+    else at="not linked yet (an own copy at $(short "$HEAD_SHA")) — the updater points it at current on its next tick"; fi
+    finish off "managed · 跟随 $NODE_ROOT/current ($(short "$MANAGED_SHA")): the machine updater (fleet-node-update.py) points this install at the runtime's current and moves it with the machine; $at"
   fi
 
   # Where stable comes from (issue #2773): the hub's signed release when this

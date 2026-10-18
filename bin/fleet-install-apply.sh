@@ -144,9 +144,10 @@
 #
 #   --tree-from <dir> --tree-to <dir>
 #             (issue #2774, EPIC #2770 C4) two version DIRECTORIES instead of two
-#             commits: a managed login's ~/.claude/fleet.versions/<sha>/ is a tree
-#             of links into the machine runtime (<root>/<sha>/, the updater's
-#             `link-tree`) with no git in it, so what moved is read by comparing
+#             commits: a managed login's ~/.claude/fleet is a link to the machine
+#             runtime's <root>/current (issue #4669; the updater's `point`; an
+#             older login a tree of links into <root>/<sha>/), with no git in
+#             it, so what moved is read by comparing
 #             the two trees file by file (.git, .release, tools/, __pycache__ and
 #             the top-level links into .shared/ are not the version's), a file's
 #             old bytes from <tree-from>. --root must resolve to <tree-to> (the

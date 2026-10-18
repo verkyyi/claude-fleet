@@ -106,7 +106,7 @@ machine's work ONCE, however many logins the machine carries:
                 The admin login's own units with nothing left to do go too (issue
                 #4363, expected.json or not): com.claude-fleet.<admin>.<unit> whose
                 unit this release ships no template for (dispatch), and its
-                install-sync once its ~/.claude/fleet is linked into this root;
+                install-sync once its ~/.claude/fleet stands on this root (→ current);
                 and a managed login still on its own credential proxy is joined to
                 the shared one (`fleet-credsep.py machine join`, no gap;
                 FLEET_NODE_CREDSEP_JOIN=0 leaves it). One log line before, one after.
@@ -4434,7 +4434,7 @@ def admin_handover_cli(paths, dry=False):
 # daemon. Two of them have nothing left to do: one whose unit the release no
 # longer ships (dispatch: fleet-dispatch.sh is gone — no
 # launchd/com.claude-fleet.<unit>.plist.tmpl in the runtime), and install-sync
-# once the admin's ~/.claude/fleet is a tree linked into this root (the machine's
+# once the admin's ~/.claude/fleet stands on this root (the machine's
 # updater moves it — #3248; its own copy keeps its install-sync). Booted out into
 # the attic like any leftover (7 days, `attic restore`), one log line before and
 # one after. Every other unit of the admin's stays its own. The admin's own node
@@ -4450,12 +4450,17 @@ def sweep_say(msg):
 
 
 def _linked_into(home, root):
-    """Is <home>/.claude/fleet a version tree linked into <root> (its .fleet-linked
-    mark names it — fleet-node-update.py linked_sha)?"""
+    """Does <home>/.claude/fleet stand on <root> — a link to <root>/current (issue
+    #4669), or an older version tree whose .fleet-linked mark names <root>
+    (compat-1v: 下一批删) — fleet-node-update.py linked_sha?"""
     live = os.path.join(home, ".claude", "fleet")
     try:
         if not os.path.islink(live):
             return False
+        t = os.readlink(live).rstrip("/")
+        if os.path.basename(t) == "current" and \
+                os.path.realpath(os.path.dirname(os.path.join(os.path.dirname(live), t))) == os.path.realpath(root):
+            return True
         m = read_json(os.path.join(os.path.realpath(live), ".fleet-linked"), None)
     except OSError:
         return False
@@ -5118,10 +5123,10 @@ def adopt_credsep(paths, login):
 
 
 def adopt_follow(paths, login):
-    """Taken over = its install taken over too (issues #2714, #2774): the
-    release's updater links the login's tools and makes its ~/.claude/fleet a
-    tree linked to the runtime NOW, in this command — a link tree is built in
-    milliseconds; the apply after it (daemons reloaded) is what takes the time.
+    """Taken over = its install taken over too (issues #2714, #4669): the
+    release's updater links the login's tools and points its ~/.claude/fleet at
+    the runtime's current NOW, in this command — one link; the apply after it
+    (daemons reloaded) is what takes the time.
     A machine with no release yet has nothing to follow."""
     upd = os.path.join(paths.runtime, "bin", "fleet-node-update.py")
     if env("FLEET_NODE_ADOPT_FOLLOW", "1") == "0" or not os.path.exists(upd):
@@ -5134,7 +5139,7 @@ def adopt_follow(paths, login):
         print("  its install follows the release on the next update tick (%s)" % e)
         return
     if r.returncode == 0:
-        print("  its ~/.claude/fleet is linked to the release %s (log: %s)"
+        print("  its ~/.claude/fleet → the runtime's current, the release %s (log: %s)"
               % ((runtime_sha(paths) or "?")[:12], os.path.join(paths.log, "update.log")))
     else:
         print("  its install did not move yet (%s) — the next update tick tries again"
@@ -5142,8 +5147,8 @@ def adopt_follow(paths, login):
 
 
 def release_install(paths, login):
-    """Let go = its install its own again (issue #2774): the linked
-    ~/.claude/fleet becomes a copy of the same files, a checkout of one
+    """Let go = its install its own again (issue #2774): its ~/.claude/fleet (a
+    link to the runtime's current, #4669) becomes a copy of the same files, a checkout of one
     `fleet-release:` commit, so the login runs and follows on its own."""
     upd = os.path.join(paths.runtime, "bin", "fleet-node-update.py")
     if not os.path.exists(upd):

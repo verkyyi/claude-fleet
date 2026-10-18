@@ -279,6 +279,13 @@ ts_scan "$D" --only bootstrap
 expect bootstrap PASS "11: a login linked to the runtime → no hit"
 printf '%s' "$(ts_row bootstrap)" | grep -q '链接本机运行时' && ok "11: …and said so" || bad "11: linked not said: $(ts_row bootstrap)"
 rm -f "$D/Users/me/.claude/fleet"; rm -rf "$D/Users/me/.claude/fleet.versions"
+# a managed login since #4669: ~/.claude/fleet → <runtime>/current, a release dir with its .release/
+mkdir -p "$D/rt/$(printf '%040d' 1)/.release"; ln -s "$D/rt/$(printf '%040d' 1)" "$D/rt/current"
+ln -s "$D/rt/current" "$D/Users/me/.claude/fleet"
+ts_scan "$D" --only bootstrap
+expect bootstrap PASS "11: a login pointed at the runtime's current → no hit"
+printf '%s' "$(ts_row bootstrap)" | grep -q '链接本机运行时' && ok "11: …and said so (#4669)" || bad "11: current link not said: $(ts_row bootstrap)"
+rm -f "$D/Users/me/.claude/fleet"; rm -rf "$D/rt"
 mv "$D/Users/me/.claude/fleet.co" "$D/Users/me/.claude/fleet"
 LOGF="$D/Users/me/.claude/fleet/.git/logs/HEAD"
 cp "$LOGF" "$WORK/HEAD.log"

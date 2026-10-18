@@ -14,7 +14,8 @@
 # 「本批跨了 K 个版本」 from `show`.
 #
 # The version is this login's live install (~/.claude/fleet, FLEET_LIVE_DIR): a
-# link into fleet.versions/<sha>[-suffix] names its sha, a plain checkout its
+# link into fleet.versions/<sha>[-suffix] names its sha, a managed login's link to
+# <runtime>/current the sha current names (#4669), a plain checkout its
 # HEAD. One line per spawn in $FLEET_CONF_DIR/global/epic-floors/<repo slug>-<N>
 # (`<epoch>\t<repo>\t<member>\t<sha>`); a member spawned twice keeps both — the
 # version count is over every line. Needs no gh and no tmux.
@@ -59,7 +60,10 @@ floor_now() {
   local live t k
   live="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
   if [ -L "$live" ]; then
-    t=$(readlink "$live"); t=${t%/}; k=${t##*/}; k=${k%%-*}
+    t=$(readlink "$live"); t=${t%/}
+    # a managed login's link names <runtime>/current, itself a link to <runtime>/<sha> (#4669)
+    [ "${t##*/}" = current ] && [ -L "$t" ] && { t=$(readlink "$t"); t=${t%/}; }
+    k=${t##*/}; k=${k%%-*}
     case "$k" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) printf '%s\n' "$k"; return 0 ;; esac
   fi
   k=$(git -C "$live" rev-parse HEAD 2>/dev/null) && [ -n "$k" ] && { printf '%s\n' "$k"; return 0; }

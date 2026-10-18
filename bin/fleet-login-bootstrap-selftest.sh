@@ -426,10 +426,12 @@ out=$(PATH="$WORK/k-bin:$PATH" FLEET_NODE_ROOT="$NR" FLEET_BOOTSTRAP_GIT_BASE="$
 eq "K rc" "$rc" 0
 eq "K never a git clone" "$(cat "$WORK/k-clone.log")" ""
 R="$HOME/.claude/fleet"
-[ -L "$R" ] || fail "K: ~/.claude/fleet is not the linked version (a link to fleet.versions/<sha>)"
-case "$(cat "$R/.fleet-linked" 2>/dev/null)" in *"\"sha\": \"$STABLE\""*) ;; *) fail "K .fleet-linked: $(cat "$R/.fleet-linked" 2>&1)" ;; esac
+[ -L "$R" ] || fail "K: ~/.claude/fleet is not a link to the runtime's current"
+eq "K ~/.claude/fleet → <runtime>/current (#4669)" "$(readlink "$R")" "$NR/current"
+eq "K it resolves to the release" "$(cd "$R" && pwd -P)" "$(cd "$NR/$STABLE" && pwd -P)"
+[ -e "$HOME/.claude/fleet.versions" ] && fail "K: a versions dir was made for the login"
 [ -d "$R/.git" ] && fail "K: the linked install has a .git"
-has "K install line" "$out" "install: ok — from the runtime: linked to this machine's runtime $NR/$STABLE"
+has "K install line" "$out" "install: ok — from the runtime: linked to this machine's runtime $NR/current → $STABLE"
 ap=$(grep '^fleet-install-apply.sh ' "$CALLS")
 has "K apply --tree-from" "$ap" "--tree-from $FLEET_CONF_DIR/global/.empty-tree"
 has "K apply --tree-to the linked tree" "$ap" "--tree-to $(cd "$R" && pwd -P) --root $R --from none --to $STABLE"

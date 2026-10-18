@@ -136,7 +136,7 @@
 #                         never followed, so a Mac's stayed on its old ccquota and opened no login
 #   runtime-gc-admin-tree bin/fleet-node-update.py keep_set / follow_installs / login_tree_rows
 #                         (#3248): the runtime pruned a release an admin's (not taken over)
-#                         linked ~/.claude/fleet still stood on — every script its agent ran gone
+#                         ~/.claude/fleet still stood on — every script its agent ran gone
 #   codex-helper-missing  bin/fleet-node-update.py helpers (#3017): codex without its
 #                         codex-code-mode-host beside it runs no shell command
 #   shift-enter-sends     conf/tmux-attention.conf, conf/tmux-view.conf
@@ -151,11 +151,11 @@
 #   managed-login-install-predates  bin/fleet-node-update.py follow_installs (#2714):
 #                         a login install from before #2688 never follows — its own
 #                         install-sync still answers off · managed
-#   managed-login-own-copy  bin/fleet-node-update.py link-tree + follow_installs
-#                         (#2774): a managed login pointed back at an own old copy
-#   managed-login-mod-escapes  bin/fleet-node-update.py _build_tree / _copy_heal +
-#                         follow_installs (#2964): the mod's files were links into the
-#                         runtime, Claude Code refused it (Path escapes plugin directory)
+#   managed-login-own-copy  bin/fleet-node-update.py point + follow_installs
+#                         (#2774, #4669): a managed login pointed back at an own old copy
+#   managed-login-mod-escapes  bin/fleet-lib.sh fleet_mod_dir (#2964, #4669): the mod's
+#                         files resolved outside --plugin-dir, Claude Code refused it
+#                         (Path escapes plugin directory)
 #   managed-cert-lapses-idle bin/fleet-login.py keep + bin/fleet-diskguard.sh managed_cert_watch +
 #                         bin/fleet-drill.sh + bin/fleet_managed.py (#4594, bin/fleet-managed-cert-selftest.sh):
 #                         a managed login's certificate and 7-day device window ran out unused
@@ -1703,8 +1703,8 @@ drill_managed_login_install_stale() {
 # managed-login-install-predates (#2714): the login's own install is older than
 # #2688, so its install-sync — the code that would move it — still answers
 # `off · managed`. The updater (root, always the release's code) moves it: since
-# #2774 by linking it to the runtime (link-tree), at the switch, the rollback and
-# every tick at the release.
+# #4669 by pointing it at <root>/current (`point`) — the switch and the rollback
+# then move it with `current` — and every tick at the release puts one back.
 drill_managed_login_install_predates() {
   CAP=60
   local t0 out
@@ -1712,13 +1712,13 @@ drill_managed_login_install_predates() {
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-follow 2>&1) \
     || { WHY="the updater did not move a login install behind the release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器在换版那一拍把每个托管登录的 ~/.claude/fleet 换成链接到 <root>/<sha> 的目录树并跑新版 apply（两目录模式），退回时一起退回，接管时当场做；放手时换回独立副本；钉在版本目录的客户端壳镜像改走登录链接"
+  WHAT="登录安装早于 #2688（自己的 install-sync 仍答 off · managed）：更新器把每个托管登录的 ~/.claude/fleet 指向 <root>/current（一个链接，不建树），换版 / 退回时随 current 一起动、各跑一次新版 apply（两目录模式），接管时当场做；旧版本目录过保留期后连 fleet.versions 一起删；放手时换回独立副本；钉在版本目录的客户端壳镜像改走登录链接"
 }
 
-# managed-login-own-copy (#2774): a managed login's ~/.claude/fleet pointed back
-# by hand at an own old copy (or left on its bootstrap copy) no longer moves with
-# the machine. The machine doctor WARNs (never FAIL), and the next update tick
-# links it to the release again — unless an EPIC batch with work holds it.
+# managed-login-own-copy (#2774, #4669): a managed login's ~/.claude/fleet pointed
+# back by hand at an own old copy (or left on its bootstrap copy) no longer moves
+# with the machine. The machine doctor WARNs (never FAIL), and the next update
+# tick points it at <root>/current again — unless an EPIC batch with work holds it.
 drill_managed_login_own_copy() {
   CAP=60
   local t0 out
@@ -1726,21 +1726,32 @@ drill_managed_login_own_copy() {
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-own-copy 2>&1) \
     || { WHY="a login pointed at an own copy was not linked back: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新链接到发布版；有活的批次在跑时先等（同 2 小时封顶）；换版一次两个登录一起链接、体检 FAIL 一起退回、每个登录目录 < 1 MB"
+  WHAT="托管登录被手动指回一份独立旧副本：fleet doctor --machine 的 install 行 WARN（不 FAIL、不回退整机），下一拍更新器把它重新指向 <root>/current；有活的批次在跑时先等（同 2 小时封顶）；换版时两个登录随 current 一起动、体检 FAIL 一起退回"
 }
 
-# managed-login-mod-escapes (#2964): link-tree made every file of a managed
-# login's tree a link into <root>/<sha>, the mod's too; Claude Code resolves a
-# plugin file's real path and refused every one outside --plugin-dir. mod/ is
-# copied now, and a tree built before is healed by the next tick at the release.
+# managed-login-mod-escapes (#2964, #4669): Claude Code resolves a plugin file's
+# real path and refuses one outside --plugin-dir. A managed login's ~/.claude/fleet
+# is a link to <root>/current now, so fleet_mod_dir hands Claude the release's
+# PHYSICAL mod dir (<root>/<sha>/mod/fleet): every file inside it, and a session
+# keeps the one release it started on even after `current` moves.
 drill_managed_login_mod_escapes() {
-  CAP=60
-  local t0 out
+  CAP=30
+  local sb rt sha t0 got f
+  sb="$WORK/mlme"; sha=$(printf 'c%.0s' $(seq 40)); rt="$sb/root"
+  mkdir -p "$rt/$sha/bin" "$rt/$sha/mod/fleet/.claude-plugin" "$rt/$sha/mod/fleet/hooks" "$sb/home/.claude"
+  for f in "$BIN"/*; do ln -s "$f" "$rt/$sha/bin/${f##*/}"; done
+  echo '{"name":"fleet"}' > "$rt/$sha/mod/fleet/.claude-plugin/plugin.json"
+  echo '// mod' > "$rt/$sha/mod/fleet/hooks/register.ts"
+  ln -s "$rt/$sha" "$rt/current"; ln -s "$rt/current" "$sb/home/.claude/fleet"
   t0=$(now)
-  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-login-mod 2>&1) \
-    || { WHY="a login tree's mod still links out of the tree: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  got=$(env -i PATH="$PATH" HOME="$sb/home" bash -c '. "$1/.claude/fleet/bin/fleet-lib.sh" >/dev/null 2>&1; fleet_mod_dir' _ "$sb/home")     || { WHY="fleet_mod_dir found no mod through the link to current"; return 1; }
+  [ "$got" = "$(cd "$rt/$sha" && pwd -P)/mod/fleet" ]     || { WHY="fleet_mod_dir gave $got, not the release's physical mod dir — Claude Code would see its files escape it"; return 1; }
+  # every file under it resolves inside it
+  while IFS= read -r f; do
+    case "$(cd "$(dirname "$f")" && pwd -P)/" in "$got"/*) ;; *) WHY="$f resolves outside $got"; return 1 ;; esac
+  done < <(find "$got" -type f -o -type l)
   SECS=$(since "$t0")
-  WHAT="托管登录版本树里 mod/ 的文件是指向运行时的链接，Claude Code 报 Path escapes plugin directory、mod 不加载：link-tree 对 mod/ 真拷贝，旧树由在发布版的下一拍原地补成拷贝，补好后不再动"
+  WHAT="托管登录的 ~/.claude/fleet 是指向 <root>/current 的链接：fleet_mod_dir 给 Claude 的是发布版里 mod 的真实目录（<root>/<sha>/mod/fleet），插件文件都在目录内、不报 Path escapes plugin directory，会话一直用它起步时那一版的 mod"
 }
 
 # shift-enter-sends (#2760): the current node/view must preserve extended keys.

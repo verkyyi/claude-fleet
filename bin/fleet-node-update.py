@@ -28,19 +28,19 @@ names — or leaves every part where it was:
              <current>/bin by `fleet-credsep.py machine refresh`, and the proxy
              restarts on it — launchd's, or the daemon's child (its `reload`)
              (issue #2435)
-  logins     every managed login's ~/.claude/fleet IS the release (issue #2774,
-             EPIC #2770 C4): ~/.claude/fleet.versions/<sha>/ is the login's own
-             real directory tree whose every file links to <root>/<sha>/ (the
-             selftest-shadow-root.sh shape: `$BIN/..` stays in the login's dir;
-             logs/ … from fleet.versions/.shared/), built by `link-tree`, demoted
-             to the login, in milliseconds; one rename of ~/.claude/fleet; then
-             that version's fleet-install-apply.sh --tree-from <old> --tree-to
-             <new> (daemons reloaded). The switch moves every login with the
-             machine, the rollback moves them back, a tick at the release puts
-             back one that drifted; a retired <root>/<sha> a login still links
-             into is not pruned. `account release` turns it back into an own copy
-             (`release-install`). A client-shell mirror pinned to one version dir
-             is re-pointed through its link
+  logins     every managed login's ~/.claude/fleet IS the release (issue #4669,
+             EPIC #4667 C2): one link, straight to <root>/current — the machine's
+             one copy, read-only (#4668: a login's records are its
+             $FLEET_CONF_DIR/logs) — so the switch and the rollback move every
+             login with `current`; each login then runs that version's
+             fleet-install-apply.sh --tree-from <root>/<old> --tree-to
+             <root>/<new> (daemons reloaded), demoted (`point`). A tick puts back
+             one that drifted (an own copy pointed at by hand). An older
+             per-login tree (~/.claude/fleet.versions/<sha>/, #2774 — compat-1v)
+             is moved off at the next tick and goes after its keep. `account
+             release` turns it back into an own copy (`release-install`). A
+             client-shell mirror pinned to one version dir is re-pointed through
+             its link
   supervisor the daemon itself: it runs from `current`, so it is the LAST step —
              the tick asks it to restart (<state>/update-restart.json) and
              launchd's KeepAlive starts the new one
@@ -52,7 +52,7 @@ names each tools/bin link's artifact — and asks the root core for the rest:
 `switch` / `rollback` (the core copies staging, fills <root>/tools, re-verifies,
 signs bin/ccquota with the machine identity), `update {step}` for the root half
 (`root outside|credsep|prune`, below), `exec-as` for what runs as a login
-(link-tree, link-account, sessions, install-state). The hub's address is
+(point, link-account, sessions, install-state). The hub's address is
 <state>/hub-url (machine.env is root's). Seated with no core: nothing runs.
 
 All of them hang off ONE link: `current` → <sha> moves by one rename(2), and
@@ -78,7 +78,7 @@ A tick, in order (each a `result` in <state>/update.json, one log line):
               FLEET_NODE_UPDATE_RETRY (3600) seconds ago.
   deferred    only when the person turned the EPIC hold on (issue #2934: off by
               default — FLEET_EPIC_HOLD_CAP_SECS 0). A switch never stops a
-              running session (each is on its own fleet.versions/<sha>) — only
+              running session (it keeps the release it started on) — only
               current/ and the daemons move — so a batch's members may span
               versions; /fleet-epic-run records the stable each member started on.
               With a cap N > 0: a running EPIC batch WITH WORK holds the machine
@@ -130,9 +130,10 @@ Usage:
   fleet-node-update.py install-state <root> [--at] · sessions save|restore <sha>
                                             (internal, AS the login through exec-as, #3670)
   fleet-node-update.py link-account <login> (internal: run demoted to <login>)
-  fleet-node-update.py link-tree <sha> [--no-apply]
-                                            (internal, run AS the login: its install →
-                                            a tree linked to <root>/<sha>, issue #2774)
+  fleet-node-update.py point <sha> [--from <sha>] [--no-apply]
+                                            (internal, run AS the login: ~/.claude/fleet →
+                                            <root>/current + apply, issue #4669; `link-tree
+                                            <sha>` is its old name, compat-1v)
   fleet-node-update.py release-copy         (internal, AS the login: an own copy again)
   fleet-node-update.py follow <login>       links + install onto the release now
                                             (`account adopt` runs it, issue #2714)
@@ -156,9 +157,10 @@ FLEET_NODE_USERS, plus
                              installer's tick), a resumable fetch goes on next tick
   FLEET_NODE_UPDATE_LIB      the fleet-lib.sh the EPIC gate sources (default <current>/bin)
   FLEET_NODE_UPDATE_FOLLOW   0 = never move a login's install (default 1)
-  FLEET_NODE_FOLLOW_TIMEOUT  seconds one login's link-tree + apply may run (1200)
-  FLEET_INSTALL_VERSIONS_KEEP_SECS  how long a login's retired version tree stays (604800);
-                             one whose release the machine pruned goes at once
+  FLEET_NODE_FOLLOW_TIMEOUT  seconds one login's point + apply may run (1200)
+  FLEET_INSTALL_VERSIONS_KEEP_SECS  how long an older per-login version tree stays once the
+                             login points at current (604800, compat-1v); one whose release
+                             the machine pruned goes at once
 """
 from __future__ import print_function
 
@@ -718,7 +720,7 @@ def hold_row(p, st):
     if not cap or (st or {}).get("result") != "deferred" or not h.get("since"):
         return None
     return ("WARN", "install", "EPIC batches hold the machine on %s, not %s, since %s (%dm of %dm, one clock for "
-            "the machine) — a switch would not stop a running session (each is on its own fleet.versions/<sha>); "
+            "the machine) — a switch would not stop a running session (it keeps the release it started on); "
             "the hold only keeps a batch's new workers on the version its others run"
             % ((link_sha(p.current) or "?")[:12], (h.get("target") or "?")[:12], iso(h["since"]),
                (now() - h["since"]) // 60, cap // 60))
@@ -842,8 +844,8 @@ class Updater(object):
     # hold does not restart it — with 3-7 batches running in parallel and stable
     # moving every hour or two, a clock keyed on the target never reached the cap
     # (mac-d 2026-10-10: two stables behind, deferred every 5 minutes).
-    # What the hold buys is small: a switch never stops a running session (each
-    # sits on its own fleet.versions/<sha>); it only moves `current/` and the
+    # What the hold buys is small: a switch never stops a running session (it
+    # keeps the release it started on); it only moves `current/` and the
     # daemons, so new workers of a batch start on the version its others run.
     def epic_hold(self, target):
         if not hold_cap():   # off by default (issue #2934): a new stable switches at once
@@ -878,8 +880,8 @@ class Updater(object):
             if h.get("released") != target:
                 h["released"] = target
                 self.log("hold released — EPIC batches have held this machine since %s, more than %ds (one clock "
-                         "for the machine, #2843); switching to %s. Running sessions stay on their own "
-                         "fleet.versions/<sha>; only current/ and the daemons move, so new workers start on %s: %s"
+                         "for the machine, #2843); switching to %s. Running sessions keep the release "
+                         "they started on; only current/ and the daemons move, so new workers start on %s: %s"
                          % (iso(h["since"]), int(cap), target[:12], target[:12], "; ".join(held)))
                 self.note_release(marks, target, now() - h["since"], cap)
             return None
@@ -904,7 +906,7 @@ class Updater(object):
             seen.add((repo, n))
             body = ("⏱ 整机更新放行：EPIC 批次已连续挡住 **%s** 的整机更新 %d 分钟（封顶 %d 分钟，按机器计，"
                     "`FLEET_EPIC_HOLD_CAP_SECS`，#2843），%s 起切换 `%s` → `%s`。\n\n"
-                    "在跑的会话不受影响（各自在 `fleet.versions/<sha>` 上）；只换 `current/` 和守护，"
+                    "在跑的会话不受影响（各自留在起步时的版本上）；只换 `current/` 和守护，"
                     "本批之后新开的 worker 在新版本上起。"
                     % (socket.gethostname().split(".")[0], held // 60, cap // 60, iso(now()), cur[:12], target[:12]))
             uid, gid, home = ident
@@ -1431,20 +1433,19 @@ class Updater(object):
                 notes.append("%s: %s" % (login, (err or out)[:120]))
         return notes
 
-    # -- every managed login's ~/.claude/fleet IS the release (issues #2714, #2774)
-    def follow_installs(self, only=None, sha=None, force=False):
-        """A managed login's ~/.claude/fleet not LINKED to <sha> (default: the
-        release `current` names) gets `link-tree <sha>` run for it, demoted (its
-        HOME / TMPDIR / FLEET_CONF_DIR): a tree of links into <root>/<sha>, one
-        rename of its link, that version's apply --tree-from/--tree-to (issue
-        #2774 — before it, the release's install-sync, which fetched its own copy
-        from GitHub: #2714). The switch and the rollback move every login with
-        the machine (force); a tick at the release puts back one that drifted (a
+    # -- every managed login's ~/.claude/fleet IS the release (issues #2714, #4669)
+    def follow_installs(self, only=None, sha=None, force=False, frm=None):
+        """A managed login's ~/.claude/fleet that is not a link to <root>/current
+        gets `point <sha>` run for it, demoted (its HOME / TMPDIR /
+        FLEET_CONF_DIR): one rename of its link, then that version's apply
+        --tree-from/--tree-to (issue #4669 — before it, a per-login tree of links
+        built by `link-tree`, #2774). A login that points there already moved
+        with `current`; the switch and the rollback (force) still run each one's
+        apply from <frm>. A tick at the release puts back one that drifted (a
         login pointed by hand at an own old copy — BREAK-IT
         managed-login-own-copy), unless an EPIC batch with work holds it (only
-        with the hold turned on, #2934). One
-        already linked costs one read; one that did not move is tried again on the
-        same release only after FLEET_NODE_UPDATE_RETRY. -> notes."""
+        with the hold turned on, #2934). One that did not move is tried again on
+        the same release only after FLEET_NODE_UPDATE_RETRY. -> notes."""
         self.follow_held = False
         sha = sha or link_sha(self.p.current)
         if not sha or env_num("FLEET_NODE_UPDATE_FOLLOW", 1) == 0 or not os.path.isdir(self.p.rel(sha)):
@@ -1452,10 +1453,10 @@ class Updater(object):
         tried = self.st.setdefault("follow", {})
         notes, todo = [], []
         managed = fns.managed_accounts(self.p.sup)
-        # a login NOT taken over whose ~/.claude/fleet is a tree linked into this
-        # root (an admin bootstrapped by link-tree — issue #3248) moves with the
+        # a login NOT taken over whose ~/.claude/fleet stands on this root (an
+        # admin bootstrapped from the runtime — issue #3248) moves with the
         # machine too: nothing else does (its install-sync answers off), and its
-        # node agent exec's this tree's bin/. Its own copy is never touched.
+        # node agent exec's this release's bin/. Its own copy is never touched.
         cands = sorted(managed.items()) + [(l, None) for l, _, _, _ in linked_logins(self.p.root)
                                            if l not in managed]
         for login, why in cands:
@@ -1472,37 +1473,38 @@ class Updater(object):
             if not ist["exists"]:
                 tried.pop(login, None)
                 continue
-            if ist["linked"] == sha and not ist["escapes"]:
+            t = tried.get(login) or {}
+            failed = t.get("to") == sha
+            if ist.get("pointed") and not failed and not force:
                 tried.pop(login, None)
                 continue
-            t = tried.get(login) or {}
-            if not (only or force) and t.get("to") == sha and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
-                notes.append("install %s: not linked to %s (%s)" % (login, sha[:12], t.get("said", "")))
+            if not (only or force) and failed and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
+                notes.append("install %s: not on %s (%s)" % (login, sha[:12], t.get("said", "")))
                 continue
             todo.append((login, ident, path))
         if todo and not (only or force):
             hold = self.epic_hold(sha)
             if hold:
                 self.follow_held = True
-                return notes + ["install %s: not linked to %s yet — an EPIC batch with work: %s"
+                return notes + ["install %s: not pointed at %s yet — an EPIC batch with work: %s"
                                 % (", ".join(t[0] for t in todo), sha[:12], hold)]
         for login, ident, path in todo:
             was = (self.install_state(login, ident, path, at=True) or {}).get("at")
-            rc, out, err = as_login(login, ["link-tree", sha], timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200),
-                                    root=self.p.root)
+            rc, out, err = as_login(login, ["point", sha] + (["--from", frm] if frm else []),
+                                    timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200), root=self.p.root)
             said = ((out + "\n" + err).strip().splitlines() or ["rc %d" % rc])[-1][:200]
-            now_at = (self.install_state(login, ident, path) or {}).get("linked")
+            ok = rc == 0 and bool((self.install_state(login, ident, path) or {}).get("pointed"))
             self.log("install %s: %s → %s · rc %d · %s" % (login, (was or "unreadable")[:12],
-                                                          (now_at or "not linked")[:12], rc, said))
-            if now_at == sha:
+                                                          sha[:12] if ok else "not pointed", rc, said))
+            if ok:
                 tried.pop(login, None)
             else:
                 tried[login] = {"at": now(), "to": sha, "rc": rc, "said": said}
-                notes.append("install %s: not linked to %s (rc %d %s)" % (login, sha[:12], rc, said))
+                notes.append("install %s: not on %s (rc %d %s)" % (login, sha[:12], rc, said))
         return notes
 
     def install_state(self, login, ident, path, at=False):
-        """{exists, linked, escapes, at} of a login's ~/.claude/fleet — read here
+        """{exists, linked, pointed, at} of a login's ~/.claude/fleet — read here
         when this process may (root, the login itself, a home it can read), else
         asked of the login through the core (`install-state`, exec-as — the seat
         reads no one's home, #3670). None: neither."""
@@ -1524,28 +1526,22 @@ class Updater(object):
         return r
 
     def linked_releases(self):
-        """The releases a login stands on (issue #2774; any login, #3248): the tree its
-        ~/.claude/fleet names and its .prev. A retired tree of its (kept a while
-        for the sessions started from it) holds nothing by itself — a running
-        process that names it is process_releases' (issue #3100)."""
+        """The releases a login stands on (any login, #3248): `current` for one
+        that points there (issue #4669), the release an older linked tree names
+        until it is moved (compat-1v: 下一批删). A tree it keeps a while for the
+        sessions started from it holds nothing by itself — a running process
+        that names it is process_releases' (issue #3100)."""
         used = set()
-        # every login's, not only a managed one's (issue #3248: mac-e's admin
-        # dave stood on a tree into fc6b100 — pruned, and every script its
-        # agent exec'd was a dangling link)
         for login in sorted(set(fns.managed_accounts(self.p.sup)) | set(local_logins())):
             ident = fns.account_ident(login)
             if ident is None:
                 continue
-            live = os.path.join(ident[2], ".claude", "fleet")
-            vers = live + ".versions"
-            trees = [os.path.realpath(live)] if os.path.islink(live) else []
-            pv = (_read_lines(os.path.join(vers, ".prev")) or [""])[0]
-            if pv:
-                trees.append(os.path.join(vers, pv))
-            for d in trees:
-                m = linked_mark(d)
-                if m and os.path.realpath(m["root"]) == os.path.realpath(self.p.root):
-                    used.add(m["sha"])
+            try:
+                sha = linked_sha(os.path.join(ident[2], ".claude", "fleet"), self.p.root)
+            except OSError:
+                sha = None
+            if sha:
+                used.add(sha)
         return used
 
     # -- credsep's code copy follows `current` (issue #2435, EPIC #2329 共同约定 3)
@@ -1650,9 +1646,9 @@ class Updater(object):
                 swap_link(self.p.prev, self.p.rel(frm))
             swap_link(self.p.current, self.p.rel(to))
             self.place_admin_gate(to)
-        # every managed login moves WITH the machine (issue #2774): its install is
-        # a tree of links into the release, re-pointed in the same tick
-        notes = self.sync_outside() + self.sync_credsep() + self.follow_installs(sha=to, force=True)
+        # every managed login moves WITH the machine: its install is a link to
+        # `current` (issue #4669); each one's apply runs in the same tick
+        notes = self.sync_outside() + self.sync_credsep() + self.follow_installs(sha=to, force=True, frm=frm)
         self.st.update(phase="switched", switched_at=now(), notes=notes)
         if frm:
             self.st["retired"][frm] = now()
@@ -1690,7 +1686,7 @@ class Updater(object):
             self.place_admin_gate(frm)
         self.sync_outside()
         self.sync_credsep()
-        self.follow_installs(sha=frm, force=True)     # the logins go back with it
+        self.follow_installs(sha=frm, force=True, frm=to)     # the logins go back with it
         prev = self.st["skip"].get(to) or {}
         self.st["skip"] = {to: {"at": now(), "reason": why, "rows": self.st.pop("rollback_rows", None) or skip_rows(why),
                                 "tries": int(prev.get("tries") or 1) + 1 if prev else 1}}
@@ -1903,7 +1899,7 @@ class StageError(Exception):
 
 def process_releases(root):
     """The release shas a running process names by path — `<root>/<sha>/…` or a
-    login's `fleet.versions/<sha>[-linked]/…` (issue #3100): a session or daemon
+    login's older `fleet.versions/<sha>[-linked]/…` (issue #3100): a session or daemon
     started from a version keeps it until it ends. One `ps`; FLEET_NODE_PS_CMD
     is the selftests' seam (a file of `ps` lines)."""
     seam = os.environ.get("FLEET_NODE_PS_CMD")
@@ -2092,14 +2088,17 @@ def login_tree_rows(p):
             real = os.path.realpath(live)
             gone = not os.path.isdir(real)
             m = None if gone else linked_mark(real)
+            on = pointed(live, p.root)
         except OSError:
             continue
         fix = "sudo python3 '%s' follow %s" % (os.path.join(p.current, "bin", "fleet-node-update.py"), login)
         if gone:
             rows.append(("FAIL", "login-tree", "%s: ~/.claude/fleet → %s, which is gone — nothing under it runs; "
-                         "sudo -u %s HOME=%s python3 '%s' link-tree %s" % (
+                         "sudo -u %s HOME=%s python3 '%s' point %s" % (
                              login, real, login, ident[2], os.path.join(p.current, "bin", "fleet-node-update.py"),
                              link_sha(p.current) or "<current sha>")))
+        elif on:
+            ok += 1
         elif m and os.path.realpath(m["root"]) == os.path.realpath(p.root):
             if os.path.isdir(os.path.join(p.root, m["sha"], "bin")):
                 ok += 1
@@ -2107,7 +2106,7 @@ def login_tree_rows(p):
                 rows.append(("FAIL", "login-tree", "%s: ~/.claude/fleet links into %s, a release the runtime no longer "
                              "has — every bin/ file is a dangling link; %s" % (login, p.rel(m["sha"]), fix)))
     if ok and not rows:
-        rows.append(("PASS", "login-tree", "%d login tree(s) linked into releases that are here" % ok))
+        rows.append(("PASS", "login-tree", "%d login(s) on releases that are here" % ok))
     return rows
 
 
@@ -2192,9 +2191,9 @@ def shell_row(p, st):
 
 
 def account_install_sha(login, ident, path, root=None):
-    """The release a login's ~/.claude/fleet is at, or None: the one its linked
-    tree names (issue #2774 — read, never run), else the commit its checkout is
-    at. git runs AS the login (root never runs git on a tree someone else owns —
+    """The release a login's ~/.claude/fleet is at, or None: <root>/current's
+    when it links there (issue #4669), the one an older linked tree names (#2774
+    — read, never run), else the commit its checkout is at. git runs AS the login (root never runs git on a tree someone else owns —
     its config could run code), and only in a dir that has its own .git (never a
     repo it merely sits inside); a doctor that is neither root nor that login
     reads only a versions link's name."""
@@ -2214,33 +2213,37 @@ def account_install_sha(login, ident, path, root=None):
         if rc == 0 and SHA_RE.match(out):
             return out
     if os.path.islink(path):
-        name = os.path.basename(os.readlink(path).rstrip("/"))[:40]
-        if SHA_RE.match(name):
-            return name
+        for t in (os.readlink(path), os.path.realpath(path)):
+            name = os.path.basename(t.rstrip("/"))[:40]
+            if SHA_RE.match(name):
+                return name
     return None
 
 
 def install_row(p, cur, login, ident):
     """Is a managed login's ~/.claude/fleet (every account task runs from it) the
-    machine's release — a tree LINKED to <root>/<current> (issue #2774)? An own
-    copy, even of the same sha, is not (BREAK-IT managed-login-own-copy). WARN,
+    machine's release — a link straight to <root>/current (issue #4669)? An own
+    copy, even of the same sha, is not (BREAK-IT managed-login-own-copy), nor an
+    older per-login tree (#2774) the next tick moves off. WARN,
     never FAIL: a login that has not moved yet is not the release's fault, and a
     FAIL would roll the whole machine back. No install = no row."""
     path = os.path.join(ident[2], ".claude", "fleet")
     if not os.path.lexists(path):
         return None
-    if linked_sha(path, p.root) == cur:
-        return ("PASS", "install", "%s: ~/.claude/fleet linked to the release %s (%s)" % (login, cur[:12], p.rel(cur)))
+    if pointed(path, p.root) and link_sha(p.current) == cur:
+        return ("PASS", "install", "%s: ~/.claude/fleet → %s, the release %s" % (login, p.current, cur[:12]))
     shape = "link" if os.path.islink(path) else "plain directory"
     sha = account_install_sha(login, ident, path, p.root)
-    fix = "the updater links it to the runtime every tick (issue #2774); now: sudo python3 '%s' follow %s" % (
+    fix = "the updater points it at %s every tick (issue #4669); now: sudo python3 '%s' follow %s" % (
+        p.current, 
         os.path.join(p.current, "bin", "fleet-node-update.py"), login)
     t = ((read_json(p.file, {}) or {}).get("follow") or {}).get(login) or {}
     if t.get("to") == cur:
         fix = "the updater's last try %s: rc %s %s; %s" % (iso(t.get("at")), t.get("rc"), t.get("said", ""), fix)
     if sha == cur:
-        return ("WARN", "install", "%s: ~/.claude/fleet at %s but its own copy (%s), not linked to the runtime — "
-                "it does not move with the machine; %s" % (login, cur[:12], shape, fix))
+        what = "an older per-login tree" if linked_sha(path, p.root) else "its own copy (%s)" % shape
+        return ("WARN", "install", "%s: ~/.claude/fleet at %s but %s, not a link to %s — "
+                "it does not move with the machine; %s" % (login, cur[:12], what, p.current, fix))
     if not sha:
         return ("WARN", "install", "%s: ~/.claude/fleet (%s) — its version is unreadable, NOT the release's; %s"
                 % (login, shape, fix))
@@ -2446,48 +2449,60 @@ def follow_shell_mirror(home):
     return bad
 
 
-# --------------------------------------------------------------- link-tree ------
-# A managed login's ~/.claude/fleet IS the machine's runtime (issue #2774, EPIC
-# #2770 C4): ~/.claude/fleet.versions/<sha>/ stays the login's own REAL directory
-# tree, but every file in it is a link to <root>/<sha>/<same path> — the
-# selftest-shadow-root.sh shape, so `$BIN/..` still lands in the login's dir
-# (its logs/, epic-pages/, fleet.conf* come from fleet.versions/.shared/, as
-# install-sync has always linked them). The bytes live once, under <root>; the
-# login's dir is links only, built in milliseconds. LINKED, written last, is the
-# mark that a tree is whole and whose it is.
+# --------------------------------------------------------------- point ----------
+# A managed login's ~/.claude/fleet IS the machine's runtime (issue #4669, EPIC
+# #4667 C2): ONE link, straight to <root>/current — so the switch that moves
+# `current` moves every login with it, and nothing is built per login. The
+# install is read-only (#4668: every record a login writes is its
+# $FLEET_CONF_DIR/logs); the mod loads from the release's real directory
+# (fleet_mod_dir prints the physical path), so no copy of it per login either.
+# Before it (issue #2774) the link named ~/.claude/fleet.versions/<sha>/, a tree
+# of per-file links built by `link-tree`: such a tree is still READ (its LINKED
+# mark — compat-1v: 下一批删) so `point` can move a login off it, and the trees
+# a login keeps go once FLEET_INSTALL_VERSIONS_KEEP_SECS has passed.
 LINKED = ".fleet-linked"
 # what the runtime has that is not the version's code (the release's own record,
-# the tool artifacts current/tools/bin carries) and never a version's
+# the tool artifacts current/tools/bin carries) — never copied into an own copy
 TREE_SKIP_TOP = (".release", "tools")
 TREE_SKIP = ("__pycache__", ".DS_Store", LINKED)
-# what is COPIED, not linked (issue #2964): Claude Code resolves a plugin's files
-# to their real path and refuses one outside --plugin-dir ("Path escapes plugin
-# directory"), so the mod (fleet_mod_dir = ~/.claude/fleet/mod/fleet) holds its
-# own bytes in every login tree — a few hundred KB
-TREE_COPY_TOP = ("mod",)
 
 
 def linked_mark(d):
-    """{sha, root, at} of a linked version tree, or None (not one, or not whole)."""
+    """{sha, root, at} of an older linked version tree, or None (compat-1v: 下一批删)."""
     m = read_json(os.path.join(d, LINKED), None)
     return m if isinstance(m, dict) and SHA_RE.match(str(m.get("sha") or "")) and m.get("root") else None
+
+
+def pointed(path, root):
+    """True when <path> (a login's ~/.claude/fleet) is a link straight to
+    <root>/current (issue #4669): the machine's release, moved with it."""
+    try:
+        t = os.readlink(path).rstrip("/")
+    except OSError:
+        return False
+    if not os.path.isabs(t):
+        t = os.path.join(os.path.dirname(path), t)
+    return os.path.basename(t) == "current" and \
+        os.path.realpath(os.path.dirname(t)) == os.path.realpath(root)
 
 
 def install_state(login, ident, path, root, at=False):
     """What follow_installs needs of <path> (a login's ~/.claude/fleet); with <at>
     also the release it is at (account_install_sha — may run git as the login)."""
     if not os.path.lexists(path):
-        return {"exists": False, "linked": None, "escapes": False, "at": None}
-    ls = linked_sha(path, root)
-    return {"exists": True, "linked": ls, "escapes": bool(ls) and _copy_escapes(os.path.realpath(path)),
+        return {"exists": False, "linked": None, "pointed": False, "at": None}
+    return {"exists": True, "linked": linked_sha(path, root), "pointed": pointed(path, root),
             "at": account_install_sha(login, ident, path, root) if at else None}
 
 
 def linked_sha(path, root):
-    """The release <path> (a login's ~/.claude/fleet) is LINKED to under <root>,
-    or None: a plain checkout, an own copy, a tree of another root's."""
+    """The release <path> (a login's ~/.claude/fleet) stands on under <root>, or
+    None: <root>/current's when it links there; an older linked tree's mark
+    (compat-1v: 下一批删); never a plain checkout or an own copy."""
     if not os.path.islink(path):
         return None
+    if pointed(path, root):
+        return link_sha(os.path.join(root, "current"))
     m = linked_mark(os.path.realpath(path))
     if not m or os.path.realpath(m["root"]) != os.path.realpath(root):
         return None
@@ -2516,77 +2531,27 @@ def local_logins():
 
 
 def linked_logins(root):
-    """[(login, ident, live, mark)] of every login — taken over or not (an admin,
-    issue #3248) — whose ~/.claude/fleet is a tree LINKED into <root>; a login's
+    """[(login, ident, live, sha)] of every login — taken over or not (an admin,
+    issue #3248) — whose ~/.claude/fleet stands on <root> (linked_sha); a login's
     own copy (a git checkout) is never one. A home this process cannot read is
     not looked at."""
     out = []
     for login, ident in sorted(local_logins().items()):
         live = os.path.join(ident[2], ".claude", "fleet")
         try:
-            if not os.path.islink(live):
-                continue
-            m = linked_mark(os.path.realpath(live))
+            sha = linked_sha(live, root)
         except OSError:
             continue
-        if m and os.path.realpath(m["root"]) == os.path.realpath(root):
-            out.append((login, ident, live, m))
+        if sha:
+            out.append((login, ident, live, sha))
     return out
 
 
-def _own_entries(d, against=None):
-    """The top-level names of version dir <d> that are NOT the version's code —
-    logs/, epic-pages/, fleet.conf backups … (what .shared/ holds): a linked
-    tree's real entries that its release lacks, a checkout's untracked ones, a
-    plain copy's (a bootstrap's, no git) entries release <against> lacks."""
-    m = linked_mark(d)
-    names = [n for n in os.listdir(d) if n not in (".git", LINKED) + TREE_SKIP and ".switch." not in n]
-    if m:
-        rel = os.path.join(m["root"], m["sha"])
-        return [n for n in names if not os.path.islink(os.path.join(d, n)) and not os.path.lexists(os.path.join(rel, n))]
-    if os.path.lexists(os.path.join(d, ".git")):
-        rc, out, _ = run(["git", "-C", d, "status", "--porcelain", "--ignored", "--untracked-files=normal"], timeout=60)
-        if rc != 0:
-            return []
-        return sorted(set(l[3:].rstrip("/") for l in out.splitlines()
-                          if l[:2] in ("??", "!!") and "/" not in l[3:].rstrip("/")) & set(names))
-    if against:
-        return [n for n in names if not os.path.islink(os.path.join(d, n))
-                and not os.path.lexists(os.path.join(against, n))]
-    return []
-
-
-def _share(vers, d, against=None):
-    """What every version shares: <d>'s own top-level entries move to
-    <vers>/.shared/ (unless it holds that name already) and are linked back;
-    then every .shared entry <d> lacks is linked in (install-sync's vers_shared)."""
-    sh = os.path.join(vers, ".shared")
-    os.makedirs(sh, exist_ok=True)
-    for n in _own_entries(d, against):
-        src = os.path.join(d, n)
-        if os.path.islink(src) or os.path.lexists(os.path.join(sh, n)):
-            continue
-        try:
-            os.rename(src, os.path.join(sh, n))
-            os.symlink(os.path.join("..", ".shared", n), src)
-        except OSError:
-            pass
-    for n in os.listdir(sh):
-        dst = os.path.join(d, n)
-        if not os.path.lexists(dst):
-            try:
-                os.symlink(os.path.join("..", ".shared", n), dst)
-            except OSError:
-                pass
-
-
-def _build_tree(src, dst, link=True):
-    """<dst> mirrors release <src>: real directories; every file a link to its
-    <src> path (link) or a copy of its bytes (an own copy — `release-copy`)."""
+def _build_tree(src, dst):
+    """<dst> = a copy of release <src>'s files (an own copy — `release-copy`)."""
     os.makedirs(dst)
     for d, dirs, files in os.walk(src):
         rel = os.path.relpath(d, src)
-        copy = not link or rel.split(os.sep)[0] in TREE_COPY_TOP
         dirs[:] = sorted(n for n in dirs if n not in TREE_SKIP and not (rel == "." and n in TREE_SKIP_TOP))
         for n in dirs:
             p = os.path.join(d, n)
@@ -2602,52 +2567,11 @@ def _build_tree(src, dst, link=True):
             q = os.path.normpath(os.path.join(dst, rel, n))
             if os.path.islink(p):
                 os.symlink(os.readlink(p), q)
-            elif not copy:
-                os.symlink(p, q)
             else:
                 shutil.copy2(p, q)
     for d, dirs, _ in os.walk(dst):
         dirs[:] = [n for n in dirs if not os.path.islink(os.path.join(d, n))]
         os.chmod(d, 0o755)
-
-
-def _copy_escapes(tree):
-    """True when a TREE_COPY_TOP file of linked tree <tree> is still a link into
-    the runtime (built before issue #2964): `link-tree` heals it."""
-    for top in TREE_COPY_TOP:
-        for d, dirs, files in os.walk(os.path.join(tree, top)):
-            dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x))]
-            for f in files:
-                q = os.path.join(d, f)
-                if os.path.islink(q) and os.path.isabs(os.readlink(q)):
-                    return True
-    return False
-
-
-def _copy_heal(tree):
-    """A linked tree built before issue #2964 linked its TREE_COPY_TOP files too:
-    each such link into the runtime becomes a copy of its bytes, in place (one
-    rename a file — a running session's next mod reload finds real files). -> how
-    many were healed."""
-    n = 0
-    for top in TREE_COPY_TOP:
-        for d, dirs, files in os.walk(os.path.join(tree, top)):
-            dirs[:] = [x for x in dirs if not os.path.islink(os.path.join(d, x))]
-            for f in files:
-                q = os.path.join(d, f)
-                if not (os.path.islink(q) and os.path.isabs(os.readlink(q))):
-                    continue
-                tmp = q + ".heal.%d" % os.getpid()
-                try:
-                    shutil.copy2(os.path.realpath(q), tmp)
-                    os.rename(tmp, q)
-                    n += 1
-                except OSError:
-                    try:
-                        os.remove(tmp)
-                    except OSError:
-                        pass
-    return n
 
 
 def _retire(vers, key, when=None):
@@ -2663,163 +2587,183 @@ def _retire(vers, key, when=None):
         pass
 
 
-def _point(live, vers, new):
-    """~/.claude/fleet → <new> by one rename(2); a plain-directory install is
-    adopted first (moved to <vers>/<its HEAD>, as fleet_versions_adopt does).
-    -> the old version dir (None: there was none)."""
-    old = None
-    if os.path.islink(live):
-        old = os.path.realpath(live)
-    elif os.path.isdir(live):
-        rc, out, _ = run(["git", "-C", live, "rev-parse", "HEAD"], timeout=30)
-        key = out if rc == 0 and SHA_RE.match(out) else "own-%d" % int(now())
-        if os.path.lexists(os.path.join(vers, key)):
-            key = "%s-%d" % (key, int(now()))
-        os.makedirs(vers, exist_ok=True)
-        old = os.path.join(vers, key)
-        os.rename(live, old)
-    swap_link(live, new)
-    if old and os.path.realpath(old) != os.path.realpath(new):
-        with open(os.path.join(vers, ".prev.tmp"), "w") as f:
-            f.write(os.path.basename(old) + "\n")
-        os.rename(os.path.join(vers, ".prev.tmp"), os.path.join(vers, ".prev"))
-        _retire(vers, os.path.basename(old), now())
-    _retire(vers, os.path.basename(new))
-    return old
+def _aside(live, vers):
+    """A plain-directory ~/.claude/fleet (an own copy, a checkout) moves to
+    <vers>/<its HEAD> — kept, never deleted. -> where it went."""
+    rc, out, _ = run(["git", "-C", live, "rev-parse", "HEAD"], timeout=30)
+    key = out if rc == 0 and SHA_RE.match(out) else "own-%d" % int(now())
+    if os.path.lexists(os.path.join(vers, key)):
+        key = "%s-%d" % (key, int(now()))
+    os.makedirs(vers, exist_ok=True)
+    os.rename(live, os.path.join(vers, key))
+    return os.path.join(vers, key)
+
+
+def _logs_out(vers, home):
+    """The older trees' shared logs/ (<vers>/.shared/logs, compat-1v: 下一批删)
+    move into the login's $FLEET_CONF_DIR/logs (#4668's merge: an entry it lacks
+    moves as is, a log / ndjson / tsv keeps both halves, any other is the newer
+    writer's) — the release the login now points at has no logs/ of its own."""
+    src = os.path.join(vers, ".shared", "logs")
+    if os.path.islink(src) or not os.path.isdir(src):
+        return 0
+    dst = os.path.join(os.environ.get("FLEET_CONF_DIR") or os.path.join(home, ".config", "claude-fleet"), "logs")
+    n = 0
+    try:
+        os.makedirs(dst, exist_ok=True)
+        for e in os.listdir(src):
+            a, b = os.path.join(src, e), os.path.join(dst, e)
+            if not os.path.lexists(b):
+                os.rename(a, b)
+                n += 1
+            elif e.endswith((".log", ".ndjson", ".tsv")) and os.path.isfile(a) and os.path.isfile(b):
+                with open(a, "ab") as f, open(b, "rb") as g:
+                    shutil.copyfileobj(g, f)
+                os.rename(a, b)
+                n += 1
+            elif os.path.isdir(a) and not os.path.islink(a):
+                shutil.rmtree(a, ignore_errors=True)
+            else:
+                os.remove(a)
+        os.rmdir(src)
+    except OSError:
+        pass
+    return n
 
 
 def _prune_login_versions(live, vers):
-    """A linked tree (or an own copy this updater made) retired longer than
-    FLEET_INSTALL_VERSIONS_KEEP_SECS (7 days — the sessions still running from it)
-    goes; never the one in use, .prev's, or a checkout holding the repository."""
-    keep = {os.path.basename(os.path.realpath(live)), (_read_lines(os.path.join(vers, ".prev")) or [""])[0]}
+    """What is left of the older per-login layout once the login points at
+    <root>/current (compat-1v: 下一批删) — every version dir under
+    ~/.claude/fleet.versions (a linked tree #2774, install-sync's checkouts, a
+    copy moved aside) is retired, and goes once FLEET_INSTALL_VERSIONS_KEEP_SECS
+    (7 days — the sessions still running from it) has passed; a linked tree
+    whose release is gone goes at once. Nothing installs from there any more.
+    When no version dir is left, the whole ~/.claude/fleet.versions goes."""
+    if not os.path.isdir(vers) or os.path.islink(vers):
+        return
+    keep = os.path.basename(os.path.realpath(live)) if os.path.realpath(live).startswith(vers + os.sep) else ""
     ttl = env_num("FLEET_INSTALL_VERSIONS_KEEP_SECS", 604800)
-    for n in os.listdir(vers) if os.path.isdir(vers) else []:
+    for n in os.listdir(vers):
         d = os.path.join(vers, n)
-        if n.startswith(".") or n in keep or os.path.islink(d) or not os.path.isdir(d):
+        if n.startswith(".") or n == keep or os.path.islink(d) or not os.path.isdir(d):
             continue
         m = linked_mark(d)
-        if not m:
-            continue
-        if not os.path.isdir(os.path.join(m["root"], m["sha"])):
-            # its release was pruned (issue #3100): nothing can run from it
-            shutil.rmtree(d, ignore_errors=True)
-            _retire(vers, n)
-            continue
         t = (_read_lines(os.path.join(vers, ".retired", n)) or [""])[0]
-        if not t.isdigit():
+        if m and not os.path.isdir(os.path.join(m["root"], m["sha"])):
+            pass        # its release was pruned (issue #3100): nothing can run from it
+        elif not t.isdigit():
             _retire(vers, n, now())
             continue
-        if now() - int(t) >= ttl:
-            shutil.rmtree(d, ignore_errors=True)
+        elif now() - int(t) < ttl:
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        if not os.path.lexists(d):
             _retire(vers, n)
+    left = [n for n in os.listdir(vers) if not n.startswith(".")]
+    sh = os.path.join(vers, ".shared")
+    if not left and not (os.path.isdir(sh) and os.listdir(sh)):
+        shutil.rmtree(vers, ignore_errors=True)
 
 
-def link_tree(sha, apply=True):
-    """Run AS the login (issue #2774): ~/.claude/fleet → a version tree linked to
-    <root>/<sha>, then that version's fleet-install-apply.sh --tree-from <old>
-    --tree-to <new> (daemons reloaded, hooks merged, skills installed). Already
-    there: nothing. Prints ONE line `linked …` (or `at …`); rc 1 = not moved."""
+def point(sha, frm=None, apply=True):
+    """Run AS the login (issue #4669): ~/.claude/fleet → <root>/current (the
+    release <sha> names, which must be current), then that version's
+    fleet-install-apply.sh --tree-from <the release before> --tree-to <root>/<sha>
+    (daemons reloaded, hooks merged, skills installed). <frm> is the release the
+    machine moved from (a switch, a rollback); else the one the login stood on.
+    Already pointed and no <frm>: nothing to apply. Prints ONE line `pointed …`
+    (or `at …`); rc 1 = not moved."""
     root = env("FLEET_NODE_ROOT", fns.DEFAULT_ROOT)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     live = os.path.join(home, ".claude", "fleet")
     vers = live + ".versions"
-    src = os.path.join(root, sha)
-    if not SHA_RE.match(sha) or not os.path.isdir(os.path.join(src, "bin")):
-        print("link-tree: no release %s under %s" % (sha[:12], root), file=sys.stderr)
+    cur = os.path.join(root, "current")
+    new = os.path.join(root, sha)
+    if not SHA_RE.match(sha) or not os.path.isdir(os.path.join(new, "bin")):
+        print("point: no release %s under %s" % (sha[:12], root), file=sys.stderr)
         return 1
-    if linked_sha(live, root) == sha:
-        _copy_heal(os.path.realpath(live))
-        _share(vers, os.path.realpath(live))
-        print("at %s — ~/.claude/fleet is linked to %s" % (sha[:12], src))
-        return 0
-    os.makedirs(vers, exist_ok=True)
-    # the tree: reused when one of this release is already whole; else built
-    # beside it and renamed in, so a half-built tree is never a version
-    new = None
-    for key in (sha, sha + "-linked"):
-        d = os.path.join(vers, key)
-        if not os.path.lexists(d):
-            new = d
-            break
-        m = linked_mark(d) if os.path.isdir(d) and not os.path.islink(d) else None
-        if m and m["sha"] == sha and os.path.realpath(m["root"]) == os.path.realpath(root):
-            new = d
-            break
-        # taken by another tree of this sha (the checkout install-sync made): next name
-    if new is None:
-        print("link-tree: %s and %s-linked are both taken" % (sha[:12], sha[:12]), file=sys.stderr)
+    if link_sha(cur) != sha:
+        print("point: %s is not the release %s names (%s)" % (sha[:12], cur, (link_sha(cur) or "none")[:12]),
+              file=sys.stderr)
         return 1
-    if not linked_mark(new):
-        tmp = os.path.join(vers, ".linking.%d" % os.getpid())
-        shutil.rmtree(tmp, ignore_errors=True)
+    old = os.path.join(root, frm) if frm and frm != sha and SHA_RE.match(frm) \
+        and os.path.isdir(os.path.join(root, frm, "bin")) else None
+    was = None
+    if not pointed(live, root) and os.path.lexists(live):
         try:
-            _build_tree(src, tmp)
-            write_json(os.path.join(tmp, LINKED), {"sha": sha, "root": root, "at": now()})
-            os.rename(tmp, new)
+            if os.path.islink(live):
+                was = os.path.realpath(live)
+                m = linked_mark(was) if os.path.isdir(was) else None
+                if old is None and m and os.path.isdir(os.path.join(root, m["sha"], "bin")):
+                    old = os.path.join(root, m["sha"])
+                elif old is None and os.path.isdir(was):
+                    old = was
+            elif os.path.isdir(live):
+                was = _aside(live, vers)
+                old = old or was
         except OSError as e:
-            shutil.rmtree(tmp, ignore_errors=True)
-            print("link-tree: building %s: %s" % (new, e), file=sys.stderr)
+            print("point: moving %s aside: %s" % (live, e), file=sys.stderr)
             return 1
-    _copy_heal(new)
-    was = os.path.realpath(live) if os.path.lexists(live) else None
-    if was and os.path.isdir(was) and was != os.path.realpath(new) and os.path.islink(live):
-        _share(vers, was)       # its logs/ … into .shared first, then the switch
-    _share(vers, new)
-    plain = os.path.isdir(live) and not os.path.islink(live)
-    try:
-        old = _point(live, vers, new)
-    except OSError as e:
-        print("link-tree: switching %s: %s" % (live, e), file=sys.stderr)
-        return 1
-    if plain and old:           # an adopted plain install: its logs/ … now
-        _share(vers, old, src)
-        _share(vers, new)
+    moved = _logs_out(vers, home)
+    if not pointed(live, root):
+        try:
+            os.makedirs(os.path.dirname(live), exist_ok=True)
+            swap_link(live, cur)
+        except OSError as e:
+            print("point: switching %s: %s" % (live, e), file=sys.stderr)
+            return 1
     said = "no apply"
     ap = os.path.join(live, "bin", "fleet-install-apply.sh")
-    if apply and old and os.path.isdir(old) and os.path.exists(ap):
+    if apply and old and os.path.isdir(old) and os.path.realpath(old) != os.path.realpath(new) \
+            and os.path.exists(ap):
         ok = os.path.basename(old)[:40]
         rc, out, err = run(["/bin/bash", ap, "--tree-from", old, "--tree-to", new, "--root", live,
                             "--from", ok if SHA_RE.match(ok) else "none", "--to", sha],
                            timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200))
         said = ([l[len("apply: "):] for l in (out + "\n" + err).splitlines() if l.startswith("apply: ")]
                 or ["apply exit %d: %s" % (rc, ((err or out).strip().splitlines() or [""])[-1][:120])])[-1]
+    if was and was.startswith(vers + os.sep):
+        _retire(vers, os.path.basename(was), now())
     _prune_login_versions(live, vers)
-    print("linked %s → %s (%s) · apply: %s" % (
-        os.path.basename(old)[:12] if old else "none", sha[:12], os.path.basename(new), said))
+    if was is None and not old:
+        print("at %s — ~/.claude/fleet → %s" % (sha[:12], cur))
+        return 0
+    print("pointed %s → %s (%s)%s · apply: %s" % (
+        os.path.basename(old)[:12] if old else "none", sha[:12], cur,
+        " · %d record(s) moved to the conf dir" % moved if moved else "", said))
     return 0
 
 
 def release_copy():
     """Run AS the login being released (`account release`, issue #2774): its
-    linked ~/.claude/fleet becomes an OWN copy — the same files, copied — that
-    is a checkout of one commit `fleet-release: <sha> seq=<n>` (what
-    fleet-install-sync.sh's hub road imports, #2773), so the login lives and
-    follows on its own after the machine lets it go. Not linked: nothing."""
+    ~/.claude/fleet (a link to <root>/current) becomes an OWN copy — the same
+    files, copied — that is a checkout of one commit `fleet-release: <sha>
+    seq=<n>` (what fleet-install-sync.sh's hub road imports, #2773), so the login
+    lives and follows on its own after the machine lets it go. Not on the
+    runtime: nothing."""
     root = env("FLEET_NODE_ROOT", fns.DEFAULT_ROOT)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     live = os.path.join(home, ".claude", "fleet")
     vers = live + ".versions"
-    cur = os.path.realpath(live)
-    m = linked_mark(cur) if os.path.islink(live) else None
-    if not m:
+    sha = linked_sha(live, root)
+    if not sha:
         print("own copy already — ~/.claude/fleet is not linked to a runtime")
         return 0
-    sha = m["sha"]
-    src = os.path.join(m["root"], sha)
+    src = os.path.join(root, sha)
     if not os.path.isdir(src):
         print("release-copy: the runtime's %s is gone (%s)" % (sha[:12], src), file=sys.stderr)
         return 1
     key = sha + "-own"
     if os.path.lexists(os.path.join(vers, key)):
         key = "%s-own-%d" % (sha, int(now()))
+    os.makedirs(vers, exist_ok=True)
     tmp = os.path.join(vers, ".copying.%d" % os.getpid())
     shutil.rmtree(tmp, ignore_errors=True)
     seq = (read_json(os.path.join(src, ".release", "manifest.json"), {}) or {}).get("seq") or 0
     genv = dict(os.environ, GIT_AUTHOR_NAME="fleet-release", GIT_AUTHOR_EMAIL="fleet-release@localhost",
                 GIT_COMMITTER_NAME="fleet-release", GIT_COMMITTER_EMAIL="fleet-release@localhost")
     try:
-        _build_tree(src, tmp, link=False)
+        _build_tree(src, tmp)
         for c in (["git", "init", "-q", "-b", "master", tmp],
                   ["git", "-C", tmp, "add", "-A", "-f", "."],
                   ["git", "-C", tmp, "commit", "-q", "--no-verify", "-m", "fleet-release: %s seq=%d" % (sha, int(seq))]):
@@ -2831,9 +2775,8 @@ def release_copy():
         shutil.rmtree(tmp, ignore_errors=True)
         print("release-copy: %s" % e, file=sys.stderr)
         return 1
-    new = os.path.join(vers, key)
-    _share(vers, new)
-    _point(live, vers, new)
+    _logs_out(vers, home)
+    swap_link(live, os.path.join(vers, key))
     print("own copy %s — ~/.claude/fleet no longer links to %s" % (key, root))
     return 0
 
@@ -2923,8 +2866,10 @@ def main(argv):
         return 0
     if cmd == "link-account" and rest:
         return link_account(rest[0])
-    if cmd == "link-tree" and rest:
-        return link_tree(rest[0], apply="--no-apply" not in rest[1:])
+    if cmd in ("point", "link-tree") and rest:
+        # `link-tree` is the name an updater before issue #4669 asks by (compat-1v: 下一批删)
+        frm = rest[rest.index("--from") + 1] if "--from" in rest[1:-1] else None
+        return point(rest[0], frm=frm, apply="--no-apply" not in rest[1:])
     if cmd == "release-copy":
         return release_copy()
     if cmd == "install-state" and rest:

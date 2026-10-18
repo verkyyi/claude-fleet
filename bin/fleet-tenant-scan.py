@@ -614,7 +614,9 @@ def i_bootstrap(it, a):
     linked = os.path.join(os.path.realpath(FLEET), ".fleet-linked")
     rc, log = run(["git", "-C", FLEET, "reflog", "--format=%gs"], timeout=20)
     first = (log.strip().splitlines() or [""])[-1]
-    if os.path.isfile(linked):
+    lt = os.readlink(FLEET).rstrip("/") if os.path.islink(FLEET) else ""
+    if os.path.isfile(linked) or (os.path.basename(lt) == "current" and
+                                  os.path.isdir(os.path.join(os.path.realpath(FLEET), ".release"))):
         it.note("fleet 链接本机运行时（不经网络）")
     elif rc == 0 and first.startswith("clone: from") and "://" in first:
         it.hit("本账号的 %s 是从网上克隆的（%s）" % (FLEET, re.sub(r"//[^/@]*@", "//", first)))

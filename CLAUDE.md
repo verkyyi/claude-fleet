@@ -1034,17 +1034,19 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   doctor (`fleet doctor --machine`) after the switch: a FAIL the old version did
   not have rolls EVERYTHING back and skips that sha. `update.json`'s phase makes
   a killed tick resume or roll back. A managed login's `~/.claude/fleet` IS the
-  runtime (issue #2774, EPIC #2770 C4): `fleet.versions/<sha>/` is its own real
-  directory tree whose every file links into `<root>/<sha>/` (the shadow-root
-  shape — `$BIN/..` stays the login's), built demoted by the updater's
-  `link-tree` and moved in the machine's own switch / rollback, then that
-  version's `fleet-install-apply.sh --tree-from <old> --tree-to <new>` (no git);
+  runtime (issue #4669, EPIC #4667 C2; #2774 before it): ONE link straight to
+  `<root>/current` — nothing built or kept per login, so it moves with the
+  machine's own switch / rollback; the updater's `point` (demoted) puts it there
+  and runs that version's `fleet-install-apply.sh --tree-from <root>/<old>
+  --tree-to <root>/<new>` (no git); `fleet_mod_dir` hands Claude the release's
+  PHYSICAL mod dir (BREAK-IT `managed-login-mod-escapes`); an older login's
+  `fleet.versions/` goes after its 7-day keep (`# compat-1v`);
   its own install-sync answers `off · managed · 跟随 <root>/current`, the
-  doctor's `install` row PASSes only when linked to `current`, `account release`
+  doctor's `install` row PASSes only when it links to `current`, `account release`
   makes it an own copy again (BREAK-IT `managed-login-own-copy`,
   `managed-login-install-stale`). A NEW login's first install takes the same
   road — `bin/fleet-login-install.sh` (bootstrap's install step and
-  `fleet-login-new.sh` step 7): the runtime (link-tree; step 8 is `account adopt`,
+  `fleet-login-new.sh` step 7): the runtime (a link to current; step 8 is `account adopt`,
   no per-login plist), else the hub's signed stable, else a git clone (a
   developer's machine); the cache's claude-fleet mirror is retired, the timing in
   `global/bootstrap.timing` (issue #2775, BREAK-IT `bootstrap-reaches-github`); `fleet doctor --installs`

@@ -141,8 +141,11 @@ class LinuxNode(unittest.TestCase):
                                          'FLEET_INSTALL_PLATFORM': 'none'}):
                 m.activate(None)
                 live = home / '.claude/fleet'
-                (live / 'logs').mkdir(exist_ok=True)
-                (live / 'logs/kept').write_text('history')
+                # the login's records are its conf dir's (#4668); its install is the image's (#4669)
+                logs = home / '.config/claude-fleet/logs'
+                logs.mkdir(parents=True, exist_ok=True)
+                (logs / 'kept').write_text('history')
+                self.assertEqual(os.readlink(live), str(root / 'current'))
                 (home / 'project').write_text('worktree')
                 marker = home / '.config/claude-fleet/global/linux-image-applied'
                 m.activate(None)
@@ -166,7 +169,7 @@ class LinuxNode(unittest.TestCase):
                 cur.symlink_to('a' * 40)
                 m.activate(None)
                 self.assertEqual((live / 'bin/version').read_text(), 'a' * 40)
-                self.assertEqual((live / 'logs/kept').read_text(), 'history')
+                self.assertEqual((logs / 'kept').read_text(), 'history')
                 self.assertEqual((home / 'project').read_text(), 'worktree')
                 self.assertEqual(len((home / 'applies').read_text().splitlines()), 3)
 
