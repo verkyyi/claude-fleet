@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import select
 import signal
@@ -447,6 +448,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (Refused, OSError, ValueError):
-        print('C9 entry refused; live NOT RUN', file=sys.stderr)
+    except (Refused, OSError, ValueError) as exc:
+        # Only an identifier: the code, else the exception class (#4625).
+        code = str(exc) if isinstance(exc, Refused) and re.fullmatch(r'[A-Z0-9_]{1,64}', str(exc)) \
+            else type(exc).__name__.upper()[:64]
+        print('C9 entry refused (%s); live NOT RUN' % code, file=sys.stderr)
         sys.exit(125)

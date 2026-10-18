@@ -398,6 +398,21 @@ class TraceMetadata(unittest.TestCase):
         self.assertEqual(caught.exception.detail, 'ACTION_LIMIT@close')
         self.assertGreater(observer.Trace.MAX_LINES, 1000000)
 
+    def test_broker_failure_reaches_the_record_as_its_own_code(self):
+        # live (#4625): a deny probe past its bound made the broker refuse
+        # ACTION_FAILED, and the record said BROKER_FORMAT.
+        import nogh_live_runtime as runtime
+        caught = runtime.broker_failure(dict(type='failure', code='ACTION_FAILED', live='NOT RUN'))
+        self.assertEqual((str(caught), caught.detail), ('ACTION_FAILED', 'BROKER'))
+        caught = runtime.broker_failure(dict(type='failure', code='X', live='NOT RUN', detail='PENDING_CALL@fcntl'))
+        self.assertEqual(caught.detail, 'PENDING_CALL@fcntl')
+        for bad in (dict(type='failure', code='lower', live='NOT RUN'),
+                    dict(type='failure', code='A', live='NOT RUN', detail='/etc/passwd'),
+                    dict(type='failure', code='A', live='NOT RUN', extra=1),
+                    dict(type='failure', code='A', live='OBSERVED')):
+            with self.assertRaisesRegex(live.Refused, 'BROKER_FORMAT'):
+                runtime.broker_failure(bad)
+
     def test_refusal_names_its_check_and_syscall_only(self):
         # A live run keeps no raw trace: the failure record says WHICH check
         # refused and on WHICH syscall, as identifiers — never the line (#4625).
@@ -510,6 +525,28 @@ class TraceMetadata(unittest.TestCase):
                               (['8 1.200 ???(1, 2) = 0'], True)):
             with self.assertRaises(live.Refused):
                 run(lines, exited)
+
+    def test_a_call_open_at_its_own_exit_is_cut_off(self):
+        # live (#4625): `exit_group(0 <unfinished` / `fcntl(… <unfinished`, then
+        # `+++ exited` with no resume line. A cut-off call; connect counts.
+        def run(lines):
+            trace = observer.Trace(plan(), 'node-a')
+            for line in ('7 1.000 execve("/usr/bin/python3", [""...], 0x1) = 0 <0.001>',
+                         '7 1.010 write(198, ""..., 1) = 1 <0.001>',
+                         '7 1.100 clone(flags=SIGCHLD) = 8 <0.001>',
+                         '8 1.110 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3 <0.001>',
+                         *lines,
+                         '7 2.000 write(198, ""..., %d) = %d <0.001>' % ((observer.PHASES.index('end') + 1,) * 2),
+                         '7 2.100 +++ exited with 0 +++'):
+                trace.feed(line + '\n')
+            return trace.finish(0)
+        run(['8 1.200 exit_group(0 <unfinished ...>', '8 1.300 +++ exited with 0 +++'])
+        run(['8 1.200 fcntl(1, F_DUPFD_CLOEXEC, 0 <unfinished ...>', '8 1.300 +++ killed by SIGKILL +++'])
+        self.assertEqual(run(['8 1.200 connect(3, {sa_family=AF_INET, sin_port=htons(443), '
+                              'sin_addr=inet_addr("203.0.113.1")}, 16 <unfinished ...>',
+                              '8 1.300 +++ killed by SIGKILL +++'])['intervals']['startup']['github_network'], 1)
+        with self.assertRaises(live.Refused):  # still open and never exited
+            run(['8 1.200 fcntl(1, F_DUPFD_CLOEXEC, 0 <unfinished ...>'])
 
     def test_fork_alias_reconnect_during_write_refuses(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
@@ -730,7 +767,7 @@ class LiveRowEntry(unittest.TestCase):
         self.assertEqual(driver.reply_seconds('result', 'row:A1'), observer.phase_timeout('row:A1') + 5)
         self.assertGreaterEqual(driver.reply_seconds('result', 'row:A7'), 30)
         self.assertGreaterEqual(driver.reply_seconds('result', 'identity'), 30)  # await_ready's 20 s (+ one 6 s live read) fits
-        self.assertEqual(driver.reply_seconds('result', 'deny:gh-path'), 2 + 5)
+        self.assertEqual(driver.reply_seconds('result', 'deny:gh-path'), 3 + 5)
         self.assertEqual(driver.reply_seconds('marked', 'row:A1'), 5)
         asked = []
         cluster = SimpleNamespace(remaining=lambda cap: asked.append(cap) or cap)

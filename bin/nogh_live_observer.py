@@ -24,7 +24,7 @@ MARKER_FD = 198
 
 def phase_timeout(phase):
     """The broker's bound on one phase command; the driver waits this plus a margin."""
-    return 5 if phase.startswith('allow:') else 2 if phase.startswith('deny:') else 30
+    return 5 if phase.startswith('allow:') else 3 if phase.startswith('deny:') else 30
 TRACE_CALLS = ('execve,execveat,clone,clone3,fork,vfork,exit,exit_group,wait4,waitid,'
                'socket,socketpair,bind,recvfrom,connect,accept,accept4,sendto,sendmsg,sendmmsg,'
                'dup,dup2,dup3,fcntl,close,close_range,write,writev,sendfile,splice,recvmsg,recvmmsg,'
@@ -120,6 +120,14 @@ class Trace:
             require(pid not in self.exited, 'DUPLICATE_EXIT')
             self.exited.add(pid)
             self.dying.discard(pid)
+            if pid in self.pending:
+                # Its own process ended while strace held the call open, and no
+                # resume line follows (live, #4625: `exit_group(0 <unfinished`,
+                # `fcntl(… <unfinished` then `+++ exited`). A cut-off call: a
+                # failed attempt, exactly as the `= ?` resume shape decodes.
+                start, prefix = self.pending.pop(pid)
+                self.pending_bytes -= len(prefix) + len('<unfinished ...>')
+                self.decode(pid, start, at, prefix.rstrip(', ') + ') = -1 EINTR (cut off by process exit)')
             return
         require(pid not in self.dying, 'UNKNOWN_SYSCALL_NOT_FINAL')
         # strace could not read the syscall number because the tracee was
