@@ -1,12 +1,12 @@
 name: shellcheck
 
-# The PR gate lints only the *.sh the PR adds or modifies (issue #4663): one file's
-# findings never depend on another's (.shellcheckrc follows no source), so that is
-# the full run's verdict for every file it checks, in seconds instead of 8.5 min —
-# bin/ci-shellcheck.sh --changed says why, and checks the whole tree when the
-# lint's own config changes. No master push run: it re-linted a tree its PR had
-# just linted (41 runs, 368 min in 15 h). The whole tree runs nightly and on
-# dispatch. A re-push to a PR cancels its stale run — issue #2034.
+# The PR gate lints only the *.sh the PR adds or modifies (issue #4663), each with
+# -x (it follows what it sources), so each file's verdict is the full run's — in
+# seconds instead of 8.5 min; bin/ci-shellcheck.sh --changed says why, and checks
+# the whole tree when the lint's own config changes. No master push run: it
+# re-linted a tree its PR had just linted (41 runs, 368 min in 15 h). The whole
+# tree runs nightly and on dispatch (a sourced lib's change shows in its
+# sourcers there). A re-push to a PR cancels its stale run — issue #2034.
 on:
   pull_request:
     paths:

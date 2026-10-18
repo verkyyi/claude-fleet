@@ -8,13 +8,17 @@
 #
 #   - The file set: every *.sh under bin hooks shell extras (shell/cw.zsh is not
 #     linted — shellcheck has no zsh), each checked with --severity=warning.
+#   - -x: each file follows what it sources itself. The old single full call
+#     followed a sourced file only because it happened to be one of the inputs
+#     (shellcheck reads its own inputs), so one file's verdict depended on which
+#     others shared its invocation — alone, shell/fleet-intro.sh was red. With -x
+#     a file's verdict is its own, however the tree is split.
 #   - --changed <base> (the PR gate — issue #4663): only the *.sh `git diff
-#     <base> HEAD` adds or modifies. That is the SAME verdict as the full run for
-#     every file it checks: .shellcheckrc follows no source (SC1090/SC1091 are off,
-#     no external-sources), so one file's findings never depend on another's
-#     content. A change to what decides the verdict for EVERY file —
+#     <base> HEAD` adds or modifies — by -x the same verdict as the full run for
+#     every file it checks. A change to what decides the verdict for EVERY file —
 #     .shellcheckrc, .shellcheck-version, this script, the workflow — or a base
-#     that does not resolve checks the whole tree. The full tree runs nightly too.
+#     that does not resolve checks the whole tree. The full tree runs nightly too
+#     (a sourced lib's change shows in its sourcers there).
 #   - --jobs <n>: n shellcheck processes at once (xargs -P, 16 files each); the
 #     findings are the same, only the wall clock drops (8.5 min single-threaded).
 #   - --list: print the files it would check and stop (no shellcheck needed).
@@ -91,6 +95,6 @@ if [ -z "$files" ]; then
   exit 1
 fi
 count=$(printf '%s\n' "$files" | wc -l | tr -d ' ')
-echo "Checking $count script(s) ($scope, $jobs at once) with shellcheck ${local_ver:-?} --severity=warning:"
+echo "Checking $count script(s) ($scope, $jobs at once) with shellcheck ${local_ver:-?} -x --severity=warning:"
 printf '%s\n' "$files" | sed 's/^/  /'
-printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 -P "$jobs" -n 16 shellcheck --severity=warning
+printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 -P "$jobs" -n 16 shellcheck -x --severity=warning
