@@ -8029,13 +8029,26 @@ fleet_from_marker() {
 # FLEET_BREAKAGE_MAX_AGE (2 days) is not "red now" — a nightly that stopped
 # running on the branch weeks ago is nobody's breakage today.
 #
-# fleet_breakage_probe <repo> [<branch>] → one line per RED workflow, the oldest
-#   streak first: `key<TAB>sha<TAB>check<TAB>line<TAB>names<TAB>run id` — names =
-#   the workflow, every failed job of the streak's first run and every Go test the
-#   error line names, `|`-joined (what a filer's text is matched against).
+# THE RED THIS TIME (issue #4774): #4771's red (the release train on Linux /
+# shard 5 — a run the train's failfast left `cancelled`) and #4598's (selftests /
+# shard 16 in a dispatch run on a branch) were both fingerprinted as an older
+# red somewhere else — a macOS nightly, another shard of the streak's first run.
+# So: a cancelled run with a failed job is red; a workflow with its own channel
+# (FLEET_BREAKAGE_SKIP_RE, macOS / nightly) is not this probe's; the job is the
+# NEWEST red run's, one row each; the rows go newest red first; and the filer
+# fingerprints a run its text names before it asks the base branch at all.
+#
+# fleet_breakage_probe <repo> [<branch>] → one line per failed job of each RED
+#   workflow's newest red run, the workflow red most recently first:
+#   `key<TAB>sha<TAB>check<TAB>line<TAB>names<TAB>run id` — sha / run id = the
+#   oldest run of the streak that job has failed in since; names = the workflow
+#   first, then the job, its short name, the run ids, the shas, every Go test and
+#   selftest its log failed, `|`-joined (what a filer's text is matched against).
 #   rc 0 · 1 no workflow is red · 2 gh could not answer.
 #   No <branch> ⇒ the repo's default branch. key = `ci-<sha12 of check·line>` —
 #   the channel + the failed step, never a commit (issue #4271).
+# fleet_breakage_run_rows <repo> <run id>… → the same rows for runs a text names.
+# fleet_breakage_text_runs <text> → the run ids it names.
 # fleet_breakage_key <repo> [<branch>] → the first row's key alone (same rc).
 # fleet_breakage_pick <text> [<base>] → the row a filing's text is about (rc 1 none).
 # fleet_breakage_marker <key> → the invisible body marker bin/fleet-issue-file.sh
@@ -8074,55 +8087,171 @@ fleet_breakage_norm_line() {
           && tolower($0) ~ /error|fail|panic|fatal|exception|duplicate|undefined|cannot|not found|exit code/ { err = $0 }
         first == "" { first = $0 }
         END { if (strong != "") print strong; else if (gherr != "") print gherr; else if (err != "") print err; else if (first != "") print first }' \
-    | sed -e 's/:[0-9][0-9]*//g' -e 's/ *([0-9][0-9.]*m*s)//g' -e 's/[[:space:]][[:space:]]*/ /g' -e 's/^ //' -e 's/ $//' \
+    | sed -e 's/:[0-9][0-9]*//g' -e 's/ *([0-9][0-9.]*m*s)//g' -e 's/[[:space:]][[:space:]]*/ /g' \
+          -e 's/ [0-9][0-9.]*m*s / /g' -e 's/ [0-9][0-9.]*m*s$//' -e 's/^ //' -e 's/ $//' \
     | cut -c1-160
 }
 
+# _fleet_breakage_failed_jobs <owner> <name> <run id> → `<job id>\t<job name>` per
+# failed / timed-out job of that run, by completion time (nothing = none or gh down).
+_fleet_breakage_failed_jobs() {
+  fleet_gh api "repos/$1/$2/actions/runs/$3/jobs?per_page=100" \
+    --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")]
+          | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)"' 2>/dev/null | grep .
+}
+
+# fleet_breakage_log_names — stdin: a failed job's log → the names a filer's text
+# may call it by, one a line: every Go `--- FAIL: TestX`, and every selftest the
+# runner printed `FAIL  <name>` / `TIMEOUT <name>` for (with and without its
+# .sh / .py) — #4771's text named selftest-partitions-selftest.sh, #4598's
+# fleet-bin-inventory-selftest.sh, neither of which is a job's name.
+fleet_breakage_log_names() {
+  LC_ALL=C sed -e 's/^[^	]*	[^	]*	//' -e 's/^[0-9][0-9-]*T[0-9:.]*Z *//' \
+    | LC_ALL=C awk '
+        { for (i = 1; i < NF; i++) if ($i == "FAIL:" && $(i+1) ~ /^Test[A-Za-z0-9_]+$/) print $(i+1) }
+        ($1 == "FAIL" || $1 == "TIMEOUT") && $2 ~ /^[A-Za-z0-9_.-]+(\.sh|\.py)$/ {
+          print $2; n = $2; sub(/\.(sh|py)$/, "", n); print n }' \
+    | awk 'length($0) >= 4 && !seen[$0]++'
+}
+
+# _fleet_breakage_rows <repo> <wname> <newest rid> <newest sha> [<older streak runs>]
+# → one probe row per failed job of the newest red run (FLEET_BREAKAGE_MAX_JOBS, 6).
+# <older streak runs> = `<rid>\t<sha>` lines, newest first: walked back (at most 8
+# runs) while the same job failed there, so the sha / run beside the key is where
+# THIS failure started — not where the workflow first went red on something else
+# (#4598: the streak's first run was red on shard 8's transfer-norepo, the red that
+# day was shard 16).
+_fleet_breakage_rows() {
+  local repo="$1" wname="$2" rid="$3" sha="$4" older="${5:-}" owner name jobs jid jname log line key names
+  local srid ssha orid osha ojobs walked n=0 cache='' tail
+  owner="${repo%%/*}"; name="${repo#*/}"
+  jobs=$(_fleet_breakage_failed_jobs "$owner" "$name" "$rid")
+  [ -n "$jobs" ] || jobs="	$wname"
+  while IFS=$'\t' read -r jid jname; do
+    n=$((n + 1)); [ "$n" -le "${FLEET_BREAKAGE_MAX_JOBS:-6}" ] || break
+    [ -n "$jname" ] || jname="$wname"
+    log=''
+    case "$jid" in ''|*[!0-9]*) : ;; *) log=$(fleet_gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null) ;; esac
+    line=$(printf '%s\n' "$log" | fleet_breakage_norm_line)
+    # No commit in the key (issue #4271): the same job red on the same line is one
+    # breakage whichever commit its streak started at.
+    key="ci-$(printf '%s\t%s' "$jname" "$line" | fleet_sha12)"
+    srid="$rid"; ssha="$sha"; walked=0
+    while IFS=$'\t' read -r orid osha; do
+      case "$orid" in ''|*[!0-9]*) continue ;; esac
+      walked=$((walked + 1)); [ "$walked" -le 8 ] || break
+      if ! printf '%s\n' "$cache" | grep -q "^$orid	"; then
+        ojobs=$(_fleet_breakage_failed_jobs "$owner" "$name" "$orid" | cut -f2)
+        cache="$cache$(printf '%s\n' "$ojobs" | sed "s/^/$orid	/")
+$orid	
+"
+      fi
+      printf '%s\n' "$cache" | grep -qxF "$orid	$jname" || break
+      srid="$orid"; ssha="$osha"
+    done <<OLDER
+$older
+OLDER
+    tail="${jname##* / }"
+    names=$( { printf '%s\n' "$wname" "$jname" "$tail" "$rid" "$srid" "$(printf '%.8s' "$sha")" "$(printf '%.8s' "$ssha")"
+               printf '%s\n' "$log" | fleet_breakage_log_names
+               printf '%s\n' "$line" | grep -oE 'Test[A-Za-z0-9_]+'; } \
+             | grep . | awk '!seen[$0]++' | paste -sd '|' -)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$ssha" "$jname" "$line" "$names" "$srid"
+  done <<JOBS
+$jobs
+JOBS
+}
+
 fleet_breakage_probe() {
-  local repo="$1" branch="${2:-}" owner name runs starts rid sha wname jobs jid jname line key names out=''
+  local repo="$1" branch="${2:-}" owner name runs skip peek prid red streaks wid wname rid sha older out=''
   owner="${repo%%/*}"; name="${repo#*/}"
   [ -n "$branch" ] || branch=$(fleet_gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
   [ -n "$branch" ] || branch=master
   runs=$(fleet_gh api "repos/$owner/$name/actions/runs?branch=$branch&status=completed&per_page=100" \
            --jq '.workflow_runs[] | select((.event // "") | startswith("pull_request") | not)
-                 | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)\t\(.display_title // "" | gsub("\t"; " "))"' 2>/dev/null) || return 2
+                 | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)\t\(.display_title // "" | gsub("\t"; " "))\t\(.path // "")"' 2>/dev/null) || return 2
+  # A workflow with its own breakage channel is not this probe's (issue #4774:
+  # #4771 — the release train red on Linux / shard 5 — was fingerprinted as
+  # selftests-macos.yml's nightly red, which fleet-macos-watch.sh files as macos-…).
+  skip="${FLEET_BREAKAGE_SKIP_RE-selftests-macos|mac-follow|selftests-nightly}"
+  [ -n "$skip" ] && runs=$(printf '%s\n' "$runs" | awk -F'\t' -v re="$skip" '$9 == "" || $9 !~ re')
+  # A cancelled run with a failed job IS red (issue #4774): the release train's
+  # failfast cancels the whole run the moment a shard goes red, so its conclusion
+  # reads `cancelled` — #4771's run 39170235632. Only the cancelled runs above each
+  # workflow's first verdict are looked at (at most 3 each).
+  peek=$(printf '%s\n' "$runs" | awk -F'\t' '
+      NF < 4 || done[$1] || $8 ~ /\(drill/ { next }
+      $4 == "success" || $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { done[$1] = 1; next }
+      $4 == "cancelled" && k[$1]++ < 3 { print $2 }')
+  red=''
+  while read -r prid; do   # a read loop, not `for … in $peek`: zsh does not split (issue #1633)
+    [ -n "$prid" ] && _fleet_breakage_failed_jobs "$owner" "$name" "$prid" >/dev/null && red="$red $prid"
+  done <<PEEK
+$peek
+PEEK
+  [ -n "$red" ] && runs=$(printf '%s\n' "$runs" | awk -F'\t' -v OFS='\t' -v red="$red" '
+      BEGIN { n = split(red, a, " "); for (i = 1; i <= n; i++) r[a[i]] = 1 }
+      ($2 in r) && $4 == "cancelled" { $4 = "failure" } { print }')
   # Newest first (the API's order): per workflow the first verdict decides; a red
-  # one is walked back to the last success. Each red workflow's streak start,
-  # oldest first. A drill run (its title says `(drill …)` — release-train.yml's
-  # run-name for `drill_red`, issue #3243) is red on purpose and no verdict on
-  # master at all (issue #3372).
-  starts=$(printf '%s\n' "$runs" | awk -F'\t' -v maxage="${FLEET_BREAKAGE_MAX_AGE:-172800}" '
+  # one's streak (every red run back to the last success) is printed newest first,
+  # `<n>` = 1 for the newest. A drill run (its title says `(drill …)` — release-
+  # train.yml's run-name for `drill_red`, issue #3243) is red on purpose and no
+  # verdict on master at all (issue #3372).
+  streaks=$(printf '%s\n' "$runs" | awk -F'\t' -v OFS='\t' -v maxage="${FLEET_BREAKAGE_MAX_AGE:-172800}" '
       NF < 4 || done[$1] || $8 ~ /\(drill/ { next }
       $4 == "success" { done[$1] = 1; next }
-      !($1 in st) && ($4 == "failure" || $4 == "timed_out" || $4 == "startup_failure") && $7 != "" && $7 + 0 > maxage + 0 { done[$1] = 1; next }
-      $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { if (!($1 in st)) ord[++n] = $1; st[$1] = $0 }
-      END { for (i = 1; i <= n; i++) print st[ord[i]] }' | sort -t '	' -k5,5)
-  [ -n "$starts" ] || return 1
-  while IFS=$'\t' read -r _ rid sha _ _ wname _; do
-    case "$rid" in ''|*[!0-9]*) continue ;; esac
-    jobs=$(fleet_gh api "repos/$owner/$name/actions/runs/$rid/jobs?per_page=100" \
-             --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")]
-                   | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)"' 2>/dev/null)
-    jid=''; jname=''
-    IFS=$'\t' read -r jid jname <<JOBS
-$(printf '%s\n' "$jobs" | grep . | head -1)
-JOBS
-    [ -n "$jname" ] || jname="$wname"
-    line=''
-    case "$jid" in ''|*[!0-9]*) : ;; *) line=$(fleet_gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
-    # No commit in the key (issue #4271): the same job red on the same line is one
-    # breakage whichever commit its streak started at — a red that comes back
-    # after its fix reopens that issue (fleet-issue-file.sh), never files another.
-    key="ci-$(printf '%s\t%s' "$jname" "$line" | fleet_sha12)"
-    names=$( { printf '%s\n' "$wname"; printf '%s\n' "$jobs" | cut -f2; printf '%s\n' "$line" | grep -oE 'Test[A-Za-z0-9_]+'; } \
-               | grep . | awk '!seen[$0]++' | paste -sd '|' -)
-    out="$out$key	$sha	$jname	$line	$names	$rid
+      !($1 in c) && ($4 == "failure" || $4 == "timed_out" || $4 == "startup_failure") && $7 != "" && $7 + 0 > maxage + 0 { done[$1] = 1; next }
+      $4 == "failure" || $4 == "timed_out" || $4 == "startup_failure" { print $1, $2, $3, $5, $6, ++c[$1] }')
+  [ -n "$streaks" ] || return 1
+  # The rows: the workflow red most recently first (issue #4774: the red a filer
+  # sees is the newest one, not a nightly that has been red since yesterday).
+  while read -r wid; do
+    [ -n "$wid" ] || continue
+    IFS=$'\t' read -r _ rid sha _ wname _ <<NEWEST
+$(printf '%s\n' "$streaks" | awk -F'\t' -v w="$wid" '$1 == w && $6 == 1')
+NEWEST
+    older=$(printf '%s\n' "$streaks" | awk -F'\t' -v OFS='\t' -v w="$wid" '$1 == w && $6 > 1 { print $2, $3 }')
+    out="$out$(_fleet_breakage_rows "$repo" "$wname" "$rid" "$sha" "$older")
 "
-  done <<STARTS
-$starts
-STARTS
+  done <<WIDS
+$(printf '%s\n' "$streaks" | awk -F'\t' '$6 == 1' | sort -t '	' -k4,4r | cut -f1)
+WIDS
+  out=$(printf '%s' "$out" | grep .)
   [ -n "$out" ] || return 1
-  printf '%s' "$out"
+  printf '%s\n' "$out"
+}
+
+# fleet_breakage_run_rows <repo> <run id>… → the probe's rows for runs a filer's
+# text NAMES (issue #4774): the red the person is looking at, wherever it ran —
+# #4598 named run 39025697982, a workflow_dispatch on issue-3884 that the base
+# branch's run list never carries. A run that is not red (or not a run at all — a
+# 12-digit job id, a timestamp) gives nothing. rc 1 = no row.
+fleet_breakage_run_rows() {
+  local repo="$1" owner name rid meta conc sha wname title out=''; shift
+  owner="${repo%%/*}"; name="${repo#*/}"
+  for rid in "$@"; do
+    case "$rid" in ''|*[!0-9]*) continue ;; esac
+    meta=$(fleet_gh api "repos/$owner/$name/actions/runs/$rid" \
+             --jq '"\(.conclusion // "")\t\(.head_sha // "")\t\(.name // "")\t\(.display_title // "" | gsub("\t"; " "))"' 2>/dev/null) || continue
+    IFS=$'\t' read -r conc sha wname title <<META
+$meta
+META
+    case "$conc" in failure|timed_out|startup_failure|cancelled) ;; *) continue ;; esac
+    case "$title" in *'(drill'*) continue ;; esac
+    _fleet_breakage_failed_jobs "$owner" "$name" "$rid" >/dev/null || continue
+    out="$out$(_fleet_breakage_rows "$repo" "$wname" "$rid" "$sha")
+"
+  done
+  out=$(printf '%s' "$out" | grep .)
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# fleet_breakage_text_runs <text> → the Actions run ids a text names (10–12 digit
+# numbers standing alone, at most 3, first seen first).
+fleet_breakage_text_runs() {
+  printf '%s\n' "$1" | LC_ALL=C grep -oE '(^|[^0-9A-Za-z])[0-9]{10,12}([^0-9A-Za-z]|$)' \
+    | LC_ALL=C tr -cd '0-9\n' | grep . | awk '!seen[$0]++' | head -3
 }
 
 fleet_breakage_key() {
@@ -8134,27 +8263,49 @@ fleet_breakage_key() {
   printf '%s\n' "${out%%	*}"
 }
 
+# _fleet_breakage_names_in <lowercased text> <lowercased name> — rc 0 when the
+# name stands in the text as a whole token: `shard 1` is not in `shard 16`.
+_fleet_breakage_names_in() {
+  local s="$1" nm="$2" pre rest c d
+  while :; do
+    case "$s" in *"$nm"*) ;; *) return 1 ;; esac
+    pre=${s%%"$nm"*}; rest=${s#*"$nm"}
+    c=${pre#"${pre%?}"}; d=${rest%"${rest#?}"}
+    case "$c" in [a-z0-9_]) ;; *) case "$d" in [a-z0-9_]) ;; *) return 0 ;; esac ;; esac
+    s=$rest
+  done
+}
+
 # fleet_breakage_pick <text> [<base branch>] — stdin: the probe's rows → the row
-# this filing is about, or nothing (rc 1). A row whose name (workflow, failed
-# job, Go test; ≥4 chars, not a generic word like `test` or `ubuntu`) appears in
-# the text wins; else, when the text says the base branch is red, the first
-# (oldest) row. It is the auto-mode trigger (issue #2175) and, for an explicit
-# --breakage, the choice between two red workflows.
+# this filing is about, or nothing (rc 1). Each row is scored by the names its
+# text says (field 5; ≥4 chars, a whole token, not a generic word like `test` or
+# `ubuntu`): the workflow's name (the first) counts 1, anything sharper — the
+# failed job, its short name (`shard 5`), a run id, a sha, a Go test, a selftest —
+# 10 (issue #4774: every row of one workflow shares its name, so only the sharper
+# names tell its jobs apart). The best score wins, the earlier row on a tie; no
+# name at all ⇒ when the text says the base branch is red, the first (the newest)
+# row. It is the auto-mode trigger (issue #2175) and, for an explicit --breakage,
+# the choice between red rows.
 fleet_breakage_pick() {
-  local text="$1" base="${2:-}" lc row nms nm first=''
+  local text="$1" base="${2:-}" lc row nms nm first='' best='' bs=0 sc i
   lc=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     [ -n "$first" ] || first="$row"
     nms=$(printf '%s' "$row" | cut -f5 | tr '|' '\n' | tr '[:upper:]' '[:lower:]')
+    sc=0; i=0
     while IFS= read -r nm; do
+      i=$((i + 1))
       [ "${#nm}" -ge 4 ] || continue
-      case "$nm" in test|tests|build|lint|check|checks|ubuntu|macos|linux|windows|node|unit) continue ;; esac
-      case "$lc" in *"$nm"*) printf '%s\n' "$row"; return 0 ;; esac
+      case "$nm" in test|tests|build|lint|check|checks|ubuntu|macos|linux|windows|node|unit|train|release) continue ;; esac
+      _fleet_breakage_names_in "$lc" "$nm" || continue
+      if [ "$i" = 1 ]; then sc=$((sc + 1)); else sc=$((sc + 10)); fi
     done <<NAMES
 $nms
 NAMES
+    [ "$sc" -gt "$bs" ] && { bs=$sc; best="$row"; }
   done
+  [ -n "$best" ] && { printf '%s\n' "$best"; return 0; }
   [ -n "$first" ] || return 1
   fleet_breakage_text_says_red "$text" "$base" || return 1
   printf '%s\n' "$first"

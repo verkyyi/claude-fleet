@@ -68,6 +68,8 @@
 #   breakage-no-flag                                bin/fleet-issue-file.sh (no auto road, #4271), fleet-mcp.py file_issue
 #   breakage-new-sha                                bin/fleet-issue-file.sh --fault-sha, fleet_fault_find_closed /
 #                                                   fleet_fault_fix_commit / fleet_fault_contains / fleet_fault_seen (fleet-lib.sh)
+#   breakage-wrong-red                              bin/fleet-issue-file.sh --breakage, fleet_breakage_probe /
+#                                                   fleet_breakage_run_rows / fleet_breakage_pick (the red this time, #4774)
 #   place-declined-not-retried                      fleet_hub_place (fleet-lib.sh: the `after` field, each try's
 #                                                   stderr), fleet-children.py (claim: stale); the hub half is
 #                                                   tokenledger/internal/api fleet_place.go (go test, when here)
@@ -2888,6 +2890,7 @@ case "$1" in
       repos/o/w)                    printf 'main\n' ;;
       */actions/runs\?*)            printf '77\t9003\t%s\tfailure\t2026-10-07T04:35:00Z\tselftests\t60\n77\t9002\t%s\tfailure\t2026-10-07T04:10:00Z\tselftests\t1600\n77\t9001\t%s\tsuccess\t2026-10-07T04:00:00Z\tselftests\t2200\n' "$BK_HEAD" "$BK_RED" "$BK_GREEN" ;;
       */actions/runs/9002/jobs*)    printf '501\tselftests / shard 3\n' ;;
+      */actions/runs/9003/jobs*)    printf '503\tselftests / shard 3\n' ;;   # the newest red: the same job (#4774)
       repos/o/w/issues\?*)          for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
     esac ;;
   run) cat "$BK_LOG" ;;
@@ -3069,6 +3072,75 @@ EOF
     || { WHY="red on a stable containing the fix must REOPEN #$n0 (exit $c): $(tr '\n' ' ' < "$d/err" | cut -c1-200)"; return 1; }
   grep -q '重开：修复' "$d/store/comments-$n0" || { WHY="the reopen left no comment naming the fix"; return 1; }
   WHAT="同一指纹在 4 个 stable 上红：1 张单 + 3 条评论（同 sha 不重复）；修复关单后旧 stable 仍红只记一笔不重开，含修复的版本仍红就重开那张旧单"
+}
+
+# #4771 / #4598 (issue #4774): a red base's fingerprint named an OLDER red — the
+# train's failfast had left the red run `cancelled` (passed over as no verdict),
+# so a macOS nightly red since earlier won; and a text naming shard 16 of a branch
+# run got the base streak's first job, shard 8. The filer must key the red the
+# text is about.
+drill_breakage_wrong_red() {
+  CAP=20; local d="$WORK/bkwr" t0 b
+  mkdir -p "$d/fp" "$d/conf" "$d/store" "$d/home" "$d/tmp"
+  cat > "$d/fp/gh" <<'EOF'
+#!/bin/bash
+S="$BK_STORE"; printf '%s\n' "$*" >> "$S/gh.log"
+case "$1" in
+  issue)
+    case "$2" in
+      create)
+        n=$(( $(ls "$S"/issue-* 2>/dev/null | wc -l) + 4771 ))
+        shift 2; b=''; while [ $# -gt 0 ]; do case "$1" in --body) shift; b="$1";; esac; shift; done
+        printf '%s' "$b" > "$S/issue-$n"; printf 'https://github.com/o/w/issues/%s\n' "$n" ;;
+    esac ;;
+  api)
+    p=''; for a in "$@"; do case "$a" in repos/*|search/*) p="$a";; esac; done
+    case "$p" in
+      */actions/runs\?*)
+        printf '381\t39170235632\t10bb05b5aaaa\tcancelled\t2026-10-18T21:50:00Z\trelease train\t900\trelease train\t.github/workflows/release-train.yml\n'
+        printf '99\t39164519771\t8937c5a842eb\tfailure\t2026-10-18T18:17:00Z\tselftests (macOS)\t13000\tselftests (macOS)\t.github/workflows/selftests-macos.yml\n'
+        printf '310\t39020000000\tf4276886dddd\tfailure\t2026-10-17T02:00:00Z\tselftests\t30000\tselftests\t.github/workflows/selftests.yml\n'
+        printf '381\t39164193455\t8937c5a842eb\tsuccess\t2026-10-18T18:10:00Z\trelease train\t13400\trelease train\t.github/workflows/release-train.yml\n' ;;
+      */actions/runs/39170235632/jobs*) printf '5\tLinux / shard 5\n6\ttrain\n' ;;
+      */actions/runs/39164519771/jobs*) printf '9\tmacOS / shard 1\n' ;;
+      */actions/runs/39020000000/jobs*) printf '8\tselftests / shard 8\n' ;;
+      */actions/runs/39025697982/jobs*) printf '16\tselftests / shard 16\n' ;;
+      */actions/runs/39025697982)       printf 'failure\t14bad884cccc\tselftests\tselftests\n' ;;
+      repos/o/w/issues\?*)              for f in "$S"/issue-*; do [ -e "$f" ] || continue; printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done ;;
+    esac ;;
+  run)
+    j=''; while [ $# -gt 0 ]; do [ "$1" = --job ] && j="${2:-}"; shift; done
+    case "$j" in
+      5)  printf 'Linux / shard 5\tUNKNOWN STEP\t2026-10-18T22:08:23.4771710Z FAIL  selftest-partitions-selftest.sh                   2.6s (exit 1)\n' ;;
+      6)  printf 'train\tUNKNOWN STEP\t2026-10-18T22:09:13.0000000Z ##[error]Process completed with exit code 1.\n' ;;
+      9)  printf 'macOS / shard 1\tUNKNOWN STEP\t2026-10-18T18:40:00.0000000Z FAIL B: a change with no script should pass (nothing to lint), not fail\n' ;;
+      8)  printf 'selftests / shard 8\tUNKNOWN STEP\t2026-10-17T03:00:00.0000000Z FAIL  transfer-norepo-selftest.sh   41.0s (exit 1)\n' ;;
+      16) printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:41:32.4001687Z FAIL  fleet-bin-inventory-selftest.sh   13.1s (exit 1)\n' ;;
+    esac ;;
+esac
+exit 0
+EOF
+  chmod +x "$d/fp/gh"
+  bk() { env -u TMUX -u TMUX_PANE HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 TMPDIR="$d/tmp" PATH="$d/fp:$PATH" \
+           FLEET_GH_WRITE_GAP=0 FLEET_BASE_BRANCH=master BK_STORE="$d/store" "$@"; }
+  t0=$(now)
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w1 --breakage \
+     --title 'master 红：selftest-partitions-selftest.sh — fleet-cleanup-idle 测试分组与分片表不一致' \
+     --body '列车（10bb05b5，master 头）在 Linux / shard 5 红，同一提交单独重跑仍红' > "$d/out1" 2> "$d/err1" \
+    || { WHY="the #4771 filing failed: $(tr '\n' ' ' < "$d/err1" | cut -c1-200)"; return 1; }
+  b=$(cat "$d/store"/issue-4771 2>/dev/null)
+  case "$b" in *'故障指纹：`Linux / shard 5` @ `10bb05b` — FAIL selftest-partitions-selftest.sh (exit 1)'*) ;;
+    *) WHY="#4771's fingerprint is not the train's Linux / shard 5 @ 10bb05b: $(printf '%s' "$b" | grep 故障指纹 | cut -c1-200)"; return 1 ;; esac
+  rm -rf "$d/conf/global/breakage"
+  bk bash "$BIN/fleet-issue-file.sh" --repo o/w --from w2 --breakage \
+     --title 'master 红：fleet-bin-inventory 有 9 个 nogh_live_* 未归类' \
+     --body '我是在 #3884 的全量验收 run 39025697982 里看到的：shard 16，FAIL fleet-bin-inventory-selftest.sh 13.1s。' > "$d/out2" 2> "$d/err2" \
+    || { WHY="the #4598 filing failed: $(tr '\n' ' ' < "$d/err2" | cut -c1-200)"; return 1; }
+  SECS=$(since "$t0")
+  b=$(cat "$d/store"/issue-4772 2>/dev/null)
+  case "$b" in *'故障指纹：`selftests / shard 16` @ `14bad88`'*) ;;
+    *) WHY="#4598's fingerprint is not shard 16 of the run it names: $(printf '%s' "$b" | grep 故障指纹 | cut -c1-200)"; return 1 ;; esac
+  WHAT="#4771 → 列车 Linux / shard 5 @ 10bb05b（failfast 取消的 run 也算红、macOS 夜跑不进 ci- 探针）；#4598 → 正文点名的 run 的 shard 16，不是主干 streak 的 shard 8"
 }
 
 # A release that deletes a hook script an old session's table still calls: the

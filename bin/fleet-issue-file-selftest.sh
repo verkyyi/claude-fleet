@@ -44,6 +44,14 @@
 #      #2170's sightings (11:22:55 and 11:29:30Z, head a6dd7c9b then an
 #      unfinished bb7da505) and the one after bb7da505 went red too all give ONE
 #      key; the two pg logs normalize to the same `--- FAIL:` line.
+#   Z. the red THIS time (issue #4774), on the two real misfiles: #4771 (the
+#      release train cancelled by its failfast with Linux / shard 5 red, a macOS
+#      nightly red since earlier) and #4598 (selftests / shard 16 red in a branch
+#      dispatch run the text names, the base's streak red on shard 8): a cancelled
+#      run with a failed job is red, a channel of its own (macOS) is skipped, the
+#      newest red comes first, the job the text names wins (`shard 1` ≠ `shard 16`),
+#      a bare duration (`2.6s`) is not part of the key, and the filer keys a run
+#      its text names.
 #   T. no auto road (issue #4271, replacing #2175's): no flag + a red base + a
 #      text naming it ⇒ an ORDINARY issue, no probe; the #4268 shape (a design
 #      ticket mentioning 「红」) files plain and a later one is not swallowed;
@@ -189,6 +197,8 @@ case "$1" in
       */actions/runs\?*)                     [ -n "${BRK_RUNS_FILE:-}" ] && cat "$BRK_RUNS_FILE"; exit 0 ;;
       */actions/runs/*/jobs*)                r=${p#*/actions/runs/}; r=${r%%/*}
                                              [ -n "${BRK_JOBS_DIR:-}" ] && [ -f "$BRK_JOBS_DIR/$r" ] && cat "$BRK_JOBS_DIR/$r"; exit 0 ;;
+      */actions/runs/[0-9]*)                 r=${p##*/actions/runs/}   # one run's metadata (issue #4774: a run the text names)
+                                             [ -n "${BRK_RUNMETA_DIR:-}" ] && [ -f "$BRK_RUNMETA_DIR/$r" ] && cat "$BRK_RUNMETA_DIR/$r"; exit 0 ;;
       repos/*/issues\?*)                     for f in "${BRK_STORE:-/nonexistent}"/issue-*; do [ -e "$f" ] || continue
                                                printf '%s\t%s\n' "${f##*-}" "$(tr '\n' ' ' < "$f")"; done; exit 0 ;;
     esac
@@ -450,6 +460,7 @@ printf 'selftests / shard 3\tRun tests\t2026-10-07T04:20:11.1234567Z ##[group]Ru
 sed 's/:88:2:/:91:4:/' "$WORK/log-a" > "$WORK/log-a2"
 printf 'selftests / shard 3\tRun tests\t2026-10-07T04:30:00.0000000Z FAIL  bash32-array-selftest: bin/x.sh:12: bare array on an empty array\n' > "$WORK/log-b"
 printf '501\tselftests / shard 3\n' > "$FX/jobs/9002"
+printf '503\tselftests / shard 3\n' > "$FX/jobs/9003"   # the newest red: the same job, still red
 red_runs() {  # red_runs [age of the newest red] [a cancelled run on top: 1]
   [ "${2:-0}" = 1 ] && printf '77\t9004\tdddd444dddd444\tcancelled\t2026-10-07T04:40:00Z\tselftests\t60\n'
   printf '77\t9003\taaaa111aaaa111\tfailure\t2026-10-07T04:35:00Z\tselftests\t%s\n' "${1:-100}"
@@ -483,9 +494,9 @@ printf '%s' "$pa" | cut -f6 | grep -qx '9002'          || fail "R field 6 is tha
 printf '%s' "$pa" | cut -f3 | grep -qx 'selftests / shard 3' || fail "R field 3 is the failed job's name" "$pa"
 printf '%s' "$pa" | cut -f4 | grep -qx 'FAIL lint: internal/api/roles.go: duplicate key "/v1/admin/drill" in map literal' \
                                                      || fail "R field 4 is the FAIL line, :line:col stripped, the echoed script and an ok line skipped" "$pa"
-printf '%s' "$pa" | cut -f5 | grep -q '^selftests|selftests / shard 3$' || fail "R field 5 names the workflow + its failed jobs" "$pa"
-grep -q 'run view --job 501 --log-failed' "$GH_LOG"  || fail "R the log is read with gh run view --job <job id> --log-failed" "$(cat "$GH_LOG")"
-grep -q 'actions/runs/9002/jobs' "$GH_LOG"           || fail "R the jobs are the streak's FIRST run's (9002)" "$(cat "$GH_LOG")"
+printf '%s' "$pa" | cut -f5 | grep -q '^selftests|selftests / shard 3|shard 3|9003|9002|' || fail "R field 5 names the workflow, the failed job, its short name, the runs" "$pa"
+grep -q 'run view --job 503 --log-failed' "$GH_LOG"  || fail "R the log is the NEWEST red run's job's, read with gh run view --job <job id> --log-failed (#4774)" "$(cat "$GH_LOG")"
+grep -q 'actions/runs/9002/jobs' "$GH_LOG"           || fail "R the streak is walked back to where that job first failed (9002)" "$(cat "$GH_LOG")"
 grep -q 'graphql' "$GH_LOG"                          && fail "R the probe must be REST only" "$(cat "$GH_LOG")"
 pg=$(probe "$FX/runs-green" "$WORK/log-a"); rcg=$?
 [ "$rcg" = 1 ] && [ -z "$pg" ]                       || fail "R no red workflow is rc 1 (not red)" "rc=$rcg [$pg]"
@@ -522,6 +533,7 @@ pglog() {  # pglog <time> → the tokenledger-pg job log
 pglog 11:14:03 1.12s 0.92s > "$FX/logs/112763377741"     # c902bf83's run
 pglog 11:24:40 1.31s 0.88s > "$FX/logs/112766631835"     # bb7da505's run
 printf 'test\tRun go test -race ./...\t2026-10-07T11:21:08.0158841Z --- FAIL: TestNodePlaceIdleNodeStaysLocal (1.19s)\ntest\tRun go test -race ./...\t2026-10-07T11:21:08.0495450Z FAIL\tgithub.com/verkyyi/claude-fleet/tokenledger/internal/api\t342.280s\n' > "$FX/logs/112763377674"
+sed 's/(1.19s)/(1.27s)/' "$FX/logs/112763377674" > "$FX/logs/112766631871"   # bb7da505's `test`: still red
 printf '112763377674\ttest\n112763377741\ttokenledger-pg\n' > "$FX/jobs/37611916613"
 printf '112766631871\ttest\n112766631835\ttokenledger-pg\n' > "$FX/jobs/37613311153"
 tl_runs() {  # tl_runs <age> [bb7da505 finished: 1] — newest first, as the REST list
@@ -536,9 +548,13 @@ sp() { env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$1" BRK_JO
          bash -c '. "$1/fleet-lib.sh"; fleet_breakage_probe verkyyi/claude-fleet master' _ "$WORK/bin"; }
 s63=$(sp "$FX/runs-2163"); s70=$(sp "$FX/runs-2170"); slt=$(sp "$FX/runs-later")
 [ -n "$s63" ] && [ -n "$s70" ] && [ -n "$slt" ]      || fail "S master WAS red at #2163's and #2170's filing — the probe must say so" "[$s63] [$s70] [$slt]"
-k63=${s63%%	*}; k70=${s70%%	*}; klt=${slt%%	*}
-[ "$k63" = "$k70" ] && [ "$k70" = "$klt" ]           || fail "S #2163, #2170 and a later sighting are ONE breakage" "$s63"$'\n'"$s70"$'\n'"$slt"
-printf '%s' "$s63" | cut -f2 | grep -q '^c902bf8' || fail "S the streak started at c902bf83" "$s63"
+# One row per failed job (issue #4774); the pg row is the one the filings named.
+pgrow() { printf '%s\n' "$1" | awk -F'\t' '$3 == "tokenledger-pg"'; }
+k63=$(pgrow "$s63" | cut -f1); k70=$(pgrow "$s70" | cut -f1); klt=$(pgrow "$slt" | cut -f1)
+[ -n "$k63" ] && [ "$k63" = "$k70" ] && [ "$k70" = "$klt" ] || fail "S #2163, #2170 and a later sighting are ONE breakage" "$s63"$'\n'"$s70"$'\n'"$slt"
+[ "$(printf '%s\n' "$slt" | awk -F'\t' '$3 == "test"' | cut -f1)" = "$(printf '%s\n' "$s63" | awk -F'\t' '$3 == "test"' | cut -f1)" ] \
+                                                     || fail "S the other failed job (test) is its own row, one key across sightings too" "$s63"$'\n'"$slt"
+pgrow "$slt" | cut -f2 | grep -q '^c902bf8'          || fail "S the later sighting's pg row walks back to where it went red (c902bf83)" "$slt"
 printf '%s' "$s63" | cut -f5 | grep -q 'tokenledger-pg' || fail "S the names carry the failed tokenledger-pg job" "$s63"
 l1=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112763377741")
 l2=$(env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_norm_line' < "$FX/logs/112766631835")
@@ -552,6 +568,115 @@ done
 pk=$(printf '%s\n' "$s63" | env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_pick "$1" master' _ '登录页按钮点了没反应，报错 undefined')
 [ -z "$pk" ]                                         || fail "S a text naming neither the base branch nor a red check picks nothing" "[$pk]"
 ok "S the real 2026-10-07 red: #2163 / #2170 / later = one key (streak at c902bf8); both pg logs → one --- FAIL line; both titles pick it"
+
+# ============================ Z: the red THIS time (issue #4774) ===============
+# #4771 (2026-10-18): release train run 39170235632 on 10bb05b5 went red on Linux /
+# shard 5 (selftest-partitions-selftest.sh) and the train's failfast CANCELLED the
+# run — the probe passed it over as no verdict, so the only red left was
+# selftests-macos.yml's nightly (macOS / shard 1, red since 8937c5a) and #4771 was
+# stamped `macOS / shard 1 @ 8937c5a`. The logs are excerpts of the real ones.
+mkdir -p "$FX/meta"
+u_log5() {  # u_log5 <duration> → Linux / shard 5's log
+  local t='Linux / shard 5	UNKNOWN STEP	2026-10-18T22:0'
+  printf '%s2:18.6712171Z ^[[36;1mif [ -n "$CHANGED_BASE" ] && [ -n "$PREV_FAILS" ] && has --prev-fails; then^[[0m\n' "$t"
+  printf '%s6:13.3237822Z ok   limit classification reads the call'"'"'s own error text (graphql / core / secondary / none)\n' "$t"
+  printf '%s8:23.4274349Z PASS fleet-break-it-node: 56 discovered cases, 6 parts, every case once; growth covered\n' "$t"
+  printf '%s8:23.4514259Z Traceback (most recent call last):\n' "$t"
+  printf '%s8:23.4514457Z   File "<stdin>", line 103, in <module>\n' "$t"
+  printf "%s8:23.4515711Z AssertionError: ('fleet-cleanup-idle', 'groups != part', ['PolicyGrammar.test_idle_owned_holds_off_the_reopen'])\n" "$t"
+  printf '%s8:23.4771710Z FAIL  selftest-partitions-selftest.sh                   %s (exit 1)\n' "$t" "$1"
+  printf '%s8:23.4772841Z ---------------- slowest 10 of 28 ----------------\n' "$t"
+  printf '%s8:23.5224409Z ##[error]Process completed with exit code 1.\n' "$t"
+}
+u_log5 2.6s > "$FX/logs/117802200944"
+printf 'train\tUNKNOWN STEP\t2026-10-18T22:09:13.0000000Z ##[error]Process completed with exit code 1.\n' > "$FX/logs/117803738916"
+printf 'macOS / shard 1\tUNKNOWN STEP\t2026-10-18T18:40:00.0000000Z FAIL B: a change with no script should pass (nothing to lint), not fail\n' > "$FX/logs/900"
+printf '117802200944\tLinux / shard 5\n117803738916\ttrain\n' > "$FX/jobs/39170235632"
+printf '900\tmacOS / shard 1\n' > "$FX/jobs/39164519771"
+u71_runs() {  # newest first, as the REST list: wid rid sha conclusion created name age title path
+  printf '381130352\t39170235632\t10bb05b5aaaa\tcancelled\t2026-10-18T21:50:00Z\trelease train\t900\trelease train\t.github/workflows/release-train.yml\n'
+  printf '99\t39164519771\t8937c5a842eb\tfailure\t2026-10-18T18:17:00Z\tselftests (macOS)\t13000\tselftests (macOS)\t.github/workflows/selftests-macos.yml\n'
+  printf '381130352\t39164193455\t8937c5a842eb\tsuccess\t2026-10-18T18:10:00Z\trelease train\t13400\trelease train\t.github/workflows/release-train.yml\n'
+  printf '99\t39100000000\t7777777bbbbb\tsuccess\t2026-10-17T18:17:00Z\tselftests (macOS)\t99000\tselftests (macOS)\t.github/workflows/selftests-macos.yml\n'
+}
+u71_runs > "$FX/runs-4771"
+up() {  # up <runs file> [VAR=val…] → the probe's lines on verkyyi/claude-fleet
+  local rf="$1"; shift
+  env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_RUNS_FILE="$rf" BRK_JOBS_DIR="$FX/jobs" BRK_LOGS_DIR="$FX/logs" BRK_RUNMETA_DIR="$FX/meta" "$@" \
+      bash -c '. "$1/fleet-lib.sh"; fleet_breakage_probe verkyyi/claude-fleet master' _ "$WORK/bin"
+}
+upick() { env BIN="$WORK/bin" bash -c '. "$BIN/fleet-lib.sh"; fleet_breakage_pick "$1" master' _ "$1"; }
+t71='master 红：selftest-partitions-selftest.sh — fleet-cleanup-idle 测试分组与分片表不一致'
+b71='列车 39170235632（10bb05b5，master 头）在 Linux / shard 5 红，同一提交单独重跑仍红：AssertionError: (fleet-cleanup-idle, groups != part)'
+u1=$(up "$FX/runs-4771"); rcu=$?
+[ "$rcu" = 0 ] && [ -n "$u1" ]                       || fail "Z1 a run the train's failfast cancelled with a red shard IS red (#4771)" "rc=$rcu $(cat "$GH_LOG")"
+printf '%s\n' "$u1" | cut -f3 | grep -q 'macOS'      && fail "Z1 selftests-macos.yml has its own channel (macos-…): not a ci- row" "$u1"
+r1=$(printf '%s\n' "$u1" | head -1)
+printf '%s' "$r1" | cut -f3 | grep -qx 'Linux / shard 5' || fail "Z1 the first row is the shard that went red first (Linux / shard 5)" "$u1"
+printf '%s' "$r1" | cut -f4 | grep -qx 'FAIL selftest-partitions-selftest.sh (exit 1)' \
+                                                     || fail "Z1 its line is the FAIL line with the bare 2.6s gone" "$r1"
+printf '%s' "$r1" | cut -f2 | grep -q '^10bb05b5'    || fail "Z1 the sha is where it went red (10bb05b5), not the macOS 8937c5a" "$r1"
+printf '%s' "$r1" | cut -f6 | grep -qx '39170235632' || fail "Z1 the run is the train's 39170235632" "$r1"
+printf '%s' "$r1" | cut -f5 | tr '|' '\n' | grep -qx 'selftest-partitions-selftest.sh' \
+                                                     || fail "Z1 the names carry the selftest the log failed" "$r1"
+u_log5 3.1s > "$FX/logs/117802200944"
+u1b=$(up "$FX/runs-4771")
+[ "${u1b%%	*}" = "${r1%%	*}" ]                   || fail "Z1 a rerun that took 3.1s instead of 2.6s is the same key" "$r1"$'\n'"$u1b"
+# Even with the macOS workflow in (no skip): the newest red first, and #4771's
+# own words pick the shard, never the nightly.
+u2=$(up "$FX/runs-4771" FLEET_BREAKAGE_SKIP_RE=)
+printf '%s\n' "$u2" | tail -1 | cut -f3 | grep -qx 'macOS / shard 1' || fail "Z2 no skip: the macOS row is there, after the newer train" "$u2"
+pk=$(printf '%s\n' "$u2" | upick "$t71"$'\n'"$b71")
+[ "${pk%%	*}" = "${r1%%	*}" ]                   || fail "Z2 #4771's title + body pick Linux / shard 5 (not macOS / shard 1)" "[$pk]"
+pk=$(printf '%s\n' "$u2" | upick 'master 红了，原因待查')
+[ "${pk%%	*}" = "${r1%%	*}" ]                   || fail "Z2 a text naming no check: the NEWEST red, not the oldest" "[$pk]"
+
+# #4598 (2026-10-17): selftests / shard 16 (fleet-bin-inventory-selftest.sh) red
+# in run 39025697982 — a workflow_dispatch on issue-3884, never on master's list —
+# while master's own selftests streak had started on shard 8 (transfer-norepo):
+# the fingerprint said shard 8. Its text names the run; the filer keys THAT run.
+printf 'failure\t14bad884cccc\tselftests\tselftests\n' > "$FX/meta/39025697982"
+printf '117376131742\tselftests / shard 16\n' > "$FX/jobs/39025697982"
+{ printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:41:32.3841558Z 未归类\t9\n'
+  printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:41:32.4001687Z FAIL  fleet-bin-inventory-selftest.sh                  13.1s (exit 1)\n'
+  printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:44:46.1443959Z ok   FAIL  hub 400 → exit 1 with its status only; others still land; no token shown\n'
+  printf 'selftests / shard 16\tUNKNOWN STEP\t2026-10-17T10:46:40.9332804Z ##[error]Process completed with exit code 1.\n'; } > "$FX/logs/117376131742"
+printf 'selftests / shard 8\tUNKNOWN STEP\t2026-10-17T03:00:00.0000000Z FAIL  transfer-norepo-selftest.sh                  41.0s (exit 1)\n' > "$FX/logs/800"
+printf 'selftests / shard 1\tUNKNOWN STEP\t2026-10-17T03:00:00.0000000Z FAIL  portability-selftest.sh                  1.0s (exit 1)\n' > "$FX/logs/801"
+printf '800\tselftests / shard 8\n801\tselftests / shard 1\n' > "$FX/jobs/39020000000"
+printf '310227836\t39020000000\tf4276886dddd\tfailure\t2026-10-17T02:00:00Z\tselftests\t30000\tselftests\t.github/workflows/selftests.yml\n310227836\t39010000000\t6666666eeeee\tsuccess\t2026-10-16T02:00:00Z\tselftests\t99000\tselftests\t.github/workflows/selftests.yml\n' > "$FX/runs-4598"
+t98='master 红：fleet-bin-inventory 有 9 个 nogh_live_* 未归类'
+b98='我是在 #3884 的全量验收 run 39025697982 里看到的：shard 16，`FAIL fleet-bin-inventory-selftest.sh 13.1s`。'
+r98=$(env PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" BRK_JOBS_DIR="$FX/jobs" BRK_LOGS_DIR="$FX/logs" BRK_RUNMETA_DIR="$FX/meta" \
+        bash -c '. "$1/fleet-lib.sh"; fleet_breakage_run_rows verkyyi/claude-fleet $(fleet_breakage_text_runs "$2")' _ "$WORK/bin" "$t98"$'\n'"$b98")
+printf '%s' "$r98" | cut -f3 | grep -qx 'selftests / shard 16' || fail "Z3 the run #4598 names gives its shard 16 row" "[$r98]"
+printf '%s' "$r98" | cut -f2 | grep -q '^14bad884'   || fail "Z3 its sha is that run's (14bad884)" "[$r98]"
+# shard 1 is not shard 16: a run red on both picks what the text says.
+u4=$(up "$FX/runs-4598")
+pk=$(printf '%s\n%s\n' "$u4" "$r98" | upick "$t98"$'\n'"$b98")
+printf '%s' "$pk" | cut -f3 | grep -qx 'selftests / shard 16' || fail "Z4 「shard 16」 is not 「shard 1」 or shard 8: the text's shard wins" "[$pk]"
+pk=$(printf '%s\n' "$u4" | upick 'master 红：selftests / shard 16')
+[ -z "$pk" ] || ! printf '%s' "$pk" | cut -f3 | grep -qx 'selftests / shard 1' \
+                                                     || fail "Z4 「shard 16」 must not score as 「shard 1」" "[$pk]"
+# The filer: --breakage with each real text keys the red it names.
+BRK4="$WORK/brk4"; mkdir -p "$BRK4"; rm -rf "$WORK/conf/global/breakage"
+run_u() {  # run_u <sfx> <runs file> <args…>
+  local sfx="$1" rf="$2"; shift 2
+  PATH="$WORK/fakebin:$PATH" GH_LOG="$GH_LOG" SPAWN_LOG="$SPAWN_LOG" BIND_LOG="$BIND_LOG" BODY="$WORK/body-$sfx" \
+  FLEET_REPO="verkyyi/claude-fleet" FLEET_BASE_BRANCH=master FLEET_CONF_DIR="$WORK/conf" BRK_STORE="$BRK4" \
+  BRK_RUNS_FILE="$rf" BRK_JOBS_DIR="$FX/jobs" BRK_LOGS_DIR="$FX/logs" BRK_RUNMETA_DIR="$FX/meta" \
+    bash "$WORK/bin/fleet-issue-file.sh" "$@" >"$WORK/out-$sfx" 2>"$WORK/err-$sfx"
+  echo $? > "$WORK/rc-$sfx"
+}
+run_u u5 "$FX/runs-4771" --title "$t71" --body "$b71" --breakage --from w1
+grep -q "<!-- fleet:breakage key=${r1%%	*} -->" "$WORK/body-u5" \
+                                                     || fail "Z5 #4771 filed with --breakage is keyed Linux / shard 5" "$(cat "$WORK/err-u5" "$WORK/body-u5")"
+grep -q '<!-- fleet:fault sha=10bb05b5aaaa -->' "$WORK/body-u5" || fail "Z5 its fault sha is 10bb05b5, not 8937c5a" "$(cat "$WORK/body-u5")"
+run_u u6 "$FX/runs-4598" --title "$t98" --body "$b98" --breakage --from w1
+grep -q "<!-- fleet:breakage key=${r98%%	*} -->" "$WORK/body-u6" \
+                                                     || fail "Z6 #4598 filed with --breakage is keyed by the run it names (shard 16), not master's shard 8" "$(cat "$WORK/err-u6" "$WORK/body-u6")"
+grep -q '<!-- fleet:fault sha=14bad884cccc -->' "$WORK/body-u6" || fail "Z6 its fault sha is that run's" "$(cat "$WORK/body-u6")"
+ok "Z the red THIS time (#4774): #4771 → Linux / shard 5 @ 10bb05b5 (failfast-cancelled = red, macOS skipped, newest first, no bare duration); #4598 → shard 16 of the run it names"
 
 # ============================ T: no auto road — only a flag makes a breakage ====
 # Issue #4271 (replacing #2175's auto road): a red base AND a text naming it is
