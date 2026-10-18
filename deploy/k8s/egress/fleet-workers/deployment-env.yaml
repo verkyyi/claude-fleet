@@ -12,10 +12,11 @@ spec:
             - name: FLEET_EGRESS_SOURCES
               value: "198.18.0.0/16"
             # a host the cluster cannot reach directly goes through a parent proxy
-            # (the LLM endpoints and GitHub's git transport through a US egress);
+            # (the LLM endpoints and GitHub's git transport through the US egress,
+            # ../../us-egress: Service fleet-us-egress:3128);
             # every other public host, any port, leaves directly (#4311)
             - name: FLEET_EGRESS_VIA
-              value: ".anthropic.com=192.0.2.10:3128 .claude.ai=192.0.2.10:3128 .github.com=192.0.2.10:3128 .githubusercontent.com=192.0.2.10:3128 ghcr.io=192.0.2.10:3128"
+              value: ".anthropic.com=fleet-us-egress:3128 .claude.ai=fleet-us-egress:3128 .github.com=fleet-us-egress:3128 .githubusercontent.com=fleet-us-egress:3128 ghcr.io=fleet-us-egress:3128"
             # never direct: the parent's refusal is the answer
             - name: FLEET_EGRESS_REQUIRE_VIA
               value: ".anthropic.com .claude.ai"

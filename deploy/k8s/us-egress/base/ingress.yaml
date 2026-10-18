@@ -1,0 +1,25 @@
+# The US connector's way in: one exact path on the hub's host, behind its
+# existing TLS (no tls block here; no new LoadBalancer). CONNECT stays closed
+# until an authenticated connector holds a lane. The overlay names the real host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fleet-us-egress
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: hub.example.com
+      http:
+        paths:
+          - path: /_fleet/us-egress
+            pathType: Exact
+            backend:
+              service:
+                name: fleet-us-egress
+                port:
+                  name: reverse

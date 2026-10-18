@@ -415,3 +415,32 @@ spec:
       ports:
         - {protocol: TCP, port: 443}
         - {protocol: TCP, port: 6443}
+---
+# The US egress gateway (#4313, ../us-egress): fleet-egress alone hands it CONNECT
+# tunnels (3128 — never a user pod: its parent is fleet-egress's choice, not the
+# pod's), and the hub's ingress controller (ACK runs it in kube-system) brings the
+# US connector's WSS to 8090. It opens nothing itself: each tunnel's far end is the
+# connector's.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: us-egress-in
+  namespace: fleet-workers
+spec:
+  podSelector:
+    matchLabels:
+      app: fleet-us-egress
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: fleet-egress
+      ports:
+        - {protocol: TCP, port: 3128}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {protocol: TCP, port: 8090}

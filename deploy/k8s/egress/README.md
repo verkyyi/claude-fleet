@@ -29,6 +29,11 @@
 改 `fleet-workers/deployment-env.yaml` 再 apply；改程序 = 改 `base/fleet-egress.py`，ConfigMap 名
 带内容哈希，apply 即滚动（2 副本、`maxUnavailable: 0`，隧道在旧 pod 上跑完）。
 
+我们的 `fleet-workers/` 在私有部署仓库里（[../README.md](../README.md) «overlays live in a private
+repo»）：先 `gh variable get FLEET_DEPLOY_OVERLAY_REPO -R verkyyi/claude-fleet` 查到它（fleet 机器上
+它被托管在 `~/projects/<name>`，`fleet-repo.sh list`），把它的 `k8s/` 叠到本仓库的 `deploy/k8s/`
+上再 apply；别另做一份临时 overlay。上游里的美国出口是 [`../us-egress`](../us-egress/README.md)。
+
 验：
 
 ```sh
