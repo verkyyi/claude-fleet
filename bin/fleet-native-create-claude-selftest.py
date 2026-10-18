@@ -198,6 +198,26 @@ def main():
                 self.send_response(404)
                 self.end_headers()
                 return
+            if self.path.startswith('/v1/fleet/tickets/authority/start?'):
+                # The independent reserved read the supervisor takes before begin.
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                key = query.get('reservation', [''])[0]
+                row = reservations.get(key)
+                valid = (arguments.local_authority
+                         and self.headers.get('Authorization') == 'Bearer fixture-authority-only'
+                         and query == {'repo': [context['repo']], 'reservation': [key]}
+                         and row is not None and row['state'] == 'reserved')
+                if not valid:
+                    admission_errors.append('unexpected reserved read: ' + self.path)
+                body = json.dumps(dict(repo=context['repo'], reservation=key, owner='fixture-owner',
+                                       endpoint_id='fixture-node', phase='reserved')
+                                  if valid else {'error': 'unexpected read'}).encode()
+                self.send_response(200 if valid else 409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             valid = (arguments.raw_entrypoint and self.path.startswith('/v1/fleet/tickets/authority?')
                      and self.headers.get('Authorization') == 'Bearer fixture-authority-only'
                      and urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -259,7 +279,15 @@ def main():
                     else:
                         raise ValueError('invalid authority transition')
                     admission_events.append(dict(payload, worktree_exists=worktree.exists()))
-                    body = json.dumps({'reservation': key}).encode()
+                    # The exact acknowledgement the supervisor and observe hook check.
+                    ack = dict(repo=context['repo'], reservation=key, owner='fixture-owner',
+                               endpoint_id='fixture-node', phase=dict(begin='starting', observe='observed',
+                               stopped='stopped').get(action, 'reserved'))
+                    if action != 'reserve':
+                        ack['worker_id'] = context['worker_id']
+                    if action == 'observe':
+                        ack['native_identity'] = payload['native_identity']
+                    body = json.dumps(ack).encode()
                     code = 200
                 except (KeyError, ValueError) as error:
                     admission_errors.append(str(error))
