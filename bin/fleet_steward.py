@@ -38,8 +38,8 @@ the person's clock (fleet_decision.zone). A due beat:
      epic marks (global/epic-running.d), and the asks (C1's fleet_decision.py
      parse, through fleet-gh.sh's cache) of every session waiting on a person,
      plus every row still open;
-  3. answers each due row by its default (fleet_decision.apply_due) — within the
-     beat's write budget;
+  3. (gone, issue #4337) answers nothing at a deadline — a due row waits for
+     someone to answer it;
   4. asks fleet-epic-backstop.sh about the open PRs of a batch whose driver is
      gone (its mark stale), so the model never merges under a busy worker; a
      stale mark whose driver window is still HERE (issue #2958) is a row too —
@@ -666,35 +666,8 @@ def collect(sess, st, now_t, apply=True):
             elif old.get("state") == "open" and row["state"] != "open":
                 delta["closed"].append({"id": row["id"], "src": row["src"], "state": row["state"]})
                 old.update(row)
-    # 3. due rows answered by their default, within the budget
-    for row in list(st.d["rows"].values()):
-        if not apply or not fd.is_due(row, now_t):
-            continue
-        if row.get("local"):
-            if row.get("local") == "dialog" and st.budget_left() >= 1:
-                rc, _ = dialog_answer(sess, row, [fd.row_default(row)], "default", tr("steward_dialog_basis_default"))
-                st.spend(1)
-                if rc == 0:
-                    close_local(st, row, "defaulted", "default", fd.row_default(row), now_t, delta)
-                    tally(st, "default")
-                    delta["defaulted"].append({"id": row["id"], "src": row["src"], "default": row.get("default", "")})
-            continue
-        if st.budget_left() < 2:
-            delta["deferred"] += 1
-            continue
-        try:
-            res = fd.apply_due(row)
-        except (RuntimeError, ValueError, OSError):
-            continue
-        if res.get("answered"):
-            st.spend(2 if res.get("recorded") else 1)
-            row["state"] = "defaulted"
-            row["by"] = "default"
-            row["closed_at"] = fd.iso(now_t)
-            tally(st, "default")
-            delta["defaulted"].append({"id": row["id"], "src": row["src"], "default": row.get("default", "")})
-        elif res.get("skipped") in ("answered", "defaulted", "gone"):
-            row["state"] = res["skipped"] if res["skipped"] != "gone" else "answered"
+    # 3. (gone, issue #4337 — EPIC #4333 拍板 2) nobody answers a question at its
+    #    deadline any more: a due row stays open on the sheet until someone answers it
     # 4. batches whose driver is gone: what the backstop says about their open PRs
     orphans = {}
     marks = epic_marks(int(now_t.timestamp()))

@@ -59,8 +59,10 @@
 #      logs/rules.log line; a rule the table lacks is refused (exit 2, no create);
 #      a filing from anywhere else gets no rule line at all (byte for byte).
 #   W. any pane spawns, a worker's too (issue #4591 lifted #2960's exit 6); a
-#      breakage a worker files WITHOUT --spawn is queued under breakage-spawn/ for
-#      the steward, one filed with --spawn spawns its fixer, nothing queued.
+#      breakage a worker files WITHOUT --spawn (issue #4337) is ONE issue + ONE
+#      breakage alert + ONE message to its parent (wid: on another machine), no
+#      queue file and no spawn; no parent ⇒ said, filed all the same; one filed
+#      with --spawn spawns its fixer, no alert, nothing queued.
 #   X. retired automation labels autoland/autofill are rejected before filing
 #      (issue #4326), alone or alongside valid labels.
 #
@@ -208,7 +210,7 @@ cat > "$WORK/fakebin/tmux" <<'TMUXFAKE'
 #!/bin/bash
 if [ "${1:-}" = -L ] || [ "${1:-}" = -S ]; then shift 2; fi
 case "${1:-}" in
-  display-message) case "$*" in *-p*) case "$*" in *session_name*) echo fifsess ;; *@fleet_role*) echo "${FAKE_FLEET_ROLE:-}" ;; *) echo '' ;; esac ;; esac ;;
+  display-message) case "$*" in *-p*) case "$*" in *session_name*) echo fifsess ;; *@fleet_role*) echo "${FAKE_FLEET_ROLE:-}" ;; *@origin_wid*) echo "${FAKE_ORIGIN_WID:-}" ;; *) echo '' ;; esac ;; esac ;;
 esac
 exit 0
 TMUXFAKE
@@ -697,25 +699,47 @@ FAKE_FLEET_ROLE=worker TMUX_PANE=%9 run_fif --title "旁支活" --parent 5
 [ "$RC" -eq 0 ] && grep -q 'issue create' "$GH_LOG" && [ ! -s "$SPAWN_LOG" ] \
   || fail "W2 a worker files without --spawn as before" "$(cat "$WORK/err")"
 ok "W1-2 spawn: every pane — a worker's too — files and spawns; without --spawn nothing starts"
-# A breakage a worker files without --spawn: filed and queued for the steward.
-: > "$SPAWN_LOG"
-FAKE_FLEET_ROLE=worker TMUX_PANE=%9 run_brk w4 --title "master 又红" --breakage-key k-worker
+# A breakage a worker files without --spawn (issue #4337): filed, the person
+# alerted, the parent told — nobody spawned, nothing queued.
+ALERT_LOG="$WORK/alerts"; SEND_LOG="$WORK/sends"; export ALERT_LOG SEND_LOG
+cat > "$WORK/bin/fleet-alerts.sh" <<'ALERTSTUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$ALERT_LOG"
+ALERTSTUB
+cat > "$WORK/bin/fleet-peer-send.sh" <<'SENDSTUB'
+#!/bin/bash
+printf '%s <<<%s>\n' "$*" "$(cat | tr '\n' ' ')" >> "$SEND_LOG"
+echo "sent → $1"
+SENDSTUB
+chmod +x "$WORK/bin/fleet-alerts.sh" "$WORK/bin/fleet-peer-send.sh"
+PWID=42f8e358-7cc0-5856-a353-8983a4b4c9a1/78b97cf6-7383-4634-b4d7-72915e63fd74
+: > "$SPAWN_LOG"; : > "$ALERT_LOG"; : > "$SEND_LOG"
+FAKE_FLEET_ROLE=worker FAKE_ORIGIN_WID="$PWID" TMUX_PANE=%9 run_brk w4 --title "master 又红" --breakage-key k-worker
 nw=$(cat "$WORK/out-w4"); nw=${nw##*/}
-q="$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw"
-[ "$(cat "$WORK/rc-w4")" = 0 ] && [ ! -s "$SPAWN_LOG" ] && [ -f "$q" ] \
-  && [ "$(cut -f1,2 "$q")" = "acme/widgets	$nw" ] && grep -q 'queued for the steward' "$WORK/err-w4" \
-  || fail "W4 a worker's breakage: filed, not spawned, queued for the steward" "$(cat "$WORK/err-w4"; ls -R "$WORK/conf/fleets" 2>&1)"
+[ "$(cat "$WORK/rc-w4")" = 0 ] && [ -n "$nw" ] && [ "$(grep -c '<!-- fleet:breakage key=k-worker -->' "$BRK"/issue-* | awk -F: '{s+=$2} END {print s}')" = 1 ] \
+  && [ ! -s "$SPAWN_LOG" ] && [ ! -e "$WORK/conf/fleets/fifsess/breakage-spawn" ] \
+  && [ "$(grep -c . "$ALERT_LOG")" = 1 ] && grep -q "^event breakage fleet: base red — acme/widgets#$nw filed (master 又红)" "$ALERT_LOG" \
+  && [ "$(grep -c . "$SEND_LOG")" = 1 ] && grep -q "^wid:$PWID - <<<\[breakage\] the base is red — filed acme/widgets#$nw: master 又红 " "$SEND_LOG" \
+  && grep -q "parent told: sent → wid:$PWID" "$WORK/err-w4" \
+  || fail "W4 a worker's breakage: one issue + one alert + the parent told, no spawn, no queue" \
+       "$(cat "$WORK/err-w4" "$ALERT_LOG" "$SEND_LOG"; ls -R "$WORK/conf/fleets" 2>&1)"
+: > "$ALERT_LOG"; : > "$SEND_LOG"
+FAKE_FLEET_ROLE=worker TMUX_PANE=%9 run_brk w4b --title "又一处红" --breakage-key k-worker-orphan
+[ "$(cat "$WORK/rc-w4b")" = 0 ] && [ "$(grep -c . "$ALERT_LOG")" = 1 ] && [ ! -s "$SEND_LOG" ] && [ ! -s "$SPAWN_LOG" ] \
+  && grep -q 'no parent session to tell' "$WORK/err-w4b" \
+  || fail "W4b no parent: filed + alerted, said on stderr, nothing sent" "$(cat "$WORK/err-w4b" "$ALERT_LOG" "$SEND_LOG")"
 : > "$SPAWN_LOG"
 FAKE_FLEET_ROLE='orchestrator|||orchestrator' TMUX_PANE=%9 run_brk w5 --title "另一处红" --breakage-key k-orch --spawn
 nw=$(cat "$WORK/out-w5"); nw=${nw##*/}
 [ "$(cat "$WORK/rc-w5")" = 0 ] && grep -q "^$nw" "$SPAWN_LOG" && [ ! -f "$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw" ] \
   || fail "W5 the orchestrator's breakage spawns its fixer itself, nothing queued" "$(cat "$WORK/err-w5")"
-: > "$SPAWN_LOG"
+: > "$SPAWN_LOG"; : > "$ALERT_LOG"; : > "$SEND_LOG"
 FAKE_FLEET_ROLE=worker TMUX_PANE=%9 run_brk w6 --title "第三处红" --breakage-key k-worker-spawn --spawn
 nw=$(cat "$WORK/out-w6"); nw=${nw##*/}
-[ "$(cat "$WORK/rc-w6")" = 0 ] && grep -q "^$nw" "$SPAWN_LOG" && [ ! -f "$WORK/conf/fleets/fifsess/breakage-spawn/acme-widgets-$nw" ] \
-  || fail "W6 a worker's breakage with --spawn spawns its fixer itself, nothing queued" "$(cat "$WORK/err-w6")"
-ok "W4-6 breakage: a worker's without --spawn is queued for the steward; with --spawn (any pane) it spawns, nothing queued"
+[ "$(cat "$WORK/rc-w6")" = 0 ] && grep -q "^$nw" "$SPAWN_LOG" && [ ! -e "$WORK/conf/fleets/fifsess/breakage-spawn" ] \
+  && [ ! -s "$ALERT_LOG" ] && [ ! -s "$SEND_LOG" ] \
+  || fail "W6 a worker's breakage with --spawn spawns its fixer itself, no alert, nothing queued" "$(cat "$WORK/err-w6")"
+ok "W4-6 breakage: a worker's without --spawn ⇒ one issue + one alert + its parent told, no queue; with --spawn (any pane) it spawns"
 
 # ============================ X: retired labels rejected (issue #4326) =====
 for retired in autoland autofill; do

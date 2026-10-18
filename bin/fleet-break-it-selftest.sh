@@ -5142,8 +5142,8 @@ drill_decision_never_defaulted() {
 # diskguard tick reopened a steward and its beat went on answering, spawning and
 # merging with nobody there; now the role is a mark on a window, the beat runs
 # only in that window's own loop (`beat --holder`), and nothing reopens it. So the
-# moment the holder goes NOTHING happens by itself any more: a due question stays
-# unanswered, a worker's red base is filed but no fixer spawned (the person told
+# moment the holder goes NOTHING happens by itself any more (and since #4337 a due
+# question is answered by nobody even while it holds): a worker's red base is filed but no fixer spawned (the person told
 # once), no sheet, no state written — until someone types /fleet-steward again.
 drill_steward_exited() {
   CAP=10; BREAK_SOCK="$WORK/sock-sx"; local t0 w g="$WORK/sxg" p0 rc
@@ -5178,11 +5178,17 @@ json.dump(d, open(p, "w"))' "$BIN" "$g/conf/global/steward.state.json" "$g" "$1"
             FLEET_STEWARD_IDLE_CMD="$g/none" FLEET_STEWARD_SPAWN_CMD="$g/spawn" FLEET_STEWARD_ALERT_CMD="$g/alert" \
             FLEET_STEWARD_PAGE_SHARE=0 FLEET_STEWARD_DEBUG=0 \
             python3 "$BIN/fleet_steward.py" "$@" --session sx; }
-  # held: the beat answers a due row by its default (the holder's loop runs it)
+  # held: a due row is answered by nobody, held or not (issue #4337); a queued red
+  # base (one a pre-#4337 filer left — fleet-issue-file.sh writes none any more) is
+  # drained, its fixer spawned under the holder (the holder's loop runs it).
   mkrow 10
-  sxb beat --holder --force >/dev/null 2>&1
-  p0=$(grep -c . "$g/posts" 2>/dev/null || echo 0)
-  [ "$p0" -ge 1 ] || { WHY="with a holder the beat answered nothing — the drill proves nothing"; return 1; }
+  sxb beat --holder --force > "$g/beat.out" 2>&1
+  printf 'o/r\t9\tmaster 红\t\n' > "$g/conf/fleets/sx/breakage-spawn/o-r-9"
+  sxb breakage > "$g/brk.out" 2>&1
+  local s0; s0=$(cat "$g/spawns" 2>/dev/null | grep -c .)
+  [ "$s0" -ge 1 ] || { WHY="with a holder the queued red base spawned nothing — the drill proves nothing: $(cat "$g/beat.out" "$g/brk.out")"; return 1; }
+  p0=$(cat "$g/posts" 2>/dev/null | grep -c .)
+  [ "$p0" = 0 ] || { WHY="a held beat answered a due row by its default: $(cat "$g/posts")"; return 1; }
   nt kill-window -t "$w"                          # the break
   t0=$(now)
   mkrow 11
@@ -5192,8 +5198,8 @@ json.dump(d, open(p, "w"))' "$BIN" "$g/conf/global/steward.state.json" "$g" "$1"
   sxb breakage >/dev/null 2>&1
   sxb sheet --force > "$g/sheet.out" 2>&1
   [ "$rc" = 3 ] || { WHY="the beat ran with nobody holding the role (rc $rc)"; return 1; }
-  [ "$(grep -c . "$g/posts")" = "$p0" ] || { WHY="a due row was answered after the holder went: $(cat "$g/posts")"; return 1; }
-  [ ! -s "$g/spawns" ] || { WHY="a fixer was spawned with no holder: $(cat "$g/spawns")"; return 1; }
+  [ "$(cat "$g/posts" 2>/dev/null | grep -c .)" = "$p0" ] || { WHY="a due row was answered after the holder went: $(cat "$g/posts")"; return 1; }
+  [ "$(cat "$g/spawns" | grep -c .)" = "$s0" ] || { WHY="a fixer was spawned with no holder: $(cat "$g/spawns")"; return 1; }
   [ "$(grep -c . "$g/alerts" 2>/dev/null)" = 1 ] || { WHY="the red base was not told once: [$(cat "$g/alerts" 2>/dev/null)]"; return 1; }
   cmp -s "$g/state.before" "$g/conf/global/steward.state.json" || { WHY="the steward's books moved with no holder"; return 1; }
   grep -q '没人接手管家' "$g/sheet.out" || { WHY="sheet with no holder: $(cat "$g/sheet.out")"; return 1; }
