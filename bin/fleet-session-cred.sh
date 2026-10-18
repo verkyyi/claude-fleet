@@ -5,7 +5,8 @@
 # which puts the real one in on the way out — so an account change is the proxy's
 # `rebind`, never a closed window.
 #
-#   fleet-session-cred.sh on                  exit 0 ⇔ FLEET_CRED_PROXY=1 (fleet.conf / env)
+#   fleet-session-cred.sh on                  exit 0 ⇔ separated (credsep.json: always,
+#                                             issue #4675) or FLEET_CRED_PROXY=1 (fleet.conf / env)
 #   fleet-session-cred.sh mint --provider claude|codex --sid SID
 #                              [--account LABEL] [--codex-home DIR]
 #        → one line on stdout: <route> TAB <port> TAB <session credential>
@@ -55,6 +56,9 @@ PROXY="$BIN/fleet-cred-proxy.sh"
 die() { printf 'fleet-session-cred: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 switch() { # 1 / 0 — an explicit environment value outranks the conf (fleet-cred-proxy.sh's rule)
+  # A separated login reaches a subscription through the proxy or not at all
+  # (issue #4675): no lease ever lands in its home to read, so off is never its word.
+  separated && { printf 1; return; }
   [ -n "${FLEET_CRED_PROXY:-}" ] && { printf '%s' "$FLEET_CRED_PROXY"; return; }
   ( set -a
     for f in "$BIN/../fleet.conf" "$CONF/fleet.settings" "$CONF/fleet.conf"; do

@@ -139,7 +139,7 @@ func TestComputeOffNodeCannotLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	setBeat := func(compute *bool) {
-		raw, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: "alice", Compute: compute, ObservedAt: time.Now()})
+		raw, _ := json.Marshal(control.Heartbeat{Hostname: "mac-c", OSUser: "alice", Compute: compute, Credsep: control.CredsepSeparated, ObservedAt: time.Now()})
 		if err := h.srv.Store.NodeHeartbeat(ep.ID, "mac-c", "alice", "", control.Proto, string(raw), time.Now()); err != nil {
 			t.Fatal(err)
 		}

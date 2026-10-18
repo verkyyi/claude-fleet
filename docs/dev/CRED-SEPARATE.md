@@ -1,10 +1,14 @@
 # Separated credentials — 可信机器上，凭据放在会话碰不到的地方
 
-Issue #1971 · EPIC #1967 C4. **Not opt-in** (issue #4607): every login is
-separated — every one there is, and every one opened from now on. `FLEET_CRED_SEPARATE`
-(fleet.conf `[common]`) defaults to `1`; `0` counts only beside
-`FLEET_CREDSEP_OPTIONAL=1`, a declared self-hosted one-person box (and the hub then
-says `CCQUOTA_FLEET_CREDSEP_OPTIONAL=1`, else it leases that login nothing).
+Issue #1971 · EPIC #1967 C4. **Not opt-in** (issue #4607) and **no way out**
+(issue #4675): every login is separated — every one there is, and every one opened
+from now on, a self-hosted one-person box too (it has its one machine proxy, like
+any). A subscription credential is held only by the machine's proxy and the hub's
+central proxy; nothing writes one into a home. `FLEET_CREDSEP_OPTIONAL`,
+`FLEET_CRED_SEPARATE=0`, `CCQUOTA_FLEET_CREDSEP_OPTIONAL`, root's `credsep.optional`,
+`fleet-login-new.sh --no-credsep` and `fleet-credsep.sh uninstall` are gone (the
+doctor / hub / daemon say so once; `FLEET_CRED_SEPARATE=1` stays a mark the install
+pass converges on).
 
 ## Every login, by the machine itself (issue #4607)
 
@@ -15,8 +19,8 @@ program had written the pool's real Claude `.credentials.json`, Codex `auth.json
 rails now:
 
 1. **A new login is separated before its first session** — `fleet-login-new.sh`
-   7b (below); `--no-credsep` is refused (exit 2) unless the environment says
-   `FLEET_CREDSEP_OPTIONAL=1`. `account adopt` separates the login it takes over
+   7b (below); there is no `--no-credsep` (#4675: an unknown option, exit 2).
+   `account adopt` separates the login it takes over
    at once (`machine enforce --logins <it>`), not at the next tick.
 2. **An existing one is taken in by root's daemon** — the node supervisor's
    `credsep-enforce` task (every 5 minutes, `FLEET_CREDSEP_ENFORCE_EVERY`) runs
@@ -34,8 +38,9 @@ rails now:
    A preflight refusal (live sessions still reading the files) is tried again each
    tick and, past `FLEET_CREDSEP_ENFORCE_GRACE` (24 h — the hub has been refusing
    the login every lease meanwhile), with `--force`; a failed install rolls itself
-   back and is tried again after `FLEET_CREDSEP_ENFORCE_RETRY` (1 h). The way out
-   is root's alone: `/var/db/fleet-node/credsep.optional`, a login per line, or `*`.
+   back and is tried again after `FLEET_CREDSEP_ENFORCE_RETRY` (1 h). There is no
+   way out (#4675): root's old `/var/db/fleet-node/credsep.optional` is said and
+   ignored.
 3. **The hub leases an unseparated login nothing** — every login, an admin's and
    the operator's own included (below, «The hub's backstop»).
 4. **It is red until it holds** — the login's `credsep` row is FAIL for a node
@@ -105,15 +110,14 @@ the hub's credentials.
   the proxy answers ONE peer uid (`LOCAL_PEERCRED` / `SO_PEERCRED`): the login's
   (and root). No group to create, no re-login.
 
-## Turning it on / off
+## Turning it on (there is no off — issue #4675)
 
 ```sh
 # a managed machine: nothing to type — the daemon's credsep-enforce does it
 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine enforce --dry-run   # what it would do
 bash ~/.claude/fleet/bin/fleet-credsep.sh machine enforced                 # the doctor's credsep-logins row
-# elsewhere — FLEET_CRED_SEPARATE=1 written in fleet.conf [common] (the doctor is
-# red until then), then the next sync (install pass `credsep`, password-less sudo)
-# — or by hand:
+# elsewhere (a self-hosted box too) — the doctor is red until it is done; the next
+# sync does it (install pass `credsep`, password-less sudo) — or by hand:
 bash ~/.claude/fleet/bin/fleet-credsep.sh install     # needs password-less sudo ONCE
 bash ~/.claude/fleet/bin/fleet-credsep.sh status
 bash ~/.claude/fleet/bin/fleet-credsep.sh check       # the doctor's `credsep` row
@@ -144,35 +148,32 @@ after the clone, **before** its background services and its first session (先�
    — never the login's dir — and gives the login the marker `store:<label>` plus the
    label's `.conf` (a usable label to its account judge; the token itself is the
    store's); an admin marker (`hub:…`) travels as a marker. The proxy reads the
-   store's file; a session names the label. `uninstall` puts each token at the login's
-   path (the old share-pool layout); a failed fresh install deletes them instead;
-   `check` WARNs if a pool label's file holds a token again.
+   store's file; a session names the label. A failed fresh install deletes them;
+   nothing ever puts a pool token at the login's path (#4675); `check` WARNs if a
+   pool label's file holds a token again.
 3. the verdict, read **as the login** with its own clone: `status` not `separated`
    fails the open (exit 1 — the login must not be handed out); then `check` (waited
    for up to `FLEET_LOGIN_CREDSEP_WAIT`, 15 s, while the proxy starts). The run's
-   LAST line is the one the hub reads: `credsep: separated` · `credsep: pending — <why>`
-   · `credsep: off` (`--no-credsep`, the old layout: every pool token copied into the
-   login, readable by its sessions — only for a machine whose fleet predates credsep).
+   LAST line is the one the hub reads: `credsep: separated` · `credsep: pending — <why>`.
 
 From then on the login never needs sudo.
 
 ### The hub's backstop: no token to a user's login that is not separated (issue #2295, EPIC #2293 C2)
 
 Should step 7b not have happened — an old script, a by-hand override, a login put
-back — the hub still holds the line. Since #4607 it holds it for **every** login:
-the rule below reads "a GitHub person whose role is user" only on a hub that declared
-itself self-hosted (`CCQUOTA_FLEET_CREDSEP_OPTIONAL=1`); elsewhere an admin's and the
-operator's own login are refused the same way. Every heartbeat carries `credsep`
+back — the hub still holds the line. Since #4607 it holds it for **every** login —
+an admin's and the operator's own too — and since #4675 no hub may declare
+otherwise (`CCQUOTA_FLEET_CREDSEP_OPTIONAL` is said in the log and ignored). Every heartbeat carries `credsep`
 (`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh status`
-**and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes). For a
-GitHub person whose role is **user**, `/v1/node/credentials` issues real tokens only
-while that word is `separated`; otherwise it answers 403 `not_separated` and the
+**and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes).
+`/v1/node/credentials` issues real tokens only while that word is `separated`; otherwise it answers 403 `not_separated` and the
 credential audit records 「拒发：未隔离」. An agent too old to send the field counts
 as not separated. `/v1/node/self` then carries `credsep_gate: not_separated`, and the
 login's proxy reads it as an untrusted machine: every session goes **central**
 (the hub's proxy, no credential file read) — slower, but it works, and nothing ever
-lands in `accounts/*.hub/`. (Under `CCQUOTA_FLEET_CREDSEP_OPTIONAL=1` only: admin and
-operator logins lease exactly as before.)
+lands in `accounts/*.hub/`. And should a lease reach an agent with no credential
+store at all, it writes no Claude / Codex credential anywhere — `no_store` in its
+log (#4675; #4643 was such an agent, writing into a separated home for a week).
 
 ### Rolling it out on a machine (issue #2135, EPIC #2133 C5)
 
@@ -184,8 +185,6 @@ bash ~/.claude/fleet/bin/fleet-credsep.sh install --dry-run    # no sudo: every 
 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh install         # THE sudo (the login is SUDO_USER's)
 bash ~/.claude/fleet/bin/fleet-credsep.sh status               # separated · /var/db/fleet-cred/<login> · …
 bash ~/.claude/fleet/bin/fleet-credsep.sh check                # credsep: OK — … Permission denied …
-bash ~/.claude/fleet/bin/fleet-credsep.sh uninstall --dry-run  # no sudo: the whole way back
-# then FLEET_CRED_SEPARATE=1 in fleet.conf [common], so the sync keeps it
 ```
 
 Then, in a real session of that login (its Bash tool),
@@ -197,9 +196,7 @@ counts only: ① `readable=0`, ② `readable=0`, ④ `readable=0` (or the hub re
   login's own conf dir. Root with neither is refused — before #2135 the hint
   separated a `root` store and left the login's agent unable to read `node.env`
   (BREAK-IT `cred-sep-sudo-root`).
-- The dry runs run as the login. Separated, the login cannot read the store, so
-  `uninstall --dry-run` reads the way back from `credsep.json`'s `back` — the
-  paths each credential left, the agent's and the proxy's service (no secret).
+- The dry run runs as the login.
 - **A login with password-less sudo** is not separated from its own sessions:
   `sudo -n cat /var/db/fleet-cred/<login>/node.env` works from any session. The
   doctor's `credsep` row says so; on such a login the boundary only holds once
@@ -215,12 +212,10 @@ start through the launcher (the original kept in the store's `backup/`). A
 systemd `--user` agent is refused: move it to `ccquota-agent-<login>.service`
 first.
 
-`FLEET_CRED_SEPARATE=0` + a sync — or `fleet-credsep.sh uninstall` — reverses
-it: every file under the store goes back to the login's own path (including
-leases the agent renewed meanwhile), `node.env` is a file again, the services
-are restored, and the store, the code copy and — with no other login left — the
-role account are deleted. The sandbox selftest compares the tree byte for byte
-before install and after uninstall.
+Nothing reverses it (issue #4675): `fleet-credsep.sh uninstall` and `machine
+uninstall` exit 2, and `FLEET_CRED_SEPARATE=0` does nothing. Only an install that
+fails halfway puts back what it moved (its own rollback, #2273). A login that goes
+away is `fleet-login-remove.sh` — its store is deleted, nothing moved back (`purge`).
 
 ## One proxy for the whole machine (issue #2217)
 
@@ -235,7 +230,7 @@ computer starts `fleet run`'s central proxy on demand.
 ```sh
 fleet cred-proxy status  --machine        # shared · _fleetcred · on k/N logins · sessions a/b
 fleet cred-proxy enable  --machine        # every login with ~/.claude/fleet (or --logins a,b)
-fleet cred-proxy disable --machine        # every login's files back in its home, byte for byte
+# (no disable: issue #4675 — credentials never go back into a home)
 ```
 
 `enable --machine` is `fleet-credsep.sh machine install`: ONE sudo for the whole
@@ -250,7 +245,7 @@ credentials and `node.env` moved, the agent through the launcher — and then:
 | control socket | per login | `/var/run/fleet-cred/.shared/ctl.sock` (0666): the kernel's peer uid (`getpeereid` / `SO_PEERCRED`) names the login |
 | the login's proxy state (signing key, held passes, relay pass) | `~/.config/claude-fleet/cred-proxy/` | MOVED to `/var/db/fleet-cred/<login>/cred-proxy/` (binds / revocations / live sessions / trust copied) |
 | the leased credentials (Claude `.credentials.json`, Codex `auth.json`) | in the login's store | ONE copy for the machine, `/var/db/fleet-cred/.shared/pool/<kind>/<hash of the access token>/`; the login's store keeps only its index, `cred-proxy/pool.json` (issue #2311) |
-| `FLEET_CRED_PROXY` | as the login set it | `1` — the line it had is remembered and put back by `disable` |
+| `FLEET_CRED_PROXY` | as the login set it | `1` (the line it had is remembered; nothing puts it back since #4675) |
 | version | each login's install | the root-owned copy in `/Library/Application Support/claude-fleet/credsep/`; an admin login's sync runs `machine refresh` (`sudo -n`) to follow stable, else the doctor says to |
 
 **Each login is a tenant, and stays one.** Everything that was per-login — the
@@ -269,8 +264,8 @@ an own copy left after that (`accounts/<label>.hub` beside the pool's — a join
 the tenant's next lease or the first read of that label, so a label resolves to
 the pool's copy only; `fleet-credsep.py machine pooldup` (root; the machine
 doctor's `credpool` row) WARNs on a token held twice, by `<login>:<label>` and
-fingerprint, never the token; a file no index names any more is removed; `uninstall` puts each tenant's copies
-back as its own files. A session credential minted on the shared proxy carries its
+fingerprint, never the token; a file no index names any more is removed. Nothing
+puts a tenant's copies back as its own files (issue #4675). A session credential minted on the shared proxy carries its
 login (`lg`) and is verified with **that** login's key, so a credential relabelled
 to another login only fails the signature. A hub pass (the central route) is
 filed under the login whose session registered it (`fleet-cred-proxy.sh pass`,
@@ -281,18 +276,11 @@ its own tenant and nothing else; root names one (`FLEET_CRED_AS`).
 the login's old port is served by the shared proxy for that login: the login's
 own launcher sees `credsep.json` appear, lets go of the port within 2 s, the
 shared proxy binds it, and a session minted before the switch goes on with its
-next request. `disable --machine` reverses it: the shared service stops, every
-login's key and state go back to `~/.config/claude-fleet/cred-proxy/`, its own
-proxy takes its old port back with the same key, credentials and the
-`FLEET_CRED_PROXY` line go back byte for byte. (A session started *under* the
-shared proxy carries the shared port and needs `/fleet-handoff` or a reopen
-after a disable.)
+next request. Nothing reverses it (`disable --machine` is gone, issue #4675).
 
-A login on the shared proxy ignores its own `FLEET_CRED_SEPARATE`: the machine
-switch owns it (`fleet-credsep.sh apply` says `shared`). A login that was
-separated per login before joins as it is; after `disable --machine` it is
-per-login and unseparated, and `FLEET_CRED_SEPARATE=1` + a sync separates it
-again. The shared proxy dying is BREAK-IT `cred-shared-down`.
+A login on the shared proxy ignores its own `FLEET_CRED_SEPARATE` (a mark, no
+switch): `fleet-credsep.sh apply` says `shared`. A login that was separated per
+login before joins as it is. The shared proxy dying is BREAK-IT `cred-shared-down`.
 `bin/fleet-cred-shared-selftest.sh` runs two logins through one proxy in a
 sandbox.
 
@@ -351,9 +339,8 @@ node.env, fleet.conf, the agent's definition, the proxy's key) and the
 command exits 1. `load_daemon` now waits for `bootout` to finish and retries
 the bootstrap (`FLEET_CREDSEP_BOOT_TRIES`, 3). If a step of the way back fails
 too, the exit is 5, the store is kept as `<login>.rolledback-<UTC>`, and the
-steps to finish by hand are printed. A store with no `credsep.json` (an install
-that stopped before its last step) is undone by `uninstall --login <login>`;
-its `--dry-run` says HALF INSTALLED. BREAK-IT rows `cred-sep-by-agent`,
+steps to finish by hand are printed (`uninstall` is gone, issue #4675: this
+rollback is the only way a credential leaves the store). BREAK-IT rows `cred-sep-by-agent`,
 `cred-sep-bootstrap-fails`.
 
 ## Writing node.env once it is separated (issue #2316)
@@ -440,11 +427,11 @@ proxy (its own credentials) keeps the old rule: any https host. BREAK-IT row
 
 ## Files
 
-`bin/fleet-credsep.sh` (front) · `bin/fleet-credsep.py` (install / uninstall /
-status / check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
+`bin/fleet-credsep.sh` (front) · `bin/fleet-credsep.py` (install / status /
+check) · `bin/fleet-credsep-launch.py` (root launcher: `proxy` |
 `agent`) · `bin/fleet-cred-proxy.py` (separated mode: `store`, `probe`,
 `node-token`, `node-hash`, `/hub/` broker, peer-uid gate) ·
 `tokenledger/internal/agent/node_credstore.go` (the agent's `store` client) ·
 `bin/fleet-credsep-selftest.sh` · `bin/fleet-cred-shared-selftest.sh` (the
-machine's shared proxy, `machine install|uninstall|refresh|join|leave|status`,
+machine's shared proxy, `machine install|refresh|join|status`,
 `fleet-credsep-launch.py shared`, `fleet-cred-proxy.py serve --shared`).

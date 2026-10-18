@@ -9,7 +9,8 @@
 #   B  on, with the machine's proxy this login is a tenant of: status counts the
 #      sessions that talk to it — on its port, or on the login's OLD port it took
 #      over (issue #2324) — and no other
-#   C  a login's own enable / disable left with the per-login proxy (#4674):
+#   C  a login's own enable / disable left with the per-login proxy (#4674), and
+#      disable --machine with the way back to a home (#4675):
 #      exit 2 naming the machine's switch (--machine), not a byte written; the
 #      old `run` entry starts nothing
 #   F  --all-logins: fleet-sync-logins.sh --cred-proxy status runs each other
@@ -98,6 +99,8 @@ for v in enable disable; do
     pass "C $v: a login has no proxy of its own to $v — exit 2, names --machine, nothing written"
   else fail "C $v rc=$rc: $out"; fi
 done
+out=$(R disable --machine 2>&1); rc=$?
+case "$rc:$out" in "2:"*"disable --machine is gone (issue #4675)"*) pass "C disable --machine: gone — exit 2, no way back to a home (#4675)" ;; *) fail "C disable --machine rc=$rc: $out" ;; esac
 out=$(R enable --all-logins 2>&1); rc=$?
 [ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && pass "C enable --all-logins: exit 2 too" || fail "C --all-logins rc=$rc: $out"
 out=$(bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?

@@ -271,7 +271,7 @@ def pod_login(d, runtime, hub, made):
     ne = (conf / 'node.env').read_text().splitlines()
     assert 'CCQUOTA_FLEET_CREDS=0' in ne and (conf / 'node.env').stat().st_uid == uid
     fc = (conf / 'fleet.conf').read_text()
-    assert 'FLEET_CRED_SEPARATE=0' in fc and 'FLEET_CRED_CENTRAL_URL=http://fleet-credproxy' in fc, fc
+    assert 'FLEET_CRED_SEPARATE' not in fc and 'FLEET_CRED_CENTRAL_URL=http://fleet-credproxy' in fc, fc
     assert json.loads((d / 'pod/state/accounts.json').read_text())[name]['managed']
     assert (d / 'pod/state/logins' / (name + '.env')).stat().st_uid == uid
     assert not (d / 'cred' / name).exists(), 'a pod login got a fleetcred store'

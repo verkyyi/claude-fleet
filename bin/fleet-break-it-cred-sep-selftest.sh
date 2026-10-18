@@ -40,10 +40,11 @@
 #   cred-central-trusted-pod   bin/fleet-cred-proxy.py (Router.leases_nothing: a pod with
 #                              nothing leased in routes central even when the hub says
 #                              trusted) — fleet-cred-proxy-selftest.sh leg D2 (#4290)
-#   cred-new-login-unseparated  bin/fleet-login-new.sh (--no-credsep refused), bin/fleet-credsep.py
+#   cred-new-login-unseparated  bin/fleet-login-new.sh (--no-credsep gone, #4675), bin/fleet-credsep.py
 #                              install (conf_ensure: no ~/.config) — issue #4607
 #   cred-existing-unseparated  bin/fleet-credsep.py machine enforce / enforced (human_logins,
-#                              fleet_login), bin/fleet-node-supervisor.py credsep-enforce — #4607
+#                              fleet_login; root's credsep.optional ignored, #4675),
+#                              bin/fleet-node-supervisor.py credsep-enforce — #4607
 #   cred-enforce-fails-no-lease  bin/fleet-credsep.py machine enforce (refused → --force past the
 #                              grace, failed → retry later) / enforced / check, tokenledger
 #                              credsepGated (go test TestLeaseCredsepMandatory) — #4607
@@ -51,8 +52,8 @@
 #                              when it is not), tokenledger credsepJudge (go test
 #                              TestCredsepJudge), bin/fleet-cred-proxy.py deny reason — #4623
 #   cred-sep-home-leak         bin/fleet-credsep.py machine enforce (sweep_leftovers) / check,
-#                              tokenledger agent loginSeparated (go test
-#                              TestSeparatedLoginNoStoreWritesNothingHome) — #4643
+#                              tokenledger agent writeClaudeCred / writeCodexAuth: no store,
+#                              nothing written (go test TestNoStoreWritesNothingHome) — #4643, #4675
 #   cred-gate-counts-unleased  tokenledger api leaseServes / the cred-ttl gate item (go test
 #                              TestGateCredsepCountsOnlyLeasedLogins) — #4622
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -595,16 +596,20 @@ enf_env() {
 
 # #4607: a login opened without separation. `fleet-login-new.sh --no-credsep` used
 # to hand out the old layout — every pool token readable by the login's sessions —
-# on a word; and a login with no ~/.config at all (one managed machine's newest login, 2026-10-17)
+# on a word (#4675: the word is gone, a self-hosted declaration included); and a
+# login with no ~/.config at all (one managed machine's newest login, 2026-10-17)
 # died FileNotFoundError on credsep.json's temp file mid-install.
 drill_cred_new_login_unseparated() {
   CAP=20
   local sb="$WORK/newunsep" t0 out rc env h c
   mkdir -p "$sb/db" "$sb/node"
   t0=$(now)
-  out=$(env -u FLEET_CREDSEP_OPTIONAL bash "$BIN/fleet-login-new.sh" newbie --full-name N --no-credsep 2>&1); rc=$?
-  [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'every login is credential-separated' \
-    || { WHY="fleet-login-new.sh --no-credsep was not refused (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  for env in "-u FLEET_CREDSEP_OPTIONAL" "FLEET_CREDSEP_OPTIONAL=1"; do
+    # shellcheck disable=SC2086 # the words are env's
+    out=$(env $env bash "$BIN/fleet-login-new.sh" newbie --full-name N --no-credsep 2>&1); rc=$?
+    [ "$rc" = 2 ] && printf '%s' "$out" | grep -q 'unknown option: --no-credsep' \
+      || { WHY="fleet-login-new.sh --no-credsep ($env) was not refused (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
+  done
   # a login with nothing in its home but the fleet install: no ~/.config
   h="$sb/homes/fresh"; c="$h/.config/claude-fleet"
   mkdir -p "$h/.claude/fleet/bin" "$sb/daemons" "$sb/shim"
@@ -618,7 +623,7 @@ drill_cred_new_login_unseparated() {
   [ -f "$c/credsep.json" ] && [ "$(python3 -c 'import os,sys; print("%o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$c")" = 700 ] \
     && grep -q '^export FLEET_CRED_SEPARATE=1$' "$c/fleet.conf" && grep -q '^export FLEET_CRED_PROXY=1$' "$c/fleet.conf" \
     || { WHY="no conf dir 0700 / fleet.conf / credsep.json after the install: $(ls -la "$c" 2>&1 | tr '\n' ' ')"; return 1; }
-  WHAT="开新登录不隔离：--no-credsep 没声明自托管直接拒（exit 2）；连 ~/.config 都没有的登录 install --fresh 先建 0700 的配置目录和 fleet.conf，再写 credsep.json"
+  WHAT="开新登录不隔离：--no-credsep 已删，声明自托管（FLEET_CREDSEP_OPTIONAL=1）也拒（未知选项，exit 2）；连 ~/.config 都没有的登录 install --fresh 先建 0700 的配置目录和 fleet.conf，再写 credsep.json"
 }
 
 # #4607: logins that were never separated — opened before #2294, by hand, put back
@@ -626,7 +631,8 @@ drill_cred_new_login_unseparated() {
 # Separation waited for a person to type a sudo, so it never happened; the node
 # program wrote the pool's real tokens and node.env into their homes. The machine
 # daemon's credsep-enforce takes every human fleet login in by itself and leaves a
-# CI runner / a plain account alone.
+# CI runner / a plain account alone — and root's old way out, credsep.optional
+# naming every login, is said and ignored (#4675).
 drill_cred_existing_unseparated() {
   CAP=30
   local sb="$WORK/existunsep" t0 out rc env
@@ -637,10 +643,13 @@ drill_cred_existing_unseparated() {
   env=$(enf_env "$sb")
   t0=$(now)
   grep -q ccq_BOOT_SECRET "$C/node.env" || { WHY="the rig: alpha's node.env holds no token"; return 1; }
+  printf '*\n' > "$sb/node/credsep.optional"; chmod 644 "$sb/node/credsep.optional"
   # shellcheck disable=SC2086
   out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="machine enforce failed (rc $rc): $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; return 1; }
+  printf '%s' "$out" | grep -q 'credsep.optional is gone' \
+    || { WHY="root's credsep.optional was not said to be gone: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"; return 1; }
   [ -L "$C/node.env" ] && [ -f "$sb/db/alpha/node.env" ] && [ ! -e "$C/accounts/a1.hub/.credentials.json" ] \
     || { WHY="after enforce alpha's node.env / lease are still its own files: $(ls -lR "$C" | head -20 | tr '\n' ' ')"; return 1; }
   python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["logins"]; sys.exit(0 if l.get("alpha",{}).get("verdict")=="separated" and set(l)=={"alpha"} else 1)' \
@@ -654,7 +663,7 @@ drill_cred_existing_unseparated() {
     || { WHY="every fleet login separated, yet the doctor row is not OK (rc $rc): $out"; return 1; }
   grep -q '"credsep-enforce"' "$BIN/fleet-node-supervisor.py" \
     || { WHY="the machine daemon no longer runs credsep-enforce"; return 1; }
-  WHAT="没隔离的现有登录：守护的 credsep-enforce 自己把它收进隔离库（node.env、租约都搬走），审计一行、状态文件写 separated；CI 账号和不能登录的账号不碰；doctor credsep-logins 行 OK"
+  WHAT="没隔离的现有登录：守护的 credsep-enforce 自己把它收进隔离库（node.env、租约都搬走），root 的 credsep.optional 写了 * 也照收（说一句已删）；审计一行、状态文件写 separated；CI 账号和不能登录的账号不碰；doctor credsep-logins 行 OK"
 }
 
 # #4607: separating a login fails (its live sessions still read the files, or the
@@ -916,7 +925,8 @@ drill_credsep_warn_cuts_creds() {
 # accounts/<l>.hub/.credentials.json; `check` WARNed, credsep-enforce saw a store and
 # wrote «separated», and the token sat readable in the home for a week. Now the
 # daemon's next pass moves it into the store (audited, no value logged), the login's
-# check is clean again, and the agent no longer writes there at all (the Go half).
+# check is clean again, and no agent writes a subscription credential into any
+# home at all — no store, nothing written, separated or not (the Go half, #4675).
 drill_cred_sep_home_leak() {
   CAP=90
   local sb="$WORK/homeleak" t0 out rc env gohalf
@@ -960,15 +970,15 @@ drill_cred_sep_home_leak() {
   [ -L "$C/accounts/icloud.hub/.credentials.json" ] && [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'not followed' \
     || { WHY="a planted link was followed or not named (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
   rm -f "$C/accounts/icloud.hub/.credentials.json"
-  gohalf="agent 一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestSeparatedLoginNoStoreWritesNothingHome"
-  grep -q 'func TestSeparatedLoginNoStoreWritesNothingHome(' "$ROOT/tokenledger/internal/agent/node_credstore_test.go" 2>/dev/null \
-    || { WHY="the agent half's TestSeparatedLoginNoStoreWritesNothingHome is gone"; return 1; }
+  gohalf="agent 一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestNoStoreWritesNothingHome"
+  grep -q 'func TestNoStoreWritesNothingHome(' "$ROOT/tokenledger/internal/agent/node_credstore_test.go" 2>/dev/null \
+    || { WHY="the agent half's TestNoStoreWritesNothingHome is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestSeparatedLoginNoStoreWritesNothingHome$' ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run '^TestNoStoreWritesNothingHome$' ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
-      0:*) gohalf="agent 一半：go test ok（已隔离、没有凭据库就一份也不写进家）" ;;
+      0:*) gohalf="agent 一半：go test ok（没有凭据库就一份订阅凭据也不写进任何家，报 no_store）" ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
       *) WHY="the agent half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac

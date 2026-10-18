@@ -158,9 +158,11 @@ chmod +x "$WORK/trustcurl"
 l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=trusted)
 contains "TRUST: trusted → PASS" "$l" "PASS  可信"
 contains "TRUST: names the machine" "$l" "m9 · 可信"
+# untrusted is an INFO with the proxy on or off (issue #4675: no session reads a
+# lease from its home any more — sessions take the central road)
 l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=untrusted)
-contains "TRUST: untrusted → WARN" "$l" "WARN  可信"
-contains "TRUST: names the fix" "$l" "fleet-node-trust.sh set m9 trusted"
+contains "TRUST: untrusted → INFO (#4675)" "$l" "INFO  可信"
+contains "TRUST: says central" "$l" "会话走中心代理"
 l=$(trust_lines CCQUOTA_FLEET=1 TRUST_WORD=untrusted FLEET_CRED_PROXY=1)
 contains "TRUST: untrusted behind the proxy → INFO" "$l" "INFO  可信"
 l=$(trust_lines CCQUOTA_FLEET=1 TRUST_RC=7)

@@ -139,13 +139,13 @@ tooling neither requires nor refuses either setup. Sharing the pool still keeps
 one login per person, so usage stays attributed per login on the hub.
 
 **Claude pool** — the tokens are plain `claude setup-token` files, so copy them.
-`fleet-login-new.sh --share-pool --no-credsep` (step 1) does exactly this: every `<label>`
-token and its `<label>.conf` (`CCQUOTA_ACCOUNT`) from your accounts dir
-(`--pool-src` to pick another), dir 700 / files 600, owned by the new login —
-readable by its every session. Without `--no-credsep` (the default since #2294)
-the tokens go into the login's credential store instead. For
-an existing login, by hand (admin, since the source files are `600` in the
-operator's home):
+`fleet-login-new.sh --share-pool` (step 1) puts every `<label>` token of your
+accounts dir (`--pool-src` to pick another) into the new login's credential store
+— never into the login (since #2294; `--no-credsep`, the old copy into the login,
+is gone, #4675) — and gives it the label markers and `<label>.conf`. The by-hand
+copy below is the pre-#2294 layout, for reference only — a node login is
+separated, and the machine daemon moves such copies into its store
+(`credsep-enforce`, #4643):
 
 ```sh
 src=/Users/operator/.config/claude-fleet/accounts
@@ -165,7 +165,8 @@ pool once — `~/.claude/fleet/bin/fleet-creds-import.sh` puts every setup-token
 file into the hub's vault as a `pool` account — and every login whose agent runs
 with `CCQUOTA_FLEET_CREDS=1` leases the whole pool from the hub (its own
 person's credentials too), with each `<label>` file becoming the `hub:<label>`
-marker beside `<label>.hub/.credentials.json`. Adding, replacing or revoking a
+marker — the token itself goes to the login's credential store, never a file in
+the home (#4675: an agent with no store writes none). Adding, replacing or revoking a
 token is then one hub operation, and `fleet-account.sh list` says `hub` and
 when the token runs out. See `tokenledger/README.md`, "Setup tokens and the
 shared pool". Rotation state

@@ -252,10 +252,11 @@ func loadFleetCerts(srv *api.Server) error {
 	srv.FleetRoutes = routes
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
 	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
-	// Every login credential-separated or no lease (claude-fleet#4607); only a
-	// self-hosted hub may say otherwise, and says so in the log.
-	if srv.CredsepOptional = os.Getenv("CCQUOTA_FLEET_CREDSEP_OPTIONAL") == "1"; srv.CredsepOptional {
-		log.Printf("fleet: CCQUOTA_FLEET_CREDSEP_OPTIONAL=1 — only a role=user person's login must be credential-separated to lease (a self-hosted hub)")
+	// Every login credential-separated or no lease (claude-fleet#4607), with
+	// no way out (claude-fleet#4675): the old self-hosted declaration is said
+	// once and ignored. # compat-1v: 下一批删
+	if os.Getenv("CCQUOTA_FLEET_CREDSEP_OPTIONAL") == "1" {
+		log.Printf("fleet: CCQUOTA_FLEET_CREDSEP_OPTIONAL is gone (claude-fleet#4675) — every login must be credential-separated to lease; remove it")
 	}
 	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
 	// The client follows stable through this hub (claude-fleet#1805): pushed

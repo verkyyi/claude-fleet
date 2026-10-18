@@ -14,10 +14,10 @@ import (
 // label ("default" = ~/.codex).
 type credSink func(kind, label string, data []byte) error
 
-// credSink is nil — write the files, as always — unless this agent was
-// started separated (FleetCredStore names the credential proxy's control
-// socket), when every credential goes to the proxy, which runs as its own
-// role account and keeps it where no session of this login can read it.
+// credSink is the credential proxy's store when FleetCredStore names its
+// control socket: every subscription credential goes there, to a proxy running
+// as its own role account where no session of this login can read it. nil =
+// no store, and then nothing is written at all (claude-fleet#4675).
 func (a *Agent) credSink() credSink {
 	if a.cfg.FleetCredStore == "" {
 		return nil

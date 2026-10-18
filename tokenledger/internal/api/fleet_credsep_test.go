@@ -15,9 +15,8 @@ import (
 // The lease's credential-separation gate (claude-fleet#2295, EPIC #2293 C2;
 // mandatory since #4607): every login gets real tokens only when its newest
 // heartbeat says credsep=separated — an admin's and the operator's own too; an
-// agent that does not report the field counts as not separated. A hub that
-// declared itself self-hosted (CredsepOptional — the test harness's default,
-// for the lease fixtures) keeps #2295's rule: a role=user person's login only.
+// agent that does not report the field counts as not separated. There is no
+// way out (claude-fleet#4675): the self-hosted declaration is gone.
 
 // credsepHarness: the vault harness plus a GitHub admin (ivan, id 100)
 // and a listed user (carol, id 400), each with an active login on mac-c, and a
@@ -69,7 +68,7 @@ func credsepBeat(t *testing.T, h *harness, tok, osUser, credsep string) {
 }
 
 func TestLeaseCredsepGate(t *testing.T) {
-	h, user, admin := credsepHarness(t)
+	h, user, _ := credsepHarness(t)
 	cases := []struct {
 		name, osUser, tok, credsep string
 		want                       int
@@ -78,8 +77,6 @@ func TestLeaseCredsepGate(t *testing.T) {
 		{"user, not separated", "carol", user, control.CredsepNot, http.StatusForbidden},
 		{"user, unknown", "carol", user, control.CredsepUnknown, http.StatusForbidden},
 		{"user, separated", "carol", user, control.CredsepSeparated, http.StatusOK},
-		{"admin, not separated", "ivan", admin, control.CredsepNot, http.StatusOK},
-		{"admin, old agent", "ivan", admin, "", http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,19 +112,8 @@ func TestLeaseCredsepGate(t *testing.T) {
 	}
 }
 
-// A person not on the list as a user — the operator's own principals, an id
-// GitHub sign-in never named — is untouched: 共同约定 4.
-func TestLeaseCredsepGateOnlyForUsers(t *testing.T) {
-	h, tok, _ := newVaultHarness(t) // pAlice: a gh: principal with no hub_users row
-	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt"})
-	credsepBeat(t, h, tok, "alice", control.CredsepNot)
-	if code, _, refusal := lease(t, h, tok); code != http.StatusOK {
-		t.Fatalf("lease = %d %v; want 200", code, refusal)
-	}
-}
-
-// /v1/node/self tells the node's proxy to route central while gated, and
-// leaves the operator's trust word alone.
+// /v1/node/self tells the node's proxy to route central while gated — a
+// user's and an admin's alike — and leaves the operator's trust word alone.
 func TestNodeSelfCarriesCredsepGate(t *testing.T) {
 	h, user, admin := credsepHarness(t)
 	self := func(tok string) NodeView {
@@ -150,8 +136,8 @@ func TestNodeSelfCarriesCredsepGate(t *testing.T) {
 	if v := self(user); v.CredsepGate != LeaseNotSeparated || v.Credsep != control.CredsepNot || v.Trust != TrustTrusted {
 		t.Fatalf("user not separated: gate=%q credsep=%q trust=%q", v.CredsepGate, v.Credsep, v.Trust)
 	}
-	if v := self(admin); v.CredsepGate != "" {
-		t.Fatalf("admin gated: %q", v.CredsepGate)
+	if v := self(admin); v.CredsepGate != LeaseNotSeparated {
+		t.Fatalf("admin not separated, not gated: %q", v.CredsepGate)
 	}
 	credsepBeat(t, h, user, "carol", control.CredsepSeparated)
 	if v := self(user); v.CredsepGate != "" || v.Credsep != control.CredsepSeparated {
@@ -163,7 +149,6 @@ func TestNodeSelfCarriesCredsepGate(t *testing.T) {
 // refused while not separated, leased once it is.
 func TestLeaseCredsepMandatory(t *testing.T) {
 	h, user, admin := credsepHarness(t)
-	h.srv.CredsepOptional = false
 	cases := []struct {
 		name, osUser, tok, credsep string
 		want                       int
@@ -209,7 +194,6 @@ func TestLeaseCredsepMandatory(t *testing.T) {
 // /v1/node/self tells an admin's unseparated node to route central.
 func TestLeaseCredsepMandatoryOperatorAndSelf(t *testing.T) {
 	h, tok, _ := newVaultHarness(t)
-	h.srv.CredsepOptional = false
 	putCred(t, h, credvault.Claude, "main", credvault.Secret{RefreshToken: "rt"})
 	credsepBeat(t, h, tok, "alice", control.CredsepNot)
 	if code, _, refusal := lease(t, h, tok); code != http.StatusForbidden || refusal["error"] != LeaseNotSeparated {
@@ -221,7 +205,6 @@ func TestLeaseCredsepMandatoryOperatorAndSelf(t *testing.T) {
 	}
 
 	h2, _, admin := credsepHarness(t)
-	h2.srv.CredsepOptional = false
 	credsepBeat(t, h2, admin, "ivan", control.CredsepNot)
 	req, _ := http.NewRequest(http.MethodGet, h2.http.URL+"/v1/node/self", nil)
 	req.Header.Set("Authorization", "Bearer "+admin)

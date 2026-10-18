@@ -280,6 +280,7 @@ FLEET_CRED_RELAY_RETRY_SECS        knob: first ask for a relay pass the proxy ha
 FLEET_CRED_RELAY_RETRY_MAX_SECS    knob: cap of that doubling — the bound on a new login's pass (120, #3423)
 FLEET_CRED_REPROBE_CMD             test seam: what a newly issued relay pass re-runs instead of fleet-node-probe.sh (#3423)
 FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)
+FLEET_CREDSEP_OPTIONAL             alias: the retired self-hosted opt-out (#4607) — read only for the doctor's one «gone» line (#4675, compat-1v: 下一批删)
 FLEET_DRILL_AGENT_SECS             knob: fleet-onboard-drill.sh's wait for the session to read the screenshot (300 s, #2139)
 FLEET_DRILL_GUIDE_SECS             knob: fleet-onboard-drill.sh's wait for the home's onboarding guide to open (240 s, #3472)
 FLEET_DRILL_NODE_BIN               knob: the session login's fleet bin/ fleet-onboard-drill.sh restarts it with (default ~<login>/.claude/fleet/bin, #2139)

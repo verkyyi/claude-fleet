@@ -108,12 +108,12 @@ func tccGranted() bool {
 }
 
 // credsepMark is the line fleet-login-new.sh ends a create with when it opened
-// the login credential-separated (claude-fleet#2294, its step 7b), and
-// credsepScriptMark what a version of the script that separates carries.
+// the login credential-separated (claude-fleet#2294, its step 7b) — and, since
+// the same change, what every script that separates carries (claude-fleet#4675
+// took its old companion mark, --no-credsep, out of the script).
 const (
 	credsepMark        = "credsep: separated"
 	credsepCentralMark = "credsep: central"
-	credsepScriptMark  = "--no-credsep"
 )
 
 // credsepCapable reports whether this login's fleet-login-new.sh (at script)
@@ -122,7 +122,7 @@ const (
 // (claude-fleet#2263).
 func credsepCapable(script string) bool {
 	b, err := os.ReadFile(script)
-	return err == nil && bytes.Contains(b, []byte(credsepScriptMark)) && bytes.Contains(b, []byte(credsepMark))
+	return err == nil && bytes.Contains(b, []byte(credsepMark))
 }
 
 // recycleScriptMark is what a remove script with the --recycle mode carries

@@ -39,7 +39,9 @@ func nextCreds(t *testing.T, c *websocket.Conn, why, what string) {
 func TestCredsPushOnDeletePauseRevoke(t *testing.T) {
 	h, tok, _ := newVaultHarness(t)
 	other := h.enroll(t, "old")
-	hb := func(host string) control.Heartbeat { return control.Heartbeat{Hostname: host, OSUser: "alice"} }
+	hb := func(host string) control.Heartbeat {
+		return control.Heartbeat{Hostname: host, OSUser: "alice", Credsep: control.CredsepSeparated}
+	}
 	a := teamNode(t, h, tok, control.CapRead, control.CapCreds)
 	b := teamNode(t, h, other, control.CapRead) // an older agent: no CapCreds
 	beat(t, a, control.Proto, hb("mac-c"))      // the host newVaultHarness enrolled alice on

@@ -2,14 +2,20 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -54,6 +60,57 @@ func fakeCredStore(t *testing.T, refuse string) (string, chan map[string]string)
 		}
 	}()
 	return sock, got
+}
+
+// recCredStore is the credential proxy's control socket for a whole lease
+// cycle: it keeps every `store`d file by kind/label and answers every op ok.
+func recCredStore(t *testing.T) (string, func(kind, label string) []byte) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "ctl.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	var mu sync.Mutex
+	files := map[string][]byte{}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(c).ReadBytes('\n')
+			var req map[string]any
+			_ = json.Unmarshal(line, &req)
+			if req["op"] == "store" {
+				b, _ := base64.StdEncoding.DecodeString(fmt.Sprint(req["data"]))
+				mu.Lock()
+				files[fmt.Sprint(req["kind"])+"/"+fmt.Sprint(req["label"])] = b
+				mu.Unlock()
+			}
+			c.Write([]byte(`{"ok":true,"rejected":[],"gone":[]}` + "\n"))
+			c.Close()
+		}
+	}()
+	return sock, func(kind, label string) []byte {
+		mu.Lock()
+		defer mu.Unlock()
+		return files[kind+"/"+label]
+	}
+}
+
+// storeAgent is credAgent with a credential store: where every lease goes.
+func storeAgent(t *testing.T, srv *httptest.Server, home string) (*Agent, func(kind, label string) []byte) {
+	sock, stored := recCredStore(t)
+	a := credAgent(srv, home)
+	a.cfg.FleetCredStore = sock
+	return a, stored
 }
 
 // claude-fleet#1971: separated, a leased Claude credential goes to the proxy's
@@ -111,11 +168,25 @@ func TestCredStoreRefusalIsAnError(t *testing.T) {
 	}
 }
 
-// No FleetCredStore = no sink = the files, exactly as before.
+// claude-fleet#4675: no FleetCredStore = no sink = nothing written anywhere.
 func TestNoCredStoreMeansNoSink(t *testing.T) {
 	a := &Agent{cfg: Config{}}
 	if a.credSink() != nil {
 		t.Fatal("an agent with no FleetCredStore has a sink")
+	}
+	dir, home := t.TempDir(), filepath.Join(t.TempDir(), ".codex")
+	exp := time.Now().Add(time.Hour)
+	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-x", &exp, nil, "", nil); !errors.Is(err, errNoStore) {
+		t.Fatalf("claude with no store: err = %v, want errNoStore", err)
+	}
+	if err := writeCodexAuth(home, "at", "id", "acct-1", time.Now(), nil); !errors.Is(err, errNoStore) {
+		t.Fatalf("codex with no store: err = %v, want errNoStore", err)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 0 {
+		t.Fatalf("no store, yet %d entries written in the accounts dir", len(ents))
+	}
+	if _, err := os.Lstat(home); err == nil {
+		t.Fatal("no store, yet the codex home was made")
 	}
 }
 
@@ -160,43 +231,51 @@ func TestCredVerdictOffWithoutStore(t *testing.T) {
 	}
 }
 
-// claude-fleet#4643: a separated login (credsep.json in its conf dir) whose
-// agent has no credential store writes no pool credential into the home — on
-// 2026-10-09 one did, and a separated login read a real Claude token for a week.
-// A login that is not separated still gets its files, byte for byte.
-func TestSeparatedLoginNoStoreWritesNothingHome(t *testing.T) {
+// claude-fleet#4675 (after #4643, where an agent started with no store leased
+// a real Claude token into a separated login's home for a week): an agent with
+// no credential store that is pushed creds writes NO subscription credential
+// into any home — separated or not — and says no_store; GitHub's token, not a
+// subscription, is still written.
+func TestNoStoreWritesNothingHome(t *testing.T) {
 	exp := time.Now().Add(8 * time.Hour).UTC().Truncate(time.Second)
 	body := fmt.Sprintf(`{"credentials":[
 	 {"provider":"claude","account":"icloud","expires_at":%q,"access":{"access_token":"sk-ant-oat01-LEAK","scopes":["user:inference"]}},
-	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":"cx-LEAK","id_token":"idt","account_id":"acct-1"}}]}`,
+	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":"cx-LEAK","id_token":"idt","account_id":"acct-1"}},
+	 {"provider":"github","account":"alice","access":{"token":"ghp_short","user":"alice"}}]}`,
 		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
-	home := t.TempDir()
-	conf := filepath.Join(home, ".config", "claude-fleet")
-	if err := os.MkdirAll(conf, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(conf, "credsep.json"), []byte(`{"root":"/var/db/fleet-cred/x"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	a := credAgent(fakeVaultHub(t, 200, body), home)
-	if _, err := a.credCycle(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range []string{
-		filepath.Join(conf, "accounts", "icloud.hub", ".credentials.json"),
-		filepath.Join(home, ".codex-accounts", "work", "auth.json"),
-	} {
-		if _, err := os.Lstat(p); err == nil {
-			t.Fatalf("a separated login with no store got %s written into its home", p)
+	for _, separated := range []bool{true, false} {
+		home := t.TempDir()
+		conf := filepath.Join(home, ".config", "claude-fleet")
+		if err := os.MkdirAll(conf, 0o700); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	plain := t.TempDir()
-	b := credAgent(fakeVaultHub(t, 200, body), plain)
-	if _, err := b.credCycle(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(plain, ".config", "claude-fleet", "accounts", "icloud.hub", ".credentials.json")); err != nil {
-		t.Fatalf("a login that is not separated lost its lease file: %v", err)
+		if separated {
+			if err := os.WriteFile(filepath.Join(conf, "credsep.json"), []byte(`{"root":"/var/db/fleet-cred/x"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		a := credAgent(fakeVaultHub(t, 200, body), home)
+		_, err := a.credCycle(context.Background())
+		log.SetOutput(os.Stderr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = filepath.WalkDir(home, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			if b, _ := os.ReadFile(p); strings.Contains(string(b), "LEAK") {
+				t.Errorf("separated=%v: no store, yet %s holds a subscription credential", separated, p)
+			}
+			return nil
+		})
+		if !strings.Contains(buf.String(), "no_store=2") {
+			t.Errorf("separated=%v: the cycle did not say no_store:\n%s", separated, buf.String())
+		}
+		if gh, _ := os.ReadFile(filepath.Join(home, ".config", "gh", "hosts.yml")); !strings.Contains(string(gh), "ghp_short") {
+			t.Errorf("separated=%v: the GitHub token (not a subscription) was not written: %q", separated, gh)
+		}
 	}
 }

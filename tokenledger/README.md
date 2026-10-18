@@ -1360,8 +1360,7 @@ What a machine can do with only the short-lived half was **measured first**
 |---|---|---|
 | hub | `CCQUOTA_FLEET_CRED_KEY_FILE=/secrets/cred-key` (or `CCQUOTA_FLEET_CRED_KEY`) | 32 bytes, base64 (`openssl rand -base64 32`). Unset = vault off: credential routes answer 503, the rest of the fleet module is unaffected |
 | hub | `CCQUOTA_FLEET_CRED_MIN_TTL=3h` (default) | a cached access token with less left is refreshed before it is issued |
-| hub | `CCQUOTA_FLEET_CREDSEP_OPTIONAL=1` | a self-hosted hub's declaration (claude-fleet#4607): only a role=user person's login must be credential-separated to lease. Unset (the default): every login is — an unseparated one gets 403 `not_separated` and routes central |
-| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and keep them written (with `CCQUOTA_FLEET=1`) |
+| agent | `CCQUOTA_FLEET_CREDS=1` | lease this login's credentials (its own + the shared pool's) and hand each Claude / Codex one to the credential store `CCQUOTA_FLEET_CRED_STORE` names (with `CCQUOTA_FLEET=1`) — no store, none written anywhere (claude-fleet#4675: `no_store` in the log; GitHub's token is still written). Every login must be credential-separated to lease (claude-fleet#4607; `CCQUOTA_FLEET_CREDSEP_OPTIONAL` is gone) |
 | agent | `CCQUOTA_FLEET_COMPUTE=0` | this login only coordinates (claude-fleet#1719): the hub refuses its lease (`compute_off`) and placement skips it. Unset = on. Re-read from `node.env` every beat (claude-fleet#1720) |
 | agent | `CCQUOTA_FLEET_PERSONAL=1` | a person's own computer (claude-fleet#1721, `fleet node compute on --personal`, a laptop's default): placed on only from itself; flags itself 维护中 while asleep. Re-read from `node.env` every beat |
 | agent | `CCQUOTA_FLEET_COMPUTE_FORCE=1` | `fleet node compute on --force` (claude-fleet#1720): open over a probe that says the region is unsupported; the hub audits it |

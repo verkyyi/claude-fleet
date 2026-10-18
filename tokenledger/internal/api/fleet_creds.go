@@ -107,8 +107,7 @@ const (
 	// is no plain key to fall back to — and the hub raises a critical finding.
 	LeaseVaultLocked = "vault_locked"
 	// LeaseNotSeparated: a login whose newest heartbeat does not say
-	// credsep=separated (claude-fleet#2295; every login since #4607, a
-	// role=user person's only under CredsepOptional). Nothing is issued —
+	// credsep=separated (claude-fleet#2295; every login since #4607). Nothing is issued —
 	// its sessions take the proxy's central route instead (/v1/node/self
 	// says so), so they still work but no token lands in the login's home.
 	LeaseNotSeparated = "not_separated"
@@ -117,30 +116,15 @@ const (
 	LeaseMachineOff = "machine_off"
 )
 
-// credsepGated says whether principal's login must be refused real tokens
+// credsepGated says whether a login must be refused real tokens
 // because it is not credential-separated (claude-fleet#2295, EPIC #2293).
-// Separation is not opt-in (claude-fleet#4607): every login is held to it —
-// an admin's, the operator's own principals', anyone's — so no real token is
-// ever written into a home its sessions can read. Only a hub that declared
-// itself a self-hosted one (CredsepOptional, CCQUOTA_FLEET_CREDSEP_OPTIONAL=1)
-// keeps #2295's rule: a person whose role is user, nobody else. credsep is the
-// login's newest heartbeat's word; "" (an agent older than #2295) counts as
-// not separated.
-func (s *Server) credsepGated(principal, credsep string) (bool, error) {
-	if !s.CredsepOptional {
-		return credsep != control.CredsepSeparated, nil
-	}
-	if !isPerson(principal) {
-		return false, nil
-	}
-	role, err := s.personRole(principal)
-	if err != nil {
-		return false, err
-	}
-	if role != roleUser {
-		return false, nil
-	}
-	return credsep != control.CredsepSeparated, nil
+// Separation is not opt-in (claude-fleet#4607) and has no way out
+// (claude-fleet#4675): every login is held to it — an admin's, the operator's
+// own principals', a self-hosted box's, anyone's — so no real token is ever
+// written into a home its sessions can read. credsep is the login's newest
+// heartbeat's word; "" (an agent older than #2295) counts as not separated.
+func credsepGated(credsep string) bool {
+	return credsep != control.CredsepSeparated
 }
 
 // leaseServes says whether the lease would hand n's login pool credentials
@@ -303,14 +287,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Credential separation (claude-fleet#2295): a user's login that has not
+	// Credential separation (claude-fleet#2295): a login that has not
 	// put its tokens out of its own reach gets none — 拒发：未隔离.
-	gated, err := s.credsepGated(principal, hb.Credsep)
-	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if gated {
+	if credsepGated(hb.Credsep) {
 		deny(http.StatusForbidden, LeaseNotSeparated, principal, "拒发：未隔离 — "+osUser+" on "+firstLabel(host)+
 			" is not credential-separated (credsep="+credsepWord(hb.Credsep)+"); its sessions go through the hub's central proxy. "+
 			"On a managed machine its daemon separates it within minutes (credsep-enforce); else, as root: "+

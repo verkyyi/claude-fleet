@@ -127,7 +127,11 @@ class TransferAuth(TransferAuthFixture):
         self.assertEqual(accounts.target_auth('codex', home=str(custom))['verdict'], 'refuse')
 
     def test_disabled_proxy_does_not_admit(self):
+        # a separated login is never off (issue #4675): FLEET_CRED_PROXY=0 still
+        # means the proxy; only a login that is not separated turns it off
         with patch.dict(os.environ, FLEET_CRED_PROXY='0'):
+            self.assertEqual(accounts.target_auth('codex')['verdict'], 'ok')
+            (self.conf / 'credsep.json').unlink()
             self.assertEqual(accounts.target_auth('codex')['verdict'], 'refuse')
 
     def test_central_route_cannot_be_attested_by_local_lease(self):

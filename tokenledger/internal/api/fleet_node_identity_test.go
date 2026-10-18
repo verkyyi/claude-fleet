@@ -64,6 +64,7 @@ func TestTrustBorrowedNameGetsNothing(t *testing.T) {
 	if _, _, err := h.srv.Store.TouchEndpoint("ep_evil", ident, "test", true, nil); err != nil {
 		t.Fatal(err)
 	}
+	credsepBeat(t, h, evil, "alice", control.CredsepSeparated) // it says mac-c now
 	code, body := rawLease(t, h, evil)
 	if code != http.StatusForbidden || !strings.Contains(string(body), LeaseUntrusted) || !strings.Contains(string(body), "borrowed") {
 		t.Fatalf("borrowed-name lease: %d %s; want 403 untrusted_node, borrowed", code, body)

@@ -4,7 +4,7 @@
 # reaches it through bin/fleet-cred-proxy.sh.
 #
 #   fleet cred-proxy status  [--all-logins [--logins a,b]]
-#   fleet cred-proxy enable|disable|status --machine [--logins a,b]
+#   fleet cred-proxy enable|status --machine [--logins a,b]
 #
 # --machine  the machine's ONE shared credential proxy (issue #2217) — the role
 #          account (_fleetcred / fleetcred) runs it, every login is a tenant of
@@ -12,7 +12,8 @@
 #          enable = `fleet-credsep.sh machine install` (every login with
 #          ~/.claude/fleet, or --logins): ONE sudo for the machine — run with
 #          password-less sudo, else the line to type is printed (exit 4).
-#          disable = `machine uninstall`. status = ONE line `shared · <user> · on
+#          disable is gone (issue #4675: no way back to credentials in a
+#          home — exit 2). status = ONE line `shared · <user> · on
 #          k/N logins · sessions a/b` (N logins with a fleet install, k of them on
 #          it; b live claude / codex processes on the machine, a of them on the
 #          shared proxy) — `per-login · …` when there is none.
@@ -221,7 +222,8 @@ do_machine() {
   case "$verb" in
     status) machine_line; return 0 ;;
     enable)  bash "$CREDSEP" machine install --logins "${logins:-all}"; rc=$? ;;
-    disable) bash "$CREDSEP" machine uninstall; rc=$? ;;
+    disable) echo "fleet cred-proxy: disable --machine is gone (issue #4675) — credentials never go back into a home" >&2
+             return 2 ;;
   esac
   [ "$rc" = 4 ] && return 4    # no password-less sudo: the line to type was printed
   if [ "$verb" = enable ] && [ "$rc" = 0 ]; then
