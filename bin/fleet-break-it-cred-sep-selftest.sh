@@ -192,18 +192,21 @@ drill_cred_upstream_tenant_override() {
   printf 'CCQUOTA_TOKEN=ccq_TENANT_NODE_SECRET\n' > "$c/node.env"      # its hub: FLEET_HUB_URL
   printf '{"anthropic":"reachable","openai":"reachable"}\n' > "$c/node-probe.json"
   t0=$(now)
+  # the login is a tenant of the machine's shared proxy (#4674: no proxy of its
+  # own); the proxy's upstream is the process's — the sandbox launcher hands its
+  # FLEET_CRED_* through — never a line of the login's own file
   ( export HOME="$sb/home" FLEET_CONF_DIR="$c" FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" \
       FLEET_CREDSEP_LOG_BASE="$sb/log" FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" \
-      FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO=''
+      FLEET_CREDSEP_ROLE="$me" FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
+      FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$(cred_deadport)"
     bash "$BIN/fleet-credsep.sh" install >"$sb/install.out" 2>&1
-    # root's settings: the real upstream; the login's own file: its listener
-    printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\n' "$good" >> "$sb/lib/$me.conf"
     printf 'FLEET_CRED_ANTHROPIC_URL=%s/direct-anthropic\nFLEET_CRED_CENTRAL_URL=%s/central\nFLEET_HUB_URL=%s\n' \
       "$evil" "$evil" "$evil" >> "$c/fleet.conf"
-    exec python3 -I "$BIN/fleet-credsep-launch.py" proxy "$me" ) 2>"$sb/launch.err" &
+    export FLEET_CRED_ANTHROPIC_URL="$good/direct-anthropic"
+    exec python3 -I "$BIN/fleet-credsep-launch.py" shared ) 2>"$sb/launch.err" &
   printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 30 test -s "$sb/run/$me/port" || { WHY="the proxy did not start: $(tail -3 "$sb/install.out" "$sb/launch.err" | tr '\n' ' ')"; return 1; }
-  port=$(cat "$sb/run/$me/port")
+  until_ok 30 test -s "$sb/run/.shared/port" || { WHY="the proxy did not start: $(tail -3 "$sb/install.out" "$sb/launch.err" | tr '\n' ' ')"; return 1; }
+  port=$(cat "$sb/run/.shared/port")
   tok=$(HOME="$sb/home" FLEET_CONF_DIR="$c" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid t1 2>&1)
   for i in 1 2; do
     curl -s -m 20 -o "$sb/resp" -X POST -H "Authorization: Bearer $tok" -H 'content-type: application/json' \
@@ -215,7 +218,7 @@ drill_cred_upstream_tenant_override() {
     || { WHY="root's upstream never served the request: $(cat "$sb/resp" 2>/dev/null) $(tail -2 "$sb/launch.err" | tr '\n' ' ')"; return 1; }
   grep -q 'ignored FLEET_CRED_ANTHROPIC_URL' "$sb/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$sb/launch.err" \
     || { WHY="the launcher did not say what it ignored: $(tr '\n' ' ' < "$sb/launch.err")"; return 1; }
-  WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走 root 配置的上游；启动器写明 ignored"
+  WHAT="登录往自己的 fleet.conf 写上游和 FLEET_HUB_URL：它的监听收不到任何请求、Authorization 或节点令牌，请求照走整机代理的上游；启动器写明 ignored"
 }
 
 # root-log-in-home (issue #2296): launchd / systemd open a root job's stdout file
@@ -294,7 +297,8 @@ drill_cred_login_removed_leftovers() {
   printf 'brkgone:%s:%s:%s\n' "$(id -u)" "$(id -g)" "$sb/homes/brkgone" > "$sb/pw"
   set -- FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
     FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$(id -un)" \
-    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw"
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
+    FLEET_NODE_STATE="$sb/node" FLEET_CREDSEP_JOIN_WAIT=0
   out=$(env "$@" bash "$BIN/fleet-credsep.sh" install --login brkgone --fresh --pool-src "$sb/pool" --install-dir "$sb/inst" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the rig: install --fresh failed (rc $rc): $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; return 1; }
   mkdir -p "$sb/log/brkgone"; : > "$sb/log/brkgone.log"; : > "$sb/log/brkgone.launch.log"; : > "$sb/lib/brkgone.conf"

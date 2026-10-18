@@ -16,8 +16,8 @@
 #   cred-sep-codex-full bin/fleet-cred-proxy.py held / standing / limit_until + the default
 #                       home unpinned (issue #4606), bin/fleet-session-cred.sh mint / standing:
 #                       a Codex session skips the account whose usage limit is spent
-#   cred-own-to-shared  bin/fleet-credsep.py machine join / leave (issue #2432): a login on its
-#                       own proxy joins the shared one with no gap, and goes back
+#   cred-own-to-shared  bin/fleet-credsep.py machine join (issue #2432): a login still on its
+#                       own proxy (none is made any more, #4674) joins the shared one with no gap
 #   cred-pool-dup       bin/fleet-cred-proxy.py pool_held / pool_resolve / store, bin/fleet-credsep.py
 #                       machine pooldup (issue #2849): a token held twice — the pool's and a
 #                       login's own accounts/<label>.hub — is seen, and folds back to ONE
@@ -251,7 +251,9 @@ drill_cred_sep_codex_full() {
 # Now `machine join`: the shared proxy answers for it first, the agent's leases
 # follow (logins/<login>.env), then the own proxy goes and its old port is bound
 # by the shared one; a join the shared proxy does not take leaves everything as
-# it was; `machine leave` puts it back.
+# it was. No login is made an own proxy any more (issue #4674) and there is no
+# way back (`machine leave` left with it): join is how the last ones leave, so
+# the drill builds alpha as such a leftover by hand.
 drill_cred_own_to_shared() {
   CAP=20   # join: the shared proxy's restart (loop delay + a python start) + the old port's handover
   local sb me uid gid port oport ta out rc t0 sup ca refused bad own_pid svc
@@ -282,14 +284,31 @@ drill_cred_own_to_shared() {
     printf '%s\n' "$!" >> "$WORK/cred-pids"
     until_ok 30 sh -c '[ -s "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null && [ -S "$1/ctl.sock" ]' _ "$sb/run/alpha"
   }
-  # alpha: separated on its own proxy, the way mac-a's credsep.fleetu2 / credsep.carol are
+  # alpha: separated on its own proxy, the way mac-a's credsep.fleetu2 / credsep.carol
+  # are — a leftover from before #4674: separated as a tenant, then made what an
+  # older install left (meta.json without `mode`, its own service, its own run dir)
   bash "$BIN/fleet-credsep.sh" install --login alpha >"$sb/install-alpha.out" 2>&1 \
     || { WHY="install alpha: $(tail -2 "$sb/install-alpha.out" | tr '\n' ' ')"; own_down; return 1; }
-  svc=''
-  for f in "$sb/daemons"/com.claude-fleet.credsep.alpha.plist "$sb/daemons"/claude-fleet-credsep-alpha.service; do
-    [ -e "$f" ] && svc=$(basename "$f")
-  done
-  [ -n "$svc" ] || { WHY="alpha's own proxy service was not written: $(ls "$sb/daemons")"; own_down; return 1; }
+  if [ "$(uname)" = Darwin ]; then svc=com.claude-fleet.credsep.alpha.plist; else svc=claude-fleet-credsep-alpha.service; fi
+  python3 - "$sb" "$ca" "$svc" <<'OWN' || { WHY="could not make alpha an own-mode leftover"; own_down; return 1; }
+import json, os, sys
+sb, ca, svc = sys.argv[1:4]
+m = os.path.join(sb, "db", "alpha", "meta.json")
+meta = json.load(open(m))
+for k in ("mode", "legacy_port", "conf_prior", "own_prior", "pool_hold"):
+    meta.pop(k, None)
+json.dump(meta, open(m, "w"), indent=1)
+r = os.path.join(ca, "credsep.json")
+rec = json.load(open(r))
+rec.pop("shared", None)
+rec["run"] = os.path.join(sb, "run", "alpha")
+json.dump(rec, open(r, "w"), indent=1)
+open(os.path.join(sb, "daemons", svc), "w").write("alpha's own proxy (an older install)\n")
+for f in (os.path.join(sb, "db", ".shared.json"), os.path.join(sb, "daemons", "com.claude-fleet.cred-proxy-shared.plist"),
+          os.path.join(sb, "daemons", "claude-fleet-cred-proxy-shared.service")):
+    if os.path.exists(f):
+        os.unlink(f)
+OWN
   own_up || { WHY="alpha's own proxy did not start: $(tail -2 "$sb/own.err" | tr '\n' ' ')"; own_down; return 1; }
   oport=$(cat "$sb/run/alpha/port")
   # the node daemon's view of alpha's agent (issue #2387): its leases go to the own socket
@@ -339,18 +358,8 @@ drill_cred_own_to_shared() {
     || { WHY="the agent's leases were not repointed (logins/alpha.env)"; own_down; return 1; }
   grep -q '"shared": true' "$ca/credsep.json" || { WHY="credsep.json does not say shared"; own_down; return 1; }
 
-  # the way back
-  out=$(bash "$BIN/fleet-credsep.sh" machine leave --logins alpha 2>&1) \
-    || { WHY="machine leave: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; own_down; return 1; }
-  [ -e "$sb/daemons/$svc" ] && grep -qx "CCQUOTA_FLEET_CRED_STORE=$sb/run/alpha/ctl.sock" "$sb/node/logins/alpha.env" \
-    && ! grep -q '"shared": true' "$ca/credsep.json" \
-    || { WHY="leave did not put the own proxy back: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; own_down; return 1; }
-  own_up || { WHY="the own proxy did not come back: $(tail -2 "$sb/own.err" | tr '\n' ' ')"; own_down; return 1; }
-  CP=$oport
-  [ "$(cat "$sb/run/alpha/port")" = "$oport" ] && [ "$(cred_req "$ta" "$sb/r")" = 200 ] \
-    || { WHY="after leave, the own proxy on $(cat "$sb/run/alpha/port") (want $oport): $(cat "$sb/r")"; own_down; return 1; }
   own_down
-  WHAT="own 模式登录 machine join：共享代理先答应接管、agent 改指共享 socket，才卸旧代理（进 backup/）；旧端口由共享代理接住，会话原凭据一路 200（拒连 ${refused} 次）；共享代理不接则原样不动；machine leave 一条放回"
+  WHAT="own 模式登录 machine join：共享代理先答应接管、agent 改指共享 socket，才卸旧代理（进 backup/）；旧端口由共享代理接住，会话原凭据一路 200（拒连 ${refused} 次）；共享代理不接则原样不动（不再有登录自己的代理，join 是最后几个的路，#4674）"
 }
 
 # cred-pool-dup (issue #2849): `machine join` starts the shared proxy with the

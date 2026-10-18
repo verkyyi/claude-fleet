@@ -3533,7 +3533,7 @@ def main():
         if store_mode(a.login) == "own":
             return 0 if join_login(a.login) else 1
         a.shared = True
-        say("shared: %s joins %s as a tenant" % (a.login, SHARED_LABEL))
+        say("shared: %s joins it as a tenant — the machine's one proxy, %s" % (a.login, SHARED_LABEL))
         try:
             rc = install(a)
             fresh_join(a.login)
