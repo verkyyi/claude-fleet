@@ -277,7 +277,7 @@ def observe(reader, expected=None):
         daemon = subprocess.Popen(['sh', str(root / 'bin/tmux-spinner.sh')], env=env,
                                   stdout=log, stderr=log, start_new_session=True)
     try:
-        hb = root / 'logs/spinner.heartbeat'
+        hb = root / 'conf/logs/spinner.heartbeat'   # the login's records (#4668)
         until(lambda: hb.exists(), 3)
         first_hb = hb.read_text().split()[0]
         last_hb = first_hb

@@ -134,7 +134,8 @@ export FAKE_KICK_LOG="$WORK/kicks.log"
 export FAKE_LC_STATE="$WORK/lcstate"; mkdir -p "$FAKE_LC_STATE"
 export FLEET_DAEMON_KICK_COOLDOWN=600
 : > "$FAKE_KICK_LOG"
-KICKLOG="$WORK/logs/daemon-kick.log"
+export FLEET_CONF_DIR="$WORK/conf"   # the kick log is the login's record (#4668)
+KICKLOG="$FLEET_CONF_DIR/logs/daemon-kick.log"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }

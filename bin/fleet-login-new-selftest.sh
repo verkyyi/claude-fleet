@@ -382,9 +382,11 @@ for f in alpha alpha.conf beta beta.conf; do eq "B pool $f mode" 600 "$(mode "$D
 contains "B config chown" "$CALLS" "chown frank:staff $H/.config $H/.config/claude-fleet"
 contains "B machine" "$OUT" "ccquota enroll --name box-frank"
 eq "B only .claude + .config + .ssh + .zshrc written" ".claude .config .ssh .zshrc" "$(ls -A "$H" | tr '\n' ' ' | sed 's/ $//')"
-# B3. the clone (#1192): at stable, as the login, logs/ ready for the daemons' StandardErrorPath
+# B3. the clone (#1192): at stable, as the login; logs/ ready for the daemons' StandardErrorPath
+# in the login's conf dir, never the install (#4668)
 eq "B3 clone at stable" "$(git -C "$FX" rev-parse stable)" "$(git -C "$H/.claude/fleet" rev-parse HEAD 2>/dev/null)"
-[ -d "$H/.claude/fleet/logs" ] || fail "B3 no logs/ in the clone"
+[ -d "$H/.config/claude-fleet/logs" ] || fail "B3 no logs/ in the login's conf dir"
+[ ! -e "$H/.claude/fleet/logs" ] || fail "B3 a logs/ in the install"
 eq "B3 only the clone under .claude" "fleet" "$(ls -A "$H/.claude" | tr '\n' ' ' | sed 's/ $//')"
 if [ -z "$DAEMONS" ]; then
   # B3. the daemons: every template, system shape, installed + bootstrapped
@@ -1034,7 +1036,7 @@ contains "R createhomedir fills" "$CALLS" "createhomedir -c -u rex"
 contains "R the proxy's first answer is not waited for (#4044, #4196)" "$OUT" "env FLEET_CREDSEP_JOIN_WAIT=0 bash"
 contains "R the fleet starts off the clock (#4196)" "$OUT" "fleet: starting (fleet-login-bootstrap.sh, detached as rex"
 contains "R the detached bootstrap ran, without its doctor report (#4044)" "$(tail -n 1 "$WORK/bs.log" 2>/dev/null)" "doctor=0"
-contains "R its output in its own log, never this run's (#4196)" "$(cat "$RH/.claude/fleet/logs/bootstrap.log" 2>/dev/null)" "fleet: ok"
+contains "R its output in its own log, never this run's (#4196)" "$(cat "$RH/.config/claude-fleet/logs/bootstrap.log" 2>/dev/null)" "fleet: ok"
 contains "R its own name when none is given" "$OUT" "full-name=rex"
 eq "R the key installed" "$(cat "$KEY")" "$(cat "$RH/.ssh/authorized_keys")"
 contains "R the last line is credsep's (pending in a sandbox, as leg M)" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: pending"

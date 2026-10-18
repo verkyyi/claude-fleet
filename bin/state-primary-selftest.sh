@@ -30,7 +30,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # Re-root onto a conf-free shadow of this install (as classify-backend-selftest.sh
-# does): the classifier reads `$BIN/../fleet.conf` and writes `$BIN/../logs`.
+# does): the classifier reads `$BIN/../fleet.conf` and writes `$FLEET_CONF_DIR/logs`.
 if [ "${_STATE_PRIMARY_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _STATE_PRIMARY_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
@@ -152,10 +152,10 @@ reset needs perm 7501 10 '{"state":"blocked","kind":"permission"}'
 bash "$BIN/classify-sessions.sh" --window "$W"
 [ "$(st)" = needs/perm/7501 ] || fail "G: the classifier overwrote a fresh 7501 blocked: [$(st)]"
 [ ! -f "$WORK/claude-calls" ] || fail "G: the classifier called the model while 7501 was fresh"
-grep -q "skip:7501" "$BIN/../logs/classify.log" 2>/dev/null || fail "G: no skip:7501 line" "$(tail -3 "$BIN/../logs/classify.log" 2>/dev/null)"
+grep -q "skip:7501" "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null || fail "G: no skip:7501 line" "$(tail -3 "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null)"
 reset needs perm 7501 130 '{"state":"blocked","kind":"permission"}'
 bash "$BIN/classify-sessions.sh" --window "$W"
-[ "$(st)" = done//classifier ] || fail "G: 130 s after the last report the screen read did not decide: [$(st)]" "$(tail -3 "$BIN/../logs/classify.log" 2>/dev/null)"
+[ "$(st)" = done//classifier ] || fail "G: 130 s after the last report the screen read did not decide: [$(st)]" "$(tail -3 "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null)"
 [ -f "$WORK/claude-calls" ] || fail "G: past the window the classifier never asked the model"
 ok "G  CLASSIFIER: skip:7501 while fresh; after 120 s the screen decides"
 

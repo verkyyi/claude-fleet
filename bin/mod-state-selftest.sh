@@ -75,7 +75,7 @@ i=0; while [ "$i" -lt 40 ] && [ -z "$(tmux capture-pane -p -t "$ww" | tr -d '[:s
 
 wopt()  { tmux show-options -w -t "$ww" -v "$1" 2>/dev/null; }
 ncall() { [ -f "$WORK/claude-calls" ] && wc -l < "$WORK/claude-calls" | tr -d ' ' || echo 0; }
-CCACHE="$BIN/../logs/.classify-cache"; LOGF="$BIN/../logs/classify.log"; mkdir -p "$CCACHE"
+CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"; LOGF="$FLEET_CONF_DIR/logs/classify.log"; mkdir -p "$CCACHE"
 ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
 fresh() {   # fresh <state> <@mod_alive or ''>
   tmux set-window-option -t "$ww" @claude_state "$1"; tmux set-window-option -t "$ww" @claude_needs ''

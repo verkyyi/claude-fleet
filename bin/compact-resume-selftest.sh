@@ -38,13 +38,13 @@ done
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/compact-resume-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/inst/logs" "$WORK/conf/fleets/s1" "$WORK/tmp" \
+mkdir -p "$WORK/fakepath" "$WORK/inst/bin" "$WORK/conf/logs" "$WORK/conf/fleets/s1" "$WORK/tmp" \
   "$WORK/widgets-issue-12" "$WORK/widgets-scratch-3"
 for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
 REFOCUS="$WORK/inst/bin/refocus-hook.sh"
 RESUME="$WORK/inst/bin/fleet-compact-resume.sh"
 OPTS="$WORK/opts"; SENDLOG="$WORK/send.log"; INBOX="$WORK/inbox.log"
-LOG="$WORK/inst/logs/context-ladder.log"
+LOG="$WORK/conf/logs/context-ladder.log"
 OVERLAY="$WORK/conf/fleets/s1/conf"
 git -C "$WORK/widgets-issue-12" init -q -b issue-12 2>/dev/null || git -C "$WORK/widgets-issue-12" init -q
 MAP="$(git -C "$WORK/widgets-issue-12" rev-parse --absolute-git-dir)/fleet-recovery-map.md"

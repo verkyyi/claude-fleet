@@ -66,7 +66,8 @@ chmod +x "$WORK/bin/"*.sh
 G="$WORK/.claude-dash/global"
 HB="$G/collect.heartbeat"
 KTS="$G/collect.kick.ts"
-KICKLOG="$WORK/logs/daemon-kick.log"
+export FLEET_CONF_DIR="$WORK/conf"   # the kick log is the login's record (#4668)
+KICKLOG="$FLEET_CONF_DIR/logs/daemon-kick.log"
 
 # --- fake launchctl: `print <target>` succeeds iff the unit is "loaded"
 # ($FAKE_UNIT_LOADED), `kickstart` logs the call and returns $FAKE_KICK_RC.

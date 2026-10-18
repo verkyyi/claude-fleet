@@ -141,7 +141,7 @@ eq "A: keeps @issue / @worktree / @fleet_id" "41 $WORK/wt1 fid-w41" \
 eq "A: carries @cc_agent codex and @ver_told" "codex 222222222222" "$(T display-message -p -t "$NW" '#{@cc_agent} #{@ver_told}')"
 for _ in $(seq 1 20); do grep -q "reason=ver-stale" "$FLEET_HISTORY_LEDGER" 2>/dev/null && break; sleep 0.3; done
 has "A: /fleet-history row reason=ver-stale" "$(cat "$FLEET_HISTORY_LEDGER" 2>/dev/null)" "$TH1	reason=ver-stale	resumed"
-has "A: cfg-restart.log says ver-stale" "$(cat "$BIN/../logs/cfg-restart.log" 2>/dev/null)" "$S:w41 ($W1) reason=ver-stale"
+has "A: cfg-restart.log says ver-stale" "$(cat "$FLEET_CONF_DIR/logs/cfg-restart.log" 2>/dev/null)" "$S:w41 ($W1) reason=ver-stale"
 
 # ============================================================================
 # D. the notice

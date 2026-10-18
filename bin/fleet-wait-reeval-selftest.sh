@@ -46,7 +46,7 @@ unset TMUX TMUX_PANE FLEET_MOD FLEET_WAIT_REEVAL
 # not the repo's; dotfiles too (fleet-sleep.py loads .fleet-transfer.py).
 for f in "$BIN"/* "$BIN"/.[!.]*; do [ -e "$f" ] && ln -s "$f" "$WORK/root/bin/${f##*/}"; done
 RB="$WORK/root/bin"
-LOGF="$WORK/root/logs/reconcile.log"
+LOGF="$WORK/conf/logs/reconcile.log"
 
 FAKE="$WORK/$FLEET_CLAUDE_COMM.sh"
 cat > "$FAKE" <<SH

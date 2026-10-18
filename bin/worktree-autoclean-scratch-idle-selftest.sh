@@ -35,7 +35,7 @@ pass=0
 ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
-mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
+mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/conf/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
@@ -151,7 +151,7 @@ run_wac >/dev/null
 for n in 2 3 4 5 6; do [ -d "$WORK/base-scratch-$n" ] || fail "scratch-$n must be KEPT"; done
 # Recoverable = DROPPED into .fleet-trash (the run's own budgeted trash sweep may
 # already have paid for the bytes by the time we look, so read the logged target).
-LOG="$WORK/logs/worktree-autoclean.log"
+LOG="$WORK/conf/logs/worktree-autoclean.log"
 grep -Eq 'autoclean: scratch idle [0-9]+d → trash .*/\.fleet-trash/base-scratch-1\.' "$LOG" \
   || fail "missing the 'autoclean: scratch idle <Nd> → trash <path>' line for scratch-1" "$(cat "$LOG")"
 [ "$(grep -c 'autoclean: scratch idle' "$LOG")" = 2 ] || fail "exactly two idle-reclaim log lines expected" "$(cat "$LOG")"
@@ -165,7 +165,7 @@ ok "REAL: idle clean scratches trashed + logged; kept work announced in one dige
 n1="$(grep -c 'idle scratch worktree' "$EVENTS")"
 run_wac >/dev/null
 [ "$(grep -c 'idle scratch worktree' "$EVENTS")" = "$n1" ] || fail "a second sweep within 24h must not re-send the digest" "$(cat "$EVENTS")"
-touch -t "$OLD" "$WORK/logs/.scratch-idle-digest"   # the last digest is now > 24h old
+touch -t "$OLD" "$WORK/conf/logs/.scratch-idle-digest"   # the last digest is now > 24h old
 run_wac >/dev/null
 [ "$(grep -c 'idle scratch worktree' "$EVENTS")" = $((n1 + 1)) ] || fail "after 24h the digest must repeat" "$(cat "$EVENTS")"
 ok "DIGEST: at most once per 24h, and it repeats while the work is still there"

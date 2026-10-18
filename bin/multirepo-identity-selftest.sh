@@ -191,7 +191,7 @@ eq "bridge: one-repo o/c#12 → D12" "$(find 12 o/c)" "$D	$D12"
 leg bridge
 
 # --- ledger: key (repo, N); each row to its own repo's ledger -------------------------
-ledger() { printf '%s/.claude/fleet/logs/landed_%s.tsv' "$HOME" "$1"; }
+ledger() { printf '%s/logs/landed_%s.tsv' "$FLEET_CONF_DIR" "$1"; }
 bash "$BIN/fleet-ledger-watch.sh" "$M" >/dev/null 2>&1        # tick 1: snapshot only
 snap=$(cut -f1 "$(fleet_state_dir "$M")/ledgerwatch.snap" | sort | tr '\n' ' ')
 eq "ledger: snapshot keys are repo-qualified; unknown skipped" "$snap" "o/a#12 o/a#20 o/b#12 o/b#14 o/b#21 "

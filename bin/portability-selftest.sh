@@ -443,7 +443,7 @@ for path in sys.argv[1:]:
 PY
 ro_files=$(find -L "$ROOT/bin" "$ROOT/hooks" "$ROOT/launchd" "$ROOT/systemd" -type f \
              \( -name '*.sh' -o -name '*.py' -o -name '*.tmpl' -o -name '*.service' -o -name '*.ts' \) 2>/dev/null \
-           | grep -v -e '-selftest' -e '/portability-selftest\.sh$' | sort)
+           | grep -v -e '/[^/]*-selftest[^/]*$' | sort)   # by basename: the shadow root's own name says selftest
 ok; [ -n "$ro_files" ] || fail "install-ro: found nothing to scan under $ROOT"
 ro_hits=$(printf '%s\n' "$ro_files" | tr '\n' '\0' | xargs -0 python3 "$WORK/installro.py")
 ok; [ -z "$ro_hits" ] || fail "a write into the install (issue #4668: records are \$FLEET_CONF_DIR/logs, the install is read-only):

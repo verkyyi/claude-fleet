@@ -139,7 +139,7 @@ with m['transition_lock'](sys.argv[2]) as p:
         with patch.dict(os.environ,self.env,clear=True), TRANSFER['transition_lock'](str(self.work)):
             r=self.run_cmd('bash',self.root/'bin/worktree-autoclean.sh')
             self.assertEqual(r.returncode,0,r.stderr)
-            self.assertIn('transition retained',(self.root/'logs/worktree-autoclean.log').read_text())
+            self.assertIn('transition retained',(self.conf/'logs/worktree-autoclean.log').read_text())
             self.assertTrue(self.work.is_dir())
             self.assertFalse(sibling.exists(),r.stdout+r.stderr)
         self.assertEqual(list((self.conf/'rotating').glob('*.transfer-lock')),[])

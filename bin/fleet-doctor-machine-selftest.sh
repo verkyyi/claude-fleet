@@ -273,16 +273,16 @@ rm -rf "$WORK/conf/fleets"
 # 7. tmux calls/s from the spinner heartbeat (issue #887 field) — shown only
 #    when present.
 # ============================================================================
-mkdir -p "$WORK/logs"
-date +%s > "$WORK/logs/spinner.heartbeat"
+mkdir -p "$WORK/conf/logs"
+date +%s > "$WORK/conf/logs/spinner.heartbeat"
 out="$(run_doctor)"
 CHECKS=$((CHECKS + 1))
 mlines "$out" | grep -q 'tmux call' && fail "7a: no tmux_calls_per_s field must show no line" "$(mlines "$out")"
-printf '%s tmux_calls_per_s=41.5\n' "$(date +%s)" > "$WORK/logs/spinner.heartbeat"
+printf '%s tmux_calls_per_s=41.5\n' "$(date +%s)" > "$WORK/conf/logs/spinner.heartbeat"
 out="$(run_doctor)"; l="$(mlines "$out" | grep -a 'tmux call' | head -1)"
 has "41.5" "$l" "7b: the heartbeat's tmux_calls_per_s must be reported"
 quiet "7b: the tmux-rate line must print NOTHING on stderr"
-rm -rf "$WORK/logs"
+rm -rf "$WORK/conf/logs"
 
 # ============================================================================
 # 8. The diskguard --watch share: remind ONCE per day, never kill, re-arm on

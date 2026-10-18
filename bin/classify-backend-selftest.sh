@@ -43,7 +43,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # reads its backend from `$BIN/../fleet.conf` (fleet-lib.sh), and a conf line
 # outranks the environment — so run straight from the live install, where the
 # operator set CLASSIFY_BACKEND=jev, this test measured the HOST, not the code.
-# It also keeps `$BIN/../logs` (classify.log, .classify-cache) off the live
+# It also keeps `$FLEET_CONF_DIR/logs` (classify.log, .classify-cache) off the live
 # fleet's state. The gate already does this (run-selftests.sh); this covers a
 # direct run, and costs one ~100ms mirror when nested.
 if [ "${_CLASSIFY_SELFTEST_ROOT:-}" != "$BIN" ]; then
@@ -155,7 +155,7 @@ CAP="$(tmux capture-pane -p -t "$ww" | sed '/^[[:space:]]*$/d' | tail -35)"
 HASH="$(printf '%s' "$CAP" | cksum | awk '{print $1}')"
 
 wopt()  { tmux show-options -w -t "$1" -v "$2" 2>/dev/null; }
-CCACHE="$BIN/../logs/.classify-cache"; LOGF="$BIN/../logs/classify.log"; mkdir -p "$CCACHE"
+CCACHE="$FLEET_CONF_DIR/logs/.classify-cache"; LOGF="$FLEET_CONF_DIR/logs/classify.log"; mkdir -p "$CCACHE"
 ckey="$(printf '%s' "$ww" | tr '/:@' '___')"
 nreq()  { n=0; for f in "$WORK"/req/*.json; do [ -e "$f" ] && n=$((n+1)); done; echo "$n"; }
 ncall() { [ -f "$WORK/claude-calls" ] && wc -l < "$WORK/claude-calls" | tr -d ' ' || echo 0; }

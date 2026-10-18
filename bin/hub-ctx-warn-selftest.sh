@@ -30,7 +30,7 @@ for f in $FILES; do cp "$BIN/$f" "$WORK/inst/bin/$f"; done
 STATE="$WORK/inst/bin/set-claude-state.sh"
 LATCH="$WORK/inst/bin/handoff-latch-reset-hook.sh"
 GCONF="$WORK/inst/fleet.conf"
-LOG="$WORK/inst/logs/context-ladder.log"
+LOG="$WORK/conf/logs/context-ladder.log"
 OPTS="$WORK/opts"; NOTES="$WORK/notes"
 printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/s1/conf"
 
