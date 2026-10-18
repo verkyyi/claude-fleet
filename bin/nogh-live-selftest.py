@@ -375,7 +375,7 @@ class TraceMetadata(unittest.TestCase):
                      '7 1.300 write(9<UNIX:[12->11]>, ""..., 1) = 1 <0.001>',
                      # ...and one cut after its LAST argument (a proxy's reply)
                      '7 1.400 socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3 <0.001>',
-                     '7 1.500 sendto(3<TCP:[10.0.0.1:1->10.0.0.2:2]>, ""..., 39, MSG_NOSIGNAL, NULL, 0 <unfinished ...>',
+                     '7 1.500 sendto(3<TCP:[192.0.2.1:1->192.0.2.2:2]>, ""..., 39, MSG_NOSIGNAL, NULL, 0 <unfinished ...>',
                      '7 1.600 <... sendto resumed>) = 39 <0.001>',
                      '7 2.000 write(198, ""..., %d) = %d <0.001>' % ((observer.PHASES.index('end') + 1,) * 2),
                      '7 2.100 +++ exited with 0 +++'):
