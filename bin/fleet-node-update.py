@@ -1517,6 +1517,9 @@ class Updater(object):
         want = home_hash(self.p.rel(sha))
         notes, todo = [], []
         managed = fns.managed_accounts(self.p.sup)
+        # root consented to a login's developer mode (issue #2779, `account dev`):
+        # its ~/.claude/fleet points at its own checkout and is left there
+        devs = set(l for l, a in fns.accounts_read(self.p.sup).items() if (a or {}).get("dev"))
         # a login NOT taken over whose ~/.claude/fleet stands on this root (an
         # admin bootstrapped from the runtime — issue #3248) moves with the
         # machine too: nothing else does (its install-sync answers off), and its
@@ -1526,6 +1529,9 @@ class Updater(object):
         for login, why in cands:
             ident = fns.account_ident(login)
             if (only and login != only) or why or ident is None:
+                continue
+            if login in devs:
+                tried.pop(login, None)
                 continue
             uid, gid, home = ident
             path = os.path.join(home, ".claude", "fleet")
@@ -2258,6 +2264,11 @@ def install_row(p, cur, login, ident):
         return None
     if pointed(path, p.root) and link_sha(p.current) == cur:
         return ("PASS", "install", "%s: ~/.claude/fleet → %s, the release %s" % (login, p.current, cur[:12]))
+    if (fns.accounts_read(p.sup).get(login) or {}).get("dev"):
+        # root consented to its developer mode (issue #2779, `account dev`): left alone
+        where = os.path.realpath(path) if os.path.islink(path) else path
+        return ("INFO", "install", "%s: developer mode (account dev) — ~/.claude/fleet → %s, the updater leaves it; "
+                "back: fleet host dev off as %s, then account dev %s off" % (login, where, login, login))
     shape = "link" if os.path.islink(path) else "plain directory"
     sha = account_install_sha(login, ident, path, p.root)
     fix = "the updater points it at %s every tick (issue #4669); now: sudo python3 '%s' follow %s" % (

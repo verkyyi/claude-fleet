@@ -30,7 +30,7 @@
 #                               switching, a drop reconnects the same way; bare
 #                               lists every machine's route + last handshakes
 #                               (#2886; ⌘P 连接路线…)
-#   fleet host on|off|status    承载: whether this computer also runs sessions
+#   fleet host on|off|status|dev  承载: whether this computer also runs sessions (dev: your checkout as the install)
 #                               (#1806 — the hub's word for it is node)
 #   fleet config [show|add|set|rm|promote|history|restore|people|export|import]
 #                               see where each Agent setting comes from (fleet ·

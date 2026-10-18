@@ -195,6 +195,11 @@ Usage:
   fleet-node-supervisor.py account [list | adopt <login> | release <login> [--force] | manages <login>]
                                                the account half (#2332); manages: exit 0 = this
                                                daemon runs <login>'s tasks (install-apply, doctor)
+  fleet-node-supervisor.py account dev <login> [on|off]
+                                               root's consent (issue #2779): <login> may point its
+                                               ~/.claude/fleet at its own checkout (`fleet host dev
+                                               on`) and the machine updater leaves that link alone
+                                               until `off`; no argument prints the consent
   fleet-node-supervisor.py account forget <login> [--force]
                                                a login being DELETED (fleet-login-remove.sh, #2924):
                                                its tasks stop, its entry and logins/<login>.env go,
@@ -5358,6 +5363,39 @@ def account_release(paths, login, force=False):
     return 0
 
 
+def account_dev(paths, login, how=None):
+    """Root's consent to a managed login's developer mode (issue #2779): with
+    `dev` set on its accounts.json entry the machine updater does not put its
+    ~/.claude/fleet back on <root>/current (follow_installs) — `fleet host dev on`
+    run as the login asks for it, else refuses. on / off write it (root); no
+    argument prints it (exit 0 = consented)."""
+    a = accounts_read(paths)
+    ent = a.get(login) or {}
+    if how is None:
+        print("%s: dev %s" % (login, "on since %s" % iso(ent["dev"]) if ent.get("dev") else "off"))
+        return 0 if ent.get("dev") else 1
+    if how not in ("on", "off"):
+        print("fleet-node-supervisor: account dev %s on|off" % login, file=sys.stderr)
+        return 2
+    if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
+        print("fleet-node-supervisor: account dev writes accounts.json — run it as root (sudo)", file=sys.stderr)
+        return 1
+    if not ent.get("managed"):
+        print("fleet-node-supervisor: %s is not managed — its own install is its own (fleet host dev on needs no consent)"
+              % login, file=sys.stderr)
+        return 1
+    ent = dict(ent)
+    if how == "on":
+        ent["dev"] = ent.get("dev") or now()
+    else:
+        ent.pop("dev", None)
+    a[login] = ent
+    _accounts_write(paths, a)
+    print("%s: dev %s — %s" % (login, how, "the machine updater leaves its ~/.claude/fleet alone; it runs `fleet host dev on <checkout>`"
+                                            if how == "on" else "the machine updater points its ~/.claude/fleet at current again"))
+    return 0
+
+
 def account_forget(paths, login, force=False):
     """A login on its way OUT (fleet-login-remove.sh, issue #2924): stop running
     as it and forget it — its entry leaves accounts.json, its logins/<login>.env
@@ -8880,6 +8918,8 @@ def main(argv):
                 adopt_credsep(paths, rest[1])
         elif sub == "release" and len(rest) > 1:
             rc = account_release(paths, rest[1], force="--force" in rest)
+        elif sub == "dev" and len(rest) > 1:
+            return account_dev(paths, rest[1], rest[2] if len(rest) > 2 else None)
         elif sub == "forget" and len(rest) > 1:
             rc = account_forget(paths, rest[1], force="--force" in rest)
         if rc is not None:

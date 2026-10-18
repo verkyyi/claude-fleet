@@ -7,7 +7,8 @@
 # fallback switch), or its client install follows GitHub (a .client-version
 # with an empty hub=). With a hub each is a WARN with its fix, none a PASS. With
 # no hub GitHub is the only source — the developer's / own-code road: INFO, never
-# a WARN. Nothing installed: nothing printed. `fleet doctor --installs` lists
+# a WARN. Developer mode (`fleet host dev on`, issue #2779) is `dev <checkout>`,
+# an INFO before all of it. Nothing installed: nothing printed. `fleet doctor --installs` lists
 # every install's 来源 (fleet-installs.sh).
 #
 # Prints one line `PASS|WARN|INFO<TAB><message>`, or nothing. Exit 0.
@@ -23,6 +24,12 @@ src=${FLEET_DIST_SOURCE:-}
 [ -n "$src" ] || src=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_DIST_SOURCE[[:space:]]*=[[:space:]]*\([^#]*\).*/\2/p' \
   "$conf/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' 	")
 [ -d "$live" ] || [ -f "$croot/.client-version" ] || exit 0
+# developer mode (issue #2779): this login's install is the person's own checkout
+if [ "$(sed -n 's/^mode: //p' "$conf/global/dist-mode" 2>/dev/null | head -n 1)" = dev ]; then
+  printf 'INFO\tdev %s（开发中：入口的新版不覆盖它 — 退出：fleet host dev off）\n' \
+    "$(sed -n 's/^checkout: //p' "$conf/global/dist-mode" | head -n 1)"
+  exit 0
+fi
 if [ -z "$hub" ]; then
   printf 'INFO\t没有入口：新版本从 GitHub 来（开发者 / 自己取代码的路，照旧）\n'
   exit 0
