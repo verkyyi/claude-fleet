@@ -361,8 +361,12 @@ class TraceMetadata(unittest.TestCase):
         trace.decode(8, 1.4, 1.5, 'close(4) = 0')
         trace.decode(8, 1.7, 1.8, 'write(4, ""..., 1) = 1')
         trace.exited.add(8)
-        with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
+        with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS') as caught:
             trace.finish(0)
+        # which two touches collided, as identifiers the record may carry (#4625)
+        import nogh_live_runtime as runtime
+        self.assertEqual(caught.exception.detail, 'CLOSE@accept')
+        self.assertTrue(runtime.DETAIL.fullmatch(caught.exception.detail))
 
     def test_resumed_call_rejoins_like_an_uninterrupted_one(self):
         # live (#4625): strace's unfinished prefix ends `0,  <unfinished` (two

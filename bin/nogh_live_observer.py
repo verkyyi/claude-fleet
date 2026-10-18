@@ -395,10 +395,10 @@ class Trace:
                 child = self.parents[child]
             return False
 
-        def access(key, first, last, write, at, until, pid, new_child=None, inert=False):
+        def access(key, first, last, write, at, until, pid, new_child=None, inert=False, kind=''):
             active = [item for item in pending.get(key, []) if item[0] > at]
             whole = first == 0 and last == 2 ** 32
-            for end, old_first, old_last, old_write, old_pid, old_child, old_inert in active:
+            for end, old_first, old_last, old_write, old_pid, old_child, old_inert, old_kind in active:
                 if pid == old_pid or last < old_first or old_last < first or not (write or old_write):
                     continue
                 # A child can run before clone/vfork returns; that causal
@@ -412,8 +412,11 @@ class Trace:
                 # bash close pipes while a sibling forks or execs).
                 if (inert and old_first == 0 and old_last == 2 ** 32) or (old_inert and whole):
                     continue
-                require(False, 'FD_ORDER_AMBIGUOUS')
-            active.append((until, first, last, write, pid, new_child, inert))
+                # Which two kinds of touch collided, as identifiers (live, #4625).
+                refused = Refused('FD_ORDER_AMBIGUOUS')
+                refused.detail = '%s@%s' % ((kind or 'TOUCH').upper(), old_kind or 'touch')
+                raise refused
+            active.append((until, first, last, write, pid, new_child, inert, kind))
             pending[key] = active
 
         for at, action, pid, data, until in sorted(self.actions, key=lambda e: e[0]):
@@ -436,14 +439,15 @@ class Trace:
                 (action == 'cloexec' and data[0] not in table) or \
                 (action == 'dup' and data[0] not in table and data[1] not in table)
             for first, last, write in touches:
-                access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None, inert)
+                access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None, inert,
+                       action + ('_inert' if inert else ''))
             if action in ('write', 'network') and data[0] in table:
                 # dup and fork retain the same open-file-description even when
                 # their FD tables differ. A concurrent connect/disconnect makes
                 # destination attribution uncertain and must never read as zero.
                 state = table[data[0]][0]
                 access(('socket', id(state)), 0, 0,
-                       action == 'network' and (data[-1] or data[-2]), at, until, pid)
+                       action == 'network' and (data[-1] or data[-2]), at, until, pid, kind='ofd_' + action)
             if action == 'fork':
                 child, shared = data
                 tables[child] = table if shared else table.copy()
