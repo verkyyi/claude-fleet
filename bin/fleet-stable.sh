@@ -107,8 +107,11 @@
 #               is still open — closing that issue (its fix is what this move
 #               ships) or a green re-walk lets the move through; --force moves and
 #               logs. No such status (no machine walks it, or stable moved since)
-#               ⇒ said, passes. FLEET_STABLE_CN_GATE=0 turns it off. Runs on
-#               --precheck too, so a red path stops a train before its tests.
+#               ⇒ said, passes. Only the PRODUCT's red refuses (issue #4663): a
+#               status of class env (环境无效…) or probe (检测出错…) is said and
+#               passes — filed all the same, re-walked hourly.
+#               FLEET_STABLE_CN_GATE=0 turns it off. Runs on --precheck too, so a
+#               red path stops a train before its tests.
 #          Gate 5 is not stable's once a Mac lane exists (issue #3868, EPIC #3863
 #          共同约定 4): with refs/tags/stable-macos on the remote, stable means
 #          "Linux has verified it", a Mac follows the lane, and the BSD half gates
@@ -133,6 +136,12 @@
 #          BSD half gated stable). A lane already there ⇒ said, exit 0, nothing
 #          pushed. The train seeds it at the stable it boarded, before its stable
 #          move stops asking macOS: a Mac stays there until mac-follow.yml moves it.
+#          --with-stable (issue #4663 — the release train, right after its stable
+#          move): the lane goes WITH stable, onto stable itself and nothing else,
+#          lane or no lane; gates 1, 2 and M hold as ever, gate 5 is not asked. The
+#          BSD half no longer holds a release: each Mac verifies its own install
+#          (fleet-node-update.py's machine doctor after the switch, rolled back on
+#          a new FAIL), and the nightly full suite files what it finds.
 #
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
@@ -176,7 +185,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run="" seed=0
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 macos_timeout=5400 ignore_check="" train_run="" seed=0 with_stable=0
 cmd="" target=""
 TAG=stable
 US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
@@ -203,6 +212,7 @@ while [ "$#" -gt 0 ]; do
     --ref)             shift
                        case "${1:-}" in stable|stable-macos) TAG="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
     --seed)            seed=1 ;;
+    --with-stable)     with_stable=1 ;;
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -214,6 +224,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
 [ "$seed" -eq 0 ] || [ "$TAG" = stable-macos ] || die "--seed seeds the Mac lane: --ref stable-macos"
+[ "$with_stable" -eq 0 ] || [ "$TAG" = stable-macos ] || die "--with-stable moves the Mac lane: --ref stable-macos"
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
 case "$macos_timeout" in ''|*[!0-9]*) macos_timeout=5400 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
@@ -566,6 +577,15 @@ cn_gate() {   # cn_gate <old> <new>
     failure|error) ;;
     *) printf 'cn: no "%s" verdict on %s — not gated\n' "$CN_CONTEXT" "$(short "$1")"; return 0 ;;
   esac
+  # only the PRODUCT's red holds a release (issue #4663): an invalid test road
+  # (env — a certificate, a quota, a drill login's leftovers) or the probe's own
+  # error says nothing about the release; it is filed, and re-walked hourly
+  case "$_desc" in
+    环境无效*|检测出错*)
+      printf 'cn: the China path probe is red on %s for a reason that is not the product (%s) — not gated; filed, re-walked hourly\n' \
+        "$(short "$1")" "$(printf '%s' "$_desc" | cut -c1-80)"
+      return 0 ;;
+  esac
   _iss=''
   case "$_url" in https://github.com/*/*/issues/[0-9]*)
     _iss=$(gh api "repos/${_url#https://github.com/}" --jq .state 2>/dev/null) ;; esac
@@ -673,7 +693,12 @@ do_move() {
       exit 0
     fi
     slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
-    if [ -n "$train_run" ]; then
+    if [ "$with_stable" -eq 1 ]; then
+      _st=$(remote_stable stable) || die "could not read refs/tags/stable from $remote"
+      [ "$_st" = "$new" ] ||
+        refuse "M: --with-stable moves the Mac lane onto stable ($(short "${_st:-none}")) only, not $(short "$new")"
+      printf 'macos: the lane moves with stable to %s — the BSD half holds no release (each Mac verifies its own install; the nightly files a red)\n' "$(short "$new")"
+    elif [ -n "$train_run" ]; then
       runs=$(train_jobs "$slug" "$train_run") || die "could not read the jobs of train run $train_run on $slug (gh auth?)"
       train_macos_gate "$old" "$new" "$(printf '%s\n' "$runs" | awk 'NF && $3 == "macOS"')"
     else

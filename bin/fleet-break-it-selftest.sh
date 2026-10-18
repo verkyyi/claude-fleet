@@ -5980,7 +5980,7 @@ drill_nothing_starts_by_itself() {
   for f in dash-issue-session.sh dash-raw-session.sh; do
     rm -f "$sb/bin/$f"; printf '#!/bin/sh\necho "$0 $*" >> "%s/spawned"\n' "$sb" > "$sb/bin/$f"; chmod +x "$sb/bin/$f"
   done
-  : > "$sb/mainA/.github/workflows/mac-follow.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
+  : > "$sb/mainA/.github/workflows/selftests-macos.yml"; : > "$sb/mainA/bin/fleet-stable.sh"
   # a backlog of autofill-labelled issues, and master's macOS run red
   cat > "$sb/shim/gh" <<SH
 #!/bin/sh

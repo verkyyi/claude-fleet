@@ -151,6 +151,7 @@ FLEET_DISPATCH_RESULT              handoff: ccquota place writes the hub's accep
 FLEET_LAUNCH                       handoff: accepted operation/task/owner/generation binding from controller to spawner (#4393)
 FLEET_LAUNCH_CONTEXT               handoff: supervisor binding inherited by native SessionStart proof (#4393)
 FLEET_LAUNCH_CREATE                handoff: supervisor-validated native Claude worktree creation intent, never a user override
+FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollback.sh runs (#4663)
 FLEET_TASK_RECOVERY_URL            handoff: pinned hub URL for receipt replay, independent of repo authority mode (#4396)
 FLEET_TASK_RECOVERY_RAW            handoff: recovery calls the original task HTTP adapter without recursion (#4396)
 FLEET_TASK_STALE_READ              handoff: allow an observed task cache only for lifecycle receipts, never launches (#4396)
@@ -877,7 +878,7 @@ FLEET_HUB_POOL_TIMEOUT             knob: curl timeout for that ask (fleet-hub-po
 FLEET_SKIP_HUB_POOL                seam: fleet-lib skips hub-pool.env (fleet-hub-pool.sh status: what this machine sets alone)
 FLEET_MACOS_WATCH                  knob: 0 turns off the red-master-macOS breakage filer on the diskguard tick (fleet-macos-watch.sh, fleet-diskguard.sh, #2286, #3120)
 FLEET_MACOS_WATCH_SECS             knob: internal pacing, seconds between two reads of master's macOS runs per repo (fleet-macos-watch.sh, default 600, #2286)
-FLEET_MACOS_WORKFLOW               knob: the workflow file whose macOS shard jobs the watcher reads (fleet-macos-watch.sh, fleet-diskguard.sh, default mac-follow.yml since #3869, #2286)
+FLEET_MACOS_WORKFLOW               knob: the workflow file whose macOS shard jobs the watcher reads (fleet-macos-watch.sh, fleet-diskguard.sh, default selftests-macos.yml since #4663 — mac-follow.yml before, #3869, #2286)
 FLEET_MACOS_STALE_SECS             knob: seconds a macOS red streak may hold the Mac lane back before one more alert (fleet-macos-watch.sh, default 7200, #3869)
 FLEET_MACOS_WATCH_WALK             knob: internal pacing, how many of the newest runs the watcher reads jobs of looking for a macOS verdict (fleet-macos-watch.sh, default 25, #3143)
 FLEET_MACOS_BRANCH                 knob: the branch whose macOS runs the watcher reads (fleet-macos-watch.sh, default master, #2286)

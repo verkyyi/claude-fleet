@@ -20,12 +20,12 @@ name: release train
 #     Linux on TRAIN_SHA (发起人拍板 2 — the full suite stays nightly).
 #   * the macOS half is NOT the train's (issue #3869, EPIC #3863 C6): stable means
 #     "Linux has verified it", and a Mac follows refs/tags/stable-macos (#3868).
-#     mac-follow.yml runs the macOS shards on each stable after this train ends
-#     green and moves the Mac lane when they are green; red, a Mac stays on the
-#     previous version and fleet-macos-watch.sh files one issue. A train never
-#     waits for, nor reds on, a Mac. `release` seeds the lane at the stable it
-#     boarded the first time there is none (fleet-stable.sh move --ref stable-macos
-#     --seed), so no Mac is ever handed a version its BSD half has not seen.
+#     Since #4663 `release` moves that lane WITH stable (fleet-stable.sh move
+#     --ref stable-macos --with-stable): no release waits on macOS. Each Mac
+#     verifies its own install (the updater's machine doctor after the switch,
+#     rolled back on a new FAIL); the nightly full macOS suite (selftests-macos.yml)
+#     files what it finds through fleet-macos-watch.sh. mac-follow.yml (#3869) is a
+#     dispatch only. A train never waits for, nor reds on, a Mac.
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
 #     oldcfg / release.json / artifacts / cn (issue 4180), no tag pushed. Any red ⇒ this train is
 #     red and ships nothing; the next merge starts the next one (拍板 7).
@@ -256,7 +256,7 @@ jobs:
     # (bin/fleet-train-plan.sh) instead of wearing the PR's 12 × 8 minutes: ≤ 6
     # minutes a shard, 12..20 wide. A shard cut short with no test red reruns once
     # (bin/fleet-shard-run.sh); a forecast that cannot be made falls back, never
-    # stops. The macOS half's plan is mac-follow.yml's (issue #3869).
+    # stops. No macOS half (issues #3869, #4663).
     # In the Shenzhen pool (issue #3865) the width follows its free slots instead
     # (`Linux 选机器`'s linux_slots → --slots): ceil(total / 75 s), ≤ the slots, ≤ 44,
     # a test over 75 s alone in its shard, 150 s an attempt. No pick (the variable
@@ -537,8 +537,8 @@ jobs:
           exit $rc
 
   train:
-    # The train's verdict: green only when every stage is. No macOS stage: that
-    # half follows the release (mac-follow.yml, issue #3869).
+    # The train's verdict: green only when every stage is. No macOS stage: each
+    # Mac verifies its own install, the nightly files the BSD half (issue #4663).
     name: train
     # fail-fast is waited for (not judged) so `release`'s --train move finds it done.
     needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, fail-fast, gate, record]
@@ -587,7 +587,7 @@ jobs:
             echo "| 本趟片数 | ${nsh:-?} 片$([ -z "$SLOTS" ] || echo "（空机位 $SLOTS）") |"
             echo "| 预计 | 合计 ${PRED:-?}s，最重一片 ${HEAVY:-?}s |"
             echo "| 实际最慢一片 | $([ -n "$slow" ] && echo "${slow#* } · ${slow%% *}s" || echo '?') |"
-            echo "| macOS | 发布之后由 mac-follow 跟（#3869） |"
+            echo "| macOS | Mac 通道随 stable 一起动；每台 Mac 装好后自检（#4663） |"
             echo "| precheck | $GATE |"
             echo "| 隔离 | $QUAR · $REC |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -747,7 +747,7 @@ jobs:
       LOST: ${{ needs.linux-rescue-plan.outputs.covers == 'true' && needs.linux-rescue-plan.outputs.lost || '' }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      # Both tag pushes below (the stable-macos seed and the stable move) ride the
+      # Both tag pushes below (the stable move and the Mac lane's) ride the
       # checkout's credential. GitHub refuses a tag move whose range changes
       # .github/workflows/* from a token without workflows permission, which
       # GITHUB_TOKEN never has (issue #3912) — so the push uses STABLE_PUSH_TOKEN
@@ -798,22 +798,6 @@ jobs:
           python3 bin/fleet-train-ledger.py build --jobs jobs.ndjson --run-id "$GITHUB_RUN_ID" --sha "$TRAIN_SHA" \
             --prev "$STABLE_SHA" > train.json || { echo "::warning::no ledger: $(cat train.json)"; rm -f train.json; }
           [ ! -s train.json ] || python3 -c 'import json; d=json.load(open("train.json")); print("ledger: %d merge(s), stages %s" % (len(d["merges"]), ", ".join(s["name"] for s in d["stages"])))'
-
-      # The Mac lane's first value (issue #3869): this train's move no longer asks
-      # macOS, so before stable leaves the commit it boarded a Mac must have a lane
-      # of its own — the hub's first (else it would serve a Mac the new stable),
-      # then the tag, at the stable this train boarded (it passed the BSD half when
-      # it moved). A lane already there ⇒ nothing. Red ⇒ nothing published, the
-      # move never runs (with no lane it would refuse anyway: no macOS job here).
-      - name: seed the Mac lane (once)
-        if: steps.sup.outputs.superseded != 'true' && needs.board.outputs.stable_sha != ''
-        run: |
-          if git ls-remote --exit-code origin refs/tags/stable-macos >/dev/null; then
-            echo "Mac lane: refs/tags/stable-macos exists — mac-follow moves it"; exit 0
-          fi
-          bash bin/fleet-release-publish.sh "$STABLE_SHA" --dir . --ref stable-macos
-          sh bin/fleet-stable.sh move "$STABLE_SHA" --ref stable-macos --seed --dir . --repo "$GITHUB_REPOSITORY"
-          echo "### Mac 通道起点：\`${STABLE_SHA:0:7}\`（之后由 mac-follow 跟）" >> "$GITHUB_STEP_SUMMARY"
 
       # the stage `发布包` kept while the tests ran (issue #3867)
       - uses: actions/download-artifact@v4
@@ -890,6 +874,22 @@ jobs:
           [ "$rc" != 0 ] || echo "moved=true" >> "$GITHUB_OUTPUT"
           exit $rc
 
+      # The Mac lane moves WITH stable (issue #4663): no release waits on macOS any
+      # more — the hub's lane first (else it would keep serving a Mac the old one),
+      # then the tag, onto the stable this step just moved (--with-stable: gates 1,
+      # 2 and M, never 5). Each Mac verifies its own install (fleet-node-update.py's
+      # machine doctor after the switch, rolled back on a new FAIL); the nightly
+      # full macOS suite files what it finds. Linux is out either way, so a red here
+      # warns and leaves the Macs one release behind until the next train.
+      - name: move the Mac lane with stable
+        if: steps.move.outputs.moved == 'true'
+        continue-on-error: true
+        run: |
+          bash bin/fleet-release-publish.sh "$TRAIN_SHA" --dir . --ref stable-macos \
+            && sh bin/fleet-stable.sh move "$TRAIN_SHA" --ref stable-macos --with-stable --dir . --repo "$GITHUB_REPOSITORY" \
+            && echo "### Mac 通道随 stable → \`${TRAIN_SHA:0:7}\`" >> "$GITHUB_STEP_SUMMARY" \
+            || { echo "::warning::the Mac lane did not follow stable to ${TRAIN_SHA:0:7} — the Macs stay one release behind until the next train"; exit 1; }
+
   ledger:
     # Every run into the hub's ledger, shipped or not (issue #3870, EPIC #3863 C7 —
     # 共同约定 7): until #3870 only `release` wrote one, as its publish's `train`
@@ -899,8 +899,7 @@ jobs:
     # (bin/fleet-train-ledger.py build — the release step's own builder), names the
     # first FAIL test off the shards' train-result-* artifacts, POSTs it to
     # /v1/fleet/release/train with this run's OIDC, and puts the hub's 「卡在…」 line
-    # on the summary. Bookkeeping: it never reds — a red here would stop
-    # mac-follow (it follows only a green train) — and the move ignores it.
+    # on the summary. Bookkeeping: it never reds, and the move ignores it.
     name: ledger
     needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, record, fail-fast, gate, train, hub-plan, hub-build, hub, release-stage, release]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'

@@ -252,7 +252,7 @@ $(printf '%s\n' "$out" | tail -n 60)
 \`\`\`
 </details>
 
-这台机器上的 stable 前移因此被拦（\`bin/fleet-stable.sh\` 的 \`cn:\` 门，读 stable 上的提交状态 \`$CONTEXT\`）——修好合并后关掉这张单，列车就能前移；巡检每小时复测一次，绿了状态自己变回 success。复测：\`bin/fleet-cn-probe.sh\`（一次）或 \`bin/fleet-cn-probe-watch.sh --repo $repo --now\`。"
+类别是 product 时，stable 前移会被拦下（\`bin/fleet-stable.sh\` 的 \`cn:\` 门，读 stable 上的提交状态 \`$CONTEXT\`）：修好、合并后关掉这张单，列车就能继续前移。env 和 probe 两类不拦发布（#4663）。巡检每小时复测一次，绿了状态自己变回 success。复测：\`bin/fleet-cn-probe.sh\`（一次）或 \`bin/fleet-cn-probe-watch.sh --repo $repo --now\`。"
   if [ "$dry" = 1 ]; then
     printf 'would-file\tcn-path-%s\t%s\n' "$layer" "$title"
   else

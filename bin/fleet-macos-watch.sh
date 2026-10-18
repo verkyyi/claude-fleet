@@ -2,14 +2,14 @@
 # fleet-macos-watch.sh --repo <owner/name> [--session <fleet>] [--dry-run] [--now]
 #   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
 #
-# Since #2286 the macOS selftests no longer run on a pull request; since #3869 they
-# run AFTER the release (.github/workflows/mac-follow.yml, its `macOS / shard K`
-# jobs on the stable it follows — #3141..#3868 they ran inside the release train),
-# and the full suite nightly (selftests-macos.yml). A red BSD half holds every Mac
-# on the previous version (refs/tags/stable-macos stays), never Linux, and nobody
-# watches the Actions tab. This script does (issue #3143, EPIC #3139 C4):
+# Since #2286 the macOS selftests no longer run on a pull request; since #4663 they
+# hold no release either: the Mac lane (refs/tags/stable-macos) moves WITH stable
+# in the release train, each Mac verifies its own install (the updater's machine
+# doctor, rolled back on a new FAIL), and the BSD half is the nightly full suite
+# (selftests-macos.yml) — mac-follow.yml (#3869) is a dispatch only. A red BSD half
+# is a bug a Mac will meet, and nobody watches the Actions tab. This script does (issue #3143, EPIC #3139 C4):
 #
-#   1. walks the workflow's (FLEET_MACOS_WORKFLOW, default mac-follow.yml)
+#   1. walks the workflow's (FLEET_MACOS_WORKFLOW, default selftests-macos.yml)
 #      completed non-pull_request runs on master, newest first, and judges each by
 #      its macOS shard jobs only (`macOS / shard K`, the nightly's `macOS shard K`):
 #      one failed / timed out ⇒ red, all green ⇒ green, none or cancelled ⇒ no
@@ -32,10 +32,10 @@
 #      person's, or a steward holder's (the fleet-steward plugin).
 #   4. remembers the run id it filed for, so the same red run is never re-filed
 #      (nor re-commented 「同一故障」) on every tick;
-#   5. the Mac lane held back (issue #3869): when the red streak began more than
+#   5. a long red (issue #3869): when the red streak began more than
 #      FLEET_MACOS_STALE_SECS ago (7200, 2 hours — the streak's first red run's
-#      created_at) with nothing green since, ONE more `breakage` alert says every
-#      Mac has sat on the previous version that long — once per streak.
+#      created_at) with nothing green since, ONE more `breakage` alert says macOS
+#      has been red that long — once per streak.
 #
 # The walk reads at most FLEET_MACOS_WATCH_WALK (25) runs' jobs.
 #
@@ -72,7 +72,7 @@ done
 [ "${FLEET_MACOS_WATCH:-1}" = 0 ] && exit 0
 command -v gh >/dev/null 2>&1 || { printf 'fleet-macos-watch: gh not on PATH\n' >&2; exit 2; }
 
-WF="${FLEET_MACOS_WORKFLOW:-mac-follow.yml}"
+WF="${FLEET_MACOS_WORKFLOW:-selftests-macos.yml}"
 BRANCH="${FLEET_MACOS_BRANCH:-master}"
 slug=$(fleet_slug "$repo")
 SD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/macos-watch"
@@ -144,7 +144,7 @@ if [ -n "$t0" ] && [ $((t - t0)) -ge "$held" ] && [ "$(cat "$stale" 2>/dev/null)
     printf '%s\n' "$start" > "$stale"
     printf 'stale\t%sh\t%.7s\n' "$hrs" "$start"
     bash "$alert" event ${sock:+-L "$sock"} breakage \
-      "fleet: every Mac has stayed on the previous version for ${hrs}h+ — macOS is red since $(printf '%.7s' "$start") (stable-macos held back; Linux unaffected)" \
+      "fleet: macOS has been red for ${hrs}h+ — since $(printf '%.7s' "$start"); every Mac runs it (the lane moves with stable since #4663)" \
       >/dev/null 2>&1 || log "the stale-lane alert failed"
   fi
 fi
@@ -173,8 +173,8 @@ body="## master 上的 BSD 半边红了（issue #2286 的自动开单）
 - 红的测试：${tests:-（日志里没有读出 FAIL/TIMEOUT 行，看上面的 run）}
 - 从哪个提交开始红：\`$s7\`（往回找到最后一次绿之后的第一个红）
 
-macOS 检查在发布之后跑（#2286；#3869 起是 \`mac-follow.yml\`，跟每个 stable），所以它红着时 Linux 照发，Mac 通道 \`refs/tags/stable-macos\` 停在上一版：这张单修好之前，每台 Mac（和 Mac 上的客户端）都换不上新版本。
-修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（BSD sed / bash 3.2 的差别最常见，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车发出、mac-follow 绿了，Mac 通道就跟上。"
+macOS 全量检查每晚跑（\`selftests-macos.yml\`）。#4663 起它不再挡发布：Mac 通道随 stable 一起移动，每台 Mac 装上新版后由自己的 machine doctor 验证，新出现 FAIL 就整机回滚。所以这里的红，是 Mac 上会遇到的问题，要尽快修。
+修法：在 \`bin/run-selftests.sh <name>\` 里复现那个测试（最常见的是 BSD sed / bash 3.2 的差别，见 CLAUDE.md「The gate has a BSD half」），修好后合并，下一趟列车就把修复带到 Mac。"
 
 if [ "$dry" = 1 ]; then
   printf 'would-file\t%s\t%s\n' "$rid" "$title"; exit 0
@@ -212,7 +212,7 @@ fi
 # streak. Nobody is spawned for it (issue #3120).
 if [ "$rc" = 0 ] || [ "$reopened" = 1 ]; then
   bash "$alert" event ${sock:+-L "$sock"} breakage \
-    "fleet: macOS is red since ${s7}, every Mac stays on the previous version — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
+    "fleet: macOS is red since ${s7}, and every Mac runs it — ${url:-$repo} (nobody fixes it on their own; open a session on it)" \
     >/dev/null 2>&1 || log "filed ${url:-the breakage} but the alert failed"
 fi
 exit 0
