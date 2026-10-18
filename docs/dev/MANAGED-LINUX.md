@@ -580,7 +580,16 @@ provisioner once the pod is ready, never rendered.
 What an idle pod is promised: 0.25 core · 1.5 GB. The ceiling is the person's —
 the hub setting `fleet.user_pod_limits.<principal>` (`cpu=2,memory=6Gi,disk=50Gi`
 by default; the hub stores every key spelled, refuses a value under the idle
-request) — and `--limits` takes that same text:
+request) — and `--limits` takes that same text.
+
+The node's own disk is not the person's to fill (issue #4729): the `fleet`
+container asks for 1 GiB of ephemeral-storage and is capped at 8 GiB, `sshd`
+64 MiB · 1 GiB, and `/tmp` (tmux's sockets, scratch) is an emptyDir of at most
+6 GiB — what a person keeps lives on the home disk. A container that asks for
+none is the kubelet's first eviction pick when the shared node runs short, so
+a pod that used 1.6 MiB went first, every session with it; past its own cap
+only that pod goes. The door (2 GiB · 6 GiB, state 4 GiB · logs 1 GiB) and the
+shared services ask for theirs too (BREAK-IT `pod-disk-unasked`). `--limits`:
 
 ```sh
 python3 extras/managed-node/render.py --image "$IMAGE" --hub "$HUB" --storage-class "$SC" \

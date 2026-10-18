@@ -524,6 +524,18 @@ USER_POD_RE = r'u-[a-z0-9]{4,20}'
 # fleet.user_pod_limits.<principal>, the same cpu=…,memory=…,disk=… text)
 USER_POD_REQUESTS = {'cpu': '250m', 'memory': '1536Mi'}
 USER_POD_LIMITS = {'cpu': '2', 'memory': '6Gi', 'disk': '50Gi'}
+# The node's own disk (claude-fleet#4729). A container that asks for no
+# ephemeral-storage is the kubelet's FIRST pick when the shared node runs short —
+# usage above a request of 0 — so on 2026-10-18 a person's pod (1.6 MiB of it)
+# and the door (100 KiB) were evicted for a disk other tenants filled. Each
+# fleet container asks for what it holds and is capped, and a disk-backed
+# emptyDir has a sizeLimit: past it only that pod goes, never the node's others.
+# The person's work lives on the home disk (the PVC); /tmp is tmux's sockets and
+# scratch. A pod's ceiling is the SUM of its containers' limits, so the fleet
+# container's covers /tmp's.
+USER_POD_TMP = '6Gi'
+USER_POD_EPHEMERAL = {'fleet': {'requests': '1Gi', 'limits': '8Gi'},
+                      'sshd': {'requests': '64Mi', 'limits': '1Gi'}}
 _CPU_RE = r'([1-9][0-9]{0,2}|[1-9][0-9]{0,5}m)'
 _BYTES_RE = r'[1-9][0-9]{0,5}(Mi|Gi|Ti)'
 _UNIT = {'Mi': 1, 'Gi': 1024, 'Ti': 1024 * 1024}
@@ -559,9 +571,14 @@ def user_pod_limits(text=''):
     return got
 
 
+def _ephemeral(res, eph):
+    """`res` (requests / limits) with the container's ephemeral-storage added."""
+    return {k: dict(v, **{'ephemeral-storage': eph[k]}) for k, v in res.items()}
+
+
 def _user_pod_container_resources(limits):
-    return {'requests': dict(USER_POD_REQUESTS),
-            'limits': {'cpu': limits['cpu'], 'memory': limits['memory']}}
+    return _ephemeral({'requests': dict(USER_POD_REQUESTS),
+                       'limits': {'cpu': limits['cpu'], 'memory': limits['memory']}}, USER_POD_EPHEMERAL['fleet'])
 
 
 # A person's pod runs as that person (#3757, EPIC #3500 C16 · its second half):
@@ -683,7 +700,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
         'command': ['/bin/sh', '-ec', 'chmod 711 /run/sshd-key\nrm -f /run/sshd-key/host /run/sshd-key/host.pub\n'
                     'ssh-keygen -q -t ed25519 -N "" -f /run/sshd-key/host\n'
                     'exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config'],
-        'resources': {'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
+        'resources': _ephemeral({'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
+                                USER_POD_EPHEMERAL['sshd']),
         'securityContext': {'runAsUser': 0, 'allowPrivilegeEscalation': False,
                             'capabilities': {'drop': ['ALL'], 'add': list(POD_SSHD_CAPS)}, 'seccompProfile': rt()},
         'ports': [{'name': 'ssh', 'containerPort': POD_SSHD_PORT}],
@@ -738,7 +756,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                                   {'name': 'door', 'secret': {'secretName': DOOR_PUB_SECRET,
                                                            'optional': True, 'defaultMode': 0o444}},
                                   {'name': 'pod-etc', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
-                                  {'name': 'tmp', 'emptyDir': {}},
+                                  {'name': 'tmp', 'emptyDir': {'sizeLimit': USER_POD_TMP}},
                                   {'name': 'run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '16Mi'}},
                                   {'name': 'sshd-key', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
                                   {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}}}},
@@ -755,6 +773,11 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
 DOOR_NAME = 'fleet-door'
 DOOR_SECRET = 'fleet-door'
 DOOR_PUB_SECRET = 'fleet-door-pub'
+# its disk (#4729): state holds the runtime the image stages at each start
+# (~1.3 GiB), logs the node's own; asked for and capped like a user pod's
+DOOR_STATE = '4Gi'
+DOOR_LOGS = '1Gi'
+DOOR_EPHEMERAL = {'requests': '2Gi', 'limits': '6Gi'}
 
 
 def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec='slb.s1.small',
@@ -795,7 +818,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
     tcp = {'tcpSocket': {'port': ENTRY_PORT}}
     container = {
         'name': 'door', 'image': image, 'env': env,
-        'resources': {'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '512Mi'}},
+        'resources': _ephemeral({'requests': {'cpu': '50m', 'memory': '64Mi'}, 'limits': {'cpu': '1', 'memory': '512Mi'}},
+                                DOOR_EPHEMERAL),
         'securityContext': NODE_SECURITY,
         'ports': [{'name': 'entry', 'containerPort': ENTRY_PORT}],
         'volumeMounts': [{'name': 'state', 'mountPath': '/var/db/fleet-node'},
@@ -823,8 +847,8 @@ def door_resources(image, hub, namespace='fleet-workers', replicas=2, entry_spec
                           {'weight': 100, 'podAffinityTerm': {'topologyKey': 'kubernetes.io/hostname',
                                                               'labelSelector': {'matchLabels': {'fleet/role': 'door'}}}}]}},
                       'containers': [container],
-                      'volumes': [{'name': 'state', 'emptyDir': {}},
-                                  {'name': 'logs', 'emptyDir': {}},
+                      'volumes': [{'name': 'state', 'emptyDir': {'sizeLimit': DOOR_STATE}},
+                                  {'name': 'logs', 'emptyDir': {'sizeLimit': DOOR_LOGS}},
                                   {'name': 'secret', 'secret': {'secretName': DOOR_SECRET, 'defaultMode': 0o400}}]}}}},
     ]
 

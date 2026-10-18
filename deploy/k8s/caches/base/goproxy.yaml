@@ -112,6 +112,8 @@ spec:
             requests:
               cpu: 50m
               memory: 128Mi
+              # #4729: a request of 0 is the kubelet's first pick when the node's disk runs short
+              ephemeral-storage: 256Mi
             limits:
               cpu: "1"
               memory: 1Gi
