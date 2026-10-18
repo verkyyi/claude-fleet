@@ -18,3 +18,10 @@ patches:
       - op: replace
         path: /spec/rules/0/host
         value: hub.example.com
+  # the cluster's pod range (docs/dev/MANAGED-LINUX.md «Egress guard»): CONNECT from
+  # nowhere else; the program has no default
+  - target: {kind: Deployment, name: fleet-us-egress}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: FLEET_US_EGRESS_SOURCES, value: "198.18.0.0/16"}

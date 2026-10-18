@@ -8,7 +8,7 @@
 
 | 端口 | 谁来 |
 |---|---|
-| `connect` 3128 | `fleet-egress`（`FLEET_US_EGRESS_SOURCES`，默认集群 pod 网段；只放 `FLEET_US_EGRESS_DOMAINS` 里的主机、只 443） |
+| `connect` 3128 | `fleet-egress`（`FLEET_US_EGRESS_SOURCES` = 集群 pod 网段，overlay 必须给、程序没有默认；只放 `FLEET_US_EGRESS_DOMAINS` 里的主机、只 443） |
 | `reverse` 8090 | 美国主机的连接器，经入口；凭 Secret `fleet-us-egress` 的 `token` 认证 |
 
 没有连接器时 CONNECT 回 502——没有直连、也没有新加坡兜底。`/livez` 只说进程活着（入口在中断期间
@@ -38,7 +38,8 @@ fleet-workers/   示例 overlay：namespace、镜像（托管节点镜像，按 
 
 连接器（`client-run.sh` · `install-macos.py`，launchd `com.claude-fleet.us-egress`）和凭据代理那一侧的
 `FLEET_CRED_ANTHROPIC_PROXY` 还在分支 `scratch-20261012-us-egress` 的 `extras/us-egress/`（提交 157e3276），
-它的 `render.py` 是这份清单的前身——网关这一半以本目录为准。
+它的 `render.py` 是这份清单的前身——网关这一半以本目录为准。那一版程序默认来源网段，
+本目录的不给默认：从那份清单换到 `base/` 时，overlay 要补上 `FLEET_US_EGRESS_SOURCES`。
 
 验：
 

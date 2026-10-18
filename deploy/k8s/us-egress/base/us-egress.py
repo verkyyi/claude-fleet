@@ -217,7 +217,11 @@ class Gateway:
 
 
 async def gateway():
-    g = Gateway(token(), os.environ.get("FLEET_US_EGRESS_SOURCES", "172.20.0.0/16"),
+    # the cluster's pod range: the deployment's own, so no default (the overlay sets it)
+    sources = os.environ.get("FLEET_US_EGRESS_SOURCES", "").strip()
+    if not sources:
+        raise ValueError("FLEET_US_EGRESS_SOURCES (the cluster's pod range) is not set")
+    g = Gateway(token(), sources,
                 os.environ.get("FLEET_US_EGRESS_DOMAINS", DOMAINS))
     tcp_host, tcp_port = os.environ.get("FLEET_US_EGRESS_LISTEN", "127.0.0.1:3128").rsplit(":", 1)
     ws_host, ws_port = os.environ.get("FLEET_US_EGRESS_WS_LISTEN", "127.0.0.1:8090").rsplit(":", 1)
