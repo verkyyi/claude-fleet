@@ -136,6 +136,19 @@ def marker(phase):
 DETAIL = re.compile(r'[A-Z0-9_]{1,64}(?:@[a-z][a-z0-9_]{0,31})?')
 
 
+def broker_failure(value):
+    """The broker's own refusal record, as the supervisor's refusal: say IT, not
+    that its line was not a phase (live, #4625). Identifiers only, or BROKER_FORMAT."""
+    require(set(value) - {'detail'} == {'type', 'code', 'live'} and value['type'] == 'failure'
+            and isinstance(value['code'], str) and re.fullmatch(r'[A-Z0-9_]{1,64}', value['code'])
+            and value['live'] == 'NOT RUN'
+            and ('detail' not in value or (isinstance(value['detail'], str) and DETAIL.fullmatch(value['detail']))),
+            'BROKER_FORMAT')
+    refused = Refused(value['code'])
+    refused.detail = value.get('detail', 'BROKER')
+    return refused
+
+
 def control_refusal():
     """A control probe's refusal code, left in the root-only state dir (#4625)."""
     try:
@@ -422,6 +435,8 @@ def supervise(role):
                                                               'success_provider', 'success_forge', 'success_github_restored')
                                     and value['phase'] in PHASES and len(gateway) < 100000, 'GATEWAY_SCOPE')
                             gateway.append(value)
+                        elif value.get('type') == 'failure':
+                            raise broker_failure(value)
                         else:
                             require(value.get('type') in ('ready', 'marked', 'result')
                                     and value.get('phase') in PHASES, 'BROKER_FORMAT')
