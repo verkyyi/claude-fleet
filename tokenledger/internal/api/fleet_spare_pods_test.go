@@ -147,6 +147,7 @@ func podRig(t *testing.T) (*harness, *fakeOps) {
 	ops := startFakeOps(t, h, pub)
 	setHubSetting(t, h.srv, SparesKey, "on")
 	setHubSetting(t, h.srv, ClustersKey, testCluster)
+	setHubSetting(t, h.srv, SpareMaxKey, "2") // the most a place keeps (the default is 1)
 	return h, ops
 }
 

@@ -83,13 +83,17 @@ const (
 	NodeUserCapPrefix = "fleet.node_user_cap."
 )
 
-// spareMaxCeiling bounds fleet.spare_max; defaultNodeUserCap is a machine's
-// login cap when fleet.node_user_cap.<machine> is unset.
+// defaultNodeUserCap is a machine's login cap when fleet.node_user_cap.<machine>
+// is unset.
 const (
-	spareMaxCeiling    = 2
 	defaultSpareMax    = 1
 	defaultNodeUserCap = 10
 )
+
+// spareMaxCeiling bounds fleet.spare_max and every place's count: at most two
+// a machine (claude-fleet#4673). A variable so tests that seat several people
+// on one machine can move it.
+var spareMaxCeiling = 2
 
 // spareScanEvery is how often a beat may run the refill scan. A variable so
 // tests can move it.

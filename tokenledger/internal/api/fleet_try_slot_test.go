@@ -69,6 +69,13 @@ func trialSlotHarness(t *testing.T, spares int) (*harness, *fleetNode, *fakeConv
 	node := connectCaps(t, h, "mac-d-op", "mac-d", "ivan", true, control.CapCredsep, control.CapRecycle)
 	beatCount(t, node, "mac-d", "ivan", 1)
 	waitFor(t, 3*time.Second, "mac-d on the roster", func() bool { return h.srv.leastBusyMachine(time.Now()) == "mac-d" })
+	if spares > spareMaxCeiling {
+		// several people seated on one machine: past the two a machine keeps
+		// (claude-fleet#4673), for this test only
+		old := spareMaxCeiling
+		spareMaxCeiling = spares
+		t.Cleanup(func() { spareMaxCeiling = old })
+	}
 	sparesOn(t, h, strconv.Itoa(spares))
 	openSpares(t, node, spares, control.CredsepSeparated)
 	readySpares(t, h, "mac-d", spares)
