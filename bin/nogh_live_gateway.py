@@ -90,7 +90,7 @@ class Policy:
         if host in self.restored_hosts and before != 'row:A4-restored':
             addresses = None
         if addresses is None:
-            self.record(source, 'github_network' if github(host) else 'unknown', before, 'DNS_NAME')
+            self.record(source, 'github_network' if github(host) else 'unknown', before, name_shape(labels))
             return struct.pack('!6H', ident, 0x8183, 1, 0, 0, 0) + packet[12:offset]
         family = 4 if qtype == 1 else 6
         packed = [ipaddress.ip_address(ip).packed for ip in sorted(addresses)
@@ -99,6 +99,17 @@ class Policy:
         header = struct.pack('!6H', ident, 0x8180, 1, len(packed), 0, 0)
         answer = b''.join(b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 0, len(ip)) + ip for ip in packed)
         return header + packet[12:offset] + answer
+
+
+TLD_CLASSES = ('com', 'net', 'org', 'io', 'test', 'local', 'internal', 'cn')
+
+
+def name_shape(labels):
+    """A refused name's SHAPE, never the name (#4625): DNS_NAME_<labels>_<TLD class>,
+    the TLD only from a fixed short list (else OTHER) — enough to tell a bare host name
+    or a cluster suffix from a public one."""
+    tld = labels[-1] if labels and labels[-1] in TLD_CLASSES else 'other'
+    return 'DNS_NAME_%d_%s' % (min(len(labels), 9), tld.upper())
 
 
 def dns_reason(exc, transport):
