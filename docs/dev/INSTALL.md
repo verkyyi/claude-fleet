@@ -1050,6 +1050,33 @@ replay, green at once.
 `stable` trails master — the cue to move it. The first placement was `0164208`,
 the version every login on the Mac mini was synced to on 2026-09-24.
 
+### 开发模式 — 本机代码直接当安装（issue #2779）
+
+改 fleet 本身、想马上试一个还没定版的改动时，不必等 stable：
+
+```sh
+fleet host dev on ~/projects/claude-fleet-issue-123   # ~/.claude/fleet → 这个代码目录
+fleet host dev status                                 # 开发模式 已开 · dev <checkout> …
+fleet host dev off                                    # 指回原来那一版，下一拍照常跟入口
+```
+
+`on` 把 `~/.claude/fleet` 这条链接换到代码目录（还是普通目录的安装先收进
+`fleet.versions/`），记一份 `$FLEET_CONF_DIR/global/dist-mode`（mode · checkout ·
+prev · since）。在它期间 install-sync 每一拍答 `off · dev <checkout>`、不切，入口
+发的新版不覆盖它；doctor 的 `dist` 行是 `INFO dev <checkout>`，`install` 行是 OFF、
+`fleet doctor --installs` 的来源列写 `dev`。守护和 hook 走的都是
+`~/.claude/fleet/bin/…`，下一次调用就跑这里的代码；改了 hook 表 / 守护模板 / 设置这类
+装机步骤，照旧手动重放一次。`off` 指回 `prev`（不在了就指回握着仓库的那一版），删掉
+记录，下一拍 install-sync 回到入口那一版（stable 动过就是 `switched`）。
+
+托管登录（`accounts.json`）上，机器更新器每拍把 `~/.claude/fleet` 指回
+`<root>/current`，所以先要管理员同意：
+`sudo "<root>/current/bin/fleet-node-supervisor.py" account dev <login> on`——
+没有这份同意 `fleet host dev on` 拒绝并给出这条命令；有了，更新器放过这个登录，
+`fleet doctor --machine` 的 `install` 行 INFO。用完 `fleet host dev off`，再
+`account dev <login> off`。BREAK-IT `dev-checkout-overwritten`；
+`bin/fleet-dev-mode-selftest.sh`。
+
 ## MCP servers on demand
 
 Without `FLEET_MCP_CONFIG`, every spawned session starts **every** MCP server

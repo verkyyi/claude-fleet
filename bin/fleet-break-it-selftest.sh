@@ -997,6 +997,18 @@ drill_install_sync_killed() {
   SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
 }
 
+# dev-checkout-overwritten (issue #2779): a person's own checkout as the install
+# survives a stable move (install-sync answers off · dev), a managed login needs
+# root's consent, and `dev off` goes back and follows again — the selftest's legs.
+drill_dev_checkout_overwritten() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-dev-mode-selftest.sh" 2>&1) \
+    || { WHY="developer mode did not hold: $(printf '%s\n' "$out" | grep '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="开发模式：stable 前进时 install-sync 答 off · dev、链接不动；托管登录无 root 同意即拒；dev off 指回原版，下一拍 switched"
+}
+
 # epic_sandbox <dir> — a bare origin + a clone ONE commit behind stable, with
 # stub apply / doctor / diskguard; the heartbeat and the state live under
 # <dir>/conf. epic_tick runs one install-sync tick on it, epic_hb the heartbeat.

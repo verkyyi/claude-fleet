@@ -1445,6 +1445,21 @@ class H_Accounts(Sandbox):
         self.assertEqual(self.run_sup("account", "manages", "alice").returncode, 1)
         self.assertEqual(self.run_sup("account", "manages", "bob").returncode, 0)
 
+    def test_account_dev_consent(self):
+        """issue #2779: `account dev <login> on|off` is root's consent to the
+        login's developer mode — only for a managed login, read back by the bare form."""
+        self.assertEqual(self.run_sup("account", "adopt", "alice").returncode, 0)
+        self.assertEqual(self.run_sup("account", "dev", "alice").returncode, 1)
+        self.assertEqual(self.run_sup("account", "dev", "bob", "on").returncode, 1, "bob is not managed")
+        r = self.run_sup("account", "dev", "alice", "on")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        acc = json.load(open(os.path.join(self.d, "db", "accounts.json")))
+        self.assertTrue(acc["alice"].get("dev") and acc["alice"].get("managed"))
+        self.assertIn("alice: dev on since", self.run_sup("account", "dev", "alice").stdout)
+        self.assertEqual(self.run_sup("account", "dev", "alice", "off").returncode, 0)
+        self.assertNotIn("dev", json.load(open(os.path.join(self.d, "db", "accounts.json")))["alice"])
+        self.assertEqual(self.run_sup("account", "dev", "alice", "maybe").returncode, 2)
+
     def test_needs_root_for_another_uid(self):
         pw = json.load(open(self.env["FLEET_NODE_PASSWD"]))
         pw["carol"] = {"uid": os.getuid() + 1, "gid": os.getgid(), "home": self.home("alice")}

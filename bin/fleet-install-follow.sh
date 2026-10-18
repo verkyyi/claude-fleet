@@ -180,6 +180,13 @@ judge() {
     [ "$j_rc" -eq 0 ] && j_val=$(conf_val "$j_txt" FLEET_INSTALL_SYNC)
     [ -n "$j_val" ] && break
   done
+  # developer mode (issue #2779): the login's own checkout, on purpose
+  j_txt=$(oread "$j_owner" "$j_conf/global/dist-mode")
+  if [ "$(printf '%s\n' "$j_txt" | sed -n 's/^mode: //p' | head -n 1)" = dev ]; then
+    F_FOLLOW=off F_RESULT=dev F_VERDICT=OFF
+    F_WHY="开发中 · dev $(printf '%s\n' "$j_txt" | sed -n 's/^checkout: //p' | head -n 1) — 入口的新版不覆盖它（fleet host dev off 回到入口那一版）"
+    return 0
+  fi
   if [ "$j_val" = 0 ]; then
     F_FOLLOW=off F_RESULT=off F_VERDICT=OFF
     F_WHY="FLEET_INSTALL_SYNC=0 — this login does not follow refs/tags/stable (a hand /fleet-sync-install still works; set it to 1, or delete the line, to follow)"

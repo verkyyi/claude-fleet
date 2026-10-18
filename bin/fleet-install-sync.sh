@@ -50,6 +50,11 @@
 #              tree of links into the root runtime that the machine updater
 #              builds and moves with the machine (issue #2774, EPIC #2770 C4;
 #              #2688 had it follow the runtime's sha over git).
+#              A login in DEVELOPER MODE (issue #2779, `fleet host dev on
+#              <checkout>` — global/dist-mode says `mode: dev`) is off too:
+#              `off · dev <checkout>` — its ~/.claude/fleet is the person's own
+#              checkout and no stable overwrites it; `fleet host dev off` points
+#              it back and the next tick follows again.
 #   fetch      `git fetch --no-tags origin +refs/tags/stable:refs/tags/stable`
 #              over https, no credentials, bounded by --timeout (git's own
 #              low-speed abort — macOS has no timeout(1)). A fetch that fails is
@@ -933,6 +938,14 @@ main() {
   if [ "${FLEET_INSTALL_SYNC:-1}" = 0 ]; then
     DEFERRED_SINCE=''
     finish off 'FLEET_INSTALL_SYNC=0 — this login does not follow stable (set it to 1, or delete the line, to switch back on)'
+  fi
+  # --- dev (issue #2779) ---------------------------------------------------------
+  # `fleet host dev on <checkout>` made this login's install the person's own
+  # checkout: nothing is fetched, nothing switched — before the managed gate, as
+  # root's consent (`account dev`) is what lets a managed login get here.
+  if [ "$(sed -n 's/^mode: //p' "$STATE_DIR/dist-mode" 2>/dev/null | head -n 1)" = dev ]; then
+    DEFERRED_SINCE=''
+    finish off "dev · $(sed -n 's/^checkout: //p' "$STATE_DIR/dist-mode" | head -n 1) — developer mode: ~/.claude/fleet is this checkout and no stable overwrites it (\`fleet host dev off\` to follow the hub again)"
   fi
   # --- managed (issue #2334) -----------------------------------------------------
   # A login the machine daemon manages runs the root runtime, and the machine's ONE

@@ -253,7 +253,7 @@ Claude Code 解析插件文件真实路径时都落在目录内（不报「Path 
 （两目录比较模式：发布目录里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
 **机器换版时所有登录同时换**：`current` 一动就都换了，切换那一拍（请守护重启之前）每个托管登录各跑一次 apply；
 体检 FAIL 整机退回时随 `current` 一起退回、各跑一次 apply；提交后、以及每拍处于发布版时，不是指向 `current` 的登录（被手动指回一份
-独立旧副本、开号时那份自己的拷贝、#2774 的旧链接树）重新指回（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
+独立旧副本、开号时那份自己的拷贝、#2774 的旧链接树）重新指回（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。root 用 `account dev <登录> on` 同意过开发模式的登录（`accounts.json` 的 `dev`，#2779）例外：它的链接指着自己的代码目录（`fleet host dev on`），更新器不动、`install` 行 INFO，`account dev <登录> off` 后照常指回。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
 `FLEET_NODE_UPDATE_RETRY` 后再试（`FLEET_NODE_UPDATE_FOLLOW=0` 关）。登录自己的 `fleet-install-sync.sh` 在托管登录上答
 `off · managed · 跟随 <root>/current (<sha>)`（这次是对的：更新器负责），不再自己去取——以前（#2688 / #2714）它按提交
 从 GitHub 取对象、每个登录各存一份。`account adopt` 接管那一刻**当场同步**做一次 `fleet-node-update.py follow <login>`

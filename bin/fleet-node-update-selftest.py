@@ -1461,6 +1461,29 @@ class M_FollowInstall(Sandbox):
         self.assertTrue(os.path.isdir(own), "an own copy outside the versions dir is never removed")
         self.assertRegex(self.cmd("doctor").stdout, r"PASS\s+install\s+alice")
 
+    def test_dev_consent_is_left_alone(self):
+        """issue #2779: root consented to alice's developer mode (`account dev`):
+        her link on her own checkout is left there tick after tick, the doctor
+        says INFO; consent taken back ⇒ the next tick points her at current."""
+        self.install(V1)
+        co = os.path.join(self.d, "checkout")
+        os.makedirs(os.path.join(co, "bin"))
+        os.remove(self.live("alice"))
+        os.symlink(co, self.live("alice"))
+        acc = os.path.join(self.d, "db", "accounts.json")
+        with open(acc) as f:
+            a = json.load(f)
+        a["alice"]["dev"] = 1
+        self.wj(acc, a)
+        self.tick(V1)
+        self.assertEqual(os.path.realpath(self.live("alice")), os.path.realpath(co))
+        self.assertRegex(self.cmd("doctor").stdout, r"INFO\s+install\s+alice: developer mode")
+        del a["alice"]["dev"]
+        self.wj(acc, a)
+        self.tick(V1)
+        self.assert_pointed("alice", V1)
+        self.assertTrue(os.path.isdir(co), "the checkout is never removed")
+
     def test_follow_now_and_off(self):
         self.release(V1)
         self.tick(V1, FLEET_NODE_UPDATE_FOLLOW="0")

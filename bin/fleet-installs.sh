@@ -33,7 +33,8 @@
 #   github   a login install whose origin is GitHub, FLEET_DIST_SOURCE=github, a
 #            client that follows GitHub (no hub on its .client-version)
 #   dev      a local checkout (a plain dir or a link outside fleet.versions/
-#            whose origin is not GitHub)
+#            whose origin is not GitHub), and any login in developer mode
+#            (`fleet host dev on`, global/dist-mode — issue #2779)
 #   ?        nothing to tell from
 # A shell's is the install it resolves to.
 #
@@ -115,6 +116,7 @@ if [ -d "$d" ]; then
   # a tree the machine updater linked to its runtime (issue #2774): its root
   echo "linked $(sed -n 's/.*"root": *"\([^"]*\)".*/\1/p' "$d/.fleet-linked" 2>/dev/null | head -n 1)"
 fi
+echo "distmode $(sed -n 's/^mode: //p' "$h/.config/claude-fleet/global/dist-mode" 2>/dev/null | head -n 1)"
 echo "distsrc $(sed -n 's/^[[:space:]]*\(export \)\{0,1\}FLEET_DIST_SOURCE=["'"'"']\{0,1\}\([a-z]*\).*/\2/p' "$h/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1)"
 s=$h/.cache/claude-fleet/shell/bin/fleet-shell.sh
 if [ -L "$s" ]; then
@@ -179,6 +181,8 @@ GH = re.compile(r"(^|[@/.])github\.com[:/]")
 
 def login_source(r, kind):
     """来源 of a login install (see the header)."""
+    if r.get("distmode") == "dev":
+        return "dev"
     if r.get("distsrc") == "github":
         return "github"
     lib = r.get("lib", "-")

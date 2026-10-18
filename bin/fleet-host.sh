@@ -30,6 +30,10 @@
 #   fleet host status
 #       One line: 能力 基础 · 承载 已开 / 未开, then the hub's word when this
 #       login is a node.
+#   fleet host dev on <checkout> | off | status
+#       Developer mode (issue #2779): this login's ~/.claude/fleet IS your own
+#       checkout, and no new version from the hub overwrites it until `off` —
+#       fleet-dev-mode.sh (the part that runs sessions only).
 #   fleet host trust-release-key [--yes]
 #       The hub's release signing key (issue #2773) is pinned once, at the first
 #       install with a hub; a NEW one is only ever taken here: both fingerprints
@@ -199,6 +203,13 @@ YES=0; PASS=()
 verb="${1:-status}"; [ $# -gt 0 ] && shift
 # the hub's release key is its own command (issue #2773): never folded into on
 [ "$verb" = trust-release-key ] && exec bash "$here/fleet-release-key.sh" trust "$@"
+# developer mode (issue #2779): its own command, on the install that runs sessions
+if [ "$verb" = dev ]; then
+  d="$here/fleet-dev-mode.sh"
+  [ -f "$d" ] || d="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}/bin/fleet-dev-mode.sh"
+  [ -f "$d" ] || { echo "fleet host dev: 这台没有跑会话的那部分（先 fleet host on）" >&2; exit 1; }
+  exec bash "$d" "$@"
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes) YES=1 ;;
@@ -213,5 +224,5 @@ case "$verb" in
   off) cmd_off ;;
   status) cmd_status ;;
   -h|--help|help) usage ;;
-  *) echo "fleet host: on | off | status（fleet host --help）" >&2; exit 2 ;;
+  *) echo "fleet host: on | off | status | dev（fleet host --help）" >&2; exit 2 ;;
 esac
