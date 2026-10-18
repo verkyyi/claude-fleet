@@ -418,7 +418,10 @@ class TraceMetadata(unittest.TestCase):
 
     def test_lost_or_truncated_says_which(self):
         for exit_code, pending, detail in ((1, None, 'OBSERVER_EXIT'),
-                                           (0, (1.5, 'wait4(-1, '), 'PENDING_CALL@wait4')):
+                                           (0, (1.5, 'wait4(-1, '), 'PENDING_CALL@wait4'),
+                                           (0, (1.5, '<... recvfrom resumed> '), 'PENDING_RESUME@recvfrom'),
+                                           (0, (1.5, ' '), 'PENDING_EMPTY'),
+                                           (0, (1.5, '??? /x'), 'PENDING_UNPARSED')):
             trace = self.make_trace([])
             if pending: trace.pending[8] = pending
             with self.assertRaises(live.Refused) as caught:
