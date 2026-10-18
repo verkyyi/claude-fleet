@@ -26,7 +26,6 @@
 #               p50=<ms|-> max=<ms|->` of ↵ → 能打字
 # Exit 0; 2 = usage.
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
 
 LAST=20; NODE=''; SUMMARY=0; LOGS=()
 while [ $# -gt 0 ]; do

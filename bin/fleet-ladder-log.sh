@@ -64,7 +64,6 @@
 # is its JSON decision).
 set -u
 
-BIN=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 MAX="${FLEET_LADDER_LOG_MAX_BYTES:-1048576}"
 case "$MAX" in ''|*[!0-9]*) MAX=1048576 ;; esac
 

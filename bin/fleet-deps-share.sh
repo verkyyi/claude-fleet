@@ -58,7 +58,6 @@
 # with no lockfile writes neither. Exit 0 on a completed run, 2 on usage.
 set -u
 
-BIN="$(cd "$(dirname "$0")" && pwd)"
 STATUS=0 POS=()
 while [ $# -gt 0 ]; do
   case "$1" in
