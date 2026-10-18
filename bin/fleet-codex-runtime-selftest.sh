@@ -257,5 +257,38 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(errors,[])
 
+class PretrustTests(unittest.TestCase):
+    """issue #4728: a remote resume stops on «Hooks need review» — the launcher's
+    own hooks (session flags, plugins) are trusted before the TUI connects; a
+    person's user / project hook and a managed one are never touched."""
+    def fake(self, hooks):
+        calls = []
+        class Client:
+            def __init__(self, remote, timeout=10): calls.append(('open', remote))
+            def call(self, method, params):
+                calls.append((method, params))
+                return {'data': [{'cwd': '/w', 'hooks': hooks, 'errors': [], 'warnings': []}]} if method == 'hooks/list' else {}
+            def close(self): calls.append(('close',))
+        return Client, calls
+    def hook(self, key, source, status, managed=False):
+        return {'key': key, 'source': source, 'trustStatus': status, 'isManaged': managed, 'currentHash': 'sha256:' + key}
+    def test_trusts_only_the_launchers_hooks(self):
+        Client, calls = self.fake([self.hook('a', 'sessionFlags', 'untrusted'), self.hook('b', 'plugin', 'modified'),
+                                   self.hook('c', 'user', 'untrusted'), self.hook('d', 'project', 'modified'),
+                                   self.hook('e', 'sessionFlags', 'managed', True), self.hook('f', 'sessionFlags', 'trusted')])
+        self.assertEqual(runtime.trust_launch_hooks('unix:///x/s', '/w', rpc_client=Client), 2)
+        self.assertEqual(calls[1], ('hooks/list', {'cwds': ['/w']}))
+        self.assertEqual(calls[2], ('config/value/write', {'keyPath': 'hooks.state', 'mergeStrategy': 'upsert',
+                                    'value': {'a': {'trusted_hash': 'sha256:a'}, 'b': {'trusted_hash': 'sha256:b'}}}))
+        self.assertEqual(calls[-1], ('close',))
+    def test_nothing_to_trust_writes_nothing(self):
+        Client, calls = self.fake([self.hook('c', 'user', 'untrusted'), self.hook('f', 'plugin', 'trusted')])
+        self.assertEqual(runtime.trust_launch_hooks('unix:///x/s', '/w', rpc_client=Client), 0)
+        self.assertNotIn('config/value/write', [c[0] for c in calls])
+    def test_run_pretrusts_only_with_the_bypass_flag(self):
+        src = RUNTIME.read_text()
+        self.assertIn("'--dangerously-bypass-hook-trust' in options", src)
+        self.assertLess(src.index('trust_launch_hooks(remote'), src.index("client = subprocess.Popen(['codex', '--remote'"))
+
 unittest.main(argv=['codex-runtime'],verbosity=2)
 PY

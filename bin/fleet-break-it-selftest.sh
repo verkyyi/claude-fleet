@@ -51,6 +51,8 @@
 #   restore-conversation-twice                      bin/fleet-restore.sh (restore, snapshot), fleet_restore_map_prune,
 #                                                   bin/.fleet-restore-resolve.py (one row per conversation)
 #   restore-peer-window / restore-role-lost        bin/fleet-restore.sh (snapshot drops @peer windows; role_handback)
+#   codex-thread-lost                               bin/fleet-codex.sh (@codex_pending), fleet-restore.sh (snapshot),
+#                                                   bin/.fleet-restore-resolve.py (--prior-map), fleet-session-wrap.sh
 #   tool-wait-idle                                  fleet_window_tool_busy / fleet_window_wait (fleet-lib.sh),
 #                                                   fleet-state-reconcile.py, bin/set-claude-state.sh (Stop),
 #                                                   fleet-wait-reeval.sh
@@ -1585,6 +1587,50 @@ drill_restore_peer_window() {
   grep -q '^WIN.issue-1' "$mf" || { WHY="the snapshot did not run against the sandbox (no issue-1 row)"; return 1; }
   grep -q '^WIN.@' "$mf" && { WHY="the snapshot wrote the peer window as a session: $(grep '^WIN.@' "$mf" | cut -f2-4)"; return 1; }
   SECS=$(since "$t0"); WHAT="看台对端窗口（@机器·登录）不进恢复图；旧图里有也不按它猜的对话重开"
+}
+
+# A no-repo Codex window killed, pulled back on its thread, and the pull-back sat on
+# Codex's «Hooks need review» page (issue #4728): the launcher cleared the window's
+# @codex_identity, no hook ever ran to write it back, and the next snapshot wrote the
+# row with no thread — ⌘P then held only a new Codex and the conversation was gone.
+# The resume now names its thread (@codex_pending) until its hook does, and a window
+# that does not know its thread keeps the one its identity had in the stored map.
+drill_codex_thread_lost() {
+  CAP=25; BREAK_SOCK="$WORK/sock-tl"; local t0 w row mf="$WORK/econf/fleets/oc/restore.map"
+  local tid=01a14de0-a17e-7f72-a2a8-6716048c2ebf ft=1f0e0000-0000-4000-8000-000000047281
+  local cx="$WORK/cxtl"; mkdir -p "$cx/bin" "$cx/home"
+  # a Codex that never reaches its first hook: it logs its argv and waits (the review page)
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/argv"\nexec sleep 600\n' "$cx" > "$cx/bin/codex"; chmod +x "$cx/bin/codex"
+  { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
+    printf 'FID\t%s\nWIN\t我的会话-6\t%s\t%s\t-\tworking\t-\t-\t-\tcodex\t%s\t-\t-\t-\t-\t-\n' "$ft" "$WORK/home" "$tid" "$cx/home"
+    printf 'WIN\tissue-1\t%s\tsid-1\t1\tworking\t-\t-\n' "$WORK/wt-1"
+  } > "$mf"
+  : > "$WORK/claude-argv"; : > "$cx/argv"
+  t0=$(now)
+  auto PATH="$cx/bin:$WORK/tbin:$PATH" FLEET_CODEX_SERVER=0 FLEET_CODEX_VERSION_CHECK=0 FLEET_MCP=0 \
+    FLEET_AGENT_CFG=0 FLEET_CODEX_PLUGINS=0 FLEET_PRETRUST=0 FLEET_CRED_PROXY=0
+  until_ok "$CAP" grep -q "resume $tid" "$cx/argv" \
+    || { WHY="the Codex row was not resumed on its thread: [$(cat "$cx/argv" | tr '\n' ' ')] DBG $(nt list-windows -a -F '#{window_name}:#{@fleet_id}' | tr '\n' ' ') $(for p in $(nt list-panes -a -F '#{pane_id}'); do nt capture-pane -p -t $p | grep . | tail -3; done | tr '\n' ' ') $(tail -5 "$WORK"/econf/logs/restore.log 2>/dev/null | tr '\n' ' ')"; return 1; }
+  w=$(nt list-windows -t oc -F '#{window_id} #{@fleet_id}' | awk -v f="$ft" '$2 == f { print $1 }')
+  [ -n "$w" ] || { WHY="the resumed window does not carry its identity"; return 1; }
+  until_ok 5 sh -c "'$REAL_TMUX' -S '$BREAK_SOCK' show-options -wv -t '$w' @codex_pending 2>/dev/null | grep -q '$tid'" \
+    || { WHY="the resume does not name its thread on the window (@codex_pending)"; return 1; }
+  snap() { env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+             BREAK_SOCK="$BREAK_SOCK" bash "$WORK/inst/bin/fleet-restore.sh" --snapshot >/dev/null 2>&1; }
+  snap                                            # the break: a snapshot while it waits on the page
+  row=$(awk -F'\t' -v f="$ft" '$1 == "FID" { n = ($2 == f); next } n && $1 == "WIN" { print; exit }' "$mf")
+  [ -n "$row" ] || { WHY="the snapshot lost the session's row: [$(cut -f1-4 "$mf" | tr '\n' ' ')]"; return 1; }
+  [ "$(printf '%s' "$row" | cut -f4)" = "$tid" ] \
+    || { WHY="the snapshot wrote the waiting resume with thread [$(printf '%s' "$row" | cut -f4)], not ${tid%%-*}…"; return 1; }
+  # …and a window that came back NEW (no thread yet, the pending stamp gone) keeps it too
+  nt set-option -wu -t "$w" @codex_pending; nt set-option -w -t "$w" @cc_launcher_pid 4728
+  nt set-option -w -t "$w" @claude_state needs
+  snap
+  row=$(awk -F'\t' -v f="$ft" '$1 == "FID" { n = ($2 == f); next } n && $1 == "WIN" { print; exit }' "$mf")
+  [ "$(printf '%s' "$row" | cut -f4)" = "$tid" ] \
+    || { WHY="a new window under the session's identity erased its thread: [$(printf '%s' "$row" | cut -f2-6)]"; return 1; }
+  [ "$(printf '%s' "$row" | cut -f11)" = "$cx/home" ] || { WHY="the kept thread lost its Codex home: [$(printf '%s' "$row" | cut -f10-12)]"; return 1; }
+  SECS=$(since "$t0"); WHAT="无仓库 Codex 被杀后续接、停在 hook 审查页或回来是新开的：恢复图那一行仍记着原 thread"
 }
 
 # A role's mark lives on its window (issue #3829): a reboot took the server and the

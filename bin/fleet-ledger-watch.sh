@@ -174,7 +174,7 @@ watch_fleet() { (
   # printable '|' survives — same reasoning as fleet-restore.sh's snapshot).
   #   window-id | @issue | @raw | @worktree | pane_current_path | window_name | @origin
   raw=$(ftmux list-windows -t "$sess" \
-        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}|#{@task}|#{@task_line}' 2>/dev/null)
+        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@task}|#{@task_line}' 2>/dev/null)
   # A LIVE fleet always has ≥1 hub window (dash/plan/backlog). An empty read here
   # means the session is gone or tmux glitched — either way do NOT diff (that would
   # false-record still-live workers as closed) and do NOT overwrite the snapshot.

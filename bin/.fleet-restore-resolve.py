@@ -184,6 +184,33 @@ if '--launch-map' in sys.argv:
         except ValueError:
             saved_launches[fields[1]] = None
 
+# --prior-map (issue #4728): the map this snapshot replaces. A Codex window whose
+# thread is not known right now — a fresh launch before its first hook, a resume
+# stuck on a review page — keeps the thread its identity (@fleet_id) had in that
+# map, so one snapshot of a window that came back new cannot erase the
+# conversation the session was. A carried id is never the window's own: a live
+# window that holds it wins the one-conversation-one-row pass below.
+prior_codex = {}
+if '--prior-map' in sys.argv:
+    try:
+        pending_fid = ''
+        for record in Path(sys.argv[sys.argv.index('--prior-map') + 1]).read_text().splitlines():
+            fields = record.split('\t')
+            if fields[0] == 'FID' and len(fields) >= 2:
+                pending_fid = fields[1] if FID_RE.fullmatch(fields[1]) else ''
+                continue
+            if fields[0] == 'WIN' and pending_fid and len(fields) >= 12 and fields[9] == 'codex':
+                try:
+                    if (str(uuid.UUID(fields[3])) == fields[3].lower()
+                            and (fields[10] == '-' or os.path.isabs(fields[10]))):
+                        prior_codex[pending_fid] = (fields[3], fields[10], fields[11] or '-')
+                except ValueError:
+                    pass
+            if fields[0] != 'REAP':
+                pending_fid = ''
+    except (OSError, IndexError):
+        prior_codex = {}
+
 groups = []
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -292,6 +319,7 @@ for line in sys.stdin:
         continue
     suffix = ""
     sid = "-"
+    carried = False
     if native_session:
         sid = native_session
     elif agent == "codex":
@@ -306,6 +334,9 @@ for line in sys.stdin:
                     sid, home, transcript = fields
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             pass
+        if sid == "-" and fid in prior_codex:
+            sid, home, transcript = prior_codex[fid]
+            carried = True
         suffix = f"\tcodex\t{home}\t{transcript or '-'}"
     elif norepo_sid is not None:
         # A no-repo session runs in $HOME, whose project dir is shared with every
@@ -348,7 +379,7 @@ for line in sys.stdin:
     group.append(row)
     # Its own id (the pane's hooks, a no-repo stamp, a loop, a sleep record) or a
     # guess by mtime — two windows in one directory guess the same newest file.
-    own = sid != "-" and (sid == hook_sid or norepo_sid is not None
+    own = sid != "-" and not carried and (sid == hook_sid or norepo_sid is not None
                           or bool(loop_record) or bool(retained) or bool(native_session) or agent == "codex")
     groups.append((sid, own, group))
 

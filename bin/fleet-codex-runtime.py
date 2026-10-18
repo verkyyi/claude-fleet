@@ -154,6 +154,39 @@ that layer as overrides, then apply -c flags above it in their original order.
     return layers + flags
 
 
+# The hook sources the launcher's own table brings (issue #4728): fleet-codex.sh's
+# `-c hooks.…` flags and the plugins it loads. A person's own config / project
+# hooks keep their review — the fleet never vouches for those.
+FLEET_HOOK_SOURCES = ('sessionFlags', 'plugin')
+
+
+def trust_launch_hooks(remote, cwd, rpc_client=None):
+    """Persist trust for the hooks a `--dangerously-bypass-hook-trust` launch
+    would run untrusted anyway (issue #4728). Over `--remote` the flag stays in the
+    TUI: Codex's protocol has no bypass to hand the server, and a remote RESUME
+    stops on «Hooks need review · N hooks are new or changed» with nobody to press
+    Enter — the window then holds no thread id for the snapshot to keep. So the
+    launcher's own hooks are trusted here, at their current hash, before the TUI
+    connects: the same set the flag covers, no wider. Returns how many it wrote."""
+    if rpc_client is None:
+        rpc_client = runpy.run_path(str(Path(__file__).with_name('fleet-codex-rpc.py')))['Client']
+    client = rpc_client(remote, timeout=5)
+    try:
+        entries = (client.call('hooks/list', {'cwds': [cwd]}) or {}).get('data') or []
+        value = {}
+        for entry in entries:
+            for hook in entry.get('hooks') or []:
+                if (hook.get('source') in FLEET_HOOK_SOURCES and not hook.get('isManaged')
+                        and hook.get('trustStatus') in ('untrusted', 'modified')
+                        and isinstance(hook.get('key'), str) and isinstance(hook.get('currentHash'), str)):
+                    value[hook['key']] = {'trusted_hash': hook['currentHash']}
+        if value:
+            client.call('config/value/write', {'keyPath': 'hooks.state', 'mergeStrategy': 'upsert', 'value': value})
+        return len(value)
+    finally:
+        client.close()
+
+
 def run(argv, prepare=None, tick=None):
     options = argv[:argv.index('--')] if '--' in argv else argv
     if '--no-daemon' in options:
@@ -223,6 +256,14 @@ def run(argv, prepare=None, tick=None):
                 seeder = runpy.run_path(str(seed_mod))["for_launch"](argv)
             except Exception:
                 seeder = None
+        if '--dangerously-bypass-hook-trust' in options and os.environ.get('FLEET_CODEX_PRETRUST_HOOKS', '1') != '0':
+            try:
+                trusted = trust_launch_hooks(remote, os.getcwd())
+                if trusted:
+                    print('fleet-codex-runtime: trusted %d fleet hook(s) for this launch (issue #4728)' % trusted,
+                          file=sys.stderr)
+            except Exception as exc:
+                print('fleet-codex-runtime: could not pre-trust the fleet hooks: ' + str(exc), file=sys.stderr)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:

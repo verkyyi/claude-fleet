@@ -195,6 +195,21 @@ else
   [ "$fork_session" = 0 ] || { echo 'fleet-codex: --fork-session requires --resume' >&2; exit 2; }
   set -- ${normal[@]+"${normal[@]}"}
 fi
+# The thread a resume reopens (issue #4728): kept on the window as @codex_pending
+# until its first SessionStart hook writes @codex_identity — a resume that sits on
+# a review page, or dies before that hook, still names its conversation to the
+# restore snapshot and to the recovery page's ↵. A fork is a new thread: none.
+_codex_pending_sid=''
+_pv=''
+for _arg in "$@"; do
+  if [ "$_pv" = resume ]; then
+    printf '%s' "$_arg" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+      && { _codex_pending_sid="$_arg"; break; }
+    _pv=''
+  fi
+  case "$_arg" in resume) _pv=resume ;; esac
+done
+unset _pv
 
 # Use ccquota's shared run lock and official isolated credential environment for
 # the entire launcher/app-server/TUI lifetime. Do not change its global default.
@@ -620,6 +635,18 @@ if [ -n "${TMUX_PANE:-}" ]; then
   for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @cc_model @handoff_armed; do
     tmux set-option -wu -t "$TMUX_PANE" "$_opt" 2>/dev/null || true
   done
+  # The resume's thread until its hook says so (issue #4728): the same JSON shape
+  # as @codex_identity — this launcher as owner, the REAL home — so a reader that
+  # falls back to it (`#{?@codex_identity,…,#{@codex_pending}}`) judges it alike.
+  if [ -n "$_codex_pending_sid" ]; then
+    _pend=$(python3 -c 'import json,os,sys; print(json.dumps({"session_id":sys.argv[1],"owner":sys.argv[2],"home":os.path.realpath(sys.argv[3]),"transcript":"","pending":True},separators=(",",":")))' \
+      "$_codex_pending_sid" "$$" "${_fx_real_home:-${CODEX_HOME:-$HOME/.codex}}" 2>/dev/null) || _pend=''
+    if [ -n "$_pend" ]; then tmux set-option -w -t "$TMUX_PANE" @codex_pending "$_pend" 2>/dev/null || true
+    else tmux set-option -wu -t "$TMUX_PANE" @codex_pending 2>/dev/null || true; fi
+    unset _pend
+  else
+    tmux set-option -wu -t "$TMUX_PANE" @codex_pending 2>/dev/null || true
+  fi
   [ -n "$launch_model" ] && tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
   if [ -n "$_cfg_fp" ]; then                 # issue #1782
     tmux set-option -w -t "$TMUX_PANE" @agent_cfg "$_cfg_fp" 2>/dev/null || true

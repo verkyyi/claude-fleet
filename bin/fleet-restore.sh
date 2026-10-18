@@ -172,7 +172,7 @@ snapshot_unchanged() {
   local sdir n=0 kept='' every="${FLEET_RESTORE_SNAPSHOT_EVERY:-5}"
   case "$every" in ''|*[!0-9]*) every=5 ;; esac
   sdir="$(fleet_state_dir "$1")"
-  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
+  SNAP_KEY=$(tmux -L "$2" list-panes -s -t "$1" -F '#{window_id}|#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},#{@repo}}|#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@desk}|#{@origin_wid}|#{@pin}|#{@hub}|#{@launch}|#{@launch_receipt}|#{@native_worktree}|#{@authority_receipt}' 2>/dev/null) || { SNAP_KEY=''; return 1; }
   [ -n "$SNAP_KEY" ] && [ -f "$sdir/restore.map" ] || return 1
   { IFS= read -r n; IFS= read -r -d '' kept; } < "$sdir/.snapshot-key" 2>/dev/null
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -312,15 +312,20 @@ snapshot() {
     # its hooks recorded it — the resolver resumes THAT before guessing by mtime.
     # Accepted launch identity survives snapshot/restore; absence of native
     # proof is an interrupted start, never permission to rerun the first input.
+    # The map this one replaces (issue #4728): a Codex window that does not know
+    # its thread right now keeps the one its identity had there.
+    local priormap; priormap=$(restore_map_file "$sess")
+    [ -f "$priormap" ] || priormap=''
     if ! tmux -L "$sock" list-windows -t "$sess" -F 'F#{q:@fleet_id} L#{q:@launch} R#{q:@launch_receipt} A#{?@native_worktree,#{q:@authority_receipt},}' 2>/dev/null \
       | python3 "$BIN/.fleet-restore-resolve.py" --snapshot-metadata >> "$tmp"; then
       log "snapshot $sess: metadata capture failed; preserving prior map"
       rm -f "$tmp"
       return 1
     fi
-    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{@codex_identity}' 2>/dev/null
+    { tmux -L "$sock" list-windows -t "$sess" -F "#{@reap_policy}|#{@fleet_id}|#{@cc_session_id}|#{?@norepo,norepo:#{@norepo_sid},$rfmt}|"'#{?@remote,,#{?@peer,,#{?#{==:#{@fleet_role},panel},,#{window_name}}}}|#{?@raw,#{?@worktree,#{@worktree},#{pane_current_path}},#{pane_current_path}}|#{@issue}|#{@claude_state}|#{@prci}|#{@pfg}|#{@raw}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{@handoff_manifest}|#{?@worker_lifecycle,#{@sleep_record},}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null
       [ -n "$spath" ] && printf '||||__HUB__|%s|-\n' "$spath"
-    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" >> "$tmp" 2>/dev/null
+    } | python3 "$BIN/.fleet-restore-resolve.py" "$main" --lead --sid --fid --reap --launch-map "$tmp" \
+          ${priormap:+--prior-map "$priormap"} >> "$tmp" 2>/dev/null
     # A desk session (issue #2676) is a no-repo row whose ticket lives in a repo:
     # `DESK<TAB><fleet_id><TAB><owner/name>` rows, appended AFTER every FID/WIN pair
     # (a row between them would unpair it — fleet_restore_wins), restore() stamps

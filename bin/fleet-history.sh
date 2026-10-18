@@ -360,9 +360,9 @@ history_source() {
   if [ -z "$HIST_AGENT" ] && [ -n "$win" ]; then
     if [ -n "$sess" ]; then
       sock=$(fleet_socket "$sess")
-      raw=$(tmux -L "$sock" display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null)
+      raw=$(tmux -L "$sock" display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null)
     elif [ -n "${TMUX:-}" ]; then
-      raw=$(tmux display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{@codex_identity}' 2>/dev/null)
+      raw=$(tmux display-message -p -t "$win" '#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}' 2>/dev/null)
     else raw=''; fi
     IFS='|' read -r HIST_AGENT owner record <<< "$raw"
   fi
