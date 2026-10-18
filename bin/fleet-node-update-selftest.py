@@ -123,7 +123,7 @@ def wj(path, obj):
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
                  sessions_log=None, sync_log=None, sync_fail=False, apply_log=None, ccquota_src=None, ccquota_says=None,
-                 seq=0):
+                 seq=0, mark=None, home_list=False):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -167,7 +167,10 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
     # the version's own code beyond bin/ (issue #2774: a login's tree links each file)
     os.makedirs(os.path.join(d, "conf", "agent-defaults"))
     with open(os.path.join(d, "conf", "agent-defaults", "MARK"), "w") as f:
-        f.write(sha + "\n")
+        f.write((mark or sha) + "\n")
+    if home_list:
+        # issue #4670: the release says which of its files a login's apply reads
+        shutil.copy(os.path.join(REPO, "conf", "home-inputs.list"), os.path.join(d, "conf", "home-inputs.list"))
     # the mod (issue #2964): a login tree must hold its own bytes, never links out
     os.makedirs(os.path.join(d, "mod", "fleet", ".claude-plugin"))
     os.makedirs(os.path.join(d, "mod", "fleet", "hooks"))
@@ -179,7 +182,7 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
         # issue #2774: the version's fleet-install-apply.sh, recording how it was run
         ap = os.path.join(d, "bin", "fleet-install-apply.sh")
         with open(ap, "w") as f:
-            f.write('#!/bin/bash\necho "$*|$HOME|%s" >> %s\necho "apply: ok — fixture %s"\n' % (sha, apply_log, sha[:7]))
+            f.write('#!/bin/bash\necho "$*|$HOME|%s" >> %s\necho "apply: ok — fixture %s"\n' % (mark or sha, apply_log, (mark or sha)[:7]))
         os.chmod(ap, 0o755)
     if drill_fail:
         open(os.path.join(d, "conf", "drill-fail"), "w").close()
@@ -1517,41 +1520,116 @@ class M_FollowInstall(Sandbox):
         self.assertEqual(os.readlink(os.path.join(sb, "x.sh")), "/elsewhere/x.sh")
 
 
-class J_Sessions(Sandbox):
-    """issue #2484: every managed account's sessions are pinned before the switch
-    (the target release's fleet-sessions-snapshot.sh save, demoted, its own HOME and
-    TMPDIR) and brought back after it — committed or rolled back."""
-    def log(self):
-        p = os.path.join(self.d, "sessions.log")
-        return open(p).read().splitlines() if os.path.exists(p) else []
+class J_OneSwitch(Sandbox):
+    """issue #4670 (EPIC #4667 C3): a switch is `current` moved once. No login's
+    sessions are saved or restored (they read ~/.claude/fleet — the new release —
+    on their next hook, as they always did; one that vanished is fleet-restore.sh
+    --auto's), and a login is entered only when the files its apply reads
+    (the release's conf/home-inputs.list) hash differently from what it was last
+    applied with — once, its seconds in update.log. Rollback the same."""
+    def setUp(self):
+        Sandbox.setUp(self)
+        self.S = os.path.join(self.d, "sessions.log")
+        self.A = os.path.join(self.d, "apply.log")
+        # alice's own bootstrap copy: the first switch points it at current
+        os.makedirs(os.path.join(self.home, ".claude", "fleet", "bin"))
 
-    def test_save_before_restore_after(self):
-        L = os.path.join(self.d, "sessions.log")
-        self.install(V1, sessions_log=L)
-        self.assertEqual(self.log(), ["save|%s|tmp|%s" % (self.home, V1), "restore|%s|tmp|%s" % (self.home, V1)])
-        self.assertIn("sessions restore alice: rc 0 1 back", open(os.path.join(self.env["FLEET_NODE_LOG"], "update.log")).read())
-        # a version that fails its doctor: pinned by V2's, brought back by V1's
-        self.release(V2, claude="2.1.9", broken=("claude-",), sessions_log=L)
-        self.tick(V2)
-        self.daemon_on(V2)
-        self.assertEqual(self.tick(V2)["result"], "rolled-back")
-        self.assertEqual(self.log()[2:], ["save|%s|tmp|%s" % (self.home, V2), "restore|%s|tmp|%s" % (self.home, V1)])
+    def lines(self, path):
+        return open(path).read().splitlines() if os.path.exists(path) else []
 
-    def test_off_and_absent(self):
-        L = os.path.join(self.d, "sessions.log")
-        self.release(V1, sessions_log=L)
-        st = self.tick(V1, FLEET_NODE_UPDATE_SESSIONS="0")
-        self.assertEqual(st["phase"], "switched", st)
-        self.assertEqual(self.log(), [])
+    def ulog(self):
+        return self.lines(os.path.join(self.env["FLEET_NODE_LOG"], "update.log"))
+
+    def rel_(self, sha, mark, **kw):
+        self.release(sha, sessions_log=self.S, apply_log=self.A, mark=mark, home_list=True, **kw)
+
+    def test_switch_no_session_save(self):
+        """BREAK-IT switch-no-session-save: a login with sessions running; a
+        version that changes only bin/ — nothing saved, nothing reopened, the
+        login not entered, its ~/.claude/fleet (what every hook runs) the new one."""
+        self.rel_(V1, "m1")
+        self.assertEqual(self.tick(V1)["phase"], "switched")
         self.daemon_on(V1)
-        self.assertEqual(self.tick(V1, FLEET_NODE_UPDATE_SESSIONS="0")["result"], "committed")
-        self.assertEqual(self.log(), [])
-        # a release without the script (older than #2484): nothing run, nothing broken
-        self.release(V2)
-        self.tick(V2)
+        self.assertEqual(self.tick(V1)["result"], "committed")
+        self.assertEqual(len(self.lines(self.A)), 1, self.lines(self.A))   # pointed + applied once
+        n = len(self.ulog())
+        self.rel_(V2, "m1")
+        self.assertEqual(self.tick(V2)["phase"], "switched")
         self.daemon_on(V2)
         self.assertEqual(self.tick(V2)["result"], "committed")
-        self.assertEqual(self.log(), [])
+        self.assertEqual(self.lines(self.S), [], "sessions saved / restored on a switch")
+        self.assertEqual(len(self.lines(self.A)), 1, "a login entered with nothing of its own changed")
+        new = self.ulog()[n:]
+        self.assertEqual([l for l in new if " alice" in l], [], new)
+        self.assertTrue(any("switched %s → %s" % (V1[:12], V2[:12]) in l for l in new), new)
+        live = os.path.join(self.home, ".claude", "fleet")
+        self.assertEqual(os.path.realpath(live), os.path.realpath(os.path.join(self.root, V2)))
+
+    def test_changed_inputs_enter_once_and_rollback(self):
+        self.rel_(V1, "m1")
+        self.tick(V1)
+        self.daemon_on(V1)
+        self.tick(V1)
+        self.rel_(V2, "m2")
+        self.assertEqual(self.tick(V2)["phase"], "switched")
+        runs = self.lines(self.A)
+        self.assertEqual(len(runs), 2, runs)
+        self.assertIn("--tree-from %s --tree-to %s " % (os.path.join(self.root, V1), os.path.join(self.root, V2)),
+                      runs[1])
+        self.assertTrue(any(re.search(r"install alice: .* · rc 0 · .*\(\d+s\)$", l) for l in self.ulog()),
+                        self.ulog())
+        self.daemon_on(V2)
+        self.assertEqual(self.tick(V2)["result"], "committed")
+        self.assertEqual(len(self.lines(self.A)), 2)     # the verify enters nobody again
+        # a version that fails its doctor: the login goes back with the machine, entered once
+        self.rel_(V3, "m3", claude="2.1.9", broken=("claude-",))
+        self.tick(V3)
+        self.daemon_on(V3)
+        self.assertEqual(self.tick(V3)["result"], "rolled-back")
+        runs = self.lines(self.A)
+        self.assertEqual(len(runs), 4, runs)
+        self.assertIn("--tree-from %s --tree-to %s " % (os.path.join(self.root, V3), os.path.join(self.root, V2)),
+                      runs[3])
+        self.assertEqual(self.lines(self.S), [])
+
+    def test_resumed_switch_enters_no_login_twice(self):
+        self.rel_(V1, "m1")
+        self.tick(V1)
+        self.daemon_on(V1)
+        self.tick(V1)
+        self.rel_(V2, "m2")
+        self.tick(V2)
+        self.assertEqual(len(self.lines(self.A)), 2)
+        # killed after the login was applied, before `switched` was saved
+        st = self.state()
+        st["phase"] = "switching"
+        self.wj(os.path.join(self.d, "db", "update.json"), st)
+        self.assertEqual(self.tick(V2)["phase"], "switched")
+        self.assertEqual(len(self.lines(self.A)), 2, self.lines(self.A))
+
+    def test_release_without_a_list_enters(self):
+        """An older release (no conf/home-inputs.list) says nothing: enter, as before."""
+        self.rel_(V1, "m1")
+        self.tick(V1)
+        self.daemon_on(V1)
+        self.tick(V1)
+        self.release(V2, apply_log=self.A, mark="m1")
+        self.tick(V2)
+        self.assertEqual(len(self.lines(self.A)), 2)
+
+    def test_list_names_every_path_apply_reads(self):
+        """conf/home-inputs.list covers each file install-apply's passes test by name."""
+        with open(os.path.join(BIN, "fleet-install-apply.sh")) as f:
+            src = f.read()
+        named = set(re.findall(r"touched ((?:bin|conf|hooks)/[A-Za-z0-9_./-]+)", src))
+        named |= {"bin/" + n for n in re.search(r"for file in (.*?); do", src, re.S).group(1).replace("\\", " ").split()}
+        sys.path.insert(0, BIN)
+        upd = load_upd()
+        pats = upd.home_patterns(REPO)
+        self.assertTrue(pats)
+        for n in sorted(named):
+            self.assertTrue(upd.home_input(n, pats), "%s is read by an apply pass but not in conf/home-inputs.list" % n)
+        self.assertFalse(upd.home_input("bin/fleet-lib.sh", pats))
 
 
 class L_ResumableFetch(Sandbox):
@@ -2080,6 +2158,14 @@ class U_OneLine(Sandbox):
         self.assertNotIn("behind", st)
 
 
+def load_upd():
+    import importlib.util
+    sp = importlib.util.spec_from_file_location("fnu", UPD)
+    m = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(m)
+    return m
+
+
 def sha256_of(path):
     with open(path, "rb") as f:
         return sh256(f.read())
@@ -2096,9 +2182,9 @@ if __name__ == "__main__":
         kw = json.loads(sys.argv[4]) if len(sys.argv) > 4 else {}
         make_release(sys.argv[2], sys.argv[3], **kw)
         sys.exit(0)
-    if len(sys.argv) > 1 and sys.argv[1] == "--drill-sessions":
-        # BREAK-IT node-update-sessions: pinned before the switch, back after
-        unittest.main(argv=[sys.argv[0], "J_Sessions.test_save_before_restore_after"], verbosity=1)
+    if len(sys.argv) > 1 and sys.argv[1] == "--drill-one-switch":
+        # BREAK-IT switch-no-session-save (issue #4670): nothing saved, no login entered
+        unittest.main(argv=[sys.argv[0], "J_OneSwitch.test_switch_no_session_save"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-torn-read":
         # BREAK-IT node-update-stale-fail (issue #2906): an outlived torn read rolls nothing back
         unittest.main(argv=[sys.argv[0], "O_TornReadPast"], verbosity=1)

@@ -34,7 +34,13 @@ names — or leaves every part where it was:
              $FLEET_CONF_DIR/logs) — so the switch and the rollback move every
              login with `current`; each login then runs that version's
              fleet-install-apply.sh --tree-from <root>/<old> --tree-to
-             <root>/<new> (daemons reloaded), demoted (`point`). A tick puts back
+             <root>/<new>, demoted (`point`) — only when the files that apply
+             reads (the release's conf/home-inputs.list) hash differently from
+             what the login was last applied with (issue #4670): a version
+             that changes only the rest of bin/ enters no login. No login's
+             sessions are saved or restored — they read ~/.claude/fleet, the
+             new release, on their next hook; one that vanished is
+             fleet-restore.sh --auto's. A tick puts back
              one that drifted (an own copy pointed at by hand). An older
              per-login tree (~/.claude/fleet.versions/<sha>/, #2774 — compat-1v)
              is moved off at the next tick and goes after its keep. `account
@@ -52,7 +58,7 @@ names each tools/bin link's artifact — and asks the root core for the rest:
 `switch` / `rollback` (the core copies staging, fills <root>/tools, re-verifies,
 signs bin/ccquota with the machine identity), `update {step}` for the root half
 (`root outside|credsep|prune`, below), `exec-as` for what runs as a login
-(point, link-account, sessions, install-state). The hub's address is
+(point, link-account, install-state). The hub's address is
 <state>/hub-url (machine.env is root's). Seated with no core: nothing runs.
 
 All of them hang off ONE link: `current` → <sha> moves by one rename(2), and
@@ -127,7 +133,7 @@ Usage:
   fleet-node-update.py root outside|credsep|prune
                                             (internal: the root core's `update {step}`, #3670 —
                                             the seated updater's root half; state in update-root.json)
-  fleet-node-update.py install-state <root> [--at] · sessions save|restore <sha>
+  fleet-node-update.py install-state <root> [--at]
                                             (internal, AS the login through exec-as, #3670)
   fleet-node-update.py link-account <login> (internal: run demoted to <login>)
   fleet-node-update.py point <sha> [--from <sha>] [--no-apply]
@@ -157,7 +163,6 @@ FLEET_NODE_USERS, plus
                              installer's tick), a resumable fetch goes on next tick
   FLEET_NODE_UPDATE_LIB      the fleet-lib.sh the EPIC gate sources (default <current>/bin)
   FLEET_NODE_UPDATE_FOLLOW   0 = never move a login's install (default 1)
-  FLEET_NODE_FOLLOW_TIMEOUT  seconds one login's point + apply may run (1200)
   FLEET_INSTALL_VERSIONS_KEEP_SECS  how long an older per-login version tree stays once the
                              login points at current (604800, compat-1v); one whose release
                              the machine pruned goes at once
@@ -447,6 +452,61 @@ def link_sha(path):
         return None
     b = os.path.basename(t.rstrip("/"))
     return b if SHA_RE.match(b) else None
+
+
+# -- what a login's apply reads, per release (issue #4670)
+HOME_LIST = os.path.join("conf", "home-inputs.list")
+FOLLOW_SECS = 1200   # one login's point + apply
+_HOME_HASH = {}
+
+
+def home_patterns(tree):
+    """<tree>'s conf/home-inputs.list -> [pattern] (`dir/` or one path), or None:
+    an older release says nothing, so every login is entered."""
+    try:
+        with open(os.path.join(tree, HOME_LIST)) as f:
+            return [l.strip() for l in f if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        return None
+
+
+def home_input(rel, pats):
+    return any(rel.startswith(p) if p.endswith("/") else rel == p for p in pats)
+
+
+def home_hash(tree):
+    """sha256 over every home input of the release <tree> (path + bytes) — the
+    same for two releases ⇒ a login applied with one needs nothing for the
+    other. None: no list, or unreadable. A release never changes: kept per dir."""
+    key = os.path.realpath(tree)
+    if key in _HOME_HASH:
+        return _HOME_HASH[key]
+    pats, h = home_patterns(key), None
+    if pats is not None:
+        try:
+            d = hashlib.sha256()
+            for p in sorted(set(pats)):
+                base = os.path.join(key, p.rstrip("/"))
+                files = []
+                if p.endswith("/"):
+                    for dp, dns, fs in os.walk(base):
+                        dns[:] = [n for n in dns if n not in ("__pycache__", ".git")]
+                        files += [os.path.join(dp, n) for n in fs]
+                elif os.path.lexists(base):
+                    files = [base]
+                for fp in sorted(files):
+                    d.update(os.path.relpath(fp, key).encode() + b"\0")
+                    if os.path.islink(fp):
+                        d.update(b"link " + os.readlink(fp).encode())
+                    else:
+                        with open(fp, "rb") as f:
+                            d.update(hashlib.sha256(f.read()).digest())
+                    d.update(b"\0")
+            h = d.hexdigest()
+        except OSError:
+            h = None
+    _HOME_HASH[key] = h
+    return h
 
 
 def swap_link(path, target):
@@ -1440,8 +1500,10 @@ class Updater(object):
         FLEET_CONF_DIR): one rename of its link, then that version's apply
         --tree-from/--tree-to (issue #4669 — before it, a per-login tree of links
         built by `link-tree`, #2774). A login that points there already moved
-        with `current`; the switch and the rollback (force) still run each one's
-        apply from <frm>. A tick at the release puts back one that drifted (a
+        with `current`; the switch and the rollback (force) run its apply from
+        <frm> only when the release's home inputs hash differently from what it
+        was last applied with (`applied`, issue #4670) — else it is not entered
+        at all. A tick at the release puts back one that drifted (a
         login pointed by hand at an own old copy — BREAK-IT
         managed-login-own-copy), unless an EPIC batch with work holds it (only
         with the hold turned on, #2934). One that did not move is tried again on
@@ -1451,6 +1513,8 @@ class Updater(object):
         if not sha or env_num("FLEET_NODE_UPDATE_FOLLOW", 1) == 0 or not os.path.isdir(self.p.rel(sha)):
             return []
         tried = self.st.setdefault("follow", {})
+        applied = self.st.setdefault("applied", {})
+        want = home_hash(self.p.rel(sha))
         notes, todo = [], []
         managed = fns.managed_accounts(self.p.sup)
         # a login NOT taken over whose ~/.claude/fleet stands on this root (an
@@ -1478,6 +1542,13 @@ class Updater(object):
             if ist.get("pointed") and not failed and not force:
                 tried.pop(login, None)
                 continue
+            if ist.get("pointed") and not failed and want:
+                # what it was last applied with — before #4670 every switch applied
+                # it, so with no record that is the release it comes from
+                last = applied[login] if login in applied else (home_hash(self.p.rel(frm)) if frm else None)
+                if last == want:
+                    applied[login] = want
+                    continue
             if not (only or force) and failed and now() - (t.get("at") or 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
                 notes.append("install %s: not on %s (%s)" % (login, sha[:12], t.get("said", "")))
                 continue
@@ -1490,12 +1561,16 @@ class Updater(object):
                                 % (", ".join(t[0] for t in todo), sha[:12], hold)]
         for login, ident, path in todo:
             was = (self.install_state(login, ident, path, at=True) or {}).get("at")
+            t0 = now()
             rc, out, err = as_login(login, ["point", sha] + (["--from", frm] if frm else []),
-                                    timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200), root=self.p.root)
+                                    timeout=FOLLOW_SECS, root=self.p.root)
             said = ((out + "\n" + err).strip().splitlines() or ["rc %d" % rc])[-1][:200]
             ok = rc == 0 and bool((self.install_state(login, ident, path) or {}).get("pointed"))
-            self.log("install %s: %s → %s · rc %d · %s" % (login, (was or "unreadable")[:12],
-                                                          sha[:12] if ok else "not pointed", rc, said))
+            self.log("install %s: %s → %s · rc %d · %s (%ds)" % (login, (was or "unreadable")[:12],
+                                                                sha[:12] if ok else "not pointed", rc, said,
+                                                                int(now() - t0)))
+            applied[login] = want if ok else None
+            self.save()     # a switch killed after this login is not entered twice
             if ok:
                 tried.pop(login, None)
             else:
@@ -1577,53 +1652,6 @@ class Updater(object):
             return ["credsep: pool-sync rc %d %s" % (rc, (err or out).strip()[-160:])]
         return []
 
-    # -- the sessions ride through a switch (issue #2484, EPIC #2482 C5)
-    def sessions(self, verb, sha):
-        """`<release sha>/bin/fleet-sessions-snapshot.sh save|restore` for every
-        managed account, demoted to it with its own TMPDIR (so its tmux socket):
-        pinned before the switch, brought back and checked after. -> notes."""
-        if env_num("FLEET_NODE_UPDATE_SESSIONS", 1) == 0 or not sha:
-            return []
-        if self.seated and not os.path.isdir(self.p.rel(sha)):
-            # the target is still the seat's staging, which never runs as a login
-            # (#3670): the snapshot is taken with the release that stands
-            sha = link_sha(self.p.current)
-            if not sha:
-                return []
-        sc = os.path.join(self.p.rel(sha), "bin", "fleet-sessions-snapshot.sh")
-        if not os.path.exists(sc):
-            return []
-        notes = []
-        tb = os.path.join(self.p.rel(sha), "tools", "bin")
-        for login, why in fns.managed_accounts(self.p.sup).items():
-            ident = fns.account_ident(login)
-            if why or ident is None:
-                continue
-            uid, gid, home = ident
-            if uid != 0 and self.seated:
-                rc, out, err = as_login(login, ["sessions", verb, sha], timeout=600, root=self.p.root)
-            elif uid == 0 or (os.geteuid() != 0 and uid != os.geteuid()):
-                continue
-            else:
-                rc, out, err = run(["/bin/sh", "-c", SESSIONS_SH, "fleet-sessions",
-                                    "/bin/bash", sc, verb],
-                                   timeout=600, **fns.demote_kw(login, uid, gid, home),
-                                   env={"HOME": home, "USER": login, "LOGNAME": login, "LANG": "en_US.UTF-8",
-                                        "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
-                                        "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet")})
-            if verb == "save":
-                msg = (out.strip().splitlines() or [""])[-1]
-            else:
-                rows = [l.split("\t") for l in out.splitlines() if "\t" in l]
-                msg = "%d back" % sum(1 for r in rows if r[0] == "back")
-                miss = [r[2] for r in rows if r[0] == "missing" and len(r) > 2]
-                if miss:
-                    msg += ", missing: %s" % " ".join(miss)
-            self.log("sessions %s %s: rc %d %s" % (verb, login, rc, msg or (err or "").strip()[-160:]))
-            if rc not in (0, 3):
-                notes.append("sessions %s %s: rc %d %s" % (verb, login, rc, msg))
-        return notes
-
     # -- the switch, the verify, the rollback
     def request_restart(self, sha):
         write_json(self.p.request, {"to": sha, "at": now()})
@@ -1647,7 +1675,8 @@ class Updater(object):
             swap_link(self.p.current, self.p.rel(to))
             self.place_admin_gate(to)
         # every managed login moves WITH the machine: its install is a link to
-        # `current` (issue #4669); each one's apply runs in the same tick
+        # `current` (issue #4669); its sessions stay as they are, and a login is
+        # entered only when what its apply reads changed (issue #4670)
         notes = self.sync_outside() + self.sync_credsep() + self.follow_installs(sha=to, force=True, frm=frm)
         self.st.update(phase="switched", switched_at=now(), notes=notes)
         if frm:
@@ -1694,7 +1723,6 @@ class Updater(object):
         self.st["retired"].pop(frm, None)
         self.record("rolled-back", frm, to, why)
         self.st.update(phase="idle")
-        self.sessions("restore", frm)
         self.end("rolled-back", "%s → back to %s: %s" % (to[:12], frm[:12], why), current=frm)
         self.request_restart(frm)
         return 0
@@ -1719,7 +1747,6 @@ class Updater(object):
             return self.rollback(self.st["rollback_reason"])
         self.record("committed", self.st.get("from"), self.st["to"], "; ".join(new))
         self.st.update(phase="idle", current=self.st["to"])
-        self.sessions("restore", self.st["to"])
         # a login the switch could not move: once more, now the release stands
         self.follow_installs()
         self.prune()
@@ -1880,14 +1907,13 @@ class Updater(object):
         self.st["failed"] = {}      # an older target's failure says nothing now (key row, #2843)
         self.st.pop("hold", None)   # the machine reaches the target: its hold clock starts over (#2843)
         baseline = sorted(set(r[1] for r in doctor_rows(self.p) if r[0] == "FAIL")) if cur else []
-        self.sessions("save", target)
         self.st.update(phase="switching", **{"from": cur, "to": target, "baseline": baseline})
         self.save()
         self.switch()
         return 0
 
 
-# the login's own TMPDIR, as the supervisor's account units get it (issue #2450)
+# the login's own TMPDIR (so its tmux socket), as the supervisor's account units get it (issue #2450)
 SESSIONS_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; '
                '[ -n "$TMPDIR" ] || TMPDIR="/tmp/claude-fleet-$(id -u)"; export TMPDIR; exec "$@"')
 
@@ -2719,7 +2745,7 @@ def point(sha, frm=None, apply=True):
         ok = os.path.basename(old)[:40]
         rc, out, err = run(["/bin/bash", ap, "--tree-from", old, "--tree-to", new, "--root", live,
                             "--from", ok if SHA_RE.match(ok) else "none", "--to", sha],
-                           timeout=env_num("FLEET_NODE_FOLLOW_TIMEOUT", 1200))
+                           timeout=FOLLOW_SECS)
         said = ([l[len("apply: "):] for l in (out + "\n" + err).splitlines() if l.startswith("apply: ")]
                 or ["apply exit %d: %s" % (rc, ((err or out).strip().splitlines() or [""])[-1][:120])])[-1]
     if was and was.startswith(vers + os.sep):
@@ -2829,9 +2855,8 @@ def as_login(login, args, timeout=1200, root=None):
          "PATH": "%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" % tb,
          "FLEET_CONF_DIR": os.path.join(home, ".config", "claude-fleet"),
          "FLEET_NODE_ROOT": root, "FLEET_NODE_STATE": env("FLEET_NODE_STATE", fns.Paths().state)}
-    for k in ("FLEET_INSTALL_VERSIONS_KEEP_SECS", "FLEET_NODE_FOLLOW_TIMEOUT"):
-        if env(k, ""):
-            e[k] = env(k, "")
+    if env("FLEET_INSTALL_VERSIONS_KEEP_SECS", ""):
+        e["FLEET_INSTALL_VERSIONS_KEEP_SECS"] = env("FLEET_INSTALL_VERSIONS_KEEP_SECS", "")
     return run(["/bin/sh", "-c", SESSIONS_SH, "fleet-node-update", sys.executable, "-I",
                 os.path.abspath(__file__)] + list(args),
                timeout=timeout, env=e, **fns.demote_kw(login, uid, gid, home))
@@ -2879,17 +2904,11 @@ def main(argv):
         print(json.dumps(install_state(login, ident, os.path.join(ident[2], ".claude", "fleet"), rest[0],
                                        at="--at" in rest[1:]), sort_keys=True))
         return 0
-    if cmd == "sessions" and len(rest) == 2:
-        # (internal, AS the login, #3670) one release's session snapshot save|restore
-        verb, sha = rest
-        root = env("FLEET_NODE_ROOT", os.path.dirname(fns.Paths().runtime.rstrip("/")))
-        sc = os.path.join(root, sha, "bin", "fleet-sessions-snapshot.sh")
-        if verb not in ("save", "restore") or not SHA_RE.match(sha) or not os.path.isfile(sc):
-            print("fleet-node-update: sessions save|restore <a release under %s>" % root, file=sys.stderr)
-            return 2
-        e = dict(os.environ, PATH="%s:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-                 % os.path.join(root, sha, "tools", "bin"))
-        os.execve("/bin/bash", ["/bin/bash", sc, verb], e)
+    if cmd == "sessions":
+        # an updater from before #4670 asks a login's sessions be saved / restored
+        # around its switch: nothing to do — the switch leaves them be (compat-1v: 下一批删)
+        print("sessions: not saved or restored on a switch any more (#4670)")
+        return 0
     p = P()
     if cmd == "root" and len(rest) == 1:
         # the seated updater's root half (#3670): run by the root core's `update
