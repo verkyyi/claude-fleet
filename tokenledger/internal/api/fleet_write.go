@@ -925,7 +925,9 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 			return nil, err
 		}
 	case tool == "orch_ensure":
-		return nil, fault("INVALID_STATE", noOrchestrator)
+		// An older client's ⌘N (claude-fleet#3118): there is no orchestrating
+		// seat; compat-1v.
+		return nil, fault("INVALID_STATE", "没有编排：入口不再开编排会话；起一个编排会话（spawn agent:orchestrator）")
 	case w.fleetID != "":
 		if target, err = s.visibleFleet(p, w.fleetID); err != nil {
 			return nil, err

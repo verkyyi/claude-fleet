@@ -12,38 +12,28 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 )
 
-// A person's role overlays and rule table, kept and pushed
-// (claude-fleet#2784, EPIC #2781 C3).
+// A person's rule table, kept and pushed (claude-fleet#2784, EPIC #2781 C3);
+// the role overlays left with the person's role layer (claude-fleet#3130).
 
 var personRolesV1 = map[string]any{"bundle": map[string]any{
-	"roles": map[string]any{
-		"steward": "---\nmodel: sonnet\n---\n",
-		"worker":  map[string]any{"effort": "high", "tools": []string{"+WebFetch"}},
-	},
 	"rules": "| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 报价, 金额 |\n",
 }}
 
-// roles: only the four roles, each an overlay of at most 16 KiB, with no
-// credential in it; rules: a table or a list of rows. The team layer takes neither.
-func TestPersonRolesValidation(t *testing.T) {
+// rules: a table or a list of rows, at most 32 KiB, no credential in it. The
+// team layer takes none.
+func TestPersonRulesValidation(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
 	h.srv.Store.AdoptPrincipal(pAlice, "alice", "Alice", time.Now())
 
 	code, out, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personRolesV1, "")
-	if code != 200 || out.Version != 1 || !strings.Contains(string(out.Bundle), `"steward":"---\nmodel: sonnet\n---\n"`) || !strings.Contains(string(out.Bundle), `| 101 | steward |`) {
-		t.Fatalf("a valid roles + rules layer: HTTP %d %s", code, raw)
+	if code != 200 || out.Version != 1 || !strings.Contains(string(out.Bundle), `| 101 | steward |`) {
+		t.Fatalf("a valid rules layer: HTTP %d %s", code, raw)
 	}
 	if code, _, raw, _ := teamCall(t, h, http.MethodPut, asOperator, personRolesV1, ""); code != http.StatusUnprocessableEntity || !strings.Contains(raw, "is not something a team hands out") {
-		t.Fatalf("team PUT with roles: HTTP %d %s, want 422", code, raw)
+		t.Fatalf("team PUT with rules: HTTP %d %s, want 422", code, raw)
 	}
 	for name, b := range map[string]map[string]any{
-		"unknown role":    {"roles": map[string]any{"reviewer": "---\nmodel: opus\n---\n"}},
-		"role not text":   {"roles": map[string]any{"worker": 3}},
-		"role over 16KiB": {"roles": map[string]any{"worker": "---\n---\n" + strings.Repeat("a", 17<<10)}},
-		"literal token":   {"roles": map[string]any{"worker": "---\nmcpServers:\n  gh: {env: {GITHUB_TOKEN: ghp_abcdefghijklmnopqrstuvwxyz0123}}\n---\n"}},
-		"token key":       {"roles": map[string]any{"worker": map[string]any{"mcpServers": map[string]any{"gh": map[string]any{"command": "x", "env": map[string]any{"GITHUB_TOKEN": "abc"}}}}}},
-		"roles not obj":   {"roles": []any{"worker"}},
 		"rules a number":  {"rules": 3},
 		"rules an object": {"rules": map[string]any{"5": "x"}},
 		"rule not a row":  {"rules": []any{"x"}},
@@ -55,16 +45,12 @@ func TestPersonRolesValidation(t *testing.T) {
 			t.Errorf("%s: HTTP %d %s, want 422", name, code, raw)
 		}
 	}
-	// a ${VAR} reference is not a credential
-	ok := map[string]any{"roles": map[string]any{"worker": map[string]any{"mcpServers": map[string]any{"gh": map[string]any{"command": "x", "env": map[string]any{"GITHUB_TOKEN": "${GITHUB_TOKEN}"}}}}}}
-	if code, out, raw, _ := personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": ok}, ""); code != 200 || out.Version != 2 {
-		t.Fatalf("a ${VAR} reference: HTTP %d %s", code, raw)
-	}
 }
 
-// Off: a layer with no roles / rules is stored and answered exactly as
-// before — the same text validateBundle always made of it — and a node that
-// never said CapPerson is never sent anything.
+// The roles key is no longer rendered: an older client's PUT that still
+// carries it is taken (compat-1v — never checked, even a bad overlay), the key
+// dropped, and the layer stored and answered exactly as validateBundle makes
+// it of the rest. A node that never said CapPerson is never sent anything.
 func TestPersonRolesOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
@@ -82,6 +68,18 @@ func TestPersonRolesOffAddsNothing(t *testing.T) {
 	code, out, body, _ := personCall(t, h, http.MethodPut, asSession(pAlice), personV1, "")
 	if code != 200 || string(out.Bundle) != string(want) || strings.Contains(body, `"roles"`) || strings.Contains(body, `"rules"`) {
 		t.Fatalf("PUT without roles: HTTP %d %s, want the bundle as %s", code, body, want)
+	}
+	withRoles := map[string]any{}
+	for k, v := range m {
+		withRoles[k] = v
+	}
+	withRoles["roles"] = map[string]any{"reviewer": 3, "worker": "---\nmodel: opus\n---\n"}
+	code, out, body, _ = personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": withRoles}, "")
+	if code != 200 || string(out.Bundle) != string(want) || strings.Contains(body, `"roles"`) {
+		t.Fatalf("PUT with roles: HTTP %d %s, want it taken and the bundle as %s", code, body, want)
+	}
+	if code, _, body, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, ""); code != 200 || strings.Contains(body, `"roles"`) {
+		t.Fatalf("GET after a roles PUT: HTTP %d %s", code, body)
 	}
 	if m, ok := readMsg(old.tnode, 400*time.Millisecond); ok && m.Type == control.TypePerson {
 		t.Fatalf("a node without CapPerson was sent %s", m.Payload)

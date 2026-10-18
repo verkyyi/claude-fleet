@@ -87,7 +87,7 @@ var routeAccess = map[string]string{
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
-	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/orchestrator": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
+	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
@@ -117,7 +117,7 @@ var routeAccess = map[string]string{
 	// The team layer is read by every machine that applies it — a node's
 	// token, a client's certificate — and its PUT is refused to anyone but an
 	// admin by the handler itself.
-	control.TeamBundlePath: accessSelf, control.PersonBundlePath: accessSelf, control.PersonBundlePath + "/roles": accessSelf,
+	control.TeamBundlePath: accessSelf, control.PersonBundlePath: accessSelf,
 	// Session, token or certificate; the handler scopes a person's answer
 	// through FleetScope.
 	control.SessionsPath: accessUser, control.SummaryPath: accessUser,

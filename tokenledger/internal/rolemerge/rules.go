@@ -1,21 +1,14 @@
 package rolemerge
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 )
 
-// The rule table (bin/fleet_rules.py, claude-fleet#2786): 自带 < 你的 < 本机,
-// merged by number. The hub holds the first two — the stable tree's
-// conf/role-rules.default.md and the person bundle's `rules`.
-
-// RuleNewFrom is where a layer's new rule numbers start.
-const RuleNewFrom = 100
+// The rule table's row format (bin/fleet_rules.py, claude-fleet#2786): the
+// hub only reads a person bundle's `rules` to refuse a row no machine could read.
 
 // Tiers are a rule's 档位.
 var Tiers = []string{"auto", "default", "ask", "off"}
@@ -38,23 +31,6 @@ type Rule struct {
 	Source   string   `json:"source,omitempty"`
 }
 
-// RuleLayer is one layer's verdict in the merged table.
-type RuleLayer struct {
-	Layer   string `json:"layer"`
-	Used    bool   `json:"used"`
-	Source  string `json:"source,omitempty"`
-	Rows    int    `json:"rows,omitempty"`
-	Problem string `json:"problem,omitempty"`
-}
-
-// Table is the merged table.
-type Table struct {
-	Version  string      `json:"version"`
-	Rows     []Rule      `json:"rows"`
-	Layers   []RuleLayer `json:"layers"`
-	Problems []string    `json:"problems"`
-}
-
 func words(cell string) []string {
 	out := []string{}
 	for _, w := range ruleWordSep.Split(cell, -1) {
@@ -75,6 +51,37 @@ func isDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// Roles are the role names a rule row may name.
+var Roles = []string{"orchestrator", "steward", "worker", "epic-driver"}
+
+func in(s string, set []string) bool {
+	for _, x := range set {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// pyStr is python's str() of a cell.
+func pyStr(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case nil:
+		return "None"
+	case bool:
+		if t {
+			return "True"
+		}
+		return "False"
+	case fmt.Stringer:
+		return t.String()
+	default:
+		return Canonical(t)
+	}
 }
 
 // RuleRow is one row from its six cells (a list, or an object with
@@ -191,68 +198,4 @@ func PersonRules(v any) ([]Rule, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("person-bundle rules is neither a table nor a list")
-}
-
-// RulesVersion is the content address of the rows (fleet_rules.py's version_of).
-func RulesVersion(rows []Rule) string {
-	all := make([]any, len(rows))
-	for i, r := range rows {
-		all[i] = []any{r.N, r.Role, r.Cond, r.Action, r.Tier, strs(r.Keywords)}
-	}
-	sum := sha256.Sum256([]byte(Canonical(all)))
-	return hex.EncodeToString(sum[:])[:10]
-}
-
-// MergeRules merges the built-in table's text with the person's `rules`
-// (label e.g. "你的 v3"). An error only when the built-in cannot be read.
-func MergeRules(defaultText string, person any, personLabel string) (Table, error) {
-	merged := map[int]Rule{}
-	t := Table{Layers: []RuleLayer{}, Problems: []string{}}
-	rows, err := ParseRules(defaultText)
-	if err != nil {
-		return t, fmt.Errorf("the fleet's rule table: %v", err)
-	}
-	add := func(rows []Rule, label string) {
-		seen := map[int]bool{}
-		for _, r := range rows {
-			if seen[r.N] {
-				continue
-			}
-			seen[r.N] = true
-			r.Source = label
-			merged[r.N] = r
-		}
-	}
-	add(rows, "自带")
-	t.Layers = append(t.Layers, RuleLayer{Layer: "default", Used: true, Source: "自带", Rows: len(rows)})
-	prows, err := PersonRules(person)
-	switch {
-	case err != nil:
-		t.Problems = append(t.Problems, "person layer not used: "+err.Error())
-		t.Layers = append(t.Layers, RuleLayer{Layer: "person", Problem: err.Error()})
-	case prows != nil:
-		var bad []string
-		for _, r := range prows {
-			if _, ok := merged[r.N]; !ok && r.N < RuleNewFrom {
-				bad = append(bad, strconv.Itoa(r.N))
-			}
-		}
-		if len(bad) > 0 {
-			why := fmt.Sprintf("a new rule starts at %d (got %s)", RuleNewFrom, strings.Join(bad, ", "))
-			t.Problems = append(t.Problems, "person layer not used: "+why)
-			t.Layers = append(t.Layers, RuleLayer{Layer: "person", Problem: why})
-		} else {
-			add(prows, personLabel)
-			t.Layers = append(t.Layers, RuleLayer{Layer: "person", Used: true, Source: personLabel, Rows: len(prows)})
-		}
-	}
-	t.Rows = []Rule{}
-	for _, r := range merged {
-		if r.Tier != "off" {
-			t.Rows = append(t.Rows, r)
-		}
-	}
-	sort.Slice(t.Rows, func(i, j int) bool { return t.Rows[i].N < t.Rows[j].N })
-	t.Version = RulesVersion(t.Rows)
-	return t, nil
 }

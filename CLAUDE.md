@@ -584,9 +584,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   open** (issue #3118, EPIC #3111 C7 — it replaced the resident-seat sections of
   #1957 / #2670 / #2671). There is no resident orchestrator or steward: nothing opens,
   reopens, revives or renews one — not fleet-up, not the diskguard tick's
-  `home_watch`, not the hub (`/v1/node/orchestrator` and `orch_ensure` answer
-  「没有编排」 for one version, never a 500, never a window — Go
-  `TestNoOrchestratorEndpoint`), and no setting brings one back (FLEET_ORCHESTRATOR,
+  `home_watch`, not the hub (`/v1/node/orchestrator` is gone, #3130; an older
+  client's `orch_ensure` answers 「没有编排」 for one version, never a window), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
   launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`
