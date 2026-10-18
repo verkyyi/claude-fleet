@@ -496,3 +496,4 @@
 0.3 rm-empty-var-prompt
 1.5 spare-ready-unverified
 6.0 codex-thread-lost
+0.9 breakage-wrong-red

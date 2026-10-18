@@ -16,9 +16,10 @@
 #      offline (no gh read). No labels requested → no validation, so the
 #      label-free ⌃n / new-session paths add nothing here.
 #   1b. --breakage (issue #2078): the base branch is RED and this issue is its fix.
-#      Fingerprint the breakage first — fleet_breakage_probe: the commit the red
-#      streak started at + the first failed check + its first error line, sans
-#      line numbers — and file ONE issue per fingerprint: a `<key>/` lock under
+#      Fingerprint the breakage first — the red THIS time (issue #4774): a run
+#      the text names (fleet_breakage_run_rows), else fleet_breakage_probe's
+#      newest red; the failed check the text names + its first error line, sans
+#      line numbers and durations — and file ONE issue per fingerprint: a `<key>/` lock under
 #      $FLEET_CONF_DIR/global/breakage serializes the same-second filers on this
 #      machine (2 minutes, FLEET_BREAKAGE_LOCK_SECS), the `<!-- fleet:breakage
 #      key=… -->` marker in the body is what a filer on another machine finds
@@ -243,13 +244,22 @@ if [ "$breakage" = 1 ] && [ -z "$breakage_key" ]; then
     fleet_load_repo_conf "$_fs" "$repo" 2>/dev/null
   fi
   # The probe reads GitHub's runs: only a repo with that forge has any (issue #3599).
+  # The red this time first (issue #4774): a run the text names — the one the
+  # filer is looking at, on whatever branch — is fingerprinted before the base
+  # branch's run list is asked at all; none red ⇒ the probe as before.
   if [ "$(fleet_repo_forge "$repo" "$_fs")" = none ]; then _probe=''; _prc=9
-  else _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?; fi
+  else
+    _probe=''; _prc=1
+    _runs=$(fleet_breakage_text_runs "$title"$'\n'"$body")
+    # shellcheck disable=SC2086  # run ids: digits only, one word each
+    [ -n "$_runs" ] && _probe=$(fleet_breakage_run_rows "$repo" $_runs) && _prc=0
+    [ "$_prc" = 0 ] || { _probe=$(fleet_breakage_probe "$repo" "${FLEET_BASE_BRANCH:-}"); _prc=$?; }
+  fi
   _row=''
   if [ "$_prc" = 0 ]; then
     # The row this filing is about: a red check its text names, else (the base
-    # branch said red) the oldest red. Explicit --breakage with no match: the
-    # oldest red all the same — the caller said it is the base branch's.
+    # branch said red) the newest red. Explicit --breakage with no match: the
+    # newest red all the same — the caller said it is the base branch's.
     _row=$(printf '%s\n' "$_probe" | fleet_breakage_pick "$title"$'\n'"$body" "${FLEET_BASE_BRANCH:-}")
     [ -n "$_row" ] || _row=${_probe%%$'\n'*}
   fi
