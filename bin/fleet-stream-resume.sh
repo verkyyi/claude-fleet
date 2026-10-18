@@ -5,7 +5,7 @@
 #
 # Before: «API Error: Connection lost mid-response» left the session at its prompt
 # (the 7501 relay reads `error` → exited) until a person typed something — three
-# times in one day on mini2, each a stream the machine's credential proxy cut when
+# times in one day on one managed Mac, each a stream the machine's credential proxy cut when
 # it restarted. Now a TRANSIENT kind (server_error · overloaded · unknown — the
 # stream cut, a 5xx, an overloaded API) books one resume: after
 # FLEET_STREAM_RESUME_SECS (20) the session is told, over its own inbox

@@ -584,7 +584,7 @@ drill_spare_not_tenant() {
 # meta.json still says `mode: shared`) is skipped by the launcher, so the shared
 # proxy never serves it — and `machine refresh` read that as «not served» (#4245)
 # and restarted the proxy on every updater tick (5 min), cutting every session's
-# stream mid-response («API Error: Connection lost mid-response», mini2, 3 times in
+# stream mid-response («API Error: Connection lost mid-response», a managed Mac, 3 times in
 # a day). Now a login with no passwd entry is never «not served», and a login that
 # exists but a restart did not serve is restarted for ONCE, not every tick.
 drill_cred_shared_restart_loop() {
