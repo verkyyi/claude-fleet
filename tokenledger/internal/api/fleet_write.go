@@ -957,10 +957,17 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 				if why := s.denyEndpoint(machineAllowOf(settings, p.Person), target.EndpointID, target.Hostname); why != "" {
 					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+MachineDisabledWord+"："+why)
 				}
+				// Compute, as placement (claude-fleet#4707): the same rule
+				// for the same (machine, provider), never a second copy.
+				agent, _ := w.params["agent"].(string)
+				if cv := s.computeFor(target.EndpointID, target.Hostname, hb, settings, agent, now); cv.Off {
+					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+cv.Reason())
+				}
 			}
 		}
 	default:
-		pl, err := s.pickNode(p, w.repo, w.node, time.Now())
+		agent, _ := w.params["agent"].(string)
+		pl, err := s.pickNode(p, w.repo, w.node, agent, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -1434,7 +1441,7 @@ func (s *Server) PickNode(person, repo string) (Placement, error) {
 	if err != nil {
 		return Placement{}, err
 	}
-	return s.pickNode(fleetPrincipal{Actor: person, Person: person, scope: scope}, repo, "auto", time.Now())
+	return s.pickNode(fleetPrincipal{Actor: person, Person: person, scope: scope}, repo, "auto", "", time.Now())
 }
 
 // scopeFor is FleetScope for a person named directly, not through a request.
@@ -1532,8 +1539,8 @@ func (s *Server) loginAccounts() map[string]string {
 	return out
 }
 
-func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (Placement, error) {
-	return s.pickNodeAfter(p, repo, node, now, nil, "")
+func (s *Server) pickNode(p fleetPrincipal, repo, node, provider string, now time.Time) (Placement, error) {
+	return s.pickNodeAfter(p, repo, node, provider, now, nil, "")
 }
 
 // pickNodeAfter is pickNode for the next try of one send (claude-fleet#1610):
@@ -1541,7 +1548,7 @@ func (s *Server) pickNode(p fleetPrincipal, repo, node string, now time.Time) (P
 // running, its reason the candidate's — and last is a fleet ranked after every
 // other eligible one (the asking machine: 本机最后). With every eligible
 // machine declined the fault is ALL_DECLINED, each machine's reason in it.
-func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Time, declined map[string]string, last string) (Placement, error) {
+func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, now time.Time, declined map[string]string, last string) (Placement, error) {
 	pl := Placement{Requested: node, Repo: repo, Candidates: []Candidate{}, At: now.UTC()}
 	_, rows, err := s.visibleFleets(p, now)
 	if err != nil {
@@ -1606,7 +1613,7 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node string, now time.Tim
 			continue
 		}
 		seen[r.EndpointID] = true // one fleet per login: the first by name
-		c := s.judge(r, settings, accounts, now)
+		c := s.judge(r, settings, accounts, provider, now)
 		if node == "auto" && c.Eligible && c.Ready != nil && !*c.Ready {
 			// The node says it cannot take a new session (claude-fleet#1475:
 			// no gh login, no credential, a missing checkout). auto never
@@ -1821,7 +1828,7 @@ func updatingPhase(v *control.Versions) string {
 }
 
 // judge scores one candidate login.
-func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts map[string]string, now time.Time) Candidate {
+func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts map[string]string, provider string, now time.Time) Candidate {
 	c := Candidate{Machine: r.Hostname, OSUser: r.OSUser, EndpointID: r.EndpointID, FleetID: r.FleetID, FleetName: r.Name}
 	hb, status, _ := s.nodeStatusOf(r.EndpointID, now)
 	c.Sessions, c.MemFreeBytes = hb.SessionsCount(), hb.MemFreeBytes
@@ -1863,7 +1870,7 @@ func (s *Server) judge(r store.FleetRow, settings map[string]string, accounts ma
 	}
 	connErr := s.writableAnywhere(context.Background(), r.EndpointID)
 	maint, flagged := maintenanceOf(r.Hostname, settings)
-	cv := s.computeOf(r.EndpointID, hb, settings, now)
+	cv := s.computeFor(r.EndpointID, r.Hostname, hb, settings, provider, now)
 	switch {
 	case status != "online":
 		c.Excluded = "offline"

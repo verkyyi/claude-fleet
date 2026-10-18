@@ -97,7 +97,7 @@ func TestAutoAssignLeastBusyNoneFit(t *testing.T) {
 	if st.Why != noLoginOpener {
 		t.Fatalf("why = %q; want %q", st.Why, noLoginOpener)
 	}
-	if _, err := h.srv.pickNode(fleetPrincipal{Person: p}, "", "auto", time.Now()); err == nil || !strings.Contains(err.Error(), noLoginOpener) {
+	if _, err := h.srv.pickNode(fleetPrincipal{Person: p}, "", "auto", "", time.Now()); err == nil || !strings.Contains(err.Error(), noLoginOpener) {
 		t.Fatalf("placement = %v; want it to say %q", err, noLoginOpener)
 	}
 }
