@@ -76,6 +76,25 @@ func TestTicketRefBackendChecked(t *testing.T) {
 	}
 }
 
+// Another owner's ticket is FORBIDDEN, never 409 IDEMPOTENCY_CONFLICT; a key
+// reused for a different start still is one (claude-fleet#4697).
+func TestTicketRefOfAnotherOwnerIsForbidden(t *testing.T) {
+	h, _, target, _, _ := twoNodesCaps(t, control.CapLaunch)
+	hubTicket(t, h.srv.Store, "someone-else", 7)
+	args := map[string]any{"issue": 7, "repo": writeRepo, "idempotency_key": "foreign", "coding_agent": "codex",
+		"ticket_ref": "hub:" + writeRepo + "#7"}
+	if e := postFleet(t, h, "worker_start", args, 403)["error"].(map[string]any); e["code"] != "FORBIDDEN" {
+		t.Fatalf("another owner's ticket: %v; want FORBIDDEN", e)
+	}
+	if target.count() != 0 {
+		t.Fatalf("a fenced start launched (%d)", target.count())
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 99, "repo": writeRepo, "idempotency_key": "k", "coding_agent": "codex"}, 200)
+	if e := postFleet(t, h, "worker_start", map[string]any{"issue": 98, "repo": writeRepo, "idempotency_key": "k", "coding_agent": "codex"}, 409)["error"].(map[string]any); e["code"] != "IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("reused key: %v; want IDEMPOTENCY_CONFLICT", e)
+	}
+}
+
 func setAuthority(t *testing.T, s *store.Store, a store.RepoAuthority) {
 	t.Helper()
 	b, _ := json.Marshal(a)

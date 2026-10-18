@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -178,7 +179,14 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
 			ResolvedAgent: d.ResolvedAgent, ParentSession: asString(w.params["origin_wid"]), RequestPayload: dispatchPayload(w)},
 			"dispatch:"+owner+":"+d.RequestID, time.Now())
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrTaskFence):
+			// Another owner's ticket or parent task is a refusal of WHO asks,
+			// not a reused key (claude-fleet#4697).
+			return fault("FORBIDDEN", "ticket_ref or parent task belongs to another owner or backend")
+		case errors.Is(err, store.ErrTaskInvalid):
+			return fault("INVALID_ARGUMENT", "the accepted task is invalid (ticket_ref names no ticket)")
+		case err != nil:
 			return fault("IDEMPOTENCY_CONFLICT", "dispatch conflicts with its accepted request")
 		}
 		d.Task, d.Generation, d.AttemptID = t.Ref, t.Generation, t.AttemptID
