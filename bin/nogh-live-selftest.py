@@ -551,6 +551,25 @@ class HubIdentity(unittest.TestCase):
         self.responses['/v1/fleet/account-key'] = b'ed25519 WRONG\n'
         with self.assertRaisesRegex(live.Refused, 'HUB_KEY_CHANGED'): identity.verify(self.p, self.get)
 
+    def test_live_read_timeout_is_not_ready_and_has_its_own_bound(self):
+        # live (#4625): fleet_status is the hub asking the node under strace —
+        # a read past 2 s timed out as a bare TimeoutError and failed identity.
+        from unittest import mock
+        seen = []
+        class Opener:
+            def open(self, request, timeout):
+                seen.append((request.full_url.split('8443', 1)[-1], timeout))
+                raise TimeoutError('read timed out')
+        with mock.patch.object(identity.Path, 'read_text', return_value='tok'), \
+                mock.patch.object(identity.urllib.request, 'build_opener', return_value=Opener()), \
+                mock.patch.object(identity.ssl, 'create_default_context'):
+            get = identity.reader(self.p)
+            with self.assertRaises(identity.NotReady):
+                get('/v1/fleet/fleet_status?fleet_id=x')
+            with self.assertRaises(identity.NotReady):
+                get('/version')
+        self.assertEqual([t for _, t in seen], [identity.LIVE_READ_TIMEOUT, 2])
+
 class Templates(unittest.TestCase):
     def test_api_omits_only_known_zero_value_fields(self):
         p = plan(); ep = p['endpoints'][0]; pod = template.pod(p, ep)
@@ -634,7 +653,7 @@ class LiveRowEntry(unittest.TestCase):
         from types import SimpleNamespace
         self.assertEqual(driver.reply_seconds('result', 'row:A1'), observer.phase_timeout('row:A1') + 5)
         self.assertGreaterEqual(driver.reply_seconds('result', 'row:A7'), 30)
-        self.assertGreaterEqual(driver.reply_seconds('result', 'identity'), 30)  # await_ready's 10 s fits
+        self.assertGreaterEqual(driver.reply_seconds('result', 'identity'), 30)  # await_ready's 20 s (+ one 6 s live read) fits
         self.assertEqual(driver.reply_seconds('result', 'deny:gh-path'), 2 + 5)
         self.assertEqual(driver.reply_seconds('marked', 'row:A1'), 5)
         asked = []
