@@ -76,6 +76,42 @@ class Registration(unittest.TestCase):
             self.assertEqual(self.local(), before)
             self.assertEqual(path.read_bytes(), original)
 
+    def linked_worktree(self):
+        common = self.root / 'repo'
+        subprocess.run(['git', 'init', '-q', str(common)], check=True)
+        subprocess.run(['git', '-C', str(common), '-c', 'user.name=t', '-c', 'user.email=t@t',
+                        'commit', '-q', '--allow-empty', '-m', 'init'], check=True)
+        tree = self.root / 'repo-issue-1'
+        subprocess.run(['git', '-C', str(common), 'worktree', 'add', '-q', str(tree)], check=True)
+        binding = registration.launch.worktree_identity(str(tree))
+        self.tm('set-option', '-w', '-t', self.pane, '@worktree', binding['root'])
+        self.payload['cwd'] = self.identity['cwd'] = binding['root']
+        return binding
+
+    def test_linked_worktree_context_registers_and_later_prompt_reads(self):
+        # #4780: since #4573 a linked-worktree window's context carries `worktree`.
+        context = dict(self.context, worktree=self.linked_worktree())
+        with patch.dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(context)), \
+                patch.object(authority, 'start_call', side_effect=self.ack) as post:
+            registration.observe(self.payload, self.identity)
+            registration.verify_registered(dict(self.payload, hook_event_name='UserPromptSubmit'))
+            self.assertEqual(post.call_count, 1)
+        self.assertTrue(all(self.local().values()))
+
+    def test_worktree_context_that_differs_or_carries_more_keys_refuses(self):
+        binding = self.linked_worktree()
+        cases = dict(other=dict(self.context, worktree=dict(binding, root=str(self.root))),
+                     malformed=dict(self.context, worktree=dict(binding, extra='/x')),
+                     native=dict(self.context, worktree=binding, native_worktree={'name': 'x'}),
+                     unknown=dict(self.context, unknown=1))
+        for name, context in cases.items():
+            with self.subTest(case=name), patch.dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(context)), \
+                    patch.object(authority, 'start_call') as post:
+                with self.assertRaises(ValueError):
+                    registration.observe(self.payload, self.identity)
+                post.assert_not_called()
+        self.assertEqual(self.local(), dict.fromkeys(registration.LOCAL, ''))
+
     def test_unknown_later_prompt_never_creates_journal_or_posts(self):
         with patch.object(authority, 'start_call') as post:
             with self.assertRaises((ValueError, OSError)):

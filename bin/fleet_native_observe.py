@@ -313,7 +313,11 @@ def inspect(pane, socket, pid, sid):
     scope = process_scope(pid)
     require(not scope.get("FLEET_LAUNCH_CONTEXT"), "accepted execution is outside legacy recovery")
     context = json.loads(scope.get("FLEET_AUTHORITY_CONTEXT", "{}"))
-    require(set(context) == {"repo", "worker_id", "reservation", "supervisor"}, "original authority scope is missing")
+    require(set(context) - {"worktree"} == {"repo", "worker_id", "reservation", "supervisor"},
+            "original authority scope is missing")
+    if "worktree" in context:  # #4573: a linked-worktree window's binding
+        require(launch.validate_worktree(context["worktree"]) == launch.worktree_identity(row["@worktree"]),
+                "authority worktree differs from the window")
     require(authority.repo_identity(row["@repo"]) == context["repo"]
             and context["worker_id"].split("/")[-1] == row["@fleet_id"]
             and len(context["worker_id"].split("/")) == 2

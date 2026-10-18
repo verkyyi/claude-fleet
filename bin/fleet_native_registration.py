@@ -37,7 +37,9 @@ def read_options(pane, socket, keys):
 def snapshot(payload):
     context = json.loads(os.environ.get('FLEET_AUTHORITY_CONTEXT', '{}'))
     admission = json.loads(os.environ.get('FLEET_AUTHORITY_ADMISSION', '{}'))
-    require(set(context) == {'repo', 'worker_id', 'reservation', 'supervisor'}, 'unknown authority context')
+    # #4573: a window with a registered linked worktree also carries `worktree`.
+    require(set(context) - {'worktree'} == {'repo', 'worker_id', 'reservation', 'supervisor'},
+            'unknown authority context')
     require(type(context['supervisor']) is int and context['supervisor'] > 1, 'unknown supervisor')
     require(all(admission.get(k) == context[k] for k in ('repo', 'worker_id', 'reservation')),
             'independent admission differs from context')
@@ -56,6 +58,9 @@ def snapshot(payload):
             and launch.valid_uuid(row['@fleet_id']) and os.path.isabs(row['@worktree'])
             and not any(row[k] for k in ('@launch', '@launch_receipt', '@handoff_armed')),
             'current execution binding differs')
+    if 'worktree' in context:
+        require(launch.validate_worktree(context['worktree']) == launch.worktree_identity(row['@worktree']),
+                'authority worktree differs from the window')
     native = launch.native_parent()
     require(native.get('actual_provider') == 'codex' and launch.valid_uuid(payload.get('session_id')),
             'native provider/session unknown')
