@@ -268,7 +268,6 @@
 23.7 fleet-one-per-login-selftest.sh
 13.2 fleet-open-laptop-selftest.sh
 11.0 fleet-open-selftest.sh
-1.6 fleet-orchestrator-state-selftest.sh
 2.3 fleet-palette-selftest.sh
 0.5 fleet-panel-jump-selftest.sh
 3.1 fleet-peer-cert-selftest.sh
@@ -303,9 +302,7 @@
 15.8 fleet-restore-selftest.sh
 7.3 fleet-role-merge-selftest.sh
 1.8 fleet-role-migrate-selftest.sh
-5.0 fleet-role-selftest.sh
 2.8 fleet-role-write-selftest.sh
-1.5 fleet-rules-selftest.sh
 0.8 fleet-run-selftest.sh
 11.2 fleet-seed-selftest.sh
 0.1 fleet-selftest-reap-selftest.sh

@@ -52,6 +52,8 @@ func TestTaskDispatchCLI(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(dir, "conf/node.env"), []byte("CCQUOTA_HUB_URL="+h.http.URL+"\nCCQUOTA_TOKEN="+nodes["bob4"].token+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// --rule is accepted and ignored since the rule table left (claude-fleet#4340):
+	// the dispatch still goes through, and the payload carries no rule mark.
 	cmd := exec.Command("bash", filepath.Join(root, "bin/fleet-task-record.sh"), "dispatch", "--title", "rule integration", "--repo", "org/repo", "--rule", "1", "--agent", "codex")
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -66,7 +68,7 @@ func TestTaskDispatchCLI(t *testing.T) {
 		t.Fatal(st, task)
 	}
 	rec := task["task"].(map[string]any)
-	if rec["ticket_ref"] != "gh:org/repo#71" || rec["resolved_agent"] != "codex" || !strings.Contains(rec["request_payload"].(string), `n=1 v=`) {
+	if rec["ticket_ref"] != "gh:org/repo#71" || rec["resolved_agent"] != "codex" || strings.Contains(rec["request_payload"].(string), `n=1 v=`) {
 		t.Fatalf("association/provenance lost: %v", rec)
 	}
 }
@@ -211,7 +213,7 @@ exec python3 -c 'import json,os; print(json.dumps(dict(task=os.environ.get("FLEE
 			if err != nil {
 				t.Fatal(err)
 			}
-			if task.TicketRef != "gh:"+writeRepo+"#71" || task.ResolvedAgent != "codex" || task.State != store.TaskRunning || task.Generation != 1 || !strings.Contains(task.RequestPayload, "n=1 v=") {
+			if task.TicketRef != "gh:"+writeRepo+"#71" || task.ResolvedAgent != "codex" || task.State != store.TaskRunning || task.Generation != 1 || strings.Contains(task.RequestPayload, "n=1 v=") {
 				t.Fatalf("lost accepted contract: %+v", task)
 			}
 			if _, err = h.srv.Store.FleetTask(2); err == nil {
@@ -230,7 +232,7 @@ exec python3 -c 'import json,os; print(json.dumps(dict(task=os.environ.get("FLEE
 			if json.Unmarshal(raw, &adapter) != nil || adapter["task"] != task.Ref {
 				t.Fatalf("binding lost: %s", raw)
 			}
-			t.Logf("fixture %s: one accepted T / issue / execution; rule and explicit Codex retained; controller task/dispatch/launch agree; native receipt is a fixture", failure)
+			t.Logf("fixture %s: one accepted T / issue / execution; --rule dropped (#4340), explicit Codex retained; controller task/dispatch/launch agree; native receipt is a fixture", failure)
 		})
 	}
 }

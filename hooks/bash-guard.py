@@ -1099,11 +1099,10 @@ _DIRECT_TOOLS = {
     "fleet-gh.sh": ("gh", None),
     "fleet-reap-policy.sh": ("set_reap", ("set",)),
     "fleet-dialog-answer.sh": ("answer_dialog", None),
-    "fleet-role-take.sh": ("take_role", None),
     "fleet-task-record.sh": ("task", ("dispatch",)),
 }
 # Which server lists each tool (issue #3113, EPIC #3111 C2): the dispatch group is
-# `fleet-orch` (the fleet-orchestrate plugin's), every other tool the core `fleet`.
+# `fleet-orch` (the core's, conf/mcp-orch.json — issue #4334), every other tool the core `fleet`.
 _ORCH_TOOLS = {"spawn", "await", "children", "send", "answer_dialog", "task"}
 
 

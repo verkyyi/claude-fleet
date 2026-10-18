@@ -16,7 +16,7 @@ import "net/http"
 // machine's window and never retires its own.
 
 // noOrchestrator is the one sentence both roads answer with.
-const noOrchestrator = "没有编排：入口不再开编排会话；在任一会话里输入 /fleet-orchestrate 接手"
+const noOrchestrator = "没有编排：入口不再开编排会话；起一个编排会话（spawn agent:orchestrator）"
 
 // OrchestratorResponse is the body of /v1/node/orchestrator.
 type OrchestratorResponse struct {

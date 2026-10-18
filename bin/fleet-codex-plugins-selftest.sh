@@ -60,8 +60,12 @@ CACHE="$WORK/cache"
 for p in fleet-orchestrate fleet-epic fleet-feedback; do
   mkdir -p "$CACHE/$p/0.1.0" && cp -R "$ROOT/plugins/$p/." "$CACHE/$p/0.1.0/"
 done
-# The shipped plugin registers no MCP server any more (the dispatch group is the
-# core's, issue #4334); the MCP sync below is exercised on a fixture copy of that one.
+# The shipped fleet-orchestrate is an empty 已下架 plugin now (issue #4340): its skill,
+# MCP server and hooks below are a FIXTURE copy, so the skill / MCP / hook sync keeps
+# a plugin to exercise (the dispatch group is the core's, issue #4334).
+mkdir -p "$CACHE/fleet-orchestrate/0.1.0/skills/fleet-orchestrate"
+printf -- '---\nname: fleet-orchestrate\ndescription: a fixture skill\n---\n\nfixture\n' \
+  > "$CACHE/fleet-orchestrate/0.1.0/skills/fleet-orchestrate/SKILL.md"
 cp "$ROOT/conf/mcp-orch.json" "$CACHE/fleet-orchestrate/0.1.0/.mcp.json"
 mkdir -p "$CACHE/fleet-orchestrate/0.1.0/hooks"
 cat > "$CACHE/fleet-orchestrate/0.1.0/hooks/hooks.json" <<'J'

@@ -407,7 +407,6 @@
 25.1 fleet-one-per-login-selftest.sh
 15.4 fleet-open-laptop-selftest.sh
 21.5 fleet-open-selftest.sh
-2.7 fleet-orchestrator-state-selftest.sh
 0.5 fleet-orphan-reports-selftest.sh
 2.7 fleet-palette-selftest.sh
 0.0 fleet-pane-submit-selftest.sh
@@ -461,10 +460,6 @@
 5.8 fleet-restore-outcome-selftest.sh
 11.5 fleet-restore-pick-selftest.sh
 19.4 fleet-restore-selftest.sh
-0.4 fleet-role-selftest.sh
-1.3 fleet-role-take-selftest.sh
-0.5 fleet-role-windows-selftest.sh
-1.5 fleet-rules-selftest.sh
 0.8 fleet-run-selftest.sh
 0.1 fleet-runtime-selftest.sh
 10.3 fleet-seed-selftest.sh

@@ -1434,7 +1434,7 @@ func fleetToolSpecs() []toolSpec {
 			Name:  "orch_ensure",
 			Title: "Open your orchestrating session",
 			Description: "Retired (claude-fleet#3118): there is no orchestrating seat to open — the hub answers " +
-				"INVALID_STATE 「没有编排」 and sends nothing; type /fleet-orchestrate in any session to take the role. " +
+				"INVALID_STATE 「没有编排」 and sends nothing; open one with spawn agent:orchestrator. " +
 				"Kept one version so an older client gets that answer." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "idempotency_key": idemProp}, "idempotency_key"),
 		},

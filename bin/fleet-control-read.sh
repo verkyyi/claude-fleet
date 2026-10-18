@@ -816,7 +816,7 @@ case "$mode" in
   # orchestrating seat to open any more (issue #3118): answer 3 (off) with one
   # line, never a window. # compat-1v: 下一批删
   orch)
-    echo "没有编排：用 /fleet-orchestrate 在任一会话里接手" >&2
+    echo "没有编排：起一个编排会话（spawn agent:orchestrator）" >&2
     exit 3
     ;;
   stop)

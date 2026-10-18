@@ -164,12 +164,7 @@ else
   case "$t" in *'a /model lands within one poll'*) : ;; *) fail "D: the model-poll test (#1459) did not run" "$t" ;; esac
   case "$t" in *'fallback tools (#2057)'*) : ;; *) fail "D: the fallback-tools lifecycle test (#2057) did not run" "$t" ;; esac
   case "$t" in *'forwards to fleet-mcp.py --call'*) : ;; *) fail "D: the fallback-tools forwarding tests (tests/tools.test.ts, #2057) did not run" "$t" ;; esac
-  # /qd lives in the fleet-orchestrate plugin (issue #3114): its own validate + tests
-  PO="$BIN/../plugins/fleet-orchestrate"
-  v=$(claude plugin validate "$PO" 2>&1) || fail "D: claude plugin validate plugins/fleet-orchestrate failed" "$v"
-  q=$(cd "$PO" && claude plugin test . 2>&1) || fail "D: claude plugin test plugins/fleet-orchestrate failed" "$q"
-  case "$q" in *'Enter sends exactly once through ⌘P'*) : ;; *) fail "D: the /qd forward tests (plugins/fleet-orchestrate/tests/qd.test.tsx, #2618 · #3114 · #3328) did not run" "$q" ;; esac
-  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools + quick dispatch covered)"
+  ok "D claude plugin validate + test pass (out-of-range gate + command inbox + session state + bus feed + fallback tools covered)"
 fi
 
 # --- E: the fallback tools — one implementation, in bin/fleet-mcp.py (issue #2057) ---
@@ -211,10 +206,11 @@ for _gone in orchestrator.ts exit-guard.ts queue.ts qd.ts; do
 done
 grep -q 'orchestrator-role\|@orch_queue\|registerExitGuard\|registerQueue' "$MOD"/hooks/*.ts "$MOD"/hooks/*.tsx \
   && fail "E: mod/fleet still carries the orchestrator's role section / exit guard / queue (issue #3118)"
-# /qd is the fleet-orchestrate plugin's (issue #3114): this mod registers no command for it
+# /qd left with the fleet-orchestrate plugin's parts (issue #4340; ⌘P's ⚡ row is the
+# dispatch from anywhere, #3328): no mod registers it, the retired plugin carries nothing
 grep -q 'QuickDispatch\|qdCommand' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
-  && fail "E: mod/fleet still registers /qd — it is plugins/fleet-orchestrate/hooks/qd.tsx's"
-grep -q '"\./qd.tsx"' "$BIN/../plugins/fleet-orchestrate/hooks/hooks.json" || fail "E: the fleet-orchestrate plugin does not load hooks/qd.tsx"
+  && fail "E: mod/fleet registers /qd — it was retired with the fleet-orchestrate plugin (issue #4340)"
+[ -e "$BIN/../plugins/fleet-orchestrate/hooks" ] && fail "E: plugins/fleet-orchestrate/hooks is back — the plugin is retired (issue #4340)"
 ok "E fallback tools: registered only without the service, from --spec; every call forwarded to --call; no second copy of a schema, a check or a script"
 
 printf 'fleet-mod-selftest: %d passed\n' "$pass"

@@ -1,7 +1,7 @@
 {
   "name": "fleet-orchestrate",
-  "version": "0.2.9",
-  "description": "claude-fleet orchestration: /fleet-orchestrate opens an orchestrator session (the orchestrator agent file, bound to no issue) — it talks a request through, then hands it to worker sessions; its instructions are its system prompt, so they ride a compaction. Dispatching from anywhere is ⌘P's ⚡ row (issue #3328); an old /qd forwards to it for one version. Not installed by default (EPIC #3111).",
+  "version": "1.0.0",
+  "description": "已下架（EPIC #4333）：编排是一份会话模板了——要编排就起一个 orchestrator 会话（spawn agent:orchestrator），这里不再带任何东西；可以 /plugin uninstall fleet-orchestrate。Retired: the orchestrator is a session template (spawn agent:orchestrator); this plugin carries nothing — uninstall it.",
   "author": {
     "name": "verkyyi",
     "url": "https://github.com/verkyyi"
@@ -11,7 +11,6 @@
   "license": "MIT",
   "keywords": [
     "claude-fleet",
-    "orchestration"
-  ],
-  "types": "./types/index.d.ts"
+    "retired"
+  ]
 }

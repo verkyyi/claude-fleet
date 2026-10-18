@@ -66,8 +66,8 @@
 #
 # A person's roles and rules, kept on the hub (issue #2784, EPIC #2781 C3):
 #   U. roles       a personal layer carrying `roles` / `rules` is taken (the
-#                  hub's allow-list, kept in step): an unknown role, a role over
-#                  16 KiB, a literal token in an overlay are refused, the cache
+#                  hub's allow-list, kept in step; no role name is checked since
+#                  the role programs left, issue #4340): a role over 16 KiB, a literal token in an overlay are refused, the cache
 #                  kept; `person` reads the layer alone (no team read, no apply)
 #                  and records person-sync.json; `sync --person-version N` records
 #                  the push; `status --roles` is the doctor's row — 入口 vN · 本机 vN
@@ -555,13 +555,10 @@ for who in alice bob; do USEAM="cat $WORK/u-$who.json" ut "$who" person >/dev/nu
   && [ ! -e "$WORK/u-alice/c/agent-effective.json" ] \
   && ok "U person: roles + rules taken, each login its own person's (alice v4, bob v2), no apply" \
   || bad "U person: $(cat "$WORK/u-alice/c/person-bundle.json" "$WORK/u-bob/c/person-bundle.json" 2>&1 | head -5)"
-src=$(env -i PATH="$PATH" HOME="$WORK/u-alice/h" FLEET_CONF_DIR="$WORK/u-alice/c" "$PY" "$REPO/bin/fleet-role.py" rules --json 2>/dev/null \
-        | "$PY" -c 'import json,sys; print([r["source"] for r in json.load(sys.stdin)["rows"] if r["n"]==101])')
-[ "$src" = "['你的 v4']" ] && ok "U the rule table (C5) reads rule 101 from the cache this fetch wrote: 你的 v4" || bad "U rules source: $src"
 out=$(ut alice status --roles); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -Eq '^入口未推送（随同步拉） · 本机 v4 · 角色 steward worker · 拉到 20[0-9-]+T[0-9:]+Z（[0-9]+ 秒前）$' \
   && ok "U doctor row: $out" || bad "U status --roles rc=$rc: $out"
-for bad_b in '{"roles":{"reviewer":"x"}}' '{"roles":{"worker":3}}' '{"rules":{"r1":"x"}}' '{"rules":["x"]}' \
+for bad_b in '{"roles":{"worker":3}}' '{"rules":{"r1":"x"}}' '{"rules":["x"]}' \
     '{"roles":{"worker":"---\nmcpServers:\n  gh: {env: {X: ghp_abcdefghijklmnopqrstuvwxyz0123}}\n---\n"}}' \
     "{\"roles\":{\"worker\":\"$(head -c 17000 /dev/zero | tr '\0' a)\"}}"; do
   printf '{"version":5,"prev":4,"bundle":%s}\n' "$bad_b" > "$WORK/u-bad.json"

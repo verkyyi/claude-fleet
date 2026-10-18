@@ -1,8 +1,10 @@
 # tests/role-merge — the merge's test vectors (issue #2783, EPIC #2781 C2)
 
-A role's definition (`agents/<role>.md`) is merged with a person's layers by
-`bin/fleet-role.py merge` (python) and, on the hub, by C6's Go copy. Both are
-held to these files: one JSON per case,
+A role's definition (`agents/<role>.md`) merged with a person's layers. The
+node's python copy (`bin/fleet-role.py merge`) left with the role programs
+(issue #4340, EPIC #4333 C7); the hub's Go copy (`tokenledger/internal/rolemerge`,
+issue #2787) still runs every case in `go test ./internal/rolemerge/` until the
+person's role layer goes (#3130), and these files go with it. One JSON per case,
 
     {name, why, role,
      base:   {front: {...}, body: "..."}           # or {text: "<agents/*.md>"}
@@ -14,10 +16,3 @@ held to these files: one JSON per case,
 `refused` lists the layers (by index) that were not used because a key or value
 is not one a layer may carry. `sources[<field>]` lists who shaped it, low → high:
 `agents` (the built-in), a layer's label, `lock`.
-
-Run one: `bin/fleet-role.py merge --vector tests/role-merge/04-list-add-remove.json`.
-`bin/fleet-role-merge-selftest.sh` runs them all; the hub's Go copy
-(`tokenledger/internal/rolemerge`, issue #2787) runs the same set in
-`go test ./internal/rolemerge/`.
-A new case: write it without
-`expect`, run the line above, read the answer, then paste it in.

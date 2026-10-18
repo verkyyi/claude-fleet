@@ -1,11 +1,11 @@
 #!/bin/bash
 # fleet-plugins-selftest.sh — this repo is a plugin marketplace of optional
-# plugins (issue #3112, EPIC #3111 C1): fleet-orchestrate · fleet-epic (fleet-steward retired, #4339),
+# plugins (issue #3112, EPIC #3111 C1): fleet-epic (fleet-steward and fleet-orchestrate retired, #4339 / #4340),
 # fleet-browser (issue #3236), fleet-feedback (#3360) and fleet-infra (#3586) under plugins/, beside the core `fleet` plugin (the repo root).
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
 #      source is its dir and its name the dir's plugin.json name; steward
-#      depends on fleet-orchestrate, epic on nothing (its driver dispatches with
+#      and orchestrate are empty 已下架 plugins, epic depends on nothing (its driver dispatches with
 #      the core's tools, issue #4334); every plugin pins a version;
 #      `claude plugin validate` passes (when claude is on PATH)
 #   B  paths: every skill has name + description frontmatter, every command /
@@ -28,7 +28,7 @@
 #   G  a changed plugin bumps its version (against the merge-base with master,
 #      when git can tell)
 #   H  the real thing (claude on PATH): a sandbox HOME adds the marketplace and
-#      lists none of the three; install fleet-orchestrate lists it; uninstall
+#      lists none of the three; install fleet-browser lists it; uninstall
 #      lists none again; install fleet-epic carries its three commands, epic-page
 #      and agents/epic-driver.md (and pulls in no other plugin, #4334)
 #   I  the epic plugin (issue #3116, EPIC #3111 C5): fleet-epic carries
@@ -102,12 +102,10 @@ for d in dirs:
     if not re.match(r"^\d+\.\d+\.\d+$", str(pj.get("version", ""))):
         bad.append("A %s: no semver version — the doctor's 落后 reads version vs folderVersion" % d)
     deps = pj.get("dependencies") or []
-    if d == "fleet-steward" and (deps or os.listdir(base) != [".claude-plugin"]):
-        bad.append("A fleet-steward is retired (#4339): an empty plugin, no parts, no dependency")
+    if d in ("fleet-steward", "fleet-orchestrate") and (deps or os.listdir(base) != [".claude-plugin"]):
+        bad.append("A %s is retired (#4339 / #4340): an empty plugin, no parts, no dependency" % d)
     if d == "fleet-epic" and deps:
         bad.append("A fleet-epic depends on nothing (the dispatch tools ship with the core, #4334), has %s" % deps)
-    if d == "fleet-orchestrate" and deps:
-        bad.append("A fleet-orchestrate depends on nothing, has %s" % deps)
     # B: parts
     sk = os.path.join(base, "skills")
     skills_of[d] = sorted(os.listdir(sk)) if os.path.isdir(sk) else []
@@ -150,20 +148,13 @@ for d in dirs:
             if f.endswith((".sh", ".py")):
                 bad.append("B %s: %s — scripts stay in bin/, never copied into a plugin"
                            % (d, os.path.relpath(os.path.join(dp, f), root)))
-native_root = os.path.join(root, "plugins", "fleet-orchestrate")
-native_manifest = json.load(open(os.path.join(native_root, ".codex-plugin", "plugin.json")))
-claude_manifest = json.load(open(os.path.join(native_root, ".claude-plugin", "plugin.json")))
-if any(native_manifest.get(key) != claude_manifest.get(key) for key in ("name", "version")):
-    bad.append("B native and Claude plugin identity/version differ")
-if native_manifest.get("skills") != "./skills/" or native_manifest.get("hooks") != {"hooks": {}}:
-    bad.append("B native plugin must reuse shared skills without Claude-only state hooks")
-codex_map = json.load(open(os.path.join(root, "hooks", "codex-map.json")))
-if "fleet-orchestrator-state.py" not in codex_map.get("drop_commands", {}):
-    bad.append("B legacy Codex bridge and native package disagree on orchestration state ownership")
 # The dispatch group ships with the core (issue #4334): the launchers mount
-# conf/mcp-orch.json where @agent_spawn is 1 — no plugin registers it, either agent.
-if "fleet-orch" in (native_manifest.get("mcpServers") or {}) or os.path.exists(os.path.join(native_root, ".mcp.json")):
-    bad.append("B fleet-orchestrate registers the dispatch group — it is the core's (conf/mcp-orch.json)")
+# conf/mcp-orch.json — no plugin registers it, either agent.
+for d in dirs:
+    base = os.path.join(root, "plugins", d)
+    for mf in (os.path.join(base, ".mcp.json"), os.path.join(base, ".codex-plugin", "plugin.json")):
+        if os.path.exists(mf) and "fleet-orch" in (json.load(open(mf)).get("mcpServers") or {}):
+            bad.append("B %s registers the dispatch group — it is the core's (conf/mcp-orch.json)" % d)
 # C: the default package
 for d in dirs:
     for s in skills_of[d]:
@@ -186,6 +177,15 @@ sys.exit(1 if bad else 0)
 PY
 ) || fail "A/B/C manifests, parts, default package" "$out"
 ok
+
+# A (cont.): an installed copy of the old fleet-orchestrate (≤ 0.2.9) still runs
+# `fleet-orchestrator-state.py hook` on every prompt until it updates to the empty
+# one (issue #4340): the script answers every call with nothing, exit 0 — a missing
+# script would exit 2 and block the person's prompt
+for ev in UserPromptSubmit SessionStart PreCompact; do
+  out=$(printf '{"hook_event_name":"%s"}' "$ev" | python3 "$BIN/fleet-orchestrator-state.py" hook --skill-dir /nonexistent 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ -z "$out" ] && ok || fail "A the retired state relay must be a quiet exit 0 ($ev rc=$rc)" "$out"
+done
 
 # C (cont.): the agents pass's skills count is the repo's skills/ — none of theirs
 missing=$(python3 "$BIN/fleet-agent-defaults.py" check --root "$ROOT" --claude-config "$WORK/none.json" \
@@ -275,24 +275,25 @@ ln -s "$RT/abc" "$RT/current"
 [ "$(src "$WORK/lt")" = "$RT/current" ] && ok || fail "D source: a link tree → <runtime>/current" "$(src "$WORK/lt")"
 
 # carry-over: the moved parts left the install this apply, and this login has them
-printf 'skills/fleet-orchestrate/SKILL.md\nskills/fleet-orchestrate/role.md\ncommands/fleet-epic-run.md\nskills/doc-preview/old.md\n' > "$WORK/gone"
-mkdir -p "$CD/skills/fleet-orchestrate" "$CD/commands"; echo x > "$CD/skills/fleet-orchestrate/SKILL.md"
+printf 'skills/fleet-browser/SKILL.md\ncommands/fleet-epic-run.md\nskills/doc-preview/old.md\n' > "$WORK/gone"
+mkdir -p "$CD/skills/fleet-browser" "$CD/commands"; echo x > "$CD/skills/fleet-browser/SKILL.md"
 out=$(ens --gone "$WORK/gone" --dry-run)
-has "would install fleet-orchestrate@claude-fleet" "$out" "D dry-run names the carry-over"
+has "would install fleet-browser@claude-fleet" "$out" "D dry-run names the carry-over"
 grep -q '^plugin install' "$ST/calls" && fail "D --dry-run installed" "$(cat "$ST/calls")"; ok
 out=$(ens --gone "$WORK/gone")
-has "installed fleet-orchestrate@claude-fleet" "$out" "D carry-over: a login with the skill installed gets the plugin"
+has "installed fleet-browser@claude-fleet" "$out" "D carry-over: a login with the skill installed gets the plugin"
 hasnt "fleet-epic@" "$out" "D carry-over: fleet-epic's command was not installed here — no fleet-epic"
 hasnt "fleet-steward" "$out" "D carry-over: never the retired fleet-steward"
+hasnt "fleet-orchestrate" "$out" "D carry-over: never the retired fleet-orchestrate"
 echo x > "$CD/commands/fleet-epic-run.md"
 out=$(ens --gone "$WORK/gone")
 has "installed fleet-epic@claude-fleet" "$out" "D carry-over: the epic command installed → fleet-epic"
-hasnt "installed fleet-orchestrate" "$out" "D carry-over: an installed plugin is not re-installed"
+hasnt "installed fleet-browser" "$out" "D carry-over: an installed plugin is not re-installed"
 
 # carry-over of an agent file the core shipped (issue #3116): epic-driver left
 # conf/agent-defaults/ for plugins/fleet-epic/agents/; a login holding the shipped
 # copy in ~/.claude/agents gets fleet-epic before the agentfiles pass retires it
-echo '[{"id":"fleet-orchestrate@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
+echo '[{"id":"fleet-browser@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
 rm -f "$CD/commands/fleet-epic-run.md"
 printf 'conf/agent-defaults/claude/agents/epic-driver.md\n' > "$WORK/gone"
 out=$(ens --gone "$WORK/gone")
@@ -308,7 +309,7 @@ l = json.load(open(sys.argv[1])); l[0]["folderVersion"] = "0.2.0"; json.dump(l, 
 PY
 : > "$WORK/gone"
 out=$(ens --gone "$WORK/gone")
-has "updated fleet-orchestrate@claude-fleet 0.1.0 → 0.2.0" "$out" "D a plugin behind the runtime is updated"
+has "updated fleet-browser@claude-fleet 0.1.0 → 0.2.0" "$out" "D a plugin behind the runtime is updated"
 
 # ---- E: doctor ------------------------------------------------------------------
 rm -f "$ST/market" "$ST/installed.json"
@@ -318,11 +319,13 @@ has "marketplace is not added" "$out" "E no marketplace → WARN"
 echo x > "$ST/market"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$FK"); rc=$?
 [ "$rc" = 0 ] && ok || fail "E none installed rc=$rc" "$out"
-has "fleet-orchestrate 未装" "$out" "E none installed → each 未装"
-echo '[{"id":"fleet-orchestrate@claude-fleet","version":"0.1.0","folderVersion":"0.2.0","enabled":true},{"id":"fleet-epic@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
+has "fleet-browser 未装" "$out" "E none installed → each 未装"
+hasnt "fleet-orchestrate" "$out" "E a retired plugin not installed says nothing (#4340)"
+echo '[{"id":"fleet-browser@claude-fleet","version":"0.1.0","folderVersion":"0.2.0","enabled":true},{"id":"fleet-orchestrate@claude-fleet","version":"0.2.9","folderVersion":"1.0.0","enabled":true},{"id":"fleet-epic@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$FK"); rc=$?
 [ "$rc" = 1 ] && ok || fail "E behind rc=$rc" "$out"
-has "fleet-orchestrate 0.1.0 落后（运行时 0.2.0）" "$out" "E behind → 落后"
+has "fleet-browser 0.1.0 落后（运行时 0.2.0）" "$out" "E behind → 落后"
+has "fleet-orchestrate 已下架（可卸" "$out" "E an installed retired plugin → 已下架, uninstall it (#4340)"
 has "fleet-epic 0.1.0" "$out" "E installed → its version"
 hasnt "fleet-steward" "$out" "E a retired plugin not installed says nothing (#4339)"
 out=$(python3 "$PL" doctor --root "$ROOT" --claude "$WORK/no-such-claude"); rc=$?
@@ -529,11 +532,11 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
   ids() { hc list --json | python3 -c 'import json,sys; print(" ".join(sorted(e["id"] for e in json.load(sys.stdin))))'; }
   out=$(hc marketplace add "$WORK/fleet") || fail "H marketplace add" "$out"
   [ -z "$(ids)" ] && ok || fail "H a fresh login lists a plugin" "$(ids)"
-  out=$(hc install fleet-orchestrate@claude-fleet) || fail "H install fleet-orchestrate" "$out"
-  [ "$(ids)" = "fleet-orchestrate@claude-fleet" ] && ok || fail "H install → listed" "$(ids)"
-  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-orchestrate/*/skills/fleet-orchestrate/SKILL.md >/dev/null 2>&1 && ok \
-    || fail "H the installed copy carries the /fleet-orchestrate skill"
-  out=$(hc uninstall fleet-orchestrate@claude-fleet) || fail "H uninstall" "$out"
+  out=$(hc install fleet-browser@claude-fleet) || fail "H install fleet-browser" "$out"
+  [ "$(ids)" = "fleet-browser@claude-fleet" ] && ok || fail "H install → listed" "$(ids)"
+  ls "$H"/.claude/plugins/cache/claude-fleet/fleet-browser/*/skills/fleet-browser/SKILL.md >/dev/null 2>&1 && ok \
+    || fail "H the installed copy carries the fleet-browser skill"
+  out=$(hc uninstall fleet-browser@claude-fleet) || fail "H uninstall" "$out"
   [ -z "$(ids)" ] && ok || fail "H uninstall → none" "$(ids)"
   out=$(hc install fleet-epic@claude-fleet) || fail "H install fleet-epic" "$out"
   case " $(ids) " in *" fleet-epic@claude-fleet "*) ok ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
@@ -545,7 +548,7 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
   ls "$H"/.claude/plugins/cache/claude-fleet/fleet-infra/*/skills/mac-node-prep/SKILL.md >/dev/null 2>&1 && ok \
     || fail "H the installed fleet-infra carries mac-node-prep"
   hc uninstall fleet-infra@claude-fleet >/dev/null
-  hc uninstall fleet-epic@claude-fleet >/dev/null; hc uninstall fleet-orchestrate@claude-fleet >/dev/null
+  hc uninstall fleet-epic@claude-fleet >/dev/null
   case " $(ids) " in *" fleet-epic@"*) fail "H uninstall fleet-epic → still listed" "$(ids)" ;; *) ok ;; esac
 fi
 
