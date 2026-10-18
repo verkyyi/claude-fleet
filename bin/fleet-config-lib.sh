@@ -339,6 +339,9 @@ fcfg_label_i18n() {
     FLEET_DAEMON_KICK_TRACE) printf 'Daemon trace 窗口' ;;
     FLEET_DAEMON_RELOAD_AFTER) printf 'N 次 kick 后重载 daemon' ;;
     FLEET_DAEMON_RELOAD_COOLDOWN) printf 'Daemon 重载冷却' ;;
+    FLEET_RESIDENT_WATCH) printf '常驻后台卸载自愈' ;;
+    FLEET_DAEMON_RESIDENT_GRACE) printf '常驻后台卸载宽限' ;;
+    FLEET_DAEMON_RESIDENT_COOLDOWN) printf '常驻后台装回冷却' ;;
     FLEET_LAUNCHD_PROBE) printf 'launchd domain 探测' ;;
     FLEET_LAUNCHD_PROBE_WINDOW) printf 'launchd 探测窗口' ;;
     FLEET_LAUNCHD_PROBE_INTERVAL) printf 'launchd 探测间隔' ;;
