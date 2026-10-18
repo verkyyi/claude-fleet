@@ -6,7 +6,7 @@ This is the legacy cross-agent bridge, not Codex's native plugin manager.
 Verified Codex 0.162.1 and 0.163.0 can install Claude-format plugins natively;
 the bridge remains until single-owner migration and runtime parity are verified.
 What the Claude side has installed AND enabled of this repo's marketplace
-(fleet-orchestrate · fleet-epic · …) — asked of
+(fleet-epic · fleet-browser · …) — asked of
 `claude plugin list --json` through fleet-plugins.py, the one reader; nothing is
 recorded a second time — is carried into each Codex home as far as Codex can take
 it, and what it cannot take is said:
@@ -33,7 +33,7 @@ it, and what it cannot take is said:
               `fleet.codex_model` → model.
 
 Not carried by this bridge (the doctor's `plugins` row lists them): mod interface
-modules (the decision-sheet panel, /qd — Codex gets the `[decision]` text),
+modules (a plugin's .tsx parts — Codex has none),
 PreCompact (not mapped here), an agent file's `tools` limits, and native plugin
 ownership. These are bridge limitations, not claims that Codex lacks plugins.
 
@@ -99,7 +99,7 @@ except Exception:  # noqa: BLE001 — a launch never fails over the constants
     CODEX_TIMEOUT = 600
 
 GAPS = [
-    "mod 界面模块（决定单面板、/qd；Codex 收文字版 [decision]）",
+    "mod 界面模块（插件的 .tsx 模块，Codex 没有）",
     "PreCompact（此兼容桥未映射该事件，恢复时补回照做）",
     "agent 文件的 tools 限制",
     "原生插件管理（此兼容桥仍跟随 Claude；支持版本可用 /plugins，原生迁移尚未验收）",

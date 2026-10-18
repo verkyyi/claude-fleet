@@ -798,6 +798,10 @@ def draft_argv(args):
 DRAFT = {"type": "boolean", "description": "Draft-only (issue #3715): its worker opens a DRAFT PR, reports "
                                            "waiting and stops; it lands only after `fleet-draft.sh approve <N>` "
                                            "(reject: `fleet-draft.sh reject <N> --reason …`)."}
+# `rule` left with the dispatch rule table (issue #4340, EPIC #4333 C7): a call that
+# still carries it is accepted and the number dropped. # compat-1v: 下一批删
+RULE_RETIRED = {"type": "integer", "minimum": 1,
+                "description": "Retired (the rule table is gone): accepted and ignored for one version."}
 PR_NOTE = {"type": "string", "description": "Draft-only, plus what the PR body must carry (e.g. 「日报回复 "
                                             "<日期>#<n>」 and <!-- daily-plan -->). Implies draft."}
 
@@ -809,8 +813,6 @@ def tool_task(args):
     argv = [str(BIN / "fleet-task-record.sh"), "dispatch", "--title", args["title"], "--body-file", "-"]
     if args.get("repo"):
         argv += ["--repo", args["repo"]]
-    if "rule" in args:
-        argv += ["--rule", str(args["rule"])]
     if args.get("spawn"):
         argv.append("--spawn")
     if args.get("reap"):
@@ -834,9 +836,12 @@ def tool_send(args):
 
 
 def tool_take_role(args):
-    """Take / steal / drop / ask about a role in THIS session (issue #3114)."""
-    flag = {"take": [], "steal": ["--steal"], "drop": ["--drop"], "who": ["--who"]}[args.get("action", "take")]
-    return script([str(BIN / "fleet-role-take.sh"), args["role"]] + flag, STATUS_TIMEOUT_S)
+    """Retired with the role seats (issue #4340, EPIC #4333 C7): bin/fleet-role-take.sh
+    is gone. A session that started with the tool keeps a call that says where the
+    role went — and changes nothing. # compat-1v: 下一批删"""
+    return {"command": "take_role", "exit": 2, "stdout": "",
+            "stderr": "take_role is retired (EPIC #4333): %s is a session template now — open one with "
+                      "spawn agent:%s; nothing was marked\n" % (args.get("role", "a role"), args.get("role", "orchestrator"))}
 
 
 # --- 报 问 记 合 (issue #1808, EPIC #1813 C6) ------------------------------------
@@ -1106,8 +1111,6 @@ def tool_file_issue(args):
         argv.append("--no-breakage")
     if "breakage_key" in args:
         argv += ["--breakage-key", args["breakage_key"]]
-    if "rule" in args:
-        argv += ["--rule", str(args["rule"])]
     if "task" in args:
         argv += ["--task", args["task"]]
     argv += draft_argv(args)
@@ -1304,7 +1307,7 @@ TOOLS = {
                        "dispatch): the hub writes task record T<n> (first stdout line); with repo — a "
                        "development task — its issue is filed and hung on the record (+ spawn: its worker, "
                        "stamped @task; the URL follows); without repo + spawn a no-repo session is opened with "
-                       "the words. rule goes on the record and the issue. No hub here: a repo task is filed "
+                       "the words. No hub here: a repo task is filed "
                        "exactly as file_issue would (no T line); a no-repo one exits 3 — file an issue instead. "
                        "await takes the T<n>.",
         "inputSchema": {"type": "object", "properties": {
@@ -1312,8 +1315,7 @@ TOOLS = {
             "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "
                                                       "first message)."},
             "repo": REPO,
-            "rule": {"type": "integer", "minimum": 1,
-                     "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
+            "rule": RULE_RETIRED,
             "spawn": {"type": "boolean", "description": "Start its session now."},
             "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; independent of the agent definition."},
@@ -1393,13 +1395,9 @@ TOOLS = {
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
             "required": ["window", "fp", "picks"], "additionalProperties": False}}),
     "take_role": (tool_take_role, {
-        "description": "Take a role in THIS session (bin/fleet-role-take.sh; issue #3114): marks this window "
-                       "`@fleet_role_def <role>` and records it as the role's one holder "
-                       "($FLEET_CONF_DIR/global/roles.held) — a child's report and a peer's send to "
-                       "`orchestrator` find it, and it may spawn. Only a session that binds no issue. action "
-                       "take (default) · steal (take it from the holder) · drop (give it back) · who. Exit 0 "
-                       "taken / dropped / already held here · 3 this window cannot (it binds an issue) · 4 "
-                       "another window holds it (named) · 1 --who: nobody.",
+        "description": "Retired (issue #4340): roles are session templates now — spawn agent:orchestrator "
+                       "or agent:steward. Answers exit 2 and marks nothing; kept one version for a session "
+                       "that started with it.",
         "inputSchema": {"type": "object", "properties": {
             "role": {"type": "string", "enum": ["orchestrator", "steward"]},
             "action": {"type": "string", "enum": ["take", "steal", "drop", "who"],
@@ -1492,9 +1490,7 @@ TOOLS = {
                        "nothing filed or spawned — wait for that issue (await), never file a second (issue #2078); "
                        "a closed one is reopened when the red version contains its fix (issue #4271). "
                        "Left out, the filing is an ordinary issue whatever its text says (issue #4271: the auto "
-                       "road of #2175 is gone) — say breakage: true for a red base. rule: the rule-table row this dispatch follows (fleet-role.py rules) — the "
-                       "body ends 「按规则 N 派发」 + its fleet:rule marker; from the orchestrator a filing with none "
-                       "gets 「未注明规则」 (issue #2786). "
+                       "road of #2175 is gone) — say breakage: true for a red base. "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
                        "5 the breakage already has an open issue (URL printed) · 1 failure. A breakage a worker files "
                        "without spawn is filed, the person alerted and the parent session told — nobody "
@@ -1512,8 +1508,7 @@ TOOLS = {
                          "Omitted or false = an ordinary issue (no auto road since issue #4271)."},
             "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
-            "rule": {"type": "integer", "minimum": 1,
-                     "description": "The rule-table number this dispatch follows (fleet-role.py rules)."},
+            "rule": RULE_RETIRED,
             "task": dict(TASK_REF, description="The hub task record this issue is filed FOR (issue #3330): "
                                                "hung on it, and a spawn's worker carries it."),
             "draft": DRAFT, "pr_note": PR_NOTE,
@@ -1626,7 +1621,8 @@ LEGACY = {
 # (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
 # but LISTS only CORE; `fleet-orch` lists and answers ORCH. RETIRED tools are listed by
 # neither and still answered by both, one version (#2068 rule 4): `take_role` left the
-# list with the seats (issue #4334) — a session that started with it keeps its call.
+# list with the seats (issue #4334) and its script with #4340 — a session that started
+# with it keeps a call that says so.
 ORCH_SERVER = "fleet-orch"
 ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "task")
 RETIRED = ("take_role",)   # compat-1v: 下一批删

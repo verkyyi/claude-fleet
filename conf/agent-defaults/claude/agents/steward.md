@@ -4,7 +4,7 @@ description: fleet 的管家会话——一份会话模板（spawn agent:steward
 model: opus
 effort: medium
 # 正文就是这个会话的系统提示（`claude --agent` 用它顶替 Claude Code 自带的）：压缩、恢复都不丢，
-# 所以管家不再需要座位（take_role）、巡查程序和决定单面板（EPIC #4333 C3, issue #4336）。
+# 所以管家不再需要角色座位、巡查程序和决定单面板（EPIC #4333 C3, issue #4336）。
 # 不列 tools = 全部工具，含派单组（fleet-orch 每个会话都挂，#4703：spawn · send · answer_dialog）。
 mcpServers:
   - fleet

@@ -4,7 +4,7 @@ description: fleet 的编排会话——一份会话模板（spawn agent:orchest
 model: fable
 effort: high
 # 正文就是这个会话的系统提示（`claude --agent` 用它顶替 Claude Code 自带的）：压缩、恢复都不丢，
-# 所以编排不再需要座位（take_role）和状态快照钩子（EPIC #4333 C2, issue #4335）。
+# 所以编排不再需要角色座位和状态快照钩子（EPIC #4333 C2, issue #4335）。
 # 不列 tools = 全部工具，含派单组的 spawn（派单组 fleet-orch 每个会话都挂，#4703）。
 mcpServers:
   - fleet

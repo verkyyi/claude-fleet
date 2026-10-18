@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Opt-in native plugin probe: isolated homes, fixture MCP, no model or live configuration."""
 import argparse
-import contextlib
 import hashlib
 import json
 import os
@@ -318,166 +317,22 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
         return report
 
 
-def probe_package(binary, client_type, fleet_root, role_checks=False):
-    """Load the unmodified shipping package without trusting hooks or starting a turn."""
-    checks = []
-    plugin_id = "fleet-orchestrate@claude-fleet"
-
-    def check(condition, name):
-        if not condition:
-            raise AssertionError(name)
-        checks.append(name)
-
-    with tempfile.TemporaryDirectory(prefix="fleet-package-cli-", dir="/tmp") as temporary, contextlib.ExitStack() as cleanup:
-        root = Path(temporary).resolve()
-        home = root / "home"
-        codex_home = home / ".codex"
-        codex_home.mkdir(parents=True)
-        configuration = codex_home / "config.toml"
-        configuration.write_text(
-            'model="probe"\nmodel_provider="offline"\napproval_policy="never"\nsandbox_mode="read-only"\n'
-            '[features]\ndaemon_auto_start=false\nhooks=true\nremote_plugin=false\n'
-            '[model_providers.offline]\nname="offline"\nbase_url="http://127.0.0.1:9/v1"\n'
-            'wire_api="responses"\nrequires_openai_auth=false\n', encoding="utf-8")
-        fixture_bin = root / "fleet-bin"
-        fixture_bin.mkdir()
-        shutil.copyfile(fleet_root / "bin/fleet-mcp.py", fixture_bin / "fleet-mcp.py")
-        environment = {
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
-            "CODEX_HOME": str(codex_home), "TMPDIR": str(root),
-            "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache"),
-            "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-            "TMUX": str(root / "unused.sock") + ",0,0", "TMUX_PANE": "%999999",
-            "FLEET_CONF_DIR": str(root / "fleet-conf"), "FLEET_SESSION": "fixture-only-session",
-            "FLEET_WORKER_CRED": "fixture-only-malformed", "FLEET_MCP_BIN": str(fixture_bin),
-        }
-        if role_checks:
-            tmux_binary = shutil.which("tmux")
-            check(bool(tmux_binary), "native role probe requires tmux")
-            socket = root / "fixture-fleet"
-
-            def fixture_tmux(*arguments):
-                result = subprocess.run([tmux_binary, "-S", str(socket), *arguments],
-                                        env=environment, capture_output=True, text=True, timeout=5)
-                if result.returncode:
-                    raise AssertionError("isolated tmux failed: " + result.stderr[-500:])
-                return result.stdout.strip()
-
-            cleanup.callback(subprocess.run, [tmux_binary, "-S", str(socket), "kill-server"],
-                             env=environment, capture_output=True, timeout=5)
-            fixture_tmux("-f", "/dev/null", "new-session", "-d", "-s", "fixture-fleet",
-                         "-n", "scratch-1", "sleep 120")
-            fixture_pane = fixture_tmux("display-message", "-p", "#{pane_id}")
-            fixture_window = fixture_tmux("display-message", "-p", "#{window_id}")
-            fixture_fid = "11111111-1111-4111-8111-111111111111"
-            for option, value in (("@fleet_id", fixture_fid), ("@cc_agent", "codex"), ("@fleet_role", "worker")):
-                fixture_tmux("set-window-option", "-t", fixture_window, option, value)
-            environment.update(TMUX=str(socket) + ",0,0", TMUX_PANE=fixture_pane, FLEET_SESSION="fixture-fleet")
-            for name in ("fleet-lib.sh", "fleet-role-take.sh"):
-                shutil.copy2(fleet_root / "bin" / name, fixture_bin / name)
-                (fixture_bin / name).chmod(0o700)
-            minted = subprocess.run([sys.executable, str(fixture_bin / "fleet-mcp.py"), "--cred", "mint"],
-                                    env=environment, cwd=root, capture_output=True, text=True, timeout=10)
-            check(minted.returncode == 0 and minted.stdout.startswith("fwc1."), "fixture credential minted by real Fleet code")
-            environment["FLEET_WORKER_CRED"] = minted.stdout.strip()
-        market = root / "market"
-        plugin = market / "plugins/fleet-orchestrate"
-        shutil.copytree(fleet_root / "plugins/fleet-orchestrate", plugin)
-        (market / ".claude-plugin").mkdir()
-        (market / ".claude-plugin/marketplace.json").write_text(json.dumps({
-            "name": "claude-fleet", "owner": {"name": "Fixture"},
-            "plugins": [{"name": "fleet-orchestrate", "source": "./plugins/fleet-orchestrate",
-                         "description": "Candidate package acceptance"}]}), encoding="utf-8")
-        manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
-
-        def execute(*arguments):
-            child = subprocess.Popen([binary, *arguments], env=environment, cwd=root,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, text=True, start_new_session=True)
-            try:
-                stdout, stderr = child.communicate(timeout=25)
-            except subprocess.TimeoutExpired:
-                stop(child)
-                child.communicate(timeout=5)
-                raise AssertionError("native package CLI exceeded 25 seconds")
-            check(child.returncode == 0, "CLI " + " ".join(arguments[:3]) +
-                  (": " + stderr[-1000:] if child.returncode else ""))
-            return stdout
-
-        version = execute("--version").strip()
-        execute("plugin", "marketplace", "add", str(market), "--json")
-        execute("plugin", "add", plugin_id, "--json")
-        installed = json.loads(execute("plugin", "list", "--marketplace", "claude-fleet", "--json"))
-        check(len(installed["installed"]) == 1 and installed["installed"][0]["enabled"],
-              "actual package installed and enabled")
-        endpoint = root / "backend.sock"
-        with (root / "backend.log").open("w", encoding="utf-8") as log:
-            backend = subprocess.Popen([binary, "app-server", "--listen", "unix://" + str(endpoint)],
-                                       env=environment, cwd=root, stdin=subprocess.DEVNULL,
-                                       stdout=log, stderr=log, start_new_session=True)
-            client = None
-            try:
-                deadline = time.monotonic() + 10
-                while not endpoint.exists() and backend.poll() is None and time.monotonic() < deadline:
-                    time.sleep(.05)
-                check(endpoint.exists() and backend.poll() is None, "owned package backend ready")
-                client = client_type("unix://" + str(endpoint), timeout=5)
-                skills = client.call("skills/list", {"cwds": [str(root)], "forceReload": True})
-                names = {skill["name"] for entry in skills["data"] for skill in entry["skills"]
-                         if skill.get("pluginId") == plugin_id and skill["enabled"]}
-                check("fleet-orchestrate:fleet-orchestrate" in names, "actual orchestration skill discovered")
-                hooks = client.call("hooks/list", {"cwds": [str(root)]})
-                hook_report = hooks
-                hooks = [hook for entry in hooks["data"] for hook in entry["hooks"]
-                         if hook.get("pluginId") == plugin_id]
-                if hooks or any(entry.get("warnings") or entry.get("errors") for entry in hook_report["data"]):
-                    raise AssertionError("Claude-only hooks loaded or hook configuration failed: " + json.dumps(hook_report))
-                check(True, "explicit empty native hooks suppress Claude-only default file without warnings")
-                native = client.call("thread/start", {"cwd": str(root), "model": "probe",
-                                                     "approvalPolicy": "never", "sandbox": "read-only"})
-                status = client.call("mcpServerStatus/list", {})
-                servers = [entry for entry in status["data"] if entry["name"] == "fleet-orch"]
-                # The dispatch group ships with the core (issue #4334): the launcher mounts
-                # conf/mcp-orch.json where @agent_spawn is 1 — the package carries none.
-                check(not [entry for entry in servers if entry.get("pluginId") == plugin_id],
-                      "native package mounts no dispatch tools (the core's launcher does)")
-                check((root / "logs/mcp-calls.log").is_file(), "audit remains in temporary directory")
-                check("# >>> fleet plugins" not in configuration.read_text() and
-                      not any((codex_home / "skills").glob("fleet-*")),
-                      "no legacy MCP block or Fleet skill links generated")
-                check("trusted_hash" not in configuration.read_text(), "no hook trust written")
-            finally:
-                try:
-                    if client is not None:
-                        client.close()
-                finally:
-                    stop(backend)
-        return {"version": version, "package_version": manifest["version"], "checks": checks, "role_checks": role_checks,
-                "manifest_sha256": hashlib.sha256((plugin / ".codex-plugin/plugin.json").read_bytes()).hexdigest()}
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex", default="codex")
     parser.add_argument("--fleet-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--mcp-env", choices=("all", "bare", "allowlist", "expanded"), default="all")
     parser.add_argument("--retire-bridge", action="store_true", help="also exercise candidate bridge retirement in the temporary home")
-    parser.add_argument("--package", action="store_true", help="test the unmodified fleet-orchestrate package instead of fixtures")
-    parser.add_argument("--package-role", action="store_true", help="test the package with real role scripts and credentials on isolated tmux")
     arguments = parser.parse_args()
-    if arguments.package_role:
-        arguments.package = True
-    if arguments.package and (arguments.retire_bridge or arguments.mcp_env != "all"):
-        parser.error("--package cannot be combined with fixture options")
     binary = shutil.which(arguments.codex)
     if not binary:
         parser.error("native Codex binary required; not a default CI test")
     client_type = runpy.run_path(str(arguments.fleet_root / "bin/fleet-codex-rpc.py"))["Client"]
     modes = ("bare", "allowlist", "expanded") if arguments.mcp_env == "all" else (arguments.mcp_env,)
-    reports = ([probe_package(str(Path(binary).resolve()), client_type, arguments.fleet_root.resolve(), arguments.package_role)]
-               if arguments.package else
-               [probe(str(Path(binary).resolve()), client_type, mode, arguments.fleet_root.resolve(), arguments.retire_bridge)
-                for mode in modes])
+    # --package / --package-role probed the shipped fleet-orchestrate Codex package;
+    # it left with the role seats (issue #4340), and with it that probe.
+    reports = [probe(str(Path(binary).resolve()), client_type, mode, arguments.fleet_root.resolve(), arguments.retire_bridge)
+               for mode in modes]
     print(json.dumps({"scope": "isolated native plugins, fixture tool calls and Fleet credential refusal; no model or live changes",
                       "runs": reports, "passed": sum(len(report["checks"]) for report in reports)}, indent=2))
 

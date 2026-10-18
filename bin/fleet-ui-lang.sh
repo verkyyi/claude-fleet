@@ -1044,8 +1044,8 @@ fleet_ui_t() {
     en:compose_agent)           printf 'Agent' ;;
     zh:compose_agent_default)   printf '默认' ;;
     en:compose_agent_default)   printf 'default' ;;
-    zh:compose_orch_none)       printf '没有编排会话：在任一会话里输入 /fleet-orchestrate 接手' ;;
-    en:compose_orch_none)       printf 'no orchestrating session: type /fleet-orchestrate in any session to take the role' ;;
+    zh:compose_orch_none)       printf '没有编排会话：起一个（spawn agent:orchestrator）' ;;
+    en:compose_orch_none)       printf 'no orchestrating session: open one (spawn agent:orchestrator)' ;;
     # the desk ticket of a no-code session (issue #2676, dash-raw-session.sh)
     zh:desk_body_fmt)           printf '%s\n\n来源会话：%s\n\n没有代码要改的活（设计页、调研、发布……）的单子：会话绑在这张单上，不开工作区。在这里评论会送到会话里。' "${1:-}" "${2:-}" ;;
     en:desk_body_fmt)           printf '%s\n\nOpened by: %s\n\nThe ticket of a task with no code to change (a design page, research, a release): the session is bound to it, with no workspace. A comment here reaches the session.' "${1:-}" "${2:-}" ;;

@@ -198,10 +198,10 @@ SKILL_MARK = "<!-- fleet team skill -->"
 HOOK_SCRIPTS_DIR = os.path.join(CONF_DIR, "personal-hooks")
 SCRIPT_MARK = "fleet personal hook"
 SCRIPT_MAX = 32 << 10
-# A person's role overlays and rule table (issue #2784, EPIC #2781 C3) — the
-# hub's rules (fleet_team_bundle.go personRoles, personRulesMax), kept in step;
-# a rule row's own shape is bin/fleet_rules.py's (C5).
-ROLE_NAMES = ("orchestrator", "steward", "worker", "epic-driver")
+# A person's role overlays and rule table (issue #2784, EPIC #2781 C3): nothing on
+# a machine reads them since the role programs left (issue #4340) — a bundle that
+# still carries them is taken, held to its size, and left unread until the hub stops
+# sending them (#3130). The hub's limits (fleet_team_bundle.go), kept in step.
 ROLE_MAX = 16 << 10
 RULES_MAX = 32 << 10
 
@@ -349,8 +349,6 @@ def validate(b, layer="team"):
         if not (scalar(v) or isinstance(v, list) and all(scalar(x) for x in v)):
             return "bundle.codex_config.%s must be a scalar or a list of them" % k
     for n, ov in b.get("roles", {}).items():
-        if n not in ROLE_NAMES:
-            return "bundle.roles.%s is not a role (%s)" % (n, ", ".join(ROLE_NAMES))
         if not isinstance(ov, (str, dict)):
             return "bundle.roles.%s must be the overlay's text or an object" % n
         if len(json.dumps(ov, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > ROLE_MAX:

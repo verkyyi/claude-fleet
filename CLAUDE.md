@@ -474,16 +474,15 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `fleet-agent-def.py spawn-tools`) is recorded, never a gate; `--role worker|epic-driver|debugger`
   and an old window's `@fleet_role_def epic-driver` are read for one version
   (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
-  set|unset|undo` are gone; `bin/fleet-role.py` keeps only the two role definitions'
-  reads (`get` · `body` · `prompt` · `sha`) and the rule table — its `render` left
-  with the seats it launched (issue #3118). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F,
-  `fleet-role-selftest.sh`.
-- **This repo is a plugin marketplace; orchestration and EPIC batches are its
-  optional plugins** (issue #3112, EPIC #3111 C1).
+  set|unset|undo` are gone, and `bin/fleet-role.py` left with the role seats
+  (issue #4340). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
+- **This repo is a plugin marketplace; EPIC batches and the other optional parts
+  are its plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
-  `plugins/fleet-orchestrate` · `plugins/fleet-epic` (epic depends on orchestrate;
-  `plugins/fleet-steward` is an empty 已下架 entry for one version, issue #4339 —
-  `fleet-plugins.py`'s `RETIRED`, never defaulted, the doctor says 可卸), each a standard plugin (skills ·
+  `plugins/fleet-epic` · `fleet-browser` · `fleet-feedback` · `fleet-infra`
+  (`plugins/fleet-orchestrate` and `plugins/fleet-steward` are empty 已下架 entries
+  for one version, issues #4340 / #4339 — `fleet-plugins.py`'s `RETIRED`, never
+  defaulted, the doctor says 可卸), each a standard plugin (skills ·
   commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
   Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
   the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
@@ -558,61 +557,26 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/web-console-pack.sh`); its budget bar reads the person's own `/v1/me/usage`.
   BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
   `chat-budget-bypass` · `chat-home-moved`.
-- **Orchestrating is a role a session TAKES, one holder per role** (issue #3114,
-  EPIC #3111 C3). `/fleet-orchestrate` (the fleet-orchestrate plugin's skill) first
-  calls the dispatch group's `take_role` (`bin/fleet-role-take.sh <role>
-  [--steal|--drop|--who]`): only a window that binds no issue (exit 3 otherwise),
-  stamped `@fleet_role_def orchestrator|steward`, recorded as the role's ONE line
-  in `$FLEET_CONF_DIR/global/roles.held`; a second taker exits 4 naming the holder,
-  `--steal` moves it (the old holder's mark goes). `fleet_role_holder`
-  (`bin/fleet-lib.sh`) is the only reader — `fleet_win_for_key orchestrator|steward`
-  asks it; the old seat's `@fleet_role orchestrator` answers only while no line
-  names another (`# compat-1v`). The state relay (`fleet-orchestrator-state.py`) is registered
-  only by the plugin's `hooks/hooks.json` (`--skill-dir ${CLAUDE_PLUGIN_ROOT}/…`),
-  writes only for the holder and hands back the skill's `role.md` + `rules.md` on
-  SessionStart; the built-in rule rows live in the plugins' `skills/*/rules.md`
-  (`conf/role-rules.default.md` is their union, one version, for the hub's view);
-  `/qd` is the plugin's mod module (`plugins/fleet-orchestrate/hooks/qd.tsx`, any
-  window with no issue). `fleet-role-take-selftest.sh`, BREAK-IT `role-taken-twice`.
-- **A role's text is its ONE definition: `agents/<role>.md`** (issue #2782, EPIC
-  #2781 C1). orchestrator · steward, in Claude Code's subagent file format (model ·
-  effort · … + the body). **The orchestrator is a session template now** (issue
-  #4335, EPIC #4333 C2): `conf/agent-defaults/claude/agents/orchestrator.md`, shipped
-  into `~/.claude/agents` like fleet-worker, its body the session's system prompt
-  (a compaction keeps it — no seat, no state hook), `fleet: reap: keep`;
-  `/fleet-orchestrate` only opens one (`dash-raw-session.sh --no-repo --as
-  orchestrator`), and `fleet-role.py` reads it there when `agents/` has none. **So is
-  the steward** (issue #4336, C3): `conf/agent-defaults/claude/agents/steward.md`, a
-  patrol checklist over generic tools only (agents · gh · send / answer_dialog ·
-  spawn · pr_verdict / pr_merge) on its own `/loop` — no `take_role`, no
-  tick program, no sheet; a person opens one with `spawn agent:steward` (the
-  `/fleet-steward` skill left with its plugin, #4339),
-  and `agents/` is gone. `bin/fleet-role.py get|body|prompt|sha <role>` is the one
-  reader, and `prompt` (the body + the role's rule-table rows) is what the plugins'
-  `skills/*/role.md` copy byte for byte (`fleet-role-selftest.sh` B) — the text a
-  session that takes the role reads. Nothing launches a session from it any more:
-  the worker and the EPIC driver are standard agent files (`--as`, above), and the
-  resident seats whose launchers rendered it are gone (issue #3118), with their
-  knobs. The person's layer, the merge, `fleet role set|unset|undo` and the hub's
-  `roles` view left with C11 (issue #3122). The repo root is the plugin root:
-  `plugin.json` says `"agents": []`, so the definitions never register as plugin
-  subagents.
-- **How the orchestrator dispatches is ONE rule
-  table** (issue #2786, EPIC #2781 C5): the plugins' `skills/*/rules.md` (issue #3114;
-  `conf/role-rules.default.md` their one-version union) (编号 · 角色 ·
-  条件 · 动作 · 档位 auto|default|ask|off · 关键词) < the person's layer
-  (`person-bundle.json` `rules`) < this computer's `$FLEET_CONF_DIR/roles/rules.md`,
-  merged by number in `bin/fleet_rules.py` (the one reader; a number is never
-  reused, a new one starts at 100, a layer with a bad row is not used at all).
-  `fleet-role.py prompt <role>` appends the role's rows to its body (≤ 40 lines;
-  the plugins' `skills/*/role.md` are its copies);
-  the `ask` rows carry each `never:<class>`'s keywords (`fleet_rules.never_words`;
-  the steward's rows left with #4339, their numbers unused). A dispatch carries `rule: N` (`--rule N`):
-  the ticket ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=<version> -->`, every
-  version kept as `roles/rules-<v>.md` (`fleet-role.py rules --version`); an
-  orchestrator filing with none gets 「未注明规则」 + `logs/rules.log`, never a
-  refusal. Never list a keyword or a dispatch shape anywhere else.
-  `fleet-rules-selftest.sh`, `fleet-issue-file-selftest.sh` V.
+- **Orchestrating and stewarding are session templates — no seat, no rule table**
+  (EPIC #4333; issues #4335 · #4336 · #4340). `conf/agent-defaults/claude/agents/orchestrator.md`
+  and `steward.md` are standard agent files shipped into `~/.claude/agents` like
+  fleet-worker; a person opens one with `spawn agent:orchestrator|steward` (`--as`,
+  above). Its body is the session's system prompt — a compaction or a resume keeps
+  it, so nothing relays a role's state (`bin/fleet-orchestrator-state.py` is a
+  quiet exit-0 shell for one version: a copy of the old plugin still runs it as a
+  hook). The orchestrator's few dispatch rules are written into its template; there
+  is no rule table, no 「按规则 N 派发」 and no `fleet:rule` marker any more — the
+  `rule` argument of `file_issue` / `task` and `--rule` on `fleet-issue-file.sh` /
+  `fleet-task-record.sh` are accepted and ignored for one version, an old issue's
+  marker is only text. Gone with them (issue #4340): `take_role`'s script (the tool
+  answers 「retired」, exit 2, one version), `fleet-role.py`, `fleet_rules.py`,
+  `conf/role-rules.default.md`, the plugin's skill / role / rules / `/qd`,
+  install-apply's `roles-windows:` step. Several orchestrators may run at once; each
+  looks after what it dispatched. The readers of an old mark — `fleet_role_holder`,
+  `roles.held`, `fleet_win_for_key orchestrator|steward`, restore's re-stamp — stay
+  one version for a session that took the role before (# compat-1v, EPIC #4333 C8).
+  The plugins' `role.md` are gone, so `plugin.json`'s `"agents": []` only keeps
+  the repo root from registering agent files as plugin subagents.
 - **Orchestration is an extension a person installs, and nothing keeps a session
   open** (issue #3118, EPIC #3111 C7 — it replaced the resident-seat sections of
   #1957 / #2670 / #2671). There is no resident orchestrator or steward: nothing opens,
@@ -622,8 +586,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `TestNoOrchestratorEndpoint`), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
-  launchers are gone (their quiet shells left with #3576). A person who wants the role types `/fleet-orchestrate` (or spawns
-  `agent:steward`); closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
+  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`
+  (or `agent:steward`); closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
   (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
   (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
   client's `orch_*` / `steward_all_*` files, the steward's hosted page and
@@ -635,11 +599,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   orchestrator|steward` is never written again; a window still wearing it (an old
   seat) is an ordinary row for restore / migrate / move, and only the readers keep
   it one version (`fleet_role_holder`'s ③, the idle reaper leaves such a window for
-  its person). install-apply's `roles-windows:` step (`bin/fleet-role-windows.sh`,
-  issue #3121, re-runnable) moves such a window over in place: an old orchestrator
-  seat → `@fleet_role worker` + the taken mark + its roles.held line (the
-  conversation runs on), an old steward seat stopped and retired, an old driver
-  `@agent_def epic-driver`, a pinned window `@reap_policy keep` once. BREAK-IT `role-auto-reopen-off`.
+  its person). BREAK-IT `role-auto-reopen-off`.
   The fleet-steward plugin and the programs behind it — the beat, the health watch,
   the decision sheet, the patrol / batches panes, parking, the followup list — are
   gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and

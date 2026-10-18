@@ -2,8 +2,8 @@
 """fleet-plugins.py — this repo IS a Claude Code plugin marketplace (issue #3112,
 EPIC #3111 C1).
 
-Orchestration and EPIC batches are standard plugins under plugins/
-(fleet-orchestrate · fleet-epic · …), listed beside the core
+EPIC batches and the other optional parts are standard plugins under plugins/
+(fleet-epic · fleet-browser · …), listed beside the core
 `fleet` plugin in .claude-plugin/marketplace.json. Installing, uninstalling,
 enabling and disabling them is Claude Code's own `/plugin` (or `claude plugin
 install|uninstall|enable|disable`) — the fleet keeps NO record of what is
@@ -201,10 +201,10 @@ def carried(root, plugs, gone, cdir):
 # machine admins' runbook, installed by hand where one is wanted.
 NEVER_DEFAULT = ("fleet-infra",)
 
-# A plugin that left (issue #4339, EPIC #4333 C6): its entry stays one version as an
-# empty plugin, so an installed copy updates to nothing and /plugin says 已下架;
-# never defaulted, and the doctor names it only where it is still installed.
-RETIRED = ("fleet-steward",)  # compat-1v: 下一批删（连 plugins/fleet-steward 一起）
+# A plugin that left (issue #4339 / #4340, EPIC #4333 C6 / C7): its entry stays one
+# version as an empty plugin, so an installed copy updates to nothing and /plugin
+# says 已下架; never defaulted, and the doctor names it only where it is still installed.
+RETIRED = ("fleet-orchestrate", "fleet-steward")  # compat-1v: 下一批删（连 plugins/<它> 一起）
 
 
 def defaulted_path(a):

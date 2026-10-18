@@ -43,13 +43,13 @@ nests three levels, and this is where the confusing vocabulary starts:
   (issue #441), so the hub only steps in for the strays. **One hub per fleet**; its pane carries `@hub=1` and F9 /
   the ⌂ icon jump to it. Built by
   [`bin/hub-session.sh`](../../bin/hub-session.sh).
-- **Orchestrator** (编排会话) — a ROLE a session takes, not a window the fleet
-  keeps: type `/fleet-orchestrate` (the fleet-orchestrate plugin) in any session
-  that binds no issue, and it talks a request through with you and then dispatches
-  it (a quick task, an EPIC, the queue), never writing code itself (issues #1957,
-  #3114). One holder at a time (`take_role`, `@fleet_role_def orchestrator`),
-  addressed as `orchestrator`; nothing opens or reopens one (issue #3118).
-  Instructions: [`plugins/fleet-orchestrate/skills/fleet-orchestrate/`](../../plugins/fleet-orchestrate/skills/fleet-orchestrate/SKILL.md).
+- **Orchestrator** (编排会话) — a session TEMPLATE, not a seat or a window the fleet
+  keeps: `spawn agent:orchestrator` (or `claude --agent orchestrator`) opens one bound
+  to no issue; it talks a request through with you and then dispatches it (a quick
+  task, an EPIC, the queue), never writing code itself (issues #1957, #4335). Several
+  may run at once, each looking after what it dispatched; nothing opens or reopens one
+  (issue #3118), and there is no role to take (issue #4340). Instructions: the
+  template, [`conf/agent-defaults/claude/agents/orchestrator.md`](../../conf/agent-defaults/claude/agents/orchestrator.md).
 - **Scheduler** — whatever starts the collector on a timer: **launchd** on macOS
   (`launchd/com.claude-fleet.collect.plist.tmpl`), a **systemd** user timer on
   Linux (`systemd/claude-fleet-collect.timer`).

@@ -6,7 +6,7 @@
 # this login's NODE token (POST/GET <hub>/v1/node/tasks — read per call, never in
 # the environment, never on an argv):
 #
-#   fleet-task-record.sh new --title T --token K [--via V] [--repo o/n] [--rule N]
+#   fleet-task-record.sh new --title T --token K [--via V] [--repo o/n]
 #                     [--issue o/n#N] [--key K] [--worker-id W] [--state S]
 #                     → `T<n>` on stdout. The same token twice is the same record.
 #   fleet-task-record.sh get T<n>          → the record + its session's live word (JSON)
@@ -18,7 +18,7 @@
 #                     [--state S] [--note TEXT]
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
-#   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n] [--rule N]
+#   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
 #                     [--spawn] [--reap P] [--agent A] [--draft] [--pr-note TEXT]
 #                     → the orchestrator's `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
@@ -137,13 +137,13 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' rule='' spawn=0 reap='' agent='' as_agent='' draft='' pr_note=''
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' draft='' pr_note=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
       --body-file) bodyf="${2:-}"; shift ;;
       --repo) repo="${2:-}"; shift ;;
-      --rule) rule="${2:-}"; shift ;;
+      --rule) shift ;;   # compat-1v: accepted, ignored — the rule table is gone (issue #4340)
       --spawn) spawn=1 ;;
       --reap) reap="${2:-}"; shift ;;
       --agent)
@@ -161,12 +161,6 @@ if [ "$cmd" = dispatch ]; then
   [ -z "$draft" ] || [ -n "$repo" ] || die 2 "--draft needs --repo: a draft PR lives in a repo"
   body=''
   if [ "$bodyf" = - ]; then body=$(cat); elif [ -n "$bodyf" ]; then body=$(cat "$bodyf") || die 2 "cannot read $bodyf"; fi
-  rmark=''
-  if [ -n "$rule" ]; then
-    case "$rule" in *[!0-9]*) die 2 "--rule must be a rule number (got $rule)" ;; esac
-    rmark=$(python3 "$BIN/fleet-role.py" rules --mark "$rule" 2>/dev/null | sed -n 's/.*<!-- fleet:rule \(n=[0-9]* v=[0-9a-f]*\) -->.*/\1/p')
-    [ -n "$rmark" ] || die 2 "--rule $rule: no such rule in the table (fleet-role.py rules)"
-  fi
   # One token per (caller, words): the orchestrator asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
@@ -188,7 +182,7 @@ if [ "$cmd" = dispatch ]; then
       parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
       parent_task=$(fleet_pane_fmt '#{@task}')
     fi
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "$rmark" "$draft" "$pr_note" "$parent_wid" "$parent_task" <<'JSON'
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "$draft" "$pr_note" "$parent_wid" "$parent_task" <<'JSON'
 import json,sys
 d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
 d=json.loads(d)
@@ -218,7 +212,7 @@ JSON
   if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
     sp=''; [ "$spawn" = 1 ] && sp=--spawn
     exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
-      ${rule:+--rule "$rule"} ${t:+--task "$t"} ${sp:+"$sp"} ${draft:+"$draft"} ${pr_note:+--pr-note "$pr_note"}
+      ${t:+--task "$t"} ${sp:+"$sp"} ${draft:+"$draft"} ${pr_note:+--pr-note "$pr_note"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
@@ -260,14 +254,14 @@ case "$cmd" in
     call POST "/v1/node/tasks/$1" "$mutation"
     exit $? ;;
   new)
-    title='' token='' via='' repo='' rule='' issue='' key='' wid='' state=''
+    title='' token='' via='' repo='' issue='' key='' wid='' state=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --title) title="${2:-}"; shift ;;
         --token) token="${2:-}"; shift ;;
         --via) via="${2:-}"; shift ;;
         --repo) repo="${2:-}"; shift ;;
-        --rule) rule="${2:-}"; shift ;;
+        --rule) shift ;;   # compat-1v: accepted, ignored (issue #4340)
         --issue) issue="${2:-}"; shift ;;
         --key) key="${2:-}"; shift ;;
         --worker-id) wid="${2:-}"; shift ;;
@@ -277,14 +271,7 @@ case "$cmd" in
       shift
     done
     [ -n "$title" ] && [ -n "$token" ] || usage
-    rmark=''
-    if [ -n "$rule" ]; then
-      case "$rule" in *[!0-9]*) die 2 "--rule must be a rule number (got $rule)" ;; esac
-      # the issue body's marker's words: `n=N v=<table version>` (issue #2786)
-      rmark=$(python3 "$BIN/fleet-role.py" rules --mark "$rule" 2>/dev/null | sed -n 's/.*<!-- fleet:rule \(n=[0-9]* v=[0-9a-f]*\) -->.*/\1/p') \
-        && [ -n "$rmark" ] || die 2 "--rule $rule: no such rule in the table (fleet-role.py rules)"
-    fi
-    out=$(call POST /v1/node/tasks "$(json token="$token" title="$title" via="$via" repo="$repo" rule="$rmark" \
+    out=$(call POST /v1/node/tasks "$(json token="$token" title="$title" via="$via" repo="$repo" \
             issue="$issue" key="$key" worker_id="$wid" state="$state")") || exit 1
     t=$(printf '%s' "$out" | field id)
     is_tref "$t" || die 1 "the hub's answer names no record"

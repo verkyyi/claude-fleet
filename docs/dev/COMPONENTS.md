@@ -49,7 +49,7 @@
 
 | 组件 | 类别 | 理由 |
 |---|---|---|
-| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 发起人定为下一批改成普通会话模板后移除；当前按需安装，本批不动，跨会话基础设施保留。 |
+| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 已改成普通会话模板（`spawn agent:orchestrator`），座位、状态快照与派单规则表已删（#4340）；插件只剩一版空的已下架条目，`fleet-orchestrator-state.py` 只剩一版安静的壳；跨会话基础设施保留。 |
 | 管家特殊实现（`fleet-steward` 插件、巡查逻辑、决定单） | 移除 | 同上，下一批改成普通会话模板；当前按需安装，本批不删除正在使用的实现。 |
 | EPIC 批次（`fleet-epic`） | 按需 | 用户选择才安装；依赖关系仍由插件管理，不属于默认核心。 |
 | 反馈（`fleet-feedback`） | 按需 | 普通新装不启用；受托管登录按 #3360 既有策略首次默认启用，之后尊重用户关闭/卸载。本批只登记此例外，不改变托管策略。 |
@@ -157,7 +157,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
 | 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择任务权威（#4395），没有常驻进程 |
-| 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色与编排状态，下一批处理 |
+| 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色程序已删（#4340）；剩一版兼容壳 |
 | EPIC 批次 | `fleet-epic* epic-page* fleet-batch-green*` | 批次工作流 |
 | 反馈 | `fleet-feedback*` | 反馈插件 |
 | 浏览器 | `fleet-browser*` | 浏览器插件 |

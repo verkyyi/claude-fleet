@@ -266,7 +266,6 @@
 0.1 opened-login-no-fleet
 0.1 opening-eta-climbs
 0.1 opening-never-ends
-0.3 orchestrator-compacted
 0.2 orphan-report-unseen
 0.3 oss-internal-name-committed
 0.3 panel-stale
@@ -340,8 +339,6 @@
 1.3 restore-role-lost
 4.0 resume-fails-fast
 0.2 role-auto-reopen-off
-0.2 role-seat-migrate-early
-0.5 role-taken-twice
 0.5 root-core-off-list
 0.8 root-core-seat-stage
 0.8 root-core-unsigned-switch

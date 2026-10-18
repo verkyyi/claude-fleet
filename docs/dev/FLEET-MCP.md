@@ -46,9 +46,12 @@ ships with the core (issue #4334): no plugin registers it. Claude shows its tool
   needs no reopen: its `fleet` server, once it takes over the new version (#1898's
   exec + `tools/list_changed`), lists the dispatch group itself, and answers it
   (`road=legacy`) as it always did.
-- **`take_role` is listed by neither server** (issue #4334; the seats it marked go
-  with EPIC #4333 C7) and still answered one version — an old session that listed it
-  keeps its call (`# compat-1v`).
+- **`take_role` is listed by neither server** (issue #4334) and its script left with
+  the role seats (issue #4340, EPIC #4333 C7): an old session that listed it keeps a
+  call that answers 「retired」 (exit 2, nothing marked) for one version (`# compat-1v`).
+- **`rule` is accepted and ignored** on `task` and `file_issue` for one version
+  (issue #4340: the dispatch rule table is gone; nothing writes 「按规则 N 派发」 or a
+  `fleet:rule` marker).
 - **Old sessions keep their tools (#2068, one version — `# compat-1v`).** `fleet`
   still ANSWERS every dispatch-group call under its old name; the call log marks it
   `road=legacy`. A server that takes over from a pre-group version (#1898's exec —
@@ -74,7 +77,7 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
 | `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; an issue number whose window is an accepted launch waits on that window's `T<n>` (no `@task`: NO-WORKER), and a hub-authority repo never spawns by number (NO-WORKER — use `task`, issue #4398); legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
-| `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
+| `task` 派 | `title`, `body`?, `repo`?, `rule`? (ignored, #4340), `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
 ### 报 问 记 合 (issue #1808, EPIC #1813 C6)
@@ -91,7 +94,7 @@ together (refused, nothing ran): `evidence before|after` takes exactly one of
 | `report` 报 | `state` (`merged` · `blocked` · `failed` · `stopped` · `waiting`), `pr`?, `summary`?, `outcome`? (`succeeded` · `failed`, accepted tasks), `dry_run`? | `fleet-report-parent.sh --state S [--pr N] [--summary T] [--outcome O] [--dry-run]` | 0 reported / no parent · 3 queued (delivered later — don't resend) · 1 refused; `merged` is checked against the PR's real state |
 | `ask` 问 | `question`, `kind`? (`question` · `permission`), `suggest`? `default`? `due`? (hints, written under the question off the `ask_hint_*` strings — nothing acts on them), `class`? (accepted and unused since #4337), `issue`? (default the window's `@issue`; none → refused) | `fleet-comment.sh <issue> --note --body-file -` with `⛔ blocked: <question>` (`⛔ blocked — needs authorization: …` for `permission`) + the hint lines, **then** `set-claude-state.sh blocked` — stamped even if the comment failed — **then** a copy to the parent session over `send` to: `parent` (fid first, `wid:` on another machine; issue #4337) | the comment's; `structuredContent.state` is the stamp's, `.parent` the send's (`delivered` / `queued`, or `why` it could not be told — never an error). Nobody answers at a deadline (EPIC #4333); the answer arrives as the next turn by the existing channels (issue-bridge, the parent's send, a prompt) |
 | `answer_dialog` 答 | `window` (`@<id>` / `%<pane>`), `fp` (the dialog's fingerprint), `picks` (labels verbatim; `N=<label>` with several questions), `by`? (`person` · `session` · `default`; `steward` = session, one version), `basis`?, `issue`? (where the trail goes) | `fleet-dialog-answer.sh <window> --fp F --pick L … [--by B] [--basis T] [--issue R#N]` — reads the open AskUserQuestion off that window's transcript, refuses unless it is the one named (fingerprint + labels), refuses over a person typing / a draft, presses once through `fleet-answer.sh` and confirms in the transcript, leaves one line in the answer log (代答记录, `fleets/<session>/answers/answers-<day>.md`) + a record-only comment (issue #2958) | 0 answered · 1 no window / transcript · 2 usage · 3 refused, nothing sent · 4 pressed, unconfirmed (never pressed again) · 5 a person is typing |
-| `take_role` 接 | `role` (`orchestrator` · `steward`), `action`? (`take` default · `steal` · `drop` · `who`) | `fleet-role-take.sh <role> [--steal\|--drop\|--who]` — marks THIS window `@fleet_role_def <role>` and writes the role's one line in `$FLEET_CONF_DIR/global/roles.held` (issue #3114); `fleet_role_holder` is the one reader, `fleet_win_for_key orchestrator` answers the holder. Only a window that binds no issue | 0 taken / dropped / already here (`who`: printed) · 1 `who`: nobody · 2 usage · 3 this window cannot (binds an issue / a panel / no pane) · 4 another window holds it (named) |
+| `take_role` 接 | `role`, `action`? | retired (issue #4340): answers exit 2 「retired — spawn agent:<role>」, runs nothing, marks nothing; listed by neither server, kept one version | 2 |
 | `comment` 记 | `issue`, `body`, `mode`? (`note` default · `to-worker`), `close`?, `repo`? | `fleet-comment.sh <issue> --note\|--to-worker [--close] [--repo R] --body-file -` | the script's. `note` is RECORD-ONLY |
 | `evidence` 记 | `action` (`line` · `before` · `after` · `post`), `file` \| `text` \| `pane`, `name`?, `note`?, `mv`?, `issue`? | `fleet-evidence.sh <action> [--issue M] [--note …] [--name F] [--mv] [--pane T] [<file> \| -]` (`text` on stdin as `-`) | 0 ok · 1 none / failure · 2 usage · 4 no issue |
 | `handoff` 记 | `action` (`path` · `find` · `repo` · `check`), `slug`?, `doc`?, `issue`? | `fleet-handoff-file.sh <action> [--slug S]` · `check - [--issue N]` (doc on stdin) | 0 · 1 none · 3 check findings (advice) · 4 ambiguous |
@@ -110,7 +113,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | tool | arguments | runs | exit codes |
 |---|---|---|---|
 | `brief` | `kind`? (`claim` default · `resume`), `issue`?, `repo`?, `no_comments`? (claim only) | `fleet-claim-brief.sh [--issue N] [--repo R] [--no-comments]` · `fleet-compact-resume.sh --brief` | claim: 0 go · 2 not in a fleet · 3 wrong seat · 4 no issue · 5 the read failed |
-| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `rule`?, `task`? (`T<n>`, issue #3330), `draft`? \| `pr_note`? (issue #3715), `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--rule N] [--task T<n>] [--draft\|--pr-note T] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K\|--no-breakage]` — `breakage: false` → `--no-breakage` (a no-op); left out = an ordinary issue whatever the text says (issue #4271 removed #2175's auto road); a closed issue under the key is reopened when the red version contains its fix; `rule` → `--rule N`: the body ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->` (an orchestrator filing with none gets 「未注明规则」, issue #2786) | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
+| `file_issue` | `title`, `body`?, `labels`? (comma list), `priority`? (`p0`–`p3`), `parent`?, `spawn`? \| `bind`?, `breakage`? \| `breakage_key`?, `rule`? (ignored, #4340), `task`? (`T<n>`, issue #3330), `draft`? \| `pr_note`? (issue #3715), `repo`? | `fleet-issue-file.sh --title T [--body B] [--label L]… [--priority P] [--parent N] [--task T<n>] [--draft\|--pr-note T] [--repo R] [--spawn\|--bind] [--breakage\|--breakage-key K\|--no-breakage]` — `breakage: false` → `--no-breakage` (a no-op); left out = an ordinary issue whatever the text says (issue #4271 removed #2175's auto road); a closed issue under the key is reopened when the red version contains its fix; `rule` → `--rule N`: the body ends 「按规则 N 派发」 + `<!-- fleet:rule n=N v=… -->` (an orchestrator filing with none gets 「未注明规则」, issue #2786) | 0 · 2 usage · 3 unknown label · 4 spawn with no live parent · 5 the breakage already has an open issue (its URL on stdout, a 「同一故障」 comment left on it; issue #2078) · 1 failure |
 | `gh` | `kind` (`issue` · `pr` · `checks`), `number`, `fields`?, `max_age`? (≥ 0), `repo`? | `fleet-gh.sh issue view\|pr view\|pr checks <N> [--repo R] [--json F] [--max-age S]` | the script's |
 | `context` | `json`? | `fleet-context.sh [--json]` | 0 OK · 1 another verdict · 2 nothing to read |
 | `transfer` | `action` (`check` · `arm` · `export_loop`); `to` (`claude` · `codex`) for check/arm; `handoff` + `loop`? for arm; `transcript` + `output` for export_loop | `fleet-transfer.sh --session S --window $TMUX_PANE --to T --dry-run` · `… --handoff DOC [--loop L] --after-turn` · `fleet-loop.py from-claude --transcript F --output F` | the script's |
@@ -244,8 +247,8 @@ C3; source merge is not evidence of deployment or live acceptance.
 
 ### Filing after acceptance (#4506)
 
-`task` / `fleet-task-record.sh dispatch --rule N` keep rule number and version
-in immutable `request_payload.rule`; v1 still rejects legacy top-level `rule`
+`task` / `fleet-task-record.sh dispatch` keep `request_payload.rule` (empty since
+the rule table left, issue #4340) in the immutable payload; v1 still rejects legacy top-level `rule`
 and `issue` setters. A repo task's unified filer uses two v1 mutations:
 `ticket_prepare` (`ticket-file:g<N>`) pins the authenticated filing endpoint and
 durable local `filing_id`; `ticket_link` (`ticket-link:g<N>`) attaches a full
@@ -925,7 +928,6 @@ for you (#2068 B).
 | `fleet-pr-verdict.sh` · `fleet-pr-merge.sh` | `pr_verdict` · `pr_merge` |
 | `fleet-claim-brief.sh` · `fleet-issue-file.sh` · `fleet-gh.sh` | `brief` · `file_issue` · `gh` |
 | `fleet-dialog-answer.sh` | `answer_dialog` |
-| `fleet-role-take.sh` | `take_role` |
 | `fleet-task-record.sh dispatch` | `task` |
 
 `FLEET_DIRECT_SCRIPTS` (env, or `fleet.conf`) picks what happens:

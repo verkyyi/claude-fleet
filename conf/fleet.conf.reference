@@ -373,8 +373,8 @@ FLEET_CTX_WINDOW=200000
 #FLEET_SUBAGENT_MODEL="opus"
 
 # There is no resident orchestrating or steward session (issue #3118): nothing
-# opens, reopens or keeps one. Type /fleet-orchestrate (the fleet-orchestrate
-# plugin) or spawn agent:steward to open one. FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
+# opens, reopens or keeps one. Spawn agent:orchestrator or agent:steward (session
+# templates, EPIC #4333) to open one. FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
 # FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS knobs are gone with it.
 
 # Desk tickets (issue #2676): a session the orchestrator or you open with no repo

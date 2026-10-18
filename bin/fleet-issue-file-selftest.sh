@@ -52,12 +52,9 @@
 #      issue + 3 comments (sha + link), a repeat sha adds none; closed + red on a
 #      sha containing the fix ⇒ reopened; on an older sha ⇒ only noted; closed by
 #      hand + a newer sha ⇒ reopened.
-#   V. which rule dispatched it (issue #2786): from the orchestrator's pane
-#      (@fleet_role orchestrator ⇒ the marker says role=orchestrator) the five
-#      shapes filed with --rule 1…5 carry 「按规则 N 派发」 + `<!-- fleet:rule n=N
-#      v=… -->` 5/5; one with no rule files all the same with 「未注明规则」 and a
-#      logs/rules.log line; a rule the table lacks is refused (exit 2, no create);
-#      a filing from anywhere else gets no rule line at all (byte for byte).
+#   V. the rule table is gone (issue #4340; #2786 wrote it): --rule accepted and
+#      ignored for one version, no 「按规则 N 派发」 / fleet:rule / 「未注明规则」
+#      line from any pane, the orchestrator's included.
 #   W. any pane spawns, a worker's too (issue #4591 lifted #2960's exit 6); a
 #      breakage a worker files WITHOUT --spawn (issue #4337) is ONE issue + ONE
 #      breakage alert + ONE message to its parent (wid: on another machine), no
@@ -91,8 +88,6 @@ GH_LOG="$WORK/ghlog"; SPAWN_LOG="$WORK/spawns"; BIND_LOG="$WORK/binds"; BODY="$W
 cp "$SRC" "$WORK/bin/fleet-issue-file.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
 cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"   # its write queue (issue #1264)
 cp "$BIN/fleet-ticket.sh" "$BIN/fleet_ticket.py" "$WORK/bin/"   # the ticket door it files through (issue #3595)
-cp "$BIN/fleet-role.py" "$BIN/fleet_rules.py" "$WORK/bin/"   # --rule's table (issue #2786)
-export FLEET_RULES_DEFAULT="$BIN/../conf/role-rules.default.md" FLEET_RULES_LOG="$WORK/rules.log"
 chmod +x "$WORK/bin/fleet-issue-file.sh"
 # Stub the spawn choke point the channel hands to on --spawn: log its args, honour
 # SPAWN_RC so a cap-refusal (non-zero) can be simulated.
@@ -667,26 +662,19 @@ run_auto u3 "$FX/runs-green" --title '每日推送没跑成'
                                                      || fail "U3 a short use files with no hint" "$(cat "$WORK/err-u3")"
 ok "U title hint: long / script-name titles file with one hint line, a short use says nothing"
 
-# --- V. which rule dispatched it (issue #2786) -------------------------------------
-marked=0
-for n in 1 2 3 4 5; do
-  FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "形状 $n" --body "要做的事 $n" --rule "$n"
-  [ "$RC" -eq 0 ] || fail "V1 --rule $n should file" "$(cat "$WORK/err")"
-  grep -q '<!-- fleet:from role=orchestrator' "$BODY" || fail "V1 the orchestrator's filing says role=orchestrator" "$(cat "$BODY")"
-  grep -qx "按规则 $n 派发" "$BODY" && grep -Eq "^<!-- fleet:rule n=$n v=[0-9a-f]{10} -->$" "$BODY" && marked=$((marked+1))
+# --- V. the rule table is gone (issue #4340; #2786 before it) --------------------
+# --rule is accepted and ignored for one version: the filing goes through, its body
+# carries no 「按规则 N 派发」, no fleet:rule marker, no 「未注明规则」 — from the
+# orchestrator's pane or anywhere else; a number no table ever had files the same.
+for args in '--rule 1' '--rule 999' ''; do
+  # shellcheck disable=SC2086
+  FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "形状" --body "要做的事" $args
+  [ "$RC" -eq 0 ] || fail "V an orchestrator filing ($args) should file" "$(cat "$WORK/err")"
+  grep -q '按规则\|fleet:rule\|未注明规则' "$BODY" && fail "V ($args) still writes a rule line" "$(cat "$BODY")"
 done
-[ "$marked" = 5 ] || fail "V1 5/5 shapes carry their rule mark (got $marked/5)" "$(cat "$BODY")"
-: > "$FLEET_RULES_LOG"
-FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "没注明" --body "随手一单"
-[ "$RC" -eq 0 ] && grep -qx '未注明规则' "$BODY" && grep -q $'\tunmarked\trepo=acme/widgets\ttitle=没注明' "$FLEET_RULES_LOG" \
-  || fail "V2 an orchestrator filing with no rule files with 「未注明规则」 + a log line" "$(cat "$BODY" "$FLEET_RULES_LOG" "$WORK/err")"
-FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "已带" --body $'x\n<!-- fleet:rule n=1 v=abcdef0123 -->'
-grep -q '未注明规则' "$BODY" && fail "V3 a body already carrying a fleet:rule marker gets no 「未注明规则」" "$(cat "$BODY")"
-run_fif --title "没这条" --rule 999
-[ "$RC" -eq 2 ] && ! grep -q 'issue create' "$GH_LOG" || fail "V4 a rule the table lacks is refused (exit 2, no create; got $RC)" "$(cat "$WORK/err")"
-run_fif --title "别处" --body "y"
-grep -q '未注明规则\|fleet:rule' "$BODY" && fail "V5 a non-orchestrator filing gets no rule line" "$(cat "$BODY")"
-ok "V rules: 5/5 orchestrator shapes marked; no rule ⇒ 「未注明规则」 + log; unknown rule refused; elsewhere untouched"
+run_fif --title "别处" --body "y" --rule 2
+[ "$RC" -eq 0 ] && ! grep -q '按规则\|fleet:rule\|未注明规则' "$BODY" || fail "V elsewhere: --rule ignored" "$(cat "$BODY" "$WORK/err")"
+ok "V rules: --rule accepted and ignored; no rule line from any pane (one version)"
 
 # --- W. any pane spawns, a worker's too (issue #4591 lifted #2960) -----------------
 for who in worker 'worker||0' orchestrator steward home '' ; do

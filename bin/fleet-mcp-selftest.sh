@@ -1061,6 +1061,7 @@ ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the ba
 # comment), red all the same; with both ⇒ the comment, then the record mirrors it;
 # neither ⇒ refused as before. task ⇒ fleet-task-record.sh dispatch, the words on
 # stdin; await takes a T<n> instead of an issue (exactly one); file_issue --task.
+# A task's `rule` is accepted and dropped (issue #4340: the rule table is gone).
 : > "$LOG"
 { call 130 ask '{"question":"which one?"}'; } | FAKE_NOISSUE=1 FAKE_TASK=T7 serve "$WORK/r1"
 { call 131 ask '{"question":"push?"}'; } | FAKE_TASK=T7 serve "$WORK/r2"
@@ -1096,7 +1097,7 @@ fleet-comment.sh 1807 --note --body-file -
 set-claude-state.sh blocked
 fleet-peer-send.sh @77 -
 fleet-task-record.sh set T7 --asked ⛔ blocked: push?
-fleet-task-record.sh dispatch --title 看看风扇 --body-file - --rule 1 --spawn
+fleet-task-record.sh dispatch --title 看看风扇 --body-file - --spawn
 <<<为什么一直转>
 fleet-await.sh T7 --timeout 30
 fleet-repo.sh list
@@ -1256,12 +1257,19 @@ for f in dash-raw-session.sh scratch-pool.sh fleet-restore.sh; do
 done
 grep -q 'stamp_option @agent_spawn 1' "$BIN/dash-raw-session.sh" || fail "Q2: a claimed warm window keeps no @agent_spawn"
 ok "Q2 the person's no-issue sessions are stamped @agent_spawn 1 before their launcher mounts the group"
-# take_role: listed by neither server, still answered one version (an old session's call).
+# take_role: listed by neither server, still answered one version (an old session's
+# call) — its script left with the role seats (issue #4340): the answer says where the
+# role went, exit 2, and nothing runs.
 grep -Eqx 'take_role' "$WORK/q.l0" "$WORK/q.l1" && fail "Q2: take_role is still listed" "$(cat "$WORK/q.l0" "$WORK/q.l1")"
-fake fleet-role-take.sh 'echo "taken"'
 : > "$LOG"
 call 162 take_role '{"role":"orchestrator"}' | serve "$WORK/q11" --group orch
-grep -qx 'fleet-role-take.sh orchestrator' "$LOG" || fail "Q2: an old session's take_role is no longer answered" "$(cat "$WORK/q11" "$LOG")"
-ok "Q2 take_role is on no server's list and still answered (one version)"
+[ -s "$LOG" ] && fail "Q2: a retired take_role still ran something" "$(cat "$LOG")"
+python3 - "$WORK/q11" <<'PY' || fail "Q2: an old session's take_role is no longer answered" "$(cat "$WORK/q11")"
+import json, sys
+r = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][0]["result"]
+sc = r["structuredContent"]
+assert sc["exit"] == 2 and "retired" in sc["stderr"] and "spawn agent:orchestrator" in sc["stderr"], sc
+PY
+ok "Q2 take_role is on no server's list and still answered: retired, nothing marked (one version)"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

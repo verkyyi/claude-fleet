@@ -90,9 +90,8 @@ SHIM_PATH="$PATH"
 esac
 
 # The launch POLICY a resume / new session keeps: its Codex home and the whole
-# group a role's definition rendered (issue #2782, `fleet-role.py render`): model,
-# effort, an appended system prompt — the orchestrator's role (issue #2582) —,
-# tools, permission mode, and the agent file a session started as (`--as`, issue
+# launch group an older version rendered from a role's definition (issue #2782):
+# model, effort, an appended system prompt, tools, permission mode, and the agent file a session started as (`--as`, issue
 # #3122 — fleet-claude.sh finds it again; `--role` is its old spelling). The agent is the one that just ran, @cc_agent. The rest — a seed
 # prompt, a --resume + nudge, a --session-id — belonged to the first launch only.
 policy=(); want=''

@@ -14,7 +14,7 @@
     {
       "name": "fleet-orchestrate",
       "source": "./plugins/fleet-orchestrate",
-      "description": "Open an orchestrator session (/fleet-orchestrate — the orchestrator agent file) that hands work to worker sessions."
+      "description": "已下架 · retired (EPIC #4333): the orchestrator is a session template now — spawn agent:orchestrator. Kept one version so an installed copy updates to this empty one; uninstall it."
     },
     {
       "name": "fleet-steward",

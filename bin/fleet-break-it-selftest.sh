@@ -25,7 +25,6 @@
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
 #   role-auto-reopen-off                            nothing reopens a seat: fleet-up.sh, fleet-diskguard.sh
-#   role-seat-migrate-early                         fleet-role-windows.sh (seats left while the live install revives)
 #                                                   home_watch, the seat launchers gone (#3576)
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
@@ -787,43 +786,6 @@ drill_agent_file_broken() {
   [ "$rc3" = 0 ] || { WHY="with no --as and no fleet-worker the spawn failed ($rc3): $(tr '\n' '|' < "$d/err3")"; return 1; }
   case " $(printf '%s ' $wins)" in *" 7: "*) ;; *) WHY="the plain spawn is not a plain session: [$wins]"; return 1 ;; esac
   WHAT="agent 文件写坏或不在：派单 exit 1、不开窗口，stderr 说是哪个文件（或在哪几处找过）；没有 --as、自带的 fleet-worker 也删了：照常开一个普通会话"
-}
-
-# orchestrator-compacted (issue #2583, EPIC #2581 C2): a compaction leaves the
-# orchestrator a summary that may drop the batches it follows, the children it
-# waits on, the reports it has not passed on — and the Loop, which then never
-# wakes it again. PreCompact writes global/orchestrator.state.json, SessionStart
-# (compact) hands it back with the next step: re-arm the Loop. A /compact the
-# person typed also gets its next turn started. No real Claude here: the hook's
-# own input and output are the drill (the model's answer is the issue's 上线证据).
-drill_orchestrator_compacted() {
-  CAP=10; BREAK_SOCK="$WORK/sock-oc"; local t0 w p out c="$WORK/occonf" tr="$WORK/oc-tr.jsonl" ts
-  [ -f "$BIN/fleet-orchestrator-state.py" ] || { WHY="no bin/fleet-orchestrator-state.py — nothing carries the state across"; return 1; }
-  grep -q 'fleet-orchestrator-state.py hook' "$ROOT/plugins/fleet-orchestrate/hooks/hooks.json" \
-    || { WHY="the fleet-orchestrate plugin's hooks never run the state relay"; return 1; }
-  nt -f /dev/null new-session -d -s oc -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  w=$(nt new-window -d -P -F '#{window_id}' -t oc: -n orchestrator 'exec sleep 600')
-  p=$(nt display-message -p -t "$w" '#{pane_id}')
-  nt set-option -wq -t "$w" @fleet_role orchestrator
-  mkdir -p "$c/global/epic-running.d"
-  printf 'epoch: %s\nttl: 2700\nepic: 2581\nrepo: o/n\nsession: oc\ntick: 3\n' "$(date +%s)" > "$c/global/epic-running.d/o-n-2581"
-  ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-  printf '%s\n%s\n' \
-    "{\"type\":\"assistant\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"ScheduleWakeup\",\"input\":{\"delaySeconds\":1200,\"prompt\":\"<<autonomous-loop-dynamic>>\"}}]}}" \
-    "{\"type\":\"user\",\"timestamp\":\"$ts\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t\",\"content\":\"ok\"}]}}" > "$tr"
-  printf '#!/bin/sh\necho "{\\"seq\\":0,\\"summary\\":{\\"text\\":\\"0 children\\"},\\"children\\":[]}"\n' > "$WORK/oc-children"; chmod +x "$WORK/oc-children"
-  och() { printf '%s' "$1" | env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" \
-            TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$p" CLAUDE_CODE_ENTRYPOINT=cli FLEET_ORCH_CHILDREN_CMD="$WORK/oc-children" \
-            FLEET_COMPACT_RESUME=0 python3 "$BIN/fleet-orchestrator-state.py" hook 2>/dev/null; }
-  t0=$(now)
-  och "{\"hook_event_name\":\"PreCompact\",\"trigger\":\"manual\",\"transcript_path\":\"$tr\"}" >/dev/null   # the break: /compact
-  out=$(och '{"hook_event_name":"SessionStart","source":"compact"}')
-  SECS=$(since "$t0")
-  case "$out" in *'EPIC #2581'*) ;; *) WHY="after the compaction the session is not told its batch: [$out]"; return 1 ;; esac
-  case "$out" in *'<<autonomous-loop-dynamic>>'*'重新 arm 循环'*) ;; *) WHY="after the compaction the Loop is not handed back: [$out]"; return 1 ;; esac
-  [ "$(nt display-message -p -t "$p" '#{@compact_stage}')" = restored ] \
-    || { WHY="a typed /compact leaves the REPL idle and nothing starts the next turn"; return 1; }
-  WHAT="压缩前存下批次、在等谁、未读回报、循环；压缩后注入 ≤40 行并让会话先重新 arm 循环；人敲的 /compact 自动起下一轮"
 }
 
 # window-renamed (issue #1844): a name is not an identity. Home renamed, a worker
@@ -5999,76 +5961,6 @@ drill_client_update_silent_fail() {
   WHAT="入口发布版 3 小时验不过（停在 fetch-failed）：一拍发一次通知（同一回只一次），install-follow 标 alarm → doctor 的 install 行 FAIL"
 }
 
-# role-taken-twice (issue #3114, EPIC #3111 C3): orchestrating is a role any
-# session without an issue takes (/fleet-orchestrate → take_role). Two scratch
-# sessions both type it: before, nothing kept one holder — each would mark itself,
-# a child's report and a peer's send to `orchestrator` hit an ambiguous key, and
-# neither knew the other dispatched. Now the second is told who holds it (exit 4)
-# and changes nothing; an issue window cannot take it (exit 3); the key answers
-# the one holder; only --steal moves it.
-drill_role_taken_twice() {
-  CAP=10; BREAK_SOCK="$WORK/sock-rt"; local t0 a b i r rc c="$WORK/rtconf" rt
-  # its own shim on the tmux binary itself: a bare `tmux` here must not re-enter
-  # the fleet's tmux-shim, which would find this shim again on PATH
-  rt=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
-  mkdir -p "$WORK/rtbin"; printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$rt" "$BREAK_SOCK" > "$WORK/rtbin/tmux"; chmod +x "$WORK/rtbin/tmux"
-  nt -f /dev/null new-session -d -s rt -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  a=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-1 'exec sleep 600'); nt set-option -wq -t "$a" @fleet_role worker
-  b=$(nt new-window -d -P -F '#{window_id}' -t rt: -n scratch-2 'exec sleep 600'); nt set-option -wq -t "$b" @fleet_role worker
-  i=$(nt new-window -d -P -F '#{window_id}' -t rt: -n issue-5 'exec sleep 600'); nt set-option -wq -t "$i" @fleet_role worker; nt set-option -wq -t "$i" @issue 5
-  rtake() { env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 BREAK_SOCK="$BREAK_SOCK" \
-              TMUX="$BREAK_SOCK,1,0" TMUX_PANE="$(o "$1" pane_id)" bash "$BIN/fleet-role-take.sh" orchestrator ${2:+"$2"} 2>&1; }
-  t0=$(now)
-  rtake "$a" >/dev/null || { WHY="the first scratch could not take the role"; return 1; }
-  r=$(rtake "$b"); rc=$?                                      # the break: a second taker
-  SECS=$(since "$t0")
-  [ "$rc" = 4 ] || { WHY="a second session took the role too (exit $rc): $r"; return 1; }
-  case "$r" in *"$a"*) ;; *) WHY="the second taker is not told who holds it: $r"; return 1 ;; esac
-  [ -z "$(o "$b" @fleet_role_def)" ] || { WHY="the refused taker was marked anyway"; return 1; }
-  rtake "$i" >/dev/null; [ $? = 3 ] || { WHY="a window bound to an issue took the role"; return 1; }
-  r=$(env PATH="$WORK/rtbin:$PATH" FLEET_CONF_DIR="$c" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-        bash -c '. "$1/fleet-lib.sh"; fleet_win_for_key orchestrator' _ "$BIN" 2>&1)
-  [ "$r" = "$a" ] || { WHY="the orchestrator key does not answer the one holder: $r"; return 1; }
-  rtake "$b" --steal >/dev/null && [ -z "$(o "$a" @fleet_role_def)" ] && [ "$(o "$b" @fleet_role_def)" = orchestrator ] \
-    || { WHY="--steal did not move the role in one step"; return 1; }
-  WHAT="第二个会话接手编排被告知是谁在编排（exit 4、不打标），绑单窗口不能接手（exit 3）；orchestrator 只解析到唯一持有者；只有 --steal 转手"
-}
-
-# role-seat-migrate-early (issue #3121, EPIC #3111 C10): the old seats move onto the
-# new marks (fleet-role-windows.sh). Run by hand while the LIVE install still revives a
-# closed seat, the first real run made the seat a plain row and stopped the steward —
-# and the old diskguard tick reopened BOTH within seconds, the new orchestrator on the
-# old one's conversation. Now the step reads the live install first: one whose
-# diskguard still `ensure`s a seat leaves the seats alone (one line each); a new one
-# moves them.
-drill_role_seat_migrate_early() {
-  CAP=10; BREAK_SOCK="$WORK/sock-rs"; local t0 a st r rc c="$WORK/rsconf" rt live="$WORK/rslive"
-  rt=$(PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v tmux-shim | paste -sd: -) command -v tmux)
-  mkdir -p "$WORK/rsbin" "$live/bin"; printf '#!/bin/sh\nexec "%s" -S "%s" "$@"\n' "$rt" "$BREAK_SOCK" > "$WORK/rsbin/tmux"; chmod +x "$WORK/rsbin/tmux"
-  printf '#!/bin/sh\necho "$@" >> %s/rs.stop\n' "$WORK" > "$WORK/rsbin/stop"; chmod +x "$WORK/rsbin/stop"
-  nt -f /dev/null new-session -d -s rs -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  a=$(nt new-window -d -P -F '#{window_id}' -t rs: -n Orchestrator 'exec sleep 600')
-  nt set-option -wq -t "$a" @fleet_role orchestrator; nt set-option -wq -t "$a" @fleet_id 55555555-5555-4555-8555-555555555555
-  st=$(nt new-window -d -P -F '#{window_id}' -t rs: -n steward 'exec sleep 600')
-  nt set-option -wq -t "$st" @fleet_role steward; nt set-option -wq -t "$st" @fleet_id 66666666-6666-4666-8666-666666666666
-  # the break: the live install is the old one — its tick still reopens a seat
-  printf 'w="$(bash "$BIN/fleet-orchestrator.sh" ensure "$s" 2>/dev/null)"\n' > "$live/bin/fleet-diskguard.sh"
-  rmig() { env PATH="$WORK/rsbin:$PATH" FLEET_CONF_DIR="$c" FLEET_SKIP_GLOBAL_CONF=1 FLEET_INSTALL_ROOT="$live" \
-             FLEET_ROLE_WINDOWS_STOP="$WORK/rsbin/stop" bash "$BIN/fleet-role-windows.sh" --socket rs 2>&1; }
-  t0=$(now)
-  r=$(rmig); rc=$?
-  SECS=$(since "$t0")
-  [ "$rc" = 0 ] || { WHY="the step failed under an old live install (exit $rc): $r"; return 1; }
-  [ "$(o "$a" @fleet_role)" = orchestrator ] && [ "$(o "$st" @fleet_role)" = steward ] && [ ! -s "$WORK/rs.stop" ] \
-    || { WHY="the seats were moved while the live install still reopens them: $r"; return 1; }
-  [ "$(printf '%s\n' "$r" | grep -c 'still reopens')" = 2 ] || { WHY="the skipped seats are not named: $r"; return 1; }
-  : > "$live/bin/fleet-diskguard.sh"                      # the switch: no revive any more
-  r=$(rmig)
-  [ "$(o "$a" @fleet_role)" = worker ] && [ "$(o "$a" @fleet_role_def)" = orchestrator ] && grep -q 'fid:66666666' "$WORK/rs.stop" \
-    || { WHY="after the switch the seats did not move: $r"; return 1; }
-  WHAT="旧安装还会重开座位时 roles-windows 不碰两个座位、各说一行；换到新版后同一步把编排变成普通行（持有角色）、收掉管家"
-}
-
 # A batch nobody drives with green member PRs (issue #3369): its driver is gone and
 # nobody holds the steward role, so nothing looked at its PRs — the sidebar said
 # 没人在跑, never that work waits to land. bin/fleet-batch-green.sh (diskguard tick)
@@ -6488,7 +6380,7 @@ drill_repo_authority_case() {
 }
 
 drill_rm_empty_var_prompt() {
-  CAP=15; local t0 g j out rc
+  CAP=15; local t0 g out rc
   t0=$(now); g="$BIN/../hooks/bash-guard.py"
   j() { python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
   out=$(j 'rm -f $P/*' | python3 "$g" 2>&1 >/dev/null); rc=$?
