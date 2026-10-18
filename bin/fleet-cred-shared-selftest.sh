@@ -151,7 +151,7 @@ BEFORE=$(snap); KEY0=$(cksum < "$CA/cred-proxy/key")
 cp -a "$SB/homes" "$SB/homes.0"   # sbreset's: the logins as a node left them
 sbreset() { # the sandbox back to before any install — by hand: nothing in the product goes back (#4675)
   kill "$(cat "$SB/shared.pid" 2>/dev/null)" "$(cat "$SB/run/.shared/pid" 2>/dev/null)" 2>/dev/null; sleep 0.3
-  rm -rf "$SB/db" "$SB/run" "$SB/lib" "$SB/homes" && rm -f "$SB/daemons"/* && cp -a "$SB/homes.0" "$SB/homes"
+  rm -rf "${SB:?}/db" "${SB:?}/run" "${SB:?}/lib" "${SB:?}/homes" && rm -f "${SB:?}/daemons"/* && cp -a "$SB/homes.0" "$SB/homes"
 }
 call() { # <port> <token> → the far end's view of the credential
   curl -s -m 10 -H "Authorization: Bearer $2" -H 'content-type: application/json' -d '{}' \
