@@ -309,7 +309,9 @@ def command(a):
         elif a.command == 'defer':
             if 'jobs' in r['schedule']:
                 raise ValueError('cron jobs retain their own cadence; use stop --job ID for an individual termination')
-            if r.get('agent') == 'claude' and r['status'] == 'delivering':
+            # Only the legacy inbox road is acknowledged from the transcript; a
+            # fenced delivery (pending_delivery) settles on the runtime's receipt.
+            if r.get('agent') == 'claude' and r['status'] == 'delivering' and not r.get('pending_delivery'):
                 acknowledge_claude(r)
             if r['status'] != 'active':
                 raise ValueError('loop is not active; bind it first')
@@ -542,13 +544,14 @@ def _runtime():
 
 
 def deliver_fenced(path, r, now):
-    """A C3 pane: a fresh v1 read, then the shared conditional accept (#4524, #4617).
+    """A C3 pane: a fresh v1 read, then the shared conditional accept (#4524).
 
-    Only `accepted` (the native turn carrying this delivery id) is a delivery.
-    unknown keeps the pending delivery and settles it with the same id and text on
-    a later tick; rejected keeps the wakeup due. No capability ⇒ nothing is sent
-    and the ledger says so (Claude: the mod's entry-boundary accept, #4618).
-    Never turn/start or peer send.
+    Codex and Claude alike (#4617 thread/queue; #4618 / #4658 the fleet mod's
+    entry boundary — never the legacy inbox + transcript road). Only `accepted`
+    (the native turn carrying this delivery id) is a delivery. unknown keeps the
+    pending delivery and settles it with the same id and text on a later tick;
+    rejected keeps the wakeup due. A provider the adapter has no accept for ⇒
+    nothing is sent and the ledger says so. Never turn/start or peer send.
     """
     rt = _runtime()
     sock = r['fleet']['session']

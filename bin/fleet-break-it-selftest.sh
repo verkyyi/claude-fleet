@@ -6561,13 +6561,15 @@ drill_runtime_idle_accept_codex() {
 }
 
 drill_loop_due_display_gate() {
-  CAP=60; local t0 out
+  CAP=120; local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet-loop-selftest.py" IdleDispatchTests 2>&1) || { WHY="$out"; return 1; }
   # The real app-server where codex >= 0.162 is installed (SKIP elsewhere).
   out=$(bash "$BIN/fleet-loop-idle-native-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  # The real Claude engine + fleet mod where claude >= 2.1.295 is installed (#4658; SKIP elsewhere).
+  out=$(bash "$BIN/fleet-loop-idle-claude-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 accepted 才记，rejected 仍到期，unknown 同 id 结清，缺能力不投'
+  WHAT='Stop→looping 只有自己的 loop 时到期照投且仅一次；真 bg/tool/提问/草稿/近期输入/转交带原因延后；C3 窗格 Codex 与 Claude 同走条件接受：accepted 才记，rejected 仍到期，unknown 同 id 按回执结清，绝不走旧 inbox，缺能力的 provider 不投'
 }
 
 drill_pending_observation_stale() {
