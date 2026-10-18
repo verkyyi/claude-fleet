@@ -879,11 +879,14 @@ class Templates(unittest.TestCase):
             policy.dns(struct.pack('!6H', 1, 0x100, 1, 0, 0, 0) + name + b'\x00\x01\x00\x01', source)
             with self.assertRaises(live.Refused) as caught:
                 policy.dns(struct.pack('!6H', 2, 0x100, 1, 0, 0, 0) + name + b'\x00\x41\x00\x01', source)
-        self.assertEqual(records[0][1:], ('unknown', 'row:A8', 'DNS_NAME'))
+        self.assertEqual(records[0][1:], ('unknown', 'row:A8', 'DNS_NAME_3_COM'))
+        self.assertEqual(gateway.name_shape(['c9-node-a']), 'DNS_NAME_1_OTHER')
+        self.assertEqual(gateway.name_shape(['a', 'b', 'svc', 'cluster', 'local']), 'DNS_NAME_5_LOCAL')
+        self.assertEqual(gateway.name_shape(['x', 'secretzone']), 'DNS_NAME_2_OTHER')
         self.assertEqual(gateway.dns_reason(caught.exception, 'UDP'), 'DNS_TYPE')
         self.assertEqual(gateway.dns_reason(TimeoutError(), 'TCP'), 'DNS_TCP_TIMEOUTERROR')
         import nogh_live_runtime as runtime
-        for reason in ('DNS_NAME', 'DNS_TYPE', 'DNS_TCP_TIMEOUTERROR'):
+        for reason in ('DNS_NAME_3_COM', 'DNS_TYPE', 'DNS_TCP_TIMEOUTERROR'):
             self.assertTrue(runtime.DETAIL.fullmatch(reason))
         self.assertNotIn('secret', ''.join(map(str, records)))
 
