@@ -924,6 +924,19 @@ home_watch() {
   return 0
 }
 
+# resident_watch — the hand that watches the spinner (issue #1849): a KeepAlive
+# unit taken out of the domain by `launchctl bootout` is never restarted, and the
+# spinner is what puts every OTHER unit back (this one included). So each tick
+# asks fleet-daemon-watch.sh --resident to bootstrap an unloaded spinner / webhook
+# whose plist is still on disk — a managed login and a pure client have none, and
+# a loaded unit costs one `launchctl print`. Detached: it may wait out its grace.
+resident_watch() {
+  [ "${FLEET_RESIDENT_WATCH:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-daemon-watch.sh" ] || return 0
+  ( bash "$BIN/fleet-daemon-watch.sh" --resident >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+
 # restore_watch — the --watch tick's share of «the fleet never stays down» (issue
 # #1784): fleet-restore.sh --auto rebuilds a fleet whose session vanished (a crash,
 # a kill-server, the last window closing) when the machine admits new sessions,
@@ -1197,6 +1210,7 @@ EOF2
     transcript_watch                              # daily transcript archive (#1299), budgeted
     home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
+    resident_watch                                # spinner / webhook booted out: bootstrap it back (#1849)
     brew_watch                                    # a keg other logins cannot read: repair it (#2283)
     pool_watch                                    # warm-pool slots topped back up (#2233)
     macos_watch                                   # red macOS on master: file + alert, no spawn (#3120)

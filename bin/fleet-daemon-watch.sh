@@ -92,6 +92,11 @@
 #                                              #   with --now, regardless of cooldown
 #                                              #   and of the unit being RUNNING)
 #   fleet-daemon-watch.sh --dry-run            # say what it would do, touch nothing
+#   fleet-daemon-watch.sh --resident [--dry-run]
+#                                              # the KeepAlive hands (spinner, webhook):
+#                                              #   unloaded with its plist on disk ⇒
+#                                              #   bootstrapped back (issue #1849; the
+#                                              #   diskguard tick runs it)
 #
 # Env: FLEET_DAEMON_STALE_MULT (5)  FLEET_DAEMON_STALE_FLOOR (180)
 #      FLEET_DAEMON_STALE_<UNIT> / FLEET_COLLECT_STALE  — absolute per-unit override
@@ -108,6 +113,9 @@
 #      FLEET_DAEMON_RELOAD_AFTER (3 — 0 disables the reload escalation)
 #      FLEET_DAEMON_RELOAD_COOLDOWN (1800)
 #      FLEET_LAUNCHD_AGENTS_DIR (~/Library/LaunchAgents — where the plists live)
+#      FLEET_DAEMON_RESIDENT_GRACE (2 — seconds a resident unit must STAY unloaded
+#        before --resident acts: install-apply's own bootout→bootstrap is sub-second)
+#      FLEET_DAEMON_RESIDENT_COOLDOWN (120 — one bootstrap per resident unit per this)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -121,7 +129,7 @@ STATE="$(fleet_daemon_state_dir "$ROOT")"
 LOGD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"          # same logs/ the daemons write to (the templates' __HOME__/.config/claude-fleet/logs)
 LOG="$LOGD/daemon-kick.log"
 
-FORCE=0; NOW_=0; DRY=0; STATUS=0; UNITS=''
+FORCE=0; NOW_=0; DRY=0; STATUS=0; RESIDENT=0; UNITS=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --unit)    [ -n "${2:-}" ] || { printf 'fleet-daemon-watch: --unit needs a unit name\n' >&2; exit 2; }
@@ -131,6 +139,7 @@ while [ "$#" -gt 0 ]; do
     --now)     NOW_=1 ;;          # with --force: ignore the cooldown AND the running guard
     --dry-run) DRY=1 ;;
     --status)  STATUS=1 ;;
+    --resident) RESIDENT=1 ;;
     -h|--help) sed -n '2,80p' "$0"; exit 0 ;;
     *) printf 'fleet-daemon-watch: unknown argument %s\n' "$1" >&2; exit 2 ;;
   esac
@@ -186,6 +195,52 @@ kick_enabled() {
   [ "$1" = collect ] && [ "${FLEET_COLLECT_KICK:-1}" = 0 ] && return 1
   return 0
 }
+
+# --- --resident: the hands nobody else watches (issue #1849) -----------------
+# The spinner is KeepAlive, so it is never pended — but a `launchctl bootout`
+# (a person's, a half-finished uninstall, a reload whose bootstrap failed) takes
+# it out of the domain, and launchd restarts only what it still knows. The
+# ladder below cannot see that: the spinner is the hand that runs it. So the
+# diskguard tick asks here, and the two guard each other — the spinner's pass
+# bootstraps an unloaded diskguard (the `bootstr` rung), diskguard's pass an
+# unloaded spinner. Only the gui shape with its plist ON DISK is acted on: no
+# plist means not installed (a pure client, a removed unit — the install's
+# choice, not a fault); a system-shape login needs root; a managed login's units
+# are the machine daemon's KeepAlive children (fleet_node_manages) and its
+# plists were moved to the attic. A unit must STAY unloaded for
+# FLEET_DAEMON_RESIDENT_GRACE, so install-apply's own bootout→bootstrap is
+# never raced, and is bootstrapped at most once per FLEET_DAEMON_RESIDENT_COOLDOWN.
+if [ "$RESIDENT" = 1 ]; then
+  if [ "${FLEET_DAEMON_KICK:-1}" = 0 ] || ! command -v launchctl >/dev/null 2>&1 \
+     || fleet_node_manages || [ "$(fleet_daemon_shape)" != gui ]; then
+    exit 0
+  fi
+  for u in $(fleet_daemon_resident_units); do
+    plist="$(fleet_daemon_plist "$u" gui)"
+    [ -f "$plist" ] || continue
+    probe "$u" >/dev/null 2>&1 && continue
+    sleep "${FLEET_DAEMON_RESIDENT_GRACE:-2}"
+    probe "$u" >/dev/null 2>&1 && continue
+    if [ "$DRY" = 1 ]; then
+      printf 'fleet-daemon-watch: would BOOTSTRAP %s (KeepAlive, not loaded) from %s\n' "$u" "$plist" >&2; continue
+    fi
+    rts="$STATE/$u.resident.ts"
+    last=$(cat "$rts" 2>/dev/null || echo 0); case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    [ $(( $(now) - last )) -ge "${FLEET_DAEMON_RESIDENT_COOLDOWN:-120}" ] || continue
+    mkdir -p "$STATE" 2>/dev/null; now > "$rts" 2>/dev/null
+    rc=0
+    launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || rc=$?
+    launchctl kickstart "gui/$(id -u)/com.claude-fleet.$u" >/dev/null 2>&1 || :
+    if probe "$u" >/dev/null 2>&1; then
+      log "resident-bootstrap unit=$u rc=$rc — the KeepAlive unit was NOT loaded; bootstrapped from $plist"
+      printf 'fleet-daemon-watch: %s was not loaded — bootstrapped from %s (rc=%s)\n' "$u" "$plist" "$rc" >&2
+    else
+      log "resident-bootstrap-FAILED unit=$u rc=$rc — still not loaded after bootstrap gui/$(id -u) $plist; fix by hand"
+      printf 'fleet-daemon-watch: %s is not loaded and bootstrap failed (rc=%s); see %s\n' "$u" "$rc" "$LOG" >&2
+    fi
+  done
+  exit 0
+fi
 
 # --- --status: report, touch nothing ------------------------------------------
 # ONE unit prints the legacy bin/fleet-collect-kick.sh contract verbatim —
