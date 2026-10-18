@@ -1,17 +1,8 @@
 name: browser-attachment
+# No master `push` run (issue #4663): its PR ran this on the change already, and a
+# post-merge re-run only re-checked it beside the release train.
 on:
   pull_request:
-    paths:
-      - 'tokenledger/**'
-      - 'bin/fleet-webterm.py'
-      - 'bin/fleet-term-attach.sh'
-      - 'bin/fleet_view.py'
-      - 'extras/browser-transport/**'
-      - 'extras/web-console/**'
-      - 'extras/web-chat/ui/**'
-      - '.github/workflows/browser-attachment.yml'
-  push:
-    branches: [master]
     paths:
       - 'tokenledger/**'
       - 'bin/fleet-webterm.py'

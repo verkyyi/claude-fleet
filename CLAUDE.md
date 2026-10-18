@@ -737,8 +737,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `select: <test> ← <reason>`. A change to the harness (`run-selftests.sh`,
   `selftest-shadow-root.sh`, `.github/workflows/selftests*.yml`) or an
   unresolvable base falls back to the full suite. `selftests.yml` runs it on
-  `pull_request` and on `push` to **master only** (the branch push duplicated
-  the PR run). **The BSD half is not on the PR** (issue #2286): since #3141 it
+  `pull_request` only — no `push` run at all (issue #4663: the branch push
+  duplicated the PR run, master's re-ran a subset of the train's; the same for
+  every PR check — shellcheck, tokenledger, fleet-hub-mcp, client-e2e,
+  task-acceptance, browser-attachment, web-*), and shellcheck lints only the
+  `*.sh` a PR touches (`bin/ci-shellcheck.sh --changed`, the whole tree nightly). **The BSD half is not on the PR** (issue #2286): since #3141 it
   rides the release train (`release-train.yml`: ONE concurrency lane, a push never
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`

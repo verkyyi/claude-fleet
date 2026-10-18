@@ -4,14 +4,9 @@ name: web-chat-ui
 # output, ui/dist, is committed: server.mjs serves it as is, so a machine never
 # builds and the page never reaches a CDN. This job rebuilds it from the lockfile
 # and fails when the committed dist is not exactly what the sources make.
+# No master `push` run (issue #4663): its PR ran this on the change already, and a
+# post-merge re-run only re-checked it beside the release train.
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'extras/web-chat/ui/**'
-      - 'extras/fleet-theme/**'
-      - 'extras/browser-transport/**'
-      - '.github/workflows/web-chat-ui.yml'
   pull_request:
     paths:
       - 'extras/web-chat/ui/**'
