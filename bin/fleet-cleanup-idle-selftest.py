@@ -1045,6 +1045,20 @@ class PolicyGrammar(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
 
+    def test_idle_owned_holds_off_the_reopen(self):
+        """A finished session the idle reaper will close is not the idle reopen's
+        (issue #4764): done / loop-end / an `at:` reached — never merged / keep."""
+        import fleet_reap_policy as rp
+        now = 1791320000
+        self.assertEqual([rp.idle_owned(p, now) for p in
+                          ("done", "done:10m", "loop-end", "at:%d" % (now - 60), "at:%d" % (now + 60),
+                           "merged", "merged:48h", "keep", "", "junk")],
+                         [True, True, True, True, False, False, False, False, False, False])
+        for pol, rc in (("done:10m", 0), ("merged", 1)):
+            r = subprocess.run(["python3", str(BIN / "fleet_reap_policy.py"), "idle-owned", pol],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, rc, pol)
+
     def test_restore_map_carries_policy_by_identity(self):
         fid = "12345678-1234-4123-8123-123456789abc"
         line = "keep|" + fid + "||acme/app|w|/nonexistent|7|done|-|-||-|claude|\n"

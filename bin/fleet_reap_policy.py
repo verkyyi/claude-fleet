@@ -22,6 +22,8 @@ CLI (the shell side's one parser — never a second copy):
     fleet_reap_policy.py default <issue|scratch|loop>
     fleet_reap_policy.py label <policy> [--lang zh|en] [--now N]
     fleet_reap_policy.py merged-grace <policy>   seconds, or `keep` / `other` / ``
+    fleet_reap_policy.py idle-owned <policy> [--now N]   exit 0 when a finished
+                                           session is the idle reaper's to close
 """
 import re
 import sys
@@ -161,6 +163,22 @@ def merged_grace(policy):
     return "keep" if kind == "keep" else "other"
 
 
+def idle_owned(policy, now=None):
+    """Is a FINISHED session with this policy waiting on the idle reaper (issue
+    #4764)? done / loop-end, or an `at:` already reached. The idle reopen
+    (fleet_cfg_restart_why) leaves such a window alone: a reopen restarts its
+    idle clock, so `done:<dur>` would never come due."""
+    got = parse(policy)
+    if got is None:
+        return False
+    kind, val = got
+    if kind in ("done", "loop-end"):
+        return True
+    if kind == "at":
+        return val <= (int(time.time()) if now is None else now)
+    return False
+
+
 def main(argv):
     if len(argv) < 2:
         sys.stderr.write(__doc__)
@@ -190,6 +208,9 @@ def main(argv):
         if out:
             print(out)
         return 0 if out else 1
+    if cmd == "idle-owned":
+        now = int(args[args.index("--now") + 1]) if "--now" in args else None
+        return 0 if idle_owned(args[0] if args else "", now) else 1
     if cmd == "merged-grace":
         print(merged_grace(args[0] if args else ""))
         return 0
