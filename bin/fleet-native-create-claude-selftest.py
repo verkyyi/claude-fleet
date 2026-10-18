@@ -501,6 +501,12 @@ def main():
                         else:
                             (root / 'saved-launch.json').write_text(json.dumps([context, receipt]))
                         tmux('kill-server')
+                        # the next new-session on this socket must not reach the server
+                        # still on its way out («server exited unexpectedly»)
+                        for _ in range(100):
+                            if not socket.exists():
+                                break
+                            time.sleep(0.05)
                         check(worktree.is_dir(), 'native directory survives loss of the isolated tmux server')
                         if arguments.restore_entrypoint:
                             tmux('new-session', '-d', '-s', 'fixture', '-n', 'dash', '-x', '120', '-y', '32',
