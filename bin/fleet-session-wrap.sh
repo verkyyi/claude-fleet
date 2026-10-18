@@ -236,6 +236,21 @@ close_secs() {
 PCONF="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
 cmd=("$@")
 first=1; last=''; last_sid=''; last_agent=''
+# The conversation this wrapper was opened to resume (issue #4728) is the last id
+# it saw, before any launch stamps one: a resume that dies before its first hook
+# (fleet-codex.sh clears the window's ids at launch) comes back on ↵ as itself.
+_pv=''; _ag=claude
+for a in "$@"; do
+  case "$_pv" in
+    --agent) _ag=$a ;;
+    resume|--resume)
+      if printf '%s' "$a" | grep -qiE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+        last_sid=$a; last_agent=$_ag
+      fi ;;
+  esac
+  _pv=$a
+done
+unset _pv _ag
 cred_tries=0   # refused launches in a row for want of a session credential (#4112)
 while :; do
   if [ "$intmux" = 1 ]; then
@@ -339,6 +354,11 @@ while :; do
   # launch): keep the last one this window had.
   if [ -n "$sid" ]; then last_sid=$sid; last_agent=$agent
   elif [ "$agent" = "$last_agent" ]; then sid=$last_sid; fi
+  # A resume that never reached its first hook (a review page, a fast death) still
+  # names the thread it was opened for (@codex_pending, issue #4728): ↵ resumes
+  # THAT, never a new conversation in its place.
+  [ "$agent" = codex ] && [ -z "$sid" ] \
+    && sid=$(opt @codex_pending | sed -n 's/.*"session_id":"\([0-9A-Fa-f-]*\)".*/\1/p')
   # Codex with no id: the window's own thread, never the home's latest (#1842 ④).
   [ "$agent" = codex ] && [ -z "$sid" ] && sid=$(opt @codex_thread_id)
   # Commits on no remote, so the page can say they are still here (#1842 ①).
