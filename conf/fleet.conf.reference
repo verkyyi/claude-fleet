@@ -373,9 +373,8 @@ FLEET_CTX_WINDOW=200000
 #FLEET_SUBAGENT_MODEL="opus"
 
 # There is no resident orchestrating or steward session (issue #3118): nothing
-# opens, reopens or keeps one. Type /fleet-orchestrate or /fleet-steward in any
-# session that binds no issue to take the role (the fleet-orchestrate /
-# fleet-steward plugins). FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
+# opens, reopens or keeps one. Type /fleet-orchestrate (the fleet-orchestrate
+# plugin) or spawn agent:steward to open one. FLEET_ORCHESTRATOR, FLEET_STEWARD and the FLEET_ORCH_* /
 # FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS knobs are gone with it.
 
 # Desk tickets (issue #2676): a session the orchestrator or you open with no repo
@@ -421,23 +420,6 @@ FLEET_CTX_WINDOW=200000
 # to 已结束 · 还开着 (issue #4225) — the sidebar, `fleet ls` and ⌘P alike.
 # @label=Just-landed window @group=status @tier=internal @scope=global @edit=int @unit=seconds
 #FLEET_VIEW_LANDED_SECS=86400
-
-# The steward plugin's beat (seconds), in the loop of the session that took the
-# role: every FLEET_STEWARD_EVERY, FLEET_STEWARD_AGAIN after a beat
-# that changed something, FLEET_STEWARD_NIGHT_EVERY from 23:00 to 08:00.
-# @label=Steward beat @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
-#FLEET_STEWARD_EVERY=1200
-# @label=Steward beat after a change @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
-#FLEET_STEWARD_AGAIN=600
-# @label=Steward beat at night @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
-#FLEET_STEWARD_NIGHT_EVERY=3600
-# At most this many GitHub writes a beat (共同约定 7); past it they wait a beat.
-# @label=Steward writes per beat @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_STEWARD_WRITES=20
-# C8's desk ticket (`gh:owner/repo#N`) the decision sheet is also posted on; empty =
-# the sheet file + the orchestrator's [decision] only.
-# @label=Steward desk ticket @group=spawn @tier=internal @scope=fleet @edit=str
-#FLEET_STEWARD_DESK=""
 
 # When an account hits a PER-MODEL cap ("You've hit your Fable 5 limit · resets
 # Sep 6 …" / "You've reached your Fable limit …") while its subscription still

@@ -705,16 +705,17 @@ restore() {
         continue
       fi
       # A PARKED session (issue #2671) gave its place back on purpose and waits for
-      # something; bin/fleet_park.py reopens it, on the same conversation, when it
-      # arrives — a restore (after a reboot, a lost server) never does.
+      # something; its wake reopens it, on the same conversation, when it arrives —
+      # a restore (after a reboot, a lost server) never does. (The steward's parker
+      # left with #4339; the book is still honoured for a session parked before.)
       if [ -n "${wrepo:-}" ] && [ "$wrepo" != - ] && fleet_parked "$wrepo" "$wissue"; then
-        say "    · $wname: parked (fleet-park.sh list) — not reopened"
+        say "    · $wname: parked — not reopened"
         log "skip $sess/$wname parked $wrepo#$wissue"
         continue
       fi
       # …and one with no issue, booked under its task record (issue #3387): by identity.
       case "$wtag" in WIN:?*) if fleet_parked_fid "${wtag#WIN:}"; then
-        say "    · $wname: parked (fleet-park.sh list) — not reopened"
+        say "    · $wname: parked — not reopened"
         log "skip $sess/$wname parked fid ${wtag#WIN:}"
         continue
       fi ;; esac

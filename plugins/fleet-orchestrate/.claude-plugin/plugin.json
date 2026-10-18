@@ -1,6 +1,6 @@
 {
   "name": "fleet-orchestrate",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "claude-fleet orchestration: /fleet-orchestrate opens an orchestrator session (the orchestrator agent file, bound to no issue) — it talks a request through, then hands it to worker sessions; its instructions are its system prompt, so they ride a compaction. Dispatching from anywhere is ⌘P's ⚡ row (issue #3328); an old /qd forwards to it for one version. Not installed by default (EPIC #3111).",
   "author": {
     "name": "verkyyi",

@@ -98,8 +98,8 @@ if [ "${1:-}" = --bundle ]; then
 fi
 
 # `fleet doctor --json` (issue #2674): the same run, its rows as one JSON object —
-# {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for the
-# steward's health watch (bin/fleet_steward_health.py). It runs the doctor once,
+# {"v":1,"rc":N,"fails":N,"warns":N,"rows":[{"level","row","msg"}…]} — for a
+# reader that wants the rows (fleet-doctor-bundle.sh keeps a copy). It runs the doctor once,
 # off a tty (no color), and parses the `  LEVEL  label  msg` lines; a line indented
 # past the label column continues the row above. Exit = the doctor's.
 if [ "${1:-}" = --json ]; then
@@ -511,7 +511,7 @@ fi
 # One INFO row per item of conf/public-gate.tsv, PASS / FAIL in its words, then the
 # count. INFO on purpose: the gate is red until EPIC #3500 lands, and a red gate is
 # a release decision, not this machine's fault — it never counts toward the doctor's
-# FAILs (nor the steward's health watch, which reads WARN/FAIL rows).
+# FAILs.
 if [ -f "$(dirname "$0")/fleet-gate-check.sh" ] && [ -f "$(dirname "$0")/../conf/public-gate.tsv" ]; then
   FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-gate-check.sh" 2>&1 | while IFS= read -r _gl; do
     case "$_gl" in
@@ -3590,7 +3590,7 @@ if [ "$_hub_on" = 1 ] && [ -x "$(dirname "$0")/fleet-hub-sessions.sh" ]; then
     unset _hsfail _hsage _hsfix
   fi
   # personcert (issue #3106): a node's own hub calls — the sessions read and
-  # every write (the steward's and the idle reaper's reaps, a remote answer) —
+  # every write (the idle reaper's reaps, a remote answer) —
   # go by this login's node token; one that would still borrow a person's
   # 12-hour `fleet login` certificate stops dead the night it lapses.
   _pcw=$(bash "$(dirname "$0")/fleet-hub-write.sh" --identity 2>/dev/null </dev/null)

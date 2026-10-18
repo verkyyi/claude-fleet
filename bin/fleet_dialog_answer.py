@@ -4,7 +4,7 @@ choice dialog (AskUserQuestion) on the person's behalf (issue #2958). Run as
 bin/fleet-dialog-answer.sh; the `answer_dialog` fleet tool runs it.
 
     fleet-dialog-answer.sh <@window|%pane> --fp FP --pick [Q=]LABEL …
-                           [--by person|steward|default] [--basis TEXT]
+                           [--by person|session|default] [--basis TEXT]
                            [--issue owner/name#N] [--session S] [-L SOCK] [--dry-run]
 
 A peer message waits behind an open dialog (it is mid-turn), and a raw
@@ -18,8 +18,8 @@ and checks after — never a second press.
   1. only a window that waits on its person (@claude_state needs, @claude_needs
      ask) and only an AskUserQuestion — fixed options; a free-text box, the
      dialog's own 「Other / Type something」, is never answered (no such label);
-  2. read: the transcript's open dialog (fleet_needs_detail.pending_dialog — the
-     same read the steward's decision row came from) must carry the caller's
+  2. read: the transcript's open dialog (fleet_needs_detail.pending_dialog) must
+     carry the caller's
      fingerprint `--fp` (dialog_fp: its tool_use_id + every question and label,
      verbatim) and every `--pick` must be one of its labels, verbatim, one pick a
      question (several only for a multiSelect) — else refused: it changed or it
@@ -29,7 +29,8 @@ and checks after — never a second press.
      try again later;
   4. press once (fleet-answer.sh --answer … --transcript <the same file>), which
      confirms by the tool_result landing; unconfirmed is a failure, not a retry;
-  5. the trail: one line in the steward's decision-<day>.md and one record-only
+  5. the trail: one line in the answer log (代答记录,
+     $FLEET_CONF_DIR/fleets/<session>/answers/answers-<day>.md) and one record-only
      comment on the batch's issue (--issue, else the window's @epic, else its
      @repo#@issue) — who answered, on what basis, what was chosen.
 
@@ -40,7 +41,11 @@ Exit: 0 answered and confirmed · 1 no such window / transcript · 2 usage ·
 
 Seams (selftest): FLEET_DIALOG_PROJECTS (the transcripts' root, default
 ~/.claude/projects), FLEET_DIALOG_ANSWER_CMD (argv run instead of fleet-answer.sh),
-fleet_decision.py's FLEET_DECISION_POST_CMD for the issue comment.
+FLEET_DIALOG_POST_CMD (argv `<repo> <N> note`, the body on stdin, instead of
+fleet-comment.sh for the issue comment).
+
+`--by session` is a session answering on the charter's word; `--by steward` is its
+old name, read as session for one version.
 """
 import argparse
 import datetime as dt
@@ -175,8 +180,20 @@ def issue_ref(a, w):
     return None
 
 
+def post(repo, number, body):
+    """One record-only comment on repo#number (fleet-comment.sh — fleet_gh_write)."""
+    seam = os.environ.get("FLEET_DIALOG_POST_CMD")
+    argv = (seam.split() + [repo, str(number), "note"]) if seam else \
+        ["bash", str(BIN / "fleet-comment.sh"), str(number), "--repo", repo, "--note", "--body-file", "-"]
+    r = subprocess.run(argv, input=body, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       universal_newlines=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError("cannot comment on %s#%s: %s" % (repo, number, r.stderr.strip()))
+    return r.stdout.strip()
+
+
 def trail(a, w, d, want, verdict):
-    who = {"person": "人在决定单上答", "steward": "管家按章程代答", "default": "到点按默认"}.get(a.by, a.by)
+    who = {"person": "人来答", "session": "会话按章程代答", "default": "到点按默认"}.get(a.by, a.by)
     chosen = " / ".join("、".join(ls) for ls in want)
     q = " / ".join(x["question"] for x in d["questions"])
     line = "- %s 代答选择框 · %s（%s）· 窗口 %s · 问「%s」→ 选「%s」%s · %s" % (
@@ -184,20 +201,19 @@ def trail(a, w, d, want, verdict):
         "" if verdict == "answered" else "（按了未确认）", "fp=" + a.fp)
     sess = a.session or w["session"]
     if sess:
-        p = conf_dir() / "fleets" / sess / "steward"
+        p = conf_dir() / "fleets" / sess / "answers"
         try:
             p.mkdir(parents=True, exist_ok=True)
-            with open(str(p / ("decision-%s.md" % dt.date.today().isoformat())), "a", encoding="utf-8") as fh:
+            with open(str(p / ("answers-%s.md" % dt.date.today().isoformat())), "a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
         except OSError:
             pass
     ref = issue_ref(a, w)
     if ref:
-        import fleet_decision as fd
         body = "\n".join([line.lstrip("- "), "",
                           "<!-- fleet:dialog-answer by=%s fp=%s verdict=%s -->" % (a.by, a.fp, verdict)])
         try:
-            fd.post(ref[0], ref[1], body, "note")
+            post(ref[0], ref[1], body)
         except Exception as e:  # the answer stands even if its record could not be posted
             sys.stderr.write("fleet-dialog-answer: trail comment on %s#%s failed: %s\n" % (ref[0], ref[1], e))
     return line
@@ -253,7 +269,7 @@ def main(argv=None):
     p.add_argument("target")
     p.add_argument("--fp", required=True)
     p.add_argument("--pick", action="append", required=True)
-    p.add_argument("--by", default="person", choices=("person", "steward", "default"))
+    p.add_argument("--by", default="person", choices=("person", "session", "default", "steward"))
     p.add_argument("--basis", default="")
     p.add_argument("--issue", default="")
     p.add_argument("--session", default="")
@@ -261,6 +277,8 @@ def main(argv=None):
     p.add_argument("-L", default="")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
+    if a.by == "steward":  # compat-1v: 下一批删 — the old name of session (issue #4339)
+        a.by = "session"
     if not re.match(r"^[@%][0-9]+$", a.target):
         sys.stderr.write("fleet-dialog-answer: %r is not a window address (@<id> / %%<pane>)\n" % a.target)
         return 2

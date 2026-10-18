@@ -1,34 +1,30 @@
 #!/bin/bash
-# fleet-rules-selftest.sh — dispatch and the steward's three tiers follow ONE
-# editable rule table (issue #2786, EPIC #2781 C5). bin/fleet_rules.py reads
-# conf/role-rules.default.md < the person's layer (person-bundle.json `rules`) <
-# this computer's ($FLEET_CONF_DIR/roles/rules.md); bin/fleet-role.py prompt appends the
-# role's rows to the orchestrator's / steward's body (the plugins' role.md); bin/fleet_decision.py
-# classifies off the table's `ask` rows.
+# fleet-rules-selftest.sh — dispatch follows ONE editable rule table (issue #2786,
+# EPIC #2781 C5). bin/fleet_rules.py reads the built-in rows < the person's layer
+# (person-bundle.json `rules`) < this computer's ($FLEET_CONF_DIR/roles/rules.md);
+# bin/fleet-role.py prompt appends the role's rows to the orchestrator's body (the
+# plugin's role.md). The steward's rows (13–19 · 21) left with its tick program
+# (issue #4339).
 #
-#   A  the default table: numbers unique, the keywords ≡ fleet_decision.NEVER_WORDS
-#      class by class, and classify gives the same verdict as the code's list on
-#      every string fleet-decision-selftest.sh uses (逐条对拍)
-#   B  the person's layer adds 「金额 ⇒ ask」 (rule 101, never:money): a question
-#      with 报价 is never:money; without the layer it is normal; the row's source
+#   A  the default table: 13 rows, numbers unique, no steward row, no problem
+#   B  the person's layer adds 「金额 ⇒ ask」 (rule 101, never:money): its keywords
+#      count for never:money; without the layer there are none; the row's source
 #      reads 你的 vN; this computer's layer wins over it by number
-#   C  `档位 off` removes a rule (its keywords stop counting); the number stays
-#      unused
+#   C  `档位 off` removes a rule; the number stays unused
 #   D  a layer that cannot be read (a new rule under 100, a bad 档位) is not used
 #      at all and says why; the rest of the table stands
 #   E  versions: a different table is a different v=; every rendered version is
 #      kept, `rules --version <old>` still shows the old row; --mark N prints the
 #      ticket's line, an unknown N is refused
 #   F  render: the orchestrator's prompt ends with its rows only (≤ 40 lines),
-#      the steward's with its; a worker's launch carries no table
-#   G  a broken fleet table: classify falls back to the code's list, a role
-#      still renders (body alone)
-#   H  the words live in the table only: docs/dev/DECISIONS.md lists no keywords, the
-#      orchestrator's body no longer spells the shapes
-#   I  the built-in rows live in the skill dirs (issue #3114): the orchestrate
-#      plugin's rules.md holds only orchestrator rows, the steward's only steward
-#      rows, the loader reads those two, and conf/role-rules.default.md (kept one
-#      version for the hub's view) is exactly their union — same version
+#      the steward's is its body alone; a worker's launch carries no table
+#   G  a broken fleet table: a role still renders (body alone)
+#   H  the orchestrator's body spells its shapes itself (docs/dev/DECISIONS.md left
+#      with the steward's programs, issue #4339)
+#   I  the built-in rows live in the skill dir (issue #3114): the orchestrate
+#      plugin's rules.md holds only orchestrator rows, the loader reads it, and
+#      conf/role-rules.default.md (kept one version for the hub's view) is exactly
+#      it — same version
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -42,65 +38,47 @@ unset FLEET_RULES_DEFAULT FLEET_ROLE_AGENTS_DIR
 mkdir -p "$FLEET_CONF_DIR/roles" "$HOME"
 R() { python3 "$BIN/fleet-role.py" "$@"; }
 PY() { (cd "$BIN" && python3 -c "$1" "${@:2}"); }
-cls() { PY 'import sys, fleet_decision as d; print(d.classify(sys.argv[1] or None, sys.argv[2]))' "$1" "$2"; }
+nw() {  # nw <class> — that class's keywords in the merged table, comma-joined
+  PY 'import sys, fleet_rules as r; print(",".join(r.never_words(r.load())[sys.argv[1]]))' "$1" 2>/dev/null; }
 
 # --- A the default table ----------------------------------------------------------
 got=$(PY '
-import fleet_rules as r, fleet_decision as d
+import fleet_rules as r
 t = r.load()
 ns = [x["n"] for x in t["rows"]]
-print(len(ns), len(set(ns)) == len(ns), r.never_words(t) == {k: tuple(v) for k, v in d.NEVER_WORDS.items()},
-      t["problems"])')
-[ "$got" = "21 True True []" ] && ok "A: 21 rules, unique numbers, keywords ≡ NEVER_WORDS class by class" \
+print(len(ns), len(set(ns)) == len(ns), any(x["role"] == "steward" for x in t["rows"]), t["problems"])')
+[ "$got" = "13 True False []" ] && ok "A: 13 rules, unique numbers, no steward row (#4339)" \
   || bad "A: default table — $got"
-corpus=$(grep -oE "\"[^\"]{2,}\"|'[^']{2,}'" "$BIN/fleet-decision-selftest.sh" | sed 's/^.//; s/.$//')
-diff=$(printf '%s\n' "$corpus" | PY '
-import sys, fleet_decision as d
-lines = [l for l in sys.stdin.read().split("\n") if l]
-lines += [w.upper() for ws in d.NEVER_WORDS.values() for w in ws] + ["要不要付费", "一个普通问题"]
-bad, n = [], 0
-for decl in (None, "normal", "never:rule", "never:money", "never:publish"):
-    for s in lines:
-        d._WORDS = None; a = d.classify(decl, s)
-        d._WORDS = d.NEVER_WORDS; b = d.classify(decl, s)
-        n += 1
-        if a != b: bad.append((decl, s, a, b))
-print(n, len(bad), bad[:3])')
-case "$diff" in [1-9]*" 0 []") ok "A: classify(table) ≡ classify(code list) on ${diff%% *} cases from fleet-decision-selftest.sh (逐条对拍)" ;;
-  *) bad "A: classify differs — $diff" ;; esac
 
 # --- B the person's layer -----------------------------------------------------------
-Q='这份报价要不要接受'
-[ "$(cls '' "$Q")" = normal ] && ok "B: without a layer, 「${Q}」 is normal" || bad "B: baseline $(cls '' "$Q")"
+[ -z "$(nw money)" ] && ok "B: without a layer, nothing is never:money" || bad "B: baseline $(nw money)"
 python3 - "$FLEET_CONF_DIR/person-bundle.json" <<'EOF'
 import json, sys
 rules = "| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n" \
         "| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 报价, 金额 |\n"
 json.dump({"version": 3, "rules": rules}, open(sys.argv[1], "w"), ensure_ascii=False)
 EOF
-[ "$(cls '' "$Q")" = never:money ] && [ "$(cls normal "$Q")" = never:money ] \
-  && ok "B: the person adds 「金额 ⇒ ask」 ⇒ 「${Q}」 is never:money (a declared normal does not beat it)" \
-  || bad "B: with the layer: $(cls '' "$Q")"
+[ "$(nw money)" = 报价,金额 ] && ok "B: the person adds 「金额 ⇒ ask」 ⇒ 报价, 金额 count for never:money" \
+  || bad "B: with the layer: $(nw money)"
 src=$(R rules --json 2>/dev/null | python3 -c 'import json,sys; print([r["source"] for r in json.load(sys.stdin)["rows"] if r["n"]==101])')
 [ "$src" = "['你的 v3']" ] && ok "B: rule 101's source reads 你的 v3" || bad "B: source $src"
 printf '| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 101 | steward | 问的是金额 | 必须问你（never:money） | ask | 金额 |\n' \
   > "$FLEET_CONF_DIR/roles/rules.md"
-[ "$(cls '' "$Q")" = normal ] && [ "$(cls '' '金额多少')" = never:money ] \
-  && ok "B: this computer's layer wins by number (101 without 报价)" || bad "B: local over person: $(cls '' "$Q")"
+[ "$(nw money)" = 金额 ] && ok "B: this computer's layer wins by number (101 without 报价)" || bad "B: local over person: $(nw money)"
 
 # --- C off ------------------------------------------------------------------------
-printf '| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 17 | steward | 花钱 | - | off | |\n' \
+printf '| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 11 | orchestrator | 没写优先级 | - | off | |\n' \
   > "$FLEET_CONF_DIR/roles/rules.md"
-n17=$(R rules --json 2>/dev/null | python3 -c 'import json,sys; print(sum(r["n"]==17 for r in json.load(sys.stdin)["rows"]))')
-[ "$(cls '' '要不要购买')" = normal ] && [ "$(cls '' "$Q")" = never:money ] && [ "$n17" = 0 ] \
-  && ok "C: 档位 off drops rule 17 (购买 no longer asks); the person's 101 still counts" \
-  || bad "C: off — $(cls '' '要不要购买') / $n17"
+n11=$(R rules --json 2>/dev/null | python3 -c 'import json,sys; print(sum(r["n"]==11 for r in json.load(sys.stdin)["rows"]))')
+[ "$n11" = 0 ] && [ "$(nw money)" = 报价,金额 ] \
+  && ok "C: 档位 off drops rule 11; the person's 101 still counts" \
+  || bad "C: off — $n11 / $(nw money)"
 
 # --- D a layer that cannot be read ----------------------------------------------------
 printf '| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 50 | steward | x | y | ask | 什么 |\n' \
   > "$FLEET_CONF_DIR/roles/rules.md"
 err=$(R rules 2>&1 >/dev/null)
-case "$err" in *'local layer not used'*'starts at 100'*) [ "$(cls '' '什么')" = normal ] && [ "$(cls '' "$Q")" = never:money ] \
+case "$err" in *'local layer not used'*'starts at 100'*) [ "$(nw money)" = 报价,金额 ] \
   && ok "D: a new rule under 100 ⇒ the whole local layer unused, said on stderr; the rest stands" || bad "D: under-100 layer leaked" ;;
   *) bad "D: no reason given: $err" ;; esac
 printf '| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| 5 | orchestrator | x | y | sometimes | |\n' \
@@ -129,39 +107,33 @@ case "$sec" in *"v=$v2"*'| 1 | 一处改动 | 一律先问 | ask |'*'| 12 |'*)
       || { [ "$nl" -le 40 ] && ok "F: the orchestrator's prompt ends with its $((nl - 3)) rows at v=$v2 (≤ 40 lines), the local edit in" || bad "F: $nl lines"; } ;;
   *) bad "F: orchestrator section: $sec" ;; esac
 rm -f "$FLEET_CONF_DIR/roles/rules.md"
-sb=$(R prompt steward)
-printf '%s\n' "$sb" | grep -q '^| 16 | 改 fleet 的铁律' && ! printf '%s\n' "$sb" | grep -q '^| 1 |' && ok "F: the steward's prompt carries its rules only (13–19, 21)" || bad "F: steward section"
+rm -f "$FLEET_CONF_DIR/person-bundle.json"   # its 101 is a steward row
+[ "$(R prompt steward)" = "$(R body steward)" ] && ok "F: the steward's prompt is its body alone (its rows left, #4339)" || bad "F: steward section"
 R prompt worker >/dev/null 2>&1 && bad "F: a worker has a role prompt" || ok "F: a worker has no role prompt (no table)"
 
 # --- G a broken fleet table ------------------------------------------------------------
 printf 'not a table\n| 编号 | 角色 | 条件 | 动作 | 档位 | 关键词 |\n|---|---|---|---|---|---|\n| x | nobody | | | | |\n' > "$WORK/broken.md"
-[ "$(FLEET_RULES_DEFAULT="$WORK/broken.md" cls '' '要不要付费')" = never:money ] \
-  && ok "G: an unreadable table ⇒ classify falls back to the code's list" || bad "G: fallback"
 p=$(FLEET_RULES_DEFAULT="$WORK/broken.md" R prompt orchestrator 2>/dev/null)
-[ "$p" = "$(R body orchestrator)" ] && ok "G: …and the orchestrator still renders, on its body alone" || bad "G: prompt with a broken table"
+[ "$p" = "$(R body orchestrator)" ] && ok "G: an unreadable table ⇒ the orchestrator still renders, on its body alone" || bad "G: prompt with a broken table"
 
 # --- H the words live in the table only ------------------------------------------------
-grep -q '付费 · 花钱' "$ROOT/docs/dev/DECISIONS.md" && bad "H: docs/dev/DECISIONS.md still lists keywords" \
-  || { grep -q 'role-rules.default.md' "$ROOT/docs/dev/DECISIONS.md" && ok "H: docs/dev/DECISIONS.md points at the rule table" || bad "H: DECISIONS.md names no table"; }
 # the orchestrator is a session template now (issue #4335, EPIC #4333 decision 7): the
 # rows it really uses are in its own body, and it writes no 「按规则 N」 any more
 R body orchestrator | grep -q '几处独立改动或跨仓库' && ! R body orchestrator | grep -q '按规则' \
   && ok "H: the orchestrator template spells its shapes itself, no 按规则 N" \
   || bad "H: the orchestrator template must carry its shapes and no 按规则 N"
 
-# --- I the rows beside the skills (issue #3114) -----------------------------------------
+# --- I the rows beside the skill (issue #3114) -----------------------------------------
 OR="$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/rules.md"
-SR="$ROOT/plugins/fleet-steward/skills/fleet-steward/rules.md"
 PY 'import fleet_rules as r, sys
-o = r.parse(open(sys.argv[1]).read()); s = r.parse(open(sys.argv[2]).read())
+o = r.parse(open(sys.argv[1]).read())
 assert o and all(x["role"] == "orchestrator" for x in o), "orchestrate rules.md"
-assert s and all(x["role"] == "steward" for x in s), "steward rules.md"
-assert [p.split("/")[-1] for p in r.default_paths()] == ["rules.md", "rules.md"], r.default_paths()
-c = r.parse(open(sys.argv[3]).read())
-assert r.version_of(sorted(o + s, key=lambda x: x["n"])) == r.version_of(sorted(c, key=lambda x: x["n"])), "conf copy drifted"
-' "$OR" "$SR" "$ROOT/conf/role-rules.default.md" \
-  && ok "I: the built-in rows are the skills' rules.md (orchestrator · steward), the conf copy their union" \
-  || bad "I: the skill dirs' rules.md and conf/role-rules.default.md disagree (or the loader reads neither)"
+assert [p.split("/")[-2] for p in r.default_paths()] == ["fleet-orchestrate"], r.default_paths()
+c = r.parse(open(sys.argv[2]).read())
+assert r.version_of(sorted(o, key=lambda x: x["n"])) == r.version_of(sorted(c, key=lambda x: x["n"])), "conf copy drifted"
+' "$OR" "$ROOT/conf/role-rules.default.md" \
+  && ok "I: the built-in rows are the orchestrate skill's rules.md, the conf copy the same" \
+  || bad "I: the skill dir's rules.md and conf/role-rules.default.md disagree (or the loader reads neither)"
 
 [ "$fails" = 0 ] && { echo "fleet-rules selftest: all green"; exit 0; }
 echo "fleet-rules selftest: $fails FAILED"; exit 1

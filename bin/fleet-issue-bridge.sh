@@ -494,7 +494,7 @@ apply_forward() {
 # comment of every repo it covers, and keeps one file per open ask,
 # $FLEET_C/global/asks/<slug>#<N> = `<cid>\t<epoch>\t<question's first line>`.
 # A ⛔ comment (or one carrying the decision format's `fleet:ask` marker) writes
-# it; a LATER comment that answers — fleet_decision.parse_comments's rule: a
+# it; a LATER comment that answers — the decision format's rule: a
 # `fleet:answer` marker, a direct-route 「决定…」, or any comment with no
 # `fleet:from` marker (a person's) — removes it. A closed issue is the reader's
 # (fleet_view.open_ask, off the collector's open-issue list). Never fails a relay.

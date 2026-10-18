@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """fleet-debug-desk.py — the node's half of the hub's debug reports (issue #2893,
-EPIC #2889 C4): what the debugger session's three fleet tools run, and the feed
-the orchestrator's steward beat reads.
+EPIC #2889 C4): what the debugger session's three fleet tools run.
 
   fetch <id>                 the report's bundle + the hub's hub.json, unpacked into
                              $TMPDIR/fleet-debug/<id>/ (bundle/ and hub.json); prints
@@ -10,15 +9,12 @@ the orchestrator's steward beat reads.
                              cmd, system?}], ours[]) → the hub renders the page;
                              checked here first by the same rules (the hub checks again)
   propose <id> <text>        one thing to change on our side, for the person to nod at
-  feed [--since T] [--json]  what changed in the reports after T (the cursor kept in
-                             $FLEET_CONF_DIR/global/debug-feed.json when no --since);
-                             one line per report for the orchestrator — the steward's
-                             beat sends them (fleet_steward.py debug_step)
+
+(The `feed` the steward's beat read left with it — issue #4339.)
 
 Every call is AS this login's node (node.env's token, read here, never exported;
 a separated login through its credential proxy's broker — fleet-agent-team.py's
-node_auth). The hub answers a report only to the login it was sent to, and the
-feed only to the orchestrator's (CCQUOTA_FLEET_DEBUG_NOTIFY).
+node_auth). The hub answers a report only to the login it was sent to.
 
 Exit: 0 · 2 usage / the result does not fit the page · 3 no hub or no node token
 here · 4 the hub refused (its words on stderr) · 1 the hub did not answer.
@@ -35,9 +31,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -241,68 +235,6 @@ def cmd_propose(rid, text):
     return 0
 
 
-# ── feed ─────────────────────────────────────────────────────────────────
-
-FEED = os.path.join(CONF_DIR, "global", "debug-feed.json")
-
-
-def feed_line(r):
-    """One report, as the orchestrator reads it."""
-    head = "〔诊断〕%s · " % (r.get("who") or "?")
-    st = r.get("state")
-    if st == "concluded":
-        line = head + (r.get("cause") or "已出结论") + " · " + r.get("url", "")
-    elif st == "unfinished":
-        line = head + "没看完（%s）· %s" % (r.get("why") or "?", r.get("url", ""))
-    elif st == "queued":
-        line = head + "排队等你点头（%s）· 点头：POST /v1/fleet/debug/%s/start · %s" % (
-            r.get("why") or "今天的诊断次数满了", r.get("id"), r.get("url", ""))
-    else:
-        return ""
-    ours = r.get("ours") or []
-    if ours:
-        line += "\n  要我们改的（你点头才立单，file_issue）：" + "；".join(ours)
-    return line
-
-
-def cmd_feed(since, as_json):
-    st = {}
-    try:
-        with open(FEED) as f:
-            st = json.load(f)
-    except (OSError, ValueError):
-        pass
-    after = since if since is not None else st.get("after", "")
-    path = "/v1/node/debug/feed" + ("?after=" + urllib.parse.quote(after) if after else "")
-    rows = json.loads(need(*hub("GET", path))).get("reports") or []
-    told = st.get("told") or {}
-    lines = []
-    for r in rows:
-        # one line per (report, state, proposals): a report seen again unchanged says nothing
-        mark = "%s|%d" % (r.get("state"), len(r.get("ours") or []))
-        if told.get(r.get("id")) == mark:
-            continue
-        ln = feed_line(r)
-        if ln:
-            lines.append(ln)
-        told[r.get("id")] = mark
-        after = r.get("updated_at") or after
-    if since is None:
-        os.makedirs(os.path.dirname(FEED), exist_ok=True)
-        keep = [k for k in told if k][-500:]    # a report lives 7 days; 500 is weeks of them
-        st = {"after": after, "at": int(time.time()), "told": {k: told[k] for k in keep}}
-        tmp = FEED + ".%d.tmp" % os.getpid()
-        with open(tmp, "w") as f:
-            json.dump(st, f)
-        os.replace(tmp, FEED)
-    if as_json:
-        print(json.dumps({"lines": lines, "after": after}, ensure_ascii=False))
-    else:
-        for ln in lines:
-            print(ln)
-    return 0
-
-
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__.strip())
@@ -315,17 +247,7 @@ def main(argv):
             return cmd_publish(rest[0], rest[1])
         if cmd == "propose" and len(rest) >= 2:
             return cmd_propose(rest[0], " ".join(rest[1:]))
-        if cmd == "feed":
-            since, as_json, i = None, False, 0
-            while i < len(rest):
-                if rest[i] == "--since" and i + 1 < len(rest):
-                    since, i = rest[i + 1], i + 2
-                elif rest[i] == "--json":
-                    as_json, i = True, i + 1
-                else:
-                    raise ValueError("feed takes --since T and --json")
-            return cmd_feed(since, as_json)
-        raise ValueError("usage: fetch <id> · publish <id> <file|-> · propose <id> <text> · feed [--since T] [--json]")
+        raise ValueError("usage: fetch <id> · publish <id> <file|-> · propose <id> <text>")
     except ValueError as e:
         print("fleet-debug-desk: %s" % e, file=sys.stderr)
         return 2

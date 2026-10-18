@@ -1393,10 +1393,10 @@ TOOLS = {
     "answer_dialog": (tool_answer_dialog, {
         "description": "答 — answer another session's open choice dialog (AskUserQuestion) for its person, through "
                        "the one guarded road (bin/fleet-dialog-answer.sh; issue #2958): only a window waiting on "
-                       "a dialog (needs/ask), only the dialog whose fingerprint you read (fp, from the steward's "
-                       "decision row or `fleet_needs_detail.py dialog <transcript>`), only its own labels verbatim — "
+                       "a dialog (needs/ask), only the dialog whose fingerprint you read (fp, from "
+                       "`fleet_needs_detail.py dialog <transcript>`), only its own labels verbatim — "
                        "never a free-text answer, never over a person typing there, pressed once and confirmed in "
-                       "the transcript, the trail left on the decision log and the batch's issue. Exit 0 answered "
+                       "the transcript, the trail left in the answer log (代答记录) and on the batch's issue. Exit 0 answered "
                        "· 3 refused, nothing sent (changed / answered / not waiting) · 4 pressed but unconfirmed "
                        "(left for a person, never pressed again) · 5 a person is typing there.",
         "inputSchema": {"type": "object", "properties": {
@@ -1406,8 +1406,9 @@ TOOLS = {
             "picks": {"type": "array", "minItems": 1, "items": {"type": "string"},
                       "description": "One option label per question, verbatim; N=<label> when it has several "
                                      "questions; several labels for one multiSelect question."},
-            "by": {"type": "string", "enum": ["person", "steward", "default"],
-                   "description": "Whose answer this is (default person)."},
+            "by": {"type": "string", "enum": ["person", "session", "default", "steward"],
+                   "description": "Whose answer this is (default person): session = a session answering on "
+                                  "the charter's word (steward is its old name, kept one version)."},
             "basis": {"type": "string", "description": "Why: the charter's rule, the sheet, the deadline."},
             "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},

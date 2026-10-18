@@ -25,7 +25,6 @@ bin/fleet-onboard.sh
 bin/fleet-report-stats.py
 bin/fleet-restore-pick.sh
 bin/fleet-restore.sh
-bin/fleet-steward-conflicts.sh
 bin/fleet-ui-lang.sh
 bin/fleet-webhook.sh
 bin/refocus-hook.sh

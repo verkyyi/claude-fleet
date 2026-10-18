@@ -1,8 +1,7 @@
 #!/bin/bash
 # fleet-debug-desk-selftest.sh — the node's half of the hub's debug reports
 # (issue #2893, EPIC #2889 C4): bin/fleet-debug-desk.py behind the debugger's
-# three fleet tools (debug_bundle · debug_publish · debug_propose) and the feed
-# bin/fleet_steward.py's beat tells the orchestrator from. The hub is a fake
+# three fleet tools (debug_bundle · debug_publish · debug_propose). The hub is a fake
 # (FLEET_DEBUG_DESK_HUB_CMD); the hub's own half is Go (fleet_debug_test.go).
 #
 #   A  fetch: the bundle unpacked under $TMPDIR/fleet-debug/<id>/bundle + hub.json;
@@ -11,10 +10,7 @@
 #      credential-shaped command is refused HERE (exit 2, nothing sent); a good
 #      result is POSTed as it is; a bad id never reaches the hub
 #   C  propose: one line POSTed; a credential-shaped one refused
-#   D  feed: one line per report change for the orchestrator (concluded · cause ·
-#      link, 要我们改的), the cursor kept, a report seen again unchanged says
-#      nothing; the steward's debug_step sends each line to `orchestrator`, only
-#      when an orchestrator window is there, and backs off an hour on a refusal
+#   D  the steward's feed is gone (issue #4339): `feed` is a usage error
 #   E  no hub / no node token: exit 3, nothing written
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -102,54 +98,14 @@ if [ "$rc" = 0 ] && grep -q '"text": "客户端连续失败三次时 主动提�
 else bad "C propose rc=$rc out=$out log=$(cat "$WORK/hub.log")"; fi
 D propose abcdefgh 'use sk-ant-abcdefghijklmnop' >/dev/null 2>&1; [ $? = 2 ] && ok "C a credential-shaped proposal is refused" || bad "C a credential-shaped proposal passed"
 
-# --- D feed + the steward's line ---------------------------------------------
-ans "GET /v1/node/debug/feed" 200 <<'EOF'
-{"reports":[{"id":"abcdefgh","state":"concluded","who":"alice","cause":"python3 没装证书库","url":"https://hub/s/abcdefgh","ours":["安装时查证书库"],"updated_at":"2026-10-10T07:00:00Z"},
-{"id":"cccccccc","state":"diagnosing","who":"fp 12345678","url":"https://hub/s/cccccccc","updated_at":"2026-10-10T07:01:00Z"},
-{"id":"dddddddd","state":"unfinished","who":"fp 12345678","why":"诊断员 15 分钟没交页 — 已转给管理员","url":"https://hub/s/dddddddd","updated_at":"2026-10-10T07:02:00Z"}]}
-EOF
-: > "$WORK/hub.log"
-out=$(D feed); rc=$?
-if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | grep -c '^〔诊断〕')" = 2 ] \
-   && printf '%s\n' "$out" | grep -qx '〔诊断〕alice · python3 没装证书库 · https://hub/s/abcdefgh' \
-   && printf '%s\n' "$out" | grep -q '要我们改的（你点头才立单，file_issue）：安装时查证书库' \
-   && printf '%s\n' "$out" | grep -q '〔诊断〕fp 12345678 · 没看完（诊断员 15 分钟没交页 — 已转给管理员）· https://hub/s/dddddddd'; then
-  ok "D feed: concluded and unfinished say one line each (cause · link · 要我们改的); diagnosing says nothing"
-else bad "D feed rc=$rc out=$out"; fi
-out2=$(D feed); after=$(sed -n 's/.*after=\([^	]*\).*/\1/p' "$WORK/hub.log" | tail -1)
-if [ -z "$out2" ] && [ "$after" = "2026-10-10T07%3A02%3A00Z" ]; then
-  ok "D feed: the cursor kept (after=the last change); a report seen again unchanged says nothing"
-else bad "D feed again: out=$out2 after=$after log=$(cat "$WORK/hub.log")"; fi
-
-# the steward's beat: debug_step → send(orchestrator, line)
-printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s/sent"; cat >> "%s/sent"; printf "\\n--\\n" >> "%s/sent"\n' "$WORK" "$WORK" "$WORK" > "$WORK/send"
-printf '#!/bin/sh\nprintf "{\\"lines\\": [\\"〔诊断〕alice · 证书 · https://hub/s/abcdefgh\\"]}"\nexit ${DBG_RC:-0}\n' > "$WORK/feed"
-printf '#!/bin/sh\nprintf "@1\\torchestrator\\tidle\\t\\t\\t\\t\\t\\n"\n' > "$WORK/wins-orch"
-printf '#!/bin/sh\nprintf "@1\\tworker\\tidle\\t7\\to/r\\t\\t\\t\\n"\n' > "$WORK/wins-none"
-chmod +x "$WORK/send" "$WORK/feed" "$WORK/wins-orch" "$WORK/wins-none"
-step() {  # step <windows cmd> <now>
-  FLEET_STEWARD_WINDOWS_CMD="$WORK/$1" FLEET_STEWARD_DEBUG_CMD="$WORK/feed" FLEET_STEWARD_SEND_CMD="$WORK/send" \
-    python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fleet_steward as s; print(s.debug_step("fleet", int(sys.argv[2])))' "$BIN" "$2"
-}
-rm -f "$WORK/sent" "$FLEET_CONF_DIR/global/debug-feed.step"
-n0=$(step wins-none 1000)
-n1=$(step wins-orch 1000)
-n2=$(step wins-orch 1030)
-n3=$(step wins-orch 1061)
-if [ "$n0" = 0 ] && [ "$n1" = 1 ] && [ "$n2" = 0 ] && [ "$n3" = 1 ] && [ "$(grep -c '^orchestrator$' "$WORK/sent")" = 2 ] \
-   && grep -q '〔诊断〕alice · 证书 · https://hub/s/abcdefgh' "$WORK/sent"; then
-  ok "D steward: each line to the orchestrator; none read without an orchestrator window; at most once a minute"
-else bad "D steward: n=$n0/$n1/$n2/$n3 sent=$(cat "$WORK/sent" 2>/dev/null)"; fi
-rm -f "$FLEET_CONF_DIR/global/debug-feed.step"
-nr=$(DBG_RC=4 step wins-orch 5000); next=$(cat "$FLEET_CONF_DIR/global/debug-feed.step")
-[ "$nr" = 0 ] && [ "$next" = 8600 ] && ok "D steward: a refused feed (not the orchestrator's login) asks again in an hour" \
-  || bad "D steward refused: n=$nr next=$next"
+# --- D no feed (issue #4339) ---------------------------------------------------
+D feed >/dev/null 2>&1; [ $? = 2 ] && ok "D feed is gone: a usage error (exit 2)" || bad "D feed still answers"
 
 # --- E no hub --------------------------------------------------------------
 unset FLEET_DEBUG_DESK_HUB_CMD
 rm -rf "$FLEET_CONF_DIR/global"
-FLEET_HUB_URL='' CCQUOTA_HUB_URL='' D feed >/dev/null 2>&1; rc=$?
-[ "$rc" = 3 ] && [ ! -e "$FLEET_CONF_DIR/global/debug-feed.json" ] && ok "E no hub here: exit 3, nothing written" \
+FLEET_HUB_URL='' CCQUOTA_HUB_URL='' D propose abcdefgh '一处要改的' >/dev/null 2>&1; rc=$?
+[ "$rc" = 3 ] && [ ! -e "$FLEET_CONF_DIR/global" ] && ok "E no hub here: exit 3, nothing written" \
   || bad "E no hub: rc=$rc"
 
 [ "$fails" = 0 ] && { echo "fleet-debug-desk selftest: all green"; exit 0; }

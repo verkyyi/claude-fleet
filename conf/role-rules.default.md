@@ -1,6 +1,6 @@
 # 规则表（自带）
 
-编排会话怎么派、管家哪些自己答 / 按默认 / 必须问你，都按这张表（issue #2786）。
+编排会话怎么派，按这张表（issue #2786）。管家那几行（13–19、21）随管家程序删了（issue #4339），号留空不复用。
 派出去的每张单子末尾写「按规则 N 派发」。
 
 - **编号永不复用**：删掉的规则号留空，旧单子上的「按规则 N」永远查得到当时那条。
@@ -23,12 +23,4 @@
 | 10 | orchestrator | 为回答眼下这段对话要查点东西 | subagent 只做一次只读、有界的查找（Explore / Plan） | auto | |
 | 11 | orchestrator | 单子没写优先级 | 问你（mcp__fleet__ask），不替你定默认值 | ask | |
 | 12 | orchestrator | 范围、拿不准放哪个仓库 | 问你（mcp__fleet__ask） | ask | |
-| 13 | steward | 批次 parent 的共同约定、发起人拍板或它链接的设计页写明了答案 | 自己答，附出处 | auto | |
-| 14 | steward | 问题带了建议或默认，到点没人答 | 按默认走，在批次 parent 记「默认拍板」，你可翻案 | default | |
-| 15 | steward | 问题没带默认（旧格式的提问） | 等你，从不按默认 | ask | |
-| 16 | steward | 改 fleet 的铁律 | 必须问你（never:rule） | ask | claude.md, agents.md, break-it, 铁律, 改约定, 删约定 |
-| 17 | steward | 花钱 | 必须问你（never:money） | ask | 付费, 花钱, 云机器, 购买, 充值, 账单, 预算, billing, purchase, paid plan |
-| 18 | steward | 对外发布 | 必须问你（never:publish） | ask | stable, 发布, 对外, 公开, publish, release |
-| 19 | steward | 批次收尾留下的 followup（发布检查没过、要不要重部署入口） | 只进决定单，从不自答 | ask | |
 | 20 | orchestrator | 要管理员能力的活（演练、开号、删号）——worker 被「需要管理员登录（有 sudo）」拒了 | 编排经管理员 SSH（m4-admin / m5-admin）自己跑；不推给人，也不给 worker 的登录加 sudo（#2842） | auto | |
-| 21 | steward | worker 报「需要管理员登录（有 sudo）」、问谁来跑演练 | 不是「只能人做」：转给编排按规则 20 跑；只有编排也没有管理员 SSH 时才进决定单 | auto | |

@@ -194,7 +194,7 @@ def ssh_host_set(machine):
 
 
 def conf_val(key):
-    """The environment, else fleet.conf's last `KEY=value` line (fleet_decision's
+    """The environment, else fleet.conf's last `KEY=value` line (the
     reading — the keeper is a daemon and sources no shell file)."""
     v = os.environ.get(key)
     if v is not None:
