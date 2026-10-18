@@ -571,6 +571,38 @@ assert 'issue-700\tissue-650\n' in m and 'issue-700\tissue-483' not in m, m
 RELAY
 ok
 
+# --- a session's OWN `stopped`, mid-turn (issue #4757) ---------------------------
+# The report tool runs with no --win while the session is still working: the Stop
+# fallback's `not done` gate (and the busy re-file — it is mid tool call) dropped it
+# with a blank exit 0. Its own word is sent; a no-send path says why, never blank.
+new_win selfstop "PATH='$BINSH:\$PATH' exec claude '$WORK/tool.pl'"; SELFSTOP="$WID"
+TM set-window-option -t "$SELFSTOP" @issue 710 2>/dev/null
+TM set-window-option -t "$SELFSTOP" @origin issue-483 2>/dev/null
+TM set-window-option -t "$SELFSTOP" @claude_state working 2>/dev/null
+spane=$(TM display-message -p -t "$SELFSTOP" '#{pane_id}')
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  cpid=$(fleet_pane_claude_pid "$SELFSTOP" "$LBL" 2>/dev/null) \
+    && ps -axo ppid=,comm= | awk -v p="$cpid" '$1 == p { f = 1 } END { exit !f }' && break
+  sleep 0.3
+done
+b=$(frames)
+out=$(TMUX_PANE="$spane" RUN --state stopped --summary 'paused: waiting on #4755'); rc=$?
+eq "a working session's own stopped exits 0" 0 "$rc"
+ok; has 'reported → issue-483' "$out" || fail "a working session's own stopped must be sent, not dropped blank" "$out"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(frames)" -gt "$b" ] && break; sleep 0.3; done
+eq "a working session's own stopped reaches the parent" $((b + 1)) "$(frames)"
+# the fallback (--win) still holds a working child's stopped
+TM set-window-option -u -t "$SELFSTOP" @reported
+b=$(frames); out=$(RUN --win "$SELFSTOP" --state stopped --only-once); rc=$?
+eq "the Stop fallback still holds a working child — exit 0" 0 "$rc"
+eq "the Stop fallback still holds a working child — nothing sent" "$b" "$(frames)"
+# a self call with nobody to tell prints the reason
+new_win selfhub "sleep 600"; TM set-window-option -t "$WID" @issue 711 2>/dev/null
+hpane=$(TM display-message -p -t "$WID" '#{pane_id}')
+out=$(TMUX_PANE="$hpane" RUN --state stopped); rc=$?
+eq "a hub-spawned session's own report — exit 0" 0 "$rc"
+ok; has 'nothing to send' "$out" || fail "a session's own call must never come back blank" "$out"
+
 # --- nothing was ever TYPED at the parent (the #437 rail) ------------------------
 ok; has 'child-report' "$(TM capture-pane -p -t "$PARENT" 2>/dev/null)" \
   && fail "the report must never appear as keystrokes in the parent's pane"
