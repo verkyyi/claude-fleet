@@ -132,9 +132,10 @@ func (s *Store) SpareAccounts() ([]FleetAccount, error) {
 // with it, and one hub_audit line says so. Record-only, in one transaction.
 // to must have no principal row yet — a person already recorded takes a
 // spare through ClaimSpareFor (claude-fleet#3501). ErrNoSpare when hostname
-// has none ready. Ready is active AND its op's check passed all three
-// (claude-fleet#4673, spareCheckedSQL): a spare never checked is never handed.
-func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time) (*FleetAccount, error) {
+// has none ready. Ready is active AND, with checked, its op's check passed
+// all three (claude-fleet#4673, spareCheckedSQL): a machine's spare never
+// checked is never handed. A pod (its cluster's, never checked) passes false.
+func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time, checked bool) (*FleetAccount, error) {
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
@@ -157,7 +158,7 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 	var spareID, login, name string
 	err = tx.QueryRow(`SELECT a.principal_id, a.login, p.login FROM fleet_accounts a
 		JOIN fleet_principals p ON p.principal_id = a.principal_id
-		WHERE a.principal_id LIKE ? AND a.hostname = ? AND a.state = ? AND a.op = 'create'`+spareCheckedSQL("a.op_id")+`
+		WHERE a.principal_id LIKE ? AND a.hostname = ? AND a.state = ? AND a.op = 'create'`+spareCheckedSQL("a.op_id", checked)+`
 		ORDER BY a.updated_at, a.principal_id LIMIT 1`,
 		spareLikePattern, hostname, AccountActive).Scan(&spareID, &login, &name)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -215,8 +216,8 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 // it is on the machine: pending (never sent) or removed. Any other state
 // leaves it theirs and answers ErrAccountState. ErrNoPrincipal when to is
 // not recorded (ClaimSpare is that road); ErrNoSpare when hostname has none
-// ready — checked, as ClaimSpare (claude-fleet#4673).
-func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time) (*FleetAccount, error) {
+// ready — checked as ClaimSpare (claude-fleet#4673).
+func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time, checked bool) (*FleetAccount, error) {
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
@@ -250,7 +251,7 @@ func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time) (*FleetA
 	}
 	var spareID, login string
 	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_accounts
-		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'`+spareCheckedSQL("fleet_accounts.op_id")+`
+		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'`+spareCheckedSQL("fleet_accounts.op_id", checked)+`
 		ORDER BY updated_at, principal_id LIMIT 1`,
 		spareLikePattern, hostname, AccountActive).Scan(&spareID, &login)
 	if errors.Is(err, sql.ErrNoRows) {

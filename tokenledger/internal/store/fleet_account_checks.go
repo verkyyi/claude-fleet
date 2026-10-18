@@ -43,8 +43,11 @@ func (c AccountCheck) Steps() int {
 }
 
 // spareCheckedSQL is a claim's " AND <account row> passed its check": col is
-// the account row's op_id column.
-func spareCheckedSQL(col string) string {
+// the account row's op_id column; "" when the claim asks no check (a pod).
+func spareCheckedSQL(col string, checked bool) string {
+	if !checked {
+		return ""
+	}
 	return ` AND EXISTS (SELECT 1 FROM fleet_account_checks c WHERE c.op_id = ` + col +
 		` AND c.cred_ok <> '' AND c.home_ok <> '' AND c.first_reply_ok <> '' AND c.why = '')`
 }

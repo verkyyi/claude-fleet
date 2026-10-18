@@ -2845,7 +2845,7 @@ drill_spare_ready_unverified() {
     || { WHY="a wash no longer carries the opener's ready: line to the hub (fleet-login-reset.sh)"; return 1; }
   grep -q 'res.Ready = readyResult(out.String())' "$tl/agent/node_accounts.go" 2>/dev/null \
     || { WHY="the agent no longer reads the ready: line (readyResult)"; return 1; }
-  grep -q 'spareCheckedSQL("a.op_id")' "$tl/store/fleet_spare.go" 2>/dev/null \
+  grep -q 'spareCheckedSQL("a.op_id", checked)' "$tl/store/fleet_spare.go" 2>/dev/null \
     || { WHY="a claim no longer asks for a spare that passed its check (store.ClaimSpare)"; return 1; }
   grep -q 's.recordAccountCheck(m.OpID, epID, res, time.Now())' "$tl/api/fleet_accounts.go" 2>/dev/null \
     || { WHY="the hub no longer keeps a create's check (applyAccountResult → recordAccountCheck)"; return 1; }

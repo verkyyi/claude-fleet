@@ -571,28 +571,29 @@ func (s *Server) claimSpareAt(principal, displayName, actor, host string, now ti
 	var a *store.FleetAccount
 	var err error
 	// Only a checked spare is handed (claude-fleet#4673): the store's claim
-	// asks for it.
+	// asks for it — but a pod's, which is its cluster's and never checked.
+	checked := !isUserPodName(host) && !s.isCluster(host)
 	switch _, perr := s.Store.Principal(principal); {
 	case errors.Is(perr, store.ErrNoPrincipal):
-		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now)
+		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now, checked)
 		switch {
 		case errors.Is(err, store.ErrRekeyTarget):
 			// Recorded between the two reads: the recorded person's road.
-			a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+			a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 		case errors.Is(err, store.ErrSpareNameHeld):
 			// A recycled spare whose name a person's record still holds
 			// (claude-fleet#3504): record them under a name of their own,
 			// then hand them its login.
 			if _, err = s.Store.EnsurePrincipal(principal, s.spareDisplayName(principal, displayName),
 				control.MaxLoginLen, control.ValidLogin, now); err == nil {
-				a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+				a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 			}
 		}
 	case perr != nil:
 		log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, perr)
 		return nil
 	default:
-		a, err = s.Store.ClaimSpareFor(host, principal, actor, now)
+		a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 	}
 	switch {
 	case errors.Is(err, store.ErrNoSpare), errors.Is(err, store.ErrAccountState):
