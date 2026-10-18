@@ -89,14 +89,16 @@ proxy_up() { env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" port >/dev/
 proxy_port() { env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" port 2>/dev/null; }
 
 # ---- sessions n/m ---------------------------------------------------------------
-# count_sessions <port> → `n m`: m live claude / codex sessions of this login, n of
-# them through the proxy. argv0's basename names the agent (the native claude's
-# accounting name is its version); the environment is read and matched in memory.
+# count_sessions "<port> [<port>…]" → `n m`: m live claude / codex sessions of this
+# login, n of them through the proxy — on any port it serves this login on: the
+# shared proxy also answers the login's OLD port, which its sessions from before
+# the join still carry (issue #2324). argv0's basename names the agent (the native
+# claude's accounting name is its version); the environment is read in memory.
 count_sessions() {
   FCR_PORT="${1:-}" FCR_PROCS="${FLEET_CRED_ROLLOUT_PROCS:-}" python3 -I - <<'PY'
 import os, re, subprocess, sys
-port = os.environ.get("FCR_PORT", "")
-lp = re.escape("http://127.0.0.1:" + port) if port else r"http://127\.0\.0\.1:\d+"
+ports = os.environ.get("FCR_PORT", "").split()
+lp = r"http://127\.0\.0\.1:(?:%s)" % "|".join(re.escape(p) for p in ports) if ports else r"http://127\.0\.0\.1:\d+"
 claude_re = re.compile(r"(?:^|\s)ANTHROPIC_BASE_URL=" + lp + r"(?:/|\s|$)")
 codex_re = re.compile(r"(?:^|\s)FLEET_CODEX_SESSION_CRED=|model_provider=\"?fleet\"?(?:\s|$)")
 rows = []
@@ -162,6 +164,11 @@ status_line() {
   sw=$(switch_now)
   if proxy_up; then
     port=$(proxy_port)
+    # and the old port the shared proxy answers for this login (issue #2324)
+    port="$port $(env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" status --json 2>/dev/null \
+      | python3 -I -c 'import json,sys
+try: print(json.load(sys.stdin).get("legacy_port") or "")
+except ValueError: pass' 2>/dev/null)"
     route=$(env -u FLEET_CRED_PROXY bash "$BIN/fleet-cred-proxy.sh" route --json 2>/dev/null \
       | python3 -I -c 'import json,sys
 try: print(json.load(sys.stdin).get("route") or "?")
