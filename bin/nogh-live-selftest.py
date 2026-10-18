@@ -697,6 +697,35 @@ class Templates(unittest.TestCase):
         pod['spec'].pop('automountServiceAccountToken')
         with self.assertRaises(live.Refused): template.check_pod(p, ep, pod)
 
+    def test_placement_keeps_a_run_off_production_nodes(self):
+        # live (#4625): runs landed on a node running production workloads and
+        # pressed its disk. A recipe may pin its Pods to a named test node.
+        p = plan(); ep = p['endpoints'][0]
+        pod = template.pod(p, ep)
+        self.assertNotIn('nodeSelector', pod['spec'])
+        for c in pod['spec']['containers'] + pod['spec']['initContainers']:
+            self.assertEqual(c['resources']['limits']['ephemeral-storage'], '1Gi')
+        p['placement'] = dict(node_selector={'kubernetes.io/hostname': 'cn-x.10.0.1.245'},
+                              tolerations=[dict(key='fleet.24haowan.com/user-pods', value='true')])
+        live.validate(p)
+        pod = template.pod(p, ep)
+        self.assertEqual(pod['spec']['nodeSelector'], {'kubernetes.io/hostname': 'cn-x.10.0.1.245'})
+        # the API server's default tolerations beside ours are accepted, nothing else
+        actual = json.loads(json.dumps(pod))
+        actual['spec']['tolerations'] += [dict(key=k, operator='Exists', effect='NoExecute', tolerationSeconds=300)
+                                          for k in ('node.kubernetes.io/not-ready', 'node.kubernetes.io/unreachable')]
+        template.check_pod(p, ep, actual)
+        actual['spec']['tolerations'].append(dict(key='node-role.kubernetes.io/master', operator='Exists', effect='NoSchedule'))
+        with self.assertRaises(live.Refused): template.check_pod(p, ep, actual)
+        dropped = json.loads(json.dumps(pod)); dropped['spec'].pop('nodeSelector')
+        with self.assertRaises(live.Refused): template.check_pod(p, ep, dropped)
+        for bad in (dict(node_selector={}, tolerations=[]),
+                    dict(node_selector={'a': 'b'}, tolerations=[dict(key='x', value='y', effect='NoExecute')]),
+                    dict(node_selector={'a b': 'c'}, tolerations=[]),
+                    dict(node_selector={'a': 'b'}, tolerations=[], extra=1)):
+            p['placement'] = bad
+            with self.assertRaises(live.Refused): live.validate(p)
+
     def test_unbound_recipe_has_no_fabricated_object_identity(self):
         p = plan(); p['routes'] = []
         for ep in p['endpoints']:

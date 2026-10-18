@@ -107,14 +107,38 @@ def origin(value):
         raise Refused('EXACT_ORIGIN_REQUIRED') from None
 
 
+LABEL = r'(?:[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?'
+LABEL_VALUE = r'(?:[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?'
+
+
+def placement(value):
+    """Where a run's Pods may land (#4625): a nodeSelector naming 1-4 exact
+    labels and up to 4 NoSchedule tolerations of an exact key=value taint.
+    Only scheduling, never a capability; a cluster's production nodes stay
+    out because the owner's recipe names a test node."""
+    keys(value, 'node_selector tolerations', 'PLACEMENT_FIELDS')
+    selector, tolerations = value['node_selector'], value['tolerations']
+    require(isinstance(selector, dict) and 1 <= len(selector) <= 4
+            and all(isinstance(k, str) and re.fullmatch(LABEL, k) and isinstance(v, str)
+                    and re.fullmatch(LABEL_VALUE, v) for k, v in selector.items()), 'PLACEMENT_SELECTOR')
+    require(isinstance(tolerations, list) and len(tolerations) <= 4, 'PLACEMENT_TOLERATIONS')
+    for t in tolerations:
+        keys(t, 'key value', 'PLACEMENT_TOLERATIONS')
+        require(isinstance(t['key'], str) and re.fullmatch(LABEL, t['key']) and isinstance(t['value'], str)
+                and re.fullmatch(LABEL_VALUE, t['value']), 'PLACEMENT_TOLERATIONS')
+
+
 def validate(plan, now=None, *, bound=True):
     """The same strict schema is used at render, bind, start and seal.
 
     Actual UIDs come from the owner's normal creation road, never from labels.
     Names and labels alone cannot authorize adopting an already running pod.
     """
-    keys(plan, 'version purpose run_id generation source_sha namespace namespace_uid '
-         'cluster_uid expires_at budget_seconds controller row hub endpoints routes probes', 'PLAN_FIELDS')
+    fields = ('version purpose run_id generation source_sha namespace namespace_uid '
+              'cluster_uid expires_at budget_seconds controller row hub endpoints routes probes')
+    keys(plan, fields + (' placement' if 'placement' in plan else ''), 'PLAN_FIELDS')
+    if 'placement' in plan:
+        placement(plan['placement'])
     require(plan['version'] == 1 and plan['purpose'] == 'c9-disposable-test', 'TEST_ONLY')
     require(identifier(plan['run_id']) and identifier(plan['namespace_uid'])
             and identifier(plan['cluster_uid']), 'RUN_IDENTITY_REQUIRED')
