@@ -1189,7 +1189,7 @@ drill_node_update_half() {
 }
 
 # update-goes-back (#4671): a machine only moves forward. The day the Mac lane went in
-# (10-13) macmini was taken back to an older release missing a key fix. Rig: the
+# (10-13) a Mac was taken back to an older release missing a key fix. Rig: the
 # machine runs V2 (seq 5); the target is V1 (seq 4) — a stable rolled back on the hub,
 # a stale pin. The tick refuses it (`refused`, one history row), nothing moves, the
 # check reds; FLEET_NODE_UPDATE_BACKWARD=1 is the operator's way back.
