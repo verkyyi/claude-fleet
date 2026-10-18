@@ -35,20 +35,17 @@ The same script serves two servers. Every session mounts the **core**, `fleet`
 ships with the core (issue #4334): no plugin registers it. Claude shows its tools as
 `mcp__fleet-orch__<tool>`; Codex shows them on its `fleet-orch` server.
 
-- **`@agent_spawn 1` is the one switch** (issue #4334, EPIC #4333 共同约定 3). The
-  launcher (`bin/fleet-claude.sh`; `bin/fleet-codex.sh` asks `fleet-mcp.py
-  --bridge-seat`) mounts `fleet-orch` when the session may spawn: started `--as` an
-  agent file whose tools keep `spawn` (the launcher stamps the file's grant — the
-  shipped `fleet-worker` and the fleet-epic plugin's `epic-driver` keep it, #4591; the
-  debugger's takes it away), or — with no agent file — the spawner stamped it before
-  the launch: a session the person opens that binds no issue (`dash-raw-session.sh`,
-  a warm pool window, `fleet-restore.sh` for a scratch / no-repo row). No plugin, seat
-  or role name is asked (issue #3118).
-- **Not granted ⇒ not there.** Such a session's `fleet` lists no dispatch tool.
-  `file_issue` with `spawn: true` files the issue as asked, starts nobody, and adds
-  `spawn: this session may not spawn …` to stderr. "Granted" = the launcher's mount
-  said so (`FLEET_MCP_ORCH=1`, forwarded to Codex by name) or the pane's `@agent_spawn`
-  is `1`; a plugin enabled in Claude Code's settings counts for nothing.
+- **Every session has it** (issue #4703, after #4591 — any session may spawn; the
+  session caps and the claim dedup, in the scripts, are the only bounds). The launcher
+  (`bin/fleet-claude.sh`; `bin/fleet-codex.sh` asks `fleet-mcp.py --bridge-seat`, 0 in
+  any fleet pane) mounts `fleet-orch` for every launch and says `FLEET_MCP_ORCH=1`.
+  `@agent_spawn` is still stamped (the agent file's grant) but gates nothing; EPIC
+  #4333 C1's `@agent_spawn 1` switch (issue #4334) is gone. No plugin, seat or role
+  name is asked (issue #3118). `file_issue` with `spawn: true` always spawns.
+- **A session launched before #4703 without the group** (`FLEET_MCP_ORCH` unset)
+  needs no reopen: its `fleet` server, once it takes over the new version (#1898's
+  exec + `tools/list_changed`), lists the dispatch group itself, and answers it
+  (`road=legacy`) as it always did.
 - **`take_role` is listed by neither server** (issue #4334; the seats it marked go
   with EPIC #4333 C7) and still answered one version — an old session that listed it
   keeps its call (`# compat-1v`).

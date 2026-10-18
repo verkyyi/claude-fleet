@@ -363,46 +363,36 @@ has "$argv" "/fleet-claim" || fail "#1807 the seed prompt was swallowed by the m
 [ "$(cat "$WORK/mcpenv")" = "$(cd "$WORK/bin" && pwd)|1" ] || fail "#1807 FLEET_MCP_BIN / FLEET_MCP_SERVER not exported" "$(cat "$WORK/mcpenv")"
 ok "#1807 default: --mcp-config=conf/mcp-worker.json (additive, =form, seed intact), FLEET_MCP_BIN + FLEET_MCP_SERVER set"
 
-# #3113/#3118: the dispatch group `fleet-orch` (conf/mcp-orch.json) is mounted only for
-# an agent file that grants `spawn` (the EPIC driver); a worker / plain launch never, and
-# no role NAME brings it (--role epic-driver with no such file found = the core alone).
-case "$argv" in *"--mcp-config=$MO"*) fail "#3113 a plain launch mounted the dispatch group" "$argv" ;; esac
-[ "$(cat "$WORK/mcporch")" = "" ] || fail "#3113 a plain launch said FLEET_MCP_ORCH" "$(cat "$WORK/mcporch")"
-argv="$( (export FLEET_MCP_ORCH=1; run --role worker /fleet-claim) )"
-case "$argv" in *"--mcp-config=$MO"*) fail "#3113 a worker mounted the dispatch group" "$argv" ;; esac
-[ "$(cat "$WORK/mcporch")" = "" ] || fail "#3113 a worker inherited FLEET_MCP_ORCH" "$(cat "$WORK/mcporch")"
-argv="$(run --role epic-driver '/fleet-epic-run 1')"
-case "$argv" in *"--mcp-config=$MO"*) fail "#3118 a role name with no agent file mounted the dispatch group" "$argv" ;; esac
+# #4703 (after #4591): the dispatch group `fleet-orch` (conf/mcp-orch.json) rides EVERY
+# launch — any session may spawn; caps and the claim dedup are the bounds. A plain launch,
+# a worker, a bare role name, an agent file that does not grant spawn (fleet-worker taking
+# it away included), a pane stamped @agent_spawn 0 or none: all mount both servers and say
+# FLEET_MCP_ORCH=1 (never inherited — the launcher sets it itself).
+both() { # both <what> <argv>
+  has "$2" "--mcp-config=$MW" && has "$2" "--mcp-config=$MO" && [ "$(cat "$WORK/mcporch")" = 1 ] \
+    || fail "#4703 $1 did not mount the dispatch group" "$2 / $(cat "$WORK/mcporch")"
+}
+both "a plain launch" "$argv"
+argv="$( (export FLEET_MCP_ORCH=0; run --role worker /fleet-claim) )"; both "a worker (FLEET_MCP_ORCH=0 inherited)" "$argv"
+argv="$(run --role epic-driver '/fleet-epic-run 1')"; both "a bare role name" "$argv"
 mkdir -p "$WORK/ccfg/agents"
 printf -- '---\nname: epic-driver\ndescription: d\n---\nbody\n' > "$WORK/ccfg/agents/epic-driver.md"
-argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-epic-run 1') )"
-has "$argv" "--mcp-config=$MW" && has "$argv" "--mcp-config=$MO" || fail "#3113 an EPIC driver did not mount both servers" "$argv"
-[ "$(cat "$WORK/mcporch")" = 1 ] || fail "#3113 an EPIC driver's launch did not say FLEET_MCP_ORCH=1" "$(cat "$WORK/mcporch")"
-ok "#3113 the dispatch group rides only an agent file granting spawn (--as epic-driver); a plain, worker or bare role-name launch gets the core alone"
-
-# #4334: @agent_spawn is the ONE switch, no plugin asked — a session with no agent file
-# that the spawner stamped @agent_spawn 1 (the person's own, binding no issue) mounts the
-# dispatch group; an agent file's own grant wins over the pane (a file that takes spawn
-# away mounts none, whatever the pane says).
-printf '1\n' > "$WORK/spawnopt"
-argv="$(run)"
-has "$argv" "--mcp-config=$MO" && [ "$(cat "$WORK/mcporch")" = 1 ] \
-  || fail "#4334 a no-file session stamped @agent_spawn 1 did not mount the dispatch group" "$argv"
+argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-epic-run 1') )"; both "an EPIC driver" "$argv"
 printf -- '---\nname: fleet-worker\ndescription: w\ndisallowedTools: mcp__fleet-orch__spawn\n---\nbody\n' > "$WORK/ccfg/agents/fleet-worker.md"
-argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-claim) )"
-case "$argv" in *"--mcp-config=$MO"*) fail "#4334 a worker file mounted the dispatch group off the pane's stamp" "$argv" ;; esac
-printf '0\n' > "$WORK/spawnopt"
-argv="$(run)"
-case "$argv" in *"--mcp-config=$MO"*) fail "#4334 @agent_spawn 0 mounted the dispatch group" "$argv" ;; esac
+argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-claim) )"; both "a worker file that takes spawn away" "$argv"
+for v in 0 1; do
+  printf '%s\n' "$v" > "$WORK/spawnopt"
+  argv="$(run)"; both "a pane stamped @agent_spawn $v" "$argv"
+done
 rm -f "$WORK/spawnopt"
-ok "#4334 @agent_spawn 1 on a no-file session mounts the dispatch group; a worker file or 0 does not"
+ok "#4703 every launch mounts the dispatch group (plain, worker, role name, agent file with or without spawn, @agent_spawn 0/1)"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
 has "$argv" "--strict-mcp-config" && has "$argv" "--mcp-config=$MW" || fail "#1807 FLEET_MCP_CONFIG=none dropped the fleet server" "$argv"
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="%s"\n' "$MW" > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"
-[ "$(printf '%s\n' "$argv" | grep -o -- '--mcp-config' | wc -l | tr -d ' ')" = 1 ] || fail "#1807 the allowlist IS the file, yet it was mounted twice" "$argv"
+[ "$(printf '%s\n' "$argv" | grep -o -- 'mcp-worker.json' | wc -l | tr -d ' ')" = 1 ] || fail "#1807 the allowlist IS the file, yet it was mounted twice" "$argv"
 ok "#1807 beside an allowlist (none too) it rides along; an allowlist that IS the file is not mounted twice"
 
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"

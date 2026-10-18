@@ -466,8 +466,8 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$BIN/../conf/mcp-worker.json" ] && [ -f "
   _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex 2>/dev/null) && [ -n "$_mount" ] && {
     export FLEET_MCP_BIN="$BIN"
     flags+=(-c "$_mount")
-    # The dispatch group `fleet-orch` (issue #3113) — only where the agent file
-    # grants spawn (@agent_spawn 1), as bin/fleet-claude.sh mounts it.
+    # The dispatch group `fleet-orch` (issue #3113) — every fleet pane (issue #4703),
+    # as bin/fleet-claude.sh mounts it.
     python3 "$BIN/fleet-mcp.py" --bridge-seat 2>/dev/null \
       && _mount=$(python3 "$BIN/fleet-mcp.py" --mount codex --group orch 2>/dev/null) && [ -n "$_mount" ] \
       && { flags+=(-c "$_mount"); export FLEET_MCP_ORCH=1; }

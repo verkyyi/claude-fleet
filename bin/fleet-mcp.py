@@ -32,15 +32,14 @@ docs/dev/FLEET-MCP.md is the one spec; later EPIC members add tools there and he
 Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the tools
 a session works with; the dispatch group — spawn · await · children · answer_dialog ·
 send — is listed by the same script started as `fleet-mcp.py --group orch`, the
-server `fleet-orch` (conf/mcp-orch.json), which the core's launchers mount wherever
-the session may spawn — @agent_spawn 1, the ONE switch (issue #4334; see
---bridge-seat): its agent file grants `spawn`, or the person opened it and it binds
-no issue. No plugin mounts it. For at least one version (#2068) `fleet`
+server `fleet-orch` (conf/mcp-orch.json), which the core's launchers mount for EVERY
+session (issue #4703, after #4591: any session may spawn; caps and claim dedup are the
+bounds, in the scripts). `@agent_spawn` gates nothing. No plugin mounts it. For at least one version (#2068) `fleet`
 still ANSWERS a dispatch-group call under its old name (logged road=legacy), and a
 server that took over from a pre-group version keeps listing everything, so a
-session that started with the old list never loses a tool mid-conversation.
-`file_issue` with spawn: true and no dispatch group files the issue and says this
-session may not spawn. `take_role` is listed by neither server (issue #4334) and
+session that started with the old list never loses a tool mid-conversation. A session
+with no `fleet-orch` beside it (FLEET_MCP_ORCH unset: launched before #4703) gets the
+dispatch group listed on `fleet` itself. `file_issue` with spawn: true always spawns. `take_role` is listed by neither server (issue #4334) and
 still answered one version.
 
 The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
@@ -53,9 +52,8 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py --group orch    serve the dispatch group (the server `fleet-orch`)
   fleet-mcp.py [--group orch] --list
                                print the tools that server lists, one per line
-  fleet-mcp.py --bridge-seat   exit 0 when THIS pane may spawn
-                               (@agent_spawn 1) — the Codex launcher mounts the dispatch
-                               group there; 1 otherwise (no seat by role, issue #3118)
+  fleet-mcp.py --bridge-seat   exit 0 when THIS pane may spawn — any fleet pane (issue
+                               #4703); 1 outside tmux (no seat by role, issue #3118)
   fleet-mcp.py --mount codex [--group orch]
                                print the `-c` value bin/fleet-codex.sh mounts it with
   fleet-mcp.py --legacy-peer   the old fleet-peer server (list_agents/send_message)
@@ -1098,8 +1096,7 @@ def tool_file_issue(args):
     if "parent" in args:
         argv += ["--parent", str(args["parent"])]
     argv += check_repo(args)
-    unspawned = bool(args.get("spawn")) and not orch_installed()
-    if args.get("spawn") and not unspawned:
+    if args.get("spawn"):   # any session may spawn (issues #4591, #4703): no group asked
         argv.append("--spawn")
     if args.get("bind"):
         argv.append("--bind")
@@ -1114,34 +1111,16 @@ def tool_file_issue(args):
     if "task" in args:
         argv += ["--task", args["task"]]
     argv += draft_argv(args)
-    data = script(argv, FILE_TIMEOUT_S)
-    if unspawned:   # issue #3113: filed as asked, nobody started
-        data["stderr"] = (data.get("stderr") or "") + ORCH_HINT + "\n"
-    return data
+    return script(argv, FILE_TIMEOUT_S)
 
 
 # --- the dispatch group (issue #3113, EPIC #3111 C2) -------------------------------
 
-ORCH_HINT = ("spawn: this session may not spawn (its agent file does not grant `spawn`, @agent_spawn "
-             "is not 1) — the issue was filed, no worker was started")
 def bridge_seat():
-    """May THIS pane dispatch — @agent_spawn 1? (--bridge-seat) The ONE switch (issue
-    #4334): stamped by the launcher off the agent file it starts (issue #3122), or by
-    the spawner for a session the person opens that binds no issue. No plugin, seat
-    or role is asked: the dispatch group ships with the core."""
-    pane = os.environ.get("TMUX_PANE", "")
-    if not os.environ.get("TMUX") or not pane:
-        return False
-    r = run(["tmux", "display-message", "-p", "-t", pane, "#{@agent_spawn}"],
-            check=False, timeout=STATUS_TIMEOUT_S)
-    return r.returncode == 0 and r.stdout.strip() == "1"
-
-
-def orch_installed():
-    """Does this session have the dispatch group? The launcher's mount says so in the
-    environment (FLEET_MCP_ORCH=1, forwarded to Codex by name); else the pane's own
-    @agent_spawn — never a plugin's install (issue #4334)."""
-    return os.environ.get("FLEET_MCP_ORCH") == "1" or bridge_seat()
+    """May THIS pane dispatch? (--bridge-seat) Every fleet pane may (issue #4703, after
+    #4591): the dispatch group is mounted for every session and `@agent_spawn` is no
+    gate — read for nothing here. Outside tmux there is no pane to dispatch from."""
+    return bool(os.environ.get("TMUX") and os.environ.get("TMUX_PANE"))
 
 
 GH_KIND = {"issue": ["issue", "view"], "pr": ["pr", "view"], "checks": ["pr", "checks"]}
@@ -1659,9 +1638,18 @@ ORCH = {n: TOOLS[n] for n in ORCH_GROUP + RETIRED}
 SERVING = {"list_all": False}
 
 
-def listing(table):
+def listing(table, served=False):
+    """What a server lists. `fleet` served to a session that has no `fleet-orch` beside
+    it (FLEET_MCP_ORCH is not 1 — one launched before issue #4703, when the group was
+    mounted only on @agent_spawn 1) lists the dispatch group too, so that session can
+    spawn after the next takeover's tools/list_changed, no reopen. `--list` stays the
+    static core list."""
     if table is TOOLS:
-        return TOOLS if SERVING["list_all"] else CORE
+        if SERVING["list_all"]:
+            return TOOLS
+        if served and os.environ.get("FLEET_MCP_ORCH") != "1":
+            return {n: e for n, e in TOOLS.items() if n not in RETIRED}
+        return CORE
     return {n: e for n, e in table.items() if n not in RETIRED}
 
 
@@ -1741,7 +1729,7 @@ def tool_result(name, data, error=False):
 def tool_call(table, name, args):
     SIGNED["assert"] = False
     ROAD["legacy"] = (table is TOOLS and not ROAD["call"] and name in ORCH_GROUP + RETIRED
-                     and name not in listing(table))
+                     and name not in listing(table, served=True))
     entry = table.get(name)
     if entry is None:
         log_call(str(name), None, "refused", "unknown tool")
@@ -1791,7 +1779,7 @@ def handle(request, table, name):
                 "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": {"name": name, "version": VERSION}}
     if method == "tools/list":
-        return {"tools": [{"name": n, **spec} for n, (_, spec) in listing(table).items()]}
+        return {"tools": [{"name": n, **spec} for n, (_, spec) in listing(table, served=True).items()]}
     if method == "tools/call":
         params = request.get("params") or {}
         return tool_call(table, params.get("name"), params.get("arguments"))
