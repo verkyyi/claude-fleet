@@ -167,6 +167,51 @@ func resetResult(out string) string {
 	return ""
 }
 
+// readyResult is AccountResult.Ready for a create's or reset's output
+// (claude-fleet#4673): its LAST `ready:` line (bin/fleet-login-ready.sh) —
+// `cred_ok=<s> home_ok=<s> first_reply_ok=<s>`, or `FAIL <step>: <why>` with
+// the stamps of the steps that passed; nil when it carries none.
+func readyResult(out string) *control.AccountCheck {
+	lines := strings.Split(strings.TrimRight(out, " \t\r\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		v, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "ready: ")
+		if !ok {
+			continue
+		}
+		c := &control.AccountCheck{}
+		f := strings.Fields(v)
+		for len(f) > 0 {
+			k, n, ok := strings.Cut(f[len(f)-1], "=")
+			t, err := strconv.ParseInt(n, 10, 64)
+			if !ok || err != nil || t <= 0 {
+				break
+			}
+			switch k {
+			case "cred_ok":
+				c.CredOK = t
+			case "home_ok":
+				c.HomeOK = t
+			case "first_reply_ok":
+				c.FirstReplyOK = t
+			default:
+				t = 0
+			}
+			if t == 0 {
+				break
+			}
+			f = f[:len(f)-1]
+		}
+		if rest := strings.Join(f, " "); rest != "" {
+			c.Fail = strings.TrimSpace(strings.TrimPrefix(rest, "FAIL"))
+			if c.Fail == "" {
+				c.Fail = rest
+			}
+		}
+		return c
+	}
+	return nil
+}
+
 // credsepResult is AccountResult.Credsep for a create's output: "separated"
 // only when its LAST non-empty line says so (a pending / off / failed open says
 // something else, and is never handed out as a spare) — or "central", the one
@@ -757,6 +802,7 @@ func (a *Agent) runAccountScript(ctx context.Context, opID string, op control.Ac
 		res.OK, res.Exit = true, 0
 		if op.Op == control.AccountCreate || op.Op == control.AccountReset {
 			res.Credsep = credsepResult(out.String())
+			res.Ready = readyResult(out.String())
 		}
 		if op.Op == control.AccountReset {
 			res.Reset = resetResult(out.String())
@@ -863,6 +909,7 @@ func (a *Agent) settleOwnCreate(ctx context.Context, opID, login string) (contro
 		res.Detail = tail(fmt.Sprintf("login %s was opened by this op's own run (started %s, finished %s); answering its result\n%s",
 			login, mk.started, mk.done, strings.Join(mk.lines, "\n")), accountDetailMax)
 		res.Credsep = credsepResult(res.Detail)
+		res.Ready = readyResult(res.Detail)
 		log.Printf("account ops: create %s (op %s) arrived again: answered from its first run, not run twice", login, opID)
 		return res, true
 	}

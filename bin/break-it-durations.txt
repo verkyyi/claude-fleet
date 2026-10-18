@@ -376,13 +376,11 @@
 1.4 shift-enter-sends
 0.1 site-console-indexed
 0.1 spare-login-empty
-3.7 spare-not-tenant
 1.1 spare-pod-leaks
 0.1 spare-recycle-dirty
 0.1 spare-refill-session-gate
 6.1 spare-reuse-leaks
 0.1 spare-stall-silent
-0.1 spare-unserved-handed
 1.6 spare-wash-no-fda
 29.6 spare-wash-respawn
 29.5 spare-wash-resume
@@ -464,7 +462,6 @@
 0.1 trial-no-subscription
 0.1 cluster-pod-claude-leak
 0.1 trial-pause-not-recycled
-0.1 trial-seat-no-home
 0.1 trial-slot-held
 0.6 trial-transcript-cross
 0.1 trial-wash-webchat-registered
@@ -498,3 +495,4 @@
 20.0 cred-sep-home-leak
 20.0 cred-gate-counts-unleased
 0.3 rm-empty-var-prompt
+1.5 spare-ready-unverified

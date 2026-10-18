@@ -127,7 +127,24 @@ func expectAccountOp(t *testing.T, n *tnode) (control.Message, control.AccountOp
 	return m, op
 }
 
+// sendResult answers an op as a current node does: a create or a wash that
+// went well carries a passed check (bin/fleet-login-ready.sh, claude-fleet
+// #4673) unless the test gave one; sendResultBare sends res as it is.
 func sendResult(t *testing.T, c *websocket.Conn, opID string, res control.AccountResult) {
+	t.Helper()
+	if res.OK && res.Ready == nil && (res.Op == control.AccountCreate || res.Op == control.AccountReset) {
+		res.Ready = passedCheck()
+	}
+	sendResultBare(t, c, opID, res)
+}
+
+// passedCheck is a check whose three steps passed.
+func passedCheck() *control.AccountCheck {
+	now := time.Now().Unix()
+	return &control.AccountCheck{CredOK: now, HomeOK: now, FirstReplyOK: now}
+}
+
+func sendResultBare(t *testing.T, c *websocket.Conn, opID string, res control.AccountResult) {
 	t.Helper()
 	m, _ := control.New(control.TypeAccountResult, res)
 	m.OpID = opID

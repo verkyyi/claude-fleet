@@ -128,6 +128,12 @@
 #      there (a WARN on failure that names the command to re-run). A --recycle
 #      starts it detached instead (issue #4196): the login is ready to hand out
 #      without it, so the reset's clock never waits on the starter fleet.
+#   8c. (a login the hub opened or washed, issue #4673) checked ONCE before it is
+#      handed out: bin/fleet-login-ready.sh as the login — a session credential
+#      from the machine's proxy, its home up (a wash's detached fleet waited
+#      for), a first reply — prints the `ready:` line the hub keeps (before the
+#      credsep line). A FAIL is not a failed run: the login exists, the hub holds
+#      it unready and says why.
 #   9. the welcome letter (issue #1195; `--no-welcome` skips it) →
 #      ~/<login>-onboard/welcome.txt in YOUR home, mode 600: how to connect
 #      (`ssh -p <port> <login>@<host>` — host and port from FLEET_SSH_PUBLIC_HOST /
@@ -992,6 +998,21 @@ fi
 
 [ "$DONLY" = 1 ] || fleet_up_step
 
+# 8c. a login the hub opened or washed is checked ONCE before it is handed out
+# (issue #4673): a session credential from the machine's proxy, its home up, a
+# first reply — bin/fleet-login-ready.sh, as the login. Its `ready:` line goes
+# to the hub with the result; a FAIL is not a failed run: the login exists, the
+# hub keeps it unready and says why.
+READY_LINE=''
+if [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ] && [ "$CREDSEP_LINE" = 'credsep: separated' ] \
+    && { [ "$OPENED" = 1 ] || [ "$RECYCLE" = 1 ]; }; then
+  say ""; say "[${N}c] check $LOGIN before it is handed out: credential · home · first reply, as $LOGIN (fleet-login-ready.sh)"
+  show bash "$ROOT/bin/fleet-login-ready.sh" "$LOGIN" --home "$H" --root "$ROOT"
+  READY_LINE=$(bash "$BIN/fleet-login-ready.sh" "$LOGIN" --home "$H" --root "$ROOT" 2>&1 | grep '^ready: ' | tail -1)
+  [ -n "$READY_LINE" ] || READY_LINE='ready: FAIL cred: fleet-login-ready.sh said nothing'
+  say "  $READY_LINE"
+fi
+
 if [ "$DONLY" = 1 ]; then
   say ""
   if [ "$APPLY" = 1 ]; then
@@ -1260,13 +1281,14 @@ fi
 # on the hub with its fleet up (issue #2652); credsep stays the last line
 [ -z "$NODE_LINE" ] || say "$NODE_LINE"
 [ -z "$FLEET_LINE" ] || say "$FLEET_LINE"
+[ -z "$READY_LINE" ] || say "$READY_LINE"
 # last, so the hub's detail (the output's tail) always carries it
 say "$CREDSEP_LINE"
 if [ "$APPLY" = 1 ] && [ -n "$OPID" ]; then
   # this op's result, for the same op arriving again (issue #2928): the lines
   # the hub reads off the output's tail, credsep last
   { printf 'done=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    for l in "$NODE_LINE" "$FLEET_LINE" "$CREDSEP_LINE"; do [ -z "$l" ] || printf 'line=%s\n' "$l"; done
+    for l in "$NODE_LINE" "$FLEET_LINE" "$READY_LINE" "$CREDSEP_LINE"; do [ -z "$l" ] || printf 'line=%s\n' "$l"; done
   } >> "$OPMARK" 2>/dev/null || say "  WARN: cannot record the result in $OPMARK"
 fi
 exit 0

@@ -173,13 +173,13 @@ func TestSpareCountFollowsTheMachinesRoom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sparesOn(t, h, "5")
+	sparesOn(t, h, "2")
 	openSpares(t, nodes["mac-c"], 1, control.CredsepSeparated) // 3 − 2 = 1
-	openSpares(t, nodes["mac-d"], 5, control.CredsepSeparated) // min(5, 10 − 0)
+	openSpares(t, nodes["mac-d"], 2, control.CredsepSeparated) // min(2, 10 − 0)
 	noOp(t, nodes, "mac-c")
 	waitFor(t, 3*time.Second, "the spares to be ready", func() bool {
 		r := h.srv.spareReadyHosts()
-		return r["mac-c"] == 1 && r["mac-d"] == 5
+		return r["mac-c"] == 1 && r["mac-d"] == 2
 	})
 
 	var snap NodesSnapshot
@@ -198,11 +198,11 @@ func TestSpareCountFollowsTheMachinesRoom(t *testing.T) {
 		t.Fatal("mac-c is not on the operator's roster")
 	}
 
-	// The cap comes down: mac-d's newest spares close until it holds 2.
-	setHubSetting(t, h.srv, SpareMaxKey, "2")
+	// The cap comes down: mac-d's newest spare closes until it holds 1.
+	setHubSetting(t, h.srv, SpareMaxKey, "1")
 	h.srv.replenishSpares(time.Now(), true)
 	h.srv.dispatchAccounts()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 1; i++ {
 		if _, op := expectAccountOp(t, nodes["mac-d"].tnode); op.Op != control.AccountRemove || !strings.HasPrefix(op.Login, "fleetu") {
 			t.Fatalf("shrink op = %+v; want a remove of a spare", op)
 		}
@@ -392,7 +392,8 @@ func TestSpareOffAddsNothing(t *testing.T) {
 }
 
 func TestSpareSettings(t *testing.T) {
-	for v, ok := range map[string]bool{"0": true, "5": true, "20": true, "21": false, "-1": false, "x": false} {
+	// At most 2 a machine (claude-fleet#4673).
+	for v, ok := range map[string]bool{"0": true, "1": true, "2": true, "3": false, "20": false, "-1": false, "x": false} {
 		if _, msg := checkSpareMax(nil, v); (msg == "") != ok {
 			t.Errorf("%s=%q: refusal %q, want ok=%v", SpareMaxKey, v, msg, ok)
 		}
@@ -402,5 +403,88 @@ func TestSpareSettings(t *testing.T) {
 	}
 	if got := nodeUserCap("m9", nil); got != defaultNodeUserCap {
 		t.Errorf("nodeUserCap(m9) = %d, want %d", got, defaultNodeUserCap)
+	}
+}
+
+// A spare is handed out only once its open checked all three (claude-fleet
+// #4673, BREAK-IT spare-ready-unverified): a session credential from the
+// machine's proxy, its home up, a first reply. On 2026-10-14 spares with no
+// home, no proxy tenancy or no subscription were all 「ready」 — active was
+// all the hub asked. Now one whose first reply failed is held, never ready,
+// never claimed, its why on record and audited spare.unchecked; one from a
+// node that runs no check is held the same; once a check passes it is handed.
+func TestSpareHandedOnlyAfterThreeChecks(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h)
+	nodes := spareFleet(t, h)
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "0") // only mac-d keeps one
+	sparesOn(t, h, "2")
+	active := func(login string) {
+		t.Helper()
+		waitFor(t, 3*time.Second, login+" to be active", func() bool {
+			for _, a := range mustSpares(t, h) {
+				if a.Login == login && a.State == store.AccountActive {
+					return true
+				}
+			}
+			return false
+		})
+	}
+
+	// The first reply fails: the login exists, but it is not ready.
+	m1, op1 := expectAccountOp(t, nodes["mac-d"].tnode)
+	failed := &control.AccountCheck{CredOK: 100, HomeOK: 101, Fail: "reply: claude -p exited 1: 403"}
+	sendResult(t, nodes["mac-d"].c, m1.OpID, control.AccountResult{Op: control.AccountCreate, Login: op1.Login, OK: true,
+		Credsep: control.CredsepSeparated, Ready: failed})
+	// A node older than the check answers none.
+	m2, op2 := expectAccountOp(t, nodes["mac-d"].tnode)
+	sendResultBare(t, nodes["mac-d"].c, m2.OpID, control.AccountResult{Op: control.AccountCreate, Login: op2.Login, OK: true,
+		Credsep: control.CredsepSeparated})
+	active(op1.Login)
+	active(op2.Login)
+	if r := h.srv.spareReadyHosts()["mac-d"]; r != 0 {
+		t.Fatalf("mac-d ready = %d with no spare checked; want 0", r)
+	}
+	if a := h.srv.claimSpareAt("gh:7501", "WangWu", "test", "mac-d", time.Now()); a != nil {
+		t.Fatalf("an unchecked spare was handed: %+v", a)
+	}
+	checks, err := h.srv.Store.AccountChecks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := checks[m1.OpID]; c.Steps() != 2 || c.Passed() || !strings.Contains(c.Why, "reply: claude -p exited 1") {
+		t.Fatalf("check of %s = %+v; want 2/3, why the reply", op1.Login, c)
+	}
+	if c := checks[m2.OpID]; c.Steps() != 0 || c.Why != noCheckWhy {
+		t.Fatalf("check of %s = %+v; want none run (%q)", op2.Login, c, noCheckWhy)
+	}
+	if hubAuditHas(t, h, "spare.unchecked", op1.Login) == nil {
+		t.Fatalf("no spare.unchecked audit for %s", op1.Login)
+	}
+	var snap NodesSnapshot
+	h.getJSON(t, "/v1/nodes", &snap)
+	for _, mv := range snap.Machines {
+		if mv.Hostname == "mac-d" && (mv.Spare == nil || *mv.Spare != 0 || mv.SpareUnchecked == nil || *mv.SpareUnchecked != 2) {
+			t.Fatalf("mac-d = spare %v unchecked %v; want 0 · 2", mv.Spare, mv.SpareUnchecked)
+		}
+	}
+	// Held: no third spare beside them, and mac-d cannot recycle — nothing
+	// is sent, the operator looks (the roster and the account list say why).
+	h.srv.replenishSpares(time.Now(), true)
+	h.srv.dispatchAccounts()
+	noOp(t, nodes, "mac-d")
+
+	// A check that passed hands it out.
+	acct, err := h.srv.Store.AccountByOp(m1.OpID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.recordAccountCheck(m1.OpID, acct.EndpointID, control.AccountResult{Op: control.AccountCreate, Login: op1.Login,
+		OK: true, Ready: passedCheck()}, time.Now())
+	if r := h.srv.spareReadyHosts()["mac-d"]; r != 1 {
+		t.Fatalf("mac-d ready = %d with one spare checked 3/3; want 1", r)
+	}
+	if a := h.srv.claimSpareAt("gh:7501", "WangWu", "test", "mac-d", time.Now()); a == nil || a.Login != op1.Login {
+		t.Fatalf("claim = %+v; want the checked spare %s", a, op1.Login)
 	}
 }

@@ -1153,6 +1153,9 @@ type MachineView struct {
 	SpareResetting *int `json:"spare_resetting,omitempty"`
 	SpareFailed    *int `json:"spare_failed,omitempty"`
 	SpareTarget    *int `json:"spare_target,omitempty"`
+	// SpareUnchecked is how many active spares did not pass their check
+	// before being handed out (claude-fleet#4673): held, never ready.
+	SpareUnchecked *int `json:"spare_unchecked,omitempty"`
 	// Door is the machine's entry port on the operator's roster
 	// (claude-fleet#3934, stampDoors); absent elsewhere and while no entry
 	// port or door is set up.

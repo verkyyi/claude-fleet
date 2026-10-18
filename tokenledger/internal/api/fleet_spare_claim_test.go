@@ -17,7 +17,7 @@ import (
 // spare's fleetu<N> while their own name stays theirs elsewhere; own_name
 // opens their own name instead. Each place (a machine, or a cluster standing
 // as one roster place) keeps its desired state's spare_accounts, else
-// fleet.spare_max (default 2); the roster counts ready, resetting and failed
+// fleet.spare_max (default 1, at most 2); the roster counts ready, resetting and failed
 // spares apart.
 
 // readySpares waits until host holds n ready spares.
@@ -168,7 +168,7 @@ func TestSpareOwnNameAndNoneReady(t *testing.T) {
 }
 
 // The target is the place's desired spare_accounts when written (0 too), else
-// fleet.spare_max (default 2), never past the login cap's room.
+// fleet.spare_max (default 1), never past 2 nor the login cap's room.
 func TestSpareTargetFollowsDesiredState(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
@@ -188,30 +188,36 @@ func TestSpareTargetFollowsDesiredState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if target("mac-c") != 2 || target("mac-d") != 2 {
-		t.Fatalf("default target = %d / %d; want 2", target("mac-c"), target("mac-d"))
+	if target("mac-c") != 1 || target("mac-d") != 1 {
+		t.Fatalf("default target = %d / %d; want 1", target("mac-c"), target("mac-d"))
 	}
-	for _, n := range []int{1, 3, 0} {
+	for _, c := range []struct{ n, want int }{{1, 1}, {3, 2}, {0, 0}} {
+		n := c.n
 		b, _ := json.Marshal(DesiredBody{Spares: &n})
 		put("ep_mac-c-op", string(b))
-		if got := target("mac-c"); got != n {
-			t.Fatalf("desired spare_accounts %d (%s): target %d", n, b, got)
+		if got := target("mac-c"); got != c.want {
+			t.Fatalf("desired spare_accounts %d (%s): target %d; want %d (at most 2)", n, b, got, c.want)
 		}
-		if got := target("mac-d"); got != 2 {
-			t.Fatalf("mac-d (no desired state) target %d; want the default 2", got)
+		if got := target("mac-d"); got != 1 {
+			t.Fatalf("mac-d (no desired state) target %d; want the default 1", got)
 		}
 	}
 	// A desired state that does not name the key keeps the setting.
 	put("ep_mac-c-op", `{"release":"abc123"}`)
-	setHubSetting(t, h.srv, SpareMaxKey, "4")
-	if target("mac-c") != 4 || target("mac-d") != 4 {
-		t.Fatalf("fleet.spare_max 4: %d / %d", target("mac-c"), target("mac-d"))
+	setHubSetting(t, h.srv, SpareMaxKey, "2")
+	if target("mac-c") != 2 || target("mac-d") != 2 {
+		t.Fatalf("fleet.spare_max 2: %d / %d", target("mac-c"), target("mac-d"))
+	}
+	// An old value past the ceiling reads as 2.
+	setHubSetting(t, h.srv, SpareMaxKey, "20")
+	if target("mac-d") != 2 {
+		t.Fatalf("fleet.spare_max 20 (from before claude-fleet#4673): target %d; want 2", target("mac-d"))
 	}
 	// The cap still bounds it.
 	put("ep_mac-c-op", `{"spare_accounts":9}`)
-	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "3")
-	if got := target("mac-c"); got != 3 {
-		t.Fatalf("desired 9 under a cap of 3: target %d", got)
+	setHubSetting(t, h.srv, NodeUserCapPrefix+"mac-c", "1")
+	if got := target("mac-c"); got != 1 {
+		t.Fatalf("desired 9 under a cap of 1: target %d", got)
 	}
 }
 
@@ -221,9 +227,9 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h)
 	nodes := spareFleet(t, h)
-	sparesOn(t, h, "3")
-	openSpares(t, nodes["mac-d"], 3, control.CredsepSeparated)
-	for i := 0; i < 3; i++ {
+	sparesOn(t, h, "2")
+	openSpares(t, nodes["mac-d"], 2, control.CredsepSeparated)
+	for i := 0; i < 2; i++ {
 		m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 		word := control.CredsepSeparated
 		if i == 0 {
@@ -231,8 +237,8 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 		}
 		sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true, Credsep: word})
 	}
-	readySpares(t, h, "mac-d", 3)
-	readySpares(t, h, "mac-c", 2)
+	readySpares(t, h, "mac-d", 2)
+	readySpares(t, h, "mac-c", 1)
 	for _, sp := range mustSpares(t, h) {
 		if sp.Hostname == "mac-d" {
 			if ok, err := h.srv.Store.MarkAccountSent(sp.PrincipalID, "mac-d", store.AccountActive, store.AccountResetting, "op-reset", "", time.Now()); err != nil || !ok {
@@ -243,7 +249,7 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 	}
 	var snap NodesSnapshot
 	h.getJSON(t, "/v1/nodes", &snap)
-	want := map[string][3]int{"mac-c": {2, 0, 1}, "mac-d": {2, 1, 0}}
+	want := map[string][3]int{"mac-c": {1, 0, 1}, "mac-d": {1, 1, 0}}
 	for _, m := range snap.Machines {
 		w, ok := want[m.Hostname]
 		if !ok {
@@ -251,8 +257,8 @@ func TestSpareRosterCountsResettingAndFailed(t *testing.T) {
 		}
 		delete(want, m.Hostname)
 		if m.Spare == nil || m.SpareResetting == nil || m.SpareFailed == nil || m.SpareTarget == nil ||
-			[3]int{*m.Spare, *m.SpareResetting, *m.SpareFailed} != w || *m.SpareTarget != 3 {
-			t.Fatalf("%s = spare %v resetting %v failed %v target %v; want %v / 3", m.Hostname, m.Spare, m.SpareResetting, m.SpareFailed, m.SpareTarget, w)
+			[3]int{*m.Spare, *m.SpareResetting, *m.SpareFailed} != w || *m.SpareTarget != 2 {
+			t.Fatalf("%s = spare %v resetting %v failed %v target %v; want %v / 2", m.Hostname, m.Spare, m.SpareResetting, m.SpareFailed, m.SpareTarget, w)
 		}
 	}
 	if len(want) != 0 {
@@ -280,7 +286,8 @@ func TestSpareClusterPlaceClaimAndRefill(t *testing.T) {
 		}
 		return false
 	})
-	setHubSetting(t, h.srv, SparesKey, "on") // no fleet.spare_max: the default 2
+	setHubSetting(t, h.srv, SparesKey, "on")
+	setHubSetting(t, h.srv, SpareMaxKey, "2") // the most a place keeps
 	h.srv.replenishSpares(time.Now(), true)
 	h.srv.dispatchAccounts()
 	pods := openSpares(t, n, 2, control.CredsepSeparated)

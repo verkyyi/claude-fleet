@@ -37,9 +37,8 @@ const (
 var credsepCommand = exec.CommandContext
 
 type credsepProbe struct {
-	at     time.Time
-	word   string
-	served *bool
+	at   time.Time
+	word string
 }
 
 // reading is the login's credsep word: separated | not | unknown.
@@ -47,29 +46,8 @@ func (p *credsepProbe) reading(ctx context.Context, home string, now time.Time) 
 	if !p.at.IsZero() && now.Sub(p.at) < credsepInterval {
 		return p.word
 	}
-	p.at, p.word, p.served = now, credsepJudge(ctx, home), credsepServed(ctx, home)
+	p.at, p.word = now, credsepJudge(ctx, home)
 	return p.word
-}
-
-// credsepServed is `fleet-credsep.sh served` (claude-fleet#4247): does the
-// proxy hand this login a credential now? Exit 0 yes, 3 no; nil for anything
-// else — cannot tell (2), a script older than the verb (its «unknown command»
-// is 2 too), or one that never ran.
-func credsepServed(ctx context.Context, home string) *bool {
-	script := filepath.Join(home, credsepScript)
-	if _, err := os.Stat(script); err != nil {
-		return nil
-	}
-	var v bool
-	switch credsepRun(ctx, home, script, "served") {
-	case 0:
-		v = true
-	case 3:
-		v = false
-	default:
-		return nil
-	}
-	return &v
 }
 
 func credsepJudge(ctx context.Context, home string) string {

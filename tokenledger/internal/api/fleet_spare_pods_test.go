@@ -399,11 +399,11 @@ func TestSparePodSettings(t *testing.T) {
 			t.Errorf("checkClusters(%q) = %q; want ok=%v", v, why, ok)
 		}
 	}
-	putSetting(t, h, SpareMaxPrefix+testCluster, "3", 200)
-	putSetting(t, h, SpareMaxPrefix+testCluster, "99", 400)
+	putSetting(t, h, SpareMaxPrefix+testCluster, "2", 200)
+	putSetting(t, h, SpareMaxPrefix+testCluster, "3", 400) // at most 2 (claude-fleet#4673)
 	set, _ := h.srv.Store.FleetSettings()
-	if got := h.srv.clusterSpareMax(testCluster, set); got != 3 {
-		t.Fatalf("clusterSpareMax = %d; want 3", got)
+	if got := h.srv.clusterSpareMax(testCluster, set); got != 2 {
+		t.Fatalf("clusterSpareMax = %d; want 2", got)
 	}
 	if got := h.srv.clusterSpareMax("other", set); got != defaultSpareMax {
 		t.Fatalf("another cluster = %d; want fleet.spare_max's default", got)

@@ -901,7 +901,7 @@ hub settings and one agent variable turn it on:
 |---|---|
 | hub `fleet.spares` | `on` (the same switch as a machine's spare logins) |
 | hub `fleet.clusters` | the clusters that keep spare pods, by the name their fleet-ops reports |
-| hub `fleet.spare_max.<cluster>` | how many (default `fleet.spare_max`, 2), within `fleet.node_user_cap.<cluster>` (10) − the pods people hold |
+| hub `fleet.spare_max.<cluster>` | how many (default `fleet.spare_max`, 1; at most 2 — claude-fleet#4673), within `fleet.node_user_cap.<cluster>` (10) − the pods people hold |
 | hub `CCQUOTA_FLEET_ACCOUNT_KEY` | the account-op key — every ticket is signed with it (C15/C16); none = no pool |
 | fleet-ops `CCQUOTA_FLEET_PROVISIONER` | the provisioner's address; the agent's hello lists `cluster_ops` and it carries tickets there unopened |
 
