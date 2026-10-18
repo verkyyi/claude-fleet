@@ -23,6 +23,9 @@
 #   8. (issue #1104) ONE `repos` summary row per fleet lists every hosted repo with
 #      ✓, or ✗ plus the failing item (main / base / trust); the WARN form does not
 #      count again (its items were already counted); a one-repo fleet shows it too.
+#   9. (issue #1944) an `overrides` row per overlay repo names the keys it set on
+#      its own (identity keys left to their rows), the fleet value each shadows, and
+#      never a credential-shaped value; two / one / zero repos.
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -48,11 +51,14 @@ FLEET_MAIN="$WORK/alpha"
 FLEET_BASE_BRANCH="main"
 FLEET_DEPLOY_CHECK="actions"
 FLEET_BASE_DEPS=1
+FLEET_MODEL="sonnet"
 EOF
 cat > "$WORK/conf/fleets/fleet-t/repos/o-beta.conf" <<EOF
 FLEET_REPO="o/beta"
 FLEET_MAIN="$WORK/no-such-beta"
 FLEET_BASE_BRANCH="main"
+FLEET_MODEL="opus"
+export FLEET_API_TOKEN="s3cr3t-beta"
 EOF
 
 # gh shim: `repo view <r> …` → default branch, then label names. o/alpha carries
@@ -106,6 +112,15 @@ ok
 
 # 5. missing labels are named, per repo
 row WARN labels 'o/beta: missing fleet labels: enhancement' || fail "o/beta's missing labels were not reported"
+ok
+
+# 9. (issue #1944) two repos: o/beta's own settings, the fleet value it shadows,
+#    the token hidden; o/alpha (no overlay) has no overrides row
+row INFO overrides "o/beta: FLEET_MODEL=opus \\(fleet: sonnet\\) · FLEET_API_TOKEN=<hidden> — in $WORK/conf/fleets/fleet-t/repos/o-beta.conf\$" \
+  || fail "o/beta's overrides row did not list its own keys"
+grep -q 's3cr3t-beta' "$WORK/stdout" && fail "a credential value was printed"
+grep -q 'overrides .*FLEET_BASE_BRANCH' "$WORK/stdout" && fail "an identity key was listed as an override"
+grep -q 'overrides  *o/alpha' "$WORK/stdout" && fail "o/alpha has no overlay but got an overrides row"
 ok
 
 # 8. (issue #1104) the `repos` summary row: both repos, beta's broken main named
@@ -162,6 +177,21 @@ run_doctor
 grep -q 'o/beta' "$WORK/stdout" && fail "o/beta still reported after its overlay was removed"
 row PASS repos '1 hosted: o/alpha ✓$' || fail "a one-repo fleet has no PASS repos row"
 [ "$(grep -c 'repos ' "$WORK/stdout")" = 1 ] || fail "a one-repo fleet printed other than one repos row"
+grep -q 'overrides ' "$WORK/stdout" && fail "a one-repo fleet with no overlay printed an overrides row"
+ok
+# 9. one repo as an overlay holding only its identity
+mkdir -p "$WORK/conf/fleets/fleet-t/repos"
+printf 'FLEET_REPO="o/alpha"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$WORK/alpha" > "$WORK/conf/fleets/fleet-t/repos/o-alpha.conf"
+run_doctor
+row INFO overrides "o/alpha: no setting of its own" || fail "an identity-only overlay did not say it has no setting of its own"
+ok
+# 9. zero repos: no block, no overrides row, the repos row says 0 hosted
+rm -rf "$WORK/conf/fleets/fleet-t/repos"
+printf 'FLEET_BASE_DEPS=0\n' > "$WORK/conf/fleets/fleet-t/conf"
+run_doctor
+grep -q 'unbound variable' "$WORK/stderr" && fail "doctor died on an unbound variable with zero repos"
+row PASS repos '0 hosted' || fail "a fleet with no repo has no '0 hosted' repos row"
+grep -Eq '── fleet-t · |overrides ' "$WORK/stdout" && fail "a fleet with no repo printed a repo block"
 ok
 
 printf 'fleet-doctor-repos-selftest: %d checks passed\n' "$CHECKS"
