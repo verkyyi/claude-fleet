@@ -553,6 +553,7 @@ def main():
                         processes = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True, timeout=5)
                         core = [int(row.split(None, 1)[0]) for row in processes.splitlines()
                                 if str(home / '.claude/fleet/bin/fleet-mcp.py') in row
+                                and '--group orch' not in row   # the dispatch group (#4334) is not the core
                                 and launch.descendant(int(row.split(None, 1)[0]), observed['pid'])]
                         check(len(core) == 1, phase + ': Fleet mounts exactly one core MCP process')
                         mcp_proofs = [launch.process(pid) for pid in set(core) |
