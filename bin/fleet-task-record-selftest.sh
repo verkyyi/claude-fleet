@@ -7,7 +7,8 @@
 #   A  no hub (no node token): every write exits 3, prints nothing, sends nothing —
 #      callers stay byte for byte what they were.
 #   B  new: POST /v1/node/tasks, the token in the -K header on stdin (never argv),
-#      the JSON body (rule → the issue marker's `n=N v=…` words); `T<n>` on stdout;
+#      the JSON body (--rule accepted and dropped since the rule table left, issue
+#      #4340 — no `rule` key); `T<n>` on stdout;
 #      a hub refusal → exit 1, said on stderr.
 #   C  set / get: POST /v1/node/tasks/T<n> with asked / parked / clear; GET the record.
 #   D  dispatch: the record first, then a repo task through fleet-issue-file.sh
@@ -91,11 +92,11 @@ grep -q '^argv: .*-X POST .*https://hub.test/v1/node/tasks$' "$CURL_LOG" && ok "
   || bad "B argv: $(cat "$CURL_LOG")"
 grep -q '^stdin: header = "Authorization: Bearer tok-SECRET"' "$CURL_LOG" && ! grep '^argv:' "$CURL_LOG" | grep -q SECRET \
   && ok "B the token rides the -K stdin, never an argv" || bad "B token: $(cat "$CURL_LOG")"
-python3 - "$CURL_LOG" <<'PY' && ok "B the body: token, title, via, the rule's marker words" || bad "B body: $(grep body: "$CURL_LOG")"
+python3 - "$CURL_LOG" <<'PY' && ok "B the body: token, title, via — no rule" || bad "B body: $(grep body: "$CURL_LOG")"
 import json, re, sys
 b = json.loads([l for l in open(sys.argv[1]) if l.startswith("body: ")][0][6:])
 assert b["token"] == "orch:k1" and b["title"] == "看看风扇" and b["via"] == "编排", b
-assert re.match(r"^n=1 v=[0-9a-f]+$", b["rule"]), b
+assert "rule" not in b, b
 assert "repo" not in b and "issue" not in b, b
 PY
 echo 409 > "$CODE"; : > "$CURL_LOG"
@@ -103,7 +104,7 @@ bash "$R" new --title t --token k >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q 'refused (HTTP 409)' "$WORK/err" && ok "B a refusal exits 1 and says so" || bad "B refusal rc=$rc $(cat "$WORK/err")"
 rm -f "$CODE"
 bash "$R" new --title t >/dev/null 2>&1; [ "$?" = 2 ] && ok "B no token: usage (2)" || bad "B no --token accepted"
-bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 2 ] && ok "B an unknown rule: 2" || bad "B unknown rule accepted"
+bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 0 ] && ok "B any --rule is accepted and ignored (issue #4340)" || bad "B --rule 9999 refused"
 
 # --- C: set / get ------------------------------------------------------------------
 : > "$CURL_LOG"
@@ -127,7 +128,7 @@ rm -f "$ANS"
 out=$(printf '为什么一直转\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --rule 1 --spawn 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = T5 ] && printf '%s\n' "$out" | grep -q 'issues/77' \
   && ok "D a repo task: T<n> first, then the issue's URL" || bad "D repo: rc=$rc [$out]"
-[ "$(head -1 "$WORK/calls")" = "fleet-issue-file.sh --title 修风扇 --body 为什么一直转 --repo o/r --rule 1 --task T5 --spawn" ] \
+[ "$(head -1 "$WORK/calls")" = "fleet-issue-file.sh --title 修风扇 --body 为什么一直转 --repo o/r --task T5 --spawn" ] \
   && ok "D …filed through fleet-issue-file.sh --task T5 --spawn" || bad "D filer argv: $(cat "$WORK/calls")"
 grep -q '"repo": "o/r"' "$CURL_LOG" && grep -q '"token": "orch:hub:' "$CURL_LOG" \
   && ok "D the record names the repo; the token is the caller's + the words'" || bad "D record body: $(grep body: "$CURL_LOG")"
