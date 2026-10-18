@@ -24,8 +24,9 @@ One holder per role.
      person who is orchestrating and **stop** — never take it over unasked. Only when the
      person says so: `action: steal` (the other window loses the mark).
    - exit 3 — this window binds an issue: a worker never orchestrates. Say so and stop.
-   No `mcp__fleet-orch__*` tool at all? The fleet-orchestrate plugin's dispatch group is
-   not mounted — say so (`/plugin install fleet-orchestrate@claude-fleet`, then reopen).
+   No `take_role` tool (issue #4334 took it off the list)? There is no seat to take: go on.
+   No `mcp__fleet-orch__*` tool at all? This session may not spawn (`@agent_spawn` is not
+   1 — the dispatch group ships with the core and mounts only there) — say so and stop.
 2. **Read your role and your rules** — this skill's directory: `role.md` (who you are and
    how you work; it ends with your rows of the rule table) and `rules.md` (the dispatch
    rules, the whole orchestrator table). Claude Code's optional state hook hands both

@@ -4,8 +4,9 @@
 # fleet-browser (issue #3236), fleet-feedback (#3360) and fleet-infra (#3586) under plugins/, beside the core `fleet` plugin (the repo root).
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
-#      source is its dir and its name the dir's plugin.json name; steward and
-#      epic depend on fleet-orchestrate; every plugin pins a version;
+#      source is its dir and its name the dir's plugin.json name; steward
+#      depends on fleet-orchestrate, epic on nothing (its driver dispatches with
+#      the core's tools, issue #4334); every plugin pins a version;
 #      `claude plugin validate` passes (when claude is on PATH)
 #   B  paths: every skill has name + description frontmatter, every command /
 #      agent / hooks.json / .mcp.json the plugin carries exists and parses, and
@@ -99,8 +100,10 @@ for d in dirs:
     if not re.match(r"^\d+\.\d+\.\d+$", str(pj.get("version", ""))):
         bad.append("A %s: no semver version — the doctor's 落后 reads version vs folderVersion" % d)
     deps = pj.get("dependencies") or []
-    if d in ("fleet-steward", "fleet-epic") and "fleet-orchestrate" not in deps:
-        bad.append("A %s must depend on fleet-orchestrate (its dispatch tools)" % d)
+    if d == "fleet-steward" and "fleet-orchestrate" not in deps:
+        bad.append("A %s must depend on fleet-orchestrate" % d)
+    if d == "fleet-epic" and deps:
+        bad.append("A fleet-epic depends on nothing (the dispatch tools ship with the core, #4334), has %s" % deps)
     if d == "fleet-orchestrate" and deps:
         bad.append("A fleet-orchestrate depends on nothing, has %s" % deps)
     # B: parts
@@ -148,9 +151,6 @@ for d in dirs:
 native_root = os.path.join(root, "plugins", "fleet-orchestrate")
 native_manifest = json.load(open(os.path.join(native_root, ".codex-plugin", "plugin.json")))
 claude_manifest = json.load(open(os.path.join(native_root, ".claude-plugin", "plugin.json")))
-native_mcp = native_manifest.get("mcpServers", {}).get("fleet-orch", {})
-claude_mcp = json.load(open(os.path.join(native_root, ".mcp.json")))["mcpServers"]["fleet-orch"]
-mcp_constants = runpy.run_path(os.path.join(root, "bin", "fleet-mcp.py"))
 if any(native_manifest.get(key) != claude_manifest.get(key) for key in ("name", "version")):
     bad.append("B native and Claude plugin identity/version differ")
 if native_manifest.get("skills") != "./skills/" or native_manifest.get("hooks") != {"hooks": {}}:
@@ -158,12 +158,10 @@ if native_manifest.get("skills") != "./skills/" or native_manifest.get("hooks") 
 codex_map = json.load(open(os.path.join(root, "hooks", "codex-map.json")))
 if "fleet-orchestrator-state.py" not in codex_map.get("drop_commands", {}):
     bad.append("B legacy Codex bridge and native package disagree on orchestration state ownership")
-if any(native_mcp.get(key) != claude_mcp.get(key) for key in ("command", "args")):
-    bad.append("B native MCP must call the same Fleet implementation")
-if native_mcp.get("env_vars") != mcp_constants["CODEX_ENV"] or "env" in native_mcp:
-    bad.append("B native MCP must forward only the agreed environment names")
-if native_mcp.get("tool_timeout_sec") != mcp_constants["CODEX_TOOL_TIMEOUT_S"]:
-    bad.append("B native MCP timeout differs from the supported blocking tool budget")
+# The dispatch group ships with the core (issue #4334): the launchers mount
+# conf/mcp-orch.json where @agent_spawn is 1 — no plugin registers it, either agent.
+if "fleet-orch" in (native_manifest.get("mcpServers") or {}) or os.path.exists(os.path.join(native_root, ".mcp.json")):
+    bad.append("B fleet-orchestrate registers the dispatch group — it is the core's (conf/mcp-orch.json)")
 # C: the default package
 for d in dirs:
     for s in skills_of[d]:

@@ -121,7 +121,7 @@ def probe(binary, client_type, mode, fleet_root, retire_bridge=False):
             server["env"] = {name: "${" + name + "}" for name in ENVIRONMENT_NAMES}
         servers = {"fixture-native-mcp": server}
         if mode == "allowlist":
-            source = fleet_root / "plugins/fleet-orchestrate/.mcp.json"
+            source = fleet_root / "conf/mcp-orch.json"
             fleet_server = json.loads(source.read_text())["mcpServers"]["fleet-orch"]
             fleet_server.update(env_vars=list(ENVIRONMENT_NAMES), tool_timeout_sec=5)
             servers["fleet-orch"] = fleet_server
@@ -437,48 +437,10 @@ def probe_package(binary, client_type, fleet_root, role_checks=False):
                                                      "approvalPolicy": "never", "sandbox": "read-only"})
                 status = client.call("mcpServerStatus/list", {})
                 servers = [entry for entry in status["data"] if entry["name"] == "fleet-orch"]
-                check(len(servers) == 1 and servers[0].get("serverInfo") is not None,
-                      "actual package inline MCP starts once alongside shared .mcp.json")
-                check(servers[0].get("pluginId") == plugin_id and len(servers[0]["tools"]) == 7,
-                      "native package owns all seven orchestration tools")
-                if role_checks:
-                    def take_role(action="take"):
-                        return client.call("mcpServer/tool/call", {"threadId": native["thread"]["id"],
-                                           "server": "fleet-orch", "tool": "take_role",
-                                           "arguments": {"role": "orchestrator", "action": action}})
-
-                    def role_exit(result):
-                        return result.get("structuredContent", {}).get("exit")
-
-                    held = Path(environment["FLEET_CONF_DIR"]) / "global/roles.held"
-                    check(role_exit(take_role()) == 0, "native MCP takes role with valid fixture identity")
-                    check(fixture_tmux("show-options", "-wqv", "-t", fixture_window, "@fleet_role_def") == "orchestrator"
-                          and held.read_text().split("\t")[2:4] == [fixture_fid, fixture_window],
-                          "real role script binds exact fixture window and persistent ID")
-                    before = held.read_text()
-                    check(role_exit(take_role("who")) == 0 and held.read_text() == before,
-                          "native role lookup preserves ownership")
-                    fixture_tmux("set-window-option", "-t", fixture_window, "@fleet_id",
-                                 "22222222-2222-4222-8222-222222222222")
-                    result = take_role("drop")
-                    refused = " ".join(part.get("text", "") for part in result["content"])
-                    check(result.get("isError") and "not the credential's session" in refused and held.read_text() == before,
-                          "valid credential cannot mutate another session identity")
-                    fixture_tmux("set-window-option", "-t", fixture_window, "@fleet_id", fixture_fid)
-                    check(role_exit(take_role("drop")) == 0 and not held.read_text().strip(),
-                          "native MCP drops only the verified fixture role")
-                    fixture_tmux("set-window-option", "-t", fixture_window, "@issue", "123")
-                    check(role_exit(take_role()) == 3 and not held.read_text().strip(),
-                          "issue-bound worker cannot take orchestration role")
-                    audit = (root / "logs/mcp-calls.log").read_text()
-                    check("via=cred" in audit and "via=badcred" in audit and environment["FLEET_WORKER_CRED"] not in audit,
-                          "valid and mismatched identities audited without credential disclosure")
-                else:
-                    result = client.call("mcpServer/tool/call", {"threadId": native["thread"]["id"],
-                                         "server": "fleet-orch", "tool": "children", "arguments": {}})
-                    refused = " ".join(part.get("text", "") for part in result["content"])
-                    check(result.get("isError") and "credential is malformed" in refused and "Nothing ran" in refused,
-                          "actual package forwards credential and refuses before business execution")
+                # The dispatch group ships with the core (issue #4334): the launcher mounts
+                # conf/mcp-orch.json where @agent_spawn is 1 — the package carries none.
+                check(not [entry for entry in servers if entry.get("pluginId") == plugin_id],
+                      "native package mounts no dispatch tools (the core's launcher does)")
                 check((root / "logs/mcp-calls.log").is_file(), "audit remains in temporary directory")
                 check("# >>> fleet plugins" not in configuration.read_text() and
                       not any((codex_home / "skills").glob("fleet-*")),

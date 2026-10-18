@@ -58,14 +58,19 @@
 #      on stdout, exit 0 answered (the script's exit is in the text) / 1 refused
 #      (the reason on stdout, nothing ran) / 2 usage; the call log says road=call
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
-#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · take_role · task;
+#      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task
+#      (take_role listed by neither, still answered — issue #4334);
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
 #      from a pre-group version keeps listing all 28 and hands that on; file_issue
-#      spawn:true with no dispatch group files WITHOUT --spawn and says how to install
-#      it, with it (FLEET_MCP_ORCH=1, or the plugin enabled in Claude Code's settings)
-#      spawns as before; --mount codex --group orch derives from conf/mcp-orch.json,
-#      the same server the plugin's .mcp.json registers; --bridge-seat answers by @agent_spawn, never a role name (issue #3118)
+#      spawn:true with no dispatch group files WITHOUT --spawn and says this session
+#      may not spawn, with it (FLEET_MCP_ORCH=1, or the pane's @agent_spawn 1) spawns as
+#      before — a plugin enabled in Claude Code's settings counts for nothing (issue
+#      #4334); --mount codex --group orch derives from conf/mcp-orch.json and no plugin
+#      registers the server; --bridge-seat answers by @agent_spawn, never a role name (issue #3118)
+#   Q2 the dispatch group ships with the core (issue #4334): no plugin + @agent_spawn 1
+#      ⇒ --bridge-seat 0 and file_issue spawns; @agent_spawn unset / 0 (a session whose
+#      agent file takes spawn away) ⇒ none; take_role on neither server's list
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -140,6 +145,7 @@ if [ "$1" = display-message ]; then
     *'#{@origin}'*) printf 'issue-77\n' ;;
     *'#{@issue}'*) [ -n "${FAKE_NOISSUE:-}" ] || printf '1807\n' ;;
     *'#{@task}'*) printf '%s\n' "${FAKE_TASK:-}" ;;
+    *'#{@agent_spawn}'*) printf '%s\n' "${FAKE_SPAWN:-}" ;;
   esac
   exit 0
 fi
@@ -1108,10 +1114,9 @@ import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
 assert rows[1]["serverInfo"]["name"] == "fleet-orch", rows[1]
 tools = {t["name"]: t for t in rows[2]["tools"]}
-assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "take_role", "task"], sorted(tools)
+assert sorted(tools) == ["answer_dialog", "await", "children", "send", "spawn", "task"], sorted(tools)
 assert tools["task"]["inputSchema"]["required"] == ["title"]   # issue #3330
 assert "required" not in tools["await"]["inputSchema"]          # issue or task (#3330)
-assert tools["take_role"]["inputSchema"]["required"] == ["role"]
 assert tools["spawn"]["inputSchema"]["required"] == ["issue"]
 assert tools["send"]["inputSchema"]["required"] == ["to", "text"]
 for t in tools.values():
@@ -1119,7 +1124,7 @@ for t in tools.values():
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
 [ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|take_role|task' "$WORK/q.l0" \
-  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn take_role task " ] \
+  && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
 # An old session (its list had spawn) calls it on `fleet`: answered, logged road=legacy.
@@ -1166,25 +1171,29 @@ printf '{"enabledPlugins":{"fleet-orchestrate@claude-fleet":false}}\n' > "$WORK/
 call 153 file_issue '{"title":"d","spawn":true}' | FAKE_ORCH='' serve "$WORK/q8"
 rm -f "$WORK/claude/settings.json"
 grep -qx 'fleet-issue-file.sh --title a' "$LOG" && grep -qx 'fleet-issue-file.sh --title b --spawn' "$LOG" \
-  && grep -qx 'fleet-issue-file.sh --title c --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title d' "$LOG" \
+  && grep -qx 'fleet-issue-file.sh --title c' "$LOG" && grep -qx 'fleet-issue-file.sh --title d' "$LOG" \
   || fail "Q: file_issue spawn:true does not follow the dispatch group" "$(cat "$LOG")"
-python3 - "$WORK/q5" "$WORK/q6" <<'PY' || fail "Q: the unspawned filing does not say how to install the group" "$(cat "$WORK/q5" "$WORK/q6")"
+python3 - "$WORK/q5" "$WORK/q6" <<'PY' || fail "Q: the unspawned filing does not say this session may not spawn" "$(cat "$WORK/q5" "$WORK/q6")"
 import json, sys
 r5 = json.loads(open(sys.argv[1]).readline())["result"]
 assert not r5.get("isError"), r5
 t = r5["content"][0]["text"]
-assert "issues/900" in t and "/plugin install fleet-orchestrate@claude-fleet" in t, t
+assert "issues/900" in t and "may not spawn" in t and "@agent_spawn" in t and "/plugin" not in t, t
 r6 = json.loads(open(sys.argv[2]).readline())["result"]
-assert "/plugin install" not in r6["content"][0]["text"], r6
+assert "may not spawn" not in r6["content"][0]["text"], r6
 PY
-# The Codex mount and the plugin's registration are the one server.
+# The Codex mount is the one server, and no plugin registers it (issue #4334).
 m=$(python3 "$WORK/bin/fleet-mcp.py" --mount codex --group orch) || fail "Q: --mount codex --group orch failed"
 case "$m" in
   'mcp_servers.fleet-orch={command="bash",args=["-c",'*'fleet-mcp.py'*'--group orch'*'],env_vars=['*'"FLEET_MCP_ORCH"],tool_timeout_sec=600}') : ;;
   *) fail "Q: the Codex mount of the dispatch group is wrong" "$m" ;;
 esac
-cmp -s "$BIN/../conf/mcp-orch.json" "$BIN/../plugins/fleet-orchestrate/.mcp.json" \
-  || fail "Q: plugins/fleet-orchestrate/.mcp.json is not conf/mcp-orch.json (the one definition)"
+python3 - "$BIN/../plugins" <<'PY' || fail "Q: a plugin still registers the dispatch group (it ships with the core, #4334)"
+import glob, json, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], "*", ".mcp.json")) + glob.glob(os.path.join(sys.argv[1], "*", ".codex-plugin", "plugin.json")):
+    d = json.load(open(f))
+    assert "fleet-orch" not in (d.get("mcpServers") or {}), f
+PY
 python3 - "$BIN/../conf/mcp-worker.json" "$BIN/../conf/mcp-orch.json" <<'PY' || fail "Q: the two configs do not name the two servers"
 import json, sys
 w, o = (json.load(open(f))["mcpServers"] for f in sys.argv[1:3])
@@ -1196,6 +1205,35 @@ PY
   && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat orchestrator \
   && ! env -u TMUX python3 "$WORK/bin/fleet-mcp.py" --bridge-seat \
   || fail "Q: --bridge-seat still answers by role"
-ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps all 28; file_issue spawn follows the group; one server definition for Codex and the plugin"
+ok "Q fleet-orch lists the dispatch group; fleet answers it road=legacy; a pre-group takeover keeps all 28; file_issue spawn follows the group; one server definition, no plugin's"
+
+# --- Q2: the dispatch group ships with the core (issue #4334) -------------------
+# No plugin anywhere (the sandbox's Claude settings are empty): the pane's @agent_spawn
+# is the one switch — 1 (the person's own session, an agent file granting spawn) ⇒
+# --bridge-seat 0 and file_issue spawns; unset / 0 (a file that takes spawn away) ⇒ no.
+rm -f "$WORK/claude/settings.json"
+seat() { env PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 FAKE_SPAWN="$1" python3 "$WORK/bin/fleet-mcp.py" --bridge-seat; }
+seat 1 && ! seat '' && ! seat 0 || fail "Q2: --bridge-seat does not follow @agent_spawn alone"
+: > "$LOG"
+call 160 file_issue '{"title":"e","spawn":true}' | FAKE_ORCH='' FAKE_SPAWN=1 serve "$WORK/q9"
+call 161 file_issue '{"title":"f","spawn":true}' | FAKE_ORCH='' FAKE_SPAWN=0 serve "$WORK/q10"
+grep -qx 'fleet-issue-file.sh --title e --spawn' "$LOG" && grep -qx 'fleet-issue-file.sh --title f' "$LOG" \
+  || fail "Q2: file_issue spawn:true does not follow @agent_spawn with no plugin" "$(cat "$LOG")"
+ok "Q2 no plugin + @agent_spawn 1 ⇒ the session may spawn (--bridge-seat, file_issue --spawn)"
+ok "Q2 @agent_spawn unset / 0 ⇒ no dispatch group, file_issue files without --spawn"
+# …and the spawners of a session the person opens (no agent file, no issue) stamp it
+# BEFORE the launch: dash-raw-session.sh (cold + warm claim), scratch-pool.sh, fleet-restore.sh.
+for f in dash-raw-session.sh scratch-pool.sh fleet-restore.sh; do
+  grep -q 'fleet_win_stamp_cmd @agent_spawn 1' "$BIN/$f" || fail "Q2: $f no longer stamps @agent_spawn 1 before the launch"
+done
+grep -q 'stamp_option @agent_spawn 1' "$BIN/dash-raw-session.sh" || fail "Q2: a claimed warm window keeps no @agent_spawn"
+ok "Q2 the person's no-issue sessions are stamped @agent_spawn 1 before their launcher mounts the group"
+# take_role: listed by neither server, still answered one version (an old session's call).
+grep -Eqx 'take_role' "$WORK/q.l0" "$WORK/q.l1" && fail "Q2: take_role is still listed" "$(cat "$WORK/q.l0" "$WORK/q.l1")"
+fake fleet-role-take.sh 'echo "taken"'
+: > "$LOG"
+call 162 take_role '{"role":"orchestrator"}' | serve "$WORK/q11" --group orch
+grep -qx 'fleet-role-take.sh orchestrator' "$LOG" || fail "Q2: an old session's take_role is no longer answered" "$(cat "$WORK/q11" "$LOG")"
+ok "Q2 take_role is on no server's list and still answered (one version)"
 
 printf 'fleet-mcp-selftest: %d passed\n' "$pass"

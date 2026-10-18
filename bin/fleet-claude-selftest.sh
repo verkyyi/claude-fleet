@@ -69,7 +69,10 @@ chmod +x "$WORK/fakebin/claude"
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
 cat > "$WORK/fakebin/tmux" <<EOF
 #!/bin/sh
-case "\$1" in display-message) cat "$SESS_FILE" ;; set-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;; esac
+case "\$1" in
+  display-message) case "\$*" in *'@agent_spawn'*) cat "$WORK/spawnopt" 2>/dev/null ;; *) cat "$SESS_FILE" ;; esac ;;
+  set-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;;
+esac
 exit 0
 EOF
 chmod +x "$WORK/fakebin/tmux"
@@ -376,6 +379,23 @@ argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as epic-driver '/fleet-ep
 has "$argv" "--mcp-config=$MW" && has "$argv" "--mcp-config=$MO" || fail "#3113 an EPIC driver did not mount both servers" "$argv"
 [ "$(cat "$WORK/mcporch")" = 1 ] || fail "#3113 an EPIC driver's launch did not say FLEET_MCP_ORCH=1" "$(cat "$WORK/mcporch")"
 ok "#3113 the dispatch group rides only an agent file granting spawn (--as epic-driver); a plain, worker or bare role-name launch gets the core alone"
+
+# #4334: @agent_spawn is the ONE switch, no plugin asked — a session with no agent file
+# that the spawner stamped @agent_spawn 1 (the person's own, binding no issue) mounts the
+# dispatch group; an agent file's own grant wins over the pane (a file that takes spawn
+# away mounts none, whatever the pane says).
+printf '1\n' > "$WORK/spawnopt"
+argv="$(run)"
+has "$argv" "--mcp-config=$MO" && [ "$(cat "$WORK/mcporch")" = 1 ] \
+  || fail "#4334 a no-file session stamped @agent_spawn 1 did not mount the dispatch group" "$argv"
+printf -- '---\nname: fleet-worker\ndescription: w\ndisallowedTools: mcp__fleet-orch__spawn\n---\nbody\n' > "$WORK/ccfg/agents/fleet-worker.md"
+argv="$( (export CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as fleet-worker /fleet-claim) )"
+case "$argv" in *"--mcp-config=$MO"*) fail "#4334 a worker file mounted the dispatch group off the pane's stamp" "$argv" ;; esac
+printf '0\n' > "$WORK/spawnopt"
+argv="$(run)"
+case "$argv" in *"--mcp-config=$MO"*) fail "#4334 @agent_spawn 0 mounted the dispatch group" "$argv" ;; esac
+rm -f "$WORK/spawnopt"
+ok "#4334 @agent_spawn 1 on a no-file session mounts the dispatch group; a worker file or 0 does not"
 
 printf 'FLEET_MODEL="fable"\nFLEET_MCP_CONFIG="none"\n' > "$WORK/conf/fleets/f1/conf"
 argv="$(run)"

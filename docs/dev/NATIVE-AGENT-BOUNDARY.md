@@ -776,7 +776,7 @@ SHA-256 与工作树一致，未改在线安装；固定版本 CI 仍须对提�
 
 - 通过 `mcpServer/tool/call` 调用夹具工具成功；插件的 `tool_timeout_sec = 1` 能中止等待 2.5 秒的夹具调用。
   等串行夹具完成旧请求后再调用成功；不声称客户端超时会终止服务器内部工作，也不声称 1 秒是生产超时值。
-- allowlist 夹具读取实际 `fleet-orchestrate/.mcp.json` 的命令/参数，仅在临时副本补 env_vars 和测试超时。
+- allowlist 夹具读取实际 `conf/mcp-orch.json`（派活组随核心，#4334）的命令/参数，仅在临时副本补 env_vars 和测试超时。
   真实 `fleet-mcp.py --group orch` 通过原生插件启动，shell 中的 FLEET_MCP_BIN 路径展开正常，七个工具仍可发现。
 - 使用格式故意无效的假 worker 凭据调用 `children`，真实 Fleet MCP 返回 credential malformed / Nothing ran。
   证明该拒绝路径未被原生 MCP 绕过，不代表有效凭据、Hub 准入或所有工具已验收。

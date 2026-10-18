@@ -24,7 +24,7 @@
     {
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
-      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report). Needs fleet-orchestrate."
+      "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report)."
     },
     {
       "name": "fleet-browser",
