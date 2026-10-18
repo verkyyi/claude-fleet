@@ -42,6 +42,9 @@
 #                  macos-latest runner that blocked 30s+ — the port sat bound but
 #                  never accepting, share.sh gave up on five ports (~170s), and this
 #                  test was red on every macOS run from the day it landed.
+#   • BURST        (issue #3235) server.py listens with a backlog ≥128 and serves 40
+#                  simultaneous requests all 200 — socketserver's default of 5 reset
+#                  a page's image burst (ERR_CONNECTION_RESET, 11-14 of 20 broken).
 #   • CODES        (issue #1153) every link carries a 128-bit random code: `/`, `/d/`,
 #                  no / a wrong / an EXPIRED code → 404, the right one → 200; the index
 #                  is /i/<its own code>/; another login (a second HOME) holding its own
@@ -373,6 +376,10 @@ python3 - "$BIN/../skills/doc-preview/server.py" "$P9" "$WORK/serve9" "$BIN/../s
 import runpy, socket, sys
 def boom(*a, **k): raise RuntimeError("reverse DNS lookup at startup: %r" % (a,))
 socket.getfqdn = socket.gethostbyaddr = socket.getnameinfo = boom
+_listen = socket.socket.listen
+def listen(self, n=0):             # issue #3235: say the backlog it listens with
+    print("listen backlog=%d" % n, flush=True); return _listen(self, n)
+socket.socket.listen = listen
 sys.argv = sys.argv[1:]            # python3 - <server.py> <args…> → argv[0] = server.py
 runpy.run_path(sys.argv[0], run_name="__main__")
 PY
@@ -386,6 +393,30 @@ CHECKS=$((CHECKS + 1)); [ "$up9" = 1 ] || fail "9: server.py must come up with r
 has 200 "$(get "$P9" /i/0123456789abcdef0123456789abcdef/)" "9: the no-DNS server must serve"
 has "listening on http://127.0.0.1:$P9/" "$(cat "$WORK/srv9.log")" "9: server.py must log the address it is accepting on"
 lacks "reverse DNS lookup" "$(cat "$WORK/srv9.log")" "9: server.py must never have called a reverse lookup"
+# --- 9b. a page full of images: ~40 connections at once all get 200 (issue #3235) --
+# socketserver's default backlog is 5; a browser fetching ~20 images at once had the
+# overflow reset (ERR_CONNECTION_RESET), a different count on every reload.
+bl9="$(sed -n 's/^listen backlog=\([0-9]*\)$/\1/p' "$WORK/srv9.log" | head -1)"
+CHECKS=$((CHECKS + 1)); [ "${bl9:-0}" -ge 128 ] || fail "9b: server.py must listen with a backlog of at least 128 (got '${bl9:-none}'; socketserver's default 5 resets a page's image burst)" "$(cat "$WORK/srv9.log")"
+burst9="$(python3 - "$P9" <<'PY'
+import sys, threading, urllib.request
+port, n = int(sys.argv[1]), 40
+url = "http://127.0.0.1:%d/i/0123456789abcdef0123456789abcdef/" % port
+gate, res = threading.Barrier(n), []
+def one():
+    gate.wait()
+    try:
+        res.append(urllib.request.urlopen(url, timeout=10).status)
+    except Exception as e:
+        res.append(repr(e))
+ts = [threading.Thread(target=one) for _ in range(n)]
+for t in ts: t.start()
+for t in ts: t.join()
+bad = [r for r in res if r != 200]
+print("ok %d/%d" % (n - len(bad), n) if not bad else "bad %d/%d %s" % (len(bad), n, bad[:3]))
+PY
+)"
+has "ok 40/40" "$burst9" "9b: 40 simultaneous requests must all be served 200"
 kill "$pid9" 2>/dev/null
 
 # --- 10. codes, expiry, isolation, serve leak, honest unpublish (issue #1153) ----

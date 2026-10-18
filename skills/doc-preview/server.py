@@ -422,7 +422,15 @@ class Server(ThreadingHTTPServer):
     the doc-preview-share selftest was red on every macOS run (issue #1500). The
     name only feeds CGIHTTPRequestHandler, which this server never uses, so a server
     on a fixed address has nothing to look up: bind, record the address, listen.
+
+    request_queue_size: socketserver's default listen backlog is 5. A page with ~20
+    images makes the browser open ~20 connections at once; past the backlog the
+    kernel resets them (ERR_CONNECTION_RESET) and 11-14 images came up broken on
+    every load (issue #3235). Every mode (https / http-direct / tunnel / local)
+    listens through this class.
     """
+
+    request_queue_size = 128
 
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)
