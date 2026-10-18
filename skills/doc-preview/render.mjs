@@ -12,10 +12,16 @@
 // to the served page so the reference resolves. Remote / data: / site-absolute URLs are
 // left alone; a missing file just doesn't render.
 //
-// Rendering is client-side (marked + github-markdown-css from a CDN, loaded by the
-// viewer's browser) so the host needs no npm install — just node.
+// Markdown is rendered HERE, at share time, into a static page (issue #1189): the
+// viewer's browser loads no CDN — a reader on a network where jsdelivr is slow or
+// blocked used to get an empty page. marked ships beside this file (vendor/, MIT),
+// so the host still needs no npm install — just node. Tables get their own
+// horizontal-scroll box, headings a stable id and the 一、/1. number mark; the only
+// script left on the page is the public-link switch (and mermaid, loaded only when
+// a ```mermaid block is present — without it the block shows its source).
 import fs from 'node:fs';
 import path from 'node:path';
+import { Marked } from './vendor/marked.esm.js';
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -34,7 +40,40 @@ const ICON_PATHS = {
 const icon = (name, size = 16, cls = '') =>
   `<svg class="ico${cls ? ' ' + cls : ''}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
 
-function pageHtml(title, b64, meta = {}) {
+// Heading ids: the same slug the old client script made, so an existing #anchor
+// link keeps working.
+const plain = (h) => String(h).replace(/<[^>]*>/g, '')
+  .replace(/&(amp|lt|gt|quot|#39);/g, (m, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[e]));
+const NUMBERED = /^\s*([0-9０-９一二三四五六七八九十百]{1,3})\s*[、.．·)]\s*(\S[\s\S]*)$/;
+
+function renderMarkdown(md) {
+  const used = {};
+  const slug = (t) => {
+    let s = t.trim().toLowerCase().replace(/[^\w一-龥\s-]/g, '').replace(/\s+/g, '-') || 'section';
+    if (used[s] != null) { used[s]++; s += '-' + used[s]; } else used[s] = 0;
+    return s;
+  };
+  const marked = new Marked({ gfm: true, breaks: false });
+  marked.use({
+    renderer: {
+      heading(text, level) {
+        const id = level <= 4 ? ` id="${esc(slug(plain(text)))}"` : '';
+        const m = level === 2 || level === 3 ? text.match(NUMBERED) : null;
+        if (m) return `<h${level}${id} class="numbered"><span class="hn">${m[1]}</span><span class="ht">${m[2]}</span></h${level}>\n`;
+        return `<h${level}${id}>${text}</h${level}>\n`;
+      },
+      table(header, body) {
+        return `<div class="tbl"><table>\n<thead>\n${header}</thead>\n${body ? `<tbody>${body}</tbody>` : ''}</table></div>\n`;
+      },
+      listitem(text, task) {
+        return task ? `<li class="task-list-item">${text}</li>\n` : `<li>${text}</li>\n`;
+      },
+    },
+  });
+  return marked.parse(md);
+}
+
+function pageHtml(title, body, meta = {}) {
   const metaLine = [
     meta.session ? `${esc(meta.session)}` : '',
     meta.added ? `${esc(meta.added)}` : '',
@@ -44,11 +83,6 @@ function pageHtml(title, b64, meta = {}) {
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
-<!-- Dark variants are scoped to screen only: print media queries can't flip prefers-color-scheme,
-     so an unscoped dark stylesheet would print a dark (ink-wasting) page from a dark-themed device.
-     Light variants also cover print → printing is always light, automatically. -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github.min.css" media="print, screen and (prefers-color-scheme: light)">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" media="screen and (prefers-color-scheme: dark)">
 <style>
  /* doc-preview 文档样式 —— 阅读/打印优先，明暗跟随系统，无交互组件（仅 tailnet 内公开链接开关）。
     设计语言对齐 Claude Artifact 文档：考究字阶 + 有色偏中性色 + 单一强调色(teal) + 打印适配。 */
@@ -62,7 +96,7 @@ function pageHtml(title, b64, meta = {}) {
    --accent:#3fc9ad;--accent-soft:#123029;--hairline:#243330;--bd:#243330;
    --code-bg:#101917;--code-ink:#d6e0dd;--sel:#1d4b41;
    --shadow:0 1px 2px rgba(0,0,0,.3),0 22px 46px -24px rgba(0,0,0,.62)}}
- html{scroll-behavior:smooth}
+ html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;text-size-adjust:100%}
  body{margin:0;background:var(--ground);color:var(--ink);
    font:15.5px/1.78 -apple-system,BlinkMacSystemFont,system-ui,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;
    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
@@ -94,6 +128,8 @@ function pageHtml(title, b64, meta = {}) {
  /* 文档纸面 */
  .markdown-body{box-sizing:border-box;max-width:var(--maxw);margin:16px auto 60px;background:var(--surface);
    border:1px solid var(--hairline);border-radius:14px;box-shadow:var(--shadow);padding:clamp(24px,4.5vw,52px)}
+ .markdown-body{overflow-wrap:break-word;min-width:0}
+ .markdown-body :is(p,li,blockquote,dd,h1,h2,h3,h4,h5,h6){overflow-wrap:anywhere}  /* 长链接/长串不撑宽窄屏 */
  .markdown-body>:first-child{margin-top:0}
  .markdown-body>:last-child{margin-bottom:0}
  .markdown-body :is(h1,h2,h3,h4,h5,h6){line-height:1.32;font-weight:700;text-wrap:balance;scroll-margin-top:16px;margin:1.85em 0 .7em}
@@ -142,7 +178,6 @@ function pageHtml(title, b64, meta = {}) {
  .markdown-body pre{margin:0 0 1.15em;padding:14px 16px;background:var(--code-bg);border:1px solid var(--hairline);
    border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.6}
  .markdown-body pre code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:none;border:0;padding:0;color:var(--code-ink)}
- .markdown-body pre code.hljs{background:none;padding:0}
  .markdown-body img{max-width:100%;height:auto;border-radius:8px}
  .markdown-body .mermaid{margin:0 0 1.15em;text-align:center;overflow-x:auto}
  /* 表格：容器可横滚（窄屏/长表兜底），细线 + 斑马 + 等宽数字 */
@@ -153,7 +188,7 @@ function pageHtml(title, b64, meta = {}) {
    text-align:left;font-weight:700;color:var(--mut);font-size:12px;letter-spacing:.02em;
    padding:9px 13px;border-bottom:1.5px solid var(--hairline);white-space:nowrap}
  .markdown-body .tbl td{padding:8px 13px;border-bottom:1px solid var(--hairline);vertical-align:top;
-   white-space:normal}
+   white-space:normal;min-width:4.5em}  /* 短中文单元格（「创建订单」）不被挤成一字一行 */
  /* 长 token（会员编号/哈希/URL）不折行，整体展示；过宽时表格容器横向滚动 */
  .markdown-body .tbl :is(td,th){overflow-wrap:normal}
  .markdown-body .tbl :is(td,th) code{white-space:nowrap;word-break:normal}
@@ -198,38 +233,11 @@ function pageHtml(title, b64, meta = {}) {
   <span class="purl" id="purl" hidden><a id="plink" target="_blank" rel="noopener"></a><button class="cpy" id="cpy">复制</button></span>
  </span>
 </div>
-<article class="markdown-body" id="c"></article>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js"></script>
+<article class="markdown-body" id="c">
+${body}</article>
 <script>
- const md = decodeURIComponent(escape(atob("${b64}")));
- marked.setOptions({ gfm:true, breaks:false });
  const c = document.getElementById('c');
- c.innerHTML = marked.parse(md);
- c.querySelectorAll('pre code').forEach(b=>{try{hljs.highlightElement(b)}catch(e){}});
-
- // 表格套横向滚动容器（窄屏兜底；打印时展开）。
- c.querySelectorAll('table').forEach(t=>{
-   const box = document.createElement('div'); box.className='tbl';
-   t.before(box); box.appendChild(t);
- });
-
- // 标题加稳定 id，便于外部 #锚点 链接（无可见交互件）。
- const used = {};
- const slug = (t) => { let s = t.trim().toLowerCase().replace(/[^\\w\\u4e00-\\u9fa5\\s-]/g,'').replace(/\\s+/g,'-') || 'section';
-   if (used[s] != null) { used[s]++; s += '-' + used[s]; } else used[s] = 0; return s; };
- c.querySelectorAll('h1,h2,h3,h4').forEach(h=>{ h.id = slug(h.textContent); });
- // 章节号（一/二/… 或 1./１．）抽成 teal 序号标记，贴近 Artifact 版式。
- c.querySelectorAll('h2,h3').forEach(h=>{
-   const m=h.textContent.match(/^\\s*([0-9\\uFF10-\\uFF19一二三四五六七八九十百]{1,3})\\s*[、.．·)]\\s*(\\S.*)$/);
-   if(!m) return;
-   h.classList.add('numbered');
-   const hn=document.createElement('span'); hn.className='hn'; hn.textContent=m[1];
-   const ht=document.createElement('span'); ht.className='ht'; ht.textContent=m[2];
-   h.textContent=''; h.append(hn,ht);
- });
-
- // mermaid（仅文档用到时才加载渲染）。
+ // mermaid：仅文档用到时才加载；加载不到时代码块原样显示源码。
  if (c.querySelector('code.language-mermaid')) {
    const s = document.createElement('script');
    s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
@@ -388,7 +396,7 @@ function titleOf(src, raw) {
 function writePage(src, raw, out, title, meta) {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   if (isHtml(src)) fs.writeFileSync(out, raw);
-  else fs.writeFileSync(out, pageHtml(title, Buffer.from(raw, 'utf8').toString('base64'), meta));
+  else fs.writeFileSync(out, pageHtml(title, renderMarkdown(raw), meta));
 }
 
 // Copy referenced LOCAL images next to the served page so relative paths resolve

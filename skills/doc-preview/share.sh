@@ -81,7 +81,7 @@
 # --unpublish never prints OFF while the mount is still there.
 #
 # Set DOC_PREVIEW_SESSION to label your session in the list (default: hostname).
-# No npm install needed: rendering is client-side (CDN libs in the viewer's browser).
+# No npm install needed: render.mjs renders Markdown with its vendored marked (no CDN).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

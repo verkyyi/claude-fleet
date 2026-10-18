@@ -26,10 +26,12 @@ site-absolute refs are left alone.
 
 ## How it works
 
-`share.sh` renders the given Markdown file(s) into GitHub-styled HTML (client-side `marked`
-+ `github-markdown-css`, so **no npm install is needed**), serves them from one shared
+`share.sh` renders the given Markdown file(s) into static HTML at share time (node + the
+`marked` copy in `vendor/`, so **no npm install is needed**), serves them from one shared
 directory via a loopback `server.py` (a `http.server` + a tiny control API), and fronts it
-with `tailscale serve` (HTTPS on the tailnet). The viewing browser needs internet for the CDN libs.
+with `tailscale serve` (HTTPS on the tailnet). The page loads nothing from a CDN — it reads
+the same on a network where jsdelivr is slow or blocked (issue #1189); only a ```mermaid
+block asks for its library, and shows its source when that does not load.
 
 **Three serving modes** (recorded in `~/.cache/claude-doc-preview/mode`, issues #1093/#1151):
 
