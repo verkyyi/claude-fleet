@@ -36,11 +36,13 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 
 # The tools each server really serves (tools/list, no hub, no tmux needed): `fleet`,
 # and the dispatch group `fleet-orch` (issue #3113) — a line is `<server>__<tool>`.
+# As every session launches since issue #4703: fleet-orch beside fleet (FLEET_MCP_ORCH=1),
+# so `fleet` lists its core only.
 : > "$WORK/tools"
 for grp in core orch; do
   srv=fleet; [ "$grp" = orch ] && srv=fleet-orch
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
-    | env -u TMUX -u TMUX_PANE -u FLEET_MCP_EXEC python3 "$BIN/fleet-mcp.py" --group "$grp" > "$WORK/list" 2>"$WORK/list.err" \
+    | env -u TMUX -u TMUX_PANE -u FLEET_MCP_EXEC FLEET_MCP_ORCH=1 python3 "$BIN/fleet-mcp.py" --group "$grp" > "$WORK/list" 2>"$WORK/list.err" \
     || fail "fleet-mcp.py --group $grp tools/list failed" "$(cat "$WORK/list.err")"
   python3 -c 'import json,sys; print("\n".join(sys.argv[2] + "__" + t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"]))' \
     "$WORK/list" "$srv" >> "$WORK/tools" || fail "could not read the tool list" "$(cat "$WORK/list")"

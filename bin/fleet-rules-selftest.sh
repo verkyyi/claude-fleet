@@ -19,7 +19,7 @@
 #   F  render: the orchestrator's prompt ends with its rows only (≤ 40 lines),
 #      the steward's is its body alone; a worker's launch carries no table
 #   G  a broken fleet table: a role still renders (body alone)
-#   H  the orchestrator's body spells its shapes itself (docs/dev/DECISIONS.md left
+#   H  the orchestrator's body spells its shapes itself (the old decisions doc left
 #      with the steward's programs, issue #4339)
 #   I  the built-in rows live in the skill dir (issue #3114): the orchestrate
 #      plugin's rules.md holds only orchestrator rows, the loader reads it, and

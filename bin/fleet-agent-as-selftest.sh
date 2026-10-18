@@ -126,6 +126,7 @@ orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET
            bash "$BIN/fleet-claude.sh" "$@" 2>/dev/null | grep -c 'conf/mcp-orch.json$'; }
 eq "C: an agent file that grants spawn (epic-driver) mounts the dispatch group" "$(orch --as epic-driver x)" 1
 eq "C: …so does fleet-worker (it may spawn too, issue #4591)" "$(orch --as fleet-worker x)" 1
+eq "C: …and a file that grants no spawn, and a plain launch (any session may spawn, issue #4703)" "$(orch --as doc-only x)$(orch x)" 11
 grep -q "no agent file 'gone-now'.*starting a plain session" "$WORK/fc.err" && ok "C: …and one stderr line says so" || bad "C: no stderr line: $(cat "$WORK/fc.err")"
 printf '[]\n' > "$WORK/plugins.json"; rm -f "$FLEET_CONF_DIR/agents/plugins.json"
 eq "C: fleet-epic not installed ⇒ no epic-driver: a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver x)" "--model opus x"

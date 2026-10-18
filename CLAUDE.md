@@ -70,8 +70,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   one-level rule). The filer's `--spawn`, the `spawn` / `task` tools and
   `fleet-await.sh` ask no seat; the session caps and the claim dedup are the only
   bounds. `fleet_spawn_refused` (`bin/fleet-lib.sh`) answers "may spawn" for one
-  version (`# compat-1v`). The shipped `fleet-worker` grants `spawn`, so its
-  dispatch group mounts (`@agent_spawn 1`). A grandchild reports to the worker
+  version (`# compat-1v`). The dispatch group (`fleet-orch`) mounts for EVERY
+  session (issue #4703 undid #4334's `@agent_spawn 1` gate); `@agent_spawn` gates
+  nothing, and a group-less older session sees the group on `fleet`. A grandchild reports to the worker
   that spawned it; a reaped worker's reports climb to the nearest live ancestor
   (`fleet_live_ancestor`, #1352), else the person's reminder (#3117). A red base
   a worker files WITHOUT `--spawn` is filed, the person alerted and the parent
@@ -468,10 +469,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   A login an older release shipped it into gets fleet-epic (`fleet-plugins.py`
   carry-over) before the copy is retired. The batch marks and heartbeat / floor /
   backstop / preflight scripts stay in `bin/` — only the plugin's commands call
-  them (`fleet-plugins-selftest.sh` I). A worker
-  window may spawn ⇔ its file grants `spawn` (no `tools` list, or one naming it,
-  and no `disallowedTools` taking it away — fleet-worker takes it away) or it took
-  a role (`@fleet_role_def orchestrator|steward`); `--role worker|epic-driver|debugger`
+  them (`fleet-plugins-selftest.sh` I). Every window may
+  spawn (issues #4591, #4703) — a file's `spawn` grant (`@agent_spawn`, off
+  `fleet-agent-def.py spawn-tools`) is recorded, never a gate; `--role worker|epic-driver|debugger`
   and an old window's `@fleet_role_def epic-driver` are read for one version
   (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
   set|unset|undo` are gone; `bin/fleet-role.py` keeps only the two role definitions'
@@ -631,7 +631,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   [76] hooks, unset on a reload), the client's steward rows,
   `fleet-role.py render` / `fleet_role_render`, the
   doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
-  only for an agent file that grants `spawn`, `@agent_spawn 1`). `@fleet_role
+  for every session, issue #4703). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
   seat) is an ordinary row for restore / migrate / move, and only the readers keep
   it one version (`fleet_role_holder`'s ③, the idle reaper leaves such a window for
