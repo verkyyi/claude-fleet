@@ -497,6 +497,8 @@ FLEET_LOGIN_CREDSEP_WAIT           knob: seconds fleet-login-new.sh step 7b wait
 FLEET_LOGIN_HUB                    handoff: the hub the admin agent hands fleet-login-new.sh with a create's join code (#2652)
 FLEET_LOGIN_JOIN_CODE              handoff: a create's one-time join code, admin agent → fleet-login-new.sh, env only (#2652)
 FLEET_LOGIN_OP_ID                  handoff: the create's op_id, admin agent → fleet-login-new.sh, marked in ~/<login>-onboard/op (#2928)
+FLEET_LOGIN_READY_WAIT             knob: seconds fleet-login-ready.sh waits for the login's home window (a wash starts its fleet detached; 300, #4673)
+FLEET_LOGIN_READY_REPLY_SECS       knob: the bound on fleet-login-ready.sh's one first-reply request (claude -p; 120, #4673)
 FLEET_LOOP_AGENT                   handoff: which agent the /loop spec belongs to
 FLEET_LOOP_SPEC                    handoff: the /loop spec a relaunched agent restores
 FLEET_CLAUDE_RSS_EVERY             knob: min seconds between memguard fat-session checks (fleet-memguard.sh, 30)
