@@ -496,7 +496,15 @@ class Trace:
                     if category != 'local': self.record(pid, at, end, category)
 
     def finish(self, observer_exit):
-        require(observer_exit == 0 and not self.failed and not self.pending, 'OBSERVER_LOST_OR_TRUNCATED')
+        if observer_exit != 0 or self.failed or self.pending:
+            # Which of the three, as identifiers only (live, #4625: a node
+            # refused here and the record could not say why).
+            refused = Refused('OBSERVER_LOST_OR_TRUNCATED')
+            pending = next(iter(self.pending.values()), (0, ''))[1]
+            call = re.match(r'([a-z][a-z0-9_]{0,31})\(', pending)
+            refused.detail = 'OBSERVER_EXIT' if observer_exit != 0 else 'TRACE_FAILED' if self.failed \
+                else 'PENDING_CALL' + ('@' + call[1] if call else '')
+            raise refused
         require(self.root is not None and self.markers and self.markers[0][1] == 'startup'
                 and self.markers[-1][1] == 'end', 'MISSING_INTERVAL_BOUNDARY')
         require(set(self.parents) == self.exited, 'PROCESS_TREE_INCOMPLETE')

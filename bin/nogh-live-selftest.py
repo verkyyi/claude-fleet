@@ -416,6 +416,18 @@ class TraceMetadata(unittest.TestCase):
         for bad in ('x', 'A B', 'CODE@/etc/passwd', 'CODE@Upper', 'A' * 65):
             self.assertIsNone(runtime.DETAIL.fullmatch(bad), bad)
 
+    def test_lost_or_truncated_says_which(self):
+        for exit_code, pending, detail in ((1, None, 'OBSERVER_EXIT'),
+                                           (0, (1.5, 'wait4(-1, '), 'PENDING_CALL@wait4')):
+            trace = self.make_trace([])
+            if pending: trace.pending[8] = pending
+            with self.assertRaises(live.Refused) as caught:
+                trace.finish(exit_code)
+            self.assertEqual(str(caught.exception), 'OBSERVER_LOST_OR_TRUNCATED')
+            self.assertEqual(caught.exception.detail, detail)
+            import nogh_live_runtime as runtime
+            self.assertTrue(runtime.DETAIL.fullmatch(detail))
+
     def test_inert_close_beside_a_sibling_fork_is_ordered_enough(self):
         # live (#4625): a Go agent's thread closes a pipe while another forks.
         # No socket is made, dropped or copied, so attribution cannot change.
