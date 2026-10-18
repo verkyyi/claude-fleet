@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import sys
 import time
 import fleet_iso
 
@@ -12,9 +13,9 @@ from fleet_loop_mark import claude_tool_results, parse, prune
 from fleet_cron import plan, next_fire, refresh
 
 
-def refuse_durable():
+def refuse_durable(detail=''):
     raise ValueError('native durable task has no proven successor execution owner; '
-                     'switch refused, source and native tasks stay running')
+                     'switch refused, source and native tasks stay running' + detail)
 
 
 def durable_journal(fid):
@@ -27,7 +28,7 @@ def durable_journal(fid):
     return r if r and r.get('state') not in durable.TERMINAL else None
 
 
-def check_durable_store(fid=''):
+def check_durable_store(fid='', source_pid=None):
     """Persistence is not execution. Check even without a process-local marker:
     another session may have created this project's task. Never mutate the table
     or infer that an overdue task has already fired. A durable task may only move
@@ -41,12 +42,32 @@ def check_durable_store(fid=''):
     entries = data.get('tasks', data.get('jobs')) if isinstance(data, dict) else data
     if not isinstance(entries, list):
         raise ValueError('unknown native durable task table; execution owner cannot be verified')
+    import fleet_transfer_durable as durable
+    start = durable.proc_start(source_pid) if source_pid else ''
+    source = dict(pid=int(source_pid), start=start) if start else None
+    blocking, others = [], []
     for record in entries:
         project = record.get('createdInProject') if isinstance(record, dict) else None
         if not isinstance(project, str) or not Path(project).is_absolute():
             raise ValueError('unknown native durable task project; execution owner cannot be verified')
-        if Path(project).resolve() == home:
-            refuse_durable()
+        if Path(project).resolve() != home:
+            continue
+        # Only this session's task (or one whose creator cannot be told) holds
+        # this session's switch; another process's — a live session's own, or
+        # an orphan whose creator is gone — is not this switch's to move (#4758).
+        kind = durable.creator(record, source)
+        (blocking if kind in ('mine', 'unknown') else others).append(durable.explain(record, kind))
+    if others:
+        # Never deleted or taken over here: it is the person's reminder. A Claude
+        # session in HOME delivers it (or offers to catch it up); its creator's
+        # session, if live, owns it; the person may CronDelete it.
+        print('note: native durable task(s) not this session\'s, left in the table untouched: '
+              + '; '.join(others) + ' — a Claude session in HOME delivers it (or offers to catch it up); '
+              'to drop it, CronDelete it from a Claude session in HOME (the person\'s call)',
+              file=sys.stderr)
+    if blocking:
+        refuse_durable(': ' + '; '.join(blocking) + ' — let it fire, CronDelete it, or move it on the '
+                       'single-owner road (the source\'s cron export, or --durable-takeover)')
     journal = durable_journal(fid)
     if journal and journal['state'] != 'withdrawn':
         raise ValueError('native durable handover is %s: the source has not confirmed its native '
@@ -119,7 +140,7 @@ def has_native_activity(transcript, pid):
 def validate(raw, transcript, pid, sid, fid, mark, now=None, staging=None):
     """`staging`: the export's native durable records (before the source's
     CronDelete); None at cutover, where the withdrawn journal stands in."""
-    journal = None if staging is not None else check_durable_store(fid)
+    journal = None if staging is not None else check_durable_store(fid, pid)
     durable_jobs = ({r['id']: r for r in staging} if staging is not None
                     else {j['id']: j for j in (journal or {}).get('jobs', [])})
     now = time.time() if now is None else now
@@ -209,8 +230,10 @@ def export(jobs_file, session, pane):
     proof.update(pid=source['pid'], session_id=source['session_id'], fleet_id=fid)
     import fleet_transfer_durable as durable
     version = durable.transcript_version(source['transcript'])
-    staging = durable.inspect(Path.home(), source['pid'], version)['records'] if durable.tasks(
-        durable.read(durable.native_paths(Path.home())[0])) else None
+    # Only the source's own durable records stage; another process's (live, or
+    # an orphan whose creator is gone) stay in the table untouched (#4758).
+    staging = (durable.inspect(Path.home(), source['pid'], version)['records'] if durable.tasks(
+        durable.read(durable.native_paths(Path.home())[0])) else None) or None
     if staging is not None:
         if durable_journal(fid) and durable_journal(fid)['state'] != 'staged':
             raise ValueError('an unresolved durable handover exists for this session; resolve it first')

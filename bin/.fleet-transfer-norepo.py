@@ -260,7 +260,7 @@ def schedule_readiness(session, pane, transcript, pid, sid, loop, agent):
                     return None
                 journal = None
             else:
-                journal = check_durable_store(values['fleet_id'])
+                journal = check_durable_store(values['fleet_id'], pid)
             native = has_native_activity(transcript, pid)
             if native and not active['ids'] and not active['next'] and not loop:
                 if live_list(transcript, pid, time.time()):

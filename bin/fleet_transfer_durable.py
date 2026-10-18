@@ -224,6 +224,37 @@ def holder(lock, source):
     return 'other', owner_
 
 
+def creator(r, source):
+    """Whose durable record is this, from the switching source's view (#4758)?
+
+    'mine'    created by this exact process (pid + procStart; a /clear keeps it);
+    'live'    created by another process that is still running — its own session;
+    'gone'    created by a process that is gone (or whose pid now names another
+              process): an orphan, nobody's session to switch;
+    'unknown' the record does not say, or there is no source to compare with.
+    """
+    pid, start = r.get('createdByPid'), r.get('createdByProcStart')
+    if not source or type(pid) is not int or not isinstance(start, str) or not start:
+        return 'unknown'
+    if pid == source['pid'] and start == source['start']:
+        return 'mine'
+    return 'live' if alive(pid, start) else 'gone'
+
+
+def explain(r, kind, now=None):
+    """One line naming a durable record: id, who made it, when it fires."""
+    now = time.time() if now is None else now
+    try:
+        due = next_fire(job_for(r), now)
+    except Exception:  # an unreadable cron still gets named
+        due = None
+    when = time.strftime('%Y-%m-%d %H:%M', time.localtime(due)) if due else 'no future round'
+    who = {'mine': 'this session', 'live': 'live pid %s' % r.get('createdByPid'),
+           'gone': 'pid %s, gone' % r.get('createdByPid'), 'unknown': 'an unproven creator'}[kind]
+    return '%s (cron %s, fires %s; created by %s, session %s)' % (
+        r.get('id'), r.get('cron'), when, who, r.get('createdBySessionId') or '?')
+
+
 def describe(owner_):
     return 'pid %s (session %s, since %s)' % (owner_.get('pid'), owner_.get('sessionId'),
                                               owner_.get('procStart'))
@@ -271,16 +302,18 @@ def inspect(home, source_pid, version, now=None):
     now = time.time() if now is None else now
     home = Path(home).resolve()
     store, lock = native_paths(home)
-    records = tasks(read(store))
+    start = proc_start(source_pid)
+    source = dict(pid=int(source_pid), start=start) if start else None
+    # Another process's record — live, or an orphan whose creator is gone — is
+    # not this source's to move (#4758): only its own (or an unproven one) goes.
+    records = [r for r in tasks(read(store)) if creator(r, source) in ('mine', 'unknown')]
     if not records:
         return dict(records=[])
     if version not in SUPPORTED:
         raise Refused('native durable handover requires a verified Claude ' + '/'.join(SUPPORTED)
                       + ' (source is ' + str(version or 'unknown') + ')')
-    start = proc_start(source_pid)
-    if not start:
+    if not source:
         raise Refused('the source process is gone; its durable tasks cannot use the native road')
-    source = dict(pid=int(source_pid), start=start)
     kind, owner_ = holder(lock, source)
     if kind == 'other':
         raise Refused('native scheduler lock is held by another live process: ' + describe(owner_)

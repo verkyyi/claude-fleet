@@ -6163,6 +6163,17 @@ drill_transfer_durable_crash() {
   SECS=$(since "$started"); WHAT='SIGKILL at write-ahead / table write / withdrawn: the sweep settles one owner, unrelated records intact; unknown Claude refused by pid'
 }
 
+# A durable task another (gone or live) session left in HOME (issue #4758):
+# it must not hold this session's switch, nor stage with it; it is named and
+# left byte for byte. Only this session's own (or an unproven) task refuses.
+drill_transfer_durable_orphan() {
+  CAP=20
+  local started; started=$(now)
+  python3 "$BIN/fleet-transfer-durable-selftest.py" Orphan >"$WORK/transfer-durable-orphan.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/transfer-durable-orphan.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='orphan / live-foreign durable task: switch allowed, named on stderr, table untouched; own or unproven task refuses naming id, fire time and the way out'
+}
+
 drill_transfer_proxy_home() {
   CAP=45
   local started; started=$(now)
