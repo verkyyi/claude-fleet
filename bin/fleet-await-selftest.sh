@@ -19,6 +19,10 @@
 #             no issue, or no hub, is NO-WORKER (5).
 #   SEAT      from a worker's pane (@fleet_role worker) the await spawns like any
 #             other (issue #4591 lifted #2960's NO-WORKER).
+#   ACCEPTED  (issue #4398, EPIC #4390 C8) an accepted launch (@launch) is waited on
+#             as its task (fleet_task_control.py await --task), never by number,
+#             and gets no @origin; one with no @task is NO-WORKER; in a
+#             hub-authority repo no issue-number spawn happens (NO-WORKER).
 #
 # Runs on a DEDICATED tmux server on its own -L label (never the live server,
 # issue #159), from a sandbox bin/ whose dash-issue-session.sh is a stub; reports
@@ -230,5 +234,36 @@ has "…naming its session" 'scratch-12' "$(cat "$WORK/out")"
 bash "$AW" T11 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
 eq "no hub here: exits 5" 5 "$?"
 has "…saying so" 'no hub here' "$(cat "$WORK/out")"
+
+# ACCEPTED (issue #4398, EPIC #4390 C8): the issue-number wait is retired on the
+# accepted-task path — the task's own wait answers, nothing is adopted or spawned.
+rm -f "$SB/fleet_task_control.py"
+cat > "$SB/fleet_task_control.py" <<'STUB'
+import sys
+print("SUCCEEDED"); print("argv: " + " ".join(sys.argv[1:]))
+STUB
+A=$(TM new-window -d -P -F '#{window_id}' -n issue-408 "sleep 600")
+TM set-window-option -t "$A" @issue 408; TM set-window-option -t "$A" @repo acme/app
+TM set-window-option -t "$A" @launch '{"worker_id":"u/f"}'; TM set-window-option -t "$A" @task T21
+n=$(wc -l < "$STUB_LOG" | tr -d ' ')
+bash "$AW" 408 -L "$LBL" --parent scratch-7 --interval 1 --timeout 30 > "$WORK/out" 2> "$WORK/err"
+eq "an accepted launch is awaited as its task" "0 SUCCEEDED" "$? $(head -1 "$WORK/out")"
+has "…on its T<n>" 'argv: await --task T21' "$(cat "$WORK/out")"
+eq "…no @origin adopted onto accepted work" '' "$(TM display-message -p -t "$A" '#{@origin}')"
+TM set-window-option -u -t "$A" @task
+bash "$AW" 408 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "an accepted launch with no task exits 5" 5 "$?"
+has "…saying no issue-number wait" 'no issue-number wait' "$(cat "$WORK/out")"
+TM kill-window -t "$A"
+printf 'FLEET_REPO=acme/app\nFLEET_TASK_AUTHORITY=hub\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
+eq "a hub-authority repo: no spawn by issue number (exit 5)" 5 "$?"
+has "…pointing at the task tool" 'hub-authoritative' "$(cat "$WORK/out")"
+eq "…and nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
+printf 'FLEET_REPO=acme/app\nFLEET_TASK_AUTHORITY=legacy\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+await 410 --timeout 30
+W=$(until_win 410); [ -n "$W" ] || fail "a legacy repo still spawns by issue number" "$(cat "$WORK/err")"
+TM kill-window -t "$W"; collect
+eq "…a legacy repo: spawned once, as before" $((n + 1)) "$(wc -l < "$STUB_LOG" | tr -d ' ')"
 
 printf 'fleet-await selftest: OK (%d checks)\n' "$CHECKS"

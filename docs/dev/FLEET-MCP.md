@@ -73,7 +73,7 @@ are the dispatch group's — listed by `fleet-orch`, answered by `fleet` as lega
 | `agents` | — | `tmux list-windows` of this fleet, `fleet-children.sh --json`, `fleet_origin_key` | read-only; each row `key · issue · agent · state · is_self/is_parent/is_child` |
 | `spawn` | `issue` (int ≥ 1), `repo`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `dash-issue-session.sh <issue> [--repo R] [--reap P]` — `draft` / `pr_note` first run `fleet-draft.sh mark <issue> [--pr-note T]` (issue #3715; a failed mark spawns nothing) | 0 spawned / window exists · 2 at capacity · 3 already claimed · 1 infrastructure |
 | `set_reap` | `policy` (`merged[:<dur>]` · `done[:<dur>]` · `loop-end` · `at:<HH:MM\|ISO>` · `keep`) | `fleet-reap-policy.sh set <policy>` — this window's `@reap_policy` (issue #1902) | 0 set · 2 not a policy · 1 no window |
-| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
+| `await` | `issue` or `task` (`T<n>`, issue #3330), `repo`?, `timeout`? (1–570 s, default 540) | `fleet-await.sh <issue\|T<n>> --timeout T [--repo R]` — an accepted task reads its authoritative outcome; an issue number whose window is an accepted launch waits on that window's `T<n>` (no `@task`: NO-WORKER), and a hub-authority repo never spawns by number (NO-WORKER — use `task`, issue #4398); legacy records wait on their issue worker (no issue: NO-WORKER) | accepted T: 0 SUCCEEDED · 1 FAILED · 2 CANCELLED/REFUSED · 3 WAITING/UNKNOWN; legacy: 0 MERGED · 3 TIMEOUT |
 | `task` 派 | `title`, `body`?, `repo`?, `rule`?, `spawn`?, `reap`?, `agent`?, `coding_agent`?, `draft`? \| `pr_note`? | `fleet-task-record.sh dispatch --title T --body-file - [--repo R] [--rule N] [--spawn] [--reap P] [--as A] [--agent claude|codex] [--draft\|--pr-note T]` (draft needs `repo`, issue #3715) — the hub's task record FIRST (`T<n>`, `POST /v1/node/tasks` with the node token, issue #3330), then a repo task's issue (`fleet-issue-file.sh --task T<n>`, + its worker) or a no-repo session given the words (`dash-raw-session.sh --no-repo --task T<n>`). No hub: a repo task files exactly as `file_issue`; a no-repo one exits 3 | 0 · 1 the hub refused · 2 usage · 3 no hub (no-repo) · the filer's / spawner's own |
 | `send` | `to` (`issue:<N>` · `scratch-<N>` · `orchestrator` · `parent`), `text` | `fleet-peer-send.sh <target> -` (text on stdin) | `{delivered}` · `{queued}` (exit 3) · `{ended}` (exit 2 + stdout) |
 
@@ -713,6 +713,36 @@ It keeps task history and ticket mappings; it never mirrors hub results to
 GitHub. Explicit completion with a PR records `work_result` and `pr_state:
 waiting` separately in result evidence. Only the existing merge verdict permits
 `pr_state: merged`. Fixture tests do not establish deployment/live acceptance.
+
+### Retiring the compatibility window (#4398)
+
+The window closed on 2026-10-18. The 7-day wait was waived by the operator,
+and three gates were met: a compatible released version, C9 live rows, and a
+fresh dry-run of each migrated repo showing `legacy_owners=[]`, `blockers=[]`.
+Inventory of the C1–C7 branches: old peers are kept out at the gate, not
+translated. That gate is:
+
+- `launch_v1` for any accepted launch;
+- `repo_authority_v1` for a hub-mode `worker_start`;
+- cutover blockers for any non-capable host or live legacy owner;
+- refusal of a downlevel report or legacy POST on a version-1 task.
+
+The gate stays.
+
+The legacy-mode path stays byte for byte: legacy relays, the version-0 record,
+the issue lease, label resolution at a first dispatch, and `gh:` ticket refs.
+Unmigrated repos still run on it.
+
+The one superseded branch was the issue-number wait. `fleet-await.sh <N>` no
+longer reads the legacy ledger, or adopts `@origin`, for a window carrying
+`@launch`. It waits on that window's `T<n>`, and a hub-authority repo refuses
+a by-number spawn.
+
+Before deleting more, confirm per repo with `fleet-repo.sh authority <repo>
+--session <s> --dry-run`: hub mode with zero legacy owners. A repo still in
+`legacy` keeps every legacy reader. Rolling back a repo is the C5
+`--rollback` stage, unchanged. Rolling back this code is a revert of its PR;
+no schema or stored row changed.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 

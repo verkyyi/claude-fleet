@@ -4840,6 +4840,14 @@ drill_task_report_fence() {
   WHAT='任务结果按身份与代次归属，未知不伪造完成或取消'
 }
 
+drill_accepted_await_by_number() {
+  CAP=60; local out t0
+  t0=$(now)
+  out=$(bash "$BIN/fleet-await-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='已接受任务按 T 等待，不按单号等账本、不领养 @origin；hub 仓库不按单号派'
+}
+
 drill_task_blocker_fence() {
   CAP=15; local out t0
   t0=$(now)
