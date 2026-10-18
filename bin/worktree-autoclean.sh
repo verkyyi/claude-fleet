@@ -200,6 +200,25 @@ dir=""; head=""; branch=""
 REPO_ROOT=""; REPO=""; BASE=""; PROTECTED_RE=""; MASTER=""; MERGED_PRS=""; FORGE=github
 
 process() {
+  [ -n "$dir" ] && [ "$dir" != "$REPO_ROOT" ] && [ -n "$branch" ] || return
+  # Same exclusion as migration/transfer, including orphan sweeping on KEEP.
+  # Acquire before the fresh liveness/git gates, not after a stale scan verdict.
+  local transition_wt
+  transition_wt=$(cd "$dir" 2>/dev/null && pwd -P) || transition_wt="$dir"
+  if [ "$DRY" = 1 ]; then
+    if [ -e "$(fleet_rotate_lease_file "$transition_wt").transfer-lock" ]; then
+      say "KEEP  $branch  (transition retained)"; kept=$((kept+1)); return
+    fi
+    process_locked; return
+  fi
+  if ! fleet_transition_lock_take "$transition_wt"; then
+    say "KEEP  $branch  (transition retained)"; kept=$((kept+1)); return
+  fi
+  process_locked
+  fleet_transition_lock_drop "$transition_wt"
+}
+
+process_locked() {
   [ -z "$dir" ] && return
   # skip main worktree and detached / no-branch worktrees
   if [ "$dir" = "$REPO_ROOT" ] || [ -z "$branch" ]; then return; fi

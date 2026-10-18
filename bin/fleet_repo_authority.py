@@ -100,6 +100,32 @@ def update_local(path, mode):
 
 
 NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
+START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")
+
+
+def check_start_ack(expected, ack, phase, proof=None):
+    if (not isinstance(expected, dict)
+            or any(not isinstance(expected.get(k), str) or not expected[k] for k in START_KEYS)
+            or not isinstance(ack, dict) or set(ack) - set(START_KEYS) - {'phase', 'native_identity'}
+            or any(not isinstance(ack.get(k), str) or not ack[k] for k in START_KEYS)
+            or any(ack.get(k) != expected[k] for k in START_KEYS)
+            or ack.get('phase') != phase
+            or ack.get('native_identity') != proof):
+        raise ValueError('authority acknowledgement differs from the exact admission/execution')
+    return ack
+
+
+def reserved_scope(repo, key, worker):
+    # Only read BEFORE begin. GET on an observed successor belongs to #4510's
+    # recovery fence and deliberately rejects competing history (even stopped).
+    row = ticket.api('GET', '/authority/start', query={'repo': repo, 'reservation': key})
+    if (not isinstance(row, dict) or set(row) - set(START_KEYS) - {'phase', 'native_identity'}
+            or any(not isinstance(row.get(k), str) or not row[k]
+                   for k in ('repo', 'reservation', 'owner', 'endpoint_id'))
+            or row['repo'] != repo_identity(repo) or row['reservation'] != key
+            or row.get('worker_id') or row.get('native_identity') or row.get('phase') != 'reserved'):
+        raise ValueError('independent reserved admission unavailable; no begin authorized')
+    return dict(row, worker_id=worker)
 
 
 def stopped_receipt(path, authority):
@@ -161,14 +187,23 @@ def start_call(repo, key, action, **fields):
                       body=dict(action=action, reservation=key, **fields))
 
 
-def observe_native(payload):
+def observe_native(payload, codex_identity=None):
     raw = os.environ.get("FLEET_AUTHORITY_CONTEXT")
     if not raw or payload.get("hook_event_name") != "SessionStart":
         return
     c = json.loads(raw)
+    if os.environ.get('FLEET_CODEX_LAUNCHER_PID'):
+        from fleet_native_registration import observe
+        return observe(payload, codex_identity)
     native = launch.native_parent()
     if not launch.valid_uuid(payload.get("session_id")) or not launch.root_native(native, c["supervisor"]):
         raise ValueError("local reservation does not own this native execution")
+    if native.get('actual_provider') == 'codex':
+        raise ValueError('Codex authority requires its verified launcher binding')
+    # Keep the original four-field authority context contract unchanged (#4510).
+    expected = json.loads(os.environ.get('FLEET_AUTHORITY_ADMISSION', '{}'))
+    if any(expected.get(k) != c[k] for k in ('repo', 'reservation', 'worker_id')):
+        raise ValueError('admission context differs')
     binding = c.get("worktree")
     intent = c.get("native_worktree")
     pane = os.environ["TMUX_PANE"]
@@ -191,8 +226,11 @@ def observe_native(payload):
         launch.check_worktree_window(pane, c["worktree"])
     proof = {k: native[k] for k in ("pid", "birth", "executable")}
     proof.update(worker_id=c["worker_id"], native_session=payload["session_id"])
-    start_call(c["repo"], c["reservation"], "observe", native_identity=proof)
-    receipt = dict(c, native_identity=proof)
+    ack = start_call(c["repo"], c["reservation"], "observe", native_identity=proof)
+    check_start_ack(expected, ack, 'observed', proof)
+    receipt = dict(c, native_identity=proof, hub_confirmation=ack)
+    if os.environ.get('FLEET_AUTHORITY_ADMISSION'):
+        receipt['admission'] = expected
     if intent:
         receipt["worktree"] = binding
         launch.tmux("set-option", "-w", "-t", pane, "@worktree", binding["root"])
@@ -275,23 +313,32 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     key = os.environ.get("FLEET_AUTHORITY_START") or str(uuid.uuid4())
     if not os.environ.get("FLEET_AUTHORITY_START"):
         start_call(repo, key, "reserve")
+    expected = reserved_scope(repo, key, worker)
+    if os.environ.get('FLEET_AUTHORITY_EXPECTED'):
+        # A controlled continuation already witnessed its source admission and
+        # fresh reserve. A credential/scope change must fail BEFORE begin/native.
+        prior = json.loads(os.environ['FLEET_AUTHORITY_EXPECTED'])
+        check_start_ack(prior, expected, 'reserved')
     try:
-        start_call(repo, key, "begin", worker_id=worker)
+        admission = start_call(repo, key, "begin", worker_id=worker)
     except (ticket.Fail, ValueError):
-        # Cancel is CAS from reserved only; a concurrent begin cannot lose its
-        # reservation. An unavailable/ambiguous begin stays retained.
+        # A refused begin leaves the reservation reserved; cancel is CAS from
+        # reserved only. An accepted begin whose ACK differs (below) is retained.
         try:
             start_call(repo, key, "cancel")
         except (ticket.Fail, ValueError):
             pass
         raise
+    check_start_ack(expected, admission, 'starting')
     c = dict(repo=repo, worker_id=worker, reservation=key, supervisor=os.getpid())
     if worktree:
         c["worktree"] = worktree
     if intent:
         c["native_worktree"] = intent
-    env = dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(c))
+    env = dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(c),
+               FLEET_AUTHORITY_ADMISSION=json.dumps(admission))
     env.pop("FLEET_AUTHORITY_START", None)
+    env.pop('FLEET_AUTHORITY_EXPECTED', None)
     if intent:
         for variable in ("FLEET_LAUNCH_CREATE", "FLEET_LAUNCH_WORKTREE", "FLEET_LAUNCH_CONTEXT"):
             env.pop(variable, None)

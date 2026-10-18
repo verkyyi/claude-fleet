@@ -112,13 +112,14 @@ CLOSED_GRACE="${FLEET_CLEANUP_CLOSED_GRACE:-900}"
 case "$CLOSED_GRACE" in ''|*[!0-9]*) CLOSED_GRACE=900 ;; esac   # tolerate a garbled conf
 
 # --- args ---------------------------------------------------------------------
-PR=""; DRY=0; AUTO=0; REPO_ARG=""; BRANCH_ARG=""
+PR=""; DRY=0; AUTO=0; REPO_ARG=""; BRANCH_ARG=""; EXPECTED_BINDING=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pr) shift; PR="${1:-}"; PR="${PR//[^0-9]/}" ;;
     # --branch <issue-N|scratch-N> (issue #3601): no PR — git says whether it landed
     --branch) shift; BRANCH_ARG="${1:-}" ;;
     --repo) shift; REPO_ARG="${1:-}" ;;
+    --expected-binding) shift; EXPECTED_BINDING="${1:-}"; [[ "$EXPECTED_BINDING" =~ ^[0-9a-f]{64}$ ]] || exit 2 ;;
     --dry-run|-n) DRY=1 ;;
     --auto) AUTO=1 ;;
     -h|--help) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -270,6 +271,32 @@ fi
 
 if [ -n "$WT" ] && [ -d "$WT" ] && ! _retirement=$(fleet_worktree_retire_metadata "$WT"); then
   note "  worktree retained: $_retirement"; done_token skip:protected; exit 0
+fi
+
+# Pin the execution before any wait. The final gate compares under the SAME
+# transition lock as rotate/transfer; a delayed cleanup never adopts a successor.
+cleanup_binding() {
+  local inode='' panes=''
+  if [ -n "$WT" ]; then
+    inode=$(python3 - "$WT" <<'PY'
+import os, sys
+try:
+    s = os.stat(sys.argv[1]); print(s.st_dev, s.st_ino)
+except FileNotFoundError:
+    print('absent')
+PY
+    ) || return 1
+  fi
+  if [ -n "$WIN" ]; then
+    [[ "$WIN" =~ ^@[0-9]+$ ]] || return 1
+    panes=$(ftmux list-panes -t "$WIN" -F '#{socket_path}|#{pid}|#{window_id}|#{pane_id}|#{pane_pid}|#{@fleet_id}|#{@repo}|#{@worktree}|#{@cc_agent}|#{@cc_launcher_pid}|#{@authority_receipt}|#{@codex_session_id}|#{@launch_receipt}|#{@worker_lifecycle}|#{@migrating}|#{@reap_hold}' 2>/dev/null) || return 1
+    [ -n "$panes" ] || return 1
+  fi
+  printf '%s\n%s\n%s\n' "$WT" "$inode" "$panes" | shasum -a 256 | awk '{print $1}'
+}
+CLEANUP_BINDING=$(cleanup_binding) || { done_token skip:live; exit 0; }
+if [ -n "$EXPECTED_BINDING" ] && [ "$CLEANUP_BINDING" != "$EXPECTED_BINDING" ]; then
+  done_token skip:binding; exit 0
 fi
 
 # --- the bound-issue gate (issue #1156) ---------------------------------------
@@ -661,14 +688,15 @@ fi
 # this is the backstop for the seconds between the gate and the `mv`, and it makes
 # the DETACHED path (which re-runs minutes later, inside tmux) safe too.
 DROP_FORCE="--force"
-teardown() {
+teardown() (
   [ -z "$BRANCH" ] && { note "  head $href is not a branch we may reap — nothing to do."; return 0; }
   local retirement
   if [ -n "$WT" ] && [ -d "$WT" ] && ! retirement=$(fleet_worktree_retire_metadata "$WT"); then
     note "  worktree retained before teardown: $retirement"; done_token skip:protected; return 1
   fi
   local self_win cwd
-  self_win=$(ftmux display-message -p -t "${TMUX_PANE:-}" '#{window_id}' 2>/dev/null)
+  self_win=''
+  [ -z "${TMUX_PANE:-}" ] || self_win=$(ftmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null)
   cwd=$(pwd -P 2>/dev/null)
 
   local detach=0
@@ -681,21 +709,34 @@ teardown() {
   if [ "$detach" = 1 ]; then
     # Silence the git steps (issue #192): run-shell surfaces non-empty output as a
     # view-mode overlay on the attached client.
-    # The worktree is DROPPED, not deleted (issue #586): fleet-worktree-drop.sh
-    # renames it into a sibling .fleet-trash/ in milliseconds, so a 300k-file tree
-    # cannot hold this teardown — nor the daemon tick driving it. run-shell runs the
-    # string under /bin/sh, which cannot source fleet-lib.sh; hence the shim.
-    local dropcmd=""
-    [ -n "$WT" ] && dropcmd="bash '$BIN/fleet-worktree-drop.sh' '$MAIN' '$WT' $DROP_FORCE; "
-    local cmd="tmux kill-window -t ${WIN:-@self}; { ${dropcmd}git -C '$MAIN' branch -D '$BRANCH'; } >/dev/null 2>&1"
+    # Re-enter normal cleanup OUTSIDE the target cwd with its original binding.
+    # No queued naked kill/drop: the child takes the shared lock and rechecks.
+    local cmd args=(env -u TMUX_PANE "FLEET_CONF_DIR=$FLEET_CONF_DIR" "FLEET_SESSION=$FLEET_SESSION")
+    [ -z "${TMUX:-}" ] || args+=("TMUX=$TMUX")
+    args+=(bash "$BIN/fleet-cleanup.sh" --repo "$REPO" --expected-binding "$CLEANUP_BINDING")
+    if [ -n "$BRANCH_ARG" ]; then args+=(--branch "$BRANCH_ARG"); else args+=(--pr "$PR"); fi
+    printf -v cmd '%q ' ${args[@]+"${args[@]}"}
+    cmd="cd / && $cmd >/dev/null 2>&1"
     note "  teardown (detached): $cmd"
-    [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] || { [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")"; }   # not a kill to pull back (#1840)
     [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ] && return 0
     ftmux run-shell -b "$cmd" 2>/dev/null || \
       note "  teardown: tmux run-shell failed — worktree-autoclean.sh will reap the merged worktree."
-    return 0
+    done_token deferred:cleanup; return 1
   fi
 
+  if [ -n "$WT" ]; then
+    local transition_wt
+    transition_wt=$(cd "$WT" 2>/dev/null && pwd -P) || transition_wt="$WT"
+    fleet_transition_lock_take "$transition_wt" || { done_token skip:transition; return 1; }
+    # Preserve the physical key after the directory has been moved to trash.
+    trap 'fleet_transition_lock_drop "$transition_wt"' EXIT
+  fi
+  local current
+  current=$(cleanup_binding) || { done_token skip:binding; return 1; }
+  [ "$current" = "$CLEANUP_BINDING" ] || { done_token skip:binding; return 1; }
+  if [ -n "$WT" ] && fleet_rotate_lease_held "$WT" >/dev/null; then
+    done_token skip:live; return 1
+  fi
   auto_cleanup_gate || return 1
   note "  teardown: kill-window ${WIN:-none} → worktree drop ${WT:-none} → branch -D $BRANCH"
   if [ "${CLEANUP_DRY_TEARDOWN:-0}" = 1 ]; then return 0; fi
@@ -728,7 +769,7 @@ teardown() {
     esac
   fi
   git -C "$MAIN" branch -D "$BRANCH" >/dev/null 2>&1 || true
-}
+)
 
 # --- closed-unmerged: record, then reap the orphan (no base pull, no --force) --
 # Nothing was merged into the base, so there is no fast-forward to do — but there

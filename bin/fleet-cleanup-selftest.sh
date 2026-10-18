@@ -23,7 +23,7 @@
 #   already-torn-down (MERGED, no worktree/window) → skip:nothing (idempotent,
 #                                       no duplicate ledger row, no teardown)
 #   self-cwd cleanup → teardown DETACHES into the tmux server (worker-safe), and the
-#                      detached command drives bin/fleet-worktree-drop.sh
+#                      detached command re-enters cleanup with the pinned binding
 #   the drop itself  → the worktree is RENAMED into a sibling .fleet-trash/ with its
 #                      bytes intact and pruned from the registry, never deleted
 #                      inline (issue #586 — a 308k-file delete held the daemon 67min)
@@ -669,13 +669,13 @@ ok "4 already-torn-down → skip:nothing (idempotent, no dup ledger, no teardown
 
 # --- 5. self-cwd cleanup → teardown DETACHES into the tmux server (worker-safe) -
 : > "$LEDGER"
-tok="$(FAKE_SELF_WIN=@7 run_clean merged)"; err="$(cat "$WORK/err")"
-case "$tok" in cleaned:*) ;; *) fail "5 expected cleaned:* on the self-cwd path, got '$tok'" "$err" ;; esac
+tok="$(FAKE_PANE=%7 FAKE_SELF_WIN=@7 run_clean merged)"; err="$(cat "$WORK/err")"
+[ "$tok" = deferred:cleanup ] || fail "5 expected deferred cleanup on the self-cwd path, got '$tok'" "$err"
 grep -qx run-shell "$ORDER_LOG" || fail "5 self-cwd teardown must detach via tmux run-shell" "$err"
 [ -d "$WORK/wt-issue-42" ] || fail "5 self-cwd teardown must NOT drop the worktree inline (it detaches)" "$err"
 case "$err" in
-  *fleet-worktree-drop.sh*) ;;
-  *) fail "5 the detached command must drive the drop shim (run-shell runs under /bin/sh)" "$err" ;;
+  *fleet-cleanup.sh*--expected-binding*) ;;
+  *) fail "5 detached cleanup must re-enter the guarded path with the original binding" "$err" ;;
 esac
 ok "5 self-cwd cleanup → teardown detaches into the tmux server"
 

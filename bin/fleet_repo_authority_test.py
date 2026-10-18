@@ -79,9 +79,13 @@ class PoolAuthorityTests(unittest.TestCase):
             elif action == "stopped":
                 self.assertEqual(fields["native_identity"], native)
                 self.assertTrue(fields["execution_stopped"])
+            return dict(repo=repo, reservation=key, worker_id=worker, owner='owner',
+                        endpoint_id='node', phase='starting' if action == 'begin' else action)
 
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(migration, "start_call", side_effect=start), \
+                patch.object(migration.ticket, 'api', side_effect=lambda method, path, query: dict(
+                    repo=query['repo'], reservation=query['reservation'], owner='owner', endpoint_id='node', phase='reserved')), \
                 patch.object(migration.signal, "signal"), \
                 patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
                              json.dumps(receipt) if key == "@authority_receipt" else ""), \
@@ -119,6 +123,38 @@ class PoolAuthorityTests(unittest.TestCase):
 
 
 class RepoAuthorityTests(unittest.TestCase):
+    def test_continuation_scope_change_refuses_before_begin(self):
+        source = dict(repo='org/a', reservation='new', worker_id='fleet/session', owner='source-owner', endpoint_id='node')
+        different = dict(repo='org/a', reservation='new', owner='different-owner', endpoint_id='node', phase='reserved')
+        with patch.dict(os.environ, FLEET_AUTHORITY_START='new', FLEET_AUTHORITY_EXPECTED=json.dumps(source), TMUX_PANE='%1'), \
+                patch.object(migration.launch, 'option', return_value=''), \
+                patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
+                patch.object(migration.ticket, 'api', return_value=different), \
+                patch.object(migration, 'start_call') as post, patch.object(migration.subprocess, 'Popen') as child:
+            with self.assertRaises(ValueError):
+                migration.supervise(['fixture-native'])
+            post.assert_not_called()
+            child.assert_not_called()
+
+    def test_begin_ack_cannot_supply_its_own_owner_or_endpoint(self):
+        original = dict(repo='org/a', reservation='start', owner='independent-owner',
+                        endpoint_id='independent-node', phase='reserved')
+        for changed in ('owner', 'endpoint_id'):
+            wrong = dict(original, worker_id='fleet/session', phase='starting')
+            wrong[changed] = 'ack-supplied-other'
+            with self.subTest(changed=changed), \
+                    patch.dict(os.environ, FLEET_AUTHORITY_START='start', TMUX_PANE='%1'), \
+                    patch.object(migration.launch, 'option', return_value=''), \
+                    patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
+                    patch.object(migration.ticket, 'api', return_value=original) as get, \
+                    patch.object(migration, 'start_call', return_value=wrong) as post, \
+                    patch.object(migration.subprocess, 'Popen') as child:
+                with self.assertRaises(ValueError):
+                    migration.supervise(['fixture-native'])
+                get.assert_called_once_with('GET', '/authority/start', query={'repo':'org/a', 'reservation':'start'})
+                post.assert_called_once_with('org/a', 'start', 'begin', worker_id='fleet/session')
+                child.assert_not_called()
+
     def test_final_gate_reserves_before_window_creation(self):
         calls = []
         def api(method, path, body=None, query=None):
@@ -251,14 +287,20 @@ class RepoAuthorityTests(unittest.TestCase):
             if replaced:
                 receipt["reservation"] = "replacement"
             writes = []
+            def start_call(r, k, action, **kw):
+                writes.append(action)
+                return dict(repo=r, reservation=k, worker_id='fleet/session',
+                            owner='owner', endpoint_id='node', phase='starting')
             with patch.dict(os.environ, {"FLEET_AUTHORITY_START": "start", "TMUX_PANE": "%1"}), \
+                    patch.object(migration.ticket, 'api', return_value=dict(repo='org/a', reservation='start',
+                        owner='owner', endpoint_id='node', phase='reserved')), \
                     patch.object(migration.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "org/a\tfleet/session", "")), \
                     patch.object(migration.subprocess, "Popen") as child, \
                     patch.object(migration.signal, "signal"), \
                     patch.object(migration.launch, "option", side_effect=lambda pane,key,*args:
                                  json.dumps(receipt) if key == "@authority_receipt" else ""), \
                     patch.object(migration.os, "kill", side_effect=ProcessLookupError()), \
-                    patch.object(migration, "start_call", side_effect=lambda r, k, a, **kw: writes.append(a)), \
+                    patch.object(migration, "start_call", side_effect=start_call), \
                     contextlib.redirect_stderr(io.StringIO()):
                 child.return_value.wait.return_value = 0
                 self.assertEqual(migration.supervise(["fixture-native"]), 0)
