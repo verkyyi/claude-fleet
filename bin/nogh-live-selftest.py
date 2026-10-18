@@ -460,15 +460,24 @@ class TraceMetadata(unittest.TestCase):
         trace.decode(8, 1.42, 1.45, 'dup2(6, 7) = 7')
         trace.exited.update({8, 9})
         trace.finish(0)
-        # ...but a socket made, or a tracked socket closed, beside the fork is not
-        for racing in ('socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 5', 'close(3) = 0', 'dup2(3, 6) = 6'):
+        # ...a tracked socket closed beside the fork is not (the child may keep it)
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(7, 1.3, 1.6, 'fork() = 9')
+        trace.decode(8, 1.4, 1.5, 'close(3) = 0')
+        trace.exited.update({8, 9})
+        with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
+            trace.finish(0)
+        # ...and a socket (or dup) MADE beside it may be in the child: the child is
+        # given it, so its traffic there is counted, never hidden (live, #4625: SOCKET@fork)
+        for racing, fd in (('socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 5', 5), ('dup2(3, 6) = 6', 6)):
             trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
             trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
             trace.decode(7, 1.3, 1.6, 'fork() = 9')
             trace.decode(8, 1.4, 1.5, racing)
+            trace.decode(9, 1.7, 1.71, 'write(%d, ""..., 1) = 1' % fd)
             trace.exited.update({8, 9})
-            with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
-                trace.finish(0)
+            self.assertEqual(trace.finish(0)['intervals']['startup']['unknown'], 1, racing)
 
     def test_untracked_close_racing_an_accept_on_that_fd_keeps_the_socket(self):
         # live (#4625): ACCEPT@close_inert. Traffic on the accepted fd is counted.
@@ -479,12 +488,21 @@ class TraceMetadata(unittest.TestCase):
         trace.decode(7, 1.60, 1.61, 'write(4, ""..., 1) = 1')
         trace.exited.add(8)
         self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
-        # ...but closing a TRACKED socket beside an accept onto it still refuses
+        # A TRACKED socket's close, then an accept onto that number: the kernel
+        # frees N before handing it out, so the close came first (ACCEPT@close)...
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3',
                                  'socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 4'])
         trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
         trace.decode(8, 1.30, 1.40, 'close(4) = 0')
         trace.decode(7, 1.32, 1.50, 'accept(3, NULL, NULL) = 4')
+        trace.decode(7, 1.60, 1.61, 'write(4, ""..., 1) = 1')
+        trace.exited.add(8)
+        self.assertEqual(trace.finish(0)['intervals']['startup']['allow_hub'], 1)
+        # ...but a close that starts after an accept onto its fd is still ambiguous
+        trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
+        trace.decode(7, 1.2, 1.21, 'clone(flags=CLONE_VM|CLONE_FILES|CLONE_THREAD) = 8')
+        trace.decode(7, 1.30, 1.50, 'accept(3, NULL, NULL) = 4')
+        trace.decode(8, 1.32, 1.40, 'close(4) = 0')
         trace.exited.add(8)
         with self.assertRaisesRegex(live.Refused, 'FD_ORDER_AMBIGUOUS'):
             trace.finish(0)

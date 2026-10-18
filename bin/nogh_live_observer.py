@@ -395,9 +395,14 @@ class Trace:
                 child = self.parents[child]
             return False
 
+        creations = ('accept', 'socket', 'dup')
+
         def access(key, first, last, write, at, until, pid, new_child=None, inert=False, kind=''):
+            """Refuse an ambiguous overlap; return the forks a new fd may also have reached."""
             active = [item for item in pending.get(key, []) if item[0] > at]
             whole = first == 0 and last == 2 ** 32
+            single = first == last
+            reached = []
             for end, old_first, old_last, old_write, old_pid, old_child, old_inert, old_kind in active:
                 if pid == old_pid or last < old_first or old_last < first or not (write or old_write):
                     continue
@@ -417,8 +422,23 @@ class Trace:
                 # first (N was an untracked fd, then reused) or it closed the new
                 # socket. Replay keeps the socket: later traffic on N is then counted,
                 # never hidden; a close of a TRACKED socket still refuses.
-                if old_kind == 'close_inert' and write and kind in ('accept', 'socket', 'dup') \
+                if old_kind == 'close_inert' and write and kind in creations \
                         and first == last == old_first == old_last:
+                    continue
+                # A close of a TRACKED fd N, then a call that makes fd N: the kernel
+                # hands out N only once it is free, so the close came first (live,
+                # #4625: ACCEPT@close). The reverse order stays ambiguous.
+                if old_kind == 'close' and write and kind in creations and single \
+                        and old_first == old_last == first:
+                    continue
+                # A socket made while a sibling's copying fork runs may or may not be
+                # in the child: give the child it too (live, #4625: SOCKET@fork), so
+                # its traffic there is counted, never hidden. Made just before a fork,
+                # replay already copies it.
+                if old_kind == 'fork' and write and kind in creations and single:
+                    reached.append(old_child)
+                    continue
+                if kind == 'fork' and old_kind in creations and old_write and old_first == old_last:
                     continue
                 # Which two kinds of touch collided, as identifiers (live, #4625).
                 refused = Refused('FD_ORDER_AMBIGUOUS')
@@ -426,6 +446,7 @@ class Trace:
                 raise refused
             active.append((until, first, last, write, pid, new_child, inert, kind))
             pending[key] = active
+            return reached
 
         for at, action, pid, data, until in sorted(self.actions, key=lambda e: e[0]):
             require(pid in tables, 'FD_OWNER_UNKNOWN')
@@ -446,9 +467,10 @@ class Trace:
             inert = (action == 'close' and data not in table) or \
                 (action == 'cloexec' and data[0] not in table) or \
                 (action == 'dup' and data[0] not in table and data[1] not in table)
+            reached = []
             for first, last, write in touches:
-                access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None, inert,
-                       action + ('_inert' if inert else ''))
+                reached += access(table_key, first, last, write, at, until, pid, data[0] if action == 'fork' else None,
+                                  inert, action + ('_inert' if inert else ''))
             if action in ('write', 'network') and data[0] in table:
                 # dup and fork retain the same open-file-description even when
                 # their FD tables differ. A concurrent connect/disconnect makes
@@ -466,6 +488,9 @@ class Trace:
             elif action == 'socket':
                 fd, protocol, category, cloexec = data
                 table[fd] = (socket_state(protocol, category), cloexec)
+                for child in reached:
+                    if child in tables and tables[child] is not table:
+                        tables[child].setdefault(fd, table[fd])
             elif action == 'close':
                 table.pop(data, None)
             elif action == 'range':
@@ -479,6 +504,9 @@ class Trace:
                 if old != new:
                     table.pop(new, None)
                     if old in table: table[new] = (table[old][0], cloexec)
+                    for child in reached:
+                        if new in table and child in tables and tables[child] is not table:
+                            tables[child].setdefault(new, table[new])
             elif action == 'cloexec':
                 fd, flag = data
                 if fd in table: table[fd] = (table[fd][0], flag)
@@ -492,6 +520,9 @@ class Trace:
                         all(t[0] in {e['pod_ip'] for e in self.plan['endpoints']} for t in targets)):
                     category = 'allow_' + ('provider' if self.role == 'proxy' else 'dns' if self.role == 'dns' else 'hub')
                 table[new] = (socket_state(source[0], category), cloexec)
+                for child in reached:
+                    if child in tables and tables[child] is not table:
+                        tables[child].setdefault(new, table[new])
             elif action == 'write':
                 fd, end = data
                 if fd in table and table[fd][0][1] != 'local':
