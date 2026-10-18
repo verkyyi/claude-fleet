@@ -37,7 +37,6 @@
 1.1 blocked-state-selftest.sh
 6.4 cfg-restart-codex-selftest.sh
 11.9 cfg-stale-selftest.sh
-14.9 classify-backend-selftest.sh
 42.3 client-log-selftest.sh
 16.2 clipboard-osc52-selftest.sh
 0.2 codex-matrix-selftest.sh

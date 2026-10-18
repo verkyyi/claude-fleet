@@ -603,14 +603,6 @@ elicitations. Refusal is opt-in; no native approval or permission grant is sent.
 The fleet's default bypass posture normally produces no command/file approval
 prompt, but a stricter caller configuration can.
 
-The optional Stop classifier still uses the shared Claude helper. Its rubric is
-now agent-aware, including Codex's idle placeholder. Native pending requests and
-explicit blockers take precedence, and a slow classification is discarded when
-the launcher, thread or hook state changes. This allows plain-text questions at
-Stop to be distinguished from completed work without inventing a Codex
-Notification hook.
-
-
 ## Model changes and per-model fallback
 
 Use the native settings API to change an idle worker without restarting it:

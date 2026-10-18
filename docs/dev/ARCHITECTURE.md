@@ -579,7 +579,7 @@ launcher exported it.** Three shapes, one resolution:
 
 | Hook shell | How it resolves | Example |
 |---|---|---|
-| bash | source `fleet-lib.sh` (auto-sources the global conf) then `fleet_load_conf "$(fleet_current_session)"` | `session-end-hook.sh`, `fleet-context.sh`, `classify-sessions.sh` |
+| bash | source `fleet-lib.sh` (auto-sources the global conf) then `fleet_load_conf "$(fleet_current_session)"` | `session-end-hook.sh`, `fleet-context.sh` |
 | `sh` (cannot source the bash-only lib) | `bash bin/fleet-hook-conf.sh KEY…` — the same two steps in a ≈20 ms bash hop | `set-claude-state.sh` (the auto-handoff threshold) |
 | python | `bash -c 'source lib; fleet_load_conf "$(fleet_current_session)"; printf "$KEY"'` | `base-readonly-guard.py` (`FLEET_MAIN`), `bash-guard.py` (`FLEET_BASE_BRANCH`) |
 

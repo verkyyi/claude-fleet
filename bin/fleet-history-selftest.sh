@@ -559,12 +559,9 @@ contains "an all-helper dir is recorded transcript-less (#547)" "$out" "closed-u
 eq "  …one row, with NO session id (helper never promoted)" "-" "$(cut -f8 "$FLEET_HISTORY_LEDGER")"
 eq "  …and no transcript dir" "-" "$(cut -f7 "$FLEET_HISTORY_LEDGER")"
 
-# Two-way lock: the classifier marker must still be the text that daemon actually
-# sends, and BOTH rubrics must still be in the filter (fleet_newest_human_session)
-# — the summarizer's because its old transcripts outlive the script (#535).
-CHECKS=$((CHECKS + 1))
-grep -qF -- "$CLS" "$BIN/classify-sessions.sh" || \
-  fail "the transcript filter's marker is no longer in classify-sessions.sh — reword it in both places"
+# Every rubric must still be in the filter (fleet_newest_human_session): the
+# classifier's and the summarizer's scripts are gone (#2543, #535), but their old
+# transcripts outlive them on disk.
 # (the filter matches on a PREFIX of each rubric — assert the prefix is still a
 # prefix of the string the test seeds, then that the lib still carries it.)
 for _pfx in 'You are a status classifier for a coding-agent' 'You are a status classifier for a Claude Code' 'You are labeling a Claude Code session for a dashboard'; do

@@ -74,8 +74,8 @@ DIGEST_ENV=('FLEET_UI_LANG','FLEET_SLEEP_DIGEST','FLEET_SLEEP_DIGEST_CMD','FLEET
 def digest_argv():
     """The helper model that writes a sleeping page's digest: `claude -p` on
     haiku, no MCP (issue #468), no transcript left in the worktree (#1296),
-    authenticated off the account pool (#497) — the
-    classify-sessions.sh helper's shape. FLEET_SLEEP_DIGEST_CMD replaces it (a
+    authenticated off the account pool (#497) — the shape the
+    retired screen classifier's helper had (#2543). FLEET_SLEEP_DIGEST_CMD replaces it (a
     shell command reading the prompt on stdin): the selftests' fake model."""
     custom=os.environ.get('FLEET_SLEEP_DIGEST_CMD')
     if custom: return ['bash','-c',custom]

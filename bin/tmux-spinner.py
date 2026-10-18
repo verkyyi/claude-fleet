@@ -293,7 +293,6 @@ class Spinner:
                         continue
                     self.write_state(c, wid, 'done')
                     self.log('stuck.log', '%s:%s working -> done (idle %ss; stop-hook missed)' % (name, wid, now-int(act)))
-                    self.launch([str(BIN / 'classify-sessions.sh'), '--window', wid], dict(os.environ, CLASSIFY_SOCK=name))
             except (OSError, ValueError):
                 continue
         self.stuck_strikes, self.screens = new, screens

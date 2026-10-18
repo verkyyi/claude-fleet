@@ -721,7 +721,6 @@ degrading to a pane-content heuristic.
 | `/fleet-context` + the dash's ctx % | ✅ | ✅ | Run `fleet-context.sh` directly on Codex. SessionStart binds the exact root UUID, launcher lifetime and CODEX_HOME; rollout token telemetry supplies the current model/window. Missing data stays unknown; no Claude transcript or default denominator is reused. |
 | peer messages + child reports | ✅ | ✅ | Fleet pane launches give each worker a private local app-server. `codex queue` reaches that exact endpoint, UUID and CODEX_HOME; failed delivery is never stamped as success. A guardian shuts down the owned server even if the launcher is killed. `FLEET_CODEX_SERVER=0` opts back into embedded mode without live queue delivery. |
 | fleet tools (`status` / `children` / `repos` / `agents` / `spawn` / `await` / `send` · `report` / `ask` / `comment` / `evidence` / `handoff` / `pr_verdict` / `pr_merge` · `brief` / `file_issue` / `gh` / `context` / `transfer` / `where` / `show` / `open`) | ✅ | ✅ | Both launchers mount the one tool service `fleet` (`bin/fleet-mcp.py`, defined once in `conf/mcp-worker.json`, issues #1807 / #1808 / #1811): the same tools for Claude and Codex, each a checked wrapper over the existing script. The worker skills name only these tools — a script path appears only under a 排障 / 运营者 heading (`bin/skill-tools-selftest.sh`). Spec: `docs/dev/FLEET-MCP.md`. `FLEET_MCP=0` turns it off. |
-| Stop classifier (haiku) | opt-in | opt-in | CLASSIFY_BACKEND defaults to off before helper authentication, capture or inference. Explicit haiku/jev/shadow settings preserve the legacy path. Native attention and explicit worker blockers outrank screen inference; slow verdicts cannot replace a newer launcher or hook state. |
 | `--resume` paths (restore · migrate · `/fleet-history`) | ✅ | ✅ | Crash snapshots and history retain the exact Codex UUID, CODEX_HOME and rollout. Native resume/fork stays in that home; account migration uses a durable packet to start fresh in a different home with source recovery preserved. |
 | multi-account rotation + native quota collector | ✅ | ✅ | Register independent CODEX_HOME directories and select fresh launches by native quota headroom. Windows/reset times are reported by Codex. Unknown data stays unknown; gating and idle-only protected account migration are separate opt-ins. |
 | subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` reuses fleet-account, ccquota, quotawatch and transfer: eligible same-agent subscription first, then the allowed other agent, otherwise durable waiting. Exact source paths, target authentication, unsent drafts and Fleet loops follow the task. |
@@ -774,9 +773,6 @@ watching.
   configured, the account pool additionally uses **account-wide quota readings**
   from ccquota; these are separate from that local estimate. The usage + account
   modal shows the usage/limit details and the account pool.
-- The classifier spends real (haiku-sized, change-gated) tokens only when
-  explicitly enabled with `CLASSIFY_BACKEND=haiku`, `jev` or `shadow`.
-  The default is `off`; native state and explicit waits remain available.
 - Daemon units ship for both macOS launchd (`launchd/`) and Linux systemd
   user units (`systemd/` — one always-on service + `.timer`/`.service` pairs,
   `__HOME__`-templated; see `systemd/README.md`).

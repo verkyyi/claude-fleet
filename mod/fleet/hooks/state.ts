@@ -17,9 +17,8 @@
 // whichever of the two writers arrives first, @loop reads the same. The settings
 // hooks are not removed: they still fire, and write the same values.
 //
-// With the mod alive (bin/fleet-lib.sh fleet_mod_alive) the screen classifier skips
-// the window (`skip:mod` in classify.log, bin/classify-sessions.sh). Subagent turns
-// and calls (`agentId`) are not this pane's state and are passed straight on.
+// (The screen classifier that stood down for a live mod retired with issue #2543.)
+// Subagent turns and calls (`agentId`) are not this pane's state and are passed straight on.
 
 import type { EngineInterface, On } from 'claude-code'
 

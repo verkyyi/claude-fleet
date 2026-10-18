@@ -299,7 +299,7 @@ reads the last reply — for Claude the last `assistant` entry of its transcript
 for Codex the last assistant `message` item of its rollout (issue #1052) — and
 hands it, with the PR state (`@prci` / `@reap_key`) and the automatic wakes, to
 `claude -p --model haiku` (no MCP, pool-authenticated — the
-`classify-sessions.sh` helper's shape). The prompt asks for plain, non-technical
+fleet's helper `claude -p` shape). The prompt asks for plain, non-technical
 language, at most three items each, and each NEXT item tagged with who acts
 (`you` / `others`). The answer is stored as
 `digest: {done: [...], next: [{who, text}]}` in the record, under the worker

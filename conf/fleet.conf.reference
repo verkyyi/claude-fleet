@@ -325,18 +325,13 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 #FLEET_ROTATE_LEASE_TTL=900
 
 # --- Helper `claude -p` calls carry no MCP (issue #468) -------------------------
-# Screen classification is opt-in: CLASSIFY_BACKEND defaults to off; explicit
-# haiku, jev or shadow retains the legacy model-backed path. Existing settings
-# are preserved. Native state and explicit waits do not require classification.
-#CLASSIFY_BACKEND=off
-# ON by default for explicitly enabled helpers, GLOBALLY. bin/classify-sessions.sh reads a pane and answers in one
-# word (the dash summarizer that shared this flag retired in issue #535). Left unflagged, EVERY such call boots the
-# operator's whole MCP set — 4+ node children, the remote connectors, and a cold `rg`
-# scan: measured at 5.2s and up to 517MB RSS, on every Stop hook in every window. They
-# now pass --strict-mcp-config with an empty config (auth and settings stay intact,
-# unlike --bare, which drops the login). Set to 0 to restore the unflagged calls if a
-# future CLI changes what those flags mean — both call sites swallow stderr, so a
-# silent breakage would simply stop the summaries.
+# ON by default, GLOBALLY. A fleet helper `claude -p` (today the sleep digest,
+# bin/fleet-sleep.py; the screen classifier retired in issue #2543, the dash
+# summarizer in #535) left unflagged boots the operator's whole MCP set — 4+ node
+# children, the remote connectors, and a cold `rg` scan: measured at 5.2s and up to
+# 517MB RSS per call. It passes --strict-mcp-config with an empty config (auth and
+# settings stay intact, unlike --bare, which drops the login). Set to 0 to restore
+# the unflagged call if a future CLI changes what those flags mean.
 # @label=Strip MCP from helper claude -p @group=status @tier=internal @scope=global @edit=bool
 #FLEET_HELPER_NO_MCP=1
 

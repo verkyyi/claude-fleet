@@ -6,9 +6,9 @@
 # relay's `exited`).
 #
 # A real tmux server on a private socket (a PATH shim pins every bare `tmux`), the
-# real bin/set-claude-state.sh, bin/fleet-status-7501.py (pipe mode),
-# bin/classify-sessions.sh with a FAKE `claude` (records each call, answers
-# STOPPED) and fleet-lib.sh's fleet_primary_fresh / fleet_state_carry.
+# real bin/set-claude-state.sh, bin/fleet-status-7501.py (pipe mode) and
+# fleet-lib.sh's fleet_primary_fresh / fleet_state_carry. (Leg G — the screen
+# classifier's skip:7501 — retired with the classifier, issue #2543.)
 #
 # Asserted:
 #   A  HOOK-HELD     7501 said `working` 10 s ago: a Stop `done`, a Notification
@@ -19,8 +19,6 @@
 #   D  EXITED        a fresh `exited` record from the relay holds nothing
 #   E  SAME-VALUE    a hook re-saying the 7501 value keeps the 7501 label
 #   F  RELAY         a blocked/permission report → needs/perm + its words, src 7501
-#   G  CLASSIFIER    fresh 7501: `skip:7501`, no model call, state kept; silent past
-#                    120 s: the screen read decides (done), labelled classifier
 #   H  REASSERT      the same report again after another writer took the window
 #                    puts the agent's word back
 #   I  CARRY         fleet_state_carry stamps `carried` only before the first report
@@ -29,8 +27,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-# Re-root onto a conf-free shadow of this install (as classify-backend-selftest.sh
-# does): the classifier reads `$BIN/../fleet.conf` and writes `$FLEET_CONF_DIR/logs`.
+# Re-root onto a conf-free shadow of this install: the scripts read
+# `$BIN/../fleet.conf` and write `$FLEET_CONF_DIR/logs`.
 if [ "${_STATE_PRIMARY_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _STATE_PRIMARY_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
@@ -55,21 +53,14 @@ cat > "$WORK/bin/tmux" <<EOS
 printf '%s\n' "\$1" >> "$WORK/tmux.calls"
 exec "$REAL_TMUX" -S "$SOCK" "\$@"
 EOS
-cat > "$WORK/bin/claude" <<EOS
-#!/bin/sh
-echo call >> "$WORK/claude-calls"
-cat >/dev/null
-echo STOPPED
-EOS
-chmod +x "$WORK/bin/tmux" "$WORK/bin/claude"
+chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH"
 cleanup() { "$REAL_TMUX" -S "$SOCK" kill-server 2>/dev/null; rm -rf "$WORK"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" CLASSIFY_SETTLE=0 TMUX="$SOCK,1,0"
-unset CLASSIFY_SOCK FLEET_STATE_PRIMARY_SECS CCQUOTA_FLEET CLAUDE_CODE_ENTRYPOINT
-export CLASSIFY_BACKEND=haiku
+export TMPDIR="$WORK" FLEET_CONF_DIR="$WORK/conf" TMUX="$SOCK,1,0"
+unset FLEET_STATE_PRIMARY_SECS CCQUOTA_FLEET CLAUDE_CODE_ENTRYPOINT
 mkdir -p "$FLEET_CONF_DIR/global"
 
 tmux -f /dev/null new-session -d -s sp -n issue-1 -x 100 -y 30 "printf 'hello\n'; exec sleep 600" \
@@ -145,19 +136,6 @@ case "$(o @agent_status_ts)" in ''|*[!0-9]*) fail "F: no @agent_status_ts" ;; es
 hook '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' busy
 [ "$(st)" = needs/perm/7501 ] || fail "F: waiting on permission, a PreToolUse working overwrote it: [$(st)]"
 ok "F  RELAY: needs/perm with its words, src 7501, and the hooks held off"
-
-# ── G ──
-rm -f "$WORK/claude-calls"
-reset needs perm 7501 10 '{"state":"blocked","kind":"permission"}'
-bash "$BIN/classify-sessions.sh" --window "$W"
-[ "$(st)" = needs/perm/7501 ] || fail "G: the classifier overwrote a fresh 7501 blocked: [$(st)]"
-[ ! -f "$WORK/claude-calls" ] || fail "G: the classifier called the model while 7501 was fresh"
-grep -q "skip:7501" "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null || fail "G: no skip:7501 line" "$(tail -3 "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null)"
-reset needs perm 7501 130 '{"state":"blocked","kind":"permission"}'
-bash "$BIN/classify-sessions.sh" --window "$W"
-[ "$(st)" = done//classifier ] || fail "G: 130 s after the last report the screen read did not decide: [$(st)]" "$(tail -3 "$FLEET_CONF_DIR/logs/classify.log" 2>/dev/null)"
-[ -f "$WORK/claude-calls" ] || fail "G: past the window the classifier never asked the model"
-ok "G  CLASSIFIER: skip:7501 while fresh; after 120 s the screen decides"
 
 # ── H ──
 reset working '' hook -

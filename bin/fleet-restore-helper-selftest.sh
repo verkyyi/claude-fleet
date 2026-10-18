@@ -22,8 +22,7 @@
 #               (set-claude-state.sh done) stamp @cc_session_id from the payload;
 #               a headless `claude -p` (CLAUDE_CODE_ENTRYPOINT=sdk-cli) stamps nothing
 #   • NO-PERSIST the sleep digest's helper `claude -p` carries
-#               --no-session-persistence (stub claude records argv); the classifier's
-#               leg is classify-backend-selftest.sh's
+#               --no-session-persistence (stub claude records argv)
 #
 # tmux on a private -S socket via a PATH shim; CLAUDE_PROJECTS_DIR points every
 # transcript lookup at a temp tree. Exit 0 = pass.
