@@ -84,7 +84,7 @@ save() {
     sess=${d%/}; sess=${sess##*/}
     fleet_is_pool_session "$sess" && continue
     # One pass over the map: REAP / FID rows ride with the WIN row they precede;
-    # a finished or panel row drops with them; PIN / DESK / OWID rows are kept. The map copy keeps restore.map's
+    # a finished or panel row drops with them; PIN / DESK / OWID / AGENTDEF rows are kept. The map copy keeps restore.map's
     # own format; the TSV is the readable list.
     n=$(awk -F'\t' -v OFS='\t' -v sess="$sess" -v panel="$PANEL_RE" -v tsv="$tmp" -v map="$SDIR/$sess.map.tmp" '
       function v(x) { return (x == "" ? "-" : x) }
@@ -102,9 +102,9 @@ save() {
         pend = ""; fid = ""; next
       }
       # the identity-keyed rows after the pairs — a pin (#3517), a desk ticket
-      # (#2676), a remote parent (#3439) — ride along as they are: restore()
+      # (#2676), a remote parent (#3439), an agent file (#4760) — ride along as they are: restore()
       # stamps one only on the WIN row its fleet_id names
-      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" { post = post $0 "\n"; pend = ""; fid = ""; next }
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" { post = post $0 "\n"; pend = ""; fid = ""; next }
       { pend = ""; fid = "" }
       END { if (c > 0) printf "%s", post > map; print c + 0 }' "$mf")
     # A fleet with no session open keeps its copy too — the FLEET row alone: its
@@ -179,7 +179,7 @@ restore() {
       $1 == "FLEET" { print; next }
       $1 == "REAP" || $1 == "FID" { pend = pend $0 "\n"; next }
       $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }
-      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" { print; pend = ""; next }' "$skip" "$mf" > "$tmp"   # #3517: by identity
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" { print; pend = ""; next }' "$skip" "$mf" > "$tmp"   # #3517: by identity
     if grep -q '^WIN' "$tmp"; then
       log "restore: $sess — $(grep -c '^WIN' "$tmp") pinned session(s)"
       RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 RESTORE_KEEP_DONE=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :
