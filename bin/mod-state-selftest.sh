@@ -27,7 +27,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ "${_MODSTATE_SELFTEST_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _MODSTATE_SELFTEST_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
-  rm -rf "$_root"; exit "$_rc"
+  sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
 CLS="$BIN/classify-sessions.sh"
 SCS="$BIN/set-claude-state.sh"

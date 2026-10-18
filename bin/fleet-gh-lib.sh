@@ -33,7 +33,7 @@
 # shared marker — so a test never manufactures a limit on the real account.
 #
 # Log: every limit seen, call skipped and fallback completed appends one line to
-# $FLEET_GH_LOG (default <install>/logs/gh-limit.log) — the limited→fallback-ok
+# $FLEET_GH_LOG (default $FLEET_CONF_DIR/logs/gh-limit.log) — the limited→fallback-ok
 # interval is the EPIC's «longest a worker waits under a limit» metric.
 #
 # API
@@ -64,8 +64,6 @@
 #                                        webhook event stamps (issue #1272, below)
 
 FLEET_GH_LIMITED_RC=75
-# A caller that already knows its bin/ (fleet-topbar.py, every 5s) presets it: no fork.
-_FLEET_GH_LIB_DIR="${_FLEET_GH_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)}"
 
 fleet_gh_state_dir() {
   local d="${FLEET_STATE_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global}"
@@ -74,9 +72,9 @@ fleet_gh_state_dir() {
 }
 
 fleet_gh_log() {  # fleet_gh_log <event> [k=v …] — best effort, never fails a caller
-  local f="${FLEET_GH_LOG:-${_FLEET_GH_LIB_DIR:-.}/../logs/gh-limit.log}"
-  # A read-only install (the managed runtime under /Library/…, issue #4633) has no
-  # logs/ and cannot make one: skip silently. The 2>/dev/null must wrap the group —
+  local f="${FLEET_GH_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/gh-limit.log}"
+  # The login's conf dir, never the install (issue #4668); one that cannot take
+  # it (read-only) is skipped silently. The 2>/dev/null must wrap the group —
   # a bare `>> "$f" 2>/dev/null` reports the failed open before stderr is moved.
   { mkdir -p "$(dirname "$f")" && [ -w "$(dirname "$f")" ] &&
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$f"; } 2>/dev/null

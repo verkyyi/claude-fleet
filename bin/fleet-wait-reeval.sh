@@ -49,7 +49,7 @@ if [ "${FLEET_WAIT_REEVAL:-1}" = 0 ]; then
   printf 'changed=0 windows=0 fleets=0\n'; exit 0
 fi
 
-LOG="$BIN/../logs/reconcile.log"
+LOG="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/reconcile.log"
 changed=0 windows=0 fleets=0
 
 one() {   # <sess> <win> — reeval one window, print + log a change

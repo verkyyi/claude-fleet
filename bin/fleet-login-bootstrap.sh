@@ -159,7 +159,7 @@ step_end install
 LINKED=''
 [ -d "$ROOT/.git" ] || LINKED=$(cd "$ROOT" 2>/dev/null && pwd -P)
 [ "$FAILS" = 0 ] || { say "stopped — nothing else can run without the install"; exit 1; }
-mkdir -p "$ROOT/logs"
+mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
 
 # --- claude -------------------------------------------------------------------
 # Claude Code is a per-login native install (~/.local/bin/claude) that nothing

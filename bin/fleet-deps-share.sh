@@ -268,7 +268,7 @@ EOF
 [ -n "$OUT" ] || exit 0
 
 printf '%s' "$OUT" > "$REC" 2>/dev/null
-LOG="${FLEET_DEPS_SHARE_LOG:-$BIN/../logs/deps-share.log}"
+LOG="${FLEET_DEPS_SHARE_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/deps-share.log}"
 mkdir -p "$(dirname "$LOG")" 2>/dev/null
 printf '%s' "$OUT" | awk -v ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -v wt="$WT" -v secs="$(( $(date +%s) - T0 ))" '
   { k = $1; sub(/:.*/, "", k); if (k == "skipped") k = $1; c[k]++; if (!(k in o)) { o[k] = ++n; ord[n] = k } }

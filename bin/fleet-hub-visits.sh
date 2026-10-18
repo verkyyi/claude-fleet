@@ -70,7 +70,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-LOGDIR="${FLEET_HUB_VISITS_LOGDIR:-$BIN/../logs}"
+LOGDIR="${FLEET_HUB_VISITS_LOGDIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}"
 MAX="${FLEET_HUB_VISITS_MAX:-5000}"
 case "$MAX" in ''|*[!0-9]*|0) MAX=5000 ;; esac
 

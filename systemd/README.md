@@ -27,7 +27,7 @@ real home dir at install time.
 
 ```sh
 # 1. Substitute __HOME__ and drop the units into the user unit dir.
-mkdir -p ~/.config/systemd/user ~/.claude/fleet/logs
+mkdir -p ~/.config/systemd/user ~/.config/claude-fleet/logs
 for f in systemd/*.service systemd/*.timer; do
   sed "s|__HOME__|$HOME|g" "$f" > ~/.config/systemd/user/"$(basename "$f")"
 done

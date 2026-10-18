@@ -283,7 +283,7 @@ check_runs() {
 
 # One line per FORCED move past gate 4 or 5 is kept (FLEET_STABLE_LOG).
 force_log() {   # force_log <old> <new> <gate> <why> <what was forced past>
-  _log="${FLEET_STABLE_LOG:-$BIN_DIR/../logs/stable-move.log}"
+  _log="${FLEET_STABLE_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/stable-move.log}"
   mkdir -p "$(dirname "$_log")" 2>/dev/null
   printf '%s\tforced\told=%s\tnew=%s\tby=%s\t%s=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     "$(short "$1")" "$(short "$2")" "${USER:-?}" "$3" "$4" >> "$_log" 2>/dev/null

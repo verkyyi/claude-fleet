@@ -118,7 +118,7 @@ _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" 
 
 ROOT="$BIN/.."
 STATE="$(fleet_daemon_state_dir "$ROOT")"
-LOGD="$BIN/../logs"          # same logs/ the daemons write to (live install: ~/.claude/fleet/logs)
+LOGD="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"          # same logs/ the daemons write to (the templates' __HOME__/.config/claude-fleet/logs)
 LOG="$LOGD/daemon-kick.log"
 
 FORCE=0; NOW_=0; DRY=0; STATUS=0; UNITS=''

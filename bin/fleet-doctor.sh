@@ -624,7 +624,7 @@ _gh_rows=''; _gh_hour=''
     case "$r" in fake) echo "$b limited (injected: FLEET_GH_FAKE_LIMIT)" ;;
       *) echo "$b limited until $(fleet_gh_hhmm "$r") (seen by $s)" ;; esac
   done' _ "$_gh_lib" 2>/dev/null)
-_gh_log="${FLEET_GH_LOG:-$(dirname "$0")/../logs/gh-limit.log}"
+_gh_log="${FLEET_GH_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/gh-limit.log}"
 if [ -f "$_gh_lib" ] && [ -f "$_gh_log" ]; then
   _gh_cut=$(date -u -r $(( $(date +%s) - 3600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 3600 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
   _gh_hour=$(awk -v cut="$_gh_cut" '$1 >= cut {
@@ -1939,7 +1939,7 @@ mwarn="${FLEET_LOAD_WARN_PER_CORE:-4}"
 # The orphan scan lives in the daemon that acts on it, so the doctor and the
 # watchdog can never disagree about what counts as a runaway.
 _dg="$(dirname "$0")/fleet-diskguard.sh"
-hbf_m="$(dirname "$0")/../logs/spinner.heartbeat"
+hbf_m="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/spinner.heartbeat"
 morph=''
 [ -f "$_dg" ] && morph="$(bash "$_dg" --orphans 2>/dev/null)"
 # awk, not `grep -c` (issue #709): `grep -c` on no match prints `0` AND exits 1,
@@ -3436,7 +3436,7 @@ fi
 # ceiling). Shipped, the margin was 40s across two files that had never heard of each
 # other. Both failures are SILENT — an overnight loop just fills its context and stops
 # — which is exactly the shape that belongs on this screen.
-hbf="$(dirname "$0")/../logs/spinner.heartbeat"
+hbf="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/spinner.heartbeat"
 inv="$(dirname "$0")/fleet-handoff-invariant.sh"
 hb_age=''
 if [ -f "$hbf" ]; then
@@ -3488,7 +3488,7 @@ else
   # Contradicting state signals (#1270): a `working` hook on a silent pane the
   # registry calls idle/gone/busy. Counted from the (trimmed) reconcile.log, and
   # `contested` is how many still contradict on the latest tick.
-  rlog="$(dirname "$0")/../logs/reconcile.log"
+  rlog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/reconcile.log"
   rung_n=$(grep -c ' rung_health ' "$rlog" 2>/dev/null) || rung_n=0
   rung_live=$(rhb_get contested); rung_live=${rung_live:-0}
   # Where each window's state came from (issue #2537, EPIC #2535 C2): the agent's
@@ -3514,7 +3514,7 @@ fi
 # majority, issue #2622); the read is tail-bounded. FLEET_DOCTOR_SINCE=<epoch>
 # (install-sync's doctor after a switch, issue #2655) moves the window's start up
 # to then: what the OLD version's sleep judge wrote is not the new one's verdict.
-slog="$(dirname "$0")/../logs/sleep.log"
+slog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/sleep.log"
 _dsince="${FLEET_DOCTOR_SINCE:-}"; case "$_dsince" in *[!0-9]*) _dsince='' ;; esac
 if [ -f "$slog" ] && command -v python3 >/dev/null 2>&1; then
   sdist=$(tail -n 6000 "$slog" 2>/dev/null | FLEET_DOCTOR_SINCE="$_dsince" python3 -c '
@@ -3546,7 +3546,7 @@ fi
 while IFS="$(printf '\t')" read -r hvs hvn hvtop; do
   [ -n "$hvs" ] && pass hub "$hvs: $hvn trip(s) to the hub in 24h; top: $hvtop (table: bin/fleet-hub-visits.sh --session $hvs)"
 done <<EOF
-$(FLEET_HUB_VISITS_LOGDIR="$(dirname "$0")/../logs" bash "$(dirname "$0")/fleet-hub-visits.sh" --brief --all --since 24h 2>/dev/null </dev/null)
+$(FLEET_HUB_VISITS_LOGDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" bash "$(dirname "$0")/fleet-hub-visits.sh" --brief --all --since 24h 2>/dev/null </dev/null)
 EOF
 # Who the sidebar asks the cross-machine hub as (issue #1475): your connection
 # certificate, else the viewer token, else nobody — and then no other machine's

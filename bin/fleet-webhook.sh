@@ -93,7 +93,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-gh-lib.sh"   # fleet_wh_mark — the event stamps a waiter blocks on (#1272)
 
-LOGP="$BIN/../logs"; mkdir -p "$LOGP" 2>/dev/null || :
+LOGP="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"; mkdir -p "$LOGP" 2>/dev/null || :
 log() { printf '%s fleet-webhook: %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '--:--:--')" "$*" >&2; }
 now() {  # wall-clock seconds; FLEET_WH_NOW_FILE overrides with a scripted clock (selftest)
   local f="${FLEET_WH_NOW_FILE:-}" v

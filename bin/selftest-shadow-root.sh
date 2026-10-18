@@ -32,9 +32,10 @@
 # How the mirror is built
 # ------------------------
 #   <shadow>/bin/        REAL directory, one symlink per file in the real bin/
-#   <shadow>/logs/       REAL directory, EMPTY
 #   <shadow>/conf-dir/   REAL directory, EMPTY — a FLEET_CONF_DIR for the caller to
-#                        export, so fleet_load_conf finds no per-fleet overlay either
+#                        export, so fleet_load_conf finds no per-fleet overlay either;
+#                        the ONE writable place (logs/ are $FLEET_CONF_DIR/logs)
+#   <shadow>/logs        ABSENT — the install is read-only (issue #4668)
 #   <shadow>/.claude-plugin/  COPIED, not symlinked — `claude plugin validate` refuses
 #                        to follow a symlink and would validate nothing
 #   <shadow>/<rest>      symlink to the real entry (docs, hooks, conf, skills,
@@ -48,21 +49,14 @@
 # physically: with a symlinked bin/ it lands back on the real root and reads the
 # real conf. A real dir of symlinks is what keeps `..` honest.
 #
-# `logs/` is emptied for the same reason one level down: it is not config, it is
-# live STATE. `bin/tmux-spinner.sh` keeps its needs-reconcile strike table at
-# `$BIN/../logs/.needs-strikes` and `bin/classify-sessions.sh` its change-gate
-# hashes at `$BIN/../logs/.classify-cache`. Symlinked through, a suite run on a
-# live install would read AND CLOBBER the running fleet's own state.
-#
-# SIX selftests reach those two files, not two — and not through their own code
-# but through the scripts they drive: attn-signal, fleet-collect-stale and
-# needs-reconcile all run tmux-spinner.sh, while helper-auth, auto-handoff and
-# fleet-history all run classify-sessions.sh. They are safe only because the
-# suite runs its tests ONE AT A TIME (each shard sequential, issue #681): two of
-# a group in flight at once in the same root would trade state. Anything that
-# would run them concurrently needs a root per concurrent slot, not a list of
-# known state files — the #660 lesson is that such a list always misses the next
-# script to keep something here.
+# The shadow is READ-ONLY once built (issue #4668): the shadow root and its bin/
+# are `chmod a-w`, so a script that still writes into its install (`$BIN/..`) —
+# the live state the shadow keeps out of a suite run, and what a managed login's
+# runtime cannot take at all — fails there instead of writing a file nobody
+# reads. Every record is `$FLEET_CONF_DIR/logs`, and the caller exports
+# FLEET_CONF_DIR=<shadow>/conf-dir. The live install's own `logs/` (an older
+# version's) is never linked in. Remove a shadow with `selftest-shadow-root.sh
+# --rm <shadow>`, which gives the two directories back their write bit first.
 #
 # `fleet.conf.bak*` is skipped alongside `fleet.conf`: those are the config modal's
 # backup slots (`fcfg_write`, bin/fleet-config-lib.sh) and older residue, and
@@ -73,9 +67,9 @@
 #   selftest-shadow-root.sh [REAL_ROOT]
 #
 #   REAL_ROOT  install root to mirror (default: the parent of this script's dir).
-#   stdout     the shadow root path. The CALLER owns it and must `rm -rf` it —
-#              it holds only symlinks and empty dirs, so removing it never
-#              touches the real tree.
+#   stdout     the shadow root path. The CALLER owns it and must remove it with
+#              `selftest-shadow-root.sh --rm <shadow>` — it holds only symlinks
+#              and the conf dir, so removing it never touches the real tree.
 #
 # The temp dir is named `fleet-selftest-root.*` so that `fleet-selftest-reap.sh`
 # (which sweeps aged `*selftest*` mktemp dirs) collects one orphaned by a SIGKILLed
@@ -88,6 +82,15 @@
 set -u
 
 unset CDPATH
+
+# --rm <shadow>: the write bit back on the two read-only directories, then rm -rf.
+# Only a dir the builder made (its name), never a symlinked bin/.
+if [ "${1:-}" = --rm ]; then
+  case "${2:-}" in */fleet-selftest-root.*) ;; *) exit 0 ;; esac
+  [ -d "$2" ] && [ ! -L "$2" ] || exit 0
+  chmod u+w "$2" 2>/dev/null; [ -L "$2/bin" ] || chmod u+w "$2/bin" 2>/dev/null
+  rm -rf "${2:?}"; exit 0
+fi
 
 # link_into <target-dir> <src>... — symlink each src into target-dir under its own
 # basename. Batched into a single `ln -s` (see above); a name carrying whitespace
@@ -118,7 +121,7 @@ shadow=$(mktemp -d "${TMPDIR:-/tmp}/fleet-selftest-root.XXXXXX") || exit 2
 # differently it never matched, nested shadow inside shadow until the symlink
 # chain hit ELOOP, and died exit 126 ~20s in. Logical pwd, not -P: keep `/var`.
 shadow=$(cd -- "$shadow" && pwd) || exit 2
-mkdir -p "$shadow/bin" "$shadow/logs" "$shadow/conf-dir" || exit 2
+mkdir -p "$shadow/bin" "$shadow/conf-dir" || exit 2
 
 # Top-level entries, dotfiles included. An unmatched glob stays literal under sh,
 # which the -e/-L guard drops; `..?*` catches a `..foo` without ever matching `..`.
@@ -127,7 +130,8 @@ for e in "$real"/* "$real"/.[!.]* "$real"/..?*; do
   [ -e "$e" ] || [ -L "$e" ] || continue
   b=${e##*/}
   case "$b" in
-    bin|logs|conf-dir) continue ;;           # rebuilt above: real dirs, not symlinks
+    bin|conf-dir) continue ;;                # rebuilt above: real dirs, not symlinks
+    logs) continue ;;                        # an older install's live records (#4668)
     fleet.conf|fleet.conf.bak*) continue ;;  # the leak itself
     # `claude plugin validate` never follows a symlink: with .claude-plugin symlinked
     # it reports `Local source "./" is or traverses a symlink` and reads no manifest
@@ -149,5 +153,6 @@ for f in "$real"/bin/* "$real"/bin/.[!.]* "$real"/bin/..?*; do
   set -- "$@" "$f"
 done
 [ "$#" -eq 0 ] || link_into "$shadow/bin" "$@" || exit 2
+chmod a-w "$shadow/bin" "$shadow" || exit 2
 
 printf '%s\n' "$shadow"

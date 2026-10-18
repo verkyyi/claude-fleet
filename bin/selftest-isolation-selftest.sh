@@ -23,9 +23,10 @@
 #      the operator's conf. Assert the file test directly.
 #
 #   C. STRUCTURE — the shadow mirrors every top-level entry of the root except the
-#      conf and its backups; bin/ is a real directory; logs/ and conf-dir/ are real
-#      and EMPTY (live STATE, not config — a suite run must not read or clobber the
-#      running fleet's needs-strike table); the temp dir is named so that
+#      conf and its backups; bin/ is a real directory; conf-dir/ is real and EMPTY
+#      (live STATE, not config — a suite run must not read or clobber the running
+#      fleet's needs-strike table); there is no logs/ and the root + bin/ are
+#      read-only (issue #4668); the temp dir is named so that
 #      fleet-selftest-reap.sh collects it if a run is SIGKILLed.
 #
 #   D. END TO END — the real runner, invoked from a fake install root that HAS a
@@ -60,7 +61,7 @@ ok()   { CHECKS=$((CHECKS + 1)); printf 'ok   %s\n' "$1"; }
 eq()   { CHECKS=$((CHECKS + 1)); [ "$2" = "$3" ] || fail "$1 — expected [$2], got [$3]"; printf 'ok   %s\n' "$1"; }
 
 CLEAN=''
-cleanup() { for d in $CLEAN; do rm -rf "$d"; done; }
+cleanup() { for d in $CLEAN; do sh "$MK" --rm "$d"; rm -rf "$d"; done; }
 trap cleanup EXIT INT TERM HUP
 
 # The inner runner must decide for itself whether to build a shadow. When the OUTER
@@ -78,6 +79,7 @@ clean_env() { env -u FLEET_SELFTEST_ROOT -u FLEET_SELFTEST_NO_SHADOW \
 # ============================================================================
 FAKE="$("$MK")" || fail "shadow-root builder failed while making the fixture"
 CLEAN="$CLEAN $FAKE"
+chmod u+w "$FAKE" "$FAKE/bin"   # a shadow is read-only (#4668); this fixture is an install we write into
 
 cat > "$FAKE/fleet.conf" <<'CONF'
 # fixture conf (selftest-isolation-selftest.sh) — the keys #660 traced its six fake
@@ -182,15 +184,27 @@ for e in "$FAKE"/bin/* "$FAKE"/bin/.[!.]*; do
 done
 eq "every bin/ entry is mirrored, dotfiles included" "" "$missing"
 
-for d in logs conf-dir; do
-  CHECKS=$((CHECKS + 1))
-  [ -d "$SHADOW/$d" ] && [ ! -L "$SHADOW/$d" ] \
-    || fail "$d/ must be a real directory in the shadow, not a symlink to the install's live state"
-  CHECKS=$((CHECKS + 1))
-  [ -z "$(ls -A "$SHADOW/$d" 2>/dev/null)" ] \
-    || fail "$d/ must start EMPTY — a suite run must never read or clobber the running fleet's state"
-done
-ok "logs/ and conf-dir/ are real and empty (live state, not config)"
+CHECKS=$((CHECKS + 1))
+[ -d "$SHADOW/conf-dir" ] && [ ! -L "$SHADOW/conf-dir" ] \
+  || fail "conf-dir/ must be a real directory in the shadow, not a symlink to the login's live state"
+CHECKS=$((CHECKS + 1))
+[ -z "$(ls -A "$SHADOW/conf-dir" 2>/dev/null)" ] \
+  || fail "conf-dir/ must start EMPTY — a suite run must never read or clobber the running fleet's state"
+ok "conf-dir/ is real and empty (live state, not config)"
+
+# The install is read-only (issue #4668): no logs/ in it (an older install's live
+# records are never linked in), and neither the root nor bin/ takes a new file —
+# a script still writing beside its bin/ fails in the suite, not on a managed login.
+CHECKS=$((CHECKS + 1))
+[ ! -e "$SHADOW/logs" ] && [ ! -L "$SHADOW/logs" ] || fail "the shadow carries a logs/ — records are \$FLEET_CONF_DIR/logs"
+CHECKS=$((CHECKS + 1))
+if [ "$(id -u)" != 0 ]; then
+  ( : > "$SHADOW/probe" ) 2>/dev/null && fail "the shadow root is writable — a script could still write into its install"
+  ( : > "$SHADOW/bin/probe" ) 2>/dev/null && fail "the shadow bin/ is writable"
+fi
+CHECKS=$((CHECKS + 1))
+( : > "$SHADOW/conf-dir/probe" ) 2>/dev/null && rm -f "$SHADOW/conf-dir/probe" || fail "the shadow conf-dir/ must stay writable"
+ok "the shadow install is read-only, its conf-dir/ the one writable place"
 
 # fleet-selftest-reap.sh sweeps aged `*selftest*` mktemp dirs; a run killed outright
 # leaves the shadow behind, and only this naming gets it collected.
@@ -206,7 +220,7 @@ SLASHTMP="$(mktemp -d "${TMPDIR:-/tmp}/isolation-slash-selftest.XXXXXX")" || fai
 S2="$(TMPDIR="$SLASHTMP/" clean_env "$FAKE/bin/selftest-shadow-root.sh")" \
   || { rm -rf "$SLASHTMP"; fail "shadow-root builder failed under a trailing-slash TMPDIR"; }
 S2_LOGICAL="$(cd "$S2/bin" && pwd)"
-rm -rf "$S2" "$SLASHTMP"
+sh "$FAKE/bin/selftest-shadow-root.sh" --rm "$S2"; rm -rf "$SLASHTMP"
 [ "$S2/bin" = "$S2_LOGICAL" ] \
   || fail "trailing-slash TMPDIR: shadow printed as '$S2', but its bin/ resolves to '$S2_LOGICAL'"
 ok "a trailing-slash TMPDIR yields a shadow path spelled as its own \$BIN sees it"

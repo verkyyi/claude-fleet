@@ -85,7 +85,7 @@ case "$rc" in
      sleep 0.3 2>/dev/null || sleep 1
      FLEET_ALLOW_SENDKEYS=1 tmux send-keys -t "$PANE" Enter 2>/dev/null ;;
 esac
-_ld="${FLEET_HANDOFF_LOG_DIR:-$(dirname "$0")/../logs}"
+_ld="${FLEET_HANDOFF_LOG_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}"
 mkdir -p "$_ld" 2>/dev/null && printf '%s [%s] /compact via %s (rc=%s)\n' \
   "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)" "$PANE" "$via" "$rc" >> "$_ld/compact-send.log" 2>/dev/null
 [ -f "$_lb" ] && sh "$_lb" --trim "$_ld/compact-send.log" >/dev/null 2>&1

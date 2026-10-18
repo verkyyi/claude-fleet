@@ -598,7 +598,7 @@ fleet_up_step() {
     # ~55 s) runs detached as the login, its output in its own logs/, and the
     # reset's verdict never waits for it. Its stdio is never ours: the reset
     # reads this run through a pipe that a child holding it would keep open.
-    local blog="$ROOT/logs/bootstrap.log"
+    local blog="$CD/logs/bootstrap.log"
     say ""; say "[${N}b] start $LOGIN's fleet off the clock, as $LOGIN (fleet-login-bootstrap.sh, detached → $blog — the login is ready without it, issue #4196)"
     show sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" FLEET_BOOTSTRAP_DOCTOR=0 bash "$ROOT/bin/fleet-login-bootstrap.sh" '>' "$blog"
     [ "$APPLY" = 1 ] || return 0
@@ -809,7 +809,7 @@ if [ "$DONLY" = 0 ]; then
       rm -rf "$ISTG"; fail
     fi
   fi
-  run sudo -u "$LOGIN" -H mkdir -p "$ROOT/logs"
+  run sudo -u "$LOGIN" -H mkdir -p "$H/.config/claude-fleet/logs"
 
   # 7a. a login the hub opens joins it as its own node (issue #2652) — before
   # 7b, so the token and the agent are separated with everything else

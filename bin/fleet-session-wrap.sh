@@ -64,6 +64,10 @@ for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; 
   case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
 done
 export PATH
+# The install is read-only (issue #4668): Python's bytecode for the fleet's own
+# modules goes to this login's conf dir, never beside them in bin/ — for every hook
+# and tool the session runs (the daemons' templates say the same).
+[ -n "${PYTHONPYCACHEPREFIX:-}" ] || export PYTHONPYCACHEPREFIX="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/pycache"
 # This login's TMPDIR (issue #2442): a session opened from a `sudo -u` half (a
 # same-machine fleet-move) has none, and every script it runs would read the dash
 # cache from /tmp every login shares. fleet-lib.sh's fleet_user_tmpdir, inline.
@@ -124,7 +128,7 @@ WRAP=$$
 if [ "$intmux" = 1 ]; then
   (
     trap '' INT QUIT TTIN TTOU HUP
-    log="$BIN/../logs/session-ctrl-z.log"
+    log="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/session-ctrl-z.log"
     ctrl_z() {
       kill -CONT 0 2>/dev/null
       wset @wrap_ctrl_z "$(date +%s)"
@@ -392,7 +396,7 @@ while :; do
   # what the line under the conversation no longer says (issue #2743) — the exit
   # status, the id, how long it ran, why a relaunch failed and the agent's last
   # words — is kept here, one line a stop
-  xlog="$BIN/../logs/session-exit.log"
+  xlog="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/session-exit.log"
   [ -d "${xlog%/*}" ] && printf '%s window=%s pane=%s agent=%s sid=%s rc=%s secs=%s failed=%s why=%s unpushed=%s detail=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(opt window_name | tr ' ' '_')" "$TMUX_PANE" "$agent" "${sid:--}" "$rc" "$dur" \
     "${failed:--}" "${fail_why:--}" "$unp" "$(printf '%s' "${fail_line:-}" | tr '\n' ' ' | cut -c1-200)" >> "$xlog" 2>/dev/null

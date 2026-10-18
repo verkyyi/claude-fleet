@@ -134,7 +134,7 @@ if [ -f "$F/bin/fleet-cred-proxy.sh" ]; then
     [ -z "$r" ] || d "cred.route_$p" "$r"
   done
 fi
-L=$F/logs/cred-proxy.log
+L=$C/logs/cred-proxy.log; [ -r "$L" ] || L=$F/logs/cred-proxy.log   # compat-1v: 下一批删 (the install's logs/, before #4668)
 if [ -r "$L" ]; then
   st=$(grep '"ev": "start"' "$L" | tail -n 1); nc=$(grep '"ev": "nocred"' "$L" | tail -n 1)
   d cred.proxy_start "$st"; d cred.last_nocred "${nc:-none}"

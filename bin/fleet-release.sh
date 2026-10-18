@@ -127,7 +127,7 @@ git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git chec
 STABLE_SH="${FLEET_RELEASE_STABLE:-$BIN/fleet-stable.sh}"
 CONF_DIR="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 LIVE="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
-LOG="${FLEET_RELEASE_LOG:-$BIN/../logs/release.log}"
+LOG="${FLEET_RELEASE_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/release.log}"
 POLL="${FLEET_RELEASE_POLL:-15}"; case "$POLL" in ''|*[!0-9]*|0) POLL=15 ;; esac
 HOST_SELF="${FLEET_RELEASE_HOST:-$(hostname -s 2>/dev/null || hostname)}"
 HOST_SELF=$(printf '%s' "$HOST_SELF" | tr 'A-Z' 'a-z'); HOST_SELF=${HOST_SELF%%.*}

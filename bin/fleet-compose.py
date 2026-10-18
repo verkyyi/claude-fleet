@@ -86,7 +86,7 @@ def place_why(text):
 def log_path():
     """logs/compose.ndjson beside this install's bin/ (issue #1955) —
     FLEET_COMPOSE_LOG overrides it (the selftest's seam)."""
-    return Path(os.environ.get("FLEET_COMPOSE_LOG") or (BIN.parent / "logs" / "compose.ndjson"))
+    return Path(os.environ.get("FLEET_COMPOSE_LOG") or (Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / "compose.ndjson"))
 
 
 def compose_log(ev, **fields):

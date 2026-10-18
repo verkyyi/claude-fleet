@@ -11,12 +11,13 @@ Type=simple
 ExecStart=/bin/sh __HOME__/.claude/fleet/bin/tmux-spinner.sh
 Environment=SPIN_INTERVAL=0.12
 Environment=LANG=en_US.UTF-8
+Environment=PYTHONPYCACHEPREFIX=__HOME__/.config/claude-fleet/pycache
 Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 Restart=always
 LimitNOFILE=65536
 RestartSec=2
 StandardOutput=null
-StandardError=append:__HOME__/.claude/fleet/logs/spinner.systemd.log
+StandardError=append:__HOME__/.config/claude-fleet/logs/spinner.systemd.log
 
 [Install]
 WantedBy=default.target

@@ -146,7 +146,7 @@ def daemon_state_dir(root):
 class Spinner:
     def __init__(self):
         self.conf = Path(os.environ.get('FLEET_CONF_DIR', str(Path.home() / '.config/claude-fleet')))
-        self.logs = BIN.parent / 'logs'
+        self.logs = self.conf / 'logs'   # the login's, never the install (#4668)
         self.logs.mkdir(parents=True, exist_ok=True)
         self.interval = float(os.environ.get('SPIN_INTERVAL', '.12'))
         if not math.isfinite(self.interval) or self.interval <= 0:

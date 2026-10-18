@@ -487,7 +487,7 @@ def main():
     p.add_argument('--tmux-idle-secs', type=int, default=int(os.environ.get('FLEET_RUNG_TMUX_IDLE_SECS') or 10))
     p.add_argument('--primary-secs', type=int,
                    default=int(os.environ.get('FLEET_STATE_PRIMARY_SECS') or PRIMARY_SECS_DEFAULT))
-    p.add_argument('--log', default=str(BIN.parent / 'logs' / 'reconcile.log'))
+    p.add_argument('--log', default=str((Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / 'reconcile.log')))
     p.add_argument('sessions', nargs='*')
     args = p.parse_args()
     if args.idle_secs < 1:

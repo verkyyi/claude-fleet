@@ -34,7 +34,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ "${_STATE_PRIMARY_ROOT:-}" != "$BIN" ]; then
   _root="$(sh "$BIN/selftest-shadow-root.sh" "$BIN/..")" || exit 2
   _STATE_PRIMARY_ROOT="$(cd "$_root/bin" && pwd)" bash "$_root/bin/${0##*/}" "$@"; _rc=$?
-  rm -rf "$_root"; exit "$_rc"
+  sh "$BIN/selftest-shadow-root.sh" --rm "$_root"; exit "$_rc"
 fi
 # The real binary, never the fleet's tmux-shim: that one execs the next `tmux` on
 # PATH — which would be our own shim below, and the two would call each other.

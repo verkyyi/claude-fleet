@@ -775,7 +775,7 @@ included:
 **No credential** (a person in a shell, a session launched before this, `FLEET_MCP=0`):
 the call runs as before, by the window's options — and is logged `via=marker`.
 
-**The call log** — `<install>/logs/mcp-calls.log` (`FLEET_MCP_LOG`), one line per
+**The call log** — `$FLEET_CONF_DIR/logs/mcp-calls.log` (`FLEET_MCP_LOG`), one line per
 call, never the credential:
 
 ```

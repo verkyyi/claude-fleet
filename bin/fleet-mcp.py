@@ -402,7 +402,7 @@ def identify():
 
 
 def log_path():
-    return Path(os.environ.get("FLEET_MCP_LOG") or (BIN.parent / "logs" / "mcp-calls.log"))
+    return Path(os.environ.get("FLEET_MCP_LOG") or (Path(os.environ.get("FLEET_CONF_DIR") or os.path.expanduser("~/.config/claude-fleet")) / "logs" / "mcp-calls.log"))
 
 
 # --- the hub route: a worker assertion (issue #1810, EPIC #1813 C8) ---------------

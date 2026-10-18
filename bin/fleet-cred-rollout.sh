@@ -279,7 +279,7 @@ daemon_ensure() {
     tmpl="$root/launchd/com.claude-fleet.cred-proxy.plist.tmpl"
     [ -f "$tmpl" ] || { say "daemon: no template $tmpl"; return 1; }
     brew=$(brew --prefix 2>/dev/null || printf '/opt/homebrew')
-    mkdir -p "$(dirname "$plist")" "$root/logs"
+    mkdir -p "$(dirname "$plist")" "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
     sed -e "s|__HOME__|$HOME|g" -e "s|__BREW_PREFIX__|$brew|g" "$tmpl" > "$plist" || { say "daemon: cannot write $plist"; return 1; }
     launchctl bootstrap "$dom" "$plist" 2>/dev/null || launchctl kickstart -k "$dom/$label" >/dev/null 2>&1 \
       || { say "daemon: launchctl bootstrap $dom $plist failed"; return 1; }
@@ -289,7 +289,7 @@ daemon_ensure() {
   if command -v systemctl >/dev/null 2>&1; then
     local unit="$HOME/.config/systemd/user/claude-fleet-cred-proxy.service"
     if [ ! -f "$unit" ]; then
-      mkdir -p "$(dirname "$unit")" "$root/logs"
+      mkdir -p "$(dirname "$unit")" "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs"
       sed -e "s|__HOME__|$HOME|g" "$root/systemd/claude-fleet-cred-proxy.service" > "$unit" || { say "daemon: cannot write $unit"; return 1; }
       systemctl --user daemon-reload >/dev/null 2>&1
     fi

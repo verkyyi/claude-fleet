@@ -249,7 +249,7 @@ fi
 # one is stored-not-cleared: the whole point of the line is that it is never quiet.
 # `<epoch>\t<time>\t<ctx>\t<count>\t<reason>` each, empty when none.
 last_c='' last_h='' last_hs=''
-_llog="${FLEET_HANDOFF_LOG_DIR:-$BIN/../logs}/context-ladder.log"
+_llog="${FLEET_HANDOFF_LOG_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}/context-ladder.log"
 if [ -n "$pane" ] && [ -f "$_llog" ]; then
   _lv=$(awk -F'\t' -v p="$pane" '
     $1 ~ /^#/ || $5 != p { next }
