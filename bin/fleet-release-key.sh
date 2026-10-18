@@ -58,7 +58,10 @@ if [ "$verb" = status ]; then
   # shellcheck source=fleet-daemon-lib.sh
   . "$here/fleet-daemon-lib.sh"
   node_root="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"
+  # ~/.claude/fleet → <runtime>/current (#4669), or an older tree's .fleet-linked (compat-1v: 下一批删)
   linked_root=$(sed -n 's/.*"root": *"\([^"]*\)".*/\1/p' "$HOME/.claude/fleet/.fleet-linked" 2>/dev/null)
+  _lt=$(readlink "$HOME/.claude/fleet" 2>/dev/null); _lt=${_lt%/}
+  [ "${_lt##*/}" = current ] && linked_root=${_lt%/*}
   if fleet_node_manages || { [ -n "$linked_root" ] && [ -d "$linked_root" ] && [ -d "$node_root" ] \
       && [ "$(cd "$linked_root" && pwd -P)" = "$(cd "$node_root" && pwd -P)" ]; }; then
     PK="${FLEET_NODE_STATE:-/var/db/fleet-node}/release.pub"

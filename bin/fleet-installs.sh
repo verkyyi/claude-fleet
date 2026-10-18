@@ -27,8 +27,9 @@
 # 来源 (issue #2776, EPIC #2770): where each install takes its new versions from —
 #   hub      the hub's signed release (the runtime always; a login install with
 #            no GitHub remote, a refs/fleet/rel/* import; a client with a hub)
-#   runtime  a managed login whose files link into the machine runtime (its
-#            bin/fleet-lib.sh, or the updater's .fleet-linked mark — #2774)
+#   runtime  a managed login on the machine runtime: its ~/.claude/fleet a link
+#            to <runtime>/current (#4669), or an older tree whose files link
+#            into it (its bin/fleet-lib.sh, the .fleet-linked mark — #2774)
 #   github   a login install whose origin is GitHub, FLEET_DIST_SOURCE=github, a
 #            client that follows GitHub (no hub on its .client-version)
 #   dev      a local checkout (a plain dir or a link outside fleet.versions/
@@ -97,7 +98,10 @@ PROBE = r'''
 h=$1
 d=$h/.claude/fleet
 # a version dir's name is its sha, maybe with a suffix (-<stamp>, -linked, -own)
-if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}; k=${t##*/}; echo "login link ${k%%-*}"; echo "target $t"
+if [ -L "$d" ]; then t=$(readlink "$d"); t=${t%/}
+  # a managed login's link names <runtime>/current, itself a link to <runtime>/<sha> (#4669)
+  [ "${t##*/}" = current ] && [ -L "$t" ] && { echo "current $t"; t=$(readlink "$t"); t=${t%/}; }
+  k=${t##*/}; echo "login link ${k%%-*}"; echo "target $t"
 elif [ -d "$d" ]; then
   # an imported hub release (#2773) is named by its upstream sha
   v=$(git -C "$d" log -1 --format=%s 2>/dev/null | sed -n 's/^fleet-release: \([0-9a-f]\{40\}\) seq=.*/\1/p')
@@ -181,6 +185,8 @@ def login_source(r, kind):
     if lib.startswith("/") and root and lib.startswith(root.rstrip("/") + "/"):
         return "runtime"
     if root and r.get("linked") and os.path.realpath(r["linked"]) == os.path.realpath(root):
+        return "runtime"
+    if root and r.get("current") and os.path.realpath(os.path.dirname(r["current"])) == os.path.realpath(root):
         return "runtime"
     origin = r.get("origin", "-")
     if GH.search(origin):

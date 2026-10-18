@@ -26,8 +26,9 @@ targets from:
 
 Processes are the target's (`ps` by its uid) whose argv names a path UNDER the
 target's home: <home>/.claude/fleet/ · .claude/fleet.versions/ ·
-.claude/skills/doc-preview/ · .local/share/claude-fleet/ — never a bare
-`/.claude/fleet/` that every login's processes carry.
+.claude/skills/doc-preview/ · .local/share/claude-fleet/ — or, when that
+~/.claude/fleet is a link to <runtime>/current (a managed login, #4669), under
+<runtime>/ — never a bare `/.claude/fleet/` that every login's processes carry.
 
   fleet_sidefx.py check --login L --home H          print live|sandbox|refused: <why>
   fleet_sidefx.py procs --login L --home H          the fleet processes it would stop
@@ -101,7 +102,18 @@ def _table():
 
 def _anchors(home):
     h = _real(home)
-    return [h + "/" + s for s in FLEET_PATHS] + [home.rstrip("/") + "/" + s for s in FLEET_PATHS]
+    out = [h + "/" + s for s in FLEET_PATHS] + [home.rstrip("/") + "/" + s for s in FLEET_PATHS]
+    # a managed login's ~/.claude/fleet is a link to <runtime>/current (issue
+    # #4669): a session started from it names <runtime>/<sha>/… (the mod's
+    # --plugin-dir) — the target uid's processes only, as every anchor
+    try:
+        t = os.readlink(os.path.join(home, ".claude", "fleet")).rstrip("/")
+    except OSError:
+        t = ""
+    if os.path.isabs(t) and os.path.basename(t) == "current":
+        rt = os.path.dirname(t)
+        out += [rt + "/", _real(rt) + "/"]
+    return out
 
 
 def procs(login, home, tab=None):

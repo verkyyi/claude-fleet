@@ -1227,7 +1227,7 @@ def activate(_a):
     root = Path(os.environ.get('FLEET_NODE_ROOT', '/opt/claude-fleet'))
     sha = (root / 'current').resolve().name
     updater = load('fleet-node-update')
-    if updater.link_account(pwd.getpwuid(os.geteuid()).pw_name) or updater.link_tree(sha, apply=False):
+    if updater.link_account(pwd.getpwuid(os.geteuid()).pw_name) or updater.point(sha, apply=False):
         raise RuntimeError('could not link tenant to current runtime')
     home = Path.home()
     marker = home / '.config/claude-fleet/global/linux-image-applied'

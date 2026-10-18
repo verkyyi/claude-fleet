@@ -1953,8 +1953,9 @@ def session(a):
 def fleet_ver(root):
     """The fleet version a session launched from <root> runs (issue #1895, EPIC
     #1906 C2): the 12-hex short sha of the version directory <root> resolves to
-    under C1's layout (~/.claude/fleet → ~/.claude/fleet.versions/<sha>[-<stamp>]/),
-    else `git rev-parse HEAD` of <root> when <root> IS a checkout's top (a
+    under C1's layout (~/.claude/fleet → ~/.claude/fleet.versions/<sha>[-<stamp>]/)
+    or a managed login's (→ <runtime>/current → <runtime>/<sha>/, a release tree
+    with its .release/ — issue #4669), else `git rev-parse HEAD` of <root> when <root> IS a checkout's top (a
     plain-checkout install, a worktree — never a repo it merely sits inside);
     "" when neither answers — then nothing is stamped and nothing is 待换新.
     Kept apart from the fingerprint: @agent_cfg says the DEFINITION changed
@@ -1962,6 +1963,8 @@ def fleet_ver(root):
     real = os.path.realpath(root)
     m = re.match(r"([0-9a-f]{12})[0-9a-f]*(-|$)", os.path.basename(real))
     if m and os.path.dirname(real).endswith(".versions"):
+        return m.group(1)
+    if m and re.fullmatch(r"[0-9a-f]{40}", os.path.basename(real)) and os.path.isdir(os.path.join(real, ".release")):
         return m.group(1)
     try:
         r = subprocess.run(["git", "-C", real, "rev-parse", "--show-toplevel", "HEAD"],

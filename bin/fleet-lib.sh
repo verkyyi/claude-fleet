@@ -3763,9 +3763,12 @@ fleet_mod_on() { [ "${FLEET_MOD:-1}" != 0 ]; }
 
 # fleet_mod_dir — the plugin folder beside this lib's bin/ (the live install's
 # ~/.claude/fleet/mod/fleet), printed only when it holds a manifest; else exit 1.
+# Its PHYSICAL path (issue #4669): a managed login's ~/.claude/fleet is a link to
+# <root>/current, and Claude Code refuses a plugin file whose real path is not
+# under --plugin-dir — so a session loads, and reloads, the one release it started on.
 fleet_mod_dir() {
   local d
-  d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd)/mod/fleet"
+  d="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd -P)/mod/fleet"
   [ -f "$d/.claude-plugin/plugin.json" ] || return 1
   printf '%s\n' "$d"
 }

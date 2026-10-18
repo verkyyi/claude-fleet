@@ -3,7 +3,8 @@
 # records the version each member started on, and says how many it spanned.
 #
 #   A. record reads the live install: a link into fleet.versions/<sha> (a
-#      `-linked` suffix dropped), a plain checkout's HEAD;
+#      `-linked` suffix dropped), a link to <runtime>/current (#4669), a plain
+#      checkout's HEAD;
 #   B. show: `versions: K` + one line per version in first-seen order with its
 #      members, a member recorded twice listed once; per (repo, epic) file;
 #   C. nothing recorded → `versions: 0`; bad arguments → exit 2, nothing written.
@@ -32,6 +33,9 @@ f record 2934 13 --repo o/r
 ln -sfn "$WORK/v/$S2-linked" "$WORK/live"
 f record 2934 14 --repo o/r; has "A: a -linked dir is its sha" "$OUT" "on 2222222"
 f record 2934 12 --repo o/r
+# a managed login (#4669): ~/.claude/fleet → <runtime>/current → <runtime>/<sha>
+mkdir -p "$WORK/rt/$S2"; ln -s "$WORK/rt/$S2" "$WORK/rt/current"; ln -sfn "$WORK/rt/current" "$WORK/live"
+f record 2935 1 --repo o/r; has "A: a link to the runtime's current is its sha" "$OUT" "on 2222222"
 eq "A: one line per spawn" 4 "$(wc -l < "$FLEET_CONF_DIR/global/epic-floors/o-r-2934" | tr -d ' ')"
 rm "$WORK/live"; mkdir -p "$WORK/live"
 ( cd "$WORK/live" && git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m x ) || exit 2

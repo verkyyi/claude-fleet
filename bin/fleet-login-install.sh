@@ -6,9 +6,9 @@
 # services and its first session). Three sources, the first that holds:
 #
 #   runtime  a managed machine (<root>/current → <root>/<sha>, the machine
-#            updater's): ~/.claude/fleet becomes a tree of links into it —
-#            `fleet-node-update.py link-tree <sha> --no-apply`, the runtime's own
-#            copy (issue #2774) — no fetch at all, milliseconds. The login must be
+#            updater's): ~/.claude/fleet becomes ONE link to <root>/current, the
+#            machine's own copy (issue #4669) — no fetch, no tree, nothing copied;
+#            it moves with every switch. The login must be
 #            adopted (`account adopt`) for the machine to move it later; a login
 #            that is not is named on stderr.
 #   hub      a hub that keeps releases (FLEET_HUB_URL / CCQUOTA_HUB_URL, or the
@@ -24,8 +24,8 @@
 # is not read: a runtime or the hub is the version, a mirror filled at the last
 # opening was usually an old one.
 #
-# An install already there is reported, never touched: a checkout or a tree linked
-# to a runtime is `present`; anything else is an error (move it aside).
+# An install already there is reported, never touched: a checkout or a link to a
+# runtime is `present`; anything else is an error (move it aside).
 #
 # Prints ONE line on stdout: `<source> <sha> <what>` (source: runtime | hub | git
 # | present). A made install also leaves $FLEET_CONF_DIR/global/bootstrap.install —
@@ -58,8 +58,19 @@ made() {
     && printf '%s %s %s %s\n' "$1" "$2" "$(( $(now) - T0 ))" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CONF/global/bootstrap.install" 2>/dev/null
   printf '%s %s %s\n' "$1" "$2" "$3"
 }
-# linked_sha <dir> — the release a tree linked by the updater names (its .fleet-linked)
-linked_sha() { sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p' "$(cd "$1" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null; }
+# linked_sha <dir> — the release <dir> stands on in the runtime: <NROOT>/current's
+# when it is a link there (issue #4669), else the sha an older linked tree's
+# .fleet-linked names (compat-1v: 下一批删)
+linked_sha() {
+  local t
+  t=$(readlink "$1" 2>/dev/null)
+  if [ "${t%/}" = "$NROOT/current" ]; then
+    t=$(readlink "$NROOT/current" 2>/dev/null); t=${t%/}; t=${t##*/}
+    case "$t" in *[!0-9a-f]*) ;; *) [ "${#t}" = 40 ] && printf '%s\n' "$t" ;; esac
+    return 0
+  fi
+  sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p' "$(cd "$1" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null
+}
 
 # --- already there -------------------------------------------------------------
 if [ -e "$ROOT" ] || [ -L "$ROOT" ]; then
@@ -79,14 +90,12 @@ case "$rsha" in *[!0-9a-f]*) rsha='' ;; esac
 [ "${#rsha}" = 40 ] && [ -d "$NROOT/$rsha/bin" ] || rsha=''
 if [ -n "$rsha" ]; then
   if [ "$ROOT" != "$HOME/.claude/fleet" ]; then
-    err "a runtime is here ($NROOT/current), but link-tree makes ~/.claude/fleet only, not $ROOT — trying the hub"
+    err "a runtime is here ($NROOT/current), but the machine's copy is ~/.claude/fleet only, not $ROOT — trying the hub"
   else
-    upd="$NROOT/current/bin/fleet-node-update.py"
-    [ -f "$upd" ] || upd="$here/fleet-node-update.py"
-    out=$(FLEET_NODE_ROOT="$NROOT" python3 -I "$upd" link-tree "$rsha" --no-apply 2>&1 </dev/null); rc=$?
+    out=$(ln -s "$NROOT/current" "$ROOT" 2>&1); rc=$?
     if [ "$rc" = 0 ] && [ "$(linked_sha "$ROOT")" = "$rsha" ]; then
       mkdir -p "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" 2>/dev/null
-      made runtime "$rsha" "linked to this machine's runtime $NROOT/$rsha (no fetch)"
+      made runtime "$rsha" "linked to this machine's runtime $NROOT/current → $rsha (no fetch)"
       if [ -f "$here/fleet-daemon-lib.sh" ]; then
         # shellcheck source=fleet-daemon-lib.sh
         . "$here/fleet-daemon-lib.sh"
@@ -95,7 +104,7 @@ if [ -n "$rsha" ]; then
       fi
       exit 0
     fi
-    err "link-tree $rsha did not link ~/.claude/fleet (rc $rc: $(printf '%s' "$out" | tail -n 1)) — trying the hub"
+    err "~/.claude/fleet could not be linked to $NROOT/current (rc $rc: $(printf '%s' "$out" | tail -n 1)) — trying the hub"
     [ -L "$ROOT" ] && [ -z "$(linked_sha "$ROOT")" ] && rm -f "$ROOT"
   fi
 fi
