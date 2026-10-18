@@ -349,6 +349,10 @@ class Trace:
         missing parent. FD aliases share their connected destination.
         """
         tables = {self.root: {}}
+        # Pending touches are keyed by a table's object id: keep every table
+        # alive through replay, or an exec's dropped table lends its id to an
+        # unrelated fork's fresh copy (live, #4625).
+        kept = list(tables.values())
         pending = {}
         bound, replies = {}, {}
         # Keep sanitized socket objects alive through replay: a reused Python
@@ -418,8 +422,10 @@ class Trace:
             if action == 'fork':
                 child, shared = data
                 tables[child] = table if shared else table.copy()
+                kept.append(tables[child])
             elif action == 'exec':
                 tables[pid] = {fd: entry for fd, entry in table.items() if not entry[1]}
+                kept.append(tables[pid])
             elif action == 'socket':
                 fd, protocol, category, cloexec = data
                 table[fd] = (socket_state(protocol, category), cloexec)

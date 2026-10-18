@@ -455,6 +455,19 @@ class TraceMetadata(unittest.TestCase):
         with self.assertRaises(live.Refused):  # a resume with nothing pending stays refused
             observer.Trace(plan(), 'node-a').feed('7 1.0 <... wait4 resumed> <unfinished ...>) = ?\n')
 
+    def test_a_replaced_table_never_lends_its_identity(self):
+        # live (#4625): a process exec'd (its old FD table dropped) while an
+        # unrelated process forked; the fork's fresh copy reused the dropped
+        # table's object id, and the pending exec read as a sibling's touch.
+        trace = self.make_trace([])
+        trace.decode(7, 1.2, 1.21, 'fork() = 8')
+        trace.decode(8, 1.3, 1.6, 'execve("/usr/bin/true", [], 0x1) = 0')
+        for n in range(20):
+            trace.decode(7, 1.31 + n / 1000, 1.311 + n / 1000, 'fork() = %d' % (100 + n))
+            trace.decode(100 + n, 1.4 + n / 1000, 1.401 + n / 1000, 'fork() = %d' % (200 + n))
+        trace.exited.update({8} | set(range(100, 120)) | set(range(200, 220)))
+        trace.finish(0)
+
     def test_fork_alias_reconnect_during_write_refuses(self):
         trace = self.make_trace(['socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) = 3'])
         trace.decode(7, 1.2, 1.21, 'fork() = 8')
