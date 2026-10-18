@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-train-macos.sh pick  [--hub <url>] [--runners-file <json>] [--max <n>]
+# fleet-train-macos.sh pick  [--hub <url>] [--runners-file <json>] [--max <n>] [--need <n>]
 # fleet-train-macos.sh watch [--repo <owner/name>] [--run <id>] [--where fleet-ci|github]
 #                            [--deadline <s>] [--every <s>] [--prefix <job name>]
 #   — where one release train runs its macOS half (issue #3145, EPIC #3139 C6).
@@ -13,6 +13,11 @@
 #   `[self-hosted, macOS, fleet-ci]`, min(n, --max 2) wide; none — or no token, a
 #   hub that does not answer, an answer that is not the list — ⇒ `macos-latest`,
 #   2 wide: the train runs either way (拔掉两台测试机，下一趟照样发).
+#   --need n (default 2, issue #4672): fewer than n of ours ⇒ GitHub's too — one of
+#   our Macs free used to get the WHOLE suite as one shard, cut at its budget
+#   (exit 124: run 39094216976; our Mac runs ×6.6 the fleet-ci table). The caller
+#   prices n (mac-follow.yml's board: fleet-train-plan.sh --full, 35 minutes a
+#   shard); n above --max can never be ours.
 #   Prints, and appends to $GITHUB_OUTPUT when set, one `key=value` line each:
 #     macos_runs_on  the runs-on labels, a JSON list
 #     macos_shards   the shard matrix, a JSON list 1..N
@@ -41,17 +46,19 @@ emit() {
 summary() { [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat >> "$GITHUB_STEP_SUMMARY"; }
 
 pick() {
-  local hub=${FLEET_HUB_URL:-} file='' max=2 body='' why=''
+  local hub=${FLEET_HUB_URL:-} file='' max=2 need=2 body='' why=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --hub)          shift; hub="${1:-}" ;;
       --runners-file) shift; file="${1:-}" ;;
       --max)          shift; max="${1:-2}" ;;
+      --need)         shift; need="${1:-2}" ;;
       *) die "pick: unknown argument $1" ;;
     esac
     shift
   done
   case "$max" in ''|*[!0-9]*|0) max=2 ;; esac
+  case "$need" in ''|*[!0-9]*|0) need=2 ;; esac
   if [ -n "$file" ]; then
     body=$(cat -- "$file" 2>/dev/null) || why="no runners file $file"
   elif [ -z "$hub" ]; then
@@ -64,9 +71,9 @@ pick() {
       || { why="the hub did not answer: $(printf '%s' "$body" | head -1 | cut -c1-120)"; body=''; }
   fi
   local out where n say labels shards i
-  out=$(printf '%s' "$body" | MAX=$max WHY="$why" python3 -c '
+  out=$(printf '%s' "$body" | MAX=$max NEED=$need WHY="$why" python3 -c '
 import json, os, sys
-mx, why = int(os.environ["MAX"]), os.environ["WHY"]
+mx, need, why = int(os.environ["MAX"]), int(os.environ["NEED"]), os.environ["WHY"]
 names = []
 if not why:
     try:
@@ -84,6 +91,10 @@ if not why:
             why = "no runner of ours online and idle/busy (%s)" % (", ".join(seen) or "none listed")
     except Exception:
         why = "the hub answer is not the runner list"
+if names and min(len(names), mx) < need:
+    why = "only %d of ours (%s), need %d (one shard of the whole suite runs past its budget)" % (
+        min(len(names), mx), ", ".join(names), need)
+    names = []
 if names:
     print("fleet-ci"); print(min(len(names), mx)); print("ours: " + ", ".join(names))
 else:
@@ -192,6 +203,6 @@ cmd=${1:-}; [ "$#" -gt 0 ] && shift
 case "$cmd" in
   pick)  pick "$@" ;;
   watch) watch "$@" ;;
-  -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) die "usage: fleet-train-macos.sh pick|watch …" ;;
 esac

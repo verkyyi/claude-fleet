@@ -47,6 +47,12 @@ permissions:
   contents: read
   actions: read
 
+env:
+  # our Macs run the suite ×6.6 the seconds of bin/selftest-durations-fleet-ci.txt
+  # (issue #4672: run 39094216976, 77 tests 511 s predicted, 3365 s taken) — how
+  # many of them the full suite needs, and each shard's budget there
+  FLEET_CI_SCALE: '6.6'
+
 jobs:
   board:
     name: board
@@ -89,7 +95,13 @@ jobs:
           FLEET_HUB_URL: ${{ inputs.runners != 'github' && 'https://claudefleet.24haowan.com' || '' }}   # oss-ok: the hub's address, as release-train.yml's board spelled it (#3145)
           FLEET_HUB_CI_TOKEN: ${{ secrets.FLEET_HUB_VIEWER_TOKEN }}
         run: |
-          bash bin/fleet-train-macos.sh pick 2> pick.err
+          # how many of our Macs the full suite needs at 35 minutes a shard (#4672):
+          # fewer free ⇒ GitHub's, never the whole suite in one shard on ours
+          need=$(bash bin/fleet-train-plan.sh --full --prefix need --durations selftest-durations-fleet-ci.txt \
+            --scale "$FLEET_CI_SCALE" --target 2100 --min 2 --max 44 2>/dev/null \
+            | sed -n 's/^need_shards=//p' | tr -cd ',' | wc -c)
+          need=$((need + 1))
+          bash bin/fleet-train-macos.sh pick --need "$need" 2> pick.err
           echo "macOS → $(cat pick.err)" >> "$GITHUB_STEP_SUMMARY"
           cat pick.err
 
@@ -128,7 +140,7 @@ jobs:
           LANE=${LANE:-none}   # no lane yet: an unresolvable base ⇒ the full suite's plan
           if [ "$WHERE" = fleet-ci ]; then
             bash bin/fleet-train-plan.sh --base "$LANE" --prefix macos --shards "$n" \
-              --durations selftest-durations-fleet-ci.txt --floor 1320
+              --durations selftest-durations-fleet-ci.txt --scale "$FLEET_CI_SCALE" --floor 1320
           else
             # a free account runs 5 macOS jobs at once: 4 at most, one left for the nightly
             bash bin/fleet-train-plan.sh --base "$LANE" --prefix macos --min "$n" --max 4 --target 2400 \
