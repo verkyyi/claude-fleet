@@ -4571,9 +4571,8 @@ def admin_old_retire(paths, index, stamp, managed=(), hold=None, dry=False):
 
 # -- a managed login still on its own credential proxy (issue #4363): every
 # taken-over login is a tenant of the machine's ONE shared proxy (#3700) — the
-# own one (com.claude-fleet.credsep.<login>) plus the resident
-# `fleet-cred-proxy.sh run` the account table keeps for it are one more copy per
-# login. `fleet-credsep.py machine join` is the no-gap road (it puts the login
+# own one (com.claude-fleet.credsep.<login>) is one more copy per login, and none
+# is made any more (#4674): this is how the last ones leave. `fleet-credsep.py machine join` is the no-gap road (it puts the login
 # back on its own proxy when the shared one does not take it); the sweep runs it
 # once per such login, one log line before and one after.
 # FLEET_NODE_CREDSEP_JOIN=0 leaves them.

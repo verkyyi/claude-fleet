@@ -648,9 +648,10 @@ def login_open(a):
     # The relay pass is the proxy's second road, never a reason to undo a login
     # (#3213): the hub mints it only for a login whose account is ACTIVE, and a
     # login the hub's create op is making is still `creating` here — so a 403 is
-    # expected on every create. The login's fleet-cred-proxy.sh mints it later
-    # (relay_fetch, as on a Mac: asked again every minute or two while it has
-    # none, then a re-probe — #3423); until then the relay road is simply off.
+    # expected on every create. The login's `cred-relay` mints it later (the
+    # shared proxy asks — relay-want.<login> — and the node daemon runs
+    # fleet-cred-proxy.sh relay-tick as the login, then a re-probe — #3423,
+    # #3561, #4674); until then the relay road is simply off.
     try:
         relay = request(hub, '/v1/node/relay-credential', ne['CCQUOTA_TOKEN'], {})
     except HubHTTPError as e:
