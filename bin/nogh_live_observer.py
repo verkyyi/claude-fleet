@@ -92,6 +92,7 @@ class Trace:
         self.lines, self.failed = 0, None
         self.actions = []
         self.pending_bytes = 0
+        self.dying = set()
 
     def feed(self, line):
         try:
@@ -118,6 +119,17 @@ class Trace:
         if call.startswith('+++ exited with ') or call.startswith('+++ killed by '):
             require(pid not in self.exited, 'DUPLICATE_EXIT')
             self.exited.add(pid)
+            self.dying.discard(pid)
+            return
+        require(pid not in self.dying, 'UNKNOWN_SYSCALL_NOT_FINAL')
+        # strace could not read the syscall number because the tracee was
+        # already dying (SIGKILL at its entry stop; the kernel skips a syscall
+        # whose entry stop has a fatal signal pending), so nothing ran. Only as
+        # the process's last record before its exit line (live, #4625).
+        if call.startswith('???('):
+            require(re.fullmatch(r'\?\?\?\(\s*(?:<unfinished \.\.\.>|\)\s+= \?)', call)
+                    and pid not in self.pending, 'UNKNOWN_SYSCALL_FORMAT')
+            self.dying.add(pid)
             return
         if call.startswith('--- SIG'):
             return  # no payload, signal text or si_* fields retained
@@ -167,6 +179,11 @@ class Trace:
         found = re.match(r'(\w+)\(', call)
         require(found is not None, 'UNKNOWN_SYSCALL_FORMAT')
         name = found[1]
+        # A process killed inside a syscall: strace prints no result (`= ?`,
+        # whole or resumed). Decoded as the call cut off by process exit — a
+        # failed attempt, as for a sibling's exit_group (live, #4625).
+        if name not in ('exit', 'exit_group'):
+            call = re.sub(r'\)\s+= \?(?:\s+<(?:\d+\.\d+|unavailable)>)?$', ') = -1 EINTR (cut off by process exit)', call)
         self.action_end = end
         if name in ('execve', 'execveat'):
             path = re.match(r'execve\("([^"\\]*)"', call) if name == 'execve' else \
@@ -496,7 +513,7 @@ class Trace:
                     if category != 'local': self.record(pid, at, end, category)
 
     def finish(self, observer_exit):
-        if observer_exit != 0 or self.failed or self.pending:
+        if observer_exit != 0 or self.failed or self.pending or self.dying:
             # Which of the three, as identifiers only (live, #4625: a node
             # refused here and the record could not say why).
             refused = Refused('OBSERVER_LOST_OR_TRUNCATED')
@@ -506,6 +523,7 @@ class Trace:
             # A prefix that is not `name(` still names its shape (live, #4625:
             # node-a and dns refused PENDING_CALL with no syscall).
             refused.detail = 'OBSERVER_EXIT' if observer_exit != 0 else 'TRACE_FAILED' if self.failed \
+                else 'UNKNOWN_SYSCALL_NOT_FINAL' if not self.pending \
                 else 'PENDING_CALL@' + call[1] if call else 'PENDING_RESUME@' + resumed[1] if resumed \
                 else 'PENDING_EMPTY' if not pending.strip() else 'PENDING_UNPARSED'
             raise refused
