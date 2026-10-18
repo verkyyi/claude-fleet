@@ -148,6 +148,11 @@ unset _flib_here
 # client and the installer too. One release line (issue #4671): no lane reader.
 # shellcheck source=fleet-versions-lib.sh
 [ -f "$_FLEET_LIB_DIR/fleet-versions-lib.sh" ] && . "$_FLEET_LIB_DIR/fleet-versions-lib.sh"
+# The GitHub layer (issue #3721): fleet_gh is how every program here calls gh. Bash
+# only (a zsh skill sourcing this, or a copy without the file, gets plain gh).
+# shellcheck source=fleet-gh-lib.sh
+if [ -n "${BASH_VERSION:-}" ] && [ -f "$_FLEET_LIB_DIR/fleet-gh-lib.sh" ]; then . "$_FLEET_LIB_DIR/fleet-gh-lib.sh"
+else fleet_gh() { gh "$@"; }; fi
 
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
@@ -1703,7 +1708,7 @@ fleet_sub_issues() {
       n = id; sub(/^.*#/, "", n); r = id; sub(/#[0-9]+$/, "", r); printf "%s\t%s\t%s\n", r, n, $2 }'
     return 0
   fi
-  gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
+  fleet_gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
     --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)\t\(.state)"' 2>/dev/null
 }
 
@@ -1990,7 +1995,7 @@ fleet_resolve_base_branch() {
     default=$(git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null \
                 | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
   elif command -v gh >/dev/null 2>&1; then
-    default=$(gh repo view "$repo" --json defaultBranchRef \
+    default=$(fleet_gh repo view "$repo" --json defaultBranchRef \
                 -q .defaultBranchRef.name 2>/dev/null) || default=''
   fi
   if [ -n "$flag" ]; then
@@ -2201,9 +2206,9 @@ fleet_repo_checkout() {
     # An address given (issue #3600) is cloned as itself when gh cannot (missing,
     # or no GitHub login): an ssh key reaches a GitHub repo without gh.
     if [ -n "$remote" ] && [ "$remote" != "$repo" ]; then
-      { command -v gh >/dev/null 2>&1 && gh repo clone "$repo" "$dir" 2>/dev/null; } \
+      { command -v gh >/dev/null 2>&1 && fleet_gh repo clone "$repo" "$dir" 2>/dev/null; } \
         || { rm -rf "$dir"; git clone "$remote" "$dir"; } || { echo "$tag: clone failed" >&2; return 5; }
-    elif command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
+    elif command -v gh >/dev/null 2>&1; then fleet_gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
     else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
   fi
   return 0
@@ -8076,9 +8081,9 @@ fleet_breakage_norm_line() {
 fleet_breakage_probe() {
   local repo="$1" branch="${2:-}" owner name runs starts rid sha wname jobs jid jname line key names out=''
   owner="${repo%%/*}"; name="${repo#*/}"
-  [ -n "$branch" ] || branch=$(gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
+  [ -n "$branch" ] || branch=$(fleet_gh api "repos/$owner/$name" --jq .default_branch 2>/dev/null)
   [ -n "$branch" ] || branch=master
-  runs=$(gh api "repos/$owner/$name/actions/runs?branch=$branch&status=completed&per_page=100" \
+  runs=$(fleet_gh api "repos/$owner/$name/actions/runs?branch=$branch&status=completed&per_page=100" \
            --jq '.workflow_runs[] | select((.event // "") | startswith("pull_request") | not)
                  | "\(.workflow_id)\t\(.id)\t\(.head_sha)\t\(.conclusion // "")\t\(.created_at // "")\t\(.name // "")\t\(now - ((.created_at // "1970-01-01T00:00:00Z") | fromdateiso8601) | floor)\t\(.display_title // "" | gsub("\t"; " "))"' 2>/dev/null) || return 2
   # Newest first (the API's order): per workflow the first verdict decides; a red
@@ -8095,7 +8100,7 @@ fleet_breakage_probe() {
   [ -n "$starts" ] || return 1
   while IFS=$'\t' read -r _ rid sha _ _ wname _; do
     case "$rid" in ''|*[!0-9]*) continue ;; esac
-    jobs=$(gh api "repos/$owner/$name/actions/runs/$rid/jobs?per_page=100" \
+    jobs=$(fleet_gh api "repos/$owner/$name/actions/runs/$rid/jobs?per_page=100" \
              --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out")]
                    | sort_by(.completed_at // "") | .[] | "\(.id)\t\(.name)"' 2>/dev/null)
     jid=''; jname=''
@@ -8104,7 +8109,7 @@ $(printf '%s\n' "$jobs" | grep . | head -1)
 JOBS
     [ -n "$jname" ] || jname="$wname"
     line=''
-    case "$jid" in ''|*[!0-9]*) : ;; *) line=$(gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
+    case "$jid" in ''|*[!0-9]*) : ;; *) line=$(fleet_gh run view --job "$jid" --log-failed -R "$repo" 2>/dev/null | fleet_breakage_norm_line) ;; esac
     # No commit in the key (issue #4271): the same job red on the same line is one
     # breakage whichever commit its streak started at — a red that comes back
     # after its fix reopens that issue (fleet-issue-file.sh), never files another.
@@ -8188,7 +8193,7 @@ fleet_breakage_find() {
     printf '%s\n' "${rows#*	}"; return 0
   fi
   owner="${repo%%/*}"; name="${repo#*/}"
-  rows=$(gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
+  rows=$(fleet_gh api "repos/$owner/$name/issues?state=open&per_page=100&sort=created&direction=desc" \
            --jq '.[] | select(.pull_request == null) | "\(.number)\t\(.body // "" | gsub("[\r\n]"; " "))"' 2>/dev/null) || return 1
   n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1)
   case "$n" in ''|*[!0-9]*) return 1 ;; esac
@@ -8203,13 +8208,13 @@ fleet_breakage_find() {
 fleet_fault_find_closed() {
   local repo="$1" mk owner name rows n q
   mk=$(fleet_breakage_marker "$2"); owner="${repo%%/*}"; name="${repo#*/}"
-  rows=$(gh api "repos/$owner/$name/issues?state=closed&per_page=100&sort=updated&direction=desc" \
+  rows=$(fleet_gh api "repos/$owner/$name/issues?state=closed&per_page=100&sort=updated&direction=desc" \
            --jq '.[] | select(.pull_request == null) | select((.state_reason // "") != "not_planned")
                  | "\(.number)\t\(.closed_at // "")\t\(.body // "" | gsub("[\r\n\t]"; " "))"' 2>/dev/null)
   n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1,2)
   if [ -z "$n" ]; then
     q="repo:$owner/$name is:issue is:closed in:body \"fleet:breakage key=$2\""
-    rows=$(gh api -X GET search/issues -f q="$q" -f sort=updated -f order=desc -f per_page=20 \
+    rows=$(fleet_gh api -X GET search/issues -f q="$q" -f sort=updated -f order=desc -f per_page=20 \
              --jq '.items[] | select((.state_reason // "") != "not_planned")
                    | "\(.number)\t\(.closed_at // "")\t\(.body // "" | gsub("[\r\n\t]"; " "))"' 2>/dev/null)
     n=$(printf '%s\n' "$rows" | grep -F -- "$mk" | head -1 | cut -f1,2)
@@ -8223,7 +8228,7 @@ fleet_fault_find_closed() {
 #   nothing (rc 1) when it was closed by hand.
 fleet_fault_fix_commit() {
   local c
-  c=$(gh api "repos/${1%%/*}/${1#*/}/issues/$2/events?per_page=100" \
+  c=$(fleet_gh api "repos/${1%%/*}/${1#*/}/issues/$2/events?per_page=100" \
         --jq '[.[] | select(.event == "closed")] | last | .commit_id // empty' 2>/dev/null)
   case "$c" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) printf '%s\n' "$c" ;; *) return 1 ;; esac
 }
@@ -8233,7 +8238,7 @@ fleet_fault_fix_commit() {
 #   diverged: the red is on a version without the fix), 2 unknown.
 fleet_fault_contains() {
   local st
-  st=$(gh api "repos/${1%%/*}/${1#*/}/compare/$2...$3" --jq .status 2>/dev/null)
+  st=$(fleet_gh api "repos/${1%%/*}/${1#*/}/compare/$2...$3" --jq .status 2>/dev/null)
   case "$st" in ahead|identical) return 0 ;; behind|diverged) return 1 ;; *) return 2 ;; esac
 }
 
@@ -8242,7 +8247,7 @@ fleet_fault_contains() {
 #   (a version cut after it — red again), 1 older, 2 unknown.
 fleet_fault_after_close() {
   local d te tc
-  d=$(gh api "repos/${1%%/*}/${1#*/}/commits/$2" --jq '.commit.committer.date // empty' 2>/dev/null)
+  d=$(fleet_gh api "repos/${1%%/*}/${1#*/}/commits/$2" --jq '.commit.committer.date // empty' 2>/dev/null)
   te=$(fleet_epoch_from_iso "$d" 2>/dev/null); tc=$(fleet_epoch_from_iso "$3" 2>/dev/null)
   case "$te$tc" in ''|*[!0-9]*) return 2 ;; esac
   [ -n "$te" ] && [ -n "$tc" ] || return 2
@@ -8254,8 +8259,8 @@ fleet_fault_after_close() {
 #   red is on record, so a re-sighting (the next tick, another machine) adds nothing.
 fleet_fault_seen() {
   local mk; mk="<!-- fleet:fault sha=$3 -->"
-  { gh api "repos/${1%%/*}/${1#*/}/issues/$2" --jq '.body // ""' 2>/dev/null
-    gh api "repos/${1%%/*}/${1#*/}/issues/$2/comments?per_page=100" --jq '.[].body // ""' 2>/dev/null
+  { fleet_gh api "repos/${1%%/*}/${1#*/}/issues/$2" --jq '.body // ""' 2>/dev/null
+    fleet_gh api "repos/${1%%/*}/${1#*/}/issues/$2/comments?per_page=100" --jq '.[].body // ""' 2>/dev/null
   } | grep -qF -- "$mk"
 }
 
@@ -8559,7 +8564,7 @@ fleet_epic_agent() {
              "hub:$(fleet_norm_repo "${1:-}")#${2:-}" --json body 2>/dev/null \
            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body") or "")' 2>/dev/null) || return 1
   else
-    body=$(gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
+    body=$(fleet_gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
   fi
   fleet_epic_charter_agent "${1:-}" "$body" "${3:-}" "${4:-}"
 }
@@ -8665,7 +8670,7 @@ fleet_issue_win_name() {
   if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && fleet_ticket_hub "$repo"; then
     b=$(fleet_ticket_view "$repo" "$num" body .body) || b=''   # a hub ticket: the door (#3598)
   elif [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
-    b=$(gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
+    b=$(fleet_gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
   fi
   ref=$(fleet_epic_member_ref "$b")
   if [ -n "$ref" ]; then
@@ -8679,7 +8684,7 @@ fleet_issue_win_name() {
       js=''
       if fleet_ticket_hub "$er"; then js=$(fleet_ticket_view "$er" "$en" title,body) || js=''
       elif command -v gh >/dev/null 2>&1; then
-        js=$(gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
+        js=$(fleet_gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
       fi
       if [ -n "$js" ]; then
         et=$(printf '%s' "$js" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")' 2>/dev/null)
@@ -10079,7 +10084,7 @@ FLEET_DEPLOY_BATCH_JQ='[.workflow_runs[]? | {sha: .head_sha, tok: (if .status=="
 fleet_deploy_probe_batch() {
   local repo="${1:-}" branch="${2:-}" out
   [ -n "$repo" ] && [ -n "$branch" ] || return 1
-  out=$(gh api "repos/$repo/actions/runs?branch=$branch&per_page=100" --jq "$FLEET_DEPLOY_BATCH_JQ" 2>/dev/null) || return 1
+  out=$(fleet_gh api "repos/$repo/actions/runs?branch=$branch&per_page=100" --jq "$FLEET_DEPLOY_BATCH_JQ" 2>/dev/null) || return 1
   printf '%s' "$out"
   return 0
 }
@@ -10099,7 +10104,7 @@ fleet_deploy_probe() {
   fi
   case "$check" in
     actions)
-      out=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --jq "$FLEET_DEPLOY_RUNS_JQ" 2>/dev/null) || return 1
+      out=$(fleet_gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --jq "$FLEET_DEPLOY_RUNS_JQ" 2>/dev/null) || return 1
       case "$out" in live|deploying|failed|unknown) printf '%s' "$out" ;; *) return 1 ;; esac ;;
     *) : ;;
   esac
@@ -10260,7 +10265,7 @@ fleet_child_busy() {
   command -v gh >/dev/null 2>&1 || { printf 'pr-unknown\n'; return 0; }
   # REST, not `gh pr list`: the core budget is separate from the GraphQL one the
   # prmap spends, and this runs on every unreported Stop.
-  n=$(fleet_timebox 5 gh api "repos/$repo/pulls?state=open&head=${repo%%/*}:$br" \
+  n=$(fleet_timebox 5 fleet_gh api "repos/$repo/pulls?state=open&head=${repo%%/*}:$br" \
         --jq length 2>/dev/null)
   case "$n" in
     0) return 1 ;;
@@ -10871,7 +10876,7 @@ fleet_pr_merge_state() {
     done
   fi
   if [ -n "$n" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
-    raw=$(fleet_timebox 10 gh api "repos/$repo/pulls/$n" \
+    raw=$(fleet_timebox 10 fleet_gh api "repos/$repo/pulls/$n" \
             --jq '"\(.merged) \(.state) \(.auto_merge != null)"' 2>/dev/null)
     case "$raw" in
       'true '*)          st=merged ;;

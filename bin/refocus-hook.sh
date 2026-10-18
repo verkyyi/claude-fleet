@@ -227,7 +227,7 @@ lines += [
     "fleet-issue-file.sh --parent %s (add --spawn to start it now), never in this worktree." % (n, n),
     "- Base checkout %s is read-only; talk on the issue via fleet-comment.sh." % e("REFOCUS_MAIN"),
     "- Done = verify → push → PR with `Closes #%s` → fleet-pr-verdict.sh <PR> "
-    "(--wait in background) → on READY `gh pr merge --%s --delete-branch` → "
+    "(--wait in background) → on READY `gh pr merge --%s --delete-branch` → "  # no-gh-ok: a message
     "confirm MERGED → report → stop. Never /fleet-sync-install." % (n, e("REFOCUS_MERGE")),
     "- Blocked → `⛔ blocked:` comment + set-claude-state.sh blocked, report, stop.",
     "- %s" % e("REFOCUS_ORIGIN"),

@@ -98,13 +98,13 @@ have_commit() {
 if [ -n "$epic" ]; then
   # only the members filed in THIS repo (issue #1942): an EPIC may span repos, and
   # another repo's #N is not this repo's issue-N branch — stable is per repo
-  members=$(gh api "repos/$epic_repo/issues/$epic/sub_issues" --paginate \
+  members=$(bash "$BIN_DIR/fleet-gh.sh" run api "repos/$epic_repo/issues/$epic/sub_issues" --paginate \
       --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) ||
-    die "could not read #$epic's sub-issues on $epic_repo (gh auth?)"
+    die "could not read #$epic's sub-issues on $epic_repo (gh auth?)"  # no-gh-ok: a hint
   members=$(printf '%s\n' "$members" | awk -F '\t' -v r="$repo" 'NF == 1 || $1 == r { print $NF }')
   for m in $members; do
     case "$m" in ''|*[!0-9]*) continue ;; esac
-    sha=$(gh pr list --repo "$repo" --state merged --head "issue-$m" --limit 5 \
+    sha=$(bash "$BIN_DIR/fleet-gh.sh" run pr list --repo "$repo" --state merged --head "issue-$m" --limit 5 \
             --json mergeCommit,mergedAt --jq 'map(select(.mergeCommit != null)) | sort_by(.mergedAt) | last | .mergeCommit.oid // empty' 2>/dev/null) || sha=""
     [ -n "$sha" ] && merged="$merged
 $sha"

@@ -59,7 +59,7 @@ ENVELOPE = "<cross-session-message"
 ENVELOPE_B, REPORT_B, DIGEST_B = ENVELOPE.encode(), b"[child-report]", DIGEST.encode()
 CHILD_RX = re.compile(r"^(?:(\S+/\S+) )?(issue #|scratch ~)(\d+)")
 LEDGER_MATCH_SECS = 1800     # a queued delivery can land well after the ledger write
-VERIFY_CMDS = ("gh pr", "capture-pane", "gh run", "git log")
+VERIFY_CMDS = ("gh pr", "capture-pane", "gh run", "git log")  # no-gh-ok: transcript matchers
 
 
 def parse_ts(value):

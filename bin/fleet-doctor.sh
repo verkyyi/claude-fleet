@@ -595,12 +595,19 @@ if [ -d "$conf_dir/fleets" ]; then
   unset _ov _gh_total _gh_none
 fi
 
+# Every gh call goes through the GitHub layer (issue #3721): fleet-gh.sh run is
+# fleet_gh for this POSIX-sh doctor. A copy without it (a test sandbox) runs gh.
+_ghrun() {
+  if [ -f "$(dirname "$0")/fleet-gh.sh" ]; then bash "$(dirname "$0")/fleet-gh.sh" run "$@"
+  else gh "$@"; fi
+}
+
 # --- gh + auth (backlog + PR/CI map) ---
 if [ "$_gh_wanted" = 0 ]; then
   :   # no GitHub repo hosted — gh is not this login's business (issue #3600)
 elif command -v gh >/dev/null 2>&1; then
-  if gh auth status >/dev/null 2>&1; then pass gh "authed"
-  else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi
+  if _ghrun auth status >/dev/null 2>&1; then pass gh "authed"
+  else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi  # no-gh-ok: a hint
   # PR status has its own fast daemon (decoupled from the 60s collector) so
   # CI-green / merged shows within ~15s. Recommended alongside the collector.
   printf '        note: install com.claude-fleet.pr-refresh (~15s, FLEET_PR_REFRESH_INTERVAL) for fast PR/CI status — single writer of prmap + @prci.\n'
@@ -3979,7 +3986,7 @@ _repo_block() {
                                     | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
   else
     command -v gh >/dev/null 2>&1 \
-      && gh_out=$(gh repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
+      && gh_out=$(_ghrun repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
   fi
   bdef=$(printf '%s\n' "$gh_out" | sed -n 1p)
   if [ -n "$bbase" ]; then
@@ -4076,7 +4083,7 @@ EOF
     have=$(printf '%s\n' "$gh_out" | sed 1d)
     # `repo view` returns the first 100 labels only; page the full list past that
     [ "$(printf '%s\n' "$have" | grep -c .)" -ge 100 ] \
-      && have=$(gh label list --repo "$r" --limit 1000 --json name -q '.[].name' 2>/dev/null)
+      && have=$(_ghrun label list --repo "$r" --limit 1000 --json name -q '.[].name' 2>/dev/null)
     missing=''
     for l in $canon_labels; do
       printf '%s\n' "$have" | grep -qxF "$l" || missing="$missing $l"

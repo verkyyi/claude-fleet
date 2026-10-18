@@ -197,7 +197,7 @@ if [ -n "$ISSUE" ]; then
     }
   else
     command -v gh >/dev/null 2>&1 || refuse "comment-storage handoff needs gh on PATH"
-    hand_bodies() { gh issue view "$ISSUE" --repo "$repo" --json comments -q '.comments[].body' 2>/dev/null; }
+    hand_bodies() { bash "$BIN/fleet-gh.sh" run issue view "$ISSUE" --repo "$repo" --json comments -q '.comments[].body' 2>/dev/null; }
   fi
   hand_bodies \
     | grep -Fq "$HANDOFF_MARKER" \

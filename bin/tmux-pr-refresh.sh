@@ -274,7 +274,7 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
       continue
     fi
     fleet_gh_share_on && rm -rf "$FD/.adopt.$$" 2>/dev/null; pub=0
-    gh pr list --repo "$rp" --state all --limit 100 \
+    fleet_gh pr list --repo "$rp" --state all --limit 100 \
       --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit \
       --jq "$FLEET_PRMAP_JQ" \
       > "$FD/prmap.$$" 2>/dev/null \
@@ -372,7 +372,7 @@ while IFS="$US" read -r sess win path cur wrepo wnorepo cnum cci cfail wwt; do
              behind)   glyph="✓↑"; pfg="#e0af68";;   # green but behind base → update-branch
              conflict) glyph="✓!"; pfg="#f7768e";;   # green but conflicting → rebase
              blocked)  glyph="✓·"; pfg="#e0af68";;   # green+mergeable but blocked (protection)
-             draft)    glyph="✓d"; pfg="#565f89";;   # green but a DRAFT → gh pr ready (muted)
+             draft)    glyph="✓d"; pfg="#565f89";;   # green but a DRAFT → gh pr ready (muted) — no-gh-ok: a comment
              unknown)  glyph="✓?"; pfg="#a9b1d6";;   # green, mergeability not computed yet
              *)        glyph="✓";  pfg="#9ece6a";;   # green + mergeable, awaiting merge
            esac;;

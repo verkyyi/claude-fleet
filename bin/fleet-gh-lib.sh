@@ -42,6 +42,11 @@
 #   fleet_gh_limited <bucket>            rc 0 (+ print reset epoch or `fake`) while
 #                                        <bucket> or `secondary` is limited
 #   fleet_gh_mark_limited <bucket> [reset] [source]
+#   fleet_gh <gh args…>                  THE road for a plain gh call (issue #3721):
+#                                        gh itself, byte for byte — except that a
+#                                        call aimed at a FLEET_FORGE=none repo is
+#                                        refused (rc $FLEET_GH_NOFORGE_RC, one stderr
+#                                        line) and gh never runs
 #   fleet_gh_run <bucket> <source> <gh args…>
 #                                        run gh unless <bucket> is known-limited;
 #                                        rc $FLEET_GH_LIMITED_RC (75) = rate-limited
@@ -164,6 +169,41 @@ fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
   fi
   cat "$err" >&2; rm -f "$err"
   return "$rc"
+}
+
+# --- fleet_gh: every plain gh call (issue #3721, EPIC #3570 共同约定 2) -----------
+# A program outside the door and this layer never spells `gh issue|pr|api|…`; it
+# calls `fleet_gh …` (or, from POSIX sh / an exec, `fleet-gh.sh run …`). For a
+# GitHub repo it is `gh "$@"` — same stdout, stderr and exit code. A call aimed at
+# a repo whose conf says FLEET_FORGE=none (--repo / -R / --repo= / an api path
+# `repos/<owner>/<name>/…`) stops here, so such a repo never reaches GitHub. The
+# target's forge is fleet_repo_forge's (fleet-lib.sh) — not sourced ⇒ no check.
+FLEET_GH_NOFORGE_RC=78
+fleet_gh_target() {  # fleet_gh_target <gh args…> → owner/name the call is aimed at, or nothing
+  local a prev='' api=0 n=0
+  for a in "$@"; do
+    n=$((n + 1))
+    [ "$n" = 1 ] && [ "$a" = api ] && api=1
+    case "$prev" in --repo|-R) printf '%s' "$a"; return 0 ;; esac
+    case "$a" in
+      --repo=*) printf '%s' "${a#--repo=}"; return 0 ;;
+      repos/*/*) [ "$api" = 1 ] && { a=${a#repos/}; a=${a%%\?*}
+                   printf '%s/%s' "${a%%/*}" "$(a=${a#*/}; printf '%s' "${a%%/*}")"; return 0; } ;;
+    esac
+    prev=$a
+  done
+  return 0
+}
+fleet_gh() {  # fleet_gh <gh args…>
+  local t
+  if type fleet_repo_forge >/dev/null 2>&1; then
+    t=$(fleet_gh_target "$@")
+    if [ -n "$t" ] && [ "$(fleet_repo_forge "$t")" = none ]; then
+      printf 'fleet_gh: %s has no GitHub (FLEET_FORGE=none) — gh %s not run\n' "$t" "${1:-}" >&2
+      return "$FLEET_GH_NOFORGE_RC"
+    fi
+  fi
+  gh "$@"
 }
 
 # --- REST equivalents ---------------------------------------------------------

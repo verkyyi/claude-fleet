@@ -161,18 +161,18 @@ if [ "$TK_HUB" = 1 ] && [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ]; then
   st=$(fleet_ticket_view "$REPO" "$num" state .state 2>/dev/null) || st=''
   [ -n "$st" ] && [ "$st" != OPEN ] && die "#$num is closed — --force to bind anyway" 4
   if [ "$(fleet_repo_forge "$REPO" "$SESS")" != none ] && command -v gh >/dev/null 2>&1; then
-    n_open_pr=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq 'length' 2>/dev/null)
+    n_open_pr=$(fleet_gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq 'length' 2>/dev/null)
     [ "${n_open_pr//[^0-9]/}" -gt 0 ] 2>/dev/null && die "#$num has an open PR — --force to bind anyway" 4
   fi
   co=$(bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" 2>&1); crc=$?
   [ "$crc" = 3 ] && die "#$num is already claimed (${co#fleet-ticket: }) — --force to bind anyway" 4
   [ "$crc" = 0 ] && TK_HELD=1
 elif [ "$FORCE" != 1 ] && [ "$FRESH" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-  cs=$(gh issue view "$num" --repo "$REPO" --json assignees,state \
+  cs=$(fleet_gh issue view "$num" --repo "$REPO" --json assignees,state \
         --jq '"\(.assignees|length)\t\(.state)"' 2>/dev/null)
   n_assignee=${cs%%$'\t'*}; st=${cs#*$'\t'}
   n_assignee="${n_assignee//[^0-9]/}"
-  n_open_pr=$(gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq 'length' 2>/dev/null)
+  n_open_pr=$(fleet_gh pr list --repo "$REPO" --head "$branch" --state open --json number --jq 'length' 2>/dev/null)
   n_open_pr="${n_open_pr//[^0-9]/}"
   if [ "${n_assignee:-0}" -gt 0 ] \
      || { [ -n "$st" ] && [ "$st" != OPEN ]; } || [ "${n_open_pr:-0}" -gt 0 ]; then
@@ -196,7 +196,7 @@ if [ "$TK_HUB" = 1 ]; then
     && bash "$BIN/fleet-ticket.sh" claim "$TK_ID" --by "$(fleet_ticket_claimant)" >/dev/null 2>&1
 else
 [ "$FORCE" != 1 ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1 \
-  && gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
+  && fleet_gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1
 fi
 
 # Window name from the issue CONTENT (issue #216's rule): an explicit --title wins
@@ -210,7 +210,7 @@ if [ -z "$title" ] && [ "$TK_HUB" = 1 ]; then
   tb=$(fleet_ticket_view "$REPO" "$num" title,body '.title + "\n" + .body') || tb=''
   title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 elif [ -z "$title" ] && [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
-  tb=$(gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
+  tb=$(fleet_gh issue view "$num" --repo "$REPO" --json title,body -q '.title + "\n" + .body' 2>/dev/null) || tb=''
   title=${tb%%$'\n'*}; body=${tb#*$'\n'}; [ "$body" = "$tb" ] && body=''
 fi
 if [ -n "$TITLE" ]; then wname=$(fleet_issue_plain_name "$title")

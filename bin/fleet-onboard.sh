@@ -192,7 +192,7 @@ EOF
       [ "$gh" = 0 ] && echo "gh=not-needed (no repo on GitHub)"
     fi
     if [ "$gh" = 1 ]; then
-      me=$(gh api user --jq .login 2>/dev/null)
+      me=$(fleet_gh api user --jq .login 2>/dev/null)
       echo "gh=${me:-NOT-LOGGED-IN}"
     fi
     echo "repos:"

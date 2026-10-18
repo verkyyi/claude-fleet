@@ -28,8 +28,8 @@ for f in "$accounts"/*; do
 done
 [ "$tokens" -gt 0 ] && [ "$bad_tokens" = 0 ] || add 'Claude accounts (nonempty 600 token files)'
 
-if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
-  add 'GitHub login (gh auth login)'
+if ! command -v gh >/dev/null 2>&1 || ! fleet_gh auth status >/dev/null 2>&1; then
+  add 'GitHub login (gh auth login)'  # no-gh-ok: a hint
 fi
 
 # `ccquota codex list` has a LOGIN column; a listed but expired profile does

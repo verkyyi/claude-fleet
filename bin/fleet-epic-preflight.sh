@@ -146,8 +146,8 @@ if [ "$forge" = none ]; then
   pass gh "not needed — $repo has no forge (FLEET_FORGE=none): tickets on the hub, landing by fleet"
 elif ! command -v gh >/dev/null 2>&1; then
   fail gh "not on PATH — an EPIC is issues, sub-issues and PRs end to end; none of it works without gh"
-elif ! gh auth status >/dev/null 2>&1; then
-  fail gh "installed but NOT authed — \`gh auth login\` (cannot file, label, link or land)"
+elif ! fleet_gh auth status >/dev/null 2>&1; then
+  fail gh "installed but NOT authed — \`gh auth login\` (cannot file, label, link or land)"  # no-gh-ok: a hint
 else
   gh_ok=1
   pass gh "authed"
@@ -216,12 +216,12 @@ elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
       probe=$(fleet_gh_run core preflight api "repos/$repo/issues?state=all&per_page=20" \
                 --jq '[.[] | select(.pull_request == null)][0].number // empty' 2>/dev/null)
     else
-      probe=$(gh issue list --repo "$repo" --state all --limit 1 --json number -q '.[0].number' 2>/dev/null)
+      probe=$(fleet_gh issue list --repo "$repo" --state all --limit 1 --json number -q '.[0].number' 2>/dev/null)
     fi
     probe="${probe//[^0-9]/}"
     if [ -z "$probe" ]; then
       warn subissue "no issue in $repo to probe against — sub-issue linking is UNVERIFIED here (GA on github.com; older GitHub Enterprise 404s). The first \`--parent\` filing finds out."
-    elif sub_err=$(gh api "repos/$owner/$name/issues/$probe/sub_issues" 2>&1 >/dev/null); then
+    elif sub_err=$(fleet_gh api "repos/$owner/$name/issues/$probe/sub_issues" 2>&1 >/dev/null); then
       pass subissue "the sub-issues API answers for $repo (probed #$probe) — parent→child linking works"
     else
       case "$sub_err" in
@@ -250,7 +250,7 @@ labels_missing() {  # rc 1 = the label list could not be read under a GraphQL li
     have=$(fleet_gh_run core preflight api --paginate "repos/$repo/labels?per_page=100" --jq '.[].name' 2>/dev/null) \
       || return 1
   else
-    have=$(gh label list --repo "$repo" --limit 200 --json name -q '.[].name' 2>/dev/null)
+    have=$(fleet_gh label list --repo "$repo" --limit 200 --json name -q '.[].name' 2>/dev/null)
   fi
   for l in $EPIC_LABELS; do
     printf '%s\n' "$have" | grep -qxF -- "$l" || miss="$miss $l"
@@ -274,7 +274,7 @@ elif [ "$gh_ok" = 1 ] && [ -n "$perm" ]; then
   if [ -z "$missing" ]; then
     pass labels "$(printf '%s' "$EPIC_LABELS" | sed 's/ / · /g') all present in $repo"
   elif [ "$do_fix" = 1 ]; then
-    fail labels "still missing after --fix:$missing — \`gh label create\` failed (rerun \`bash $BIN/fleet-labels-seed.sh --repo $repo\` to see why)"
+    fail labels "still missing after --fix:$missing — \`gh label create\` failed (rerun \`bash $BIN/fleet-labels-seed.sh --repo $repo\` to see why)"  # no-gh-ok: a hint
   else
     fixme labels "missing in $repo: $missing — rerun with --fix to seed them (that seeds the FULL canonical set, so on a team repo get the nod first)"
   fi

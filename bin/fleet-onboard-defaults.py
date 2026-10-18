@@ -40,11 +40,11 @@ ALLOW = [
     "Bash(~/.claude/fleet/bin/fleet-repo.sh add *)",
     "Bash(~/.claude/fleet/bin/fleet-repo.sh remove *)",
     "Bash(~/.claude/fleet/bin/fleet-pr-verdict.sh *)",
-    "Bash(gh repo list *)",
-    "Bash(gh repo create *)",
-    "Bash(gh pr list *)",
-    "Bash(gh pr view *)",
-    "Bash(gh pr diff *)",
+    "Bash(gh repo list *)",  # no-gh-ok: a permission rule
+    "Bash(gh repo create *)",  # no-gh-ok: a permission rule
+    "Bash(gh pr list *)",  # no-gh-ok: a permission rule
+    "Bash(gh pr view *)",  # no-gh-ok: a permission rule
+    "Bash(gh pr diff *)",  # no-gh-ok: a permission rule
 ]
 
 

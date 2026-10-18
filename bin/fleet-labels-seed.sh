@@ -62,7 +62,7 @@ command -v gh >/dev/null 2>&1 || { printf 'fleet-labels-seed: gh not on PATH\n' 
 rc=0 made=0
 while IFS='|' read -r name color desc; do
   [ -n "$name" ] || continue
-  if gh label create "$name" --color "$color" --description "$desc" --force --repo "$repo" >/dev/null 2>&1; then
+  if fleet_gh label create "$name" --color "$color" --description "$desc" --force --repo "$repo" >/dev/null 2>&1; then
     made=$((made+1))
     printf 'fleet-labels-seed: %s\n' "$name" >&2
   else
