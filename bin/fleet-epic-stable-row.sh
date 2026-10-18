@@ -34,7 +34,7 @@
 #   tr:      the same row as a <tr> for the page
 #   mark:    the followup marker for the parent's closing comment (issue #2672,
 #            bin/fleet_followup.py): `kind=stable` when a move is all it takes
-#            (behind / none) — the steward runs it once the gates are green —
+#            (behind / none) — the person runs it (EPIC #4333 C5: no session picks it up) —
 #            `kind=human` when a person must look first (offtrunk / unknown)
 # Exit: 0 row due · 1 no row · 2 usage / could not read (gh, git)
 #

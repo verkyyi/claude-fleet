@@ -494,9 +494,11 @@ the bodies they always did. Only now, and in this order:
    `<!-- fleet:epic repo=… short=… agent=codex -->` makes every member a Codex
    session; one member row ending ` (codex)` / ` (claude)` overrides it for that
    member (`- [ ] **C3** #N — title (codex)`). Left out, members follow their own
-   `agent:*` label, else the fleet's `FLEET_AGENT`. Pick Codex the way the
-   orchestrator does (`/fleet-orchestrate` «派给谁»); never mix agents within one
-   member.
+   `agent:*` label, else the fleet's `FLEET_AGENT`. Pick Codex for a member that
+   is mostly Go / TS with a test that decides done, or a mechanical change (a mass
+   rename, adding tests, fixing lint) — and for new mechanical members while
+   Claude's quota is ≥ 85% (the doctor's `quota` row); it needs this login's Codex
+   sign-in. Never mix agents within one member.
 
    The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
    the parent before it starts, so a charter edited mid-batch reaches every worker

@@ -30,14 +30,16 @@
 #   H  the real thing (claude on PATH): a sandbox HOME adds the marketplace and
 #      lists none of the three; install fleet-orchestrate lists it; uninstall
 #      lists none again; install fleet-epic carries its three commands, epic-page
-#      and agents/epic-driver.md (and pulls fleet-orchestrate in)
+#      and agents/epic-driver.md (and pulls in no other plugin, #4334)
 #   I  the epic plugin (issue #3116, EPIC #3111 C5): fleet-epic carries
 #      /fleet-epic-plan · run · report, epic-page and the epic-driver agent file
 #      (`fleet: reap: loop-end`, every tool — spawn among them); the core ships
 #      no epic-driver; installed, `--as epic-driver` (the orchestrator's driver
 #      line) resolves to the plugin's file and the launch says `--agent
 #      epic-driver`; not installed, there is no such agent; a login an older
-#      release shipped epic-driver into gets fleet-epic (carry-over, D)
+#      release shipped epic-driver into gets fleet-epic (carry-over, D); it names
+#      no steward and no /fleet-orchestrate, and the driver mounts fleet-orch itself
+#      (EPIC #4333 C5, issue #4338: a batch runs with only fleet-epic installed)
 #   J  the managed default (issue #3360, EPIC #3354 C6): ensure --default
 #      fleet-feedback installs + enables it ONCE and records it in
 #      plugins-defaulted.json; the person disables / uninstalls it => the next
@@ -364,6 +366,10 @@ done
 grep -q -- '--as epic-driver' "$ROOT/conf/agent-defaults/claude/agents/orchestrator.md" && ok \
   || fail "I the orchestrator's driver line does not start --as epic-driver"
 grep -rq -- '--role epic-driver' "$ROOT/plugins" && fail "I a plugin still starts a driver with --role epic-driver" "$(grep -rn -- '--role epic-driver' "$ROOT/plugins")"; ok
+grep -rnE 'steward|管家|fleet-orchestrate' "$EP" >/dev/null \
+  && fail "I fleet-epic still hands work to the steward / the orchestrate plugin (#4338)" "$(grep -rnE 'steward|管家|fleet-orchestrate' "$EP")"; ok
+sed -n '/^---$/,/^---$/p' "$EP/agents/epic-driver.md" | grep -qx '  - fleet-orch' && ok \
+  || fail "I epic-driver does not mount the dispatch group fleet-orch itself (#4338)"
 AE=$(mktemp -d "$WORK/ae.XXXXXX")
 adef() { env HOME="$AE" CLAUDE_CONFIG_DIR="$AE/.claude" FLEET_CONF_DIR="$AE/conf" \
            FLEET_AGENT_PLUGINS_CMD="cat '$AE/plugins.json'" python3 "$BIN/fleet-agent-def.py" "$@" 2>&1; }

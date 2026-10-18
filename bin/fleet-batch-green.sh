@@ -14,8 +14,7 @@
 #
 # A batch here is one fleet_epic_stale_list gives (a heartbeat mark gone stale,
 # its EPIC still on the open-issue list), minus any a live window still wears as
-# its @epic (a driver window that is there but quiet is the steward's
-# stuck-driver row, not this). For each, at most once per FLEET_BATCH_GREEN_SECS
+# its @epic (a driver window that is there but quiet is not stale, so not this). For each, at most once per FLEET_BATCH_GREEN_SECS
 # (600): its open sub-issues (fleet_sub_issues — ONE REST call), each member's
 # PR off its repo's prmap (`issue-<M>`, the collector's copy — no gh): OPEN, CI ✓
 # and `ready` (the merge gate's READY) counts. A count that differs from the last
