@@ -60,7 +60,7 @@ CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；
 | 浏览器（`fleet-browser`） | 按需 | 2 |
 | 版本维护（install-sync / base-sync） | 核心 | 52 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 2 |
-| 管家特殊实现（`fleet-steward` 插件、巡查逻辑、决定单） | 移除 | 11 |
+| 管家特殊实现（`fleet-steward` 插件、巡查程序） | 移除 | 11 |
 | 终端状态与节点连接（spinner / peerlink） | 待定 | 9 |
 | 终端看台与薄客户端 | 核心 | 160 |
 | 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 9 |

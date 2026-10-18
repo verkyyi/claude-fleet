@@ -334,10 +334,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `breakage-new-sha` + `fleet-issue-file-selftest.sh` O–T, Y pin it.
   **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
   only PRODUCE (macos-watch, cn-probe — they file, and alert only on a new or
-  reopened issue, plus macOS' once-per-streak held-back alert); the patrol is the
-  orchestrator session's ONE self-patrol loop — after a compaction its state says
-  `CronList` first, never a second job — and a steward holder's `/loop` is the
-  same patrol, never run beside it.
+  reopened issue, plus macOS' once-per-streak held-back alert); the patrol is ONE
+  steward session's `/loop` (`spawn agent:steward`), opened by a person, never a
+  second beside it; an orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything
@@ -473,9 +472,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   spawn (issues #4591, #4703) — a file's `spawn` grant (`@agent_spawn`, off
   `fleet-agent-def.py spawn-tools`) is recorded, never a gate; `--role worker|epic-driver|debugger`
   and an old window's `@fleet_role_def epic-driver` are read for one version
-  (`# compat-1v`). The person's role layer, the merge, the locks and `fleet role
-  set|unset|undo` are gone, and `bin/fleet-role.py` left with the role seats
-  (issue #4340). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
+  (`# compat-1v`). The person's role layer and `fleet role set|unset|undo` are
+  gone with the role seats (issue #4340). `fleet-agent-as-selftest.sh`, `spawn-origin-gate-selftest.sh` F.
 - **This repo is a plugin marketplace; EPIC batches and the other optional parts
   are its plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
@@ -564,14 +562,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   above). Its body is the session's system prompt — a compaction or a resume keeps
   it, so nothing relays a role's state (`bin/fleet-orchestrator-state.py` is a
   quiet exit-0 shell for one version: a copy of the old plugin still runs it as a
-  hook). The orchestrator's few dispatch rules are written into its template; there
-  is no rule table, no 「按规则 N 派发」 and no `fleet:rule` marker any more — the
-  `rule` argument of `file_issue` / `task` and `--rule` on `fleet-issue-file.sh` /
-  `fleet-task-record.sh` are accepted and ignored for one version, an old issue's
-  marker is only text. Gone with them (issue #4340): `take_role`'s script (the tool
-  answers 「retired」, exit 2, one version), `fleet-role.py`, `fleet_rules.py`,
-  `conf/role-rules.default.md`, the plugin's skill / role / rules / `/qd`,
-  install-apply's `roles-windows:` step. Several orchestrators may run at once; each
+  hook). The orchestrator's few dispatch rules are written into its template, and
+  nothing else holds any — the `rule` argument of `file_issue` / `task` and `--rule`
+  on `fleet-issue-file.sh` / `fleet-task-record.sh` are accepted and ignored for one
+  version; the old role-taking tool answers 「retired」 (exit 2) for one version
+  (issue #4340). Several orchestrators may run at once; each
   looks after what it dispatched. **The shared parts know no role** (issue #4341, C8):
   a session with no key of its own (no issue, no scratch — a template opened bare, a
   person's no-repo session) answers to its IDENTITY — `fleet_origin_key` /
@@ -601,8 +596,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   client's `orch_*` / `steward_all_*` files, the steward's hosted page and
   `@orch_page`, the attention count (`fleet-steward-stats.sh` and the node conf's
   [76] hooks, unset on a reload), the client's steward rows,
-  `fleet-role.py render` / `fleet_role_render`, the
-  doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
+  the doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
   for every session, issue #4703). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
   seat) is an ordinary row for restore / migrate / move / cleanup, and only

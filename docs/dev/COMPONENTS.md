@@ -38,8 +38,8 @@
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
 | Codex 上下文计量适配（`fleet-codex-session.py` Meter / `conf/statusline.sh`） | 核心 | 将原生读数投影到既有计量总线；显式候选复用注意力连接，收到有效事件时暂停重复 rollout 轮询，失联回退。不新增常驻服务、不默认启用，不改变其他 collector 的待定类别。 |
 | Fleet MCP（status / where / context / open / show） | 核心 | 代理读取状态和向操作者送达内容的统一接口。 |
-| 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 发起人明确保留跨会话协作基础设施；工具权限仍按会话座位控制，不能随编排插件一起删。 |
-| 编排 MCP 挂载组（`conf/mcp-orch.json`） | 按需 | 随编排插件挂载；未来角色模板改造另批实施，底层协作接口保留。 |
+| 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 发起人明确保留跨会话协作基础设施；每个会话都挂载派发组（#4703），不能随编排插件一起删。 |
+| 编排 MCP 挂载组（`conf/mcp-orch.json`） | 核心 | 每个会话都挂载（#4703 撤掉了 #4334 的 `@agent_spawn` 门）；底层协作接口，和编排模板无关。 |
 
 ## 可选插件
 
@@ -49,7 +49,7 @@
 | 组件 | 类别 | 理由 |
 |---|---|---|
 | 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 已改成普通会话模板（`spawn agent:orchestrator`），座位、状态快照与派单规则表已删（#4340）；插件只剩一版空的已下架条目，`fleet-orchestrator-state.py` 只剩一版安静的壳；跨会话基础设施保留。 |
-| 管家特殊实现（`fleet-steward` 插件、巡查逻辑、决定单） | 移除 | 同上，下一批改成普通会话模板；当前按需安装，本批不删除正在使用的实现。 |
+| 管家特殊实现（`fleet-steward` 插件、巡查程序） | 移除 | 已改成普通会话模板（`spawn agent:steward`），巡查程序与停放已删（#4339）；插件只剩一版空的已下架条目；卡住的对话只经 `fleet-dialog-answer.sh` 代答。 |
 | EPIC 批次（`fleet-epic`） | 按需 | 用户选择才安装；依赖关系仍由插件管理，不属于默认核心。 |
 | 反馈（`fleet-feedback`） | 按需 | 普通新装不启用；受托管登录按 #3360 既有策略首次默认启用，之后尊重用户关闭/卸载。本批只登记此例外，不改变托管策略。 |
 | 浏览器（`fleet-browser`） | 按需 | 用户选择浏览器能力后安装，不进入普通默认。 |
@@ -150,7 +150,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
 | 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
-| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet_compat* fleet-worker-records*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
+| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet_compat* fleet-worker-records* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
 | 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |
@@ -164,7 +164,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 凭据代理 | `fleet-cred-proxy* fleet-proxy-quota*` | 订阅代理 |
 | 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
 | 项目依赖复用 | `fleet-deps-*` | 显式依赖克隆/链接，不属于默认会话启动 |
-| 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install*` | 安装、版本与包 |
+| 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install* fleet-dev-mode*` | 安装、版本与包 |
 | 宿主清理与保护 | `fleet-cleanup* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-crash-harvest* fleet-park* fleet_park*` | 资源、退出与停放 |
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠与唤醒 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect* fleet-report-stats*` | 收集与账本 |
