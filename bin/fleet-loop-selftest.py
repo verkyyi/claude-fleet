@@ -482,7 +482,7 @@ class IdleDispatchTests(unittest.TestCase):
     """#4431: a due wakeup follows fresh native idle, never the panel's done/looping word.
 
     Two tiers. A pane with a C3 launch goes through fleet_runtime: a fresh v1 read,
-    then accept_if_idle (Codex) or capability_unavailable (Claude, #4618); only
+    then accept_if_idle, or capability_unavailable where the adapter has none; only
     `accepted` counts. A pane without one keeps its original road (legacy_unfenced).
     """
     def setUp(self):

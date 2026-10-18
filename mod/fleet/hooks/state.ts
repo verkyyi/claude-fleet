@@ -35,6 +35,25 @@ const LOOP_TOOLS = new Set(['ScheduleWakeup', 'CronCreate', 'CronDelete'])
 let runtimeSequence = 0
 let runtimeTurn: string | undefined
 let runtimeObservation: { state: string; turn_id: string } | undefined
+// A session.end (a /clear, a /resume) since the last turn: that turn's id no
+// longer names the conversation a prompt would enter (accept.ts, #4618).
+let runtimeBoundary = false
+
+/** The last main turn finished as `expected` (idle), none runs, no session boundary since. */
+export function runtimeIdle(expected: string): boolean {
+  return runtimeTurn === undefined && !runtimeBoundary && runtimeObservation?.turn_id === expected
+    && runtimeObservation.state === 'idle'
+}
+
+/** The main turn running now, as turn.start named it. */
+export function runtimeTurnNow(): string | undefined {
+  return runtimeTurn
+}
+
+/** lifecycle.ts session.end: no earlier turn is the one a prompt would follow. */
+export function noteSessionBoundary(): void {
+  runtimeBoundary = true
+}
 
 /** An on-demand reply from this native module, never a renewed disk cache. */
 export function runtimeQuery(request: Record<string, unknown>, context: string | undefined, now: number): Record<string, unknown> {
@@ -118,6 +137,7 @@ export function registerState(on: On): void {
     if (isOpen()) {
       if ((e as { agentId?: string }).agentId === undefined) {
         runtimeTurn = e.turnId
+        runtimeBoundary = false
         await runtimeEvent($, 'active', e.turnId, true)
       }
       await setState($, 'working')

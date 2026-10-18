@@ -108,17 +108,38 @@ CODEX_NOT_FOUND = "queued submission not found"
 RECEIPT_PAGES = 20
 RECEIPT_PAGE = 50
 
+# Claude has no conditional accept reachable from outside the session (#4617);
+# inside it, the fleet mod (>= 0.6.0, mod/fleet/hooks/accept.ts) does it at the
+# engine's own entry boundary: $.prompt.submit from an engine frame, refused by
+# this plugin's prompt.submit hook with { drop } unless the last finished turn is
+# still the expected one, none runs, no /clear since, no draft, before the
+# deadline (#4618). Verified on 2.1.295 (fleet-idle-accept-claude-selftest.py).
+CLAUDE_ACCEPT = "idle.v1"
+CLAUDE_ACCEPT_WINDOW = 5.0      # the request's deadline, seconds from the post
+CLAUDE_ACCEPT_GRACE = 3.0       # the mod's ACCEPT_GRACE_S: a submitted slot's last word
+CLAUDE_ACCEPT_POLL = 2.0        # the inbox poll (INBOX_MS) and one tmux round
+CLAUDE_RECEIPT_PREFIX = "fleet idle-accept receipt delivery_id="
+# The mod's refusals at the entry boundary: handed to the engine, then dropped.
+CLAUDE_ENTRY_DROPS = ("draft_present", "deadline_passed", "not_idle_at_entry", "slot_lost", "dropped_beneath")
+
 
 def idle_accept_capability(provider):
     """This adapter's support, not a live probe or an upstream version guess.
 
     Codex: thread/queue/start is the native start-if-idle; clientUserMessageId
-    is the receipt, readable again after a disconnect. Claude has no native
-    conditional accept reachable from outside the session (#4617): unavailable.
-    Never infer one from turn/start, turn/steer's *active* expectedTurnId, a
-    successful read, or a peer frame write.
+    is the receipt, readable again after a disconnect. Claude: the fleet mod's
+    entry-boundary check (#4618) — a pane whose mod does not say `@mod_accept
+    idle.v1` is refused per call, nothing sent. Never infer one from
+    turn/start, turn/steer's *active* expectedTurnId, a successful read, a peer
+    frame write or command.run.
     """
     known = isinstance(provider, str) and provider in ("codex", "claude")
+    if provider == "claude":
+        return dict(version=1, name="idle-accept", provider="claude", state="available",
+                    native_method="mod/prompt.submit", reason="",
+                    support="mod_entry_boundary_drop_and_hidden_context_receipt",
+                    fence=dict(idle="entry_boundary", turn="entry_boundary"),
+                    min_native_version="2.1.295", min_mod_version="0.6.0")
     if provider == "codex":
         return dict(version=1, name="idle-accept", provider="codex", state="available",
                     native_method="thread/queue/start", reason="",
@@ -262,7 +283,9 @@ def accept_if_idle(pane, expected, delivery_id, text, socket=""):
     """Conditional controller input: accepted only when the provider natively
     starts it on an idle session (#4524 contract, #4617 implementation).
 
-    Claude: unavailable, no I/O. Codex: a fresh read must still equal `expected`
+    Claude: the fleet mod's inbox (`idle.v1`), checked again at the engine's
+    entry boundary; the receipt is the mod's accepted turn (a durable file
+    beside the inbox, the delivery id in the turn's hidden context). Codex: a fresh read must still equal `expected`
     and be idle, then thread/queue add + start-if-idle; refused -> deleted under
     the native lock (rejected); a receipt is the accepted turn whose userMessage
     carries clientId == delivery_id. A per-delivery journal is written before
@@ -294,6 +317,8 @@ def accept_if_idle(pane, expected, delivery_id, text, socket=""):
         # Do not fall back to turn/start, turn/steer, peer send or command.run.
         return result
     try:
+        if capability["provider"] == "claude":
+            return _claude_accept(result, pane, expected, delivery_id, text, socket)
         return _codex_accept(result, pane, expected, delivery_id, text, socket)
     except Unknown as e:
         result.update(state="unknown", reason=str(e))
@@ -403,6 +428,173 @@ def _accepted(result, path, rec, sid, tid, prev, anchor, why):
     return result
 
 
+def claude_inbox(pane, socket):
+    sock = Path(launch.option(pane, "socket_path", socket)).name
+    if not sock:
+        raise Unknown("native_query_unavailable")
+    conf = Path(os.environ.get("FLEET_CONF_DIR", str(Path.home() / ".config/claude-fleet")))
+    directory = conf / "global/mod-inbox" / sock / pane[1:]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return directory
+
+
+def claude_post_accept(directory, request, wait):
+    """One idle.v1 request on the pane's inbox, its fixed slot; the mod's answer.
+
+    Not taken by the end (the .json renamed back by us, the same rename the mod
+    claims with, so one side wins) = never submitted: rejected. Taken and no
+    answer = unknown, settled later by its receipt; never a second post.
+    """
+    directory = Path(directory)
+    base = directory / "idle-accept"
+    with base.with_suffix(".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return dict(state="rejected", reason="accept_slot_busy")
+        tmp = directory / ".idle-accept.tmp"
+        paths = [base.with_suffix(x) for x in (".json", ".taken", ".done")]
+        try:
+            for path in paths:
+                path.unlink(missing_ok=True)
+            tmp.write_text(json.dumps(request))
+            tmp.replace(paths[0])
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                try:
+                    done = json.loads(paths[2].read_text())
+                except (FileNotFoundError, json.JSONDecodeError):
+                    done = None
+                if done is not None:
+                    if done.get("ok") is not True:
+                        # The mod refuses a request only before taking its slot.
+                        return dict(state="rejected", reason="mod_refused")
+                    if done.get("nonce") != request["nonce"] or done.get("delivery_id") != request["delivery_id"]:
+                        raise Unknown("mod_answer_mismatch")
+                    return done
+                time.sleep(.05)
+            try:
+                paths[0].rename(base.with_suffix(".cancelled"))
+                return dict(state="rejected", reason="not_taken")
+            except FileNotFoundError:
+                raise Unknown("entry_unanswered") from None
+        finally:
+            for path in [tmp, *paths, base.with_suffix(".cancelled")]:
+                path.unlink(missing_ok=True)
+
+
+def claude_transcript(native_session):
+    projects = Path(os.environ.get("FLEET_CC_PROJECTS_DIR",
+                                   os.environ.get("CLAUDE_PROJECTS_DIR", str(Path.home() / ".claude/projects"))))
+    hits = list(projects.glob("*/" + native_session + ".jsonl"))
+    return hits[0] if len(hits) == 1 else None
+
+
+def claude_receipt(directory, delivery_id, native_session):
+    """(found, turn_id): the mod's durable receipt, else the turn's hidden context.
+
+    found None = no transcript to read: never "not delivered". A context line
+    with no receipt file is a delivery whose turn id is unknown.
+    """
+    try:
+        r = json.loads((Path(directory) / ("idle-accept-%s.receipt" % delivery_id)).read_text())
+        if r.get("delivery_id") == delivery_id and r.get("state") == "accepted" and r.get("turn_id"):
+            return True, r["turn_id"]
+    except (OSError, ValueError, AttributeError):
+        pass
+    t = claude_transcript(native_session)
+    if t is None:
+        return None, None
+    try:
+        with open(t, "rb") as f:
+            hit = (CLAUDE_RECEIPT_PREFIX + delivery_id).encode() in f.read()
+    except OSError:
+        return None, None
+    return (True, None) if hit else (False, None)
+
+
+def _claude_accept(result, pane, expected, delivery_id, text, socket):
+    ident = result["request_identity"]
+    fixed = {k: v for k, v in ident.items() if k != "turn_id"}
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    jdir = _accept_dir()
+    path = jdir / (delivery_id + ".json")
+    sid = ident["native_session"]
+    with (jdir / (delivery_id + ".lock")).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rec = json.loads(path.read_text()) if path.exists() else None
+        if rec is not None:
+            if rec.get("identity") != fixed:
+                raise Unknown("delivery_identity_changed")
+            if rec.get("text_sha256") != digest:
+                result.update(state="rejected", reason="delivery_id_reused")
+                return result
+            result["submitted"] = bool(rec.get("queued"))
+            if rec.get("state") == "accepted":
+                result.update(state="accepted", reason="journal", receipt=dict(rec["receipt"], source="journal"))
+                return result
+        directory = claude_inbox(pane, socket)
+        if rec is not None and rec.get("state") == "pending":
+            # Settle the earlier attempt before anything new: never a blind resend.
+            found, tid = claude_receipt(directory, delivery_id, sid)
+            if found and tid:
+                return _claude_accepted(result, path, rec, tid, "mod_receipt")
+            if found:
+                result.update(state="unknown", reason="receipt_turn_unknown")
+                return result
+            if time.time() < rec["deadline"] + CLAUDE_ACCEPT_GRACE + CLAUDE_ACCEPT_POLL:
+                result.update(state="unknown", reason="previous_attempt_unsettled")
+                return result
+            if found is None:
+                result.update(state="unknown", reason="receipt_scan_incomplete")
+                return result
+            # Past its deadline the mod drops it at entry: it never ran.
+            rec.update(state="rejected", reason="not_delivered")
+            _journal_write(path, rec)
+        if launch.option(pane, "@mod_accept", socket) != CLAUDE_ACCEPT:
+            result.update(state="rejected", reason="mod_accept_unavailable")
+            return result
+        s = read(pane, expected=expected, socket=socket)
+        if s["runtime"]["state"] != "idle":
+            result.update(state="rejected", reason="precheck_" + (s["runtime"]["reason"] or s["runtime"]["state"]))
+            return result
+        receipt = launch.inspect({k: ident[k] for k in launch.IDENTITY}, pane, socket)
+        if {k: receipt.get(k) for k in NATIVE} != {k: ident[k] for k in NATIVE}:
+            raise Unknown("native_identity_changed")
+        now = time.time()
+        request = dict(accept=CLAUDE_ACCEPT, nonce=uuid.uuid4().hex, launch={k: ident[k] for k in launch.IDENTITY},
+                       delivery_id=delivery_id, expected_turn=ident["turn_id"], text=text,
+                       deadline=now + CLAUDE_ACCEPT_WINDOW)
+        rec = dict(version=1, delivery_id=delivery_id, identity=fixed, text_sha256=digest,
+                   anchor=ident["turn_id"], native_session=sid, state="pending", queued=True,
+                   method="mod/prompt.submit", deadline=request["deadline"], created_at=now)
+        _prune(jdir, now)
+        _journal_write(path, rec)
+        result["submitted"] = True
+        done = claude_post_accept(directory, request,
+                                  CLAUDE_ACCEPT_WINDOW + CLAUDE_ACCEPT_GRACE + CLAUDE_ACCEPT_POLL)
+        st, why = done.get("state"), done.get("reason") or ""
+        if st == "accepted" and done.get("turn_id") and done.get("previous_turn_id") == ident["turn_id"]:
+            return _claude_accepted(result, path, rec, done["turn_id"], why)
+        if st == "rejected":
+            rec.update(state="rejected", reason=why)
+            _journal_write(path, rec)
+            result.update(state="rejected", reason=why, submitted=why in CLAUDE_ENTRY_DROPS)
+            return result
+        result.update(state="unknown", reason=why or "mod_answer_invalid")
+        return result
+
+
+def _claude_accepted(result, path, rec, tid, why):
+    receipt = dict(delivery_id=rec["delivery_id"], method="mod/prompt.submit", native_session=rec["native_session"],
+                   turn_id=tid, previous_turn_id=rec["anchor"], anchor_turn_id=rec["anchor"],
+                   intervening_turn=False, queued_submission_id=None, accepted_at=time.time(), source="native")
+    rec.update(state="accepted", reason=why, receipt=receipt)
+    _journal_write(path, rec)
+    result.update(state="accepted", reason=why, submitted=True, receipt=receipt)
+    return result
+
+
 def task(context):
     t = launch.task_call(context)
     if (t.get("authority_version") != 1 or any(t.get(k) != v for k, v in (
@@ -500,12 +692,7 @@ def query_claude(pane, socket, context):
     One fixed request slot per pane, serialized locally; no new timer or journal.
     Only a native-ancestry-checked event with this nonce can answer the reader.
     """
-    sock = Path(launch.option(pane, "socket_path", socket)).name
-    if not sock:
-        raise Unknown("native_query_unavailable")
-    conf = Path(os.environ.get("FLEET_CONF_DIR", str(Path.home() / ".config/claude-fleet")))
-    directory = conf / "global/mod-inbox" / sock / pane[1:]
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory = claude_inbox(pane, socket)
     base = directory / "runtime-observation"
     with base.with_suffix(".lock").open("a") as lock:
         try:
