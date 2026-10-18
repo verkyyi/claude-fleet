@@ -324,7 +324,9 @@ drill_cred_login_removed_leftovers() {
 # sep_self <dir> [node.env lines] — THIS user as a separated login in <dir> (the
 # writers call credsep with no --login, so the sandbox login is `id -un`); sets
 # C, R, SEPENV (the env every call runs under). With lines, node.env is there
-# first and install moves it into the store.
+# first and install moves it into the store. FLEET_CREDSEP_JOIN_WAIT=0: since
+# #4674 install always joins the shared proxy and waits for its answer, and with
+# FLEET_CREDSEP_SVC=0 none runs here — 30 s per drill for nothing (#4718).
 sep_self() {
   local sb="$1" me out rc; me=$(id -un)
   C="$sb/homes/$me/.config/claude-fleet" R="$sb/db/$me"
@@ -333,7 +335,7 @@ sep_self() {
   if [ -n "${2:-}" ]; then printf '%s' "$2" > "$C/node.env"; chmod 600 "$C/node.env"; fi
   SEPENV="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_CREDSEP_LOG_BASE=$sb/log
     FLEET_CREDSEP_LIB=$sb/lib FLEET_CREDSEP_DAEMON_DIR=$sb/daemons FLEET_CREDSEP_ROLE=$me FLEET_CREDSEP_SVC=0
-    FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO= FLEET_CREDSEP_PW=$sb/pw
+    FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO= FLEET_CREDSEP_PW=$sb/pw
     FLEET_CONF_DIR=$C HOME=$sb/homes/$me"
   # shellcheck disable=SC2086
   out=$(env $SEPENV bash "$BIN/fleet-credsep.sh" install --install-dir "$sb/inst" 2>&1); rc=$?
