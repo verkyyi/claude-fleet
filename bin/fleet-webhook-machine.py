@@ -91,10 +91,13 @@ BODY_MAX = 26 * 1024 * 1024        # GitHub caps a delivery at 25 MB
 LOGIN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 
 # A login's TMPDIR as ACCOUNT_SH gives it, its stderr to the unit's own log
-# (opened by the demoted process — root never writes in a login's directory),
+# (opened by the demoted process — root never writes in a login's directory —
+# in a directory it makes; `true`, never `:`: dash exits on a special builtin's
+# failed redirection, #4668),
 # stdout left to the caller (--desired is read from it).
 WRAP_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPDIR" ] || { TMPDIR="/tmp/claude-fleet-$(id -u)"; mkdir -p -m 700 "$TMPDIR" 2>/dev/null; }; export TMPDIR; '
-           'if : >>"$1" 2>/dev/null; then exec 2>>"$1"; else exec 2>/dev/null; fi; '
+           'mkdir -p "${1%/*}" 2>/dev/null; '
+           'if true >>"$1" 2>/dev/null; then exec 2>>"$1"; else exec 2>/dev/null; fi; '
            'shift; exec "$@"')
 
 
