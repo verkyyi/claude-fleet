@@ -759,6 +759,19 @@ class Templates(unittest.TestCase):
             self.assertEqual(read.call_count, 1)
 
 
+class ChannelClose(unittest.TestCase):
+    def test_close_after_a_failed_send_to_a_gone_observer_does_not_raise(self):
+        # live (#4625): cancel to a finished observer -> EPIPE, bytes stay
+        # buffered, and close() re-raised out of the driver's finally.
+        from types import SimpleNamespace
+        channel = driver.Channel([sys.executable, '-c', 'pass'], SimpleNamespace())
+        channel.process.wait()
+        with self.assertRaises(OSError):
+            for _ in range(64):
+                channel.send(dict(action='cancel', phase='end', pad='x' * 4096))
+        channel.close()
+
+
 class LiveRowEntry(unittest.TestCase):
     """#4630: the entry must be able to carry a real row, not only fixtures."""
 

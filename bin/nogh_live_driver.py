@@ -101,7 +101,12 @@ class Channel:
 
     def close(self):
         if self.process.stdin and not self.process.stdin.closed:
-            self.process.stdin.close()
+            # A cancel sent to an observer that already finished leaves its
+            # bytes buffered; closing flushes them into a gone pipe. That must
+            # not escape `finally` and swallow the run's own refusal and its
+            # receipt (live, #4625: A11 sealed, then BROKENPIPEERROR).
+            try: self.process.stdin.close()
+            except (BrokenPipeError, OSError): pass
         if self.process.poll() is None:
             self.process.terminate()
         try:
