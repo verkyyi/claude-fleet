@@ -484,6 +484,21 @@ if [ -n "${REMOTE:-}" ]; then
 fi
 row=$(child_win)
 wid=${row%%|*}; worigin=${row#*|}; [ -n "$row" ] || { wid=''; worigin=''; }
+# An accepted task is never waited on by its issue number (issue #4398, EPIC #4390
+# C8 — the compatibility window closed). Its worker reports on the task route only
+# (C4), so this ledger never hears its outcome, and adopting @origin here would
+# give accepted work a parent its dispatch never named. Wait on the task instead;
+# in a hub-authority repo a new start is a task (the `task` tool), never a spawn
+# by number (refused at the spawn below). Any other repo: byte for byte.
+if [ -n "$wid" ] && [ -n "$(TM display-message -p -t "$wid" '#{@launch}' 2>/dev/null)" ]; then
+  wtask=$(TM display-message -p -t "$wid" '#{@task}' 2>/dev/null)
+  case "$wtask" in
+    T[1-9]*) TASK=$wtask
+      printf 'fleet-await: #%s is accepted task %s — waiting on the task, not the issue\n' "$NUM" "$TASK" >&2
+      exec python3 "$BIN/fleet_task_control.py" await --task "$TASK" --timeout "$((TIMEOUT - SECONDS > 0 ? TIMEOUT - SECONDS : 1))" --interval "$INTERVAL" ;;
+  esac
+  finish NO-WORKER "#$NUM is an accepted launch with no task reference — no issue-number wait on accepted work"
+fi
 if [ -n "$wid" ]; then
   if [ -z "$worigin" ]; then
     # Hub-spawned: nobody will ever read its report. Make it ours.
@@ -511,6 +526,12 @@ fi
 
 if [ -z "$wid" ]; then
   [ "$SPAWN" = 1 ] || finish NO-WORKER "#$NUM has no live worker (--no-spawn)"
+  arepo=$REPO_ARG
+  case "$CKEY" in ?*:*) [ -n "$arepo" ] || arepo=$(fleet_repo_for_slug "$sess" "${CKEY%%:*}" 2>/dev/null) ;; esac
+  [ -n "$arepo" ] || arepo=$(fleet_repos "$sess" | awk 'NR == 1 { r = $0 } END { if (NR == 1) print r }')
+  if [ -n "$arepo" ] && [ "$(fleet_repo_conf_get "$sess" "$arepo" FLEET_TASK_AUTHORITY 2>/dev/null)" = hub ]; then
+    finish NO-WORKER "$arepo is hub-authoritative: dispatch #$NUM as a task (the \`task\` tool) and await its T<n> — no issue-number spawn"
+  fi
   sargs=("$NUM" "$sess" --origin "$KEY")
   [ -n "$TASK" ] && sargs+=(--task "$TASK")   # the record's worker carries @task (#3330)
   [ -n "$REPO_ARG" ] && sargs+=(--repo "$REPO_ARG")
