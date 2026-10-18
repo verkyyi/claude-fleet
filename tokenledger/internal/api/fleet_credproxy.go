@@ -158,6 +158,9 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	}
 	out.AccessToken, out.AccountID, out.ExpiresAt = acc.AccessToken, acc.AccountID, acc.ExpiresAt
 	out.CredentialID = identity
+	// a request is about to go out on the pool: pool_usage_silent's half
+	// (claude-fleet#3233)
+	s.notePoolResolve(c.Principal, now)
 	writeJSON(w, http.StatusOK, out)
 }
 

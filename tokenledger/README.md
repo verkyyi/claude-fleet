@@ -712,7 +712,12 @@ node has been silent for `FLEET_NODE_LOST_ALERT_SECS` (120; counted from the
 hub's own start, and never for a machine in maintenance), cleared by its next
 beat; `lease_conflict` when a node's first beat after reconnecting shows a
 session on an issue whose live lease another worker holds, naming both sides,
-cleared once they agree again. Nothing changes hands because of either.
+cleared once they agree again; `pool_usage_silent` when a person's passes
+kept resolving at the cluster credential proxy for
+`FLEET_POOL_USAGE_SILENT_ALERT_SECS` (1800; `0` off) with no `pool_usage` row
+landing — requests on the pool whose usage report broke (claude-fleet#3233),
+cleared by the next row or once the proxy stops asking. Nothing changes hands
+because of any of them.
 
 ### A new machine in one command — `fleet node join` (claude-fleet#1627)
 

@@ -154,6 +154,21 @@ func (s *Store) PoolUsageFirst() (first time.Time, ok bool, err error) {
 	return time.Unix(at.Int64, 0).UTC(), true, nil
 }
 
+// PoolUsageLastAt is principal's newest pool row at or after since — zero
+// when there is none (claude-fleet#3233, the pool_usage_silent sweep). Rides
+// the (principal, at_unix) index.
+func (s *Store) PoolUsageLastAt(principal string, since time.Time) (time.Time, error) {
+	var at sql.NullInt64
+	if err := s.write.QueryRow(`SELECT MAX(at_unix) FROM pool_usage WHERE principal = ? AND at_unix >= ?`,
+		principal, since.Unix()).Scan(&at); err != nil {
+		return time.Time{}, err
+	}
+	if !at.Valid {
+		return time.Time{}, nil
+	}
+	return time.Unix(at.Int64, 0).UTC(), nil
+}
+
 // LeaseForWorker is the (repo, issue) worker holds a live lease on at at —
 // the task a pool request is filed under. ok false = it holds none (a scratch,
 // the orchestrator, a session whose lease lapsed).
