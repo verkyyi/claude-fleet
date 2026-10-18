@@ -4071,6 +4071,25 @@ EOF
     *)      warn tickets "$r: FLEET_TICKETS=\"$rtk\" is neither hub nor github — read as github; fix it in $rb_src" ;;
   esac
 
+  # settings — what THIS repo changed on its own (issue #1944): every key its
+  # overlay assigns beyond the identity the rows above already show, its value
+  # read the way sourcing leaves it (_repo_key), and the fleet-wide value it
+  # shadows. A credential-shaped key or value is never printed (CLAUDE.md).
+  if [ -n "$rb_ov" ]; then
+    rb_set=''
+    for rb_k in $(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$rb_ov" | awk '!s[$0]++'); do
+      case " FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH FLEET_TICKETS " in *" $rb_k "*) continue ;; esac
+      rb_v=$(_repo_key "$rb_cf" "$rb_ov" "$rb_own" "$rb_k")
+      rb_fv=$(_conf_val "$rb_cf" "$rb_k"); [ -n "$rb_fv" ] || rb_fv=$(_gconf_val "$rb_k")
+      case "$rb_k" in *TOKEN*|*SECRET*|*PASSW*|*CRED*|*_KEY|*APIKEY*) rb_v='<hidden>'; rb_fv='' ;; esac
+      case "$rb_v" in ghp_*|gho_*|github_pat_*|sk-*|xox?-*) rb_v='<hidden>'; rb_fv='' ;; esac
+      rb_kv="$rb_k=$rb_v"; [ -n "$rb_fv" ] && [ "$rb_fv" != "$rb_v" ] && rb_kv="$rb_kv (fleet: $rb_fv)"
+      rb_set="${rb_set:+$rb_set · }$rb_kv"
+    done
+    if [ -n "$rb_set" ]; then info overrides "$r: $rb_set — in $rb_ov"
+    else info overrides "$r: no setting of its own — $rb_ov holds only its identity"; fi
+  fi
+
   rs_n=$((rs_n + 1))
   if [ -z "$rb_bad" ]; then rs_list="${rs_list:+$rs_list · }$r ✓"
   else rs_list="${rs_list:+$rs_list · }$r ✗ ($rb_bad)"; rs_bad=1; fi
