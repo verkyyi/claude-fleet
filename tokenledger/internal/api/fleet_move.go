@@ -319,7 +319,7 @@ func (s *Server) handleNodeMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	pl, err := s.pickNode(p, req.Repo, req.Node, now)
+	pl, err := s.pickNode(p, req.Repo, req.Node, "", now)
 	if err != nil {
 		s.leaseAudit(p.Actor, "move_"+req.Action, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})

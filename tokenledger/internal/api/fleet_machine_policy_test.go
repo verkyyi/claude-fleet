@@ -213,7 +213,7 @@ func TestMachinePolicyPlacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.srv.pickNode(fleetPrincipal{Actor: "gh:1005", Person: "gh:1005", scope: scope}, writeRepo, "mac-c", time.Now())
+	_, err = h.srv.pickNode(fleetPrincipal{Actor: "gh:1005", Person: "gh:1005", scope: scope}, writeRepo, "mac-c", "", time.Now())
 	if err == nil || !strings.Contains(err.Error(), MachineDisabledWord) {
 		t.Fatalf("named mac-c off the list: %v; want refused naming it", err)
 	}

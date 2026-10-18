@@ -98,7 +98,7 @@ func TestUserPodSplitPlacement(t *testing.T) {
 		t.Fatalf("%s: %q %v; want the first pod %s", writeRepo, pl.Machine, err, first)
 	}
 	// naming the second pod for another repo still asks it
-	if _, err := h.srv.pickNode(fleetPrincipal{Actor: "operator"}, writeRepo, second, time.Now()); err != nil {
+	if _, err := h.srv.pickNode(fleetPrincipal{Actor: "operator"}, writeRepo, second, "", time.Now()); err != nil {
 		t.Fatalf("naming the second pod: %v; want it asked", err)
 	}
 	if err := h.srv.Store.SetClusterPodSplit(second, "acme/api", time.Now()); err != nil {

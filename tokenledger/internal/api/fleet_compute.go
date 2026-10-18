@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
@@ -94,6 +95,35 @@ func decideCompute(claimOn, force bool, p *control.NodeProbe, auto bool, now tim
 		return v
 	}
 	v.Off, v.Why = true, excludedComputeOff
+	return v
+}
+
+// computeFor is computeOf for a start of one provider (claude-fleet#4707):
+// the ONE eligibility rule every road that opens a session asks — placement
+// (judge, for /v1/node/place, the client's place and worker_start node=auto),
+// a worker_start named at a fleet, a resume. provider "" (not said) is
+// computeOf exactly.
+//
+//   - An egress region the providers do not serve refuses every provider but
+//     Codex: Codex's road from such a machine is the credential proxy's relay
+//     / central route (an ACK pod is Codex-only, claude-fleet#4601), Claude's
+//     is none. The login's own off and a machine link stay off for every
+//     provider.
+//   - A cluster pod refuses the providers fleet.cred_pod_providers leaves out
+//     (podProvidersOf) — the lease would refuse them on arrival.
+func (s *Server) computeFor(endpointID, machine string, hb control.Heartbeat, settings map[string]string, provider string, now time.Time) computeVerdict {
+	v := s.computeOf(endpointID, hb, settings, now)
+	if provider == "" || v.Off && !v.Closed {
+		return v
+	}
+	if pod := podProvidersOf(settings, machine); pod != nil && !pod[provider] {
+		why := credPolicy{Machine: machine, PodProviders: pod}.podProviderWhy(provider)
+		return computeVerdict{Off: true, Why: "compute off for " + provider + " (" + why + ")", Probe: v.Probe}
+	}
+	if v.Closed && provider == credvault.Codex {
+		// Closed: the login asked to run and only its region closed it.
+		return computeVerdict{Probe: v.Probe}
+	}
 	return v
 }
 

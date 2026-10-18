@@ -161,7 +161,7 @@ func (s *Server) homePick(pid, last string, now time.Time) (HomeResponse, error)
 		if ep == nil {
 			c.Excluded = "no node has reported from it"
 		} else {
-			j := s.judge(store.FleetRow{Hostname: m.Hostname, OSUser: ep.OSUser, EndpointID: ep.EndpointID}, settings, accounts, now)
+			j := s.judge(store.FleetRow{Hostname: m.Hostname, OSUser: ep.OSUser, EndpointID: ep.EndpointID}, settings, accounts, "", now)
 			c.LoadPerCore, c.CPUBusy, c.Score = j.LoadPerCore, j.CPUBusy, j.Score
 			// Entering a machine over ssh needs it online — not a writable
 			// control channel, free memory or cap headroom, which gate new

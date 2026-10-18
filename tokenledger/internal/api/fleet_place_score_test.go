@@ -40,7 +40,7 @@ func judgeAll(t *testing.T, h *harness, accounts map[string]string) map[string]C
 	}
 	out := map[string]Candidate{}
 	for _, r := range rows {
-		out[r.Hostname] = h.srv.judge(r, settings, accounts, time.Now())
+		out[r.Hostname] = h.srv.judge(r, settings, accounts, "", time.Now())
 	}
 	return out
 }

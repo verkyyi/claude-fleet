@@ -546,7 +546,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		task = &rec
 	}
 	var err error
-	if pl, err = s.pickNode(p, req.Repo, node, now); err != nil {
+	if pl, err = s.pickNode(p, req.Repo, node, req.Agent, now); err != nil {
 		s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
 		out := refusedAnswer(err, &pl)
 		s.taskAnswered(task, &out)
@@ -578,7 +578,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		}
 		attempts = append(attempts, a)
 		declined[pl.FleetID] = a.Why
-		npl, err := s.pickNodeAfter(p, req.Repo, "auto", time.Now(), declined, "")
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", req.Agent, time.Now(), declined, "")
 		if err != nil {
 			if len(attempts) == 1 {
 				attempts = attempts[:0]

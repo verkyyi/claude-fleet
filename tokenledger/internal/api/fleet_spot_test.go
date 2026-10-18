@@ -279,7 +279,7 @@ func TestSpotPeakStartsNodeAndIdleReleasesIt(t *testing.T) {
 	// Placement avoids a node on its way out. (Asked by name: an `auto`
 	// refusal is demand, and would rightly have the next tick start a
 	// replacement — not this test's story.)
-	if _, err := h.srv.pickNode(fleetPrincipal{}, writeRepo, "spot-a1", time.Now()); err == nil || !strings.Contains(err.Error(), "spot-a1: SPOT node releasing") {
+	if _, err := h.srv.pickNode(fleetPrincipal{}, writeRepo, "spot-a1", "", time.Now()); err == nil || !strings.Contains(err.Error(), "spot-a1: SPOT node releasing") {
 		t.Fatalf("placement on a releasing node: %v", err)
 	}
 
@@ -369,7 +369,7 @@ func TestSpotReclaimReleasesLeasesAtOnce(t *testing.T) {
 	if resp.StatusCode != 200 || rec["state"] != store.SpotReclaiming || rec["grace_seconds"].(float64) != 300 {
 		t.Fatalf("reclaim: HTTP %d %v", resp.StatusCode, rec)
 	}
-	if pl, err := h.srv.pickNode(fleetPrincipal{}, writeRepo, "spot-b2", time.Now()); err == nil || !strings.Contains(err.Error(), "SPOT node reclaiming") {
+	if pl, err := h.srv.pickNode(fleetPrincipal{}, writeRepo, "spot-b2", "", time.Now()); err == nil || !strings.Contains(err.Error(), "SPOT node reclaiming") {
 		t.Fatalf("placement during reclaim: %v %v", pl, err)
 	}
 	// Demand while it drains starts a replacement: that is the point of

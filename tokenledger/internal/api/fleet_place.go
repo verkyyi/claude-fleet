@@ -291,7 +291,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		taskOwnsIssueLease = task.TicketRef != ""
 	}
-	pl, err := s.pickNode(p, req.Repo, req.Node, now)
+	pl, err := s.pickNode(p, req.Repo, req.Node, req.Agent, now)
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
 		writeJSON(w, placeStatus(err), map[string]any{"error": errorObject(err), "placement": pl})
@@ -354,7 +354,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		attempts = append(attempts, a)
 		declined[pl.FleetID] = a.Why
-		npl, err := s.pickNodeAfter(p, req.Repo, "auto", time.Now(), declined, fleetID)
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", req.Agent, time.Now(), declined, fleetID)
 		if err != nil {
 			if len(attempts) == 1 {
 				// The only machine that could take it said no: its answer,

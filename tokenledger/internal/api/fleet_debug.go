@@ -510,7 +510,7 @@ func (s *Server) debugHubMaterial(rep store.DebugReport, now time.Time) map[stri
 		out["logins"] = rows
 	}
 	if scope, err := s.scopeFor(owner); err == nil {
-		pl, err := s.pickNode(fleetPrincipal{Actor: owner, Person: owner, scope: scope}, "", "auto", now)
+		pl, err := s.pickNode(fleetPrincipal{Actor: owner, Person: owner, scope: scope}, "", "auto", "", now)
 		if err != nil {
 			out["placement"] = map[string]any{"ok": false, "why": err.Error()}
 		} else {
