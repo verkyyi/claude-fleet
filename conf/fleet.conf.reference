@@ -1401,6 +1401,23 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Daemon reload cooldown @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_RELOAD_COOLDOWN=1800
 
+# The KeepAlive hands (spinner, webhook) are outside the ladder above — the
+# spinner IS the hand that runs it — but a `launchctl bootout` still takes one
+# out of the domain for good (issue #1849). The diskguard tick runs
+# `fleet-daemon-watch.sh --resident`: a resident unit unloaded with its plist on
+# disk is bootstrapped back. 0 turns that pass off. GLOBAL.
+# @label=Resident daemon watch @group=cache @tier=internal @scope=global @edit=bool
+#FLEET_RESIDENT_WATCH=1
+
+# Seconds a resident unit must STAY unloaded before it is bootstrapped, so
+# install-apply's own bootout→bootstrap (sub-second) is never raced. GLOBAL.
+# @label=Resident unload grace @group=cache @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_RESIDENT_GRACE=2
+
+# Minimum seconds between two bootstraps of the same resident unit. GLOBAL.
+# @label=Resident bootstrap cooldown @group=cache @tier=internal @scope=global @edit=int @unit=sec
+#FLEET_DAEMON_RESIDENT_COOLDOWN=120
+
 # --- the launchd DOMAIN probe (issue #711) -------------------------------------
 # Every knob above answers "is THIS unit being scheduled?". These answer the
 # question one level up, and they exist because on 2026-09-15 the honest per-unit

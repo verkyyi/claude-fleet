@@ -113,6 +113,16 @@ fleet_daemon_units() {
 # registry is named here and vice versa.
 fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
 
+# fleet_daemon_resident_units — the KeepAlive hands that stay OUT of the registry
+# above (they are never pended, and the spinner is the one that kicks the rest),
+# but can still be UNLOADED: a `launchctl bootout` takes a KeepAlive unit out of
+# the domain, and launchd never brings back what it no longer knows. Nothing
+# watched for that (issue #1849, audit #8), so the diskguard tick — an interval
+# unit the spinner itself puts back — runs `fleet-daemon-watch.sh --resident`
+# over these: each guards the other. A managed login has neither plist (the
+# machine daemon runs them as KeepAlive children) and is skipped.
+fleet_daemon_resident_units() { printf '%s\n' spinner webhook; }
+
 # fleet_daemon_client_units — the units a computer that hosts NO sessions (承载
 # off, a pure client — issue #3534) still runs; every other template serves the
 # sessions on this machine and is neither installed nor kept there

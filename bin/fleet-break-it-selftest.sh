@@ -28,6 +28,7 @@
 #                                                   home_watch, the seat launchers gone (#3576)
 #   break-pane                                      bin/fleet-window-carry.sh (conf/tmux-attention.conf hook)
 #   install-sync-killed                             bin/fleet-install-sync.sh (the tick lock)
+#   spinner-booted-out                              bin/fleet-daemon-watch.sh --resident, fleet-diskguard.sh (resident_watch)
 #   epic-mark-overwritten / epic-fresh-switched     bin/fleet-epic-heartbeat.sh (one mark per batch),
 #                                                   fleet_epic_running_fresh, fleet-install-sync.sh (the EPIC gate)
 #   epic-idle-held / epic-hold-uncapped / epic-hold-rotating fleet_epic_holding (live/inflight), fleet-install-sync.sh
@@ -958,6 +959,55 @@ drill_install_sync_killed() {
     || { WHY="the next tick did not follow stable: $(tail -2 "$d/tick2.out")"; return 1; }
   grep -q "holder pid=$pid is dead" "$d/tick2.out" || { WHY="the takeover left no log line naming pid=$pid"; return 1; }
   SECS=$(since "$t0"); WHAT="下一拍接管死掉那一跳（pid=${pid}）的锁，跟上 stable"
+}
+
+# spinner-booted-out (issue #1849, audit #8): `launchctl bootout` of the spinner
+# — KeepAlive, so launchd never restarts what it no longer knows, and the spinner
+# is the hand that puts every other unit back. The diskguard tick's
+# `fleet-daemon-watch.sh --resident` bootstraps it from its plist; a unit with no
+# plist (a pure client) and a managed login (the machine daemon's children) are
+# left alone. A launchctl stand-in on PATH keeps the loaded set in files.
+drill_spinner_booted_out() {
+  CAP=10; local t0 d="$WORK/resident" la out
+  la="$d/home/Library/LaunchAgents"
+  mkdir -p "$la" "$d/shim" "$d/loaded" "$d/conf" "$d/tmp" "$d/node"
+  : > "$la/com.claude-fleet.spinner.plist"; : > "$la/com.claude-fleet.diskguard.plist"
+  cat > "$d/shim/launchctl" <<SH
+#!/bin/sh
+echo "\$*" >> "$d/launchctl.log"
+case "\$1" in
+  print)     [ -f "$d/loaded/\${2##*/}" ] && { printf '\tstate = running\n'; exit 0; }; exit 113 ;;
+  bootstrap) touch "$d/loaded/\$(basename "\$3" .plist)"; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$d/shim/launchctl"
+  resident() { PATH="$d/shim:$PATH" HOME="$d/home" TMPDIR="$d/tmp" FLEET_CONF_DIR="$d/conf" \
+               FLEET_LAUNCHD_AGENTS_DIR="$la" FLEET_NODE_STATE="$d/node" FLEET_INSTALL_LOGIN=drill \
+               FLEET_DAEMON_RESIDENT_GRACE=0 "$@" bash "$BIN/fleet-daemon-watch.sh" --resident 2>&1; }
+  grep -q '^    resident_watch ' "$BIN/fleet-diskguard.sh" \
+    || { WHY="the diskguard --watch tick does not run resident_watch"; return 1; }
+  touch "$d/loaded/com.claude-fleet.spinner"
+  resident env >/dev/null
+  grep -q '^bootstrap' "$d/launchctl.log" 2>/dev/null && { WHY="a LOADED spinner was bootstrapped again"; return 1; }
+  rm -f "$d/loaded/com.claude-fleet.spinner"                 # launchctl bootout gui/<uid>/com.claude-fleet.spinner
+  t0=$(now)
+  out=$(resident env)
+  [ -f "$d/loaded/com.claude-fleet.spinner" ] || { WHY="the booted-out spinner stayed out: [$out] $(tail -3 "$d/launchctl.log")"; return 1; }
+  SECS=$(since "$t0")
+  grep -q 'resident-bootstrap unit=spinner' "$d/conf/logs/daemon-kick.log" 2>/dev/null \
+    || { WHY="the bootstrap left no line in daemon-kick.log"; return 1; }
+  grep -q 'bootstrap.*webhook' "$d/launchctl.log" && { WHY="the webhook, with no plist on disk, was bootstrapped"; return 1; }
+  rm -f "$d/loaded/com.claude-fleet.spinner"; : > "$d/launchctl.log"
+  resident env >/dev/null
+  grep -q '^bootstrap' "$d/launchctl.log" && { WHY="a second bootstrap inside the cooldown"; return 1; }
+  printf '{"drill": {"managed": true}}\n' > "$d/node/accounts.json"
+  resident env FLEET_DAEMON_RESIDENT_COOLDOWN=0 >/dev/null
+  grep -q '^bootstrap' "$d/launchctl.log" && { WHY="a managed login's unit was bootstrapped (it is the machine daemon's child)"; return 1; }
+  rm -f "$d/node/accounts.json"
+  resident env FLEET_DAEMON_RESIDENT_COOLDOWN=0 >/dev/null
+  [ -f "$d/loaded/com.claude-fleet.spinner" ] || { WHY="past the cooldown the spinner was not bootstrapped again"; return 1; }
+  WHAT="spinner 被 bootout 后 diskguard 一拍从 plist 装回、记一行；冷却内不重复，没 plist 的不碰，托管登录不碰"
 }
 
 # dev-checkout-overwritten (issue #2779): a person's own checkout as the install
