@@ -29,6 +29,10 @@
 #      resume keeps it, the `spawn` tool's `agent` reaches dash-issue-session.sh
 #      --as; the shipped fleet-worker and fleet-epic's epic-driver have an EMPTY
 #      body (a body replaces Claude Code's own system prompt)
+#   H  a Codex start never runs the Claude CLI (issue #4726): `launch --agent codex`
+#      or a spawner's `--for codex` with no shipped file ⇒ exit 1 and no plugin
+#      command run; a cached plugin answer (even a stale one) still answers; a
+#      Claude start still asks; the spawners pass --for
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -223,6 +227,31 @@ done
   || bad "G: conf/agent-defaults/claude/agents/epic-driver.md is back in the core"
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
   && ok "G: plugin.json still says \"agents\": []" || bad "G: .claude-plugin/plugin.json must say \"agents\": []"
+
+# --- H a Codex start never asks the Claude CLI (issue #4726) --------------------------
+rm -rf "$WORK/conf/agents/plugins.json" "$WORK/asked"
+printf '[{"id": "acme@market", "enabled": true, "installPath": "%s"}]\n' "$WORK/plug" > "$WORK/plugins.json"
+H_CMD="touch '$WORK/asked'; cat '$WORK/plugins.json'"
+FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" --agent codex >/dev/null 2>&1; rc=$?
+[ "$rc" = 1 ] && [ ! -e "$WORK/asked" ] && ok "H: Codex launch, no file anywhere ⇒ exit 1, no claude plugin list" \
+  || bad "H: codex launch rc=$rc asked=$([ -e "$WORK/asked" ] && echo yes || echo no)"
+FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" --for codex >/dev/null 2>&1
+[ ! -e "$WORK/asked" ] && ok "H: a spawner's --for codex asks nothing either" || bad "H: --for codex ran the plugin command"
+FLEET_AGENT_PLUGINS_CMD=$H_CMD AD spawn-tools nobody-h --dir "$WORK" --for codex >/dev/null 2>&1
+[ ! -e "$WORK/asked" ] && ok "H: spawn-tools --for codex asks nothing" || bad "H: spawn-tools --for codex ran the plugin command"
+mkdir -p "$WORK/conf/agents"
+printf '{"stamp": ["stale"], "rows": [{"id": "acme@market", "enabled": true, "installPath": "%s"}]}\n' "$WORK/plug" > "$WORK/conf/agents/plugins.json"
+eq "H: Codex takes the cached plugin answer, stale or not" \
+  "$(FLEET_AGENT_PLUGINS_CMD=$H_CMD kv acme:reviewer --dir "$WORK" --agent codex | field file)" "$WORK/plug/agents/reviewer.md"
+[ ! -e "$WORK/asked" ] && ok "H: …without running the command" || bad "H: a cached answer still ran the plugin command"
+FLEET_AGENT_PLUGINS_CMD=$H_CMD AD launch nobody-h --dir "$WORK" >/dev/null 2>&1
+[ -e "$WORK/asked" ] && ok "H: a Claude start still asks (the stale stamp is refreshed)" || bad "H: a Claude start did not ask"
+rm -f "$WORK/asked" "$WORK/conf/agents/plugins.json"; printf '[]\n' > "$WORK/plugins.json"
+for f in dash-issue-session.sh dash-raw-session.sh; do
+  n=$(grep -c 'fleet-agent-def.py" launch' "$BIN/$f"); m=$(grep 'fleet-agent-def.py" launch' "$BIN/$f" | grep -c -- '--for "$AS_FOR"')
+  eq "H: every $f lookup passes --for" "$m" "$n"
+done
+grep -q -- '--for "$as_for"' "$BIN/fleet-task-record.sh" && ok "H: fleet-task-record.sh passes --for" || bad "H: fleet-task-record.sh does not pass --for"
 
 [ "$fails" = 0 ] && { echo "fleet-agent-as selftest: all green"; exit 0; }
 echo "fleet-agent-as selftest: $fails FAILED"; exit 1

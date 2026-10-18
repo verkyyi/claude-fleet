@@ -174,7 +174,8 @@ if [ "$cmd" = dispatch ]; then
   # tools/body. Explicit --agent wins. Every retry retains the full input.
   template=''
   if [ -n "$as_agent" ]; then
-    kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}") || exit 2
+    as_for=claude; [ "${agent:-${FLEET_AGENT:-claude}}" = codex ] && as_for=codex   # #4726
+    kv=$(python3 "$BIN/fleet-agent-def.py" launch "$as_agent" --dir "${FLEET_MAIN:-$PWD}" --for "$as_for") || exit 2
     template=$(printf '%s\n' "$kv" | awk -F'\t' '$1 == "agent" {print $2; exit}')
   fi
   dispatch=$(python3 "$BIN/fleet_dispatch.py" ${agent:+--agent "$agent"} --template "$template" --default "${FLEET_AGENT:-}" --request-id "$tok") || exit 2

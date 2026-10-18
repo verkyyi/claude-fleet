@@ -386,8 +386,10 @@ fi
 # repo; several and none chosen ⇒ a no-repo scratch. The chosen repo's overlay
 # replaces what fleet_load_conf resolved (possibly the CALLER window's repo).
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
+# A start already known to be Codex never asks the Claude CLI for plugins (#4726).
+AS_FOR=claude; [ "${AGENT:-${FLEET_AGENT:-claude}}" = codex ] && AS_FOR=codex
 if [ "$NOREPO" != 1 ] && [ -z "$REPO_ARG" ] && [ -z "$SEL" ] && [ -n "$AS_ARG" ] && [ "$AS_SOFT" != 1 ]; then
-  REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" 2>/dev/null \
+  REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
 fi
 if [ "$NOREPO" != 1 ]; then
@@ -428,7 +430,7 @@ if [ -n "$AS_ARG" ]; then
   if [ -n "$NODE_ARG" ] && ! fleet_node_is_self "$NODE_ARG" && [ "$AS_SOFT" != 1 ]; then
     refuse "raw: --as $AS_ARG opens on this machine (the agent file is here), not on $NODE_ARG"; exit 1
   fi
-  if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" 2>&1); then
+  if ! AS_KV=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "$_asdir" --for "$AS_FOR" 2>&1); then
     if [ "$AS_SOFT" = 1 ]; then
       printf 'dash-raw-session: --role %s: %s — a plain session\n' "$ROLE" "${AS_KV##*fleet-agent-def: }" >&2
       AS_KV=''; AS_ARG=''
