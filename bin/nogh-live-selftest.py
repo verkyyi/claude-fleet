@@ -705,11 +705,11 @@ class Templates(unittest.TestCase):
         self.assertNotIn('nodeSelector', pod['spec'])
         for c in pod['spec']['containers'] + pod['spec']['initContainers']:
             self.assertEqual(c['resources']['limits']['ephemeral-storage'], '1Gi')
-        p['placement'] = dict(node_selector={'kubernetes.io/hostname': 'cn-x.10.0.1.245'},
-                              tolerations=[dict(key='fleet.24haowan.com/user-pods', value='true')])
+        p['placement'] = dict(node_selector={'kubernetes.io/hostname': 'test-node-1'},
+                              tolerations=[dict(key='example.test/user-pods', value='true')])
         live.validate(p)
         pod = template.pod(p, ep)
-        self.assertEqual(pod['spec']['nodeSelector'], {'kubernetes.io/hostname': 'cn-x.10.0.1.245'})
+        self.assertEqual(pod['spec']['nodeSelector'], {'kubernetes.io/hostname': 'test-node-1'})
         # the API server's default tolerations beside ours are accepted, nothing else
         actual = json.loads(json.dumps(pod))
         actual['spec']['tolerations'] += [dict(key=k, operator='Exists', effect='NoExecute', tolerationSeconds=300)
