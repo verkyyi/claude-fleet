@@ -710,11 +710,11 @@ drill_burst_lands_on_one() {
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='入口连续派 4 个 → 两台各 2（go test 七条：分摊、90 秒过期、心跳抵消一次、room 先扣、拒掉即忘）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }
@@ -1167,11 +1167,11 @@ drill_spare_refill_session_gate() {
 # ---- lease-unseparated-user (#2295, EPIC #2293 C2): a user's login whose
 # credential separation did not happen (or an agent too old to say) must not be
 # leased a real token — the hub refuses 「拒发：未隔离」 and tells the node's
-# proxy to route every session central, so they still work. Admin / operator
-# logins lease as before.
+# proxy to route every session central, so they still work. Since #4607 every
+# login is held to it — an admin's too — and since #4675 no hub may opt out.
 drill_lease_unseparated_user() {
   CAP=120; local t0 out rc api agent fa fg
-  api='TestLeaseCredsepGate TestLeaseCredsepGateOnlyForUsers TestNodeSelfCarriesCredsepGate'
+  api='TestLeaseCredsepGate TestNodeSelfCarriesCredsepGate TestLeaseCredsepMandatory'
   agent='TestCredsepJudge TestCredsepProbeCaches'
   fa="$ROOT/tokenledger/internal/api/fleet_credsep_test.go"
   fg="$ROOT/tokenledger/internal/agent/node_credsep_test.go"
@@ -1189,13 +1189,13 @@ drill_lease_unseparated_user() {
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='普通用户未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central）；隔离后 200；管理员与非 GitHub 用户不受影响；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
+      0:*) WHAT='未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central），管理员也一样；隔离后 200；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }
@@ -1223,11 +1223,11 @@ drill_trust_name_borrowed() {
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；信任在机器上：托管加入码一次、一小时、写机器；入口开的登录随机器；旧的按登录信任迁到机器；期望状态只有操作者能写（go test 七条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }
@@ -1286,11 +1286,11 @@ drill_release_tampered() {
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='stable 一动入口就打包签名；机器从入口取到全部文件与二进制；GitHub 断了、入口重启也照样取；树 / 二进制 / 清单 / 签名 / 钥匙任一处被改都整个不换、不留半成品（go test 五条）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们'
+    WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们'
   fi
   SECS=$(since "$t0")
 }

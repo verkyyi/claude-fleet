@@ -400,23 +400,16 @@ fi
 # The operator's word on the hub (fleet.node_trust.<machine>), read as this
 # login's node sees it (GET /v1/node/self). Only where the node token row
 # passed: no hub, no token → no row. (The `trust` row is
-# Claude Code's folder trust, #563 — a different word.) Untrusted is a WARN while sessions here
-# still lease credentials directly (FLEET_CRED_PROXY≠1): the hub refuses them,
-# so nothing here borrows the subscription until the operator trusts the
-# machine; with the proxy on it is the central road, an INFO. A hub that
-# cannot be asked, or predates #1968, is an INFO.
+# Claude Code's folder trust, #563 — a different word.) Untrusted is an INFO:
+# sessions take the central road (no session reads a lease from its home any
+# more — issue #4675). A hub that cannot be asked, or predates #1968, is an INFO.
 if [ "$_hub_on" = 1 ] && [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/fleet-node-trust.sh" ]; then
   _tr=$(CCQUOTA_FLEET=1 FLEET_CONF_DIR="$conf_dir" FLEET_HUB_TIMEOUT="${FLEET_HUB_TIMEOUT:-5}" \
         bash "$(dirname "$0")/fleet-node-trust.sh" self 2>&1); _trc=$?
   _tr_m=$(printf '%s' "$_tr" | sed -n 's/^trust: \([^ ]*\) .*/\1/p' | head -n 1)
   case "$_trc:$_tr" in
     0:*' trusted') pass 可信 "${_tr_m:-本机} · 可信 — 入口给这台发订阅凭据" ;;
-    0:*' untrusted')
-      if [ "${FLEET_CRED_PROXY:-0}" = 1 ]; then
-        info 可信 "${_tr_m:-本机} · 不可信 — 入口不给这台发订阅凭据，会话走中心代理"
-      else
-        warn 可信 "${_tr_m:-本机} · 不可信 — 入口不给这台发订阅凭据，这里的会话用不上订阅（操作者：fleet-node-trust.sh set ${_tr_m:-<machine>} trusted）"
-      fi ;;
+    0:*' untrusted') info 可信 "${_tr_m:-本机} · 不可信 — 入口不给这台发订阅凭据，会话走中心代理" ;;
     *) info 可信 "问不到入口: $(printf '%s' "$_tr" | tail -n 1 | sed 's/^fleet-node-trust: //')" ;;
   esac
 fi
@@ -465,16 +458,20 @@ print("%s\n%s\n%s" % ("off" if d.get("compute_off") else ("auto" if d.get("compu
 fi
 
 # --- credsep: the credentials out of this login's reach (issue #1971) --------------
-# FLEET_CRED_SEPARATE=1 → the role account's store must be unreadable here, no
-# credential back at a login path, its proxy up; =0 and not separated → no row.
+# Every node login (issue #4607, no switch since #4675): the role account's store
+# unreadable here, no credential back at a login path, its proxy up.
 if [ -f "$(dirname "$0")/fleet-credsep.py" ]; then
+  # the old way out, said once (issue #4675): it does nothing now.  # compat-1v: 下一批删
+  if [ -n "${FLEET_CREDSEP_OPTIONAL:-}" ] || [ "${FLEET_CRED_SEPARATE:-}" = 0 ]; then
+    warn credsep-conf "fleet.conf 里还有 FLEET_CREDSEP_OPTIONAL / FLEET_CRED_SEPARATE=0 — 已删除（#4675），不再起作用：每个登录都隔离；从 fleet.conf 删掉这两行"
+  fi
   _cs=$(FLEET_CONF_DIR="$conf_dir" bash "$(dirname "$0")/fleet-credsep.sh" check 2>&1 | tail -n 1)
   _cs_m=${_cs#credsep: }; _cs_lv=${_cs_m%% —*}; _cs_m=${_cs_m#* — }
   case "$_cs_lv" in
     OK)   pass credsep "$_cs_m" ;;
     WARN) warn credsep "$_cs_m" ;;
     FAIL) fail credsep "$_cs_m" ;;   # a managed login not separated (issue #3700)
-    INFO) case "$_cs_m" in off*|"not a node"*) ;; *) info credsep "$_cs_m" ;; esac ;;   # off / no node: no row
+    INFO) case "$_cs_m" in "not a node"*) ;; *) info credsep "$_cs_m" ;; esac ;;   # no node: no row
     *)    info credsep "$_cs_m" ;;
   esac
   # every login this machine's daemon took over is separated (issue #3700): an

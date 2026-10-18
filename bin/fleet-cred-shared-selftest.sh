@@ -24,15 +24,15 @@
 #   E  alpha's per-login proxy hands over: a session minted BEFORE the switch
 #      keeps working on its old port, through the shared proxy, alpha's account
 #   F  `status --machine` / the doctor's `cred` row: shared · user · k/N · a/b
-#   G  machine uninstall: every fleet.conf, credential and key byte for byte
-#      where it was; the record, the store and the service gone
-#   H  a half install (issue #2273: the store and its meta.json, no credsep.json):
-#      `uninstall --dry-run` says HALF INSTALLED, not "nothing to undo", and
-#      `uninstall --login beta` puts it back byte for byte from meta.json
+#   G  no way back (issue #4675): `machine uninstall` / `uninstall` exit 2 and
+#      every credential stays in the store — none back in a home (between legs
+#      the sandbox is reset by hand: sbreset)
+#   H  a half install (issue #2273: the store and its meta.json, no credsep.json)
+#      is finished by running install again — forward, never back into the home
 #   P  the machine's ONE copy (issue #2311): what each tenant had moved into
 #      <db>/.shared/pool at the start, a lease two logins hold is ONE file, a
 #      token only beta leased is never served to alpha, a file no tenant names
-#      any more is gone — and G puts every tenant's copy back byte for byte
+#      any more is gone
 #      — and `accounts` / the account check (`.fleet-account.py claude-login`) of a
 #      separated login read each lease's expiry from the proxy, never a token
 #   Q  account-quota (issue #2412): the newest rate-limit reading per account, another
@@ -148,6 +148,11 @@ snap() { # every file of both logins: path + bytes
      printf '%s %s\n' "$f" "$(cksum < "$f")"; done)
 }
 BEFORE=$(snap); KEY0=$(cksum < "$CA/cred-proxy/key")
+cp -a "$SB/homes" "$SB/homes.0"   # sbreset's: the logins as a node left them
+sbreset() { # the sandbox back to before any install — by hand: nothing in the product goes back (#4675)
+  kill "$(cat "$SB/shared.pid" 2>/dev/null)" "$(cat "$SB/run/.shared/pid" 2>/dev/null)" 2>/dev/null; sleep 0.3
+  rm -rf "$SB/db" "$SB/run" "$SB/lib" "$SB/homes" && rm -f "$SB/daemons"/* && cp -a "$SB/homes.0" "$SB/homes"
+}
 call() { # <port> <token> → the far end's view of the credential
   curl -s -m 10 -H "Authorization: Bearer $2" -H 'content-type: application/json' -d '{}' \
     "http://127.0.0.1:$1/v1/messages"
@@ -490,37 +495,29 @@ out=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-credsep.sh" apply 2>&1)
 case "$out" in "credsep: ok — shared · shared: current"*) pass "F the sync pass leaves a tenant alone, keeps the code current" ;;
   *) fail "F apply: $out" ;; esac
 
-# ── G: the way back, byte for byte ────────────────────────────────────────────────
+# ── G: no way back (issue #4675) ─────────────────────────────────────────────────
 kill "$(cat "$SB/shared.pid")" 2>/dev/null; sleep 0.3
+STORE0=$(cd "$SB/db" && find . -type f | LC_ALL=C sort)
 out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^shared: OFF' && pass "G machine uninstall" || fail "G rc=$rc: $out"
-rm -f "$CA/cred-proxy/"*.json "$CA/cred-proxy/revoked" 2>/dev/null   # the copies it made, not the login's own files
-# P's leases came back as each login's own files (issue #2311) — then set aside for the byte-for-byte check
-grep -qs pool-v2 "$CA/accounts/pool1.hub/.credentials.json" && grep -qs beta-only "$CB/accounts/solo.hub/.credentials.json" \
-  && [ ! -e "$CA/accounts/solo.hub" ] && grep -qs cx-pool-v1 "$SB/homes/beta/.codex/auth.json" \
-  && pass "G each login gets back exactly the copies it leased (pool → its own files)" \
-  || fail "G pool out: $(cd "$SB/homes" && find . -name '*.json' -path '*accounts*' -o -name auth.json | tr '\n' ' ')"
-rm -rf "$CA/accounts/pool1.hub" "$CB/accounts/pool1.hub" "$CB/accounts/solo.hub" "$SB/homes/alpha/.codex" "$SB/homes/beta/.codex"
-[ "$(snap)" = "$BEFORE" ] && pass "G every fleet.conf and credential byte for byte" \
-  || fail "G differs: $(diff <(printf '%s\n' "$BEFORE") <(snap) | head -6)"
-[ "$(cksum < "$CA/cred-proxy/key" 2>/dev/null)" = "$KEY0" ] && pass "G alpha's key back: its own proxy verifies the old sessions" \
-  || fail "G key"
-[ ! -e "$SB/db/.shared.json" ] && [ ! -e "$SB/db/alpha" ] && [ ! -e "$SB/db/beta" ] && [ -z "$(ls "$SB/daemons")" ] \
-  && pass "G the record, the stores and the service gone" || fail "G leftovers: $(ls -a "$SB/db" "$SB/daemons" 2>&1 | tr '\n' ' ')"
+case "$rc:$out" in "2:"*"machine uninstall is gone (issue #4675)"*) pass "G machine uninstall: gone (exit 2)" ;; *) fail "G rc=$rc: $out" ;; esac
+out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --login beta --conf-dir "$CB" 2>&1); rc=$?
+[ "$rc" = 2 ] && pass "G uninstall --login beta: refused (exit 2)" || fail "G uninstall rc=$rc: $out"
+[ "$(cd "$SB/db" && find . -type f | LC_ALL=C sort)" = "$STORE0" ] && [ -e "$SB/db/.shared.json" ] \
+  && [ ! -e "$CA/accounts/pool1.hub" ] && [ ! -e "$CB/accounts/solo.hub" ] && [ ! -e "$SB/homes/beta/.codex/auth.json" ] \
+  && pass "G every lease still in the store, none back in a home" \
+  || fail "G something moved: $(cd "$SB/homes" && find . -name '*.json' -path '*accounts*' -o -name auth.json | tr '\n' ' ')"
+sbreset
+[ "$(snap)" = "$BEFORE" ] || fail "G the sandbox reset is not the logins as they were"
 
-# ── H: a half install is undone from meta.json ─────────────────────────────────────
+# ── H: a half install is finished, forward ─────────────────────────────────────────
 out=$(bash "$BIN/fleet-credsep.sh" machine install --logins beta 2>&1) || fail "H setup install: $out"
 rm -f "$CB/credsep.json"                       # the install stopped before its last step
-chmod 000 "$SB/db/beta/meta.json"              # as the login sees it: the store is not readable
-out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --dry-run --login beta --conf-dir "$CB" 2>&1)
-chmod 600 "$SB/db/beta/meta.json"
-case "$out" in *"HALF INSTALLED"*"uninstall --login beta"*) pass "H dry run names the half install and the one line" ;;
-  *) fail "H dry run: $out" ;; esac
-out=$(HOME="$SB/homes/beta" python3 -I "$BIN/fleet-credsep.py" uninstall --login beta --conf-dir "$CB" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db/beta" ] \
-  && pass "H uninstall from meta.json alone: beta byte for byte" \
-  || fail "H rc=$rc: $(diff <(printf '%s\n' "$BEFORE") <(snap) | head -4) $(printf '%s' "$out" | tail -2)"
-bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
+out=$(bash "$BIN/fleet-credsep.sh" machine install --logins beta 2>&1); rc=$?
+[ "$rc" = 0 ] && [ -e "$CB/credsep.json" ] && [ -f "$SB/db/beta/meta.json" ] \
+  && [ ! -e "$CB/accounts/main.hub/.credentials.json" ] \
+  && pass "H a half install is finished by install again: credsep.json back, nothing in the home" \
+  || fail "H rc=$rc: $(printf '%s' "$out" | tail -3) · $(ls -a "$CB" | tr '\n' ' ')"
+sbreset
 
 # ── N: a login just opened joins the machine's shared proxy (issue #3155) ─────────
 # fleet-login-new.sh's 7b runs `install --login <new> --fresh`: on a machine that
@@ -545,7 +542,7 @@ sys.exit(0 if m.get("mode")=="shared" and r.get("shared") and r["run"].endswith(
   && case "$out" in *"gamma joins it as a tenant"*) true ;; *) false ;; esac \
   && pass "N a fresh login on a shared machine: a tenant of the shared proxy (record names it), no own proxy" \
   || fail "N fresh gamma rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
-bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
+sbreset; rm -rf "$SB/new/gamma/.config/claude-fleet/credsep.json"
 out=$(FLEET_CREDSEP_JOIN_WAIT=0 HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" install --login delta --fresh \
   --conf-dir "$SB/new/delta/.config/claude-fleet" --install-dir "$SB/new/delta/.claude/fleet" 2>&1); rc=$?
 python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); s=json.load(open(sys.argv[2]))
@@ -554,9 +551,7 @@ sys.exit(0 if m.get("mode") == "shared" and s.get("logins") == ["delta"] else 1)
   && { [ -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] || [ -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ]; } \
   && pass "N no shared proxy: a fresh login brings the machine's one up as its first tenant — no own proxy (#4674)" \
   || fail "N fresh delta rc=$rc: $(printf '%s' "$out" | tail -4) · $(ls "$SB/daemons")"
-bash "$BIN/fleet-credsep.sh" machine uninstall >/dev/null 2>&1
-HOME="$SB/new/delta" python3 -I "$BIN/fleet-credsep.py" uninstall --login delta --conf-dir "$SB/new/delta/.config/claude-fleet" >/dev/null 2>&1
-HOME="$SB/new/gamma" python3 -I "$BIN/fleet-credsep.py" uninstall --login gamma --conf-dir "$SB/new/gamma/.config/claude-fleet" >/dev/null 2>&1
+sbreset
 
 # ── I: the way back fails too: say so, keep the store, print the steps ──────────────
 mkdir -p "$SB/shim"

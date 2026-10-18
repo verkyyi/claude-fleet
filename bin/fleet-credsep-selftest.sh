@@ -6,8 +6,8 @@
 # launchctl / systemctl run. The OS half — a real role account, and a session
 # that gets "Permission denied" — is the issue's on-machine evidence, not this.
 #
-#   A  FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0: apply does nothing, every file byte
-#      for byte; FLEET_CRED_SEPARATE=0 alone: check FAILs (not opt-in, issue #4607)
+#   A  no way out (issues #4607, #4675): FLEET_CRED_SEPARATE=0, with or without the
+#      retired FLEET_CREDSEP_OPTIONAL=1, check FAILs on a login not separated
 #   B  install: leased credentials, hub-managed Codex auth.json and node.env
 #      move into the store (same bytes); a personal Codex login stays; node.env
 #      becomes a symlink, node.pub.env holds no token; the agent's service now
@@ -24,12 +24,11 @@
 #      fleet-session-cred.sh's central pass (mint + revoke) rides it (issue #2392)
 #   E  the ctl socket answers ONE peer uid (another uid is refused)
 #   F  the launcher's agent mode: the token arrives on fd 3, never in the env
-#   G  machine uninstall: every file back where it was, byte for byte; the
-#      store, the record and the service changes gone
+#   G  `uninstall` and `machine uninstall` are gone (issue #4675): exit 2, every
+#      credential stays in the store, nothing comes back into the home
 #   H  install --dry-run with NO sudo (issue #2135): runs as the login, names
 #      every move, changes nothing
-#   I  uninstall --dry-run as the login while the store is unreadable to it:
-#      the way back is read from credsep.json's `back` (paths, no secret)
+#   I  credsep.json, the login-readable record, holds paths only (no secret)
 #   J  plan: every login under the homes dir, the ONE sudo line per login
 #      carries --login, a `sudo -u` line carries that login's HOME
 #   K  a login name may start with a digit (issue #2257): `machine install
@@ -129,17 +128,14 @@ snap() { # every file under the login's tree + the service dir: path, kind, byte
 }
 BEFORE=$(snap)
 
-# ── A: off ⇒ nothing — only on a declared self-hosted box (issue #4607) ─────────
-out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1)
-if [ "$out" = "credsep: skip — off (FLEET_CREDSEP_OPTIONAL=1, FLEET_CRED_SEPARATE=0: a declared self-hosted box)" ] \
-   && [ "$(snap)" = "$BEFORE" ] && [ ! -e "$SB/db" ]; then
-  pass "A off (self-hosted): apply skips, every file byte for byte, no store"
-else fail "A off: '$out'"; fi
-out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1)
-case "$out" in "credsep: INFO — off"*) pass "A off (self-hosted): check is INFO off (the doctor prints no row)" ;; *) fail "A check: $out" ;; esac
-# FLEET_CRED_SEPARATE=0 alone is not a way out: a node login not separated is red
-out=$(FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" check 2>&1); rc=$?
-case "$rc:$out" in "1:credsep: FAIL — this login is not separated"*) pass "A FLEET_CRED_SEPARATE=0 alone: check FAILs (not opt-in, #4607)" ;; *) fail "A mandatory check rc=$rc: $out" ;; esac
+# ── A: no way out (issues #4607, #4675) ─────────────────────────────────────────
+# FLEET_CRED_SEPARATE=0 is not a way out, and neither is the retired
+# FLEET_CREDSEP_OPTIONAL=1 beside it: a node login not separated is red
+for env_ in "FLEET_CRED_SEPARATE=0" "FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0"; do
+  # shellcheck disable=SC2086 # the words are the environment
+  out=$(env $env_ bash "$BIN/fleet-credsep.sh" check 2>&1); rc=$?
+  case "$rc:$out" in "1:credsep: FAIL — this login is not separated"*) pass "A $env_: check FAILs (no way out, #4675)" ;; *) fail "A $env_ check rc=$rc: $out" ;; esac
+done
 [ "$(snap)" = "$BEFORE" ] || fail "A a check changed something"
 
 # ── H: the dry run needs no sudo and changes nothing (issue #2135) ──────────────
@@ -151,7 +147,7 @@ if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q "would move $C/node.env" \
 else fail "H dry run rc=$rc: $out"; fi
 printf '%s' "$out" | grep -q 'sk-ant-\|ccq_' && fail "H the dry run printed a credential" || pass "H the dry run prints paths, no credential"
 out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?
-case "$rc:$out" in "0:credsep: not separated"*) pass "H uninstall --dry-run when not separated: nothing to undo" ;; *) fail "H uninstall dry rc=$rc: $out" ;; esac
+case "$rc:$out" in "2:"*"uninstall is gone (issue #4675)"*) pass "H uninstall --dry-run: gone (exit 2, #4675)" ;; *) fail "H uninstall dry rc=$rc: $out" ;; esac
 
 # ── N: --fresh is for a login nothing runs as yet (issue #2294) ─────────────────
 out=$(FLEET_CREDSEP_PREFLIGHT=1 bash "$BIN/fleet-credsep.sh" install --fresh 2>&1); rc=$?
@@ -435,17 +431,7 @@ else fail "F2 launcher: stray=$STRAY $(gone "$STRAY" && echo gone) other=$(gone 
 kill "$STRAY" "$OTHER" "$MACH" 2>/dev/null; wait "$STRAY" "$OTHER" "$MACH" 2>/dev/null
 rm -f "$HOME/agent.out"
 
-# ── I: the way back, read by the login that cannot read the store ─────────────
-chmod 000 "$R"
-out=$(FLEET_CREDSEP_SUDO=false bash "$BIN/fleet-credsep.sh" uninstall --dry-run 2>&1); rc=$?
-chmod 700 "$R"
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -qF "$R/accounts/main.hub/.credentials.json → $C/accounts/main.hub/.credentials.json" \
-   && printf '%s' "$out" | grep -qF "$R/node.env → $C/node.env" \
-   && printf '%s' "$out" | grep -qF "$R/codex/work/auth.json → $HOME/.codex-accounts/work/auth.json" \
-   && printf '%s' "$out" | grep -q "agent: com.ccquota.agent.$ME\|agent: ccquota-agent-$ME.service"; then
-  pass "I uninstall --dry-run, store unreadable: every way back from credsep.json"
-else fail "I rc=$rc: $out"; fi
-[ -f "$R/node.env" ] && [ -L "$C/node.env" ] && pass "I the dry run moved nothing back" || fail "I the dry run moved something"
+# ── I: the login-readable record ─────────────────────────────────────────────
 grep -q 'sk-ant-\|ccq_\|at-WORK' "$C/credsep.json" && fail "I credsep.json holds a credential" || pass "I credsep.json: paths only"
 
 # ── J: plan ──────────────────────────────────────────────────────────────────────
@@ -505,26 +491,19 @@ else fail "L adopt rc=$rc: $out · $(cat "$SB/lib/$ME.conf")"; fi
 m=$(ls -l "$SB/lib/$ME.conf" | cut -c1-10)
 [ "$m" = -rw------- ] && pass "L root's settings 0600 (a relay pass may be in it)" || fail "L root conf mode $m"
 
-# ── G: uninstall ───────────────────────────────────────────────────────────────
+# ── G: no way back (issue #4675) ─────────────────────────────────────────────
 kill "$(cat "$SR/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''
-# the renewal C stored goes back too; put the original bytes back in the store
-# so the before/after comparison is exact
-for f in "$R/accounts/main.hub/.credentials.json" $(grep -rl RENEWED "$SB/db" 2>/dev/null); do
-  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-MAIN","refreshToken":null,"expiresAt":4102444800000,"scopes":["user:inference"]}}' > "$f"
-done
-sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:1#" "$R/node.env" && rm -f "$R/node.env.bak"
-rm -f "$C/fleet.conf"
-# a tenant comes off through the machine's switch (the machine's last one takes
-# the shared proxy's service with it)
+STORE_BEFORE=$(cd "$SB" && find db -type f 2>/dev/null | LC_ALL=C sort)
+out=$(bash "$BIN/fleet-credsep.sh" uninstall 2>&1); rc=$?
+case "$rc:$out" in "2:"*"uninstall is gone (issue #4675)"*) pass "G uninstall: gone (exit 2)" ;; *) fail "G uninstall rc=$rc: $out" ;; esac
 out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
-case "$rc" in 0) pass "G machine uninstall: $(printf '%s\n' "$out" | tail -n 1)" ;; *) fail "G rc=$rc: $out" ;; esac
-# the proxy's own state (its key, passes, trust) comes back to the home with the
-# login: what a later join carries over again — not a file the login had before
-AFTER=$(snap | grep -v '^home/.config/claude-fleet/cred-proxy/')
-if [ "$AFTER" = "$BEFORE" ]; then pass "G every file back where it was, byte for byte (and the service definition)"
-else fail "G differs:"; diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER"); fi
-[ ! -e "$R" ] && [ ! -e "$C/credsep.json" ] && [ ! -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] \
-  && [ ! -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ] \
-  && pass "G the store, the record and the shared proxy's service are gone" || fail "G leftovers: $(ls "$SB/db" "$SB/daemons" 2>&1)"
+case "$rc:$out" in "2:"*"machine uninstall is gone (issue #4675)"*) pass "G machine uninstall: gone (exit 2)" ;; *) fail "G machine uninstall rc=$rc: $out" ;; esac
+out=$(FLEET_CREDSEP_TEST=1 python3 -I "$BIN/fleet-credsep.py" uninstall --login "$ME" --conf-dir "$C" 2>&1); rc=$?
+[ "$rc" = 2 ] && pass "G fleet-credsep.py uninstall: refused (exit 2)" || fail "G py uninstall rc=$rc: $out"
+STORE_AFTER=$(cd "$SB" && find db -type f 2>/dev/null | LC_ALL=C sort)
+if [ "$STORE_AFTER" = "$STORE_BEFORE" ] && [ -f "$R/node.env" ] && [ -L "$C/node.env" ] && [ -e "$C/credsep.json" ] \
+   && [ ! -e "$C/accounts/main.hub/.credentials.json" ] && [ ! -e "$HOME/.codex-accounts/work/auth.json" ]; then
+  pass "G every credential still in the store, none back in the home"
+else fail "G something moved: $(diff <(printf '%s\n' "$STORE_BEFORE") <(printf '%s\n' "$STORE_AFTER"))"; fi
 
 [ "$FAIL" = 0 ] && echo "fleet-credsep selftest PASS" || { echo "fleet-credsep selftest FAIL"; exit 1; }

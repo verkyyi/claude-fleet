@@ -301,17 +301,16 @@ contains "A pool into the store" "$OUT" "the tokens go into frank's credential s
 contains "A conf switches" "$OUT" "sudo install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/fleet.conf"
 contains "A credsep install" "$OUT" "sudo bash $BIN/fleet-credsep.sh install --login frank --fresh --install-dir $FLEET_LOGIN_HOMES/frank/.claude/fleet --pool-src $POOL"
 if [ -z "$DAEMONS" ]; then case "$OUT" in *"--fresh"*"[8] install frank"*) ;; *) fail "A 7b is not before the daemons (8)" ;; esac; fi
-# --no-credsep is refused (issue #4607: separation is not opt-in) — nothing runs
-run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
-eq "A --no-credsep refused" 2 "$RC"
-contains "A --no-credsep says why" "$OUT" "every login is credential-separated (issue #4607)"
-eq "A --no-credsep refused: nothing ran" "" "$CALLS"
-# …the old layout only on a declared self-hosted box, every token copied into the login
-FLEET_CREDSEP_OPTIONAL=1 run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
-contains "A pool cp" "$OUT" "sudo cp -p $POOL/alpha $POOL/alpha.conf $POOL/beta $POOL/beta.conf $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/accounts/"
-contains "A pool chown" "$OUT" "sudo chown -R frank:staff $FLEET_LOGIN_HOMES/frank/.config/claude-fleet/accounts"
-not_contains "A --no-credsep no 7b" "$OUT" "fleet-credsep.sh install"
-contains "A --no-credsep says off" "$OUT" "credsep: off"
+# --no-credsep is gone (issues #4607, #4675): an unknown option, nothing runs —
+# with the retired FLEET_CREDSEP_OPTIONAL=1 too
+for opt_ in 0 1; do
+  if [ "$opt_" = 1 ]; then export FLEET_CREDSEP_OPTIONAL=1; fi
+  run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep
+  unset FLEET_CREDSEP_OPTIONAL
+  eq "A --no-credsep refused (optional=$opt_)" 2 "$RC"
+  contains "A --no-credsep unknown (optional=$opt_)" "$OUT" "unknown option: --no-credsep"
+  eq "A --no-credsep refused: nothing ran (optional=$opt_)" "" "$CALLS"
+done
 run frank --full-name 'Frank V' --pubkey "$KEY" --share-pool --pool-src "$POOL"
 not_contains "A no dotfile" "$OUT" ".DS_Store"
 not_contains "A no backup" "$OUT" "alpha~"
@@ -512,13 +511,11 @@ ck=$(FLEET_CONF_DIR="$CD" bash "$H/.claude/fleet/bin/fleet-credsep.sh" check 2>&
 chmod 700 "$R"
 contains "M check WARNs on a pool token back at the login's path" "$ck" "credentials are back at login paths: $CD/accounts/beta"
 printf 'store:beta\n' > "$CD/accounts/beta"
-# --no-credsep (a declared self-hosted box only, #4607): the old layout, and the hub reads `credsep: off`
+# --no-credsep is gone (issue #4675): no run copies a pool token into a login
 : > "$LOG"; OUT=$(FLEET_CREDSEP_OPTIONAL=1 "$BASH_BIN" "$S" uma --full-name N --pubkey "$KEY" --share-pool --pool-src "$POOL" --no-credsep --apply --no-daemons 2>&1); RC=$?
 unlock_homes
-eq "M --no-credsep exit" 0 "$RC"
-eq "M --no-credsep: the token in the login (the old way)" "tok-beta" "$(cat "$FLEET_LOGIN_HOMES/uma/.config/claude-fleet/accounts/beta" 2>/dev/null)"
-[ -e "$FLEET_CREDSEP_ROOT_BASE/uma" ] && fail "M --no-credsep made a store"
-contains "M --no-credsep last line" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep: off"
+eq "M --no-credsep refused" 2 "$RC"
+[ -e "$FLEET_LOGIN_HOMES/uma/.config/claude-fleet/accounts/beta" ] && fail "M --no-credsep: a pool token in the login"
 # 7b refused (a login that is not fresh, a store that cannot be made) → the run fails, never hands it out
 : > "$LOG"; OUT=$(FLEET_CREDSEP_ROOT_BASE=/dev/null/nope "$BASH_BIN" "$S" vee --full-name V --pubkey "$KEY" --apply --no-daemons 2>&1); RC=$?
 unlock_homes

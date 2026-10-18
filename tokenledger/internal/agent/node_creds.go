@@ -304,12 +304,11 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 	claude := 0
 	written := map[string]int{}
 	failed := 0
-	// claude-fleet#4643: a separated login (credsep.json) whose agent has no
-	// credential store — an agent started some other way than the credsep
-	// launcher — would lease the pool's tokens back into the home, where every
-	// session of the login reads them. Nothing goes there; the store or nowhere.
+	noStore := 0
+	// claude-fleet#4675: a subscription credential goes to the credential
+	// proxy's store or nowhere — never into a home (#4643: an agent started
+	// with no store wrote one there, and a login read it for a week).
 	sink := a.credSink()
-	homeBarred := sink == nil && a.loginSeparated()
 	for _, c := range lease.Credentials {
 		if c.Error != "" || c.Access == nil {
 			failed++
@@ -322,20 +321,16 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		var werr error
 		switch c.Provider {
 		case "claude":
-			if homeBarred {
-				werr = errSeparatedNoStore
-			} else {
-				werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType, sink)
-			}
+			werr = writeClaudeCred(a.credAccountsDir(), c.Account, c.Access.AccessToken, c.ExpiresAt, c.Access.Scopes, c.Access.SubscriptionType, sink)
 		case "codex":
-			if homeBarred {
-				werr = errSeparatedNoStore
-			} else {
-				werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now, sink)
-			}
+			werr = writeCodexAuth(a.codexHomeFor(c.Account), c.Access.AccessToken, c.Access.IDToken, c.Access.AccountID, now, sink)
 		case "github":
 			werr = writeGHHosts(a.ghConfigDir(), c.Access.User, c.Access.Token)
 		default:
+			continue
+		}
+		if errors.Is(werr, errNoStore) {
+			noStore++
 			continue
 		}
 		if werr != nil {
@@ -377,7 +372,11 @@ func (a *Agent) credCycle(ctx context.Context) (time.Duration, error) {
 		wait = credMinWait
 	}
 	a.credVerdict("ok", "", "", claude)
-	a.logCredSummary(credSummary(written, failed, len(lease.Withdrawn)))
+	line := credSummary(written, failed, len(lease.Withdrawn))
+	if noStore > 0 {
+		line += fmt.Sprintf(" no_store=%d — %v", noStore, errNoStore)
+	}
+	a.logCredSummary(line)
 	return wait, nil
 }
 
@@ -663,32 +662,10 @@ func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
 	return &l, nil
 }
 
-// errSeparatedNoStore is a lease refused at the home (claude-fleet#4643).
-var errSeparatedNoStore = errors.New("this login is separated (credsep.json) but this agent has no credential store " +
-	"(CCQUOTA_FLEET_CRED_STORE) — not writing a pool credential into the home; restart it through the credsep launcher")
-
-// loginSeparated: the login this agent leases for carries credsep.json — the
-// login-readable record fleet-credsep.py install writes (the same mark
-// nodesig.LoginKeyPath reads) — in its conf dir: the machine tenant's
-// RunAs conf dir, the accounts dir's parent, or the default under its home.
-func (a *Agent) loginSeparated() bool {
-	dirs := []string{filepath.Dir(a.credAccountsDir())}
-	if a.cfg.RunAs != nil {
-		dirs = append(dirs, a.cfg.RunAs.confDir())
-	}
-	if a.cfg.Home != "" {
-		dirs = append(dirs, filepath.Join(a.cfg.Home, ".config", "claude-fleet"))
-	}
-	for _, d := range dirs {
-		if d == "" {
-			continue
-		}
-		if _, err := os.Lstat(filepath.Join(d, "credsep.json")); err == nil {
-			return true
-		}
-	}
-	return false
-}
+// errNoStore is a subscription credential this agent has nowhere to put
+// (claude-fleet#4675): only the credential proxy's store holds one.
+var errNoStore = errors.New("no_store: this agent has no credential store (CCQUOTA_FLEET_CRED_STORE) — " +
+	"a subscription credential goes to the credential proxy or nowhere, never into a home")
 
 func (a *Agent) credAccountsDir() string {
 	if a.cfg.AccountsDir != "" {
@@ -745,11 +722,11 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// writeClaudeCred writes one Claude account's short-lived token and its label
-// marker. The JSON is the shape Claude Code itself stores (claudeAiOauth),
-// with no refresh token. A non-nil sink takes the credential file's bytes
-// instead (claude-fleet#1971: separated, the file lives where only the
-// credential proxy reads); the marker is not a credential and stays here.
+// writeClaudeCred hands one Claude account's short-lived token to the
+// credential proxy's store and writes its label marker. The JSON is the shape
+// Claude Code itself stores (claudeAiOauth), with no refresh token. The sink is
+// the only place it goes (claude-fleet#4675): nil is errNoStore, and nothing
+// is written; the marker is not a credential and stays here.
 func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes []string, subType string, sink credSink) error {
 	if !safeLabel.MatchString(label) {
 		return fmt.Errorf("unsafe account label %q", label)
@@ -757,31 +734,11 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 	if accessToken == "" || expires == nil {
 		return errors.New("lease carried no access token or expiry")
 	}
-	if len(scopes) == 0 {
-		scopes = []string{"user:inference"}
+	if sink == nil {
+		return errNoStore
 	}
-	oauth := map[string]any{
-		"accessToken":  accessToken,
-		"refreshToken": nil,
-		"expiresAt":    expires.UnixMilli(),
-		"scopes":       scopes,
-	}
-	if subType != "" {
-		oauth["subscriptionType"] = subType
-	}
-	b, _ := json.Marshal(map[string]any{"claudeAiOauth": oauth})
-	if sink != nil {
-		if err := sink("claude", label, b); err != nil {
-			return err
-		}
-	} else {
-		credDir := filepath.Join(dir, label+".hub")
-		if err := mkdirOwned(credDir, 0o700); err != nil {
-			return err
-		}
-		if err := writeAtomic(filepath.Join(credDir, ".credentials.json"), b, 0o600); err != nil {
-			return err
-		}
+	if err := sink("claude", label, claudeCredJSON(accessToken, *expires, scopes, subType)); err != nil {
+		return err
 	}
 	marker := []byte(HubMarkerPrefix + label + "\n")
 	markerPath := filepath.Join(dir, label)
@@ -796,10 +753,28 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 	return writeAtomic(markerPath, marker, 0o600)
 }
 
-// writeCodexAuth writes one Codex home's auth.json, and makes sure that home
-// stores credentials in the file (not a keyring the hub cannot write). A
-// non-nil sink takes auth.json's bytes instead (claude-fleet#1971), under the
-// home's label — "default" for ~/.codex.
+// claudeCredJSON is a leased Claude credential file's bytes.
+func claudeCredJSON(accessToken string, expires time.Time, scopes []string, subType string) []byte {
+	if len(scopes) == 0 {
+		scopes = []string{"user:inference"}
+	}
+	oauth := map[string]any{
+		"accessToken":  accessToken,
+		"refreshToken": nil,
+		"expiresAt":    expires.UnixMilli(),
+		"scopes":       scopes,
+	}
+	if subType != "" {
+		oauth["subscriptionType"] = subType
+	}
+	b, _ := json.Marshal(map[string]any{"claudeAiOauth": oauth})
+	return b
+}
+
+// writeCodexAuth hands one Codex home's auth.json to the credential proxy's
+// store under the home's label — "default" for ~/.codex — and makes sure that
+// home stores credentials in a file (not a keyring). The sink is the only
+// place auth.json goes (claude-fleet#4675): nil is errNoStore, nothing written.
 func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time, sink credSink) error {
 	if !safeLabel.MatchString(filepath.Base(home)) && filepath.Base(home) != ".codex" {
 		return fmt.Errorf("unsafe codex home %q", home)
@@ -807,10 +782,25 @@ func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time,
 	if accessToken == "" || accountID == "" {
 		return errors.New("lease carried no access token or account id")
 	}
+	if sink == nil {
+		return errNoStore
+	}
 	if err := mkdirOwned(home, 0o700); err != nil {
 		return err
 	}
-	auth := map[string]any{
+	label := filepath.Base(home)
+	if label == ".codex" {
+		label = "default"
+	}
+	if err := sink("codex", label, codexAuthJSON(accessToken, idToken, accountID, now)); err != nil {
+		return err
+	}
+	return ensureCodexFileStore(filepath.Join(home, "config.toml"))
+}
+
+// codexAuthJSON is a leased Codex auth.json's bytes.
+func codexAuthJSON(accessToken, idToken, accountID string, now time.Time) []byte {
+	b, _ := json.MarshalIndent(map[string]any{
 		"auth_mode":      "chatgpt",
 		"OPENAI_API_KEY": nil,
 		"tokens": map[string]any{
@@ -820,20 +810,8 @@ func writeCodexAuth(home, accessToken, idToken, accountID string, now time.Time,
 			"account_id":    accountID,
 		},
 		"last_refresh": now.UTC().Format(time.RFC3339),
-	}
-	b, _ := json.MarshalIndent(auth, "", "  ")
-	if sink != nil {
-		label := filepath.Base(home)
-		if label == ".codex" {
-			label = "default"
-		}
-		if err := sink("codex", label, b); err != nil {
-			return err
-		}
-	} else if err := writeAtomic(filepath.Join(home, "auth.json"), b, 0o600); err != nil {
-		return err
-	}
-	return ensureCodexFileStore(filepath.Join(home, "config.toml"))
+	}, "", "  ")
+	return b
 }
 
 var codexStoreKey = regexp.MustCompile(`(?m)^\s*cli_auth_credentials_store\s*=`)

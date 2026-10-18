@@ -679,9 +679,10 @@ def login_open(a):
     return rc
 
 
-# The tenant's fleet.conf on a person's own pod (#3757): its own proxy, not
-# separated — the pod holds no subscription credential to separate it from —
-# routing every session to the cluster credential proxy. Written as the login.
+# The tenant's fleet.conf on a person's own pod (#3757): the pod holds no
+# subscription credential — every session routes to the cluster credential
+# proxy. An old FLEET_CRED_SEPARATE line is dropped (a mark with no switch,
+# issue #4675). Written as the login.
 # argv[2] (#4175): the hub's in-cluster Service (render.py --hub-internal) its
 # proxy and its sessions' passes dial in the public address' place; '' = no line.
 POD_CONF = (
@@ -691,7 +692,7 @@ POD_CONF = (
     '("FLEET_CRED_PROXY","FLEET_CRED_SEPARATE","FLEET_CRED_CENTRAL_URL","FLEET_HUB_INTERNAL_URL")]; '
     'b="".join(keep) or "# ---- [common] ----\\n"; b=b if b.endswith("\\n") else b+"\\n"; '
     'hi=sys.argv[2] if len(sys.argv)>2 else ""; '
-    'f.write_text(b+"FLEET_CRED_PROXY=1\\nFLEET_CRED_SEPARATE=0\\nFLEET_CRED_CENTRAL_URL="+sys.argv[1]+"\\n"'
+    'f.write_text(b+"FLEET_CRED_PROXY=1\\nFLEET_CRED_CENTRAL_URL="+sys.argv[1]+"\\n"'
     '+("FLEET_HUB_INTERNAL_URL="+hi+"\\n" if hi else ""))')
 
 

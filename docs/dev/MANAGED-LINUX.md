@@ -632,7 +632,7 @@ pod.
 - `login open` (the hub's create, under the node program — which runs as the
   login, so its commands need no setuid) writes no passwd, no fleetcred store and
   no shared proxy: the node token in the login's own `~/.config/claude-fleet/node.env`
-  (`CCQUOTA_FLEET_CREDS=0`), its `fleet.conf` saying `FLEET_CRED_SEPARATE=0` and
+  (`CCQUOTA_FLEET_CREDS=0`), its `fleet.conf` saying `FLEET_CRED_PROXY=1` and
   `FLEET_CRED_CENTRAL_URL=<the cluster proxy>`, then `account adopt` of itself.
   It ends **`credsep: central`** (`control.CredsepCentral`): the pod holds no
   subscription credential, so there is nothing to separate — a pod's readiness is

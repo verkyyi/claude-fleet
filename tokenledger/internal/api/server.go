@@ -336,11 +336,6 @@ type Server struct {
 	// Empty: the hub serves none and the join script falls back to a local
 	// binary or `go install`.
 	FleetDistDir string
-	// CredsepOptional is a self-hosted hub's declaration that credential
-	// separation is optional (CCQUOTA_FLEET_CREDSEP_OPTIONAL=1,
-	// claude-fleet#4607): only a role=user person's login is then refused an
-	// unseparated lease (#2295). Off (the default): every login is.
-	CredsepOptional bool
 	// FleetJoinScriptURL is where the join command fetches the script
 	// (CCQUOTA_FLEET_JOIN_SCRIPT_URL); empty means DefaultJoinScriptURL.
 	FleetJoinScriptURL string

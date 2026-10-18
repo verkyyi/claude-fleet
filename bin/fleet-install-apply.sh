@@ -91,10 +91,11 @@
 #             optional plugins Claude has installed, carried into every Codex
 #             home (skills linked as fleet-plugin-*, MCP servers as one marked
 #             config.toml block). None installed = nothing written.
-#   credsep   FLEET_CRED_SEPARATE (issue #1971): converge this login on it —
-#             bin/fleet-credsep.sh apply (install / uninstall / refresh the root-
-#             owned copy; needs password-less sudo, else one line says what to
-#             run). Off and never separated: no line at all.
+#   credsep   a login marked separated (credsep.json, or FLEET_CRED_SEPARATE=1 as
+#             fleet-login-new.sh writes it — a mark, no switch: issue #4675) —
+#             bin/fleet-credsep.sh apply (install / refresh the root-owned copy;
+#             needs password-less sudo, else one line says what to run). Neither:
+#             no line at all.
 #   ui        dash launcher / tmux conf changed -> fleet-ui-refresh.sh --all
 #   repark    re-park stale sleeping-worker pages on every live fleet (#1064)
 #   loopmark  give every Claude window on every live fleet the `@loop` mark its
@@ -1399,13 +1400,13 @@ if [ -f "$ROOT/bin/fleet-agent-team.py" ] && [ "$DRY" = 0 ] && [ "$BUNDLE" != 1 
 fi
 
 # --- credsep (issue #1971, EPIC #1967 C4) ------------------------------------------
-# Converge on FLEET_CRED_SEPARATE: 1 and not separated → install (root once, via
-# password-less sudo; none → one line saying what to run); separated → refresh the
-# root-owned code copy the role account runs; uninstall only on a box that declared
-# itself self-hosted (FLEET_CREDSEP_OPTIONAL=1 + 0, issue #4607). Never separated
-# and no line asking for it: nothing runs here — on a managed machine the root
-# daemon's credsep-enforce separates every fleet login, elsewhere the doctor's
-# credsep row is red and the hub leases it nothing.
+# Every node login separated (issue #4607), with no way back (issue #4675): not
+# separated → install (root once, via password-less sudo; none → one line saying
+# what to run); separated → refresh the root-owned code copy the role account
+# runs. A login with neither mark (credsep.json, FLEET_CRED_SEPARATE=1): nothing
+# runs here. On a managed machine the root daemon's credsep-enforce separates
+# every fleet login anyway; elsewhere the doctor's credsep row is red and the hub
+# leases it nothing.
 if [ -f "$ROOT/bin/fleet-credsep.sh" ] && [ "$BUNDLE" != 1 ]; then
   _cs_cf="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"
   if [ -f "$_cs_cf/credsep.json" ] || grep -qs '^[[:space:]]*\(export[[:space:]]*\)\{0,1\}FLEET_CRED_SEPARATE=["'"'"']\{0,1\}1' \

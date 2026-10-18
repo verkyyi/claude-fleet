@@ -57,7 +57,7 @@ func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 	 {"provider":"codex","account":"work","expires_at":%q,"access":{"access_token":%q,"id_token":"idt","account_id":"acct-1"}},
 	 {"provider":"github","account":"alice","access":{"token":"ghp_short","user":"alice"}}]}`,
 		exp.Format(time.RFC3339), exp.Format(time.RFC3339), cxShort)
-	a := credAgent(fakeVaultHub(t, 200, body), home)
+	a, stored := storeAgent(t, fakeVaultHub(t, 200, body), home)
 
 	// A pre-existing long-lived token for the same label, and a codex config
 	// with a table: both must survive correctly.
@@ -76,7 +76,8 @@ func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 		t.Fatalf("next lease in %s, want ~%s (2h before expiry)", wait, want)
 	}
 
-	// Claude: the file Claude Code reads via CLAUDE_SECURESTORAGE_CONFIG_DIR.
+	// Claude: the file Claude Code reads via CLAUDE_SECURESTORAGE_CONFIG_DIR,
+	// held by the store (claude-fleet#4675: never in the home).
 	var cc struct {
 		ClaudeAiOauth struct {
 			AccessToken      string   `json:"accessToken"`
@@ -86,7 +87,9 @@ func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 			SubscriptionType string   `json:"subscriptionType"`
 		} `json:"claudeAiOauth"`
 	}
-	readJSON(t, filepath.Join(acct, "main.hub", ".credentials.json"), &cc)
+	if err := json.Unmarshal(stored("claude", "main"), &cc); err != nil {
+		t.Fatalf("stored claude credential: %v", err)
+	}
 	o := cc.ClaudeAiOauth
 	if o.AccessToken != "sk-ant-oat01-short" || o.RefreshToken != nil || o.ExpiresAt != exp.UnixMilli() ||
 		len(o.Scopes) != 2 || o.SubscriptionType != "max" {
@@ -95,34 +98,45 @@ func TestCredCycleWritesEachCLIsFile(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(acct, "main")); string(b) != "hub:main\n" {
 		t.Fatalf("label file = %q, want the hub marker in place of the long-lived token", b)
 	}
-	mode(t, filepath.Join(acct, "main.hub", ".credentials.json"), 0o600)
+	for _, p := range []string{filepath.Join(acct, "main.hub"), filepath.Join(cxHome, "auth.json")} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Fatalf("%s written into the home", p)
+		}
+	}
 
-	// Codex: auth.json with the placeholder, and file storage switched on
-	// ABOVE the existing table.
+	// Codex: auth.json with the placeholder (in the store), and file storage
+	// switched on ABOVE the existing table.
 	var cx struct {
 		AuthMode string `json:"auth_mode"`
 		Tokens   map[string]string
 	}
-	readJSON(t, filepath.Join(cxHome, "auth.json"), &cx)
+	if err := json.Unmarshal(stored("codex", "work"), &cx); err != nil {
+		t.Fatalf("stored codex auth: %v", err)
+	}
 	if cx.AuthMode != "chatgpt" || cx.Tokens["access_token"] != cxShort || cx.Tokens["refresh_token"] != CodexRefreshPlaceholder ||
 		cx.Tokens["account_id"] != "acct-1" || cx.Tokens["id_token"] != "idt" {
 		t.Fatalf("codex auth.json = %+v", cx)
 	}
-	// The home the lease wrote is one `ccquota codex` reads as hub-managed
+	// The auth.json the lease made is one `ccquota codex` reads as hub-managed
 	// (claude-fleet#1666): a valid login refreshed by the hub, and a local
 	// refresh — the agent's auto-refresh or `ccquota codex refresh` — refused
 	// before the official CLI is started.
-	leased, err := codex.ReadAuth(cxHome)
+	leasedHome := filepath.Join(t.TempDir(), "work")
+	_ = os.MkdirAll(leasedHome, 0o700)
+	if err := os.WriteFile(filepath.Join(leasedHome, "auth.json"), stored("codex", "work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leased, err := codex.ReadAuth(leasedHome)
 	if err != nil {
 		t.Fatalf("the leased home does not read as a Codex login: %v", err)
 	}
 	if !leased.HubManaged || leased.HasRefreshToken || !leased.ExpiresAt.Equal(exp) {
 		t.Fatalf("leased home = hub:%v refresh:%v exp:%s", leased.HubManaged, leased.HasRefreshToken, leased.ExpiresAt)
 	}
-	if h := codex.LoginHealth(cxHome, leased, true); h.State != "valid" || h.Source != "hub" || h.AutoRefresh {
+	if h := codex.LoginHealth(leasedHome, leased, true); h.State != "valid" || h.Source != "hub" || h.AutoRefresh {
 		t.Fatalf("leased home health = %+v, want valid · source hub · auto_refresh false", h)
 	}
-	if _, err := codex.Maintain(context.Background(), filepath.Join(home, "no-such-codex"), cxHome, true); !errors.Is(err, codex.ErrHubManaged) {
+	if _, err := codex.Maintain(context.Background(), filepath.Join(home, "no-such-codex"), leasedHome, true); !errors.Is(err, codex.ErrHubManaged) {
 		t.Fatalf("local refresh of the leased home: err = %v, want ErrHubManaged", err)
 	}
 	cfg, _ := os.ReadFile(filepath.Join(cxHome, "config.toml"))
@@ -171,7 +185,7 @@ func TestCredCycleRevokedIsRefused(t *testing.T) {
 func TestCredCycleRejectsUnsafeLabel(t *testing.T) {
 	home := t.TempDir()
 	exp := time.Now().Add(8 * time.Hour).UTC().Format(time.RFC3339)
-	a := credAgent(fakeVaultHub(t, 200, fmt.Sprintf(`{"credentials":[{"provider":"claude","account":"../../evil","expires_at":%q,"access":{"access_token":"x"}}]}`, exp)), home)
+	a, _ := storeAgent(t, fakeVaultHub(t, 200, fmt.Sprintf(`{"credentials":[{"provider":"claude","account":"../../evil","expires_at":%q,"access":{"access_token":"x"}}]}`, exp)), home)
 	if _, err := a.credCycle(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -183,9 +197,7 @@ func TestCredCycleRejectsUnsafeLabel(t *testing.T) {
 func TestHubAccountTokenResolvesMarker(t *testing.T) {
 	dir := t.TempDir()
 	exp := time.Now().Add(time.Hour)
-	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-live", &exp, nil, "", nil); err != nil {
-		t.Fatal(err)
-	}
+	leaseFile(t, dir, "main", "sk-ant-oat01-live", exp)
 	if got, err := hubAccountToken(dir, "main", "hub:main"); err != nil || got != "sk-ant-oat01-live" {
 		t.Fatalf("marker resolved to %q, %v", got, err)
 	}
@@ -231,39 +243,40 @@ func TestHubAccountTokenNamesTheHubSourceWhenUnreadable(t *testing.T) {
 	check("empty token", err, "has no claudeAiOauth.accessToken")
 
 	past := time.Now().Add(-3 * time.Hour)
-	if err := writeClaudeCred(dir, "main", "sk-ant-oat01-stale", &past, nil, "", nil); err != nil {
-		t.Fatal(err)
-	}
+	leaseFile(t, dir, "main", "sk-ant-oat01-stale", past)
 	_, err = hubAccountToken(dir, "main", "hub:main")
 	check("expired lease", err, "lease expired", "not renewed")
 }
 
-func readJSON(t *testing.T, path string, v any) {
+// leaseFile lays down the files an older agent leased into a home — the
+// credential under <label>.hub/ and the marker — which the probe still reads.
+func leaseFile(t *testing.T, dir, label, token string, exp time.Time) {
 	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, label+".hub"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(b, v); err != nil {
-		t.Fatalf("%s: %v", path, err)
+	if err := os.WriteFile(filepath.Join(dir, label+".hub", ".credentials.json"), claudeCredJSON(token, exp, nil, ""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, label), []byte(HubMarkerPrefix+label+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func mode(t *testing.T, path string, want os.FileMode) {
+// codexLeaseFile lays down the auth.json an older agent leased into a home.
+func codexLeaseFile(t *testing.T, home, access string) {
 	t.Helper()
-	st, err := os.Stat(path)
-	if err != nil {
+	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != want {
-		t.Fatalf("%s mode %v, want %v", path, st.Mode().Perm(), want)
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), codexAuthJSON(access, "idt", "acct-1", time.Now()), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
 // A pool setup token (claude-fleet#1463) arrives like any lease — a year out,
-// marked kind/pool — and lands in the same files a short-lived one does: the
-// session reads it through CLAUDE_SECURESTORAGE_CONFIG_DIR, the label file is
-// the hub marker, and the agent's next lease is the ordinary 6h cap.
+// marked kind/pool — and goes to the store like a short-lived one: the label
+// file is the hub marker, and the agent's next lease is the ordinary 6h cap.
 func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
 	home := t.TempDir()
 	exp := time.Now().Add(365 * 24 * time.Hour).UTC().Truncate(time.Second)
@@ -271,7 +284,7 @@ func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
 	 {"provider":"claude","account":"icloud","kind":"setup_token","pool":true,"expires_at":%q,
 	  "access":{"access_token":"sk-ant-oat01-POOLTOKEN","scopes":["user:inference"],"expires_at":%q}}]}`,
 		exp.Format(time.RFC3339), exp.Format(time.RFC3339))
-	a := credAgent(fakeVaultHub(t, 200, body), home)
+	a, stored := storeAgent(t, fakeVaultHub(t, 200, body), home)
 	acct := filepath.Join(home, ".config", "claude-fleet", "accounts")
 	_ = os.MkdirAll(acct, 0o700)
 	// The same token the operator kept here by hand before the import.
@@ -291,14 +304,18 @@ func TestCredCycleSetupTokenIsWrittenLikeAnyLease(t *testing.T) {
 			ExpiresAt    int64   `json:"expiresAt"`
 		} `json:"claudeAiOauth"`
 	}
-	readJSON(t, filepath.Join(acct, "icloud.hub", ".credentials.json"), &cc)
+	if err := json.Unmarshal(stored("claude", "icloud"), &cc); err != nil {
+		t.Fatalf("stored claude credential: %v", err)
+	}
 	if o := cc.ClaudeAiOauth; o.AccessToken != "sk-ant-oat01-POOLTOKEN" || o.RefreshToken != nil || o.ExpiresAt != exp.UnixMilli() {
 		t.Fatalf("claude credentials = %+v", o)
 	}
 	if b, _ := os.ReadFile(filepath.Join(acct, "icloud")); string(b) != "hub:icloud\n" {
 		t.Fatalf("label file = %q, want the hub marker", b)
 	}
-	mode(t, filepath.Join(acct, "icloud.hub", ".credentials.json"), 0o600)
+	if _, err := os.Lstat(filepath.Join(acct, "icloud.hub")); err == nil {
+		t.Fatal("the setup token was written into the home")
+	}
 }
 
 // claude-fleet#2007: a hub-leased Codex home whose current access the
@@ -309,9 +326,7 @@ func TestCredLeaseReportsUpstreamRevoked(t *testing.T) {
 	exp := time.Now().Add(100 * time.Hour).UTC()
 	access := hubTestJWT(map[string]any{"exp": exp.Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-1", "chatgpt_user_id": "member"}})
 	cx := filepath.Join(home, ".codex-accounts", "work")
-	if err := writeCodexAuth(cx, access, "idt", "acct-1", time.Now(), nil); err != nil {
-		t.Fatal(err)
-	}
+	codexLeaseFile(t, cx, access)
 	// An unmanaged home with a refusal of its own is not the hub's business.
 	own := filepath.Join(home, ".codex")
 	_ = os.MkdirAll(own, 0o700)
@@ -355,9 +370,7 @@ func TestCredLeaseReportsUpstreamRevoked(t *testing.T) {
 		t.Fatal("a carried refusal is not remembered: the wait would wake on it again")
 	}
 	// A renewed token (a new auth.json) outdates the refusal: nothing to say.
-	if err := writeCodexAuth(cx, access+"2", "idt", "acct-1", time.Now(), nil); err != nil {
-		t.Fatal(err)
-	}
+	codexLeaseFile(t, cx, access+"2")
 	if rs := a.upstreamRejections(); len(rs) != 0 {
 		t.Fatalf("refusal of a replaced token still reported: %+v", rs)
 	}

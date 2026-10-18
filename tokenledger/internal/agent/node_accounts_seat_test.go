@@ -28,7 +28,7 @@ func seatAgent(t *testing.T, hub string, code string) (a *Agent, sudoLog string)
 	}
 	a.cfg.AdminGateDir = gate
 	os.WriteFile(filepath.Join(gate, "admin.conf"), []byte("bin="+rel+"\nhub=https://hub.example\n"), 0o644)
-	os.WriteFile(filepath.Join(rel, "fleet-login-new.sh"), []byte("# "+credsepScriptMark+" "+credsepMark+"\n"), 0o755)
+	os.WriteFile(filepath.Join(rel, "fleet-login-new.sh"), []byte("# "+credsepMark+"\n"), 0o755)
 	os.WriteFile(filepath.Join(rel, "fleet-login-remove.sh"), []byte("# "+recycleScriptMark+"\n"), 0o755)
 	sudoLog = filepath.Join(t.TempDir(), "sudo.log")
 	sudo := filepath.Join(t.TempDir(), "sudo")

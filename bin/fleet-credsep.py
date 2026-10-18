@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """fleet-credsep.py — keep a trusted login's credentials where its sessions
 cannot read them (issue #1971, EPIC #1967 C4). bin/fleet-credsep.sh is the
-front; install / uninstall run as ROOT (it calls them through `sudo -n`).
+front; install runs as ROOT (it calls it through `sudo -n`).
 
     install   --login L --conf-dir C --install-dir I [--dry-run|--adopt]
                                                     (the login a TENANT of the machine's shared
                                                      proxy — the machine's first brings it up;
                                                      no login gets a proxy of its own, #4674)
-    uninstall --login L --conf-dir C [--dry-run]
+    uninstall                                       (gone, issue #4675: refused, exit 2 — there is
+                                                     no way back to credentials in a home)
     purge     --login L [--dry-run]                 (root: a login being deleted — everything of it
                                                      GONE, nothing moved back; fleet-login-remove.sh, #2418)
     status    --conf-dir C [--json]                 (as the login)
     check     --conf-dir C                          (as the login: the doctor row)
     plan      --bin B                               (anyone: every login's state + commands)
-    machine install|uninstall|refresh [--logins a,b|all] [--dry-run]    (root)
+    machine install|refresh [--logins a,b|all] [--dry-run]    (root; `machine uninstall` gone, #4675)
     machine join  [--logins a,b|all] [--dry-run]    (root: an own-mode login onto the shared proxy, no gap —
                                                      the last ones' road; `machine leave` left with #4674)
     machine status [--json]                         (anyone)
@@ -31,14 +32,12 @@ fixed 127.0.0.1 port (FLEET_CRED_SHARED_PORT, 18923) with one control socket
 into <store>/cred-proxy (its sessions' credentials stay good, and its old port
 is answered by the shared proxy for that login only), its per-login proxy
 service removed, FLEET_CRED_PROXY=1 in its fleet.conf (the line it had is
-remembered). `machine uninstall` undoes all of it, byte for byte (no login has
-a proxy of its own to go back to any more — #4674). /var/db/fleet-cred/
-.shared.json is the record anyone reads (`machine status`, the doctor).
+remembered). Nothing undoes it (issue #4675: no login's credentials go back
+into its home). /var/db/fleet-cred/.shared.json is the record anyone reads
+(`machine status`, the doctor).
 
 --dry-run needs no root (bin/fleet-credsep.sh runs it as the login): it prints
-what would happen. Separated, the store is unreadable to the login, so the
-uninstall dry run reads the way back from C/credsep.json's `back` (every login
-path a credential left, the agent's service, the proxy's) — paths, no secret.
+what would happen.
 
 What install does, each step idempotent:
   1. the role account _fleetcred (macOS: UID/GID in 450-499, shell
@@ -56,19 +55,17 @@ What install does, each step idempotent:
      from before is booted out, its old port answered by the shared proxy)
   6. the agent service now starts through fleet-credsep-launch.py agent (root,
      token down a pipe, then the login); the original definition is kept in
-     backup/ for uninstall
+     backup/ for an install's rollback
   6b. LIB/<L>.conf (root, 0600) — the proxy's upstream / hub / relay-pass
      settings; the launcher reads these from here ONLY, never the login's own
      files (issue #2290). Written once from the login's allowed values, then
      kept; `install --adopt` takes the login's current ones again
   7. C/credsep.json — the login-readable record that says "separated" (no secret),
-     with `back`: the paths uninstall puts things back to (issue #2135)
+     with `back`: the paths each file came from (issue #2135)
 
-uninstall reverses all of it: every credential file under the store goes back
-to the login's own path (the agent may have renewed them meanwhile), node.env
-becomes a file again, the services are restored, the store and — when no other
-login uses it — the role account are deleted. After uninstall every file is
-where it was before install, byte for byte (modulo renewals the agent wrote).
+An install that fails halfway rolls itself back (undo_install, issue #2273):
+what it moved goes back where it was. Nothing else ever moves a credential out
+of the store — `uninstall` is gone (issue #4675).
 
 Seams (the selftest's sandbox; never set in production): FLEET_CREDSEP_ROOT_BASE,
 FLEET_CREDSEP_RUN_BASE, FLEET_CREDSEP_LOG_BASE, FLEET_CREDSEP_LIB,
@@ -950,7 +947,7 @@ def chown_tree(d, owner):
             chown(os.path.join(dp, f), owner)
 
 
-# ---- uninstall ----------------------------------------------------------------------
+# ---- the pool, and an install's rollback --------------------------------------------
 def pool_in(src, R, conf, login):
     """A NEW login's share of the team pool (issue #2294 — fleet-login-new.sh
     --share-pool, the hub's every account op): each token file of <src> (the
@@ -1080,7 +1077,9 @@ def fresh_gate(login, force):
     die("preflight refused: nothing was moved (install without --fresh runs the full preflight)", 6)
 
 
-def uninstall(a):
+def undo_install(a):
+    """Put back what an install that failed halfway moved (rollback_login, issue
+    #2273) — never a command: there is no way back from separated (issue #4675)."""
     login, conf = a.login, os.path.abspath(a.conf_dir)
     pw = getpw(login)
     home = (getattr(a, "home", "") or (pw.pw_dir if getattr(pw, "sandbox", False) else os.environ["HOME"])) \
@@ -1090,20 +1089,6 @@ def uninstall(a):
         meta = json.load(open(os.path.join(R, "meta.json")))
     except (OSError, ValueError):
         meta = {}
-    rec = record(conf)
-    if DRY and not rec and not meta:
-        if os.path.lexists(R):
-            # an install that stopped halfway leaves the store and no credsep.json
-            # (2026-10-07 mac-b, issue #2273): the way back is in the store's meta.json
-            say("credsep: HALF INSTALLED — %s is there but %s has no credsep.json (an install that stopped"
-                % (R, conf))
-            say("  halfway); the store is not readable here. Put it back, from the store's meta.json:")
-            say("  sudo bash %s uninstall --login %s" % (os.path.join(HERE, "fleet-credsep.sh"), login))
-            return 0
-        say("credsep: not separated — nothing to undo (%s has no credsep.json)" % conf)
-        return 0
-    if DRY and not meta and rec:
-        return uninstall_plan(login, conf, rec)
     plabel = "com.claude-fleet.credsep.%s" % login if MAC else "claude-fleet-credsep-%s.service" % login
     ppath = os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else ""))
     shared = meta.get("mode") == "shared"
@@ -1180,7 +1165,7 @@ def uninstall(a):
         left = [m["login"] for m in shared_tenants()]
         shared_record(left)
         if not left:
-            say("shared: no login left on it — `machine uninstall` stops the shared proxy")
+            say("shared: no login left on it")
     others = [d for d in (os.listdir(ROOT_BASE) if os.path.isdir(ROOT_BASE) else []) if not d.startswith(".")]
     if not others and not DRY and not SOFT:
         shutil.rmtree(LIB, ignore_errors=True)
@@ -1383,7 +1368,7 @@ def rollback_login(login, conf, home):
         put(mp, json.dumps(m, indent=1), 0o600, ROLE)
     SOFT = []
     try:
-        uninstall(argparse.Namespace(login=login, conf_dir=conf, home=home if TEST else "",
+        undo_install(argparse.Namespace(login=login, conf_dir=conf, home=home if TEST else "",
                                      install_dir="", dry_run=False))
     except SystemExit as e:
         SOFT.append(str(e.code))
@@ -1449,31 +1434,6 @@ def manual_steps(login, conf, home, fails):
     n += 1
     say("  %d. rm -f %s, then check: bash ~/.claude/fleet/bin/fleet-credsep.sh status (as %s)"
         % (n, q(os.path.join(conf, "credsep.json")), login))
-
-
-def uninstall_plan(login, conf, rec):
-    """The uninstall dry run AS THE LOGIN: the store is the role account's, so
-    the way back is read from credsep.json's `back` (paths only — issue #2135)."""
-    back = rec.get("back") or {}
-    R = rec.get("root") or paths(login)[0]
-    say("credsep: uninstall --dry-run for %s (the store %s is not readable here: the way back is read" % (login, R))
-    say("  from %s/credsep.json; run it under sudo for the store's own list)" % conf)
-    s = back.get("agent")
-    if s:
-        say("  1. agent: %s back to its original definition (%s, kept in %s/backup/), restarted"
-            % (s.get("label"), s.get("path"), R))
-    else:
-        say("  1. agent: none recorded — nothing to restore")
-    say("  2. proxy: %s stopped and removed" % (back.get("proxy") or "com.claude-fleet.credsep.%s" % login))
-    files = back.get("files") or []
-    say("  3. credentials back to the login (%d recorded, plus any lease the agent renewed into the store since):" % len(files))
-    for src, dst in files:
-        say("       %s → %s" % (src, dst))
-    say("  4. node.env a plain file again (0600, the login's); node.pub.env and credsep.json deleted")
-    say("  5. %s and %s deleted; with no other login separated, also %s and the role account %s"
-        % (R, rec.get("run") or paths(login)[1], rec.get("lib") or LIB, rec.get("role") or ROLE))
-    say("  then: FLEET_CRED_SEPARATE=0 in fleet.conf [common] (or the next sync's credsep pass undoes it the same way)")
-    return 0
 
 
 # ---- the machine's shared proxy (issue #2217) ---------------------------------------
@@ -1738,8 +1698,8 @@ def machine_logins(spec):
 # been refusing the login any lease (its backstop) and the files it would keep
 # are only a leak. A failed install is rolled back by install itself and tried
 # again after FLEET_CREDSEP_ENFORCE_RETRY (1 h).
-# The one way out is root's own word: <NODE_STATE>/credsep.optional, a login per
-# line (or `*`: this whole machine is a self-hosted one-person box).
+# There is no way out (issue #4675): root's old <NODE_STATE>/credsep.optional is
+# said once a pass and ignored (# compat-1v: 下一批删).
 ENFORCE_STATUS = os.path.join(NODE_STATE, "credsep-enforce.json")
 ENFORCE_OPTIONAL = os.path.join(NODE_STATE, "credsep.optional")
 NOLOGIN = ("/usr/bin/false", "/bin/false", "/sbin/nologin", "/usr/sbin/nologin", "/usr/bin/nologin", "")
@@ -1789,19 +1749,6 @@ def fleet_login(login, home):
     return login in managed_logins()
 
 
-def enforce_optional():
-    """root's own list of logins left unseparated on purpose ('*' = all), or
-    None when it is not root's alone (a file anyone could plant says nothing)."""
-    try:
-        st = os.lstat(ENFORCE_OPTIONAL)
-    except OSError:
-        return set()
-    if not stat.S_ISREG(st.st_mode) or (st.st_mode & 0o022) or (st.st_uid != 0 and not TEST):
-        say("enforce: %s is not root's alone (owner/mode) — ignored" % ENFORCE_OPTIONAL)
-        return set()
-    return {l.strip() for l in open(ENFORCE_OPTIONAL) if l.strip() and not l.startswith("#")}
-
-
 def enforce_audit(row):
     """One JSON line per attempt in <LOG_BASE>/enforce.log — who, what, the verdict."""
     if DRY:
@@ -1832,7 +1779,7 @@ def enforce_run(argv):
     return r.returncode, " | ".join((pre[:3] if r.returncode == 6 and pre else []) + lines[-2:])[:600]
 
 
-def sweep_leftovers(login, home):
+def sweep_leftovers(login, home):  # compat-1v: 下一批删 (issue #4675: nothing writes there any more)
     """A separated login whose credentials are back at its login paths (issue
     #4643: 2026-10-09 an agent with no store leased a real Claude token into
     one's accounts/<l>.hub/ and it sat there a week; `check` only WARNed). Root
@@ -1913,9 +1860,9 @@ def sweep_leftovers(login, home):
 
 
 def machine_enforce(a):
-    """Every human login separated (issue #4607). -> 0 when every one is (or
-    is root's declared exception), 1 when any is not (named on stdout and in the
-    status file), 2 when it cannot run."""
+    """Every human login separated (issue #4607, no exception since #4675). -> 0
+    when every one is, 1 when any is not (named on stdout and in the status
+    file), 2 when it cannot run."""
     now_ = int(time.time())
     grace = int(E("FLEET_CREDSEP_ENFORCE_GRACE", "86400"))
     retry = int(E("FLEET_CREDSEP_ENFORCE_RETRY", "3600"))
@@ -1923,7 +1870,8 @@ def machine_enforce(a):
         prev = json.load(open(ENFORCE_STATUS)).get("logins") or {}
     except (OSError, ValueError, AttributeError):
         prev = {}
-    opt = enforce_optional()
+    if os.path.lexists(ENFORCE_OPTIONAL):   # compat-1v: 下一批删
+        say("enforce: %s is gone (issue #4675) — ignored: every login is separated; delete it" % ENFORCE_OPTIONAL)
     want = [l for l in a.logins.split(",") if l] if a.logins not in ("", "all") else None
     logins = [(l, h) for l, h in human_logins() if want is None or l in want]
     out, bad = {}, []
@@ -1932,9 +1880,7 @@ def machine_enforce(a):
         p = prev.get(login) or {}
         st = store_state(login)
         row = {"state": st, "at": now_}
-        if "*" in opt or login in opt:
-            row.update(verdict="optional", why="root's %s names it" % ENFORCE_OPTIONAL)
-        elif st == "shared" or (st == "own" and not shared):
+        if st == "shared" or (st == "own" and not shared):
             row["verdict"] = "separated"
             moved, rest = sweep_leftovers(login, home)
             if moved or rest:
@@ -1998,11 +1944,10 @@ def machine_enforced(a):
         print("credsep-logins: INFO — not a managed machine (no %s)" % ENFORCE_STATUS)
         return 0
     logins = human_logins()
-    opt = enforce_optional()
     st = {l: store_state(l) for l, _ in logins}
     if a.json:
         print(json.dumps({"status": doc, "state": st}))
-    none = [l for l, _ in logins if st[l] == "none" and "*" not in opt and l not in opt]
+    none = [l for l, _ in logins if st[l] == "none"]
     rows = (doc or {}).get("logins") or {}
     if none:
         why = "; ".join("%s: %s" % (l, (rows.get(l) or {}).get("why") or (rows.get(l) or {}).get("verdict")
@@ -2017,9 +1962,8 @@ def machine_enforced(a):
         print("credsep-logins: INFO — no human login here")
         return 0
     age = int(time.time()) - int((doc or {}).get("at") or 0)
-    print("credsep-logins: OK — every login separated (%d)%s%s" % (
-        len(logins), " · root's exception: %s" % ", ".join(sorted(opt)) if opt else "",
-        " · daemon last ran %ds ago" % age if doc else " · no daemon pass recorded yet"))
+    print("credsep-logins: OK — every login separated (%d)%s" % (
+        len(logins), " · daemon last ran %ds ago" % age if doc else " · no daemon pass recorded yet"))
     return 0
 
 
@@ -2105,49 +2049,13 @@ def machine_rollback(rows, fresh, pre, err):
         shared_record(left)
     for login, _, _ in rows:
         if login not in [f[0] for f in fresh]:
-            say("note: %s was in the store before this run — left as it is (`uninstall --login %s` takes it out)"
-                % (login, login))
+            say("note: %s was in the store before this run — left as it is" % login)
     say("")
     if ok:
         say("machine install: rolled back — every login this run touched is as it was; nothing is separated")
         return 1
     say("machine install: rollback INCOMPLETE — do the steps above by hand, then `fleet-credsep.sh status`")
     return 5
-
-
-def machine_uninstall(a):
-    """The way back: the shared service goes first, then every tenant leaves —
-    credentials, proxy state and the FLEET_CRED_PROXY line back where they were
-    (no login has a proxy of its own to take its port back, #4674)."""
-    unload_daemon(SHARED_LABEL)
-    if os.path.exists(SHARED_PATH) and not DRY:
-        os.unlink(SHARED_PATH)
-    say("shared: %s stopped and removed" % SHARED_LABEL)
-    if DRY:
-        for d in sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else []:
-            if d.startswith(".") or ".rolledback-" in d:
-                continue
-            try:
-                open(os.path.join(ROOT_BASE, d, "meta.json")).close()
-            except PermissionError:
-                say("== %s: a store is there, not readable here — under sudo it is put back the same way" % d)
-            except OSError:
-                pass
-    for m in shared_tenants():
-        say("")
-        say("== %s" % m["login"])
-        uninstall(argparse.Namespace(login=m["login"], conf_dir=m["conf_dir"], home=m.get("home", ""),
-                                     install_dir="", dry_run=DRY))
-    # last: the pool (issue #2311) is read by every tenant's uninstall above
-    if not DRY:
-        for p in (SHARED_REC, os.path.join(LOG_BASE, "shared.log"), os.path.join(LOG_BASE, "shared.launch.log")):
-            if os.path.exists(p):
-                os.unlink(p)
-        shutil.rmtree(SHARED_DIR, ignore_errors=True)
-        shutil.rmtree(SHARED_RUN, ignore_errors=True)
-    say("")
-    say("shared: OFF — every login's files back in its home (no login has a proxy of its own any more, #4674)")
-    return 0
 
 
 def shared_restart():
@@ -2957,10 +2865,8 @@ def plan(a):
         say("  dry run     %sbash %s install --dry-run" % (as_, q))
         say("  separate    sudo bash %s install --login %s" % (q, name))
         say("  read        %sbash %s status ; %sbash %s check" % (as_, q, as_, q))
-        say("  way back    %sbash %s uninstall --dry-run   (then: sudo bash %s uninstall --login %s)"
-            % (as_, q, q, name))
     say("")
-    say("then FLEET_CRED_SEPARATE=1 in each login's fleet.conf [common] so the sync keeps it (0 + sync = the way back)")
+    say("there is no way back (issue #4675): a separated login's credentials never go into its home again")
     return 0
 
 
@@ -3308,30 +3214,23 @@ def check(a):
     home = os.path.expanduser("~")
     rec = record(conf)
     me = pwd.getpwuid(os.getuid()).pw_name
-    # separation is not opt-in (issue #4607): FLEET_CRED_SEPARATE=0 counts only
-    # beside an explicit FLEET_CREDSEP_OPTIONAL=1 (a self-hosted one-person box),
-    # or root's own credsep.optional naming this login
-    opt = os.environ.get("FLEET_CREDSEP_OPTIONAL") == "1" or bool({"*", me} & enforce_optional())
-    want = not opt or os.environ.get("FLEET_CRED_SEPARATE", "1") == "1"
+    # separation is not opt-in (issue #4607) and has no way out (issue #4675):
+    # FLEET_CREDSEP_OPTIONAL / FLEET_CRED_SEPARATE=0 / credsep.optional say nothing
     if not rec and me in managed_logins():
         # a managed login is always separated (issue #3700): exit 1 = the hub's «not»
         print("credsep: FAIL — this login is managed but not separated: its sessions can read node.env and the "
               "relay pass and act as this machine. An admin separates it (one sudo): sudo bash "
               "%s/fleet-credsep.sh machine install --logins %s" % (HERE, me))
         return 1
-    if not rec and want and not node_login(conf, home):
+    if not rec and not node_login(conf, home):
         print("credsep: INFO — not a node (no node.env here, not taken over by a machine daemon): nothing is "
               "leased to this login, so nothing to separate — it is separated the moment it joins")
         return 0
     if not rec:
-        if want:
-            print("credsep: FAIL — this login is not separated: its sessions can read the leased credentials and "
-                  "node.env, and the hub leases it none (拒发：未隔离). On a managed machine the daemon separates it "
-                  "within minutes (credsep-enforce); else, once (root): sudo bash %s/fleet-credsep.sh install" % HERE)
-            return 1
-        print("credsep: INFO — off (FLEET_CREDSEP_OPTIONAL=1, FLEET_CRED_SEPARATE=0): credentials in this login's "
-              "own files — a declared self-hosted box")
-        return 0
+        print("credsep: FAIL — this login is not separated: its sessions can read the leased credentials and "
+              "node.env, and the hub leases it none (拒发：未隔离). On a managed machine the daemon separates it "
+              "within minutes (credsep-enforce); else, once (root): sudo bash %s/fleet-credsep.sh install" % HERE)
+        return 1
     R = rec["root"]
     bad = [p for p in (R, os.path.join(R, "node.env"), os.path.join(R, "accounts")) if not denied(p)]
     left = leftovers(conf, home, rec)
@@ -3369,10 +3268,6 @@ def check(a):
     note = ""
     if subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         note = " · note: this login has password-less sudo, which reaches any file"
-    if not want and not rec.get("shared"):
-        print("credsep: WARN — FLEET_CREDSEP_OPTIONAL=1 + FLEET_CRED_SEPARATE=0 but this login is still separated; "
-              "uninstall: bash %s/fleet-credsep.sh uninstall" % HERE)
-        return WARNED
     if not rec.get("shared") and shared_rec():
         print("credsep: WARN — separated on its own proxy, but this machine runs the shared one: one more service "
               "for nothing. Join it (sudo, no gap): bash %s/fleet-credsep.sh machine join --logins %s" % (HERE, me))
@@ -3505,13 +3400,20 @@ def main():
             return machine_proxies(a)
         if a.verb == "enforced":
             return machine_enforced(a)
+        if a.verb == "uninstall":
+            die("machine uninstall: gone (issue #4675) — no login's credentials go back into its home", 2)
         DRY = a.dry_run
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
-        return {"install": machine_install, "uninstall": machine_uninstall, "refresh": machine_refresh,
+        return {"install": machine_install, "refresh": machine_refresh,
                 "join": machine_join, "pooldup": machine_pooldup,
                 "pool-sync": machine_pool_sync, "enforce": machine_enforce}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
+        if a.cmd == "uninstall":
+            # no way back (issue #4675): a subscription credential never goes into
+            # a home again. A login going away is fleet-login-remove.sh (purge).
+            die("uninstall: gone (issue #4675) — a credential never goes back into a home; "
+                "a login that goes away: fleet-login-remove.sh", 2)
         DRY = a.dry_run
         if not re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", a.login):
             die("bad login %r" % a.login, 2)
@@ -3519,8 +3421,6 @@ def main():
             die("%s needs root (bin/fleet-credsep.sh runs it through sudo -n)" % a.cmd, 2)
         if not (MAC or sys.platform.startswith("linux")):
             die("only macOS and Linux", 2)
-        if a.cmd == "uninstall":
-            return uninstall(a)
         if a.adopt:
             return adopt(a)
         if a.pool_src and not a.fresh:

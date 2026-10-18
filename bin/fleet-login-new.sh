@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-login-new.sh <login> --full-name <name> [--pubkey <file>] [--share-pool]
 #                    [--pool-src <dir>] [--password-file <file>] [--no-daemons]
-#                    [--machine <name>] [--no-welcome] [--lang zh|en] [--no-credsep]
+#                    [--machine <name>] [--no-welcome] [--lang zh|en]
 #                    [--apply]
 # fleet-login-new.sh <login> --daemons-only [--apply]
 # fleet-login-new.sh <login> --recycle [--full-name <name>] … [--apply]
@@ -41,12 +41,9 @@
 #      first login (the letter says how). --no-welcome without --pubkey is an
 #      error: nothing would carry the key.
 #   5. --share-pool: every Claude pool token + its <label>.conf from --pool-src
-#      (default: YOUR accounts dir). Separated (the default, step 7b): the tokens
+#      (default: YOUR accounts dir). Separated (always, step 7b): the tokens
 #      go into the login's credential STORE, never its dir — it gets only the
-#      label markers (`store:<label>`) + the .conf files. --no-credsep: the old
-#      layout, every token copied into ~<login>/.config/claude-fleet/accounts
-#      (dir 700 / files 600, owned by <login>, readable by its every session) —
-#      SHARED-MACHINE step 2b. Never ~/.codex/auth.json: Codex rotates its
+#      label markers (`store:<label>`) + the .conf files. Never ~/.codex/auth.json: Codex rotates its
 #      refresh token, so the new login gets its own device-code session instead
 #      (printed as a manual step).
 #   6. ~<login>/.zshrc ← the ~/.local/bin PATH line (Claude Code's native install
@@ -80,11 +77,9 @@
 #      with ONE line the hub reads — `credsep: separated` (status separated AND
 #      check OK, the one judgement, EPIC #2293 convention 1), `credsep: pending
 #      — <why>` (separated, but check not OK yet: the proxy still starting) — and
-#      a status that is not separated FAILS the run (exit 1). --no-credsep skips
-#      7b (and prints `credsep: off`): the old layout — refused (exit 2) unless the
-#      environment says FLEET_CREDSEP_OPTIONAL=1, a declared self-hosted one-person
-#      box (issue #4607: separation is not opt-in; the hub leases an unseparated
-#      login nothing, and a managed machine's daemon would separate it anyway).
+#      a status that is not separated FAILS the run (exit 1). There is no way to
+#      skip 7b (issue #4607, #4675: `--no-credsep` is gone — refused as an unknown
+#      option; the hub leases an unseparated login nothing).
 #   8. on a MANAGED machine (step 7 linked the install to <root>/current):
 #      `sudo python3 <root>/current/bin/fleet-node-supervisor.py account adopt
 #      <login>` instead — the machine daemon runs a managed login's account tasks
@@ -118,8 +113,7 @@
 #      --no-fleet --compute 1` as itself (node.env + ccquota + its runner,
 #      nothing started); the admin drops its LaunchDaemon definition
 #      (com.ccquota.agent.<login>, not loaded) — so 7b moves the token into the
-#      store and starts the agent through its launcher (--no-credsep: loaded
-#      here). Without it the hub never sees this login's fleet: a heartbeat
+#      store and starts the agent through its launcher. Without it the hub never sees this login's fleet: a heartbeat
 #      covers only the login that sends it. A step that fails is a WARN.
 #   8b. (every login, issue #2702 — before it, only the ones the hub opened)
 #      the fleet comes up AS the login, right away — fleet-login-bootstrap.sh:
@@ -225,7 +219,7 @@ usage() {
 }
 die2() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
 
-LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 CREDSEP=1 RECYCLE=0
+LOGIN='' FULL='' PUBKEY='' SHARE=0 APPLY=0 MACHINE=mini POOL_SRC='' PWFILE='' DAEMONS=1 WELCOME=1 WLANG=zh DONLY=0 RECYCLE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --full-name) [ $# -ge 2 ] || usage; FULL=$2; shift 2 ;;
@@ -236,7 +230,6 @@ while [ $# -gt 0 ]; do
     --lang)      [ $# -ge 2 ] || usage; WLANG=$2; shift 2 ;;
     --share-pool) SHARE=1; shift ;;
     --no-daemons) DAEMONS=0; shift ;;
-    --no-credsep) CREDSEP=0; shift ;;
     --daemons-only) DONLY=1; shift ;;
     --recycle)   RECYCLE=1; shift ;;
     --welcome)   WELCOME=1; shift ;;
@@ -250,9 +243,10 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$LOGIN" ] || usage
-# Separation is not opt-in (issue #4607): the old layout only on a box that said so
-[ "$CREDSEP" = 1 ] || [ "${FLEET_CREDSEP_OPTIONAL:-0}" = 1 ] \
-  || die2 "--no-credsep: every login is credential-separated (issue #4607) — the old layout only on a declared self-hosted box (FLEET_CREDSEP_OPTIONAL=1)"
+# Separation is not opt-in (issue #4607) and has no way out (issue #4675): the
+# old opt-out is an unknown option now. # compat-1v: 下一批删 — an admin agent
+# older than #4675 reads its CapCredsep off the words --no-credsep and
+# credsep: separated in this file; this line keeps them here one version.
 # A leading digit is allowed (macOS permits it; `acme` opened on a second
 # machine, issue #2105) — an all-digit name is not: it reads as a uid.
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \
@@ -294,7 +288,7 @@ if [ "$DONLY" = 1 ]; then
   [ "$SHARE" = 0 ] || die2 "--daemons-only installs the background services only; --share-pool is step 5 (docs/dev/SHARED-MACHINE.md 2b for an existing login)"
   [ -z "$PUBKEY" ] || die2 "--daemons-only installs the background services only; --pubkey is step 4"
   [ -z "$PWFILE" ] || die2 "--daemons-only installs the background services only; --password-file is step 1"
-  WELCOME=0 CREDSEP=0
+  WELCOME=0
 else
   [ "$RECYCLE" = 0 ] || [ -n "$FULL" ] \
     || FULL=$(dscl . -read "/Users/$LOGIN" RealName 2>/dev/null | awk 'NR == 1 { sub(/^RealName:[ \t]*/, ""); if ($0 != "") { print; exit } } NR == 2 { sub(/^[ \t]+/, ""); print; exit }')
@@ -577,7 +571,7 @@ node_join_step() {
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" != 0 ]; then warn_step "fleet-node-join.sh exited $rc as $LOGIN"; N=$N0; return 0; fi
   # the agent's definition, not loaded: 7b turns it into the launcher's and
-  # starts it; with --no-credsep it is loaded here as it is
+  # starts it
   { printf '<?xml version="1.0" encoding="UTF-8"?>\n<!-- fleet-login-new.sh (issue #2652) -->\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n'
     printf '  <key>Label</key><string>com.ccquota.agent.%s</string>\n  <key>UserName</key><string>%s</string>\n' "$LOGIN" "$LOGIN"
@@ -586,12 +580,7 @@ node_join_step() {
     printf '  <key>StandardErrorPath</key><string>%s/.ccquota/agent.log</string>\n  <key>StandardOutPath</key><string>%s/.ccquota/agent.log</string>\n' "$H" "$H"
     printf '</dict>\n</plist>\n'; } > "$TMPD/agent.plist"
   if ! sudo install -m 644 "$TMPD/agent.plist" "$plist"; then warn_step "cannot write $plist"; N=$N0; return 0; fi
-  if [ "$CREDSEP" = 0 ]; then
-    sudo launchctl bootstrap system "$plist" || { warn_step "launchctl bootstrap system $plist"; N=$N0; return 0; }
-    NODE_LINE="node: joined $JHUB — its agent runs (com.ccquota.agent.$LOGIN)"
-  else
-    NODE_LINE="node: joined $JHUB — its agent starts through the credential launcher (next step)"
-  fi
+  NODE_LINE="node: joined $JHUB — its agent starts through the credential launcher (next step)"
   say "  $NODE_LINE"
   N=$N0
 }
@@ -742,20 +731,9 @@ if [ "$DONLY" = 0 ]; then
   run sudo chmod 700 "$H/.ssh"
   run sudo chmod 600 "$H/.ssh/authorized_keys"
 
-  if [ "$SHARE" = 1 ] && [ "$CREDSEP" = 1 ]; then
+  if [ "$SHARE" = 1 ]; then
     step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC)"
     say "  (separated: the tokens go into $LOGIN's credential store in step 7b — never into $H; it gets the label markers only)"
-  elif [ "$SHARE" = 1 ]; then
-    D="$H/.config/claude-fleet/accounts"
-    step "join the shared Claude pool (${#POOL[@]} files from $POOL_SRC — SHARED-MACHINE 2b; --no-credsep: readable by $LOGIN's sessions)"
-    DST=()
-    for f in ${POOL[@]+"${POOL[@]}"}; do DST+=("$D/${f##*/}"); done
-    run sudo mkdir -p "$D"
-    run sudo cp -p ${POOL[@]+"${POOL[@]}"} "$D/"
-    run sudo chown "$LOGIN:staff" "$H/.config" "$H/.config/claude-fleet"
-    run sudo chown -R "$LOGIN:staff" "$D"
-    run sudo chmod 700 "$D"
-    run sudo chmod 600 ${DST[@]+"${DST[@]}"}
   fi
 
   step "$LOGIN's .zshrc — the ~/.local/bin PATH line only (no banner, no client on login: issue #2702)"
@@ -823,55 +801,52 @@ if [ "$DONLY" = 0 ]; then
   # 7b. the subscription out of the login's reach (issue #2294) — before its
   # services (8) and its first session: the proxy first, then the credentials
   CD="$H/.config/claude-fleet"
-  [ -z "$KEEPN" ] || [ "$CREDSEP" = 1 ] || die2 'a kept node token goes back into a credential store only (--no-credsep with FLEET_LOGIN_KEEP_NODE)'
-  if [ "$CREDSEP" = 1 ]; then
-    N0=$N; N="${N}b"; say ""; say "[$N] keep the subscription out of $LOGIN's reach (credsep, before any service or session: FLEET_CRED_PROXY=1 + FLEET_CRED_SEPARATE=1, store ${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN$([ "$SHARE" = 1 ] && echo ', the pool inside it'))"
-    FC="$TMPD/fleet.conf"
-    {
-      printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
-      printf '# Credentials never live here: node.env, hub.json (its token), secrets.env and\n'
-      printf '# ~/.ssh/fleet-cert are separate, each 0600. Written by fleet-login-new.sh when\n'
-      printf '# this login was opened: separated from its first session on (issue #2294).\n'
-      printf '\n# ---- [common] ----\n'
-      printf 'export FLEET_CRED_PROXY=1\n'
-      printf 'export FLEET_CRED_SEPARATE=1\n'
-      printf '%s\n' '_fcs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/secrets.env"; [ -f "$_fcs" ] && . "$_fcs"; unset _fcs'
-      printf '\n# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----\n'
-      printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" = 1 ]; then' 'fi  # ---- [client] end ----'
-      printf '\n# ---- [node] — the shell (FLEET_SHELL=1) does not read this section ----\n'
-      printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" != 1 ]; then' 'fi  # ---- [node] end ----'
-    } > "$FC"
-    run sudo mkdir -p "$CD"
-    run sudo chown "$LOGIN:staff" "$H/.config" "$CD"
-    run sudo chmod 700 "$CD"
-    run_shown "${SU}install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $(printf %q "$CD/fleet.conf")" \
-      -- sudo install -m 600 "$FC" "$CD/fleet.conf"
-    run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
-    CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
-    # a recycle: the shared proxy's first answer is not waited for here at all
-    # (issue #4044: it timed out at 30 s, then the [check] below passed in
-    # 0.6 s; #4196: not even 3 s) — the check polls for it and stays the one
-    # verdict, before the login goes back to the pool
-    [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=0 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
-    [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
-    run "${CS[@]}"
-    if [ -n "$KEEPN" ]; then
-      # the kept token into the new store (issue #4195): root reads the keep dir,
-      # credsep setenv writes the store's node.env (the home gets the link and the
-      # token-less node.pub.env); the signing key goes beside it, owner kept
-      KSTORE="${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN"
-      printf '  $ %s%s\n' "${SU}" "bash $(printf %q "$BIN/fleet-credsep.sh") setenv --login $LOGIN < $(printf %q "$KEEPN/node.env")"
-      printf '  $ %s%s\n' "${SU}" "cp -p $(printf %q "$KEEPN")/node.key{,.ok} $(printf %q "$KSTORE")/  (those there are)"
-      if [ "$APPLY" = 1 ]; then
-        sudo cat "$KEEPN/node.env" | sudo bash "$BIN/fleet-credsep.sh" setenv --login "$LOGIN" || fail
-        for k in node.key node.key.ok; do
-          if sudo test -f "$KEEPN/$k"; then sudo cp -p "$KEEPN/$k" "$KSTORE/$k" || fail; fi
-        done
-        say "  node: kept — its token is back in $KSTORE (no re-join)"
-      fi
+  N0=$N; N="${N}b"; say ""; say "[$N] keep the subscription out of $LOGIN's reach (credsep, before any service or session: FLEET_CRED_PROXY=1 + FLEET_CRED_SEPARATE=1, store ${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN$([ "$SHARE" = 1 ] && echo ', the pool inside it'))"
+  FC="$TMPD/fleet.conf"
+  {
+    printf "# claude-fleet — this machine's ONE config file (issue #1623). Assignments only.\n"
+    printf '# Credentials never live here: node.env, hub.json (its token), secrets.env and\n'
+    printf '# ~/.ssh/fleet-cert are separate, each 0600. Written by fleet-login-new.sh when\n'
+    printf '# this login was opened: separated from its first session on (issue #2294).\n'
+    printf '\n# ---- [common] ----\n'
+    printf 'export FLEET_CRED_PROXY=1\n'
+    printf 'export FLEET_CRED_SEPARATE=1\n'
+    printf '%s\n' '_fcs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/secrets.env"; [ -f "$_fcs" ] && . "$_fcs"; unset _fcs'
+    printf '\n# ---- [client] — only the shell (FLEET_SHELL=1) reads this section ----\n'
+    printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" = 1 ]; then' 'fi  # ---- [client] end ----'
+    printf '\n# ---- [node] — the shell (FLEET_SHELL=1) does not read this section ----\n'
+    printf '%s\n:\n%s\n' 'if [ "${FLEET_SHELL:-0}" != 1 ]; then' 'fi  # ---- [node] end ----'
+  } > "$FC"
+  run sudo mkdir -p "$CD"
+  run sudo chown "$LOGIN:staff" "$H/.config" "$CD"
+  run sudo chmod 700 "$CD"
+  run_shown "${SU}install -m 600 <fleet.conf: [common] export FLEET_CRED_PROXY=1, export FLEET_CRED_SEPARATE=1> $(printf %q "$CD/fleet.conf")" \
+    -- sudo install -m 600 "$FC" "$CD/fleet.conf"
+  run sudo chown "$LOGIN:staff" "$CD/fleet.conf"
+  CS=(sudo bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
+  # a recycle: the shared proxy's first answer is not waited for here at all
+  # (issue #4044: it timed out at 30 s, then the [check] below passed in
+  # 0.6 s; #4196: not even 3 s) — the check polls for it and stays the one
+  # verdict, before the login goes back to the pool
+  [ "$RECYCLE" = 0 ] || CS=(sudo env FLEET_CREDSEP_JOIN_WAIT=0 bash "$BIN/fleet-credsep.sh" install --login "$LOGIN" --fresh --install-dir "$ROOT")
+  [ "$SHARE" = 1 ] && CS+=(--pool-src "$POOL_SRC")
+  run "${CS[@]}"
+  if [ -n "$KEEPN" ]; then
+    # the kept token into the new store (issue #4195): root reads the keep dir,
+    # credsep setenv writes the store's node.env (the home gets the link and the
+    # token-less node.pub.env); the signing key goes beside it, owner kept
+    KSTORE="${FLEET_CREDSEP_ROOT_BASE:-/var/db/fleet-cred}/$LOGIN"
+    printf '  $ %s%s\n' "${SU}" "bash $(printf %q "$BIN/fleet-credsep.sh") setenv --login $LOGIN < $(printf %q "$KEEPN/node.env")"
+    printf '  $ %s%s\n' "${SU}" "cp -p $(printf %q "$KEEPN")/node.key{,.ok} $(printf %q "$KSTORE")/  (those there are)"
+    if [ "$APPLY" = 1 ]; then
+      sudo cat "$KEEPN/node.env" | sudo bash "$BIN/fleet-credsep.sh" setenv --login "$LOGIN" || fail
+      for k in node.key node.key.ok; do
+        if sudo test -f "$KEEPN/$k"; then sudo cp -p "$KEEPN/$k" "$KSTORE/$k" || fail; fi
+      done
+      say "  node: kept — its token is back in $KSTORE (no re-join)"
     fi
-    N=$N0
   fi
+  N=$N0
 fi
 
 # 8. on a managed machine: the machine daemon takes the login (issue #2775) —
@@ -966,9 +941,7 @@ fi
 # separated = 7b did not take: the run fails (the hub must not hand this login
 # out). Check not OK yet = the proxy still coming up: waited for, then `pending`.
 CREDSEP_LINE=''
-if [ "$DONLY" = 0 ] && [ "$CREDSEP" = 0 ]; then
-  CREDSEP_LINE='credsep: off (--no-credsep — the old layout: the subscription is readable by this login'"'"'s sessions)'
-elif [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ]; then
+if [ "$DONLY" = 0 ] && [ "$APPLY" = 1 ]; then
   say ""; say "[check] $LOGIN is separated (fleet-credsep.sh status + check, as $LOGIN — the step 7b verdict)"
   AS=(sudo -u "$LOGIN" -H env FLEET_CONF_DIR="$CD" bash "$ROOT/bin/fleet-credsep.sh")
   show "${AS[@]}" status

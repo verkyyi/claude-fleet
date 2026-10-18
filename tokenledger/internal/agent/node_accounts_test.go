@@ -393,13 +393,13 @@ func TestAdminAgentSaysCredsep(t *testing.T) {
 	for _, tc := range []struct{ last, want string }{
 		{"credsep: separated", control.CredsepSeparated},
 		{"credsep: pending — proxy not running", ""},
-		{"credsep: off (--no-credsep)", ""},
+		{"credsep: off", ""},
 	} {
 		shrinkBackoff(t)
 		hub := newAccountHub(t, control.AccountOp{Op: control.AccountCreate, Login: "alice", FullName: "Alice Wang"})
 		a := adminAgent(t, hub.srv.URL, true)
 		fakeLoginScripts(t, a.cfg.Home, "0")
-		body := "#!/bin/sh\n# --no-credsep … credsep: separated\necho step 7b\necho '" + tc.last + "'\n"
+		body := "#!/bin/sh\n# credsep: separated\necho step 7b\necho '" + tc.last + "'\n"
 		if err := os.WriteFile(filepath.Join(a.cfg.Home, loginNewScript), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
