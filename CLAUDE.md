@@ -581,7 +581,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   into `~/.claude/agents` like fleet-worker, its body the session's system prompt
   (a compaction keeps it — no seat, no state hook), `fleet: reap: keep`;
   `/fleet-orchestrate` only opens one (`dash-raw-session.sh --no-repo --as
-  orchestrator`), and `fleet-role.py` reads it there when `agents/` has none; `bin/fleet-role.py get|body|prompt|sha <role>` is the one
+  orchestrator`), and `fleet-role.py` reads it there when `agents/` has none. **So is
+  the steward** (issue #4336, C3): `conf/agent-defaults/claude/agents/steward.md`, a
+  patrol checklist over generic tools only (agents · gh · send / answer_dialog ·
+  spawn · pr_verdict / pr_merge) on its own `/loop` — no `take_role`, no
+  `fleet-steward-tick.sh`, no sheet; `/fleet-steward` only opens one (`--as steward`),
+  and `agents/` is gone. `bin/fleet-role.py get|body|prompt|sha <role>` is the one
   reader, and `prompt` (the body + the role's rule-table rows) is what the plugins'
   `skills/*/role.md` copy byte for byte (`fleet-role-selftest.sh` B) — the text a
   session that takes the role reads. Nothing launches a session from it any more:
