@@ -502,8 +502,12 @@ class Trace:
             refused = Refused('OBSERVER_LOST_OR_TRUNCATED')
             pending = next(iter(self.pending.values()), (0, ''))[1]
             call = re.match(r'([a-z][a-z0-9_]{0,31})\(', pending)
+            resumed = re.match(r'<\.\.\. ([a-z][a-z0-9_]{0,31}) resumed>', pending)
+            # A prefix that is not `name(` still names its shape (live, #4625:
+            # node-a and dns refused PENDING_CALL with no syscall).
             refused.detail = 'OBSERVER_EXIT' if observer_exit != 0 else 'TRACE_FAILED' if self.failed \
-                else 'PENDING_CALL' + ('@' + call[1] if call else '')
+                else 'PENDING_CALL@' + call[1] if call else 'PENDING_RESUME@' + resumed[1] if resumed \
+                else 'PENDING_EMPTY' if not pending.strip() else 'PENDING_UNPARSED'
             raise refused
         require(self.root is not None and self.markers and self.markers[0][1] == 'startup'
                 and self.markers[-1][1] == 'end', 'MISSING_INTERVAL_BOUNDARY')
