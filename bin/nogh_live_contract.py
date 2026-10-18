@@ -107,6 +107,7 @@ def origin(value):
         raise Refused('EXACT_ORIGIN_REQUIRED') from None
 
 
+PULL_SECRET = 'c9-image-pull'
 LABEL = r'(?:[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?'
 LABEL_VALUE = r'(?:[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?'
 
@@ -136,9 +137,14 @@ def validate(plan, now=None, *, bound=True):
     """
     fields = ('version purpose run_id generation source_sha namespace namespace_uid '
               'cluster_uid expires_at budget_seconds controller row hub endpoints routes probes')
-    keys(plan, fields + (' placement' if 'placement' in plan else ''), 'PLAN_FIELDS')
+    keys(plan, fields + (' placement' if 'placement' in plan else '')
+         + (' image_pull_secret' if 'image_pull_secret' in plan else ''), 'PLAN_FIELDS')
     if 'placement' in plan:
         placement(plan['placement'])
+    # The ONE registry read credential a run's Pods may carry (#4625, operator's
+    # decision 2026-10-18): a copy of the registry helper's pull secret, made an
+    # immutable artifact of the run namespace and deleted with it. Never another name.
+    require(plan.get('image_pull_secret', PULL_SECRET) == PULL_SECRET, 'PULL_SECRET_NAME')
     require(plan['version'] == 1 and plan['purpose'] == 'c9-disposable-test', 'TEST_ONLY')
     require(identifier(plan['run_id']) and identifier(plan['namespace_uid'])
             and identifier(plan['cluster_uid']), 'RUN_IDENTITY_REQUIRED')

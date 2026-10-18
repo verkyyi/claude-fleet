@@ -64,6 +64,8 @@ def pod(plan, endpoint):
                          dict(name='control', secret=dict(secretName=name + '-control', defaultMode=0o400))])
     if role == 'proxy':
         spec['volumes'].append(dict(name='proxy-private', secret=dict(secretName=name + '-tls', defaultMode=0o400)))
+    if 'image_pull_secret' in plan:
+        spec['imagePullSecrets'] = [dict(name=plan['image_pull_secret'])]
     if 'placement' in plan:
         # Only onto the owner's named test node(s), never a production one (#4625).
         spec['nodeSelector'] = dict(plan['placement']['node_selector'])
@@ -206,7 +208,10 @@ def check_pod(plan, endpoint, actual):
                 'terminationMessagePolicy'}, 'CONTAINER_EXTRA_FIELDS')
         require(not set(c['securityContext']) - set(security([])), 'SECURITY_CONTEXT_EXTRA_FIELDS')
     require(not any(spec.get(k) for k in ('securityContext', 'hostAliases', 'runtimeClassName',
-            'hostUsers', 'imagePullSecrets', 'overhead')), 'POD_EXTRA_EXECUTION_SURFACE')
+            'hostUsers', 'overhead')), 'POD_EXTRA_EXECUTION_SURFACE')
+    # Only the plan's one pull secret, exactly (#4625); none when the plan names none.
+    require((spec.get('imagePullSecrets') or []) == expected['spec'].get('imagePullSecrets', []),
+            'POD_EXTRA_EXECUTION_SURFACE')
     require(not spec.get('ephemeralContainers'), 'TEST_TEMPLATE_CHANGED')
 
 

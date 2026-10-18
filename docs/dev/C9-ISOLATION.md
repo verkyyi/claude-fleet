@@ -69,6 +69,23 @@ recipe、Git、命令参数或公开记录。
 | `<name>-credentials` Secret | `immutable: true`；普通 workload 自己的最小凭据与 `ca.pem`；0444，普通测试登录可读 |
 | `<name>-control` Secret | `immutable: true`；`hub-token`、`provider-probe.json`；0400，仅可信控制程序可读 |
 | `<proxy-name>-tls` Secret | `immutable: true`；`tls.crt`、`tls.key`；0400，独立挂载，仅可信 adapter 可读 |
+| `c9-image-pull` Secret（可选） | `immutable: true`、`type: kubernetes.io/dockerconfigjson`，只有 `.dockerconfigjson` 一个键；从集群 registry helper 的拉取凭据**复制**进本 run namespace，随 namespace 一起删除 |
+
+**镜像拉取凭据（#4625，2026-10-18 owner 决定）。** Kubernetes 1.36 的 kubelet 会
+核对镜像拉取凭据：节点上已缓存、但当初用凭据拉下的私有镜像，不带凭据的 Pod 仍要重新
+匿名拉取并被拒绝（`pull access denied`）。所以 recipe 可写 `image_pull_secret:
+c9-image-pull`，且**只允许这一个名字**（其他名字 `PULL_SECRET_NAME`）。renderer 把它作为
+每个 run Pod 唯一的 `imagePullSecrets`；`check_pod` 只接受恰好这一项，plan 未写时
+Pod 带任何拉取凭据都拒绝（`POD_EXTRA_EXECUTION_SURFACE`）；driver 预检要求它在本
+namespace 中存在、不可变、类型和键如上（`PULL_SECRET_REQUIRED`），并像其他 artifact
+一样锚定 resourceVersion。它只是 registry 只读凭据，不进入任何容器、不挂载、不进证据；
+镜像仍是私有的，共享基础设施（ACR 设置、kubelet 策略）不改。
+
+**调度与磁盘（#4625）。** recipe 可写 `placement`：1–4 个精确 `node_selector` 标签和
+≤ 4 个 NoSchedule `key=value` toleration（进入 plan digest），renderer 写到每个 run Pod；
+`check_pod` 除此之外只接受 API server 默认的 not-ready/unreachable NoExecute toleration。
+owner 用它把 run 固定到一个不跑生产负载的测试节点。每个 run 容器的 ephemeral-storage
+request 128Mi、limit 1Gi（一个 Pod ≤ 2Gi）。
 
 `hub-token` 是测试 Hub 的正常 operator/admin 凭据，不能放进普通 workload Secret。
 `ca.pem` 包含该测试 Hub 和 adapter 的 CA；adapter 证书覆盖精确允许的 HTTPS 域名。
