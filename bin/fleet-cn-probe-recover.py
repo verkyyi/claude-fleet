@@ -42,7 +42,7 @@ FLEET_CN_RECOVER_RUN_SECS (1800) is recorded `abandoned` (not counted, the strea
 reset, one of the budget's runs) and the round goes on. Runs never overlap; a
 next one starts FLEET_CN_RECOVER_EVERY (0: at once) s after the last one's start. `done` / `exhausted` write the
 round's evidence to <state dir>/recover/<round>.json (0600): every attempt, and for
-done the N counted runs with their run dirs — for the orchestrator to check before
+done the N counted runs with their run dirs — for whoever drives it to check before
 it lifts a stable window. This script moves no ref, merges nothing, files nothing.
 
 FLEET_CN_RECOVER_NOW (epoch seconds) is the fake clock's seam.

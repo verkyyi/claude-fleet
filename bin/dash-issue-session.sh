@@ -133,7 +133,7 @@ for _a in "$@"; do
     --as) _want=as ;;
     --as=*) AS_ARG="${_a#--as=}" ;;
     # --resume <sid> + --seed-file <f> (issue #2671, EPIC #2668 C3): a PARKED
-    # session coming back (a park's wake; the steward's parker left with #4339). The window opens on the same
+    # session coming back (a park's wake; the parker left with #4339). The window opens on the same
     # conversation (`--resume <sid>`, Claude only, and only while its transcript is
     # still in the worktree's project dir) and its first turn is the file's text —
     # read the handoff, go on — instead of /fleet-claim. No transcript ⇒ the plain

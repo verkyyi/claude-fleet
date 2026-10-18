@@ -84,7 +84,7 @@
 # one launches with `--session-id <uuid>`, stamped as @norepo_sid, so fleet-restore
 # resumes THAT conversation in $HOME, not whatever else ran there last. No ledger
 # row (nothing lands).
-# A seeded no-repo session the orchestrator or the person opens gets a DESK ticket
+# A seeded no-repo session the person or a keyless session opens gets a DESK ticket
 # (issue #2676): `desk`-labelled in the desk repo (fleet_desk_repo), the window
 # stamped `@desk 1` `@issue N` `@repo <desk>` beside `@norepo 1` — still no
 # worktree — so a comment on it reaches the session. --desk[=<owner/name>] asks for
@@ -219,7 +219,7 @@ while [ "$#" -gt 0 ]; do
     # list hides it and `fleet ls` marks it.
     --test-identity) TEST_ID=1; shift ;;
     # --desk[=<owner/name>] / --no-desk (issue #2676): a no-repo session's ticket.
-    # By default one the orchestrator or the person (`--origin hub`) opens with a
+    # By default one the person (`--origin hub`) or a keyless session opens with a
     # seed and no repo gets a desk ticket (fleet_desk_repo); --desk asks for one
     # whoever opens it — in <owner/name> when named (a private project's no-code
     # work is ticketed in ITS repo, 发起人拍板 6) — and --no-desk never files one.
@@ -790,7 +790,7 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 # On a new-window failure, roll back the just-created worktree + branch so a failed
 # spawn leaves no orphan (the janitor would otherwise inherit it).
 # --- the desk ticket (issue #2676, EPIC #2668 C8) -----------------------------
-# A no-code session the orchestrator or the person opens — a design page, a piece
+# A no-code session the person or a keyless session opens — a design page, a piece
 # of research, a release — gets a ticket all the same, so a comment has somewhere
 # to reach it and its outcome somewhere to stay: filed in the desk repo with the
 # `desk` label (fleet-ticket.sh new — the one filer channel, plus one registry row
@@ -807,9 +807,11 @@ _desk_clip() {   # <chars> <text> — by character, never a cut UTF-8 byte
 }
 if [ "$NOREPO" = 1 ] && [ "$warm" = 0 ] && [ "$TEST_ID" != 1 ] && [ "$DESK_ARG" != off ] && [ -n "$PROMPT" ]; then
   case "$DESK_ARG" in
-    '') case "$ORIGIN_RAW:$ORIGIN" in
-          hub:*|*:orchestrator) DESK_REPO=$(fleet_desk_repo "$SESS") || DESK_REPO='' ;;
-        esac ;;
+    '') # the person (`--origin hub`), or a session with no key of its own (named by
+        # its identity, issue #4341 — a session template opened bare)
+        if [ "$ORIGIN_RAW" = hub ] || { [ -z "$ORIGIN_WID" ] && fleet_is_fid "$ORIGIN"; }; then
+          DESK_REPO=$(fleet_desk_repo "$SESS") || DESK_REPO=''
+        fi ;;
     on) DESK_REPO=$(fleet_norm_repo "${FLEET_DESK_REPO:-verkyyi/claude-fleet}") ;;
     *)  DESK_REPO=$(fleet_norm_repo "$DESK_ARG") ;;
   esac
@@ -938,11 +940,9 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844)
 # The agent file it starts as, before its agent starts (fleet-claude.sh stamps it
-# again off the file it launched): whether that file grants `spawn` decides
-# whether its dispatch group mounts (issue #3122), whichever agent runs it. The old
-# `--role epic-driver` road still marks @fleet_role_def for one version, so a
-# login whose agents pass has not shipped epic-driver yet keeps its driver able
-# to spawn (# compat-1v: 下一批删).
+# again off the file it launched): whether that file grants `spawn` is recorded
+# (issue #3122), never a gate — every session may spawn (issues #4591, #4703), so
+# the old `--role epic-driver` road marks nothing any more (issue #4341).
 # All of these stamps precede input delivery. Send one argv command list; values
 # stay arguments (including dispatch JSON), never shell/tmux source text.
 window_stamps=()
@@ -954,7 +954,6 @@ stamp_option() {
   stamp_option @agent_def_sha "$(as_kv sha)"
   stamp_option @agent_spawn "$(as_kv spawn)"; }
 [ -z "$AS_KV" ] && stamp_option @agent_spawn 1   # no agent file, no issue: may spawn (#4334)
-[ "$ROLE" = epic-driver ] && stamp_option @fleet_role_def epic-driver 2>/dev/null
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null
 [ "$PIN" = 1 ] && stamp_option @pin 1 2>/dev/null

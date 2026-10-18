@@ -14,7 +14,7 @@
 # joined on the operation id. Names and meaning: EPIC #2230 共同约定 3; every
 # point is epoch ms.
 #
-# Prints the last N sends (default 20; orchestrator hand-overs are no sends):
+# Prints the last N sends (default 20; a session's hand-overs are no sends):
 # each segment's p50 and max over the sends that have both ends, how many did,
 # and the slowest send end to end. A point no side recorded (an older node sends
 # no timing, an older client no t_enter) is 「—」, never an error.

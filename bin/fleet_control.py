@@ -966,7 +966,7 @@ class Control:
             elif req["action"] == "orch_ensure":
                 # issue #2616's ⌘N from an older hub: there is no orchestrating
                 # seat to open any more (issue #3118) — compat-1v: 下一批删
-                raise Unattempted("INVALID_STATE", "没有编排：起一个编排会话（spawn agent:orchestrator）")
+                raise Unattempted("INVALID_STATE", "没有编排：起一个编排会话（spawn agent:orchestrator）")  # compat-1v: 下一批删
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True

@@ -572,9 +572,17 @@ one-off drill / audit records do not go in the repo (issue #3576).
   answers 「retired」, exit 2, one version), `fleet-role.py`, `fleet_rules.py`,
   `conf/role-rules.default.md`, the plugin's skill / role / rules / `/qd`,
   install-apply's `roles-windows:` step. Several orchestrators may run at once; each
-  looks after what it dispatched. The readers of an old mark — `fleet_role_holder`,
-  `roles.held`, `fleet_win_for_key orchestrator|steward`, restore's re-stamp — stay
-  one version for a session that took the role before (# compat-1v, EPIC #4333 C8).
+  looks after what it dispatched. **The shared parts know no role** (issue #4341, C8):
+  a session with no key of its own (no issue, no scratch — a template opened bare, a
+  person's no-repo session) answers to its IDENTITY — `fleet_origin_key` /
+  `fleet_window_okey` print its `@fleet_id` (home and the panels: nothing), so its
+  children report to it; `agent:<name>` (`fleet_win_for_agent`, by `@agent_def`)
+  addresses the session started from that agent file, and `fleet-peer-send.sh` gives
+  a message to nobody-runs-it to the sender's parent, else the person's reminder —
+  never exit 0 unheld. `fleet_role_holder`, `roles.held` and restore's re-stamp are
+  gone; the bare words `orchestrator` / `steward` (an older child's `@origin`, a
+  `send` target) and a leftover `@fleet_role_def` read as `agent:<name>` for one
+  version (# compat-1v); column 20 `role=` is sent empty. `keyless-parent-selftest.sh`.
   The plugins' `role.md` are gone, so `plugin.json`'s `"agents": []` only keeps
   the repo root from registering agent files as plugin subagents.
 - **Orchestration is an extension a person installs, and nothing keeps a session
@@ -597,9 +605,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   doctor's `orch` rows, and `--bridge-seat` by role name (the dispatch group is mounted
   for every session, issue #4703). `@fleet_role
   orchestrator|steward` is never written again; a window still wearing it (an old
-  seat) is an ordinary row for restore / migrate / move, and only the readers keep
-  it one version (`fleet_role_holder`'s ③, the idle reaper leaves such a window for
-  its person). BREAK-IT `role-auto-reopen-off`.
+  seat) is an ordinary row for restore / migrate / move / cleanup, and only
+  `fleet_win_for_agent` reads it one version. BREAK-IT `role-auto-reopen-off`.
   The fleet-steward plugin and the programs behind it — the beat, the health watch,
   the decision sheet, the patrol / batches panes, parking, the followup list — are
   gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and

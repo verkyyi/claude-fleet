@@ -14,7 +14,7 @@ goes; the home pane and whatever runs in it stay.
                                 `@reap_policy keep`). No fleet: rc 3, or with
                                 --init the existing lifecycle entry brings a
                                 no-repo one up (fleet-up.sh --no-repo --no-attach
-                                — no issue, no agent, no orchestrator). The pane
+                                — no issue, no agent, no template). The pane
                                 lost (shell exited, server gone): rc 5 `ended` —
                                 nothing is recreated until --renew (generation +1).
     status                      the same reading, nothing written: rc 0 live ·

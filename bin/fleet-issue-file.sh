@@ -40,8 +40,8 @@
 #      not hold; else S is an older version without the fix and it is only noted
 #      there. Either way exit 5 and that URL, never a new issue.
 #      NOT AUTOMATIC ANY MORE (issue #4271, replacing #2175's auto road): only
-#      --breakage / --breakage-key make a filing a breakage. A person's or the
-#      orchestrator's ordinary issue whose text says 「红」 is an ordinary issue —
+#      --breakage / --breakage-key make a filing a breakage. A person's or a
+#      session's ordinary issue whose text says 「红」 is an ordinary issue —
 #      #4268 (a release-gate design ticket) was taken as macOS / shard 6's breakage
 #      and swallowed the next filing as 「同一故障」. The old auto knob is read
 #      by nothing; --no-breakage still parses (a no-op).
@@ -71,8 +71,8 @@
 #   5c. any pane may --spawn, a worker's too (issue #4591 lifted #2960's refusal);
 #      a NEW breakage a worker files WITHOUT --spawn spawns nobody (issue #4337): the
 #      person is alerted (fleet-alerts.sh event breakage) and the worker's parent
-#      session told (fleet-peer-send.sh, fid first) — an orchestrator or steward
-#      session there spawns its fixer, else it waits for the person.
+#      session told (fleet-peer-send.sh, fid first) — that session may spawn its
+#      fixer, else it waits for the person.
 #
 # Prints the created issue URL on stdout (exactly like GitHub's own create) so a
 # caller can parse the trailing #number; all diagnostics + refusals go to stderr.
@@ -95,7 +95,7 @@
 #      PR body must carry (「日报回复 <日期>#<n>」, `<!-- daily-plan -->`).
 #      A --spawn of one keeps the default reap (merged): an open draft is never reaped.
 #   --task T<n> (issue #3330): the hub's task record this issue is filed FOR — the
-#      orchestrator's `task` tool opened it first; a development task then files
+#      `task` tool opened it first; a development task then files
 #      its issue here. The body says 「hub 任务 T<n>」, the issue is hung on the
 #      record (bin/fleet-task-record.sh set --issue) and a --spawn carries --task to
 #      the worker (stamped @task). No --task ⇒ byte for byte as before.
@@ -531,12 +531,12 @@ fi
 # --- 5c. a worker's breakage filed without --spawn: the person and the parent told --
 # Nobody spawns its fixer by itself any more (issue #4337, EPIC #4333 拍板 3): the
 # person gets one breakage alert, the worker's parent session one message (an
-# orchestrator / steward session there may spawn it), and the issue waits — no
+# session may spawn it), and the issue waits — no
 # queue. A parent that cannot be told is said on stderr; the filing stands.
 if [ "$worker_seat" = 1 ] && [ "$spawn" != 1 ] && [ -n "$breakage_key" ] && [ -n "$num" ]; then
   _bt=$(printf '%s' "$title" | tr '\t\n' '  ')
   bash "$BIN/fleet-alerts.sh" event breakage \
-    "fleet: base red — $repo#$num filed ($_bt); nobody spawned its fixer: spawn it, or let an orchestrator / steward session" \
+    "fleet: base red — $repo#$num filed ($_bt); nobody spawned its fixer: spawn it, or ask a session to" \
     >/dev/null 2>&1 \
     || printf 'fleet-issue-file: #%s filed, but the breakage alert could not be raised\n' "$num" >&2
   _pt=''

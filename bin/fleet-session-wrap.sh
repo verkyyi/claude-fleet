@@ -16,7 +16,7 @@
 #     also counts down — 「10 秒后关闭 · 按任意键取消」 (issue #3170) — and at 0
 #     does what q does; any key cancels it. FLEET_EXIT_CLOSE_SECS (fleet.conf or
 #     the environment, default 10) sets it, 0 = no countdown (the line as before);
-#     a crash, a refused / failed launch and the orchestrator / steward never count.
+#     a crash and a refused / failed launch never count.
 #   • the FLEET's own exit — sleep, migrate, move, stop, transfer stamp
 #     the window's @wrap_quiet before they type /exit — and a FIRST launch that
 #     ends within FLEET_WRAP_FAST_FAIL seconds (default 5): it returns the
@@ -391,13 +391,11 @@ while :; do
     *) cred_tries=0 ;;
   esac
   # The countdown (issue #3170): only the person's own exit — never a crash, a
-  # failed relaunch or a refused launch (the page must stay to say why), and never
-  # the orchestrator / steward (their ensure reopens them; a close would fight it).
+  # failed relaunch or a refused launch (the page must stay to say why). Every
+  # session alike: nothing reopens a role's window any more (issue #4341).
   close_n=0
   case "$rc" in 0|130)
-    if [ -z "$failed" ]; then
-      case "$(opt @fleet_role)" in orchestrator|steward) ;; *) close_n=$(close_secs) ;; esac
-    fi ;;
+    [ -z "$failed" ] && close_n=$(close_secs) ;;
   esac
   [ "$close_n" -gt 0 ] && pargs+=(--close-in "$close_n")
   # The personal layer (#1862): absent on this login → nothing passed, the page as before.

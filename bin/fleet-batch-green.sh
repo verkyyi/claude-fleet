@@ -5,8 +5,8 @@
 #   fleet-batch-green.sh [--dry-run]
 #
 # WHY. Once the EPIC driver's session is gone (closed, reaped, its loop ended),
-# the only code that looked at its members' PRs was the steward's beat — and that
-# runs only for a session HOLDING the steward role. With nobody holding it, a
+# the only code that looked at its members' PRs was the old patrol's beat — and
+# that ran only for a session holding its seat. With nobody holding it, a
 # member that went green waited unseen: the sidebar's grey 「#N … 没人在跑」 row
 # says the batch stopped, never that work is ready to land. This is the core's
 # read-only half of it, on the diskguard tick (beside macos_watch): it MERGES

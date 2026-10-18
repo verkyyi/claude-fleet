@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """fleet_ticket.py — the ticket door's python half (issue #3595, EPIC #3570 C2).
 
-The same verbs as bin/fleet-ticket.sh, for python callers (the steward, parking,
-the decision sheet) — and the ONE place the hub backend lives: every verb on a
+The same verbs as bin/fleet-ticket.sh, for python callers (parking, once the
+decision sheet) — and the ONE place the hub backend lives: every verb on a
 `hub:<owner/name>#<N>` ticket (or a repo whose FLEET_TICKETS=hub) is a REST call
 to the hub's /v1/fleet/tickets (C1, tokenledger/internal/api/fleet_tickets.go).
 A `gh:` ticket is handed to the shell door unchanged, so GitHub stays behind

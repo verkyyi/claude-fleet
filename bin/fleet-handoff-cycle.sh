@@ -250,8 +250,8 @@ printf '%s\n' "$$" > "$LOCK" 2>/dev/null || true
 ( sleep "$HARD_TIMEOUT" 2>/dev/null; kill -TERM "$$" 2>/dev/null ) &
 WATCHDOG=$!
 # The window says a cycle owns it (issue #2937): @handoff_cycle <epoch>:<pid>,
-# read by fleet_handoff_cycle_live — the orchestrator's / steward's `ensure`
-# (renew, revive) and the cfg-restart leave the window alone while it holds, so
+# read by fleet_handoff_cycle_live — the old seats' `ensure` (renew, revive)
+# and the cfg-restart leave the window alone while it holds, so
 # no reopen resumes the conversation this cycle is about to clear. Unset on exit,
 # only while it is still ours.
 CYCLE_MARK="$(date +%s 2>/dev/null || echo 0):$$"
@@ -269,8 +269,8 @@ log "armed: store=$STORE pane=$PANE socket=${SOCKET:-\$TMUX} idle_to=${IDLE_TIME
 LADDER_AT="$(TM display-message -p -t "$PANE" '#{@ctx_pct}|#{@compact_count}' 2>/dev/null)"
 
 # ladder_fail <why> — a fail-safe abort is a ladder step of its own (issue #2937):
-# `handoff-failed` (stored, not cleared), read by fleet-context.sh's `last` line and
-# the steward's page; the alert is notify()'s.
+# `handoff-failed` (stored, not cleared), read by fleet-context.sh's `last` line; the
+# alert is notify()'s.
 ladder_fail() {
   [ -f "$BIN/fleet-ladder-log.sh" ] && FLEET_HANDOFF_LOG_DIR="$LOG_DIR" sh "$BIN/fleet-ladder-log.sh" handoff-failed \
     --pane "$PANE" ${SOCKET:+--socket "$SOCKET"} --ctx "${LADDER_AT%%|*}" --count "${LADDER_AT#*|}" \

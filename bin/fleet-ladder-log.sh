@@ -20,7 +20,7 @@
 #                                               stored, the context NOT cleared — reason
 #                                               `never-idle`, `operator`, `unconfirmed`,
 #                                               `timeout` (issue #2937; fleet-context.sh's
-#                                               `last` line and the steward's page read it)
+#                                               `last` line reads it)
 #   hub-warn          bin/set-claude-state.sh   the HUB reached the handoff line:
 #                                               warned + notified, never blocked (#1319)
 #   native-precompact bin/precompact-hook.sh    PreCompact: Claude Code's OWN compaction

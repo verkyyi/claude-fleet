@@ -530,6 +530,8 @@ def cred_main(action):
 
 # --- agents / send (moved from fleet-peer-mcp.py, issue #1185) ------------------
 
+FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
 def slug(repo):
     return re.sub(r"[^A-Za-z0-9._-]", "", repo.replace("/", "-"))
 
@@ -548,24 +550,25 @@ def scratch_key(path):
 def window_key(row, one_repo, no_repo=False):
     """fleet_window_okey's key: `<slug>:issue-N` / `<slug>:scratch-N` in every
     fleet (issue #1939); a window with no @repo is the fleet's ONE repo's
-    (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown."""
-    if row.get("role") == "orchestrator":
-        return "orchestrator"           # the fleet's orchestrating session (issue #2129)
-    if row.get("role") == "steward":
-        return "steward"                # its steward (issue #2670)
+    (<one_repo>, fleet_window_repo's fallback), and nothing when that is unknown.
+    A session with no key of its own answers to its identity, @fleet_id (issue
+    #4341) — home and the panels have none."""
+    fid = row.get("fleet_id", "")
+    if row.get("role") in ("home", "panel") or not FID_RE.match(fid):
+        fid = ""
     if row["issue"].isdigit():
         key = "issue-" + row["issue"]
     else:
         key = scratch_key(row["worktree"]) or scratch_key(row["path"])
         if not key:
-            return ""
+            return fid
     if no_repo and not row["repo"]:
         return key                      # a fleet hosting no repo: bare is its only spelling
     if row["norepo"] == "1":
-        return ""
+        return fid
     repo = row["repo"] or one_repo
     if not repo:
-        return ""
+        return fid
     return slug(repo) + ":" + key
 
 
@@ -598,17 +601,17 @@ def list_agents():
     no_repo = not one
     fmt = "#{window_id}\t#{session_name}\t#{window_name}\t#{@issue}\t#{@cc_agent}\t" \
           "#{?@worker_lifecycle,#{@worker_lifecycle},#{@claude_state}}\t#{@claude_needs}\t" \
-          "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}\t#{@fleet_role}"
+          "#{@origin}\t#{@repo}\t#{@norepo}\t#{@worktree}\t#{pane_current_path}\t#{@fleet_role}\t#{@fleet_id}"
     out = tmux("list-windows", "-a", "-F", fmt)
     agents = []
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) == 12:
-            parts.append("")            # no @fleet_role column: an older reader's row
-        if len(parts) != 13 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
+        while 12 <= len(parts) < 14:
+            parts.append("")            # no @fleet_role / @fleet_id column: an older reader's row
+        if len(parts) != 14 or parts[1] != session or parts[2] in ("dash", "plan", "backlog", "home"):
             continue
         row = dict(zip(("window_id", "session", "window_name", "issue", "agent", "state", "needs",
-                        "origin", "repo", "norepo", "worktree", "path", "role"), parts))
+                        "origin", "repo", "norepo", "worktree", "path", "role", "fleet_id"), parts))
         key = window_key(row, one_repo, no_repo)
         state = row["needs"] or row["state"] or "unknown"
         agent = "codex" if row["agent"] == "codex" else "claude"
@@ -627,7 +630,9 @@ def list_agents():
     return {"session": session, "self": me or None, "parent": parent or None, "agents": agents}
 
 
-FID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# An older child's @origin may still be one of the two bare words a role answered
+# to; fleet_win_for_key reads them as agent files for one version.
+OLD_ROLE_ORIGINS = ("orchestrator", "steward")  # compat-1v: 下一批删
 
 
 def parent_remote():
@@ -644,7 +649,7 @@ def parent_remote():
 
 def parent_window():
     parent = origin_option()
-    if parent not in ("orchestrator", "steward") and not FID_RE.match(parent or "") \
+    if parent not in OLD_ROLE_ORIGINS and not FID_RE.match(parent or "") \
             and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
         # A parent on another machine is addressed by its worker_id (issue #3439);
         # fleet-peer-send.sh carries `wid:` through the hub.
@@ -680,9 +685,12 @@ def send_message(to, text):
     if not isinstance(text, str) or not text.strip():
         raise Refused("text is required")
     target = to.strip()
+    if target in OLD_ROLE_ORIGINS:
+        target = "agent:" + target      # compat-1v: 下一批删 — the bare word an older session sends to
     if target != "parent" and not re.match(
-            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|orchestrator|steward|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, scratch-<N>, orchestrator or parent")
+            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}"
+            r"|[@%][A-Za-z0-9_.:-]+)$", target):
+        raise Refused("to must be issue:<N>, scratch-<N>, agent:<name> or parent")
     if target == "parent":
         target = parent_window()
     result = run(["bash", str(BIN / "fleet-peer-send.sh"), target, "-"], input_text=text, check=False,
@@ -807,7 +815,7 @@ PR_NOTE = {"type": "string", "description": "Draft-only, plus what the PR body m
 
 
 def tool_task(args):
-    """The orchestrator's dispatch, record first (issue #3330): fleet-task-record.sh
+    """A dispatch, record first (issue #3330): fleet-task-record.sh
     dispatch — the hub's T<n>, then a repo task's issue (+ worker), or a no-repo
     session given the words."""
     argv = [str(BIN / "fleet-task-record.sh"), "dispatch", "--title", args["title"], "--body-file", "-"]
@@ -841,7 +849,7 @@ def tool_take_role(args):
     role went — and changes nothing. # compat-1v: 下一批删"""
     return {"command": "take_role", "exit": 2, "stdout": "",
             "stderr": "take_role is retired (EPIC #4333): %s is a session template now — open one with "
-                      "spawn agent:%s; nothing was marked\n" % (args.get("role", "a role"), args.get("role", "orchestrator"))}
+                      "spawn agent:%s; nothing was marked\n" % (args.get("role", "a role"), args.get("role", "orchestrator"))}  # compat-1v: 下一批删
 
 
 # --- 报 问 记 合 (issue #1808, EPIC #1813 C6) ------------------------------------
@@ -1325,7 +1333,8 @@ TOOLS = {
             "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {
         "description": "Send text to a live fleet peer as its next turn (bin/fleet-peer-send.sh). "
-                       "to is issue:<N>, scratch-<N>, orchestrator or parent.",
+                       "to is issue:<N>, scratch-<N>, agent:<name> (the session started from that agent "
+                       "file; none running ⇒ your parent, else the person's reminder) or parent.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
                         "required": ["to", "text"], "additionalProperties": False}}),
     "report": (tool_report, {
@@ -1387,19 +1396,19 @@ TOOLS = {
             "picks": {"type": "array", "minItems": 1, "items": {"type": "string"},
                       "description": "One option label per question, verbatim; N=<label> when it has several "
                                      "questions; several labels for one multiSelect question."},
-            "by": {"type": "string", "enum": ["person", "session", "default", "steward"],
+            "by": {"type": "string", "enum": ["person", "session", "default", "steward"],  # compat-1v: 下一批删 (the old name)
                    "description": "Whose answer this is (default person): session = a session answering on "
-                                  "the charter's word (steward is its old name, kept one version)."},
+                                  "the charter's word."},
             "basis": {"type": "string", "description": "Why: the charter's rule, the sheet, the deadline."},
             "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
             "required": ["window", "fp", "picks"], "additionalProperties": False}}),
     "take_role": (tool_take_role, {
-        "description": "Retired (issue #4340): roles are session templates now — spawn agent:orchestrator "
-                       "or agent:steward. Answers exit 2 and marks nothing; kept one version for a session "
+        "description": "Retired (issue #4340): roles are session templates now — spawn agent:orchestrator "  # compat-1v: 下一批删
+                       "or agent:steward. Answers exit 2 and marks nothing; kept one version for a session "  # compat-1v: 下一批删
                        "that started with it.",
         "inputSchema": {"type": "object", "properties": {
-            "role": {"type": "string", "enum": ["orchestrator", "steward"]},
+            "role": {"type": "string", "enum": ["orchestrator", "steward"]},  # compat-1v: 下一批删
             "action": {"type": "string", "enum": ["take", "steal", "drop", "who"],
                        "description": "take (default) · steal · drop · who."}},
             "required": ["role"], "additionalProperties": False}}),
@@ -1594,7 +1603,7 @@ TOOLS = {
             "result": {"type": "string", "description": "The four sections as one JSON object (text)."}},
             "required": ["id", "result"], "additionalProperties": False}}),
     "debug_propose": (tool_debug_propose, {
-        "description": "The debugger's: one thing the fleet side should change, handed to the orchestrator as a "
+        "description": "The debugger's: one thing the fleet side should change, handed to an orchestrating session as a "
                        "line to nod at (bin/fleet-debug-desk.py propose) — never an issue by itself.",
         "inputSchema": {"type": "object", "properties": {
             "id": DEBUG_ID,

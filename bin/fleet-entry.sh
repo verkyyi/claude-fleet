@@ -10,8 +10,8 @@
 #   no command, a terminal (SSH_TTY: a phone in Termius, plain `ssh -p 22022 …`)
 #                                  ⇒ the 看台: `fleet-remote-view.sh attach --thin
 #     --view <key>-<fp6> --resume [--want <last>] --device <b64> --route entry` —
-#     the first screen is #3060's: the session you looked at last, else the
-#     orchestrator; ⌃\ in the 看台 is the shell as always. A 看台 that cannot come
+#     the first screen is #3060's: the session you looked at last, else a
+#     new one; ⌃\ in the 看台 is the shell as always. A 看台 that cannot come
 #     up (no fleet live here) says so and leaves you at the login shell.
 #   no command, no terminal (`ssh -T`)
 #                                  ⇒ the login shell

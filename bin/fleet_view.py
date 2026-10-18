@@ -89,7 +89,7 @@ x failed · » working · ✓ done · ∙ idle · ? lost, coloured unless NO_COL
 FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii). Selection keeps the same glyph;
 `?` on an empty query shows the legend. Machine, login and repo
 (only when 2+) are tags at the row's end, never a group. No session
-is special (issue #3119): the one holding the orchestrator or the steward is a row
+is special (issues #3119, #4341): a session from any template is a row
 like any other — no session is behind 「新任务」 below. All of it through
 fleet-ui-lang.sh (`view_*`).
 
@@ -1721,8 +1721,8 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
     (dash-raw-session.sh --no-repo, the hub's own origin; the warm pool's HOME
     entry when one is ready, issue #3311), then go() onto it: the
-    pane is the agent's input. No session is special, so nothing here names an
-    orchestrator. rc as go(); 3 when none opened (one line on the client).
+    pane is the agent's input. No session is special, so nothing here names a
+    template. rc as go(); 3 when none opened (one line on the client).
     ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
     `agent` (--agent, the panel's resolved selection) and `draft` (the typed
     words, left unsubmitted). Explicit `prompt` callers retain seeded starts."""

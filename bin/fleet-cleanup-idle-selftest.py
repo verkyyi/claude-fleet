@@ -1287,7 +1287,7 @@ class HomeReap(ReapPolicy):
         self.set("@claude_state_ts", str(int(time.time()) - 600))
         self.due()
         self.assertTrue(self.exists())               # no parent: #2565's exited rule
-        self.set("@origin", "orchestrator")
+        self.set("@origin", "1f0e0000-0000-4000-8000-000000004341")
         self.set("@claude_state_ts", str(int(time.time()) - 120))
         self.due()
         self.assertTrue(self.exists())               # done 120 s < 5 m: not yet
@@ -1301,7 +1301,7 @@ class HomeReap(ReapPolicy):
         self.assertFalse(self.exists())
 
     def test_spawned_norepo_without_policy_is_never_closed(self):
-        self.set("@origin", "orchestrator")
+        self.set("@origin", "1f0e0000-0000-4000-8000-000000004341")
         self.set("@claude_state_ts", str(int(time.time()) - 900000))
         self.due()
         self.assertTrue(self.exists())               # no policy: #791, as before

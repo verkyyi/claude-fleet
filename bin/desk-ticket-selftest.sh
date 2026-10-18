@@ -176,9 +176,9 @@ FLEET_HOST=1 run_raw --origin scratch-3 --prompt '查一下 X'
 [ -s "$LOG" ] && fail "C a scratch's no-repo child gets no ticket by default" "$(cat "$LOG")"
 FLEET_HOST=1 run_raw --origin scratch-3 --prompt '查一下 X' --desk
 grep -q 'fleet-issue-file.sh .*\[--repo\] \[acme/desk\]' "$LOG" || fail "C --desk asks for one anyway" "$(cat "$LOG" "$WORK/err")"
-FLEET_HOST=1 run_raw --origin orchestrator --prompt '查一下 X'
-grep -q '^fleet-issue-file.sh' "$LOG" || fail "C the orchestrator's spawn is ticketed" "$(cat "$LOG" "$WORK/err")"
-ok "C only the person / the orchestrator by default; --desk for anyone"
+FLEET_HOST=1 run_raw --origin 1f0e0000-0000-4000-8000-000000004341 --prompt '查一下 X'
+grep -q '^fleet-issue-file.sh' "$LOG" || fail "C a keyless session's spawn (named by its identity) is ticketed" "$(cat "$LOG" "$WORK/err")"
+ok "C only the person / a keyless session by default; --desk for anyone"
 
 # ============================ D: --desk=<repo> =================================
 FLEET_HOST=1 run_raw --origin hub --prompt '拓客：写第二版' --desk=acme/widgets

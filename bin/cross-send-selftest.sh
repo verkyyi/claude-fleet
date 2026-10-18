@@ -46,7 +46,8 @@ tf -f /dev/null new-session -d -s "$L" -n plan 'while :; do sleep 300; done' 2>/
   || { echo 'cross-send selftest: cannot start an isolated tmux server — SKIP' >&2; exit 0; }
 SP=$(tf display-message -p '#{socket_path}')
 wo=$(tf new-window -d -P -F '#{window_id}' -n orch 'while :; do sleep 300; done')
-tf set-window-option -t "$wo" @fleet_role orchestrator
+tf set-window-option -t "$wo" @fleet_role worker \; set-window-option -t "$wo" @norepo 1 \; \
+   set-window-option -t "$wo" @fleet_id 0dbf19b9-aaaa-4bbb-8ccc-000000002729
 po=$(tf display-message -p -t "$wo" '#{pane_id}')
 w7=$(tf new-window -d -P -F '#{window_id}' -n issue-7 'while :; do sleep 300; done')
 tf set-window-option -t "$w7" @issue 7
@@ -78,7 +79,7 @@ from_pane() {
 # The hub's worker_id grammar, the claude-fleet copy of fleetid.workerIDRE.
 hub_ok() { (cd "$BIN" && python3 -c 'import sys, fleet_hub_common as h; sys.exit(0 if h.WORKER_ID_RE.fullmatch(sys.argv[1]) else 1)' "$1"); }
 
-# --- G: the orchestrator sends as its identity ----------------------------------------------
+# --- G: a keyless session sends as its identity (its key, issue #4341) ----------------------------------------------
 export FLEET_PEER_RECEIPT_SECS=0
 from_pane "$po" "wid:$F/issue-42" 'hello from the orchestrator'
 f=$(outbox | head -1)

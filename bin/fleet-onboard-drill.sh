@@ -159,8 +159,8 @@
 # #2842): it opens a real login and runs sudo, so the preflight asks `sudo -n
 # true` and refuses with 「需要管理员登录（有 sudo）」 when it does not pass — a
 # fleet worker runs on a taken-over login with no admin and no sudo, so it is
-# refused by that, and a session that has the ability (the orchestrator over an
-# admin's ssh) runs the drill. Run it on the machine meant for drills.
+# refused by that, and a session that has the ability (a coordinating session
+# over an admin's ssh) runs the drill. Run it on the machine meant for drills.
 #
 # Exit: 0 every step passed · 1 a step failed (the teardown still ran) ·
 #       2 bad arguments / preflight · 3 the login (or its home) already exists

@@ -191,11 +191,9 @@ case "$mode" in
     # Column 19 (issue #1951): `detail=<question>` — what a session in `needs`
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
-    # Column 20 (issue #1957): `role=` — since issue #3119 no session is special:
-    # the window holding the orchestrator or the steward (@fleet_role) says
-    # `role=worker`, so every machine's list draws it as an ordinary row (an
-    # older node's `role=orchestrator|steward` is read by the hub for one more
-    # version); empty on every other window.
+    # Column 20 (issue #1957): `role=` — no session wears a role (issues #3119,
+    # #4341): sent empty on every window for one version so an older reader keeps
+    # its column count. # compat-1v: 下一批删
     # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
     # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
     # the counts off THIS machine's mark for that batch (epic-running.d); its
@@ -229,9 +227,8 @@ case "$mode" in
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
     # Columns 31-37 (orchq= · orchdec= · orchtodo= · orchpark= · orchpage= ·
-    # orchparkl= · orchtodol=) were the resident orchestrator's and steward's
-    # (issues #2617 #2670 #2672 #2671 #2735 #2913); gone with the seat (issue
-    # #3118). Column 31 (issue #3369): `orphanrep=` — the results of sessions
+    # orchparkl= · orchtodol=) were the resident seats' (issues #2617 #2670 #2672
+    # #2671 #2735 #2913); gone with the seat (issue #3118). Column 31 (issue #3369): `orphanrep=` — the results of sessions
     # whose spawner was gone, filed for the person (global/orphan-reports.ndjson,
     # fleet-report-parent.sh) and not read yet: bin/fleet-orphan-reports.py cell —
     # `id\037ts\037repo\037child\037state\037pr\037summary`, \036-joined, at most
@@ -251,7 +248,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t#{?#{||:#{==:#{@fleet_role},orchestrator},#{==:#{@fleet_role},steward}},#{@fleet_role},}\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
@@ -350,8 +347,7 @@ case "$mode" in
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
       fi
-      # the holder of an old seat is an ordinary row (issue #3119): `role=worker`
-      orole=''; [ -n "$wrole" ] && orole=worker
+      orole=''   # column 20 is always empty (issue #4341); $wrole only keeps the split
       printf '%s\tbusy=%s\tborn=%s\tcfg=%s\ttitle=%s\treap=%s\tdetail=%s\trole=%s\tepic=%s\tepicstale=%s\tbackfill=%s\tctxleft=%s\tctxband=%s\tctxts=%s\tmodel=%s\teffort=%s\tagentstatus=%s\ttest=%s\torphanrep=%s\tpin=%s\n' "$row" "$b" "$born" "$FCFG_STATE" "$t" "$wreap" "$wdet" "$orole" "$wepic" "$estale" "$wbf" "$cl" "$cb" "$cts" "$cm" "$ce" "$cas" "$wtest" "$orep" "$wpin"
     done <<<"$rows"
     ;;
@@ -816,7 +812,7 @@ case "$mode" in
   # orchestrating seat to open any more (issue #3118): answer 3 (off) with one
   # line, never a window. # compat-1v: 下一批删
   orch)
-    echo "没有编排：起一个编排会话（spawn agent:orchestrator）" >&2
+    echo "没有编排：起一个编排会话（spawn agent:orchestrator）" >&2   # compat-1v: 下一批删
     exit 3
     ;;
   stop)

@@ -10,7 +10,7 @@ EPIC #2889 C4): what the debugger session's three fleet tools run.
                              checked here first by the same rules (the hub checks again)
   propose <id> <text>        one thing to change on our side, for the person to nod at
 
-(The `feed` the steward's beat read left with it — issue #4339.)
+(The `feed` the old patrol beat read left with it — issue #4339.)
 
 Every call is AS this login's node (node.env's token, read here, never exported;
 a separated login through its credential proxy's broker — fleet-agent-team.py's

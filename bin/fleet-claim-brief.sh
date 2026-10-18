@@ -152,7 +152,7 @@ if [ -n "$at_remote" ]; then
   printf 'origin: %s on another machine (worker_id %s — report to it when you ship: the report / send parent tools carry it through the hub; `queued` means it waits there until that session can take it)\n' "$at_origin" "$at_owid"
 else
 case "$at_origin" in
-  orchestrator|steward) printf 'origin: %s (spawned by the session holding the %s role — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "$at_origin" ;;
+  orchestrator|steward) printf 'origin: %s (an older parent named by that word — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" ;;   # compat-1v: 下一批删
   issue-*)   printf 'origin: %s (spawned by the worker on issue #%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#issue-}" ;;
   scratch-*) printf 'origin: %s (spawned by scratch session ~%s — report to it when you ship: bin/fleet-report-parent.sh)\n' "$at_origin" "${at_origin#scratch-}" ;;
   # Repo-qualified (issue #789 — a fleet hosting 2+ repos): the same two keys with

@@ -302,12 +302,10 @@ def inventory_row(parts):
     its kind's default) — the other machines' sidebars draw 常驻 etc. off it.
     Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
     (@claude_needs_detail) — the client's bar and notification say it; empty = none.
-    Column 20 (issue #1957): `role=orchestrator` — the old resident orchestrating
-    session (gone, issue #3118). Since issue #3119 a node writes
-    `role=worker` for it (no session is special: an ordinary row everywhere);
-    an older node's `orchestrator` / `steward` is still read — compat-1v: 下一批删.
-    `role=worker` becomes `coordinator: true` (issue #3227) — the hub's 我的用量
-    reads it, every list still draws the row as an ordinary one.
+    Column 20 (issue #1957): `role=` — empty since issue #4341 (no session wears
+    a role). An older node's value is still read for one version (compat-1v:
+    下一批删): `role=worker` becomes `coordinator: true` (issue #3227, the hub's
+    我的用量), an older one's role word is passed on as `role`.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
     window that drives a running EPIC, so every machine's list draws the batch as
     ONE row named after its parent, badged landed/members; empty elsewhere.
@@ -331,8 +329,8 @@ def inventory_row(parts):
     placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
     Absent otherwise. With no 7501 report, a `needs` row's subtype and `detail`
     fill status_kind / status_msg (issue #2538).
-    Columns 31-37 (`orchq=` … `orchtodol=`) were the resident orchestrator's and
-    steward's (issues #2617-#2913), gone with the seat (issue #3118): an older
+    Columns 31-37 (`orchq=` … `orchtodol=`) were the resident seats' (issues
+    #2617-#2913), gone with the seat (issue #3118): an older
     node's are dropped unread — compat-1v: 下一批删.
     Column 31 (issue #3369): `orphanrep=` — the login's unread results of
     sessions whose spawner was gone (orphan_rep_cell): `orphan_reports`, a list,
@@ -383,12 +381,10 @@ def inventory_row(parts):
             extra["epic"] = e
     if len(parts) >= 20 and parts[-1].startswith("role="):
         r = parts.pop()[5:]
-        if r in ("orchestrator", "steward"):
+        # an older node's value (compat-1v: 下一批删); a newer node sends it empty
+        if r in ("orchestrator", "steward"):  # compat-1v: 下一批删
             extra["role"] = r
         elif r == "worker":
-            # the window holding the orchestrator or the steward (issue #3119
-            # made it an ordinary row): the hub files its pool usage under one
-            # 「编排与管家」 row on 我的用量 (issue #3227) and nothing else reads it
             extra["coordinator"] = True
     if len(parts) >= 19 and parts[-1].startswith("detail="):
         extra["detail"] = parts.pop()[7:][:120] or None

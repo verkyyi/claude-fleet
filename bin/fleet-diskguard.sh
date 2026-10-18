@@ -914,8 +914,8 @@ home_watch() {
   type fleet_home_heal >/dev/null 2>&1 || return 0
   local s out
   for s in $(fleet_sockets 2>/dev/null); do
-    # No orchestrating or steward seat is reopened here (issue #3118): a closed
-    # session stays closed; a role is taken in a session, never kept open.
+    # No coordinating seat is reopened here (issue #3118): a closed session
+    # stays closed.
     out="$(fleet_home_heal "$s" "$s")"
     [ -n "$out" ] || continue
     mkdir -p "$GDIR" 2>/dev/null

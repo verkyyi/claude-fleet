@@ -152,7 +152,8 @@
 #   report-parent-remote                            bin/fleet-report-parent.sh (rail 1 → the hub outbox by
 #                                                   @origin_wid), fleet-lib.sh fleet_origin_canon
 #   report-parent-online-queued                     bin/fleet-hub-node.sh (deliver: an identity found here is
-#                                                   never «not now»), fleet-lib.sh fleet_window_okey (@fleet_role_def)
+#                                                   never «not now»), fleet-lib.sh fleet_window_okey (a keyless
+#                                                   session's key is its @fleet_id, issue #4341)
 #   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
@@ -1607,35 +1608,33 @@ drill_codex_thread_lost() {
   SECS=$(since "$t0"); WHAT="无仓库 Codex 被杀后续接、停在 hook 审查页或回来是新开的：恢复图那一行仍记着原 thread"
 }
 
-# A role's mark lives on its window (issue #3829): a reboot took the server and the
-# `@fleet_role_def` with it; restore stamped the identity back but nobody held the
-# orchestrator role until a person stole it in the restored window.
+# A role's mark lived on its window (issue #3829): a reboot took the server and the
+# `@fleet_role_def` with it, and nobody held the orchestrator role until a person
+# stole it. Since issue #4341 no session needs a mark: a keyless session's key IS
+# its @fleet_id, which restore stamps back — so after the reboot's restore its
+# children still reach it by identity, and a conversation a person resumed by hand
+# first is not opened a second time.
 drill_restore_role_lost() {
-  CAP=20; BREAK_SOCK="$WORK/sock-rl"; local t0 w h mf="$WORK/econf/fleets/oc/restore.map"
+  CAP=20; BREAK_SOCK="$WORK/sock-rl"; local t0 w k mf="$WORK/econf/fleets/oc/restore.map"
   local sid=3829bbbb-0000-4000-8000-000000003829 fo=1f0e0000-0000-4000-8000-000000038292
-  local held="$WORK/econf/global/roles.held"
   { printf 'FLEET\toc\tacme/widgets\t%s\tmain\n' "$WORK/emain"
     printf 'FID\t%s\nWIN\t编排\t%s\t%s\t-\tlooping\t-\t-\t-\t-\t-\t-\t-\t-\t-\t-\n' "$fo" "$WORK/home" "$sid"
   } > "$mf"
-  mkdir -p "$WORK/econf/global"
-  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"   # the line from before the reboot
   : > "$WORK/claude-argv"
   t0=$(now)
   auto                                            # the break: the reboot's restore
   until_ok "$CAP" grep -q -- "--resume $sid" "$WORK/claude-argv" 2>/dev/null \
-    || { WHY="the orchestrator's conversation was not resumed"; return 1; }
+    || { WHY="the keyless session's conversation was not resumed"; return 1; }
   w=$(nt list-windows -t oc -F '#{window_id}|#{@fleet_id}' | awk -F'|' -v f="$fo" '$2 == f { print $1 }')
-  [ -n "$w" ] || { WHY="no window came back with the orchestrator's identity"; return 1; }
-  h=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
-      BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_role_holder orchestrator' _ "$WORK/inst/bin" 2>&1)
-  [ "$h" = "$w" ] || { WHY="the orchestrator role came back to [$h], not the restored window $w"; return 1; }
-  grep -q "^orchestrator	oc	$fo	$w	" "$held" || { WHY="roles.held still names the window from before: $(cat "$held")"; return 1; }
+  [ -n "$w" ] || { WHY="no window came back with the session's identity"; return 1; }
+  k=$(env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/econf" FLEET_SKIP_GLOBAL_CONF=1 \
+      BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; fleet_win_for_addr "$2"' _ "$WORK/inst/bin" "$fo" 2>&1)
+  [ "$k" = "$w" ] || { WHY="its identity resolves to [$k], not the restored window $w — a child could not report to it"; return 1; }
   SECS=$(since "$t0")
   # a person resumed the conversation by hand first (a new window, a new identity):
-  # restore leaves it open once and the role follows it there
+  # restore leaves it open once and opens no second copy
   nt kill-server 2>/dev/null
   BREAK_SOCK="$WORK/sock-rl2"                     # its own server: nothing of the first half's answers
-  printf 'orchestrator\toc\t%s\t@7\t1791863523\n' "$fo" > "$held"
   nt -f /dev/null new-session -d -s oc -n home -c "$WORK/emain" 'exec sleep 600'
   nt new-window -d -t oc: -n 编排 -c "$WORK/home" 'exec sleep 600'
   w=$(nt list-windows -t oc -F '#{window_id}|#{window_name}' | awk -F'|' '$2 == "编排" { print $1 }')
@@ -1649,11 +1648,7 @@ drill_restore_role_lost() {
   # counted by windows, not argv lines: the first half's killed wrapper may still log a late relaunch
   [ "$(nt list-windows -t oc -F x | grep -c .)" = 2 ] \
     || { WHY="restore opened the hand-resumed conversation a second time: [$(nt list-windows -t oc -F '#{window_name}' | tr '\n' ' ')]"; return 1; }
-  [ "$(o "$w" @fleet_role_def)" = orchestrator ] || { WHY="the hand-resumed window did not get the role back"; return 1; }
-  grep -q "^orchestrator	oc	1f0e0000-0000-4000-8000-000000038293	$w	" "$held" \
-    || { WHY="roles.held does not follow the conversation to its new window: $(cat "$held")"; return 1; }
-  rm -f "$held"
-  WHAT="重启后 restore 把编排对话开回来，orchestrator 角色跟着它回到新窗口；人先手动接回的，角色也交给那一个窗口，不再开第二份"
+  WHAT="重启后 restore 把不绑单会话开回来、身份戳回去，孩子按身份仍找得到它；人先手动接回的，不再开第二份"
 }
 
 # ---- /loop and fleet down (issue #1846) ------------------------------------------
@@ -5048,15 +5043,17 @@ drill_status_question_lost() {
 # grammar refuses; the agent moved it to refused/ and the sender, seeing only the
 # file gone, said 「queued · not delivered yet」 for hours. The drill plays the hub
 # as the agent sees it: any relay whose `from` the hub's grammar refuses goes to
-# refused/<file> + .why, any other is "stored" (deleted). The orchestrator's send
-# must be stored; a refusal must come back as exit 1 + FAILED in the book.
+# refused/<file> + .why, any other is "stored" (deleted). A keyless session's send
+# (its key is its identity, issue #4341) must be stored; a refusal must come back as
+# exit 1 + FAILED in the book.
 drill_cross_send_refused_unseen() {
   CAP=10; BREAK_SOCK="$WORK/sock-xs"; local t0 c="$WORK/xs" u po rc ob
   mkdir -p "$c/conf/fleets/xs" "$c/conf/control"
   printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$c" > "$c/conf/fleets/xs/conf"
   "$REAL_TMUX" -S "$BREAK_SOCK" -f /dev/null new-session -d -s xs -n plan 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
   po=$("$REAL_TMUX" -S "$BREAK_SOCK" new-window -d -P -F '#{pane_id}' -t xs -n orch 'exec sleep 600')
-  "$REAL_TMUX" -S "$BREAK_SOCK" set-option -w -t "$po" @fleet_role orchestrator
+  "$REAL_TMUX" -S "$BREAK_SOCK" set-option -w -t "$po" @fleet_role worker \; set-option -w -t "$po" @norepo 1 \; \
+    set-option -w -t "$po" @fleet_id 0dbf19b9-aaaa-4bbb-8ccc-002729002729
   xs() { env FLEET_CONF_DIR="$c/conf" FLEET_SKIP_GLOBAL_CONF=1 CCQUOTA_FLEET=1 FLEET_PEER_RECEIPT_SECS=0 FLEET_HUB_RECEIPT_WAIT=1 "$@"; }
   (cd "$BIN" && xs python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$c/conf") >/dev/null 2>&1
   u=$(xs bash -c '. "$1/fleet-lib.sh"; fleet_uuid xs' _ "$BIN")
@@ -5080,8 +5077,8 @@ drill_cross_send_refused_unseen() {
   hub grammar
   xs env TMUX="$BREAK_SOCK,0,0" TMUX_PANE="$po" bash "$BIN/fleet-peer-send.sh" "wid:11111111-2222-3333-4444-555555555555/issue-42" 'hi' >/dev/null 2>&1; rc=$?
   wait
-  [ ! -e "$ob/refused" ] || { WHY="the hub refused the orchestrator's relay: $(cat "$ob"/refused/*.why 2>/dev/null | head -1)"; return 1; }
-  [ "$rc" = 3 ] || { WHY="the orchestrator's send ended $rc, want 3 (stored, waiting for the receipt)"; return 1; }
+  [ ! -e "$ob/refused" ] || { WHY="the hub refused the keyless session's relay: $(cat "$ob"/refused/*.why 2>/dev/null | head -1)"; return 1; }
+  [ "$rc" = 3 ] || { WHY="the keyless session's send ended $rc, want 3 (stored, waiting for the receipt)"; return 1; }
   hub all
   xs env TMUX="$BREAK_SOCK,0,0" TMUX_PANE="$po" bash "$BIN/fleet-peer-send.sh" "wid:11111111-2222-3333-4444-555555555555/issue-42" 'hi again' >/dev/null 2>&1; rc=$?
   wait
@@ -5089,7 +5086,7 @@ drill_cross_send_refused_unseen() {
   tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null | grep -q '"state": "FAILED"' \
     || { WHY="the delivery book does not say FAILED: $(tail -1 "$c/conf/fleets/xs/delivery.ndjson" 2>/dev/null)"; return 1; }
   SECS=$(since "$t0")
-  WHAT="编排用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
+  WHAT="没有键的会话用身份发、入口收下；被拒的当场退出 1，账本记 FAILED、原因在 stderr"
 }
 
 # debug-bundle-leaks-secret (issue #2890, EPIC #2889 C1): a diagnosis bundle is
@@ -5657,8 +5654,8 @@ drill_report_parent_remote() {
 }
 
 # The parent is right here and online, and still every relay to it answered «not
-# now» (issue #3520): a session that TOOK the orchestrator role has no key of its
-# own, and `fleet-hub-node.sh deliver` found it by identity, asked
+# now» (issue #3520): a session with no issue / scratch key of its own (once a role
+# holder; since issue #4341 any keyless session, keyed by its @fleet_id), and `fleet-hub-node.sh deliver` found it by identity, asked
 # fleet_window_okey for its key, got nothing and exited 75 — the hub pushed it
 # again forever and the child read the endless retry as «its machine is offline».
 # (The hub half — an admin login and the same person's managed login are one relay
@@ -5674,23 +5671,23 @@ drill_report_parent_online_queued() {
   (cd "$BIN" && rpoq python3 -c 'import sys, fleet_control as c; c.Control(sys.argv[1]).inventory()' "$d/conf") >/dev/null 2>&1
   U=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_uuid rpoq' _ "$BIN")
   [ -n "$U" ] || { WHY="no fleet UUID could be minted"; return 1; }
-  # the orchestrator: took the role (issue #3114), binds no issue, its cwd no scratch
+  # a keyless session: no role mark at all, binds no issue, its cwd no scratch
   w=$(nt new-window -d -P -F '#{window_id}' -t rpoq -n orch -c "$WORK/home" 'exec sleep 600')
-  nt set-option -w -t "$w" @fleet_role worker \; set-option -w -t "$w" @fleet_role_def orchestrator \; \
+  nt set-option -w -t "$w" @fleet_role worker \; set-option -w -t "$w" @norepo 1 \; \
      set-option -w -t "$w" @fleet_id "$PF" \; set-option -w -t "$w" @claude_state 'done'
   out=$(rpoq bash -c '. "$1/fleet-lib.sh"; fleet_window_okey rpoq "$2"' _ "$BIN" "$w")
-  [ "$out" = orchestrator ] || { WHY="the role holder's own key read [$out], want orchestrator"; return 1; }
+  [ "$out" = "$PF" ] || { WHY="the keyless session's own key read [$out], want its identity $PF"; return 1; }
   t0=$(now)
   out=$(printf '{"id":"%s/acme-app:issue-41#1.1","kind":"child_report","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"child":"acme-app:issue-41","state":"merged","pr":"7","summary":"done","tier":"loud","msg":"[child-report] issue-41 merged"}}' \
           "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
-  [ "$rc" = 0 ] || { WHY="a child report to the online orchestrator by identity exited $rc [$out], want 0 (never «not now» for a window that is here)"; return 1; }
-  [ -s "$d/conf/fleets/rpoq/children/orchestrator.ndjson" ] \
-    || { WHY="the report was not booked under the role's key: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
+  [ "$rc" = 0 ] || { WHY="a child report to the online keyless parent by identity exited $rc [$out], want 0 (never «not now» for a window that is here)"; return 1; }
+  [ -s "$d/conf/fleets/rpoq/children/$PF.ndjson" ] \
+    || { WHY="the report was not booked under the parent's identity: $(ls "$d/conf/fleets/rpoq/children" 2>&1)"; return 1; }
   out=$(printf '{"id":"%s/acme-app:issue-41#2.1","kind":"message","from":"%s/acme-app:issue-41","to":"%s/%s","from_node":"mac-d","payload":{"text":"a question"}}' \
           "$F" "$F" "$U" "$PF" | rpoq bash "$BIN/fleet-hub-node.sh" deliver 2>&1); rc=$?
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] || { WHY="a message to the online orchestrator by identity exited $rc [$out], want 0"; return 1; }
-  WHAT="在线的编排（拿了角色、没有自己的键）按身份收 hub 推来的回报和消息：exit 0、记在 orchestrator 账本，不再 75「不在」让 hub 无限重推"
+  [ "$rc" = 0 ] || { WHY="a message to the online keyless parent by identity exited $rc [$out], want 0"; return 1; }
+  WHAT="在线的不绑单会话（没有自己的键，键就是身份）按身份收 hub 推来的回报和消息：exit 0、记在它身份的账本，不再 75「不在」让 hub 无限重推"
 }
 
 # A repo not on GitHub (issue #3600, EPIC #3570 共同约定 3): adding it from any git

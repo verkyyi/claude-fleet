@@ -63,7 +63,7 @@
 # THE TRUSTED NODE'S WIDE FORM (issue #2282). On a machine the hub trusts, the
 # launcher pre-trusts more of the directories the fleet ITSELF opens sessions in:
 # every hosted repo's base checkout (+ its worktrees) — `--main` repeats — and,
-# for a window the fleet opened with no repo (@norepo 1 / the orchestrator) whose
+# for a window the fleet opened with no repo (@norepo 1) whose
 # cwd is the login's home, `--home`: the physical $HOME, that one directory, never
 # an ancestor or any other path. Still a whitelist, still per directory.
 #   `node` is the ONE reader of "is this a trusted node": the credential proxy's

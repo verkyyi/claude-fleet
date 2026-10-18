@@ -29,7 +29,7 @@
 #      alert (fleet-alerts.sh event) on --session's fleet (a red run on an issue
 #      already open raises none — the issue is the reminder) — and spawns NOTHING: since
 #      #3120 (EPIC #3111 C9) no session starts by itself; sending a fixer is the
-#      person's, or a steward holder's (the fleet-steward plugin).
+#      person's, or a session's they opened for it.
 #   4. remembers the run id it filed for, so the same red run is never re-filed
 #      (nor re-commented 「同一故障」) on every tick;
 #   5. a long red (issue #3869): when the red streak began more than

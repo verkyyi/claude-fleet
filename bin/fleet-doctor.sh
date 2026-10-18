@@ -3136,7 +3136,7 @@ if [ -f "$_ad" ] && [ -d "$(dirname "$0")/../conf/agent-defaults" ] && command -
 fi
 
 # --- plugins: the three optional plugins of this repo's marketplace (issue #3112) ---
-# fleet-orchestrate · fleet-steward · fleet-epic are standard Claude Code plugins,
+# fleet-epic and the other optional parts are standard Claude Code plugins,
 # installed only by /plugin; the row asks `claude plugin list --json` (through
 # fleet-plugins.py, the one reader) which are installed and whether one is behind
 # the runtime (落后 → WARN). Marketplace not added on a hosting login → WARN (the

@@ -22,8 +22,9 @@
 #                to its worktree's git dir, or — no git dir — to
 #                $FLEET_CONF_DIR/fleets/<sess>/recovery/w<window-id>.md; the refocus
 #                restates the MAP (not an issue charter); the cap hands it off.
-#   ORCH         (#2937) @fleet_role orchestrator: prep, the handoff nudge and the cap
-#                — not the hub's warning; a steward window stays out.
+#   NOREPO       (#2937, #4341) a session with no repo (@norepo 1 — a template opened
+#                bare): prep, the handoff nudge and the cap — not the hub's warning;
+#                a leftover role word changes nothing.
 #   DEDUP        a prep stage whose sender ran < 60 s ago spawns no second sender.
 #   TYPING HOLD  an operator keypress at this window holds the keystrokes; held past
 #                the deadline ⇒ nothing typed and the stage stays `prep` (#571).
@@ -410,25 +411,26 @@ case "$OUT" in *'compacted in place 2 times (FLEET_COMPACT_MAX=2)'*) : ;; *) fai
 [ "$(getopt @handoff_armed)" = 1 ] || fail "the scratch cap handoff must latch"
 ok "CAP typing hold · stop_hook_active · codex · hub untouched · scratch capped (#1318)"
 
-# ===== ORCHESTRATOR: the ladder runs there too (issue #2937) =====================
-# @fleet_role orchestrator (@norepo, no @issue / @raw) used to fall to the hub
-# warning — one notice, no action — and its context only grew. Now: prep at the
-# line (its own map wording), the handoff nudge at the handoff line, the cap.
+# ===== NOREPO: the ladder runs there too (issues #2937, #4341) ===================
+# A session with no repo (@norepo, no @issue / @raw — a session template opened
+# bare) used to fall to the hub warning — one notice, no action — and its context
+# only grew. Now: prep at the line (its own map wording), the handoff nudge at the
+# handoff line, the cap. No role word decides it.
 conf 55 80
-reset @ctx_pct=60 @issue= @fleet_role=orchestrator; CWD="$WORK/nogit" stop
-case "$OUT" in *'compact-prep threshold'*'orchestrator session'*) : ;;
-  *) fail "the orchestrator at the prep line must be asked for its recovery map" "$OUT" ;; esac
-[ "$(getopt @compact_stage)" = prep ] || fail "the orchestrator's prep must stamp prep"
-reset @ctx_pct=82 @issue= @fleet_role=orchestrator; CWD="$WORK/nogit" stop
+reset @ctx_pct=60 @issue= @norepo=1; CWD="$WORK/nogit" stop
+case "$OUT" in *'compact-prep threshold'*'session with no repo'*) : ;;
+  *) fail "a no-repo session at the prep line must be asked for its recovery map" "$OUT" ;; esac
+[ "$(getopt @compact_stage)" = prep ] || fail "a no-repo session's prep must stamp prep"
+reset @ctx_pct=82 @issue= @norepo=1; CWD="$WORK/nogit" stop
 case "$OUT" in *'auto-handoff threshold). Run /fleet-handoff now'*) : ;;
-  *) fail "the orchestrator at the handoff line must be told to run /fleet-handoff" "$OUT" ;; esac
-[ "$(getopt @handoff_armed)" = 1 ] || fail "the orchestrator's handoff nudge must latch"
-[ -z "$(getopt @ctx_warn)" ] || fail "the orchestrator is not the hub: no @ctx_warn notice instead of the action"
-reset @ctx_pct=60 @compact_count=3 @issue= @fleet_role=orchestrator; CWD="$WORK/nogit" stop
-case "$OUT" in *'compacted in place 3 times'*) : ;; *) fail "the orchestrator at the cap must be handed off" "$OUT" ;; esac
-reset @ctx_pct=60 @issue= @fleet_role=steward; CWD="$WORK/nogit" stop
-blocked && fail "the steward is not on the orchestrator's ladder" "$OUT"
-ok "ORCH prep at 55 · /fleet-handoff at 80 (latched, no hub warning) · cap 3 → handoff · steward untouched"
+  *) fail "a no-repo session at the handoff line must be told to run /fleet-handoff" "$OUT" ;; esac
+[ "$(getopt @handoff_armed)" = 1 ] || fail "a no-repo session's handoff nudge must latch"
+[ -z "$(getopt @ctx_warn)" ] || fail "a no-repo session is not the hub: no @ctx_warn notice instead of the action"
+reset @ctx_pct=60 @compact_count=3 @issue= @norepo=1; CWD="$WORK/nogit" stop
+case "$OUT" in *'compacted in place 3 times'*) : ;; *) fail "a no-repo session at the cap must be handed off" "$OUT" ;; esac
+reset @ctx_pct=60 @issue= @fleet_role=orchestrator; CWD="$WORK/nogit" stop
+blocked && fail "a role word alone puts no window on the ladder (issue #4341)" "$OUT"
+ok "NOREPO prep at 55 · /fleet-handoff at 80 (latched, no hub warning) · cap 3 → handoff · a role word decides nothing"
 
 # SessionStart: clear/startup zero the count; compact/resume keep it.
 for src in compact resume; do

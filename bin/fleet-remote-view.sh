@@ -49,7 +49,7 @@
 #                           client for FLEET_VIEW_KEEP_SECS; see rv_attach_thin.
 #   attach --thin --browser --home <window id> --view wt-<conn> …   (issue #4373)
 #                           a browser's personal terminal (fleet-webterm.py attach):
-#                           no `.last`, no ⌘N road, no orchestrator — the session
+#                           no `.last`, no ⌘N road — the session
 #                           named, else the owned home pane's window.
 #   attach --thin --view <id>-via-<home> …   (ON another machine, from a home
 #                           machine's peer window — EPIC #2999 C4) — the same 看台,
@@ -723,7 +723,8 @@ rv_within() {
 # new one on `cur=`. A plain `fleet` (no --want, no --resume — a new run, any
 # device) lands on the person's LAST session (`.last`, the `cur` hook's, issue
 # #4000): here, or on another machine through the 看台's switch road; gone ⇒ a new
-# session (⌘N's road). Never seen one: the orchestrator's window, else a new one.
+# session (⌘N's road). Never seen one: a new one too — no session is anyone's
+# home (issue #4341).
 # rv_restoring — a restore of this login holds its lock right now (a live pid in
 # fleet-restore's $FLEET_CONF_DIR/restore/.auto.lock, which the snapshot restore
 # takes too): sessions are being reopened.
@@ -760,18 +761,6 @@ rv_thin_window() {
   fi
   [ -n "$w" ] || return 1
   printf '%s\n' "$w"
-}
-# rv_thin_home <session> — where a 看台 with nowhere to go back to lands: the
-# orchestrator's window (「新任务」) — whoever holds the role (fleet_role_holder,
-# issue #3114: an old seat's @fleet_role is no longer written) —, else the
-# session's current window.
-rv_thin_home() {
-  local w
-  w=$(fleet_role_holder orchestrator "$sock" 2>/dev/null) || w=''
-  [ -n "$w" ] && T list-windows -t "=$1" -F '#{window_id}' 2>/dev/null | grep -qxF "$w" || w=''
-  [ -n "$w" ] || w=$(T list-windows -t "=$1" -F '#{window_id} #{@fleet_role}' 2>/dev/null | awk '$2 == "orchestrator" { print $1; exit }')
-  [ -n "$w" ] || w=$(T display-message -p -t "=$1:" '#{window_id}' 2>/dev/null)
-  printf '%s' "$w"
 }
 # rv_thin_cur <session> <window> <fleet uuid> — that window as `cur=` says it
 # (the `cur` hook's rule, for the attach's own first write).
@@ -852,7 +841,7 @@ rv_browser_cleanup() {
 }
 
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar orchfar sp last lastgone
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone
   local browser='' bhome=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -940,25 +929,18 @@ rv_attach_thin() {
     trap 'exit 129' HUP
     trap 'exit 143' TERM
   fi
-  # Nowhere named: a resumed 看台 still kept stays where it was; anything else lands home.
-  # Home is the orchestrator: here, or — no such window here — wherever it runs,
-  # through ⌘N's own road below (issue #3007: a home that is not the holder put the
-  # person on a bare `home` shell, on the MacBook and on the phone alike)
-  orchfar=''
+  # Nowhere named: a resumed 看台 still kept stays where it was; anything else gets a
+  # new session through ⌘N's own road below (issue #3007: a bare `home` shell is no
+  # landing; issue #4341: no session is anyone's home)
+  newfar=''
   if [ -n "$browser" ]; then
-    # the browser lands where it asked, else on its own home pane — never the
-    # orchestrator, never a new session (issue #4373)
+    # the browser lands where it asked, else on its own home pane — never a new
+    # session (issue #4373)
     [ -n "$w" ] || { [ -n "$bhome" ] && T list-windows -t "=$s" -F '#{window_id}' 2>/dev/null | grep -qxF "$bhome" && w=$bhome; }
     [ -n "$w" ] || w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null)
-  elif [ -n "$lastgone" ]; then
-    # the last one is gone: a new session, never the orchestrator in its place
-    w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null); orchfar=1
-  elif [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; then
-    w=$(rv_thin_home "$s")
-    # the holder wears @fleet_role_def (issue #3114), an old seat @fleet_role
-    case "$(T display-message -p -t "$w" '#{@fleet_role}|#{@fleet_role_def}' 2>/dev/null)" in
-      orchestrator\|*|*\|orchestrator) ;; *) orchfar=1 ;;
-    esac
+  elif [ -n "$lastgone" ] || { [ -z "$w" ] && ! { [ -n "$resume" ] && [ -n "$kept" ]; }; }; then
+    # the last one is gone, or there never was one: a new session
+    w=$(T display-message -p -t "=$s:" '#{window_id}' 2>/dev/null); newfar=1
   fi
   [ -z "$w" ] || T select-window -t "$gid:$w" 2>/dev/null
   rv_thin_dress "$gid" "$view" "$s"
@@ -1013,7 +995,7 @@ rv_attach_thin() {
   case "$wfar:$view" in ?*:*-via-*|:*) ;; *)
     ( sleep 0.3; TMUX='' python3 "$BIN/fleet-quickopen.py" go "$s@view-$view" "$wfar" --how want </dev/null >/dev/null 2>&1 & ) ;;
   esac
-  case "$orchfar:$wfar:$view" in 1::*-via-*) ;; 1::*)
+  case "$newfar:$wfar:$view" in 1::*-via-*) ;; 1::*)
     if [ -n "${FLEET_VIEW_FIRST_CMD:-}" ]; then   # the selftest's seam: what ran, nothing switched
       ( sleep 0.3; TMUX='' sh -c "$FLEET_VIEW_FIRST_CMD"' "$@"' _ "do" new --view "$s@view-$view" </dev/null >/dev/null 2>&1 & )
     else
