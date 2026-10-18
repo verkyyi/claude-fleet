@@ -818,7 +818,27 @@ fi
 # preflight BEFORE an install exists. Nothing is printed in that case.
 iv="$(dirname "$0")/fleet-install-version.sh"
 live_dir="${FLEET_LIVE_DIR:-$HOME/.claude/fleet}"
-if [ -f "$iv" ] && [ -d "$live_dir" ]; then
+# Which install shape this is decides what "current" means (issue #1139):
+#   managed  ~/.claude/fleet is ONE link to the machine runtime's <root>/current
+#            (#4669) — no git to compare; the machine updater moves it with the
+#            release, so the link itself is the whole check (a PASS)
+#   follower install-sync is on and following stable (#1120): its version dir is a
+#            worktree tracking master, and stable trails master by design, so
+#            "behind master" is INFO and the fix is `fleet-stable.sh move` — a
+#            `pull --ff-only` would push HEAD past stable and the next tick refuses
+#   else     a hand-pulled checkout (FLEET_INSTALL_SYNC=0, dev mode): as before
+node_root="${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}"
+fl="$(dirname "$0")/fleet-install-follow.sh"
+fl_verdict=''
+if [ -f "$fl" ] && [ -d "$live_dir" ]; then
+  flout=$(sh "$fl" --self --dir "$live_dir" --conf-dir "$conf_dir" 2>/dev/null)
+  fl_verdict=$(printf '%s\n' "$flout" | sed -n 's/^verdict:  *//p')
+fi
+if [ -d "$live_dir" ] && [ "$(readlink "$live_dir" 2>/dev/null)" = "$node_root/current" ]; then
+  iv_rt=$(readlink "$node_root/current" 2>/dev/null)
+  pass install "$live_dir links to the machine runtime $node_root/current${iv_rt:+ (→ ${iv_rt##*/})} — the machine updater moves it with the release (fleet doctor --machine)"
+fi
+if [ -f "$iv" ] && [ -d "$live_dir" ] && [ "$(readlink "$live_dir" 2>/dev/null)" != "$node_root/current" ]; then
   ivout=$(sh "$iv" 2>/dev/null)
   # Parse the human form, not --json: these keys are line-anchored, so a path or
   # a message containing a quote can't shift the fields (doctor has no jq).
@@ -832,7 +852,11 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
       [ "$iv_dirty" = yes ] && printf '        note: the live install has uncommitted tracked changes — the next fast-forward will refuse.\n'
       ;;
     BEHIND)
-      warn install "$live_dir is $iv_behind commit(s) behind ${iv_trunk%% *} — this machine runs old bin/ + daemons while master has moved (the drift nothing used to report, #635); fix: $iv_fix"
+      if [ "$fl_verdict" = OK ]; then
+        info install "$live_dir is $iv_behind commit(s) behind ${iv_trunk%% *} — expected: installs follow stable, not master (install-sync on, following); to ship newer commits move stable with \`fleet-stable.sh move\` (forward only, CI-green only), never \`pull\` here"
+      else
+        warn install "$live_dir is $iv_behind commit(s) behind ${iv_trunk%% *} — this machine runs old bin/ + daemons while master has moved (the drift nothing used to report, #635); fix: $iv_fix"
+      fi
       ;;
     AHEAD)
       warn install "$live_dir has $iv_ahead local commit(s) not on ${iv_trunk%% *} — someone edited/tested in place; the next \`pull --ff-only\` will refuse until that is resolved"
@@ -870,9 +894,9 @@ if [ -f "$iv" ] && [ -d "$live_dir" ]; then
   # passwordless sudo they read `?`, never a WARN. Nothing counts a FAIL here: the
   # daemon's own post-update doctor compares FAIL lines, and a fresh install
   # waiting for its first tick must not roll a version back.
-  fl="$(dirname "$0")/fleet-install-follow.sh"
+fi
+if [ -d "$live_dir" ]; then
   if [ -f "$fl" ]; then
-    flout=$(sh "$fl" --self --dir "$live_dir" --conf-dir "$conf_dir" 2>/dev/null)
     _flf() { printf '%s\n' "$flout" | sed -n "s/^$1:  *//p"; }
     fl_off="opt out with FLEET_INSTALL_SYNC=0 in $conf_dir/fleet.settings — then this login neither follows nor warns"
     case "$(_flf verdict)" in
