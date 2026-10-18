@@ -685,6 +685,24 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Agent state on your terminal: tmux depth @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_STATUS_REPLAY_DEPTH=3
 
+# FLEET_STREAM_RESUME — a turn an API error cut off goes on by itself (issue #4714).
+# «API Error: Connection lost mid-response» (a stream the credential proxy or the
+# upstream cut, a 5xx, overloaded) used to leave the session at its prompt until a
+# person typed. Claude Code's StopFailure hook (bin/fleet-stream-resume.sh) now
+# tells the session, over its own inbox, to continue — FLEET_STREAM_RESUME_SECS
+# after the failure, unless the session moved on meanwhile; at most
+# FLEET_STREAM_RESUME_MAX per FLEET_STREAM_RESUME_WINDOW seconds per window, then
+# it is left for a person. Never for a quota, auth or request error. 0 = off.
+# Login-wide; read at each failure.
+# @label=Resume a turn an API error cut off @group=spawn @tier=internal @scope=global @edit=bool
+#FLEET_STREAM_RESUME=1
+# @label=Resume: seconds after the failure @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_STREAM_RESUME_SECS=20
+# @label=Resume: at most N per window @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_STREAM_RESUME_MAX=3
+# @label=Resume: the budget's window (seconds) @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_STREAM_RESUME_WINDOW=1800
+
 # A session's agent configuration, fixed at launch (issue #1782, EPIC #1776 C6):
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch (bin/fleet-agent-team.py session), hand what the login's files lack

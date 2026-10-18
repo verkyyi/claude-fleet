@@ -6815,6 +6815,16 @@ drill_ticket_credential_pair() {
   WHAT='endpoint/token 同源；URL-only 整对读取，token-only/读取失败拒绝，显式 401/403 不换身份'
 }
 
+# stream-cut-stays (#4714): a turn an API error cut off is resumed by itself —
+# bin/fleet-stream-resume-selftest.sh on an isolated tmux server, a stub sender.
+drill_stream_cut_stays() {
+  CAP=15; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-stream-resume-selftest.sh" 2>&1) || { WHY="$(printf '%s' "$out" | grep FAIL | head -3)"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='StopFailure(unknown) 20 s 后经会话收件箱发「继续」；人已发话或又失败一次就不发；每窗口 3 次/30 分钟，超了留给人；配额/认证/请求错误不管'
+}
+
 # ================================================================ run ====}
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"

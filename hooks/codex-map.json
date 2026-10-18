@@ -13,6 +13,7 @@
     "PostToolUse": true,
     "UserPromptSubmit": true,
     "Stop": true,
+    "StopFailure": "Codex has no StopFailure event; an API error there still waits for a person (issue #4714).",
     "Notification": "Codex has no Notification event.",
     "SessionStart": true,
     "PreCompact": "Codex has no PreCompact event; precompact-hook.sh also skips a codex pane.",

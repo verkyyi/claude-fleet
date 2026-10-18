@@ -27,6 +27,8 @@
 #   cred-pool-follows-hub   bin/fleet-credsep.py machine pool-sync + bin/fleet-cred-proxy.py
 #                       pool-drop (issue #2850): the hub puts / revokes a pool token, the
 #                       pool follows in one sync (bin/fleet-node-update.py sync_pool runs it)
+#   cred-shared-restart-loop    bin/fleet-credsep.py machine refresh (shared_unserved / login_exists /
+#                       unserved_tried, issue #4714): a deleted tenant no longer restarts the proxy every tick
 #   cred-codex-path-open    bin/fleet-cred-proxy.py codex_refused / CODEX_ALLOW_SPEC (issue #4611):
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
@@ -576,6 +578,65 @@ drill_spare_not_tenant() {
     || { WHY="the daemon's next starts took it over again: $(grep -c 'took over' "$sb/shared.err")"; spare_down; return 1; }
   spare_down
   WHAT="共享代理是守护丢了的孤儿（只服务 alpha），备用 beta 加入后重启没落地：beta 的 mint 回「has not joined」、machine status 报 NOT SERVED: beta；守护再起一份时认出占锁的是旧租户表，TERM 接管，beta 拿到凭据、请求 200，alpha 原凭据照用，之后的起动不再接管"
+}
+
+# cred-shared-restart-loop (issue #4714): a login deleted under its store (its
+# meta.json still says `mode: shared`) is skipped by the launcher, so the shared
+# proxy never serves it — and `machine refresh` read that as «not served» (#4245)
+# and restarted the proxy on every updater tick (5 min), cutting every session's
+# stream mid-response («API Error: Connection lost mid-response», mini2, 3 times in
+# a day). Now a login with no passwd entry is never «not served», and a login that
+# exists but a restart did not serve is restarted for ONCE, not every tick.
+drill_cred_shared_restart_loop() {
+  CAP=10
+  local sb me uid gid t0 out
+  me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/rloop"
+  mkdir -p "$sb/daemons"
+  for L in alpha ghost beta; do
+    mkdir -p "$sb/homes/$L/.config/claude-fleet" "$sb/homes/$L/.claude/fleet/bin"
+  done
+  printf 'alpha:%s:%s:%s\nghost:1999995:%s:%s\nbeta:1999996:%s:%s\n' "$uid" "$gid" "$sb/homes/alpha" \
+    "$gid" "$sb/homes/ghost" "$gid" "$sb/homes/beta" > "$sb/pw"
+  export FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
+    FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
+    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
+    FLEET_CRED_SHARED_PORT="$(cred_deadport)"
+  rloop_down() {
+    unset FLEET_CREDSEP_ROOT_BASE FLEET_CREDSEP_RUN_BASE FLEET_CREDSEP_LOG_BASE FLEET_CREDSEP_LIB FLEET_CREDSEP_DAEMON_DIR \
+      FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_PREFLIGHT FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT
+  }
+  bash "$BIN/fleet-credsep.sh" machine install --logins alpha,ghost >"$sb/install.out" 2>&1 \
+    || { WHY="machine install: $(tail -2 "$sb/install.out" | tr '\n' ' ')"; rloop_down; return 1; }
+  # the account goes; its store stays. The running proxy serves alpha (it skipped ghost).
+  printf 'alpha:%s:%s:%s\nbeta:1999996:%s:%s\n' "$uid" "$gid" "$sb/homes/alpha" "$gid" "$sb/homes/beta" > "$sb/pw"
+  mkdir -p "$sb/run/.shared"; printf '%s\n' "$$" > "$sb/run/.shared/pid"; printf 'alpha\n' > "$sb/run/.shared/logins"
+  t0=$(now)
+  for i in 1 2 3; do
+    out=$(bash "$BIN/fleet-credsep.sh" machine refresh 2>&1)
+    case "$out" in *"shared: current"*) ;;
+      *) WHY="tick $i with a deleted login: $(printf '%s' "$out" | grep 'shared:' | tail -1) — the proxy restarts every tick"; rloop_down; return 1 ;; esac
+  done
+  # a login that exists and still is not served after a restart: restarted ONCE
+  bash "$BIN/fleet-credsep.sh" machine install --logins beta >"$sb/install-b.out" 2>&1 \
+    || { WHY="machine install beta: $(tail -2 "$sb/install-b.out" | tr '\n' ' ')"; rloop_down; return 1; }
+  printf 'alpha\n' > "$sb/run/.shared/logins"
+  out=$(bash "$BIN/fleet-credsep.sh" machine refresh 2>&1)
+  case "$out" in *"refreshed, restarted"*"not served: beta)"*) ;;
+    *) WHY="beta not served did not restart it once: $(printf '%s' "$out" | grep 'shared:' | tail -1)"; rloop_down; return 1 ;; esac
+  for i in 1 2; do
+    out=$(bash "$BIN/fleet-credsep.sh" machine refresh 2>&1)
+    case "$out" in *"shared: current"*"not served: beta — restarted once already"*) ;;
+      *) WHY="beta still unserved, tick $i restarted again: $(printf '%s' "$out" | grep 'shared:' | tail -1)"; rloop_down; return 1 ;; esac
+  done
+  case "$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)" in *"NOT SERVED: beta"*) ;;
+    *) WHY="machine status no longer says beta is not served"; rloop_down; return 1 ;; esac
+  # served at last: the mark clears, a later unserved set restarts once again
+  printf 'alpha\nbeta\n' > "$sb/run/.shared/logins"
+  bash "$BIN/fleet-credsep.sh" machine refresh >/dev/null 2>&1
+  [ ! -e "$sb/db/.shared.json.unserved" ] || { WHY="the once-mark outlived beta being served"; rloop_down; return 1; }
+  SECS=$(since "$t0")
+  rloop_down
+  WHAT="登录被删、存储留着：machine refresh 三个 tick 都答 current、不再重启共享代理；存在却没被服务的 beta 只重启一次，之后答「restarted once already」，machine status 仍报 NOT SERVED；服务上之后标记清掉"
 }
 
 # cred-codex-path-open (issue #4611): a session asks its proxy for /codex/<anything>.
