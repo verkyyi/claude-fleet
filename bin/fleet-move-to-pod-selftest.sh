@@ -160,6 +160,8 @@ for f in node.env node.pub.env credsep.json; do echo x > "$T/src/24acme/.config/
 # a live socket (a peerlink's): tar never carries one, so the count must not either
 python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$T/src/24acme/peer.sock"
 echo tmp > "$T/src/24acme/.codex/tmp/x"; echo tmp > "$T/src/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1/y"
+# an older version's bytecode in the conf dir (issue #4692): a cache, never copied
+mkdir -p "$T/src/24acme/.config/claude-fleet/pycache/a/b"; echo pyc > "$T/src/24acme/.config/claude-fleet/pycache/a/b/m.pyc"
 mv all 24acme > "$T/out" 2>&1 || fail "C: all failed: $(tail -5 "$T/out")"
 POD=$(cat "$T/state/24acme/pod")
 [[ "$POD" =~ ^u-[a-z0-9]{10}$ ]] || fail "C: picked pod name '$POD'"
@@ -179,6 +181,7 @@ grep -q "rm -f /data/homes/24acme/.config/claude-fleet/node.env .*node.pub.env .
 [ "$(cat "$T/dst/24acme/work.txt" 2>/dev/null)" = 'moves with the home' ] || fail 'C: the home did not arrive on the pod disk'
 [ ! -e "$T/dst/24acme/.codex/tmp/x" ] && [ ! -e "$T/dst/24acme/.config/claude-fleet/cred-proxy/codex-homes/w1/y" ] ||
   fail 'C: the copy took the throwaway trees'
+[ ! -e "$T/dst/24acme/.config/claude-fleet/pycache" ] || fail 'C: the copy took the conf dir'"'"'s pycache/ (#4692)'
 grep -q 'kubectl .* -- tar ' "$LOG" && fail 'C: a tar ran through kubectl exec — the home went through this machine'
 tokline=$(grep -h '^TOKEN=' "$T/send.py") && tok=${tokline#TOKEN=b\"} && tok=${tok%\"}
 [ "${#tok}" = 32 ] || fail "C: no one-time token in the source half ($tokline)"

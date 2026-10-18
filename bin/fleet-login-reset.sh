@@ -433,7 +433,7 @@ aside_later() {
   # shellcheck disable=SC2016 # expanded by the inner bash
   local cmd=(sudo bash -c 'a=$1 t=$2 l=$3 o=$4
 if [ -n "$t" ]; then
-  tar --exclude="$l/Library/Caches" -czf "$t" -C "$a" "$l" 2>/dev/null
+  tar --exclude="$l/Library/Caches" --exclude="$l/.config/claude-fleet/pycache" -czf "$t" -C "$a" "$l" 2>/dev/null
   if ! tar -tzf "$t" >/dev/null 2>&1; then echo "archive $t did not read back: $a kept"; exit 1; fi
   chown "$o" "$t" && chmod 600 "$t"
 fi

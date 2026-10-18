@@ -470,7 +470,7 @@ elif [ ! -d "$H" ]; then
   ARCHIVE=''
 else
   run sudo install -d -m 700 -o "$ADMIN_UID" "$ARCHIVE_DIR"
-  TAR=(sudo tar --exclude="$LOGIN/Library/Caches" -czf "$ARCHIVE" -C "$HOMES" "$LOGIN")
+  TAR=(sudo tar --exclude="$LOGIN/Library/Caches" --exclude="$LOGIN/.config/claude-fleet/pycache" -czf "$ARCHIVE" -C "$HOMES" "$LOGIN")
   show "${TAR[@]}"
   if [ "$APPLY" = 1 ]; then
     TERR=$(mktemp "${TMPDIR:-/tmp}/fleet-login-remove.tar.XXXXXX") || { printf '%s: mktemp failed; stopped before deleting the login\n' "$PROG" >&2; exit 1; }

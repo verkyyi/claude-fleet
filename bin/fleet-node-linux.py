@@ -1078,7 +1078,8 @@ def _login_remove(a):
             attic.mkdir(mode=0o700, exist_ok=True)
             os.chmod(attic, 0o700)
             archive = attic / ('%s-%s.tar.gz' % (login, time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())))
-            tar = subprocess.run(['tar', '-czf', str(archive), '--exclude=./.cache', '-C', str(home), '.'],
+            tar = subprocess.run(['tar', '-czf', str(archive), '--exclude=./.cache',
+                                  '--exclude=./.config/claude-fleet/pycache', '-C', str(home), '.'],
                                  capture_output=True, text=True)
             os.chmod(archive, 0o600)
             if subprocess.run(['tar', '-tzf', str(archive)], capture_output=True).returncode:

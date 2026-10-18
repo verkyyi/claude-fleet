@@ -20,7 +20,7 @@ Type=simple
 ExecStart=/bin/bash __HOME__/.claude/fleet/bin/fleet-webhook.sh
 Environment=HOME=__HOME__
 Environment=LANG=en_US.UTF-8
-Environment=PYTHONPYCACHEPREFIX=__HOME__/.config/claude-fleet/pycache
+Environment=PYTHONPYCACHEPREFIX=__HOME__/.cache/claude-fleet/pycache
 Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 Restart=always
 LimitNOFILE=65536

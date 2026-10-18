@@ -86,6 +86,8 @@ reset_fixture() {
   printf 'notes\n' > "$WORK/homes/alice/keep-me.txt"
   mkdir -p "$WORK/homes/alice/Library/Caches/com.example"
   printf 'cache\n' > "$WORK/homes/alice/Library/Caches/com.example/blob"
+  mkdir -p "$WORK/homes/alice/.config/claude-fleet/pycache/x"   # an older version's bytecode (#4692)
+  printf 'pyc\n' > "$WORK/homes/alice/.config/claude-fleet/pycache/x/m.pyc"
   for p in "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" \
            "$WORK/homes/alice/Library/LaunchAgents/com.claude-fleet.collect.plist" \
            "$WORK/homes/alice/Library/LaunchAgents/com.ccquota.agent.plist" \
@@ -286,7 +288,7 @@ has "$WORK/out" 'bootout gui/602' 'GUI shape missing'
 has "$WORK/out" 'com.ccquota.agent.plist' 'ccquota missing'
 has "$WORK/out" "home-policy=archive → $ARCH/alice-" 'default policy is not archive'
 has "$WORK/out" "sudo install -d -m 700 -o 501 $ARCH" 'archive dir not prepared for the admin'
-has "$WORK/out" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'archive command missing (or Library/Caches not excluded)'
+has "$WORK/out" "sudo tar --exclude=alice/Library/Caches --exclude=alice/.config/claude-fleet/pycache -czf $ARCH/alice-" 'archive command missing (or Library/Caches not excluded)'
 has "$WORK/out" "bootout system $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" 'node agent LaunchDaemon not shown (#1700)'
 has "$WORK/out" "rm -f $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist.bak-1453" 'node agent .bak-* copy not shown'
 has "$WORK/out" "tar.gz -C $WORK/homes alice" 'archive is not the home, relative to the homes dir'
@@ -336,7 +338,7 @@ has "$FLEET_TEST_LOG" 'pkill -TERM -U 602' 'remaining processes were not stopped
 has "$FLEET_TEST_LOG" "sudo find $WORK/outside/tmp -xdev -mindepth 1 -path $ARCH -prune -o -user 602 -prune -exec rm -rf {} +" 'files of the uid in /private/tmp were not removed'
 has "$FLEET_TEST_LOG" "sudo find $WORK/outside/shared -xdev -mindepth 1 -path $ARCH -prune -o -user 602" 'files of the uid in /Users/Shared were not removed'
 has "$FLEET_TEST_LOG" "install -d -m 700 -o 501 $ARCH" 'archive dir not prepared'
-has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'home was not archived'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches --exclude=alice/.config/claude-fleet/pycache -czf $ARCH/alice-" 'home was not archived'
 has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.ccquota.agent.alice.plist" 'node agent LaunchDaemon not booted out (#1700)'
 for f in com.ccquota.agent.alice.plist com.ccquota.agent.alice.plist.bak-1453 com.ccquota.agent.alice.plist.pre-move; do
   [ ! -e "$FLEET_INSTALL_DAEMON_DIR/$f" ] || fail "$f was left behind (#1700)"
@@ -352,6 +354,7 @@ has "$WORK/tar.lst" 'alice/keep-me.txt' "the person's files are not in the archi
 has "$WORK/tar.lst" 'alice/.config/claude-fleet/fleets/alice-fleet/conf' 'the fleet conf is not in the archive'
 not_has "$WORK/tar.lst" 'accounts/alpha' 'the copied account pool is inside the archive'
 not_has "$WORK/tar.lst" 'Library/Caches' 'Library/Caches is inside the archive (#1700)'
+not_has "$WORK/tar.lst" 'claude-fleet/pycache' 'the conf dir'"'"'s pycache/ is inside the archive (#4692)'
 not_has "$WORK/out" 'WARN' 'a clean archive warned'
 has "$WORK/out" "archive=$A" 'archive path not printed at the end'
 has "$WORK/out" 'fleet-login-remove: done' 'done line missing'
@@ -514,7 +517,7 @@ not_has "$FLEET_TEST_LOG" 'dscl . -delete /Groups/com.apple.access_' 'dscl -dele
 reset_fixture
 : > "$FLEET_TEST_LOG"; PATH="$WORK/shim-tar-fails:$PATH" bash "$S" alice --apply > "$WORK/out" 2>&1; RC=$?
 [ "$RC" = 1 ] || { cat "$WORK/out" >&2; fail 'a failed archive did not stop the run'; }
-has "$FLEET_TEST_LOG" 'sudo tar --exclude=alice/Library/Caches -czf' 'failing tar was not attempted'
+has "$FLEET_TEST_LOG" 'sudo tar --exclude=alice/Library/Caches --exclude=alice/.config/claude-fleet/pycache -czf' 'failing tar was not attempted'
 has "$WORK/out" 'stopped before deleting the login' 'failed archive not explained'
 not_has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser' 'login deleted although the archive failed'
 not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'groups edited although the archive failed'
@@ -563,7 +566,7 @@ reset_fixture
 not_has "$WORK/out" 'Permission denied' 'closed cwd: a getcwd death leaked into the run'
 has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'closed cwd: fleet was not stopped'
 has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'closed cwd: account was not deleted'
-has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'closed cwd: home was not archived'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches --exclude=alice/.config/claude-fleet/pycache -czf $ARCH/alice-" 'closed cwd: home was not archived'
 [ ! -e "$WORK/homes/alice" ] || fail 'closed cwd: home remains'
 # A login that is a node is taken off the hub first, as itself, with its own
 # token (issue #1928): the hub is asked, node.env goes, and it happens before the
@@ -766,7 +769,7 @@ run alice --recycle-stop --keep-home --apply
 has "$FLEET_TEST_LOG" 'tmux -L alice-fleet kill-session -t alice-fleet' 'recycle-stop: fleet not stopped'
 has "$FLEET_TEST_LOG" "launchctl bootout system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.alice.spinner.plist" 'recycle-stop: services not booted out'
 has "$FLEET_TEST_LOG" 'pkill -TERM -U 602' 'recycle-stop: not quiesced'
-has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches -czf $ARCH/alice-" 'recycle-stop: home not archived'
+has "$FLEET_TEST_LOG" "sudo tar --exclude=alice/Library/Caches --exclude=alice/.config/claude-fleet/pycache -czf $ARCH/alice-" 'recycle-stop: home not archived'
 not_has "$FLEET_TEST_LOG" 'sysadminctl' 'recycle-stop deleted the login'
 not_has "$FLEET_TEST_LOG" 'dscl . -delete' 'recycle-stop edited the directory service'
 [ -d "$WORK/homes/alice" ] || fail 'recycle-stop: the home is gone'

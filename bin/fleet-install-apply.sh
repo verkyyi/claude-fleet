@@ -555,6 +555,14 @@ if [ "$DRY" != 1 ]; then
   unset _ln _le _lb
 fi
 unset _ld
+# Python's bytecode left the conf dir for the cache dir (issue #4692): the conf dir
+# is snapshotted, moved and backed up, and its pycache/ (several MB) once broke a
+# home snapshot's 1 MiB Secret. What #4668 wrote there is a cache — removed.
+_pc="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/pycache"
+if [ "$DRY" != 1 ] && [ -d "$_pc" ] && [ ! -L "$_pc" ]; then
+  rm -rf "${_pc:?}" 2>/dev/null && say "conf: removed the old bytecode cache $_pc (#4692)"
+fi
+unset _pc
 }
 if [ "$CONFONLY" = 1 ]; then
   conf_pass

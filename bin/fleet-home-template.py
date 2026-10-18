@@ -76,6 +76,7 @@ STRIP = (
     ".config/claude-fleet/fleet.conf.bak",
     ".config/claude-fleet/global/bootstrapped",
     ".config/claude-fleet/global/bootstrap.timing",
+    ".config/claude-fleet/pycache",   # bytecode an older version put here (issue #4692)
     ".ssh",
     ".claude/projects",
     ".claude/todos",

@@ -221,7 +221,10 @@ run_ap() { : > "$LOG"; OUT=$(CODEX_HOME="$H/.codex" FLEET_CONF_DIR="$H/.config/c
 # --- A. script only ---------------------------------------------------------------
 echo 'echo collect v2' > "$R/bin/tmux-dash-collect.sh"
 C1=$(commit 'script only')
+mkdir -p "$H/.config/claude-fleet/pycache/x" && echo b > "$H/.config/claude-fleet/pycache/x/m.pyc"   # #4668's bytecode
 run_ap --from "$C0" --to "$C1"
+ok 'A the old bytecode cache leaves the conf dir (#4692)' "[ ! -e '$H/.config/claude-fleet/pycache' ]"
+contains 'A says it removed it' "$OUT" 'conf: removed the old bytecode cache'
 eq 'A exit' 0 "$RC"
 contains 'A says no reload' "$OUT" 'daemons: ok — no daemon change, no reload needed'
 ok 'A no launchctl' "! grep -q '^launchctl' '$LOG'"
@@ -460,8 +463,8 @@ if command -v plutil >/dev/null 2>&1; then
   snap=$(cat "$D")
   FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"
   eq 'M no sudo -> exit 1' 1 "$RC"
-  contains 'M prints runnable admin commands' "$OUT" "run as an admin: sudo install -m 644 $R/logs/install-apply-pending/com.claude-fleet.tester.collect.plist $D"
-  ok 'M pending plist kept' "[ -f '$R/logs/install-apply-pending/com.claude-fleet.tester.collect.plist' ]"
+  contains 'M prints runnable admin commands' "$OUT" "run as an admin: sudo install -m 644 $H/.config/claude-fleet/logs/install-apply-pending/com.claude-fleet.tester.collect.plist $D"
+  ok 'M pending plist kept' "[ -f '$H/.config/claude-fleet/logs/install-apply-pending/com.claude-fleet.tester.collect.plist' ]"
   eq 'M no sudo -> unchanged' "$snap" "$(cat "$D")"
   ok 'M no sudo -> no launchctl' "! grep -q '^launchctl' '$LOG'"
   FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" run_ap --from "$M0" --to "$M1"

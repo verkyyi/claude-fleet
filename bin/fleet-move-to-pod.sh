@@ -269,8 +269,9 @@ phase_stop() {
   mark stop "sessions=$(wc -l < "$STATE/pinned" | tr -d ' ')"
 }
 
-# the excluded paths: throwaway trees whose links point into the source's runtime
-EXCL=(--exclude="$LOGIN/.codex/tmp" --exclude="$LOGIN/.config/claude-fleet/cred-proxy/codex-homes")
+# the excluded paths: throwaway trees whose links point into the source's runtime,
+# and the bytecode cache an older version wrote into the conf dir (issue #4692)
+EXCL=(--exclude="$LOGIN/.codex/tmp" --exclude="$LOGIN/.config/claude-fleet/cred-proxy/codex-homes" --exclude="$LOGIN/.config/claude-fleet/pycache")
 
 # The copy never leaves the cluster (issue #3554: 387 MB of a drill's home
 # through the API server from the operator's machine broke 4 times out of 4;
@@ -367,7 +368,7 @@ phase_copy() {
   kc exec "$(SEEDER)" -- rm -f "/data/homes/$LOGIN/.config/claude-fleet/node.env" \
     "/data/homes/$LOGIN/.config/claude-fleet/node.pub.env" "/data/homes/$LOGIN/.config/claude-fleet/credsep.json" \
     "$RECV_RC" || die 1 'clearing the shared-node files failed'
-  a=$(src sh -c 'cd /home && find "$1" -xdev ! -type s ! -type p ! -path "$1/.codex/tmp*" ! -path "$1/.config/claude-fleet/cred-proxy/codex-homes*" | wc -l' _ "$LOGIN")
+  a=$(src sh -c 'cd /home && find "$1" -xdev ! -type s ! -type p ! -path "$1/.codex/tmp*" ! -path "$1/.config/claude-fleet/cred-proxy/codex-homes*" ! -path "$1/.config/claude-fleet/pycache*" | wc -l' _ "$LOGIN")
   b=$(kc exec "$(SEEDER)" -- sh -c 'cd /data/homes && find "$1" ! -type s ! -type p | wc -l' _ "$LOGIN")
   # the three cleared files are the only difference allowed; a socket or a
   # fifo is never copied (tar skips it: a live peerlink's .sock), so neither side counts one

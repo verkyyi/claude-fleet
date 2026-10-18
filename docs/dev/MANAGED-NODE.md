@@ -244,7 +244,7 @@ root 运行。**新 stable 推过来就当拍跑**（#3146，EPIC #3139 C7）：
 `fleet-install-sync.sh --now`。定时不动：推送丢了，下一次定时照样切到（BREAK-IT `release-push-lost`）。**托管登录的 `~/.claude/fleet` 就是机器运行时那一份**（#2774，EPIC #2770 C4）：
 `~/.claude/fleet.versions/<sha>/` 仍是登录自己的**真目录**，但里面每个文件都是指向 `<root>/<sha>/<同一路径>` 的链接
 （与 `bin/selftest-shadow-root.sh` 同一做法：目录是真的、文件是链接，所以 `$BIN/..` 落在登录自己的目录里——
-`fleet.versions/.shared/` 只为旧版本链入 `logs/`，读一个版本——`# compat-1v`）。**安装目录只读**（#4668）：登录写的每一条记录（日志、心跳、台账）都在它自己的 `$FLEET_CONF_DIR/logs`，`fleet-install-apply.sh` 的 conf 一步把安装目录里剩下的 `logs/` 搬过去；守护模板的 `StandardErrorPath` 与 Python 的字节码（`PYTHONPYCACHEPREFIX`）也都指向 `~/.config/claude-fleet/`。`portability-selftest.sh` PART 4 对 `bin/` 里任何写进安装目录的路径即红，selftest 的影子根也是只读的。字节只在 `<root>/<sha>/` 存一份，
+`fleet.versions/.shared/` 只为旧版本链入 `logs/`，读一个版本——`# compat-1v`）。**安装目录只读**（#4668）：登录写的每一条记录（日志、心跳、台账）都在它自己的 `$FLEET_CONF_DIR/logs`，`fleet-install-apply.sh` 的 conf 一步把安装目录里剩下的 `logs/` 搬过去；守护模板的 `StandardErrorPath` 也指向 `~/.config/claude-fleet/`；Python 的字节码（`PYTHONPYCACHEPREFIX`）是缓存，放缓存目录（macOS `~/Library/Caches/claude-fleet/pycache`，其他 `${XDG_CACHE_HOME:-~/.cache}/claude-fleet/pycache`，#4692），不进会被快照、搬迁的设置目录——旧版写进 `$FLEET_CONF_DIR/pycache` 的由 conf 一步删掉，拷整个家目录的几处（move-to-pod、家模板、登录归档）也都排除它。`portability-selftest.sh` PART 4 对 `bin/` 里任何写进安装目录的路径即红，selftest 的影子根也是只读的。字节只在 `<root>/<sha>/` 存一份，
 登录目录只是链接（< 1 MB），毫秒级建好——唯一的例外是 `mod/`：整棵真拷贝（几百 KB），因为 Claude Code 解析插件文件的真实路径、
 拒绝落在 `--plugin-dir` 之外的（「Path escapes plugin directory」），之前建的树由在发布版的下一拍原地补成拷贝（#2964）；最后写的 `.fleet-linked`（`{sha, root}`）是「这棵树完整、属于哪一版」的记号。
 建它的是更新器的 `link-tree <sha>`，**降权到该登录**（它的 HOME / TMPDIR / `FLEET_CONF_DIR`）运行：建树 → 一次 rename 切

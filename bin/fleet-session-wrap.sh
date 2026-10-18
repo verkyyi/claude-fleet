@@ -65,9 +65,14 @@ for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; 
 done
 export PATH
 # The install is read-only (issue #4668): Python's bytecode for the fleet's own
-# modules goes to this login's conf dir, never beside them in bin/ — for every hook
-# and tool the session runs (the daemons' templates say the same).
-[ -n "${PYTHONPYCACHEPREFIX:-}" ] || export PYTHONPYCACHEPREFIX="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/pycache"
+# modules goes to this login's CACHE dir, never beside them in bin/ and never in
+# the conf dir, which is snapshotted, moved and backed up (issue #4692) — for every
+# hook and tool the session runs (the daemons' templates say the same).
+if [ -z "${PYTHONPYCACHEPREFIX:-}" ]; then
+  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then PYTHONPYCACHEPREFIX="$HOME/Library/Caches/claude-fleet/pycache"
+  else PYTHONPYCACHEPREFIX="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/pycache"; fi
+  export PYTHONPYCACHEPREFIX
+fi
 # This login's TMPDIR (issue #2442): a session opened from a `sudo -u` half (a
 # same-machine fleet-move) has none, and every script it runs would read the dash
 # cache from /tmp every login shares. fleet-lib.sh's fleet_user_tmpdir, inline.
