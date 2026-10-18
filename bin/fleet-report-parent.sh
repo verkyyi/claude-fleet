@@ -20,7 +20,9 @@
 #   --state <s>     merged | blocked | failed | reaped | stopped | waiting | idle |
 #                   degenerate (required). A `stopped` whose child is still busy (issue #864)
 #                   is re-filed here as `waiting` (bg job / open PR) or `idle` (the
-#                   PR gate could not be read) — see TIERS below.
+#                   PR gate could not be read) — see TIERS below. That re-file and the
+#                   `not done` / handoff / loop rails are the Stop FALLBACK's (--win);
+#                   a session's own `stopped` is sent as said (issue #4757).
 #   --pr <N>        the PR number, for a merged or failed report. A `merged` report
 #                   is checked against GitHub's `.merged` (issue #1247): an armed
 #                   auto-merge / open PR is re-filed WAITING, a closed-unmerged one
@@ -68,7 +70,8 @@
 # the parent window already reaped with no live ancestor above it in the ledger
 # (a reaped parent WITH one relays there, issue #1352 — see `relay` below), no
 # live Claude under it, or the fleet has
-# FLEET_CHILD_REPORT=0 — every one of those is a silent success. This runs on the
+# FLEET_CHILD_REPORT=0 — every one of those is a success (silent for a hook /
+# reaper; a session's own call prints the reason — never blank, issue #4757). This runs on the
 # child's SHIP path and must never block it or turn a landed PR into an error.
 # Exit 2 is reserved for a usage mistake (bad/missing --state, unknown flag).
 #
@@ -145,7 +148,10 @@ esac
 
 # quiet <msg> — the "nothing to do, and that is fine" exit. Silent in production so
 # a ship path prints nothing; --dry-run says WHY it would send nothing.
-quiet() { [ "$DRY" = 1 ] && printf 'fleet-report-parent: %s — nothing to send\n' "$1"; exit 0; }
+# A session's OWN call (no --win: the report tool, a person's shell) is never
+# answered with a blank exit 0 (issues #3439, #4757): the caller reads the reason
+# off stdout. A hook / reaper (--win) stays silent unless --dry-run.
+quiet() { { [ "$DRY" = 1 ] || [ -z "$WIN" ]; } && printf 'fleet-report-parent: %s — nothing to send\n' "$1"; exit 0; }
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
 
@@ -217,7 +223,10 @@ fi
 
 # The Stop fallback reports a stopped TURN, never a claim that an unfinished PR
 # landed. Transfer/loop pauses are not completion and must not wake the parent.
-if [ "$STATE" = stopped ]; then
+# Only the fallback (--win: the Stop hook, a reaper) is held to these rails: a
+# session that says `stopped` ITSELF does so mid-turn (@claude_state working), and
+# the old `not done` gate dropped that report with a blank exit 0 (issue #4757).
+if [ "$STATE" = stopped ] && [ -n "$WIN" ]; then
   [ "$wstate" = "done" ] || quiet 'not done'
   [ "$(TM display-message -p -t "$target" '#{@handoff_armed}')" != 1 ] || quiet 'handoff pending'
   manifest=$(TM display-message -p -t "$target" '#{@handoff_manifest}')
@@ -436,8 +445,10 @@ print(json.dumps(d))' "$@" 2>/dev/null
 # stamped, so a later Stop that finds the child genuinely idle still reports once.
 # Before the ledger (it must record the RIGHT state), after the cheap rails: this
 # walks processes and may ask GitHub.
+# The session's own `stopped` (no --win) is its word, not a turn boundary — and it
+# is mid tool call, so the busy probe would always re-file it silent (issue #4757).
 busy=''
-if [ "$STATE" = stopped ] && busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg"); then
+if [ "$STATE" = stopped ] && [ -n "$WIN" ] && busy=$(fleet_child_busy "$sess" "$selfwin" "$branch_arg"); then
   case "$busy" in pr-unknown) STATE=idle ;; *) STATE=waiting ;; esac
   VERDICT="$busy"
 fi
