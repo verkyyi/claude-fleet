@@ -256,6 +256,68 @@ class RepoAuthorityTests(unittest.TestCase):
                 self.assertEqual(doc["local"]["settings"]["FLEET_FORGE"], "github")
             print("fixture manifest: dry-run writes=0, repeat apply identical, repo B unchanged, forge/land/ticket home retained")
 
+    def test_second_host_follows_apply_and_rollback(self):
+        # Issue #4730: node-a's cutover rewrote only node-a's overlay. node-b,
+        # told by the hub, re-reads the authority and lands on the same mode.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = 'FLEET_REPO="org/a"\nFLEET_TICKETS="github"\nFLEET_FORGE="github"\nFLEET_LAND="github"\n'
+            overlays = {}
+            for host in ("node-a", "node-b"):
+                repos = root / host / "fleets/fixture/repos"
+                repos.mkdir(parents=True)
+                (root / host / "fleets/fixture/conf").write_text('FLEET_SESSION="fixture"\n')
+                overlays[host] = repos / "org-a.conf"
+                overlays[host].write_text(original)
+                (repos / "org-b.conf").write_text(original.replace("org/a", "org/b"))
+            other_b = (root / "node-b/fleets/fixture/repos/org-b.conf").read_bytes()
+            authority = dict(repo="org/a", mode="legacy", revision=0)
+
+            def api(method, path, body=None, query=None):
+                nonlocal authority
+                self.assertEqual(query["repo"], "org/a")
+                if method == "GET":
+                    if query.get("gate"):
+                        return copy.deepcopy(authority)
+                    return dict(authority=copy.deepcopy(authority), nodes=[], legacy_owners=[],
+                                tickets=[], blockers=[], dry_run=True, live_acceptance="unverified")
+                authority = dict(authority, mode={"freeze": "frozen", "apply": "hub", "rollback": "legacy"}[body["action"]],
+                                 revision=authority["revision"] + 1)
+                return copy.deepcopy(authority)
+
+            def run(host, *args):
+                out = io.StringIO()
+                env = dict(os.environ, FLEET_CONF_DIR=str(root / host), FLEET_SKIP_GLOBAL_CONF="1")
+                for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_REPO", "FLEET_TASK_AUTHORITY"):
+                    env.pop(key, None)
+                with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
+                    migration.main(["org/a", *args])
+                return json.loads(out.getvalue())
+
+            def effective(host):
+                return run(host, "--session", "fixture", "--dry-run")["local"]["settings"]["FLEET_TASK_AUTHORITY"]
+
+            with patch.object(migration.ticket, "api", side_effect=api):
+                untouched = run("node-b", "--sync")
+                self.assertEqual(untouched["changed"], [])
+                self.assertEqual(overlays["node-b"].read_text(), original)
+                manifest = root / "manifest.json"
+                for stage, mode in (("freeze", "frozen"), ("apply", "hub"), ("rollback", "legacy")):
+                    manifest.write_text(json.dumps(run("node-a", "--session", "fixture", "--dry-run")))
+                    run("node-a", "--session", "fixture", "--" + stage, "--manifest", str(manifest))
+                    self.assertEqual(effective("node-a"), mode)
+                    self.assertEqual(run("node-b", "--sync")["changed"], ["fixture"])
+                    self.assertEqual(effective("node-b"), mode)
+                    self.assertEqual(run("node-b", "--sync")["changed"], [])
+                    self.assertEqual(other_b, (root / "node-b/fleets/fixture/repos/org-b.conf").read_bytes())
+                self.assertIn(original, overlays["node-b"].read_text())
+            with patch.object(migration.ticket, "api", return_value=dict(mode="unknown")):
+                before = overlays["node-b"].read_bytes()
+                with self.assertRaises(ValueError):
+                    run("node-b", "--sync")
+                self.assertEqual(before, overlays["node-b"].read_bytes())
+            print("two hosts: node-b reads frozen/hub/legacy after node-a's freeze/apply/rollback; repo B and unknown untouched")
+
     def test_forge_none_manifest_and_unknown_gate(self):
         with patch.object(migration, "local_settings", return_value=(dict(settings=dict(FLEET_FORGE="none", FLEET_LAND="fleet", FLEET_TICKETS="hub")), Path("fixture"))), \
                 patch.object(migration.ticket, "api", return_value=dict(authority=dict(mode="legacy", revision=0))):

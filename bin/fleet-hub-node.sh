@@ -283,9 +283,13 @@ case "${1:-}" in
     # the agent lists CapTestIdentity, and only then does the hub send `test`;
     # task (issue #3325): it takes the hub's task record on a start and runs
     # task_issue — the agent lists CapTask, and only then does the hub send them
-    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
+    printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;
+  # The hub's word that a repo's authority moved (issue #4730): every local
+  # overlay of that repo re-reads it — the mode comes from the hub's gate read.
+  authority-sync) [ -n "${2:-}" ] || die 2 "usage: fleet-hub-node.sh authority-sync <owner/repo>"
+    exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync ;;
   recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;

@@ -99,6 +99,37 @@ def update_local(path, mode):
         tmp.unlink(missing_ok=True)
 
 
+def sync(repo):
+    # Every host of the repo follows the hub's selection (issue #4730): a cutover
+    # rewrote only the overlay of the host that ran it, so another host's reader
+    # of FLEET_TASK_AUTHORITY saw legacy for a repo the hub owned. The hub says
+    # "re-read" to each capable host; the mode is read back here with this
+    # node's own credential, never taken from the push. Unknown leaves the
+    # overlay alone. legacy with no line stays byte for byte.
+    repo = repo_identity(repo)
+    a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+    mode = a.get("mode") if isinstance(a, dict) else None
+    if mode not in ("legacy", "frozen", "hub"):
+        raise ValueError("repo authority is unknown; overlays left as they are")
+    env = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
+    changed = []
+    for repos in sorted((Path(env) / "fleets").glob("*/repos")):
+        session = repos.parent.name
+        try:
+            _, path = local_settings(session, repo)
+        except (ValueError, subprocess.SubprocessError):
+            continue  # this fleet does not host the repo with its own overlay
+        with open(str(path) + ".authority.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            local, path = local_settings(session, repo)
+            current = local["settings"]["FLEET_TASK_AUTHORITY"]
+            if current == mode or (mode == "legacy" and not current):
+                continue
+            update_local(path, mode)
+            changed.append(session)
+    print(json.dumps(dict(repo=repo, mode=mode, revision=a.get("revision"), changed=changed)))
+
+
 NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
 START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")
 
@@ -385,7 +416,7 @@ def main(argv=None):
     p.add_argument("repo")
     p.add_argument("--session", default=os.environ.get("FLEET_SESSION", ""))
     actions = p.add_mutually_exclusive_group()
-    for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish"):
+    for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync"):
         actions.add_argument("--" + a, action="store_true")
     actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
@@ -401,6 +432,9 @@ def main(argv=None):
         if args.session:
             registered_repo(args.session, repo)
         gate(repo, args.finish)
+        return
+    if args.sync:
+        sync(repo)
         return
     if args.cancel_start:
         print(json.dumps(start_call(repo, args.cancel_start, "cancel"), indent=2))

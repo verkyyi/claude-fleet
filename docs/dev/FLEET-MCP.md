@@ -667,6 +667,16 @@ nothing. `--freeze`, `--apply`, and `--rollback` each require `--manifest FILE`;
 save a fresh dry-run between stages. Exact retries reuse the same operation key.
 The manifest must name this exact repo/session and unchanged local settings.
 
+The cutover writes the caller's overlay, and every other host of the repo
+follows (#4730): after each freeze/apply/rollback the hub sends
+`repo_authority` to every capable host (and on a host's first beat for each
+repo it hosts whose authority ever moved), and the node runs
+`fleet-hub-node.sh authority-sync owner/repo` → `fleet_repo_authority.py
+owner/repo --sync`, which reads the mode back with the node's own credential and
+rewrites `FLEET_TASK_AUTHORITY` in each local overlay of that repo only. An
+unknown answer leaves the overlays as they are; a repo still `legacy` with no
+line is left byte for byte. A failed re-read is retried on the next beat.
+
 Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
 The last local gate reserves a start in the existing operation journal before
 window creation. Freeze, admission and cancellation serialize on the same repo

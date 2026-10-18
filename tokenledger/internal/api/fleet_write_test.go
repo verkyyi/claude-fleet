@@ -33,6 +33,8 @@ type writeNode struct {
 	conn   *websocket.Conn
 	mu     sync.Mutex
 	writes []map[string]any
+	// pushed is every other hub message it heard (claude-fleet#4730).
+	pushed []control.Message
 	answer func(env map[string]any) (any, *control.Error)
 	// opGet answers operation_get (claude-fleet#1586); nil = the operation
 	// as submit journalled it, still accepted.
@@ -93,6 +95,9 @@ func (n *writeNode) serve() {
 		case m.Type == control.TypeRequest && req.Method == "operation_get":
 			res, e = n.operation(asString(env["operation_id"]))
 		case m.Type != control.TypeWrite:
+			n.mu.Lock()
+			n.pushed = append(n.pushed, m)
+			n.mu.Unlock()
 			continue
 		default:
 			n.mu.Lock()
@@ -114,6 +119,20 @@ func (n *writeNode) serve() {
 		out.OpID = m.OpID
 		_ = wsjson.Write(context.Background(), n.conn, out)
 	}
+}
+
+// authorityPushes is every TypeRepoAuthority it heard, in order.
+func (n *writeNode) authorityPushes() []control.RepoAuthority {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := []control.RepoAuthority{}
+	for _, m := range n.pushed {
+		var r control.RepoAuthority
+		if m.Type == control.TypeRepoAuthority && json.Unmarshal(m.Payload, &r) == nil {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // operation is the node's record of one operation it was sent.

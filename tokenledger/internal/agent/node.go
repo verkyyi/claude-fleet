@@ -366,6 +366,10 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 				a.handleRelease(ctx, m)
 			case control.TypeTicket:
 				a.handleTicket(ctx, m)
+			case control.TypeRepoAuthority:
+				if relayOK && rp.authoritySync {
+					a.handleRepoAuthority(ctx, rp.script, m)
+				}
 			case control.TypeCreds:
 				a.handleCreds(m)
 			case control.TypeSSHRelayOpen:
@@ -485,6 +489,8 @@ func (a *Agent) nodeSession(ctx context.Context, netc <-chan struct{}) (establis
 			}
 			// A team (or person) sync that failed runs again on this beat.
 			a.teamKick(ctx)
+			// So does a repo authority re-read (claude-fleet#4730).
+			a.authorityKick(ctx)
 		case <-nudge:
 			nb.arm()
 		case <-netc:

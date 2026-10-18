@@ -85,6 +85,9 @@ type relayPaths struct {
 	launch        bool
 	taskRecovery  bool
 	repoAuthority bool
+	// authoritySync: this claude-fleet answers `authority-sync <repo>`
+	// (claude-fleet#4730); false on one that predates it.
+	authoritySync bool
 }
 
 // relayState is the outbox's in-flight table, kept across reconnects so a
@@ -141,6 +144,8 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 			p.taskRecovery = v == "1"
 		case "repo_authority_v1":
 			p.repoAuthority = v == "1"
+		case "repo_authority_sync":
+			p.authoritySync = v == "1"
 		case "task":
 			p.task = v == "1"
 		}

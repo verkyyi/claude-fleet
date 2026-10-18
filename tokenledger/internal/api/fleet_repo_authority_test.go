@@ -207,3 +207,56 @@ func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 	encoded, _ := json.Marshal(map[string]any{"authority": a, "task": rec.Ref, "operation": op["operation_id"], "work_outcome": rec.Outcome, "pr_completion": "unverified"})
 	t.Logf("fixture clean cutover: %s; no GitHub access used; live acceptance NOT RUN", encoded)
 }
+
+// claude-fleet#4730: a cutover run from one host tells EVERY capable host of the
+// repo to re-read its overlay — freeze, apply and rollback alike — and a host
+// that connects later hears the current one on its first beat.
+func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
+	h, macD, macC, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
+	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	refresh := func() {
+		for _, f := range []control.Fleet{f5, f4} {
+			if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, "[]", time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(macD.authorityPushes())+len(macC.authorityPushes()) != 0 {
+		t.Fatal("a repo that never moved was pushed")
+	}
+	steps := []struct {
+		body map[string]any
+		mode string
+	}{
+		{map[string]any{"action": "freeze", "idempotency_key": "f", "expected_revision": 0, "legacy_tickets": "github"}, "frozen"},
+		{map[string]any{"action": "apply", "idempotency_key": "a", "expected_revision": 1}, "hub"},
+		{map[string]any{"action": "freeze", "idempotency_key": "f2", "expected_revision": 2, "legacy_tickets": "github"}, "frozen"},
+		{map[string]any{"action": "rollback", "idempotency_key": "r", "expected_revision": 3}, "legacy"},
+	}
+	for i, st := range steps {
+		refresh()
+		if code, out := ticketCall(t, h, auth, http.MethodPost, path, st.body); code != 200 || out["mode"] != st.mode {
+			t.Fatalf("%s: %d %v", st.mode, code, out)
+		}
+		want := control.RepoAuthority{Repo: writeRepo, Mode: st.mode, Revision: int64(i + 1)}
+		for name, n := range map[string]*writeNode{"mac-d": macD, "mac-c": macC} {
+			waitFor(t, 3*time.Second, name+" told "+st.mode, func() bool {
+				p := n.authorityPushes()
+				return len(p) == i+1 && p[i] == want
+			})
+		}
+	}
+	// A host coming back hears the authority once, on its first beat.
+	again := connectWriteNodeCaps(t, h, h.tokens["mac-c"], control.CapRead, control.CapWrite, control.CapLaunch, control.CapRepoAuthority)
+	again.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
+	waitFor(t, 3*time.Second, "reconnected host told", func() bool {
+		p := again.authorityPushes()
+		return len(p) == 1 && p[0] == control.RepoAuthority{Repo: writeRepo, Mode: "legacy", Revision: 4}
+	})
+	again.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
+	time.Sleep(200 * time.Millisecond)
+	if len(again.authorityPushes()) != 1 {
+		t.Fatal("a later beat pushed again", again.authorityPushes())
+	}
+}

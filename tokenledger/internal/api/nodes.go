@@ -800,6 +800,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 					}
 				}
 				s.recordFleets(*ep, hb, nc.canRead, first, now)
+				if first && nc.canRepoAuthority && nc.canLaunch {
+					// The repos whose authority moved while this link was
+					// away (claude-fleet#4730), after its fleets are registered.
+					go s.pushRepoAuthorities(ep.ID)
+				}
 				first = false
 			}()
 			if s.Spot != nil {
