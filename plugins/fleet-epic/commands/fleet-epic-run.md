@@ -88,11 +88,11 @@ that dies at the boundary. Therefore:
   ```
 
   `--title` is the parent issue's title as you read it (the stamp drops a leading
-  `EPIC: `); the orchestrator's batches pane names the batch with it (issue #2833).
+  `EPIC: `); the task list's batch row names the batch with it (issue #2833).
 
   `<l>` is how many member sessions were alive at the LAST tick's read (a member
   window still open, running or waiting), `<p>` how many member PRs were open and
-  not yet merged (issue #2247). The batches pane, the steward and the doctor
+  not yet merged (issue #2247). The task list and the doctor
   read them as «has work» vs «idle» (and, only when the person opted into the EPIC
   hold with `FLEET_EPIC_HOLD_CAP_SECS`, whether the batch holds the upgrade —
   off by default, issue #2934). Stamp what is true.
@@ -113,7 +113,7 @@ that dies at the boundary. Therefore:
   It rewrites THIS batch's mark, `$FLEET_CONF_DIR/global/epic-running.d/<repo
   slug>-<N>` — one file per batch (issue #2062), so a second loop on this login
   never overwrites yours. The mark says the batch is running (the task list's
-  batch row, the steward, `fleet doctor`'s `epic` row); it does **not** hold the
+  batch row, `fleet doctor`'s `epic` row); it does **not** hold the
   install still (issue #2934): a version switch moves `current/` and the
   daemons, never a running session, so install-sync and the machine updater
   switch to a new stable even while this batch runs, and members spawned later
@@ -248,8 +248,8 @@ and swapping the floor under running workers is how one bad merge takes the batc
 with it. Sync once, at the end (step 4). The same rule binds the workers through
 `/fleet-claim` (issue #953: on EPIC #883 one synced right after its own merge and
 reloaded a daemon under the rest of the batch). The install-sync daemon itself
-follows stable even mid-batch (issue #2934) — a stable move is the operator's /
-the steward's, and it stops no running session.
+follows stable even mid-batch (issue #2934) — a stable move is the operator's,
+and it stops no running session.
 
 ### b. Reclaim finished slots
 
@@ -408,10 +408,13 @@ to the member's diff, say so on the parent and re-run the check rather than
 burning the one retry on a flake. And if the base branch itself is red (the same
 check fails on `master`'s head), it is ONE breakage for every member and every
 loop: file it once through `~/.claude/fleet/bin/fleet-issue-file.sh --title …
---breakage --spawn --repo "$MREPO"` (issue #2078; a member that files it without
-`--spawn` leaves the fixer to the steward) — exit 5 + a URL means someone
+--breakage --spawn --repo "$MREPO"` (issue #2078) — exit 5 + a URL means someone
 already did, and a 「同一故障」 comment was left there — then wait for that issue
-before retrying any member. Three issues and three conflicting fixes for one
+before retrying any member. A member that filed it WITHOUT `--spawn` only got
+the issue filed and the person alerted (nobody spawns its fixer by itself, EPIC
+#4333 C4): if that issue has no live worker, spawn its fixer yourself
+(`mcp__fleet-orch__spawn` with its number — the claim dedup makes a second spawn
+a no-op), then wait for it the same way. Three issues and three conflicting fixes for one
 duplicate route (2026-10-07, #2039 #2040 #2041) is what this replaces.
 
 ### e. Quota
@@ -474,8 +477,8 @@ survives a context boundary the same way everything else here does:
    format). Before running the report, not after: if this session dies between
    the two, `pending` is what tells the next one there is work left.
    The same comment carries what the batch leaves for a person, **one marker
-   line each** (issue #2672) — the steward reads them, merges every batch's into
-   ONE 「待你动手」 list, and runs what it may:
+   line each** (issue #2672) — the person's reminders, which step 5's report
+   names again; no other session reads or runs them (EPIC #4333 C5):
 
    ```sh
    python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind stable     --what '挪稳定版到 <sha>'
@@ -483,9 +486,9 @@ survives a context boundary the same way everything else here does:
    python3 ~/.claude/fleet/bin/fleet_followup.py mark --kind human      --what 'iPad 上真环境走一遍' --due 2026-10-12
    ```
 
-   `stable` — the steward runs `fleet-stable.sh move` itself once every gate is
-   green and no batch holds the install; `hub-deploy` — it asks the person
-   first, always; `human` — listed, with its due date. No followup, no line.
+   `stable` — the person runs `fleet-stable.sh move` (its own gates decide);
+   `hub-deploy` — the person's call, always; `human` — with its due date. No
+   followup, no line.
    The report's 挪稳定版 row prints its own `mark:` (step 2 of
    `/fleet-epic-report`); write the others here. Never run the move yourself.
 2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here** (its page
@@ -500,7 +503,7 @@ survives a context boundary the same way everything else here does:
 4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
    (issue #953) — `<N>` is this EPIC: it removes THIS batch's mark and no other's
    (issue #2062: a bare `--clear` once took the file every batch on the login
-   shared). The batch's own followups (`move stable`) are the steward's, never
+   shared). The batch's own followups (`move stable`) are the person's, never
    this loop's; the installs follow stable on their own tick whether a batch runs
    or not (issue #2934). A loop that never reaches this line leaves a mark that
    expires on its own, 45 min after its last tick.
@@ -508,9 +511,10 @@ survives a context boundary the same way everything else here does:
    of the run: `mcp__fleet__report` with `state: merged` and a `summary` that
    carries the report page's URL and what the batch leaves for the person
    (`move stable`, a hub redeploy, a member still blocked — the same things the
-   closing tick's followup markers name). The orchestrator that
-   started this driver gets it as a `[child-report]`; with no parent it exits 0
-   silently, so it is unconditional. Then stop: the driver's own `done:2h`
+   closing tick's followup markers name). The session that started this
+   driver (an orchestrator, or the person's own) gets it as a `[child-report]`;
+   a parent that is gone turns it into the person's reminder, and with no
+   parent at all it exits 0 silently — so it is unconditional. Then stop: the driver's own `done:2h`
    closes it — no `/loop` left armed, no handoff.
 
 **Resuming into a `report: pending`.** The stateless rule (step 1) covers this
