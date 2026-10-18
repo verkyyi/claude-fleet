@@ -39,11 +39,11 @@ name: mac follow
 # Never a gate of Linux: nothing here touches refs/tags/stable or the hub's stable.
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('mac follow @ {0}', inputs.sha || 'stable') || 'mac follow' }}
 
+# Since #4663 a dispatch only: the Mac lane moves WITH stable in the release train
+# (fleet-stable.sh move --ref stable-macos --with-stable), each Mac verifies its own
+# install, and the nightly full suite (selftests-macos.yml) is the BSD half. This run
+# 30 days before had 1 success in 40 and held every Mac for hours.
 on:
-  workflow_run:
-    workflows: ['release train']
-    types: [completed]
-    branches: [master]
   workflow_dispatch:
     inputs:
       sha:

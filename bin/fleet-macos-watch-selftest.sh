@@ -32,7 +32,7 @@
 #   K. held back      (issue #3869) the red streak began > FLEET_MACOS_STALE_SECS
 #                     ago ⇒ ONE more alert «every Mac … previous version»; the next
 #                     tick in the same streak says nothing; green forgets it. The
-#                     default workflow is mac-follow.yml (the train no longer runs macOS)
+#                     default workflow is selftests-macos.yml (#4663: mac-follow holds nothing)
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -182,7 +182,7 @@ eq "I: off exits 0" 0 "$RC"; eq "I: says nothing" "" "$OUT"; eq "I: nothing file
 # --- J. the diskguard tick drives it, files + alerts, spawns nobody (#3120) --------------
 reset; red_runs
 mkdir -p "$WORK/mainA/.github/workflows" "$WORK/mainA/bin" "$WORK/mainB"
-: > "$WORK/mainA/.github/workflows/mac-follow.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
+: > "$WORK/mainA/.github/workflows/selftests-macos.yml"; : > "$WORK/mainA/bin/fleet-stable.sh"
 cat > "$WORK/dg.sh" <<SH
 FLEET_DISKGUARD_SOURCE=1 . "$BIN/fleet-diskguard.sh"
 BIN="$BIN" GDIR="$WORK/dg"
@@ -214,17 +214,17 @@ new=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 jobs 62 red; jobs 61 red; jobs 60 green
 run --now --session fleet
 contains "K: says the lane is held back" "$OUT" "stale	3h	2222222"
-contains "K: the held-back alert" "$(alerted)" "every Mac has stayed on the previous version for 3h+"
+contains "K: the held-back alert" "$(alerted)" "macOS has been red for 3h+"
 eq "K: two alerts (the filing + held back)" 2 "$(alerted | wc -l | tr -d ' ')"
 rm -f "$WORK/alerted"; { row 63 "$S3" failure workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 63 red
 run --now --session fleet
-lacks "K: the same streak is not alerted twice" "$(alerted)" "previous version for"
+lacks "K: the same streak is not alerted twice" "$(alerted)" "has been red for"
 FLEET_MACOS_STALE_SECS=99999 run --now
 lacks "K: within the window nothing is said" "$OUT" "stale	"
 { row 64 "$S3" success workflow_run "$new"; cat "$WORK/runs"; } > "$WORK/runs.n"; mv "$WORK/runs.n" "$WORK/runs"; jobs 64 green
 run --now
 eq "K: green forgets the held-back mark" no "$([ -e "$WORK/conf/global/macos-watch/o-r.stale" ] && echo yes || echo no)"
-contains "K: the watched workflow is mac-follow.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-mac-follow.yml'
+contains "K: the watched workflow is selftests-macos.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-selftests-macos.yml'
 
 # --- L. one issue per red test, whatever the commit (#4232) ------------------------------
 key() { sed -n 's/.*--breakage-key \([^ ]*\) .*/\1/p' "$WORK/filed" | tail -1; }

@@ -473,5 +473,30 @@ eq "S: a green path moves" 0 "$RC"; contains "S: says green" "$OUT" "cn: the Chi
 C29=$(commit twentynine); push; : > "$WORK/cnstatus"
 run move "$C29"
 eq "S: no verdict → not gated" 0 "$RC"; contains "S: says no verdict" "$OUT" 'no "cn path" verdict'
+# issue #4663: only the product's red holds — env (an invalid test road) and probe (the probe's
+# own error) are said and pass, with their issue still open
+for cls in '环境无效（cert_expired）：卡在 cert — expired' '检测出错（no_verdict）：卡在 probe — no verdict'; do
+  Cx=$(commit "cls-$cls"); push
+  printf 'failure\thttps://github.com/o/r/issues/78\t%s\n' "$cls" > "$WORK/cnstatus"; printf 'open\n' > "$WORK/cnissue"
+  run move "$Cx"
+  eq "S: a red China path of class ${cls%%（*} moves" 0 "$RC"; eq "S: stable moved (${cls%%（*})" "$Cx" "$(tag)"
+  contains "S: says it is not the product (${cls%%（*})" "$OUT" "not the product"
+done
+: > "$WORK/cnstatus"
+
+# --- T. --with-stable: the Mac lane moves WITH stable (issue #4663) -------------------------------
+# The train moves the lane right after stable, onto stable only; gate 5 is not asked.
+STT=$(tag); : > "$WORK/macos"
+run move "$C28" --ref stable-macos --with-stable
+eq "T: --with-stable off stable is refused" 3 "$RC"; contains "T: reason M:" "$OUT" "REFUSED — M: --with-stable moves the Mac lane onto stable"
+run move --ref stable-macos --with-stable
+eq "T: --with-stable onto stable moves past a red macOS" 0 "$RC"; eq "T: the lane is at stable" "$STT" "$(ltag)"
+contains "T: says the lane moves with stable" "$OUT" "the lane moves with stable"
+case "$OUT" in *"REFUSED — macos:"*|*"macos: green"*|*"macos: no run"*) fail "T: --with-stable asked gate 5: $OUT" ;; esac
+run move --ref stable-macos --with-stable
+eq "T: again is a no-op" 0 "$RC"; eq "T: the lane stays at stable" "$STT" "$(ltag)"
+run move --with-stable
+eq "T: --with-stable without --ref stable-macos is usage" 2 "$RC"
+green
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"

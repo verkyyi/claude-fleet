@@ -784,19 +784,20 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   skips gate 5. No `stable-macos` tag ⇒ every reader reads stable and gate 5
   holds stable, byte for byte (BREAK-IT `stable-macos-ahead`; the doctor's
   `channel` row says which lane this machine follows and how far the Mac lane
-  trails). **The macOS half runs AFTER the release** (issue #3869, C6): the train
-  never waits for nor reds on a Mac; `mac-follow.yml` (`workflow_run` on a green
-  train, concurrency `mac-follow`, our Macs first via `fleet-train-macos.sh pick`)
-  tests the new stable `--changed <lane>`, leaves the status `mac follow: macOS`
-  (gate 5 reads it) and on green moves the lane (`move --ref stable-macos <sha>
-  --train <run>`) and dispatches `stable-publish.yml ref=stable-macos`; red, every
-  Mac stays on the previous version. The train's `release` seeds the lane once at
-  the stable it boarded (`move --ref stable-macos --seed`: only while there is
-  none, only at stable, gate 5 not asked). A red follow (its `macOS / shard *`
+  trails). **No check holds a release on a Mac** (issue #4663, after #3869): the train's
+  `release` moves stable, then the lane WITH it (`move --ref stable-macos
+  --with-stable`: gates 1 · 2 · M, never 5) and publishes the hub's Mac lane; each
+  Mac verifies its own install (the updater's machine doctor after the switch,
+  rolled back to `.prev` on a new FAIL). `mac-follow.yml` is a dispatch only. The
+  BSD half is the nightly full `selftests-macos.yml`: a red one (its macOS shard
   jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
   more when the red streak is older than `FLEET_MACOS_STALE_SECS` (2 h) — no fixer
-  is spawned (issue #3120). **The selection's backstop is a nightly full run**
+  is spawned (issue #3120). Gate 9 (`cn:`) refuses only on the product's red: a
+  China-path status of class env / probe is said and passes. A problem that ships is taken back by ONE command,
+  `bin/fleet-release-rollback.sh <PR|sha> [--hub-tag prod-<sha7>]` (a revert PR
+  merged at once in a clone of its own, the train ships it; `--hub-tag` puts the
+  hub back on that image now). **The selection's backstop is a nightly full run**
   (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
   06:17 Beijing (the train's pick and `fleet-train-plan.sh --full`, no rerun, no
   quarantine); each red test goes to `bin/fleet-nightly-miss.sh`, which bisects it
