@@ -32,14 +32,16 @@ docs/dev/FLEET-MCP.md is the one spec; later EPIC members add tools there and he
 Two groups (issue #3113, EPIC #3111 C2). The default server `fleet` LISTS the tools
 a session works with; the dispatch group — spawn · await · children · answer_dialog ·
 send — is listed by the same script started as `fleet-mcp.py --group orch`, the
-server `fleet-orch`, which only the fleet-orchestrate plugin's .mcp.json registers
-(plus the launchers of a session whose agent file grants spawn — conf/mcp-orch.json,
-see --bridge-seat). For at least one version (#2068) `fleet`
+server `fleet-orch` (conf/mcp-orch.json), which the core's launchers mount wherever
+the session may spawn — @agent_spawn 1, the ONE switch (issue #4334; see
+--bridge-seat): its agent file grants `spawn`, or the person opened it and it binds
+no issue. No plugin mounts it. For at least one version (#2068) `fleet`
 still ANSWERS a dispatch-group call under its old name (logged road=legacy), and a
 server that took over from a pre-group version keeps listing everything, so a
 session that started with the old list never loses a tool mid-conversation.
-`file_issue` with spawn: true and no dispatch group files the issue and says how to
-install it.
+`file_issue` with spawn: true and no dispatch group files the issue and says this
+session may not spawn. `take_role` is listed by neither server (issue #4334) and
+still answered one version.
 
 The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
 CHECKS its arguments — an unknown or missing argument, a wrong type, a repo this
@@ -51,7 +53,7 @@ came. Caps, claim dedup and guards live in the scripts, once.
   fleet-mcp.py --group orch    serve the dispatch group (the server `fleet-orch`)
   fleet-mcp.py [--group orch] --list
                                print the tools that server lists, one per line
-  fleet-mcp.py --bridge-seat   exit 0 when THIS pane's agent file grants spawn
+  fleet-mcp.py --bridge-seat   exit 0 when THIS pane may spawn
                                (@agent_spawn 1) — the Codex launcher mounts the dispatch
                                group there; 1 otherwise (no seat by role, issue #3118)
   fleet-mcp.py --mount codex [--group orch]
@@ -1120,15 +1122,13 @@ def tool_file_issue(args):
 
 # --- the dispatch group (issue #3113, EPIC #3111 C2) -------------------------------
 
-ORCH_PLUGIN = "fleet-orchestrate@claude-fleet"
-ORCH_HINT = ("spawn: 派单要装插件：/plugin install %s — the issue was filed, no worker was started"
-             % ORCH_PLUGIN)
+ORCH_HINT = ("spawn: this session may not spawn (its agent file does not grant `spawn`, @agent_spawn "
+             "is not 1) — the issue was filed, no worker was started")
 def bridge_seat():
-    """Is THIS pane started to dispatch — its agent file grants `spawn` (@agent_spawn
-    1, stamped by the Claude launcher, issue #3122)? (--bridge-seat) The seats the
-    fleet used to open itself (orchestrator · steward) are gone (issue #3118), and a
-    role is never matched by name: an epic-driver without the fleet-epic plugin is a
-    plain session."""
+    """May THIS pane dispatch — @agent_spawn 1? (--bridge-seat) The ONE switch (issue
+    #4334): stamped by the launcher off the agent file it starts (issue #3122), or by
+    the spawner for a session the person opens that binds no issue. No plugin, seat
+    or role is asked: the dispatch group ships with the core."""
     pane = os.environ.get("TMUX_PANE", "")
     if not os.environ.get("TMUX") or not pane:
         return False
@@ -1137,28 +1137,11 @@ def bridge_seat():
     return r.returncode == 0 and r.stdout.strip() == "1"
 
 
-def plugin_enabled():
-    """fleet-orchestrate enabled in Claude Code's own settings (user, then this
-    directory's project files) — the record /plugin keeps; the fleet keeps none."""
-    home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-    on = None
-    for f in (os.path.join(home, "settings.json"), os.path.join(".claude", "settings.json"),
-              os.path.join(".claude", "settings.local.json")):
-        try:
-            with open(f) as fh:
-                v = (json.load(fh).get("enabledPlugins") or {}).get(ORCH_PLUGIN)
-        except (OSError, ValueError, AttributeError):
-            continue
-        if isinstance(v, bool):
-            on = v              # a later (narrower) scope wins, as in Claude Code
-    return on is True
-
-
 def orch_installed():
-    """Does this session have the dispatch group? The launcher's bridge mount says so
-    in the environment (FLEET_MCP_ORCH=1, forwarded to Codex by name); a plugin
-    install, in Claude Code's settings."""
-    return os.environ.get("FLEET_MCP_ORCH") == "1" or plugin_enabled()
+    """Does this session have the dispatch group? The launcher's mount says so in the
+    environment (FLEET_MCP_ORCH=1, forwarded to Codex by name); else the pane's own
+    @agent_spawn — never a plugin's install (issue #4334)."""
+    return os.environ.get("FLEET_MCP_ORCH") == "1" or bridge_seat()
 
 
 GH_KIND = {"issue": ["issue", "view"], "pr": ["pr", "view"], "checks": ["pr", "checks"]}
@@ -1661,11 +1644,14 @@ LEGACY = {
 
 # Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
 # (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
-# but LISTS only CORE; `fleet-orch` lists and answers ORCH — take_role among them (#3114).
+# but LISTS only CORE; `fleet-orch` lists and answers ORCH. RETIRED tools are listed by
+# neither and still answered by both, one version (#2068 rule 4): `take_role` left the
+# list with the seats (issue #4334) — a session that started with it keeps its call.
 ORCH_SERVER = "fleet-orch"
-ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "take_role", "task")
-CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
-ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
+ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "task")
+RETIRED = ("take_role",)   # compat-1v: 下一批删
+CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP and n not in RETIRED}
+ORCH = {n: TOOLS[n] for n in ORCH_GROUP + RETIRED}
 # What `fleet` lists: CORE, unless this process took over (#1898) from a server of a
 # version before the groups — its session met the full list and Claude Code re-lists
 # on the takeover's tools/list_changed, so it keeps the full list (#2068).
@@ -1675,7 +1661,7 @@ SERVING = {"list_all": False}
 def listing(table):
     if table is TOOLS:
         return TOOLS if SERVING["list_all"] else CORE
-    return table
+    return {n: e for n, e in table.items() if n not in RETIRED}
 
 
 def check_args(schema, args):
@@ -1753,7 +1739,8 @@ def tool_result(name, data, error=False):
 
 def tool_call(table, name, args):
     SIGNED["assert"] = False
-    ROAD["legacy"] = table is TOOLS and not ROAD["call"] and name in ORCH_GROUP and name not in listing(table)
+    ROAD["legacy"] = (table is TOOLS and not ROAD["call"] and name in ORCH_GROUP + RETIRED
+                     and name not in listing(table))
     entry = table.get(name)
     if entry is None:
         log_call(str(name), None, "refused", "unknown tool")

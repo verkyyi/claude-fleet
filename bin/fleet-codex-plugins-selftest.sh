@@ -60,6 +60,9 @@ CACHE="$WORK/cache"
 for p in fleet-orchestrate fleet-epic fleet-feedback; do
   mkdir -p "$CACHE/$p/0.1.0" && cp -R "$ROOT/plugins/$p/." "$CACHE/$p/0.1.0/"
 done
+# The shipped plugin registers no MCP server any more (the dispatch group is the
+# core's, issue #4334); the MCP sync below is exercised on a fixture copy of that one.
+cp "$ROOT/conf/mcp-orch.json" "$CACHE/fleet-orchestrate/0.1.0/.mcp.json"
 mkdir -p "$CACHE/fleet-orchestrate/0.1.0/hooks"
 cat > "$CACHE/fleet-orchestrate/0.1.0/hooks/hooks.json" <<'J'
 {"hooks": {

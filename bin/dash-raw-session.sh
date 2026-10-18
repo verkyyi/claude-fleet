@@ -885,6 +885,10 @@ else
     fi
   fi
   [ "$NOREPO" != 1 ] && [ -n "$rsid" ] && launch="$launch --resume $rsid"
+  # A session opened with no agent file binds no issue: it may spawn (issue #4334,
+  # @agent_spawn the one switch) — stamped before its launcher mounts the dispatch
+  # group; an agent file's own grant is the launcher's (fleet-claude.sh).
+  [ -z "$AS_ARG" ] && stamp="$stamp$(fleet_win_stamp_cmd @agent_spawn 1)"
   if [ -n "$PROMPT" ]; then
     tf="$(fleet_cache_dir "$(fleet_slug "${REPO_ARG:-${FLEET_REPO:-$SESS}}")")/task_$slug.txt"
     [ "$NOREPO" = 1 ] && tf="$(fleet_cache_dir "$(fleet_slug "$SESS")")/task_norepo-$$.txt"
@@ -947,6 +951,7 @@ stamp_option() {
 [ -n "$AS_KV" ] && { stamp_option @agent_def "$AS_ARG"
   stamp_option @agent_def_sha "$(as_kv sha)"
   stamp_option @agent_spawn "$(as_kv spawn)"; }
+[ -z "$AS_KV" ] && stamp_option @agent_spawn 1   # no agent file, no issue: may spawn (#4334)
 [ "$ROLE" = epic-driver ] && stamp_option @fleet_role_def epic-driver 2>/dev/null
 # Every repo scratch carries its repo (issue #789), warm or cold.
 [ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null

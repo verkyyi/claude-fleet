@@ -553,6 +553,10 @@ EOF
     fi
     stamp=$(fleet_win_stamp_cmd @norepo 1 ${nsid:+@norepo_sid "$nsid"})
   fi
+  # A pool window becomes a session the person opens with no agent file and no
+  # issue (dash-raw-session.sh claims it only then): it may spawn (issue #4334) —
+  # stamped before its launcher mounts the dispatch group.
+  stamp="${stamp:-}$(fleet_win_stamp_cmd @agent_spawn 1)"
   if TM has-session -t "$POOL" 2>/dev/null; then
     TM set-option -t "$POOL" window-size manual >/dev/null 2>&1
     TM resize-window -t "$POOL" -x "$_w" -y "$_h" >/dev/null 2>&1

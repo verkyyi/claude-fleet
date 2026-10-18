@@ -389,11 +389,15 @@ if [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$_fc_mw" ] && [ -f "$BIN/fleet-mcp.py" ];
         *) mcp_flag+=("--mcp-config=$_fc_mw") ;;               # the =form (#476, above)
       esac
       unset _fc_mwin
-      # The dispatch group (issue #3113, EPIC #3111 C2) is the server `fleet-orch`,
-      # which only the fleet-orchestrate plugin registers — except in a session
-      # whose agent file grants `spawn` (issue #3122 — the epic-driver): it was
-      # started to dispatch. No seat is matched by role any more (issue #3118).
+      # The dispatch group (issue #3113) is the server `fleet-orch`, mounted here
+      # wherever the session may spawn — @agent_spawn 1, the ONE switch (issue
+      # #4334): an agent file that grants `spawn` (issue #3122), else the spawner's
+      # stamp on a session the person opened that binds no issue (read off this
+      # pane, stamped before the launch). No plugin, no seat by role (issue #3118).
       # FLEET_MCP_ORCH=1 tells the core server's file_issue the group is here.
+      if [ -z "$_fc_as_sha" ] && [ -n "${TMUX_PANE:-}" ]; then
+        _fc_as_spawn=$(tmux display-message -p -t "$TMUX_PANE" '#{@agent_spawn}' 2>/dev/null)
+      fi
       if [ -f "$BIN/../conf/mcp-orch.json" ] && [ "${_fc_as_spawn:-0}" = 1 ]; then
         mcp_flag+=("--mcp-config=$BIN/../conf/mcp-orch.json"); export FLEET_MCP_ORCH=1
       fi

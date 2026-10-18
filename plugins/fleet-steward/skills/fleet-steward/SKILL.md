@@ -23,8 +23,8 @@ closes. Its patrol is THIS session's own loop — there is no daemon behind it.
      (stop the loop too, if this is a round of one) — never take it over unasked. Only when
      the person says so: `action: steal`.
    - exit 3 — this window binds an issue: a worker never patrols. Say so and stop.
-   No `mcp__fleet-orch__*` tool at all? The fleet-orchestrate plugin (which this one needs)
-   is not mounted — say so (`/plugin install fleet-orchestrate@claude-fleet`, then reopen).
+   No `mcp__fleet-orch__*` tool at all? This session may not spawn (`@agent_spawn` is not
+   1 — the dispatch group ships with the core, issue #4334) — say so and stop.
 2. **Read your role and your rules** — this skill's directory: `role.md` (who you are; it
    ends with your rows of the rule table) and `rules.md`. Read them once per conversation
    (again after a compaction).

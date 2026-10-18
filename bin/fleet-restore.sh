@@ -884,6 +884,9 @@ restore() {
         stamp=$(fleet_win_stamp_cmd @worktree "$wpath")
         [ -n "${wrepo:-}" ] && stamp="$stamp$(fleet_win_stamp_cmd @repo "$wrepo")"
       fi
+      # A session that binds no issue (a scratch, a no-repo one — its desk ticket is
+      # not a binding) may spawn (issue #4334): its @agent_spawn back before its launcher mounts the dispatch group.
+      { [ "${wraw:-}" = 1 ] || [ "${wrepo:-}" = - ]; } && stamp="$stamp$(fleet_win_stamp_cmd @agent_spawn 1)"
       local launch_context='' launch_receipt='' authority_receipt='' authority_count=0 native_intent=''
       case "$wtag" in WIN:?*)
         launch_context=$(awk -F'\t' -v id="${wtag#WIN:}" '$1 == "LAUNCH" && $2 == id {print $3}' "$mf")
