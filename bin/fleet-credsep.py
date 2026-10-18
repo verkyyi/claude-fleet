@@ -2116,9 +2116,9 @@ def machine_rollback(rows, fresh, pre, err):
 
 
 def machine_uninstall(a):
-    """The way back: the shared service goes first (each login's own proxy then
-    takes its old port back), then every tenant leaves — credentials, proxy
-    state and the FLEET_CRED_PROXY line back where they were."""
+    """The way back: the shared service goes first, then every tenant leaves —
+    credentials, proxy state and the FLEET_CRED_PROXY line back where they were
+    (no login has a proxy of its own to take its port back, #4674)."""
     unload_daemon(SHARED_LABEL)
     if os.path.exists(SHARED_PATH) and not DRY:
         os.unlink(SHARED_PATH)
@@ -2146,7 +2146,7 @@ def machine_uninstall(a):
         shutil.rmtree(SHARED_DIR, ignore_errors=True)
         shutil.rmtree(SHARED_RUN, ignore_errors=True)
     say("")
-    say("shared: OFF — every login back on its own proxy")
+    say("shared: OFF — every login's files back in its home (no login has a proxy of its own any more, #4674)")
     return 0
 
 

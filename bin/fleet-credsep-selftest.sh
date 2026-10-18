@@ -11,9 +11,12 @@
 #   B  install: leased credentials, hub-managed Codex auth.json and node.env
 #      move into the store (same bytes); a personal Codex login stays; node.env
 #      becomes a symlink, node.pub.env holds no token; the agent's service now
-#      starts the launcher, its agent argv comes from run-agent.sh
-#   C  the launcher starts the proxy against the store: a minted session reads
-#      the moved credential; `store` (the agent's lease) lands in the store
+#      starts the launcher, its agent argv comes from run-agent.sh; the login is
+#      a TENANT of the machine's shared proxy — the machine's first brings its
+#      service up, and no proxy of the login's own is written (issue #4674)
+#   C  the shared launcher starts the proxy against the store: a minted session
+#      reads the moved credential; `store` (the agent's lease) lands in the
+#      store, never the login
 #   D  the hub broker: fcpn1. → the real node token on the way out; POST
 #      /v1/node/credentials (any spelling) refused before the hub sees it; no
 #      credential → 401; node-hash = sha256(token); fleet-lib's
@@ -21,8 +24,8 @@
 #      fleet-session-cred.sh's central pass (mint + revoke) rides it (issue #2392)
 #   E  the ctl socket answers ONE peer uid (another uid is refused)
 #   F  the launcher's agent mode: the token arrives on fd 3, never in the env
-#   G  uninstall: every file back where it was, byte for byte; the store, the
-#      record and the service changes gone
+#   G  machine uninstall: every file back where it was, byte for byte; the
+#      store, the record and the service changes gone
 #   H  install --dry-run with NO sudo (issue #2135): runs as the login, names
 #      every move, changes nothing
 #   I  uninstall --dry-run as the login while the store is unreadable to it:
@@ -48,8 +51,9 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB=$(mktemp -d "/tmp/credsep-st.XXXXXX")
 ME=$(id -un)
+SR="$SB/run/.shared"   # the machine's one proxy's run dir (issue #4674: no login runs its own)
 cleanup() {
-  kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null
+  kill "$(cat "$SR/pid" 2>/dev/null)" 2>/dev/null
   [ -n "${LPID:-}" ] && kill "$LPID" 2>/dev/null
   [ -n "${P2:-}" ] && kill "$P2" 2>/dev/null
   kill "$(cat "$SB/fake.pid" 2>/dev/null)" "$(cat "$SB/evil.pid" 2>/dev/null)" 2>/dev/null
@@ -59,7 +63,8 @@ trap cleanup EXIT
 export HOME="$SB/home" FLEET_CONF_DIR="$SB/home/.config/claude-fleet" XDG_CONFIG_HOME="$SB/home/.config"
 export FLEET_NODE_STATE="$SB/node" FLEET_CREDSEP_ROOT_BASE="$SB/db" FLEET_CREDSEP_RUN_BASE="$SB/run" FLEET_CREDSEP_LOG_BASE="$SB/log" \
        FLEET_CREDSEP_LIB="$SB/lib" FLEET_CREDSEP_DAEMON_DIR="$SB/daemons" FLEET_CREDSEP_ROLE="$ME" \
-       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO=''
+       FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' \
+       FLEET_CREDSEP_JOIN_WAIT=0 FLEET_CRED_SHARED_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_CRED_SEPARATE
 C=$FLEET_CONF_DIR R="$SB/db/$ME"
 mkdir -p "$C/accounts/main.hub" "$HOME/.codex" "$HOME/.codex-accounts/work" "$HOME/.codex-accounts/mine" \
@@ -164,8 +169,9 @@ case "$rc:$out" in 2:*"--pool-src is for a login just opened"*) pass "N --pool-s
 
 # ── B: install ─────────────────────────────────────────────────────────────────
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?
-[ "$rc" = 0 ] && case "$out" in "credsep: ok — credsep: ON"*) true ;; *) false ;; esac \
-  && pass "B install via apply: $out" || fail "B apply rc=$rc: $out"
+[ "$rc" = 0 ] && case "$out" in "credsep: ok — shared: $ME — "*) true ;; *) false ;; esac \
+  && grep -q '"shared": true' "$C/credsep.json" && grep -q '"mode": "shared"' "$R/meta.json" \
+  && pass "B install via apply: a tenant of the machine's shared proxy — $out" || fail "B apply rc=$rc: $out"
 same() { [ -f "$2" ] && [ "$(cksum < "$2")" = "$1" ]; }
 ck() { cksum < "$1"; }
 [ ! -e "$C/accounts/main.hub/.credentials.json" ] && grep -q sk-ant-oat01-MAIN "$R/accounts/main.hub/.credentials.json" \
@@ -193,9 +199,12 @@ if grep -q "^ExecStart=.*fleet-credsep-launch.py.* agent $ME\$" "$AGENT_DEF.d/cr
    || python3 -c 'import plistlib,sys; p=plistlib.load(open(sys.argv[1],"rb")); sys.exit(0 if "UserName" not in p and p["ProgramArguments"][-2:]==["agent",sys.argv[2]] else 1)' "$AGENT_DEF" "$ME" 2>/dev/null; then
   pass "B the agent's service starts the launcher (root, no UserName)"
 else fail "B agent service: $(cat "$AGENT_DEF" "$AGENT_DEF.d/credsep.conf" 2>/dev/null | head -20)"; fi
-{ [ -e "$SB/daemons/com.claude-fleet.credsep.$ME.plist" ] || [ -e "$SB/daemons/claude-fleet-credsep-$ME.service" ]; } && pass "B the proxy service is written" || fail "B proxy service"
+{ [ -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] || [ -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ]; } \
+  && ! ls "$SB/daemons" | grep -q "credsep\.$ME\|credsep-$ME" \
+  && pass "B the machine's shared proxy service is written; no proxy of the login's own (#4674)" \
+  || fail "B proxy service: $(ls "$SB/daemons")"
 out=$(FLEET_CRED_SEPARATE=1 bash "$BIN/fleet-credsep.sh" apply 2>&1)
-case "$out" in *"credsep: ON"*) pass "B apply again: idempotent" ;; *) fail "B re-apply: $out" ;; esac
+case "$out" in "credsep: ok — shared"*) pass "B apply again: idempotent ($out)" ;; *) fail "B re-apply: $out" ;; esac
 grep -q at-DEFAULT "$R/codex/default/auth.json" && [ -L "$C/node.env" ] && pass "B re-apply moved nothing twice" || fail "B re-apply damage"
 
 # ── M: the root agent's log is not in the home (issue #2296) ───────────────────
@@ -263,9 +272,9 @@ case "$rc:$out" in 1:"rootlog: WARN — 1 root service(s)"*"not the fleet's"*x.o
 # shellcheck disable=SC2086
 rm -f $junk
 
-# ── C: the proxy, started by the launcher ──────────────────────────────────────
+# ── C: the machine's proxy, started by the shared launcher ───────────────────────
 cat > "$SB/fake.py" <<'PY'
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SB = sys.argv[1]
 class H(BaseHTTPRequestHandler):
@@ -280,7 +289,7 @@ class H(BaseHTTPRequestHandler):
         except OSError: trust = "trusted"
         if self.path.endswith("/v1/node/self"): d = {"trust": trust}
         elif self.path.endswith("/v1/fleet/session-cred") and self.command == "POST":
-            d = {"cred": "fcp-h1.PASS-sep.sig", "id": "pass-sep"}
+            d = {"cred": open(SB + "/hubpass").read().strip() if os.path.exists(SB + "/hubpass") else "", "id": "pass-sep"}
         else: d = {"ok": True}
         b = json.dumps(d).encode()
         self.send_response(200); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
@@ -289,6 +298,9 @@ s = ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(SB + "/fake.port", "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
+python3 -c 'import base64, json, time; n = int(time.time())
+c = json.dumps({"v": 1, "id": "pass-sep", "iat": n, "exp": n + 3600}).encode()
+print("fcp-h1." + base64.urlsafe_b64encode(c).rstrip(b"=").decode() + ".sig")' > "$SB/hubpass"
 python3 "$SB/fake.py" "$SB" & echo $! > "$SB/fake.pid"
 mkdir -p "$SB/evil"; python3 "$SB/fake.py" "$SB/evil" & echo $! > "$SB/evil.pid"
 for _ in $(seq 1 300); do [ -s "$SB/fake.port" ] && break; sleep 0.1; done   # a slow runner: 30s
@@ -298,15 +310,18 @@ sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:$FP#" "$R/nod
 # the upstreams come from root's settings only (issue #2290); install wrote the file
 [ -f "$SB/lib/$ME.conf" ] && pass "C install wrote root's settings $SB/lib/$ME.conf" || fail "C no root settings file"
 printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\n' "$FP" "$FP" >> "$SB/lib/$ME.conf"
-python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
+# the shared proxy's upstreams are the process's, the same for every tenant (the
+# sandbox launcher hands its FLEET_CRED_* through)
+export FLEET_CRED_ANTHROPIC_URL="http://127.0.0.1:$FP" FLEET_CRED_CODEX_URL="http://127.0.0.1:$FP/codex"
+python3 -I "$BIN/fleet-credsep-launch.py" shared 2>"$SB/launch.err" &
 LPID=$!
-for _ in $(seq 1 300); do [ -S "$SB/run/$ME/ctl.sock" ] && [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
-PORT=$(cat "$SB/run/$ME/port" 2>/dev/null)
-[ -n "$PORT" ] && pass "C the launcher started the proxy (127.0.0.1:$PORT, run dir)" \
+for _ in $(seq 1 300); do [ -S "$SR/ctl.sock" ] && [ -s "$SR/port" ] && break; sleep 0.1; done
+PORT=$(cat "$SR/port" 2>/dev/null)
+[ -n "$PORT" ] && pass "C the shared launcher started the machine's proxy (127.0.0.1:$PORT, run dir)" \
   || { fail "C proxy did not start: $(cat "$SB/launch.err")"; }
-m=$(ls -l "$SB/run/$ME/ctl.sock" 2>/dev/null | cut -c1-10)
+m=$(ls -l "$SR/ctl.sock" 2>/dev/null | cut -c1-10)
 [ "$m" = srw-rw-rw- ] && pass "C ctl.sock 0666 (the peer-uid gate decides)" || fail "C ctl.sock mode $m"
-m=$(ls -l "$SB/run/$ME/port" 2>/dev/null | cut -c1-10)
+m=$(ls -l "$SR/port" 2>/dev/null | cut -c1-10)
 [ "$m" = -rw-r--r-- ] && pass "C port 0644 (the login is another uid)" || fail "C port mode $m"
 [ "$(bash "$BIN/fleet-cred-proxy.sh" port 2>&1)" = "$PORT" ] && pass "C fleet-cred-proxy.sh port reads the run dir" \
   || fail "C port: $(bash "$BIN/fleet-cred-proxy.sh" port 2>&1)"
@@ -316,8 +331,8 @@ grep -q "POST /v1/messages auth=Bearer sk-ant-oat01-MAIN" "$SB/fake.log" 2>/dev/
   && pass "C a session's request carries the credential from the store" \
   || fail "C direct: HTTP $code $(cat "$SB/c.body" 2>/dev/null) · fake saw: $(tail -3 "$SB/fake.log" 2>/dev/null)"
 printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-RENEWED"}}' | bash "$BIN/fleet-cred-proxy.sh" store --kind claude --label main
-grep -q RENEWED "$R/accounts/main.hub/.credentials.json" && [ ! -e "$C/accounts/main.hub/.credentials.json" ] \
-  && pass "C store: the agent's lease lands in the store, not the login" || fail "C store"
+grep -rq RENEWED "$SB/db" && [ ! -e "$C/accounts/main.hub/.credentials.json" ] \
+  && pass "C store: the agent's lease lands in the store (the shared pool), not the login" || fail "C store"
 printf 'rp-PASS-1\n' | bash "$BIN/fleet-cred-proxy.sh" relay
 [ "$(cat "$R/cred-proxy/relay.token" 2>/dev/null)" = rp-PASS-1 ] \
   && pass "C relay: the login's minted relay pass lands in the proxy's state" || fail "C relay pass"
@@ -363,7 +378,7 @@ FLEET_CONF_DIR="$S" bash "$BIN/fleet-cred-proxy.sh" route --provider claude --re
 : > "$SB/fake.log"
 row=$(FLEET_CONF_DIR="$S" FLEET_CRED_PROXY=1 FLEET_WORKER_ASSERT=fwa1.test.sig \
       bash "$BIN/fleet-session-cred.sh" mint --provider claude --sid sep1 2>"$SB/d.err")
-case "$row" in central"	"*"	"fcp-h1.PASS-sep.sig) pass "D session-cred: a central pass on a separated login" ;;
+case "$row" in central"	"*"	"*) pass "D session-cred: a central pass on a separated login" ;;
   *) fail "D session-cred mint: '$row' $(cat "$SB/d.err")" ;; esac
 grep -q "POST /v1/fleet/session-cred auth=Bearer ccq_NODE_SECRET_0123" "$SB/fake.log" \
   && pass "D session-cred: the pass request went through the broker (node token put in)" \
@@ -390,7 +405,7 @@ kill "$P2" 2>/dev/null; P2=''
 # ── F: the agent's launch ────────────────────────────────────────────────────────
 python3 -I "$BIN/fleet-credsep-launch.py" agent "$ME" 2>"$SB/agent.err"
 grep -q '^fd3=ccq_NODE_SECRET_0123$' "$HOME/agent.out" && grep -q '^envhits=0$' "$HOME/agent.out" \
-  && grep -q "^store=$SB/run/$ME/ctl.sock$" "$HOME/agent.out" \
+  && grep -q "^store=$SR/ctl.sock$" "$HOME/agent.out" \
   && pass "F agent: token on fd 3, not in its environment; the store socket handed over" \
   || fail "F agent: $(cat "$HOME/agent.out" "$SB/agent.err" 2>/dev/null)"
 rm -f "$HOME/agent.out"
@@ -461,12 +476,12 @@ cp "$R/node.env" "$SB/node.env.keep"
 grep -v '^CCQUOTA_HUB_URL=' "$SB/node.env.keep" > "$R/node.env"   # the hub would come from FLEET_HUB_URL
 printf 'FLEET_CRED_ANTHROPIC_URL=http://127.0.0.1:%s\nFLEET_CRED_CODEX_URL=http://127.0.0.1:%s/codex\nFLEET_CRED_CENTRAL_URL=http://127.0.0.1:%s\nFLEET_HUB_URL=http://127.0.0.1:%s\nFLEET_CRED_PROXY_TIMEOUT=30\n' \
   "$EP" "$EP" "$EP" "$EP" >> "$C/fleet.conf"
-kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
-rm -f "$SB/run/$ME/port"
-python3 -I "$BIN/fleet-credsep-launch.py" proxy "$ME" 2>"$SB/launch.err" &
+kill "$(cat "$SR/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+rm -f "$SR/port"
+python3 -I "$BIN/fleet-credsep-launch.py" shared 2>"$SB/launch.err" &
 LPID=$!
-for _ in $(seq 1 300); do [ -s "$SB/run/$ME/port" ] && break; sleep 0.1; done
-PORT=$(cat "$SB/run/$ME/port" 2>/dev/null)
+for _ in $(seq 1 300); do [ -s "$SR/port" ] && break; sleep 0.1; done
+PORT=$(cat "$SR/port" 2>/dev/null)
 : > "$SB/fake.log"
 tok=$(bash "$BIN/fleet-cred-proxy.sh" mint --account main --sid s2 2>&1)
 curl -s --max-time 60 -o /dev/null -H "Authorization: Bearer $tok" -H 'content-type: application/json' -d '{}' "http://127.0.0.1:$PORT/v1/messages"
@@ -474,9 +489,9 @@ curl -s --max-time 60 -o /dev/null -H "Authorization: Bearer $tok" -H 'content-t
   && pass "L a login-file upstream / FLEET_HUB_URL: never asked, root's upstream served it" \
   || fail "L the login's listener saw: $(cat "$SB/evil/fake.log" 2>/dev/null) · root's: $(cat "$SB/fake.log") · $(cat "$SB/launch.err")"
 grep -q "ignored FLEET_CRED_ANTHROPIC_URL from $C/fleet.conf" "$SB/launch.err" && grep -q 'ignored FLEET_HUB_URL' "$SB/launch.err" \
-  && grep -q '^FLEET_HUB_URL ' "$SB/run/$ME/ignored.$ME" && ! grep -q 'PROXY_TIMEOUT\|127.0.0.1' "$SB/run/$ME/ignored.$ME" \
+  && grep -q '^FLEET_HUB_URL ' "$SR/ignored.$ME" && ! grep -q 'PROXY_TIMEOUT\|127.0.0.1' "$SR/ignored.$ME" \
   && pass "L the launcher says what it ignored (key names, no value) for credsep check" \
-  || fail "L ignored note: $(cat "$SB/launch.err" "$SB/run/$ME/ignored.$ME" 2>&1)"
+  || fail "L ignored note: $(cat "$SB/launch.err" "$SR/ignored.$ME" 2>&1)"
 cp "$SB/node.env.keep" "$R/node.env"
 # install --adopt: root takes the login's values — an https URL to an allowed host only
 OLDHUB=https://ccquota.24haowan.com  # oss-ok: fleet_compat.py 一版兼容的旧主机，随它删（#3577）
@@ -490,20 +505,25 @@ m=$(ls -l "$SB/lib/$ME.conf" | cut -c1-10)
 [ "$m" = -rw------- ] && pass "L root's settings 0600 (a relay pass may be in it)" || fail "L root conf mode $m"
 
 # ── G: uninstall ───────────────────────────────────────────────────────────────
-kill "$(cat "$SB/run/$ME/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''
+kill "$(cat "$SR/pid" 2>/dev/null)" 2>/dev/null; kill "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null; LPID=''
 # the renewal C stored goes back too; put the original bytes back in the store
 # so the before/after comparison is exact
-printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-MAIN","refreshToken":null,"expiresAt":4102444800000,"scopes":["user:inference"]}}' \
-  > "$R/accounts/main.hub/.credentials.json"
+for f in "$R/accounts/main.hub/.credentials.json" $(grep -rl RENEWED "$SB/db" 2>/dev/null); do
+  printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-MAIN","refreshToken":null,"expiresAt":4102444800000,"scopes":["user:inference"]}}' > "$f"
+done
 sed -i.bak "s#^CCQUOTA_HUB_URL=.*#CCQUOTA_HUB_URL=http://127.0.0.1:1#" "$R/node.env" && rm -f "$R/node.env.bak"
 rm -f "$C/fleet.conf"
-out=$(FLEET_CREDSEP_OPTIONAL=1 FLEET_CRED_SEPARATE=0 bash "$BIN/fleet-credsep.sh" apply 2>&1); rc=$?
-case "$rc:$out" in "0:credsep: ok — credsep: OFF"*) pass "G uninstall via apply: $out" ;; *) fail "G rc=$rc: $out" ;; esac
-AFTER=$(snap)
+# a tenant comes off through the machine's switch (the machine's last one takes
+# the shared proxy's service with it)
+out=$(bash "$BIN/fleet-credsep.sh" machine uninstall 2>&1); rc=$?
+case "$rc" in 0) pass "G machine uninstall: $(printf '%s\n' "$out" | tail -n 1)" ;; *) fail "G rc=$rc: $out" ;; esac
+# the proxy's own state (its key, passes, trust) comes back to the home with the
+# login: what a later join carries over again — not a file the login had before
+AFTER=$(snap | grep -v '^home/.config/claude-fleet/cred-proxy/')
 if [ "$AFTER" = "$BEFORE" ]; then pass "G every file back where it was, byte for byte (and the service definition)"
 else fail "G differs:"; diff <(printf '%s\n' "$BEFORE") <(printf '%s\n' "$AFTER"); fi
-[ ! -e "$R" ] && [ ! -e "$C/credsep.json" ] && [ ! -e "$SB/lib" ] && [ ! -e "$SB/daemons/com.claude-fleet.credsep.$ME.plist" ] \
-  && [ ! -e "$SB/daemons/claude-fleet-credsep-$ME.service" ] \
-  && pass "G the store, the record, the code copy and the proxy service are gone" || fail "G leftovers: $(ls "$SB/db" "$SB/daemons" 2>&1)"
+[ ! -e "$R" ] && [ ! -e "$C/credsep.json" ] && [ ! -e "$SB/daemons/com.claude-fleet.cred-proxy-shared.plist" ] \
+  && [ ! -e "$SB/daemons/claude-fleet-cred-proxy-shared.service" ] \
+  && pass "G the store, the record and the shared proxy's service are gone" || fail "G leftovers: $(ls "$SB/db" "$SB/daemons" 2>&1)"
 
 [ "$FAIL" = 0 ] && echo "fleet-credsep selftest PASS" || { echo "fleet-credsep selftest FAIL"; exit 1; }
