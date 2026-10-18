@@ -3381,17 +3381,18 @@ drill_train_hub_stable_split() {
   out=$(bash "$BIN/fleet-train-hub.sh" "$c4" --dir "$d/co" --hub "file://$d/hub" 2>&1); rc=$?
   [ "$rc" != 0 ] && ! printf '%s\n' "$out" | grep -q '^deploy=true' || { WHY="a hub whose commit is unknown is deployed blind (#3319: red instead): $(printf '%s' "$out" | tr '\n' '|')"; return 1; }
   [ "$(RELEASE_TRAIN_HUB=off plan "$c4")" = false ] || { WHY="RELEASE_TRAIN_HUB=off still deploys from the train"; return 1; }
-  # --train: the gates read THIS run's jobs — a red macOS job refuses, no check-runs are read
+  # --train: the gates read THIS run's jobs — a red Linux job refuses, a red macOS job
+  # does not (one release line, #4671), no check-runs are read
   printf '#!/bin/sh\ncase "$*" in *actions/runs/*/jobs*) cat "%s/jobs";; *) echo "unexpected gh $*" >&2; exit 9;; esac\n' "$d" > "$d/shim/gh"; chmod +x "$d/shim/gh"
-  printf 'completed success board\ncompleted success Linux / shard 1\ncompleted failure macOS / shard 1\ncompleted success precheck\nin_progress null release\n' > "$d/jobs"
+  printf 'completed success board\ncompleted failure Linux / shard 1\ncompleted failure macOS / shard 1\ncompleted success precheck\nin_progress null release\n' > "$d/jobs"
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL='' \
           sh "$BIN/fleet-stable.sh" move "$c2" --train 42 --ignore-check release --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="--train past a red macOS job exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — macos:'*) ;; *) WHY="the refusal is not macos:: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  sed -i.bak 's/failure macOS/success macOS/' "$d/jobs"
+  [ "$rc" = 3 ] || { WHY="--train past a red Linux job exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'not green: completed failure Linux / shard 1'*) ;; *) WHY="the refusal does not name the red Linux job: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
+  sed -i.bak 's/failure Linux/success Linux/' "$d/jobs"
   out=$(PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL='' \
           sh "$BIN/fleet-stable.sh" move "$c2" --train 42 --ignore-check release --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="--train with every job green did not move: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+    || { WHY="--train with Linux green (macOS red) did not move: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c2" ] || { WHY="stable did not move off a green train"; return 1; }
   # a rollback dispatched by hand: the hub's image source ≠ stable's — the doctor's source says SPLIT
   printf '{"artifacts":["ccquota-darwin-arm64"],"ccquota_src":"aaaa"}\n' > "$d/hub/v1/fleet/release/artifacts"
@@ -3404,7 +3405,7 @@ drill_train_hub_stable_split() {
   case "$out" in *'source:  SAME'*) ;; *) WHY="same source is not SAME: $(printf '%s' "$out" | tr '\n' '|')"; return 1 ;; esac
   grep -q 'SPLIT)' "$BIN/fleet-doctor.sh" || { WHY="the doctor's hub-image row has no SPLIT case"; return 1; }
   SECS=$(since "$t0")
-  WHAT="列车测试 + 门全绿后同一个 TRAIN_SHA 出入口（Go / deploy/k8s 没变就不出）、发布、--train 挪 stable（本趟 macOS 任务红就拒）；手动回退造出的不同源 doctor 报 SPLIT"
+  WHAT="列车测试 + 门全绿后同一个 TRAIN_SHA 出入口（Go / deploy/k8s 没变就不出）、发布、--train 挪 stable（本趟 Linux 任务红就拒，macOS 红不挡）；手动回退造出的不同源 doctor 报 SPLIT"
 }
 
 # ---- release-artifact-missing (#2631): release.json pins a Claude Code version
