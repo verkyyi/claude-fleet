@@ -125,6 +125,7 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
     _fx_sess="$FLEET_LAUNCH_SESSION"
   fi
   [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
+  _fx_fleet="$_fx_sess"   # the forge read below (issue #4696) asks this fleet's repo confs
   unset _fx_sess
 fi
 # The native usage pilot (#4557) is read by the private runtime from its
@@ -412,6 +413,20 @@ flags=(
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
   ${hook_flags[@]+"${hook_flags[@]}"}
 )
+# A repo with no GitHub (FLEET_FORGE=none, issue #4696) launches Codex with its
+# plugins off: Codex's startup plugin sync fetches github.com/openai/plugins.git
+# (and raw.githubusercontent.com) on every start, and Codex has no switch for that
+# sync alone — only features.plugins. The fleet's own parts reach Codex as skills
+# and config.toml MCP servers, not Codex plugins, so they are unaffected. The repo
+# is the window's (fleet_window_repo), its forge its conf's (fleet_repo_forge);
+# a GitHub repo, a no-repo window or an unknown one keeps the person's plugins.
+if [ -n "${TMUX_PANE:-}" ] && command -v fleet_window_repo >/dev/null 2>&1; then
+  _fx_repo=$(fleet_window_repo "${_fx_fleet:-}" "$TMUX_PANE" 2>/dev/null)
+  [ -n "$_fx_repo" ] && [ "$(fleet_repo_forge "$_fx_repo" "${_fx_fleet:-}")" = none ] \
+    && flags+=(-c 'features.plugins=false')
+  unset _fx_repo
+fi
+unset _fx_fleet
 # Remote resume retains the native thread's permission policy and rejects CLI
 # permission overrides. Only a fresh thread needs Fleet's initial full access.
 [ -n "$_codex_resuming" ] || flags=(--dangerously-bypass-approvals-and-sandbox ${flags[@]+"${flags[@]}"})

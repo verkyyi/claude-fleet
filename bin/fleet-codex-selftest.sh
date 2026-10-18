@@ -106,6 +106,7 @@ EOS
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
 cat > "$WORK/fakebin/tmux" <<EOS
 #!/bin/sh
+case "\$*" in *'#{@repo}|'*) printf '%s|%s|' "\${TEST_REPO:-}" "\${TEST_NOREPO:-}"; exit 0 ;; esac
 case "\$*" in *'#{@norepo}'*) printf '%s' "\${TEST_NOREPO:-}"; exit 0 ;; esac
 case "\$1" in display-message) cat "$SESS_FILE" ;; set-option|set-window-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;; esac
 exit 0
@@ -114,6 +115,9 @@ chmod +x "$WORK/fakebin/tmux"
 # fakes first; the rest of PATH is the system dirs only, so no real `claude` /
 # `codex` (typically ~/.local/bin, /opt/homebrew/bin) can ever be reached.
 export PATH="$WORK/fakebin:/usr/bin:/bin"
+# …and fleet_path_fill (fleet-claude.sh) must not add them back: its default dirs
+# (~/.local/bin, /opt/homebrew/bin) hold a real codex on a Mac, which leg G reached.
+export FLEET_TOOL_DIRS="$WORK/no-tool-dirs"
 export FLEET_CONF_DIR="$WORK/conf"
 # A pane's env: $TMUX_PANE names the window to stamp, and set-claude-state.sh is
 # a no-op without $TMUX (a non-tmux shell is never a fleet) — CI has neither, so
@@ -528,6 +532,42 @@ rm -f "$WORK/nusage"; run '/fleet-claim'
 rm -f "$WORK/nusage"; FLEET_CODEX_NATIVE_USAGE=0 run '/fleet-claim'
 [ "$(cat "$WORK/nusage")" = unset ] || fail "J a 0 must not reach the runtime" "$(cat "$WORK/nusage")"
 ok "J FLEET_CODEX_NATIVE_USAGE=1 in the fleet conf reaches the Codex launch; default and 0 reach it as unset"
+
+# ============================================================================
+# K. a repo with no GitHub (FLEET_FORGE=none, issue #4696): Codex starts with
+#    -c features.plugins=false, so its startup plugin sync never fetches
+#    github.com/openai/plugins.git. A GitHub repo (FLEET_FORGE unset), a no-repo
+#    window and a Claude launch keep the plugins. Its own fleet f3 with a repos/
+#    dir, so the overlay legs above stay byte for byte.
+# ============================================================================
+cat > "$WORK/fakebin/codex" <<EOS
+#!/bin/sh
+if [ "\${1:-}" = debug ] && [ "\${2:-}" = prompt-input ]; then printf '%s\n' '<skills_instructions>'; exit 0; fi
+printf codex > "$WORK/ran"
+: > "$WORK/argv"; for a in "\$@"; do printf '%s\036' "\$a" >> "$WORK/argv"; done
+exit 0
+EOS
+chmod +x "$WORK/fakebin/codex"
+mkdir -p "$WORK/conf/fleets/f3/repos"; printf 'f3' > "$SESS_FILE"
+printf 'FLEET_AGENT="codex"\n' > "$WORK/conf/fleets/f3/conf"
+printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\nFLEET_FORGE="none"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
+TEST_REPO=local/demo run '/fleet-claim'
+[ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
+  || fail "K forge none: Codex must start with features.plugins=false (#4696)" "$(argv1l; cat "$WORK/err")"
+printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
+TEST_REPO=local/demo run '/fleet-claim'
+[ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
+  || fail "K a GitHub repo must keep Codex's plugins" "$(argv1l)"
+printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\nFLEET_FORGE="none"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
+TEST_NOREPO=1 run '/fleet-claim'
+[ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
+  || fail "K a no-repo window must keep Codex's plugins" "$(argv1l)"
+printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f3/conf"
+TEST_REPO=local/demo run '/fleet-claim'
+[ "$(ran)" = claude ] && ! hasarg 'features.plugins=false' \
+  || fail "K a Claude launch carries no Codex flag" "$(ran) $(argv1l)"
+printf 'f1' > "$SESS_FILE"
+ok "K forge none → Codex -c features.plugins=false; a GitHub repo, a no-repo window and Claude keep plugins"
 
 printf '\nselftest OK: %s assertions passed (FLEET_AGENT / fleet-codex.sh, issue #547)\n' "$pass"
 exit 0
