@@ -117,6 +117,7 @@ scs --via mod 'done' >/dev/null; [ "$(wopt @claude_state)" = looping ] || fail "
 tmux set-window-option -u -t "$ww" @loop
 ok "VIA-MOD: working / needs+ask / done / looping-on-@loop, written by set-claude-state.sh"
 
+chmod u+w "$BIN/.." 2>/dev/null   # this test's own shadow, read-only as built (#4668): the conf is planted beside bin/
 # ================================================================ STATE-ONLY
 printf 'FLEET_AUTO_HANDOFF_PCT=50\nFLEET_HANDOFF_DEFER_SECS=0\n' > "$BIN/../fleet.conf"
 tmux set-window-option -t "$ww" @ctx_pct 90

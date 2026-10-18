@@ -192,6 +192,7 @@ ok "the haiku helper runs with --no-session-persistence — no transcript in the
 # CLASSIFY_BACKEND cannot have decided it. Then prove that is load-bearing: the
 # same leg with a conf line planted beside this bin/ DOES flip, so the leak is
 # real and the re-root above is what closes it (not a stale assertion).
+chmod u+w "$BIN/.." 2>/dev/null   # this test's own shadow, read-only as built (#4668): the conf is planted beside bin/
 [ ! -e "$BIN/../fleet.conf" ] || fail "host conf: the selftest root carries a fleet.conf — the DEFAULT leg would read the host's backend"
 printf 'CLASSIFY_BACKEND=jev\n' > "$BIN/../fleet.conf"
 fresh "done"; printf 'STOPPED\n' > "$WORK/claude-out"; printf '0\n' > "$WORK/claude-rc"; jev_answer LOOPING 0.99
