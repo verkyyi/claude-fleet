@@ -95,7 +95,7 @@ class PoolAuthorityTests(unittest.TestCase):
                     migration.supervise([self.native_program])
             else:
                 self.assertEqual(migration.supervise([self.native_program]), 0)
-        self.assertEqual(writes, ["reserve", "begin"] if refuse else ["reserve", "begin", "stopped"])
+        self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
         self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
 
     def test_warm_pool_uses_owning_fleet_with_launch_hint(self):

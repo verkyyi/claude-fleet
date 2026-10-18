@@ -319,7 +319,16 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
         # fresh reserve. A credential/scope change must fail BEFORE begin/native.
         prior = json.loads(os.environ['FLEET_AUTHORITY_EXPECTED'])
         check_start_ack(prior, expected, 'reserved')
-    admission = start_call(repo, key, "begin", worker_id=worker)
+    try:
+        admission = start_call(repo, key, "begin", worker_id=worker)
+    except (ticket.Fail, ValueError):
+        # A refused begin leaves the reservation reserved; cancel is CAS from
+        # reserved only. An accepted begin whose ACK differs (below) is retained.
+        try:
+            start_call(repo, key, "cancel")
+        except (ticket.Fail, ValueError):
+            pass
+        raise
     check_start_ack(expected, admission, 'starting')
     c = dict(repo=repo, worker_id=worker, reservation=key, supervisor=os.getpid())
     if worktree:

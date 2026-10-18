@@ -357,11 +357,18 @@ class Worktrees(Receipts):
                        supervisor=12, worktree=self.binding)
         native = {key: self.receipt[key] for key in ("pid", "birth", "executable")}
         payload = dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"])
-        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_AUTHORITY_CONTEXT": json.dumps(context)}), \
+        # The begin acknowledgement the supervisor hands down, and the exact
+        # observe acknowledgement the hook checks against it (#4536).
+        admission = dict(repo="org/a", reservation="fixture", owner="fixture-owner",
+                         endpoint_id="fixture-node", worker_id=context["worker_id"], phase="starting")
+        proof = dict(native, worker_id=context["worker_id"], native_session=payload["session_id"])
+        ack = dict(admission, phase="observed", native_identity=proof)
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%1", "FLEET_AUTHORITY_CONTEXT": json.dumps(context),
+                                          "FLEET_AUTHORITY_ADMISSION": json.dumps(admission)}), \
                 mock.patch.object(launch, "native_parent", return_value=native), \
                 mock.patch.object(launch, "root_native", return_value=True), \
                 mock.patch.object(launch, "option", return_value=str(self.worktree)), \
-                mock.patch.object(authority, "start_call") as observed, \
+                mock.patch.object(authority, "start_call", return_value=ack) as observed, \
                 mock.patch.object(launch, "stamp") as stamped:
             for invalid in ({}, None):
                 with mock.patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(dict(context, worktree=invalid))}), \

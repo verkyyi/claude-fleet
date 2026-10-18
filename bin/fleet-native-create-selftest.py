@@ -14,6 +14,16 @@ import fleet_launch as launch
 import fleet_repo_authority as authority
 
 
+
+# The hub's own owner/endpoint for a reservation, and its independent reserved
+# read before begin (#4536): the supervisor never takes these from an ACK.
+HUB_SCOPE = dict(owner='fixture-owner', endpoint_id='fixture-node')
+
+
+def reserved_read(method, path, body=None, query=None):
+    assert (method, path) == ('GET', '/authority/start'), (method, path)
+    return dict(HUB_SCOPE, repo=query['repo'], reservation=query['reservation'], phase='reserved')
+
 class NativeCreation(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='fleet-native-create-')
@@ -236,11 +246,19 @@ class NativeCreation(unittest.TestCase):
                     native_worktree=self.intent)
 
     def observe_local(self, context, observe):
-        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_CONTEXT': json.dumps(context)}), \
+        # The begin acknowledgement the supervisor hands down; the hub answers
+        # the observe with the exact same scope plus the native identity.
+        admission = dict(HUB_SCOPE, repo=context['repo'], reservation=context['reservation'],
+                         worker_id=context['worker_id'], phase='starting')
+        def answer(repo, key, action, **fields):
+            observe(repo, key, action, **fields)
+            return dict(admission, phase='observed', native_identity=fields.get('native_identity'))
+        with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_CONTEXT': json.dumps(context),
+                                          'FLEET_AUTHORITY_ADMISSION': json.dumps(admission)}), \
                 mock.patch.object(launch, 'native_parent', return_value=self.native), \
                 mock.patch.object(launch, 'root_native', return_value=True), \
                 mock.patch.object(launch, 'tmux', side_effect=self.tmux), \
-                mock.patch.object(authority, 'start_call', side_effect=observe):
+                mock.patch.object(authority, 'start_call', side_effect=answer):
             authority.observe_native(self.payload)
 
     def test_local_native_hook_binds_only_after_authority_observation(self):
@@ -278,6 +296,9 @@ class NativeCreation(unittest.TestCase):
                 reservations.append(reservation)
             self.assertEqual(reservation, reservations[-1])
             actions.append(action)
+            if action == 'begin':
+                return dict(HUB_SCOPE, repo=repo, reservation=reservation,
+                            worker_id=fields['worker_id'], phase='starting')
         def run(arguments, **options):
             if arguments[:2] == ['bash', '-c']:
                 return subprocess.CompletedProcess(arguments, 0, 'acme/widgets\t' + worker, '')
@@ -301,6 +322,7 @@ class NativeCreation(unittest.TestCase):
                 mock.patch.object(authority, 'subprocess', process_api), \
                 mock.patch.object(authority.signal, 'signal'), \
                 mock.patch.object(authority, 'start_call', side_effect=start), \
+                mock.patch.object(authority.ticket, 'api', side_effect=reserved_read), \
                 mock.patch.object(authority, 'prove_stopped', side_effect=lambda proof: proof), \
                 mock.patch.object(launch, 'same_process', return_value=False):
             self.assertEqual(authority.supervise(['launcher', '--agent', 'claude']), 0)
@@ -364,6 +386,7 @@ class NativeCreation(unittest.TestCase):
         with mock.patch.dict(os.environ, {'TMUX_PANE': '%1', 'FLEET_AUTHORITY_START': reservation}), \
                 mock.patch.object(authority, 'subprocess', process_api), \
                 mock.patch.object(authority, 'start_call', side_effect=start), \
+                mock.patch.object(authority.ticket, 'api', side_effect=reserved_read), \
                 self.assertRaisesRegex(ValueError, 'frozen fixture'):
             authority.supervise(['launcher'])
         self.assertEqual(actions, ['begin', 'cancel'])
