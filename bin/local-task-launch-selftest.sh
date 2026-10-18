@@ -30,7 +30,9 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 
 FUUID=22222222-2222-4222-8222-222222222222
-mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf/fleets/testsess" "$WORK/dash"
+mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf/fleets/testsess" "$WORK/dash" "$WORK/home/.claude/agents"
+# The orchestrator template as the core ships it into ~/.claude/agents.
+cp "$BIN/../conf/agent-defaults/claude/agents/orchestrator.md" "$WORK/home/.claude/agents/"
 printf 'CCQUOTA_TOKEN=tok\nCCQUOTA_HUB_URL=http://hub.test\n' > "$WORK/conf/node.env"
 printf '%s\n' "$FUUID" > "$WORK/conf/fleets/testsess/identity"   # fleet_uuid's frozen file
 printf 'CCQUOTA_FLEET=1\n' > "$WORK/conf/fleets/testsess/conf"         # the hub is on for this fleet
@@ -91,7 +93,7 @@ PLAIN='{"version":1,"request_id":"fixture","requested_agent":"claude","resolved_
 env_run() {  # <dispatch> <script> args… — FLEET_LAUNCH never set: a LOCAL start
   local d="$1"; shift
   : > "$NEWWIN"; : > "$HUBLOG"
-  env -u FLEET_LAUNCH PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
+  env -u FLEET_LAUNCH HOME="$WORK/home" PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/conf" \
     FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_ORIGIN_GATE=0 \
     FLEET_PRESPAWN_DEDUP=0 FLEET_CODEX_READY_CHECK=0 FLEET_MAX_SESSIONS=0 FLEET_GLOBAL_MAX_SESSIONS=0 \
     FLEET_DISPATCH="$d" FLEET_HUB_CURL="$WORK/fakebin/curl" FLEET_HUB_AUTHORITY_CMD="$WORK/fakebin/authority" HUBLOG="$HUBLOG" NEWWIN="$NEWWIN" \
