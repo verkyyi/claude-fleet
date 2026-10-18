@@ -86,7 +86,7 @@
 0.4 cred-relay-down
 10.9 cred-relay-hub-restart
 1.1 cred-revoked-still-works
-0.3 cred-second-proxy
+0.3 cred-per-login-proxy-left
 0.6 cred-sep-acct-full
 0.4 cred-sep-bootstrap-fails
 8.5 cred-sep-codex-failover-pin

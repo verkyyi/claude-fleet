@@ -31,8 +31,8 @@
 #                              bin/fleet-doctor.sh credsep · credsep-all rows (issue #3700)
 #   cred-pool-delete-stale-proxy  bin/fleet-cred-proxy.py (prune · a 401 runs on the next
 #                              account), tokenledger agent pruneCreds + TypeCreds (issue #3744)
-#   cred-second-proxy          bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
-#                              credproxy row (issue #3744)
+#   cred-per-login-proxy-left  bin/fleet-credsep.py machine proxies, bin/fleet-doctor.sh
+#                              credproxy row (issues #3744, #4674)
 #   cred-sep-codex-failover-pin  bin/fleet-codex.sh (_fx_sep: no local profile pin through the
 #                              proxy) — bin/session-cred-selftest.sh leg I (issue #3713)
 #   cred-central-failover-pin  bin/fleet-claude.sh / bin/fleet-codex.sh (a person's pod routes
@@ -768,14 +768,19 @@ drill_cred_pool_delete_stale_proxy() {
   WHAT="hub 删掉的订阅：agent 把整份 lease 交给代理 prune，它立刻从这个登录里消失、会话换号；正在用它的会话遇到 401 同一个请求改走下一个账号，不报给会话；暂停的账号不再接新会话"
 }
 
-# ---- cred-second-proxy (#3744): beside the machine's shared proxy, a managed
-# machine still ran two logins' own separated proxies (the role account's `serve`) — each with its own copy of the subscriptions, one of them the deleted
-# one — and nothing said so. `machine proxies` (the doctor's credproxy row) reads
-# the process table: a second proxy is a FAIL naming it; a worktree's / a sandbox's
-# test copy is nobody's proxy; a per-login machine (no shared proxy, unmanaged) is INFO.
-drill_cred_second_proxy() {
+# ---- cred-per-login-proxy-left (#3744, #4674): a machine runs ONE credential
+# proxy — the shared one, every login its tenant; a person's pod runs the same
+# `serve --shared` as its login. Anything else is a proxy left from the per-login
+# road (#4674 deleted it): a login's own separated proxy (the role account's
+# `serve`), a login's unseparated `serve`, a pod's old `serve --parent-watch` —
+# each its own copy of the subscriptions, one the hub deleted stays there.
+# `machine proxies` (the doctor's credproxy row) reads the process table: any such
+# proxy is a FAIL naming it — with a shared proxy or without one, on a pod too; a
+# worktree's / a sandbox's test copy is nobody's proxy; a client computer (not a
+# host) running `fleet run`'s central-only proxy is INFO.
+drill_cred_per_login_proxy_left() {
   CAP=10
-  local sb="$WORK/secondproxy" t0 out rc lib env
+  local sb="$WORK/perloginproxy" t0 out rc lib env
   mkdir -p "$sb/run/alice" "$sb/run/.shared" "$sb/db" "$sb/node"
   lib="$sb/lib dir"
   printf '435\n' > "$sb/run/alice/pid"
@@ -784,29 +789,46 @@ drill_cred_second_proxy() {
     printf '47283 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve --shared /var/db/fleet-cred/.shared/tenants.json\n' "$lib"
     printf '435 _fleetcred /usr/bin/python3 -I %s/fleet-cred-proxy.py serve\n' "$lib"
     printf '62916 alice /usr/bin/python3 -I /home/alice/projects/repo-issue-1/bin/fleet-cred-proxy.py serve\n'
-    printf '47373 alice /bin/bash /home/alice/.claude/fleet/bin/fleet-cred-proxy.sh run\n'
   } > "$sb/ps"
   env="FLEET_CREDSEP_ROOT_BASE=$sb/db FLEET_CREDSEP_RUN_BASE=$sb/run FLEET_NODE_STATE=$sb/node FLEET_CREDSEP_PS=$sb/ps"
   t0=$(now)
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
-  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the shared one: own proxy of alice (pid 435' \
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the machine.s one: own proxy of alice (pid 435' \
     && ! printf '%s' "$out" | grep -q 62916 \
-    || { WHY="a second proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
+    || { WHY="a login's own proxy beside the shared one is not a FAIL naming it (rc $rc): $out"; return 1; }
   grep -q 'machine proxies' "$BIN/fleet-doctor.sh" || { WHY="the doctor reads no credproxy row"; return 1; }
   sed -i.bak '/^435 /d' "$sb/ps"
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
-  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the shared one (pid 47283' \
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine: the machine.s (pid 47283' \
     || { WHY="the shared proxy alone is not OK (rc $rc): $out"; return 1; }
+  # no shared proxy, nothing managed: two logins' per-login proxies are no longer «just INFO»
   rm -f "$sb/db/.shared.json"
-  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n9 bob /usr/bin/python3 -I /home/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --parent-watch\n10 bob /usr/bin/python3 -I /home/bob/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
   # shellcheck disable=SC2086
   out=$(env $env FLEET_CREDSEP_LIB="$lib" python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 2 credential proxies besides the machine.s one: per-login proxy of alice (pid 9' \
+    || { WHY="per-login proxies on a machine with no shared proxy are not a FAIL (rc $rc): $out"; return 1; }
+  # a person's pod: its login's old per-login proxy is a FAIL; the pod's `serve --shared` is OK
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --parent-watch\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_NODE_PROFILE=user-pod python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q '^credproxy: FAIL — 1 credential proxy besides the machine.s one: per-login proxy of alice (pid 9' \
+    || { WHY="a pod's per-login proxy is not a FAIL (rc $rc): $out"; return 1; }
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve --shared /home/alice/.config/claude-fleet/cred-proxy/machine.json\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_NODE_PROFILE=user-pod python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: OK — one proxy on this machine' \
+    || { WHY="a pod's machine-mode proxy is not OK (rc $rc): $out"; return 1; }
+  # a client computer (not a host): `fleet run`'s central-only proxy is INFO
+  printf '9 alice /usr/bin/python3 -I /home/alice/.claude/fleet/bin/fleet-cred-proxy.py serve\n' > "$sb/ps"
+  # shellcheck disable=SC2086
+  out=$(env $env FLEET_CREDSEP_HOST=0 python3 -I "$BIN/fleet-credsep.py" machine proxies 2>&1); rc=$?
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — per-login proxies' \
-    || { WHY="a per-login machine (no shared proxy, unmanaged) is not INFO (rc $rc): $out"; return 1; }
-  WHAT="共享代理之外机器上还跑着登录自己的代理：credproxy 行 FAIL 并点名（pid · 登录）；只剩共享代理转 OK；工作区里的测试副本不算；没有共享代理的单登录机器只是 INFO"
+  [ "$rc" = 0 ] && printf '%s' "$out" | grep -q '^credproxy: INFO — a client computer' \
+    || { WHY="a client computer's fleet run proxy is not INFO (rc $rc): $out"; return 1; }
+  WHAT="整机代理之外还跑着按登录的代理（登录自己的隔离代理、未隔离的 serve、pod 的旧 serve）：有没有整机代理、在不在 pod 上都 FAIL 点名；只剩整机那一个转 OK；工作区里的测试副本不算；客户端电脑上 fleet run 的代理只是 INFO"
 }
 
 # ---- cred-central-trusted-pod (#4290): a person's pod (node.env

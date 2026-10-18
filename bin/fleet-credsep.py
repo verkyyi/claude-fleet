@@ -2896,7 +2896,11 @@ def proxy_procs():
 
 
 def machine_proxies(a):
-    """Anyone: one doctor line, credproxy: OK|FAIL|INFO — … ; exit 0 OK/INFO, 1 FAIL."""
+    """Anyone: one doctor line, credproxy: OK|FAIL|INFO — … ; exit 0 OK/INFO, 1 FAIL.
+    A machine runs ONE proxy (issue #4674): the shared one (a person's pod: the
+    same `serve --shared`, run by its login). Any other is left from the per-login
+    road — with or without a shared proxy, on a pod too. Only a client computer
+    (FLEET_CREDSEP_HOST=0: not a host) may run `fleet run`'s central-only proxy."""
     procs = proxy_procs()
     if procs is None:
         print("credproxy: INFO — cannot read the process table")
@@ -2906,27 +2910,29 @@ def machine_proxies(a):
     rec = shared_rec()
     if a.json:
         print(json.dumps({"shared": shared, "others": extra, "managed": managed_logins()}))
-    # the shared proxy's launcher may have a child serving too: one pid tree, one proxy
-    on_shared = bool(shared or rec)
     if not procs:
         if not a.json:
             print("credproxy: INFO — no credential proxy runs here" + (" (the shared one is down)" if rec else ""))
         return 0
-    if not on_shared and not managed_logins():
-        if not a.json:
-            print("credproxy: INFO — per-login proxies (no shared proxy on this machine): %s"
-                  % ", ".join("%s (pid %d)" % (p["login"], p["pid"]) for p in procs))
-        return 0
     if not extra:
         if not a.json:
-            print("credproxy: OK — one proxy on this machine: the shared one (pid %s, %d login(s))"
-                  % (",".join(str(p["pid"]) for p in shared), len((rec or {}).get("logins") or [])))
+            print("credproxy: OK — one proxy on this machine: the machine's (pid %s, %d login(s))"
+                  % (",".join(str(p["pid"]) for p in shared), len((rec or {}).get("logins") or [1])))
+        return 0
+    if E("FLEET_CREDSEP_HOST", "1") == "0" and not shared and all(p["kind"] == "login" for p in extra):
+        if not a.json:
+            print("credproxy: INFO — a client computer: fleet run's proxy (central only, nothing leased): %s"
+                  % ", ".join("%s (pid %d)" % (p["login"], p["pid"]) for p in extra))
         return 0
     if not a.json:
-        fix = "sudo bash %s/fleet-credsep.sh machine install --logins managed" % HERE
-        print("credproxy: FAIL — %d credential prox%s besides the shared one: %s — each holds its own copy of the "
-              "subscriptions (one the hub deleted stays there, and its sessions get 401). Join them to the shared "
-              "proxy (one sudo): %s"
+        if E("FLEET_NODE_PROFILE", "") == "user-pod":
+            fix = "reopen the pod's login (fleet-node-linux.py login open): it runs the machine proxy"
+        else:
+            fix = "join every login to the machine's proxy (one sudo): sudo bash %s/fleet-credsep.sh machine install " \
+                  "--logins managed" % HERE
+        print("credproxy: FAIL — %d credential prox%s besides the machine's one: %s — each holds its own copy of the "
+              "subscriptions (one the hub deleted stays there, and its sessions get 401); the per-login road is "
+              "gone (#4674). Fix: %s"
               % (len(extra), "y" if len(extra) == 1 else "ies",
                  ", ".join("%s %s (pid %d, %s)" % ({"own": "own proxy of", "login": "per-login proxy of"}[p["kind"]],
                                                     p["login"], p["pid"], p["user"]) for p in extra), fix))
