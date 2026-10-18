@@ -448,7 +448,7 @@ else
     MARK=1
     curl -fsS --max-time 10 "$HUBURL/version" -o "$tmp/version.json" 2>/dev/null || : > "$tmp/version.json"
     eval "$(python3 - "$tmp/version.json" <<'PYV'
-import json, os, platform, re, shlex, sys
+import json, re, shlex, sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
@@ -458,13 +458,8 @@ def s(k):
     return "" if v is None else str(v)
 st = s("stable") if re.match(r"^[0-9a-f]{40}$", s("stable")) else ""
 url = s("client_url") if st and re.match(r"^https?://[A-Za-z0-9._~:/@%+-]+$", s("client_url")) else ""
+# one release line - issue 4671: a Mac installs stable too
 ver = s("client_version")
-# a Mac follows the Mac lane of the hub when it names one - issue 3868 - else stable
-mac = s("client_version_macos")
-murl = s("client_url_macos")
-if (os.environ.get("FLEET_PLATFORM") or platform.system().lower()) == "darwin" and st \
-        and re.match(r"^[0-9a-f]{40}$", mac) and re.match(r"^https?://[A-Za-z0-9._~:/@%+-]+$", murl):
-    ver, st, url = mac, mac, murl
 for k, v in (("VER", ver), ("COMPAT", s("client_compat")), ("HCOMMIT", s("commit")), ("STABLE", st), ("CURL", url)):
     print("%s=%s" % (k, shlex.quote(v)))
 PYV

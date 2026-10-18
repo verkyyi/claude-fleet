@@ -122,7 +122,8 @@ def wj(path, obj):
 
 
 def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=(), drop=(), drill_fail=False,
-                 sessions_log=None, sync_log=None, sync_fail=False, apply_log=None, ccquota_src=None, ccquota_says=None):
+                 sessions_log=None, sync_log=None, sync_fail=False, apply_log=None, ccquota_src=None, ccquota_says=None,
+                 seq=0):
     """A release dir as `ccquota release fetch --artifacts` leaves it, under <rel>/<sha>."""
     d = os.path.join(rel, sha)
     os.makedirs(os.path.join(d, ".release", "artifacts"))
@@ -205,6 +206,8 @@ def make_release(rel, sha, claude="2.1.1", codex="0.154.0", tmux="3.7c", broken=
         os.chmod(os.path.join(d, ".release", "artifacts", n), 0o755)
         man.append({"name": n, "sha256": sh256(b), "size": len(b)})
     m = {"schema": 1, "sha": sha, "artifacts": man}
+    if seq:
+        m["seq"] = seq  # its place on stable's chain (issue #4671: a machine only moves forward)
     if ccquota_src:
         m["ccquota_src"] = ccquota_src  # the commit's Go source, checked by the hub (issue #2930)
     wj(os.path.join(d, ".release", "manifest.json"), m)
@@ -2008,10 +2011,11 @@ class T_Codesign(Sandbox):
                                  os.path.join(self.root, "current", "bin", "ccquota")).returncode, 0)
 
 
-class U_MacLane(Sandbox):
-    """issue #3868: with no target pinned, the machine follows what the hub's
-    /version names — a Mac its Mac lane (client_version_macos), a linux machine
-    stable; a hub that names no lane is stable for both."""
+class U_OneLine(Sandbox):
+    """issue #4671: one release line — with no target pinned every platform
+    follows the hub's /version `stable`; an older hub's client_version_macos is
+    not read. And a machine only moves forward: a target older than what runs
+    (a lower seq on stable's chain) is refused, never switched to."""
 
     def hub(self, body):
         import http.server
@@ -2033,31 +2037,47 @@ class U_MacLane(Sandbox):
         with open(os.path.join(self.d, "db", "machine.env"), "w") as f:
             f.write("CCQUOTA_HUB_URL=http://127.0.0.1:%d\n" % srv.server_address[1])
 
-    def follow(self, plat):
-        e = dict(self.env, FLEET_PLATFORM=plat)
+    def follow(self, plat, **extra):
+        e = dict(self.env, FLEET_PLATFORM=plat, **extra)
         r = subprocess.run([sys.executable, UPD, "tick"], env=e, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return self.state()
 
-    def test_lane(self):
+    def test_mac_follows_stable(self):
         self.install(V1)
         self.release(V2)
-        self.hub({"stable": V2, "client_version_macos": V1})
+        self.hub({"stable": V2, "client_version_macos": V1})   # an older hub's Mac lane
         st = self.follow("darwin")
-        self.assertEqual(st["result"], "current", st)
-        self.assertIn("hub stable-macos", st["reason"])
-        self.assertEqual(self.current(), V1)
-        st = self.follow("linux")
         self.assertEqual(st["target_seen"]["sha"], V2, st)
         self.assertEqual(st["phase"], "switched", st)
 
-    def test_no_lane(self):
-        self.install(V1)
-        self.release(V2)
-        self.hub({"stable": V2})
+    def test_older_target_refused(self):
+        self.install(V2, seq=5)
+        self.release(V1, seq=4)
+        self.hub({"stable": V1})   # stable rolled back on the hub
         st = self.follow("darwin")
-        self.assertEqual(st["target_seen"]["sha"], V2, st)
+        self.assertEqual(st["result"], "refused", st)
+        self.assertIn("only moves forward", st["reason"])
+        self.assertEqual(self.current(), V2)
+        self.assertEqual(st["phase"], "idle", st)
+        rows = [h for h in st["history"] if h["result"] == "refused"]
+        st = self.follow("darwin")   # again: still refused, one history row per target
+        self.assertEqual(st["result"], "refused", st)
+        self.assertEqual(len([h for h in st["history"] if h["result"] == "refused"]), len(rows))
+        self.assertEqual(self.cmd("status", "--check").returncode, 1)
+        # a pin too, unless the operator's hatch says so
+        st = self.tick(V1)
+        self.assertEqual(st["result"], "refused", st)
+        st = self.tick(V1, FLEET_NODE_UPDATE_BACKWARD="1")
         self.assertEqual(st["phase"], "switched", st)
+
+    def test_newer_target_taken(self):
+        self.install(V1, seq=4)
+        self.release(V2, seq=5)
+        self.hub({"stable": V2})
+        st = self.follow("linux")
+        self.assertEqual(st["phase"], "switched", st)
+        self.assertNotIn("behind", st)
 
 
 def sha256_of(path):

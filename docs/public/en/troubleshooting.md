@@ -177,14 +177,7 @@ From `fleet doctor --machine`.
 From `fleet doctor`.
 
 - **What it is**: the result of the machine updater's last round.
-- **On WARN / FAIL**: read `/var/log/fleet-node/update.log` and `sudo fleet doctor --machine`. When a switch adds a FAIL, the updater goes back to the previous version by itself — no rollback by hand.
-
-#### `channel`
-
-From `fleet doctor`; it appears only when the hub has set up a Mac channel.
-
-- **What it is**: which release channel this machine follows — Linux follows stable, Mac follows stable-macos (equal to or behind stable) — and how many versions and how long the Mac channel trails stable.
-- **On WARN / FAIL**: the Mac channel more than 2 hours behind usually means the macOS half of the tests is red or has not run: once it is green, Macs catch up by themselves; while it is red, look at its breakage ticket.
+- **On WARN / FAIL**: read `/var/log/fleet-node/update.log` and `sudo fleet doctor --machine`. When a switch adds a FAIL, the updater goes back to the previous version by itself — no rollback by hand. A `refused` result means the hub named a target older than the running release (its stable was rolled back): a machine only moves forward and stays where it is — wait for the next release, or set `FLEET_NODE_UPDATE_BACKWARD=1` on that machine if you really mean to go back.
 
 #### `cnpath`
 

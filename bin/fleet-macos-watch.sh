@@ -3,8 +3,8 @@
 #   — a red BSD half on master becomes ONE breakage issue and one alert (issues #2286, #3120).
 #
 # Since #2286 the macOS selftests no longer run on a pull request; since #4663 they
-# hold no release either: the Mac lane (refs/tags/stable-macos) moves WITH stable
-# in the release train, each Mac verifies its own install (the updater's machine
+# hold no release either: there is one release line (#4671), every Mac follows
+# stable and verifies its own install (the updater's machine
 # doctor, rolled back on a new FAIL), and the BSD half is the nightly full suite
 # (selftests-macos.yml) — mac-follow.yml (#3869) is a dispatch only. A red BSD half
 # is a bug a Mac will meet, and nobody watches the Actions tab. This script does (issue #3143, EPIC #3139 C4):

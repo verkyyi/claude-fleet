@@ -74,7 +74,7 @@
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/internal/api pickNodeAfter (go test, when here)
 #   oldcfg-deleted-hook                             bin/fleet-stable.sh move (the oldcfg gate), fleet-oldcfg-replay.py
-#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move --ref stable-macos (macos gate), .github/workflows/mac-follow.yml
+#   macos-red-to-stable                             bin/fleet-macos-watch.sh (breakage filing), fleet-stable.sh move (no macos gate), .github/workflows/mac-follow.yml
 #   train-push-cancels                              .github/workflows/release-train.yml (concurrency), bin/fleet-train-board.sh,
 #                                                   selftests-macos.yml (no push trigger)
 #   release-artifact-missing                        bin/fleet-stable.sh move (the artifacts gate),
@@ -3075,14 +3075,12 @@ drill_oldcfg_deleted_hook() {
   WHAT="删了 h.sh 的发版被拒（oldcfg: 点名 bin/h.sh，stable 没动）；--force 才挪并记一行"
 }
 
-# ---- macos-red-to-stable (#2286, rewritten by #3869): the macOS selftests run
-# AFTER the release (mac-follow.yml). A BSD-only red must hold the Mac lane, not
-# stable: (1) the release train's own move (`--train`, no macOS job in it) moves
-# stable past it, (2) the watcher files it once as a breakage reading mac-follow's
-# jobs, (3) `fleet-stable.sh move --ref stable-macos` refuses (`macos:`) on the
-# `mac follow: macOS` status, so every Mac stays on the previous version; once it
-# goes green the lane follows. Fake gh (runs / jobs / statuses), fake filer; a
-# real bare repo + both tags.
+# ---- macos-red-to-stable (#2286, rewritten by #3869, #4671): the macOS selftests run
+# AFTER the release. A BSD-only red must hold no release and still be seen: (1) the
+# release train's own move (`--train`, no macOS job in it) moves stable past it,
+# (2) the watcher files it once as a breakage reading mac-follow's jobs, (3) a move
+# by hand past a red `mac follow: macOS` status moves too — one release line, no
+# gate 5. Fake gh (runs / jobs / statuses), fake filer; a real bare repo.
 drill_macos_red_to_stable() {
   CAP=30; local t0 d out rc c1 c2
   d="$WORK/macosred"; mkdir -p "$d/shim" "$d/seed" "$d/conf"
@@ -3110,8 +3108,9 @@ SH
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
     echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'bsd-only break' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable-macos "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+    echo y > "$d/seed/g"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'next' && git -C "$d/seed" push -q origin HEAD:master || exit 1
+    git -C "$d/seed" rev-parse HEAD > "$d/c3"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
   ) || { WHY="could not build the rig repo"; return 1; }
   c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
   printf '9\t%s\tfailure\tworkflow_run\n8\t%s\tsuccess\tworkflow_run\n' "$c2" "$c1" > "$d/runs.watch"
@@ -3128,74 +3127,27 @@ SH
   grep -q 'bsd-only-selftest.sh' "$d/filed" || { WHY="the filing does not name the red test"; return 1; }
   PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" FLEET_MACOS_FILE_CMD="$d/filer" bash "$BIN/fleet-macos-watch.sh" --repo o/r --now >/dev/null 2>&1
   [ "$(grep -c -- '--breakage' "$d/filed")" = 1 ] || { WHY="the same red follow was filed twice"; return 1; }
-  # … and the Mac lane refuses to follow it.
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="the lane move onto the red commit exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — macos:'*'mac follow: macOS'*) ;; *) WHY="the refusal is not macos: on the mac-follow status: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the Mac lane followed a red macOS"; return 1; }
-  # green: mac-follow's status on the same commit → the lane follows.
-  printf 'success\n' > "$d/status"
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the lane move after a green follow failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  # … and a move by hand past the red `mac follow: macOS` status is not held either.
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$(cat "$d/c3")" --dir "$d/co" --repo o/r 2>&1) \
+    || { WHY="a red mac follow held a move by hand: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
+  case "$out" in *'macos:'*) WHY="gate 5 still spoke: $(printf '%s' "$out" | grep 'macos:' | head -1)"; return 1 ;; esac
+  git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null && { WHY="a Mac lane tag was written"; return 1; }
   SECS=$(since "$t0")
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c2" ] || { WHY="the lane did not follow after macOS went green"; return 1; }
-  WHAT="macOS 红：列车照挪 stable（Linux 不等 Mac）、开一张带指纹的单（同一 run 不重开）、Mac 通道拒挪（macos:）停在上一版；同一提交跑绿后 Mac 通道跟上"
-}
-
-# ---- stable-macos-ahead (#3868, EPIC #3863 C5): a Mac follows refs/tags/stable-macos,
-# which must never lead stable — a Mac would run what Linux never verified. The way
-# it would happen is a lane move onto a commit stable has not reached (by hand, or a
-# train whose stable move failed after its macOS half went green). fleet-stable.sh
-# refuses it (`M:`), and a lane at stable moves; a darwin install's one reader
-# (fleet_stable_ref_for) then names the lane, a linux one stable.
-drill_stable_macos_ahead() {
-  CAP=30; local t0 d out rc c1 c2
-  d="$WORK/macahead"; mkdir -p "$d/shim" "$d/seed"
-  cat > "$d/shim/gh" <<SH
-#!/bin/sh
-case "\$*" in
-  *actions/workflows/*) printf '%s\tcompleted\tsuccess\tpush\t5\tselftests (macOS)\n%s\tcompleted\tsuccess\tpush\t6\tselftests (macOS)\n' "\$(cat "$d/c1")" "\$(cat "$d/c2")" ;;
-  *) printf 'completed success shard 1\n' ;;
-esac
-SH
-  chmod +x "$d/shim/gh"
-  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/.github/workflows"; echo 'name: selftests (macOS)' > "$d/seed/.github/workflows/selftests-macos.yml"
-    git -C "$d/seed" add -A && git -C "$d/seed" commit -qm verified && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c1"
-    echo x > "$d/seed/f"; git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'not on stable yet' && git -C "$d/seed" push -q origin HEAD:master || exit 1
-    git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
-  ) || { WHY="could not build the rig repo"; return 1; }
-  c1=$(cat "$d/c1"); c2=$(cat "$d/c2")
-  t0=$(now)
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$c2" --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
-  [ "$rc" = 3 ] || { WHY="a lane move ahead of stable exited $rc, want 3: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  case "$out" in *'REFUSED — M:'*) ;; *) WHY="the refusal is not prefixed M: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
-  git --git-dir="$d/origin.git" rev-parse -q --verify refs/tags/stable-macos >/dev/null \
-    && { WHY="the Mac lane was created ahead of stable"; return 1; }
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move --ref stable-macos --dir "$d/co" --repo o/r 2>&1) \
-    || { WHY="the lane move onto stable failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the lane is not at stable"; return 1; }
-  out=$( . "$BIN/fleet-versions-lib.sh"; printf '%s %s' "$(fleet_stable_ref_for darwin "$d/co" origin)" "$(fleet_stable_ref_for linux "$d/co" origin)")
-  SECS=$(since "$t0")
-  [ "$out" = "stable-macos stable" ] || { WHY="the one reader names «${out}», want «stable-macos stable»"; return 1; }
-  WHAT="Mac 通道挪到 stable 之前的提交被拒（M:）；挪到 stable 本身照常；Mac 读 stable-macos、Linux 读 stable"
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$(cat "$d/c3")" ] || { WHY="stable did not follow the hand move"; return 1; }
+  WHAT="macOS 红：列车照挪 stable（不等 Mac）、开一张带指纹的单（同一 run 不重开）；手挪也不被 mac follow 的红挡（一条版本线，没有 gate 5、没有 Mac 通道）"
 }
 
 # ---- stable-push-no-workflows (#3912): GitHub refuses a tag move whose range
 # changes .github/workflows/* from a credential without workflows permission —
 # GITHUB_TOKEN, the checkout's default. Stable stayed at one commit for a day while
 # every merge touched a workflow, and the move said only «lease lost». Now the
-# release / mac-follow checkouts take STABLE_PUSH_TOKEN when set, and fleet-stable.sh
-# names the refusal. Rig: a bare remote whose pre-receive refuses such a tag move
-# the way GitHub does; the Mac lane (at c1) is moved onto stable (c2, which changes
-# a workflow) → exit 4, the reason said as no workflows permission, the tag left.
+# release checkout takes STABLE_PUSH_TOKEN when set, and fleet-stable.sh names the
+# refusal. Rig: a bare remote whose pre-receive refuses such a tag move the way
+# GitHub does; stable (at c1) is moved onto c2, which changes a workflow → exit 4,
+# the reason said as no workflows permission, the tag left.
 drill_stable_push_no_workflows() {
   CAP=30; local t0 d out rc c1 f
-  for f in release-train.yml mac-follow.yml; do
+  for f in release-train.yml; do
     grep -q 'token: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}' "$ROOT/.github/workflows/$f" \
       || { WHY="$f's checkout does not push with STABLE_PUSH_TOKEN"; return 1; }
   done
@@ -3217,8 +3169,7 @@ SH
     echo 'name: release train' > "$d/seed/.github/workflows/release-train.yml"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'touches a workflow' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c2")"
-    git --git-dir="$d/origin.git" update-ref refs/tags/stable-macos "$(cat "$d/c1")"
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")"
     git clone -q "$d/origin.git" "$d/co" 2>/dev/null || exit 1
     cat > "$d/origin.git/hooks/pre-receive" <<'HOOK'
 #!/bin/sh
@@ -3236,14 +3187,14 @@ HOOK
   ) || { WHY="could not build the rig repo"; return 1; }
   c1=$(cat "$d/c1")
   t0=$(now)
-  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move --ref stable-macos --dir "$d/co" --repo o/r 2>&1); rc=$?
+  out=$(PATH="$d/shim:$PATH" GITHUB_ACTIONS=true sh "$BIN/fleet-stable.sh" move "$(cat "$d/c2")" --dir "$d/co" --repo o/r 2>&1); rc=$?
   SECS=$(since "$t0")
   [ "$rc" = 4 ] || { WHY="a push the remote refused for workflows exited $rc, want 4: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1; }
   case "$out" in *'no workflows permission'*STABLE_PUSH_TOKEN*) ;; *) WHY="the refusal is not said as missing workflows permission: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; return 1 ;; esac
   case "$out" in *'.github/workflows/release-train.yml'*) ;; *) WHY="the changed workflow is not named: $(printf '%s' "$out" | tail -1)"; return 1 ;; esac
   case "$out" in *'lease lost'*) WHY="still blames a lost lease: $(printf '%s' "$out" | tail -1)"; return 1 ;; esac
-  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable-macos)" = "$c1" ] || { WHY="the refused tag moved anyway"; return 1; }
-  WHAT="范围里改过工作流、凭据没有 workflows 权限：推 tag 被拒时 move 说「缺 workflows 权限」、点名改过的工作流和 STABLE_PUSH_TOKEN（退出 4、不说 lease lost、tag 不动）；release / mac-follow 的 checkout 用 STABLE_PUSH_TOKEN"
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c1" ] || { WHY="the refused tag moved anyway"; return 1; }
+  WHAT="范围里改过工作流、凭据没有 workflows 权限：推 tag 被拒时 move 说「缺 workflows 权限」、点名改过的工作流和 STABLE_PUSH_TOKEN（退出 4、不说 lease lost、tag 不动）；release 的 checkout 用 STABLE_PUSH_TOKEN"
 }
 
 # ---- train-push-cancels (#3141, EPIC #3139 C2): every merge used to start its own

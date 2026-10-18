@@ -504,12 +504,6 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def release_platform():
-    """darwin | linux | … — the platform whose release lane this machine
-    follows (FLEET_PLATFORM overrides, as fleet_platform in fleet-versions-lib.sh)."""
-    return (env("FLEET_PLATFORM", "") or platform.system()).lower()
-
-
 def hub_url(p):
     for line in _read_lines(p.machine_env):
         if line.startswith("CCQUOTA_HUB_URL="):
@@ -832,12 +826,8 @@ class Updater(object):
         except ValueError:
             v = {}
         v = v if isinstance(v, dict) else {}
-        # a Mac follows the Mac lane when the hub names one (issue #3868, EPIC
-        # #3863 共同约定 3) — the hub's client_version_macos is that lane's one
-        # word; none (no lane, an older hub) ⇒ stable, as before
-        mac = v.get("client_version_macos")
-        if release_platform() == "darwin" and isinstance(mac, str) and SHA_RE.match(mac):
-            return mac, "hub stable-macos"
+        # one release line (issue #4671): every platform takes stable — an older
+        # hub's client_version_macos is not read
         s = v.get("stable")
         if isinstance(s, str) and SHA_RE.match(s):
             return s, "hub stable"
@@ -1100,6 +1090,36 @@ class Updater(object):
             raise StageError("stage: %s" % e)
 
     # -- the machine's fixed signing identity (issue #3433)
+    def release_seq(self, sha):
+        """the release's place on stable's chain (its manifest's seq), or 0 when
+        it does not say — staged, or the runtime's own copy."""
+        for d in (self.p.rel(sha), self.p.stage_dir(sha)):
+            m = read_json(os.path.join(d, ".release", "manifest.json"), None)
+            if isinstance(m, dict) and m.get("sha") == sha:
+                try:
+                    return max(0, int(m.get("seq") or 0))
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
+    def backward(self, target, cur, src):
+        """only forward (issue #4671): a target older than what runs here — a
+        stable rolled back on the hub, a stale pin — is refused (one history row
+        per target, the state says `refused`), never switched to. Its seal (the
+        manifest's seq on stable's chain) says which is older; a release that
+        names none, or is not on disk yet, is not judged. A failed switch's own
+        rollback to .prev is not this road. FLEET_NODE_UPDATE_BACKWARD=1 is the
+        operator's hatch. None = go on."""
+        tseq, cseq = self.release_seq(target), (self.release_seq(cur) if cur else 0)
+        if not (tseq and cseq and tseq < cseq) or env("FLEET_NODE_UPDATE_BACKWARD", "") == "1":
+            return None
+        why = "%s (#%d, %s) is older than the running %s (#%d) — a machine only moves forward" % (
+            target[:12], tseq, src, cur[:12], cseq)
+        if self.st.get("behind") != target:
+            self.st["behind"] = target
+            self.record("refused", cur, target, why)
+        return self.end("refused", why, current=cur)
+
     def sign_ccquota(self, path):
         """Sign a staged ccquota with the machine's ONE identity and check it —
         so the TCC grant a person gave the admin agent survives the switch. The
@@ -1822,6 +1842,7 @@ class Updater(object):
         if (self.st.get("target_seen") or {}).get("sha") != target:
             self.st["target_seen"] = {"sha": target, "at": now()}
         if target == cur:
+            self.st.pop("behind", None)
             notes = self.sync_outside() + self.sync_credsep() + self.follow_installs()
             if not self.follow_held:
                 self.st.pop("hold", None)
@@ -1841,6 +1862,9 @@ class Updater(object):
         f = self.st["failed"].get(target) or {}
         if f and now() - f.get("at", 0) < env_num("FLEET_NODE_UPDATE_RETRY", 3600):
             return self.end("backoff", "%s failed %s: %s" % (target[:12], iso(f["at"]), f.get("reason", "")), current=cur)
+        back = self.backward(target, cur, src)   # already on disk (a .prev): no fetch
+        if back is not None:
+            return back
         hold = self.epic_hold(target)
         if hold:
             return self.end("deferred", "an EPIC batch with work: %s" % hold, current=cur)
@@ -1853,6 +1877,10 @@ class Updater(object):
                 self.st["failed"] = {target: {"at": now(), "reason": str(e)}}
             self.record("failed", cur, target, str(e))
             return self.end("failed", "%s: %s" % (target[:12], e), current=cur)
+        back = self.backward(target, cur, src)   # now that its manifest is here
+        if back is not None:
+            return back
+        self.st.pop("behind", None)
         self.st["failed"] = {}      # an older target's failure says nothing now (key row, #2843)
         self.st.pop("hold", None)   # the machine reaches the target: its hold clock starts over (#2843)
         baseline = sorted(set(r[1] for r in doctor_rows(self.p) if r[0] == "FAIL")) if cur else []
@@ -3013,7 +3041,7 @@ def main(argv):
         if fl:
             print("fetch   %s" % fl)
         if "--check" in rest:
-            bad = st.get("result") in ("failed", "rolled-back", "skipped") or bool(sf) or (
+            bad = st.get("result") in ("failed", "rolled-back", "skipped", "refused") or bool(sf) or (
                 st.get("phase") != "idle" and now() - (st.get("at") or 0) > 3600)
             return 1 if bad else 0
         return 0

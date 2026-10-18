@@ -24,8 +24,8 @@
 #      key, the SSHSIG with ssh-keygen); a manifest that is not the commit's
 #      bytes is never signed; the key is never on curl's argv; a 428 says the
 #      run has no key.
-#   G. --ref stable-macos (issue #3868): the Mac lane's move is sha + ref + run,
-#      nothing cut or signed; the hub's 409 is exit 1; --dry-run POSTs nothing.
+#   G. --ref stable-macos (an older caller, issue #4671): there is no Mac lane —
+#      said, exit 0, nothing POSTed; any other --ref but stable is exit 2.
 #   H. --stage / --commit (issue #3867): a stage is POSTed only to a hub whose /key
 #      says the train signs and only with the key here (else exit 4, nothing sent),
 #      carries no ledger and keeps the 202 in its dir; --commit signs that, one POST
@@ -219,21 +219,14 @@ run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO"
 eq "F: 428 → exit 1" 1 "$RC"; has "F: says the run has no key" "$OUT" "no FLEET_RELEASE_SIGN_KEY"
 rm -f "$WORK/code"
 
-# --- G. the Mac lane (issue #3868) ---------------------------------------------------------
-# --ref stable-macos POSTs sha + ref + run only: no chain, no tree, no signer
+# --- G. one release line (issue #4671) ------------------------------------------------------
+# --ref stable-macos (an older caller): said, exit 0, nothing POSTed
 before=$(posts)
 run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$B" --hub "$HUB" --dir "$REPO" --ref stable-macos
-eq "G: exit 0" 0 "$RC"; eq "G: one POST" "$((before + 1))" "$(posts)"
-eq "G: sha" "$B" "$(part sha)"; eq "G: ref" stable-macos "$(part ref)"
-eq "G: no tree, no commits, no signer" "" "$(part tree)$(part commits)$(part signer)"
-echo 409 > "$WORK/code"
-run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref stable-macos
-eq "G: the hub's 409 → exit 1" 1 "$RC"; has "G: its words" "$OUT" "answered 409"
-rm -f "$WORK/code"; before=$(posts)
-run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref stable-macos --dry-run
-eq "G: dry-run POSTs nothing" "$before" "$(posts)"
+eq "G: exit 0" 0 "$RC"; eq "G: no POST" "$before" "$(posts)"
+has "G: says there is no Mac lane" "$OUT" "no Mac lane"
 run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref other
-eq "G: --ref takes stable or stable-macos" 2 "$RC"
+eq "G: --ref takes stable" 2 "$RC"
 
 # --- H. the stage, then the commit (issue #3867) --------------------------------------------
 mkman 0; echo "$A" > "$WORK/stable"; ST="$WORK/stage"

@@ -60,6 +60,10 @@ import (
 const releasePublished = "published"
 
 // publishMaxBody bounds one publish (the whole repo as a tar: ~27 MB today).
+// refRetiredMac is the publish form's `ref` that moved the Mac lane (claude-fleet#3868);
+// one release line (claude-fleet#4671) answers it `retired` for one version.
+const refRetiredMac = "stable-macos" // compat-1v: 下一批删
+
 const publishMaxBody = 256 << 20
 
 // publishMaxCommits bounds the first-parent chain one publish may carry.
@@ -354,7 +358,7 @@ func publishErr(code int, format string, a ...any) error {
 // publishForm is one publish request, read whole.
 type publishForm struct {
 	sha, prev, run string
-	ref            string // "" / "stable" = stable; RefStableMacOS = the Mac lane (claude-fleet#3868)
+	ref            string // "" / "stable" = stable; refRetiredMac = an older caller's Mac lane
 	commits, tree  []byte
 	hasCommits     bool // an empty list is an answer: nothing between prev and sha
 	train          []byte
@@ -409,14 +413,12 @@ func readPublishForm(r *http.Request) (*publishForm, error) {
 	switch f.ref {
 	case "", "stable":
 		f.ref = ""
-	case RefStableMacOS:
-		// the Mac lane names a release the hub holds already: the sha alone
-		if !release.ValidSHA(f.sha) {
-			return nil, publishErr(http.StatusBadRequest, "sha: want 40 hex, got %q", firstLine(f.sha))
-		}
+	case refRetiredMac:
+		// compat-1v: 下一批删 — an older train / dispatch moving the Mac lane,
+		// which one release line (claude-fleet#4671) removed: answered, nothing done
 		return f, nil
 	default:
-		return nil, publishErr(http.StatusBadRequest, "ref: want stable or %s, got %q", RefStableMacOS, f.ref)
+		return nil, publishErr(http.StatusBadRequest, "ref: want stable, got %q", f.ref)
 	}
 	if f.sig != "" {
 		// the second half: the signatures over what the first half built
@@ -488,8 +490,9 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var out map[string]any
 	switch {
-	case f.ref == RefStableMacOS:
-		out, err = rs.moveMac(f.sha)
+	case f.ref == refRetiredMac:
+		out = map[string]any{"status": "retired", "ref": refRetiredMac, "sha": f.sha,
+			"note": "one release line (claude-fleet#4671): every Mac follows stable — there is no Mac lane to move"}
 	case f.sig != "":
 		out, err = rs.Sign(f.sha, f.sig, f.sshsig)
 	default:

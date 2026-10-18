@@ -1,6 +1,6 @@
 #!/bin/bash
 # fleet-release-publish.sh <sha> [--hub <url>] [--dir <checkout>] [--train <json file>] [--dry-run]
-#                          [--ref stable-macos] [--stage <dir> | --commit <dir>]
+#                          [--stage <dir> | --commit <dir>]
 #   — hand the hub a stable it then serves to every machine (issue #2772,
 #   EPIC #2770 C2). Run by CI: the release train's `release` job (before its
 #   move, issue #3142), and stable-publish.yml (dispatch only — the repair road,
@@ -28,10 +28,8 @@
 #            release-sign environment's secret and is only ever read from the
 #            environment — never an argv, a file or a log line.
 #
-# --ref stable-macos (issue #3868, EPIC #3863 C5): move the hub's Mac lane to
-# <sha> — a release the hub holds already (it was stable): the POST carries sha,
-# ref and run only; the hub refuses (409) a sha ahead of its stable or behind
-# the lane. Nothing is cut, built or signed.
+# One release line (issue #4671): the hub's Mac lane is gone; `--ref
+# stable-macos` (an older caller) is said and exits 0 for one version.
 #
 # --stage <dir> / --commit <dir> (issue #3867, EPIC #3863 C4): the publish in two
 # halves, so the train's release is ready by the time its tests are green.
@@ -64,14 +62,16 @@
 #      2 usage / git / no identity · 3 the hub could not be reached
 set -uo pipefail
 
-sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0 train="" ref=stable stage="" commit=""
+sha="" hub="${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}" dir="" dry=0 train="" stage="" commit=""
 die() { printf 'fleet-release-publish: %s\n' "$*" >&2; exit 2; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --hub) shift; hub="${1:-}" ;;
     --dir) shift; dir="${1:-}" ;;
     --train) shift; train="${1:-}" ;;
-    --ref) shift; case "${1:-}" in stable|stable-macos) ref="$1" ;; *) die "--ref takes stable or stable-macos" ;; esac ;;
+    --ref) shift   # compat-1v: 下一批删 — stable is the only line (#4671)
+           case "${1:-}" in stable) ;; stable-macos) printf 'publish: no Mac lane (one release line, issue #4671) — nothing to publish\n'; exit 0 ;;
+             *) die "--ref takes stable" ;; esac ;;
     --stage) shift; stage="${1:-}"; [ -n "$stage" ] || die "--stage takes a directory" ;;
     --commit) shift; commit="${1:-}"; [ -n "$commit" ] || die "--commit takes a directory" ;;
     --dry-run|-n) dry=1 ;;
@@ -85,7 +85,6 @@ here="$(cd "$(dirname "$0")" && pwd)"
 [ -n "$dir" ] || dir="$(cd "$here/.." && pwd)"
 [ -z "$train" ] || [ -s "$train" ] || die "--train $train is not a file"
 [ -z "$stage" ] || [ -z "$commit" ] || die "--stage or --commit, not both"
-[ -z "$stage$commit" ] || [ "$ref" = stable ] || die "--stage / --commit publish stable, not $ref"
 [ -z "$stage" ] || [ -z "$train" ] || die "--train rides with --commit (the ledger is final only then)"
 [ -n "$hub" ] || die "no hub — pass --hub <url> or set FLEET_HUB_URL"
 hub="${hub%/}"
@@ -166,10 +165,6 @@ if [ -n "$stage" ]; then
     { printf 'stage: nothing staged — %s signs its own releases (signer: %s); the release step publishes whole\n' "$hub" "${who:-?}"; exit 4; }
 fi
 
-if [ "$ref" = stable-macos ]; then
-  printf 'publish: stable-macos → %s to %s\n' "${sha:0:7}" "$hub"
-  [ "$dry" -eq 0 ] || { printf 'dry-run: would POST %s/v1/fleet/release/publish (ref=stable-macos)\n' "$hub"; exit 0; }
-else
 # the hub's stable: the chain is cut from there
 code=$(curl -sS -m 30 -o "$work/stable.json" -w '%{http_code}' "$hub/v1/fleet/release/stable") ||
   { printf 'fleet-release-publish: %s cannot be reached\n' "$hub" >&2; exit 3; }
@@ -206,19 +201,8 @@ if [ "$dry" -eq 1 ]; then
   printf 'dry-run: would POST %s/v1/fleet/release/publish\n' "$hub"
   exit 0
 fi
-fi
 
 identity
-if [ "$ref" = stable-macos ]; then
-  code=$(curl -sS -m 120 -K "$work/auth.cfg" -o "$work/answer" -w '%{http_code}' \
-    -F "sha=$sha" -F "ref=stable-macos" -F "run=$run" "$hub/v1/fleet/release/publish") ||
-    { printf 'fleet-release-publish: POST to %s failed\n' "$hub" >&2; exit 3; }
-  answer=$(cat "$work/answer" 2>/dev/null)
-  [ "$code" = 200 ] && { printf 'published: %s\n' "$answer"; exit 0; }
-  printf 'fleet-release-publish: the hub answered %s: %s\n' "$code" "$answer" >&2
-  case "$code" in 5??) exit 3 ;; esac
-  exit 1
-fi
 set -- -F "sha=$sha" -F "prev=$prev" -F "run=$run"
 [ -z "$train" ] || set -- "$@" -F "train=@$train;type=application/json"
 signer=""

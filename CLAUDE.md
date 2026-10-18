@@ -770,25 +770,19 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   publish and again on a 409 / a refused move, `bin/fleet-train-superseded.sh`,
   BREAK-IT `train-superseded-red`;
   and `selftests-macos.yml` stays FULL nightly / on dispatch; the merge gate is the ubuntu checks alone (`fleet-pr-verdict.sh` drops
-  any `macOS shard *` an older PR still carries). It gates RELEASING instead:
-  `fleet-stable.sh move` refuses (`macos:`) a target whose newest macOS run is not
-  green and dispatches the full suite on a target with none — **once a Mac lane
-  exists that gate is the lane's, not stable's** (issue #3868, EPIC #3863 C5):
-  `refs/tags/stable-macos`, only forward and never ahead of stable
-  (`fleet-stable.sh move --ref stable-macos`: gates 1 · 2 · `M:` not ahead · 5),
-  is what every Mac follows — machine, login install, client — through ONE
-  reader, `fleet_stable_ref_for` / `fleet_stable_refs` (`bin/fleet-versions-lib.sh`,
-  sourced by fleet-lib.sh), and the hub's `/version` `client_version_macos` /
-  `…/release/stable?platform=darwin` (its pointer moves by a publish with
-  `ref=stable-macos`); stable then means "Linux has verified it" and its move
-  skips gate 5. No `stable-macos` tag ⇒ every reader reads stable and gate 5
-  holds stable, byte for byte (BREAK-IT `stable-macos-ahead`; the doctor's
-  `channel` row says which lane this machine follows and how far the Mac lane
-  trails). **No check holds a release on a Mac** (issue #4663, after #3869): the train's
-  `release` moves stable, then the lane WITH it (`move --ref stable-macos
-  --with-stable`: gates 1 · 2 · M, never 5) and publishes the hub's Mac lane; each
-  Mac verifies its own install (the updater's machine doctor after the switch,
-  rolled back to `.prev` on a new FAIL). `mac-follow.yml` is a dispatch only. The
+  any `macOS shard *` an older PR still carries). **There is ONE release line**
+  (issue #4671, after #3868 / #4663): every machine, login install and client —
+  a Mac too — follows `refs/tags/stable` and the hub's `/version` `stable`;
+  `refs/tags/stable-macos`, the Mac lane readers, `fleet-stable.sh` gate 5 and the
+  hub's `client_version_macos` / `?platform=darwin` are gone (an older caller's
+  `--ref stable-macos` / `--seed` / `--with-stable` / `ref=stable-macos` publish is
+  said and exits 0 / answered `retired`, `# compat-1v`). **No check holds a release
+  on a Mac**: each Mac verifies its own install (the updater's machine doctor after
+  the switch, rolled back to `.prev` on a new FAIL), and **a machine only moves
+  forward** — `fleet-node-update.py` refuses a target whose manifest `seq` is lower
+  than the running release's (`refused`, BREAK-IT `update-goes-back`;
+  `FLEET_NODE_UPDATE_BACKWARD=1` is the hatch). `mac-follow.yml` is a dispatch only
+  (it leaves `mac follow: macOS` on the commit, moves nothing). The
   BSD half is the nightly full `selftests-macos.yml`: a red one (its macOS shard
   jobs) is filed once as a breakage by `bin/fleet-macos-watch.sh` (diskguard tick →
   `fleet-issue-file.sh --breakage`) and raised as one `breakage` alert, plus one
@@ -861,14 +855,13 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
     (input `sha`: the full suite on that commit, named `… @ <sha>`); the per-merge
     `--changed` run moved into the release train (#3141, BREAK-IT
     `train-push-cancels` — the next push used to cancel it, 17 of 20 one night),
-    and out of it again into `mac-follow.yml` after the release (#3869), which
-    leaves `mac follow: macOS` on the stable it tested for gate 5. **Since
+    and out of it again into `mac-follow.yml` after the release (#3869), now a
+    dispatch that only leaves `mac follow: macOS` on the commit. **Since
     #2286 it runs AFTER the merge, not on the PR**: the queue for 5 macOS slots
     had made the merge gate wait a median 21 minutes (worst 56) on a check that
     guards releasing, not merging — master reaches a machine only when `stable`
-    moves. So the BSD half's verdict lands in two places: `fleet-stable.sh move`
-    (gate 5, `macos:`; no run on the target ⇒ dispatch + wait; `--force` logs) and
-    `bin/fleet-macos-watch.sh` (a red follow ⇒ ONE breakage issue + one alert,
+    moves. Since #4663 / #4671 it gates no release either: its verdict lands in
+    `bin/fleet-macos-watch.sh` (a red run ⇒ ONE breakage issue + one alert,
     never a spawned fixer — #3120; it reads mac-follow.yml's `macOS / shard *`
     jobs since #3869, `FLEET_MACOS_WORKFLOW`; on the diskguard
     tick, only for a repo carrying that workflow and `bin/fleet-stable.sh`). BREAK-IT row `macos-red-to-stable`.

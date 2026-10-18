@@ -393,8 +393,7 @@ type runStats struct {
 }
 
 type runLanes struct {
-	Stable      string `json:"stable,omitempty"`
-	StableMacOS string `json:"stable_macos,omitempty"`
+	Stable string `json:"stable,omitempty"`
 }
 
 // computeRunStats folds the runs: merge → stable (each merge's commit time →

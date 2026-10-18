@@ -21,13 +21,10 @@
 #   I. oldcfg gate        a target that deletes a script stable's hook table still
 #                         calls is REFUSED (`oldcfg:`, the script named, tag untouched);
 #                         --force moves it and logs one line (issue #2075)
-#   J. macos gate         (issue #2286) a target whose newest macOS run is red is
-#                         REFUSED (`macos:`); the generic check gate ignores the
-#                         `macOS shard *` runs; --dry-run with no run refuses and
-#                         dispatches nothing; no run (or only a cancelled one) →
-#                         the full suite is dispatched with -f sha=<target> and
-#                         waited for, then the tag moves; --force moves past red
-#                         and logs `macos=`
+#   J. no macos gate      (issues #4663, #4671) gate 5 is retired: a red macOS
+#                         run on the target, no run at all, a cancelled `macOS
+#                         shard *` check — none refuses, nothing is dispatched or
+#                         waited for; --macos-timeout is still accepted (compat-1v)
 #   L. --ignore-check     the caller's own pending CI job (exact name) is passed
 #                         over; any other pending run still refuses; the flag
 #                         repeats (issue #3143) — every name it gives is passed over
@@ -37,22 +34,17 @@
 #                         any other workflow still refuses; FLEET_STABLE_DERIVED_RE=''
 #                         counts every run again
 #   N. the release train  (issue #3141) --precheck runs trunk / forward / oldcfg /
-#                         release.json / artifacts only — red or pending CI and no
-#                         macOS run pass, nothing is pushed or dispatched; backward
-#                         and a bad release.json still refuse. A green
-#                         `mac follow: macOS` (or older `release train: macOS`) status on the target is its BSD
-#                         half (a red one refuses `macos:`), and the shared
-#                         matrix's `macOS / shard K` checks are gate 5's, not CI's
-#   O. --train <run>      (issue #3142) gates 3 and 5 read THAT run's jobs, never the
+#                         release.json / artifacts only — red or pending CI pass,
+#                         nothing is pushed or dispatched; backward and a bad
+#                         release.json still refuse. The shared matrix's
+#                         `macOS / shard K` checks are no verdict
+#   O. --train <run>      (issue #3142) gate 3 reads THAT run's jobs, never the
 #                         commit's check runs: a red / unfinished job refuses (CI),
-#                         a red or missing macOS job refuses `macos:`, the job
+#                         a red or missing macOS job does not, the job
 #                         --ignore-check names is passed over, all green moves
-#   Q. the Mac lane       (issue #3868) move --ref stable-macos: default = stable,
-#                         ahead of stable REFUSED (`M:`, --precheck too), backward
-#                         refused, a red macOS refuses the lane, a train's green
-#                         macOS moves it, the publish carries ref=stable-macos;
-#                         with a lane, stable moves past a red macOS; without
-#                         one, gate 5 holds stable as before
+#   Q. one release line   (issue #4671) --ref stable-macos / --seed / --with-stable
+#                         (an older caller) say there is no Mac lane and exit 0,
+#                         pushing nothing; --ref takes only stable
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -205,49 +197,29 @@ eq "I: --force moves" 0 "$RC"; eq "I: tag at C8" "$C8" "$(tag)"; contains "I: sa
 contains "I: one line logged" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	forced	old=$(git -C "$CO" rev-parse --short "$C7")	new=$(git -C "$CO" rev-parse --short "$C8")	by="
 contains "I: the log carries the replay's verdict" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "oldcfg=oldcfg-replay: RED — 1 finding(s)"
 
-# --- J. the macOS gate (issue #2286) ------------------------------------------------
-# From here the tree carries the macOS workflow, so gate 5 applies. h.sh comes back
-# too: stable C8's hook table still calls it (gate 4 must stay green here).
+# --- J. no macOS gate (issues #4663, #4671) ------------------------------------------
+# The tree carries the macOS workflow from here; gate 5 is retired, so nothing about
+# it holds stable. h.sh comes back too: stable C8's hook table still calls it.
 mkdir -p "$SEED/.github/workflows"; echo 'name: selftests (macOS)' > "$SEED/.github/workflows/selftests-macos.yml"
 mkdir -p "$SEED/bin"; printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' > "$SEED/bin/h.sh"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'bsd half'; C9=$(git -C "$SEED" rev-parse HEAD); push
-# The generic gate must not count the macOS shards: a cancelled one is no verdict.
+# The generic gate must not count the macOS shards; a red macOS run is no refusal.
 printf 'completed success shard 1\ncompleted cancelled macOS shard 1\n' > "$WORK/checks"
 printf '%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C9" > "$WORK/macos"
 run move "$C9"
-eq "J: a red macOS run on the target is refused" 3 "$RC"; contains "J: reason prefixed macos:" "$OUT" "REFUSED — macos:"
-contains "J: names the run" "$OUT" "is failure (run 11, push"; eq "J: tag still C8" "$C8" "$(tag)"
+eq "J: a red macOS run does not hold stable" 0 "$RC"; eq "J: tag at C9" "$C9" "$(tag)"
 case "$OUT" in *"not green: completed cancelled"*) fail "J: the generic gate counted a macOS shard" ;; esac
-# A target with no run: --dry-run refuses and dispatches nothing.
-C10=$(commit ten); push
-printf '%s\tcompleted\tcancelled\tpush\t13\tselftests (macOS)\n%s\tcompleted\tfailure\tpush\t11\tselftests (macOS)\n' "$C10" "$C9" > "$WORK/macos"
-run move "$C10" --dry-run
-eq "J: dry-run with no run refused" 3 "$RC"; contains "J: dry-run says it would dispatch" "$OUT" "a real move dispatches"
-eq "J: dry-run dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
-# A real move dispatches the full suite on exactly C10 and waits: in_progress, then
-# (after one poll) success. A cancelled run on C10 counted as none.
-printf '%s\tin_progress\t\tworkflow_dispatch\t14\tselftests (macOS) @ %s\n' "$C9" "$C10" > "$WORK/dispatch_to"
-mkdir -p "$WORK/sleepshim"
-cat > "$WORK/sleepshim/sleep" <<SH
-#!/bin/sh
-printf '%s\tcompleted\tsuccess\tworkflow_dispatch\t14\tselftests (macOS) @ %s\n' "$C9" "$C10" > "$WORK/macos"
-SH
-chmod +x "$WORK/sleepshim/sleep"
-OUT=$(PATH="$WORK/sleepshim:$PATH" FLEET_STABLE_MACOS_POLL=1 sh "$ST" move "$C10" --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "J: no run → dispatched, waited, moved" 0 "$RC"; eq "J: tag at C10" "$C10" "$(tag)"
-contains "J: dispatched with the target sha" "$(cat "$WORK/dispatched" 2>/dev/null)" "workflow run selftests-macos.yml --repo o/r --ref master -f sha=$C10"
-contains "J: says it dispatched" "$OUT" "dispatched the full suite"; contains "J: says green" "$OUT" "macos: green on"
-# A run that never finishes refuses at --macos-timeout.
-C11=$(commit eleven); push; rm -f "$WORK/dispatch_to"
-printf '%s\tqueued\t\tpush\t15\tselftests (macOS)\n' "$C11" > "$WORK/macos"
-mkdir -p "$WORK/nosleep"; printf '#!/bin/sh\nexit 0\n' > "$WORK/nosleep/sleep"; chmod +x "$WORK/nosleep/sleep"
-OUT=$(PATH="$WORK/nosleep:$PATH" FLEET_STABLE_MACOS_POLL=1 sh "$ST" move "$C11" --macos-timeout 3 --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "J: an unfinished run refuses at the bound" 3 "$RC"; contains "J: says did not finish" "$OUT" "did not finish in 3s"; eq "J: tag still C10" "$C10" "$(tag)"
-# --force past red: moves, one `macos=` line.
-printf '%s\tcompleted\tfailure\tschedule\t16\tselftests (macOS)\n' "$C11" > "$WORK/macos"
-OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C11" --force --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "J: --force moves past red" 0 "$RC"; eq "J: tag at C11" "$C11" "$(tag)"; contains "J: says FORCED" "$OUT" "macos: FORCED past the BSD half (failure)"
-contains "J: the log carries macos=" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	macos=run 16 failure"
+case "$OUT" in *"macos:"*) fail "J: gate 5 still spoke: $OUT" ;; esac
+# No macOS run at all: nothing dispatched, nothing waited for; --macos-timeout accepted.
+C10=$(commit ten); push; : > "$WORK/macos"
+run move "$C10" --macos-timeout 3
+eq "J: no macOS run → moves" 0 "$RC"; eq "J: tag at C10" "$C10" "$(tag)"
+eq "J: dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
+C11=$(commit eleven); push
+run move "$C11" --dry-run
+eq "J: dry-run passes with no macOS run" 0 "$RC"
+run move "$C11"
+eq "J: tag at C11" 0 "$RC"; eq "J: …C11" "$C11" "$(tag)"
 
 # --- K. release.json (issue #2334) ---------------------------------------------------
 # A tree that ships the machine updater must declare what a managed machine runs.
@@ -307,8 +279,8 @@ contains "M: dispatched stable-publish.yml for the target" "$(cat "$WORK/dispatc
 contains "M: says so" "$OUT" "publish: dispatched stable-publish.yml"
 
 # --- N. the release train (issue #3141) ----------------------------------------------------
-# --precheck: the train's own jobs are its CI and its BSD half, so neither is read —
-# a pending check and no macOS run pass; nothing is pushed, dispatched or waited for.
+# --precheck: the train's own jobs are its CI, so they are not read — a pending check
+# passes; nothing is pushed, dispatched or waited for.
 C19=$(commit nineteen); push; : > "$WORK/macos"; rm -f "$WORK/dispatched"
 printf 'completed success shard 1\nin_progress null train / precheck\ncompleted failure deploy hub\n' > "$WORK/checks"
 run move "$C19" --precheck
@@ -325,37 +297,28 @@ cp "$BIN/../release.json" "$SEED/release.json"
 git -C "$SEED" add -A; git -C "$SEED" commit -qm 'release.json back'; C21=$(git -C "$SEED" rev-parse HEAD); push
 run move "$C21" --precheck
 eq "N: precheck passes once fixed" 0 "$RC"
-# A green train on the target is its BSD half; its `macOS / shard K` checks are not CI's.
+# The shared matrix's `macOS / shard K` checks are no verdict; a red `mac follow: macOS`
+# status holds nothing (one release line, #4671).
 printf 'completed success shard 1\nin_progress null macOS / shard 2\n' > "$WORK/checks"; : > "$WORK/macos"
-printf 'failure\n' > "$WORK/statuses"
+printf 'failure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
 run move "$C21"
-eq "N: a red train macOS refuses" 3 "$RC"; contains "N: reason macos: + the status" "$OUT" 'mac follow: macOS'
+eq "N: a red mac follow holds nothing" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
 case "$OUT" in *"not green: in_progress null macOS / shard 2"*) fail "N: the generic gate counted a train macOS shard" ;; esac
-printf 'success\nfailure\n' > "$WORK/statuses"; rm -f "$WORK/dispatched"
-run move "$C21"
-eq "N: a green train is the BSD half" 0 "$RC"; eq "N: tag at C21" "$C21" "$(tag)"
-contains "N: says mac-follow / a train tested it" "$OUT" "mac-follow / a release train tested it"
-case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run past a green train" ;; esac
+case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "N: dispatched a full macOS run" ;; esac
 
-# --- O. --train: this run's jobs are the CI and the BSD half (issue #3142) -----------------------
+# --- O. --train: this run's jobs are the CI (issue #3142) ----------------------------------------
 C22=$(commit twentytwo); push; : > "$WORK/macos"; : > "$WORK/statuses"; rm -f "$WORK/dispatched"
 printf 'completed failure some derived run\n' > "$WORK/checks"   # never read with --train
 printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null hub / deploy\ncompleted success macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
 eq "O: an unfinished job refuses" 3 "$RC"; contains "O: names it" "$OUT" "not green: in_progress null hub / deploy"
-printf 'completed success board\ncompleted success Linux / shard 1\ncompleted success hub / deploy\ncompleted failure macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
-run move "$C22" --train 77 --ignore-check release
-eq "O: a red macOS job refuses" 3 "$RC"; contains "O: reason macos:" "$OUT" "REFUSED — macos: train run 77"
-printf 'completed success board\ncompleted success Linux / shard 1\nin_progress null release\n' > "$WORK/jobs"
-run move "$C22" --train 77 --ignore-check release
-eq "O: no macOS job refuses" 3 "$RC"; contains "O: says so" "$OUT" "ran no macOS job"
 printf 'in_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
 eq "O: nothing finished refuses" 3 "$RC"; contains "O: says no finished job" "$OUT" "no finished job"
-printf 'completed success board\ncompleted success Linux / shard 1\ncompleted skipped hub\ncompleted success macOS / shard 1\ncompleted success macOS / shard 2\nin_progress null release\n' > "$WORK/jobs"
+printf 'completed success board\ncompleted success Linux / shard 1\ncompleted skipped hub\ncompleted failure macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
 run move "$C22" --train 77 --ignore-check release
-eq "O: an all-green train moves" 0 "$RC"; eq "O: tag at C22" "$C22" "$(tag)"
-contains "O: says the run" "$OUT" "job(s) of train run 77 green"; contains "O: macOS jobs counted" "$OUT" "2 macOS job(s) of train run 77"
+eq "O: an all-green train moves (a red macOS shard is no verdict)" 0 "$RC"; eq "O: tag at C22" "$C22" "$(tag)"
+contains "O: says the run" "$OUT" "job(s) of train run 77 green"
 case "$(cat "$WORK/dispatched" 2>/dev/null)" in *selftests-macos*) fail "O: dispatched a macOS run past a green train run" ;; esac
 run move --train abc
 eq "O: --train takes a run id" 2 "$RC"
@@ -381,69 +344,29 @@ OUT=$(FLEET_STABLE_DERIVED_RE='^selftests\.yml$' sh "$ST" move "$C23" --dry-run 
 eq "P: FLEET_STABLE_DERIVED_RE names the workflows" 3 "$RC"; contains "P: … the publish counts then" "$OUT" "not green: completed failure publish stable"
 : > "$WORK/derived"; green
 
-# --- Q. the Mac lane (issue #3868, EPIC #3863 C5) ------------------------------------------------
-# move --ref stable-macos: default target = stable; never ahead of stable, forward
-# only, the BSD half green on it; once the lane exists, stable's own move no longer
-# waits on macOS; with no lane, gate 5 holds stable as before.
+# --- Q. one release line (issue #4671) ---------------------------------------------------------
+# An older caller moving the Mac lane is told there is none and exits 0; nothing pushed.
 ltag() { git --git-dir="$BARE" rev-parse -q --verify refs/tags/stable-macos 2>/dev/null || echo none; }
 green; : > "$WORK/statuses"; rm -f "$WORK/dispatched"; : > "$WORK/dispatch_to"
-macos_green "$(tag)" 30
 S0=$(tag)
-OUT=$(env -u GITHUB_ACTIONS sh "$ST" move --ref stable-macos --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "Q: the first lane move exits 0" 0 "$RC"; eq "Q: the lane is at stable" "$S0" "$(ltag)"
-eq "Q: stable untouched" "$S0" "$(tag)"
-contains "Q: says it is at stable" "$OUT" "lane: $(git -C "$CO" rev-parse --short "$S0") is at stable"
-contains "Q: publish carries ref=stable-macos" "$(cat "$WORK/dispatched" 2>/dev/null)" "-f sha=$S0 -f ref=stable-macos"
-C24=$(commit twentyfour); push
-run move "$C24" --ref stable-macos
-eq "Q: a lane ahead of stable is refused" 3 "$RC"; contains "Q: reason M:" "$OUT" "REFUSED — M:"
-contains "Q: …says never leads" "$OUT" "never leads stable"; eq "Q: lane untouched" "$S0" "$(ltag)"
-run move "$C24" --ref stable-macos --precheck
-eq "Q: --precheck refuses it too" 3 "$RC"
-run move "$C21" --ref stable-macos
-eq "Q: a lane move backward is refused" 3 "$RC"; contains "Q: …forward only" "$OUT" "only moves FORWARD"
-# stable moves on past a red macOS: the lane carries the BSD half now
-printf '%s\tcompleted\tfailure\tpush\t31\tselftests (macOS)\n' "$C24" > "$WORK/macos"
-run move "$C24"
-eq "Q: with a lane, stable moves past a red macOS" 0 "$RC"; eq "Q: stable at C24" "$C24" "$(tag)"
-contains "Q: says the lane gates it" "$OUT" "a Mac lane exists"
-run move "$C24" --ref stable-macos
-eq "Q: …but the lane does not follow a red macOS" 3 "$RC"; contains "Q: reason macos:" "$OUT" "REFUSED — macos:"
-eq "Q: lane untouched" "$S0" "$(ltag)"
-printf 'completed success board\ncompleted success macOS / shard 1\nin_progress null release\n' > "$WORK/jobs"
-run move "$C24" --ref stable-macos --train 78 --ignore-check release
-eq "Q: a train run's green macOS moves the lane" 0 "$RC"; eq "Q: lane at C24" "$C24" "$(ltag)"
+for w in "--ref stable-macos" "--ref stable-macos --seed" "--ref stable-macos --with-stable" "--with-stable"; do
+  # shellcheck disable=SC2086  # the words are the flags
+  run move $w
+  eq "Q: $w exits 0" 0 "$RC"; contains "Q: $w says no Mac lane" "$OUT" "there is no Mac lane"
+  eq "Q: $w pushed no lane" none "$(ltag)"; eq "Q: $w left stable" "$S0" "$(tag)"
+done
+eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 run move --ref nope
-eq "Q: --ref takes stable or stable-macos" 2 "$RC"
-# no lane: gate 5 holds stable exactly as before
-git --git-dir="$BARE" update-ref -d refs/tags/stable-macos
+eq "Q: --ref takes stable" 2 "$RC"
+C24=$(commit twentyfour); push
 C25=$(commit twentyfive); push
-printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"
-run move "$C25"
-eq "Q: no lane → a red macOS refuses stable again" 3 "$RC"; contains "Q: reason macos:" "$OUT" "REFUSED — macos:"
-
-# --- R. --seed: the Mac lane's first value (issue #3869) ------------------------------------------
-# The train's stable move no longer asks macOS, so it seeds the lane — once, at stable
-# itself, never asking gate 5 (that stable passed it when it moved).
-printf '%s\tcompleted\tfailure\tpush\t33\tselftests (macOS)\n' "$C24" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
-run move "$C21" --ref stable-macos --seed
-eq "R: --seed off stable is refused" 3 "$RC"; contains "R: reason M:" "$OUT" "REFUSED — M: --seed only starts the Mac lane at stable"
-eq "R: no lane yet" none "$(ltag)"
-run move --ref stable-macos --seed
-eq "R: --seed at stable exits 0 past a red macOS" 0 "$RC"; eq "R: the lane starts at stable" "$C24" "$(ltag)"
-contains "R: says where it starts" "$OUT" "seed: no Mac lane yet"
-case "$OUT" in *"REFUSED — macos:"*|*"macos: green"*|*"macos: no run"*) fail "R: --seed asked gate 5: $OUT" ;; esac
-run move --ref stable-macos --seed
-eq "R: a second --seed exits 0" 0 "$RC"; contains "R: …says already" "$OUT" "already at"; eq "R: lane unchanged" "$C24" "$(ltag)"
-run move "$C25"
-eq "R: with the seeded lane, stable moves past a red macOS" 0 "$RC"; eq "R: stable at C25" "$C25" "$(tag)"
-eq "R: the lane stays behind" "$C24" "$(ltag)"
-run move --seed
-eq "R: --seed without --ref stable-macos is usage" 2 "$RC"
+printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"
+run move "$C25" --ref stable
+eq "Q: --ref stable moves stable past a red macOS" 0 "$RC"; eq "Q: stable at C25" "$C25" "$(tag)"
 
 # --- S. gate 9, the China real-user path (issue #4180) -------------------------------------------
 # bin/fleet-cn-probe-watch.sh leaves `cn path` on the stable it walked; red holds stable while
-# the breakage issue it names is open. The lane above carries macOS, so only gate 9 decides here.
+# the breakage issue it names is open. macOS holds nothing, so only gate 9 decides here.
 green; S25=$(tag)
 C26=$(commit twentysix); push
 printf 'failure\thttps://github.com/o/r/issues/77\t不通：卡在 codex:entry — no answer\n' > "$WORK/cnstatus"
@@ -484,19 +407,6 @@ for cls in '环境无效（cert_expired）：卡在 cert — expired' '检测出
 done
 : > "$WORK/cnstatus"
 
-# --- T. --with-stable: the Mac lane moves WITH stable (issue #4663) -------------------------------
-# The train moves the lane right after stable, onto stable only; gate 5 is not asked.
-STT=$(tag); : > "$WORK/macos"
-run move "$C28" --ref stable-macos --with-stable
-eq "T: --with-stable off stable is refused" 3 "$RC"; contains "T: reason M:" "$OUT" "REFUSED — M: --with-stable moves the Mac lane onto stable"
-run move --ref stable-macos --with-stable
-eq "T: --with-stable onto stable moves past a red macOS" 0 "$RC"; eq "T: the lane is at stable" "$STT" "$(ltag)"
-contains "T: says the lane moves with stable" "$OUT" "the lane moves with stable"
-case "$OUT" in *"REFUSED — macos:"*|*"macos: green"*|*"macos: no run"*) fail "T: --with-stable asked gate 5: $OUT" ;; esac
-run move --ref stable-macos --with-stable
-eq "T: again is a no-op" 0 "$RC"; eq "T: the lane stays at stable" "$STT" "$(ltag)"
-run move --with-stable
-eq "T: --with-stable without --ref stable-macos is usage" 2 "$RC"
 green
 
 printf 'fleet-stable-selftest OK (%d checks)\n' "$CHECKS"
