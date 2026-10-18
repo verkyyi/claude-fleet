@@ -147,6 +147,7 @@ func podRig(t *testing.T) (*harness, *fakeOps) {
 	ops := startFakeOps(t, h, pub)
 	setHubSetting(t, h.srv, SparesKey, "on")
 	setHubSetting(t, h.srv, ClustersKey, testCluster)
+	setHubSetting(t, h.srv, SpareMaxKey, "2") // the most a place keeps (the default is 1)
 	return h, ops
 }
 
@@ -399,13 +400,13 @@ func TestSparePodSettings(t *testing.T) {
 			t.Errorf("checkClusters(%q) = %q; want ok=%v", v, why, ok)
 		}
 	}
-	putSetting(t, h, SpareMaxPrefix+testCluster, "3", 200)
-	putSetting(t, h, SpareMaxPrefix+testCluster, "99", 400)
+	putSetting(t, h, SpareMaxPrefix+testCluster, "2", 200)
+	putSetting(t, h, SpareMaxPrefix+testCluster, "3", 400) // at most 2 (claude-fleet#4673)
 	set, _ := h.srv.Store.FleetSettings()
-	if got := h.srv.clusterSpareMax(testCluster, set); got != 3 {
-		t.Fatalf("clusterSpareMax = %d; want 3", got)
+	if got := h.srv.clusterSpareMax(testCluster, set); got != 2 {
+		t.Fatalf("clusterSpareMax = %d; want 2", got)
 	}
-	if got := h.srv.clusterSpareMax("other", set); got != defaultSpareMax {
+	if got := h.srv.clusterSpareMax("other", set); got != h.srv.spareMax() {
 		t.Fatalf("another cluster = %d; want fleet.spare_max's default", got)
 	}
 	for in, want := range map[string]string{"gh:12345": "gh.12345", "drill1": "drill1", ":::": ""} {

@@ -21,9 +21,6 @@
 #   cred-pool-dup       bin/fleet-cred-proxy.py pool_held / pool_resolve / store, bin/fleet-credsep.py
 #                       machine pooldup (issue #2849): a token held twice — the pool's and a
 #                       login's own accounts/<label>.hub — is seen, and folds back to ONE
-#   spare-not-tenant    bin/fleet-cred-proxy.py serve --shared (shared_stale / shared_takeover),
-#                       bin/fleet-credsep.py machine status / check (shared_unserved) (issue #4245):
-#                       a login joins while an orphaned shared proxy holds the lock
 #   cred-pool-follows-hub   bin/fleet-credsep.py machine pool-sync + bin/fleet-cred-proxy.py
 #                       pool-drop (issue #2850): the hub puts / revokes a pool token, the
 #                       pool follows in one sync (bin/fleet-node-update.py sync_pool runs it)
@@ -499,85 +496,6 @@ PY
     *) WHY="machine status shows no pool sync time"; shared_down; return 1 ;; esac
   shared_down
   WHAT="入口 put a3、吊销 a2：一轮 pool-sync 内 a3 进池（经 alpha 自己的租约）、a2 从索引和磁盘一起删掉、a1 不动；a3 剩 10 天打 WARN，machine status 显示同步时间"
-}
-
-# spare-not-tenant (issue #4245): a spare login is opened (`machine install
-# --logins <it>`) while the shared proxy running is an ORPHAN — started before
-# the machine daemon restarted, so the daemon no longer knows it. The restart the
-# join asked for never reaches it; every start the daemon makes finds the lock
-# held, printed «already running» and exited 0 (810 times on one managed Mac), and the
-# new login's every mint was «this login has not joined this machine's
-# credential proxy». Now `machine status` names it NOT SERVED, and the daemon's
-# next start sees the holder is stale (another set of logins), stops it and
-# serves everyone — the old login's credential still answers. `served` (the
-# heartbeat's cred_served, issue #4247) says no for beta, then yes.
-drill_spare_not_tenant() {
-  CAP=15   # the daemon loop's 1 s + a SIGTERM + a python start + the first mint
-  local sb me uid gid port ta tb pid1 pid2 t0 sup out rc
-  me=$(id -un); uid=$(id -u); gid=$(id -g); sb="$WORK/spare"
-  mkdir -p "$sb/daemons"
-  cred_rig spare trusted reachable || return 1
-  for L in alpha beta; do
-    mkdir -p "$sb/homes/$L/.config/claude-fleet/accounts/a1.hub" "$sb/homes/$L/.claude/fleet/bin"
-    printf '{"claudeAiOauth":{"accessToken":"sk-ant-oat-%s"}}' "$L" > "$sb/homes/$L/.config/claude-fleet/accounts/a1.hub/.credentials.json"
-  done
-  printf 'alpha:%s:%s:%s\nbeta:1999994:%s:%s\n' "$uid" "$gid" "$sb/homes/alpha" "$gid" "$sb/homes/beta" > "$sb/pw"
-  port=$(cred_deadport)
-  export FLEET_CREDSEP_ROOT_BASE="$sb/db" FLEET_CREDSEP_RUN_BASE="$sb/run" FLEET_CREDSEP_LOG_BASE="$sb/log" \
-    FLEET_CREDSEP_LIB="$sb/lib" FLEET_CREDSEP_DAEMON_DIR="$sb/daemons" FLEET_CREDSEP_ROLE="$me" \
-    FLEET_CREDSEP_SVC=0 FLEET_CREDSEP_TEST=1 FLEET_CREDSEP_PREFLIGHT=0 FLEET_CREDSEP_SUDO='' FLEET_CREDSEP_PW="$sb/pw" \
-    FLEET_CRED_SHARED_PORT="$port" FLEET_CRED_ANTHROPIC_URL="$CU/direct-anthropic"
-  spare_down() {
-    kill "$sup" 2>/dev/null; kill "$(cat "$sb/run/.shared/pid" 2>/dev/null)" "$pid1" 2>/dev/null
-    unset FLEET_CREDSEP_ROOT_BASE FLEET_CREDSEP_RUN_BASE FLEET_CREDSEP_LOG_BASE FLEET_CREDSEP_LIB FLEET_CREDSEP_DAEMON_DIR \
-      FLEET_CREDSEP_ROLE FLEET_CREDSEP_SVC FLEET_CREDSEP_TEST FLEET_CREDSEP_SUDO FLEET_CREDSEP_PW FLEET_CRED_SHARED_PORT
-  }
-  sup=''; pid1=''
-  bash "$BIN/fleet-credsep.sh" machine install --logins alpha >"$sb/install-alpha.out" 2>&1 \
-    || { WHY="machine install alpha: $(tail -2 "$sb/install-alpha.out" | tr '\n' ' ')"; spare_down; return 1; }
-  # the orphan: started once, by no one who still watches it
-  python3 -I "$sb/lib/fleet-credsep-launch.py" shared 2>>"$sb/orphan.err" &
-  printf '%s\n' "$!" >> "$WORK/cred-pids"
-  until_ok 30 test -S "$sb/run/.shared/ctl.sock" || { WHY="the shared proxy did not start: $(tail -2 "$sb/orphan.err" | tr '\n' ' ')"; spare_down; return 1; }
-  until_ok 5 test -s "$sb/run/.shared/pid"; pid1=$(cat "$sb/run/.shared/pid"); CP="$port"
-  ta=$(FLEET_CONF_DIR="$sb/homes/alpha/.config/claude-fleet" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid sa 2>&1)
-  case "$ta" in fcp1.*) ;; *) WHY="alpha's mint: $ta"; spare_down; return 1 ;; esac
-  # the spare opened: it joins, and the restart that should follow never lands
-  bash "$BIN/fleet-credsep.sh" machine install --logins beta >"$sb/install-beta.out" 2>&1 \
-    || { WHY="machine install beta: $(tail -2 "$sb/install-beta.out" | tr '\n' ' ')"; spare_down; return 1; }
-  out=$(FLEET_CRED_TEST_PEER_UID=1999994 FLEET_CONF_DIR="$sb/homes/beta/.config/claude-fleet" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid sb 2>&1)
-  case "$out" in *"has not joined"*) ;; *) WHY="the orphan served beta already? $out"; spare_down; return 1 ;; esac
-  out=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
-  case "$out" in *"NOT SERVED: beta"*) ;;
-    *) WHY="machine status does not say beta is not served: $out"; spare_down; return 1 ;; esac
-  # what the heartbeat carries (issue #4247): cred_served false for beta, true for alpha
-  bash "$BIN/fleet-credsep.sh" served --login beta >"$sb/served-beta.out" 2>&1; rc=$?
-  [ "$rc" = 3 ] || { WHY="served for beta (unserved) = exit $rc: $(cat "$sb/served-beta.out")"; spare_down; return 1; }
-  bash "$BIN/fleet-credsep.sh" served --login alpha >"$sb/served-alpha.out" 2>&1; rc=$?
-  [ "$rc" = 0 ] || { WHY="served for alpha = exit $rc: $(cat "$sb/served-alpha.out")"; spare_down; return 1; }
-  # the machine daemon's part: start it again (it lost the orphan, so it starts its own)
-  t0=$(now)
-  ( while :; do python3 -I "$sb/lib/fleet-credsep-launch.py" shared 2>>"$sb/shared.err"; sleep 1; done ) 2>/dev/null &
-  sup=$!; printf '%s\n' "$sup" >> "$WORK/cred-pids"
-  until_ok 30 sh -c 'FLEET_CRED_TEST_PEER_UID=1999994 FLEET_CONF_DIR="$1" bash "$2" mint --account a1 --sid sb 2>/dev/null | grep -q "^fcp1\."' \
-    _ "$sb/homes/beta/.config/claude-fleet" "$BIN/fleet-cred-proxy.sh" \
-    || { WHY="beta never got a credential: $(grep -v 'ignored ' "$sb/shared.err" | tail -3 | tr '\n' ' ')"; spare_down; return 1; }
-  tb=$(FLEET_CRED_TEST_PEER_UID=1999994 FLEET_CONF_DIR="$sb/homes/beta/.config/claude-fleet" bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid sb2)
-  [ "$(cred_req "$tb" "$sb/rb")" = 200 ] || { WHY="beta's request: $(cat "$sb/rb")"; spare_down; return 1; }
-  SECS=$(since "$t0")
-  ! kill -0 "$pid1" 2>/dev/null || { WHY="the orphan pid $pid1 still runs"; spare_down; return 1; }
-  grep -q "is stale" "$sb/shared.err" || { WHY="the takeover left no line: $(tail -2 "$sb/shared.err" | tr '\n' ' ')"; spare_down; return 1; }
-  [ "$(cred_req "$ta" "$sb/ra")" = 200 ] || { WHY="alpha's old credential after the takeover: $(cat "$sb/ra")"; spare_down; return 1; }
-  out=$(bash "$BIN/fleet-credsep.sh" machine status 2>&1)
-  case "$out" in *"NOT SERVED"*) WHY="still not served after the takeover: $out"; spare_down; return 1 ;; esac
-  bash "$BIN/fleet-credsep.sh" served --login beta >"$sb/served-beta.out" 2>&1; rc=$?
-  [ "$rc" = 0 ] || { WHY="served for beta after the takeover = exit $rc: $(cat "$sb/served-beta.out")"; spare_down; return 1; }
-  pid2=$(cat "$sb/run/.shared/pid")
-  sleep 2   # the loop's next starts: the holder is current now, they leave it
-  [ "$(cat "$sb/run/.shared/pid")" = "$pid2" ] && [ "$(grep -c 'took over' "$sb/shared.err")" = 1 ] \
-    || { WHY="the daemon's next starts took it over again: $(grep -c 'took over' "$sb/shared.err")"; spare_down; return 1; }
-  spare_down
-  WHAT="共享代理是守护丢了的孤儿（只服务 alpha），备用 beta 加入后重启没落地：beta 的 mint 回「has not joined」、machine status 报 NOT SERVED: beta；守护再起一份时认出占锁的是旧租户表，TERM 接管，beta 拿到凭据、请求 200，alpha 原凭据照用，之后的起动不再接管"
 }
 
 # cred-shared-restart-loop (issue #4714): a login deleted under its store (its

@@ -191,12 +191,10 @@
 #                                                   15 s alerts tick: hidden 120 · idle 240, + #4059's budget); go test
 #   trial-idle-while-opening                        tokenledger/internal/api fleet_try_slot.go (trialSlotVerdict: idle
 #                                                   from ready_at, open_slow 300 → store.RequeueTrial); go test
-#   trial-seat-no-home                              tokenledger/internal/api fleet_spare.go (deadSpares / liveFleetRows,
-#                                                   claimSpareAt's skip, healDeadSpares) + internal/store fleet_spare.go
-#                                                   (ClaimSpare / ClaimSpareFor skip); go test, when a toolchain is here
-#   spare-unserved-handed                           bin/fleet-credsep.py served (shared_unserved) → the agent's
-#                                                   credsepServed → Heartbeat.CredServed → fleet_spare.go deadSpares
-#                                                   (a live fleet the proxy does not serve counts as none); go test
+#   spare-ready-unverified                          bin/fleet-login-ready.sh (cred · home · reply, as the login) ←
+#                                                   fleet-login-new.sh 8c / fleet-login-reset.sh → the agent's readyResult →
+#                                                   tokenledger fleet_spare.go (recordAccountCheck / spareChecked) + store
+#                                                   ClaimSpare's spareCheckedSQL; the script for real, go test
 #   trial-no-subscription                           tokenledger/internal/api fleet_trial_cred.go (trialUserAllow in
 #                                                   credPolicyFor: fleet.trial.cred_allow; [] ⇒ trialHold nosub;
 #                                                   convertTrial writes the member's own list); go test
@@ -2807,45 +2805,53 @@ drill_trial_pause_not_recycled() {
   SECS=$(since "$t0")
 }
 
-# ---- trial-seat-no-home (#4234): a spare the hub held active whose fleet was
-# never live (no node reported it) was handed to a trial — 「opening」 and
-# 409 no_home until it was taken back. Now only a spare whose fleet is live is
-# handed; one unseen past spareDeadAfter is dead, skipped by the claim and
-# closed by the refill (a wash, or a remove), audited spare.dead.
-drill_trial_seat_no_home() {
-  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
+# ---- spare-ready-unverified (#4673): a spare the hub held 「ready」 could not be
+# used — no home, its proxy not serving it, no subscription — because only
+# 「separated」 and 「fleet online」 were asked. Now the open / wash ends with
+# fleet-login-ready.sh as the login (a session credential from the proxy, its
+# home up, a first reply) and the hub hands only a spare whose op passed 3/3.
+drill_spare_ready_unverified() {
+  CAP=120; local t0 tl="$ROOT/tokenledger/internal" sb sess out f; GO_RAN=0
   t0=$(now)
-  grep -q 'dead := s.deadSpareLogins(host, now)' "$tl/api/fleet_spare.go" 2>/dev/null \
-    || { WHY="a claim no longer skips the dead spares (claimSpareAt, fleet_spare.go)"; return 1; }
-  grep -q 'queued = s.healDeadSpares(m, now) || queued' "$tl/api/fleet_spare.go" 2>/dev/null \
-    || { WHY="the refill no longer closes a dead spare (healDeadSpares)"; return 1; }
-  grep -q 'rows, avail, err := s.liveFleetRows(now)' "$tl/api/fleet_entry.go" 2>/dev/null \
-    || { WHY="a home and a ready spare no longer read the same live rows (entryHomeChoices → liveFleetRows)"; return 1; }
-  c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAHomelessSpare || return 1
-  WHAT='只发 fleet 活着的备用；active 过 10 分钟仍不见 fleet 的是死备用：不算就绪、领号跳过、补池收掉并审计 spare.dead（测试按名核对在，Go 门跑它）'
-  [ "$GO_RAN" = 1 ] && WHAT='fleet 活的备用领走即成家；fleet 从没起来的备用过期后就绪 0、试用者排队不领它、补池发 remove（能回收的发 reset）、审计 spare.dead（go test）'
-  SECS=$(since "$t0")
-}
-
-# ---- spare-unserved-handed (#4247): a spare whose fleet was live but whose
-# login the machine's shared proxy did not serve (#4245) was ready all the
-# same — the trial's first word was «no session credential from the proxy».
-# Now the node says cred_served (fleet-credsep.sh served) and the hub counts a
-# spare its node says unserved as dead.
-drill_spare_unserved_handed() {
-  CAP=120; local t0 tl="$ROOT/tokenledger/internal"; GO_RAN=0
-  t0=$(now)
-  grep -q '^def served(a):' "$ROOT/bin/fleet-credsep.py" 2>/dev/null \
-    || { WHY="fleet-credsep.py has no served verb: nothing says whether the proxy serves this login"; return 1; }
-  grep -q 'credsepRun(ctx, home, script, "served")' "$tl/agent/node_credsep.go" 2>/dev/null \
-    || { WHY="the agent no longer asks fleet-credsep.sh served (credsepServed)"; return 1; }
-  grep -q 'hb.CredServed = fp.credsep, fp.served' "$tl/agent/beat_parts.go" 2>/dev/null \
-    || { WHY="the heartbeat no longer carries cred_served (beat_parts.go fill)"; return 1; }
-  grep -q '!unserved\[r.EndpointID\]' "$tl/api/fleet_spare.go" 2>/dev/null \
-    || { WHY="deadSpares no longer counts a live fleet the proxy does not serve as none"; return 1; }
-  c11_go_tests fleet_spare_dead_test.go TestTrialSeatNeverAnUnservedSpare || return 1
-  WHAT='节点上报 cred_served；fleet 活着、代理却不服务的备用算死备用：不算就绪、领号跳过、补池收掉（测试按名核对在，Go 门跑它）'
-  [ "$GO_RAN" = 1 ] && WHAT='cred_served=false 的备用就绪 0、试用者排队不领它；改报 true 或不报（旧节点）即重回就绪（go test）'
+  sb=$(mktemp -d "${TMPDIR:-/tmp}/spare-ready.XXXXXX"); sess="sparechk$$"
+  mkdir -p "$sb/root/bin" "$sb/home/.config/claude-fleet/fleets/$sess"
+  for f in "$ROOT"/bin/*; do ln -s "$f" "$sb/root/bin/"; done
+  ln -s "$ROOT/conf" "$sb/root/conf"
+  rm -f "$sb/root/bin/fleet-session-cred.sh"
+  printf '#!/bin/bash\ncase "$1" in mint) printf "direct\\t18923\\tfcp1.test\\n" ;; esac\n' > "$sb/root/bin/fleet-session-cred.sh"
+  # shellcheck disable=SC2016 # the stub's own variables
+  printf '#!/bin/bash\n[ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = fcp1.test ] && [ "${ANTHROPIC_BASE_URL:-}" = http://127.0.0.1:18923 ] || { echo "no session credential"; exit 1; }\n[ -f "$HOME/reply.fail" ] && { echo "API Error: 403 this login holds no claude account"; exit 1; }\necho ok\n' > "$sb/claude"
+  chmod +x "$sb/root/bin/fleet-session-cred.sh" "$sb/claude"
+  printf 'FLEET_SESSION=%s\n' "$sess" > "$sb/home/.config/claude-fleet/fleets/$sess/conf"
+  chk() { FLEET_CLAUDE_BIN="$sb/claude" bash "$ROOT/bin/fleet-login-ready.sh" "$(id -un)" --home "$sb/home" --root "$sb/root" --wait "$1" 2>&1; }
+  sr_down() { tmux -L "$sess" kill-server 2>/dev/null; rm -rf "${sb:?}"; }
+  # no home: the credential passed, the home did not
+  out=$(chk 0)
+  case "$out" in "ready: FAIL home: "*" cred_ok="[0-9]*) ;; *) WHY="no home, check said: $out"; sr_down; return 1 ;; esac
+  # the home up, the first reply refused
+  tmux -L "$sess" -f /dev/null new-session -d -s "$sess" -n home || { WHY="cannot start a tmux server"; sr_down; return 1; }
+  : > "$sb/home/reply.fail"
+  out=$(chk 5)
+  case "$out" in "ready: FAIL reply: "*"403"*" cred_ok="*" home_ok="[0-9]*) ;; *) WHY="no subscription, check said: $out"; sr_down; return 1 ;; esac
+  # all three
+  rm -f "$sb/home/reply.fail"
+  out=$(chk 5)
+  printf '%s' "$out" | grep -Eq '^ready: cred_ok=[0-9]+ home_ok=[0-9]+ first_reply_ok=[0-9]+$' \
+    || { WHY="a working login, check said: $out"; sr_down; return 1; }
+  sr_down
+  grep -q 'bash "$BIN/fleet-login-ready.sh" "$LOGIN"' "$ROOT/bin/fleet-login-new.sh" 2>/dev/null \
+    || { WHY="fleet-login-new.sh no longer checks the login it opened (fleet-login-ready.sh)"; return 1; }
+  grep -q 'READY_LINE' "$ROOT/bin/fleet-login-reset.sh" 2>/dev/null \
+    || { WHY="a wash no longer carries the opener's ready: line to the hub (fleet-login-reset.sh)"; return 1; }
+  grep -q 'res.Ready = readyResult(out.String())' "$tl/agent/node_accounts.go" 2>/dev/null \
+    || { WHY="the agent no longer reads the ready: line (readyResult)"; return 1; }
+  grep -q 'spareCheckedSQL("a.op_id", checked)' "$tl/store/fleet_spare.go" 2>/dev/null \
+    || { WHY="a claim no longer asks for a spare that passed its check (store.ClaimSpare)"; return 1; }
+  grep -q 's.recordAccountCheck(m.OpID, epID, res, time.Now())' "$tl/api/fleet_accounts.go" 2>/dev/null \
+    || { WHY="the hub no longer keeps a create's check (applyAccountResult → recordAccountCheck)"; return 1; }
+  c11_go_tests fleet_spare_test.go TestSpareHandedOnlyAfterThreeChecks TestSpareSettings || return 1
+  WHAT='验收脚本当真跑：没家 → FAIL home（cred_ok 在）；家起来、首句 403 → FAIL reply（cred_ok · home_ok 在）；都好 → 三个时间戳；入口只领 3/3 的备用（测试按名核对在，Go 门跑它）'
+  [ "$GO_RAN" = 1 ] && WHAT='验收脚本当真跑三种结局；首句失败 / 旧节点没验的备用就绪 0、领号不给、名册没验过 2、审计 spare.unchecked；验过 3/3 才领得到；spare_max 只收 0–2（go test）'
   SECS=$(since "$t0")
 }
 

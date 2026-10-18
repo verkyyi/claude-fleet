@@ -534,3 +534,33 @@ func TestAccountScriptTCCDisclaimed(t *testing.T) {
 		})
 	}
 }
+
+// readyResult reads fleet-login-ready.sh's last `ready:` line (claude-fleet
+// #4673): three stamps is a pass, FAIL keeps why and the steps that passed,
+// none is nil (a node older than the check).
+func TestReadyResult(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want *control.AccountCheck
+	}{
+		{"credsep: separated", nil},
+		{"    ready: FAIL cred: old\nready: cred_ok=10 home_ok=20 first_reply_ok=30\ncredsep: separated",
+			&control.AccountCheck{CredOK: 10, HomeOK: 20, FirstReplyOK: 30}},
+		{"ready: FAIL reply: claude -p exited 1: 403 forbidden cred_ok=10 home_ok=20\nreset: clean\ncredsep: separated",
+			&control.AccountCheck{CredOK: 10, HomeOK: 20, Fail: "reply: claude -p exited 1: 403 forbidden"}},
+		{"ready: FAIL home: no fleet with a home window after 300s cred_ok=10",
+			&control.AccountCheck{CredOK: 10, Fail: "home: no fleet with a home window after 300s"}},
+	} {
+		got := readyResult(tc.out)
+		switch {
+		case tc.want == nil && got != nil:
+			t.Fatalf("%q → %+v; want nil", tc.out, *got)
+		case tc.want != nil && (got == nil || *got != *tc.want):
+			t.Fatalf("%q → %+v; want %+v", tc.out, got, *tc.want)
+		}
+	}
+	if !(control.AccountCheck{CredOK: 1, HomeOK: 1, FirstReplyOK: 1}).Passed() ||
+		(control.AccountCheck{CredOK: 1, HomeOK: 1, Fail: "reply: x"}).Passed() {
+		t.Fatal("Passed is all three and no fail")
+	}
+}

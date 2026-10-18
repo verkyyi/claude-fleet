@@ -127,27 +127,15 @@ func (s *Store) SpareAccounts() ([]FleetAccount, error) {
 	return scanFleetAccounts(rows)
 }
 
-// spareSkip is the claim's " AND <col> NOT IN (?, …)" for skip, and its
-// arguments; "" for none.
-func spareSkip(col string, skip []string) (string, []any) {
-	if len(skip) == 0 {
-		return "", nil
-	}
-	args := make([]any, len(skip))
-	for i, l := range skip {
-		args[i] = l
-	}
-	return " AND " + col + " NOT IN (?" + strings.Repeat(", ?", len(skip)-1) + ")", args
-}
-
 // ClaimSpare hands the oldest ready (active) spare on hostname to the person
 // to: its principal row becomes theirs (display name set), its account row
 // with it, and one hub_audit line says so. Record-only, in one transaction.
 // to must have no principal row yet — a person already recorded takes a
 // spare through ClaimSpareFor (claude-fleet#3501). ErrNoSpare when hostname
-// has none ready. A login in skip is never handed (a dead spare, claude-fleet
-// #4234: active, but its fleet never live on the hub).
-func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time, skip ...string) (*FleetAccount, error) {
+// has none ready. Ready is active AND, with checked, its op's check passed
+// all three (claude-fleet#4673, spareCheckedSQL): a machine's spare never
+// checked is never handed. A pod (its cluster's, never checked) passes false.
+func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time, checked bool) (*FleetAccount, error) {
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
@@ -168,12 +156,11 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 		return nil, err
 	}
 	var spareID, login, name string
-	notIn, skipArgs := spareSkip("a.login", skip)
 	err = tx.QueryRow(`SELECT a.principal_id, a.login, p.login FROM fleet_accounts a
 		JOIN fleet_principals p ON p.principal_id = a.principal_id
-		WHERE a.principal_id LIKE ? AND a.hostname = ? AND a.state = ? AND a.op = 'create'`+notIn+`
+		WHERE a.principal_id LIKE ? AND a.hostname = ? AND a.state = ? AND a.op = 'create'`+spareCheckedSQL("a.op_id", checked)+`
 		ORDER BY a.updated_at, a.principal_id LIMIT 1`,
-		append([]any{spareLikePattern, hostname, AccountActive}, skipArgs...)...).Scan(&spareID, &login, &name)
+		spareLikePattern, hostname, AccountActive).Scan(&spareID, &login, &name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSpare
 	}
@@ -229,8 +216,8 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 // it is on the machine: pending (never sent) or removed. Any other state
 // leaves it theirs and answers ErrAccountState. ErrNoPrincipal when to is
 // not recorded (ClaimSpare is that road); ErrNoSpare when hostname has none
-// ready. A login in skip is never handed (claude-fleet#4234).
-func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time, skip ...string) (*FleetAccount, error) {
+// ready — checked as ClaimSpare (claude-fleet#4673).
+func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time, checked bool) (*FleetAccount, error) {
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
@@ -263,11 +250,10 @@ func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time, skip ...
 		return nil, fmt.Errorf("%w: %s already has a login on %s (%s)", ErrAccountState, pid, hostname, held)
 	}
 	var spareID, login string
-	notIn, skipArgs := spareSkip("login", skip)
 	err = tx.QueryRow(`SELECT principal_id, login FROM fleet_accounts
-		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'`+notIn+`
+		WHERE principal_id LIKE ? AND hostname = ? AND state = ? AND op = 'create'`+spareCheckedSQL("fleet_accounts.op_id", checked)+`
 		ORDER BY updated_at, principal_id LIMIT 1`,
-		append([]any{spareLikePattern, hostname, AccountActive}, skipArgs...)...).Scan(&spareID, &login)
+		spareLikePattern, hostname, AccountActive).Scan(&spareID, &login)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSpare
 	}

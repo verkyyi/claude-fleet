@@ -46,7 +46,9 @@
                                          sent: 送达 → 出结论 and the short link (claude-fleet#2893)
     fleet hub machines                   every machine: status, sessions, load, and its logins:
                                          备用 N · 已用 M / 上限 K (fleet.spares, claude-fleet#2263),
-                                         + 回收中 / 坏了 when any (claude-fleet#3501)
+                                         + 回收中 / 坏了 when any (claude-fleet#3501),
+                                         + 没验过 N: active but not checked 3/3 (claude-fleet#4673);
+                                         `accounts list` shows each spare's 验 N/3
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.spot fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.trial
@@ -375,6 +377,8 @@ def machines_main(a):
                 acct += " · 回收中 %d" % m["spare_resetting"]
             if m.get("spare_failed"):
                 acct += " · 坏了 %d" % m["spare_failed"]
+            if m.get("spare_unchecked"):
+                acct += " · 没验过 %d" % m["spare_unchecked"]
         links = m.get("links")
         print(fmt % (name, m.get("status", ""), "?" if sess is None else sess, load,
                      "-" if links is None else links, acct))
@@ -393,6 +397,15 @@ def credsep_word(detail):
 
 
 KIND_WORD = {"node": "服务节点", "client": "客户端"}
+
+
+def check_word(c):
+    """a spare's check before it is handed out (claude-fleet#4673): 验 3/3,
+    or 验 N/3 and why; "" before any answer carried one."""
+    if not c:
+        return ""
+    n = sum(1 for k in ("cred_ok", "home_ok", "first_reply_ok") if c.get(k))
+    return "验 %d/3" % n + ("" if n == 3 and not c.get("why") else " · " + (c.get("why") or "?"))
 
 
 def pair_cell(l, word=""):
@@ -439,7 +452,7 @@ def accounts_main(a):
             # opened ahead of a newcomer (claude-fleet#2263); `forget` takes the principal
             print("\nspare logins (备用):")
             for ac in spares:
-                print(fmt % (ac.get("principal_id", ""), "-", pair_cell(ac)))
+                print(fmt % (ac.get("principal_id", ""), "-", pair_cell(ac, check_word(ac.get("check")))))
         return
     if a.action == "rekey":
         if not a.principal or not a.to:

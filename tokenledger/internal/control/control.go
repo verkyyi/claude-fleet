@@ -871,15 +871,6 @@ type Heartbeat struct {
 	// merely warns (claude-fleet#4623), CredsepNot / CredsepUnknown otherwise. Absent from an agent older than
 	// #2295 — the hub reads that as not separated for a role=user person.
 	Credsep string `json:"credsep,omitempty"`
-	// CredServed says whether the proxy hands this login a credential right
-	// now (claude-fleet#4247): `fleet-credsep.sh served` — false for a tenant
-	// the machine's running shared proxy does not serve (#4245), or a login
-	// whose own proxy is down; every session's first word there is «no session
-	// credential from the proxy». The hub hands no such spare. Absent (nil)
-	// when it cannot tell — not separated, an older proxy or claude-fleet, an
-	// older agent — and then the hub holds nothing on it.
-	CredServed *bool `json:"cred_served,omitempty"`
-
 	// Gate is this machine's half of the public gate (claude-fleet#3574,
 	// EPIC #3569 C4): every conf/public-gate.tsv row judged where=node, as
 	// `fleet-gate-check.sh --local` reads them on this machine. The hub's
@@ -1302,6 +1293,27 @@ type AccountResult struct {
 	// script's `reset:` line said clean, else what it said ("dirty home,…").
 	// Absent on any other op. Only a clean, separated reset is handed out.
 	Reset string `json:"reset,omitempty"`
+	// Ready is the login's check before it is handed out (claude-fleet#4673):
+	// the script's last `ready:` line (bin/fleet-login-ready.sh). Absent from a
+	// node older than it, or a create the hub did not open — and a spare without
+	// all three is never handed out.
+	Ready *AccountCheck `json:"ready,omitempty"`
+}
+
+// AccountCheck is fleet-login-ready.sh's verdict on a login (claude-fleet
+// #4673): the epoch second each step passed — a session credential from the
+// machine's proxy, the login's home up, a first reply — 0 when it was not
+// reached, and Fail (`<step>: <why>`) when one did not pass.
+type AccountCheck struct {
+	CredOK       int64  `json:"cred_ok,omitempty"`
+	HomeOK       int64  `json:"home_ok,omitempty"`
+	FirstReplyOK int64  `json:"first_reply_ok,omitempty"`
+	Fail         string `json:"fail,omitempty"`
+}
+
+// Passed says all three steps passed.
+func (c AccountCheck) Passed() bool {
+	return c.Fail == "" && c.CredOK > 0 && c.HomeOK > 0 && c.FirstReplyOK > 0
 }
 
 // MaxLoginLen bounds a hub-generated login. macOS allows longer short names;

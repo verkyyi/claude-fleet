@@ -80,7 +80,7 @@ GET 的回答：
 | `release` | 这台跑的发布版（stable 标签所在提交） | 标签或提交，≤ 80 |
 | `components` | 各部件钉住的版本：`ccquota` `claude` `codex` `runtime` … | ≤ 32 项，名字小写，版本 `[A-Za-z0-9.+_-]` |
 | `accounts` | 这台应有的系统账号 | ≤ 64，系统登录名 |
-| `spare_accounts` | 这台（或这个集群）备好的空账号数——入口补备用的唯一来源（claude-fleet#3501）；写了 0 就是 0，没写过按 `fleet.spare_max`（默认 2），都不超过登录上限剩下的空位 | 0–32 |
+| `spare_accounts` | 这台（或这个集群）备好的空账号数——入口补备用的唯一来源（claude-fleet#3501）；写了 0 就是 0，没写过按 `fleet.spare_max`（默认 1），都不超过 2、也不超过登录上限剩下的空位（claude-fleet#4673） | 0–32（超过 2 按 2） |
 | `trust` / `trust_source` / `role` | 所在机器的信任与身份上的角色（§1） | PUT 里可带 `trust`：`trusted` / `untrusted` / `""`（去掉，读不可信）——写到这台 endpoint 加入时的机器上 |
 | `cred_relay_url` | 入口的凭据中转（`CCQUOTA_FLEET_CRED_RELAY_URL`，claude-fleet#4010）：只在机器自己的 GET 里、只在入口配了时出现；`fleet node install` 把它留在 `expected.json`，Linux 上每个开出来的账号拿它当 `FLEET_CRED_RELAY_URL`（root 的 `credsep/<login>.conf`） | 入口给，不可写；没配 = 没这个键 |
 

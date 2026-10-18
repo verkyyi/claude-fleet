@@ -924,6 +924,9 @@ func (s *Server) applyAccountResult(ctx context.Context, wire nodeWire, epID str
 		// adopts it if it is this person's.
 		detail = existsDetail + detail
 	}
+	// The login's check before it is handed out (claude-fleet#4673), kept
+	// before the answer lands so a spare is never active without it.
+	s.recordAccountCheck(m.OpID, epID, res, time.Now())
 	var applied bool
 	var err error
 	if res.Op == control.AccountReset {
@@ -1004,7 +1007,8 @@ type FleetAccountsView struct {
 	Principals []store.Principal    `json:"principals"`
 	Accounts   []store.FleetAccount `json:"accounts"`
 	// Spares are the spare logins (claude-fleet#2263), apart from anyone's;
-	// absent when there are none. `forget` takes their principal_id.
+	// absent when there are none. `forget` takes their principal_id. Each
+	// carries its op's check (claude-fleet#4673) once one was answered.
 	Spares []store.FleetAccount `json:"spares,omitempty"`
 	// Logins is each person's machine·login pairs keyed by principal_id,
 	// with the home (家) and the machine's kind marked (claude-fleet#3302).
@@ -1067,8 +1071,16 @@ func (s *Server) handleFleetAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		view := FleetAccountsView{Principals: ps, Accounts: []store.FleetAccount{}}
+		checks, err := s.Store.AccountChecks()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		for _, a := range all {
 			if store.IsSparePrincipal(a.PrincipalID) {
+				if c, ok := checks[a.OpID]; ok && a.OpID != "" {
+					a.Check = &c // its check before it is handed out (claude-fleet#4673)
+				}
 				view.Spares = append(view.Spares, a)
 			} else {
 				view.Accounts = append(view.Accounts, a)

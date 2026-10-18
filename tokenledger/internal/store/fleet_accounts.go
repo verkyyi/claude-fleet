@@ -47,7 +47,16 @@ CREATE TABLE IF NOT EXISTS fleet_accounts (
   PRIMARY KEY (principal_id, hostname),
   UNIQUE (hostname, login)
 );
-CREATE INDEX IF NOT EXISTS fleet_accounts_op ON fleet_accounts(op_id);`
+CREATE INDEX IF NOT EXISTS fleet_accounts_op ON fleet_accounts(op_id);
+CREATE TABLE IF NOT EXISTS fleet_account_checks (
+  op_id          TEXT PRIMARY KEY,
+  op             TEXT NOT NULL DEFAULT '',
+  cred_ok        TEXT NOT NULL DEFAULT '',
+  home_ok        TEXT NOT NULL DEFAULT '',
+  first_reply_ok TEXT NOT NULL DEFAULT '',
+  why            TEXT NOT NULL DEFAULT '',
+  checked_at     TEXT NOT NULL
+);`
 
 // Account states.
 //
@@ -92,6 +101,9 @@ type FleetAccount struct {
 	Detail      string    `json:"detail,omitempty"`
 	RequestedAt time.Time `json:"requested_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// Check is its op's check before it is handed out (claude-fleet#4673):
+	// filled only by the operator's spare list, never by a scan.
+	Check *AccountCheck `json:"check,omitempty"`
 }
 
 // Managed reports whether the hub manages this login (it opened, adopted or

@@ -29,11 +29,6 @@
 #                                           1 not separated (credentials readable) ·
 #                                           4 separated, but the row warns — never the
 #                                           hub's «not» (issue #4623)
-#   fleet-credsep.sh served                 does the proxy hand this login a
-#                                           credential now (issue #4247): exit 0
-#                                           yes · 3 no (the shared proxy does not
-#                                           serve it, or its own is down) · 2 cannot
-#                                           tell — the heartbeat's cred_served
 #   fleet-credsep.sh check --fix            and first move a root agent's log out of
 #                                           the login's home (issue #2296; sudo once —
 #                                           an admin: sudo bash … check --fix --login X)
@@ -289,7 +284,6 @@ case "$cmd" in
       [ "$(id -u)" = 0 ] && exit 0     # root reads every store: the check is the login's to run
     fi
     py check --conf-dir "$CONF" ;;
-  served) py served --conf-dir "$CONF" ;;
   rootlogs) py rootlogs ;;
   apply)
     dry=''; [ "${1:-}" = --dry-run ] && dry=--dry-run

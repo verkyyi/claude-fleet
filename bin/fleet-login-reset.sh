@@ -60,7 +60,8 @@
 # stop.log / rejoin.log (each child's steps stamped) and aside.log.
 #
 # The run ends with TWO lines the hub reads (EPIC #3500 convention 9), a kept
-# token's `node: kept …` line before them (issue #4195):
+# token's `node: kept …` line and the opener's `ready: …` check (issue #4673)
+# before them (issue #4195):
 #     reset: clean | reset: dirty <category>,…
 #     credsep: separated | credsep: <anything else>
 # A phase that fails is `reset: dirty <phase>` (stop · wash · check · rejoin).
@@ -157,11 +158,12 @@ case "$ARCHIVE_DIR/" in "$H/"*) refuse "archiving '$H' into itself ($ARCHIVE_DIR
 show() { [ "$ROOTRUN" = 0 ] || [ "${1:-}" != sudo ] || [ "${2:-}" = -u ] || shift
   local q; q=$(printf '%q ' "$@"); printf '  $ %s\n' "${q% }"; }
 step() { printf '\n[%s] %s\n' "$1" "$2"; }
-CREDSEP_LINE='credsep: not reached' NODE_LINE=''
+CREDSEP_LINE='credsep: not reached' NODE_LINE='' READY_LINE=''
 # verdict <reset verdict> <exit>: the two last lines, then out
 verdict() {
   timing_line
   [ -z "$NODE_LINE" ] || printf '\n%s' "$NODE_LINE"
+  [ -z "$READY_LINE" ] || printf '\n%s' "$READY_LINE"   # the opener's check (issue #4673)
   printf '\n%s\n%s\n' "reset: $1" "$CREDSEP_LINE"
   exit "$2"
 }
@@ -561,9 +563,11 @@ if [ "$DONE_REJOIN" = 0 ]; then
     cp "$NOUT" "$OPDIR/rejoin.log" 2>/dev/null || :
     L=$(sed -n 's/^\(credsep: .*\)$/\1/p' "$NOUT" | tail -n 1)
     [ -z "$L" ] || CREDSEP_LINE=$L
+    READY_LINE=$(sed -n 's/^ *\(ready: .*\)$/\1/p' "$NOUT" | tail -n 1)
     lap rejoin
     [ "$rc" = 0 ] || failed rejoin "fleet-login-new.sh --recycle failed (exit $rc, above)"
     opput credsep "$CREDSEP_LINE" rejoin
+    [ -z "$READY_LINE" ] || opput ready "$READY_LINE" rejoin
     if [ "$KEEP_NODE" = 1 ]; then
       grep -q 'node: kept' "$NOUT" || failed rejoin "the opener did not put the kept node token back (no 'node: kept' above)"
       NODE_LINE="node: kept (root-held token, no re-join)"
@@ -574,7 +578,7 @@ if [ "$DONE_REJOIN" = 0 ]; then
   fi
 else
   printf '\n[4] (done in this op: washed at %s, set up again)\n' "$SINCE"
-  NODE_LINE=$(opget node)
+  NODE_LINE=$(opget node) READY_LINE=$(opget ready)
 fi
 [ "$APPLY" = 1 ] || { printf '\n%s: dry run complete\n' "$PROG"; exit 0; }
 verdict clean 0

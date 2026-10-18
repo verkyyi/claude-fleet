@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -21,7 +22,8 @@ import (
 //   - How many: per machine (or cluster — a place is one hostname on the
 //     roster, whatever stands behind it), the machine's own desired state
 //     spare_accounts when the operator wrote one, else fleet.spare_max
-//     (default 2, claude-fleet#3501) — and never more than
+//     (default 1, at most 2 — claude-fleet#4673; either way never above
+//     spareMaxCeiling) — and never more than
 //     fleet.node_user_cap.<machine> (default 10) − the logins already handed
 //     out there. A spare runs no session and holds no subscription; measured
 //     on mac-b (2026-10-08, idle fleet logins zx / vincent / erin) one costs
@@ -52,16 +54,20 @@ import (
 //     which the newcomer can read a token. No ready spare, or the operator's
 //     assign with own_name: their own login is opened as before, and the
 //     doors say 「正在开」 with its ETA.
-//   - Ready is not just active (claude-fleet#4234): a spare is handed only
-//     while the hub can make a home of it — its fleet registered and present
-//     on a node that is not lost, the rows entryHomeChoices reads. An active
-//     spare the hub has still not seen live spareDeadAfter after its open or
-//     wash answered, on a machine whose node is online, is dead: never
-//     claimed, not counted ready, and the refill washes it (a reset re-joins
-//     it and brings its fleet up) — or removes it where the machine cannot
-//     recycle, and opens a new one. (On 2026-10-14 a trial was handed one held
-//     active for six days with no node of its own: 「opening」 until it was
-//     taken back, BREAK-IT trial-seat-no-home.)
+//   - Ready is checked, not inferred (claude-fleet#4673, BREAK-IT
+//     spare-ready-unverified): the open or wash ends with bin/fleet-login-ready.sh
+//     on the machine — a session credential from the machine's proxy, the
+//     login's home up, a first reply — and the hub keeps the time each step
+//     passed (store.AccountCheck, keyed by the op). A spare is handed only while
+//     its op passed all three (store.ClaimSpare's spareCheckedSQL); one that did
+//     not is held, never ready, its why on the roster and the account list.
+//     One with no check at all (opened before the check existed) is washed once
+//     — or removed where the machine cannot recycle — so the next answer checks
+//     it; a create whose check failed is washed once more, a wash whose check
+//     failed is left for the operator. A pod is its cluster's (destroyed whole,
+//     never washed) and is never judged here. (Before this the hub guessed:
+//     「not seen live 10 minutes after its open」 — and still handed out spares
+//     with no home, no proxy tenancy or no subscription, 2026-10-14.)
 //   - A spare is nobody in every people, budget and usage view
 //     (store.Principals leaves it out).
 //
@@ -77,28 +83,26 @@ const (
 	NodeUserCapPrefix = "fleet.node_user_cap."
 )
 
-// spareMaxCeiling bounds fleet.spare_max; defaultNodeUserCap is a machine's
-// login cap when fleet.node_user_cap.<machine> is unset.
+// defaultNodeUserCap is a machine's login cap when fleet.node_user_cap.<machine>
+// is unset.
 const (
-	spareMaxCeiling    = 20
-	defaultSpareMax    = 2
+	defaultSpareMax    = 1
 	defaultNodeUserCap = 10
 )
+
+// spareMaxCeiling bounds fleet.spare_max and every place's count: at most two
+// a machine (claude-fleet#4673). A variable so tests that seat several people
+// on one machine can move it.
+var spareMaxCeiling = 2
 
 // spareScanEvery is how often a beat may run the refill scan. A variable so
 // tests can move it.
 var spareScanEvery = 30 * time.Second
 
-// spareDeadAfter is how long an active spare may go unseen as a live fleet
-// before it is dead (claude-fleet#4234): its open / wash answered, its fleet
-// comes up off the clock (fleet-login-bootstrap.sh, about a minute). A
-// variable so tests can move it.
-var spareDeadAfter = 10 * time.Minute
-
 func checkSpareMax(_ *Server, v string) (string, string) {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
 	if err != nil || n < 0 || n > spareMaxCeiling {
-		return "", SpareMaxKey + " is an integer 0–" + strconv.Itoa(spareMaxCeiling) + ", or \"\" for the default (2)"
+		return "", SpareMaxKey + " is an integer 0–" + strconv.Itoa(spareMaxCeiling) + ", or \"\" for the default (" + strconv.Itoa(defaultSpareMax) + ")"
 	}
 	return strconv.Itoa(n), ""
 }
@@ -141,9 +145,10 @@ type spareMachine struct {
 	Failed    bool // a spare's create failed
 	Resetting int  // spares being washed for the next person (never ready)
 	FailedN   int  // spares that failed (never ready)
-	Dead      int  // active spares whose fleet is not live (never ready, claude-fleet#4234)
+	Unchecked int  // active spares whose check did not pass (never ready, claude-fleet#4673)
 	spares    []store.FleetAccount
-	dead      []store.FleetAccount
+	unchecked []store.FleetAccount
+	checks    map[string]store.AccountCheck // by op_id
 }
 
 func (m *spareMachine) aim(max int) {
@@ -175,20 +180,16 @@ func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, err
 	if err != nil {
 		return nil, err
 	}
-	dead := map[string]bool{}
-	if ds, err := s.deadSpares(time.Now()); err == nil {
-		for _, a := range ds {
-			dead[a.PrincipalID+"\x00"+strings.ToLower(a.Hostname)] = true
-		}
-	} else {
-		log.Printf("fleet: spares: dead ones: %v", err)
+	checks, err := s.Store.AccountChecks()
+	if err != nil {
+		return nil, err
 	}
 	out := map[string]*spareMachine{}
 	get := func(host string) *spareMachine {
 		k := strings.ToLower(host)
 		m := out[k]
 		if m == nil {
-			m = &spareMachine{Cap: nodeUserCap(host, settings)}
+			m = &spareMachine{Cap: nodeUserCap(host, settings), checks: checks}
 			out[k] = m
 		}
 		return m
@@ -212,9 +213,9 @@ func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, err
 			continue
 		}
 		switch {
-		case a.State == store.AccountActive && dead[a.PrincipalID+"\x00"+strings.ToLower(a.Hostname)]:
-			m.Dead++
-			m.dead = append(m.dead, a)
+		case a.State == store.AccountActive && !s.spareChecked(a, checks):
+			m.Unchecked++
+			m.unchecked = append(m.unchecked, a)
 		case a.State == store.AccountActive:
 			m.Ready++
 		case a.State == store.AccountFailed:
@@ -238,8 +239,8 @@ func (s *Server) sparePicture(machines ...string) (map[string]*spareMachine, err
 }
 
 // desiredSpares is, per machine (lower-cased), the spare_accounts its desired
-// state names (claude-fleet#3501) — the one per-machine source, ahead of
-// fleet.spare_max. A machine whose desired state never wrote the key is not
+// state names (claude-fleet#3501), at most spareMaxCeiling — the one
+// per-machine source, ahead of fleet.spare_max. A machine whose desired state never wrote the key is not
 // in it; 0 written is 0. Several endpoints of one machine: the newest write.
 func (s *Server) desiredSpares() map[string]int {
 	nodes, err := s.Store.Nodes()
@@ -266,6 +267,9 @@ func (s *Server) desiredSpares() map[string]int {
 		v := *body.Spares
 		if v < 0 {
 			v = 0
+		}
+		if v > spareMaxCeiling {
+			v = spareMaxCeiling // a machine keeps at most two (claude-fleet#4673)
 		}
 		out[k], at[k] = v, d.UpdatedAt
 	}
@@ -344,10 +348,11 @@ func (s *Server) replenishSpares(now time.Time, force bool) bool {
 	queued := s.replenishClusterSpares(now)
 	for _, m := range pic {
 		queued = s.shrinkSpares(m, now) || queued
-		queued = s.healDeadSpares(m, now) || queued
 	}
 	for _, host := range fit {
 		m := pic[strings.ToLower(host)]
+		// only where the machine is up to answer the wash (claude-fleet#4673)
+		queued = s.healUncheckedSpares(m, now) || queued
 		if m.Failed {
 			continue // the operator looks at why first (fleet hub accounts)
 		}
@@ -415,8 +420,8 @@ func (s *Server) shrinkSpares(m *spareMachine, now time.Time) bool {
 }
 
 // liveFleetRows is every fleet a home can be made of right now (claude-fleet
-// #4234 — entryHomeChoices and a ready spare read the same rows): registered
-// and present, an os user that is no fleet admin, its node not lost.
+// #4234, entryHomeChoices): registered and present, an os user that is no
+// fleet admin, its node not lost.
 func (s *Server) liveFleetRows(now time.Time) ([]store.FleetRow, map[string]string, error) {
 	rows, err := s.Store.Fleets()
 	if err != nil {
@@ -436,104 +441,90 @@ func (s *Server) liveFleetRows(now time.Time) ([]store.FleetRow, map[string]stri
 	return out, avail, nil
 }
 
-// deadSpares is every dead spare (claude-fleet#4234, BREAK-IT
-// trial-seat-no-home): active for longer than spareDeadAfter, on a machine
-// one of whose nodes is online right now — so the hub would see its fleet if
-// it had one — with no live fleet of its login there. A live fleet whose node
-// says the proxy does not serve its login counts as none (claude-fleet#4247,
-// BREAK-IT spare-unserved-handed). A pod is its cluster's
-// (destroyed whole, never washed) and is never judged here.
-func (s *Server) deadSpares(now time.Time) ([]store.FleetAccount, error) {
-	spares, err := s.Store.SpareAccounts()
-	if err != nil || len(spares) == 0 {
-		return nil, err
+// spareChecked says a's op passed its check (claude-fleet#4673) — the hub's
+// read of what store.ClaimSpare's spareCheckedSQL asks. A pod is its
+// cluster's and never checked here: it is ready as active.
+func (s *Server) spareChecked(a store.FleetAccount, checks map[string]store.AccountCheck) bool {
+	if isUserPodName(a.Hostname) || s.isCluster(a.Hostname) {
+		return true
 	}
-	live, avail, err := s.liveFleetRows(now)
-	if err != nil {
-		return nil, err
-	}
-	nodes, err := s.Store.Nodes()
-	if err != nil {
-		return nil, err
-	}
-	// A login its node says the proxy does not serve (claude-fleet#4247) has a
-	// fleet but no credential: every session's first word is «no session
-	// credential from the proxy». Unsaid (an older node, cannot tell) holds
-	// nothing.
-	unserved := map[string]bool{}
-	for _, n := range nodes {
-		var hb control.Heartbeat
-		if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil && hb.CredServed != nil && !*hb.CredServed {
-			unserved[n.EndpointID] = true
-		}
-	}
-	var out []store.FleetAccount
-	for _, a := range spares {
-		if a.State != store.AccountActive || a.Op != control.AccountCreate || now.Sub(a.UpdatedAt) < spareDeadAfter ||
-			isUserPodName(a.Hostname) || s.isCluster(a.Hostname) {
-			continue
-		}
-		online := false
-		for _, n := range nodes {
-			if avail[n.EndpointID] == "online" && sameMachine(a.Hostname, n.Hostname) {
-				online = true
-				break
-			}
-		}
-		if !online {
-			continue
-		}
-		seen := false
-		for _, r := range live {
-			if r.OSUser == a.Login && sameMachine(r.Hostname, a.Hostname) && !unserved[r.EndpointID] {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			out = append(out, a)
-		}
-	}
-	return out, nil
+	c, ok := checks[a.OpID]
+	return ok && c.Passed()
 }
 
-// deadSpareLogins is the logins of host's dead spares — what a claim there
-// skips.
-func (s *Server) deadSpareLogins(host string, now time.Time) []string {
-	ds, err := s.deadSpares(now)
-	if err != nil {
-		log.Printf("fleet: spares: dead ones on %s: %v", host, err)
-		return nil
+// noCheckWhy is a check row for an answer that carried none: a node older than
+// bin/fleet-login-ready.sh (claude-fleet#4673).
+const noCheckWhy = "the node ran no check before handing it out (a node older than claude-fleet#4673)"
+
+// recordAccountCheck keeps the check of a create's or a wash's answer, before
+// the answer is applied — so a spare is never active without its check. Only
+// for the op's own node; an answer that carried none is recorded as such.
+func (s *Server) recordAccountCheck(opID, epID string, res control.AccountResult, now time.Time) {
+	if !res.OK || (res.Op != control.AccountCreate && res.Op != control.AccountReset) {
+		return
 	}
-	var out []string
-	for _, a := range ds {
-		if sameMachine(a.Hostname, host) {
-			out = append(out, a.Login)
+	a, err := s.Store.AccountByOp(opID)
+	if err != nil || a.EndpointID != epID {
+		return // stale or foreign: nothing of it is applied either
+	}
+	c := store.AccountCheck{OpID: opID, Op: res.Op, CheckedAt: now, Why: noCheckWhy}
+	if r := res.Ready; r != nil {
+		c.Why = r.Fail
+		for _, f := range []struct {
+			sec int64
+			to  **time.Time
+		}{{r.CredOK, &c.CredOK}, {r.HomeOK, &c.HomeOK}, {r.FirstReplyOK, &c.FirstReplyOK}} {
+			if f.sec > 0 {
+				t := time.Unix(f.sec, 0).UTC()
+				*f.to = &t
+			}
+		}
+		if c.Why == "" && c.Steps() < 3 {
+			c.Why = fmt.Sprintf("the check passed %d of 3 steps", c.Steps())
 		}
 	}
-	return out
+	if err := s.Store.RecordAccountCheck(c); err != nil {
+		log.Printf("fleet: check of %s on %s (op %s): %v", a.Login, a.Hostname, opID, err)
+		return
+	}
+	if !c.Passed() && store.IsSparePrincipal(a.PrincipalID) {
+		log.Printf("fleet: spares: %s on %s did not pass its check (%d/3): %s — not handed out", a.Login, a.Hostname, c.Steps(), c.Why)
+		_ = s.Store.HubAudit("hub", "spare.unchecked", a.Login, "held", fmt.Sprintf("%s: %d/3 — %s", a.Hostname, c.Steps(), c.Why), now)
+	}
 }
 
-// healDeadSpares closes m's dead spares: a wash where the machine's admin can
-// recycle (a reset re-joins the login and brings its fleet up; a clean answer
-// makes it a ready spare again), else a remove the refill replaces. One
-// hub_audit spare.dead line each. It reports whether anything was queued.
-func (s *Server) healDeadSpares(m *spareMachine, now time.Time) bool {
+// healUncheckedSpares washes m's spares that never had a check (opened before
+// it existed) — or removes them where the machine's admin cannot recycle, so
+// the refill opens a checked one — and washes once more a create whose check
+// failed. A wash whose check failed, or an answer from a node that runs no
+// check, is left for the operator (the roster says why). One hub_audit
+// spare.recheck line each. It reports whether anything was queued.
+func (s *Server) healUncheckedSpares(m *spareMachine, now time.Time) bool {
 	queued := false
-	for _, a := range m.dead {
-		req, how := s.Store.RequestAccountRemoval, "removing it (this machine's admin cannot recycle)"
-		if _, ok := s.nodes.recyclerFor(a.Hostname); ok {
-			req, how = s.Store.RequestAccountReset, "washing it (a reset re-joins it and brings its fleet up)"
+	for _, a := range m.unchecked {
+		c, checked := m.checks[a.OpID]
+		_, recycle := s.nodes.recyclerFor(a.Hostname)
+		req, how := s.Store.RequestAccountRemoval, "removing it (this machine's admin cannot recycle; the refill opens a checked one)"
+		switch {
+		case !checked && recycle, checked && c.Op == control.AccountCreate && c.Why != noCheckWhy && recycle:
+			req, how = s.Store.RequestAccountReset, "washing it (the wash checks it again)"
+		case !checked:
+		default:
+			continue
 		}
 		if err := req(a.PrincipalID, a.Hostname, now); err != nil {
 			if !errors.Is(err, store.ErrAccountState) {
-				log.Printf("fleet: spares: heal %s on %s: %v", a.Login, a.Hostname, err)
+				log.Printf("fleet: spares: recheck %s on %s: %v", a.Login, a.Hostname, err)
 			}
 			continue
 		}
-		why := "active since " + a.UpdatedAt.UTC().Format(time.RFC3339) + " but its fleet is not live on the hub, or the proxy serves its login no credential — " + how
-		log.Printf("fleet: spares: %s on %s is dead: %s", a.Login, a.Hostname, why)
-		_ = s.Store.HubAudit("hub", "spare.dead", a.Login, "queued", a.Hostname+": "+why, now)
+		why := "never checked"
+		if checked {
+			why = "its check failed: " + c.Why
+		}
+		why += " — " + how
+		log.Printf("fleet: spares: %s on %s: %s", a.Login, a.Hostname, why)
+		_ = s.Store.HubAudit("hub", "spare.recheck", a.Login, "queued", a.Hostname+": "+why, now)
 		queued = true
 	}
 	return queued
@@ -579,30 +570,30 @@ func (s *Server) claimSpareOn(principal, displayName, actor, host string, now ti
 func (s *Server) claimSpareAt(principal, displayName, actor, host string, now time.Time) *store.FleetAccount {
 	var a *store.FleetAccount
 	var err error
-	// A dead spare is never handed (claude-fleet#4234): no home can be made
-	// of it, and the refill is closing it.
-	dead := s.deadSpareLogins(host, now)
+	// Only a checked spare is handed (claude-fleet#4673): the store's claim
+	// asks for it — but a pod's, which is its cluster's and never checked.
+	checked := !isUserPodName(host) && !s.isCluster(host)
 	switch _, perr := s.Store.Principal(principal); {
 	case errors.Is(perr, store.ErrNoPrincipal):
-		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now, dead...)
+		a, err = s.Store.ClaimSpare(host, principal, s.spareDisplayName(principal, displayName), actor, now, checked)
 		switch {
 		case errors.Is(err, store.ErrRekeyTarget):
 			// Recorded between the two reads: the recorded person's road.
-			a, err = s.Store.ClaimSpareFor(host, principal, actor, now, dead...)
+			a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 		case errors.Is(err, store.ErrSpareNameHeld):
 			// A recycled spare whose name a person's record still holds
 			// (claude-fleet#3504): record them under a name of their own,
 			// then hand them its login.
 			if _, err = s.Store.EnsurePrincipal(principal, s.spareDisplayName(principal, displayName),
 				control.MaxLoginLen, control.ValidLogin, now); err == nil {
-				a, err = s.Store.ClaimSpareFor(host, principal, actor, now, dead...)
+				a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 			}
 		}
 	case perr != nil:
 		log.Printf("fleet: claim a spare on %s for %s: %v", host, principal, perr)
 		return nil
 	default:
-		a, err = s.Store.ClaimSpareFor(host, principal, actor, now, dead...)
+		a, err = s.Store.ClaimSpareFor(host, principal, actor, now, checked)
 	}
 	switch {
 	case errors.Is(err, store.ErrNoSpare), errors.Is(err, store.ErrAccountState):
@@ -696,6 +687,8 @@ func (s *Server) stampSpares(snap *NodesSnapshot) {
 		mv.Spare, mv.LoginsUsed, mv.LoginCap = &ready, &used, &cap
 		resetting, failed, target := m.Resetting, m.FailedN, m.Target
 		mv.SpareResetting, mv.SpareFailed, mv.SpareTarget = &resetting, &failed, &target
+		unchecked := m.Unchecked
+		mv.SpareUnchecked = &unchecked
 	}
 }
 
