@@ -576,7 +576,12 @@ one-off drill / audit records do not go in the repo (issue #3576).
   window with no issue). `fleet-role-take-selftest.sh`, BREAK-IT `role-taken-twice`.
 - **A role's text is its ONE definition: `agents/<role>.md`** (issue #2782, EPIC
   #2781 C1). orchestrator · steward, in Claude Code's subagent file format (model ·
-  effort · … + the body); `bin/fleet-role.py get|body|prompt|sha <role>` is the one
+  effort · … + the body). **The orchestrator is a session template now** (issue
+  #4335, EPIC #4333 C2): `conf/agent-defaults/claude/agents/orchestrator.md`, shipped
+  into `~/.claude/agents` like fleet-worker, its body the session's system prompt
+  (a compaction keeps it — no seat, no state hook), `fleet: reap: keep`;
+  `/fleet-orchestrate` only opens one (`dash-raw-session.sh --no-repo --as
+  orchestrator`), and `fleet-role.py` reads it there when `agents/` has none; `bin/fleet-role.py get|body|prompt|sha <role>` is the one
   reader, and `prompt` (the body + the role's rule-table rows) is what the plugins'
   `skills/*/role.md` copy byte for byte (`fleet-role-selftest.sh` B) — the text a
   session that takes the role reads. Nothing launches a session from it any more:

@@ -1,6 +1,6 @@
 {
   "name": "fleet-orchestrate",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Optional Fleet orchestration role and skills (the dispatch tools ship with the core, issue #4334). Never installed or started by default; native Codex manages its conversation lifecycle.",
   "author": {
     "name": "verkyyi",
