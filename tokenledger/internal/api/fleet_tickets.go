@@ -74,6 +74,58 @@ func ticketRefMatches(ref, repo, number string) bool {
 	return ref == "gh:"+repo+"#"+number || ref == "hub:"+repo+"#"+number
 }
 
+// checkTicketBackend refuses a ticket_ref whose backend is not where the repo's
+// tickets live (claude-fleet#4654; EPIC #4390: a ref keeps backend, repo and
+// number, and a hub number is never read as a GitHub one). The hub's word is
+// the repo's authority record once it has one (legacy_tickets: hub ⇒ hub: only;
+// github ⇒ gh:, or hub: for a ticket the adopt road moved here), else its own
+// ticket rows: the row's backend when it holds (repo, N), else hub: is refused
+// (no such hub ticket) and gh: is refused for a repo whose tickets are the hub's.
+func (s *Server) checkTicketBackend(ref, repo, number string) error {
+	bad := fault("INVALID_ARGUMENT", "ticket_ref backend does not match where this repo's tickets live")
+	backend, _, ok := strings.Cut(ref, ":")
+	if !ok || !ticketRefMatches(ref, repo, number) {
+		return fault("INVALID_ARGUMENT", "ticket_ref must explicitly match the accepted repo and issue")
+	}
+	a, err := s.Store.RepoAuthority(repo)
+	if err != nil {
+		return err
+	}
+	switch a.LegacyTickets {
+	case "hub":
+		if backend != store.TicketHub {
+			return bad
+		}
+		return nil
+	case "github":
+		if backend == store.TicketGitHub {
+			return nil
+		}
+		for _, m := range a.Mappings {
+			if m.To == ref {
+				return nil
+			}
+		}
+		return bad
+	}
+	n, err := strconv.ParseInt(number, 10, 64)
+	if err != nil {
+		return bad
+	}
+	row, repoHub, err := s.Store.TicketBackends(repo, n)
+	switch {
+	case err != nil:
+		return err
+	case row != "":
+		if row != backend {
+			return bad
+		}
+	case backend == store.TicketHub || repoHub:
+		return bad
+	}
+	return nil
+}
+
 func (c ticketCaller) sees(t store.FleetTicket) bool {
 	return c.all || (c.owner != "" && t.Owner == c.owner)
 }
