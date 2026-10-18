@@ -117,7 +117,7 @@ norm_repo_arg() {
 #      conf dir is ARCHIVED, never deleted, to
 #      $FLEET_CONF_DIR/archive/<from>-folded-into-<sess without fleet->-<YYYYMMDD>.
 #   4. every store keyed by <from> OUTSIDE its conf dir (failover requests, the
-#      warm-pool dir, hub visits, caches) is archived next to the conf or deleted —
+#      warm-pool dir, caches) is archived next to the conf or deleted —
 #      fold_side below; the plan lists each kind as a `side:` line (issue #1014).
 # --dry-run prints the plan and stops; a real run prints the SAME plan, then acts.
 # Re-running after a partial fold is safe: an already-hosted repo is left as is,
@@ -222,7 +222,6 @@ fold_count() {
 #     pool      fleets/<from>-pool/ — the warm pool's restore snapshot. The pool
 #               itself re-keys on its own: <sess>'s pool serves the repo (#797).
 #     restore   the legacy restore/<from>.map and restore/<from>-pool.map.
-#     hub       logs/hub-visits-<from>.log — trips to a hub that no longer exists.
 #   delete   cache — $FLEET_C/global/*<from> runtime state (dash toggles, spawn
 #            debounce, quotawatch probe health) with nothing to preserve.
 fold_side() {
@@ -248,8 +247,6 @@ PY
   for p in "$FLEET_CONF_DIR/restore/$f.map" "$FLEET_CONF_DIR/restore/$f-pool.map"; do
     [ -f "$p" ] && printf 'archive\trestore\t%s\n' "$p"
   done
-  p="${FLEET_HUB_VISITS_LOGDIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs}/hub-visits-$(printf '%s' "$f" | tr -c 'A-Za-z0-9._-' '_').log"
-  [ -f "$p" ] && printf 'archive\thub\t%s\n' "$p"
   for p in "$g/dash_view_$f" "$g/dash_fold_rows_$f" "$g/backlog_show_bound_$f" \
            "$g/spawn_last_ms_$f" "$g/quotawatch.modelcap.$f" "$g/quotawatch.probe.trace.$f" \
            "$g/dash_fold_landed_$f" "$g/dash_fold_landed_$f".*; do
@@ -266,7 +263,6 @@ fold_side_plan() {
           failover) why='failover request(s) — archived, never reconciled once its windows are gone' ;;
           pool)     why="warm-pool dir fleets/$FROM-pool — archived; $SESS's own pool serves the repo" ;;
           restore)  why='legacy restore map(s) — archived' ;;
-          hub)      why='hub-visits log — archived' ;;
           *)        why="runtime cache file(s) under $FLEET_C/global — deleted" ;;
         esac
         printf '  side:    %-7s %s %s\n' "$a" "$n" "$why"

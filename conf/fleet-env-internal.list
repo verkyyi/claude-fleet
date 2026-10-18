@@ -437,8 +437,6 @@ FLEET_HISTORY_LEDGER               path: state/log location override (fleet-hist
 FLEET_HOST                         doc: the machine's 承载 switch in fleet.conf [common], written by `fleet host on|off` (fleet-host.sh) — read as the orchestrator's default (#1957)
 FLEET_HOST_TUNE_MAXFILES_PLIST     seam: the maxfiles LaunchDaemon plist path (fleet-host-tune.sh)
 FLEET_HUB                          handoff: marks the hub pane (operator seat), set at hub spawn
-FLEET_HUB_VISITS_LOGDIR            path: state/log location override (fleet-hub-visits.sh)
-FLEET_HUB_VISITS_MAX               knob: internal pacing/limit, safe in-code default (fleet-hub-visits.sh)
 FLEET_INSTALL_BIN                  path: where `curl <hub>/install | sh` (fleet-install.sh) puts the fleet client — ~/.local/bin by default; the installer runs before any fleet.conf exists (#1470)
 FLEET_INSTALL_BREW_PREFIX          seam: brew prefix substituted into plists (fleet-install-apply.sh)
 FLEET_INSTALL_CLAUDE               seam: an injectable command/path for tests (fleet-install-apply.sh)

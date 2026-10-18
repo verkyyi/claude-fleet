@@ -270,7 +270,7 @@ ok "E3 the silenced job still runs (side effects land; only the chatter is dropp
 # E4. THE OTHER ROUTE: a job that prints NOTHING but exits nonzero opens the very
 #     same overlay (tmux appends its own "did not exit successfully"). fleet_bg's
 #     `|| :` has to swallow that too — a backgrounded job has no tail of its own to
-#     put an `exit 0` on, the way dash-zoom.sh / hub-zoom.sh do.
+#     put an `exit 0` on, the way the retired dash-zoom.sh / hub-zoom.sh did.
 tmux run-shell -b -t "$paneA" "( exit 3
 ) >/dev/null 2>&1"
 settle "$paneA" 1 || fail "E4 a silenced-but-FAILING run-shell should have opened the view (the second route this guards) — got '$(in_mode "$paneA")'"

@@ -3537,14 +3537,6 @@ if n:
     ?*) pass state "sleep judgments (${_dsince:+since the switch, }last hour): $sdist" ;;
   esac
 fi
-# Trips back to the hub over the last day, per fleet, with the top two causes
-# (issue #897 — the meter EPIC #894 is judged by). Info only, like the line above:
-# a count is never a pass/fail. Silent until a hub-visits log exists.
-while IFS="$(printf '\t')" read -r hvs hvn hvtop; do
-  [ -n "$hvs" ] && pass hub "$hvs: $hvn trip(s) to the hub in 24h; top: $hvtop (table: bin/fleet-hub-visits.sh --session $hvs)"
-done <<EOF
-$(FLEET_HUB_VISITS_LOGDIR="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs" bash "$(dirname "$0")/fleet-hub-visits.sh" --brief --all --since 24h 2>/dev/null </dev/null)
-EOF
 # Who the sidebar asks the cross-machine hub as (issue #1475): your connection
 # certificate, else the viewer token, else nobody — and then no other machine's
 # session ever shows. Only with the hub module on; a one-machine fleet says nothing.

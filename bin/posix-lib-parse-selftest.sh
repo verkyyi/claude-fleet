@@ -44,7 +44,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
 
 # The libs whose PARSE must stay POSIX-sh clean. fleet-lib.sh is MANDATORY — it is
-# the one sourced under `sh` by the conf's hub-zoom path (the #414 failure).
+# the one the retired hub-zoom path sourced under `sh` (the #414 failure).
 # The siblings are guarded defensively to keep the shared lib layer free of the
 # same syntax-error class. Extend this list when a new sourceable lib lands.
 LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'

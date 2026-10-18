@@ -559,7 +559,6 @@
 18.8 hub-sessions-inv-selftest.sh
 24.0 hub-sessions-loop-selftest.sh
 37.5 hub-sessions-watch-selftest.sh
-0.2 hub-visits-selftest.sh
 20.7 idle-login-loops-selftest.sh
 9.6 install-apply-selftest.sh
 46.4 install-follow-selftest.sh

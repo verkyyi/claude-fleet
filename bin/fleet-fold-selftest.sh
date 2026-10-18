@@ -14,8 +14,8 @@
 #   4. refusals: fold into itself, a 2-repo source, a stopped target with work.
 #   5. degenerate: a failed restore leaves the fleet un-retired (never a blind down).
 #   6. side state (issue #1014): every store keyed by B outside its conf dir —
-#      failover requests, the warm-pool dir, the legacy restore map, the hub-visits
-#      log, dash caches — is listed by --dry-run, left alone until B retires, then
+#      failover requests, the warm-pool dir, the legacy restore map, dash
+#      caches — is listed by --dry-run, left alone until B retires, then
 #      archived under <archive>/side/ (caches deleted); a neighbour keyed by A or by
 #      a longer name (fb-2) is never touched, and after the retire no store is left
 #      keyed by B. A fold re-run on an already-retired fleet sweeps just the side.
@@ -152,9 +152,8 @@ OVL="$FLEET_CONF_DIR/fleets/$A/repos/o-b.conf"
 B_BEFORE=$(bnames)
 
 # ---- side state keyed by B (and neighbours that must stay) ----------------------
-export FLEET_HUB_VISITS_LOGDIR="$WORK/logs"
 Q="$FLEET_CONF_DIR/handoffs/quota-requests" G="$FLEET_C/global"
-mkdir -p "$Q" "$G" "$FLEET_HUB_VISITS_LOGDIR" "$FLEET_CONF_DIR/fleets/$B-pool" "$FLEET_CONF_DIR/restore"
+mkdir -p "$Q" "$G" "$FLEET_CONF_DIR/fleets/$B-pool" "$FLEET_CONF_DIR/restore"
 req() {  # req <dir> <session> <state>
   mkdir -p "$Q/$1"
   printf '{"source": {"session": "%s", "window": ""}, "state": "%s", "attempts": 99}\n' "$2" "$3" > "$Q/$1/request.json"
@@ -165,8 +164,6 @@ printf '{"session": "%s", "window": "3", "state": "unsupported"}\n' "$B-2" > "$Q
 printf '{"next": 4}\n' > "$Q/$B.cursor.json"; printf '{"next": 1}\n' > "$Q/$A.cursor.json"
 printf 'FLEET\t%s-pool\to/b\t%s\tmain\n' "$B" "$WORK/mainB" > "$FLEET_CONF_DIR/fleets/$B-pool/restore.map"
 printf 'FLEET\t%s\to/b\n' "$B" > "$FLEET_CONF_DIR/restore/$B.map"
-printf '1\tissue-12\tbell\n' > "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$B.log"
-printf '1\tissue-1\tbell\n' > "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$A.log"
 for f in "dash_view_$B" "dash_fold_landed_$B.x" "quotawatch.modelcap.$B" "dash_view_$B-2" "dash_view_$A"; do
   : > "$G/$f"
 done
@@ -178,13 +175,13 @@ side_left() {
   done
   [ -f "$Q/$1.cursor.json" ] && echo "$Q/$1.cursor.json"
   for p in "$FLEET_CONF_DIR/fleets/$1-pool" "$FLEET_CONF_DIR/restore/$1.map" \
-           "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$1.log" "$G/dash_view_$1" \
+           "$G/dash_view_$1" \
            "$G/dash_fold_landed_$1.x" "$G/quotawatch.modelcap.$1"; do
     [ -e "$p" ] && echo "$p"
   done
 }
 SIDE_B=$(side_left "$B" | grep -c .)
-eq "seeded side stores" "$SIDE_B" 10
+eq "seeded side stores" "$SIDE_B" 9
 
 # ---- 1. dry run: the plan, and nothing else --------------------------------
 dry=$(bash "$FR" fold "$B" --into "$A" --dry-run 2>&1); rc=$?
@@ -204,7 +201,6 @@ has "dry retire"  "$dry" "retire:  NO — 2 window(s) stay in $B"
 has "dry side failover" "$dry" "side:    archive 4 failover request(s)"
 has "dry side pool"     "$dry" "side:    archive 1 warm-pool dir fleets/$B-pool"
 has "dry side restore"  "$dry" "side:    archive 1 legacy restore map(s)"
-has "dry side hub"      "$dry" "side:    archive 1 hub-visits log"
 has "dry side cache"    "$dry" "side:    delete  3 runtime cache file(s)"
 eq "dry side untouched" "$(side_left "$B" | grep -c .)" "$SIDE_B"
 [ -e "$OVL" ] && fail "dry run wrote the overlay"
@@ -266,12 +262,12 @@ has "retired line" "$out" "fold: $B retired"
 has "side line" "$out" "fold: $B side state archived at $arch/side"
 eq "no store left keyed by B" "$(side_left "$B")" ""
 for p in failover/rb1/request.json failover/rb2/request.json "failover/unsupported-$B-3.json" \
-         "failover/$B.cursor.json" "pool/$B-pool/restore.map" "restore/$B.map" "hub/hub-visits-$B.log"; do
+         "failover/$B.cursor.json" "pool/$B-pool/restore.map" "restore/$B.map"; do
   [ -f "$arch/side/$p" ] || fail "side not archived: $p"
 done
 [ -e "$arch/side/cache" ] && fail "caches were archived, not deleted"
 for p in "$Q/ra1/request.json" "$Q/rn1/request.json" "$Q/unsupported-$B-2-3.json" "$Q/$A.cursor.json" \
-         "$FLEET_HUB_VISITS_LOGDIR/hub-visits-$A.log" "$G/dash_view_$B-2" "$G/dash_view_$A"; do
+         "$G/dash_view_$B-2" "$G/dash_view_$A"; do
   [ -f "$p" ] || fail "neighbour swept: $p"
 done
 leg "3 --wait moves the late finisher, then retires + archives"
