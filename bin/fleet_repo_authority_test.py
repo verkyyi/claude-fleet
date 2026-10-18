@@ -126,7 +126,8 @@ class RepoAuthorityTests(unittest.TestCase):
     def test_continuation_scope_change_refuses_before_begin(self):
         source = dict(repo='org/a', reservation='new', worker_id='fleet/session', owner='source-owner', endpoint_id='node')
         different = dict(repo='org/a', reservation='new', owner='different-owner', endpoint_id='node', phase='reserved')
-        with patch.dict(os.environ, FLEET_AUTHORITY_START='new', FLEET_AUTHORITY_EXPECTED=json.dumps(source)), \
+        with patch.dict(os.environ, FLEET_AUTHORITY_START='new', FLEET_AUTHORITY_EXPECTED=json.dumps(source), TMUX_PANE='%1'), \
+                patch.object(migration.launch, 'option', return_value=''), \
                 patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
                 patch.object(migration.ticket, 'api', return_value=different), \
                 patch.object(migration, 'start_call') as post, patch.object(migration.subprocess, 'Popen') as child:
@@ -142,7 +143,8 @@ class RepoAuthorityTests(unittest.TestCase):
             wrong = dict(original, worker_id='fleet/session', phase='starting')
             wrong[changed] = 'ack-supplied-other'
             with self.subTest(changed=changed), \
-                    patch.dict(os.environ, FLEET_AUTHORITY_START='start'), \
+                    patch.dict(os.environ, FLEET_AUTHORITY_START='start', TMUX_PANE='%1'), \
+                    patch.object(migration.launch, 'option', return_value=''), \
                     patch.object(migration.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'org/a\tfleet/session', '')), \
                     patch.object(migration.ticket, 'api', return_value=original) as get, \
                     patch.object(migration, 'start_call', return_value=wrong) as post, \
