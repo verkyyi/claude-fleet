@@ -341,6 +341,13 @@ snapshot() {
     # bring the session back unpinned. No pinned window ⇒ no row, the map byte for byte.
     tmux -L "$sock" list-windows -t "$sess" -F '#{@pin}|#{@fleet_id}' 2>/dev/null \
       | awk -F'|' '$1 == "1" && $2 != "" { printf "PIN\t%s\n", $2 }' >> "$tmp"
+    # The agent file a session started as (issue #4760): `AGENTDEF<TAB><fleet_id>
+    # <TAB><name>` rows, appended like DESK, off @agent_def. Its resume used to
+    # come back without `--as`, so a template session (orchestrator, steward,
+    # epic-driver) that had compacted could return a plain session. No such
+    # window ⇒ no row, the map byte for byte.
+    tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@agent_def}' 2>/dev/null \
+      | awk -F'|' '$1 != "" && $2 ~ /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/ { printf "AGENTDEF\t%s\t%s\n", $1, $2 }' >> "$tmp"
     # Destructive-shrink guard (issue #160): a fleet caught MID-RESTORE is
     # hub-only — fleet-up has rebuilt its panels but restore hasn't reopened the
     # work windows yet — so a snapshot taken in that window has FEWER WIN rows
@@ -564,7 +571,7 @@ pullback_run() {
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
     awk -F'\t' '$1 == "LAUNCH" || $1 == "AUTHORITY"' "$pb" >> "$keep" 2>/dev/null
-    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676), remote parents (#3439) and pins (#3517) ride along
+    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF"' "$mf" >> "$keep" 2>/dev/null   # desk tickets (#2676), remote parents (#3439), pins (#3517) and agent files (#4760) ride along
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -807,6 +814,15 @@ restore() {
         agent_label=codex; resume_flag=resume
         nudge=${nudge/claude --resume/codex resume}
       fi
+      # The agent file it started as (issue #4760): the map's AGENTDEF row, by
+      # identity — the resume starts `--as <name>` like the recovery page's ↵ and
+      # a transfer do. A file gone since: fleet-claude.sh opens a plain session
+      # and says so. No row ⇒ the launch byte for byte as before.
+      case "$wtag" in WIN:?*)
+        local wasdef
+        wasdef=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "AGENTDEF" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
+        case "$wasdef" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_.:-]*) ;; *) launch="$launch --as '$wasdef'" ;; esac ;;
+      esac
       # NEVER a silent fresh session (issue #1265). A stale/pruned id used to fall
       # through `|| fleet-claude.sh` to a FRESH claude, and a window with no
       # transcript launched one outright — either way the window looked restored

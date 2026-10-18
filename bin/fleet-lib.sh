@@ -7359,7 +7359,7 @@ fleet_restore_wins() {
 # reaped sessions in the map for good, ready for the next restore to reopen.
 # A 看台's peer window (a row named `@…` in $HOME, issue #3829) goes too: an ssh
 # onto another machine that an older snapshot wrote with a conversation guessed
-# by mtime. Every other row (FLEET, HUB, DESK, OWID, PIN, …) prints byte for byte; a map
+# by mtime. Every other row (FLEET, HUB, DESK, OWID, PIN, AGENTDEF, …) prints byte for byte; a map
 # with neither prints exactly itself.
 fleet_restore_map_prune() {
   local mf="${1:-}" rl='' rd t
