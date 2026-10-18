@@ -18,6 +18,10 @@
 #   F. doctor             the `install` line: PASS when current, WARN carrying the
 #                         count + fix command when behind, and never a silent pass
 #                         when the fetch failed
+#   F2. stable follower   issue #1139: a login install-sync says is following
+#                         stable reads «behind master» as INFO + fleet-stable.sh
+#                         move (opted out: still the WARN + pull); a managed link
+#                         to <root>/current is a PASS, never «could not tell»
 #   G. other logins       the `logins:` line (issue #1069): absent with one login,
 #                         the drift of other logins' installs when they exist,
 #                         in --json too — and never a change to verdict or exit
@@ -239,6 +243,36 @@ contains "doctor: behind is a WARN" "$out" "WARN"
 contains "doctor: behind names the count" "$out" "1 commit"
 contains "doctor: behind names the fix" "$out" "pull --ff-only"
 contains "doctor: behind names the sync command" "$out" "/fleet-sync-install"
+
+# F2. a login following stable (issue #1139): its install trails master by design,
+# so BEHIND is an INFO naming fleet-stable.sh move — never a WARN, never `pull`.
+doc_install_all() {  # <live-dir> <conf-dir> → every labelled install line, INFO too
+  FLEET_LIVE_DIR="$1" FLEET_CONF_DIR="$2" sh "$DOC" 2>&1 | grep -E '^[[:space:]]+(PASS|WARN|FAIL|INFO)[[:space:]]+install[[:space:]]' || true
+}
+C4="$WORK/doctor-follower"; clone "$C4"
+mkdir -p "$C4/bin" "$WORK/conf-follow/global"; : > "$C4/bin/fleet-install-sync.sh"
+printf 'result: current\nlast_check: %s\nhead: %s\nstable: %s\n' "$(date +%s)" \
+  "$(g "$C4" rev-parse HEAD)" "$(g "$C4" rev-parse HEAD)" > "$WORK/conf-follow/global/install-sync.state"
+echo nine >> "$UP/f"; g "$UP" add f; g "$UP" commit -qm c9
+out=$(doc_install_all "$C4" "$WORK/conf-follow")
+contains "doctor: follower behind master is an INFO" "$out" "INFO  install  $C4 is 1 commit(s) behind"
+contains "doctor: follower names fleet-stable.sh move" "$out" "fleet-stable.sh move"
+not_contains "doctor: follower is never told to pull" "$out" "pull --ff-only"
+not_contains "doctor: follower behind is no WARN" "$out" "WARN"
+# opted out (FLEET_INSTALL_SYNC=0): a hand pull is its only road, so the WARN stays
+printf 'FLEET_INSTALL_SYNC=0\n' > "$WORK/conf-follow/fleet.conf"
+out=$(doc_install_all "$C4" "$WORK/conf-follow")
+contains "doctor: opted-out behind is still a WARN" "$out" "WARN"
+contains "doctor: opted-out keeps the pull fix" "$out" "pull --ff-only"
+# a managed login (#4669): ~/.claude/fleet is a link to <root>/current — no git to
+# compare, the link is the check (a PASS), never «could not tell»
+mkdir -p "$WORK/node-root/abc1234"; ln -s "$WORK/node-root/abc1234" "$WORK/node-root/current"
+ln -s "$WORK/node-root/current" "$WORK/managed-live"
+export FLEET_NODE_ROOT="$WORK/node-root"
+out=$(doc_install_all "$WORK/managed-live" "$WORK/conf-empty")
+unset FLEET_NODE_ROOT
+contains "doctor: managed link is a PASS" "$out" "PASS  install  $WORK/managed-live links to the machine runtime"
+not_contains "doctor: managed link is never unknown" "$out" "could not tell"
 
 C3="$WORK/doctor-offline"; clone "$C3"
 mv "$UP" "$WORK/upstream.gone2"
