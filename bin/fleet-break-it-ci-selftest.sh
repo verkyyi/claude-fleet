@@ -13,6 +13,9 @@
 #                       runner: none of its steps runs
 #   train-own-runners-gone   both Macs paused / offline, the hub away or no token:
 #                       the train's board picks macos-latest, 2 shards (#3145)
+#   train-own-mac-one-shard  one of our Macs free (or fewer than the full suite
+#                       needs at 35 minutes a shard): the pick is GitHub's Macs,
+#                       never the whole suite in one shard on ours (#4672)
 #   train-own-runner-silent  our runner said idle but never took the shard: the
 #                       train's watcher reds + cancels it at the deadline (#3145)
 #   train-ack-down      FLEET_TRAIN_RUNNER=fleet-ack but no fleet-ack runner online,
@@ -109,6 +112,35 @@ drill_train_own_runners_gone() {
   grep -q '^macos_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="两台测试机 paused / 离线、入口不通、没令牌：列车选 macos-latest 2 片照发；两台在：fleet-ci 2 片"
+}
+
+# One of our Macs free used to be one shard of the WHOLE suite on it: run
+# 39094216976 cut at 3606 s, exit 124 — macmini runs ×6.6 the fleet-ci table
+# (issue #4672). The pick wants --need runners (default 2) or it goes to GitHub's.
+drill_train_own_mac_one_shard() {
+  CAP=30
+  local t0 d out wf
+  wf="$BIN/../.github/workflows/mac-follow.yml"
+  grep -q 'fleet-train-macos.sh pick --need' "$wf" && grep -q -- '--scale "$FLEET_CI_SCALE"' "$wf" \
+    || { WHY="mac-follow.yml does not size our Macs' need off the forecast"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-one.XXXXXX"); t0=$(now)
+  printf '%s' '{"runners":[{"machine":"macmini","online":true,"runner":{"state":"idle"}},{"machine":"mac-b","online":true,"runner":{"state":"paused"}}]}' > "$d/one.json"
+  printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"idle"}},{"machine":"mac-d","online":true,"runner":{"state":"busy"}}]}' > "$d/two.json"
+  pick() { bash "$BIN/fleet-train-macos.sh" pick "$@" 2>/dev/null; }
+  out=$(pick --runners-file "$d/one.json")
+  case "$out" in *'macos_runs_on=["macos-latest"]'*'macos_shards=[1, 2]'*'macos_where=github'*'1 of ours'*) ;;
+    *) WHY="one Mac of ours free, the pick was not GitHub's: $out"; rm -rf "$d"; return 1 ;; esac
+  out=$(pick --runners-file "$d/two.json" --need 8)
+  case "$out" in *'macos_where=github'*'need 8'*) ;;
+    *) WHY="two Macs of ours but the suite needs 8, the pick was not GitHub's: $out"; rm -rf "$d"; return 1 ;; esac
+  out=$(pick --runners-file "$d/two.json" --need 2)
+  case "$out" in *'macos_runs_on=["self-hosted","macOS","fleet-ci"]'*'macos_shards=[1, 2]'*) ;;
+    *) WHY="two Macs of ours, need 2: not fleet-ci × 2: $out"; rm -rf "$d"; return 1 ;; esac
+  out=$(pick --runners-file "$d/one.json" --need 1)
+  case "$out" in *'macos_shards=[1]'*'macos_where=fleet-ci'*) ;;
+    *) WHY="a small selection (need 1) on one Mac of ours was not fleet-ci × 1: $out"; rm -rf "$d"; return 1 ;; esac
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="自家 Mac 只有 1 台空闲（或少于全量按每片 35 分钟要的台数）：选 GitHub 的 Mac，不再把整套塞进自家 1 片跑到 exit 124；够数才用自家"
 }
 
 drill_train_own_runner_silent() {
