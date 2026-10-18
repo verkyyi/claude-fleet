@@ -15,7 +15,7 @@
 #   2 wide: the train runs either way (拔掉两台测试机，下一趟照样发).
 #   --need n (default 2, issue #4672): fewer than n of ours ⇒ GitHub's too — one of
 #   our Macs free used to get the WHOLE suite as one shard, cut at its budget
-#   (exit 124: run 39094216976; macmini runs ×6.6 the fleet-ci table). The caller
+#   (exit 124: run 39094216976; our Mac runs ×6.6 the fleet-ci table). The caller
 #   prices n (mac-follow.yml's board: fleet-train-plan.sh --full, 35 minutes a
 #   shard); n above --max can never be ours.
 #   Prints, and appends to $GITHUB_OUTPUT when set, one `key=value` line each:

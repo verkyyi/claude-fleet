@@ -115,7 +115,7 @@ drill_train_own_runners_gone() {
 }
 
 # One of our Macs free used to be one shard of the WHOLE suite on it: run
-# 39094216976 cut at 3606 s, exit 124 — macmini runs ×6.6 the fleet-ci table
+# 39094216976 cut at 3606 s, exit 124 — mac-a runs ×6.6 the fleet-ci table
 # (issue #4672). The pick wants --need runners (default 2) or it goes to GitHub's.
 drill_train_own_mac_one_shard() {
   CAP=30
@@ -124,7 +124,7 @@ drill_train_own_mac_one_shard() {
   grep -q 'fleet-train-macos.sh pick --need' "$wf" && grep -q -- '--scale "$FLEET_CI_SCALE"' "$wf" \
     || { WHY="mac-follow.yml does not size our Macs' need off the forecast"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-one.XXXXXX"); t0=$(now)
-  printf '%s' '{"runners":[{"machine":"macmini","online":true,"runner":{"state":"idle"}},{"machine":"mac-b","online":true,"runner":{"state":"paused"}}]}' > "$d/one.json"
+  printf '%s' '{"runners":[{"machine":"mac-a","online":true,"runner":{"state":"idle"}},{"machine":"mac-b","online":true,"runner":{"state":"paused"}}]}' > "$d/one.json"
   printf '%s' '{"runners":[{"machine":"mac-c","online":true,"runner":{"state":"idle"}},{"machine":"mac-d","online":true,"runner":{"state":"busy"}}]}' > "$d/two.json"
   pick() { bash "$BIN/fleet-train-macos.sh" pick "$@" 2>/dev/null; }
   out=$(pick --runners-file "$d/one.json")
