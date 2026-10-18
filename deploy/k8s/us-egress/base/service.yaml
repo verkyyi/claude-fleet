@@ -1,0 +1,16 @@
+# connect: fleet-egress's parent (CONNECT); reverse: the US connector's WSS, via ingress.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet-us-egress
+spec:
+  selector:
+    app: fleet-us-egress
+  publishNotReadyAddresses: true
+  ports:
+    - name: connect
+      port: 3128
+      targetPort: connect
+    - name: reverse
+      port: 8090
+      targetPort: reverse

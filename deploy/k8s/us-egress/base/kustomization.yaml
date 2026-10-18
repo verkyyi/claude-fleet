@@ -1,0 +1,27 @@
+# The US egress gateway (claude-fleet#4313; the program is the one #4311 put live
+# from branch scratch-20261012-us-egress, extras/us-egress at 157e3276):
+# fleet-egress's parent for the LLM endpoints and GitHub (../../egress
+# FLEET_EGRESS_VIA → fleet-us-egress:3128). A US macOS host dials in over WSS
+# through the hub's ingress (/_fleet/us-egress) and opens each CONNECT tunnel
+# there; nothing listens for it on the internet but that one path.
+#
+# us-egress.py runs as `gateway` here; websockets.whl is PyPI's
+# websockets-12.0-py3-none-any.whl (sha256 dc284bbc…500e9e), unpacked offline by
+# the init container. The ConfigMap name carries the content hash: change either
+# file and apply rolls the Deployment.
+#
+# Environment-free: ../fleet-workers adds the namespace, the image and the host.
+# The token Secret fleet-us-egress (key `token`) is made by a person from
+# encrypted stdin (README.md) — referenced, never here. Applied by a person,
+# never by hub-deploy.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+configMapGenerator:
+  - name: fleet-us-egress
+    files:
+      - us-egress.py
+      - websockets.whl

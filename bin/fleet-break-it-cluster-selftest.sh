@@ -1334,7 +1334,7 @@ for f, kind in (("user-pod.json", "Deployment"), ("door.json", "Deployment")):
         if lim and dirs >= lim:
             bad.append("%s: its emptyDirs (%d) fill its whole ceiling (%d)" % (name, dirs, lim))
 # the shared services beside them: asked for, at least
-for f in ("egress/base/deployment.yaml", "credproxy/base/deployment.yaml", "caches/base/goproxy.yaml",
+for f in ("egress/base/deployment.yaml", "us-egress/base/deployment.yaml", "credproxy/base/deployment.yaml", "caches/base/goproxy.yaml",
           "caches/base/npm.yaml", "caches/base/pypi.yaml"):
     t = open(sys.argv[2] + "/deploy/k8s/" + f).read()
     seen += 1

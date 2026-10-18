@@ -17,6 +17,9 @@ overlays/prod/     namespace new-deploy, ACR image, hostnames + TLS, production 
                    in the private deploy repo (below), not in this tree
 overlays/example/  the shape a deployment's own overlay takes (names nothing of ours)
 overlays/kind/     the rolling drill on a throwaway kind cluster (hub-rolling.yml)
+egress/ us-egress/ fleet-workers' way out and its US parent (#3547, #4313), with
+credproxy/ caches/ the cluster credential proxy and the package caches — fleet-workers/
+                   applies all but us-egress, which goes on its own (a person, never hub-deploy)
 runners/           fleet-ack, this repo's Actions runner scale set in the cluster (#3855)
 updating/          the 「正在更新」 page the Ingress falls back to during a release (installed by a person)
 RUNBOOK.md         when the pod will not come up, the data disk, the two secrets
@@ -34,6 +37,10 @@ there (`.github/actions/hub-release/render-check.sh --need-prod`); the image
 registry and the hub's addresses are the repo variables `HUB_PUSH_REPO` and
 `HUB_URLS`. A person applying one of those manifests by hand lays the private
 repo's `k8s/` over a checkout first (`cp -R <deploy repo>/k8s/. deploy/k8s/`).
+Which repo that is: `gh variable get FLEET_DEPLOY_OVERLAY_REPO -R verkyyi/claude-fleet`
+(the name is never written in this public tree); on a fleet machine the fleet
+hosts it like any repo, at `~/projects/<name>` — `fleet-repo.sh list` names its
+checkout.
 Your own deployment: copy `overlays/example` into a repo of yours and point the
 variable at it.
 

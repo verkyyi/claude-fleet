@@ -4,7 +4,9 @@
 > 发布见 [README.md](README.md)。
 > 下文的 `overlays/prod` · `updating/prod` · `credproxy/prod` · `*/fleet-workers` 是部署自己的覆盖层，
 > 我们的在私有部署仓库里（#3630）：手工 `kubectl` 之前先把它的 `k8s/` 叠到本仓库的 `deploy/k8s/` 上
-> （`cp -R <部署仓库>/k8s/. deploy/k8s/`，[README.md](README.md)）。
+> （`cp -R <部署仓库>/k8s/. deploy/k8s/`，[README.md](README.md)）。它是哪个仓库：
+> `gh variable get FLEET_DEPLOY_OVERLAY_REPO -R verkyyi/claude-fleet`（公开仓库里不写它的名字）；
+> fleet 机器上 fleet 托管着它，检出在 `~/projects/<name>`（`fleet-repo.sh list`）。
 
 入口有两种形态（#2125，EPIC #2119）：
 
