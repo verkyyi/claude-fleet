@@ -683,11 +683,20 @@ fi
 # through to the original cold path below — the pool is never load-bearing.
 # A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
 # argument, which only a cold spawn can carry (see the header).
-[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
-  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
+# An accepted task opening HERE (issue #4754): the hub binds only a remote
+# start, so a local one claims the task itself and carries the same launch
+# binding — refused, never opened unbound. Before --finish, which reads it.
+if [ -n "$TASK_REF" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
+  _fu=$(fleet_uuid "$SESS" 2>/dev/null) || _fu=''   # none: `local` refuses a tasked dispatch
+  FLEET_LAUNCH=$(printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" local "$_fu") \
+    || { refuse "raw: $TASK_REF could not be claimed for a local launch"; exit 1; }
+  [ -z "$FLEET_LAUNCH" ] || export FLEET_LAUNCH   # empty: the dispatch carries no task
+fi
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
+[ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish >/dev/null \
+  || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
 warm=0; win=""; slug=""; wt=""
 claimed=""
 # One pool per hosted repo (issue #797): the claim names the scratch's repo, so it
