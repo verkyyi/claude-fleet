@@ -1,7 +1,7 @@
 {
   "name": "fleet-steward",
-  "version": "0.2.5",
-  "description": "claude-fleet steward: /fleet-steward takes the steward role in a session that holds no issue and runs its own patrol loop — answers due questions by their suggestion, spawns a red base's fixer, lands a driverless batch, parks, files health issues — and draws the decision sheet / patrol / batches panes in that window only. Nobody holds it ⇒ none of that runs. Needs fleet-orchestrate. Not installed by default (EPIC #3111).",
+  "version": "0.2.6",
+  "description": "claude-fleet steward: /fleet-steward opens a steward session (the steward agent file, bound to no issue) that keeps watch on its own /loop — answers what a batch charter already says, spawns a red base's fixer, lands a green batch nobody drives; closing it ends the watch. Its old panes still ship until EPIC #4333 C6 removes them. Not installed by default (EPIC #3111).",
   "author": {
     "name": "verkyyi",
     "url": "https://github.com/verkyyi"

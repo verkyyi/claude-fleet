@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""The role definitions agents/steward.md · the orchestrator template, and the rule table.
+"""The two session templates (orchestrator · steward) as role definitions, and the rule table.
 
 What is left of the role engine (issue #2782) after EPIC #3111: a session started
 AS something is a standard agent file (bin/fleet-agent-def.py, `--as <name>` →
-`claude --agent <name>`), and a person takes the orchestrator / steward role in a
-session with /fleet-orchestrate · /fleet-steward (take_role). The two launchers
+`claude --agent <name>`); the orchestrator and the steward are such files now
+(issues #4335, #4336 — EPIC #4333 C2 · C3), and /fleet-orchestrate · /fleet-steward
+only open one. The two launchers
 that rendered a role onto a resident window — and their FLEET_ORCH_* /
 FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL knobs — went with the seat (issue #3118).
 
@@ -47,8 +48,9 @@ def agents_dir():
 
 def def_path(role):
     """agents/<role>.md, else the core's shipped agent file of that name — the
-    orchestrator is a session template now (issue #4335, EPIC #4333 C2), shipped
-    as conf/agent-defaults/claude/agents/orchestrator.md like fleet-worker."""
+    orchestrator and the steward are session templates now (issues #4335, #4336,
+    EPIC #4333 C2 · C3), shipped as conf/agent-defaults/claude/agents/<role>.md
+    like fleet-worker."""
     path = os.path.join(agents_dir(), role + '.md')
     if os.path.isfile(path) or os.environ.get('FLEET_ROLE_AGENTS_DIR'):
         return path

@@ -5,6 +5,7 @@
 # (bin/fleet-agent-def.py — fleet-agent-as-selftest.sh), and the launchers that
 # rendered a role onto a resident window went with the seat (issue #3118).
 #
+#   C  the steward template: generic tools only, no seat/tick/sheet (issue #4336)
 #   B  the bodies: orchestrator / steward prompt ≡ the plugins' skills/*/role.md
 #      (the body + the role's rule-table rows, issue #2786), the body ≤ 60 lines,
 #      name / description / model / effort; a role that is not orchestrator /
@@ -31,10 +32,10 @@ R() { python3 "$BIN/fleet-role.py" "$@"; }
 # --- B bodies ---------------------------------------------------------------
 cmp -s <(R prompt orchestrator) "$ROOT/plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" \
   && ok "B: orchestrator prompt ≡ plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md" \
-  || bad "B: agents/orchestrator.md + the rule table and plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
+  || bad "B: the orchestrator template + the rule table and plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md differ — regenerate: fleet-role.py prompt orchestrator > plugins/fleet-orchestrate/skills/fleet-orchestrate/role.md"
 cmp -s <(R prompt steward) "$ROOT/plugins/fleet-steward/skills/fleet-steward/role.md" \
   && ok "B: steward prompt ≡ plugins/fleet-steward/skills/fleet-steward/role.md" \
-  || bad "B: agents/steward.md + the rule table and plugins/fleet-steward/skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > plugins/fleet-steward/skills/fleet-steward/role.md"
+  || bad "B: the steward template + the rule table and plugins/fleet-steward/skills/fleet-steward/role.md differ — regenerate: fleet-role.py prompt steward > plugins/fleet-steward/skills/fleet-steward/role.md"
 for r in orchestrator steward; do
   n=$(R body $r | wc -l | tr -d ' ')
   cap=60
@@ -42,6 +43,25 @@ for r in orchestrator steward; do
     && [ -n "$(R get $r model)" ] && [ -n "$(R get $r effort)" ] \
     && ok "B: $r — name, description, model, effort; body $n ≤ $cap lines" || bad "B: $r: name=$(R get $r name) body=$n lines (cap $cap)"
 done
+# C the steward is a session template (issue #4336, EPIC #4333 C3): shipped by the core,
+# its patrol uses the generic tools only — no seat, no tick program, no sheet
+ST="$ROOT/conf/agent-defaults/claude/agents/steward.md"
+sb=$(R body steward)
+[ -f "$ST" ] && [ ! -e "$ROOT/agents/steward.md" ] && ok "C: steward ships as conf/agent-defaults/claude/agents/steward.md" \
+  || bad "C: the steward template must be the core's shipped agent file (and agents/steward.md gone)"
+miss=''; for w in mcp__fleet__agents mcp__fleet__gh mcp__fleet-orch__send mcp__fleet-orch__answer_dialog \
+  mcp__fleet-orch__spawn mcp__fleet__pr_verdict mcp__fleet__pr_merge /loop fleet:answer; do
+  case "$sb" in *"$w"*) ;; *) miss="$miss $w" ;; esac
+done
+[ -z "$miss" ] && ok "C: the steward's patrol names its generic tools" || bad "C: the steward's patrol lacks:$miss"
+hit=''; for w in fleet-steward-tick take_role fleet_steward fleet-park decision- 'steward.delta'; do
+  case "$sb" in *"$w"*) hit="$hit $w" ;; esac
+done
+[ -z "$hit" ] && ok "C: no seat, tick program, park or sheet in the steward" || bad "C: the steward still names:$hit"
+grep -q -- '--as steward' "$ROOT/plugins/fleet-steward/skills/fleet-steward/SKILL.md" \
+  && ! grep -q 'take_role' "$ROOT/plugins/fleet-steward/skills/fleet-steward/SKILL.md" \
+  && ok "C: /fleet-steward only opens a steward session" || bad "C: /fleet-steward must open one (--as steward), never take_role"
+
 R body nobody >/dev/null 2>&1; [ $? = 2 ] && ok "B: an unknown role is refused (exit 2)" || bad "B: unknown role not refused"
 R body worker >/dev/null 2>&1; [ $? = 2 ] && ok "B: worker is an agent file now, not a role here (exit 2)" || bad "B: worker still a role"
 

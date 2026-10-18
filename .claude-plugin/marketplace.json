@@ -19,7 +19,7 @@
     {
       "name": "fleet-steward",
       "source": "./plugins/fleet-steward",
-      "description": "Patrol batches and workers, answer what a charter says, one decision sheet for the rest (/fleet-steward). Needs fleet-orchestrate."
+      "description": "Open a steward session (/fleet-steward — the steward agent file) that keeps watch on its own /loop: answers what a batch charter says, spawns a red base's fixer, lands a green driverless batch."
     },
     {
       "name": "fleet-epic",
