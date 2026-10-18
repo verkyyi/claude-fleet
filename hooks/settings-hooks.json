@@ -78,6 +78,13 @@
         ]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/fleet/bin/fleet-stream-resume.sh" }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

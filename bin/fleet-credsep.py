@@ -2205,14 +2205,43 @@ def machine_refresh(a):
         relog_agent(m["login"])     # separated before issue #2296
     # a login the running proxy does not serve (issue #4245): restart it even on
     # unchanged bytes — the start takes over a stale holder of the lock
+    # — once per set of unserved logins (issue #4714): a restart that did not serve
+    # them will not the next time either, and every restart cuts every session's
+    # stream; the doctor's credsep row and `machine status` keep saying NOT SERVED
     _, unserved = shared_unserved(shared_rec())
-    if (moved and not sup) or unserved:
+    tried = unserved_tried()
+    retry = bool(unserved) and unserved != tried
+    if unserved != tried:
+        unserved_tried(unserved)
+    if (moved and not sup) or retry:
         shared_restart()
     say("shared: %s — version %s%s" % (("refreshed, restarted" + (" by the machine daemon" if sup else ""))
-                                        if moved or unserved else "current",
+                                        if moved or retry else "current",
                                         code_version(os.path.join(LIB, "fleet-cred-proxy.py")),
-                                        " (not served: %s)" % ", ".join(unserved) if unserved else ""))
+                                        (" (not served: %s%s)" % (", ".join(unserved),
+                                                                  "" if retry else " — restarted once already, left running")
+                                         if unserved else "")))
     return 0
+
+
+def unserved_tried(logins=None):
+    """The unserved logins `machine refresh` last restarted the shared proxy for
+    (issue #4714) — read with no argument, written with one ([] clears it)."""
+    f = SHARED_REC + ".unserved"
+    if logins is None:
+        try:
+            return sorted(l for l in open(f).read().split() if l)
+        except OSError:
+            return []
+    if logins:
+        put(f, "".join("%s\n" % l for l in logins), 0o644,
+            "root" if os.geteuid() == 0 else pwd.getpwuid(os.getuid()).pw_name)
+    else:
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
+    return logins
 
 
 # ---- an own-mode login onto the shared proxy, and back (issue #2432) ----------------
@@ -2513,7 +2542,19 @@ def shared_unserved(rec):
         live = sorted(l for l in open(os.path.join(rec.get("run") or SHARED_RUN, "logins")).read().split() if l)
     except OSError:
         return None, []
-    return live, [l for l in sorted(rec.get("logins") or []) if l not in live]
+    return live, [l for l in sorted(rec.get("logins") or []) if l not in live and login_exists(l)]
+
+
+def login_exists(login):
+    """A login deleted under its store (its meta.json left behind) is never served:
+    fleet-credsep-launch.py skips it (`getpw` → KeyError). So it is never «not
+    served» either — counting it made `machine refresh` restart the shared proxy
+    on every tick, cutting every session's stream mid-response (issue #4714)."""
+    try:
+        getpw(login)
+        return True
+    except KeyError:
+        return False
 
 
 def machine_pooldup(a):

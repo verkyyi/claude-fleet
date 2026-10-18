@@ -271,6 +271,10 @@ fcfg_label_i18n() {
     FLEET_MOD) printf '会话内 fleet 扩展' ;;
     FLEET_STATUS_7501) printf '读程序自报的状态（OSC 7501）' ;;
     FLEET_STATUS_REPLAY_DEPTH) printf '你的终端也看得到：tmux 层数' ;;
+    FLEET_STREAM_RESUME) printf '回复被 API 错误截断后自动续接' ;;
+    FLEET_STREAM_RESUME_SECS) printf '续接：失败后等几秒' ;;
+    FLEET_STREAM_RESUME_MAX) printf '续接：每个窗口期最多几次' ;;
+    FLEET_STREAM_RESUME_WINDOW) printf '续接：窗口期（秒）' ;;
     FLEET_CHILD_REPORT) printf '子任务向父任务报告结果' ;;
     FLEET_CHILD_REPORT_BATCH_SECS) printf '子报告摘要最大等待' ;;
     FLEET_DEFAULT_MILESTONE) printf '新建 issue 默认里程碑' ;;

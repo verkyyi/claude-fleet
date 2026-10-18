@@ -100,7 +100,7 @@ HOOK_TABLE = "hooks/settings-hooks.json"
 MOD_TOOLS = "mod/fleet/hooks/tools.ts"
 MCP_CONF = "conf/mcp-worker.json"
 EVENT_ORDER = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-               "Notification", "Stop", "SubagentStop", "PreCompact", "SessionEnd")
+               "Notification", "Stop", "StopFailure", "SubagentStop", "PreCompact", "SessionEnd")
 # Commands an agent or a hook may reach for that must never touch the real machine.
 SHIMMED = ("tmux", "gh", "ssh", "scp", "curl", "wget", "open", "osascript", "claude",
            "codex", "launchctl", "systemctl", "terminal-notifier")
@@ -162,6 +162,8 @@ def event_json(event, matcher, work):
         base.update(message="replay", notification_type=alt or "idle_prompt")
     elif event in ("Stop", "SubagentStop"):
         base["stop_hook_active"] = False
+    elif event == "StopFailure":
+        base.update(error="unknown", error_details="Connection lost mid-response")
     elif event == "PreCompact":
         base.update(trigger=alt or "manual", custom_instructions="")
     elif event == "SessionEnd":
