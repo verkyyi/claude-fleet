@@ -617,8 +617,16 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(env['FLEET_NODE_LOGIN'], 'none')
         self.assertEqual((env['FLEET_POD_LOGIN'], env['FLEET_POD_UID'], env['FLEET_NODE_UPDATE_OWNER']),
                          ('fleetu7', '10002', 'image'))
-        self.assertEqual(c['resources'], {'requests': {'cpu': '250m', 'memory': '1536Mi'},
-                                          'limits': {'cpu': '2', 'memory': '6Gi'}})
+        self.assertEqual(c['resources'], {'requests': {'cpu': '250m', 'memory': '1536Mi', 'ephemeral-storage': '1Gi'},
+                                          'limits': {'cpu': '2', 'memory': '6Gi', 'ephemeral-storage': '8Gi'}})
+        # #4729: the node's own disk is asked for and capped — a request of 0 is the
+        # kubelet's first eviction pick; /tmp is bounded, the pod's sum covers it
+        self.assertEqual(sshd['resources']['requests']['ephemeral-storage'], '64Mi')
+        vols = {v['name']: v for v in pod['volumes']}
+        self.assertEqual(vols['tmp'], {'name': 'tmp', 'emptyDir': {'sizeLimit': '6Gi'}})
+        for v in vols.values():
+            ed = v.get('emptyDir')
+            self.assertTrue(ed is None or 'sizeLimit' in ed, v)
         # #3757: the node is the login — non-root, nothing added; root is sshd's alone
         sc = c['securityContext']
         self.assertEqual((sc['runAsUser'], sc['runAsGroup'], sc['runAsNonRoot']), (10002, 10002, True))
@@ -651,7 +659,7 @@ class LinuxNode(unittest.TestCase):
         moved = json.loads(subprocess.check_output(base + ['--limits', 'cpu=4,memory=8Gi']))['items']
         self.assertEqual(moved[:2], items[:2])
         self.assertEqual(moved[2]['spec']['template']['spec']['containers'][0]['resources']['limits'],
-                         {'cpu': '4', 'memory': '8Gi'})
+                         {'cpu': '4', 'memory': '8Gi', 'ephemeral-storage': '8Gi'})
         patch_ = json.loads(subprocess.check_output([sys.executable, str(render), '--limits-patch',
                                                      '--limits', 'cpu=4,memory=8Gi']))
         self.assertEqual(patch_['spec']['template']['spec']['containers'],
@@ -874,6 +882,11 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual((env['FLEET_NODE_PROFILE'], env['FLEET_DOOR'], env['FLEET_ENTRY'], env['FLEET_ENTRY_PORT']),
                          ('door', '1', '1', '22022'))
         self.assertIn({'name': 'secret', 'secret': {'secretName': 'fleet-door', 'defaultMode': 0o400}}, pod['volumes'])
+        # #4729: its disk asked for and capped (state holds the staged runtime)
+        res = pod['containers'][0]['resources']
+        self.assertEqual((res['requests']['ephemeral-storage'], res['limits']['ephemeral-storage']), ('2Gi', '6Gi'))
+        self.assertEqual({v['name']: v['emptyDir'] for v in pod['volumes'] if 'emptyDir' in v},
+                         {'state': {'sizeLimit': '4Gi'}, 'logs': {'sizeLimit': '1Gi'}})
         self.assertNotIn('CCQUOTA_FLEET_NODE_ROUTES', env)
         # the load balancer's address, once it has one: the door's reach knocks
         # there, not on the NAT (#4112)

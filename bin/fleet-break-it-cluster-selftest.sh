@@ -32,6 +32,8 @@
 #                            bin/fleet_cluster_ticket.py + bin/fleet-svc-runner.py +
 #                            deploy/k8s/fleet-workers/networkpolicy.yaml + deploy/k8s/egress/run +
 #                            tokenledger/internal/api/svc_runner.go (issue #4005)
+#   pod-disk-unasked         extras/managed-node/render.py (user pod, door) +
+#                            deploy/k8s/{egress,credproxy,caches}/base (issue #4729)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -1285,6 +1287,66 @@ drill_user_pod_login_reissued() {
   printf '%s' "$out" | grep -q 'Ran 1 test' || { WHY="the reissue test did not run: $(printf '%s' "$out" | tail -3)"; return 1; }
   SECS=$(since "$t0")
   WHAT="个人 pod 唯一的登录被入口重新要一次：盘上的旧声明照认（改写 op）、家目录和数据不动、退役的 token 换成新 join 码入网、交给守护——不再「already exists」rc 3"
+}
+
+# pod-disk-unasked (#4729): the node's own disk runs short — other tenants, image
+# layers — and the kubelet evicts first whoever uses more ephemeral-storage than
+# it asked for. A request of 0 makes any byte "more": on 2026-10-18 a person's pod
+# (1.6 MiB) and the door (100 KiB) went first, every session with them. Every
+# long-lived fleet container on the shared nodes now asks for some disk, the
+# user pod and the door are capped, and their disk-backed emptyDirs have a
+# sizeLimit inside the pod's ceiling — past it only that pod goes.
+drill_pod_disk_unasked() {
+  CAP=30
+  local d="$WORK/disk" t0 out
+  mkdir -p "$d"; t0=$(now)
+  templates "$d" >/dev/null || { WHY="render failed"; return 1; }
+  out=$(python3 - "$d" "$ROOT" <<'PY'
+import json, re, sys
+U = {"Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
+def q(v):
+    m = re.fullmatch(r"([0-9]+)(Ki|Mi|Gi|Ti)?", str(v))
+    return int(m.group(1)) * U.get(m.group(2) or "", 1) if m else 0
+bad, seen = [], 0
+for f, kind in (("user-pod.json", "Deployment"), ("door.json", "Deployment")):
+    for o in json.load(open(sys.argv[1] + "/" + f))["items"]:
+        if o["kind"] != kind:
+            continue
+        seen += 1
+        p, name = o["spec"]["template"]["spec"], "%s %s" % (kind, o["metadata"]["name"])
+        lim = 0
+        for c in p["containers"]:
+            r = c.get("resources") or {}
+            if q((r.get("requests") or {}).get("ephemeral-storage")) <= 0:
+                bad.append("%s/%s: asks for no ephemeral-storage" % (name, c["name"]))
+            l = q((r.get("limits") or {}).get("ephemeral-storage"))
+            if l <= 0:
+                bad.append("%s/%s: no ephemeral-storage limit" % (name, c["name"]))
+            lim += l
+        dirs = 0
+        for v in p.get("volumes") or []:
+            e = v.get("emptyDir")
+            if e is None or e.get("medium") == "Memory":
+                continue
+            if not q(e.get("sizeLimit")):
+                bad.append("%s: emptyDir %s has no sizeLimit" % (name, v["name"]))
+            dirs += q(e.get("sizeLimit"))
+        if lim and dirs >= lim:
+            bad.append("%s: its emptyDirs (%d) fill its whole ceiling (%d)" % (name, dirs, lim))
+# the shared services beside them: asked for, at least
+for f in ("egress/base/deployment.yaml", "credproxy/base/deployment.yaml", "caches/base/goproxy.yaml",
+          "caches/base/npm.yaml", "caches/base/pypi.yaml"):
+    t = open(sys.argv[2] + "/deploy/k8s/" + f).read()
+    seen += 1
+    for blk in re.findall(r"\n( *)requests:\n((?:\1  [^\n]*\n)+)", t):
+        if "cpu:" in blk[1] and "ephemeral-storage:" not in blk[1]:
+            bad.append("deploy/k8s/%s: a container asks for no ephemeral-storage" % f)
+print("\n".join(bad) if bad else "ok %d templates" % seen)
+sys.exit(1 if bad else 0)
+PY
+) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="个人 pod 与门的每个容器都要了临时盘、也封了顶，落盘的 emptyDir 都有 sizeLimit 且在 pod 的顶之内；出口 · 凭据代理 · 三个包缓存也都要了临时盘——节点盘紧时 kubelet 不再先挑它们（${out}）"
 }
 
 cred_run_drills "$0"
