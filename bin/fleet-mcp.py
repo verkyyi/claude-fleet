@@ -1487,7 +1487,8 @@ TOOLS = {
         "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
                        "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "
                        "is relayed into that issue's worker as its next turn (to just tell a peer something, "
-                       "send is direct). close closes the issue after the comment (a no-PR wrap-up).",
+                       "send is direct). close closes the issue after the comment (a no-PR wrap-up). GitHub not "
+                       "answering: exit 0 and 「已记下」 in stderr — kept, and made in order once it answers.",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "body": {"type": "string", "description": "The comment, Markdown."},
             "mode": {"type": "string", "enum": ["note", "to-worker"], "description": "note (default) or to-worker."},
@@ -1572,7 +1573,7 @@ TOOLS = {
                        "Left out, the filing is an ordinary issue whatever its text says (issue #4271: the auto "
                        "road of #2175 is gone) — say breakage: true for a red base. "
                        "Prints the issue URL. Exit 0 ok · 2 usage · 3 unknown label · 4 spawn with no live parent · "
-                       "5 the breakage already has an open issue (URL printed) · 1 failure. A breakage a worker files "
+                       "5 the breakage already has an open issue (URL printed) · 6 GitHub unreachable: nothing opened, never kept for later — file it later or as a hub ticket · 1 failure. A breakage a worker files "
                        "without spawn is filed, the person alerted and the parent session told — nobody "
                        "spawns its fixer by itself (issue #4337).",
         "inputSchema": {"type": "object", "properties": {

@@ -680,8 +680,18 @@ _gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
 _gh_down=''
 # shellcheck disable=SC2016
 [ -f "$_gh_lib" ] && _gh_down=$(bash -c '. "$1" || exit 1; fleet_gh_down_line' _ "$_gh_lib" 2>/dev/null)
+# Ticket writes kept while GitHub did not answer (issue #4844): 「待补 N 条，最早 X 分钟前」,
+# and a WARN for any that could not be made for 24 h (gh-outbox/stuck/).
+_gh_ob='' _gh_stuck=0
+if [ -f "$_gh_lib" ] && [ -f "$(dirname "$0")/fleet_gh_outbox.py" ]; then
+  _gh_ob=$(python3 "$(dirname "$0")/fleet_gh_outbox.py" line 2>/dev/null)
+  _gh_stuck=$(python3 "$(dirname "$0")/fleet_gh_outbox.py" count 2>/dev/null | awk '{ print $3 + 0 }')
+fi
+_gh_hour="${_gh_ob:+$_gh_ob${_gh_hour:+ · }}${_gh_hour}"
 if [ -n "$_gh_down" ]; then
   warn github "$_gh_down — GitHub calls return at once (rc 75) until a probe gets an answer; the background keeps its last copies${_gh_hour:+ · $_gh_hour}"
+elif [ "${_gh_stuck:-0}" -gt 0 ]; then
+  warn github "some kept ticket writes GitHub refused for 24 h; read them with \`python3 bin/fleet_gh_outbox.py list\`, redo by hand, then delete${_gh_hour:+ · $_gh_hour}"
 elif [ -n "$_gh_rows" ]; then
   _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
   warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"

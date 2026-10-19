@@ -821,11 +821,21 @@ if [ "$TAIL_ONLY" != 1 ] && [ "${FLEET_PRESPAWN_DEDUP:-1}" != 0 ] && [ "$FORCE_F
       *) issue_json='' ;;   # the hub did not answer: spawn anyway, as a gh outage does
     esac
     unset _co _crc
-  elif fleet_gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; then
-    # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
-    [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
   else
-    issue_json=''
+    fleet_gh issue edit "$num" --repo "$REPO" --add-assignee @me >/dev/null 2>&1; _arc=$?
+    if [ "$_arc" = 0 ]; then
+      # Hub off ⇒ today's path, byte for byte (EPIC #1645 rule 6): no take-back.
+      [ "${CCQUOTA_FLEET:-0}" = 1 ] && { CLAIMED_HERE=1; trap _spawn_back EXIT; }
+    else
+      issue_json=''
+      # GitHub not answering (issue #4844): the hub lease is the claim, the
+      # assignee is kept for the outbox under the session's own key — the drain
+      # drops it when no window answers to that key (the spawn failed, or ended).
+      [ "$_arc" = 75 ] && python3 "$BIN/fleet_gh_outbox.py" put --repo "$REPO" --verb claim \
+          --session "$(fleet_okey_prefix "$SESS" "$REPO")issue-$num" -- "gh:$(fleet_norm_repo "$REPO")#$num" >/dev/null 2>&1 \
+        && printf 'dash-issue-session: GitHub 不通 — #%s 的 assignee 已记下，通了补上（认领以入口租约为准）\n' "$num" >&2
+    fi
+    unset _arc
   fi
 fi
 

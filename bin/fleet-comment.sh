@@ -270,12 +270,18 @@ case "${FLEET_TICKET_BACKEND:-}" in
   *) tkb=${tid%%:*} ;;
 esac
 tid="$tkb:$(fleet_norm_repo "$repo")#$num"
+# QUEUED: GitHub did not answer and the door kept the comment for later (issue
+# #4844) — exit 0 with no URL; the door already said 「已记下」, so no verdict here
+# (the peer road below still runs: it needs no GitHub).
+QUEUED=0
 post_comment() {
-  local tmp rc
+  local tmp rc out
   tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-comment.XXXXXX") || return 1
   printf '%s' "$body" > "$tmp"
-  bash "$BIN/fleet-ticket.sh" post "$tid" --body-file "$tmp"; rc=$?
+  out=$(bash "$BIN/fleet-ticket.sh" post "$tid" --body-file "$tmp"); rc=$?
   rm -f "$tmp"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  [ "$rc" = 0 ] && [ -z "$out" ] && [ "$tkb" = gh ] && QUEUED=1
   return "$rc"
 }
 close_issue() { bash "$BIN/fleet-ticket.sh" close "$tid"; }
@@ -283,8 +289,9 @@ close_issue() { bash "$BIN/fleet-ticket.sh" close "$tid"; }
 # the close itself fails, and the bridge never sees an unmarked close comment (#486).
 if [ "$do_close" -eq 1 ]; then
   post_comment || exit "$?"
-  comment_verdict
+  { [ "$QUEUED" = 1 ] && [ "$peer_fallback" != 1 ]; } || comment_verdict
   close_issue; exit "$?"
 fi
 post_comment || exit "$?"
+[ "$QUEUED" = 1 ] && [ "$peer_fallback" != 1 ] && exit 0   # the peer road needs no GitHub
 comment_verdict || exit 1

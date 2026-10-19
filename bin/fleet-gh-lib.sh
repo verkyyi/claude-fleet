@@ -242,7 +242,9 @@ _fleet_gh_timed() {
 }
 
 # fleet_gh_conn_fail <text> — rc 0 when <text> is a CONNECTION failure (gh / git /
-# curl wording): GitHub never answered. An HTTP error is an answer, never this.
+# curl wording): GitHub never answered. An HTTP error is an answer, never this —
+# but a PROXY's refusal of the tunnel is not GitHub's (Go's `Post "<url>": Bad
+# Gateway`, curl's `CONNECT tunnel failed`): GitHub was never reached (issue #4844).
 fleet_gh_conn_fail() {
   case "${1:-}" in
     *'error connecting to'*|*'no such host'*|*'connection refused'*|*'Connection refused'*|\
@@ -250,7 +252,9 @@ fleet_gh_conn_fail() {
     *'network is unreachable'*|*'Network is unreachable'*|*'connection reset by peer'*|\
     *'Could not resolve host'*|*'Failed to connect to'*|*"Couldn't connect to server"*|\
     *'Connection timed out'*|*'Operation timed out'*|*'Operation too slow'*|\
-    *'SSL connection timeout'*) return 0 ;;
+    *'SSL connection timeout'*|\
+    *'": Bad Gateway'*|*'": Service Unavailable'*|*'": Gateway Timeout'*|\
+    *'CONNECT tunnel failed'*|*'from proxy after CONNECT'*) return 0 ;;
   esac
   return 1
 }

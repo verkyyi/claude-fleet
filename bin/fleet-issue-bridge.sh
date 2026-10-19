@@ -850,7 +850,24 @@ EOF
   return 0
 }
 
+# outbox_drain — the ticket writes GitHub could not take (issue #4844, EPIC #4839
+# C5): made now, oldest first, by bin/fleet_gh_outbox.py, once the one gh-down
+# marker is closed (fleet_gh_ready probes when one is due). Before the fleet
+# checks below: a write kept while every fleet was down still goes out. An empty
+# outbox costs one glob, no process.
+outbox_drain() {
+  local f
+  for f in "${FLEET_GH_OUTBOX_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/gh-outbox}"/*.json; do
+    [ -f "$f" ] || return 0
+    break
+  done
+  fleet_gh_ready || { log "gh-outbox: GitHub still down — the kept writes wait"; return 0; }
+  python3 "$BIN/fleet_gh_outbox.py" drain 2>&1 | while IFS= read -r l; do log "$l"; done
+  return 0
+}
+
 poll() {
+  outbox_drain
   # gh is asked per repo now (issue #3597): a hub-ticket repo never needs it.
   # Each fleet is its own tmux server now (issue #159) — "is tmux up" means "is any
   # fleet live", which fleet_sockets answers without a single shared server.
