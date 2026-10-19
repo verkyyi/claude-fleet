@@ -192,9 +192,11 @@ assert set(rows[1]["inputSchema"]["required"]) == {"issue"} and "reap" in rows[1
 ' || fail "E: --spec did not print the three closed schemas" "$spec"
 python3 "$BIN/fleet-mcp.py" --spec status nope >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] || fail "E: --spec of an unknown tool exited $rc, want 2"
-for f in Lifecycle Usage State Progress Compose Tools Accept; do
+for f in Lifecycle Usage State Compose Tools Accept; do
   grep -q "^  register$f(on)\$" "$MOD/hooks/register.ts" || fail "E: register.ts no longer wires register$f"
 done
+# the PR progress band left with the rows' PR map (issue #4902)
+grep -q 'registerProgress' "$MOD/hooks/register.ts" && fail "E: mod/fleet wires the PR progress band — it was deleted (issue #4902)"
 # the steward's panels left with its plugin (issue #4339): nothing wires them anywhere
 grep -qE 'register(Panels|Sheet|Patrol|Batches)' "$MOD/hooks/register.ts" "$MOD/hooks/lifecycle.ts" \
   && fail "E: mod/fleet wires the steward's panels — they were deleted (issue #4339)"
