@@ -1,7 +1,11 @@
 #!/bin/bash
 # fleet-release-rollback.sh <PR number | merge sha> [--repo <owner/name>] [--remote <url>]
-#                           [--hub-tag prod-<sha7>] [--no-merge] [--dry-run]
+#                           [--hub-tag prod-<sha7>] [--since <good sha>] [--no-merge] [--dry-run]
 #   — take a bad change back out of production in ONE command (issue #4663).
+#   --since <good sha>: the WHOLE version instead (issue #4915) — every commit in
+#      <good sha>..<sha> reverted as ONE commit 「回退版本 <sha7> → <good7>」, so the
+#      tree goes back to the last good release's while the history (and the
+#      release seq a machine moves forward on) keeps going forward.
 #
 # Since #4663 no check holds a release on a Mac or on the China probe's test road:
 # a problem shows in production and is fixed fast. This is the fast part. It
@@ -29,22 +33,23 @@ fail()   { printf 'fleet-release-rollback: %s\n' "$*" >&2; exit 1; }
 refuse() { printf 'fleet-release-rollback: REFUSED — %s\n' "$*" >&2; exit 3; }
 say()    { printf 'rollback: %s\n' "$*"; }
 
-what='' repo='' remote='' hub_tag='' merge=1 dry=0
+what='' repo='' remote='' hub_tag='' since='' merge=1 dry=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo)     shift; repo="${1:-}" ;;
     --remote)   shift; remote="${1:-}" ;;
     --hub-tag)  shift; hub_tag="${1:-}"
                 case "$hub_tag" in prod-[0-9a-f]*) ;; *) die "--hub-tag takes prod-<sha7> (an image hub-deploy built)" ;; esac ;;
+    --since)    shift; since="${1:-}"; [ -n "$since" ] || die "--since takes the last good release's sha" ;;
     --no-merge) merge=0 ;;
     --dry-run)  dry=1 ;;
-    -h|--help)  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)         die "unknown flag $1" ;;
     *)          [ -z "$what" ] || die "one change at a time (got $what and $1)"; what="$1" ;;
   esac
   shift
 done
-[ -n "$what" ] || die "usage: fleet-release-rollback.sh <PR number | merge sha> [--repo owner/name] [--hub-tag prod-<sha7>] [--no-merge] [--dry-run]"
+[ -n "$what" ] || die "usage: fleet-release-rollback.sh <PR number | merge sha> [--repo owner/name] [--hub-tag prod-<sha7>] [--since <good sha>] [--no-merge] [--dry-run]"
 if [ -z "$repo" ]; then
   repo=$($GH repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=''
   [ -n "$repo" ] || die "cannot tell the repo — pass --repo owner/name"
@@ -76,6 +81,24 @@ s7=$(printf '%.7s' "$full")
 [ -n "$pr" ] || pr=$(printf '%s' "$title" | sed -n 's/.*(#\([0-9][0-9]*\))$/\1/p')
 br="rollback-$s7"
 g switch -q -c "$br" || fail "could not branch $br"
+if [ -n "$since" ]; then
+  # the whole version (issue #4915): <good>..<sha> reverted as one commit
+  good=$(g rev-parse -q --verify "$since^{commit}") || refuse "--since $since is not a commit of $repo"
+  [ "$good" != "$full" ] || refuse "--since is $s7 itself — nothing between them to take back"
+  g merge-base --is-ancestor "$good" "$full" || refuse "--since $(printf '%.7s' "$good") is not before $s7 — the version goes back to an older release only"
+  g7=$(printf '%.7s' "$good")
+  prs=$(g log --format=%s "$good..$full" | sed -n 's/.*(#\([0-9][0-9]*\))$/#\1/p' | tr '\n' ' ' | sed 's/ $//')
+  n=$(g rev-list --count "$good..$full")
+  if ! g revert --no-commit "$good..$full" >"$T/rev" 2>&1; then
+    g revert --abort >/dev/null 2>&1
+    refuse "the $n commit(s) $g7..$s7 do not revert cleanly on $base (a later change builds on them) — revert by hand: $(tail -1 "$T/rev")"
+  fi
+  g commit -q -m "回退版本 $s7 → ${g7}（#4915）" -m "Reverts $g7..$s7: ${prs:-$n commit(s)}" >"$T/rev" 2>&1 \
+    || refuse "nothing to revert between $g7 and $s7 on $base (already taken back?)"
+  ptitle="回退版本 $s7 → $g7${prs:+：$prs}"
+  pbody="回退整个版本 \`$s7\` → 上一版 \`$g7\`（$n 个提交${prs:+：$prs}）：发布后出了问题，自动退回（#4915 · \`bin/fleet-release-watch.py\` → \`bin/fleet-release-rollback.sh --since\`）。一个提交撤回这一段，列车照常发出去；机器「只向前」——这是新的提交、新的版本号，不是回拨。${hub_tag:+
+hub 已直接切回镜像 \`$hub_tag\`。}"
+else
 if ! g revert --no-edit "$full" >"$T/rev" 2>&1; then
   g revert --abort >/dev/null 2>&1
   refuse "the revert of $s7 does not apply cleanly on $base (a later change builds on it) — revert by hand: $(tail -1 "$T/rev")"
@@ -86,6 +109,7 @@ pbody="回滚 ${pr:+#${pr}（}$s7${pr:+）}：问题在生产上暴露，先撤�
 hub 已直接切回镜像 \`$hub_tag\`。}
 
 ${pr:+Reverts #$pr}"
+fi
 if [ "$dry" = 1 ]; then
   say "would push $br (revert of $s7) and open: $ptitle"
   [ "$merge" = 0 ] || say "would merge it at once (squash)"

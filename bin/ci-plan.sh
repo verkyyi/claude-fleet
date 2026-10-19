@@ -20,7 +20,8 @@
 #           --list-only --among <files>` — the rules the selftest gate trusts).
 # Go (`tokenledger`) is four modules, so four blocks: shared/** ⇒ all four,
 # agent/** ⇒ agent + e2e, hub/** ⇒ hub + e2e, e2e/** ⇒ e2e; go.work, the
-# Dockerfile, the quarantine list, this file, the Go workflow ⇒ all four. Inside a
+# Dockerfile, the quarantine list, this file, the Go workflow ⇒ all four; a bin/
+# script a Go test runs (go_driven) ⇒ that test's block and package. Inside a
 # selected block `go list -test` keeps only the packages whose test binary depends
 # on a changed package — none left ⇒ the block is skipped too.
 #
@@ -164,12 +165,26 @@ block_of() {
   esac
 }
 
+# go_driven <file> → the Go test files that run a bin/ script (issue #4944:
+# #4937 changed bin/fleet-task-record.sh, which hub/api's tests execute, and no
+# block was picked). Run = named inside a filepath.Join — `"bin/<name>"` or
+# `"bin", "<name>"` — or on a `// drives: bin/<name> …` line (a script the test
+# reaches through another one). A path merely listed as data is not a run.
+go_driven() {
+  case "$1" in bin/*/*) return 0 ;; bin/?*) ;; *) return 0 ;; esac
+  local q
+  q=$(printf '%s' "${1#bin/}" | sed 's/[].[\*^$+?(){}|]/\\&/g')
+  (cd "$root" && grep -rlE --include='*_test.go' \
+    -e "filepath\.Join\([^;]*(\"bin/$q\"|\"bin\", *\"$q\")" -e "// drives:.* bin/$q( |\$)" \
+    tokenledger/shared tokenledger/agent tokenledger/hub tokenledger/e2e 2>/dev/null) | sort
+}
+
 # go_plan → GO_SELECTED (blocks, space-separated), GO_WHY_<block>, GO_PKGS_<block>
 # (import paths, or `./...` = the whole module), GO_PKGNOTE. Needs $files.
 go_plan() {
   [ -z "${GO_DONE:-}" ] || return 0
-  GO_DONE=1 GO_SELECTED='' GO_PKGNOTE='' GO_WHOLE=''
-  local f b bs='' k
+  GO_DONE=1 GO_SELECTED='' GO_PKGNOTE='' GO_WHOLE='' GO_DRIVEN=''
+  local f b bs='' k t
   for k in shared agent hub e2e; do eval "GO_WHY_$k=''; GO_PKGS_$k=''"; done
   pick() {  # pick <block> <why>
     case " $bs " in *" $1 "*) return ;; esac
@@ -183,7 +198,12 @@ go_plan() {
     case " $SELF " in *" $f "*) for k in shared agent hub e2e; do pick "$k" "$f changed (the plan itself)"; done; GO_WHOLE=$f; continue ;; esac
     b=$(block_of "$f")
     case "$b" in
-      '') ;;
+      '')
+        for t in $(go_driven "$f"); do
+          k=${t#tokenledger/}; k=${k%%/*}
+          pick "$k" "$f is run by $t"
+          GO_DRIVEN="$GO_DRIVEN $t"
+        done ;;
       none) ;;
       all) for k in shared agent hub e2e; do pick "$k" "$f changed (all four blocks)"; done; GO_WHOLE=$f ;;
       unknown) for k in shared agent hub e2e; do pick "$k" "$f has no block rule — unsure, so it runs"; done; GO_WHOLE=$f ;;
@@ -213,8 +233,9 @@ go_narrow() {
     [ -f "$tl/$m/go.mod" ] || { GO_PKGNOTE="packages: not narrowed (no tokenledger/$m/go.mod)"; return 0; }
   done
   # changed packages: a changed file's directory, or the nearest package above it
-  # (testdata/, an embedded asset); a go.mod / go.sum ⇒ every package of its module
-  for f in $files; do
+  # (testdata/, an embedded asset); a go.mod / go.sum ⇒ every package of its module;
+  # a bin/ script a Go test runs ⇒ that test's package (go_driven)
+  for f in $files $GO_DRIVEN; do
     case "$f" in tokenledger/shared/*|tokenledger/agent/*|tokenledger/hub/*|tokenledger/e2e/*) ;; *) continue ;; esac
     rel=${f#tokenledger/}; m=${rel%%/*}; rel=${rel#*/}
     case "$rel" in

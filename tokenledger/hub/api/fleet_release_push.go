@@ -30,7 +30,9 @@ func (s *Server) pushRelease(endpointID string, nc *nodeConn, p stablePointer) {
 		if s.Releases == nil {
 			return
 		}
-		p = s.Releases.stable()
+		// what this machine is handed — a stable with its canary only there
+		// (claude-fleet#4915); no canary set ⇒ the pointer
+		p = s.releaseGate(time.Now()).forMachine(nc.hostname())
 	}
 	nc.pushMu.Lock()
 	defer nc.pushMu.Unlock()
@@ -59,9 +61,15 @@ func (s *Server) BroadcastRelease(sha string, seq int64) {
 	if p.SHA == "" || p.Seq < 1 {
 		return
 	}
+	// a canary set (claude-fleet#4915): only it hears the new one now
+	gate := s.releaseGate(time.Now())
 	s.nodes.each(func(id string, c *nodeConn) {
 		if c.canRelease {
-			go s.pushRelease(id, c, p)
+			q := p
+			if gate.holding && gate.p.SHA == sha {
+				q = gate.forMachine(c.hostname())
+			}
+			go s.pushRelease(id, c, q)
 		}
 	})
 }
