@@ -127,6 +127,18 @@ class LiveTests(unittest.TestCase):
         for raw in ("", '{"state":"clear"}', "not json"):
             self.assertEqual(self.probe(state="working", status=raw, age="2:00:00"), "state:working")
 
+    def test_stale_stamp_with_wrapper_gone(self):
+        # Issue #4822: `needs` carried over a restore onto a pane that came back
+        # a bare shell (@wrap_gone) — no word, no agent: exited, reapable. An agent
+        # still under it, or the wrapper still there, keeps the stamp's word.
+        for stamped in ("needs", "working", "looping"):
+            self.assertIsNone(self.probe(state=stamped, status="\t1", comm="zsh"), stamped)
+            self.assertEqual(self.probe(state=stamped, status="\t1", age="2:00:00"), "state:" + stamped)
+            self.assertEqual(self.probe(state=stamped, comm="zsh"), "state:" + stamped)
+        self.assertEqual(self.probe(state="needs", status="\t1", comm="node", commands=""), "unknown:agent-command")
+        # a 7501 word on it is the agent's own answer, gone or not
+        self.assertEqual(self.probe(state="needs", status='{"state":"blocked"}\t1', age="2:00:00"), "agent:blocked")
+
     def test_reap_state_cli(self):
         # `--state`: the one answer dash-reap's no-repo branch, fleet-cleanup and
         # the EPIC backstop judge a window by (issue #2540).
@@ -149,6 +161,10 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(run("needs", ""), (0, "needs"))
         self.assertEqual(run("", ""), (0, ""))
         self.assertEqual(run("", "", ps="100 1 01:00:00 zsh", cmds="100 zsh"), (0, "exited"))
+        # A stale stamp, its wrapper gone, no agent (#4822): exited; an agent: the stamp.
+        self.assertEqual(run("needs", "\t1", ps="100 1 01:00:00 zsh", cmds="100 zsh"), (0, "exited"))
+        self.assertEqual(run("needs", "\t1"), (0, "needs"))
+        self.assertEqual(run("needs", "", ps="100 1 01:00:00 zsh", cmds="100 zsh"), (0, "needs"))
         with patch.object(sys, "argv", ["probe", "pane", "--state"]):
             self.assertEqual(live.main(), 2)
 
@@ -165,10 +181,18 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-900, now=NOW), "state:looping")
         # No agent under the pane: nothing shipped, the stamp stands.
         self.assertEqual(self.probe(state="looping", comm="zsh", merged_at=NOW-300, now=NOW), "state:looping")
-        # An ACTIVE Loop, a running child or bg job still retain it (#1331, #1370).
+        # An ACTIVE Loop or a bg job / tool call of its own still retain it (#1331,
+        # #1370); a sub-task still open does not, once its own PR merged (#4822:
+        # an idle repro session it spawned held @4383 for hours) — waived, said.
         wake = f"kind=wakeup next={int(time.time())+1800} ttl=1800\t"
         self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, loop=wake), "retained:loop")
-        self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, wait="children"), "retained:children")
+        for wait in ("bg", "tool"):
+            self.assertEqual(self.probe(state="looping", age="10:00", merged_at=NOW-300, now=NOW, wait=wait), "retained:" + wait)
+        waived = []
+        self.assertIsNone(self.probe(state="looping", age="2:00:00", merged_at=NOW-300, now=NOW, wait="children", waived=waived))
+        self.assertIn("children", waived)
+        # No merge time (the idle / no-PR passes): an open sub-task still holds it.
+        self.assertEqual(self.probe(state="done", wait="children"), "retained:children")
         # Only `looping` is waived — a working agent never is.
         self.assertEqual(self.probe(state="working", age="2:00:00", merged_at=NOW-300, now=NOW), "state:working")
 

@@ -29,6 +29,7 @@
 #      a test identity's (@test_identity) or no agent runs (@wrap_gone); the
 #      agent's own OSC 7501 word (issue #2540) outranks the stamp — blocked keeps,
 #      done stops — and no word, no state, no agent process stops as exited
+#  12. a bare PATH (ssh / the peerlink: no tmux on it) still finds the window (#4822)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 REAL_TMUX=$(command -v tmux) || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
@@ -263,6 +264,28 @@ tf set-window-option -u -t "$w11d" @claude_state 2>/dev/null
 reap "$w11d" --yes
 [ "$rc" = 0 ] && [ "$out" = reaped:full ] || fail "11: no word, no state, no agent process expected reaped:full/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
 has_win "$w11d" && fail "11: the agentless row survived ⌃x"
+
+# --- 12. a bare PATH (issue #4822): a stop sent over ssh / the peerlink runs with
+#         `/usr/bin:/bin` — no tmux on it — and every key answered not-found while
+#         the window stood. The fill finds tmux in FLEET_TOOL_DIRS: a PATH with
+#         every system tool but tmux, and tmux only in a tool dir.
+mkdir -p "$WORK/pbin" "$WORK/tbin"
+for d in /usr/bin /bin; do
+  for f in "$d"/*; do
+    n=${f##*/}; [ "$n" = tmux ] || [ -e "$WORK/pbin/$n" ] || ln -s "$f" "$WORK/pbin/$n" 2>/dev/null
+  done
+done
+for t in bash python3 ps awk; do   # where the runner keeps them outside /usr/bin:/bin
+  [ -e "$WORK/pbin/$t" ] || { tp=$(command -v "$t") && ln -s "$tp" "$WORK/pbin/$t"; }
+done
+ln -s "$REAL_TMUX" "$WORK/tbin/tmux"
+w12=$(mkwin twelve 'while :; do sleep 300; done' 12); sleep 0.3
+out=$(env -i HOME="$HOME" PATH="$WORK/pbin" FLEET_TOOL_DIRS="$WORK/tbin" TMUX_TMPDIR="$TMUX_TMPDIR" \
+        FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_HISTORY_LEDGER="$FLEET_HISTORY_LEDGER" \
+        CLAUDE_PROJECTS_DIR="$CLAUDE_PROJECTS_DIR" FLEET_CC_SESSIONS_DIR="$FLEET_CC_SESSIONS_DIR" \
+        "$WORK/pbin/bash" "$BIN/fleet-worker-stop.sh" fleetS issue-12 2>"$WORK/err"); rc=$?
+[ "$rc" = 0 ] && [ "$out" = stopped:shell ] || fail "12: a bare-PATH stop expected stopped:shell/0" "rc=$rc out=$out err=$(cat "$WORK/err")"
+has_win "$w12" && fail "12: the window survived a bare-PATH stop"
 
 # --- 9. a multi-repo fleet (issue #1018): `<repo>:issue-N` stops THAT repo's -----
 #        window only; a bare key two repos hold is ambiguous; an unhosted repo is

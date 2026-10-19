@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 
-from fleet_reap_notice import clear, notice, option, tmux
+from fleet_reap_notice import clear, notice, option, reap_state, tmux
 import fleet_reap_policy
 
 
@@ -33,7 +33,10 @@ def run(*args, cwd=None):
                                        stderr=subprocess.PIPE, timeout=15).strip()
     except subprocess.CalledProcessError as exc:
         if args[0] == "gh" and re.search(r"rate.?limit|HTTP 429", exc.stderr, re.I):
-            raise RateLimited("GitHub rate limit; stopping this tick") from exc
+            # gh's own words (issue #4822): a secondary limit and an exhausted
+            # quota read alike here, and only the line says which it was.
+            said = next((l.strip() for l in exc.stderr.splitlines() if l.strip()), "")
+            raise RateLimited("GitHub rate limit; stopping this tick" + (": " + said[:200] if said else "")) from exc
         raise
 
 
@@ -85,7 +88,7 @@ class Cleaner:
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
-                 "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted")
+                 "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -94,6 +97,22 @@ class Cleaner:
         if len(vals) != len(names):
             return {n: option(self.tm, window, n) for n in names}
         return {n: v.strip() for n, v in zip(names, vals)}
+
+    @staticmethod
+    def finished(snap):
+        """done | exited | the stamp — the agent's own finished 7501 word first
+        (fleet_reap_notice.reap_state, issue #4822): a `looping` stamp its Stop
+        hook left for a child that has since ended is not «still working»; what
+        is really pending is busy()'s and fleet-reap-live.py's to say."""
+        return reap_state(snap["@claude_state"], snap["@agent_status"])
+
+    def theirs(self, snap):
+        """Another hosted repo's window, in a multi-repo fleet's per-repo pass
+        (--window-repo): that repo's pass decides it — this one neither closes it
+        nor CLEARS the countdown that pass set (issue #4822: every other repo's
+        pass wiped it, so a `done:10m` window's notice never came due). A window
+        whose repo is unknown is no pass's: skipped, never guessed."""
+        return bool(self.args.window_repo) and norm_repo(snap["@repo"]) != norm_repo(self.args.repo)
 
     def ticket(self, snap):
         """The ticket a session is bound to: its @issue, else — for a batch
@@ -188,7 +207,7 @@ class Cleaner:
         # finished turn: the same grace, the same resumable record — and so is a
         # window with no agent at all (the wrapper gone, the pane dead:
         # fleet_window_has_agent, issue #2404).
-        if ((snap["@claude_state"] not in ("done", "exited")
+        if ((self.finished(snap) not in ("done", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")):
             return False
@@ -392,6 +411,8 @@ class Cleaner:
             return self.empty(window, snap)
         if snap["@norepo"] == "1":
             return self.norepo(window, snap)
+        if self.theirs(snap):
+            return False
         if self.route(snap) == "no-pr":
             return self.no_pr(window, snap)
         if not self.eligible(window, snap):
@@ -497,7 +518,7 @@ class Cleaner:
                 # an old role's window is an ordinary session (issue #4341)
                 or snap["@fleet_role"] in ("home", "panel")
                 or snap["window_name"] in ("dash", "plan", "backlog", "home")
-                or (snap["@claude_state"] not in ("done", "exited")
+                or (self.finished(snap) not in ("done", "exited")
                     and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1")):
             if snap["@reap_skip"] and not self.args.dry_run:
                 self.tm("set-option", "-wu", "-t", window, "@reap_skip")

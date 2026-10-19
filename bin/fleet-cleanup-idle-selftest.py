@@ -1547,6 +1547,72 @@ class DoneNoPr(Rig):
         self.assertIn("cleaned:done-no-pr " + self.win, self.due())
         self.assertFalse(self.exists())
 
+class StuckReaps(unittest.TestCase):
+    """Issue #4822: the finished windows nothing closed on a multi-repo fleet.
+    Last in the module on purpose — a case added above would move every later
+    case to another stride part; this class runs as fleet-cleanup-idle-9."""
+    NAMES = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
+             "@cc_agent", "@cc_launcher_pid", "@codex_identity", "@handoff_manifest",
+             "@agent_transfer_until", "window_name", "@reap_policy", "@loop", "@worker_lifecycle",
+             "@wrap_gone", "pane_dead", "@fleet_role", "@reap_skip", "@test_identity", "@born",
+             "@fleet_id", "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status")
+
+    def cleaner(self, repo, opts):
+        args = argparse.Namespace(session="s", socket_name="s", main="/nonexistent", repo=repo,
+                                  base="master", limit=4, forge="github", window_repo=True,
+                                  dry_run=False, policy_only=False)
+        c = idle.Cleaner(args)
+        self.writes = []
+
+        def tm(*argv):
+            if argv[0] == "display-message":
+                return "\x1f".join(opts.get(n, "") for n in self.NAMES) if "\x1f" in argv[-1] \
+                    else opts.get(argv[-1][2:-1], "")
+            self.writes.append(argv)
+            return ""
+        c.tm = tm
+        return c
+
+    def test_another_repos_pass_leaves_the_countdown(self):
+        # A done:10m window of acme/two, its countdown set by acme/two's pass: the
+        # acme/one pass of the same tick used to call clear() on it, every tick.
+        opts = {"@repo": "acme/two", "@issue": "7", "@reap_policy": "done:10m",
+                "@claude_state": "exited", "@claude_state_ts": "100", "@worktree": "/nonexistent/wt",
+                "@reap_key": "idle:abc", "@reap_due": "200", "window_name": "w"}
+        c = self.cleaner("acme/one", opts)
+        self.assertFalse(c.candidate("@5"))
+        self.assertEqual([w for w in self.writes if "-wu" in w], [])
+        # its own pass still clears a countdown it no longer stands behind
+        c = self.cleaner("acme/two", opts)
+        with patch.object(idle.Cleaner, "eligible", return_value=False):
+            self.assertFalse(c.candidate("@5"))
+        self.assertIn(("set-option", "-wu", "-t", "@5", "@reap_due"), self.writes)
+
+    def test_the_agents_finished_word_outranks_a_looping_stamp(self):
+        # The Stop hook stamped `looping` for a child that has since ended; the
+        # agent itself said `done` (OSC 7501). What is really pending is busy()'s
+        # and fleet-reap-live's to say, not the stamp's.
+        def st(word):
+            return '{"state":"%s"}' % word
+        for word, want in (("done", "done"), ("idle", "done"), ("error", "exited"),
+                           ("working", "looping"), ("blocked", "looping"), ("", "looping")):
+            snap = {"@claude_state": "looping", "@agent_status": st(word) if word else ""}
+            self.assertEqual(idle.Cleaner.finished(snap), want, word)
+        opts = {"@claude_state": "looping", "@claude_state_ts": "100", "@agent_status": st("done")}
+        def tm(*args):
+            if args[0] == "display-message":
+                return opts.get(args[-1][2:-1], "")
+            if args[1] == "-wu":
+                opts.pop(args[-1], None)
+            else:
+                opts[args[-2]] = args[-1]
+            return ""
+        self.assertEqual(notice(tm, "@1", "merged:9:abc", 0, 500), 560)
+        opts["@agent_status"] = st("working")
+        with self.assertRaises(ValueError):
+            notice(tm, "@1", "merged:9:abc", 0, 600)
+
+
 if __name__ == "__main__":
     import selftest_part
     try:

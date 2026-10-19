@@ -649,9 +649,12 @@ auto_cleanup_gate() {
           why="${why:-liveness probe unavailable}"
         else
           case "$why" in
-            waived:*)  # the gate runs twice per reap; one log line per reap
+            waived:*young-agent*)  # the gate runs twice per reap; one log line per reap
               [ -n "${young_waived_noted:-}" ] \
                 || note "  #$PR young-agent waived: merged during this agent's life (${why#waived:young-agent:})"
+              young_waived_noted=1 ;;
+            waived:*)  # a still-open sub-task does not hold a merged worker (#4822)
+              [ -n "${young_waived_noted:-}" ] || note "  #$PR waived: ${why#waived:}"
               young_waived_noted=1 ;;
           esac
           why=""

@@ -14,7 +14,8 @@
 #                  Codex one alike (issue #1896); working / needs / looping /
 #                  recent / ok / unknown never; nor a Loop the hook never marked
 #                  that the transcript still holds (issue #2189); nor a finished
-#                  one its @reap_policy hands to the idle reaper (issue #4764)
+#                  one its @reap_policy hands to the idle reaper (issue #4764), nor
+#                  one on a CLOSED ticket (issue #4822)
 #   D. tick      — fleet-cfg-restart.sh (fleet-migrate.sh faked): auto hands the
 #                  eligible window to `--cfg-stale`, never the working one, at most
 #                  FLEET_CFG_RESTART_MAX, the Codex one on a later tick, not again
@@ -155,6 +156,23 @@ eq "C: an at: still ahead → reopen"                    "rc=0"      "$(why "$WR
 eq "C: merged → reopen (the merged janitor's, not idle)" "rc=0"    "$(why "$WRM")"
 eq "C: keep → reopen"                                  "rc=0"      "$(why "$WRK")"
 for w in "$WRD" "$WRL" "$WRA" "$WRF" "$WRM" "$WRK"; do T kill-window -t "$w"; done
+# A finished session on a CLOSED ticket is the reaper's too (issue #4822): the
+# reopen's resume nudge is a new turn, so every release restarted done-no-pr's
+# two hours. An open ticket, or a GitHub that cannot be read, reopens as before.
+mkdir -p "$WORK/fakegh"
+cat > "$WORK/fakegh/gh" <<GH
+#!/bin/sh
+case "\$*" in *"issue view 41"*) echo '{"state":"CLOSED"}' ;; *"issue view 42"*) echo '{"state":"OPEN"}' ;; *) exit 1 ;; esac
+GH
+chmod +x "$WORK/fakegh/gh"
+whygh() { PATH="$WORK/fakegh:$PATH" why "$1"; }
+WCL=$(mk closedtkt done bbbbbbbbbbbb); T set-option -w -t "$WCL" @issue 41; T set-option -w -t "$WCL" @repo acme/app
+WOP=$(mk opentkt done bbbbbbbbbbbb);   T set-option -w -t "$WOP" @issue 42; T set-option -w -t "$WOP" @repo acme/app
+WUN=$(mk unkntkt done bbbbbbbbbbbb);   T set-option -w -t "$WUN" @issue 43; T set-option -w -t "$WUN" @repo acme/app
+eq "C: done on a CLOSED ticket → left to the reaper (#4822)" "reap rc=1" "$(whygh "$WCL")"
+eq "C: done on an open ticket → reopen"                      "rc=0"      "$(whygh "$WOP")"
+eq "C: ticket unreadable → reopen"                           "rc=0"      "$(whygh "$WUN")"
+for w in "$WCL" "$WOP" "$WUN"; do T kill-window -t "$w"; done
 # A Loop the PostToolUse hook never marked (issue #2189): no @loop, but the
 # transcript holds a pending ScheduleWakeup — the judge reads it, says `looping`,
 # and writes the missing @loop; a lapsed one is no Loop.

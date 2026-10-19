@@ -163,19 +163,38 @@ def agent_present(tmux, target):
     return agent_under(roots, table)
 
 
+# The state read every gate here takes: the stamp, the agent's 7501 word and
+# whether the wrapper is gone (@wrap_gone — fleet-session-wrap.sh stamps it when
+# the pane fell back to a bare shell) or the pane dead. A caller that fed only
+# the first two fields reads «not gone».
+STATE_FMT = "#{@claude_state}\t#{@agent_status}\t#{@wrap_gone}#{?pane_dead,1,}"
+
+
+def split_state(raw):
+    stamped, status, gone = (raw.rstrip("\n").split("\t") + ["", ""])[:3]
+    return stamped.strip(), status, "1" in gone
+
+
+def stale(stamped, said, gone):
+    """A stamp that is not a finished one, on a window whose wrapper is gone and
+    whose agent never said a word — `needs` carried over a restore onto a pane
+    that came back as a shell (issue #4822). Only the process walk may turn it
+    into `exited`: an agent found under it keeps the stamp's word."""
+    return gone and said is None and stamped not in ("", "done", "exited")
+
+
 def reap_state(tmux, target):
     """The state every reaper judges a window by (issue #2540) — one answer for
     dash-reap, fleet-cleanup and the EPIC backstop (`--state`):
       the agent's 7501 word (working | blocked | done | exited), else @claude_state;
       a 7501 working/blocked with no agent process left under the pane (the relay
-      went down with it) and a window with neither a 7501 word nor a stamped state
-      nor an agent process (an agent that never started, #2404) → exited."""
-    raw = read(*tmux, "display-message", "-p", "-t", target,
-               "#{@claude_state}\t#{@agent_status}").rstrip("\n")
-    stamped, _, status = raw.partition("\t")
-    stamped = stamped.strip()
+      went down with it), a window with neither a 7501 word nor a stamped state
+      nor an agent process (an agent that never started, #2404), and a stale
+      stamp with its wrapper gone and no agent (#4822) → exited."""
+    stamped, status, gone = split_state(read(*tmux, "display-message", "-p", "-t", target, STATE_FMT))
     said = self_state(status)
-    if said in ("working", "blocked") or (said is None and not stamped):
+    if (said in ("working", "blocked") or (said is None and not stamped)
+            or stale(stamped, said, gone)):
         if agent_present(tmux, target) is False:
             return "exited"
     return said or stamped
@@ -205,6 +224,15 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     if (value or manifest) and LOOPMARK["status"](value, manifest)[0] == "active":
         return "retained:loop"
     why = waiting(target, socket_name)
+    # A worker whose PR merged (merged_at, the merged gate's own probe) has shipped:
+    # a sub-task it spawned and that is still open — a repro session left at its
+    # prompt — does not keep it (issue #4822). The child stays; its reports climb
+    # to the nearest live ancestor (fleet_live_ancestor, #1352). A running job or
+    # an in-flight tool call is this agent's own and still holds it.
+    if why == "children" and merged_at is not None:
+        if waived is not None:
+            waived.append("children")
+        why = ""
     if why:
         return "retained:" + why
     lifecycle = read(*tmux, "display-message", "-p", "-t", target, "#{@worker_lifecycle}").strip()
@@ -216,10 +244,7 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     sleeping = lifecycle == "sleeping"
     if lifecycle and not sleeping:
         return "retained:" + lifecycle
-    raw = read(*tmux, "display-message", "-p", "-t", target,
-               "#{@claude_state}\t#{@agent_status}").rstrip("\n")
-    state, _, status = raw.partition("\t")
-    state = state.strip()
+    state, status, gone = split_state(read(*tmux, "display-message", "-p", "-t", target, STATE_FMT))
     # The agent's own word first (issue #2540): done / idle / error / exited is a
     # finished agent whatever a hook stamped — reapable, and on done / error /
     # exited the young-agent gate is waived (FINISHED: it covers an agent that has
@@ -239,7 +264,8 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     # `exited` (issue #1784): the agent left and the pane holds the recovery page —
     # as idle as `done`; the walk below still refuses any agent found under it.
     busy = said in ("working", "blocked")
-    if not busy and state not in ("", "done", "exited") and not looping:
+    gone_stale = stale(state, said, gone)
+    if not busy and not gone_stale and state not in ("", "done", "exited") and not looping:
         return "state:"+state
     roots = read(*tmux, "list-panes", "-t", target, "-F", "#{pane_pid}").split()
     if not roots or not all(p.isdigit() for p in roots):
@@ -247,13 +273,13 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
     processes, children, commands = process_table()
     if not all(pid in processes for pid in roots):
         return "unknown:pane-process"
-    if busy:
+    if busy or gone_stale:
         found = agent_under(roots, (processes, children, commands))
         if found is None:
             return "unknown:agent-command"
         if found:
-            return "agent:" + said
-        state = "exited"
+            return ("agent:" + said) if busy else "state:" + state
+        state, looping = "exited", False
     seen, todo, shipped = set(), list(roots), False
     while todo:
         pid = todo.pop()
@@ -337,7 +363,7 @@ def main():
         return 1
     if waived:
         # Exit 0 still means reapable; the line only lets the caller log the waiver.
-        print("waived:" + ",".join(w if w == "looping" else "young-agent:" + w for w in waived))
+        print("waived:" + ",".join(w if w in ("looping", "children") else "young-agent:" + w for w in waived))
     return 0
 
 

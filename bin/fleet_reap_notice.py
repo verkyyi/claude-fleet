@@ -1,8 +1,28 @@
 #!/usr/bin/env python3
 """Window-local reap notice, invalidated by activity or a missed daemon tick."""
 import argparse
+import json
 import subprocess
 import time
+
+# The agent's own last word (OSC 7501, @agent_status — issue #2540) outranks the
+# hook stamp for «has it finished?»: fleet-reap-live.py's SELF_STATES, the
+# finished half. A Stop hook stamps `looping` while a child or a job is pending
+# (issue #1370) and keeps that stamp after the child is gone; the gates that read
+# the pending work themselves (fleet-reap-live.py, busy()) still hold such a
+# window — the stamp alone must not (issue #4822).
+FINISHED_WORDS = {"done": "done", "idle": "done", "error": "exited", "exited": "exited"}
+
+
+def reap_state(stamped, status):
+    """@claude_state + @agent_status → the state a reaper judges a finished
+    window by: the agent's finished 7501 word when it said one, else the stamp."""
+    try:
+        rec = json.loads(status) if status else None
+    except ValueError:
+        rec = None
+    word = rec.get("state") if isinstance(rec, dict) else None
+    return FINISHED_WORDS.get(word, stamped)
 
 
 def tmux(socket=None):
@@ -25,7 +45,7 @@ def clear(tm, window):
 
 def notice(tm, window, key, deadline, now=None, dry=False, hold=None):
     now = int(time.time()) if now is None else now
-    state = option(tm, window, "@claude_state")
+    state = reap_state(option(tm, window, "@claude_state"), option(tm, window, "@agent_status"))
     stamp = option(tm, window, "@claude_state_ts")
     # exited (issue #1784): the agent gone, the pane on its recovery page — as
     # idle as a finished turn, and the no-PR pass closes it too (issue #1832).

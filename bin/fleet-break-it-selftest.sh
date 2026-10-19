@@ -160,6 +160,9 @@
 #   batch-green-unsaid                              bin/fleet-batch-green.sh (diskguard batch_green_watch)
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
+#   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
+#   reap-reopen-restarts-clock                      fleet_cfg_restart_why (fleet-lib.sh), fleet-cfg-restart.sh
+#   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
 #   ticket-hub-down                                 bin/fleet-ticket.sh, bin/fleet_ticket.py, fleet-comment.sh,
 #                                                   fleet-issue-file.sh (fleet_ticket_home: a hub repo never asks gh),
 #                                                   fleet-issue-bridge.sh (--event + the hub backstop, #3597)
@@ -6592,6 +6595,106 @@ drill_stuck_worker_unseen() {
     || { WHY="fleet-session-wrap.sh no longer reports a refused launch"; return 1; }
   SECS=$(since "$t0")
   WHAT='worker 被 API 错误停住、自动续接用完或错误不可续：给父会话报一次 failed（停在提示符、不是做完了）；rate_limit 和人的会话不报；起动被拒的 worker 一串也只报一次'
+}
+
+# ---- finished workers nothing closed (issue #4822, macmini 2026-10-19) -------------
+# The idle pass runs once per hosted repo; every OTHER repo's pass saw a `done:10m`
+# window as not its own and cleared the countdown its own pass had just set — on
+# every tick, so it never came due (@3762, six hours).
+drill_reap_other_repo_clears() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 - "$BIN" <<'PY'
+import importlib.util, sys, types
+spec = importlib.util.spec_from_file_location("idle", sys.argv[1] + "/fleet-cleanup-idle.py")
+m = importlib.util.module_from_spec(spec); sys.path.insert(0, sys.argv[1]); spec.loader.exec_module(m)
+opts = {"@repo": "acme/two", "@issue": "7", "@reap_policy": "done:10m", "@claude_state": "exited",
+        "@claude_state_ts": "100", "@worktree": "/nonexistent/wt", "@reap_key": "idle:abc", "window_name": "w"}
+writes = []
+def tm(*a):
+    if a[0] == "display-message":
+        f = a[-1]
+        return "\x1f".join(opts.get(x[2:-1], "") for x in f.split("\x1f")) if "\x1f" in f else opts.get(f[2:-1], "")
+    writes.append(a); return ""
+c = m.Cleaner.__new__(m.Cleaner)
+c.args = types.SimpleNamespace(session="s", socket_name="s", main="/nonexistent", repo="acme/one", base="master",
+                               limit=4, forge="github", window_repo=True, dry_run=False, policy_only=False)
+c.tm, c.now, c.idle = tm, 1000, 1800
+c.candidate("@5")
+print(sum(1 for w in writes if "-wu" in w))
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = 0 ] || { WHY="another repo's pass cleared the window's countdown ($out unsets)"; return 1; }
+  WHAT="一个仓库的闲置那一遍只管自己仓库的窗口：别的仓库窗口的倒计时原样留着，到点就收"
+}
+
+# A `looping` stamp its Stop hook left for a child that has since ended (or for one
+# still open after its own PR merged), and `needs` carried onto a pane that came
+# back a bare shell: nothing ever read them as finished (@3718 · @4383 · @1058).
+drill_reap_stale_stamp() {
+  CAP=15; local t0
+  t0=$(now)
+  python3 "$BIN/fleet-reap-live-selftest.py" "$BIN" LiveTests.test_stale_stamp_with_wrapper_gone \
+    LiveTests.test_merged_looping_worker_is_reapable LiveTests.test_reap_state_cli >"$WORK/stale-stamp.out" 2>&1 \
+    || { WHY="reap-live still holds a stale stamp: $(grep -E '^(FAIL|AssertionError)' "$WORK/stale-stamp.out" | head -2 | tr '\n' ' ')"; return 1; }
+  python3 "$BIN/fleet-cleanup-idle-selftest.py" "$BIN" StuckReaps >"$WORK/stale-stamp2.out" 2>&1 \
+    || { WHY="the idle pass still reads only the stamp: $(grep -E '^(FAIL|AssertionError)' "$WORK/stale-stamp2.out" | head -2 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="agent 自己说的 done 压过 looping 印记；包装没了、没 agent 的旧 needs 读成 exited；PR 合了的不再被还开着的子会话留住"
+}
+
+# Every release reopens idle sessions on the old version (ver-stale); the resume
+# nudge is a new turn, so a session finished on a CLOSED ticket restarted
+# done-no-pr's two hours on each release and never came due (#2338: @4390 → @4407 → @4425).
+drill_reap_reopen_restarts_clock() {
+  CAP=15; local t0 d sock w why
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  d="$WORK/rrc"; sock="$d/s"; mkdir -p "$d/conf/global" "$d/conf/fleets/rrc" "$d/gh"
+  printf 'FLEET_REPO=acme/app\n' > "$d/conf/fleets/rrc/conf"
+  printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
+  printf '#!/bin/sh\ncase "$*" in *"issue view 41"*) echo %s ;; *) exit 1 ;; esac\n' "'{\"state\":\"CLOSED\"}'" > "$d/gh/gh"
+  chmod +x "$d/gh/gh"
+  "$REAL_TMUX" -S "$sock" -f /dev/null new-session -d -s rrc -n w 'sleep 120' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$("$REAL_TMUX" -S "$sock" display-message -p -t rrc:w '#{window_id}')
+  "$REAL_TMUX" -S "$sock" set-option -w -t "$w" @agent_cfg fp-old \; set-option -w -t "$w" @cc_agent claude \; \
+    set-option -w -t "$w" @claude_state 'done' \; set-option -w -t "$w" @claude_state_ts 1 \; \
+    set-option -w -t "$w" @issue 41 \; set-option -w -t "$w" @repo acme/app
+  t0=$(now)
+  why=$(env PATH="$d/gh:$PATH" TMUX="$sock,1,0" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          bash -c '. "$1/fleet-lib.sh"; fleet_cfg_restart_why rrc "$2"' _ "$BIN" "$w" 2>/dev/null)
+  SECS=$(since "$t0")
+  "$REAL_TMUX" -S "$sock" kill-server 2>/dev/null
+  [ "$why" = reap ] || { WHY="cfg-restart would reopen a finished session on a closed ticket: [$why], want reap"; return 1; }
+  WHAT="单已关、做完了的会话不再被换版重开：两小时的「单已关才收」从它最后一轮算起，到点就收"
+}
+
+# A stop sent over ssh / the peerlink runs with a bare PATH (/usr/bin:/bin): no tmux
+# on it, every list empty, every key refused:not-found while the window stood.
+drill_stop_bare_path() {
+  CAP=10; local t0 d f n t w out
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  d="$WORK/sbp"; mkdir -p "$d/tt" "$d/conf/fleets/sbp" "$d/pbin" "$d/tbin"
+  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s"\n' "$d" > "$d/conf/fleets/sbp/conf"
+  # every system tool but tmux on PATH; tmux only in a tool dir
+  for f in /usr/bin/* /bin/*; do
+    n=${f##*/}; [ "$n" = tmux ] || [ -e "$d/pbin/$n" ] || ln -s "$f" "$d/pbin/$n" 2>/dev/null
+  done
+  for t in bash python3 ps awk; do [ -e "$d/pbin/$t" ] || ln -s "$(command -v "$t")" "$d/pbin/$t"; done
+  ln -s "$REAL_TMUX" "$d/tbin/tmux"
+  TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sbp -f /dev/null new-session -d -s sbp -n w 'sleep 120' \
+    || { WHY="cannot start the isolated tmux server"; return 1; }
+  w=$(TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sbp display-message -p -t sbp:w '#{window_id}')
+  TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sbp set-option -w -t "$w" @issue 12
+  t0=$(now)
+  out=$(env -i HOME="$WORK" PATH="$d/pbin" FLEET_TOOL_DIRS="$d/tbin" TMUX_TMPDIR="$d/tt" \
+          FLEET_CONF_DIR="$d/conf" FLEET_HISTORY_LEDGER="$d/ledger.tsv" FLEET_SKIP_GLOBAL_CONF=1 \
+          "$d/pbin/bash" "$BIN/fleet-worker-stop.sh" sbp issue-12 2>/dev/null)
+  SECS=$(since "$t0")
+  TMUX_TMPDIR="$d/tt" "$REAL_TMUX" -L sbp kill-server 2>/dev/null
+  [ "$out" = stopped:shell ] || { WHY="a bare-PATH stop answered [$out], want stopped:shell"; return 1; }
+  WHAT="裸 PATH（ssh / peerlink）下 fleet-worker-stop.sh 照样找到 fleet 上的窗口并停掉"
 }
 
 # ================================================================ run ====}
