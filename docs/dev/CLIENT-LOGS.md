@@ -135,6 +135,25 @@ fields, only ever added at the end:
 The `tls:` part is `fleet_tls.describe()` (#2878): which python, which CA
 sources it verifies the hub with.
 
+## Reading them — `bin/fleet-client-stats.py`
+
+The ONE ruler for the client's three stability readings (issue #4824, EPIC
+#4823 共同约定 7 — before, after and the batch report all read them this way):
+
+    bin/fleet-client-stats.py [--json] [--days N] [--now ISO] <dir>…
+
+Each `<dir>` is one computer: its cache (`~/.cache/claude-fleet`), a diagnosis
+bundle (`fleet doctor --bundle` — it packs `thin.log`'s last 5000 lines as
+`logs/thin.log` since #4824) or a bare log dir; `.1` is read first.
+
+| reading | from |
+|---|---|
+| drops / computer / day | `thin.log` `connect` with reason `up` whose next lifecycle line is not `quit` / `end`, over the UTC days that computer's thin client logged anything |
+| reconnect (median / p90) | a drop's line → the next `drawn`, whole seconds; also without the gaps that had an `offline` inside (this computer's own line down); a drop with no `drawn` before the client ended is `unrecovered` |
+| open failures | per start (the first lifecycle line after `quit` / `end`, or a second `drawn` with no end to the first — a process that went silently): its first `connect` not up (pick rc 1, `never up` but rc 3 — the first-session road), or a `first` rc 1; beside it the starts that never drew, connect.log `home` failures by code, place.log asks and non-zero exits |
+
+`bin/fleet-client-stats-selftest.sh` pins the three on synthetic logs.
+
 ## Redaction — `conf/secret-shapes.list`
 
 The ONE table of what a credential looks like (EPIC #2889 共同约定 1): one
