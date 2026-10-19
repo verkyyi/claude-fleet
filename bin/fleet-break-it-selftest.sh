@@ -3917,7 +3917,7 @@ drill_guide_killed_midopen() {
   WHAT="打开要 2 s、阶段只给 1 s：开窗的那一步不在阶段的进程组里，引导照样开出来（无仓库）、算一次；2 小时前的「没能重开」停止自己解除"
 }
 
-# guide-spare-login (issue #4852, macmini/fleetsvc1 2026-10-19): every login is
+# guide-spare-login (issue #4852, a service login, 2026-10-19): every login is
 # bootstrapped with a fleet, and fleet-up opened the onboarding guide on each — a
 # spare waiting to be handed out, a service login that only coordinates. Closed by
 # hand it came straight back (a stop's lift had reset the try count to 0, and the

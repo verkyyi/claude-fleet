@@ -564,7 +564,7 @@ leg "12 a guide the person closed stays closed"
 # spare, a service login, a drill account. Its guide stays pending until a person
 # arrives (an attach, `fleet guide`), a pinned guide an older version left open
 # there is closed, and once shown and closed it is dismissed — whatever the try
-# count (macmini/fleetsvc1 2026-10-19: closed, back at once as a new window).
+# count (a service login, 2026-10-19: closed, back at once as a new window).
 export FLEET_CONF_DIR="$WORK/conf13"; unset FLEET_ONBOARD
 gdir="$FLEET_CONF_DIR/global"
 : > "$launches"
