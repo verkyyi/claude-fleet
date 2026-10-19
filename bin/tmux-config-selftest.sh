@@ -33,6 +33,7 @@
 # Exit 0 = pass. Non-zero = fail (prints which assertion).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-config-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
@@ -379,18 +380,21 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 # --- REPO SCOPE (issue #802) -------------------------------------------------
-# A real fleet-lib over a temp FLEET_CONF_DIR: fleet s2 hosts o/a (its conf) and,
-# once an overlay exists, o/b. FCFG_FLEET_CONF is dropped so the lib resolves the
-# fleet conf the way the modal does.
+# A real fleet-lib over a temp FLEET_CONF_DIR: fleet s2 hosts o/a and, once its
+# overlay exists, o/b. FCFG_FLEET_CONF is dropped so the lib resolves the fleet
+# conf the way the modal does.
 unset FCFG_FLEET_CONF
 export FLEET_CONF_DIR="$WORK/confdir"
 mkdir -p "$FLEET_CONF_DIR/fleets/s2"
 F2="$FLEET_CONF_DIR/fleets/s2/conf"
-printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' > "$F2"
+# s2_fixture — the fleet conf names no repo (#1937, #4806): o/a is its overlay
+s2_fixture() { printf 'FLEET_MODEL="sonnet"\n' > "$F2"; rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
+               fx_repo "$FLEET_CONF_DIR" s2 o/a FLEET_DEPLOY_CHECK=actions; }
+s2_fixture
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-# One-repo fleet (old layout, no repos/ overlay): one repo scope, for its one repo,
+# One-repo fleet: one repo scope, for its one repo,
 # so ⌃s is fleet ⇄ repo:o-a — and that repo layer is the repo's overlay, as in
 # any fleet (issue #1943): an edit there writes repos/o-a.conf, never F2.
 eq 'one-repo: one repo scope' "$(fcfg_repo_scopes s2 | cut -d"$FCFG_US" -f1)" repo:o-a
@@ -401,11 +405,11 @@ eq 'one-repo per-repo key → repo'      "$(fcfg_key_wscope s2 FLEET_MODEL)" rep
 eq 'one-repo non-repo key → fleet'     "$(fcfg_key_wscope s2 FLEET_MAX_SESSIONS)" fleet
 eq 'one-repo global-only key → global' "$(fcfg_key_wscope s2 FLEET_GLOBAL_MAX_SESSIONS)" global
 cp "$F2" "$WORK/F2.keep"
-eq 'one-repo repo write' "$(fcfg_repo_write s2 o-a FLEET_AGENT codex enum)" created
+fcfg_repo_write s2 o-a FLEET_AGENT codex enum >/dev/null || fail 'one-repo repo write failed'; ok
 eq 'one-repo write lands in its overlay' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf" FLEET_AGENT)" codex
 cmp -s "$F2" "$WORK/F2.keep" || fail 'one-repo repo write touched the fleet conf'; ok
 eq 'one-repo fleet still hosts one repo' "$(fleet_repos s2 | tr '\n' ' ')" "o/a "
-mv "$WORK/F2.keep" "$F2"; rm -f "$F2.bak"; rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
+rm -f "$WORK/F2.keep" "$F2.bak"; s2_fixture
 fcfg_wscope_toggle s2; eq 'one-repo toggle → fleet' "$(fcfg_wscope s2)" fleet
 
 # Shim tmux so the modal resolves session s2 with no server.
@@ -453,22 +457,21 @@ eq 'repo target' "$(fcfg_target_conf s2 repo:o-b)" "$FLEET_CONF_DIR/fleets/s2/re
 eq 'unhosted repo target is empty' "$(fcfg_target_conf s2 repo:gone)" ''
 
 # Effective value per repo: own overlay ▸ fleet conf ▸ … — and a deploy key does
-# NOT leak from the conf repo into another repo (fleet-lib unsets it).
+# NOT leak from one repo's overlay into another repo (fleet-lib unsets it).
 eq 'o/b model (own overlay)' "$(fcfg_repo_effective FLEET_MODEL s2 o/b)" "opus${FCFG_US}repo"
 eq 'o/a model (fleet conf)'  "$(fcfg_repo_effective FLEET_MODEL s2 o/a)" "sonnet${FCFG_US}fleet"
-eq 'o/a deploy (fleet conf)' "$(fcfg_repo_effective FLEET_DEPLOY_CHECK s2 o/a)" "actions${FCFG_US}fleet"
+eq 'o/a deploy (own overlay)' "$(fcfg_repo_effective FLEET_DEPLOY_CHECK s2 o/a)" "actions${FCFG_US}repo"
 eq 'o/b deploy (no leak)'    "$(fcfg_repo_effective FLEET_DEPLOY_CHECK s2 o/b)" "${FCFG_US}default"
 # …and it agrees with what a reader loading the repo conf actually sees.
 eq 'o/b model = fleet_repo_conf_get' "$(fleet_repo_conf_get s2 o/b FLEET_MODEL)" opus
 eq 'o/b deploy = fleet_repo_conf_get' "$(fleet_repo_conf_get s2 o/b FLEET_DEPLOY_CHECK)" ''
 
-# Write: into o/b's overlay; the conf repo's first write CREATES its overlay,
-# seeded with FLEET_REPO so fleet_repos still lists it once.
+# Write: into each repo's own overlay; fleet_repos still lists each once.
 eq 'repo write updates' "$(fcfg_repo_write s2 o-b FLEET_AGENT codex enum)" updated
 eq 'o/b agent after write' "$(fleet_repo_conf_get s2 o/b FLEET_AGENT)" codex
 eq 'fleet conf untouched' "$(fcfg_file_value "$F2" FLEET_AGENT || echo unset)" unset
-eq 'conf-repo write creates' "$(fcfg_repo_write s2 o-a FLEET_MODEL haiku enum)" created
-eq 'conf-repo overlay seeded' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf" FLEET_REPO)" o/a
+eq 'first repo write updates' "$(fcfg_repo_write s2 o-a FLEET_MODEL haiku enum)" updated
+eq 'first repo overlay keeps its identity' "$(fcfg_file_value "$FLEET_CONF_DIR/fleets/s2/repos/o-a.conf" FLEET_REPO)" o/a
 eq 'o/a model after write' "$(fleet_repo_conf_get s2 o/a FLEET_MODEL)" haiku
 eq 'o/b model unaffected'  "$(fleet_repo_conf_get s2 o/b FLEET_MODEL)" opus
 eq 'repos listed once' "$(fleet_repos s2 | paste -sd' ' -)" 'o/a o/b'
@@ -533,11 +536,10 @@ ev=$(fcfg_effective FLEET_GLOBAL_MAX_SESSIONS s2)
 eq 'modal agrees' "$ev" "9${FCFG_US}fleet"
 rm -f "$FLEET_CONF_DIR/fleet.settings" "$FLEET_CONF_DIR/fleet.settings.bak" "$F2.bak"
 : > "$FCFG_GLOBAL_CONF"
-printf 'FLEET_REPO="o/a"\nFLEET_MODEL="sonnet"\nFLEET_DEPLOY_CHECK="actions"\n' > "$F2"
+s2_fixture
 fcfg_wscope_set s2 fleet
 
-# Degenerate rows: drop the overlays and the rows are byte-identical to before.
-rm -rf "$FLEET_CONF_DIR/fleets/s2/repos"
+# Degenerate rows: drop the other overlays and the rows are byte-identical to before.
 eq 'one-repo rows unchanged' "$(rows)" "$ROWS1"
 
 printf 'selftest PASS: %d assertions (keys · tags · typing · defaults · layering · validation · write · write-scope · repo-scope)\n' "$pass"

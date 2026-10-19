@@ -748,8 +748,7 @@ fcfg_repo_effective() {
 
 # fcfg_repo_write SESS SLUG KEY VALUE TYPE — fcfg_write into the repo's overlay.
 # A brand-new overlay is seeded with its FLEET_REPO first, so fleet_repos still
-# lists it (an old-layout conf repo's own overlay is created this way on its first
-# edit). Every fleet writes the repo's overlay (fcfg_repo_conf, issue #1943).
+# lists it. Every fleet writes the repo's overlay (fcfg_repo_conf, issue #1943).
 fcfg_repo_write() {
   local r f; r=$(fcfg_scope_repo "${1:-}" "repo:${2:-}") || return 1
   f=$(fleet_repo_conf_file "$1" "$r")
