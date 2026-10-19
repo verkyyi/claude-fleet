@@ -442,14 +442,9 @@ def held_text():
 
 
 def start_age(updated, now):
-    # The journal's RFC3339Nano, UTC; python 3.9 parses neither Z nor 9 digits.
-    import datetime
-    stamp = updated.rstrip("Z")
-    if "." in stamp:
-        head, frac = stamp.split(".", 1)
-        stamp = head + "." + frac[:6]
-    t = datetime.datetime.fromisoformat(stamp).replace(tzinfo=datetime.timezone.utc)
-    return now - t.timestamp()
+    # The journal's RFC3339Nano, UTC — read by the one ISO reader.
+    import fleet_iso
+    return now - fleet_iso.parse(updated, utc=True).timestamp()
 
 
 def settle_plan(start, held, now):
