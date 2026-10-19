@@ -7,9 +7,11 @@
 # itself runs it (EPIC #4823 共同约定 1).
 #
 #   fleet-client-runtime.sh --check [<list> [<manifest>]]
-#       every path on the list is in the manifest, every line `<path> TAB
-#       <use>[,<use>…]`, no path twice, each use a known action, `<action>:read`
-#       or `static`; exit 0 · 1 a finding (one line each) · 2 usage
+#       every path on the list is in the manifest, every file the manifest
+#       INSTALLS (all but its `served` lines, issue #4826) is on the list, every
+#       line `<path> TAB <use>[,<use>…]`, no path twice, each use a known
+#       action, `<action>:read` or `static`; exit 0 · 1 a finding (one line
+#       each) · 2 usage
 #   fleet-client-runtime.sh trace <out dir> [--live-user <login>] [--machine <m>]
 #       (Linux, strace, root when --live-user) installs THIS tree's client into
 #       a sandbox with bin/fleet-install.sh (FLEET_INSTALL_SRC=file://, no hub
@@ -50,6 +52,12 @@
 #   doctor-live  fleet doctor with the certificate (cert · tls rows)
 #   bundle       fleet doctor --bundle <dir>
 #   update-live  fleet update as that login
+#   and two uses no trace takes, written by hand (issue #4826):
+#   agent        the node agent a login starts runs it from the install
+#                (fleet-node-probe.sh, fleet-node-sleepwatch.sh)
+#   dispatch     a `fleet <word>` the actions above do not run (fleet route,
+#                fleet ls --services, fleet show <file> …) — the word is the
+#                client's, so is its script
 #
 # Static closure (`build`, the safety net under the trace — a branch the actions
 # did not take): the code lines (comments skipped) of a file that RAN, naming
@@ -64,7 +72,7 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$BIN/.." && pwd)
 MANIFEST_DEF="$REPO/tokenledger/internal/api/fleetclient/manifest"
 LIST_DEF="$REPO/conf/client-runtime.list"
-ACTIONS="install help status update doctor login logout host-on view ls show answer connect doctor-live bundle update-live static"
+ACTIONS="install help status update doctor login logout host-on view ls show answer connect doctor-live bundle update-live agent dispatch static"
 
 usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it)$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
@@ -75,11 +83,13 @@ check() {
   python3 - "$list" "$man" "$ACTIONS" <<'PY'
 import sys
 lst, man, known = sys.argv[1], sys.argv[2], set(sys.argv[3].split())
-inman = set()
+inman, installs = set(), []
 for line in open(man, encoding="utf-8"):
     s = line.split("#", 1)[0].split()
     if s:
         inman.add(s[0])
+        if s[1:2] != ["served"]:
+            installs.append(s[0])
 seen, bad = set(), 0
 for n, line in enumerate(open(lst, encoding="utf-8"), 1):
     line = line.rstrip("\n")
@@ -97,6 +107,11 @@ for n, line in enumerate(open(lst, encoding="utf-8"), 1):
     for a in acts.split(","):
         if a.split(":read")[0] not in known or (a.endswith(":read") and a.count(":") != 1) or a == "static:read":
             print("%s:%d: %s: unknown action %r" % (lst, n, p, a)); bad = 1
+# the other way (issue #4826, EPIC #4823 共同约定 1): a file the client installs
+# is one a client action uses — else it is `served`, or not the client's
+for p in installs:
+    if p not in seen:
+        print("%s: %s is installed by the client manifest but on no line of %s — serve it (`served`) or drop it" % (man, p, lst)); bad = 1
 sys.exit(bad)
 PY
 }
@@ -304,10 +319,10 @@ build() {
   done
   [ -n "$dirs" ] || usage
   # shellcheck disable=SC2086  # the dirs are words
-  python3 - "$REPO" "$MANIFEST_DEF" "$ACTIONS" "${write:--}" $dirs <<'PY'
+  python3 - "$REPO" "$MANIFEST_DEF" "$ACTIONS" "${write:--}" "$LIST_DEF" $dirs <<'PY'
 import os, re, sys
-repo, man, order, write = sys.argv[1], sys.argv[2], sys.argv[3].split(), sys.argv[4]
-dirs = sys.argv[5:]
+repo, man, order, write, prev = sys.argv[1], sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
+dirs = sys.argv[6:]
 files = [l.split("#", 1)[0].split()[0] for l in open(man, encoding="utf-8") if l.split("#", 1)[0].split()]
 used = {}   # path -> {action: ran?}
 for d in dirs:
@@ -347,14 +362,27 @@ while frontier:
         for n, q in names.items():
             if q != p and q not in used and re.search(r"(^|[^A-Za-z0-9_.-])" + re.escape(n) + r"($|[^A-Za-z0-9_-])", l):
                 used[q] = {"static": True}   # one hop: a static file's own names are not followed
+# the hand-written uses no trace makes (`agent`, `dispatch` — issue #4826) carry over
+try:
+    for line in open(write if write != "-" else prev, encoding="utf-8"):   # the list it replaces
+        f = line.rstrip("\n").split("\t")
+        if len(f) == 2 and not f[0].startswith("#") and f[0] in files:
+            for a in f[1].split(","):
+                if a in ("agent", "dispatch"):
+                    used.setdefault(f[0], {})[a] = True
+except OSError:
+    pass
 rank = {a: i for i, a in enumerate(order)}
 lines = ["# conf/client-runtime.list — the client package's files a client-only computer",
          "# really uses (issue #4824, EPIC #4823 C1): <path> TAB <the actions that used it>.",
          "# Made by bin/fleet-client-runtime.sh (trace on Linux under strace, then build);",
          "# `<action>:read` = only read as data there; `static` = named in a file that ran,",
          "# on a branch no action took.",
-         "# bin/fleet-client-runtime.sh --check holds every path to fleetclient/manifest.",
-         "# A manifest file NOT here is a candidate to leave the client package (C3)."]
+         "# `agent` / `dispatch` (issue #4826) are written by hand: the node agent runs it,",
+         "# a `fleet <word>` no traced action takes.",
+         "# bin/fleet-client-runtime.sh --check holds this list and fleetclient/manifest",
+         "# together both ways: every path here is in the manifest, every file it",
+         "# installs is here (EPIC #4823 C3)."]
 for p in files:
     if p in used:
         u = used[p]

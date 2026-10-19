@@ -536,7 +536,10 @@ def write_cert(res, include):
     if machines:
         os.makedirs(PEER_DIR, mode=0o700, exist_ok=True)
         write_file(MACHINES_FILE, "".join("%s %s\n" % m for m in machines), 0o644)
-    peer = peer_section(machines) if (res.get("node") or os.path.exists(NODE_ENV)) else ""
+    # a computer with only the client reaches no other machine itself: its
+    # package carries no fleet-peer-cert.sh (claude-fleet#4826), so no Match
+    peer = peer_section(machines) if (res.get("node") or os.path.exists(NODE_ENV)) \
+        and os.path.exists(PEER_CERT_SH) else ""
     if peer:
         snippet = snippet.rstrip("\n") + "\n\n" + peer
     write_file(SSH_CONFIG_SNIPPET, snippet, 0o644)

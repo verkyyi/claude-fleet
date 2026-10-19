@@ -110,6 +110,20 @@ self() { curl -fsS --max-time 15 -H "Authorization: Bearer $2" "$1/v1/node/self"
 
 jfield() { sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p" | head -n 1; }
 
+# served <bin file>… — a script the client package only serves (issue #4826,
+# EPIC #4823 C3): here, or fetched from where this client came from
+# (fc_served); one ✗ line and rc 1 when it cannot be. A full install has them.
+served() {
+  local f need=""
+  for f in "$@"; do [ -f "$here/$f" ] || need="$need bin/$f"; done
+  [ -n "$need" ] || return 0
+  # shellcheck source=fleet-client-lib.sh
+  # shellcheck disable=SC2086  # the paths are words
+  . "$here/fleet-client-lib.sh" && fc_served "$here/.." $need && return 0
+  echo "✗ 取不到${need}：${FC_WHY:-读不到 fleet-client-lib.sh}（重跑同一条命令即可）" >&2
+  return 1
+}
+
 # managed_hint — on a managed machine (#2330) the old road still works for one
 # version, but the machine's own command is `fleet node install`
 managed_hint() {
@@ -133,6 +147,8 @@ cmd_join() {
     esac
     shift
   done
+  # the join's steps, before any scan
+  served fleet-node-join.sh || return 1
   if [ -n "$hub_arg" ]; then hub=$("$here/fleet-login.py" hub --hub "$hub_arg") || return 2
   else hub=$("$here/fleet-login.py" hub) || return 2; fi
 
@@ -210,6 +226,7 @@ cmd_ensure() {
   fi
   [ -f "$ENVF" ] || fresh=1
   mkdir -p "$CONF" 2>/dev/null
+  served fleet-node-join.sh 2>>"$CONF/node-join.log" || { notpassed "取不到 fleet-node-join.sh：${FC_WHY:-}"; return 1; }
   work=$(mktemp -d "${TMPDIR:-/tmp}/fleet-node.XXXXXX") || return 1
   chmod 700 "$work"
   "$here/fleet-login.py" node-pass --hub "$hub" --out "$work/node.json" 2>"$work/err"
@@ -378,7 +395,7 @@ cmd_status() {
 
 case "${1:-}" in
   join) shift; cmd_join "$@" ;;
-  install) shift; exec "$here/fleet-node-install.sh" "$@" ;;
+  install) shift; served fleet-node-install.sh || exit 1; exec "$here/fleet-node-install.sh" "$@" ;;
   status) shift; cmd_status "$@" ;;
   ensure) shift; cmd_ensure "$@" ;;
   compute) shift; cmd_compute "$@" ;;

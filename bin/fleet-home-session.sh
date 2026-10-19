@@ -56,9 +56,11 @@ case "$agent" in
   *) usage ;;
 esac
 
-# --here anywhere: the rest, untouched, is fleet run's
+# --here anywhere: the rest, untouched, is fleet run's — 承载's (issue #4826:
+# a computer with only the client has no fleet-run.sh, and says so)
 for a in "$@"; do
   if [ "$a" = --here ]; then
+    [ -f "$BIN/fleet-run.sh" ] || { echo "fleet $agent --here 在这台电脑上跑会话，开了承载才有：fleet host on（或去掉 --here，在 fleet 机器上开）" >&2; exit 3; }
     rest=()
     for b in "$@"; do [ "$b" = --here ] || rest+=("$b"); done
     exec bash "$BIN/fleet-run.sh" "$agent" ${rest[@]+"${rest[@]}"}

@@ -37,7 +37,8 @@
 # ONE directory, ~/.claude/fleet (FLEET_INSTALL_HOME / FLEET_INSTALL_ROOT):
 #
 #   1. the part everyone has — the client's manifest (fleetclient/manifest in
-#      the repo: `fleet`, what it dispatches to, the SHELL, the Agent package),
+#      the repo: `fleet` and what it dispatches to; a `served` line is not
+#      installed — the client fetches it on first use, issue #4826),
 #      with a hub as ONE download — <from>/bundle.tar.gz, the manifest and every
 #      file it lists in one SHA-256-checked tar (#2260; ~140 requests took close
 #      to two minutes) — and file by file when that fails, each SHA-256-checked, from the hub's /install/<path> (接) or the
@@ -75,8 +76,8 @@
 #      → the line to run later; already a node of this hub → left alone).
 #      --no-node (FLEET_INSTALL_NO_NODE=1) skips the hub registration;
 #   6. the Agent configuration (#1725) — hooks · skills · commands · MCP · the
-#      mod, fill only (fleet-install-apply.sh --bundle); a full install's own
-#      sync applies it there. FLEET_INSTALL_NO_AGENTS=1 skips it;
+#      mod — is 承载's (issue #4826, EPIC #4823 decision 1): a full install's
+#      own setup / sync applies it; the client package carries none;
 #   7. one line, 能力 基础 · 承载 已开/未开 · 入口 接/不接, and runs `fleet`.
 #
 # Only what a stock macOS or Linux has: sh, curl, python3 (macOS's own 3.9 is
@@ -498,7 +499,8 @@ PYV
   # the manifest first (its `installer` line is this very script, not a
   # download), then every file on it
   [ "$BUNDLED" = 1 ] || fetch manifest "$MPATH"
-  FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
+  # a `served` line (issue #4826) is the hub's to hand out on first use, never installed
+  FILES="$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" && $2 != "served" { print $1 }' "$tmp/manifest" | tr '\n' ' ')"
   [ -n "${FILES% }" ] || { say "fleet-install: $FROM 的 manifest 里没有文件"; exit 1; }
   for f in $FILES; do
     case "$f" in
@@ -808,19 +810,106 @@ if [ "$HUB_ANS" = 1 ] && [ "$HOST_ANS" = 0 ] && [ "$CUR_HOST" = 0 ] && [ "${FLEE
   fi
 fi
 
-# ── 6 — the Agent configuration (#1725), on the base only ──────────────────
-# A full install's own setup / sync applies the same package (fill only).
-if [ "${FLEET_INSTALL_NO_AGENTS:-}" != 1 ] && ! full && [ -f "$ROOT/bin/fleet-agent-bundle.py" ] && [ -f "$ROOT/bin/fleet-install-apply.sh" ]; then
-  if aout="$(FLEET_CONF_DIR="$CONF" bash "$ROOT/bin/fleet-install-apply.sh" --bundle --root "$ROOT" 2>&1)"; then
-    case "$aout" in
-      *'bundle: skip'*) say "Agent 配置: 这台电脑有完整安装，由它的同步装同一份" ;;
-      *) say "Agent 配置: 已装 — 钩子·技能·MCP·Mod（$(printf '%s\n' "$aout" | sed -n 's/^apply: ok — //p')；只补不删，本机覆盖文件里列的不动）" ;;
-    esac
-  else
-    say "Agent 配置: 有一步没成 — $(printf '%s\n' "$aout" | grep ': FAIL' | head -1)；再跑一次这行会只补缺的"
-  fi
-elif full; then
+# ── 6 — the Agent configuration (#1725) is 承载's (issue #4826) ─────────────
+# A full install's own setup / sync applies it (fill only); the client
+# package carries none — `fleet host on` installs it with the rest of the tree.
+# An earlier client wired its own copy into this login: every hook through its
+# bin/fleet-hook-run.sh (a personal one through bin/fleet-hook-personal.sh),
+# the github / fetch MCP servers at its bin/mcp-*.sh — files this package no
+# longer has. So the wiring that names them goes, here (a client's update runs
+# this very script): only those entries, the rest of each file byte for byte
+# (Codex's config.toml as text), the file before kept beside it once — and
+# never where ~/.claude/fleet is the full install, or this computer hosts.
+if full; then
   say "Agent 配置: 完整安装的同步装同一份"
+elif [ ! -f "$HOME/.claude/fleet/bin/fleet-up.sh" ] && [ ! -d "$HOME/.claude/fleet/.git" ] \
+     && [ "$(fconf host 2>/dev/null || true)" != 1 ]; then
+  cat > "$tmp/unwire.py" <<'PYUW'
+import json, os, re, sys, time
+home, codex = sys.argv[1], sys.argv[2]
+SHIM = re.compile(r"/\.claude/fleet/(\./)?bin/fleet-hook-(run|personal)\.sh\b")
+MCP = re.compile(r"\.claude/fleet/bin/mcp-(github|fetch)\.sh")
+said = []
+def keep(path, text):
+    bak = path + ".fleet-bak-" + time.strftime("%Y%m%d%H%M%S")
+    if not os.path.exists(bak):
+        with open(bak, "w") as f:
+            f.write(text)
+def put(path, text):
+    tmp = path + ".fleet-tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, os.stat(path).st_mode & 0o7777)
+    os.replace(tmp, path)
+# Claude Code's hooks
+p = os.path.join(home, ".claude", "settings.json")
+try:
+    raw = open(p).read(); s = json.loads(raw)
+except (OSError, ValueError):
+    s = None
+if isinstance(s, dict) and isinstance(s.get("hooks"), dict):
+    n = 0
+    for ev in list(s["hooks"]):
+        groups = s["hooks"][ev]
+        if not isinstance(groups, list):
+            continue
+        out = []
+        for g in groups:
+            hs = g.get("hooks") if isinstance(g, dict) else None
+            if isinstance(hs, list):
+                left = [h for h in hs if not (isinstance(h, dict) and SHIM.search(str(h.get("command", ""))))]
+                n += len(hs) - len(left)
+                if not left:
+                    continue
+                g = dict(g, hooks=left)
+            out.append(g)
+        if out:
+            s["hooks"][ev] = out
+        else:
+            del s["hooks"][ev]
+    if n:
+        if not s["hooks"]:
+            del s["hooks"]
+        keep(p, raw); put(p, json.dumps(s, indent=2, ensure_ascii=False) + "\n")
+        said.append("钩子 %d 条" % n)
+# Claude Code's MCP servers
+p = os.path.join(home, ".claude.json")
+try:
+    raw = open(p).read(); c = json.loads(raw)
+except (OSError, ValueError):
+    c = None
+if isinstance(c, dict) and isinstance(c.get("mcpServers"), dict):
+    gone = [k for k, v in c["mcpServers"].items() if MCP.search(json.dumps(v))]
+    if gone:
+        for k in gone:
+            del c["mcpServers"][k]
+        keep(p, raw); put(p, json.dumps(c, indent=2, ensure_ascii=False) + "\n")
+        said.append("Claude MCP " + "·".join(sorted(gone)))
+# Codex's MCP servers — text: a [mcp_servers.<n>] table naming the script goes
+p = os.path.join(codex, "config.toml")
+try:
+    raw = open(p).read()
+except OSError:
+    raw = None
+if raw is not None:
+    lines, out, gone, i = raw.splitlines(True), [], [], 0
+    while i < len(lines):
+        m = re.match(r"\s*\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*$", lines[i])
+        if m:
+            j = i + 1
+            while j < len(lines) and not re.match(r"\s*\[", lines[j]):
+                j += 1
+            if MCP.search("".join(lines[i:j])):
+                gone.append(m.group(1)); i = j
+                continue
+        out.append(lines[i]); i += 1
+    if gone:
+        keep(p, raw); put(p, "".join(out))
+        said.append("Codex MCP " + "·".join(gone))
+print("、".join(said))
+PYUW
+  _uw="$(python3 "$tmp/unwire.py" "$HOME" "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null || true)"
+  [ -z "$_uw" ] || say "Agent 配置: 撤下了旧客户端接进来的 ${_uw} — 它们指向的文件不再随客户端装（承载的东西，fleet host on 时一起装）"
 fi
 
 # no hub + 承载 — the subscription accounts are this computer's own

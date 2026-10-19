@@ -1,11 +1,12 @@
 #!/bin/bash
-# fleet-client-mirror.sh — keep the hub's client manifest current (issues
-# #1470, #1486, #1725; retired to this in #1803).
+# fleet-client-mirror.sh — keep the hub's client manifest honest (issues
+# #1470, #1486, #1725; retired to this in #1803; #4826).
 #
-#   fleet-client-mirror.sh           rewrite the manifest's generated agent
-#                                    bundle block from conf/agent-bundle.manifest
-#   fleet-client-mirror.sh --check   exit 0 when that block is current and every
-#                                    path the manifest lists exists in the repo;
+#   fleet-client-mirror.sh           take out a leftover generated agent bundle
+#                                    block (#4826), then say the manifest is current
+#   fleet-client-mirror.sh --check   exit 0 when every path the manifest lists
+#                                    exists in the repo, every tag is one it
+#                                    knows and no agent bundle rides in it;
 #                                    else one line per drift on stdout, exit 1
 #
 # There is no copy to mirror any more (#1803): the repo keeps ONE copy of each
@@ -15,11 +16,11 @@
 # bin/fleet-install.sh walks it). TestFleetClientMatchesBin (Go) and
 # fleet-install-selftest.sh leg A (shell) assert what --check asserts.
 #
-# The Agent configuration package (issue #1725) rides the same list: its files
-# are conf/agent-bundle.manifest's, expanded by bin/fleet-agent-bundle.py into a
-# GENERATED block at the end of the manifest (between the `agent bundle` marker
-# lines — never edit it by hand). A plain run rewrites the block; --check reds a
-# block that no longer matches the expansion, like any other drift.
+# The Agent configuration package (issue #1725) used to ride the same list, as
+# a block generated from conf/agent-bundle.manifest. It is 承载's now (issue
+# #4826, EPIC #4823 decision 1): `fleet host on` installs it with the whole
+# tree, so the client manifest carries none — --check reds a block that comes
+# back, a plain run takes it out.
 #
 # Exit: 0 ok · 1 drift (--check) · 2 no repo / manifest beside this script.
 set -uo pipefail
@@ -37,36 +38,28 @@ MANIFEST="$CLIENT/manifest"
 
 BEGIN='# --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---'
 END='# --- end agent bundle ---'
-# bundle_block — the generated block: the package's files the hand-kept part of
-# the manifest does not list already, in the package's order.
-bundle_block() {
-  local hand files
-  hand="$(awk -v b="$BEGIN" '$0 == b { exit } !/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST")"
-  files="$(python3 "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO")" || return 1
-  printf '%s\n' "$BEGIN"
-  printf '%s\n' "$files" | grep -vxF -f <(printf '%s\n' "$hand") || true
-  printf '%s\n' "$END"
-}
-# current_block — the block as the manifest holds it now (empty when absent).
-current_block() { awk -v b="$BEGIN" -v e="$END" '$0 == b { on = 1 } on { print } $0 == e { on = 0 }' "$MANIFEST"; }
 
 # listed — the manifest's paths (every line that is not blank or a comment;
-# the `installer` tag is a second word and does not matter here).
+# the `installer` / `served` tag is a second word and does not matter here).
 listed() { awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST"; }
+# badtags — a line whose second word is no tag the hub and the installer know
+badtags() { awk '!/^[[:space:]]*#/ && NF > 1 && $2 != "installer" && $2 != "served" { print $1 " " $2 }' "$MANIFEST"; }
 
 case "${1:-}" in
   --check)
     rc=0
-    if ! want="$(bundle_block)"; then
-      echo "agent bundle: bin/fleet-agent-bundle.py files failed"; rc=1
-    elif [ "$want" != "$(current_block)" ]; then
-      echo "stale: the manifest's agent bundle block ≠ conf/agent-bundle.manifest — run bin/fleet-client-mirror.sh"; rc=1
-    fi
+    grep -qxF "$BEGIN" "$MANIFEST" \
+      && { echo "stale: the manifest still carries the agent bundle block — 承载's since #4826; run bin/fleet-client-mirror.sh"; rc=1; }
     while IFS= read -r p; do
       [ -n "$p" ] || continue
       [ -f "$REPO/$p" ] || { echo "missing original: $p is in the manifest but not in the repo"; rc=1; }
     done <<EOT
 $(listed)
+EOT
+    while IFS= read -r t; do
+      [ -n "$t" ] && { echo "unknown tag: $t (installer · served)"; rc=1; }
+    done <<EOT
+$(badtags)
 EOT
     # a committed copy is the two-copies era coming back (#1803)
     for d in bin conf hooks commands skills mod; do
@@ -74,11 +67,10 @@ EOT
     done
     exit "$rc" ;;
   '')
-    want="$(bundle_block)" || { echo "fleet-client-mirror: bin/fleet-agent-bundle.py files failed" >&2; exit 2; }
-    if [ "$want" != "$(current_block)" ]; then
-      { awk -v b="$BEGIN" '$0 == b { exit } { print }' "$MANIFEST"; printf '%s\n' "$want"; } > "$MANIFEST.tmp" \
+    if grep -qxF "$BEGIN" "$MANIFEST"; then
+      awk -v b="$BEGIN" -v e="$END" '$0 == b { on = 1; next } on && $0 == e { on = 0; next } !on { print }' "$MANIFEST" > "$MANIFEST.tmp" \
         && mv -f "$MANIFEST.tmp" "$MANIFEST"
-      echo "rewrote the manifest's agent bundle block"
+      echo "took the agent bundle block out of the manifest (#4826)"
     fi
     while IFS= read -r p; do
       [ -n "$p" ] || continue

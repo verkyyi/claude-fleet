@@ -68,6 +68,12 @@ func TestImageBundle(t *testing.T) {
 	if modes["bin/fleet"] != 0o755 {
 		t.Errorf("bin/fleet mode %o", modes["bin/fleet"])
 	}
+	// served, never installed (claude-fleet#4826): not in the one download
+	for _, n := range fleetclient.Served {
+		if _, ok := files[n]; ok {
+			t.Errorf("the bundle carries %s, a served file", n)
+		}
+	}
 	if _, ok := files[fleetclient.Installer]; ok {
 		t.Error("the installer template is never a download")
 	}

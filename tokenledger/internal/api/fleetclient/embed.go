@@ -87,8 +87,16 @@ const ManifestName = "manifest"
 var Installer string
 
 // Names lists the files a client downloads — every manifest path but the
-// installer's — in install order; each is served at /install/<name>.
+// installer's and the served ones — in install order; each is served at
+// /install/<name>.
 var Names []string
+
+// Served lists the manifest's `served` lines (claude-fleet#4826): served at
+// /install/<name> like Names, packed and checked like them, but never part of
+// what a client installs — the bundle, the version digest and the installer's
+// walk leave them out. A client fetches one on first use; the one-line join /
+// install commands curl them from here.
+var Served []string
 
 // HubPlaceholder is the token in the installer the hub replaces with its own
 // URL, so the script a person pipes to sh already knows where it came from.
@@ -103,8 +111,9 @@ func init() {
 	if Installer == "" {
 		panic("fleetclient: the manifest names no `installer` line")
 	}
+	Served = ParseServed(b)
 	Packed = true
-	for _, n := range append([]string{Installer}, Names...) {
+	for _, n := range append(append([]string{Installer}, Names...), Served...) {
 		if _, err := fs.Stat(Files, n); err != nil {
 			Packed = false
 			break
@@ -152,9 +161,33 @@ func Digest(read func(string) ([]byte, error), names []string) string {
 }
 
 // ParseManifest reads a manifest: one repo-relative path per line, an optional
-// second word `installer` marking the template, `#` comments and blank lines
-// ignored. It returns the installer's path and the download list in order.
+// second word tagging it — `installer` the template, `served` a file served but
+// not installed (claude-fleet#4826) — `#` comments and blank lines ignored. It
+// returns the installer's path and the download list in order.
 func ParseManifest(b []byte) (installer string, names []string) {
+	eachLine(b, func(path, tag string) {
+		switch tag {
+		case "installer":
+			installer = path
+		case "served":
+		default:
+			names = append(names, path)
+		}
+	})
+	return installer, names
+}
+
+// ParseServed is a manifest's `served` paths, in order.
+func ParseServed(b []byte) (served []string) {
+	eachLine(b, func(path, tag string) {
+		if tag == "served" {
+			served = append(served, path)
+		}
+	})
+	return served
+}
+
+func eachLine(b []byte, fn func(path, tag string)) {
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -162,24 +195,26 @@ func ParseManifest(b []byte) (installer string, names []string) {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) > 1 && f[1] == "installer" {
-			installer = f[0]
-			continue
+		tag := ""
+		if len(f) > 1 {
+			tag = f[1]
 		}
-		names = append(names, f[0])
+		fn(f[0], tag)
 	}
-	return installer, names
 }
 
-// Serves says whether /install/<name> is a download: the manifest itself or a
-// file it lists. The template and anything else in the package are not.
+// Serves says whether /install/<name> is a download: the manifest itself, a
+// file a client installs, or a served one. The template and anything else in
+// the package are not.
 func Serves(name string) bool {
 	if name == ManifestName {
 		return true
 	}
-	for _, n := range Names {
-		if n == name {
-			return true
+	for _, list := range [][]string{Names, Served} {
+		for _, n := range list {
+			if n == name {
+				return true
+			}
 		}
 	}
 	return false

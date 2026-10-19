@@ -7,7 +7,9 @@
 # the part everyone has there (the client's files, no git); 承载 is the same
 # directory as a git checkout of `stable` plus a new login's setup. So this:
 #
-#   1. tools   git and tmux (≥ 3.2), each skipped when here — the same installer
+#   1. tools   the release scripts the client package only serves (issue
+#              #4826: fetched from where the client came from), then
+#              git and tmux (≥ 3.2), each skipped when here — the same installer
 #              as the install line's tmux step (fleet-client-lib.sh's
 #              fc_pkg_install: Homebrew / apt-get / dnf / yum / apk, never a
 #              password prompt). FLEET_INSTALL_NO_DEPS=1 skips installing.
@@ -58,6 +60,18 @@ lib="$here/fleet-client-lib.sh"
 . "$lib" || { echo "✗ 找不到 fleet-client-lib.sh"; exit 1; }
 rlib="$here/fleet-release-lib.sh"
 [ -f "$rlib" ] || rlib="$ROOT/bin/fleet-release-lib.sh"
+# The release scripts are what the client package only serves (issue #4826):
+# fetched first, from where this client came from. A hub that cannot hand them
+# over stops here — never GitHub behind it (#2773); with no hub and no version
+# to fetch at (rc 2) it is the git road below, as before.
+if [ ! -f "$rlib" ]; then
+  fc_served "${here%/bin}" bin/fleet-release-lib.sh bin/fleet-release-fetch.py bin/fleet-release-verify.py
+  case $? in
+    0) rlib="${here%/bin}/bin/fleet-release-lib.sh" ;;
+    2) : ;;
+    *) echo "✗ 取不到发布校验脚本（${FC_WHY}）— 什么都没动；再跑一次即可"; exit 1 ;;
+  esac
+fi
 # shellcheck source=fleet-release-lib.sh
 if [ -f "$rlib" ]; then . "$rlib"; else fleet_rel_first_checkout() { return 3; }; fi
 # shellcheck disable=SC2034  # FC_LOG / FC_SUDO are read by the lib just sourced
