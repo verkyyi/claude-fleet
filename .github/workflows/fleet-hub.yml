@@ -13,8 +13,7 @@ on:
   # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
   # the change reaches it — its old `paths:` live there now
   workflow_call:
-  schedule:
-    - cron: '41 20 * * *'   # 04:41 CST — the macOS leg
+  # nightly (with the macOS leg): ci-nightly.yml calls it (issue #4816)
   workflow_dispatch:
 
 jobs:

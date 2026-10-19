@@ -1,0 +1,225 @@
+name: CI nightly
+
+# Every PR check, whole, once a day — the backstop of the PR gate's skips (issue
+# #4816, EPIC #4810 C6; docs/dev/CI.md «每晚»).
+#
+# The PR gate (ci.yml) runs only what bin/ci-plan.sh says a change reaches: the Go
+# blocks it maps (agent ⇒ agent + e2e, never hub …, narrowed by `go list -test`),
+# each end-to-end check by its rules, and a skipped check reads green. A test that
+# reads something outside what selected it goes red with nothing running it. This
+# runs all of it on master:
+#
+#   * 22:17 UTC = 06:17 Beijing (beside selftests-nightly.yml, which keeps the Linux
+#     selftests — not called here), and workflow_dispatch (`since`: the window's
+#     start). `board` fixes the window: since = the commit the previous scheduled
+#     run tested, else the first-parent commit a day before.
+#   * every check ci.yml can call, with no plan: tokenledger.yml with its defaults —
+#     the four Go blocks whole and every Postgres part; on a non-PR event it restores
+#     no Go cache and runs `go test -race -count=1` (the test cache never answers
+#     here) and uploads each part's `go test -v` log (go-log-* / pg-log-*); every
+#     end-to-end check (task-acceptance, client-e2e on Linux and macOS, fleet-hub-mcp
+#     on both, browser-attachment, hub-rolling …). Not oss-scan (it reads a PR's
+#     diff) nor selftests (selftests-nightly.yml). The checks keep no schedule of
+#     their own: this is their nightly.
+#   * `report` (选漏分析) writes every check's result to `nightly-checks` (tomorrow's
+#     --prev-checks) and runs bin/fleet-nightly-miss.sh --go --checks: a red Go test
+#     is bisected over the window's merges (`go test -run`, the Postgres leg against
+#     the job's own Postgres) and its merge M asked `bin/ci-plan.sh go M^` — not
+#     selected ⇒ ONE `selection-miss` issue naming M (--breakage-key
+#     nightly-go-<pkg>.<Test> / nightly-pg-…, a later night a comment); a red
+#     check lists the merges whose `ci-plan.sh <check> M^` skipped it
+#     (nightly-check-<check>), red the night before too ⇒ old.
+#
+# Nothing here moves stable, releases or touches a machine.
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('CI nightly @ {0}', github.ref_name) || 'CI nightly' }}
+
+on:
+  schedule:
+    - cron: '17 22 * * *'
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'the window''s start for the miss analysis (default: the last scheduled run''s commit)'
+        type: string
+        required: false
+        default: ''
+
+concurrency:
+  group: ci-nightly
+  cancel-in-progress: false
+
+# the most any called workflow's jobs ask for (as ci.yml)
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  board:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.board.outputs.sha }}
+      since: ${{ steps.board.outputs.since }}
+      prev_run: ${{ steps.board.outputs.prev_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: the commit and the window
+        id: board
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE: ${{ inputs.since || '' }}
+        run: |
+          set -u
+          sha=$(git rev-parse HEAD)
+          # the last scheduled run before this one: its commit starts the window,
+          # its nightly-checks artifact is tonight's --prev-checks
+          prev=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci-nightly.yml/runs?event=schedule&status=completed&per_page=10" \
+                   --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | [.id, .head_sha] | @tsv" 2>/dev/null | head -1)
+          prev_run=$(printf '%s' "$prev" | cut -f1) prev_sha=$(printf '%s' "$prev" | cut -f2)
+          if [ -n "$SINCE" ]; then
+            since=$(git rev-parse --verify -q "$SINCE^{commit}") || { echo "::error::$SINCE is not a commit"; exit 1; }
+          elif [ -n "$prev_sha" ] && git merge-base --is-ancestor "$prev_sha" "$sha" 2>/dev/null; then
+            since=$prev_sha
+          else
+            since=$(git rev-list -1 --first-parent --before="$(( $(git log -1 --format=%ct "$sha") - 86400 ))" "$sha")
+          fi
+          n=$( [ -z "$since" ] || git rev-list --first-parent --count "$since..$sha")
+          { echo "sha=$sha"; echo "since=$since"; echo "prev_run=$prev_run"; } >> "$GITHUB_OUTPUT"
+          echo "### 🌙 每晚全跑：master ${sha:0:7} · 窗口 ${since:0:7}..${sha:0:7}（${n:-0} 次合并）" >> "$GITHUB_STEP_SUMMARY"
+
+  # every check ci.yml calls but selftests (selftests-nightly.yml) and oss-scan (a
+  # PR's diff) — whole: no plan, so each runs its defaults
+  tokenledger:
+    needs: board
+    uses: ./.github/workflows/tokenledger.yml
+  shellcheck:
+    needs: board
+    uses: ./.github/workflows/shellcheck.yml
+  task-acceptance:
+    needs: board
+    uses: ./.github/workflows/task-acceptance.yml
+  client-e2e:
+    needs: board
+    uses: ./.github/workflows/client-e2e.yml
+  fleet-hub-mcp:
+    needs: board
+    uses: ./.github/workflows/fleet-hub.yml
+  browser-attachment:
+    needs: board
+    uses: ./.github/workflows/browser-attachment.yml
+  hub-rolling:
+    needs: board
+    uses: ./.github/workflows/hub-rolling.yml
+  hub-deploy-check:
+    needs: board
+    uses: ./.github/workflows/hub-deploy-check.yml
+  cluster-perms:
+    needs: board
+    uses: ./.github/workflows/cluster-perms.yml
+  native-claude-worktree:
+    needs: board
+    uses: ./.github/workflows/native-claude-worktree.yml
+  native-managed-hooks:
+    needs: board
+    uses: ./.github/workflows/native-managed-hooks.yml
+  node-join:
+    needs: board
+    uses: ./.github/workflows/node-join.yml
+  web-chat-ui:
+    needs: board
+    uses: ./.github/workflows/web-chat-ui.yml
+  web-console:
+    needs: board
+    uses: ./.github/workflows/web-console.yml
+
+  report:
+    # Every red traced and filed (bin/fleet-nightly-miss.sh). Red only when a filing
+    # failed — the checks already carry their own red.
+    name: 选漏分析
+    needs: [board, tokenledger, shellcheck, task-acceptance, client-e2e, fleet-hub-mcp, browser-attachment, hub-rolling, hub-deploy-check, cluster-perms, native-claude-worktree, native-managed-hooks, node-join, web-chat-ui, web-console]
+    if: "!cancelled() && needs.board.result == 'success'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      issues: write     # one issue per red
+    # the Postgres leg's red tests are re-run against this one (FLEET_NM_DB_URL)
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.sha }}
+          # the bisect walks the window's merges
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: the Go logs
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: '*-log-*'
+          path: gores
+      - name: every check's result
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+          PREV: ${{ needs.board.outputs.prev_run }}
+        run: |
+          python3 - > checks.txt <<'PY'
+          import json, os
+          for job, v in json.loads(os.environ["NEEDS"]).items():
+              if job != "board":
+                  print(job.replace("-", "_"), v.get("result") or "unknown")
+          PY
+          cat checks.txt
+          {
+            echo "### 每晚全跑：各检查"
+            echo '| 检查 | 结果 |'; echo '|---|---|'
+            awk '{ printf "| %s | %s |\n", $1, $2 }' checks.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p prev
+          [ -z "$PREV" ] || gh run download "$PREV" --repo "$GITHUB_REPOSITORY" -n nightly-checks -D prev 2>/dev/null || true
+          [ -f prev/checks.txt ] || : > prev/checks.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-checks
+          path: checks.txt
+          retention-days: 30
+      - name: the label it files under
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          row=$(bash -c '. bin/fleet-lib.sh; fleet_labels_canonical' | grep '^selection-miss|') || exit 0
+          gh label create selection-miss --repo "$GITHUB_REPOSITORY" --force \
+            --color "$(printf '%s' "$row" | cut -d'|' -f2)" --description "$(printf '%s' "$row" | cut -d'|' -f3)" || true
+      - name: fleet-nightly-miss.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.sha }}
+          SINCE: ${{ needs.board.outputs.since }}
+          FLEET_NM_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
+        run: |
+          mkdir -p gores
+          set -- --go gores --checks checks.txt --prev-checks prev/checks.txt --sha "$SHA" --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --dir .
+          [ -z "$SINCE" ] || set -- "$@" --since "$SINCE"
+          set +e
+          bash bin/fleet-nightly-miss.sh "$@" > miss.md; rc=$?
+          cat miss.md
+          if [ "$(grep -c '^| ' miss.md)" -gt 2 ]; then
+            { echo; echo "### 选漏分析"; cat miss.md; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### 选漏分析：没有红" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $rc

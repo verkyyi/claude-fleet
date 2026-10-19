@@ -6,9 +6,7 @@ on:
   # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
   # the change reaches it — its old `paths:` live there now
   workflow_call:
-  # the whole check every night (issue #4794): a PR runs it only when related
-  schedule:
-    - cron: '29 19 * * *'   # 03:29 CST
+  # the whole check every night: ci-nightly.yml calls it (issue #4816)
   workflow_dispatch:
 
 jobs:

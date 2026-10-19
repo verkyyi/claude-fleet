@@ -3267,6 +3267,23 @@ drill_selection_miss_silent() {
   WHAT="那次合并改了一个测试没点名的文件、列车没选它：夜里全量红 ⇒ 二分到那次合并，--list-only 证实没选中，开一张 selection-miss 单写明合并和文件"
 }
 
+# ---- selection-miss-go-silent (#4816, EPIC #4810 C6): the PR gate runs only the Go
+# blocks and checks bin/ci-plan.sh says a change reaches; a hub test that reads the
+# agent block goes red on an agent-only merge the plan never sent to hub. The
+# nightly (ci-nightly.yml) runs every block and check; fleet-nightly-miss.sh --go
+# bisects the red test to that merge, asks `ci-plan.sh go M^`, and files ONE
+# selection-miss issue (nightly-go-<pkg>.<Test>). The sandbox is the selftest's J leg.
+drill_selection_miss_go_silent() {
+  CAP=60; local t0 out
+  [ -f "$ROOT/.github/workflows/ci-nightly.yml" ] || { WHY="no .github/workflows/ci-nightly.yml — nothing runs the Go blocks and checks the PR gate skipped"; return 1; }
+  grep -q -- '--go ' "$ROOT/.github/workflows/ci-nightly.yml" || { WHY="ci-nightly.yml does not hand its Go logs to fleet-nightly-miss.sh --go"; return 1; }
+  t0=$(now)
+  out=$(NM_LEG=J bash "$BIN/fleet-nightly-miss-selftest.sh" 2>&1) \
+    || { WHY="$(printf '%s\n' "$out" | grep -E '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="一次只改 agent 的合并弄红了读 agent 文件的 hub 测试、PR 门没跑 hub：夜里全量红 ⇒ go test -run 二分到那次合并，ci-plan.sh go 证实没选 hub，开且只开一张 selection-miss 单"
+}
+
 # ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
 # from different commits — hub-deploy shipped the hub on its own clock, the
 # auto-move / publish moved stable on another, and the hub refused the publish

@@ -21,8 +21,7 @@ on:
   # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
   # the change reaches it — its old `paths:` live there now
   workflow_call:
-  schedule:
-    - cron: '7 19 * * *'   # 03:07 CST
+  # nightly: ci-nightly.yml calls it — both legs (issue #4816)
   workflow_dispatch:
 
 defaults:
@@ -31,7 +30,6 @@ defaults:
 
 jobs:
   ubuntu:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

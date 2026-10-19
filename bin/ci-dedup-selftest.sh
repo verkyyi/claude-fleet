@@ -6,7 +6,8 @@
 #      browser-attachment.yml, web-console.yml, web-chat-ui.yml carry no `push:`
 #      trigger (the release train is master's run), and each still runs on its
 #      PR — called by the PR gate, ci.yml (issue #4815), which runs on
-#      pull_request alone; shellcheck.yml keeps a nightly full run.
+#      pull_request alone; shellcheck.yml's nightly full run is ci-nightly.yml's
+#      call (issue #4816), on a schedule.
 #   B  bin/ci-shellcheck.sh --changed <base> --list, in a throwaway repo: only the
 #      *.sh under bin hooks shell extras that the change adds or modifies (a
 #      deleted one, a .py, a docs file never); none ⇒ nothing; a change to
@@ -38,7 +39,8 @@ for f in selftests shellcheck tokenledger fleet-hub client-e2e task-acceptance b
 done
 ckeys=$(on_keys "$WF/ci.yml" | tr '\n' ' ')
 [ "$ckeys" = "pull_request " ] || fail "A: ci.yml runs on [$ckeys], want pull_request alone"
-on_keys "$WF/shellcheck.yml" | grep -qx schedule || fail "A: shellcheck.yml lost its nightly full run"
+{ on_keys "$WF/ci-nightly.yml" | grep -qx schedule && grep -q 'uses: ./.github/workflows/shellcheck.yml' "$WF/ci-nightly.yml"; } \
+  || fail "A: shellcheck.yml lost its nightly full run (ci-nightly.yml, on a schedule, calls it)"
 [ "$FAILS" -eq 0 ] && ok "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
 
 # ── B ──
