@@ -133,7 +133,7 @@ strip(){ printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g'; }
 logs() { : > "$WORK/gh.log"; : > "$WORK/tmux.log"; : > "$WORK/spawn.log"; : > "$WORK/fzf.args"; }
 # The --spawn tail runs in its own background subshell (dash-issue-new.sh: the popup
 # never waits on the spawn), so its line can land after the call returns (#4690).
-spawned() { local i; for i in $(seq 1 100); do [ -s "$WORK/spawn.log" ] && break; sleep 0.1; done; cat "$WORK/spawn.log"; }
+spawned() { local _; for _ in $(seq 1 100); do [ -s "$WORK/spawn.log" ] && break; sleep 0.1; done; cat "$WORK/spawn.log"; }
 
 # --- A. no filter ---------------------------------------------------------------
 printf 'o/bbb\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
