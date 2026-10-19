@@ -17,7 +17,8 @@
 #       tailnet name — mapped to the loopback port `tailscale serve` or doc-preview
 #       fronts): the laptop forwards a local port over its ssh to 127.0.0.1:<rport>
 #   {"v":1,"kind":"url","url":"https://…","host":…,"ts":…}   anything else, as is
-# A FILE goes to bin/fleet-show.sh (a download into their ~/Downloads).
+# A FILE goes to bin/fleet-show.sh (a download into their ~/Downloads); its receipt
+# (issue #3541) is ours: saved:<path> → opened (the path on stderr).
 #
 # The secret: ~/.config/claude-fleet/open.secret (0600, made on first run). The
 # laptop installer reads it over ssh, and its script ignores an escape whose id
@@ -174,14 +175,13 @@ wait_ack() {
 case "$target" in file://*) f="${target#file://}"; [ -f "$f" ] && target="$f" ;; esac
 if [ -f "$target" ]; then
   out=$("$BIN/fleet-show.sh" ${client:+--client "$client"} -- "$target"); rc=$?
-  [ -n "$out" ] && printf '%s\n' "$out" >&2
-  # fleet-show has no receipt yet (issue #3541): only the local opener is one
-  case "$rc" in
-    0) case "$out" in
-         *' → 本机'*) finish opened file ;;
-         *) finish unconfirmed file ;;
-       esac ;;
-    2) printf '%s\n' "$out" | grep '^PATH '; finish 'failed:the file could not be sent — give the person its path' file 2 ;;
+  # fleet-show's own receipt (issue #3541): saved:<path> · unconfirmed · failed:<why>
+  res=$(printf '%s\n' "$out" | grep -E '^(saved:|unconfirmed|failed:)' | tail -n 1)
+  case "$rc:$res" in
+    0:saved:*) printf 'fleet-open: %s\n' "$res" >&2; finish opened file ;;
+    0:*) finish unconfirmed file ;;
+    2:*) printf '%s\n' "$out" | grep '^PATH '; finish "${res:-failed:the file could not be sent — give the person its path}" file 2 ;;
+    4:failed:*) finish "$res" file 4 ;;
     *) exit "$rc" ;;
   esac
 fi

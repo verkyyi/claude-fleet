@@ -17,6 +17,13 @@ it does what the JSON asks:
   kind=url      an outside link: http/https only; a host on the allow-list
                 (~/.config/fleet-open/allow, default github.com + claude.ai) opens
                 at once, anything else asks first (osascript dialog).
+  kind=file     the receipt of a download (issue #3541): fleet-show.sh writes it
+                right BEFORE iTerm2's own file escape ({"name", "size"}); this
+                watches the downloads folder (~/Downloads, or the path in
+                ~/.config/fleet-open/downloads) for FILE_WAIT_SECS for a file of
+                that name (iTerm2 may add a suffix) and that size, written since,
+                and answers ok <its path> — or fail when it never lands (the
+                download prompt declined, or not clicked in time).
 
 Every action appends one line to ~/.config/fleet-open/log.
 
@@ -25,14 +32,15 @@ ssh the forward rides — `ssh <host> bash .claude/fleet/bin/fleet-open.sh --ack
 ok|fail <why>` — so the session that asked prints `opened` or `failed:<why>`, not
 `unconfirmed`: opened (also after the dialog's Open) → ok; declined, `open` failing,
 a refused request (stale, bad field), a forward that would not come up → fail with
-the reason. No id (an older mini) → nothing sent.
+the reason. No id (an older mini) → nothing sent. A file's ok carries where it was
+saved as its <why> (fleet-show.sh prints `saved:<path>`).
 
 Install with extras/iterm2/install.sh (it puts this file in
 ~/Library/Application Support/iTerm2/Scripts/AutoLaunch/). Everything above the
 `iTerm2 glue` line is pure and unit-tested (test_fleet_open.py) without iTerm2.
 """
 
-FLEET_OPEN_VERSION = "2"  # bump on any behaviour change: fleet-doctor compares it
+FLEET_OPEN_VERSION = "3"  # bump on any behaviour change: fleet-doctor compares it
 
 import base64
 import binascii
@@ -59,6 +67,7 @@ ID_RE = r"^[a-f0-9]{1,64}$"
 # path the payload names — the laptop runs nothing a request spells out.
 ACK_BIN = ".claude/fleet/bin/fleet-open.sh"
 HOST_RE = r"^[A-Za-z0-9][A-Za-z0-9._@-]*$"
+FILE_WAIT_SECS = 180  # how long a download's receipt watches for the file
 
 
 class Reject(ValueError):
@@ -115,6 +124,15 @@ def parse_payload(b64, now=None):
             raise Reject("bad url")
         check_url(url)
         return {"kind": "url", "url": url, "host": host}
+    if kind == "file":
+        name = req.get("name")
+        if not isinstance(name, str) or not name or len(name) > 255 or name in (".", "..") \
+                or "/" in name or re.search(r"[\x00-\x1f]", name):
+            raise Reject("bad name")
+        size = req.get("size")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 0:
+            raise Reject("bad size")
+        return {"kind": "file", "name": name, "size": size, "host": host}
     raise Reject("unknown kind=%r" % kind)
 
 
@@ -136,14 +154,34 @@ def peek(b64):
 RESULT_WHY = {
     "open-failed": "the browser did not open it (`open` failed on the laptop)",
     "declined": "declined on the laptop (the link is not on its allow-list)",
+    "not-saved": "it never landed in the laptop's downloads folder (the download prompt declined, or not clicked in time)",
 }
 
 
-def ack_words(result):
-    """A handled request's result → ("ok", "") or ("fail", why)."""
+def ack_words(result, saved=""):
+    """A handled request's result → ("ok", "" | where it was saved) or ("fail", why)."""
     if result in ("opened", "opened-confirmed"):
         return "ok", ""
+    if result == "saved":
+        return "ok", saved
     return "fail", RESULT_WHY.get(result, "the laptop said %s" % result)
+
+
+def find_saved(entries, name, size, since):
+    """The download among a folder's entries [(name, size, mtime)], or None: the same
+    name, or iTerm2's renamed copy (its stem + anything + the same extension), of
+    exactly that size, written at or after `since` (a little slack for the clock).
+    The newest one wins."""
+    stem, ext = os.path.splitext(name)
+    best = None
+    for n, sz, mt in entries:
+        if sz != size or mt < since - 2:
+            continue
+        if n != name and not (n.startswith(stem) and n.endswith(ext) and len(n) > len(name)):
+            continue
+        if best is None or mt > best[2]:
+            best = (n, sz, mt)
+    return best[0] if best else None
 
 
 def ack_cmd(host, oid, state, why):
@@ -374,6 +412,42 @@ def do_url(req):
     return url, ("opened-confirmed" if _open(url) else "open-failed")
 
 
+def downloads_dir():
+    d = (_read("downloads") or "").strip()
+    return os.path.expanduser(d or "~/Downloads")
+
+
+def _entries(d):
+    out = []
+    try:
+        with os.scandir(d) as it:
+            for e in it:
+                try:
+                    if e.is_file(follow_symlinks=False):
+                        st = e.stat(follow_symlinks=False)
+                        out.append((e.name, st.st_size, st.st_mtime))
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def do_file(req, wait=None, now=time.time, sleep=time.sleep):
+    """Watch the downloads folder for the file iTerm2 is about to save."""
+    d = downloads_dir()
+    since = now()
+    end = since + (FILE_WAIT_SECS if wait is None else wait)
+    while True:
+        n = find_saved(_entries(d), req["name"], req["size"], since)
+        if n:
+            p = os.path.join(d, n)
+            return "%s size=%d" % (p, req["size"]), "saved", p
+        if now() >= end:
+            return "%s size=%d in %s" % (req["name"], req["size"], d), "not-saved", ""
+        sleep(0.5)
+
+
 def send_ack(hint, oid, state, why):
     """The receipt of open <oid> (issue #3540); a failed send is only logged."""
     try:
@@ -393,12 +467,15 @@ def handle(b64):
     state, why = "fail", ""
     try:
         req = parse_payload(b64, now=time.time())
+        saved = ""
         if req["kind"] == "forward":
             detail, result = do_forward(req)
+        elif req["kind"] == "file":
+            detail, result, saved = do_file(req)
         else:
             detail, result = do_url(req)
         log(req["kind"], detail, result)
-        state, why = ack_words(result)
+        state, why = ack_words(result, saved)
     except Reject as e:
         log("reject", b64[:60], str(e))
         why = "the laptop refused it: %s" % e

@@ -651,9 +651,15 @@ non-image cannot be drawn inline, so `--inline` sends it as a download and says
 so. The screen text is Chinese, fixed — the fleet has no UI-language setting.
 
 - **iTerm2 side:** nothing to install (3.5+, for multipart transfers), but iTerm2
-  **asks you to confirm each download** — the file lands only after you accept,
-  so `SENT` means "offered", not "on disk yet". iTerm2 has no documented setting
-  that silences it (`NoSyncSuppressDownloadConfirmation` did not, on 3.6.10).
+  **asks you to confirm each download** — the file lands only after you accept.
+  iTerm2 has no documented setting that silences it
+  (`NoSyncSuppressDownloadConfirmation` did not, on 3.6.10).
+- **The receipt** (issue #3541): each file's line is `saved:<path>` (your side said
+  where it landed), `failed:<why>`, or `unconfirmed` (no answer within
+  `FLEET_SHOW_ACK_WAIT`, 12 s). Through the thin client (`fleet`) the loop fetches
+  the file over its own connection into `~/Downloads` and answers by itself; through
+  iTerm2 directly, `extras/iterm2/fleet_open.py` v3 watches `~/Downloads` for it
+  (an older script, or none: `unconfirmed`).
 - **Which terminal:** the one you are using — the most recently active tmux
   client of this session — and only if its terminal type (`#{client_termtype}`,
   e.g. `iTerm2 3.6.10`) matches `FLEET_SHOW_TERM_RE`. Reading from your phone over

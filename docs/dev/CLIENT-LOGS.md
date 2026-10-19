@@ -109,6 +109,7 @@ fields, only ever added at the end:
 | `first` | the home had no fleet session of yours (rc 3) or the hub is opening your first login — the first-session road (#3054): a start line, then rc 0 + the place line (opened there) or rc 1 + why it did not open | `home` (the machine it opened on, once placed); reason |
 | `offline` | three connections failed and the hub did not answer either — this computer's own line is down, so no 换家: the home and the view are kept (#3007) | `home`; reason |
 | `upload` | a drop or a ⌃V picture sent through the home | `ssh_ms` = the one-shot's time; reason `<name> → <path there>` |
+| `show` | a file a session sent (OSC 7502 `show`, issue #3541): fetched over one ssh into `~/Downloads` | `rc` 0 saved · 1 not; reason = why not |
 | `exec` | a new client version between two connections | reason `<old> → <new>` |
 | `say` | a word for the person (a file not sent) — also an OSC 9 notification | the words |
 | `quit` / `end` | ⌘Q or a detach / a signal | `rc` |

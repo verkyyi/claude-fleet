@@ -20,8 +20,22 @@
 #                  PNG and a portrait JPEG land at the computed CUP with
 #                  width=/height= cells + preserveAspectRatio=1 · unknown client
 #                  size → top-left, no width= · title row + countdown footer
-#   • NON-IMAGE    --inline on a PDF sends it as a download (inline=0), SENT says so
+#   • NON-IMAGE    --inline on a PDF sends it as a download (inline=0), stderr says so
 #   • D-KEY        FLEET_SHOW_KEYS=d → the image again as inline=0 after the inline=1
+#   • RECEIPT      (issue #3541) one result line per file — saved:<path> · failed:<why>
+#                  · unconfirmed — on every road:
+#        ITERM     the Custom= kind=file request goes right before the download and
+#                  fleet-open.sh --ack answers it: saved:<path> rc 0 · failed:<why>
+#                  rc 4 · a v2 script's «unknown kind» → unconfirmed · no answer →
+#                  unconfirmed · no secret → nothing asked, unconfirmed at once
+#        THIN      a thin 看台 with caps=show gets OSC 7502 show; the REAL thin loop
+#                  (fleet-thin.py show_req) fetches it through --fetch, saves it in
+#                  its downloads and answers: saved:<path>, bytes identical, a name
+#                  taken → «name (1).ext»; --fetch serves an id once; a fetch that
+#                  fails → failed rc 4; no answer → unconfirmed; a row with no caps
+#                  → the terminal road as before
+#        CLIENT    the lease's result naming a path → saved; the local opener →
+#                  saved:<the file here>
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -48,6 +62,10 @@ esac
 EOF
 chmod +x "$WORK/bin/tmux"
 export PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1"
+# nobody's client, no fleet-open secret: the terminal road, nothing asked (#3541)
+export FLEET_CONF_DIR="$WORK/conf" FLEET_OPEN_SECRET_FILE="$WORK/no.secret" FLEET_OPEN_WHERE_CMD="$WORK/bin/where"
+mkdir -p "$FLEET_CONF_DIR"
+printf '#!/bin/sh\ncat "%s/where.json" 2>/dev/null || echo "{}"\n' "$WORK" > "$WORK/bin/where"; chmod +x "$WORK/bin/where"
 OUT="$WORK/out"; export FLEET_SHOW_OUT="$OUT"
 SHOW="$BIN/fleet-show.sh"
 
@@ -100,9 +118,9 @@ PY
 # ---- ROUNDTRIP + PICK + RESTORE(unset) -------------------------------------------
 clients '100|/dev/ttyOLD|iTerm2 3.6.10' '300|/dev/ttyNEW|iTerm2 3.6.10' '200|/dev/ttyMID|xterm-256color'
 rm -f "$OUT" "$STATE/lockcmd"
-res=$("$SHOW" "$F" 2>&1); rc=$?
-[ "$rc" = 0 ] && printf '%s' "$res" | grep -q '^SENT pic one.png (200001 bytes) → /dev/ttyNEW \[iTerm2' \
-  && ok "SENT line, rc 0" || bad "SENT ($rc): $res"
+res=$("$SHOW" "$F" 2>"$WORK/err"); rc=$?
+[ "$rc" = 0 ] && [ "$res" = unconfirmed ] && grep -q '^fleet-show: pic one.png → iTerm2（/dev/ttyNEW iTerm2' "$WORK/err" \
+  && grep -q '没有 fleet-open 密钥' "$WORK/err" && ok "no secret: unconfirmed at once, rc 0, stderr names the road" || bad "result ($rc): $res / $(cat "$WORK/err")"
 [ "$(cat "$STATE/locked")" = /dev/ttyNEW ] && ok "PICK newest client (iTerm2)" || bad "PICK locked $(cat "$STATE/locked")"
 meta=$(decode "$OUT")
 [ "$meta" = "pic one.png 0 200001 MultipartFile" ] && ok "header: $meta" || bad "header: $meta"
@@ -124,7 +142,7 @@ meta=$(decode "$OUT"); case "$meta" in *' File') cmp -s "$OUT.bin" "$F" && ok "S
 deg() {  # <label> <expect-rc> <cmd…>
   local label=$1 want=$2; shift 2
   rm -f "$OUT"; local out; out=$("$@" 2>/dev/null); local rc=$?
-  if [ "$rc" = "$want" ] && { [ "$want" = 1 ] || printf '%s' "$out" | grep -q "^PATH /"; } && [ ! -s "$OUT" ]; then
+  if [ "$rc" = "$want" ] && { [ "$want" = 1 ] || { printf '%s' "$out" | grep -q "^PATH /" && printf '%s' "$out" | grep -q '^failed:.'; }; } && [ ! -s "$OUT" ]; then
     ok "DEGRADE $label → rc $rc"
   else bad "DEGRADE $label → rc $rc out=$out"; fi
 }
@@ -168,7 +186,7 @@ got=$(inl "$OUT")
 
 clients '300|/dev/ttyNEW|iTerm2 3.6.10|141,29,24,64'
 rm -f "$OUT"; res=$(FLEET_SHOW_KEYS=x "$SHOW" --inline "$WORK/doc.pdf" 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(inl "$OUT")" = "- 0 -" ] && printf '%s' "$res" | grep -q '^SENT doc.pdf .*not an image' \
+[ "$rc" = 0 ] && [ "$(inl "$OUT")" = "- 0 -" ] && printf '%s' "$res" | grep -q '^fleet-show: doc.pdf .*不是 iTerm2 能画的图' \
   && ok "NON-IMAGE pdf --inline → download + said so" || bad "NON-IMAGE ($rc): $(inl "$OUT") / $res"
 
 rm -f "$OUT"; FLEET_SHOW_KEYS=d "$SHOW" --inline "$WORK/wide.png" >/dev/null 2>&1
@@ -177,8 +195,122 @@ got=$(inl "$OUT" | cut -d' ' -f2 | tr '\n' ' ')
 
 rm -f "$OUT"; res=$(FLEET_SHOW_KEYS=dx "$SHOW" --inline "$WORK/wide.png" "$WORK/tall.jpg" 2>&1)
 got=$(inl "$OUT" | cut -d' ' -f2 | tr '\n' ' ')
-[ "$got" = "1 0 1 " ] && printf '%s' "$res" | grep -q '^SENT wide.png → the operator pressed d' \
+[ "$got" = "1 0 1 " ] && printf '%s' "$res" | grep -q '^fleet-show: wide.png → 你按了 d' \
+  && [ "$(printf '%s\n' "$res" | grep -c '^unconfirmed$')" = 2 ] \
   && grep -q '\[1/2\] wide.png' "$OUT" && ok "D-KEY on screen 1 of 2 reported, then screen 2" || bad "D-KEY multi: $got / $res"
+
+# ---- RECEIPT · ITERM (issue #3541) ------------------------------------------------
+# The laptop's fleet_open.py, played: wait for the Custom= request in the stream, check
+# it is kind=file for this file and comes BEFORE its MultipartFile, answer it.
+cat > "$WORK/iterm_peer.py" <<'PY'
+import base64, json, os, re, subprocess, sys, time
+out, state, why, secret = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+end = time.time() + 15
+while time.time() < end:
+    s = open(out, "rb").read() if os.path.exists(out) else b""
+    m = re.search(rb"\x1b\]1337;Custom=id=([^:]*):([^\a]*)\a", s)
+    if m and b"FileEnd" in s:
+        assert m.group(1).decode() == secret, "secret"
+        assert m.start() < s.find(b"MultipartFile="), "request after the file"
+        d = json.loads(base64.b64decode(m.group(2)))
+        assert d["kind"] == "file" and d["name"] == "pic one.png" and d["size"] == 200001 and d["v"] == 1, d
+        if state != "none":
+            subprocess.call(["bash", sys.argv[5], "--ack", d["id"], state, why])
+        print("seen")
+        sys.exit(0)
+    time.sleep(0.05)
+sys.exit(1)
+PY
+printf 'sekrit-0123\n' > "$WORK/open.secret"
+clients '300|/dev/ttyNEW|iTerm2 3.6.10'
+iterm() {  # <state ok|fail|none> <why> → "rc|stdout"; the peer's verdict in $WORK/peer
+  rm -f "$OUT"
+  ( python3 "$WORK/iterm_peer.py" "$OUT" "$1" "$2" sekrit-0123 "$BIN/fleet-open.sh" > "$WORK/peer" 2>&1 & )
+  local out rc; out=$(FLEET_OPEN_SECRET_FILE="$WORK/open.secret" FLEET_SHOW_ACK_WAIT=3 "$SHOW" "$F" 2>"$WORK/err"); rc=$?
+  sleep 0.2; printf '%s|%s' "$rc" "$out"
+}
+got=$(iterm ok "/Users/p/Downloads/pic one.png")
+[ "$got" = "0|saved:/Users/p/Downloads/pic one.png" ] && grep -qx seen "$WORK/peer" \
+  && ok "ITERM saved:<path> from fleet_open.py's answer (request before the file, keyed)" || bad "ITERM saved: $got / $(cat "$WORK/peer" "$WORK/err")"
+got=$(iterm fail "it never landed in the laptop's downloads folder")
+[ "$got" = "4|failed:it never landed in the laptop's downloads folder" ] && ok "ITERM failed:<why> rc 4" || bad "ITERM failed: $got"
+got=$(iterm fail "the laptop refused it: unknown kind='file'")
+[ "$got" = "0|unconfirmed" ] && grep -q '旧版' "$WORK/err" && ok "ITERM a v2 script's refusal → unconfirmed, says so" || bad "ITERM v2: $got / $(cat "$WORK/err")"
+t0=$(date +%s); got=$(iterm none ""); t1=$(date +%s)
+[ "$got" = "0|unconfirmed" ] && [ $(( t1 - t0 )) -ge 3 ] && grep -q '没等到那边的回执' "$WORK/err" \
+  && ok "ITERM no answer → unconfirmed after the wait" || bad "ITERM none: $got ($(( t1 - t0 ))s) / $(cat "$WORK/err")"
+[ -n "$(find "$FLEET_CONF_DIR/open-acks" -type f 2>/dev/null)" ] && bad "ITERM receipts left behind" || ok "ITERM no receipt left behind"
+
+# ---- RECEIPT · THIN (issue #3541) -------------------------------------------------
+# The REAL loop's show_req, fed the 7502 off the 看台's tty through its own parser;
+# its fetch is this machine's `fleet-show.sh --fetch`, its receipt `fleet-open.sh --ack`.
+cat > "$WORK/thin_peer.py" <<'PY'
+import importlib.util, os, sys, threading, time
+out, token, binp = sys.argv[1], sys.argv[2], sys.argv[3]
+spec = importlib.util.spec_from_file_location("fleet_thin", os.path.join(binp, "fleet-thin.py"))
+ft = importlib.util.module_from_spec(spec); spec.loader.exec_module(ft)
+t = object.__new__(ft.Thin)
+t.base, t.home, t.said, t.said_lock = {"argv": []}, "mini", [], threading.Lock()
+end = time.time() + 15
+while time.time() < end:
+    data = open(out, "rb").read() if os.path.exists(out) else b""
+    if data:
+        _, events, _ = ft.Osc7502(token).feed(data)
+        shows = [kv for kind, kv in events if kind == "show"]
+        if shows:
+            for kv in shows:
+                t.show_req(kv)
+            print("\n".join(t.said))
+            sys.exit(0)
+    time.sleep(0.05)
+sys.exit(1)
+PY
+VIEWS="$FLEET_CONF_DIR/remote-views"; mkdir -p "$VIEWS"
+DEV=$(printf '{"device":"Pat Mac"}' | base64 | tr -d '\n')
+row() {  # <caps column or empty>
+  printf '/dev/ttyNEW\tfleet-x\tthin\t1\t1\tcur=x\troute=lan\tdevice=%s\ttoken=tok-1\tfuid=u\tnode=mini%s\n' "$DEV" "$1" > "$VIEWS/v1"
+}
+printf '{"source":"hub","state":"active","via":"thin"}\n' > "$WORK/where.json"
+DL="$WORK/dl"; mkdir -p "$DL"
+TOUT="$WORK/thin.out"
+thin() {  # <file…> → "rc|stdout" (FETCH= the loop's fetch command)
+  rm -f "$OUT" "$TOUT"
+  ( env FLEET_THIN_DOWNLOADS="$DL" FLEET_THIN_LOG="$WORK/thin.log" FLEET_THIN_FETCH_CMD="${FETCH:-bash $SHOW --fetch}" \
+        FLEET_THIN_ACK_CMD="bash $BIN/fleet-open.sh" python3 "$WORK/thin_peer.py" "$TOUT" tok-1 "$BIN" > "$WORK/peer" 2>&1 & )
+  local out rc; out=$(env FLEET_THIN_SHOW_OUT="$TOUT" FLEET_SHOW_ACK_WAIT=5 "$SHOW" "$@" 2>"$WORK/err"); rc=$?
+  sleep 0.3; printf '%s|%s' "$rc" "$out"
+}
+row "	caps=show"
+got=$(thin "$F")
+[ "$got" = "0|saved:$DL/pic one.png" ] && cmp -s "$DL/pic one.png" "$F" && [ ! -s "$OUT" ] \
+  && ok "THIN saved:<path> in the loop's downloads, bytes identical, no terminal escape" || bad "THIN saved: $got / $(cat "$WORK/peer" "$WORK/err")"
+grep -q 'fleet · .* 发来 pic one.png，存在 ' "$WORK/peer" && ok "THIN the loop says where it saved it" || bad "THIN say: $(cat "$WORK/peer")"
+grep -q 'Pat Mac' "$WORK/err" && ok "THIN stderr names the device" || bad "THIN device: $(cat "$WORK/err")"
+got=$(thin "$F")
+[ "$got" = "0|saved:$DL/pic one (1).png" ] && ok "THIN a taken name → «pic one (1).png»" || bad "THIN taken: $got"
+[ -n "$(find "$FLEET_CONF_DIR/show-files" -type f 2>/dev/null)" ] && bad "THIN a fetched id left registered" || ok "THIN --fetch serves an id once"
+bash "$SHOW" --fetch 00ff >/dev/null 2>&1; [ $? = 3 ] && ok "THIN --fetch of an unknown id → rc 3" || bad "THIN --fetch unknown"
+bash "$SHOW" --fetch '../x' >/dev/null 2>&1; [ $? = 1 ] && ok "THIN --fetch refuses a non-hex id" || bad "THIN --fetch non-hex"
+got=$(FETCH=false thin "$F")
+case "$got" in "4|failed:fetch failed (rc 1)"*) ok "THIN a fetch that fails → failed:<why> rc 4" ;; *) bad "THIN fetch fail: $got" ;; esac
+rm -f "$OUT" "$TOUT"; got=$(FLEET_THIN_SHOW_OUT="$TOUT" FLEET_SHOW_ACK_WAIT=1 "$SHOW" "$F" 2>"$WORK/err"); rc=$?
+[ "$rc|$got" = "0|unconfirmed" ] && grep -q 'show;token=tok-1;' "$TOUT" && ok "THIN no answer → unconfirmed" || bad "THIN none: $rc|$got"
+row ""
+rm -f "$OUT" "$TOUT"; got=$(FLEET_THIN_SHOW_OUT="$TOUT" "$SHOW" "$F" 2>/dev/null)
+[ "$got" = unconfirmed ] && [ ! -s "$TOUT" ] && [ -s "$OUT" ] && ok "THIN a row with no caps (older loop) → the terminal road" || bad "THIN no caps: $got"
+rm -f "$VIEWS/v1"
+
+# ---- RECEIPT · CLIENT lease + local opener (issue #3541) ---------------------------
+printf '{"source":"hub","state":"active","via":"ssh"}\n' > "$WORK/where.json"
+cat > "$WORK/bin/actions" <<'SH'
+print('{"state":"done","result":"saved:/Users/p/Downloads/x.png","client":{"device":"Pat Mac"}}')
+SH
+got=$(FLEET_SHOW_ACTIONS_BIN="$WORK/bin/actions" "$SHOW" "$F" 2>/dev/null); rc=$?
+[ "$rc|$got" = "0|saved:/Users/p/Downloads/x.png" ] && ok "CLIENT the lease's result → saved:<path>" || bad "CLIENT: $rc|$got"
+printf '{"source":"local","state":"active","via":"local"}\n' > "$WORK/where.json"
+got=$(FLEET_SHOW_LOCAL_CMD=true "$SHOW" "$F" 2>/dev/null); rc=$?
+[ "$rc|$got" = "0|saved:$(cd "$WORK" && pwd -P)/pic one.png" ] && ok "CLIENT the local opener → saved:<the file here>" || bad "LOCAL: $rc|$got"
+rm -f "$WORK/where.json"
 
 [ "$fail" = 0 ] && echo "fleet-show-selftest: PASS" || echo "fleet-show-selftest: FAIL"
 exit "$fail"

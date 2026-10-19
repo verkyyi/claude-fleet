@@ -59,7 +59,9 @@ too, whose link to this one carries it.
 - **Docs to READ** (Markdown / HTML) still go through doc-preview — `share.sh --open <file>`
   hosts it and opens it in one step (add `--local` when there is no tailnet).
 - **Images / PDFs to LOOK at** can also go through `mcp__fleet__show` (`inline: true` draws
-  an image in the terminal); `open` with a file is the same download.
+  an image in the terminal); `open` with a file is the same download. Its answer (issue #3541):
+  `saved:<path>` — on THEIR computer, tell them where · `unconfirmed` — handed over, no
+  receipt · `failed:<why>` (exit 4) · `PATH …` + `failed:…` (exit 2) — give them the path.
 - **Never print or log the secret** (`~/.config/claude-fleet/open.secret`, 0600). It is what
   stops any other text printed to the operator's terminal from opening URLs on their machine.
 - `fleet-doctor`'s `open` line shows whether the secret exists and the last result.

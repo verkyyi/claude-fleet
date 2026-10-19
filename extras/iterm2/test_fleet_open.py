@@ -276,5 +276,83 @@ class Receipt(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class FileReceipt(unittest.TestCase):
+    """Issue #3541: a download's receipt — the file found in the downloads folder."""
+
+    def test_parse(self):
+        r = fo.parse_payload(b64({"v": 1, "kind": "file", "name": "a b.png", "size": 12, "id": "ab"}))
+        self.assertEqual(r, {"kind": "file", "name": "a b.png", "size": 12, "host": ""})
+        for bad in ({"name": "../x", "size": 1}, {"name": "", "size": 1}, {"name": "..", "size": 1},
+                    {"name": "a\nb", "size": 1}, {"name": "a", "size": -1}, {"name": "a", "size": "3"},
+                    {"name": "a", "size": True}, {"name": 5, "size": 1}):
+            with self.subTest(bad=bad):
+                self.assertRaises(fo.Reject, fo.parse_payload, b64(dict({"v": 1, "kind": "file"}, **bad)))
+
+    def test_find_saved(self):
+        ents = [("a.png", 10, 99.0),            # older than the receipt: not this download
+                ("a 2.png", 10, 105.0),         # iTerm2's renamed copy, newest
+                ("a (1).png", 10, 103.0),
+                ("a.png.txt", 10, 106.0),       # other extension
+                ("ab.png", 9, 107.0),           # other size
+                ("b.png", 10, 108.0)]
+        self.assertEqual(fo.find_saved(ents, "a.png", 10, 102.0), "a 2.png")
+        self.assertEqual(fo.find_saved([("a.png", 10, 101.0)], "a.png", 10, 102.0), "a.png")  # clock slack
+        self.assertIsNone(fo.find_saved(ents, "a.png", 11, 102.0))
+        self.assertIsNone(fo.find_saved([], "a.png", 10, 0))
+
+    def test_ack_words(self):
+        self.assertEqual(fo.ack_words("saved", "/Users/x/Downloads/a.png"), ("ok", "/Users/x/Downloads/a.png"))
+        st, why = fo.ack_words("not-saved")
+        self.assertEqual(st, "fail")
+        self.assertIn("downloads folder", why)
+
+    def _do_file(self, plant, wait):
+        tmp = tempfile.TemporaryDirectory()
+        old = fo.CONF_DIR
+        fo.CONF_DIR = tmp.name
+        dl = os.path.join(tmp.name, "dl")
+        os.makedirs(dl)
+        with open(os.path.join(tmp.name, "downloads"), "w") as f:
+            f.write(dl + "\n")
+        ticks = []
+
+        def sleep(_):
+            ticks.append(1)
+            if plant and len(ticks) == 2:
+                with open(os.path.join(dl, "r.pdf"), "wb") as f:
+                    f.write(b"x" * 7)
+        try:
+            return fo.do_file({"name": "r.pdf", "size": 7}, wait=wait, sleep=sleep), dl
+        finally:
+            fo.CONF_DIR = old
+            tmp.cleanup()
+
+    def test_do_file_saved(self):
+        (detail, result, path), dl = self._do_file(True, 30)
+        self.assertEqual((result, path), ("saved", os.path.join(dl, "r.pdf")))
+
+    def test_do_file_never_lands(self):
+        (detail, result, path), _ = self._do_file(False, 0)
+        self.assertEqual((result, path), ("not-saved", ""))
+
+    def test_handle_acks_the_path(self):
+        old = (fo.CONF_DIR, fo.do_file, fo.subprocess.run)
+        tmp = tempfile.TemporaryDirectory()
+        calls = []
+
+        class R:
+            returncode = 0
+        fo.CONF_DIR = tmp.name
+        fo.do_file = lambda req: ("d", "saved", "/Users/p/Downloads/r.pdf")
+        fo.subprocess.run = lambda cmd, **kw: calls.append(cmd) or R()
+        try:
+            fo.handle(b64({"v": 1, "kind": "file", "name": "r.pdf", "size": 7, "id": "beef", "host": "mini"}))
+        finally:
+            fo.CONF_DIR, fo.do_file, fo.subprocess.run = old
+            tmp.cleanup()
+        import shlex
+        self.assertEqual(shlex.split(calls[0][-1])[-4:], ["--ack", "beef", "ok", "/Users/p/Downloads/r.pdf"])
+
+
 if __name__ == "__main__":
     unittest.main()
