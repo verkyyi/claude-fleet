@@ -6597,7 +6597,7 @@ drill_stuck_worker_unseen() {
   WHAT='worker 被 API 错误停住、自动续接用完或错误不可续：给父会话报一次 failed（停在提示符、不是做完了）；rate_limit 和人的会话不报；起动被拒的 worker 一串也只报一次'
 }
 
-# ---- finished workers nothing closed (issue #4822, macmini 2026-10-19) -------------
+# ---- finished workers nothing closed (issue #4822, a managed Mac 2026-10-19) -------------
 # The idle pass runs once per hosted repo; every OTHER repo's pass saw a `done:10m`
 # window as not its own and cleared the countdown its own pass had just set — on
 # every tick, so it never came due (@3762, six hours).
