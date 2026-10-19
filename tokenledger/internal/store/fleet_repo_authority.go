@@ -197,7 +197,7 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 		return nil, nil, err
 	}
 	for _, start := range starts {
-		if start.Phase == "stopped" || start.Phase == "cancelled" {
+		if repoStartClosed(start.Phase) {
 			continue
 		}
 		blockers = append(blockers, "local start retained: "+start.Reservation)
