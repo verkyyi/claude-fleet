@@ -149,7 +149,7 @@ mv "$WORK/conf.keep" "$FLEET_CONF_DIR/fleets/$SESS/conf"
 overlay_off; : > "$WLIST_FILE"
 w 1 alpha3 /w/alpha-issue-3 3 acme/alpha ''
 w 2 alpha7 /w/beta-issue-7  7 acme/alpha ''
-srows() { PATH="$WORK/bin:$PATH" FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" --sidebar 2>&1 | grep -E "^@[12]$US"; }
+srows() { PATH="$WORK/bin:$PATH" FLEET_SESSION="$SESS" FZF_COLUMNS=140 bash "$ROWS" --rows 2>&1 | grep -E "^@[12]$US"; }
 one=$(srows)
 overlay_on; w 3 beta3 /w/beta-issue-3 3 acme/beta ''
 two=$(srows)

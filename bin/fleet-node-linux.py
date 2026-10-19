@@ -811,15 +811,6 @@ def pod_login_open(a):
     return 0
 
 
-def compat_default(key, hub):
-    """compat-1v: 下一批删 — conf/compat-ours.conf's old value of key, only for
-    one of the hubs it names (bin/fleet_compat.py, issue #3577)."""
-    try:
-        return load('fleet_compat').default(key, hub)
-    except Exception:
-        return ''
-
-
 def hub_relay():
     """The hub's credential relay as its desired state handed it down (issue
     #4010): expected.json's cred_relay_url, written by `fleet node install` from
@@ -858,9 +849,8 @@ def route_settings(c, login, hub, relay):
     # No relay given (--relay / FLEET_CRED_RELAY_URL): the hub's, as it handed it
     # down (expected.json, #4010 — a pod routing central has its own road), else
     # none — the relay road is optional. The code names no relay of its own
-    # (issue #3577); a pod of ours rendered before render.py --relay keeps the
-    # old one for a version.
-    relay = relay or ('' if central_url() else hub_relay()) or compat_default('FLEET_CRED_RELAY_URL', hub)
+    # (issue #3577).
+    relay = relay or ('' if central_url() else hub_relay())
     route = {'FLEET_HUB_URL': hub}
     if relay:
         route['FLEET_CRED_RELAY_URL'] = relay

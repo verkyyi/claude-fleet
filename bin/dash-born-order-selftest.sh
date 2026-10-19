@@ -81,7 +81,7 @@ fixture() {   # $1..$5 = the states of A P C1 C2 Z; $6 = drop this name (closed)
   done
 }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e 's/⠋/*/g;s/⠙/*/g;s/⠹/*/g;s/⠸/*/g;s/⠼/*/g;s/⠴/*/g;s/⠦/*/g;s/⠧/*/g;s/⠇/*/g;s/⠏/*/g'; }
-side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip; }
+side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --rows 2>/dev/null | strip; }
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
 sorder(){ printf '%s\n' "$1" | LC_ALL=C awk -F"$US" '$1 != "hdr" { printf "%s;", $4 }'; }
 shdrs() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" '$1 == "hdr" { printf "%s|%s;", $3, $4 }'; }

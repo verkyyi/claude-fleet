@@ -12,16 +12,6 @@
       "description": "The fleet slash commands, base skills, and hooks."
     },
     {
-      "name": "fleet-orchestrate",
-      "source": "./plugins/fleet-orchestrate",
-      "description": "已下架 · retired (EPIC #4333): the orchestrator is a session template now — spawn agent:orchestrator. Kept one version so an installed copy updates to this empty one; uninstall it."
-    },
-    {
-      "name": "fleet-steward",
-      "source": "./plugins/fleet-steward",
-      "description": "已下架 · retired (EPIC #4333): the steward is a session template now — spawn agent:steward. Kept one version so an installed copy updates to this empty one; uninstall it."
-    },
-    {
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
       "description": "EPIC batches: plan, run and report (/fleet-epic-plan · /fleet-epic-run · /fleet-epic-report)."

@@ -201,11 +201,6 @@ def carried(root, plugs, gone, cdir):
 # machine admins' runbook, installed by hand where one is wanted.
 NEVER_DEFAULT = ("fleet-infra",)
 
-# A plugin that left (issue #4339 / #4340, EPIC #4333 C6 / C7): its entry stays one
-# version as an empty plugin, so an installed copy updates to nothing and /plugin
-# says 已下架; never defaulted, and the doctor names it only where it is still installed.
-RETIRED = ("fleet-orchestrate", "fleet-steward")  # compat-1v: 下一批删（连 plugins/<它> 一起）
-
 
 def defaulted_path(a):
     if a.defaulted:
@@ -299,9 +294,6 @@ def cmd_ensure(a):
         dpath = defaulted_path(a)
         done = defaulted_load(dpath)
         for name in a.default:
-            if name in RETIRED:
-                print("plugins: %s is retired (已下架) — never installed by default" % name)
-                continue
             if name in NEVER_DEFAULT:
                 print("plugins: %s is never a managed default — installed by hand only (#3586)" % name)
                 continue
@@ -367,10 +359,6 @@ def cmd_doctor(a):
     bits, late = [], []
     for name in sorted(plugs):
         e = have.get(name)
-        if name in RETIRED:
-            if e is not None:
-                bits.append("%s 已下架（可卸：claude plugin uninstall %s@%s）" % (name, name, mname))
-            continue
         if e is None:
             bits.append("%s 未装" % name)
         elif behind(e):

@@ -23,7 +23,6 @@ docs/dev/MANAGED-LINUX.md	private-ipv4	出口守卫一表写的就是 render.py 
 deploy/k8s/egress/base/fleet-egress.py	private-ipv4	内嵌自测：要的就是私网地址被拒、被认
 extras/gh-relay/gh-relay.py	private-ipv4	内嵌自测：要的就是私网地址被拒
 extras/gh-relay/gh-relay.service	private-ipv4	Lightsail 默认 VPC 的解析器地址（AWS 的产品默认），重建后照 README 核对
-conf/compat-ours.conf	*	compat-1v（#3577，下一批删）：我们自己机器在未设新键时的旧值，只在配置的入口是我们的时才读
 
 # (tokenledger's files are spelled `tokenledge?/…`: no conf line may name that tree — tokenledger-isolation-selftest)
 # C8 (#3578): tests and docs whose private addresses ARE the point — LAN / tailnet / entry

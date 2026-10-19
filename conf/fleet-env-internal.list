@@ -751,7 +751,7 @@ FLEET_VIEW_LANG                    handoff: the language a 看台's client broug
 FLEET_UI_PERSON_FILE               seam: the person-bundle.json fleet-ui-lang.sh reads the person's ui_lang from (default $FLEET_CONF_DIR/person-bundle.json, #3329)
 FLEET_VIEW_FIRST_CMD               seam: replaces `fleet-quickopen.py` when attach --thin lands a 看台 with no orchestrator here on ⌘N's road (`do new`) (fleet-remote-view.sh, #3007)
 FLEET_VIEW_KEEP_SECS               knob: seconds a thin client's 看台 (attach --thin) outlives its client for --resume before prune takes it (600, #2763)
-FLEET_VIEW_ROWS_CMD                seam: a shell command printing the 看台 switcher's rows instead of tmux-dashboard-rows.sh --sidebar (fleet_view.py, #3000)
+FLEET_VIEW_ROWS_CMD                seam: a shell command printing the 看台 switcher's rows instead of tmux-dashboard-rows.sh --rows (fleet_view.py, #3000)
 FLEET_HUB_SESSIONS_USER            knob: whose sessions on the other machines the dash shows (os_user; default `id -un`, `*` = every login the hub shows; #1423)
 FLEET_CERT                         handoff: the connection-certificate key pair a sidebar / `fleet connect` signs with — the key; `<key>-cert.pub` beside it (default ~/.ssh/fleet-cert, what `fleet login` wrote; fleet-hub-sessions.sh, fleet-connect.py, #1475)
 FLEET_HUB_LEASE_CMD                seam: the hub issue-lease command (default `ccquota lease`), run as `<cmd> acquire|release [--force] <repo> <issue> <worker_id>` (fleet_hub_lease, #1422)

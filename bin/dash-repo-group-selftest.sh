@@ -92,7 +92,7 @@ win 'issue-4' @repo o/elsewhere @issue 4              # a repo this fleet does n
 
 strip() { sed "s/$(printf '\033')\[[0-9;]*m//g"; }
 rows()  { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "${1:-$ROWS}" | tail -n +2 | awk -F '\037' '{ print $1 "|" $3 }' | strip; }
-side()  { FLEET_SESSION=alpha bash "${1:-$ROWS}" --sidebar | tr '\037' '|'; }
+side()  { FLEET_SESSION=alpha bash "${1:-$ROWS}" --rows | tr '\037' '|'; }
 # a rows() line → its heading text, or the window name (glyph/issue/tree cells dropped)
 names() { awk -F'|' '{ l = $2; if ($1 == "hdr") { print l; next }
                        sub(/^ *[^ ]+ +(#[0-9]+ +)?. +/, "", l); sub(/ .*/, "", l); print l }'; }

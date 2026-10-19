@@ -29,9 +29,8 @@ BIN="$(cd "${BIN:-/}" && pwd)"
 [ -n "${FLEET_SESSION:-}" ] && fleet_load_conf "$FLEET_SESSION" 2>/dev/null || true
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; [ -d "$C" ] || mkdir -p "$C"   # 1Hz path: no exec once it exists (#888)
 G="$C/global"                       # machine-wide caches (git_/ctx_) — issue #181
-# --rows was --sidebar, named after the list that first drew them (issue #3732);
-# both mean the same. compat-1v: --sidebar stays while a caller still spells it.
-SIDEBAR=0; case "${1:-}" in --rows|--sidebar) SIDEBAR=1 ;; esac
+# --rows (named --sidebar until issue #3732): the rows the 看台's list draws.
+SIDEBAR=0; case "${1:-}" in --rows) SIDEBAR=1 ;; esac
 
 # live⇄landed view toggle (dash ⌃t writes $C/dash_view_<session>, per-fleet). In
 # LANDED mode this producer hands off to the history ledger's row emitter, so
@@ -610,7 +609,7 @@ fi
 # line of this fleet, taken off the first (panels included: a fleet whose only
 # windows are panels still draws its `(0)` headings, folded or not).
 KEYTAB=''; PRWANT=''; RSLUGS=' '; RFOLD=''; UNFIN=$'\n'
-# The issue titles this frame needs (issue #1921, --sidebar only): a local row's
+# The issue titles this frame needs (issue #1921, --rows only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
 ITWANT=''; ISLUGS=' '; DRIVEN=' '
 while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic _; do

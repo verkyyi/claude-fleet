@@ -8,11 +8,6 @@
 #   fleet-client-update.sh tick     `fleet update`'s beat: check (hourly) and stage
 #   fleet-client-update.sh doctor [--root <home>]   the doctor's `client` row:
 #                                   `PASS|WARN|INFO<TAB><text>` on stdout
-#   fleet-client-update.sh follow | running   no-ops (compat-1v: 下一批删) — they
-#                                   reloaded the OLD client's running servers
-#                                   (issues #2145, #2737); that client went with
-#                                   #3008, and an install-sync of the version
-#                                   before still calls `follow`
 #
 # An installed client (the one line, `curl <hub>/install | sh`) lives in one
 # directory, ~/.claude/fleet (#1804; ~/.local/share/claude-fleet before) — the
@@ -592,6 +587,5 @@ case "${1:-}" in
   stage)  shift; load_conf; HUB=$(hub_url); stage "${1:-}"; exit $? ;;
   tick)   shift; HUB=''; cmd_tick; exit $? ;;
   doctor) shift; HUB=''; cmd_doctor "$@"; exit 0 ;;
-  follow|running) exit 0 ;;   # compat-1v: 下一批删 (the old client's reload, #3008)
-  *) sed -n '4,17p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
+  *) sed -n '4,10p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
 esac

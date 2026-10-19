@@ -5,8 +5,8 @@
 组件、类别与归属模式来自 [COMPONENTS.md](COMPONENTS.md)，规则按表顺序首个匹配。
 
 ```text
-总数	1301
-已归类	1301
+总数	1299
+已归类	1299
 待删候选	0
 人工入口	11
 未归类	0
@@ -45,7 +45,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 29 |
 | 仓库接入与帮助（`fleet-add-repo` / `fleet-help`） | 按需 | 14 |
 | 休眠（sleep） | 待定 | 10 |
-| 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 65 |
+| 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 64 |
 | 会话状态钩子（`set-claude-state.sh`） | 核心 | 1 |
 | 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 18 |
 | 内容送达与阅读（`fleet-open` / `doc-preview`） | 按需 | 9 |
@@ -67,7 +67,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 2 |
 | 终端状态与节点连接（spinner / peerlink） | 待定 | 11 |
 | 终端看台与薄客户端 | 核心 | 168 |
-| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 2 |
+| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 1 |
 | 账号与代理启动 | 核心 | 81 |
 | 配置与插件装配 | 核心 | 34 |
 | 项目依赖复用 | 按需 | 4 |

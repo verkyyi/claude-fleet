@@ -8,7 +8,7 @@
 #                  the empty fields before it kept (a measured bus, an ask pair);
 #                  a row with none (absent, 0, not a number) is byte for byte as
 #                  before
-#   B. the sidebar — tmux-dashboard-rows.sh --sidebar carries it as field 19's
+#   B. the sidebar — tmux-dashboard-rows.sh --rows carries it as field 19's
 #                  sixth part (`left|band|ts|model|effort|tokens`), only when any
 #                  (the old client's sidebar that read it went with it, #3008)
 #   C. the top line and ⌘P — fleet-topbar.py says 「今天 123 万」 / 「1.2M today」
@@ -88,7 +88,7 @@ if [ -n "$REAL_TMUX" ]; then
   T -f /dev/null new-session -d -s "$S" -n home 'sleep 600' || fail "B: could not start the isolated server"
   SOCK=$(T display-message -p '#{socket_path}')
   date +%s > "$G/hub_ok"
-  SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
+  SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
   eq "B: tokens alone ride field 19 as its sixth part" "|||||1234567" "$(fld "$SIDE" RT 19)" "$SIDE"
   eq "B: …after a measured bus" "40|ok|1800000000|Opus 5.5|high|555" "$(fld "$SIDE" RB 19)"
   eq "B: none recorded — no field 19" "-" "$(fld "$SIDE" RN 19)"

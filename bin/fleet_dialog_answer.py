@@ -269,7 +269,7 @@ def main(argv=None):
     p.add_argument("target")
     p.add_argument("--fp", required=True)
     p.add_argument("--pick", action="append", required=True)
-    p.add_argument("--by", default="person", choices=("person", "session", "default", "steward"))  # compat-1v: 下一批删
+    p.add_argument("--by", default="person", choices=("person", "session", "default"))
     p.add_argument("--basis", default="")
     p.add_argument("--issue", default="")
     p.add_argument("--session", default="")
@@ -277,8 +277,6 @@ def main(argv=None):
     p.add_argument("-L", default="")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args(argv)
-    if a.by == "steward":  # compat-1v: 下一批删 — the old name of session (issue #4339)
-        a.by = "session"
     if not re.match(r"^[@%][0-9]+$", a.target):
         sys.stderr.write("fleet-dialog-answer: %r is not a window address (@<id> / %%<pane>)\n" % a.target)
         return 2

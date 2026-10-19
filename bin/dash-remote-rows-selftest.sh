@@ -190,7 +190,7 @@ w 3  solo  /w/app-issue-1430    working  @3   1430  ''          a3
 
 # colours off, and the working spinner's frame (it turns every quarter second) → `*`
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g' -e 's/⠋/*/g;s/⠙/*/g;s/⠹/*/g;s/⠸/*/g;s/⠼/*/g;s/⠴/*/g;s/⠦/*/g;s/⠧/*/g;s/⠇/*/g;s/⠏/*/g'; }
-side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip; }
+side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --rows 2>/dev/null | strip; }
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
 # LC_ALL=C: BSD awk compares strings with strcoll, and under a UTF-8 locale two
 # different CJK names collate EQUAL — `孙` would match `侧边栏`.
@@ -569,9 +569,7 @@ OID=0d1e2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || fail "O: --refresh (orchestrator) failed"
 eq   "O: the orchestrator keeps its line in the cache (open finds it there)" "mac-a|编排" \
      "$(LC_ALL=C awk -F"$US" -v w="wid:$F/$OID" '$1 == w { print $2 "|" $8 }' "$G/remote_$S")"
-printf 'stale\n' > "$G/orch_$S"; printf 'stale\n' > "$G/orch_multi_$S"
-FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-orch.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null
-eq   "O: no orch_<sess> / orch_multi_<sess> file any more (issue #3118: an older one is removed)" "00" \
+eq   "O: no orch_<sess> / orch_multi_<sess> file (issue #3118)" "00" \
      "$([ -e "$G/orch_$S" ] && echo 1 || echo 0)$([ -e "$G/orch_multi_$S" ] && echo 1 || echo 0)"
 s=$(side)
 has  "O: the sidebar draws its row (issue #3119: no session is special)" "$s" "编排"
@@ -738,7 +736,7 @@ we 2  只看只点   /w/app-issue-1950     'done'     @2  1950  acme-app:scratch
 we 3  侧栏·底栏  /w/app-issue-1951     working  @3  1951  acme-app:scratch-7   acme/app
 we 4  工具活     /w/tool-issue-31      working  @4  31    acme-app:scratch-7   acme/tool
 we 5  单干       /w/app-issue-1960     working  @5  1960  ''                   acme/app
-qside() { PATH="$SHIMPATH" FLEET_SESSION=$QS bash "$ROWS" --sidebar 2>/dev/null | strip; }
+qside() { PATH="$SHIMPATH" FLEET_SESSION=$QS bash "$ROWS" --rows 2>/dev/null | strip; }
 qhub()  { PATH="$SHIMPATH" FLEET_SESSION=$QS FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
 MARK="$WORK/conf/global/epic-running.d/acme-app-1949"
 printf 'epoch: %s\nttl: 2700\nepic: 1949\nrepo: acme/app\nlanded: 1\nmembers: 3\n' "$NOW" > "$MARK"
@@ -832,7 +830,7 @@ got=$(cd "$BIN" && python3 -c 'import fleet_hub_common as h
 p = ["@5", "", "1", "/w/x", "idle", "claude", "a1", "", "", "test-norepo", "", "", "", "busy=", "born=", "cfg=", "title=", "reap=", "detail="]
 x = lambda r: (lambda e: (e.get("role"), e.get("coordinator")))(h.inventory_row(p + ["role=" + r])[1])
 print(x("worker"), x("orchestrator"), x(""))' 2>&1)
-eq "Q: column 20 role=worker is the coordinator flag (#3227), an old role= kept" "(None, True) ('orchestrator', None) (None, None)" "$got"
+eq "Q: column 20 role= is read as nothing (#4341)" "(None, None) (None, None) (None, None)" "$got"
 rm -f "$G/remote_$QS" "$G/remote_fold_$QS" "$G/hub_ok" "$MARK"; rm -rf "$WORK/conf/fleets/$QS"
 PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null   # leave leg E's cache as it was
 cp "$WORK/wlist.q" "$WLIST_FILE"
@@ -849,7 +847,7 @@ cp "$WLIST_FILE" "$WORK/wlist.t"; : > "$WLIST_FILE"
 wt_() { printf '%s\n' "$TS$US$1$US$2$US$3$US$4$US$US$5$US${6:-}$US$US$3$US$US$US$US$US$US$US$US$US$US${7:-}$US$US$US$US$US$US$US$US$US$US${8:-}" >> "$WLIST_FILE"; }
 wt_ 1  只看只点   /w/app-issue-1950   working  @1  1950  acme/app
 wt_ 2  工具活     /w/tool-issue-31    working  @2  31    acme/tool
-tside() { PATH="$SHIMPATH" FLEET_SESSION=$TS bash "$ROWS" --sidebar 2>/dev/null | strip; }
+tside() { PATH="$SHIMPATH" FLEET_SESSION=$TS bash "$ROWS" --rows 2>/dev/null | strip; }
 EDIR="$WORK/conf/global/epic-running.d"; rm -rf "$EDIR"
 t0=$(unset CCQUOTA_FLEET; tside)
 mkdir -p "$EDIR"
@@ -1035,10 +1033,10 @@ ws = ctl.workers(f)["workers"]
 print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if x["name"] in ("test-norepo", "侧边栏 x"))))' "$FLEET_CONF_DIR" "$S" 2>&1)
   eq "X: the adapter marks the test window, and only it" "test-norepo:True,侧边栏 x:False" "$got"
   SP=$("$REAL_TMUX" -L "$S" display-message -p '#{socket_path}')
-  got=$(TMUX="$SP,1,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip)
+  got=$(TMUX="$SP,1,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>/dev/null | strip)
   hasnt "X: the list on this machine draws no row for a test window" "$got" "test-norepo"
   has  "X: …the other windows are there" "$got" "侧边栏 x"
-  has  "X: FLEET_ROWS_TEST=1 lists it" "$(TMUX="$SP,1,0" FLEET_SESSION=$S FLEET_ROWS_TEST=1 bash "$ROWS" --sidebar 2>/dev/null | strip)" "test-norepo"
+  has  "X: FLEET_ROWS_TEST=1 lists it" "$(TMUX="$SP,1,0" FLEET_SESSION=$S FLEET_ROWS_TEST=1 bash "$ROWS" --rows 2>/dev/null | strip)" "test-norepo"
   "$REAL_TMUX" -L "$S" kill-window -t "$wt5" 2>/dev/null
   # The refresher maps a LOCAL row to the window that holds it now (#1480) —
   # through this same adapter on the real server, by the hub's own key rule.

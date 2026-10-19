@@ -72,7 +72,7 @@ W_DONE=$(win donehome @norepo 1 @claude_state done)
 win gone     @norepo 1 @claude_state exited >/dev/null
 win pinned   @norepo 1 @claude_state done @pin 1 >/dev/null
 
-side()  { FLEET_SESSION=alpha bash "$ROWS" --sidebar | tr '\037' '|'; }
+side()  { FLEET_SESSION=alpha bash "$ROWS" --rows | tr '\037' '|'; }
 names() { side | awk -F'|' '{ print $4 }' | sed 's/^ *//' | tr '\n' ' '; }
 keys()  { side | awk -F'|' '$1 == "hdr" { print "hdr:" $2; next } { print $1 }' | tr '\n' ' '; }
 raw()   { FLEET_SESSION=alpha FZF_COLUMNS=120 bash "$ROWS"; }

@@ -48,8 +48,8 @@
 
 | 组件 | 类别 | 理由 |
 |---|---|---|
-| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 已改成普通会话模板（`spawn agent:orchestrator`），座位、状态快照与派单规则表已删（#4340）；插件只剩一版空的已下架条目，`fleet-orchestrator-state.py` 只剩一版安静的壳；跨会话基础设施保留。 |
-| 管家特殊实现（`fleet-steward` 插件、巡查程序） | 移除 | 已改成普通会话模板（`spawn agent:steward`），巡查程序与停放已删（#4339）；插件只剩一版空的已下架条目；卡住的对话只经 `fleet-dialog-answer.sh` 代答。 |
+| 编排特殊实现（`fleet-orchestrate` 插件、角色座位、状态快照） | 移除 | 已改成普通会话模板（`spawn agent:orchestrator`），座位、状态快照与派单规则表已删（#4340）；插件条目与 `fleet-orchestrator-state.py` 已删（#4790）；跨会话基础设施保留。 |
+| 管家特殊实现（`fleet-steward` 插件、巡查程序） | 移除 | 已改成普通会话模板（`spawn agent:steward`），巡查程序与停放已删（#4339），插件条目也已删（#4790）；卡住的对话只经 `fleet-dialog-answer.sh` 代答。 |
 | EPIC 批次（`fleet-epic`） | 按需 | 用户选择才安装；依赖关系仍由插件管理，不属于默认核心。 |
 | 反馈（`fleet-feedback`） | 按需 | 普通新装不启用；受托管登录按 #3360 既有策略首次默认启用，之后尊重用户关闭/卸载。本批只登记此例外，不改变托管策略。 |
 | 浏览器（`fleet-browser`） | 按需 | 用户选择浏览器能力后安装，不进入普通默认。 |
@@ -151,7 +151,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 压缩后任务恢复 | `refocus-hook*` | 压缩恢复 |
 | 登录说明规则块 | `fleet-agent-defaults*` | 已退出默认，保留显式清理 |
 | 会话状态钩子 | `set-claude-state*` | 状态写入 |
-| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet_compat* fleet-worker-records* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
+| 会话恢复与事件记录 | `classify-* fleet-codex-session* fleet-emit* handoff-latch-reset-hook* fleet_loop_mark* precompact-hook* session-end-hook* fleet-restore* .fleet-restore* fleet-state-* fleet-status* fleet-sessions-snapshot* fleet-transcript* fleet-start-backfill* fleet-idle-* fleet-loop* fleet_cron* fleet_sample* fleet_timing* fleet_runtime.py fleet-compat* fleet-worker-records* fleet-stream-resume*` | 状态、历史与恢复；mod 的 lifecycle/state 钩子通过 fleet_runtime.py 记录原生运行态观察 |
 | 上下文连续性 | `fleet-ladder-log* fleet-context* fleet-compact* fleet-handoff* fleet-transfer* .fleet-transfer* fleet_transfer*` | 上下文与代理交接 |
 | 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |

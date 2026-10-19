@@ -5,13 +5,13 @@
 #   ` 阿里云成本 #8 · 子任务 1/2 · 等子任务 · 父 #3 `
 #
 # The sidebar's selected-row line used to carry these words; the header has the
-# room. The producer (tmux-dashboard-rows.sh, both the hub and --sidebar modes)
+# room. The producer (tmux-dashboard-rows.sh, both the hub and --rows modes)
 # computes the line every frame and writes it ONLY when it changed, and UNSETS it
 # when every segment is empty, so a lone worker's header stays ` name #issue `.
 #
 # Legs: sub-tasks k/N · why a ↻ waits · a Loop's next round (local HH:MM) · which
 # `!` · the parent; then the write discipline (unchanged → no write, all-empty →
-# no write, stale → unset) and the same answer from --sidebar.
+# no write, stale → unset) and the same answer from --rows.
 #
 # Hermetic: `tmux` is PATH-shimmed to replay a fixture window list and to LOG
 # every set-option call (never a live server). Exit 0 = pass.
@@ -51,7 +51,7 @@ WLIST_FILE="$WORK/wlist"; SETLOG="$WORK/setlog"; export WLIST_FILE SETLOG
 # w idx name state wid issue origin [wait] [@loop] [@title_info]
 w() { printf '%s\n' "S$US$1$US$2$US/w/r-issue-$5$US$3$US$US$4$US$5$US$6$US/w/r-issue-$5$US${US}a$1$US${7:-}$US$US$US$US$US$US$US$US$US$US$US${8:-}$US${9:-}" >> "$WLIST_FILE"; }
 hub()  { : > "$SETLOG"; FLEET_SESSION=S FZF_COLUMNS=140 bash "$ROWS" >/dev/null 2>&1; }
-side() { : > "$SETLOG"; FLEET_SESSION=S bash "$ROWS" --sidebar >/dev/null 2>&1; }
+side() { : > "$SETLOG"; FLEET_SESSION=S bash "$ROWS" --rows >/dev/null 2>&1; }
 # the value written for a window ('' = none written; `-u` = unset)
 put() { awk -v w="$1" '$0 ~ ("-t " w " @title_info") {
           if ($0 ~ /set-option -wqu /) { print "-u"; exit }
@@ -87,8 +87,8 @@ eq "stale value with nothing to say: unset" "-u"                        "$(put @
 
 side
 L=$(cat "$SETLOG")
-eq "--sidebar writes the same line"         "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
-eq "--sidebar: a lone worker stays unset"   ""                          "$(put @8)" "$L"
+eq "--rows writes the same line"         "子任务 1/3 · 等子任务"     "$(put @1)" "$L"
+eq "--rows: a lone worker stays unset"   ""                          "$(put @8)" "$L"
 
 # a folded parent's child is hidden from the list, never from its own header
 : > "$WLIST_FILE"

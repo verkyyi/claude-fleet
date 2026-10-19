@@ -38,9 +38,6 @@ SCOPE_OF = {"worker_start": "worker:start", "config_set": "config:write",
             # worker_transfer (issue #4184) closes the session and continues its
             # task in the other agent, in the same pane: a switch's authority.
             "worker_transfer": "worker:stop",
-            # orch_ensure (issue #2616): an older client's ⌘N, answered 「没有编排」
-            # since issue #3118 — compat-1v: 下一批删
-            "orch_ensure": "worker:start",
             # task_issue (issue #3325): a hub task record's 「建 GitHub 单」 —
             # filing an issue is a GitHub write of a comment's weight.
             "task_issue": "gh:comment"}
@@ -302,10 +299,8 @@ def inventory_row(parts):
     its kind's default) — the other machines' sidebars draw 常驻 etc. off it.
     Column 19 (issue #1951): `detail=<question>`, what a session in `needs` asks
     (@claude_needs_detail) — the client's bar and notification say it; empty = none.
-    Column 20 (issue #1957): `role=` — empty since issue #4341 (no session wears
-    a role). An older node's value is still read for one version (compat-1v:
-    下一批删): `role=worker` becomes `coordinator: true` (issue #3227, the hub's
-    我的用量), an older one's role word is passed on as `role`.
+    Column 20 (issue #1957): `role=` — sent empty since issue #4341 (no session
+    wears a role); read as nothing.
     Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` — the
     window that drives a running EPIC, so every machine's list draws the batch as
     ONE row named after its parent, badged landed/members; empty elsewhere.
@@ -329,9 +324,6 @@ def inventory_row(parts):
     placed (@test_identity): the person's list hides it, `fleet ls` marks it 测试.
     Absent otherwise. With no 7501 report, a `needs` row's subtype and `detail`
     fill status_kind / status_msg (issue #2538).
-    Columns 31-37 (`orchq=` … `orchtodol=`) were the resident seats' (issues
-    #2617-#2913), gone with the seat (issue #3118): an older
-    node's are dropped unread — compat-1v: 下一批删.
     Column 31 (issue #3369): `orphanrep=` — the login's unread results of
     sessions whose spawner was gone (orphan_rep_cell): `orphan_reports`, a list,
     on every row alike (like epic_stale); absent when empty. The sidebar and the
@@ -347,8 +339,6 @@ def inventory_row(parts):
         orep = orphan_rep_cell(parts.pop()[10:])
         if orep:
             extra["orphan_reports"] = orep
-    while len(parts) >= 31 and parts[-1].startswith(ORCH_TAGS):   # compat-1v: 下一批删
-        parts.pop()
     if len(parts) >= 30 and parts[-1].startswith("test="):
         if parts.pop()[5:] == "1":
             extra["test"] = True
@@ -380,12 +370,7 @@ def inventory_row(parts):
         if EPIC_RE.fullmatch(e):
             extra["epic"] = e
     if len(parts) >= 20 and parts[-1].startswith("role="):
-        r = parts.pop()[5:]
-        # an older node's value (compat-1v: 下一批删); a newer node sends it empty
-        if r in ("orchestrator", "steward"):  # compat-1v: 下一批删
-            extra["role"] = r
-        elif r == "worker":
-            extra["coordinator"] = True
+        parts.pop()
     if len(parts) >= 19 and parts[-1].startswith("detail="):
         extra["detail"] = parts.pop()[7:][:120] or None
     if len(parts) >= 18 and parts[-1].startswith("reap="):
@@ -423,9 +408,6 @@ def inventory_row(parts):
         extra["status_msg"] = extra["detail"]
     return parts, extra
 
-
-# an older node's columns 31-37 (issue #3118) — compat-1v: 下一批删
-ORCH_TAGS = ("orchq=", "orchdec=", "orchtodo=", "orchpark=", "orchpage=", "orchparkl=", "orchtodol=")
 
 # @claude_needs subtype → the OSC 7501 kind it says (issue #2538)
 NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
@@ -699,8 +681,6 @@ def validate_write(action, params):
             check_text(params.get("text"))
         if action == "worker_answer":
             check_answer(params["answer"])
-    elif action == "orch_ensure":
-        fields(params, (), ())   # issue #2616: nothing to name — the fleet is the session
     elif action == "task_issue":
         # issue #3325: file a hub task record's issue here (fleet-issue-file.sh),
         # binding the task's session when it is this fleet's and has none.

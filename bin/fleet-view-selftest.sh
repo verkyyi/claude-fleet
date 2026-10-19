@@ -79,7 +79,7 @@ to() { tmux -S "$OUT" "$@"; }
 tmux -S "$STOCK" -f /dev/null new-session -d -s k -x 100 -y 30 'sleep 600' || fail "A: stock tmux"
 tmux -S "$STOCK" list-keys > "$W/stock.keys"
 norm() { awk '{ $1 = $1; print }'; }
-# The rows the 看台 lists (tmux-dashboard-rows.sh --sidebar's shape, 19 fields),
+# The rows the 看台 lists (tmux-dashboard-rows.sh --rows's shape, 19 fields),
 # through the producer seam: two here, one on mac-a, one of another login here, one
 # ended. Window ids are filled in once the windows exist.
 cat > "$W/rows.sh" <<'EOF'

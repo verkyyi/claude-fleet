@@ -684,13 +684,6 @@ fleet_alerts_bar() {
   return 0
 }
 
-# fleet_alerts_notify — retired (issue #2759): the client's notification is
-# decided by bin/fleet_notify.py on the client's refresh loop
-# (fleet-hub-sessions.sh), which runs with no terminal attached — this ran on the
-# bar's status-right job, so a client in the background never notified. Kept as
-# a no-op one version for a bar an older conf still renders (# compat-1v: 下一批删).
-fleet_alerts_notify() { return 0; }
-
 # fleet_alerts_list [--level L] [--plain] [--history] — the popup's rows, alarm →
 # warning → needs → ↻, longest-standing first within a level; --history adds the
 # events past their hour (issue #1617), newest first, below everything (`all` and

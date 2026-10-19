@@ -4,7 +4,7 @@
 # top line is the one place that draws it, for this machine's rows and another's
 # alike, off the same fields `fleet ls` reads.
 #   A. local — a real isolated tmux socket: a window with #2431's stamps comes out
-#              of tmux-dashboard-rows.sh --sidebar with field 19
+#              of tmux-dashboard-rows.sh --rows with field 19
 #              `left|band|ts|model|effort` (fields 13-18 empty before it); a
 #              window with no @ctx_pct has no field 19 (byte for byte as before)
 #   B. remote — fleet-hub-sessions.sh --refresh writes the cache's fields 21-25;
@@ -54,7 +54,7 @@ TS=$(date +%s)
 T set-window-option -t "=$S:measured" @ctx_pct 38 \; set-window-option -t "=$S:measured" @ctx_left 62 \; \
   set-window-option -t "=$S:measured" @ctx_band ok \; set-window-option -t "=$S:measured" @ctx_ts "$TS" \; \
   set-window-option -t "=$S:measured" @model 'Opus 5.5' \; set-window-option -t "=$S:measured" @effort high
-SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
+SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
 eq "A: a measured window's field 19" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)" "$SIDE"
 eq "A: …fields 13-18 empty before it" "|||||" "$(printf '%s\n' "$SIDE" | LC_ALL=C awk -F"$US" '$4 == "measured" { print $13 "|" $14 "|" $15 "|" $16 "|" $17 "|" $18 }')"
 eq "A: no @ctx_pct ⇒ no field 19 (byte for byte as before)" "-" "$(fld "$SIDE" bare 19)"
@@ -84,7 +84,7 @@ R=$(cat "$G/remote_$S" 2>/dev/null)
 eq "B: the cache's fields 21-25" "23|watch|$TS|Fable 5.1|high" \
    "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-41" '$1 == w { print $21 "|" $22 "|" $23 "|" $24 "|" $25 }')"
 printf '%s\n' "$(date +%s)" > "$G/hub_ok"
-SIDE2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
+SIDE2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
 eq "B: the remote row's field 19 is the cache's five" "23|watch|$TS|Fable 5.1|high" "$(fld "$SIDE2" RM 19)" "$SIDE2"
 eq "B: a remote row the node measured nothing for has none" "-" "$(fld "$SIDE2" RN 19)"
 LS=$(FLEET_SESSION=$S python3 - "$BIN" "wid:$F/issue-41" <<'PY'

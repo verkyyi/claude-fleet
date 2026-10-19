@@ -127,7 +127,7 @@ eq "B: hub headings carry the spawn target in field 4" \
    "alpha (0)=o/alpha beta (1)=o/beta no repo (1)=none "
 eq "B: …and both key fields stay hdr" \
    "$(printf '%s\n' "$hub" | awk -F"$US" 'NF == 4 && !($1 == "hdr" && $2 == "hdr")' | wc -l | tr -d ' ')" 0
-side=$(FLEET_SESSION=$S FLEET_DASH_SIDEBAR=1 bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null)
+side=$(FLEET_SESSION=$S FLEET_DASH_SIDEBAR=1 bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null)
 eq "B: sidebar headings carry it in the state field" \
    "$(printf '%s\n' "$side" | awk -F"$US" '$1 == "hdr" { print $2 }' | tr '\n' ' ')" "o/alpha o/beta none "
 tmux new-window -d -t "$S" -n unk

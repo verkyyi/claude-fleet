@@ -39,8 +39,7 @@ still ANSWERS a dispatch-group call under its old name (logged road=legacy), and
 server that took over from a pre-group version keeps listing everything, so a
 session that started with the old list never loses a tool mid-conversation. A session
 with no `fleet-orch` beside it (FLEET_MCP_ORCH unset: launched before #4703) gets the
-dispatch group listed on `fleet` itself. `file_issue` with spawn: true always spawns. `take_role` is listed by neither server (issue #4334) and
-still answered one version.
+dispatch group listed on `fleet` itself. `file_issue` with spawn: true always spawns.
 
 The rule (EPIC #1813 decision 4, the one the retired mod tools kept): a tool only
 CHECKS its arguments — an unknown or missing argument, a wrong type, a repo this
@@ -630,11 +629,6 @@ def list_agents():
     return {"session": session, "self": me or None, "parent": parent or None, "agents": agents}
 
 
-# An older child's @origin may still be one of the two bare words a role answered
-# to; fleet_win_for_key reads them as agent files for one version.
-OLD_ROLE_ORIGINS = ("orchestrator", "steward")  # compat-1v: 下一批删
-
-
 def parent_remote():
     """The parent's worker_id when it lives on ANOTHER machine (issue #3439): this
     pane's @origin_wid, unless its fleet UUID is one configured here. Empty when the
@@ -649,7 +643,7 @@ def parent_remote():
 
 def parent_window():
     parent = origin_option()
-    if parent not in OLD_ROLE_ORIGINS and not FID_RE.match(parent or "") \
+    if not FID_RE.match(parent or "") \
             and not re.match(r"^([A-Za-z0-9._-]+:)?(issue|scratch)-[0-9]+$", parent or ""):
         # A parent on another machine is addressed by its worker_id (issue #3439);
         # fleet-peer-send.sh carries `wid:` through the hub.
@@ -719,8 +713,6 @@ def send_message(to, text, repo=None):
     if not isinstance(text, str) or not text.strip():
         raise Refused("text is required")
     target = to.strip()
-    if target in OLD_ROLE_ORIGINS:
-        target = "agent:" + target      # compat-1v: 下一批删 — the bare word an older session sends to
     # `<slug>:issue-<N>` (issue #4761): the repo-qualified key fleet_win_for_key speaks —
     # its slug picks the repo, handed to the script as --repo.
     m = re.match(r"^([A-Za-z0-9._-]+):((?:issue|scratch)-[0-9]+)$", target)
@@ -864,10 +856,6 @@ def draft_argv(args):
 DRAFT = {"type": "boolean", "description": "Draft-only (issue #3715): its worker opens a DRAFT PR, reports "
                                            "waiting and stops; it lands only after `fleet-draft.sh approve <N>` "
                                            "(reject: `fleet-draft.sh reject <N> --reason …`)."}
-# `rule` left with the dispatch rule table (issue #4340, EPIC #4333 C7): a call that
-# still carries it is accepted and the number dropped. # compat-1v: 下一批删
-RULE_RETIRED = {"type": "integer", "minimum": 1,
-                "description": "Retired (the rule table is gone): accepted and ignored for one version."}
 PR_NOTE = {"type": "string", "description": "Draft-only, plus what the PR body must carry (e.g. 「日报回复 "
                                             "<日期>#<n>」 and <!-- daily-plan -->). Implies draft."}
 
@@ -899,15 +887,6 @@ def tool_agents(_args):
 
 def tool_send(args):
     return send_message(args.get("to"), args.get("text"), args.get("repo"))
-
-
-def tool_take_role(args):
-    """Retired with the role seats (issue #4340, EPIC #4333 C7): bin/fleet-role-take.sh
-    is gone. A session that started with the tool keeps a call that says where the
-    role went — and changes nothing. # compat-1v: 下一批删"""
-    return {"command": "take_role", "exit": 2, "stdout": "",
-            "stderr": "take_role is retired (EPIC #4333): %s is a session template now — open one with "
-                      "spawn agent:%s; nothing was marked\n" % (args.get("role", "a role"), args.get("role", "orchestrator"))}  # compat-1v: 下一批删
 
 
 # --- 报 问 记 合 (issue #1808, EPIC #1813 C6) ------------------------------------
@@ -1381,7 +1360,6 @@ TOOLS = {
             "body": {"type": "string", "description": "The rest of the words (the issue body / the session's "
                                                       "first message)."},
             "repo": REPO,
-            "rule": RULE_RETIRED,
             "spawn": {"type": "boolean", "description": "Start its session now."},
             "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; independent of the agent definition."},
@@ -1457,22 +1435,13 @@ TOOLS = {
             "picks": {"type": "array", "minItems": 1, "items": {"type": "string"},
                       "description": "One option label per question, verbatim; N=<label> when it has several "
                                      "questions; several labels for one multiSelect question."},
-            "by": {"type": "string", "enum": ["person", "session", "default", "steward"],  # compat-1v: 下一批删 (the old name)
+            "by": {"type": "string", "enum": ["person", "session", "default"],
                    "description": "Whose answer this is (default person): session = a session answering on "
                                   "the charter's word."},
             "basis": {"type": "string", "description": "Why: the charter's rule, the sheet, the deadline."},
             "issue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+$",
                       "description": "Where the trail goes (default: the window's @epic, else its issue)."}},
             "required": ["window", "fp", "picks"], "additionalProperties": False}}),
-    "take_role": (tool_take_role, {
-        "description": "Retired (issue #4340): roles are session templates now — spawn agent:orchestrator "  # compat-1v: 下一批删
-                       "or agent:steward. Answers exit 2 and marks nothing; kept one version for a session "  # compat-1v: 下一批删
-                       "that started with it.",
-        "inputSchema": {"type": "object", "properties": {
-            "role": {"type": "string", "enum": ["orchestrator", "steward"]},  # compat-1v: 下一批删
-            "action": {"type": "string", "enum": ["take", "steal", "drop", "who"],
-                       "description": "take (default) · steal · drop · who."}},
-            "required": ["role"], "additionalProperties": False}}),
     "comment": (tool_comment, {
         "description": "记 — comment on an issue through bin/fleet-comment.sh (the marker + sender footer). "
                        "mode note (the DEFAULT) is RECORD-ONLY: the issue's worker never sees it. mode to-worker "
@@ -1578,7 +1547,6 @@ TOOLS = {
                          "Omitted or false = an ordinary issue (no auto road since issue #4271)."},
             "breakage_key": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$",
                              "description": "A fingerprint already computed (fleet_breakage_key) instead of probing."},
-            "rule": RULE_RETIRED,
             "task": dict(TASK_REF, description="The hub task record this issue is filed FOR (issue #3330): "
                                                "hung on it, and a spawn's worker carries it."),
             "draft": DRAFT, "pr_note": PR_NOTE,
@@ -1688,16 +1656,12 @@ LEGACY = {
 }
 
 # Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
-# (a dispatch-group call there is road=legacy, one version — # compat-1v: 下一批删)
-# but LISTS only CORE; `fleet-orch` lists and answers ORCH. RETIRED tools are listed by
-# neither and still answered by both, one version (#2068 rule 4): `take_role` left the
-# list with the seats (issue #4334) and its script with #4340 — a session that started
-# with it keeps a call that says so.
+# (a dispatch-group call it does not list is logged road=legacy) but LISTS only
+# CORE; `fleet-orch` lists and answers ORCH.
 ORCH_SERVER = "fleet-orch"
 ORCH_GROUP = ("spawn", "await", "children", "answer_dialog", "send", "task")
-RETIRED = ("take_role",)   # compat-1v: 下一批删
-CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP and n not in RETIRED}
-ORCH = {n: TOOLS[n] for n in ORCH_GROUP + RETIRED}
+CORE = {n: e for n, e in TOOLS.items() if n not in ORCH_GROUP}
+ORCH = {n: TOOLS[n] for n in ORCH_GROUP}
 # What `fleet` lists: CORE, unless this process took over (#1898) from a server of a
 # version before the groups — its session met the full list and Claude Code re-lists
 # on the takeover's tools/list_changed, so it keeps the full list (#2068).
@@ -1714,9 +1678,9 @@ def listing(table, served=False):
         if SERVING["list_all"]:
             return TOOLS
         if served and os.environ.get("FLEET_MCP_ORCH") != "1":
-            return {n: e for n, e in TOOLS.items() if n not in RETIRED}
+            return TOOLS
         return CORE
-    return {n: e for n, e in table.items() if n not in RETIRED}
+    return table
 
 
 def check_args(schema, args):
@@ -1794,7 +1758,7 @@ def tool_result(name, data, error=False):
 
 def tool_call(table, name, args):
     SIGNED["assert"] = False
-    ROAD["legacy"] = (table is TOOLS and not ROAD["call"] and name in ORCH_GROUP + RETIRED
+    ROAD["legacy"] = (table is TOOLS and not ROAD["call"] and name in ORCH_GROUP
                      and name not in listing(table, served=True))
     entry = table.get(name)
     if entry is None:

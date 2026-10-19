@@ -120,7 +120,7 @@ check 'python3 -c "import json,sys; e=json.loads(open(sys.argv[1]).read().splitl
   'B: the row carries child / lines / sample and is tier silent' "$(tail -1 "$LEDGER" 2>/dev/null)"
 # The sidebar row ends in ⟲ (the producer reads the window through $TMUX).
 SOCKP="$TMUX_TMPDIR/tmux-$(id -u)/$LBL"
-srow=$(TMUX="$SOCKP,0,0" FLEET_SESSION="$LBL" bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | grep -a "$WBR" | head -1)
+srow=$(TMUX="$SOCKP,0,0" FLEET_SESSION="$LBL" bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null | grep -a "$WBR" | head -1)
 check 'case "$srow" in *"w-br ⟲"*) true ;; *) false ;; esac' 'B: the sidebar row of the interrupted window ends in ⟲' "row=$srow"
 
 # --- C: the cooldown ------------------------------------------------------------

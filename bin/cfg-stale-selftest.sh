@@ -69,7 +69,7 @@ SHIMPATH="$WORK/bin:$PATH"
 # is folded into 已结束 (issue #2565), off the painted list
 w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$1$US$US$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US$5" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
-side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>/dev/null | strip; }
+side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --rows 2>/dev/null | strip; }
 hub()  { PATH="$SHIMPATH" FLEET_SESSION=$S FZF_COLUMNS=160 bash "$ROWS" 2>/dev/null | strip; }
 f13()  { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" '$4 == n { print (NF >= 13 ? $13 : "-") }'; }
 
