@@ -25,6 +25,11 @@ name: selftests nightly
 #     listed it (`run-selftests.sh --changed <M^> --list-only`) — not listed ⇒ one
 #     `selection-miss` issue naming the merge, its files and the one-line fix;
 #     one issue per test (--breakage-key nightly-<test>), a later night a comment.
+#   * the same job then asks bin/fleet-durations-drift.sh whether the durations
+#     table still prices the shards right (issue #4819): every shard's tests off
+#     bin/selftest-durations.txt against the seconds they took; past ±20% on any
+#     shard ⇒ ONE refresh issue (--breakage-key durations-selftests) naming this
+#     run and `bin/selftest-durations.sh --run <id>` — a worker opens the PR.
 #
 # Nothing here moves stable, releases or touches a machine.
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('selftests nightly @ {0}', inputs.sha || 'stable') || 'selftests nightly' }}
@@ -285,4 +290,19 @@ jobs:
           if grep -q '^| [A-Za-z0-9._-]*-selftest\.sh ' miss.md; then
             { echo; echo "### 选漏分析"; cat miss.md; } >> "$GITHUB_STEP_SUMMARY"
           fi
+          exit $rc
+      - name: fleet-durations-drift.sh
+        # the durations table against tonight's seconds (issue #4819); a rescued
+        # shard's artifact replaced the lost one, so every shard is read once
+        if: "!cancelled()"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.board.outputs.sha }}
+        run: |
+          [ -f bin/fleet-durations-drift.sh ] || { echo "no bin/fleet-durations-drift.sh at ${SHA:0:7}"; exit 0; }
+          mkdir -p results
+          set +e
+          bash bin/fleet-durations-drift.sh --results results --sha "$SHA" --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" > drift.md; rc=$?
+          cat drift.md
+          { echo; cat drift.md; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
