@@ -49,7 +49,7 @@ func sampleLedger(t *testing.T, id string) []map[string]any {
 
 func push(t *testing.T, st *store.Store, ep, id string, evs []map[string]any) (store.FleetIDPushed, error) {
 	t.Helper()
-	return st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: ep, Machine: "m-" + ep, Login: "verky", ID: id, Events: evs})
+	return st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "operator", EndpointID: ep, Machine: "m-" + ep, Login: "alice", ID: id, Events: evs})
 }
 
 func TestFleetIDCodeMatchesNode(t *testing.T) {
