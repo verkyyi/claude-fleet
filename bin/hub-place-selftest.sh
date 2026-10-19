@@ -572,6 +572,8 @@ gh_has '--remove-assignee'                       && fail "UNCLAIM a spawn that o
 ok "UNCLAIM a claimed-then-failed spawn here withdraws its GitHub claim; an opened one keeps it"
 
 # ===== STALE (issue #1610): a claim an unknown send left, no session anywhere =====
+# The parent's ledger, as fleet-children.sh reads it: the one repo's key (#1939).
+DISPATCH="$WORK/conf/fleets/testsess/children/acme-widgets:issue-77.dispatch"
 rm -f "$DISPATCH"; mkdir -p "$(dirname "$DISPATCH")"
 _old=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
 printf '{"seq": 1, "ts": "%s", "child": "acme-widgets:issue-258", "node": "mac-d", "op": "op_50", "state": "unknown"}\n' "$_old" > "$DISPATCH"
@@ -589,6 +591,7 @@ gh_has '--remove-assignee'                       && fail "STALE a send still you
 ok "STALE a claim an unknown send left with no session anywhere is withdrawn before the next send — no --force; a young send or a silent hub keeps it"
 
 # ===== FALLBACK (issue #1610): the hub tried the next machine after a decline =====
+rm -f "$DISPATCH"; DISPATCH="$WORK/conf/fleets/testsess/children/issue-77.dispatch"   # the writer's, as above
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=0 \
   PLACE_STDERR='ccquota place: mac-d declined (exit 1): fleet discover: fork/exec fleet-control.py: invalid argument — trying the next machine' \
