@@ -1224,7 +1224,13 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   is the whole release for both layers — `fleet-client-update.sh` (基础) and
   `fleet-install-sync.sh` (承载), dispatched by `bin/fleet-update.sh`
   (`fleet update`) — and the hub image is redeployed only for the hub's own
-  changes. `fleet-update-selftest.sh` pins it. **A client script reads
+  changes. `fleet-update-selftest.sh` pins it. **A connected 看台 follows too** (issue #4916): `fleet-thin.py`
+  runs `fleet-client-update.sh poll` every `FLEET_THIN_POLL_SECS` (120) while the
+  line is up and, once a newer client is staged and the person idle
+  (`FLEET_THIN_UPDATE_IDLE`, 30 s), ends the line, switches and execs it onto the
+  same view; `fleet doctor --installs` lists the hub, every machine / pod the hub
+  hears and each connected 看台 (`cv=` on its registry row) against stable, WARN
+  past 10 min (BREAK-IT `client-stays-old`). **A client script reads
   `bin/fleet-client-core.sh`, never `fleet-lib.sh`** (issue #4825): the core
   holds what the client roads call (`$FLEET_C`, the fleet confs and sockets,
   node.env reads, the tool search) and is their ONLY definition — `fleet-lib.sh`

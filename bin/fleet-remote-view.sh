@@ -704,7 +704,8 @@ rv_within() {
 # 看台: the fleet session, its windows and every global option are untouched.
 #
 # The registry row (kind `thin`) carries `cur= route= device= token= fuid= node=`
-# (+ `caps=` when the loop says what it takes, issue #3541) after the five columns; `cur=` follows the session in view — a server hook,
+# (+ `caps=` when the loop says what it takes, issue #3541; + `cv=` its client
+# version, issue #4916) after the five columns; `cur=` follows the session in view — a server hook,
 # session-window-changed[78], gated on the session's `@view_thin`, runs `cur`
 # above on every change. The 看台 OUTLIVES its client: no destroy-unattached; on
 # the attach's exit the row gets `left=<epoch>` and rv_prune (every attach, the
@@ -1000,6 +1001,9 @@ rv_attach_thin() {
   # an older loop brings none and the row is byte for byte as before
   caps=''
   case "${FLEET_CLIENT_CAPS:-}" in ''|*[!a-z0-9,_-]*) ;; *) caps="	caps=${FLEET_CLIENT_CAPS}" ;; esac
+  # which client it is (issue #4916): `fleet doctor --installs` lists each
+  # connected 看台's version against stable; an older loop brings none
+  case "${FLEET_CLIENT_VER:-}" in ''|*[!0-9A-Za-z._-]*) ;; *) caps="$caps	cv=${FLEET_CLIENT_VER}" ;; esac
   tty=$(tty 2>/dev/null) || tty=-
   fu=$(fleet_uuid "$s" 2>/dev/null) || fu=''
   mkdir -p "$VIEWS" 2>/dev/null

@@ -78,6 +78,16 @@ FLEET_THIN_FIRST_WAIT s (issue #4829); a failure is three lines — 没开出来
 下一步 (who to ask) — and exit 1.
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
+While a connection is up (issue #4916) the loop asks too: every
+FLEET_THIN_POLL_SECS (120) `fleet-client-update.sh poll` in the background
+(the hub's /version, no hourly stamp; it stages a newer client and exits 10);
+once one is staged and the person has pressed nothing for FLEET_THIN_UPDATE_IDLE
+(30) s with no upload in flight, the loop ends that line itself, switches
+(`start`) and execs the new version onto the SAME view (`--resume`) — a 看台
+left open for days follows stable within minutes. FLEET_CLIENT_UPDATED (set
+by `fleet` after its own start switched) only skips the first check after the
+start, never every later one. A switch that did not happen (start not 3)
+holds the next one for FLEET_THIN_UPDATE_HOLD (3600) s.
 
 `--local` (issue #3006, EPIC #2999 C9): this machine is home — a managed
 machine's own `fleet`, typed over ssh from a phone. No hub is asked and no ssh
@@ -101,13 +111,15 @@ reason = its first word).
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_ALIVE_SECS (5) × FLEET_THIN_ALIVE_MAX (3): the keepalive — a line
 silent that long is given up (#4828),
-FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
+FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_THIN_POLL_SECS (120),
+FLEET_THIN_UPDATE_IDLE (30), FLEET_THIN_UPDATE_HOLD (3600), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
 FLEET_THIN_FIRST_WAIT (300),
 FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_FETCH_SECS (600), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
-`fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
+`fleet-client-update.sh start`), FLEET_THIN_POLL_CMD (in place of
+`fleet-client-update.sh poll`), FLEET_CLIENT_CLIP_CMD (the clipboard),
 FLEET_THIN_FETCH_CMD (in place of the `--fetch` ssh; the id appended),
 FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家),
 FLEET_CLIENT_LEASE_CMD / FLEET_THIN_PLACE_CMD / FLEET_THIN_ACCOUNT_CMD (the
@@ -624,6 +636,15 @@ class Thin:
         self.fwd = None         # the forwards `open` made (issue #3236)
         self.said = []          # lines a forward's thread queued for the terminal
         self.said_lock = threading.Lock()
+        # a new client while connected (issue #4916): `fleet` already ran start
+        # when it set this — skip the FIRST check only, never every later one
+        self.just_updated = bool(os.environ.pop("FLEET_CLIENT_UPDATED", ""))
+        self.poll_proc = None   # the background `fleet-client-update.sh poll`
+        self.poll_at = time.time()
+        self.staged = False     # poll said a newer client is staged
+        self.updating = False   # this line was ended to switch to it
+        self.update_hold = 0.0  # a switch that did not happen: no other until then
+        self.last_key = time.time()
 
     # -- the argv ---------------------------------------------------------
     def argv(self, reconnect):
@@ -1040,7 +1061,9 @@ class Thin:
                             threading.Thread(target=self.show_req, args=(kv,), daemon=True).start()
                 if self.said:
                     self.drain_said()
+                self.update_tick(now, bool(pending) or bool(uploads and uploads.busy))
                 if 0 in r:
+                    self.last_key = now
                     try:
                         data = os.read(0, 65536)
                     except OSError as e:
@@ -1138,6 +1161,51 @@ class Thin:
         if self.back:
             write_out(b"\x1b]1337;SetProfile=" + (b"fleet" if on else self.back.encode()) + b"\x07")
 
+    # -- a new client while connected (issue #4916) -----------------------
+    def poll_cmd(self):
+        seam = os.environ.get("FLEET_THIN_POLL_CMD")
+        if seam:
+            return shlex.split(seam)
+        upd = os.path.join(BIN, "fleet-client-update.sh")
+        return [upd, "poll"] if version() and os.access(upd, os.X_OK) else []
+
+    def update_tick(self, now, busy):
+        """Called by pump each turn: run the poll in the background now and then;
+        once a newer client is staged and the person idle, end this line so run()
+        switches to it (the view kept)."""
+        if self.local or self.updating or now < self.update_hold:
+            return
+        p = self.poll_proc
+        if p is not None:
+            rc = p.poll()
+            if rc is None:
+                if now - self.poll_at > 900:   # a stage never takes this long
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                return
+            self.poll_proc = None
+            self.staged = self.staged or rc == 10
+        elif not self.staged and now - self.poll_at >= env_num("FLEET_THIN_POLL_SECS", 120):
+            self.poll_at = now
+            cmd = self.poll_cmd()
+            if cmd:
+                try:
+                    self.poll_proc = subprocess.Popen(
+                        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True)
+                except OSError:
+                    self.poll_proc = None
+        if (self.staged and not busy and self.child
+                and now - self.last_key >= env_num("FLEET_THIN_UPDATE_IDLE", 30)):
+            self.updating = True
+            tlog("update", self.home, "", "", "", "", "", "a newer client is staged: switching to it")
+            try:
+                os.killpg(self.child, signal.SIGHUP)
+            except OSError:
+                pass
+
     # -- between connections ----------------------------------------------
     def maybe_update(self):
         """A new client between two connections: exec it, view and home kept."""
@@ -1146,13 +1214,14 @@ class Thin:
             [os.path.join(BIN, "fleet-client-update.sh"), "start"]
             if os.access(os.path.join(BIN, "fleet-client-update.sh"), os.X_OK) else [])
         rc = 0
-        if upd and not self.local and not os.environ.get("FLEET_CLIENT_UPDATED"):   # --local: the machine's runtime moves it
+        if upd and not self.local and not self.just_updated:   # --local: the machine's runtime moves it
             try:
                 rc = subprocess.call(upd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, timeout=60)
             except (OSError, subprocess.SubprocessError):
                 rc = 0
+        self.just_updated = False
         if rc != 3 and version() == self.version:
-            return
+            return False
         me = os.path.join(install_home(), "fleet-thin.py")
         if not os.path.exists(me):
             me = os.path.abspath(__file__)
@@ -1319,6 +1388,17 @@ class Thin:
         try:
             while True:
                 rc, up, why = self.connect_once(k > 0)
+                if self.updating and not self.quit:
+                    # we ended this line ourselves for a newer client (#4916): switch,
+                    # exec it onto the same view; not switched ⇒ back on, held a while
+                    self.updating = self.staged = self.just_updated = False
+                    self.mute()
+                    write_out(RESET + ("fleet · %s\r\n" % tr("thin_update_switch")).encode("utf-8", "replace"))
+                    if self.maybe_update() is False:
+                        self.update_hold = time.time() + env_num("FLEET_THIN_UPDATE_HOLD", 3600)
+                        tlog("update", self.home, "", "", "", "", "", "not switched: holding the next try")
+                    fails, k = 0, 0
+                    continue
                 if self.quit or (rc == 0 and not why):
                     tlog("quit", self.home, "", "", "", "", rc, "quit" if self.quit else "detach")
                     return 0
