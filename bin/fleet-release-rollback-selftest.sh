@@ -10,6 +10,9 @@
 #   C  refusals (exit 3, nothing pushed): a PR not merged; a commit not on the
 #      base; a revert that does not apply (a later change builds on it)
 #   D  usage (exit 2): no change named; a --hub-tag that is not prod-<sha7>
+#   E  --since <good> (issue #4915): the WHOLE version <good>..<sha> reverted as ONE
+#      commit — the tree back to <good>'s, history forward, the PR 「回退版本 …」
+#      naming every PR in it; a --since not before the sha is refused
 set -u
 BIN=$(cd -- "$(dirname -- "$0")" && pwd)
 RB="$BIN/fleet-release-rollback.sh"
@@ -101,6 +104,28 @@ run
 eq "D: no change named is usage" 2 "$RC"
 run 41 --hub-tag latest
 eq "D: a --hub-tag not prod-<sha7> is usage" 2 "$RC"
+
+# ── E ── (a fresh line: base ← G (good) ← V1 ← V2 (the bad version's head))
+git init -q --bare -b master "$T/v.git"; git clone -q "$T/v.git" "$T/vs" 2>/dev/null
+vc() { printf '%s\n' "$2" > "$T/vs/$1"; git -C "$T/vs" add -A; git -C "$T/vs" commit -qm "$3"; git -C "$T/vs" rev-parse HEAD; }
+vc a.txt one 'base' >/dev/null
+GOOD=$(vc a.txt two 'the good release (#60)')
+vc b.txt new 'part one (#61)' >/dev/null
+V2=$(vc a.txt three 'part two (#62)')
+git -C "$T/vs" push -q origin HEAD:master
+v7=$(printf '%.7s' "$V2")
+: > "$T/calls"
+OUT=$(cd "$T/mine" && FLEET_ROLLBACK_GH="$T/gh" bash "$RB" "$V2" --since "$GOOD" --repo o/r --remote "$T/v.git" --hub-tag prod-abcdef0 2>&1); RC=$?
+eq "E: --since rolls the version back" 0 "$RC"
+R=$(git --git-dir="$T/v.git" rev-parse -q --verify "refs/heads/rollback-$v7") || R=''
+eq "E: ONE commit on the base's head" "$V2" "$(git --git-dir="$T/v.git" rev-parse "$R^" 2>/dev/null)"
+eq "E: …whose tree is the good release's" "$(git --git-dir="$T/v.git" rev-parse "$GOOD^{tree}")" "$(git --git-dir="$T/v.git" rev-parse "$R^{tree}" 2>/dev/null)"
+has "E: the PR names the version and its PRs" "$(cat "$T/calls")" "--title 回退版本 $v7 → $(printf '%.7s' "$GOOD")：#62 #61"
+has "E: the hub goes back too" "$(cat "$T/calls")" "workflow run hub-deploy.yml --repo o/r -f tag=prod-abcdef0"
+has "E: …and it is merged" "$(cat "$T/calls")" "pr merge"
+git --git-dir="$T/v.git" update-ref -d "refs/heads/rollback-$v7"
+OUT=$(cd "$T/mine" && FLEET_ROLLBACK_GH="$T/gh" bash "$RB" "$GOOD" --since "$V2" --repo o/r --remote "$T/v.git" 2>&1); RC=$?
+eq "E: a --since after the sha is refused" 3 "$RC"; has "E: …saying so" "$OUT" "is not before"
 
 [ "$FAILS" -eq 0 ] && { printf 'fleet-release-rollback-selftest OK (%d checks)\n' "$CHECKS"; exit 0; }
 printf 'fleet-release-rollback-selftest: %d of %d checks failed\n' "$FAILS" "$CHECKS"; exit 1

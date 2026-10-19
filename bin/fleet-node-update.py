@@ -181,6 +181,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import quote
 from urllib.request import urlopen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -878,7 +879,11 @@ class Updater(object):
         hub = hub_url(self.p)
         if not hub:
             return None, "no hub (machine.env has no CCQUOTA_HUB_URL)"
-        rc, out, err = run(["/usr/bin/curl", "-fsS", "--max-time", "20", hub.rstrip("/") + "/version"], timeout=30)
+        # which machine asks (issue #4915): with fleet.release_canary set the hub
+        # hands a new stable to the canary first, the rest once it passed
+        host = socket.gethostname() or ""
+        q = ("?machine=" + quote(host, safe="")) if host else ""
+        rc, out, err = run(["/usr/bin/curl", "-fsS", "--max-time", "20", hub.rstrip("/") + "/version" + q], timeout=30)
         try:
             v = json.loads(out) if rc == 0 else {}
         except ValueError:

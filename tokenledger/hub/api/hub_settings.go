@@ -116,6 +116,14 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strings.Join(hosts, ","), ""
 		}},
+	ReleaseCanaryKey: {def: "", help: "the machine a new stable goes to first (claude-fleet#4915): the rest switch once it is on it with its doctor passing, or after 2 minutes; it rolls back ⇒ nobody else gets it. Empty = everyone at once",
+		check: func(_ *Server, v string) (string, string) {
+			v = strings.TrimSpace(v)
+			if v != "" && !nodeNameRE.MatchString(v) {
+				return "", fmt.Sprintf("%s: %q is not a machine name", ReleaseCanaryKey, v)
+			}
+			return v, ""
+		}},
 	DoorKey: {def: "", help: "the cluster's one public door (claude-fleet#3549): its machine name(s); a person whose home is their own pod u-<nonce> is reached through it",
 		check: doorCheck},
 	EntryKey: {def: "off", help: "the direct door: people's keys, address names and homes, pushed to their home machines (default on when the hub writes address records: CCQUOTA_DNS_*)",

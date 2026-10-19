@@ -1027,7 +1027,7 @@ jobs:
     # (release-train-next.yml), and ONE line to the hub's notifier
     # (POST /v1/fleet/release/notice). Bookkeeping: it never reds the train.
     name: next
-    needs: [board, linux, linux-rescue-plan, linux-rescue, release, ledger]
+    needs: [board, linux, linux-rescue-plan, linux-rescue, hub-plan, hub, release, ledger]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1103,6 +1103,20 @@ jobs:
           python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
             || echo "::warning::the hub did not take this train's notice"
           exit 0
+      # The 15 minutes after a release (issue #4915, BREAK-IT release-bad-spreads):
+      # moved ⇒ release-watch.yml, a lane of its own, watches the version and rolls
+      # it back whole (to STABLE_SHA, the hub to its image from before this train)
+      # when the canary refuses it, a machine rolls it back or the hub 5xxs.
+      - name: watch the release
+        if: needs.release.outputs.moved == 'true'
+        env:
+          STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
+          HUB_LIVE: ${{ needs.hub.result == 'success' && needs.hub-plan.outputs.live || '' }}
+        run: |
+          gh workflow run release-watch.yml --repo "$GITHUB_REPOSITORY" --ref master \
+            -f sha="$TRAIN_SHA" -f prev="$STABLE_SHA" -f hub_live="$HUB_LIVE" \
+            && echo "### 👀 发布后 15 分钟监视：release-watch ${TRAIN_SHA:0:7}（出问题回退到 ${STABLE_SHA:0:7}）" >> "$GITHUB_STEP_SUMMARY" \
+            || echo "::warning::could not start release-watch — this release is not watched"
       - name: the verdict for the backstop
         if: always()
         uses: actions/upload-artifact@v4

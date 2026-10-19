@@ -28,11 +28,14 @@ import (
 const trainNoticeMaxBytes = 4 << 10
 
 // trainNoticeWorkflows may post a notice: the train and its backstop.
-var trainNoticeWorkflows = []string{"release-train.yml", "release-train-next.yml"}
+// … and the post-release watch (claude-fleet#4915).
+var trainNoticeWorkflows = []string{"release-train.yml", "release-train-next.yml", "release-watch.yml"}
 
 var trainNoticeVerdicts = map[string]bool{
 	"shipped": true, "flaky": true, "red": true, "held": true,
 	"cancelled": true, "superseded": true, "resent": true,
+	// the post-release watch (claude-fleet#4915)
+	"rolledback": true, "rollback-failed": true,
 }
 
 type trainNotice struct {
@@ -57,7 +60,7 @@ func parseTrainNotice(b []byte) (*trainNotice, error) {
 	case !release.ValidSHA(n.SHA):
 		return nil, fmt.Errorf("sha: want 40 hex, got %q", runLine(n.SHA, 50))
 	case !trainNoticeVerdicts[n.Verdict]:
-		return nil, fmt.Errorf("verdict: want shipped|flaky|red|held|cancelled|superseded|resent, got %q", runLine(n.Verdict, 40))
+		return nil, fmt.Errorf("verdict: want shipped|flaky|red|held|cancelled|superseded|resent|rolledback|rollback-failed, got %q", runLine(n.Verdict, 40))
 	case n.Text == "":
 		return nil, fmt.Errorf("text: missing")
 	}

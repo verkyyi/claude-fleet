@@ -1,0 +1,86 @@
+name: release watch
+
+# The 15 minutes after a release (issue #4915, EPIC #4810 S3, BREAK-IT
+# release-bad-spreads). The train's `next` job dispatches this once it MOVED
+# stable to TRAIN_SHA — a lane of its own (never the train's: a 15-minute watch
+# in release-train would hold the next train back). bin/fleet-release-watch.py
+# reads the hub's /v1/fleet/release/health every 30 s and probes /healthz:
+#
+#   the canary refused the version (fleet.release_canary, the hub's hold) · a
+#   machine rolled it back (its doctor's new FAIL) · the hub's 5xx past the
+#   threshold · /healthz failing 3 rounds in a row
+#
+# ⇒ ONE whole-version rollback: bin/fleet-release-rollback.sh <stable> --since
+# <prev> (one revert commit = a new commit and a new release seq — a machine's
+# 「只向前」 holds), the hub back on its image from before the train
+# (--hub-tag prod-<hub_live7>, only when the train deployed one), a release-train
+# dispatch to ship the revert, and one notice to the hub's alert channel. Clean
+# for 15 minutes ⇒ nothing said.
+#
+# The revert PR rides STABLE_PUSH_TOKEN when the repository has it (a revert may
+# touch .github/workflows/, which GITHUB_TOKEN may not push), else GITHUB_TOKEN.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: the release just moved to stable (40 hex)
+        required: true
+      prev:
+        description: the stable before it — the version to go back to (40 hex)
+        required: true
+      hub_live:
+        description: the hub's commit before this train deployed one (empty = the train deployed no hub)
+        required: false
+        default: ''
+      mins:
+        description: how long to watch (minutes)
+        required: false
+        default: '15'
+
+concurrency:
+  group: release-watch-${{ inputs.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # the rollback branch (when no STABLE_PUSH_TOKEN)
+  pull-requests: write   # the rollback PR, merged at once
+  actions: write         # hub-deploy.yml tag=… and the release-train dispatch
+  id-token: write        # the health read and the notice (audience ccquota-fleet-release)
+
+env:
+  FLEET_HUB_URL: https://claudefleet.24haowan.com  # oss-ok: the train's hub (release-train.yml)
+
+jobs:
+  watch:
+    name: watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          sparse-checkout: bin
+          sparse-checkout-cone-mode: false
+      - name: watch, roll back, say it
+        env:
+          GH_TOKEN: ${{ secrets.STABLE_PUSH_TOKEN || github.token }}
+          SHA: ${{ inputs.sha }}
+          PREV: ${{ inputs.prev }}
+          HUB_LIVE: ${{ inputs.hub_live }}
+          MINS: ${{ inputs.mins }}
+        run: |
+          set +e
+          git config --global user.name "fleet release watch"
+          git config --global user.email "fleet-release-watch@users.noreply.github.com"
+          gh auth setup-git   # the rollback's clone pushes its branch with GH_TOKEN
+          python3 bin/fleet-release-watch.py watch --sha "$SHA" --prev "$PREV" --hub "$FLEET_HUB_URL" \
+            --hub-live "$HUB_LIVE" --repo "$GITHUB_REPOSITORY" --mins "${MINS:-15}" --every 30 \
+            --run-id "$GITHUB_RUN_ID" | tee watch.txt
+          rc=${PIPESTATUS[0]}
+          case "$rc" in
+            (0) echo "### 👀 ${SHA:0:7}：$(tail -1 watch.txt)" >> "$GITHUB_STEP_SUMMARY" ;;
+            (1) echo "### ↩️ ${SHA:0:7} 已自动回退到 ${PREV:0:7}" >> "$GITHUB_STEP_SUMMARY"; { echo '```'; cat watch.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            (*) echo "### ⛔ ${SHA:0:7} 出问题了、自动回退失败——请手动（bin/fleet-release-rollback.sh ${SHA:0:7} --since ${PREV:0:7}）" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::the release went bad and the automatic rollback failed — see the log"; exit 1 ;;
+          esac
