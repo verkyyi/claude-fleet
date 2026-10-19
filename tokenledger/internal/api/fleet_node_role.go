@@ -15,8 +15,9 @@ import (
 // A node's type (claude-fleet#4886): managed — a login of a 托管 machine or a
 // cluster pod, where the fleet runs tasks — or client, a person's terminal
 // that only connects, looks and opens windows. The join code sets it (a 托管
-// code and a login the hub opened: managed; a plain code and a device's own
-// `fleet login`: client); the operator changes it here. A row from before
+// code and a login the hub opened: managed; a device's own `fleet login`:
+// client; a plain code: what it asks for, else untyped); the operator changes
+// it here. A row from before
 // #4886 holds "" until the operator writes the backfill this route proposes.
 //
 //	GET  /v1/fleet/nodes/role   every roster login: its role and the proposal

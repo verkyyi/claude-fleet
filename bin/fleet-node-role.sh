@@ -10,8 +10,8 @@
 # repo and runs no task (the repo-authority check skips it, placement passes it
 # over, and the node itself refuses fleet-repo.sh add / fleet host on / opening a
 # session). A join sets it (a 托管 code or a login the hub opened: managed; a
-# plain code or a device's `fleet login`: client); a row from before #4886 holds
-# none until `apply` — run it only after the operator confirmed `plan`'s list.
+# device's `fleet login`: client; a plain code: the role it asks for, else none);
+# an untyped row (one from before #4886, too) holds none until `set` / `apply` — run it only after the operator confirmed `plan`'s list.
 # apply never changes a typed row.
 #
 # Who may: the operator — a viewer token in CCQUOTA_VIEWER_TOKEN, read from the

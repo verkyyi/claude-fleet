@@ -1090,7 +1090,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
 - **Only a managed node runs tasks; a client only connects, looks and opens
   windows** (issue #4886, docs/dev/TERMS.md). The hub types each node
   `endpoints.role` = `managed` | `client` at its join (托管 code / hub-opened
-  login: managed; plain code / device `fleet login`: client) and the operator
+  login: managed; device `fleet login`: client; plain code: as minted) and the operator
   changes it (`bin/fleet-node-role.sh`, `/v1/fleet/nodes/role`). A client is out
   of placement, skipped by the repo-authority check (`client_hosts`), and refuses
   `fleet-repo.sh add` / `fleet host on` / opening a session here through ONE

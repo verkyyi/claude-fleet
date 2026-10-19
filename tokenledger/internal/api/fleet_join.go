@@ -142,12 +142,10 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 			if role == "" {
 				role = store.NodeRoleManaged
 			}
-		} else if role == "" {
-			// A plain code joins a terminal (claude-fleet#4886): only a
-			// managed node runs tasks, so the old route's machine is a client
-			// unless the operator says otherwise.
-			role = store.NodeRoleClient
 		}
+		// A plain code types nothing unless asked (role: client|managed,
+		// claude-fleet#4886): the operator's machine it joins is typed by
+		// the operator, never guessed.
 		if req.Trusted != nil {
 			trust = ""
 			if *req.Trusted {

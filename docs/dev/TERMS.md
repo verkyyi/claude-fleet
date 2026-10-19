@@ -190,8 +190,9 @@ A fleet has three roles, and only one runs tasks (issue #4886):
   an execution pod of the `fleet-workers` cluster. Tasks run here only.
 
 The hub types every node it knows — `endpoints.role`, `managed` or `client` —
-when it joins (a 托管 join code and a login the hub opened: managed; a plain code
-and a device's `fleet login`: client), and the operator changes it
+when it joins (a 托管 join code and a login the hub opened: managed; a device's
+`fleet login`: client; a plain code: the `role` it was minted with, else
+untyped), and the operator changes it
 (`bin/fleet-node-role.sh plan|set|apply`, `GET/POST /v1/fleet/nodes/role`). A row
 from before #4886 is untyped ("") until the backfill writes it: untyped is never
 client, so everything reads as before. A client is passed over by placement,
