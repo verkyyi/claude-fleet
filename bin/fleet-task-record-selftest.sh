@@ -120,6 +120,10 @@ bash "$R" settle --repo o/r --apply >/dev/null 2>&1 && grep -q '^body: {"repo": 
 bash "$R" settle --repo o/r --drained --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "o/r", "apply": true, "drained": true}' "$CURL_LOG" \
   && ok "S settle --drained sends drained (T479)" || bad "S --drained: $(cat "$CURL_LOG")"
 bash "$R" settle >/dev/null 2>&1; [ "$?" = 2 ] && ok "S settle without --repo is usage" || bad "S no --repo accepted"
+: > "$CURL_LOG"
+bash "$R" settle --no-repo --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "", "apply": true, "no_repo": true}' "$CURL_LOG" \
+  && ok "S settle --no-repo sends no_repo (#4963)" || bad "S --no-repo: $(cat "$CURL_LOG")"
+bash "$R" settle --no-repo --repo o/r >/dev/null 2>&1; [ "$?" = 2 ] && ok "S settle --no-repo with --repo is usage" || bad "S --no-repo + --repo accepted"
 
 # --- C: set / get ------------------------------------------------------------------
 : > "$CURL_LOG"
