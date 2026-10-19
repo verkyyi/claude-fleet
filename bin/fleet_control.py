@@ -1034,7 +1034,12 @@ class Control:
                     # 8 = the fleet's tmux server is not running (issue #2477): nothing was opened.
                     reasons = {2: "AT_CAPACITY", 3: "ALREADY_CLAIMED", 4: "RESOURCE_GATE", 6: "INVALID_ARGUMENT",
                                7: "EXECUTION_FAILED", 8: "UNAVAILABLE"}
-                    attempted = code not in reasons
+                    # Any other exit is the spawner's own refusal when its LAST
+                    # stderr line is its `dash-*-session:` refuse() line: every
+                    # such exit takes down what it opened first (issue #4864) —
+                    # failed, not unknown. A crash (no such last line) stays
+                    # attempted: a window may have opened.
+                    attempted = code not in reasons and not spawner_refused(err)
                     # The spawn's own exit code and refusal line ride back to
                     # whoever placed it (issue #1586): a refusal there prints
                     # what a refusal here would.
@@ -1227,6 +1232,12 @@ def describe(request):
 def last_line(err):
     lines = (err or b"").decode("utf-8", "replace").strip().splitlines()
     return lines[-1][:200] if lines else "no detail"
+
+
+def spawner_refused(err):
+    """True when the spawn's last stderr line is its own refusal (issue #4864)."""
+    lines = [l.strip() for l in (err or b"").decode("utf-8", "replace").splitlines() if l.strip()]
+    return bool(lines) and lines[-1].startswith(("dash-issue-session:", "dash-raw-session:"))
 
 
 def refusal_line(err):

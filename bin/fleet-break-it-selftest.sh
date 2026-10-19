@@ -6602,6 +6602,23 @@ drill_authority_legacy_task_unclosable() {
   SECS=$(since "$t0")
 }
 
+# ---- authority-orphan-worker-start (#4864): a worker_start that can never
+# settle — refused by the spawner but filed unknown, sent to a retired
+# endpoint's fleet, or never accepted by its node — held a repo off the hub as
+# an `unsettled start` forever. Each now ends failed; a crash stays unknown.
+drill_authority_orphan_worker_start() {
+  CAP=180;  # two cold go test builds
+  local t0 out
+  t0=$(now)
+  grep -q 'not spawner_refused(err)' "$BIN/fleet_control.py" \
+    || { WHY="fleet_control.py files a spawner's own refusal as attempted (unknown) again"; return 1; }
+  out=$(python3 "$BIN/fleet-hub-selftest.py" -k test_start_scratch_opens_a_raw_session 2>&1) || { WHY="$out"; return 1; }
+  _drill_go_tests 'TestRetireFailsOrphanWorkerStarts' "$ROOT/tokenledger/internal/store/retire_settle_test.go" x ./internal/store || return 1
+  _drill_go_tests 'TestFleetWriteRefusedStartSettles' "$ROOT/tokenledger/internal/api/fleet_write_test.go" \
+    '孤儿 worker_start：spawner 的 refuse 记 failed（崩溃仍 unknown），Hub 送达/对账/读日志同规则结清；退役端点的 start 结成 failed；节点说没收过的过宽限结成 failed（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)

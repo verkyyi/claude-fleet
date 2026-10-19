@@ -122,3 +122,76 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 		t.Fatal("an unretired endpoint's start was drained", blockers)
 	}
 }
+
+// claude-fleet#4864: a worker_start sent to a fleet whose endpoint is retired
+// can never be answered — retiring (or re-retiring one an older hub retired)
+// ends it failed and lifts its "unsettled start" blocker; a start on a live
+// endpoint's fleet stays byte for byte.
+func TestRetireFailsOrphanWorkerStarts(t *testing.T) {
+	s := taskStore(t)
+	now := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, ep := range []string{"gone", "live"} {
+		if err := s.Enroll(ep, ep, "hash-"+ep); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RecordFleetSnapshot(ep, ep, "u", "m-"+ep, []FleetReport{{FleetID: "f-" + ep, Name: ep, Repo: "org/repo"}}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	op := func(id, fleet, status, result string) {
+		t.Helper()
+		if err := s.InsertFleetOperation(FleetOperation{ID: id, FleetID: fleet, Actor: "alice", Idem: id, Action: "worker_start",
+			Request: `{"params":{"repo":"org/repo","kind":"issue","issue":7}}`, Status: status, Result: result, Created: now, Updated: now}); err != nil {
+			t.Fatal(id, err)
+		}
+	}
+	op("o-unknown", "f-gone", "unknown", `{"error":{"code":"TIMEOUT","message":"no ack"}}`)
+	op("o-running", "f-gone", "running", "")
+	op("o-done", "f-gone", "succeeded", `{"window":"@1"}`)
+	op("o-live", "f-live", "running", "")
+	row := func(id string) string {
+		t.Helper()
+		var st, res, up string
+		if err := s.read.QueryRow(`SELECT status, COALESCE(result,''), updated FROM fleet_operations WHERE id = ?`, id).Scan(&st, &res, &up); err != nil {
+			t.Fatal(err)
+		}
+		return st + "|" + res + "|" + up
+	}
+	liveBefore, doneBefore := row("o-live"), row("o-done")
+	res, err := s.RetireEndpointAs("gone", "operator", "machine gone", now.Add(time.Minute))
+	if err != nil || !res.Retired || res.Settled.WorkerStarts != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	for _, id := range []string{"o-unknown", "o-running"} {
+		if r := row(id); !strings.HasPrefix(r, `failed|{"error":{"code":"ENDPOINT_RETIRED"`) {
+			t.Fatal(id, r)
+		}
+	}
+	if !strings.Contains(row("o-unknown"), `"prior_result":{"error":{"code":"TIMEOUT"`) {
+		t.Fatal("prior result lost", row("o-unknown"))
+	}
+	if row("o-live") != liveBefore || row("o-done") != doneBefore {
+		t.Fatal("touched another endpoint's or a closed start")
+	}
+	blockers, _, err := s.RepoAuthorityBlockers("org/repo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(blockers, "\n")
+	if strings.Contains(joined, "o-unknown") || strings.Contains(joined, "o-running") || !strings.Contains(joined, "unsettled start: o-live") {
+		t.Fatal(joined)
+	}
+	var outcome string
+	if err := s.read.QueryRow(`SELECT outcome FROM fleet_audit WHERE action = 'node_retire_settle'`).Scan(&outcome); err != nil || !strings.Contains(outcome, "worker_starts=2") {
+		t.Fatal(outcome, err)
+	}
+	// An older hub retired it without settling: a re-run settles what is left.
+	op("o-late", "f-gone", "unknown", "")
+	again, err := s.RetireEndpointAs("gone", "operator", "", now.Add(2*time.Minute))
+	if err != nil || again.Retired || again.Settled.WorkerStarts != 1 || !strings.HasPrefix(row("o-late"), "failed|") {
+		t.Fatalf("%+v %v %s", again, err, row("o-late"))
+	}
+	if again, err = s.RetireEndpointAs("gone", "operator", "", now.Add(3*time.Minute)); err != nil || !again.Settled.empty() {
+		t.Fatalf("a clean re-run changed something: %+v %v", again, err)
+	}
+}

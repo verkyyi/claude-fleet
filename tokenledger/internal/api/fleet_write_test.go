@@ -629,3 +629,70 @@ func TestFleetWriteTestScratch(t *testing.T) {
 		}
 	}
 }
+
+// claude-fleet#4864: a start the node's spawner refused (its own refuse() line,
+// a nonzero exit) settles failed even when the node filed it unknown — at the
+// send, at operation_get's reconcile and, node or no node, from the journal; a
+// crash stays unknown; an operation the node never accepted fails past the grace.
+func TestFleetWriteRefusedStartSettles(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	start := func(key string) map[string]any {
+		return postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": key}, 200)
+	}
+	refusal := func(line string) json.RawMessage {
+		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "EXECUTION_FAILED", "exit": 1,
+			"message": "Fleet refused to start the worker: " + line, "stderr1": line}})
+		return b
+	}
+	unknownWith := func(res json.RawMessage) func(map[string]any) (any, *control.Error) {
+		return func(env map[string]any) (any, *control.Error) {
+			return map[string]any{"operation_id": env["operation_id"], "fleet_id": env["fleet_id"],
+				"action": env["action"], "status": "unknown", "result": res}, nil
+		}
+	}
+	macC.setAnswer(unknownWith(refusal("dash-issue-session: spawn failed for #12: new-window")))
+	if op := start("r-send"); op["status"] != "failed" {
+		t.Fatalf("a spawner refusal filed unknown = %v; want failed", op)
+	}
+	macC.setAnswer(unknownWith(refusal("dash-issue-session.sh: line 9: x: unbound variable")))
+	if op := start("r-crash"); op["status"] != "unknown" {
+		t.Fatalf("a crash = %v; want unknown", op)
+	}
+	// Reconcile: sent accepted, the node later reads it back as a refused unknown.
+	macC.setAnswer(accepted)
+	op := start("r-reconcile")
+	macC.setOpGet(unknownWith(refusal("dash-raw-session: spawn failed: worktree checkout")))
+	id := op["operation_id"].(string)
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+id, 200); got["status"] != "failed" {
+		t.Fatalf("reconcile of a refusal = %v; want failed", got)
+	}
+	// The journal alone: an older hub stored the refusal as unknown and its
+	// node is gone — operation_get settles it without asking anyone.
+	stored := start("r-stored")
+	sid := stored["operation_id"].(string)
+	if err := h.srv.Store.UpdateFleetOperation(sid, "unknown", string(refusal("dash-issue-session: #12 已被认领")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	macC.setOpGet(func(map[string]any) (any, *control.Error) {
+		t.Error("asked the node for a refusal the journal already proves")
+		return nil, &control.Error{Code: "INTERNAL", Message: "x"}
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+sid, 200); got["status"] != "failed" {
+		t.Fatalf("a journalled refusal = %v; want failed", got)
+	}
+	// Never accepted by the node: unknown inside the grace, failed past it.
+	lost := start("r-lost")["operation_id"].(string)
+	macC.setOpGet(func(map[string]any) (any, *control.Error) {
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+lost, 200); got["status"] != "unknown" {
+		t.Fatalf("NOT_FOUND inside the grace = %v; want unknown", got)
+	}
+	old := orphanOpGrace
+	orphanOpGrace = 0
+	t.Cleanup(func() { orphanOpGrace = old })
+	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+lost, 200)
+	if e, _ := got["result"].(map[string]any)["error"].(map[string]any); got["status"] != "failed" || e["code"] != "NOT_ACCEPTED" {
+		t.Fatalf("NOT_FOUND past the grace = %v; want failed NOT_ACCEPTED", got)
+	}
+}

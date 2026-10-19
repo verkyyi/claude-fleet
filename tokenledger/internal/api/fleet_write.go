@@ -1037,6 +1037,7 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	}
 	status, result := s.sendWrite(ctx, target, op, envelope)
 	status, result = s.verifyLaunchResult(op, target, status, result)
+	status = settleRefusedStart(op.Action, status, result)
 	if noted != 0 && status == "failed" {
 		s.recent.forget(target.EndpointID, noted) // refused before anything opened
 	}
@@ -1179,6 +1180,34 @@ func (s *Server) sendWrite(ctx context.Context, target store.FleetRow, op store.
 		}
 		return remote.Status, res
 	}
+}
+
+// settleRefusedStart: a worker_start the node filed `unknown` although its
+// spawner REFUSED it — the error's message carries the spawner's own
+// `dash-issue-session:` / `dash-raw-session:` refuse() line and its nonzero
+// exit — is failed (claude-fleet#4864). Every such exit takes down what it
+// opened before it refuses; an older node filed the reasons it had no code
+// for (exit 1) as maybe-opened, and that `unknown` held a repo's authority
+// switch forever. A crash (no refuse line), a TIMEOUT or a lost receipt stays
+// unknown.
+func settleRefusedStart(action, status, result string) string {
+	if action != "worker_start" || status != "unknown" {
+		return status
+	}
+	var r struct {
+		Error struct {
+			Exit    *int   `json:"exit"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(result), &r) != nil || r.Error.Exit == nil || *r.Error.Exit == 0 {
+		return status
+	}
+	line, ok := strings.CutPrefix(r.Error.Message, "Fleet refused to start the worker: ")
+	if ok && (strings.HasPrefix(line, "dash-issue-session:") || strings.HasPrefix(line, "dash-raw-session:")) {
+		return "failed"
+	}
+	return status
 }
 
 // newOperationID mints a canonical (v4) UUID — fleet-control.py's identifier
