@@ -27,8 +27,11 @@
 // ⇒ rejected. Passed ⇒ the receipt rides as hidden context
 // (`fleet idle-accept receipt delivery_id=<id>`), readable again in the
 // transcript after a disconnect, and the turn that starts is the receipt's.
-// A fleet-plugin prompt that matches no live slot (a late one, after its
-// deadline) is dropped: this module is the only one here that submits.
+// A prompt this module handed to the engine that matches no live slot (a late
+// one, after its deadline) is dropped. Every other prompt passes untouched —
+// the same `plugin:fleet` origin also stamps the prompt a markdown command or
+// skill expands into when the inbox runs it with `$.command.run` (a handoff's
+// `/fleet-handoff pickup`, issue #4865), so the origin alone never decides.
 
 import { atom, read } from 'claude-code'
 import type { On, PromptSubmitResult } from 'claude-code'
@@ -66,6 +69,15 @@ const acceptKick = atom({ plugin: 'fleet', key: 'acceptKick' } as const, 0)
 
 // One slot per pane: the inbox runs one request at a time.
 let slot: Slot | undefined
+// Texts this module passed to `$.prompt.submit` whose call has not resolved yet:
+// the only prompts the entry hook may claim (and drop).
+const handed = new Map<string, number>()
+
+function hand(text: string, d: 1 | -1): void {
+  const n = (handed.get(text) ?? 0) + d
+  if (n > 0) handed.set(text, n)
+  else handed.delete(text)
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -137,8 +149,9 @@ export function entryRefusal(s: Slot, draft: string, now: number): string {
   return ''
 }
 
-function ours(e: { origin?: { kind: string; name?: string } }): boolean {
-  return e.origin?.kind === 'plugin' && e.origin.name === 'fleet'
+/** This module's own submit: fleet's origin AND a text it handed over and is still waiting on. */
+function ours(e: { text: string; origin?: { kind: string; name?: string } }): boolean {
+  return e.origin?.kind === 'plugin' && e.origin.name === 'fleet' && handed.has(e.text)
 }
 
 export function registerAccept(on: On): void {
@@ -148,13 +161,15 @@ export function registerAccept(on: On): void {
     const s = slot
     if (!isOpen() || s === undefined || s.phase !== 'queued') return next(e)
     s.phase = 'submitted'
+    hand(s.text, 1)
     // Once the entry hook passed it on, that hook alone names the outcome.
     $.prompt.submit({ text: s.text, asUser: true }).then(
       (r: PromptSubmitResult) => {
+        hand(s.text, -1)
         if (r.drop !== undefined) settle(s, outcome(s, 'rejected', 'dropped'))
         else if (s.phase !== 'entered') settle(s, outcome(s, 'unknown', 'entry_unreviewed'))
       },
-      () => { if (s.phase !== 'entered') settle(s, outcome(s, 'unknown', 'submit_failed')) })
+      () => { hand(s.text, -1); if (s.phase !== 'entered') settle(s, outcome(s, 'unknown', 'submit_failed')) })
     return next(e)
   }).catch(($, e, next) => next(e))
 

@@ -165,7 +165,7 @@ test('no band drawn by the deadline: never submitted ⇒ rejected not_submitted'
   expect(entered).toEqual([])
 })
 
-test('a fleet prompt with no live slot is dropped; a person\'s prompt passes untouched', async ($, on) => {
+test('a prompt accept.ts never handed over passes untouched (a person\'s, a command\'s — #4865)', async ($, on) => {
   const { entered } = engine(on)
   await $.session.start(START)
   await idleAfter($)
