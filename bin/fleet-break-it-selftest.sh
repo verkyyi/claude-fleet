@@ -3334,10 +3334,13 @@ drill_train_push_cancels() {
     && { WHY="something in release-train.yml can cancel in progress: $(grep -nE 'cancel-in-progress' "$wf" | tr '\n' ' ')"; return 1; }
   [ "$(grep -cE '^[[:space:]]*concurrency:' "$wf")" = 1 ] \
     || { WHY="release-train.yml has a second (job-level) concurrency — it would split the lane"; return 1; }
-  for v in 'push:' 'workflow_dispatch:' 'schedule:'; do
+  for v in 'push:' 'workflow_dispatch:'; do
     awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$wf" | grep -q "^[[:space:]]*$v" \
       || { WHY="release-train.yml is not triggered by $v"; return 1; }
   done
+  # the timed backstop is release-train-next.yml's (issue #4913), dispatching into this lane
+  awk '/^on:/{o=1; next} o && /^[^ ]/{o=0} o' "$ROOT/.github/workflows/release-train-next.yml" 2>/dev/null | grep -q '^[[:space:]]*schedule:' \
+    || { WHY="nothing re-boards a lost push (no schedule on release-train-next.yml)"; return 1; }
   grep -q 'fleet-train-board.sh' "$wf" || { WHY="the train does not board through bin/fleet-train-board.sh"; return 1; }
   grep -qE 'runs_on:.*macos' "$wf" && { WHY="the train still waits on macOS tests (issue #3869: mac-follow.yml follows the release)"; return 1; }
   grep -qE 'runs_on:.*macos' "$ROOT/.github/workflows/mac-follow.yml" || { WHY="nothing runs the macOS half after the release (mac-follow.yml)"; return 1; }
