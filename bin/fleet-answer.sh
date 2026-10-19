@@ -168,8 +168,11 @@ SK() { FLEET_ALLOW_SENDKEYS=1 TM send-keys -t "$PANE" "$@" 2>/dev/null; }
 
 # --- a key is a worker_id here (issue #2729): issue:<N> / #<N> / issue-<N> /
 # scratch-<N> / <slug>:issue-<N> → wid:<key>, resolved by the ONE locator below —
-# a bare key in a 2+ repo fleet is refused there, never guessed.
+# a bare key in a 2+ repo fleet is refused there, never guessed. A target that
+# is already `wid:…` stays as it is — `wid:<uuid>/<slug>:issue-<N>` and the node
+# adapter's `wid:<slug>:issue-<N>` end in a key too (issue #4938: `wid:wid:`).
 case "$TARGET" in
+  wid:*) ;;
   issue:*|'#'*) TARGET="wid:issue-${TARGET#*[:#]}" ;;
   issue-*|scratch-*|*:issue-*|*:scratch-*) TARGET="wid:$TARGET" ;;
 esac
