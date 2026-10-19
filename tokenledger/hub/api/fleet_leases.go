@@ -151,7 +151,7 @@ func (s *Server) handleNodeLease(w http.ResponseWriter, r *http.Request) {
 		}
 		granted, l, displaced, err := s.Store.AcquireLease(store.LeaseClaim{Repo: req.Repo, Issue: req.Issue,
 			WorkerID: req.WorkerID, FleetID: fleetID, EndpointID: ep.ID, Hostname: host, OSUser: user,
-			Force: req.Force}, leaseStartGrace, now)
+			Force: req.Force, Owner: s.nodeTaskOwner(ep)}, leaseStartGrace, now)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return

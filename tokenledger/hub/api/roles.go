@@ -152,6 +152,7 @@ var routeAccess = map[string]string{
 	FleetTicketRegisterPath: accessSelf,
 	// Hub tickets (claude-fleet#2677): a node token or a person's own sign-in.
 	FleetTicketsPath: accessSelf, FleetTicketsPath + "/": accessSelf,
+	FleetAuthorityPath: accessSelf, FleetAuthorityPath + "/": accessSelf,
 	control.RoutesPath: accessSelf,
 
 	// An admin's: subscriptions, machines, join codes, credentials,

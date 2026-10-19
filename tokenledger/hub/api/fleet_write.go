@@ -986,18 +986,19 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	if acceptedLaunch(w) != nil && !s.canLaunch(ctx, target.EndpointID) {
 		return nil, fault("UNAVAILABLE", "selected node does not support verified launch_v1; nothing was sent")
 	}
-	if tool == "worker_start" && w.repo != "" {
-		a, e := s.Store.RepoAuthority(w.repo)
+	if tool == "worker_start" {
+		a, e := s.Store.OwnerAuthority(p.taskOwner())
 		if e != nil {
 			return nil, e
 		}
 		if a.Mode == "hub" && !s.canRepoAuthority(ctx, target.EndpointID) {
-			return nil, fault("UNAVAILABLE", "selected node cannot enforce repo authority; nothing was sent")
+			return nil, fault("UNAVAILABLE", "selected node cannot enforce task authority; nothing was sent")
 		}
 	}
 	now := time.Now()
 	op := store.FleetOperation{ID: newOperationID(), FleetID: target.FleetID, Action: tool,
-		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now}
+		Request: w.canonical, Actor: p.Actor, Idem: idem, Status: "pending", Created: now, Updated: now,
+		TaskOwner: p.taskOwner()}
 	if p.Worker != nil {
 		op.WorkerID = p.Worker.WorkerID // the session the node asked for (claude-fleet#1810)
 	}

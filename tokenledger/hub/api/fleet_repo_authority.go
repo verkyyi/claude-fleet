@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,8 @@ type repoSupersededHost struct {
 	ByObserved time.Time `json:"superseded_observed_at"`
 }
 
-// supersededBy names the present row that supersedes f, "" when none does. A
+// supersededBy names the present row that supersedes f, "" when none does
+// (repo "" = any successor, for a fleet row that hosts no repo). A
 // present row is never superseded — a host that is still there but not
 // capable keeps blocking. The successor must itself be a live, unretired row
 // of the same repo observed AFTER f, on the same machine: the fleet machine that reported both,
@@ -63,7 +65,7 @@ func supersededBy(f store.FleetRow, repo string, fs []store.FleetRow, eps func(s
 	}
 	epF := eps(f.EndpointID)
 	for _, g := range fs {
-		if !g.Present || g.FleetID == f.FleetID || !g.ObservedAt.After(f.ObservedAt) || !fleetHosts(g, repo) {
+		if !g.Present || g.FleetID == f.FleetID || !g.ObservedAt.After(f.ObservedAt) || (repo != "" && !fleetHosts(g, repo)) {
 			continue
 		}
 		epG := eps(g.EndpointID)
@@ -86,7 +88,7 @@ func supersededBy(f store.FleetRow, repo string, fs []store.FleetRow, eps func(s
 }
 
 // repoClientHost is a fleet row whose endpoint is a client — a person's
-// terminal, which runs no task (claude-fleet#4886): a repo it still lists in
+// terminal, which runs no task (claude-fleet#4886): a fleet it still lists in
 // its inventory is a leftover, not a host, so it is listed apart and blocks
 // nothing.
 type repoClientHost struct {
@@ -94,15 +96,98 @@ type repoClientHost struct {
 	Endpoint string `json:"endpoint_id"`
 }
 
-// Only registry observations are accepted. A caller cannot submit a reassuring
-// inventory in its manifest. Absent/offline/old nodes are unknown, never drained
-// — a RETIRED one is neither: its fleet row is listed apart and blocks nothing,
-// and so is a SUPERSEDED one (supersededBy) and a CLIENT's (claude-fleet#4886).
-func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, []repoSupersededHost, []repoClientHost, error) {
-	nodes, owners, blockers, retired, superseded, clients := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}, []repoSupersededHost{}, []repoClientHost{}
+// endpointRole is an endpoint's role ("" when unread or never typed).
+func (s *Server) endpointRole(endpointID string) string {
+	et, err := s.Store.EndpointTrustOf(endpointID)
+	if err != nil {
+		return ""
+	}
+	return et.Role
+}
+
+// FleetAuthorityPath is a person's task authority (claude-fleet#4896):
+//
+//	GET  /v1/fleet/authority[?owner=]            → the manifest (dry run): authority,
+//	                                                hosts, blockers, starts, tasks, tickets
+//	GET  /v1/fleet/authority?gate=1              → the authority alone (a node's pre-start read)
+//	POST /v1/fleet/authority                     {action freeze|apply|rollback|stop_ack,
+//	                                              expected_revision, idempotency_key,
+//	                                              worker_id?, evidence?}
+//	GET|POST /v1/fleet/authority/start?repo=     a node's local start (reserve · begin ·
+//	                                              observe · recover-observe · stopped ·
+//	                                              cancel · unobserved; GET reservation= | list=1)
+//	POST /v1/fleet/authority/adopt?repo=         {source, title, body, expected_revision}
+//
+// The scope is the caller's own: a node's token speaks for its login's person
+// (nodeTaskOwner), a person's sign-in for that person. Only a caller who sees
+// every owner (an admin, the operator's door) may name ?owner= — never a node —
+// and each such read or change is audited. /v1/fleet/tickets/authority[...]
+// ?repo= is the old per-repo road, kept one version and forwarded here.
+const FleetAuthorityPath = "/v1/fleet/authority"
+
+func (s *Server) handleFleetAuthority(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	c, ok := s.ticketCallerOf(r)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
+		httpError(w, http.StatusUnauthorized, "a node token, a session or the viewer token is required")
+		return
+	}
+	sub := strings.Trim(strings.TrimPrefix(r.URL.Path, FleetAuthorityPath), "/")
+	if sub != "" && sub != "start" && sub != "adopt" {
+		httpError(w, http.StatusNotFound, "a task authority is "+FleetAuthorityPath+"[/start|/adopt]")
+		return
+	}
+	s.taskAuthority(w, r, c, sub, "")
+}
+
+// ticketAuthority is the old per-repo road (claude-fleet#4730 … #4885): one
+// explicit repo=, answered with the CALLER's own authority, the repo echoed so
+// an older node's reader keeps working. `init` is refused — a new repo no
+// longer selects anything. # compat-1v: 下一批删
+func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
+	repo := store.NormRepo(r.URL.Query().Get("repo"))
+	if !leaseRepoRE.MatchString(repo) {
+		httpError(w, 400, "select one explicit repo=owner/name")
+		return
+	}
+	sub := strings.TrimPrefix(strings.Trim(strings.TrimPrefix(r.URL.Path, FleetTicketsPath), "/"), "authority")
+	s.taskAuthority(w, r, c, strings.Trim(sub, "/"), repo)
+}
+
+// authorityView is what a gate read answers: the person's authority, plus the
+// repo the old road asked about (# compat-1v: 下一批删).
+func authorityView(a store.OwnerAuthority, compatRepo string) any {
+	if compatRepo == "" {
+		return a
+	}
+	return map[string]any{"repo": compatRepo, "owner": a.Owner, "mode": a.Mode, "revision": a.Revision,
+		"frozen_at": a.FrozenAt, "legacy_owners": a.Owners, "mappings": a.Mappings, "scope": "owner"}
+}
+
+// endpointOwner is whose task authority admits a claim made on endpoint id:
+// that login's person (nodeTaskOwner), "" when the endpoint is unknown.
+func (s *Server) endpointOwner(id string) string {
+	ep, err := s.Store.EndpointByID(id)
+	if err != nil || ep == nil {
+		return ""
+	}
+	return s.nodeTaskOwner(ep)
+}
+
+// ownerAuthorityInventory: only registry observations are accepted — a caller
+// cannot submit a reassuring inventory. The hosts are the owner's OWN fleet
+// rows; another person's host is theirs, never foreign, and blocks nothing
+// here (claude-fleet#4896). Absent/offline/old ones of the owner are unknown,
+// never drained — a RETIRED one is neither: it is listed apart and blocks
+// nothing, and so is a SUPERSEDED one (supersededBy) and a CLIENT's
+// (claude-fleet#4886). endpoints are the owner's endpoints, the scope the
+// store's blockers count.
+func (s *Server) ownerAuthorityInventory(ctx context.Context, a store.OwnerAuthority) (nodes []repoAuthorityNode, owners []store.RepoLegacyOwner, blockers []string, retired []repoRetiredHost, superseded []repoSupersededHost, clients []repoClientHost, endpoints []string, err error) {
+	nodes, owners, blockers, retired, superseded, clients, endpoints = []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}, []repoSupersededHost{}, []repoClientHost{}, []string{}
 	fs, err := s.Store.Fleets()
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return
 	}
 	epCache := map[string]*store.Endpoint{}
 	eps := func(id string) *store.Endpoint {
@@ -116,39 +201,26 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 		epCache[id] = ep
 		return ep
 	}
+	seenEP := map[string]bool{}
 	for _, f := range fs {
-		if !fleetHosts(f, a.Repo) {
+		ep := eps(f.EndpointID)
+		if ep == nil || s.nodeTaskOwner(ep) != a.Owner {
 			continue
 		}
-		ep, e := s.Store.EndpointByID(f.EndpointID)
-		if e == nil && ep != nil && ep.RetiredAt != nil {
-			if c.all || s.nodeTaskOwner(ep) == c.owner {
-				retired = append(retired, repoRetiredHost{f.FleetID, f.EndpointID, *ep.RetiredAt})
-			}
+		if !seenEP[ep.ID] {
+			seenEP[ep.ID] = true
+			endpoints = append(endpoints, ep.ID)
+		}
+		if ep.RetiredAt != nil {
+			retired = append(retired, repoRetiredHost{f.FleetID, f.EndpointID, *ep.RetiredAt})
 			continue
 		}
-		if e == nil && ep != nil && s.endpointRole(ep.ID) == store.NodeRoleClient {
-			if c.all || s.nodeTaskOwner(ep) == c.owner {
-				clients = append(clients, repoClientHost{f.FleetID, f.EndpointID})
-			}
+		if s.endpointRole(ep.ID) == store.NodeRoleClient {
+			clients = append(clients, repoClientHost{f.FleetID, f.EndpointID})
 			continue
 		}
-		if g, ok := supersededBy(f, a.Repo, fs, eps); ok {
-			// Listed to whoever owns its successor (or sees every owner): the
-			// successor is the proof, and its owner is the one reading.
-			if c.all || s.nodeTaskOwner(eps(g.EndpointID)) == c.owner {
-				superseded = append(superseded, repoSupersededHost{f.FleetID, f.EndpointID, f.ObservedAt, g.FleetID, g.ObservedAt})
-			}
-			continue
-		}
-		if e != nil || ep == nil || (!c.all && s.nodeTaskOwner(ep) != c.owner) {
-			// Only a caller who sees every owner is told WHICH row: a person's
-			// manifest never names another person's fleet (claude-fleet#4831).
-			why := "repo has an unknown or foreign host"
-			if c.all {
-				why += ": " + f.FleetID + " (endpoint " + f.EndpointID + ")"
-			}
-			blockers = append(blockers, why)
+		if g, ok := supersededBy(f, store.NormRepo(f.Repo), fs, eps); ok {
+			superseded = append(superseded, repoSupersededHost{f.FleetID, f.EndpointID, f.ObservedAt, g.FleetID, g.ObservedAt})
 			continue
 		}
 		capable := s.canRepoAuthority(ctx, f.EndpointID)
@@ -161,16 +233,13 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 			blockers = append(blockers, "unknown workers: "+f.FleetID)
 			continue
 		}
+		// Every session of the owner's that is not an accepted task's
+		// execution is legacy, whatever repo it works in — or none.
 		for _, w := range ws {
-			if store.NormRepo(w.Repo) != a.Repo {
-				if w.Repo == "" {
-					blockers = append(blockers, "worker has no repo identity: "+f.FleetID)
-				}
-				continue
-			}
-			known, e := s.Store.TaskExecutionKnown(s.nodeTaskOwner(ep), w.WorkerID)
+			known, e := s.Store.TaskExecutionKnown(a.Owner, w.WorkerID)
 			if e != nil {
-				return nil, nil, nil, nil, nil, nil, e
+				err = e
+				return
 			}
 			if !known {
 				owners = append(owners, store.RepoLegacyOwner{WorkerID: w.WorkerID, EndpointID: f.EndpointID})
@@ -179,87 +248,109 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 		}
 	}
 	if len(nodes) == 0 {
-		blockers = append(blockers, "no verified host for this repo")
+		blockers = append(blockers, "no verified host of yours")
 	}
-	return nodes, owners, blockers, retired, superseded, clients, nil
+	return
 }
 
-// endpointRole is an endpoint's role ("" when unread or never typed).
-func (s *Server) endpointRole(endpointID string) string {
-	et, err := s.Store.EndpointTrustOf(endpointID)
-	if err != nil {
-		return ""
-	}
-	return et.Role
+// authorityChangeIn is a POST's body. legacy_tickets is what the old road's
+// freeze / init sent; it is accepted and ignored (# compat-1v: 下一批删).
+type authorityChangeIn struct {
+	store.OwnerAuthorityChange
+	LegacyTickets string `json:"legacy_tickets"`
 }
 
-func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
-	repo := store.NormRepo(r.URL.Query().Get("repo"))
-	if !leaseRepoRE.MatchString(repo) {
-		httpError(w, 400, "select one explicit repo=owner/name")
+// taskAuthority serves both roads. compatRepo is the old road's repo ("" on
+// the new one): it narrows the manifest's lists and is echoed in the gate read.
+func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller, sub, compatRepo string) {
+	q := r.URL.Query()
+	repo := compatRepo
+	if repo == "" {
+		repo = store.NormRepo(q.Get("repo"))
+		if repo != "" && !leaseRepoRE.MatchString(repo) {
+			httpError(w, 400, "repo is owner/name")
+			return
+		}
+	}
+	owner, onBehalf := c.owner, false
+	if o := strings.TrimSpace(q.Get("owner")); o != "" && o != c.owner {
+		if !c.all || c.node {
+			httpError(w, 403, "only an admin reads or moves another person's task authority")
+			return
+		}
+		owner, onBehalf = o, true
+	}
+	if owner == "" {
+		httpError(w, 403, "no person owns this caller's tasks")
 		return
 	}
-	a, err := s.Store.RepoAuthority(repo)
+	if sub == "start" {
+		if onBehalf {
+			httpError(w, 403, "a local start is its own node's")
+			return
+		}
+		if repo == "" {
+			httpError(w, 400, "select one explicit repo=owner/name")
+			return
+		}
+		s.ticketAuthorityStart(w, r, c, repo)
+		return
+	}
+	a, err := s.Store.OwnerAuthority(owner)
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
 	}
-	if a.Owner != "" && a.Owner != c.owner {
-		httpError(w, 404, "no authority selection of yours")
-		return
-	}
-	if strings.HasSuffix(r.URL.Path, "/start") {
-		s.ticketAuthorityStart(w, r, c, repo)
-		return
-	}
 	// A node's pre-start check is a read, not a manifest or a new polling loop.
-	if r.Method == http.MethodGet && r.URL.Query().Get("gate") == "1" {
-		writeJSON(w, 200, a)
+	if r.Method == http.MethodGet && q.Get("gate") == "1" {
+		writeJSON(w, 200, authorityView(a, compatRepo))
 		return
 	}
-	nodes, owners, blockers, retired, superseded, clients, err := s.repoAuthorityInventory(r.Context(), c, a)
+	nodes, owners, blockers, retired, superseded, clients, endpoints, err := s.ownerAuthorityInventory(r.Context(), a)
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
 	}
 	inventoryBlockers := append([]string(nil), blockers...)
-	dbBlockers, leaseOwners, err := s.Store.RepoAuthorityBlockers(repo, r.URL.Query().Get("rollback") == "1")
+	dbBlockers, leaseOwners, err := s.Store.OwnerAuthorityBlockers(owner, endpoints, q.Get("rollback") == "1")
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
 	}
 	blockers = append(blockers, dbBlockers...)
 	owners = append(owners, leaseOwners...)
+	audit := func(action, outcome string) {
+		if onBehalf || r.Method != http.MethodGet {
+			_ = s.Store.FleetAudit(c.actor, "task_authority_"+action, "owner:"+owner, outcome, "", time.Now())
+		}
+	}
 	if r.Method == http.MethodGet {
-		tickets, err := s.Store.FleetTickets(store.TicketFilter{Repo: repo, Owner: c.owner, All: c.all, Limit: 500})
+		tickets, err := s.Store.FleetTickets(store.TicketFilter{Repo: repo, Owner: owner, Limit: 500})
 		if err != nil {
 			httpError(w, 500, err.Error())
 			return
 		}
-		tasks, err := s.Store.RepoTaskInventory(repo, c.owner)
+		tasks, err := s.Store.RepoTaskInventory(repo, owner)
 		if err != nil {
 			httpError(w, 500, err.Error())
 			return
 		}
 		// Each retained start as fields (issue #4832): the blocker strings stay
 		// as they are; this says which phase, endpoint, worker and native.
-		startOwner := c.owner
-		if c.all {
-			startOwner = ""
-		}
-		starts, err := s.Store.RepoOpenStarts(repo, startOwner, "")
+		starts, err := s.Store.RepoOpenStarts(repo, owner, "")
 		if err != nil {
 			httpError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "client_hosts": clients, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		audit("read", "OK")
+		writeJSON(w, 200, map[string]any{"authority": authorityView(a, compatRepo), "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "client_hosts": clients, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {
 		httpError(w, 405, "GET manifest or POST authority transition")
 		return
 	}
-	if strings.HasSuffix(r.URL.Path, "/adopt") {
+	if sub == "adopt" {
 		var in struct {
 			Source   string `json:"source"`
 			Title    string `json:"title"`
@@ -269,30 +360,43 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		if !decodeTicket(w, r, &in) {
 			return
 		}
+		if !leaseRepoRE.MatchString(repo) {
+			httpError(w, 400, "select one explicit repo=owner/name")
+			return
+		}
 		if len(blockers) > 0 {
 			httpError(w, 409, "drain/verify legacy owners before selective adoption")
 			return
 		}
-		m, e := s.Store.AdoptRepoTicket(repo, c.owner, in.Source, in.Title, in.Body, in.Revision, time.Now())
+		m, e := s.Store.AdoptRepoTicket(repo, owner, endpoints, in.Source, in.Title, in.Body, in.Revision, time.Now())
 		if e != nil {
+			audit("adopt", "REFUSED: "+e.Error())
 			httpError(w, 409, e.Error())
 			return
 		}
+		audit("adopt", "OK "+m.From+" -> "+m.To)
 		writeJSON(w, 200, m)
 		return
 	}
-	var change store.RepoAuthorityChange
-	if !decodeTicket(w, r, &change) {
+	var in authorityChangeIn
+	if !decodeTicket(w, r, &in) {
+		return
+	}
+	change := in.OwnerAuthorityChange
+	if change.Action == "init" {
+		// # compat-1v: 下一批删 — an older node's fleet-repo.sh add asks this; it
+		// falls back to the gate read, which is the person's own mode.
+		httpError(w, 409, "task authority is a person's, not a repo's: a new repo selects nothing (claude-fleet#4896)")
 		return
 	}
 	if !idemRE.MatchString(change.Key) {
 		httpError(w, 400, "idempotency_key is required")
 		return
 	}
-	change.Owners = owners
+	change.Owners, change.Endpoints = owners, endpoints
 	if change.Action == "stop_ack" {
 		ep, _ := s.nodeAuthOpt(r)
-		if ep == nil {
+		if ep == nil || s.nodeTaskOwner(ep) != owner {
 			httpError(w, 403, "native stop must be acknowledged by its node")
 			return
 		}
@@ -311,46 +415,47 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		}
 	} else if (change.Action == "apply" && a.Mode != "hub") || (change.Action == "rollback" && a.Mode != "legacy") {
 		if len(blockers) > 0 {
-			writeJSON(w, 409, map[string]any{"error": "drain/verify all owners and hosts first", "blockers": blockers})
+			audit(change.Action, "REFUSED: blockers")
+			writeJSON(w, 409, map[string]any{"error": "drain/verify all of your executions and hosts first", "blockers": blockers})
 			return
 		}
 	} else if change.Action == "freeze" {
-		// All registered hosts must know the new local dispatch rail before
-		// relying on the central freeze. Active owners themselves may drain.
+		// All of the owner's hosts must know the local dispatch rail before
+		// relying on the central freeze. Active executions themselves may drain.
 		if len(nodes) == 0 {
-			httpError(w, 409, "no registered capable host")
+			httpError(w, 409, "no registered capable host of yours")
 			return
 		}
 		for _, reason := range inventoryBlockers {
 			if !strings.HasPrefix(reason, "legacy execution: ") {
-				httpError(w, 409, "verify every repo host before freeze: "+reason)
+				httpError(w, 409, "verify every host of yours before freeze: "+reason)
 				return
 			}
 		}
 		for _, n := range nodes {
 			if !n.Capable {
-				httpError(w, 409, "upgrade every repo host before freeze")
+				httpError(w, 409, "upgrade every host of yours before freeze")
 				return
 			}
 		}
 	}
-	a, err = s.Store.ChangeRepoAuthority(repo, c.owner, change, time.Now())
+	a, err = s.Store.ChangeOwnerAuthority(owner, change, time.Now())
 	if err != nil {
 		code := 409
 		if errors.Is(err, store.ErrTaskInvalid) {
 			code = 400
 		}
+		audit(change.Action, "REFUSED: "+err.Error())
 		httpError(w, code, err.Error())
 		return
 	}
+	audit(change.Action, "OK mode="+a.Mode+" revision="+strconv.FormatInt(a.Revision, 10))
 	if change.Action == "freeze" || change.Action == "apply" || change.Action == "rollback" {
-		// Every host of the repo, not only the caller's, re-reads its overlay
+		// Every host of the owner's, not only the caller's, re-reads
 		// (claude-fleet#4730). One that is offline hears it on its first beat.
-		for _, n := range nodes {
-			go s.pushRepoAuthority(n.Endpoint, a)
-		}
+		go s.pushOwnerAuthority(endpoints, a)
 	}
-	writeJSON(w, 200, a)
+	writeJSON(w, 200, authorityView(a, compatRepo))
 }
 
 func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c ticketCaller, repo string) {
@@ -439,61 +544,87 @@ func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c 
 	writeJSON(w, 200, start)
 }
 
-func (s *Server) repoDispatchGate(repo string, accepted bool) error {
-	if repo == "" {
+// ownerDispatchGate refuses a hub dispatch the owner's authority does not
+// admit: frozen refuses all, hub an unaccepted one. Another person's mode is
+// never consulted (claude-fleet#4896).
+func (s *Server) ownerDispatchGate(owner string, accepted bool) error {
+	if owner == "" {
 		return nil
 	}
-	a, err := s.Store.RepoAuthority(repo)
+	a, err := s.Store.OwnerAuthority(owner)
 	if err != nil {
 		return err
 	}
 	if a.Mode == "frozen" || (a.Mode == "hub" && !accepted) {
-		return fault("INVALID_STATE", "repo task authority requires an unfrozen accepted dispatch")
+		return fault("INVALID_STATE", "task authority requires an unfrozen accepted dispatch")
 	}
 	return nil
 }
 
-// pushRepoAuthority tells one host that repo a's authority moved
-// (claude-fleet#4730). A host that did not list CapRepoAuthority, or is
-// offline, is skipped: it is told on its next connection's first beat.
-func (s *Server) pushRepoAuthority(endpointID string, a store.RepoAuthority) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if !s.canRepoAuthority(ctx, endpointID) {
-		return
+// taskOwner is whose task authority a principal's start is admitted by.
+func (p fleetPrincipal) taskOwner() string {
+	if p.TaskOwner != "" {
+		return p.TaskOwner
 	}
-	msg, err := control.New(control.TypeRepoAuthority, control.RepoAuthority{Repo: a.Repo, Mode: a.Mode, Revision: a.Revision})
-	if err != nil {
-		return
-	}
-	if err := s.SendNodeWrite(ctx, endpointID, msg); err != nil && !errors.Is(err, ErrNodeOffline) {
-		log.Printf("node %s: repo authority %s: %v", endpointID, a.Repo, err)
-	}
+	return p.Actor
 }
 
-// pushRepoAuthorities runs on a capable connection's first beat: every repo
-// this endpoint's fleets host whose authority has ever moved is told once, so
-// a host offline at the cutover converges when it comes back. A repo that
-// never moved sends nothing — byte for byte as before (claude-fleet#4730).
-func (s *Server) pushRepoAuthorities(endpointID string) {
-	fs, err := s.Store.Fleets()
-	if err != nil {
-		return
-	}
-	seen := map[string]bool{}
+// endpointRepos is every repo the fleets on endpointID host.
+func endpointRepos(fs []store.FleetRow, endpointID string) []string {
+	seen, out := map[string]bool{}, []string{}
 	for _, f := range fs {
 		if f.EndpointID != endpointID {
 			continue
 		}
 		for _, r := range append([]string{f.Repo}, f.Repos...) {
 			r = store.NormRepo(r)
-			if r == "" || seen[r] {
-				continue
-			}
-			seen[r] = true
-			if a, err := s.Store.RepoAuthority(r); err == nil && a.Revision > 0 {
-				s.pushRepoAuthority(endpointID, a)
+			if r != "" && !seen[r] {
+				seen[r] = true
+				out = append(out, r)
 			}
 		}
+	}
+	return out
+}
+
+// pushOwnerAuthority tells each of the owner's capable hosts that their
+// authority moved (claude-fleet#4730, per person since #4896). The message is
+// still the per-repo TypeRepoAuthority — once for each repo the host's fleets
+// host, the owner's mode and revision — so an older node re-reads
+// its overlays as before. A host that did not list CapRepoAuthority, or is
+// offline, is skipped: it is told on its next connection's first beat.
+func (s *Server) pushOwnerAuthority(endpoints []string, a store.OwnerAuthority) {
+	fs, err := s.Store.Fleets()
+	if err != nil {
+		return
+	}
+	for _, ep := range endpoints {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if s.canRepoAuthority(ctx, ep) {
+			for _, repo := range endpointRepos(fs, ep) {
+				msg, err := control.New(control.TypeRepoAuthority, control.RepoAuthority{Repo: repo, Mode: a.Mode, Revision: a.Revision})
+				if err != nil {
+					continue
+				}
+				if err := s.SendNodeWrite(ctx, ep, msg); err != nil && !errors.Is(err, ErrNodeOffline) {
+					log.Printf("node %s: task authority %s (%s): %v", ep, a.Owner, repo, err)
+				}
+			}
+		}
+		cancel()
+	}
+}
+
+// pushRepoAuthorities runs on a capable connection's first beat: when this
+// login's person ever moved their authority, the host is told once, so a host
+// offline at the cutover converges when it comes back. A person who never
+// moved sends nothing — byte for byte as before (claude-fleet#4730).
+func (s *Server) pushRepoAuthorities(endpointID string) {
+	owner := s.endpointOwner(endpointID)
+	if owner == "" {
+		return
+	}
+	if a, err := s.Store.OwnerAuthority(owner); err == nil && a.Revision > 0 {
+		s.pushOwnerAuthority([]string{endpointID}, a)
 	}
 }

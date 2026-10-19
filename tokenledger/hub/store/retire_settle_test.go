@@ -32,7 +32,10 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 	start("org/repo", "gone", "r2", true)
 	start("org/other", "gone", "r3", true)
 	start("org/repo", "other", "keep", true)
-	start("org/untouched", "other", "u1", true)
+	// Another person's start, on the endpoint that stays: their cutover's.
+	if _, err := s.RepoLocalStart("org/untouched", "carol", "other", "u1", "reserve", "", nil, now); err != nil {
+		t.Fatal(err)
+	}
 	if g, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/repo", Issue: 7, WorkerID: "f/w", FleetID: "f", EndpointID: "gone"}, 5*time.Minute, now); err != nil || !g {
 		t.Fatal("lease", g, err)
 	}
@@ -54,7 +57,7 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 		return b.String()
 	}
 	before := opsOf("other")
-	beforeBlockers, _, err := s.RepoAuthorityBlockers("org/untouched", false)
+	beforeBlockers, _, err := s.OwnerAuthorityBlockers("carol", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +75,7 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 			t.Fatal(k, st, err)
 		}
 	}
-	blockers, _, err := s.RepoAuthorityBlockers("org/repo", false)
+	blockers, _, err := s.OwnerAuthorityBlockers("alice", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +87,9 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 	if after := opsOf("other"); after != before {
 		t.Fatalf("another endpoint's starts changed:\n%s\n%s", before, after)
 	}
-	afterBlockers, _, _ := s.RepoAuthorityBlockers("org/untouched", false)
+	afterBlockers, _, _ := s.OwnerAuthorityBlockers("carol", nil, false)
 	if strings.Join(afterBlockers, "\n") != strings.Join(beforeBlockers, "\n") {
-		t.Fatal("untouched repo's blockers changed", beforeBlockers, afterBlockers)
+		t.Fatal("another person's blockers changed", beforeBlockers, afterBlockers)
 	}
 	if _, err := s.RepoLocalStart("org/repo", "alice", "gone", "r1", "begin", "f/r1", nil, now); err == nil {
 		t.Fatal("a retired start began")
@@ -117,7 +120,7 @@ func TestRetireSettlesLocalStarts(t *testing.T) {
 	}
 
 	// A merely offline endpoint keeps its start blocking.
-	blockers, _, _ = s.RepoAuthorityBlockers("org/repo", false)
+	blockers, _, _ = s.OwnerAuthorityBlockers("alice", nil, false)
 	if !strings.Contains(strings.Join(blockers, "\n"), "local start retained: keep") {
 		t.Fatal("an unretired endpoint's start was drained", blockers)
 	}
@@ -173,7 +176,7 @@ func TestRetireFailsOrphanWorkerStarts(t *testing.T) {
 	if row("o-live") != liveBefore || row("o-done") != doneBefore {
 		t.Fatal("touched another endpoint's or a closed start")
 	}
-	blockers, _, err := s.RepoAuthorityBlockers("org/repo", false)
+	blockers, _, err := s.OwnerAuthorityBlockers("alice", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,97 +10,35 @@ import (
 	"time"
 )
 
-func repoChange(t *testing.T, s *Store, a RepoAuthority, action string) RepoAuthority {
+func repoChange(t *testing.T, s *Store, a OwnerAuthority, action string) OwnerAuthority {
 	t.Helper()
-	next, err := s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: action, Revision: a.Revision, Key: action + time.Now().Format("150405.000000000"), LegacyTickets: "github"}, time.Now())
+	next, err := s.ChangeOwnerAuthority(a.Owner, OwnerAuthorityChange{Action: action, Revision: a.Revision, Key: action + time.Now().Format("150405.000000000")}, time.Now())
 	if err != nil {
 		t.Fatalf("%s: %v", action, err)
 	}
 	return next
 }
 
-func TestRepoAuthorityDryRunAndPerRepoCutover(t *testing.T) {
-	s := taskStore(t)
-	before, _ := s.FleetSettings()
-	a, err := s.RepoAuthority("org/a")
-	if err != nil || a.Mode != "legacy" {
-		t.Fatal(a, err)
-	}
-	_, _, err = s.RepoAuthorityBlockers("org/a", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	after, _ := s.FleetSettings()
-	if !reflect.DeepEqual(before, after) {
-		t.Fatal("dry-run wrote settings")
-	}
-	b, _ := s.RepoAuthority("org/b")
-	freeze := RepoAuthorityChange{Action: "freeze", Revision: 0, Key: "freeze", LegacyTickets: "github"}
-	a, err = s.ChangeRepoAuthority("org/a", "alice", freeze, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, err := s.ChangeRepoAuthority("org/a", "alice", freeze, time.Now())
-	if err != nil || !reflect.DeepEqual(a, replay) {
-		t.Fatal("freeze replay", replay, err)
-	}
-	if _, err = s.CreateFleetTask(FleetTask{Repo: "org/a", Owner: "alice", Title: "frozen", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}, "frozen", time.Now()); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("accepted while frozen", err)
-	}
-	if _, _, _, err = s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "old", FleetID: "f"}, time.Minute, time.Now()); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("legacy starts during freeze", err)
-	}
-	if err = s.InsertFleetOperation(FleetOperation{ID: "legacy", Actor: "alice", Idem: "legacy", Action: "worker_start", Request: `{"params":{"repo":"org/a","kind":"scratch"}}`, Created: time.Now(), Updated: time.Now()}); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("scratch bypass", err)
-	}
-	a = repoChange(t, s, a, "apply")
-	apply := RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "apply-again"}
-	a, err = s.ChangeRepoAuthority("org/a", "alice", apply, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, err = s.ChangeRepoAuthority("org/a", "alice", apply, time.Now())
-	if err != nil || !reflect.DeepEqual(a, replay) {
-		t.Fatal("apply replay", err)
-	}
-	if _, _, _, err = s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "old", FleetID: "f", Force: true}, time.Minute, time.Now()); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("forced legacy bypass", err)
-	}
-	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/b", Issue: 7, WorkerID: "other", FleetID: "g"}, time.Minute, time.Now()); err != nil || !ok {
-		t.Fatal("repo B changed", err)
-	}
-	b2, _ := s.RepoAuthority("org/b")
-	if !reflect.DeepEqual(b, b2) {
-		t.Fatal("repo B authority changed")
-	}
-	a = repoChange(t, s, a, "freeze")
-	a = repoChange(t, s, a, "rollback")
-	if a.Mode != "legacy" || a.LegacyTickets != "github" {
-		t.Fatal(a)
-	}
-	t.Log("fixture dry-run=0 writes; explicit freeze/apply/replay/rollback; repo B unchanged")
-}
-
 func TestRepoAuthorityExpiredOwnerAndNativeStop(t *testing.T) {
 	s := taskStore(t)
 	now := time.Now()
-	_, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "f/old", FleetID: "f", EndpointID: "node-a"}, time.Minute, now.Add(-time.Hour))
+	_, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "f/old", FleetID: "f", EndpointID: "node-a", Owner: "alice"}, time.Minute, now.Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	before, _ := s.FleetSettings()
-	a, _ := s.RepoAuthority("org/a")
-	_, err = s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: "freeze", Revision: 0, Key: "old-unbound", LegacyTickets: "github"}, now)
+	a, _ := s.OwnerAuthority("alice")
+	_, err = s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "freeze", Revision: 0, Key: "old-unbound"}, now)
 	if !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("unbound expired owner froze the repo", err)
+		t.Fatal("unbound expired owner froze alice", err)
 	}
-	unchanged, _ := s.RepoAuthority("org/a")
+	unchanged, _ := s.OwnerAuthority("alice")
 	after, _ := s.FleetSettings()
 	if !reflect.DeepEqual(a, unchanged) || !reflect.DeepEqual(before, after) {
 		t.Fatal("refused preflight mutated authority", unchanged)
 	}
-	ack := RepoAuthorityChange{Action: "stop_ack", Revision: 0, Key: "unbound-stop", WorkerID: "f/old", EndpointID: "node-a", Evidence: "unbound native stop"}
-	if _, err = s.ChangeRepoAuthority(a.Repo, "alice", ack, now); err == nil {
+	ack := OwnerAuthorityChange{Action: "stop_ack", Revision: 0, Key: "unbound-stop", WorkerID: "f/old", EndpointID: "node-a", Evidence: "unbound native stop"}
+	if _, err = s.ChangeOwnerAuthority("alice", ack, now); err == nil {
 		t.Fatal("unbound proof accepted")
 	}
 	// Existing legacy stop/release remains available because freeze did not
@@ -133,12 +71,12 @@ func TestRepoAuthorityPausedAfterFinalGate(t *testing.T) {
 		done <- err
 	}()
 	<-paused
-	a, _ := s.RepoAuthority("org/a")
+	a, _ := s.OwnerAuthority("alice")
 	a = repoChange(t, s, a, "freeze")
 	if len(a.Owners) != 0 {
 		t.Fatal("fixture must have no observed window", a)
 	}
-	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "apply", Revision: a.Revision, Key: "empty-inventory"}, time.Now().Add(24*time.Hour)); !errors.Is(err, ErrRepoAuthority) {
+	if _, err := s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "apply", Revision: a.Revision, Key: "empty-inventory"}, time.Now().Add(24*time.Hour)); !errors.Is(err, ErrRepoAuthority) {
 		t.Fatal("paused start lost to empty inventory/expiry", err)
 	}
 	close(resume)
@@ -163,11 +101,11 @@ func TestRepoAuthorityLegacyTaskWithoutLeaseOrSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := s.RepoAuthority("org/a")
-	if _, err := s.ChangeRepoAuthority("org/a", "alice", RepoAuthorityChange{Action: "freeze", Revision: a.Revision, Key: "missing-owner", LegacyTickets: "github"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
+	a, _ := s.OwnerAuthority("alice")
+	if _, err := s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "freeze", Revision: a.Revision, Key: "missing-owner"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
 		t.Fatal("unbound legacy T froze", err)
 	}
-	after, _ := s.RepoAuthority("org/a")
+	after, _ := s.OwnerAuthority("alice")
 	if !reflect.DeepEqual(a, after) {
 		t.Fatal("legacy T refusal changed authority", after)
 	}
@@ -195,7 +133,7 @@ func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
 					run("replacement", action, current)
 				}
 			}
-			a, _ := s.RepoAuthority("org/a")
+			a, _ := s.OwnerAuthority("alice")
 			a = repoChange(t, s, a, "freeze")
 			proof := func(n *RepoNativeIdentity) string {
 				b, _ := json.Marshal(struct {
@@ -206,25 +144,25 @@ func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
 			}
 			wrong := *old
 			wrong.PID = 999
-			ack := RepoAuthorityChange{Action: "stop_ack", Revision: a.Revision, Key: "ack", EndpointID: "node-a", WorkerID: "f/w", Evidence: proof(&wrong)}
-			if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
+			ack := OwnerAuthorityChange{Action: "stop_ack", Revision: a.Revision, Key: "ack", EndpointID: "node-a", WorkerID: "f/w", Evidence: proof(&wrong)}
+			if _, err := s.ChangeOwnerAuthority("alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
 				t.Fatal("wrong dead process released owner", err)
 			}
 			ack.Evidence = proof(old)
 			if replacement {
-				if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
+				if _, err := s.ChangeOwnerAuthority("alice", ack, time.Now()); !errors.Is(err, ErrTaskFence) {
 					t.Fatal("pre-transfer native receipt released live replacement", err)
 				}
 				return
 			}
 			run("old", "stopped", current)
 			var err error
-			a, err = s.ChangeRepoAuthority("org/a", "alice", ack, time.Now())
+			a, err = s.ChangeOwnerAuthority("alice", ack, time.Now())
 			if err != nil {
 				t.Fatal(err)
 			}
 			ack.EndpointID = "node-b"
-			if _, err := s.ChangeRepoAuthority("org/a", "alice", ack, time.Now()); err == nil {
+			if _, err := s.ChangeOwnerAuthority("alice", ack, time.Now()); err == nil {
 				t.Fatal("foreign replay accepted")
 			}
 			a = repoChange(t, s, a, "apply")
@@ -239,18 +177,18 @@ func TestRepoAuthorityCollisionAndSelectiveMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, _ := s.RepoAuthority("org/a")
+	a, _ := s.OwnerAuthority("alice")
 	a = repoChange(t, s, a, "freeze")
 	a = repoChange(t, s, a, "apply")
-	m, err := s.AdoptRepoTicket("org/a", "alice", "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
+	m, err := s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
 	if err != nil || m.From != "gh:org/a#7" || m.To != "hub:org/a#8" || m.SourceURL != "https://github.com/org/a/issues/7" {
 		t.Fatal(m, err)
 	}
-	again, err := s.AdoptRepoTicket("org/a", "alice", "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
+	again, err := s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
 	if err != nil || again != m {
 		t.Fatal("mapping not idempotent", again, err)
 	}
-	if _, err = s.AdoptRepoTicket("org/a", "alice", "gh:org/a#7", "changed input", "selected body", a.Revision, now); !errors.Is(err, ErrTaskConflict) {
+	if _, err = s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "changed input", "selected body", a.Revision, now); !errors.Is(err, ErrTaskConflict) {
 		t.Fatal("changed adoption replay", err)
 	}
 	unchanged, err := s.FleetTicketAt("org/a", 7)
@@ -270,13 +208,13 @@ func TestRepoAuthorityCollisionAndSelectiveMapping(t *testing.T) {
 
 func TestRepoAuthorityRollbackRetainsCompletedExecution(t *testing.T) {
 	s := taskStore(t)
-	a, _ := s.RepoAuthority("org/a")
+	a, _ := s.OwnerAuthority("alice")
 	a = repoChange(t, s, a, "freeze")
 	a = repoChange(t, s, a, "apply")
 	rec := startTask(t, s, acceptedTask(t, s, "retained", "gh:org/a#9"))
 	rec = mutateTask(t, s, rec, TaskMutation{Key: "complete", Kind: "transition", State: TaskSucceeded, Evidence: `{"work_result":"succeeded","pr":"org/a#10","pr_state":"waiting"}`})
 	a = repoChange(t, s, a, "freeze")
-	if _, err := s.ChangeRepoAuthority(a.Repo, "alice", RepoAuthorityChange{Action: "rollback", Revision: a.Revision, Key: "unsafe"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
+	if _, err := s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "rollback", Revision: a.Revision, Key: "unsafe"}, time.Now()); !errors.Is(err, ErrRepoAuthority) {
 		t.Fatal("terminal outcome released authority", err)
 	}
 	rec = mutateTask(t, s, rec, TaskMutation{Key: "native-stop", Kind: "stop_ack", ExecutionStopped: true, Evidence: "fixture native exit"})
@@ -300,14 +238,14 @@ func TestRepoAuthorityFreezeSerializesClaim(t *testing.T) {
 	var claimErr, freezeErr error
 	go func() {
 		defer wg.Done()
-		granted, _, _, claimErr = s.AcquireLease(LeaseClaim{Repo: "org/race", Issue: 1, WorkerID: "f/w", EndpointID: "node", FleetID: "f"}, time.Minute, time.Now())
+		granted, _, _, claimErr = s.AcquireLease(LeaseClaim{Repo: "org/race", Issue: 1, WorkerID: "f/w", EndpointID: "node", FleetID: "f", Owner: "alice"}, time.Minute, time.Now())
 	}()
 	go func() {
 		defer wg.Done()
-		_, freezeErr = s.ChangeRepoAuthority("org/race", "alice", RepoAuthorityChange{Action: "freeze", Key: "freeze", LegacyTickets: "github"}, time.Now())
+		_, freezeErr = s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "freeze", Key: "freeze"}, time.Now())
 	}()
 	wg.Wait()
-	a, _ := s.RepoAuthority("org/race")
+	a, _ := s.OwnerAuthority("alice")
 	if granted {
 		if !errors.Is(freezeErr, ErrRepoAuthority) || a.Mode != "legacy" || a.Revision != 0 {
 			t.Fatal("racing unbound owner was frozen", a, freezeErr)
@@ -344,49 +282,113 @@ func TestRepoAuthorityLandingAfterWorkCompleted(t *testing.T) {
 	}
 }
 
-// A repo the hub has never seen starts on the hub in one step; any trace of it —
-// a fleet row, a task, a ticket — of ANY owner keeps it legacy (claude-fleet#4885).
-func TestRepoAuthorityInitOnlyForNewRepo(t *testing.T) {
+// Task authority is a person's (claude-fleet#4896): alice and bob share org/a,
+// each cuts over alone, and neither's mode, starts or leftovers touch the other.
+func TestOwnerAuthorityDryRunAndPerOwnerCutover(t *testing.T) {
 	s := taskStore(t)
 	now := time.Now()
-	init := func(repo, owner, key string) (RepoAuthority, error) {
-		return s.ChangeRepoAuthority(repo, owner, RepoAuthorityChange{Action: "init", Key: key, LegacyTickets: "hub"}, now)
+	before, _ := s.FleetSettings()
+	a, err := s.OwnerAuthority("alice")
+	if err != nil || a.Mode != "legacy" || a.Owner != "alice" {
+		t.Fatal(a, err)
 	}
-	a, err := init("org/fresh", "alice", "init-fresh")
-	if err != nil || a.Mode != "hub" || a.Revision != 1 || a.LegacyTickets != "hub" || a.Owner != "alice" {
-		t.Fatal("new repo init", a, err)
-	}
-	if replay, err := init("org/fresh", "alice", "init-fresh"); err != nil || !reflect.DeepEqual(a, replay) {
-		t.Fatal("init replay", replay, err)
-	}
-	if _, err = init("org/fresh", "alice", "init-again"); err == nil {
-		t.Fatal("a second init on a selected repo must refuse")
-	}
-	if _, err = s.ChangeRepoAuthority("org/x", "alice", RepoAuthorityChange{Action: "init", Key: "bad", LegacyTickets: "gitlab"}, now); !errors.Is(err, ErrTaskInvalid) {
-		t.Fatal("init needs a ticket home", err)
-	}
-	// Another login (bob) already hosts org/hosted under legacy: not new for alice.
-	if _, err = s.RecordFleetSnapshot("ep-b", "mac-b", "bob", "m-b", []FleetReport{{FleetID: "f-b", Name: "fleet", Repo: "org/other", Repos: []string{"org/other", "Org/Hosted"}}}, now); err != nil {
+	if _, _, err = s.OwnerAuthorityBlockers("alice", nil, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = init("org/hosted", "alice", "init-hosted"); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("a repo another fleet hosts must stay legacy", err)
+	if after, _ := s.FleetSettings(); !reflect.DeepEqual(before, after) {
+		t.Fatal("dry-run wrote settings")
 	}
-	if _, err = s.CreateFleetTicket(FleetTicket{Repo: "org/ticketed", Owner: "bob", Title: "old"}, 1, now); err != nil {
+	// bob runs legacy work in the same repo: a live lease, a local start, a
+	// v0 T, an unsettled worker_start. None of it is alice's to drain.
+	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 1, WorkerID: "fb/w", FleetID: "fb", EndpointID: "node-b", Owner: "bob"}, time.Hour, now); err != nil || !ok {
+		t.Fatal("bob's lease", err)
+	}
+	if _, err = s.RepoLocalStart("org/a", "bob", "node-b", "bob-start", "reserve", "", nil, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = init("org/ticketed", "alice", "init-ticketed"); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("a repo with a ticket must stay legacy", err)
-	}
-	if _, err = s.CreateFleetTask(FleetTask{Repo: "org/tasked", Owner: "bob", Title: "old", RequestedAgent: "claude", ResolvedAgent: "claude"}, "tasked", now); err != nil {
+	if _, err = s.CreateFleetTask(FleetTask{Owner: "bob", Repo: "org/a", Title: "bob legacy", WorkerID: "fb/old", State: TaskOpen}, "bob-v0", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = init("org/tasked", "alice", "init-tasked"); !errors.Is(err, ErrRepoAuthority) {
-		t.Fatal("a repo with a task must stay legacy", err)
+	if err = s.InsertFleetOperation(FleetOperation{ID: "bob-op", Actor: "node:bob@mac-b", TaskOwner: "bob", Idem: "bob-op", Action: "worker_start", Status: "running", Request: `{"params":{"repo":"org/a","kind":"scratch"}}`, Created: now, Updated: now}); err != nil {
+		t.Fatal(err)
 	}
-	for _, r := range []string{"org/hosted", "org/ticketed", "org/tasked"} {
-		if a, _ := s.RepoAuthority(r); a.Mode != "legacy" || a.Revision != 0 {
-			t.Fatal("a refused init wrote a selection", r, a)
-		}
+	mine, _, _ := s.OwnerAuthorityBlockers("alice", []string{"node-a"}, false)
+	if len(mine) != 0 {
+		t.Fatal("another person's work blocks alice", mine)
+	}
+	theirs, _, _ := s.OwnerAuthorityBlockers("bob", []string{"node-b"}, false)
+	if len(theirs) != 4 {
+		t.Fatal("bob's own blockers", theirs)
+	}
+	bob, _ := s.OwnerAuthority("bob")
+
+	freeze := OwnerAuthorityChange{Action: "freeze", Revision: 0, Key: "freeze"}
+	a, err = s.ChangeOwnerAuthority("alice", freeze, now)
+	if err != nil || a.Mode != "frozen" || a.Revision != 1 {
+		t.Fatal(a, err)
+	}
+	replay, err := s.ChangeOwnerAuthority("alice", freeze, now)
+	if err != nil || !reflect.DeepEqual(a, replay) {
+		t.Fatal("freeze replay", replay, err)
+	}
+	if _, err = s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "apply", Revision: 0, Key: "freeze"}, now); !errors.Is(err, ErrTaskConflict) {
+		t.Fatal("changed replay accepted", err)
+	}
+	// alice frozen: every start of hers waits, in any repo or none.
+	if _, err = s.CreateFleetTask(FleetTask{Repo: "org/a", Owner: "alice", Title: "frozen", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}, "frozen", now); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("accepted while frozen", err)
+	}
+	if _, _, _, err = s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "fa/w", FleetID: "fa", Owner: "alice"}, time.Minute, now); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("legacy lease during freeze", err)
+	}
+	if err = s.InsertFleetOperation(FleetOperation{ID: "alice-scratch", Actor: "alice", Idem: "alice-scratch", Action: "worker_start", Request: `{"params":{"kind":"scratch"}}`, Created: now, Updated: now}); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("no-repo scratch bypass", err)
+	}
+	if _, err = s.RepoLocalStart("org/b", "alice", "node-a", "a-start", "reserve", "", nil, now); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("local start during freeze", err)
+	}
+	// bob in the same repo goes on as before.
+	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 2, WorkerID: "fb/w2", FleetID: "fb", Owner: "bob"}, time.Minute, now); err != nil || !ok {
+		t.Fatal("alice's freeze held bob", err)
+	}
+	a = repoChange(t, s, a, "apply")
+	if a.Mode != "hub" {
+		t.Fatal(a)
+	}
+	if _, _, _, err = s.AcquireLease(LeaseClaim{Repo: "org/a", Issue: 7, WorkerID: "fa/w", FleetID: "fa", Force: true, Owner: "alice"}, time.Minute, now); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("forced legacy bypass", err)
+	}
+	if _, err = s.CreateFleetTask(FleetTask{Repo: "org/a", Owner: "alice", Title: "hub", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}, "hub-accept", now); err != nil {
+		t.Fatal("accepted work on the hub", err)
+	}
+	if err = s.InsertFleetOperation(FleetOperation{ID: "bob-op2", Actor: "bob", Idem: "bob-op2", Action: "worker_start", Request: `{"params":{"repo":"org/a","kind":"scratch"}}`, Created: now, Updated: now}); err != nil {
+		t.Fatal("alice on the hub refused bob's legacy start", err)
+	}
+	if _, err = s.RepoLocalStart("org/a", "bob", "node-b", "bob-start-2", "reserve", "", nil, now); err != nil {
+		t.Fatal("alice on the hub refused bob's local start", err)
+	}
+	if b2, _ := s.OwnerAuthority("bob"); !reflect.DeepEqual(bob, b2) {
+		t.Fatal("bob's authority changed", b2)
+	}
+	a = repoChange(t, s, a, "freeze")
+	if _, err = s.ChangeOwnerAuthority("alice", OwnerAuthorityChange{Action: "rollback", Revision: a.Revision, Key: "early"}, now); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("rollback with accepted work open", err)
+	}
+	t.Log("alice: dry-run 0 writes, freeze/replay/apply; bob's legacy in the same repo neither blocks nor is blocked")
+}
+
+// The per-repo rows of before (claude-fleet#4885's hub default included) are
+// read as absent: they admit and refuse nothing.
+func TestOwnerAuthorityIgnoresOldRepoRow(t *testing.T) {
+	s := taskStore(t)
+	now := time.Now()
+	if _, err := s.write.Exec(`INSERT INTO fleet_settings (key, value, updated) VALUES ('task-authority:org/new', '{"repo":"org/new","owner":"alice","mode":"hub","revision":1,"legacy_tickets":"hub"}', ?)`, now.UTC().Format(rfc)); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := s.OwnerAuthority("alice"); err != nil || a.Mode != "legacy" || a.Revision != 0 {
+		t.Fatal(a, err)
+	}
+	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "org/new", Issue: 1, WorkerID: "f/w", FleetID: "f", Owner: "alice"}, time.Minute, now); err != nil || !ok {
+		t.Fatal("old repo row refused a legacy lease", err)
 	}
 }

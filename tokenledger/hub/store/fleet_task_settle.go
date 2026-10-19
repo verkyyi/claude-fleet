@@ -51,7 +51,7 @@ func legacyWorkerLive(q querier, repo, worker string) (string, error) {
 	if n > 0 {
 		return "lease held", nil
 	}
-	starts, err := repoLocalStarts(q, repo)
+	starts, err := localStarts(q, func(st RepoLocalStart) bool { return st.Repo == repo })
 	if err != nil {
 		return "", err
 	}
@@ -93,15 +93,15 @@ func (s *Store) SettleLegacyTask(id int64, worker, evidence string, now time.Tim
 		return err
 	}
 	defer tx.Rollback()
-	var repo, state, w string
+	var repo, owner, state, w string
 	var version int
-	if err = tx.QueryRow(`SELECT repo, state, worker_id, authority_version FROM fleet_tasks WHERE id = ?`, id).Scan(&repo, &state, &w, &version); err != nil {
+	if err = tx.QueryRow(`SELECT repo, owner, state, worker_id, authority_version FROM fleet_tasks WHERE id = ?`, id).Scan(&repo, &owner, &state, &w, &version); err != nil {
 		return err
 	}
 	if version != 0 || w == "" || w != worker || state == TaskClosed || state == TaskRefused {
 		return ErrTaskConflict
 	}
-	if err = s.lockRepoAuthority(tx, repo); err != nil {
+	if err = s.lockOwnerAuthority(tx, owner); err != nil {
 		return err
 	}
 	live, err := legacyWorkerLive(tx, repo, worker)

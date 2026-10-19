@@ -249,7 +249,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		p.Worker = c
 	}
 
-	if err := s.repoDispatchGate(req.Repo, req.Dispatch != nil); err != nil {
+	if err := s.ownerDispatchGate(p.taskOwner(), req.Dispatch != nil); err != nil {
 		httpError(w, http.StatusConflict, errorObject(err)["message"])
 		return
 	}
@@ -386,7 +386,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		// occupy the linked issue before that authoritative claim can run.
 		if !scratch && !taskOwnsIssueLease {
 			tclaim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: pl.FleetID + "/" + targetKey(key, target, req.Repo),
-				FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+				FleetID: pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser, Owner: p.taskOwner()}
 			moved, err := s.Store.HandOverLease(req.Repo, req.Issue, req.WorkerID, tclaim, leaseStartGrace, now)
 			if err == nil && !moved {
 				// The asker held no live lease (its own acquire could not reach
@@ -406,7 +406,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 			}
 			giveBack = func() {
 				mine := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue, WorkerID: req.WorkerID, FleetID: fleetID,
-					EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser}
+					EndpointID: ep.ID, Hostname: fl.Hostname, OSUser: fl.OSUser, Owner: p.taskOwner()}
 				if _, err := s.Store.HandOverLease(req.Repo, req.Issue, tclaim.WorkerID, mine, leaseStartGrace, time.Now()); err != nil {
 					s.placeAudit(p, fleetID, "lease give-back failed: "+err.Error(), time.Now())
 				}
