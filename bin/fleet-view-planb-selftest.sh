@@ -4,8 +4,8 @@
 #   A  short_name: a cross-session envelope is 「来自 X：its words」 (an envelope
 #      cut before its words is no name), the `T<n> Claude · ` prefix gives the ID,
 #      a leading 「修 #N：」, brackets and paths go
-#   B  row_cols / entries over fixture rows: the ID is field 22's T<n>, else the
-#      name's prefix, else blank; the agent is field 23's (a window here with none
+#   B  row_cols / entries over fixture rows: with no window ID the ID column is
+#      blank, field 22's T<n> (else the name's prefix) an alias; the agent is field 23's (a window here with none
 #      is Claude, another machine's 未知); the repo is the row's own field 24, not
 #      its heading's (a pinned or no-repo row: blank)
 #   C  the seven glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ under
@@ -88,8 +88,12 @@ fv.hub_view_request = lambda f: None
 fv.hub_fresh = lambda f: None
 it = fv.entries("v1")
 by = {e["target"]: e for e in it if e["kind"] == "sess"}
-assert [by[t]["id"] for t in ("@1", "@2", "@3", "@4", "@5")] == ["", "T367", "T484", "T12", ""], \
+# no window ID here (no @fleet_id): the ID column is blank — a hub task's T<n> is
+# only an alias now, searched, never drawn (EPIC T497 C3; fleet-view-id-selftest.sh)
+assert [by[t]["id"] for t in ("@1", "@2", "@3", "@4", "@5")] == ["", "", "", "", ""], \
     [by[t]["id"] for t in by]
+assert [by[t]["aliases"] for t in ("@1", "@2", "@3", "@4", "@5")] == [[], ["T367"], ["T484"], ["T12"], []], \
+    [by[t]["aliases"] for t in by]
 assert by["@3"]["text"] == "⌘P 新任务先建 T", by["@3"]["text"]
 assert [by[t]["agent"] for t in ("@2", "@3", "@5", "MU/far1")] == ["claude", "codex", "claude", ""], \
     [by[t]["agent"] for t in by]
@@ -163,7 +167,7 @@ note, red = fv.note_of(by["MU/far2"])
 assert "失联" in note and not red, (note, red)
 PY
 pass "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
-pass "B  columns: ID (task → name prefix → blank), Agent (here: Claude; far: 未知), the row's own repo"
+pass "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
 pass "C  ↻ ! ✓ ✗ ◌ ∙ ☾ ? — one cell each; ◌ only under 已结束; the legend"
 pass "D  paint: glyph · ID · Agent · name · repo(13, kept blank); only ! ✗ red; cut at punctuation"
 pass "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"
