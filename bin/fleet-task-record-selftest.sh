@@ -57,16 +57,15 @@ export FLEET_HUB_CURL="$WORK/curl" CURL_LOG="$WORK/curl.log" ANS="$WORK/ans" COD
 : > "$CURL_LOG"
 
 # Stub: the spawner logs its argv (and the prompt file).
-for s in dash-raw-session.sh; do
-  rm -f "$SB/$s"
-  cat > "$SB/$s" <<EOF
+s=dash-raw-session.sh
+rm -f "$SB/$s"
+cat > "$SB/$s" <<EOF
 #!/bin/bash
 printf '%s %s\n' "$s" "\$*" >> "$WORK/calls"
 for a in "\$@"; do case "\$a" in --prompt-file=*) cat "\${a#--prompt-file=}" >> "$WORK/calls" ;; esac; done
 exit 0
 EOF
-  chmod +x "$SB/$s"
-done
+chmod +x "$SB/$s"
 
 # --- A: no hub ---------------------------------------------------------------------
 out=$(bash "$R" new --title t --token k 2>&1); rc=$?

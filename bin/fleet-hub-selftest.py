@@ -1348,9 +1348,14 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
                                      "params": {"repo": "acme/web", "task": "T218", "title": "整理账单",
                                                 "body": "整理账单\n\nhub 任务 T218 补建的单。", "worker_id": wid},
                                      "actor": "operator"})
-        with patch.object(self.node.controller, "adapter") as adapter:
+        real_adapter, modes = self.node.controller.adapter, []
+
+        def adapter(mode, *a, **k):
+            modes.append(mode)
+            return real_adapter(mode, *a, **k)
+        with patch.object(self.node.controller, "adapter", side_effect=adapter):
             self.node.controller.execute(op_id)
-        adapter.assert_not_called()
+        self.assertNotIn("taskissue", modes)
         got = self.node.rpc("operation_get", {"operation_id": op_id})
         self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"), got)
 
@@ -1655,13 +1660,6 @@ printf '@9\\t4242\\t/fixture/moved\\n'
         for repo, title in (("example/other", "Other repo's seven"), ("project", "First repo's seven")):
             got = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": repo}, token)
             self.assertEqual((got["_source"], got["title"]), ("cache", title))
-        unnamed = self.call("gh_comment", dict(fleet_id=self.fleet, idempotency_key="c", params={"issue": 7, "body": "x"}), token)
-        unnamed = self.node.wait(unnamed["operation_id"])
-        self.assertEqual((unnamed["status"], unnamed["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
-        named = self.call("gh_comment", dict(fleet_id=self.fleet, idempotency_key="d",
-                                             params={"issue": 7, "body": "x", "repo": "example/other"}), token)
-        self.assertEqual(self.node.wait(named["operation_id"])["status"], "succeeded")
-        self.assertEqual(self.node.calls("comment"), ["7 --repo example/other --note --from hub --body-file -"])
         self.assertEqual(self.node.calls("gh"), [])
 
     def test_multi_repo_worker_keys_carry_the_repo(self):
@@ -1692,20 +1690,17 @@ printf '@9\\t4242\\t/fixture/moved\\n'
                          ["@12", "@14"])
         sent = self.lifecycle("worker_message", "example-project:issue-123", text="hi")
         self.assertEqual(sent["status"], "succeeded")
-        self.assertEqual(self.node.calls("comment"), ["123 --repo example/project --to-worker --from hub --body-file -"])
+        self.assertRegex(self.node.calls("peer")[-1], r"^-L \S+ --repo example/project issue:123 -$")
         back = self.lifecycle("worker_resume", "example-other:issue-123")
         self.assertEqual(back["status"], "succeeded")
         self.assertEqual(self.node.calls("restore"), ["landed:issue:123 demo --repo example/other"])
         self.assertEqual([w["worker_id"] for w in back["result"]["workers"]], [self.worker("example-other:issue-123")])
-        # The bridge is per repo (#978): with example/other's off, its resumed
-        # worker is reached directly, the peer resolver told which repo's #123 (#1554).
-        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=0\n')
+        # Its resumed worker is reached directly, the peer resolver told which
+        # repo's #123 (#1554; the only road since #4898).
         direct = self.lifecycle("worker_message", "example-other:issue-123", idem="msg-other", text="hi")
         self.assertEqual(direct["status"], "succeeded", direct)
         self.assertEqual(direct["result"]["channel"], "direct")
         self.assertRegex(self.node.calls("peer")[-1], r"^-L \S+ --repo example/other issue:123 -$")
-        self.assertEqual(len(self.node.calls("comment")), 1)
-        (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=1\n')
         # worker_start's post-spawn read matches the spawned repo, not the number:
         # @14 (issue-124, repo unknown) is not the worker it started.
         started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="start-124",

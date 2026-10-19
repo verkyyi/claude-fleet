@@ -99,7 +99,7 @@ GITFAKE
 cat > "$WORK/fakebin/gh" <<GHFAKE
 #!/bin/bash
 # issue view (issue #1156): the bound-issue gate's one read — fleet_ticket_state's
-# `-R <repo> issue view <N> --json state,… -q …` (state, reason, labels; a TAB line).
+# -R <repo> issue view <N> --json state,… -q … (state, reason, labels; a TAB line).
 # FAKE_ISSUE_STATE defaults to CLOSED so every pre-#1156 scenario reaps as it always did.
 if [ "\${1:-}" = -R ] && [ "\${3:-}" = issue ]; then
   printf 'issue %s\n' "\$*" >> "$WORK/gh-issue.log"

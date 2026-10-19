@@ -228,9 +228,7 @@ ok; grep -q '\$sid.fleet-id' "$BIN/fleet-move-remote.sh" && grep -q '@fleet_id "
 for f in dash-issue-session.sh dash-raw-session.sh; do
   ok; grep -q 'fleet_window_fid "$SESS" "$win" "$SOCK"' "$BIN/$f" || fail "E: $f mints the identity at spawn"
 done
-for f in fleet-cleanup-daemon.sh; do
-  ok; grep -q 'fleet_origin_heal ' "$BIN/$f" || fail "E: $f heals children's @origin after a key change"
-done
+ok; grep -q 'fleet_origin_heal ' "$BIN/fleet-cleanup-daemon.sh" || fail "E: fleet-cleanup-daemon.sh heals children's @origin after a key change"
 
 # --- F: zsh answers what bash does ------------------------------------------------------
 if command -v zsh >/dev/null 2>&1; then

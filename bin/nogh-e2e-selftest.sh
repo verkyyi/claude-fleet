@@ -438,7 +438,7 @@ func main() {
 	time.Sleep(600 * time.Second)
 }
 GO
-(cd "$WORK/fakeclaude" && GOTOOLCHAIN=local GOFLAGS= GO111MODULE=off go build -o "$WORK/shim/claude" main.go) 2>"$WORK/err" \
+(cd "$WORK/fakeclaude" && GOTOOLCHAIN=local GOFLAGS="" GO111MODULE=off go build -o "$WORK/shim/claude" main.go) 2>"$WORK/err" \
   || die 'could not build the native stand-in for claude (go)' "$(cat "$WORK/err")"
 export FAKE_CLAUDE_REC="$WORK/rec"
 # the hooks the agent runs name ~/.claude/fleet/bin/…: this login's install is this tree
