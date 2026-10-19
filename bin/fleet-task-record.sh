@@ -16,7 +16,7 @@
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
-#   fleet-task-record.sh settle --repo o/n [--apply] [--drained]
+#   fleet-task-record.sh settle --repo o/n|--no-repo [--apply] [--drained]
 #                     → end this owner's legacy records of a repo whose issue is
 #                       closed and whose worker holds nothing (no lease, no open
 #                       local start, not in inventory) — issue #4867. Dry unless
@@ -25,6 +25,8 @@
 #                       --drained (the authority cutover, T479): the worker half
 #                       alone — gone ⇒ closed even with its issue still open
 #                       (GitHub not asked, the issue untouched); live ⇒ kept.
+#                       --no-repo (issue #4963): this owner's records that name
+#                       no repo (an EPIC driver's), the same two halves.
 #                       Waits at least 90 s (the hub asks GitHub for up to 60 s,
 #                       issue #4881), FLEET_HUB_TIMEOUT when that is longer.
 #   fleet-task-record.sh attach T<n> [<window>]
@@ -305,22 +307,23 @@ case "$cmd" in
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1" || exit 1 ;;
   settle)
-    repo='' apply=false drained=false
+    repo='' apply=false drained=false norepo=false
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo) repo="${2:-}"; shift ;;
+        --no-repo) norepo=true ;;
         --apply) apply=true ;;
         --drained) drained=true ;;
         *) usage ;;
       esac
       shift
     done
-    case "$repo" in */*) ;; *) usage ;; esac
+    case "$norepo:$repo" in false:*/*|true:) ;; *) usage ;; esac
     # the hub reads GitHub for each issue within a 60 s budget (issue #4881)
     to=${FLEET_HUB_TIMEOUT:-10}
     case "$to" in ''|*[!0-9]*) to=90 ;; esac
     [ "$to" -ge 90 ] || to=90
-    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; d={"repo":sys.argv[1],"apply":sys.argv[2]=="true"}; d.update({"drained":True} if sys.argv[3]=="true" else {}); print(json.dumps(d))' "$repo" "$apply" "$drained")" || exit 1 ;;
+    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; d={"repo":sys.argv[1],"apply":sys.argv[2]=="true"}; d.update({"drained":True} if sys.argv[3]=="true" else {}); d.update({"no_repo":True} if sys.argv[4]=="true" else {}); print(json.dumps(d))' "$repo" "$apply" "$drained" "$norepo")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift

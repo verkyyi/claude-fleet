@@ -198,3 +198,61 @@ func TestNodeTaskSettleDrained(t *testing.T) {
 		t.Fatalf("a live worker's record was drained: %v", rec)
 	}
 }
+
+// claude-fleet#4963: a record keeps its repo as written — `Org/Repo` is found by
+// a settle of `org/repo` (or any case), and the records that name no repo are
+// settled by owner through no_repo, never by a repo settle.
+func TestNodeTaskSettleRepoCaseAndNoRepo(t *testing.T) {
+	h, _, nodes := peerHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	h.srv.IssueMeta = fakeIssueStates{"Org/Repo#1": "closed", "org/repo#1": "closed", "Org/Epic#7": "closed"}
+	gone := wrFleetM4 + "/" + wrFid
+	if _, err := h.srv.Store.RecordFleetSnapshot(nodes["verk4"].id, "verk4", "frank", "verk4", []store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "org/repo", WorkersJSON: `[]`}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	tok := nodes["verk4"].token
+	mk := func(token, repo, issue string) {
+		t.Helper()
+		body := map[string]any{"token": token, "title": token, "worker_id": gone, "state": "open", "issue": issue}
+		if repo != "" {
+			body["repo"] = repo
+		}
+		if st, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath, body); st != 200 {
+			t.Fatalf("create %s = %d %v", token, st, rec)
+		}
+	}
+	mk("mixed", "Org/Repo", "Org/Repo#1")
+	mk("norepo", "", "Org/Epic#7")
+	if n := unverified(t, h); n != 2 {
+		t.Fatalf("blockers before = %d; want 2", n)
+	}
+	settle := func(body map[string]any) (int, map[string]any) {
+		t.Helper()
+		return nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/settle", body)
+	}
+	if st, out := settle(map[string]any{"repo": "org/REPO"}); st != 200 || out["candidates"] != float64(1) || out["settled"] != float64(1) {
+		t.Fatalf("mixed-case dry = %d %v", st, out)
+	}
+	if st, out := settle(map[string]any{"repo": "org/repo", "apply": true}); st != 200 || out["settled"] != float64(1) {
+		t.Fatalf("mixed-case apply = %d %v", st, out)
+	}
+	if n := unverified(t, h); n != 1 {
+		t.Fatalf("blockers after the repo settle = %d; want 1", n)
+	}
+	if st, _ := settle(map[string]any{"repo": "org/repo", "no_repo": true}); st != 400 {
+		t.Fatalf("no_repo with a repo: HTTP %d; want 400", st)
+	}
+	if st, _ := settle(map[string]any{}); st != 400 {
+		t.Fatalf("neither repo nor no_repo: HTTP %d; want 400", st)
+	}
+	// Another account's machine settles none of this one's no-repo records.
+	if _, out := nodeTaskCall(t, h, nodes["bob4"].token, http.MethodPost, NodeTasksPath+"/settle", map[string]any{"no_repo": true, "apply": true}); out["candidates"] != float64(0) {
+		t.Fatalf("foreign no_repo settle = %v", out)
+	}
+	if st, out := settle(map[string]any{"no_repo": true, "apply": true}); st != 200 || out["candidates"] != float64(1) || out["settled"] != float64(1) {
+		t.Fatalf("no_repo apply = %d %v", st, out)
+	}
+	if n := unverified(t, h); n != 0 {
+		t.Fatalf("blockers after = %d; want 0", n)
+	}
+}

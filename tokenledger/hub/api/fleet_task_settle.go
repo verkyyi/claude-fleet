@@ -18,7 +18,7 @@ import (
 // state that ends it, so every one once attached to a worker blocks the repo's
 // authority switch as "legacy task owner is unverified" forever.
 //
-//	POST /v1/node/tasks/settle {repo, apply?, drained?} → {repo, apply, drained, settled, kept, items}
+//	POST /v1/node/tasks/settle {repo | no_repo, apply?, drained?} → {repo, apply, drained, settled, kept, items}
 //
 // A record is settled (state closed) only when its issue is closed — the hub's
 // own ticket, else GitHub read now — AND its worker holds nothing on the hub's
@@ -30,6 +30,9 @@ import (
 // purpose and goes on as a hub task, so the issue is still open. The worker
 // half alone decides — gone ⇒ closed whatever the issue says (GitHub is not
 // asked, the issue is left as it is); a live worker is kept all the same.
+//
+// no_repo (claude-fleet#4963): the records that name no repo (an EPIC driver's
+// T) are settled by owner alone, the same two halves; repo must then be empty.
 const nodeTaskSettleRef = "settle"
 
 // IssueStateSource answers an issue's state on GitHub ("open" / "closed").
@@ -59,14 +62,19 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 		Repo    string `json:"repo"`
 		Apply   bool   `json:"apply"`
 		Drained bool   `json:"drained"`
+		NoRepo  bool   `json:"no_repo"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
 		httpError(w, http.StatusBadRequest, "the body is one JSON object")
 		return
 	}
 	repo := store.NormRepo(in.Repo)
-	if !leaseRepoRE.MatchString(repo) {
-		httpError(w, http.StatusBadRequest, "select one explicit repo=owner/name")
+	switch {
+	case in.NoRepo && repo != "":
+		httpError(w, http.StatusBadRequest, "no_repo settles the records that name no repo: leave repo out")
+		return
+	case !in.NoRepo && !leaseRepoRE.MatchString(repo):
+		httpError(w, http.StatusBadRequest, "select one explicit repo=owner/name, or no_repo")
 		return
 	}
 	scope := owner
@@ -141,7 +149,7 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 			settled++
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "apply": in.Apply, "drained": in.Drained, "candidates": len(items),
+	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "no_repo": in.NoRepo, "apply": in.Apply, "drained": in.Drained, "candidates": len(items),
 		"settled": settled, "kept": kept, "items": items})
 }
 

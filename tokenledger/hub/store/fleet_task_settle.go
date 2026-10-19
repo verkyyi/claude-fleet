@@ -23,9 +23,11 @@ const TaskClosed = "closed"
 
 // LegacySettleCandidates lists the legacy records of repo that block the
 // authority switch: attached to a worker and not ended. owner "" = everyone's
-// (the operator's door).
+// (the operator's door). A record keeps its repo as written
+// (`Org/Name`), so both sides are compared normalized (claude-fleet#4963);
+// repo "" lists the records that name no repo (an EPIC driver's).
 func (s *Store) LegacySettleCandidates(repo, owner string) ([]FleetTask, error) {
-	q, args := `SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE repo = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`,
+	q, args := `SELECT `+fleetTaskCols+` FROM fleet_tasks WHERE LOWER(TRIM(repo)) = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`,
 		[]any{NormRepo(repo), TaskClosed, TaskRefused}
 	if owner != "" {
 		q, args = q+` AND owner = ?`, append(args, owner)
@@ -38,7 +40,8 @@ func (s *Store) LegacySettleCandidates(repo, owner string) ([]FleetTask, error) 
 }
 
 // LegacyWorkerLive says why worker may still be executing for repo; "" when
-// nothing on the hub's books holds it.
+// nothing on the hub's books holds it. repo "" (a record that names no repo)
+// counts the worker's open local start of any repo.
 func (s *Store) LegacyWorkerLive(repo, worker string) (string, error) {
 	return legacyWorkerLive(s.read, NormRepo(repo), worker)
 }
@@ -51,7 +54,7 @@ func legacyWorkerLive(q querier, repo, worker string) (string, error) {
 	if n > 0 {
 		return "lease held", nil
 	}
-	starts, err := localStarts(q, func(st RepoLocalStart) bool { return st.Repo == repo })
+	starts, err := localStarts(q, func(st RepoLocalStart) bool { return repo == "" || NormRepo(st.Repo) == repo })
 	if err != nil {
 		return "", err
 	}
@@ -104,7 +107,7 @@ func (s *Store) SettleLegacyTask(id int64, worker, evidence string, now time.Tim
 	if err = s.lockOwnerAuthority(tx, owner); err != nil {
 		return err
 	}
-	live, err := legacyWorkerLive(tx, repo, worker)
+	live, err := legacyWorkerLive(tx, NormRepo(repo), worker)
 	if err != nil {
 		return err
 	}
