@@ -91,12 +91,12 @@ def sym_of(rec, trouble=False):
 
 
 def state_word(rec, sym):
-    """在干活 · 做完了 · 已退出 / 失败 · 空闲 — the panel's words; ! and ? say none."""
+    """在干活 · 做完了 · 已退出 · 失败 · 睡着 · 空闲 — the panel's words; ! and ? say none."""
     if sym in ("needs", "lost"):
         return ""
     if sym == "fail":
         return FV.state_words("failed" if rec.get("state") == "failed" else "exited")
-    return FV.state_words({"work": "working", "done": "done"}.get(sym, "idle"))
+    return FV.state_words({"work": "working", "done": "done", "exited": "exited", "sleep": "sleeping"}.get(sym, "idle"))
 
 
 # @remote_via's route word for the hub relay: fleet-connect.py route_label's, a value

@@ -83,12 +83,17 @@ the list's session order as last drawn — ⌘↓ ⌘↑ read it (a press never 
 
 WORDS (#2752): no row says `merged` or `done:15m` — the reap policy is
 「合并后关」 / 「空闲 2 小时关」, available in the row's actions;
-names are the issue's title as wide as the popup is (the producer's 12-cell name
-when there is none) with no `⇢cla` tag. A state is ONE glyph (#3179: ! needs ·
-x failed · » working · ✓ done · ∙ idle · ? lost, coloured unless NO_COLOR /
-FLEET_COLOR=0, ASCII with FLEET_GLYPHS=ascii). Selection keeps the same glyph;
-`?` on an empty query shows the legend. Machine, login and repo
-(only when 2+) are tags at the row's end, never a group. No session
+ROWS — plan B (T486 v14, T493): every session line is the same columns, glyph(1)
+· ID(8, bold: its hub task T<n> until T488's window ID; none ⇒ blank) · Agent(7:
+Claude / Codex, a grey 未知) · short name (short_name: no envelope, issue prefix,
+brackets or paths; cut at punctuation) · repo(13, its own, blank when none). A
+state is ONE glyph (↻ running · ! needs · ✓ done · ✗ failed · ◌ exited, only
+under 已结束 · ∙ idle · ☾ asleep · ? lost); only ! and ✗ are coloured — red,
+bold — unless NO_COLOR / FLEET_COLOR=0; ASCII with FLEET_GLYPHS=ascii. A lost
+row is grey; the selected one wears PAL_SEL behind (sel_color). Issue numbers,
+PRs, machines and the other tags are off the row: the lit row's bottom line
+(note_of; a broken configuration red) — an issue is still searched, exactly
+(issue_hit, match_why). `?` on an empty query shows the legend. No session
 is special (issues #3119, #4341): a session from any template is a row
 like any other — no session is behind 「新任务」 below. All of it through
 fleet-ui-lang.sh (`view_*`).
@@ -546,7 +551,8 @@ def produce(fleet, kept=False):
                     return text
         except OSError:
             pass
-    env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
+    # FLEET_ROWS_COLS=1: the plan-B columns' fields 22-24 (ID · agent · repo, T493)
+    env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1", FLEET_ROWS_COLS="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--rows"]
     try:
@@ -622,11 +628,21 @@ def name_hold(fleet, target, name):
 # green), every one an East-Asian-narrow character so it is one cell in a CJK
 # terminal too, and in all seven of Termius iOS's fonts (✓ borrows a system font
 # in UbuntuMono). FLEET_GLYPHS=ascii swaps in plain ASCII.
-GLYPHS = {"needs": "!", "fail": "x", "work": "»", "done": "✓", "idle": "∙", "lost": "?"}
-GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "idle": ".", "lost": "?"}
-# the 16-colour palette's numbers, present in every theme: red red green blue grey yellow
-GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "idle": 8, "lost": 3}
-GROUPS = ("pin", "ask", "work", "wait", "landed", "other")
+# Plan B (T486 v14, T493): seven states and lost, each a one-cell character with
+# no emoji form — ↻ running · ! waiting on you · ✓ done · ✗ failed · ◌ exited (the
+# agent gone, its window up: only under 已结束 · 还开着) · ∙ idle · ☾ asleep · ? lost.
+GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "◌", "idle": "∙", "sleep": "☾",
+          "lost": "?"}
+GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "sleep": "z",
+                "lost": "?"}
+# the 16-colour palette's numbers, present in every theme (the top line colours
+# every glyph by them). The ⌘P rows colour only the two a person has to act on —
+# ! and ✗, red and bold (ROW_RED); every other glyph keeps the row's colour.
+GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "sleep": 8, "lost": 3}
+ROW_RED = ("needs", "fail")
+LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "sleep", "lost")
+GROUPS = ("pin", "ask", "work", "done", "other")
+SLEEP_STATES = ("sleeping", "preparing", "waking")
 MERGED_PR = ("merged", "live", "deploy…", "deploy✗")
 
 
@@ -645,31 +661,37 @@ def sym_of(state, lost=False):
         return "lost"
     if state == "needs":
         return "needs"
-    if state in ("failed", "exited", "error"):
+    if state in ("failed", "error"):
         return "fail"
+    if state == "exited":
+        return "exited"
     if state in ("working", "looping"):
         return "work"
     if state in ("done", "landed"):
         return "done"
+    if state in SLEEP_STATES:
+        return "sleep"
     return "idle"
 
 
 def group_of(state, pinned, landed, ended, asked=False, stage=""):
-    """What the person should do about a row (issues #3179, #4225): 置顶 · 等你
-    (needs / failed, or an unanswered ⛔ ask on its issue whatever the state) ·
-    在干活 · 等合并/等发版 (done, its PR open or merged-not-live — stage_of) ·
-    刚落地 · 已结束 (the producer's mark) · 其他 (idle, unknown)."""
+    """What the person should do about a row (issues #3179, #4225; plan B, T493):
+    置顶 · 等你 (needs / failed, or an unanswered ⛔ ask on its issue whatever the
+    state) · 在干活 · 做完待收 (done: it handed in its result — its PR on its way,
+    just landed or not; `landed` / `stage` no longer split it) · 已结束 (the
+    producer's mark, and every exited agent whose window is still up — ◌ lives
+    there only) · 其他 (idle, unknown: no result to collect)."""
     if pinned:
         return "pin"
     if state in ("needs", "failed") or asked:
         return "ask"
     if state in ("working", "looping"):
         return "work"
-    if stage and not ended and state in ("done", "landed"):
-        return "wait"
-    if landed:
-        return "landed"
-    return "ended" if ended else "other"
+    if ended or state == "exited":
+        return "ended"
+    if state in ("done", "landed"):
+        return "done"
+    return "other"
 
 
 # A PR's step on its way out (issue #4225), off the producer's PR cell (field 11:
@@ -863,6 +885,60 @@ def closed_secs():
         return 48 * 3600.0
 
 
+# A session's short name (plan B, T486 v14 §1): what it is about, never its
+# envelope, issue prefix, brackets or paths.
+ENVELOPE_RE = re.compile(r'^\s*<cross-session-message\b([^>]*)(>|$)', re.S)
+NAMED_RE = re.compile(r'^(T\d+)\s+(?:(?:Claude|Codex)\s*·\s*)?')
+ISSUE_HEAD_RE = re.compile(r'^(?:[修查做改加]\s*)?#\d+\s*[：:]\s*')
+BRACKET_RE = re.compile(r'\s*(?:（[^（）]*）|\([^()]*\)|【[^【】]*】|\[[^\[\]]*\])')
+PATH_RE = re.compile(r'(?<!\S)(?:\S*:/|~/|\.{0,2}/)\S*|(?<!\S)[^\s/]+(?:/[^\s/]+){2,}/?|(?<!\S)[^\s/]+/[^\s/]*\.\w+(?!\S)')
+EDGE = " \t·:：,，;；、-—…"
+
+
+def short_name(text):
+    """(the short name, the `T<n>` a `T<n> Claude · …` name carried): a
+    cross-session message is 「来自 X：its words」 (its envelope is no name), the
+    orchestrator's `T<n> <Agent> · ` / `T<n> ` prefix (the ID and Agent columns
+    say it), a
+    leading 「修/查/做 #N：」, brackets and paths go. '' when nothing is left."""
+    text = " ".join((text or "").split())
+    m = ENVELOPE_RE.match(text)
+    if m:
+        who = re.search(r'from-name="([^"]*)"?', m.group(1))
+        body = text[m.end():] if m.group(2) == ">" else ""
+        body = short_name(body.replace("</cross-session-message>", ""))[0]
+        if not body:
+            return "", ""
+        return say("view_from_fmt", (who.group(1) if who else "").strip() or "?", body), ""
+    tid = ""
+    m = NAMED_RE.match(text)
+    if m:
+        tid, text = m.group(1), text[m.end():]
+    text = ISSUE_HEAD_RE.sub("", text)
+    bare = BRACKET_RE.sub("", text)
+    text = bare if bare.strip(EDGE) else text
+    bare = PATH_RE.sub("", text)
+    text = bare if bare.strip(EDGE) else text
+    return " ".join(text.split()).strip(EDGE), tid
+
+
+def row_cols(e, tid, agent, title, name):
+    """Fill a session line's plan-B columns: `id` (its hub task T<n> — T488's
+    window ID comes later; none ⇒ blank), `agent` ('' ⇒ 未知) and its short
+    `text` — the title cell (a name given, the issue's title, the first sentence)
+    else the window name, the first that leaves a name."""
+    tid = (tid or "").strip()
+    found = ""
+    for cand in (title, name):
+        short, t = short_name(cand)
+        found = found or t
+        if short:
+            e["text"] = short
+            break
+    e["id"] = tid if re.fullmatch(r"T\d+", tid) else found
+    e["agent"] = agent.strip() if (agent or "").strip() in AGENTS else ""
+
+
 def entries(vid, now=None, hub=True):
     """Every line the popup can show, in order (issue #3179): grouped by what you
     should do — 置顶 (@pin) · 等你 (needs / failed / blocked, or an unanswered ⛔
@@ -927,7 +1003,7 @@ def entries(vid, now=None, hub=True):
             continue
         if len(f) < 15 or not f[0]:
             continue
-        f += [""] * (20 - len(f))
+        f += [""] * (24 - len(f))
         key = f[0]
         local = not key.startswith("wid:")
         target = key if local else key[4:]
@@ -1003,7 +1079,7 @@ def entries(vid, now=None, hub=True):
             tags.append("-" if gl is GLYPHS_ASCII else "∅")
         if f[5].strip():
             tags.append(f[5].strip())
-        if grp == "wait":
+        if grp == "done" and stage:
             tags.append(say("view_stage_" + stage))
         e = {"kind": "sess", "target": target, "far": not local, "machine": machine, "login": login,
              "open": target in wins if local else True,
@@ -1030,8 +1106,14 @@ def entries(vid, now=None, hub=True):
                     e["worker_id"] = worker
             except (ValueError, AttributeError, TypeError):
                 pass
+        # plan B's columns (T493): ID · Agent · short name · the row's own repo
+        own = f[23].strip()
+        e["repo"] = own.rpartition("/")[2] if "/" in own else (repo if slug and not section else "")
+        # a window here with no agent word (an older producer) is Claude — the
+        # spawners' convention; another machine's says its own or 未知
+        row_cols(e, f[21], f[22] or ("claude" if local else ""), title, name)
         if grp == "ended":
-            why = say("view_ended_merged") if f[10].strip() in MERGED_PR else \
+            why =say("view_ended_merged") if f[10].strip() in MERGED_PR else \
                 say("view_ended_exited") if state == "exited" else say("view_ended_done")
             e["word"] = why
             e["right"] = say("view_ago_fmt", dur(now - act)) if act and local else ""
@@ -1070,6 +1152,7 @@ def entries(vid, now=None, hub=True):
                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
                                                     word, say("view_gone_hint")) if x)})
+        row_cols(gone[-1], label, "", title, name)
     if held != held0:
         names_save(fleet, held)
     multi = len(set(repos)) >= 2
@@ -1219,22 +1302,50 @@ def fuzzy(token, text):
     return score, pos
 
 
+def issue_hit(token, e):
+    """A word that is a number or `#number` equal to the row's linked issue (plan B,
+    T493: the issue is never drawn on the row, but it is searched — exactly)."""
+    issue = (e.get("issue") or "").lstrip("#")
+    return bool(issue) and issue.isdigit() and re.fullmatch(r"#?\d+", token) is not None \
+        and token.lstrip("#") == issue
+
+
 def score_token(token, e):
-    """The row's title (substring, a word start better) > its window name or issue
-    number > the title's letters in order. Only those (issue #3327): a machine's,
-    a login's or a repo's name never hits — typing `mac-a` lights no row, the ⚡ row
-    takes it."""
+    """The row's title (substring, a word start better) > its window name or ID >
+    its linked issue (a whole number, exactly) > the title's letters in order. Only
+    those (issue #3327): a machine's, a login's or a repo's name never hits —
+    typing `mac-a` lights no row, the ⚡ row takes it."""
     name = e.get("text") or ""
     i = name.lower().find(token)
     if i >= 0:
         return 3000 - i + (200 if word_start(name, i) else 0)
-    issue = (e.get("issue") or "").lstrip("#")
-    hay = " ".join(str(x) for x in (e.get("name"), "#" + issue if issue else "") if x).lower()
+    hay = " ".join(str(x) for x in (e.get("name"), e.get("id")) if x).lower()
     i = hay.find(token)
     if i >= 0:
         return 2000 - i
+    if issue_hit(token, e):
+        return 1500
     hit = fuzzy(token, name)
     return 1000 + hit[0] if hit else None
+
+
+def match_why(e, query):
+    """The bottom line under a search: why the lit row is listed — said only when
+    its linked issue is what matched (a name hit explains itself)."""
+    words = query.lower().split()
+    name = (e.get("text") or "").lower()
+    if words and any(issue_hit(w, e) and w not in name for w in words):
+        return say("view_match_issue_fmt", "#" + (e.get("issue") or "").lstrip("#"))
+    return ""
+
+
+def note_of(e):
+    """The lit session's bottom line (plan B): what its row no longer carries — lost,
+    a broken configuration (red: a person has to act), k/N, the PR's step, the
+    repo when 2+. (text, red)."""
+    tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
+    red = any(say("view_tag_cfg_broken") in t for t in tags)
+    return " · ".join(tags), red
 
 
 def score(query, e):
@@ -1282,14 +1393,72 @@ def sec_fold(opened, sec, expand):
 def legend():
     """The one line `?` toggles on an empty query: every glyph and its word."""
     gl = glyphs()
-    return "  ".join("%s %s" % (gl[k], say("view_legend_" + k)) for k in ("needs", "fail", "work", "done", "idle", "lost"))
+    return "  ".join("%s %s" % (gl[k], say("view_legend_" + k)) for k in LEGEND)
+
+
+PUNCT = "，。；：、！？,;:!?·—)）」』"
+ID_W, AGENT_W, REPO_W = 8, 7, 13
+
+
+def ellipsis(text, room, cells, clip):
+    """`text` in `room` cells, `…` closing what was cut."""
+    if cells(text) <= room:
+        return text
+    return clip(text, max(0, room - 1)) + "…" if room > 0 else ""
+
+
+def clip_name(text, room, cells, clip):
+    """`text` in `room` cells: whole when it fits, else cut at the last
+    punctuation that leaves at least half the room (then `…`), else clipped."""
+    if cells(text) <= room:
+        return text
+    body = clip(text, max(0, room - 1))
+    cut = max((i for i, ch in enumerate(body) if ch in PUNCT), default=-1)
+    if cut >= 0 and cells(body[:cut]) * 2 >= room:
+        return body[:cut].rstrip(" ·") + "…"
+    return body + "…"
+
+
+def agent_word(e):
+    a = e.get("agent") or ""
+    return a.capitalize() if a else say("view_agent_unknown")
+
+
+def row_segs(e, width, cells, clip, lit=False, glyph=True):
+    """One session as plan B draws it (T486 v14 §1): glyph(1) · ID(8, bold) ·
+    Agent(7) · short name · repo(13), the repo column kept when empty. Only ! and ✗
+    are coloured (red, bold); a lost row is grey end to end; 未知 is grey."""
+    gl, col = glyphs(), color_on()
+    base = (("dim",) if e.get("lost") else ()) + (("lit",) if lit else ())
+    sym = e.get("sym") or "idle"
+    gstyle = base + (("c%d" % GLYPH_COLORS[sym], "bold") if col and sym in ROW_RED and not e.get("lost") else ())
+    indent = "  " * (e.get("depth") or 0)
+    show_repo = width >= 60
+    show_agent = width >= 40
+    agent = agent_word(e)
+    segs = [("  ", base), (gl[sym], gstyle), (" ", base),
+            ((e.get("id") or "").ljust(ID_W) + " ", base + ("bold",))]
+    if show_agent:
+        aw = ellipsis(agent, AGENT_W, cells, clip)
+        segs.append((aw + " " * (AGENT_W - cells(aw)) + " ", base + (("dim",) if not e.get("agent") else ())))
+    used = sum(cells(t) for t, _ in segs)
+    tail = (REPO_W + 2) if show_repo else 1
+    room = max(1, width - used - tail)
+    name = clip_name(indent + (e.get("text") or ""), room, cells, clip)
+    segs.append((name + " " * max(0, room - cells(name)), base))
+    if show_repo:
+        r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
+        segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
+    used = sum(cells(t) for t, _ in segs)
+    if used < width:
+        segs.append((" " * (width - used), base))
+    return segs
 
 
 def paint(shown, at, width, cells, clip):
     """The list's lines as segments [(text, style)] — style a tuple of: bold ·
     lit · dim · c<N> (a 16-colour palette number). Kept off curses so the
     selftest reads exactly what is drawn. Selection changes style only; glyph/name columns are invariant."""
-    gl, col = glyphs(), color_on()
     lines = []
     for i, e in enumerate(shown):
         lit = i == at
@@ -1316,26 +1485,11 @@ def paint(shown, at, width, cells, clip):
             continue
         indent = "  " * (e.get("depth") or 0)
         if e["kind"] == "ask":
-            lines.append([(clip("    " + indent + e["text"], width), ("dim",))])
+            # the question under its row, from the name column
+            lead = " " * (4 + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0))
+            lines.append([(clip(lead + indent + e["text"], width), ("dim",))])
             continue
-        base = (("dim",) if e.get("far") or e.get("sec") else ()) + (("lit",) if lit else ())
-        sym = e.get("sym") or "idle"
-        # a lost row is grey end to end, its glyph too: what it says is no longer known
-        gstyle = base + (("c%d" % GLYPH_COLORS[sym],) if col and not e.get("lost") else ())
-        head, word = "  ", ""
-        right = " ".join(list(e.get("tags") or ()) + [e.get("right") or (
-            "#" + e["issue"].lstrip("#") if e.get("issue") else "")]).strip()
-        used = cells(head) + 1 + cells(word) + 1
-        room = width - used - (cells(right) + 1 if right else 0)
-        name = clip(indent + (e.get("text") or ""), max(1, room))
-        segs = [(head, base), (gl[sym], gstyle), (word + " " + name, base)]
-        if right:
-            pad = max(1, width - used - cells(name) - cells(right))
-            segs.append((" " * pad + right, base if lit else ("dim",)))
-        used = sum(cells(text) for text, _ in segs)
-        if used < width:
-            segs.append((" " * (width - used), base))
-        lines.append(segs)
+        lines.append(row_segs(e, width, cells, clip, lit))
     return lines
 
 
@@ -2957,8 +3111,9 @@ def label_of(e):
 
 
 def landed_first(items):
-    """The 刚落地 group moved above the others (`landed` in FLEET_PANEL_COMMANDS)."""
-    i = next((n for n, e in enumerate(items) if e["kind"] == "hdr" and e.get("group") == "landed"), -1)
+    """The 做完待收 group (刚落地's heir, plan B) moved above the others (`landed`
+    in FLEET_PANEL_COMMANDS)."""
+    i = next((n for n, e in enumerate(items) if e["kind"] == "hdr" and e.get("group") == "done"), -1)
     if i < 0:
         return items
     j = next((n for n in range(i + 1, len(items)) if items[n]["kind"] in ("hdr", "sec")), len(items))
@@ -3224,6 +3379,27 @@ def _keys():
     return fleet_keys
 
 
+# PAL_SEL (conf/fleet-palette.conf) in the dark theme and its Tokyo Night Day
+# counterpart, each with its nearest 256-colour cell.
+SEL_RGB = {"dark": ((0x41, 0x48, 0x68), 60), "light": ((0xb7, 0xc1, 0xe3), 146)}
+
+
+def view_theme():
+    """dark | light: FLEET_VIEW_THEME, else the terminal's COLORFGBG (a light
+    background is 7 or 15), else dark."""
+    want = os.environ.get("FLEET_VIEW_THEME", "")
+    if want in SEL_RGB:
+        return want
+    bg = os.environ.get("COLORFGBG", "").rpartition(";")[2]
+    return "light" if bg in ("7", "15") else "dark"
+
+
+def sel_color(cs):
+    """The selected row's background: PAL_SEL's nearest 256-colour cell (never a
+    redefined colour — it would outlive the popup on the terminal), else blue."""
+    return SEL_RGB[view_theme()][1] if cs.COLORS >= 256 else cs.COLOR_BLUE
+
+
 def popup(screen, qo, vid, client, forward=""):
     # Scope paste mode to this popup's terminal, including exceptions/close.
     sys.stdout.write("\x1b[?2004h")
@@ -3254,10 +3430,12 @@ def _popup(screen, qo, vid, client, forward=""):
             curses.init_pair(4, curses.COLOR_RED, -1)
             styles["red"] = curses.color_pair(4) | curses.A_BOLD
             styles["dim"] = curses.color_pair(2)
-            # Keep foregrounds and state glyphs; selection changes background only.
+            # Keep foregrounds and state glyphs; selection changes background only —
+            # the palette's PAL_SEL (plan B, T486 v14 §1).
+            sel_bg = sel_color(curses)
             for n, fg in [(-1, -1), (8, grey)] + [(n, n if n < curses.COLORS else n % 8) for n in GLYPH_COLORS.values()]:
                 pair = 32 + n + 1
-                curses.init_pair(pair, fg, curses.COLOR_BLUE)
+                curses.init_pair(pair, fg, sel_bg)
                 selected_pairs[n] = curses.color_pair(pair)
             for n in sorted(set(GLYPH_COLORS.values())):
                 c = n if n < curses.COLORS else (curses.COLOR_WHITE if n == 8 else n % 8)
@@ -3542,9 +3720,16 @@ def _popup(screen, qo, vid, client, forward=""):
                 x += qo.cells(text)
         lit_e = shown[at] if 0 <= at < len(shown) else {}
         foot = (say("view_task_starting_fmt", busy["title"]) if busy else msg) or (legend() if show_legend else "")
+        fstyle = ("dim",)
+        if not foot and lit_e.get("kind") == "sess":
+            # what the plan-B row no longer carries, or why a search listed it
+            foot, red = (match_why(lit_e, query), False) if query.strip() else ("", False)
+            if not foot:
+                foot, red = note_of(lit_e)
+            fstyle = ("red",) if red else fstyle
         if width < 48:
             foot = say("view_narrow")
-        panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(("dim",)))
+        panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(fstyle))
         keys = say("view_keys_sending") if busy else say("view_keys_short")
         if overlay:
             keys = say("view_overlay_keys") if overlay.focus else say("view_list_focus_keys")

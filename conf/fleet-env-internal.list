@@ -219,6 +219,7 @@ FLEET_HUB_TOKEN                    handoff: a viewer token from the environment 
 FLEET_INSTALL_VERSION              seam: the version a pinned FLEET_INSTALL_SRC is (the client's no-hub stage passes stable's commit; set = .client-version written, #1805)
 FLEET_ITERM_DIR                    path: where the iTerm2 profile `fleet` is written (fleet-iterm-profile.py; selftests' sandbox, #1903)
 FLEET_ITERM_KEYS                   knob: 0 removes the iTerm2 ⌘-key profile and never switches into it (fleet-thin.py / fleet-iterm-profile.py, #1903)
+FLEET_ROWS_COLS                    handoff: 1 = the rows producer adds fields 22-24 (ID · agent · repo) — ⌘P's plan-B columns only (fleet_view.py produce, T493)
 FLEET_ROWS_UNFOLD                  handoff: 1 = the rows producer skips its fold filters — ⌘P / the switch history list every session (fleet-quickopen.py, #1903)
 FLEET_ROWS_TEST                    handoff: 1 = the rows producer lists the test identity's sessions it otherwise hides — `fleet ls` / `fleet close --test` (fleet-session-cli.py, #2505)
 FLEET_CLIENT_IDENTITY              handoff: test = the client is the TEST identity (`fleet --test-identity`, #1931); its scratch is marked and a NO_ATTACH placement closed at once (fleet-client-place.sh, fleet-shell.sh, #2505)

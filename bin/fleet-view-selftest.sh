@@ -182,13 +182,14 @@ for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台�
 done
 ask=$(grep -n '─ 等你' "$W/popup.txt" | head -1 | cut -d: -f1); work=$(grep -n '─ 在干活' "$W/popup.txt" | head -1 | cut -d: -f1)
 [ "$ask" -lt "$work" ] || fail "B: 等你 is not the first group"
-grep -q '! Beta 要你拍板' "$W/popup.txt" || fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
+# plan B (T493): glyph · ID · Agent · short name · repo
+grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # Highlight changes background only; text and glyph columns stay fixed (#4416).
 grep -q '▶' "$W/popup.txt" && fail "B: selection inserted a marker"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"
 # `?` on an empty query: the legend line; with text it is a letter of the query
 to send-keys -t o:view -l '?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
-grep -q '! 在等你' "$W/legend.txt" || fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
+grep -q '! 等你' "$W/legend.txt" || fail "B: ? on an empty query showed no legend: $(cat "$W/legend.txt")"
 grep -q '› ?' "$W/legend.txt" && fail "B: ? on an empty query went into the query"
 to send-keys -t o:view -l '?'; to send-keys -t o:view -l 'z?'; sleep 0.5; to capture-pane -p -t o:view > "$W/legend.txt"
 grep -q '› z?' "$W/legend.txt" || fail "B: ? after text is not part of the query: $(head -2 "$W/legend.txt")"
@@ -388,10 +389,11 @@ def run(repos):
     return fv.entries("v1")
 it = run(["o/claude-fleet"])
 heads = [e["group"] for e in it if e["kind"] == "hdr"]
-assert heads == ["pin", "ask", "work", "landed", "other"], heads
+# plan B (T493): 刚落地 · 等合并 · a done row are one group, 做完待收
+assert heads == ["pin", "ask", "work", "done"], heads
 grp = {e["target"]: e["group"] for e in it if e["kind"] == "sess"}
 assert grp == {"@1": "pin", "@3": "ask", "@4": "ask", "MU/far2": "ask", "@2": "work", "MU/far1": "work",
-               "@5": "landed", "@6": "other", "@9": "ended"}, grp
+               "@5": "done", "@6": "done", "@9": "ended"}, grp
 sym = {e["target"]: e["sym"] for e in it if e["kind"] == "sess"}
 assert sym["@3"] == "needs" and sym["@4"] == "fail" and sym["@2"] == "work" and sym["@5"] == "done" \
     and sym["@1"] == "idle" and sym["MU/far1"] == "lost", sym
@@ -434,6 +436,12 @@ for mode in ("", "ascii"):
         assert text.startswith("  " + gl[e["sym"]] + " "), text
     assert len({e["sym"] for e in shown if e["kind"] == "sess"}) == 6
     assert any(any(st.startswith("c") for _, st in segs for st in st) for segs in lines)
+    # only ! and ✗ are coloured (red, bold); the tags no longer ride the row
+    for e, segs in zip(shown, lines):
+        if e["kind"] != "sess": continue
+        colored = any(st.startswith("c") for st in segs[1][1])
+        assert colored == (e["sym"] in ("needs", "fail") and not e.get("lost")), (e["sym"], segs[1])
+        assert "会坏" not in "".join(t for t, _ in segs), segs
 os.environ["NO_COLOR"] = "1"
 lines = fv.paint(shown, at, 100, qo.cells, qo.clip)
 assert not any(st.startswith("c") for segs in lines for _, sty in segs for st in sty), "NO_COLOR left a colour"
