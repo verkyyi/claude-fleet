@@ -44,31 +44,14 @@ The panel looks roughly like this (sample data):
 
 ### Open a session
 
-- **Write a new task**: pick “⚡ New session (blank)” or “⚡ New task” below the search results, then press Enter or Tab to open an editor beside that row. Search text seeds an empty draft only. Enter in the editor adds a newline. Tab / Shift+Tab walks the editor, repository, agent and buttons; left/right changes the repository or agent. Only “Open with draft (not sent)” opens a session with your complete draft in its input. Review and send it from that session.
-- **Open a blank session**: choose “Open blank session” in the same overlay. It uses the selected repository and agent; choose “No repository” if you do not need one. Opening a blank session keeps the draft.
+- **Write a new task**: pick “⚡ New session (blank)” or “⚡ New task” below the search results, then press Enter or Tab to open the “⚡ New task” page: a multi-line draft on top, the repository, agent and buttons under it. Search text seeds an empty draft only. Enter in the editor adds a newline. Tab / Shift+Tab walks the editor, repository, agent and buttons; left/right changes the repository or agent. Only “Open with draft (not sent)” opens a session with your complete draft in its input. Review and send it from that session.
+- **Open a blank session**: choose “Open blank session” on the same page. It uses the selected repository and agent; choose “No repository” if you do not need one. Opening a blank session keeps the draft.
 - **Switch sessions**: type part of a title or ticket number, select a session with ↑↓, and press Enter.
 
-Menus and editors cover a small area near their source row; the list stays in place. F6 moves focus between list and overlay. Changing the list selection leaves the overlay's target unchanged; Tab explicitly retargets it. Escape closes the overlay and restores the selection, search and scroll from when it opened; another Escape closes the panel. Click to select a row, double-click to enter a session or open the composer; overlay buttons are clickable.
+The actions page, a question such as a rename, and the new-task draft are whole pages: the list area is replaced, the top line names what it is about (the session, or “⚡ New task”), and below it one item a line — ↑↓ to pick, ↵ to run; there is no floating box. Escape goes back a level (from a rename to the actions page, then to the list), the list keeping its selection; another Escape closes the panel. Click to select a row, double-click to enter a session or open the new task; items on a page are clickable.
 
-Draft text, repository, agent, caret and control focus are stored privately on this machine for this view. They survive cancellation, retargeting and session switches. “Clear draft” or a confirmed successful draft opening clears the text; failures and unconfirmed openings retain it. Repository and agent remain selected. Resize preserves editor state and selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice, keep the overlay inside the real terminal bounds, and retain Tab, F6 and Escape. Long content scrolls inside the overlay.
+Draft text, repository, agent, caret and control focus are stored privately on this machine for this view. They survive going back and session switches. “Clear draft” or a confirmed successful draft opening clears the text; failures and unconfirmed openings retain it. Repository and agent remain selected. Resize preserves editor state and selection, clamping scroll ranges only where necessary. At least 48 columns is recommended; narrower terminals show a notice and keep Tab and Escape working. Long content scrolls inside the page.
 
-
-### Inspect status evidence
-
-Select a session, then Tab → “状态证据 / Status evidence”. The read-only overlay
-separates runtime, task result, explicit blockers, loop schedule, acceptance/delivery
-and reap retention, with source and original observation time. A local session is
-read once when this item is opened. Scroll with arrows or the mouse wheel; Escape
-returns and F6 changes focus. Legacy done means “turn ended”. PR merge, deployment
-and live availability remain separate facts.
-
-Expired evidence, unreachable peers and missing current execution identity show
-unknown; last-known is reference only. Refreshing the list never renews evidence.
-Missing controller receipts do not confirm acceptance or delivery. The shadow proof
-never authorizes closing; existing reap checks remain in force. Web Tasks reads
-outcomes and blockers from the hub; native snapshot and reap proof dimensions are
-explicitly unknown where unavailable. Resolving one blocker never clears other
-blockers, questions or approval requests.
 
 ### Session states
 
@@ -91,7 +74,7 @@ Ticket numbers, pull requests and machines are no longer on the row: pick a row 
 
 ### What you can do with a session
 
-Pick a row and press **Tab** for its menu: Enter · Shell in its directory · Open PR · Answer… · Send a message… · Rename… · Pin · Reap policy… · Stop (resumable) · Resume · Wake · Switch account… · Switch to Claude / Codex · Reap…. "Shell in its directory" opens on the machine the session runs on.
+Pick a row and press **Tab** for its actions page: Enter · Open PR #n (only with a PR) · Rename… · Switch to Codex / Claude (while it runs; grey, unnumbered and saying why when this machine cannot run that agent) · Reap…. A digit runs an item; `[` `]` step to the previous / next session's page. A session waiting on you, one whose agent exited and one asleep are all "Enter": switch to it and answer, or press ↵ on its recovery page. A shell in its directory is `⌃\`, pinning `⌃T` (or "Pin this session" at the foot of the list); a reap policy is changed by the session itself, or with the commands below.
 
 You can do the same from the terminal with commands (`<session>` can be part of a name or a `#ticket`; when it is not clear which one you mean, it lists the candidates rather than guess):
 

@@ -443,12 +443,18 @@ fleet_ui_t() {
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
     zh:view_count_fmt) printf '会话 %s' "${1:-}" ;;
     en:view_count_fmt) printf 'Sessions %s' "${1:-}" ;;
-    zh:view_overlay_keys) printf 'Tab/⇧Tab 控件  F6 列表  esc 返回' ;;
-    en:view_overlay_keys) printf 'Tab/S-Tab  F6 list  esc back' ;;
-    zh:view_list_focus_keys) printf '↑↓ 选  Tab 重定位  F6 浮层  esc 返回' ;;
-    en:view_list_focus_keys) printf '↑↓ pick  Tab retarget  F6 overlay  esc back' ;;
-    zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/F6/esc 可用' ;;
-    en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/F6/esc work' ;;
+    zh:view_page_keys_fmt) printf '↵ 执行  ↑↓ 选  %s 直接执行  [ ] 上一个/下一个会话  esc 回列表' "${1:-}" ;;
+    en:view_page_keys_fmt) printf '↵ run  ↑↓ pick  %s run it  [ ] previous/next session  esc list' "${1:-}" ;;
+    zh:view_choice_keys_fmt) printf '↵ 选定  ↑↓ 选  %s 直接选  esc 返回' "${1:-}" ;;
+    en:view_choice_keys_fmt) printf '↵ choose  ↑↓ pick  %s choose it  esc back' "${1:-}" ;;
+    zh:view_ask_keys) printf '↵ 确定  ↑↓ 选  esc 回列表' ;;
+    en:view_ask_keys) printf '↵ confirm  ↑↓ pick  esc list' ;;
+    zh:view_ask_keys_back) printf '↵ 确定  ↑↓ 选  esc 回操作页' ;;
+    en:view_ask_keys_back) printf '↵ confirm  ↑↓ pick  esc actions' ;;
+    zh:view_compose_keys) printf 'Enter 换行  Tab 到下一项  ←→ 换仓库 / Agent  ↵ 执行（在选项上）  esc 回列表（草稿保留）' ;;
+    en:view_compose_keys) printf 'Enter newline  Tab next  ←→ repo / Agent  ↵ run (on an option)  esc list (draft kept)' ;;
+    zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/esc 可用' ;;
+    en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/esc work' ;;
     zh:view_overlay_gone) printf '来源已失效；请回列表重新选择' ;;
     en:view_overlay_gone) printf 'Source unavailable; select it again in the list' ;;
     zh:view_composer) printf '新任务' ;;
@@ -645,8 +651,6 @@ fleet_ui_t() {
     en:view_act_sent_fmt)       printf '%s: under way' "${1:-}" ;;
     zh:view_act_nothing)        printf '没有可选的' ;;
     en:view_act_nothing)        printf 'nothing to pick' ;;
-    zh:view_ask_keys)           printf '↵ 确定 · esc 取消' ;;
-    en:view_ask_keys)           printf '↵ ok · esc cancel' ;;
     zh:view_ask_rename)         printf '新名字› ' ;;
     en:view_ask_rename)         printf 'New name› ' ;;
     zh:view_ask_message)        printf '发给它› ' ;;

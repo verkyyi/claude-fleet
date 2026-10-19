@@ -171,7 +171,7 @@ def main():
                     check(data()[start:].count("╭".encode()) == 0,
                           "%d resize settled: frame quiet, CJK background contained" % width)
                     tm(outer, "send-keys", "-t", "out:0", "Tab")
-                    until(lambda: "esc back" in capture())
+                    until(lambda: "run it" in capture())
                     frame()
                     tm(outer, "send-keys", "-t", "out:0", "Escape")
                     time.sleep(0.2)
@@ -179,7 +179,7 @@ def main():
                     state.write_text("")
                     until(lambda: "PANEL-" not in capture() and "New session" in capture())
                     tm(outer, "send-keys", "-t", "out:0", "Tab")
-                    until(lambda: "Tab/S-Tab" in capture())
+                    until(lambda: "Enter newline" in capture())
                     frame()
                     check(proc.poll() is None, "%d menu / empty list / new-task cells remain open" % width)
                     state.write_text(title)

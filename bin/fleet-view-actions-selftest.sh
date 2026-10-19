@@ -225,7 +225,9 @@ waitfor 'Tab 操作' || fail "D: the list did not open: $(screen)"
 to send-keys -t o Tab
 waitfor '回收…' || fail "D: Tab opened no menu: $(screen)"
 screen > "$W/menu.txt"
-grep -q '─ Alpha 做完了' "$W/menu.txt" || fail "D: the menu's title is not the row: $(cat "$W/menu.txt")"
+# plan B (T493): a whole page — the row on top, a rule, numbered items
+sed -n 2p "$W/menu.txt" | grep -q 'Alpha 做完了' || fail "D: the page's top line is not the row: $(cat "$W/menu.txt")"
+grep -q '1  进入' "$W/menu.txt" || fail "D: the page has no numbered 进入: $(cat "$W/menu.txt")"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || fail "D: Esc did not step back to the list: $(screen)"
 to send-keys -t o Escape
@@ -240,7 +242,9 @@ waitfor '回收…' || fail "D: ↓ did not reach 回收: $(screen)"
 to send-keys -t o Enter
 waitfor '回收「Alpha 做完了」？(y/n)' || fail "D: 回收 did not ask y/n: $(screen)"
 to send-keys -t o n
-waitfor 'Tab 操作' || fail "D: n did not return to the list"
+waitfor '1  进入' || fail "D: n did not return to the actions page: $(screen)"
+to send-keys -t o Escape
+waitfor 'Tab 操作' || fail "D: Esc did not return to the list"
 [ -z "$(calls)" ] || fail "D: 回收 → n ran «$(calls)»"
 to send-keys -t o Tab; waitfor '回收…' || fail "D: no menu (2)"
 for _ in $(seq 1 20); do to send-keys -t o Down; done
@@ -252,10 +256,12 @@ waitfor '回收：已在后台做' || fail "D: the list does not say the reap is
 screen > "$W/after.txt"
 reset
 to send-keys -t o Tab; waitfor '改名…' || fail "D: no menu (3)"
-for _ in $(seq 1 4); do to send-keys -t o Down; done
-waitfor '改名…' || fail "D: ↓4 is not 改名: $(screen)"
-to send-keys -t o Enter
-waitfor '新名字▏' || fail "D: 改名 did not ask on the bottom line, pre-filled: $(screen)"
+n=$(screen | grep -o '[0-9]  改名…' | cut -c1)
+[ -n "$n" ] || fail "D: 改名 has no number: $(screen)"
+to send-keys -t o "$n"
+waitfor '新名字›' || fail "D: 改名 did not ask on its page: $(screen)"
+to send-keys -t o Escape
+waitfor '1  进入' || fail "D: Esc did not step back to the actions page: $(screen)"
 to send-keys -t o Escape
 waitfor 'Tab 操作' || fail "D: Esc did not cancel the rename"
 [ -z "$(calls)" ] || fail "D: a cancelled rename ran «$(calls)»"
@@ -271,7 +277,7 @@ if [ -n "${FLEET_VIEW_ACT_EVIDENCE:-}" ]; then
   { echo '--- 改动后：⌘P 选中「Alpha 做完了」· 回收前'; cat "$W/before.txt"; echo '--- Tab → 回收… → y 之后';
     cat "$W/after.txt"; echo '--- Tab 的菜单'; cat "$W/menu.txt"; } > "$FLEET_VIEW_ACT_EVIDENCE"
 fi
-pass "D  popup: Tab opens the row's menu, Esc steps back and closes with nothing run; 回收 asks y/n (n nothing, y one dash-reap.sh); 改名 asks on the bottom line; 置顶当前会话 and ⌃T (#3517)"
+pass "D  popup: Tab opens the row's actions page, Esc steps back and closes with nothing run; 回收 asks y/n (n back to the page, y one dash-reap.sh); 改名 asks on its page; 置顶当前会话 and ⌃T (#3517)"
 # --- E: another machine's row --------------------------------------------------------------
 # the sidebar's own cache (fleet-row-remote.sh reads $FLEET_C/global, FLEET_C
 # under $TMPDIR): the same dir the list reads (FLEET_STATUS_G)
@@ -375,11 +381,12 @@ to respawn-pane -k -t o "env TMUX='$IN,0,0' ESCDELAY=25$penv python3 '$BIN/fleet
 waitfor 'Tab 操作' || fail "E: the list did not reopen: $(screen)"
 to send-keys -t o -l 'Far 在'
 waitfor '› Far 在' || fail "E: typing did not filter: $(screen)"
-to send-keys -t o Tab; waitfor '─ Far 在 mac-a' || fail "E: Tab on the far row: $(screen)"
-for _ in $(seq 1 6); do to send-keys -t o Down; done
-waitfor '停下' || fail "E: ↓6 is not 停下 (置顶 sits above it, #3517): $(screen)"
-to send-keys -t o Enter
-waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the stop landed: $(screen)"
-[ "$(calls)" = "fleet-row-remote.sh|stop|fl|wid:$MU/far1" ] || fail "E: the popup's stop ran «$(calls)»"
-pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 停 lands off-thread"
+to send-keys -t o Tab; waitfor '换成' || fail "E: Tab on the far row: $(screen)"
+sed -n 2p <<<"$(screen)" | grep -q 'Far 在' || fail "E: the page's top line is not the far row: $(screen)"
+n=$(screen | grep -o '[0-9]  换成' | cut -c1)
+[ -n "$n" ] || fail "E: 换成 has no number on the far row's page: $(screen)"
+to send-keys -t o "$n"
+waitfor '（在 mac-a）：已完成' || fail "E: the popup does not say the switch landed: $(screen)"
+[ "$(calls)" = "fleet-row-remote.sh|agent|fl|wid:$MU/far1" ] || fail "E: the popup's switch ran «$(calls)»"
+pass "E  another machine's row: each far action one row-remote call + one hub write (worker_id, answer, pin on/off, transfer to the other agent / its refusal), the machine named, a refusal verbatim, a lost row nothing, a --refresh after; the popup's 换成 lands off-thread"
 echo "PASS fleet-view-actions-selftest"

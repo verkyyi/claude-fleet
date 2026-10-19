@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native overlay regression, isolated actions/PTY, never a live fleet socket."""
+"""Native full-page regression (#4416; plan B, T493), isolated actions/PTY, never a live fleet socket."""
 import curses
 import importlib.util
 import json
@@ -49,28 +49,6 @@ def fixture(directory):
     v.grid_read = lambda *a: dict(repos=["acme/web", "acme/app"], last="acme/web", agent="codex",
                                 missing={"codex": "Codex unavailable"} if (root / "nomodel").exists() else {}, blocked=[])
     v.facts = lambda f, e: dict(pin=False, life="", keep=False, agent="codex", fid=e["target"], pr="", needs="ask", pane="%1")
-    # A deterministic shared proof behind the actual asynchronous overlay.
-    # Native PTY/curses is real; provider/task authority remains a fixture.
-    reads = []
-    def evidence_read(fleet, row):
-        import runpy
-        import fleet_reap_shadow
-        n = len(reads) + 1
-        reads.append(n)
-        (root / ("read-%d" % n)).write_text(row["target"])
-        until = time.monotonic() + 4
-        while (root / "delay-evidence").exists() and not (root / ("release-%d" % n)).exists() and time.monotonic() < until:
-            time.sleep(.02)
-        b = runpy.run_path(str(BIN / "fleet-reap-shadow-selftest.py"))["fixture"]()
-        now = time.time()
-        b["runtime"].update(observed_at=now, expires_at=now + 5, source="proof-%d" % n)
-        for d in [*b["layers"].values(), b["legacy"]]:
-            d.update(observed_at=now, expires_at=now + 5)
-        proof = fleet_reap_shadow.project(b, now=now)
-        if (root / "changed-turn").exists():
-            b["runtime"]["identity"] = dict(b["runtime"]["identity"], turn_id="new-turn")
-        return dict(proof=proof, current=b["runtime"])
-    v.evidence_read = evidence_read
 
     def log(payload):
         with (root / "actions").open("a") as f:
@@ -138,17 +116,17 @@ class StateTests(unittest.TestCase):
                     self.assertIn("lit", selected[at][1][1])
                     self.assertNotIn("▶", base[at])
 
-    def test_geometry_cell_bounds_and_prefix(self):
-        for width in (189, 100, 80, 60, 48, 30, 12):
-            for y in (-20, 1, 10, 27, 100):
-                b = p.anchor_box(width, 1, 26, y, 80, 20)
-                self.assertGreaterEqual(b.x, min(8, width - 4))
-                self.assertLessEqual(b.x + b.w, width - 1)
-                self.assertGreaterEqual(b.y, 1)
-                self.assertLessEqual(b.y + b.h, 27)
-                self.assertLessEqual(b.h, int(26 * .72))
-                if width >= 48:
-                    self.assertEqual(b.w, max(22, min(42, round(.32 * (width - 4)))))
+    def test_actions_page_five_items_and_a_grey_agent(self):
+        r = dict(kind="sess", target="@1", state="working", agent="codex", pr="#4966", pr_url="u", far=False, gone=False,
+                 text="t", name="t")
+        with patch.object(v, "say", side_effect=lambda k, *a: k if not a else k + ":" + ":".join(map(str, a))):
+            ids = [a["id"] for a, _, _ in v.page_of(r)]
+            self.assertEqual(ids, ["enter", "pr", "rename", "agent", "reap"])
+            page = v.page_of(r, {"claude": "this machine has no claude"})
+            self.assertEqual([why for _, _, why in page], ["", "", "", "this machine has no claude", ""])
+            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, pr=""))], ["enter", "rename", "agent", "reap"])
+            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, state="exited"))], ["enter", "pr", "rename", "reap"])
+            self.assertEqual([a["id"] for a, _, _ in v.page_of(dict(r, gone=True, pr="", target="landed:1@o/r"))], ["resume"])
 
     def test_editor_enter_unicode_caret_and_resize(self):
         ed = p.Editor("中e\u0301文" * 50)
@@ -168,9 +146,10 @@ class StateTests(unittest.TestCase):
 
     def test_cancel_restore_and_private_draft_lifecycle(self):
         data = rows()
-        overlay = p.Overlay(data[9], "query", {"ended"}, 9, 7, 3)
-        overlay.focus = False
-        self.assertEqual(overlay.restore(data), ("query", {"ended"}, 9, 7))
+        page = p.Page(data[9], "query", {"ended"}, 9, 7)
+        self.assertEqual(page.restore(data), ("query", {"ended"}, 9, 7))
+        page.retarget(data[3])     # [ ] moved it: esc lands on the last one acted on
+        self.assertEqual(page.restore(data), ("query", {"ended"}, 3, 7))
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "draft.json"
             d = p.Draft(path)
@@ -247,7 +226,11 @@ class NativeTests(unittest.TestCase):
             before = self.screen().splitlines()
             self.keys("Tab")
             opened = self.wait("回收…").splitlines()
-            self.assertEqual([q.clip(x, 8) for x in before[1:-2]], [q.clip(x, 8) for x in opened[1:-2]])
+            # a whole page: the session line on top, a rule, one numbered item a line
+            self.assertIn("源中文", opened[1])
+            self.assertTrue(opened[2].startswith("───"), opened[2])
+            self.assertEqual([x.strip() for x in opened[3:7]], ["1  进入", "2  改名…", "3  换成 Claude", "4  回收…"])
+            self.assertNotIn("会话 02", "\n".join(opened))
             self.assertIn("会话 42", opened[0])
             self.assertNotIn("DO NOT REPEAT", "\n".join(opened))
             self.evidence.append("ACTIONS %d columns\n%s" % (width, "\n".join(opened)))
@@ -280,14 +263,21 @@ class NativeTests(unittest.TestCase):
         self.wait("POPUP-CLOSED")
         self.evidence.append("PASS widths 189/100/80/60/48; prefix/geometry/cancel unchanged; continuous resize preserves caret/draft; zero actions; terminal restored")
 
-    def test_focus_frozen_target_retarget_and_invalidation(self):
-        self.keys("Tab", "F6", "Down", "F6")
-        # In the still-open original menu: Enter is the original row's go.
-        self.keys("Enter")
+    def test_page_numbers_step_and_invalidation(self):
+        # a number runs its item on the page's own row; [ ] steps to the next session
+        self.keys("Tab", "1")
         self.assertEqual(self.actions(), [{"action": "enter", "target": "@1", "answer": ""}])
-
-        self.keys("Tab", "F6", "Down", "Tab", "Enter")
+        self.keys("Tab", "]")
+        self.wait("会话 01")
+        self.keys("Enter")
         self.assertEqual(self.actions()[-1]["target"], "@2")
+        # a question opened from the page: esc comes back to the page, not the list
+        self.keys("Tab", "2")
+        self.wait("新名字›")
+        self.keys("Escape")
+        self.wait("4  回收…")
+        self.keys("Escape")
+        self.wait("Tab 操作")
         self.keys("Up", "Tab")
         (self.root / "gone").touch()
         time.sleep(.25)
@@ -295,37 +285,7 @@ class NativeTests(unittest.TestCase):
         self.keys("Enter")
         self.wait("来源已失效")
         self.assertEqual(len(self.actions()), count)
-        self.evidence.append("PASS F6 changes selection without retarget; Tab explicitly retargets; vanished source refuses without action")
-
-    def test_evidence_cancel_reopen_and_resize(self):
-        (self.root / "delay-evidence").touch()
-        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
-        self.wait("Reading")
-        self.keys("Escape", "Tab", *(["Down"] * 40), "Up", "Enter")
-        self.wait("Reading")
-        (self.root / "release-2").touch()
-        self.wait("proof-2")
-        (self.root / "release-1").touch()
-        time.sleep(.25)
-        self.assertIn("proof-2", self.screen())
-        self.assertNotIn("proof-1", self.screen())
-        for width in (189, 100, 80, 60, 48):
-            self.tm("resize-window", "-t", "test", "-x", str(width))
-            time.sleep(.08)
-            self.assertIn("proof-2", self.screen())
-        self.keys("Escape")
-        self.wait("Tab 操作")
-        self.assertEqual(self.actions(), [])
-        self.assertEqual((self.root / "read-1").read_text(), "@1")
-        self.assertEqual((self.root / "read-2").read_text(), "@1")
-        self.evidence.append("PASS evidence: same-row cancel/reopen rejects late result; widths 189/100/80/60/48; zero dispatch")
-
-    def test_evidence_same_row_new_turn_is_unknown(self):
-        (self.root / "changed-turn").touch()
-        self.keys("Tab", *(["Down"] * 40), "Up", "Enter")
-        self.wait("proof-1")
-        self.assertIn("运行: unknown", self.screen())
-        self.assertEqual(self.actions(), [])
+        self.evidence.append("PASS numbers run on the page's row; [ ] steps; esc from a question returns to the page; a vanished source refuses")
 
     def test_real_producer_cache_roundtrip(self):
         import runpy
@@ -372,11 +332,9 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(json.loads(path.read_text()), proof)
         self.evidence.append("PASS real producer cache -> optional column 21 -> parser; original times retained; missing current binding unknown")
 
-    def test_mouse_prefix_and_overlay_button_keep_origin(self):
+    def test_mouse_clicks_a_page_item_once(self):
         self.keys("Tab")
-        self.wait("回收…")
-        # SGR mouse at the unoccluded first eight columns: select @2 without
-        # retargeting the open @1 menu, then click its Pin button exactly once.
+        lines = self.wait("回收…").splitlines()
         def click(x, y):
             # Match the application's terminfo, as tmux translates a real
             # client's mouse. macOS ncurses can still request X10, not SGR.
@@ -386,16 +344,11 @@ class NativeTests(unittest.TestCase):
             else:
                 event = "\x1b[<0;%d;%dM\x1b[<0;%d;%dm" % (x, y, x, y)
             self.literal(event)
-        click(4, 4)
-        time.sleep(.25)
-        lines = self.screen().splitlines()
-        self.assertTrue(any("│置顶" in line for line in lines), "\n".join(lines))
-        y = next(i for i, line in enumerate(lines) if "│置顶" in line)
-        x = q.cells(lines[y].split("│置顶")[0]) + 2
-        click(x, y + 1)
-        self.wait("ACTION OK")
-        self.assertEqual(self.actions(), [{"action": "pin", "target": "@1", "answer": ""}])
-        self.evidence.append("PASS exposed prefix accepts mouse selection; local overlay button executes once on its frozen source")
+        y = next(i for i, line in enumerate(lines) if "1  进入" in line)
+        click(6, y + 1)
+        time.sleep(.3)
+        self.assertEqual(self.actions(), [{"action": "enter", "target": "@1", "answer": ""}])
+        self.evidence.append("PASS a click on a page item runs it once on the page's row")
 
     def test_saved_agent_unavailable_refuses_instead_of_switching(self):
         self.literal("task")
