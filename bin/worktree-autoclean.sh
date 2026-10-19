@@ -433,6 +433,9 @@ process_locked() {
 clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protected-re  $5=scratch-max-idle  $6=worktree root  $7=forge
   REPO_ROOT="$1"; REPO="$2"; BASE="${3:-main}"; WT_ROOT="${6:-}"
   case "${7:-}" in none) FORGE=none ;; *) FORGE=github ;; esac
+  # The repo's own conf decides too (the refusal the GitHub layer made before #4899):
+  # the default-fleet road above passes whatever FLEET_FORGE the caller had.
+  [ -n "$REPO" ] && [ "$(fleet_repo_forge "$REPO")" = none ] && FORGE=none
   PROTECTED_RE="${4:-^(master|main|develop|test)$}"
   SCRATCH_MAX_IDLE="${5:-0}"
   case "$SCRATCH_MAX_IDLE" in ''|*[!0-9]*) SCRATCH_MAX_IDLE=0 ;; esac
