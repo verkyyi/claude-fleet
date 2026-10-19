@@ -341,7 +341,7 @@ if isinstance(p, str):
     case "$_tl" in "$_soh"*)
       _tw=${_tl#?}; _tb=${_tw#*"$_soh"}; _tw=${_tw%%"$_soh"*}
       _tl=$(sh "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-ui-lang.sh" t view_from_fmt "$_tw" "$_tb" 2>/dev/null)
-      [ -n "$_tl" ] || _tl="来自 $_tw：$_tb" ;;
+      [ -n "$_tl" ] || _tl="来自 ${_tw}：${_tb}" ;;
     esac
     [ -n "$_tl" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_tl" 2>/dev/null ;;
   esac
