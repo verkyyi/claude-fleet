@@ -18,6 +18,8 @@
 #           those globs matched loosely, the selftest selector says whether a
 #           changed file is actually named (`run-selftests.sh --changed <base>
 #           --list-only --among <files>` — the rules the selftest gate trusts).
+# browser-attachment and hub-rolling build Go too, but a Go change runs them only
+# when it touches what they guard (issue #4919): their globs name those files.
 # Go (`tokenledger`) is four modules, so four blocks: shared/** ⇒ all four,
 # agent/** ⇒ agent + e2e, hub/** ⇒ hub + e2e, e2e/** ⇒ e2e; go.work, the
 # Dockerfile, the quarantine list, this file, the Go workflow ⇒ all four; a bin/
@@ -37,6 +39,8 @@ root=$(cd "$bin/.." && pwd)
 CHECKS='selftests shellcheck tokenledger task_acceptance client_e2e fleet_hub_mcp browser_attachment hub_rolling hub_deploy_check cluster_perms native_claude_worktree native_managed_hooks node_join oss_scan web_chat_ui web_console'
 # a change to the plan itself (or the workflow that runs it) runs everything
 SELF='bin/ci-plan.sh .github/workflows/ci.yml'
+# a Go dependency change (any module's go.mod / go.sum, the workspace) reaches every Go-built check
+GO_DEPS_GLOBS='tokenledger/go.work tokenledger/go.work.sum tokenledger/*/go.mod tokenledger/*/go.sum'
 MODPFX=github.com/verkyyi/claude-fleet/tokenledger
 # set by go_plan (eval'd per block)
 GO_PKGS_hub=''   # read by name below; it and its siblings are eval'd by go_plan
@@ -46,7 +50,7 @@ usage() { sed -n '2,13p' "$0" >&2; exit 2; }
 # check → entry files (from bin/; ../x outside it) | globs that run it whole.
 # `*` crosses / here (shell case). Keep each glob list the check's old `paths:`.
 check_rules() {
-  among='' globs='' paths=''
+  among='' globs='' paths='' gounsure=''
   case "$1" in
     selftests)
       globs='bin/* hooks/* conf/* launchd/* systemd/* .claude-plugin/* commands/* skills/* shell/* extras/* mod/* fleet.conf.example .github/workflows/selftests.yml .github/workflows/selftests-shards.yml' ;;
@@ -67,9 +71,19 @@ check_rules() {
       paths='bin/fleet* requirements-mcp.txt .github/workflows/fleet-hub.yml'
       globs='requirements-mcp.txt .github/workflows/fleet-hub.yml' ;;
     browser_attachment)
-      globs='tokenledger/* bin/fleet-webterm.py bin/fleet-term-attach.sh bin/fleet_view.py extras/browser-transport/* extras/web-console/* extras/web-chat/ui/* .github/workflows/browser-attachment.yml' ;;
+      # issue #4919: not every Go change — its tests (tokenledger/e2e, -tags
+      # browseracceptance) drive the attachment / terminal / chat roads, and their
+      # test binary imports hub/apitest (all of hub/api) and agent (one package), so
+      # `go list -deps` cannot narrow it: these are the files those roads live in,
+      # the wire they speak, the harness, and every module's dependencies
+      gounsure=1
+      globs="$GO_DEPS_GLOBS tokenledger/e2e/*browser* tokenledger/e2e/harness_test.go tokenledger/e2e/main_test.go tokenledger/hub/apitest/* tokenledger/hub/api/*attach* tokenledger/hub/api/*chat* tokenledger/hub/api/*term* tokenledger/hub/api/app_mount.go tokenledger/hub/api/server.go tokenledger/hub/api/nodes.go tokenledger/hub/store/fleet_attachments.go tokenledger/agent/*attach* tokenledger/agent/*chat* tokenledger/agent/*term* tokenledger/agent/pty* tokenledger/agent/relay.go tokenledger/agent/node.go tokenledger/agent/agent.go tokenledger/shared/control/* tokenledger/shared/attachment/* tokenledger/shared/hubwire/* bin/fleet-webterm.py bin/fleet-term-attach.sh bin/fleet_view.py extras/browser-transport/* extras/web-console/* extras/web-chat/ui/* .github/workflows/browser-attachment.yml" ;;
     hub_rolling)
-      globs='deploy/k8s/* .github/actions/hub-release/* .github/workflows/hub-rolling.yml tokenledger/*' ;;
+      # issue #4919: what a release is made of — the manifests, the release scripts,
+      # the image (its Dockerfile, the client it embeds, the hub's dependencies) and
+      # the hub's start: its command, readiness / shutdown, leader, migrations
+      gounsure=1
+      globs="$GO_DEPS_GLOBS deploy/k8s/* .github/actions/hub-release/* .github/workflows/hub-rolling.yml tokenledger/Dockerfile tokenledger/.dockerignore bin/fleet-client-pack.sh tokenledger/hub/api/fleetclient/* tokenledger/hub/cmd/* tokenledger/hub/leader/* tokenledger/hub/api/server.go tokenledger/hub/api/deploy_probe.go tokenledger/hub/api/access.go tokenledger/hub/api/roles.go tokenledger/hub/store/migrations.go tokenledger/hub/store/schema.sql tokenledger/hub/store/pg*.go tokenledger/hub/store/store.go" ;;
     hub_deploy_check)
       globs='deploy/k8s/* .github/actions/hub-* .github/workflows/hub-deploy.yml .github/workflows/hub-deploy-check.yml' ;;
     cluster_perms)
@@ -119,6 +133,12 @@ plan_check() {
     go_plan
     if [ -n "$GO_SELECTED" ]; then why="Go blocks: $GO_SELECTED"; else run=false why="no Go block is reached"; fi
     return
+  fi
+  if [ -n "$gounsure" ]; then
+    # a tokenledger/ path the Go blocks have no rule for is unsure here too
+    for f in $files; do
+      [ "$(block_of "$f")" = unknown ] && { set +f; why="$f has no block rule — unsure, so it runs"; return; }
+    done
   fi
   for f in $files; do
     for g in $globs; do

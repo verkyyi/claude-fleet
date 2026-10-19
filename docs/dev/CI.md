@@ -49,8 +49,8 @@
 | `task_acceptance` | `task-acceptance.yml` | `tokenledger/`、`extras/web-console/`；`bin/` 里的改动要被它的入口文件点名才跑 |
 | `client_e2e` | `client-e2e.yml` | `tokenledger/`；`bin/ shell/ conf/` 里的改动要被入口文件点名 |
 | `fleet_hub_mcp` | `fleet-hub.yml` | `requirements-mcp.txt`；`bin/fleet*` 要被入口文件点名 |
-| `browser_attachment` | `browser-attachment.yml` | `tokenledger/`、web 终端那几个脚本、`extras/browser-transport/ web-console/ web-chat/ui/` |
-| `hub_rolling` | `hub-rolling.yml` | `deploy/k8s/`、`.github/actions/hub-release/`、`tokenledger/` |
+| `browser_attachment` | `browser-attachment.yml` | Go 里只认它守的那几条路（#4919）：附件 / 终端 / 聊天的 hub、节点文件（`*attach* *chat* *term*`、`pty*`、`relay.go` 等）、`shared/control attachment hubwire`、联调 harness 与 `*browser*` 测试、各模块的 `go.mod/go.sum`、`go.work`；外加 web 终端那几个脚本、`extras/browser-transport/ web-console/ web-chat/ui/`。认不出的 `tokenledger/` 路径照跑 |
+| `hub_rolling` | `hub-rolling.yml` | 发布物与 hub 启动（#4919）：`deploy/k8s/`、`.github/actions/hub-release/`、`tokenledger/Dockerfile`、客户端打包（`fleet-client-pack.sh`、`hub/api/fleetclient/`）、`hub/cmd/ hub/leader/`、就绪 / 关停（`server.go deploy_probe.go access.go roles.go`）、迁移（`store/migrations.go schema.sql pg*.go store.go`）、`go.mod/go.sum`、`go.work`。认不出的 `tokenledger/` 路径照跑 |
 | `hub_deploy_check` | `hub-deploy-check.yml` | `deploy/k8s/`、`.github/actions/hub-*`、`hub-deploy.yml` |
 | `cluster_perms` | `cluster-perms.yml` | 集群那几处 `deploy/k8s/*` 与相关脚本 |
 | `native_claude_worktree` / `native_managed_hooks` | 同名 | 各自列出的脚本与 hooks |
