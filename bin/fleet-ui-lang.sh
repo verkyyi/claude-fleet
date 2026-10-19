@@ -453,8 +453,8 @@ fleet_ui_t() {
     en:view_ask_keys_back) printf '↵ confirm  ↑↓ pick  esc actions' ;;
     zh:view_compose_keys) printf 'Enter 换行  Tab 到下一项  ←→ 换仓库 / Agent  ↵ 执行（在选项上）  esc 回列表（草稿保留）' ;;
     en:view_compose_keys) printf 'Enter newline  Tab next  ←→ repo / Agent  ↵ run (on an option)  esc list (draft kept)' ;;
-    zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/F6/esc 可用' ;;
-    en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/F6/esc work' ;;
+    zh:view_narrow) printf '窄屏：建议 ≥48 列；Tab/esc 可用' ;;
+    en:view_narrow) printf 'Narrow: use ≥48 cols; Tab/esc work' ;;
     zh:view_overlay_gone) printf '来源已失效；请回列表重新选择' ;;
     en:view_overlay_gone) printf 'Source unavailable; select it again in the list' ;;
     zh:view_composer) printf '新任务' ;;
