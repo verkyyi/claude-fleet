@@ -55,3 +55,59 @@ func TestNodeIDMirrorRoad(t *testing.T) {
 		t.Fatalf("no token: HTTP %d", st)
 	}
 }
+
+// An EPIC driver's batch in one read (EPIC T497 C5): ?parent=<ID> answers the
+// IDs it spawned and every ID that continued one of them down `prev` (a member's
+// redo), with their results; another owner's IDs never appear.
+func TestNodeIDFamily(t *testing.T) {
+	h, _, n := peerHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	v5, alice := n["verk5"].token, n["alice4"].token
+	const drv, c1, c2, redo, stray = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
+		"33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555"
+	open := func(tok, id string, ts int, extra map[string]any) {
+		ev := map[string]any{"ev": "opened", "id": id, "seq": 1, "ts": ts, "agent": "claude", "title": "t " + id[:2]}
+		for k, v := range extra {
+			ev[k] = v
+		}
+		if st, got := nodeTaskCall(t, h, tok, http.MethodPost, NodeIDsPath, map[string]any{"id": id, "events": []any{ev}}); st != 200 {
+			t.Fatalf("open %s = %d %v", id, st, got)
+		}
+	}
+	open(v5, drv, 10, nil)
+	open(v5, c1, 20, map[string]any{"parent": drv, "task": "T2"})
+	open(v5, c2, 30, map[string]any{"parent": drv, "task": "T3"})
+	open(v5, redo, 40, map[string]any{"prev": c2}) // 「从这一段继续」: no parent, prev only
+	open(alice, stray, 50, map[string]any{"parent": drv})
+	if st, got := nodeTaskCall(t, h, v5, http.MethodPost, NodeIDsPath, map[string]any{"id": redo,
+		"events": []any{map[string]any{"ev": "result", "id": redo, "seq": 2, "ts": 41, "state": "merged", "pr": "7"}}}); st != 200 {
+		t.Fatalf("result = %d %v", st, got)
+	}
+	st, got := nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?parent="+drv, nil)
+	if _, ok := got["ids"].([]any); st != 200 || !ok {
+		t.Fatalf("family = %d %v", st, got)
+	}
+	var ids []string
+	for _, x := range got["ids"].([]any) {
+		ids = append(ids, x.(map[string]any)["id"].(string))
+	}
+	if len(ids) != 3 || ids[0] != c1 || ids[1] != c2 || ids[2] != redo {
+		t.Fatalf("family = %v; want c1 c2 redo (alice's never)", ids)
+	}
+	last := got["ids"].([]any)[2].(map[string]any)
+	if last["prev"] != c2 || len(last["results"].([]any)) != 1 {
+		t.Fatalf("the redo = %v; want prev c2 and its result", last)
+	}
+	// a member whose ledger names no parent is found by its ID (a seed), with its redo;
+	// another owner's ID given as a seed is not read.
+	const orphan, orphanRedo = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
+	open(v5, orphan, 60, nil)
+	open(v5, orphanRedo, 70, map[string]any{"prev": orphan})
+	st, got = nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?parent="+drv+"&id="+orphan+"&id="+stray, nil)
+	if ids, _ := got["ids"].([]any); st != 200 || len(ids) != 5 {
+		t.Fatalf("with seeds = %d %v; want 5 ids (c1 c2 redo orphan orphanRedo)", st, got)
+	}
+	if st, _ := nodeTaskCall(t, h, v5, http.MethodGet, NodeIDsPath+"?parent=nope", nil); st != 400 {
+		t.Fatalf("a bad parent: HTTP %d", st)
+	}
+}

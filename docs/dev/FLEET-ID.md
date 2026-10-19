@@ -1,6 +1,6 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）与 C6（迁移命令与切换开关）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
+EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）、C5（EPIC 批次）与 C6（迁移命令与切换开关）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
 这一层目前**只双写**：旧 T 记录与执行权照旧，谁都不读这里做决定，直到 C7 打开切换开关。
 
 ## ID 与短码
@@ -81,6 +81,27 @@ fleet-id.sh status|route|children|await|history|continue|reopen …   结果、�
 - **worktree 记 ID**：`fleet_worktree_id_mark` 在 worktree 的 git 目录写 `fleet-id`（旁边的 `fleet-task` 照旧）。
 
 `bin/fleet-id-results-selftest.sh` 钉住 S2、S7、S8、S9、接班 / parent / 提醒、父 /clear 后回报照常送达。
+
+## EPIC 批次（C5）
+
+批次的父任务 T<n> 是记录，父 **ID** 是驱动窗口的 ID（父记录 worker_id 的后半，短码就是 ⌘P 上那一行）；
+每个成员的会话是一个子 ID。`fleet-epic-tick.py` 每个 tick 读一次 `fleet-id.sh family <父 ID> <子记录的 ID>…`：
+本机账本 + hub 的 `GET /v1/node/ids?parent=<父 ID>&id=<ID>…`（父是它的、点名的、以及顺 `prev` 接上它们的每一个 ID；
+旧 hub 不认这个查询时逐个读点名的）。
+
+- **成员 = 一串棒**：它的记录按先后排，每条记录后面跟着顺 `prev` 接上它的 ID（重做、「从这一段继续」）；
+  **最新一棒说了算**。一棒的结局：记录有 outcome 用记录的；没有就看 ID 最新结果（merged / succeeded ⇒ 成、
+  failed ⇒ 败）；ID 关了没结果 ⇒ `exited`，算一次失败（BREAK-IT `epic-member-dead-record`）。
+- **重做 = 新 ID**：重试的派单正文末尾带 `<!-- fleet:prev <上一棒 ID> -->`，`dash-raw-session.sh` 对带 `--task`
+  的话读出它当 `--prev`，新窗口的账本记 prev。
+- **依赖按 ID 解除**（拍板 6）：章程「依赖顺序」表（或成员段的 `**依赖**` 行）里的成员键；被依赖的成员最新一棒成了才放行，
+  之前是 `waiting`；被依赖的卡住 ⇒ 它也卡住。表外的单（T493 这类）留给驱动判断。
+- **批次标记**：`epic-running.d/<slug>-T-xxxxx`（tick 的 `mark`，父 ID 的短码）带一行 `task: T<n>`；
+  盖新标记时删掉同一批旧的 `<slug>-T<n>`，`--clear T<n>` 也清得掉它。
+- tick 的 JSON 多了 `parent_id` · `parent_short` · `mark`，每个成员的 `id` · `short` · `ids`（每一棒，带 prev），
+  重试项的 `prev`。没有 ID、没有 hub ⇒ 只读记录，跟以前一样。
+
+`bin/fleet-epic-id-selftest.sh` 是演练批次：两个成员从规划到报告，其中一个重做一次。
 
 ## hub 镜像（C2）
 

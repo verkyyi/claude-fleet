@@ -446,7 +446,9 @@ this order:
 3. **Open the parent task — it starts the driver** (one call):
    `mcp__fleet-orch__task` with `title` 「EPIC: <主题>」, `body` the charter file's
    content, `agent` `epic-driver`, `spawn: true`, `reap` `loop-end`. Its first
-   stdout line is the parent's `T<n>`. The driver opens bound to that record — it
+   stdout line is the parent's `T<n>`; the driver's window is the batch's parent
+   ID (`T-xxxxx` on ⌘P), the one its members' IDs name as `parent` (EPIC T497 C5).
+   The driver opens bound to that record — it
    reads the charter off it every tick, its children are this batch's members, and
    its final report comes back here. No hub ⇒ exit 3: say so and stop.
 4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <T<n>>`, republished to

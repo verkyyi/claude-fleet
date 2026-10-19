@@ -24,6 +24,10 @@ import (
 //	                         when another machine registered that full ID (S13)
 //	GET  /v1/node/ids        → {ids:[{id, short}]}: every ID of this node's owner,
 //	                         what the node's short codes are kept apart from
+//	GET  /v1/node/ids?parent=<ID>[&id=<ID>…] → {parent, ids:[record…]}: the IDs it
+//	                         spawned, the given ones (its members), and every ID
+//	                         that continued one of them down `prev` — an EPIC
+//	                         driver's members and their redos (C5)
 //	GET  /v1/node/ids/<ID|T-code> → the record; a code two IDs share is 409
 //	                         {code: AMBIGUOUS, candidates} — never a pick
 //
@@ -78,6 +82,22 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "seq": got.Seq, "short": got.Short})
+	case ref == "" && r.Method == http.MethodGet && r.URL.Query().Has("parent"):
+		parent := r.URL.Query().Get("parent")
+		if !store.IsFleetID(parent) {
+			httpError(w, http.StatusBadRequest, "parent must be a full ID (a window's @fleet_id)")
+			return
+		}
+		seeds := r.URL.Query()["id"]
+		if len(seeds) > store.IDFamilyMax {
+			seeds = seeds[:store.IDFamilyMax]
+		}
+		fam, err := s.Store.FleetIDFamily(owner, parent, seeds)
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"parent": parent, "ids": fam})
 	case ref == "" && r.Method == http.MethodGet:
 		ids, err := s.Store.FleetIDsOf(owner, "")
 		if err != nil {

@@ -141,6 +141,8 @@
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
 #   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
 #                                                   (the ID switch: ids/.switch, exit 5 → the ID road)
+#   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
+#                                                   batons_of, fleet-id.sh family)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6239,6 +6241,32 @@ drill_id_switch_flip_report() {
   [ "$(rtm display-message -p -t "$w" '#{@fleet_id}')" = "$f" ] || { rtm kill-server 2>/dev/null; WHY="the window lost its ID across the flips"; return 1; }
   rtm kill-server 2>/dev/null
   WHAT="开关来回切两次：开时回报写在窗口 ID 上，关时回到旧路；窗口和它的 ID 一直在"
+}
+
+# An EPIC member whose window closed with no result while its record stayed open
+# (EPIC T497 C5): the batch read the record alone, so the member was `running` for
+# ever and the batch never finished; a member continued by hand (a new ID, prev the
+# old one, no record) was never seen. The tick reads the member's ID chain now.
+drill_epic_member_dead_record() {
+  CAP=10; local t0 out
+  t0=$(now)
+  out=$(python3 - "$BIN" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("tick", sys.argv[1] + "/fleet-epic-tick.py")
+tick = importlib.util.module_from_spec(spec); spec.loader.exec_module(tick)
+a, b = "aaaaaaaa-0000-4000-8000-00000000000a", "bbbbbbbb-0000-4000-8000-00000000000b"
+kid = dict(id="T2", outcome="", worker_id="fleet/" + a)
+dead = [dict(id=a, short="T-aaaaa", state="exited", prev="", result=None)]
+m = tick.judge(dict(key="C1"), [kid], dead)
+redo = dead + [dict(id=b, short="T-bbbbb", state="done", prev=a, result=dict(state="merged", pr="9"))]
+n = tick.judge(dict(key="C1"), [kid], redo)
+print(m["state"], n["state"], n["short"], n["pr"])
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "retry succeeded T-bbbbb 9" ] \
+    || { WHY="a dead member read [$out], want «retry succeeded T-bbbbb 9» (its closed ID a failure, its continuation the newest baton)"; return 1; }
+  WHAT="成员窗口关了没结果、记录还开着：按 ID 读成失败可重试；手动续上的新 ID 被认作它的最新一棒"
 }
 
 # ================================================================ run ====}

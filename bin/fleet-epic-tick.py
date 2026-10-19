@@ -24,15 +24,39 @@ The charter (written by /fleet-epic-plan, the parent's body):
 
 A member's child task is titled `<key> · <title>`; a child whose title carries a
 key the charter does not list (`C5 · …`, a member added within scope) is a
-member too. Per member, off its children (oldest first):
-  succeeded  one child succeeded
-  running    the newest child has no outcome yet
-  retry      one failed — dispatch it once more (the retry rule)
-  blocked    failed twice, or cancelled (the person stopped it)
-  unstarted  no child yet
+member too.
+
+By ID (EPIC T497 C5). Every session is a window ID (`@fleet_id`, short code
+`T-xxxxx` — docs/dev/FLEET-ID.md): the parent's ID is the driver's (the second
+half of the parent record's worker_id), each child's is its record's. One read of
+`fleet-id.sh family <parent ID>` (this machine's ledgers + the hub mirror's
+`?parent=`) gives every member's ID, its results, and every ID that continued it
+down `prev` — a redo dispatched with `<!-- fleet:prev <ID> -->` in its body (the
+spawner records it), or a 「从这一段继续」 from /fleet-history with no record of its
+own. A member is its chain of batons (its records, oldest first, each followed by
+the IDs that continued it); the newest baton is where it stands. A baton's outcome
+is its record's when the record has one, else its ID's newest result (merged /
+succeeded ⇒ succeeded, failed ⇒ failed), else — the ID closed with no result —
+`exited`, counted as a failure. No family (no hub, an old hub, no IDs) ⇒ the
+records alone, as before.
+
+Per member, off its batons:
+  succeeded  one baton succeeded
+  running    the newest baton has no outcome yet
+  retry      one failed — dispatch it once more (the retry rule), prev = its ID
+  blocked    failed twice, or cancelled (the person stopped it), or a member it
+             waits on is blocked
+  waiting    unstarted, and a member it depends on has not succeeded yet
+  unstarted  no baton yet
+Dependencies are the charter's `## 依赖顺序` table (`| C5 | C4 | |`, `C1–C6` a
+range), else a section's `**依赖** 依赖 C4 · 被依赖 …` line; only member keys count
+(an outside ticket is the driver's to judge). A dependency is released by its
+member's newest baton — by ID, not by which record it was (拍板 6).
 `next` is what to dispatch now: retries first, then unstarted core members in
 charter order, as many as the free slots (cap − running). `done` is true when
 every core (and added) member is succeeded or blocked and nothing runs.
+`mark` is what the heartbeat stamps the batch as: the parent's short code
+(`T-xxxxx`), else its record `T<n>`.
 
 Exit: 0 read · 1 the hub did not answer · 2 usage / no parent / no charter ·
 3 no hub here (fleet-task-record.sh exit 3).
@@ -52,6 +76,12 @@ LINE = re.compile(r"^\s*[-*] \[[ xX]\] \*\*([CR][1-9][0-9]*)\*\*\s+(.+?)\s*$")
 REPO = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)\s+(?:—|--|-)\s+(.+)$")
 AGENT = re.compile(r"^(.*?)\s*\((codex|claude)\)$")
 HEAD = re.compile(r"^#{2,4}\s+")
+FID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+DEPS_HEAD = re.compile(r"^#{2,4}\s+依赖")
+DEP_RANGE = re.compile(r"([CR])([1-9][0-9]*)\s*[–—~-]\s*[CR]?([1-9][0-9]*)")
+DEP_KEY = re.compile(r"(?<![A-Za-z0-9])([CR][1-9][0-9]*)(?![0-9])")
+DEP_LINE = re.compile(r"\*\*依赖\*\*\s*依赖\s*(.*?)(?:·|$)")
+FAILED = ("failed", "refused", "exited")
 KEYED = re.compile(r"^([CR][1-9][0-9]*)\s*·\s*(.*)$")
 TITLE_MAX = 200
 
@@ -82,6 +112,44 @@ def own_task():
     if p.returncode or not TREF.match(t):
         raise Fail(2, "this window carries no task (@task): name the parent with --task T<n>")
     return t
+
+
+def id_of(task):
+    """A record's window ID: the second half of its worker_id (`<fleet>/<ID>`)."""
+    for k in ("worker_id", "execution_owner"):
+        tail = str(task.get(k) or "").rpartition("/")[2]
+        if FID.match(tail):
+            return tail
+    return ""
+
+
+def code_of(fid):
+    """An ID with no record anywhere still has a code: its first five (fleet_id.py's
+    encoding — a longer one only where the ledger or the hub says so)."""
+    if not fid:
+        return ""
+    sys.path.insert(0, str(BIN))
+    try:
+        import fleet_id
+        return "T-" + fleet_id.encode(fid)[:fleet_id.SHORT_MIN]
+    except (ImportError, ValueError):
+        return ""
+    finally:
+        sys.path.pop(0)
+
+
+def family_of(pid, seeds=()):
+    """`fleet-id.sh family <pid> <member ID>…` — {} when there is no ID, no hub, or
+    no answer. The seeds are the children's own IDs: a ledger may name no parent."""
+    if not pid:
+        return {}
+    try:
+        p = subprocess.run(["bash", str(BIN / "fleet-id.sh"), "family", pid] + list(seeds), capture_output=True, text=True,
+                           timeout=60, stdin=subprocess.DEVNULL)
+        got = json.loads(p.stdout) if p.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
 
 
 def charter_of(task):
@@ -134,6 +202,41 @@ def detail(text, key):
     return "\n".join(out).strip()
 
 
+def dep_keys(text):
+    keys = []
+    for a, lo, hi in DEP_RANGE.findall(text):
+        keys += ["%s%d" % (a, i) for i in range(int(lo), int(hi) + 1)]
+    keys += DEP_KEY.findall(DEP_RANGE.sub(" ", text))
+    return keys
+
+
+def parse_deps(text, members):
+    """{key: [keys it waits on]} off the `## 依赖顺序` table, else each section's
+    `**依赖**` line; only the charter's own member keys, never itself."""
+    known = {m["key"] for m in members}
+    deps, on = {}, False
+    for line in text.splitlines():
+        if HEAD.match(line):
+            on = bool(DEPS_HEAD.match(line))
+            continue
+        if not on or not line.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and cells[0] in known:
+            deps[cells[0]] = cells[1]
+    for m in members:
+        if m["key"] not in deps:
+            d = DEP_LINE.search(m.get("detail") or "")
+            if d:
+                deps[m["key"]] = d.group(1)
+    out = {}
+    for k, cell in deps.items():
+        got = [x for x in dict.fromkeys(dep_keys(cell)) if x in known and x != k]
+        if got:
+            out[k] = got
+    return out
+
+
 def child_key(child):
     m = KEYED.match(str(child.get("title") or ""))
     return (m.group(1), m.group(2).strip()) if m else (None, "")
@@ -148,22 +251,91 @@ def child_pr(child):
     return pr
 
 
-def judge(member, kids):
-    tasks = [dict(task=c.get("id"), outcome=c.get("outcome") or "", pr=child_pr(c)) for c in kids]
+def batons_of(kids, fam):
+    """A member's chain: its records oldest first, each followed by the IDs that
+    continued it down `prev` (a redo, a 「从这一段继续」) — newest last."""
+    rows = {r["id"]: r for r in fam}
+    placed = set()
+    out = []
+
+    def add(task, outcome, pr, fid):
+        row = rows.get(fid) if fid else None
+        if not outcome and row:
+            outcome = {"done": "succeeded", "failed": "failed", "exited": "exited"}.get(row.get("state"), "")
+        if not pr and row:
+            pr = str((row.get("result") or {}).get("pr") or "")
+        out.append(dict(task=task, outcome=outcome, pr=pr, id=fid, short=(row or {}).get("short", "") or code_of(fid),
+                        prev=(row or {}).get("prev", "")))
+        if fid:
+            placed.add(fid)
+            for r in fam:
+                if r.get("prev") == fid and r["id"] not in placed and r["id"] not in kid_ids:
+                    add(r.get("task", ""), "", "", r["id"])
+
+    kid_ids = {id_of(c) for c in kids} - {""}
+    for c in kids:
+        fid = id_of(c)
+        if fid in placed:
+            continue
+        add(c.get("id"), c.get("outcome") or "", child_pr(c), fid)
+    return out
+
+
+def judge(member, kids, fam=()):
+    tasks = batons_of(kids, list(fam))
     member["tasks"] = tasks
     won = [t for t in tasks if t["outcome"] == "succeeded"]
-    failed = [t for t in tasks if t["outcome"] in ("failed", "refused")]
+    failed = [t for t in tasks if t["outcome"] in FAILED]
+    last = tasks[-1] if tasks else {}
+    member.update(id=last.get("id", ""), short=last.get("short", ""),
+                  ids=[dict(id=t["id"], short=t["short"], task=t["task"], prev=t["prev"], outcome=t["outcome"])
+                       for t in tasks if t["id"]])
     if won:
-        member.update(state="succeeded", task=won[0]["task"], pr=won[0]["pr"])
-    elif tasks and not tasks[-1]["outcome"]:
-        member.update(state="running", task=tasks[-1]["task"])
+        member.update(state="succeeded", task=won[0]["task"], pr=won[0]["pr"], id=won[0]["id"] or member["id"],
+                      short=won[0]["short"] or member["short"])
+    elif tasks and not last["outcome"]:
+        member.update(state="running", task=last["task"])
     elif any(t["outcome"] == "cancelled" for t in tasks) or len(failed) >= 2:
-        member.update(state="blocked", task=tasks[-1]["task"])
+        member.update(state="blocked", task=last["task"])
     elif failed:
-        member.update(state="retry", task=tasks[-1]["task"])
+        member.update(state="retry", task=last["task"])
     else:
         member.update(state="unstarted", task="")
     return member
+
+
+def hold_on_deps(members, deps):
+    """An unstarted member whose dependencies have not all succeeded waits; one whose
+    dependency is blocked is blocked too. A cycle (everything waiting, nothing to
+    run) is let through rather than stalled."""
+    by = {m["key"]: m for m in members}
+    for _ in range(len(members)):
+        moved = False
+        for m in members:
+            if m["state"] not in ("unstarted", "waiting") or m["key"] not in deps:
+                continue
+            ds = [by[d] for d in deps[m["key"]] if d in by]
+            stuck = [d["key"] for d in ds if d["state"] == "blocked"]
+            open_ = [d["key"] for d in ds if d["state"] != "succeeded"]
+            if stuck:
+                new = dict(state="blocked", blocked_by=stuck)
+            elif open_:
+                new = dict(state="waiting", waits_on=open_)
+            else:
+                new = dict(state="unstarted")
+            if m["state"] != new["state"] or m.get("waits_on") != new.get("waits_on"):
+                moved = True
+            m.pop("waits_on", None)
+            m.pop("blocked_by", None)
+            m.update(new)
+        if not moved:
+            break
+    live = [m for m in members if m["layer"] != "reserve" and m["state"] in ("running", "retry", "unstarted")]
+    if not live:
+        for m in members:
+            if m["state"] == "waiting":
+                m["state"] = "unstarted"
+                m["cycle"] = True
 
 
 def dispatch_of(parent, member):
@@ -174,10 +346,19 @@ def dispatch_of(parent, member):
             "做完开 PR，门禁绿了自己合并，然后 report merged；做不成就 report failed 写清原因。"]
     if member.get("detail"):
         body += ["", member["detail"]]
-    if member["state"] == "retry":
-        body += ["", "这是重试：上一次（%s）失败了，先读它的结果再动手。" % member["task"]]
+    retry = member["state"] == "retry"
+    if retry:
+        who = member["task"] or member.get("short") or "上一棒"
+        if member.get("short") and member["task"]:
+            who = "%s，编号 %s" % (member["task"], member["short"])
+        body += ["", "这是重试：上一次（%s）失败了，先读它的结果再动手。" % who]
+        if member.get("id"):
+            # the spawner reads this into the new window's ledger as its prev
+            # (dash-raw-session.sh): the redo is the next baton of the same member
+            body += ["<!-- fleet:prev %s -->" % member["id"]]
     return dict(key=member["key"], title=title, repo=member["repo"], agent=member["agent"],
-                retry_of=member["task"] if member["state"] == "retry" else "", body="\n".join(body))
+                retry_of=member["task"] if retry else "", prev=member.get("id", "") if retry else "",
+                body="\n".join(body))
 
 
 def status(parent_ref, cap):
@@ -185,7 +366,8 @@ def status(parent_ref, cap):
     parent = got.get("task") or {}
     if parent.get("authority_version") != 1:
         raise Fail(2, "%s is not an authoritative task: an EPIC is a parent task opened by /fleet-epic-plan" % parent_ref)
-    meta, members = parse_charter(charter_of(parent))
+    text = charter_of(parent)
+    meta, members = parse_charter(text)
     if not members:
         raise Fail(2, "%s's record has no charter member list (- [ ] **C1** …)" % parent_ref)
     kids = record("children", parent_ref)
@@ -202,8 +384,12 @@ def status(parent_ref, cap):
             known.add(k)
             members.append(dict(key=k, title=t, repo=str(c.get("repo") or "").lower(), agent="",
                                 layer="added", detail=""))
+    pid = id_of(parent)
+    fam = family_of(pid, [i for i in (id_of(c) for c in children) if i])
+    rows = [r for r in fam.get("ids") or [] if isinstance(r, dict) and FID.match(str(r.get("id", "")))]
     for m in members:
-        judge(m, by_key.get(m["key"], []))
+        judge(m, by_key.get(m["key"], []), rows)
+    hold_on_deps(members, parse_deps(text, members))
     if cap is None:
         try:
             cap = int(meta.get("cap", "4"))
@@ -216,12 +402,15 @@ def status(parent_ref, cap):
     pending = [m for m in counted if m["state"] == "retry"] + [m for m in counted if m["state"] == "unstarted"]
     nxt = [dispatch_of(parent, m) for m in pending if m["repo"]][:free]
     norepo = [m["key"] for m in pending if not m["repo"]]
-    counts = dict(core=len(counted), succeeded=0, running=0, retry=0, blocked=0, unstarted=0)
+    counts = dict(core=len(counted), succeeded=0, running=0, retry=0, blocked=0, unstarted=0, waiting=0)
     for m in counted:
         counts[m["state"]] += 1
     done = running == 0 and all(m["state"] in ("succeeded", "blocked") for m in counted)
     progress = got.get("progress") or {}
-    return dict(parent=parent_ref, title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
+    pshort = str(fam.get("short") or code_of(pid)) if pid else ""
+    return dict(parent=parent_ref, parent_id=pid, parent_short=pshort, mark=pshort or parent_ref,
+                ids=fam.get("hub", "none") if pid else "none",
+                title=parent.get("title", ""), short=meta.get("short", ""), repo=meta.get("repo", ""),
                 outcome=parent.get("outcome", ""), cap=cap, running=running, free=free, counts=counts, done=done,
                 members=[{k: v for k, v in m.items() if k != "detail"} for m in members],
                 next=nxt, no_repo=norepo, last_tick=progress.get("summary", ""), summary=kids.get("summary") or {})
@@ -229,8 +418,11 @@ def status(parent_ref, cap):
 
 def line(s):
     c = s["counts"]
+    head = s["parent"] + (" (%s)" % s["parent_short"] if s.get("parent_short") else "")
     out = "%s · 核心 %d：合 %d · 在跑 %d · 重试 %d · 卡住 %d · 未开始 %d · 空位 %d/%d" % (
-        s["parent"], c["core"], c["succeeded"], c["running"], c["retry"], c["blocked"], c["unstarted"], s["free"], s["cap"])
+        head, c["core"], c["succeeded"], c["running"], c["retry"], c["blocked"], c["unstarted"], s["free"], s["cap"])
+    if c.get("waiting"):
+        out += " · 等依赖 %d" % c["waiting"]
     if s["next"]:
         out += " · 该派 " + " ".join(n["key"] for n in s["next"])
     if s["no_repo"]:
