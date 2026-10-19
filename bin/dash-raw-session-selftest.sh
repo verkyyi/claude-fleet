@@ -82,6 +82,8 @@ git init -q "$MAIN"
 git -C "$MAIN" config user.email t@t; git -C "$MAIN" config user.name t
 printf 'seed\n' > "$MAIN/f"; git -C "$MAIN" add f; git -C "$MAIN" commit -qm seed
 BASE_BR="$(git -C "$MAIN" branch --show-current)"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR"
 
 reset_scratch() {   # drop every scratch-* worktree + branch so N is predictable per case
   local d b
@@ -275,7 +277,7 @@ grep -q 'SETOPT .*@origin scratch-5' "$OPTS_LOG" || fail "N same-fleet spawn fro
 reset_scratch
 TMUX=fake TMUX_PANE=%5 SESS_NAME=srcfleet ORIGIN_PROBE="|$WORK/main-scratch-5|$WORK/main-scratch-5"   WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --name adhoc dstfleet
 grep -q 'NEWWIN' "$NEWWIN_LOG" || fail "N a caller in a NON-fleet session (no conf) is headless — it may name a fleet" "$(cat "$WORK/err")"
-mkdir -p "$WORK/conf/fleets/srcfleet"; printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/srcfleet/conf"
+mkdir -p "$WORK/conf/fleets/srcfleet"; : > "$WORK/conf/fleets/srcfleet/conf"
 for extra in '' '--origin issue-77'; do
   reset_scratch
   # shellcheck disable=SC2086

@@ -77,11 +77,14 @@ mkdir -p "$TMPDIR" "$FLEET_CONF_DIR/fleets/alpha/repos" "$FLEET_CONF_DIR/fleets/
 . "$BIN/fleet-lib.sh"
 
 fconf() { printf 'FLEET_REPO="%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH=master\n' "$2" "$WORK/$3" > "$1"; }
-fconf "$FLEET_CONF_DIR/fleets/alpha/conf"           o/claude-fleet cf
+mkdir -p "$FLEET_CONF_DIR/fleets/alpha/repos"; : > "$FLEET_CONF_DIR/fleets/alpha/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-claude-fleet.conf" o/claude-fleet cf; printf 'o-claude-fleet\n' > "$FLEET_CONF_DIR/fleets/alpha/repos/.order"
 fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-tokenledger.conf" o/tokenledger tl
 printf 'FLEET_REPO_SHORT="tl"\n' >> "$FLEET_CONF_DIR/fleets/alpha/repos/o-tokenledger.conf"
-fconf "$FLEET_CONF_DIR/fleets/beta/conf"            o/cee  cee
-fconf "$FLEET_CONF_DIR/fleets/gamma/conf"           o/gee  gee
+mkdir -p "$FLEET_CONF_DIR/fleets/beta/repos"; : > "$FLEET_CONF_DIR/fleets/beta/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/beta/repos/o-cee.conf" o/cee cee; printf 'o-cee\n' > "$FLEET_CONF_DIR/fleets/beta/repos/.order"
+mkdir -p "$FLEET_CONF_DIR/fleets/gamma/repos"; : > "$FLEET_CONF_DIR/fleets/gamma/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/gamma/repos/o-gee.conf" o/gee gee; printf 'o-gee\n' > "$FLEET_CONF_DIR/fleets/gamma/repos/.order"
 
 "$REAL_TMUX" -S "$SOCK" new-session -d -s alpha -n plan -x 200 -y 40 || { echo "no isolated tmux" >&2; exit 1; }
 tmux new-session -d -s beta -x 200 -y 40

@@ -29,6 +29,7 @@
 # are written by the real fleet-report-parent.sh, so the ledger is the real one.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 for f in fleet-await.sh fleet-children.sh fleet-children.py fleet-children-lib.sh fleet-report-parent.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }
 done
@@ -208,7 +209,7 @@ eq "…once" $((n + 1)) "$(wc -l < "$STUB_LOG" | tr -d ' ')"
 # record with no issue is NO-WORKER naming its session; no hub here ⇒ NO-WORKER.
 rm -f "$STUB_RC"
 # the record names its repo: this fleet hosts it from here on (a one-repo fleet)
-mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; printf 'FLEET_REPO=acme/app\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+mkdir -p "$FLEET_CONF_DIR/fleets/$LBL"; : > "$FLEET_CONF_DIR/fleets/$LBL/conf"; fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
 rm -f "$SB/fleet-task-record.sh"
 cat > "$SB/fleet-task-record.sh" <<'STUB'
 #!/bin/bash
@@ -255,12 +256,14 @@ bash "$AW" 408 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/ou
 eq "an accepted launch with no task exits 5" 5 "$?"
 has "…saying no issue-number wait" 'no issue-number wait' "$(cat "$WORK/out")"
 TM kill-window -t "$A"
-printf 'FLEET_REPO=acme/app\nFLEET_TASK_AUTHORITY=hub\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+printf 'FLEET_TASK_AUTHORITY=hub\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
 bash "$AW" 409 -L "$LBL" --parent scratch-7 --interval 1 --timeout 5 > "$WORK/out" 2>&1
 eq "a hub-authority repo: no spawn by issue number (exit 5)" 5 "$?"
 has "…pointing at the task tool" 'hub-authoritative' "$(cat "$WORK/out")"
 eq "…and nothing spawned" "$n" "$(wc -l < "$STUB_LOG" | tr -d ' ')"
-printf 'FLEET_REPO=acme/app\nFLEET_TASK_AUTHORITY=legacy\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+printf 'FLEET_TASK_AUTHORITY=legacy\n' > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+fx_repo "$FLEET_CONF_DIR" "$LBL" acme/app
 await 410 --timeout 30
 W=$(until_win 410); [ -n "$W" ] || fail "a legacy repo still spawns by issue number" "$(cat "$WORK/err")"
 TM kill-window -t "$W"; collect

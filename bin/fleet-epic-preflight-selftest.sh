@@ -36,6 +36,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-epic-preflight.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$SRC" ] || { echo "selftest: $SRC missing" >&2; exit 2; }
@@ -350,12 +351,8 @@ ok "H no resolvable repo is a usage error (exit 2), not a verdict"
 # or the screen silently describes two fleets at once. Drive it through a real
 # conf dir so fleet_conf_file/fleet_load_conf do the resolving, as they do live.
 mkdir -p "$WORK/conf/fleets/fleet-other"
-cat > "$WORK/conf/fleets/fleet-other/conf" <<'OTHERCONF'
-FLEET_REPO="other/monorepo"
-FLEET_BASE_BRANCH="master"
-FLEET_MAX_SESSIONS=30
-FLEET_DEPLOY_CHECK="actions"
-OTHERCONF
+printf 'FLEET_MAX_SESSIONS=30\n' > "$WORK/conf/fleets/fleet-other/conf"
+fx_repo "$WORK/conf" fleet-other other/monorepo FLEET_BASE_BRANCH=master FLEET_DEPLOY_CHECK=actions
 FLEET_CONF_DIR="$WORK/conf" FLEET_REPO='acme/widgets' FLEET_BASE_BRANCH='master' \
   FLEET_MAX_SESSIONS=5 CCQUOTA_HUB_URL='' QUOTA_ROWS='' run_pf --session fleet-other
 [ "$RC" -eq 0 ] || fail "J --session must resolve the other fleet cleanly (exit 0, got $RC)" "$OUT

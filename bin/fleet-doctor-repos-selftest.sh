@@ -29,6 +29,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
@@ -45,11 +46,8 @@ git init -q -b main "$WORK/alpha" 2>/dev/null || { git init -q "$WORK/alpha" && 
 git -C "$WORK/alpha" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 git -C "$WORK/alpha" remote add origin "git@github.com:o/alpha.git"
 
+fx_repo "$WORK/conf" fleet-t o/alpha FLEET_MAIN="$WORK/alpha" FLEET_BASE_BRANCH=main FLEET_DEPLOY_CHECK=actions
 cat > "$WORK/conf/fleets/fleet-t/conf" <<EOF
-FLEET_REPO="o/alpha"
-FLEET_MAIN="$WORK/alpha"
-FLEET_BASE_BRANCH="main"
-FLEET_DEPLOY_CHECK="actions"
 FLEET_BASE_DEPS=1
 FLEET_MODEL="sonnet"
 EOF
@@ -90,7 +88,7 @@ row() {   # row <PASS|WARN|FAIL> <tag> <ERE after the tag>
 run_doctor
 grep -q 'unbound variable' "$WORK/stderr" && fail "doctor died on an unbound variable"
 
-# 1. one block per hosted repo, conf repo first
+# 1. one block per hosted repo, in repos/.order
 heads=$(grep -E '── fleet-t · ' "$WORK/stdout" | sed 's/.*── fleet-t · //' | tr -d '\033' | sed 's/\[[0-9;]*m//g')
 [ "$heads" = "$(printf 'o/alpha\no/beta')" ] || fail "expected blocks o/alpha then o/beta, got: $heads"
 ok
@@ -106,7 +104,7 @@ ok
 row WARN main "o/beta: FLEET_MAIN $WORK/no-such-beta does not exist" || fail "o/beta's missing FLEET_MAIN was not reported by name"
 ok
 
-# 4. scoped keys do not leak from the conf repo into the overlay repo
+# 4. scoped keys do not leak from one repo's overlay into another's
 row PASS deploy 'o/beta: no deploy state configured' || fail "o/beta inherited o/alpha's FLEET_DEPLOY_CHECK"
 ok
 
@@ -115,12 +113,13 @@ row WARN labels 'o/beta: missing fleet labels: enhancement' || fail "o/beta's mi
 ok
 
 # 9. (issue #1944) two repos: o/beta's own settings, the fleet value it shadows,
-#    the token hidden; o/alpha (no overlay) has no overrides row
+#    the token hidden; o/alpha's row names its own key
 row INFO overrides "o/beta: FLEET_MODEL=opus \\(fleet: sonnet\\) · FLEET_API_TOKEN=<hidden> — in $WORK/conf/fleets/fleet-t/repos/o-beta.conf\$" \
   || fail "o/beta's overrides row did not list its own keys"
 grep -q 's3cr3t-beta' "$WORK/stdout" && fail "a credential value was printed"
 grep -q 'overrides .*FLEET_BASE_BRANCH' "$WORK/stdout" && fail "an identity key was listed as an override"
-grep -q 'overrides  *o/alpha' "$WORK/stdout" && fail "o/alpha has no overlay but got an overrides row"
+row INFO overrides "o/alpha: FLEET_DEPLOY_CHECK=actions — in $WORK/conf/fleets/fleet-t/repos/o-alpha.conf\$" \
+  || fail "o/alpha's overrides row did not name its own deploy check"
 ok
 
 # 8. (issue #1104) the `repos` summary row: both repos, beta's broken main named
@@ -170,14 +169,13 @@ row PASS checkout 'o/alpha: .* is on "main"' || fail "back on main did not PASS"
 grep -q 'holds "main"' "$WORK/stdout" && fail "a pruned holder is still reported"
 ok
 
-# 6. degenerate: no overlay → exactly one block
-rm -rf "$WORK/conf/fleets/fleet-t/repos"
+# 6. one repo → exactly one block
+rm -f "$WORK/conf/fleets/fleet-t/repos/o-beta.conf"
 run_doctor
 [ "$(grep -c '── fleet-t · ' "$WORK/stdout")" = 1 ] || fail "a one-repo fleet printed other than one block"
 grep -q 'o/beta' "$WORK/stdout" && fail "o/beta still reported after its overlay was removed"
 row PASS repos '1 hosted: o/alpha ✓$' || fail "a one-repo fleet has no PASS repos row"
 [ "$(grep -c 'repos ' "$WORK/stdout")" = 1 ] || fail "a one-repo fleet printed other than one repos row"
-grep -q 'overrides ' "$WORK/stdout" && fail "a one-repo fleet with no overlay printed an overrides row"
 ok
 # 9. one repo as an overlay holding only its identity
 mkdir -p "$WORK/conf/fleets/fleet-t/repos"

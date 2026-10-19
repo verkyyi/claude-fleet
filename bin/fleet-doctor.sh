@@ -4196,7 +4196,9 @@ if [ -d "$conf_dir" ]; then
     if [ -n "$(_conf_val "$cf" FLEET_REPO)" ]; then
       warn repo "$sess: $cf still names FLEET_REPO — the old layout is not read any more; run \`fleet-conf.sh migrate\`"
     fi
-    for ov in "$conf_dir/fleets/$sess/repos"/*.conf; do
+    # In fleet_repos' order: repos/.order, then any overlay it does not list.
+    for ov in $(sed -e "s|^|$conf_dir/fleets/$sess/repos/|" -e 's|$|.conf|' "$conf_dir/fleets/$sess/repos/.order" 2>/dev/null) \
+              "$conf_dir/fleets/$sess/repos"/*.conf; do
       [ -f "$ov" ] || continue
       r=$(_norm_repo "$(sh -c 'unset FLEET_REPO; . "$1" >/dev/null 2>&1; printf %s "${FLEET_REPO:-}"' _ "$ov")")
       case "$r" in ?*/?*) ;; *) warn repo "$sess: $ov names no FLEET_REPO — that overlay hosts nothing"; continue ;; esac

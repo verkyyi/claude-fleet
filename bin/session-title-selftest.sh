@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 CREAD="$BIN/fleet-control-read.sh"
@@ -38,7 +39,8 @@ export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET
 G="$WORK/.claude-dash/global"
 IC="$WORK/.claude-dash/fleets/acme-app"
 mkdir -p "$G" "$IC" "$WORK/conf/fleets/$S" "$WORK/bin"
-printf 'FLEET_REPO=acme/app\n' > "$WORK/conf/fleets/$S/conf"
+: > "$WORK/conf/fleets/$S/conf"
+fx_repo "$WORK/conf" "$S" acme/app
 printf '%s\tacme-app\tacme/app\n' "$S" > "$G/sessmap"
 # the collector's issue cache: milestone<TAB>#num<TAB>assignee<TAB>title
 issues() { printf '\t#7\tme\t修复侧栏：显示 issue 标题\n\t#9\t\tA\ttabbed title\n' > "$IC/issues"; }

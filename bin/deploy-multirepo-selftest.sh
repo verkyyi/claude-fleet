@@ -20,6 +20,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REFRESH="$BIN/tmux-pr-refresh.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 command -v git >/dev/null 2>&1 || { printf 'deploy-multirepo-selftest: git absent — SKIP\n'; exit 0; }
@@ -86,7 +87,8 @@ printf 'issue-1\t#5\tMERGED\t✓\t\t%s\nissue-2\t#6\tMERGED\t✓\t\t%s\n' "$SHA_
 printf 'live\n' > "$WORK/api/$SHA_APP"          # $SHA_T has no runs → gh fails for it
 
 printf '%s\tacme-tool\tacme/tool\n' "$SESS" > "$C/global/sessmap"
-printf 'FLEET_REPO="acme/tool"\nFLEET_DEPLOY_REF="%s"\n' "$REF" > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+: > "$FLEET_CONF_DIR/fleets/$SESS/conf"
+fx_repo "$FLEET_CONF_DIR" "$SESS" acme/tool FLEET_DEPLOY_REF="$REF"
 overlay() { mkdir -p "$OVL"; { printf 'FLEET_REPO="acme/app"\n'; printf '%s\n' "$@"; } > "$OVL/acme-app.conf"; }
 
 dep() { [ -f "$1/deploy_$2" ] && cut -f1 < "$1/deploy_$2"; }
@@ -113,18 +115,18 @@ refresh acme/app
 [ -z "$(ls "$FA"/deploy_* 2>/dev/null)" ] || fail "no-leak: an overlay without deploy keys must write nothing" "$(ls "$FA")"
 CHECKS=$((CHECKS+1))
 hasnt "no-leak: … and make no gh api call" "$(cat "$WORK/gh.log")" "actions/runs"
-# an overlay for the conf's OWN repo may override its mode
-mkdir -p "$OVL"; printf 'FLEET_REPO="acme/tool"\nFLEET_DEPLOY_REF=""\nFLEET_DEPLOY_CHECK="actions"\n' > "$OVL/acme-tool.conf"
+# the first repo's overlay sets its own mode, like any other's
+fx_repo "$FLEET_CONF_DIR" "$SESS" acme/tool FLEET_DEPLOY_REF="" FLEET_DEPLOY_CHECK=actions
 reset
 refresh acme/tool
-has   "own-overlay: the conf repo's overlay overrides its deploy mode" "$(cat "$WORK/gh.log")" "repos/acme/tool/actions/runs"
-rm -f "$OVL/acme-tool.conf"
+has   "own-overlay: the first repo's overlay overrides its deploy mode" "$(cat "$WORK/gh.log")" "repos/acme/tool/actions/runs"
+fx_repo "$FLEET_CONF_DIR" "$SESS" acme/tool FLEET_DEPLOY_REF="$REF"
 
 # ============================================================ DEGENERATE
-rm -rf "$OVL"
+rm -f "$OVL/acme-app.conf"
 reset
 refresh acme/tool
-eq    "degenerate: no repos/ overlay → the conf's ref mode, as before" live "$(dep "$FT" "$SHA_T")"
+eq    "degenerate: one repo → its ref mode, as before" live "$(dep "$FT" "$SHA_T")"
 hasnt "degenerate: … still no gh api" "$(cat "$WORK/gh.log")" "actions/runs"
 refresh acme/app
 [ -z "$(ls "$FA"/deploy_* 2>/dev/null)" ] || fail "degenerate: a repo the fleet does not host gets no deploy state" "$(ls "$FA")"

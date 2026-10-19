@@ -35,6 +35,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SUT="$BIN/fleet-claude.sh"
 LIB="$BIN/fleet-lib.sh"
 for f in "$SUT" "$LIB"; do [ -f "$f" ] || { printf 'selftest: %s missing\n' "$f" >&2; exit 2; }; done
@@ -293,7 +294,7 @@ runt() {   # like run() with no args, but also scrubs the trust knobs from the e
 }
 printf 'FLEET_MODEL="opus"\n' > "$WORK/fleet.conf"
 mkdir -p "$WORK/main"
-printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"; fx_repo "$WORK/conf" f1 acme/app FLEET_MAIN="$WORK/main"
 runt
 [ -f "$TRUST_LOG" ] || fail "#563 the launcher did not call fleet-trust.sh at all" "$(cat "$WORK/err")"
 grep -qxF "grant --main $WORK/main $PWD" "$TRUST_LOG" || fail "#563 pre-trust must be 'grant --main <FLEET_MAIN> <cwd>'" "$(cat "$TRUST_LOG")"
@@ -301,13 +302,13 @@ grep -q "pre-trusted $WORK/main in /fake/home/.claude.json" "$WORK/err" || fail 
 [ -s "$WORK/argv" ] || fail "#563 claude must still be exec'd after pre-trust" "$(cat "$WORK/err")"
 ok "pre-trust: grant --main <FLEET_MAIN> <cwd> before exec, announced in the pane (#563)"
 
-printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\nFLEET_PRETRUST=0\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+printf 'FLEET_MODEL="opus"\nFLEET_PRETRUST=0\n' > "$WORK/conf/fleets/f1/conf"
 runt
 [ ! -f "$TRUST_LOG" ] || fail "#563 FLEET_PRETRUST=0 must skip the pre-trust call" "$(cat "$TRUST_LOG")"
 [ -s "$WORK/argv" ] || fail "#563 claude must still launch with pre-trust off"
 ok "FLEET_PRETRUST=0 opts the fleet out (claude still launches)"
 
-printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"          # no FLEET_MAIN anywhere
+printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"; rm -rf "$WORK/conf/fleets/f1/repos"   # no FLEET_MAIN anywhere
 runt
 [ ! -f "$TRUST_LOG" ] || fail "#563 no FLEET_MAIN → nothing to trust, no call" "$(cat "$TRUST_LOG")"
 ok "no FLEET_MAIN resolvable → pre-trust is skipped quietly"
@@ -319,7 +320,7 @@ printf '%s\n' "\$*" >> "$TRUST_LOG"
 case "\$1" in grant) echo "fleet-trust: refusing \$4: not a worktree" >&2; exit 3 ;; file) echo /fake/home/.claude.json ;; esac
 exit 0
 EOF
-printf 'FLEET_MODEL="opus"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/f1/conf"
+printf 'FLEET_MODEL="opus"\n' > "$WORK/conf/fleets/f1/conf"; fx_repo "$WORK/conf" f1 acme/app FLEET_MAIN="$WORK/main"
 runt
 grep -q "refusing" "$WORK/err" && fail "#563 a refused cwd (exit 3) must be silent in the pane" "$(cat "$WORK/err")"
 [ -s "$WORK/argv" ] || fail "#563 a refused cwd must not block the launch"

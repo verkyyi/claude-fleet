@@ -31,6 +31,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ADD="$BIN/dash-repo-add.sh"
 [ -f "$ADD" ] || { printf 'selftest: %s missing\n' "$ADD" >&2; exit 2; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -71,11 +72,8 @@ mkrepo() {   # $1=dir $2=owner/name — a checkout whose origin IS that repo
 S=ft
 mkdir -p "$FLEET_CONF_DIR/fleets/$S"
 mkrepo "$WORK/mainA" o/a
-cat > "$FLEET_CONF_DIR/fleets/$S/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/mainA"
-FLEET_BASE_BRANCH="master"
-EOF
+printf 'FLEET_CTX_WINDOW="7"\n' > "$FLEET_CONF_DIR/fleets/$S/conf"   # the fleet conf names no repo (#1937, #4806)
+fx_repo "$FLEET_CONF_DIR" "$S" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
 conf_before=$(cat "$FLEET_CONF_DIR/fleets/$S/conf")
 
 # run <args…> → stdout on $OUT, stderr on $ERR, exit code on $RC
@@ -85,9 +83,9 @@ run() { OUT=$(bash "$ADD" "$@" 2>"$WORK/err"); RC=$?; ERR=$(cat "$WORK/err"); }
 run --session "$S" 'bad repo'
 eq "A: a non owner/name → refused:invalid-repo" "$OUT" "refused:invalid-repo"; eq "A: … rc 1" "$RC" 1
 run --session "$S" o/a
-eq "A: the conf's own repo → refused:hosted" "$OUT" "refused:hosted"; eq "A: … rc 1" "$RC" 1
+eq "A: a hosted repo → refused:hosted" "$OUT" "refused:hosted"; eq "A: … rc 1" "$RC" 1
 has "A: … the human line names it" "$ERR" "already hosts o/a"
-[ -d "$FLEET_CONF_DIR/fleets/$S/repos" ] && fail "A: a refusal created repos/"
+[ "$(ls "$FLEET_CONF_DIR/fleets/$S/repos")" = o-a.conf ] || fail "A: a refusal wrote into repos/"
 mkrepo "$HOME/projects/b" o/b
 run --session "$S" o/b
 eq "A: a prepared ~/projects/<name> → added" "$OUT" "added:o-b"; eq "A: … rc 0" "$RC" 0
@@ -124,9 +122,10 @@ run --session "$S" --bogus; eq "A: an unknown flag → usage" "$RC" 2
 
 # --- B. degenerate first: the fleet conf is never touched; the entries exist anyway ----
 eq "B: the fleet conf is byte-identical after three adds" "$(cat "$FLEET_CONF_DIR/fleets/$S/conf")" "$conf_before"
-# a fresh one-repo fleet (no repos/ dir) still lists the key — it does not
-# depend on how many repos the fleet hosts, which is the whole point
+# a fresh one-repo fleet still lists the key — it does not depend on how many
+# repos the fleet hosts, which is the whole point
 S1=one; mkdir -p "$FLEET_CONF_DIR/fleets/$S1"; cp "$FLEET_CONF_DIR/fleets/$S/conf" "$FLEET_CONF_DIR/fleets/$S1/conf"
+fx_repo "$FLEET_CONF_DIR" "$S1" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
 eq "B: the one-repo fixture hosts one repo" "$(fleet_repos "$S1" | grep -c .)" 1
 eq "B: a one-repo fleet's dash keymap has repo-add on ctrl-z" \
    "$(FLEET_TMUX_PREFIX=C-b FLEET_TMUX_PREFIX2='' bash "$BIN/dash-keymap.sh" key repo-add)" "ctrl-z"

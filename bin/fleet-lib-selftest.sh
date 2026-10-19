@@ -28,6 +28,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 LIB="$BIN/fleet-lib.sh"
 [ -f "$LIB" ] || { printf 'selftest: %s not found\n' "$LIB" >&2; exit 2; }
 
@@ -279,14 +280,14 @@ eq "conf_file: absent → new"   "$CONFROOT/fleets/fleet-z/conf" "$(fleet_conf_f
 # identity + tunables must still apply; global-only keys must keep their pre-overlay
 # (global) value. Run each assertion in a subshell so the sourced vars don't bleed.
 mkdir -p "$CONFROOT/fleets/loadc"
+fx_repo "$CONFROOT" loadc acme/widgets   # the identity is the repo's overlay (#1937, #4806)
 cat > "$CONFROOT/fleets/loadc/conf" <<'LOADC'
-FLEET_REPO="acme/widgets"
 FLEET_CTX_WINDOW=1000000
 FLEET_MAX_SESSIONS=3
 FLEET_GLOBAL_MAX_SESSIONS=999
 FLEET_NOTIFY_CMD="/evil/notify.sh"
 LOADC
-eq "load_conf: per-fleet identity applied" "acme/widgets" \
+eq "load_conf: the fleet's repo overlay applied" "acme/widgets" \
   "$( FLEET_REPO="you/repo"; fleet_load_conf loadc; printf '%s' "$FLEET_REPO" )"
 eq "load_conf: per-fleet tunable applied" "1000000" \
   "$( FLEET_CTX_WINDOW=200000; fleet_load_conf loadc; printf '%s' "$FLEET_CTX_WINDOW" )"

@@ -23,6 +23,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/history-multirepo-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
@@ -51,9 +52,11 @@ before() { local la lb
 for r in A B C; do mkdir -p "$WORK/main$r/.git"; done
 M=M D=D
 mkdir -p "$FLEET_CONF_DIR/fleets/$M/repos" "$FLEET_CONF_DIR/fleets/$D"
-printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainA" > "$FLEET_CONF_DIR/fleets/$M/conf"
+: > "$FLEET_CONF_DIR/fleets/$M/conf"
+fx_repo "$FLEET_CONF_DIR" "$M" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH="master"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="main"\n' "$WORK/mainB" > "$FLEET_CONF_DIR/fleets/$M/repos/o-b.conf"
-printf 'FLEET_REPO="o/c"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainC" > "$FLEET_CONF_DIR/fleets/$D/conf"
+: > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH="master"
 mkdir -p "$FLEET_C/global"
 printf '%s\t%s\t%s\n' "$M" o-a o/a "$D" o-c o/c > "$FLEET_C/global/sessmap"
 

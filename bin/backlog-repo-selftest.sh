@@ -101,9 +101,11 @@ mkdir -p "$C/global" "$FLEET_CONF_DIR/fleets/alpha/repos" "$FLEET_CONF_DIR/fleet
 . "$BIN/fleet-lib.sh"
 
 fconf() { printf 'FLEET_REPO="%s"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH=master\n' "$2" "$WORK/$3" > "$1"; }
-fconf "$FLEET_CONF_DIR/fleets/alpha/conf"                o/aaa aaa
+mkdir -p "$FLEET_CONF_DIR/fleets/alpha/repos"; : > "$FLEET_CONF_DIR/fleets/alpha/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-aaa.conf" o/aaa aaa; printf 'o-aaa\n' > "$FLEET_CONF_DIR/fleets/alpha/repos/.order"
 fconf "$FLEET_CONF_DIR/fleets/alpha/repos/o-bbb.conf"    o/bbb bbb
-fconf "$FLEET_CONF_DIR/fleets/solo/conf"                 o/sss sss
+mkdir -p "$FLEET_CONF_DIR/fleets/solo/repos"; : > "$FLEET_CONF_DIR/fleets/solo/conf"   # every repo is an overlay (#1937, #4806)
+fconf "$FLEET_CONF_DIR/fleets/solo/repos/o-sss.conf" o/sss sss; printf 'o-sss\n' > "$FLEET_CONF_DIR/fleets/solo/repos/.order"
 printf 'alpha\to-aaa\to/aaa\nsolo\to-sss\to/sss\n' > "$C/global/sessmap"
 seed() {   # (re)write the three repos' issues/labels/parents caches
   local s d

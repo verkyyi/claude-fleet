@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -108,18 +109,14 @@ mkrepo "$WORK/mainA" o/a; mkrepo "$WORK/mainB" o/b
 
 A=fa B=fb
 mkdir -p "$FLEET_CONF_DIR/fleets/$A" "$FLEET_CONF_DIR/fleets/$B"
+fx_repo "$FLEET_CONF_DIR" "$A" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
+fx_repo "$FLEET_CONF_DIR" "$B" o/b FLEET_MAIN="$WORK/mainB" FLEET_BASE_BRANCH=main
 cat > "$FLEET_CONF_DIR/fleets/$A/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/mainA"
-FLEET_BASE_BRANCH="master"
 FLEET_MODEL="fable"
 FLEET_MCP_CONFIG="mcp-image"
 FLEET_MAX_SESSIONS="8"
 EOF
 cat > "$FLEET_CONF_DIR/fleets/$B/conf" <<EOF
-FLEET_REPO="o/b"
-FLEET_MAIN="$WORK/mainB"
-FLEET_BASE_BRANCH="main"
 FLEET_MODEL="opus"
 FLEET_MCP_CONFIG=""
 FLEET_SLEEP_MCP_RESTARTABLE="plugin:playwright:playwright"
@@ -257,7 +254,7 @@ TB has-session -t "=$B" 2>/dev/null && fail "B's server still up"
 [ -e "$FLEET_CONF_DIR/fleets/$B" ] && fail "B's conf dir still in fleets/"
 arch=$(ls -d "$FLEET_CONF_DIR/archive/$B-folded-into-$A-"* 2>/dev/null | head -1)
 [ -f "$arch/conf" ] || fail "B's conf not archived under archive/$B-folded-into-$A-<date>"
-has "archived conf intact" "$(cat "$arch/conf" 2>/dev/null)" 'FLEET_REPO="o/b"'
+has "archived conf intact" "$(cat "$arch/repos/o-b.conf" 2>/dev/null)" 'FLEET_REPO="o/b"'
 has "retired line" "$out" "fold: $B retired"
 has "side line" "$out" "fold: $B side state archived at $arch/side"
 eq "no store left keyed by B" "$(side_left "$B")" ""
@@ -282,7 +279,8 @@ eq "no --into = usage" "$rc" 2
 # a source that already hosts two repos
 C="fc"; mkrepo "$WORK/mainC" o/c
 mkdir -p "$FLEET_CONF_DIR/fleets/$C"
-printf 'FLEET_REPO="o/c"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainC" > "$FLEET_CONF_DIR/fleets/$C/conf"
+: > "$FLEET_CONF_DIR/fleets/$C/conf"
+fx_repo "$FLEET_CONF_DIR" "$C" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH="master"
 out=$(bash "$FR" fold "$A" --into "$C" --dry-run 2>&1); rc=$?
 eq "2-repo source rc" "$rc" 1; has "2-repo source msg" "$out" "$A hosts 2 repos"
 leg "4 refusals"
@@ -290,7 +288,8 @@ leg "4 refusals"
 # ---- 5. a stopped target / a failed restore never retires the source ----------
 D="fd"; mkrepo "$WORK/mainD" o/d
 mkdir -p "$FLEET_CONF_DIR/fleets/$D"
-printf 'FLEET_REPO="o/d"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainD" > "$FLEET_CONF_DIR/fleets/$D/conf"
+: > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/d FLEET_MAIN="$WORK/mainD" FLEET_BASE_BRANCH="master"
 tmux -L "$D" new-session -d -s "$D" -n dash 'sleep 3600'
 w=$(tmux -L "$D" new-window -d -P -F '#{window_id}' -t "$D:" -n issue-7 'sleep 3600')
 tmux -L "$D" set -w -t "$w" @issue 7

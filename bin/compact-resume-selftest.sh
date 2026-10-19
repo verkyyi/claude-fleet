@@ -30,6 +30,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 FILES="refocus-hook.sh fleet-compact-resume.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-ladder-log.sh"
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
@@ -128,7 +129,8 @@ reset() {
   printf 'session_name\ts1\nwindow_name\tw12\n@issue\t12\n@claude_state\tdone\nwindow_id\t@1\n@compact_stage\tcompacting\n@ctx_pct\t72\n' > "$OPTS"
   for kv in "$@"; do printf '%s\t%s\n' "${kv%%=*}" "${kv#*=}" >> "$OPTS"; done
   : > "$SENDLOG"; : > "$INBOX"; rm -f "$LOG"
-  printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN=%s/main\n' "$WORK" > "$OVERLAY"
+  : > "$OVERLAY"; rm -rf "$WORK/conf/fleets/s1/repos"
+  fx_repo "$WORK/conf" s1 acme/widgets FLEET_MAIN="$WORK/main"
 }
 getopt() { awk -F'\t' -v k="$1" '$1 == k { print $2 }' "$OPTS"; }
 penv() { env -i PATH="$WORK/fakepath:/usr/bin:/bin" HOME="$WORK" TMPDIR="$WORK/tmp" \

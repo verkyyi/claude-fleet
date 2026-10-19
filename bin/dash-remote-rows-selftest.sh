@@ -126,6 +126,7 @@ set -uo pipefail
 export FLEET_DASH_ORDER=status
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 ROWS="$BIN/tmux-dashboard-rows.sh"
 HUBS="$BIN/fleet-hub-sessions.sh"
 CREAD="$BIN/fleet-control-read.sh"
@@ -142,7 +143,8 @@ unset CCQUOTA_FLEET CCQUOTA_HUB_URL CCQUOTA_VIEWER_TOKEN FLEET_HUB_SESSIONS_CMD 
 export TMPDIR="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" FLEET_UI_LANG=zh
 G="$WORK/.claude-dash/global"
 mkdir -p "$G" "$WORK/conf/fleets/$S" "$WORK/bin" "$WORK/main"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$S/conf"
+: > "$WORK/conf/fleets/$S/conf"
+fx_repo "$WORK/conf" "$S" acme/app FLEET_MAIN="$WORK/main"
 
 CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
@@ -724,7 +726,8 @@ mv "$WORK/remote.f" "$G/remote_$S"; rm -f "$G/remote_fold_$S"
 # ============================================================================
 QS="epicq$$"
 mkdir -p "$WORK/conf/fleets/$QS/repos" "$WORK/.claude-dash/fleets/acme-app" "$WORK/conf/global/epic-running.d"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/conf"
+: > "$WORK/conf/fleets/$QS/conf"
+fx_repo "$WORK/conf" "$QS" acme/app FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO=acme/tool\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$QS/repos/acme-tool.conf"
 printf '\t#1949\t\tEPIC: 侧栏改版：只看只点\n\t#1950\t\t只看只点\n\t#1961\t\t底部数字\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
 # WFMT, every field: 1 session · 2 idx · 3 name · 4 path · 5 state · 7 window id ·
@@ -840,7 +843,8 @@ cp "$WORK/wlist.q" "$WLIST_FILE"
 # ============================================================================
 TS="epict$$"
 mkdir -p "$WORK/conf/fleets/$TS/repos" "$WORK/.claude-dash/fleets/acme-app"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$TS/conf"
+: > "$WORK/conf/fleets/$TS/conf"
+fx_repo "$WORK/conf" "$TS" acme/app FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO=acme/tool\nFLEET_MAIN=%s/main\n' "$WORK" > "$WORK/conf/fleets/$TS/repos/acme-tool.conf"
 printf '\t#1949\t\t侧栏改版\n\t#1950\t\t只看只点\n' > "$WORK/.claude-dash/fleets/acme-app/issues"
 cp "$WLIST_FILE" "$WORK/wlist.t"; : > "$WLIST_FILE"

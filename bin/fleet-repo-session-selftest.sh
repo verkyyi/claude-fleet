@@ -29,6 +29,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 4
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
@@ -89,9 +90,11 @@ mkrepo "$WORK/mainD" o/d
 
 S=ft; D=fd
 mkdir -p "$FLEET_CONF_DIR/fleets/$S/repos" "$FLEET_CONF_DIR/fleets/$D"
-printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainA" > "$FLEET_CONF_DIR/fleets/$S/conf"
+: > "$FLEET_CONF_DIR/fleets/$S/conf"
+fx_repo "$FLEET_CONF_DIR" "$S" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH="master"
 printf 'FLEET_REPO="o/b"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainB" > "$FLEET_CONF_DIR/fleets/$S/repos/o-b.conf"
-printf 'FLEET_REPO="o/d"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/mainD" > "$FLEET_CONF_DIR/fleets/$D/conf"
+: > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/d FLEET_MAIN="$WORK/mainD" FLEET_BASE_BRANCH="master"
 
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n plan -x 200 -y 50 || { echo "could not start isolated tmux" >&2; exit 1; }
 tmux new-session -d -s "$D" -n plan

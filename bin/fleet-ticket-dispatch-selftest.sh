@@ -153,7 +153,7 @@ for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.1; done
 [ -s "$WORK/port" ] || fail "the stand-in hub did not start"
 PORT=$(cat "$WORK/port")
 printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=sekret\n' "$PORT" > "$WORK/conf/node.env"
-printf 'FLEET_TICKETS=hub\nFLEET_FORGE=none\nFLEET_LAND=fleet\n' > "$WORK/conf/fleets/testsess/repos/acme-app.conf"
+printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="'"$WORK/main"'"\nFLEET_TICKETS=hub\nFLEET_FORGE=none\nFLEET_LAND=fleet\n' > "$WORK/conf/fleets/testsess/repos/acme-app.conf"
 printf 'acme-app\n' > "$WORK/conf/fleets/testsess/repos/.order"
 
 E() { env FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/tmp" \

@@ -41,6 +41,7 @@
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 MOVE="$BIN/fleet-move.sh"; REMOTE="$BIN/fleet-move-remote.sh"
 [ -f "$MOVE" ] && [ -f "$REMOTE" ] || { printf 'selftest: fleet-move.sh/-remote.sh not found\n' >&2; exit 2; }
 
@@ -188,17 +189,11 @@ git -C "$WORK/src-home/projects/repo-issue-42" commit -q -m 'do work'
 
 # --- fleet confs (one-fleet-per-login: exactly one `fleets/<sess>/conf` each) --
 mkdir -p "$WORK/src-home/.config/claude-fleet/fleets/$LSRC"
-cat > "$WORK/src-home/.config/claude-fleet/fleets/$LSRC/conf" <<EOF
-FLEET_REPO="o/n"
-FLEET_MAIN="$WORK/src-home/projects/repo"
-FLEET_BASE_BRANCH="master"
-EOF
+: > "$WORK/src-home/.config/claude-fleet/fleets/$LSRC/conf"
+fx_repo "$WORK/src-home/.config/claude-fleet" "$LSRC" o/n FLEET_MAIN="$WORK/src-home/projects/repo" FLEET_BASE_BRANCH=master
 mkdir -p "$WORK/dst-home/.config/claude-fleet/fleets/$LDST"
-cat > "$WORK/dst-home/.config/claude-fleet/fleets/$LDST/conf" <<EOF
-FLEET_REPO="o/n"
-FLEET_MAIN="$WORK/dst-home/projects/repo"
-FLEET_BASE_BRANCH="master"
-EOF
+: > "$WORK/dst-home/.config/claude-fleet/fleets/$LDST/conf"
+fx_repo "$WORK/dst-home/.config/claude-fleet" "$LDST" o/n FLEET_MAIN="$WORK/dst-home/projects/repo" FLEET_BASE_BRANCH=master
 mkdir -p "$WORK/dst-home/.claude/fleet/bin"
 ln -s "$REMOTE" "$WORK/dst-home/.claude/fleet/bin/fleet-move-remote.sh"
 ln -s "$BIN/fleet-lib.sh" "$WORK/dst-home/.claude/fleet/bin/fleet-lib.sh"

@@ -174,7 +174,8 @@ git clone -q "$WORK/o.git" "$WORK/m" 2>/dev/null
 ( cd "$WORK/m" && git config user.email t@t && git config user.name t && git checkout -q -b master 2>/dev/null
   echo one > f && git add f && git commit -qm one && git push -q origin master ) || fail "git setup"
 mkdir -p "$FLEET_CONF_DIR/fleets/$SESS"
-{ printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\nFLEET_MAX_SESSIONS=20\n' "$WORK/m"
+. "$BIN/selftest-repo-fixture.sh"; fx_repo "$FLEET_CONF_DIR" "$SESS" o/a FLEET_MAIN="$WORK/m" FLEET_BASE_BRANCH=master
+{ printf 'FLEET_MAX_SESSIONS=20\n'
   printf 'FLEET_SCRATCH_POOL=1\nFLEET_POOL_SETTLE_MIN=1\nFLEET_POOL_STABLE_HITS=2\n'
   printf 'FLEET_POOL_PROBE_TIMEOUT=40\nFLEET_POOL_WARM_TIMEOUT=20\nFLEET_POOL_CLAIM_REFILL_DELAY=600\n'
   printf "FLEET_POOL_DISK_PROBE_CMD='echo 500'\nFLEET_LOAD_PROBE_CMD='echo 0.10'\n"

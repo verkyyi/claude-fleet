@@ -52,6 +52,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/fleet-cleanup-daemon.sh"
 [ -x "$SRC" ] || { printf 'selftest: %s not found/executable\n' "$SRC" >&2; exit 2; }
 
@@ -168,7 +169,8 @@ run() { # extra args (session / --dry-run) → runs the daemon, appends to $WORK
     bash "$WORK/bin/fleet-cleanup-daemon.sh" "$@" >>"$WORK/log" 2>&1
 }
 reset() { : > "$CLEAN_LOG"; : > "$WORK/log"; rm -rf "$WORK/leases"/* 2>/dev/null || true; }
-conf() { { printf 'FLEET_REPO="fake/repo"\n'; printf 'FLEET_MAIN="%s"\n' "$WORK/main"; printf '%s\n' "$@"; } > "$WORK/conf/s1.conf"; }
+conf() { printf '%s\n' "$@" > "$WORK/conf/s1.conf"; rm -rf "$WORK/conf/fleets/s1/repos"
+         fx_repo "$WORK/conf" s1 fake/repo FLEET_MAIN="$WORK/main"; }
 reaped_list() { tr '\n' ' ' < "$CLEAN_LOG" | sed 's/ *$//'; }
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2
@@ -377,6 +379,7 @@ reset
 touch "$WORK/idle-rate"
 : > "$WORK/idle-calls"
 cp "$WORK/conf/s1.conf" "$WORK/conf/s2.conf"
+fx_repo "$WORK/conf" s2 fake/repo FLEET_MAIN="$WORK/main"
 run s1 s2
 [ "$(reaped_list)" = "101 102 105" ] || fail 'rate limit: the first fleet PR pass runs before its idle pass'
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'

@@ -4,6 +4,7 @@
 # fake Claude/Codex processes. No model requests, GitHub calls or live hooks.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 5
 for dep in tmux python3 perl git; do
@@ -80,7 +81,8 @@ git init -q "$MAIN" || fail 'git init'
 git -C "$MAIN" config user.name test; git -C "$MAIN" config user.email test@example.invalid
 printf 'base\n' > "$MAIN/file"
 git -C "$MAIN" add file; git -C "$MAIN" commit -qm initial || fail 'initial commit'
-printf 'FLEET_MAIN=%q\nFLEET_REPO=fake/repo\n' "$MAIN" > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+: > "$FLEET_CONF_DIR/fleets/$LBL/conf"
+fx_repo "$FLEET_CONF_DIR" "$LBL" fake/repo FLEET_MAIN="$MAIN"
 
 ln -s "$(command -v perl)" "$FB/claude"
 ln -s "$(command -v perl)" "$FB/codex"

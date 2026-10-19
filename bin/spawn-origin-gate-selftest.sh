@@ -23,6 +23,7 @@
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'spawn-origin-gate selftest: tmux absent — SKIP'; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/spawn-origin-gate.XXXXXX")" || exit 2
@@ -31,7 +32,8 @@ export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 export FLEET_UI_QUIET=1 TMPDIR="$WORK"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$L/conf"
+: > "$FLEET_CONF_DIR/fleets/$L/conf"
+fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_HUB_STATUS_CMD FLEET_HUB_CACHE_SECS
 
 # gh shim: records every call; nothing in this test may reach GitHub.

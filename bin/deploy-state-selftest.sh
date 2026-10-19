@@ -178,7 +178,9 @@ fi
 
 # ============================================================ PRODUCER
 printf 's1\tfake-repo\tfake/repo\n' > "$C/global/sessmap"
-conf() { { printf 'FLEET_REPO="fake/repo"\n'; printf '%s\n' "$@"; } > "$WORK/conf/fleets/s1/conf"; }
+conf() { : > "$WORK/conf/fleets/s1/conf"; mkdir -p "$WORK/conf/fleets/s1/repos"   # every repo is an overlay (#1937, #4806)
+         { printf 'FLEET_REPO="fake/repo"\n'; printf '%s\n' "$@"; } > "$WORK/conf/fleets/s1/repos/fake-repo.conf"
+         printf 'fake-repo\n' > "$WORK/conf/fleets/s1/repos/.order"; }
 FD="$C/fleets/fake-repo"
 dep() { [ -f "$FD/deploy_$1" ] && cut -f1 < "$FD/deploy_$1"; }
 dep_ts() { [ -f "$FD/deploy_$1" ] && cut -f2 < "$FD/deploy_$1"; }

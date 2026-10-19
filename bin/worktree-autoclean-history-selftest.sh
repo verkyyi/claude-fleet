@@ -27,6 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SRC="$BIN/worktree-autoclean.sh"
 LIB="$BIN/fleet-lib.sh"
 HIST="$BIN/fleet-history.sh"
@@ -127,10 +128,9 @@ GHFAKE
 chmod +x "$WORK/fakebin/gh"
 
 # --- a per-fleet conf so fleet_sockets yields a socket ------------------------
+rm -rf "$WORK/conf/fleets/sess1/repos"
+fx_repo "$WORK/conf" sess1 fake/repo FLEET_MAIN="$BASE" FLEET_BASE_BRANCH="$BASE_BR"
 cat > "$WORK/conf/sess1.conf" <<EOF
-FLEET_MAIN="$BASE"
-FLEET_REPO="fake/repo"
-FLEET_BASE_BRANCH="$BASE_BR"
 FLEET_PROTECTED_RE='^(master|main|develop|test)\$'
 EOF
 

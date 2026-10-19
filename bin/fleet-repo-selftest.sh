@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -62,13 +63,10 @@ mkrepo "$WORK/wtB"   o/b     # stands in for B's issue worktree
 S=ft
 mkdir -p "$FLEET_CONF_DIR/fleets/$S"
 cat > "$FLEET_CONF_DIR/fleets/$S/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/mainA"
-FLEET_BASE_BRANCH="master"
 FLEET_MODEL="opus"
-FLEET_DEPLOY_REF="~/deployed-a"
 FLEET_GLOBAL_MAX_SESSIONS=99
 EOF
+fx_repo "$FLEET_CONF_DIR" "$S" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master FLEET_DEPLOY_REF="~/deployed-a"
 
 "$REAL_TMUX" -S "$SOCK" new-session -d -s "$S" -n plan -x 200 -y 50 || { echo "could not start isolated tmux" >&2; exit 1; }
 paneOf() { tmux display-message -p -t "$S:$1" '#{pane_id}'; }
@@ -82,22 +80,14 @@ tmux set-option -w -t "$S:wNO" @norepo 1
 
 # in_pane <window> <cmd…> — run as if inside that window's pane.
 in_pane() { local w="$1"; shift; ( export TMUX="$SOCK,1,0" TMUX_PANE; TMUX_PANE=$(paneOf "$w"); "$@" ); }
-envdump() { ( set -o posix; set ) | grep -E '^FLEET_(REPO|MAIN|BASE_BRANCH|MODEL|DEPLOY_REF|GLOBAL_MAX_SESSIONS)='; }
 
-# --- A. degenerate: no repos/ dir ------------------------------------------------
-ref_load() {   # the pre-#788 fleet_load_conf body, verbatim
-  local conf; conf=$(fleet_conf_file "$1")
-  [ -f "$conf" ] || return 0
-  local _ore; _ore=$(printf '%s' "$_FLEET_GLOBAL_ONLY" | tr ' ' '|')
-  eval "$(grep -Ev "^[[:space:]]*(export[[:space:]]+)?(${_ore})=" "$conf")"
-  return 0
-}
-want=$( ref_load "$S"; envdump )
-: > "$WORK/tmux.calls"
+# --- A. one repo: its overlay, wherever the pane is ---------------------------------
 got=$( in_pane wB bash -c '. "$1"; fleet_load_conf "$2"; ( set -o posix; set ) | grep -E "^FLEET_(REPO|MAIN|BASE_BRANCH|MODEL|DEPLOY_REF|GLOBAL_MAX_SESSIONS)="' _ "$BIN/fleet-lib.sh" "$S" )
-calls=$(grep -c 'display-message -p -t %' "$WORK/tmux.calls" 2>/dev/null || true)
-eq "A: degenerate in-pane env byte-identical" "$got" "$want"
-eq "A: degenerate makes no tmux lookup" "${calls:-0}" 0
+eq "A: a one-repo fleet's pane loads its overlay on the fleet conf" "$got" "FLEET_BASE_BRANCH=master
+FLEET_DEPLOY_REF='~/deployed-a'
+FLEET_MAIN=$WORK/mainA
+FLEET_MODEL=opus
+FLEET_REPO=o/a"
 eq "A: fleet_repos (one repo)" "$(fleet_repos "$S")" "o/a"
 eq "A: one-repo fleet window resolves to its only repo" "$(fleet_window_repo "$S" "$S:wUNK")" "o/a"
 eq "A: ...and is not stamped" "$(tmux display-message -p -t "$S:wUNK" '#{@repo}')" ""
@@ -173,10 +163,10 @@ bash "$BIN/fleet-repo.sh" remove --session "$S" o/b >/dev/null 2>&1 && fail "F: 
 [ -f "$f" ] || fail "F: refused remove deleted the overlay"
 bash "$BIN/fleet-repo.sh" remove --session "$S" o/b --force >/dev/null 2>&1 || fail "F: --force remove failed"
 eq "F: after remove" "$(fleet_repos "$S")" "o/a"
-# The fleet conf's own repo (old layout) goes the same road (issue #1937): moved
-# into repos/ first, then removed — no refusal, no promotion — leaving no repo.
-bash "$BIN/fleet-repo.sh" remove --session "$S" o/a --force >/dev/null 2>&1 || fail "F: the conf's own repo did not remove"
-eq "F: after removing the conf's own repo" "$(fleet_repos "$S")" ""
+# The first repo goes the same road (issue #1937) — no refusal, no promotion —
+# leaving no repo.
+bash "$BIN/fleet-repo.sh" remove --session "$S" o/a --force >/dev/null 2>&1 || fail "F: the first repo did not remove"
+eq "F: after removing the first repo" "$(fleet_repos "$S")" ""
 grep -q '^FLEET_REPO=' "$(fleet_conf_file "$S")" && fail "F: the fleet conf still names a repo"
 
 [ "$FAILS" -eq 0 ] && { echo "fleet-repo-selftest: PASS"; exit 0; }

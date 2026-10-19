@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 CLI="$BIN/fleet-pr-verdict.sh"
 [ -x "$CLI" ] || { echo "selftest: $CLI missing/not executable" >&2; exit 2; }
 
@@ -159,9 +160,11 @@ ok "gh missing → exit 2, no verdict invented"
 # hosted repos — and a one-repo fleet runs the same rule (issue #1938).
 MERGE_CLI="$BIN/fleet-pr-merge.sh"
 RW="$WORK/repo"; mkdir -p "$RW/fakebin" "$RW/conf/fleets/mr/repos" "$RW/conf/fleets/one" "$RW/tmp"
-printf 'FLEET_REPO=o/a\n' > "$RW/conf/fleets/mr/conf"
+: > "$RW/conf/fleets/mr/conf"
+fx_repo "$RW/conf" "mr" o/a
 printf 'FLEET_REPO=o/b\n' > "$RW/conf/fleets/mr/repos/o-b.conf"
-printf 'FLEET_REPO=o/a\n' > "$RW/conf/fleets/one/conf"
+: > "$RW/conf/fleets/one/conf"
+fx_repo "$RW/conf" "one" o/a
 # fake tmux: the session name for $FLEET_SESSION_FMT, the window's @repo for the
 # '#{@repo}|#{@norepo}|#{@worktree}' read; everything else answers nothing.
 cat > "$RW/fakebin/tmux" <<'TMUXFAKE'

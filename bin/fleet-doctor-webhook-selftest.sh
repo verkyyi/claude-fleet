@@ -45,9 +45,15 @@ ok() { CHECKS=$((CHECKS + 1)); }
 # setup <global 1|''> <fleet-a conf value|''> <o-beta overlay value|''> <fleet-b 1|0>
 setup() {
   if [ -n "$1" ]; then printf 'FLEET_WEBHOOK=%s\n' "$1" > "$WORK/fleet.conf"; else rm -f "$WORK/fleet.conf"; fi
-  { echo 'FLEET_REPO="o/alpha"'; [ -n "$2" ] && echo "FLEET_WEBHOOK=$2"; } > "$WORK/conf/fleets/fleet-a/conf"
+  # every repo is an overlay (#1937, #4806); the fleet conf holds the fleet-wide value
+  { [ -n "$2" ] && echo "FLEET_WEBHOOK=$2"; } > "$WORK/conf/fleets/fleet-a/conf"
+  echo 'FLEET_REPO="o/alpha"' > "$WORK/conf/fleets/fleet-a/repos/o-alpha.conf"
   { echo 'FLEET_REPO="o/beta"'; [ -n "$3" ] && echo "FLEET_WEBHOOK=$3"; } > "$WORK/conf/fleets/fleet-a/repos/o-beta.conf"
-  if [ "$4" = 1 ]; then echo 'FLEET_REPO="o/alpha"' > "$WORK/conf/fleets/fleet-b/conf"; else rm -f "$WORK/conf/fleets/fleet-b/conf"; fi
+  printf 'o-alpha\no-beta\n' > "$WORK/conf/fleets/fleet-a/repos/.order"
+  rm -rf "$WORK/conf/fleets/fleet-b/repos"
+  if [ "$4" = 1 ]; then : > "$WORK/conf/fleets/fleet-b/conf"; mkdir -p "$WORK/conf/fleets/fleet-b/repos"
+    echo 'FLEET_REPO="o/alpha"' > "$WORK/conf/fleets/fleet-b/repos/o-alpha.conf"
+  else rm -f "$WORK/conf/fleets/fleet-b/conf"; fi
 }
 # The global layer is the point here, so the gate's FLEET_SKIP_GLOBAL_CONF is
 # dropped: the only fleet.conf in reach is the sandbox's own.
@@ -85,9 +91,9 @@ printf '%s' "$r" | grep -Eq '1 repo\(s\) forwarded \(o/alpha\)' || fail "3: expe
 setup '' '' '' 1; run_doctor
 whrow >/dev/null && fail "4: webhook row printed with no opt-in: $(whrow)"; ok
 
-# 5. degenerate one-repo fleet (no overlay dir contents)
+# 5. a one-repo fleet, the fleet conf opting in
 rm -f "$WORK/conf/fleets/fleet-a/repos/o-beta.conf"
-{ echo 'FLEET_REPO="o/alpha"'; echo 'FLEET_WEBHOOK=1'; } > "$WORK/conf/fleets/fleet-a/conf"
+echo 'FLEET_WEBHOOK=1' > "$WORK/conf/fleets/fleet-a/conf"
 rm -f "$WORK/fleet.conf" "$WORK/conf/fleets/fleet-b/conf"; run_doctor
 r=$(whrow) || fail "5: fleet conf FLEET_WEBHOOK=1 printed no webhook row"
 printf '%s' "$r" | grep -Eq 'PASS[[:space:]]+webhook[[:space:]]+1 repo\(s\) forwarded \(o/alpha\)' || fail "5: got: $r"; ok

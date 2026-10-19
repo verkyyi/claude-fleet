@@ -40,6 +40,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 RESOLVE="$BIN/.fleet-restore-resolve.py"
 RESTORE="$BIN/fleet-restore.sh"
 HUBSH="$BIN/hub-session.sh"
@@ -150,11 +151,8 @@ dup=$(printf '%s|%s|%s|-\n|%s|%s|-\n' "$DUP_SID" "owner" "$DUP_PATH" "guess" "$D
 # ============================================================ 2. SNAPSHOT ======
 # A real fleet layout: a 'plan' window with a @hub pane + a work window.
 # snapshot() must capture the hub pane as a HUB row despite the panel name.
-cat > "$FLEET_CONF_DIR/snap.conf" <<EOF
-FLEET_REPO=acme/widgets
-FLEET_MAIN=$STEW_PATH
-FLEET_BASE_BRANCH=main
-EOF
+: > "$FLEET_CONF_DIR/snap.conf"
+fx_repo "$FLEET_CONF_DIR" snap acme/widgets FLEET_MAIN="$STEW_PATH" FLEET_BASE_BRANCH=main
 tmux new-session -d -s snap -x 200 -y 50 -c "$WORK_PATH" 2>/dev/null \
   || fail "could not start isolated tmux server"
 tmux rename-window -t snap "issue-9"
@@ -385,11 +383,8 @@ TAB="$(printf '\t')"
 # 5-field (pre-#153) WIN rows on purpose: they exercise the legacy-map parse in
 # the reconcile path (missing state trio → no nudge/re-stamp, just resume).
 W11="$WORK/repo-issue-11"; mkdir -p "$W11"
-cat > "$FLEET_CONF_DIR/hubonly.conf" <<EOF
-FLEET_REPO=acme/widgets
-FLEET_MAIN=$STEW_PATH
-FLEET_BASE_BRANCH=main
-EOF
+: > "$FLEET_CONF_DIR/hubonly.conf"
+fx_repo "$FLEET_CONF_DIR" hubonly acme/widgets FLEET_MAIN="$STEW_PATH" FLEET_BASE_BRANCH=main
 HMAP="$FLEET_CONF_DIR/restore/hubonly.map"
 mkdir -p "$FLEET_CONF_DIR/restore"
 {
