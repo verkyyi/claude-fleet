@@ -268,7 +268,7 @@ func (s *Server) preferredLogin(principal, displayName string) string {
 // leastBusyMachine is fleet.auto_assign=least-busy's pick
 // (claude-fleet#2069): among the machines the roster hears right now —
 // online (not 维护中, not lost), not only-coordinating, not a person's own
-// computer, not a SPOT node, with a connected admin node to open the login
+// computer, with a connected admin node to open the login
 // and a session count it can read, and — a machine's own node program
 // opening it (a Linux machine) — one the relay trusts, since its create ends
 // by fetching the login's relay credential (claude-fleet#3294) — and one where
@@ -321,7 +321,7 @@ func (s *Server) pickMachine(now time.Time, spareOnly bool, skip []string) (stri
 	var fit []cand
 	spareless := false
 	for _, m := range snap.Machines {
-		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
+		if m.Status != "online" || m.ComputeOff || m.Personal ||
 			m.Sessions == nil || !admin[strings.ToLower(m.Hostname)] || hasFold(skip, m.Hostname) {
 			continue
 		}

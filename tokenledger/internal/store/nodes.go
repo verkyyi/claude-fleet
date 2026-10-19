@@ -204,9 +204,9 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetJoin(); err != nil {
 		return err
 	}
-	// SPOT nodes and node kinds (claude-fleet#1428) — after the join codes,
-	// whose table it widens.
-	if err := s.ensureFleetSpot(); err != nil {
+	// Node kinds (claude-fleet#1428) and a login node's device
+	// (claude-fleet#2212) — after the join codes, whose table it widens.
+	if err := s.ensureNodeKind(); err != nil {
 		return err
 	}
 	// A cluster's pods (claude-fleet#3553).

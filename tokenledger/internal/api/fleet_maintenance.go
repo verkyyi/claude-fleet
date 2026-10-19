@@ -22,7 +22,7 @@ import (
 // `maintenance`, and it is the operator's, never the heartbeat's:
 //
 //   - stored as the fleet setting `fleet.node_maintenance.<machine>` (the same
-//     table as the per-machine caps and the SPOT weight; no new schema), so it
+//     table as the per-machine caps; no new schema), so it
 //     survives the outage itself and a hub restart, and the machine comes back
 //     as 维护中 until someone says it is done — not as a placement target the
 //     moment its agent reconnects;

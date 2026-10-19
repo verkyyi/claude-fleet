@@ -323,3 +323,77 @@ func TestHubIdentities(t *testing.T) {
 		t.Fatal("an unknown kind was taken")
 	}
 }
+
+// Migration 3 (claude-fleet#4797) on a hub that ran SPOT nodes: the ledger
+// goes, the SPOT settings go, every other setting and every endpoint stays,
+// and a second run changes nothing. A database that never had the table
+// (fleet module off) migrates too.
+func TestMigration3_RemovesTheSpotNodes(t *testing.T) {
+	s := newStore(t)
+	if err := s.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	db := s.DB()
+	if err := s.EnrollKind("ep-spot", "spot-a1", "hash-spot", "agent"); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE fleet_spot_nodes (id TEXT PRIMARY KEY, pod_name TEXT NOT NULL, state TEXT NOT NULL)`,
+		`INSERT INTO fleet_spot_nodes VALUES ('s1', 'ccquota-spot-a1', 'released'), ('s2', 'ccquota-spot-b2', 'released')`,
+		`UPDATE endpoints SET node_kind = 'ephemeral' WHERE endpoint_id = 'ep-spot'`,
+		`DELETE FROM hub_migrations WHERE id = 3`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	now := time.Now()
+	for _, k := range append([]string{"fleet.node_cap.mac-c"}, spotSettings...) {
+		if err := s.SetFleetSetting(k, "1", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := runMigrations(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := dialectOf(db).tableExists(db, "fleet_spot_nodes"); err != nil || ok {
+		t.Fatalf("fleet_spot_nodes still there (%v)", err)
+	}
+	settings, err := s.FleetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range spotSettings {
+		if _, ok := settings[k]; ok {
+			t.Errorf("%s survived the migration", k)
+		}
+	}
+	if settings["fleet.node_cap.mac-c"] != "1" {
+		t.Errorf("another setting went with the SPOT ones: %v", settings)
+	}
+	if kind, err := s.EndpointKind("ep-spot"); err != nil || kind != "agent" {
+		t.Errorf("the endpoint went: %q %v", kind, err)
+	}
+	ms, err := s.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	for _, m := range ms {
+		if m.ID == 3 {
+			detail = m.Detail
+		}
+	}
+	for _, want := range []string{`"dropped.fleet_spot_nodes":2`, `"deleted.fleet_settings":4`, `"kept.ephemeral_endpoints":1`} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("migration 3 detail %s lacks %s", detail, want)
+		}
+	}
+
+	fresh := newStore(t)
+	if err := runMigrations(fresh.DB()); err != nil {
+		t.Fatalf("a database with no fleet tables: %v", err)
+	}
+}

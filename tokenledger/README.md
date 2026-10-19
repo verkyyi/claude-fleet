@@ -224,7 +224,7 @@ What each replica keeps in its own memory, and why that is acceptable:
 | a revoked node token | `fleet_node_revoke.go` | the holder closes the link at the node's next message (every message re-checks the token) |
 
 **Two hubs on one Postgres** (claude-fleet#2123): each background loop — the
-daily prune, node alerts, the SPOT controller — runs only on the replica holding
+daily prune, node alerts — runs only on the replica holding
 its Postgres advisory lock (`internal/leader`); the lock goes with that
 replica's connection, and the other takes it within 5 s. A credential refresh
 takes a per-account lock across replicas, so one account is never refreshed
@@ -1019,7 +1019,6 @@ is one `hub_audit` row: who, when, old → new.
 | `pool.skip_pct` | 85 | a node's `FLEET_ACCOUNT_CEILING` (served at `/v1/fleet/client-settings` → `pool`) |
 | `pool.move_when_full` | off | a node's `FLEET_FAILOVER` (same) |
 | `fleet.auto_assign` | — | `CCQUOTA_FLEET_AUTO_ASSIGN`, no longer read (`none` = no machines; `least-busy` = the hub picks, claude-fleet#2069) |
-| `fleet.spot` | off | a set `CCQUOTA_FLEET_SPOT_IMAGE` meaning on (the image is still the deploy's) |
 | `fleet.routes_extra` | — | more machines / routes on top of `CCQUOTA_FLEET_ROUTES`, the same JSON |
 | `fleet.machine_names` | — | the short name every client shows a machine by, `mac-c=mac-b,mac-d=mac-a` (claude-fleet#1706); wins over a `CCQUOTA_FLEET_ROUTES` alias, rides `/v1/fleet/routes` → each client's `FLEET_NODE_ALIASES`, and `/v1/nodes` → `machines[].alias` |
 | `fleet.spares` | off | keep spare logins opened on every host machine (claude-fleet#2263): a newcomer's first sign-in is handed a ready one — recorded as theirs, never renamed — instead of waiting for one to be made. Only on a machine whose admin node opens logins credential-separated (`credsep`, claude-fleet#2294), and a spare whose create did not come back `separated` is never handed out (and stops that machine's refill until `forget`). Refilled on the admin beat only when the machine is fit (online, not 维护中, load / memory inside the placement thresholds, its admit gate open); 维护中 or under pressure it only shrinks. Each spare is a macOS user (measured idle: ~9 processes, 60–75 MB, 0.25–0.9 GB): turn it on once you have agreed to that. `fleet hub machines` shows 备用 N · 已用 M / 上限 K |
@@ -1032,7 +1031,7 @@ is one `hub_audit` row: who, when, old → new.
 | `fleet.trial.max_secs` | 900 | a trial's time holding a machine (summed over its seats); with `max_msgs`, whichever comes first ends it: the machine goes back (audited `trial.release reason=time\|msgs`, the 15-second sweep — it replaced #3590's 7-day reclaim) and the chat page reads 「这次试用用完了」 (claude-fleet#4059) |
 | `fleet.trial.max_msgs` | 20 | a trial's lines sent: the last one's reply gets `trialCapGrace` (2 min) to arrive, then the machine goes back; `GET /v1/try/state` is what's left (the chat's top bar, read every 15 s and after each line). An approved request makes the trial person a member (`converted`): the login they hold stays theirs, else they are placed as any member |
 | `fleet.trial.cred_allow` | `"*"` | the subscriptions a trial person may use (claude-fleet#4260): a trial person is a fresh `p:` principal nobody lists, so its person allowance (`fleet.cred_allow.user.*`, #3043) is this ONE setting — `"*"` every one it is otherwise eligible for (the machine's own list still applies), a JSON list of subscription IDs only those, `[]` none: trials then wait with reason `nosub` (「试用暂时没有可用订阅」) instead of being placed onto the proxy's 403. A list written for the person wins; usage is still counted by their principal. Approval (`converted`) writes it as the new member's own `fleet.cred_allow.user.<pid>` (a `policy` cred-audit row) |
-| `fleet.cred_pod_providers` | codex | the subscription providers every cluster pod may use (claude-fleet#4601): a person's pod `u-<nonce>` (drill pods too), the ACK worker `fleet-linux-*`, a SPOT pod `ccquota-spot-*` — the machine layer of their allowlist passes this first, so an owner's `"*"` reads as every Codex subscription and an owner's list as its Codex entries; any other provider is refused «cluster pods are Codex-only». Comma-separated (`codex,claude`), `*` for no limit |
+| `fleet.cred_pod_providers` | codex | the subscription providers every cluster pod may use (claude-fleet#4601): a person's pod `u-<nonce>` (drill pods too), the ACK worker `fleet-linux-*` — the machine layer of their allowlist passes this first, so an owner's `"*"` reads as every Codex subscription and an owner's list as its Codex entries; any other provider is refused «cluster pods are Codex-only». Comma-separated (`codex,claude`), `*` for no limit |
 | `fleet.spare_max` | 5 | spares per machine, at most — within `fleet.node_user_cap.<machine>` − the logins handed out there |
 | `fleet.clusters` | — | the clusters that keep spare **pods** (claude-fleet#3553): each one's name as its fleet-ops reports it (`CCQUOTA_FLEET_PROVISIONER` set, hello `cluster_ops`). With `fleet.spares` on and the account key set, a newcomer placed on a cluster (`fleet.auto_assign` or an assign naming it) is handed a ready pod of their own — bound, not started — and removing them destroys the pod and starts a fresh one; `docs/dev/MANAGED-LINUX.md` «Spare pods» |
 | `fleet.spare_max.<cluster>` | `fleet.spare_max` | spare pods one cluster keeps, within `fleet.node_user_cap.<cluster>` − the pods people hold |
@@ -1047,10 +1046,8 @@ The old flag and variables were copied into the database by the version
 that introduced the settings (claude-fleet#1986) and are **no longer read**
 (claude-fleet#2087): a deploy that still sets one changes nothing, and a
 machine login is someone's only while their hub_users row or a
-`user.<id>.machine_login` says so. The one old value still honoured is a set
-`CCQUOTA_FLEET_SPOT_IMAGE` meaning `fleet.spot` on, copied into the database
-once at start (audited as `deploy`, marked `hub.legacy_migrated.fleet.spot` so
-an admin's later clear is not copied back). The CLI authenticates with
+`user.<id>.machine_login` says so. (`fleet.spot` and `fleet.spot_weight` went
+with the SPOT nodes; migration 3 deleted them, claude-fleet#4797.) The CLI authenticates with
 `CCQUOTA_VIEWER_TOKEN`, or `FLEET_HUB_SESSION` set to a signed-in admin's
 `ccq_sess` cookie — both read from the environment, never written down.
 
@@ -1108,7 +1105,7 @@ only picks the login and display name, both re-validated there:
 person's login on those machines at their first sign-in; `least-busy`
 (claude-fleet#2069) queues it on ONE machine the hub picks at that moment —
 online (not 维护中, not lost), not only-coordinating, not a person's own
-computer, not SPOT, with a connected admin agent — fewest sessions first (a
+computer, with a connected admin agent — fewest sessions first (a
 machine already hosting a repo before one that hosts none, then load per core,
 then name); none fit = nothing queued, and the next look retries. The login is
 the person's **GitHub username**, lowercased, when a node would make it
@@ -1447,7 +1444,7 @@ provider serves:
 
 - **Which node.** A connected **admin** agent (on `CCQUOTA_FLEET_ADMIN_USERS`,
   started with `CCQUOTA_FLEET_ADMIN=1`) whose hello offered `oauth_refresh`,
-  online by its heartbeat, not a SPOT pod (its egress is the cluster's own),
+  online by its heartbeat,
   lowest load per core first — mac-b or mac-a, whichever is idler. The node picks the
   token endpoint itself, by provider: the hub cannot name a host or send a body
   anywhere else, so a node is never a general forwarder.
@@ -1812,81 +1809,6 @@ lands the branch, unpacks the transcript and resumes the session. A `working`
 session is refused (`INVALID_STATE`); a failed move gives the lease back to the
 source; a settled move's bundle is dropped, and every bundle expires after a day.
 
-### SPOT nodes — the hub starts a machine when every fixed one is busy (claude-fleet#1428)
-
-Off by default. Set `CCQUOTA_FLEET_SPOT_IMAGE` (with `CCQUOTA_FLEET=1`, in a
-hub that runs in a Kubernetes cluster) and the hub starts **ephemeral
-execution nodes** of its own — a pod of that image on the cluster's SPOT
-machines — when placement finds no fixed machine with room, lets placement use
-them at a reduced weight, and deletes them again after they have sat idle for
-`CCQUOTA_FLEET_SPOT_IDLE_MINUTES` (30). The image is `extras/spot-node/` in
-the claude-fleet repo (fleet + agent + tmux + Claude Code + Codex CLI, one
-unprivileged login), built from the repo root; the hub needs create / get /
-list / delete on pods in its namespace (`extras/spot-node/k8s.yaml`).
-
-| setting | what |
-|---|---|
-| `CCQUOTA_FLEET_SPOT_IMAGE` | the node image; set = SPOT on |
-| `CCQUOTA_FLEET_SPOT_HUB_URL` | how a pod reaches the hub (default `CCQUOTA_FLEET_PUBLIC_URL`; one of the two is required) |
-| `CCQUOTA_FLEET_SPOT_NAMESPACE` | where pods go (default: the hub's own) |
-| `CCQUOTA_FLEET_SPOT_MAX` | nodes at once (1; 0 = never) |
-| `CCQUOTA_FLEET_SPOT_IDLE_MINUTES` | release after this long with no session (30) |
-| `CCQUOTA_FLEET_SPOT_BOOT_MINUTES` | give up on a pod that has not joined (10; also the join code's life) |
-| `CCQUOTA_FLEET_SPOT_WEIGHT` | an ephemeral node's placement score multiplier (0.5); the `fleet.spot_weight` setting (`PUT /v1/fleet/settings`, 0–2) overrides it at runtime |
-| `CCQUOTA_FLEET_SPOT_GRACE_SECONDS` | the pod's terminationGracePeriodSeconds: time to move sessions off on a reclaim (300) |
-| `CCQUOTA_FLEET_SPOT_NODE_SELECTOR` / `_TOLERATIONS` | the SPOT pool: `k=v,k=v` and `key[=value][:effect],…` (or a JSON array) |
-| `CCQUOTA_FLEET_SPOT_CPU` / `_MEMORY` / `_SERVICE_ACCOUNT` / `_PULL_SECRET` / `_POD_JSON` | the pod's requests, service account, pull secret, and a JSON file merged over the generated Pod for anything else |
-| `CCQUOTA_FLEET_SPOT_KUBE_URL` / `_KUBE_TOKEN` / `_KUBE_CA` / `_KUBE_INSECURE=1` | outside a cluster (a dev hub against kind); in-cluster discovery otherwise |
-
-**Kind.** A node is `fixed` (a machine someone owns) or `ephemeral` (one the
-hub started). The kind is stamped on the endpoint **from the join code** the
-hub minted — never from the joining side — so a SPOT pod cannot claim to be
-mac-b and mac-b cannot talk itself into the SPOT weight. `POST /v1/fleet/join-codes`
-takes `{kind: "ephemeral"}` for a SPOT box the operator runs by hand; the
-join answer carries `kind`, and the join script writes
-`CCQUOTA_FLEET_NODE_KIND=ephemeral` into `node.env`, which is what makes the
-agent treat SIGTERM as a reclaim. `/v1/nodes` carries `kind` on every node and
-machine, `spot` (the ledger state) on an ephemeral one, and a `spot` block —
-the configuration, the nodes under way (a pod is listed from the moment it is
-created, before it joins) and the newest released records.
-
-**Life.** `fleet_spot_nodes` is the ledger: one row per node the hub started,
-`provisioning` → `online` → `releasing` | `reclaiming` → `released`, with
-when it was created, joined and released, the most sessions it ever ran, and
-what it still held when it went. A placement that finds no eligible fixed
-machine (`NO_ELIGIBLE_NODE`) asks for one — the refusal says so — and the
-controller's next tick (`CCQUOTA_FLEET_SPOT_TICK_SECONDS`, 30) mints a join
-code good for the boot window and creates the pod with it in its environment.
-A pod that has not joined by the boot window, or a node whose heartbeats
-stop for that long, is deleted. Only an `online` node is a placement
-candidate; its score is multiplied by the weight, so a fixed machine with room
-always wins. When a node is gone — released, failed, or simply not there any
-more — the roster row is dropped, the endpoint retired (its token stops
-working) and the record closed; it never lingers as 失联.
-
-**Reclaim.** The cloud taking the machine reaches the pod as the kubelet's
-SIGTERM. An ephemeral agent then `POST /v1/node/reclaim` (its own token) —
-placement avoids the node from that moment — and runs claude-fleet's
-`bin/fleet-spot-evacuate.sh` (`CCQUOTA_FLEET_RECLAIM_CMD` overrides;
-`CCQUOTA_FLEET_RECLAIM_SECS`, 240, bounds it): `fleet-move.sh --rebalance
---max all` per fleet, the ordinary hub move, so every idle session lands on
-another machine; a session mid-turn is never cut. When the pod is gone the
-hub lets every lease the node still held go **at once** — the 30-minute lost
-TTL is for a machine that may come back, and this one will not — records the
-sessions that were still on it (意外下线), and re-dispatches nothing, as for
-any lost node.
-
-| Route | Auth | What |
-|---|---|---|
-| `GET /v1/fleet/spot` | operator | the `spot` block on its own |
-| `POST /v1/fleet/spot {action: start\|release, id?, reason?}` | operator (same-origin) | start a node now (the `/nodes` page's button), or release one |
-| `POST /v1/node/reclaim` | the node's token | "the cloud is taking me": `{id, state, grace_seconds}` |
-
-Every step is a `fleet_audit` row (`hub:spot`, `spot_start` /
-`spot_online` / `spot_release` / `spot_reclaim` / `spot_lease_release` /
-`spot_released`), and the `/nodes` page's **SPOT 节点** block shows the live
-nodes and the last few records as a timeline — 起 → 报到 → 释放.
-
 ### A machine is going down — 维护中 (claude-fleet#1427)
 
 A fixed machine's status was `online` or `lost`, both read off its heartbeats.
@@ -1895,7 +1817,7 @@ for a while, and **nothing new should start here** — so that `fleet-move.sh
 --rebalance` on it finds every idle session a better home and the sessions
 still working there finish on their own. `maintenance` is that word, and it is
 the operator's: the fleet setting `fleet.node_maintenance.<machine>` (the same
-table as the node caps and the SPOT weight), holding `{since, reason, by}`, so
+table as the node caps), holding `{since, reason, by}`, so
 it survives the outage and a hub restart and the machine comes back 维护中 until
 someone ends it — never a placement target the moment its agent reconnects.
 

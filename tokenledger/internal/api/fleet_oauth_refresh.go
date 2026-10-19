@@ -56,8 +56,7 @@ type refreshPick struct {
 }
 
 // pickOAuthRefreshNode chooses the connected admin node that offered the relay
-// and is online (fresh heartbeat), is not a SPOT pod (whose egress is the
-// cluster's own, the one being avoided), and carries the least load per
+// and is online (fresh heartbeat), and carries the least load per
 // core; ties break on endpoint id, so the pick is deterministic. With several
 // replicas, a node another one holds is a candidate on the same terms.
 func (s *Server) pickOAuthRefreshNode(now time.Time) (refreshPick, error) {
@@ -69,12 +68,8 @@ func (s *Server) pickOAuthRefreshNode(now time.Time) (refreshPick, error) {
 	for _, n := range rows {
 		byID[n.EndpointID] = n
 	}
-	kinds, _ := s.Store.EphemeralEndpoints()
 	var cands []refreshPick
 	consider := func(id string, n store.Node, ok bool) (float64, bool) {
-		if kinds[id] == store.NodeKindEphemeral {
-			return 0, false
-		}
 		if !ok || NodeStatus(n.LastHeartbeat, n.HeartbeatMS, now) != "online" {
 			return 0, false
 		}

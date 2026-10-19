@@ -476,7 +476,7 @@
 35.7 fleet-sleep-2-selftest.sh
 22.9 fleet-sleep-3-selftest.sh
 19.0 fleet-sleep-selftest.sh
-2.3 fleet-spot-evacuate-selftest.sh
+2.3 fleet-evacuate-selftest.sh
 0.2 fleet-spotlight-selftest.sh
 0.2 fleet-src-digest-selftest.sh
 13.8 fleet-stable-selftest.sh

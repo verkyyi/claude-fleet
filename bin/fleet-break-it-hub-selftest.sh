@@ -203,7 +203,7 @@
 #                                                   convertTrial writes the member's own list); go test
 #   cluster-pod-claude-leak                         tokenledger/internal/api fleet_cred_pod.go (podProvidersOf in
 #                                                   credPolicyOf: fleet.cred_pod_providers, default codex, on u-* /
-#                                                   fleet-linux-* / ccquota-spot-*); go test, when a toolchain is here
+#                                                   fleet-linux-*); go test, when a toolchain is here
 #   trial-host-no-spare                             tokenledger/internal/api fleet_accounts.go (trialMachine: only
 #                                                   machines with a ready spare) + fleet_try.go (no_spare,
 #                                                   trial_no_spare); go test, when a toolchain is here
@@ -801,7 +801,6 @@ drill_two_hubs_double_refresh() {
     || { WHY="credvault has no TestTwoReplicasRefreshOnce"; return 1; }
   grep -q 'v.CrossLock(' "$ROOT/tokenledger/internal/credvault/credvault.go" || { WHY="Lease takes no cross-replica lock"; return 1; }
   grep -q 'Leader(ctx, "alerts")' "$ROOT/tokenledger/internal/api/fleet_alerts.go" || { WHY="node alerts are not gated on the leader"; return 1; }
-  grep -q 'Leader(ctx, "spot")' "$ROOT/tokenledger/internal/api/fleet_spot.go" || { WHY="the SPOT controller is not gated on the leader"; return 1; }
   grep -q 'Leader(ctx, "prune")' "$ROOT/tokenledger/cmd/ccquota/hub.go" || { WHY="the daily prune is not gated on the leader"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
@@ -2926,7 +2925,7 @@ drill_cluster_pod_claude_leak() {
   grep -q 'p.PodProviders = podProvidersOf(settings, machine)' "$tl/api/fleet_cred_policy.go" 2>/dev/null \
     || { WHY="credPolicyOf no longer gates the provider on a cluster pod (podProvidersOf)"; return 1; }
   c11_go_tests fleet_cred_pod_test.go TestClusterPodCodexOnly TestClusterPodOwnListKept TestCheckCredPodProviders || return 1
-  WHAT='集群 POD（u-* / fleet-linux-* / ccquota-spot-*）只放 fleet.cred_pod_providers（默认 codex）：owner 是 "*" 的新 POD 拿得到 Codex、拿不到 Claude（测试按名核对在，Go 门跑它们）'
+  WHAT='集群 POD（u-* / fleet-linux-*）只放 fleet.cred_pod_providers（默认 codex）：owner 是 "*" 的新 POD 拿得到 Codex、拿不到 Claude（测试按名核对在，Go 门跑它们）'
   [ "$GO_RAN" = 1 ] && WHAT='owner "*" 的新 POD：Codex 放、Claude 拒（cluster pods are Codex-only）；owner 列表只有 Codex 条目起作用；节点自己的名单照旧；普通机器不受影响；设置 * 关掉（go test）'
   SECS=$(since "$t0")
 }

@@ -106,8 +106,8 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 		}
 		var req struct {
 			Label string `json:"label"`
-			// Kind is fixed (default) or ephemeral: a code for a node the
-			// operator runs on a SPOT machine by hand (claude-fleet#1428).
+			// Kind is fixed, the default and the only one since the SPOT
+			// nodes went (claude-fleet#4797).
 			Kind string `json:"kind"`
 			// Trusted / Role are handed to the endpoint the code enrolls
 			// (claude-fleet#2214) — trust on its identity, never its name.
@@ -128,9 +128,9 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 		switch req.Kind {
 		case "":
 			req.Kind = store.NodeKindFixed
-		case store.NodeKindFixed, store.NodeKindEphemeral:
+		case store.NodeKindFixed:
 		default:
-			httpError(w, http.StatusBadRequest, "kind: fixed or ephemeral")
+			httpError(w, http.StatusBadRequest, "kind: fixed (SPOT nodes are gone, claude-fleet#4797)")
 			return
 		}
 		trust, role, ttl := "", req.Role, JoinCodeTTL
@@ -220,9 +220,8 @@ type NodeJoinResponse struct {
 	SSHCA string `json:"ssh_ca,omitempty"`
 	// Dist lists the agent binaries this hub serves at /v1/node/dist/<name>.
 	Dist []string `json:"dist"`
-	// Kind is what the code was minted for (claude-fleet#1428): fixed, or
-	// ephemeral — the join script then runs the agent as a SPOT node, which
-	// on SIGTERM tells the hub and moves its idle sessions off.
+	// Kind is what the code was minted for (claude-fleet#1428): fixed, the
+	// only kind since the SPOT nodes went (claude-fleet#4797).
 	Kind string `json:"kind"`
 	// AccountRefused is the login node pass's word on 登录即认人
 	// (claude-fleet#2249): why this system login is NOT recorded as the
@@ -316,9 +315,6 @@ func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *N
 	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.hubURL(r),
 		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
-	}
-	if k, err := s.Store.EndpointNodeKind(id); err == nil && k != "" {
-		out.Kind = k
 	}
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()

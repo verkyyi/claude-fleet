@@ -1,13 +1,11 @@
 // Machines — 机器与 pod, /admin/machines (EPIC #3923 C11; the old /app/nodes
 // and its ?tab=clients — once /app/admin/devices — move here). Three tabs on
-// one table frame: 服务节点 (the fixed machines that run sessions), pod (SPOT
-// pods the cluster rents and people's own pods, with the SPOT switch), 客户端
-// (every person's client devices, revoke). State, load, sessions, version,
+// one table frame: 服务节点 (the fixed machines that run sessions), pod
+// (people's own pods), 客户端 (every person's client devices, revoke). State, load, sessions, version,
 // whether its door is open; a row opens its page (/admin/machines/:host).
 // 「添加机器」 is today's one-time join code flow. Reads /v1/nodes · /version ·
-// /v1/fleet/settings · /v1/admin/devices · /v1/fleet/users (owners); writes
-// fleet.spot, /v1/fleet/nodes/join-codes, /v1/fleet/devices/revoke — every
-// write audited by the hub.
+// /v1/admin/devices · /v1/fleet/users (owners); writes /v1/fleet/nodes/join-codes,
+// /v1/fleet/devices/revoke — every write audited by the hub.
 import * as React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowRight, Check, Copy, Loader2, Plus } from "lucide-react";
@@ -26,10 +24,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { AdminTablePage, type Filter, type Kpi } from "../AdminTablePage";
@@ -45,7 +41,6 @@ import {
   type JoinCodes,
   type MachineRow,
   type NodesSnapshot,
-  type SettingsView,
   type Status,
   type VersionInfo,
 } from "../machines/model";
@@ -56,14 +51,12 @@ type Loaded = {
   snap: NodesSnapshot | null;
   machines: MachineRow[];
   clients: ClientRow[] | null;
-  spotOn: boolean | null;
 };
 
 async function loadAll(): Promise<Loaded> {
-  const [snapR, verR, setR, devR, usersR] = await Promise.allSettled([
+  const [snapR, verR, devR, usersR] = await Promise.allSettled([
     api<NodesSnapshot>("/v1/nodes"),
     api<VersionInfo>("/version"),
-    api<SettingsView>("/v1/fleet/settings"),
     api<DevicesResponse>("/v1/admin/devices"),
     api<UsersList>("/v1/fleet/users"),
   ]);
@@ -71,12 +64,10 @@ async function loadAll(): Promise<Loaded> {
   const ver = verR.status === "fulfilled" ? verR.value : null;
   const owners = new Map<string, string>();
   if (usersR.status === "fulfilled") for (const u of usersR.value.users || []) owners.set(u.principal || `gh:${u.github_id}`, u.login);
-  const spot = setR.status === "fulfilled" ? (setR.value.hub || []).find((h) => h.key === "fleet.spot") : undefined;
   return {
     snap,
     machines: snap ? machineRows(snap, ver) : [],
     clients: devR.status === "fulfilled" ? clientRows(devR.value, snap, owners) : null,
-    spotOn: setR.status === "fulfilled" ? spot?.value === "on" : null,
     // the tab's own read failing fails the tab (below); the others are a courtesy
     ...(snapR.status === "rejected" ? { snapErr: snapR.reason } : {}),
     ...(devR.status === "rejected" ? { devErr: devR.reason } : {}),
@@ -89,22 +80,18 @@ const STATUS: Record<Status, { key: MKey; cls: string }> = {
   online: { key: "status.online", cls: "border-ok/40 text-ok" },
   maintenance: { key: "status.maintenance", cls: "border-warn/50 text-warn" },
   lost: { key: "status.lost", cls: "border-destructive/50 text-destructive" },
-  starting: { key: "status.starting", cls: "text-muted-foreground" },
-  reclaim: { key: "status.reclaim", cls: "border-clay-line bg-clay-soft text-clay" },
-  releasing: { key: "status.releasing", cls: "border-clay-line bg-clay-soft text-clay" },
-  reclaiming: { key: "status.reclaiming", cls: "border-destructive/50 text-destructive" },
 };
 
-export function StatusBadge({ r }: { r: Pick<MachineRow, "status" | "reclaimMin"> }) {
+export function StatusBadge({ r }: { r: Pick<MachineRow, "status"> }) {
   const s = STATUS[r.status];
   return (
     <Badge variant="outline" className={cn("font-normal", s.cls)}>
-      {tm(s.key, { n: r.reclaimMin ?? 0 })}
+      {tm(s.key)}
     </Badge>
   );
 }
 
-export const kindText = (k: MachineRow["kind"]) => tm(k === "fixed" ? "kind.fixed" : k === "spot" ? "kind.spot" : "kind.person");
+export const kindText = (k: MachineRow["kind"]) => tm(k === "fixed" ? "kind.fixed" : "kind.person");
 
 export function DoorText({ d }: { d: MachineRow["door"] }) {
   if (d.state === "open") return <span className="font-mono text-xs">{tm("door.open", { port: d.port || 22 })}</span>;
@@ -207,7 +194,7 @@ const clientColumns: ColumnDef<ClientRow, any>[] = [
 ];
 
 const machineFilters: Filter<MachineRow>[] = [
-  { key: "online", label: tm("filter.online"), test: (r) => r.status === "online" || r.status === "reclaim" },
+  { key: "online", label: tm("filter.online"), test: (r) => r.status === "online" },
   { key: "maint", label: tm("filter.maint"), test: (r) => r.status === "maintenance" },
   { key: "lost", label: tm("filter.lost"), test: (r) => r.status === "lost" },
   { key: "behind", label: tm("filter.behind"), test: (r) => r.behind },
@@ -327,45 +314,7 @@ export function MachinesPage() {
       }}
       emptyText={tm(pods ? "empty.pods" : "empty.nodes")}
       actions={(reload) => <AddMachine onJoined={reload} />}
-      aside={() => (pods ? <SpotCard snap={data?.snap || null} on={data?.spotOn ?? null} onChanged={(on) => setData((d) => (d ? { ...d, spotOn: on } : d))} /> : null)}
     />
-  );
-}
-
-// ---- SPOT -------------------------------------------------------------------
-
-function SpotCard({ snap, on, onChanged }: { snap: NodesSnapshot | null; on: boolean | null; onChanged: (on: boolean) => void }) {
-  const [busy, setBusy] = React.useState(false);
-  const spot = snap?.spot;
-  const n = (spot?.nodes || []).length;
-  const line = !snap ? "" : !spot ? tm("spot.none") : on ? tm("spot.on", { max: spot.max || 0, idle: spot.idle_minutes || 30, n }) : tm("spot.off", { n });
-  return (
-    <Card className="gap-0 py-4">
-      <CardContent className="flex items-center justify-between gap-6 px-5">
-        <div className="min-w-0">
-          <p className="font-display text-base font-semibold">{tm("spot.title")}</p>
-          <p className="text-xs text-muted-foreground">{tm("spot.sub")}</p>
-          {line && <p className="mt-1.5 text-sm">{line}</p>}
-        </div>
-        <Switch
-          checked={!!on}
-          disabled={on == null || busy}
-          aria-label={tm("spot.title")}
-          onCheckedChange={async (v) => {
-            setBusy(true);
-            try {
-              await api("/v1/fleet/settings", { method: "PUT", json: { key: "fleet.spot", value: v ? "on" : "off" } });
-              toast.success(tm(v ? "spot.onToast" : "spot.offToast"));
-              onChanged(v);
-            } catch (e) {
-              toast.error(tm("err.action", { e: (e as Error).message }));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        />
-      </CardContent>
-    </Card>
   );
 }
 

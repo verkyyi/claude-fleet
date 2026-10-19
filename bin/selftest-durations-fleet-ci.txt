@@ -310,7 +310,7 @@
 3.4 fleet-sessions-snapshot-selftest.sh
 4.6 fleet-show-selftest.sh
 60.0 fleet-sleep-selftest.sh
-2.4 fleet-spot-evacuate-selftest.sh
+2.4 fleet-evacuate-selftest.sh
 0.2 fleet-src-digest-selftest.sh
 5.3 fleet-stable-selftest.sh
 55.0 fleet-start-warm-selftest.sh

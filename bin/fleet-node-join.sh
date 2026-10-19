@@ -214,8 +214,8 @@ priv() {
 }
 can_priv() { [ "$UID_N" = 0 ] || { [ -n "$SUDO" ] && priv true >/dev/null 2>&1; }; }
 
-load_env() { # → TOKEN, saved HUB match, KIND, SAVED_COMPUTE
-  TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
+load_env() { # → TOKEN, saved HUB match, SAVED_COMPUTE
+  TOKEN="" SAVED_HUB="" SAVED_COMPUTE=""
   local f="$ENVF"
   # separated: the link's target is not this login's to read — the rest is in node.pub.env
   [ "$SEP" = 1 ] && [ ! -r "$ENVF" ] && f="$CONF/node.pub.env"
@@ -223,7 +223,6 @@ load_env() { # → TOKEN, saved HUB match, KIND, SAVED_COMPUTE
   SAVED_COMPUTE="$(sed -n 's/^CCQUOTA_FLEET_COMPUTE=//p' "$f" | head -n 1)"
   TOKEN="$(sed -n 's/^CCQUOTA_TOKEN=//p' "$f" | head -n 1)"
   SAVED_HUB="$(sed -n 's/^CCQUOTA_HUB_URL=//p' "$f" | head -n 1)"
-  KIND="$(sed -n 's/^CCQUOTA_FLEET_NODE_KIND=//p' "$f" | head -n 1)"
   [ -n "$TOKEN" ]
 }
 
@@ -234,11 +233,12 @@ sep_registered() { [ "$SEP" = 1 ] && [ -L "$ENVF" ] && { load_env; [ "$SAVED_HUB
 write_env() {
   if [ "$SEP" = 1 ]; then
     # the same lines, down a pipe to root (the token never on an argv); a line
-    # with an empty value drops it, so ADMIN / KIND / COMPUTE converge too
+    # with an empty value drops it, so ADMIN / COMPUTE converge too
+    # (and an old SPOT node kind is dropped — the SPOT nodes went, issue #4797)
     { [ -z "$1" ] || printf 'CCQUOTA_TOKEN=%s\n' "$1"
       printf 'CCQUOTA_HUB_URL=%s\nCCQUOTA_FLEET=1\n' "$HUB"
       if [ "$ADMIN" = 1 ]; then printf 'CCQUOTA_FLEET_ADMIN=1\n'; else printf 'CCQUOTA_FLEET_ADMIN=\n'; fi
-      if [ "${KIND:-}" = ephemeral ]; then printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n'; else printf 'CCQUOTA_FLEET_NODE_KIND=\n'; fi
+      printf 'CCQUOTA_FLEET_NODE_KIND=\n'
       [ -z "$COMPUTE" ] || printf 'CCQUOTA_FLEET_COMPUTE=%s\n' "$COMPUTE"
     } | FLEET_CONF_DIR="$CONF" bash "$CREDSEP" setenv >>"$WORK/credsep.log" 2>&1
     return
@@ -251,10 +251,6 @@ write_env() {
       printf 'CCQUOTA_TOKEN=%s\n' "$1"
       printf 'CCQUOTA_FLEET=1\n'
       if [ "$ADMIN" = 1 ]; then printf 'CCQUOTA_FLEET_ADMIN=1\n'; fi
-      # The node's kind, from the hub's answer to the join (issue #1428):
-      # ephemeral = a SPOT node, whose agent treats SIGTERM as the cloud
-      # taking the machine (tell the hub, move idle sessions off, then stop).
-      if [ "${KIND:-}" = ephemeral ]; then printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n'; fi
       # Coordinate only (issue #1719): no placement, no lease. Absent = on.
       if [ -n "$COMPUTE" ]; then printf 'CCQUOTA_FLEET_COMPUTE=%s\n' "$COMPUTE"; fi
     } > "$ENVF.tmp" ) && mv "$ENVF.tmp" "$ENVF" && chmod 600 "$ENVF"
@@ -265,7 +261,7 @@ self_status() { # → the /v1/node/self body on stdout; exit 0 iff 200
 }
 
 # ── join ────────────────────────────────────────────────────────────────────
-TOKEN="" SAVED_HUB="" KIND="" SAVED_COMPUTE=""
+TOKEN="" SAVED_HUB="" SAVED_COMPUTE=""
 # compute (issue #1719): --compute wins; else a node.env already here keeps its
 # word (no line = a node from before #1719, still on); else a first join is 0.
 if [ -z "$COMPUTE" ]; then
@@ -315,7 +311,6 @@ else
   esac
   TOKEN="$(jfield token < "$WORK/join")"
   [ -n "$TOKEN" ] || die "join: the hub answered without a token"
-  KIND="$(jfield kind < "$WORK/join")"
   if [ "$SEP" = 1 ]; then
     write_env "$TOKEN" || die "join: cannot write the token into the credential store: $(tail -n 1 "$WORK/credsep.log")"
   else
@@ -324,7 +319,6 @@ else
   ADMIN_OK="$(jbool admin < "$WORK/join")"
   SSH_CA="$(jfield ssh_ca < "$WORK/join")"
   kind_note=""
-  [ "$KIND" = ephemeral ] && kind_note=" · SPOT node (ephemeral): SIGTERM moves idle sessions off, then stops"
   [ "$SEP" = 1 ] && kind_note="$kind_note · separated: the token is in the credential store, $ENVF stays its link"
   say "join: registered as $(jfield label < "$WORK/join") ($(jfield endpoint_id < "$WORK/join")); token in $ENVF$kind_note"
   [ -n "$JOINED" ] || ui "✓ 已登记到入口：$(jfield label < "$WORK/join")（通行证在 ${ENVF}）"

@@ -30,7 +30,7 @@ import (
 //     about 9 processes, 60–75 MB resident and 0.25–0.9 GB of disk.
 //   - Refill rides the admin node's heartbeat (at most once per
 //     spareScanEvery), and only on a fit machine: online (not 维护中, not
-//     lost), hosts sessions, not a person's own computer or a SPOT node,
+//     lost), hosts sessions, not a person's own computer,
 //     CPU (cpu_busy first, else load per core) and free memory inside the
 //     placement thresholds — and an admin node that opens logins
 //     credential-separated (control.CapCredsep, claude-fleet#2294). Never the
@@ -280,8 +280,8 @@ func (s *Server) desiredSpares() map[string]int {
 func (s *Server) spareFitMachines(now time.Time) []string { return s.spareMachines(now, true) }
 
 // spareMachines is every machine that keeps spares: online (not 维护中, not
-// lost), hosting sessions, not a person's own computer, a SPOT node or one
-// person's pod, its admin node up and opening logins credential-separated.
+// lost), hosting sessions, not a person's own computer or one person's
+// pod, its admin node up and opening logins credential-separated.
 // fit adds what a refill needs right now: CPU (cpuVerdict — cpu_busy first)
 // and free memory inside the placement thresholds. It never reads a login's
 // admit / room (claude-fleet#4076): those hold new sessions, not a login.
@@ -300,7 +300,7 @@ func (s *Server) spareMachines(now time.Time, fit bool) []string {
 	var out []string
 	for _, m := range snap.Machines {
 		h := strings.ToLower(m.Hostname)
-		if m.Status != "online" || m.ComputeOff || m.Personal || m.Kind == store.NodeKindEphemeral ||
+		if m.Status != "online" || m.ComputeOff || m.Personal ||
 			m.Sessions == nil || !admin[h] || !s.nodes.credsepAdminFor(m.Hostname) ||
 			isUserPodName(m.Hostname) { // one person's pod holds one login (claude-fleet#3553)
 			continue

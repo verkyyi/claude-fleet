@@ -15,7 +15,6 @@ const settings: HubSetting[] = [
   { key: "fleet.machine_names", value: "mac-mini.local=mac-mini, mac-studio.local=mac-studio", source: "set" },
   { key: "fleet.spare_max", value: "2", source: "default" },
   { key: "fleet.spares", value: "on", source: "set" },
-  { key: "fleet.spot", value: "off", source: "legacy" },
   { key: "hub.public_badges", value: "off", source: "default" },
   { key: "hub.public_meter", value: "on", source: "set" },
   { key: "pool.move_when_full", value: "on", source: "set" },
@@ -38,7 +37,7 @@ const audit: AuditEvent[] = [
   { at: ago(60 * 24 * 3), kind: "user", source: "hub", actor: "chenyu-dev (gh:2002)", action: "signin", target: "github", outcome: "ok" },
   { at: ago(60 * 24 * 6), kind: "user", source: "hub", actor: ME, action: "user.remove", target: "old-intern", outcome: "ok", detail: "devices revoked: 2" },
   { at: ago(60 * 24 * 11), kind: "set", source: "hub", actor: ME, action: "setting", target: "pool.skip_pct", outcome: "ok", detail: "85 → 90" },
-  { at: ago(60 * 24 * 15), kind: "mach", source: "hub", actor: ME, action: "setting", target: "fleet.spot", outcome: "ok", detail: "(default) → off" },
+  { at: ago(60 * 24 * 15), kind: "mach", source: "hub", actor: ME, action: "setting", target: "fleet.node_cap.mac-mini", outcome: "ok", detail: "(default) → 6" },
   { at: ago(60 * 24 * 21), kind: "sub", source: "fleet", actor: "linux-01", action: "session_cred", target: "chenyu", outcome: "error" },
   { at: ago(60 * 24 * 30), kind: "set", source: "hub", actor: ME, action: "setting", target: "hub.public_meter", outcome: "ok", detail: "off → on" },
   { at: ago(60 * 24 * 44), kind: "user", source: "hub", actor: "deploy", action: "pin", target: "zhouning", outcome: "ok" },
@@ -95,7 +94,7 @@ export function entryDemo(method: string, u: URL, body: Record<string, any>): un
       if (s.key === "pool.skip_pct" && !/^\d+$/.test(body.value)) throw Object.assign(new Error("pool.skip_pct is a whole percent"), { status: 400 });
       const old = s.value;
       if (old !== body.value) {
-        audit.unshift({ at: new Date().toISOString(), kind: s.key.startsWith("pool.") ? "sub" : s.key === "fleet.spot" ? "mach" : "set", source: "hub", actor: ME, action: "setting", target: s.key, outcome: "ok", detail: `${old || "(default)"} → ${body.value || "(default)"}` });
+        audit.unshift({ at: new Date().toISOString(), kind: s.key.startsWith("pool.") ? "sub" : s.key.startsWith("fleet.node_") ? "mach" : "set", source: "hub", actor: ME, action: "setting", target: s.key, outcome: "ok", detail: `${old || "(default)"} → ${body.value || "(default)"}` });
       }
       Object.assign(s, { value: body.value, source: body.value ? "set" : "default" });
       return { ok: true };

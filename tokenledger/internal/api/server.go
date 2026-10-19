@@ -369,10 +369,6 @@ type Server struct {
 	// joinClock replaces the join-code clock in tests.
 	joinClock func() time.Time
 
-	// Spot starts and releases SPOT execution nodes in the hub's cluster
-	// (claude-fleet#1428); nil when CCQUOTA_FLEET_SPOT_IMAGE is unset.
-	Spot *SpotController
-
 	// EntryDNS writes every person's address record (claude-fleet#3073);
 	// nil when the hub has no DNS token (CCQUOTA_DNS_*) — no call at all.
 	EntryDNS *EntryDNS
@@ -597,10 +593,6 @@ func (s *Server) routes() *routeMux {
 		// word, an admin's (the train's macOS job holds the viewer token).
 		mux.Handle(CIRunnersPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleCIRunners))))
 		mux.HandleFunc("/v1/node/desired", s.handleNodeDesired)
-		// SPOT nodes (claude-fleet#1428): the node's own reclaim notice
-		// authenticates with its token; starting and releasing are the
-		// operator's.
-		mux.HandleFunc("/v1/node/reclaim", s.handleNodeReclaim)
 		// 维护中 (claude-fleet#1427): a machine flags itself before a planned
 		// outage, with its own token; the operator flags any machine through
 		// /v1/fleet/settings.
@@ -655,7 +647,6 @@ func (s *Server) routes() *routeMux {
 		// its run's spec once and its result once — never a node token.
 		mux.HandleFunc(NodeSvcRunsPath+"/", s.handleNodeSvcRuns)
 		mux.Handle("/v1/fleet/peer-certs", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetPeerCerts))))
-		mux.Handle("/v1/fleet/spot", s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetSpot))))
 		mux.Handle("/v1/nodes", s.viewerOnly(http.HandlerFunc(s.handleNodes)))
 		// One machine's page (claude-fleet#2796): its five blocks, the same cut.
 		mux.Handle(NodeDetailPrefix, s.viewerOnly(http.HandlerFunc(s.handleNodeDetail)))

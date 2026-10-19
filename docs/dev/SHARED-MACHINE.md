@@ -227,7 +227,7 @@ an administrator reviews and activates the migration. Both grants live on the hu
   switch each (an `all` rule is shown, not switched). `GET` answers them as
   `services` (issue #4085).
 - **A cluster pod** (a person's pod `u-<nonce>` — drill pods too — the ACK
-  worker `fleet-linux-*`, a SPOT pod `ccquota-spot-*`) is one provider's
+  worker `fleet-linux-*`) is one provider's
   (issue #4601): its machine layer passes the hub setting
   `fleet.cred_pod_providers` (default `codex`; `fleet hub set`, one `hub_audit`
   row) before any list. A person's pod with no list of its own reads its

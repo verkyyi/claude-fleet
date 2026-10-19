@@ -147,6 +147,7 @@ func fleetAuditKind(action string) string {
 		return auditSettings
 	case action == "client_action" || action == "client_revoke":
 		return auditDevices
+	// spot_*: an audit row from the SPOT nodes (gone, claude-fleet#4797).
 	case strings.HasPrefix(action, "spot_"), strings.HasPrefix(action, "node_"), strings.HasPrefix(action, "compute_"),
 		action == "relay_cred", action == "place":
 		return auditMachines
@@ -163,7 +164,7 @@ func hubAuditKind(action, target string) string {
 	switch {
 	case strings.HasPrefix(target, "pool."):
 		return auditSubs
-	case strings.HasPrefix(target, "fleet.node_"), target == SpotKey, target == SpotWeightKey, target == ComputeAutoKey:
+	case strings.HasPrefix(target, "fleet.node_"), target == "fleet.spot", target == "fleet.spot_weight", target == ComputeAutoKey:
 		return auditMachines
 	case strings.HasPrefix(target, userSettingPrefix):
 		return auditUsers

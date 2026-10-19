@@ -1,5 +1,5 @@
-# Build context of extras/spot-node/Dockerfile (the repo root). The fleet
-# checkout the image carries is a git clone source, so .git stays.
+# Build context of the images built from the repo root (extras/managed-node/c9/
+# Dockerfile). A checkout an image carries may be a git clone source, so .git stays.
 **/node_modules
 tokenledger/bin
 tokenledger/dist

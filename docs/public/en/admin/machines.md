@@ -52,8 +52,8 @@ Every step is done by a person; no step powers anything off by itself.
 2. **Move the idle sessions away**: on that machine, run once in each account
 
    ```sh
-   ~/.claude/fleet/bin/fleet-spot-evacuate.sh --dry-run   # see what would move, and where
-   ~/.claude/fleet/bin/fleet-spot-evacuate.sh             # move them
+   ~/.claude/fleet/bin/fleet-evacuate.sh --dry-run   # see what would move, and where
+   ~/.claude/fleet/bin/fleet-evacuate.sh             # move them
    ```
 
    Only idle sessions with no uncommitted changes move; nothing that is working is touched. A moved session carries on as it was on the other machine. The `left N` it prints is what stays; run it again once those finish.
@@ -72,7 +72,3 @@ Every step is done by a person; no step powers anything off by itself.
 1. Empty it of sessions first, as in "Planned downtime".
 2. Take back every person's account on it ([Creating and removing accounts](accounts.md)).
 3. **Remove** on its card: the machine's credential is revoked at once and the card disappears. To connect it again later takes a new join code.
-
-## SPOT machines (self-hosted, optional)
-
-When the hub runs on Kubernetes with a SPOT machine image configured, turning **SPOT machines** on in Settings makes the hub rent one in the cluster when no fixed machine has room, and delete it after 30 idle minutes.

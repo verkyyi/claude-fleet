@@ -18,8 +18,8 @@ import (
 // GitHub person on the list — sees
 // only their own: the usage, sessions and live rows whose os_user is the
 // machine login the hub knows as theirs, their own devices, and the fleet
-// through FleetScope. Subscriptions, machines, join codes, maintenance, SPOT
-// machines, credentials, audits and the team configuration are an admin's.
+// through FleetScope. Subscriptions, machines, join codes, maintenance,
+// credentials, audits and the team configuration are an admin's.
 //
 // Every route the hub mounts is named in routeAccess. roles_test.go walks
 // every pattern Handler registers and fails on one the table does not name,
@@ -87,7 +87,7 @@ var routeAccess = map[string]string{
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
-	"/v1/node/reclaim": accessSelf, "/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
+	"/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
@@ -154,12 +154,11 @@ var routeAccess = map[string]string{
 	FleetTicketsPath: accessSelf, FleetTicketsPath + "/": accessSelf,
 	control.RoutesPath: accessSelf,
 
-	// An admin's: subscriptions, machines, join codes, SPOT, credentials,
+	// An admin's: subscriptions, machines, join codes, credentials,
 	// audits, settings, the operator's own analytics.
 	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
 	FleetNodesPrefix: accessAdmin, "/v1/node/desired": accessSelf, // claude-fleet#2214
 	CIRunnersPath:        accessAdmin, // claude-fleet#3144
-	"/v1/fleet/spot":     accessAdmin,
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/gate": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/users/sessions": accessAdmin, "/v1/fleet/invites": accessAdmin,
 	"/v1/fleet/credentials": accessAdmin, "/v1/fleet/credentials/revoke": accessAdmin,
 	"/v1/fleet/revocations":       accessAdmin,
@@ -210,7 +209,7 @@ var routeAccess = map[string]string{
 	// 任务 (claude-fleet#3325): the viewer's own records.
 	"/v1/fleet/tasks": accessUser, "/v1/fleet/tasks/": accessUser,
 	// The roster, cut by FleetScope to the machines where their login runs
-	// (claude-fleet#1411); maintenance, SPOT and join codes stay an admin's.
+	// (claude-fleet#1411); maintenance and join codes stay an admin's.
 	"/v1/nodes": accessUser,
 	// One machine (claude-fleet#2796): 404 unless one of their logins is on it.
 	NodeDetailPrefix:    accessUser,

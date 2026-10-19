@@ -2,7 +2,7 @@
 // the old /app/admin/settings moves here). The hub's own settings
 // (/v1/fleet/settings, applied at once, one audit row a change): the public
 // counter and badges, the pool's skip threshold and failover, where a
-// newcomer lands, spare logins, SPOT machines. The team layer
+// newcomer lands, spare logins. The team layer
 // (/v1/fleet/team-bundle): publish a file as its next version, go back to an
 // older one — one step, audited. And, read-only (部署写死), what the deploy
 // sets: the admins and the ways in (/v1/access). When and by whom a row last
@@ -46,7 +46,6 @@ const EDITABLE: { key: string; type: Type; group: Group }[] = [
   { key: "pool.move_when_full", type: "onoff", group: "pool" },
   { key: "fleet.auto_assign", type: "hosts", group: "people" },
   { key: "fleet.machine_names", type: "names", group: "people" },
-  { key: "fleet.spot", type: "onoff", group: "people" },
   { key: "fleet.spares", type: "onoff", group: "people" },
   { key: "fleet.spare_max", type: "count", group: "people" },
 ];
