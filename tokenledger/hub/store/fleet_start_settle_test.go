@@ -133,3 +133,69 @@ func TestSettleNeverAppearedStart(t *testing.T) {
 		t.Fatal(st)
 	}
 }
+
+// claude-fleet#4945: a worker_start the hub cannot check is settled by an admin
+// only while it is still that unknown / running worker_start, older than the
+// age, naming no worker; it ends failed with the prior status and result kept.
+func TestSettleStartByOperator(t *testing.T) {
+	s := taskStore(t)
+	t0 := time.Date(2026, 10, 8, 3, 33, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	unknown := `{"error":{"code":"UNKNOWN_OUTCOME","message":"Spawn returned but no matching worker is visible"}}`
+	op := func(id, action, status string) {
+		t.Helper()
+		if err := s.InsertFleetOperation(FleetOperation{ID: id, FleetID: "f1", Actor: "alice", Idem: id, Action: action,
+			Request: `{"params":{"kind":"scratch"}}`, Status: status, Result: unknown, Created: t0, Updated: t0}); err != nil {
+			t.Fatal(id, err)
+		}
+	}
+	res := func(prior, priorResult string) string {
+		return `{"error":{"code":"SETTLED_BY_OPERATOR","prior_status":"` + prior + `","prior_result":` + priorResult + `}}`
+	}
+	settle := func(id string, w StartWorker, now time.Time) (string, string) {
+		t.Helper()
+		f, why, err := s.SettleStartByOperator(id, w, day, res, now)
+		if err != nil {
+			t.Fatal(id, err)
+		}
+		return f, why
+	}
+	late := t0.Add(2 * day)
+	op("o1", "worker_start", "unknown")
+	if _, why := settle("o1", StartWorker{Issue: 7}, late); !strings.Contains(why, "settles on its own") {
+		t.Fatal(why)
+	}
+	if _, why := settle("o1", StartWorker{Identity: "11111111-2222-3333-4444-555555555555"}, late); !strings.Contains(why, "settles on its own") {
+		t.Fatal(why)
+	}
+	if _, why := settle("o1", StartWorker{}, t0.Add(time.Hour)); !strings.Contains(why, "younger than") {
+		t.Fatal(why)
+	}
+	op("o2", "worker_stop", "unknown")
+	if _, why := settle("o2", StartWorker{}, late); !strings.Contains(why, "only a worker_start") {
+		t.Fatal(why)
+	}
+	op("o3", "worker_start", "succeeded")
+	if _, why := settle("o3", StartWorker{}, late); !strings.Contains(why, "not unknown or running") {
+		t.Fatal(why)
+	}
+	if f, why := settle("o1", StartWorker{}, late); f != "f1" || why != "" {
+		t.Fatal(f, why)
+	}
+	o, err := s.FleetOperation("o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Status != "failed" || !strings.Contains(o.Result, `"SETTLED_BY_OPERATOR"`) ||
+		!strings.Contains(o.Result, `"prior_status":"unknown"`) || !strings.Contains(o.Result, "UNKNOWN_OUTCOME") {
+		t.Fatal(o.Status, o.Result)
+	}
+	// Settled once: a second call is refused, nothing rewritten.
+	if _, why := settle("o1", StartWorker{}, late); !strings.Contains(why, "failed, not unknown") {
+		t.Fatal(why)
+	}
+	op("o4", "worker_start", "running")
+	if f, why := settle("o4", StartWorker{}, late); f != "f1" || why != "" {
+		t.Fatal(f, why)
+	}
+}

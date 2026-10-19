@@ -698,6 +698,8 @@ func (s *Server) routes() *routeMux {
 		// The Fleet Hub's read tools (claude-fleet#1409), the same ones
 		// /mcp lists when the module is on.
 		mux.Handle("/v1/fleet/", s.viewerOnly(http.HandlerFunc(s.handleFleet)))
+		// An admin vouching for a start the hub cannot check (claude-fleet#4945).
+		mux.Handle(OperationSettlePath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleOperationSettle))))
 		// The app's push channel (claude-fleet#2794): nodes, sessions and
 		// usage over one SSE connection, each cut like its own route.
 		mux.Handle(FleetStreamPath, s.viewerOnly(http.HandlerFunc(s.handleFleetStream)))

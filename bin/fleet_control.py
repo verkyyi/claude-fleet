@@ -1074,8 +1074,10 @@ class Control:
                     # identity, the one address a no-repo session has. Still unknown:
                     # what the window holds is not this start's to vouch for.
                     stop, _, _ = self.adapter("stop", fleet["name"], "fid:" + fid, timeout=120)
+                    # The message names the window it looked for (`fid:`, issue
+                    # #4945): the hub settles such a start on its own books.
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible; "
-                                + ("its window was closed" if not stop else "closing its window failed (fid:%s)" % fid))
+                                + ("its window was closed" if not stop else "closing its window failed") + " (fid:%s)" % fid)
                 if not matches:
                     raise Fault("UNKNOWN_OUTCOME", "Spawn returned but no matching worker is visible")
                 # The session runs the agent asked for, or the start failed (issue

@@ -952,6 +952,17 @@ the grant; they cannot enlarge it.
 
 Writes return an `operation_id`. Read it with `operation_get` until it reaches a
 confirmed terminal state. Submission is not proof that a worker has started.
+A `worker_start` whose outcome no one can confirm is settled by a person, not
+retried (#4945): `POST /v1/fleet/operation_settle {operation_id, reason}` — admin
+only (the operator's token or an admin's sign-in; never the node / certificate
+`/v1/fleet/write` door, which serves no such tool) — ends a `worker_start` that
+has been `unknown` or `running` for over 24 h as `failed`
+(`SETTLED_BY_OPERATOR`; `actor`, `reason`, `prior_status`, `prior_result` in the
+error), and writes one `operation_settle` fleet_audit row whose outcome carries
+the reason. It is refused (409 `INVALID_STATE`) for a start the hub can check —
+an issue start, or one whose node named the window (`fid:`) — which the hub
+settles on its own books (#4932); the CLI is `fleet hub settle-start
+<operation_id> --reason <why>`.
 `fleet_list` is an inventory, not a worker-health check: its `fresh` availability
 means the node recently answered discovery. Use `fleet_status` for live workers.
 

@@ -393,7 +393,7 @@ PY
 )
 l1=$(printf '%s\n' "$out" | sed -n 1p); l2=$(printf '%s\n' "$out" | sed -n 2p)
 [ "$l1" = 'succeeded @7 False []' ] || fail "H a keyless no-repo session matched by @fleet_id" "$out"
-case "$l2" in "unknown UNKNOWN_OUTCOME ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3'] "*"its window was closed") ;; *) fail "H a miss closes the window it opened (fid:)" "$out" ;; esac
+case "$l2" in "unknown UNKNOWN_OUTCOME ['fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3'] "*"its window was closed (fid:c63813a3-3f3f-4cea-bec6-c12705d98fc3)") ;; *) fail "H a miss closes the window it opened (fid:)" "$out" ;; esac
 ok "H the controller: a no-repo start matched by identity (window_id, no key); a miss closes it"
 
 # ---- I: filing fails every try — the session keeps working, marked ------------
