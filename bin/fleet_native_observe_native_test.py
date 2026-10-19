@@ -24,6 +24,12 @@ import uuid
 
 import fleet_native_observe as observe
 
+# The scenario is a live native whose observation never landed while its tool
+# runs. Since #4553 the launcher's SessionStart fails closed on a refused
+# observation (the turn stops), so such a session can only have been started by
+# an older install: the deleted legacy install is that tree by default.
+LEGACY_REF = 'b58f00d7^'
+
 BIN = Path(__file__).resolve().parent
 
 
@@ -110,18 +116,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--codex', required=True)
     parser.add_argument('--keep-install', action='store_true', help='normal-message control, old hooks remain available')
+    parser.add_argument('--old-ref', default=LEGACY_REF,
+                        help='git ref the deleted legacy install is taken from (default: before #4553)')
     parser.add_argument('--evidence', help='new absolute private JSON file outside the repository')
     args = parser.parse_args()
     assert Path(args.codex).is_absolute()
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix='native-observe-', dir='/tmp') as directory:
         root = Path(directory).resolve()
-        old, home, conf, work = (root / n for n in ('old', 'home', 'conf', 'work'))
-        for p in (home, conf, work):
+        old, home, conf, repo, work = (root / n for n in ('old', 'home', 'conf', 'repo', 'work'))
+        for p in (home, conf, repo):
             p.mkdir()
-        # Copy the real implementation, then remove THIS disposable installation.
-        for name in ('bin', 'conf', 'hooks', 'commands'):
-            shutil.copytree(BIN.parent / name, old / name, ignore=shutil.ignore_patterns('__pycache__'))
+        # Extract the legacy implementation, then remove THIS disposable installation.
+        old.mkdir()
+        archive = subprocess.run(['git', '-C', str(BIN.parent), 'archive', args.old_ref, 'bin', 'conf', 'hooks', 'commands'],
+                                 capture_output=True, check=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(old)], input=archive, check=True)
         fake = root / 'tools'
         fake.mkdir()
         (fake / 'codex').symlink_to(args.codex)
@@ -131,7 +141,16 @@ def main():
                    FLEET_EXIT_CLOSE_SECS='0', FLEET_CLOSE_ON_EXIT='0', FLEET_PERSONAL='0',
                    FLEET_CRED_PROXY='1', FLEET_CRED_QUOTA_PUSH='', FLEET_CRED_BUDGET='0',
                    FLEET_CODEX_VERSION_CHECK='0', CCQUOTA_FLEET='1', FLEET_MCP='1',
+                   GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
                    FLEET_WRAP_LAUNCH=str(old / 'bin/fleet-codex.sh'))
+        # Repo authority (#4573) wants the window's worktree to be a registered
+        # linked worktree of FLEET_MAIN, not a plain directory.
+        git = lambda *a: subprocess.check_output(['git', *a], env=env, text=True).strip()
+        git('-C', str(repo), 'init', '-q', '-b', 'master')
+        (repo / 'tracked.txt').write_text('tracked\n')
+        git('-C', str(repo), 'add', 'tracked.txt')
+        git('-C', str(repo), '-c', 'user.name=f', '-c', 'user.email=f@f', 'commit', '-qm', 'fixture')
+        git('-C', str(repo), 'worktree', 'add', '-q', '-b', 'issue-1', str(work))
         native_home = home / '.codex'
         (native_home / 'sessions').mkdir(parents=True)
         token = 'fixture.' + base64.urlsafe_b64encode(json.dumps(dict(exp=int(time.time()) + 3600)).encode()).decode().rstrip('=') + '.fixture'
@@ -163,7 +182,7 @@ def main():
         (fleet / 'repos').mkdir(parents=True)
         (fleet / 'identity').write_text(str(uuid.uuid4()) + '\n')
         (fleet / 'fleet.conf').write_text('FLEET_SESSION=isolated\n')
-        (fleet / 'repos/fixture-repo.conf').write_text('FLEET_REPO=fixture/repo\nFLEET_MAIN=' + str(work) + '\n')
+        (fleet / 'repos/fixture-repo.conf').write_text('FLEET_REPO=fixture/repo\nFLEET_MAIN=' + str(repo) + '\n')
         (fleet / 'repos/.order').write_text('fixture-repo\n')
         socket = str(root / 'tmux')
         def tmux(*a):
