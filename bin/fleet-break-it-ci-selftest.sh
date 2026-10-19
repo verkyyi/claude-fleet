@@ -353,6 +353,23 @@ S
   [ "$rc" = 0 ] && [ -f "$d/s.log.cut-1" ] && grep -q 'rerunning the same shard once' "$d/sum" \
     && grep -q 'attempt 2 — predicted ~300s' "$d/sum" \
     || { WHY="a shard cut short with no test red: exit $rc, not rerun green: $out"; rm -rf "$d"; return 1; }
+  # …and with --resume-opt (issue #4914) the rerun is told what already passed: only
+  # a test whose own block ended in PASS (a drill's inner PASS line is not one)
+  cat > "$d/run-selftests.sh" <<'S'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FAKE_DIR/argv"
+echo "run-selftests: shard 9/12 — predicted ~300s"
+echo "=== zsh-local-selftest.sh ==="; echo "PASS  zsh-local-selftest.sh 1s"
+echo "=== fleet-break-it-ci-selftest.sh ==="; echo "PASS  inner-drill 1s"
+[ -f "$FAKE_DIR/twice" ] || { touch "$FAKE_DIR/twice"; sleep 30; }
+echo "PASS  fleet-break-it-ci-selftest.sh 1s"
+S
+  chmod +x "$d/run-selftests.sh"
+  out=$(cd "$d" && FAKE_DIR=$d GITHUB_STEP_SUMMARY="$d/sum2" bash "$BIN/fleet-shard-run.sh" --budget 1 --resume-opt --passed --log r.log -- ./run-selftests.sh --shard 9/12 2>&1); rc=$?
+  [ "$rc" = 0 ] && [ "$(sed -n 2p "$d/argv")" = "--passed $(cd "$d" && pwd)/r.log.passed --shard 9/12" ] \
+    && [ "$(cat "$d/r.log.passed")" = zsh-local-selftest.sh ] \
+    && grep -q 'rerunning the rest of the shard once (1 test(s) already passed' "$d/sum2" \
+    || { WHY="a cut shard's rerun was not handed what already passed: exit $rc, argv $(tr '\n' '|' < "$d/argv"), passed $(tr '\n' '|' < "$d/r.log.passed" 2>/dev/null): $out"; rm -rf "$d"; return 1; }
   # a FAIL line before the cut never reruns
   printf '#!/bin/bash\necho "FAIL  a-selftest.sh"; touch "$FAKE_DIR/ran.$$"; sleep 30\n' > "$d/shard"
   out=$(cd "$d" && FAKE_DIR=$d bash "$BIN/fleet-shard-run.sh" --budget 1 --log f.log -- ./shard 2>&1); rc=$?
@@ -365,7 +382,7 @@ S
     || { WHY="a shard cut short twice: exit $rc: $out"; rm -rf "$d"; return 1; }
   ! pgrep -f 'sleep 31' >/dev/null || { WHY="the cut shard's process group was left running"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿，有 FAIL 行不重跑，两次截断才红"
+  WHAT="stable 落后、近全量 4600 s：列车排 13 片、每次上限 710 s；截断且无红 ⇒ 同一片重跑一次变绿（只跑还没过的测试），有 FAIL 行不重跑，两次截断才红"
 }
 
 # The Shenzhen pool's width (issue #3865, EPIC #3863 C2): the train in the pool sizes

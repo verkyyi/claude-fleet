@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-shard-run.sh --budget <secs> [--log <file>] [--retries <n>] -- <command …>
+# fleet-shard-run.sh --budget <secs> [--log <file>] [--retries <n>] [--resume-opt <opt>] -- <command …>
 #   — run one release-train shard under a deadline, and rerun it once when the
 #   deadline cut it short (issue #3241, EPIC #3139 C9).
 #
@@ -14,6 +14,12 @@
 #     really failed: red, no rerun (a rerun must never turn a red green). None ⇒ run
 #     the SAME command again, once (--retries) — the same commit, the same
 #     selection; nothing is loosened. Cut short again ⇒ red, said so.
+# --resume-opt <opt> (issue #4914): the rerun does not repeat what already passed.
+# Every test whose own `=== <test> ===` block ended in a `PASS  <test>` line on a cut
+# attempt is written to <log>.passed, and the rerun gets `<opt> <log>.passed` right
+# after the command's run-selftests.sh word (else at its end) — run-selftests.sh
+# --passed, which leaves those out of the same slice. Only PASS: the one in flight,
+# the ones never started, and a FLAKY / QUARANTINE one run again as before.
 # The first attempt's log is kept as <log>.cut-<n>; <log> is always the last
 # attempt's, so the caller's summary step reads what it always read. One line per
 # attempt (predicted · budget · actual) goes to stdout and $GITHUB_STEP_SUMMARY.
@@ -23,12 +29,13 @@
 # (bin/fleet-train-plan.sh sizes it for two attempts).
 set -uo pipefail
 
-budget='' log=selftests.log retries=1
+budget='' log=selftests.log retries=1 resume_opt=''
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --budget) budget=${2:-}; shift 2 ;;
     --log) log=${2:-}; shift 2 ;;
     --retries) retries=${2:-}; shift 2 ;;
+    --resume-opt) resume_opt=${2:-}; shift 2 ;;
     --) shift; break ;;
     *) echo "fleet-shard-run: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -62,12 +69,26 @@ note() {
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n\n' "$1" >> "$GITHUB_STEP_SUMMARY"
 }
 
+# The rerun's command: the first one, plus `<resume_opt> <log>.passed` after the
+# run-selftests.sh word (its options parse off the front, a name ends them).
+resume_cmd() {
+  local a put=0 pf=$log.passed
+  case "$pf" in /*) ;; *) pf=$PWD/$pf ;; esac
+  cmd=()
+  for a in "$@"; do
+    cmd+=("$a")
+    case "$a" in *run-selftests.sh) [ "$put" = 1 ] || { cmd+=("$resume_opt" "$pf"); put=1; } ;; esac
+  done
+  [ "$put" = 1 ] || cmd+=("$resume_opt" "$pf")
+}
+
+cmd=("$@")
 attempt=0
 while :; do
   attempt=$((attempt + 1))
   rm -f "$log.cut-mark"
   t0=$(date +%s)
-  perl -e "$DEADLINE" "$budget" "$log.cut-mark" "$@" 2>&1 | tee "$log"
+  perl -e "$DEADLINE" "$budget" "$log.cut-mark" ${cmd[@]+"${cmd[@]}"} 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   took=$(( $(date +%s) - t0 ))
   pred=$(sed -n 's/.*predicted ~\([0-9]*\)s.*/\1/p' "$log" | head -1)
@@ -88,6 +109,13 @@ while :; do
     echo "::error::this shard was cut short at ${budget}s on every attempt ($attempt) — the forecast is wrong or a test hangs; see the log for the test in flight"
     exit 124
   fi
-  note "shard-run: attempt $attempt CUT SHORT at ${budget}s (predicted ~${pred:-?}s), no test red — rerunning the same shard once"
+  if [ -n "$resume_opt" ]; then
+    # a test passed when its own block's PASS line came (a drill's inner PASS is not it)
+    cat "$log".cut-* | awk '/^=== /{h=$2} /^PASS  / && $2 == h {print h; h=""}' | sort -u > "$log.passed"
+    resume_cmd "$@"
+    note "shard-run: attempt $attempt CUT SHORT at ${budget}s (predicted ~${pred:-?}s), no test red — rerunning the rest of the shard once ($(wc -l < "$log.passed" | tr -d ' ') test(s) already passed, not run again)"
+  else
+    note "shard-run: attempt $attempt CUT SHORT at ${budget}s (predicted ~${pred:-?}s), no test red — rerunning the same shard once"
+  fi
   echo "::warning::shard cut short at ${budget}s with no test red — rerunning it once (same commit, same selection)"
 done

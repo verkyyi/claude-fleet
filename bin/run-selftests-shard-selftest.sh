@@ -25,7 +25,9 @@
 #                    400s WARNs; `--durations F` packs by table F instead (our own
 #                    Macs, issue #3145), a missing F falls back saying so;
 #                    `--solo S` (issue #3865) puts a test over S seconds in a slice
-#                    of its own while a slice is left for the rest.
+#                    of its own while a slice is left for the rest;
+#                    `--passed F` (issue #4914) leaves F's tests out of the SAME slice
+#                    (the cut-short rerun), a slice all passed runs nothing, green.
 #   • DURATIONS      bin/selftest-durations.sh rewrites the table from runner output
 #                    (--drills: the BREAK-IT drills' table, which bin/fleet-break-it-part.py
 #                    slices the break-it tests by — issue #2694):
@@ -257,6 +259,21 @@ eq "--solo 75, N=6 — four slices of one, and the shards still cover every test
    "$ALL13" "$(printf '%s' "$union" | sed '/^$/d' | sort)"
 out=$(run --solo x --shard 1/4); rc=$?
 eq "--solo wants whole seconds (exit 2)" 2 "$rc"
+# --passed F (issue #4914): the cut-short rerun leaves out what passed on the cut
+# attempt — AFTER the deal, so it is the same slice minus those, never a re-deal.
+out=$(run --shard 4/4); slice=$(ran "$out" | sort)
+first=$(printf '%s\n' "$slice" | head -2)
+printf '%s\n' "$first" > "$WORK/passed"
+out=$(run --passed "$WORK/passed" --shard 4/4) || fail "--passed went red" "$out"
+eq "--passed: the rerun runs the slice minus what already passed" \
+   "$(printf '%s\n' "$slice" | sed 1,2d)" "$(ran "$out" | sort)"
+eq "--passed: each one left out is named" 2 "$(printf '%s\n' "$out" | grep -c '^PASSED-BEFORE ')"
+printf '%s\n' "$slice" > "$WORK/passed"
+out=$(run --passed "$WORK/passed" --shard 4/4) || fail "--passed with the whole slice done went red" "$out"
+eq "--passed: a slice already all passed runs nothing, green" "" "$(ran "$out")"
+out=$(run --passed "$WORK/no-such" --shard 4/4); rc=$?
+eq "--passed needs a file (exit 2)" 2 "$rc"
+rm -f "$WORK/passed"
 rm -f "$TABLE" "$WORK/bin/own-durations.txt"
 
 # The shipped width wider than the fixture (14 since issue #3243): grow the fixture

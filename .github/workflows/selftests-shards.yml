@@ -92,7 +92,8 @@ on:
       # The release train's forecast (issue #3241, bin/fleet-train-plan.sh). Empty —
       # the PR gate — keeps the fixed bounds below and runs the suite bare, byte for
       # byte; set, one attempt of a shard gets <budget_secs> under
-      # bin/fleet-shard-run.sh (a shard cut short with no test red reruns once) and
+      # bin/fleet-shard-run.sh (a shard cut short with no test red reruns once — only
+      # the tests that had not passed yet, issue #4914) and
       # the step / job bounds become <step_minutes> / <job_minutes>.
       budget_secs:
         description: 'seconds one attempt of a shard may take (empty = the fixed bounds, no rerun)'
@@ -296,8 +297,11 @@ jobs:
           [ -z "$DRILL_FLAKY" ] || ! has --drill-flaky || set -- --drill-flaky "$DRILL_FLAKY" "$@"
           [ -z "$CHANGED_BASE" ] || set -- --changed "$CHANGED_BASE" "$@"
           if [ -n "$SHARD_BUDGET_SECS" ] && [ -f bin/fleet-shard-run.sh ]; then
-            # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns
-            bash bin/fleet-shard-run.sh --budget "$SHARD_BUDGET_SECS" --log selftests.log -- bash bin/run-selftests.sh "$@"
+            # cut short with no test red ⇒ the same shard once more; a FAIL line never reruns.
+            # The rerun skips what already passed (issue #4914) when both scripts know how.
+            resume=''
+            if grep -q -- '--resume-opt' bin/fleet-shard-run.sh && has --passed; then resume=--passed; fi
+            bash bin/fleet-shard-run.sh --budget "$SHARD_BUDGET_SECS" ${resume:+--resume-opt "$resume"} --log selftests.log -- bash bin/run-selftests.sh "$@"
           else
             bash bin/run-selftests.sh "$@" 2>&1 | tee selftests.log
           fi
