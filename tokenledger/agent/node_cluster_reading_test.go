@@ -94,9 +94,14 @@ func TestClusterReadingsArePerPod(t *testing.T) {
 	os.WriteFile(filepath.Join(sa, "token"), []byte("ops-token\n"), 0o600)
 	os.WriteFile(filepath.Join(sa, "namespace"), []byte("fleet-workers"), 0o600)
 	a := &Agent{cfg: Config{FleetClusterOps: "http://prov", FleetKubeAPI: api.URL, FleetKubeSADir: sa}, http: api.Client()}
-	got, err := a.readClusterReadings(context.Background())
+	cr, err := a.readClusterReadings(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	got := cr.Pods
+	// Every user pod standing is listed, whatever its phase (claude-fleet#4887).
+	if !cr.Listed || len(cr.Present) != 4 || cr.Present[0] != "u-busy1" || cr.Present[1] != "u-free1" || cr.Present[2] != "u-gone1" || cr.Present[3] != "u-new1" {
+		t.Fatalf("present = %v %v; want all four user pods, listed", cr.Listed, cr.Present)
 	}
 	if len(got) != 2 || got[0].Pod != "u-busy1" || got[1].Pod != "u-free1" {
 		t.Fatalf("pods = %+v; want u-busy1, u-free1 (no metrics yet / not running: none)", got)

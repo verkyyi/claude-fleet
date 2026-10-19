@@ -139,6 +139,35 @@ func userPodLimits(raw []byte) (map[string]podLimits, error) {
 	return out, nil
 }
 
+// userPodsPresent is every user pod standing in the pods list, by its
+// fleet/pod label, whatever its phase (claude-fleet#4887): a pod starting,
+// running or stopping still has its Deployment; one deleted or scaled to 0
+// has no pod object at all. Sorted, each once.
+func userPodsPresent(raw []byte) ([]string, error) {
+	var l struct {
+		Items []struct {
+			Metadata struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &l); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, it := range l.Items {
+		pod := it.Metadata.Labels["fleet/pod"]
+		if it.Metadata.Labels["fleet/role"] != "user" || !jobOwnerRE.MatchString(pod) || seen[pod] {
+			continue
+		}
+		seen[pod] = true
+		out = append(out, pod)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // podUsage is one pod's fleet container's use, by pod object name.
 type podUsage struct{ cpu, mem float64 }
 
@@ -193,34 +222,45 @@ func podReading(l podLimits, u podUsage, now time.Time) control.MachineReading {
 	return r
 }
 
-// readClusterReadings is every running user pod's reading, sorted by pod.
-func (a *Agent) readClusterReadings(ctx context.Context) ([]control.PodReading, error) {
+// readClusterReadings is every running user pod's reading, sorted by pod,
+// and the list of every user pod standing (Listed: claude-fleet#4887).
+func (a *Agent) readClusterReadings(ctx context.Context) (control.ClusterReadings, error) {
+	var cr control.ClusterReadings
 	k, err := a.kubeReader()
 	if err != nil {
-		return nil, err
+		return cr, err
 	}
 	sel := url.QueryEscape("fleet/role=user")
 	st, raw, err := k.get(ctx, "/api/v1/namespaces/"+url.PathEscape(k.ns)+"/pods?labelSelector="+sel, 8<<20)
 	if err != nil {
-		return nil, err
+		return cr, err
 	}
 	if st != 200 {
-		return nil, fmt.Errorf("pods: HTTP %d", st)
+		return cr, fmt.Errorf("pods: HTTP %d", st)
 	}
 	limits, err := userPodLimits(raw)
 	if err != nil {
-		return nil, fmt.Errorf("pods: %w", err)
+		return cr, fmt.Errorf("pods: %w", err)
+	}
+	present, err := userPodsPresent(raw)
+	if err != nil {
+		return cr, fmt.Errorf("pods: %w", err)
+	}
+	// A list too long to send whole is not a list: the hub would read the
+	// cut-off pods as gone.
+	if len(present) <= control.MaxClusterReadings {
+		cr.Listed, cr.Present = true, present
 	}
 	st, raw, err = k.get(ctx, "/apis/metrics.k8s.io/v1beta1/namespaces/"+url.PathEscape(k.ns)+"/pods?labelSelector="+sel, 8<<20)
 	if err != nil {
-		return nil, err
+		return cr, err
 	}
 	if st != 200 {
-		return nil, fmt.Errorf("pod metrics: HTTP %d", st)
+		return cr, fmt.Errorf("pod metrics: HTTP %d", st)
 	}
 	usage, err := userPodUsage(raw)
 	if err != nil {
-		return nil, fmt.Errorf("pod metrics: %w", err)
+		return cr, fmt.Errorf("pod metrics: %w", err)
 	}
 	now := time.Now()
 	var out []control.PodReading
@@ -235,7 +275,8 @@ func (a *Agent) readClusterReadings(ctx context.Context) ([]control.PodReading, 
 	if len(out) > control.MaxClusterReadings {
 		out = out[:control.MaxClusterReadings]
 	}
-	return out, nil
+	cr.Pods = out
+	return cr, nil
 }
 
 // clusterReadingsLoop sends the cluster's readings up the ops link until the
@@ -253,7 +294,7 @@ func (a *Agent) clusterReadingsLoop(ctx context.Context, conn nodeLink) {
 	lastErr := ""
 	for {
 		rctx, cancel := context.WithTimeout(ctx, every)
-		pods, err := a.readClusterReadings(rctx)
+		cr, err := a.readClusterReadings(rctx)
 		cancel()
 		if err != nil {
 			if err.Error() != lastErr {
@@ -262,7 +303,7 @@ func (a *Agent) clusterReadingsLoop(ctx context.Context, conn nodeLink) {
 			lastErr = err.Error()
 		} else {
 			lastErr = ""
-			if m, err := control.New(control.TypeClusterReadings, control.ClusterReadings{Pods: pods}); err == nil {
+			if m, err := control.New(control.TypeClusterReadings, cr); err == nil {
 				wctx, cancel := context.WithTimeout(ctx, nodeWriteTimeout)
 				err = conn.write(wctx, m)
 				cancel()
