@@ -6491,9 +6491,31 @@ drill_native_authority_ack() {
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)
-  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal Readiness 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet_native_continue_test.py" Journal Readiness Adopt AdoptLock OriginalMessage 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
-  WHAT='未知原生元数据与 pending 拒绝；停止/启动失败或丢确认不重放副作用'
+  WHAT='未知原生元数据与 pending 拒绝；停止/启动失败或丢确认不重放副作用；原消息丢 ACK 按回执结清不重发'
+}
+
+drill_native_continue_stop_loop() {
+  CAP=15; local t0 out
+  t0=$(now)
+  # The real-Codex half is bin/fleet_native_continue_native_test.py --loop-control
+  # (opt-in: it needs a codex binary); these are its contracts, run everywhere.
+  out=$(python3 "$BIN/fleet_native_continue_test.py" Readiness Journal.test_message_is_the_resumed_lifetimes_first_turn_and_binds_it \
+        Journal.test_unproven_target_never_gets_the_message_or_relaunches 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='忙、排队输入、待答请求或 goal 的原会话不停不投；原消息只做续起新 lifetime 的第一轮，由它的 SessionStart 绑定'
+}
+
+drill_native_continue_mcp_remount() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-sleep-selftest.py" "$BIN" McpRestartTest.test_remounted_skips_only_contract_and_readiness \
+        McpRestartTest.test_shell_exec_is_offered_to_codex_only 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet_native_continue_test.py" Readiness.test_only_the_current_launchers_exact_mount_is_remounted 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='只有当前 launcher 原样挂载的 fleet MCP 服务免重启契约与就绪；身份、其下作业照旧拒绝；strict 外与 Claude 不受理'
 }
 
 drill_native_observe_missing() {

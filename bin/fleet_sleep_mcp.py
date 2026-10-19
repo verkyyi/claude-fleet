@@ -325,7 +325,7 @@ def _expand(nodes, env):
 # env_vars + env (issue #4537: real app-server, every hook in its environment,
 # none reached the child; one named in env_vars did). Another release gets no
 # shell-exec identity until it is measured and added here.
-SHELL_EXEC_CODEX = ('0.160.1',)
+SHELL_EXEC_CODEX = ('0.160.1', '0.162.1')   # 0.162.1: bin/fleet_native_continue_native_test.py (#4775)
 
 
 def codex_version(client):
@@ -586,7 +586,8 @@ def contract_hint(source, approved, name, conf=None):
             % (name, ','.join(listed), conf))
 
 
-def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None):
+def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None,
+             remounted=frozenset()):
     # strict=False answers a narrower question (issue #864): not "may this worker
     # hibernate?" but "is this configured MCP service, or something the agent is
     # still running?". An uncontracted, unready or job-owning service is still an
@@ -596,6 +597,10 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     # env_reader (fleet_sleep_argv.process_env) lets a `bash -c 'exec …'` launcher
     # match its exec target (shell_exec_argv, issue #4537) — Codex callers only;
     # without it that shape stays unverified. Identity is never a contract.
+    # remounted (issue #4775) names services the CALLER proved the next lifetime
+    # mounts afresh from the current install (the continuation's own question,
+    # never sleep's): they skip only the restartability contract and readiness —
+    # identity, and the no-job-beneath / package-child checks, still apply.
     configured, statuses = inventory
     approved, contract_conf = restartable(source) if strict else (set(), None)
     allowed = set()
@@ -624,13 +629,15 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
                 allowed.add(node)
                 pending.extend(child for child, (pp, _) in rows.items() if pp == node)
             continue
-        if not contracted(name, approved):
+        if name in remounted:
+            pass
+        elif not contracted(name, approved):
             raise ValueError('MCP service %s has no restartability contract (FLEET_SLEEP_MCP_RESTARTABLE); %s'
                              % (name, contract_hint(source, approved, name, contract_conf)))
         # Codex reports a runtime status per server. Claude has no such channel:
         # the exactly matching live process is the evidence, and a server still
         # initializing is as restartable as a ready one.
-        if statuses is not None and not runtime_ready(statuses.get(name, {})):
+        if name not in remounted and statuses is not None and not runtime_ready(statuses.get(name, {})):
             raise ValueError('MCP service %s is not ready or has unknown runtime status' % name)
         allowed.add(pid)
         for child, (pp, _) in rows.items():
@@ -644,6 +651,8 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
         proof[name] = fingerprint(conf)
         if shell_exec_argv(pid, server_pid, conf, env_reader) is not None:
             basis[name] = 'shell-exec'
+        if name in remounted:
+            basis[name] = basis.get(name, 'exact') + '+remounted'
     source['sleep_mcp'] = proof
     if basis:
         # How each service was identified, for the record: 'shell-exec' = the

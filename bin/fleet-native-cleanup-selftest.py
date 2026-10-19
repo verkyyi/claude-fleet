@@ -75,17 +75,18 @@ class Cleanup(unittest.TestCase):
 
     def test_each_continuation_stage_excludes_cleanup_and_unknown_retains_lock(self):
         test = self
-        plan = dict(binding={'@worktree':str(self.work)}, proof={'native_session':'fixture-source'})
+        plan = dict(binding={'@worktree':str(self.work)}, proof={'native_session':'fixture-source'},
+                    message={'operation':'0b9d7f3e-6a0e-4c8f-9a51-6f0c2b1d4e77','text':'continue'})
         class Backend:
             def __init__(self, failure): self.failure=failure
             def __getattr__(self, stage):
-                def run(*args):
+                def run(*args, **kwargs):
                     test.assertEqual(test.clean_now(), 'skip:transition', stage)
                     if stage == self.failure: raise ValueError('unconfirmed fixture')
-                    return {'verified':stage}
+                    return {'verified':stage, 'native_identity':{'pid':43}}
                 return run
         with patch.dict(os.environ,self.env,clear=True):
-            for stage in ('preflight','stop','stopped','reserve','launch','bound',''):
+            for stage in ('preflight','stop','stopped','reserve','launch','started','deliver','bound','consumed',''):
                 with self.subTest(stage=stage):
                     path=self.root/('continue-'+(stage or 'success')+'.json')
                     result=continuation.protected_execute(path,plan,Backend(stage))
@@ -95,7 +96,7 @@ class Cleanup(unittest.TestCase):
                         request=json.loads((locks[0]/'request').read_text())
                         self.assertEqual(request['journal'],str(path))
                         self.assertEqual(self.clean_now(),'skip:transition')
-                        self.assertNotEqual(result['state'],'bound')
+                        self.assertNotEqual(result['state'],'consumed')
                         # Fixture-only teardown of retained lock; product has no
                         # automatic unlock/retry or TTL escape for this outcome.
                         shutil.rmtree(locks[0])
