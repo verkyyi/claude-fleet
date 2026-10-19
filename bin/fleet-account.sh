@@ -757,7 +757,13 @@ except ValueError:
     d = None
 if not isinstance(d, dict):
     print("unreachable\tno answer from ccquota" if not raw.strip() else "unreachable\tunreadable answer"); sys.exit(0)
-r = str(d.get("reason") or "").replace("\t", " ").replace("\n", " ")[:160]
+r = str(d.get("reason") or "").replace("\t", " ").replace("\n", " ")
+# «<viewer door>; node token: <summary door>»: the summary door decides
+# (issue #4906) — cut at 160 the viewer half was all that was left, a tokenless
+# 401 from the proxy broker copied onto every EPIC tick while the cause hid
+if "; node token: " in r:
+    r = "hub unreachable: node token: " + r.split("; node token: ", 1)[1]
+r = r[:160]
 if re.search(r"HTTP (401|403)\b", r): print("refused\t" + r)
 elif r.startswith("hub unreachable") or "no hub configured" in r: print("unreachable\t" + r)
 else: print("empty\t" + (r or "no row for any pool account"))

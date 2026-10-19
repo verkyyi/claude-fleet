@@ -1423,6 +1423,11 @@ class Proxy(BaseHTTPRequestHandler):
         """/hub/<path> → the hub, with the node token put in (separated mode only)."""
         tok = inbound.get("authorization", "")[7:].strip() if inbound.get("authorization", "").lower().startswith("bearer ") else ""
         bare = path.split("?")[0].rstrip("/")
+        if not tok:
+            # nothing to name a login with (issue #4906): say that, not «names no login»
+            self.t = self.fixed or self.T
+            self.log(ev="deny", path="/hub" + bare, why="no credential")
+            return self.fail(401, "no node credential on the request (fleet-cred-proxy.sh node-token mints one)")
         self.t = self.pick(tok)
         if not self.t:
             self.log(ev="deny", path="/hub" + bare, why="names no login served here")
