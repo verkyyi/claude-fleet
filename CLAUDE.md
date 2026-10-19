@@ -304,17 +304,17 @@ one-off drill / audit records do not go in the repo (issue #3576).
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
 - **A red CI check is SAID, never filed** (issue #4898, EPIC #4895; it replaced
-  #2078's one-issue-per-fault filer). The automatic reporters — `fleet-macos-watch.sh`,
-  `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
+  #2078's one-issue-per-fault filer; its fingerprint helpers `fleet_breakage_*` /
+  `fleet_fault_*` and the nightly miss tracer left with #4900). The automatic
+  reporters — `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
   run `bin/fleet-ci-say.sh` (a `FLEET_*_FILER` seam of the same argv): the title and
   body on the run's summary page and one `::warning::` under the key a filing used
-  (never a sha: `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`), no
-  issue, no URL. A fix is dispatched as a task (`task` tool) by whoever decides to.
-  **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
-  only PRODUCE (macos-watch — one alert per red run, plus macOS' once-per-streak
-  held-back alert); the patrol is ONE
-  steward session's `/loop` (`spawn agent:steward`), opened by a person, never a
-  second beside it; an orchestrator does not patrol.
+  (never a sha: `flaky-<test>`, `selftest-quarantine.<test>`), no issue, no URL;
+  `fleet-macos-watch.sh` raises one `breakage` alert per red run (plus macOS'
+  once-per-streak held-back alert); a red nightly is its run's red. A fix is
+  dispatched as a task (`task` tool) by whoever decides to. **Nothing patrols**
+  (issue #4900): the steward template and docs/dev/PATROLS.md are gone; an
+  orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything
@@ -740,11 +740,9 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   hub back on that image now). **The selection's backstop is a nightly full run**
   (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
   06:17 Beijing (the train's pick and `fleet-train-plan.sh --full`, no rerun, no
-  quarantine); each red test goes to `bin/fleet-nightly-miss.sh`, which bisects it
-  to the merge it went red at and asks `run-selftests.sh --changed <M^> --list-only`
-  there — not listed ⇒ ONE `selection-miss` issue (`--breakage-key nightly-<test>`)
-  naming the merge, its files and the fix (name the file in the test; BREAK-IT
-  `selection-miss-silent`). So **don't run the
+  quarantine); a red there is its run's red (the miss tracer left with #4900 —
+  `run-selftests.sh --changed <M^> --list-only` still says whether a merge selected
+  a test; the fix is to name the file in the test). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or

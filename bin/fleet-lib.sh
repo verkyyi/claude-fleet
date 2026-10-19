@@ -7518,7 +7518,6 @@ agent:codex|10A37F|claude-fleet starts this issue's worker in Codex instead of t
 agent:claude|D97757|claude-fleet starts this issue's worker in Claude Code instead of the fleet default
 desk|C5DEF5|No code to change (design page, research, release) — claude-fleet opens it with no workspace
 flaky|FBCA04|A selftest the release train saw red, then green on its one rerun — claude-fleet files one per test
-selection-miss|C2E0C6|A test or check red in a nightly full run that the train or the PR gate never ran — names the merge and the file
 EOF
 }
 

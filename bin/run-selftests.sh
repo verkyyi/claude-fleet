@@ -67,8 +67,7 @@
 #   --list-only (with --changed — issue #3871) run nothing: print the names of the
 #               tests the selection picked, one per line (no `select:` lines; the
 #               full-suite fallback prints every test, a change that maps to none
-#               prints nothing), exit 0. The nightly's miss analysis
-#               (bin/fleet-nightly-miss.sh) asks it of every merge.
+#               prints nothing), exit 0.
 #   --among "F …" (with --changed --list-only — issue #4794) select among the files
 #               F (paths from bin/, `../x` for one outside it) instead of the
 #               selftests, by the same rules a)–c): a changed F itself, an F naming a

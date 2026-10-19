@@ -2936,41 +2936,7 @@ drill_quarantine_expired()  { quarantine_leg expired  "过期条目视为不存�
 drill_quarantine_pr_skips() { quarantine_leg pr-skips "不带 --quarantine 什么都不跳；没有 --changed 就拒（exit 2）；PR 门和夜里全量的工作流不传隔离输入，只有列车传"; }
 drill_train_flaky_retry_hides_red() { quarantine_leg retry-red "重跑还红是 FAIL、这一片红（一个确定红的测试不能靠重跑发出）；--drill-red 重跑也记红；超时不重跑；--retry-red 只收 0 或 1；只有列车传 retry_red"; }
 
-# ---- selection-miss-silent (#3871, EPIC #3863 C8): a test reads a file it never
-# names, a merge changes that file — the release train's --changed selection never
-# picks the test, the train ships, the test sits red on stable and nothing says so.
-# The nightly full run (.github/workflows/selftests-nightly.yml) sees it red and
-# bin/fleet-nightly-miss.sh bisects it to that merge, asks the selection there
-# (run-selftests.sh --list-only) and files ONE selection-miss issue naming the merge
-# and the file. Rig: fleet-nightly-miss-selftest.sh leg B (a sandbox repo, the real
-# runner, a stub filer).
-drill_selection_miss_silent() {
-  CAP=60; local t0 out
-  [ -f "$BIN/fleet-nightly-miss.sh" ] || { WHY="no bin/fleet-nightly-miss.sh — a red the train never selected is filed by nobody"; return 1; }
-  [ -f "$ROOT/.github/workflows/selftests-nightly.yml" ] || { WHY="no .github/workflows/selftests-nightly.yml — nothing runs the whole suite"; return 1; }
-  t0=$(now)
-  out=$(NM_LEG=B bash "$BIN/fleet-nightly-miss-selftest.sh" 2>&1) \
-    || { WHY="$(printf '%s\n' "$out" | grep -E '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="那次合并改了一个测试没点名的文件、列车没选它：夜里全量红 ⇒ 二分到那次合并，--list-only 证实没选中，开一张 selection-miss 单写明合并和文件"
-}
 
-# ---- selection-miss-go-silent (#4816, EPIC #4810 C6): the PR gate runs only the Go
-# blocks and checks bin/ci-plan.sh says a change reaches; a hub test that reads the
-# agent block goes red on an agent-only merge the plan never sent to hub. The
-# nightly (ci-nightly.yml) runs every block and check; fleet-nightly-miss.sh --go
-# bisects the red test to that merge, asks `ci-plan.sh go M^`, and files ONE
-# selection-miss issue (nightly-go-<pkg>.<Test>). The sandbox is the selftest's J leg.
-drill_selection_miss_go_silent() {
-  CAP=60; local t0 out
-  [ -f "$ROOT/.github/workflows/ci-nightly.yml" ] || { WHY="no .github/workflows/ci-nightly.yml — nothing runs the Go blocks and checks the PR gate skipped"; return 1; }
-  grep -q -- '--go ' "$ROOT/.github/workflows/ci-nightly.yml" || { WHY="ci-nightly.yml does not hand its Go logs to fleet-nightly-miss.sh --go"; return 1; }
-  t0=$(now)
-  out=$(NM_LEG=J bash "$BIN/fleet-nightly-miss-selftest.sh" 2>&1) \
-    || { WHY="$(printf '%s\n' "$out" | grep -E '^FAIL' | head -3 | tr '\n' ' ')"; return 1; }
-  SECS=$(since "$t0")
-  WHAT="一次只改 agent 的合并弄红了读 agent 文件的 hub 测试、PR 门没跑 hub：夜里全量红 ⇒ go test -run 二分到那次合并，ci-plan.sh go 证实没选 hub，开且只开一张 selection-miss 单"
-}
 
 # ---- train-hub-stable-split (#3142, EPIC #3139 C3): the hub image and stable come
 # from different commits — hub-deploy shipped the hub on its own clock, the

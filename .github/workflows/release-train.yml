@@ -23,7 +23,7 @@ name: release train
 #     the Mac lane (#3868) is gone. No release waits on macOS. Each Mac
 #     verifies its own install (the updater's machine doctor after the switch,
 #     rolled back on a new FAIL); the nightly full macOS suite (selftests-macos.yml)
-#     files what it finds through fleet-macos-watch.sh. mac-follow.yml (#3869) is a
+#     raises an alert on a red through fleet-macos-watch.sh. mac-follow.yml (#3869) is a
 #     dispatch only. A train never waits for, nor reds on, a Mac.
 #   * the gate is `fleet-stable.sh move TRAIN_SHA --precheck`: trunk / forward /
 #     oldcfg / release.json / artifacts / cn (issue 4180), no tag pushed. Any red ⇒ this train is
@@ -85,23 +85,22 @@ name: release train
 #                   change does not touch, and a test red again, untouched, prints
 #                   QUARANTINE instead of FAIL (bin/run-selftests.sh --quarantine /
 #                   --prev-fails — the PR gate and the nightly never pass them).
-#       `隔离`      files each new one's breakage issue (--breakage-key, one per
-#                   test), writes the entry, uploads the state for the next train
-#                   and says 「隔离了 N 个：…」 on the summary (nothing when none).
+#       `隔离`      writes each new one's entry (no issue is filed since #4900),
+#                   uploads the state for the next train and says 「隔离了 N 个：…」
+#                   on the summary (nothing when none).
 #   * a red test runs ONCE more before it counts (issue #3866, EPIC #3863 C3): the
 #     shards get --retry-red 1, so a test red then green on its rerun is `FLAKY`, its
-#     shard stays green and the train ships; `隔离` files it (--breakage-key
-#     flaky-<test>, label flaky — one issue a test, a later sighting a comment), keeps
-#     its sightings seven days in the state and quarantines it at the third (reason
+#     shard stays green and the train ships; `隔离` keeps its sightings seven days
+#     in the state (no issue, #4900) and quarantines it at the third (reason
 #     flaky), and the summary says 「重跑才过 N 个：…」. Red twice is red as before:
 #     `红灯即停` judges job conclusions, and only a red rerun reds a job
 #     (BREAK-IT train-flaky-retry-hides-red). The PR gate and the nightly never rerun.
 #     A workflow_dispatch with `drill_flaky: <test>` counts that test's FIRST run red
 #     on the Linux half: a whole train otherwise (it ships when there is a change),
-#     its flaky issue filed for real, the sighting never counted toward a quarantine.
+#     the sighting said, never counted toward a quarantine.
 #     A workflow_dispatch with `drill_red: <test>` is the drill: that test counts red,
-#     the state is `train-quarantine-drill` (never the real trains'), no issue is
-#     filed (`drill_issue` stands in), and nothing past the tests runs — no gate, no
+#     the state is `train-quarantine-drill` (never the real trains'), the entry names
+#     `drill_issue`, and nothing past the tests runs — no gate, no
 #     hub, no release. Two drills on two different heads show the second quarantine.
 #
 #   * the Linux half goes to the Shenzhen cluster when asked (issue #3864, EPIC #3863
@@ -132,7 +131,7 @@ name: release train
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
 # {sha, subject, committed}).
-# A drill names itself in the title: fleet_breakage_probe skips such a run (issue #3372).
+# A drill names itself in the title (issue #3372).
 # A re-send names itself too (issue #4913): 「补发 <sha7> · n/2 · why」 is what
 # fleet-train-next.py retries counts — at most two a sha.
 run-name: ${{ inputs.drill_red != '' && format('release train (drill {0})', inputs.drill_red) || inputs.resend != '' && format('release train (补发 {0})', inputs.resend) || 'release train' }}
@@ -465,10 +464,9 @@ jobs:
 
 
   record:
-    # New quarantines get their issue + entry; the state goes to the next train
-    # (issue #3243). Red when a new one could not be filed — the train with it.
-    # Each FLAKY test (issue #3866) gets its issue (or a comment on it) and a
-    # sighting; a flaky filing that fails is said, never reds the train.
+    # New quarantines get their entry; the state goes to the next train (issue
+    # #3243). Each FLAKY test (issue #3866) gets a sighting. Nothing is filed
+    # (issue #4900): the summary is the alert.
     name: 隔离
     needs: [board, quarantine, linux, linux-rescue]
     if: always() && needs.quarantine.result == 'success'
@@ -476,7 +474,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: write     # the breakage issue of a new quarantine
     steps:
       - uses: actions/checkout@v4
         with:
@@ -488,7 +485,6 @@ jobs:
           path: results
       - name: fleet-train-quarantine.sh record
         env:
-          GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.board.outputs.train_sha }}
           RAW: ${{ needs.quarantine.outputs.raw }}
           PREV_RUN: ${{ needs.quarantine.outputs.prev_run }}

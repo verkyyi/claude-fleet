@@ -3,9 +3,9 @@
 # filed an issue does now: it SAYS it (issue #4898, EPIC #4895 — the issue filer
 # left with the ticket layer; 红了只报警，不开单).
 #
-# The default "filer" of the train's quarantine (fleet-train-quarantine.sh), the
-# nightly's miss tracer (fleet-nightly-miss.sh) and the durations check
-# (fleet-durations-drift.sh) — they take the filer's argv as they always did, so a
+# The default "filer" of the train's quarantine (fleet-train-quarantine.sh) and the
+# durations check (fleet-durations-drift.sh; the nightly's miss tracer left with
+# #4900) — they take the filer's argv as they always did, so a
 # selftest's FLEET_*_FILER seam is unchanged. It writes the title and body to the
 # run's summary page ($GITHUB_STEP_SUMMARY) and one `::warning::` line on stderr,
 # prints NOTHING on stdout (there is no issue URL) and exits 0. Every other flag
