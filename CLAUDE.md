@@ -313,7 +313,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `fleet-macos-watch.sh` raises one `breakage` alert per red run (plus macOS'
   once-per-streak held-back alert); a red nightly is its run's red. A fix is
   dispatched as a task (`task` tool) by whoever decides to. **Nothing patrols**
-  (issue #4900): the steward template and docs/dev/PATROLS.md are gone; an
+  (issue #4900): the steward template and the patrols page are gone; an
   orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
