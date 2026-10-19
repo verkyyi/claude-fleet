@@ -750,7 +750,15 @@ replays its first answer.
    references and selective mappings, and `blockers`. Every blocker is the
    person's own: a local start on their endpoint, a legacy lease, an unfinished
    v0 T, an unsettled worker_start, a session on their hosts that is not an
-   accepted task's execution. `--freeze | --apply | --rollback --manifest FILE`
+   accepted task's execution. An unsettled worker_start the hub can check (its
+   issue, or the window `fid:` its node named) settles on its own once the
+   hub's books show the worker never appeared (#4932); one that names no worker
+   — a no-repo start whose node named no window — is the person's to vouch for:
+   an admin runs `fleet hub settle-start <operation_id> --reason <why>`
+   (`POST /v1/fleet/operation_settle`, past 24 h, unknown / running only), it
+   ends `failed` (`SETTLED_BY_OPERATOR`, the prior status and result kept) and
+   fleet_audit records who and why (#4945).
+   `--freeze | --apply | --rollback --manifest FILE`
    refuse a manifest that is not `version: 2` for this login's `conf` — an
    older per-repo one, another login's — or whose local settings changed since.
 2. **Freeze** — `--freeze --manifest FILE` (CAS on the revision; the hub

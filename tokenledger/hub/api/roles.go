@@ -151,7 +151,7 @@ var routeAccess = map[string]string{
 
 	// An admin's: subscriptions, machines, join codes, credentials,
 	// audits, settings, the operator's own analytics.
-	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin,
+	"/v1/fleet/join-codes": accessAdmin, "/v1/fleet/peer-certs": accessAdmin, OperationSettlePath: accessAdmin,
 	FleetNodesPrefix: accessAdmin, "/v1/node/desired": accessSelf, // claude-fleet#2214
 	CIRunnersPath:        accessAdmin, // claude-fleet#3144
 	"/v1/fleet/accounts": accessAdmin, "/v1/fleet/settings": accessAdmin, "/v1/fleet/gate": accessAdmin, "/v1/fleet/users": accessAdmin, "/v1/fleet/users/sessions": accessAdmin, "/v1/fleet/invites": accessAdmin,

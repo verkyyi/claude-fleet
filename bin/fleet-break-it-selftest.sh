@@ -6314,6 +6314,22 @@ drill_orphan_unknown_outcome_start() {
   SECS=$(since "$t0")
 }
 
+# ---- orphan-start-unnamed (#4945): a no-repo worker_start whose node named no
+# window stays unknown under #4932 — the hub cannot check it. The node now
+# names the window it looked for (fid:), and an admin vouches for the rest:
+# operation_settle ends it failed (SETTLED_BY_OPERATOR), audited who and why.
+drill_orphan_start_unnamed() {
+  CAP=180;  # two cold go test builds
+  local t0
+  t0=$(now)
+  grep -q '" (fid:%s)" % fid' "$ROOT/bin/fleet_control.py" \
+    || { WHY="the node's UNKNOWN_OUTCOME no longer names the window it looked for"; return 1; }
+  _drill_go_tests 'TestSettleStartByOperator' "$ROOT/tokenledger/hub/store/fleet_start_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestFleetOperationSettleByAdmin' "$ROOT/tokenledger/hub/api/fleet_write_test.go" \
+    '核实不了的不绑仓库启动：自动路照旧 unknown；管理员 operation_settle 只在 24 小时后、只对说不出 worker 的 worker_start 结成 failed（SETTLED_BY_OPERATOR），审计写谁、为什么；核实得了的 409（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 # ---- authority-superseded-fleet-row (#4877): fleet rows are never deleted,
 # so an old row of the same machine + login that a newer row replaced stayed
 # present=0 and asked for a capable observation that never comes. The manifest

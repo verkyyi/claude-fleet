@@ -663,3 +663,61 @@ func TestFleetWriteNeverAppearedStartSettles(t *testing.T) {
 		t.Fatalf("never appeared = %v; want failed WORKER_NEVER_APPEARED", got)
 	}
 }
+
+// claude-fleet#4945: a no-repo start whose node named no window cannot be
+// checked, so it stays unknown past the never-appeared grace; an admin settles
+// it with operation_settle (past 24 h only, never one the hub can check), and
+// fleet_audit says who and why.
+func TestFleetOperationSettleByAdmin(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	macC.setAnswer(accepted)
+	unnamed := postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "fleet_id": f4.FleetID, "idempotency_key": "un"}, 200)["operation_id"].(string)
+	issue := postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": "is"}, 200)["operation_id"].(string)
+	macC.setOpGet(func(env map[string]any) (any, *control.Error) {
+		return map[string]any{"operation_id": env["operation_id"], "fleet_id": f4.FleetID, "action": "worker_start", "status": "unknown",
+			"result": json.RawMessage(`{"error":{"code":"UNKNOWN_OUTCOME","message":"Spawn returned but no matching worker is visible"}}`)}, nil
+	})
+	old := neverAppearedGrace
+	neverAppearedGrace = 0
+	t.Cleanup(func() { neverAppearedGrace = old })
+	// The automatic road keeps the unnamed one: it names no worker to check.
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+unnamed, 200); got["status"] != "unknown" {
+		t.Fatalf("unnamed start = %v; want unknown", got)
+	}
+	why := map[string]any{"operation_id": unnamed, "reason": "window long gone; vouched by the operator"}
+	if got := postFleet(t, h, "operation_settle", why, 409); !strings.Contains(asJSON(got), "younger than") {
+		t.Fatalf("young = %v", got)
+	}
+	oldAge := operatorSettleAge
+	operatorSettleAge = 0
+	t.Cleanup(func() { operatorSettleAge = oldAge })
+	postFleet(t, h, "operation_settle", map[string]any{"operation_id": unnamed}, 400)
+	if got := postFleet(t, h, "operation_settle", map[string]any{"operation_id": issue, "reason": "x"}, 409); !strings.Contains(asJSON(got), "settles on its own") {
+		t.Fatalf("checkable start = %v", got)
+	}
+	got := postFleet(t, h, "operation_settle", why, 200)
+	e, _ := got["result"].(map[string]any)["error"].(map[string]any)
+	if got["status"] != "failed" || e["code"] != "SETTLED_BY_OPERATOR" || e["actor"] != "operator" || e["prior_status"] != "unknown" || e["prior_result"] == nil {
+		t.Fatalf("settled = %v; want failed SETTLED_BY_OPERATOR", got)
+	}
+	// operation_get no longer turns it back: it is failed, and stays failed.
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+unnamed, 200); got["status"] != "failed" {
+		t.Fatalf("after settle = %v", got)
+	}
+	postFleet(t, h, "operation_settle", why, 409)
+	log, err := h.srv.Store.FleetAuditLog(50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, a := range log {
+		if a.Action == "operation_settle" && a.OperationID == unnamed && strings.Contains(a.Outcome, "vouched by the operator") && a.Actor == "operator" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no operation_settle audit row: %+v", log)
+	}
+}
+
+func asJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

@@ -165,3 +165,44 @@ func sameRepo(a, b string) bool {
 	tail := func(r string) string { return r[strings.LastIndex(r, "/")+1:] }
 	return tail(a) == tail(b)
 }
+
+// Settling by a person what the hub cannot check (claude-fleet#4945). A
+// worker_start that names no worker — a no-repo / scratch start whose node
+// named no window — stays unknown under SettleNeverAppearedStart forever. An
+// admin may vouch for it: the start is still that worker_start, unknown or
+// running, older than minAge, and still names no worker the hub could check
+// (one it can check is the automatic road's). It ends failed with the
+// evidence result writes; the caller audits who and why.
+func (s *Store) SettleStartByOperator(opID string, w StartWorker, minAge time.Duration, result func(priorStatus, priorResult string) string, now time.Time) (string, string, error) {
+	if w.named() {
+		return "", "the hub can check this start's worker: it settles on its own once its books show the worker never appeared", nil
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	var fleetID, action, status, prior, created string
+	if err = tx.QueryRow(`SELECT fleet_id, action, status, result, created FROM fleet_operations WHERE id = ?`, opID).Scan(&fleetID, &action, &status, &prior, &created); err != nil {
+		return "", "", err
+	}
+	if action != "worker_start" {
+		return "", "only a worker_start is settled this way", nil
+	}
+	if status != "unknown" && status != "running" {
+		return "", "the start is " + status + ", not unknown or running", nil
+	}
+	at, _ := time.Parse(rfc, created)
+	if at.IsZero() || now.Sub(at) < minAge {
+		return "", "the start is younger than " + minAge.String(), nil
+	}
+	res, err := tx.Exec(`UPDATE fleet_operations SET status = 'failed', result = ?, updated = ? WHERE id = ? AND status = ?`,
+		result(status, prior), now.UTC().Format(rfc), opID, status)
+	if err != nil {
+		return "", "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", "changed while settling", nil
+	}
+	return fleetID, "", tx.Commit()
+}

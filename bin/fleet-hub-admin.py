@@ -43,6 +43,12 @@
                                          + 回收中 / 坏了 when any (claude-fleet#3501),
                                          + 没验过 N: active but not checked 3/3 (claude-fleet#4673);
                                          `accounts list` shows each spare's 验 N/3
+    fleet hub settle-start <operation_id> --reason <why>
+                                         end a worker_start the hub cannot check (it names no
+                                         worker: no issue, no window `fid:`) that has been
+                                         unknown / running for over 24 h as failed
+                                         (SETTLED_BY_OPERATOR) — you vouch for it; audited with
+                                         who and why (claude-fleet#4945)
 
 Keys: hub.public_meter hub.public_badges pool.skip_pct pool.move_when_full
 fleet.auto_assign fleet.routes_extra fleet.machine_names fleet.spares fleet.spare_max fleet.trial
@@ -78,6 +84,7 @@ SETTINGS_PATH = "/v1/fleet/settings"
 USERS_PATH = "/v1/fleet/users"
 ACCOUNTS_PATH = "/v1/fleet/accounts"
 INVITES_PATH = "/v1/fleet/invites"
+SETTLE_PATH = "/v1/fleet/operation_settle"
 NODES_PATH = "/v1/nodes"
 MIGRATED = "hub.legacy_migrated."
 
@@ -475,6 +482,16 @@ def accounts_main(a):
         print("forgot %s%s" % (a.principal, " on " + a.host if a.host else ""))
 
 
+def settle_start(a):
+    resp = call(a, "POST", SETTLE_PATH, {"operation_id": a.operation_id, "reason": a.reason})
+    if a.json:
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return
+    err = (resp.get("result") or {}).get("error") or {}
+    print("%s %s → %s (%s; was %s)" % (resp.get("action", ""), resp.get("operation_id", a.operation_id),
+                                     resp.get("status", ""), err.get("code", ""), err.get("prior_status", "")))
+
+
 def main(argv):
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--hub", help="the hub's URL")
@@ -515,6 +532,10 @@ def main(argv):
     iv.add_argument("--list", action="store_true", help="every invite and its state")
     iv.add_argument("--revoke", metavar="ID", help="stop an unused invite")
     sub.add_parser("machines", parents=[common], help="every machine, with its spare logins")
+    ss = sub.add_parser("settle-start", parents=[common],
+                        help="end a worker_start the hub cannot check as failed, vouched by you")
+    ss.add_argument("operation_id")
+    ss.add_argument("--reason", required=True, help="why it is safe to settle (audited)")
     a = ap.parse_args(argv)
     if getattr(a, "newlogin", None) and not getattr(a, "login", None):
         a.login = a.newlogin
@@ -532,6 +553,8 @@ def main(argv):
         invite_main(a)
     elif a.cmd == "machines":
         machines_main(a)
+    elif a.cmd == "settle-start":
+        settle_start(a)
     else:
         if a.action == "rm":
             a.action = "remove"
