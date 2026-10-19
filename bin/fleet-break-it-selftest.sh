@@ -771,6 +771,7 @@ drill_role_auto_reopen_off() {
 drill_agent_file_broken() {
   CAP=15; local d="$WORK/af" lbl="brkaf-$$" t0 rc wins
   mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb" "$d/home/.claude/agents"
+  fx_repo "$d/conf" "$lbl" acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
   git init -q --bare "$d/o.git"
   ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
       && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
@@ -4013,8 +4014,8 @@ drill_pool_empty_compose() {
   git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
   ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i ) \
     || { WHY="cannot build the repo"; return 1; }
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s/main"\nFLEET_BASE_BRANCH="master"\nFLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' "$d" \
-    > "$d/conf/fleets/pe/conf"
+  fx_repo "$d/conf" pe acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
+  printf 'FLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pe/conf"
   for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
   rm -f "$d/sb/fleet-issue-file.sh" "$d/sb/dash-issue-session.sh"
   printf '#!/bin/sh\necho filed >> "%s/log/file"\necho https://github.com/acme/app/issues/9\n' "$d" > "$d/sb/fleet-issue-file.sh"
@@ -4097,6 +4098,7 @@ drill_cold_fill_fails() {
   # with it, and the spawn must say so — never a session on half a tree.
   CAP=10; local d="$WORK/cf" lbl="brkcf-$$" t0 rc
   mkdir -p "$d/o.git" "$d/main" "$d/conf" "$d/tmp" "$d/fb"
+  fx_repo "$d/conf" "$lbl" acme/w FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
   git init -q --bare "$d/o.git"
   ( cd "$d/main" && git init -q -b master . && git config user.email t@t && git config user.name t \
       && printf 'x\n' > CLAUDE.md && git add -A && git commit -qm i && git remote add origin "$d/o.git" \
@@ -6768,7 +6770,7 @@ drill_reap_reopen_restarts_clock() {
   CAP=15; local t0 d sock w why
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   d="$WORK/rrc"; sock="$d/s"; mkdir -p "$d/conf/global" "$d/conf/fleets/rrc" "$d/gh"
-  printf 'FLEET_REPO=acme/app\n' > "$d/conf/fleets/rrc/conf"
+  : > "$d/conf/fleets/rrc/conf"; fx_repo "$d/conf" rrc acme/app
   printf 'claude fp-new x\n' > "$d/conf/global/agent-cfg.expected"
   printf '#!/bin/sh\ncase "$*" in *"issue view 41"*) echo %s ;; *) exit 1 ;; esac\n' "'{\"state\":\"CLOSED\"}'" > "$d/gh/gh"
   chmod +x "$d/gh/gh"
@@ -6793,7 +6795,7 @@ drill_stop_bare_path() {
   CAP=10; local t0 d f n t w out
   [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
   d="$WORK/sbp"; mkdir -p "$d/tt" "$d/conf/fleets/sbp" "$d/pbin" "$d/tbin"
-  printf 'FLEET_REPO="acme/app"\nFLEET_MAIN="%s"\n' "$d" > "$d/conf/fleets/sbp/conf"
+  : > "$d/conf/fleets/sbp/conf"; fx_repo "$d/conf" sbp acme/app FLEET_MAIN="$d"
   # every system tool but tmux on PATH; tmux only in a tool dir
   for f in /usr/bin/* /bin/*; do
     n=${f##*/}; [ "$n" = tmux ] || [ -e "$d/pbin/$n" ] || ln -s "$f" "$d/pbin/$n" 2>/dev/null

@@ -298,6 +298,9 @@ snap()        { cat "$WORK/spawn.rc" "$WORK/spawn.err"; sort "$GH_LOG"; cat "$TM
 unset FLEET_PRESPAWN_DEDUP CCQUOTA_FLEET FLEET_HUB_LEASE_CMD FLEET_HUB_PLACE_CMD FLEET_HUB_STATUS_CMD FLEET_NODE_ALIASES
 unset CCQUOTA_TOKEN CCQUOTA_HUB_URL   # a pane under the pre-#1491 stop-gap exports the token
 LEASE="$WORK/fakebin/fake-lease"; PLACE="$WORK/fakebin/fake-place"
+# A configured fleet (an empty conf; its repo is the overlay): the UUID is frozen
+# here, once, and every later spawn reads that file (issue #1936).
+[ -f "$WORK/conf/fleets/testsess/conf" ] || : > "$WORK/conf/fleets/testsess/conf"
 UUID=$(cd "$WORK" && FLEET_CONF_DIR="$WORK/conf" FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" \
   bash -c '. "$1/fleet-lib.sh"; fleet_uuid testsess' _ "$BIN")
 [ -n "$UUID" ] || fail "setup: fleet_uuid derived nothing from the fake control database"
@@ -346,7 +349,7 @@ head -n1 "$LEASE_LOG" | grep -q '^acquire' || fail "REMOTE the lease is taken BE
 ok "REMOTE mac-b busy → sent to mac-a with its reason; no window, no claim, lease kept"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin issue-77
-place_has "--origin-wid $UUID/acme-widgets:issue-77"         || fail "PARENT the parent's worker_id rides the placement"
+place_has "--origin-wid $UUID/issue-77"          || fail "PARENT the parent's worker_id rides the placement"
 ok "PARENT a worker's child carries --origin-wid <fleet UUID>/issue-77"
 
 # ===== LOCAL: the hub chose this machine ⇒ today's path ===========================
@@ -394,7 +397,7 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-a" PLACE_ANSWER="$REMOTE_LINE" 
 [ -s "$PLACE_LOG" ]                              && fail "HUBSENT a start the hub sent is never placed again"
 tmux_has 'new-window'                            || fail "HUBSENT opens it here"
 tmux_has "@origin_wid $MACHINE/issue-77"         || fail "HUBSENT stamps the given parent worker_id"
-tmux_has "@origin acme-widgets:issue-77"         || fail "HUBSENT stamps the parent's key as @origin too — the report path needs it"
+tmux_has "@origin issue-77"                      || fail "HUBSENT stamps the parent's key as @origin too — the report path needs it"
 ok "HUBSENT --origin hub --node local → no re-placement; @origin_wid stamped verbatim"
 
 for n in local mac-b; do
@@ -641,6 +644,7 @@ ok "ASYNC --async → --wait 0, operation id in the dispatch file, listed by fle
 # testsess = the fleet the fake tmux answers; `other` = a second fleet on the same
 # login, named as the spawn's second argument (a headless target). Each conf carries only the lines under test.
 mkdir -p "$WORK/conf/fleets/testsess" "$WORK/conf/fleets/other"
+fx_repo "$WORK/conf" other acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 printf 'CCQUOTA_FLEET=0\n' > "$WORK/conf/fleets/testsess/conf"
 printf 'export CCQUOTA_FLEET=1\n' > "$WORK/conf/fleets/other/conf"
 for login in 1 ''; do

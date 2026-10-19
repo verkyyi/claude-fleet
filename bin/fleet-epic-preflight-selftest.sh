@@ -381,17 +381,13 @@ printf '%s' "$OUT" | grep -q 'overrides the repo only' \
 ok "J3 a bare --repo announces that the fleet rows still belong to the current fleet"
 
 # ============================ K: a multi-repo fleet (issue #803) ============
-# The fleet hosts acme/widgets (its conf) AND acme/b (repos/ overlay). `--repo B`
+# The fleet hosts acme/widgets AND acme/b (repos/ overlays). `--repo B`
 # must probe B and read B's OWN base/deploy — not repo A's with a "still the
 # current fleet's" note; no --repo follows the dash's current repo, and under
 # `all` it refuses with the list rather than silently probing A.
 mkdir -p "$WORK/mconf/fleets/fepsess/repos"
-cat > "$WORK/mconf/fleets/fepsess/conf" <<'MCONF'
-FLEET_REPO="acme/widgets"
-FLEET_BASE_BRANCH="master"
-FLEET_DEPLOY_REF=""
-FLEET_DEPLOY_CHECK=""
-MCONF
+: > "$WORK/mconf/fleets/fepsess/conf"
+fx_repo "$WORK/mconf" fepsess acme/widgets FLEET_BASE_BRANCH=master FLEET_DEPLOY_REF= FLEET_DEPLOY_CHECK=
 b_conf=$(FLEET_CONF_DIR="$WORK/mconf"; . "$WORK/bin/fleet-lib.sh"; fleet_repo_conf_file fepsess acme/b)
 cat > "$b_conf" <<'BCONF'
 FLEET_REPO="acme/b"

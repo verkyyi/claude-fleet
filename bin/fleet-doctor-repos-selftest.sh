@@ -143,7 +143,7 @@ ok
 # 7. (issue #1044) the base checkout must sit ON its base branch
 ga() { git -C "$WORK/alpha" -c user.name=t -c user.email=t@t "$@"; }
 row PASS checkout 'o/alpha: .* is on "main"' || fail "o/alpha on main did not PASS the checkout row"
-row PASS deps 'fleet-t: base deps ' || fail "o/alpha's base deps did not PASS on main"
+row PASS deps 'fleet-t \[o-alpha\]: base deps ' || fail "o/alpha's base deps did not PASS on main"
 ok
 ga checkout -q -b ops/side
 ga commit -q --allow-empty -m side
@@ -154,8 +154,8 @@ ga reset -q --hard "$tip"; ga commit -q --allow-empty -m side2          # side: 
 run_doctor
 row WARN checkout "o/alpha: base checkout $WORK/alpha is on ops/side, not \"main\" \\(3 commit\\(s\\) behind origin/main\\).*git -C '$WORK/alpha' checkout main" \
   || fail "a base on a side branch was not a WARN checkout row with its behind count"
-row WARN deps 'fleet-t: base deps .*\[against ops/side, not main' || fail "base deps still passed against the wrong branch"
-row PASS deps 'fleet-t: base deps ' && fail "base deps PASSed on a side branch"
+row WARN deps 'fleet-t \[o-alpha\]: base deps .*\[against ops/side, not main' || fail "base deps still passed against the wrong branch"
+row PASS deps 'fleet-t \[o-alpha\]: base deps ' && fail "base deps PASSed on a side branch"
 ok
 ga worktree add -q "$WORK/stray" main 2>/dev/null
 run_doctor

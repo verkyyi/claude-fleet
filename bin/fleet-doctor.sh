@@ -3879,11 +3879,6 @@ if [ -d "$conf_dir" ] && [ -x "$dl_sh" ]; then
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
     bd_on=$(_conf_val "$cf" FLEET_BASE_DEPS); [ -n "$bd_on" ] || bd_on=$(_gconf_val FLEET_BASE_DEPS)
     bd_ws=$(_conf_val "$cf" FLEET_WORKTREE_SETUP); [ -n "$bd_ws" ] || bd_ws=$(_gconf_val FLEET_WORKTREE_SETUP)
-    case "$bd_on:$bd_ws" in 1:*|:*fleet-deps-link*)
-      main=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_MAIN:-}"' _ "$cf")
-      bd_b=$(sh -c '. "$1" 2>/dev/null; printf %s "${FLEET_BASE_BRANCH:-master}"' _ "$cf")
-      [ -d "$main" ] && _deps_row "$sess" "$main" "$bd_b" ;;
-    esac
     # Each hosted repo keeps its own setup (issue #978): an overlay's
     # FLEET_BASE_DEPS / FLEET_WORKTREE_SETUP win for its base, else the fleet's.
     for rf in "$conf_dir/fleets/$sess/repos"/*.conf; do
@@ -3902,8 +3897,8 @@ EOF
 fi
 
 # --- hosted repos: one block per repo every fleet hosts (issue #801) -------------
-# A fleet hosts one or more repos (#788): the fleet conf's FLEET_REPO first, then
-# each fleets/<sess>/repos/<slug>.conf overlay. Each repo gets its own block —
+# A fleet hosts one or more repos (#788): each fleets/<sess>/repos/<slug>.conf
+# overlay, in repos/.order. Each repo gets its own block —
 #   main    FLEET_MAIN exists, is a git checkout, and its origin IS the repo
 #   base    FLEET_BASE_BRANCH is the repo's GitHub default (#603) and exists locally
 #   checkout  FLEET_MAIN is ON that base branch, and no other worktree holds it (#1044)
