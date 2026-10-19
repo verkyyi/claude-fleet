@@ -1,0 +1,10 @@
+# Go tests held out of the PR gate (claude-fleet#4679, EPIC #4810 C8) — ONE list.
+#
+# A test red by luck that cannot be fixed at once goes here, each against the
+# issue that fixes it, until that issue lands:
+#     <TestName> #<issue> <why, a few words>
+#     TestSomethingFlaky #4900 times out on a busy runner
+# `#` starts a comment. bin/tokenledger-quarantine.sh is the one reader: the PR
+# legs of .github/workflows/tokenledger.yml skip these (go test -skip); the
+# nightly full run (C6) runs every test, these too. Find candidates with
+# bin/tokenledger-flaky.sh. Empty: every test gates.

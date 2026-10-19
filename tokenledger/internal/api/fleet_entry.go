@@ -774,6 +774,8 @@ func (s *Server) pushEntry(endpointID string, nc *nodeConn, v int) {
 		}
 		v = cur
 	}
+	nc.pushMu.Lock()
+	defer nc.pushMu.Unlock()
 	if v <= 0 || nc.entrySent.Load() >= int64(v) {
 		return
 	}

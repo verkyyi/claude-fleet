@@ -105,6 +105,14 @@ type nodeConn struct {
 	// none yet), so a beat pushes only a version the node has not heard.
 	canTeam  bool
 	teamSent atomic.Int64
+	// pushMu serializes the "told once" pushes below (team, person, entry,
+	// release): each reads what this connection has heard, writes, then
+	// records it, and a second push between that write and that record — a
+	// beat's push beside a PUT's broadcast — sent the same version again
+	// (claude-fleet#4679: TestTeamPushOnPutBeatAndReconnect and
+	// TestReleasePushOnPromoteBeatAndReconnect read a repeat). Held for the
+	// write; only these pushes take it.
+	pushMu sync.Mutex
 	// canPerson is the hello's CapPerson (claude-fleet#2784): this node
 	// follows TypePerson. personSent is the "<principal>#<version>" last
 	// told this connection, so a beat pushes only what it has not heard.
