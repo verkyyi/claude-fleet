@@ -16,6 +16,16 @@
 #   fleet-id.sh short  <ID>                  its short code, T-<5+>
 #   fleet-id.sh resolve <ID | T-code>        → the full ID; rc 1 none, rc 2 ambiguous
 #                                            (the candidates on stderr — never a pick)
+#   fleet-id.sh push [<ID>…]                 hand the ledgers (all, or these) to the hub's
+#                                            mirror in (ID, seq) order from where it is
+#                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
+#                                            hub here (nothing sent) · 75 the hub did not
+#                                            answer (the next push, or the cleanup tick, resumes)
+#
+# `_post METHOD PATH` (the body on stdin → `<http code>\n<body>`) is push's one
+# road to the hub: the node token is read here, per call (fleet_node_pair), never
+# handed to python or put in an environment. FLEET_ID_HUB_POST is its seam;
+# FLEET_ID_PUSH=0 keeps the spawn, the hook and result/close from pushing.
 #
 # The ledger is $FLEET_CONF_DIR/ids/<ID>.ndjson. Nothing decides anything off it
 # yet: it is written beside the old task record until the switch (EPIC T497 C7).
@@ -47,6 +57,34 @@ EOF
     fi ;;
 esac
 cmd=$1; shift
+case "$cmd" in
+  _post)
+    pair=$(fleet_node_pair 2>/dev/null) || exit 3
+    url=${pair%%	*}; tok=${pair#*	}
+    body=$(cat)
+    resp=$(printf 'header = "Authorization: %s"\n' "$(fleet_node_auth "$1" "$url$2" "$tok")" | \
+      "${FLEET_HUB_CURL:-curl}" -sS --max-time "${FLEET_HUB_TIMEOUT:-10}" -K - -o - -w '\n%{http_code}' \
+        -X "$1" -H 'Content-Type: application/json' ${body:+--data-binary "$body"} "$url$2" 2>/dev/null) || { printf '0\n'; exit 0; }
+    printf '%s\n%s\n' "$(printf '%s\n' "$resp" | tail -n 1)" "$(printf '%s\n' "$resp" | sed '$d')"
+    exit 0 ;;
+  push)
+    if [ -z "${FLEET_ID_HUB_POST:-}" ]; then
+      sess=$(fleet_current_session 2>/dev/null) || sess=''
+      if [ -n "$sess" ]; then fleet_hub_on "$sess" || exit 3; fi
+      fleet_node_pair >/dev/null 2>&1 || exit 3
+    fi
+    wins=''
+    if [ -n "${TMUX:-}" ]; then wins=$(fleet_lw '#{@fleet_id}	#{window_id}' 2>/dev/null | sed 's/	/		/')
+    else
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        wins="$wins"$'\n'"$(fleet_lw '#{@fleet_id}	#{window_id}' tmux -L "$s" 2>/dev/null | sed "s/	/	$s	/")"
+      done <<EOF
+$(fleet_sockets 2>/dev/null)
+EOF
+    fi
+    FLEET_ID_WINDOWS="$wins" FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" push "$@" ;;
+esac
 if [ "$cmd" = open ]; then
   win=''; sock=''; prev=''; oargs=()
   for a in "$@"; do
@@ -61,6 +99,7 @@ if [ "$cmd" = open ]; then
   tm=(tmux); [ -n "$sock" ] && tm+=(-L "$sock")
   [ -z "$win" ] || [ -z "$short" ] || "${tm[@]}" set-window-option -t "$win" @task_short "$short" 2>/dev/null || :
   printf '%s\n' "$short"
+  [ "${FLEET_ID_PUSH:-1}" = 0 ] || ( bash "$BIN/fleet-id.sh" push "$1" </dev/null >/dev/null 2>&1 & )
   exit 0
 fi
 FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"

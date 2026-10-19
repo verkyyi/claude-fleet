@@ -1,6 +1,6 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
+EPIC T497 的 C1（节点账本）与 C2（hub 镜像）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
 这一层目前**只双写**：旧 T 记录与执行权照旧，谁都不读这里做决定，直到 C7 打开切换开关。
 
 ## ID 与短码
@@ -23,6 +23,8 @@ EPIC T497 的 C1。设计页：「会话与 hub 任务（T）的关系 · 设计
 | `native` | SessionStart 钩子 | 新的一段（agent · 原生 id · trigger · seg），或 `compact: true` 给当前段记一次压缩 |
 | `result` | `fleet-id.sh result`（C4 接 report） | state · summary · pr |
 | `closed` | `fleet-id.sh close`（C4 接回收） | reason |
+| `short` | `fleet-id.sh push`（hub 回告） | hub 给的更长短码（只会变长） |
+| `moved` | fleet-move 的新机器（待接） | hub 把这个 ID 改挂到新机器 |
 
 ## 原生段怎么追加（§4.2）
 
@@ -48,6 +50,32 @@ fleet-id.sh get <ID | T-code> [--json]   ID、短码、opened、各段（agent �
 fleet-id.sh resolve <ID | T-code>        → 完整 ID；rc 1 没有，rc 2 有歧义（候选在 stderr）
 fleet-id.sh short <ID>
 fleet-id.sh open|native|result|close …   见脚本头
+fleet-id.sh push [<ID>…]                 把账本推给 hub 镜像（C2）
 ```
+
+## hub 镜像（C2）
+
+hub 只是镜像：`fleet_ids`（完整 ID 主键 · owner · short · machine · login · title · agent · repo ·
+issues · body · parent · prev · aliases · asked · parked · opened_at · closed_at · close_reason · seq）+
+`fleet_id_natives`（段）+ `fleet_id_results`（结果），都由节点账本按 `(ID, seq)` 折叠而来，
+随时能从账本重放（`tokenledger/hub/store/fleet_ids.go`）。旧 `fleet_tasks` 不动。
+
+- **推送**：`fleet-id.sh push [<ID>…]` 从 hub 上次说它有的 seq（`ids/.hub/<ID>.seq`）接着推
+  `POST /v1/node/ids {id, events}`（节点令牌，只在 `fleet-id.sh _post` 里读）。重推的部分 hub 跳过，
+  中间缺了 hub 回它的 seq、节点从那儿重推；hub 重建成空的会再收到整本账。开窗（open）、钩子、
+  result、close 后台各推一次；清理 tick 每轮把所有账本补推一遍——hub 断着时开的窗口恢复后补齐（S10）。
+  没有 hub / 节点令牌 ⇒ exit 3，什么都不发；hub 没应 ⇒ 75，下一轮接着推。`FLEET_ID_PUSH=0` 关掉自动推送。
+- **短码在用户内唯一**：hub 登记时按本 owner 全部 ID 核一次，撞了就把**后登记的**加长；
+  回答里带上，节点写一条 `short` 事件并改窗口的 `@task_short`（S12）。`GET /v1/node/ids` 是本 owner
+  的 ID 表，每 10 分钟最多拉一次写进 `ids/.known`，本机选短码、解析短码都把它算进去——5 位对上两个就拒绝并列候选。
+  `GET /v1/node/ids/<ID|T-code>` 读一条，歧义回 409 `AMBIGUOUS`。
+- **完整 ID 重复即拒**：hub 已有、来自另一台机器（或另一个 owner）的同一个完整 ID ⇒ 409 `DUPLICATE_ID`，
+  什么都不存（整机克隆，S13）。节点记 `ids/.hub/<ID>.refused`、在那个窗口上盖 `@id_hub_error`、
+  发一条 `id-duplicate` 提醒，这本账不再推；窗口照常跑，新开的窗口不受影响。只有以 `moved` 开头的推送能把 ID 改挂到别的机器。
+- **issues**（§3.5）：opened 的 `issue` / `ticket_ref` / `issue-<N>` 键 + repo，result 的 `issues`
+  （`fleet-id.sh result --issues o/r#N,…`，PR 正文的 Fixes/Closes）。
+
+`bin/fleet-id-hub-selftest.sh` 钉节点这一半的 S10、S12、S13；hub 那一半是
+`hub/store/fleet_ids_test.go`、`hub/api/fleet_node_ids_test.go`。
 
 `bin/fleet-id-selftest.sh` 钉住 §4.6 的 S1、S3–S6、S11 与短码/寻址/钩子的规矩。
