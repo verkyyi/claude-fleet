@@ -36,6 +36,7 @@
 # tmux / python3 / git absent → SKIP (exit 0).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 POOL="$BIN/scratch-pool.sh"
 for t in tmux python3 git; do command -v "$t" >/dev/null 2>&1 || { echo "scratch-pool-off-race: $t absent — SKIP"; exit 0; }; done
 REAL_TMUX=''
@@ -116,8 +117,8 @@ git clone -q "$WORK/o.git" "$WORK/m" 2>/dev/null
 mkdir -p "$FLEET_CONF_DIR/fleets/$SESS"
 LOCK="$FLEET_CONF_DIR/fleets/$SESS/pool/home-claude.lock"
 conf() {   # conf <pool size> [disk probe]
-  { printf 'FLEET_REPO="o/a"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$WORK/m"
-    printf 'FLEET_SCRATCH_POOL=%s\nFLEET_POOL_SETTLE_MIN=1\nFLEET_POOL_STABLE_HITS=2\n' "$1"
+  fx_repo "$FLEET_CONF_DIR" "$SESS" o/a FLEET_MAIN="$WORK/m" FLEET_BASE_BRANCH=master
+  { printf 'FLEET_SCRATCH_POOL=%s\nFLEET_POOL_SETTLE_MIN=1\nFLEET_POOL_STABLE_HITS=2\n' "$1"
     printf 'FLEET_POOL_PROBE_TIMEOUT=40\nFLEET_POOL_WARM_TIMEOUT=20\nFLEET_POOL_CLAIM_REFILL_DELAY=0\n'
     printf "FLEET_LOAD_PROBE_CMD='echo 0.10'\nFLEET_POOL_DISK_PROBE_CMD='%s'\n" "${2:-echo 500}"
   } > "$FLEET_CONF_DIR/fleets/$SESS/conf"

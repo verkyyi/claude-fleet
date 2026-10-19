@@ -525,6 +525,7 @@ seh_rig() {
   git init -q "$R/main"; git -C "$R/main" config user.email t@t; git -C "$R/main" config user.name t
   printf 'seed\n' > "$R/main/f"; git -C "$R/main" add f; git -C "$R/main" commit -qm seed
   git -C "$R/main" branch -M main
+  fx_repo "$R/conf" s1 acme/widgets FLEET_MAIN="$R/main" FLEET_BASE_BRANCH=main
   cat > "$R/fp/tmux" <<'FAKE'
 #!/bin/bash
 if [ "${1:-}" = run-shell ]; then shift; [ "${1:-}" = -b ] && shift; sh -c "$1"; exit 0; fi

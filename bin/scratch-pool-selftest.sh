@@ -40,6 +40,7 @@
 # Exit 0 = pass; non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 POOL="$BIN/scratch-pool.sh"; RAW="$BIN/dash-raw-session.sh"; LIB="$BIN/fleet-lib.sh"
 for f in "$POOL" "$RAW" "$LIB"; do [ -f "$f" ] || { echo "selftest: $f missing" >&2; exit 2; }; done
 command -v git >/dev/null 2>&1 || { echo "selftest: git absent — SKIP" >&2; exit 0; }
@@ -62,10 +63,9 @@ export FLEET_CONF_DIR="$WORK/conf"
 export FLEET_CPU_MAX_FILE="$WORK/no-cpu.max" FLEET_CPU_STAT_FILE="$WORK/no-cpu.stat"
 mkdir -p "$FLEET_CONF_DIR/fleets/tf"
 mkconf() {  # mkconf <pool-size> [max-age] — a one-repo fleet (o/a): the pool is per repo (#1941)
+  rm -rf "$FLEET_CONF_DIR/fleets/tf/repos"
+  fx_repo "$FLEET_CONF_DIR" tf o/a FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH=master
   cat > "$FLEET_CONF_DIR/fleets/tf/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$MAIN"
-FLEET_BASE_BRANCH="master"
 FLEET_SCRATCH_POOL=$1
 FLEET_POOL_MAX_AGE=${2:-1800}
 EOF
@@ -346,7 +346,7 @@ ok "P one-repo fleet: the same per-repo pool (claim by repo, status names it)"
 
 # Q: a fleet with no repo has no REPO pool — a repo claim / the bare claim are
 # silent no-ops — but it has the HOME slot (#2233): an ensure there warms $HOME.
-reset_state; mkfleet; printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
+reset_state; mkfleet; rm -rf "$FLEET_CONF_DIR/fleets/tf/repos"; printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
 warm '@11' o/a "$WORK/wt-a"
 out=$(bash "$POOL" claim tf 2>&1); [ -z "$out" ] || fail "Q a no-repo fleet must claim nothing" "$out"
 out=$(bash "$POOL" claim tf --repo o/a 2>&1); [ -z "$out" ] || fail "Q a no-repo fleet must claim no repo entry" "$out"
@@ -559,10 +559,9 @@ HM="$WORK/hang"; mkdir -p "$HM"
   && git remote add origin ssh://fleet-no-such-host/x && git config core.sshCommand 'sleep 60 #' \
   && git update-ref refs/remotes/origin/master HEAD ) || fail "AA setup failed"
 reset_state; mkfleet
+rm -rf "$FLEET_CONF_DIR/fleets/tf/repos"
+fx_repo "$FLEET_CONF_DIR" tf o/a FLEET_MAIN="$HM" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/tf/conf" <<EOF
-FLEET_REPO="o/a"
-FLEET_MAIN="$HM"
-FLEET_BASE_BRANCH="master"
 FLEET_SCRATCH_POOL=1
 EOF
 aa_tick() { FLEET_POOL_FETCH_SECS=2 FLEET_POOL_FETCH_FRESH_MIN=0 FLEET_LOAD_PROBE_CMD='echo 0.10' \
@@ -597,7 +596,7 @@ _fleet_cgroup_cpu() {
 REFILL_READER
 export REFILL_PROBE_LOG="$WORK/refill-probes" REFILL_HOLD="$WORK/refill-hold"
 refill_reset() {
-  reset_state; mkfleet
+  reset_state; mkfleet; rm -rf "$FLEET_CONF_DIR/fleets/tf/repos"
   printf 'FLEET_SCRATCH_POOL=1\n' > "$FLEET_CONF_DIR/fleets/tf/conf"
   : > "$REFILL_PROBE_LOG"; rm -f "$REFILL_HOLD"
 }
