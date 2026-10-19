@@ -7471,7 +7471,7 @@ fleet_reap_record() {
   # PR number — the emit runs even on installs where fleet-history.sh is absent.
   # A repo with no GitHub (FLEET_FORGE=none) has no PR to ask after (issue #3601).
   local forge=github
-  [ -n "$repo" ] && [ -n "$sess" ] && forge=$(fleet_repo_forge "$repo" "$sess")
+  [ -n "$repo" ] && forge=$(fleet_repo_forge "$repo" "$sess")   # no session: the fleet hosting it
   if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
     case "$outcome" in
       merged-pr|merged-PR|merged|landed)
