@@ -169,6 +169,8 @@ fail() { printf 'FAIL %s\n' "$1" >&2
          exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 GH_LOG="$WORK/gh.log"; TMUX_LOG="$WORK/tmux.log"; GIT_LOG="$WORK/git.log"; DISPLAY_LOG="$WORK/display.log"
 
 # --- fake git: fetch/worktree/branch succeed; worktree+branch ops are LOGGED -------
@@ -344,7 +346,7 @@ head -n1 "$LEASE_LOG" | grep -q '^acquire' || fail "REMOTE the lease is taken BE
 ok "REMOTE mac-b busy → sent to mac-a with its reason; no window, no claim, lease kept"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" run_spawn 258 --origin issue-77
-place_has "--origin-wid $UUID/issue-77"          || fail "PARENT the parent's worker_id rides the placement"
+place_has "--origin-wid $UUID/acme-widgets:issue-77"         || fail "PARENT the parent's worker_id rides the placement"
 ok "PARENT a worker's child carries --origin-wid <fleet UUID>/issue-77"
 
 # ===== LOCAL: the hub chose this machine ⇒ today's path ===========================
@@ -392,7 +394,7 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-a" PLACE_ANSWER="$REMOTE_LINE" 
 [ -s "$PLACE_LOG" ]                              && fail "HUBSENT a start the hub sent is never placed again"
 tmux_has 'new-window'                            || fail "HUBSENT opens it here"
 tmux_has "@origin_wid $MACHINE/issue-77"         || fail "HUBSENT stamps the given parent worker_id"
-tmux_has "@origin issue-77"                      || fail "HUBSENT stamps the parent's key as @origin too — the report path needs it"
+tmux_has "@origin acme-widgets:issue-77"         || fail "HUBSENT stamps the parent's key as @origin too — the report path needs it"
 ok "HUBSENT --origin hub --node local → no re-placement; @origin_wid stamped verbatim"
 
 for n in local mac-b; do

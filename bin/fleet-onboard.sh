@@ -59,9 +59,9 @@
 # ONLY, read everywhere else; `reset` forgets the progress, not that it spoke.
 #
 # THE STARTER REPO. A newcomer's fleet is started on claude-fleet itself
-# (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in the fleet conf and
-# read ONLY through fleet_repo_is_seed — it marks the conf's OWN repo, never an
-# overlay. `brief` tags it `[seed]` so the wizard can say plainly
+# (`fleet-up.sh --seed`, C4 #1167), marked by FLEET_SEED=1 in its repo overlay and
+# read ONLY through fleet_repo_is_seed — it marks that repo, never another.
+# `brief` tags it `[seed]` so the wizard can say plainly
 # «this is the tool itself, not your repo» and never offer it as a place to work.
 # Once another repo is hosted the tag also names the way out — `fleet-repo.sh
 # remove <seed>` (issue #1172), which the wizard offers right after the add.

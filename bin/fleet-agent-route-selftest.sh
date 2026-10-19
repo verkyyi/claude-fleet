@@ -99,6 +99,8 @@ ok "C central-only readiness keeps the local credential checks on other logins"
 
 # ===== D: the spawn routes by label =========================================
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 cat > "$WORK/fakebin/git" <<'GITFAKE'
 #!/bin/bash
 if [ "${1:-}" = "-C" ]; then shift 2; fi
@@ -147,6 +149,7 @@ run_spawn() { # GH_LABELS / CODEX_CMD from env; $@ = spawn args
 run_shell_spawn() {
   rm -rf "$WORK/dash/.claude-dash/fleets"; : > "$WORK/newwin"
   mkdir -p "$WORK/sepconf"; printf '{\n "separated": true\n}\n' > "$WORK/sepconf/credsep.json"
+  fx_repo "$WORK/sepconf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
   ( unset TMUX_PANE
     PATH="$WORK/fakebin:$PATH" TMPDIR="$WORK/dash" FLEET_CONF_DIR="$WORK/sepconf" TMUX="$WORK/tt-sock,1,0" \
     FLEET_REPO="acme/widgets" FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master" \
@@ -228,7 +231,8 @@ printf '#!/bin/bash\nexit 0\n' > "$SB/fleet-diskguard.sh"
 printf 'CCQUOTA_FLEET_CREDS=0\n' > "$WORK/central/node.env"
 run_new() {
   mkdir -p "$WORK/central/fleets/testsess"
-  printf 'FLEET_REPO=acme/widgets\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH=master\n' "$WORK/main" > "$WORK/central/fleets/testsess/conf"
+  : > "$WORK/central/fleets/testsess/conf"
+  fx_repo "$WORK/central" "testsess" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master"
   : > "$WORK/spawn-args"; : > "$WORK/gh.log"
   PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/central" TMUX='' TMUX_PANE='' \
   FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_START_WARM=0 \

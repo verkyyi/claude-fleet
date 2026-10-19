@@ -34,6 +34,8 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 NEWWIN_LOG="$WORK/newwins"; GHVIEW_LOG="$WORK/ghviews"; DISPLAY_LOG="$WORK/display"
 
 # --- fake git: worktree/fetch/branch succeed; report a branch + toplevel --------

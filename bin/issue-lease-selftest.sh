@@ -37,6 +37,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 SPAWN="$BIN/dash-issue-session.sh"
 [ -x "$SPAWN" ] || { echo "selftest: $SPAWN missing/not executable" >&2; exit 2; }
 
@@ -53,6 +54,7 @@ fail() { printf 'FAIL %s\n' "$1" >&2
          exit 1; }
 
 mkdir -p "$WORK/main/.git" "$WORK/fakebin" "$WORK/conf" "$WORK/dash"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main"
 # This fixture mocks the hub lease/placement, including its independent C5
 # authority response. Unknown authority is still refused by the real guard.
 cat > "$WORK/fakebin/authority" <<'AUTH'
@@ -264,6 +266,7 @@ ok "WHY 403 → 「lease refused: HTTP 403 — <error>」, other → 「<cmd> ex
 
 # ===== NOUUID: no control database ⇒ note + today's path =========================
 mkdir -p "$WORK/conf2"
+fx_repo "$WORK/conf2" testsess acme/widgets FLEET_MAIN="$WORK/main"
 CONF_DIR="$WORK/conf2" CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "NOUUID spawns" "$(cat "$WORK/spawn.err")"
 [ -s "$LEASE_LOG" ]                              && fail "NOUUID no worker_id → the lease command must not run"
@@ -350,7 +353,8 @@ ok "MOVE fleet_hub_move: node.env's token reaches the command; none → 「no no
 # [session, FLEET_REPO, FLEET_MAIN] — what fleet_control.py's inventory minted and
 # the hub registered — or every lease from such a pane is 403 「not registered」.
 mkdir -p "$WORK/conf/fleets/testsess/repos" "$WORK/other" "$WORK/ovbin"
-printf 'FLEET_REPO="acme/widgets"\nFLEET_MAIN="%s"\n' "$WORK/main" > "$WORK/conf/fleets/testsess/conf"
+: > "$WORK/conf/fleets/testsess/conf"
+fx_repo "$WORK/conf" "testsess" acme/widgets FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO="acme/other"\nFLEET_MAIN="%s"\n' "$WORK/other" > "$WORK/conf/fleets/testsess/repos/acme-other.conf"
 cat > "$WORK/ovbin/tmux" <<OVTMUX
 #!/bin/bash
@@ -380,9 +384,10 @@ parts = sys.stdin.buffer.read().decode("utf-8").split("\0")
 sess, repo, checkout = parts[0:3]
 print(repo + " " + str(uuid.uuid5(uuid.UUID(sys.argv[1]), json.dumps([sess, repo, checkout], ensure_ascii=False, sort_keys=True, separators=(",", ":")))))' "$MACHINE")
 [ "$u_inv" = "acme/widgets $u_fleet" ]           || fail "UUID the inventory run from that pane must name the fleet's own repo and mint the same UUID" "inventory: $u_inv · fleet: $u_fleet"
-# the conf the other legs ran under (no FLEET_MAIN line, FLEET_REPO from the env)
-# is restored so this leg leaves no footprint
+# the conf the other legs ran under (one repo, no fleet conf) is restored so this
+# leg leaves no footprint
 rm -rf "$WORK/conf/fleets/testsess/repos" "$WORK/conf/fleets/testsess/conf"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$WORK/main"
 ok "UUID the worker_id's fleet UUID ignores the window's repo overlay"
 
 printf '\nselftest OK: %s assertions passed (hub issue lease, issue #1422)\n' "$pass"

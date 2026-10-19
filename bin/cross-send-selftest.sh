@@ -21,6 +21,7 @@
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX=$(command -v tmux) || { echo 'cross-send selftest: tmux absent — SKIP'; exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo 'cross-send selftest: python3 absent — SKIP'; exit 0; }
 
@@ -30,7 +31,8 @@ export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
-printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s/main\n' "$WORK" > "$FLEET_CONF_DIR/fleets/$L/conf"
+: > "$FLEET_CONF_DIR/fleets/$L/conf"
+fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
 unset TMUX TMUX_PANE CCQUOTA_FLEET FLEET_HUB_STATUS_CMD FLEET_HUB_CACHE_SECS FLEET_HUB_RETAIN_SECS \
   FLEET_HUB_WRITE_CMD FLEET_PEER_RECEIPT_SECS FLEET_WORKER_ASSERT
 

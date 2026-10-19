@@ -34,6 +34,7 @@
 #                   pushes --evidence-only on merged/blocked
 set -uo pipefail
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 CHECKS=0
 fail() { printf 'fleet-worker-records selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 ok()   { CHECKS=$((CHECKS + 1)); }
@@ -51,7 +52,8 @@ for f in fleet-worker-records.sh fleet-evidence.sh fleet-history.sh fleet-lib.sh
   cp "$BIN/$f" "$WORK/bin/$f" || fail "copy $f"
 done
 chmod +x "$WORK"/bin/*.sh
-printf 'FLEET_REPO=o/r\n' > "$FLEET_CONF_DIR/fleets/wrsess/conf"
+: > "$FLEET_CONF_DIR/fleets/wrsess/conf"
+fx_repo "$FLEET_CONF_DIR" "wrsess" o/r
 SUT="$WORK/bin/fleet-worker-records.sh"
 EV="$WORK/bin/fleet-evidence.sh"
 HI="$WORK/bin/fleet-history.sh"
