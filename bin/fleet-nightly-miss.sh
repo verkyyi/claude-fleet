@@ -395,7 +395,7 @@ ${flist:-（没有读出改动的文件）}
 ${slist}
 
 ## 修法
-1. 在上面那几次合并里找出改坏它的（\`gh workflow run ci-nightly.yml\` 指定 \`ref\` 复跑，或本地照它的工作流跑）并修好；
+1. 在上面那几次合并里找出改坏它的（在那次合并上手动跑一次 ci-nightly.yml，或本地照它的工作流跑）并修好；
 2. 让 PR 门以后选中它：在 \`bin/ci-plan.sh\` 的 \`check_rules\` 里把那次改到的路径加进 \`${ck}\` 的 \`globs\`（或它的入口文件点名那个文件）。修它的 PR 写 \`Closes #<本单>\`。"
       ;;
     st:picked|go:picked|pg:picked)
