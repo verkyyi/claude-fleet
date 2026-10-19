@@ -38,14 +38,73 @@ type repoRetiredHost struct {
 	RetiredAt time.Time `json:"retired_at"`
 }
 
+// repoSupersededHost is a fleet row no machine reports any more (present=0)
+// whose machine — the same fleet machine, endpoint, or hardware machine_id +
+// os_user — has since reported a newer present row (claude-fleet#4877). That
+// machine will never observe this fleet_id again, so it is no host of the repo.
+type repoSupersededHost struct {
+	Fleet      string    `json:"fleet_id"`
+	Endpoint   string    `json:"endpoint_id"`
+	ObservedAt time.Time `json:"observed_at"`
+	By         string    `json:"superseded_by"`
+	ByObserved time.Time `json:"superseded_observed_at"`
+}
+
+// supersededBy names the present row that supersedes f, "" when none does. A
+// present row is never superseded — a host that is still there but not
+// capable keeps blocking. The successor must itself be a live, unretired row
+// observed AFTER f, on the same machine: the fleet machine that reported both,
+// the endpoint, or the endpoint's hardware machine_id + os_user (a re-joined
+// login). An endpoint no longer on record falls back to hostname + os_user.
+func supersededBy(f store.FleetRow, fs []store.FleetRow, eps func(string) *store.Endpoint) (store.FleetRow, bool) {
+	if f.Present {
+		return store.FleetRow{}, false
+	}
+	epF := eps(f.EndpointID)
+	for _, g := range fs {
+		if !g.Present || g.FleetID == f.FleetID || !g.ObservedAt.After(f.ObservedAt) {
+			continue
+		}
+		epG := eps(g.EndpointID)
+		if epG == nil || epG.RetiredAt != nil {
+			continue
+		}
+		same := g.MachineID == f.MachineID ||
+			(f.EndpointID != "" && g.EndpointID == f.EndpointID)
+		if !same && epF != nil {
+			same = epF.MachineID != "" && epF.OSUser != "" && epF.MachineID == epG.MachineID && epF.OSUser == epG.OSUser
+		}
+		if !same && epF == nil {
+			same = f.Hostname != "" && f.OSUser != "" && f.Hostname == g.Hostname && f.OSUser == g.OSUser
+		}
+		if same {
+			return g, true
+		}
+	}
+	return store.FleetRow{}, false
+}
+
 // Only registry observations are accepted. A caller cannot submit a reassuring
 // inventory in its manifest. Absent/offline/old nodes are unknown, never drained
-// — a RETIRED one is neither: its fleet row is listed apart and blocks nothing.
-func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, error) {
-	nodes, owners, blockers, retired := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}
+// — a RETIRED one is neither: its fleet row is listed apart and blocks nothing,
+// and so is a SUPERSEDED one (supersededBy).
+func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a store.RepoAuthority) ([]repoAuthorityNode, []store.RepoLegacyOwner, []string, []repoRetiredHost, []repoSupersededHost, error) {
+	nodes, owners, blockers, retired, superseded := []repoAuthorityNode{}, []store.RepoLegacyOwner{}, []string{}, []repoRetiredHost{}, []repoSupersededHost{}
 	fs, err := s.Store.Fleets()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
+	}
+	epCache := map[string]*store.Endpoint{}
+	eps := func(id string) *store.Endpoint {
+		if ep, ok := epCache[id]; ok {
+			return ep
+		}
+		ep, e := s.Store.EndpointByID(id)
+		if e != nil {
+			ep = nil
+		}
+		epCache[id] = ep
+		return ep
 	}
 	for _, f := range fs {
 		if !fleetHosts(f, a.Repo) {
@@ -55,6 +114,14 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 		if e == nil && ep != nil && ep.RetiredAt != nil {
 			if c.all || s.nodeTaskOwner(ep) == c.owner {
 				retired = append(retired, repoRetiredHost{f.FleetID, f.EndpointID, *ep.RetiredAt})
+			}
+			continue
+		}
+		if g, ok := supersededBy(f, fs, eps); ok {
+			// Listed to whoever owns its successor (or sees every owner): the
+			// successor is the proof, and its owner is the one reading.
+			if c.all || s.nodeTaskOwner(eps(g.EndpointID)) == c.owner {
+				superseded = append(superseded, repoSupersededHost{f.FleetID, f.EndpointID, f.ObservedAt, g.FleetID, g.ObservedAt})
 			}
 			continue
 		}
@@ -87,7 +154,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 			}
 			known, e := s.Store.TaskExecutionKnown(s.nodeTaskOwner(ep), w.WorkerID)
 			if e != nil {
-				return nil, nil, nil, nil, e
+				return nil, nil, nil, nil, nil, e
 			}
 			if !known {
 				owners = append(owners, store.RepoLegacyOwner{WorkerID: w.WorkerID, EndpointID: f.EndpointID})
@@ -98,7 +165,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 	if len(nodes) == 0 {
 		blockers = append(blockers, "no verified host for this repo")
 	}
-	return nodes, owners, blockers, retired, nil
+	return nodes, owners, blockers, retired, superseded, nil
 }
 
 func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
@@ -125,7 +192,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 		writeJSON(w, 200, a)
 		return
 	}
-	nodes, owners, blockers, retired, err := s.repoAuthorityInventory(r.Context(), c, a)
+	nodes, owners, blockers, retired, superseded, err := s.repoAuthorityInventory(r.Context(), c, a)
 	if err != nil {
 		httpError(w, 500, err.Error())
 		return
@@ -160,7 +227,7 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 			httpError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {
