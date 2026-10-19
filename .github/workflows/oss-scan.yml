@@ -17,11 +17,10 @@ name: oss-scan
 #      a PR by finding nothing.
 
 on:
-  pull_request:
-
-concurrency:
-  group: oss-scan-${{ github.ref }}
-  cancel-in-progress: true
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   oss-scan:

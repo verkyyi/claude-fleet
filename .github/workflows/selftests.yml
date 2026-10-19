@@ -33,39 +33,9 @@ name: selftests
 # stays FULL, as the backstop for what a selector misses.
 
 on:
-  pull_request:
-    paths:
-      - 'bin/**'
-      # Guard hooks the selftests drive from OUTSIDE bin/ (bash-guard-selftest.sh
-      # exercises hooks/bash-guard.py + hooks/base-readonly-guard.py), so an edit
-      # to the guard logic re-runs the gate.
-      - 'hooks/**'
-      # Fixtures the selftests read from OUTSIDE bin/, kept so an edit to any of
-      # them still re-runs the gate: fleet.conf.example (tmux-config-selftest.sh)
-      # and conf/tmux-attention.conf (fleet-keys-selftest.sh cross-checks the
-      # cheatsheet against the shipped tmux binds).
-      - 'conf/**'
-      # The shipped daemon units, asserted directly by daemon-processtype-selftest.sh
-      # (issue #588 — a plist that drifts back to ProcessType=Background throttles
-      # its disk I/O ~100x), so a unit-only edit still re-runs the gate.
-      - 'launchd/**'
-      - 'systemd/**'
-      # The plugin manifests + the command/skill trees they ship
-      # (fleet-plugin-selftest.sh pins that the manifests match what is on disk,
-      # so adding commands/fleet-foo.md without listing it fails here).
-      - '.claude-plugin/**'
-      - 'commands/**'
-      - 'skills/**'
-      # portability-selftest.sh (issue #696) lints the SHIPPED SHELL for GNU-only
-      # idioms, and its scan is wider than bin/ — it covers every *.sh/*.zsh under
-      # bin/ hooks/ shell/ extras/. Without these two, a GNU-only `sed \|` added to
-      # shell/cw.zsh or extras/*.sh would never re-run the gate that catches it.
-      - 'shell/**'
-      - 'extras/**'
-      - 'mod/**'
-      - 'fleet.conf.example'
-      - '.github/workflows/selftests.yml'
-      - '.github/workflows/selftests-shards.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   # The full suite on a runner set of our own, by hand (issue #3864): e.g. runs_on
   # ["fleet-ack"] + the cluster mirror, before the release train is pointed there.
   workflow_dispatch:
@@ -82,11 +52,6 @@ on:
         description: 'the matrix, a JSON list 1..N (empty = the gate width)'
         type: string
         default: ''
-
-# A re-push to a PR makes its in-flight run stale; a dispatch always finishes.
-concurrency:
-  group: selftests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   plan:

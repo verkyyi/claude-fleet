@@ -1,38 +1,13 @@
 name: native-managed-hooks
 
 on:
-  pull_request:
-    paths:
-      - 'bin/fleet-native-hook-cli-selftest.py'
-      - 'bin/fleet-native-local-runtime-selftest.py'
-      - 'bin/fleet-native-session-env-selftest.py'
-      - 'bin/fleet-mcp.py'
-      - 'bin/fleet_launch.py'
-      - 'bin/fleet-agent-defaults.py'
-      - 'conf/agent-defaults/codex/config.default.toml'
-      - 'bin/fleet-native-usage-cli-selftest.py'
-      - 'bin/fleet-native-guard-install-selftest.py'
-      - 'extras/managed-node/image-stage.py'
-      - 'bin/fleet-codex-runtime.py'
-      - 'bin/fleet-codex-rpc.py'
-      - 'bin/fleet-codex-attention.py'
-      - 'bin/fleet-codex-session.py'
-      - 'bin/fleet-codex-runtime.py'
-      - 'conf/statusline.sh'
-      - 'bin/fleet-hooks-emit.sh'
-      - 'hooks/settings-hooks.json'
-      - 'hooks/codex-map.json'
-      - 'hooks/bash-guard.py'
-      - 'hooks/base-readonly-guard.py'
-      - '.github/workflows/native-managed-hooks.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: native-managed-hooks-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   native-managed:

@@ -2,19 +2,10 @@ name: browser-attachment
 # No master `push` run (issue #4663): its PR ran this on the change already, and a
 # post-merge re-run only re-checked it beside the release train.
 on:
-  pull_request:
-    paths:
-      - 'tokenledger/**'
-      - 'bin/fleet-webterm.py'
-      - 'bin/fleet-term-attach.sh'
-      - 'bin/fleet_view.py'
-      - 'extras/browser-transport/**'
-      - 'extras/web-console/**'
-      - 'extras/web-chat/ui/**'
-      - '.github/workflows/browser-attachment.yml'
-concurrency:
-  group: browser-attachment-${{ github.ref }}
-  cancel-in-progress: true
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
+  workflow_dispatch:
 jobs:
   chromium:
     runs-on: ubuntu-latest

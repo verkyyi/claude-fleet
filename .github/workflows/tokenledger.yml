@@ -4,14 +4,16 @@ name: tokenledger
 # repo under tokenledger/ with its full history (issue #1391). This is its old
 # repo's ci.yml, moved here and scoped to the subdirectory:
 #
-#   - it runs ONLY when a change touches tokenledger/** (or this file) — the
-#     same "run only what a change can break" rule as #1374. The shell
+#   - the PR gate (.github/workflows/ci.yml) calls it only when a change reaches
+#     a Go block, and says which (claude-fleet#4815, bin/ci-plan.sh go): shared/
+#     ⇒ all four, agent/ ⇒ agent + e2e, hub/ ⇒ hub + e2e, e2e/ ⇒ e2e, each
+#     narrowed to the packages whose test binary depends on a changed one —
+#     the inputs below; a dispatch (no inputs) runs everything. The shell
 #     selftests, in turn, never run for a change confined to tokenledger/:
 #     neither selftests*.yml path filter lists it, and run-selftests.sh
 #     --changed ignores files outside the shipped shell trees
 #     (bin/tokenledger-isolation-selftest.sh pins both directions).
-#   - tokenledger/ holds four Go modules (EPIC #4810), each tested whole here
-#     (which change runs which is C5's, claude-fleet#4815): hub/ (…/hub — the
+#   - tokenledger/ holds four Go modules (EPIC #4810): hub/ (…/hub — the
 #     hub, #4814), agent/ (…/agent — the node, #4812), shared/ (…/shared — what
 #     both build in, #4811) and e2e/ (…/e2e — the联调 tests: a real node against
 #     a real hub, through hub/apitest, #4814), joined by the go.mods' replaces.
@@ -22,14 +24,40 @@ name: tokenledger
 #     its PR ran this on the change already, and the release train builds the
 #     hub from the merged commit anyway.
 on:
-  pull_request:
-    paths:
-      - 'tokenledger/**'
-      - '.github/workflows/tokenledger.yml'
-
-concurrency:
-  group: tokenledger-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
+    inputs:
+      parts:
+        description: 'the `test` matrix (bin/ci-plan.sh go: go_parts)'
+        type: string
+        default: '["rest", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]'
+      pg_parts:
+        description: 'the Postgres matrix (go_pg_parts); [] = no Postgres leg'
+        type: string
+        default: '["store", "api-1", "api-2", "api-3", "e2e"]'
+      build:
+        description: 'which binaries cross-compile: hub, agent (go_build)'
+        type: string
+        default: 'hub agent'
+      modules:
+        description: 'the modules vet runs in (go_modules)'
+        type: string
+        default: 'shared agent hub e2e'
+      pkgs_shared:
+        description: 'import paths to test, or ./... (go_pkgs_shared)'
+        type: string
+        default: './...'
+      pkgs_agent:
+        type: string
+        default: './...'
+      pkgs_hub:
+        type: string
+        default: './...'
+      pkgs_e2e:
+        type: string
+        default: './...'
+  workflow_dispatch:
 
 defaults:
   run:
@@ -42,19 +70,48 @@ jobs:
   # Sharded like the Postgres leg below (claude-fleet#4067): hub/api ran
   # ~570-600s under -race on a runner (go test's 10m default timed it out,
   # claude-fleet#3146), then grew past the 20m cap on a slow one (1200s on
-  # dd2107b2). `rest` runs gofmt + vet + every hub package but hub/api; each
+  # dd2107b2). `rest` runs every selected hub package but hub/api; each
   # `api-K` runs every API_SHARDS-th test of `go test -list` (sorted,
   # round-robin, so the union is the whole package by construction). Adding a
-  # shard = one more `api-K` in `part` AND API_SHARDS raised to match. `shared`,
-  # `agent` and `e2e` are the other three modules, each whole.
+  # shard = one more `api-K` in bin/ci-plan.sh's go_parts (and the default
+  # above) AND API_SHARDS raised to match. `shared`, `agent` and `e2e` are the
+  # other three modules, their selected packages. gofmt / vet / the modules
+  # selftest are `lint`'s.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: |
+            tokenledger/hub/go.sum
+            tokenledger/shared/go.sum
+            tokenledger/agent/go.sum
+            tokenledger/e2e/go.sum
+      - run: ../bin/fleet-client-pack.sh
+      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - env:
+          MODULES: ${{ inputs.modules || 'shared agent hub e2e' }}
+        run: for m in $MODULES; do (cd "$m" && go vet ./...) || exit 1; done
+      # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no
+      # other block, agent/ and hub/ only shared/ (hub/ not even in a test), e2e/
+      # any of the three, and neither build has the other's package
+      - run: ../bin/tokenledger-modules-selftest.sh
+
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        part: [rest, api-1, api-2, api-3, shared, agent, e2e]
+        part: ${{ fromJSON(inputs.parts || '["rest", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]') }}
     env:
       API_SHARDS: 3
+      PKGS_SHARED: ${{ inputs.pkgs_shared || './...' }}
+      PKGS_AGENT: ${{ inputs.pkgs_agent || './...' }}
+      PKGS_HUB: ${{ inputs.pkgs_hub || './...' }}
+      PKGS_E2E: ${{ inputs.pkgs_e2e || './...' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -69,15 +126,6 @@ jobs:
       # The client /install serves lives once, in the repo's bin/ conf/ …
       # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
       - run: ../bin/fleet-client-pack.sh
-      - if: matrix.part == 'rest'
-        run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
-      - if: matrix.part == 'rest'
-        run: for m in hub shared agent e2e; do (cd "$m" && go vet ./...) || exit 1; done
-      # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no
-      # other block, agent/ and hub/ only shared/ (hub/ not even in a test), e2e/
-      # any of the three, and neither build has the other's package
-      - if: matrix.part == 'rest'
-        run: ../bin/tokenledger-modules-selftest.sh
       - name: pick this part's tests
         env:
           PART: ${{ matrix.part }}
@@ -92,7 +140,10 @@ jobs:
           fi
           case "$PART" in
             rest)
-              pkgs=$(cd hub && go list ./... | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' | paste -sd' ')
+              # the plan's hub packages (./... = all of them), hub/api left to api-K
+              if [ "$PKGS_HUB" = ./... ]; then all=$(cd hub && go list ./...); else all=$(printf '%s\n' $PKGS_HUB); fi
+              pkgs=$(printf '%s\n' "$all" | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' | paste -sd' ' -)
+              [ -n "$pkgs" ] || { echo "::error::rest picked no hub package"; exit 1; }
               echo "MOD=hub" >> "$GITHUB_ENV"
               echo "PKGS=$pkgs" >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;
@@ -107,11 +158,14 @@ jobs:
               echo 'PKGS=./api/' >> "$GITHUB_ENV"
               echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
             shared|agent|e2e)
+              case "$PART" in shared) p=$PKGS_SHARED ;; agent) p=$PKGS_AGENT ;; e2e) p=$PKGS_E2E ;; esac
+              [ -n "$p" ] || { echo "::error::$PART picked no package"; exit 1; }
               echo "MOD=$PART" >> "$GITHUB_ENV"
-              echo 'PKGS=./...' >> "$GITHUB_ENV"
+              echo "PKGS=$p" >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown part $PART"; exit 1 ;;
           esac
+          echo "$PART tests: $(grep '^PKGS=' "$GITHUB_ENV" | tail -1)"
       - name: tests (${{ matrix.part }})
         run: cd "$MOD" && go test -race -timeout 20m ${RUN:+-run "$RUN"} $PKGS
 
@@ -137,11 +191,12 @@ jobs:
   # union is the whole package by construction). Adding a shard = one more
   # `api-K` in `part` AND API_SHARDS raised to match.
   tokenledger-pg:
+    if: github.event_name == 'workflow_dispatch' || inputs.pg_parts != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        part: [store, api-1, api-2, api-3, e2e]
+        part: ${{ fromJSON(inputs.pg_parts || '["store", "api-1", "api-2", "api-3", "e2e"]') }}
     services:
       postgres:
         image: mirror.gcr.io/library/postgres:16
@@ -153,6 +208,7 @@ jobs:
     env:
       CCQUOTA_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
       API_SHARDS: 3
+      PKGS_E2E: ${{ inputs.pkgs_e2e || './...' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -194,7 +250,7 @@ jobs:
               echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
             e2e)
               echo "MOD=e2e" >> "$GITHUB_ENV"
-              echo 'PKGS=./...' >> "$GITHUB_ENV"
+              echo "PKGS=$PKGS_E2E" >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown part $PART"; exit 1 ;;
           esac
@@ -250,7 +306,9 @@ jobs:
 
   cross-compile:
     # The whole adoption story is "download one binary", so a platform that
-    # stops building is a release-blocking bug, not a nice-to-have.
+    # stops building is a release-blocking bug, not a nice-to-have. The plan
+    # builds the hub when its block is selected, the node when agent's is.
+    if: github.event_name == 'workflow_dispatch' || inputs.build != ''
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -270,8 +328,10 @@ jobs:
             tokenledger/shared/go.sum
             tokenledger/agent/go.sum
       # the hub's build (claude-fleet#4814)
-      - working-directory: tokenledger/hub
+      - if: contains(inputs.build || 'hub agent', 'hub')
+        working-directory: tokenledger/hub
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
       # the node's own build (claude-fleet#4812) — what C3 ships to machines
-      - working-directory: tokenledger/agent
+      - if: contains(inputs.build || 'hub agent', 'agent')
+        working-directory: tokenledger/agent
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota

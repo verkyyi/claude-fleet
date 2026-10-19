@@ -13,9 +13,10 @@
 #      tokenledger/ (they may COPY it as plain files; they must not act on it);
 #   2. no hook, daemon unit or tmux conf names tokenledger/ — so the extra
 #      directory cannot alter any hook/daemon behaviour;
-#   3. CI is split both ways: the selftests*.yml path filters never match
-#      tokenledger/**, and tokenledger.yml triggers ONLY on tokenledger/** (plus
-#      itself);
+#   3. CI is split both ways: the PR gate's plan (bin/ci-plan.sh, issue #4815)
+#      never runs the selftests for tokenledger/**, and runs the Go tests ONLY for
+#      tokenledger/** (plus the few scripts and the workflow that gate them);
+#      selftests-macos.yml has no PR trigger at all;
 #   4. run-selftests.sh --changed, driven for real in a throwaway repo, picks
 #      only the lint group for a change confined to tokenledger/ — even when a
 #      test names a file whose basename matches one in there (hub.go, README.md).
@@ -63,34 +64,40 @@ paths_of() {
        inp && /^[[:space:]]*-[[:space:]]/ { s = $0; sub(/^[[:space:]]*-[[:space:]]*/, "", s); gsub(/["'\'']/, "", s); print s; next }
        { inp = 0 }' "$1"
 }
-for w in selftests.yml selftests-macos.yml; do
-  [ -f "$WF/$w" ] || { fail "$w missing"; continue; }
-  p=$(paths_of "$WF/$w")
-  # no push / pull_request trigger at all (selftests-macos.yml since #3141: nightly
-  # + dispatch only) cannot run for a tokenledger/ change
-  if [ -z "$p" ] && ! grep -qE '^[[:space:]]*(push|pull_request):' "$WF/$w"; then
-    ok "$w is never triggered by a push or PR"; continue
-  fi
-  [ -n "$p" ] || { fail "$w has no paths filter — it would run for tokenledger/**"; continue; }
+w=selftests-macos.yml
+if [ -f "$WF/$w" ]; then
+  # no push / pull_request trigger at all (since #3141: nightly + dispatch only)
+  grep -qE '^[[:space:]]*(push|pull_request):' "$WF/$w" \
+    && fail "$w runs on a push or PR" || ok "$w is never triggered by a push or PR"
+else
+  fail "$w missing"
+fi
+# the PR gate (issue #4815): ONE plan, bin/ci-plan.sh, says what a PR runs
+eval "$(sed -n '/^check_rules()/,/^}/p; /^block_of()/,/^}/p' "$BIN/ci-plan.sh")"
+globs=""
+if command -v check_rules >/dev/null 2>&1 && check_rules selftests; then
   bad=''
-  for g in $p; do
-    case "$g" in
-      tokenledger*|'**'|'**/*'|'*'|'**/'*) bad="$bad $g" ;;
-    esac
-  done
-  [ -z "$bad" ] && ok "$w path filter never matches tokenledger/**" \
-    || fail "$w path filter matches tokenledger/**:$bad"
-done
+  for g in $globs; do case "$g" in tokenledger*|'*'|'**'*) bad="$bad $g" ;; esac; done
+  [ -z "$bad" ] && ok "the selftests' plan rule never matches tokenledger/**" \
+    || fail "the selftests' plan rule matches tokenledger/**:$bad"
+else
+  fail "bin/ci-plan.sh has no selftests rule"
+fi
+if command -v block_of >/dev/null 2>&1; then
+  out=''
+  for f in bin/fleet-lib.sh hooks/bash-guard.py conf/x.conf docs/README.md; do out="$out$(block_of "$f")"; done
+  [ -z "$out" ] && ok "the Go tests run for no change outside tokenledger/ (shell, hooks, conf, docs)" \
+    || fail "a shell / hook / conf / docs change reaches a Go block: [$out]"
+  [ "$(block_of tokenledger/hub/api/x.go)" = hub ] && ok "a tokenledger/ change reaches its Go block" \
+    || fail "tokenledger/hub/api/x.go reaches no Go block"
+else
+  fail "bin/ci-plan.sh has no block_of"
+fi
 T_WF="$WF/tokenledger.yml"
 if [ -f "$T_WF" ]; then
-  p=$(paths_of "$T_WF" | sort -u | tr '\n' ' ')
-  [ "$p" = ".github/workflows/tokenledger.yml tokenledger/** " ] \
-    && ok "tokenledger.yml triggers only on tokenledger/** (+ itself)" \
-    || fail "tokenledger.yml paths = [$p]"
-  n=$(grep -cE '^[[:space:]]*(push|pull_request):' "$T_WF")
-  m=$(grep -cE '^[[:space:]]*paths:' "$T_WF")
-  [ "$n" -ge 1 ] && [ "$n" = "$m" ] && ok "every tokenledger.yml trigger carries a paths filter" \
-    || fail "tokenledger.yml: $n triggers, $m paths filters"
+  grep -qE '^[[:space:]]*(push|pull_request):' "$T_WF" \
+    && fail "tokenledger.yml runs on a push or PR by itself (ci.yml calls it)" \
+    || ok "tokenledger.yml runs only when the PR gate calls it (or by hand)"
   grep -qE '^[[:space:]]*working-directory:[[:space:]]*tokenledger$' "$T_WF" \
     && ok "tokenledger.yml runs inside tokenledger/" || fail "tokenledger.yml has no working-directory: tokenledger"
 else

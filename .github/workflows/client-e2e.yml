@@ -21,45 +21,20 @@ name: client-e2e
 # the change already) and nightly; macOS nightly (and on demand) — the BSD /
 # bash 3.2 / Homebrew-tmux half, on its own clock (18:17 UTC).
 on:
-  pull_request:
-    paths:
-      - 'bin/**'
-      - 'shell/**'
-      - 'conf/**'
-      - 'tokenledger/**'
-      - '.github/workflows/client-e2e.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   schedule:
     - cron: '7 19 * * *'   # 03:07 CST
   workflow_dispatch:
-
-concurrency:
-  group: client-e2e-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  plan:
-    # Does this change reach these checks? (issue #4794, bin/ci-plan.sh — the
-    # selftest selector over this workflow's entry files.) Not related ⇒ the job
-    # below is skipped, which reads green; a schedule or a dispatch always runs.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      run: ${{ steps.plan.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: plan
-        run: bash bin/ci-plan.sh client-e2e origin/${{ github.base_ref }}
-
   ubuntu:
-    needs: plan
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.plan.outputs.run == 'true') && github.event_name != 'schedule' }}
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

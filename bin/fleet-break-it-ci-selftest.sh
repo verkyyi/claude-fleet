@@ -70,6 +70,10 @@
 #                       a hub-only change would hold stable (or a hub-only digest stop
 #                       the hub redeploy) — the Dockerfile, fleet-src-digest.py (node ·
 #                       --image) and the stable gate (+ the old digest, one version)
+#   module-skip-wrong   the PR gate's Go map forgets a block (shared ⇒ hub only): a
+#                       shared change skips the node's and the 联调 tests and 「CI 结论」
+#                       reads green — bin/ci-plan-selftest.sh B reds on the broken plan
+#                       and is green on ours (#4815)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -803,7 +807,7 @@ drill_train_call_permissions() {
   out=$(python3 "$BIN/fleet-workflow-perms.py" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the repo's own workflows ask more than their callers grant ($rc): $out"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/train-perms.XXXXXX"); mkdir -p "$d/.github/workflows"
-  cp "$wfd/release-train.yml" "$wfd/hub-deploy.yml" "$wfd/selftests-shards.yml" "$d/.github/workflows/"
+  cp "$wfd/release-train.yml" "$wfd/hub-deploy.yml" "$wfd/hub-deploy-check.yml" "$wfd/selftests-shards.yml" "$d/.github/workflows/"
   # #3893's grant: hub-build without issues: write (hub-deploy's deploy asks it)
   awk '/^  hub-build:/{b=1} /^  release-stage:/{b=0} !(b && /^      issues: write/)' \
     "$wfd/release-train.yml" > "$d/.github/workflows/release-train.yml"
@@ -1048,6 +1052,29 @@ drill_module_split_digest() {
   [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c4" ] || { WHY="stable is not at the target after the green move"; rm -rf "$d"; return 1; }
   rm -rf "$d"
   WHAT="发布的 ccquota 从 agent 模块编、盖节点源（shared+agent）的摘要：只改 hub 节点摘要不动、--image 照样变（列车照常重部署 hub）；旧算法的入口镜像认一个版本；节点改了而入口没跟上 ⇒ stable 拒挪 ccquota:，跟上后放行"
+}
+
+# ---- module-skip-wrong (#4815, EPIC #4810 C5): the PR gate runs a Go block only
+# when bin/ci-plan.sh's map says the change reaches it, and a skipped check reads
+# green in `CI 结论`. A map that forgets a block (here: shared ⇒ hub, no agent, no
+# e2e) skips exactly the tests the change can break, and nothing says so. The plan's
+# own selftest pins every rule in a sandbox repo: handed the broken copy it reds,
+# naming the rule; on ours it is green. The nightly full run is the second net.
+drill_module_skip_wrong() {
+  CAP=60
+  local t0 d out rc
+  [ -f "$BIN/ci-plan-selftest.sh" ] || { WHY="no bin/ci-plan-selftest.sh — nothing pins the PR gate's Go map"; return 1; }
+  grep -q "shared) for k in shared agent hub e2e" "$BIN/ci-plan.sh" \
+    || { WHY="bin/ci-plan.sh's shared rule is not 'all four blocks'"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/modskip.XXXXXX"); t0=$(now)
+  sed 's/shared) for k in shared agent hub e2e; do/shared) for k in shared hub; do/' "$BIN/ci-plan.sh" > "$d/ci-plan.sh"
+  out=$(CI_PLAN_UNDER_TEST="$d/ci-plan.sh" CI_PLAN_LEG=B bash "$BIN/ci-plan-selftest.sh" 2>&1); rc=$?
+  [ "$rc" != 0 ] && printf '%s' "$out" | grep -q '^FAIL B shared ⇒ all four' \
+    || { WHY="a plan whose shared rule forgot agent + e2e passed the plan selftest (rc $rc)"; rm -rf "$d"; return 1; }
+  out=$(CI_PLAN_LEG=B bash "$BIN/ci-plan-selftest.sh" 2>&1) \
+    || { WHY="the real plan reds its own selftest: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="Go 映射漏一块（shared ⇒ 只剩 hub）：计划自测 B 当场红、点名「shared ⇒ all four」；真计划绿——漏选不会悄悄变成「CI 结论」的绿"
 }
 
 cred_run_drills "$0"

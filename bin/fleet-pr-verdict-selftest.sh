@@ -374,6 +374,33 @@ run_wait
 [ "$OUT" = FAILING ] || fail "only a check NAMED macOS shard * is dropped" "out=$OUT"
 ok "macOS shards never hold the merge gate (#2286): queued/red ones are dropped, Linux decides"
 
+# `CI 结论` (issue #4815): present, it decides — a check still running elsewhere
+# no longer holds a green conclusion; any other red still fails (compat-1v);
+# pending until it completes; absent ⇒ every check, as before.
+CI_PASS='{"name":"CI 结论","status":"COMPLETED","conclusion":"SUCCESS"}'
+CI_FAIL='{"name":"CI 结论","status":"COMPLETED","conclusion":"FAILURE"}'
+CI_RUN='{"name":"CI 结论","status":"QUEUED","conclusion":null}'
+C_SKIP='{"name":"tokenledger / test (rest)","status":"COMPLETED","conclusion":"SKIPPED"}'
+seq_reset; fx 1 OPEN CLEAN "$CI_PASS,$C_SKIP,$C_RUN"
+run_wait
+[ "$OUT" = READY ] || fail "a green CI 结论 decides over a check still running" "out=$OUT $ERR"
+seq_reset; fx 1 OPEN CLEAN "$CI_FAIL,$C_PASS,$C_SKIP"
+run_wait
+[ "$OUT" = FAILING ] || fail "a red CI 结论 is FAILING whatever the rest says" "out=$OUT"
+seq_reset; fx 1 OPEN CLEAN "$CI_PASS,$C_FAIL"
+run_wait
+[ "$OUT" = FAILING ] || fail "another red check still fails beside a green CI 结论 (compat-1v)" "out=$OUT"
+seq_reset; fx 1 OPEN BLOCKED "$CI_RUN,$C_PASS"; fx 2 OPEN CLEAN "$CI_PASS,$C_PASS"
+run_wait --wait
+[ "$OUT" = READY ] && [ "$CALLS" = 2 ] || fail "--wait holds a queued CI 结论, then READY" "out=$OUT calls=$CALLS"
+seq_reset; fx 1 OPEN CLEAN "$C_SKIP,$C_PASS"
+run_wait
+[ "$OUT" = READY ] || fail "no CI 结论: skipped and green checks read READY as before" "out=$OUT"
+seq_reset; fx 1 OPEN BLOCKED "$C_PASS"
+run_wait
+case "$OUT/$ERR" in BLOCKED/*"no 'CI 结论'"*update-branch*) : ;; *) fail "BLOCKED with no CI 结论 hints update-branch" "out=$OUT $ERR" ;; esac
+ok "CI 结论 decides when present (green over a running check, red over green, queued waits); absent ⇒ every check"
+
 # Duration flags are validated like everything else: exit 2.
 seq_reset; fx 1 OPEN CLEAN "$C_PASS"
 run_wait --wait --timeout soon

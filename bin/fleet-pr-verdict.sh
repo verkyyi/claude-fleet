@@ -58,6 +58,14 @@
 # `macOS shard *` checks are not part of the merge gate (issue #2286): the BSD half
 # runs on master after the merge and gates `fleet-stable.sh move` instead.
 #
+# `CI 结论` (issue #4815, .github/workflows/ci.yml) is read FIRST when the PR
+# carries it: it is the one check that says every check its plan selected is green
+# and every other skipped. Present ⇒ it decides (pending until it completes — a
+# check still running elsewhere no longer holds the verdict once it is green),
+# except that any other red check still reads FAILING (fail fast while it waits,
+# and the old per-check reading for one version — # compat-1v: 下一批删). Absent
+# (a branch from before ci.yml, a repo without it) ⇒ every check, as before.
+#
 # The CHECK ROLLUP fold mirrors bin/tmux-pr-refresh.sh's dash glyphs
 # (none/fail/pending/pass), widened on the failure side — a gate must count
 # TIMED_OUT / CANCELLED / ACTION_REQUIRED as red, where a glance can shrug.
@@ -166,15 +174,23 @@ read_pr() {
           --json state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,autoMergeRequest \
           --jq '[(.statusCheckRollup // [])[]
                  | select((.name // .context // "") | startswith("macOS shard") | not)] as $r |
-                (if   ($r|length)==0                       then "none"
-                 elif ($r|any(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
-                              or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
-                              or .state=="FAILURE" or .state=="ERROR"))          then "fail"
-                 elif ($r|any(.status!="COMPLETED" and .state!="SUCCESS"))       then "pending"
+                def red: .conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED"
+                         or .conclusion=="ACTION_REQUIRED" or .state=="FAILURE" or .state=="ERROR";
+                def open: .status!="COMPLETED" and .state!="SUCCESS";
+                [$r[] | select((.name // .context // "") == "CI 结论")] as $c |
+                [$r[] | select((.name // .context // "") != "CI 结论")] as $o |
+                (if ($c|length) > 0 then
+                   (if   ($c|any(red)) or ($o|any(red)) then "fail"
+                    elif ($c|any(open))                  then "pending"
+                    else "pass" end)
+                 elif ($r|length)==0       then "none"
+                 elif ($r|any(red))        then "fail"
+                 elif ($r|any(open))       then "pending"
                  else "pass" end) as $ck |
                 [.state, (.mergeable // ""), (.mergeStateStatus // ""),
                  (if .isDraft then "DRAFT" else "" end), $ck,
-                 (if .autoMergeRequest then "AUTO" else "" end)] | .[]' 2>/dev/null); rc=$?
+                 (if .autoMergeRequest then "AUTO" else "" end),
+                 (if ($c|length) > 0 then "CI" else "" end)] | .[]' 2>/dev/null); rc=$?
   if [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ]; then
     # GraphQL is rate-limited → the same six lines over REST (issue #1042).
     row=$(fleet_gh_rest_pr_view "$repo" "$PR" 2>/dev/null) \
@@ -187,8 +203,8 @@ read_pr() {
     via=''
   fi
   [ -z "$row" ] && { read_err="no such PR #$PR in $repo"; return 2; }
-  st='' mg='' ms='' dr='' ck='' am=''
-  { read -r st; read -r mg; read -r ms; read -r dr; read -r ck; read -r am; } <<< "$row"
+  st='' mg='' ms='' dr='' ck='' am='' ci=''
+  { read -r st; read -r mg; read -r ms; read -r dr; read -r ck; read -r am; read -r ci; } <<< "$row"
   return 0
 }
 
@@ -199,7 +215,9 @@ explain() {  # explain <verdict> → the human note on stderr
     BEHIND)   note "#$PR is behind $repo's base — gh pr update-branch $PR" ;;
     FAILING)  note "#$PR has a RED check — fix it, never merge red" ;;
     CONFLICT) note "#$PR conflicts with the base — rebase" ;;
-    BLOCKED)  note "#$PR is green but branch protection blocks the merge — not yours to force" ;;
+    BLOCKED)  note "#$PR is green but branch protection blocks the merge — not yours to force"
+              # a branch from before the base's ci.yml has no `CI 结论` to satisfy a required one
+              [ -n "$ci" ] || note "#$PR reports no 'CI 结论' check — if $repo requires it, the branch predates it: gh pr update-branch $PR" ;;
     DRAFT)    note "#$PR is a draft — gh pr ready $PR" ;;
     MERGED)   note "#$PR is already merged${via:+ (via $via)}" ;;
     CLOSED)   note "#$PR was closed unmerged" ;;
@@ -207,7 +225,7 @@ explain() {  # explain <verdict> → the human note on stderr
   esac
 }
 
-st='' mg='' ms='' dr='' ck='' am=''
+st='' mg='' ms='' dr='' ck='' am='' ci=''
 read_pr || { printf 'fleet-pr-verdict: %s\n' "$read_err" >&2; exit 2; }
 verdict=$(land_verdict "$st" "$mg" "$ms" "$dr" "$ck")
 

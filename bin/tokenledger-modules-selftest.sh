@@ -219,12 +219,13 @@ done
 
 # --- 10. CI runs every module's tests ----------------------------------------
 # the test job's parts: rest + api-K are the hub's; shared, agent and e2e each
-# their own module whole (`cd "$MOD" && go test`)
+# their own module (`cd "$MOD" && go test`). The PR gate hands the parts in
+# (bin/ci-plan.sh go, issue #4815); the default — a dispatch — is every part.
 WF="$ROOT/.github/workflows/tokenledger.yml"
-parts=$(awk '/^  test:/ { on = 1 } on && /part: \[/ { print; exit }' "$WF" 2>/dev/null)
+parts=$(awk '/^  test:/ { on = 1 } on && /part: / { print; exit }' "$WF" 2>/dev/null)
 for m in rest api-1 shared agent e2e; do
   case "$parts" in
-    *"[$m,"*|*" $m,"*|*" $m]"*) ok "tokenledger.yml's test job has the part $m" ;;
+    *"[$m,"*|*" $m,"*|*" $m]"*|*"\"$m\""*) ok "tokenledger.yml's test job has the part $m" ;;
     *) fail "tokenledger.yml's test job has no part $m — $( [ "$m" = rest ] || [ "$m" = api-1 ] && echo "the hub's" || echo "the $m module's") tests would not run" ;;
   esac
 done

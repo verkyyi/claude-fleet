@@ -4,8 +4,9 @@
 #   A  no PR check re-runs on a master push: selftests.yml, shellcheck.yml,
 #      tokenledger.yml, fleet-hub.yml, client-e2e.yml, task-acceptance.yml,
 #      browser-attachment.yml, web-console.yml, web-chat-ui.yml carry no `push:`
-#      trigger (the release train is master's run), and each still runs on
-#      pull_request; shellcheck.yml keeps a nightly full run.
+#      trigger (the release train is master's run), and each still runs on its
+#      PR — called by the PR gate, ci.yml (issue #4815), which runs on
+#      pull_request alone; shellcheck.yml keeps a nightly full run.
 #   B  bin/ci-shellcheck.sh --changed <base> --list, in a throwaway repo: only the
 #      *.sh under bin hooks shell extras that the change adds or modifies (a
 #      deleted one, a .py, a docs file never); none ⇒ nothing; a change to
@@ -32,10 +33,13 @@ for f in selftests shellcheck tokenledger fleet-hub client-e2e task-acceptance b
   [ -f "$WF/$f.yml" ] || { fail "A: $f.yml is gone"; continue; }
   keys=$(on_keys "$WF/$f.yml" | tr '\n' ' ')
   case " $keys" in *" push "*) fail "A: $f.yml still re-runs on push ($keys)" ;; esac
-  case " $keys" in *" pull_request "*) ;; *) fail "A: $f.yml no longer runs on pull_request ($keys)" ;; esac
+  case " $keys" in *" workflow_call "*) ;; *) fail "A: $f.yml is not callable by the PR gate ($keys)" ;; esac
+  grep -q "uses: ./.github/workflows/$f.yml" "$WF/ci.yml" || fail "A: ci.yml does not call $f.yml"
 done
+ckeys=$(on_keys "$WF/ci.yml" | tr '\n' ' ')
+[ "$ckeys" = "pull_request " ] || fail "A: ci.yml runs on [$ckeys], want pull_request alone"
 on_keys "$WF/shellcheck.yml" | grep -qx schedule || fail "A: shellcheck.yml lost its nightly full run"
-[ "$FAILS" -eq 0 ] && ok "A: no PR check re-runs on a master push; each runs on its PR; shellcheck has a nightly"
+[ "$FAILS" -eq 0 ] && ok "A: no PR check re-runs on a master push; ci.yml calls each on its PR; shellcheck has a nightly"
 
 # ── B ──
 T=$(mktemp -d "${TMPDIR:-/tmp}/ci-dedup-selftest.XXXXXX") || exit 1

@@ -9,7 +9,7 @@
 # on its PR. Run again, that is the same test on nearly the same tree. So for each
 # merge in stable..HEAD (newest first, at most --max, default 30) whose PR says
 # which PR it was (the squash subject's `(#N)`):
-#   1. the PR's FINAL head (`pulls/N` .head.sha) has a green `selftests` run, and
+#   1. the PR's FINAL head (`pulls/N` .head.sha) has a green PR-gate run (ci.yml), and
 #      that run uploaded `selftests-selection` (selftests.yml's plan job): the
 #      merge tree it tested, the base and head it merged, the tests it selected;
 #   2. `git merge-tree --write-tree <base> <head>` here gives that SAME tree — what
@@ -58,9 +58,15 @@ for c in $merges; do
   [ -n "$pr" ] || { say "${c:0:7} names no PR — nothing reused from it"; continue; }
   head=$($gh api "repos/$repo/pulls/$pr" --jq '.head.sha' 2>/dev/null)
   [ -n "$head" ] || { say "#$pr: cannot read the PR"; continue; }
-  # the newest green selftests run of exactly that head, with its record
-  run=$($gh api "repos/$repo/actions/workflows/selftests.yml/runs?event=pull_request&status=success&head_sha=$head&per_page=5" \
-          --jq '.workflow_runs[0].id // empty' 2>/dev/null)
+  # the newest green PR-gate run of exactly that head, with its record: ci.yml
+  # calls selftests.yml (issue #4815), so the record is the ci run's; a PR from
+  # before it ran selftests.yml itself (# compat-1v: 下一批删)
+  run=''
+  for wfy in ci.yml selftests.yml; do
+    run=$($gh api "repos/$repo/actions/workflows/$wfy/runs?event=pull_request&status=success&head_sha=$head&per_page=5" \
+            --jq '.workflow_runs[0].id // empty' 2>/dev/null)
+    [ -z "$run" ] || break
+  done
   [ -n "$run" ] || { say "#$pr: no green selftests run of its final head ${head:0:7}"; continue; }
   rd="$work/$pr"; mkdir -p "$rd"
   if ! $gh run download "$run" --repo "$repo" --name selftests-selection --dir "$rd" >/dev/null 2>&1 \
