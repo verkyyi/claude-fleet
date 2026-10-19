@@ -241,6 +241,9 @@ type TaskMutation struct {
 }
 
 func (s *Store) MutateFleetTask(id int64, owner string, m TaskMutation, now time.Time) (FleetTask, error) {
+	if s.IDSwitchOn() { // EPIC T497 C6: the execution authority is off with the switch
+		return FleetTask{}, ErrIDSwitch
+	}
 	// A start is its owner's (claude-fleet#4896): take that person's authority
 	// lock before the task row lock, in the same order as acceptance/cutover;
 	// lifecycle reports remain open. The row's owner is fenced below.

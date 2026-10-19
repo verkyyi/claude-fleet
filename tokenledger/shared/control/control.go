@@ -528,6 +528,9 @@ var ReadMethods = map[string]bool{
 	"gh_issue_view": true,
 	"gh_pr_view":    true,
 	"gh_pr_checks":  true,
+	// id_presence (EPIC T497 C6): every fleet's windows and their @fleet_id —
+	// the one question the ID migration asks a machine.
+	"id_presence": true,
 }
 
 // WriteMethods is the whole list of fleet-control.py methods a TypeWrite may

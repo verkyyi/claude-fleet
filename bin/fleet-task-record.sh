@@ -97,7 +97,13 @@ call() {
   case "$code" in
     200) return 0 ;;
     404|405) printf 'fleet-task-record: the hub said %s (%s)\n' "$code" "$p" >&2; return 1 ;;
-    *) printf 'fleet-task-record: the hub refused (HTTP %s)\n' "$code" >&2; return 1 ;;
+    *) # The ID switch (EPIC T497 C6): the hub reads sessions by ID — the caller
+       # takes the ID road, and this node writes the hub's word down.
+       case "$resp" in *'"code":"ID_SWITCH"'*)
+         printf 'on %s\n' "$(date +%s)" > "$FLEET_CONF_DIR/ids/.switch" 2>/dev/null || :
+         printf 'fleet-task-record: ID_SWITCH — the hub reads sessions by ID now (HTTP %s)\n' "$code" >&2; return 1 ;;
+       esac
+       printf 'fleet-task-record: the hub refused (HTTP %s)\n' "$code" >&2; return 1 ;;
   esac
 }
 

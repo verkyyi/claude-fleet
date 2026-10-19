@@ -44,6 +44,9 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeIDsPath), "/")
+	if s.nodeIDsAdmin(w, r, ep, owner, ref) { // migrate · switch (EPIC T497 C6)
+		return
+	}
 	switch {
 	case ref == "" && r.Method == http.MethodPost:
 		var in nodeIDPush

@@ -139,6 +139,8 @@
 #   stop-bare-path                                  bin/fleet-worker-stop.sh (fleet_path_fill)
 #   report-parent-cleared                           bin/fleet-report-parent.sh + fleet_task_control.py receive
 #                                                   (the parent by its ID: fleet_id_take, fleet-id.sh route)
+#   id-switch-flip-report                           bin/fleet-report-parent.sh + fleet_task_control.py report
+#                                                   (the ID switch: ids/.switch, exit 5 → the ID road)
 # Cred half — cred-* rows: bin/fleet-break-it-cred-selftest.sh runs them (its own
 #   test; listed here only through the lockstep lint) — and cred-shared-down,
 #   bin/fleet-break-it-cred-shared-selftest.sh (issue #2217) — and cred-sep-by-agent /
@@ -6199,6 +6201,44 @@ drill_report_parent_cleared() {
   grep -q 'parent_matches(r, parent)' "$BIN/fleet_task_control.py" \
     && { WHY="the accepted-task road still gates delivery on the parent's generation"; return 1; }
   WHAT="父会话 /clear 后子会话回报照样找到父窗口（按 ID）；父 ID 已关闭时交给接班的 ID"
+}
+
+# The hub's ID switch flipped under a running session (EPIC T497 C6): the window
+# still carries the old launch binding (@launch), and its report went to the task
+# record, which the hub now refuses (409 ID_SWITCH) — the result was lost, and so
+# was every report until someone reopened the window. The gate is «the window has
+# an ID» now: with the switch on (the hub's word in ids/.switch) the report is a
+# result on the window's ID; flipped back, the window takes the old road again —
+# twice round, every report lands somewhere.
+drill_id_switch_flip_report() {
+  CAP=30; local d="$WORK/isf" L="isf$$" sp spid f w p t0 n got out round
+  [ -n "$REAL_TMUX" ] || { WHY="no tmux"; return 1; }
+  mkdir -p "$d/conf/ids" "$d/tt"
+  rtm() { TMUX_TMPDIR="$d/tt" FLEET_ALLOW_TMUX_DESTROY=1 "$REAL_TMUX" -L "$L" "$@"; }
+  rtm -f /dev/null new-session -d -s "$L" -n home 'sleep 120' || { WHY="cannot start the isolated tmux server"; return 1; }
+  sp=$(rtm display-message -p '#{socket_path}'); spid=$(rtm display-message -p '#{pid}')
+  f=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  w=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); p=$(rtm display-message -p -t "$w" '#{pane_id}')
+  rtm set-option -w -t "$w" @fleet_id "$f"; rtm set-option -w -t "$w" @task T42; rtm set-option -w -t "$w" @launch '{"version":1}'
+  rse() { (cd "$d" && env -u FLEET_ID_SWITCH TMUX_TMPDIR="$d/tt" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 \
+            TMUX="$sp,$spid,0" "$@"); }
+  rse python3 "$BIN/fleet_id.py" open "$f" --agent claude --task T42 >/dev/null
+  nres() { rse python3 "$BIN/fleet_id.py" get "$f" --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["results"]))'; }
+  t0=$(now); n=0
+  for round in 1 2; do
+    printf 'on %s\n' "$(date +%s)" > "$d/conf/ids/.switch"
+    out=$(rse env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting --outcome succeeded --summary "round $round" 2>&1)
+    n=$((n + 1)); got=$(nres)
+    [ "$got" = "$n" ] || { rtm kill-server 2>/dev/null; WHY="switch on, round $round: $got results on the ID, want $n — the report went to the refused record [$out]"; return 1; }
+    printf 'off %s\n' "$(date +%s)" > "$d/conf/ids/.switch"
+    out=$(rse env TMUX_PANE="$p" bash "$BIN/fleet-report-parent.sh" --state waiting --outcome succeeded --summary "back $round" 2>&1)
+    got=$(nres)
+    [ "$got" = "$n" ] || { rtm kill-server 2>/dev/null; WHY="switch off, round $round: the report skipped the old road [$out]"; return 1; }
+  done
+  SECS=$(since "$t0")
+  [ "$(rtm display-message -p -t "$w" '#{@fleet_id}')" = "$f" ] || { rtm kill-server 2>/dev/null; WHY="the window lost its ID across the flips"; return 1; }
+  rtm kill-server 2>/dev/null
+  WHAT="开关来回切两次：开时回报写在窗口 ID 上，关时回到旧路；窗口和它的 ID 一直在"
 }
 
 # ================================================================ run ====}

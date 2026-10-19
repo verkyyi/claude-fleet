@@ -442,6 +442,8 @@ def task_call(context, mutation=None):
     payload = json.dumps(mutation) if mutation else None
     r = subprocess.run(cmd, input=payload, text=True, capture_output=True, timeout=15)
     if r.returncode:
+        if "ID_SWITCH" in r.stderr:
+            raise IDSwitched("the hub reads sessions by ID now (EPIC T497 C6)")
         raise ValueError("task authority unavailable/refused; no input or replacement authorized")
     data = json.loads(r.stdout)
     return data.get("task", data)
@@ -457,6 +459,18 @@ def current_task(c):
     return t
 
 
+class IDSwitched(ValueError):
+    """The hub's ID switch is on (EPIC T497 C6): nothing claims a task record."""
+
+
+def id_switch_on():
+    try:
+        import fleet_id
+        return fleet_id.switch_on()
+    except ImportError:
+        return False
+
+
 def local_launch(d, fleet_uuid):
     """An accepted task that opens on THIS machine (issue #4754).
 
@@ -468,6 +482,8 @@ def local_launch(d, fleet_uuid):
     """
     if not d.get("task"):
         return None
+    if id_switch_on():
+        return None   # EPIC T497 C6: the window opens with its ID and @task, no claim
     if not valid_uuid(fleet_uuid):
         raise ValueError("local accepted launch needs this fleet's UUID")
     t = task_call({"task": d["task"]})
@@ -479,8 +495,11 @@ def local_launch(d, fleet_uuid):
     c = validate_context(dict(version=1, operation_id=op, task=d["task"], owner=t.get("owner"),
                               generation=d["generation"], worker_id=fleet_uuid + "/" + op,
                               provider=d["resolved_agent"], attempt_id=d["attempt_id"]))
-    t = task_call(c, dict(kind="claim", idempotency_key="launch-claim:" + op,
-                          generation=c["generation"], worker_id=c["worker_id"]))
+    try:
+        t = task_call(c, dict(kind="claim", idempotency_key="launch-claim:" + op,
+                              generation=c["generation"], worker_id=c["worker_id"]))
+    except IDSwitched:
+        return None   # the hub said so before this node heard it: open unclaimed
     if t.get("generation") != c["generation"] or t.get("execution_owner") != c["worker_id"]:
         raise ValueError("task claim did not make this launch its owner")
     return c
@@ -862,7 +881,7 @@ def main():
             return 0
         if a.mode == "admit":
             d = json.load(sys.stdin)
-            if d.get("task"):
+            if d.get("task") and not (id_switch_on() and not os.environ.get("FLEET_LAUNCH")):
                 c = validate_context(json.loads(os.environ.get("FLEET_LAUNCH", "null")))
                 if any(c[k] != d.get(k) for k in ("task", "generation", "attempt_id")) or c["provider"] != d.get("resolved_agent"):
                     raise ValueError("accepted dispatch needs its authorized launch binding")

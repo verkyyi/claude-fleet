@@ -36,6 +36,18 @@
 #                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
 #                                            hub here (nothing sent) · 75 the hub did not
 #                                            answer (the next push, or the cleanup tick, resumes)
+#   fleet-id.sh migrate [--apply] [--only T1,T2] [--json]
+#                                            the old T records onto IDs (EPIC T497 C6, design
+#                                            §5): each record's verdict by one rule — 已终态 ⇒
+#                                            照抄结果 · worker's window there ⇒ 活着 (that ID,
+#                                            the T number its alias) · its machine says no
+#                                            window ⇒ 已退出 / 已取消 · never claimed ⇒ 已关闭 ·
+#                                            没开起来 · the machine silent ⇒ 等节点回答 (never
+#                                            moved). Dry by default; --apply writes (audited)
+#   fleet-id.sh switch [status|on|off]       the hub's ID switch (on/off: the operator's
+#                                            machines); written down in ids/.switch. Off =
+#                                            every old road; on = the gate is «the window has
+#                                            an ID»: no claim, a report is the ID's result
 #
 # `_post METHOD PATH` (the body on stdin → `<http code>\n<body>`) is push's one
 # road to the hub: the node token is read here, per call (fleet_node_pair), never

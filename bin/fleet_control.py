@@ -358,6 +358,24 @@ class Control:
                                 agent=agent or fleet["agent"], handle=handle, **extra))
         return {"state": "running", "workers": workers, "observed_at": now()}
 
+    def id_presence(self):
+        """Every fleet's windows and their @fleet_id, read now (EPIC T497 C6): the
+        one question the ID migration asks this machine. A fleet whose tmux is not
+        up says so (state down) — the hub never reads that as «no window»."""
+        out = []
+        for fleet in self.inventory():
+            entry = dict(fleet_id=fleet["fleet_id"], name=fleet["name"])
+            try:
+                snap = self.workers(fleet)
+            except Fault as exc:
+                entry.update(state="unknown", error=exc.as_dict().get("message", exc.code)[:200])
+            else:
+                entry.update(state=snap["state"], observed_at=snap["observed_at"],
+                             windows=[dict(identity=w.get("identity") or "", key=w.get("key") or "",
+                                           window_id=w.get("window_id") or "") for w in snap["workers"]])
+            out.append(entry)
+        return {"fleets": out, "observed_at": now()}
+
     def find_workers(self, fleet, key):
         """Windows holding `key`. A bare key in a multi-repo fleet matches every
         repo's (issue #1018) — so two of them resolve as AMBIGUOUS, never a pick.
@@ -1113,6 +1131,9 @@ class Control:
         if method in GH_READS:
             validate_gh_read(params)
             return self.gh_read(self.fleet(params["fleet_id"]), GH_READS[method], params)
+        if method == "id_presence":
+            fields(params, ())
+            return self.id_presence()
         if method == "operation_get":
             fields(params, ("operation_id",))
             return self.get_operation(params["operation_id"])

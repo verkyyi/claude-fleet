@@ -152,7 +152,7 @@ def raw_call(action, task, payload=None, timeout=15, authority=""):
     if r.returncode:
         code = re.search(r"HTTP (4[0-9][0-9])", r.stderr)
         if code and code[1] not in ("408", "429"):
-            raise Refused("task authority refused HTTP " + code[1])
+            raise Refused("task authority refused HTTP " + code[1] + (" ID_SWITCH" if "ID_SWITCH" in r.stderr else ""))
         raise ValueError("task authority unavailable/refused")
     return json.loads(r.stdout)
 

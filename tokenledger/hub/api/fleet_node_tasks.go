@@ -353,6 +353,10 @@ func (s *Server) nodeOwnTask(owner, ref string) (store.FleetTask, error) {
 
 // Contract conflicts are caller-visible, not generic server errors.
 func taskWriteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrIDSwitch) { // EPIC T497 C6: the node reads the code
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "ID_SWITCH", "error": err.Error()})
+		return
+	}
 	status := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, store.ErrTaskInvalid):

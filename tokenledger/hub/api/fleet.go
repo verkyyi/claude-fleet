@@ -280,6 +280,9 @@ func (s *Server) NodeRead(ctx context.Context, endpointID, method string, params
 	if fleetGHReads[method] {
 		timeout = ghReadTimeout
 	}
+	if method == "id_presence" {
+		timeout = idPresenceTimeout // every fleet's windows (EPIC T497 C6)
+	}
 	c := s.nodes.get(endpointID)
 	if c == nil {
 		// Held by another replica (claude-fleet#2124): its NodeRead answers.

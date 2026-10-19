@@ -95,6 +95,9 @@ type TaskReportReceipt struct {
 
 func (s *Store) RecordFleetTaskReport(owner, endpoint string, r TaskReport, now time.Time) (TaskReportReceipt, error) {
 	empty := TaskReportReceipt{}
+	if s.IDSwitchOn() { // EPIC T497 C6: a result is the window's ID's now
+		return empty, ErrIDSwitch
+	}
 	if r.EventID == "" || len(r.EventID) > 200 || ParseTaskRef(r.Task) == 0 || r.Generation < 1 || r.Evidence == "" || endpoint == "" ||
 		(r.Outcome != "" && r.Outcome != TaskSucceeded && r.Outcome != TaskFailed && r.Outcome != TaskCancelled) {
 		return empty, ErrTaskInvalid
