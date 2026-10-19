@@ -43,6 +43,8 @@ default_hooks = {
     "refocus-hook.sh", "fleet-history.sh", "precompact-hook.sh", "session-end-hook.sh",
     # StopFailure: a turn an API error cut off goes on by itself (#4714)
     "fleet-stream-resume.sh",
+    # SessionStart: a window's ID ledger records each native segment (EPIC T497 C1)
+    "fleet-id.sh",
 }
 
 def hooks(data):

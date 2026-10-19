@@ -768,7 +768,7 @@ def send_message(to, text, repo=None):
     if target != "parent" and not re.match(
             r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}|[Tt]-[0-9A-Za-z]{4,26}"
             r"|wid:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, agent:<name>, T-<code>, fid:<uuid> or parent")
+        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, T-<code>, agent:<name>, fid:<uuid> or parent")
     is_issue = re.match(r"^(issue:|#|issue-)[0-9]+$", target) is not None
     if repo is not None:
         if not is_issue and not target.startswith("scratch-"):
