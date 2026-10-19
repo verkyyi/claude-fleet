@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Prefill a new scratch's input without submitting it; preserve existing input.
 
-Args: socket-label pane-id name-file warm(0|1). The caller owns the window;
-this helper owns and removes the temporary name file and tmux paste buffer.
-Cold readiness follows scratch-pool.sh: a painted prompt alone is too early,
+Args: socket-label pane-id name-file warm(0|1) — warm is always 0 since the
+warm pool left (T495). The caller owns the window; this helper owns and removes
+the temporary name file and tmux paste buffer. Cold readiness: a painted prompt
+alone is too early (the TUI still drops what is typed while it mounts its input),
 so wait for a stable screen AND ten seconds since the empty prompt appeared.
 An agent that says so itself (OSC 7501 idle, @agent_status — issue #2536) needs
 no guess: its own word stands for both who owns the pane and that its input is

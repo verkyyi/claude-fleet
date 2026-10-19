@@ -96,7 +96,6 @@
 # subscription failover across Coding Agents | opt-in | opt-in | `FLEET_FAILOVER=1` reuses fleet-account, ccquota, quotawatch and transfer: eligible same-agent subscription first, then the allowed other agent, otherwise durable waiting. Exact source paths, target authentication, unsent drafts and Fleet loops follow the task.
 # per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation.
 # MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (the `fleet` tool service only, issues #1078/#1807); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy.
-# warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path.
 # PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ✅ | ✅ | tmux draws it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which `bin/tmux-pr-refresh.sh` stamps on every window from the PR map (issue #1954). The mod's progress band above Claude Code's input stays as a mirror.
 # knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool.
 # native panel prompts (rename · answer · message) | ✅ | ✅ | `bin/fleet_view.py` handles the prompts without changing the agent pane.
@@ -118,10 +117,6 @@ ROOT="$(cd "$BIN/.." && pwd)"
 # not inherit the spawner's env, so read the fleet's conf from $TMUX_PANE's session.
 if command -v fleet_load_conf >/dev/null 2>&1; then
   _fx_sess="$(fleet_current_session 2>/dev/null)"
-  # A holding session uses the owning fleet's overlay before it is claimed.
-  if [ -n "${FLEET_LAUNCH_SESSION:-}" ] && [ "$_fx_sess" = "${FLEET_LAUNCH_SESSION}-pool" ]; then
-    _fx_sess="$FLEET_LAUNCH_SESSION"
-  fi
   [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
   unset _fx_sess
 fi
@@ -173,8 +168,8 @@ if [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -n 
       FLEET_CODEX_QUOTA_TTL="${FLEET_CODEX_QUOTA_TTL:-300}" python3 "$BIN/fleet-codex-account.py" gate || exit 2
   fi
 elif [ "$_codex_home_explicit" = 0 ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] && [ -z "$_codex_resuming" ] && [ -n "${FLEET_CODEX_ACCOUNTS:-}" ]; then
-  # Recovery identity is authoritative. Only fresh launches choose a pool home.
-  # Pass the already-resolved overlay; a pool session has no overlay of its own.
+  # Recovery identity is authoritative. Only fresh launches choose an account home.
+  # Pass the already-resolved overlay.
   CODEX_HOME=$(FLEET_CONF_DIR="$FLEET_CONF_DIR" FLEET_CODEX_ACCOUNTS="$FLEET_CODEX_ACCOUNTS" \
     FLEET_CODEX_MODEL_LIMIT_IDS="${FLEET_CODEX_MODEL_LIMIT_IDS:-}" \
     FLEET_CODEX_MODEL="${FLEET_CODEX_MODEL:-}" FLEET_CODEX_QUOTA_GATE="${FLEET_CODEX_QUOTA_GATE:-0}" \

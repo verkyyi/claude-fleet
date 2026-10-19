@@ -806,8 +806,8 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: over the last 10 times, how long (median) from pressing ⌘P to the panel appearing, and from opening a new session to being able to type. The panel should take under 0.5 seconds, a new session under 3 seconds (when the warm pool has sessions).
-- **On WARN / FAIL**: `fleet_timing.py table` shows which part is slow; send it to your admin. If it says "every new session was a cold start", the warm pool is empty: `scratch-pool.sh status` shows why it is not refilling.
+- **What it is**: over the last 10 times, how long (median) from pressing ⌘P to the panel appearing, and from opening a new session to being able to type. The panel should take under 0.5 seconds, a new session under 8 seconds.
+- **On WARN / FAIL**: `fleet_timing.py table` shows which part is slow; send it to your admin.
 
 #### `oldkeys`
 

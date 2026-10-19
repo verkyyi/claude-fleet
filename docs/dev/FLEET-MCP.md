@@ -859,7 +859,7 @@ the window's options, which drift when a window moves or a pane is not the one
 the session lives in.
 
 **Issued** by `bin/fleet-session-wrap.sh` — the one door every session opens
-through (spawn, restore, migrate, move, transfer, the warm pool, a wake) — once
+through (spawn, restore, migrate, move, transfer, a wake) — once
 per launch: `fleet-mcp.py --cred mint` prints it to the wrapper, which exports it
 as **`FLEET_WORKER_CRED`** for that launch only; the agent hands it to this server
 (Claude: inherited; Codex: `env_vars` forwards the NAME). It is never in an argv,
@@ -875,7 +875,7 @@ login's key `$FLEET_CONF_DIR/worker-cred/key` (0600, made on first mint). Claims
 | claim | what |
 |---|---|
 | `v` | 1 |
-| `fleet` | the fleet (its socket label — the same for a warm-pool or view session) |
+| `fleet` | the fleet (its socket label — the same for a view session) |
 | `fid` | the session's lifelong `@fleet_id` — its IDENTITY (#1646) |
 | `fleet_uuid` | the fleet UUID (`fleet_uuid`), empty on a machine with none |
 | `key` · `repo` · `issue` · `origin` | what the session was at issue time (informative; a scratch bound later keeps its `fid`) |

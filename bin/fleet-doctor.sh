@@ -3985,8 +3985,8 @@ fi
 
 # --- timing: ⌘P → 面板 and ⌘N / ⚡ → 能打字 (issue #3551, EPIC #3500 C6) ---------
 # fleet_timing.py's `check` over the last 10 runs of each, the medians against
-# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (3000; warm opens only — a
-# cold one says the pool was empty, counted apart). Nothing measured yet ⇒ no row.
+# FLEET_TIMING_PANEL_MS (500) and FLEET_TIMING_SESSION_MS (8000; a `cold` run from
+# before the warm pool left, T495, is counted apart). Nothing measured yet ⇒ no row.
 # The segment table is `fleet_timing.py table`.
 if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [ -n "$_tm" ]; then
   _tmsg=$(printf '%s\n' "$_tm" | awk '{
@@ -3998,8 +3998,6 @@ if _tm=$(python3 "$(dirname "$0")/fleet_timing.py" check 2>/dev/null; true) && [
     printf "%s%s", (NR > 1 ? " · " : ""), s }')
   if printf '%s\n' "$_tm" | grep -q ' over=1 '; then
     warn timing "$_tmsg — fleet_timing.py table shows which segment"
-  elif printf '%s\n' "$_tm" | grep -q '^session .* p50=— '; then
-    warn timing "$_tmsg — every new session started cold: the warm pool is empty (scratch-pool.sh status)"
   else
     pass timing "$_tmsg"
   fi

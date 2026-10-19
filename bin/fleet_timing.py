@@ -19,16 +19,17 @@ seconds, ms precision), and a `total` segment for end to end. The two writers:
     panel    fleet_view.popup (the 看台's ⌘P):
              boot (the process start → the panel's code loaded) · read (the rows
              off the cache) · frame (the first frame drawn) · total
-    session  fleet_view.go_new (⌘N / ⚡): claim (a warm pool window bound) · cold
-             (no warm window: a session started now — then the run is `cold`) ·
-             go (the view onto it) · total
+    session  fleet_view.go_new (⌘N / ⚡): start (the session started) · go (the
+             view onto it) · total. A run written before the warm pool left
+             (T495) may carry `claim` or `cold` (no warm window then); a `cold`
+             run is still counted apart.
 A file past MAX_LINES keeps its newest half. Writing never raises and never
 blocks the person: a full disk or a read-only home costs the line, nothing else.
 
 The limits (`check`, the doctor's `timing` row): FLEET_TIMING_PANEL_MS (500) on
-the median panel total, FLEET_TIMING_SESSION_MS (3000) on the median total of the
-warm opens (a cold open is counted apart: it says the pool was empty, not that
-the open was slow). No file ⇒ nothing printed.
+the median panel total, FLEET_TIMING_SESSION_MS (8000 — a session is started
+cold since the warm pool left, T495; making that fast is the work now) on the
+median session total. No file ⇒ nothing printed.
 """
 import json
 import os
@@ -36,7 +37,7 @@ import sys
 import time
 
 MAX_LINES = 4000
-LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 500), "session": ("FLEET_TIMING_SESSION_MS", 3000)}
+LIMITS = {"panel": ("FLEET_TIMING_PANEL_MS", 500), "session": ("FLEET_TIMING_SESSION_MS", 8000)}
 
 
 def timing_dir():

@@ -493,9 +493,6 @@ case "$mode" in
     ;;
   start)
     fleet_load_conf "$sess"
-    # The one line a warm start's first turn carries after the person's words
-    # (issue #2234): its task record is the ticket (issue #4898).
-    FLEET_START_NOTE='（这件事记在 hub 的任务记录上，先开始。）'
     agent="${4:-${FLEET_AGENT:-claude}}"
     [ -n "$agent" ] || agent="${FLEET_AGENT:-claude}"
     case "$agent" in claude|codex) ;; *) printf 'start: unknown coding agent\n' >&2; exit 2 ;; esac
@@ -505,8 +502,7 @@ case "$mode" in
     fi
 
     if [ -n "${FLEET_LAUNCH:-}" ]; then
-      # Accepted operations always create a cold, unseeded native process.
-      export FLEET_START_WARM=0
+      # Accepted operations always create an unseeded native process.
       command -v "$agent" >/dev/null 2>&1 || { printf 'start: selected provider CLI missing\n' >&2; exit 4; }
     fi
     # $5 = which hosted repo issue $3 belongs to (issue #984): owner/name, slug
@@ -589,27 +585,6 @@ case "$mode" in
       # $10 = `test` (issue #2505): the TEST identity's client placed it — the
       # window is marked, named test-… and closed soon (dash-raw-session.sh).
       tiarg=''; [ "${10:-}" = test ] && tiarg=--test-identity
-      # 发出即开 (issue #2234, EPIC #2230 C4): a seeded scratch is first offered a
-      # window from the warm pool — the seed submitted into it as its first turn,
-      # the receipt the same four fields plus `<t_window> <t_ready> <t_prompt>`.
-      # An empty slot (exit 3) opens it exactly as before; FLEET_START_WARM=0 = off.
-      # An unseeded HOME session (`fleet claude`, issue #2339) takes its slot's
-      # entry too — nothing to submit, the receipt's stamps after t_window empty.
-      if { [ -n "$seedf" ] || [ "$norepo" = 1 ]; } && [ "${FLEET_START_WARM:-1}" != 0 ]; then
-        wseed=''; wok=1
-        if [ -n "$seedf" ]; then
-          wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") && cp "$seedf" "$wseed" || { wseed=''; wok=0; }
-        fi
-        if [ "$wok" = 1 ]; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${wseed:+"$seedflag=$wseed"})
-          wrc=$?; [ -z "$wseed" ] || rm -f "$wseed"
-          if [ "$wrc" != 3 ]; then
-            [ -z "$seedf" ] || rm -f "$seedf"
-            [ -n "$out" ] && printf '%s\n' "$out"
-            exit "$wrc"
-          fi
-        fi
-      fi
       exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${seedf:+"$seedflag=$seedf"}
     fi
     num="${3:-}"
@@ -618,29 +593,11 @@ case "$mode" in
       # issue is filed — the session opens in a worktree of the repo bound to the
       # hub's task record (the start's --task), its first turn the person's words
       # (the body, else $8, the title), reaped once the record is closed. No record
-      # ⇒ nothing opened (exit 7). With a ready window in this repo × agent's warm
-      # slot (发出即开, issue #2234) the start is answered from it: stdout is ONE
-      # line, `warm\t` + the receipt; an empty slot (exit 3) takes the cold path.
-      # FLEET_START_WARM=0 turns the warm path off.
+      # ⇒ nothing opened (exit 7).
       [ -n "$srepo" ] || { printf 'start: no repo for the new task\n' >&2; exit 6; }
       [ -n "$taskarg" ] || { printf 'start: a new task needs its hub record (--task T<n>) — nothing opened (#4898)\n' >&2; exit 7; }
       nbody=$(cat)
       first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
-      if [ "${FLEET_START_WARM:-1}" != 0 ]; then
-        wseed=$(mktemp "${TMPDIR:-/tmp}/fcr-seed.XXXXXX") || wseed=''
-        if [ -n "$wseed" ] && printf '%s\n\n%s\n' "$first" "$FLEET_START_NOTE" > "$wseed"; then
-          out=$(bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --warm-only --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" "--prompt-file=$wseed")
-          wrc=$?; rm -f "$wseed"
-          if [ "$wrc" = 0 ]; then
-            rcpt=$(printf '%s\n' "$out" | awk 'NF { l = $0 } END { print l }')
-            printf 'warm\t%s\n' "$rcpt"
-            exit 0
-          fi
-          [ "$wrc" = 3 ] || exit "$wrc"
-        else
-          [ -n "$wseed" ] && rm -f "$wseed"
-        fi
-      fi
       wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX") || { printf 'start: no temp file\n' >&2; exit 1; }
       printf '%s\n' "$first" > "$wordsf"
       exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" "--prompt-file=$wordsf"

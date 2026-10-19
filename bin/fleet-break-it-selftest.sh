@@ -116,7 +116,7 @@
 #                                                   bin/fleet-node-supervisor.py (lanes, account adopt --rejoin)
 #   oldcfg-broken-unmarked                          bin/fleet-oldcfg-check.sh --sweep (fleet-oldcfg-replay.py --manifest),
 #                                                   fleet_cfg_state / fleet_cfg_broken_load (fleet-lib.sh), fleet-ui-lang.sh
-#   pool-stale-handed-out                           bin/scratch-pool.sh claim / reap (usable: fleet_cfg_state)
+#   pool-left-after-upgrade                         bin/fleet-diskguard.sh pool_watch (T495: an older release's warm pool retired)
 #   pretrust-norepo                                 bin/fleet-trust.sh (node, grant --home), bin/fleet-claude.sh
 #   cross-send-refused-unseen                       bin/fleet-peer-send.sh (hub_send: identity sender, fleet_hub_refused,
 #                                                   receipt_watch), fleet-lib.sh fleet_hub_refused
@@ -1479,7 +1479,7 @@ drill_view_mouse_stale() {
 drill_window_killed() {
   CAP=20; BREAK_SOCK="$WORK/sock-wk"; local t0 wins w2 f led="$WORK/wk-ledger.tsv"
   local f1=1f0e0000-0000-4000-8000-0000000018a1 f2=1f0e0000-0000-4000-8000-0000000018a2
-  for f in dash-reap.sh session-end-hook.sh fleet-cleanup.sh fleet-move.sh fleet-worker-stop.sh scratch-pool.sh fleet-cleanup-idle.py; do
+  for f in dash-reap.sh session-end-hook.sh fleet-cleanup.sh fleet-move.sh fleet-worker-stop.sh fleet-diskguard.sh fleet-cleanup-idle.py; do
     grep -q 'retire' "$BIN/$f" || { WHY="$f closes a session window without marking it (fleet_win_retire): the next tick would pull it back"; return 1; }
   done
   mkdir -p "$WORK/gbin"
@@ -3489,71 +3489,47 @@ drill_guide_spare_login() {
   WHAT="没人来过的登录：节拍不开引导、把旧版留下的置顶 guide 关掉（不算「不要」）；人第一次 attach 立刻开；开过又被关（tries 已清零）记 dismissed，不再拉回"
 }
 
-# A warm-pool entry started before an upgrade (its @agent_cfg / @agent_ver no longer
-# the expected ones) must never be handed out — the node's claim says 3 and the
-# caller opens a cold session — and the next pass retires it (issue #2233).
-drill_pool_stale_handed_out() {
-  CAP=10; BREAK_SOCK="$WORK/sock-psh"; local d="$WORK/psh" t0 out rc w acct kv
-  mkdir -p "$d/conf/fleets/ps" "$d/conf/global" "$d/home"
-  printf 'FLEET_SCRATCH_POOL=1\n' > "$d/conf/fleets/ps/conf"
-  fx_repo "$d/conf" "ps" acme/app FLEET_MAIN="$d/nomain" FLEET_BASE_BRANCH="main"
-  printf 'claude NEW x\nver v2\n' > "$d/conf/global/agent-cfg.expected"
-  nt -f /dev/null new-session -d -s ps -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  nt new-session -d -s ps-pool -n warm-1 -x 100 -y 30 'exec sleep 600'
-  w=$(nt list-windows -t ps-pool -F '#{window_id}' | head -1)
-  acct=$(env HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-account.sh" active 2>/dev/null)
-  for kv in "@pool 1" "@pool_ready 1" "@pool_slug scratch-1" "@pool_born $(date +%s)" "@pool_agent claude" \
-            "@repo acme/app" "@worktree $d/wt" "@agent_cfg OLD" "@agent_ver v1"; do
-    nt set-option -w -t "$w" ${kv%% *} "${kv#* }"
-  done
-  nt set-option -w -t "$w" @pool_account "$acct"
-  pool() { env PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
-             BREAK_SOCK="$BREAK_SOCK" FLEET_LOAD_PROBE_CMD='echo 0.10' FLEET_POOL_DISK_PROBE_CMD='echo 500' \
-             FLEET_POOL_CLAIM_REFILL_DELAY=600 bash "$BIN/scratch-pool.sh" "$@"; }
-  t0=$(now)
-  out=$(pool claim ps --repo acme/app --agent claude 2>&1); rc=$?
-  [ "$rc" = 3 ] && [ -z "$out" ] || { WHY="an entry warmed before the upgrade was handed out (rc=$rc, out=[$out])"; return 1; }
-  [ "$(o "$w" session_name)" = ps-pool ] || { WHY="the old-config entry left the pool"; return 1; }
-  pool reap ps --repo acme/app >/dev/null 2>&1
-  nt list-windows -a -F '#{window_id}' | grep -qx "$w" && { WHY="the next pass did not retire the old-config entry"; return 1; }
-  SECS=$(since "$t0"); WHAT="升级前开好的池里会话：领用返回 3、不交出，下一拍收掉（随后按新配置重开）"
-}
-
-# 发出即开 with nothing to hand out (issue #2234, EPIC #2230 C4): a ↵ while the
-# repo × agent slot of the warm pool is empty (the pool off, just claimed, still
-# warming) must open the task the cold way — one session bound to its record
-# (issue #4898: nothing filed) — and the warm attempt must leave nothing behind:
-# no window, no worktree, no first turn typed anywhere.
-drill_pool_empty_compose() {
-  CAP=20; BREAK_SOCK="$WORK/sock-pec"; local d="$WORK/pec" t0 out rc wins f
-  mkdir -p "$d/conf/fleets/pe" "$d/sb" "$d/log" "$d/home"
+# The warm pool is gone (T495), but the release before it leaves a holding session
+# `<fleet>-pool` with warm windows parked in it and their scratch worktrees — ~550MB
+# each, that nothing would ever hand out or retire again. For real on an isolated
+# server and a real repo: the diskguard tick's pool_watch closes every window still
+# parked (a repo entry and a HOME one), frees the parked entry's worktree + branch,
+# marks it retired (restore leaves it closed), drops the pool's lock dir — and a
+# window already claimed into the fleet, with its own scratch worktree, is untouched.
+drill_pool_left_after_upgrade() {
+  CAP=20; BREAK_SOCK="$WORK/sock-plu"; local d="$WORK/plu" t0 w1 w2 c fid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1 out
+  mkdir -p "$d/conf/fleets/pu/pool/home-claude.lock" "$d/home"
   git init -q -b master "$d/main" 2>/dev/null || git init -q "$d/main"
-  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i ) \
+  ( cd "$d/main" && git config user.email t@t && git config user.name t && echo x > f && git add f && git commit -qm i \
+      && git worktree add -q -b scratch-1 "$d/main-scratch-1" && git worktree add -q -b scratch-2 "$d/main-scratch-2" ) \
     || { WHY="cannot build the repo"; return 1; }
-  fx_repo "$d/conf" pe acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
-  printf 'FLEET_SCRATCH_POOL=1\nFLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pe/conf"
-  for f in "$BIN"/*; do ln -s "$f" "$d/sb/${f##*/}"; done
-  nt -f /dev/null new-session -d -s pe -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
-  run() { env -u TMUX -u TMUX_PANE -u CCQUOTA_FLEET PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" \
-            FLEET_SKIP_GLOBAL_CONF=1 FLEET_ADMIT=0 FLEET_ORIGIN_GATE=0 BREAK_SOCK="$BREAK_SOCK" "$@"; }
+  printf 'FLEET_MAX_SESSIONS=20\n' > "$d/conf/fleets/pu/conf"
+  fx_repo "$d/conf" pu acme/app FLEET_MAIN="$d/main" FLEET_BASE_BRANCH=master
+  nt -f /dev/null new-session -d -s pu -n home -x 100 -y 30 'exec sleep 600' || { WHY="cannot start the isolated tmux server"; return 1; }
+  nt new-window -d -t pu: -n scratch-2 'exec sleep 600'
+  c=$(nt list-windows -t pu -F '#{window_id} #{window_name}' | awk '$2 == "scratch-2" { print $1 }')
+  nt set-option -w -t "$c" @raw 1; nt set-option -w -t "$c" @repo acme/app; nt set-option -w -t "$c" @worktree "$d/main-scratch-2"
+  nt new-session -d -s pu-pool -n warm-1 -x 100 -y 30 'exec sleep 600'
+  w1=$(nt list-windows -t pu-pool -F '#{window_id}' | head -1)
+  for kv in "@pool 1" "@pool_ready 1" "@pool_slug scratch-1" "@repo acme/app" "@worktree $d/main-scratch-1" "@fleet_id $fid"; do
+    nt set-option -w -t "$w1" "${kv%% *}" "${kv#* }"
+  done
+  nt new-window -d -t pu-pool: -n warm-home 'exec sleep 600'
+  w2=$(nt list-windows -t pu-pool -F '#{window_id} #{window_name}' | awk '$2 == "warm-home" { print $1 }')
+  nt set-option -w -t "$w2" @pool 1; nt set-option -w -t "$w2" @norepo 1
   t0=$(now)
-  out=$(printf 'the text' | run bash "$d/sb/dash-raw-session.sh" pe --origin hub --print --warm-only --agent claude \
-          --repo acme/app --prompt 'the text' 2>/dev/null); rc=$?
-  [ "$rc" = 3 ] && [ -z "$out" ] || { WHY="--warm-only on an empty slot answered rc=$rc out=[$out], want exit 3 and nothing"; return 1; }
-  # the cold half: a stand-in spawner that answers --warm-only with 3 (still empty)
-  rm -f "$d/sb/dash-raw-session.sh"
-  printf '#!/bin/sh\ncase " $* " in *" --warm-only "*) exit 3 ;; esac\necho "$*" >> "%s/log/spawn"\nprintf "@999\\tt\\t-\\t-\\n"\n' "$d" > "$d/sb/dash-raw-session.sh"
-  chmod +x "$d/sb/dash-raw-session.sh"
-  out=$(printf 'the text' | run env FLEET_CONTROL_TASK=T9 bash "$d/sb/fleet-control-read.sh" start pe new claude acme/app '' '' 'a title' 2>/dev/null); rc=$?
+  out=$(env -u TMUX -u TMUX_PANE PATH="$WORK/tbin:$PATH" HOME="$d/home" FLEET_CONF_DIR="$d/conf" FLEET_SKIP_GLOBAL_CONF=1 \
+          BREAK_SOCK="$BREAK_SOCK" bash -c '. "$1/fleet-lib.sh"; eval "$(sed -n "$2" "$1/fleet-diskguard.sh")"
+            pool_watch; pool_watch' _ "$BIN" '/^pool_watch() [{]/,/^[}]/p' 2>&1)
   SECS=$(since "$t0")
-  [ "$rc" = 0 ] && [ "$out" = $'@999\tt\t-\t-' ] \
-    || { WHY="the start on an empty slot was not the cold path (rc=$rc, out=[$out])"; return 1; }
-  [ "$(grep -c . "$d/log/spawn")" = 1 ] && grep -q -- '--repo acme/app' "$d/log/spawn" && grep -q -- '--task T9' "$d/log/spawn" \
-    || { WHY="spawned not exactly once, bound to its record: $(cat "$d/log/spawn" 2>/dev/null)"; return 1; }
-  wins=$(nt list-windows -t pe -F '#{window_name}' | tr '\n' ' ')
-  [ "$wins" = 'home ' ] || { WHY="the warm attempt left a window behind: $wins"; return 1; }
-  [ "$(git -C "$d/main" worktree list | grep -c .)" = 1 ] || { WHY="the warm attempt left a worktree behind"; return 1; }
-  WHAT="池子空时发任务：--warm-only 答 3、什么都不开；start new 走冷路径（按任务记录开会话一次，不建单）"
+  nt has-session -t '=pu-pool' 2>/dev/null && { WHY="the holding session is still there: $(nt list-windows -t '=pu-pool' -F '#{window_name}' | tr '\n' ' ') $out"; return 1; }
+  [ -e "$d/main-scratch-1" ] && { WHY="the parked entry's worktree was not freed"; return 1; }
+  git -C "$d/main" show-ref --verify --quiet refs/heads/scratch-1 && { WHY="the parked entry's branch was not freed"; return 1; }
+  [ -e "$d/conf/global/retired/$fid" ] || { WHY="the parked entry was closed without the retired mark (restore would bring it back)"; return 1; }
+  [ -e "$d/conf/fleets/pu/pool" ] && { WHY="the pool's lock dir is still there"; return 1; }
+  [ "$(o "$c" session_name)" = pu ] && [ -d "$d/main-scratch-2" ] && git -C "$d/main" show-ref --verify --quiet refs/heads/scratch-2 \
+    || { WHY="the claimed session (in the fleet, its own worktree) was touched"; return 1; }
+  WHAT="升级前留下的 <fleet>-pool：diskguard 一拍把还停在里面的窗口（仓库的、HOME 的）收掉，worktree 与分支删掉、记退役（restore 不拉回）、锁目录删掉；已领进 fleet 的会话和它的 worktree 不碰"
 }
 
 drill_cold_fill_fails() {

@@ -197,19 +197,16 @@ class PanelDraftTests(unittest.TestCase):
         failed.assert_called_once_with(data, "test-view", "RuntimeError: placement failed")
         focus.assert_not_called()
 
-    def test_explicit_codex_draft_tries_warm_then_cold(self):
-        responses = [SimpleNamespace(returncode=3, stdout="", stderr=""),
-                     SimpleNamespace(returncode=0, stdout="@42\n", stderr="")]
-        with patch.dict(os.environ, {"FLEET_START_WARM": "1"}), \
-                patch.object(fleet_view, "view_fleet", return_value="test-fleet"), \
+    def test_explicit_codex_draft_opens_once_cold(self):
+        responses = [SimpleNamespace(returncode=0, stdout="@42\n", stderr="")]
+        with patch.object(fleet_view, "view_fleet", return_value="test-fleet"), \
                 patch.object(fleet_view.fleet_timing, "Clock"), \
                 patch.object(fleet_view, "new_agent", side_effect=AssertionError("agent already selected")), \
                 patch.object(fleet_view.subprocess, "run", side_effect=responses) as run, \
                 patch.object(fleet_view, "go", return_value=0):
             self.assertEqual(fleet_view.go_new(None, "test-view", agent="codex", draft="literal #42"), 0)
-        self.assertEqual(run.call_count, 2)
-        self.assertIn("--warm-only", run.call_args_list[0].args[0])
-        self.assertNotIn("--warm-only", run.call_args_list[1].args[0])
+        self.assertEqual(run.call_count, 1)
+        self.assertNotIn("--warm-only", run.call_args_list[0].args[0])
         for call in run.call_args_list:
             arguments = call.args[0]
             self.assertEqual(arguments[arguments.index("--agent") + 1], "codex")

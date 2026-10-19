@@ -11,8 +11,6 @@ import unittest
 from unittest.mock import patch
 
 BIN = Path(__file__).absolute().parent
-spec = importlib.util.spec_from_file_location('warm', BIN / 'fleet-codex-warm.py')
-warm = importlib.util.module_from_spec(spec); spec.loader.exec_module(warm)
 
 
 class PolicyTests(unittest.TestCase):
@@ -42,20 +40,6 @@ else:
     def launch(self, *args, **settings):
         return subprocess.run(['bash', str(self.bin/'fleet-codex.sh'), *args],
                               env=dict(self.env, **settings), text=True, capture_output=True)
-
-    def test_pool_launcher_uses_owning_fleet_overlay(self):
-        config = self.root/'conf/fleets/tf/conf'; config.parent.mkdir(parents=True)
-        config.write_text('FLEET_AGENT=codex\nFLEET_CODEX_MODEL=native-worker\nFLEET_MCP_CONFIG=none\n')
-        tmux = self.root/'fake/tmux'
-        tmux.write_text('#!/bin/sh\ncase "$*" in *session_name*) echo tf-pool;; esac\n')
-        tmux.chmod(0o755)
-        p = subprocess.run(['bash', str(self.bin/'fleet-claude.sh'), 'seed'], text=True, capture_output=True,
-                           env=dict(self.env, TMUX='isolated,0,0', TMUX_PANE='%1', FLEET_LAUNCH_SESSION='tf', FLEET_CODEX_SERVER='0'))
-        self.assertEqual(p.returncode, 0, p.stderr)
-        args = json.loads((self.root/'launched.json').read_text())['args']
-        self.assertIn('native-worker', args)
-        self.assertIn('agents.default_subagent_model="native-worker"', args)
-        self.assertIn('features.apps=false', args)
 
     def test_none_is_strict_and_subagents_use_native_keys(self):
         p = self.launch('seed', FLEET_MCP_CONFIG='none', FLEET_CODEX_SUBAGENT_MODEL='native-model', FLEET_CODEX_SUBAGENT_EFFORT='high')
@@ -123,44 +107,6 @@ else:
         policy = next(x for x in args if x.startswith('mcp_servers='))
         self.assertIn('"env_vars"=["FIXTURE_TOKEN"]', policy)
         self.assertIn('"args"=["$(not-a-shell)"]', policy)
-
-
-class WarmTests(unittest.TestCase):
-    def probe(self, echo=True, clear=True, menu=False, shell=False, replace=False):
-        calls = []; now = [0]; state = ['empty']; reads = [0]
-        def clock(): now[0] += .25; return now[0]
-        def tm(args, **_):
-            calls.append(args); command = args[3]
-            if command == 'display-message':
-                reads[0] += 1
-                owner = os.getpid()+10000000 if replace and reads[0]>2 else os.getpid()
-                x = 3 if state[0]=='typed' else 2
-                return f'codex|{owner}|0|{"bash" if shell else "codex"}|{x}|0|0|'.encode()
-            if command == 'capture-pane':
-                text = '1. Yes, continue' if menu else '~' if state[0]=='typed' else '\x1b[2mAsk Codex to do anything\x1b[0m'
-                return ('› '+text+'\n').encode()
-            if command == 'send-keys':
-                if args[-1]=='~' and echo:state[0]='typed'
-                if args[-1]=='C-u' and clear:state[0]='empty'
-                return b''
-            raise AssertionError(args)
-        with patch.object(warm, 'has_agent', return_value=False), patch.object(warm.subprocess, 'check_output', side_effect=tm), patch.object(warm.time, 'monotonic', side_effect=clock), patch.object(warm.time, 'sleep'):
-            result = warm.warm('isolated', '%1', timeout=5, settle=0, hits=1)
-        return result, [args for args in calls if args[3]=='send-keys']
-
-    def test_echo_and_clear_without_submitting(self):
-        ok, calls = self.probe(); self.assertTrue(ok)
-        self.assertEqual([a[-1] for a in calls], ['~','C-u'])
-
-    def test_unresponsive_or_uncleared_input_is_not_ready(self):
-        self.assertFalse(self.probe(echo=False)[0]); self.assertFalse(self.probe(clear=False)[0])
-
-    def test_trust_dialog_and_leftover_shell_receive_no_keys(self):
-        for kw in ({'menu':True},{'shell':True}):
-            ok, calls = self.probe(**kw); self.assertFalse(ok); self.assertEqual(calls, [])
-
-    def test_replacement_launcher_is_refused(self):
-        with self.assertRaisesRegex(ValueError, 'changed'): self.probe(replace=True)
 
 
 unittest.main(verbosity=2)

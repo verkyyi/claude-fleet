@@ -1162,11 +1162,11 @@ PY
 done
 ok "Q2 spawn hands back the cap (exit 2) and the dedup (exit 3) as the spawner said"
 # …and the spawners of a session the person opens (no agent file, no issue) stamp it
-# BEFORE the launch: dash-raw-session.sh (cold + warm claim), scratch-pool.sh, fleet-restore.sh.
-for f in dash-raw-session.sh scratch-pool.sh fleet-restore.sh; do
+# BEFORE the launch: dash-raw-session.sh, fleet-restore.sh.
+for f in dash-raw-session.sh fleet-restore.sh; do
   grep -q 'fleet_win_stamp_cmd @agent_spawn 1' "$BIN/$f" || fail "Q2: $f no longer stamps @agent_spawn 1 before the launch"
 done
-grep -q 'stamp_option @agent_spawn 1' "$BIN/dash-raw-session.sh" || fail "Q2: a claimed warm window keeps no @agent_spawn"
+grep -q 'stamp_option @agent_spawn 1' "$BIN/dash-raw-session.sh" || fail "Q2: a scratch window keeps no @agent_spawn"
 ok "Q2 the person's no-issue sessions are stamped @agent_spawn 1 before their launcher mounts the group"
 
 # --- S: a fleet of two repos (issue #4761) -------------------------------------
