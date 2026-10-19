@@ -21,11 +21,12 @@
 #   fleet's own release fleet-release.sh fleet-stable.sh fleet-train-failfast.sh
 #                      fleet-train-macos.sh fleet-train-quarantine.sh fleet-macos-watch.sh
 #                      fleet-train-runner.sh (#3864: the Linux half's runners)
+#                      fleet-train-reuse.sh (#4794: the PR runs it reuses)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${NO_DIRECT_GH_ROOT:-$BIN/..}"
 BASE="${NO_DIRECT_GH_BASELINE:-$BIN/no-direct-gh.baseline}"
-WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh '
+WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh '
 RE='(^|[^a-z_-])gh (issue|pr|api|search|label|repo|run|auth)'
 [ -f "$BASE" ] || { echo "no-direct-gh: $BASE missing" >&2; exit 1; }
 

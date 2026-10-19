@@ -69,6 +69,20 @@
 #               full-suite fallback prints every test, a change that maps to none
 #               prints nothing), exit 0. The nightly's miss analysis
 #               (bin/fleet-nightly-miss.sh) asks it of every merge.
+#   --among "F …" (with --changed --list-only — issue #4794) select among the files
+#               F (paths from bin/, `../x` for one outside it) instead of the
+#               selftests, by the same rules a)–c): a changed F itself, an F naming a
+#               changed basename, an F naming a touched lib function. No lint group,
+#               no parts; the full-suite fallback lists every F. A PR workflow that
+#               runs its own entry scripts asks it whether this change is theirs
+#               (bin/ci-plan.sh).
+#   --exact     (with --changed — issue #4794) diff from B itself, not from its merge
+#               base with HEAD: B may be any commit or TREE, even one off HEAD's
+#               history (a PR's merge tree the train reuses — bin/fleet-train-reuse.sh).
+#   --proven F  (with --changed; the RELEASE TRAIN only — issue #4794) skip a selected
+#               test F names (lines `<test><TAB><why>`, bin/fleet-train-reuse.sh): it
+#               passed on a PR's merge tree this change does not touch it from. Prints
+#               `REUSED <test> ← <why>`; before the deal, so the shards still partition.
 #   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
 #               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
 #               reader) unless this change touches it; prints `QUARANTINED <test> …`.
@@ -253,7 +267,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky='' solo=0 list_only=0
+retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven=''
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -279,6 +293,13 @@ while [ "$#" -gt 0 ]; do
     --shard=*) shard_spec=${1#--shard=}; shift ;;
     --plan)  plan=1; shift; continue ;;
     --list-only) list_only=1; shift; continue ;;
+    --exact) exact=1; shift; continue ;;
+    --proven) [ "$#" -ge 2 ] && [ -f "$2" ] \
+                || { echo "run-selftests: --proven needs a file of test names" >&2; exit 2; }
+              proven=$(abspath "$2"); shift 2; continue ;;
+    --among) [ "$#" -ge 2 ] && [ -n "$2" ] \
+               || { echo "run-selftests: --among needs a list of files" >&2; exit 2; }
+             among=$2; shift 2; continue ;;
     --solo)  case "${2:-}" in ''|*[!0-9]*) echo "run-selftests: --solo needs whole seconds" >&2; exit 2 ;; esac
              solo=$2; shift 2; continue ;;
     --durations) [ "$#" -ge 2 ] && [ -n "$2" ] \
@@ -374,6 +395,12 @@ hunk_ranges() {
 if [ "$list_only" = 1 ] && [ -z "$changed_base" ]; then
   echo "run-selftests: --list-only needs --changed <base> (it lists what a change selects)" >&2; exit 2
 fi
+if [ -n "$proven" ] || [ "$exact" = 1 ]; then
+  [ -n "$changed_base" ] || { echo "run-selftests: --exact / --proven need --changed <base>" >&2; exit 2; }
+fi
+if [ -n "$among" ] && { [ -z "$changed_base" ] || [ "$list_only" != 1 ]; }; then
+  echo "run-selftests: --among needs --changed <base> --list-only (it only answers which files a change is related to)" >&2; exit 2
+fi
 if [ -n "$q_list$q_prev" ] && [ -z "$changed_base" ]; then
   echo "run-selftests: --quarantine / --prev-fails need --changed <base> (the release train's run)" >&2; exit 2
 fi
@@ -387,13 +414,19 @@ if [ -n "$changed_base" ]; then
     || { echo "run-selftests: --changed picks the tests itself — drop the test names" >&2; exit 2; }
   repo_dir=$(cd .. && pwd)
   full_reason=''
-  if ! mb=$(git -C "$repo_dir" merge-base "$changed_base" HEAD 2>/dev/null) || [ -z "$mb" ]; then
+  if [ "$exact" = 1 ]; then
+    mb=$(git -C "$repo_dir" rev-parse --verify -q "$changed_base^{tree}" 2>/dev/null) \
+      || { mb=''; full_reason="base '$changed_base' does not resolve to a tree"; }
+  elif ! mb=$(git -C "$repo_dir" merge-base "$changed_base" HEAD 2>/dev/null) || [ -z "$mb" ]; then
     full_reason="base '$changed_base' does not resolve to a commit with a merge base"
-  else
+  fi
+  if [ -z "$full_reason" ]; then
     changed_files=$(git -C "$repo_dir" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) \
       || full_reason="git diff $mb..HEAD failed"
   fi
   picks=''   # "test<TAB>reason" lines; the first reason per test wins
+  # The files a change is matched against: the selftests, or --among's list.
+  if [ -n "$among" ]; then pool=$among; else pool=$(printf '%s ' *-selftest.sh); fi
   if [ -z "$full_reason" ]; then
     touch_known=1
     nl='
@@ -401,10 +434,17 @@ if [ -n "$changed_base" ]; then
     tab=$(printf '\t')
     for f in $changed_files; do
       b=${f##*/}
-      case "$f" in
-        bin/*-selftest.sh)
-          [ -f "$b" ] && picks="$picks$b${tab}changed itself$nl" ;;
-      esac
+      if [ -n "$among" ]; then
+        for p in $pool; do
+          case "$p" in ../*) pf=${p#../} ;; *) pf=bin/$p ;; esac
+          [ "$pf" = "$f" ] && picks="$picks$p${tab}changed itself$nl"
+        done
+      else
+        case "$f" in
+          bin/*-selftest.sh)
+            [ -f "$b" ] && picks="$picks$b${tab}changed itself$nl" ;;
+        esac
+      fi
       case "$f" in
         bin/*-selftest.sh) ;;
         bin/*lib.sh)
@@ -412,7 +452,8 @@ if [ -n "$changed_base" ]; then
           funcs=$( { lib_funcs "$mb" "$f" "$(printf '%s\n' "$diff_u0" | hunk_ranges old)"
                      lib_funcs HEAD "$f" "$(printf '%s\n' "$diff_u0" | hunk_ranges new)"; } | sort -u)
           for fn in $funcs; do
-            for t in $(grep -lwF -- "$fn" *-selftest.sh 2>/dev/null); do
+            # shellcheck disable=SC2086  # intentional: $pool is a file list
+            for t in $(grep -lwF -- "$fn" $pool 2>/dev/null); do
               case "$fn" in
                 [A-Z]*) picks="$picks$t${tab}mentions \$$fn ($f)$nl" ;;
                 *)      picks="$picks$t${tab}mentions $fn() ($f)$nl" ;;
@@ -428,9 +469,10 @@ if [ -n "$changed_base" ]; then
       # An EXTENSIONLESS basename (bin/fleet) is an ordinary word — `fleet` is in
       # 330 of the tests — so it selects only where a test names it as a PATH:
       # `/fleet` not followed by a name character or another `/` (issue #1734).
+      # shellcheck disable=SC2086  # intentional: $pool is a file list
       case "$b" in
-        *.*) hits=$(grep -lF -- "$b" *-selftest.sh 2>/dev/null) ;;
-        *)   hits=$(grep -lE -- "/$b([^A-Za-z0-9_./-]|\$)" *-selftest.sh 2>/dev/null) ;;
+        *.*) hits=$(grep -lF -- "$b" $pool 2>/dev/null) ;;
+        *)   hits=$(grep -lE -- "/$b([^A-Za-z0-9_./-]|\$)" $pool 2>/dev/null) ;;
       esac
       for t in $hits; do
         picks="$picks$t${tab}mentions $b$nl"
@@ -440,6 +482,7 @@ if [ -n "$changed_base" ]; then
     # checks under its own name and ceiling (issue #2955): it goes wherever that
     # test goes, since the files it exercises are named only there.
     parts_of() {
+      [ -z "$among" ] || return 0
       for t in $(printf '%s' "$1" | cut -f1 | sort -u); do
         for p in $(grep -lx -- "# selftest-part-of: $t" *-selftest.sh 2>/dev/null); do
           printf '%s\t%s\n' "$p" "part of $t"
@@ -456,12 +499,14 @@ if [ -n "$changed_base" ]; then
     done
   fi
   if [ -n "$full_reason" ]; then
+    # shellcheck disable=SC2086  # intentional: $among is a file list
+    [ -n "$among" ] && { printf '%s\n' $among; exit 0; }
     [ "$list_only" = 1 ] && { ls *-selftest.sh 2>/dev/null; exit 0; }
     printf 'select: * ← full suite (%s)\n' "$full_reason"
     set -- *-selftest.sh
   else
     always=''
-    for a in $SELFTEST_ALWAYS; do
+    [ -n "$among" ] || for a in $SELFTEST_ALWAYS; do
       [ -f "$a-selftest.sh" ] && always="$always$a-selftest.sh${tab}always (lint group)$nl"
     done
     picks="$picks$always$(parts_of "$always")$nl"
@@ -534,6 +579,23 @@ EOF
     # shellcheck disable=SC2086  # intentional: test names carry no whitespace
     set -- $keep
     [ "$#" -gt 0 ] || { echo 'run-selftests: every selected test is quarantined — nothing to run'; exit 0; }
+  fi
+fi
+# THE TRAIN'S REUSE (issue #4794): a test that passed on a PR's merge tree, which
+# this change does not touch from there (bin/fleet-train-reuse.sh decided it with
+# this same selector, --exact), is not run again. Before the deal, like the above.
+if [ -n "$proven" ]; then
+  keep=''
+  for t in "$@"; do
+    p_row=$(awk -F '\t' -v t="$t" '$1 == t { print; exit }' "$proven")
+    if [ -z "$p_row" ]; then keep="$keep $t"; continue; fi
+    printf 'REUSED %s ← %s\n' "$t" "$(printf '%s' "$p_row" | cut -f2-)"
+  done
+  # shellcheck disable=SC2086  # intentional: test names carry no whitespace
+  set -- $keep
+  if [ "$#" -eq 0 ]; then
+    [ "$plan" = 1 ] && { echo "plan tests=0 total=0 shards=$shard_n heaviest=0"; exit 0; }
+    echo 'run-selftests: every selected test passed on a PR already — nothing to run'; exit 0
   fi
 fi
 q_prev_names=''

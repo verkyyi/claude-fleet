@@ -89,7 +89,61 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    # How wide this PR's gate runs, and what it tested (issue #4794). The width
+    # follows the selection's recorded cost (bin/fleet-train-plan.sh, the train's
+    # planner: ≤ ~3 minutes a shard, 1..18 wide) instead of 18 runners for a change
+    # that selects a handful of tests — a queue every other PR waited in. The record
+    # (`selftests-selection`: the merge tree tested, its base and head, the tests
+    # selected) is what the release train reuses (bin/fleet-train-reuse.sh): a test
+    # green here that the train's change does not touch from this tree is not run
+    # again. A dispatch keeps its own width and records nothing.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.pr_shards }}
+      step_minutes: ${{ steps.plan.outputs.pr_step_minutes }}
+      job_minutes: ${{ steps.plan.outputs.pr_job_minutes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: fleet-train-plan.sh
+        id: plan
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          {
+            echo "### 预测（\`--changed ${BASE}\`，按 bin/selftest-durations.txt）"
+            echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
+            echo "|---|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          bash bin/fleet-train-plan.sh --base "$BASE" --prefix pr --min 1 --max 18 --target 180
+      - name: record the selection
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          set -eo pipefail
+          # the event's merge commit: HEAD^1 the base it merged, HEAD^2 the PR head
+          {
+            echo "commit $(git rev-parse HEAD)"
+            echo "tree $(git rev-parse 'HEAD^{tree}')"
+            echo "base $(git rev-parse 'HEAD^1')"
+            echo "head $(git rev-parse 'HEAD^2')"
+            (cd bin && FLEET_HEAVY=0 bash run-selftests.sh --changed "$BASE" --list-only) | sed 's/^/test /'
+          } > selection.txt
+          echo "recorded $(grep -c '^test ' selection.txt || true) selected test(s) on tree $(git rev-parse --short 'HEAD^{tree}')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: selftests-selection
+          path: selection.txt
+          retention-days: 14
+
   selftests:
+    needs: plan
+    # a dispatch has no plan (skipped): run anyway, at its own width
+    if: ${{ !cancelled() && (needs.plan.result == 'success' || github.event_name != 'pull_request') }}
     # FANNED OUT over N runners (issue #681). The suite had grown to 120 tests and
     # ~9 minutes against a 10-minute bound — one minute of margin, already spent
     # once — and the consequence is not "CI is slow" but that green stops meaning
@@ -134,4 +188,9 @@ jobs:
       sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
       runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
       mirror: ${{ inputs.mirror || '' }}
-      shards: ${{ inputs.shards || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]' }}
+      # the plan's bounds follow its forecast (a full-suite PR's heaviest shard
+      # was predicted 417 s, ran 479 s against the old fixed 8 minutes); the
+      # per-test 240 s ceiling still names a hung test
+      step_minutes: ${{ needs.plan.outputs.step_minutes || '' }}
+      job_minutes: ${{ needs.plan.outputs.job_minutes || '' }}
+      shards: ${{ inputs.shards || needs.plan.outputs.shards || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]' }}

@@ -47,6 +47,13 @@ on:
         type: string
         required: false
         default: ''
+      # The release train's reuse (issue #4794): the tests that passed on a PR's
+      # merge tree untouched since (bin/fleet-train-reuse.sh) — never run again.
+      proven:
+        description: 'lines <test><TAB><why> (run-selftests.sh --proven) — the train only'
+        type: string
+        required: false
+        default: ''
       drill_red:
         description: 'a test counted red after it runs (the quarantine drill) — the train only'
         type: string
@@ -247,6 +254,7 @@ jobs:
           # The train's quarantine (issue #3243): empty everywhere but the train.
           QUARANTINE: ${{ inputs.quarantine }}
           PREV_FAILS: ${{ inputs.prev_fails }}
+          PROVEN: ${{ inputs.proven }}
           DRILL_RED: ${{ inputs.drill_red }}
           # The train's one rerun (issue #3866): empty everywhere but the train.
           RETRY_RED: ${{ inputs.retry_red }}
@@ -279,6 +287,9 @@ jobs:
           fi
           if [ -n "$CHANGED_BASE" ] && [ -n "$PREV_FAILS" ] && has --prev-fails; then
             printf '%s\n' "$PREV_FAILS" > "$RUNNER_TEMP/prev-fails"; set -- --prev-fails "$RUNNER_TEMP/prev-fails" "$@"
+          fi
+          if [ -n "$CHANGED_BASE" ] && [ -n "$PROVEN" ] && has --proven; then
+            printf '%s\n' "$PROVEN" > "$RUNNER_TEMP/proven"; set -- --proven "$RUNNER_TEMP/proven" "$@"
           fi
           [ -z "$DRILL_RED" ] || ! has --drill-red || set -- --drill-red "$DRILL_RED" "$@"
           [ -z "$RETRY_RED" ] || ! has --retry-red || set -- --retry-red "$RETRY_RED" "$@"

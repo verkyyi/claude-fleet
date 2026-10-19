@@ -24,10 +24,7 @@ import (
 // sets it up under CCQUOTA_FLEET=1.
 func newFleetHarness(t *testing.T) *harness {
 	t.Helper()
-	st := openTestStore(t)
-	if err := st.EnsureNodes(); err != nil {
-		t.Fatal(err)
-	}
+	st := openFleetTestStore(t)
 	// Existing behavior fixtures represent an installation awaiting policy migration.
 	if err := st.SetFleetSetting(CredPolicyModeKey, "legacy", time.Now()); err != nil {
 		t.Fatal(err)
