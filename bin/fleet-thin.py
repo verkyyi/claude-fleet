@@ -63,14 +63,19 @@ after 1 · 2 · 4 … 30 s to the SAME view (`--resume`). Three connections in a
 row that never came up (no valid 7502 and gone within FLEET_THIN_UP_SECS):
 the hub is asked for another online machine to be home (`--avoid <home>`) —
 unless the hub does not answer either (issue #3007): then it is this computer's
-own line that is down, the home is kept and the view with it.
+own line that is down, the home is kept and the view with it. No other machine
+to go to (`--avoid` exits 1): back to the same home, its view and the backoff
+(issue #4829) — never asking the hub for nothing until the person gives up.
 No fleet of yours there (issue #3054): the home answers `no fleet session is
 live` (rc 3) — a newcomer whose only login is the computer they type on — or the
 hub is still opening their first login. Then not a backoff but the old client's
 first-session road: a lease, `fleet-client-place.sh - home --agent claude`, the
 hub's 「正在为你开机器（m），约 N 秒」 while it opens, and the next connection to the
-machine the session opened on, onto it (`--want <worker_id>`); a failure is three
-lines — 没开出来 · 原因 · 下一步 (who to ask) — and exit 1.
+machine the session opened on, onto it (`--want <worker_id>`); a refusal that
+heals by itself — the machine's credentials not settled, its tmux restarting,
+its node between two beats, the hub's own 5xx — is waited out, said on the screen, for
+FLEET_THIN_FIRST_WAIT s (issue #4829); a failure is three lines — 没开出来 · 原因 ·
+下一步 (who to ask) — and exit 1.
 Between two connections a new client version (the install's .client-version,
 `fleet-client-update.sh start` → 3) is exec'd in place, view and home kept.
 
@@ -99,6 +104,7 @@ silent that long is given up (#4828),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
+FLEET_THIN_FIRST_WAIT (300),
 FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_FETCH_SECS (600), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
 `fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
@@ -280,6 +286,27 @@ def pick(home="", avoid="", reconnect=False):
 
 OPENING = "opening"   # pick()'s why: the hub is opening this person's first login
 NO_FLEET = 3          # fleet-remote-view.sh attach --thin: no fleet session is live there
+# A machine's refusal that heals by itself (issue #4829): the hub's placement
+# words (tokenledger fleet_write.go) for a machine coming up — its credentials
+# or repo not settled yet («not ready: …»), its fleet's tmux not running yet
+# (excludedDown, an update's restart too), its node between two beats
+# («offline»). 「没有你的登录」, compute off, full … do not heal by waiting — nor
+# does a 「；正在更新（…）」 the hub appends to any reason.
+HEALS = ("not ready: ", "tmux 服务没在跑", "offline")
+
+
+def first_heals(said):
+    """The part of a first-session refusal that heals by itself — «<machine>: <why>»
+    or the hub's own 5xx — else "". `said` is fleet-client-place.sh's line: «No
+    machine can take a new session now — m1: why; m2: why», or its error."""
+    said = str(said or "")
+    if re.search(r"HTTP 5[0-9][0-9]|retry shortly", said):
+        return " ".join(said.split())[:120]
+    for part in said.split(" — ", 1)[-1].split("; "):
+        why = part.split(": ", 1)[1] if ": " in part else ""
+        if why.startswith(HEALS):
+            return part.strip()[:120]
+    return ""
 
 
 def hub_conf():
@@ -1187,6 +1214,7 @@ class Thin:
         deadline = time.time() + env_num("FLEET_HOME_FIRST_OPENING_MAX", 2400)
         settle = env_num("FLEET_THIN_FIRST_SETTLE", 600)
         lease, tries, said, acct = "", 0, "", {}
+        wait_end = 0.0   # a refusal that heals by itself is waited on until then (#4829)
         # The hub opened a login for us (it said opening, at the pick or since):
         # once it stops saying so, the login exists but its fleet may not have
         # reported yet, and the place keeps answering 「没有你的登录」 meanwhile —
@@ -1256,8 +1284,17 @@ class Thin:
                     self.first_say(tr("thin_first_settle_fmt", machine or "?", "%d" % (settle_end - now)))
                     time.sleep(retry)
                     continue
+                heals = first_heals(said)
+                if heals:
+                    # the machine is coming up (or the hub said retry): wait, said, bounded
+                    now = time.time()
+                    wait_end = wait_end or now + env_num("FLEET_THIN_FIRST_WAIT", 300)
+                    if now < wait_end and now < deadline:
+                        self.first_say(tr("thin_first_wait_fmt", heals, "%d" % (wait_end - now)))
+                        time.sleep(retry)
+                        continue
                 tries += 1
-                if tries >= 2:
+                if tries >= 2 or heals:
                     return failed(acct.get("why") or said)
                 self.first_say(tr("thin_first_retry_fmt", "%g" % retry))
                 time.sleep(retry)
@@ -1317,6 +1354,14 @@ class Thin:
                         return 1
                     fails, k = 0, 0
                     continue
+                if not up and rc == 1 and why and why != OPENING and self.avoid and not self.home and not self.local:
+                    # 换家 found no other machine (`--avoid` exit 1): the home it left is
+                    # still the only one — back to it, its view and the backoff, never
+                    # asking the hub for nothing until the person gives up (#4829)
+                    self.home, self.avoid = self.avoid, ""
+                    self.resume = self.up_home == self.home
+                    tlog("rehome", self.home, "", "", "", "", "", "no other home: back to %s" % self.home)
+                    write_out(("fleet · %s\r\n" % tr("thin_rehome_back_fmt", self.home)).encode("utf-8", "replace"))
                 if up:
                     fails, k, self.firsts = 0, 0, 0
                     self.up_home, self.restart_end = self.home, 0.0
