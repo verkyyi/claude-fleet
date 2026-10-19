@@ -277,6 +277,13 @@ fleet debug report
 - **是什么**：机器上留着几个发布版、占多少磁盘。
 - **WARN / FAIL 怎么办**：WARN = 比平常多：更新器会清掉用不到的，看 `update.log` 里为什么没清。
 
+#### `image`
+
+来自 `fleet doctor --machine`。
+
+- **是什么**：只在个人 pod 这类「运行时归镜像」的机器上有：它没有更新任务，只有 pod 被滚到新镜像才会跟上 stable；这一行拿入口的 stable 比本机运行时。
+- **WARN / FAIL 怎么办**：WARN = 落后 stable、本机不会自己追上：集群有开号执行器时入口会自动滚（`roll-user-pod`）；没有的话照提示用 `render.py --image-patch` 换成 stable 那一版的节点镜像，再 `kubectl patch deploy <pod>`。
+
 #### `credpool`
 
 来自 `fleet doctor --machine`。
