@@ -22,6 +22,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 HOOK="$BIN/refocus-hook.sh"
 [ -x "$HOOK" ] || { echo "selftest: $HOOK missing/not executable" >&2; exit 2; }
 
@@ -37,10 +38,8 @@ REPO=acme/widgets
 CONF="$WORK/conf"
 mkdir -p "$CONF/fleets/$SESS" "$WORK/hub" "$WORK/widgets-issue-12" "$WORK/fakebin" \
          "$WORK/.claude-dash/fleets/acme-widgets"
+fx_repo "$CONF" "$SESS" "$REPO" FLEET_MAIN="$WORK/widgets" FLEET_BASE_BRANCH=trunk
 cat > "$CONF/fleets/$SESS/conf" <<CONF_EOF
-FLEET_REPO=$REPO
-FLEET_MAIN=$WORK/widgets
-FLEET_BASE_BRANCH=trunk
 FLEET_MERGE_METHOD=rebase
 CONF_EOF
 printf 'issue-12\t#345\tOPEN\t✓\tready\t\nissue-99\t#400\tMERGED\t✓\t\tabc\n' \
