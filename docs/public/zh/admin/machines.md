@@ -52,8 +52,8 @@ fleet-machine-policy.sh clear gh:2987262               # 撤掉名单：恢复�
 2. **把空闲的会话搬走**：在这台机器上，每个账号各执行一次
 
    ```sh
-   ~/.claude/fleet/bin/fleet-spot-evacuate.sh --dry-run   # 先看会搬哪些、去哪
-   ~/.claude/fleet/bin/fleet-spot-evacuate.sh             # 真搬
+   ~/.claude/fleet/bin/fleet-evacuate.sh --dry-run   # 先看会搬哪些、去哪
+   ~/.claude/fleet/bin/fleet-evacuate.sh             # 真搬
    ```
 
    只搬空闲、没有未提交改动的会话，正在干活的一个都不碰；搬过去的会话在另一台机器上原样接着。输出的 `left N` 是还留着的，等它们做完再执行一次。
@@ -72,7 +72,3 @@ fleet-machine-policy.sh clear gh:2987262               # 撤掉名单：恢复�
 1. 先按「计划下线」把会话搬空。
 2. 机器上的每个人的账号先收回（[开号与删号](accounts.md)）。
 3. 卡片上 **移除**：这台机器的入场证立刻作废，卡片消失。以后要再接回来，得用新的加入码。
-
-## 临时机器（自托管，可选）
-
-入口跑在 Kubernetes 上、并配置了临时机器镜像时，设置页「临时机器」打开后，固定机器都没空时入口会在集群里租一台，空闲 30 分钟自动删掉。

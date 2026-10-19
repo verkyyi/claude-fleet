@@ -41,7 +41,7 @@ func elector(t *testing.T, url, name string) *Elector {
 // degenerate case is exactly the hub before #2123.
 func TestSingleHubAlwaysLeads(t *testing.T) {
 	for _, e := range []*Elector{nil, elector(t, "", "solo")} {
-		for _, job := range []string{"alerts", "prune", "spot"} {
+		for _, job := range []string{"alerts", "prune", "trial"} {
 			if !e.Leader(context.Background(), job) {
 				t.Fatalf("single hub: Leader(%q) = false", job)
 			}
@@ -97,7 +97,7 @@ func terminate(t *testing.T, url string, e *Elector) {
 	}
 }
 
-var jobs = []string{"prune", "alerts", "spot"}
+var jobs = []string{"prune", "alerts", "trial"}
 
 // Two replicas on one Postgres for an hour of 15 s ticks (accelerated clock):
 // every job runs on exactly one replica at every tick; halfway the leader dies

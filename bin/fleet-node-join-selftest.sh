@@ -23,9 +23,9 @@
 #                nothing installed
 #   E. format    a malformed code exits 2 before any request reaches the hub
 #   F. no-admin  --no-admin writes no CCQUOTA_FLEET_ADMIN line
-#   G. kind      a join the hub answers with "kind":"ephemeral" (a SPOT node,
-#                issue #1428) writes CCQUOTA_FLEET_NODE_KIND=ephemeral and says
-#                so; a fixed join (A) writes no such line
+#   G. kind      the SPOT nodes are gone (issue #4797): a join an older hub
+#                answers "kind":"ephemeral" writes no CCQUOTA_FLEET_NODE_KIND,
+#                and a rerun drops the line an older join wrote
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 SB="$(mktemp -d "${TMPDIR:-/tmp}/fleet-join-st.XXXXXX")"
@@ -182,17 +182,19 @@ if [ "$(cat "$SB/rc")" = 0 ] && ! grep -q ADMIN "$SB/h5/.config/claude-fleet/nod
 else bad "F rc=$(cat "$SB/rc"): $(cat "$SB/h5/.config/claude-fleet/node.env" 2>/dev/null)"; fi
 
 # ── G. kind ──────────────────────────────────────────────────────────────
+# The SPOT nodes are gone (issue #4797): an older hub's "kind":"ephemeral"
+# writes no kind line, and a rerun drops one an older join left behind.
 touch "$SB/ephemeral"
 run_join h6 --token "$CODE1"
-if [ "$(cat "$SB/rc")" = 0 ] && grep -qx 'CCQUOTA_FLEET_NODE_KIND=ephemeral' "$SB/h6/.config/claude-fleet/node.env" \
-   && grep -q 'SPOT node (ephemeral)' "$SB/out"; then
-  ok "G an ephemeral join writes CCQUOTA_FLEET_NODE_KIND=ephemeral and says so"
+if [ "$(cat "$SB/rc")" = 0 ] && ! grep -q 'NODE_KIND' "$SB/h6/.config/claude-fleet/node.env" \
+   && ! grep -q 'SPOT' "$SB/out"; then
+  ok "G an ephemeral answer writes no node kind"
 else bad "G rc=$(cat "$SB/rc"): $(cat "$SB/h6/.config/claude-fleet/node.env" 2>/dev/null; grep join: "$SB/out")"; fi
-# A rerun keeps the kind: load_env reads it back before write_env rewrites.
 rm -f "$SB/ephemeral"
+printf 'CCQUOTA_FLEET_NODE_KIND=ephemeral\n' >> "$SB/h6/.config/claude-fleet/node.env"
 run_join h6 --token "$CODE2"
-if [ "$(cat "$SB/rc")" = 0 ] && grep -qx 'CCQUOTA_FLEET_NODE_KIND=ephemeral' "$SB/h6/.config/claude-fleet/node.env"; then
-  ok "G a rerun keeps the saved kind"
+if [ "$(cat "$SB/rc")" = 0 ] && ! grep -q 'NODE_KIND' "$SB/h6/.config/claude-fleet/node.env"; then
+  ok "G a rerun drops an old node kind"
 else bad "G rerun rc=$(cat "$SB/rc"): $(cat "$SB/h6/.config/claude-fleet/node.env" 2>/dev/null)"; fi
 
 [ "$fail" = 0 ] && echo "PASS fleet-node-join-selftest" || echo "FAIL fleet-node-join-selftest"

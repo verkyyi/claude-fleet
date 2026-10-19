@@ -21,9 +21,10 @@ import (
 // running hub cannot change about itself (EPIC #1982 rule 2).
 //
 // Reading a setting goes through Server.setting(key) and nothing else: the
-// stored value, else the default below. One old value is still read where
-// the setting is unset — a configured SPOT image means fleet.spot on — and
-// copied into the database once at start (MigrateLegacySettings).
+// stored value, else the default below. A key may still name an old value
+// read where the setting is unset, copied into the database once at start
+// (MigrateLegacySettings); none does since fleet.spot left with the SPOT
+// nodes (claude-fleet#4797).
 // --public-badges, CCQUOTA_FLEET_AUTO_ASSIGN and
 // CCQUOTA_FLEET_PRINCIPAL_LOGINS are no longer read at all
 // (claude-fleet#2087): their copies are in the database since #1986.
@@ -34,7 +35,6 @@ const (
 	PoolSkipPctKey  = "pool.skip_pct"
 	PoolMoveFullKey = "pool.move_when_full"
 	AutoAssignKey   = "fleet.auto_assign"
-	SpotKey         = "fleet.spot"
 	RoutesExtraKey  = "fleet.routes_extra"
 	MachineNamesKey = "fleet.machine_names"
 	// SparesKey / SpareMaxKey are fleet_spare.go's (claude-fleet#2263).
@@ -145,15 +145,6 @@ var hubSettings = map[string]hubSetting{
 			}
 			return v, ""
 		}},
-	SpotKey: {def: "off", help: "rented SPOT machines when no machine has room (needs CCQUOTA_FLEET_SPOT_IMAGE)",
-		check: onOff(SpotKey, "off"),
-		legacy: func(s *Server) string {
-			// Before the switch, a configured image WAS on.
-			if s.Spot != nil {
-				return "on"
-			}
-			return ""
-		}},
 	RoutesExtraKey: {def: "", help: "more ways in, on top of CCQUOTA_FLEET_ROUTES: the same JSON array",
 		check: func(_ *Server, v string) (string, string) {
 			ms, err := ParseFleetRoutes(v)
@@ -189,7 +180,7 @@ var hubSettings = map[string]hubSetting{
 		check: checkIntSetting(TrialIdleWarnKey, 30, 3600, defaultTrialIdleWarnSecs)},
 	TrialIdleKey: {def: "240", help: "a trial with no input for this many seconds gives its machine back; the conversation is kept 24 h (claude-fleet#4060)",
 		check: checkIntSetting(TrialIdleKey, 60, 7200, defaultTrialIdleSecs)},
-	CredPodProvidersKey: {def: credPodProvidersDef, help: "the subscription providers every cluster pod (u-<nonce>, fleet-linux-*, ccquota-spot-*) may use, whatever its owner's allowance: comma-separated (codex, claude), or * for no limit (claude-fleet#4601)",
+	CredPodProvidersKey: {def: credPodProvidersDef, help: "the subscription providers every cluster pod (u-<nonce>, fleet-linux-*) may use, whatever its owner's allowance: comma-separated (codex, claude), or * for no limit (claude-fleet#4601)",
 		check: checkCredPodProviders},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
@@ -322,7 +313,7 @@ func machineLoginSettingKey(principal string) string {
 }
 
 // setting is the ONE reading of a hub setting: the stored value, else the
-// old value (a SPOT image), else the default. An unreadable table reads
+// old value (a key's legacy), else the default. An unreadable table reads
 // as the old variable or the default.
 func (s *Server) setting(key string) string {
 	spec, ok := hubSettings[key]
@@ -382,14 +373,6 @@ func (s *Server) autoAssign() []string {
 func (s *Server) autoAssignOn() bool {
 	v := strings.TrimSpace(s.setting(AutoAssignKey))
 	return v != "" && !strings.EqualFold(v, noneValue)
-}
-
-// spot is the SPOT controller while fleet.spot is on, else nil.
-func (s *Server) spot() *SpotController {
-	if s.Spot == nil || !s.settingOn(SpotKey) {
-		return nil
-	}
-	return s.Spot
 }
 
 // routesExtra is fleet.routes_extra, parsed; a stored value that no longer

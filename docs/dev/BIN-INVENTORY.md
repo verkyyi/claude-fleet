@@ -55,7 +55,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 65 |
 | 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 63 |
 | 执行会话（`fleet-claim` / worker start hook） | 核心 | 46 |
-| 承载节点（managed-node / spot-node） | 核心 | 93 |
+| 承载节点（managed-node） | 核心 | 93 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 10 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 2 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 5 |
@@ -88,7 +88,7 @@ CI 自测引用链读到的数据文件（基线、夹具、表）。没人按�
 | `bin/fleet-hub-latency.sh` | Hub（`tokenledger`） | 跨机状态延迟测量（「≤ 3 秒」），docs/dev/FLEET-HUB.md |
 | `bin/fleet-hub-service.py` | Hub（`tokenledger`） | 管理员装 hub 的 launchd 服务，docs/dev/FLEET-HUB.md · INSTALL.md |
 | `bin/fleet-list.sh` | 终端看台与薄客户端 | 列出 fleet，README「bin/fleet-list.sh」 |
-| `bin/fleet-machine-policy.sh` | 承载节点（managed-node / spot-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
+| `bin/fleet-machine-policy.sh` | 承载节点（managed-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
 | `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md |
 | `bin/fleet-phone-mcp.py` | Fleet MCP（status / where / context / open / show） | 管理员 `fleet service add phone-mcp` 起的服务，docs/dev/PHONE-MCP.md |
 | `bin/fleet-report-stats.sh` | 收集与账本观察（collect / ledger-watch） | EPIC #935 回报质量指标，docs/dev/ARCHITECTURE.md |

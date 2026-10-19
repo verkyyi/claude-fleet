@@ -2876,7 +2876,8 @@ def plan(a):
 # compute on/off) hands its lines here instead — root edits the store's copy in
 # place (its owner and mode kept), node.pub.env follows, and the link stays: a
 # `mv node.env.tmp node.env` from the login's side would put the token back in
-# the home (EPIC #2293 ①). Only the node's own keys pass.
+# the home (EPIC #2293 ①). Only the node's own keys pass. NODE_KIND is only
+# ever blanked now — the join drops a SPOT node's old line (issue #4797).
 SETENV_KEYS = ("CCQUOTA_TOKEN", "CCQUOTA_HUB_URL", "CCQUOTA_FLEET", "CCQUOTA_FLEET_ADMIN",
                "CCQUOTA_FLEET_NODE_KIND", "CCQUOTA_FLEET_COMPUTE", "CCQUOTA_FLEET_COMPUTE_FORCE",
                "CCQUOTA_FLEET_PERSONAL")

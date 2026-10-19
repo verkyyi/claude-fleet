@@ -42,11 +42,11 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 		Provider: credvault.Claude, Account: "icloud", Secret: credvault.Secret{SetupToken: "sk-ant-oat01-X", ExpiresAt: &exp}}); code != http.StatusOK {
 		t.Fatalf("put pool: %d %v", code, out)
 	}
-	// Pause it, put a machine into maintenance, turn SPOT on, change a setting.
+	// Pause it, put a machine into maintenance, cap a machine, change a setting.
 	for _, kv := range [][2]string{
 		{PoolPausedPrefix + "icloud", "on"},
 		{NodeMaintenancePrefix + "mac-c", "upgrade"},
-		{SpotKey, "on"},
+		{"fleet.node_cap.mac-c", "3"},
 		{PoolSkipPctKey, "90"},
 	} {
 		if code, out := h.post(t, "/v1/fleet/settings", map[string]string{"key": kv[0], "value": kv[1]}); code != http.StatusOK {
@@ -100,7 +100,7 @@ func TestAdminAudit_EveryWriteHasItsRow(t *testing.T) {
 		{auditSubs, store.CredPut, "icloud"},
 		{auditSubs, "setting", PoolPausedPrefix + "icloud"},
 		{auditMachines, "node_maintenance", "mac-c"},
-		{auditMachines, "setting", SpotKey},
+		{auditMachines, "setting", "fleet.node_cap.mac-c"},
 		{auditSubs, "setting", PoolSkipPctKey},
 		{auditSubs, store.CredDelete, "icloud"},
 		{auditMachines, "node_join_code", "join:web-1"},
@@ -207,7 +207,7 @@ func TestAuditKinds(t *testing.T) {
 	}
 	for _, c := range []struct{ action, target, want string }{
 		{"user.add", "octocat", auditUsers}, {"signin", "", auditUsers},
-		{"setting", "pool.paused.x", auditSubs}, {"setting", SpotKey, auditMachines},
+		{"setting", "pool.paused.x", auditSubs}, {"setting", "fleet.spot", auditMachines},
 		{"setting", MeterKey, auditSettings}, {"setting", "user.7.machine_login", auditUsers},
 	} {
 		if got := hubAuditKind(c.action, c.target); got != c.want {

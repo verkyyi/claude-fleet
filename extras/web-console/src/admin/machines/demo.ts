@@ -3,7 +3,7 @@
 // memory. Only a VITE_DEMO=1 build reaches it (../demo.ts asks it first);
 // DemoEventSource stands in for the hub's log stream there.
 import type { ApiInit } from "../api";
-import type { CIRunner, FleetDevice, Installs, MachineView, NodeDetail, NodeView, NodesSnapshot, ServiceStatus, SpotNodeView } from "./model";
+import type { CIRunner, FleetDevice, Installs, MachineView, NodeDetail, NodeView, NodesSnapshot, ServiceStatus } from "./model";
 
 const now = Date.now();
 const ago = (min: number) => new Date(now - min * 60_000).toISOString();
@@ -29,7 +29,6 @@ const svc = (login: string, name: string, kind: "service" | "task", state: strin
 let maint: Record<string, { reason: string; since: string; by: string } | undefined> = {
   "mac-b": { reason: "换内存条", since: ago(95), by: "zhouning (gh:1001)" },
 };
-let spotOn = true;
 const retired = new Set<string>();
 
 function machines(): DemoMachine[] {
@@ -47,7 +46,6 @@ function machines(): DemoMachine[] {
       fleet_version: STABLE,
       versions: { runtime: STABLE },
       role: "host",
-      kind: "fixed",
       links: 1,
       load_hist: wave(0.4, 0.15, 24, 2),
       spare: 3,
@@ -79,7 +77,6 @@ function machines(): DemoMachine[] {
       fleet_version: STABLE,
       versions: { runtime: STABLE },
       role: "host",
-      kind: "fixed",
       links: 1,
       load_hist: wave(0.08, 0.05, 24, 5),
       spare: 2,
@@ -107,7 +104,6 @@ function machines(): DemoMachine[] {
       fleet_version: STABLE,
       versions: { runtime: STABLE },
       role: "host",
-      kind: "fixed",
       links: 2,
       load_hist: wave(0.75, 0.2, 24, 3),
       door: { state: "off" },
@@ -118,42 +114,6 @@ function machines(): DemoMachine[] {
         { user: "laozhou", sessions: 2, max: 4 },
       ],
       _comps: { ccquota: "0.94.2", claude: "2.1.301", codex: "0.61.0", tmux: "3.4" },
-    },
-    {
-      hostname: "pod-3f2a",
-      status: "online",
-      sessions: 2,
-      load1: 0.3 * 4,
-      ncpu: 4,
-      mem_free_bytes: 5 * GiB,
-      mem_total_bytes: 8 * GiB,
-      last_heartbeat: ago(0.2),
-      fleet_version: STABLE,
-      versions: { runtime: STABLE },
-      role: "host",
-      kind: "ephemeral",
-      links: 1,
-      load_hist: wave(0.3, 0.1, 9, 4),
-      door: { state: "off" },
-      _logins: [{ user: "spot", sessions: 2, max: 4 }],
-    },
-    {
-      hostname: "pod-9c11",
-      status: "online",
-      sessions: 0,
-      load1: 0,
-      ncpu: 4,
-      mem_free_bytes: 7 * GiB,
-      mem_total_bytes: 8 * GiB,
-      last_heartbeat: ago(0.3),
-      fleet_version: OLD,
-      versions: { runtime: OLD },
-      role: "host",
-      kind: "ephemeral",
-      links: 1,
-      load_hist: wave(0.02, 0.02, 14, 6),
-      door: { state: "off" },
-      _logins: [{ user: "spot", sessions: 0, max: 4 }],
     },
     {
       hostname: "u-7c1e9a",
@@ -167,7 +127,6 @@ function machines(): DemoMachine[] {
       fleet_version: STABLE,
       versions: { runtime: STABLE },
       role: "host",
-      kind: "fixed",
       links: 1,
       load_hist: wave(0.12, 0.06, 24, 7),
       door: { state: "cluster" },
@@ -181,7 +140,6 @@ function machines(): DemoMachine[] {
       ncpu: 0,
       last_heartbeat: ago(42),
       role: "client",
-      kind: "fixed",
       load_hist: [],
       _logins: [{ user: "zhouning", sessions: 0, max: 0 }],
     },
@@ -208,17 +166,9 @@ const nodesOf = (m: DemoMachine): NodeView[] =>
     agent_version: "0.94.2",
     fleet_version: m.fleet_version,
     trust: m.role === "client" ? undefined : "trusted",
-    trust_source: m.kind === "ephemeral" ? "join_code" : "machine",
-    desired: m.hostname === "pod-9c11" ? { want: 41, reached: 40, release: OLD, want_release: STABLE } : undefined,
+    trust_source: "machine",
+    desired: m.hostname === "u-7c1e9a" ? { want: 41, reached: 40, release: OLD, want_release: STABLE } : undefined,
   }));
-
-function spotNodes(): SpotNodeView[] {
-  return [
-    { id: "sp_3f2a", pod_name: "fleet-spot-3f2a", state: "online", created_at: ago(140), hostname: "pod-3f2a", idle_sec: 0, age_sec: 140 * 60, peak_sessions: 3 },
-    { id: "sp_9c11", pod_name: "fleet-spot-9c11", state: "online", created_at: ago(85), hostname: "pod-9c11", idle_sec: 1260, age_sec: 85 * 60, peak_sessions: 1 },
-    { id: "sp_x7k2", pod_name: "fleet-spot-x7k2", state: "provisioning", created_at: ago(1), age_sec: 60 },
-  ].filter((s) => !s.hostname || !retired.has(s.hostname));
-}
 
 function snapshot(): NodesSnapshot {
   const ms = machines();
@@ -226,7 +176,6 @@ function snapshot(): NodesSnapshot {
     at: new Date().toISOString(),
     machines: ms.map(({ _logins, _comps, ...m }) => m),
     nodes: ms.flatMap(nodesOf),
-    spot: { enabled: spotOn, max: 4, idle_minutes: 30, nodes: spotNodes(), history: [] },
   };
 }
 
@@ -308,7 +257,7 @@ export function demoMachines(method: string, u: URL, body: Record<string, any>, 
   const p = u.pathname;
   if (method === "GET" && p === "/v1/nodes") {
     const s = snapshot();
-    return empty ? { ...s, machines: s.machines.filter((m) => m.hostname === "mac-a"), nodes: s.nodes.filter((n) => n.hostname === "mac-a"), spot: { ...s.spot!, nodes: [] } } : s;
+    return empty ? { ...s, machines: s.machines.filter((m) => m.hostname === "mac-a"), nodes: s.nodes.filter((n) => n.hostname === "mac-a") } : s;
   }
   if (method === "GET" && p.startsWith("/v1/nodes/") && !p.includes("/services/")) {
     const d = detail(decodeURIComponent(p.slice("/v1/nodes/".length)));
@@ -318,11 +267,10 @@ export function demoMachines(method: string, u: URL, body: Record<string, any>, 
   if (method === "HEAD" && p.includes("/services/") && p.endsWith("/log")) return null;
   if (method === "GET" && p === "/version") return { version: "prod-fa76175", stable: STABLE, client_version: STABLE };
   if (method === "GET" && p === "/v1/fleet/ci-runners") return { runners, idle: 1, online: 3 };
-  if (method === "GET" && p === "/v1/fleet/settings") return { hub: [{ key: "fleet.spot", value: spotOn ? "on" : "off" }] };
+  if (method === "GET" && p === "/v1/fleet/settings") return { hub: [] };
   if (method === "PUT" && p === "/v1/fleet/settings") {
     const key = String(body.key || "");
-    if (key === "fleet.spot") spotOn = body.value === "on";
-    else if (key.startsWith("fleet.node_maintenance.")) {
+    if (key.startsWith("fleet.node_maintenance.")) {
       const m = key.slice("fleet.node_maintenance.".length);
       maint = { ...maint, [m]: body.value ? { reason: String(body.value), since: new Date().toISOString(), by: "zhouning (gh:1001)" } : undefined };
     }

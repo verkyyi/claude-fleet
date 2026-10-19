@@ -28,9 +28,18 @@ func TestHubDialCarriesTheCallsNotTheIdentity(t *testing.T) {
 	defer svc.Close()
 
 	a := &Agent{cfg: Config{HubURL: pub.URL, HubDial: svc.URL, Token: "tok"}}
-	if err := a.reclaimNotify(context.Background()); err != nil {
-		t.Fatalf("reclaim through HubDial: %v", err)
+	// Any node call builds its URL from hub() (the SPOT reclaim notice that
+	// stood here left with the SPOT nodes, claude-fleet#4797).
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, a.cfg.hub()+"/v1/node/maintenance", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	a.authorize(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("a node call through HubDial: %v", err)
+	}
+	resp.Body.Close()
 	if public.Load() != 0 || internal.Load() != 1 {
 		t.Fatalf("public %d, internal %d: the call must go to HubDial", public.Load(), internal.Load())
 	}

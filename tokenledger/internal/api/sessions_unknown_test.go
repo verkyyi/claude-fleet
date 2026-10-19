@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
 )
 
 // A fleet the agent could not read (claude-fleet#1465) is state "unknown"
@@ -122,19 +121,6 @@ func TestBetterRanksKnownSessionsFirst(t *testing.T) {
 	unknown := Candidate{Machine: "b", Score: 0.9}
 	if !better(known, unknown) || better(unknown, known) {
 		t.Fatal("an unknown session count outranked a known one")
-	}
-}
-
-// The SPOT idle clock never runs out on a count it could not take.
-func TestSpotBusyTreatsUnknownAsBusy(t *testing.T) {
-	c := &SpotController{}
-	idle := store.Node{StatusJSON: `{"hostname":"s","sessions":0,"fleets":[{"fleet_id":"f","name":"x","state":"running","count":0}]}`}
-	unread := store.Node{StatusJSON: `{"hostname":"s","sessions":0,"fleets":[{"fleet_id":"f","name":"x","state":"unknown","count":0}]}`}
-	if c.busy(idle) {
-		t.Fatal("a read fleet with no session is idle")
-	}
-	if !c.busy(unread) {
-		t.Fatal("an unreadable fleet read as idle")
 	}
 }
 

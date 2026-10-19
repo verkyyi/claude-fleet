@@ -255,14 +255,6 @@ type Config struct {
 	// FleetLANRoute adds this machine's private addresses as "lan" routes
 	// (claude-fleet#3074) unless FleetRoutes names one "lan".
 	FleetLANRoute bool
-	// FleetEphemeral marks a SPOT node (claude-fleet#1428): SIGTERM means
-	// the machine is being taken back, and Reclaim runs before the exit.
-	FleetEphemeral bool
-	// FleetReclaimCmd is what Reclaim runs to move idle sessions off; empty
-	// means claude-fleet's own bin/fleet-spot-evacuate.sh under Home.
-	FleetReclaimCmd string
-	// FleetReclaimTimeout bounds Reclaim as a whole.
-	FleetReclaimTimeout time.Duration
 	// RunAs is the login this agent's work runs as (claude-fleet#2333): set
 	// only for a tenant of `ccquota agent --machine`, which runs as root and
 	// serves every login of the machine. Every command the agent starts drops

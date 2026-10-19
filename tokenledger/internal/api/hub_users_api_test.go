@@ -267,7 +267,6 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
 		{AutoAssignKey, "mac-c, mac-e", http.StatusOK, "mac-c,mac-e"},
 		{AutoAssignKey, "bad host!", http.StatusBadRequest, "mac-c,mac-e"},
-		{SpotKey, "on", http.StatusOK, "on"},
 		{PublicBadgesKey, "on", http.StatusOK, "on"},
 		{MeterKey, "off", http.StatusOK, "off"},
 		{RoutesExtraKey, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`, http.StatusOK, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
@@ -297,8 +296,8 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 10 { // one per accepted change
-		t.Errorf("setting audit rows = %d, want 10", n)
+	if n != 9 { // one per accepted change
+		t.Errorf("setting audit rows = %d, want 9", n)
 	}
 	// The readers follow at once.
 	if got := h.srv.autoAssign(); strings.Join(got, ",") != "mac-c,mac-e" {
@@ -306,9 +305,6 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 	}
 	if !h.srv.publicBadges() {
 		t.Error("publicBadges off after hub.public_badges on")
-	}
-	if h.srv.spot() != nil {
-		t.Error("spot() without a SPOT image")
 	}
 	found := false
 	for _, m := range h.srv.fleetMachines() {
@@ -367,17 +363,17 @@ func setHubSetting(t *testing.T, s *Server, key, value string) {
 }
 
 // claude-fleet#2087: --public-badges, CCQUOTA_FLEET_AUTO_ASSIGN and
-// CCQUOTA_FLEET_PRINCIPAL_LOGINS are gone. A hub with nothing stored reads
-// the defaults, and the start's copy writes nothing for them — the
-// database is the only source.
-func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
+// CCQUOTA_FLEET_PRINCIPAL_LOGINS are gone, and the SPOT image with the SPOT
+// nodes (claude-fleet#4797). A hub with nothing stored reads the defaults,
+// and the start's copy writes nothing — the database is the only source.
+func TestMigrateLegacySettings_NothingIsLeft(t *testing.T) {
 	st := openTestStore(t)
 	if err := st.EnsureNodes(); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{Store: st, Pricing: pricing.Default(), Fleet: true}
 	for k, spec := range hubSettings {
-		if spec.legacy != nil && k != SpotKey {
+		if spec.legacy != nil {
 			t.Errorf("%s still reads an old variable", k)
 		}
 	}
@@ -388,7 +384,7 @@ func TestMigrateLegacySettings_OnlyTheSpotImageIsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	if settings, _ := st.FleetSettings(); len(settings) != 1 || settings[CredPolicyModeKey] != "strict" {
-		t.Fatalf("the start copied something with no SPOT image: %v", settings)
+		t.Fatalf("the start copied an old variable: %v", settings)
 	}
 }
 

@@ -2,7 +2,7 @@
 // (claude-fleet#2123).
 //
 // With two hubs on one Postgres database every loop the hub runs — the daily
-// prune, node alerts, the SPOT controller — would run twice, and a credential
+// prune, node alerts — would run twice, and a credential
 // refreshed by both at once makes the provider revoke the whole grant (it
 // happened on 2026-10-04). So each job asks Leader at the top of its tick, and
 // only the replica holding that job's Postgres advisory lock does the work.
