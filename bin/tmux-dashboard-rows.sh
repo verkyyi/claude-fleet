@@ -1478,15 +1478,19 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
     # no @cc_agent is Claude (the spawners' convention), another machine's row
     # carries its node's word or nothing — and its OWN repo (`owner/name`, empty
     # for @norepo), never the heading it happens to sit under (置顶 · 已结束 name
-    # none). Field 21 (the proof) stays, empty, before them.
-    case "$wtask" in T[0-9]*) case "$wtask" in *[!T0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
-    _agw=${agent%%:*}
-    case "$_agw" in claude|codex) ;; '') case "$wid" in wid:*) ;; *) _agw=claude ;; esac ;; *) _agw='' ;; esac
-    _nf=${cfgf//[!$US]/}; _nf=${#_nf}
-    while [ "$_nf" -lt 9 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
-    _rw=$wrepo; [ "$wnorepo" = 1 ] && _rw=''
-    case "$_rw" in */*) _rw=${_rw//[[:cntrl:]]/} ;; *) _rw='' ;; esac
-    cfgf+="$US$wtask$US$_agw$US$_rw"
+    # none). Field 21 (the proof) stays, empty, before them. Only for a reader
+    # that asks (FLEET_ROWS_COLS=1, ⌘P's produce): every other one reads its rows
+    # byte for byte as before.
+    if [ "${FLEET_ROWS_COLS:-0}" = 1 ]; then
+      case "$wtask" in T[0-9]*) case "$wtask" in *[!T0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
+      _agw=${agent%%:*}
+      case "$_agw" in claude|codex) ;; '') case "$wid" in wid:*) ;; *) _agw=claude ;; esac ;; *) _agw='' ;; esac
+      _nf=${cfgf//[!$US]/}; _nf=${#_nf}
+      while [ "$_nf" -lt 9 ]; do cfgf+=$US; _nf=$((_nf + 1)); done
+      _rw=$wrepo; [ "$wnorepo" = 1 ] && _rw=''
+      case "$_rw" in */*) _rw=${_rw//[[:cntrl:]]/} ;; *) _rw='' ;; esac
+      cfgf+="$US$wtask$US$_agw$US$_rw"
+    fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
   fi

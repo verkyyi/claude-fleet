@@ -9,8 +9,8 @@
 #   B  the producer (tmux-dashboard-rows.sh --rows) marks a bound session 已结束
 #      once its issue is off the open-issue list and its last state is older than
 #      FLEET_VIEW_LANDED_SECS — not while the issue is open, not inside the window,
-#      not with `keep`. The rows read no PR map (issue #4902): field 20 stays empty
-#      (T493's ID · Agent · repo fields 22-24 follow it).
+#      not with `keep`. The rows read no PR map (issue #4902): no field 20 —
+#      unless FLEET_ROWS_COLS=1 asks for T493's ID · Agent · repo (fields 22-24)
 #   C  fleet_view.entries over that producer: done + an unanswered ask → 等你 (the
 #      question under it); an ask on a closed issue → not; done + closed > 24 h →
 #      已结束; done → 做完待收 (plan B, T493), idle → 其他; the group order
@@ -113,14 +113,15 @@ printf 'unknown\t1\n' > "$FD/deploy_s14"
 out=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 bash "$ROWS" --rows 2>&1) || fail "B: the producer exited non-zero" "$out"
 ended=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "hdr" && $2 == "ended" { on = 1; next } $1 == "hdr" { on = 0 } on { print $4 }' | sed 's/ .*//' | tr '\n' ' ')
 [ "$ended" = "over train " ] || fail "B: 已结束 should be exactly «over», got «${ended}»" "$out"
-f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "") }')
-[ -z "$f20" ] || fail "B: the train row's field 20: «${f20}»" "$out"
-n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20 && $20 != ""' | wc -l | tr -d ' ')
+f20=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print (NF >= 20 ? $20 : "-") }')
+[ "$f20" = - ] || fail "B: the train row's field 20: «${f20}»" "$out"
+n20=$(printf '%s\n' "$out" | awk -F"$US" '$1 ~ /^@/ && NF >= 20' | wc -l | tr -d ' ')
 [ "$n20" = 0 ] || fail "B: field 20 on a row with nothing to say" "$out"
 # T493: fields 22-24 — the hub task (none here), the agent (no @cc_agent on a
 # window here: Claude) and the row's own repo
-f2224=$(printf '%s\n' "$out" | awk -F"$US" '$1 == "@4" { print $22 "|" $23 "|" $24 }')
-[ "$f2224" = '|claude|acme/app' ] || fail "B: the train row's fields 22-24: «${f2224}»" "$out"
+outc=$(PATH="$SHIMPATH" FLEET_SESSION=$S FLEET_ROWS_UNFOLD=1 FLEET_ROWS_COLS=1 bash "$ROWS" --rows 2>&1)
+f2224=$(printf '%s\n' "$outc" | awk -F"$US" '$1 == "@4" { print $22 "|" $23 "|" $24 }')
+[ "$f2224" = '|claude|acme/app' ] || fail "B: the train row's fields 22-24: «${f2224}»" "$outc"
 # a FULL list (the collector's newest 300 open ones, issue #4225): #11 is older
 # than all of them — not on it says nothing; a number newer than its oldest does
 cp "$FD/issues" "$FD/issues.keep"

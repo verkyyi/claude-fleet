@@ -4,7 +4,7 @@
 # #2763; its record is fleet-remote-view-thin-selftest.sh's).
 #
 #   A  pure: bin/fleet-topbar.py lays the line out at 140 / 80 / 45 columns, the
-#      ⌘P panel's glyphs (issue #3194: ! x » ✓ ∙ ?, the word from 80, the PR from
+#      ⌘P panel's glyphs (issue #3194: ! x ↻ ✓ ∙ ?, the word from 80, the PR from
 #      80 and its checks from 140, the % on every width), red while the session
 #      waits on you (its question in the title's place), grey with ? while its
 #      machine is lost, reconnecting or on the relay — the only time it is named;
@@ -45,16 +45,16 @@ for cols in (140, 80, 45):
     w[cols] = text
     eq("%d: the line is exactly the width" % cols, tb.cells(text), cols)
     eq("%d: no colour while all is well" % cols, bg, None)
-    for part in ("»", "#1894", "62%", "机器上"):
+    for part in ("↻", "#1894", "62%", "机器上"):
         has("%d: never dropped" % cols, text, part)
     for gone in ("‹", "›", "@mac-b", "mac-b", "●", "working"):
         has("%d: no %s (#3194)" % (cols, gone), text, gone, False)
-eq("140: all of it", w[140].split(), ["»", "在干活", "·", "#1894", rec["title"], "·", "claude-fleet",
+eq("140: all of it", w[140].split(), ["↻", "在干活", "·", "#1894", rec["title"], "·", "claude-fleet",
                                       "PR", "#1885", "✓", "·", "剩余", "62%", "·", "Opus", "5.5", "·", "high",
                                       "·", "⌘P"])
-eq("80: word, PR, 62% Opus 5.5 high", w[80].split(), ["»", "在干活", "·", "#1894", rec["title"],
+eq("80: word, PR, 62% Opus 5.5 high", w[80].split(), ["↻", "在干活", "·", "#1894", rec["title"],
                                                      "PR", "#1885", "·", "62%", "Opus", "5.5", "high"])
-eq("45: the glyph, #N, the title clipped, the %", w[45].split(), ["»", "#1894", "机器上一直有会话在忙，也照样更…", "62%"])
+eq("45: the glyph, #N, the title clipped, the %", w[45].split(), ["↻", "#1894", "机器上一直有会话在忙，也照样更…", "62%"])
 # each state, at 80
 def at(cols=80, **kw):
     return tb.fit(dict(rec, **kw), cols, now=1060)
@@ -66,14 +66,14 @@ eq("needs OK: red too", bg, tb.BG_ASK); has("needs OK: its words", t, "! #1894 B
 t, _ = at(state="needs", kind="ask"); has("asking, no words: the title", t, "! #1894 机器上")
 t, bg = at(state="done", pr="merged"); eq("done: no colour", bg, None)
 has("done: ✓ 本轮结束", t, " ✓ 本轮结束 · #1894"); has("done: PR 已合并", t, "PR 已合并 · 62%")
-t, bg = at(state="exited"); eq("exited: the line unchanged", bg, None); has("exited: x 已退出", t, " x 已退出 · #1894")
-t, _ = at(state="failed"); has("failed: x 失败", t, " x 失败 · ")
-eq("exited: only the glyph red", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
-   ["colour1"])
+t, bg = at(state="exited"); eq("exited: the line unchanged", bg, None); has("exited: ◌ 已退出", t, " ◌ 已退出 · #1894")
+t, _ = at(state="failed"); has("failed: ✗ 失败", t, " ✗ 失败 · ")
+eq("exited: the glyph grey (plan B: only ! and ✗ are red)", [p[1] for p in tb.layout(dict(rec, state="exited"), 80, now=1060)[0] if p[2] == "sym"],
+   ["colour8"])
 t, _ = at(state="idle"); has("idle: ∙ 空闲", t, " ∙ 空闲 · ")
-t, _ = at(state="sleeping"); has("asleep: ∙ 空闲", t, " ∙ 空闲 · ")
+t, _ = at(state="sleeping"); has("asleep: ☾ 睡着", t, " ☾ 睡着 · ")
 for s in ("looping", "preparing", "waking"):
-    has("%s: » 在干活" % s, at(state=s)[0], " » 在干活 · ")
+    has("%s: ↻ 在干活" % s, at(state=s)[0], " ↻ 在干活 · ")
 t, bg = at(lost=True)
 eq("lost: grey", bg, tb.BG_DOWN); has("lost: ?, no word", t, " ? #1894 "); has("lost: the machine", t, "· mac-b 连不上")
 t, bg = at(45, lost=True); eq("lost 45: grey", bg, tb.BG_DOWN); has("lost 45: 62% mac-b 连不上", t, "62% mac-b 连不上")
@@ -90,7 +90,7 @@ has("pinned, reconnecting: 第 N 次", t, "mac-b 连不上 · 第 3 次重连")
 eq("grey: the ? stays yellow", [p[1] for p in tb.layout(rec, 80, route="relay", now=1060)[0] if p[2] == "sym"],
    ["colour3"])
 eq("lost wins over asking: grey", tb.fit(dict(rec, state="needs", kind="ask", lost=True), 80, now=1060)[1], tb.BG_DOWN)
-t, _ = at(key="", title="整理周报里的发布时间线"); has("no issue: the title alone", t, " » 在干活 · 整理周报里的发布时间线")
+t, _ = at(key="", title="整理周报里的发布时间线"); has("no issue: the title alone", t, " ↻ 在干活 · 整理周报里的发布时间线")
 t, _ = at(140, pr="#7…"); has("140: checks running", t, "PR #7 …")
 t, _ = at(140, pr="#7✗"); has("140: checks red", t, "PR #7 ✗")
 t, _ = at(80, pr="#7✗"); has("80: no checks", t, "PR #7 ·")
@@ -103,7 +103,7 @@ del os.environ["FLEET_GLYPHS"]
 os.environ["NO_COLOR"] = "1"
 eq("NO_COLOR: the glyph uncoloured", [p[1] for p in tb.layout(rec, 80, now=1060)[0] if p[2] == "sym"], [None])
 del os.environ["NO_COLOR"]
-eq("» and ∙ are one cell, as the panel counts", (tb.cells("»"), tb.cells("∙"), tb.cells("中")), (1, 1, 2))
+eq("↻ and ∙ are one cell, as the panel counts", (tb.cells("↻"), tb.cells("∙"), tb.cells("中")), (1, 1, 2))
 # the context reading on every width (issue #2717, #3194): its three forms
 c = dict(rec)
 for cols, want in ((140, "剩余 62% · Opus 5.5 · high"), (80, "62% Opus 5.5 high"), (45, "62%")):

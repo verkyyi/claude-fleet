@@ -551,7 +551,8 @@ def produce(fleet, kept=False):
                     return text
         except OSError:
             pass
-    env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1")
+    # FLEET_ROWS_COLS=1: the plan-B columns' fields 22-24 (ID · agent · repo, T493)
+    env = dict(os.environ, FLEET_SESSION=fleet, FLEET_ROWS_UNFOLD="1", FLEET_ROWS_COLS="1")
     seam = os.environ.get("FLEET_VIEW_ROWS_CMD")
     argv = ["sh", "-c", seam] if seam else ["bash", str(Path(__file__).absolute().parent / "tmux-dashboard-rows.sh"), "--rows"]
     try:
@@ -634,9 +635,11 @@ GLYPHS = {"needs": "!", "fail": "✗", "work": "↻", "done": "✓", "exited": "
           "lost": "?"}
 GLYPHS_ASCII = {"needs": "!", "fail": "x", "work": ">", "done": "+", "exited": "o", "idle": ".", "sleep": "z",
                 "lost": "?"}
-# Only the two a person has to act on are coloured — red, bold (the 16-colour
-# palette's 1, present in every theme); every other glyph keeps the row's colour.
-GLYPH_COLORS = {"needs": 1, "fail": 1}
+# the 16-colour palette's numbers, present in every theme (the top line colours
+# every glyph by them). The ⌘P rows colour only the two a person has to act on —
+# ! and ✗, red and bold (ROW_RED); every other glyph keeps the row's colour.
+GLYPH_COLORS = {"needs": 1, "fail": 1, "work": 2, "done": 4, "exited": 8, "idle": 8, "sleep": 8, "lost": 3}
+ROW_RED = ("needs", "fail")
 LEGEND = ("work", "needs", "done", "fail", "exited", "idle", "sleep", "lost")
 GROUPS = ("pin", "ask", "work", "done", "other")
 SLEEP_STATES = ("sleeping", "preparing", "waking")
@@ -1428,7 +1431,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     gl, col = glyphs(), color_on()
     base = (("dim",) if e.get("lost") else ()) + (("lit",) if lit else ())
     sym = e.get("sym") or "idle"
-    gstyle = base + (("c%d" % GLYPH_COLORS[sym], "bold") if col and sym in GLYPH_COLORS and not e.get("lost") else ())
+    gstyle = base + (("c%d" % GLYPH_COLORS[sym], "bold") if col and sym in ROW_RED and not e.get("lost") else ())
     indent = "  " * (e.get("depth") or 0)
     show_repo = width >= 60
     show_agent = width >= 40
