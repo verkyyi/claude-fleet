@@ -92,7 +92,7 @@ out=$(add o/b "$WORK/src/b" --base master)
 chk "B add o/b" "$out" "added:o-b"
 chk "B a hub ⇒ still no line" "$(auth b)" ""
 chk "B …and the hub is not asked" "$(asked)" 0
-chk "B FLEET_TICKETS still hub" "$(grep '^FLEET_TICKETS=' "$(conf b)")" 'FLEET_TICKETS="hub"'
+chk "B no FLEET_TICKETS line (the ticket store left, #4898)" "$(grep -c '^FLEET_TICKETS=' "$(conf b)")" 0
 cmp -s "$WORK/a.before" "$(conf a)" && ok "B o/a's conf unchanged by adding o/b" || fail "B o/a's conf changed"
 
 # ---- C: --authority is read one version and only said ----
