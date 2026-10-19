@@ -17,6 +17,11 @@
 #      says the window opened here (`window: @N`) and the 看台 goes to it
 #      (FLEET_DISPATCH_GO_CMD = fleet-view-go.sh); one that does not open is said
 #      AND logged (`dispatch_failed` in logs/compose.ndjson, with the reason)
+#   H. hub authority (issue #4965): a repo's send is a task record first —
+#      fleet-task-record.sh dispatch --repo R --spawn --origin hub --via ⌘P
+#      --print (FLEET_DISPATCH_TASK_CMD), never the place road; it says T<n> and
+#      the 看台 goes to the window; a repo this machine does not host is said,
+#      never tried; legacy authority keeps the place road; `authority` prints it
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=0
@@ -37,6 +42,9 @@ mkdir -p "$WORK/tt" "$WORK/state" "$WORK/g"
 export TMUX_TMPDIR="$WORK/tt" FLEET_SWITCH_STATE="$WORK/state" FLEET_STATUS_G="$WORK/g" FLEET_UI_LANG=zh \
   FLEET_COMPOSE_LOG="$WORK/compose.ndjson"
 printf 'acme/app\nacme/web\n' > "$WORK/g/hub_repos"
+# the person's task authority is asked of no real hub: legacy, unless a leg says (H)
+printf '#!/bin/sh\necho legacy\n' > "$WORK/legacy.sh"; chmod +x "$WORK/legacy.sh"
+export FLEET_DISPATCH_AUTHORITY_CMD="$WORK/legacy.sh"
 D() { python3 "$BIN/fleet-quick-dispatch.py" "$@"; }
 J() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(d.get(sys.argv[1]))' "$1"; }
 
@@ -145,6 +153,43 @@ out=$(unset TMUX_PANE; TMUX="$WORK/tt/default,1,0" G_ARGS="$WORK/g-args" G_FAIL=
 has 'G: a failure is said, with its reason' "$out" 'no Codex login'
 has 'G: …and logged' "$(grep dispatch_failed "$WORK/compose.ndjson")" 'no Codex login'
 eq 'G: …and the 看台 stays where it is' '' "$(cat "$WORK/go.log")"
+
+# --- H. hub authority: the record first ------------------------------------------------
+cat > "$WORK/auth.sh" <<'EOF'
+#!/bin/sh
+printf '{"mode": "%s", "ticket_ref": ""}\n' "${H_MODE:-hub}"
+EOF
+cat > "$WORK/task.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$WORK/task-args"
+[ -n "\${H_FAIL:-}" ] && { printf 'fleet-task-record: the hub refused\n' >&2; exit 1; }
+printf 'T77\n@31\tclaude-fleet-scratch-9\t/tmp/wt\tfid\n'
+EOF
+chmod +x "$WORK/auth.sh" "$WORK/task.sh"
+: > "$WORK/go.log"; rm -f "${WORK:?}/task-args" "${WORK:?}/sent.json"
+H() { FLEET_DISPATCH_AUTHORITY_CMD="$WORK/auth.sh" FLEET_DISPATCH_TASK_CMD="$WORK/task.sh" FLEET_DISPATCH_HOSTED=acme/web \
+      FLEET_DISPATCH_SEND_CMD="$WORK/send.sh" FLEET_DISPATCH_GO_CMD="$WORK/go.sh" D "$@"; }
+eq 'H: authority prints the mode' 'hub' "$(H authority --repo acme/web --view 'fleet@view-t1')"
+out=$(H send --view 'fleet@view-t1' --client /dev/ttys009 --title '修 登录' --repo acme/web --agent codex --draft 2>&1) \
+  || fail "H: a hub-authority send exited non-zero" "$out"
+has 'H: says the record' "$out" 'T77'
+eq 'H: the record-first road, as the person'"'"'s own task' \
+  'dispatch --title 修 登录 --repo acme/web --spawn --origin hub --via ⌘P --print --agent codex --session fleet' \
+  "$(cat "$WORK/task-args")"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/sent.json" ] && fail "H: the place road ran under hub authority"
+eq 'H: the 看台 went to the window it opened' 'fleet@view-t1 @31 --how dispatch --client /dev/ttys009' "$(cat "$WORK/go.log")"
+rm -f "${WORK:?}/task-args"
+out=$(H send --view 'fleet@view-t1' --title '修' --repo acme/gone 2>&1) && fail "H: an unhosted repo exited 0" "$out"
+has 'H: an unhosted repo is said' "$out" 'acme/gone 不在'
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/task-args" ] && fail "H: an unhosted repo was tried here"
+long=$(printf '长%.0s' $(seq 1 90))
+H send --title "$long" --repo acme/web >/dev/null 2>&1 || fail "H: long words exited non-zero"
+has 'H: long words: a clipped title' "$(cat "$WORK/task-args")" "--body-file -"
+CHECKS=$((CHECKS + 1)); grep -q "$long" "$WORK/task-args" && fail "H: long words went whole as the title"
+out=$(H_FAIL=1 H send --title '修' --repo acme/web 2>&1) && fail "H: a refused dispatch exited 0" "$out"
+has 'H: a refused dispatch says why' "$out" 'the hub refused'
+out=$(H_MODE=legacy H send --title '看日志' --repo acme/web 2>&1) || fail "H: a legacy send exited non-zero" "$out"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/sent.json" ] || fail "H: legacy authority left the place road"
 
 # --- F. the key ------------------------------------------------------------------------
 eq 'F: the switch table row' 'dispatch ⌘T 0x74-0x100000 932 t' "$(bash "$BIN/dash-keymap.sh" --panel switch list | awk '$1 == "dispatch"')"

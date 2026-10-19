@@ -1079,6 +1079,15 @@ fleet_ui_t() {
     en:dispatch_keys)           printf '↵ file + start · Tab next · ←→ repo / agent · esc close' ;;
     zh:dispatch_norepo)         printf '还没有可派的仓库（入口还没说这台电脑的机器托管哪些仓库）' ;;
     en:dispatch_norepo)         printf 'no repo to dispatch to yet (the hub has not said which repos your machines host)' ;;
+    # hub authority: a repo's start is a hub task first (issue #4965)
+    zh:dispatch_task_done_fmt)  printf '已建 %s 并开工：%s' "${1:-}" "${2:-}" ;;
+    en:dispatch_task_done_fmt)  printf 'recorded %s and started it: %s' "${1:-}" "${2:-}" ;;
+    zh:dispatch_task_made_fmt)  printf '已建 %s' "${1:-}" ;;
+    en:dispatch_task_made_fmt)  printf 'recorded %s' "${1:-}" ;;
+    zh:dispatch_hub_elsewhere_fmt) printf '%s 不在 %s 这台上：任务由入口管时，⌘P 只在本机开带仓库的任务——到托管它的那台开，或让编排会话派' "${1:-}" "${2:-}" ;;
+    en:dispatch_hub_elsewhere_fmt) printf '%s is not on %s: with the hub owning tasks, ⌘P opens a repo task on this machine only — open it on the machine that hosts it, or have an orchestrator dispatch it' "${1:-}" "${2:-}" ;;
+    zh:view_new_hub_words)      printf '任务由入口管：带仓库的新会话先写一句要做的事（它会建成 T 记录）' ;;
+    en:view_new_hub_words)      printf 'the hub owns tasks: a repo session starts from a task — type what to do first (it becomes a T record)' ;;
     zh:dispatch_sending)        printf '发出中…' ;;
     en:dispatch_sending)        printf 'sending…' ;;
     zh:popup_dispatch)          printf '派一件事' ;;

@@ -30,7 +30,7 @@
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
-#                     [--spawn] [--reap P] [--agent A]
+#                     [--spawn] [--reap P] [--agent A] [--session S] [--origin O] [--via V] [--print]
 #                     → the `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
 #                       + --spawn: its session in a worktree of that repo, bound
@@ -38,7 +38,12 @@
 #                       --task, reaped `merged` = the record closed — issue
 #                       #4897); no repo + --spawn: a no-repo session given the
 #                       words, stamped @task. No hub: exit 3, nothing made — the
-#                       record is the only ticket (issue #4898).
+#                       record is the only ticket (issue #4898). --session /
+#                       --origin / --print go to dash-raw-session.sh (the fleet
+#                       it opens in, whose it is, its window receipt after the
+#                       T<n> line) — ⌘P's ⚡ row in a 看台 (issue #4965:
+#                       `--origin hub --via ⌘P`, the person's own task — no
+#                       parent session on the record).
 #   fleet-task-record.sh of [<window>]     → the window's @task (T<n>), rc 1 when none
 #   fleet-task-record.sh find-issue o/n#N  → … the live window's @task working that issue
 #
@@ -143,7 +148,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent=''
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -156,6 +161,10 @@ if [ "$cmd" = dispatch ]; then
         case "${2:-}" in claude|codex) agent=$2 ;; *) die 2 "--agent must be claude or codex; use --as for an agent definition" ;; esac
         shift ;;
       --as) as_agent="${2:-}"; shift ;;
+      --session) tsess="${2:-}"; shift ;;
+      --origin) origin="${2:-}"; shift ;;
+      --via) via="${2:-编排}"; shift ;;
+      --print) pwin=--print ;;
       *) usage ;;
     esac
     shift
@@ -188,17 +197,17 @@ if [ "$cmd" = dispatch ]; then
   {
     parent_wid=''; parent_task=''
     task_win=$(fleet_pane_fmt '#{window_id}')
-    if [ -n "$task_win" ]; then
+    if [ -n "$task_win" ] && [ "$origin" != hub ]; then
       task_sess=$(fleet_current_session)
       parent_wid=$(fleet_worker_id "$task_sess" "$task_win")
       parent_task=$(fleet_pane_fmt '#{@task}')
     fi
-    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$parent_wid" "$parent_task" <<'JSON'
+    payload=$(python3 - "$dispatch" "$title" "$body" "$repo" "$reap" "$as_agent" "" "" "" "$parent_wid" "$parent_task" "$via" <<'JSON'
 import json,sys
-d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task=sys.argv[1:]
+d,title,body,repo,reap,template,rule,draft,note,parent_session,parent_task,via=sys.argv[1:]
 d=json.loads(d)
 repo=repo.lower()
-print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via="编排", repo=repo,
+print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"], parent_session=parent_session, parent_task=parent_task,
     request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=template,rule=rule,draft=draft,pr_note=note))))
 JSON
@@ -229,13 +238,13 @@ JSON
     pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
     if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
     exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
-      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} "--prompt-file=$pf"
+      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
   printf '%s\n' "${body:-$title}" > "$pf"
   exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
-    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} "--prompt-file=$pf"
+    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin "--prompt-file=$pf" ${tsess:+"$tsess"}
 fi
 
 applicable || exit 3
