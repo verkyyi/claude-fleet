@@ -42,7 +42,6 @@ const (
 	FleetTicketsPath = "/v1/fleet/tickets"
 	// FleetTicketRegisterPath is #2676's registry road (bin/fleet-ticket.sh
 	// new): a GitHub ticket a node opened, now written as a gh ticket here.
-	// # compat-1v: 下一批删
 	FleetTicketRegisterPath = "/v1/fleet/tickets/register"
 
 	ticketBodyMax    = 64 << 10
@@ -647,7 +646,7 @@ func (s *Server) pushTicket(owner string, ev control.Ticket) {
 	})
 }
 
-// --- the registry of #2676, one version (# compat-1v: 下一批删) ------------
+// --- the registry of #2676 (bin/fleet-ticket.sh's road) --------------------
 
 // FleetTicketRegisterRequest is the body: the registry fields, nothing else.
 type FleetTicketRegisterRequest struct {

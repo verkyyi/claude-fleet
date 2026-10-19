@@ -21,8 +21,7 @@ import (
 //
 // bearer_off is the node's own word that everything on it now signs: from
 // then on its bare token is refused (the replay a copied token was). Off, the
-// token still works beside the key for one version (# compat-1v: 下一批删 —
-// the next version refuses a keyed endpoint's bearer outright).
+// token still works beside the key.
 //
 // Created only with the fleet module on (EnsureNodes); a hub without the
 // table, or an endpoint with no row, authenticates byte for byte as before.

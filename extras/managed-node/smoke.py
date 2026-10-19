@@ -129,11 +129,10 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
         assert out.strip().splitlines()[-1].startswith('credsep: '), out
         return pwd.getpwnam(name)
 
-    assert json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid'] == 31022, 'legacy not migrated'
-    assert (state / 'linux-tenant.json.bak').is_file() and not (state / 'linux-tenant.json').exists()
+    first_uid = json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid']
     login('open', '1234', rc=2)      # fleet-login-new.sh's codes (#3210): 2 bad argument
     a, b = opened('acme'), opened('drill2')
-    assert len({a.pw_uid, b.pw_uid, 31022}) == 3, 'two logins share a number'
+    assert len({a.pw_uid, b.pw_uid, first_uid}) == 3, 'two logins share a number'
     before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, 'acme', 'drill2')}
     # Another login cannot enter a home.
     denied = subprocess.run(['ls', b.pw_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -377,16 +376,13 @@ def main():
             pass
         else:
             raise AssertionError('root token read followed a symlink')
-        # A volume from before EPIC #3208 C1: the single-login declaration.
-        (state / 'linux-tenant.json').write_text(json.dumps(
-            {'login': login, 'uid': 31022, 'gid': 31022, 'home': str(d / 'homes' / login)}))
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://relay.example.com')
         try:
             install = ['bash', str(runtime / 'bin/fleet-node-install.sh'), '--hub', args.hub,
                        '--join-file', str(code), '--login', login, '--login-join-file', str(code),
                        '--release-key', str(pub), '--service', 'foreground']
-            result = subprocess.run(install)
+            result = subprocess.run(install, env=dict(os.environ, FLEET_NODE_UID='31022'))
             if result.returncode:
                 raise RuntimeError('installer failed: ' + (d / 'sshd-check.log').read_text())
             assert (sshdir / 'fleet_user_ca.pub').read_bytes() == Hub.ca
@@ -411,7 +407,8 @@ def main():
             token_path = d / 'cred' / login / 'node.env'
             original = token_path.read_bytes()
             code.unlink()  # restart after the one-time Secret has been removed
-            m.prepare(args)
+            args.name, args.full_name, args.start = login, '', False
+            m.login_open(args)
             assert Hub.joins == 2, 'restart enrolled another endpoint (one machine + one tenant expected)'
             assert token_path.read_bytes() == original, 'node token changed on retry'
             assert not (d / 'units/claude-fleet-cred-proxy-shared.service').exists(), 'duplicate proxy service was installed'
@@ -449,7 +446,7 @@ def main():
             assert result.returncode == 0 and result.stdout.strip().startswith('fcp1.'), result.stderr
             args.uid += 1
             try:
-                m.prepare(args)
+                m.login_open(args)
             except ValueError:
                 pass
             else:

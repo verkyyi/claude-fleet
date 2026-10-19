@@ -49,6 +49,21 @@ func startSSHRelayAgentAt(t *testing.T, enrollOn, holder *harness, hubURL, label
 		return c != nil && c.hostname() == host
 	})
 	waitFor(t, 5*time.Second, "its link recorded", func() bool { return holderOf(holder, "ep_"+label) })
+	// The other replica finds the machine by its stored node row
+	// (peerRelayHosts), written off the beat after the link: asked before
+	// it, A answered NODE_OFFLINE (claude-fleet#4679).
+	waitFor(t, 5*time.Second, "its node row recorded", func() bool {
+		nodes, err := holder.srv.Store.Nodes()
+		if err != nil {
+			return false
+		}
+		for _, n := range nodes {
+			if n.EndpointID == "ep_"+label && n.Hostname == host && control.Compatible(n.Proto) {
+				return true
+			}
+		}
+		return false
+	})
 	return host
 }
 

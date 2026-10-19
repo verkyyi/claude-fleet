@@ -113,7 +113,7 @@ eq 'Q: mac-a + codex → --node mac-a --agent codex' \
   "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"mac-a","agent":"codex"}')"
 eq 'Q: a scratch of no repo carries them too' \
   '- scratch --name 看日志 --body-file B --node mac-a --agent codex' \
-  "$(qsend '{"title":"看日志","body":"看日志","repo_mode":"none","node":"mac-a","agent":"codex"}')"
+  "$(qsend '{"title":"看日志","body":"看日志","repo":null,"node":"mac-a","agent":"codex"}')"
 eq 'Q: a named --node / --agent beats the payload'"'"'s' \
   'acme/web new --title 看日志 --body-file B --node mac-b --agent claude' \
   "$(qsend '{"title":"看日志","body":"看日志\n再看看","repo":"acme/web","node":"mac-a","agent":"codex"}' --node mac-b --agent claude)"

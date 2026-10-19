@@ -383,8 +383,8 @@ leg "I Claude first-run state preserves values; wizard commands are allowed"
 CC="$WORK/cache"
 mkdir -p "$WORK/j-claude"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/j-claude/claude"; chmod +x "$WORK/j-claude/claude"
-out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --from "$FX" --claude "$WORK/j-claude/claude" 2>&1)
-eq "J refresh rc (--from accepted, ignored)" "$?" 0
+out=$(FLEET_BOOTSTRAP_CACHE="$CC" "$BASH_BIN" "$BIN/fleet-bootstrap-cache.sh" refresh --claude "$WORK/j-claude/claude" 2>&1)
+eq "J refresh rc" "$?" 0
 has "J refresh: claude" "$out" "claude: 9.9.9"
 hasnt "J refresh: no claude-fleet half" "$out" "claude-fleet:"
 [ -e "$CC/claude-fleet.git" ] && fail "J: refresh still writes the retired claude-fleet mirror"

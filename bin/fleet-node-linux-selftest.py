@@ -455,12 +455,13 @@ class LinuxNode(unittest.TestCase):
 
             me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
             args = Mock(login='fleet', uid=10001, hub='https://hub.example', join_file=str(code),
-                        relay='https://relay.example')
+                        relay='https://relay.example', full_name='', start=False)
+            args.name = 'fleet'
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
                     patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
                     patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write), \
                     patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
-                m.prepare(args)
+                m.login_open(args)
                 store = d / 'cred/fleet/node.env'
                 self.assertIn('CCQUOTA_FLEET_CREDS=1', store.read_text().splitlines())
                 self.assertEqual(written['fleet'].get('CCQUOTA_FLEET_CREDS'), '1')
@@ -470,14 +471,14 @@ class LinuxNode(unittest.TestCase):
                 store.write_text('CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=tenant-tok\n'
                                  'CCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE_FORCE=1\n')
                 written.clear()
-                m.prepare(args)
+                m.login_open(args)
                 self.assertEqual(store.read_text(), 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=tenant-tok\n'
                                  'CCQUOTA_FLEET=1\nCCQUOTA_FLEET_COMPUTE_FORCE=1\nCCQUOTA_FLEET_CREDS=1\n')
                 self.assertEqual(written['fleet'].get('CCQUOTA_FLEET_CREDS'), '1')
                 self.assertEqual(written['fleet'].get('CCQUOTA_FLEET_COMPUTE_FORCE'), '1')
                 # A second restart writes nothing new.
                 before = store.stat().st_mtime_ns
-                m.prepare(args)
+                m.login_open(args)
                 self.assertEqual(store.stat().st_mtime_ns, before)
 
     def test_relay_refused_while_account_creating_keeps_login(self):
@@ -510,17 +511,18 @@ class LinuxNode(unittest.TestCase):
 
             me = Mock(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(d / 'home'))
             args = Mock(login='dana2', uid=10003, hub='https://hub.example', join_file=str(code),
-                        relay='https://relay.example')
+                        relay='https://relay.example', full_name='', start=False)
+            args.name = 'dana2'
             with patch.object(m, 'load', side_effect=lambda n: {'fleet-node-supervisor': s, 'fleet-credsep': c}[n]), \
                     patch.object(m, 'ensure_login', return_value=me), patch.object(m, 'as_tenant'), \
                     patch.object(m, 'request', side_effect=hub), patch.object(m, 'private_write', side_effect=write), \
                     patch.object(m.pwd, 'getpwnam', return_value=me), patch.object(m.os, 'chown'):
-                m.prepare(args)
+                m.login_open(args)
                 s.account_adopt.assert_called_once()
                 self.assertFalse((d / 'cred/dana2/cred-proxy/relay.token').exists())
                 relay_code[0] = 500
                 with self.assertRaises(m.HubHTTPError):
-                    m.prepare(args)
+                    m.login_open(args)
 
     def test_privileged_linux_groups_refused_without_sudo_binary(self):
         s = module('fleet-node-supervisor')
@@ -2432,18 +2434,6 @@ class LinuxTenants(unittest.TestCase):
         self.m = module('fleet-node-linux')
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-
-    def test_legacy_declaration_migrates_to_per_login(self):
-        with FakeOS(self.m, self.tmp.name) as f:
-            st = Path(f.paths.state)
-            st.mkdir()
-            (st / 'linux-tenant.json').write_text(json.dumps(
-                {'login': 'fleet', 'uid': 10002, 'gid': 10002, 'home': f.paths.users + '/fleet'}))
-            got = self.m.tenants(f.paths)
-            self.assertEqual(got['fleet']['uid'], 10002)
-            self.assertTrue((st / 'linux-tenant.json.bak').is_file())
-            self.assertFalse((st / 'linux-tenant.json').exists())
-            self.assertEqual(f.open('drill2').pw_uid, 10003)
 
     def test_uid_reuse(self):
         """linux-uid-reuse: same number after a restart, a removed number never

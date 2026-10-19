@@ -246,7 +246,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   pool) marks it first with `fleet_win_retire` — a new one must too.
 - **A view session shares the fleet's windows; never scan or name them bare**
   (issue #1489). A shell or proxy client of this machine (`fleet-remote-view.sh
-  attach --shell` / a view id) attaches to a GROUPED session of its own,
+  attach` with a view id) attaches to a GROUPED session of its own,
   `<fleet>@view-<id>` — same windows, its own current window — so two people
   looking at one machine each see the row they picked. tmux then holds every
   window under two session names: `list-windows -a` lists it twice, and a bare
@@ -289,8 +289,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   into the old capped hold: a batch WITH WORK (#2247: `--live` / `--inflight`,
   `live 0` + `inflight 0` = idle) defers the tick BEFORE the switch, for at most
   that long on ONE clock per login / machine (#2843), then switches and notes it
-  on each holding EPIC. The pre-#2062 single file `global/epic-running` is read
-  for one version (`# compat-1v: 下一批删`). Every install records when it first
+  on each holding EPIC. Every install records when it first
   saw stable (install-sync `stable_since`, the updater's `target_seen`) and
   `fleet doctor --installs` prints 「落后 Nm」, WARN past 30 min. Pinned by
   `install-sync-selftest.sh` O/O2/O3, `fleet-node-update-selftest.py` F,
@@ -739,9 +738,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (issue #4671, after #3868 / #4663): every machine, login install and client —
   a Mac too — follows `refs/tags/stable` and the hub's `/version` `stable`;
   `refs/tags/stable-macos`, the Mac lane readers, `fleet-stable.sh` gate 5 and the
-  hub's `client_version_macos` / `?platform=darwin` are gone (an older caller's
-  `--ref stable-macos` / `--seed` / `--with-stable` / `ref=stable-macos` publish is
-  said and exits 0 / answered `retired`, `# compat-1v`). **No check holds a release
+  hub's `client_version_macos` / `?platform=darwin` are gone, and so are the Mac
+  lane's flags and the publish's `ref=stable-macos` (#4790). **No check holds a release
   on a Mac**: each Mac verifies its own install (the updater's machine doctor after
   the switch, rolled back to `.prev` on a new FAIL), and **a machine only moves
   forward** — `fleet-node-update.py` refuses a target whose manifest `seq` is lower

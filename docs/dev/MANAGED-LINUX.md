@@ -50,9 +50,7 @@ same name opened again is a new person with a new number. `/etc/passwd` lives
 in the image layer and is gone on every container start, so the entrypoint's
 first step is `fleet-node-linux.py boot`: every declared group and user back
 with its number, home and shell, before the supervisor starts. A home owned by
-any other number stops the boot with an error; it is never chowned. A volume
-from the single-login version has its `linux-tenant.json` moved to
-`linux-tenants/<login>.json` (the old file kept as `.bak`).
+any other number stops the boot with an error; it is never chowned.
 
 ## Opening and closing a login from the hub
 

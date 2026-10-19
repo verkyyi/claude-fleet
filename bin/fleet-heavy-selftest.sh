@@ -103,7 +103,7 @@ now="$(date +%Y-%m-%dT%H:%M:%S)"
 { printf '2000-01-01T00:00:00\tacquire\tu\t1\told\tslot=1 held=1 waited=999s\n'
   for w in 0 0 4 10; do printf '%s\tacquire\tu\t1\tx\tslot=1 held=1 waited=%ss\n' "$now" "$w"; done
   printf '%s\ttimeout\tu\t1\tx\twaited=30s\n' "$now"
-  printf '%s\trelease\tu\t1\tx\trc=0\n' "$now"; } > "$SD/events.log"
+  printf '%s\trelease\tu\t1\tx\trc=0\n' "$now"; } > "$SD/events.$(id -un).log"
 eq "--status 24h stats: count / queued / median / max" "  waits 24h: 5 runs · 3 queued · median 4s · max 30s" \
    "$(FLEET_HEAVY_DIR="$SD" "$HEAVY" --status | grep 'waits 24h')"
 

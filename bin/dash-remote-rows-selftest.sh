@@ -447,7 +447,7 @@ def s(fleet, host, user, key, avail="online", wid=True, seen="2026-10-04T10:00:0
     return dict(worker_id=(fleet + "/" + key) if wid else None, machine_name=host, os_user=user,
                 fleet_id=fleet, fleet_name="x", availability=avail, worker=w, observed_at=seen)
 sessions = [
-    s(u, "elsewhere", me, "issue-1420", issue=1420, name="local-one"),           # this fleet: dropped
+    s(u, "elsewhere", me, "acme-app:issue-1420", issue=1420, name="local-one"),  # this fleet: dropped
     s(f, "mac-d.local", me, "issue-1423", issue=1423, name="侧边栏", origin_wid=u + "/issue-1419"),
     s(f, "mac-d.local", me, "issue-1500", issue=1500, name="孙", origin_wid=f + "/issue-1423", seen="2026-10-04T10:05:00Z"),
     s(f, "mac-d.local", me, "issue-1600", issue=1600, name="epic-kid", busy="bg"),  # sub-issue of local 1419; #1607 busy
@@ -501,7 +501,7 @@ eq   "E: what the window needs rides along (field 10)" "mac-a|online|needs|asker
 eq   "E: a lost machine's row is kept, marked lost" "mac-a|lost|working|草稿||" "$(rrow scratch-4)"
 eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machine's label, no window here → empty wid" \
      "local-one|1||$MYHOST|online" \
-     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
+     "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $8 "|" $11 "|" $12 "|" $2 "|" $3 }')"
 eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
 # (a needs row that says what it asks runs on to fields 27-28 — #2538)
@@ -988,22 +988,6 @@ ctl = c.Control(sys.argv[1]); f = [x for x in ctl.inventory() if x["name"] == sy
 w = [x for x in ctl.workers(f)["workers"] if x["issue"] == 1423][0]
 print(w["name"] + "|" + str(w["origin_wid"]) + "|" + w["key"] + "|" + str(w["needs"]))' "$FLEET_CONF_DIR" "$S" 2>&1)
   eq "G: the adapter hands over the window name, @origin_wid and @claude_needs" "侧边栏 x|$F/issue-1419|acme-app:issue-1423|ask" "$got"   # the internal key carries the repo (#1939); the name is unchanged
-  # The shell's road while the hub is silent (#1488): fleet-remote-view.sh
-  # sessions reads the SAME adapter on this machine. Its hand copy of the column
-  # rule missed #1607's `busy=` and glued @origin_wid onto the name (issue
-  # #1698), so every row of a silent hub came back un-nested and mislabelled.
-  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
-d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]["issue"] == 1423][0]
-print(w["name"] + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]) + "|" + str("busy" in w))' 2>&1)
-  eq "G: remote-view sessions — name, @origin_wid, needs each in its own field (#1698)" \
-     "侧边栏 x|$F/issue-1419|ask|True" "$got"
-  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @origin_wid
-  "$REAL_TMUX" -L "$S" set-window-option -t "$wi" -u @claude_needs
-  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
-d = json.load(sys.stdin); w = [s["worker"] for s in d["sessions"] if s["worker"]["issue"] == 1423][0]
-print(repr(w["name"]) + "|" + str(w["origin_wid"]) + "|" + str(w["needs"]))' 2>&1)
-  eq "G: …a row with no parent: no trailing space on its name, origin_wid None" \
-     "'侧边栏 x'|None|None" "$got"
   # 置顶 (issue #3517): the hub's worker_pin lands through the adapter — a set,
   # checked against the window's @fleet_id — and column 32 carries it back as `pin`
   pinw() { cd "$BIN" && python3 -c 'import sys, fleet_control as c
@@ -1044,11 +1028,11 @@ print(",".join(sorted("%s:%s" % (x["name"], x.get("test", False)) for x in ws if
   "$REAL_TMUX" -L "$S" set-window-option -t "$wl" @issue 1420
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>"$WORK/err" || fail "G: --refresh (real server) failed" "$(cat "$WORK/err")"
   eq "G: a local row's wid is the live window of its worker_id" "1|$wl" \
-     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   "$REAL_TMUX" -L "$S" kill-window -t "$wl" 2>/dev/null
   CCQUOTA_FLEET=1 bash "$HUBS" --refresh 2>/dev/null
   eq "G: …and empty again once that window is gone" "1|" \
-     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
+     "$(LC_ALL=C awk -F"$US" -v w="wid:$U/acme-app:issue-1420" '$1 == w { print $11 "|" $12 }' "$G/remote_$S")"
   # The driver wears its batch (issue #2544): fleet-epic-heartbeat.sh --short
   # renames ITS OWN pane's window `<简称>·批次` beside the @epic stamp — only from a
   # name the fleet gave it; a person's name stays, and no --short renames nothing.
@@ -1086,10 +1070,6 @@ print(str(g.get("key")) + "|" + str(g.get("worker_id")) + "|" + str(r.get("key")
   case "$gfid" in ????????-????-????-????-????????????) ;; *) fail "G: the adapter minted no @fleet_id for a keyless window (got '$gfid')" ;; esac
   eq "G: a keyless no-repo window is listed under its minted identity; a raw scratch keys off its cwd; no panel" \
      "None|$U/$gfid|acme-app:scratch-21|False" "$got"   # the scratch key carries the repo (#1939)
-  got=$(bash "$BIN/fleet-remote-view.sh" sessions 2>&1 | python3 -c 'import json, sys
-d = json.load(sys.stdin); print(";".join(sorted(s["worker_id"].split("/", 1)[1] for s in d["sessions"])))' 2>&1)
-  has "G: remote-view sessions lists the keyless window too" "$got" "$gfid"
-  has "G: …and the cwd-keyed scratch" "$got" "scratch-21"
   # Issue #1958: the heartbeat marks the driver's OWN window, the adapter's column
   # 21 hands its EPIC (+ the mark's counts) on, its title is the EPIC's; --clear
   # unmarks it. The pane is the one the stamp runs in ($TMUX/$TMUX_PANE).

@@ -70,7 +70,7 @@ A report is unconditional after merge (#574). `reported` means arrived; `queued`
 
 **Host for the operator with doc-preview, never an Artifact.** Artifacts are tied to the publishing claude.ai account, while fleet rotates accounts; the operator cannot know which login owns the page (#526). The artifact guard blocks publishing, not reading/commenting on an existing artifact. Doc-preview shares append to one machine-hosted collection. Follow its current skill for URL delivery and privacy rather than inventing hosting.
 
-**Show the operator a file on THEIR terminal, never `open` it here.** The operator is connected over SSH; `open` would display on the unattended node (#1367). `show` offers an image/PDF/QR file to the operator's terminal; SENT means offered, not accepted. Inline display holds the screen until a key; PATH signals unavailable transfer or an over-cap file. Reading documents still belongs to doc-preview.
+**Show the operator a file on THEIR terminal, never `open` it here.** The operator is connected over SSH; `open` would display on the unattended node (#1367). `show` sends an image/PDF/QR file to the operator's computer and answers with its receipt (#3541): `saved:<path>` names where it landed on their side, `unconfirmed` means handed over with no answer, `failed:<why>` (exit 4) that their side could not take it. Inline display holds the screen until a key; PATH signals unavailable transfer or an over-cap file. Reading documents still belongs to doc-preview.
 
 **Open a page in the operator's browser with `fleet-open`, never `open`.** The open tool routes through the operator's connection and forwards node-local ports (#1379), including dev server URLs. Its skill defines the delivery receipts and fallback behavior.
 

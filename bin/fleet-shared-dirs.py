@@ -19,8 +19,6 @@ This is the root half, the node supervisor's `shared-dirs` task (every 60 s):
     only flocks it (flock works on a read-only fd) — nobody can delete, replace,
     chmod or write them. A slot another login made (an older version, or before
     this task first ran) is replaced by root's own;
-  * the old shared heavy/events.log (0666, compat-1v) becomes root's 0644: an
-    older fleet-heavy's append fails quietly, the new one writes events.<login>.log;
   * a squatter is swept: heavy/{hold,wait}.<login>.<pid> and events.<login>.log,
     sessions/<login>, gh/<repo>/fetch.<kind>.<login> — any such file not owned by
     <login> (or not a regular file) is removed, and a hold/wait whose pid is gone
@@ -149,19 +147,6 @@ class Pass:
         os.chmod(tmp, 0o644)
         os.rename(tmp, path)                  # replaces a foreign file or a symlink in one step
 
-    def legacy_events(self, path):            # compat-1v: 下一批删
-        try:
-            st = os.lstat(path)
-        except FileNotFoundError:
-            return
-        if not stat.S_ISREG(st.st_mode):
-            self.act("rm %s (not a file)" % path, os.unlink, path)
-            return
-        if self.root and st.st_uid != 0:
-            self.act("chown root %s (was uid %d)" % (path, st.st_uid), os.chown, path, 0, 0)
-        if stat.S_IMODE(st.st_mode) & 0o022 and (self.root or st.st_uid == self.me):
-            self.act("chmod 644 %s" % path, os.chmod, path, 0o644)
-
     def sweep_heavy(self, d):
         for n in sorted(os.listdir(d)):
             p = os.path.join(d, n)
@@ -250,7 +235,6 @@ def main(argv):
     if os.path.isdir(heavy):
         for k in range(1, slots + 1):
             ps.ensure_slot(os.path.join(heavy, "slot-%d" % k))
-        ps.legacy_events(os.path.join(heavy, "events.log"))
         ps.sweep_heavy(heavy)
     if os.path.isdir(sessions):
         ps.sweep_sessions(sessions)

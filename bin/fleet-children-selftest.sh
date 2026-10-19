@@ -246,15 +246,15 @@ git -C "$GR" init -q -b master 2>/dev/null || { git -C "$GR" init -q && git -C "
 git -C "$GR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init || fail "gen: could not seed a repo"
 CD="$FLEET_CONF_DIR/fleets/$LBL/children"
 printf '%s' '{"child":"issue-501","state":"MERGED","pr":"51"}' \
-  | python3 "$BIN/fleet-children.py" append --file "$CD/scratch-1.ndjson" >/dev/null \
+  | python3 "$BIN/fleet-children.py" append --file "$CD/${P}scratch-1.ndjson" >/dev/null \
   || fail "gen: could not seed the last holder's book"
 new_win gen-oldkid; GK="$WID"; opt "$GK" @issue 502; opt "$GK" @origin scratch-1; opt "$GK" @origin_wid "u/scratch-1"
 eq "gen: before re-allocation scratch-1 has the old book's child + the live one" 2 \
   "$(bash "$CLI" -L "$LBL" scratch-1 --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["children"]))')"
 alloc=$( . "$BIN/fleet-lib.sh"; fleet_scratch_alloc "$GR" master "$LBL" )
 eq "gen: the free number is allocated" scratch-1 "${alloc%%$'\t'*}"
-eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/scratch-1.ndjson" ] && echo yes || echo no)"
-has "gen: …and kept, readable, in its retired book" '"child": "issue-501"' "$(cat "$CD/scratch-1.ndjson.0" 2>/dev/null)"
+eq "gen: the last holder's book is moved aside" no "$([ -e "$CD/${P}scratch-1.ndjson" ] && echo yes || echo no)"
+has "gen: …and kept, readable, in its retired book" "\"child\": \"${P}issue-501\"" "$(cat "$CD/${P}scratch-1.ndjson.0" 2>/dev/null)"
 G1=$(awk -F'\t' -v k="${P}scratch-1" '$1 == k { g = $2 } END { print g }' "$CD/.gen" 2>/dev/null)
 case "$G1" in [0-9]*.[0-9]*) CHECKS=$((CHECKS + 1)) ;; *) fail "gen: no generation minted for scratch-1" "$(cat "$CD/.gen" 2>/dev/null)" ;; esac
 NEWOUT=$(bash "$CLI" -L "$LBL" scratch-1 --json 2>&1)
@@ -283,45 +283,23 @@ eq "gen: (no session) scratch-2 allocated" scratch-2 "${alloc%%$'\t'*}"
 eq "gen: (no session) its book is untouched" 1 "$(wc -l < "$CD/scratch-2.ndjson" | tr -d ' ')"
 eq "gen: (no session) no generation minted" 0 "$(grep -c 'scratch-2	' "$CD/.gen")"
 
-# --- 3b. ONE BOOK (issue #1939, #982): a bare book and a bare @origin are the one
-# repo's. Before #1939 a one-repo fleet wrote `scratch-12.ndjson` and stamped bare
-# @origins; the same parent's key is `acme-app:scratch-12` now. Read together they
-# are one parent: each child once, no bare key on a row, the count whole; a report
-# from a bare-@origin child lands in the qualified book; fleet_origin_heal rewrites
-# the bare @origin, after which the dash nests it too.
+# --- 3b. A BARE @origin (issue #1939): a one-repo fleet's child stamped bare is
+# the one repo's: its report lands in the qualified book, and fleet_origin_heal
+# rewrites the bare @origin, after which the dash nests it too.
 mkdir -p "$WORK/repo-scratch-12"
 new_win '合账'; OB="$WID"; opt "$OB" @raw 1; opt "$OB" @worktree "$WORK/repo-scratch-12"; opt "$OB" @claude_state idle
-printf '%s\n' '{"seq": 1, "ts": "2026-10-05T00:00:00Z", "child": "issue-201", "state": "WAITING", "pr": "61"}' \
-  '{"seq": 2, "ts": "2026-10-05T00:01:00Z", "child": "issue-204", "state": "MERGED", "pr": "64"}' > "$CD/scratch-12.ndjson"
-printf '%s\n' '{"seq": 1, "ts": "2026-10-06T00:00:00Z", "child": "acme-app:issue-202", "state": "WAITING", "pr": "62"}' > "$CD/${P}scratch-12.ndjson"
 new_win kid-201; B1="$WID"; opt "$B1" @issue 201; opt "$B1" @origin scratch-12; opt "$B1" @claude_state 'done'
 new_win kid-202; B2="$WID"; opt "$B2" @issue 202; opt "$B2" @origin "${P}scratch-12"; opt "$B2" @claude_state working
 new_win kid-203; B3="$WID"; opt "$B3" @issue 203; opt "$B3" @origin scratch-12; opt "$B3" @claude_state working
-OBJ=$(bash "$CLI" -L "$LBL" scratch-12 --json 2>&1)
-python3 - "$OBJ" <<'PY' || fail "one book: the bare and qualified books must read as one parent (see above)" "$OBJ"
-import json, sys
-d = json.loads(sys.argv[1])
-assert d["parent"] == "acme-app:scratch-12", d["parent"]
-kids = sorted(k["child"] for k in d["children"])
-assert kids == ["acme-app:issue-201", "acme-app:issue-202", "acme-app:issue-203", "acme-app:issue-204"], kids
-k = {c["child"]: c for c in d["children"]}
-assert k["acme-app:issue-201"]["live"] and k["acme-app:issue-201"]["pr"] == "61", k["acme-app:issue-201"]
-assert k["acme-app:issue-204"]["last"]["state"] == "MERGED" and not k["acme-app:issue-204"]["live"], k["acme-app:issue-204"]
-assert d["summary"]["total"] == 4, d["summary"]
-PY
-CHECKS=$((CHECKS + 1))
-eq "one book: the qualified key reads the same" "$(summ scratch-12)" "$(summ "${P}scratch-12")"
 RUN --win "$B1" --state merged --pr 61 --summary landed
-has "one book: a bare-@origin child's report is booked under the qualified key" '"child": "acme-app:issue-201"' \
+has "bare origin: a bare-@origin child's report is booked under the qualified key" '"child": "acme-app:issue-201"' \
   "$(tail -1 "$CD/${P}scratch-12.ndjson")"
-eq "one book: …and never in the bare book again" 2 "$(wc -l < "$CD/scratch-12.ndjson" | tr -d ' ')"
-eq "one book: the newer report wins over the bare book's" MERGED \
-  "$(bash "$CLI" -L "$LBL" scratch-12 --json | python3 -c 'import json,sys; print({c["child"]: c for c in json.load(sys.stdin)["children"]}["acme-app:issue-201"]["last"]["state"])')"
+eq "bare origin: …never in a bare book" no "$([ -e "$CD/scratch-12.ndjson" ] && echo yes || echo no)"
 healed=$( . "$BIN/fleet-lib.sh"; fleet_origin_heal "$LBL" "$LBL" )
-has "one book: heal rewrites a bare @origin" "$B3 scratch-12 → ${P}scratch-12" "$healed"
-eq "one book: …every bare one" "${P}scratch-12|${P}scratch-12" \
+has "bare origin: heal rewrites a bare @origin" "$B3 scratch-12 → ${P}scratch-12" "$healed"
+eq "bare origin: …every bare one" "${P}scratch-12|${P}scratch-12" \
   "$(TM display-message -p -t "$B1" '#{@origin}')|$(TM display-message -p -t "$B3" '#{@origin}')"
-eq "one book: after the heal the dash nests them all" "1/3" "$(dash_badge_of "$OB")"
+eq "bare origin: after the heal the dash nests them all" "1/3" "$(dash_badge_of "$OB")"
 TM kill-window -t "$B1"; TM kill-window -t "$B2"; TM kill-window -t "$B3"; TM kill-window -t "$OB"
 
 # --- 4. ONE ROW PER CHILD (issue #1351): three sources, one key -----------------

@@ -389,9 +389,12 @@ func beatCap(t *testing.T, h *harness, n *writeNode, host, machine string, load1
 		hb.MaxSessions, hb.CapSessions = max, &used
 	}
 	beat(t, n.conn, control.Proto, hb)
+	// Sessions too: a beat that repeats twoNodes' load and carries no cap
+	// matched the earlier beat, and the placement read the old count
+	// (claude-fleet#4679, TestNodePlaceWithoutCapFieldsFiltersNothing).
 	waitFor(t, 3*time.Second, host+"'s beat landed", func() bool {
 		got, _, _ := h.srv.nodeStatusOf("ep_"+host, time.Now())
-		return got.Load1 == load1 && got.MaxSessions == max
+		return got.Load1 == load1 && got.MaxSessions == max && got.Sessions == used
 	})
 }
 

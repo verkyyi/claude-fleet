@@ -50,9 +50,6 @@
 #      provenance marker into the body via the shared fleet_from_marker helper —
 #      the byte-identical marker bin/fleet-comment.sh puts on a comment (the
 #      convention lives in fleet-lib.sh now; this reuses it, #224/#332).
-#   2a. --rule N is accepted and ignored for one version (issue #4340: the dispatch
-#      rule table is gone, nothing writes 「按规则 N 派发」 or a fleet:rule marker any
-#      more; an old issue's marker is only text). # compat-1v: 下一批删
 #   3. create, through the ticket door (`fleet-ticket.sh new --filed`; issue #3595) (title · body · labels · milestone). When no --milestone
 #      is given and FLEET_DEFAULT_MILESTONE is set for the fleet, default to it —
 #      auto-creating the milestone if absent — so nothing lands unsorted (issue
@@ -85,7 +82,7 @@
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
-#                       [--parent N] [--from ROLE] [--milestone M] [--rule N] \
+#                       [--parent N] [--from ROLE] [--milestone M] \
 #                       [--repo R] [--spawn | --bind] [--breakage | --breakage-key K | --no-breakage] \
 #                       [--fault-sha S] [--fault-link URL] \
 #                       [--task T<n>] [--draft] [--pr-note TEXT]
@@ -127,7 +124,6 @@ while [ "$#" -gt 0 ]; do
     --parent)    shift; parent="${1//[^0-9]/}" ;;
     --from)      shift; from="${1:-}" ;;
     --milestone) shift; milestone="${1:-}" ;;
-    --rule)      shift ;;   # compat-1v: accepted, ignored (issue #4340)
     --task)      shift; task="${1:-}" ;;
     --repo)      shift; repo="${1:-}" ;;
     --spawn)     spawn=1 ;;

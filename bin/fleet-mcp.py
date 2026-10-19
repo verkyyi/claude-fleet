@@ -1607,10 +1607,11 @@ TOOLS = {
                    "description": "New fleet version (sha); default the current one."}},
             "additionalProperties": False}}),
     "show": (tool_show, {
-        "description": "Show a file (image, PDF, QR code, screenshot) on the OPERATOR's terminal, never this "
-                       "machine's screen (bin/fleet-show.sh): SENT (exit 0) offered as a download; PATH (exit 2) "
-                       "no iTerm2 attached — tell them the path. inline draws it and holds the screen until they "
-                       "press a key.",
+        "description": "Show a file (image, PDF, QR code, screenshot) on the OPERATOR's computer, never this "
+                       "machine's screen (bin/fleet-show.sh) — one receipt line per file: saved:<path> (exit 0: "
+                       "their side saved it there — tell them where) · unconfirmed (exit 0: handed over, no answer) "
+                       "· failed:<why> (exit 4); PATH + failed: (exit 2) not sent — tell them the path. inline "
+                       "draws it and holds the screen until they press a key.",
         "inputSchema": {"type": "object", "properties": {
             "file": {"type": "string", "description": "Path of the file."},
             "inline": {"type": "boolean", "description": "Draw it in the terminal instead of a download."}},

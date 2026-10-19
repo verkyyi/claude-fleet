@@ -284,7 +284,7 @@ FLEET_CRED_RELAY_RETRY_SECS        knob: first ask for a relay pass the proxy ha
 FLEET_CRED_RELAY_RETRY_MAX_SECS    knob: cap of that doubling — the bound on a new login's pass (120, #3423)
 FLEET_CRED_REPROBE_CMD             test seam: what a newly issued relay pass re-runs instead of fleet-node-probe.sh (#3423)
 FLEET_CRED_RELAY_TOKEN             handoff: a hand-set relay pass, read from secrets.env only — never a setting; unset = the one fleet-relay-cred.sh mints (#1970, #1974)
-FLEET_CREDSEP_OPTIONAL             alias: the retired self-hosted opt-out (#4607) — read only for the doctor's one «gone» line (#4675, compat-1v: 下一批删)
+FLEET_CREDSEP_OPTIONAL             alias: the retired self-hosted opt-out (#4607, #4675) — read by nothing; a selftest sets it to prove that
 FLEET_DRILL_AGENT_SECS             knob: fleet-onboard-drill.sh's wait for the session to read the screenshot (300 s, #2139)
 FLEET_DRILL_GUIDE_SECS             knob: fleet-onboard-drill.sh's wait for the home's onboarding guide to open (240 s, #3472)
 FLEET_DRILL_NODE_BIN               knob: the session login's fleet bin/ fleet-onboard-drill.sh restarts it with (default ~<login>/.claude/fleet/bin, #2139)
@@ -1029,3 +1029,9 @@ FLEET_HUB_AUTHORITY_CMD           seam: authority admission command for isolated
 FLEET_STREAM_RESUME_FG            seam: wait in the foreground for the stream-resume selftest (#4714)
 FLEET_STREAM_RESUME_SEND_CMD      seam: the stream-resume sender (fleet-peer-send.sh) in its selftest (#4714)
 FLEET_STREAM_RESUME_REPORT_CMD    seam: the stream-resume give-up report (fleet-report-parent.sh) in its selftest (#4702)
+FLEET_SHOW_ACK_WAIT                knob: seconds fleet-show.sh waits for a file's receipt (12 + 2 a MB) before saying unconfirmed (#3541)
+FLEET_THIN_SHOW_OUT                seam: where fleet-show.sh writes the thin 看台's OSC 7502 show instead of its tty (selftest, #3541)
+FLEET_CLIENT_CAPS                  handoff: what the thin loop takes beyond open (`show`), set on the attach command for the home (fleet-thin.py → fleet-remote-view.sh caps=, #3541)
+FLEET_THIN_DOWNLOADS               path: where fleet-thin.py saves a file a show sent (default ~/Downloads, #3541)
+FLEET_THIN_FETCH_CMD               seam: what fleet-thin.py runs to fetch a show's file instead of `fleet-show.sh --fetch` on the home; the id appended (selftest, #3541)
+FLEET_THIN_FETCH_SECS              knob: how long fleet-thin.py lets one show's fetch take (600, #3541)

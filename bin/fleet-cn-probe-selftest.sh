@@ -240,11 +240,11 @@ leg_J() {   # the read-only diagnosis: the denier with its readings, the opener,
   # a shared-machine admission (FLEET_USER_POD unset) at 1.51 of 1.00 cores: the gate holds
   printf '2026/10/15 03:40:01 ccquota agent --machine prod-x -> https://hub.test (0 logins)\nccquota agent --machine: FLEET_NODE_ACCOUNT_OPS=1 but no opener: fleet-node-linux.py under /var/db/fleet-node/runtime is group-writable\nccquota: machine agent: no logins to serve\n' > "$R/node/node-agent.log"
   chmod 2775 "$R/node/runtime"
-  mkdir -p "$R/home/.config/claude-fleet/cred-proxy" "$R/home/.claude-logs"
+  mkdir -p "$R/home/.config/claude-fleet/cred-proxy" "$R/home/.config/claude-fleet/logs" "$R/home/.claude-logs"
   printf '{"trust": "trusted", "why": "hub: trusted"}\n' > "$R/home/.config/claude-fleet/cred-proxy/trust.json"
   printf '1 2 3 4\n' > "$R/home/.config/claude-fleet/global/admit-cpu.window"
   # the proxy started on central, then upstream answered the newest turn 403
-  printf '{"t": 100.0, "ev": "start", "route": "central"}\n{"t": 50.0, "ev": "nocred", "acct": "default", "route": "direct"}\n{"t": 120.5, "ev": "fwd", "provider": "codex", "path": "/codex/responses", "route": "central", "up": "hub.test", "status": 403, "hdrs_in": ["authorization=<redacted:444>"]}\n' > "$R/home/.claude/fleet/logs/cred-proxy.log"
+  printf '{"t": 100.0, "ev": "start", "route": "central"}\n{"t": 50.0, "ev": "nocred", "acct": "default", "route": "direct"}\n{"t": 120.5, "ev": "fwd", "provider": "codex", "path": "/codex/responses", "route": "central", "up": "hub.test", "status": 403, "hdrs_in": ["authorization=<redacted:444>"]}\n' > "$R/home/.config/claude-fleet/logs/cred-proxy.log"
   cp "$R/home/.config/claude-fleet/global/admit-cpu.window" "$WORK/window.before"
   # credential-shaped things the pod's words might carry — none may land
   printf 'FLEET_HUB_TOKEN=tokxxxxxxxxxxxx Cookie: sid=cookiexxxxxxxx sk-ant-api03-SECRETSECRET fd_approvecode99\n' > "$R/home/.config/claude-fleet/global/onboard.open.log"

@@ -120,7 +120,7 @@ lints it): a script path appears only under a heading marked `运营者` or `排
 | `handoff` `arm` | `doc` (a stored file's path) \| `issue` (+ `repo`?) | `fleet-handoff-cycle.sh --pane $TMUX_PANE --doc D \| --issue N [--repo R]`, **detached** — the call returns at once with its pid; it must be the turn's last call | 0 armed |
 | `where` | `json`? | `fleet-client-where.sh [--json]` | 0 named · 3 nobody connected · 1 could not tell |
 | `whats_new` | `from`?, `to`? (shas; default this session's `@agent_ver` → the current version) | `fleet-whats-new.sh --full [<from> [<to>]]` | 0 printed · 1 nothing changed / no version |
-| `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 SENT · 2 PATH (say the path) |
+| `show` | `file`, `inline`? | `fleet-show.sh [--inline] -- <file>` | 0 `saved:<path>` / `unconfirmed` · 4 `failed:<why>` · 2 PATH + `failed:` (say the path) |
 | `open` | `target` (URL · `:port[/path]` · file) | `fleet-open.sh -- <target>` — waits for the far side's receipt (issue #3538) | 0 `opened` / `unconfirmed` · 4 `failed:<why>` · 2 a file not sent (say the path) |
 | `debug_bundle` | `id` (a debug report, `[a-z2-7]{8}`) | `fleet-debug-desk.py fetch <id>` — the debugger's (issue #2893): the bundle + the hub's `hub.json`, unpacked into `$TMPDIR/fleet-debug/<id>/` | 0 · 3 no hub / node token · 4 the hub refused (not this login's report) · 1 no answer |
 | `debug_publish` | `id`, `result` (JSON text: `cause`, `evidence[]`, `steps[{why, cmd, system?}]` 1–3, `ours[]`) | `fleet-debug-desk.py publish <id> -` (result on stdin) — the page at `/s/<id>`, the report 已出结论 | 0 · 2 a section missing / > 3 steps / credential-shaped · 3 · 4 · 1 |

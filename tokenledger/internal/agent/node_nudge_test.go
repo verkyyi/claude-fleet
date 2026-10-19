@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -175,12 +176,22 @@ func TestNudgeDebouncesAndRateLimits(t *testing.T) {
 	// last change of a burst always goes out). Spacing them 20 ms apart made
 	// the burst ~100 ms of a 250 ms poll, and a tick running late on a loaded
 	// -race runner landed in it (claude-fleet#2592); set explicit mtimes in a
-	// tight loop so the burst spans microseconds.
+	// tight loop so the burst spans microseconds. Each write is made aside and
+	// renamed in with its mtime already set (claude-fleet#4679): a write's own
+	// "now" mtime, visible until the Chtimes after it, was one more change a
+	// tick could see, and the window was a whole write + chtimes wide.
 	base := time.Now()
-	for i := 0; i < 5; i++ {
-		touch(t, nudge)
+	staged := make([]string, 5)
+	for i := range staged {
+		staged[i] = fmt.Sprintf("%s.burst%d", nudge, i)
+		touch(t, staged[i])
 		at := base.Add(time.Duration(i+1) * time.Millisecond)
-		if err := os.Chtimes(nudge, at, at); err != nil {
+		if err := os.Chtimes(staged[i], at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, s := range staged {
+		if err := os.Rename(s, nudge); err != nil {
 			t.Fatal(err)
 		}
 	}

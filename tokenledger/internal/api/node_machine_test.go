@@ -162,6 +162,13 @@ func machineRig(t *testing.T, admins ...string) (*harness, *machNode) {
 	}
 	n := dialMachine(t, h, h.tokens["mach"])
 	n.beat("", control.Heartbeat{Hostname: "mac-c", OSUser: "root", NCPU: 10, ObservedAt: time.Now()})
+	// The beat is recorded off the link's reader: a login hello read before it
+	// found the machine's host unknown and skipped the other-machine check
+	// (claude-fleet#4679 — "dave with belongs to mac-d: answered welcome").
+	waitFor(t, 3*time.Second, "the machine's host recorded", func() bool {
+		ep, err := h.srv.Store.EndpointByID("ep_mach")
+		return err == nil && h.srv.endpointHost(*ep) == "mac-c"
+	})
 	for _, l := range []string{"alpha", "beta"} {
 		if r := n.login(l, h.tokens[l], hasString(admins, l), control.CapRead, control.CapWrite, control.CapMove); r.Type != control.TypeWelcome || r.Login != l {
 			t.Fatalf("%s's hello answered %+v", l, r)

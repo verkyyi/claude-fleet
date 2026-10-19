@@ -279,18 +279,18 @@ deliver "$(relay 1700000001.3 message "$F/issue-43" "$U/0e0e0e0e-1111-4222-8333-
 ok; [ "$rc" = 75 ] || fail "L: a message to an identity not live here ⇒ 75" "rc=$rc $err"
 
 # --- G: await a child elsewhere -----------------------------------------------------------
-printf '%s/issue-55\tmac-a\t%s/issue-7\n%s/issue-56\tmac-a\t%s/issue-9\n' "$F" "$U" "$F" "$U" > "$CACHE"
+printf '%s/issue-55\tmac-a\t%s/acme-app:issue-7\n%s/issue-56\tmac-a\t%s/acme-app:issue-9\n' "$F" "$U" "$F" "$U" > "$CACHE"
 ( sleep 2
-  printf '%s' "$(relay 1700000000.7 child_report "$F/issue-55" "$U/issue-7" '{"child":"issue-55","state":"MERGED","pr":"11","summary":"done","tier":"quiet","msg":"m"}')" \
+  printf '%s' "$(relay 1700000000.7 child_report "$F/issue-55" "$U/acme-app:issue-7" '{"child":"issue-55","state":"MERGED","pr":"11","summary":"done","tier":"quiet","msg":"m"}')" \
     | env -u TMUX bash "$BIN/fleet-hub-node.sh" deliver >/dev/null 2>&1 ) &
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-55" -L "$L" --parent issue-7 --timeout 20 --interval 1
 wait
 ok; [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = MERGED ] && case "$out" in *"pr: #11"*) true ;; *) false ;; esac \
   || fail "G: await a remote child → MERGED off the pushed report" "rc=$rc out=$out err=$err"
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-56" -L "$L" --parent issue-7 --timeout 5 --interval 1
-ok; [ "$rc" = 5 ] && case "$out" in *"reports to $U/issue-9"*) true ;; *) false ;; esac \
+ok; [ "$rc" = 5 ] && case "$out" in *"reports to $U/acme-app:issue-9"*) true ;; *) false ;; esac \
   || fail "G: another parent's child → NO-WORKER" "rc=$rc out=$out"
-printf '%s/issue-57\tmac-a\t%s/issue-7\n' "$F" "$U" > "$CACHE"
+printf '%s/issue-57\tmac-a\t%s/acme-app:issue-7\n' "$F" "$U" > "$CACHE"
 ( sleep 2; printf '%s/issue-1\tmac-a\t\n' "$F" > "$CACHE" ) &
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-57" -L "$L" --parent issue-7 --timeout 20 --interval 1
 wait

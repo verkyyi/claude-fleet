@@ -14,8 +14,7 @@
 # install is the machine's runtime or the hub's signed stable
 # (fleet-login-install.sh) — a mirror filled at the last opening was usually an
 # old version, and its origin was GitHub. `refresh` writes no <cache>/claude-fleet.git
-# any more (`--from` is accepted and ignored for one version); `clone` still reads
-# a mirror an older refresh left, for one version, and nothing calls it.
+# any more.
 # On a managed machine the Claude Code half is the machine updater's cache step
 # (fleet-node-update.py), the same <cache>/claude.
 #
@@ -33,32 +32,24 @@
 #       from ~/.local/bin/claude. Exit 3: no binary in the cache.
 #   fleet-bootstrap-cache.sh dir          print <cache>
 #
-# Env: FLEET_BOOTSTRAP_CACHE (`off` = no cache: refresh does nothing, clone /
-#      claude exit 3)
+# Env: FLEET_BOOTSTRAP_CACHE (`off` = no cache: refresh does nothing, claude
+#      exits 3)
 # Exit: 0 ok · 1 failed · 2 usage · 3 nothing cached for it
 set -uo pipefail
 
 PROG=fleet-bootstrap-cache
-FLEET_REPO_SELF=verkyyi/claude-fleet
 if [ -n "${FLEET_BOOTSTRAP_CACHE:-}" ]; then CACHE=$FLEET_BOOTSTRAP_CACHE
 elif [ "$(uname -s)" = Darwin ]; then CACHE='/Library/Application Support/claude-fleet/cache'
 else CACHE=/var/cache/claude-fleet
 fi
-MIRROR="$CACHE/claude-fleet.git"
-UPSTREAM="${FLEET_BOOTSTRAP_GIT_BASE:-https://github.com}/$FLEET_REPO_SELF.git"  # dist-ok: compat-1v (下一批删) — clone's origin; no caller since #2775
 
 say() { printf '%s: %s\n' "$PROG" "$*"; }
 die() { printf '%s: %s\n' "$PROG" "$2" >&2; exit "$1"; }
-# The cache is root's and the reader is a login: git (≥ 2.45.1) refuses a repo
-# another user owns, even for a local clone's upload-pack. Command-line config is
-# the one place safe.directory is honoured, and its env form reaches the children.
-g() { git -c "safe.directory=$MIRROR" "$@"; }
 
 refresh() {
   cl=''
   while [ $# -gt 0 ]; do
     case "$1" in
-      --from) shift; [ $# -gt 0 ] && shift ;;  # compat-1v: 下一批删 — the claude-fleet mirror retired (issue #2775)
       --claude) cl="${2:-}"; shift 2 ;;
       *) die 2 "refresh: unknown arg $1" ;;
     esac
@@ -94,28 +85,6 @@ refresh() {
   return 0
 }
 
-# compat-1v: 下一批删 — reads a claude-fleet.git an older refresh left; no caller
-# since issue #2775 (a new login installs from the runtime or the hub)
-clone() {
-  local dest='' br=''
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --branch|-b) br="${2:-}"; shift 2 ;;
-      -*) die 2 "clone: unknown arg $1" ;;
-      *) [ -z "$dest" ] || die 2 "clone: one <dest>"; dest=$1; shift ;;
-    esac
-  done
-  [ -n "$dest" ] || die 2 'clone: <dest> is required'
-  [ -d "$MIRROR/objects" ] || return 3
-  # --no-local: copy the objects, never hardlink root's files into the login's repo
-  if g -c advice.detachedHead=false clone -q --no-local ${br:+-b "$br"} "$MIRROR" "$dest" 2>/dev/null \
-     && git -C "$dest" remote set-url origin "$UPSTREAM"; then
-    return 0
-  fi
-  rm -rf "$dest"
-  return 1
-}
-
 claude_install() {
   local ver src
   ver=$(cat "$CACHE/claude/current" 2>/dev/null) || ver=''
@@ -137,12 +106,11 @@ if [ "$CACHE" = off ]; then
   case "${1:-}" in
     dir) echo off; exit 0 ;;
     refresh) say "off (FLEET_BOOTSTRAP_CACHE=off) — nothing cached"; exit 0 ;;
-    clone|claude) exit 3 ;;
+    claude) exit 3 ;;
   esac
 fi
 case "${1:-}" in
   refresh) shift; refresh "$@" ;;
-  clone) shift; clone "$@" ;;
   claude) shift; claude_install ;;
   dir) printf '%s\n' "$CACHE" ;;
   -h|--help) sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;

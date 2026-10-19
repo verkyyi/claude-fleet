@@ -340,13 +340,11 @@ eq "O: a bare --clear with one mark clears it" 0 "$RC"
 [ -e "$EPD/o-r-1982" ] && fail "O: the bare --clear left the one mark"; CHECKS=$((CHECKS + 1))
 OUT=$(bash "$HB" --status 2>&1); RC=$?; eq "O: --status with no mark exits 2" 2 "$RC"
 OUT=$(bash "$HB" --clear 1117 2>&1); RC=$?; eq "O: --clear of nothing exits 0" 0 "$RC"; contains "O: …says nothing to clear" "$OUT" "nothing to clear for epic=1117"
-# the pre-#2062 single file is still read for one version (compat-1v), never written
+# the pre-#2062 single file is not a mark any more (issue #4790)
 printf 'epoch: %s\nttl: 2700\nepic: 883\nsession: f1\ntick: 1\n' "$(date +%s)" > "$CONF/global/epic-running"
 OUT=$(bash "$HB" --status 2>&1); RC=$?
-eq "O: a legacy mark still reads fresh" 0 "$RC"; contains "O: …as its epic" "$OUT" "fresh epic=883"
-run; contains "O: …and still defers" "$(st reason)" "epic=883"
-bash "$HB" --clear 883 >/dev/null 2>&1
-[ -e "$CONF/global/epic-running" ] && fail "O: --clear 883 left the legacy mark"; CHECKS=$((CHECKS + 1))
+eq "O: the old single file reads as no mark" 2 "$RC"
+rm -f "$CONF/global/epic-running"
 # usage
 OUT=$(bash "$HB" 2>&1); RC=$?; eq "O: no epic is a usage error" 2 "$RC"
 OUT=$(bash "$HB" 1117 --ttl 0 2>&1); RC=$?; eq "O: --ttl 0 is a usage error" 2 "$RC"

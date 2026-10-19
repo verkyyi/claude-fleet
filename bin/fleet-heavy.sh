@@ -202,8 +202,8 @@ def log_event(kind, label, extra=""):
 
 
 def event_logs():
-    """Every login's own log (owner checked) + the old shared one (compat-1v: 下一批删)."""
-    out = [os.path.join(DIR, "events.log")]
+    """Every login's own log (owner checked)."""
+    out = []
     try:
         names = sorted(os.listdir(DIR))
     except OSError:
@@ -291,8 +291,7 @@ def probe_held(slots):
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 fcntl.flock(fd, fcntl.LOCK_UN)
             except OSError:
-                # compat-1v: 下一批删 — an older version writes its metadata INTO the slot
-                held.append((k, holds.get(k) or read_meta(path)))
+                held.append((k, holds.get(k)))
         finally:
             os.close(fd)
     return held

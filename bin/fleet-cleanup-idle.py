@@ -602,7 +602,6 @@ class Cleaner:
             if self.args.forge == "none":
                 # No GitHub, no issue to ask (issue #3601): its branch landing is the
                 # stand-in until the ticket door answers (EPIC #3570 C2).
-                # compat-1v: 下一批删 — once fleet-ticket.sh says the ticket's state.
                 state = "CLOSED" if branch and self.landed(head or branch) else "OPEN"
             else:
                 try:

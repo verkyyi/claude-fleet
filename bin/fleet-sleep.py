@@ -532,7 +532,7 @@ class Worker:
                             remain=self.opt('remain-on-exit'),resume_count=0)
                 data['screen'] = self.tm('capture-pane','-p','-t',self.pane)
                 # a Codex window's live model is the bus's @model since #2431 (the hook feeds
-                # conf/statusline.sh); @cc_model is the launcher's, kept one version (compat-1v: 下一批删)
+                # conf/statusline.sh); a Claude window's is the launcher's @cc_model
                 data['model'] = (self.opt('@model') if source['agent']=='codex' else '') or self.opt('@cc_model')
                 data['options'] = source['restart_options']
                 data['rss_before_kb']=process_tree_rss(source['pid'])

@@ -2564,7 +2564,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # separated, a self-hosted one-person box too (its one machine proxy); the hub
 # leases an unseparated login nothing, and nothing writes a subscription
 # credential into a home. 1 here is only a mark the install pass converges on;
-# 0 does nothing (the doctor says so once), and FLEET_CREDSEP_OPTIONAL is gone.
+# 0 does nothing, and FLEET_CREDSEP_OPTIONAL is gone.
 # @label=Separated credentials @group=disk @tier=internal @scope=global @edit=bool
 # A NEW login (bin/fleet-login-new.sh) is opened with 1 — separated by root at the
 # open, before its first session; the team pool goes into its store (#2294).

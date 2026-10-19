@@ -110,9 +110,8 @@ var personScriptRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // read (internal/rolemerge). The person's layer alone.
 //
 // `roles` (the role overlays) left with the person's role layer
-// (claude-fleet#3130): an older client's PUT that still carries it is taken
-// and the key dropped — never checked, never stored, never shown.
-// compat-1v: 下一批拒（422）.
+// (claude-fleet#3130): a PUT that still carries it is refused like any other
+// key a personal configuration does not hold (claude-fleet#4790).
 const personRulesMax = 32 << 10
 
 // validateBundle is validateTeamBundle for either layer: a person's layer
@@ -124,9 +123,6 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&b); err != nil || b == nil {
 		return "", errors.New("bundle must be a JSON object")
-	}
-	if personal {
-		delete(b, "roles") // compat-1v
 	}
 	for k := range b {
 		if personal && (k == "hook_scripts" || k == "rules" || k == "ui_lang") {
@@ -143,9 +139,6 @@ func validateBundle(raw json.RawMessage, personal bool) (string, error) {
 	dec = json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	_ = dec.Decode(&all)
-	if personal {
-		delete(all, "roles") // compat-1v
-	}
 	obj := func(k string) (map[string]any, error) {
 		v, ok := all[k]
 		if !ok {
@@ -548,8 +541,11 @@ func (s *Server) pushTeam(endpointID string, nc *nodeConn, v int) {
 		}
 		v = cur
 	}
-	sent := nc.teamSent.Load()
-	if v <= 0 || int64(v) == sent {
+	nc.pushMu.Lock()
+	defer nc.pushMu.Unlock()
+	// A version is never older than one already told: a beat that read v1
+	// while a PUT of v2 went out sends nothing.
+	if v <= 0 || int64(v) <= nc.teamSent.Load() {
 		return
 	}
 	msg, err := control.New(control.TypeTeam, control.Team{TeamVersion: v})
@@ -564,7 +560,7 @@ func (s *Server) pushTeam(endpointID string, nc *nodeConn, v int) {
 	if err := s.SendNodeWrite(wctx, endpointID, msg); err != nil {
 		return
 	}
-	nc.teamSent.CompareAndSwap(sent, int64(v))
+	nc.teamSent.Store(int64(v))
 }
 
 // broadcastTeam pushes version v to every node on a control channel that

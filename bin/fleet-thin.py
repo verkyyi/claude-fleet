@@ -48,6 +48,13 @@ Each connection:
      the RECEIPT (issue #3538): the payload's `id` goes back as one ssh on the
      same line — `fleet-open.sh --ack <id> ok|fail <why>` on the home — so the
      session that asked says `opened` / `failed:<why>`, never a guess.
+     `… ; show ; token=… ; j=<base64 {id,name,size,who}> BEL` (issue #3541,
+     fleet-show.sh on the home, only because this loop says `FLEET_CLIENT_CAPS=show`
+     in its attach): ONE ssh on the same line streams the file the home registered
+     under that id (`fleet-show.sh --fetch <id>` there — the loop never names a
+     path) into ~/Downloads (FLEET_THIN_DOWNLOADS; a taken name gets ` (n)`), checked
+     against its size, then `fleet-open.sh --ack <id> ok <the path>` — or `fail
+     <why>` — so the session prints `saved:<path>`; a notification line says it.
 
 When it ends: ⌘Q (quit) or ssh exit 0 (a detach) — the iTerm2 profile goes
 back (约定 11) and this exits 0. Anything else — the line dropped, the lid
@@ -80,16 +87,17 @@ thin.log — TSV, one line per connection, fields only ever added at the end
 event: connect (pick_ms = fleet-connect --argv, ssh_ms = spawn → the first
 byte back, first_ms = spawn → the first valid `cur`: the view drawn; net =
 `net=<gateway>@<network>`, the network the route was picked on, #3074) · rehome ·
-upload · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
+upload · show · exec · quit · first (the first-session road, #3054) · offline (no 换家: the hub did not answer either) · run (`--run`: one command on the home, issue #3004 —
 reason = its first word).
 
 Knobs: FLEET_THIN_UP_SECS (10), FLEET_THIN_BACKOFF ("1,2,4,8,16,30"),
 FLEET_THIN_REHOME_AFTER (3), FLEET_THIN_HUB_PROBE_SECS (4), FLEET_REMOTE_BIN (.claude/fleet/bin),
 FLEET_CLIENT_PASTE=0 (drops and ⌃V byte for byte), FLEET_ITERM_KEYS=0,
 FLEET_THIN_FIRST_RETRY (10), FLEET_HOME_FIRST_OPENING_MAX (2400), FLEET_THIN_FIRST_SETTLE (600),
-FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
+FLEET_THIN_FIRST_ROUNDS (3), FLEET_THIN_FETCH_SECS (600), FLEET_THIN_LOG. Seams (tests): FLEET_THIN_ARGV_CMD (in place of
 `fleet-connect.py --argv`), FLEET_THIN_UPDATE_CMD (in place of
 `fleet-client-update.sh start`), FLEET_CLIENT_CLIP_CMD (the clipboard),
+FLEET_THIN_FETCH_CMD (in place of the `--fetch` ssh; the id appended),
 FLEET_THIN_HUB_PROBE_CMD (in place of asking the hub's /version before 换家),
 FLEET_CLIENT_LEASE_CMD / FLEET_THIN_PLACE_CMD / FLEET_THIN_ACCOUNT_CMD (the
 first session's lease, place and the hub's account word).
@@ -575,6 +583,9 @@ class Thin:
         cv = client_ver()
         if re.fullmatch(r"[0-9A-Za-z._-]{1,64}", cv):
             env.append("FLEET_CLIENT_VER=" + cv)
+        # what this loop takes beyond `open` (issue #3541): the home's registry row
+        # carries it as caps=, and fleet-show.sh sends a file as `show` only then
+        env.append("FLEET_CLIENT_CAPS=show")
         return " ".join(env + [shlex.quote(w) for w in words])
 
     def command(self, j, extra, remote):
@@ -725,6 +736,85 @@ class Thin:
         tlog("open", self.home, "", "", "", "", 0 if ok else 1,
              "cport=%d" % cport if cport else ("rport=%d" % rport if rport else "url"))
         return ok, "" if ok else "the browser opener failed"
+
+    # -- show: a file saved here (issue #3541) ---------------------------
+    def downloads(self):
+        return os.path.expanduser(os.environ.get("FLEET_THIN_DOWNLOADS") or "~/Downloads")
+
+    def fetch_cmd(self, oid):
+        """The one ssh that streams the file the home registered under <oid>."""
+        seam = os.environ.get("FLEET_THIN_FETCH_CMD")
+        j = self.base or {}
+        if seam:
+            return shlex.split(seam) + [oid]
+        if j.get("argv") and not j.get("local"):
+            rbin = os.environ.get("FLEET_REMOTE_BIN") or ".claude/fleet/bin"
+            remote = " ".join(shlex.quote(w) for w in ["bash", rbin + "/fleet-show.sh", "--fetch", oid])
+            return self.command(j, ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-T"], remote)
+        return None
+
+    def show_req(self, kv):
+        """`show` from the home: fetch the file, save it, answer where it landed."""
+        try:
+            d = json.loads(base64.b64decode(kv.get("j", "") + "==="))
+        except (ValueError, TypeError):
+            return
+        if not isinstance(d, dict):
+            return
+        oid = d.get("id")
+        if not isinstance(oid, str) or not re.fullmatch(r"[a-f0-9]{1,64}", oid):
+            return
+        ok, why = self.show_do(d)
+        self.ack(oid, ok, why)
+
+    def show_do(self, d):
+        """(saved, the path | why not)."""
+        name = d.get("name") if isinstance(d.get("name"), str) else ""
+        name = os.path.basename(name.replace("\\", "/"))
+        if not name or name in (".", "..") or re.search(r"[\x00-\x1f]", name) or len(name) > 255:
+            return False, "bad file name"
+        size = d.get("size") if isinstance(d.get("size"), int) and not isinstance(d.get("size"), bool) else -1
+        if (self.base or {}).get("local") and not os.environ.get("FLEET_THIN_FETCH_CMD"):
+            # a managed machine's own `fleet` over ssh (#3006): the file is already on
+            # this machine, and the person is on another device — nowhere else to put it
+            return False, "the client runs on the home itself (fleet --local): the file stays where it is"
+        cmd = self.fetch_cmd(d["id"])
+        if not cmd:
+            return False, "no line to the home"
+        dest_dir = self.downloads()
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except OSError as e:
+            return False, "cannot make %s: %s" % (dest_dir, e.strerror)
+        stem, ext = os.path.splitext(name)
+        dest, n = os.path.join(dest_dir, name), 1
+        while os.path.lexists(dest):
+            dest, n = os.path.join(dest_dir, "%s (%d)%s" % (stem, n, ext)), n + 1
+        part = os.path.join(dest_dir, ".%s.fleet-part" % name)
+        try:
+            with open(part, "wb") as out:
+                p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.PIPE,
+                                   timeout=float(env_num("FLEET_THIN_FETCH_SECS", 600)))
+            got = os.path.getsize(part)
+            if p.returncode != 0:
+                why = (p.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+                raise RuntimeError("fetch failed (rc %d%s)" % (p.returncode, (": " + why[-1][:120]) if why else ""))
+            if size >= 0 and got != size:
+                raise RuntimeError("got %d of %d bytes" % (got, size))
+            os.replace(part, dest)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+            try:
+                os.unlink(part)
+            except OSError:
+                pass
+            why = str(e) if isinstance(e, RuntimeError) else type(e).__name__
+            self.queue_say("fleet · 没收到 %s（%s）" % (name, why))
+            tlog("show", self.home, "", "", "", "", 1, why[:80])
+            return False, why
+        who = str(d.get("who") or "?")[:80]
+        self.queue_say("fleet · %s 发来 %s，存在 %s" % (who, name, dest))
+        tlog("show", self.home, "", "", "", "", 0, "")
+        return True, dest
 
     # -- one connection ---------------------------------------------------
     def connect_once(self, reconnect):
@@ -878,6 +968,8 @@ class Thin:
                                 uploads.cancel("连接结束，附件已取消")
                         elif kind == "open":
                             threading.Thread(target=self.open_req, args=(kv,), daemon=True).start()
+                        elif kind == "show":
+                            threading.Thread(target=self.show_req, args=(kv,), daemon=True).start()
                 if self.said:
                     self.drain_said()
                 if 0 in r:

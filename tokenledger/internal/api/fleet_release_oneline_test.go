@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
@@ -38,8 +37,7 @@ func (p *publishRig) postRef(tok, sha, ref string) (int, string) {
 // TestVersionOneReleaseLine (claude-fleet#4671): there is one release line.
 // /version names stable and nothing for a Mac, …/stable serves stable whatever
 // ?platform= says (an older client's question), an old hub's Mac lane pointer on
-// the volume is not read, and a publish moving the Mac lane is answered
-// `retired` with nothing done; any other ref is still a 400.
+// the volume is not read, and a publish naming any ref but stable is a 400.
 func TestVersionOneReleaseLine(t *testing.T) {
 	p := newPublishRig(t)
 	a := p.repo.commit("A", nil)
@@ -83,12 +81,12 @@ func TestVersionOneReleaseLine(t *testing.T) {
 			t.Fatalf("GET stable%s served %s, want stable %s", q, m.SHA[:7], b[:7])
 		}
 	}
-	// an older train moving the Mac lane: answered, nothing moved
-	if code, body := p.postRef(tok, a, "stable-macos"); code != 200 || !strings.Contains(body, `"retired"`) {
+	// the Mac lane's ref is gone with it (claude-fleet#4790): a 400, nothing moved
+	if code, body := p.postRef(tok, a, "stable-macos"); code != 400 {
 		t.Fatalf("ref=stable-macos: %d %s", code, body)
 	}
 	if got := p.stable(t).SHA; got != b {
-		t.Fatalf("stable moved to %s after a retired ref", got[:7])
+		t.Fatalf("stable moved to %s after a refused ref", got[:7])
 	}
 	if code, body := p.postRef(tok, b, "stable-windows"); code != 400 {
 		t.Fatalf("unknown ref: %d %s", code, body)

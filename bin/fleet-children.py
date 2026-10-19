@@ -158,29 +158,14 @@ def read_events(path, pre=None):
     return [e for e in read_rows(path, pre) if not is_wake(e)]
 
 
-def alias_of(key, one_slug):  # compat-1v: 下一批删
-    """The bare key a qualified <key> was spelled as before issue #1939 — only
-    while its repo is the fleet's ONE repo (<one_slug>, fleet_key_alias's rule);
-    '' otherwise. Its book is the same parent's, read for one version."""
-    if one_slug and key.startswith(one_slug + ':') and is_key(key):
-        return key[len(one_slug) + 1:]
-    return ''
-
-
-def book_events(d, key, one_slug):
-    """<key>'s reports, its bare alias's book merged in (issue #1939, #982)."""
-    evs = read_events(os.path.join(d, key + '.ndjson'))
-    al = alias_of(key, one_slug)
-    if al:                              # its own seq counter: older than every row above
-        for e in read_events(os.path.join(d, al + '.ndjson'), key.split(':', 1)[0] + ':'):
-            e['_alias'] = 1
-            evs.append(e)
-    return evs
+def book_events(d, key, one_slug=''):
+    """<key>'s reports (issue #982)."""
+    return read_events(os.path.join(d, key + '.ndjson'))
 
 
 def ev_order(e):
-    """Sort key: an alias book's rows (written before issue #1939) come first."""
-    return (0 if e.get('_alias') else 1, int(e.get('seq') or 0))
+    """Sort key: the book's own seq."""
+    return int(e.get('seq') or 0)
 
 
 def read_wakes(path):
@@ -887,14 +872,8 @@ def last_per_child(path, pre=None, rows=None):
 
 
 def read_dispatches(d, parent, one_slug=''):
-    """The last placement row per child (issue #1586), in seq order — the bare
-    alias's book first, so the qualified book's later rows win (issue #1939)."""
-    rows = []
-    al = alias_of(parent, one_slug)
-    if al:
-        rows = read_rows(os.path.join(d, al + '.dispatch'), parent.split(':', 1)[0] + ':')
-    rows += read_rows(os.path.join(d, parent + '.dispatch'))
-    return last_per_child('', rows=rows)
+    """The last placement row per child (issue #1586), in seq order."""
+    return last_per_child('', rows=read_rows(os.path.join(d, parent + '.dispatch')))
 
 
 def cmd_show(a):

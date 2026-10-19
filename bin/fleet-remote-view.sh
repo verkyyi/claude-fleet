@@ -31,15 +31,12 @@
 #                           #1484). The pane's window carries
 #                           `@remote_ctl` — the ssh ControlPath of its connection —
 #                           so `open` can retarget it without reconnecting.
-#   attach [--shell] <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
+#   attach <worker_id> [<view>]   (runs ON <node>, over ssh — or on the
 #                           node itself, nested in the shell's own tmux) — select
 #                           the worker's window and attach to its fleet session
 #                           (`-`: attach the login's fleet session, select nothing).
-#                           `--shell` registers this client as a SHELL client
-#                           (the old client's, issue #1485 — kept one version
-#                           for an old client still out there, compat-1v:
-#                           下一批删, issue #3008); a <view> id
-#                           registers it as a proxy VIEW with a fleet-open spool.
+#                           A <view> id registers it as a proxy VIEW with a
+#                           fleet-open spool.
 #                           A registered client attaches to a VIEW SESSION of its
 #                           own (issue #1489, below), a plain one to the fleet's.
 #   attach --thin --view <id> [--want <worker_id>|--resume] --device <b64>
@@ -71,13 +68,6 @@
 #                           session of their own, attaches whose tmux client is
 #                           gone (fleet-doctor's `rview`); `prune` reaps what every
 #                           attach reaps first.
-#   sessions                (runs ON <node>, over the same ssh connection; issue
-#                           #1488) — this machine's sessions in the hub's own
-#                           fleet_sessions shape, one JSON object on stdout — what
-#                           the old client asked over its connection while the hub
-#                           was silent (compat-1v: 下一批删, issue #3008). The rows are the
-#                           control adapter's inventory keyed by the hub's own rule
-#                           (fleet_hub_common.worker_key) — never a second generator.
 #   reconcile <sess>        (ON <node>) — retired with the rule (issue #1713):
 #   restore <sess>          both undo what an OLDER version left on <sess> — its
 #                           hidden status line / prefix, the solo marker, the
@@ -87,7 +77,7 @@
 #
 # ONE VIEW SESSION PER REGISTERED CLIENT (issue #1489, EPIC #1479 R4): a tmux
 # session has one current window, so two shells on the fleet session kept
-# switching each other away. `attach` with `--shell` or a <view> id makes the
+# switching each other away. `attach` with a <view> id makes the
 # client a GROUPED session of its own — `new-session -t <fleet>`, named
 # `<fleet>@view-<id>` — the fleet's windows, its own current window, status line
 # and prefix off for good (the person's own tmux has both), destroyed with its
@@ -714,7 +704,7 @@ rv_within() {
 # 看台: the fleet session, its windows and every global option are untouched.
 #
 # The registry row (kind `thin`) carries `cur= route= device= token= fuid= node=`
-# after the five columns; `cur=` follows the session in view — a server hook,
+# (+ `caps=` when the loop says what it takes, issue #3541) after the five columns; `cur=` follows the session in view — a server hook,
 # session-window-changed[78], gated on the session's `@view_thin`, runs `cur`
 # above on every change. The 看台 OUTLIVES its client: no destroy-unattached; on
 # the attach's exit the row gets `left=<epoch>` and rv_prune (every attach, the
@@ -841,7 +831,7 @@ rv_browser_cleanup() {
 }
 
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone caps
   local browser='' bhome=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -986,8 +976,8 @@ rv_attach_thin() {
   case "$browser:$view" in 1:*|*:*-via-*) ;; *)
     ( python3 "$BIN/fleet-quickopen.py" view-peers --view "$s@view-$view" --socket "$sock" </dev/null >/dev/null 2>&1 & ) ;;
   esac
-  # the one message after issue #3328 took the keys away: 快捷键只剩 ⌘P, once per
-  # login, on this 看台's client once it is attached (compat-1v: 下一批删)
+  # the one message issue #3328 added: 快捷键只剩 ⌘P, once per login, on this
+  # 看台's client once it is attached
   case "$view" in *-via-*) ;; *)
     ( { sleep 1.5; TMUX='' python3 "$BIN/fleet-quickopen.py" view-notice --view "$s@view-$view" --socket "$sock"; } </dev/null >/dev/null 2>&1 & ) ;;
   esac
@@ -1004,13 +994,17 @@ rv_attach_thin() {
     fi ;;
   esac
   rv_hide_borders "$s"
+  # what the loop takes beyond `open` (issue #3541: `show` — fleet-show.sh reads it);
+  # an older loop brings none and the row is byte for byte as before
+  caps=''
+  case "${FLEET_CLIENT_CAPS:-}" in ''|*[!a-z0-9,_-]*) ;; *) caps="	caps=${FLEET_CLIENT_CAPS}" ;; esac
   tty=$(tty 2>/dev/null) || tty=-
   fu=$(fleet_uuid "$s" 2>/dev/null) || fu=''
   mkdir -p "$VIEWS" 2>/dev/null
   w=$(T display-message -p -t "$gid:" '#{window_id}' 2>/dev/null)
   ( umask 077
-    printf '%s\t%s\tthin\t%s\t%s\tcur=%s\troute=%s\tdevice=%s\ttoken=%s\tfuid=%s\tnode=%s\n' \
-      "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" \
+    printf '%s\t%s\tthin\t%s\t%s\tcur=%s\troute=%s\tdevice=%s\ttoken=%s\tfuid=%s\tnode=%s%s\n' \
+      "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" "$caps" \
       > "$VIEWS/.$view.$$" && mv -f "$VIEWS/.$view.$$" "$f" ) \
     || { note "attach --thin: cannot register $view"; return 1; }
   # the session in view, said to the thin loop once its client is on (issue #3489):
@@ -1456,12 +1450,11 @@ EOF_PEER
 
 # ---------------------------------------------------------------------------------
 attach)
-  shell=''
   # `--thin` (issue #2763): the thin client's 看台, its own options — rv_attach_thin
   [ "${1:-}" = --thin ] && { shift; rv_attach_thin "$@"; exit $?; }
   while [ $# -gt 0 ]; do
     # a bare `-` is the machine itself (the shell's first window), not an option (#1712)
-    case "$1" in --shell) shell=1; shift ;; --) shift; break ;; -) break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
+    case "$1" in --) shift; break ;; -) break ;; -*) note "attach: unknown option $1"; exit 2 ;; *) break ;; esac
   done
   wid="${1:-}"; view="${2:-}"; w=''
   if [ -z "$wid" ] || [ "$wid" = - ]; then
@@ -1480,12 +1473,11 @@ attach)
   rv_prune
   rv_legacy_undo "$s"
   fleet_guide_arrive "$s" attach >/dev/null 2>&1   # a person is here: a pending guide opens (#4852)
-  # Register this client (issue #1485): `--shell` = a shell client; a <view> id =
-  # a proxy view, with the spool its `watch` drains (no id → no spool: a request
-  # nobody drains would read as sent).
+  # Register this client (issue #1485): a <view> id = a proxy view, with the
+  # spool its `watch` drains.
   reg=''; g=''; gid=''
-  if { [ -n "$shell" ] || [ -n "$view" ]; } && tty=$(tty 2>/dev/null); then
-    kind=view; [ -n "$shell" ] && kind=shell
+  if [ -n "$view" ] && tty=$(tty 2>/dev/null); then
+    kind=view
     spool="$view"
     [ -n "$view" ] || view="$kind-$(hostname -s 2>/dev/null | tr -c 'A-Za-z0-9-' '-')$$-$RANDOM"
     case "$view" in *[!A-Za-z0-9-]*) note "attach: bad view id $view — not registered" ;; *)
@@ -1701,80 +1693,6 @@ shell-here)
   ;;
 
 # ---------------------------------------------------------------------------------
-sessions)
-  # ON <node> (issue #1488, EPIC #1479 R3): this machine's sessions, hub-shaped —
-  # {"sessions": […], "nodes": […]} as /v1/fleet/fleet_sessions would answer for
-  # it alone — so the shell's loop feeds it through the ONE mapping it has for the
-  # hub's answer (fleet-hub-sessions.sh), rows and header lines alike. Each live
-  # fleet session here: its UUID (fleet_uuid — the first half of every worker_id
-  # the hub knows), its conf's repo (what fills a one-repo window's repo, as
-  # fleet_control.py does) and the control adapter's inventory — the very
-  # `workers` the node agent reports — keyed by the hub's own rule, worker_key. A
-  # fleet with no UUID (no control database) has no addressable rows and is
-  # skipped, as the hub would skip it. Exit 1 only when python3 is missing.
-  inv=$(mktemp "${TMPDIR:-/tmp}/frv-sess.XXXXXX") || exit 1
-  while IFS= read -r s; do
-    [ -n "$s" ] || continue
-    u=$(fleet_uuid "$s" 2>/dev/null) || u=''
-    [ -n "$u" ] || continue
-    r=$( unset TMUX TMUX_PANE; fleet_load_conf "$s" >/dev/null 2>&1; printf '%s' "${FLEET_REPO:-}" )
-    bash "$BIN/fleet-control-read.sh" workers "$s" 2>/dev/null \
-      | while IFS= read -r line; do [ -n "$line" ] && printf '%s\t%s\t%s\t%s\n' "$s" "$u" "$r" "$line"; done >> "$inv"
-  done <<EOF
-$(fleet_sockets)
-EOF
-  python3 - "$inv" "$(hostname -s 2>/dev/null)" "$(id -un 2>/dev/null)" "$BIN" <<'PY'
-import json, sys
-from datetime import datetime, timezone
-ipath, host, user, bindir = sys.argv[1:5]
-sys.path.insert(0, bindir)
-from fleet_hub_common import inventory_row, worker_key, worker_identity
-now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-host = (host or "").split(".", 1)[0]
-sessions = []
-for line in open(ipath, encoding="utf-8"):
-    p = line.rstrip("\n").split("\t")
-    # sess, uuid, the fleet's repo, then the adapter's columns, read by the SAME
-    # reader fleet_control.py's inventory uses (issue #1698): a hand copy of it
-    # here missed #1607's trailing `busy=` column and so glued @origin_wid onto
-    # the name and lost the parent chain — every row of a silent hub flat
-    if len(p) < 4:
-        continue
-    sess, uuid, frepo = p[0], p[1], p[2]
-    row = inventory_row(p[3:])
-    if row is None:
-        continue
-    (window, issue, scratch, worktree, state, agent, handle, lifecycle, repo), extra = row
-    name, owid, needs, ident = extra.get("name") or "", extra.get("origin_wid"), extra.get("needs"), extra.get("identity")
-    if not issue and scratch != "1" and not ident:
-        continue                                     # keyless: listed by identity (#1749)
-    number = int(issue) if issue.isdigit() and int(issue) > 0 else None
-    key = worker_key(number, scratch == "1", worktree, repo)
-    wid = worker_identity(uuid, key or ident)
-    if not wid:
-        continue
-    sessions.append({"worker_id": wid, "fleet_id": uuid, "fleet_name": sess, "machine_name": host,
-                     "os_user": user, "availability": "online", "observed_at": now,
-                     "worker": {"key": key, "issue": number,
-                                "repo": repo if repo and repo != "?" else (None if repo else frepo or None),
-                                "state": state or "unknown", "lifecycle": lifecycle or "awake",
-                                "agent": agent or None, "name": name, "origin_wid": owid or None,
-                                "needs": needs or None, "identity": ident,
-                                "busy": extra.get("busy"), "born": extra.get("born"),
-                                "cfg": extra.get("cfg"), "title": extra.get("title"),
-                                "reap": extra.get("reap"), "epic": extra.get("epic"),
-                                "epic_stale": extra.get("epic_stale"),
-                                "backfill": extra.get("backfill"),
-                                # issue #2431: the measurement bus, as the hub forwards it
-                                "ctx_left": extra.get("ctx_left"), "ctx_band": extra.get("ctx_band"),
-                                "ctx_ts": extra.get("ctx_ts"), "model": extra.get("model"),
-                                "effort": extra.get("effort")}})
-print(json.dumps({"sessions": sessions,
-                  "nodes": [{"machine_name": host, "availability": "online",
-                             "sessions": len(sessions), "observed_at": now}]}, ensure_ascii=False))
-PY
-  rc=$?; rm -f "$inv"; exit "$rc"
-  ;;
 
 *)
   sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//' >&2

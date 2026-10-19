@@ -32,6 +32,8 @@ func (s *Server) pushRelease(endpointID string, nc *nodeConn, p stablePointer) {
 		}
 		p = s.Releases.stable()
 	}
+	nc.pushMu.Lock()
+	defer nc.pushMu.Unlock()
 	if p.SHA == "" || p.Seq < 1 || nc.releaseSent.Load() >= p.Seq {
 		return
 	}
@@ -47,12 +49,7 @@ func (s *Server) pushRelease(endpointID string, nc *nodeConn, p stablePointer) {
 	if err := s.SendNodeWrite(wctx, endpointID, msg); err != nil {
 		return
 	}
-	for {
-		old := nc.releaseSent.Load()
-		if old >= p.Seq || nc.releaseSent.CompareAndSwap(old, p.Seq) {
-			return
-		}
-	}
+	nc.releaseSent.Store(p.Seq)
 }
 
 // BroadcastRelease pushes the stable release sha (seq) to every connection

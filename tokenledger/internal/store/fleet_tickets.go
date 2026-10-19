@@ -22,7 +22,8 @@ import (
 // It grows out of the registry of #2676 (`fleet_ticket_index`, one row per
 // GitHub ticket a node opened): those rows are copied in once as `gh` tickets
 // — backend gh, the GitHub page as url, no body — and /register writes here
-// for one version (# compat-1v: 下一批删 the index table and its road).
+// (bin/fleet-ticket.sh); the index table is still read by the repo authority
+// and the task record's ticket checks.
 //
 // A ticket is not a task record (fleet_tasks.go): T<n> is who asked for what;
 // a ticket is what a repo has to do, and hangs on the record as its `issue`.
@@ -68,8 +69,8 @@ CREATE TABLE IF NOT EXISTS fleet_ticket_seq (
   next_n  INTEGER NOT NULL
 );`
 
-// The registry of #2676, kept one version so its rows can be copied over.
-// # compat-1v: 下一批删
+// The registry of #2676: its rows are copied over, and the repo authority and
+// the task record's ticket checks still read it.
 const fleetTicketIndexSchema = `
 CREATE TABLE IF NOT EXISTS fleet_ticket_index (
   id           TEXT PRIMARY KEY,
@@ -280,7 +281,7 @@ func (s *Store) createFleetTicketTx(tx *sql.Tx, t FleetTicket, number int64, now
 // RegisterTicket is #2676's registry road, now a gh ticket here: the row is
 // written, or its title · state · url · origin refreshed when the same owner
 // registers it again. Another owner's ticket is ErrTicketOwner; a number the
-// repo already holds as a hub ticket is ErrTicketTaken. # compat-1v: 下一批删
+// repo already holds as a hub ticket is ErrTicketTaken.
 func (s *Store) RegisterTicket(id string, t FleetTicket, now time.Time) (FleetTicket, error) {
 	repo, n, ok := splitGHID(id)
 	if !ok {

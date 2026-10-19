@@ -30,7 +30,7 @@ func installsHome(t *testing.T, login, body string, rc int) string {
 // asked for one home with no sudo and no hub, and its JSON is carried even on
 // exit 1 / 2 (behind, no stable known here).
 func TestInstallsReadOwnLogin(t *testing.T) {
-	home := installsHome(t, "alice", `{"host":"m","stable":null,"lane":"stable","runtime":{"version":"aaaa111","source":"hub","at_stable":null},
+	home := installsHome(t, "alice", `{"host":"m","stable":null,"runtime":{"version":"aaaa111","source":"hub","at_stable":null},
 "logins":[{"login":"$FLEET_INSTALLS_LOGIN","install":{"kind":"link","version":"bbbb222","source":"runtime","at_stable":null},"shell":null,"client":{"version":"cccc333","source":"hub","at_stable":false}}],
 "unreadable":["sudo=[$FLEET_INSTALLS_SUDO]","hub=[$FLEET_INSTALLS_HUB]","homes=$FLEET_INSTALLS_HOMES"]}`, 2)
 	var p installsProbe
@@ -48,7 +48,7 @@ func TestInstallsReadOwnLogin(t *testing.T) {
 	if c := in.Logins[0].Client; c == nil || c.AtStable == nil || *c.AtStable {
 		t.Fatalf("client = %+v", c)
 	}
-	if in.Stable != "" || in.Lane != "stable" || in.At == nil {
+	if in.Stable != "" || in.At == nil {
 		t.Fatalf("installs = %+v", in)
 	}
 	if got := installsOwnVersion(in, home); got != "bbbb222" {
@@ -66,13 +66,13 @@ func TestInstallsReadOwnLogin(t *testing.T) {
 
 // The probe's seams: no sudo, no hub, the one home.
 func TestInstallsAsksOneHomeNoSudoNoHub(t *testing.T) {
-	home := installsHome(t, "bob", `{"logins":[],"runtime":null,"lane":"$FLEET_INSTALLS_SUDO|$FLEET_INSTALLS_HUB|$FLEET_INSTALLS_LOGIN|$FLEET_INSTALLS_HOMES"}`, 0)
+	home := installsHome(t, "bob", `{"logins":[],"runtime":null,"stable":"$FLEET_INSTALLS_SUDO|$FLEET_INSTALLS_HUB|$FLEET_INSTALLS_LOGIN|$FLEET_INSTALLS_HOMES"}`, 0)
 	in := installsRead(context.Background(), home, time.Now())
 	if in == nil {
 		t.Fatal("no reading")
 	}
-	if want := "||bob|" + filepath.Dir(home); in.Lane != want {
-		t.Fatalf("env = %q, want %q", in.Lane, want)
+	if want := "||bob|" + filepath.Dir(home); in.Stable != want {
+		t.Fatalf("env = %q, want %q", in.Stable, want)
 	}
 	if in.Runtime != nil {
 		t.Fatalf("runtime = %+v", in.Runtime)
