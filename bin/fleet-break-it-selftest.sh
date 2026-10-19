@@ -5021,7 +5021,10 @@ drill_idle_timeout_starves_merged() {
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
 drill_task_outage_recovery() {
-  CAP=15; local out t0
+  # the wall of the whole fixture file (17 cases, one driving six CLI calls with
+  # two offline back-offs: ~12 s on an idle Mac) — the test's speed, not a recovery
+  # the product promises; 15 s went red at 15.3 s on a busy runner (#4570)
+  CAP=30; local out t0
   t0=$(now)
   out=$(bash "$BIN/fleet-task-recovery-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
