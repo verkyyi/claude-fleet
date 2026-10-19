@@ -253,8 +253,8 @@ view=$(printf '%s\n' "$l1" | sed -n 's/.*--view \([^ ]*\).*/\1/p')
 case $l1 in "m1 attach --thin --view $view --want s1 --device "*" --route lan --token "*) ok "B: first attach — --view, --want s1, --device, --route, --token" ;;
   *) fail "B: first attach: $l1" ;; esac
 s1=$(sed -n 1p "$T/ssh.log")
-case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=2 -o ServerAliveCountMax=3 m1 bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*)
-  ok "B: -tt, ControlMaster=no, ControlPath=none, ServerAlive before the host; the view's command after" ;;
+case $s1 in *"-o X=1 -tt -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=2 -o ServerAliveCountMax=3 m1 FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin"*)
+  ok "B: -tt, ControlMaster=no, ControlPath=none, ServerAlive before the host; the view's command after (caps=show rides it, #3541)" ;;
   *) fail "B: ssh argv: $s1" ;; esac
 case $out in *7502*) fail "B: an OSC 7502 reached the terminal" ;; *) ok "B: no OSC 7502 reaches the terminal (ours and the bad-token one)" ;; esac
 case $out in $'\e]1337;SetProfile=fleet\a'*) ok "B: the iTerm2 profile goes to fleet first" ;; *) fail "B: no SetProfile=fleet first" ;; esac
@@ -306,7 +306,7 @@ FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+\\' THIN_ARGS='[]' drive keys '[
  ["wait", 10]
 ]'
 [ "$(kmap)" = "0x5b-0x100000 0x5d-0x100000 0x6b-0x100000 0x6e-0x100000 0x70-0x100000 0x71-0x100000 0x74-0x100000 0xd-0x20000 0xf700-0x300000 0xf701-0x300000" ] && ok "K: FLEET_KEYS_EXTRA=next=cmd+down → ⌘↓ in the profile (⌃\\ is the terminal's own)" || fail "K: profile keys with extras: $(kmap)"
-case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
+case $(sed -n 1p "$T/ssh.log") in *" m1 FLEET_KEYS_EXTRA='next=cmd+down shell=ctrl+"*"' FLEET_CLIENT_CAPS=show bash .claude/fleet/bin/fleet-remote-view.sh attach --thin "*)
   ok "K: the extras ride the remote command's environment" ;; *) fail "K: remote command: $(sed -n 1p "$T/ssh.log")" ;; esac
 
 # ---------------------------------------------------------------------------

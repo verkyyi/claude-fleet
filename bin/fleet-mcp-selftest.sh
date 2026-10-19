@@ -134,7 +134,7 @@ fake fleet-gh.sh 'echo "{}"'
 fake fleet-context.sh 'echo "ctx 41% OK"'
 fake fleet-transfer.sh 'echo /req/1'
 fake fleet-client-where.sh 'echo "mac-b iTerm2"; exit 3'
-fake fleet-show.sh 'echo "SENT a.png"'
+fake fleet-show.sh 'echo "saved:/Users/p/Downloads/a.png"'
 fake fleet-open.sh 'echo sent:iterm2'
 fake fleet-handoff-cycle.sh "sleep 2; echo cycle-done >> '$LOG.cycle'"
 printf 'import sys\nopen("%s", "a").write("fleet-loop.py " + " ".join(sys.argv[1:]) + "\\n")\n' "$LOG" > "$WORK/bin/fleet-loop.py"

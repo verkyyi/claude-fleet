@@ -714,7 +714,7 @@ rv_within() {
 # 看台: the fleet session, its windows and every global option are untouched.
 #
 # The registry row (kind `thin`) carries `cur= route= device= token= fuid= node=`
-# after the five columns; `cur=` follows the session in view — a server hook,
+# (+ `caps=` when the loop says what it takes, issue #3541) after the five columns; `cur=` follows the session in view — a server hook,
 # session-window-changed[78], gated on the session's `@view_thin`, runs `cur`
 # above on every change. The 看台 OUTLIVES its client: no destroy-unattached; on
 # the attach's exit the row gets `left=<epoch>` and rv_prune (every attach, the
@@ -841,7 +841,7 @@ rv_browser_cleanup() {
 }
 
 rv_attach_thin() {
-  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone
+  local view='' want='' resume='' device='' route='' token='' lang='' setlang='' hint='' s w='' g gid='' tty f p fu cur rc kept wfar newfar sp last lastgone caps
   local browser='' bhome=''
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1003,13 +1003,17 @@ rv_attach_thin() {
     fi ;;
   esac
   rv_hide_borders "$s"
+  # what the loop takes beyond `open` (issue #3541: `show` — fleet-show.sh reads it);
+  # an older loop brings none and the row is byte for byte as before
+  caps=''
+  case "${FLEET_CLIENT_CAPS:-}" in ''|*[!a-z0-9,_-]*) ;; *) caps="	caps=${FLEET_CLIENT_CAPS}" ;; esac
   tty=$(tty 2>/dev/null) || tty=-
   fu=$(fleet_uuid "$s" 2>/dev/null) || fu=''
   mkdir -p "$VIEWS" 2>/dev/null
   w=$(T display-message -p -t "$gid:" '#{window_id}' 2>/dev/null)
   ( umask 077
-    printf '%s\t%s\tthin\t%s\t%s\tcur=%s\troute=%s\tdevice=%s\ttoken=%s\tfuid=%s\tnode=%s\n' \
-      "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" \
+    printf '%s\t%s\tthin\t%s\t%s\tcur=%s\troute=%s\tdevice=%s\ttoken=%s\tfuid=%s\tnode=%s%s\n' \
+      "$tty" "$s" "$(date +%s)" "$$" "$(rv_thin_cur "$s" "$w" "$fu")" "$route" "$device" "$token" "$fu" "$(rv_node_label)" "$caps" \
       > "$VIEWS/.$view.$$" && mv -f "$VIEWS/.$view.$$" "$f" ) \
     || { note "attach --thin: cannot register $view"; return 1; }
   # the session in view, said to the thin loop once its client is on (issue #3489):
