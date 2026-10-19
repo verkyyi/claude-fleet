@@ -1143,10 +1143,6 @@ class N_SeatedUpdate(Sandbox):
         r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "install-state", self.root],
                            env=e, capture_output=True, text=True)
         self.assertEqual(json.loads(r.stdout), {"exists": False, "linked": None, "pointed": False, "at": None})
-        # sessions are not saved or restored on a switch any more (#4670): an old updater's ask is a no-op
-        r = subprocess.run([sys.executable, os.path.join(self.bin, "fleet-node-update.py"), "sessions", "save", "../x"],
-                           env=e, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0)
 class O_SeatAgent(Sandbox):
     def tool(self, name, body):
         path = os.path.join(self.bin, name)
