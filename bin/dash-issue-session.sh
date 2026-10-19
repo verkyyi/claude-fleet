@@ -1072,6 +1072,9 @@ if [ -n "${FLEET_LAUNCH:-}" ]; then
 fi
 if [ -n "$TASK_REF" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
+  # The worktree remembers its record (issue #4897): the reapers ask the record,
+  # not the issue, whether the work is over (fleet-cleanup.sh, worktree-autoclean.sh).
+  fleet_worktree_task_mark "$wt" "$TASK_REF" || :
 fi
 pend=''; [ -n "$FILL_MARK" ] && pend="FLEET_WT_PENDING=$(shq "$FILL_MARK") "
 fleet_repo_authority_guard "$REPO" --finish "$SESS" >/dev/null || { refuse "$FLEET_AUTHORITY_ERROR"; exit "$RC_INFRA"; }

@@ -388,9 +388,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
   **The fleet's coordinators write the same record from a machine** (issue #3330):
   `bin/fleet-task-record.sh` (`/v1/node/tasks`, the node token on curl's stdin) —
-  the orchestrator's `task` tool opens the record FIRST and only a development
-  task then files its issue (`fleet-issue-file.sh --task T<n>`, the worker stamped
-  `@task`); a child report carries `task`, `await` takes `T<n>`, a session's
+  the orchestrator's `task` tool opens the record FIRST, and a development task
+  is that record alone (issue #4897, EPIC #4895 批 0): its session opens in a
+  worktree of the repo bound to `T<n>` (`dash-raw-session.sh --repo --task`,
+  `@task` + `@task_flow 1` before the agent starts, the worktree's git dir marked
+  `fleet-task` — `fleet_worktree_task`), `fleet-worker-start-hook.sh` gives it the
+  task flow (read the record with `brief`, PR, merge on green, `report merged`
+  closes the record — no issue claimed, commented on or closed), and every reaper
+  reads «over» as the record closed (`fleet_task_closed`, `fleet_task_control.py
+  closed`): fleet-cleanup-idle.py's task route (`merged` = record closed),
+  fleet-cleanup.sh's completion gate and worktree-autoclean.sh for any session
+  that carries a record. Still filed as an issue (`fleet-issue-file.sh --task
+  T<n>`) until 批 1: `--draft`, `FLEET_TASK_ISSUE=1`, no hub. A child report carries `task`, `await` takes `T<n>`, a session's
   `ask` and a park write 「问过你」 / 「停放」 on the record (no issue: only there),
   and an EPIC member gets a read-only record (`epic-member`). No hub ⇒ the script
   exits 3 and every caller is byte for byte as before. **A session with no issue

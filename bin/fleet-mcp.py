@@ -1354,8 +1354,9 @@ TOOLS = {
                        "running — call again to keep waiting (nothing spawns twice).",
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
-            "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): its issue's "
-                                               "worker; a record with no issue answers NO-WORKER naming its session."),
+            "task": dict(TASK_REF, description="Wait on a hub task record instead (issue #3330): until it is "
+                                               "closed — SUCCEEDED / FAILED / CANCELLED (a dispatched task, issue "
+                                               "#4897); an old record with no issue answers NO-WORKER naming its session."),
             "timeout": {"type": "integer", "minimum": 1, "maximum": AWAIT_MAX_S,
                         "description": "Seconds to wait before answering TIMEOUT (default %d, at most %d)."
                                        % (AWAIT_DEFAULT_S, AWAIT_MAX_S)}},
@@ -1363,8 +1364,10 @@ TOOLS = {
     "task": (tool_task, {
         "description": "派 — dispatch a piece of work RECORD FIRST (issue #3330, bin/fleet-task-record.sh "
                        "dispatch): the hub writes task record T<n> (first stdout line); with repo — a "
-                       "development task — its issue is filed and hung on the record (+ spawn: its worker, "
-                       "stamped @task; the URL follows); without repo + spawn a no-repo session is opened with "
+                       "development task — the record is its ticket, no issue (issue #4897): + spawn, its "
+                       "session opens in a worktree of that repo bound to T<n>, reads the record, opens its "
+                       "PR, merges it on a green gate and closes the record with its report (draft: still an "
+                       "issue, for one batch); without repo + spawn a no-repo session is opened with "
                        "the words. No hub here: a repo task is filed "
                        "exactly as file_issue would (no T line); a no-repo one exits 3 — file an issue instead. "
                        "await takes the T<n>.",

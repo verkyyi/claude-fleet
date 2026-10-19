@@ -30,6 +30,22 @@ class TaskControlTests(unittest.TestCase):
         self.assertIn("WAITING", out.getvalue())
         self.assertIn("generation: 4", out.getvalue())
 
+    def test_closed_is_one_read_never_a_wait(self):
+        # issue #4897: the reapers' reader — terminal ⇒ 0, open ⇒ 1, unknown ⇒ 3.
+        for outcome, rc, word in (("succeeded", 0, "SUCCEEDED"), ("failed", 0, "FAILED"),
+                                  ("cancelled", 0, "CANCELLED"), ("", 1, "WAITING")):
+            t = dict(id="T7", authority_version=1, generation=1, state="running", outcome=outcome)
+            with patch.object(control, "call", return_value={"task": t}) as calls, \
+                 contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(control.closed("T7"), rc)
+            self.assertEqual(calls.call_count, 1)
+            self.assertTrue(out.getvalue().startswith(word + "\n"), out.getvalue())
+        for answer in (ValueError("offline"), {"task": dict(id="T7", state="open")}):
+            kw = dict(side_effect=answer) if isinstance(answer, Exception) else dict(return_value=answer)
+            with patch.object(control, "call", **kw), contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(control.closed("T7"), 3)
+            self.assertTrue(out.getvalue().startswith("UNKNOWN\n"))
+
     def test_shell_await_and_children_with_all_github_access_denied(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); conf = root / "conf"; conf.mkdir()

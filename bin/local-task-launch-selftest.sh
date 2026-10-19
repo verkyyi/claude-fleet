@@ -15,6 +15,8 @@
 #      here: claimed, @launch on the window
 #   X  the hub refuses the claim (409) / the task is no longer accepted ⇒ both
 #      spawners refuse, no window — never opened unbound
+#   T  dash-raw-session.sh --repo --task — a development task with no issue
+#      (issue #4897): claimed, @task + @task_flow before the agent starts
 #   N  a dispatch with no task (a park wake's --task T<n>) ⇒ no hub call, opens
 #
 # selftest-deps: fleet_launch.py dash-issue-session.sh dash-raw-session.sh fleet-task-record.sh fleet_task_recovery.py
@@ -44,6 +46,8 @@ cat > "$WORK/fakebin/git" <<'EOF'
 if [ "${1:-}" = "-C" ]; then shift 2; fi
 case "${1:-}" in
   rev-parse) case "$*" in *--abbrev-ref*) echo issue-234 ;; *--show-toplevel*) pwd -P ;; *) echo deadbeef ;; esac ;;
+  show-ref) exit 1 ;;   # no branch yet: a scratch number is free (leg T)
+  worktree) [ "${2:-}" = add ] && for a in "$@"; do case "$a" in /*) mkdir -p "$a"; break ;; esac; done ;;
 esac
 exit 0
 EOF
@@ -120,6 +124,23 @@ env_run "$DISPATCH" "$BIN/dash-raw-session.sh" --no-repo --task T1 --name 看批
 launched || fail "R a local no-repo task must claim + open bound (@launch)" "$(why)"
 grep -qF -- "@launch_seed" "$NEWWIN" || fail "R the words must be held as the launch seed" "$(why)"
 ok "R dash-raw-session --no-repo: a local accepted task claims and opens with @launch"
+
+# ===== T: a development task opened here (issue #4897) ===========================
+# fleet-task-record.sh dispatch's repo spawn line: a repo worktree bound to the
+# record, @task + @task_flow on the window BEFORE its agent starts (the hook reads them).
+printf '修风扇\n' > "$WORK/words"
+env_run "$DISPATCH" "$BIN/dash-raw-session.sh" --repo acme/widgets --task T1 --name 修风扇 --reap merged \
+  "--prompt-file=$WORK/words" testsess --node local
+launched || fail "T a local repo task must claim + open bound (@launch)" "$(why)"
+python3 - "$NEWWIN" <<'PY' || fail "T @task T1 + @task_flow 1 must be stamped before the agent starts" "$(why)"
+import sys
+line = open(sys.argv[1]).read()
+launch = line.find("fleet-session-wrap.sh")
+for opt in ("@task 'T1'", "@task_flow '1'"):
+    i = line.find(opt)
+    assert 0 <= i < launch, (opt, i, launch)
+PY
+ok "T dash-raw-session --repo --task: claimed, @task + @task_flow stamped before the agent starts"
 
 # ===== X: no claim ⇒ no window ==================================================
 HUB_CLAIM=refuse env_run "$DISPATCH" "$BIN/dash-issue-session.sh" 234 testsess --node local

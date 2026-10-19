@@ -16,6 +16,9 @@
 #   N  nothing printed: resume / compact, no stamp (a scratch, a no-repo session,
 #      an old window), a desk ticket, no pane, a broken event — exit 0 every time
 #   L  the line follows the interface language (en)
+#   K  a development task with no issue (@task T<n> + @task_flow 1, issue #4897)
+#      ⇒ the task flow: read the record with `brief`, PR, pr_verdict / pr_merge,
+#      report merged — never the claim skill; @task alone (no flow) ⇒ nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
@@ -89,5 +92,25 @@ setw @issue 3312
 [ -z "$(printf '{"source":"startup"}' | env -u TMUX -u TMUX_PANE bash "$HOOK")" ] || fail "N no pane ⇒ nothing"
 printf '{"source":"startup"}' | env -u TMUX -u TMUX_PANE bash "$HOOK" >/dev/null; [ $? = 0 ] || fail "N must exit 0"
 ok "N resume/compact/clear, desk, unstamped, broken event, no pane: nothing, exit 0"
+
+# ===== K: a development task with no issue ⇒ the task flow (issue #4897) ========
+unsetw @seed_words; unsetw @issue
+setw @task T42; setw @task_flow 1; setw @repo acme/tokenledger; setw @agent_def fleet-worker
+out=$(hook startup); rc=$?
+[ "$rc" = 0 ] || fail "K the hook must exit 0" "$out"
+ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || fail "K no additionalContext" "$out"
+case "$ctx" in *"T42"*"acme/tokenledger"*"NOT to a GitHub issue"*) ;; *) fail "K the context must name the record and the repo, and no issue" "$ctx" ;; esac
+case "$ctx" in *'the fleet tool `brief`'*'`pr_verdict`'*'`pr_merge`'*'`state: merged`'*) ;; *) fail "K the flow: brief → PR → pr_verdict/pr_merge → report merged" "$ctx" ;; esac
+case "$ctx" in *fleet-claim*) fail "K a task session must not be sent to the claim skill" "$ctx" ;; esac
+line=$(printf '%s' "$out" | field 'd["systemMessage"]')
+[ "$line" = "fleet-worker · tokenledger · 任务 T42 · 做完开 PR，门绿了自己合" ] || fail "K the person's grey line" "$line"
+line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
+case "$line" in "fleet-worker · tokenledger · task T42 · "*merges*) ;; *) fail "K an English line in English" "$line" ;; esac
+unsetw @task_flow; [ -z "$(hook startup)" ] || fail "K @task without @task_flow (a no-repo task, ⌘P) ⇒ nothing"
+setw @task_flow 1; setw @task bogus; [ -z "$(hook startup)" ] || fail "K a malformed @task ⇒ nothing"
+setw @task T42; [ -z "$(hook resume)" ] || fail "K resume ⇒ nothing"
+setw @issue 3312; setw @seed_words /fleet-claim
+case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'`fleet-claim` skill'*) ;; *) fail "K an issue worker that carries @task keeps the claim flow (the old road, until 批 1)" ;; esac
+ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, report merged — no claim"
 
 printf '\nselftest OK: %s assertions passed (words first ⇒ claim next)\n' "$pass"

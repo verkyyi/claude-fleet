@@ -2,6 +2,7 @@
 # Hermetic #4464 regression: run the production bound-ticket gate through the
 # real ticket door, with a loopback hub and a fake forge. No live tmux or writes.
 # selftest-deps: bin/fleet-cleanup.sh bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-lib.sh
+# A task session (issue #4897): the worktree's record T<n> decides, no issue read.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 python3 - "$BIN" <<'PY'
@@ -110,6 +111,26 @@ done_token() { echo "$*"; }
         run('GitHub CLOSED advances', home='github', expected='passed', TEST_CLOSES='acme/widgets#43')
         run('GitHub MERGED is a PR, not closed issue', home='github', GH_STATE='MERGED', TEST_CLOSES='acme/widgets#43')
         run('GitHub read failure refuses', home='github', GH_FAIL='1', TEST_CLOSES='acme/widgets#43')
+        # A session that carries a hub task record (issue #4897): the worktree's
+        # mark names T<n>, and the RECORD's word decides — the issue is never read.
+        main = root / 'main'
+        subprocess.run(['git', 'init', '-q', str(main)], check=True)
+        subprocess.run(['git', '-C', str(main), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'b',
+                        '--allow-empty'], check=True)
+        wt = root / 'main-issue-42'
+        subprocess.run(['git', '-C', str(main), 'worktree', 'add', '-qb', 'issue-42', str(wt)], check=True)
+        gitdir = subprocess.run(['git', '-C', str(wt), 'rev-parse', '--absolute-git-dir'], check=True,
+                                text=True, capture_output=True).stdout.strip()
+        Path(gitdir, 'fleet-task').write_text('T42\n')
+        seam = root / 'task-closed'
+        seam.write_text('#!/bin/sh\necho "$1" >> "$GHLOG.task"\ncase "$TASK_ANSWER" in 0) echo SUCCEEDED ;; 1) echo WAITING ;; esac\n'
+                        'exit "$TASK_ANSWER"\n')
+        seam.chmod(0o755)
+        for answer, expected in (('0', 'passed'), ('1', 'skip:task-open'), ('3', 'skip:task-open')):
+            run('task record answer %s decides, no issue read' % answer, state='closed', expected=expected,
+                WT=str(wt), FLEET_TASK_CLOSED_CMD=str(seam), TASK_ANSWER=answer)
+            assert not requests, ('a task session read its issue', requests)
+            assert Path(str(ghlog) + '.task').read_text().split()[-1] == 'T42'
     finally:
         server.shutdown()
         server.server_close()

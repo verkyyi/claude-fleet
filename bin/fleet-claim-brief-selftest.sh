@@ -60,6 +60,9 @@ case " $* " in
   *'#{@issue}'*)       printf '%s\n' "${FAKE_AT_ISSUE-}" ;;
   *'#{@origin}'*)      printf '%s\n' "${FAKE_AT_ORIGIN-}" ;;
   *'#{@origin_wid}'*)  printf '%s\n' "${FAKE_AT_OWID-}" ;;
+  *'#{@task}'*)        printf '%s\n' "${FAKE_AT_TASK-}" ;;
+  *'#{@task_flow}'*)   printf '%s\n' "${FAKE_AT_TFLOW-}" ;;
+  *'#{@repo}'*)        printf '%s\n' "${FAKE_AT_REPO-}" ;;
   *)                   : ;;   # list-panes (hub lookup) → no hub pane
 esac
 exit 0
@@ -106,7 +109,9 @@ run() {
           FAKE_SESSION="${FAKE_SESSION-$SESS}" FAKE_AT_ISSUE="${FAKE_AT_ISSUE-}" \
           FAKE_AT_ORIGIN="${FAKE_AT_ORIGIN-}" FAKE_AT_OWID="${FAKE_AT_OWID-}" \
           GH_CALLS="${GH_CALLS:-/dev/null}" GH_RC="${GH_RC:-0}" \
-          GH_ASSIGNEES="${GH_ASSIGNEES-}" \
+          GH_ASSIGNEES="${GH_ASSIGNEES-}" FAKE_AT_TASK="${FAKE_AT_TASK-}" \
+          FAKE_AT_TFLOW="${FAKE_AT_TFLOW-}" FAKE_AT_REPO="${FAKE_AT_REPO-}" \
+          FLEET_TASK_RECORD="${FLEET_TASK_RECORD-}" \
           bash "$CLI" "$@" 2>"$WORK/err"); RC=$?
   ERR=$(cat "$WORK/err")
 }
@@ -315,6 +320,35 @@ has 'gh: NOT ON PATH' || fail "gh missing must be stated plainly" "$OUT"
 has 'FAKE-TITLE'      && fail "gh missing must not invent issue content" "$OUT"
 has 'DIRECTIVE-MARKER' || fail "gh missing must still print the directive" "$OUT"
 ok "gh missing → exit 5, says so, invents nothing, still prints the charter half"
+
+# ===== TASK: a development task with no issue (issue #4897) ===================
+# @task T<n> + @task_flow 1, no @issue, in a scratch worktree: the brief reads the
+# RECORD (never gh), prints the flow, and exits 0 — no claim line, no draft mark.
+mkdir -p "$WORK/widgets-scratch-3"
+cat > "$WORK/taskrec" <<'TR_EOF'
+#!/bin/bash
+[ "${1:-}" = get ] && [ "${2:-}" = T42 ] || exit 1
+[ "${TR_RC:-0}" = 0 ] || exit 1
+printf '%s\n' '{"task":{"id":"T42","title":"RECORD-TITLE 修风扇","state":"open","repo":"acme/widgets","parent_task":"T7","request_payload":"{\"body\":\"RECORD-WORDS 为什么一直转\"}"}}'
+TR_EOF
+chmod +x "$WORK/taskrec"
+: > "$WORK/gh.task"
+FAKE_AT_ISSUE='' FAKE_AT_TASK=T42 FAKE_AT_TFLOW=1 FAKE_AT_REPO=acme/widgets FLEET_TASK_RECORD="$WORK/taskrec" \
+  GH_CALLS="$WORK/gh.task" run "$WORK/widgets-scratch-3"
+[ "$RC" = 0 ] || fail "TASK a task session's brief must exit 0 (got $RC)" "$OUT$ERR"
+has 'task=T42'                || fail "TASK the fleet block must name the record" "$OUT"
+has 'RECORD-TITLE 修风扇'      || fail "TASK the record's title must be printed" "$OUT"
+has 'RECORD-WORDS 为什么一直转' || fail "TASK the record's words must be printed" "$OUT"
+has 'report (state: merged'   || fail "TASK the flow must end with report merged" "$OUT"
+has 'DIRECTIVE-MARKER for T42' || fail "TASK the directive is still printed" "$OUT"
+has 'claim:'                  && fail "TASK a task session has no claim line" "$OUT"
+[ -s "$WORK/gh.task" ]        && fail "TASK the brief must never call gh for a task session" "$(cat "$WORK/gh.task")"
+FAKE_AT_ISSUE='' FAKE_AT_TASK=T42 FAKE_AT_TFLOW=1 FAKE_AT_REPO=acme/widgets FLEET_TASK_RECORD="$WORK/taskrec" TR_RC=1 \
+  run "$WORK/widgets-scratch-3"
+[ "$RC" = 5 ] || fail "TASK an unreadable record must exit 5 (got $RC)" "$OUT$ERR"
+FAKE_AT_ISSUE='' FAKE_AT_TASK=T42 FAKE_AT_TFLOW='' run "$WORK/widgets-scratch-3"
+[ "$RC" = 4 ] || fail "TASK @task without @task_flow stays the old FAIL(4) (got $RC)" "$OUT$ERR"
+ok "TASK a task session: the record (no gh), the flow, exit 0; unreadable → 5; no flow → 4 as before"
 
 # ===== arg handling ============================================================
 FAKE_AT_ISSUE=77 run "$WORK/widgets-issue-12" --bogus

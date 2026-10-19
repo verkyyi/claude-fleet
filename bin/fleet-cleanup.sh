@@ -52,6 +52,9 @@
 #   skip:issue-open  automatic reap deferred: the bound issue #N is still OPEN and
 #                    the PR does not close it (issue #1156) — a side-fix PR shipped
 #                    from branch issue-<N> is not task #N done. Unknown state defers.
+#   skip:task-open   automatic reap deferred: the session's hub task record T<n> is
+#                    not closed (issue #4897 — the record, never the issue, says a
+#                    task session is over). Unknown (no hub answer) defers too.
 #   skip:migrating   reap refused: the window is being reopened (@migrating, issue
 #                    #2321 — a quota move, a cfg-stale / ver-stale reopen)
 #   error:<reason>   a precondition failed (no repo/main/gh/PR) — rc 2
@@ -314,12 +317,38 @@ fi
 # BEFORE the grace countdown, so the dash never counts down a reap that cannot
 # happen; instead the window carries a held notice until #N closes.
 issue_open_gate() {
-  [ "$AUTO" = 1 ] && [ -n "$ISSUE" ] || return 0
+  [ "$AUTO" = 1 ] || return 0
   { [ -n "$WT" ] || [ -n "$WIN" ]; } || return 0
-  local want c ist='' verb ticket_home tid='' doc
+  local want c ist='' verb ticket_home tid='' doc wtask='' tv
   # Keep #4464's refusal ordering: duplicate windows are refused by the shared
   # liveness gate below, before cleanup. They are not a ticket selector.
   case "$WIN" in *$'\n'*) return 0 ;; esac
+  # A session that carries a hub task record (issue #4897, EPIC #4895 批 0): its
+  # worktree's mark (fleet_worktree_task — a development task with no issue, or
+  # an issue worker's accepted task), else its window's @task beside @launch. The
+  # work is over when the RECORD is closed (收口) — the issue is not read at all.
+  # Open or unknown defers, like an open issue.
+  [ -n "$WT" ] && [ -d "$WT" ] && wtask=$(fleet_worktree_task "$WT" 2>/dev/null)
+  if [ -z "$wtask" ] && [[ "$WIN" =~ ^@[0-9]+$ ]] \
+     && [ -n "$(ftmux show-options -wqv -t "$WIN" @launch 2>/dev/null)" ]; then
+    wtask=$(ftmux show-options -wqv -t "$WIN" @task 2>/dev/null)
+    case "$wtask" in T[1-9]*) case "${wtask#T}" in *[!0-9]*) wtask='' ;; esac ;; *) wtask='' ;; esac
+  fi
+  if [ -n "$wtask" ]; then
+    tv=$(fleet_task_closed "$wtask") && return 0
+    verb=merged; [ "$st" = CLOSED ] && verb=closed
+    note "  #$PR $verb but task $wtask is ${tv:-unknown} (not closed) — automatic cleanup deferred until the record closes."
+    if [[ "$WIN" =~ ^@[0-9]+$ ]]; then
+      local thold=()
+      [ -n "${TMUX:-}" ] || thold=(--socket-name "$(fleet_socket "$FLEET_SESSION")")
+      [ "$DRY" = 1 ] && thold+=(--dry-run)
+      python3 "$BIN/fleet_reap_notice.py" "$WIN" "task-open:$PR:$wtask" 0 \
+        --hold "PR #$PR $verb · $wtask still open — continue or close?" \
+        ${thold[@]+"${thold[@]}"} >/dev/null 2>&1 || true
+    fi
+    done_token "skip:task-open"; return 1
+  fi
+  [ -n "$ISSUE" ] || return 0
   want=$(printf '%s#%s' "$(fleet_norm_repo "$REPO")" "$ISSUE" | tr '[:upper:]' '[:lower:]')
   # Preserve the door's legacy unset=github default, but an invalid configured
   # provider or an ambiguous branch must not silently select GitHub. Window

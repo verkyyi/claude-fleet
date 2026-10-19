@@ -113,6 +113,24 @@ def wait_task(task, timeout, interval):
         time.sleep(min(interval, max(0, end - time.monotonic())))
 
 
+def closed(task):
+    """Is the task record closed (收口, issue #4897)? ONE read, never a wait:
+    SUCCEEDED / FAILED / CANCELLED / REFUSED → exit 0; WAITING (still open) →
+    exit 1; the hub unreadable or the record not authoritative → UNKNOWN, exit 3.
+    The reapers (fleet-cleanup-idle.py, fleet-cleanup.sh, worktree-autoclean.sh)
+    read a task session's end here — never its PR or an issue."""
+    try:
+        record = call("get", task, timeout=10).get("task")
+        if not record or record.get("authority_version") != 1:
+            raise ValueError("task is not authoritative")
+    except (ValueError, OSError, subprocess.SubprocessError):
+        print("UNKNOWN\ntask: %s" % task)
+        return 3
+    state = verdict(record)
+    print("%s\ntask: %s" % (state, task))
+    return 1 if state == "WAITING" else 0
+
+
 def children(task, as_json):
     record = call("get", task)["task"]
     if record.get("authority_version") != 1:
@@ -372,7 +390,7 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("children", "await", "report", "finalize", "cancel", "receive", "blocker", "blockers"))
+    p.add_argument("action", choices=("children", "await", "closed", "report", "finalize", "cancel", "receive", "blocker", "blockers"))
     p.add_argument("--task", default="")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
@@ -388,6 +406,8 @@ def main():
     p.add_argument("--dry", action="store_true")
     args = p.parse_args()
     try:
+        if args.action == "closed":
+            return closed(args.task)
         if args.action not in ("receive",) and not args.dry:
             # Explicit next command, never a resident loop. Failed replay does
             # not stop a native process or authorize a replacement.
