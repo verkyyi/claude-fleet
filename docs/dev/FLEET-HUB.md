@@ -938,9 +938,9 @@ too. `ccquota place … <repo> scratch <fleet UUID>` is the CLI form.
 | `config_set(fleet_id, key, value, expected_revision, idempotency_key)` | Compare-and-set one allowed configuration key | `config:write` plus an explicit key grant |
 | `service_control(machine, login, name, action, at?, cron?, tz?, idempotency_key)` | One entry of a managed machine's login-level register (#2527): `start` · `stop` · `restart`, a task's `run_now` / `set_schedule` (`at` HH:MM or a five-field `cron`, optional `tz`). No fleet: the hub checks the caller sees (machine, login) — else FORBIDDEN (403) — and that the machine link's last beat lists the entry (NOT_FOUND), then sends it down that login's lane; the machine agent runs the root runtime's `fleet-node-supervisor.py service …` with that lane's own login and answers final (succeeded / failed). docs/MANAGED-NODE.md §12 | `service:control` on that (machine, login) |
 | `operation_get(operation_id)` | Reconcile a caller's own operation with its node | `fleet:read` on the target Fleet |
-| `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue through the node's `fleet-gh.sh`: the daemons' local copy when fresh, else `gh`, else REST — the `gh --json` fields plus `_source` (`cache`/`gh`/`rest`) and `_age` seconds (#1274) | `gh:read` on that Fleet |
+| `gh_issue_view(fleet_id, number, repo?, fields?)` | One Issue read with `gh` on the node — the `gh --json` fields plus `_source` (`gh`) and `_age` (0) (#1274; the local copy left with #4899) | `gh:read` on that Fleet |
 | `gh_pr_view(fleet_id, number, repo?, fields?)` | One PR, same path and shape | `gh:read` on that Fleet |
-| `gh_pr_checks(fleet_id, number, repo?, fields?)` | A PR's CI rollup `bucket`; `fields` (e.g. `name,state`) adds per-check rows, which the cache does not hold | `gh:read` on that Fleet |
+| `gh_pr_checks(fleet_id, number, repo?, fields?)` | A PR's CI rollup `bucket` and its per-check rows; `fields` (e.g. `name,state`) picks their columns | `gh:read` on that Fleet |
 | `gh_comment(fleet_id, issue, body, idempotency_key, repo?)` | Refused on the node since #4898 (`INVALID_ARGUMENT`): the fleet writes no GitHub comment — `worker_message` is the channel | `gh:comment` on that Fleet |
 
 All callers need `fleet:read`. Each lifecycle tool has its own scope; none of

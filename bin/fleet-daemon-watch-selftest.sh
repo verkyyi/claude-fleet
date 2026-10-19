@@ -43,9 +43,8 @@
 #                  after recovery, and `collect` NOT printed twice (it has its own
 #                  `⚠ dash stale` segment).
 #  10. stamps    — every interval daemon still stamps its own unit at the top of
-#                  its script, and the three with a non-unit invocation mode
-#                  (diskguard --gate, issue-bridge deliver, pr-refresh --repo) only
-#                  stamp in the mode their unit actually runs. Without this the
+#                  its script, and the ones with a non-unit invocation mode
+#                  (diskguard --gate) only stamp in the mode their unit actually runs. Without this the
 #                  whole alarm is silently unarmed.
 #  11. off       — FLEET_DAEMON_KICK=0 kicks nothing and keeps the alarm.
 #  14. dry-run   — --dry-run reports the exact remedy it WOULD apply and mutates
@@ -198,7 +197,7 @@ fi
 
 # ------------------------------------------------------------- 2. relative ----
 [ "$(lib 'fleet_daemon_stale_secs collect')" = 300 ]            || fail "2: 60s unit not 5×60"; ok
-[ "$(lib 'fleet_daemon_stale_secs issue-bridge')" = 180 ]       || fail "2: 15s unit not floored at 180"; ok
+[ "$(lib 'fleet_daemon_stale_secs memguard')" = 180 ]           || fail "2: 2s unit not floored at 180"; ok
 [ "$(lib 'fleet_daemon_stale_secs worktree-autoclean')" = 18000 ] || fail "2: 3600s unit not 5×3600"; ok
 [ "$(FLEET_DAEMON_STALE_MULT=2 lib 'fleet_daemon_stale_secs collect')" = 180 ] \
   || fail "2: MULT=2 on a 60s unit should floor to 180"; ok
@@ -338,28 +337,23 @@ stamps_for() { grep -c "fleet_daemon_stamp_tick $2" "$BIN/$1" 2>/dev/null || ech
 for pair in 'tmux-dash-collect.sh collect' 'fleet-quotawatch.sh quotawatch' \
             'fleet-cleanup-daemon.sh cleanup' \
             'fleet-base-sync.sh base-sync' 'fleet-diskguard.sh diskguard' \
-            'fleet-ledger-watch.sh ledger-watch' 'fleet-issue-bridge.sh issue-bridge' \
-            'tmux-pr-refresh.sh pr-refresh' 'worktree-autoclean.sh worktree-autoclean' \
+            'fleet-ledger-watch.sh ledger-watch' 'worktree-autoclean.sh worktree-autoclean' \
             'fleet-install-sync.sh install-sync'; do
   set -- $pair
   [ "$(stamps_for "$1" "$2")" -ge 1 ] \
     || fail "10: $1 no longer stamps its scheduling heartbeat (unit $2) — its alarm is unarmed"; ok
 done
-# The three with a non-unit invocation mode must stamp ONLY in the unit's mode,
+# One with a non-unit invocation mode must stamp ONLY in the unit's mode,
 # or another daemon's tick keeps their stamp fresh while they are pended.
 grep -q "case \" \$\* \" in \*' --watch '\*)" "$BIN/fleet-diskguard.sh" \
   || fail "10: diskguard stamps outside --watch — cleanup/base-sync call it --gate every tick"; ok
-grep -q "case \" \$\* \" in \*' --poll '\*)" "$BIN/fleet-issue-bridge.sh" \
-  || fail "10: issue-bridge stamps outside --poll — the webhook drives its deliver path"; ok
-grep -q 'if \[ "\$#" = 0 \]' "$BIN/tmux-pr-refresh.sh" \
-  || fail "10: pr-refresh stamps on --repo too — the KeepAlive webhook would mask a pended unit"; ok
 grep -q 'CALLER" != collect \] && \[ "\$STATUS" = 0 \] && \[ "\$DRY" = 0 \]' "$BIN/fleet-quotawatch.sh" \
   || fail "10: quotawatch stamps outside its own working tick — crediting --caller collect reproduces #639's blind spot, and crediting --status has fleet-doctor refreshing the very stamp it reads"; ok
 # The lib source is GUARDED everywhere: instrumentation must not be able to kill
 # the daemon it instruments if an install is ever half-synced.
 for f in tmux-dash-collect.sh fleet-quotawatch.sh fleet-cleanup-daemon.sh \
-         fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh fleet-issue-bridge.sh \
-         tmux-pr-refresh.sh worktree-autoclean.sh fleet-install-sync.sh; do
+         fleet-base-sync.sh fleet-diskguard.sh fleet-ledger-watch.sh \
+         worktree-autoclean.sh fleet-install-sync.sh; do
   grep -q 'fleet_daemon_stamp_tick' "$BIN/$f" || fail "10: $f lost its stamp"
   grep -qF '[ -f "$BIN/fleet-daemon-lib.sh" ]' "$BIN/$f" \
     || fail "10: $f sources fleet-daemon-lib.sh UNGUARDED — a half-synced install would kill the daemon instead of just losing its alarm"; ok

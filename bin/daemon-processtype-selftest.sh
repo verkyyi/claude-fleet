@@ -66,7 +66,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 # POLL: gh / tmux / network polling only — Background is correct and stays.
 IO_UNITS='cleanup worktree-autoclean diskguard base-sync sleep install-sync'
 CADENCE_UNITS='collect memguard peerlink'  # cred-proxy: one per machine now, not a login unit (#4710, #4809)
-POLL_UNITS='pr-refresh spinner quotawatch issue-bridge ledger-watch webhook'
+POLL_UNITS='spinner quotawatch ledger-watch'
 
 ptype() {  # $1 = unit → the ProcessType string, or the empty string if absent
   grep -o '<key>ProcessType</key><string>[A-Za-z]*</string>' \

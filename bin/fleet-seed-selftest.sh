@@ -4,13 +4,12 @@
 # is put one way since issue #1937 — repos/<slug>.conf, the seed too:
 #   1. `fleet-up o/a` WITHOUT --seed: the fleet conf holds the header and no repo;
 #      o/a is repos/o-a.conf (identity only) and first in repos/.order; no seed.
-#   2. `fleet-up o/a --seed` puts FLEET_SEED=1 + FLEET_ISSUE_BRIDGE=0 in o/a's
+#   2. `fleet-up o/a --seed` puts FLEET_SEED=1 in o/a's
 #      OVERLAY (no FLEET_AUTOFILL: retired, #3120), none in the fleet conf; a re-run is
 #      idempotent (no duplicate keys), and with --no-attach (issue #1165) never
 #      tries to attach.
 #   3. (retired with the autofill dispatcher, issue #3120)
-#   4. one issue-bridge tick on the seed fleet is a no-op — even with
-#      FLEET_ISSUE_BRIDGE=1; the same overlay minus FLEET_SEED is queued (control).
+#   4. (retired with the issue bridge, issue #4899)
 #   5. repo-scoped: a repo ADDED to the seed fleet is not the seed
 #      (fleet_repo_is_seed).
 #   6. `--seed` for a repo the fleet would add beside another is refused, nothing written.
@@ -61,7 +60,6 @@ trap 'exit 130' INT TERM HUP
 
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp" FLEET_C="$WORK/cache"
-export FLEET_ISSUE_BRIDGE_STATE_DIR="$WORK/bridge"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET_SKIP_GLOBAL_CONF
 unset _FLEET_GLOBAL_CONF_SOURCED FLEET_GLOBAL_MAX_SESSIONS FLEET_SEED FLEET_AUTOFILL FLEET_ISSUE_BRIDGE
 export FLEET_ONBOARD=0     # no first-fleet guide here (#1169)
@@ -123,26 +121,15 @@ out=$(up o/a "$WORK/src/a" --seed); eq "2 rc" "$?" 0
 has "2 says so" "$out" "o/a is this fleet's seed repo"
 eq "2 seed" "$(val "$(OV a)" FLEET_SEED)" 1
 eq "2 no autofill key (#3120)" "$(grep -c '^FLEET_AUTOFILL=' "$(OV a)")" 0
-eq "2 bridge" "$(val "$(OV a)" FLEET_ISSUE_BRIDGE)" 0
+eq "2 no bridge key (#4899)" "$(grep -c '^FLEET_ISSUE_BRIDGE=' "$(OV a)")" 0
 eq "2 none of them in the fleet conf" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$C")" 0
 lib 'fleet_repo_is_seed fleet o/a' || fail "2: o/a is not read as the seed"
 out=$(up o/a "$WORK/src/a" --seed --no-attach); eq "2 re-run rc" "$?" 0
 has "2 --no-attach stops short (#1165)" "$out" "not attaching (--no-attach)"
 hasnt "2 --no-attach never tries" "$out" "attach:  tmux"
-eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$(OV a)")" 2
+eq "2 no dup keys" "$(grep -cE '^FLEET_(SEED|AUTOFILL|ISSUE_BRIDGE)=' "$(OV a)")" 1
 [ -e "$C.tmp.$$" ] && fail "2: temp file left behind"
-leg "2 --seed writes SEED=1 ISSUE_BRIDGE=0 into the seed's overlay"
-
-# ---- 4. one issue-bridge tick: a no-op, even with the bridge flipped on ----
-lib "fleet_conf_set '$(OV a)' FLEET_ISSUE_BRIDGE 1"
-out=$(bash "$SB/fleet-issue-bridge.sh" 2>&1)
-[ -n "${FLEET_SELFTEST_SHOW:-}" ] && printf '$ fleet-issue-bridge (seed)\n%s\n' "$out"
-has "4 nothing to relay" "$out" "no fleet has FLEET_ISSUE_BRIDGE=1 — nothing to do"
-cp "$(OV a)" "$WORK/seedconf"; grep -v '^FLEET_SEED=' "$WORK/seedconf" > "$(OV a)"
-out=$(bash "$SB/fleet-issue-bridge.sh" 2>&1)
-hasnt "4 control is queued" "$out" "nothing to do"
-cp "$WORK/seedconf" "$(OV a)"
-leg "4 issue-bridge tick on the seed repo is a no-op"
+leg "2 --seed writes SEED=1 into the seed's overlay"
 
 # ---- 5. repo-scoped: an added repo is not the seed ----
 out=$(up o/b "$WORK/src/b"); eq "5 add rc" "$?" 0
@@ -260,4 +247,4 @@ down
 leg "11 a fleet with no repo comes up, and takes one later the same way"
 
 [ "$FAILS" = 0 ] || { printf 'selftest FAIL: %d assertion(s)\n' "$FAILS" >&2; exit 1; }
-printf 'selftest PASS: the seed repo only looks — no bridge, repo-scoped (issue #1167) — and goes like any repo (issues #1172, #1937)\n'
+printf 'selftest PASS: the seed repo only looks — repo-scoped (issue #1167) — and goes like any repo (issues #1172, #1937)\n'

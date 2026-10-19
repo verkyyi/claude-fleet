@@ -10,10 +10,9 @@
 #   B. the collector        ph_hubsess asks fleet_login_unused before --ensure
 #      (bin/tmux-dash-collect.sh) — the hub-sessions loop is not kept alive on an
 #      unused login
-#   C. the node's table     spinner + webhook are `session` units and issue-bridge
-#      + pr-refresh `worker` units (conf/node-tasks.tsv): the root daemon
-#      (bin/fleet-node-supervisor.py no_session) does not run them for a login
-#      with no session — fleet-node-supervisor-selftest.py drives that gate
+#   C. the node's table     the spinner is a `session` unit (conf/node-tasks.tsv):
+#      the root daemon (bin/fleet-node-supervisor.py no_session) does not run it
+#      for a login with no session — fleet-node-supervisor-selftest.py drives that gate
 #   D. hub-sessions idle    an unwatched node loop (no client) refreshes every
 #      FLEET_HUB_SESSIONS_IDLE_EVERY, not EVERY; an explicit
 #      FLEET_HUB_SESSIONS_EVERY is its idle pace too; a client attaching (socket
@@ -76,14 +75,8 @@ else fail "B: ph_hubsess keeps the hub-sessions loop alive on a login nobody use
 
 # --- C: the node's table -----------------------------------------------------------
 cls() { awk -F'\t' -v u="$1" '$1 == u && $2 == "unit" { print $3 }' "$BIN/../conf/node-tasks.tsv"; }
-for u in spinner webhook; do
-  if [ "$(cls "$u")" = session ]; then ok "C: $u runs only while its login has a session"
-  else fail "C: $u is a '$(cls "$u")' unit — it runs on a login with no session"; fi
-done
-for u in issue-bridge pr-refresh; do
-  if [ "$(cls "$u")" = worker ]; then ok "C: $u runs only while its login has a worker"
-  else fail "C: $u is a '$(cls "$u")' unit — it runs on a login with no worker"; fi
-done
+if [ "$(cls spinner)" = session ]; then ok "C: spinner runs only while its login has a session"
+else fail "C: spinner is a '$(cls spinner)' unit — it runs on a login with no session"; fi
 
 # --- D: the hub-sessions loop's idle pace --------------------------------------------
 S="idl$$"

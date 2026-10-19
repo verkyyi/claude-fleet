@@ -937,26 +937,12 @@ From `fleet doctor`.
 - **What it is**: the settings this repository changed on its own — every key and value its repository settings (`repos/<slug>.conf`) write beyond its name, checkout and base branch; when one shadows a fleet-wide value, the old value follows as `fleet:` in brackets. A credential-shaped key or value shows only `<hidden>`. With only its identity it says "no setting of its own".
 - **On WARN / FAIL**: status only, never WARN / FAIL. To change a setting, edit the file named at the end of the line.
 
-#### `webhook`
-
-From `fleet doctor`.
-
-- **What it is**: for a repository with live forwarding of GitHub events turned on, whether the programs it needs are missing.
-- **On WARN / FAIL**: install `gh`, `gh extension install cli/gh-webhook` or python3 as the explanation says.
-
 #### `emit`
 
 From `fleet doctor`.
 
 - **What it is**: whether sending session events out (only when a receiver address is configured) gets through.
 - **On WARN / FAIL**: install `curl`; when events pile up, check the receiving end.
-
-#### `github`
-
-From `fleet doctor`.
-
-- **What it is**: whether the GitHub API rate limit is used up. When it is, fleet switches to the other API by itself.
-- **On WARN / FAIL**: wait for the limit to reset (the explanation gives the time). It is not a permission problem; no need to sign in again.
 
 #### `wtroot`
 

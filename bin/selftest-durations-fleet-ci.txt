@@ -48,8 +48,6 @@
 0.7 dash-rows-scratch-id-selftest.sh
 0.3 dash-title-info-selftest.sh
 0.7 dash-wid-selftest.sh
-0.9 deploy-multirepo-selftest.sh
-3.7 deploy-state-selftest.sh
 8.8 dist-no-github-selftest.sh
 2.0 dist-source-selftest.sh
 6.3 doctor-resident-selftest.sh
@@ -141,18 +139,12 @@
 2.6 fleet-doctor-onboard-selftest.sh
 11.1 fleet-doctor-quota-selftest.sh
 5.6 fleet-doctor-repos-selftest.sh
-4.6 fleet-doctor-webhook-selftest.sh
 0.2 fleet-down-selftest.sh
 2.6 fleet-emit-selftest.sh
 0.3 fleet-epic-floor-selftest.sh
 1.0 fleet-epic-stable-row-selftest.sh
 1.5 fleet-failover-selftest.sh
 6.2 fleet-fold-selftest.sh
-3.2 fleet-gh-fallback-selftest.sh
-7.8 fleet-gh-limit-visible-selftest.sh
-2.6 fleet-gh-selftest.sh
-4.2 fleet-gh-share-selftest.sh
-17.2 fleet-gh-write-selftest.sh
 1.1 fleet-handoff-file-selftest.sh
 1.2 fleet-handoff-invariant-selftest.sh
 20.2 fleet-handoff-selftest.sh
@@ -175,7 +167,6 @@
 180.5 fleet-install-selftest.sh
 1.8 fleet-installs-selftest.sh
 0.4 fleet-intro-selftest.sh
-7.2 fleet-issue-bridge-selftest.sh
 9.9 fleet-keys-selftest.sh
 0.1 fleet-lang-selftest.sh
 17.1 fleet-launchd-probe-selftest.sh
@@ -283,8 +274,6 @@
 0.6 fleet-view-session-selftest.sh
 5.0 fleet-wait-reeval-selftest.sh
 11.0 fleet-wait-selftest.sh
-11.1 fleet-wait-webhook-selftest.sh
-2.9 fleet-webhook-selftest.sh
 2.5 fleet-win-name-selftest.sh
 38.2 fleet-worker-stop-selftest.sh
 0.2 fleet-worktree-drop-selftest.sh
@@ -324,11 +313,9 @@
 0.1 pane-border-focus-selftest.sh
 0.4 pane-header-selftest.sh
 8.0 peer-queue-selftest.sh
-4.1 poll-backoff-selftest.sh
 0.6 pool-not-a-fleet-selftest.sh
 8.3 portability-selftest.sh
 0.6 posix-lib-parse-selftest.sh
-0.3 pr-refresh-jq-selftest.sh
 1.4 precompact-hook-selftest.sh
 0.9 refocus-hook-selftest.sh
 4.2 release-tree-selftest.sh

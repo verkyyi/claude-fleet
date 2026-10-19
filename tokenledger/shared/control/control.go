@@ -518,8 +518,8 @@ type Workers struct {
 // ReadMethods is the whole list of fleet-control.py methods the hub may ask a
 // node for over the channel. All are reads; a write never travels as a
 // request — it is a TypeWrite naming one of WriteMethods, with its own journal
-// (claude-fleet#1410). The gh_* reads answer from the node's fleet-gh.sh (its
-// daemons' local copy first), exactly as the SSH hub's did.
+// (claude-fleet#1410). The gh_* reads answer from one gh call on the node,
+// exactly as the SSH hub's did.
 var ReadMethods = map[string]bool{
 	"discover":      true,
 	"fleet_status":  true,

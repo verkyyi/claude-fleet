@@ -97,8 +97,6 @@ fleet_daemon_units() {
     'install-sync 1800 tick' \
     'diskguard 60 tick' \
     'ledger-watch 60 tick' \
-    'issue-bridge 15 tick' \
-    'pr-refresh 15 tick' \
     'worktree-autoclean 3600 tick' \
     'memguard 2 tick'
 }
@@ -107,8 +105,8 @@ fleet_daemon_units() {
 # StartInterval units. memguard (issue #1292) is one: launchd never pends it, but
 # a loop can WEDGE (a `ps` hung on a dying machine), and a wedged memguard is the
 # one failure nobody would see — so it stamps `<unit>.tick` every ~10s and its
-# "interval" is its sample period. The spinner and webhook stay out: they are the
-# hands that kick, or carry their own supervisor. KEEP IN SYNC with the plists —
+# "interval" is its sample period. The spinner stays out: it is the hand that
+# kicks. KEEP IN SYNC with the plists —
 # bin/fleet-daemon-watch-selftest.sh checks that every KeepAlive plist in the
 # registry is named here and vice versa.
 fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
@@ -121,7 +119,7 @@ fleet_daemon_keepalive_units() { printf '%s\n' memguard; }
 # unit the spinner itself puts back — runs `fleet-daemon-watch.sh --resident`
 # over these: each guards the other. A managed login has neither plist (the
 # machine daemon runs them as KeepAlive children) and is skipped.
-fleet_daemon_resident_units() { printf '%s\n' spinner webhook; }
+fleet_daemon_resident_units() { printf '%s\n' spinner; }
 
 # fleet_daemon_client_units — the units a computer that hosts NO sessions (承载
 # off, a pure client — issue #3534) still runs; every other template serves the
@@ -363,8 +361,8 @@ fleet_daemon_fair_budget() {
 #
 # Defaults: MULT=5, FLOOR=180. Five intervals is well clear of one slow tick
 # (the collector's phases are 1–3 min) yet far below the 7–14 min cadence #639
-# measured; the floor keeps the 15s units (issue-bridge, pr-refresh) from
-# alarming on a single slow `gh` round-trip. Raise MULT on a fleet whose ticks
+# measured; the floor keeps a short-interval unit from alarming on a single
+# slow round-trip. Raise MULT on a fleet whose ticks
 # are genuinely long — a big monorepo has been seen with a 551s git phase, and
 # that host wants FLEET_DAEMON_STALE_COLLECT (or a bigger MULT), not silence.
 fleet_daemon_stale_secs() {

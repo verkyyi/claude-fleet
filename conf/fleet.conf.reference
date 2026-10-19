@@ -58,9 +58,8 @@ FLEET_BASE_BRANCH="main"
 
 # The login's SEED repo (issue #1167): `fleet-up.sh --seed` brings a new login's
 # fleet up on a starter repo (claude-fleet itself) so it works at once — and that
-# repo only LOOKS. 1 = the issue-bridge never relays its comments, whatever
-# FLEET_ISSUE_BRIDGE says. Marks the fleet conf's OWN repo only: a repo added later
-# is never the seed. fleet-up writes it (with FLEET_ISSUE_BRIDGE=0); readers ask
+# repo only LOOKS. Marks the fleet conf's OWN repo only: a repo added later
+# is never the seed. fleet-up writes it; readers ask
 # fleet_repo_is_seed.
 # Once the login hosts a repo of its own, `fleet-repo.sh remove <seed>` takes the
 # starter out: that repo is promoted into this slot and the seed keys go (#1172).
@@ -172,7 +171,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_CLEANUP FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -498,8 +497,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_MCP=1
 
 # Which agent CLI a spawned session runs (issue #547). Every spawn path — the
-# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch, the
-# issue-bridge revive — funnels through bin/fleet-claude.sh, which branches here:
+# backlog Enter / `▸ issue`, the dash ⌃s / prompt-line scratch — funnels through bin/fleet-claude.sh, which branches here:
 #   claude   (default) Claude Code, exactly as before — the default fleet's spawn
 #            argv is byte-for-byte unchanged.
 #   codex    OpenAI Codex CLI (`codex`, 0.154+), via bin/fleet-codex.sh. Modern
@@ -788,60 +786,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Stalled child escalation interval @group=spawn @tier=internal @scope=fleet @edit=int @unit=seconds
 #FLEET_AWAIT_STALL_SECS=1200
 
-# --- Issue-bridge: issue comments → the bound worker's next turn (issue #132) ---
-# OFF by default. When enabled for a fleet, the issue-bridge daemon
-# (com.claude-fleet.issue-bridge, ~15s poll — or a webhook, see docs/dev/ISSUE-BRIDGE.md)
-# relays a trusted comment on a bound issue INTO that worker as its next turn.
-# The issue thread becomes the single durable channel for driving a worker
-# (operator→worker, worker→worker, external-collaborator→worker), replacing send-keys.
-#
-# SECURITY: a relayed comment becomes autonomous tool-use in a bypass-permissions
-# worker — treat it as remote code execution. The author_association gate below is
-# the headline control; un-gated relay on a PUBLIC repo is unsafe. Loop-safety: the
-# bridge relays every comment from a trusted author UNLESS it carries the marker
-# `<!-- fleet:no-relay -->` — fleet-internal comments (worker progress, an operator
-# record) MUST carry that marker, so
-# nothing the fleet writes loops back in. See docs/dev/ISSUE-BRIDGE.md.
-# @label=Relay issue comments to worker @group=bridge @tier=common @scope=fleet @edit=bool
-#FLEET_ISSUE_BRIDGE=0
-# Trusted author_association floor (space-separated, verbatim GitHub values). Only
-# comments whose author is in this set are relayed; NONE/CONTRIBUTOR are refused.
-# Default: the three trusted tiers. Widen it ONLY if you understand the RCE risk.
-# @label=Bridge: trusted associations @group=bridge @tier=advanced @scope=fleet @edit=str
-#FLEET_ISSUE_BRIDGE_ASSOC_FLOOR="OWNER MEMBER COLLABORATOR"
-# Webhook HMAC secret (the `gh webhook forward` / cloudflared shared secret). Used
-# by `--deliver` to validate that only GitHub triggered a delivery — MANDATORY for
-# the webhook ingress (the poll ingress needs no secret). Keep it out of the conf
-# in a real deploy; the daemon reads it from the environment. See docs.
-# @label=Bridge: webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
-#FLEET_ISSUE_BRIDGE_SECRET=""
-# Revive a DORMANT issue: when a trusted comment lands on an OPEN issue whose
-# worker window is gone, re-spawn the worker (its brief re-reads the issue,
-# comment and all). OFF by default — turn on once you trust the gate. A closed/
-# landed issue is left alone (resume via #130 is a follow-up).
-# @label=Bridge: revive dormant issues @group=bridge @tier=advanced @scope=fleet @edit=bool
-#FLEET_ISSUE_BRIDGE_REVIVE=0
-# Max CONSECUTIVE typing-defers before a relay is delivered anyway (issue #195). The
-# bridge DEFERS a relay while the target's ❯ input row holds un-submitted text (so it
-# never prepends onto a human's half-typed line, issue #191). That defer is otherwise
-# UNBOUNDED: a row that reads non-empty persistently (a stuck render, a future TUI
-# placeholder, a capture-pane quirk) would wedge the channel forever, silently
-# dropping a handback you are waiting on.
-# After this many consecutive defers of the SAME comment, the bridge delivers anyway
-# and logs a WARNING; the counter resets the moment the input clears, so a real
-# partial is never clobbered. TRADE-OFF: keep it GENEROUS enough that a human pausing
-# mid-type for a few minutes is respected, small enough that a bad read can't wedge.
-# Default 20 ≈ 5 min at the 15s poll. Per-comment, persisted in the bridge state dir.
-# @label=Bridge: max typing-defers @group=bridge @tier=internal @scope=fleet @edit=int @unit=ticks
-#FLEET_BRIDGE_MAX_TYPING_DEFERS=20
-
 # --- Cleanup daemon (bin/fleet-cleanup-daemon.sh, com.claude-fleet.cleanup) ------
 # ON by default. THE FLEET NEVER MERGES — /fleet-ship arms GitHub auto-merge and
 # GitHub (or a human on the web, or a collaborator) does the merge; the cleanup
 # daemon (~60s) is what reaps the leftover worktree/window/branch and records the
 # resume ledger once a PR is final (MERGED or CLOSED-unmerged). It merges NOTHING
 # and relaxes NO approval gate, so it is safe to leave on for every fleet. Detection
-# is cache + local (the prmap pr-refresh already writes + a local git/tmux check —
+# is cache + local (the prmap cache + a local git/tmux check —
 # ZERO extra gh); single-writer per repo + disk-gated. Set to 0 to opt a fleet OUT
 # (the worktree-autoclean janitor still backstops merged worktrees). See docs/dev/CLEANUP.md.
 # @label=Cleanup daemon (reap after merges) @group=bridge @tier=common @scope=fleet @edit=bool
@@ -968,50 +919,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Close window + reap on manual exit @group=bridge @tier=advanced @scope=global @edit=bool
 #FLEET_CLOSE_ON_EXIT=1
 
-# --- Webhook: fresh (~1s) PR/issue/CI status via `gh webhook forward` (issue #315) -
-# OFF by default. When enabled for a fleet, the webhook daemon (bin/fleet-webhook.sh,
-# com.claude-fleet.webhook — a KeepAlive supervisor like the spinner) makes GitHub's
-# real-time webhook stream KICK the SAME single-writer refreshers the pollers use, so
-# "CI went green" / "PR merged" / a new issue surfaces in ~1s instead of on the next
-# poll tick. NO public endpoint: `gh webhook forward` (the cli/gh-webhook extension)
-# registers the repo webhook against GitHub's OWN hosted relay and PULLS deliveries
-# over the authenticated gh channel, re-POSTing each to a LOCALHOST handler — no
-# tunnel, no exposed port. The handler only TRIGGERS a targeted pr-refresh/collector
-# refresh (it never writes a cache itself), and polling stays the BACKSTOP, so a
-# missed delivery costs only freshness, never correctness.
-#
-# PREREQ: `gh extension install cli/gh-webhook` (it registers a repo webhook — needs
-# repo admin). One machine-wide daemon forwards one stream per opted-in repo of each
-# LIVE fleet — EVERY repo the fleet hosts (issue #800); a repos/<slug>.conf may set
-# its own FLEET_WEBHOOK to differ. Spends no LLM tokens, but keeps a `gh webhook
-# forward` process per repo. See docs/dev/WEBHOOK.md.
-# @label=Fresh status via gh webhook forward @group=bridge @tier=common @scope=fleet @edit=bool
-#FLEET_WEBHOOK=0
-# The localhost port the handler binds (127.0.0.1 ONLY) and every forward re-POSTs to.
-# GLOBAL: one handler serves every fleet. Change only on a port clash.
-# @label=Webhook handler port @group=bridge @tier=advanced @scope=global @edit=int @unit=port
-#FLEET_WEBHOOK_PORT=8917
-# Optional HMAC shared secret. When set it is passed to `gh webhook forward --secret`
-# and the handler verifies X-Hub-Signature-256 (reuses the issue-bridge --deliver
-# check) — defense-in-depth for the relay→localhost hop. The handler already binds to
-# localhost, so an unsigned delivery can at worst cause a spurious LOCAL refresh (never
-# a cache write of its own), which is why this is optional. GLOBAL: one handler. Keep
-# it out of the conf in a real deploy — the daemon reads it from the environment.
-# @label=Webhook HMAC secret @group=bridge @tier=advanced @scope=global @edit=str
-#FLEET_WEBHOOK_SECRET=""
-
 # fleet-open's laptop half (issue #1380): the ssh alias, as seen from THIS machine,
 # of the operator's computer running iTerm2. When set, fleet-doctor adds a `laptop`
 # row — is extras/iterm2/fleet_open.py installed there, and the same version? A
 # laptop that is asleep or off-network shows `?`, never a warning. Unset = no row.
 # @label=Laptop ssh alias (fleet-open) @group=notify @tier=internal @scope=global @edit=str
 #FLEET_OPEN_LAPTOP=""
-# Advanced env-only knobs (NOT in this modal; override them in the environment): the
-# forwarded event set in `FLEET_WEBHOOK_EVENTS` (default
-# pull_request,check_run,check_suite,status,issues), the supervisor rescan cadence
-# `FLEET_WEBHOOK_RESCAN` seconds (default 30), and the per-(event,repo) kick debounce
-# `FLEET_WEBHOOK_DEBOUNCE` seconds that coalesces a CI event storm (default 3; 0
-# disables). See docs/dev/WEBHOOK.md.
 
 # ── session lifecycle emitter (issue #625) ────────────────────────────────────
 # OFF unless FLEET_EMIT_URL is set — and OFF means OFF: no spool file, no socket,
@@ -1055,35 +968,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Issue cache lifetime @group=cache @tier=advanced @scope=global @edit=int @unit=sec
 #FLEET_ISSUE_TTL=180
 
-# Seconds the collector caches gh fetches (open issues + the repo-wide PR map)
-# before re-fetching. Lower = fresher backlog/PR data, more gh API chatter.
+# Seconds the collector caches its open-issue fetch before re-fetching.
+# Lower = fresher backlog data, more gh API chatter.
 # GLOBAL: the collector is ONE daemon serving every fleet and sets this once —
 # it is not per-fleet overridable.
 # @label=GitHub cache lifetime @group=cache @tier=common @scope=global @edit=int @unit=sec
 #FLEET_GH_TTL=90
-
-# One machine, one fetch per repo (issues #1271, #3529). Several logins on one
-# machine that host the same repo each ran the same collector / pr-refresh /
-# issue-bridge reads. With 1, they share them per REPO under
-# /Users/Shared/claude-fleet/gh/<owner>-<repo>/: a login takes another's copy
-# younger than its TTL, waits (≤15s) for one another login is fetching right
-# now, and otherwise fetches itself and publishes — one fetch per TTL per repo,
-# however many logins host it; the backlog comes by increments (REST since +
-# ETag, a 304 costs no budget). A repo is shared only while this login's OWN
-# token reads it and it is public (checked once a day); a private repo never is.
-# Copies are TAKEN only from FLEET_GH_SHARE_TRUST below. `fleet-doctor`'s github
-# row counts the shared repos. 0 = every login fetches for itself, as before.
-# GLOBAL: the daemons are machine-wide, so it is not per-fleet overridable.
-# @label=Share background reads across logins @group=cache @tier=internal @scope=global @edit=bool
-#FLEET_GH_SHARE=0
-
-# Whose shared copies this login takes (issue #3529): login names on this
-# machine, space-separated, or `*` for every login. A copy drives the dash AND
-# the reapers (a MERGED row in the PR map closes a session), so it is taken only
-# from a login you trust — and only from a pub dir that login really owns.
-# Empty = this login still publishes for others but takes nothing.
-# @label=Logins whose shared reads to take @group=cache @tier=internal @scope=global @edit=str
-#FLEET_GH_SHARE_TRUST=
 
 # Collector tick deadline (issue #551). ONE collector tick runs at a time
 # (global/collect.pid): a tick started while the previous one is still running
@@ -1293,7 +1183,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Daemon staleness multiplier @group=cache @tier=internal @scope=global @edit=int
 #FLEET_DAEMON_STALE_MULT=5
 
-# Floor under that multiple, so the 15s units (issue-bridge, pr-refresh) do not
+# Floor under that multiple, so a short-interval unit does not
 # alarm on one slow `gh` round-trip. GLOBAL.
 # @label=Daemon staleness floor @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_STALE_FLOOR=180
@@ -1371,7 +1261,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Daemon reload cooldown @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_RELOAD_COOLDOWN=1800
 
-# The KeepAlive hands (spinner, webhook) are outside the ladder above — the
+# The KeepAlive hands (the spinner) are outside the ladder above — the
 # spinner IS the hand that runs it — but a `launchctl bootout` still takes one
 # out of the domain for good (issue #1849). The diskguard tick runs
 # `fleet-daemon-watch.sh --resident`: a resident unit unloaded with its plist on
@@ -1438,34 +1328,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Domain-stall kick window @group=cache @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_DAEMON_DOMAIN_KICK_WINDOW=3600
 
-# PR-status refresh cadence (bin/tmux-pr-refresh.sh, com.claude-fleet.pr-refresh).
-# PR/CI state (the dash PR cell + the status-bar @prci glyph) is refreshed by its
-# OWN fast daemon, decoupled from the 60s collector, so "CI went green" / "PR
-# merged" surfaces within ~this many seconds — which is when you are
-# watching to land it. Default 15. This value gates the script's own gh-fetch
-# dedup; the DAEMON fire cadence is set in the launchd plist (StartInterval) /
-# systemd timer (OnUnitActiveSec) — keep all three in step if you change it.
-# GLOBAL: one daemon serves every fleet and its cadence is tied to the plist —
-# not per-fleet overridable.
-# @label=PR status refresh @group=cache @tier=common @scope=global @edit=int @unit=sec
-#FLEET_PR_REFRESH_INTERVAL=15
-
-# Poll backoff (issue #892): the two ~15s GitHub pollers — pr-refresh and the
-# issue-bridge poll — slow down per repo while nothing changes. A poll that comes
-# back identical doubles that repo's wait (15 → 30 → 60), capped at this many
-# seconds; any change, a webhook kick or a bridge delivery drops it straight back
-# to 15. 60 is the recommended value: a merged PR still reaches the dash within a
-# minute (at once with the webhook installed). Default 15 = no backoff, as before.
-# GLOBAL: one daemon of each serves every fleet.
-# @label=Poll backoff ceiling @group=cache @tier=internal @scope=global @edit=int @unit=sec
-#FLEET_POLL_MAX_BACKOFF=15
-
 # --- "merged" ≠ "live": deploy state for merged PRs (issue #541) ------------------
-# Once a PR is MERGED the dash PR cell reads `merged`. With one of the two knobs
-# below set for THIS fleet, bin/tmux-pr-refresh.sh also probes where the merge
-# commit actually is and the cell becomes `live` (green) / `deploy…` (still
-# rolling out) / `deploy✗` (a post-merge run went red); the ⌃t landed list shows
-# the same in its `dep` column. Per-fleet: each repo deploys its own way.
+# Where a repo's merge commits go live. Nothing probes these since the PR-map
+# refresher went (issue #4899); they stay as repo identity (fleet-repo.sh,
+# the doctor, the EPIC preflight) until the closing sweep. Per-fleet: each repo
+# deploys its own way.
 #
 # A) A local git checkout that IS the deployment — the merge sha is live once it is
 # an ancestor of that checkout's HEAD. Zero network. For claude-fleet itself this
@@ -1477,12 +1344,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # B) GitHub Actions: the merge sha's post-merge workflow runs (the push-to-master
 # runs plus any workflow_dispatch deploys a conductor fans out with the same
 # head_sha). All green → live; any still running → deploying; any red → failed;
-# none → unknown. A sha that reached `live` is never re-read; the others are
-# looked at again after FLEET_DEPLOY_TTL seconds (default 60), a `failed` one
-# only after FLEET_DEPLOY_TTL_FAILED (900). When two or more are due, ONE listing
-# of the base branch's newest runs answers all of them; shas older than that
-# window take a per-sha `gh api`, at most FLEET_DEPLOY_PROBE_MAX (4) a tick
-# (claude-fleet#1211). Only `actions` is understood.
+# none → unknown. Only `actions` is understood.
 # @label=Deploy check (Actions runs) @group=cache @tier=advanced @scope=fleet @edit=str
 #FLEET_DEPLOY_CHECK=""
 
@@ -2239,7 +2101,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Orphan listener sweep interval @group=disk @tier=internal @scope=global @edit=int @unit=sec
 #FLEET_ORPHAN_LISTEN_EVERY=300     # min seconds between sweeps
 # @label=Listener exemptions @group=disk @tier=internal @scope=global @edit=str
-#FLEET_LISTEN_EXEMPT_RE=           # an ERE of argv never counted/reaped (cloudflared, webhook, tailscale built in)
+#FLEET_LISTEN_EXEMPT_RE=           # an ERE of argv never counted/reaped (cloudflared, tailscale built in)
 
 # Showing a file on the operator's terminal (issue #1367). bin/fleet-show.sh sends
 # an image/PDF/QR code over the existing SSH connection to the iTerm2 the operator

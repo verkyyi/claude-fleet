@@ -80,11 +80,6 @@ if [ "$now" = 0 ] && [ "$dry" = 0 ]; then
   last=$(cat "$stamp" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0 ;; esac
   [ $((t - last)) -lt "$every" ] && exit 0
 fi
-# GitHub unreachable (issue #4841): no stamp, so the first tick after it answers
-# reads the runs — and nothing is alerted meanwhile.
-if command -v fleet_gh_ready >/dev/null 2>&1 && ! fleet_gh_ready; then
-  log "GitHub 不通 — skip"; exit 0
-fi
 # One watch per repo at a time (issue #4841): a run that is still waiting on
 # GitHub keeps the lock, and the next tick leaves instead of piling up beside it.
 lock="$SD/$slug.lock"
@@ -100,11 +95,9 @@ trap 'rm -rf "${lock:?}" 2>/dev/null' EXIT
 [ "$dry" = 1 ] || printf '%s\n' "$t" > "$stamp"
 
 # Completed non-PR runs, newest first: id<TAB>head_sha<TAB>conclusion<TAB>event<TAB>created_at.
-rows=$(fleet_gh api "repos/$repo/actions/workflows/$WF/runs?branch=$BRANCH&status=completed&per_page=50" \
+rows=$(gh api "repos/$repo/actions/workflows/$WF/runs?branch=$BRANCH&status=completed&per_page=50" \
          --jq '.workflow_runs[] | [(.id|tostring), .head_sha, (.conclusion // ""), .event, (.created_at // "")] | @tsv' 2>/dev/null)
 rc=$?
-# rc 75 = GitHub unreachable or no answer in time (issue #4841): not a failure.
-[ "$rc" -eq 75 ] && { log "GitHub 不通 — skip"; exit 0; }
 [ "$rc" -eq 0 ] || { log "could not read the $WF runs"; exit 2; }
 rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $3 != "skipped" && $3 != "cancelled"')
 [ -n "$rows" ] || { log "no completed $WF run on $BRANCH yet"; exit 0; }
@@ -112,7 +105,7 @@ rows=$(printf '%s\n' "$rows" | awk -F'\t' 'NF >= 4 && $4 !~ /^pull_request/ && $
 # A run's BSD verdict from its macOS shard jobs: prints `green`, or `red` and then
 # one "<job id><TAB><name>" line per failed shard; nothing = no verdict.
 mac_verdict() {
-  fleet_gh api "repos/$repo/actions/runs/$1/jobs?per_page=100" \
+  gh api "repos/$repo/actions/runs/$1/jobs?per_page=100" \
       --jq '.jobs[] | [(.id|tostring), (.conclusion // ""), .name] | @tsv' 2>/dev/null |
     awk -F'\t' 'NF >= 3 && $3 ~ /^macOS( \/)? shard / {
         n++
@@ -173,7 +166,7 @@ if [ -n "$jid" ]; then
   # over REST (#4238): `gh run view --log-failed` printed nothing for these jobs,
   # so every alert said «no FAIL line»
   u="repos/$repo/actions/jobs/$jid/logs"
-  tests=$({ fleet_gh api "$u" --allow-escape-sequences 2>/dev/null || fleet_gh api "$u" 2>/dev/null; } \
+  tests=$({ gh api "$u" --allow-escape-sequences 2>/dev/null || gh api "$u" 2>/dev/null; } \
             | grep -aoE '(FAIL|TIMEOUT) +[A-Za-z0-9_.-]*selftest[A-Za-z0-9_.-]*' | awk '{print $2}')
   tests=$(printf '%s\n' "$tests" | grep . | awk '!seen[$0]++' | head -5 | paste -sd ',' - | sed 's/,/, /g')
 fi

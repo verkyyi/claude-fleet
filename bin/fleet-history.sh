@@ -154,6 +154,7 @@ oneline() { printf '%s' "${1:-}" | tr '\t\r\n' '   ' ; }
 key_label() {
   case "${1:-}" in
     scratch-*) printf '~%s' "${1#scratch-}" ;;
+    T[1-9]*)   printf '%s' "$1" ;;              # a task session's record (#4899)
     *)         printf '#%s' "${1:-}" ;;
   esac
 }
@@ -471,7 +472,7 @@ cmd_record() {
   # Derive PR metadata from GitHub (best-effort; tolerate a missing/removed PR).
   local title="" sha="" mergedat_gh=""
   if [ -n "$pr" ] && [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
-    local meta; meta=$(fleet_gh pr view "$pr" --repo "$repo" \
+    local meta; meta=$(gh pr view "$pr" --repo "$repo" \
       --json title,mergedAt,mergeCommit \
       -q '[.title, (.mergedAt//""), (.mergeCommit.oid//"")] | @tsv' 2>/dev/null)
     if [ -n "$meta" ]; then
@@ -561,7 +562,7 @@ cmd_record_closed() {
       --task) HIST_TASK="${2:-}"; shift 2;;            # issue #3387 — see cmd_record
       --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
       --repo) repo="${2:-}"; shift 2;;
-      --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466)
+      --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466) | T<n> (#4899)
       --sha) sha="${2:-}"; shift 2;;
       --worktree) wt="${2:-}"; shift 2;;
       --win) win="${2:-}"; shift 2;;
@@ -943,7 +944,7 @@ cmd_rows() {
     # name and the scratch-<N> fallback below never fired.
     local wname=""; [ "${title:--}" != "-" ] && wname=$(fleet_win_name "$title" 2>/dev/null)
     if [ -z "${wname:-}" ]; then
-      if is_scratch_key "$iss"; then wname="$iss"; else wname="issue-$iss"; fi
+      case "$iss" in T[1-9]*) wname="task-$iss" ;; *) if is_scratch_key "$iss"; then wname="$iss"; else wname="issue-$iss"; fi ;; esac
     fi
     # flex span: the issue title. The recorded one-liner (col 9) used to take
     # precedence; it retired with the dash's summary column (issue #535) and the

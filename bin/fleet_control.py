@@ -412,9 +412,8 @@ class Control:
                     revision_scope="fleet_overlay", observed_at=now())
 
     def gh_read(self, fleet, kind, params):
-        """One issue / PR / PR's checks via fleet-gh.sh: the daemons' local copy
-        when fresh (`_source: cache`), else gh, else REST — same JSON object,
-        `_source` / `_age` included (issue #1274)."""
+        """One issue / PR / PR's checks: one plain gh read on this machine — the
+        gh --json object, `_source` / `_age` included (issues #1274, #4899)."""
         code, output, err = self.adapter("gh", fleet["name"], kind, str(params["number"]),
                                          params.get("repo", ""), params.get("fields", ""))
         if code == 6:

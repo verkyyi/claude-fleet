@@ -937,26 +937,12 @@ fleet doctor --json
 - **是什么**：这个仓库自己改过的设置——它那份仓库设置（`repos/<slug>.conf`）里除仓库名、检出位置、主干分支之外写下的每个键和值；覆盖了 fleet 级的值时，括号里写出原来的 `fleet:` 值。像凭据的键或值只显示 `<hidden>`。只写了身份时写「no setting of its own」。
 - **WARN / FAIL 怎么办**：只报状态，不会 WARN / FAIL。要改哪个设置，就改行尾点名的那个文件。
 
-#### `webhook`
-
-来自 `fleet doctor`。
-
-- **是什么**：打开了实时转发 GitHub 事件的仓库，缺不缺要用的程序。
-- **WARN / FAIL 怎么办**：照说明装上 `gh`、`gh extension install cli/gh-webhook` 或 python3。
-
 #### `emit`
 
 来自 `fleet doctor`。
 
 - **是什么**：会话事件外发（配了接收地址才有）是否送得出去。
 - **WARN / FAIL 怎么办**：装 `curl`；事件积压就查接收端。
-
-#### `github`
-
-来自 `fleet doctor`。
-
-- **是什么**：GitHub 的接口额度用完没有。用完时会自动改走另一种接口。
-- **WARN / FAIL 怎么办**：等额度重置（说明里写着时间）。这不是权限问题，不用重新登录。
 
 #### `wtroot`
 

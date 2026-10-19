@@ -50,11 +50,11 @@ fx_repo "$WORK/conf" "s1" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH
 printf 'issue-12\t#345\tOPEN\t✓\tready\t\n' > "$WORK/tmp/.claude-dash/fleets/acme-widgets/prmap"
 : > "$GCONF"
 
-# A fake fleet-gh.sh in the install copy: the hook's one network read.
-cat > "$WORK/inst/bin/fleet-gh.sh" <<'GH'
+# A fake gh on PATH: the hook's one network read.
+cat > "$WORK/fakepath/gh" <<'GH'
 #!/bin/bash
 echo "$*" >> "${FAKE_GHLOG:-/dev/null}"
-echo '{"comments":[{"url":"https://github.com/acme/widgets/issues/12#issuecomment-1"},{"url":"https://github.com/acme/widgets/issues/12#issuecomment-2"}],"_source":"cache","_age":3}'
+echo '{"comments":[{"url":"https://github.com/acme/widgets/issues/12#issuecomment-1"},{"url":"https://github.com/acme/widgets/issues/12#issuecomment-2"}]}'
 GH
 
 # The transcript: two operator prompts, tool plumbing and a meta row to skip.
@@ -116,7 +116,7 @@ elif verb in ("set-window-option", "set-option"):
 else:
     sys.exit(1)
 FAKE
-chmod +x "$WORK/fakepath/tmux" "$WORK/inst/bin/fleet-gh.sh"
+chmod +x "$WORK/fakepath/tmux" "$WORK/fakepath/gh"
 
 ok()   { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2

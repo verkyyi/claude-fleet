@@ -46,18 +46,12 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_MAX_SESSIONS=0
 
 # ── bridge ──
-# Relay issue comments to worker
-#FLEET_ISSUE_BRIDGE=0
 # Cleanup daemon (reap after merges)
 #FLEET_CLEANUP=1
-# Fresh status via gh webhook forward
-#FLEET_WEBHOOK=0
 
 # ── cache ──
 # GitHub cache lifetime
 #FLEET_GH_TTL=90
-# PR status refresh
-#FLEET_PR_REFRESH_INTERVAL=15
 
 # ── status ──
 # Tmux UI language

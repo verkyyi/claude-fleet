@@ -27,10 +27,8 @@
 #                     ago ⇒ ONE more alert «every Mac … previous version»; the next
 #                     tick in the same streak says nothing; green forgets it. The
 #                     default workflow is selftests-macos.yml (#4663: mac-follow holds nothing)
-#   M. GitHub down    (issue #4841, fleet_gh_ready in bin/fleet-gh-lib.sh) the gh-down
-#                     marker open ⇒ exit 0, nothing read / alerted / stamped; a previous
-#                     watch still running (its lock's pid alive) ⇒ this one leaves; a
-#                     dead holder's lock is taken over
+#   M. one at a time  (issue #4841) a previous watch still running (its lock's pid
+#                     alive) ⇒ this one leaves; a dead holder's lock is taken over
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -203,14 +201,7 @@ run --now
 eq "K: green forgets the held-back mark" no "$([ -e "$WORK/conf/global/macos-watch/o-r.stale" ] && echo yes || echo no)"
 contains "K: the watched workflow is selftests-macos.yml" "$(cat "$W")" 'FLEET_MACOS_WORKFLOW:-selftests-macos.yml'
 
-# --- M. GitHub down / one watch at a time (#4841) ---------------------------------
-reset; red_runs
-OUT=$(env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_GH_FAKE_DOWN=1 \
-        FLEET_MACOS_ALERT_CMD="$WORK/alert" bash "$W" --repo o/r --now 2>&1); RC=$?
-eq "M: GitHub down ⇒ exit 0" 0 "$RC"
-contains "M: says GitHub 不通" "$OUT" "GitHub 不通"
-eq "M: nothing alerted while down" "" "$(alerted)"
-eq "M: no stamp while down (the first tick after it answers reads)" no "$([ -f "$WORK/conf/global/macos-watch/o-r.stamp" ] && echo yes || echo no)"
+# --- M. one watch at a time (#4841) ---------------------------------------------
 reset; red_runs; mkdir -p "$WORK/conf/global/macos-watch/o-r.lock"; echo "$$" > "$WORK/conf/global/macos-watch/o-r.lock/pid"
 run --now
 eq "M: a live previous watch ⇒ exit 0" 0 "$RC"

@@ -133,7 +133,7 @@ tmux set-window-option -u -t "$ww" @ctx_pct \; set-window-option -u -t "$ww" @ct
      set-window-option -u -t "$ww" @model \; set-window-option -u -t "$ww" @effort \; set-window-option -u -t "$ww" @ctx_ts
 
 # --- #1954: the PR segment after the name — PR #N + its checks ----------------
-# what bin/tmux-pr-refresh.sh stamps: @pr_num / @pr_ci / @pr_fail
+# the options its writer stamped (bin/tmux-pr-refresh.sh, gone with #4899): @pr_num / @pr_ci / @pr_fail
 tmux set-window-option -t "$ww" @pr_num '#1951' \; set-window-option -t "$ww" @pr_ci '✓' \; set-window-option -t "$ww" @pr_fail ''
 [ "$(render "$ww")" = " issue-267 #267  PR #1951 ✓ 检查通过  " ] || fail "green PR segment — got [$(render "$ww")]"
 case "$(raw "$ww")" in *'#[bg=#9ece6a]#[bold] PR #1951 ✓ 检查通过 '*) : ;; *) fail "✓ must draw on green — got [$(raw "$ww")]" ;; esac

@@ -415,9 +415,8 @@ fi
 
 # --- Which agent (issue #2562) ------------------------------------------------
 # No --agent: the issue's `agent:codex` / `agent:claude` label picks one; no label
-# ⇒ AGENT stays empty and the launcher takes FLEET_AGENT, byte for byte. Read off
-# the fleet's local copy first (fleet-gh.sh — one gh read only when it is stale);
-# a --title caller was promised no round-trip (#216), so it reads the collector's
+# ⇒ AGENT stays empty and the launcher takes FLEET_AGENT, byte for byte. One gh
+# read; a --title caller was promised no round-trip (#216), so it reads the collector's
 # copy only (a create-then-spawn filer hands its label over as --agent instead).
 # Both labels ⇒ refused: the issue does not say which. Foreground only — the
 # --async tail and a hub-placed start carry the agent this pass resolved.
@@ -429,7 +428,7 @@ for l in d.get("labels") or []:
 if [ "$TAIL_ONLY" != 1 ] && [ -z "$AGENT" ] && [ -n "$REPO" ]; then
   if [ -n "$WIN_TITLE" ]; then _lbl=$(fleet_cached_labels "$REPO" "$num")
   else
-    _lbl=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
+    _lbl=$(fleet_timebox 15 gh issue view "$num" --repo "$REPO" --json labels 2>/dev/null \
            | python3 -c "$_lbl_names" 2>/dev/null)
   fi
   AGENT=$(fleet_labels_agent "$_lbl") \
@@ -652,7 +651,7 @@ if [ -z "$title" ]; then
   ISSUES=$(fleet_cache issues "$SESS")
   title=$(awk -F'\t' -v n="#$num" '$2==n{print $4; exit}' "$ISSUES" 2>/dev/null)
   if [ -z "$title" ] && [ "$TAIL_ONLY" != 1 ]; then
-    title=$(fleet_gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); title_read=1
+    title=$(gh issue view "$num" --repo "$REPO" --json title -q .title 2>/dev/null); title_read=1
   fi
 fi
 # An EPIC member's window wears its batch's 简称 first — 托管·一个节点… (issue

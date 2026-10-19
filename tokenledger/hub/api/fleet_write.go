@@ -1153,8 +1153,7 @@ func newOperationID() string {
 // --- the GitHub reads --------------------------------------------------
 
 // GHRead is gh_issue_view / gh_pr_view / gh_pr_checks: one issue, PR or PR's
-// checks through the fleet's node (fleet-gh.sh: its daemons' copy when fresh,
-// else gh, else REST). Live only — there is no heartbeat copy to fall back on.
+// checks through the fleet's node (one gh read there). Live only — there is no heartbeat copy to fall back on.
 func (s *Server) GHRead(ctx context.Context, p fleetPrincipal, tool string, args map[string]any) (json.RawMessage, error) {
 	if err := checkFields(args, []string{"fleet_id", "number"}, "repo", "fields"); err != nil {
 		return nil, err

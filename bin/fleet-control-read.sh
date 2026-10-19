@@ -179,7 +179,7 @@ case "$mode" in
     # default. Always present.
     # Column 17 (issue #1921): `title=<issue title>` — the bound issue's title off
     # THIS machine's issue cache (fleets/<repo slug>/issues, `milestone\t#num\t
-    # assignee\ttitle`, what fleet-gh.sh's cache_issue reads), joined on (repo,
+    # assignee\ttitle`), joined on (repo,
     # issue) — never a bare number. The other machines' sidebars and the session's
     # top bar (#1904) show it instead of the window name's slug; empty for a
     # scratch, a no-repo window or an issue the cache does not hold (the reader
@@ -431,7 +431,7 @@ case "$mode" in
       done < <(fleet_repos "$s" 2>/dev/null)
     done < <(fleet_each_conf)
     if [ "$nall" -gt 0 ] || [ "$nnone" -eq 0 ]; then
-      if command -v gh >/dev/null 2>&1 && fleet_gh auth status >/dev/null 2>&1; then gh_ok=true; fi
+      if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then gh_ok=true; fi
     fi
     gh_met=$gh_ok; [ "$gh_ok" = true ] || [ "$nrepos" -gt 0 ] || gh_met=true
     [ "$gh_met" = true ] || missing="gh$missing"
@@ -627,8 +627,10 @@ case "$mode" in
     exec bash "$BIN/fleet-peer-send.sh" -L "$(fleet_socket "$sess")" ${krepo:+--repo "$krepo"} "issue:$n" -
     ;;
   # --- GitHub through the fleet's own rails (issue #1274) ----------------------
-  # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — fleet-gh.sh: the daemons'
-  # local copy first, gh/REST only when it is too old. <repo> must be one this
+  # gh <sess> issue|pr|checks <N> [<repo>] [<fields>] — one plain gh read (the
+  # fleet's local copy, fleet-gh.sh, went with issue #4899): ONE JSON object, the
+  # gh --json fields plus `_source: gh` and `_age: 0`; `checks` is {bucket, checks}
+  # (pass | fail | pending | none, folded over the rows). <repo> must be one this
   # fleet hosts; with none, the fleet's only repo — a fleet hosting several must
   # name it (6; fleet_target_repo, issue #1938). (`comment` left with #4898: exit 2.)
   comment)
@@ -643,13 +645,27 @@ case "$mode" in
     else repo=$( unset TMUX TMUX_PANE; fleet_target_repo "$sess" ) || exit 6
     fi
     # TMPDIR: set at the top for every mode (issue #2355).
+    command -v gh >/dev/null 2>&1 || { echo 'gh: not on PATH' >&2; exit 2; }
     case "${3:-}" in
-      issue)  set -- issue view ;;
-      pr)     set -- pr view ;;
-      checks) set -- pr checks ;;
+      issue)  set -- issue view "$n" --repo "$repo" --json "${fields:-number,title,state}" ;;
+      pr)     set -- pr view "$n" --repo "$repo" --json "${fields:-number,headRefName,state}" ;;
+      checks) set -- pr checks "$n" --repo "$repo" --json "${fields:+$fields,}bucket" ;;
       *) exit 2 ;;
     esac
-    exec bash "$BIN/fleet-gh.sh" "$1" "$2" "$n" --repo "$repo" ${fields:+--json "$fields"}
+    out=$(fleet_timebox 20 gh "$@")
+    # `gh pr checks` exits 8 while checks are pending and 1 on a red one, the JSON
+    # still on stdout: only no answer at all is a failure.
+    [ -n "$out" ] || exit 1
+    printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if isinstance(d, list):
+    b = [c.get("bucket", "") for c in d]
+    d = {"bucket": "none" if not b else "fail" if "fail" in b or "cancel" in b
+         else "pending" if "pending" in b else "pass", "checks": d}
+d["_source"], d["_age"] = "gh", 0
+print(json.dumps(d))'
+    exit $?
     ;;
   # --- taskissue (issue #3325): a task record's 「建 GitHub 单」 — removed with
   # issue #4898 (the record is the only ticket): exit 7, nothing filed.

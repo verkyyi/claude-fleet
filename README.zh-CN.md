@@ -358,7 +358,6 @@ claude plugin install fleet@claude-fleet --scope user --yes
 | [状态机制](docs/dev/STATE.md) | 会话状态如何产生、展示和纠正 |
 | [多账号与额度](docs/dev/MULTI-ACCOUNT.md) | 账号池、轮换、会话迁移、窗口错峰与排错 |
 | [任务清理](docs/dev/CLEANUP.md) | PR 结束后的窗口和 worktree 生命周期 |
-| [Issue 消息桥](docs/dev/ISSUE-BRIDGE.md) | Issue 评论与运行中 worker 的消息传递 |
 | [事件输出](docs/dev/EMIT.md) | 可选的会话生命周期事件输出及数据范围 |
 | [贡献指南](CONTRIBUTING.md) | Shell 脚本约定与检查要求 |
 

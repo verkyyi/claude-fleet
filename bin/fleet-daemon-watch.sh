@@ -93,7 +93,7 @@
 #                                              #   and of the unit being RUNNING)
 #   fleet-daemon-watch.sh --dry-run            # say what it would do, touch nothing
 #   fleet-daemon-watch.sh --resident [--dry-run]
-#                                              # the KeepAlive hands (spinner, webhook):
+#                                              # the KeepAlive hand (the spinner):
 #                                              #   unloaded with its plist on disk ⇒
 #                                              #   bootstrapped back (issue #1849; the
 #                                              #   diskguard tick runs it)

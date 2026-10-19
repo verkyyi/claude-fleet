@@ -39,7 +39,7 @@
 - [NATIVE-OBSERVE.md](dev/NATIVE-OBSERVE.md) — 原 Codex 存活时的只读预检与观察登记，旧 hook / 消息消费分别验收
 - [CODEX-AUTH-RECOVERY.md](dev/CODEX-AUTH-RECOVERY.md) — Codex 认证恢复与后续设计
 - [AGENT-CONFIG.md](dev/AGENT-CONFIG.md) — agent 配置的团队 / 个人 / 本机三层
-- [ISSUE-BRIDGE.md](dev/ISSUE-BRIDGE.md) · [WEBHOOK.md](dev/WEBHOOK.md) · [EMIT.md](dev/EMIT.md) — issue 事件、PR / CI 状态、会话事实外送
+- [EMIT.md](dev/EMIT.md) — 会话事实外送
 
 **客户端**
 

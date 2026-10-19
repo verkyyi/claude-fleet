@@ -742,8 +742,8 @@ ISSUES_LISTED = 300     # the collector's open-issue list holds this many (tmux-
 
 def open_ask(slug, issue, lists=None):
     """The first line of the ⛔ ask still open on <slug>#<issue> (issue #4225), ""
-    when none: the issue bridge's book ($G/asks/<slug>#<N>, fleet-issue-bridge.sh
-    bridge_ask_note — written on the ⛔ comment, removed by the answer). An issue
+    when none: the issue bridge's book ($G/asks/<slug>#<N>, written on the ⛔
+    comment, removed by the answer — the bridge left with #4899, so no new one). An issue
     no longer on the collector's open-issue list (fleets/<slug>/issues, when it
     was read) is closed, so its ask is too. Local files only — the panel reads
     this on every pop and never asks GitHub. `lists`: a {slug: set} memo."""

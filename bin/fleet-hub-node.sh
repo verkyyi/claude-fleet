@@ -33,9 +33,8 @@
 #                 answer — `<key>` is `operator@<login>` for the person at a login
 #                 (issue #1649). `repo` (a bare issue:<N> the sender matched by
 #                 number): refused unless the target window works it. `bridge`
-#                 {issue, cid}: an issue comment the sender's bridge forwarded —
-#                 applied by this machine's bridge (`--apply-forward`), deduped
-#                 against its own relays, so the comment lands once.
+#                 {issue, cid}: an issue comment an older sender's bridge
+#                 forwarded — refused for good (the bridge left with #4899).
 #   receipt       {rid, kind, to, status, detail} — the hub telling the SENDER what
 #                 became of a relay it sent (issue #1647): one row in the sending
 #                 fleet's delivery book (fleet-peer-queue.sh note), DELIVERED /
@@ -433,18 +432,9 @@ if [ "$KIND" = message ]; then
     [ "$(fleet_norm_repo "$have")" = "$(fleet_norm_repo "$want")" ] \
       || die 1 "$TO works ${have:-an unknown repo}, not $want — refused"
   fi
-  # An issue comment another machine's bridge forwarded (issue #1649): applied
-  # through THIS machine's bridge, under its lease and against its seen-set, so a
-  # comment this machine's own bridge already relayed is not delivered twice.
-  if [ -s "$WORK/bridge" ]; then
-    IFS=$'\t' read -r brepo biss bcid < "$WORK/bridge"
-    out=$(env -u TMUX bash "$BIN/fleet-issue-bridge.sh" --apply-forward "$brepo" "$biss" "$bcid" < "$WORK/msg" 2>&1); rc=$?
-    case "$rc" in
-      0) printf '%s\n' "${out##*$'\n'}" >&2; exit 0 ;;
-      1) die 1 "${out##*$'\n'}" ;;
-      *) die 75 "${out##*$'\n'}" ;;
-    esac
-  fi
+  # An issue comment an older machine's bridge forwarded (issue #1649): the issue
+  # bridge is gone (issue #4899) — refused for good, never re-sent.
+  [ -s "$WORK/bridge" ] && die 1 "no issue bridge here (removed, claude-fleet#4899) — the comment was not delivered"
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
   out=$(env -u TMUX bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in

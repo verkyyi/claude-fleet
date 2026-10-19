@@ -127,8 +127,7 @@ it is written only under a `运营者` / `排障` heading. Operator skills
 `fleet-onboard`) keep their script form — the operator is not a worker session.
 
 Reverse delivery is untouched (EPIC #1813 rule 3): a report the parent cannot take
-waits in the peer queue / hub outbox, an answer comes back through the issue-bridge
-or a prompt — no tool polls for one.
+waits in the peer queue / hub outbox, an answer comes back through a prompt — no tool polls for one.
 
 `repo` is `owner/name` of a repo **this fleet hosts** — checked against
 `fleet-repo.sh list` before anything runs. Omitted = the window's repo, as the

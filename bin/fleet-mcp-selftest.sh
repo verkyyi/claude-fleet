@@ -424,7 +424,7 @@ ok "H report · ask · handoff · pr_verdict · pr_merge: exact argv, text on st
 # --- I: script ≡ tool, through the REAL scripts --------------------------------
 # A second sandbox with the real fleet-report-parent.sh and its libraries.
 R="$WORK/real"; mkdir -p "$R/bin" "$R/conf" "$R/gh"
-for f in fleet-mcp.py fleet-report-parent.sh fleet-lib.sh fleet-client-core.sh fleet-gh-lib.sh; do
+for f in fleet-mcp.py fleet-report-parent.sh fleet-lib.sh fleet-client-core.sh; do
   cp "$BIN/$f" "$R/bin/$f"
 done
 for f in "$BIN"/fleet-*lib.sh; do cp "$f" "$R/bin/" 2>/dev/null; done

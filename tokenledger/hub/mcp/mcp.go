@@ -1180,8 +1180,8 @@ func fleetToolSpecs() []toolSpec {
 		{
 			Name:  "gh_issue_view",
 			Title: "One GitHub issue, via a fleet",
-			Description: "One issue through the fleet machine's fleet-gh.sh: its daemons' local copy when " +
-				"fresh, else gh, else REST — gh --json fields plus _source (cache|gh|rest) and _age. Needs gh:read." + fleetCaveat,
+			Description: "One issue read on the fleet's machine with gh — " +
+				"gh --json fields plus _source and _age. Needs gh:read." + fleetCaveat,
 			InputSchema: obj(map[string]any{"fleet_id": fleetIDProp, "number": numberProp, "repo": fleetRepoProp, "fields": ghFieldsProp}, "fleet_id", "number"),
 		},
 		{

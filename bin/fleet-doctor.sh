@@ -598,81 +598,14 @@ if [ -d "$conf_dir/fleets" ]; then
   unset _ov _gh_total _gh_none
 fi
 
-# Every gh call goes through the GitHub layer (issue #3721): fleet-gh.sh run is
-# fleet_gh for this POSIX-sh doctor. A copy without it (a test sandbox) runs gh.
-_ghrun() {
-  if [ -f "$(dirname "$0")/fleet-gh.sh" ]; then bash "$(dirname "$0")/fleet-gh.sh" run "$@"
-  else gh "$@"; fi
-}
-
-# --- gh + auth (backlog + PR/CI map) ---
+# --- gh + auth (backlog) ---
 if [ "$_gh_wanted" = 0 ]; then
   :   # no GitHub repo hosted — gh is not this login's business (issue #3600)
 elif command -v gh >/dev/null 2>&1; then
-  if _ghrun auth status >/dev/null 2>&1; then pass gh "authed"
-  else warn gh "installed but not authed — backlog + PR/CI panels stay empty (\`gh auth login\`)"; fi  # no-gh-ok: a hint
-  # PR status has its own fast daemon (decoupled from the 60s collector) so
-  # CI-green / merged shows within ~15s. Recommended alongside the collector.
-  printf '        note: install com.claude-fleet.pr-refresh (~15s, FLEET_PR_REFRESH_INTERVAL) for fast PR/CI status — single writer of prmap + @prci.\n'
+  if gh auth status >/dev/null 2>&1; then pass gh "authed"
+  else warn gh "installed but not authed — backlog panels stay empty (\`gh auth login\`)"; fi
 else
-  fail gh "not found — no backlog, no PR/CI map (\`brew install gh\`)"
-fi
-
-# --- github: is the account rate-limited right now? (issue #989, EPIC #1262 C2) ---
-# READ off the shared gh-limit marker + logs/gh-limit.log (bin/fleet-gh-lib.sh) —
-# never a probe, and never `gh api rate_limit` (it reported 5000 left while every
-# GraphQL call was refused, #946 #989 #1211). The last-hour tally is the log's
-# limited / skip / fallback-ok events; a `used=` field, when a writer logs one,
-# reports the highest X-RateLimit-Used seen.
-# The lib is bash and this script is POSIX sh, so it runs in a bash child (as the
-# alerts row does), which also renders each row's HH:MM.
-_gh_lib="$(dirname "$0")/fleet-gh-lib.sh"
-[ "$_gh_wanted" = 0 ] && _gh_lib=/nonexistent/fleet-gh-lib.sh   # no GitHub repo: no row (#3600)
-_gh_rows=''; _gh_hour=''
-# shellcheck disable=SC2016
-[ -f "$_gh_lib" ] && _gh_rows=$(bash -c '. "$1" || exit 1
-  fleet_gh_limit_rows | while IFS="	" read -r b r s; do
-    case "$r" in fake) echo "$b limited (injected: FLEET_GH_FAKE_LIMIT)" ;;
-      *) echo "$b limited until $(fleet_gh_hhmm "$r") (seen by $s)" ;; esac
-  done' _ "$_gh_lib" 2>/dev/null)
-_gh_log="${FLEET_GH_LOG:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/logs/gh-limit.log}"
-if [ -f "$_gh_lib" ] && [ -f "$_gh_log" ]; then
-  _gh_cut=$(date -u -r $(( $(date +%s) - 3600 )) +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$(( $(date +%s) - 3600 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
-  _gh_hour=$(awk -v cut="$_gh_cut" '$1 >= cut {
-      n[$2]++
-      for (i = 3; i <= NF; i++) if ($i ~ /^used=[0-9]+$/) { u = substr($i, 6) + 0; if (u > mu) mu = u }
-    } END {
-      printf "last hour: %d limited · %d skipped · %d fallback-ok", n["limited"], n["skip"], n["fallback-ok"]
-      if (mu > 0) printf " · X-RateLimit-Used max %d", mu
-    }' "$_gh_log" 2>/dev/null)
-fi
-# Background reads shared per repo (issues #1271, #3529): whose copies this login
-# takes, and which repos it may share at all (its own token reads them, public).
-# Off → no clause.
-_gh_share=''
-# shellcheck disable=SC2016
-[ -f "$_gh_lib" ] && _gh_share=$(bash -c '[ -f "$2" ] && . "$2" >/dev/null 2>&1; . "$1" || exit 1
-  fleet_gh_share_on || exit 0
-  ok=0 no=0
-  for f in "$(fleet_gh_state_dir)"/gh-share/*.access; do
-    [ -f "$f" ] || continue
-    read -r _ v < "$f"; case "$v" in ok) ok=$((ok + 1)) ;; *) no=$((no + 1)) ;; esac
-  done
-  printf "background reads: shared per repo (%s shared · %s not)" "$ok" "$no"
-  if [ -n "${FLEET_GH_SHARE_TRUST:-}" ]; then printf " · takes copies from: %s\n" "$FLEET_GH_SHARE_TRUST"
-  else printf " · takes no copies (FLEET_GH_SHARE_TRUST empty)\n"; fi' _ "$_gh_lib" "$(dirname "$0")/../fleet.conf" 2>/dev/null)
-_gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
-# Reachability (issue #4841): the one gh-down marker, read — never a probe here.
-_gh_down=''
-# shellcheck disable=SC2016
-[ -f "$_gh_lib" ] && _gh_down=$(bash -c '. "$1" || exit 1; fleet_gh_down_line' _ "$_gh_lib" 2>/dev/null)
-if [ -n "$_gh_down" ]; then
-  warn github "$_gh_down — GitHub calls return at once (rc 75) until a probe gets an answer; the background keeps its last copies${_gh_hour:+ · $_gh_hour}"
-elif [ -n "$_gh_rows" ]; then
-  _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
-  warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"
-elif [ -f "$_gh_lib" ]; then
-  pass github "not rate-limited${_gh_hour:+ · $_gh_hour}"
+  fail gh "not found — no backlog (\`brew install gh\`)"
 fi
 
 # --- python3 (collector context% + usage caches) ---
@@ -1415,60 +1348,18 @@ fi
 # (The autofill dispatcher's row left with it, issue #3120.)
 if [ -d "$conf_dir" ]; then
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
-  # starter repo that only LOOKS — the issue-bridge skips it whatever its
-  # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
+  # starter repo that only LOOKS. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
   # The mark lives in the seed's overlay (issue #1937).
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     for sd_f in "${cf%/conf}/repos"/*.conf; do
       [ -f "$sd_f" ] || continue
       [ "$(_conf_val "$sd_f" FLEET_SEED)" = 1 ] || continue
-      info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读: no issue-bridge (FLEET_SEED=1)"
+      info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读 (FLEET_SEED=1)"
     done
   done <<EOF
 $(_fleet_confs "$conf_dir")
 EOF
-fi
-
-# --- webhook daemon (optional: fresh ~1s PR/issue/CI status via gh webhook forward) ---
-# OFF unless a hosted repo opts in with FLEET_WEBHOOK=1 (issue #315; per repo since
-# #800). When ON it needs the cli/gh-webhook extension (registers the repo webhook
-# against GitHub's hosted relay — no public endpoint) + gh + python3 (the localhost
-# handler). Flag an armed setup missing any of them; the extension is the one
-# that's easy to forget.
-# The count is the daemon's OWN resolution (issue #1004): every hosted repo of every
-# configured fleet whose FLEET_WEBHOOK resolves to 1 through fleet_repo_conf_get —
-# its repos/<slug>.conf overlay, else the fleet conf, else the login-wide settings /
-# the install's fleet.conf — deduped, exactly as `fleet-webhook.sh --desired` does.
-# A grep of each fleet conf for a literal FLEET_WEBHOOK=1 missed both a global
-# opt-in (the live install sets it there: no webhook line at all while the daemon
-# forwarded) and an overlay-only one. KEEP IN SYNC with wh_opted_in_repos in
-# bin/fleet-webhook.sh. Configured fleets, not live sockets: doctor runs anywhere.
-if [ -d "$conf_dir" ] && [ -f "$(dirname "$0")/fleet-lib.sh" ] && command -v bash >/dev/null 2>&1; then
-  wh_sessions=$(_fleet_confs "$conf_dir" | sed -e 's#/conf$##' -e 's#\.conf$##' -e 's#.*/##')
-  wh_repos=''
-  [ -n "$wh_sessions" ] && wh_repos=$(FLEET_CONF_DIR="$conf_dir" bash -c '
-    . "$1" >/dev/null 2>&1 || exit 0; shift
-    for s in "$@"; do
-      fleet_repos "$s" | while IFS= read -r r; do
-        [ -n "$r" ] || continue
-        [ "$(fleet_repo_conf_get "$s" "$r" FLEET_WEBHOOK)" = 1 ] && printf "%s\n" "$r"
-      done
-    done' _ "$(dirname "$0")/fleet-lib.sh" $wh_sessions 2>/dev/null | awk 'NF && !seen[$0]++')
-  whn=$(printf '%s\n' "$wh_repos" | grep -c .)
-  if [ "$whn" -gt 0 ]; then
-    whlist=$(printf '%s\n' "$wh_repos" | paste -sd, - | sed 's/,/, /g')
-    if ! command -v gh >/dev/null 2>&1; then
-      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but gh is missing — nothing to forward"
-    elif ! gh extension list 2>/dev/null | grep -q 'gh-webhook'; then
-      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but the cli/gh-webhook extension is missing — \`gh extension install cli/gh-webhook\`"
-    elif ! command -v python3 >/dev/null 2>&1; then
-      warn webhook "$whn repo(s) opt in (FLEET_WEBHOOK=1: $whlist) but python3 is missing — the localhost handler can't run"
-    else
-      pass webhook "$whn repo(s) forwarded ($whlist) — fresh ~1s PR/issue/CI status (no public endpoint)"
-    fi
-    printf '        note: needs com.claude-fleet.webhook installed (KeepAlive) + `gh extension install cli/gh-webhook`; polling (collector + pr-refresh) stays the backstop.\n'
-  fi
 fi
 
 # --- session lifecycle emitter (optional: joins spend to outcome downstream) ---
@@ -2317,8 +2208,7 @@ while IFS= read -r _ep_f; do
   _ep_repo=$(sed -n 's/^repo: //p' "$_ep_f" 2>/dev/null | head -1); [ "$_ep_repo" = - ] && _ep_repo=''
   _ep_st=''
   if [ -n "$_ep_n" ]; then
-    _ep_st=$(bash "$(dirname "$0")/fleet-gh.sh" issue view "$_ep_n" ${_ep_repo:+--repo "$_ep_repo"} --json state --max-age 600 2>/dev/null \
-             | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([A-Z]*\)".*/\1/p')
+    _ep_st=$(gh issue view "$_ep_n" ${_ep_repo:+--repo "$_ep_repo"} --json state -q .state 2>/dev/null)
   fi
   case "$_ep_st" in
     OPEN) warn epic "批次 #$_ep_n 没有人在跑：它的心跳 ${_ep_m} 分钟前就停了（第 ${_ep_tick:--} 拍），EPIC 还开着 — 在 hub 里重新运行 /fleet-epic-run $_ep_n" ;;
@@ -3749,7 +3639,7 @@ _repo_block() {
                                     | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
   else
     command -v gh >/dev/null 2>&1 \
-      && gh_out=$(_ghrun repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
+      && gh_out=$(gh repo view "$r" --json defaultBranchRef,labels -q '.defaultBranchRef.name, .labels[].name' 2>/dev/null)
   fi
   bdef=$(printf '%s\n' "$gh_out" | sed -n 1p)
   if [ -n "$bbase" ]; then
@@ -3846,7 +3736,7 @@ EOF
     have=$(printf '%s\n' "$gh_out" | sed 1d)
     # `repo view` returns the first 100 labels only; page the full list past that
     [ "$(printf '%s\n' "$have" | grep -c .)" -ge 100 ] \
-      && have=$(_ghrun label list --repo "$r" --limit 1000 --json name -q '.[].name' 2>/dev/null)
+      && have=$(gh label list --repo "$r" --limit 1000 --json name -q '.[].name' 2>/dev/null)
     missing=''
     for l in $canon_labels; do
       printf '%s\n' "$have" | grep -qxF "$l" || missing="$missing $l"

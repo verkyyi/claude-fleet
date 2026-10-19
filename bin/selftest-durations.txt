@@ -69,8 +69,6 @@
 0.6 dash-rows-scratch-id-selftest.sh
 0.4 dash-title-info-selftest.sh
 5.3 dash-wid-selftest.sh
-1.2 deploy-multirepo-selftest.sh
-3.9 deploy-state-selftest.sh
 9.4 dialog-wait-selftest.sh
 12.1 dist-no-github-selftest.sh
 1.6 dist-source-selftest.sh
@@ -135,7 +133,6 @@
 38.0 fleet-break-it-cred-sep-selftest.sh
 36.7 fleet-break-it-cred-shared-selftest.sh
 0.0 fleet-break-it-entry-selftest.sh
-7.0 fleet-break-it-gh-selftest.sh
 41.4 fleet-break-it-hub-2-selftest.sh
 41.8 fleet-break-it-hub-3-selftest.sh
 48.8 fleet-break-it-hub-selftest.sh
@@ -234,7 +231,6 @@
 4.0 fleet-doctor-onboard-selftest.sh
 16.6 fleet-doctor-quota-selftest.sh
 8.6 fleet-doctor-repos-selftest.sh
-4.1 fleet-doctor-webhook-selftest.sh
 0.2 fleet-down-selftest.sh
 2.7 fleet-emit-selftest.sh
 1.0 fleet-entry-lang-selftest.sh
@@ -243,12 +239,6 @@
 1.2 fleet-failover-selftest.sh
 4.8 fleet-fold-selftest.sh
 0.7 fleet-gate-check-selftest.sh
-2.0 fleet-gh-blackhole-selftest.sh
-3.3 fleet-gh-fallback-selftest.sh
-11.0 fleet-gh-limit-visible-selftest.sh
-2.4 fleet-gh-selftest.sh
-4.9 fleet-gh-share-selftest.sh
-17.0 fleet-gh-write-selftest.sh
 1.1 fleet-handoff-file-selftest.sh
 1.2 fleet-handoff-invariant-selftest.sh
 19.6 fleet-handoff-selftest.sh
@@ -283,7 +273,6 @@
 20.6 fleet-install-selftest.sh
 2.4 fleet-installs-selftest.sh
 0.4 fleet-intro-selftest.sh
-8.0 fleet-issue-bridge-selftest.sh
 1.2 fleet-job-selftest.sh
 13.1 fleet-keys-selftest.sh
 11.6 fleet-land-selftest.sh
@@ -472,17 +461,13 @@
 1.3 fleet-view-todo-selftest.sh
 9.6 fleet-wait-reeval-selftest.sh
 8.6 fleet-wait-selftest.sh
-11.1 fleet-wait-webhook-selftest.sh
 7.1 fleet-webchat-selftest.sh
-16.0 fleet-webhook-machine-selftest.sh
-3.6 fleet-webhook-selftest.sh
 18.4 fleet-webterm-selftest.sh
 2.3 fleet-win-name-selftest.sh
 36.4 fleet-worker-stop-selftest.sh
 0.2 fleet-worktree-drop-selftest.sh
 0.7 fleet-worktree-root-selftest.sh
 0.5 forkless-hotpath-selftest.sh
-120.0 gh-blackhole-selftest.sh
 0.3 helper-auth-selftest.sh
 1.3 history-multirepo-selftest.sh
 1.6 hub-creds-selftest.sh
@@ -518,7 +503,6 @@
 1.0 needs-reason-selftest.sh
 13.3 needs-reconcile-selftest.sh
 10.8 new-session-selection-selftest.sh
-1.2 no-direct-gh-selftest.sh
 0.0 nogh-e2e-selftest.sh
 0.2 nogh-task-acceptance-selftest.sh
 5.8 notify-selftest.sh
@@ -530,11 +514,9 @@
 0.0 pane-border-focus-selftest.sh
 0.5 pane-header-selftest.sh
 9.9 peer-queue-selftest.sh
-4.2 poll-backoff-selftest.sh
 0.4 pool-not-a-fleet-selftest.sh
 10.5 portability-selftest.sh
 0.8 posix-lib-parse-selftest.sh
-0.3 pr-refresh-jq-selftest.sh
 2.1 precompact-hook-selftest.sh
 0.7 refocus-hook-selftest.sh
 2.9 release-tree-selftest.sh

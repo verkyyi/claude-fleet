@@ -362,14 +362,14 @@ other repo's identity + deploy keys are dropped first, so they never leak across
 That one change moves every in-pane consumer — hooks, `commands/*.md`, the
 launcher's trust/model/MCP, the claim brief. A fleet conf that still names a repo
 (the old layout) is not read (issue #4806); `fleet-conf.sh migrate` moves it into
-`repos/`. A fleet with no `repos/` dir returns before any tmux call. The collector and pr-refresh fetch
-`issues`/`prmap` for every hosted repo, and `hooks/base-readonly-guard.py`
+`repos/`. A fleet with no `repos/` dir returns before any tmux call. The collector fetches
+`issues` for every hosted repo, and `hooks/base-readonly-guard.py`
 protects every hosted repo's `FLEET_MAIN`.
 
 PR status joins on **(repo, branch)**, never the branch alone (issue #792) — two
 hosted repos can each have an `issue-3`. In every fleet (issues #1940, #1941),
-pr-refresh matches each window against
-its own repo's `fleets/<slug>/prmap` (stamping `@repo` through `fleet_window_repo`
+a reader matches each window against
+its own repo's `fleets/<slug>/prmap` (its GitHub writer, pr-refresh, left with #4899) (stamping `@repo` through `fleet_window_repo`
 for a window that has none), and the dash's row producer reads `@repo`/`@norepo`
 off its one `list-windows` and keys the frame's narrowed haystack
 `<slug>\t<branch>` — still one awk per frame, so #662's bound holds. `deploy_<sha>`

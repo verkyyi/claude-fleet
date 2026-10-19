@@ -1,4 +1,0 @@
-# no-direct-gh.baseline — the programs that still call gh directly (issue #3595).
-# bin/no-direct-gh-selftest.sh reads it: a file not listed here may not start; a
-# listed file that stopped must be deleted from here. Only ever delete lines.
-# Empty since issue #3721: every call goes through the door or the GitHub layer.

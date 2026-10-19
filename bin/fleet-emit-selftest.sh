@@ -19,14 +19,10 @@
 #                  permanently dead endpoint costs fixed disk and keeps the fresh
 #                  tail rather than wedging on stale events.
 #   4xx IS FINAL   one malformed event must not wedge the queue forever.
-#   COLD SEEDS     a first prmap emits NO session.pr. Without this, the first tick
-#                  after an install would report up to 100 PRs as if they had just
-#                  transitioned.
 #   HEADLESS       a `claude -p` helper inherits the pane's hooks (issue #571); it
 #                  is not this pane's session and must emit nothing.
 #
-# Layer 1 is the emitter in isolation (a real localhost sink, no tmux). Layer 2 is
-# the prmap→session.pr diff, driven through the same awk the refresher runs.
+# The emitter in isolation (a real localhost sink, no tmux), then its wiring.
 # Exit 0 = pass, non-zero = fail (prints what diverged).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -289,55 +285,6 @@ start_sink reject
 bash "$CLI" session.end --via reap --repo o/r --issue 41 --outcome landed >/dev/null 2>&1
 ok; drained || fail "a 4xx must DROP the event, not wedge the queue" "$(spooled)"
 kill "$SINK_PID" 2>/dev/null; SINK_PID=
-
-# ============================================================================
-# 8. THE prmap → session.pr DIFF — the exact awk bin/tmux-pr-refresh.sh runs
-# ============================================================================
-# prmap row: branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha
-transitions() {  # $1=old $2=new → "pr<TAB>branch<TAB>state<TAB>action" per change
-  awk -F'\t' -v OFS='\t' '
-    NR==FNR { old[$2]=$3; next }
-    {
-      prev = ($2 in old) ? old[$2] : ""
-      if (prev == $3) next
-      action = ($3 == "MERGED") ? "merged" : (($3 == "CLOSED") ? "closed" : "opened")
-      n = $2; sub(/^#/, "", n)
-      print n, $1, $3, action
-    }
-  ' "$1" "$2"
-}
-printf 'issue-41\t#99\tOPEN\t✓\tready\t\nissue-42\t#100\tOPEN\t·\tready\t\n' > "$WORK/pm.old"
-printf 'issue-41\t#99\tMERGED\t✓\tready\tdeadbeef\nissue-42\t#100\tOPEN\t·\tready\t\nissue-43\t#101\tOPEN\t·\tready\t\n' > "$WORK/pm.new"
-out=$(transitions "$WORK/pm.old" "$WORK/pm.new")
-eq "only genuinely changed PRs transition" \
-  $'99\tissue-41\tMERGED\tmerged\n101\tissue-43\tOPEN\topened' "$out"
-
-printf 'issue-41\t#99\tOPEN\t✗\tready\t\n' > "$WORK/pm.old"
-printf 'issue-41\t#99\tOPEN\t✓\tready\t\n' > "$WORK/pm.new"
-eq "CI churn is not a PR transition" "" "$(transitions "$WORK/pm.old" "$WORK/pm.new")"
-
-printf 'issue-41\t#99\tOPEN\t·\tready\t\n' > "$WORK/pm.old"
-printf 'issue-41\t#99\tCLOSED\t·\t\t\n' > "$WORK/pm.new"
-eq "an abandoned PR reports closed" $'99\tissue-41\tCLOSED\tclosed' \
-  "$(transitions "$WORK/pm.old" "$WORK/pm.new")"
-
-# COLD START seeds silently, and the guard that makes it so is the `[ -s "$oldf" ]`
-# in emit_pr_transitions — NOT the awk. Left to itself the awk would be wrong in an
-# interesting way: fed an EMPTY first file it never switches files at all (FNR only
-# resets on a real record, so NR==FNR stays true for the whole SECOND file) and it
-# swallows every row as "old", emitting nothing. The right answer for the wrong
-# reason. A MISSING previous map would be worse still — awk reads one file, NR==FNR
-# holds throughout, same silence, but now any later refactor that reorders the
-# arguments turns a first tick into 100 phantom transitions. So the shape that is
-# pinned is the early return, and that the awk is never entered without a map.
-: > "$WORK/pm.cold"
-printf 'issue-41\t#99\tOPEN\t·\tready\t\n' > "$WORK/pm.fresh"
-eq "a cold diff must never report a transition" "" \
-  "$(transitions "$WORK/pm.cold" "$WORK/pm.fresh")"
-ok; grep -q 'emit_pr_transitions' "$BIN/tmux-pr-refresh.sh" \
-  || fail "the PR refresher must call emit_pr_transitions"
-ok; grep -q '\[ -s "$oldf" \] || return 0' "$BIN/tmux-pr-refresh.sh" \
-  || fail "emit_pr_transitions must seed silently on a cold prmap"
 
 # ============================================================================
 # 9. THE WIRING — the four facts are actually hung off the existing paths

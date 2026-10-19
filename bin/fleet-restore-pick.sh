@@ -100,7 +100,7 @@ case "$TARGET" in
     case "$n" in *@*) repo=${n#*@}; n=${n%@*} ;; esac   # a merged row's own repo (#804)
     [ -n "$repo" ] || { repo=$(fleet_repo_cached "$SESS" 2>/dev/null); repo=${repo:-${FLEET_REPO:-}}; }
     closed=""
-    [ -n "$repo" ] && closed=$(fleet_gh pr list --repo "$repo" --head "issue-$n" --state all \
+    [ -n "$repo" ] && closed=$(gh pr list --repo "$repo" --head "issue-$n" --state all \
       --json number,state --jq 'sort_by(.number) | last | select(.state == "CLOSED") | .number' 2>/dev/null)
     if [ -n "$closed" ]; then
       grace=${FLEET_CLEANUP_CLOSED_GRACE:-900}
@@ -115,7 +115,7 @@ case "$TARGET" in
       ask '[y] 先 reopen PR 再恢复 · [r] 直接恢复 · 其它键取消 ›'
       case "$REPLY_KEY" in
         y|Y)
-          if ! err=$(fleet_gh pr reopen "$closed" --repo "$repo" 2>&1 >/dev/null); then
+          if ! err=$(gh pr reopen "$closed" --repo "$repo" 2>&1 >/dev/null); then
             say '（分支若已删：先把 refs/pull/'"$closed"'/head 推回 issue-'"$n"'，再 reopen。）'
             say "reopen 失败：${err:-gh gave no reason}"
             ask '[r] 仍然直接恢复 · 其它键取消 ›'
