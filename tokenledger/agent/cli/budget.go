@@ -237,13 +237,26 @@ func budgetSourceNode(hub, token, nodeToken, account, home, source, codexHome st
 		rep.Scope = account
 	}
 
-	across, err := fetchHubLimits(hub, token, account, timeout, source)
-	if err != nil && nodeToken != "" && account == "all" && (source == "" || source == "claude") &&
-		(token == "" || errors.Is(err, errHubRefused)) {
-		if alt, aerr := fetchSummaryLimits(hub, nodeToken, timeout); aerr == nil {
-			across, err = alt, nil
-		} else {
-			err = fmt.Errorf("%w; node token: %v", err, aerr)
+	summary := nodeToken != "" && account == "all" && (source == "" || source == "claude")
+	var across []BudgetAccount
+	var err error
+	if summary && token == "" {
+		// No viewer token: /v1/limits can only refuse it, and a credential proxy's
+		// hub broker refuses a request carrying none as «names no login served
+		// here» — the 401 an EPIC driver copied onto every tick while the real
+		// reason (the summary door's) hid behind it (claude-fleet#4906). Ask the
+		// door the node token opens, and say only its answer.
+		if across, err = fetchSummaryLimits(hub, nodeToken, timeout); err != nil {
+			err = fmt.Errorf("node token: %w", err)
+		}
+	} else {
+		across, err = fetchHubLimits(hub, token, account, timeout, source)
+		if err != nil && summary && errors.Is(err, errHubRefused) {
+			if alt, aerr := fetchSummaryLimits(hub, nodeToken, timeout); aerr == nil {
+				across, err = alt, nil
+			} else {
+				err = fmt.Errorf("%w; node token: %v", err, aerr)
+			}
 		}
 	}
 	if err != nil {

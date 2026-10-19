@@ -18,6 +18,8 @@
 #   G  --cached with nothing cached yet → exit 3 「no reading cached yet」
 #   H  the hub answers, no account maps to a pool label → exit 3 「no account maps」
 #   I  a hub but no ccquota on PATH → exit 3 「not on PATH」
+#   K  both doors refused («<viewer 401>; node token: <real>», issue #4906) →
+#      stderr carries the node token's answer, never only the viewer half
 #   J  --json keeps its contract (the payload, exit 0) with the hub from FLEET_HUB_URL
 #
 # Hermetic: a FAKE ccquota, scratch pool / conf / TMPDIR / HOME. Exit 0 = pass.
@@ -45,6 +47,7 @@ cat > "$WORK/fakepath/ccquota" <<'FAKE'
 printf '%s\n' "${CCQUOTA_HUB_URL:-none}" > "${FAKE_MODE_FILE%/*}/ccquota.hub"
 case "$(cat "$FAKE_MODE_FILE" 2>/dev/null)" in
   refused) printf '{"verdict":"unknown","reason":"hub unreachable: HTTP 401: {\\"error\\":\\"unauthorized\\"}","accounts":null}\n' ;;
+  both)    printf '{"verdict":"unknown","reason":"hub unreachable: HTTP 401: {\\"type\\": \\"error\\", \\"error\\": {\\"type\\": \\"authentication_error\\", \\"message\\": \\"cred-proxy: node credential names no login served here\\"}}; node token: HTTP 401: {\\"error\\":\\"node token revoked\\"}","accounts":null}\n' ;;
   other)   printf '{"verdict":"go","accounts":[{"account_uuid":"u-z","label":"zed","headroom_pct":70,"five_hour":{"utilization":30,"resets_at":"2030-09-16T05:00:00Z"},"seven_day":{"utilization":10,"resets_at":"2030-09-16T05:00:00Z"}}]}\n' ;;
   *) printf '{"verdict":"go","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":70,"five_hour":{"utilization":30,"resets_at":"2030-09-16T05:00:00Z"},"seven_day":{"utilization":10,"resets_at":"2030-09-16T05:00:00Z"}},{"account_uuid":"u-b","label":"b","headroom_pct":80,"five_hour":{"utilization":20,"resets_at":"2030-09-16T05:00:00Z"},"seven_day":{"utilization":10,"resets_at":"2030-09-16T05:00:00Z"}}]}\n' ;;
 esac
@@ -112,6 +115,14 @@ printf 'refused' > "$MODE"
 q "$WORK/fakepath" "$WORK/accounts" "$HUB" -- --refresh
 [ "$RC" = 3 ] || fail "F: a refused read → exit 3 (got $RC)" "$ERR"
 case "$ERR" in *"quota unknown — hub refused: "*"HTTP 401"*) ;; *) fail "F: stderr says refused, with the hub's words" "$ERR" ;; esac
+ok
+
+# --- K: both doors refused — the node token's answer is what is said (#4906) ----
+printf 'both' > "$MODE"
+q "$WORK/fakepath" "$WORK/accounts" "$HUB" -- --refresh
+[ "$RC" = 3 ] || fail "K: both doors refused → exit 3 (got $RC)" "$ERR"
+case "$ERR" in *"hub refused: hub unreachable: node token: HTTP 401"*"node token revoked"*) ;; *) fail "K: stderr carries the node token's refusal" "$ERR" ;; esac
+case "$ERR" in *"names no login served here"*) fail "K: the tokenless viewer-door 401 must not be what is said" "$ERR" ;; esac
 ok
 
 # --- G: --cached, nothing cached -----------------------------------------------

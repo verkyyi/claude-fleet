@@ -352,8 +352,11 @@ for p in /v1/node/credentials /v1/node/credentials/ //v1/node/credentials /v1/no
 done
 [ ! -s "$SB/fake.log" ] && pass "D broker: /v1/node/credentials refused in every spelling, the hub never asked" \
   || fail "D the hub saw: $(cat "$SB/fake.log")"
-c=$(curl -s -o /dev/null -w '%{http_code}' "$burl/v1/node/self")
-[ "$c" = 401 ] && pass "D broker: no credential → 401" || fail "D no cred → $c"
+c=$(curl -s -o "$SB/d.body" -w '%{http_code}' "$burl/v1/node/self")
+# issue #4906: say «no credential», never «names no login» — ccquota's tokenless
+# viewer-door ask read as a login problem on every EPIC tick
+[ "$c" = 401 ] && grep -q "no node credential on the request" "$SB/d.body" \
+  && pass "D broker: no credential → 401 that says so" || fail "D no cred → $c $(cat "$SB/d.body")"
 c=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" "$burl/v1/node/self")
 [ "$c" = 401 ] && pass "D broker: a session credential (fcp1.) is not a node credential" || fail "D fcp1 → $c"
 want=$(printf 'ccq_NODE_SECRET_0123' | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')

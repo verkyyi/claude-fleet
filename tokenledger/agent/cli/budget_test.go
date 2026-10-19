@@ -214,8 +214,12 @@ func TestBudget_NodeTokenFallsBackToTheSummaryDoor(t *testing.T) {
 		if len(rep.Accounts) != 1 || rep.Accounts[0].AccountUUID != "u-1" || rep.Verdict == verdictUnknown {
 			t.Fatalf("%s: accounts %+v verdict %q (%s), want u-1 read off the summary door", name, rep.Accounts, rep.Verdict, rep.Reason)
 		}
-		if len(paths) != 2 || !strings.HasPrefix(paths[1], control.SummaryPath+" Bearer node-tok") {
-			t.Fatalf("%s: asked %v, want /v1/limits then the summary door with the node token", name, paths)
+		want := 2 // a refused viewer token: /v1/limits, then the summary door
+		if viewer == "" {
+			want = 1 // none: straight to the summary door (claude-fleet#4906)
+		}
+		if len(paths) != want || !strings.HasPrefix(paths[want-1], control.SummaryPath+" Bearer node-tok") {
+			t.Fatalf("%s: asked %v, want %d request(s) ending at the summary door with the node token", name, paths, want)
 		}
 	}
 
@@ -225,11 +229,20 @@ func TestBudget_NodeTokenFallsBackToTheSummaryDoor(t *testing.T) {
 	if rep := budgetSourceNode(srv.URL, "v", "node-tok", "all", "", "claude", "", 90, 2*time.Second); rep.Verdict != verdictUnknown || len(paths) != 1 {
 		t.Fatalf("5xx: verdict %q paths %v, want unknown off /v1/limits alone", rep.Verdict, paths)
 	}
-	// A refused node token says both refusals.
+	// A refused viewer token AND node token says both refusals.
 	limits = http.StatusUnauthorized
-	rep := budgetSourceNode(srv.URL, "", "wrong", "all", "", "claude", "", 90, 2*time.Second)
-	if rep.Verdict != verdictUnknown || !strings.Contains(rep.Reason, "HTTP 401") || !strings.Contains(rep.Reason, "node token") {
-		t.Fatalf("refused node token: %q (%s)", rep.Verdict, rep.Reason)
+	rep := budgetSourceNode(srv.URL, "stale", "wrong", "all", "", "claude", "", 90, 2*time.Second)
+	if rep.Verdict != verdictUnknown || !strings.Contains(rep.Reason, "viewer token is required") || !strings.Contains(rep.Reason, "; node token: HTTP 401") {
+		t.Fatalf("refused viewer + node token: %q (%s)", rep.Verdict, rep.Reason)
+	}
+	// No viewer token, a refused node token (claude-fleet#4906): the reason is the
+	// summary door's alone — never a tokenless /v1/limits refusal in front of it,
+	// which a 160-character cut left as the only words on every EPIC tick.
+	paths = nil
+	rep = budgetSourceNode(srv.URL, "", "wrong", "all", "", "claude", "", 90, 2*time.Second)
+	if rep.Verdict != verdictUnknown || !strings.HasPrefix(rep.Reason, "hub unreachable: node token: HTTP 401") ||
+		strings.Contains(rep.Reason, "viewer token") || len(paths) != 1 || !strings.HasPrefix(paths[0], control.SummaryPath) {
+		t.Fatalf("no viewer, refused node token: %q (%s) paths %v", rep.Verdict, rep.Reason, paths)
 	}
 	// No node token: exactly as before.
 	paths = nil
