@@ -233,7 +233,8 @@ def observe_native(payload, codex_identity=None):
         raise ValueError('Codex authority requires its verified launcher binding')
     # Keep the original four-field authority context contract unchanged (#4510).
     expected = json.loads(os.environ.get('FLEET_AUTHORITY_ADMISSION', '{}'))
-    if any(expected.get(k) != c[k] for k in ('repo', 'reservation', 'worker_id')):
+    if any(expected.get(k) != c[k] for k in ('reservation', 'worker_id')) \
+            or expected.get('repo') != repo_identity(c['repo']):
         raise ValueError('admission context differs')
     binding = c.get("worktree")
     intent = c.get("native_worktree")
@@ -326,12 +327,16 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
             raise ValueError("native creation requires explicit repository admission")
         os.execvpe(argv[0], argv, os.environ)
     repo, worker = result.stdout.strip().split("\t")
+    # The hub answers in the canonical owner/repo; the window's @repo keeps the
+    # registered spelling. The context carries the canonical one, or every check
+    # against the admission refuses a repo with capitals (issue #4789).
+    repo = repo_identity(repo)
     previous = None
     intent = None
     if native_raw:
         previous = saved_receipt
         if previous:
-            if previous.get("repo") != repo or previous.get("worker_id") != worker or not previous.get("native_worktree"):
+            if (previous.get("repo") or "").lower() != repo or previous.get("worker_id") != worker or not previous.get("native_worktree"):
                 raise ValueError("native recovery belongs to another repository or worker")
             if launch.same_process(previous["native_identity"]):
                 raise ValueError("original native execution is alive; reconnect instead")
@@ -385,7 +390,7 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
         if not (raw or "").strip():
             # The agent exited before its native start was observed (a refused
             # launch, issue #4764): say so, never a bare JSON parse error.
-            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed" % rc)
+            raise ValueError("no local native receipt: the agent exited (rc=%s) before its start was observed (why: logs/authority.log)" % rc)
         receipt = json.loads(raw)
         if any(receipt.get(k) != v for k, v in c.items()):
             raise ValueError("local native receipt was replaced or never observed")

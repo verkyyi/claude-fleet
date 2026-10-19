@@ -51,9 +51,13 @@ class PoolAuthorityTests(unittest.TestCase):
         return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
                                        text=True, stderr=subprocess.PIPE).strip()
 
-    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False):
+    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False, spelled=None):
         worker = self.identities[expected] + "/" + self.fid
         pane = self.panes[session]
+        if spelled:
+            # The window keeps the registered spelling; the hub answers canonical.
+            (self.conf / "fleets" / session / "conf").write_text('FLEET_REPO="%s"\n' % spelled)
+            self.tm("set-option", "-w", "-t", pane, "@repo", spelled)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("FLEET_") and key not in ("TMUX", "TMUX_PANE")}
         environment.update(HOME=str(self.root), FLEET_CONF_DIR=str(self.conf),
@@ -125,6 +129,11 @@ class PoolAuthorityTests(unittest.TestCase):
         self.supervise("fixture-pool", "fixture", "fixture")
         self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
         self.supervise("fixture-pool", "fixture", "fixture")
+
+    def test_registered_spelling_with_capitals_is_canonical_in_context(self):
+        # Issue #4789: a repo registered as Org/A put "Org/A" in the context, the
+        # admission said "org/a", and every start stayed unobserved.
+        self.supervise("fixture", "fixture", spelled="Org/A")
 
     def test_missing_receipt_says_why(self):
         self.supervise("fixture", "fixture", no_receipt=True)
@@ -351,6 +360,25 @@ class RepoAuthorityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 migration.observe_native(dict(hook_event_name="SessionStart", session_id="11111111-1111-4111-8111-111111111111"))
             write.assert_not_called()
+
+    def test_native_hook_matches_admission_by_canonical_repo(self):
+        # Issue #4789: a context in the registered spelling (Org/A) is the same
+        # repo as the hub's canonical admission (org/a); a different repo is not.
+        sid = "11111111-1111-4111-8111-111111111111"
+        native = dict(pid=456, birth="birth", executable="/bin/claude", actual_provider="claude")
+        for spelled, admitted, observed in (("Org/A", "org/a", True), ("Org/B", "org/a", False)):
+            c = dict(repo=spelled, worker_id="fleet/session", reservation="start", supervisor=123)
+            admission = dict(repo=admitted, worker_id="fleet/session", reservation="start")
+            with patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(c), "TMUX_PANE": "%1",
+                                         "FLEET_AUTHORITY_ADMISSION": json.dumps(admission)}), \
+                    patch.object(migration.launch, "native_parent", return_value=native), \
+                    patch.object(migration.launch, "root_native", return_value=True), \
+                    patch.object(migration, "start_call",
+                                 side_effect=migration.ticket.Fail(4, "reached observe")) as write:
+                with self.assertRaisesRegex((ValueError, migration.ticket.Fail),
+                                            "reached observe" if observed else "admission context differs"):
+                    migration.observe_native(dict(hook_event_name="SessionStart", session_id=sid))
+                self.assertEqual(write.called, observed)
 
     def test_supervisor_confirms_only_its_own_observed_native_stop(self):
         c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=os.getpid())

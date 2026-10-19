@@ -195,6 +195,24 @@ def start_identity(payload):
     return data
 
 
+def refusal_log(payload, exc):
+    """One line in $FLEET_CONF_DIR/logs/authority.log per refused registration."""
+    try:
+        from fleet_repo_authority import error_reason
+        event = payload.get('hook_event_name', '?') if isinstance(payload, dict) else '?'
+        conf = os.environ.get('FLEET_CONF_DIR') or str(Path.home() / '.config/claude-fleet')
+        path = Path(conf) / 'logs' / 'authority.log'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = '%s pane=%s event=%s refused: %s\n' % (
+            time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), os.environ.get('TMUX_PANE', '-'), event,
+            error_reason(exc) or type(exc).__name__)
+        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, 'a') as out:
+            out.write(line)
+    except Exception:
+        pass  # the refusal itself still stands
+
+
 def hook():
     payload = None
     if os.environ.get("FLEET_AUTHORITY_CONTEXT"):
@@ -223,11 +241,14 @@ def hook():
                     pass
                 return
             observe_native(payload)
-        except (Fail, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        except (Fail, OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
             # Authority is not telemetry. 0.160.1 honors this control output
             # only on successful hook exit; a nonzero exit merely warns. This
             # handles returned errors, NOT native timeout/kill. Later inputs
-            # have their own read-only UserPromptSubmit gate above.
+            # have their own read-only UserPromptSubmit gate above. The reason
+            # stays out of the agent's view but is kept for a person (issue
+            # #4789: every start of one repo was refused and nobody could say why).
+            refusal_log(payload, exc)
             reason = 'Fleet authority registration unconfirmed; preserve execution for reconciliation.'
             if isinstance(payload, dict) and payload.get('hook_event_name') == 'UserPromptSubmit':
                 print(json.dumps({'decision': 'block', 'reason': reason}))

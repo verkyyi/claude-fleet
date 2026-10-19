@@ -6488,6 +6488,18 @@ drill_native_authority_ack() {
   WHAT='准确admission ACK；迟到hook不能覆盖后继receipt'
 }
 
+drill_repo_authority_spelling() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet_repo_authority_test.py" \
+          PoolAuthorityTests.test_registered_spelling_with_capitals_is_canonical_in_context \
+          RepoAuthorityTests.test_native_hook_matches_admission_by_canonical_repo 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet_native_registration_test.py" \
+          Registration.test_registered_spelling_with_capitals_registers 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='注册名含大写的仓库：上下文带规范名，Claude / Codex 的 SessionStart 都登记上'
+}
+
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)
