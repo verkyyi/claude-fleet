@@ -1,7 +1,9 @@
 #!/bin/bash
 # fleet-default-audit-selftest.sh — fresh ordinary login, four TSV metrics (#4327).
-# Real fleet-install.sh -> fleet-install-apply.sh --bundle, then the host's apply
-# on that sandbox package plus its marketplace (fake Claude CLI, no network).
+# Real fleet-install.sh (the client: since #4826 it writes no Agent configuration
+# into the login — that is 承载's), then the host's apply on that sandbox package,
+# its Agent package laid beside as `fleet host on` would, plus its marketplace
+# (fake Claude CLI, no network).
 # Selection dependencies: claude-settings.default.json, fleet-hooks-merge.py,
 # fleet-agent-defaults.py, config.default.toml, CLAUDE.default.md, AGENTS.default.md,
 # mcp.default.json, settings-hooks.json, codex-map.json, fleet-hooks-emit.sh,
@@ -99,30 +101,16 @@ with tempfile.TemporaryDirectory(prefix="fleet-default-audit-selftest.") as work
 
     try:
         install = run(["sh", root / "bin/fleet-install.sh"], diagnostics=True)
-        if "Agent 配置: 已装" not in install:
-            raise RuntimeError("default install skipped agent configuration:\n" + install)
         installed = home / ".claude/fleet"
         settings_path = home / ".claude/settings.json"
-        settings = json.loads(settings_path.read_text())
-        # Prove the installation actually happened; missing everything isn't 0.
-        assert settings["permissions"]["defaultMode"] == "bypassPermissions"
-        assert "[mcp_servers." in (home / ".codex/config.toml").read_text()
-        docs = [(home / p).read_text() if (home / p).exists() else ""
-                for p in (".claude/CLAUDE.md", ".codex/AGENTS.md")]
-
-        # Codex consumes emitted launch hooks rather than settings.json. Parse
-        # this emitter's JSON-compatible TOML arrays without requiring tomllib
-        # (the supported macOS Python 3.9 has none).
-        emitted = run(["bash", root / "bin/fleet-hooks-emit.sh", "--target", "codex"])
-        codex = []
-        for line in emitted.splitlines():
-            _, value = line.split("\t", 1)
-            for command in re.findall(r'command\s*=\s*("(?:\\.|[^"\\])*")', value):
-                codex.append({"type": "command", "command": json.loads(command)})
-        for table in (hooks(settings), codex):
-            for name in ("fleet-where-hook.sh", "refocus-hook.sh", "base-readonly-guard.py"):
-                assert any(name in h["command"] for h in table), "missing core hook: " + name
-        client = metrics(settings, docs, codex, [])
+        # the client installs no Agent configuration (#4826, EPIC #4823 decision 1)
+        if "Agent 配置" in install or settings_path.exists():
+            raise RuntimeError("the client install touched the Agent configuration:\n" + install)
+        # 承载: the Agent package beside the client, as `fleet host on` puts the tree there
+        listed = run([sys.executable, root / "bin/fleet-agent-bundle.py", "files", "--root", root])
+        for rel in listed.split():
+            (installed / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / rel, installed / rel)
 
         # A fresh hosting login also runs ensure. Simulate Claude's external
         # marketplace API, recording installs/enables instead of invoking Claude.
@@ -164,13 +152,26 @@ p.write_text(json.dumps(s))
         run(["bash", installed / "bin/fleet-install-apply.sh", "--no-daemons",
              "--root", installed, "--tree-from", empty, "--tree-to", installed])
         settings = json.loads(settings_path.read_text())
+        # Prove the installation actually happened; missing everything isn't 0.
+        assert settings["permissions"]["defaultMode"] == "bypassPermissions"
+        assert "[mcp_servers." in (home / ".codex/config.toml").read_text()
         docs = [(home / p).read_text() if (home / p).exists() else ""
                 for p in (".claude/CLAUDE.md", ".codex/AGENTS.md")]
+
+        # Codex consumes emitted launch hooks rather than settings.json. Parse
+        # this emitter's JSON-compatible TOML arrays without requiring tomllib
+        # (the supported macOS Python 3.9 has none).
+        emitted = run(["bash", root / "bin/fleet-hooks-emit.sh", "--target", "codex"])
+        codex = []
+        for line in emitted.splitlines():
+            _, value = line.split("\t", 1)
+            for command in re.findall(r'command\s*=\s*("(?:\\.|[^"\\])*")', value):
+                codex.append({"type": "command", "command": json.loads(command)})
+        for table in (hooks(settings), codex):
+            for name in ("fleet-where-hook.sh", "refocus-hook.sh", "base-readonly-guard.py"):
+                assert any(name in h["command"] for h in table), "missing core hook: " + name
         plugins = json.loads((home / ".claude/audit-plugins.json").read_text())["plugins"]
-        host = metrics(settings, docs, codex, plugins)
-        # Both default paths must be clean; a host re-merge cannot conceal a
-        # default that appeared in the earlier client installation.
-        baseline = {name: max(client[name], host[name]) for name in client}
+        baseline = metrics(settings, docs, codex, plugins)
 
         def inject(key):
             # Change an actual default file, not the measured output. Use the

@@ -92,14 +92,16 @@ grep -q $'^bin/fleet-client-core.sh\t' "$LIST" && ok "C the runtime list names t
 grep -q $'^bin/fleet-lib.sh\t' "$LIST" && no "C fleet-lib.sh is still on the client's runtime list" || ok "C fleet-lib.sh is not on the client's runtime list"
 
 # --- D: smoke, with and without fleet-lib.sh ------------------------------------------
-lay() {   # lay <root> <skip> — the client package in the install's (the repo's) layout
-  awk '!/^[[:space:]]*#/ && NF { print $1 }' "$MANIFEST" | while read -r p; do
-    [ "$p" = "$2" ] && continue
+lay() {   # lay <root> [<extra>] — the client package (its installed files, not
+          # the `served` ones — issue #4826) in the install's (the repo's) layout
+  { awk '!/^[[:space:]]*#/ && NF && $2 != "served" { print $1 }' "$MANIFEST"; [ -z "${2:-}" ] || echo "$2"; } | while read -r p; do
     mkdir -p "$1/$(dirname "$p")"; cp -p "$REPO/$p" "$1/$p"
   done
 }
-lay "$WORK/with" -
-lay "$WORK/without" bin/fleet-lib.sh
+# the package carries no fleet-lib.sh since #4826: «with» puts it beside, as a
+# machine's tree has it
+lay "$WORK/with" bin/fleet-lib.sh
+lay "$WORK/without"
 [ -f "$WORK/with/bin/fleet-lib.sh" ] && [ ! -e "$WORK/without/bin/fleet-lib.sh" ] \
   && ok "D two packages: with and without fleet-lib.sh" || no "D the packages were not laid"
 # run <root> <name> <cmd…> — in a fresh HOME seeded as a signed-in client

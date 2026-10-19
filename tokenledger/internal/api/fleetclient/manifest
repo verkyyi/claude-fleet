@@ -3,83 +3,54 @@
 #
 # One repo-relative path per line, in install order; `#` starts a comment. Each
 # is served at GET /install/<path> (its SHA-256 in X-Ccquota-Sha256) and lands
-# at <install home>/<path> (~/.local/share/claude-fleet by default) — the repo's
-# own bin/ + conf/ layout, so `$BIN/../conf/…` resolves there as in a checkout.
-# The one line tagged `installer` is the template GET /install serves with the
-# hub's URL filled in; it is never a download of its own.
+# at <install home>/<path> (~/.claude/fleet) — the repo's own bin/ + conf/
+# layout, so `$BIN/../conf/…` resolves there as in a checkout. An optional
+# second word tags a line:
+#   installer  the template GET /install serves with the hub's URL filled in;
+#              never a download of its own
+#   served     (issue #4826) served at /install/<path> like the rest, but NOT
+#              installed: what only a hosting machine, a managed Mac or an admin
+#              runs. The client fetches it on first use (fc_served,
+#              bin/fleet-client-lib.sh) from where it came from, and the one-line
+#              join / install commands curl it from the hub as before
+# The format only grows (EPIC #4823 共同约定 3): an older installer that knows
+# no `served` downloads such a line too — more files, never a broken client.
 #
 # This list is read in three places and maintained here only:
 #   · fleetclient/embed.go       the hub — what to serve, which file is the installer
-#   · bin/fleet-client-mirror.sh the copy bin/ + conf/ → fleetclient/, and --check
+#   · bin/fleet-client-pack.sh   the copy into pack/ for the hub's build (every line)
 #   · bin/fleet-install.sh       fetches it as GET /install/manifest and walks it
-# and two tests hold the copies to the originals: TestFleetClientMatchesBin (Go)
-# and bin/fleet-install-selftest.sh leg A (shell).
+# and two tests hold it to the repo: TestFleetClientMatchesBin (Go) and
+# bin/fleet-install-selftest.sh leg A (shell).
 #
-# What is on it: `fleet` and what it dispatches to (#1470) — the thin client
-# (bin/fleet-thin.py, #3003; the old two-pane client and its files went with
-# issue #3008) and what it runs on the person's own computer. The client's scripts
-# read bin/fleet-client-core.sh, never the machine's fleet-lib.sh (issue #4825);
-# what a fleet NODE needs — spawning, reaping, the daemons, gh — stays out.
-# bin/fleet-client-lib.sh rides along for the installer itself (#1629): its
-# tmux step sources the lib's fc_tmux_ok / fc_pkg_install once downloaded.
-# bin/fleet-node.sh + bin/fleet-node-join.sh are `fleet node join` (#1627): the
-# one command that turns THIS computer into a node — a scan, then the join
-# script's steps (which install the node's own tooling from git themselves).
-# bin/fleet-peer-cert.sh is how a node reaches another machine (#1626): the
-# install line joins every computer as a node (#1719), and the ssh snippet
-# `fleet login` writes then runs it for each connection.
-# bin/fleet-node-probe.sh is `fleet node compute` and the join's last line
-# (#1720): can this computer run sessions — and the node agent runs it daily
-# from here on a computer with only the client installed.
-# bin/fleet-node-leave.sh is `fleet node leave` (#1928): the computer takes
-# itself off the hub — a laptop joined by the install line leaves the same way.
-# bin/fleet-node-install.sh is `sudo fleet node install --join <码>` (#2330): a
-# Mac becomes a MANAGED machine — and a 托管 join code's one line fetches it
-# from here (/install/bin/fleet-node-install.sh), so a clean Mac needs nothing
-# else; the runtime it installs comes from the hub's signed release.
-# bin/fleet-logout.sh is `fleet logout` (#2212): the way back from 登录即登记 —
-# the node its login registered leaves too, then the certificate and device key.
+# What is installed (EPIC #4823 共同约定 1): a file stays only when a client
+# action uses it — conf/client-runtime.list, made by bin/fleet-client-runtime.sh,
+# whose --check holds the two lists together both ways — or the installer's own
+# steps do. The client's scripts read bin/fleet-client-core.sh, never the
+# machine's fleet-lib.sh (issue #4825); the Agent configuration package (hooks ·
+# skills · commands · MCP · the mod) is 承载's, installed by `fleet host on`
+# with the rest of the tree (issue #4826, the EPIC's decision 1).
 bin/fleet-install.sh  installer
 bin/fleet
 bin/fleet-login.py
+# bin/fleet-node.sh is `fleet node …` (#1627) and the login's node pass (登录即登记,
+# #2212): it fetches the join / install scripts below when it needs them.
+# bin/fleet-node-leave.sh is `fleet node leave` (#1928) and `fleet logout`'s
+# (#2212): the computer takes itself off the hub.
 bin/fleet-node.sh
-bin/fleet-node-join.sh
-bin/fleet-node-probe.sh
 bin/fleet-node-leave.sh
-bin/fleet-node-install.sh
-bin/fleet-logout.sh
-# bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载 — the person's
-# word for the node steps above (join, compute on/off).
-bin/fleet-host.sh
-# bin/fleet-host-install.sh: `fleet host on` turns the base in ~/.claude/fleet
-# into the full install in place — the install line's 「2 承载」 (#1804).
-bin/fleet-host-install.sh
-# the hub's signed release (#2773): fleet-host-install.sh takes stable from it,
-# `fleet host trust-release-key` is the one way to accept a new signing key by
-# hand; fleet-release-fetch.py takes a release with python3 + `ssh-keygen -Y
-# verify` — a client needs no ccquota (#3162) — and fleet-release-verify.py
-# checks an older hub's plain ed25519 signature for it, and the root's key
-# chain and revocation list (#3559); fleet-release-sign.py is
-# `fleet-release-key.sh scan`'s look for a signing private key (and the root's
-# offline tool — a person's own computer may hold only the client)
-bin/fleet-release-lib.sh
-bin/fleet-release-key.sh
-bin/fleet-release-fetch.py
-bin/fleet-release-verify.py
-bin/fleet-release-sign.py
-# the admin's two commands (#1986): `fleet users list|add|remove` and
-# `fleet hub set|get|unset|settings` — the people list and the hub's settings,
-# through the hub's API; fleet-hub.py forwards those words to fleet-hub-admin.py
-bin/fleet-users.py
-bin/fleet-hub.py
-bin/fleet-hub-admin.py
-# `fleet release stats` (#3140): the release ledger's numbers, through
-# fleet-hub-admin.py's hub and credential
-bin/fleet-release-stats.py
-# bin/fleet-node-sleepwatch.sh: a personal computer's agent runs it from here
-# to say when it sleeps and wakes (#1721).
+# bin/fleet-node-probe.sh + bin/fleet-node-sleepwatch.sh: the node agent a login
+# starts runs them from here (#1720, #1721) — can this computer run sessions,
+# and when it sleeps and wakes
+bin/fleet-node-probe.sh
 bin/fleet-node-sleepwatch.sh
-bin/fleet-peer-cert.sh
+bin/fleet-logout.sh
+# bin/fleet-host.sh is `fleet host on|off|status` (#1806): 承载; on turns the
+# base in ~/.claude/fleet into the full install in place (fleet-host-install.sh,
+# the install line's 「2 承载」, #1804) — from the hub's signed release, whose
+# scripts it fetches first (served, below)
+bin/fleet-host.sh
+bin/fleet-host-install.sh
 bin/fleet-connect.py
 # `fleet route`: pin the route to a machine (claude-fleet#2886)
 bin/fleet-route.py
@@ -93,10 +64,10 @@ bin/fleet_clientlog.py
 # connect never tell its person to log in
 bin/fleet_managed.py
 # `fleet doctor --bundle <dir>` (#2890): the diagnosis bundle, its awk redactor
-# (no python needed) and the one list of files it may read; fleet_redact.py
-# rides the agent bundle below
+# (no python needed), the python one and the one list of files it may read
 bin/fleet-doctor-bundle.sh
 bin/fleet-redact.awk
+bin/fleet_redact.py
 conf/debug-collect.list
 # `fleet-debug report` (#2892): sends that bundle to the hub when fleet itself
 # is broken — sh + /usr/bin/curl only; `fleet debug` forwards to it, and
@@ -104,6 +75,8 @@ conf/debug-collect.list
 bin/fleet-debug
 # the third failure in half an hour asks whether the hub should look (#2894)
 bin/fleet-debug-prompt.sh
+# the installer's tmux step (#1629) and the served fetch (#4826), and the
+# send-to-your-terminal half of fleet-open / fleet-show
 bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
@@ -128,144 +101,63 @@ bin/fleet-thin-upload.py
 # a forwarded page / OAuth callback's bookkeeping, for the thin loop and the
 # action executor alike (#3236, fleet-browser)
 bin/fleet_open_fwd.py
-bin/fleet_notify.py
-bin/fleet-client-escape.sh
 bin/fleet-client-where.sh
 # open a session on a machine from the client (#1777): the hub places it
 bin/fleet-client-place.sh
 bin/fleet_dispatch.py
+bin/fleet_reap_policy.py
 # `fleet claude` / `fleet codex` (#2264): a HOME session in one command
 bin/fleet-home-session.sh
-# `fleet ls | show | open | rename | close | reap | answer` (#2365): the menu as commands
+# `fleet ls | show | open | rename | close | reap | answer` (#2365): the menu as
+# commands — run on the home over the thin loop, but for `ls --services` and
+# `fleet service|task` (#2526, #2527), which read the hub's services table here
+# and write through fleet-hub-write.sh
 bin/fleet-session-cli.py
-# `fleet ls --services` (#2526): the registered background services, one table
+bin/fleet_ticket_url.py
 bin/fleet-services.py
+bin/fleet-hub-write.sh
+bin/fleet_iso.py
 bin/fleet-open.sh
 bin/fleet-open-addr.py
 bin/open-url.sh
 bin/fleet-show.sh
 bin/fleet-show-send.py
-bin/fleet-remote-view.sh
-bin/fleet-hub-sessions.sh
-bin/fleet-hub-write.sh
-# the hub's address read one way, its timestamps on any python3 — macOS's own is
-# 3.9 (#2024); `fleet drill invite` mints an onboarding drill from any computer
-bin/fleet-hub-url.sh
-bin/fleet_iso.py
-bin/fleet-drill.sh
-bin/fleet_reap_policy.py
-bin/fleet-reap-policy.sh
-bin/fleet-row-remote.sh
-bin/tmux-dashboard-rows.sh
-# the client's small library (#4825): what its scripts call, defined only there;
-# fleet-lib.sh (still below until the package is cut, EPIC #4823 C3) sources it
+# the client's small library (#4825): what its scripts call, defined only there
 bin/fleet-client-core.sh
-bin/fleet-lib.sh
 bin/fleet-conf.sh
-bin/fleet-lang.sh
 bin/fleet-ui-lang.sh
-bin/fleet-status-lib.sh
-bin/fleet-palette.sh
-bin/usage-lib.sh
-bin/fleet-daemon-lib.sh
-bin/fleet-alerts.sh
-bin/dash-keymap.sh
-bin/dash-popup.sh
-bin/fleet-popup-lib.sh
-bin/dash-fold-toggle.sh
-# the 看台's switcher door and its shared helpers (#1903, #3000), and the iTerm2
-# profile whose ⌘ chords send the switch codes
-bin/fleet-quickopen.py
-bin/fleet-topbar.py
-# the top line's six glyphs + their colours are the ⌘P panel's one table (#3194)
-bin/fleet_view.py
-# …and where a ticket number opens: its GitHub page, or the hub's 我的单子 (#3596)
-bin/fleet_ticket_url.py
-bin/fleet-iterm-profile.py
-# …and which ⌘ chords it writes: the panel + the person's extras (#3185)
-bin/fleet_keys.py
-# a new task's payload and its one way out (#1953)
-bin/fleet-compose.py
-# …and how long each of its sends took, per segment (#2238)
-bin/fleet-compose-latency.sh
-# 派一件事 (#2753): the payload's road
-bin/fleet-quick-dispatch.py
 conf/fleet-palette.conf
+# the iTerm2 profile whose ⌘ chords send the 看台's switch codes (#3000, #3185),
+# off dash-keymap.sh's switch table
+bin/fleet-iterm-profile.py
+bin/fleet_keys.py
+bin/dash-keymap.sh
 conf/vendor-tmux.lock
 conf/secret-shapes.list
+# ── served, not installed (issue #4826) ─────────────────────────────────────
+# `fleet node join` (fleet-node.sh fetches it; the hub's join line curls it,
+# #1418) and `sudo fleet node install --join <码>` (#2330: a 托管 join code's one
+# line curls it from /install/bin/fleet-node-install.sh)
+bin/fleet-node-join.sh  served
+bin/fleet-node-install.sh  served
+# the hub's signed release (#2773, #3162, #3559): fleet-host-install.sh takes
+# stable with these (and fleet-node-join.sh curls them from /install/bin/ when
+# run as `curl … | bash`); `fleet host trust-release-key` is fleet-release-key.sh;
+# fleet-release-sign.py is its scan
+bin/fleet-release-lib.sh  served
+bin/fleet-release-fetch.py  served
+bin/fleet-release-verify.py  served
+bin/fleet-release-key.sh  served
+bin/fleet-release-sign.py  served
+# the admin's commands (#1986, #3140): `fleet users`, `fleet hub`, `fleet
+# release stats` — through fleet-hub-admin.py's hub and credential
+bin/fleet-users.py  served
+bin/fleet-hub.py  served
+bin/fleet-hub-admin.py  served
+bin/fleet-release-stats.py  served
+# `fleet drill invite` mints an onboarding drill from any computer (#2024)
+bin/fleet-drill.sh  served
+bin/fleet-hub-url.sh  served
 # 公开前的安全门槛 (#3574): the ONE table — the hub's /v1/fleet/gate reads it
 # from this pack, bin/fleet-gate-check.sh from the checkout
-conf/public-gate.tsv
-# --- agent bundle: generated from conf/agent-bundle.manifest by bin/fleet-client-mirror.sh — do not edit (#1725) ---
-conf/agent-bundle.manifest
-hooks/settings-hooks.json
-hooks/agent-guard.py
-hooks/artifact-guard.py
-hooks/base-readonly-guard.py
-hooks/bash-guard.py
-bin/fleet-hook-run.sh
-bin/fleet-hook-personal.sh
-conf/claude-settings.default.json
-conf/agent-defaults/claude/CLAUDE.default.md
-conf/agent-defaults/claude/mcp.default.json
-conf/agent-defaults/claude/agents/fleet-debugger.md
-conf/agent-defaults/claude/agents/fleet-worker.md
-conf/agent-defaults/claude/agents/orchestrator.md
-conf/agent-defaults/claude/agents/steward.md
-conf/agent-defaults/codex/AGENTS.default.md
-conf/agent-defaults/codex/config.default.toml
-bin/mcp-github.sh
-bin/mcp-fetch.sh
-skills/doc-preview/SKILL.md
-skills/doc-preview/render.mjs
-skills/doc-preview/server.py
-skills/doc-preview/share.sh
-skills/doc-preview/vendor/LICENSE.marked.md
-skills/doc-preview/vendor/marked.esm.js
-skills/fleet-add-repo/SKILL.md
-skills/fleet-help/SKILL.md
-skills/fleet-open/SKILL.md
-skills/handoff/SKILL.md
-commands/README.md
-commands/fleet-claim.md
-commands/fleet-compact-resume.md
-commands/fleet-context.md
-commands/fleet-handoff.md
-commands/fleet-history.md
-commands/fleet-move.md
-commands/fleet-onboard.md
-commands/fleet-sync-install.md
-conf/codex-preamble.md
-mod/fleet/.claude-plugin/plugin.json
-mod/fleet/hooks/accept.ts
-mod/fleet/hooks/compose.ts
-mod/fleet/hooks/gate.ts
-mod/fleet/hooks/hooks.json
-mod/fleet/hooks/inbox.ts
-mod/fleet/hooks/lifecycle.ts
-mod/fleet/hooks/progress-model.ts
-mod/fleet/hooks/progress.tsx
-mod/fleet/hooks/register.ts
-mod/fleet/hooks/state.ts
-mod/fleet/hooks/tmux.ts
-mod/fleet/hooks/tools.ts
-mod/fleet/hooks/usage.ts
-mod/fleet/hooks/version.ts
-mod/fleet/hooks/where.ts
-mod/fleet/types/index.d.ts
-mod/fleet/tsconfig.json
-bin/fleet-agent-bundle.py
-bin/fleet-install-apply.sh
-bin/fleet-hooks-merge.py
-bin/fleet-agent-defaults.py
-bin/fleet-codex-rpc.py
-bin/fleet-agent-team.py
-bin/fleet_redact.py
-bin/fleet-config.py
-bin/fleet-cred-proxy.sh
-bin/fleet-cred-proxy.py
-bin/fleet-relay-cred.sh
-bin/fleet-run.sh
-bin/fleet-session-cred.sh
-bin/fleet-cred-scan.py
-# --- end agent bundle ---
+conf/public-gate.tsv  served

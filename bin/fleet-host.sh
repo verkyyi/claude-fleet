@@ -201,8 +201,17 @@ cmd_status() {
 
 YES=0; PASS=()
 verb="${1:-status}"; [ $# -gt 0 ] && shift
-# the hub's release key is its own command (issue #2773): never folded into on
-[ "$verb" = trust-release-key ] && exec bash "$here/fleet-release-key.sh" trust "$@"
+# the hub's release key is its own command (issue #2773): never folded into on.
+# Its scripts the client package only serves (issue #4826): fetched first
+if [ "$verb" = trust-release-key ]; then
+  if [ ! -f "$here/fleet-release-key.sh" ]; then
+    # shellcheck source=fleet-client-lib.sh
+    . "$here/fleet-client-lib.sh" && fc_served "$here/.." bin/fleet-release-key.sh bin/fleet-release-lib.sh \
+      bin/fleet-release-fetch.py bin/fleet-release-verify.py \
+      || { echo "fleet host trust-release-key: 取不到它的脚本：${FC_WHY:-}" >&2; exit 1; }
+  fi
+  exec bash "$here/fleet-release-key.sh" trust "$@"
+fi
 # developer mode (issue #2779): its own command, on the install that runs sessions
 if [ "$verb" = dev ]; then
   d="$here/fleet-dev-mode.sh"

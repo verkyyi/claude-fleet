@@ -1176,9 +1176,19 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   build` without one serves no client (`fleetclient.Packed`, 503 on `/install`).
   **The list is `fleetclient/manifest`, maintained there only**: `embed.go`
   parses it, the installer walks the served copy, and a node-only script
-  (spawning, reaping, gh) stays off it. Never commit a copy back under
-  `fleetclient/`; `bin/fleet-client-mirror.sh` now only rewrites the manifest's
-  generated block (`--check`: every path in the repo, no copy committed), and
+  (spawning, reaping, gh) stays off it. **A client installs only what a client
+  uses** (issue #4826, EPIC #4823 C3): a file stays when `conf/client-runtime.list`
+  names it (`bin/fleet-client-runtime.sh --check` holds the two lists together
+  both ways, and every `bin/` file an installed script names is installed,
+  served, or excused in its NOT_HERE); what only a hosting machine, a managed Mac
+  or an admin runs is a `served` line — on the hub at `/install/<path>` (the
+  one-line join / install curl it), never installed, fetched on first use by
+  `fc_served` (`bin/fleet-client-lib.sh`) from where the client came from:
+  `fleet users|hub|drill|release stats`, `fleet node join|install`, `fleet host
+  on|trust-release-key` (BREAK-IT `client-pack-file-missing`). Never commit a
+  copy back under `fleetclient/`; `bin/fleet-client-mirror.sh --check` reds a
+  path missing from the repo, an unknown tag, an agent bundle block or a
+  committed copy, and
   `TestFleetClientMatchesBin` (Go) + `bin/fleet-install-selftest.sh` leg A
   (shell, a sandbox pack) pin it from both sides. **The client follows
   STABLE, not the hub image** (issue #1805): the hub's `/version` names
@@ -1232,15 +1242,17 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   for one. Both run on every `fleet-install-apply.sh` move (`settings`, `agents`
   passes) — never add a second place that writes these files; `fleet-doctor`'s
   `settings` / `agents` rows count what a login still lacks. **A client-only
-  computer gets the same package** (issue #1725): `conf/agent-bundle.manifest`
-  lists it (hooks · skills · commands · MCP · the mod, and what applies them);
-  `fleet-client-mirror.sh` writes its expansion into the hub client manifest's
-  generated block, the installer lands it beside `bin/` and runs
-  `fleet-install-apply.sh --bundle` — the same passes, fill only, hooks wired
-  through `bin/fleet-hook-run.sh` (no `~/.claude/fleet` there; a later node
-  sync replaces them in place). A new file the package needs goes in that
-  manifest, never in the generated block; `fleet doctor` on a client is
-  `fleet-agent-bundle.py doctor`. `fleet-agent-bundle-selftest.sh` pins it. **The hub hands ONE team layer on
+  computer gets none of it** (issue #4826, EPIC #4823 decision 1; #1725 shipped
+  it there before): `conf/agent-bundle.manifest` (hooks · skills · commands ·
+  MCP · the mod, and what applies them) is 承载's — `fleet host on` installs it
+  with the whole tree. The client manifest carries no generated block
+  (`fleet-client-mirror.sh --check` reds one), and the install line — which a
+  client's update runs — takes out what an earlier client wired into the login
+  (hooks through its `bin/fleet-hook-run.sh`, github / fetch MCP at its
+  `bin/mcp-*.sh`, Claude's and Codex's), the person's own entries byte for byte,
+  never on a full install or with `FLEET_HOST=1`. `fleet-install-apply.sh
+  --bundle` stays until it is deleted; `fleet-agent-bundle-selftest.sh` pins
+  both. **The hub hands ONE team layer on
   top, and local still wins** (issue #1726): `GET/PUT /v1/fleet/team-bundle`
   (PUT is the operator's; every PUT a version, a rollback a PUT of an older
   body — `fleet-agent-team.py put|restore|history`) holds an allow-listed

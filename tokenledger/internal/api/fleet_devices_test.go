@@ -447,7 +447,12 @@ func TestInstallServed(t *testing.T) {
 	if inst, names := fleetclient.ParseManifest(body); inst != fleetclient.Installer || !reflect.DeepEqual(names, fleetclient.Names) {
 		t.Fatalf("served manifest parses to %q %v, the build has %q %v", inst, names, fleetclient.Installer, fleetclient.Names)
 	}
-	for _, name := range fleetclient.Names {
+	if served := fleetclient.ParseServed(body); !reflect.DeepEqual(served, fleetclient.Served) {
+		t.Fatalf("served manifest's served lines %v, the build has %v", served, fleetclient.Served)
+	}
+	// a served file (claude-fleet#4826) is a download like the rest — the
+	// client fetches it on first use, the one-line join / install curl it
+	for _, name := range append(append([]string{}, fleetclient.Names...), fleetclient.Served...) {
 		resp, body := get("/install/" + name)
 		sum := sha256.Sum256(body)
 		if resp.StatusCode != 200 || resp.Header.Get("X-Ccquota-Sha256") != hex.EncodeToString(sum[:]) {
@@ -542,7 +547,7 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		t.Skip("no bin/ beside the module")
 	}
 	listed := map[string]bool{fleetclient.ManifestName: true}
-	for _, name := range append([]string{fleetclient.Installer}, fleetclient.Names...) {
+	for _, name := range append(append([]string{fleetclient.Installer}, fleetclient.Names...), fleetclient.Served...) {
 		listed[name] = true
 		want, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
 		if err != nil {
@@ -560,14 +565,29 @@ func TestFleetClientMatchesBin(t *testing.T) {
 		}
 	}
 	// The client ships — the thin one (claude-fleet#3003; the old shell of #1484
-	// went with #3008) — and the Agent configuration package (claude-fleet#1725): its list, the
-	// hook table + shim, a skill, and the mod's manifest under a dot directory
-	// (embedded only through `all:pack`).
+	// went with #3008) — and serves what the one-line join / install curl
+	// (claude-fleet#4826).
 	for _, must := range []string{"bin/fleet", "bin/fleet-thin.py", "bin/fleet-connect.py", "bin/fleet-client-retire.sh",
-		"conf/agent-bundle.manifest", "bin/fleet-agent-bundle.py", "hooks/settings-hooks.json", "bin/fleet-hook-run.sh",
-		"skills/doc-preview/SKILL.md", "mod/fleet/.claude-plugin/plugin.json"} {
+		"bin/fleet-node-join.sh", "bin/fleet-node-install.sh", "bin/fleet-release-lib.sh", "conf/public-gate.tsv"} {
 		if !listed[must] {
 			t.Errorf("manifest does not list %s", must)
+		}
+	}
+	// …and nothing a client does not run (claude-fleet#4826, EPIC #4823): the
+	// machine's library, the Agent configuration package (承载's, decision 1)
+	installs := map[string]bool{}
+	for _, n := range fleetclient.Names {
+		installs[n] = true
+	}
+	for _, never := range []string{"bin/fleet-lib.sh", "bin/fleet-cred-proxy.py", "bin/fleet-agent-team.py",
+		"bin/fleet-install-apply.sh", "hooks/bash-guard.py", "conf/agent-bundle.manifest", "mod/fleet/.claude-plugin/plugin.json"} {
+		if installs[never] {
+			t.Errorf("the client installs %s — a machine's file (EPIC #4823)", never)
+		}
+	}
+	for _, n := range fleetclient.Served {
+		if installs[n] {
+			t.Errorf("%s is both installed and served", n)
 		}
 	}
 	// one copy: nothing but the manifest, the Go sources and pack/ (a build

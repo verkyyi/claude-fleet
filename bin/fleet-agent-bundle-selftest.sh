@@ -1,6 +1,8 @@
 #!/bin/bash
-# fleet-agent-bundle-selftest.sh — a computer with ONLY the client gets the same
-# Agent configuration a full install does (issue #1725, EPIC #1718 C7).
+# fleet-agent-bundle-selftest.sh — the Agent configuration package (issue
+# #1725, EPIC #1718 C7) and how a computer with ONLY the client lives without it
+# (issue #4826, EPIC #4823 C3: the package is 承载's — the client package
+# carries none, `fleet host on` installs it with the whole tree).
 #
 # Drives bin/fleet-install.sh (--no-hub, the files from this repo over file://,
 # no node step) into a throwaway HOME, then reads what landed:
@@ -8,8 +10,22 @@
 #   A. package    conf/agent-bundle.manifest expands (fleet-agent-bundle.py
 #                 files) to existing files, every hook script the hook table
 #                 wires from hooks/ is in it, the version is a stable 12-hex
-#                 digest; the hub's client manifest carries the package
-#                 (fleet-client-mirror.sh --check)
+#                 digest; the hub's client manifest carries NONE of it
+#                 (fleet-client-mirror.sh --check, issue #4826)
+#   I. client     (issue #4826) the install line, client only: no package file
+#                 in ~/.claude/fleet, nothing written into the login's Claude /
+#                 Codex config, the doctor has no agents row; a login an earlier
+#                 client wired (hooks through its fleet-hook-run.sh, a personal
+#                 hook through fleet-hook-personal.sh, github / fetch MCP at its
+#                 bin/mcp-*.sh — Claude's and Codex's) → exactly those entries
+#                 go, the person's own stay byte for byte, each file kept beside
+#                 once; again → nothing; ~/.claude/fleet the full install, or
+#                 FLEET_HOST=1 → nothing touched
+#
+# Legs B–H pin the package's apply (fleet-install-apply.sh --bundle) the way an
+# earlier client ran it — the package laid beside the client by hand, then
+# applied — until that road is deleted:
+#
 #   B. install    client-only → the four categories are there: Claude's hooks
 #                 (wired through <root>/bin/fleet-hook-run.sh, identity kept),
 #                 skills + commands, MCP servers (github / fetch at the
@@ -17,7 +33,7 @@
 #                 `fleet doctor` prints `PASS agents 4/4`
 #   C. overrides  agent-overrides.json / settings.fleet-override.json and a
 #                 server the login already had are never written
-#   D. again      a second install changes no file (idempotent), no .bak
+#   D. again      a second apply changes no file (idempotent), no .bak
 #   E. shim       a guard runs from the package and still blocks; pane
 #                 plumbing the package does not carry exits 0; a full
 #                 install's script at ~/.claude/fleet wins
@@ -52,13 +68,27 @@ fresh() {
   echo '{"numStartups": 1}' > "$h/.claude.json"
   printf '%s\n' "$h"
 }
-# install <home> [<files dir>] — the one line, client only, from this repo; the
+# line <home> [<files dir>] — the one line, client only, from this repo; the
 # files land in the one fleet directory, ~/.claude/fleet (#1804), unless a
 # second argument names another (FLEET_INSTALL_HOME — legs E–G's separate one)
-install() {
+line() {
   env -i PATH="$SYS_PATH" HOME="$1" SHELL=/bin/zsh TMPDIR="$WORK" ${2:+FLEET_INSTALL_HOME="$2"} \
     FLEET_INSTALL_NO_HUB=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 \
     FLEET_INSTALL_SRC="file://$REPO" sh "$REPO/bin/fleet-install.sh" 2>&1
+}
+# install <home> [<files dir>] — what the line did before #4826: the client,
+# then the package laid beside it and applied (fleet-install-apply.sh --bundle)
+install() {
+  local r=${2:-$1/.claude/fleet} f out rc
+  out=$(line "$@") || { printf '%s\n' "$out"; return 1; }
+  "$PY" "$REPO/bin/fleet-agent-bundle.py" files --root "$REPO" | while IFS= read -r f; do
+    mkdir -p "$r/$(dirname "$f")"; cp -p "$REPO/$f" "$r/$f"
+  done
+  apply "$1" "$r"
+}
+# apply <home> [<files dir>] — the package's apply alone, again
+apply() {
+  env -i PATH="$SYS_PATH" HOME="$1" TMPDIR="$WORK" bash "${2:-$1/.claude/fleet}/bin/fleet-install-apply.sh" --bundle --root "${2:-$1/.claude/fleet}" 2>&1
 }
 # snap <home> — a digest of every file the apply may write
 snap() {
@@ -83,13 +113,83 @@ done
 v1=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO"); v2=$("$PY" "$REPO/bin/fleet-agent-bundle.py" version --root "$REPO")
 case "$v1" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) [ "$v1" = "$v2" ] && ok "A version $v1, stable" || bad "A version moves: $v1 $v2" ;; *) bad "A version: $v1" ;; esac
 if [ -x "$REPO/bin/fleet-client-mirror.sh" ] && [ -d "$REPO/tokenledger/internal/api/fleetclient" ]; then
-  out=$(bash "$REPO/bin/fleet-client-mirror.sh" --check 2>&1) && ok "A the hub's client manifest carries the package (mirror --check)" || bad "A mirror: $out"
+  out=$(bash "$REPO/bin/fleet-client-mirror.sh" --check 2>&1) && ok "A the hub's client manifest is current (mirror --check)" || bad "A mirror: $out"
+  # (fleet_redact.py is the client's too: `fleet doctor --bundle` redacts with it)
+  inman=$(awk '!/^[[:space:]]*#/ && NF { print $1 }' "$REPO/tokenledger/internal/api/fleetclient/manifest" | grep -xF -f <(printf '%s\n' "$files") | grep -vx 'bin/fleet_redact.py')
+  [ -z "$inman" ] && ok "A the client package carries none of it (承载's, #4826)" || bad "A the client manifest still lists: $(printf '%s' "$inman" | tr '\n' ' ')"
 fi
+
+# ── I — client only, since #4826 ─────────────────────────────────────────────
+H=$(fresh i); out=$(line "$H"); rc=$?
+R="$H/.claude/fleet"
+left=$(printf '%s\n' "$files" | grep -vx 'bin/fleet_redact.py' | while IFS= read -r f; do [ -e "$R/$f" ] && printf '%s ' "$f"; done)
+[ "$rc" = 0 ] && [ -x "$R/bin/fleet" ] && [ -z "$left" ] && ! printf '%s' "$out" | grep -q 'Agent 配置' \
+  && ok "I the line installs no package file and says nothing of it" || bad "I rc=$rc left=[$left] $out"
+[ ! -e "$H/.claude/settings.json" ] && [ "$(cat "$H/.claude.json")" = '{"numStartups": 1}' ] && [ -z "$(ls -A "$H/.codex")" ] \
+  && ok "I nothing written into the login's Claude / Codex config" || bad "I wrote: $(ls -A "$H/.claude" "$H/.codex" | tr '\n' ' ') $(cat "$H/.claude.json")"
+doc=$(env -i PATH="$SYS_PATH" HOME="$H" FLEET_NOTIFY=0 "$H/.local/bin/fleet" doctor 2>&1)
+printf '%s\n' "$doc" | grep -q ' agents ' && bad "I the doctor still has an agents row: $doc" || ok "I the doctor has no agents row"
+# a login an earlier client wired
+wire() {   # wire <home> — what fleet-install-apply.sh --bundle left there, plus the person's own
+  mkdir -p "$1/.claude" "$1/.codex"
+  cat > "$1/.claude/settings.json" <<'EOF'
+{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": "sh \"$HOME/.claude/fleet/./bin/fleet-hook-run.sh\" python3 ~/.claude/fleet/hooks/bash-guard.py"},
+          {"type": "command", "command": "my-own-guard.sh"}
+        ]
+      }
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "sh \"$HOME/.claude/fleet/./bin/fleet-hook-run.sh\" bash ~/.claude/fleet/bin/set-claude-state.sh done"}]},
+      {"hooks": [{"type": "command", "command": "sh \"$HOME/.claude/fleet/bin/fleet-hook-personal.sh\" Stop -- 'say done'"}]}
+    ]
+  }
+}
+EOF
+  cat > "$1/.claude.json" <<'EOF'
+{"numStartups": 9, "mcpServers": {"github": {"command": "bash", "args": ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-github.sh\""]}, "fetch": {"command": "bash", "args": ["-lc", "exec \"$HOME/.claude/fleet/bin/mcp-fetch.sh\""]}, "mine": {"command": "my-mcp"}}}
+EOF
+  printf 'model = "o3"\n\n[mcp_servers.github]\ncommand = "bash"\nargs = ["-lc", "exec \\"$HOME/.claude/fleet/bin/mcp-github.sh\\""]\n\n[mcp_servers.mine]\ncommand = "my-mcp"\n' > "$1/.codex/config.toml"
+}
+H=$(fresh u); wire "$H"; out=$(line "$H"); rc=$?
+chk=$("$PY" - "$H" <<'PY'
+import json, os, sys
+h = sys.argv[1]
+s = json.load(open(os.path.join(h, ".claude/settings.json")))
+cmds = [x["command"] for gs in s.get("hooks", {}).values() for g in gs for x in g["hooks"]]
+c = json.load(open(os.path.join(h, ".claude.json")))
+print(s["model"], cmds, sorted(c["mcpServers"]), c["numStartups"])
+PY
+)
+[ "$rc" = 0 ] && [ "$chk" = "opus ['my-own-guard.sh'] ['mine'] 9" ] && ok "I an earlier client's hooks + MCP go, the person's own stay" || bad "I unwire rc=$rc chk=$chk"
+[ "$(cat "$H/.codex/config.toml")" = "$(printf 'model = "o3"\n\n[mcp_servers.mine]\ncommand = "my-mcp"')" ] \
+  && ok "I Codex: its [mcp_servers.github] table goes as text, the rest byte for byte" || bad "I codex: $(cat "$H/.codex/config.toml")"
+printf '%s' "$out" | grep -q '^Agent 配置: 撤下了旧客户端接进来的 钩子 3 条、Claude MCP fetch·github、Codex MCP github' \
+  && ok "I one line says what went" || bad "I said: $(printf '%s' "$out" | grep 'Agent 配置')"
+nb=$(ls "$H/.claude/"settings.json.fleet-bak-* "$H/".claude.json.fleet-bak-* "$H/.codex/"config.toml.fleet-bak-* 2>/dev/null | wc -l | tr -d ' ')
+[ "$nb" = 3 ] && grep -q fleet-hook-run "$H/.claude/"settings.json.fleet-bak-* && ok "I each file kept beside once" || bad "I backups: $nb"
+# cfg <home> — the three files the unwire may touch, and the backups beside them
+cfg() { (cd "$1" && for f in .claude/*fleet-bak* .codex/*fleet-bak* .*fleet-bak*; do [ -e "$f" ] && echo "$f"; done; cksum .claude/settings.json .claude.json .codex/config.toml 2>/dev/null); }
+before=$(cfg "$H"); out=$(line "$H"); rc=$?
+[ "$rc" = 0 ] && [ "$before" = "$(cfg "$H")" ] && ! printf '%s' "$out" | grep -q 'Agent 配置' && ok "I again → nothing" || bad "I again rc=$rc: $out"
+# ~/.claude/fleet the full install (its files apart from the client's) → nothing
+H=$(fresh f); wire "$H"; mkdir -p "$H/.claude/fleet/bin"; : > "$H/.claude/fleet/bin/fleet-up.sh"
+before=$(cfg "$H"); out=$(line "$H" "$WORK/f/client"); rc=$?
+[ "$rc" = 0 ] && [ "$before" = "$(cfg "$H")" ] && ok "I ~/.claude/fleet the full install → untouched" || bad "I full rc=$rc: $out"
+H=$(fresh g); wire "$H"; mkdir -p "$H/.config/claude-fleet"; printf 'FLEET_HOST=1\n' > "$H/.config/claude-fleet/fleet.conf"
+before=$(cfg "$H"); out=$(line "$H" "$WORK/g/client"); rc=$?
+[ "$before" = "$(cfg "$H")" ] && ok "I FLEET_HOST=1 → untouched" || bad "I host rc=$rc: $out"
 
 # ── B — client-only install: the four categories ─────────────────────────────
 H=$(fresh b); out=$(install "$H"); rc=$?
 R="$H/.claude/fleet"
-[ "$rc" = 0 ] && echo "$out" | grep >/dev/null '^Agent 配置: 已装' && ok "B install exit 0, says the Agent configuration is in" || bad "B rc=$rc: $out"
+[ "$rc" = 0 ] && echo "$out" | grep >/dev/null '^apply: ok' && ok "B install + apply exit 0, the apply says ok" || bad "B rc=$rc: $out"
 [ -f "$R/bin/fleet" ] && [ ! -e "$R/.git" ] && [ ! -e "$R/bin/fleet-up.sh" ] && [ ! -e "$H/.local/share/claude-fleet" ] \
   && ok "B the base in ~/.claude/fleet — one directory, no git, no part that runs sessions (#1804)" || bad "B layout: $(ls -a "$R" "$H/.local/share" 2>&1 | tr '\n' ' ')"
 chk=$("$PY" - "$H" "$R" <<'PY'
@@ -172,9 +272,9 @@ printf '%s\n' "$doc" | grep >/dev/null 'PASS  agents   4/4' && ok "C what the lo
 
 # ── D — again: nothing changes ───────────────────────────────────────────────
 H="$WORK/b/home"
-before=$(snap "$H"); out=$(install "$H"); rc=$?
+before=$(snap "$H"); out=$(apply "$H"); rc=$?
 after=$(snap "$H")
-[ "$rc" = 0 ] && [ "$before" = "$after" ] && ok "D a second install writes nothing ($(printf '%s\n' "$after" | wc -l | tr -d ' ') files compared)" \
+[ "$rc" = 0 ] && [ "$before" = "$after" ] && ok "D a second apply writes nothing ($(printf '%s\n' "$after" | wc -l | tr -d ' ') files compared)" \
   || bad "D changed: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -5)"
 ls "$H/.claude/"settings.json.bak.* >/dev/null 2>&1 && bad "D a settings backup appeared" || ok "D no settings.json.bak"
 

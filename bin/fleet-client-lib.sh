@@ -45,6 +45,21 @@
 #                                FC_BREW_DIRS (where else to look for brew),
 #                                FC_LOG (the package manager's output)
 #
+# And what the client package only SERVES (issue #4826, EPIC #4823 C3): a
+# fleetclient/manifest line tagged `served` is on the hub but not installed —
+# the node join / install, the release scripts 承载 starts from, the admin's
+# commands. The road that needs one fetches it first. POSIX sh:
+#   fc_served <root> <path>…   → each <root>/<path> here, or fetched: from where
+#                                this client came from (<root>/.client-version):
+#                                the hub's stable copy of its commit, else the
+#                                hub's own /install, else (不接) GitHub's raw
+#                                at that commit; SHA-256 checked against the
+#                                hub's header, put in place by one rename.
+#                                0 all here · 1 a fetch failed · 2 nowhere to
+#                                fetch from; FC_WHY says which. Seams:
+#                                FLEET_SERVED_FROM (the one source, a URL or
+#                                file://), FLEET_STABLE_RAW
+#
 # And the client's own record (issue #2896, EPIC #2889 C7; docs/dev/CLIENT-LOGS.md):
 #   fleet_clientlog <kind> <event> [machine] [route] [ms] [result] [reason]
 #                              → one TSV line in <logs>/<kind>.log (connect ·
@@ -195,6 +210,59 @@ fc_pkg_install() {  # <pkg>
     *yum*) fc_priv yum install -y "$1" >>"$_fc_log" 2>&1 </dev/null ;;
     *) fc_priv apk add --no-cache "$1" >>"$_fc_log" 2>&1 </dev/null ;;
   esac || { FC_WHY="${FC_HOW#sudo } 失败：$(tail -n 2 "$_fc_log" 2>/dev/null | tr '\n' ' ')"; return 1; }
+  return 0
+}
+
+# ── what the package only serves (issue #4826) ────────────────────────────────
+# fc_served_from <root> — the URLs to try, best first, one per line
+fc_served_from() {
+  if [ -n "${FLEET_SERVED_FROM:-}" ]; then printf '%s\n' "${FLEET_SERVED_FROM%/}"; return 0; fi
+  _fsv=$(sed -n 's/^version=//p' "$1/.client-version" 2>/dev/null | head -n 1)
+  _fsh=$(sed -n 's/^hub=//p' "$1/.client-version" 2>/dev/null | head -n 1)
+  [ -n "$_fsh" ] || _fsh=${FLEET_HUB_URL:-}
+  [ -n "$_fsh" ] || _fsh=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_HUB_URL=//p' \
+    "${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' ")
+  _fsh=${_fsh%/}
+  case $_fsv in *[!0-9a-f]*|'') _fs40='' ;; *) [ ${#_fsv} = 40 ] && _fs40=$_fsv || _fs40='' ;; esac
+  if [ -n "$_fsh" ]; then
+    [ -z "$_fs40" ] || printf '%s/install/stable/%s\n' "$_fsh" "$_fs40"
+    printf '%s/install\n' "$_fsh"
+  elif [ -n "$_fs40" ]; then
+    _fsr=${FLEET_STABLE_RAW:-https://raw.githubusercontent.com/verkyyi/claude-fleet}   # dist-ok: 不接 only
+    printf '%s/%s\n' "${_fsr%/}" "$_fs40"
+  fi
+}
+fc_served() {  # <root> <path>…
+  FC_WHY=''
+  _fsr0=$1; shift
+  _fsl=$(fc_served_from "$_fsr0")
+  for _fsp in "$@"; do
+    [ -f "$_fsr0/$_fsp" ] && continue
+    case $_fsp in bin/*|conf/*) ;; *) FC_WHY="不认识的路径 $_fsp"; return 1 ;; esac
+    case $_fsp in *..*|*//*) FC_WHY="不认识的路径 $_fsp"; return 1 ;; esac
+    [ -n "$_fsl" ] || { FC_WHY="这台不知道从哪取 ${_fsp}（没有入口地址，也没有 .client-version）"; return 2; }
+    mkdir -p "$_fsr0/$(dirname "$_fsp")" 2>/dev/null || { FC_WHY="写不进 $_fsr0"; return 1; }
+    _fst="$_fsr0/$_fsp.fetch.$$"
+    _fsok=0
+    for _fsu in $_fsl; do
+      rm -f "$_fst" "$_fst.hdr"
+      curl -fsSL --connect-timeout 10 --max-time 120 -D "$_fst.hdr" "$_fsu/$_fsp" -o "$_fst" 2>/dev/null || continue
+      _fsw=$(tr -d '\r' <"$_fst.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}' | tail -n 1)
+      if [ -n "$_fsw" ]; then
+        [ "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_fst")" = "$_fsw" ] || continue
+      fi
+      [ -s "$_fst" ] || continue
+      _fsok=1; break
+    done
+    rm -f "$_fst.hdr"
+    if [ "$_fsok" != 1 ]; then
+      rm -f "$_fst"
+      FC_WHY="取不到 ${_fsp}（$(printf '%s' "$_fsl" | head -n 1 | sed 's/?.*//')）"
+      return 1
+    fi
+    case $_fsp in bin/*) chmod 755 "$_fst" ;; *) chmod 644 "$_fst" ;; esac
+    mv -f "$_fst" "$_fsr0/$_fsp" || { rm -f "$_fst"; FC_WHY="放不进 $_fsr0/$_fsp"; return 1; }
+  done
   return 0
 }
 

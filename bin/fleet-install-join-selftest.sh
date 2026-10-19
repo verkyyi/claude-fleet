@@ -18,17 +18,16 @@
 #                 CCQUOTA_FLEET_COMPUTE=0, CCQUOTA_FLEET_PERSONAL=1 and no
 #                 CCQUOTA_FLEET_ADMIN; the agent checked in; the output says
 #                 随登录登记 + 不可信 · 只协调
-#   B. ssh        ~/.ssh/fleet-ssh-config carries a Match per OTHER machine
-#                 (mac-a = mac-d on the hub, s9 = spare9; never this one) that runs the INSTALLED
-#                 fleet-peer-cert.sh with the hub's hostname; peer/machines lists
-#                 them; ~/.ssh/config Includes it once; the hand-written mac-b block
-#                 (`Match originalhost mac-a,mac-a-*,mac-d exec "…fleet-peer-cert.sh…"`)
-#                 is gone from ~/.ssh/config with its comment, kept in a
-#                 .fleet-bak-*, and everything else in the file is untouched;
-#                 `ssh -G` parses the snippet and, for mac-a-lan, picks the peer key
-#                 and mac-d's certificate
-#   C. one cert   the installed fleet-peer-cert.sh, for mac-a / mac-a-lan / mac-d:
-#                 the hub asked ONCE, for mac-d; every name the same file
+#   B. ssh        ~/.ssh/fleet-ssh-config carries the hub's Host blocks and the
+#                 renew-on-use Match, and — the client package carries no
+#                 fleet-peer-cert.sh since issue #4826 — no peer Match;
+#                 peer/machines lists the machines (mac-a = mac-d on the hub, s9
+#                 = spare9, and this one); ~/.ssh/config Includes it once and is
+#                 otherwise untouched (the hand-written mac-b block stays, no
+#                 .fleet-bak-*, no takeover said)
+#   C. one cert   fleet-peer-cert.sh as a hosting computer runs it, for mac-a /
+#                 mac-a-lan / mac-d: the hub asked ONCE, for mac-d; every name
+#                 the same file
 #   D. again      a second install: 「入口: 这台已登记在 …」, no new scan, node.env
 #                 unchanged
 #   E. no node    --no-node: no scan, no node.env (the degenerate case)
@@ -250,39 +249,32 @@ grep -q '只协调' "$WORK/out" && bad "A 只协调 on the newcomer's screen: $(
 grep -q 'ccq_nodepass' "$WORK/out" "$CONF/node-join.log" && bad "A the token was printed" || ok "A the token is never printed"
 
 # ── B. ssh ──────────────────────────────────────────────────────────────────
+# A computer with only the client reaches the machines on its own 12-hour
+# certificate (the hub's Host blocks); machine-to-machine certificates are a
+# hosting computer's, and the client package carries no fleet-peer-cert.sh since
+# issue #4826 — so no peer Match, and nothing takes the hand-written one over.
 SNIP="$H1/.ssh/fleet-ssh-config"
-PC="$(cd "$ROOT/bin" && pwd -P)/fleet-peer-cert.sh"   # `fleet` runs its siblings by their physical path
-if grep -qF "Match originalhost mac-a,mac-a-*,mac-d,mac-d-*,fleet-mac-a,fleet-mac-a-* exec \"'$PC' mac-d view >/dev/null 2>&1\"" "$SNIP" \
-   && grep -qF "Match originalhost s9,s9-*,spare9,spare9-*,fleet-s9,fleet-s9-* exec \"'$PC' spare9 view >/dev/null 2>&1\"" "$SNIP" \
-   && ! grep -q 'self7' "$SNIP" \
-   && grep -qF 'CertificateFile "~/.config/claude-fleet/peer/mac-d.view-cert.pub"' "$SNIP" && grep -q '^Host mac-a fleet-mac-a' "$SNIP"; then
-  ok "B the snippet: a Match per OTHER machine (not this one) through the installed fleet-peer-cert.sh, keyed on the hub's hostname"
+if [ ! -e "$ROOT/bin/fleet-peer-cert.sh" ] && ! grep -q 'fleet-peer-cert' "$SNIP" \
+   && grep -q '^Host mac-a fleet-mac-a' "$SNIP" && grep -q 'renew --quiet --on-use ssh' "$SNIP"; then
+  ok "B the snippet: the hub's Host blocks + renew on use, no peer Match (no fleet-peer-cert.sh on a client, #4826)"
 else bad "B snippet: $(cat "$SNIP" 2>/dev/null)"; fi
 [ "$(cat "$CONF/peer/machines" 2>/dev/null)" = "$(printf 'mac-d mac-a\nspare9 s9\n%s self7' "$ME")" ] && ok "B peer/machines lists the hub's machines" \
   || bad "B peer/machines: $(cat "$CONF/peer/machines" 2>/dev/null)"
 [ "$(grep -c '^Include ~/.ssh/fleet-ssh-config$' "$H1/.ssh/config")" = 1 ] && ok "B ~/.ssh/config Includes the snippet once" \
   || bad "B config: $(cat "$H1/.ssh/config")"
-bak=$(ls "$H1/.ssh/"config.fleet-bak-* 2>/dev/null | head -n 1)
-if ! grep -q 'fleet-peer-cert' "$H1/.ssh/config" && ! grep -q 'personal mac-b<->mac-a' "$H1/.ssh/config" \
-   && grep -q '^Include ~/.ssh/config.d/\*.conf$' "$H1/.ssh/config" && grep -q '^Host macbook$' "$H1/.ssh/config" \
-   && grep -q '^# macbook over Tailscale$' "$H1/.ssh/config" && [ -n "$bak" ] && cmp -s "$bak" "$WORK/config.orig"; then
-  ok "B the hand-written block is taken over (comment too), the rest kept, the original backed up"
-else bad "B takeover: config=$(cat "$H1/.ssh/config") bak=$bak"; fi
-grep -q '接管' "$WORK/out" && ok "B the takeover is said" || bad "B no takeover line: $(cat "$WORK/out")"
-G=$(HOME="$H1" FLEET_CONF_DIR="$CONF" ssh -G -F "$SNIP" mac-a-lan 2>&1)
-case "$G" in
-  *"identityfile ~/.ssh/fleet-peer"*mac-d.view-cert.pub*|*"/.ssh/fleet-peer"*"mac-d.view-cert.pub"*)
-    ok "B ssh -G mac-a-lan: the Match applies — the peer key and mac-d's certificate" ;;
-  *) bad "B ssh -G mac-a-lan: $(printf '%s\n' "$G" | grep -Ei 'identityfile|certificatefile|error|bad|line')" ;;
-esac
+[ "$(sed '/^# >>> fleet login/,/^# <<< fleet login/d' "$H1/.ssh/config" | grep -v '^$')" = "$(grep -v '^$' "$WORK/config.orig")" ] \
+  && [ -z "$(ls "$H1/.ssh/"config.fleet-bak-* 2>/dev/null)" ] && ! grep -q '接管' "$WORK/out" \
+  && ok "B the rest of ~/.ssh/config untouched — the hand-written block left as it is, nothing said" \
+  || bad "B config: $(cat "$H1/.ssh/config") out=$(cat "$WORK/out")"
 
 # ── C. one cert ─────────────────────────────────────────────────────────────
+# fleet-peer-cert.sh as a hosting computer runs it (this repo's), on this login
+PC="$BIN/fleet-peer-cert.sh"
 certs=""
 for n in mac-a mac-a-lan mac-d; do
   o=$(HOME="$H1" FLEET_CONF_DIR="$CONF" bash "$PC" "$n" view 2>"$WORK/err") || { bad "C $n: exit $?: $(cat "$WORK/err")"; continue; }
   certs="$certs $(printf '%s\n' "$o" | sed -n 's/^CertificateFile=//p')"
 done
-# ssh -G above may already have asked once; the three names add nothing
 peer=$(hubstate peer)
 set -- $certs
 if [ "$#" = 3 ] && [ "$1" = "$CONF/peer/mac-d.view-cert.pub" ] && [ "$1" = "$2" ] && [ "$2" = "$3" ] && [ "$peer" = "['mac-d']" ]; then

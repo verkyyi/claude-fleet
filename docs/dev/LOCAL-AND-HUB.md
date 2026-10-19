@@ -19,7 +19,7 @@ INFO  mode     fleet hub (新会话 auto) · scratchpad local — 本机 / 联�
 ## 一台电脑是什么：fleet 和「承载」
 
 人看到的只有两个词（issue #1806，EPIC #1813 C4）：**fleet**——每台电脑都有的那部分
-（`fleet` 命令、它打开的客户端、Agent 配置包）；**承载**——可选能力：这台也跑会话。
+（`fleet` 命令和它打开的客户端；Agent 配置包随承载一起装，#4826）；**承载**——可选能力：这台也跑会话。
 配置里只有一个键，`fleet.conf` 的 **`FLEET_HOST=1`**；开关是一条命令：
 
 ```sh

@@ -95,9 +95,9 @@
 #   fleet cred-scan scan        counts what a session here can reach (#2136)
 #   fleet doctor                with only the client here: its `fleet` row
 #                               (version, hub, tmux, cert — #1722) and its
-#                               `能力` row (基础 · 承载, #1806), then this
-#                               login's Agent configuration — hooks · skills ·
-#                               MCP · mod (#1725)
+#                               `能力` row (基础 · 承载, #1806), cert and
+#                               tls; the Agent configuration (hooks · skills ·
+#                               MCP · mod, #1725) is 承载's (#4826)
 #   fleet doctor --bundle <dir> everything a diagnosis needs from this computer,
 #                               credentials taken out, in one directory (#2890)
 #   fleet debug report          send that bundle to the hub and print a short
@@ -240,7 +240,8 @@ if [ "$cmd" = doctor ] && [ "${2:-}" = --bundle ] && [ ! -x "$here/fleet-doctor.
 fi
 # `fleet doctor` with only the client here: no fleet-doctor.sh beside — the
 # client's own row (issue #1722: version, hub, tmux, cert), then the Agent
-# configuration package's (issue #1725). Non-zero when either warns.
+# configuration package's (issue #1725) where an older client left it — the
+# client installs none since #4826 (承载's). Non-zero when either warns.
 if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
    && { [ -x "$here/fleet-client-update.sh" ] || [ -f "$here/fleet-agent-bundle.py" ]; }; then
   shift
@@ -293,6 +294,23 @@ if [ "$cmd" = login ] && [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -x "$here/flee
   sh "$here/fleet-debug-prompt.sh" after login "$rc"
   exit "$rc"
 fi
+# a word whose scripts the client package only SERVES (issue #4826, EPIC #4823
+# C3) — the admin's, the drill's: fetched here on first use (fc_served, from
+# where this client came from), then run as before. A full install has them.
+_need=''
+case $cmd in
+  users) _need='bin/fleet-users.py bin/fleet-hub-admin.py' ;;
+  hub) _need='bin/fleet-hub.py bin/fleet-hub-admin.py' ;;
+  drill) _need='bin/fleet-drill.sh bin/fleet-hub-url.sh' ;;
+  release) [ "${2:-}" = stats ] && _need='bin/fleet-release-stats.py bin/fleet-hub-admin.py' ;;
+esac
+if [ -n "$_need" ] && [ -f "$here/fleet-client-lib.sh" ]; then
+  # shellcheck source=fleet-client-lib.sh
+  . "$here/fleet-client-lib.sh"
+  # shellcheck disable=SC2086  # the paths are words
+  fc_served "$here/.." $_need || { echo "fleet · fleet $cmd 要的文件没取到：$FC_WHY" >&2; exit 1; }
+fi
+unset _need
 # `fleet release stats` (issue #3140): the release ledger's numbers, on a client
 # too — `fleet release` itself is the node's fleet-release.sh
 if [ "$cmd" = release ] && [ "${2:-}" = stats ] && [ -f "$here/fleet-release-stats.py" ]; then
@@ -347,6 +365,15 @@ case $cmd in
     case ${2:-} in
       stop|start|restart|run|schedule) exec python3 "$here/fleet-session-cli.py" "$@" ;;
     esac ;;
+esac
+# what runs the Agent on THIS computer is 承载's (issue #4826, EPIC #4823
+# decision 1): with only the client here the word says so — never a machine name
+case $cmd in
+  config|run|cred-scan)
+    if [ ! -f "$here/fleet-$cmd.py" ] && [ ! -f "$here/fleet-$cmd.sh" ]; then
+      echo "fleet · fleet $cmd 管这台电脑上的 Agent，开了承载才有：fleet host on" >&2
+      exit 3
+    fi ;;
 esac
 for ext in py sh; do
   if [ -x "$here/fleet-$cmd.$ext" ]; then

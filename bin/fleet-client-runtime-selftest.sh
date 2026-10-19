@@ -14,8 +14,13 @@
 #      files are removed
 #   D  build: run beats read for the same action; one static hop from a file
 #      that ran (fleet-host.sh → fleet-host-install.sh), none from a static file;
-#      nothing followed out of fleet-lib.sh; the list it writes passes --check
+#      nothing followed out of fleet-client-core.sh; the list it writes passes --check
 #   E  usage → 2
+#   G  (issue #4826) --check's reference rule: a file an installed script names
+#      and the package forgot → exit 1 with its file:line; NOT_HERE is excused
+#   F  (issue #4826) --check the other way: a file the manifest installs and
+#      the list lacks → exit 1, named; a `served` one off the list is fine; the
+#      hand-written `agent` / `dispatch` uses survive a rebuild (leg D)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd)
 RT="$BIN/fleet-client-runtime.sh"
@@ -97,12 +102,38 @@ grep -q "^bin/fleet-connect.py${tab}view$" "$T/built.list" && ok "D run beats re
 grep -q "^conf/secret-shapes.list${tab}view:read$" "$T/built.list" && ok "D a read alone stays :read" || no "D secret-shapes: $(grep secret-shapes "$T/built.list")"
 grep -q "^bin/fleet-host-install.sh${tab}static$" "$T/built.list" && ok "D one static hop from a file that ran" || no "D no static fleet-host-install.sh"
 grep -q 'not-in-manifest' "$T/built.list" && no "D a path off the manifest was listed" || ok "D a path off the manifest is dropped"
-# fleet-release-lib.sh is named by fleet-host-install.sh (static here), not by fleet-host.sh
-grep -q '^bin/fleet-release-lib.sh' "$T/built.list" && no "D a static file's names were followed (fleet-release-lib.sh)" || ok "D no hop from a static file"
-bash "$RT" --check "$T/built.list" >/dev/null 2>&1 && ok "D the built list passes --check" || no "D built list fails --check"
-printf '%s\n' "bin/fleet-lib.sh${tab}ls" > "$T/d1/used.tsv"
+# fleet-release-sign.py is named by fleet-release-key.sh (static here), not by fleet-host.sh
+grep -q '^bin/fleet-release-sign.py' "$T/built.list" && no "D a static file's names were followed (fleet-release-sign.py)" || ok "D no hop from a static file"
+# well formed (a list off two actions misses most installed files — that half is F's)
+out=$(bash "$RT" --check "$T/built.list" 2>&1 | grep -v 'is installed by the client manifest but on no line')
+[ -z "$out" ] && ok "D the built list passes --check's line rules" || no "D built list fails --check: $out"
+printf '%s\n' "bin/fleet-client-core.sh${tab}ls" > "$T/d1/used.tsv"
 bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
-[ "$(grep -vc '^#' "$T/lib.list")" = 1 ] && ok "D nothing followed out of fleet-lib.sh" || no "D fleet-lib.sh: $(grep -v '^#' "$T/lib.list" | head -5)"
+[ "$(grep -vc '^#' "$T/lib.list")" = 1 ] && ok "D nothing followed out of fleet-client-core.sh" || no "D fleet-client-core.sh: $(grep -v '^#' "$T/lib.list" | head -5)"
+# the hand-written uses (issue #4826) carry over from the list a build replaces
+printf '%s\n' "bin/fleet-node-probe.sh${tab}agent" "bin/fleet-route.py${tab}dispatch" >> "$T/lib.list"
+bash "$RT" build "$T/d1" --write "$T/lib.list" 2>/dev/null
+grep -q "^bin/fleet-node-probe.sh${tab}agent$" "$T/lib.list" && grep -q "^bin/fleet-route.py${tab}dispatch$" "$T/lib.list" \
+  && ok "D agent / dispatch carry over a rebuild" || no "D hand uses lost: $(grep -v '^#' "$T/lib.list")"
+
+# F — the other way (issue #4826): a file the manifest INSTALLS is on the list;
+# a `served` one need not be
+grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-route.py${tab}" > "$T/short.list"
+out=$(bash "$RT" --check "$T/short.list" 2>&1); rc=$?
+[ "$rc" = 1 ] && case $out in *'bin/fleet-route.py is installed by the client manifest but on no line'*) true ;; *) false ;; esac \
+  && ok "F an installed file off the list → exit 1, named" || no "F rc=$rc $out"
+grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-node-join.sh${tab}" > "$T/served.list"
+grep -q '^bin/fleet-node-join.sh[[:space:]]\{1,\}served$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" \
+  && bash "$RT" --check "$T/served.list" >/dev/null 2>&1 && ok "F a served file off the list is fine" || no "F served: $(bash "$RT" --check "$T/served.list" 2>&1)"
+
+# G — what the installed scripts name (issue #4826, BREAK-IT client-pack-file-missing):
+# a file the package forgot is named; one of NOT_HERE (fleet-hub-sessions.sh) is not
+grep -v '^bin/fleet_iso.py$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" > "$T/forgot.manifest"
+grep -v "^bin/fleet_iso.py${tab}" "$BIN/../conf/client-runtime.list" > "$T/forgot.list"
+out=$(bash "$RT" --check "$T/forgot.list" "$T/forgot.manifest" 2>&1); rc=$?
+[ "$rc" = 1 ] && case $out in *'bin/fleet-services.py:'*'names bin/fleet_iso.py, which the client package neither installs nor serves'*) true ;; *) false ;; esac \
+  && ok "G a forgotten file a client script names → exit 1, file:line named" || no "G rc=$rc $out"
+printf '%s' "$out" | grep -q 'fleet-hub-sessions.sh' && no "G a NOT_HERE file was reported" || ok "G a home-side file (NOT_HERE) is not reported"
 
 # E — usage
 bash "$RT" >/dev/null 2>&1; [ $? = 2 ] && ok "E no command → 2" || no "E usage rc"

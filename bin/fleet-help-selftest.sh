@@ -14,8 +14,9 @@
 #      tokenledger/internal/api (server.go, roles.go, or an old address app_mount.go's
 #      consolePages moves on), and the
 #      index is not empty
-#   C  the skill ships: it is on the hub client's manifest (the agent bundle's
-#      skills/), and docs/dev/CLIENT.md carries the 常见问题 section it answers from
+#   C  the skill ships: it is in the Agent package (conf/agent-bundle.manifest's
+#      skills/ — 承载's, #4826), and docs/dev/CLIENT.md carries the 常见问题
+#      section it answers from
 #   D  current thin-client intents and FAQ coverage survive a retirement: a
 #      shorter index or an unrelated heading sharing a prefix must not hide it
 # Exit 0 = pass.
@@ -122,10 +123,11 @@ done
 ok "B the four hub pages are linked"
 
 # --- C: it ships ----------------------------------------------------------------
-MAN="$ROOT/tokenledger/internal/api/fleetclient/manifest"
-grep -qx 'skills/fleet-help/SKILL.md' "$MAN" || fail "C: skills/fleet-help/SKILL.md is not on the client manifest — run bin/fleet-client-mirror.sh"
+# the Agent package (skills/ included) is 承载's since #4826: it ships there
+python3 "$ROOT/bin/fleet-agent-bundle.py" files --root "$ROOT" | grep -qx 'skills/fleet-help/SKILL.md' \
+  || fail "C: skills/fleet-help/SKILL.md is not in the Agent package (conf/agent-bundle.manifest)"
 grep -q '^## 常见问题' "$ROOT/docs/dev/CLIENT.md" || fail "C: docs/dev/CLIENT.md lost its 常见问题 section"
-ok "C on the client manifest; docs/dev/CLIENT.md has its 常见问题"
+ok "C in the Agent package; docs/dev/CLIENT.md has its 常见问题"
 
 # --- D: current help coverage (issue #4449) --------------------------------------
 # B intentionally accepts heading prefixes. Before #4449, the retired "The keys"

@@ -14,7 +14,8 @@
 #                 copy holds exactly those files, byte for byte; the manifest
 #                 ships the client (fleet-thin.py, fleet-connect.py)
 #   B. install    `curl … | sh` style (the script on stdin, the hub URL filled
-#                 in, nobody to ask): every manifest file lands under
+#                 in, nobody to ask): every manifest file but the served ones
+#                 (issue #4826 — fc_served fetches one on first use, checked) lands under
 #                 ~/.claude/fleet/<path> (the one directory, #1804), identical,
 #                 bin/ executable;
 #                 ~/.local/bin/fleet is the two-line runner of the real one and
@@ -116,8 +117,10 @@ REPO="$(cd "$(dirname "$real")/.." && pwd)"
 CLIENT="$REPO/tokenledger/internal/api/fleetclient"
 MANIFEST="$CLIENT/manifest"
 [ -f "$MANIFEST" ] || { echo "FAIL no manifest at $MANIFEST"; exit 1; }
-# the download list: every manifest path but the installer's
-FILES=$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" { print $1 }' "$MANIFEST")
+# the download list: every manifest path but the installer's and the served
+# ones (issue #4826: on the hub, never installed)
+FILES=$(awk '!/^[[:space:]]*#/ && NF && $2 != "installer" && $2 != "served" { print $1 }' "$MANIFEST")
+SERVED=$(awk '!/^[[:space:]]*#/ && $2 == "served" { print $1 }' "$MANIFEST")
 
 hval() { sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2=//p" "$1/.config/claude-fleet/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' "; }
 
@@ -141,15 +144,22 @@ n=$(cd "$SBC/pack" && find . -type f ! -name doc.go | wc -l | tr -d ' ')
 echo '# edited' >> "$SB/bin/fleet"
 out=$(bash "$SB/bin/fleet-client-pack.sh" --check 2>&1) && bad "A an edit after packing passed --check" \
   || { printf '%s\n' "$out" | grep -q '^stale: pack/bin/fleet ' && ok "A an edit after packing is stale (--check)" || bad "A stale: $out"; }
-grep -vx 'bin/fleet-lang.sh' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "$SBC/manifest"
+grep -vx 'bin/fleet_iso.py' "$SBC/manifest" > "$SBC/m.tmp" && mv "$SBC/m.tmp" "$SBC/manifest"
 FLEET_PACK_VENDOR=0 bash "$SB/bin/fleet-client-pack.sh" >/dev/null 2>&1
-[ ! -e "$SBC/pack/bin/fleet-lang.sh" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
+[ -e "$SB/bin/fleet_iso.py" ] && [ ! -e "$SBC/pack/bin/fleet_iso.py" ] && bash "$SB/bin/fleet-client-pack.sh" --check >/dev/null 2>&1 \
   && ok "A a file the manifest dropped leaves the pack" || bad "A a dropped file stayed in the pack"
 for must in bin/fleet bin/fleet-login.py bin/fleet-connect.py bin/fleet_dispatch.py bin/fleet-thin.py bin/fleet-client-retire.sh conf/fleet-palette.conf; do
   printf '%s\n' "$FILES" | grep -qxF "$must" && ok "A manifest lists $must" || bad "A manifest does not list $must"
 done
 [ "$(awk '!/^[[:space:]]*#/ && $2 == "installer" { print $1 }' "$MANIFEST")" = bin/fleet-install.sh ] \
   && ok "A the manifest's installer is bin/fleet-install.sh" || bad "A installer line: $(grep installer "$MANIFEST")"
+# served, never installed (issue #4826): what a one-line join / install curls
+for must in bin/fleet-node-join.sh bin/fleet-node-install.sh bin/fleet-release-lib.sh bin/fleet-release-fetch.py bin/fleet-release-verify.py; do
+  printf '%s\n' "$SERVED" | grep -qxF "$must" && ok "A $must is served" || bad "A $must is not served"
+done
+for never in bin/fleet-lib.sh hooks/bash-guard.py conf/agent-bundle.manifest; do
+  grep -q "^$never\b" "$MANIFEST" && bad "A the client package still carries $never" || ok "A the client package carries no $never"
+done
 
 fi
 
@@ -171,7 +181,7 @@ class H(BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers(); return
         sha = hashlib.sha256(b).hexdigest()
-        if os.path.exists(os.path.join(W, "corrupt")) and name == "bin/fleet-connect.py":
+        if os.path.exists(os.path.join(W, "corrupt")) and name in ("bin/fleet-connect.py", "bin/fleet-drill.sh"):
             b = b"<html>proxy error</html>\n"   # the body changes, the header does not
         self.send_response(200)
         self.send_header("Content-Type", ct)
@@ -251,6 +261,20 @@ echo "$out" | grep -q '要承载：再跑一次本命令，或 fleet host on' &&
 # The installed dispatcher works from the sandbox through the runner.
 out2=$("$HOME/.local/bin/fleet" --help 2>&1); rc=$?
 [ "$rc" = 0 ] && echo "$out2" | grep -q 'fleet login renew' && ok "B installed fleet --help" || bad "B installed fleet: rc=$rc $out2"
+# served (issue #4826): never installed; fc_served fetches one on first use from
+# the hub this client came from (.client-version), SHA-256 checked, executable;
+# a download that does not match its sum leaves nothing behind
+sv=''; for f in $SERVED; do [ -e "$ROOT/$f" ] && sv="$sv $f"; done
+[ -z "$sv" ] && ok "B no served file installed ($(printf '%s\n' "$SERVED" | wc -l | tr -d ' ') on the hub)" || bad "B served files installed:$sv"
+out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-node-join.sh bin/fleet-hub-url.sh; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
+[ "$out2" = "rc=0 " ] && cmp -s "$ROOT/bin/fleet-node-join.sh" "$REPO/bin/fleet-node-join.sh" && [ -x "$ROOT/bin/fleet-node-join.sh" ] \
+  && cmp -s "$ROOT/bin/fleet-hub-url.sh" "$REPO/bin/fleet-hub-url.sh" && ok "B fc_served fetches served files from the hub, identical, executable" || bad "B fc_served: $out2"
+: > "$WORK/corrupt"
+out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-drill.sh; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
+rm -f "$WORK/corrupt"
+case $out2 in "rc=1 取不到 bin/fleet-drill.sh"*) [ ! -e "$ROOT/bin/fleet-drill.sh" ] && [ -z "$(find "$ROOT/bin" -name '*.fetch.*')" ] \
+  && ok "B a fetch that fails its SHA-256 → rc 1, nothing left" || bad "B corrupt fetch left files" ;; *) bad "B corrupt fetch: $out2" ;; esac
+rm -f "$ROOT/bin/fleet-node-join.sh" "$ROOT/bin/fleet-hub-url.sh"
 
 # ── C — a second run adds nothing ───────────────────────────────────────────
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
@@ -755,7 +779,7 @@ import hashlib, io, os, sys, tarfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 REPO, MAN, W = sys.argv[1:4]
 names = [l.split()[0] for l in open(MAN) if l.strip() and not l.lstrip().startswith("#")
-         and not (len(l.split()) > 1 and l.split()[1] == "installer")]
+         and not (len(l.split()) > 1 and l.split()[1] in ("installer", "served"))]
 def body(name):
     if name == "conf/vendor-tmux.lock" and os.path.exists(os.path.join(W, "lock")):
         return open(os.path.join(W, "lock"), "rb").read()
@@ -835,7 +859,7 @@ for f in $FILES; do cmp -s "$KH/.claude/fleet/$f" "$REPO/$f" || kmiss="$kmiss $f
 KV="$KH/.local/share/claude-fleet-vendor/bin/tmux"
 [ -x "$KV" ] && cmp -s "$KV" "$K/vt/tmux" && echo "$out" | grep -q '^tmux: 3.7c 已就绪（随包带的' \
   && ok "K the bundle's static tmux is in ~/.local/share/claude-fleet-vendor/bin — no Homebrew" || bad "K vendor tmux: $(ls -la "$(dirname "$KV")" 2>&1) $out"
-ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
+ft=$(env -i HOME="$KH" PATH="$KP" bash -c '. "$1/fleet-client-core.sh" >/dev/null 2>&1; fleet_find_tool tmux' _ "$KH/.claude/fleet/bin" 2>&1)
 [ "$ft" = "$KV" ] && ok "K fleet_find_tool tmux → the static one" || bad "K fleet_find_tool tmux: $ft"
 [ -z "$(hval "$KH" FLEET_CLIENT_LAYOUT)" ] && ok "K no retired layout written" || bad "K retired layout written"
 # the newcomer's screen before `fleet` (issue #2347, EPIC #2259): what to type, no fleet word
