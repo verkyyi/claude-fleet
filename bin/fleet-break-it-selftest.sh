@@ -6501,7 +6501,8 @@ drill_repo_authority_spelling() {
 }
 
 drill_repo_start_unobserved() {
-  CAP=30; local t0 out
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 out
   t0=$(now)
   out=$(python3 "$BIN/fleet_repo_authority_test.py" \
           PoolAuthorityTests.test_missing_receipt_says_why \
