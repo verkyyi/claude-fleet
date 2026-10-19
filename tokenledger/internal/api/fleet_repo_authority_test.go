@@ -366,3 +366,127 @@ func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 		t.Fatalf("the live host's owners changed:\n%s\n%s", strip(before), strip(after))
 	}
 }
+
+// A fleet row no machine reports any more, whose machine has since reported a
+// newer row, is superseded (claude-fleet#4877): listed apart in
+// superseded_hosts, no host, no blocker. An absent row with no successor still
+// blocks; another repo's manifest stays byte for byte.
+func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
+	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
+	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	other := FleetTicketsPath + "/authority?repo=example/other-repo"
+	st := h.srv.Store
+	touch := func(ep, host, hw string) {
+		if _, err := st.DB().Exec(`UPDATE endpoints SET hostname = ?, os_user = 'frank', machine_id = ? WHERE endpoint_id = ?`, host, hw, ep); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.enroll(t, "mac-c-old")
+	h.enroll(t, "mac-z")
+	touch("ep_mac-c", "mac-c", "hw-c")
+	touch("ep_mac-c-old", "mac-c", "hw-c") // the same login, joined again
+	touch("ep_mac-z", "mac-z", "hw-z")
+	rep := func(f control.Fleet) store.FleetReport {
+		return store.FleetReport{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Checkout: f.Checkout,
+			Agent: f.Agent, State: f.State, WorkerCount: f.Count, WorkersJSON: string(f.Workers)}
+	}
+	machineD := "44444444-4444-4444-8444-444444444444"
+	sameMachine := fakeFleet(t, machineB, "fleet-old", writeRepo, "/u/frank/old")
+	rejoined := fakeFleet(t, machineC, "fleet-rejoined", writeRepo, "/u/frank/claude-fleet")
+	stranger := fakeFleet(t, machineD, "fleet-z", writeRepo, "/u/frank/claude-fleet")
+	_, otherBefore := ticketCall(t, h, auth, http.MethodGet, other, nil)
+	t0 := time.Now().Add(-time.Hour)
+	snap := func(ep, host string, machine string, at time.Time, fs ...control.Fleet) {
+		var reps []store.FleetReport
+		for _, f := range fs {
+			reps = append(reps, rep(f))
+		}
+		if _, err := st.RecordFleetSnapshot(ep, host, "frank", machine, reps, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap("ep_mac-c", "mac-c", machineB, t0, sameMachine, f4)
+	snap("ep_mac-c-old", "mac-c", machineC, t0, rejoined)
+	snap("ep_mac-c-old", "mac-c", machineC, t0.Add(time.Second))
+	snap("ep_mac-z", "mac-z", machineD, t0, stranger)
+	snap("ep_mac-z", "mac-z", machineD, t0.Add(time.Second))
+	snap("ep_mac-c", "mac-c", machineB, time.Now(), f4)
+
+	code, m := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	blockers, _ := json.Marshal(m["blockers"])
+	if code != 200 || strings.Contains(string(blockers), sameMachine.FleetID) || strings.Contains(string(blockers), rejoined.FleetID) {
+		t.Fatalf("a superseded row still blocks: %d %s", code, blockers)
+	}
+	if !strings.Contains(string(blockers), stranger.FleetID) {
+		t.Fatalf("an absent row with no successor stopped blocking: %s", blockers)
+	}
+	got := map[string]string{}
+	for _, x := range m["superseded_hosts"].([]any) {
+		e := x.(map[string]any)
+		got[e["fleet_id"].(string)] = e["superseded_by"].(string)
+	}
+	if len(got) != 2 || got[sameMachine.FleetID] != f4.FleetID || got[rejoined.FleetID] != f4.FleetID {
+		t.Fatalf("superseded_hosts: %v", m["superseded_hosts"])
+	}
+	nodes, _ := json.Marshal(m["nodes"])
+	if !strings.Contains(string(nodes), f5.FleetID) || !strings.Contains(string(nodes), f4.FleetID) || strings.Contains(string(nodes), sameMachine.FleetID) {
+		t.Fatalf("nodes: %s", nodes)
+	}
+	_, otherAfter := ticketCall(t, h, auth, http.MethodGet, other, nil)
+	for _, k := range []string{"blockers", "nodes", "retired_hosts", "superseded_hosts", "legacy_owners"} {
+		if !reflect.DeepEqual(otherBefore[k], otherAfter[k]) {
+			t.Fatalf("another repo's %s changed: %v → %v", k, otherBefore[k], otherAfter[k])
+		}
+	}
+}
+
+// supersededBy itself: a present row is never superseded (a live host that is
+// not capable keeps blocking), and a successor observed earlier proves nothing.
+func TestSupersededByRules(t *testing.T) {
+	now := time.Now()
+	eps := func(id string) *store.Endpoint {
+		if id == "" {
+			return nil
+		}
+		return &store.Endpoint{ID: id, MachineID: "hw", OSUser: "u"}
+	}
+	old := store.FleetRow{FleetID: "a", MachineID: "m", EndpointID: "e", Repo: writeRepo, ObservedAt: now.Add(-time.Hour)}
+	succ := store.FleetRow{FleetID: "b", MachineID: "m", EndpointID: "e", Repo: writeRepo, Present: true, ObservedAt: now}
+	if g, ok := supersededBy(old, writeRepo, []store.FleetRow{old, succ}, eps); !ok || g.FleetID != "b" {
+		t.Fatal("same machine, newer present row: superseded")
+	}
+	elsewhere := succ
+	elsewhere.Repo = "example/other-repo"
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, elsewhere}, eps); ok {
+		t.Fatal("a successor of another repo superseded it")
+	}
+	live := old
+	live.Present = true
+	if _, ok := supersededBy(live, writeRepo, []store.FleetRow{live, succ}, eps); ok {
+		t.Fatal("a present row was superseded")
+	}
+	early := succ
+	early.ObservedAt = now.Add(-2 * time.Hour)
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, early}, eps); ok {
+		t.Fatal("a successor observed before the row superseded it")
+	}
+	absent := succ
+	absent.Present = false
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, absent}, eps); ok {
+		t.Fatal("an absent successor superseded it")
+	}
+	retired := func(id string) *store.Endpoint {
+		e := eps(id)
+		if id == "e2" {
+			at := now
+			e.RetiredAt = &at
+		}
+		return e
+	}
+	gone := succ
+	gone.MachineID, gone.EndpointID = "m2", "e2"
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, gone}, retired); ok {
+		t.Fatal("a retired successor superseded it")
+	}
+}

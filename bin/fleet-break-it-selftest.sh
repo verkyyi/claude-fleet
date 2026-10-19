@@ -6619,6 +6619,23 @@ drill_authority_orphan_worker_start() {
   SECS=$(since "$t0")
 }
 
+# ---- authority-superseded-fleet-row (#4877): fleet rows are never deleted,
+# so an old row of the same machine + login that a newer row replaced stayed
+# present=0 and asked for a capable observation that never comes. The manifest
+# now lists it in superseded_hosts; a row with no successor still blocks.
+drill_authority_superseded_fleet_row() {
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 a="$ROOT/tokenledger/internal/api/fleet_repo_authority.go"
+  t0=$(now)
+  grep -q 'supersededBy(f, a.Repo, fs, eps)' "$a" \
+    || { WHY="repoAuthorityInventory no longer skips a superseded fleet row"; return 1; }
+  grep -q '"superseded_hosts": superseded' "$a" \
+    || { WHY="the authority manifest no longer lists superseded fleet rows apart"; return 1; }
+  _drill_go_tests 'TestSupersededByRules TestRepoAuthoritySupersededFleetRowBlocksNothing' "$ROOT/tokenledger/internal/api/fleet_repo_authority_test.go" \
+    '被取代的旧 fleet 行：同一台机器（fleet machine / endpoint / 硬件 machine_id + os_user）之后报过 present 行，它列进 superseded_hosts 不再挡；没有后继的 absent 行、present 而不 capable 的行照旧挡，另一个仓库一字不变（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_native_continue_once() {
   CAP=15; local t0 out
   t0=$(now)
