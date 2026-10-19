@@ -6673,7 +6673,20 @@ drill_authority_other_owner_blocks() {
   _drill_go_tests 'TestOwnerAuthorityDryRunAndPerOwnerCutover' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
   _drill_go_tests 'TestOwnerAuthorityTwoPeopleOneRepo' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
     '同一个仓库两个人：A 的 legacy 会话、local start 不进 B 的 blocker；B 冻结 / 切到 hub 后 A 照常 legacy 开会话，A 的 gate 不动、A 的机器收不到推送（go test）' || return 1
+  # The node half (#4901): the selection is the login's, never a repo overlay's.
+  grep -q 'FLEET_VIEW_LANDED_SECS FLEET_TASK_AUTHORITY"' "$BIN/fleet-lib.sh" \
+    || { WHY="FLEET_TASK_AUTHORITY is a per-repo key again"; return 1; }
+  _drill_authority_logins || return 1
   SECS=$(since "$t0")
+}
+
+# The node half of both #4896 rows (#4901): one machine, two logins, one repo —
+# alice's cutover writes her fleet.conf [node] only, bob opens / restarts /
+# settles on legacy throughout, each settle touches only its own node's starts.
+_drill_authority_logins() {
+  local out
+  out=$(bash "$BIN/fleet-task-authority-login-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  WHAT="${WHAT:+${WHAT}；}同一台机器两个 login、同一个仓库：A 切到 hub 只写 A 的 fleet.conf [node]，B 照常 legacy 开会话、重启、settle，各自只结清本节点的 start（fleet-task-authority-login-selftest）"
 }
 
 # ---- authority-owner-cutover (#4896): one person's whole road, alone — dry
@@ -6689,6 +6702,7 @@ drill_authority_owner_cutover() {
   _drill_go_tests 'TestRepoAuthorityStopBoundToCurrentNative TestRepoAuthorityRollbackRetainsCompletedExecution' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
   _drill_go_tests 'TestOwnerAuthorityTwoPeopleOneRepo' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
     '一个人的全程：dry-run 零写入，freeze 只挡本人，本人 legacy 会话凭原生停止回执 stop_ack 后 apply，再 freeze → rollback；每步按 revision CAS、幂等、写审计（go test）' || return 1
+  _drill_authority_logins || return 1
   SECS=$(since "$t0")
 }
 

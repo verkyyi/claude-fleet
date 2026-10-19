@@ -528,8 +528,9 @@ if [ -z "$wid" ]; then
   arepo=$REPO_ARG
   case "$CKEY" in ?*:*) [ -n "$arepo" ] || arepo=$(fleet_repo_for_slug "$sess" "${CKEY%%:*}" 2>/dev/null) ;; esac
   [ -n "$arepo" ] || arepo=$(fleet_repos "$sess" | awk 'NR == 1 { r = $0 } END { if (NR == 1) print r }')
-  if [ -n "$arepo" ] && [ "$(fleet_repo_conf_get "$sess" "$arepo" FLEET_TASK_AUTHORITY 2>/dev/null)" = hub ]; then
-    finish NO-WORKER "$arepo is hub-authoritative: dispatch #$NUM as a task (the \`task\` tool) and await its T<n> — no issue-number spawn"
+  # Who runs tasks is this login's person's (issue #4901), not the repo's.
+  if [ -n "$arepo" ] && [ "$(fleet_task_authority "$sess" "$arepo")" = hub ]; then
+    finish NO-WORKER "your tasks are hub-authoritative: dispatch #$NUM as a task (the \`task\` tool) and await its T<n> — no issue-number spawn"
   fi
   sargs=("$NUM" "$sess" --origin "$KEY")
   [ -n "$TASK" ] && sargs+=(--task "$TASK")   # the record's worker carries @task (#3330)

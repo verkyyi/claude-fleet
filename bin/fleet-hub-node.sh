@@ -286,8 +286,9 @@ case "${1:-}" in
     printf 'outbox\t%s\nworkers\t%s\nmovein\t%s\nattach\t%s\ntest\t1\ntask\t1\nlaunch_v1\t1\nrepo_authority_v1\t1\nrepo_authority_sync\t1\ntask_recovery_v1\t1\n' "$(fleet_hub_outbox)" "$(fleet_hub_cache)" "$(fleet_hub_movein)" "$(fleet_hub_attach)"
     exit 0 ;;
   replay) exec python3 "$BIN/fleet_task_recovery.py" replay ;;
-  # The hub's word that a repo's authority moved (issue #4730): every local
-  # overlay of that repo re-reads it — the mode comes from the hub's gate read.
+  # The hub's word that this login's person's authority moved (issues #4730,
+  # #4901 — sent once per repo a host hosts): fleet.conf [node] re-reads it,
+  # the mode from the hub's gate read; the repo is only the push's label.
   authority-sync) [ -n "${2:-}" ] || die 2 "usage: fleet-hub-node.sh authority-sync <owner/repo>"
     exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync ;;
   recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;

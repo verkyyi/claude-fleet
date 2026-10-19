@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Explicit per-repo authority migration; no GitHub call or background worker.
+"""Explicit task-authority migration; no GitHub call or background worker.
+
+The authority is this login's PERSON's (issue #4901, the hub's #4896): the hub
+keeps one row per person, and this login's selection is fleet.conf [node]'s
+FLEET_TASK_AUTHORITY. A repo is only a parameter — it names a local start's
+worktree, or narrows a manifest's lists — and never takes part in a fence.
 
 The manifest is a read-only inventory. Mutations name that manifest, so both
-the hub revision and local repo settings are checked before a cutover.
+the hub revision and this login's setting are checked before a cutover.
 """
 import argparse
 import fcntl
@@ -10,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import signal
@@ -33,138 +39,107 @@ def repo_identity(value):
     return repo
 
 
-def registered_repo(session, repo):
-    # Use the fleet's registration reader; never guess an overlay from the Hub's
-    # lower-case identity, and never fall back to another repo's fleet settings.
-    result = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_target_repo "$2" "$3"',
-                             "_", str(BIN), session, repo], capture_output=True, text=True)
-    registered = result.stdout.strip()
-    if result.returncode or ticket.norm_repo(registered) != repo:
-        raise ValueError("repo registration is unknown or ambiguous; check fleet-repo.sh list --session " + session)
-    return registered
+def conf_dir():
+    return Path(os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet"))
 
 
-def setting(session, repo, key):
-    result = subprocess.run(["bash", str(BIN / "fleet-repo.sh"), "get", key,
-                             "--session", session, repo, "--tsv"],
-                            capture_output=True, text=True, check=True)
-    fields = result.stdout.rstrip("\n").split("\t")
-    if len(fields) != 3 or fields[0] != repo:
-        raise ValueError("repo settings did not resolve explicitly")
-    return fields[2]
+AUTH_LINE = re.compile(rb"^[ \t]*(export[ \t]+)?FLEET_TASK_AUTHORITY=")
 
 
-def local_settings(session, repo):
-    repo = registered_repo(session, repo_identity(repo))
-    values = {k: setting(session, repo, k) for k in
-              ("FLEET_TASK_AUTHORITY", "FLEET_TICKETS", "FLEET_FORGE", "FLEET_LAND")}
-    # Resolve the repo's own overlay, never the fallback fleet conf.
-    env = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
-    slug = repo.replace("/", "-")
-    path = Path(env) / "fleets" / session / "repos" / (slug + ".conf")
-    if not path.is_file():
-        raise ValueError("repo needs its own registered overlay before migration")
-    raw = path.read_bytes()
-    rest = b"".join(line for line in raw.splitlines(keepends=True)
-                    if not line.lstrip().startswith(b"FLEET_TASK_AUTHORITY="))
-    return dict(settings=values, sha256=hashlib.sha256(raw).hexdigest(),
-                base_sha256=hashlib.sha256(rest).hexdigest()), path
+NODE_GUARD = (b'if [ "${FLEET_SHELL:-0}" != 1 ]; then', b"fi  # ---- [node] end ----", b":")
 
 
-def manifest(session, repo):
-    repo = repo_identity(repo)
-    local, _ = local_settings(session, repo)
-    data = ticket.api("GET", "/authority", query={"repo": repo, "rollback": "1"})
-    return dict(version=1, repo=repo, session=session, local=local, hub=data,
-                scope="fixture/source until separately live-accepted",
+def login_settings():
+    # This login's selection (issue #4901): fleet.conf [node]'s line, the one the
+    # sync and the cutover write. The rest of the file's settings are digested
+    # apart — blank lines, comments and the [node] guard aside, which the first
+    # write may add — so an exact repeat of a stage is still recognised.
+    path = conf_dir() / "fleet.conf"
+    raw = path.read_bytes() if path.is_file() else b""
+    mode, rest = "", []
+    for line in raw.splitlines(keepends=True):
+        bare = line.strip()
+        if AUTH_LINE.match(line):
+            mode = line.split(b"=", 1)[1].strip().strip(b"\"'").decode("utf-8", "replace")
+        elif bare and not bare.startswith(b"#") and bare not in NODE_GUARD:
+            rest.append(line)
+    return dict(settings=dict(FLEET_TASK_AUTHORITY=mode), sha256=hashlib.sha256(raw).hexdigest(),
+                base_sha256=hashlib.sha256(b"".join(rest)).hexdigest()), path
+
+
+def overlay_lines():
+    # compat-1v: 下一批删 — repo overlays still spelling the old per-repo line
+    # (fleet-conf.sh migrate comments them out; fleet_task_authority reads one).
+    found = []
+    for f in sorted(conf_dir().glob("fleets/*/repos/*.conf")):
+        try:
+            if any(AUTH_LINE.match(line) for line in f.read_bytes().splitlines()):
+                found.append(str(f))
+        except OSError:
+            pass
+    return found
+
+
+def manifest(repo=None):
+    local, path = login_settings()
+    query = {"rollback": "1"}
+    if repo:
+        query["repo"] = repo_identity(repo)
+    data = ticket.api("GET", "/authority", query=query)
+    owner = (data.get("authority") or {}).get("owner", "") if isinstance(data, dict) else ""
+    return dict(version=2, scope="owner", owner=owner, conf=str(path), repo=repo_identity(repo) if repo else "",
+                local=local, hub=data, scope_note="fixture/source until separately live-accepted",
                 preserved=["FLEET_TICKETS", "FLEET_FORGE", "FLEET_LAND", "existing ticket/PR references"])
 
 
-def update_local(path, mode):
-    # Only the selected repo is touched. The old ticket home/code hosting/land
-    # modes remain byte-for-byte, and old issue integers are never reinterpreted.
-    lines = path.read_text().splitlines(keepends=True)
-    lines = [line for line in lines if not line.lstrip().startswith("FLEET_TASK_AUTHORITY=")]
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] += "\n"
-    lines.append('FLEET_TASK_AUTHORITY="%s"\n' % mode)
-    tmp = path.with_name(path.name + ".authority.tmp")
-    try:
-        with open(tmp, "x") as out:
-            os.chmod(tmp, path.stat().st_mode & 0o777)
-            out.write("".join(lines))
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+def update_local(mode):
+    # Only this login's [node] line is written, through the config file's one
+    # writer; every repo's ticket home / forge / land stays byte for byte, and old
+    # issue integers are never reinterpreted.
+    env = dict(os.environ, FLEET_CONF_DIR=str(conf_dir()))
+    subprocess.run(["bash", str(BIN / "fleet-conf.sh"), "set-node", "FLEET_TASK_AUTHORITY",
+                    'FLEET_TASK_AUTHORITY="%s"' % mode], env=env, check=True, capture_output=True, text=True)
 
 
-def sync(repo):
-    # Every host of the repo follows the hub's selection (issue #4730): a cutover
-    # rewrote only the overlay of the host that ran it, so another host's reader
-    # of FLEET_TASK_AUTHORITY saw legacy for a repo the hub owned. The hub says
-    # "re-read" to each capable host; the mode is read back here with this
-    # node's own credential, never taken from the push. Unknown leaves the
-    # overlay alone. legacy with no line stays byte for byte.
-    repo = repo_identity(repo)
-    a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+def conf_lock():
+    path = conf_dir() / "fleet.conf.authority.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return open(str(path), "a")
+
+
+def sync(repo=None):
+    # This login follows its person's selection (issues #4730, #4901): the hub
+    # says "re-read" (once per repo a capable host hosts — any of them will do);
+    # the mode is read back here with this node's own credential, never taken
+    # from the push. Unknown leaves the setting alone; legacy with no line (and
+    # no old overlay line to outvote) stays byte for byte.
+    a = ticket.api("GET", "/authority", query={"gate": "1"})
     mode = a.get("mode") if isinstance(a, dict) else None
     if mode not in ("legacy", "frozen", "hub"):
-        raise ValueError("repo authority is unknown; overlays left as they are")
-    env = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
+        raise ValueError("task authority is unknown; this login's setting left as it is")
     changed = []
-    for repos in sorted((Path(env) / "fleets").glob("*/repos")):
-        session = repos.parent.name
-        try:
-            _, path = local_settings(session, repo)
-        except (ValueError, subprocess.SubprocessError):
-            continue  # this fleet does not host the repo with its own overlay
-        with open(str(path) + ".authority.lock", "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            local, path = local_settings(session, repo)
-            current = local["settings"]["FLEET_TASK_AUTHORITY"]
-            if current == mode or (mode == "legacy" and not current):
-                continue
-            update_local(path, mode)
-            changed.append(session)
-    print(json.dumps(dict(repo=repo, mode=mode, revision=a.get("revision"), changed=changed)))
+    with conf_lock() as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        local, path = login_settings()
+        current = local["settings"]["FLEET_TASK_AUTHORITY"]
+        if current != mode and not (mode == "legacy" and not current and not overlay_lines()):
+            update_local(mode)
+            changed.append(path.name)
+    print(json.dumps(dict(repo=repo_identity(repo) if repo else "", owner=a.get("owner", ""), mode=mode,
+                          revision=a.get("revision"), changed=changed)))
 
 
 NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
 START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")
 
 
-def init_new(repo, tickets):
-    # A repo this fleet is about to host starts on the hub when the hub has never
-    # seen it (issue #4885): one POST, revision 0 -> 1 mode=hub. Prints the mode
-    # the new overlay takes — hub, or legacy when the hub refused (the repo has a
-    # history somewhere, so it takes the explicit cutover). Unreachable raises.
-    # The key is the repo's own, so a rerun after a failed overlay write replays.
-    repo = repo_identity(repo)
-    if tickets not in ("hub", "github"):
-        raise ValueError("--tickets takes hub or github")
-    key = "repo-init-" + hashlib.sha256(repo.encode()).hexdigest()
-    try:
-        a = ticket.api("POST", "/authority", query={"repo": repo},
-                       body=dict(action="init", expected_revision=0, idempotency_key=key,
-                                 legacy_tickets=tickets))
-    except ticket.Fail as exc:
-        if exc.rc == 4:
-            raise
-        try:
-            a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
-        except ticket.Fail as again:
-            if again.rc == 4:
-                raise
-            a = {}
-        # Already ours on the hub (an earlier add of this repo) is still hub.
-        mode = a.get("mode") if isinstance(a, dict) else None
-        print("hub" if mode == "hub" else "legacy")
-        if mode != "hub":
-            print("repo authority: %s stays legacy — %s" % (repo, error_reason(exc)), file=sys.stderr)
-        return
-    print("hub" if isinstance(a, dict) and a.get("mode") == "hub" else "legacy")
+def init_new(repo):
+    # A new repo selects nothing any more (issue #4901): the authority is the
+    # person's. Kept one version for an older caller — says legacy, asks nothing.
+    # compat-1v: 下一批删
+    repo_identity(repo)
+    print("legacy")
+    print("task authority: a new repo selects nothing — it is this login's person's (issue #4901)", file=sys.stderr)
 
 
 def check_start_ack(expected, ack, phase, proof=None):
@@ -222,12 +197,14 @@ def prove_stopped(proof):
 
 
 def gate(repo, finish):
+    # The person's authority decides (issue #4901); the repo only names the
+    # local start the last gate reserves, and the accepted task it must match.
     repo = repo_identity(repo)
-    a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+    a = ticket.api("GET", "/authority", query={"gate": "1"})
     if not isinstance(a, dict) or a.get("mode") not in ("legacy", "frozen", "hub"):
-        raise ValueError("repo authority is unknown; no local fallback")
+        raise ValueError("task authority is unknown; no local fallback")
     if a["mode"] == "frozen":
-        raise ValueError("repo dispatch is frozen; drain/cutover must finish first")
+        raise ValueError("your dispatch is frozen; drain/cutover must finish first")
     ref = ""
     if a["mode"] == "hub":
         if os.environ.get("FLEET_LAUNCH"):
@@ -343,7 +320,7 @@ for pool_owner in "${FLEET_LAUNCH_SESSION:-}" "$pool_socket"; do
 done
 fleet_load_conf "$s"
 r=$(fleet_window_repo "$s" "$TMUX_PANE")
-if [ -z "$r" ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "${FLEET_TASK_AUTHORITY:-}" ]; }; then exit 0; fi
+if [ -z "$r" ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$(fleet_task_authority "$s" "$r")" ]; }; then exit 0; fi
 u=$(fleet_uuid "$s") || exit 1
 f=$(fleet_window_fid "$s" "$TMUX_PANE") || exit 1
 printf '%s\\t%s/%s' "$r" "$u" "$f"
@@ -520,7 +497,34 @@ def authority_log(line):
         out.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + line + "\n")
 
 
+def hosted_repos():
+    """Every repo a fleet of this login hosts, canonical and once each: the
+    local starts a person's settle walks when no repo is named (issue #4901)."""
+    script = '. "$1/fleet-lib.sh"; fleet_each_conf | while IFS=$\'\\t\' read -r s c; do [ -n "$s" ] && fleet_repos "$s"; done'
+    out = subprocess.run(["bash", "-c", script, "_", str(BIN)], capture_output=True, text=True, check=True).stdout
+    repos = []
+    for line in out.split():
+        r = ticket.norm_repo(line)
+        if r and r not in repos:
+            repos.append(r)
+    return repos
+
+
 def settle(repo, apply):
+    """One repo's settle (below), else every hosted repo's, printed as one doc."""
+    if repo:
+        print(json.dumps(settle_one(repo, apply), indent=2))
+        return
+    docs = [settle_one(r, apply) for r in hosted_repos()]
+    counts = {}
+    for d in docs:
+        for k, v in d["counts"].items():
+            counts[k] = counts.get(k, 0) + v
+    print(json.dumps(dict(repo="", endpoint_id=docs[0]["endpoint_id"] if docs else "", apply=apply,
+                          counts=counts, repos=docs), indent=2))
+
+
+def settle_one(repo, apply):
     """Close this node's own dead local starts with the existing actions
     (issue #4832): reserved and unheld -> cancel, begun with no native and
     unheld -> unobserved, observed whose native is proven stopped -> stopped.
@@ -570,7 +574,7 @@ def settle(repo, apply):
             bucket = "failed"
         counts[bucket] = counts.get(bucket, 0) + 1
         plan.append(row)
-    print(json.dumps(dict(repo=repo, endpoint_id=endpoint, apply=apply, counts=counts, starts=plan), indent=2))
+    return dict(repo=repo, endpoint_id=endpoint, apply=apply, counts=counts, starts=plan)
 
 
 def match_ticket_ref(repo, number, ref):
@@ -595,97 +599,97 @@ def ticket_ref(repo, number):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("repo")
-    p.add_argument("--session", default=os.environ.get("FLEET_SESSION", ""))
+    # The repo is a parameter, never the authority's scope (issue #4901): it names
+    # a start's worktree (gate / finish / cancel-start), narrows a manifest's
+    # lists, or is ignored (sync). The authority is this login's person's.
+    p.add_argument("repo", nargs="?", default="")
+    p.add_argument("--session", default="", help="ignored: the authority is the login's (issue #4901)")
     actions = p.add_mutually_exclusive_group()
     for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync", "settle"):
         actions.add_argument("--" + a, action="store_true")
     actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
     actions.add_argument("--adopt", help="one explicit gh:owner/repo#N reference")
-    actions.add_argument("--init-new", action="store_true",
-                         help="a repo about to be hosted: start it on the hub if the hub never saw it")
-    p.add_argument("--tickets", default="github", help="with --init-new: where its tickets live")
+    actions.add_argument("--init-new", action="store_true", help=argparse.SUPPRESS)  # compat-1v: 下一批删
+    p.add_argument("--tickets", default="github", help=argparse.SUPPRESS)  # compat-1v: 下一批删
     p.add_argument("--title", default="")
     p.add_argument("--body-file")
     p.add_argument("--manifest")
     argv = sys.argv[1:] if argv is None else list(argv)
     if "--settle" in argv:
-        # --settle [--apply]: its own pair, beside the cutover's --apply.
+        # --settle [--apply] [<owner/repo>]: its own pair, beside the cutover's
+        # --apply. No repo = every repo this login hosts.
         rest = [a for a in argv if a not in ("--settle", "--apply")]
-        if len(rest) != 1 or rest[0].startswith("-"):
-            raise ValueError("usage: fleet_repo_authority.py <owner/repo> --settle [--apply]")
-        settle(rest[0], "--apply" in argv)
+        if len(rest) > 1 or (rest and rest[0].startswith("-")):
+            raise ValueError("usage: fleet_repo_authority.py [<owner/repo>] --settle [--apply]")
+        settle(rest[0] if rest else "", "--apply" in argv)
         return
     args = p.parse_args(argv)
-    repo = repo_identity(args.repo)
-    if args.session and ("/" in args.session or args.session in (".", "..")):
-        raise ValueError("--session must name one fleet")
+    repo = repo_identity(args.repo) if args.repo else ""
+    if args.gate or args.finish or args.cancel_start or args.init_new:
+        if not repo:
+            raise ValueError("name the repo whose local start this is (owner/repo)")
     if args.gate or args.finish:
-        if args.session:
-            registered_repo(args.session, repo)
         gate(repo, args.finish)
         return
     if args.sync:
         sync(repo)
         return
     if args.init_new:
-        init_new(repo, args.tickets)
+        init_new(repo)
         return
     if args.cancel_start:
         print(json.dumps(start_call(repo, args.cancel_start, "cancel"), indent=2))
         return
-    if not args.session or "/" in args.session or args.session in (".", ".."):
-        raise ValueError("--session is required")
     action = next((x for x in ("freeze", "apply", "rollback") if getattr(args, x)), "")
     if args.stop_receipt:
         action = "stop_ack"
     if args.adopt:
         action = "adopt"
+        repo = repo or repo_identity(ticket.parse(args.adopt)[1])
     if not action:
-        print(json.dumps(manifest(args.session, repo), indent=2))
+        print(json.dumps(manifest(repo), indent=2))
         return
     if not args.manifest:
         raise ValueError("save --dry-run to a private file, then supply --manifest FILE")
     before = json.loads(Path(args.manifest).read_text())
-    if before.get("version") != 1 or before.get("repo") != repo or before.get("session") != args.session:
-        raise ValueError("manifest names a different repo/session/version")
-    local, path = local_settings(args.session, repo)
-    # Lock only this repo's overlay. Re-read after acquiring it to refuse edits
-    # made since the manifest; never rewrite repo B or a fleet-wide setting.
-    with open(str(path) + ".authority.lock", "a") as lock:
+    _, path = login_settings()
+    if before.get("version") != 2 or before.get("scope") != "owner" or before.get("conf") != str(path):
+        raise ValueError("manifest is not this login's person's (an older per-repo one?); take a fresh dry-run")
+    # Lock this login's setting. Re-read after acquiring it to refuse edits made
+    # since the manifest; never rewrite a repo's overlay or another login's file.
+    with conf_lock() as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        local, path = local_settings(args.session, repo)
+        local, path = login_settings()
         expected = before["local"]
         a = before["hub"]["authority"]
         wanted = {"freeze": "frozen", "apply": "hub", "rollback": "legacy"}.get(action)
         # Exact repeats may already have written the single authority line.
         if local != expected and not (wanted and local["base_sha256"] == expected["base_sha256"]
                                       and local["settings"] == dict(expected["settings"], FLEET_TASK_AUTHORITY=wanted)):
-            raise ValueError("repo settings changed since manifest; take a fresh dry-run")
-        key = "repo-" + hashlib.sha256(json.dumps([repo, action, a["revision"]]).encode()).hexdigest()
+            raise ValueError("this login's settings changed since manifest; take a fresh dry-run")
+        key = "owner-" + hashlib.sha256(json.dumps([before.get("owner", ""), action, a["revision"]]).encode()).hexdigest()
         data = dict(action=action, expected_revision=a["revision"], idempotency_key=key)
-        if action == "freeze":
-            home = local["settings"]["FLEET_TICKETS"]
-            data["legacy_tickets"] = home or ("hub" if local["settings"]["FLEET_FORGE"] == "none" else "github")
         if action == "stop_ack":
             proof = stopped_receipt(args.stop_receipt, a)
             data.update(worker_id=proof["worker_id"], evidence=json.dumps(proof, sort_keys=True))
-        endpoint = "/authority"
+        endpoint, query = "/authority", {}
         if action == "adopt":
             data = dict(source=args.adopt, title=args.title,
                         body=Path(args.body_file).read_text() if args.body_file else "",
                         expected_revision=a["revision"])
-            endpoint += "/adopt"
-        result = ticket.api("POST", endpoint, body=data, query={"repo": repo})
+            endpoint, query = "/authority/adopt", {"repo": repo}
+        result = ticket.api("POST", endpoint, body=data, query=query)
         if wanted:
-            current = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+            current = ticket.api("GET", "/authority", query={"gate": "1"})
+            if current.get("owner", before.get("owner")) != before.get("owner"):
+                raise ValueError("this login now answers for another person; take a fresh dry-run")
             if current["revision"] != result["revision"] or current["mode"] != wanted:
                 raise ValueError("a newer authority transition superseded this manifest; refresh it")
             # The central freeze/selection commits FIRST. A failed local write
             # is safe and replayable with the same manifest/key.
-            update_local(path, wanted)
-        print(json.dumps(dict(result=result, manifest=manifest(args.session, repo)), indent=2))
+            update_local(wanted)
+        print(json.dumps(dict(result=result, manifest=manifest(before.get("repo") or None)), indent=2))
 
 
 def error_reason(exc):

@@ -156,7 +156,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 会话迁移与历史 | `fleet-move* fleet-history* fleet-migrate* dash-migrate* dash-restore-session*` | 迁移与恢复历史 |
 | 首次使用 | `fleet-onboard* fleet-guide* fleet-doctor-onboard* newcomer-*` | 新人入口与验收 |
 | 内容送达与阅读 | `fleet-open* fleet_open* fleet-show* open-url*` | 打开与文件送达 |
-| 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择任务权威（#4395），没有常驻进程 |
+| 仓库接入与帮助 | `fleet-repo.sh fleet-repo-* fleet_repo_authority* dash-repo-add*` | 仓库注册与选择；显式分阶段选择这个 login 的人的任务权威（#4395、#4901），没有常驻进程 |
 | 编排特殊实现 | `fleet-orchestrator* fleet-role* fleet-manual-sub*` | 角色程序已删（#4340）；剩一版兼容壳 |
 | EPIC 批次 | `fleet-epic* epic-page* fleet-batch-green*` | 批次工作流 |
 | 反馈 | `fleet-feedback*` | 反馈插件 |

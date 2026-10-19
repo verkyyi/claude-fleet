@@ -7,12 +7,14 @@
 #   fleet-conf.sh migrate [--dry-run] [--quiet]   fold the old files into it (each kept as .bak);
 #                                        fills CCQUOTA_FLEET / FLEET_HUB_URL from node.env (#2116);
 #                                        moves the role knobs into the person's layer (#2788);
-#                                        pins every hosted repo's FLEET_TICKETS (#3739)
+#                                        pins every hosted repo's FLEET_TICKETS (#3739);
+#                                        comments out a repo overlay's FLEET_TASK_AUTHORITY (#4901)
 #   fleet-conf.sh set-hub <url> [--host] write FLEET_HUB_URL (+ FLEET_HOST=1 with --host)
 #   fleet-conf.sh line <KEY>             print KEY's assignment line(s) as written (exit 1 = none)
 #   fleet-conf.sh set-line <KEY> <line>  put <line> where KEY's line is, else under [common] (#2134)
 #   fleet-conf.sh drop-line <KEY>        delete KEY's assignment line(s) — the undo of a set-line that added one
 #   fleet-conf.sh set-client <KEY> <line> put <line> where KEY's line is in [client], else first in it (#2260)
+#   fleet-conf.sh set-node <KEY> <line>   put <line> where KEY's line is in [node], else first in it (#4901)
 #   fleet-conf.sh role [--why] · add-role client|node · set-hub … --role client|node — the
 #                                        FLEET_ROLE spellings, read for ONE more version (issue #1806)
 #
@@ -67,7 +69,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 _host_lib() { FLEET_SKIP_GLOBAL_CONF=1 fleet_host_lib; }
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
-usage() { sed -n '4,17p' "$0" | sed 's/^# //' >&2; exit 2; }
+usage() { sed -n '4,19p' "$0" | sed 's/^# //' >&2; exit 2; }
 
 CD="$FLEET_CONF_DIR"
 MC="$CD/fleet.conf"
@@ -313,6 +315,25 @@ _set_client() {
     inside && $0 ~ re { if (!put) print line; put = 1; next }
     { print }
     END { if (!seen) { print ""; print open; print line; print cclose } }
+  ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
+    || { rm -f "$tmp"; return 1; }
+}
+
+# _set_node <file> <KEY> <assignment-line> — the same inside the [node] guard
+# (issue #4901: FLEET_TASK_AUTHORITY is this login's, written by the authority
+# sync). A file with no guard gets one at its end.
+_set_node() {
+  local f="$1" key="$2" line="$3" tmp="$1.tmp.$$" had=0
+  awk -v key="$key" -v open="$NODE_OPEN" -v nclose="$NODE_CLOSE" 'BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
+    $0 == open { inside = 1; next } inside && $0 == nclose { inside = 0 }
+    inside && $0 ~ re { found = 1 } END { exit found ? 0 : 1 }' "$f" && had=1
+  awk -v key="$key" -v line="$line" -v open="$NODE_OPEN" -v nclose="$NODE_CLOSE" -v had="$had" '
+    BEGIN { re = "^[[:space:]]*(export[[:space:]]+)?" key "=" }
+    $0 == open { print; inside = 1; seen = 1; if (!had) { print line; put = 1 }; next }
+    inside && $0 == nclose { inside = 0 }
+    inside && $0 ~ re { if (!put) print line; put = 1; next }
+    { print }
+    END { if (!seen) { print ""; print open; print line; print nclose } }
   ' "$f" > "$tmp" && { chmod "$(stat -c '%a' "$f" 2>/dev/null || stat -f '%Lp' "$f")" "$tmp" 2>/dev/null; mv -f "$tmp" "$f"; } \
     || { rm -f "$tmp"; return 1; }
 }
@@ -795,6 +816,29 @@ EOF
   return 0
 }
 
+# ---- who runs tasks is the login's, not a repo's (issue #4901) ------------------
+# FLEET_TASK_AUTHORITY moved from a repo overlay to this login's fleet.conf [node]
+# (the hub answers it per person since #4896). An overlay's old line is read one
+# version (fleet_task_authority) and commented out here — never carried: the hub
+# reads every per-repo row as absent, so the person's mode is the hub's answer,
+# which the next authority sync writes. Idempotent: no active line, nothing written.
+AUTH_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_TASK_AUTHORITY[[:space:]]*='
+migrate_authority() {
+  local DRY="$1" QUIET="$2" f done_=''
+  for f in "$CD"/fleets/*/repos/*.conf; do
+    [ -f "$f" ] && grep -Eq "$AUTH_RE" "$f" || continue
+    if [ "$DRY" = 1 ]; then
+      printf 'fleet-conf: would comment out FLEET_TASK_AUTHORITY in %s (it is this login'\''s now, #4901)\n' "${f#$CD/}"; continue
+    fi
+    awk -v re="$AUTH_RE" '$0 ~ re { print "# moved to fleet.conf [node] #4901: " $0; next } { print }' "$f" > "$f.tmp.$$" \
+      && cat "$f.tmp.$$" > "$f" && rm -f "$f.tmp.$$" \
+      || { rm -f "$f.tmp.$$"; die "cannot rewrite $f"; }
+    done_="$done_ ${f#$CD/}"
+  done
+  [ -n "$done_" ] && [ "$QUIET" = 0 ] && echo "fleet-conf: FLEET_TASK_AUTHORITY is per login now — commented out in:$done_"
+  return 0
+}
+
 # ---- dispatch ------------------------------------------------------------------
 cmd="${1:-}"; [ -n "$cmd" ] || usage; shift
 case "$cmd" in
@@ -826,7 +870,8 @@ case "$cmd" in
     hub_fill "$DRY" "$QUIET"
     migrate_repos "$DRY" "$QUIET"
     migrate_tickets "$DRY" "$QUIET"
-    migrate_retired "$DRY" "$QUIET" ;;
+    migrate_retired "$DRY" "$QUIET"
+    migrate_authority "$DRY" "$QUIET" ;;
   add-role)
     case "${1:-}" in client|node) add_role "$1" ;; *) usage ;; esac ;;
   set-hub)
@@ -854,6 +899,12 @@ case "$cmd" in
     [ $# -ge 2 ] || usage
     _ensure_file 0 || die "cannot write $MC"
     _set_client "$MC" "$k" "$2" || die "cannot write $MC" ;;
+  set-node)
+    k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
+    [ $# -ge 2 ] || usage
+    # No file yet: one holding only the [node] block — nothing else is decided here.
+    [ -f "$MC" ] || { mkdir -p "$CD" && ( umask 077; : > "$MC" ); } || die "cannot write $MC"
+    _set_node "$MC" "$k" "$2" || die "cannot write $MC" ;;
   drop-line)
     k="${1:-}"; case "$k" in ''|*[!A-Za-z0-9_]*) usage ;; esac
     [ -f "$MC" ] || exit 0

@@ -227,25 +227,28 @@ class RepoAuthorityTests(unittest.TestCase):
                 migration.ticket_ref("org/a", "8")
 
     def test_manifest_apply_repeat_rollback_and_repo_b(self):
+        # The cutover is the person's (issue #4901): it writes this login's
+        # fleet.conf [node] line and no repo overlay, A's or B's.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             conf = root / "conf"
             repos = conf / "fleets/fixture/repos"
             repos.mkdir(parents=True)
             (conf / "fleets/fixture/conf").write_text('FLEET_SESSION="fixture"\n')
+            login = conf / "fleet.conf"
+            login.write_text('FLEET_HOST=1\n')
             a = repos / "org-a.conf"
             b = repos / "org-b.conf"
             original = 'FLEET_REPO="org/a"\nFLEET_TICKETS="github"\nFLEET_FORGE="github"\nFLEET_LAND="github"\n'
             a.write_text(original)
             b.write_text(original.replace("org/a", "org/b"))
-            old_b = b.read_bytes()
-            authority = dict(repo="org/a", mode="legacy", revision=0)
+            old_a, old_b = a.read_bytes(), b.read_bytes()
+            authority = dict(owner="alice", mode="legacy", revision=0)
             history, calls = {}, []
 
             def api(method, path, body=None, query=None):
                 nonlocal authority
-                self.assertEqual(query["repo"], "org/a")
-                calls.append((method, path))
+                calls.append((method, path, dict(query or {})))
                 if method == "GET":
                     if query.get("gate"):
                         return copy.deepcopy(authority)
@@ -263,7 +266,7 @@ class RepoAuthorityTests(unittest.TestCase):
             def run(*args):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    migration.main(["org/a", "--session", "fixture", *args])
+                    migration.main(list(args))
                 return json.loads(out.getvalue())
 
             env = dict(os.environ, FLEET_CONF_DIR=str(conf), FLEET_SKIP_GLOBAL_CONF="1")
@@ -273,49 +276,52 @@ class RepoAuthorityTests(unittest.TestCase):
                 baseline = {str(p): p.read_bytes() for p in conf.rglob("*") if p.is_file()}
                 doc = run("--dry-run")
                 self.assertEqual(baseline, {str(p): p.read_bytes() for p in conf.rglob("*") if p.is_file()})
+                self.assertEqual((doc["version"], doc["scope"], doc["owner"]), (2, "owner", "alice"))
                 manifest = root / "manifest.json"
-                for stage in ("freeze", "apply", "freeze", "rollback"):
-                    manifest.write_text(json.dumps(run("--dry-run")))
+                for stage, mode in (("freeze", "frozen"), ("apply", "hub"), ("freeze", "frozen"), ("rollback", "legacy")):
+                    manifest.write_text(json.dumps(run("org/a", "--dry-run")))
                     first = run("--" + stage, "--manifest", str(manifest))
-                    bytes_after = a.read_bytes()
-                    repeated = run("--" + stage, "--manifest", str(manifest))
+                    bytes_after = login.read_bytes()
+                    repeated = run("org/b", "--" + stage, "--manifest", str(manifest))
                     self.assertEqual(first, repeated)
-                    self.assertEqual(bytes_after, a.read_bytes())
-                    self.assertEqual(old_b, b.read_bytes())
-                self.assertIn(original, a.read_text())
+                    self.assertEqual(bytes_after, login.read_bytes())
+                    self.assertIn('FLEET_TASK_AUTHORITY="%s"' % mode, login.read_text())
+                    self.assertEqual((old_a, old_b), (a.read_bytes(), b.read_bytes()))
+                self.assertTrue(login.read_text().startswith('FLEET_HOST=1\n'))
                 self.assertEqual(authority["mode"], "legacy")
-                self.assertTrue(all(path == "/authority" for _, path in calls))
-                self.assertEqual(doc["local"]["settings"]["FLEET_FORGE"], "github")
-            print("fixture manifest: dry-run writes=0, repeat apply identical, repo B unchanged, forge/land/ticket home retained")
+                self.assertTrue(all(path == "/authority" for _, path, _ in calls))
+                self.assertFalse([q for m, _, q in calls if m == "POST" and q.get("repo")])
+            print("fixture manifest: dry-run writes=0, repeat apply identical, fleet.conf [node] only, repo A/B overlays unchanged")
 
     def test_second_host_follows_apply_and_rollback(self):
-        # Issue #4730: node-a's cutover rewrote only node-a's overlay. node-b,
-        # told by the hub, re-reads the authority and lands on the same mode.
+        # Issues #4730, #4901: a host of the same person follows the cutover; a
+        # login of ANOTHER person on the same machine and repo does not move.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             original = 'FLEET_REPO="org/a"\nFLEET_TICKETS="github"\nFLEET_FORGE="github"\nFLEET_LAND="github"\n'
+            owner_of = {"node-a": "alice", "node-b": "alice", "login-c": "bob"}
             overlays = {}
-            for host in ("node-a", "node-b"):
+            for host in owner_of:
                 repos = root / host / "fleets/fixture/repos"
                 repos.mkdir(parents=True)
                 (root / host / "fleets/fixture/conf").write_text('FLEET_SESSION="fixture"\n')
                 overlays[host] = repos / "org-a.conf"
                 overlays[host].write_text(original)
-                (repos / "org-b.conf").write_text(original.replace("org/a", "org/b"))
-            other_b = (root / "node-b/fleets/fixture/repos/org-b.conf").read_bytes()
-            authority = dict(repo="org/a", mode="legacy", revision=0)
+            rows = {o: dict(owner=o, mode="legacy", revision=0) for o in ("alice", "bob")}
+
+            def who():
+                return owner_of[Path(os.environ["FLEET_CONF_DIR"]).name]
 
             def api(method, path, body=None, query=None):
-                nonlocal authority
-                self.assertEqual(query["repo"], "org/a")
+                a = rows[who()]
                 if method == "GET":
                     if query.get("gate"):
-                        return copy.deepcopy(authority)
-                    return dict(authority=copy.deepcopy(authority), nodes=[], legacy_owners=[],
+                        return copy.deepcopy(a)
+                    return dict(authority=copy.deepcopy(a), nodes=[], legacy_owners=[],
                                 tickets=[], blockers=[], dry_run=True, live_acceptance="unverified")
-                authority = dict(authority, mode={"freeze": "frozen", "apply": "hub", "rollback": "legacy"}[body["action"]],
-                                 revision=authority["revision"] + 1)
-                return copy.deepcopy(authority)
+                a.update(mode={"freeze": "frozen", "apply": "hub", "rollback": "legacy"}[body["action"]],
+                         revision=a["revision"] + 1)
+                return copy.deepcopy(a)
 
             def run(host, *args):
                 out = io.StringIO()
@@ -323,37 +329,59 @@ class RepoAuthorityTests(unittest.TestCase):
                 for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_REPO", "FLEET_TASK_AUTHORITY"):
                     env.pop(key, None)
                 with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
-                    migration.main(["org/a", *args])
+                    migration.main(list(args))
                 return json.loads(out.getvalue())
 
             def effective(host):
-                return run(host, "--session", "fixture", "--dry-run")["local"]["settings"]["FLEET_TASK_AUTHORITY"]
+                return run(host, "--dry-run")["local"]["settings"]["FLEET_TASK_AUTHORITY"]
 
             with patch.object(migration.ticket, "api", side_effect=api):
-                untouched = run("node-b", "--sync")
+                untouched = run("node-b", "org/a", "--sync")
                 self.assertEqual(untouched["changed"], [])
-                self.assertEqual(overlays["node-b"].read_text(), original)
+                self.assertFalse((root / "node-b/fleet.conf").exists())
                 manifest = root / "manifest.json"
                 for stage, mode in (("freeze", "frozen"), ("apply", "hub"), ("rollback", "legacy")):
-                    manifest.write_text(json.dumps(run("node-a", "--session", "fixture", "--dry-run")))
-                    run("node-a", "--session", "fixture", "--" + stage, "--manifest", str(manifest))
+                    manifest.write_text(json.dumps(run("node-a", "--dry-run")))
+                    run("node-a", "--" + stage, "--manifest", str(manifest))
                     self.assertEqual(effective("node-a"), mode)
-                    self.assertEqual(run("node-b", "--sync")["changed"], ["fixture"])
+                    self.assertEqual(run("node-b", "org/a", "--sync")["changed"], ["fleet.conf"])
                     self.assertEqual(effective("node-b"), mode)
                     self.assertEqual(run("node-b", "--sync")["changed"], [])
-                    self.assertEqual(other_b, (root / "node-b/fleets/fixture/repos/org-b.conf").read_bytes())
-                self.assertIn(original, overlays["node-b"].read_text())
+                    self.assertEqual(run("login-c", "org/a", "--sync")["changed"], [])
+                    self.assertEqual(effective("login-c"), "")
+                for host in owner_of:
+                    self.assertEqual(overlays[host].read_text(), original)
+                self.assertFalse((root / "login-c/fleet.conf").exists())
+                self.assertEqual(rows["bob"], dict(owner="bob", mode="legacy", revision=0))
             with patch.object(migration.ticket, "api", return_value=dict(mode="unknown")):
-                before = overlays["node-b"].read_bytes()
+                before = (root / "node-b/fleet.conf").read_bytes()
                 with self.assertRaises(ValueError):
                     run("node-b", "--sync")
-                self.assertEqual(before, overlays["node-b"].read_bytes())
-            print("two hosts: node-b reads frozen/hub/legacy after node-a's freeze/apply/rollback; repo B and unknown untouched")
+                self.assertEqual(before, (root / "node-b/fleet.conf").read_bytes())
+            print("two hosts of alice follow frozen/hub/legacy; bob's login on the same repo stays legacy; overlays and unknown untouched")
+
+    def test_sync_outvotes_an_old_overlay_line(self):
+        # compat-1v (issue #4901): an overlay still saying hub would fill the
+        # login's gap; a legacy answer then writes the login's line.
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp)
+            repos = conf / "fleets/fixture/repos"
+            repos.mkdir(parents=True)
+            (repos / "org-a.conf").write_text('FLEET_REPO="org/a"\nFLEET_TASK_AUTHORITY="hub"\n')
+            out = io.StringIO()
+            with patch.dict(os.environ, dict(FLEET_CONF_DIR=str(conf))), \
+                    patch.object(migration.ticket, "api", return_value=dict(owner="alice", mode="legacy", revision=0)), \
+                    contextlib.redirect_stdout(out):
+                migration.main(["--sync"])
+            self.assertEqual(json.loads(out.getvalue())["changed"], ["fleet.conf"])
+            self.assertIn('FLEET_TASK_AUTHORITY="legacy"', (conf / "fleet.conf").read_text())
 
     def test_forge_none_manifest_and_unknown_gate(self):
-        with patch.object(migration, "local_settings", return_value=(dict(settings=dict(FLEET_FORGE="none", FLEET_LAND="fleet", FLEET_TICKETS="hub")), Path("fixture"))), \
-                patch.object(migration.ticket, "api", return_value=dict(authority=dict(mode="legacy", revision=0))):
-            self.assertEqual(migration.manifest("fixture", "org/a")["local"]["settings"]["FLEET_FORGE"], "none")
+        with patch.object(migration, "login_settings", return_value=(dict(settings=dict(FLEET_TASK_AUTHORITY="")), Path("fleet.conf"))), \
+                patch.object(migration.ticket, "api", return_value=dict(authority=dict(owner="alice", mode="legacy", revision=0))) as api:
+            doc = migration.manifest("Org/A")
+            self.assertEqual((doc["owner"], doc["repo"]), ("alice", "org/a"))
+            api.assert_called_once_with("GET", "/authority", query={"rollback": "1", "repo": "org/a"})
         for mode in ("frozen", "hub", "unknown"):
             with patch.object(migration.ticket, "api", return_value=dict(mode=mode)), patch.dict(os.environ, {"FLEET_LAUNCH": ""}):
                 with self.assertRaises(ValueError):

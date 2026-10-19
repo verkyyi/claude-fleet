@@ -713,14 +713,28 @@ caller: the gate read is the person's authority with `repo` echoed, the manifest
 the person's (its lists narrowed to the repo), `legacy_tickets` in a body is
 accepted and ignored, and `action: init` is refused 409 — a new repo selects
 nothing, and `fleet_repo_authority.py --init-new`'s fallback gate read then
-writes the person's own mode. The node half — `FLEET_TASK_AUTHORITY` per login
-instead of per repo overlay, the gate / settle / sync on this road — is
-#4830's child ③.
+writes the person's own mode. The node half is #4901 (below): the node reads
+and writes only this road.
 
 ### Existing-repo authority cutover (#4395)
 
 > Since #4896 the hub answers every step below per **person** (the section
-> above); the per-repo wording is the node side's until #4830's child ③ moves it.
+> above), and since #4901 so does the node: `FLEET_TASK_AUTHORITY` is the
+> login's — `$FLEET_CONF_DIR/fleet.conf` [node], a global-only key no fleet conf
+> or repo overlay can set (`fleet_task_authority`; an overlay's old line is read
+> one version and `fleet-conf.sh migrate` comments it out). Every authority call
+> goes to `/v1/fleet/authority` (`fleet_ticket.api` routes `/authority*` there):
+> the gate read carries no repo; a local start names the repo whose worktree it
+> opens. `fleet-repo.sh authority [<repo>] --dry-run` prints the person's
+> manifest (`version: 2`, `scope: owner`, the login's `conf`; a repo only
+> narrows its lists), and `--freeze | --apply | --rollback --manifest FILE`
+> refuse an older per-repo manifest or another login's. `--sync` (the hub's
+> push, once per hosted repo) rewrites this login's [node] line. `--settle
+> [--apply]` with no repo walks every repo this login hosts. A new repo selects
+> nothing: #4885's default below is gone, and `fleet-repo.sh add --authority`
+> is read one version and only said (# compat-1v). Where the text below says
+> "overlay", read "this login's fleet.conf [node]"; two logins of one machine
+> each cut over alone (`fleet-task-authority-login-selftest.sh`).
 
 
 A repo the fleet is about to host skips all of this when it is new (issue
