@@ -86,3 +86,5 @@ pkgs agent: github.com/verkyyi/claude-fleet/tokenledger/agent/cli
 - `bin/ci-plan-selftest.sh`：三处对齐；四块映射与包级收窄（沙箱仓库）；拿不准就跑；「CI 结论」的判法。
 - `docs/dev/BREAK-IT.md` 行 `module-skip-wrong`：映射漏一块时上面的自测当场红。
 - `bin/fleet-pr-verdict-selftest.sh`：合并门优先读「CI 结论」。
+
+<!-- trial #4815: a docs-only PR -->
