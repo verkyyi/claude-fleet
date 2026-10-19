@@ -49,7 +49,7 @@ ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- output ---\n%s\n' "$2" >&2; exit 1; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin"
-cp "$SRC" "$WORK/bin/fleet-epic-preflight.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$SRC" "$WORK/bin/fleet-epic-preflight.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"
 # The shared gh-limit marker is an INPUT too: a live one on the machine running the
 # test must not route the healthy cases over REST.

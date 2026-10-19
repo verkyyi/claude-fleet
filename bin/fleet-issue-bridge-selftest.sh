@@ -54,7 +54,7 @@ CANNED="$WORK/comments.json"
 # The bridge + lib + fake spawn run from $WORK/bin so BIN resolves the fakes and
 # ../fleet.conf is absent (env FLEET_REPO wins).
 cp "$SRC" "$WORK/bin/fleet-issue-bridge.sh"
-cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 cp "$BIN/fleet-input.py" "$WORK/bin/fleet-input.py"
 chmod +x "$WORK/bin/fleet-issue-bridge.sh"
 

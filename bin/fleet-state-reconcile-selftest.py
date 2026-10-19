@@ -40,6 +40,7 @@ class ReconcileTest(unittest.TestCase):
         # fleet's MCP server with one call in flight is a fake fleet-mcp.py that
         # runs its tool as a child, the way bin/fleet-mcp.py runs every tool.
         shutil.copyfile(BIN / 'fleet-lib.sh', cls.bin / 'fleet-lib.sh')
+        shutil.copyfile(BIN / 'fleet-client-core.sh', cls.bin / 'fleet-client-core.sh')
         (cls.root / 'fleet-mcp.py').write_text(
             'import signal, subprocess, sys, time\n'
             "child = subprocess.Popen(['sleep', '300'])\n"

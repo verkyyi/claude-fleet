@@ -268,7 +268,7 @@ has "G2 --json hub down" "$(env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-clien
 # the broker's token to the broker, never to FLEET_HUB_URL.
 SB="$WORK/sbin"; mkdir -p "$SB"
 cp "$BIN/fleet-client-lease.py" "$BIN/fleet-connect.py" "$BIN/fleet-client-where.sh" "$SB/"
-[ -f "$BIN/fleet-lib.sh" ] && cp "$BIN/fleet-lib.sh" "$SB/"
+cp "$BIN/fleet-client-core.sh" "$SB/"
 printf '#!/bin/bash\n[ "$1" = node-token ] && printf "http://127.0.0.1:%s/hub\\tfcpn1.BROKER\\n"\n' "$port" > "$SB/fleet-cred-proxy.sh"
 ln -sf "$WORK/nowhere/node.env" "$FLEET_CONF_DIR/node.env"
 printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$port" > "$FLEET_CONF_DIR/node.pub.env"
@@ -297,7 +297,7 @@ j=$(FLEET_HUB_TOKEN=CLIENTTOK env -u FLEET_CLIENT_WHERE_CMD bash "$BIN/fleet-cli
 has "G4 --json hub up" "$j" '"hub": "up"'
 has "G4 --json carries the node token's refusal" "$j" '"node_token": "refused: unrecognised enrollment token"'
 has "G4 --json the client" "$j" '"device": "MacBook"'
-if [ -f "$BIN/fleet-lib.sh" ]; then
+if [ -f "$BIN/fleet-client-core.sh" ]; then
   has "G4 the doctor's hubauth file names client-where" "$(cat "$HAF" 2>/dev/null)" "client-where	"
   has "G4 … with the hub's words" "$(cat "$HAF" 2>/dev/null)" "node token: unrecognised enrollment token"
   printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=NODETOK\n' "$port" > "$FLEET_CONF_DIR/node.env"

@@ -149,7 +149,7 @@ p.write_text(json.dumps(s))
         # than hardcoding an ensure invocation that could miss a future default.
         for directory in (".claude-plugin", "plugins"):
             shutil.copytree(root / directory, installed / directory)
-        for name in ("fleet-plugins.py", "fleet-codex-plugins.py", "fleet-ui-refresh.sh", "fleet-lib.sh"):
+        for name in ("fleet-plugins.py", "fleet-codex-plugins.py", "fleet-ui-refresh.sh", "fleet-lib.sh", "fleet-client-core.sh"):
             shutil.copy2(root / "bin" / name, installed / "bin" / name)
         empty = work / "empty"
         empty.mkdir()

@@ -22,7 +22,7 @@
 # (the sandbox HOME has no LaunchAgent for agent_stop to find). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet fleet-host.sh fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet-up.sh; do
+for f in fleet fleet-host.sh fleet-conf.sh fleet-lib.sh fleet-client-core.sh fleet-doctor.sh fleet-up.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-host-selftest.XXXXXX")" || exit 2

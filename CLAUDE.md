@@ -1192,7 +1192,13 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   is the whole release for both layers — `fleet-client-update.sh` (基础) and
   `fleet-install-sync.sh` (承载), dispatched by `bin/fleet-update.sh`
   (`fleet update`) — and the hub image is redeployed only for the hub's own
-  changes. `fleet-update-selftest.sh` pins it.
+  changes. `fleet-update-selftest.sh` pins it. **A client script reads
+  `bin/fleet-client-core.sh`, never `fleet-lib.sh`** (issue #4825): the core
+  holds what the client roads call (`$FLEET_C`, the fleet confs and sockets,
+  node.env reads, the tool search) and is their ONLY definition — `fleet-lib.sh`
+  sources it first; a machine-only branch loads the rest with `fleet_host_lib`
+  (rc 1 on a client-only install). `client-core-selftest.sh` lints the client
+  runtime list and runs the client's actions with and without `fleet-lib.sh`.
 - **The node token never enters a pane's environment** (issue #1491).
   `ccquota lease|place|move` act as this machine's agent and need its token;
   `fleet_hub_lease` / `fleet_hub_place` / `fleet_hub_move` (`bin/fleet-lib.sh`)

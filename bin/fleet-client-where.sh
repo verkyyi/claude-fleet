@@ -94,16 +94,17 @@ HUBREAD=$(${FLEET_CLIENT_WHERE_CMD:-python3 "$BIN/fleet-client-lease.py" where} 
 
 # A refused credential is the doctor's `hubauth` row (issue #2665): the node
 # token the hub would not take (the read then asked with the certificate), or a
-# 401 to everything. fleet-lib is sourced only when there is something to note —
-# a refusal, or an older refusal of ours to clear.
+# 401 to everything. The client core (fleet_hub_auth_note, issue #4825) is
+# sourced only when there is something to note — a refusal, or an older refusal
+# of ours to clear.
 _haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"node_token": *"refused: \([^"]*\)".*/node token: \1/p')
 [ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw=$(printf '%s' "$HUBREAD" | sed -n 's/.*"why": *"\([^"]*\)".*/\1/p')
 [ -n "$_haw" ] || [ "$hrc" != 4 ] || _haw='HTTP 401'
-if [ -f "$BIN/fleet-lib.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}" ]; then
+if [ -f "$BIN/fleet-client-core.sh" ] && [ -z "${FLEET_CLIENT_WHERE_CMD:-}" ]; then
   if [ -n "$_haw" ]; then
-    bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_note client-where fail "$2"' _ "$BIN" "$_haw" >/dev/null 2>&1
+    bash -c '. "$1/fleet-client-core.sh" && fleet_hub_auth_note client-where fail "$2"' _ "$BIN" "$_haw" >/dev/null 2>&1
   elif [ "$hrc" = 0 ] && grep -q '^client-where	' "${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash/global/hub_auth_fail" 2>/dev/null; then
-    bash -c '. "$1/fleet-lib.sh" && fleet_hub_auth_note client-where ok' _ "$BIN" >/dev/null 2>&1
+    bash -c '. "$1/fleet-client-core.sh" && fleet_hub_auth_note client-where ok' _ "$BIN" >/dev/null 2>&1
   fi
 fi
 

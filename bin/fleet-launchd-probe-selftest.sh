@@ -38,7 +38,7 @@
 # Exit 0 = pass, non-zero = fail.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES='fleet-launchd-probe.sh fleet-daemon-lib.sh fleet-doctor.sh fleet-lib.sh fleet-diskguard.sh'
+FILES='fleet-launchd-probe.sh fleet-daemon-lib.sh fleet-doctor.sh fleet-lib.sh fleet-client-core.sh fleet-diskguard.sh'
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

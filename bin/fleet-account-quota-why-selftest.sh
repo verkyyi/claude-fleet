@@ -23,7 +23,7 @@
 # Hermetic: a FAKE ccquota, scratch pool / conf / TMPDIR / HOME. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-NEED="fleet-account.sh fleet-lib.sh"
+NEED="fleet-account.sh fleet-lib.sh fleet-client-core.sh"
 for f in $NEED; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

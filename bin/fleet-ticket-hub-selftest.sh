@@ -27,7 +27,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-ticket.sh fleet_ticket.py fleet-comment.sh fleet-issue-file.sh fleet-lib.sh fleet-gh-lib.sh; do
+for f in fleet-ticket.sh fleet_ticket.py fleet-comment.sh fleet-issue-file.sh fleet-lib.sh fleet-client-core.sh fleet-gh-lib.sh; do
   [ -f "$BIN/$f" ] || { echo "selftest: $f missing" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo "selftest: python3 absent — SKIP" >&2; exit 0; }

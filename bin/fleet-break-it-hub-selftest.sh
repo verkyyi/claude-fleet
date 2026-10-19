@@ -594,7 +594,7 @@ PY2
   port=$(cat "$d/port" 2>/dev/null); [ -n "$port" ] || { kill "$hp" 2>/dev/null; WHY="the fake hub did not start: $(tail -2 "$d/hub.err")"; return 1; }
   printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\nCCQUOTA_TOKEN=node-tok\n' "$port" > "$d/conf/node.env"; chmod 600 "$d/conf/node.env"
   # separated: node.env is the role account's (unreadable), the proxy hands out its broker pair
-  ln -s "$BIN/fleet-lib.sh" "$d/sb/fleet-lib.sh"; ln -s "$BIN/fleet-hub-write.sh" "$d/sb/fleet-hub-write.sh"
+  ln -s "$BIN/fleet-lib.sh" "$d/sb/fleet-lib.sh"; ln -s "$BIN/fleet-client-core.sh" "$d/sb/fleet-client-core.sh"; ln -s "$BIN/fleet-hub-write.sh" "$d/sb/fleet-hub-write.sh"
   printf '#!/bin/bash\n[ "$1" = node-token ] && printf "http://127.0.0.1:%s/hub\\tfcpn1.BROKER\\n"\n' "$port" > "$d/sb/fleet-cred-proxy.sh"
   ln -sf "$d/role-only/node.env" "$d/sep/conf/node.env"
   printf 'CCQUOTA_HUB_URL=http://127.0.0.1:%s\n' "$port" > "$d/sep/conf/node.pub.env"; printf '{}\n' > "$d/sep/conf/credsep.json"

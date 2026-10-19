@@ -307,7 +307,7 @@ eq "load_conf: absent conf no-op" "keep" \
 # COPY so BASH_SOURCE resolves there; the real repo bin has no sibling conf (the
 # "default off" branch depends on that). Each subshell unsets the process-wide
 # double-source guard + the skip flag + any inherited cap so the auto-source runs.
-G399="$WORK/g399"; mkdir -p "$G399/bin"; cp "$LIB" "$G399/bin/fleet-lib.sh"
+G399="$WORK/g399"; mkdir -p "$G399/bin"; cp "$LIB" "$G399/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$G399/bin/fleet-client-core.sh"
 printf 'FLEET_GLOBAL_MAX_SESSIONS=20\n' > "$G399/fleet.conf"
 eq "g399: conf cap sourced on load (no export needed)" "20" \
   "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
@@ -334,7 +334,7 @@ eq "g399: gate allows below cap (19 < 20)" "allowed" \
       if fleet_session_cap_ok >/dev/null; then printf allowed; else printf refused; fi )"
 # NO sibling fleet.conf → the load is a clean no-op → the default stands: since
 # #1831 that is 0 (off — the machine admission is the gate), a bare "slots 3".
-G399B="$WORK/g399b"; mkdir -p "$G399B/bin"; cp "$LIB" "$G399B/bin/fleet-lib.sh"
+G399B="$WORK/g399b"; mkdir -p "$G399B/bin"; cp "$LIB" "$G399B/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$G399B/bin/fleet-client-core.sh"
 eq "g399: no conf → default off (no denominator)" "" \
   "$( unset _FLEET_GLOBAL_CONF_SOURCED FLEET_SKIP_GLOBAL_CONF FLEET_GLOBAL_MAX_SESSIONS
       . "$G399B/bin/fleet-lib.sh"; fleet_slots_chip 3 | grep -oE '[0-9]+/[0-9]+' )"

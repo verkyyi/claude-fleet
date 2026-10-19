@@ -2847,7 +2847,7 @@ PANEL_WORDS = ("new", "quit", "landed")
 
 def conf_word(key):
     """A setting the panel reads: the environment, else fleet.conf's line —
-    fleet-conf.sh line's own grep, without its bash and fleet-lib.sh (issue #3514:
+    fleet-conf.sh line's own grep, without its bash and shell library (issue #3514:
     ~50 ms before every ⌘P's first frame): the lines of fleet.conf that set it,
     the last one wins. '' when neither has it."""
     raw = os.environ.get(key)

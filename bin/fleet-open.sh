@@ -188,9 +188,11 @@ fi
 
 # The fleet's knobs: global fleet.conf + this pane's fleet conf, under the env.
 _env_open="${FLEET_OPEN-__unset}"; _env_re="${FLEET_SHOW_TERM_RE-__unset}"; _env_host="${FLEET_OPEN_SSH_HOST-__unset}"
-if [ -f "$BIN/fleet-lib.sh" ] && [ -n "${TMUX:-}" ]; then
-  # shellcheck source=/dev/null
-  . "$BIN/fleet-lib.sh" 2>/dev/null && fleet_load_conf "$(fleet_current_session)" 2>/dev/null
+# (a pane of a fleet: the machine's library, fleet_host_lib — issue #4825)
+if [ -n "${TMUX:-}" ] && [ -f "$BIN/fleet-client-core.sh" ]; then
+  # shellcheck source=fleet-client-core.sh
+  . "$BIN/fleet-client-core.sh" 2>/dev/null && fleet_host_lib 2>/dev/null \
+    && fleet_load_conf "$(fleet_current_session)" 2>/dev/null
 fi
 [ "$_env_open" = __unset ] || FLEET_OPEN="$_env_open"
 [ "$_env_re" = __unset ]   || FLEET_SHOW_TERM_RE="$_env_re"
@@ -232,9 +234,9 @@ print(json.dumps(d, separators=(",", ":"), ensure_ascii=False))' "$fp_p" "$fp_m"
     printf 'fleet-open: %s:%s → 本机 :%s（经到 %s 的连接）\n' "$fp_m" "$fp_r" "$fp_p" "$fp_m" >&2
   fi
   # this machine's fleet session, with no pane of ours: the first live one
-  if [ -z "${TMUX:-}" ] && [ -f "$BIN/fleet-lib.sh" ]; then
-    # shellcheck source=/dev/null
-    . "$BIN/fleet-lib.sh" 2>/dev/null
+  if [ -z "${TMUX:-}" ] && [ -f "$BIN/fleet-client-core.sh" ]; then
+    # shellcheck source=fleet-client-core.sh
+    . "$BIN/fleet-client-core.sh" 2>/dev/null
     FC_SESS=$(fleet_sockets 2>/dev/null | head -n 1)
     [ -n "$FC_SESS" ] && FP_SOCK=$(fleet_socket "$FC_SESS") && tmux() { command tmux -L "$FP_SOCK" "$@"; }
   fi

@@ -58,8 +58,13 @@
 # Exit 0 ok (or nothing to do), 1 failed, 2 usage.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+# The client's library (issue #4825): this runs on every computer, a client-only
+# one too. The machine's own steps of `migrate` (a fleet conf to fold, repos to
+# move) load fleet-lib.sh through _host_lib — a computer with a fleet has it.
+# shellcheck source=fleet-client-core.sh
+. "$BIN/fleet-client-core.sh"
 # The old files are what we read here — never let the lib source them first.
-FLEET_SKIP_GLOBAL_CONF=1 . "$BIN/fleet-lib.sh"
+_host_lib() { FLEET_SKIP_GLOBAL_CONF=1 fleet_host_lib; }
 
 die()   { echo "fleet-conf: $*" >&2; exit 1; }
 usage() { sed -n '4,17p' "$0" | sed 's/^# //' >&2; exit 2; }
@@ -434,7 +439,9 @@ migrate() {
   # #980); several stay per fleet, untouched.
   local sess='' FC='' rc
   sess=$(fleet_login_fleet); rc=$?
-  [ "$rc" = 0 ] && FC=$(fleet_conf_file "$sess")
+  # a fleet conf to fold is the machine's step: without its library (an install
+  # with the client only) it is left for that machine's own sync to fold
+  [ "$rc" = 0 ] && _host_lib && FC=$(fleet_conf_file "$sess")
   [ -n "$FC" ] && [ -f "$FC" ] || FC=''
   if [ -z "$role" ] && [ -z "$INST$SET$SH$FC" ]; then
     [ "$QUIET" = 1 ] || echo "fleet-conf: nothing to migrate — this login is neither a client nor a node yet"
@@ -467,8 +474,10 @@ except Exception: print("")' "$HJ" 2>/dev/null)
   # identity = every repo-scoped key (_FLEET_REPO_SCOPED): it describes the conf's
   # repo, so it stays with it — migrate_repos then moves it into repos/ (#1937).
   # A machine-wide FLEET_DEPLOY_REF would apply to no repo there.
-  local identity="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_REPO_SCOPED// /|})[[:space:]]*="
-  local globals="^[[:space:]]*(export[[:space:]]+)?(${_FLEET_GLOBAL_ONLY// /|})="
+  # (fleet-lib.sh's lists — loaded whenever there is a fleet conf to filter, FC)
+  local scoped="${_FLEET_REPO_SCOPED:-FLEET_REPO}" globl="${_FLEET_GLOBAL_ONLY:-FLEET_GLOBAL_MAX_SESSIONS}"
+  local identity="^[[:space:]]*(export[[:space:]]+)?(${scoped// /|})[[:space:]]*="
+  local globals="^[[:space:]]*(export[[:space:]]+)?(${globl// /|})="
   local tmp="$MC.tmp.$$"
   local nodesec=node; _role_has "$role" node || nodesec=common
   {
@@ -692,6 +701,7 @@ rescue_stranded() {
 # still read the old place for one version.
 migrate_repos() {
   local DRY="$1" QUIET="$2" s c out rc moved=''
+  [ -n "$(fleet_each_conf)" ] && _host_lib || return 0   # no fleet here: nothing to move
   while IFS=$'\t' read -r s c; do
     [ -n "$s" ] && [ -f "$c" ] || continue
     grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO[[:space:]]*=' "$c" || continue
@@ -724,6 +734,7 @@ EOF
 TICKETS_RE='^[[:space:]]*(export[[:space:]]+)?FLEET_TICKETS[[:space:]]*='
 migrate_tickets() {
   local DRY="$1" QUIET="$2" s c f r home pinned=''
+  [ -n "$(fleet_each_conf)" ] && _host_lib || return 0   # no fleet here: no repo to pin
   while IFS=$'\t' read -r s c; do
     [ -n "$s" ] || continue
     while IFS= read -r r; do

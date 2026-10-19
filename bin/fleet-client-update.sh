@@ -43,7 +43,7 @@
 #                             a failure says why in one line and opens as is
 #   GET /v1/fleet/client-settings  the team's client defaults → written to
 #     ~/.config/claude-fleet/hub-defaults.conf, which every reader sources
-#     FIRST (fleet-lib.sh): hub-defaults < fleet.conf < … — so a
+#     FIRST (the fleet library's conf load): hub-defaults < fleet.conf < … — so a
 #     key this computer set always wins, and a line here only fills a gap. Each
 #     line is `[ -n "${KEY+x}" ] || KEY='value'`: an exported value wins too.
 #     Keys and values are re-checked here (the hub's whitelist is the rule);

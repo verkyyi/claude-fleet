@@ -43,7 +43,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
 SUT="$BIN/fleet-oldcfg-check.sh"
-for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh tmux-dashboard-rows.sh fleet-cfg-restart.sh fleet-ui-lang.sh; do
+for f in fleet-oldcfg-check.sh fleet-oldcfg-replay.py fleet-agent-team.py fleet-lib.sh fleet-client-core.sh tmux-dashboard-rows.sh fleet-cfg-restart.sh fleet-ui-lang.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-oldcfg-check selftest: python3 absent — SKIP'; exit 0; }

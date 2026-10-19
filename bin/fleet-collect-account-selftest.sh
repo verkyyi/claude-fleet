@@ -5,7 +5,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/collect-account.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fake" "$WORK/accounts" "$WORK/conf" "$WORK/cache"
-for f in fleet-lib.sh usage-lib.sh fleet-account-truth.sh fleet-account-truth.py fleet-context.sh \
+for f in fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-account-truth.sh fleet-account-truth.py fleet-context.sh \
   fleet_pending_tool.py fleet_launch.py fleet_sleep_argv.py fleet_runtime.py \
   fleet-codex-rpc.py fleet-codex-session.py; do
   [ ! -f "$BIN/$f" ] || cp "$BIN/$f" "$WORK/bin/"

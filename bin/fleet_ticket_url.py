@@ -4,7 +4,7 @@
 """Where a person reads ticket N of a repo (issue #3596, EPIC #3570 C3) — for the
 python callers (the sidebar's ⌘P list, the top bar, `fleet ls`'s batch row).
 
-The ONE reader is fleet_ticket_url in bin/fleet-lib.sh; this asks it. Only when no
+The ONE reader is fleet_ticket_url in the machine's shell library; this asks it. Only when no
 repo conf on this computer says FLEET_TICKETS=hub is the answer the GitHub page
 straight away — byte for byte the link these callers spelled before, with no shell
 started (a client-only computer has no repo confs at all).
@@ -53,7 +53,7 @@ def ticket_url(repo, n, sess=None):
     env = dict(os.environ)
     try:
         out = subprocess.run(
-            ["bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; fleet_ticket_url "$2" "$3" "$4"', "_",
+            ["bash", "-c", '{ . "$1/fleet-client-core.sh" && fleet_host_lib; } >/dev/null 2>&1; fleet_ticket_url "$2" "$3" "$4"', "_",
              str(BIN), repo, n, sess or ""],
             capture_output=True, text=True, timeout=10, env=env, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):

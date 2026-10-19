@@ -215,7 +215,7 @@ ok "D agent:codex opens Codex; no label = fleet default; --agent wins; both / no
 
 # ===== E: the filer hands the label to the spawn =============================
 SB="$WORK/sb"; mkdir -p "$SB"
-cp "$BIN/fleet-issue-file.sh" "$BIN/fleet-lib.sh" "$SB/"
+cp "$BIN/fleet-issue-file.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$SB/"
 for f in "$BIN"/*.sh "$BIN"/*.py; do [ -e "$SB/$(basename "$f")" ] || ln -s "$f" "$SB/$(basename "$f")"; done
 rm -f "$SB/dash-issue-session.sh"
 cat > "$SB/dash-issue-session.sh" <<FAKE

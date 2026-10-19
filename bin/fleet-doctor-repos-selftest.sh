@@ -29,7 +29,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh; do
+for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
@@ -37,7 +37,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-repos-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/home" "$WORK/shim" "$WORK/conf/fleets/fleet-t/repos"
-for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-deps-link.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-client-core.sh fleet-deps-link.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 
 # o/alpha's checkout: a real repo, origin = o/alpha, branch main

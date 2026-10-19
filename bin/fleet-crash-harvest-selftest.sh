@@ -24,7 +24,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 FIX="$BIN/fixtures/crash"
-for f in fleet-diskguard.sh fleet-crash-harvest.py fleet-lib.sh; do
+for f in fleet-diskguard.sh fleet-crash-harvest.py fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 [ -d "$FIX" ] || { printf 'selftest: %s not found\n' "$FIX" >&2; exit 2; }

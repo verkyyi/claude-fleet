@@ -648,8 +648,8 @@ fi
 # uncommitted a.sh edit stays uncommitted. bob runs a ccquota agent whose token
 # lives only in its gui LaunchAgent plist; alice runs none.
 if command -v python3 >/dev/null 2>&1; then
-  cp "$BIN/fleet-hub-node.sh" "$BIN/fleet-lib.sh" "$SRC/bin/"
-  g "$SRC" add bin/fleet-hub-node.sh bin/fleet-lib.sh; g "$SRC" commit -qm hubnode
+  cp "$BIN/fleet-hub-node.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$SRC/bin/"
+  g "$SRC" add bin/fleet-hub-node.sh bin/fleet-lib.sh bin/fleet-client-core.sh; g "$SRC" commit -qm hubnode
   BP="$H/bob/Library/LaunchAgents/com.ccquota.agent.plist"
   mkdir -p "$(dirname "$BP")"
   cat > "$BP" <<'EOF'

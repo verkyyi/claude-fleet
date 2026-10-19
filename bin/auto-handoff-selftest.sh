@@ -44,7 +44,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 STATUSLINE="$BIN/../conf/statusline.sh"
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 [ -f "$STATUSLINE" ] || { printf 'selftest: %s not found\n' "$STATUSLINE" >&2; exit 2; }
@@ -59,7 +59,7 @@ SESS='s1'
 # global conf) relative to its OWN path, so copying the pieces here makes the global
 # conf $WORK/inst/fleet.conf — hermetic wherever this runs (a live install's bin
 # has a real sibling fleet.conf with the operator's real threshold).
-for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
+for f in set-claude-state.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh handoff-latch-reset-hook.sh fleet-doctor.sh; do
   cp "$BIN/$f" "$WORK/inst/bin/$f"
 done
 STATE="$WORK/inst/bin/set-claude-state.sh"
