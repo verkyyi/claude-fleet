@@ -57,7 +57,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/f1" "$WORK/conf/fleets/f2" "$WORK/wt/repo-issue-42"
 # fleet-hooks-emit.sh materialises the codex hook table from hooks/*.json
 # (issue #611) — without it the launcher wires no hooks at all.
-for s in fleet_codex_trust.py fleet-agent-defaults.py fleet-claude.sh fleet-codex.sh fleet-lib.sh set-claude-state.sh fleet-hooks-emit.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
+for s in fleet_codex_trust.py fleet-agent-defaults.py fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-client-core.sh set-claude-state.sh fleet-hooks-emit.sh; do ln -s "$BIN/$s" "$WORK/bin/$s"; done
 ln -s "$ROOT/commands" "$WORK/commands"
 ln -s "$ROOT/conf"     "$WORK/conf-real"
 ln -s "$ROOT/hooks"    "$WORK/hooks"

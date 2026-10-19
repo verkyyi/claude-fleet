@@ -34,7 +34,7 @@
 # TMPDIR and HOME. No network, no tmux server. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-NEED="fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh fleet-quotawatch.sh fleet-alerts.sh fleet-daemon-lib.sh"
+NEED="fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-quotawatch.sh fleet-alerts.sh fleet-daemon-lib.sh"
 for f in $NEED; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

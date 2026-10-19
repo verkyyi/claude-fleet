@@ -62,7 +62,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
 selftest_sections 4
-for f in fleet-conf.sh fleet-lib.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
+for f in fleet-conf.sh fleet-lib.sh fleet-client-core.sh fleet-doctor.sh fleet_config_write.py fleet-connect.py fleet-login.py; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-conf-selftest.XXXXXX")" || exit 2

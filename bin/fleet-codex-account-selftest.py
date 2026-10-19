@@ -144,7 +144,7 @@ for line in sys.stdin:
     def test_launcher_selection_and_explicit_recovery_home(self):
         self.quota(0,90);self.quota(1,10)
         install=self.root/'install';dest=install/'bin';dest.mkdir(parents=True)
-        for name in ('fleet-lib.sh','fleet-codex.sh','fleet-codex-account.py','fleet-hooks-emit.sh'):
+        for name in ('fleet-lib.sh','fleet-client-core.sh','fleet-codex.sh','fleet-codex-account.py','fleet-hooks-emit.sh'):
             shutil.copy2(BIN/name,dest/name)
         shutil.copytree(BIN.parent/'hooks',install/'hooks')
         env=dict(os.environ,HOME=str(self.root));env.pop('TMUX',None);env.pop('TMUX_PANE',None)

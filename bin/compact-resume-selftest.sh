@@ -30,7 +30,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-FILES="refocus-hook.sh fleet-compact-resume.sh fleet-hook-conf.sh fleet-lib.sh fleet-lang.sh fleet-ladder-log.sh"
+FILES="refocus-hook.sh fleet-compact-resume.sh fleet-hook-conf.sh fleet-lib.sh fleet-client-core.sh fleet-lang.sh fleet-ladder-log.sh"
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

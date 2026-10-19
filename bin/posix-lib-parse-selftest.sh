@@ -47,7 +47,7 @@ ok()   { CHECKS=$((CHECKS + 1)); }
 # the one the retired hub-zoom path sourced under `sh` (the #414 failure).
 # The siblings are guarded defensively to keep the shared lib layer free of the
 # same syntax-error class. Extend this list when a new sourceable lib lands.
-LIBS='fleet-lib.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'
+LIBS='fleet-lib.sh fleet-client-core.sh fleet-config-lib.sh fleet-land-lease.sh usage-lib.sh fleet-daemon-lib.sh'
 
 have_bash=0; command -v bash >/dev/null 2>&1 && have_bash=1
 have_dash=0; command -v dash >/dev/null 2>&1 && have_dash=1
@@ -126,19 +126,21 @@ export PATH="$WORK/bin:$PATH"
 # that class locally too — it is what surfaced the tab-IFS bug fixed alongside the
 # process substitutions. Exported env (PATH, FAKE_DOWN) reaches the children;
 # per-case FLEET_CONF_DIR is set INSIDE the snippet, after sourcing, so the lib's
-# own default can't clobber it.
+# own default can't clobber it. $0 is the lib's path, as a script beside it would
+# have it: dash has no BASH_SOURCE, so fleet-lib.sh finds fleet-client-core.sh by
+# the sourcing script's own directory (issue #4825).
 both() {  # <desc> <expected> <snippet>
   _d=$1; _e=$2; _s=$3
-  _osh=$(sh   -c ". \"$LIB\"; $_s" 2>/dev/null)
+  _osh=$(sh   -c ". \"$LIB\"; $_s" "$LIB" 2>/dev/null)
   [ "$_osh" = "$_e" ] || fail "$_d [sh]: expected [$_e] got [$_osh]"
   if [ "$have_bash" = 1 ]; then
-    _oba=$(bash -c ". \"$LIB\"; $_s" 2>/dev/null)
+    _oba=$(bash -c ". \"$LIB\"; $_s" "$LIB" 2>/dev/null)
     [ "$_oba" = "$_e" ] || fail "$_d [bash]: expected [$_e] got [$_oba]"
     [ "$_osh" = "$_oba" ] || fail "$_d: sh and bash diverged ([$_osh] vs [$_oba])"
     ok
   fi
   if [ "$have_dash" = 1 ]; then
-    _oda=$(dash -c ". \"$LIB\"; $_s" 2>/dev/null)
+    _oda=$(dash -c ". \"$LIB\"; $_s" "$LIB" 2>/dev/null)
     [ "$_oda" = "$_e" ] || fail "$_d [dash]: expected [$_e] got [$_oda] (runtime bashism — e.g. IFS=\$'\\t')"
     ok
   fi

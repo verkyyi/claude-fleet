@@ -18,7 +18,7 @@
 # no real runner carries (GitHub's own job runs under a Runner.Worker).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-idle-cost.sh fleet-idle-cost.py fleet-lib.sh fleet-doctor.sh; do
+for f in fleet-idle-cost.sh fleet-idle-cost.py fleet-lib.sh fleet-client-core.sh fleet-doctor.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v tmux >/dev/null 2>&1 || { echo "SKIP: no tmux"; exit 0; }

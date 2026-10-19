@@ -24,7 +24,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/doctor-mcp-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets"
-for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do
+for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/bin/"
 done
 chmod +x "$WORK/bin/"*.sh

@@ -36,6 +36,9 @@ else
     while [ -L "$_s" ]; do _l=$(readlink "$_s"); if [ "${_l#/}" != "$_l" ]; then _s=$_l; else _s=${_s%/*}/$_l; fi; done
     cd "${_s%/*}/" 2>/dev/null && pwd)" 2>/dev/null
 fi
+# a POSIX sh (dash) knows no BASH_SOURCE: there the sourcing script's own
+# directory ($0 — e.g. `sh bin/hub-zoom.sh`) is where both files are
+[ -f "$_FLEET_CORE_DIR/fleet-client-core.sh" ] || _FLEET_CORE_DIR="$(cd "${0%/*}/" 2>/dev/null && pwd)"
 if [ -f "$_FLEET_CORE_DIR/fleet-client-core.sh" ]; then
   # shellcheck source=fleet-client-core.sh
   . "$_FLEET_CORE_DIR/fleet-client-core.sh"

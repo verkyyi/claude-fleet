@@ -36,7 +36,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-SRC='tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet-lib.sh usage-lib.sh fleet-daemon-lib.sh fleet-restore.sh'
+SRC='tmux-dash-collect.sh fleet-quotawatch.sh fleet-account.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-daemon-lib.sh fleet-restore.sh'
 for f in $SRC; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

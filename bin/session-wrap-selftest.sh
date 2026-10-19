@@ -350,7 +350,7 @@ waitfor "pa: the wrapper returned 0" screen_has pa 'WRAP_RC=0'
 
 # B': the worker credential (issue #1809) — minted per launch, revoked on exit.
 mkdir -p "$WORK/kbin" "$WORK/kconf"
-for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh; do
+for f in fleet_repo_authority.py fleet-session-wrap.sh fleet-session-page.py fleet_sleep_park.py fleet-mcp.py fleet-lib.sh fleet-client-core.sh; do
   ln -s "$BIN/$f" "$WORK/kbin/$f"
 done
 cat > "$WORK/cred-launch" <<EOF

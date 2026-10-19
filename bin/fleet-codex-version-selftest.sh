@@ -18,7 +18,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-for f in fleet-doctor.sh fleet-codex.sh fleet-codex-runtime.py fleet-lib.sh; do
+for f in fleet-doctor.sh fleet-codex.sh fleet-codex-runtime.py fleet-lib.sh fleet-client-core.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: python3 missing — skip'; exit 0; }
@@ -79,7 +79,7 @@ exec /usr/bin/uname "\$@"
 SH
 chmod +x "$WORK/fake/uname"
 mkdir -p "$WORK/dbin"
-for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh fleet-codex-runtime.py; do
+for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh fleet-codex-runtime.py; do
   [ -f "$BIN/$f" ] && cp "$BIN/$f" "$WORK/dbin/"
 done
 doctor() {   # $1 = PATH prefix ('' = no codex at all)
@@ -105,7 +105,7 @@ rm -f "$WORK/conf/fleet.settings"
 # ============================================================================
 # 3. the launcher: warn once, never block
 # ============================================================================
-for f in fleet-codex.sh fleet-lib.sh fleet-codex-runtime.py fleet-hooks-emit.sh set-claude-state.sh; do
+for f in fleet-codex.sh fleet-lib.sh fleet-client-core.sh fleet-codex-runtime.py fleet-hooks-emit.sh set-claude-state.sh; do
   [ -f "$BIN/$f" ] && ln -s "$BIN/$f" "$WORK/install/bin/$f"
 done
 ln -s "$ROOT/commands" "$WORK/install/commands"; ln -s "$ROOT/hooks" "$WORK/install/hooks"

@@ -30,7 +30,7 @@ stop_hub() { [ -n "$HUBPID" ] && kill "$HUBPID" 2>/dev/null; [ -n "$HUBPID" ] &&
 trap 'stop_hub; rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets/s1/repos" "$WORK/state" "$WORK/leases"
-for f in fleet-issue-bridge.sh fleet-lib.sh fleet-input.py fleet_ticket.py fleet-ticket.sh; do
+for f in fleet-issue-bridge.sh fleet-lib.sh fleet-client-core.sh fleet-input.py fleet_ticket.py fleet-ticket.sh; do
   cp "$BIN/$f" "$WORK/bin/$f"
 done
 INJECT="$WORK/inject.log"; GHLOG="$WORK/gh.log"; SPAWN_LOG="$WORK/spawn.log"

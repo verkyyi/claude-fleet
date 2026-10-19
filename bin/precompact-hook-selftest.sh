@@ -24,7 +24,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-FILES="precompact-hook.sh refocus-hook.sh fleet-lib.sh fleet-ladder-log.sh"
+FILES="precompact-hook.sh refocus-hook.sh fleet-lib.sh fleet-client-core.sh fleet-ladder-log.sh"
 for f in $FILES; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done

@@ -20,7 +20,7 @@
 # Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-webhook.sh; do
+for f in fleet-doctor.sh fleet-daemon-lib.sh fleet-trust.sh fleet-lib.sh fleet-client-core.sh fleet-webhook.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 

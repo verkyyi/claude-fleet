@@ -39,7 +39,7 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$BIN/.." && pwd)"
-for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py fleet-config.py fleet-agent-bundle.py; do
+for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-client-core.sh fleet-agent-team.py fleet-agent-defaults.py fleet-hooks-merge.py fleet-config.py fleet-agent-bundle.py; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s missing\n' "$BIN/$f" >&2; exit 2; }
 done
 command -v python3 >/dev/null 2>&1 || { echo 'selftest: SKIP — no python3'; exit 0; }
@@ -55,7 +55,7 @@ fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--
 # Two install roots: NEW carries the composer, OLD does not (a pre-#1782 install).
 for box in new old; do
   mkdir -p "$WORK/$box/bin" "$WORK/$box/conf" "$WORK/$box/mod/fleet/.claude-plugin"
-  for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh; do ln -s "$BIN/$f" "$WORK/$box/bin/$f"; done
+  for f in fleet-claude.sh fleet-codex.sh fleet-lib.sh fleet-client-core.sh; do ln -s "$BIN/$f" "$WORK/$box/bin/$f"; done
   printf '#!/bin/sh\nexit 0\n' > "$WORK/$box/bin/fleet-account.sh"; chmod +x "$WORK/$box/bin/fleet-account.sh"
   printf '{"name":"fleet","version":"9.9.9"}\n' > "$WORK/$box/mod/fleet/.claude-plugin/plugin.json"
   ln -s "$ROOT/hooks" "$WORK/$box/hooks"
