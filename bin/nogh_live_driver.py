@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — C9 实测由 owner 手动跑，docs/dev/C9-ISOLATION.md
 """One bounded C9 row on the owner's ORIGINAL inert test resources.
 
 No creation, enrollment, deployment, task repair or delete operation is offered.

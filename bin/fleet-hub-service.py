@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — 管理员装 hub 的 launchd 服务，docs/dev/FLEET-HUB.md · INSTALL.md
 """Install and inspect the persistent Fleet Hub launchd service on macOS."""
 
 import argparse

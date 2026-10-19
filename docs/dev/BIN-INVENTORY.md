@@ -5,9 +5,10 @@
 组件、类别与归属模式来自 [COMPONENTS.md](COMPONENTS.md)，规则按表顺序首个匹配。
 
 ```text
-总数	1303
-已归类	1302
-待删候选	19
+总数	1301
+已归类	1301
+待删候选	0
+人工入口	11
 未归类	0
 ```
 
@@ -27,6 +28,10 @@ CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；
 自测优先继承同名被测脚本（允许省略 fleet- 前缀），再取最长被测名称前缀；
 其余依显式规则，跨组件检查归构建与验证。被 CI 自测引用链触达的测试/夹具保留；
 只有测试引用的生产文件仍列候选，不能据此删除测试专用依赖。
+另外三种引用也算：`fleet <词>` 按命令写出时（行首、引号、括号里）指 bin/fleet 分派到的
+`fleet-<词>.{py,sh}`；按目录读的夹具/放上 PATH 的目录，引用目录即引用其下全部文件；
+CI 自测引用链读到的数据文件（基线、夹具、表）。没人按名调用、由人手动运行的程序
+在文件头写 `# bin-inventory: 人工入口 — <谁在用>`，单列「人工入口」，不计候选。
 
 ## 组件汇总
 
@@ -40,7 +45,7 @@ CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；
 | 上下文连续性（`fleet-handoff` / `fleet-compact-resume` / `fleet-context` / `handoff`） | 核心 | 29 |
 | 仓库接入与帮助（`fleet-add-repo` / `fleet-help`） | 按需 | 14 |
 | 休眠（sleep） | 待定 | 10 |
-| 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 66 |
+| 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 65 |
 | 会话状态钩子（`set-claude-state.sh`） | 核心 | 1 |
 | 会话迁移与历史（`fleet-move` / `fleet-history`） | 核心 | 18 |
 | 内容送达与阅读（`fleet-open` / `doc-preview`） | 按需 | 9 |
@@ -48,16 +53,15 @@ CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；
 | 压缩后任务恢复（`bin/refocus-hook.sh`） | 核心 | 2 |
 | 反馈（`fleet-feedback`） | 按需 | 3 |
 | 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 65 |
-| 待删候选（暂无组件） | — | 1 |
 | 执行会话与跨会话协作 MCP（claim / issue / PR / evidence / spawn / await / children / send / report / file_issue / ask） | 核心 | 63 |
-| 执行会话（`fleet-claim` / worker start hook） | 核心 | 42 |
-| 承载节点（managed-node / spot-node） | 核心 | 94 |
+| 执行会话（`fleet-claim` / worker start hook） | 核心 | 46 |
+| 承载节点（managed-node / spot-node） | 核心 | 93 |
 | 接入中继（cred-relay / gh-relay） | 核心 | 10 |
 | 操作者终端集成（iterm2 / laptop-url-opener.sh） | 按需 | 2 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 5 |
 | 收集与账本观察（collect / ledger-watch） | 待定 | 17 |
 | 更新说明（`whats_new` / `bin/fleet-whats-new.sh`） | 按需 | 2 |
-| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 312 |
+| 构建与验证（ci-runner / workflows / 默认安装审计） | 核心 | 309 |
 | 浏览器（`fleet-browser`） | 按需 | 2 |
 | 版本维护（install-sync / base-sync） | 核心 | 58 |
 | 登录说明规则块（`CLAUDE.md` / `AGENTS.md` 的 `fleet:agent-defaults` 块） | 移除 | 2 |
@@ -74,25 +78,22 @@ CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；
 
 | 文件 | 组件 | 类型 | 引用文件数 | 首个引用 | 候选理由 |
 |---|---|---|---:|---|---|
-| `bin/classify-hook.sh` | 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 程序/数据 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fixtures/claim-grounding/missing-usage.jsonl` | 构建与验证（ci-runner / workflows / 默认安装审计） | 测试/夹具 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fixtures/claim-grounding/sidecar.jsonl` | 构建与验证（ci-runner / workflows / 默认安装审计） | 测试/夹具 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fixtures/crash/panic-full-2026-10-03-094530.0002.panic` | 构建与验证（ci-runner / workflows / 默认安装审计） | 测试/夹具 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fleet-bin-inventory.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 程序/数据 | 1 | `bin/fleet-bin-inventory-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-claim-grounding-measure.sh` | 构建与验证（ci-runner / workflows / 默认安装审计） | 程序/数据 | 1 | `bin/fleet-claim-grounding-measure-selftest.py` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-guide.sh` | 首次使用（`fleet-onboard`） | 程序/数据 | 1 | `bin/fleet-one-per-login-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-hub-latency.sh` | Hub（`tokenledger`） | 程序/数据 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fleet-hub-service.py` | Hub（`tokenledger`） | 程序/数据 | 2 | `bin/daemon-nofile-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-list.sh` | 终端看台与薄客户端 | 程序/数据 | 2 | `bin/pool-not-a-fleet-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-machine-policy.sh` | 承载节点（managed-node / spot-node） | 程序/数据 | 2 | `bin/fleet-break-it-hub-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 测试/夹具 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fleet-node-supervisor-counterexample-envelope.py` | 承载节点（managed-node / spot-node） | 程序/数据 | 1 | `bin/fleet-node-supervisor-selftest-budget.py` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-phone-mcp.py` | Fleet MCP（status / where / context / open / show） | 程序/数据 | 1 | `bin/fleet-phone-mcp-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/fleet-report-stats.sh` | 收集与账本观察（collect / ledger-watch） | 程序/数据 | 0 | `—` | 扫描范围内无静态引用；复核外部入口及动态拼接 |
-| `bin/fleet_native_continue.py` | 待复核 | 程序/数据 | 4 | `bin/fleet-native-cleanup-selftest.py` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/no-direct-gh.baseline` | 构建与验证（ci-runner / workflows / 默认安装审计） | 程序/数据 | 2 | `bin/fleet-break-it-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/nogh_live_driver.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 程序/数据 | 2 | `bin/nogh-live-selftest.py` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
-| `bin/session-shell/codex` | 执行会话（`fleet-claim` / worker start hook） | 程序/数据 | 1 | `bin/fleet-session-shell-agent-selftest.sh` | 仅测试/夹具引用；复核人工入口及测试专用依赖 |
+
+## 人工入口（不计候选）
+
+| 文件 | 组件 | 谁在用 |
+|---|---|---|
+| `bin/fleet-bin-inventory.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 维护者重生成 docs/dev/BIN-INVENTORY.md（--markdown），见 COMPONENTS.md |
+| `bin/fleet-claim-grounding-measure.sh` | 构建与验证（ci-runner / workflows / 默认安装审计） | 认领/落地测量，docs/dev/CLAIM-MEASUREMENT.md |
+| `bin/fleet-hub-latency.sh` | Hub（`tokenledger`） | 跨机状态延迟测量（「≤ 3 秒」），docs/dev/FLEET-HUB.md |
+| `bin/fleet-hub-service.py` | Hub（`tokenledger`） | 管理员装 hub 的 launchd 服务，docs/dev/FLEET-HUB.md · INSTALL.md |
+| `bin/fleet-list.sh` | 终端看台与薄客户端 | 列出 fleet，README「bin/fleet-list.sh」 |
+| `bin/fleet-machine-policy.sh` | 承载节点（managed-node / spot-node） | 管理员设每人可用机器，docs/public/*/admin/machines.md |
+| `bin/fleet-native-plugin-cli-selftest.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md |
+| `bin/fleet-phone-mcp.py` | Fleet MCP（status / where / context / open / show） | 管理员 `fleet service add phone-mcp` 起的服务，docs/dev/PHONE-MCP.md |
+| `bin/fleet-report-stats.sh` | 收集与账本观察（collect / ledger-watch） | EPIC #935 回报质量指标，docs/dev/ARCHITECTURE.md |
+| `bin/fleet_native_continue.py` | 执行会话（`fleet-claim` / worker start hook） | 旧 Codex 会话一次续接（#4775），docs/dev/NATIVE-OBSERVE.md |
+| `bin/nogh_live_driver.py` | 构建与验证（ci-runner / workflows / 默认安装审计） | C9 实测由 owner 手动跑，docs/dev/C9-ISOLATION.md |
 
 ## 未归类
 
