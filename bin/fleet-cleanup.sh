@@ -761,7 +761,7 @@ teardown() (
     note "  teardown: sleep record of $WIN could not be retired — deferred"
     done_token skip:live; return 1
   fi
-  [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")"   # the fleet's close, not one to pull back (#1840)
+  [ -n "$WIN" ] && fleet_win_retire "$WIN" "$(fleet_socket "$FLEET_SESSION")" landed   # the fleet's close, not one to pull back (#1840)
   [ -n "$WIN" ] && ftmux kill-window -t "$WIN" 2>/dev/null
   # A shell / view left in the worktree goes with it (issue #3352).
   if [ -n "$WT" ]; then

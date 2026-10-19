@@ -901,9 +901,14 @@ case "$TASK_REF" in T[1-9]*) [ -n "$ORIGIN" ] && [ "$ORIGIN" != hub ] \
 # and what it was opened for; the short code lands as @task_short. Backgrounded —
 # the SessionStart hook fills a missing `opened` itself, so a slow one costs nothing.
 _idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
+# C4: its parent's ID, the ID whose segment a --resume picks up (its prev), its worktree.
+_idpar=${ORIGIN_WID#*/}; fleet_is_fid "$_idpar" || _idpar=''
 fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
-  ${TASK_REF:+--task "$TASK_REF"} >/dev/null 2>&1 & )
+  ${TASK_REF:+--task "$TASK_REF"} ${_idpar:+--parent "$_idpar"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
+  ${wt:+--worktree "$wt"} >/dev/null 2>&1 & )
+# The worktree remembers its ID beside its record (C4).
+fleet_is_fid "$_idf" && [ -n "${wt:-}" ] && fleet_worktree_id_mark "$wt" "$_idf"
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper
 unset _sw _fid
 # Window handle (issue #566): the fleet's own short, typeable name for this window
@@ -931,7 +936,7 @@ if [ -z "$ORIGIN_WID" ] && [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS"
 if [ -n "$FILL_PID" ]; then
   wait "$FILL_PID" 2>/dev/null; _frc=$?
   if [ "$_frc" != 0 ]; then
-    fleet_win_retire "$win" "$SOCK"
+    fleet_win_retire "$win" "$SOCK" spawn-failed
     TM kill-window -t "$win" 2>/dev/null
     rm -f "$FILL_MARK"
     git -C "$MAIN" worktree remove --force "$wt" >/dev/null 2>&1

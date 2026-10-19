@@ -848,7 +848,7 @@ pool_watch() {
     tmux -L "$sock" has-session -t "=$pool" 2>/dev/null || continue
     while IFS='|' read -r w nr r wt slug; do
       [ -n "$w" ] || continue
-      fleet_win_retire "$w" "$sock"
+      fleet_win_retire "$w" "$sock" closed
       tmux -L "$sock" kill-window -t "$pool:$w" 2>/dev/null || continue
       [ "$nr" = 1 ] && continue                         # a HOME entry: no worktree
       [ -n "$slug" ] && [ -n "$wt" ] || continue

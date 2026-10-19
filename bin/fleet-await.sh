@@ -77,6 +77,10 @@
 # all (hub-spawned) is adopted — its @origin is set to yours, so its report lands
 # in your ledger.
 #
+# `T-<code>` / `fid:<ID>` / a full ID (EPIC T497 C4) is a window's ID:
+# `fleet-id.sh await` — MERGED / SUCCEEDED 0 · FAILED / BLOCKED 1 · TIMEOUT 3 ·
+# EXITED 4 (closed with no result); never a spawn.
+#
 # `T<n>` (issue #3330) is a hub task record: the record's issue (a development task
 # a session dispatched, or an EPIC member) is waited on exactly as `<N>`
 # with its repo, and the verdict carries a `task: T<n>` line. A record with no
@@ -115,9 +119,16 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
-case "$NUM" in wid:?*|T[1-9]*) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
+case "$NUM" in wid:?*|T[1-9]*|[Tt]-?*|fid:?*|????????-????-????-????-????????????) ;; ''|*[!0-9]*) die "usage: fleet-await.sh <issue-number> [--timeout s] [--no-spawn]" ;; esac
 case "$TIMEOUT" in ''|*[!0-9]*|0) die "--timeout wants a positive number of seconds" ;; esac
 case "$INTERVAL" in ''|*[!0-9]*|0) die "--interval wants a positive number of seconds" ;; esac
+# An ID (EPIC T497 C4, design §4.3): `T-<code>`, `fid:<ID>` or the full ID — wait
+# until it has a result or closes, off its ledger (the hub mirror's record for one on
+# another machine). Never spawns: an ID is a window that already exists.
+case "$NUM" in
+  [Tt]-?*|fid:?*|????????-????-????-????-????????????)
+    exec bash "$BIN/fleet-id.sh" await "${NUM#fid:}" --timeout "$TIMEOUT" --interval "$INTERVAL" ;;
+esac
 
 # Deadline #1: the kernel alarm, armed once, before anything can block. Its margin
 # covers one last read after the $SECONDS bound fires; if perl is missing the

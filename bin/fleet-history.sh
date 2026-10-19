@@ -108,6 +108,11 @@
 #   row     <key|#pr>                Print the raw ledger row (the hub upload, #1609).
 #   meta    <key|#pr>                Print "<key>\t<title>" for a ledger row — lets the
 #           restorer name the resumed window from the title + bind @issue (#319).
+#   ids [<filter>] [--all] [--json]  By ID (EPIC T497 C4): one row per window ID —
+#           code · 状态 · result · closed at · title (fleet-id.sh history).
+#   show <ID|T-code>                 its native segments (agent · id · span · trigger).
+#   continue <ID> [--seg N] [--exec] 「从这一段继续」: a new window, a new ID, prev = it.
+#   reopen <ID> [--exec]             「恢复这个窗口」: the same ID, its newest segment.
 # <key> is an issue number (a worker) or a `scratch-<N>` slug (a scratch, #466).
 # `--key` is the flag name for it; `--issue` remains accepted as its alias so an
 # older/live install's call sites keep working across a partial sync.
@@ -1618,6 +1623,13 @@ case "$cmd" in
   row)    cmd_row "$@";;
   fold)   cmd_fold "$@";;
   drafts) cmd_drafts "$@";;
+  # By ID (EPIC T497 C4, design §4.4): one row per ID (code · 状态 · result · closed
+  # at · title), `show` its native segments, `continue` from one (a new window, a new
+  # ID whose prev it is) or `reopen` it (the same ID, its newest segment).
+  ids)      exec bash "$BIN/fleet-id.sh" history "$@";;
+  show)     exec bash "$BIN/fleet-id.sh" get "$@";;
+  continue) exec bash "$BIN/fleet-id.sh" continue "$@";;
+  reopen)   exec bash "$BIN/fleet-id.sh" reopen "$@";;
   ''|-h|--help|help) usage;;
-  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|row|fold|drafts)" >&2; exit 2;;
+  *) echo "fleet-history: unknown subcommand '$cmd' (record|record-closed|resumed|list|rows|resume|path|meta|row|fold|drafts|ids|show|continue|reopen)" >&2; exit 2;;
 esac

@@ -190,6 +190,23 @@ fi
 
 [ -z "$OUTCOME" ] || { printf 'fleet-report-parent: --outcome requires an accepted task\n' >&2; exit 2; }
 
+# --- the result on the ID (EPIC T497 C4, S2) -------------------------------------
+# A session's OWN report (no --win: not a reaper's backstop) is a result of its ID:
+# several are fine, the newest counts; a window the fleet closes without one reads
+# 已退出 (S7). Written as this script exits — whatever road it took (a hub-spawned
+# session has no parent to tell, and still has a result) — with the state the
+# checks below settled on, so an unmerged PR is never recorded as merged. Beside
+# the old record (双写); it never changes the exit code.
+id_result() {
+  local rc=$?
+  if [ -z "$WIN" ] && [ "$DRY" != 1 ] && fleet_is_fid "$selffid"; then
+    python3 "$BIN/fleet_id.py" result "$selffid" --state "$STATE" --summary "$SUMMARY" --agent "$wagent" \
+      ${PR:+--pr "${PR//[^0-9]/}"} >/dev/null 2>&1 || :
+  fi
+  return "$rc"
+}
+trap id_result EXIT
+
 case "$ORIGIN" in
   wid:*) owid=${ORIGIN#wid:}; worigin=${owid#*/}; ofid=''
          # an identity-form worker_id (issue #1646) names its session, not a key
@@ -748,6 +765,27 @@ fi
 # (hub-spawned, cross-fleet, never reported) ⇒ the old silent success, below.
 SENDKEY="$worigin" RELAY_FROM='' pwin=''
 pwin=$PFOUND
+# By the parent's ID first (EPIC T497 C4, design §4.3): its window carries the same ID
+# through /clear, /compact, a handoff or an agent switch, so none of them loses a
+# report; a parent ID that has closed hands it to its successor (down the prev
+# chain), else up its own parent; nobody ⇒ the person's reminder. An ID this
+# machine's ledger does not know keeps the old road (the key, the live ancestor).
+if [ -z "$pwin" ] && fleet_is_fid "$ofid"; then
+  _take=$(fleet_id_take "$ofid"); _trc=$?
+  case "$_trc" in
+    0) IFS=$'\t' read -r _tid _thow _tsock pwin <<< "$_take"
+       if [ -n "$SOCK" ] && [ "$_tsock" != "$SOCK" ]; then pwin=''
+       else
+         SENDKEY=$(fleet_window_okey "$sess" "$pwin" 2>/dev/null); [ -n "$SENDKEY" ] || SENDKEY=$_tid
+         RELAY_FROM="$worigin ($_thow)"
+         if [ "$DRY" != 1 ] && command -v children_append >/dev/null 2>&1; then
+           children_append "$SENDKEY" "$(row_json \
+             "$ledkey" "$UST" "${PR//[^0-9]/}" "$VERDICT" "$SUMMARY" "$wname" "$TIER" "$worigin" 2>/dev/null)" "$sess" || :
+         fi
+       fi ;;
+    1) orphan "parent ID $(bash "$BIN/fleet-id.sh" short "$ofid" 2>/dev/null || printf '%s' "$ofid") has closed, with no successor or parent open" ;;
+  esac
+fi
 [ -n "$pwin" ] || pwin=$(fleet_win_for_key "$worigin" "$SOCK") || pwin=''
 if [ -z "$pwin" ] && _anc=$(fleet_live_ancestor "$worigin" "$sess" "$SOCK"); then
   SENDKEY=${_anc%%$'\t'*}; pwin=${_anc#*$'\t'}; RELAY_FROM="$worigin"

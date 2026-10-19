@@ -259,7 +259,42 @@ case "$tgt" in
     done <<EOF_IDS
 $socks
 EOF_IDS
-    if [ -n "$w" ]; then tgt=$w; else tgt="wid:$fid"; fi ;;   # not live here: wherever it lives
+    if [ -z "$w" ]; then
+      # Closed here (EPIC T497 C4, design §4.3): what was meant for it goes to its
+      # successor (down the prev chain), else up its parent — said on stderr and in
+      # the text; nobody ⇒ the person's reminder. An ID this ledger does not know
+      # keeps the old road: wherever it lives.
+      take=$(fleet_id_take "$fid"); trc=$?
+      case "$trc" in
+        0) IFS=$'\t' read -r _tid _thow _tsock w <<< "$take"
+           [ "$_tid" = "$fid" ] || {
+             printf 'fleet-peer-send: %s has closed — sent to %s (%s) instead\n' "$tgt" \
+               "$(bash "$BIN/fleet-id.sh" short "$_tid" 2>/dev/null || printf '%s' "$_tid")" "$_thow" >&2
+             text="[发给 ${tgt} 的消息——它已关闭，转给你（${_thow}）]
+$text"; }
+           SOCK=$_tsock ;;
+        1) idclosed="$tgt" ;;
+      esac
+    fi
+    if [ -n "$w" ]; then tgt=$w
+    elif [ -n "${idclosed:-}" ]; then tgt="id-closed:$fid"
+    else tgt="wid:$fid"; fi ;;   # not live here: wherever it lives
+esac
+# A closed ID nobody takes over (C4): the person's reminder, never exit 0 unheld.
+case "$tgt" in
+  id-closed:*)
+    f="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global/orphan-reports.ndjson"
+    mkdir -p "${f%/*}" 2>/dev/null
+    row=$(OR_TO="$idclosed" OR_SUM="$text" python3 -c 'import json, os, time
+e = os.environ
+print(json.dumps({"ts": int(time.time()), "child_key": "message", "state": "MESSAGE", "pr": "",
+                  "summary": e["OR_SUM"][:600], "parent": e["OR_TO"]}, ensure_ascii=False))' 2>/dev/null) \
+      && printf '%s\n' "$row" >> "$f" 2>/dev/null \
+      || die 1 "$idclosed has closed, nobody took over, and the person's reminder could not be written; nothing sent"
+    bash "${FLEET_ORPHAN_ALERT_CMD:-$BIN/fleet-alerts.sh}" event child-report \
+      "fleet: 发给 $idclosed 的消息——它已关闭、没有接班，交给你: $(printf '%s' "$text" | head -1 | cut -c1-160)" >/dev/null 2>&1 || :
+    printf 'rerouted → 你的提醒 (%s): %s has closed with no successor or parent open\n' "$f" "$idclosed"
+    exit 0 ;;
 esac
 
 # --- worker_id → where it lives (issue #1420) -------------------------------------

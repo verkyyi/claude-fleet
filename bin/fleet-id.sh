@@ -16,6 +16,21 @@
 #   fleet-id.sh short  <ID>                  its short code, T-<5+>
 #   fleet-id.sh resolve <ID | T-code>        → the full ID; rc 1 none, rc 2 ambiguous
 #                                            (the candidates on stderr — never a pick)
+#   fleet-id.sh status <ID | T-code>         {state, label, result, conflict}: the one word a
+#                                            reader shows (EPIC T497 C4 — S2 / S7 / S9)
+#   fleet-id.sh route <ID | T-code>          who takes what was meant for it: `<ID>\t<how>`,
+#                                            how = self · successor (down the prev chain) ·
+#                                            parent · unknown (no ledger here); rc 1 nobody
+#   fleet-id.sh children <ID | T-code> [--json]   the IDs it spawned (their `parent`)
+#   fleet-id.sh await <ID | T-code> [--timeout s] [--interval s]
+#                                            until it has a result or closes: MERGED /
+#                                            SUCCEEDED 0 · FAILED / BLOCKED … 1 · TIMEOUT 3 ·
+#                                            EXITED 4 (closed with no result)
+#   fleet-id.sh history [<filter>] [--all] [--json]   one row per ID: code · 状态 ·
+#                                            result · closed at · title (closed ones, or --all)
+#   fleet-id.sh continue <ID> [--seg N] [--exec]   「从这一段继续」: a NEW window, a new
+#                                            ID whose prev is this one (S8)
+#   fleet-id.sh reopen <ID> [--exec]         「恢复这个窗口」: the SAME ID, its newest segment
 #   fleet-id.sh push [<ID>…]                 hand the ledgers (all, or these) to the hub's
 #                                            mirror in (ID, seq) order from where it is
 #                                            (EPIC T497 C2, fleet_id.py push): rc 0 · 3 no
@@ -43,13 +58,18 @@ esac
 
 # Every live window's ID on this login's fleets: a window opened before its ledger
 # is still an ID a short code may name, and one a new code must not collide with.
-live=''
+# `scanned` = a tmux server answered: only then is an ID with no window known to be
+# gone (C4's status / route); with none, the ledger alone says (FLEET_ID_LIVE unset).
+# FLEET_ID_LIVE_CMD is the selftest's seam (prints the live IDs).
+live='' scanned=''
 case "$1" in
-  open|short|resolve|get|native|result|close)
-    if [ -n "${TMUX:-}" ]; then live=$(fleet_lw '#{@fleet_id}' 2>/dev/null)
+  open|short|resolve|get|native|result|close|status|route|children|await|history|continue|reopen)
+    if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
+    elif [ -n "${TMUX:-}" ]; then live=$(fleet_lw '#{@fleet_id}' 2>/dev/null) && scanned=1
     else
       while IFS= read -r s; do
         [ -n "$s" ] || continue
+        tmux -L "$s" list-sessions >/dev/null 2>&1 && scanned=1
         live="$live"$'\n'"$(fleet_lw '#{@fleet_id}' tmux -L "$s" 2>/dev/null)"
       done <<EOF
 $(fleet_sockets 2>/dev/null)
@@ -102,4 +122,30 @@ if [ "$cmd" = open ]; then
   [ "${FLEET_ID_PUSH:-1}" = 0 ] || ( bash "$BIN/fleet-id.sh" push "$1" </dev/null >/dev/null 2>&1 & )
   exit 0
 fi
-FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"
+# 「从这一段继续」/「恢复这个窗口」 (EPIC T497 C4, design §4.4): the plan is the
+# ledger's (fleet_id.py continue / reopen); --exec opens the window through the one
+# spawner, dash-raw-session.sh — a new ID with --prev, or the same one with --fid.
+if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
+  ex=0; pargs=()
+  for a in "$@"; do if [ "$a" = --exec ]; then ex=1; else pargs+=("$a"); fi; done
+  if [ -n "$scanned" ]; then plan=$(FLEET_ID_LIVE="$live" python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1
+  else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
+  [ "$ex" = 1 ] || { printf '%s\n' "$plan"; exit 0; }
+  fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
+print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","title")))')
+  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_title <<< "$fields"
+  rargs=(--resume "$p_native" --origin hub)
+  [ "$p_agent" = codex ] && rargs+=(--agent codex)
+  [ "$p_title" = - ] || rargs+=(--name "$p_title")
+  if [ "$p_repo" != - ] && [ "$p_wt" != - ] && [ -d "$p_wt" ]; then rargs+=(--repo "$p_repo" --worktree "$p_wt")
+  elif [ "$p_repo" = - ]; then rargs+=(--no-repo)
+  else
+    printf 'fleet-id: %s worked in %s (%s), which is gone — by hand: recreate it, then `claude --resume %s` there\n' \
+      "$p_id" "$p_wt" "$p_repo" "$p_native" >&2
+    exit 1
+  fi
+  if [ "$cmd" = continue ]; then rargs+=(--prev "$p_id"); else rargs+=(--fid "$p_id"); fi
+  exec bash "${FLEET_ID_SPAWN:-$BIN/dash-raw-session.sh}" "${rargs[@]}"
+fi
+if [ -n "$scanned" ]; then FLEET_ID_LIVE="$live" exec python3 "$BIN/fleet_id.py" "$cmd" "$@"; fi
+exec python3 "$BIN/fleet_id.py" "$cmd" "$@"

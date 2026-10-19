@@ -194,9 +194,15 @@ def fold(events):
             if isinstance(ev.get("short"), str) and len(ev["short"]) > len(have):
                 rec["opened"]["short"] = ev["short"]
         elif kind == "closed":
-            rec["closed"] = {"ts": ev.get("ts"), "reason": ev.get("reason", "")}
+            if rec["closed"] is None:
+                rec["closed"] = {"ts": ev.get("ts"), "reason": ev.get("reason", "")}
             if rec["segments"] and rec["segments"][-1]["end"] is None:
                 rec["segments"][-1]["end"] = ev.get("ts")
+        elif kind == "reopened":
+            # 「恢复这个窗口」(EPIC T497 C4): the same ID goes on in a new window
+            rec["closed"] = None
+            if ev.get("window"):
+                rec["opened"]["window"] = ev["window"]
     if lazy:
         rec["opened"]["lazy"] = True
     return rec
@@ -284,6 +290,232 @@ def resolve(addr, extra_known=()):
     if not hits:
         return 1, []
     return (0 if len(hits) == 1 else 2), hits
+
+
+# ---- results, parents, successors (EPIC T497 C4; design page §4.3–§4.5) ----------
+#
+# What a window is doing is read off its ID, never off a task record's generation
+# or a native process: a result is an event on the ledger (several are fine — the
+# newest counts, S2), a window the fleet closed without one has 已退出 (S7), and a
+# native segment live in two windows at once is a conflict in both until one of
+# them closes (S9). A message or a child's report for an ID that has closed goes
+# to its successor — the newest live ID whose `prev` it is, down the chain (S8:
+# 「从这一段继续」 opens a new ID with `prev`) — else up its `parent`, else nobody
+# here: the caller hands it to the person's reminder. A /clear, /compact, handoff
+# or agent switch never changes the ID, so none of them loses a report.
+#
+# `live` is the set of IDs a live window carries (fleet-id.sh scans the sockets
+# into FLEET_ID_LIVE); None = not known (no tmux to ask) — then an ID is live
+# while its ledger has not closed.
+
+SILENT_STATES = ("waiting", "idle")
+DONE_STATES = ("merged", "succeeded")
+FAIL_STATES = ("failed",)
+ASK_STATES = ("blocked", "needs")
+
+
+def alive(fid, rec, live):
+    if rec["closed"] is not None:
+        return False
+    return live is None or fid in live
+
+
+def last_result(rec):
+    return rec["results"][-1] if rec["results"] else None
+
+
+def _index():
+    """Every ledger here, folded once: {ID: rec}."""
+    return {f: fold(read(f)) for f in ledger_ids()}
+
+
+def conflicts(fid, live, idx=None):
+    """The other live IDs whose CURRENT segment is this ID's current segment (S9):
+    both windows run one native session. Empty once either closes."""
+    idx = idx if idx is not None else _index()
+    rec = idx.get(fid) or fold(read(fid))
+    if not rec["segments"] or not alive(fid, rec, live):
+        return []
+    mine = rec["segments"][-1]["native"]
+    out = []
+    for other, orec in idx.items():
+        if other == fid or not orec["segments"] or not alive(other, orec, live):
+            continue
+        if orec["segments"][-1]["native"] == mine:
+            out.append(other)
+    return sorted(out)
+
+
+def status(fid, live, idx=None):
+    """{state, label, result, conflict}: the one word a reader shows for an ID.
+    state ∈ running · conflict · done · failed · asking · exited (+ the result's own
+    state in `result`). The newest result counts (S2); closed with none = exited (S7)."""
+    idx = idx if idx is not None else _index()
+    rec = idx.get(fid) or fold(read(fid))
+    r = last_result(rec)
+    rs = (r or {}).get("state", "")
+    up = alive(fid, rec, live)
+    con = conflicts(fid, live, idx) if up else []
+    if con:
+        st, label = "conflict", "等你"
+    elif rs in DONE_STATES:
+        st, label = "done", "已完成"
+    elif rs in FAIL_STATES:
+        st, label = "failed", "失败"
+    elif rs in ASK_STATES:
+        st, label = "asking", "等你"
+    elif up:
+        st, label = "running", "运行中"
+    elif rec["closed"] is not None or live is not None:
+        st, label = "exited", "已退出"
+    else:
+        st, label = "running", "运行中"
+    out = {"id": fid, "short": rec["opened"].get("short") or short_for(fid, known_ids(idx.keys())),
+           "state": st, "label": label, "alive": up, "result": r, "closed": rec["closed"]}
+    if con:
+        out["conflict"] = con
+    return out
+
+
+def successors(fid, idx):
+    """IDs whose `prev` is fid, newest first."""
+    kids = [(o["opened"].get("ts") or 0, f) for f, o in idx.items() if o["opened"].get("prev") == fid and f != fid]
+    return [f for _, f in sorted(kids, reverse=True)]
+
+
+def route(fid, live, idx=None):
+    """Who takes what was meant for fid → (ID, how): how = self · successor · parent ·
+    '' (nobody here: the person's reminder) · unknown (no ledger here — the caller's
+    old road, e.g. another machine's ID)."""
+    idx = idx if idx is not None else _index()
+    if fid not in idx:
+        return fid, "unknown"
+    seen = set()
+
+    def down(f):
+        # the newest live ID down the prev chain
+        for s in successors(f, idx):
+            if s in seen:
+                continue
+            seen.add(s)
+            if alive(s, idx[s], live):
+                return s
+            got = down(s)
+            if got:
+                return got
+        return ""
+
+    cur, how = fid, "self"
+    while cur and cur not in seen:
+        seen.add(cur)
+        rec = idx.get(cur)
+        if rec is None:
+            return cur, "unknown"
+        if alive(cur, rec, live):
+            return cur, how
+        nxt = down(cur)
+        if nxt:
+            return nxt, "successor" if how == "self" else how
+        cur, how = rec["opened"].get("parent", ""), "parent"
+        if cur and not is_fid(cur):
+            cur = ""
+    return "", ""
+
+
+def children_of(fid, live, idx=None):
+    idx = idx if idx is not None else _index()
+    rows = []
+    for f, o in idx.items():
+        if o["opened"].get("parent") != fid:
+            continue
+        st = status(f, live, idx)
+        rows.append(dict(st, title=o["opened"].get("title", ""), prev=o["opened"].get("prev", ""),
+                         opened_at=o["opened"].get("ts")))
+    return sorted(rows, key=lambda r: r.get("opened_at") or 0)
+
+
+def _hub_record(fid):
+    """The hub mirror's record of an ID this machine has no ledger of — folded into the
+    ledger's shape — or None."""
+    code, ans = _poster()("GET", "/v1/node/ids/" + fid)
+    if code != 200 or not isinstance(ans, dict):
+        return None
+    rec = {"opened": {"short": ans.get("short", ""), "title": ans.get("title", ""), "parent": ans.get("parent", ""),
+                      "prev": ans.get("prev", "")}, "segments": [], "closed": None,
+           "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
+                        "ts": r.get("at")} for r in ans.get("results") or [] if isinstance(r, dict)]}
+    if ans.get("closed_at"):
+        rec["closed"] = {"ts": ans["closed_at"], "reason": ans.get("close_reason", "")}
+    return rec
+
+
+AWAIT_RC = {"done": 0, "failed": 1, "asking": 1, "exited": 4}
+
+
+def await_id(fid, timeout, interval, live_fn):
+    """Wait until fid has a result that is not a turn boundary, or has closed (design
+    §4.3). → the verdict block and its rc: 0 MERGED/SUCCEEDED · 1 FAILED/BLOCKED/
+    STOPPED · 3 TIMEOUT · 4 EXITED (closed with no result)."""
+    end = time.time() + timeout
+    while True:
+        local = os.path.exists(ledger_path(fid))
+        rec = fold(read(fid)) if local else _hub_record(fid)
+        if rec is not None:
+            r = last_result(rec)
+            short = rec["opened"].get("short") or short_for(fid, known_ids())
+            if r and r.get("state") not in SILENT_STATES:
+                word = r.get("state", "").upper() or "RESULT"
+                lines = [word, "id: %s (%s)" % (short, fid)]
+                if r.get("pr"):
+                    lines.append("pr: #%s" % str(r["pr"]).lstrip("#"))
+                if r.get("summary"):
+                    lines.append("summary: %s" % r["summary"])
+                print("\n".join(lines))
+                st = r.get("state")
+                return 0 if st in DONE_STATES else 1
+            if rec["closed"] is not None:
+                print("EXITED\nid: %s (%s)\nnote: the window closed without a result" % (short, fid))
+                return 4
+        left = end - time.time()
+        if left <= 0:
+            print("TIMEOUT\nid: %s\nnote: no result yet — run it again to keep waiting" % fid)
+            return 3
+        time.sleep(min(interval, left))
+
+
+def history_rows(live, include_open=False, idx=None):
+    """One row per ID (design §4.4: ID · 短名 · 结果 · 关闭时间), newest first —
+    closed IDs only unless include_open."""
+    idx = idx if idx is not None else _index()
+    rows = []
+    for f, o in idx.items():
+        st = status(f, live, idx)
+        if not include_open and st["alive"]:
+            continue
+        r = st["result"] or {}
+        rows.append({"id": f, "short": st["short"], "title": o["opened"].get("title", ""), "state": st["state"],
+                     "label": st["label"], "result": r.get("state", ""), "summary": r.get("summary", ""),
+                     "pr": r.get("pr", ""), "closed_at": (o["closed"] or {}).get("ts"),
+                     "opened_at": o["opened"].get("ts"), "segments": len(o["segments"]),
+                     "prev": o["opened"].get("prev", ""), "parent": o["opened"].get("parent", "")})
+    rows.sort(key=lambda r: r["closed_at"] or r["opened_at"] or 0, reverse=True)
+    return rows
+
+
+def continue_plan(fid, seg=None):
+    """What 「从这一段继续」 (a new window, a new ID, prev = fid — S8) or 「恢复这个窗口」
+    (the same ID, its newest segment) resumes: {native, agent, seg, worktree, repo, title}."""
+    rec = fold(read(fid))
+    segs = rec["segments"]
+    if not segs:
+        raise ValueError("%s has no native segment to resume" % fid)
+    n = len(segs) if seg is None else int(seg)
+    if n < 1 or n > len(segs):
+        raise ValueError("%s has segments 1..%d, not %s" % (fid, len(segs), seg))
+    s = segs[n - 1]
+    o = rec["opened"]
+    return {"id": fid, "seg": n, "native": s["native"], "agent": s["agent"], "worktree": o.get("worktree", ""),
+            "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None}
 
 
 # ---- the hub mirror (EPIC T497 C2) ----------------------------------------------
@@ -574,7 +806,11 @@ def hook(stdin):
             # A window opened before the ledger, or by a road that wrote no `opened`.
             open_id(fid, {"lazy": True, "agent": agent, "window": tmux(["display-message", "-p", "-t", pane, "#{window_id}"])})
         hook_retry_flush(pane, fid)
-        record_native(fid, agent, native, source, hint)
+        ev = record_native(fid, agent, native, source, hint)
+        if ev and ev.get("from") and ev.get("seg") == 1:
+            # a new window that resumed another ID's segment is a new ID whose prev is
+            # that one (S9; a spawn with --resume already wrote it — first value wins)
+            open_id(fid, {"prev": ev["from"].split("#")[0]})
         short = fold(read(fid))["opened"].get("short")
         if short and wopt(pane, "@task_short") != short:
             wset(pane, "@task_short", short)
@@ -627,7 +863,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -664,22 +900,88 @@ def main(argv):
     i = 0
     while i < len(args):
         a = args[i]
-        if a.startswith("--") and i + 1 < len(args):
+        if a in ("--json", "--all"):
+            pos.append(a)
+            i += 1
+        elif a.startswith("--") and i + 1 < len(args):
             opts[a[2:]] = args[i + 1]
             i += 2
         else:
             pos.append(a)
             i += 1
-    if not pos:
+    if cmd == "history":
+        lv = live if "FLEET_ID_LIVE" in os.environ else None
+        rows = history_rows(lv, include_open="--all" in pos)
+        flt = [p for p in pos if p != "--all" and p != "--json"]
+        if flt:
+            w = flt[0].lower()
+            rows = [r for r in rows if w in (r["short"] + " " + r["id"] + " " + r["title"] + " " + r["summary"]).lower()]
+        if "--json" in pos:
+            print(json.dumps(rows, ensure_ascii=False))
+            return 0
+        for r in rows:
+            print("%-9s %-6s %-9s %-11s %s" % (r["short"], r["label"], r["result"] or "-",
+                                             hhmm(r["closed_at"]) if r["closed_at"] else "-", r["title"]))
+        return 0
+    tpos = [p for p in pos if not p.startswith("--")]
+    if not tpos:
         return 2
-    target = pos[0]
+    target = tpos[0]
     if not is_fid(target):
         rc, hits = resolve(target, live)
         if rc != 0:
             return main(["resolve", target])
         target = hits[0]
+    lv = live if "FLEET_ID_LIVE" in os.environ else None
     if cmd == "open":
+        nat = opts.pop("from-native", "")
+        if nat and not opts.get("prev"):
+            # a new window resuming another ID's segment (S8 / S9): that ID is its prev
+            own = owner_of(nat, skip=target)
+            if own:
+                opts["prev"] = own[0]
         print(open_id(target, opts, live))
+        return 0
+    if cmd == "status":
+        print(json.dumps(status(target, lv), ensure_ascii=False))
+        return 0
+    if cmd == "route":
+        got, how = route(target, lv)
+        print("%s\t%s" % (got, how))
+        return 0 if got else 1
+    if cmd == "children":
+        rows = children_of(target, lv)
+        if "--json" in pos or opts.get("json"):
+            print(json.dumps(rows, ensure_ascii=False))
+        else:
+            for r in rows:
+                res = r["result"] or {}
+                print("%s  %s  %s%s  %s" % (r["short"], r["label"], res.get("state", "-"),
+                                            (" · PR #%s" % res["pr"]) if res.get("pr") else "", r["title"]))
+            print("%d children" % len(rows))
+        return 0
+    if cmd == "await":
+        try:
+            timeout = max(1, int(opts.get("timeout", "7200")))
+            interval = max(1, int(opts.get("interval", "15")))
+        except ValueError:
+            return 2
+        return await_id(target, timeout, interval, None)
+    if cmd in ("continue", "reopen"):
+        try:
+            plan = continue_plan(target, opts.get("seg"))
+        except ValueError as e:
+            print("fleet-id: %s" % e, file=sys.stderr)
+            return 1
+        if cmd == "reopen":
+            rec = fold(read(target))
+            if alive(target, rec, lv):
+                print("fleet-id: %s is still open in a window — nothing to reopen" % target, file=sys.stderr)
+                return 1
+            if opts.get("window"):
+                append(target, {"ev": "reopened", "window": opts["window"]})
+                push_later(target)
+        print(json.dumps(plan, ensure_ascii=False))
         return 0
     if cmd == "native":
         ev = record_native(target, opts.get("agent", "claude"), opts.get("native", ""), opts.get("source", "startup"),

@@ -227,11 +227,9 @@ def deliver_report(r, receipt):
     if not r["parent_session"]:
         print("COMMITTED\ntask: %s\nevent_id: %s" % (r["task"], r["event_id"]))
         return 0
-    if r["parent_task"]:
-        parent = call("get", r["parent_task"])["task"]
-        if not parent_matches(r, parent):
-            orphan(r, "parent generation retired; result remains on task")
-            return 0
+    # No parent generation / execution-owner gate (EPIC T497 C4): the parent is its
+    # session's ID, which a /clear, a handoff or a re-launch never changes; the
+    # receiving machine routes a closed one to its successor or parent (receive).
     # Existing outbox, including same-machine parents: one durable address and
     # one event ID across reconnects, never a timestamp allocated on each retry.
     suffix = hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
@@ -254,6 +252,24 @@ def deliver_report(r, receipt):
     return 3
 
 
+def id_result(c, state, summary, pr):
+    """The report as a result of the session's ID (EPIC T497 C4, S2) — beside the
+    task record (双写); never fails the report."""
+    fid = c["worker_id"].split("/")[1]
+    ev = {"ev": "result", "state": state, "summary": summary}
+    if c.get("provider"):
+        ev["agent"] = c["provider"]
+    if pr:
+        ev["pr"] = str(pr).lstrip("#")
+    try:
+        import fleet_id   # in-process: the ledger append runs no command
+        if fleet_id.is_fid(fid):
+            fleet_id.append(fid, ev)
+            fleet_id.push_later(fid)
+    except (ImportError, OSError, ValueError):
+        pass
+
+
 def report(pane, state, summary, pr, dry, socket="", outcome=""):
     c = context(pane, socket)
     observation = call("get", c["task"], stale=True)
@@ -271,6 +287,7 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
         r["status"] = state
         if dry:
             print(json.dumps(r)); return 0
+        id_result(c, outcome or state, summary, pr)
         return publish_report(r)
     # Keep the existing code-landing gate. Work outcome and code landing can be
     # reported independently using `fleet-task-record.sh report` with a result.
@@ -294,6 +311,7 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
     r["status"] = state  # landing projection is separate from terminal work outcome
     if dry:
         print(json.dumps(r)); return 0
+    id_result(c, "merged" if state == "merged" else outcome, summary, pr)
     return publish_report(r)
 
 
@@ -382,35 +400,38 @@ def receive(file):
         print("historical child generation; no delivery"); return 0
     if any(t.get(k, "" if k != "parent_generation" else 0) != r[k] for k in ("ticket_ref", "parent_task", "parent_session", "parent_generation")):
         raise ValueError("relay differs from accepted parent/ticket binding")
-    if r["parent_task"]:
-        parent = call("get", r["parent_task"])["task"]
-        if not parent_matches(r, parent):
-            orphan(r, "parent generation retired"); return 0
-    # The one resolver, and only the stable worker ID. No issue/name fallback.
+    # The parent by its ID (EPIC T497 C4, design §4.3) — the window carrying it, whatever
+    # native session it runs now (a /clear, a handoff, an agent switch keep the ID).
+    # An ID that has closed hands the report to its successor (down the prev chain),
+    # else up its parent (fleet_id_take); nobody ⇒ the person's reminder. No
+    # generation, execution owner or native-process proof gates the delivery.
     cmd = r''' . "$1/fleet-lib.sh"; . "$1/fleet-children-lib.sh"
 task_home=$(fleet_wid_home "wid:$2") || exit 75
 sock=$(fleet_socket "$task_home")
 tmux -L "$sock" has-session -t "=$task_home" 2>/dev/null || exit 75
 win=$(fleet_win_for_fid "${2#*/}" "$sock"); task_rc=$?
-[ "$task_rc" = 1 ] && exit 76
+how=self
+if [ "$task_rc" = 1 ]; then
+  take=$(fleet_id_take "${2#*/}"); trc=$?
+  [ "$trc" = 2 ] && exit 76
+  [ "$trc" = 0 ] || exit 77
+  IFS=$'\t' read -r _id how sock win <<< "$take"
+  task_rc=0
+fi
 [ "$task_rc" = 0 ] || exit 75
 dir=$(children_dir "$task_home") || exit 75
-printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
+printf "%s\n%s\n%s\n%s\n" "$sock" "$win" "$dir" "$how"
 '''
     located = subprocess.run(["bash", "-c", cmd, "task-receive", str(BIN), r["parent_session"]],
-                             capture_output=True, text=True, timeout=10)
+                             capture_output=True, text=True, timeout=20)
     if located.returncode == 76:
         orphan(r, "parent session retired on its known fleet"); return 0
+    if located.returncode == 77:
+        orphan(r, "parent ID closed, with no successor or parent open"); return 0
     if located.returncode:
         return 75
-    socket, pane, directory = located.stdout.strip().splitlines()
-    if r["parent_generation"]:
-        c = context(pane, socket)
-        if (c["task"], c["generation"], c["worker_id"]) != (r["parent_task"], r["parent_generation"], r["parent_session"]):
-            orphan(r, "parent window belongs to another generation"); return 0
-        native = launch.inspect(c, pane, socket)
-    else:
-        native = None
+    socket, pane, directory, how = located.stdout.strip().splitlines()
+    native = None
     # Existing child ledger directory; task + generation is the file's identity.
     path = Path(directory) / ((r["parent_task"] or r["parent_session"].split("/")[1]) + "-g%d.ndjson" % r["parent_generation"])
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,7 +447,9 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
         sent_key = "task-report:" + hashlib.sha256((r["task"] + ":" + r["event_id"]).encode()).hexdigest()
         if sentfile.exists() and sent_key in sentfile.read_text().splitlines():
             print("already delivered"); return 0
-        msg = "[child-report] %s\nstate: %s · generation %s\nsummary: %s\nno reply needed" % (r["task"], (r["outcome"].upper() or "WAITING"), r["generation"], r["summary"])
+        msg = "[child-report] %s\nstate: %s · generation %s%s\nsummary: %s\nno reply needed" % (
+            r["task"], (r["outcome"].upper() or "WAITING"), r["generation"],
+            "" if how == "self" else " · 原 parent 已关闭，代收 (%s)" % how, r["summary"])
         delivery_env = dict(os.environ)
         if native:
             # No sleeper/peer queue can outlive this generation check. An

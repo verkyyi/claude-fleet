@@ -33,6 +33,9 @@
 #   --since <seq>  only children with a ledger event after <seq>; with --json also
 #                  an `events` list of those events (a digest's cursor, C5)
 #   -L <socket>    the fleet's socket, for a caller with no $TMUX
+#   --ids          by ID (EPIC T497 C4): the IDs whose `parent` is this pane's own
+#                  ID — or the one named, `T-<code>` / a full ID — each with its
+#                  status and newest result (fleet-id.sh children)
 #   -h             this header
 #
 # Exit 0 on any answer (an empty ledger is `0 children`), 2 on a usage mistake or
@@ -47,7 +50,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-children-lib.sh"
 
-KEY='' JSON=0 SINCE=0 SOCK=''
+KEY='' JSON=0 SINCE=0 SOCK='' IDS=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --json)    JSON=1 ;;
@@ -55,7 +58,8 @@ while [ "$#" -gt 0 ]; do
     --since=*) SINCE="${1#--since=}" ;;
     -L)        shift; SOCK="${1:-}" ;;
     -L*)       SOCK="${1#-L}" ;;
-    -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ids)     IDS=1 ;;
+    -h|--help) sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)        printf 'fleet-children: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)         KEY="$1" ;;
   esac
@@ -64,6 +68,15 @@ done
 case "$SINCE" in ''|*[!0-9]*) printf 'fleet-children: --since wants a seq number\n' >&2; exit 2 ;; esac
 
 TM() { if [ -n "$SOCK" ]; then tmux -L "$SOCK" "$@"; else tmux "$@"; fi; }
+
+# By ID (EPIC T497 C4): a named ID, or --ids for this pane's own.
+case "$KEY" in [Tt]-?*|????????-????-????-????-????????????) IDS=1 ;; esac
+if [ "$IDS" = 1 ]; then
+  [ -n "$KEY" ] || KEY=$(fleet_pane_fmt '#{@fleet_id}')
+  [ -n "$KEY" ] || { printf 'fleet-children: no ID — name one (T-<code>) or run it in a session\n' >&2; exit 2; }
+  ia=(children "$KEY"); [ "$JSON" = 1 ] && ia+=(--json)
+  exec bash "$BIN/fleet-id.sh" "${ia[@]}"
+fi
 
 # Accepted parents read the task graph. No local key/cache fallback on outage.
 task_parent=''
