@@ -54,7 +54,7 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$SESS/repos"
 : > "$FLEET_CONF_DIR/fleets/$SESS/conf"
 fx_repo "$FLEET_CONF_DIR" "$SESS" verkyyi/claude-fleet FLEET_MAIN="$WORK/main"
 printf 'FLEET_REPO=erin/app\n' > "$FLEET_CONF_DIR/fleets/$SESS/repos/erin-app.conf"
-brief() { bash "$OB" brief --session "$SESS" "$@" 2>&1; }
+brief() { bash "$OB" brief --session "$SESS" 2>&1; }
 
 # --- 1. resume from nothing --------------------------------------------------
 out=$(brief) || fail "brief failed on a fresh fleet" "$out"

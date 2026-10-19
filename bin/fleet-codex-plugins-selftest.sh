@@ -56,9 +56,7 @@ cp "$HOME_C/config.toml" "$WORK/orig.toml"
 
 # the plugins' installed copies (Claude Code's cache shape: <name>/<version>)
 CACHE="$WORK/cache"
-for p in fleet-epic; do
-  mkdir -p "$CACHE/$p/0.1.0" && cp -R "$ROOT/plugins/$p/." "$CACHE/$p/0.1.0/"
-done
+mkdir -p "$CACHE/fleet-epic/0.1.0" && cp -R "$ROOT/plugins/fleet-epic/." "$CACHE/fleet-epic/0.1.0/"
 # fleet-infra's installed copy below is a FIXTURE (a skill, an MCP server, hooks),
 # so the skill / MCP / hook sync has one plugin of the marketplace to exercise.
 mkdir -p "$CACHE/fleet-infra/0.1.0/.claude-plugin" "$CACHE/fleet-infra/0.1.0/skills/fleet-infra"

@@ -139,7 +139,7 @@ printf -- '---\nname: dispatcher\ndescription: d\ntools:\n  - Read\n  - mcp__fle
 # epic-driver rides the fleet-epic plugin (issue #3116): listed as installed here
 printf '[{"id":"fleet-epic@claude-fleet","enabled":true,"installPath":"%s"}]\n' "$BIN/../plugins/fleet-epic" > "$WORK/plugins.json"
 grant() { CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_AGENT_PLUGINS_CMD="cat '$WORK/plugins.json'" python3 "$BIN/fleet-agent-def.py" spawn-tools "$1" --dir "$WORK"; }
-for a in doc-only; do ok; grant "$a" && fail "F: $a must not grant spawn"; done
+ok; grant doc-only && fail "F: doc-only must not grant spawn"
 for a in fleet-worker epic-driver dispatcher; do ok; grant "$a" || fail "F: $a grants spawn"; done
 
 [ "$FAIL" = 0 ] || { printf 'spawn-origin-gate selftest: %d FAILED (of %d)\n' "$FAIL" "$CHECKS" >&2; exit 1; }
