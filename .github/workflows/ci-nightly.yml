@@ -21,14 +21,9 @@ name: CI nightly
 #     on both, browser-attachment, hub-rolling …). Not oss-scan (it reads a PR's
 #     diff) nor selftests (selftests-nightly.yml). The checks keep no schedule of
 #     their own: this is their nightly.
-#   * `report` (选漏分析) writes every check's result to `nightly-checks` (tomorrow's
-#     --prev-checks) and runs bin/fleet-nightly-miss.sh --go --checks: a red Go test
-#     is bisected over the window's merges (`go test -run`, the Postgres leg against
-#     the job's own Postgres) and its merge M asked `bin/ci-plan.sh go M^` — not
-#     selected ⇒ ONE `selection-miss` issue naming M (--breakage-key
-#     nightly-go-<pkg>.<Test> / nightly-pg-…, a later night a comment); a red
-#     check lists the merges whose `ci-plan.sh <check> M^` skipped it
-#     (nightly-check-<check>), red the night before too ⇒ old.
+#   * `report` (汇总) writes every check's result into the run's summary. A red
+#     check is the run's red — GitHub's own failed-run notice is the alert; nothing
+#     here files an issue (issue #4900 removed #4816's 「漏测自动开单」).
 #
 # Nothing here moves stable, releases or touches a machine.
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('CI nightly @ {0}', github.ref_name) || 'CI nightly' }}
@@ -135,47 +130,18 @@ jobs:
     uses: ./.github/workflows/web-console.yml
 
   report:
-    # Every red traced and filed (bin/fleet-nightly-miss.sh). Red only when a filing
-    # failed — the checks already carry their own red.
-    name: 选漏分析
+    # Every check's result in one table — the checks already carry their own red.
+    name: 汇总
     needs: [board, tokenledger, shellcheck, task-acceptance, client-e2e, fleet-hub-mcp, browser-attachment, hub-rolling, hub-deploy-check, cluster-perms, native-claude-worktree, native-managed-hooks, node-join, web-chat-ui, web-console]
     if: "!cancelled() && needs.board.result == 'success'"
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 10
     permissions:
       contents: read
-      actions: read
-      issues: write     # one issue per red
-    # the Postgres leg's red tests are re-run against this one (FLEET_NM_DB_URL)
-    services:
-      postgres:
-        image: mirror.gcr.io/library/postgres:16
-        env:
-          POSTGRES_PASSWORD: ci-only
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.board.outputs.sha }}
-          # the bisect walks the window's merges
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: false
-      - name: the Go logs
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          pattern: '*-log-*'
-          path: gores
       - name: every check's result
         env:
           NEEDS: ${{ toJSON(needs) }}
-          GH_TOKEN: ${{ github.token }}
-          PREV: ${{ needs.board.outputs.prev_run }}
         run: |
           python3 - > checks.txt <<'PY'
           import json, os
@@ -189,37 +155,3 @@ jobs:
             echo '| 检查 | 结果 |'; echo '|---|---|'
             awk '{ printf "| %s | %s |\n", $1, $2 }' checks.txt
           } >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p prev
-          [ -z "$PREV" ] || gh run download "$PREV" --repo "$GITHUB_REPOSITORY" -n nightly-checks -D prev 2>/dev/null || true
-          [ -f prev/checks.txt ] || : > prev/checks.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nightly-checks
-          path: checks.txt
-          retention-days: 30
-      - name: the label it files under
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          row=$(bash -c '. bin/fleet-lib.sh; fleet_labels_canonical' | grep '^selection-miss|') || exit 0
-          gh label create selection-miss --repo "$GITHUB_REPOSITORY" --force \
-            --color "$(printf '%s' "$row" | cut -d'|' -f2)" --description "$(printf '%s' "$row" | cut -d'|' -f3)" || true
-      - name: fleet-nightly-miss.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.board.outputs.sha }}
-          SINCE: ${{ needs.board.outputs.since }}
-          FLEET_NM_DB_URL: postgres://postgres:ci-only@localhost:5432/postgres?sslmode=disable
-        run: |
-          mkdir -p gores
-          set -- --go gores --checks checks.txt --prev-checks prev/checks.txt --sha "$SHA" --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --dir .
-          [ -z "$SINCE" ] || set -- "$@" --since "$SINCE"
-          set +e
-          bash bin/fleet-nightly-miss.sh "$@" > miss.md; rc=$?
-          cat miss.md
-          if [ "$(grep -c '^| ' miss.md)" -gt 2 ]; then
-            { echo; echo "### 选漏分析"; cat miss.md; } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "### 选漏分析：没有红" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit $rc

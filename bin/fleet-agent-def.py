@@ -52,7 +52,7 @@ The dispatch group (the `spawn` tool) is mounted only when the file grants it
 (issue #4591); no session is refused a spawn by its seat.
 
 «ship»: the core ships `fleet-worker` (the issue-bound execution session — the
-spawn's default), `orchestrator` and `steward`. Each is
+spawn's default) and `orchestrator` (`steward` left with issue #4900). Each is
 written into ~/.claude/agents once, kept up with the release while it is still
 byte for byte what the fleet wrote, and never touched again once the person
 edits it (their override) or deletes it (then a spawn is a plain session given

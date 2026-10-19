@@ -304,17 +304,17 @@ one-off drill / audit records do not go in the repo (issue #3576).
   repo is `登记：<ticket>`, listed, never drilled. Found a new one: add the row
   + drill, watch it go red, then fix.
 - **A red CI check is SAID, never filed** (issue #4898, EPIC #4895; it replaced
-  #2078's one-issue-per-fault filer). The automatic reporters — `fleet-macos-watch.sh`,
-  `fleet-nightly-miss.sh`, `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
+  #2078's one-issue-per-fault filer; its fingerprint helpers `fleet_breakage_*` /
+  `fleet_fault_*` and the nightly miss tracer left with #4900). The automatic
+  reporters — `fleet-train-quarantine.sh`, `fleet-durations-drift.sh` —
   run `bin/fleet-ci-say.sh` (a `FLEET_*_FILER` seam of the same argv): the title and
   body on the run's summary page and one `::warning::` under the key a filing used
-  (never a sha: `nightly-<test>`, `flaky-<test>`, `selftest-quarantine.<test>`), no
-  issue, no URL. A fix is dispatched as a task (`task` tool) by whoever decides to.
-  **One patrol** (issue #4271, docs/dev/PATROLS.md): the diskguard tick's watchers
-  only PRODUCE (macos-watch — one alert per red run, plus macOS' once-per-streak
-  held-back alert); the patrol is ONE
-  steward session's `/loop` (`spawn agent:steward`), opened by a person, never a
-  second beside it; an orchestrator does not patrol.
+  (never a sha: `flaky-<test>`, `selftest-quarantine.<test>`), no issue, no URL;
+  `fleet-macos-watch.sh` raises one `breakage` alert per red run (plus macOS'
+  once-per-streak held-back alert); a red nightly is its run's red. A fix is
+  dispatched as a task (`task` tool) by whoever decides to. **Nothing patrols**
+  (issue #4900): the steward template and the patrols page are gone; an
+  orchestrator does not patrol.
 - **Stable moves only past the old-session replay** (issue #2075, EPIC #2074 C2).
   A session launched before a release keeps what it read at its start — the hook
   table, the mod's tool list, the MCP servers' tool lists — and runs everything
@@ -431,7 +431,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   found or unreadable ⇒ the spawn refuses before any window, naming the file
   (BREAK-IT `agent-file-broken`). No `--as` ⇒ the shipped `fleet-worker` when it
   is there, else a plain session given the ticket. The core ships
-  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator, steward)
+  `conf/agent-defaults/claude/agents/` (fleet-worker, orchestrator; steward left
+  with #4900)
   into `~/.claude/agents` through
   install-apply's `agent files` step (`fleet-agent-def.py ship`): written once,
   following the release while still the fleet's bytes, never touched once edited
@@ -530,11 +531,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `bin/web-console-pack.sh`); its budget bar reads the person's own `/v1/me/usage`.
   BREAK-IT `chat-relay-wrong-person` · `chat-socket-other-login` ·
   `chat-budget-bypass` · `chat-home-moved`.
-- **Orchestrating and stewarding are session templates — no seat, no rule table**
+- **Orchestrating is a session template — no seat, no rule table**
   (EPIC #4333; issues #4335 · #4336 · #4340). `conf/agent-defaults/claude/agents/orchestrator.md`
-  and `steward.md` are standard agent files shipped into `~/.claude/agents` like
-  fleet-worker; a person opens one with `spawn agent:orchestrator|steward` (`--as`,
-  above). Its body is the session's system prompt — a compaction or a resume keeps
+  is a standard agent file shipped into `~/.claude/agents` like fleet-worker; a
+  person opens one with `spawn agent:orchestrator` (`--as`, above). The steward
+  template is gone (issue #4900) — nothing patrols; a red only alerts. Its body is the session's system prompt — a compaction or a resume keeps
   it, so nothing relays a role's state. The orchestrator's few dispatch rules are
   written into its template, and nothing else holds any (issue #4340; the `rule`
   argument and the role-taking tool are gone, #4790). Several orchestrators may run at once; each
@@ -558,8 +559,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   #4790), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
-  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`
-  (or `agent:steward`); closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
+  launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`;
+  closed is closed. Gone with the seat: the mod's role section, exit guard and queue count
   (`orchestrator.ts` · `exit-guard.ts` · `queue.ts`), the inventory's columns 31-37
   (an older node's tags are dropped unread by `inventory_row`, `# compat-1v`), the
   client's `orch_*` / `steward_all_*` files, the steward's hosted page and
@@ -572,7 +573,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reads it as an address (#4790). BREAK-IT `role-auto-reopen-off`.
   The fleet-steward plugin and the programs behind it — the beat, the health watch,
   the decision sheet, the patrol / batches panes, parking, the followup list — are
-  gone (issue #4339, EPIC #4333 C6): the steward is the session template above, and
+  gone (issue #4339, EPIC #4333 C6), and its template with #4900;
   a stalled dialog is answered only through `bin/fleet-dialog-answer.sh` (`--by
   session`; its trail is the 代答记录 `fleets/<sess>/answers/answers-<day>.md`).
   `dialog-wait-selftest.sh`.
@@ -740,11 +741,9 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   hub back on that image now). **The selection's backstop is a nightly full run**
   (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
   06:17 Beijing (the train's pick and `fleet-train-plan.sh --full`, no rerun, no
-  quarantine); each red test goes to `bin/fleet-nightly-miss.sh`, which bisects it
-  to the merge it went red at and asks `run-selftests.sh --changed <M^> --list-only`
-  there — not listed ⇒ ONE `selection-miss` issue (`--breakage-key nightly-<test>`)
-  naming the merge, its files and the fix (name the file in the test; BREAK-IT
-  `selection-miss-silent`). So **don't run the
+  quarantine); a red there is its run's red (the miss tracer left with #4900 —
+  `run-selftests.sh --changed <M^> --list-only` still says whether a merge selected
+  a test; the fix is to name the file in the test). So **don't run the
   suite locally**: push, open the PR, read the gate. Locally run only the one
   test that reproduces a CI failure (`run-selftests.sh <name>`), never the full
   gate or `--changed`. A new selftest is selected when its own file changes or

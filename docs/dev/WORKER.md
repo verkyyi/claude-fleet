@@ -60,7 +60,7 @@ The separate-delete failure is why merge and branch cleanup are ONE call (#544):
 
 `pr_verdict wait: true` blocks and paces reads to the shared budget (#950), waits out checks not registered yet or reset after push, and fails fast on the first red check. TIMEOUT is undetermined, with the merge state on stderr. An armed auto-merge is not a completed merge (#1247); report's own merged check refuses to announce it prematurely.
 
-Base breakage is one issue for the fleet (#2078): three workers once filed three issues and fixes for one duplicate route within sixteen seconds. `file_issue breakage: true` fingerprints/deduplicates the failure and returns the existing issue with exit 5, or files and queues the steward with exit 0. Workers wait for that single fixer. Only the explicit flag selects this path (#4271); ordinary text saying “red” must not swallow an unrelated issue.
+A red base is not the worker's to fix or to file (#4900: the fault-filing road — `file_issue breakage`, the watchers' auto-filing — is gone; a red base only alerts). The worker reports `blocked` naming the red check and stops; the parent session that dispatched it sends one fix (a `task`) and tells it to continue, so three workers never fix one red base three times (#2078's incident).
 
 A report is unconditional after merge (#574). `reported` means arrived; `queued` means delivery will retry when the parent wakes or reconnects (#1647); `orphaned` becomes a reminder when the parent is gone (#3117); `undelivered` means neither arrival nor queue and must be disclosed (#3439). Reports use the same hub path for a parent on another machine. This reporting cannot undo a successful merge.
 

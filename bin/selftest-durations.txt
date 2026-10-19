@@ -330,7 +330,6 @@
 1.3 fleet-move-to-pod-selftest.sh
 33.1 fleet-native-continue-selftest.sh
 0.6 fleet-native-observe-selftest.sh
-2.8 fleet-nightly-miss-selftest.sh
 30.7 fleet-node-core-selftest.sh
 0.3 fleet-node-hosted-selftest.sh
 29.7 fleet-node-install-selftest.sh

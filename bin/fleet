@@ -37,7 +37,7 @@
 #                               团队 · 个人 · 本机) and change your own (#1860);
 #                               export / import a layer as one file (#1865)
 #   fleet role show <role> [--sources] [--json]
-#                               a role's definition (orchestrator · steward ·
+#                               a role's definition (orchestrator ·
 #                               worker · epic-driver) with your layers merged
 #                               in; --sources says where each field came from:
 #                               自带 · 你的 vN · 本机 · 🔒 (#2783)

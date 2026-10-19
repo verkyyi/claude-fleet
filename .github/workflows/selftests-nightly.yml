@@ -19,17 +19,14 @@ name: selftests nightly
 #     prices it. Never retry_red, never a quarantine: the nightly wants the real
 #     red (共同约定 5). A shard lost with its spot node is rerun on GitHub's
 #     runners (bin/fleet-train-runner.sh lost) — a lost runner, not a red test.
-#   * `report` writes the run's 全量 line (shards · tests · wall time) and, for every
-#     red test, bin/fleet-nightly-miss.sh: since which merge it is red (a bisect
-#     over the window's merges), and whether the train's selection at that merge
-#     listed it (`run-selftests.sh --changed <M^> --list-only`) — not listed ⇒ one
-#     `selection-miss` issue naming the merge, its files and the one-line fix;
-#     one issue per test (--breakage-key nightly-<test>), a later night a comment.
+#   * `report` writes the run's 全量 line (shards · tests · wall time). A red test
+#     is the run's red — GitHub's own failed-run notice is the alert; nothing here
+#     files an issue (issue #4900 removed #3871's 「漏测自动开单」).
 #   * the same job then asks bin/fleet-durations-drift.sh whether the durations
 #     table still prices the shards right (issue #4819): every shard's tests off
 #     bin/selftest-durations.txt against the seconds they took; past ±20% on any
-#     shard ⇒ ONE refresh issue (--breakage-key durations-selftests) naming this
-#     run and `bin/selftest-durations.sh --run <id>` — a worker opens the PR.
+#     shard ⇒ the summary names `bin/selftest-durations.sh --run <id>` and one
+#     workflow warning marks the run — a person refreshes it.
 #
 # Nothing here moves stable, releases or touches a machine.
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('selftests nightly @ {0}', inputs.sha || 'stable') || 'selftests nightly' }}
@@ -219,23 +216,19 @@ jobs:
       record: true
 
   report:
-    # The 全量 line, and every red test traced and filed (bin/fleet-nightly-miss.sh).
-    # Red only when a filing failed — the shards already carry the red.
-    name: 选漏分析
+    # The 全量 line and the durations check — the shards already carry the red.
+    name: 汇总
     needs: [board, plan, linux, linux-rescue]
     if: "!cancelled() && needs.board.result == 'success'"
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
-      issues: write     # one issue per red test
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.board.outputs.sha }}
-          # the bisect walks the window's merges
-          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: train-result-*
@@ -268,29 +261,6 @@ jobs:
           PY
           n=$(find results -name train-result.txt -exec cat {} + 2>/dev/null | grep -cE '^(FAIL|TIMEOUT) ' || true)
           echo "红测试行：${n:-0}" | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: the label it files under
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          row=$(bash -c '. bin/fleet-lib.sh; fleet_labels_canonical' | grep '^selection-miss|') || exit 0
-          gh label create selection-miss --repo "$GITHUB_REPOSITORY" --force \
-            --color "$(printf '%s' "$row" | cut -d'|' -f2)" --description "$(printf '%s' "$row" | cut -d'|' -f3)" || true
-      - name: fleet-nightly-miss.sh
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.board.outputs.sha }}
-          SINCE: ${{ needs.board.outputs.since }}
-        run: |
-          mkdir -p results
-          set -- --results results --sha "$SHA" --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --dir .
-          [ -z "$SINCE" ] || set -- "$@" --since "$SINCE"
-          set +e
-          bash bin/fleet-nightly-miss.sh "$@" > miss.md; rc=$?
-          cat miss.md
-          if grep -q '^| [A-Za-z0-9._-]*-selftest\.sh ' miss.md; then
-            { echo; echo "### 选漏分析"; cat miss.md; } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit $rc
       - name: fleet-durations-drift.sh
         # the durations table against tonight's seconds (issue #4819); a rescued
         # shard's artifact replaced the lost one, so every shard is read once

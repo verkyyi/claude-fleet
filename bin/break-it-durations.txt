@@ -327,7 +327,6 @@
 1.8 seat-repin
 0.1 seat-root-leftovers
 0.6 seated-forget-core-job
-0.4 selection-miss-silent
 0.1 selftest-tmux-leak
 1.0 service-failed-unseen
 0.9 service-handwritten

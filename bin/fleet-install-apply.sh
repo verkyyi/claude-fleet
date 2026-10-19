@@ -1314,8 +1314,8 @@ if [ "$BUNDLE" = 0 ] && [ -f "$ROOT/bin/fleet-codex-plugins.py" ] && command -v 
   fi
 fi
 # The agent files the core ships (issue #3122, EPIC #3111 C11): fleet-worker — the
-# issue-bound session a spawn starts as by default — orchestrator and steward,
-# into ~/.claude/agents. Written once, kept up while
+# issue-bound session a spawn starts as by default — and orchestrator (steward
+# left with #4900), into ~/.claude/agents. Written once, kept up while
 # still the fleet's bytes, never touched once the person edits (their override) or
 # deletes one (a spawn is then a plain session). One the core no longer ships
 # (epic-driver rides the fleet-epic plugin — issue #3116) is retired while still
