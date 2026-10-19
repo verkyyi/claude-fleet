@@ -1280,14 +1280,14 @@ drill_ci_ack_pr_fork() {
   local t0 d rc out k
   d=$(mktemp -d "${TMPDIR:-/tmp}/ack-pr.XXXXXX"); t0=$(now)
   ev() { printf '{"pull_request":{"head":{"repo":{"full_name":"%s","fork":%s}},"base":{"ref":"%s"},"user":{"login":"%s"}}}' "$1" "$2" "$3" "$4" > "$d/$5.json"; }
-  ev o/r false master verkyyi own;  ev evil/r true master evil fork
-  ev o/r true master verkyyi flagged; ev o/r false release verkyyi base
+  ev o/r false master alice own;  ev evil/r true master evil fork
+  ev o/r true master alice flagged; ev o/r false release alice base
   ev o/r false master 'dependabot[bot]' bot
   gate() {  # <event file|-> [VAR=value …]
     local f=$1; shift
     env -i PATH=/usr/bin:/bin CI_GATE_REPO=o/r CI_GATE_WORKFLOWS='release-train.yml' \
       CI_GATE_PR_WORKFLOWS='ci.yml' GITHUB_REPOSITORY=o/r GITHUB_EVENT_NAME=pull_request \
-      GITHUB_REF=refs/pull/7/merge GITHUB_HEAD_REF=issue-7 GITHUB_BASE_REF=master GITHUB_ACTOR=verkyyi \
+      GITHUB_REF=refs/pull/7/merge GITHUB_HEAD_REF=issue-7 GITHUB_BASE_REF=master GITHUB_ACTOR=alice \
       GITHUB_WORKFLOW_REF=o/r/.github/workflows/ci.yml@refs/pull/7/merge \
       ${f:+GITHUB_EVENT_PATH=$d/$f.json} "$@" /bin/bash "$BIN/fleet-ci-job-gate.sh" 2>&1
   }
