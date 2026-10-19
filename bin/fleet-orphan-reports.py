@@ -115,6 +115,14 @@ def main(argv):
             pass
         del args[i:i + 2]
     if cmd == "list":
+        if "--us" in args:
+            # 0x1f between fields (T493): a tab is IFS white space to `read`, so an
+            # empty repo merged into its neighbour and every column after it slid;
+            # agent and issue ride last
+            for r in unread(cap):
+                print("\x1f".join(f.replace("\x1f", " ").replace("\n", " ") for f in
+                                   fields(r) + [clean(r.get("agent", ""), 16), clean(str(r.get("issue", "")), 12)]))
+            return 0
         for r in unread(cap):
             print("\t".join(f.replace("\t", " ") for f in fields(r)))
         return 0

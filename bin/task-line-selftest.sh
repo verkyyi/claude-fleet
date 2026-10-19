@@ -7,6 +7,8 @@
 #   B. a later prompt never replaces it; a PostToolUse never writes it
 #   C. a blocked window still clears on that same first prompt (the payload is
 #      read once, parsed by both)
+#   E. a message from another session (T493): 「来自 X：its words」, never the
+#      <cross-session-message …> envelope; an envelope with no words writes nothing
 #   D. @agent_cwd (issue #3183): a Bash call's PostToolUse stamps the payload's
 #      top-level cwd (never one inside tool_input); another tool's leaves it; a
 #      relative or escaped one is not written
@@ -31,7 +33,7 @@ fail() { printf 'task-line selftest FAIL: %s\n' "$1" >&2; exit 1; }
 eq() { CHECKS=$((CHECKS+1)); [ "$2" = "$3" ] || fail "$1 (want '$2', got '$3')"; }
 
 mkdir -p "$WORK/path" "$WORK/inst/bin" "$WORK/inst/logs"
-cp "$BIN/set-claude-state.sh" "$WORK/inst/bin/"
+cp "$BIN/set-claude-state.sh" "$BIN/fleet-ui-lang.sh" "$WORK/inst/bin/"
 HOOK="$WORK/inst/bin/set-claude-state.sh"
 cat > "$WORK/path/tmux" <<SH
 #!/bin/sh
@@ -102,5 +104,14 @@ eq "D: another tool's call leaves it" "/w/wt-x/sub dir" "$(ac "$PB")"
 hook "$PB" "$POST" '{"session_id":"s","cwd":"rel/dir","hook_event_name":"PostToolUse","tool_name":"Bash"}'
 hook "$PB" "$POST" '{"session_id":"s","cwd":"/a\\\"b","hook_event_name":"PostToolUse","tool_name":"Bash"}'
 eq "D: a relative or escaped cwd is not written" "/w/wt-x/sub dir" "$(ac "$PB")"
+
+# --- E ------------------------------------------------------------------------
+tf set-window-option -u -t "$PB" @task_line
+FLEET_UI_LANG=zh hook "$PB" "$UPS" "$(ups $'<cross-session-message from-name="fleet" from-mode="bypass">\n实施 ⌘P 面板方案 B\n</cross-session-message>')"
+eq "E: a cross-session message — its sender and words" "来自 fleet：实施 ⌘P 面板方案 B" \
+   "$(tl "$PB")"
+tf set-window-option -u -t "$PB" @task_line
+hook "$PB" "$UPS" "$(ups '<cross-session-message from-name="fleet"></cross-session-message>')"
+eq "E: an envelope with no words writes nothing" "" "$(tl "$PB")"
 
 printf 'task-line selftest: PASS (%s checks)\n' "$CHECKS"

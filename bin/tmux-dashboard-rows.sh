@@ -1640,10 +1640,12 @@ fi
 if [ "$SIDEBAR" = 1 ]; then
   _orows=''
   if [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ]; then
-    while IFS=$'\t' read -r _oid _ots _orepo _ochild _ost _opr _osum; do
+    # 0x1f, never a tab (T493): `read` folds runs of IFS white space, so an empty
+    # repo cell took the child key's place and every field after it slid
+    while IFS=$US read -r _oid _ots _orepo _ochild _ost _opr _osum _; do
       [ -n "$_oid" ] || continue
       _orows+="$_oid$US$US$_orepo$US$_ochild$US$_ost$US$_opr$US$_osum"$'\n'
-    done < <(python3 "$BIN/fleet-orphan-reports.py" list 2>/dev/null)
+    done < <(python3 "$BIN/fleet-orphan-reports.py" list --us 2>/dev/null)
   fi
   if [ -n "${FLEET_SESSION:-}" ] && [ -s "$G/orphanrep_$FLEET_SESSION" ] && fleet_hub_on "$FLEET_SESSION"; then
     _oread=$'\n'; [ -s "$G/orphanrep_read" ] && _oread+=$(cat "$G/orphanrep_read" 2>/dev/null)$'\n'

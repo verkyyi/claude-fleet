@@ -68,5 +68,12 @@ has "E: show: the result" "$OUT" "line two"
 has "E: show: the parent" "$OUT" "scratch-3"
 f show 000000000000; eq "E: show unknown → exit 1" 1 "$RC"
 
+# --- F. list --us (T493): 0x1f, an empty repo stays its own field; agent, issue last
+printf '{"ts": %s, "child_key": "scratch-9", "state": "SUCCEEDED", "pr": "", "summary": "no repo", "agent": "codex", "issue": "4539"}\n' "$NOW" >> "$F"
+f list --us
+row=$(printf '%s\n' "$OUT" | grep scratch-9)
+eq "F: the child key is field 4 with an empty repo" "scratch-9" "$(printf '%s' "$row" | awk -F$'\037' '{print $4}')"
+eq "F: agent · issue last" "codex|4539" "$(printf '%s' "$row" | awk -F$'\037' '{print $8 "|" $9}')"
+
 printf '%d checks, %d failed\n' "$N" "$BAD"
 [ "$BAD" = 0 ]

@@ -780,8 +780,9 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
 [ -f "$BIN/fleet-daemon-lib.sh" ] && ( . "$BIN/fleet-daemon-lib.sh" && fleet_daemon_wake "$BIN/.." ) 2>/dev/null || true
   # the agent asked for, on the window before anyone reads it back (issue #2403):
   # the node's start checks the session it opened runs it — the launcher's own
-  # stamp (fleet-codex.sh) comes later, from inside the pane
-  [ -n "$AGENT" ] && TM set-window-option -t "$win" @cc_agent "$AGENT" 2>/dev/null
+  # stamp (fleet-codex.sh / fleet-claude.sh) comes later, from inside the pane.
+  # Always the resolved one, Claude too (T493): a list never guesses from blank.
+  TM set-window-option -t "$win" @cc_agent "${AGENT:-${FLEET_AGENT:-claude}}" 2>/dev/null
   if [ "$NOREPO" = 1 ]; then
     TM set-window-option -t "$win" @norepo 1 2>/dev/null    # deliberately no repo, no worktree
     [ -n "$nsid" ] && TM set-window-option -t "$win" @norepo_sid "$nsid" 2>/dev/null

@@ -818,7 +818,7 @@ migrate_one_body() {
     [ -n "$hnd" ] && fleet_wid_stamp "$nw" "$SOCK" "$hnd" >/dev/null 2>&1
     # Carried, not said (issue #2537): only until the new agent's first OSC 7501.
     fleet_state_carry "$SOCK" "$nw" "${state:-done}"
-    [ "${AGENT:-claude}" != codex ] || TM set-window-option -t "$nw" @cc_agent codex 2>/dev/null
+    TM set-window-option -t "$nw" @cc_agent "${AGENT:-claude}" 2>/dev/null   # Claude too (T493)
     fleet_hub_nudge   # issue #1481
   fi
   # The version this reopen told it about (EPIC #1906 rule 5: each version once):

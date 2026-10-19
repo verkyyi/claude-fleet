@@ -7,7 +7,7 @@
 # The rails pinned here:
 #
 #   * DEFAULT UNCHANGED — an unset/empty/`claude` FLEET_AGENT execs `claude` with
-#     byte-for-byte the argv it always had; no @cc_agent stamp.
+#     byte-for-byte the argv it always had; @cc_agent claude (T493).
 #   * PRECEDENCE — per-fleet conf overlays global; a caller's --agent wins over both
 #     (either spelling) and is CONSUMED (never reaches claude/codex argv).
 #   * RESUME IS CLAUDE — a --resume/--continue/--from-pr/--fork-session/--model
@@ -157,15 +157,15 @@ hasarg(){ argv1l | grep -xF -- "$1" >/dev/null; }
 hasprefix(){ argv1l | grep -- "^$1" >/dev/null; }
 
 # ============================================================================
-# A. default fleet: unchanged claude launch, no @cc_agent
+# A. default fleet: unchanged claude launch, @cc_agent claude (T493: every launch says its agent)
 # ============================================================================
 if [ "${1:-}" != --resume-defaults ]; then
 : > "$WORK/conf/fleets/f1/conf"
 run '/fleet-history'
 [ "$(ran)" = claude ] || fail "A default must exec claude" "$(cat "$WORK/err")"
 [ "$(argv1l | paste -sd' ' -)" = "--model opus /fleet-history" ] || fail "A default argv changed" "$(argv1l)"
-grep -q '@cc_agent' "$WORK/tmuxlog" 2>/dev/null && fail "A a claude launch must not stamp @cc_agent" "$(cat "$WORK/tmuxlog")"
-ok "A FLEET_AGENT unset → claude, argv byte-for-byte unchanged, no @cc_agent"
+grep '@cc_agent' "$WORK/tmuxlog" 2>/dev/null | grep -qv '@cc_agent claude' && fail "A a claude launch must stamp only claude" "$(cat "$WORK/tmuxlog")"
+ok "A FLEET_AGENT unset → claude, argv byte-for-byte unchanged, @cc_agent claude"
 
 printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f1/conf"
 run '/fleet-history'

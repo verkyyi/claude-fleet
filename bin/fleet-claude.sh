@@ -299,6 +299,10 @@ if [ -n "$FLEET_MODEL" ]; then
       model_flag=(--model "$launch_model") ;;
   esac
 fi
+# The agent this window runs (T493): every Claude launch says so itself — a
+# restore, a move, a resume or a window someone opened by hand — so no list
+# reads Claude off a blank @cc_agent (fleet-codex.sh stamps codex the same way).
+[ -n "${TMUX_PANE:-}" ] && tmux set-option -w -t "$TMUX_PANE" @cc_agent claude 2>/dev/null || true
 # The effective model, stamped so the dash / migrate can see what a pane runs.
 if [ -n "$launch_model" ] && [ -n "${TMUX_PANE:-}" ]; then
   tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
