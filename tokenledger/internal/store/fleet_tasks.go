@@ -57,6 +57,7 @@ const (
 	TaskOpen    = "open"    // a machine opened its session
 	TaskRefused = "refused" // no machine took it, or the one chosen said no
 	TaskUnknown = "unknown" // the start has no final word yet
+	// TaskClosed (fleet_task_settle.go) ends one, only on evidence.
 )
 
 // FleetTask is one task record.
@@ -208,6 +209,9 @@ func (s *Store) UpdateFleetTask(id int64, u FleetTaskUpdate, now time.Time) (Fle
 	}
 	if old.AuthorityVersion != 0 {
 		return FleetTask{}, ErrTaskFence
+	}
+	if old.State == TaskClosed {
+		u.State = "" // settled on evidence (claude-fleet#4867): a late word never reopens it
 	}
 	sets, args := []string{}, []any{}
 	for _, f := range []struct {

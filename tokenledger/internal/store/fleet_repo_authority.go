@@ -229,8 +229,9 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 		return nil, nil, err
 	}
 	// Legacy placement records can retain an owner even after both its lease
-	// and snapshot disappear. An unfinished T is not an empty-repo proof.
-	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE repo = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN ('closed','refused')`, repo)
+	// and snapshot disappear. An unfinished T is not an empty-repo proof; one
+	// settled on evidence (TaskClosed, claude-fleet#4867) is ended.
+	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE repo = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`, repo, TaskClosed, TaskRefused)
 	if err != nil {
 		return nil, nil, err
 	}

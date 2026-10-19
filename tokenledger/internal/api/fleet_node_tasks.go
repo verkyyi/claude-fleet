@@ -30,6 +30,9 @@ import (
 //	POST /v1/node/tasks/<T>      {asked?, parked?, issue?, pr?, worker_id?,
 //	                              key?, state?, note?, rule?, clear?: [asked,
 //	                              parked, note]} → the record
+//	POST /v1/node/tasks/settle   {repo, apply?} → ends legacy records whose
+//	                              issue is closed and worker holds nothing
+//	                              (fleet_task_settle.go, claude-fleet#4867)
 //
 // Version 1 (opt-in; no legacy adoption):
 //
@@ -175,7 +178,7 @@ func (in *nodeTaskWrite) check(s *Server, ep *store.Endpoint) string {
 	case in.Rule != "" && !nodeTaskRuleRE.MatchString(in.Rule):
 		return "rule must be n=<N>[ v=<version>]"
 	case in.State != "" && !nodeTaskStates[in.State]:
-		return "state must be placing, open, refused, unknown or done"
+		return "state must be placing, open, refused, unknown or done (closed only by settle, on evidence)"
 	case in.PR != "" && !nodeTaskIssueRE.MatchString(in.PR):
 		return "pr must be owner/name#N"
 	}
@@ -204,6 +207,10 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	owner := s.nodeTaskOwner(ep)
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
+	if ref == nodeTaskSettleRef {
+		s.nodeTaskSettle(w, r, owner)
+		return
+	}
 	if s.nodeTaskCollaboration(w, r, ep, owner, ref) {
 		return
 	}
