@@ -47,6 +47,13 @@
 #   hub-pause-train-queued  HUB_DEPLOY_PAUSED set while a train waited in the lane:
 #                       GitHub fixed `vars` at queue time; the gate also reads an open
 #                       hub-deploy-paused issue live, unreadable ⇒ red (#4621)
+#   train-node-image-stale  the node image is reused when its key is stable's (#4818):
+#                       a change to the updater, the node source, the recipe or the
+#                       pins changes the key; the rest of the release does not
+#   train-stage-node-changed  the release staged on the hub a deploy replaces: only
+#                       when the node source is TRAIN_SHA's (node=same, #4818)
+#   train-all-proven-skips  every test proven on its PR: no Linux shard is started,
+#                       and only a plan of 0 tests reads that skip as green (#4818)
 #   train-call-permissions  a caller job grants less than a job of the workflow it
 #                       calls asks (even one its `if:` skips): GitHub refuses the
 #                       whole train at parse time (startup_failure, #3908);
@@ -1092,6 +1099,112 @@ drill_module_skip_wrong() {
     || { WHY="the real plan reds its own selftest: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="Go 映射漏一块（shared ⇒ 只剩 hub）：计划自测 B 当场红、点名「shared ⇒ all four」；真计划绿——漏选不会悄悄变成「CI 结论」的绿"
+}
+
+# ---- the train's critical path (issue #4818, EPIC #4810 R1) -----------------------
+# A rig repo with the paths the node image key and the node digest read.
+train_rig() {   # train_rig <dir>: $1/co, commits named in $1/<name>
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q -b master "$1/co" || exit 1
+    cd "$1/co" || exit 1
+    mkdir -p extras/managed-node bin conf/release-keys tokenledger/agent tokenledger/hub tokenledger/shared
+    printf 'FROM x\n' > extras/managed-node/Dockerfile; printf 'k\n' > conf/release-keys/root.pub
+    printf '{}\n' > release.json; printf 'u\n' > bin/fleet-node-update.py; printf 'o\n' > bin/fleet-other.sh
+    printf 'package a\n' > tokenledger/agent/a.go; printf 'package h\n' > tokenledger/hub/h.go
+    printf 'package s\n' > tokenledger/shared/s.go
+    c() { git add -A && git commit -qm "$1" && git rev-parse HEAD > "../$1"; }
+    c base || exit 1
+    printf 'o2\n' > bin/fleet-other.sh; c other || exit 1                      # the rest of the release
+    printf 'package h // 2\n' > tokenledger/hub/h.go; c hubonly || exit 1     # the hub's own source
+    printf 't\n' > bin/fleet-node-update-selftest.sh; c selftest || exit 1    # a selftest
+    printf 'u2\n' > bin/fleet-node-update.py; c updater || exit 1             # a root-run program
+    printf 'package a // 2\n' > tokenledger/agent/a.go; c agent || exit 1     # the node source
+    printf 'FROM y\n' > extras/managed-node/Dockerfile; c recipe || exit 1    # the recipe
+    printf '{"claude":"2"}\n' > release.json; c pins || exit 1                # the pins
+  )
+}
+
+# The node image is reused when its key is stable's (#4818): a key that misses
+# what runs on a fresh pod before its first update ships a stale boot as "the
+# image of TRAIN_SHA". Only the release's other files may leave the key alone.
+drill_train_node_image_stale() {
+  CAP=30
+  local t0 d k wf prev c
+  wf="$BIN/../.github/workflows/release-train.yml"
+  sed -n '/^  node-tools:/,/^  node-image:/p' "$wf" | grep -q 'bash bin/fleet-node-image-key.sh . "$TRAIN_SHA"' \
+    && sed -n '/^  node-tools:/,/^  node-image:/p' "$wf" | grep -q 'bash bin/fleet-node-image-key.sh . "$STABLE_SHA"' \
+    && sed -n '/^  node-tools:/,/^  node-image:/p' "$wf" | grep -q 'imagetools inspect "$REPO:$STABLE_SHA"' \
+    || { WHY="node tools does not hold TRAIN_SHA's image key to stable's before reusing stable's image"; return 1; }
+  sed -n '/^  node-image:/,$p' "$wf" | grep -A2 'name: build and push (train-build.sh)' | grep -q "if: needs.node-tools.outputs.reuse == ''" \
+    || { WHY="node image builds even when stable's image is reused (or never builds)"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/nikey.XXXXXX"); t0=$(now)
+  train_rig "$d" || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  key() { bash "$BIN/fleet-node-image-key.sh" "$d/co" "$(cat "$d/$1")"; }
+  prev=$(key base) || { WHY="no key for the rig's first commit"; rm -rf "$d"; return 1; }
+  for c in other hubonly selftest; do
+    k=$(key "$c"); [ "$k" = "$prev" ] || { WHY="a change to $c (replaced by the pod's first update) changed the image key — no reuse"; rm -rf "$d"; return 1; }
+  done
+  for c in updater agent recipe pins; do
+    k=$(key "$c"); [ -n "$k" ] && [ "$k" != "$prev" ] || { WHY="a change to the $c left the image key alone — stable's stale image would be reused"; rm -rf "$d"; return 1; }
+    prev=$k
+  done
+  bash "$BIN/fleet-node-image-key.sh" "$d/co" nope >/dev/null 2>&1 && { WHY="an unreadable commit got a key"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="节点镜像键：只改发布里别的文件、hub 源、自测 ⇒ 键不变、复用 stable 的镜像只打 tag；改更新器 / 节点源 / 配方 / 钉住的工具 ⇒ 键变、发布后重新构建；读不到提交 ⇒ 没有键、不复用"
+}
+
+# The release staged on the running hub while a new one is built (#4818): right
+# only when that hub's ccquota is already TRAIN_SHA's — the node source unchanged.
+# Staged across a node change, the release would carry the old ccquota and the
+# move's ccquota gate would red the train.
+drill_train_stage_node_changed() {
+  CAP=30
+  local t0 d out wf nd
+  wf="$BIN/../.github/workflows/release-train.yml"
+  sed -n '/^  release-stage:/,/^  release:/p' "$wf" | grep -q "needs.hub-plan.outputs.deploy == 'false' || needs.hub-plan.outputs.node == 'same'" \
+    || { WHY="发布包 is not gated on the hub's node source being TRAIN_SHA's"; return 1; }
+  sed -n '/^  hub:/,/^  hub-build:/p' "$wf" | grep -q 'needs: \[.*release-stage' \
+    || { WHY="the hub deploy does not wait for a stage made on the hub it replaces"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/stnode.XXXXXX"); t0=$(now); mkdir -p "$d/hub"
+  train_rig "$d" || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  node() { printf '{"commit":"%s"}\n' "$(cat "$d/$1")" > "$d/hub/version"
+    out=$(env -u RELEASE_TRAIN_HUB GITHUB_OUTPUT='' bash "$BIN/fleet-train-hub.sh" "$(cat "$d/$2")" --dir "$d/co" --hub "file://$d/hub" --timeout 5 2>&1)
+    nd=$(printf '%s\n' "$out" | sed -n 's/^node=//p' | head -1); }
+  # a hub-only change: the hub redeploys, its ccquota is TRAIN_SHA's ⇒ same
+  node other hubonly
+  [ "$nd" = same ] && printf '%s' "$out" | grep -q '^deploy=true$' \
+    || { WHY="a hub-only change did not read node=same with a deploy: $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # the node source changed ⇒ changed, never staged on the old hub
+  node updater agent
+  [ "$nd" = changed ] \
+    || { WHY="a node source change did not read node=changed: $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="入口要重部署但只改了 hub 自己的源：node=same、发布包照样在测试旁暂存，release 只签名；节点源变了：node=changed、不在旧入口上暂存（否则带着旧 ccquota 被挪动门打红）；部署等暂存做完"
+}
+
+# No runner for a shard that would run nothing (#4818): skipping the Linux half is
+# right only when the plan priced the selection at 0 tests after the PRs' proof — a
+# plan that could not price ('?') or any drill still runs it, and the verdict reads
+# a skip as green only with 0 tests, so a skipped half can never ship untested work.
+drill_train_all_proven_skips() {
+  CAP=30
+  local t0 wf j
+  wf="$BIN/../.github/workflows/release-train.yml"; t0=$(now)
+  j=$(sed -n '/^  linux:/,/^  linux-rescue-plan:/p' "$wf")
+  printf '%s' "$j" | grep -q "needs.plan.outputs.linux_tests != '0' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''" \
+    || { WHY="the Linux half is not skipped only on linux_tests 0 (or skipped on a drill)"; return 1; }
+  sed -n '/^  plan:/,/^  linux-pick:/p' "$wf" | grep -q 'linux_tests: ${{ steps.plan.outputs.linux_tests }}' \
+    || { WHY="plan does not hand linux_tests on"; return 1; }
+  sed -n '/^  train:/,/^  hub-plan:/p' "$wf" | grep -q 'elif \[ "$LINUX" = skipped \] && \[ "$TESTS" = 0 \]; then' \
+    || { WHY="the verdict reads a skipped Linux half as green without checking it priced 0 tests"; return 1; }
+  sed -n '/^  fail-fast:/,/^  gate:/p' "$wf" | grep -q "\[ \"\$LINUX_TESTS\" != 0 \] || set -- --deadline \"\$d\" --need 'precheck'" \
+    || { WHY="红灯即停 would wait its whole deadline for Linux shards that are never started"; return 1; }
+  # the plan's own word for "nothing left": every selected test proven ⇒ tests=0
+  grep -q 'echo "plan tests=0 total=0 shards=$shard_n heaviest=0"' "$BIN/run-selftests.sh" \
+    || { WHY="run-selftests.sh --plan no longer says tests=0 when every test is proven"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="选中的测试全部已由 PR 证明（plan tests=0）：Linux 分片不起 runner，train 只在 0 个测试时把跳过算绿，红灯即停不等分片；估不出价（?）或演练照常跑"
 }
 
 cred_run_drills "$0"

@@ -44,6 +44,11 @@
 #   deploy   true | false
 #   live     the commit the hub runs (full sha), or empty when unknown
 #   why      one line
+#   node     same | changed — the NODE's source (fleet-src-digest.py, shared/ +
+#            agent/: what a release's ccquota is built from) of the hub's commit
+#            vs TRAIN_SHA's; empty when not asked (no deploy, or unknown). `same`
+#            lets the train stage its release on the running hub while the new
+#            one is built (issue #4818): that hub's ccquota already is TRAIN_SHA's
 # Exit: 0 decided · 1 the hub's commit unreadable / unknown · 2 usage / TRAIN_SHA not in the checkout
 set -u
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -66,9 +71,10 @@ hub="${hub%/}"
 train=$(git -C "$dir" rev-parse -q --verify "$train^{commit}") \
   || { printf 'fleet-train-hub: %s is not a commit in %s\n' "$train" "$dir" >&2; exit 2; }
 
+node=''
 say() {   # say <deploy> <live> <why>
-  printf 'deploy=%s\nlive=%s\nwhy=%s\n' "$1" "$2" "$3"
-  [ -z "${GITHUB_OUTPUT:-}" ] || printf 'deploy=%s\nlive=%s\nwhy=%s\n' "$1" "$2" "$3" >> "$GITHUB_OUTPUT"
+  printf 'deploy=%s\nlive=%s\nwhy=%s\nnode=%s\n' "$1" "$2" "$3" "$node"
+  [ -z "${GITHUB_OUTPUT:-}" ] || printf 'deploy=%s\nlive=%s\nwhy=%s\nnode=%s\n' "$1" "$2" "$3" "$node" >> "$GITHUB_OUTPUT"
   exit 0
 }
 
@@ -93,6 +99,11 @@ live=$(git -C "$dir" rev-parse -q --verify "$short^{commit}" 2>/dev/null) || {
 git -C "$dir" merge-base --is-ancestor "$live" "$train" \
   || say false "$live" "hub superseded: live is $(printf '%.7s' "$live"), not behind $(printf '%.7s' "$train") — the train never deploys the hub backwards; the publish's forward gate judges the release"
 src_live=$(python3 "$BIN_DIR/fleet-src-digest.py" --image "$dir" "$live" 2>/dev/null) || src_live="?live"
+# the node's source (issue #4818): a hub redeployed for a hub-only change still
+# builds TRAIN_SHA's release — its ccquota — the same; unreadable ⇒ changed
+node_live=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$live" 2>/dev/null) || node_live="?live"
+node_train=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$train" 2>/dev/null) || node_train="?train"
+node=changed; [ "$node_live" != "$node_train" ] || node=same
 src_train=$(python3 "$BIN_DIR/fleet-src-digest.py" --image "$dir" "$train" 2>/dev/null) || src_train="?train"
 if [ "$src_live" != "$src_train" ]; then
   say true "$live" "the Go source changed since the hub's $ver — deploying $(printf '%.7s' "$train")"
