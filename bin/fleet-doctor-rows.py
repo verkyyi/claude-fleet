@@ -2,14 +2,18 @@
 """fleet-doctor-rows.py — the doctor's row table, read off its source (issue #3587,
 EPIC #3569 C17).
 
-Every row `fleet doctor` can print is named in exactly two places: bin/fleet-doctor.sh
-(`pass|warn|fail|info <row> "<msg>"`) and, for `fleet doctor --machine`,
-bin/fleet-node-update.py (`("PASS", "<row>", …)` tuples). Anything that maps a
+Every row `fleet doctor` can print is named in exactly three places: bin/fleet-doctor.sh
+(`pass|warn|fail|info <row> "<msg>"`), for `fleet doctor --machine`
+bin/fleet-node-update.py (`("PASS", "<row>", …)` tuples), and for `fleet doctor` on
+a client-only computer bin/fleet (`printf '  %-4s  %-8s %s\n' "…" <row> "…"`,
+issue #4908 — read for the page only: the node-doctor skill is not a client's).
+Anything that maps a
 row to advice — the fleet-infra plugin's node-doctor skill, the public
 troubleshooting page (C12) — is generated from THIS list, never typed by hand
 twice (EPIC #3569 共同约定 4).
 
-  names     [--root R]          one `<row>\t<half>` per row, sorted (half = node | machine)
+  names     [--root R]          one `<row>\t<half>` per row, sorted (half = node | machine;
+                                the page commands also count client — a row only bin/fleet prints)
   skeleton  [--root R] [--from SKILL.md]
                                 the markdown table node-doctor carries: one line per
                                 row; a row the given SKILL.md already maps keeps its
@@ -42,6 +46,7 @@ PY_ROW = re.compile(r"\(\s*(?:\"[A-Z]+\"(?:\s+if\s+[^,]+?\s+else\s+\"[A-Z]+\")?|
 PY_TOOLS = re.compile(r"^TOOLS\s*=\s*\(([^)]*)\)", re.M)
 TABLE_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|")
 PAGE_ROW = re.compile(r"^#{3,4}\s+`([^`]+)`\s*$")
+CLIENT_ROW = re.compile(r"printf '  %-4s  %-8s %s\\n' \S+ ([a-z][a-z0-9-]*) ")
 PAGE_TODO = "（待写）"
 
 
@@ -102,8 +107,16 @@ def machine_rows(path):
     return rows
 
 
-def table(root):
-    """{row: half} — a row both halves print is `node · machine`."""
+def client_rows(path):
+    """The rows the client-only `fleet doctor` in bin/fleet prints."""
+    if not os.path.exists(path):
+        return set()
+    return set(CLIENT_ROW.findall(open(path, encoding="utf-8").read()))
+
+
+def table(root, client=False):
+    """{row: half} — a row both halves print is `node · machine`; with client, a
+    row only the client-only doctor prints is `client`."""
     nr, errs = node_rows(os.path.join(root, "bin", "fleet-doctor.sh"))
     mr = machine_rows(os.path.join(root, "bin", "fleet-node-update.py"))
     out = {}
@@ -111,6 +124,9 @@ def table(root):
         out[r] = "node"
     for r in mr:
         out[r] = "node · machine" if r in out else "machine"
+    if client:
+        for r in client_rows(os.path.join(root, "bin", "fleet")):
+            out.setdefault(r, "client")
     return out, errs
 
 
@@ -143,7 +159,8 @@ def page_sections(path):
 
 def page_skeleton(row, half):
     where = {"node": "`fleet doctor`", "machine": "`fleet doctor --machine`",
-             "node · machine": "`fleet doctor` 和 `fleet doctor --machine`"}[half]
+             "node · machine": "`fleet doctor` 和 `fleet doctor --machine`",
+             "client": "只当客户端用的电脑上的 `fleet doctor`"}[half]
     return ("#### `%s`\n\n来自 %s。\n\n- **是什么**：%s\n- **WARN / FAIL 怎么办**：%s\n"
             % (row, where, PAGE_TODO, PAGE_TODO))
 
@@ -154,7 +171,7 @@ def main(argv):
         return 0
     cmd, args = argv[0], argv[1:]
     root = root_of(args)
-    rows, errs = table(root)
+    rows, errs = table(root, client=cmd in ("page-skeleton", "page-check"))
     for e in errs:
         sys.stderr.write(e + "\n")
     if errs:
