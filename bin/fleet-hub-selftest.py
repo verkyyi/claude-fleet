@@ -43,8 +43,11 @@ class Sandbox:
         self.fleet_conf.parent.mkdir(parents=True)
         # FLEET_START_WARM=0 (issue #2234): these legs pin the cold start's argv;
         # the warm-pool start has its own test (fleet-start-warm-selftest.sh).
-        self.fleet_conf.write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\nFLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n'
-                                   'FLEET_START_WARM=0\n')
+        self.fleet_conf.write_text('FLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\nFLEET_START_WARM=0\n')
+        repos = self.fleet_conf.parent / "repos"   # every repo is an overlay (#1937, #4806)
+        repos.mkdir()
+        (repos / "example-project.conf").write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\n')
+        (repos / ".order").write_text("example-project\n")
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-client-core.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
                          "fleet-gh.sh", "fleet-gh-lib.sh", "fleet-issue-cache.py", "fleet_loop_mark.py", "fleet_iso.py",
@@ -1435,7 +1438,7 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         with self.assertRaises(Fault):
             validate_write("worker_start", {"issue": 1, "repo": "../x;rm"})
         repos = self.node.conf / "fleets/demo/repos"
-        repos.mkdir()
+        repos.mkdir(exist_ok=True)
         (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\n')
         bare = self.node.wait(self.submit(key="bare")["operation_id"])
         self.assertEqual((bare["status"], bare["result"]["error"]["code"]), ("failed", "INVALID_ARGUMENT"))
@@ -1749,7 +1752,7 @@ printf '@9\\t4242\\t/fixture/moved\\n'
 
     def test_gh_tools_name_the_repo_in_a_multi_repo_fleet(self):
         # Keyed by (repo, N), never a bare number: repo B's #7 is not repo A's.
-        (self.node.conf / "fleets/demo/repos").mkdir()
+        (self.node.conf / "fleets/demo/repos").mkdir(exist_ok=True)
         (self.node.conf / "fleets/demo/repos/example-other.conf").write_text('FLEET_REPO="example/other"\n')
         other = self.node.tmp / ".claude-dash/fleets/example-other"
         other.mkdir(parents=True)
@@ -1778,7 +1781,7 @@ printf '@9\\t4242\\t/fixture/moved\\n'
         one = self.call("fleet_status", {"fleet_id": self.fleet})["workers"]
         self.assertEqual([(w["worker_id"], w["repo"]) for w in one], [(self.worker("issue-123"), "example/project")])
         repos = self.node.conf / "fleets/demo/repos"
-        repos.mkdir()
+        repos.mkdir(exist_ok=True)
         (repos / "example-other.conf").write_text('FLEET_REPO="example/other"\nFLEET_ISSUE_BRIDGE=1\n')
         self.node.windows(("@12", 123, False, "/fixture/issue-123", "", "example/project"),
                           ("@13", 123, False, "/fixture/issue-123", "", "example/other"),

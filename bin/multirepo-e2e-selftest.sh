@@ -57,6 +57,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 . "$BIN/selftest-sections.sh"
 selftest_sections 7
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
@@ -175,7 +176,8 @@ FLEET_WORKTREE_ROOT="$WT"
 FLEET_CLEANUP_MERGED_GRACE=0
 FLEET_REAP_MIN_AGE=0
 EOF
-printf 'FLEET_REPO="o/solo"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MD" > "$FLEET_CONF_DIR/fleets/$D/conf"
+: > "$FLEET_CONF_DIR/fleets/$D/conf"
+fx_repo "$FLEET_CONF_DIR" "$D" o/solo FLEET_MAIN="$MD" FLEET_BASE_BRANCH="master"
 
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n plan -x 200 -y 50 || { echo "could not start isolated tmux" >&2; exit 1; }
 tmux new-session -d -s "$D" -n plan -x 200 -y 50
@@ -496,7 +498,8 @@ if selftest_section 4; then
 N=fn; MN="$WORK/n/nu"; MT="$WORK/n2/two"
 mkrepo "$MN" o/nu; mkrepo "$MT" o/two
 mkdir -p "$FLEET_CONF_DIR/fleets/$N"
-printf 'FLEET_REPO="o/nu"\nFLEET_MAIN="%s"\nFLEET_BASE_BRANCH="master"\n' "$MN" > "$FLEET_CONF_DIR/fleets/$N/conf"
+: > "$FLEET_CONF_DIR/fleets/$N/conf"
+fx_repo "$FLEET_CONF_DIR" "$N" o/nu FLEET_MAIN="$MN" FLEET_BASE_BRANCH="master"
 tmux new-session -d -s "$N" -n plan -x 200 -y 50
 spawn 12 "$N" || fail "(n) spawn #12: $(cat "$WORK/err")"
 nP=$(tmux list-windows -t "$N" -F '#{@issue} #{window_id}' | awk '$1==12 {print $2; exit}')
