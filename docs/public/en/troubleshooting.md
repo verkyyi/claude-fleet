@@ -51,6 +51,12 @@ On a computer with only the client installed (it watches sessions, runs none), `
 - New sessions will not open and stay queued: read the `admit`, `memory` and `machine` rows — most often this computer's memory or load is at its limit; existing sessions are not affected, and the new one opens once there is room.
 - The session says its quota is used up: read the `quota`, `qwatch` and `failover` rows; when a subscription's 5-hour window runs out, it moves to the next subscription automatically (if there is one).
 
+### "This is a client; tasks run on managed nodes"
+
+- A fleet has three kinds of computer: **clients** (the terminal you use: connect, look, open windows), the **hub**, and **managed nodes** (logins on managed machines, execution pods in the cluster). Only managed nodes run tasks.
+- The hub records this computer as a client, so `fleet-repo.sh add`, `fleet host on` and opening a session here are refused. Starting tasks still works: the hub sends them to a managed node, and you watch and talk to them from here.
+- If this computer really should run tasks (it is a managed machine, say), ask your admin to change its type on the hub.
+
 ### Sending diagnostics to your admin
 
 ```sh
@@ -438,7 +444,7 @@ From `fleet doctor`.
 From `fleet doctor`. (The row's name means "host": this computer runs sessions.)
 
 - **What it is**: whether this computer runs sessions itself, and whether its token is there.
-- **On WARN / FAIL**: fix the token as the explanation says; to have it run sessions: `fleet host on`.
+- **On WARN / FAIL**: fix the token as the explanation says; to have it run sessions: `fleet host on` (refused on a computer the hub records as a client — only managed nodes run sessions).
 
 #### `可信`
 

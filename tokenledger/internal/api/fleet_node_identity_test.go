@@ -178,7 +178,8 @@ func TestManagedJoinCodeTrustsTheMachine(t *testing.T) {
 	// A plain code from the old route still carries no trust.
 	now = t0
 	plain := mintJoinCode(t, h, "")
-	if plain.Trust != "" || plain.Role != "" {
+	// …and joins a client (claude-fleet#4886).
+	if plain.Trust != "" || plain.Role != store.NodeRoleClient {
 		t.Fatalf("plain code = %+v", plain)
 	}
 	_, pout := joinWith(t, h, plain.Code, "m7", "ivan")

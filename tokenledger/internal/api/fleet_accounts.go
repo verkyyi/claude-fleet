@@ -877,7 +877,9 @@ func (s *Server) loginJoinCode(a store.FleetAccount, now time.Time) string {
 	label := a.Hostname + "-" + a.Login
 	// The code names its machine (claude-fleet#3300): the login enrolls as
 	// a.Hostname, so it holds that machine's trust like every login there.
-	if err := s.Store.CreateJoinCodeFor(HashToken(code), label, store.NodeKindFixed, "", "", a.Hostname, now, loginJoinCodeTTL); err != nil {
+	// A login the hub opened on a machine is a managed node (claude-fleet
+	// #4886): the fleet runs its tasks there.
+	if err := s.Store.CreateJoinCodeFor(HashToken(code), label, store.NodeKindFixed, "", store.NodeRoleManaged, a.Hostname, now, loginJoinCodeTTL); err != nil {
 		log.Printf("fleet: join code for %s@%s: %v", a.Login, a.Hostname, err)
 		return ""
 	}

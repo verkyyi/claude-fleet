@@ -511,3 +511,44 @@ func TestRepoAuthorityAPIInitNewRepo(t *testing.T) {
 		t.Fatalf("hosted repo after a refused init: %d %v", code, g)
 	}
 }
+
+// claude-fleet#4886: a client runs no task, so a repo its inventory still
+// lists is a leftover — its fleet row is listed under client_hosts and blocks
+// nothing, the managed host stays, and the client may not reserve a start.
+func TestRepoAuthorityClientHostBlocksNothing(t *testing.T) {
+	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
+	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	row, _ := h.srv.Store.Fleet(f4.FleetID)
+	ws, _ := json.Marshal([]map[string]any{{"worker_id": f4.FleetID + "/old", "repo": writeRepo}})
+	if err := h.srv.Store.UpdateFleetWorkers(f4.FleetID, "running", 1, string(ws), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	mentions := func(m map[string]any, s string) bool {
+		b, _ := json.Marshal(map[string]any{"b": m["blockers"], "o": m["legacy_owners"], "n": m["nodes"]})
+		return strings.Contains(string(b), s)
+	}
+	code, before := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	if code != 200 || !mentions(before, f4.FleetID) || len(before["client_hosts"].([]any)) != 0 {
+		t.Fatalf("before: %d %v", code, before)
+	}
+	if err := h.srv.Store.SetEndpointRole(row.EndpointID, store.NodeRoleClient); err != nil {
+		t.Fatal(err)
+	}
+	code, after := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	if code != 200 || mentions(after, f4.FleetID) || mentions(after, row.EndpointID) {
+		t.Fatalf("a client host still blocks: %d %v", code, after)
+	}
+	clients := after["client_hosts"].([]any)
+	if len(clients) != 1 || clients[0].(map[string]any)["fleet_id"] != f4.FleetID {
+		t.Fatalf("client_hosts: %v", clients)
+	}
+	if !mentions(after, f5.FleetID) {
+		t.Fatalf("the managed host vanished: %v", after)
+	}
+	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	cauth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-c"]) }
+	if code, m := ticketCall(t, h, cauth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "client-start"}); code != 403 || !strings.Contains(m["error"].(string), "客户端") {
+		t.Fatalf("a client reserved a start: %d %v", code, m)
+	}
+}

@@ -1087,6 +1087,16 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   drill runs only at a time the operator confirmed. No setting ⇒ two words,
   byte for byte: `TestMaintenanceOffAddsNothing`, `fleet-node-maintenance-selftest.sh`
   leg A, `dash-remote-rows-selftest.sh` pin it.
+- **Only a managed node runs tasks; a client only connects, looks and opens
+  windows** (issue #4886, docs/dev/TERMS.md). The hub types each node
+  `endpoints.role` = `managed` | `client` at its join (托管 code / hub-opened
+  login: managed; plain code / device `fleet login`: client) and the operator
+  changes it (`bin/fleet-node-role.sh`, `/v1/fleet/nodes/role`). A client is out
+  of placement, skipped by the repo-authority check (`client_hosts`), and refuses
+  `fleet-repo.sh add` / `fleet host on` / opening a session here through ONE
+  reader, `fleet_client_refuse` (`fleet-client-core.sh`). Untyped (a row before
+  the backfill), no hub or no token ⇒ unknown ⇒ byte for byte as before.
+  `fleet-node-role-selftest.sh`.
 - **The measurement bus has ONE writer, `conf/statusline.sh`, and its feeders**
   (issues #1452, #1459, #2431). Every `@ctx_pct/@ctx_limit/@ctx_band/@model/@effort/@rl*`
   stamp goes through that script — Claude Code's `statusLine` feeds it the JSON on

@@ -39,6 +39,10 @@ import (
 // elsewhere.
 const excludedPersonal = "personal (只跑本机客户端开的会话)"
 
+// excludedClient is placement's word for a node the hub typed client
+// (claude-fleet#4886): a terminal, which runs no task.
+const excludedClient = "client (这台是客户端，任务在托管节点上跑)"
+
 // SleepReason is the maintenance reason a sleeping personal machine sets.
 const SleepReason = "sleep"
 

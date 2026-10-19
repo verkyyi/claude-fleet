@@ -142,6 +142,11 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 			if role == "" {
 				role = store.NodeRoleManaged
 			}
+		} else if role == "" {
+			// A plain code joins a terminal (claude-fleet#4886): only a
+			// managed node runs tasks, so the old route's machine is a client
+			// unless the operator says otherwise.
+			role = store.NodeRoleClient
 		}
 		if req.Trusted != nil {
 			trust = ""
@@ -149,10 +154,8 @@ func (s *Server) fleetJoinCodes(w http.ResponseWriter, r *http.Request, managed 
 				trust = TrustTrusted
 			}
 		}
-		switch role {
-		case "", store.NodeRoleManaged:
-		default:
-			httpError(w, http.StatusBadRequest, "role: managed or absent")
+		if !store.ValidNodeRole(role) {
+			httpError(w, http.StatusBadRequest, "role: managed, client or absent")
 			return
 		}
 		code, err := MintJoinCode()
@@ -434,6 +437,9 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{"endpoint_id": ep.ID, "status": "never", "trust": trust}
 	if src != "" {
 		out["trust_source"] = src
+	}
+	if role := s.endpointRole(ep.ID); role != "" {
+		out["role"] = role // client or managed (claude-fleet#4886)
 	}
 	if c := s.signInCount(); c != nil {
 		out["signin"] = c

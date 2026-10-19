@@ -1446,7 +1446,8 @@ const (
 // machineRole judges one machine from the roster rows it folds: host when it
 // carries a machine link (its own node program — a managed machine), or any
 // of its logins is managed, or is neither personal nor only-coordinating
-// (the hub may place a session there); client otherwise — a person's laptop
+// (the hub may place a session there) and not typed client (claude-fleet
+// #4886); client otherwise — a person's laptop
 // or tablet that only runs the shell. A lost login still counts: a host that
 // went quiet is a host that is down, not a client.
 func machineRole(m MachineView, nodes []NodeView) string {
@@ -1454,7 +1455,12 @@ func machineRole(m MachineView, nodes []NodeView) string {
 		if n.Hostname != m.Hostname {
 			continue
 		}
-		if n.MachineLink || n.Role == store.NodeRoleManaged || (!n.Personal && !n.ComputeOff) {
+		if n.MachineLink || n.Role == store.NodeRoleManaged {
+			return MachineRoleHost
+		}
+		// A login typed client is a terminal whatever else it says
+		// (claude-fleet#4886).
+		if n.Role != store.NodeRoleClient && !n.Personal && !n.ComputeOff {
 			return MachineRoleHost
 		}
 	}

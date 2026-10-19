@@ -40,8 +40,8 @@
 #       printed, asked (y/N; --yes = already compared) — fleet-release-key.sh.
 #
 # No terminal and no --yes: prints what `on` would do and exits 2 — never a
-# silent change. Exit 0 done / on / off · 1 a step failed or was refused · 2 usage
-# or not confirmed.
+# silent change. Exit 0 done / on / off · 1 a step failed or was refused (on, on
+# a node the hub typed client — issue #4886) · 2 usage or not confirmed.
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd -P)
@@ -131,6 +131,11 @@ managed_hint() {
 
 cmd_on() {
   local h was_node=0 restored=0 rc
+  # A client runs no session (issue #4886): the hub typed this node a terminal.
+  # shellcheck source=fleet-client-core.sh
+  if [ -f "$here/fleet-client-core.sh" ] && ( . "$here/fleet-client-core.sh" && fleet_client_refuse '打开承载' --fresh ); then
+    return 1
+  fi
   managed_hint
   h=$(hub)
   if [ "$(host_now)" = 1 ] && { [ -z "$h" ] || { is_node && [ "$(envval CCQUOTA_FLEET_COMPUTE)" != 0 ]; }; }; then

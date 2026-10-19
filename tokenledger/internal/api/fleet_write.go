@@ -935,6 +935,9 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 			if s.personalOf(target.EndpointID, hb) && !s.isMachine(target.Hostname, s.askedFrom(p, now)) {
 				return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+excludedPersonal+" — open it from that computer's own client")
 			}
+			if s.endpointRole(target.EndpointID) == store.NodeRoleClient {
+				return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+"/"+target.OSUser+": "+excludedClient)
+			}
 			// One login takes new sessions there (claude-fleet#2430): a start
 			// named at another login's fleet is held to placement's rule.
 			if settings, err := s.Store.FleetSettings(); err == nil {
@@ -1632,6 +1635,10 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, no
 			// A person's own computer (claude-fleet#1721): only what is
 			// asked from it lands there — auto or named.
 			c.Eligible, c.Excluded = false, excludedPersonal
+		}
+		if c.Eligible && s.endpointRole(r.EndpointID) == store.NodeRoleClient {
+			// A client runs no task (claude-fleet#4886) — auto or named.
+			c.Eligible, c.Excluded = false, excludedClient
 		}
 		if c.Eligible {
 			// A machine the person's allowlist leaves out (claude-fleet#3824):

@@ -39,8 +39,20 @@ const (
 	TrustSourceOperator = "operator"
 )
 
-// NodeRoleManaged is a machine the fleet manages whole (EPIC #2329).
-const NodeRoleManaged = "managed"
+// Node roles (EPIC #2329; claude-fleet#4886). managed is a node the fleet runs
+// tasks on — a login of a 托管 machine, a cluster pod; client is a person's
+// terminal that only connects, looks and opens windows: it hosts no repo and
+// runs no task. "" is a row written before #4886 that nobody has typed yet —
+// read as before, never guessed.
+const (
+	NodeRoleManaged = "managed"
+	NodeRoleClient  = "client"
+)
+
+// ValidNodeRole is a role an endpoint (or a join code) may hold.
+func ValidNodeRole(role string) bool {
+	return role == "" || role == NodeRoleManaged || role == NodeRoleClient
+}
 
 // EndpointTrust is an endpoint's trust record: EnrolledHost is its machine;
 // Trust / Source what its join code said (the record, not the judgment).
@@ -125,6 +137,22 @@ func (s *Store) SetEndpointTrust(endpointID, trust, source string) error {
 	}
 	res, err := s.write.Exec(`UPDATE endpoints SET trust = ?, trust_source = ? WHERE endpoint_id = ? AND retired_at IS NULL`,
 		trust, source, endpointID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrNoSuchEndpoint
+	}
+	return nil
+}
+
+// SetEndpointRole writes an endpoint's role — the operator's word
+// (claude-fleet#4886): managed, client, or "" to clear it.
+func (s *Store) SetEndpointRole(endpointID, role string) error {
+	if !ValidNodeRole(role) {
+		return fmt.Errorf("role: managed, client or empty, not %q", role)
+	}
+	res, err := s.write.Exec(`UPDATE endpoints SET role = ? WHERE endpoint_id = ? AND retired_at IS NULL`, role, endpointID)
 	if err != nil {
 		return err
 	}

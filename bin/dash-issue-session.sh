@@ -17,7 +17,8 @@
 # Exit status is the REASON, not just a verdict (issue #683) — a headless caller
 # gets no toast, so the code + stderr are its only read of WHY nothing spawned:
 #   0  spawned (or focused the window that already exists)
-#   1  infrastructure — bad conf / worktree add / new-window / dispatch failed
+#   1  infrastructure — bad conf / worktree add / new-window / dispatch failed;
+#      or this node is a client (the hub's type, issue #4886) and nothing placed it
 #   2  at capacity — the global or per-fleet session cap (retry later)
 #   3  already claimed — assignee / not OPEN / open PR (pick another, or --force)
 #   4  no live parent — inside tmux with no $TMUX_PANE and no --origin, or an
@@ -710,6 +711,11 @@ if [ "$PLACING" = 1 ]; then
 fi
 # Opening here after all: this machine's cap verdict, held above, now applies.
 if [ -n "$CAP_HELD" ]; then refuse "$CAP_HELD"; exit "$RC_CAP"; fi
+# Opening here: a node the hub typed client runs no task (issue #4886) — the
+# placement above may still have sent it to a managed node.
+if [ "$TAIL_ONLY" != 1 ] && fleet_client_refuse "开 #$num" 2>/dev/null; then
+  refuse "#$num: 这台是客户端，任务在托管节点上跑"; exit "$RC_INFRA"
+fi
 
 # --- Cross-machine pre-spawn dedup (issue #258; ON by default, FLEET_PRESPAWN_DEDUP=0 opts out) ---
 # The local-tmux dedup above only sees THIS fleet's server. When two fleets run on
