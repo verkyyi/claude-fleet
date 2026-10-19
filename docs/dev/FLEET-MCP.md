@@ -716,140 +716,144 @@ nothing, and `fleet_repo_authority.py --init-new`'s fallback gate read then
 writes the person's own mode. The node half is #4901 (below): the node reads
 and writes only this road.
 
-### Existing-repo authority cutover (#4395)
+### A person's authority cutover (#4395, per person since #4896 / #4901)
 
-> Since #4896 the hub answers every step below per **person** (the section
-> above), and since #4901 so does the node: `FLEET_TASK_AUTHORITY` is the
-> login's — `$FLEET_CONF_DIR/fleet.conf` [node], a global-only key no fleet conf
-> or repo overlay can set (`fleet_task_authority`; an overlay's old line is read
-> one version and `fleet-conf.sh migrate` comments it out). Every authority call
-> goes to `/v1/fleet/authority` (`fleet_ticket.api` routes `/authority*` there):
-> the gate read carries no repo; a local start names the repo whose worktree it
-> opens. `fleet-repo.sh authority [<repo>] --dry-run` prints the person's
-> manifest (`version: 2`, `scope: owner`, the login's `conf`; a repo only
-> narrows its lists), and `--freeze | --apply | --rollback --manifest FILE`
-> refuse an older per-repo manifest or another login's. `--sync` (the hub's
-> push, once per hosted repo) rewrites this login's [node] line. `--settle
-> [--apply]` with no repo walks every repo this login hosts. A new repo selects
-> nothing: #4885's default below is gone, and `fleet-repo.sh add --authority`
-> is read one version and only said (# compat-1v). Where the text below says
-> "overlay", read "this login's fleet.conf [node]"; two logins of one machine
-> each cut over alone (`fleet-task-authority-login-selftest.sh`).
+Who runs tasks is a **person's**, never a repo's: the hub keeps one row per
+person (`task-authority:owner:<owner>`, the section above), and each of that
+person's logins holds its copy as `FLEET_TASK_AUTHORITY` in
+`$FLEET_CONF_DIR/fleet.conf` [node] — a global-only key no fleet conf or repo
+overlay can set, read only through `fleet_task_authority` (an overlay's old line
+is read one version and `fleet-conf.sh migrate` comments it out, `# compat-1v`).
+A repo is a field on a task: it names the worktree a local start opens, or
+narrows a manifest's lists, and takes part in no fence. Every step below looks
+only at the person's own hosts and executions; another person working the same
+repo — on another machine or another login of this one — neither blocks it nor
+hears of it (`fleet-task-authority-login-selftest.sh`, BREAK-IT
+`authority-other-owner-blocks`).
 
+**New repos select nothing.** `fleet-repo.sh add` writes no authority line and
+asks the hub nothing: #4885's «a new repo starts as hub» is gone, `add
+--authority` is read one version and only said, and `fleet_repo_authority.py
+--init-new` answers `legacy` (both `# compat-1v`). A repo added to a person who
+is already on the hub runs on the hub from its first task.
 
-A repo the fleet is about to host skips all of this when it is new (issue
-#4885): `fleet-repo.sh add` (and fleet-up) on a login that reaches a hub posts
-`action: init` (`fleet_repo_authority.py owner/repo --init-new`) before it
-writes the overlay. The hub takes it — revision 0 → 1, `mode: hub` — only when
-it has no trace of the repo from any login (a fleet row hosting it or a worker
-of it, a local start, a task, a lease, a ticket, a worker start); then the
-overlay gets `FLEET_TASK_AUTHORITY="hub"`. Refused, the repo stays legacy with
-no line and is cut over as below; no hub, nothing is asked. `--authority
-legacy` skips the ask; `--authority hub` refuses the add when the hub declines.
+The cutover is five stages, each its own command on one of the person's logins
+(`fleet-repo.sh authority [<owner/repo>] …` = `fleet_repo_authority.py`; the
+repo is optional and only narrows the lists; `--session` is ignored). Every
+call goes to `/v1/fleet/authority` (`fleet_ticket.api` routes `/authority*`
+there). Save a fresh dry-run between stages; an exact retry reuses the same
+operation key (`owner-<sha256(owner, action, revision)>`), so a repeated stage
+replays its first answer.
 
-`fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
-manifest: local authority/ticket/forge/landing settings and their digest, hub
-revision, registered hosts and capabilities, legacy owners (including expired
-leases), task outcomes, ticket references and selective mappings. It writes
-nothing. `--freeze`, `--apply`, and `--rollback` each require `--manifest FILE`;
-save a fresh dry-run between stages. Exact retries reuse the same operation key.
-The manifest must name this exact repo/session and unchanged local settings.
+1. **Dry-run** — `--dry-run > FILE` (private, never posted) writes nothing and
+   prints the person's manifest: `version: 2`, `scope: owner`, `owner`, `conf`
+   (this login's fleet.conf) and its digest beside the hub's revision, the
+   person's registered hosts and capabilities (`retired_hosts` /
+   `superseded_hosts` apart), legacy owners (expired leases included), local
+   starts with phase · endpoint · worker · native, task outcomes, ticket
+   references and selective mappings, and `blockers`. Every blocker is the
+   person's own: a local start on their endpoint, a legacy lease, an unfinished
+   v0 T, an unsettled worker_start, a session on their hosts that is not an
+   accepted task's execution. `--freeze | --apply | --rollback --manifest FILE`
+   refuse a manifest that is not `version: 2` for this login's `conf` — an
+   older per-repo one, another login's — or whose local settings changed since.
+2. **Freeze** — `--freeze --manifest FILE` (CAS on the revision; the hub
+   commits first, then this login's [node] line becomes `frozen`). Every one of
+   the person's hosts must advertise `repo_authority_v1` and `launch_v1`; an
+   unknown or offline host of theirs refuses. Freeze blocks the person's new
+   accepted and legacy dispatch in every repo, lease-free scratches included;
+   a legacy execution with no saved native identity refuses the freeze before
+   any write — drain it on the legacy path first, then retry.
+3. **Drain** — stop the person's legacy executions through the existing stop
+   workflow (a session writes its handoff first; nothing here stops or adopts a
+   live owner by itself). On the node that ran it, `--stop-receipt RECEIPT
+   --manifest FILE` acknowledges one: the saved native receipt (worker, native
+   session, PID, birth, executable) must match the identity journalled for that
+   frozen owner, and the process must be gone (ESRCH, or a positively different
+   identity; a permission or probe failure is unknown). `--settle [--apply]`
+   (issue #4832, dry by default; no repo = every repo this login hosts) settles
+   this node's own retained starts in bulk: cancels a `reserved`, marks
+   `unobserved` a nativeless `starting` no live window or process holds, sends
+   `stopped` for an `observed` whose native is proven gone, and counts the rest
+   (alive, held, moved in the last 10 minutes, unknown) by why — one line each
+   in `logs/authority.log`, no credential. `--cancel-start RESERVATION` revokes
+   one never-begun reservation; a started or unobserved execution stays a
+   blocker. A captured legacy owner stays one after its lease expires or it
+   leaves the inventory: missing observation is not an acknowledgement.
+4. **Apply** — a fresh dry-run with `blockers: []` and fresh post-freeze
+   observations of every one of the person's hosts, then `--apply --manifest
+   FILE`: the hub selects `hub` (409 + `blockers` while any remain) and this
+   login's line becomes `hub`. From then on the person's starts need an
+   accepted dispatch on a capable node; a local start reads the gate and fails
+   closed on an authority outage. `FLEET_TICKETS`, `FLEET_FORGE` and
+   `FLEET_LAND` stay per repo, byte for byte; existing ticket integers keep
+   their pinned backend.
+5. **Rollback** — freeze, fresh dry-run, `--rollback --manifest FILE`. Accepted
+   work must have a terminal outcome and no retained execution lease before the
+   person's starts return to legacy. Task history and ticket mappings stay; hub
+   results are never mirrored to GitHub, and no database is rolled back.
 
-The cutover writes the caller's overlay, and every other host of the repo
-follows (#4730): after each freeze/apply/rollback the hub sends
-`repo_authority` to every capable host (and on a host's first beat for each
-repo it hosts whose authority ever moved), and the node runs
-`fleet-hub-node.sh authority-sync owner/repo` → `fleet_repo_authority.py
-owner/repo --sync`, which reads the mode back with the node's own credential and
-rewrites `FLEET_TASK_AUTHORITY` in each local overlay of that repo only. An
-unknown answer leaves the overlays as they are; a repo still `legacy` with no
-line is left byte for byte. A failed re-read is retried on the next beat.
+**The person's other logins follow** (#4730): after each freeze / apply /
+rollback the hub sends `repo_authority` (the person's mode and revision) to
+each of the person's capable hosts, once per repo that host hosts, and on such a
+host's first beat when the revision is past 0; the node runs `fleet-hub-node.sh
+authority-sync owner/repo` → `fleet_repo_authority.py --sync`, which reads the
+mode back with its own credential and rewrites only its login's [node] line. An
+unknown answer leaves the line; `legacy` with no line stays byte for byte; a
+failed read retries on the next beat. Another person's hosts hear nothing, and
+a second login of the same machine that is another person's is untouched.
 
-Freeze blocks new accepted and legacy dispatch, including lease-free scratches.
-The last local gate reserves a start in the existing operation journal before
-window creation. Freeze, admission and cancellation serialize on the same repo
-lock. A paused launcher, empty inventory or elapsed lease never erases it.
-`--cancel-start RESERVATION` revokes only a never-begun reservation; a racing
-launcher then cannot begin. Started but unobserved execution stays blocked.
-`--settle [--apply]` (issue #4832, dry by default) settles this node's OWN
-retained starts in bulk with those same actions: it lists only its endpoint's
-open starts (`GET /authority/start?list=1`; the manifest's `starts` carries the
-same fields — phase, endpoint, worker, native — beside the unchanged blocker
-strings), cancels a `reserved` and marks `unobserved` a nativeless `starting`
-that no live window's `@authority_receipt` or process environment holds, sends
-`stopped` for an `observed` whose native `prove_stopped` confirms, and leaves
-the rest (alive, held, moved in the last 10 minutes, unknown) counted by why.
-Each write is one line in `logs/authority.log`, no credential.
-The existing session wrapper consumes each reservation once; resumes and
-transfers through that wrapper require a new admission. Its existing native
-startup hook binds the process/session, and its native wait records stop.
-All registered hosts must advertise `repo_authority_v1` and `launch_v1` before
-freeze; apply also requires fresh post-freeze observations. Unknown/offline
-hosts refuse cutover. Captured legacy owners remain blockers after expiry or
-inventory disappearance. Drain them using the existing stop workflow, then on
-the owner node supply `--stop-receipt FILE --manifest FILE`: a saved native
-receipt names worker, native session, PID, birth and executable. It must match
-the native identity saved for that frozen owner in the operation journal;
-an arbitrary dead process or a pre-transfer receipt cannot release a replacement.
-Older owners without that binding refuse freeze before any authority mutation:
-drain/reconcile these on their existing legacy path, then retry preflight.
-This keeps legacy drain available rather than trapping the repo frozen;
-missing observation is not an acknowledgement. The command
-requires ESRCH or a positively observed different process identity; permission
-or probe failure remains unknown. The authenticated node's acknowledgement is
-journalled. It does not stop processes or adopt a live owner automatically.
+Inside one stage the local gate reserves a start in the existing operation
+journal before any window is made; freeze, admission and cancellation serialize
+on the person's authority (the hub) and this login's `fleet.conf.authority.lock`.
+A paused launcher, an empty inventory or an elapsed lease never erases a
+reservation. The session wrapper consumes each reservation once; resumes and
+transfers through it need a new admission, its native startup hook binds the
+process and its native wait records the stop.
 
-Apply selects hub task authority without changing `FLEET_TICKETS`,
-`FLEET_FORGE`, or `FLEET_LAND`. New starts require an accepted dispatch on a
-capable node; local dispatch checks the central gate and fails closed on an
-authority outage. Existing ticket integers keep their pinned backend. Selective
-backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest FILE`
-(`--body-file FILE` optional): allocate a new hub ticket and preserve the exact
-old reference/URL in one transaction. No GitHub write or whole-backlog import.
-The returned `hub:owner/repo#M` can be passed as `ticket_ref` on an accepted
-`worker_start`; the accepted task carries it through node launch and reports.
-Brief, comment, evidence and cleanup ticket reads use that accepted reference
-even when the repo's pinned default is GitHub and the hub number collides.
-The manifest projects a later confirmed `task_report` with `status=merged` and
-`pr_state=merged` independently of the original work outcome; waiting or an old
-generation cannot turn that field into a confirmed landing.
-
-Rollback first freezes dispatch. Accepted work must have a terminal outcome
-and no retained execution lease before future starts return to legacy control.
-It keeps task history and ticket mappings; it never mirrors hub results to
-GitHub. Explicit completion with a PR records `work_result` and `pr_state:
-waiting` separately in result evidence. Only the existing merge verdict permits
-`pr_state: merged`. Fixture tests do not establish deployment/live acceptance.
+Selective backlog adoption is `--adopt gh:owner/repo#N --title TEXT --manifest
+FILE` (`--body-file FILE` optional): a new hub ticket that keeps the exact old
+reference/URL in one transaction, the mapping kept on the person's authority —
+no GitHub write, no whole-backlog import. The returned `hub:owner/repo#M` can be
+passed as `ticket_ref` on an accepted `worker_start`; brief, comment, evidence
+and cleanup reads use it even when the repo's pinned default is GitHub and the
+number collides. The manifest projects a later confirmed `task_report` with
+`status=merged` and `pr_state=merged` independently of the work outcome;
+waiting or an old generation cannot turn that into a confirmed landing.
+Explicit completion with a PR records `work_result` and `pr_state: waiting`
+apart; only the existing merge verdict permits `pr_state: merged`. Fixture
+tests do not establish deployment or live acceptance.
 
 ### Retiring the compatibility window (#4398)
 
 The window closed on 2026-10-18. The 7-day wait was waived by the operator,
 and three gates were met: a compatible released version, C9 live rows, and a
-fresh dry-run of each migrated repo showing `legacy_owners=[]`, `blockers=[]`.
-Inventory of the C1–C7 branches: old peers are kept out at the gate, not
-translated. That gate is:
+fresh dry-run showing `legacy_owners=[]`, `blockers=[]`. Since #4896 / #4901
+that dry-run is the **person's** (`fleet-repo.sh authority --dry-run` on one of
+their logins), never a repo's. Inventory of the C1–C7 branches: old peers are
+kept out at the gate, not translated. That gate is:
 
 - `launch_v1` for any accepted launch;
 - `repo_authority_v1` for a hub-mode `worker_start`;
-- cutover blockers for any non-capable host or live legacy owner;
+- cutover blockers for any of the person's non-capable hosts or live legacy
+  owners;
 - refusal of a downlevel report or legacy POST on a version-1 task.
 
 The gate stays.
 
 The legacy-mode path stays byte for byte: legacy relays, the version-0 record,
 the issue lease, label resolution at a first dispatch, and `gh:` ticket refs.
-Unmigrated repos still run on it.
+A person who has not cut over still runs on it, in every repo.
 
 The one superseded branch was the issue-number wait. `fleet-await.sh <N>` no
 longer reads the legacy ledger, or adopts `@origin`, for a window carrying
-`@launch`. It waits on that window's `T<n>`, and a hub-authority repo refuses
-a by-number spawn.
+`@launch`. It waits on that window's `T<n>`, and a login whose person is on the
+hub (`fleet_task_authority` = `hub`) refuses a by-number spawn.
 
-Before deleting more, confirm per repo with `fleet-repo.sh authority <repo>
---session <s> --dry-run`: hub mode with zero legacy owners. A repo still in
-`legacy` keeps every legacy reader. Rolling back a repo is the C5
-`--rollback` stage, unchanged. Rolling back this code is a revert of its PR;
-no schema or stored row changed.
+Before deleting more, confirm per person with `fleet-repo.sh authority
+--dry-run`: hub mode with zero legacy owners. A person still in `legacy` keeps
+every legacy reader. Rolling a person back is stage 5 above, unchanged. Rolling
+back this code is a revert of its PR; no schema or stored row changed.
 
 ## Identity — the worker credential (issue #1809, EPIC #1813 C7)
 

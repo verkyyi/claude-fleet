@@ -92,17 +92,18 @@ remains in the existing hub CI; this bounded driver uses SQLite.
 | A5 | Explicit choice over stale label/default; invalid and contradictory providers refused | NOT RUN |
 | A6 | Duplicate acceptance, changed payload, one launch, lost receipt acknowledgement/replay | NOT RUN |
 | A7 | Old-generation report, explicit transfer and immutable terminal result | NOT RUN |
-| A8 | Same number in two repos, qualified references, foreign owner/endpoint refusal | NOT RUN |
+| A8 | Same number in two repos, qualified references, another person's owner/endpoint refused and not counted as a blocker | NOT RUN |
 | A9 | Retained native across outage; bounded outbox/expiry/conflicts; confirmed stale browser state | NOT RUN |
 | A10 | Cancel intent versus completion; confirmed native stop; same-generation resume fence | NOT RUN |
-| A11 | Dry-run/freeze/apply/rollback; active native/start reservation; unchanged second repo | NOT RUN |
+| A11 | One person's dry-run/freeze/drain/apply/rollback; active native/start reservation; another person's login unchanged | NOT RUN |
 | A12 | Committed portal build, mobile/desktop nav, keyboard tabs/details, thin-client PTY and verified native inbox | NOT RUN |
 
 ## Live run: select and authorize the target first
 
 This document does not authorize a live drill, install sync, restart, production
 canary or migration. Record an explicit decision naming the disposable hub,
-two test nodes/logins, one forge-none repo and one GitHub-hosted repo, source and
+two test nodes/logins belonging to two different test persons (A cuts over, B
+stays legacy), one forge-none repo and one GitHub-hosted repo, source and
 deployed versions, provider account, bounded test window and rollback owner.
 Keep existing production and peer workers outside the targets. Recheck external
 owners #3401/#3955 for credential/restore prerequisites, #4434/PR4480 for native
@@ -168,8 +169,11 @@ headers, never recorded in argv, artifacts, public comments or config.
    `fleet-await.sh <child-T> --timeout 60 --no-spawn`. Have the child explicitly
    `report` with `outcome: succeeded`; retain the report event ID. Replay its
    existing delivery after dropping the acknowledgement: one result and one
-   delivery. Run two repos with the same ticket integer and attempt a foreign
-   owner read/write: no crossed attribution, 404/refusal. After an explicitly
+   delivery. Run two repos with the same ticket integer and attempt another
+   person's read/write (person B's token on person A's task, lease, start or
+   `/v1/fleet/authority` without `?owner=`): no crossed attribution, 404/refusal.
+   Person B's legacy session in the same repo must appear in neither A's
+   `blockers` nor A's hosts. After an explicitly
    authorized, confirmed-stop transfer, replay the old report: historical/refused,
    no new-generation mutation. Never manufacture a stop receipt or switch providers
    silently to complete this row.
@@ -196,16 +200,23 @@ headers, never recorded in argv, artifacts, public comments or config.
    session before replay: old stop proof must be rejected. Run expiry/overflow
    only in disposable fixture state (7-day/1,000-event limits); never fill a real
    user's journal or call unresolved expiry success. No new polling service.
-6. **A11 — migration and rollback.** Save
-   `fleet_repo_authority.py <repo> --session <test-fleet> --dry-run` twice and
-   compare. Record active/unknown owners and repo B bytes. Use the saved manifest
-   with `--freeze`, `--apply` or `--rollback` only under the named cutover approval;
-   refresh the manifest at each revision. An active/unverified legacy owner must
-   block cutover. Drain or explicitly adopt only verified owners. Require one
-   authority and unchanged repo B. After accepted hub work exists, rollback must
-   retain its hub authority until terminal and confirmed stopped; never mirror
-   T state into GitHub or roll the database back. Warm-pool owners keep their
-   owning fleet UUID (verify the deployed #4488 fix).
+6. **A11 — one person's migration and rollback.** The authority is person A's,
+   never a repo's (#4896 / #4901). On A's test login save
+   `fleet-repo.sh authority --dry-run` twice and compare (`version: 2`,
+   `scope: owner`, A's `conf`). Record A's active/unknown owners, and the bytes
+   of person B's login (its `fleet.conf` [node] line, overlays, starts). Use the
+   saved manifest with `--freeze`, `--apply` or `--rollback` only under the
+   named cutover approval; refresh the manifest at each revision: dry-run →
+   freeze → drain (`--stop-receipt`, `--settle --apply` on A's own nodes) →
+   apply → rollback. An active/unverified legacy owner of A's must block
+   cutover; one of B's in the same repo must not. Drain or explicitly adopt
+   only verified owners. A per-repo manifest or B's manifest must be refused.
+   Require one authority for A, A's other test login following through the
+   hub's push (`--sync`), and B's login byte for byte unchanged and still
+   starting legacy sessions in the same repo. After accepted hub work exists,
+   rollback must retain its hub authority until terminal and confirmed stopped;
+   never mirror T state into GitHub or roll the database back. Warm-pool owners
+   keep their owning fleet UUID (verify the deployed #4488 fix).
 7. **A12 — operator view.** On the actual current portal, use desktop and mobile
    viewports, keyboard tabs/details and the native terminal link. Capture honest
    unknown/failed/cancelled/succeeded rows, retained native execution after work
@@ -224,6 +235,12 @@ ambiguous or stale observation is NOT RUN/FAIL, never a pass by inference.
 C8 remains open without a waiting implementation worker until **all** are
 evidenced: one released compatible version, at least seven days since explicit
 canary cutover, successful applicable C9 live rows, and zero active legacy owners.
+Each of these is read **per person** (#4896 / #4901): a canary is one person's
+cutover, and «zero active legacy owners» is that person's
+`fleet-repo.sh authority --dry-run` (`legacy_owners=[]`, `blockers=[]`) — never
+a repo's count, which would mix in other persons still on legacy. Deleting a
+legacy reader still waits until no person uses it: a person still on legacy
+keeps every legacy reader.
 Keep merged, deployed and live-accepted as independent columns in every report.
 Release-train publication alone does not prove node deployment. A merged C9
 harness does not authorize C8 deletion or production cutover.

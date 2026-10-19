@@ -71,20 +71,34 @@ in progress, input/registration errors require checking the selected repo,
 Hub outages require restoring the service before retrying. Casing does not
 require re-adding the repo or manually unfreezing it.
 
-Existing repositories keep their ticket settings. To explicitly move one repo's
-task control to the hub, first save a private migration inventory:
+Who dispatches your tasks is **your** setting, not a repository's: once you move
+to the hub, your new tasks in every repository are dispatched by the hub, while
+other people's sessions in the same repository are untouched and never block you.
+A newly added repository selects nothing of its own; it follows you.
+
+To hand your tasks to the hub, first save a private migration inventory on any
+of your hosts:
 
 ```sh
-~/.claude/fleet/bin/fleet-repo.sh authority owner/repo --session fleet --dry-run > /private/path/repo-manifest.json
+~/.claude/fleet/bin/fleet-repo.sh authority --dry-run > /private/path/my-manifest.json
 ```
 
-Review its hosts, active owners and blockers. Use the same command with
-`--freeze --manifest /private/path/repo-manifest.json` to stop new starts, then
-drain existing owners. Save a fresh `--dry-run` manifest and use `--apply` with
-it only when every host is capable and all legacy owners have confirmed stops.
-Unknown or offline owners block the change. `--rollback` also requires a freeze
-and a fresh manifest; accepted hub tasks must finish and release execution first.
-Keep manifests private: they contain machine and task references.
+(Adding `owner/repo` only narrows the inventory's lists to that repository.)
+Review your hosts, active owners and blockers, then in order:
+
+1. **Freeze**: `--freeze --manifest /private/path/my-manifest.json` stops your
+   new starts;
+2. **Drain**: let your running sessions write their handoff and end, and confirm
+   on their node that the native process stopped (`--settle --apply` settles this
+   machine's finished start records in one pass);
+3. **Apply**: save a fresh `--dry-run`; once it shows no blockers, run `--apply`
+   with it;
+4. **Rollback**: `--rollback`, also after a freeze and a fresh manifest; accepted
+   hub tasks must finish and release execution first.
+
+Unknown, offline or incapable hosts of yours, or owners in an unknown state,
+block the change. Your other logins follow automatically. Keep manifests private:
+they contain machine and task references.
 
 This changes task control only. Ticket settings, GitHub code hosting and PR
 checks stay in place. A completed task can still have a PR waiting for GitHub.
