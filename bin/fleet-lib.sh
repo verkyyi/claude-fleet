@@ -10507,15 +10507,16 @@ fleet_cfg_state() {
 # fleet_reap_policy.py idle-owned, issue #4764) reads `reap`: a reopen would
 # restart the very idle clock that closes it, so `done:10m` never came due.
 fleet_cfg_restart_why() {
-  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h rp
+  local sess="${1:-}" win="${2:-}" idle="${3:-${FLEET_CFG_RESTART_IDLE:-600}}" o ag fp av st ts lp slp rem hub nm bin h rp iss wrepo
   case "$idle" in ''|*[!0-9]*) idle=600 ;; esac
   o=$(_fleet_tmux "$sess" display-message -p -t "$win" \
-        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{@reap_policy}|#{window_name}' 2>/dev/null) \
+        '#{@cc_agent}|#{@agent_cfg}|#{@agent_ver}|#{@claude_state}|#{@claude_state_ts}|#{@loop}|#{@sleep_since}|#{@remote}|#{@hub}|#{@reap_policy}|#{@issue}|#{window_name}' 2>/dev/null) \
     && [ -n "$o" ] || { echo gone; return 1; }
   # parameter expansion, not a here-string: this lib is sourced by plain sh too
   ag=${o%%|*}; o=${o#*|}; fp=${o%%|*}; o=${o#*|}; av=${o%%|*}; o=${o#*|}; st=${o%%|*}; o=${o#*|}
   ts=${o%%|*}; o=${o#*|}; lp=${o%%|*}; o=${o#*|}; slp=${o%%|*}; o=${o#*|}
-  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; nm=${o#*|}
+  rem=${o%%|*}; o=${o#*|}; hub=${o%%|*}; o=${o#*|}; rp=${o%%|*}; o=${o#*|}
+  iss=${o%%|*}; nm=${o#*|}
   case "$nm" in dash|plan|backlog|home) echo panel; return 1 ;; esac
   [ -z "$rem" ] && [ "$hub" != 1 ] || { echo remote; return 1; }
   fleet_cfg_expected_load; fleet_cfg_broken_load; fleet_cfg_state "$ag" "$fp" "$av" "$sess" "$win"
@@ -10528,6 +10529,19 @@ fleet_cfg_restart_why() {
      && python3 "$bin/fleet_reap_policy.py" idle-owned "$rp" >/dev/null 2>&1; then
     echo reap; return 1
   fi
+  # A finished session whose ticket is CLOSED is the reaper's too (issue #4822):
+  # the idle pass's done-no-pr road counts from its last turn, and a reopen's
+  # resume nudge is a new turn — every release restarted that clock, so a session
+  # finished on a closed ticket never came due. The fleet's local copy first
+  # (fleet-gh.sh); unreadable or not CLOSED ⇒ reopened as before.
+  case "$iss" in ''|*[!0-9]*) ;; *)
+    wrepo=$(fleet_window_repo "$sess" "$win" 2>/dev/null)
+    if [ -n "$wrepo" ] && [ -f "$bin/fleet-gh.sh" ] \
+       && [ "$(bash "$bin/fleet-gh.sh" issue view "$iss" --repo "$wrepo" --json state --max-age 600 2>/dev/null \
+               | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' 2>/dev/null)" = CLOSED ]; then
+      echo reap; return 1
+    fi ;;
+  esac
   case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
   [ $(( $(date +%s) - ts )) -ge "$idle" ] || { echo recent; return 1; }
   # A handoff cycle is about to /clear it (issue #2937): the reopen would race it.

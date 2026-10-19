@@ -61,6 +61,10 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
+# A caller with a bare PATH — a command over ssh / the peerlink (`/usr/bin:/bin`),
+# a launchd job — finds no tmux: every list read empty and every key answered
+# refused:not-found while the window stood (issue #4822). fleet-restore's fill.
+PATH=$(fleet_path_fill); export PATH
 
 SESS="${1:-}"; KEY="${2:-}"
 # `fid:<fleet_id>` first: an identity is not a `<repo>:` prefix (issue #1873).
