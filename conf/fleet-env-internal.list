@@ -115,7 +115,6 @@ FLEET_LAUNCH_CONTEXT               handoff: supervisor binding inherited by nati
 FLEET_LAUNCH_CREATE                handoff: supervisor-validated native Claude worktree creation intent, never a user override
 FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollback.sh runs (#4663)
 FLEET_TASK_CLOSED_CMD              seam: answers `<T<n>>` instead of fleet_task_control.py closed — 0 closed · 1 open · 3 unknown (fleet_task_closed, fleet-cleanup-idle.py, #4897)
-FLEET_TASK_ISSUE                   knob: 1 = a development task still files its GitHub issue (fleet-task-record.sh dispatch) — the old road for one batch, gone in 批 1 (#4897)
 FLEET_TASK_RECORD                  seam: the task-record script fleet-brief.sh asks `get T<n>` of (#4897, #4898)
 FLEET_TASK_RECOVERY_URL            handoff: pinned hub URL for receipt replay, independent of repo authority mode (#4396)
 FLEET_TASK_RECOVERY_RAW            handoff: recovery calls the original task HTTP adapter without recursion (#4396)
