@@ -191,6 +191,8 @@ fetch_issues_for() {
   command -v gh >/dev/null 2>&1 || return 0
   # A repo not on GitHub has no GitHub backlog to fetch (issue #3600): never gh.
   [ "$(fleet_repo_forge "$rp")" = none ] && return 0
+  # GitHub unreachable (issue #4841): keep the last issues/labels caches.
+  command -v fleet_gh_ready >/dev/null 2>&1 && { fleet_gh_ready || return 0; }
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
     # Shared per repo (issue #3529): a trusted login's copy younger than the TTL,
     # or the one another login is fetching right now, instead of asking GitHub.

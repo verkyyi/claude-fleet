@@ -146,7 +146,7 @@ fleet_gh_mark_limited() {  # fleet_gh_mark_limited <bucket> [reset-epoch] [sourc
 # A WRITE (fleet_gh_wrun) does not skip on a secondary marker: the write queue
 # WAITS it out instead (issue #1264) — a skipped comment is a lost comment.
 fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
-  local b="${1:-graphql}" src="${2:-gh}" err rc errtxt hit runner=gh limited
+  local b="${1:-graphql}" src="${2:-gh}" err rc errtxt hit runner=_fleet_gh_call limited
   shift 2
   if [ "${_FLEET_GH_WRITE:-0}" = 1 ]; then
     runner=fleet_gh_write; _fleet_gh_limited_any "$b" >/dev/null && limited=1
@@ -168,6 +168,275 @@ fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
     return "$FLEET_GH_LIMITED_RC"
   fi
   cat "$err" >&2; rm -f "$err"
+  return "$rc"
+}
+
+# --- reachability: every GitHub call is timed; "GitHub 不通" is ONE shared state ---
+# (issue #4841, EPIC #4839 C2, 共同约定 2/3). A gh call used to be bare `gh`: with
+# GitHub connecting but never answering (a blackhole, a stalled proxy) every caller
+# hung on its own, the daemons till their watchdog (~9 min), the tools for ever.
+#   * _fleet_gh_call runs gh under _fleet_gh_timed — FLEET_GH_TIMEOUT seconds (15;
+#     FLEET_GH_TIMEOUT_KEY=5 for a key's popup), the job its own PROCESS GROUP so the
+#     kill takes gh's children too. A timeout, or gh's own connection error (DNS,
+#     refused, i/o timeout, TLS handshake), is a CONNECTION failure; an HTTP answer
+#     — 404, 422, a rate limit — is GitHub answering and resets the count.
+#   * a TIMEOUT (FLEET_GH_TIMEOUT seconds of silence) opens the marker at once —
+#     the next caller, a REST fallback right behind it, must not wait again; a FAST
+#     connection error (DNS, refused) opens it on the FLEET_GH_DOWN_AFTER-th (2)
+#     in a row (within FLEET_GH_DOWN_WINDOW, 300s), a blip being cheap. The marker
+#     is $FLEET_STATE_DIR/gh-down — one
+#     line `<epoch> <reason>`, beside gh-limit.<bucket>, shared by the login (and by
+#     the machine where FLEET_STATE_DIR is shared). While it is open every call
+#     returns $FLEET_GH_LIMITED_RC (75, "GitHub 暂时不可用" — the code callers
+#     already treat as not-a-failure) at once, without running gh.
+#   * at most once per FLEET_GH_DOWN_PROBE_SECS (60) one caller — whoever asks
+#     first — probes (`gh api zen`, FLEET_GH_TIMEOUT_KEY seconds); success removes
+#     the marker and the call goes ahead. A daemon asks fleet_gh_ready before its
+#     tick, so the probe runs even when no session touches GitHub.
+#   * one line in $FLEET_GH_LOG when it opens (`gh-down open`) and closes
+#     (`gh-down close`) — never an alert, never a breakage.
+# Not timed: a call whose stdin or stdout is a terminal (a person's prompt, a pager
+# — a background process group would stop on SIGTTIN), and a shell that is not bash.
+# Local subcommands (`auth token`, `config`, `--version` …) never see the marker.
+# Constants of the layer, not settings: the env overrides exist for the selftests.
+fleet_gh_timeout() { case "${FLEET_GH_TIMEOUT:-}" in ''|*[!0-9]*) printf 15 ;; *) printf '%s' "$FLEET_GH_TIMEOUT" ;; esac; }
+fleet_gh_timeout_key() { case "${FLEET_GH_TIMEOUT_KEY:-}" in ''|*[!0-9]*) printf 5 ;; *) printf '%s' "$FLEET_GH_TIMEOUT_KEY" ;; esac; }
+_fleet_gh_num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+
+# _fleet_gh_timed <secs> <cmd…> — the command's own rc, or 124 when the clock ran
+# out (the whole process group killed: TERM, then KILL). stdin/stdout/stderr are
+# the caller's, untouched. A watcher subshell holds the clock, so the wait is a
+# plain `wait` — no poll loop.
+_fleet_gh_timed() {
+  local secs="${1:-0}"; shift
+  case "$secs" in ''|*[!0-9]*|0) "$@"; return $? ;; esac
+  if [ -z "${BASH_VERSION:-}" ] || [ -t 0 ] || [ -t 1 ]; then "$@"; return $?; fi
+  local mflag=0 job w rc flag
+  flag="${TMPDIR:-/tmp}/fleet-gh-tmo.$$.$RANDOM$RANDOM"
+  case "$-" in *m*) mflag=1 ;; esac
+  set -m
+  # An async command gets /dev/null for stdin even under `set -m` in a script:
+  # hand it the caller's own (saved on fd 7) — `gh api --input -`, a body on stdin.
+  { "$@" 0<&7 7<&- & job=$!; } 7<&0
+  # The watcher writes the flag BEFORE the signal, so a job it killed is told
+  # apart from one that failed by itself.
+  # The system's sleep, never a PATH shim a test put first (`command -p` still
+  # takes bash's hashed path).
+  local sl=/bin/sleep; [ -x "$sl" ] || sl=/usr/bin/sleep
+  ( trap - TERM; "$sl" "$secs"; : > "$flag"
+    kill -TERM -- "-$job" 2>/dev/null; "$sl" 2; kill -KILL -- "-$job" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
+  w=$!
+  [ "$mflag" = 1 ] || set +m
+  wait "$job" 2>/dev/null; rc=$?
+  kill -TERM -- "-$w" 2>/dev/null; kill -TERM "$w" 2>/dev/null
+  wait "$w" 2>/dev/null
+  if [ -e "$flag" ]; then
+    rm -f "$flag"
+    kill -KILL -- "-$job" 2>/dev/null   # whatever gh left behind in its group
+    [ "$rc" -eq 0 ] || return 124
+  fi
+  return "$rc"
+}
+
+# fleet_gh_conn_fail <text> — rc 0 when <text> is a CONNECTION failure (gh / git /
+# curl wording): GitHub never answered. An HTTP error is an answer, never this.
+fleet_gh_conn_fail() {
+  case "${1:-}" in
+    *'error connecting to'*|*'no such host'*|*'connection refused'*|*'Connection refused'*|\
+    *'i/o timeout'*|*'TLS handshake timeout'*|*'context deadline exceeded'*|*'proxyconnect tcp'*|\
+    *'network is unreachable'*|*'Network is unreachable'*|*'connection reset by peer'*|\
+    *'Could not resolve host'*|*'Failed to connect to'*|*"Couldn't connect to server"*|\
+    *'Connection timed out'*|*'Operation timed out'*|*'Operation too slow'*|\
+    *'SSL connection timeout'*) return 0 ;;
+  esac
+  return 1
+}
+
+# fleet_gh_down [bucket] — rc 0 while GitHub is believed unreachable, printing the
+# epoch it went down (`fake` under FLEET_GH_FAKE_DOWN=1). Forkless: the status bar
+# and the dash may read it every tick. The bucket is accepted for symmetry with
+# fleet_gh_limited; reachability is one state for all of them.
+fleet_gh_down() {
+  local f since _r
+  [ "${FLEET_GH_FAKE_DOWN:-0}" = 1 ] && { echo fake; return 0; }
+  f="${FLEET_STATE_DIR:-${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/global}/gh-down"
+  [ -f "$f" ] || return 1
+  read -r since _r < "$f" 2>/dev/null || return 1
+  case "$since" in ''|*[!0-9]*) return 1 ;; esac
+  echo "$since"
+}
+
+# fleet_gh_down_reason — the marker's reason (one line), or nothing.
+fleet_gh_down_reason() {
+  local f _s r
+  f="$(fleet_gh_state_dir)/gh-down"
+  [ -f "$f" ] && read -r _s r < "$f" 2>/dev/null && printf '%s' "$r"
+}
+
+# fleet_gh_down_next — seconds until the next probe may run (0 = due now).
+fleet_gh_down_next() {
+  local d last now every
+  d=$(fleet_gh_state_dir); now=$(date +%s)
+  every=$(_fleet_gh_num "${FLEET_GH_DOWN_PROBE_SECS:-}" 60)
+  last=$(cat "$d/gh-down.probe" 2>/dev/null); last=$(_fleet_gh_num "$last" 0)
+  last=$(( last + every - now )); [ "$last" -lt 0 ] && last=0
+  printf '%s' "$last"
+}
+
+# fleet_gh_down_line — the doctor's words: 「GitHub 不通 · 3 分钟 · 下次探测 40 秒后」.
+fleet_gh_down_line() {
+  local since now m nx
+  since=$(fleet_gh_down) || return 1
+  [ "$since" = fake ] && { printf 'GitHub 不通（注入：FLEET_GH_FAKE_DOWN）'; return 0; }
+  now=$(date +%s); m=$(( (now - since) / 60 )); nx=$(fleet_gh_down_next)
+  if [ "$m" -lt 1 ]; then m='不到 1 分钟'; else m="$m 分钟"; fi
+  if [ "$nx" -gt 0 ]; then nx="下次探测 $nx 秒后"; else nx='下次调用即探测'; fi
+  printf 'GitHub 不通 · %s · %s' "$m" "$nx"
+}
+
+_fleet_gh_down_open() {  # _fleet_gh_down_open <reason>
+  local d tmp now
+  d=$(fleet_gh_state_dir); now=$(date +%s); tmp="$d/.gh-down.$$"
+  [ -f "$d/gh-down" ] && return 0
+  printf '%s %s\n' "$now" "${1//[$'\n']/ }" > "$tmp" 2>/dev/null && mv -f "$tmp" "$d/gh-down" 2>/dev/null
+  rm -f "$tmp" 2>/dev/null
+  printf '%s\n' "$now" > "$d/gh-down.probe" 2>/dev/null
+  fleet_gh_log "gh-down open reason=${1// /_} source=${0##*/}"
+}
+
+_fleet_gh_down_close() {  # _fleet_gh_down_close <how>
+  local d since
+  d=$(fleet_gh_state_dir)
+  [ -f "$d/gh-fail" ] && rm -f "$d/gh-fail" 2>/dev/null
+  [ -f "$d/gh-down" ] || return 0
+  since=$(fleet_gh_down)
+  rm -f "$d/gh-down" "$d/gh-down.probe" 2>/dev/null
+  fleet_gh_log "gh-down close how=$1 secs=$(( $(date +%s) - $(_fleet_gh_num "$since" "$(date +%s)") )) source=${0##*/}"
+}
+
+# _fleet_gh_conn_failed <reason> [now] — count one connection failure; the
+# FLEET_GH_DOWN_AFTER-th in a row (inside FLEET_GH_DOWN_WINDOW) opens the marker,
+# `now` (a timeout) opens it at once.
+_fleet_gh_conn_failed() {
+  local d f n now win after
+  d=$(fleet_gh_state_dir); f="$d/gh-fail"; now=$(date +%s)
+  win=$(_fleet_gh_num "${FLEET_GH_DOWN_WINDOW:-}" 300)
+  after=$(_fleet_gh_num "${FLEET_GH_DOWN_AFTER:-}" 2)
+  # One appended line per failure — an O_APPEND write of a short line is atomic, so
+  # callers failing at the same second (20 sessions behind one blackhole) are all
+  # counted; a read-modify-write lost all but one of them.
+  printf '%s\n' "$now" >> "$f" 2>/dev/null
+  n=$(awk -v c=$(( now - win )) '$1 >= c { n++ } END { print n + 0 }' "$f" 2>/dev/null)
+  n=$(_fleet_gh_num "$n" 1)
+  fleet_gh_log "gh-conn-fail n=$n reason=${1// /_} source=${0##*/}"
+  { [ "$n" -ge "$after" ] || [ "${2:-}" = now ]; } && _fleet_gh_down_open "$1"
+  return 0
+}
+
+# fleet_gh_ready — rc 0: go ahead and call GitHub; rc 75: it is down, skip. While
+# the marker is open and a probe is due, THIS caller probes (one at a time: a
+# mkdir lock, stale after 30s) and a success closes the marker.
+fleet_gh_ready() {
+  local d now lk since rc
+  since=$(fleet_gh_down) || return 0
+  [ "$since" = fake ] && return "$FLEET_GH_LIMITED_RC"
+  [ "$(fleet_gh_down_next)" -gt 0 ] && return "$FLEET_GH_LIMITED_RC"
+  d=$(fleet_gh_state_dir); lk="$d/gh-down.probing"; now=$(date +%s)
+  if ! mkdir "$lk" 2>/dev/null; then
+    [ $(( now - $(_fleet_gh_mtime "$lk" 2>/dev/null || echo "$now") )) -gt 30 ] && rm -rf "$lk" 2>/dev/null
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  printf '%s\n' "$now" > "$d/gh-down.probe" 2>/dev/null
+  _fleet_gh_timed "$(fleet_gh_timeout_key)" gh api zen >/dev/null 2>&1; rc=$?
+  rmdir "$lk" 2>/dev/null
+  if [ "$rc" -eq 0 ]; then _fleet_gh_down_close probe; return 0; fi
+  fleet_gh_log "gh-down probe-fail rc=$rc source=${0##*/}"
+  return "$FLEET_GH_LIMITED_RC"
+}
+
+_fleet_gh_local_cmd() {  # gh subcommands that never reach the network
+  case "${1:-} ${2:-}" in
+    'auth token'*|config\ *|alias\ *|completion\ *|help\ *|'--version '*|'version '*|'--help '*|'extension list'*) return 0 ;;
+  esac
+  return 1
+}
+
+# _fleet_gh_call <gh args…> — gh, timed and circuit-aware. Healthy: gh's stdout,
+# stderr and exit code, byte for byte (stderr is held and replayed after the call,
+# so it can be read). Down / timed out / no connection: rc 75 + one stderr line.
+_fleet_gh_call() {
+  local err rc txt
+  _fleet_gh_local_cmd "$@" && { gh "$@"; return $?; }
+  if ! fleet_gh_ready; then
+    printf 'fleet_gh: GitHub unreachable (since %s) — gh %s not run, rc %s\n' \
+      "$(fleet_gh_hhmm "$(fleet_gh_down)")" "${1:-}" "$FLEET_GH_LIMITED_RC" >&2
+    fleet_gh_log "down-skip cmd=${1:-}_${2:-} source=${0##*/}"
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  err=$(mktemp "${TMPDIR:-/tmp}/fleet-gh-err.XXXXXX" 2>/dev/null) || { _fleet_gh_timed "$(fleet_gh_timeout)" gh "$@"; return $?; }
+  _fleet_gh_timed "$(fleet_gh_timeout)" gh "$@" 2>"$err"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close call
+    [ -s "$err" ] && cat "$err" >&2
+    rm -f "$err"; return 0
+  fi
+  if [ "$rc" -eq 124 ]; then
+    rm -f "$err"
+    printf 'fleet_gh: GitHub did not answer in %ss — gh %s given up, rc %s\n' "$(fleet_gh_timeout)" "${1:-}" "$FLEET_GH_LIMITED_RC" >&2
+    _fleet_gh_conn_failed "timeout ${1:-} ${2:-}" now
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  txt=$(cat "$err" 2>/dev/null)
+  cat "$err" >&2; rm -f "$err"
+  if fleet_gh_conn_fail "$txt"; then
+    _fleet_gh_conn_failed "connect ${1:-} ${2:-}"
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close call   # GitHub answered
+  return "$rc"
+}
+
+# fleet_gh_git <git args…> — git aimed at github.com, bounded: a transfer stalled
+# below 1 B/s for FLEET_GH_TIMEOUT seconds is aborted (http.lowSpeed*; a long but
+# moving push is never cut), ssh gets ConnectTimeout, FLEET_GH_GIT_TIMEOUT (600)
+# bounds the whole. Down ⇒ rc 75 without running git; a connection failure counts.
+fleet_gh_git() {
+  local err rc txt t
+  if ! fleet_gh_ready; then
+    printf 'fleet_gh_git: GitHub unreachable — git %s not run, rc %s\n' "${1:-}" "$FLEET_GH_LIMITED_RC" >&2
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  t=$(fleet_gh_timeout)
+  err=$(mktemp "${TMPDIR:-/tmp}/fleet-gh-err.XXXXXX" 2>/dev/null) || err=/dev/null
+  GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o ConnectTimeout=$t" \
+    _fleet_gh_timed "$(_fleet_gh_num "${FLEET_GH_GIT_TIMEOUT:-}" 600)" \
+    git -c http.lowSpeedLimit=1 -c "http.lowSpeedTime=$t" "$@" 2>"$err"; rc=$?
+  [ "$err" = /dev/null ] && return "$rc"
+  txt=$(cat "$err" 2>/dev/null); cat "$err" >&2; rm -f "$err"
+  if [ "$rc" -eq 124 ]; then
+    _fleet_gh_conn_failed "git-timeout ${1:-}" now; return "$FLEET_GH_LIMITED_RC"
+  fi
+  if [ "$rc" -ne 0 ] && fleet_gh_conn_fail "$txt"; then
+    _fleet_gh_conn_failed "git ${1:-}"
+    return "$FLEET_GH_LIMITED_RC"
+  fi
+  [ "$rc" -eq 0 ] && [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close git
+  return "$rc"
+}
+
+# fleet_gh_curl <curl args…> — curl aimed at api / raw / codeload.github.com:
+# connect within FLEET_GH_TIMEOUT_KEY, abort below 1 B/s for FLEET_GH_TIMEOUT.
+# curl's own rc 6/7/28/35 (resolve · connect · timeout · TLS connect) is a
+# connection failure ⇒ counted, rc 75. Down ⇒ rc 75 without running curl.
+fleet_gh_curl() {
+  local rc
+  fleet_gh_ready || return "$FLEET_GH_LIMITED_RC"
+  curl --connect-timeout "$(fleet_gh_timeout_key)" --speed-limit 1 --speed-time "$(fleet_gh_timeout)" "$@"; rc=$?
+  case "$rc" in
+    28) _fleet_gh_conn_failed "curl rc=28" now; return "$FLEET_GH_LIMITED_RC" ;;
+    6|7|35) _fleet_gh_conn_failed "curl rc=$rc"; return "$FLEET_GH_LIMITED_RC" ;;
+    0) [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close curl ;;
+  esac
   return "$rc"
 }
 
@@ -203,7 +472,7 @@ fleet_gh() {  # fleet_gh <gh args…>
       return "$FLEET_GH_NOFORGE_RC"
     fi
   fi
-  gh "$@"
+  _fleet_gh_call "$@"
 }
 
 # --- REST equivalents ---------------------------------------------------------
@@ -422,8 +691,9 @@ fleet_gh_write() {  # fleet_gh_write <gh args…>
     _fleet_gh_sleep_ms "$dly"
     _fleet_gh_now_ms > "$d/gh-write.$fp.last.$me" 2>/dev/null \
       && mv -f "$d/gh-write.$fp.last.$me" "$d/gh-write.$fp.last" 2>/dev/null
-    gh "$@" >"$out" 2>"$err"; rc=$?
+    _fleet_gh_call "$@" >"$out" 2>"$err"; rc=$?
     [ "$rc" -eq 0 ] && break
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && break   # down / no answer — never retried here
     # A journaled non-idempotent create owns its reconciliation. Keep this
     # queue/gap, but never infer safe resend from a wrapper's error text.
     [ "${_FLEET_GH_WRITE_ONCE:-0}" = 1 ] && break

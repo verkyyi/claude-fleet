@@ -499,6 +499,9 @@ wh_reconcile() { # [session...]
     # Dead (or never started). A forward that keeps dying fast — e.g. a persistent
     # create failure — must NOT hot-loop respawns, so gate a *death* on exponential
     # backoff (issue #391). A first-ever spawn (no prior pid) skips straight to launch.
+    # GitHub unreachable (issue #4841): a respawn now would only die again — wait,
+    # without counting a death, until fleet_gh_ready says it answers.
+    if command -v fleet_gh_ready >/dev/null 2>&1 && ! fleet_gh_ready; then continue; fi
     if [ -n "$pid" ] && ! wh_backoff_ready "$repo" "$base" "$pid"; then continue; fi
     # (re)connect: launch the forward, then catch up its caches for anything that
     # changed while it was down (issue #410) — gh webhook forward never replays it.

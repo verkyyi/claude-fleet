@@ -21,15 +21,15 @@
 1	安装：新电脑经入口加入节点（入口给的加入命令）	curl -fsSL "$JOIN_URL" -o "$CELL/join.sh"	dns=fail hang=hang limit=fail
 2	更新：没有入口的登录跟 stable（install-sync 一拍）	bash "$BIN/fleet-install-sync.sh" --dry-run --root "$CELL/install"	dns=ok hang=hang limit=ok
 3	登录入口网页（只绑了 GitHub 的人）	- 入口侧（Go，tokenledger）：只在现场版读，C10 #4849 自带 Go 测试	dns=skip hang=skip limit=skip
-4	开会话：GitHub 单仓库的认领简报	bash "$BIN/fleet-claim-brief.sh" --issue "$ISSUE"	dns=fail hang=hang limit=fail
-5	派活并等结果：派单前读单（fleet-gh.sh issue view）	bash "$BIN/fleet-gh.sh" issue view "$ISSUE" --repo "$REPO" --json title,state,body	dns=fail hang=hang limit=fail
+4	开会话：GitHub 单仓库的认领简报	bash "$BIN/fleet-claim-brief.sh" --issue "$ISSUE"	dns=fail hang=fail limit=fail
+5	派活并等结果：派单前读单（fleet-gh.sh issue view）	bash "$BIN/fleet-gh.sh" issue view "$ISSUE" --repo "$REPO" --json title,state,body	dns=fail hang=fail limit=fail
 6	子会话回报：merged 回报核对 PR	bash "$BIN/fleet-report-parent.sh" --state merged --pr "$PR" --summary drill --dry-run	dns=ok hang=hang limit=ok
 7	认领 · 评论 · 证据 · 关单（四次写，写不上的记进 $CELL/writes.lost）	for op in claim comment evidence close; do echo "$op" >> "$CELL/writes"; case $op in claim) bash "$BIN/fleet-ticket.sh" claim "gh:$REPO#$ISSUE" ;; comment) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --body drill ;; evidence) echo drill | bash "$BIN/fleet-evidence.sh" before --issue "$ISSUE" --epic none --note drill --name drill.txt --post - ;; close) bash "$BIN/fleet-comment.sh" "$ISSUE" --note --close --body drill ;; esac || echo "$op" >> "$CELL/writes.lost"; done; [ ! -s "$CELL/writes.lost" ]	dns=fail hang=hang limit=fail
 8	回收：会话退出后的收尾（SessionEnd hook 的 --exec）	bash "$BIN/session-end-hook.sh" --exec worker "$SESS" @1 "$ISSUE" -	dns=ok hang=hang limit=ok
-9	面板：任务列表的单子预览	bash "$BIN/tmux-issue-preview.sh" "$ISSUE" --repo="$REPO"	dns=ok hang=hang limit=ok
-10	历史、恢复：落地记一行再列出	bash "$BIN/fleet-history.sh" record --repo "$REPO" --pr "$PR" --key "issue-$ISSUE" --worktree "$PWD" && bash "$BIN/fleet-history.sh" list	dns=ok hang=hang limit=ok
+9	面板：任务列表的单子预览	bash "$BIN/tmux-issue-preview.sh" "$ISSUE" --repo="$REPO"	dns=ok hang=ok limit=ok
+10	历史、恢复：落地记一行再列出	bash "$BIN/fleet-history.sh" record --repo "$REPO" --pr "$PR" --key "issue-$ISSUE" --worktree "$PWD" && bash "$BIN/fleet-history.sh" list	dns=ok hang=ok limit=ok
 11	起 Codex：GitHub 单仓库的 Codex 启动（插件同步）	FLEET_CODEX_SERVER=0 bash "$BIN/fleet-codex.sh"	dns=ok hang=hang limit=ok
 12	入口：版本、安装包（自托管入口问 stable）	- 入口侧（Go，tokenledger）：只在现场版读，C8 #4847 自带 Go 测试	dns=skip hang=skip limit=skip
 G1	推送分支	git push -u origin "issue-$ISSUE"	dns=fail hang=hang limit=fail
-G2	PR 检查、合并门	bash "$BIN/fleet-pr-verdict.sh" "$PR" --repo "$REPO"	dns=fail hang=hang limit=fail
-G3	开新的 GitHub 单	bash "$BIN/fleet-issue-file.sh" --title "drill: a new ticket" --body "drill"	dns=fail hang=hang limit=fail
+G2	PR 检查、合并门	bash "$BIN/fleet-pr-verdict.sh" "$PR" --repo "$REPO"	dns=fail hang=fail limit=fail
+G3	开新的 GitHub 单	bash "$BIN/fleet-issue-file.sh" --title "drill: a new ticket" --body "drill"	dns=fail hang=fail limit=fail
