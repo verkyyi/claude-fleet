@@ -585,3 +585,65 @@ func (s *Store) FleetIDsOf(owner, prefix string) ([]FleetIDShort, error) {
 	}
 	return out, rows.Err()
 }
+
+// IDFamilyMax caps one family read: an EPIC batch's members and their redos.
+const IDFamilyMax = 200
+
+// FleetIDFamily reads the IDs an ID spawned (their `parent` is it), the seeds
+// (IDs the caller knows are its members — a child task's worker), and every ID
+// that continued one of them down the `prev` chain (a member's redo, a
+// 「从这一段继续」 — EPIC T497 C5), oldest first, at most IDFamilyMax: an EPIC
+// driver's whole batch in one read. Only the owner's IDs.
+func (s *Store) FleetIDFamily(owner, parent string, seeds []string) ([]FleetIDRecord, error) {
+	seen := map[string]bool{parent: true}
+	var order []string
+	var first []string
+	for _, id := range seeds {
+		if IsFleetID(id) && !seen[id] && len(order) < IDFamilyMax {
+			var one int
+			if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_ids WHERE owner = ? AND id = ?`, owner, id).Scan(&one); err != nil {
+				return nil, err
+			}
+			if one > 0 {
+				seen[id] = true
+				order = append(order, id)
+				first = append(first, id)
+			}
+		}
+	}
+	frontier, col := []string{parent}, "parent"
+	for len(frontier) > 0 && len(order) < IDFamilyMax {
+		next := first
+		first = nil
+		for _, f := range frontier {
+			rows, err := s.read.Query(`SELECT id FROM fleet_ids WHERE owner = ? AND `+col+` = ? ORDER BY opened_at, id`, owner, f)
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if !seen[id] && len(order) < IDFamilyMax {
+					seen[id] = true
+					order = append(order, id)
+					next = append(next, id)
+				}
+			}
+			rows.Close()
+		}
+		frontier, col = next, "prev"
+	}
+	out := make([]FleetIDRecord, 0, len(order))
+	for _, id := range order {
+		rec, err := s.FleetIDOf(owner, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].OpenedAt < out[j].OpenedAt })
+	return out, nil
+}

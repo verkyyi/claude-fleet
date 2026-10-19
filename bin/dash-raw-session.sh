@@ -238,6 +238,14 @@ if [ -n "$RESUME_SID" ] || [ -n "$SEED_FILE" ] || [ -n "$WT_ARG" ]; then
 fi
 # Trim the seed; a whitespace-only prompt is no prompt (plain scratch).
 PROMPT="${PROMPT#"${PROMPT%%[![:space:]]*}"}"; PROMPT="${PROMPT%"${PROMPT##*[![:space:]]}"}"
+# An EPIC member's redo (EPIC T497 C5): the driver's retry words carry
+# `<!-- fleet:prev <ID> -->` (fleet-epic-tick.py), the failed baton's ID — this
+# window's ledger opens with it as prev, so the member's chain goes on by ID.
+if [ -z "$PREV_ID" ] && [ -n "$TASK_REF" ]; then
+  case "$PROMPT" in *'fleet:prev '*)
+    PREV_ID=$(printf '%s\n' "$PROMPT" | sed -n 's/.*<!-- *fleet:prev \([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\) *-->.*/\1/p' | head -n 1) ;;
+  esac
+fi
 case "$AS_ARG" in
   '') ;;
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;

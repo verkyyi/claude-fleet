@@ -13,7 +13,13 @@ session in a worktree of its member's repo, bound to its own record, that opens
 its PR, merges it once the gate is green and closes its record with its report
 (the task flow, issue #4897). This loop keeps 4–6 of them busy, retries a failure
 once, answers what the charter already answers, rides out quota ceilings, and
-stops when the core is empty — with the report (issue #4957). It reads and writes
+stops when the core is empty — with the report (issue #4957).
+
+**Every session is a window ID** (EPIC T497 C5, docs/dev/FLEET-ID.md): this driver
+is the parent ID (`T-xxxxx`, the short code ⌘P shows), each member's session is a
+child ID, and a member's **redo is a new ID whose `prev` is the one it replaces** —
+so a member is a chain of batons and the tick reads the newest one. Records
+(`T<n>`) are still written beside the IDs; the tick reads both. It reads and writes
 **the hub only**: no GitHub issue, sub-issue, label or comment anywhere.
 
 **Argument** (`$ARGUMENTS`): ignored except `--task T<n>` (a driver resumed in
@@ -52,26 +58,33 @@ that dies at the boundary. Therefore:
   python3 ~/.claude/fleet/bin/fleet-epic-tick.py status --task "$P"
   ```
 
-  `{parent, title, short, cap, running, free, counts, done, members[], next[],
-  no_repo[], last_tick}` — every member of the charter (and every child added
-  within scope) with its `state` (succeeded · running · retry · blocked ·
-  unstarted), its child tasks, its PR; `next` is exactly what to dispatch now
-  (retries first, then unstarted core members, as many as the free slots), each
-  with its `title`, `repo`, `agent` and the `body` its session gets. It reads only
-  the hub — the parent's record and `GET …/children` — so it is the same answer
-  after a handoff, a compaction or a reboot. A `[child-report]` that arrives
+  `{parent, parent_id, parent_short, mark, title, short, cap, running, free,
+  counts, done, members[], next[], no_repo[], last_tick}` — every member of the
+  charter (and every child added within scope) with its `state` (succeeded ·
+  running · retry · blocked · waiting · unstarted), its newest baton's `id` /
+  `short` (`T-xxxxx`), its `ids` (every baton, a redo's `prev` naming the one it
+  replaced), its child tasks, its PR; `waiting` = a member the charter's 依赖顺序
+  says waits on one that has not succeeded (`waits_on`) — released by that
+  member's newest ID, never dispatched before (拍板 6); `next` is exactly what to
+  dispatch now (retries first, then unstarted core members, as many as the free
+  slots), each with its `title`, `repo`, `agent`, the `body` its session gets and,
+  for a retry, the `prev` ID it continues. It reads the hub — the parent's record,
+  `GET …/children`, and the ID mirror (`fleet-id.sh family <parent_id>`: this
+  machine's ledgers + the hub's) — so it is the same answer after a handoff, a
+  compaction or a reboot. A `[child-report]` that arrives
   between ticks is a wake-up, not a claim to re-verify: the next tick's read
   already accounts for it.
 
 - **The first command after the read stamps the heartbeat** (issue #953):
 
   ```sh
-  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh "$P" --tick <n> \
+  bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh "<mark>" --task "$P" --tick <n> \
     --landed <counts.succeeded> --members <counts.core> --live <running> --inflight <running> \
     --short <short> --title "<title>"
   ```
 
-  It marks the batch running on this login (`fleet doctor`'s `epic` row; the
+  `<mark>` is the read's `mark` — the parent's ID code `T-xxxxx` (its record
+  `T<n>` while it has no ID); `--task "$P"` keeps the record beside it. It marks the batch running on this login (`fleet doctor`'s `epic` row; the
   person's opt-in EPIC hold, off by default — issue #2934) and renames this window
   `<简称>·批次` (issue #2544). A lease, not a lock — fresh 45 min, so a loop that
   dies leaves a mark that expires; the closing tick clears it (step 4).
@@ -105,8 +118,10 @@ For each item of `next`, dispatch it — **one call per member**:
 `mcp__fleet-orch__task` with `title` = the item's `title` (`C<k> · <名称>` — the
 tick finds the member by that prefix, so never reword it), `repo` = its `repo`
 (the member's own repo — a batch may span the fleet's repos, issue #1942),
-`body` = its `body`, `spawn: true`, and `coding_agent` = its `agent` when it names
-one. Because this session carries the parent task, the hub binds the new record
+`body` = its `body` **verbatim** (a retry's ends in `<!-- fleet:prev <ID> -->`: the
+spawner records that ID as the new window's `prev`, which is how the redo joins
+its member's chain — never strip it), `spawn: true`, and `coding_agent` = its
+`agent` when it names one. Because this session carries the parent task, the hub binds the new record
 as its child (`parent_task`); its session reports back here.
 
 The first stdout line is the child's `T<m>`. Then record the version it starts on
@@ -132,8 +147,12 @@ and a reserve worth doing? Add it within scope by dispatching it under its own k
 
 The workers land their own PRs (merge on green, then `report merged`), so there is
 no merge step here: a `succeeded` member is done. A `failed` member is `retry`
-once — the next tick's `next` carries it with 「这是重试」 and the failed task's
-`T<m>` in its body; seed nothing else by hand. A second failure is `blocked`: name
+once — the next tick's `next` carries it with 「这是重试」, the failed task's
+`T<m>` and ID code in its body and its `prev`; seed nothing else by hand. A member
+whose window closed with no result (its ID `exited`, its record left open) counts
+as a failure the same way — it no longer sits `running` forever. A member someone
+continued by hand (「从这一段继续」 in /fleet-history: a new ID, `prev` = the old one,
+no record of its own) is read off that newest ID. A second failure is `blocked`: name
 it on the tick with the reason its `[child-report]` gave. `cancelled` (the person
 stopped it) is `blocked` too — never re-dispatched.
 
@@ -157,8 +176,11 @@ loop.
 A member reporting `BLOCKED` on work it found inside the charter's scope: dispatch
 that work as a new member (`C<next> · <名称>`, its repo, a body saying which member
 waits on it); when it lands tell the waiting one to go on —
-`mcp__fleet-orch__send` with `to: fid:<its session's uuid>` (the second half of the
-child's `execution_owner`). Outside the scope → 待决.
+`mcp__fleet-orch__send` with `to:` the waiting member's `short` (`T-xxxxx`, the
+tick's newest baton — routed by ID: a closed ID's message goes on to the ID that
+continued it, docs/dev/FLEET-ID.md). The charter's own 依赖顺序 needs no send: the
+tick holds a `waiting` member and puts it in `next` once what it waits on
+succeeded. Outside the scope → 待决.
 
 ### d. Quota
 

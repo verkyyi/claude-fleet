@@ -449,6 +449,92 @@ def _hub_record(fid):
     return rec
 
 
+def _family_row(fid, rec, st, src):
+    o = rec["opened"]
+    return {"id": fid, "short": st["short"], "task": o.get("task", ""), "title": o.get("title", ""),
+            "parent": o.get("parent", ""), "prev": o.get("prev", ""), "opened_at": o.get("ts"),
+            "state": st["state"], "label": st["label"], "alive": st["alive"], "result": st["result"],
+            "closed": rec["closed"], "src": src}
+
+
+def _hub_status(fid, rec, short):
+    """status()'s reading of a hub-mirror record (no window here to ask)."""
+    r = next((x for x in reversed(rec["results"]) if x.get("state") not in SILENT_STATES), None) \
+        or last_result(rec)
+    rs = (r or {}).get("state", "")
+    if rs in DONE_STATES:
+        st, label = "done", "已完成"
+    elif rs in FAIL_STATES:
+        st, label = "failed", "失败"
+    elif rs in ASK_STATES:
+        st, label = "asking", "等你"
+    elif rec["closed"] is not None:
+        st, label = "exited", "已退出"
+    else:
+        st, label = "running", "运行中"
+    return {"short": short, "state": st, "label": label, "alive": rec["closed"] is None, "result": r}
+
+
+def family(fid, live, idx=None, seeds=()):
+    """An EPIC driver's batch by ID (EPIC T497 C5): the IDs fid spawned (their
+    `parent`), the `seeds` (IDs the caller knows are members — a child task's
+    worker — whose ledger may name no parent), and every ID that continued one of
+    them down `prev` — a member's redo or a 「从这一段继续」 — oldest first. This
+    machine's ledgers first; the hub mirror's `GET /v1/node/ids?parent=<fid>&id=<seed>…`
+    adds the ones other machines opened. A hub that does not know the query lists
+    bare ids, which are dropped — the seeds it lacks are then read one by one."""
+    idx = idx if idx is not None else _index()
+    seeds = [x for x in dict.fromkeys(seeds) if is_fid(x) and x != fid]
+    rows, seen = {}, set()
+    first = []
+    for x in seeds:
+        if x in idx:
+            seen.add(x)
+            first.append(x)
+            rows[x] = _family_row(x, idx[x], status(x, live, idx), "local")
+    frontier, key = [fid], "parent"
+    while frontier:
+        nxt, first = first, []
+        for f in frontier:
+            for other, o in idx.items():
+                if other not in seen and other != fid and o["opened"].get(key) == f:
+                    seen.add(other)
+                    nxt.append(other)
+                    rows[other] = _family_row(other, o, status(other, live, idx), "local")
+        frontier, key = nxt, "prev"
+    code, ans = _poster()("GET", "/v1/node/ids?parent=" + fid + "".join("&id=" + x for x in seeds[:100]))
+    hub = "ok" if code == 200 else ("none" if code == -3 else "down")
+    got = (ans.get("ids") or []) if code == 200 and isinstance(ans, dict) else []
+    if code == 200 and isinstance(ans, dict) and "parent" not in ans:
+        hub, got = "old", []
+        for x in seeds:
+            one = None if x in rows else _hub_record(x)
+            if one is not None:
+                o = one["opened"]
+                got.append({"id": x, "short": o.get("short", ""), "title": o.get("title", ""),
+                            "parent": o.get("parent", ""), "prev": o.get("prev", ""),
+                            "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""),
+                                         "pr": r.get("pr", ""), "at": r.get("ts")} for r in one["results"]],
+                            "closed_at": (one["closed"] or {}).get("ts"),
+                            "close_reason": (one["closed"] or {}).get("reason", "")})
+    for x in got:
+        if not isinstance(x, dict) or not is_fid(x.get("id", "")) or x["id"] in rows or x["id"] == fid:
+            continue
+        if "parent" not in x and "prev" not in x and "results" not in x:
+            continue   # an older hub: the owner's bare id list
+        rec = {"opened": {"short": x.get("short", ""), "title": x.get("title", ""), "parent": x.get("parent", ""),
+                          "prev": x.get("prev", ""), "task": x.get("task", ""), "ts": x.get("opened_at")},
+               "segments": [], "closed": None,
+               "results": [{"state": r.get("state", ""), "summary": r.get("summary", ""), "pr": r.get("pr", ""),
+                            "ts": r.get("at")} for r in x.get("results") or [] if isinstance(r, dict)]}
+        if x.get("closed_at"):
+            rec["closed"] = {"ts": x["closed_at"], "reason": x.get("close_reason", "")}
+        rows[x["id"]] = _family_row(x["id"], rec, _hub_status(x["id"], rec, x.get("short", "")), "hub")
+    out = sorted(rows.values(), key=lambda r: (r.get("opened_at") or 0, r["id"]))
+    return {"parent": fid, "short": (idx.get(fid) or fold(read(fid)))["opened"].get("short")
+            or short_for(fid, known_ids(idx.keys())), "hub": hub, "ids": out}
+
+
 AWAIT_RC = {"done": 0, "failed": 1, "asking": 1, "exited": 4}
 
 
@@ -969,7 +1055,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook|status|route|children|await|history|continue|reopen|family …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -1078,6 +1164,9 @@ def main(argv):
                 print("%s  %s  %s%s  %s" % (r["short"], r["label"], res.get("state", "-"),
                                             (" · PR #%s" % res["pr"]) if res.get("pr") else "", r["title"]))
             print("%d children" % len(rows))
+        return 0
+    if cmd == "family":
+        print(json.dumps(family(target, lv, seeds=[p for p in tpos[1:] if is_fid(p)]), ensure_ascii=False))
         return 0
     if cmd == "await":
         try:

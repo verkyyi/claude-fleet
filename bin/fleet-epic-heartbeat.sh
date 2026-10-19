@@ -3,8 +3,8 @@
 # LOCAL mark the install-sync daemon can see (issue #953, EPIC #1117 R1) — one
 # mark PER BATCH (issue #2062, EPIC #2074 C1).
 #
-#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]   # <epic> = T<n> (#4957) | N
-#                           [--session <sess>] [--ttl <seconds>]
+#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]   # <epic> = T-<code> | T<n> (#4957) | N
+#                           [--task T<n>] [--session <sess>] [--ttl <seconds>]
 #                           [--landed <k> --members <n>] [--title <parent title>]
 #                           [--live <n> --inflight <n>]
 #                           [--short <简称>]                        # stamp — every tick
@@ -90,6 +90,14 @@
 # A bare `touch` of a mark (no epoch:) counts from its mtime — a hand override
 # for «hold the install still for the next 45 min».
 #
+# THE MARK IS THE PARENT'S ID (EPIC T497 C5). A batch's parent is a window ID now
+# (the driver's `@fleet_id`, short code `T-xxxxx` — fleet-epic-tick.py's `mark`), so
+# <epic> may be that code: the file is `<slug>-T-xxxxx`. `--task T<n>` names the
+# parent's record beside it — written as a `task:` line, and the batch's older
+# `<slug>-T<n>` mark (a tick before this) is removed when the new one is written;
+# `--clear <X>` clears the marks whose `epic:` OR `task:` is X, so a driver that
+# clears by its record still clears its ID mark.
+#
 # Exit: 0 stamped / cleared / any fresh (--status) · 1 all stale (--status) ·
 # 2 usage, no mark (--status), or a bare --clear with several batches marked.
 set -uo pipefail
@@ -98,7 +106,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$BIN/fleet-lib.sh"
 
-EPIC='' TICK='' SHORT='' TITLE='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
+EPIC='' PTASK='' TICK='' SHORT='' TITLE='' LANDED='' MEMBERS='' LIVE='' INFLIGHT='' REPO="${FLEET_REPO:-}" SESS="${FLEET_SESSION:-}" TTL="${FLEET_EPIC_RUNNING_TTL:-2700}" MODE=stamp
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --tick)      shift; TICK="${1:-}" ;;
@@ -119,12 +127,14 @@ while [ "$#" -gt 0 ]; do
     --title=*)   TITLE="${1#--title=}" ;;
     --short)     shift; SHORT="${1:-}" ;;
     --short=*)   SHORT="${1#--short=}" ;;
+    --task)      shift; PTASK="${1:-}" ;;
+    --task=*)    PTASK="${1#--task=}" ;;
     --ttl)       shift; TTL="${1:-}" ;;
     --ttl=*)     TTL="${1#--ttl=}" ;;
     --clear)     MODE=clear ;;
     --clear=*)   MODE=clear; EPIC="${1#--clear=}"; EPIC="${EPIC#\#}" ;;
     --status)    MODE=status ;;
-    -h|--help)   sed -n '2,88p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          printf 'fleet-epic-heartbeat: unknown argument %s\n' "$1" >&2; exit 2 ;;
     *)           EPIC="${1#\#}" ;;
   esac
@@ -133,6 +143,16 @@ done
 
 # mark_epic <file> — the `epic:` line of one mark ('' when it has none).
 mark_epic() { sed -n 's/^epic: //p' "$1" 2>/dev/null | head -1; }
+mark_task() { sed -n 's/^task: //p' "$1" 2>/dev/null | head -1; }
+# epic_ok <epic> — a T-<code> (an ID's short code: Crockford base32, 4–26), a T<n>, or N.
+epic_ok() {
+  case "$1" in
+    T-*) case "${1#T-}" in ''|*[!0-9a-hjkmnp-tv-z]*) return 1 ;; esac
+         [ "${#1}" -ge 6 ] && [ "${#1}" -le 28 ] ;;
+    T[1-9]*) case "${1#T}" in *[!0-9]*) return 1 ;; esac ;;
+    ''|*[!0-9]*) return 1 ;;
+  esac
+}
 
 # The driver's own window (issue #1958): only from inside a pane — bare tmux is
 # that pane's own fleet server. Never fatal: the mark is the heartbeat's job.
@@ -188,13 +208,13 @@ MARKS
           printf '%s\n' "$marks" | sed '/^$/d' | while IFS= read -r f; do printf '  epic=%s (%s)\n' "$(mark_epic "$f")" "$f" >&2; done
           exit 2
         fi ;;
-      T[1-9]*) case "${EPIC#T}" in *[!0-9]*) printf 'fleet-epic-heartbeat: --clear takes an EPIC (T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2 ;; esac ;;
-      *[!0-9]*) printf 'fleet-epic-heartbeat: --clear takes an EPIC (T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2 ;;
+      *) epic_ok "$EPIC" || { printf 'fleet-epic-heartbeat: --clear takes an EPIC (T-<code>, T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2; } ;;
     esac
     cleared=''
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      [ -z "$EPIC" ] || [ "$(mark_epic "$f")" = "$EPIC" ] || continue
+      [ -z "$EPIC" ] || [ "$(mark_epic "$f")" = "$EPIC" ] || [ "$(mark_task "$f")" = "$EPIC" ] || continue
+      [ -n "$EPIC" ] && [ "$(mark_epic "$f")" != "$EPIC" ] && win_epic unset "$(mark_epic "$f")"
       rm -f "$f" && cleared="$cleared $f"
     done <<MARKS
 $marks
@@ -205,13 +225,13 @@ MARKS
     exit 0 ;;
 esac
 
-# An EPIC is its parent hub task `T<n>` since issue #4957 (an older batch: its issue number).
-case "$EPIC" in
-  T[1-9]*) case "${EPIC#T}" in *[!0-9]*) EPIC='' ;; esac ;;
-  *[!0-9]*) EPIC='' ;;
-esac
+# An EPIC is its parent's ID code `T-<code>` (EPIC T497 C5), its parent hub task
+# `T<n>` (issue #4957), or an older batch's issue number.
+epic_ok "$EPIC" || EPIC=''
 [ -n "$EPIC" ] || {
-  printf 'fleet-epic-heartbeat: an EPIC (its parent task T<n>, or an issue number) is required (or --clear <epic> / --status)\n' >&2; exit 2; }
+  printf 'fleet-epic-heartbeat: an EPIC (its parent ID T-<code>, its task T<n>, or an issue number) is required (or --clear <epic> / --status)\n' >&2; exit 2; }
+case "$PTASK" in T[1-9]*) case "${PTASK#T}" in *[!0-9]*) PTASK='' ;; esac ;; *) PTASK='' ;; esac
+[ "$PTASK" = "$EPIC" ] && PTASK=
 case "$TTL" in ''|*[!0-9]*|0)
   printf 'fleet-epic-heartbeat: --ttl must be a positive seconds count, got [%s]\n' "$TTL" >&2; exit 2 ;;
 esac
@@ -241,9 +261,15 @@ if ! {
   [ -z "$MEMBERS" ] || printf 'landed: %s\nmembers: %s\n' "$LANDED" "$MEMBERS"
   [ -z "$LIVE" ] || printf 'live: %s\ninflight: %s\n' "$LIVE" "$INFLIGHT"
   [ -z "$TITLE" ] || printf 'title: %s\n' "$TITLE"
+  [ -z "$PTASK" ] || printf 'task: %s\n' "$PTASK"
 } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$F" 2>/dev/null; then
   rm -f "$tmp" 2>/dev/null
   printf 'fleet-epic-heartbeat: cannot write %s\n' "$F" >&2; exit 1
+fi
+# The same batch's mark by its record (a tick before the ID mark): one batch, one mark.
+if [ -n "$PTASK" ]; then
+  old=$(fleet_epic_mark_file "$REPO" "$PTASK")
+  [ "$old" != "$F" ] && [ -f "$old" ] && [ "$(mark_epic "$old")" = "$PTASK" ] && rm -f "$old"
 fi
 case "$REPO" in ''|-) win_epic set "#$EPIC" ;; *) win_epic set "$REPO#$EPIC" ;; esac
 [ -z "$SHORT" ] || win_name "$(fleet_epic_short "$SHORT")"

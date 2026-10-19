@@ -22,6 +22,11 @@
 #                                            how = self · successor (down the prev chain) ·
 #                                            parent · unknown (no ledger here); rc 1 nobody
 #   fleet-id.sh children <ID | T-code> [--json]   the IDs it spawned (their `parent`)
+#   fleet-id.sh family <ID | T-code> [<member ID>…]   JSON: the IDs it spawned (and
+#                                            the members named), every ID that
+#                                            continued one of them down `prev` (a redo),
+#                                            this machine's ledgers + the hub mirror's
+#                                            (EPIC T497 C5 — an EPIC driver's batch)
 #   fleet-id.sh await <ID | T-code> [--timeout s] [--interval s]
 #                                            until it has a result or closes: MERGED /
 #                                            SUCCEEDED 0 · FAILED / BLOCKED … 1 · TIMEOUT 3 ·
@@ -75,7 +80,7 @@ esac
 # FLEET_ID_LIVE_CMD is the selftest's seam (prints the live IDs).
 live='' scanned=''
 case "$1" in
-  open|short|resolve|get|native|result|close|status|route|children|await|history|continue|reopen)
+  open|short|resolve|get|native|result|close|status|route|children|family|await|history|continue|reopen)
     if [ -n "${FLEET_ID_LIVE_CMD:-}" ]; then live=$(eval "$FLEET_ID_LIVE_CMD") && scanned=1
     elif [ -n "${TMUX:-}" ]; then live=$(fleet_lw '#{@fleet_id}' 2>/dev/null) && scanned=1
     else
