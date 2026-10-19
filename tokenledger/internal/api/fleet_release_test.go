@@ -40,9 +40,10 @@ type releaseRig struct {
 	fetch *release.Fetcher
 }
 
-// rigSrc: the Go source digest of every rig commit's tokenledger/ (go.mod
-// "module x"), so the rig's dist binaries are that commit's (claude-fleet#2930).
-var rigSrc = release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module x\n")})
+// rigSrc: the node source digest of every rig commit (agent/go.mod "module x";
+// the node's source since claude-fleet#4813), so the rig's dist binaries are
+// that commit's (claude-fleet#2930).
+var rigSrc = release.SourceDigest(map[string][]byte{"tokenledger/agent/go.mod": []byte("module x\n")})
 
 func newReleaseRig(t *testing.T) *releaseRig {
 	t.Helper()
@@ -55,6 +56,7 @@ func newReleaseRig(t *testing.T) *releaseRig {
 		shaA + "/skills/x/SKILL.md":        "# x\n",
 		shaA + "/docs/BREAK-IT.md":         "# rows\n",
 		shaA + "/tokenledger/go.mod":       "module x\n",
+		shaA + "/tokenledger/agent/go.mod": "module x\n",
 		shaA + "/.github/workflows/ci.yml": "on: push\n",
 		shaB + "/" + StableManifestPath:    "bin/fleet\n",
 		shaB + "/bin/fleet":                "#!/bin/sh\necho B\n",
@@ -739,7 +741,7 @@ func TestReleaseHealsLackingPinned(t *testing.T) {
 // A rebuild (heal) keeps the build's own ccquota, never today's image's.
 func TestReleaseRefusesStaleCCQuota(t *testing.T) {
 	r := newReleaseRig(t)
-	stale := release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module old\n")})
+	stale := release.SourceDigest(map[string][]byte{"tokenledger/agent/go.mod": []byte("module old\n")})
 	r.rs.DistSrc = stale
 	must(t, r.rs.Source.Refresh(context.Background()))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

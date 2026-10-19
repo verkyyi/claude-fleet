@@ -621,7 +621,7 @@ func (rs *ReleaseStore) Accept(ctx context.Context, f *publishForm) (map[string]
 	if len(missing) > 0 {
 		return nil, publishErr(http.StatusUnprocessableEntity, "%s", rs.missingPinnedNote(f.sha, missing))
 	}
-	if err := rs.distSrcCheck(release.SourceDigest(all), rs.artifacts()); err != nil {
+	if err := rs.distSrcCheck(rs.srcFor(all), rs.artifacts()); err != nil {
 		// a new runtime with an old ccquota is how #2928 reran a login's
 		// creation (claude-fleet#2930): stable waits for the hub image
 		return nil, publishErr(http.StatusUnprocessableEntity, "ccquota: %v", err)

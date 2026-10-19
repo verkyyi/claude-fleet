@@ -3619,8 +3619,8 @@ drill_release_ccquota_behind() {
 # ---- release-ccquota-stale (#2930): the hub image is older than the commit
 # stable moves to (its Go changed, the hub was not redeployed). Before: the
 # release took the image's ccquota — new scripts, old Go on every managed
-# machine (#2928). Now `fleet-stable.sh move` holds the target's tokenledger/
-# digest to the hub's /artifacts ccquota_src and refuses with `ccquota:`; once
+# machine (#2928). Now `fleet-stable.sh move` holds the target's node source
+# digest (shared/ + agent/, #4813) to the hub's /artifacts ccquota_src and refuses with `ccquota:`; once
 # the hub runs the target's Go the same move goes through. The hub half (the
 # build / publish refusal, the heal keeping its own ccquota) and the node's
 # rollback are their tests, held by name. A file:// hub; a real bare repo + tag.
@@ -3637,12 +3637,12 @@ drill_release_ccquota_stale() {
   ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
     export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
     git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
-    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/internal/x"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
-    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/internal/x/x.go"
+    mkdir -p "$d/seed/bin" "$d/seed/tokenledger/agent/x"; printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"
+    printf 'module x\n' > "$d/seed/tokenledger/go.mod"; printf 'package x\n' > "$d/seed/tokenledger/agent/x/x.go"
     cp "$ROOT/release.json" "$d/seed/release.json"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm old && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c1"
-    printf 'package x\n\nconst OpID = true\n' > "$d/seed/tokenledger/internal/x/x.go"
+    printf 'package x\n\nconst OpID = true\n' > "$d/seed/tokenledger/agent/x/x.go"
     git -C "$d/seed" add -A && git -C "$d/seed" commit -qm 'go: op_id' && git -C "$d/seed" push -q origin HEAD:master || exit 1
     git -C "$d/seed" rev-parse HEAD > "$d/c2"
     git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null

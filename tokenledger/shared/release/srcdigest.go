@@ -20,26 +20,47 @@ import (
 // build, -X main.SrcDigest), the hub computes the same digest from the commit
 // it is building, and a release whose two differ is not built.
 //
-// The digest is over tokenledger/'s build inputs: go.mod, go.sum and every
-// regular file under cmd/, internal/, shared/ and agent/ (embedded files too —
-// schema.sql; shared/ is the module both the hub and the node build in,
-// claude-fleet#4811, agent/ the node's own, claude-fleet#4812, their go.mod
-// and go.sum with them; go.work is a developer's
-// convenience the image builds without, GOWORK=off),
-// less tests (*_test.go, testdata/), Markdown and the client's file list and
-// pack (internal/api/fleetclient/manifest and pack/: the client follows stable,
-// not the image — claude-fleet#1805 — and pack/ is gitignored, packed before a
-// build; a new client file must not hold stable for a hub redeploy).
+// Two digests (claude-fleet#4813, EPIC #4810 C3):
+//
+//   - the NODE's source — SourceDigest: what a release's ccquota-<os>-<arch> are
+//     compiled from since they are built from the node's own module
+//     (agent/cmd/ccquota): every regular file under shared/ (the module both the
+//     hub and the node build in, #4811) and agent/ (the node's, #4812), their
+//     go.mod and go.sum with them. The Dockerfile stamps it into every binary,
+//     the hub's 422 and the manifest's ccquota_src compare it, and so do
+//     fleet-stable.sh's ccquota gate and a managed machine's ccquota row. A
+//     change to the hub alone does not move it — stable need not wait for a hub
+//     image no machine runs.
+//   - the hub IMAGE's — ImageSourceDigest: tokenledger/'s go.mod, go.sum and
+//     everything under cmd/, internal/, shared/ and agent/ — what the image
+//     compiles. bin/fleet-train-hub.sh reads it to decide whether a train
+//     redeploys the hub, and it is the one digest an image built before the split
+//     stamped (compat-1v: 下一批删 — the hub and the stable gate accept it as the
+//     node's for one version).
+//
+// Both leave out tests (*_test.go, testdata/), Markdown and the client's file
+// list and pack (internal/api/fleetclient/manifest and pack/: the client follows
+// stable, not the image — claude-fleet#1805 — and pack/ is gitignored, packed
+// before a build; a new client file must not hold stable for a hub redeploy);
+// go.work is a developer's convenience the image builds without (GOWORK=off).
 // sha256 over "<path>\x00<sha256 hex of the file>\n" per file, paths relative
-// to tokenledger/, sorted bytewise. No such file ⇒ "". bin/fleet-stable.sh
-// computes the same from git (bin/fleet-src-digest.py, its ccquota gate);
-// bin/fleet-src-digest-selftest.sh holds it to srcdigest_test.go's vector.
+// to tokenledger/, sorted bytewise. No such file ⇒ "". bin/fleet-src-digest.py
+// computes both from git (node; --image); bin/fleet-src-digest-selftest.sh holds
+// it to srcdigest_test.go's vector.
 
 // SourcePrefix is the Go module's directory in the repo.
 const SourcePrefix = "tokenledger/"
 
-// SourceInput: is p (relative to tokenledger/) one of the digest's inputs?
+// SourceInput: is p (relative to tokenledger/) one of the NODE's inputs?
 func SourceInput(p string) bool {
+	if !strings.HasPrefix(p, "shared/") && !strings.HasPrefix(p, "agent/") {
+		return false
+	}
+	return buildFile(p)
+}
+
+// ImageSourceInput: is p (relative to tokenledger/) one of the hub image's inputs?
+func ImageSourceInput(p string) bool {
 	if p == "go.mod" || p == "go.sum" {
 		return true
 	}
@@ -47,6 +68,11 @@ func SourceInput(p string) bool {
 		!strings.HasPrefix(p, "agent/") {
 		return false
 	}
+	return buildFile(p)
+}
+
+// buildFile: not a test, a doc or the client's list / pack.
+func buildFile(p string) bool {
 	if strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, ".md") ||
 		p == "internal/api/fleetclient/manifest" || strings.HasPrefix(p, "internal/api/fleetclient/pack/") {
 		return false
@@ -59,21 +85,31 @@ func SourceInput(p string) bool {
 	return true
 }
 
-// SourceDigest: the digest of a commit's files (repo-relative paths), "" when
-// it has no Go source.
-func SourceDigest(files map[string][]byte) string {
+// SourceDigest: the node's digest of a commit's files (repo-relative paths), ""
+// when it has no node source.
+func SourceDigest(files map[string][]byte) string { return digestOf(files, SourceInput) }
+
+// ImageSourceDigest: the hub image's digest of a commit's files.
+func ImageSourceDigest(files map[string][]byte) string { return digestOf(files, ImageSourceInput) }
+
+// SourceDigestDir: the node's digest of a tokenledger/ checkout on disk (the
+// docker build's context). Only regular files count, as in git's tree.
+func SourceDigestDir(dir string) (string, error) { return digestDir(dir, SourceInput) }
+
+// ImageSourceDigestDir: the hub image's digest of a checkout on disk.
+func ImageSourceDigestDir(dir string) (string, error) { return digestDir(dir, ImageSourceInput) }
+
+func digestOf(files map[string][]byte, input func(string) bool) string {
 	rel := map[string][]byte{}
 	for p, b := range files {
-		if r, ok := strings.CutPrefix(p, SourcePrefix); ok && SourceInput(r) {
+		if r, ok := strings.CutPrefix(p, SourcePrefix); ok && input(r) {
 			rel[r] = b
 		}
 	}
 	return sourceDigest(rel)
 }
 
-// SourceDigestDir: the same digest of a tokenledger/ checkout on disk (the
-// docker build's context). Only regular files count, as in git's tree.
-func SourceDigestDir(dir string) (string, error) {
+func digestDir(dir string, input func(string) bool) (string, error) {
 	rel := map[string][]byte{}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -87,7 +123,7 @@ func SourceDigestDir(dir string) (string, error) {
 			return err
 		}
 		r = filepath.ToSlash(r)
-		if !SourceInput(r) {
+		if !input(r) {
 			return nil
 		}
 		b, err := os.ReadFile(path)

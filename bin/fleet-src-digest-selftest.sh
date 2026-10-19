@@ -4,7 +4,9 @@
 # digest of the Go source a ccquota is built from (issue #2930). The Go test's
 # vector (sourceDigestVector / sourceDigestWant in srcdigest_test.go) is
 # committed into a sandbox repo here and the python must print the same value —
-# so the two can never drift apart without one side going red. No Go needed.
+# so the two can never drift apart without one side going red. Both digests
+# (issue #4813): the node's (default, sourceDigestWant) and the hub image's
+# (--image, imageSourceDigestWant). No Go needed.
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$BIN/.." && pwd)
 T="$ROOT/tokenledger/shared/release/srcdigest_test.go"
@@ -15,6 +17,8 @@ bad() { printf 'FAIL %s\n' "$1"; fail=1; }
 
 want=$(sed -n 's/^const sourceDigestWant = "\([0-9a-f]*\)"$/\1/p' "$T")
 [ "${#want}" = 64 ] || { echo "FAIL no sourceDigestWant in ${T#$ROOT/}"; exit 1; }
+iwant=$(sed -n 's/^const imageSourceDigestWant = "\([0-9a-f]*\)"$/\1/p' "$T")
+[ "${#iwant}" = 64 ] || { echo "FAIL no imageSourceDigestWant in ${T#$ROOT/}"; exit 1; }
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 git init -q "$WORK/r" || exit 1
@@ -35,33 +39,45 @@ PY
 ln -s main.go "$WORK/r/tokenledger/cmd/ccquota/link.go"
 git -C "$WORK/r" add -A && git -C "$WORK/r" commit -qm v || exit 1
 
-got=$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)
+sd()  { python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD; }
+isd() { python3 "$BIN/fleet-src-digest.py" --image "$WORK/r" HEAD; }
+got=$(sd)
 [ "$got" = "$want" ] && ok "git digest = the Go vector's ($want)" || bad "fleet-src-digest.py printed '$got', srcdigest_test.go wants $want"
+got=$(isd)
+[ "$got" = "$iwant" ] && ok "git --image digest = the Go vector's ($iwant)" || bad "fleet-src-digest.py --image printed '$got', srcdigest_test.go wants $iwant"
 
 # a test, a doc or the client manifest moves nothing; one byte of Go does
 printf 'x\n' >> "$WORK/r/tokenledger/internal/store/store_test.go"
 printf 'y\n' >> "$WORK/r/tokenledger/internal/api/fleetclient/manifest"
+printf 'x\n' >> "$WORK/r/tokenledger/shared/release/r_test.go"
 git -C "$WORK/r" commit -qam noise
-[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" = "$want" ] && ok "tests / the client manifest are not inputs" || bad "a non-input moved the digest"
+[ "$(sd)" = "$want" ] && [ "$(isd)" = "$iwant" ] && ok "tests / the client manifest are not inputs" || bad "a non-input moved a digest"
 printf 'z\n' >> "$WORK/r/tokenledger/go.work"
 git -C "$WORK/r" commit -qam work
-[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" = "$want" ] && ok "go.work is not an input (the image builds GOWORK=off)" || bad "go.work moved the digest"
+[ "$(sd)" = "$want" ] && [ "$(isd)" = "$iwant" ] && ok "go.work is not an input (the image builds GOWORK=off)" || bad "go.work moved a digest"
+# a hub-only edit (the root module, #4813): the image's moves, the node's does not
+printf '// edit\n' >> "$WORK/r/tokenledger/cmd/ccquota/main.go"
+printf 'require y v0\n' >> "$WORK/r/tokenledger/go.mod"
+git -C "$WORK/r" commit -qam hub
+[ "$(sd)" = "$want" ] && ok "a hub-only edit (cmd/, the root go.mod) leaves the node's digest" || bad "a hub-only edit moved the node's digest"
+[ "$(isd)" != "$iwant" ] && ok "…and moves the image's (the train redeploys the hub)" || bad "a hub-only edit did not move the image's digest"
 # the shared module both the hub and the node build in counts (#4811)
+iprev=$(isd)
 printf '// edit\n' >> "$WORK/r/tokenledger/shared/release/r.go"
 git -C "$WORK/r" commit -qam shared
-[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a shared/ edit moves it" || bad "an edit under shared/ did not move the digest"
+[ "$(sd)" != "$want" ] && [ "$(isd)" != "$iprev" ] && ok "a shared/ edit moves both" || bad "an edit under shared/ did not move both digests"
 # …and the node's own module (#4812)
-prev=$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)
+prev=$(sd); iprev=$(isd)
 printf '// edit\n' >> "$WORK/r/tokenledger/agent/cli/run.go"
 git -C "$WORK/r" commit -qam agent
-[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$prev" ] && ok "an agent/ edit moves it" || bad "an edit under agent/ did not move the digest"
-printf '// edit\n' >> "$WORK/r/tokenledger/cmd/ccquota/main.go"
-git -C "$WORK/r" commit -qam go
-[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a Go edit moves it" || bad "a Go edit did not move the digest"
+[ "$(sd)" != "$prev" ] && [ "$(isd)" != "$iprev" ] && ok "an agent/ edit moves both" || bad "an edit under agent/ did not move both digests"
 
 # no Go source: empty, exit 0; an unknown rev: exit 2
+git -C "$WORK/r" rm -rq tokenledger/shared tokenledger/agent && git -C "$WORK/r" commit -qm node-gone
+out=$(sd); rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && [ -n "$(isd)" ] && ok "no node source: the node's is empty, the image's is not" || bad "no node source: rc $rc '$out'"
 git -C "$WORK/r" rm -rq tokenledger && git -C "$WORK/r" commit -qm gone
-out=$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD); rc=$?
+out=$(isd); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && ok "a commit with no Go source: empty" || bad "no Go source: rc $rc '$out'"
 python3 "$BIN/fleet-src-digest.py" "$WORK/r" deadbeef >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] && ok "an unreadable rev: exit 2" || bad "an unreadable rev exited $rc"

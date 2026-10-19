@@ -241,7 +241,23 @@ func (rs *ReleaseStore) artifacts() map[string]string {
 	return out
 }
 
-// distSrcCheck: may a release whose commit's Go source digests to src carry
+// srcFor: the source digest a release of the commit's files is held to and
+// signs in as ccquota_src — the node's (release.SourceDigest: shared/ + agent/,
+// what the image's dist is built from since claude-fleet#4813). compat-1v: 下一批删
+// — an image from before the split stamped its dist with the whole tree's
+// (release.ImageSourceDigest); when that is what DistSrc names, the release
+// signs it in, so a machine's ccquota row still finds its binary's own src.
+func (rs *ReleaseStore) srcFor(all map[string][]byte) string {
+	node := release.SourceDigest(all)
+	if rs.DistSrc != "" && rs.DistSrc != node {
+		if img := release.ImageSourceDigest(all); img == rs.DistSrc {
+			return img
+		}
+	}
+	return node
+}
+
+// distSrcCheck: may a release whose commit's node source digests to src carry
 // arts' ccquota binaries? Only when they were built from that very source
 // (claude-fleet#2930): a release used to take whatever ccquota the hub image
 // had, so a new runtime went out with an old ccquota — and a release is built
@@ -264,7 +280,7 @@ func (rs *ReleaseStore) distSrcCheck(src string, arts map[string]string) error {
 	case rs.DistSrc == "":
 		return fmt.Errorf("the hub's ccquota binaries name no Go source (an image built without the Dockerfile's src stamp) — cannot vouch they are this commit's (Go source %s); redeploy the hub image", src[:12])
 	}
-	return fmt.Errorf("the hub's ccquota binaries were built from Go source %s, this commit's tokenledger/ is %s — redeploy the hub image from this commit (or a later one with the same tokenledger/) first", rs.DistSrc[:min(12, len(rs.DistSrc))], src[:12])
+	return fmt.Errorf("the hub's ccquota binaries were built from Go source %s, this commit's node source (tokenledger/shared + agent) is %s — redeploy the hub image from this commit (or a later one with the same node source) first", rs.DistSrc[:min(12, len(rs.DistSrc))], src[:12])
 }
 
 // Ensure builds <sha> unless it is on disk; concurrent callers share one build.
@@ -340,7 +356,7 @@ func (rs *ReleaseStore) build(ctx context.Context, sha string, all map[string][]
 		}
 	}
 	if rebuilt == "" {
-		seal.Src = release.SourceDigest(all)
+		seal.Src = rs.srcFor(all)
 		// the commit's key documents ride under the signature (claude-fleet#3559)
 		if seal.KeyChain, seal.Revoked, err = releaseKeys(all); err != nil {
 			return err

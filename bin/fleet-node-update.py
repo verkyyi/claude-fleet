@@ -1998,8 +1998,9 @@ def ccquota_row(p, cur, d):
     """Is the runtime's ccquota THIS release's (issue #2930)? A release used to
     take whatever ccquota the hub image had — 003e89bb went out with
     prod-343c92b, and a new hub + old node reran a login's creation (#2928).
-    The manifest's ccquota_src (the commit's Go source, checked by the hub at
-    build) against `ccquota version`'s `src` line: different = FAIL (the
+    The manifest's ccquota_src (the commit's node source — shared/ + agent/
+    since #4813, or a pre-split image's whole-tree digest it was built with —
+    checked by the hub at build) against `ccquota version`'s `src` line: different = FAIL (the
     rollback gate). A release from before (no ccquota_src) names no source: a
     ccquota whose build commit is not the runtime's is a WARN, never a FAIL —
     its Go may well be the same."""

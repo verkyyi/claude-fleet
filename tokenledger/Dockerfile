@@ -28,7 +28,7 @@ ENV GOWORK=off
 COPY go.mod go.sum ./
 COPY shared/go.mod shared/go.sum ./shared/
 COPY agent/go.mod agent/go.sum ./agent/
-RUN go mod download
+RUN go mod download && cd agent && go mod download
 COPY . .
 # The client /install serves is packed from the repo before the build
 # (claude-fleet#1803): bin/fleet-client-pack.sh && docker build … tokenledger/.
@@ -41,9 +41,11 @@ RUN test -f internal/api/fleetclient/pack/bin/fleet || { \
 ARG VERSION=docker
 ARG TARGETOS
 ARG TARGETARCH
-# SrcDigest: the digest of the Go source compiled here (claude-fleet#2930) — the
-# hub builds a node release only from a commit whose tokenledger/ hashes the
-# same, so a release never carries a ccquota older (or newer) than its commit.
+# SrcDigest: the digest of the node's Go source (shared/ + agent/ — what the
+# dist below compiles; claude-fleet#2930, #4813) — the hub builds a node release
+# only from a commit whose node source hashes the same, so a release never
+# carries a ccquota older (or newer) than its commit. The hub binary carries the
+# same stamp: it is the DistSrc the hub vouches for (`ccquota version`'s src).
 RUN go run github.com/verkyyi/claude-fleet/tokenledger/shared/cmd/ccquota-srcdigest . > /tmp/srcdigest
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/ccquota ./cmd/ccquota
@@ -51,8 +53,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 # (/v1/node/dist/<os>-<arch>, claude-fleet#1418) — there are no tagged releases,
 # and `go install` on a fresh SPOT box means installing Go first. Pure Go, so
 # each is a cross-compile, not an emulated build. DIST_TARGETS="" skips them.
+# Built from the node's own module (agent/cmd/ccquota, claude-fleet#4813): no
+# hub code inside, the same subcommands (agent/cmd/ccquota/commands.txt), the
+# same artifact names.
 ARG DIST_TARGETS="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64"
-RUN mkdir -p /out/dist && for t in $DIST_TARGETS; do \
+RUN mkdir -p /out/dist && cd agent && for t in $DIST_TARGETS; do \
       CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} \
       go build -ldflags "-s -w -X main.Version=${VERSION} -X main.SrcDigest=$(cat /tmp/srcdigest)" -o /out/dist/ccquota-${t%/*}-${t#*/} ./cmd/ccquota || exit 1; \
     done
