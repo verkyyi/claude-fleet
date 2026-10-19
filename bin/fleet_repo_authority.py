@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import signal
+import time
 import uuid
 
 import fleet_ticket as ticket
@@ -410,6 +411,136 @@ printf '%s\\t%s/%s' "$r" "$u" "$f"
     return rc
 
 
+SETTLE_MIN_AGE = 600  # a start that moved within this is still on its way: left alone
+
+
+def held_text():
+    """Every place a live local start can be held on this login: each fleet
+    window's @authority_receipt, and each of its processes' environment and
+    argv (a spawner's FLEET_AUTHORITY_START, a supervisor child's
+    FLEET_AUTHORITY_CONTEXT, a pane's launch line). None = could not look,
+    and nothing may then be called unheld."""
+    try:
+        wins = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_list_windows_all "#{@authority_receipt}"',
+                               "_", str(BIN)], capture_output=True, text=True, check=True, timeout=30).stdout
+        if sys.platform.startswith("linux"):
+            procs = []
+            for d in Path("/proc").iterdir():
+                if d.name.isdigit():
+                    for name in ("environ", "cmdline"):
+                        try:
+                            procs.append((d / name).read_bytes().decode("utf-8", "replace"))
+                        except OSError:
+                            pass  # gone, or another login's: not ours to hold
+            procs = "\n".join(procs)
+        else:
+            procs = subprocess.run(["ps", "-Eaxww", "-o", "command="], capture_output=True,
+                                   text=True, check=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return wins + "\n" + procs
+
+
+def start_age(updated, now):
+    # The journal's RFC3339Nano, UTC — read by the one ISO reader.
+    import fleet_iso
+    return now - fleet_iso.parse(updated, utc=True).timestamp()
+
+
+def settle_plan(start, held, now):
+    """One start of this node -> (action, why); action "" = left alone."""
+    key, phase = start.get("reservation"), start.get("phase")
+    try:
+        if start_age(start.get("updated") or "", now) < SETTLE_MIN_AGE:
+            return "", "recent"
+    except ValueError:
+        return "", "unknown"
+    if phase in ("reserved", "starting"):
+        if held is None:
+            return "", "unknown"
+        if key in held:
+            return "", "held"
+        if phase == "reserved":
+            return "cancel", "no live window holds it"
+        if start.get("native_identity") or not start.get("worker_id"):
+            return "", "unknown"
+        return "unobserved", "begun, no native, no live window holds it"
+    if phase == "observed":
+        native = start.get("native_identity")
+        if not isinstance(native, dict) or any(native.get(k) in (None, "") for k in NATIVE_KEYS):
+            return "", "unknown"
+        try:
+            prove_stopped(dict(native))
+        except ValueError as exc:
+            return "", "alive" if "still alive" in str(exc) else "unknown"
+        except (OSError, KeyError, TypeError, subprocess.SubprocessError):
+            return "", "unknown"
+        return "stopped", "native process proven stopped"
+    return "", "unknown"
+
+
+def authority_log(line):
+    conf = os.environ.get("FLEET_CONF_DIR") or str(Path.home() / ".config/claude-fleet")
+    path = Path(conf) / "logs" / "authority.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "a") as out:
+        out.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " " + line + "\n")
+
+
+def settle(repo, apply):
+    """Close this node's own dead local starts with the existing actions
+    (issue #4832): reserved and unheld -> cancel, begun with no native and
+    unheld -> unobserved, observed whose native is proven stopped -> stopped.
+    Everything else stays, counted by why. Dry unless apply."""
+    repo = repo_identity(repo)
+    try:
+        data = ticket.api("GET", "/authority/start", query={"repo": repo, "list": "1"})
+    except ticket.Fail as exc:
+        if "one explicit reservation" not in str(exc):
+            raise
+        data = None  # a Hub from before the list: it asks for one reservation
+    starts = data.get("starts") if isinstance(data, dict) else None
+    endpoint = data.get("endpoint_id") if isinstance(data, dict) else None
+    if not isinstance(starts, list) or not isinstance(endpoint, str) or not endpoint:
+        raise ValueError("the Hub cannot list this node's starts (needs a Hub with issue #4832)")
+    held, now = held_text(), time.time()
+    counts, plan = {}, []
+    for start in starts:
+        if (not isinstance(start, dict) or start.get("endpoint_id") != endpoint
+                or ticket.norm_repo(start.get("repo") or "") != repo or not start.get("reservation")):
+            action, why = "", "unknown"  # never another node's, never a malformed row
+        else:
+            action, why = settle_plan(start, held, now)
+        row = dict(reservation=start.get("reservation") if isinstance(start, dict) else None,
+                   phase=start.get("phase") if isinstance(start, dict) else None,
+                   worker_id=(start.get("worker_id") or "") if isinstance(start, dict) else "",
+                   action=action or "keep", why=why)
+        if action and apply:
+            want = {"cancel": "cancelled", "unobserved": "abandoned", "stopped": "stopped"}[action]
+            fields = {}
+            if action == "unobserved":
+                fields["worker_id"] = start["worker_id"]
+            if action == "stopped":
+                fields.update(native_identity={k: start["native_identity"][k] for k in NATIVE_KEYS},
+                              execution_stopped=True)
+            try:
+                ack = start_call(repo, start["reservation"], action, **fields)
+                if not isinstance(ack, dict) or ack.get("reservation") != start["reservation"] or ack.get("phase") != want:
+                    raise ValueError("authority acknowledgement differs")
+                row["result"] = want
+            except (ticket.Fail, ValueError) as exc:
+                row["result"] = "failed: " + error_reason(exc)
+            authority_log("settle repo=%s reservation=%s phase=%s worker=%s action=%s result=%s" % (
+                repo, row["reservation"], row["phase"], row["worker_id"] or "-", action, row["result"]))
+        bucket = row.get("result", action or why)
+        if bucket.startswith("failed"):
+            bucket = "failed"
+        counts[bucket] = counts.get(bucket, 0) + 1
+        plan.append(row)
+    print(json.dumps(dict(repo=repo, endpoint_id=endpoint, apply=apply, counts=counts, starts=plan), indent=2))
+
+
 def match_ticket_ref(repo, number, ref):
     repo = repo_identity(repo)
     backend, bound_repo, bound_number = ticket.parse(ref)
@@ -435,7 +566,7 @@ def main(argv=None):
     p.add_argument("repo")
     p.add_argument("--session", default=os.environ.get("FLEET_SESSION", ""))
     actions = p.add_mutually_exclusive_group()
-    for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync"):
+    for a in ("dry-run", "freeze", "apply", "rollback", "gate", "finish", "sync", "settle"):
         actions.add_argument("--" + a, action="store_true")
     actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
@@ -443,6 +574,14 @@ def main(argv=None):
     p.add_argument("--title", default="")
     p.add_argument("--body-file")
     p.add_argument("--manifest")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if "--settle" in argv:
+        # --settle [--apply]: its own pair, beside the cutover's --apply.
+        rest = [a for a in argv if a not in ("--settle", "--apply")]
+        if len(rest) != 1 or rest[0].startswith("-"):
+            raise ValueError("usage: fleet_repo_authority.py <owner/repo> --settle [--apply]")
+        settle(rest[0], "--apply" in argv)
+        return
     args = p.parse_args(argv)
     repo = repo_identity(args.repo)
     if args.session and ("/" in args.session or args.session in (".", "..")):

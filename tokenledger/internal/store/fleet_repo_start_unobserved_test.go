@@ -1,6 +1,7 @@
 package store
 
 import (
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +68,43 @@ func TestRepoStartUnobservedCloses(t *testing.T) {
 	joined := strings.Join(blockers, "\n")
 	if strings.Contains(joined, "local start retained: warm") || !strings.Contains(joined, "local start retained: used") {
 		t.Fatal("blockers", blockers)
+	}
+}
+
+// Issue #4832: RepoOpenStarts is the retained set, scoped by owner / endpoint.
+func TestRepoOpenStartsScoped(t *testing.T) {
+	s := taskStore(t)
+	now := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, c := range []struct{ owner, ep, key, action, worker string }{
+		{"alice", "node", "a", "reserve", ""}, {"alice", "node", "b", "reserve", ""}, {"alice", "node", "b", "cancel", ""},
+		{"alice", "other", "c", "reserve", ""}, {"alice", "node", "d", "reserve", ""}, {"alice", "node", "d", "begin", "fleet/w"},
+	} {
+		if _, err := s.RepoLocalStart("org/repo", c.owner, c.ep, c.key, c.action, c.worker, nil, now); err != nil {
+			t.Fatal(c, err)
+		}
+	}
+	got := func(owner, ep string) string {
+		rows, err := s.RepoOpenStarts("org/repo", owner, ep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys := []string{}
+		for _, r := range rows {
+			keys = append(keys, r.Reservation+":"+r.Phase)
+		}
+		sort.Strings(keys) // one clock tick here: order is the id's
+		return strings.Join(keys, ",")
+	}
+	if g := got("alice", "node"); g != "a:reserved,d:starting" {
+		t.Fatal(g)
+	}
+	if g := got("", ""); g != "a:reserved,c:reserved,d:starting" {
+		t.Fatal(g)
+	}
+	if g := got("bob", ""); g != "" {
+		t.Fatal(g)
+	}
+	if rows, _ := s.RepoOpenStarts("org/other", "", ""); len(rows) != 0 {
+		t.Fatal("another repo", rows)
 	}
 }

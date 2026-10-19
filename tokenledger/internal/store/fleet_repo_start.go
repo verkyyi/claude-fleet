@@ -110,6 +110,43 @@ func repoLocalStarts(q querier, repo string) ([]RepoLocalStart, error) {
 	return starts, rows.Err()
 }
 
+// RepoStartRow is one open local start as its journal holds it, plus when it
+// last moved: a node settling its own starts (issue #4832) leaves a young one
+// alone, it may still be on its way to begin / observe.
+type RepoStartRow struct {
+	RepoLocalStart
+	Updated string `json:"updated"`
+}
+
+// RepoOpenStarts lists the starts of repo that still hold something, oldest
+// first — the same set repoAuthorityBlockers names as "local start retained".
+// owner / endpoint "" = any. Read only: settling goes through RepoLocalStart's
+// own actions (cancel · unobserved · stopped), never a write here.
+func (s *Store) RepoOpenStarts(repo, owner, endpoint string) ([]RepoStartRow, error) {
+	repo = NormRepo(repo)
+	rows, err := s.read.Query(`SELECT result, updated FROM fleet_operations WHERE action = 'repo_local_start' ORDER BY updated, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RepoStartRow{}
+	for rows.Next() {
+		var raw string
+		var r RepoStartRow
+		if err = rows.Scan(&raw, &r.Updated); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(raw), &r.RepoLocalStart); err != nil {
+			return nil, err
+		}
+		if r.Repo != repo || repoStartClosed(r.Phase) || (owner != "" && r.Owner != owner) || (endpoint != "" && r.EndpointID != endpoint) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIdentity) error {
 	starts, err := repoLocalStarts(q, repo)
 	if err != nil {
