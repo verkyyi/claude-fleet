@@ -47,6 +47,12 @@ type Elector struct {
 
 	mu   sync.Mutex
 	jobs map[string]*sql.Conn // every job asked about; a non-nil conn holds its lock
+	// closed: Close has run; nothing takes a lock again. Set under mu, so a
+	// Run tick that was waiting on mu while Close released every lock does
+	// not take a fresh connection and a job's lock between Close's release
+	// and the pool's close — db.Close never ends a checked-out *sql.Conn, so
+	// that lock outlived the replica (claude-fleet#4679, TestCloseHandsOver).
+	closed bool
 
 	logf func(string, ...any)
 }
@@ -112,6 +118,9 @@ func (e *Elector) Leader(ctx context.Context, job string) bool {
 
 // hold is Leader under e.mu.
 func (e *Elector) hold(ctx context.Context, job string) bool {
+	if e.closed {
+		return false
+	}
 	if c := e.jobs[job]; c != nil {
 		pctx, cancel := context.WithTimeout(ctx, pingTimeout)
 		err := c.PingContext(pctx)
@@ -210,6 +219,7 @@ func (e *Elector) Close() error {
 		return nil
 	}
 	e.mu.Lock()
+	e.closed = true
 	for job, c := range e.jobs {
 		if c != nil {
 			uctx, cancel := context.WithTimeout(context.Background(), pingTimeout)

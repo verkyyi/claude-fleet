@@ -548,8 +548,11 @@ func (s *Server) pushTeam(endpointID string, nc *nodeConn, v int) {
 		}
 		v = cur
 	}
-	sent := nc.teamSent.Load()
-	if v <= 0 || int64(v) == sent {
+	nc.pushMu.Lock()
+	defer nc.pushMu.Unlock()
+	// A version is never older than one already told: a beat that read v1
+	// while a PUT of v2 went out sends nothing.
+	if v <= 0 || int64(v) <= nc.teamSent.Load() {
 		return
 	}
 	msg, err := control.New(control.TypeTeam, control.Team{TeamVersion: v})
@@ -564,7 +567,7 @@ func (s *Server) pushTeam(endpointID string, nc *nodeConn, v int) {
 	if err := s.SendNodeWrite(wctx, endpointID, msg); err != nil {
 		return
 	}
-	nc.teamSent.CompareAndSwap(sent, int64(v))
+	nc.teamSent.Store(int64(v))
 }
 
 // broadcastTeam pushes version v to every node on a control channel that

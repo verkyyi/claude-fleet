@@ -410,6 +410,8 @@ func (s *Server) pushPerson(endpointID string, nc *nodeConn, person string, v in
 		v = b.Version
 	}
 	key := fmt.Sprintf("%s#%d", person, v)
+	nc.pushMu.Lock()
+	defer nc.pushMu.Unlock()
 	if v <= 0 || nc.personSent.Load() == key {
 		return
 	}

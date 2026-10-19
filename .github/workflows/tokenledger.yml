@@ -65,6 +65,13 @@ jobs:
           PART: ${{ matrix.part }}
         run: |
           set -eo pipefail
+          # tokenledger/test-quarantine.txt (claude-fleet#4679): the PR gate
+          # holds those tests out; GOFLAGS carries the -skip to every go test below.
+          skip=$(../bin/tokenledger-quarantine.sh skip)
+          if [ -n "$skip" ]; then
+            echo "quarantined (tokenledger/test-quarantine.txt): $skip"
+            echo "GOFLAGS=-skip=$skip" >> "$GITHUB_ENV"
+          fi
           case "$PART" in
             rest)
               pkgs=$(go list ./... | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/internal/api' | paste -sd' ')
@@ -134,6 +141,13 @@ jobs:
           PART: ${{ matrix.part }}
         run: |
           set -eo pipefail
+          # tokenledger/test-quarantine.txt (claude-fleet#4679): the PR gate
+          # holds those tests out; GOFLAGS carries the -skip to every go test below.
+          skip=$(../bin/tokenledger-quarantine.sh skip)
+          if [ -n "$skip" ]; then
+            echo "quarantined (tokenledger/test-quarantine.txt): $skip"
+            echo "GOFLAGS=-skip=$skip" >> "$GITHUB_ENV"
+          fi
           case "$PART" in
             store)
               echo 'PKGS=./internal/store/... ./internal/leader/...' >> "$GITHUB_ENV"

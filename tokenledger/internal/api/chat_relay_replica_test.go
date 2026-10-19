@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -62,11 +63,12 @@ func startSignedChatAgent(t *testing.T, holder *harness, hubURL, label, conf str
 	return host, me.Username
 }
 
-// spentNonces counts the signatures the hubs' shared store has seen.
-func spentNonces(t *testing.T, h *harness) int {
+// spentNonce counts how often the hubs' shared store has seen one signature's
+// nonce.
+func spentNonce(t *testing.T, h *harness, nonce string) int {
 	t.Helper()
 	var n int
-	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_sig_nonces`).Scan(&n); err != nil {
+	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_sig_nonces WHERE nonce = ?`, nonce).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -81,9 +83,11 @@ func TestChatRelayReplicaHop(t *testing.T) {
 	ub, _ := url.Parse(hb.http.URL)
 	pa, pb := httputil.NewSingleHostReverseProxy(ua), httputil.NewSingleHostReverseProxy(ub)
 	var dataOnA atomic.Int64
+	var dataAuth atomic.Value
 	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == control.ChatRelayDataPath {
 			dataOnA.Add(1)
+			dataAuth.Store(r.Header.Get("Authorization"))
 			pa.ServeHTTP(w, r)
 			return
 		}
@@ -105,7 +109,6 @@ func TestChatRelayReplicaHop(t *testing.T) {
 	}
 
 	// The page asks A; B opens the relay; the agent's data half lands on A.
-	nonces := spentNonces(t, ha)
 	resp = chatDo(t, ha, "GET", "/v1/chat/conversation", alice, nil, "")
 	b, _ = io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"session":"s1"`) {
@@ -125,8 +128,16 @@ func TestChatRelayReplicaHop(t *testing.T) {
 	if n := hb.srv.forwarded.Load(); n != 0 {
 		t.Fatalf("B proxied %d request(s) it was handed (a bounce)", n)
 	}
-	if n := spentNonces(t, ha) - nonces; n != 1 {
-		t.Fatalf("%d signatures spent for one data half, want 1", n)
+	// Counted by the data half's own nonce, not the table's growth: the agent
+	// signs its other requests too, and one landing in this window read as a
+	// second spend (claude-fleet#4679: "2 signatures spent").
+	auth, _ := dataAuth.Load().(string)
+	nonce := regexp.MustCompile(`nonce=([^,\s]+)`).FindStringSubmatch(auth)
+	if nonce == nil {
+		t.Fatalf("the data half was not signed: Authorization %q", auth)
+	}
+	if n := spentNonce(t, ha, nonce[1]); n != 1 {
+		t.Fatalf("the data half's signature spent %d time(s), want 1", n)
 	}
 	if n := chatAudits(t, ha, "chat_relay"); n != 1 {
 		t.Errorf("%d relays audited; want 1 (by B, which carried it)", n)
