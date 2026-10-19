@@ -1,13 +1,12 @@
-"""State and cell geometry for the thin panel's local overlays (#4416).
+"""State for the thin panel's full pages (#4416; plan B, T493) and its editor.
 
-No Fleet actions live here. A popup owns one overlay and a per-view draft; the
-caller hands explicit button activations to its existing action routes.
+No Fleet actions live here. A popup owns one page at a time and a per-view
+draft; the caller hands explicit activations to its existing action routes.
 """
 import curses
 import json
 import os
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -21,35 +20,6 @@ def clamp_top(top, count, height):
 
 def reveal(top, at, height):
     return min(top, at) if at < top else max(top, at - max(1, height) + 1)
-
-
-@dataclass
-class Box:
-    y: int
-    x: int
-    h: int
-    w: int
-
-    def contains(self, y, x):
-        return self.y <= y < self.y + self.h and self.x <= x < self.x + self.w
-
-
-def anchor_box(width, off, body, source_y, title_end, desired):
-    """Cell coordinates, within the list; leave its first eight cells exposed.
-
-    Prefer following the title and below the source; flip vertically, then
-    clamp. Tiny terminals keep the same overlay with internal scrolling.
-    The final terminal column is never used (implicit wrap on some terminals).
-    """
-    room = max(1, width - 1)
-    left = min(8, max(0, room - 3))
-    w = min(max(22, min(42, round(.32 * (width - 4)))), room - left)
-    h = min(max(3, desired), max(1, int(body * .72)))
-    x = max(left, min(title_end + 1, room - w))
-    y = source_y + 1
-    if y + h > off + body:
-        y = source_y - h
-    return Box(max(off, min(y, off + body - h)), x, h, w)
 
 
 class Editor:
@@ -150,7 +120,7 @@ class Draft:
         self.repo = data.get("repo") if isinstance(data.get("repo"), str) else None
         self.agent = data.get("agent") if data.get("agent") in ("claude", "codex") else None
         self.control = data.get("control", 0) if isinstance(data.get("control", 0), int) else 0
-        self.control = max(0, min(self.control, 6))
+        self.control = max(0, min(self.control, 5))
         self.scroll = max(0, data.get("scroll", 0)) if isinstance(data.get("scroll", 0), int) else 0
 
     def save(self, bolt):
@@ -172,16 +142,20 @@ class Draft:
         return True
 
 
-class Overlay:
-    def __init__(self, row, query, opened, at, top, y):
-        self.origin = key_of(row)
+class Page:
+    """One full page in the list's place (plan B, T486 v14 §2): the row it is
+    about, and the list's search / open sections / selection / scroll to come back
+    to — the lit row then the page's own, the last one acted on."""
+    def __init__(self, row, query, opened, at, top):
         self.snapshot = query, set(opened), at, top
-        self.y = y
-        self.title = row.get("text", "")
-        self.focus = True
         self.scroll = 0
         self.follow = True
-        self.box = None
+        self.retarget(row)
+
+    def retarget(self, row):
+        self.origin = key_of(row)
+        self.row = row
+        self.title = row.get("text", "")
 
     def restore(self, shown):
         query, opened, at, top = self.snapshot
@@ -201,36 +175,12 @@ def put(screen, y, x, text, width, clip, style=0):
         pass
 
 
-def draw_box(screen, box, title, lines, selected, top, follow, qo, attr):
-    """Opaque only inside the local rectangle. Return scroll and hit rows."""
-    inner = max(1, box.h - 2)
-    top = clamp_top(top, len(lines), inner)
-    if follow and selected is not None:
-        top = reveal(top, selected, inner)
-    for y in range(box.y, box.y + box.h):
-        put(screen, y, box.x, " " * box.w, box.w, qo.clip)
-    put(screen, box.y, box.x, "┌" + "─" * max(0, box.w - 2) + "┐", box.w, qo.clip)
-    put(screen, box.y, box.x + 1, "─ " + title + " ", box.w - 2, qo.clip, attr(("bold",)))
-    hits = {}
-    for n, (text, style) in enumerate(lines[top:top + inner]):
-        y = box.y + 1 + n
-        put(screen, y, box.x, "│", 1, qo.clip)
-        put(screen, y, box.x + box.w - 1, "│", 1, qo.clip)
-        put(screen, y, box.x + 1, text, box.w - 2, qo.clip, attr(style))
-        hits[y] = top + n
-    if box.h > 1:
-        tail = " %d/%d " % (min(len(lines), top + inner), len(lines)) if len(lines) > inner else ""
-        put(screen, box.y + box.h - 1, box.x, "└" + "─" * max(0, box.w - 2) + "┘", box.w, qo.clip)
-        put(screen, box.y + box.h - 1, box.x + 1, tail, box.w - 2, qo.clip)
-    return top, hits
-
-
 class Input:
     """Bracketed paste is text, never a sequence of buttons/Enter keystrokes.
 
     Partial pastes survive input timeouts and resize notifications. A cancelled
-    or oversized paste never dispatches anything. Ordinary Escape still closes
-    the overlay; unrelated following keys are put back in order.
+    or oversized paste never dispatches anything. Ordinary Escape still steps
+    back a page; unrelated following keys are put back in order.
     """
     def __init__(self):
         self.paste = None
