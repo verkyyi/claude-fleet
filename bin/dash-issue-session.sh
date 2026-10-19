@@ -877,7 +877,7 @@ fleet_is_fid "${ORIGIN_WID#*/}" && _sw+=(\; set-window-option -t "$win" @origin_
 # - @cc_agent: the agent asked for (issue #2403), before the node's start reads the
 #   window back to check it — the launcher's own stamp comes later, from the pane
 _sw+=(\; set-window-option -t "$win" @dispatch "$DISPATCH")
-[ -n "$AGENT" ] && _sw+=(\; set-window-option -t "$win" @cc_agent "$AGENT")
+_sw+=(\; set-window-option -t "$win" @cc_agent "${AGENT:-${FLEET_AGENT:-claude}}")   # Claude too (T493)
 # - @agent_def / @agent_spawn (issue #3122): the agent file it starts as and whether
 #   that file grants `spawn` (its dispatch group mounts) — before the agent
 #   starts; fleet-claude.sh stamps the same off the file it launched

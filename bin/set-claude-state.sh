@@ -324,8 +324,24 @@ except ValueError:
 p = d.get("prompt") if isinstance(d, dict) and d.get("hook_event_name") == "UserPromptSubmit" else None
 if isinstance(p, str):
     p = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", " ", p)).strip()
+    # a message from another session (T493): its words, never its envelope —
+    # \x01<sender>\x01<words> for the shell to say 「来自 X：…」 in the login'"'"'s language
+    m = re.match(r"<cross-session-message\b([^>]*)>\s*(.*)", p)
+    if m:
+        who = re.search(r"from-name=\"([^\"]*)\"", m.group(1))
+        who = (who.group(1) if who else "").replace("\x01", " ").strip()[:16] or "?"
+        p = m.group(2).replace("</cross-session-message>", "").strip()
+        n = max(8, 36 - len(who))
+        p = p if len(p) <= n else p[:n - 1].rstrip() + "…"
+        sys.stdout.write(("\x01" + who + "\x01" + p) if p else "")
+        sys.exit(0)
     sys.stdout.write(p if len(p) <= 40 else p[:39].rstrip() + "…")
 ' 2>/dev/null)
+    case "$_tl" in $'\001'*)
+      _tw=${_tl#?}; _tb=${_tw#*$'\001'}; _tw=${_tw%%$'\001'*}
+      _tl=$(sh "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/fleet-ui-lang.sh" t view_from_fmt "$_tw" "$_tb" 2>/dev/null)
+      [ -n "$_tl" ] || _tl="来自 $_tw：$_tb" ;;
+    esac
     [ -n "$_tl" ] && tmux set-window-option -t "$TMUX_PANE" @task_line "$_tl" 2>/dev/null ;;
   esac
 fi
