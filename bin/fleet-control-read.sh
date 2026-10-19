@@ -652,7 +652,7 @@ case "$mode" in
       checks) set -- pr checks "$n" --repo "$repo" --json "${fields:+$fields,}bucket" ;;
       *) exit 2 ;;
     esac
-    out=$(fleet_timebox 20 gh "$@"); rc=$?
+    out=$(fleet_timebox 20 gh "$@")
     # `gh pr checks` exits 8 while checks are pending and 1 on a red one, the JSON
     # still on stdout: only no answer at all is a failure.
     [ -n "$out" ] || exit 1

@@ -192,13 +192,11 @@ add_repo() {
 }
 # mark_seed — --seed on a repo the fleet already hosts (its only one): in its overlay.
 mark_seed() {
-  local f kv
+  local f
   [ "$SEED" = 1 ] && [ -z "$ADD_REPO" ] || return 0
   f=$(fleet_repo_conf_file "$NAME" "$REPO")
   [ -f "$f" ] || return 0
-  for kv in FLEET_SEED=1; do
-    fleet_conf_set "$f" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $f"
-  done
+  fleet_conf_set "$f" FLEET_SEED 1 || die "failed to write FLEET_SEED to $f"
   echo "fleet-up: $REPO is this fleet's seed repo (FLEET_SEED=1)"
 }
 

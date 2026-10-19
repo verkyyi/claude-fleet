@@ -75,10 +75,8 @@ else fail "B: ph_hubsess keeps the hub-sessions loop alive on a login nobody use
 
 # --- C: the node's table -----------------------------------------------------------
 cls() { awk -F'\t' -v u="$1" '$1 == u && $2 == "unit" { print $3 }' "$BIN/../conf/node-tasks.tsv"; }
-for u in spinner; do
-  if [ "$(cls "$u")" = session ]; then ok "C: $u runs only while its login has a session"
-  else fail "C: $u is a '$(cls "$u")' unit — it runs on a login with no session"; fi
-done
+if [ "$(cls spinner)" = session ]; then ok "C: spinner runs only while its login has a session"
+else fail "C: spinner is a '$(cls spinner)' unit — it runs on a login with no session"; fi
 
 # --- D: the hub-sessions loop's idle pace --------------------------------------------
 S="idl$$"

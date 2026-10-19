@@ -24,6 +24,7 @@ WANT=65536
 # the credential proxy has no per-login unit any more (issue #4674): the machine's
 # one runs under the node daemon, whose own definition carries the limit its
 # children inherit — its start line is still pinned below
+# shellcheck disable=SC2043  # one long-lived per-login unit left (#4899)
 for u in spinner; do
   f="$ROOT/launchd/com.claude-fleet.$u.plist.tmpl"
   [ -f "$f" ] || fail "$f missing"

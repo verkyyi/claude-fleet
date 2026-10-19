@@ -21,7 +21,6 @@ eq() { [ "$2" = "$3" ] || fail "$1" "want: [$2]
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/forkless-selftest.XXXXXX") || exit 2
 [ -n "${KEEP:-}" ] || trap 'rm -rf "$WORK"' EXIT
-TAB=$(printf '\t'); US=$(printf '\037')
 
 # ================================================================ EQUIVALENCE
 # shellcheck source=/dev/null
