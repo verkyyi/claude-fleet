@@ -546,8 +546,9 @@ echo "$out" | grep -q -e '这台电脑要做什么' -e '接入口吗' && bad "H1
 before=$(hsnap "$H1"); HENV=FLEET_INSTALL_NO_NODE=1 hinstall "$H1" "$WORK/install.sh"
 [ "$rc" = 0 ] && [ "$before" = "$(hsnap "$H1")" ] && ok "H1 again → not one file changes" \
   || bad "H1 again rc=$rc: $(diff <(printf '%s\n' "$before") <(hsnap "$H1") | head -5) $out"
-# H2 --host: 承载 too, still nothing asked
-HENV='' hinstall "$H1" "$WORK/install.sh" --host
+# H2 --host: 承载 too, still nothing asked. The fake hub keeps no releases, which
+# is a stop since #4848 — the git road is asked for by name (FLEET_DIST_SOURCE)
+HENV=FLEET_DIST_SOURCE=github hinstall "$H1" "$WORK/install.sh" --host
 [ "$rc" = 0 ] && ok "H2 --host on a pty → exit 0, nothing asked" || bad "H2 rc=$rc: $out"
 [ -d "$H1/.claude/fleet/.git" ] && [ -f "$H1/.claude/fleet/bin/fleet-up.sh" ] && [ ! -e "$H1/.local/share/claude-fleet" ] \
   && [ -z "$(ls -d "$H1/.claude/fleet".* 2>/dev/null)" ] \

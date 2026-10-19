@@ -328,7 +328,8 @@ g() { git -C "$ROOT" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$TIMEOUT" 
 # whole bounded by twice FLEET_GH_TIMEOUT_KEY (10 s): no answer ⇒ rc 75 at once,
 # and GitHub is marked down for every caller. Then the fetch itself, by
 # fleet_gh_git's own bounds (a moving catch-up is never cut). A GitHub already
-# known down is not tried at all (rc 75). Any other remote: g, as before.
+# known down is not tried at all (rc 75, the layer's FLEET_GH_LIMITED_RC). Any
+# other remote: g, as before.
 GH_PROBED=''
 gfetch() {
   case "$(git -C "$ROOT" remote get-url "$REMOTE" 2>/dev/null)" in
@@ -1074,7 +1075,7 @@ main() {
     local frc=0
     ferr=$(gfetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null) || frc=$?
     if [ "$frc" -ne 0 ]; then
-      [ "$frc" = "${FLEET_GH_LIMITED_RC:-75}" ] \
+      [ "$frc" = 75 ] \
         && finish fetch-failed "GitHub 不通，留在当前版 $(short "$HEAD_SHA") — refs/tags/$TAG not read from $REMOTE (gave up within ${TIMEOUT}s): $(printf '%s\n' "$ferr" | tail -1)"
       case "$ferr" in
         *"couldn't find remote ref"*|*"Couldn't find remote ref"*)
