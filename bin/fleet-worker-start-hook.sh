@@ -88,7 +88,7 @@ if os.environ["SW_MODE"] == "task":
         "Before anything else, read the record: call the fleet tool `brief` with no arguments "
         "(it prints the fleet, repo, base, merge method, origin and the record). Then:\n"
         "1. Implement in this worktree (never the base checkout), and verify per the repo\x27s rules.\n"
-        "2. Commit, push this branch, open the PR (`gh pr create --fill`); its body names %s and "
+        "2. Commit, push this branch, open the PR (`gh pr create --fill`); its body names %s and "  # no-gh-ok: a message
         "carries no `Closes #N`.\n"
         "3. Land it: the fleet tool `pr_verdict` (`wait: true` while PENDING), then `pr_merge` on "
         "READY; never merge red.\n"

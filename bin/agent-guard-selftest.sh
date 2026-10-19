@@ -9,7 +9,7 @@
 #              tool's default is general-purpose); `isolation: worktree` even for
 #              an allowed type (a fork worktree is edit-blocked by the base guard).
 #              The refusal must TELL the model what to do instead — it names
-#              dash-issue-session.sh, and Explore for the read-only case.
+#              the `task` tool + `await` (issue #4897), and Explore for the read-only case.
 #   3. ESCAPE — FLEET_ALLOW_SUBAGENT=1 allows everything.
 #   4. FAIL-OPEN — bad JSON / a non-Agent tool never block.
 #   5. FLEET-SCOPED — outside a fleet (no FLEET_MAIN, no $TMUX) it is a no-op;
@@ -64,9 +64,10 @@ agent_json() { printf '{"tool_name":"Agent","tool_input":%s}' "$1"; }
   assert_exit 2 "Explore + worktree blocked (fork worktree is edit-blocked)" "$(agent_json '{"subagent_type":"Explore","isolation":"worktree","prompt":"p","description":"d"}')"
   # the refusal must TELL the model what to do instead
   msg=$(printf '%s' "$(agent_json '{"subagent_type":"general-purpose","prompt":"p","description":"d"}')" | "$PY" "$GUARD" 2>&1 >/dev/null)
-  case "$msg" in *dash-issue-session.sh*) ;; *) printf 'FAIL: refusal must point at dash-issue-session.sh (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
-  case "$msg" in *fleet-await.sh*) ;; *) printf 'FAIL: refusal must point at fleet-await.sh — the synchronous hand-off (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
-  case "$msg" in *fleet-issue-file.sh*--spawn*) ;; *) printf 'FAIL: refusal must point at fleet-issue-file.sh --spawn\n' >&2; fails=$((fails + 1)) ;; esac
+  # issue #4897: hand it to a TASK — the `task` tool (spawn: true) and `await` on its T<n>.
+  case "$msg" in *'Fleet TASK'*'task (title'*'spawn: true'*) ;; *) printf 'FAIL: refusal must point at the task tool with spawn (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *'await (task: T<n>)'*) ;; *) printf 'FAIL: refusal must point at await on the T<n> — the synchronous hand-off (got: %s)\n' "$msg" >&2; fails=$((fails + 1)) ;; esac
+  case "$msg" in *dash-issue-session.sh*|*fleet-issue-file.sh*) printf 'FAIL: refusal must not send the work to a GitHub issue any more\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *Explore*) ;; *) printf 'FAIL: refusal must name Explore for read-only fan-out\n' >&2; fails=$((fails + 1)) ;; esac
   case "$msg" in *FLEET_ALLOW_SUBAGENT=1*) ;; *) printf 'FAIL: refusal must name the FLEET_ALLOW_SUBAGENT escape hatch\n' >&2; fails=$((fails + 1)) ;; esac
   # --- 4: fail-open

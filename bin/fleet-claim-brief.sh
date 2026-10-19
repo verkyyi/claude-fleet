@@ -214,9 +214,10 @@ print(words.strip() or "(only the title — the first message is the person\x27s
     rc=5
   fi
   printf '\n===== flow · a hub task, not an issue =====\n'
+  _gh_create='gh pr create --fill'  # no-gh-ok: the command the flow names
   printf '%s\n' \
     "1. Implement in this worktree and verify per the repo's rules (CI is the verdict)." \
-    "2. Commit, push this branch, open the PR (gh pr create --fill); the body names $at_task, no \`Closes #N\`." \
+    "2. Commit, push this branch, open the PR ($_gh_create); the body names $at_task, no \`Closes #N\`." \
     "3. pr_verdict (wait: true while PENDING) → pr_merge on READY. Never merge red." \
     "4. report (state: merged, pr, summary) right after the merge — it closes $at_task and tells the dispatcher." \
     "   Blocked: ask, then report (state: blocked). Then stop. No evidence tool: it is issue-bound."
