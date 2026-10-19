@@ -6095,7 +6095,15 @@ fleet_identity_triplet() {
       [ -f "$FLEET_CONF_DIR/fleet.settings" ] && . "$FLEET_CONF_DIR/fleet.settings" >/dev/null 2>&1
       [ -f "$FLEET_CONF_DIR/fleet.conf" ] && . "$FLEET_CONF_DIR/fleet.conf" >/dev/null 2>&1
     fi
-    fleet_load_conf "$sess" >/dev/null 2>&1
+    # An old-layout conf about to be migrated (fleet_conf_repo_migrate freezes the
+    # identity first) still names its repo: those lines ARE its identity, read as
+    # they always were — the conf is not read for hosting any more (#4806).
+    _fit_cf=$(fleet_conf_file "$sess")
+    if [ -f "$_fit_cf" ] && _fleet_conf_txt_names_repo "$(_fleet_conf_sans_global "$_fit_cf")"; then
+      eval "$(_fleet_conf_sans_global "$_fit_cf")"
+    else
+      fleet_load_conf "$sess" >/dev/null 2>&1
+    fi
     printf '%s\0' "$sess" "${FLEET_REPO:-}" "${FLEET_MAIN:-}" )
 }
 
