@@ -182,7 +182,7 @@ fixture() {   # a used login: one thing per category
     "$FLEET_INSTALL_DAEMON_DIR/com.example.x.plist" "$L"
   python3 -c 'import plistlib,sys; plistlib.dump({"Label": "com.example.y", "UserName": "bob"}, open(sys.argv[1], "wb"))' \
     "$FLEET_INSTALL_DAEMON_DIR/com.example.y.plist"
-  printf '%s 4242 01:00:00 distnoted\n' "$U" > "$RS_PS"
+  printf '%s 9999999 01:00:00 distnoted\n' "$U" > "$RS_PS"   # above any pid_max: never the checker's own (#4745)
   mkdir -p "$R/private/tmp/tmux-$U"; : > "$R/private/tmp/tmux-$U/default"
   : > "$R/private/var/tmp/left.txt"; mkdir -p "$R/Users/Shared/stuff"; : > "$R/Users/Shared/stuff/a"
   mkdir -p "$R/private/var/folders/zz/abc123/T" "$R/private/var/folders/zz/abc123/C" "$R/private/var/folders/zz/abc123/0"
@@ -225,7 +225,10 @@ done
 [ -f "$R/private/var/folders/zz/abc123/X/clone.app/bin" ] && ok "B the SIP-held X is left alone (root's rm is refused there) and the check passes" || fail 'B the wash went into X'
 has "$W/out" "archive=$ARCH/$L-" 'B the archive is named'
 TGZ=$(ls "$ARCH"/$L-*.tar.gz 2>/dev/null | head -1)
-[ -n "$TGZ" ] && tar -tzf "$TGZ" | grep -q "^$L/notes.txt" && ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(tar -tzf "$TGZ" 2>&1 | head -3 | tr '\n' ' ')"
+# listed to a file first: under pipefail `tar | grep -q` is red whenever grep's early
+# exit SIGPIPEs tar mid-listing — a found line read as a miss (#4243)
+tar -tzf "$TGZ" > "$W/tgz.list" 2>&1 || :
+[ -n "$TGZ" ] && grep -q "^$L/notes.txt" "$W/tgz.list" && ok 'B the archive holds the old home as <login>/' || fail "B archive: '$TGZ' $(head -3 "$W/tgz.list" | tr '\n' ' ')"
 [ -z "$(ls -d "$ARCH"/*.wash 2>/dev/null)" ] && ok 'B the moved-aside home is deleted after its archive' || fail 'B a .wash dir is left'
 grep -Eq '^timing: stop=[0-9.]+ quiesce=[0-9.]+ aside=[0-9.]+ requiesce=[0-9.]+ home\+sweep=[0-9.]+ check=[0-9.]+ rejoin=[0-9.]+ isolated=[0-9.]+ total=[0-9.]+$' "$W/out" \
   && ok 'B one timing line' || { grep timing "$W/out"; fail 'B no timing line'; }

@@ -88,7 +88,9 @@ plant() {   # plant <category>
     crontab) printf '# a comment\n* * * * * echo hi\n' > "$S/cron" ;;
     launchd) mkdir -p "$H/Library/LaunchAgents"; : > "$H/Library/LaunchAgents/com.prev.agent.plist" ;;
     systemd-user) mkdir -p "$H/.config/systemd/user"; : > "$H/.config/systemd/user/prev.service" ;;
-    processes) printf '%s 4242 01:02:03 /usr/bin/sleep\n1 1 9-00:00:00 launchd\n' "$U" > "$S/ps" ;;
+    # a pid above any pid_max: the checker skips its OWN pid, and on a runner it
+    # was once exactly the 4242 this line said (#4745)
+    processes) printf '%s 9999999 01:02:03 /usr/bin/sleep\n1 1 9-00:00:00 launchd\n' "$U" > "$S/ps" ;;
     tmux) mkdir -p "$TT/tmux-$U"; : > "$TT/tmux-$U/default" ;;
     outside-files) printf 'x\n' > "$OUT1/leftover.txt" ;;
     # X and 0/com.apple.LaunchServices.dv are macOS's own, behind SIP / TCC
