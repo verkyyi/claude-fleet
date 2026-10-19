@@ -327,21 +327,28 @@ def root_native(p, supervisor):
     return False
 
 
+def native_provider(p):
+    """The provider a native process says it is, by its own version probe."""
+    # Managed Claude binaries use a numeric version basename. Do not run
+    # arbitrary ancestor shells/interpreters as provider probes.
+    if not native_name(p["executable"]):
+        return ""
+    v = subprocess.run([p["executable"], "--version"], stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=5)
+    version = v.stdout.strip()
+    actual = "codex" if re.fullmatch(r"codex-cli \S+", version) else (
+        "claude" if re.fullmatch(r"\S+ \(Claude Code\)", version) else "")
+    return actual if v.returncode == 0 else ""
+
+
 def native_parent():
     """The hook's native ancestor. Only its version probe sees an empty request."""
     pid = os.getppid()
     for _ in range(12):
         p = process(pid)
-        # Managed Claude binaries use a numeric version basename. Do not run
-        # arbitrary ancestor shells/interpreters as provider probes.
-        if native_name(p["executable"]):
-            v = subprocess.run([p["executable"], "--version"], stdin=subprocess.DEVNULL,
-                               capture_output=True, text=True, timeout=5)
-            version = v.stdout.strip()
-            actual = "codex" if re.fullmatch(r"codex-cli \S+", version) else (
-                "claude" if re.fullmatch(r"\S+ \(Claude Code\)", version) else "")
-            if v.returncode == 0 and actual:
-                return dict(p, actual_provider=actual)
+        actual = native_provider(p)
+        if actual:
+            return dict(p, actual_provider=actual)
         pid = p["ppid"]
         if pid <= 1:
             break
@@ -352,11 +359,28 @@ def hook(payload):
     raw = os.environ.get("FLEET_LAUNCH_CONTEXT", "")
     if not raw or payload.get("hook_event_name") != "SessionStart":
         return
-    c = validate_context(json.loads(raw))
+    record(validate_context(json.loads(raw)), native_parent(), payload)
+
+
+def witness_codex(server_pid, payload, remote):
+    """The Codex receipt without a turn (T485). Codex 0.162's app-server runs
+    SessionStart only when the first turn starts, and an accepted launch holds
+    that turn until a receipt exists — so the private runtime, which owns the
+    server, witnesses it instead: the PID the kernel names as its socket's peer,
+    the thread that server has loaded. Same checks as the hook from there on."""
+    raw = os.environ.get("FLEET_LAUNCH_CONTEXT", "")
+    if not raw:
+        return
+    p = process(server_pid)
+    if native_provider(p) != "codex":
+        raise ValueError("app-server peer is not a verified Codex")
+    record(validate_context(json.loads(raw)), dict(p, actual_provider="codex"), payload, remote)
+
+
+def record(c, p, payload, remote=None):
     pane = os.environ["TMUX_PANE"]
     if json.loads(option(pane, "@launch")) != c:
         raise ValueError("launch binding changed")
-    p = native_parent()
     supervisor = int(os.environ["FLEET_LAUNCH_SUPERVISOR"])
     if not root_native(p, supervisor):
         raise ValueError("native process is outside this launch")
@@ -376,7 +400,7 @@ def hook(payload):
         receipt["worktree"] = bind_native_worktree(payload, json.loads(worktree))
         check_worktree_window(pane, receipt["worktree"])
     if p["actual_provider"] == "codex":
-        receipt.update(native_remote=os.environ.get("FLEET_CODEX_REMOTE", ""),
+        receipt.update(native_remote=os.environ.get("FLEET_CODEX_REMOTE", "") if remote is None else remote,
                        native_home=os.environ.get("CODEX_HOME", ""))
     # Preserve an old native identity on resume. Missing identity never starts
     # a fresh session under an existing accepted operation.
