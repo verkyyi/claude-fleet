@@ -239,7 +239,7 @@ got=$(iterm fail "the laptop refused it: unknown kind='file'")
 t0=$(date +%s); got=$(iterm none ""); t1=$(date +%s)
 [ "$got" = "0|unconfirmed" ] && [ $(( t1 - t0 )) -ge 3 ] && grep -q '没等到那边的回执' "$WORK/err" \
   && ok "ITERM no answer → unconfirmed after the wait" || bad "ITERM none: $got ($(( t1 - t0 ))s) / $(cat "$WORK/err")"
-ls "$FLEET_CONF_DIR/open-acks" 2>/dev/null | grep -q . && bad "ITERM receipts left behind" || ok "ITERM no receipt left behind"
+[ -n "$(find "$FLEET_CONF_DIR/open-acks" -type f 2>/dev/null)" ] && bad "ITERM receipts left behind" || ok "ITERM no receipt left behind"
 
 # ---- RECEIPT · THIN (issue #3541) -------------------------------------------------
 # The REAL loop's show_req, fed the 7502 off the 看台's tty through its own parser;
@@ -288,7 +288,7 @@ grep -q 'fleet · .* 发来 pic one.png，存在 ' "$WORK/peer" && ok "THIN the 
 grep -q 'Pat Mac' "$WORK/err" && ok "THIN stderr names the device" || bad "THIN device: $(cat "$WORK/err")"
 got=$(thin "$F")
 [ "$got" = "0|saved:$DL/pic one (1).png" ] && ok "THIN a taken name → «pic one (1).png»" || bad "THIN taken: $got"
-ls -A "$FLEET_CONF_DIR/show-files" | grep -q . && bad "THIN a fetched id left registered" || ok "THIN --fetch serves an id once"
+[ -n "$(find "$FLEET_CONF_DIR/show-files" -type f 2>/dev/null)" ] && bad "THIN a fetched id left registered" || ok "THIN --fetch serves an id once"
 bash "$SHOW" --fetch 00ff >/dev/null 2>&1; [ $? = 3 ] && ok "THIN --fetch of an unknown id → rc 3" || bad "THIN --fetch unknown"
 bash "$SHOW" --fetch '../x' >/dev/null 2>&1; [ $? = 1 ] && ok "THIN --fetch refuses a non-hex id" || bad "THIN --fetch non-hex"
 got=$(FETCH=false thin "$F")

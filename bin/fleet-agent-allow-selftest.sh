@@ -144,7 +144,7 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 self = types.SimpleNamespace(view="v1", resume=False, want="", device="ZA==", keys="")
 cmd = m.Thin.remote(self, "tok", "r")
-assert cmd.startswith("FLEET_CLIENT_VER=cafe1234cafe1234 bash "), cmd
+assert cmd.startswith("FLEET_CLIENT_VER=cafe1234cafe1234 FLEET_CLIENT_CAPS=show bash "), cmd
 PY
 grep -q 'fleet-client-behind.py" "$FLEET_CLIENT_VER"' "$BIN/fleet-remote-view.sh" \
   && ok "E: attach --thin asks fleet-client-behind.py with it" || fail "E: attach --thin does not read FLEET_CLIENT_VER"
