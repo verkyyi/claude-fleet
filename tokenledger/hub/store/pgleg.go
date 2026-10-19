@@ -58,7 +58,7 @@ func TestMainPostgres(m *testing.M, skip map[string]string) int {
 		return 1
 	}
 
-	leg := &pgLeg{admin: admin, base: base, tpls: map[string]*pgTpl{}, paths: map[string]string{}, dbs: map[string]bool{}}
+	leg := &pgLeg{admin: admin, base: base, tpls: map[string]*pgTpl{}, paths: map[string]string{}, dbs: map[string]bool{}, fresh: map[string]bool{}}
 	var mu sync.Mutex
 	schemas := map[string]bool{}
 	dbURL = func(path string) string {
@@ -130,6 +130,7 @@ type pgLeg struct {
 	tpls  map[string]*pgTpl // name → its template database
 	paths map[string]string // a path PGTemplate marked → its template's name
 	dbs   map[string]bool   // every database made, the templates too
+	fresh map[string]bool   // a copy no Open has seen yet (takeFresh)
 
 	copies           int
 	cloneDur, opened time.Duration
@@ -211,8 +212,20 @@ func (l *pgLeg) url(path string) (string, bool) {
 		l.cloneDur += time.Since(t0)
 		l.copies++
 		l.dbs[db] = true
+		l.fresh[path] = true
 	}
 	return l.dbURLFor(db), true
+}
+
+// takeFresh says whether path's database is a template copy that no Open has
+// seen yet — and from here on it is not. Open skips the schema pass on it: the
+// template had it from this binary's own Open, and nothing has written since.
+func (l *pgLeg) takeFresh(path string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f := l.fresh[path]
+	delete(l.fresh, path)
+	return f
 }
 
 // openedFrom records how long Open took on a copied database (the copy's own
