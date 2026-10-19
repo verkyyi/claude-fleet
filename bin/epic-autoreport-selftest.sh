@@ -22,10 +22,11 @@
 #   4. a failed report is a stall, never a done notification.
 #   5. the report command knows it has a non-human caller and says it is
 #      re-runnable, which is what makes check 3's re-entry safe.
-#   6. an EPIC spanning repos (issue #1942): the trio treats a member as (repo,
-#      issue) — plan files it in its own repo and writes `owner/name#N` in the
-#      list, run spawns / judges / merges / reaps it in ITS repo, report reads
-#      evidence and stable per repo — and the one-repo wording of #803 is gone.
+#   6. an EPIC spanning repos (issue #1942): each member names its repo, its child
+#      task opens there, the report asks stable per repo; the one-repo wording of
+#      #803 is gone.
+#   7. hub tasks, not GitHub (issue #4957): the parent is a task, its members child
+#      tasks; no `gh issue`, sub-issue, preflight, backstop or loopers road is left.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
@@ -43,51 +44,54 @@ lacksF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" && fail "$3 — [$2] 
 #    The old wording is the regression to catch: it reads as a contract and is
 #    not one, so it must not come back.
 lacksF "$RUN" 'hand off to `/fleet-epic-report' "run §4 must not delegate the report away again (#852)"
-hasF "$RUN" '/fleet-epic-report <N>' "run §4 names the report command it runs"
-hasF "$RUN" 'in this same hub session' "run §4: the report runs here, not elsewhere"
-hasF "$RUN" 'is not finished' "run §4: an EPIC without a report is not finished"
+hasF "$RUN" 'Run `/fleet-epic-report` right here' "run §4 names the report command it runs"
+hasF "$RUN" 'in this session, now' "run §4: the report runs here, not elsewhere"
+hasF "$RUN" 'is not the end of the run' "run §4: an EPIC without a report is not finished"
 
 # 2. the `report:` field — declared in the tick format, written by the close
-hasF "$RUN" 'report: <pending | the report' "run step 1: the tick format declares the report: field"
+hasF "$RUN" 'report: <pending | link>' "run step 1: the tick format declares the report: field"
 hasF "$RUN" 'report: pending' "run §4: the closing tick writes report: pending"
 
 # 3. ordering + resume. `pending` before the run is what survives a session that
 #    dies mid-report; the resumed loop re-enters the close instead of refilling.
-hasF "$RUN" 'Before running the report, not after' "run §4: pending is written BEFORE the report runs"
+hasF "$RUN" 'Before the report, not after' "run §4: pending is written BEFORE the report runs"
 hasF "$RUN" 'Resuming into a' "run §4: says what a resumed loop does with a pending report"
-hasF "$RUN" 'refill slots, and it does not start over' "run §4: a resumed close does not go back to refilling"
+hasF "$RUN" 'it does **not** refill' "run §4: a resumed close does not go back to refilling"
 
-# 4. a report that did not run never produces a done notification
+# 4. a report that did not run never closes the batch
 hasF "$RUN" 'is a stall, not a finish' "run §4: a failed report is a stall"
-hasF "$RUN" 'and the report has run' "run §4: done requires the report to have run"
+hasF "$RUN" 'Never close the parent off a report that did not run' "run §4: done requires the report to have run"
 
 # 5. the other end of the seam — the report is safe for a machine to re-run
 hasF "$REPORT" 'usual caller is not a human' "report: documents its run-loop caller"
 hasF "$REPORT" 're-runnable' "report: states it is re-runnable (makes check 3 safe)"
 hasF "$REPORT" '#852' "report: cites the seam's issue"
 
-# 6. an EPIC spanning repos (issue #1942) — every reader keys a member on (repo,
-#    issue). The regression to catch is a doc that goes back to «an EPIC lives in
-#    ONE repo» and a run that spawns or merges a repo-B member in repo A.
+# 6. an EPIC spanning repos (issue #1942) — each member names the repo its code
+#    changes in, and its child task opens there.
 PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
 [ -f "$PLAN" ] || fail "plugins/fleet-epic/commands/fleet-epic-plan.md is missing"
 for f in "$PLAN" "$RUN" "$REPORT"; do
   lacksF "$f" 'and an EPIC lives in' "the one-repo EPIC wording (#803) is retired"
   hasF "$f" '#1942' "cites the cross-repo EPIC issue"
 done
-hasF "$PLAN" '**C1** owner/name#N — title' "plan: a member in another repo is listed as owner/name#N"
-hasF "$PLAN" 'the one holding the MOST' "plan: the parent goes to the repo with the most members"
-hasF "$PLAN" 'repos/<the member'"'"'s repo>/issues/<child>' "plan: the child is named in ITS repo (its database id read there, #1942)"
-hasF "$PLAN" '--member-repo' "plan: preflight checks every other member repo"
-hasF "$PLAN" 'IS the member list then' "plan: a refused cross-repo link falls back to the list (ruling 4)"
-hasF "$RUN" 'Members are (repo, issue)' "run: a member is (repo, issue)"
-hasF "$RUN" 'fleet_member_ref "$FLEET_REPO"' "run: list lines parse through fleet_member_ref"
-hasF "$RUN" 'dash-issue-session.sh <N> --repo "$MREPO"' "run: the spawn opens in the member's repo"
-hasF "$RUN" 'fleet-pr-verdict.sh <PR> --repo "$MREPO"' "run: the verdict reads the member's repo"
-hasF "$RUN" 'fleet-pr-merge.sh <PR> --repo "$MREPO"' "run: the merge lands in the member's repo"
-hasF "$RUN" 'dash-reap.sh <slug>:issue-<N>' "run: the reap names the member's key"
-lacksF "$RUN" 'fleet-pr-verdict.sh <PR> --repo "$FLEET_REPO"' "run: no member verdict on the parent's repo"
-hasF "$REPORT" '--epic "$FLEET_REPO#<N>"' "report: a member in another repo names the parent with its repo"
-hasF "$REPORT" 'once per repo its members landed in' "report: the stable row is asked per repo"
+hasF "$PLAN" '**C2** owner/other — <名称> (codex)' "plan: a member in another repo names its repo in its line"
+hasF "$RUN" '`repo` = its `repo`' "run: each child task opens in its member's repo"
+hasF "$REPORT" 'Once per repo the members landed in' "report: the stable row is asked per repo"
+
+# 7. hub tasks, not GitHub issues (issue #4957): the parent is a task, the members
+#    its children; the trio reads and writes the hub only.
+for f in "$PLAN" "$RUN" "$REPORT"; do
+  hasF "$f" '#4957' "cites the hub-task EPIC issue"
+  for gone in 'gh issue' 'sub_issues' 'fleet_sub_issues' 'fleet-epic-preflight' 'fleet-epic-backstop' 'fleet-epic-loopers' 'epic-member' 'gh api'; do
+    lacksF "$f" "$gone" "the GitHub road is gone"
+  done
+done
+hasF "$PLAN" '`agent` `epic-driver`' "plan: the parent task starts the driver"
+hasF "$PLAN" 'mcp__fleet-orch__task' "plan: the parent is opened with the task tool"
+hasF "$RUN" 'fleet-epic-tick.py status' "run: one read of the batch off the hub"
+hasF "$RUN" 'fleet_task_control.py progress' "run: the tick goes onto the parent task"
+hasF "$RUN" 'outcome: succeeded' "run: the close records the parent's result"
+hasF "$REPORT" 'fleet-epic-tick.py status' "report: the members come off the hub"
 
 printf 'epic-autoreport-selftest OK (%d checks)\n' "$CHECKS"

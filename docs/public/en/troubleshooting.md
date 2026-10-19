@@ -828,7 +828,7 @@ From `fleet doctor`.
 From `fleet doctor`.
 
 - **What it is**: whether someone is still driving a batch of tasks (an EPIC).
-- **On WARN / FAIL**: the heartbeat stopped while the EPIC is still open: in a session bound to no ticket, run `/fleet-epic-run <number>` again.
+- **On WARN / FAIL**: the heartbeat stopped while the batch's parent task (`T<n>`) is still open: resume its driver session from `/fleet-history`, or run `/fleet-epic-run --task T<n>` in a session. The batch is on the hub's Tasks page, with the driver's last tick beside the parent task.
 
 #### `socket`
 

@@ -1,5 +1,5 @@
 ---
-description: Turn a theme into a confirmed, two-layer EPIC — one design page first, issues only after you say yes.
+description: Turn a theme into a confirmed, two-layer EPIC — one design page first, the hub's parent task only after you say yes.
 ---
 
 # /fleet-epic-plan — turn a theme into a confirmed, two-layer EPIC
@@ -7,32 +7,29 @@ description: Turn a theme into a confirmed, two-layer EPIC — one design page f
 <!-- fleet skill · owner: hub -->
 
 PHASE 1 of the EPIC trio (`/fleet-epic-plan` → `/fleet-epic-run` →
-`/fleet-epic-report`). You name a **theme**; this reads the fleet's open issues,
-proposes a bounded batch as **one design page** you open in a browser (served
-on this machine's loopback and opened on yours, issue #809), and — **only after you say yes** — files ONE parent
-`epic` issue whose body is the batch charter, with every member linked as a real
-GitHub sub-issue whose body is that member's section of the page. It mutates this
-fleet's repos and nothing else — the parent's `$FLEET_REPO`, plus any hosted repo
-a member is filed in (issue #1942) — and it mutates **nothing at all** until
-you confirm: before the nod the plan exists only in your scratchpad and on the
-page you opened.
+`/fleet-epic-report`). You name a **theme**; this proposes a bounded batch as
+**one design page** you read on your phone or computer, and — **only after you say
+yes** — opens ONE **parent task** on the hub (`T<n>`) whose record holds the
+batch charter, with every member written into it as its own section. The parent
+task's session IS the batch's driver (`/fleet-epic-run`, started by the same
+call); each member becomes a **child task** of it when the driver dispatches it
+(issue #4957). Nothing goes to GitHub: no issue, no sub-issue, no label, no
+comment — the hub's task records are the batch. Until you confirm, nothing is
+made at all: the plan exists only in your scratchpad and on the page.
 
 **Argument** (`$ARGUMENTS`): the theme, in your own words — *"让无人值守的失败会
 出声"*, *"collect/dash 性能"*, *"额度池化"*. Required: with no argument, ask for
-one and stop. Never infer a theme from the backlog; the whole point of a theme is
+one and stop. Never infer a theme from a backlog; the whole point of a theme is
 that it is the operator's judgment about what matters this week, and a cluster the
 model picks is a cluster nobody chose.
 
-**Which repo** (issues #803, #1942): a fleet may host several repos. An EPIC's
-**parent** lives in ONE of them; its **members** may live in any repo the fleet
-hosts — each member is filed in the repo its code changes in and linked under the
-parent as a cross-repo sub-issue (GitHub allows it; probed 2026-10-06). `--repo
-<owner/name>` anywhere in `$ARGUMENTS` names the repo to start from; without it
-the preamble resolves the pane's own repo, else refuses and lists the choices. A
-one-repo fleet always gets its repo — nothing to pass, nothing changes. Where the
-parent finally goes is decided in step 5 (the repo with the most members).
+**Which repo** (issues #803, #1942): a fleet may host several repos, and a
+batch's members may change any of them — each member names the ONE repo its code
+changes in, and its child task opens a worktree there. `--repo <owner/name>`
+anywhere in `$ARGUMENTS` names the batch's default repo (the charter marker's
+`repo=`); without it the preamble resolves the pane's own repo, else asks.
 
-## 0. Resolve fleet + guard seat (run FIRST, every time)
+## 0. Resolve fleet + guard seat + the hub (run FIRST, every time)
 
 Env vars do NOT persist across separate Bash tool calls — run this once, then
 reuse the literal values it prints:
@@ -41,111 +38,75 @@ reuse the literal values it prints:
 source ~/.claude/fleet/bin/fleet-lib.sh
 S=$(fleet_current_session); fleet_load_conf "$S"
 REPO=$(fleet_target_repo "$S" "<the --repo value, or empty>"); RC=$?   # issue #803
-[ "$RC" = 0 ] && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH / deploy
-SEAT=$(fleet_seat)                                 # → worker | "" (the hub pane / a stray shell)
-echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} seat=${SEAT:-unknown} rc=$RC"
+[ "$RC" = 0 ] && fleet_load_repo_conf "$S" "$REPO"   # → that repo's FLEET_REPO / FLEET_MAIN / FLEET_BASE_BRANCH
+bash ~/.claude/fleet/bin/fleet-task-record.sh authority >/dev/null 2>&1; HUB=$?
+echo "repo=${FLEET_REPO:-} main=${FLEET_MAIN:-} base=${FLEET_BASE_BRANCH:-master} rc=$RC hub=$HUB"
 ```
 
-- **`RC=4` — several repos, none current** (the dash is on `all`): list them
-  (`fleet_repos "$S"`) and ASK which one in an `AskUserQuestion` menu — never
-  guess — then re-run this block with the answer as `--repo`.
+- **`RC=4` — several repos, none current**: list them (`fleet_repos "$S"`) and
+  ASK which one in an `AskUserQuestion` menu — never guess — then re-run this
+  block with the answer as `--repo`.
 - **`RC=1`** — the named `--repo` is not one this fleet hosts: ABORT in one line.
-- From here on **every** `$FLEET_REPO` below is the resolved repo, and every
-  `gh` call names it with `--repo` — the hub pane of a multi-repo fleet sits in
-  `$HOME`, where a bare `gh` has no repo to infer.
-
+- **`hub≠0` — no hub here**: an EPIC is a hub task and its members are hub tasks
+  (issue #4957); without a hub there is nowhere to record it. Say so in one line
+  and stop — never fall back to GitHub issues.
 - **No fleet** (`FLEET_REPO` empty) → **ABORT** in one line: *"not inside a fleet
   — run this from a fleet session."* Never guess a repo.
-- **Wrong seat** — this is `owner: hub`: refuse when `$SEAT` is `worker`, in one
-  line: *"/fleet-epic-plan is hub-only; you're in a worker pane."* A worker
-  planning a batch is a worker deciding its own scope.
 
-## 1. Preflight — can this repo run an EPIC at all?
+## 1. Can this batch run?
 
-`/fleet-epic-*` is a **generic** fleet skill: it ships to every fleet and may
-assume nothing about the target repo. Ask before planning, not at 03:00:
+Nothing about the repo has to be checked on GitHub any more. What can hurt is the
+fleet's own state — say it on the page, never as a blocker of your own making:
 
 ```sh
-bash ~/.claude/fleet/bin/fleet-epic-preflight.sh --repo "$FLEET_REPO"; echo "verdict=$?"
+bash ~/.claude/fleet/bin/fleet-account.sh quota    # label · 5h% · week% · … (exit 4 = no pool, 3 = unknown)
+bash -c 'source ~/.claude/fleet/bin/fleet-lib.sh; fleet_machine_admit' && echo admit || echo 'held now'
 ```
 
-**Members in other repos** (issue #1942): once step 3 has put a member in another
-repo, re-run it against the parent's repo (step 5 decides which) with one
-`--member-repo <owner/name>` per OTHER repo — its `members` row blocks on a repo
-this fleet does not host (the run cannot open a session there) or cannot write
-to — and carry that screen to `#preflight` instead. Seeding labels stays per
-repo: `--repo <that repo> --fix`.
-
-Branch on the exit code — it is the whole point of the script:
-
-- **0 READY** → carry the screen forward to the page's `#preflight` section (step 4) and plan.
-- **1 FIXABLE** → only labels are missing. Do **not** run `--fix` yet. Carry the
-  screen to the page's `#preflight` section and put the seed in front of the
-  operator as part of the confirmation: seeding creates the WHOLE canonical set,
-  and a team repo sprouting a dozen unexplained labels overnight is how an
-  operator loses the room.
-- **3 BLOCKED** → **stop here** and report the blocking row verbatim. No repo
-  permission / no sub-issues API is not something a plan can work around.
-- **2** → no fleet resolved; report and stop.
-
-Keep the warning rows (base drift, quota). They are the *"this will hurt"*
-column, and whether it hurts enough to wait is the operator's call in step 4.
+Keep any warning (every account near its ceiling, the machine held) for the
+page's `#preflight` section; whether it hurts enough to wait is the operator's
+call in step 4.
 
 **The concurrency caps are not this skill's business** (issue #881).
 `FLEET_MAX_SESSIONS` / `FLEET_GLOBAL_MAX_SESSIONS` are the operator's own
-settings: the preflight's `slots` row only states them, and the plan never
-suggests a different value, never asks about one, and never puts one on the page
-— not in 开跑前要处理, not in 需要你定的事. The run works inside whatever cap is
-set.
+settings: the plan never suggests a different value, never asks about one, and
+never puts one on the page. The run works inside whatever cap is set; the
+charter's `cap=` only says how many members the driver keeps running at once
+(default 4).
 
-## 2. Read the backlog inside the theme
+## 2. Gather what the theme covers
 
-```sh
-gh issue list --repo "$FLEET_REPO" --state open --limit 100 \
-  --json number,title,labels,createdAt,body,assignees
-```
+The theme is the operator's. Its members come from what they told you, the code
+itself (read it), and anything they point at — a doc, a page, a task `T<n>`
+(`fleet-task-record.sh get T<n>`), an old issue link. Read those as INPUT; the
+batch is recorded on the hub only, never written back to any of them.
 
-An EPIC's issues are GitHub issues (the hub's ticket store and the fleet's ticket
-door left with issue #4898): `gh issue` reads and writes them directly.
+Exclude anything already being worked: a live session on the same thing (ask
+`mcp__fleet__status` / the person) is someone's live work, and re-planning it is
+how two workers implement the same fix.
 
-A theme that reaches into another hosted repo (`fleet_repos "$S"` lists them —
-*"活页里显示 fleet 状态"* touches claude-fleet and the monorepo at once) reads
-that repo's backlog the same way, `--repo <that repo>`. Every candidate is noted
-as `owner/name#N` from here on: numbers repeat across repos.
+For each candidate, note in one line: what it is, which repo its code changes in,
+and whether it is one worker's work or several.
 
-Select the ones the theme actually covers. Two rules:
+## 3. Split what is too big — as a PROPOSAL, make nothing
 
-- **The theme decides, not the label.** Labels in a mature backlog describe kind
-  (`bug`, `robustness`), not batch. Read the titles and enough of each body to
-  know what the work IS.
-- **Exclude anything already claimed.** An issue with an assignee, or with an
-  open PR, is someone's live work — `gh issue view <N> --repo <repo> --json assignees` and the
-  repo-wide open-PR list (`gh pr list`, a repo on GitHub only). Re-planning live work is how two workers implement the
-  same fix.
+The unit is **one worker, one PR**. A piece of work that is half a project (a
+migration, a subsystem swap) gives you a worker that runs six hours and ships
+nothing, which is the single worst outcome for an unattended batch: it holds a
+slot, burns a 5h window, and leaves no artifact.
 
-For each survivor, note in one line: what it is, and whether it is one worker's
-work or several.
-
-## 3. Split what is too big — as a PROPOSAL, file nothing
-
-The unit is **one worker, one PR**. An issue that is half a project (a migration,
-a subsystem swap) gives you a worker that runs six hours and ships nothing, which
-is the single worst outcome for an unattended batch: it holds a slot, burns a 5h
-window, and leaves no artifact.
-
-For each oversized issue, draft the split — 2–4 children, each independently
+For each oversized one, draft the split — 2–4 members, each independently
 shippable, each with a one-line scope. They go onto the step-4 page as member
-cards marked *new*. **Do not create them yet.** The operator confirming the
-list is the same act as authorizing the issues; filing first and asking second is
-the thing this skill exists to not do.
+cards. **Nothing is created yet.** The operator confirming the list is the same
+act as authorizing the batch.
 
 ## 4. Render the design page — then STOP and wait
 
 The proposal is a **page**, not a terminal screen (issue #809). The operator reads
 it on whatever device they have — a terminal long-read on an iPad is where plans
-went to die — and the same page is what gets written back after the nod, so the
-charter, the member sections and the dependency order are read in one place and
-recorded from one place. Build it from the shared frame:
+went to die — and the same page is what gets written into the charter after the
+nod, so the charter, the member sections and the dependency order are read in one
+place and recorded from one place. Build it from the shared frame:
 
 ```sh
 cat ~/.claude/fleet/plugins/fleet-epic/skills/epic-page/template.html   # the ONE frame plan + report share — keep <style> + ids
@@ -190,10 +151,10 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
 5. **Few words** — a section lede is one sentence or nothing.
 6. **Execution detail is folded** — 先后顺序, 依赖, 来源单号, 复读时间 all live in a
    fold; the order section is folded whole and sits last.
-7. **No keys on the surface** — `C1` / `R1` and source issue numbers appear only
+7. **No keys on the surface** — `C1` / `R1` and source references appear only
    inside a card's 技术细节 (its 编号 / 来源 field) and in the folded order table.
    Card titles and every cross-reference on the surface use the member's
-   **name**. The parent's `- [ ] **C1** #N` list and `/fleet-epic-run`'s parsing
+   **name**. The charter's `- [ ] **C1** <名称>` list and `/fleet-epic-run`'s parsing
    are untouched — this rule is about the page.
 8. **有空再做 is a list too** — the reserve is the last group of the same member
    list, same one-line cards.
@@ -204,8 +165,8 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
     少写文件 / 少起进程 / 看得见 / 有空再做, `<h3 class="grp">`), each card one line
     (名称 + one sentence of 解决什么) until tapped. No separate overview table.
 12. **能不能开跑 comes last** among the visible sections — after 需要你定的事 —
-    and **only when there is something to handle** (issue #929): FIXABLE, or a
-    warning the 发起人 has to act on. READY with nothing to do ⇒ drop the whole
+    and **only when there is something to handle** (issue #929): a warning the
+    发起人 has to act on. READY with nothing to do ⇒ drop the whole
     `#preflight` section AND the band's 开跑前要处理 tile (a 0 says nothing); the
     screen moves to the end of the `#order` fold as 预检原文, so nothing is lost.
 13. **范围 in plain words** — short items, no code, no tool names
@@ -267,8 +228,8 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
     the page stays valid. `--lint` (rule 23) WARNs
     `prototype` for a card that reads visual (侧栏 / 状态栏 / 菜单 / 页面 / 界面 /
     样式 …) with no such link; a non-visual card that trips it is yours to wave
-    through, a visual one is not. At filing (step 5) the link goes into the
-    member's body beside its 上线证据.
+    through, a visual one is not. At step 5 the link goes into the
+    member's charter section beside its 上线证据.
 
 Visible order, top to bottom: title → number band → `#metrics` → `#charter` →
 `#members` → `#risks` → `#signoff` → `#preflight` (only with something to
@@ -310,7 +271,7 @@ The sections, as the template lays them out:
    then reserve (8–10) as the last group 「有空再做」, `id="m-<key>"` (`C1`…,
    `R1`…) — the id carries the key so the page stays addressable, the title does
    not. Each card is a `<details class="card">` whose summary is **名称 + one
-   sentence of 解决什么**; the card IS the sub-issue body later.
+   sentence of 解决什么**; the card IS the member's section of the charter later.
 
    **上层 — 给决定的人** (tap 1), four fields, plain words, no file names:
    - **目标** — what it delivers, one sentence.
@@ -323,11 +284,10 @@ The sections, as the template lays them out:
      that row and this line must not disagree.
 
    **下层 — 技术细节** (tap 2), inside `<details class="fold">`, default closed:
-   first **编号 / 来源** — the key, **the repo it is filed in**, and where it came
-   from (`C1 · 已有 owner/name#N` / `C2 · 拆自 owner/name#N` / `C3 · 新建 ·
-   owner/name`, a proposed split from step 3; issue #1942). A member's repo is
-   the one its code changes in — one member, one repo, one worker; work that
-   changes two repos is two members. Then the five
+   first **编号 / 来源** — the key, **the repo its code changes in**, and where it
+   came from (`C1 · o/r · 来自 <what the operator pointed at>` / `C2 · o/r · 拆自
+   C1 的原题` / `C3 · o/r · 新`; issue #1942). One member, one repo, one worker;
+   work that changes two repos is two members. Then the five
    fields exactly as before, none of them shortened:
    - **方案** — 改哪里、怎么改: the files / scripts / surfaces and the shape of the
      change. Enough that a worker starts from the code, not from a re-read.
@@ -359,69 +319,64 @@ The sections, as the template lays them out:
    事项 / 建议, **every row with a default recommendation**, phrased so that
    nodding settles it; 「（批后）」 on an item decided only after approval. One
    line under it: 「点头即全部按建议。」 After the nod these are recorded with the
-   date and workers do not re-open them — the section is the template for what
-   #7773's charter did by hand.
+   date and workers do not re-open them.
 6. **`#preflight`** — **omitted when there is nothing to handle** (rule 12).
    Otherwise **能不能开跑**: one sentence — can it run, and what to
-   handle first. The step-1 screen, verbatim, in the fold, plus (on FIXABLE) the
-   labels `--fix` would seed.
+   handle first. The step-1 screen, verbatim, in the fold.
 7. **`#order`** — the whole section folded, last: **执行安排** — waves, who waits
    for whom, what runs in parallel. A table is enough; draw an inline SVG (load the
    `dataviz` skill first) only when the graph has real branches. 「先后」 never
    appears on the surface.
 
-Self-check the surface (rule 23), fix what it shows, then serve it on loopback
-and open it on the operator's computer with **one sentence**:
+Self-check the surface (rule 23), fix what it shows, then **publish it to 活页,
+private** and put it in front of the operator with **one sentence** (issue #4957):
 
-```sh
-(cd <scratchpad> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # once; dies with the session
-```
+1. `mcp__space__publish_file` — `title` 「EPIC 提案：<主题>」, `filename`
+   `epic-plan-<slug>.html`, `content` the page (a page with prototypes beside it:
+   `files`, each by its relative path). A new page starts **private** — only the
+   operator's workspace can open it; never make it public or passcode-shared
+   yourself. Keep the returned `proposal_id` and link.
+2. `mcp__space__push_to_wechat` — `proposal_id`, `to` omitted (the operator only).
+3. Say: *"设计方案页 <link>（已推到你微信，仅你可见）— 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
+   开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，开父任务开跑。"* On a fleet that runs
+   tap-first (`FLEET_TAP_FIRST=1`), the nod is a bounded choice — an
+   `AskUserQuestion` menu of *开父任务开跑 / 改清单 / 放弃* is the right shape; keep
+   free text for what they want changed.
 
-then the fleet `open` tool, target `:<port>/epic-plan-<slug>.html`, and say:
-*"设计方案页 :<port>/epic-plan-<slug>.html — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
-开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
-bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / 放弃* is the
-right shape; keep free text for what they want changed.
+No 活页 tools in this session (`mcp__space__*` not mounted)? Serve it on
+loopback instead — `(cd <scratchpad> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)`
+— and open it with the fleet `open` tool (`:<port>/epic-plan-<slug>.html`).
 
-Then **stop and wait**. No issue is created, no label is seeded, no worker is
-spawned until the operator answers — `gh issue list` must show nothing new. If
-they change the list, **edit the same file** — the same address, they reload
-it. Never a second copy for a revision: the operator ends up with three tabs of
-the same plan. The loop here is cheap and the alternative is a batch nobody
-chose.
+Then **stop and wait**. No task is created and no worker is spawned until the
+operator answers. If they change the list, **edit the same file and publish it
+again to the same page** (`publish_file` with that `proposal_id`) — the same
+link, they reload it. Never a second page for a revision: the operator ends up
+with three copies of the same plan.
 
 Deliberately **not** on the page: an estimate in hours or tokens. This fleet has
 no session→spend join yet (issue #625), so any number would be invented.
-`/fleet-epic-run` extrapolates from the batch's own measured rate once it has
-1–2 hours of evidence, and says so then.
 
-## 5. After the nod — file the EPIC from the page
+## 5. After the nod — open the parent task from the page
 
-**The page is the single source of truth.** Every body below is transcribed from
+**The page is the single source of truth.** The charter below is transcribed from
 the page section by section — not re-drafted from the conversation, which is where
 a "small change" agreed in chat and never made to the page goes missing. **Folds
-change the page, never the issue** (issue #881): every fold — 怎么量, 共同约定,
-技术细节, 更多风险与拆分理由, 预检原文, 执行安排 — is written back in full, in the
-same section shape as before, so `/fleet-epic-run` and the workers read exactly
-the bodies they always did. Only now, and in this order:
+change the page, never the record** (issue #881): every fold — 怎么量, 共同约定,
+技术细节, 更多风险与拆分理由, 预检原文, 执行安排 — is written in full. Only now, in
+this order:
 
-1. **Record the nod on the page** — `#signoff` gets the operator's login and the
+1. **Record the nod on the page** — `#signoff` gets the operator's name and the
    date, and any change they asked for goes into the page first.
-2. **Seed labels** if the operator approved it: `fleet-epic-preflight.sh --repo "$FLEET_REPO" --fix`.
-3. **Create the parent**, labelled `epic`, titled after the theme. **Which repo**
-   (issue #1942; the operator's ruling on EPIC #1935): the one holding the MOST
-   members; a tie goes to the repo the plan was started in (`$FLEET_REPO`). From
-   here on `<P>` is the parent and `$PREPO` its repo — run step 0's block again
-   with `--repo "$PREPO"` when it differs, so `$FLEET_REPO` names it. Its body is
-   the charter, in this shape — the **page URL pinned at the top**, and the
-   Core / Reserve list lines in exactly the form `/fleet-epic-run` reads
-   (`- [ ] **C1** #N — title` for a member in the parent's own repo,
-   `- [ ] **C1** owner/name#N — title` for one filed in another repo; a proposed
-   split is `#new` until step 4 fills it):
+2. **Write the charter** (`<scratchpad>/epic-charter-<slug>.md`) in exactly this
+   shape. Its FIRST line is the driver's command; the marker and the member lines
+   are what `bin/fleet-epic-tick.py` parses every tick — keep them literal:
 
    ```markdown
-   > 设计方案页：<url>（这台机器提供，会话结束即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
-   <!-- fleet:epic repo=<owner/name> short=<简称> -->
+   /fleet-epic-run
+
+   <!-- fleet:epic repo=<owner/name> short=<简称> cap=4 -->
+   # EPIC: <主题>
+   > 设计方案页：<活页 link>（私密）
 
    ## 主题
    <the page's subtitle>
@@ -430,169 +385,89 @@ the bodies they always did. Only now, and in this order:
    ## 这批不做
    <#charter's 不做 items>
    ## 打算移动的指标
-   <ONE markdown table, the surface and the 「怎么量」 fold joined per row, in the
-    columns it has always had: 指标 / 现在 / 期望 (= the page's 目标) /
-    多久能读出来 / 成员 — then the 读数口径 line(s) under it.
-    /fleet-epic-report reads THIS table back row by row; 「本批不量」 when the
-    theme brought no diagnosis>
+   <ONE markdown table, the surface and the 「怎么量」 fold joined per row:
+    指标 / 现在 / 期望 (= the page's 目标) / 多久能读出来 / 成员 — then the 读数口径
+    line(s) under it. /fleet-epic-report reads THIS table back row by row;
+    「本批不量」 when the theme brought no diagnosis>
    ## 共同约定
-   ## Core — definition of done (the run stops when all are merged)
-   - [ ] **C1** #N — title
-   - [ ] **C2** owner/other#N — title      ← a member filed in another repo (#1942)
-   ## Reserve — promoted only when the core is done and quota remains
-   - [ ] **R1** #N — title
+   ## 成员
+   ### 核心 — definition of done (the batch is done when each is merged or blocked)
+   - [ ] **C1** <名称>
+   - [ ] **C2** owner/other — <名称> (codex)     ← another repo than the marker's; its agent
+   ### 备选 — dispatched only when the person (or the driver, within scope) adds one
+   - [ ] **R1** <名称>
    ## 依赖顺序
    <the #order table, as a markdown table>
    ## 风险与拆分理由
    <the surface risks, then the fold's technical risks + 为什么这样切>
-   ## 待决 / open questions
+   ## 待决
    <every 「（批后）」 row of 需要你定的事: 事项 — 建议>
-   <!-- /fleet-epic-run appends here -->
    ## 发起人拍板
-   发起人 @login YYYY-MM-DD 拍板，worker 照做，不再讨论方向：
+   发起人 <name> YYYY-MM-DD 拍板，worker 照做，不再讨论方向：
    1. <事项>：<建议>   ← EVERY row of 需要你定的事, 「（批后）」 ones included
+
+   ## C1 · <名称>
+   <the card, both layers — see below>
+   ## C2 · <名称>
+   …
    ```
 
-   `## 依赖顺序` is the folded 执行安排 table, keys and all. The page's grouping of
-   要做的事 by theme is page-only: the Core / Reserve lists keep their exact
-   `- [ ] **C1** #N — title` shape and order-by-key, because that is what
-   `/fleet-epic-run` parses.
-
-   ```sh
-   gh issue create --repo "$FLEET_REPO" --label epic \
-     --title "EPIC: <theme>" --body-file <charter.md>
-   ```
-
-   It prints the issue's URL; the number is its last segment.
-
-   The `fleet:epic repo=` marker records which repo the PARENT is in
-   (issue #803): `/fleet-epic-run` and `/fleet-epic-report` check it against the
-   repo they resolved, so a run started against the wrong repo stops at tick 0
-   instead of spawning repo A's workers for repo B's issue numbers. A member in
-   another repo is named by its own `owner/name#N` in the list, never by the
-   marker — the parent is in one repo, the members may be in several.
-
-   `short=` is the batch's 简称 (issue #2355): 2–4 letters you pick from the
-   theme (托管 · 安全 · 上手 · 3秒) — letters/digits only, no spaces. Every
-   member's window is named `<简称>·<its title>` (`fleet_issue_win_name`), so
-   batches running side by side can be told apart; the person may edit it in the
-   body. Left out, it is the theme's first 4 letters.
-
-   `agent=` (optional, issue #2562) is which agent the batch's workers run:
-   `<!-- fleet:epic repo=… short=… agent=codex -->` makes every member a Codex
-   session; one member row ending ` (codex)` / ` (claude)` overrides it for that
-   member (`- [ ] **C3** #N — title (codex)`). Left out, members follow their own
-   `agent:*` label, else the fleet's `FLEET_AGENT`. Pick Codex for a member that
-   is mostly Go / TS with a test that decides done, or a mechanical change (a mass
-   rename, adding tests, fixing lint) — and for new mechanical members while
-   Claude's quota is ≥ 85% (the doctor's `quota` row); it needs this login's Codex
-   sign-in. Never mix agents within one member.
-
-   The charter body is load-bearing. `/fleet-epic-run` seeds each worker to read
-   the parent before it starts, so a charter edited mid-batch reaches every worker
-   still to come without re-dispatching anything.
-4. **Give every member its section — both layers.** Each `#members` card becomes a
-   markdown body in this shape: the four surface fields first, then the five
-   technical ones under a `<details>` that mirrors the page's fold, the **上线证据
-   line kept as one line**, and the parent pointer as the footer. The worker gets
-   everything it got before #839 — the fold changes the ORDER, never the content.
-   The card's page-only bits stay on the page: its one-line summary (the title
-   already says it) and its 编号 / 来源 field (the key rides in the
-   `fleet:epic-member` marker, the source in the parent's list):
+   **Each member's section** (`## C<k> · <名称>`, one per card, core and reserve)
+   is what its child task's session receives as its body — the tick hands the
+   section verbatim to the dispatch. Both layers, the fold changing the ORDER,
+   never the content:
 
    ```markdown
-   ## 目标
-   ## 为谁
-   ## 解决什么
-   ## 怎么算成功
-
-   <details>
-   <summary>实现细节（方案 · 接口约定 · 依赖 · 完成判据 · 上线证据）</summary>
-
-   ## 方案（改哪里、怎么改）
-   ## 接口 / 约定
-   ## 依赖
-   依赖 C1 (#N) · 被依赖 C3 (#N) C4 (#N)
-   ## 完成判据
-   **上线证据**：<the one line, verbatim from the page>
-   **交互原型**：<the card's ▶ 打开可交互原型 URL — visual members only, drop the line otherwise>
-
-   </details>
-
-   ---
-   Part of EPIC #<P>. **Read its charter before starting.** 设计方案页：<url>（会话结束即失效）
-   <!-- fleet:epic-member epic=<P> key=C1 -->
+   ## C1 · <名称>
+   **目标** … · **为谁** … · **解决什么** … · **怎么算成功** …
+   **方案（改哪里、怎么改）** …
+   **接口 / 约定** …
+   **依赖** 依赖 C1 · 被依赖 C3 C4
+   **完成判据** …
+   上线证据：<the one line, verbatim from the page>
+   交互原型：<the card's ▶ 打开可交互原型 link — visual members only, drop the line otherwise>
    ```
 
-   A member filed in ANOTHER repo than the parent (issue #1942) names the parent
-   with its repo, both in the footer and the marker — a bare `#<P>` there would
-   link the member's own repo's issue: `Part of EPIC <owner/name>#<P>.` and
-   `<!-- fleet:epic-member epic=<owner/name>#<P> key=C2 -->`.
+   - **`上线证据` is a LABELLED LINE** (`上线证据：…`): one line, one label, one
+     colon — the worker captures 改动后 along it and the report follows it.
+   - `repo=` is the default repo; a member whose code changes elsewhere names its
+     repo in its line (`owner/name — <名称>`). A member with no repo at all is never
+     dispatched — the tick says 没写仓库.
+   - `short=` is the batch's 简称 (issue #2355): 2–4 letters/digits from the theme
+     (托管 · 安全 · 上手 · 3秒) — the driver's window wears `<简称>·批次`.
+   - `agent=` (optional, issue #2562) is which agent the members run; a line
+     ending ` (codex)` / ` (claude)` overrides it for that member. Pick Codex for
+     a member that is mostly Go / TS with a test that decides done, or a mechanical
+     change, and for new mechanical members while Claude's quota is ≥ 85%.
+   - `cap=` is how many members run at once (default 4).
+   - The record's body is capped (16 KB with its envelope): a charter over ~12 KB
+     moves its longest technical folds to the page and names the page there.
 
-   Two shapes that are load-bearing, not cosmetic:
-   - **Write `上线证据` as a LABELLED LINE, not a heading**: `上线证据：…` /
-     `evidence: …` (the label, then a colon, then the line). One line, one label,
-     one colon.
-   - **A visual member's prototype link rides next to its 上线证据** (rule 24,
-     issue #1754): the `**交互原型**：<url>` line right under it, so the worker
-     builds to the prototype and shoots its 改动后 against it. Its own line,
-     never folded into the 上线证据 text.
-   - **Keep the blank lines around the `<details>` tags.** GitHub renders
-     `<details>` in an issue body, but without a blank line after `<summary>` the
-     markdown inside stops being parsed as markdown.
-
-   - A **proposed split** (`new`) is created with this body **in its card's repo**
-     (`gh issue create --repo <the member's repo>`; titles in the repo's own
-     language — CJK titles survive into window names, issue #579 — and the
-     title is the card's 名称: the member's use from the person's side, ≤ 20 汉字,
-     no script names or flags, the mechanism in the body — issue #2545), then its
-     number replaces `#new` in the parent's list (`gh issue edit <parent> --repo
-     "$PREPO" --body-file <f>`) — as `owner/name#N` when that repo is not the parent's.
-   - An **existing issue** keeps its own body: **append** the section below it
-     (`gh issue view <N> --repo <repo> --json body`, append, `gh issue edit <N> --repo <repo> --body-file <f>`). The `<!-- fleet:epic-member … -->` marker makes a second
-     round replace the section rather than stack another one — never overwrite
-     an issue somebody else wrote.
-5. **Link every member** under the parent as a real GitHub sub-issue (by the
-   child's database id, across repos too, issue #1942):
-
-   ```sh
-   cid=$(gh api "repos/<the member's repo>/issues/<child>" -q .id)
-   gh api -X POST "repos/$PREPO/issues/<parent>/sub_issues" -F sub_issue_id="$cid"
-   ```
-
-   **GitHub refuses a cross-repo link** (an Enterprise without it, a repo in an
-   org that forbids it): don't stop the batch — the operator's ruling 4 on
-   EPIC #1935 is that the parent's Core / Reserve list, which already names
-   every member as `owner/name#N`, IS the member list then. Say so in the
-   parent's 待决 (「<owner/name>#N 未能挂成子单，以总单列表为准」); `/fleet-epic-run`
-   and `/fleet-epic-report` read members from the list, never from the
-   sub-issues alone.
-
-   Sub-issues are what make the batch visible: the dash nests them under the
-   parent and shows subtree progress, and `run` re-derives its entire state from
-   them every tick.
-6. **Mark the reserve.** Reserve members are sub-issues too, distinguished in the
-   charter's own list — `run` promotes from that list, so it must be in the body,
-   not only in this conversation.
-7. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC #<P>`, so the tab
-   the operator still has open says what it became on its next reload.
+3. **Open the parent task — it starts the driver** (one call):
+   `mcp__fleet-orch__task` with `title` 「EPIC: <主题>」, `body` the charter file's
+   content, `agent` `epic-driver`, `spawn: true`, `reap` `loop-end`. Its first
+   stdout line is the parent's `T<n>`. The driver opens bound to that record — it
+   reads the charter off it every tick, its children are this batch's members, and
+   its final report comes back here. No hub ⇒ exit 3: say so and stop.
+4. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC <T<n>>`, republished to
+   the same page (`publish_file` with its `proposal_id`), so the link the operator
+   holds says what it became.
 
 ## 6. Report (keep it short)
 
-One line: the EPIC number and URL, the design page URL, core/reserve counts, the
-preflight verdict, and the single next command — `/fleet-epic-run <N>` (in a
-fleet hosting 2+ repos: `/fleet-epic-run <N> --repo <owner/name>` — the
-PARENT's repo, however many repos its members are in). If you
-stopped at step 1 (BLOCKED) or step 4 (awaiting the nod — the page URL is the
-whole report then), say that instead, with the reason.
+One line: the parent task `T<n>`, the design page link, core/reserve counts, and
+that its driver is running (`/fleet-epic-run` on `T<n>`; the batch shows on the
+hub's 任务 page and ⌘P as `T<n>` with the driver's latest tick). If you stopped at
+step 0 (no hub) or step 4 (awaiting the nod — the page link is the whole report
+then), say that instead, with the reason.
 
 ---
 
-Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
-other repos this fleet hosts that its members are filed in — never another
-fleet's repo, sessions, or ledgers. The design page is served on loopback and opened with the `open` tool, never the
-Artifact tool (hook-blocked in fleet sessions, issue #526), and lives in your
-scratchpad, never in the repo. This skill files issues; it never edits code,
-opens a PR, or spawns a worker — spawning is `/fleet-epic-run`'s job, and the
-split between them is what keeps "deciding the batch" a waking-hours act and
-"running it" an unattended one. The base checkout is read-only (hook-enforced).
+Rails: operate on YOUR fleet's repos only — never another fleet's repo, sessions,
+or ledgers. Nothing here writes to GitHub. The design page goes to 活页 privately
+(or loopback + `open`), never the Artifact tool (hook-blocked in fleet sessions,
+issue #526), and its source lives in your scratchpad, never in the repo. This skill
+never edits code, opens a PR, or spawns a member — dispatching members is
+`/fleet-epic-run`'s job, and the split between them is what keeps "deciding the
+batch" a waking-hours act and "running it" an unattended one. The base checkout is
+read-only (hook-enforced).

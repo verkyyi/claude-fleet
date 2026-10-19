@@ -343,8 +343,8 @@ for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-e
 done
 [ ! -e "$ROOT/conf/agent-defaults/claude/agents/epic-driver.md" ] && [ ! -e "$ROOT/agents/epic-driver.md" ] && ok \
   || fail "I the core still ships an epic-driver agent file — it is fleet-epic's"
-grep -q -- '--as epic-driver' "$ROOT/conf/agent-defaults/claude/agents/orchestrator.md" && ok \
-  || fail "I the orchestrator's driver line does not start --as epic-driver"
+grep -qF -- '`agent` `epic-driver`' "$EP/commands/fleet-epic-plan.md" && ok \
+  || fail "I the plan's parent task does not start the epic-driver (issue #4957)"
 grep -rq -- '--role epic-driver' "$ROOT/plugins" && fail "I a plugin still starts a driver with --role epic-driver" "$(grep -rn -- '--role epic-driver' "$ROOT/plugins")"; ok
 grep -rnE 'steward|管家|fleet-orchestrate' "$EP" >/dev/null \
   && fail "I fleet-epic still hands work to the steward / the orchestrate plugin (#4338)" "$(grep -rnE 'steward|管家|fleet-orchestrate' "$EP")"; ok

@@ -38,7 +38,17 @@ func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, e
 			taskWriteError(w, err)
 			return true
 		}
-		writeJSON(w, 200, map[string]any{"parent": t.Ref, "parent_session": t.ExecutionOwner, "parent_generation": t.Generation, "children": rows})
+		// summary (claude-fleet#4957): an EPIC driver's one read of its batch —
+		// each child counted by its committed outcome, "open" while it has none.
+		summary := map[string]int{"open": 0, store.TaskSucceeded: 0, store.TaskFailed: 0, store.TaskCancelled: 0, store.TaskRefused: 0}
+		for _, c := range rows {
+			if _, ok := summary[c.Outcome]; ok && c.Outcome != "" {
+				summary[c.Outcome]++
+			} else {
+				summary["open"]++
+			}
+		}
+		writeJSON(w, 200, map[string]any{"parent": t.Ref, "parent_session": t.ExecutionOwner, "parent_generation": t.Generation, "children": rows, "summary": summary})
 	case "reports":
 		if r.Method != http.MethodPost {
 			httpError(w, 405, "POST only")

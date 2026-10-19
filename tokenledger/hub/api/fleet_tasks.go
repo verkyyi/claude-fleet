@@ -117,6 +117,9 @@ type taskView struct {
 	store.FleetTask
 	Live    map[string]any `json:"live,omitempty"`
 	PRState string         `json:"pr_state"`
+	// Progress is the current execution's newest workflow word — an EPIC
+	// driver's tick on its parent task (claude-fleet#4957); absent when none.
+	Progress *store.TaskProgress `json:"progress,omitempty"`
 }
 
 // Use the same owner/generation-fenced landing projection as repo migration.
@@ -148,6 +151,11 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 				v.PRState, _ = p["pr_state"].(string)
 				v.PR, _ = p["pr"].(string)
 			}
+			progress, err := s.Store.FleetTaskProgress(t)
+			if err != nil {
+				return nil, err
+			}
+			v.Progress = progress
 		}
 		out = append(out, v)
 	}

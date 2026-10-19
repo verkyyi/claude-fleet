@@ -15,7 +15,7 @@
 #      + --spawn, dash-raw-session.sh --repo --task T<n> --reap merged, no issue;
 #      a no-repo task opens a no-repo session with --task; no hub ⇒ exit 3, nothing
 #      opened, repo or not (issue #4898); --draft is an unknown option.
-#   E  epic-member: one record per member (token epic:<repo>#<N>, its issue on it).
+#   E  epic-member is gone (issue #4957): an EPIC member is a child task, dispatched.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 FAILS=0 CHECKS=0
@@ -166,16 +166,8 @@ rm -f "$WORK/calls"
 printf 'x\n' | bash "$R" dispatch --title r --body-file - >/dev/null 2>&1; rc=$?
 [ "$rc" = 0 ] && [ ! -f "$WORK/calls" ] && ok "D no spawn, no repo: the record alone" || bad "D record-only rc=$rc"
 
-# --- E: epic-member ----------------------------------------------------------------
-: > "$CURL_LOG"
-t=$(bash "$R" epic-member 3178 o/r 3330 '编排改用记录' 2>/dev/null)
-[ "$t" = T5 ] && python3 - "$CURL_LOG" <<'PY' && ok "E one read-only record per member: its issue, EPIC #N, open" || bad "E: [$t] $(cat "$CURL_LOG")"
-import json, sys
-b = json.loads([l for l in open(sys.argv[1]) if l.startswith("body: ")][0][6:])
-assert b == {"token": "epic:o/r#3330", "title": "编排改用记录", "via": "EPIC #3178", "repo": "o/r",
-             "issue": "o/r#3330", "state": "open"}, b
-PY
-bash "$R" epic-member 3178 nope 1 >/dev/null 2>&1; [ "$?" = 2 ] && ok "E a bad repo is usage" || bad "E bad repo accepted"
+# --- E: epic-member is gone (issue #4957): an EPIC's members are child tasks ------
+bash "$R" epic-member 3178 o/r 3330 x >/dev/null 2>&1; [ "$?" = 2 ] && ok "E epic-member is usage now" || bad "E epic-member still answers"
 
 printf '%d checks, %d failed\n' "$CHECKS" "$FAILS"
 [ "$FAILS" = 0 ]

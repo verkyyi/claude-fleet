@@ -3,7 +3,7 @@
 # LOCAL mark the install-sync daemon can see (issue #953, EPIC #1117 R1) — one
 # mark PER BATCH (issue #2062, EPIC #2074 C1).
 #
-#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]
+#   fleet-epic-heartbeat.sh <epic> [--tick <n>] [--repo <owner/name>]   # <epic> = T<n> (#4957) | N
 #                           [--session <sess>] [--ttl <seconds>]
 #                           [--landed <k> --members <n>] [--title <parent title>]
 #                           [--live <n> --inflight <n>]
@@ -188,7 +188,8 @@ MARKS
           printf '%s\n' "$marks" | sed '/^$/d' | while IFS= read -r f; do printf '  epic=%s (%s)\n' "$(mark_epic "$f")" "$f" >&2; done
           exit 2
         fi ;;
-      *[!0-9]*) printf 'fleet-epic-heartbeat: --clear takes an EPIC issue number, got [%s]\n' "$EPIC" >&2; exit 2 ;;
+      T[1-9]*) case "${EPIC#T}" in *[!0-9]*) printf 'fleet-epic-heartbeat: --clear takes an EPIC (T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2 ;; esac ;;
+      *[!0-9]*) printf 'fleet-epic-heartbeat: --clear takes an EPIC (T<n> or an issue number), got [%s]\n' "$EPIC" >&2; exit 2 ;;
     esac
     cleared=''
     while IFS= read -r f; do
@@ -204,9 +205,13 @@ MARKS
     exit 0 ;;
 esac
 
-case "$EPIC" in ''|*[!0-9]*)
-  printf 'fleet-epic-heartbeat: an EPIC issue number is required (or --clear <epic> / --status)\n' >&2; exit 2 ;;
+# An EPIC is its parent hub task `T<n>` since issue #4957 (an older batch: its issue number).
+case "$EPIC" in
+  T[1-9]*) case "${EPIC#T}" in *[!0-9]*) EPIC='' ;; esac ;;
+  *[!0-9]*) EPIC='' ;;
 esac
+[ -n "$EPIC" ] || {
+  printf 'fleet-epic-heartbeat: an EPIC (its parent task T<n>, or an issue number) is required (or --clear <epic> / --status)\n' >&2; exit 2; }
 case "$TTL" in ''|*[!0-9]*|0)
   printf 'fleet-epic-heartbeat: --ttl must be a positive seconds count, got [%s]\n' "$TTL" >&2; exit 2 ;;
 esac

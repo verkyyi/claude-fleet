@@ -4,8 +4,6 @@
 # and only READS the shared gh-limit marker (bin/fleet-gh-lib.sh) — it never
 # probes GitHub. (The old client's status bar said it too; it went with that
 # client, issue #3008.)
-# (The preflight half — a limit is a WARN, never BLOCKED — is case M of
-# fleet-epic-preflight-selftest.sh.)
 #
 #   R. fleet_gh_limit_rows / _until: live marker, expired marker, injected limit
 #   D. fleet-doctor.sh `github`: PASS clear, WARN limited, last-hour log tally

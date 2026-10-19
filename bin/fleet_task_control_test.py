@@ -155,6 +155,38 @@ print("200")
             native.terminate()
             native.wait(timeout=5)
 
+    def test_epic_parent_progress_is_recorded_never_relayed(self):
+        # issue #4957: an EPIC driver's tick is a progress report on its OWN
+        # (parent) task — one hub write, no child report, no GitHub.
+        c = dict(task="T7", owner="alice", generation=2, worker_id="parent/session")
+        t = dict(id="T7", authority_version=1, owner="alice", generation=2, execution_owner="parent/session",
+                 parent_session="orch/session")
+        writes = []
+        def call(action, task, payload=None, **kwargs):
+            if action == "get": return dict(task=t)
+            writes.append((action, payload)); return dict(disposition="progress", task=t)
+        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), \
+             patch.object(control.subprocess, "run") as relay, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(control.progress("@7", "tick 3 · landed C1", "waiting", "tick-3"), 0)
+            relay.assert_not_called()
+        self.assertEqual(len(writes), 1)
+        action, r = writes[0]
+        self.assertEqual((action, r["status"], r["outcome"], r["summary"], r["event_id"]), ("report", "waiting", "", "tick 3 · landed C1", "tick-3"))
+        self.assertIn("RECORDED", out.getvalue())
+        t["outcome"] = "succeeded"   # a closed parent takes no more ticks
+        with patch.object(control, "context", return_value=c), patch.object(control, "call", side_effect=call), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(control.progress("@7", "late", "waiting"), 0)
+        self.assertEqual(len(writes), 1)
+        with patch.object(control, "context", return_value=c), self.assertRaises(ValueError):
+            control.progress("@7", "  ", "waiting")
+
+    def test_children_summary_counts_outcomes(self):
+        kids = [dict(outcome="succeeded"), dict(outcome="failed"), dict(outcome=""), dict()]
+        self.assertEqual(control.child_summary(dict(children=kids)),
+                         dict(open=2, succeeded=1, failed=1, cancelled=0, refused=0))
+        hub = dict(open=0, succeeded=2, failed=0, cancelled=0, refused=0)
+        self.assertEqual(control.child_summary(dict(children=kids, summary=hub)), hub)
+
     def test_stop_ack_does_not_republish_completed_work(self):
         c = dict(task="T7", owner="alice", generation=1, worker_id="fleet/session")
         t = dict(c, execution_owner="fleet/session", outcome="succeeded", cancel_request="stop")

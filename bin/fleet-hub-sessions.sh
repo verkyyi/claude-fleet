@@ -144,8 +144,7 @@
 # that dims rows for the hub's silence spares a `node` line: that machine answered. `busy` (#1607, rows only) is the
 # node's word for a window whose turn is over but whose work is not — `looping`
 # (a /loop round still held) or `bg` (a Bash-tool job still running) — empty
-# otherwise; fleet-epic-backstop.sh reads it so a member mid-acceptance on
-# another machine is never merged under it. A `read` naming `via` last must name
+# otherwise. A `read` naming `via` last must name
 # one more. `born` (#1750, rows only) is the session's birth, epoch seconds (the
 # node's @born, else window_created; empty from a node older than it) — the order
 # tmux-dashboard-rows.sh draws every machine's rows in. A `read` naming `busy`
