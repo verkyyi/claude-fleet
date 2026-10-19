@@ -28,8 +28,7 @@
 #            release-sign environment's secret and is only ever read from the
 #            environment — never an argv, a file or a log line.
 #
-# One release line (issue #4671): the hub's Mac lane is gone; `--ref
-# stable-macos` (an older caller) is said and exits 0 for one version.
+# One release line (issue #4671): the hub's Mac lane is gone.
 #
 # --stage <dir> / --commit <dir> (issue #3867, EPIC #3863 C4): the publish in two
 # halves, so the train's release is ready by the time its tests are green.
@@ -69,9 +68,6 @@ while [ "$#" -gt 0 ]; do
     --hub) shift; hub="${1:-}" ;;
     --dir) shift; dir="${1:-}" ;;
     --train) shift; train="${1:-}" ;;
-    --ref) shift   # compat-1v: 下一批删 — stable is the only line (#4671)
-           case "${1:-}" in stable) ;; stable-macos) printf 'publish: no Mac lane (one release line, issue #4671) — nothing to publish\n'; exit 0 ;;
-             *) die "--ref takes stable" ;; esac ;;
     --stage) shift; stage="${1:-}"; [ -n "$stage" ] || die "--stage takes a directory" ;;
     --commit) shift; commit="${1:-}"; [ -n "$commit" ] || die "--commit takes a directory" ;;
     --dry-run|-n) dry=1 ;;

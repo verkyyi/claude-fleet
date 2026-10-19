@@ -90,8 +90,8 @@ if [ -n "$REAL_TMUX" ]; then
      "$(printf '%s\n' "$out2" | awk -F'\t' '$10 == "draft" { d = $23 } $10 == "uncached" { u = $23 } END { print d, u }')"
   T set-option -wu -t "=$S:draft" @backfill; T set-option -wu -t "=$S:uncached" @backfill
   # columns 24-28 (issue #2431): ctxleft= ctxband= ctxts= model= effort= off the bus;
-  # an unmeasured window the five keys empty; no @ctx_left → 100 - @ctx_pct; a Codex
-  # window with only the launcher's @cc_model gives that (compat-1v)
+  # an unmeasured window the five keys empty; no @ctx_left → 100 - @ctx_pct; the
+  # launcher's @cc_model alone gives no model=
   eq "A: an unmeasured window → columns 24-28 empty" "ctxleft= ctxband= ctxts= model= effort=" \
      "$(printf '%s\n' "$out" | awk -F'\t' '$10 == "draft" { print $24, $25, $26, $27, $28 }')"
   T set-option -w -t "=$S:draft" @ctx_pct 38; T set-option -w -t "=$S:draft" @ctx_left 62
@@ -102,7 +102,7 @@ if [ -n "$REAL_TMUX" ]; then
   out3=$(bash "$CREAD" workers "$S" 2>"$WORK/err") || fail "A: workers failed" "$(cat "$WORK/err")"
   eq "A: the bus → columns 24-28" "ctxleft=62|ctxband=ok|ctxts=1800000000|model=Opus 5.5|effort=high" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "draft" { print $24 "|" $25 "|" $26 "|" $27 "|" $28 }')"
-  eq "A: no @ctx_left → 100 - @ctx_pct; a Codex @cc_model; a bad band dropped" "ctxleft=47|ctxband=|model=gpt-6-astra" \
+  eq "A: no @ctx_left → 100 - @ctx_pct; @cc_model alone no model; a bad band dropped" "ctxleft=47|ctxband=|model=" \
      "$(printf '%s\n' "$out3" | awk -F'\t' '$10 == "uncached" { print $24 "|" $25 "|" $27 }')"
   # column 29 (issue #2536): agentstatus= — @agent_status as fleet-status-7501.py
   # stamped it, verbatim; empty when the agent said nothing, a non-JSON value dropped

@@ -192,8 +192,7 @@ case "$mode" in
     # asks, in its own words (@claude_needs_detail, ≤120 characters), so the
     # client's bar and its notification can say it; empty when it waits on nothing.
     # Column 20 (issue #1957): `role=` — no session wears a role (issues #3119,
-    # #4341): sent empty on every window for one version so an older reader keeps
-    # its column count. # compat-1v: 下一批删
+    # #4341): sent empty on every window so every reader keeps its column count.
     # Column 21 (issue #1958): `epic=<owner/name>#<N>[:<landed>/<members>]` on the
     # window that drives a running EPIC (@epic, stamped by fleet-epic-heartbeat.sh),
     # the counts off THIS machine's mark for that batch (epic-running.d); its
@@ -214,15 +213,14 @@ case "$mode" in
     # computer shows each session's context LEFT · model · effort the way its
     # header does — `ctxleft=` (% left: @ctx_left, else 100 - @ctx_pct on a
     # window stamped before it), `ctxband=` (ok|watch|handoff), `ctxts=` (the
-    # reading's epoch, empty before #2431), `model=` (@model; a Codex window with
-    # only the launcher's @cc_model gives that — compat-1v: 下一批删), `effort=`.
+    # reading's epoch, empty before #2431), `model=` (@model), `effort=`.
     # Read as conf/statusline.sh stamped them, never recomputed; an unmeasured
     # window carries the five keys empty.
     # Column 29 (issue #2536, EPIC #2535 C1): `agentstatus=<json>` — the agent's
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t=#{@effort}\t=#{@agent_status}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.

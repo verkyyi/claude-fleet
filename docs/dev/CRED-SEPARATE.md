@@ -7,7 +7,7 @@ any). A subscription credential is held only by the machine's proxy and the hub'
 central proxy; nothing writes one into a home. `FLEET_CREDSEP_OPTIONAL`,
 `FLEET_CRED_SEPARATE=0`, `CCQUOTA_FLEET_CREDSEP_OPTIONAL`, root's `credsep.optional`,
 `fleet-login-new.sh --no-credsep` and `fleet-credsep.sh uninstall` are gone (the
-doctor / hub / daemon say so once; `FLEET_CRED_SEPARATE=1` stays a mark the install
+daemon says so once; `FLEET_CRED_SEPARATE=1` stays a mark the install
 pass converges on).
 
 ## Every login, by the machine itself (issue #4607)
@@ -163,7 +163,7 @@ From then on the login never needs sudo.
 Should step 7b not have happened — an old script, a by-hand override, a login put
 back — the hub still holds the line. Since #4607 it holds it for **every** login —
 an admin's and the operator's own too — and since #4675 no hub may declare
-otherwise (`CCQUOTA_FLEET_CREDSEP_OPTIONAL` is said in the log and ignored). Every heartbeat carries `credsep`
+otherwise (`CCQUOTA_FLEET_CREDSEP_OPTIONAL` is gone). Every heartbeat carries `credsep`
 (`separated` · `not` · `unknown`), the agent's reading of `fleet-credsep.sh status`
 **and** `check` (exit 0 both ⇒ `separated`; asked at most every 5 minutes).
 `/v1/node/credentials` issues real tokens only while that word is `separated`; otherwise it answers 403 `not_separated` and the

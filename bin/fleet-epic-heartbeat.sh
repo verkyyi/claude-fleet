@@ -27,8 +27,6 @@
 # own file, $FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>, rewritten
 # atomically as the FIRST command of every tick; `--clear <N>` removes that one
 # file and no other; a bare `--clear` is refused while several batches are marked.
-# The pre-#2062 single file global/epic-running is still read for one version
-# (never written); `--clear <N>` removes it too when it names <N>.
 #
 # The mark is a LEASE, not a lock: fresh for --ttl seconds (default 2700 = 45 min:
 # the loop's longest planned gap between ticks is 30 min, and a lease has to

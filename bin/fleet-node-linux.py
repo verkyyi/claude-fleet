@@ -203,7 +203,6 @@ def retired_uids(paths):
 
 def tenants(paths):
     """{login: declaration} — every login this machine opened, read from the volume."""
-    migrate_legacy(paths)
     out = {}
     d = tenants_dir(paths)
     for f in sorted(d.glob('*.json')) if d.is_dir() else []:
@@ -215,26 +214,6 @@ def tenants(paths):
             raise ValueError('tenant declaration %s does not match its name/UID' % f)
         out[f.stem] = t
     return out
-
-
-def migrate_legacy(paths):
-    # compat-1v: 下一批删 — the single-login linux-tenant.json (#3022) becomes
-    # linux-tenants/<login>.json; the old file stays beside it as .bak.
-    old = Path(paths.state) / 'linux-tenant.json'
-    if not old.is_file():
-        return
-    t = json.loads(old.read_text())
-    login = t.get('login', '')
-    new = tenant_path(paths, login)
-    if not new.exists():
-        if not re.fullmatch(r'[a-z][a-z0-9_-]{0,30}', login) or int(t.get('uid', 0)) < 1000:
-            raise ValueError('legacy linux-tenant.json is not a valid declaration')
-        t.setdefault('since', int(old.stat().st_mtime))
-        private_write(new, json.dumps(t, sort_keys=True) + '\n')
-        nxt = tenants_dir(paths) / '.next-uid'
-        if _num(nxt, FIRST_UID) <= t['uid']:
-            private_write(nxt, '%d\n' % (t['uid'] + 1))
-    os.replace(old, str(old) + '.bak')
 
 
 def uid_taken(uid):
@@ -542,14 +521,6 @@ def ensure_login(s, paths, login, uid=None, full_name='', op=''):
 
 def machine_hub(paths, hub):
     return (hub or env_read(Path(paths.state) / 'machine.env').get('CCQUOTA_HUB_URL', '')).rstrip('/')
-
-
-def prepare(a):
-    """compat-1v: 下一批删 — the old single-login verb; `login open` now."""
-    if not primary_login(a):
-        raise Refuse('prepare needs --login <login>')
-    a.name, a.full_name, a.start = a.login, '', False
-    return login_open(a)
 
 
 # The tenant's own fleet.conf, written as the tenant (see login_open).
@@ -1895,7 +1866,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     # route: every enrolled login's route settings again — the hub's relay to the
     # logins opened before it had one (`fleet node install`'s 中转 step, #4010)
-    ap.add_argument('action', choices=('boot', 'prepare', 'activate', 'bootstrap', 'foreground', 'live', 'ready', 'route'))
+    ap.add_argument('action', choices=('boot', 'activate', 'bootstrap', 'foreground', 'live', 'ready', 'route'))
     # `none` (the image's default since #3526) or empty: no primary login.
     ap.add_argument('--login', default=os.environ.get('FLEET_NODE_LOGIN', 'none'))
     ap.add_argument('--uid', type=int, default=int(os.environ.get('FLEET_NODE_UID', '10002')))
@@ -1906,9 +1877,9 @@ def main():
     a = ap.parse_args()
     if not (own_seat() or (a.action == 'activate' and sys.platform.startswith('linux'))):
         ap.error('run as root on Linux (on a person\'s pod: as its login)')
-    if pod_own() and a.action in ('boot', 'prepare'):
+    if pod_own() and a.action == 'boot':
         ap.error('%s is a shared node\'s: a person\'s pod has no useradd to do' % a.action)
-    return guarded(lambda: {'boot': boot, 'prepare': prepare, 'activate': activate, 'bootstrap': bootstrap,
+    return guarded(lambda: {'boot': boot, 'activate': activate, 'bootstrap': bootstrap,
                             'foreground': foreground, 'live': probe, 'ready': probe, 'route': route_heal}[a.action](a) or 0)
 
 

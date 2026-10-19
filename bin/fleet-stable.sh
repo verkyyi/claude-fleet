@@ -98,8 +98,7 @@
 #               FLEET_STABLE_CN_GATE=0 turns it off. Runs on --precheck too, so a
 #               red path stops a train before its tests.
 #          There is ONE release line (issue #4671): refs/tags/stable-macos and
-#          its `--ref stable-macos` / `--seed` / `--with-stable` moves are gone —
-#          those words are said and exit 0 for one version (an older caller).
+#          its `--ref stable-macos` / `--seed` / `--with-stable` moves are gone.
 #
 #          Then pushes <sha>:refs/tags/stable with --force-with-lease pinned to
 #          the value it read, so two concurrent moves cannot both win — the
@@ -143,7 +142,7 @@ set -u
 
 BIN_DIR=$(cd "$(dirname "$0")" && pwd)
 dir="$(cd "$BIN_DIR/.." && pwd)"
-remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 ignore_check="" train_run="" lane_word=""
+remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0 force=0 ignore_check="" train_run=""
 cmd="" target=""
 TAG=stable
 US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
@@ -165,11 +164,7 @@ while [ "$#" -gt 0 ]; do
     --branch)          shift; branch="${1:-}" ;;
     --repo)            shift; repo="${1:-}" ;;
     --timeout)         shift; timeout="${1:-15}" ;;
-    --macos-timeout)   shift ;;   # compat-1v: 下一批删 — gate 5 is retired (#4671)
     --ignore-check)    shift; ignore_check="$ignore_check${1:-}$US" ;;   # repeats
-    --ref)             shift   # one release line (#4671): stable is the only tag
-                       case "${1:-}" in stable) ;; stable-macos) lane_word="--ref stable-macos" ;; *) die "--ref takes stable" ;; esac ;;
-    --seed|--with-stable) lane_word=$1 ;;   # compat-1v: 下一批删 (the Mac lane's, #3868/#4663)
     --train)           shift; train_run="${1:-}"
                        case "$train_run" in ''|*[!0-9]*) die "--train takes a workflow run id" ;; esac ;;
     -h|--help)         sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -180,11 +175,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 [ -n "$cmd" ] || die "usage: fleet-stable.sh show | move [<sha>] [--dry-run] [--force]"
-if [ -n "$lane_word" ]; then
-  # an older caller moving the Mac lane: there is none any more (issue #4671)
-  printf 'fleet-stable: %s — there is no Mac lane (one release line, issue #4671): every Mac follows stable; nothing to move\n' "$lane_word"
-  exit 0
-fi
 case "$timeout" in ''|*[!0-9]*|0) timeout=15 ;; esac
 git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || die "$dir is not a git checkout (--dir)"
 

@@ -2102,7 +2102,7 @@ PY
 # one's `new-session` failed and it fell back to a plain client of the fleet
 # session — the node's own status line under the stage's header, its prefix
 # live — and the old one's exit then removed the NEW registration. The drill:
-# a node fleet on an isolated socket, a first `attach --shell - V` that never
+# a node fleet on an isolated socket, a first `attach - V` that never
 # leaves, a second with the same id; the second must sit in a view session of
 # its own (status off, prefix None), nobody on the fleet session, the row its.
 vr_env() {
@@ -2118,13 +2118,13 @@ vr_view_reconnect() {
   printf 'FLEET_REPO=acme/app\nFLEET_MAIN=%s\n' "$WORK/vr" > "$WORK/vr/conf/fleets/vrn/conf"
   vr vrn -f /dev/null new-session -d -s vrn -n home -x 100 -y 20 'exec sleep 600' || { WHY="no node server"; return 1; }
   vr vrc -f /dev/null new-session -d -s vrc -n t1 -x 100 -y 20 \
-    "$(vr_env) bash $BIN/fleet-remote-view.sh attach --shell - V1; exec sleep 600"
+    "$(vr_env) bash $BIN/fleet-remote-view.sh attach - V1; exec sleep 600"
   until_ok 5 sh -c "[ \"\$(TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn list-clients -F '#{client_session}')\" = 'vrn@view-V1' ]" \
     || { WHY="the first attach never sat in its view session: [$(vr_clients)]"; return 1; }
   one=$(vr_pid V1)
   t0=$(now)
   # the reconnect: the same view id, while the first attach still holds it
-  vr vrc new-window -d -t vrc: -n t2 "$(vr_env) bash $BIN/fleet-remote-view.sh attach --shell - V1; exec sleep 600"
+  vr vrc new-window -d -t vrc: -n t2 "$(vr_env) bash $BIN/fleet-remote-view.sh attach - V1; exec sleep 600"
   until_ok "$CAP" sh -c "two=\$(cut -f5 '$WORK/vr/conf/remote-views/V1' 2>/dev/null); [ -n \"\$two\" ] && [ \"\$two\" != '$one' ] \
       && [ \"\$(TMUX_TMPDIR='$WORK/vt' '$REAL_TMUX' -L vrn list-clients -F '#{client_session}')\" = 'vrn@view-V1' ]" \
     || { WHY="after the reconnect the node's clients are [$(vr_clients)] (want one, on vrn@view-V1), row pid $(vr_pid V1) (first was $one)"; return 1; }
@@ -2141,11 +2141,11 @@ vr_view_reconnect() {
   # (its line died, the client hangs in a tty write). `health` counts it, the
   # next attach reaps it and its row.
   mkdir -p "$WORK/vr/fake"; printf 'sleep 600\n' > "$WORK/vr/fake/fleet-remote-view.sh"
-  bash "$WORK/vr/fake/fleet-remote-view.sh" attach --shell - V9 >/dev/null 2>&1 </dev/null & one=$!
+  bash "$WORK/vr/fake/fleet-remote-view.sh" attach - V9 >/dev/null 2>&1 </dev/null & one=$!
   printf '/dev/ttys999\tvrn\tshell\t%s\t%s\n' "$(date +%s)" "$one" > "$WORK/vr/conf/remote-views/V9"
   s=$(eval "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh health" 2>&1)
   [ "$s" = "shared=0 orphans=1" ] || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="health with one orphan says [$s]"; return 1; }
-  vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach --shell - V3; exec sleep 600"
+  vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach - V3; exec sleep 600"
   until_ok 5 sh -c "! kill -0 $one 2>/dev/null && [ ! -e '$WORK/vr/conf/remote-views/V9' ]" \
     || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="the next attach left the orphan ($one) or its row"; return 1; }
   wait "$one" 2>/dev/null

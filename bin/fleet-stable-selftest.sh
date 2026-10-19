@@ -24,7 +24,7 @@
 #   J. no macos gate      (issues #4663, #4671) gate 5 is retired: a red macOS
 #                         run on the target, no run at all, a cancelled `macOS
 #                         shard *` check — none refuses, nothing is dispatched or
-#                         waited for; --macos-timeout is still accepted (compat-1v)
+#                         waited for
 #   L. --ignore-check     the caller's own pending CI job (exact name) is passed
 #                         over; any other pending run still refuses; the flag
 #                         repeats (issue #3143) — every name it gives is passed over
@@ -42,9 +42,8 @@
 #                         commit's check runs: a red / unfinished job refuses (CI),
 #                         a red or missing macOS job does not, the job
 #                         --ignore-check names is passed over, all green moves
-#   Q. one release line   (issue #4671) --ref stable-macos / --seed / --with-stable
-#                         (an older caller) say there is no Mac lane and exit 0,
-#                         pushing nothing; --ref takes only stable
+#   Q. one release line   (issues #4671, #4790) --ref / --seed / --with-stable /
+#                         --macos-timeout are unknown flags (exit 2), nothing pushed
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -210,9 +209,9 @@ run move "$C9"
 eq "J: a red macOS run does not hold stable" 0 "$RC"; eq "J: tag at C9" "$C9" "$(tag)"
 case "$OUT" in *"not green: completed cancelled"*) fail "J: the generic gate counted a macOS shard" ;; esac
 case "$OUT" in *"macos:"*) fail "J: gate 5 still spoke: $OUT" ;; esac
-# No macOS run at all: nothing dispatched, nothing waited for; --macos-timeout accepted.
+# No macOS run at all: nothing dispatched, nothing waited for.
 C10=$(commit ten); push; : > "$WORK/macos"
-run move "$C10" --macos-timeout 3
+run move "$C10"
 eq "J: no macOS run → moves" 0 "$RC"; eq "J: tag at C10" "$C10" "$(tag)"
 eq "J: dispatched nothing" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
 C11=$(commit eleven); push
@@ -345,19 +344,17 @@ eq "P: FLEET_STABLE_DERIVED_RE names the workflows" 3 "$RC"; contains "P: … th
 : > "$WORK/derived"; green
 
 # --- Q. one release line (issue #4671) ---------------------------------------------------------
-# An older caller moving the Mac lane is told there is none and exits 0; nothing pushed.
+# The Mac lane's flags are gone: an unknown flag, nothing pushed.
 ltag() { git --git-dir="$BARE" rev-parse -q --verify refs/tags/stable-macos 2>/dev/null || echo none; }
 green; : > "$WORK/statuses"; rm -f "$WORK/dispatched"; : > "$WORK/dispatch_to"
 S0=$(tag)
-for w in "--ref stable-macos" "--ref stable-macos --seed" "--ref stable-macos --with-stable" "--with-stable"; do
+for w in "--ref stable-macos" "--seed" "--with-stable" "--macos-timeout 3"; do
   # shellcheck disable=SC2086  # the words are the flags
   run move $w
-  eq "Q: $w exits 0" 0 "$RC"; contains "Q: $w says no Mac lane" "$OUT" "there is no Mac lane"
+  eq "Q: $w is an unknown flag" 2 "$RC"
   eq "Q: $w pushed no lane" none "$(ltag)"; eq "Q: $w left stable" "$S0" "$(tag)"
 done
 eq "Q: nothing dispatched" no "$([ -f "$WORK/dispatched" ] && echo yes || echo no)"
-run move --ref nope
-eq "Q: --ref takes stable" 2 "$RC"
 commit twentyfour >/dev/null; push
 C25=$(commit twentyfive); push
 printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/macos"; printf 'failure\n' > "$WORK/statuses"

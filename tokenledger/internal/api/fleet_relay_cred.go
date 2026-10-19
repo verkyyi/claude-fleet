@@ -248,7 +248,7 @@ func (s *Server) handleNodeRelayCredential(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// frl2 only for a caller that asks for it ({"kind":"frl2"}, claude-fleet#3561):
-	// an older node's fleet-relay-cred.sh keeps nothing but frl1. # compat-1v
+	// a caller that does not ask gets frl1.
 	var ask struct {
 		Kind string `json:"kind"`
 	}

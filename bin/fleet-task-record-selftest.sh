@@ -7,8 +7,8 @@
 #   A  no hub (no node token): every write exits 3, prints nothing, sends nothing —
 #      callers stay byte for byte what they were.
 #   B  new: POST /v1/node/tasks, the token in the -K header on stdin (never argv),
-#      the JSON body (--rule accepted and dropped since the rule table left, issue
-#      #4340 — no `rule` key); `T<n>` on stdout;
+#      the JSON body (no `rule` key since the rule table left, issue #4340);
+#      `T<n>` on stdout; --rule is an unknown option (usage, 2);
 #      a hub refusal → exit 1, said on stderr.
 #   C  set / get: POST /v1/node/tasks/T<n> with asked / parked / clear; GET the record.
 #   D  dispatch: the record first, then a repo task through fleet-issue-file.sh
@@ -86,7 +86,7 @@ rm -f "$WORK/calls"
 
 # --- B: new ------------------------------------------------------------------------
 printf 'CCQUOTA_HUB_URL=https://hub.test\nCCQUOTA_TOKEN=tok-SECRET\n' > "$FLEET_CONF_DIR/node.env"
-t=$(bash "$R" new --title '看看风扇' --token orch:k1 --via 编排 --rule 1 2>"$WORK/err"); rc=$?
+t=$(bash "$R" new --title '看看风扇' --token orch:k1 --via 编排 2>"$WORK/err"); rc=$?
 [ "$rc" = 0 ] && [ "$t" = T5 ] && ok "B new prints the record's number" || bad "B new: rc=$rc t=[$t] $(cat "$WORK/err")"
 grep -q '^argv: .*-X POST .*https://hub.test/v1/node/tasks$' "$CURL_LOG" && ok "B POST /v1/node/tasks at node.env's hub" \
   || bad "B argv: $(cat "$CURL_LOG")"
@@ -104,7 +104,7 @@ bash "$R" new --title t --token k >/dev/null 2>"$WORK/err"; rc=$?
 [ "$rc" = 1 ] && grep -q 'refused (HTTP 409)' "$WORK/err" && ok "B a refusal exits 1 and says so" || bad "B refusal rc=$rc $(cat "$WORK/err")"
 rm -f "$CODE"
 bash "$R" new --title t >/dev/null 2>&1; [ "$?" = 2 ] && ok "B no token: usage (2)" || bad "B no --token accepted"
-bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 0 ] && ok "B any --rule is accepted and ignored (issue #4340)" || bad "B --rule 9999 refused"
+bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 2 ] && ok "B --rule is gone: usage (issue #4790)" || bad "B --rule 9999 accepted"
 
 # --- C: set / get ------------------------------------------------------------------
 : > "$CURL_LOG"
@@ -125,7 +125,7 @@ rm -f "$ANS"
 
 # --- D: dispatch -------------------------------------------------------------------
 : > "$CURL_LOG"; rm -f "$WORK/calls"
-out=$(printf '为什么一直转\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --rule 1 --spawn 2>&1); rc=$?
+out=$(printf '为什么一直转\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = T5 ] && printf '%s\n' "$out" | grep -q 'issues/77' \
   && ok "D a repo task: T<n> first, then the issue's URL" || bad "D repo: rc=$rc [$out]"
 [ "$(head -1 "$WORK/calls")" = "fleet-issue-file.sh --title 修风扇 --body 为什么一直转 --repo o/r --task T5 --spawn" ] \

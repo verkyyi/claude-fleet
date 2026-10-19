@@ -245,9 +245,7 @@ done
 
 [ -n "$LOGIN" ] || usage
 # Separation is not opt-in (issue #4607) and has no way out (issue #4675): the
-# old opt-out is an unknown option now. # compat-1v: 下一批删 — an admin agent
-# older than #4675 reads its CapCredsep off the words --no-credsep and
-# credsep: separated in this file; this line keeps them here one version.
+# old opt-out is an unknown option now.
 # A leading digit is allowed (macOS permits it; `acme` opened on a second
 # machine, issue #2105) — an all-digit name is not: it reads as a uid.
 printf '%s' "$LOGIN" | grep -Eq '^[a-z0-9_][a-z0-9_-]{0,31}$' \

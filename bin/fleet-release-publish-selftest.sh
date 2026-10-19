@@ -24,8 +24,8 @@
 #      key, the SSHSIG with ssh-keygen); a manifest that is not the commit's
 #      bytes is never signed; the key is never on curl's argv; a 428 says the
 #      run has no key.
-#   G. --ref stable-macos (an older caller, issue #4671): there is no Mac lane —
-#      said, exit 0, nothing POSTed; any other --ref but stable is exit 2.
+#   G. --ref (the Mac lane's, issues #4671, #4790) is an unknown option: exit 2,
+#      nothing POSTed.
 #   H. --stage / --commit (issue #3867): a stage is POSTed only to a hub whose /key
 #      says the train signs and only with the key here (else exit 4, nothing sent),
 #      carries no ledger and keeps the 202 in its dir; --commit signs that, one POST
@@ -220,13 +220,9 @@ eq "F: 428 → exit 1" 1 "$RC"; has "F: says the run has no key" "$OUT" "no FLEE
 rm -f "$WORK/code"
 
 # --- G. one release line (issue #4671) ------------------------------------------------------
-# --ref stable-macos (an older caller): said, exit 0, nothing POSTed
 before=$(posts)
 run env FLEET_PUBLISH_TOKEN=x FLEET_RELEASE_SIGN_KEY="$KEY" "$PUB" "$B" --hub "$HUB" --dir "$REPO" --ref stable-macos
-eq "G: exit 0" 0 "$RC"; eq "G: no POST" "$before" "$(posts)"
-has "G: says there is no Mac lane" "$OUT" "no Mac lane"
-run env FLEET_PUBLISH_TOKEN=x "$PUB" "$C" --hub "$HUB" --dir "$REPO" --ref other
-eq "G: --ref takes stable" 2 "$RC"
+eq "G: --ref is an unknown option" 2 "$RC"; eq "G: no POST" "$before" "$(posts)"
 
 # --- H. the stage, then the commit (issue #3867) --------------------------------------------
 mkman 0; echo "$A" > "$WORK/stable"; ST="$WORK/stage"

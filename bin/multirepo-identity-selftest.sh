@@ -208,11 +208,6 @@ b=$(cut -f2 "$(ledger o-b)" 2>/dev/null | tr '\n' ' ')
 eq "ledger: o/b#14 lands in o/b's ledger" "$b" "14 "
 a=$(cut -f2 "$(ledger o-a)" | tr '\n' ' ')
 eq "ledger: ...not in o/a's" "$a" "12 "
-# a snapshot written before #1941 holds bare keys: it must not read as every
-# live window vanishing (compat-1v: 下一批删).
-sd=$(fleet_state_dir "$M"); sed -E 's/^o\/[ab]#//' "$sd/ledgerwatch.snap" > "$sd/x" && mv "$sd/x" "$sd/ledgerwatch.snap"
-out=$(bash "$BIN/fleet-ledger-watch.sh" "$M" 2>&1)
-has "ledger: bare→qualified switch records nothing" "$out" "no session window vanished"
 # one-repo fleet: the same repo-qualified keys — one road (#1941)
 bash "$BIN/fleet-ledger-watch.sh" "$D" >/dev/null 2>&1
 eq "ledger: one-repo snapshot is repo-qualified too" "$(cut -f1 "$(fleet_state_dir "$D")/ledgerwatch.snap" | sort | tr '\n' ' ')" "o/c#12 o/c#14 o/c#20 "

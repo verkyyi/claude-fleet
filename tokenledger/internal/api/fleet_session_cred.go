@@ -54,7 +54,7 @@ import (
 // revocation list (`relay_pub`) and the credproxy resolve answer
 // (`session_pub`); a revocation still lands as the list's `fcp:<id>`. Minted
 // only for a node that asks ({"kind":"fcp-h2"}) and only with the key; renew
-// keeps a pass's kind, and /renew, /verify take both (fcp-h1: # compat-1v).
+// keeps a pass's kind, and /renew, /verify take both.
 // No relay key ⇒ fcp-h1, byte for byte (TestSessionCredH2OffAddsNothing).
 //
 // Routes (all under /v1/fleet/session-cred):

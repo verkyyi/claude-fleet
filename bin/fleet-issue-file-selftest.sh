@@ -60,9 +60,9 @@
 #      issue + 3 comments (sha + link), a repeat sha adds none; closed + red on a
 #      sha containing the fix ⇒ reopened; on an older sha ⇒ only noted; closed by
 #      hand + a newer sha ⇒ reopened.
-#   V. the rule table is gone (issue #4340; #2786 wrote it): --rule accepted and
-#      ignored for one version, no 「按规则 N 派发」 / fleet:rule / 「未注明规则」
-#      line from any pane, the orchestrator's included.
+#   V. the rule table is gone (issue #4340; #2786 wrote it): no 「按规则 N 派发」 /
+#      fleet:rule / 「未注明规则」 line from any pane, the orchestrator's included;
+#      --rule is an unknown flag (exit 2, issue #4790).
 #   W. any pane spawns, a worker's too (issue #4591 lifted #2960's exit 6); a
 #      breakage a worker files WITHOUT --spawn (issue #4337) is ONE issue + ONE
 #      breakage alert + ONE message to its parent (wid: on another machine), no
@@ -788,18 +788,14 @@ run_auto u3 "$FX/runs-green" --title '每日推送没跑成'
 ok "U title hint: long / script-name titles file with one hint line, a short use says nothing"
 
 # --- V. the rule table is gone (issue #4340; #2786 before it) --------------------
-# --rule is accepted and ignored for one version: the filing goes through, its body
-# carries no 「按规则 N 派发」, no fleet:rule marker, no 「未注明规则」 — from the
-# orchestrator's pane or anywhere else; a number no table ever had files the same.
-for args in '--rule 1' '--rule 999' ''; do
-  # shellcheck disable=SC2086
-  FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "形状" --body "要做的事" $args
-  [ "$RC" -eq 0 ] || fail "V an orchestrator filing ($args) should file" "$(cat "$WORK/err")"
-  grep -q '按规则\|fleet:rule\|未注明规则' "$BODY" && fail "V ($args) still writes a rule line" "$(cat "$BODY")"
-done
+# The filing's body carries no 「按规则 N 派发」, no fleet:rule marker, no 「未注明规则」
+# — from the orchestrator's pane or anywhere else; --rule is an unknown flag.
+FAKE_FLEET_ROLE=orchestrator TMUX_PANE=%9 run_fif --title "形状" --body "要做的事"
+[ "$RC" -eq 0 ] || fail "V an orchestrator filing should file" "$(cat "$WORK/err")"
+grep -q '按规则\|fleet:rule\|未注明规则' "$BODY" && fail "V still writes a rule line" "$(cat "$BODY")"
 run_fif --title "别处" --body "y" --rule 2
-[ "$RC" -eq 0 ] && ! grep -q '按规则\|fleet:rule\|未注明规则' "$BODY" || fail "V elsewhere: --rule ignored" "$(cat "$BODY" "$WORK/err")"
-ok "V rules: --rule accepted and ignored; no rule line from any pane (one version)"
+[ "$RC" -eq 2 ] || fail "V --rule should be an unknown flag (exit 2), rc=$RC" "$(cat "$WORK/err")"
+ok "V rules: no rule line from any pane; --rule is gone"
 
 # --- W. any pane spawns, a worker's too (issue #4591 lifted #2960) -----------------
 for who in worker 'worker||0' orchestrator steward home '' ; do

@@ -129,11 +129,10 @@ def multi_login(d, state, runtime, hub, first, s, m, made):
         assert out.strip().splitlines()[-1].startswith('credsep: '), out
         return pwd.getpwnam(name)
 
-    assert json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid'] == 31022, 'legacy not migrated'
-    assert (state / 'linux-tenant.json.bak').is_file() and not (state / 'linux-tenant.json').exists()
+    first_uid = json.loads((state / 'linux-tenants' / (first + '.json')).read_text())['uid']
     login('open', '1234', rc=2)      # fleet-login-new.sh's codes (#3210): 2 bad argument
     a, b = opened('acme'), opened('drill2')
-    assert len({a.pw_uid, b.pw_uid, 31022}) == 3, 'two logins share a number'
+    assert len({a.pw_uid, b.pw_uid, first_uid}) == 3, 'two logins share a number'
     before = {n: (pwd.getpwnam(n).pw_uid, os.stat(pwd.getpwnam(n).pw_dir).st_uid) for n in (first, 'acme', 'drill2')}
     # Another login cannot enter a home.
     denied = subprocess.run(['ls', b.pw_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -377,9 +376,6 @@ def main():
             pass
         else:
             raise AssertionError('root token read followed a symlink')
-        # A volume from before EPIC #3208 C1: the single-login declaration.
-        (state / 'linux-tenant.json').write_text(json.dumps(
-            {'login': login, 'uid': 31022, 'gid': 31022, 'home': str(d / 'homes' / login)}))
         args = argparse.Namespace(login=login, uid=31022, hub='http://127.0.0.1:%d' % hub.server_port,
                                   join_file=str(code), relay='https://relay.example.com')
         try:

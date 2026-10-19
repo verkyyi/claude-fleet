@@ -143,7 +143,6 @@ if [ "$cmd" = dispatch ]; then
       --title) title="${2:-}"; shift ;;
       --body-file) bodyf="${2:-}"; shift ;;
       --repo) repo="${2:-}"; shift ;;
-      --rule) shift ;;   # compat-1v: accepted, ignored — the rule table is gone (issue #4340)
       --spawn) spawn=1 ;;
       --reap) reap="${2:-}"; shift ;;
       --agent)
@@ -261,7 +260,6 @@ case "$cmd" in
         --token) token="${2:-}"; shift ;;
         --via) via="${2:-}"; shift ;;
         --repo) repo="${2:-}"; shift ;;
-        --rule) shift ;;   # compat-1v: accepted, ignored (issue #4340)
         --issue) issue="${2:-}"; shift ;;
         --key) key="${2:-}"; shift ;;
         --worker-id) wid="${2:-}"; shift ;;
