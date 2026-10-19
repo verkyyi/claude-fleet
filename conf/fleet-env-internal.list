@@ -110,6 +110,7 @@ FLEET_LAUNCH_CONTEXT               handoff: supervisor binding inherited by nati
 FLEET_LAUNCH_CREATE                handoff: supervisor-validated native Claude worktree creation intent, never a user override
 FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollback.sh runs (#4663)
 FLEET_TASK_CLOSED_CMD              seam: answers `<T<n>>` instead of fleet_task_control.py closed — 0 closed · 1 open · 3 unknown (fleet_task_closed, fleet-cleanup-idle.py, #4897)
+FLEET_TASK_REBIND_CMD              seam: answers `<T<n>> <sid> [<fleet_id>]` instead of fleet_launch.py rebind — 0 JSON · 3 not bound · 4 unread · 1 refused (fleet_task_rebind_stamp, #4974)
 FLEET_TASK_RECORD                  seam: the task-record script fleet-brief.sh asks `get T<n>` of (#4897, #4898)
 FLEET_TASK_RECOVERY_URL            handoff: pinned hub URL for receipt replay, independent of repo authority mode (#4396)
 FLEET_TASK_RECOVERY_RAW            handoff: recovery calls the original task HTTP adapter without recursion (#4396)
@@ -425,6 +426,7 @@ FLEET_MIGRATE_DETACHED             handoff: marks the --force-self re-exec so it
 FLEET_MIGRATE_EXIT_WAIT            knob: internal pacing/limit, safe in-code default (fleet-migrate.sh)
 FLEET_MIGRATE_FAILOVER_PY          seam: an injectable command/path for tests (fleet-migrate.sh)
 FLEET_MIGRATE_LAUNCH               seam: an injectable command/path for tests (fleet-migrate.sh)
+FLEET_MIGRATE_TASK_CHECK           seam: answers `<socket> <window>` instead of fleet_launch.py transfer-check — rc 0 = the record still names this session (fleet-migrate.sh, #4974)
 FLEET_MIGRATE_SELF_IDLE_WAIT       knob: how long a --force-self move waits for the caller's turn to end (fleet-migrate.sh, 1800)
 FLEET_MOVE_CMD                     seam: the fleet-move.sh fleet-evacuate.sh runs per fleet (default this bin's; #1428)
 FLEET_OFFBOARD_ARCHIVE_DIR         path: offboarding home-archive dir override; --archive-dir is the CLI form (fleet-login-remove.sh)

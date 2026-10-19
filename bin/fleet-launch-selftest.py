@@ -511,6 +511,57 @@ class Transfer(Receipts):
             self.attempt(directory, lost_response=True)
 
 
+class Rebind(Receipts):
+    """claude-fleet#4974: a reopened window is the SAME executor — the record's own
+    binding (its executor + the receipt its last start published), never a claim."""
+    def record(self, **over):
+        t = dict(authority_version=1, id="T1", owner="alice", generation=1, attempt_id="task:T1:g1",
+                 execution_owner=self.context["worker_id"], resolved_agent="codex", state="running",
+                 outcome="", evidence=json.dumps(self.receipt))
+        t.update(over)
+        return t
+
+    def rebind(self, task, alive=False, sid=None, fid=""):
+        calls = []
+        def call(c, m=None):
+            calls.append(m)
+            return task
+        with mock.patch.object(launch, "task_call", side_effect=call), \
+             mock.patch.object(launch, "same_process", return_value=alive):
+            out = launch.rebind("T1", sid or self.receipt["native_session"], fid)
+        self.assertEqual(calls, [None])   # a read; never a claim or a transition
+        return out
+
+    def test_same_session_gets_its_own_binding(self):
+        out = self.rebind(self.record(), fid="33333333-3333-4333-8333-333333333333")
+        self.assertEqual(out["launch"], self.context)
+        self.assertEqual(out["receipt"]["native_session"], self.receipt["native_session"])
+        self.assertEqual(out["fleet_id"], "33333333-3333-4333-8333-333333333333")
+
+    def test_nothing_to_rebind(self):
+        for task in (self.record(outcome="succeeded"), self.record(execution_owner=""),
+                     self.record(evidence="not json"), self.record(evidence=json.dumps(dict(self.receipt, pid=0)))):
+            with self.assertRaises(launch.NotBound):
+                self.rebind(task)
+        with self.assertRaises(launch.NotBound):
+            self.rebind(self.record(), sid="55555555-5555-4555-8555-555555555555")
+
+    def test_unreadable_record_is_unknown_not_refused(self):
+        with mock.patch.object(launch, "task_call", side_effect=ValueError("no hub")):
+            with self.assertRaises(launch.Unread):
+                launch.rebind("T1", self.receipt["native_session"])
+
+    def test_refuses_another_executor_a_live_native_or_another_window(self):
+        for task in (self.record(execution_owner="22222222-2222-4222-8222-222222222222/66666666-6666-4666-8666-666666666666"),
+                     self.record(generation=2), self.record(resolved_agent="claude")):
+            with self.assertRaises(ValueError):
+                self.rebind(task)
+        with self.assertRaisesRegex(ValueError, "still alive"):
+            self.rebind(self.record(), alive=True)
+        with self.assertRaisesRegex(ValueError, "window identity"):
+            self.rebind(self.record(), fid="77777777-7777-4777-8777-777777777777")
+
+
 class NativeInbox(Receipts):
     def test_input_uses_verified_executable_endpoint_and_thread(self):
         spec = importlib.util.spec_from_file_location("codex_session_fixture", Path(__file__).with_name("fleet-codex-session.py"))
