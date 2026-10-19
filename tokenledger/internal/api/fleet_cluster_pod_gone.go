@@ -18,7 +18,7 @@ import (
 // A person's or a test pod (u-<nonce>) lives as long as its Deployment: once
 // that is deleted or scaled to 0, the pod's endpoints stay on the roster as
 // lost, and their fleet rows, starts and leases keep holding a repo switch
-// until somebody retires them by hand (#4830: Arvin's pod, ep_1791893593702723695,
+// until somebody retires them by hand (#4830: one person's pod, ep_1791893593702723695,
 // 83 starts and 447 passes). The cluster already says which pods stand: with
 // every readings message fleet-ops lists every user pod object it sees
 // (ClusterReadings.Listed / Present — any phase, so a pod restarting or being

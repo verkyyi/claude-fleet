@@ -79,7 +79,7 @@ func TestClusterPodGoneRetires(t *testing.T) {
 	epBack := f.node(t, "back", back.Hostname, "fleetu2", f.t0)
 	epHeard := f.node(t, "heard", heard.Hostname, "fleetu3", now.Add(20*time.Minute)) // heard during the watch
 	epOther := f.node(t, "other", other.Hostname, "fleetu4", f.t0)
-	epMini := f.node(t, "mini", "mac-mini.local", "verky", f.t0)
+	epMini := f.node(t, "mini", "mac-mini.local", "op", f.t0)
 
 	// 20 minutes missing, then «back» stands again: its clock is dropped.
 	f.list("ack", nil, now, now.Add(20*time.Minute))
@@ -133,7 +133,7 @@ func TestClusterPodGoneRetires(t *testing.T) {
 func TestClusterPodGoneHandMadeAndGaps(t *testing.T) {
 	f := newPodGoneFixture(t)
 	now := time.Now()
-	ep := f.node(t, "hand", "u-handmade1", "arvin", f.t0)
+	ep := f.node(t, "hand", "u-handmade1", "fleetu9", f.t0)
 
 	// Another cluster lists too: a hand-made pod could be its.
 	for at := now; !at.After(now.Add(40 * time.Minute)); at = at.Add(4 * time.Minute) {
