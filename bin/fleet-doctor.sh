@@ -595,8 +595,8 @@ fi
 # step calls gh for it, so the gh / github rows (and each repo's labels row) speak
 # only when SOME hosted repo is GitHub's — or when nothing is hosted yet (a new
 # login is still told what gh does). Read straight off the confs (doctor is /bin/sh,
-# no fleet-lib): a repo overlay without FLEET_FORGE="none", or an old-layout fleet
-# conf still naming FLEET_REPO, is GitHub's — every repo before #3600.
+# no fleet-lib): a repo overlay without FLEET_FORGE="none" is GitHub's — every repo
+# before #3600.
 _gh_wanted=1
 if [ -d "$conf_dir/fleets" ]; then
   _gh_total=0; _gh_none=0
@@ -604,9 +604,6 @@ if [ -d "$conf_dir/fleets" ]; then
     [ -f "$_ov" ] || continue
     _gh_total=$((_gh_total + 1))
     grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_FORGE="?none"?[[:space:]]*$' "$_ov" && _gh_none=$((_gh_none + 1))
-  done
-  for _ov in "$conf_dir"/fleets/*/conf; do
-    [ -f "$_ov" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?FLEET_REPO=..' "$_ov" && _gh_total=$((_gh_total + 1))
   done
   [ "$_gh_total" -gt 0 ] && [ "$_gh_total" = "$_gh_none" ] && _gh_wanted=0
   unset _ov _gh_total _gh_none
@@ -1576,12 +1573,10 @@ if [ -d "$conf_dir" ]; then
   # The seed repo (issue #1167): `fleet-up.sh --seed` brought the fleet up on a
   # starter repo that only LOOKS — the issue-bridge skips it whatever its
   # switches say. Said once per seeded repo; a fleet without FLEET_SEED says nothing.
-  # compat-1v: 下一批删 (the old layout, below)
-  # The mark lives in the seed's overlay (issue #1937), or — the old layout, read
-  # for one version — in the fleet conf beside its own repo.
+  # The mark lives in the seed's overlay (issue #1937).
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
-    for sd_f in "$cf" "${cf%/conf}/repos"/*.conf; do
+    for sd_f in "${cf%/conf}/repos"/*.conf; do
       [ -f "$sd_f" ] || continue
       [ "$(_conf_val "$sd_f" FLEET_SEED)" = 1 ] || continue
       info seed "$(_conf_val "$sd_f" FLEET_REPO) — 起步仓库，只读: no issue-bridge (FLEET_SEED=1)"
@@ -4195,15 +4190,11 @@ if [ -d "$conf_dir" ]; then
   while IFS= read -r cf; do
     [ -n "$cf" ] || continue
     case "$cf" in */fleets/*/conf) sess=${cf%/conf}; sess=${sess##*/} ;; *) sess=$(basename "$cf" .conf) ;; esac
-    own=$(_norm_repo "$(_conf_val "$cf" FLEET_REPO)")
     seen=' '; rs_n=0; rs_bad=0; rs_list=''
-    # compat-1v: 下一批删
-    # An old-layout conf still names its first repo (read for one version, issue
-    # #1937); a new one names none — every repo is an overlay below.
-    if [ -n "$own" ]; then
-      ov="$conf_dir/fleets/$sess/repos/$(_repo_slug "$own").conf"; [ -f "$ov" ] || ov=''
-      _repo_block "$sess" "$cf" "$own" "$ov" 1
-      seen=" $own "
+    # Every repo is an overlay (issue #1937); a conf that still names one is not
+    # read (#4806) — `fleet-conf.sh migrate` moves it.
+    if [ -n "$(_conf_val "$cf" FLEET_REPO)" ]; then
+      warn repo "$sess: $cf still names FLEET_REPO — the old layout is not read any more; run \`fleet-conf.sh migrate\`"
     fi
     for ov in "$conf_dir/fleets/$sess/repos"/*.conf; do
       [ -f "$ov" ] || continue

@@ -388,20 +388,15 @@ if [ "$NOREPO" != 1 ]; then
     case "$(printf '%s' "$_all" | grep -c .)" in
       1) REPO_ARG=$_all ;;
       # A fleet with no repo at all (issue #1937): every session is a no-repo one.
-      # compat-1v: 下一批删 — a pre-#1937 conf naming only FLEET_MAIN keeps its checkout.
-      0) [ -n "${FLEET_MAIN:-}" ] || NOREPO=1 ;;
+      0) NOREPO=1 ;;
       *) NOREPO=1 ;;
     esac
     unset _all
   fi
   if [ -n "$REPO_ARG" ]; then
-    if [ -n "$(fleet_repos "$SESS")" ]; then
-      _registered=$(fleet_target_repo "$SESS" "$REPO_ARG") \
-        || { refuse "raw: $REPO_ARG is not a uniquely registered repo this fleet hosts"; exit 1; }
-      REPO_ARG=$_registered
-    else
-      REPO_ARG=$(fleet_norm_repo "$REPO_ARG")
-    fi
+    _registered=$(fleet_target_repo "$SESS" "$REPO_ARG") \
+      || { refuse "raw: $REPO_ARG is not a uniquely registered repo this fleet hosts"; exit 1; }
+    REPO_ARG=$_registered
     fleet_load_repo_conf "$SESS" "$REPO_ARG" \
       || { refuse "raw: $REPO_ARG is not a repo this fleet hosts"; exit 1; }
   fi

@@ -11,7 +11,7 @@
 # A fleet hosts zero or more repos, every one put the same way: an overlay at
 # $FLEET_CONF_DIR/fleets/<sess>/repos/<slug>.conf, in repos/.order (see fleet_repos
 # in fleet-lib.sh, issue #1937). An old-layout fleet conf that still names a repo is
-# read for one version; `remove` moves it out first (fleet_conf_repo_migrate).
+# not read (#4806); `remove` moves it out first (fleet_conf_repo_migrate).
 #
 # `add` takes a GitHub owner/name or ANY git address (issue #3600): https / ssh on
 # any host, an ssh-reachable bare repo, file:// or a local path. Its name is the
@@ -445,13 +445,12 @@ conf_val() { ( unset "$2"; . "$1" >/dev/null 2>&1; eval "printf '%s' \"\${$2:-}\
 case "$cmd" in
   list)
     [ -z "$REPO" ] || usage
-    confrepo=$(conf_repo)
     printf 'fleet %s hosts:\n' "$SESS"
     while IFS= read -r r; do
       [ -n "$r" ] || continue
       row=$( fleet_load_repo_conf "$SESS" "$r" >/dev/null 2>&1
              printf '%s\t%s' "${FLEET_MAIN:-?}" "${FLEET_BASE_BRANCH:-?}" )
-      if [ "$r" = "$confrepo" ]; then src='conf (old layout)'; else src=repos/$(fleet_slug "$r").conf; fi
+      src=repos/$(fleet_slug "$r").conf
       printf '  %-36s main=%s  base=%s  [%s]\n' "$r" "${row%%$'\t'*}" "${row#*$'\t'}" "$src"
     done <<EOF
 $(fleet_repos "$SESS")
