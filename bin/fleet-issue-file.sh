@@ -79,6 +79,8 @@
 # caller records an honest FAIL rather than a false success ·
 # 5 --breakage (or auto): the breakage already has an open issue — its URL is on stdout, a
 # 「同一故障」 comment is on it, nothing was filed or spawned (issue #2078).
+# 6 GitHub unreachable (or its rate limit spent): the new GitHub ticket was NOT opened and
+# is not kept for later — one stderr sentence (issue #4844); a hub ticket never sees it.
 #
 # Usage:
 #   fleet-issue-file.sh --title T [--body B] [--label L,...]… [--priority pN] \
@@ -200,6 +202,13 @@ fi
 tk_home=$(fleet_ticket_home "$repo" "$_fs")
 if [ "$tk_home" = hub ]; then tkb=hub; else tkb=gh; fi
 [ "$tk_home" = hub ] || command -v gh >/dev/null 2>&1 || { printf 'fleet-issue-file: gh not on PATH\n' >&2; exit 1; }
+# GitHub not answering (issue #4844, EPIC #4839 拍板 2): a new GitHub ticket is
+# refused at once, never kept for later — one sentence, exit 6.
+gh_down_refuse() {
+  printf 'fleet-issue-file: GitHub 不通，%s 的新单没开 — 稍后再开，或改开入口单（不离线开 GitHub 单）\n' "$repo" >&2
+  exit 6
+}
+[ "$tk_home" = hub ] || ! fleet_gh_down >/dev/null || gh_down_refuse
 
 # --- 1. validate labels against the canonical taxonomy (reject off-taxonomy) ---
 # The allowed set is the FIXED fleet_labels_allowed taxonomy (issue #333), the
@@ -469,6 +478,7 @@ fi
 rm -f "$_bf"
 [ "$_crc" = 0 ] \
   || { [ -z "$url" ] || printf '%s\n' "$url"
+       [ "$_crc" = 6 ] && { [ "$bk_held" = 1 ] && rm -rf "$bk_lock"; rm -f "$_bf"; gh_down_refuse; }
        if [ -n "$task" ]; then printf 'fleet-issue-file: task %s filing/association incomplete; no spawn; retry the same dispatch\n' "$task" >&2
        elif [ "$tk_home" = hub ]; then printf 'fleet-issue-file: the hub would not open the ticket in %s (exit %s)\n' "$repo" "$_crc" >&2
        else printf 'fleet-issue-file: gh issue create failed in %s\n' "$repo" >&2; fi   # no-gh-ok: a message

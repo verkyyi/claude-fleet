@@ -50,8 +50,18 @@
 # (CCQUOTA_FLEET≠1, no token, no answer) ⇒ not registered, the ticket stands all
 # the same; the reason goes to stderr and the exit is 0.
 #
+# GitHub not answering (issue #4844, EPIC #4839 C5): a gh ticket's write — claim ·
+# post · close · state · edit · label · priority · link — that meets the layer's
+# rc 75 (unreachable, or the account's rate limit) is kept in the outbox
+# ($FLEET_CONF_DIR/gh-outbox, bin/fleet_gh_outbox.py) and says 「已记下」 on stderr
+# with exit 0; the issue-bridge tick makes it once GitHub answers, in order, never
+# twice. A replay (FLEET_GH_OUTBOX_REPLAY=1) meeting 75 again exits 75 instead. A
+# NEW GitHub ticket is never kept: `new --filed` exits 6 (GitHub 不通 — later, or a
+# hub ticket instead). GitHub answering ⇒ byte for byte as before.
+#
 # Exit: 0 ok · 1 the backend failed · 2 usage (a bad id) · 3 claim conflict ·
-# 4 the hub is not reachable (no answer, or no node token).
+# 4 the hub is not reachable (no answer, or no node token) · 6 GitHub unreachable,
+# no new ticket opened · 75 a replay GitHub still did not take.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
@@ -122,7 +132,30 @@ print(json.dumps({"id": id_, "backend": "gh", "title": title, "state": "open",
   return 0
 }
 
+# --- writes GitHub could not take (issue #4844) ---------------------------------
+REPLAY="${FLEET_GH_OUTBOX_REPLAY:-0}"
+# tk_w <bucket> <gh args…> — one write through the per-token queue; a rate-limit
+# refusal comes back as 75, like 不通 (fleet_gh_wrun).
+tk_w() { local b="$1"; shift; fleet_gh_wrun "$b" ticket "$@"; }
+# tk_r <bucket> <gh args…> — a read the write depends on, the same way.
+tk_r() { local b="$1"; shift; fleet_gh_run "$b" ticket "$@"; }
+# tk_unavail — rc 0 while GitHub is down or the account's limit holds.
+tk_unavail() { fleet_gh_down >/dev/null || _fleet_gh_limited_any graphql core secondary >/dev/null; }
+# tk_queue <repo> — keep THIS call (its verb and argv as given) for the drain:
+# rc 0 + one stderr line. A replay gets 75 back, never a second copy.
+tk_queue() {
+  local repo="$1" op ses
+  [ "$REPLAY" = 1 ] && return "$FLEET_GH_LIMITED_RC"
+  ses=$(fleet_pane_fmt '#{@fleet_id}' 2>/dev/null) || ses=''
+  op=$(python3 "$BIN/fleet_gh_outbox.py" put --repo "$repo" --verb "$verb" --session "$ses" \
+         -- ${ARGS[@]+"${ARGS[@]}"}) \
+    || { printf 'fleet-ticket: GitHub 不通，这次 %s 也没能记下 — 没写上\n' "$verb" >&2; return 1; }
+  printf 'fleet-ticket: GitHub 不通 — 已记下（%s %s · 出箱 %s），通了按原顺序补交\n' "$verb" "${ARGS[0]:-}" "$op" >&2
+  return 0
+}
+
 verb="${1:-}"; [ -n "$verb" ] || usage; shift
+ARGS=("$@")
 
 case "$verb" in
   parse)
@@ -186,6 +219,9 @@ case "$verb" in
     printf '%s' "$pbody" > "$tmp"
     out=$(fleet_gh_rest_comment "$repo" "$num" "$tmp"); rc=$?
     rm -f "$tmp"
+    if [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ]; then
+      ARGS=("gh:$repo#$num" --body "$pbody"); tk_queue "$repo"; exit $?
+    fi
     [ "$rc" -eq 0 ] || exit "$rc"
     printf 'fleet-comment: GraphQL rate-limited — posted via REST\n' >&2
     fleet_gh_log "fallback-ok op=comment repo=$repo issue=$num"
@@ -198,7 +234,9 @@ case "$verb" in
     num="${p#*	}"; repo="${p%%	*}"
     fleet_gh_wrun graphql comment issue close "$num" --repo "$repo"; rc=$?
     [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || exit "$rc"
-    fleet_gh_rest_issue_close "$repo" "$num" >/dev/null || exit $?
+    fleet_gh_rest_issue_close "$repo" "$num" >/dev/null; rc=$?
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$repo"; exit $?; }
+    [ "$rc" -eq 0 ] || exit "$rc"
     printf 'fleet-comment: GraphQL rate-limited — closed #%s via REST\n' "$num" >&2
     fleet_gh_log "fallback-ok op=close repo=$repo issue=$num"
     exit 0 ;;
@@ -218,11 +256,12 @@ case "$verb" in
     done
     case "$reason" in ''|completed|not_planned) ;; *) die "state: --reason is completed or not_planned" 2 ;; esac
     case "$want" in
-      open)   fleet_gh_write issue reopen "${p#*	}" --repo "${p%%	*}" >/dev/null || die "could not reopen ${1:-the ticket}" ;;
-      closed) fleet_gh_write issue close "${p#*	}" --repo "${p%%	*}" ${reason:+--reason "${reason/_/ }"} >/dev/null \
-                || die "could not close the ticket" ;;
+      open)   tk_w graphql issue reopen "${p#*	}" --repo "${p%%	*}" >/dev/null; rc=$? ;;
+      closed) tk_w graphql issue close "${p#*	}" --repo "${p%%	*}" ${reason:+--reason "${reason/_/ }"} >/dev/null; rc=$? ;;
       *) die "state: say open or closed" 2 ;;
     esac
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "${p%%	*}" || exit $?; rc=0; }
+    [ "$rc" -eq 0 ] || { [ "$want" = open ] && die "could not reopen ${ARGS[0]:-the ticket}"; die "could not close the ticket"; }
     printf '%s\n' "$want" ;;
 
   edit)
@@ -245,10 +284,14 @@ case "$verb" in
       [ -n "$ebody" ] || die "edit: say --body or --body-file" 2
       efile=$(mktemp "${TMPDIR:-/tmp}/fleet-ticket-edit.XXXXXX") || die "edit: no temp file"
       printf '%s\n' "$ebody" > "$efile"
-      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
+      tk_w graphql issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
       rm -f "$efile"
     else
-      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
+      tk_w graphql issue edit "${p#*	}" --repo "${p%%	*}" --body-file "$efile" >/dev/null; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { ebody=$(cat "$efile"; printf x); ebody=${ebody%x}; ebody=${ebody%$'\n'}; }
+    fi
+    if [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ]; then
+      ARGS=("gh:${p%%	*}#${p#*	}" --body "$ebody"); tk_queue "${p%%	*}" || exit $?; rc=0
     fi
     [ "$rc" = 0 ] || die "could not edit the ticket"
     printf 'edited\n' ;;
@@ -335,8 +378,12 @@ case "$verb" in
           *) die "new --filed: unknown argument '$1'" 2 ;;
         esac
       done
-      _FLEET_GH_WRITE_ONCE=$write_once fleet_gh_write issue create ${cargs[@]+"${cargs[@]}"}
-      exit $? ;;
+      # GitHub not answering ⇒ no ticket is opened, and none is kept for later
+      # (issue #4844, EPIC #4839 拍板 2): exit 6, the filer says it in one line.
+      fleet_gh_down >/dev/null && exit 6
+      _FLEET_GH_WRITE_ONCE=$write_once fleet_gh_write issue create ${cargs[@]+"${cargs[@]}"}; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && exit 6
+      exit "$rc" ;;
     esac
     repo=''; title=''; tbody=''; origin=''; label=desk
     while [ "$#" -gt 0 ]; do
@@ -393,11 +440,25 @@ case "$verb" in
     done
     num="${p#*	}"; repo="${p%%	*}"
     if [ "$release" = 1 ]; then
-      fleet_gh_write issue edit "$num" --repo "$repo" --remove-assignee @me >/dev/null || die "could not release the ticket"
+      tk_w graphql issue edit "$num" --repo "$repo" --remove-assignee @me >/dev/null; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$repo" || exit $?; rc=0; }
+      [ "$rc" -eq 0 ] || die "could not release the ticket"
       printf 'released\n'; exit 0
     fi
-    me=$(gh api user -q .login 2>/dev/null) || die "claim: gh cannot say who this login is"
-    holders=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$repo" --json assignees --max-age 0 2>/dev/null \
+    # GitHub not answering: the hub lease is the claim (#4390), the assignee only
+    # its mirror — kept for the drain, which drops it if the lease moved on.
+    if [ "$REPLAY" != 1 ] && fleet_gh_down >/dev/null; then
+      tk_queue "$repo" || exit $?; printf 'claimed\t@me\n'; exit 0
+    fi
+    me=$(tk_r core api user -q .login 2>/dev/null); rc=$?
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$repo" || exit $?; printf 'claimed\t@me\n'; exit 0; }
+    [ "$rc" -eq 0 ] && [ -n "$me" ] || die "claim: gh cannot say who this login is"
+    hj=$(bash "$BIN/fleet-gh.sh" issue view "$num" --repo "$repo" --json assignees --max-age 0 2>/dev/null); rc=$?
+    # fleet-gh.sh says 1 for «GitHub did not answer» too: ask the layer which it was
+    if [ "$rc" -ne 0 ] && { [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] || tk_unavail; }; then
+      tk_queue "$repo" || exit $?; printf 'claimed\t@me\n'; exit 0
+    fi
+    holders=$(printf '%s' "$hj" \
                 | python3 -c 'import json,sys; print(",".join(a.get("login","") for a in (json.load(sys.stdin).get("assignees") or [])))' 2>/dev/null) \
       || die "claim: could not read the ticket"
     case ",$holders," in
@@ -405,7 +466,9 @@ case "$verb" in
       *) printf 'fleet-ticket: claimed by %s\n' "$holders" >&2; exit 3 ;;
     esac
     case ",$holders," in *",$me,"*) ;; *)
-      fleet_gh_write issue edit "$num" --repo "$repo" --add-assignee @me >/dev/null || die "could not claim the ticket" ;;
+      tk_w graphql issue edit "$num" --repo "$repo" --add-assignee @me >/dev/null; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$repo" || exit $?; rc=0; }
+      [ "$rc" -eq 0 ] || die "could not claim the ticket" ;;
     esac
     printf 'claimed\t%s\n' "$me" ;;
 
@@ -418,20 +481,26 @@ case "$verb" in
     shift 2
     ls=$(IFS=,; printf '%s' "$*")
     if [ "$op" = add ]; then fl=--add-label; else fl=--remove-label; fi
-    fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" "$fl" "$ls" >/dev/null || die "could not change the labels"
-    gh issue view "${p#*	}" --repo "${p%%	*}" --json labels -q '[.labels[].name] | join(",")' ;;
+    tk_w graphql issue edit "${p#*	}" --repo "${p%%	*}" "$fl" "$ls" >/dev/null; rc=$?
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "${p%%	*}"; exit $?; }
+    [ "$rc" -eq 0 ] || die "could not change the labels"
+    fleet_gh issue view "${p#*	}" --repo "${p%%	*}" --json labels -q '[.labels[].name] | join(",")' ;;
 
   priority)
     tid="${1:-}"; want="${2:-}"
     p=$(ticket_parse "$tid") || exit 2
     case "$want" in p0|p1|p2|p3|none) ;; *) die "priority: say p0|p1|p2|p3|none" 2 ;; esac
     [ "$(ticket_backend "$tid")" = hub ] && { hub priority "$tid" "$want"; exit $?; }
-    cur=$(gh issue view "${p#*	}" --repo "${p%%	*}" --json labels -q '.labels[].name' 2>/dev/null | grep '^priority:' | paste -sd, -) || cur=''
+    lv=$(tk_r graphql issue view "${p#*	}" --repo "${p%%	*}" --json labels -q '.labels[].name' 2>/dev/null); rc=$?
+    [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "${p%%	*}" || exit $?; printf '%s\n' "$want"; exit 0; }
+    cur=$(printf '%s\n' "$lv" | grep '^priority:' | paste -sd, -) || cur=''
     pargs=()
     [ -n "$cur" ] && pargs+=(--remove-label "$cur")
     [ "$want" != none ] && pargs+=(--add-label "priority:$want")
     if [ "${#pargs[@]}" -gt 0 ]; then
-      fleet_gh_write issue edit "${p#*	}" --repo "${p%%	*}" ${pargs[@]+"${pargs[@]}"} >/dev/null || die "could not set the priority"
+      tk_w graphql issue edit "${p#*	}" --repo "${p%%	*}" ${pargs[@]+"${pargs[@]}"} >/dev/null; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "${p%%	*}" || exit $?; rc=0; }
+      [ "$rc" -eq 0 ] || die "could not set the priority"
     fi
     printf '%s\n' "$want" ;;
 
@@ -445,18 +514,22 @@ case "$verb" in
     [ "$(ticket_backend "$pid")" = hub ] && { hub link "$@"; exit $?; }
     [ "$(ticket_backend "$cid")" = gh ] || die "link: a GitHub ticket's children are GitHub tickets" 2
     cr="${cp%%	*}"
-    child_id=$(gh api "repos/${cr%%/*}/${cr#*/}/issues/${cp#*	}" -q '.id' 2>/dev/null)
-    [ -n "$child_id" ] || die "link: could not read $cid"
     pr="${pp%%	*}"
-    if [ "$rm_" = 1 ]; then
-      fleet_gh_write api --method DELETE "repos/${pr%%/*}/${pr#*/}/issues/${pp#*	}/sub_issue" -F sub_issue_id="$child_id" >/dev/null 2>&1 \
-        || die "could not take $cid off $pid"
-      printf 'unlinked\n'
+    child_id=$(tk_r core api "repos/${cr%%/*}/${cr#*/}/issues/${cp#*	}" -q '.id' 2>/dev/null); rc=$?
+    if [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ]; then
+      tk_queue "$pr" || exit $?; rc=0
+    elif [ -z "$child_id" ]; then
+      die "link: could not read $cid"
+    elif [ "$rm_" = 1 ]; then
+      tk_w core api --method DELETE "repos/${pr%%/*}/${pr#*/}/issues/${pp#*	}/sub_issue" -F sub_issue_id="$child_id" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$pr" || exit $?; rc=0; }
+      [ "$rc" -eq 0 ] || die "could not take $cid off $pid"
     else
-      fleet_gh_write api --method POST "repos/${pr%%/*}/${pr#*/}/issues/${pp#*	}/sub_issues" -F sub_issue_id="$child_id" >/dev/null 2>&1 \
-        || die "could not hang $cid on $pid"
-      printf 'linked\n'
-    fi ;;
+      tk_w core api --method POST "repos/${pr%%/*}/${pr#*/}/issues/${pp#*	}/sub_issues" -F sub_issue_id="$child_id" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && { tk_queue "$pr" || exit $?; rc=0; }
+      [ "$rc" -eq 0 ] || die "could not hang $cid on $pid"
+    fi
+    if [ "$rm_" = 1 ]; then printf 'unlinked\n'; else printf 'linked\n'; fi ;;
 
   milestone)
     # A GitHub milestone, created when missing (the filer's default milestone,
