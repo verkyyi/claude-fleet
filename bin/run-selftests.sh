@@ -76,6 +76,13 @@
 #               no parts; the full-suite fallback lists every F. A PR workflow that
 #               runs its own entry scripts asks it whether this change is theirs
 #               (bin/ci-plan.sh).
+#   --exact     (with --changed — issue #4794) diff from B itself, not from its merge
+#               base with HEAD: B may be any commit or TREE, even one off HEAD's
+#               history (a PR's merge tree the train reuses — bin/fleet-train-reuse.sh).
+#   --proven F  (with --changed; the RELEASE TRAIN only — issue #4794) skip a selected
+#               test F names (lines `<test><TAB><why>`, bin/fleet-train-reuse.sh): it
+#               passed on a PR's merge tree this change does not touch it from. Prints
+#               `REUSED <test> ← <why>`; before the deal, so the shards still partition.
 #   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
 #               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
 #               reader) unless this change touches it; prints `QUARANTINED <test> …`.
@@ -260,7 +267,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky='' solo=0 list_only=0 among=''
+retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven=''
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -286,6 +293,10 @@ while [ "$#" -gt 0 ]; do
     --shard=*) shard_spec=${1#--shard=}; shift ;;
     --plan)  plan=1; shift; continue ;;
     --list-only) list_only=1; shift; continue ;;
+    --exact) exact=1; shift; continue ;;
+    --proven) [ "$#" -ge 2 ] && [ -f "$2" ] \
+                || { echo "run-selftests: --proven needs a file of test names" >&2; exit 2; }
+              proven=$(abspath "$2"); shift 2; continue ;;
     --among) [ "$#" -ge 2 ] && [ -n "$2" ] \
                || { echo "run-selftests: --among needs a list of files" >&2; exit 2; }
              among=$2; shift 2; continue ;;
@@ -384,6 +395,9 @@ hunk_ranges() {
 if [ "$list_only" = 1 ] && [ -z "$changed_base" ]; then
   echo "run-selftests: --list-only needs --changed <base> (it lists what a change selects)" >&2; exit 2
 fi
+if [ -n "$proven" ] || [ "$exact" = 1 ]; then
+  [ -n "$changed_base" ] || { echo "run-selftests: --exact / --proven need --changed <base>" >&2; exit 2; }
+fi
 if [ -n "$among" ] && { [ -z "$changed_base" ] || [ "$list_only" != 1 ]; }; then
   echo "run-selftests: --among needs --changed <base> --list-only (it only answers which files a change is related to)" >&2; exit 2
 fi
@@ -400,9 +414,13 @@ if [ -n "$changed_base" ]; then
     || { echo "run-selftests: --changed picks the tests itself — drop the test names" >&2; exit 2; }
   repo_dir=$(cd .. && pwd)
   full_reason=''
-  if ! mb=$(git -C "$repo_dir" merge-base "$changed_base" HEAD 2>/dev/null) || [ -z "$mb" ]; then
+  if [ "$exact" = 1 ]; then
+    mb=$(git -C "$repo_dir" rev-parse --verify -q "$changed_base^{tree}" 2>/dev/null) \
+      || { mb=''; full_reason="base '$changed_base' does not resolve to a tree"; }
+  elif ! mb=$(git -C "$repo_dir" merge-base "$changed_base" HEAD 2>/dev/null) || [ -z "$mb" ]; then
     full_reason="base '$changed_base' does not resolve to a commit with a merge base"
-  else
+  fi
+  if [ -z "$full_reason" ]; then
     changed_files=$(git -C "$repo_dir" diff --no-renames --name-only "$mb" HEAD 2>/dev/null) \
       || full_reason="git diff $mb..HEAD failed"
   fi
@@ -562,6 +580,23 @@ EOF
     # shellcheck disable=SC2086  # intentional: test names carry no whitespace
     set -- $keep
     [ "$#" -gt 0 ] || { echo 'run-selftests: every selected test is quarantined — nothing to run'; exit 0; }
+  fi
+fi
+# THE TRAIN'S REUSE (issue #4794): a test that passed on a PR's merge tree, which
+# this change does not touch from there (bin/fleet-train-reuse.sh decided it with
+# this same selector, --exact), is not run again. Before the deal, like the above.
+if [ -n "$proven" ]; then
+  keep=''
+  for t in "$@"; do
+    p_row=$(awk -F '\t' -v t="$t" '$1 == t { print; exit }' "$proven")
+    if [ -z "$p_row" ]; then keep="$keep $t"; continue; fi
+    printf 'REUSED %s ← %s\n' "$t" "$(printf '%s' "$p_row" | cut -f2-)"
+  done
+  # shellcheck disable=SC2086  # intentional: test names carry no whitespace
+  set -- $keep
+  if [ "$#" -eq 0 ]; then
+    [ "$plan" = 1 ] && { echo "plan tests=0 total=0 shards=$shard_n heaviest=0"; exit 0; }
+    echo 'run-selftests: every selected test passed on a PR already — nothing to run'; exit 0
   fi
 fi
 q_prev_names=''

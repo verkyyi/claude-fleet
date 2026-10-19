@@ -1,7 +1,7 @@
 #!/bin/bash
 # fleet-train-plan.sh --base <rev> | --full [--dir <repo>] [--prefix <name>] [--durations <table>]
 #                     [--scale <x>] [--shards <N> | --min <N> --max <N> --target <s>]
-#                     [--factor <x>] [--floor <s>] [--slots <S>]
+#                     [--factor <x>] [--floor <s>] [--slots <S>] [--proven <file>]
 #   — how wide one release train's test half runs, and how long a shard may take
 #   (issue #3241, EPIC #3139 C9).
 #
@@ -42,13 +42,16 @@
 # shard of its own (run-selftests.sh --solo 75). One attempt's floor is 150 s
 # instead of 480. Also prints <prefix>_slots and <prefix>_solo_secs (75). Without
 # --slots every line is byte for byte as before.
+# --proven <file> — the tests the train reuses from a PR (issue #4794,
+# bin/fleet-train-reuse.sh): priced out of the selection, as the shards will skip
+# them (run-selftests.sh --proven). An empty file prices as before.
 # --full — price the WHOLE suite instead of a --changed selection (the nightly,
 # .github/workflows/selftests-nightly.yml, issue #3871): the same widths and bounds.
 # FLEET_TRAIN_PLAN_CMD replaces `bash bin/run-selftests.sh` (the drill's seam).
 set -uo pipefail
 
 dir=. base='' prefix=plan dur='' scale=1 fixed='' min=12 max=20 target=360 factor=1.5 floor=480
-slots='' solo='' full=0
+slots='' solo='' full=0 proven=''
 # the Shenzhen pool (issue #3865): 75 s a shard, ≤ 44 wide, a node's 180 s to grow
 ACK_TARGET=75 ACK_CAP=44 ACK_GROW=180 ACK_FLOOR=150
 while [ "$#" -gt 0 ]; do
@@ -66,10 +69,15 @@ while [ "$#" -gt 0 ]; do
     --factor) factor=$2; shift 2 ;;
     --floor) floor=$2; shift 2 ;;
     --slots) slots=$2; shift 2 ;;
-    -h|--help) sed -n '2,44p' "$0"; exit 0 ;;
+    --proven) proven=$2; shift 2 ;;
+    -h|--help) sed -n '2,47p' "$0"; exit 0 ;;
     *) echo "fleet-train-plan: unknown argument '$1'" >&2; exit 2 ;;
   esac
 done
+# a relative --proven is the caller's, and plan_line runs in --dir
+case "$proven" in ''|/*) ;; *) proven="$(pwd)/$proven" ;; esac
+[ -z "$proven" ] || [ -s "$proven" ] || proven=''
+[ "$full" = 0 ] || proven=''
 [ -n "$base" ] || [ "$full" = 1 ] || { echo "fleet-train-plan: --base <rev> (or --full) is required" >&2; exit 2; }
 # the selection: what changed since <base>, or every test
 sel='--changed'; [ "$full" = 1 ] && sel='' && base=''
@@ -88,7 +96,7 @@ plan_line() {
   if [ -n "${FLEET_TRAIN_PLAN_CMD:-}" ]; then cmd=$FLEET_TRAIN_PLAN_CMD
   else cmd="bash bin/run-selftests.sh"; fi
   # shellcheck disable=SC2086  # $cmd is a command and its arguments
-  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan ${sel:+$sel "$base"} --shard "1/$1" ${dur:+--durations "$dur"} ${solo:+--solo "$solo"} 2>/dev/null) \
+  (cd "$dir" && FLEET_HEAVY=0 $cmd --plan ${sel:+$sel "$base"} --shard "1/$1" ${dur:+--durations "$dur"} ${solo:+--solo "$solo"} ${proven:+--proven "$proven"} 2>/dev/null) \
     | grep '^plan ' | tail -1
 }
 field() { printf '%s\n' "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }

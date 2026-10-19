@@ -268,7 +268,12 @@ jobs:
       (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read         # the PR runs' selftests-selection records (issue #4794)
+      pull-requests: read   # each merge's PR head
     outputs:
+      proven: ${{ steps.reuse.outputs.proven }}
       linux_shards: ${{ steps.plan.outputs.linux_shards }}
       linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
       linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
@@ -282,6 +287,21 @@ jobs:
         with:
           ref: ${{ needs.board.outputs.train_sha }}
           fetch-depth: 0
+      - name: fleet-train-reuse.sh
+        # The tests the merges' own PRs already ran green on a tree this train does
+        # not touch them from (issue #4794): priced out here, skipped by the shards.
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STABLE: ${{ needs.board.outputs.stable_sha }}
+        run: |
+          bash bin/fleet-train-reuse.sh --repo "$GITHUB_REPOSITORY" --stable "$STABLE" --out proven.txt 2> reuse.err || : > proven.txt
+          cat reuse.err
+          { echo 'proven<<FLEET_TR_EOF'; cat proven.txt; echo 'FLEET_TR_EOF'; } >> "$GITHUB_OUTPUT"
+          {
+            echo "### 复用 PR 的结果：$(awk 'END { print NR }' proven.txt) 个测试不再重跑（#4794）"
+            echo '```'; cat reuse.err; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: fleet-train-plan.sh
         id: plan
         env:
@@ -293,7 +313,7 @@ jobs:
             echo "| 段 | 选中 | 宽 | 最重一片 | 每次上限 | 步骤 |"
             echo "|---|---|---|---|---|---|"
           } >> "$GITHUB_STEP_SUMMARY"
-          bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux ${SLOTS:+--slots "$SLOTS"}
+          bash bin/fleet-train-plan.sh --base "$STABLE" --prefix linux ${SLOTS:+--slots "$SLOTS"} --proven proven.txt
 
   linux-pick:
     # The Shenzhen cluster or GitHub (issue #3864): only when FLEET_TRAIN_RUNNER
@@ -357,6 +377,7 @@ jobs:
       solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      proven: ${{ needs.plan.outputs.proven }}
       drill_red: ${{ inputs.drill_red || '' }}
       retry_red: '1'
       drill_flaky: ${{ inputs.drill_flaky || '' }}
@@ -411,6 +432,7 @@ jobs:
       solo_secs: ${{ needs.plan.outputs.linux_solo_secs }}
       quarantine: ${{ needs.quarantine.outputs.active }}
       prev_fails: ${{ needs.quarantine.outputs.prev_fails }}
+      proven: ${{ needs.plan.outputs.proven }}
       drill_red: ${{ inputs.drill_red || '' }}
       retry_red: '1'
       drill_flaky: ${{ inputs.drill_flaky || '' }}
