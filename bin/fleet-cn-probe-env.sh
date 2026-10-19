@@ -51,7 +51,11 @@ KUBECTL=${FLEET_CN_PROBE_KUBECTL:-kubectl}
 NS=${FLEET_CN_PROBE_POD_NS:-fleet-workers}
 MANIFEST=${FLEET_CN_PROBE_POD_MANIFEST:-}
 WAIT=${FLEET_CN_PROBE_ENSURE_WAIT:-300}
-GH=${FLEET_CN_PROBE_GH:-gh}
+# shellcheck source=fleet-gh-lib.sh
+. "$BIN/fleet-gh-lib.sh"
+# GitHub through the layer (issue #4842): fleet_gh — timed, «不通» shared; the
+# test's fake gh (FLEET_CN_PROBE_GH) rides it as FLEET_GH_BIN
+FLEET_GH_BIN=${FLEET_CN_PROBE_GH:-${FLEET_GH_BIN:-gh}}
 DRILL=${FLEET_CN_PROBE_DRILL_CMD:-bash $BIN/fleet-drill.sh}
 POLICY=${FLEET_CN_PROBE_POLICY_CMD:-bash $BIN/fleet-cred-policy.sh}
 
@@ -163,7 +167,7 @@ pod_part() {
   local want have ctrs c
   command -v "$KUBECTL" >/dev/null 2>&1 || { say "pod skip no $KUBECTL here"; return; }
   [ -n "$stable" ] && [ -n "$repo" ] || { say "pod skip no stable to follow (--repo / --stable)"; return; }
-  want=$($GH api "repos/$repo/commits/$stable/statuses?per_page=100" \
+  want=$(fleet_gh api "repos/$repo/commits/$stable/statuses?per_page=100" \
            --jq '[.[] | select(.context == "node image" and .state == "success")][0].description // ""' 2>/dev/null)
   case "$want" in *@sha256:[0-9a-f]*) ;; *) say "pod skip stable ${stable:0:7} carries no node image status (a train before #4180) — left as it is"; return ;; esac
   have=$("$KUBECTL" -n "$NS" get deploy "$MACHINE" -o jsonpath='{range .spec.template.spec.initContainers[*]}{.name}={.image}{"\n"}{end}{range .spec.template.spec.containers[*]}{.name}={.image}{"\n"}{end}' 2>/dev/null)

@@ -10,6 +10,7 @@ import time
 
 from fleet_reap_notice import clear, notice, option, reap_state, tmux
 import fleet_reap_policy
+import fleet_gh
 
 
 def retired_dir():
@@ -28,11 +29,17 @@ class RateLimited(Exception):
 
 
 def run(*args, cwd=None):
+    gh = args[:3] == tuple(fleet_gh.argv())   # through the GitHub layer (issue #4842)
     try:
-        return subprocess.check_output(args, cwd=cwd, text=True,
-                                       stderr=subprocess.PIPE, timeout=15).strip()
+        return subprocess.check_output(args, cwd=cwd, text=True, stderr=subprocess.PIPE,
+                                       timeout=fleet_gh.TIMEOUT if gh else 15).strip()
     except subprocess.CalledProcessError as exc:
-        if args[0] == "gh" and re.search(r"rate.?limit|HTTP 429", exc.stderr, re.I):
+        if gh and exc.returncode == fleet_gh.DOWN:
+            # the layer's «not now»: GitHub unreachable (its own clock ran out, or
+            # the shared gh-down marker is open) — the same stop as a limit
+            said = (exc.stderr.strip().splitlines() or [""])[-1]
+            raise RateLimited("GitHub unavailable; stopping this tick" + (": " + said[:200] if said else "")) from exc
+        if gh and re.search(r"rate.?limit|HTTP 429", exc.stderr, re.I):
             # gh's own words (issue #4822): a secondary limit and an exhausted
             # quota read alike here, and only the line says which it was.
             said = next((l.strip() for l in exc.stderr.splitlines() if l.strip()), "")
@@ -486,8 +493,8 @@ class Cleaner:
         branch's work is on the base (fleet_land_check), else none; gh is never run."""
         if self.args.forge == "none":
             return [{"state": "MERGED"}] if self.landed(head or branch) else []
-        return json.loads(run("gh", "pr", "list", "--repo", self.args.repo, "--head", branch,
-                              "--state", "all", "--limit", "100", "--json", "state"))
+        return json.loads(run(*fleet_gh.argv("pr", "list", "--repo", self.args.repo, "--head", branch,
+                                             "--state", "all", "--limit", "100", "--json", "state")))
 
     def landed(self, tip, cwd=None):
         """git's word on whether <tip>'s work is on origin/<base> (fleet_land_check:
