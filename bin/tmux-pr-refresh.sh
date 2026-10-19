@@ -63,6 +63,7 @@ fi
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
+command -v fleet_gh_ready >/dev/null 2>&1 || fleet_gh_ready() { return 0; }
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 G="$C/global"                       # machine-wide caches (git_<key>) — issue #181
 # Sweep this run's PID-unique temps on exit (across the fleets/<slug>/ subdirs now;
@@ -244,6 +245,9 @@ while [ "$i" -lt "${#Q_REPO[@]}" ]; do
     continue
   fi
   command -v gh >/dev/null 2>&1 || break
+  # GitHub unreachable (issue #4841): skip the fetch, keep the last prmap — no
+  # tick spent hanging on it. fleet_gh_ready probes once a minute meanwhile.
+  fleet_gh_ready || continue
   FD=$(fleet_cache_dir "$sg")          # fleets/<slug>/ (issue #181)
   pts=0; [ -f "$FD/prmap.ts" ] && IFS= read -r pts < "$FD/prmap.ts" 2>/dev/null   # no `cat` (#888)
   case "$pts" in ''|*[!0-9]*) pts=0 ;; esac

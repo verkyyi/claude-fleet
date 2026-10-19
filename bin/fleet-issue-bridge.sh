@@ -117,6 +117,7 @@ case " $* " in *' --poll '*) [ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/flee
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
 command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
+command -v fleet_gh_ready >/dev/null 2>&1 || fleet_gh_ready() { return 0; }
 
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 STATE="${FLEET_ISSUE_BRIDGE_STATE_DIR:-$HOME/.config/claude-fleet/issue-bridge}"
@@ -793,6 +794,10 @@ poll_worker_channel() {
     rows=$(printf '%s\n' "$rows" | sed '1{/^#max /d;}')
   elif ! command -v gh >/dev/null 2>&1; then
     log "$slug: gh not on PATH — nothing to poll"; return 0
+  # GitHub unreachable (issue #4841): the watermark is held, the next tick after
+  # it answers picks up what this one missed.
+  elif ! fleet_gh_ready; then
+    log "$slug: GitHub 不通 — skip this tick"; return 0
   # Shared (issue #3529): a trusted login's fresh listing that began at or before
   # OUR watermark covers everything we have not seen (the seen-set skips the
   # overlap). Else list as before — and publish it.

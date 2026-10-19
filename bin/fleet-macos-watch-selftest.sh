@@ -33,6 +33,10 @@
 #                     ago ⇒ ONE more alert «every Mac … previous version»; the next
 #                     tick in the same streak says nothing; green forgets it. The
 #                     default workflow is selftests-macos.yml (#4663: mac-follow holds nothing)
+#   M. GitHub down    (issue #4841, fleet_gh_ready in bin/fleet-gh-lib.sh) the gh-down
+#                     marker open ⇒ exit 0, nothing read / filed / stamped; a previous
+#                     watch still running (its lock's pid alive) ⇒ this one leaves; a
+#                     dead holder's lock is taken over
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -239,5 +243,24 @@ eq "L: another red test set ⇒ its own key, sorted, deduped" "macos-b-selftest_
 : > "$WORK/log"; reset; red_runs; run --now
 eq "L: no test read ⇒ keyed on the red shards" "macos-macOS-shard-2" "$(key)"
 mv "$WORK/log.keep" "$WORK/log"
+
+# --- M. GitHub down / one watch at a time (#4841) ---------------------------------
+reset; red_runs
+OUT=$(env PATH="$WORK/shim:$PATH" FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_GH_FAKE_DOWN=1 \
+        FLEET_MACOS_FILE_CMD="$WORK/filer" FLEET_MACOS_ALERT_CMD="$WORK/alert" bash "$W" --repo o/r --now 2>&1); RC=$?
+eq "M: GitHub down ⇒ exit 0" 0 "$RC"
+contains "M: says GitHub 不通" "$OUT" "GitHub 不通"
+eq "M: nothing filed while down" "" "$(filed)"
+eq "M: no stamp while down (the first tick after it answers reads)" no "$([ -f "$WORK/conf/global/macos-watch/o-r.stamp" ] && echo yes || echo no)"
+reset; red_runs; mkdir -p "$WORK/conf/global/macos-watch/o-r.lock"; echo "$$" > "$WORK/conf/global/macos-watch/o-r.lock/pid"
+run --now
+eq "M: a live previous watch ⇒ exit 0" 0 "$RC"
+contains "M: says the previous one still runs" "$OUT" "still running"
+eq "M: nothing filed beside a running watch" "" "$(filed)"
+eq "M: the holder's lock is left alone" "$$" "$(cat "$WORK/conf/global/macos-watch/o-r.lock/pid")"
+echo 999999 > "$WORK/conf/global/macos-watch/o-r.lock/pid"
+run --now
+contains "M: a dead holder's lock is taken over ⇒ the watch runs" "$(filed)" "--breakage-key"
+eq "M: its own lock is gone at exit" no "$([ -d "$WORK/conf/global/macos-watch/o-r.lock" ] && echo yes || echo no)"
 
 printf 'fleet-macos-watch-selftest OK (%d checks)\n' "$CHECKS"

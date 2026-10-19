@@ -135,18 +135,59 @@ class Refused(ToolFault):
     """Arguments that do not fit: said with the reason, nothing ran."""
 
 
+def _descendants(pid):
+    """Every live descendant of pid (one `ps` read), deepest last."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True,
+                             text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    kids = {}
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
+            kids.setdefault(int(f[1]), []).append(int(f[0]))
+    seen, todo = [], [pid]
+    while todo:
+        for c in kids.get(todo.pop(), []):
+            if c not in seen:
+                seen.append(c)
+                todo.append(c)
+    return seen
+
+
+def _kill_tree(proc):
+    """Issue #4841: subprocess.run's timeout killed only the direct child, so a
+    script's gh (and gh's own children) lived on past the tool's answer. Kill the
+    whole tree. Not a new session: the scripts keep the pane's /dev/tty."""
+    for pid in _descendants(proc.pid) + [proc.pid]:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+
+
 def run(argv, *, input_text=None, check=True, timeout=None, env=None):
     try:
         # errors="replace" (issue #3129): a script's stderr can carry another
         # program's raw bytes — macOS awk echoes an illegal byte sequence it met
         # (a CJK char cut mid-sequence) — and a strict decode turned that into
         # the tool's own failure, whatever the script did.
-        result = subprocess.run(argv, input=input_text, text=True, errors="replace",
-                                capture_output=True, timeout=timeout, env=env)
-    except subprocess.TimeoutExpired:
-        raise ToolFault("%s did not answer within %ss" % (Path(argv[0]).name, timeout))
+        proc = subprocess.Popen(argv, stdin=None if input_text is None else subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, errors="replace", env=env)
     except OSError as exc:
         raise ToolFault("%s could not start: %s" % (argv[0], exc))
+    try:
+        out, err = proc.communicate(input_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        raise ToolFault("%s did not answer within %ss" % (Path(argv[0]).name, timeout))
+    result = subprocess.CompletedProcess(argv, proc.returncode, out, err)
     if check and result.returncode != 0:
         msg = (result.stderr or result.stdout or "command failed").strip().replace("\n", " ")
         raise ToolFault(msg)

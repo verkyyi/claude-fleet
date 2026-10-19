@@ -655,7 +655,13 @@ _gh_share=''
   if [ -n "${FLEET_GH_SHARE_TRUST:-}" ]; then printf " · takes copies from: %s\n" "$FLEET_GH_SHARE_TRUST"
   else printf " · takes no copies (FLEET_GH_SHARE_TRUST empty)\n"; fi' _ "$_gh_lib" "$(dirname "$0")/../fleet.conf" 2>/dev/null)
 _gh_hour="${_gh_hour}${_gh_share:+${_gh_hour:+ · }$_gh_share}"
-if [ -n "$_gh_rows" ]; then
+# Reachability (issue #4841): the one gh-down marker, read — never a probe here.
+_gh_down=''
+# shellcheck disable=SC2016
+[ -f "$_gh_lib" ] && _gh_down=$(bash -c '. "$1" || exit 1; fleet_gh_down_line' _ "$_gh_lib" 2>/dev/null)
+if [ -n "$_gh_down" ]; then
+  warn github "$_gh_down — GitHub calls return at once (rc 75) until a probe gets an answer; the background keeps its last copies${_gh_hour:+ · $_gh_hour}"
+elif [ -n "$_gh_rows" ]; then
   _gh_msg=$(printf '%s\n' "$_gh_rows" | awk 'NF { printf "%s%s", (n++ ? "; " : ""), $0 }')
   warn github "$_gh_msg — the shared account limit, not a permission problem: GraphQL calls fall back to REST until then${_gh_hour:+ · $_gh_hour}"
 elif [ -f "$_gh_lib" ]; then
