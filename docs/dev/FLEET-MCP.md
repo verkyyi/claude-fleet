@@ -687,6 +687,15 @@ window creation. Freeze, admission and cancellation serialize on the same repo
 lock. A paused launcher, empty inventory or elapsed lease never erases it.
 `--cancel-start RESERVATION` revokes only a never-begun reservation; a racing
 launcher then cannot begin. Started but unobserved execution stays blocked.
+`--settle [--apply]` (issue #4832, dry by default) settles this node's OWN
+retained starts in bulk with those same actions: it lists only its endpoint's
+open starts (`GET /authority/start?list=1`; the manifest's `starts` carries the
+same fields — phase, endpoint, worker, native — beside the unchanged blocker
+strings), cancels a `reserved` and marks `unobserved` a nativeless `starting`
+that no live window's `@authority_receipt` or process environment holds, sends
+`stopped` for an `observed` whose native `prove_stopped` confirms, and leaves
+the rest (alive, held, moved in the last 10 minutes, unknown) counted by why.
+Each write is one line in `logs/authority.log`, no credential.
 The existing session wrapper consumes each reservation once; resumes and
 transfers through that wrapper require a new admission. Its existing native
 startup hook binds the process/session, and its native wait records stop.

@@ -260,3 +260,59 @@ func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
 		t.Fatal("a later beat pushed again", again.authorityPushes())
 	}
 }
+
+// Issue #4832: the manifest carries each retained start as fields beside its
+// unchanged blocker string, and a node lists ONLY its own endpoint's open starts.
+func TestRepoAuthorityStartsAsFields(t *testing.T) {
+	h, _, _, f5, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(token string) func(http.Header) {
+		return func(h http.Header) { h.Set("Authorization", "Bearer "+token) }
+	}
+	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	worker := f5.FleetID + "/" + wrFid
+	for _, step := range [][2]string{{"reserve", "held"}, {"reserve", "begun"}, {"begin", "begun"}, {"reserve", "gone"}, {"cancel", "gone"}} {
+		code, out := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, start,
+			map[string]any{"action": step[0], "reservation": step[1], "worker_id": worker})
+		if code != 200 {
+			t.Fatalf("%v %d %v", step, code, out)
+		}
+	}
+	code, list := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, start+"&list=1", nil)
+	if code != 200 {
+		t.Fatal(code, list)
+	}
+	rows, _ := list["starts"].([]any)
+	phases := map[string]string{}
+	for _, raw := range rows {
+		r := raw.(map[string]any)
+		phases[r["reservation"].(string)] = r["phase"].(string)
+		if r["endpoint_id"] != list["endpoint_id"] || r["updated"] == "" {
+			t.Fatal("row", r)
+		}
+		if r["reservation"] == "begun" && r["worker_id"] != worker {
+			t.Fatal("worker", r)
+		}
+	}
+	if !reflect.DeepEqual(phases, map[string]string{"held": "reserved", "begun": "starting"}) {
+		t.Fatal("open starts", phases)
+	}
+	if code, other := ticketCall(t, h, auth(h.tokens["mac-c"]), http.MethodGet, start+"&list=1", nil); code == 200 {
+		if rows, _ := other["starts"].([]any); len(rows) != 0 {
+			t.Fatal("another node read this node's starts", other)
+		}
+	}
+	code, m := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo, nil)
+	if code != 200 {
+		t.Fatal(code, m)
+	}
+	blockers := map[string]bool{}
+	for _, b := range m["blockers"].([]any) {
+		blockers[b.(string)] = true
+	}
+	if !blockers["local start retained: held"] || !blockers["local start retained: begun"] || blockers["local start retained: gone"] {
+		t.Fatal("blocker strings changed", m["blockers"])
+	}
+	if starts, _ := m["starts"].([]any); len(starts) != 2 {
+		t.Fatal("manifest starts", m["starts"])
+	}
+}

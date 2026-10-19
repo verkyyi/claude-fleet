@@ -128,7 +128,18 @@ func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticke
 			httpError(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "legacy_owners": owners, "blockers": blockers, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		// Each retained start as fields (issue #4832): the blocker strings stay
+		// as they are; this says which phase, endpoint, worker and native.
+		startOwner := c.owner
+		if c.all {
+			startOwner = ""
+		}
+		starts, err := s.Store.RepoOpenStarts(repo, startOwner, "")
+		if err != nil {
+			httpError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -248,6 +259,17 @@ func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c 
 	}
 	if !hosted {
 		httpError(w, 403, "node does not host this repo")
+		return
+	}
+	if r.Method == http.MethodGet && r.URL.Query().Get("list") == "1" {
+		// A node reads ONLY its own endpoint's open starts, to settle the dead
+		// ones through the actions below (issue #4832). Never another node's.
+		starts, err := s.Store.RepoOpenStarts(repo, c.owner, ep.ID)
+		if err != nil {
+			httpError(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]any{"repo": repo, "endpoint_id": ep.ID, "starts": starts})
 		return
 	}
 	if r.Method == http.MethodGet {
