@@ -44,12 +44,14 @@ with tempfile.TemporaryDirectory(prefix='revoke-go-gate.') as tmp:
     tests.write_text('')
     assert run(0)[0] != 0, 'shell-only mode accepted missing independent Go coverage'
 
-# The independent workflow discovers all API test names, then strides that list;
-# the six revocation tests must each belong to exactly one API shard.
+# The independent workflow discovers all API test names, then deals that list by
+# recorded cost (bin/go-test-shard.sh deal, claude-fleet#4817 — the union is the
+# whole package, go-test-shard-selftest.sh A); the six revocation tests must each
+# belong to exactly one API shard.
 workflow = (root / '.github/workflows/tokenledger.yml').read_text()
 assert "go test -race -list '.*' ./api/" in workflow
-assert 'NR % n == k % n' in workflow
-assert 'go test -race -timeout 20m' in workflow
+assert 'go-test-shard.sh deal' in workflow
+assert re.search(r'go test -race -v \$COUNT -timeout 20m', workflow)
 names = sorted(re.findall(r'^func (Test\w+)\(', (root / 'tokenledger/hub/api/fleet_revocations_test.go').read_text(), re.M))
 assert len([n for n in names if n.startswith('TestRevocations')]) == 6
 print('PASS Go-half dispatch: disabled makes zero calls; enabled exact family; failure/empty/missing coverage refused')
