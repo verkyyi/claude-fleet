@@ -22,7 +22,7 @@
 # Targets (the EPIC's 演练清单): rows 1–12 must read ok in all three ways, G1–G3
 # must never hang (a fast, clear «在等 GitHub» failure is their target).
 1	安装：新电脑经入口加入节点（入口给的加入命令）	curl -fsSL "$JOIN_URL" -o "$CELL/join.sh"	dns=ok hang=ok limit=ok
-2	更新：没有入口的登录跟 stable（install-sync 一拍）	bash "$BIN/fleet-install-sync.sh" --dry-run --root "$CELL/install"	dns=ok hang=hang limit=ok
+2	更新：没有入口的登录跟 stable（install-sync 一拍）	bash "$BIN/fleet-install-sync.sh" --dry-run --root "$CELL/install"	dns=ok hang=ok limit=ok
 3	登录入口网页（只绑了 GitHub 的人）	- 入口侧（Go，tokenledger）：只在现场版读，C10 #4849 自带 Go 测试	dns=skip hang=skip limit=skip
 4	开会话：GitHub 单仓库的认领简报	bash "$BIN/fleet-claim-brief.sh" --issue "$ISSUE"	dns=fail hang=fail limit=fail
 5	派活并等结果：派单前读单（fleet-gh.sh issue view）	bash "$BIN/fleet-gh.sh" issue view "$ISSUE" --repo "$REPO" --json title,state,body	dns=fail hang=fail limit=fail
@@ -31,7 +31,7 @@
 8	回收：会话退出后的收尾（SessionEnd hook 的 --exec）	bash "$BIN/session-end-hook.sh" --exec worker "$SESS" @1 "$ISSUE" -	dns=ok hang=ok limit=ok
 9	面板：任务列表的单子预览	bash "$BIN/tmux-issue-preview.sh" "$ISSUE" --repo="$REPO"	dns=ok hang=ok limit=ok
 10	历史、恢复：落地记一行再列出	bash "$BIN/fleet-history.sh" record --repo "$REPO" --pr "$PR" --key "issue-$ISSUE" --worktree "$PWD" && bash "$BIN/fleet-history.sh" list	dns=ok hang=ok limit=ok
-11	起 Codex：GitHub 单仓库的 Codex 启动（插件同步）	FLEET_CODEX_SERVER=0 bash "$BIN/fleet-codex.sh"	dns=ok hang=hang limit=ok
+11	起 Codex：GitHub 单仓库的 Codex 启动（插件同步）	FLEET_CODEX_SERVER=0 bash "$BIN/fleet-codex.sh"	dns=ok hang=ok limit=ok
 12	入口：版本、安装包（自托管入口问 stable）	- 入口侧（Go，tokenledger）：只在现场版读，C8 #4847 自带 Go 测试	dns=skip hang=skip limit=skip
 G1	推送分支	git push -u origin "issue-$ISSUE"	dns=fail hang=hang limit=fail
 G2	PR 检查、合并门	bash "$BIN/fleet-pr-verdict.sh" "$PR" --repo "$REPO"	dns=fail hang=fail limit=fail

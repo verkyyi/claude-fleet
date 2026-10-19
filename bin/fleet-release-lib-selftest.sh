@@ -22,7 +22,9 @@
 #                without a terminal or --yes takes nothing, --yes takes it
 #   F. host      fleet-host-install.sh with a hub: the checkout is the hub's
 #                signed stable (an imported commit, no remote, the key pinned,
-#                checked with no ccquota) — git never asked for GitHub
+#                checked with no ccquota) — git never asked for GitHub; a hub
+#                that keeps none (404) fails host-install and login-install
+#                (bin/fleet-login-install.sh) with a line, never a clone (#4848)
 #   G. origin    drop → the remote gone, its URL kept; restore → back
 #   H. legacy    a hub from before SSHSIG: the release's plain ed25519 signature
 #                (header, else manifest.sig) checked by fleet-release-verify.py
@@ -161,6 +163,35 @@ rm -f "$H/badsig"
 eq "F: a bad signature fails the install" 1 "$rc"
 has "F: …says it did not verify" "$out" "没验过章"
 [ -e "$FH2/.claude/fleet" ] && fail "F: something was installed from a release that did not verify"
+# a hub that keeps no releases (404): said, nothing installed, GitHub never asked
+# (issue #4848) — host-install and login-install alike; FLEET_DIST_SOURCE=github
+# said by name is the developer road, as before
+FH3="$WORK/hostF3"; mkdir -p "$FH3/conf"; touch "$H/nostore"
+cat > "$FH/shim/git" <<'GIT'
+#!/bin/sh
+for a in "$@"; do [ "$a" = clone ] && { echo "git $*" >> "$GITLOG"; exit 128; }; done
+exec /usr/bin/git "$@"
+GIT
+chmod +x "$FH/shim/git"; export GITLOG="$WORK/clone.log"; : > "$GITLOG"
+out=$(env HOME="$FH3" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_DIR="$FH3/conf" FLEET_HUB_URL="$HUB" \
+  FLEET_INSTALL_ROOT="$FH3/.claude/fleet" FLEET_INSTALL_NO_DEPS=1 FLEET_BOOTSTRAP_GIT_BASE="$WORK/no-such-github" \
+  bash "$BIN/fleet-host-install.sh" </dev/null 2>&1); rc=$?
+eq "F: a hub with no releases fails the host install (#4848)" 1 "$rc"
+has "F: …says the hub keeps none" "$out" "不存发布"
+eq "F: …never a clone" "" "$(cat "$GITLOG")"
+[ -e "$FH3/.claude/fleet" ] && fail "F: something was installed from a hub with no releases"
+out=$(env HOME="$FH3" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_DIR="$FH3/conf" FLEET_HUB_URL="$HUB" \
+  FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_BOOTSTRAP_GIT_BASE="$WORK/no-such-github" \
+  bash "$BIN/fleet-login-install.sh" "$FH3/.claude/fleet" </dev/null 2>&1); rc=$?
+eq "F: a hub with no releases fails the login install (#4848)" 1 "$rc"
+has "F: …says the hub keeps none" "$out" "keeps no releases"
+has "F: …names the developer road" "$out" "FLEET_DIST_SOURCE=github"
+eq "F: …never a clone" "" "$(cat "$GITLOG")"
+out=$(env HOME="$FH3" PATH="$FH/shim:/usr/bin:/bin:/usr/sbin:/sbin" FLEET_CONF_DIR="$FH3/conf" FLEET_HUB_URL="$HUB" \
+  FLEET_NODE_ROOT="$WORK/no-runtime" FLEET_BOOTSTRAP_GIT_BASE="$WORK/no-such-github" FLEET_DIST_SOURCE=github \
+  bash "$BIN/fleet-login-install.sh" "$FH3/.claude/fleet" </dev/null 2>&1)
+has "F: FLEET_DIST_SOURCE=github is the developer road (a clone)" "$(cat "$GITLOG")" "clone"
+rm -f "$H/nostore" "$FH/shim/git"; unset GITLOG
 
 # --- G. origin ------------------------------------------------------------------------------
 git -C "$R" remote add origin https://example.invalid/r.git

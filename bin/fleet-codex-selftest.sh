@@ -351,7 +351,7 @@ ok "F prose and unknown-skill prompts pass through verbatim"
 # no prompt → no positional; a trailing flag is a flag, not a prompt
 run
 [ "$(nargs)" -gt 0 ] || fail "F codex still gets its flags with no prompt" "$(argv1l)"
-case "$(last)" in hooks.SessionEnd=*) : ;; *) fail "F with no prompt the last arg must be the last flag value, not a positional" "$(last)" ;; esac
+case "$(last)" in hooks.SessionEnd=*|features.plugins=false) : ;; *) fail "F with no prompt the last arg must be the last flag value, not a positional" "$(last)" ;; esac
 run --search
 [ "$(last)" = '--search' ] || fail "F a trailing flag must stay a flag" "$(last)"
 ok "F no prompt → no positional; a trailing flag is a flag"
@@ -567,11 +567,13 @@ rm -f "$WORK/nusage"; FLEET_CODEX_NATIVE_USAGE=0 run '/fleet-claim'
 ok "J FLEET_CODEX_NATIVE_USAGE=1 in the fleet conf reaches the Codex launch; default and 0 reach it as unset"
 
 # ============================================================================
-# K. a repo with no GitHub (FLEET_FORGE=none, issue #4696): Codex starts with
-#    -c features.plugins=false, so its startup plugin sync never fetches
-#    github.com/openai/plugins.git. A GitHub repo (FLEET_FORGE unset), a no-repo
-#    window and a Claude launch keep the plugins. Its own fleet f3 with a repos/
-#    dir, so the overlay legs above stay byte for byte.
+# K. Codex's plugins are off in every fleet launch (issue #4848; #4696 did it
+#    for FLEET_FORGE=none only): -c features.plugins=false, so its startup
+#    plugin sync never fetches github.com/openai/plugins.git — a repo with no
+#    GitHub, a GitHub repo and a no-repo window alike. agent-overrides.json
+#    `"codex_plugins": "on"` (or the array form) keeps the person's plugins; a
+#    Claude launch carries no Codex flag. Its own fleet f3 with a repos/ dir, so
+#    the overlay legs above stay byte for byte.
 # ============================================================================
 cat > "$WORK/fakebin/codex" <<EOS
 #!/bin/sh
@@ -589,18 +591,30 @@ TEST_REPO=local/demo run '/fleet-claim'
   || fail "K forge none: Codex must start with features.plugins=false (#4696)" "$(argv1l; cat "$WORK/err")"
 printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
 TEST_REPO=local/demo run '/fleet-claim'
-[ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
-  || fail "K a GitHub repo must keep Codex's plugins" "$(argv1l)"
-printf 'FLEET_REPO="local/demo"\nFLEET_MAIN="%s"\nFLEET_FORGE="none"\n' "$FAKE_MAIN" > "$WORK/conf/fleets/f3/repos/local-demo.conf"
+[ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
+  || fail "K a GitHub repo: Codex must start with features.plugins=false (#4848)" "$(argv1l)"
 TEST_NOREPO=1 run '/fleet-claim'
+[ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
+  || fail "K a no-repo window: Codex must start with features.plugins=false (#4848)" "$(argv1l)"
+printf '{"codex_plugins": "on"}\n' > "$FLEET_CONF_DIR/agent-overrides.json"
+TEST_REPO=local/demo run '/fleet-claim'
 [ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
-  || fail "K a no-repo window must keep Codex's plugins" "$(argv1l)"
+  || fail "K codex_plugins on in agent-overrides.json must keep Codex's plugins" "$(argv1l)"
+printf '["playwright", "codex_plugins:on"]\n' > "$FLEET_CONF_DIR/agent-overrides.json"
+TEST_REPO=local/demo run '/fleet-claim'
+[ "$(ran)" = codex ] && ! hasarg 'features.plugins=false' \
+  || fail "K the array form codex_plugins:on must keep Codex's plugins" "$(argv1l)"
+printf '{"codex_plugins": "off"}\n' > "$FLEET_CONF_DIR/agent-overrides.json"
+TEST_REPO=local/demo run '/fleet-claim'
+[ "$(ran)" = codex ] && hasarg 'features.plugins=false' \
+  || fail "K codex_plugins off keeps the plugins off" "$(argv1l)"
+rm -f "$FLEET_CONF_DIR/agent-overrides.json"
 printf 'FLEET_AGENT="claude"\n' > "$WORK/conf/fleets/f3/conf"
 TEST_REPO=local/demo run '/fleet-claim'
 [ "$(ran)" = claude ] && ! hasarg 'features.plugins=false' \
   || fail "K a Claude launch carries no Codex flag" "$(ran) $(argv1l)"
 printf 'f1' > "$SESS_FILE"
-ok "K forge none → Codex -c features.plugins=false; a GitHub repo, a no-repo window and Claude keep plugins"
+ok "K every Codex launch → -c features.plugins=false; agent-overrides codex_plugins on keeps them; Claude carries no flag"
 
 printf '\nselftest OK: %s assertions passed (FLEET_AGENT / fleet-codex.sh, issue #547)\n' "$pass"
 exit 0

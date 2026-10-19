@@ -322,6 +322,29 @@ managed_release() {
 
 # git with the network bounded: git's own stall abort, the only portable timeout.
 g() { git -C "$ROOT" -c http.lowSpeedLimit=1000 -c "http.lowSpeedTime=$TIMEOUT" "$@"; }
+# gfetch <git fetch args…> — the network half: a remote on GitHub goes through
+# the GitHub layer (issue #4848). git's stall abort does not cover a proxy that
+# takes the connection and never answers, so a tiny `ls-remote` asks first, the
+# whole bounded by twice FLEET_GH_TIMEOUT_KEY (10 s): no answer ⇒ rc 75 at once,
+# and GitHub is marked down for every caller. Then the fetch itself, by
+# fleet_gh_git's own bounds (a moving catch-up is never cut). A GitHub already
+# known down is not tried at all (rc 75, the layer's FLEET_GH_LIMITED_RC). Any
+# other remote: g, as before.
+GH_PROBED=''
+gfetch() {
+  case "$(git -C "$ROOT" remote get-url "$REMOTE" 2>/dev/null)" in
+    *github.com[:/]*)
+      if command -v fleet_gh_ready >/dev/null 2>&1; then
+        if [ -z "$GH_PROBED" ]; then
+          FLEET_GH_GIT_TIMEOUT=$(( $(fleet_gh_timeout_key) * 2 )) \
+            fleet_gh_git -C "$ROOT" ls-remote -q "$REMOTE" HEAD >/dev/null || return $?
+          GH_PROBED=1
+        fi
+        fleet_gh_git -C "$ROOT" fetch "$@"; return $?
+      fi ;;
+  esac
+  g fetch "$@"
+}
 
 # state_get <key> — one value from the previous state file ('' when absent).
 state_get() { [ -f "$STATE" ] && sed -n "s/^$1: //p" "$STATE" | head -1; }
@@ -1047,9 +1070,13 @@ main() {
     # an imported release's own commit is not in the repository's history: fetch
     # it by sha, so the ancestry gate below can read it
     if [ -n "$HEAD_SEQ" ] && ! git -C "$ROOT" cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
-      g fetch --no-tags -q "$REMOTE" "$HEAD_SHA" >/dev/null 2>&1 </dev/null || :
+      gfetch --no-tags -q "$REMOTE" "$HEAD_SHA" >/dev/null 2>&1 </dev/null || :
     fi
-    if ! ferr=$(g fetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null); then
+    local frc=0
+    ferr=$(gfetch --no-tags -q "$REMOTE" "+refs/tags/$TAG:refs/tags/$TAG" 2>&1 </dev/null) || frc=$?
+    if [ "$frc" -ne 0 ]; then
+      [ "$frc" = 75 ] \
+        && finish fetch-failed "GitHub 不通，留在当前版 $(short "$HEAD_SHA") — refs/tags/$TAG not read from $REMOTE (gave up within ${TIMEOUT}s): $(printf '%s\n' "$ferr" | tail -1)"
       case "$ferr" in
         *"couldn't find remote ref"*|*"Couldn't find remote ref"*)
           STABLE_SHA=''

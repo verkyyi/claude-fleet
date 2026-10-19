@@ -28,7 +28,7 @@
 #   agent     ccquota → ~/.local/bin/ccquota: --ccquota <file>, else the hub's own
 #             build (/v1/node/dist/<os>-<arch>, SHA-256 checked), else one already
 #             on PATH, else — the developer road only (FLEET_DIST_SOURCE=github,
-#             or a hub that keeps no releases) — built with Go from a shallow
+#             issue #4848) — built with Go from a shallow
 #             clone (issue #2862; `go install …@latest` stopped working when
 #             tokenledger/go.mod took a replace for its shared module, #4811).
 #   service   the agent under the platform's supervisor, as THIS login:
@@ -56,9 +56,10 @@
 #             fleet_rel_first_checkout: the key pinned, the tree verified, one
 #             local commit, no remote — never GitHub; the lib beside this script,
 #             else the hub's /install/bin/ copy for a `curl … | bash` run, issue
-#             #2862). GitHub only on the developer road: --fleet-src / --ref,
-#             FLEET_DIST_SOURCE=github, or a hub that keeps no releases (EPIC
-#             #2770 共同约定 7) — a git clone at `stable`. Then
+#             #2862). GitHub only on the developer road: --fleet-src / --ref or
+#             FLEET_DIST_SOURCE=github (EPIC #2770 共同约定 7) — a git clone at
+#             `stable`. A hub that keeps no releases (404) is said and the fleet
+#             step FAILs, never a quiet clone (issue #4848). Then
 #             bin/fleet-login-bootstrap.sh: Claude Code, hooks, daemons, a seed
 #             fleet, doctor. Its failure is a WARN — the machine is already on the
 #             hub — with the rerun line. --no-fleet skips.
@@ -80,7 +81,7 @@ set -uo pipefail
 PROG=fleet-node-join
 HUB="" CODE="" JOINED="" UI=0 ADMIN=1 DEPS=1 FLEET=1 SERVICE=auto WAIT=180 FORCE=0
 SRC_REF="" CCQ_SRC=""
-SRC_REPO="https://github.com/verkyyi/claude-fleet.git"  # dist-ok: the developer road only — --fleet-src/--ref, FLEET_DIST_SOURCE=github, or a hub that keeps no releases (issue #2862)
+SRC_REPO="https://github.com/verkyyi/claude-fleet.git"  # dist-ok: the developer road only — --fleet-src/--ref, FLEET_DIST_SOURCE=github (issues #2862, #4848)
 SRC_SET=0
 COMPUTE=""   # "" = a first join's 0, a rerun's whatever node.env says (issue #1719)
 
@@ -412,8 +413,8 @@ install_deps() {
 if [ "$DEPS" = 1 ]; then install_deps || exit 1; else say "deps: skipped (--no-deps)"; fi
 
 # ── where the fleet's code comes from (issue #2862) ─────────────────────────
-# hub_releases — 0 the hub keeps signed releases · 3 it keeps none (404: the
-# developer road, EPIC #2770 共同约定 7) · 1 no answer. Asked once.
+# hub_releases — 0 the hub keeps signed releases · 3 it keeps none (404: said, never
+# the developer road — issue #4848) · 1 no answer. Asked once.
 HUB_REL=""
 hub_releases() {
   if [ -z "$HUB_REL" ]; then
@@ -422,11 +423,16 @@ hub_releases() {
   fi
   return "$HUB_REL"
 }
-# dev_road — rc 0 when GitHub may be asked: FLEET_DIST_SOURCE=github, or a hub
-# that keeps no releases
+# dev_road — rc 0 when GitHub may be asked: FLEET_DIST_SOURCE=github said by name.
+# A hub that keeps no releases is not one (issue #4848): it is said, never a
+# quiet trip to GitHub.
 dev_road() {
-  [ "${FLEET_DIST_SOURCE:-}" = github ] && return 0
-  hub_releases; [ $? = 3 ]
+  [ "${FLEET_DIST_SOURCE:-}" = github ]
+}
+# no_release_store — the one line for a hub that keeps no releases (issue #4848)
+no_release_store() {
+  say "fleet: FAIL — $HUB keeps no releases (404 on /v1/fleet/release/stable); GitHub not asked. Publish a release to the hub, or take the code yourself: --fleet-src <git url|dir> [--ref <ref>], or FLEET_DIST_SOURCE=github on a developer's machine"
+  FLEET_RC=1
 }
 # rel_lib — fleet-release-lib.sh sourced (its fetch beside it): this script's
 # own siblings, else the hub's /install/bin/ copies (a `curl … | bash` run has
@@ -496,7 +502,7 @@ install_ccquota() {
     # tokenledger/go.mod replaces its shared module with ./shared (#4811), and
     # `go install <pkg>@<version>` refuses any module with a replace — so build
     # from a checkout, where the replace resolves.
-    # dist-ok: the developer road — FLEET_DIST_SOURCE=github, or a hub that keeps no releases
+    # dist-ok: the developer road — FLEET_DIST_SOURCE=github said by name
     git clone -q --depth 1 https://github.com/verkyyi/claude-fleet.git "$WORK/src" >"$WORK/go.log" 2>&1 \
       && (cd "$WORK/src/tokenledger" && GOWORK=off CGO_ENABLED=0 go build -o "$LBIN/ccquota" ./cmd/ccquota) >>"$WORK/go.log" 2>&1 \
       && say "agent: ccquota built with go from a clone" && return 0
@@ -770,14 +776,14 @@ if [ "$FLEET" = 1 ]; then
              else
                rm -rf "$new"; say "fleet: FAIL — the hub's stable verified, but cannot move it to $ROOT"; FLEET_RC=1
              fi ;;
-          3) rm -rf "$new"; VIA=git ;;  # no release store: the developer road
+          3) rm -rf "$new"; no_release_store ;;
           *) rm -rf "$new"
              say "fleet: FAIL — the hub did not give its stable — $REL_STAGE: ${REL_ERR:-?}. Rerun (FLEET_DIST_SOURCE=github takes GitHub instead)"
              FLEET_RC=1 ;;
         esac
       else
         hub_releases; case $? in
-          3) VIA=git ;;  # an older hub: no client copy, no release store
+          3) no_release_store ;;  # an older hub: no client copy, no release store
           *) say "fleet: FAIL — cannot take fleet-release-lib.sh (${REL_LIB_ERR:-?}). Rerun (FLEET_DIST_SOURCE=github takes GitHub instead)"
              FLEET_RC=1 ;;
         esac

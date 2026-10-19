@@ -155,7 +155,8 @@ EOF
 cat > "$STUB/codex" <<'EOF'
 #!/bin/bash
 # Codex's own start: unless plugins are off it syncs its plugin marketplace from GitHub
-case " $* " in *features.plugins=false*) exit 0 ;; esac
+# (`codex --version` / `codex debug …` start no session, so no sync)
+case " $* " in *features.plugins=false*|" --version "|" debug "*) exit 0 ;; esac
 git ls-remote https://github.com/openai/plugins.git HEAD >/dev/null 2>&1
 exit 0
 EOF

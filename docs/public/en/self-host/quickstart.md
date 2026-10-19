@@ -1,6 +1,6 @@
 # Self-host · Quickstart
 
-Goal: fleet installed on one computer of your own and your first session open, in about 10 minutes. This road needs no hub; when you later want to connect several machines or create accounts for colleagues, see [Install and deploy](install.md).
+Goal: fleet installed on one computer of your own and your first session open, in about 10 minutes. With a hub, install from the hub; with none, this one computer works on its own. When you later want to connect several machines or create accounts for colleagues, see [Install and deploy](install.md).
 
 ## What you need
 
@@ -13,12 +13,23 @@ The install script brings its own tmux; there is nothing to install first.
 
 ## 1. Install
 
+**From a hub** (your team's, or one you run yourself per [Install and deploy](install.md)): what you get is the version the hub signed, and installing, following new versions and starting Claude / Codex never go to GitHub.
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub --host
+curl -fsSL https://hub.example.com/install | sh -s -- --host
 ```
 
-- `--no-hub`: this computer only, connected to no hub (local mode).
+Replace `hub.example.com` with your hub's address.
+
 - `--host`: this computer runs sessions itself (host). Without it you can turn it on later with `fleet host on`.
+
+> **Note: no hub, this computer only** — install straight from GitHub:
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub --host
+> ```
+>
+> `--no-hub`: connected to no hub (local mode). This road goes to GitHub to install and to follow new versions; when GitHub cannot be reached, `fleet update` says so (「GitHub 不通，留在当前版」) and stays on the current version instead of waiting.
 
 Once installed, the command is at `~/.local/bin/fleet`. If the terminal says it cannot find `fleet`, open a new terminal window and try again.
 
@@ -27,7 +38,7 @@ When it is done it opens the client right in this terminal. Where there is no te
 Every argument and the environment variables for automation (`FLEET_INSTALL_HOST=0|1` is `--host`, `FLEET_INSTALL_HUB=0` is `--no-hub`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --help
+curl -fsSL https://hub.example.com/install | sh -s -- --help
 ```
 
 ## 2. Open the client

@@ -127,7 +127,6 @@ if command -v fleet_load_conf >/dev/null 2>&1; then
     _fx_sess="$FLEET_LAUNCH_SESSION"
   fi
   [ -n "$_fx_sess" ] && fleet_load_conf "$_fx_sess"
-  _fx_fleet="$_fx_sess"   # the forge read below (issue #4696) asks this fleet's repo confs
   unset _fx_sess
 fi
 # The native usage pilot (#4557) is read by the private runtime from its
@@ -430,20 +429,28 @@ flags=(
   -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
   ${hook_flags[@]+"${hook_flags[@]}"}
 )
-# A repo with no GitHub (FLEET_FORGE=none, issue #4696) launches Codex with its
-# plugins off: Codex's startup plugin sync fetches github.com/openai/plugins.git
-# (and raw.githubusercontent.com) on every start, and Codex has no switch for that
-# sync alone — only features.plugins. The fleet's own parts reach Codex as skills
-# and config.toml MCP servers, not Codex plugins, so they are unaffected. The repo
-# is the window's (fleet_window_repo), its forge its conf's (fleet_repo_forge);
-# a GitHub repo, a no-repo window or an unknown one keeps the person's plugins.
-if [ -n "${TMUX_PANE:-}" ] && command -v fleet_window_repo >/dev/null 2>&1; then
-  _fx_repo=$(fleet_window_repo "${_fx_fleet:-}" "$TMUX_PANE" 2>/dev/null)
-  [ -n "$_fx_repo" ] && [ "$(fleet_repo_forge "$_fx_repo" "${_fx_fleet:-}")" = none ] \
-    && flags+=(-c 'features.plugins=false')
-  unset _fx_repo
+# Codex's plugins are OFF in every fleet launch (issue #4848; #4696 did it for a
+# repo with no GitHub only): Codex's startup plugin sync fetches
+# github.com/openai/plugins.git (and raw.githubusercontent.com) on every start, and
+# Codex has no switch for that sync alone — only features.plugins. The fleet's own
+# parts reach Codex as skills and config.toml MCP servers, not Codex plugins, so
+# they are unaffected. A person who wants Codex's plugin marketplace says so in
+# agent-overrides.json: `"codex_plugins": "on"` (or "codex_plugins:on" in the
+# array form) — then the person's own config.toml decides, as before.
+if ! python3 - "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agent-overrides.json" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+if isinstance(d, list):
+    sys.exit(0 if any(str(x).replace(" ", "").lower() == "codex_plugins:on" for x in d) else 1)
+v = d.get("codex_plugins") if isinstance(d, dict) else None
+sys.exit(0 if v is True or str(v).strip().lower() in ("on", "true", "1", "yes") else 1)
+PY
+then
+  flags+=(-c 'features.plugins=false')
 fi
-unset _fx_fleet
 
 # --- model: FLEET_CODEX_MODEL → -m, unless the caller already chose one ---------
 launch_model=''
@@ -603,7 +610,10 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ]; then
       unset _fx_out
       flags+=(-c 'model_provider="fleet"'
               -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fx_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
-              -c 'features.plugins=false' -c 'features.apps=false' -c 'analytics.enabled=false')
+              -c 'features.apps=false' -c 'analytics.enabled=false')
+      # plugins off whatever agent-overrides says (the proxy's provider has no
+      # marketplace) — once: the default above may already have put it there
+      case " ${flags[*]} " in *" features.plugins=false "*) ;; *) flags+=(-c 'features.plugins=false') ;; esac # bash32-ok: flags is populated above
       unset _fx_home _fx_port ;;
     4) : ;;
     5) echo 'fleet-codex: the hub does not know this session (404: not registered for this node) — refusing to launch; ↵ on the page re-registers it and retries' >&2
