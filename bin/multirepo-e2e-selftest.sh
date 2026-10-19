@@ -168,10 +168,8 @@ WT="$WORK/wt.noindex"
 
 S=ft; D=fd
 mkdir -p "$FLEET_CONF_DIR/fleets/$S" "$FLEET_CONF_DIR/fleets/$D"
+fx_repo "$FLEET_CONF_DIR" "$S" o/alpha FLEET_MAIN="$MA" FLEET_BASE_BRANCH="master"
 cat > "$FLEET_CONF_DIR/fleets/$S/conf" <<EOF
-FLEET_REPO="o/alpha"
-FLEET_MAIN="$MA"
-FLEET_BASE_BRANCH="master"
 FLEET_WORKTREE_ROOT="$WT"
 FLEET_CLEANUP_MERGED_GRACE=0
 FLEET_REAP_MIN_AGE=0
@@ -469,7 +467,8 @@ zrows=$(backlog "$D" | tail -n +2)
   && ok "(z) one-repo backlog rows carry their repo, as in a 2-repo fleet" || fail "(z) one-repo backlog rows: $zrows"
 bash "$BIN/fleet-restore.sh" --snapshot >/dev/null 2>&1
 chk z "one-repo restore rows carry their repo, as in a 2-repo fleet" "$(awk -F'\t' '$1=="WIN" {print $16}' "$FLEET_CONF_DIR/fleets/$D/restore.map" 2>/dev/null | sort -u)" o/solo
-[ -e "$FLEET_CONF_DIR/fleets/$D/repos" ] && fail "(z) the one-repo fleet grew a repos/ dir" || ok "(z) the one-repo fleet has no repos/ dir"
+[ "$(ls "$FLEET_CONF_DIR/fleets/$D/repos")" = o-solo.conf ] && ok "(z) the one-repo fleet's repos/ still holds its one overlay" \
+  || fail "(z) the one-repo fleet's repos/ changed: $(ls "$FLEET_CONF_DIR/fleets/$D/repos" | tr '\n' ' ')"
 
 # ==== (p) the hub sees every repo (issue #1512) ==========================================
 # The node agent's inventory (fleet-control-read.sh → fleet_control.py, the real
