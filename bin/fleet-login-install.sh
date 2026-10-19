@@ -16,7 +16,10 @@
 #            ($FLEET_CONF_DIR/release.pub), the tree verified (no ccquota, #3162), imported
 #            as ONE local commit on master (fleet-release-lib.sh, issue #2773); no
 #            remote. FLEET_DIST_SOURCE=github skips it.
-#   git      neither — a developer's machine with no hub (EPIC #2770 共同约定 7):
+#            A hub that keeps NO releases (404) is an error, never a quiet
+#            clone (issue #4848).
+#   git      neither — a developer's machine with no hub (EPIC #2770 共同约定 7),
+#            or FLEET_DIST_SOURCE=github said by name:
 #            `git clone -b stable` of FLEET_BOOTSTRAP_GIT_BASE, on master tracking
 #            origin/master so install-sync fast-forwards it. Today's road.
 #
@@ -119,7 +122,14 @@ if [ "${FLEET_DIST_SOURCE:-}" != github ] && [ -f "$here/fleet-release-lib.sh" ]
          made hub "$REL_SHA" "the hub's stable, verified ($REL_FPR), from $REL_HUB — not GitHub"; exit 0
        fi
        rm -rf "$new"; err "the hub's stable verified, but cannot move it to $ROOT"; exit 1 ;;
-    3) ;;  # no hub, or one that keeps no releases: the developer road
+    3) # no hub at all: the developer road. A hub that keeps no releases (404) is
+       # not a reason to go to GitHub behind the person's back (issue #4848):
+       # say so; a developer's machine asks for GitHub by name.
+       if [ -n "${REL_HUB:-}" ]; then
+         rm -rf "$new"
+         err "the hub ($REL_HUB) keeps no releases (404 on /v1/fleet/release/stable) — nothing was made, GitHub not asked. Publish one to the hub (fleet-release-publish.sh), or on a developer's machine say FLEET_DIST_SOURCE=github to clone from $GITBASE"
+         exit 1
+       fi ;;
     *) rm -rf "$new"
        err "the hub ($REL_HUB) did not give its stable — $REL_STAGE: ${REL_ERR:-?}. Nothing was made; run again (FLEET_DIST_SOURCE=github takes GitHub instead)"
        exit 1 ;;

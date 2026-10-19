@@ -1,6 +1,6 @@
 # 自托管 · 快速开始
 
-目标：在你自己的一台电脑上装好 fleet，开出第一个会话，大约 10 分钟。这条路不需要入口；以后要连起几台机器、给同事开号，再看 [安装与部署](install.md)。
+目标：在你自己的一台电脑上装好 fleet，开出第一个会话，大约 10 分钟。有入口就从入口装；没有入口也能只用这一台。以后要连起几台机器、给同事开号，再看 [安装与部署](install.md)。
 
 ## 准备
 
@@ -13,12 +13,23 @@ tmux 由安装脚本自己带，不用先装。
 
 ## 1. 安装
 
+**从入口装**（你们团队的入口，或照 [安装与部署](install.md) 自己架的）：装的是入口签过名的版本，装机、以后跟版、起 Claude / Codex 都不找 GitHub。
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub --host
+curl -fsSL https://hub.example.com/install | sh -s -- --host
 ```
 
-- `--no-hub`：只用这一台，不连入口（本机模式）。
+`hub.example.com` 换成你的入口地址。
+
 - `--host`：这台电脑自己跑会话（承载）。不加的话，之后也能用 `fleet host on` 打开。
+
+> **备注：没有入口、只用这一台**——直接从 GitHub 装：
+>
+> ```sh
+> curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --no-hub --host
+> ```
+>
+> `--no-hub`：不连入口（本机模式）。这条路装和以后跟版都找 GitHub；GitHub 连不上时 `fleet update` 说「GitHub 不通，留在当前版」，不会一直等。
 
 装好后命令在 `~/.local/bin/fleet`。终端说找不到 `fleet` 的话，开一个新终端窗口再试。
 
@@ -27,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fle
 全部参数和自动化用的环境变量（`FLEET_INSTALL_HOST=0|1` 等同 `--host`，`FLEET_INSTALL_HUB=0` 等同 `--no-hub`）：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-install.sh | sh -s -- --help
+curl -fsSL https://hub.example.com/install | sh -s -- --help
 ```
 
 ## 2. 打开客户端

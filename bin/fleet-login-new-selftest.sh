@@ -940,7 +940,8 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         # a hub that keeps no releases (no CCQUOTA_FLEET_RELEASE_KEY): every
-        # release route 404s, so the login's install takes the git road (#2775)
+        # release route 404s — the run says FLEET_DIST_SOURCE=github, so the
+        # login's install takes the git road by name (#2775, #4848)
         open(W + "/hub.log", "a").write("GET %s\n" % self.path)
         self.send_response(404); self.send_header("content-length", "0"); self.end_headers()
     def do_POST(self):
@@ -958,12 +959,12 @@ for _ in $(seq 1 300); do [ -s "$WORK/hub.port" ] && break; sleep 0.1; done
 HUBU="http://127.0.0.1:$(cat "$WORK/hub.port" 2>/dev/null)"
 export FLEET_SELFTEST_NJ_LOG="$WORK/nj.log" FLEET_SELFTEST_BS_LOG="$WORK/bs.log"
 JC=fj_abcdefghijklmnopqrstuvwxyz
-: > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE=$JC FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oli --full-name Oli --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
+: > "$LOG"; OUT=$(FLEET_DIST_SOURCE=github FLEET_LOGIN_JOIN_CODE=$JC FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oli --full-name Oli --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?; CALLS=$(cat "$LOG")
 unlock_homes
 OH="$FLEET_LOGIN_HOMES/oli"
 eq "O exit" 0 "$RC"
 contains "O the code redeemed for the login" "$(cat "$WORK/hub.log" 2>/dev/null)" "/v1/node/join $JC oli"
-contains "O the install asked the hub that opened it for its stable (#2775)" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/fleet/release/stable"
+not_contains "O FLEET_DIST_SOURCE=github: the git road by name, the hub's empty store not asked (#4848)" "$(cat "$WORK/hub.log" 2>/dev/null)" "GET /v1/fleet/release/stable"
 not_contains "O the code never on a shim's argv" "$CALLS" "$JC"
 not_contains "O the code never in the output" "$OUT" "$JC"
 not_contains "O the node token never in the output" "$OUT" "ntok-secret"
@@ -979,7 +980,7 @@ contains "O the hub's detail says so" "$(printf '%s\n' "$OUT" | tail -n 3)" "fle
 contains "O ... and that it joined" "$(printf '%s\n' "$OUT" | tail -n 3)" "node: joined $HUBU"
 contains "O credsep stays last" "$(printf '%s\n' "$OUT" | tail -n 1)" "credsep:"
 # a code the hub refuses: the login still opens, the line says why
-: > "$WORK/bs.log"; : > "$LOG"; OUT=$(FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oda --full-name Oda --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
+: > "$WORK/bs.log"; : > "$LOG"; OUT=$(FLEET_DIST_SOURCE=github FLEET_LOGIN_JOIN_CODE=fj_zzzzzzzzzzzzzzzzzzzzzzzzzz FLEET_LOGIN_HUB=$HUBU "$BASH_BIN" "$S" oda --full-name Oda --pubkey "$KEY" --apply $DAEMONS 2>&1); RC=$?
 unlock_homes
 eq "O refused code: still opened" 0 "$RC"
 contains "O refused code: named" "$OUT" "node: WARN — the hub did not take the join code (HTTP 401)"

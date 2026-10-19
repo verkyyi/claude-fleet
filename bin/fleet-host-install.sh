@@ -80,14 +80,18 @@ echo "✓ git $gv  ✓ tmux $FC_TMUX_V"
 # With a hub that keeps releases (issue #2773) the checkout is the hub's signed
 # stable — the key pinned now (fleet-release-lib.sh), the tree verified with
 # python3 + ssh-keygen (no ccquota, #3162), imported as one local commit; no
-# remote, never GitHub. No hub, or one
-# that keeps none (404): `git clone` of stable, as before.
-# hub_checkout <dir> — rc 0 made · 3 the hub keeps no releases · 1 failed (says why)
+# remote, never GitHub. No hub at all, or FLEET_DIST_SOURCE=github said by name:
+# `git clone` of stable, as before. A hub that keeps none (404) is said and
+# stops — never a quiet clone from GitHub (issue #4848).
+# hub_checkout <dir> — rc 0 made · 3 no hub (the git road) · 1 failed (says why)
 hub_checkout() {
+  [ "${FLEET_DIST_SOURCE:-}" = github ] && return 3
   fleet_rel_first_checkout "$1" "$CONF" 30 "$LOG"
   case $? in
     0) echo "  · 从入口取 stable $(printf '%.7s' "$REL_SHA")（验过章 ${REL_FPR}，不经 GitHub）" ;;
-    3) return 3 ;;
+    3) [ -z "${REL_HUB:-}" ] && return 3
+       echo "✗ 入口（${REL_HUB}）不存发布（/v1/fleet/release/stable 答 404）— 什么都没动，没去找 GitHub。先在入口发一版（fleet-release-publish.sh）；开发者机器要从 GitHub 装就显式 FLEET_DIST_SOURCE=github"
+       return 1 ;;
     *) case "$REL_STAGE" in
          unreachable) echo "✗ 入口不可达（${REL_HUB}）：${REL_ERR} — 什么都没动；再跑一次即可" ;;
          key)         echo "✗ 入口没给发布签名钥匙（${REL_ERR}）— 什么都没动" ;;
