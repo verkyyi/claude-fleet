@@ -95,7 +95,7 @@ eq "C: one login only" "['bob'] $S1 []" "$J"
 # --- L. 落后 (issue #2934) ------------------------------------------------------------
 # nothing recorded: no 落后 word (above). alice's install-sync saw S2 at T0, the
 # machine updater at T0+600: the earliest counts — 40m on, every install not at
-# S2 says 落后 40m WARN; 20m on, 落后 20m and no WARN; a record of ANOTHER
+# S2 says 落后 40m WARN; 5m on, 落后 5m and no WARN (the bar is 10m, #4916); a record of ANOTHER
 # stable says nothing.
 T0=1800000000
 mkdir -p "$H/alice/.config/claude-fleet/global" "$WORK/state"
@@ -104,10 +104,10 @@ printf '{"target_seen": {"sha": "%s", "at": %s}}\n' "$S2" "$((T0 + 600))" > "$WO
 FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run
 has "L: the runtime says how long" "$OUT" "machine runtime  1111111  ≠ stable · 落后 40m WARN  来源 hub"
 has "L: a login install too" "$OUT" "alice          1111111  ≠ stable · 落后 40m WARN"
-has "L: a closing WARN line" "$OUT" "WARN: 4 install(s) behind stable for over 30m — stable 2222222 first seen here"
+has "L: a closing WARN line" "$OUT" "WARN: 4 install(s) behind stable for over 10m — stable 2222222 first seen here"
 case "$OUT" in *"2222222  = stable · 落后"*) bad "L: an install at stable says 落后" ;; *) ok ;; esac
-FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 1200)) run
-has "L: under 30m no WARN" "$OUT" "alice          1111111  ≠ stable · 落后 20m  来源"
+FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 300)) run
+has "L: under 10m no WARN" "$OUT" "alice          1111111  ≠ stable · 落后 5m  来源"
 case "$OUT" in *WARN*) bad "L: a WARN under the threshold" ;; *) ok ;; esac
 FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 2400)) run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
@@ -194,7 +194,7 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 # --- E. the doctor flag -------------------------------------------------------------
-OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" FLEET_INSTALLS_STABLE=$S1 sh "$BIN/fleet-doctor.sh" --installs 2>&1); RC=$?
+OUT=$(FLEET_INSTALLS_HOMES="$H" FLEET_INSTALLS_SUDO='' FLEET_NODE_ROOT="$WORK/root" FLEET_INSTALLS_STABLE=$S1 FLEET_INSTALLS_HUB='' sh "$BIN/fleet-doctor.sh" --installs 2>&1); RC=$?
 eq "E: doctor --installs exit" 0 "$RC"
 has "E: doctor --installs is the table" "$OUT" "claude-fleet installs —"
 
@@ -258,6 +258,39 @@ rm -f "$WORK/conf/global/install-sync.state"; ln -sfn "$WORK/root/$S1" "$WORK/ro
 FLEET_LIVE_DIR="$WORK/nolive" FLEET_PLATFORM=darwin FLEET_INSTALLS_STABLE='' run --json
 J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("lane"), d["stable"][:7], d["runtime"]["at_stable"])')
 eq "M: a managed Mac, no tag → the hub's stable" "None 2222222 False" "$J"
+
+# --- N. the four kinds that follow stable (issue #4916) ------------------------------
+# the hub hands out S2 (image 3333333); the summary names a managed machine at S2,
+# a pod (u-…) at S1, an offline one; alice has a 看台 connected on S1 (a live
+# row), a closed one (left=) and one whose attach is gone
+printf '{"stable":"%s","commit":"3333333","stable_source":"release"}' "$S2" > "$WORK/hubd/version"
+printf '{"target_seen": {"sha": "%s", "at": %s}}\n' "$S2" "$T0" > "$WORK/state/update.json"
+mkdir -p "$H/alice/.config/claude-fleet/remote-views"
+sleep 600 & VPID=$!
+printf '/dev/ttys9\tfleet\tthin\t1\t%s\tcur=x\troute=lan\tdevice=e30=\ttoken=t\tfuid=u\tnode=n\tcaps=show\tcv=%s\n' "$VPID" "$S1" > "$H/alice/.config/claude-fleet/remote-views/mbp-aaaaaa"
+printf '/dev/ttys8\tfleet\tthin\t1\t%s\tcur=x\tcv=%s\tleft=5\n' "$VPID" "$S1" > "$H/alice/.config/claude-fleet/remote-views/mbp-closed"
+printf '/dev/ttys7\tfleet\tthin\t1\t999999\tcur=x\tcv=%s\n' "$S1" > "$H/alice/.config/claude-fleet/remote-views/mbp-gone"
+printf '{"machines":[{"hostname":"%s","installs":{"runtime":{"version":"%s"}},"status":"online"},{"hostname":"mac-a","alias":"mac-a","status":"online","installs":{"runtime":{"version":"%s"}}},{"hostname":"u-p1q2","status":"online","installs":{"runtime":{"version":"%s"}}},{"hostname":"mac-z","status":"lost","installs":{"runtime":{"version":"%s"}}}]}' \
+  "$(python3 -c 'import socket; print(socket.gethostname().split(".")[0])')" "$S1" "$S2" "$S1" "$S1" > "$WORK/summary.json"
+FLEET_INSTALLS_SUMMARY_CMD="cat $WORK/summary.json" FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 900)) run
+has "N: the hub hands out stable" "$OUT" "2222222  = stable  来源 release  (image 3333333)"
+has "N: a connected 看台 behind, with how long" "$OUT" "online client    alice          1111111  ≠ stable · 落后 15m WARN  来源 hub  (看台 mbp-aaaaaa)"
+case "$OUT" in *mbp-closed*|*mbp-gone*) bad "N: a closed / gone 看台 listed: $OUT" ;; *) ok ;; esac
+has "N: a managed machine at stable" "$OUT" "fleet machines   mac-a          2222222  = stable  来源 hub  (managed · online)"
+has "N: a pod behind" "$OUT" "u-p1q2         1111111  ≠ stable · 落后 15m WARN  来源 hub  (pod · online)"
+has "N: an offline machine listed, not judged" "$OUT" "mac-z          1111111  not judged (lost)"
+case "$OUT" in *"fleet machines"*"$(python3 -c 'import socket; print(socket.gethostname().split(".")[0])')  "*) bad "N: this machine listed twice" ;; *) ok ;; esac
+FLEET_INSTALLS_SUMMARY_CMD="cat $WORK/summary.json" FLEET_INSTALLS_STABLE=$S2 FLEET_INSTALLS_NOW=$((T0 + 900)) run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin); L={l["login"]: l for l in d["logins"]}
+print(d["hub"]["at_stable"], [v["view"] for v in L["alice"]["views"]], L["alice"]["views"][0]["at_stable"],
+      sorted((m["machine"], m["kind"], m.get("at_stable")) for m in d["machines"]))' 2>&1)
+eq "N: json" "True ['mbp-aaaaaa'] False [('mac-a', 'managed', True), ('mac-z', 'managed', None), ('u-p1q2', 'pod', False)]" "$J"
+# the heartbeat's one-login read asks no hub and no summary
+FLEET_INSTALLS_LOGIN=alice FLEET_INSTALLS_SUMMARY_CMD="cat $WORK/summary.json" XHUB='' FLEET_INSTALLS_STABLE=$S2 run --json
+J=$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["hub"], d["machines"])' 2>&1)
+eq "N: one login: no hub row, no machines" "None []" "$J"
+kill "$VPID" 2>/dev/null; wait "$VPID" 2>/dev/null; rm -rf "$H/alice/.config/claude-fleet/remote-views"
 kill "$HPID" 2>/dev/null; XHUB=''; rm -f "$WORK/root/current"
 grep -q 'fleet-installs.sh" --channel' "$BIN/fleet-doctor.sh" && bad "M: the doctor still runs fleet-installs.sh --channel" || ok
 

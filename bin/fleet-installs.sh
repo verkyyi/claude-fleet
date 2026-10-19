@@ -18,11 +18,28 @@
 #                    pinned to one version dir; plus a client install
 #                    (~/.local/share/claude-fleet/.client-version) when present.
 #
+#   online client    (issue #4916) each 看台 a person's `fleet` keeps connected to
+#                    a login here (its remote-views/ row, `cv=` the client's
+#                    version — fleet-thin.py says it at every attach): a client
+#                    follows stable by itself while connected, within minutes.
+#
+# And, with a hub (issue #4916 — one reading for the four kinds that follow
+# stable):
+#   hub              the hub's /version: the stable it hands out (`stable`) and
+#                    the image it runs (`commit`). It follows when it hands out
+#                    this stable; the image moves only when the hub's own source
+#                    did (the release train skips a same-source redeploy).
+#   fleet machines   every other machine of yours the hub hears (GET
+#                    /v1/fleet/summary over this login's node token): a managed
+#                    machine's runtime, a pod (hostname u-…) likewise, else its
+#                    newest login install; an offline one is listed, not judged.
+#
 # 落后 (issue #2934): how long an install that is not at stable has been behind
 # it — counted from the first time THIS machine saw that stable (a login's
 # install-sync.state `stable_since`, the machine updater's update.json
-# `target_seen`; the earliest of them). Past FLEET_INSTALLS_LAG_WARN (1800 s)
-# the row says WARN, and so does a closing line. Nothing recorded = no 落后.
+# `target_seen`; the earliest of them). Past FLEET_INSTALLS_LAG_WARN (600 s —
+# #4916: a machine moves in seconds, a pod in ~2 minutes, a client in 5) the
+# row says WARN, and so does a closing line. Nothing recorded = no 落后.
 #
 # 来源 (issue #2776, EPIC #2770): where each install takes its new versions from —
 #   hub      the hub's signed release (the runtime always; a login install with
@@ -55,7 +72,8 @@
 # (the privilege prefix, default `sudo -n`; empty = none), FLEET_INSTALLS_STABLE
 # (the stable commit), FLEET_NODE_ROOT (the runtime root), FLEET_NODE_STATE (the
 # machine updater's state dir), FLEET_INSTALLS_NOW (the clock), FLEET_LIVE_DIR,
-# FLEET_INSTALLS_HUB (the hub's address; empty = none).
+# FLEET_INSTALLS_HUB (the hub's address; empty = none), FLEET_INSTALLS_SUMMARY_CMD
+# (prints the hub's /v1/fleet/summary JSON in place of asking it).
 # FLEET_INSTALLS_LOGIN=<name> reads that one home only — the agent's heartbeat
 # (issue #2697) asks each login for its own, with no sudo and no hub.
 set -u
@@ -77,17 +95,17 @@ hub="${FLEET_INSTALLS_HUB-${FLEET_HUB_URL:-${CCQUOTA_HUB_URL:-}}}"
 
 exec python3 - "$as_json" "${FLEET_INSTALLS_HOMES:-$homes_default}" "${FLEET_INSTALLS_SUDO-sudo -n}" \
   "$stable" "${FLEET_NODE_ROOT:-/Library/Application Support/claude-fleet}" \
-  "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-1800}" "${FLEET_INSTALLS_NOW:-}" \
-  "${hub%/}" "${FLEET_INSTALLS_LOGIN:-}" <<'PY'
+  "${FLEET_NODE_STATE:-/var/db/fleet-node}" "${FLEET_INSTALLS_LAG_WARN:-600}" "${FLEET_INSTALLS_NOW:-}" \
+  "${hub%/}" "${FLEET_INSTALLS_LOGIN:-}" "$(cd "$(dirname "$0")" && pwd -P)" <<'PY'
 import json, os, re, socket, subprocess, sys, time
 
 as_json, homes, sudo, stable, root = sys.argv[1] == "1", sys.argv[2], sys.argv[3].split(), sys.argv[4], sys.argv[5]
-hub, only = sys.argv[9], sys.argv[10]
+hub, only, here_bin = sys.argv[9], sys.argv[10], sys.argv[11]
 node_state = sys.argv[6]
 try:
     lag_warn = int(sys.argv[7])
 except ValueError:
-    lag_warn = 1800
+    lag_warn = 600
 try:
     clock = int(sys.argv[8]) if sys.argv[8] else int(time.time())
 except ValueError:
@@ -138,6 +156,19 @@ c=$h/.local/share/claude-fleet/.client-version
 v=$(sed -n 's/^version=//p' "$c" 2>/dev/null | head -n 1)
 echo "client ${v:--}"
 if grep -q '^hub=' "$c" 2>/dev/null; then echo "clienthub $(sed -n 's/^hub=//p' "$c" | head -n 1)"; fi
+# the 看台 connected here (issue #4916): a live thin row, its client's version
+for f in "$h/.config/claude-fleet/remote-views"/*; do
+  [ -f "$f" ] || continue
+  while IFS= read -r ln; do
+    case "$ln" in *"	thin	"*) ;; *) continue ;; esac
+    case "$ln" in *"	left="*) continue ;; esac
+    p=$(printf '%s\n' "$ln" | cut -f5)
+    case "$p" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$p" 2>/dev/null || continue
+    cv=$(printf '%s\n' "$ln" | tr '\t' '\n' | sed -n 's/^cv=//p' | head -n 1)
+    echo "view ${f##*/} ${cv:--}"
+  done < "$f"
+done
 '''
 
 def owner(path):
@@ -163,9 +194,13 @@ def probe(home):
                              stdin=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
     except Exception:
         return None
-    r = {}
+    r = {"views": []}
     for line in out.splitlines():
         k, _, v = line.partition(" ")
+        if k == "view":
+            vid, _, cv = v.strip().partition(" ")
+            r["views"].append({"view": vid, "version": cv.strip() or "-"})
+            continue
         r[k] = v.strip()
     return r if "login" in r else None
 
@@ -276,12 +311,14 @@ for name in entries:
         ssrc = lsrc if (follows or "/.claude/fleet" in sp) else (client_source(r) if "/.local/share/claude-fleet" in sp else "?")
         shell = {"version": r.get("shellv", "-"), "follows": follows, "source": ssrc or "?"}
     client = r.get("client", "-")
-    if kind == "none" and shell is None and client == "-":
+    views = [dict(v, source="hub" if hub else "?") for v in r["views"]]
+    if kind == "none" and shell is None and client == "-" and not views:
         continue
     logins.append({"login": name,
                    "install": None if kind == "none" else {"kind": kind, "version": ver, "source": lsrc},
                    "shell": shell,
-                   "client": None if client == "-" else {"version": client, "source": client_source(r)}})
+                   "client": None if client == "-" else {"version": client, "source": client_source(r)},
+                   "views": views})
 
 since = min(seen) if seen else None
 judged, late = [], []
@@ -302,8 +339,64 @@ if runtime is not None:
     judge(rt)
 for l in logins:
     judge(l["install"]); judge(l["shell"]); judge(l["client"])
+    for v in l["views"]:
+        # an older loop says no version: listed, not judged
+        if v["version"] != "-":
+            judge(v)
 
 host = socket.gethostname().split(".")[0]
+
+# the hub and the other machines it hears (issue #4916)
+hubrow = None
+if hubv:
+    hubrow = {"url": hub, "version": str(hubv.get("stable") or "-"), "image": str(hubv.get("commit") or "-"),
+              "source": str(hubv.get("stable_source") or "?")}
+    if hubrow["version"] != "-":
+        judge(hubrow)
+
+def summary():
+    """The hub's /v1/fleet/summary over this login's node token ({} when none)."""
+    seam = os.environ.get("FLEET_INSTALLS_SUMMARY_CMD")
+    try:
+        if seam:
+            out = subprocess.run(["sh", "-c", seam], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 timeout=20).stdout
+        else:
+            if not hub.startswith(("http://", "https://")):
+                return {}
+            # the pair is read by the one reader (fleet_node_pair) and never leaves
+            # this process: the header goes to curl on stdin, never an argv
+            pair = subprocess.run(["bash", "-c", '. "$1/fleet-client-core.sh" >/dev/null 2>&1 && fleet_node_pair "$2"',
+                                   "_", here_bin, hub], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                  timeout=20).stdout.decode().strip()
+            url, _, tok = pair.partition("\t")
+            if not url or not tok:
+                return {}
+            out = subprocess.run(["curl", "-fsS", "-m", "8", "-K", "-", url.rstrip("/") + "/v1/fleet/summary"],
+                                 input=('header = "Authorization: Bearer %s"\n' % tok).encode(),
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15).stdout
+        d = json.loads(out.decode("utf-8", "replace") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+machines = []
+for m in (summary().get("machines") or []) if not only else []:
+    if not isinstance(m, dict) or not m.get("hostname"):
+        continue
+    hn = str(m["hostname"]).split(".")[0]
+    if hn == host:
+        continue   # this machine: its own rows above
+    ins = m.get("installs") or {}
+    rtv = (ins.get("runtime") or {}).get("version") if isinstance(ins.get("runtime"), dict) else None
+    ver = rtv or next((str((l.get("install") or {}).get("version") or "") for l in (ins.get("logins") or [])
+                       if isinstance(l, dict) and (l.get("install") or {}).get("version")), "") or "-"
+    o = {"machine": str(m.get("alias") or hn), "hostname": hn, "version": ver,
+         "kind": "pod" if hn.startswith("u-") else ("managed" if rtv else "host"),
+         "status": str(m.get("status") or "?"), "source": "hub" if rtv else "?"}
+    if o["status"] in ("online", "maintenance") and ver != "-":
+        judge(o)
+    machines.append(o)
 
 def dur(secs):
     m = secs // 60
@@ -312,7 +405,7 @@ def dur(secs):
 if as_json:
     print(json.dumps({"host": host, "stable": stable or None, "stable_seen": since,
                       "lag_warn": lag_warn, "late": len(late), "runtime": rt, "logins": logins,
-                      "unreadable": unreadable},
+                      "unreadable": unreadable, "hub": hubrow, "machines": machines},
                      ensure_ascii=False))
 else:
     def word(o):
@@ -322,6 +415,9 @@ else:
             w += " · 落后 %s%s" % (dur(o["behind_secs"]), " WARN" if o.get("late") else "")
         return "%s  来源 %s" % (w, o.get("source") or "?")
     print("claude-fleet installs — %s (stable %s)" % (host, short(stable) if stable else "unknown: no local refs/tags/stable"))
+    if hubrow:
+        print("  hub              %-14s %-8s %s  (image %s)" % (re.sub(r"^https?://", "", hub)[:14], short(hubrow["version"]),
+                                                               word(hubrow), short(hubrow["image"])))
     if rt is None:
         print("  machine runtime  none (not a managed machine)")
     else:
@@ -342,6 +438,17 @@ else:
         print("  %-16s %-14s %-8s %s%s" % ("client shell" if i == 0 else "", n, short(o["version"]), word(o), extra))
     if not rows:
         print("  client shell     none")
+    rows = [(l["login"], v) for l in logins for v in l["views"]]
+    for i, (n, v) in enumerate(rows):
+        print("  %-16s %-14s %-8s %s  (看台 %s)" % ("online client" if i == 0 else "", n, short(v["version"]),
+                                                  word(v) if v["version"] != "-" else "? (an older client says no version)",
+                                                  v["view"]))
+    if not rows:
+        print("  online client    none connected here")
+    for i, o in enumerate(machines):
+        what = "%s · %s" % (o["kind"], o["status"])
+        w = word(o) if "at_stable" in o else "not judged (%s)" % o["status"]
+        print("  %-16s %-14s %-8s %s  (%s)" % ("fleet machines" if i == 0 else "", o["machine"][:14], short(o["version"]), w, what))
     if unreadable:
         print("  unreadable       %s (no passwordless sudo here — run as an admin login)" % " ".join(unreadable))
     n_ok = sum(1 for a in judged if a)

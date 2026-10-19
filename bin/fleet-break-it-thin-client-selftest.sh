@@ -37,6 +37,12 @@
 #                           client uses: every offline word runs with no missing
 #                           file, a served script comes on first use, --check
 #                           holds the package to what its scripts name
+#   client-stays-old        (issue #4916) a new client staged while the 看台 stays
+#                           connected for hours: while the person types nothing
+#                           moves; once idle the loop drops its line, execs the
+#                           new version and is back on the SAME view — and does
+#                           it again for the next one (FLEET_CLIENT_UPDATED is
+#                           once, not forever)
 #   client-update-deletes-foreign  (issue #4827) an upgrade to a manifest that
 #                           drops files: the fleet's own unchanged copies go,
 #                           a file the person put in or edited stays — in place
@@ -168,6 +174,7 @@ env = dict(os.environ, HOME=R + "/client", XDG_CACHE_HOME=R + "/client/.cache",
            ITERM_PROFILE="Default", TERM_PROGRAM="iTerm.app", FLEET_ITERM_DIR=R + "/iterm", TERM="xterm-256color")
 for k in ("TMUX", "TMUX_PANE", "FLEET_CLIENT_UPDATED", "LC_TERMINAL", "FLEET_HUB_URL", "FLEET_HUB_TOKEN", "SSH_CONNECTION"):
     env.pop(k, None)
+env.update(json.loads(os.environ.get("THIN_ENV", "{}")))   # a drill's own knobs / seams
 pid, fd = pty.fork()
 if pid == 0:
     os.execvpe(sys.executable, [sys.executable, BIN + "/fleet-thin.py"] + json.loads(os.environ.get("THIN_ARGS", "[]")), env)
@@ -753,6 +760,45 @@ drill_client_update_deletes_foreign() {
   [ -z "$bad" ] || { WHY="${bad# | }"; return 1; }
   SECS=$(since "$t0")
   WHAT="升级到少了两个文件的清单：fleet 原样的那个删了，人改过的、自己放的留着；整版切换两次也带着，版本目录只留当前 + 上一版"
+}
+
+drill_client_stays_old() {
+  CAP=6   # staged, the person idle 1 s → the new version on the same view
+  local t0 v steps i n
+  tc_rig
+  # the update's two halves (seams): poll says a new client is staged while
+  # $R/new.ready is there; start switches to it (rc 3) and takes the mark away
+  printf '#!/bin/sh\n[ -e "%s/new.ready" ] && exit 10\nexit 0\n' "$R" > "$R/poll.sh"
+  printf '#!/bin/sh\nif [ -e "%s/new.ready" ]; then rm -f "%s/new.ready"; echo x >> "%s/switched"; exit 3; fi\nexit 0\n' "$R" "$R" "$R" > "$R/update.sh"
+  chmod +x "$R/poll.sh" "$R/update.sh"
+  # the person typing for 4 s (a key every 0.25 s), then idle for a long while
+  steps='[["expect", "VIEW s1 ON m1"], ["await", "'"$R"'/new.ready", 15]'
+  for i in $(seq 1 16); do steps="$steps"', ["send", "k"], ["linger", 0.25]'; done
+  steps="$steps"', ["send", "\n"], ["linger", 40]]'
+  ( THIN_ARGS='["--home", "m1", "s1"]' \
+    THIN_ENV='{"FLEET_THIN_UPDATE_CMD": "'"$R"'/update.sh", "FLEET_THIN_POLL_CMD": "'"$R"'/poll.sh", "FLEET_THIN_POLL_SECS": "0.5", "FLEET_THIN_UPDATE_IDLE": "1"}' \
+    tc_drive so "$steps" & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.so" || { WHY="the view never came up: $(cat "$R/res.so")"; tc_done; return 1; }
+  v=$(sed -n '1s/.*--view \([^ ]*\).*/\1/p' "$R/rv.log")
+  # a release lands while the 看台 is up and the person is typing
+  touch "$R/new.ready"; sleep 3.5
+  [ ! -e "$R/switched" ] || { WHY="the client switched while the person was typing: $(tr '\t' ' ' < "$R/thin.log")"; tc_done; return 1; }
+  t0=$(now)
+  until_ok "$CAP" test -e "$R/switched" \
+    || { WHY="a client staged while connected never took over (the 看台 stays on the old version until it is closed): $(tr '\t' ' ' < "$R/thin.log")"; tc_done; return 1; }
+  until_ok "$CAP" sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="switched, but the view did not come back: $(tail -n 2 "$R/rv.log")"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  n=$(sed -n 2p "$R/rv.log")
+  case $n in "m1 attach --thin --view $v --resume "*) ;;
+    *) WHY="after the switch the loop went to another view: '$n' (was m1 --view $v)"; tc_done; return 1 ;; esac
+  grep -aq '	exec	' "$R/thin.log" || { WHY="no exec in thin.log: $(tr '\t' ' ' < "$R/thin.log")"; tc_done; return 1; }
+  # the next release: the new process takes it too (not once per terminal)
+  touch "$R/new.ready"
+  until_ok "$CAP" sh -c '[ "$(grep -c . "$1/switched")" -ge 2 ] && [ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 3 ]' _ "$R" \
+    || { WHY="the second release never took over (switched $(grep -c . "$R/switched")×): $(tr '\t' ' ' < "$R/thin.log")"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="看台连着时取好了新版：人在打字不动；空闲 1 s 后 ${SECS}s 内断线、exec 新版、回到 m1 同一个看台（--resume）的 s1；下一版同样接上"
 }
 
 tc_cleanup() {

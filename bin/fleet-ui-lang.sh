@@ -974,6 +974,8 @@ fleet_ui_t() {
     en:paste_sending)           printf 'sending %s …' "${1:-}" ;;
     zh:thin_reconnect)          printf '和 %s 的连接断了，%s 秒后重连（第 %s 次）' "${1:-}" "${2:-}" "${3:-}" ;;
     en:thin_reconnect)          printf 'lost the connection to %s, reconnecting in %ss (attempt %s)' "${1:-}" "${2:-}" "${3:-}" ;;
+    zh:thin_update_switch)      printf '客户端有新版（stable 挪了），换到新版后回到这个会话…' ;;
+    en:thin_update_switch)      printf 'a new client is out (stable moved): switching to it, then back to this session…' ;;
     zh:thin_debug_hint)         printf '一直连不上？跑 fleet debug report，把这台电脑的情况交给入口看' ;;
     en:thin_debug_hint)         printf 'still failing? run fleet debug report to hand this computer'"'"'s state to the hub' ;;
     zh:thin_no_tty)             printf 'fleet --thin 要在终端里运行（这里是管道或脚本）' ;;

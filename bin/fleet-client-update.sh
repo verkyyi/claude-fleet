@@ -6,6 +6,10 @@
 #                                   connections) runs before it opens the client
 #   fleet-client-update.sh stage    fetch the hub's client into a version dir (background)
 #   fleet-client-update.sh tick     `fleet update`'s beat: check (hourly) and stage
+#   fleet-client-update.sh poll     the connected 看台's ask (fleet-thin.py, every
+#                                   FLEET_THIN_POLL_SECS — issue #4916): check now
+#                                   (no hourly stamp), stage in the foreground;
+#                                   exit 10 when a newer client is staged
 #   fleet-client-update.sh doctor [--root <home>]   the doctor's `client` row:
 #                                   `PASS|WARN|INFO<TAB><text>` on stdout
 #
@@ -71,7 +75,8 @@
 # half off; the settings half still runs.
 #
 # Exit (start): 0 open as is · 3 the files were switched — run `fleet` again.
-# Exit (tick): 0.
+# Exit (tick): 0. Exit (poll): 10 a newer client is staged — the loop switches
+# to it once the person is idle (start) · 0 nothing to switch to.
 # Env: FLEET_CLIENT_ROOT (the home; default this script's ../, or the home a
 # <home>.versions/<v>/ belongs to) · FLEET_CLIENT_CHECK_SECS ·
 # FLEET_CLIENT_TIMEOUT (seconds per request, 3) · FLEET_CLIENT_STATE (the stamp
@@ -518,6 +523,24 @@ cmd_tick() {
   return 0
 }
 
+# poll — the connected 看台's ask (issue #4916): the same check, unthrottled (the
+# loop paces it), and the stage in the foreground (the loop runs this in the
+# background); 10 = a newer client is staged and start would switch to it
+cmd_poll() {
+  [ -f "$ROOT/.client-version" ] || return 0
+  load_conf
+  [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] || return 0
+  mkdir -p "$STATE" 2>/dev/null || return 0
+  HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
+  adopt
+  tidy
+  legacy_next
+  FLEET_CLIENT_CHECK_SECS=0 check 2>/dev/null
+  case "$?" in 10|11) stage "${HV:-}" 2>>"$STATE/stage.log" || : ;; esac
+  [ -n "$(next_key)" ] && return 10
+  return 0
+}
+
 cmd_doctor() {
   local mark lv lc commit hv hmin cert lvl=PASS parts='' f up uph uto uat uwhy
   while [ $# -gt 0 ]; do
@@ -548,7 +571,7 @@ cmd_doctor() {
     elif [ "$hv" = "$lv" ]; then
       parts="$parts · 入口 不接 · 跟 stable 同版"
     else
-      parts="$parts · 入口 不接 · stable 有新版 $(short "$hv")（取好后下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
+      parts="$parts · 入口 不接 · stable 有新版 $(short "$hv")（取好后看台空闲时、或下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
     fi
   else
     f=$(mktemp "${TMPDIR:-/tmp}/fleet-client-doctor.XXXXXX")
@@ -565,7 +588,7 @@ EOF
       elif [ "$lc" -lt "$hmin" ]; then
         parts="$parts · 入口 $HUB 要求更新（$(short "$hv")）"; lvl=WARN
       else
-        parts="$parts · 入口 $HUB 有新版 $(short "$hv")（取好后下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
+        parts="$parts · 入口 $HUB 有新版 $(short "$hv")（取好后看台空闲时、或下次启动生效）"; [ "$lvl" = PASS ] && lvl=INFO
       fi
     else
       parts="$parts · 入口 $HUB 不可达"; lvl=WARN
@@ -605,6 +628,7 @@ case "${1:-}" in
   start)  shift; HUB=''; cmd_start "$@"; exit $? ;;
   stage)  shift; load_conf; HUB=$(hub_url); stage "${1:-}"; exit $? ;;
   tick)   shift; HUB=''; cmd_tick; exit $? ;;
+  poll)   shift; HUB=''; cmd_poll; exit $? ;;
   doctor) shift; HUB=''; cmd_doctor "$@"; exit 0 ;;
   *) sed -n '4,10p' "$SELF" | sed 's/^# //' >&2; exit 2 ;;
 esac

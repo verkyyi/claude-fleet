@@ -36,6 +36,10 @@
 #                  drops — and leaves the fleet's unchanged one behind
 #                  (installed.list); a version dir past the current + .prev and
 #                  a staging dir a crashed run left go at the next start
+#   K. poll        (issue #4916) the connected 看台's ask: the hourly stamp does not
+#                  hold it; same version → 0, nothing staged; behind → staged in
+#                  the foreground, exit 10, the home untouched (start switches);
+#                  FLEET_CLIENT_AUTO_UPDATE=0 → 0, nothing staged
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-update-selftest.XXXXXX") || exit 2
@@ -235,6 +239,26 @@ if [ ! -e "$ROOT.versions/stale" ] && [ ! -e "$ROOT.versions/.staging-install.99
 else
   bad "J tidy: $(ls -a "$ROOT.versions" | tr '\n' ' ')"
 fi
+
+# --- K. poll: the connected 看台's ask (issue #4916) --------------------------
+poll() { bash "$ROOT/bin/fleet-client-update.sh" poll 2>"$WORK/err"; }
+rm -f "$HUBD/fail"
+install_client v1; hub v1 1 1
+mkdir -p "$STATE"; date +%s > "$STATE/checked"   # inside the hourly window: poll asks anyway
+poll; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$ROOT.versions/.next" ] && ok "K poll, same version: 0, nothing staged" \
+  || bad "K poll same: rc=$rc next=$(cat "$ROOT.versions/.next" 2>&1)"
+hub v2 1 1 beef002
+poll; rc=$?
+if [ "$rc" = 10 ] && [ "$(cat "$ROOT.versions/.next" 2>/dev/null)" = v2 ] && [ -f "$ROOT.versions/v2/.staged" ] && grep -q OLD "$ROOT/bin/fleet"; then
+  ok "K poll, behind (hourly stamp fresh): staged v2 in the foreground, exit 10, still the old client"
+else bad "K poll behind: rc=$rc next=$(cat "$ROOT.versions/.next" 2>&1) err=$(cat "$WORK/err")"; fi
+start; rc=$?
+[ "$rc" = 3 ] && grep -q NEW "$ROOT/bin/fleet" && ok "K the start after it switches (exit 3)" || bad "K start after poll: rc=$rc err=$(cat "$WORK/err")"
+install_client v1; hub v2 1 1 beef002
+FLEET_CLIENT_AUTO_UPDATE=0 poll; rc=$?
+[ "$rc" = 0 ] && [ ! -e "$ROOT.versions/.next" ] && ok "K poll, auto update off: 0, nothing staged" \
+  || bad "K poll off: rc=$rc next=$(cat "$ROOT.versions/.next" 2>&1)"
 
 if [ "$fail" = 0 ]; then echo "PASS fleet-client-update-selftest"; else echo "FAIL fleet-client-update-selftest"; fi
 exit "$fail"
