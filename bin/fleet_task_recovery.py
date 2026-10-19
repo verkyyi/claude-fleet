@@ -90,6 +90,57 @@ def verify_stopped(payload, task):
         raise Deferred("native stop binding unavailable; reconciliation required") from exc
 
 
+def verify_retired(payload, task):
+    """The native's window is gone, so verify_stopped can never read its binding
+    (claude-fleet#4964). Prove the stop another way, on this node, now: no tmux
+    window on the native's socket carries its identity, AND the witnessed process
+    (the receipt's pid/birth/executable) is gone or is another process. Either one
+    unknown defers; a live window or the same process refuses. A lease's age is
+    never part of it. Returns the evidence, for the hub's audit row."""
+    import fleet_launch as launch
+    binding = payload.get("_native", {})
+    try:
+        c = launch.validate_context(binding["launch"])
+        proof = json.loads(payload["evidence"])
+        pid, socket = proof["pid"], binding["socket"]
+        if type(pid) is not int or pid <= 0 or not isinstance(socket, str) or not os.path.isabs(socket):
+            raise ValueError("no witnessed native process/socket")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Refused("retained stop receipt witnessed no native: " + str(exc)) from exc
+    if (c["task"], c["generation"], c["worker_id"]) != (task, payload["generation"], payload["expected_worker"]):
+        raise Refused("stop proof belongs to another task generation")
+    fid = c["worker_id"].split("/")[1]
+    try:
+        r = subprocess.run(["tmux", "-S", socket, "list-windows", "-a", "-F", "#{@fleet_id}"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Deferred("tmux unreadable; reconciliation required") from exc
+    if r.returncode == 0:
+        if fid in r.stdout.split():
+            raise Refused("a live window still carries the native's identity")
+        window = "no window on %s carries %s" % (socket, fid)
+    elif re.search(r"no server running|error connecting|No such file", r.stderr):
+        window = "no tmux server at %s" % socket
+    else:
+        raise Deferred("tmux unreadable; reconciliation required")
+    gone = ""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        gone = "pid %d gone (ESRCH)" % pid
+    except PermissionError:
+        pass  # a pid of another user: read it below, never assume
+    if not gone:
+        try:
+            observed = launch.process(pid)
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise Deferred("native process unreadable; reconciliation required") from exc
+        if all(observed[k] == proof.get(k) for k in ("pid", "birth", "executable")):
+            raise Refused("native execution is still alive")
+        gone = "pid %d is another process now" % pid
+    return dict(binding_retired=True, window=window, process=gone, checked_at=int(time.time()))
+
+
 def raw_call(action, task, payload=None, timeout=15, authority=""):
     env = dict(os.environ, FLEET_TASK_RECOVERY_RAW="1",
                FLEET_HUB_TIMEOUT=str(max(1, min(10, int(timeout)))))
@@ -297,6 +348,54 @@ class Journal:
             self.ack_report(task, r, receipt.get("_delivery_file", ""))
         return self.transport("mutate", task, dict({k: v for k, v in payload.items() if k != "_native"}, kind="stop_ack"))
 
+    def retained_stop(self, task, generation, worker):
+        """The pending stop receipt of exactly this task generation and executor."""
+        with self.store.connect() as db:
+            rows = db.execute("SELECT id,request FROM operations WHERE action=? AND status='pending' ORDER BY created", (ACTION,)).fetchall()
+        for row in rows:
+            r = json.loads(row["request"])
+            p = r["payload"]
+            if (r["scope"], r["action"], r["task"], p.get("generation"), p.get("expected_worker")) == (self.scope, "stopped", task, generation, worker):
+                return row["id"], p
+        return None, None
+
+    def release(self, task, event):
+        """Release an execution whose native and its window are both gone
+        (claude-fleet#4964). Explicit, one task: only a stop receipt this node
+        retained can be the proof (no receipt ⇒ nothing witnessed the native ⇒
+        refused), re-checked under the native fence by verify_retired. A record
+        with no outcome is cancelled first (the existing cancel_request → cancelled
+        report road); then stop_ack carries the evidence to the hub's audit row and
+        one line lands in logs/task-release.ndjson."""
+        t = self.get(task)["task"]
+        worker = t.get("execution_owner", "")
+        if t.get("authority_version") != 1 or not worker:
+            raise Refused("no execution owner to release")
+        eid, payload = self.retained_stop(task, t["generation"], worker)
+        if payload is None:
+            raise Refused("no retained stop receipt for %s g%s on this node: nothing witnessed its native" % (task, t["generation"]))
+        c = dict(task=task, generation=t["generation"], worker_id=worker)
+        with native_guard(c, self.store.root):
+            proof = verify_retired(payload, task)
+            evidence = canonical(dict(json.loads(payload["evidence"]), **proof))
+            if len(evidence) > 8000:
+                raise Refused("release evidence exceeds the hub's bound")
+            if not t.get("outcome") and not t.get("cancel_request"):
+                self.send("mutate", task, dict(kind="cancel_request", idempotency_key=event, generation=t["generation"],
+                                               expected_worker=worker, evidence="release: " + proof["window"] + "; " + proof["process"]))
+            receipt = self.commit_stopped(task, dict(payload, evidence=evidence))
+        kept = receipt.get("task", receipt)
+        kept = {k: v for k, v in kept.items() if k in TASK_FIELDS} if isinstance(kept, dict) else {}
+        with self.store.connect() as db:
+            db.execute("UPDATE operations SET status='succeeded',result=?,updated=? WHERE id=? AND status='pending'",
+                       (canonical(dict(receipt=kept, released=event)), time.time(), eid))
+        log = self.store.root.parent / "logs" / "task-release.ndjson"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a") as stream:
+            stream.write(canonical(dict(ts=int(time.time()), task=task, generation=t["generation"], worker_id=worker,
+                                        event=event, receipt=eid, outcome=kept.get("outcome", t.get("outcome") or ""), **proof)) + "\n")
+        return dict(kept, released=event, evidence=proof)
+
     def ack_report(self, task, payload, delivery_file=""):
         eid = self.event("report", task, payload)
         with self.store.connect() as db:
@@ -375,9 +474,12 @@ class Journal:
     def status(self):
         with self.store.connect() as db:
             self.expire(db)
-            rows = db.execute("SELECT id,status,created,result FROM operations WHERE action=? AND status!='succeeded' ORDER BY created", (ACTION,)).fetchall()
+            rows = db.execute("SELECT id,status,created,result,request FROM operations WHERE action=? AND status!='succeeded' ORDER BY created", (ACTION,)).fetchall()
             overflow = db.execute("SELECT value FROM metadata WHERE key='task-recovery-overflow'").fetchone()
+        # task + action name what each receipt holds (claude-fleet#4964): a
+        # `stopped` one deferred on its binding is what `release` may resolve.
         return dict(pending=len(rows), unresolved=[dict(event_id=r["id"], status=r["status"], created_at=r["created"],
+                    task=json.loads(r["request"]).get("task", ""), action=json.loads(r["request"]).get("action", ""),
                     reason=json.loads(r["result"] or "{}").get("reason", "delivery pending")) for r in rows],
                     overflow=json.loads(overflow[0]) if overflow else None)
 
