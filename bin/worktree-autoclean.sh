@@ -22,6 +22,10 @@
 #   * it is merged: a MERGED PR exists for the branch on GitHub, OR the branch
 #     tip is a strict ancestor of origin/<base> (equal tips need a merged PR), OR
 #     git finds its whole change on the base (squash / rebase merge, issue #3601)
+#   * for a worktree opened for a hub task record (its git dir's `fleet-task`
+#     mark, issue #4897), that record is CLOSED (收口) — the record decides, the
+#     issue is not read; a closed task's clean scratch is pruned even when a
+#     session ran in it. Open or unknown (no hub answer) KEEPs.
 #   * for an `issue-<N>` worktree, the bound issue #N is no longer OPEN (issue
 #     #1156; a repo with no GitHub — FLEET_FORGE=none — has no issue to ask). A merged branch is not a finished task: a worker can ship a side-fix
 #     PR from its own branch while #N stays open. Unknown state (gh failed) KEEPs.
@@ -282,6 +286,15 @@ process_locked() {
   local merged is_scratch=0
   case "$branch" in scratch-*) is_scratch=1 ;; esac   # issue #290
   merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
+  # A worktree opened for a hub task record (issue #4897): its mark names T<n>,
+  # and the RECORD says whether the work is over (收口) — never the issue. Asked
+  # only once the shared gate let a candidate by (no hub read for a live / dirty one).
+  local wtask="" tclosed=0 tv=""
+  case "$merged" in live|dirty) ;; *)
+    if wtask="$(fleet_worktree_task "$dir" 2>/dev/null)"; then
+      tv="$(fleet_task_closed "$wtask")" && tclosed=1
+    else wtask=""; fi ;;
+  esac
   # Past FLEET_SCRATCH_MAX_IDLE? (#884) — only ever computed for a scratch, only when
   # the knob is on, so the default path does not even stat.
   local idle_d="" _age idle_prune=0
@@ -322,7 +335,9 @@ process_locked() {
       # transcript dir: a human session there → KEEP + surface (⌃x remains the
       # deliberate disposal path); helper-only or no transcripts (a warm-pool
       # slot, a spawn nobody typed into) → still pruned silently, as ever.
-      if [ "$is_scratch" = 1 ]; then
+      # A task scratch whose record is closed holds nothing to keep: its
+      # conversation is on the record and in /fleet-history (issue #4897).
+      if [ "$is_scratch" = 1 ] && [ "$tclosed" = 0 ]; then
         local hsid; hsid="$(fleet_newest_human_session "$(fleet_transcript_dir "$dir")")"
         [ -n "$hsid" ] && [ -n "$idle_d" ] && idle_prune=1   # #884: past the age → reap
         if [ -n "$hsid" ] && [ "$idle_prune" = 0 ]; then
@@ -345,6 +360,16 @@ process_locked() {
   # issue number bound to this worktree (branch convention: issue-<N>)
   local inum=""
   case "$branch" in issue-[0-9]*) inum="${branch#issue-}"; inum="${inum%%[!0-9]*}" ;; esac
+  # The bound-task gate (issue #4897): a worktree with a task record prunes only
+  # once that record is closed — open or unknown KEEPs — and its issue (an issue
+  # worker's accepted task) is then not asked at all.
+  if [ -n "$wtask" ]; then
+    if [ "$tclosed" != 1 ]; then
+      reap_detached "$dir" "$branch"
+      say "KEEP  $branch  (skip:task-open — $merged but $wtask is ${tv:-unknown})"; kept=$((kept+1)); return
+    fi
+    inum=""
+  fi
   # The bound-issue gate (issue #1156): prune an issue worktree only once #N is
   # CLOSED. One `gh issue view`, spent only on a candidate every gate above let by.
   # A repo with no GitHub (FLEET_FORGE=none, issue #3601) has no issue to ask: gh is

@@ -36,7 +36,8 @@
 #   2  no fleet resolved            → ABORT  (never guess a repo)
 #   3  not the worker seat          → REFUSE (/fleet-claim is worker-only)
 #   4  no issue bound               → FAIL   (no @issue, cwd isn't issue-<N>)
-#   5  the issue read failed        → gh missing / auth / no such issue. Everything
+#   5  the issue read failed        → gh missing / auth / no such issue (a task
+#      session: the record unreadable — issue #4897). Everything
 #      that does NOT depend on gh is still printed first, so the failure is loud
 #      but not blinding.
 #
@@ -117,9 +118,24 @@ issue="$issue_arg"
 seat=$(fleet_seat)
 [ -z "$seat" ] && [ -n "$wt_issue" ] && seat=worker
 
+# A development task with no issue (issue #4897, EPIC #4895 批 0): the window
+# carries the hub's record (@task T<n>) and @task_flow 1 (dash-raw-session.sh
+# --repo --task). Its brief reads the RECORD in place of an issue — the fleet
+# block, the record (title · state · words), the flow, charter, directive and
+# language; no claim, no draft mark, never a gh read. Exit 5 when the record
+# cannot be read (no hub answer). A window with no @task_flow: byte for byte.
+at_task=$(fleet_pane_fmt '#{@task}')
+case "$at_task" in T[1-9]*) case "${at_task#T}" in *[!0-9]*) at_task='' ;; esac ;; *) at_task='' ;; esac
+task_mode=0
+if [ -z "$issue" ] && [ -n "$at_task" ] && [ "$(fleet_pane_fmt '#{@task_flow}')" = 1 ]; then
+  task_mode=1; seat=worker
+  _wr=$(fleet_pane_fmt '#{@repo}'); [ -n "$_wr" ] && [ -z "$repo_arg" ] && repo=$_wr
+fi
+
 # --- the three rails, in the order /fleet-claim states them -------------------
 [ -n "$repo" ] || die 'ABORT: not inside a fleet (no FLEET_REPO) — run /fleet-claim from a fleet session. Never guess a repo.' 2
-if [ "$seat" != worker ]; then
+if [ "$task_mode" = 1 ]; then :
+elif [ "$seat" != worker ]; then
   where='this pane is not in an issue-<N> worktree'
   hub=$(fleet_hub_pane "$sess" 2>/dev/null)
   [ -n "$hub" ] && [ "$hub" = "${TMUX_PANE:-}" ] && where="you're in the hub pane"
@@ -127,7 +143,7 @@ if [ "$seat" != worker ]; then
     && die "REFUSE: /fleet-claim is worker-only — $where (seat=${seat:-none}). Not proceeding from the wrong seat." 3
   die "FAIL: no issue bound (no @issue and cwd isn't an issue-<N> worktree) — run /fleet-claim inside a worker window. Never guess." 4
 fi
-[ -n "$issue" ] || die "FAIL: no issue bound (no @issue and cwd isn't an issue-<N> worktree) — run /fleet-claim inside a worker window. Never guess." 4
+[ -n "$issue" ] || [ "$task_mode" = 1 ] || die "FAIL: no issue bound (no @issue and cwd isn't an issue-<N> worktree) — run /fleet-claim inside a worker window. Never guess." 4
 
 printf '===== fleet =====\n'
 printf 'session=%s  seat=%s  repo=%s  base=%s\n' "$sess" "$seat" "$repo" "$base"
@@ -142,9 +158,13 @@ else
   printf 'merge=%s  (how you land: fleet-pr-merge.sh <PR> on a READY verdict — %s --%s --delete-branch, REST when GraphQL is rate-limited)\n' \
   "$(fleet_merge_method)" "$_gh_merge" "$(fleet_merge_method)"
 fi
+if [ "$task_mode" = 1 ]; then
+  printf 'task=%s  (hub task record — no GitHub issue: never claim, comment on or close one for this work)\n' "$at_task"
+else
 printf 'issue=%s  (@issue=%s worktree=%s%s)\n' \
   "$issue" "${at_issue:-none}" "${wt_issue:-none}" \
   "$([ -n "$issue_arg" ] && printf ' --issue=%s' "$issue_arg")"
+fi
 # The `origin:` line is the address half of the ship step (issue #574): when it
 # names a window key, /fleet-claim's last move before stopping is one
 # fleet-report-parent.sh call, so the session that spawned this one hears the
@@ -166,6 +186,53 @@ case "$at_origin" in
                printf 'origin: %s (not a live-window key — a daemon or another fleet; nothing to report back to)\n' "$at_origin"
              fi ;;
 esac
+fi
+
+# ------------------------------------------------- the task record (issue #4897)
+if [ "$task_mode" = 1 ]; then
+  printf '\n===== task %s · %s =====\n' "$at_task" "$repo"
+  # FLEET_TASK_RECORD is the selftest's seam (a stub answering `get`).
+  if trec=$(bash "${FLEET_TASK_RECORD:-$BIN/fleet-task-record.sh}" get "$at_task" 2>/dev/null) && [ -n "$trec" ]; then
+    printf '%s' "$trec" | python3 -c '
+import json, sys
+t = (json.load(sys.stdin) or {}).get("task") or {}
+try:
+    words = (json.loads(t.get("request_payload") or "{}") or {}).get("body") or ""
+except ValueError:
+    words = ""
+print("title: %s" % (t.get("title") or "-"))
+print("state: %s   outcome: %s   repo: %s" % (t.get("state") or "-", t.get("outcome") or "open", t.get("repo") or "-"))
+if t.get("parent_task") or t.get("parent_session"):
+    print("dispatched by: %s%s" % (t.get("parent_task") or "", (" · " + t["parent_session"]) if t.get("parent_session") else ""))
+print("")
+print("----- the request -----")
+print(words.strip() or "(only the title — the first message is the person\x27s words)")
+' 2>/dev/null || printf '(the record could not be rendered)\n'
+    rc=0
+  else
+    printf 'the hub did not answer for %s — the record could not be read (fleet + charter below are still valid)\n' "$at_task"
+    rc=5
+  fi
+  printf '\n===== flow · a hub task, not an issue =====\n'
+  printf '%s\n' \
+    "1. Implement in this worktree and verify per the repo's rules (CI is the verdict)." \
+    "2. Commit, push this branch, open the PR (gh pr create --fill); the body names $at_task, no \`Closes #N\`." \
+    "3. pr_verdict (wait: true while PENDING) → pr_merge on READY. Never merge red." \
+    "4. report (state: merged, pr, summary) right after the merge — it closes $at_task and tells the dispatcher." \
+    "   Blocked: ask, then report (state: blocked). Then stop. No evidence tool: it is issue-bound."
+  printf '\n===== charter · file layers, low→high precedence (built-in contract is the base) =====\n'
+  ch=$(fleet_worker_charter "$sess")
+  if [ -n "$ch" ]; then printf '%s\n' "$ch"
+  else printf '(no file layers — the built-in contract)\n'; fi
+  printf '\n===== implementation directive · this fleet (issue #234) =====\n'
+  printf '%s\n' "$(fleet_worker_prompt_body "$at_task" "$repo")"
+  if [ -n "${FLEET_LANG_RULE_SEED:-}" ]; then
+    printf '\n===== language · keep the session in ONE language (issue #620) =====\n'
+    printf '%s\n' "$FLEET_LANG_RULE_SEED" \
+                   "The fleet's own automation always speaks English (resume nudges, quota" \
+                   "warnings, child reports). Those are notices, never a signal to switch language."
+  fi
+  exit "$rc"
 fi
 
 # --------------------------------------------------------- snapshot or ONE gh read

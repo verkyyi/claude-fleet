@@ -3,8 +3,13 @@
 
 One window option says when the fleet may close a session on its own:
 
-    merged[:<dur>]   after its PR merged (+ the fleet's grace, or <dur>) — the
-                     default for an issue session; the historic rule
+    merged[:<dur>]   after its work is over (+ the fleet's grace, or <dur>) — the
+                     default for an issue session and a task session. Over is
+                     the hub task record CLOSED (收口: succeeded / failed /
+                     cancelled) for a session that carries one (@task T<n> — a
+                     development task with no issue, issue #4897; or an issue
+                     worker's accepted task); else its PR merged and the issue
+                     closed, the historic rule
     done[:<dur>]     its turn is over and it has sat idle <dur> (default 15m), no
                      /loop pending, no background job — a scratch's default
     loop-end         the /loop it was opened with has stopped (then idle 10 min)
@@ -19,7 +24,7 @@ unpushed worktree kept on disk, a working window never closed.
 
 CLI (the shell side's one parser — never a second copy):
     fleet_reap_policy.py norm <policy>     canonical form, exit 2 when invalid
-    fleet_reap_policy.py default <issue|scratch|loop>
+    fleet_reap_policy.py default <issue|task|scratch|loop>
     fleet_reap_policy.py label <policy> [--lang zh|en] [--now N]
     fleet_reap_policy.py merged-grace <policy>   seconds, or `keep` / `other` / ``
     fleet_reap_policy.py idle-owned <policy> [--now N]   exit 0 when a finished
@@ -110,7 +115,7 @@ def norm(policy):
 
 
 def default(kind):
-    return {"issue": "merged", "scratch": "done:15m", "loop": "loop-end"}.get(kind, "")
+    return {"issue": "merged", "task": "merged", "scratch": "done:15m", "loop": "loop-end"}.get(kind, "")
 
 
 def _dur_words(secs, zh):

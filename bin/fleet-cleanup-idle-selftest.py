@@ -1084,6 +1084,63 @@ class PolicyGrammar(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+@unittest.skipUnless(shutil.which("tmux"), "tmux absent")
+class TaskSession(Rig):
+    """A development task's session (issue #4897, EPIC #4895 批 0): a repo scratch
+    bound to the hub's record (@task + @task_flow, no issue) whose `merged` means
+    the RECORD closed — never its PR. Open or unknown keeps it; closed reaps it
+    (history first, the worktree kept for worktree-autoclean.sh)."""
+    def setUp(self):
+        super().setUp()
+        self.answer = self.root / "task-answer"
+        seam = self.root / "task-closed"
+        seam.write_text("#!/bin/sh\nread rc < " + shlex.quote(str(self.answer)) + "\n"
+                        "[ \"$1\" = T42 ] || exit 3\n"
+                        "case \"$rc\" in 0) echo SUCCEEDED ;; 1) echo WAITING ;; esac\nexit \"$rc\"\n")
+        seam.chmod(0o755)
+        self.env["FLEET_TASK_CLOSED_CMD"] = str(seam)
+        for key, value in (("@task", "T42"), ("@task_flow", "1"), ("@reap_policy", "merged")):
+            self.set(key, value)
+
+    def due(self):
+        out = self.clean()
+        if self.tm("display-message", "-p", "-t", self.win, "#{@reap_due}").strip().isdigit():
+            self.set("@reap_due", str(int(time.time()) - 1))
+        return out + self.clean()
+
+    def test_open_or_unknown_record_keeps_the_session(self):
+        for rc, token in (("1", "skip:task-open"), ("3", "skip:task-unknown")):
+            with self.subTest(rc=rc):
+                self.answer.write_text(rc + "\n")
+                self.set("@reap_skip", "")
+                out = self.due()
+                self.assertIn(token + " " + self.win + " T42", out)
+                self.assertNotIn("reaped", out)
+                self.assertTrue(self.exists())
+
+    def test_closed_record_reaps_after_grace_keeping_the_worktree(self):
+        self.answer.write_text("0\n")
+        self.set("@claude_state", "working")
+        self.assertEqual(self.due().count("reaped"), 0)   # working: never
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        out = self.due()
+        self.assertIn("reaped-task:" + self.win + " T42", out)
+        self.assertFalse(self.exists())
+        self.assertTrue(self.wt.is_dir())
+        self.assertIn("task T42 is closed", (self.root / "ledger.tsv").read_text())
+
+    def test_other_policy_or_no_flow_takes_the_ordinary_roads(self):
+        self.answer.write_text("1\n")
+        self.set("@task_flow", "")
+        self.assertNotIn("task", self.due())             # no flow: not a task session
+        self.set("@task_flow", "1")
+        self.set("@reap_policy", "done:15m")
+        out = self.due()
+        self.assertNotIn("skip:task", out)               # done: the idle road decides
+        self.assertIn("reaped-idle:" + self.win, out)
+
+
 class ReapPolicy(Rig):
     """Each reap policy (issue #1902): reaped once due, kept before it, kept while
     working, and its unpushed work stays on disk."""

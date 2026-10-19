@@ -47,6 +47,13 @@ def run(*args, cwd=None):
         raise
 
 
+def merged_grace_default():
+    """FLEET_CLEANUP_MERGED_GRACE — fleet-cleanup.sh's grace after a merge, the
+    same seconds for a task session's closed record (issue #4897)."""
+    v = os.environ.get("FLEET_CLEANUP_MERGED_GRACE", "600")
+    return int(v) if v.isdigit() and len(v) <= 8 else 600
+
+
 def minutes():
     value = os.environ.get("FLEET_REAP_IDLE_DONE_MIN", "30")
     return int(value) if re.fullmatch(r"\d{1,6}", value) else 30
@@ -95,7 +102,8 @@ class Cleaner:
                  "@handoff_manifest", "@agent_transfer_until", "window_name",
                  "@reap_policy", "@loop", "@worker_lifecycle", "@wrap_gone", "pane_dead",
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
-                 "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status")
+                 "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
+                 "@task", "@task_flow")
         # ONE tmux call for the lot (issue #4261): a call per name was 28 execs a
         # window, every window, every tick — ~600 a minute on a busy login. A
         # value carrying the separator (never seen) falls back to a call per name.
@@ -194,9 +202,14 @@ class Cleaner:
             return stamp + fleet_reap_policy.LOOP_END_GRACE
         return val  # at
 
-    def eligible(self, window, snap):
+    def eligible(self, window, snap, task=False):
         pol = self.policy(snap)
-        if pol is not None:
+        if task:
+            # A task session's `merged` is this pass's (issue #4897): the record
+            # closed is what task_session() checked; every gate below still applies.
+            if snap["@worker_lifecycle"] not in ("", "sleeping"):
+                return False
+        elif pol is not None:
             # An explicit policy decides which windows this pass may close: done /
             # loop-end / at, an issue session as well as a scratch. keep and merged
             # are never this pass's (merged is fleet-cleanup.sh's). Every gate
@@ -420,6 +433,8 @@ class Cleaner:
             return self.norepo(window, snap)
         if self.theirs(snap):
             return False
+        if self.task_ref(snap):
+            return self.task_session(window, snap)
         if self.route(snap) == "no-pr":
             return self.no_pr(window, snap)
         if not self.eligible(window, snap):
@@ -485,6 +500,79 @@ class Cleaner:
         self.retire(window)
         self.tm("kill-window", "-t", window)
         print("reaped-idle:" + window + ("" if pol is None else " policy=" + snap["@reap_policy"]))
+        return True
+
+    @staticmethod
+    def task_ref(snap):
+        """A development task's session (issue #4897, EPIC #4895 批 0): a repo
+        scratch bound to the hub's record (@task T<n> + @task_flow 1, no issue)
+        whose policy is `merged` (or none — a task's default). Its end is the
+        RECORD closed, never a PR or an issue. Any other policy (done / loop-end /
+        at / keep) goes the ordinary roads."""
+        if (snap["@task_flow"] != "1" or snap["@issue"] or snap["@raw"] != "1"
+                or not re.fullmatch(r"T[1-9][0-9]{0,9}", snap["@task"])):
+            return ""
+        pol = fleet_reap_policy.parse(snap["@reap_policy"]) if snap["@reap_policy"] else ("merged", 0)
+        return snap["@task"] if pol and pol[0] == "merged" else ""
+
+    def task_closed(self, task):
+        """0 closed (收口) · 1 open · 3 unknown — fleet_task_control.py closed,
+        or the FLEET_TASK_CLOSED_CMD seam (same contract)."""
+        cmd = os.environ.get("FLEET_TASK_CLOSED_CMD")
+        argv = [cmd, task] if cmd else ["python3", str(BIN / "fleet_task_control.py"), "closed", "--task", task]
+        try:
+            rc = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode
+        except (OSError, subprocess.SubprocessError):
+            return 3
+        return rc if rc in (0, 1) else 3
+
+    def task_session(self, window, snap):
+        """Close a task session once its record is closed (issue #4897): its turn
+        over, nothing pending, the grace (`merged:<dur>`, else
+        FLEET_CLEANUP_MERGED_GRACE) past its last turn — history first and
+        resumable, the worktree left for worktree-autoclean.sh (which asks the
+        record too). An open or unreadable record keeps it."""
+        task = self.task_ref(snap)
+        wt = snap["@worktree"]
+        key = re.search(r"(?:^|-)(scratch)-(\d+)$", Path(wt).name)
+        if not key:
+            return False
+        key = key[1] + "-" + key[2]
+        if self.finished(snap) not in ("done", "exited") and snap["@wrap_gone"] != "1" and snap["pane_dead"] != "1":
+            return False
+        rc = self.task_closed(task)
+        if rc != 0:
+            if not self.args.dry_run and option(self.tm, window, "@reap_key").startswith("task:"):
+                clear(self.tm, window)
+            self.say(window, "skip:task-open" if rc == 1 else "skip:task-unknown", task)
+            return False
+        if not self.eligible(window, snap, task=True) or self.busy(window, snap):
+            return False
+        pol = self.policy(snap)
+        grace = pol[1] if pol and pol[1] else merged_grace_default()
+        due = notice(self.tm, window, "task:" + task, int(snap["@claude_state_ts"]) + grace,
+                     self.now, self.args.dry_run)
+        if due > self.now:
+            return False
+        print("reap-due:%s policy=%s task=%s" % (window, snap["@reap_policy"] or "merged", task),
+              file=__import__("sys").stderr)
+        if self.args.dry_run:
+            print("would-reap-task:" + window + " " + task)
+            return False
+        history = str(BIN / "fleet-history.sh")
+        run("bash", history, "record-closed", "--repo", self.args.repo, "--session", self.args.session,
+            "--key", key, "--worktree", wt, "--win", window, "--title", snap["window_name"],
+            "--summary", "Automatically closed: task " + task + " is closed")
+        resume = run("bash", history, "resume", "--repo", self.args.repo,
+                     "--main", self.args.main, key).split("\t")
+        if len(resume) < 4 or resume[0] not in ("RESUME", "CODEX-RESUME") or resume[1] != wt:
+            self.say(window, "skip:no-resume", key + " " + (resume[0] if resume else "?"))
+            return False
+        if self.snapshot(window) != snap or self.busy(window, snap):
+            return False  # re-checked right before the close
+        self.retire(window)
+        self.tm("kill-window", "-t", window)
+        print("reaped-task:" + window + " " + task)
         return True
 
     def branch_prs(self, branch, head):

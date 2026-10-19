@@ -2,8 +2,18 @@
 
 You are a **claude-fleet worker running on OpenAI Codex CLI**, not on Claude Code.
 The fleet spawned you in a tmux pane whose working directory is your own git
-worktree, bound to one GitHub issue. What follows the rule is the fleet's
-`/fleet-claim` skill — the whole worker lifecycle — written for Claude Code.
+worktree, bound to one task. The flow is: read the task → implement → open the
+PR → merge it yourself once the gate is green (`pr_verdict` / `pr_merge`) → close
+the task record and report (`report`, `state: merged`). Two kinds of binding:
+
+- **A hub task record `T<n>`** (the `task` tool's development task, issue #4897):
+  read it first with the `brief` tool (no arguments). There is no GitHub issue —
+  never claim, comment on, close or file one for this work; the record is the
+  ticket, and `report merged` closes it.
+- **An older GitHub issue** (until the issue road is removed): what follows the
+  rule is the fleet's `/fleet-claim` skill — the whole worker lifecycle — written
+  for Claude Code.
+
 Follow it as written, with these translations (they are the only differences):
 
 - **Fleet slash commands are Codex skills here.** Claude spells them `/fleet-*`;

@@ -11,8 +11,10 @@
 #      `T<n>` on stdout; --rule is an unknown option (usage, 2);
 #      a hub refusal → exit 1, said on stderr.
 #   C  set / get: POST /v1/node/tasks/T<n> with asked / parked / clear; GET the record.
-#   D  dispatch: the record first, then a repo task through fleet-issue-file.sh
-#      --task T<n> (+ --spawn); a no-repo task opens a no-repo session with --task;
+#   D  dispatch: the record first; a repo task is the record alone (issue #4897):
+#      + --spawn, dash-raw-session.sh --repo --task T<n> --reap merged, no issue
+#      (a draft, or FLEET_TASK_ISSUE=1: still fleet-issue-file.sh --task T<n>);
+#      a no-repo task opens a no-repo session with --task;
 #      no hub ⇒ a repo task files exactly as before (no --task), a no-repo one exits 3.
 #   E  epic-member: one record per member (token epic:<repo>#<N>, its issue on it).
 #   F  fleet-issue-file.sh --task: the body says 「hub 任务 T<n>」, the issue is hung
@@ -142,12 +144,26 @@ rm -f "$ANS"
 # --- D: dispatch -------------------------------------------------------------------
 : > "$CURL_LOG"; rm -f "$WORK/calls"
 out=$(printf '为什么一直转\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | head -1)" = T5 ] && printf '%s\n' "$out" | grep -q 'issues/77' \
-  && ok "D a repo task: T<n> first, then the issue's URL" || bad "D repo: rc=$rc [$out]"
-[ "$(head -1 "$WORK/calls")" = "fleet-issue-file.sh --title 修风扇 --body 为什么一直转 --repo o/r --task T5 --spawn" ] \
-  && ok "D …filed through fleet-issue-file.sh --task T5 --spawn" || bad "D filer argv: $(cat "$WORK/calls")"
+[ "$rc" = 0 ] && [ "$out" = T5 ] \
+  && ok "D a repo task: T<n> only — no issue filed, no URL (issue #4897)" || bad "D repo: rc=$rc [$out]"
+grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 修风扇 --reap merged (--as fleet-worker )?--prompt-file=' "$WORK/calls" \
+  && ! grep -q '^fleet-issue-file.sh' "$WORK/calls" && grep -qx '修风扇' "$WORK/calls" && grep -qx '为什么一直转' "$WORK/calls" \
+  && ok "D …its session opens in a repo worktree bound to T5 (reap merged), title + words its first turn" \
+  || bad "D repo spawner argv: $(cat "$WORK/calls")"
 grep -q '"repo": "o/r"' "$CURL_LOG" && grep -q '"token": "orch:hub:' "$CURL_LOG" \
   && ok "D the record names the repo; the token is the caller's + the words'" || bad "D record body: $(grep body: "$CURL_LOG")"
+rm -f "$WORK/calls"
+out=$(printf 'x\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = T5 ] && [ ! -f "$WORK/calls" ] \
+  && ok "D a repo task with no --spawn: the record alone (await names it)" || bad "D repo record-only: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
+rm -f "$WORK/calls"
+out=$(printf 'x\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn --draft 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q '^fleet-issue-file.sh .*--task T5 --spawn --draft' "$WORK/calls" && ! grep -q '^dash-raw-session' "$WORK/calls" \
+  && ok "D a draft repo task keeps the issue road for one batch (its mark lives in the body)" || bad "D draft: rc=$rc $(cat "$WORK/calls" 2>&1)"
+rm -f "$WORK/calls"
+out=$(printf 'x\n' | FLEET_TASK_ISSUE=1 bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(head -1 "$WORK/calls")" = "fleet-issue-file.sh --title 修风扇 --body x --repo o/r --task T5 --spawn" ] \
+  && ok "D FLEET_TASK_ISSUE=1: the old road, byte for byte (fleet-issue-file.sh --task T5 --spawn)" || bad "D old road: $(cat "$WORK/calls" 2>&1)"
 rm -f "$WORK/calls"
 out=$(printf '风扇为什么一直转\n' | bash "$R" dispatch --title '看看风扇' --body-file - --spawn --reap done:2h 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = T5 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 看看风扇 --reap done:2h --prompt-file=' "$WORK/calls" \

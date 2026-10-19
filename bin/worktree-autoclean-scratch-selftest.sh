@@ -11,6 +11,8 @@
 #   * clean but unmerged local commits                        → KEEP + surface ONCE
 #   * a live tmux pane inside it                              → KEEP (attached)
 # and a normal `issue-<N>` worktree must be UNAFFECTED by the scratch wording.
+# A worktree marked with a hub task record (issue #4897) is decided by THAT record:
+# closed ⇒ prune, open / unknown ⇒ keep, and its issue is not read.
 #
 # No network / no tmux server / no real GitHub: the real script + fleet-lib.sh are
 # symlinked into a temp bin (so $BIN/../fleet.conf can't leak the real fleet), a
@@ -171,6 +173,42 @@ run_wac >/dev/null
 n2="$(wc -l < "$EVENTS" | tr -d ' ')"
 [ "$n1" = "$n2" ] || fail "a second sweep must NOT re-notify a still-kept scratch (surface once)" "before=$n1 after=$n2"
 ok "SURFACE-ONCE: a kept scratch is surfaced only on the first sweep, not every cycle"
+
+# ============================ TASK: the record decides (issue #4897) ============
+# A worktree opened for a hub task record carries `fleet-task` in its git dir.
+#   scratch-8  clean ancestor + a HUMAN transcript, record CLOSED ⇒ PRUNE (not kept)
+#   scratch-9  clean ancestor, record OPEN                        ⇒ KEEP skip:task-open
+#   issue-10   clean ancestor, record CLOSED, issue still OPEN   ⇒ PRUNE (issue not read)
+#   scratch-11 clean ancestor, record UNKNOWN (no hub answer)    ⇒ KEEP
+. "$LIB"
+for b in scratch-8 scratch-9 issue-10 scratch-11; do
+  git -C "$BASE" worktree add -q -b "$b" "$WORK/base-$b" >/dev/null 2>&1
+done
+fleet_worktree_task_mark "$WORK/base-scratch-8" T81 && fleet_worktree_task_mark "$WORK/base-scratch-9" T91 \
+  && fleet_worktree_task_mark "$WORK/base-issue-10" T101 && fleet_worktree_task_mark "$WORK/base-scratch-11" T111 \
+  || fail "fleet_worktree_task_mark could not mark a worktree"
+[ "$(fleet_worktree_task "$WORK/base-scratch-8")" = T81 ] || fail "fleet_worktree_task must read the mark back"
+[ -z "$(git -C "$WORK/base-scratch-8" status --porcelain)" ] || fail "the mark must not dirty the tree"
+fleet_worktree_task "$WORK/base-scratch-2" >/dev/null && fail "an unmarked worktree has no task"
+git -C "$BASE" commit --allow-empty -qm base-advance-2
+mkdir -p "$PROJ/$(enc "$WORK/base-scratch-8")"
+printf '{"type":"user","message":{"content":"the task conversation"}}\n' > "$PROJ/$(enc "$WORK/base-scratch-8")/s.jsonl"
+cat > "$WORK/task-closed" <<'TC'
+#!/bin/bash
+case "$1" in T81|T101) echo SUCCEEDED; exit 0 ;; T91) echo WAITING; exit 1 ;; *) exit 3 ;; esac
+TC
+chmod +x "$WORK/task-closed"
+out="$(FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac --dry-run)"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +scratch-8 ' || fail "TASK a closed task's conversation scratch should PRUNE" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-9 .*skip:task-open .*T91 is WAITING' || fail "TASK an open record must KEEP" "$out"
+printf '%s\n' "$out" | grep -Eq 'PRUNE +issue-10 ' || fail "TASK a closed record prunes an issue worktree whatever the issue says" "$out"
+printf '%s\n' "$out" | grep -Eq 'KEEP +scratch-11 .*skip:task-open .*T111 is unknown' || fail "TASK an unknown record must KEEP" "$out"
+FLEET_TASK_CLOSED_CMD="$WORK/task-closed" run_wac >/dev/null
+[ -d "$WORK/base-scratch-8" ] && fail "TASK real run should remove the closed task's scratch-8"
+[ -d "$WORK/base-issue-10" ] && fail "TASK real run should remove the closed task's issue-10"
+[ -d "$WORK/base-scratch-9" ] || fail "TASK real run must KEEP the open task's scratch-9"
+[ -d "$WORK/base-scratch-11" ] || fail "TASK real run must KEEP the unknown task's scratch-11"
+ok "TASK the worktree's record decides: closed ⇒ prune (even a conversation / an open issue); open / unknown ⇒ keep"
 
 printf '\nselftest OK: %s assertions passed (janitor scratch reap rules, #290)\n' "$pass"
 exit 0

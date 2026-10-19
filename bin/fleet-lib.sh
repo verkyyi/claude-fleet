@@ -1011,6 +1011,43 @@ fleet_task_authority() {
   printf '%s' "$v"
 }
 
+# A worktree remembers the hub task record it was opened for (issue #4897, EPIC
+# #4895 批 0): `fleet-task` in its own git dir (`.git/worktrees/<name>/`, never the
+# tree — no file shows as dirty), so the reapers can ask the RECORD whether the
+# work is over after its window is gone. Written by the spawners when a session
+# carries --task; none ⇒ every reader is byte for byte what it was.
+#   fleet_worktree_task_mark <dir> <T<n>>   (best effort, rc 1 on a bad ref / dir)
+#   fleet_worktree_task <dir>               → T<n> on stdout, rc 1 when none
+fleet_worktree_task_mark() {
+  local gd
+  case "${2:-}" in T[1-9]*) case "${2#T}" in *[!0-9]*) return 1 ;; esac ;; *) return 1 ;; esac
+  gd=$(git -C "${1:-/nonexistent}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  case "$gd" in /*) [ -d "$gd" ] || return 1 ;; *) return 1 ;; esac
+  printf '%s\n' "$2" > "$gd/fleet-task" 2>/dev/null
+}
+fleet_worktree_task() {
+  local gd t
+  gd=$(git -C "${1:-/nonexistent}" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  case "$gd" in /*) ;; *) return 1 ;; esac
+  [ -f "$gd/fleet-task" ] || return 1
+  t=$(head -n 1 "$gd/fleet-task" 2>/dev/null)
+  case "$t" in T[1-9]*) case "${t#T}" in *[!0-9]*) return 1 ;; esac ;; *) return 1 ;; esac
+  printf '%s\n' "$t"
+}
+# fleet_task_closed <T<n>> — is the record closed (收口)? rc 0 closed (its verdict
+# — SUCCEEDED / FAILED / CANCELLED / REFUSED — on stdout), 1 still open, 3 unknown
+# (no hub, no answer). Unknown never reads as closed: a reaper keeps on 3.
+# FLEET_TASK_CLOSED_CMD is the seam (a selftest's answer, same contract).
+fleet_task_closed() {
+  local out rc
+  case "${1:-}" in T[1-9]*) case "${1#T}" in *[!0-9]*) return 3 ;; esac ;; *) return 3 ;; esac
+  if [ -n "${FLEET_TASK_CLOSED_CMD:-}" ]; then out=$("$FLEET_TASK_CLOSED_CMD" "$1" 2>/dev/null); rc=$?
+  else out=$(python3 "$_FLEET_LIB_DIR/fleet_task_control.py" closed --task "$1" 2>/dev/null); rc=$?; fi
+  case "$rc" in 0|1) ;; *) return 3 ;; esac
+  printf '%s\n' "$out" | head -n 1
+  return "$rc"
+}
+
 # A capable node checks the hub immediately before new dispatch, including a
 # local scratch without a lease. Hub outage is unknown, never legacy fallback.
 # No hub and no explicit selection remains byte-for-byte the legacy path. The

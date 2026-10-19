@@ -30,11 +30,14 @@
 #                     [--spawn] [--reap P] [--agent A] [--draft] [--pr-note TEXT]
 #                     → the `task` tool: the record FIRST (`T<n>` on
 #                       stdout), then — a repo named, i.e. a development task —
-#                       fleet-issue-file.sh --task T<n> (+ --spawn: its worker,
-#                       stamped @task; the URL on stdout after the T); no repo +
-#                       --spawn: a no-repo session given the words, stamped @task.
-#                       No hub: a repo task is filed exactly as before (no T line),
-#                       a no-repo one is refused (exit 3: file an issue instead).
+#                       + --spawn: its session in a worktree of that repo, bound
+#                       to the record alone (no issue: dash-raw-session.sh --repo
+#                       --task, reaped `merged` = the record closed — issue
+#                       #4897); no repo + --spawn: a no-repo session given the
+#                       words, stamped @task. Still filed as an issue
+#                       (fleet-issue-file.sh --task T<n>, the URL after the T):
+#                       --draft, FLEET_TASK_ISSUE=1, and no hub (no T line —
+#                       a no-repo one is refused there, exit 3).
 #   fleet-task-record.sh epic-member <epic> <owner/name> <N> [<title>]
 #                     → an EPIC member's read-only record (`T<n>` on stdout): its
 #                       issue on it, `via` EPIC #<epic>, one per member (the token is
@@ -171,6 +174,14 @@ if [ "$cmd" = dispatch ]; then
   # One token per (caller, words): a session asking twice is one record.
   okey=$(fleet_origin_key 2>/dev/null) || okey=''
   tok="orch:${okey:-hub}:$(printf '%s\n%s' "$title" "$body" | shasum 2>/dev/null | cut -c1-16)"
+  # A development task's session starts as the worker template, as
+  # dash-issue-session.sh gives an issue worker (#3122): the shipped fleet-worker
+  # when this login has it, else a plain session (issue #4897).
+  if [ -n "$repo" ] && [ -z "$as_agent" ] && [ -z "$draft" ] && [ "$spawn" = 1 ] && [ "${FLEET_TASK_ISSUE:-0}" != 1 ] \
+     && python3 "$BIN/fleet-agent-def.py" launch fleet-worker --dir "${FLEET_MAIN:-$PWD}" \
+          --for "${agent:-${FLEET_AGENT:-claude}}" >/dev/null 2>&1; then
+    as_agent=fleet-worker
+  fi
   # Resolve the definition's provider before acceptance, independently of its
   # tools/body. Explicit --agent wins. Every retry retains the full input.
   template=''
@@ -216,6 +227,21 @@ JSON
     die 3 "no hub here: a task with no repo has nowhere to be recorded — file an issue instead (file_issue)"
   fi
   export FLEET_DISPATCH="$dispatch"
+  # A development task the hub accepted is the record alone (issue #4897, EPIC
+  # #4895 批 0): no GitHub issue — the session opens in its own worktree of the
+  # repo, bound to T<n> (dash-raw-session.sh --repo --task stamps @task_flow), reads
+  # the record, opens its PR, merges it on a green gate and closes the record with
+  # its report; it is reaped once the record is closed (`merged`). Not --spawn: the
+  # record waits (await T<n> names it). Kept on the issue road for one batch: a
+  # draft-only task (its mark lives in an issue body, #3715), no hub (no T), and
+  # FLEET_TASK_ISSUE=1 — the old road, deleted in 批 1.
+  if [ -n "$repo" ] && [ -n "$t" ] && [ -z "$draft" ] && [ "${FLEET_TASK_ISSUE:-0}" != 1 ]; then
+    [ "$spawn" = 1 ] || exit 0
+    pf=$(mktemp "${TMPDIR:-/tmp}/fleet-task-prompt.XXXXXX") || die 1 "no temp file"
+    if [ -n "$body" ]; then printf '%s\n\n%s\n' "$title" "$body" > "$pf"; else printf '%s\n' "$title" > "$pf"; fi
+    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
+      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} "--prompt-file=$pf"
+  fi
   if [ -n "$repo" ]; then   # a development task: its issue, hung on the record
     sp=''; [ "$spawn" = 1 ] && sp=--spawn
     exec bash "$BIN/fleet-issue-file.sh" --title "$title" ${body:+--body "$body"} --repo "$repo" \
