@@ -256,13 +256,17 @@ def id_result(c, state, summary, pr):
     """The report as a result of the session's ID (EPIC T497 C4, S2) — beside the
     task record (双写); never fails the report."""
     fid = c["worker_id"].split("/")[1]
-    argv = [sys.executable, str(BIN / "fleet_id.py"), "result", fid, "--state", state, "--summary", summary,
-            "--agent", c.get("provider", "")]
+    ev = {"ev": "result", "state": state, "summary": summary}
+    if c.get("provider"):
+        ev["agent"] = c["provider"]
     if pr:
-        argv += ["--pr", str(pr).lstrip("#")]
+        ev["pr"] = str(pr).lstrip("#")
     try:
-        subprocess.run(argv, capture_output=True, timeout=15)
-    except (OSError, subprocess.SubprocessError):
+        import fleet_id   # in-process: the ledger append runs no command
+        if fleet_id.is_fid(fid):
+            fleet_id.append(fid, ev)
+            fleet_id.push_later(fid)
+    except (ImportError, OSError, ValueError):
         pass
 
 
