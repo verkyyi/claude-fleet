@@ -705,7 +705,16 @@ one-off drill / audit records do not go in the repo (issue #3576).
   duplicated the PR run, master's re-ran a subset of the train's; the same for
   every PR check — shellcheck, tokenledger, fleet-hub-mcp, client-e2e,
   task-acceptance, browser-attachment, web-*), and shellcheck lints only the
-  `*.sh` a PR touches (`bin/ci-shellcheck.sh --changed`, the whole tree nightly). **The BSD half is not on the PR** (issue #2286): since #3141 it
+  `*.sh` a PR touches (`bin/ci-shellcheck.sh --changed`, the whole tree nightly).
+  **The PR gate is as wide as its selection, and the train reuses it** (issue
+  #4794): selftests.yml's `plan` job sizes the shards by `fleet-train-plan.sh`
+  (1..18, ~3 min a shard) and uploads `selftests-selection` (the merge tree, base,
+  head, the tests selected); the train's `bin/fleet-train-reuse.sh` skips
+  (`run-selftests.sh --proven`, `REUSED …`) a test a merged PR's green run tested
+  on a tree the selector (`--changed <tree> --exact`) says is untouched since.
+  task-acceptance · client-e2e · fleet-hub-mcp run only when `bin/ci-plan.sh` (the
+  same selector `--among` their entry files, plus their globs) says the change is
+  theirs — skipped reads green; unsure ⇒ run; nightly they run whole. **The BSD half is not on the PR** (issue #2286): since #3141 it
   rides the release train (`release-train.yml`: ONE concurrency lane, a push never
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
