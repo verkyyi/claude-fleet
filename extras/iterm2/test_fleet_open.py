@@ -200,5 +200,81 @@ class Reaper(unittest.TestCase):
             tmp.cleanup()
 
 
+class Receipt(unittest.TestCase):
+    """Issue #3540: an open with an id is answered over ssh — opened / failed:<why>."""
+
+    def test_peek(self):
+        self.assertEqual(fo.peek(b64({"v": 1, "id": "ab12", "host": "mac-c"})), ("ab12", "mac-c"))
+        self.assertEqual(fo.peek(b64({"v": 9, "id": "ab12"})), ("ab12", ""))  # refused, still answered
+        self.assertEqual(fo.peek(b64({"id": "AB;rm", "host": "-oProxyCommand=x"})), (None, ""))
+        self.assertEqual(fo.peek("!!junk!!"), (None, ""))
+        self.assertEqual(fo.peek(b64([1])), (None, ""))
+
+    def test_ack_words(self):
+        self.assertEqual(fo.ack_words("opened"), ("ok", ""))
+        self.assertEqual(fo.ack_words("opened-confirmed"), ("ok", ""))
+        self.assertEqual(fo.ack_words("declined")[0], "fail")
+        self.assertIn("allow-list", fo.ack_words("declined")[1])
+        self.assertIn("open", fo.ack_words("open-failed")[1])
+
+    def test_ack_cmd_quotes_everything(self):
+        cmd = fo.ack_cmd("mac-c", "ab12", "fail", "it's\tbad; rm -rf ~\nx")
+        self.assertEqual(cmd[:6], ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "mac-c"])
+        self.assertEqual(len(cmd), 7)
+        import shlex
+        self.assertEqual(shlex.split(cmd[6]),
+                         ["bash", fo.ACK_BIN, "--ack", "ab12", "fail", "it's bad; rm -rf ~ x"])
+
+    def _handle(self, payload, do_url=None):
+        old = (fo.CONF_DIR, fo.do_url, fo.subprocess.run)
+        tmp = tempfile.TemporaryDirectory()
+        calls = []
+
+        class R:
+            returncode = 0
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return R()
+        fo.CONF_DIR, fo.subprocess.run = tmp.name, run
+        if do_url:
+            fo.do_url = do_url
+        try:
+            with open(os.path.join(tmp.name, "host"), "w") as f:
+                f.write("mini-from-file\n")
+            fo.handle(b64(payload))
+            log = open(os.path.join(tmp.name, "log")).read()
+        finally:
+            fo.CONF_DIR, fo.do_url, fo.subprocess.run = old
+            tmp.cleanup()
+        import shlex
+        return [c[:-1] + shlex.split(c[-1]) for c in calls], log
+
+    def test_opened_acks_ok(self):
+        calls, log = self._handle({"v": 1, "kind": "url", "url": "https://github.com/x", "id": "c0ffee", "host": "mac-c"},
+                                  do_url=lambda req: (req["url"], "opened"))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][5], "mac-c")
+        self.assertEqual(calls[0][-4:], ["--ack", "c0ffee", "ok", ""])
+        self.assertIn("ack-sent", log)
+
+    def test_declined_acks_fail(self):
+        calls, _ = self._handle({"v": 1, "kind": "url", "url": "https://x.example/", "id": "c0ffee"},
+                                do_url=lambda req: (req["url"], "declined"))
+        self.assertEqual(calls[0][5], "mini-from-file")
+        self.assertEqual(calls[0][-3:-1], ["c0ffee", "fail"])
+        self.assertIn("allow-list", calls[0][-1])
+
+    def test_refused_acks_fail_with_reason(self):
+        calls, _ = self._handle({"v": 1, "kind": "url", "url": "https://github.com/x", "id": "c0ffee", "ts": 1})
+        self.assertEqual(calls[0][-3:-1], ["c0ffee", "fail"])
+        self.assertIn("stale ts", calls[0][-1])
+
+    def test_no_id_sends_nothing(self):
+        calls, _ = self._handle({"v": 1, "kind": "url", "url": "https://github.com/x"},
+                                do_url=lambda req: (req["url"], "opened"))
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

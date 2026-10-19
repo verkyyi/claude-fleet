@@ -31,8 +31,12 @@
 # DEGRADE: no tmux, FLEET_OPEN=0, the active client is not iTerm2, the send did
 # not finish → bin/open-url.sh: its reverse-tunnel opener (2226) if live, else a
 # popup with the URL + OSC 52 to the operator's clipboard.
-#   No receipt: iTerm2 accepting the escape says nothing about the laptop side
-# (iTerm2 drops an unknown Custom= silently), so this road is `unconfirmed` (#3540).
+#   The receipt (issue #3540): iTerm2 accepting the escape says nothing about the
+# laptop side (it drops an unknown Custom= silently), so the laptop script answers
+# the payload's id over its own ssh to this machine — `fleet-open.sh --ack <id> ok|fail
+# <why>` — and this road waits for it like the thin one: opened / failed:<why>, no
+# answer within FLEET_OPEN_ACK_WAIT (the script not installed, an older v1, a dialog
+# still waiting for its click) → `unconfirmed`.
 # `fleet-doctor`'s `open` line shows the secret + the last result.
 #
 # THE CLIENT FIRST (issue #1717, EPIC #1710 C7): before any of the above,
@@ -56,8 +60,9 @@
 # A RECEIPT, not a send (issue #3538): every open carries an id, and a road whose far
 # side can answer waits up to FLEET_OPEN_ACK_WAIT seconds (12) for it — the client's
 # action loop through the hub (its done/failed), a thin client's loop (one ssh back to
-# its home: `fleet-open.sh --ack <id> ok|fail <why>`), the local opener's exit. A road
-# with no answer (the iTerm2 escape, a proxy spool, open-url.sh) is `unconfirmed`, and
+# its home: `fleet-open.sh --ack <id> ok|fail <why>`), the iTerm2 script (the same
+# --ack over its ssh, issue #3540), the local opener's exit. A road
+# with no answer (a proxy spool, open-url.sh) is `unconfirmed`, and
 # the stderr line gives the person's side the link. Which road it took is on stderr.
 #
 # THE HOME (issue #3538): a session on THIS machine watched through another machine's
@@ -500,5 +505,15 @@ fc_wait "$status" 10 || fallback "the client did not finish within 10s (status: 
 grep -q '^ok	' "$status" || fallback "the sender failed: $(grep '^err' "$status" | head -n 1 | cut -f2)"
 
 printf 'fleet-open: %s → %s%s\n' "$kind" "$FC_CLIENT" "${FC_TERMTYPE:+ [$FC_TERMTYPE]}" >&2
-# iTerm2 took the escape; whether their side (#1380) opened it, nothing says yet (#3540).
-unconfirmed "写到了 iTerm2（${FC_CLIENT}）"
+# iTerm2 took the escape; their side (#1380) answers the id over its ssh (issue #3540).
+# The send is done: free the client for the next fleet-show / fleet-open first.
+rm -rf "$job"; fc_unlock; trap - EXIT
+if wait_ack "$OPEN_ID"; then
+  if [ "$ACK_STATE" = ok ]; then
+    printf 'fleet-open: iTerm2（%s）那边已打开\n' "$FC_CLIENT" >&2
+    finish opened "$kind"
+  fi
+  printf 'fleet-open: iTerm2（%s）那边没打开：%s\n' "$FC_CLIENT" "${ACK_WHY:-?}" >&2
+  finish "failed:${ACK_WHY:-the laptop could not open it}" "$kind"
+fi
+unconfirmed "写到了 iTerm2（${FC_CLIENT}），${FLEET_OPEN_ACK_WAIT:-12} 秒内没等到那边的回执（fleet_open.py 没装、是 v1，或对话框还在等你点）"
