@@ -1,21 +1,110 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
+// newStore is a fresh store, already migrated: on the Postgres leg a copy of
+// the template database (PGTemplate), else a byte copy of one migrated SQLite
+// file per test binary — storetest's road (claude-fleet#2574), which this
+// package cannot import. Migrating an empty SQLite file costs ~0.5s under
+// -race, and ~170 tests here each did (claude-fleet#4817).
 func newStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	return newStoreFrom(t, "base", nil)
+}
+
+// newStoreFrom is newStore from the template called name, prep applied to the
+// template once (what the caller would otherwise run on every store); applied
+// says whether the store has it — false only off both templates (CCQUOTA_DB_URL
+// set with no leg running), where the caller runs prep itself.
+func newStoreFrom(t *testing.T, name string, prep func(*Store) error) *Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	if os.Getenv(envDBURL) == "" {
+		files, err := sqliteTemplate(name, prep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for suffix, raw := range files {
+			if err := os.WriteFile(path+suffix, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	} else if ok, err := PGTemplate(path, name, prep); err != nil {
+		t.Fatal(err)
+	} else if !ok && prep != nil {
+		s := openTestPath(t, path)
+		if err := prep(s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	return openTestPath(t, path)
+}
+
+func openTestPath(t *testing.T, path string) *Store {
+	t.Helper()
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+var (
+	sqliteTplMu sync.Mutex
+	sqliteTpls  = map[string]map[string][]byte{}
+)
+
+// sqliteTemplate is the migrated SQLite file called name (prep applied), as
+// bytes: "" the database, "-wal" … what Close left beside it.
+func sqliteTemplate(name string, prep func(*Store) error) (map[string][]byte, error) {
+	sqliteTplMu.Lock()
+	defer sqliteTplMu.Unlock()
+	if f, ok := sqliteTpls[name]; ok {
+		return f, nil
+	}
+	dir, err := os.MkdirTemp("", "tl-store-tpl-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	st, err := Open(filepath.Join(dir, "tpl.db"))
+	if err != nil {
+		return nil, err
+	}
+	if prep != nil {
+		if err := prep(st); err != nil {
+			st.Close()
+			return nil, err
+		}
+	}
+	if err := st.Close(); err != nil {
+		return nil, err
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	files := map[string][]byte{}
+	for _, e := range ents {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		files[strings.TrimPrefix(e.Name(), "tpl.db")] = raw
+	}
+	sqliteTpls[name] = files
+	return files, nil
 }
 
 func ident(account string) model.Identity {

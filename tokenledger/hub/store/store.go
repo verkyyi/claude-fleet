@@ -64,9 +64,19 @@ type Store struct {
 // Postgres database instead and path is not touched (claude-fleet#2120); unset,
 // it is SQLite at path exactly as it always was.
 func Open(path string) (*Store, error) {
+	if leg := pgLegNow; leg != nil {
+		t0 := time.Now()
+		defer func() { leg.openedFrom(path, time.Since(t0)) }()
+	}
 	if url := dbURL(path); url != "" {
 		if !isPostgresURL(url) {
 			return nil, fmt.Errorf("%s must be a postgres:// connection string", envDBURL)
+		}
+		if leg := pgLegNow; leg != nil && leg.takeFresh(path) {
+			// a test's first open of a template copy: the copy is what this
+			// binary's own Open made, so its schema pass would change nothing
+			// (claude-fleet#4817 — it was most of the per-test cost)
+			return openStoreApplied(postgresDialect, url, "postgres", true)
 		}
 		return openStore(postgresDialect, url, "postgres")
 	}
@@ -109,6 +119,13 @@ func (s *Store) SetReadOnly() error {
 }
 
 func openStore(d dialect, src, name string) (*Store, error) {
+	return openStoreApplied(d, src, name, false)
+}
+
+// openStoreApplied is openStore; applied skips the schema pass (schema,
+// migrations, issue numbers, rollup) for a database known to have had it
+// already — only the Postgres leg's fresh template copies.
+func openStoreApplied(d dialect, src, name string, applied bool) (*Store, error) {
 	write, err := openPool(d, src, false)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", name, err)
@@ -125,24 +142,11 @@ func openStore(d dialect, src, name string) (*Store, error) {
 		}
 	}
 
-	if _, err := write.Exec(d.ddl(schemaSQL)); err != nil {
-		write.Close()
-		return nil, fmt.Errorf("apply schema: %w", err)
-	}
-	if err := migrate(write); err != nil {
-		write.Close()
-		return nil, err
-	}
-	if err := runMigrations(write); err != nil {
-		write.Close()
-		return nil, err
-	}
-	// Fills issue_number wherever the stored rule version is not the current
-	// one: a database that just acquired the column, or a changed rule. Reads
-	// only git_branch, so it never needs raw events retention has pruned.
-	if err := ensureIssueNumbers(write); err != nil {
-		write.Close()
-		return nil, err
+	if !applied {
+		if err := applySchema(d, write); err != nil {
+			write.Close()
+			return nil, err
+		}
 	}
 
 	// The schema exists by now, so the read pool opens against a database that
@@ -155,11 +159,32 @@ func openStore(d dialect, src, name string) (*Store, error) {
 	read.SetMaxOpenConns(readPoolSize)
 
 	st := &Store{read: read, write: write, d: d, src: src}
+	if applied {
+		return st, nil
+	}
 	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
 		st.Close()
 		return nil, err
 	}
 	return st, nil
+}
+
+// applySchema is Open's schema pass on the writer: the schema, the column
+// additions, the numbered migrations and the issue numbers.
+func applySchema(d dialect, write *sql.DB) error {
+	if _, err := write.Exec(d.ddl(schemaSQL)); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err := migrate(write); err != nil {
+		return err
+	}
+	if err := runMigrations(write); err != nil {
+		return err
+	}
+	// Fills issue_number wherever the stored rule version is not the current
+	// one: a database that just acquired the column, or a changed rule. Reads
+	// only git_branch, so it never needs raw events retention has pruned.
+	return ensureIssueNumbers(write)
 }
 
 // migrate adds columns to databases created by an earlier version.

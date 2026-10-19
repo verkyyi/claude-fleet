@@ -172,7 +172,7 @@ if leg C; then
     eq "C agent/cli: only the cli package" "$P/agent/cli" "$(gout go_pkgs_agent)"
     change tokenledger/shared/b/b.go
     eq "C shared/b: only store's dependents — agent and e2e skipped" "shared hub" "$(blocks)"
-    eq "C shared/b: hub store, no api shard" '["rest", "shared"]' "$(gout go_parts)"
+    eq "C shared/b: hub store (its own -race part), no api shard" '["store", "shared"]' "$(gout go_parts)"
     eq "C shared/b: Postgres store only" '["store"]' "$(gout go_pg_parts)"
     change tokenledger/hub/api/api.go
     eq "C hub/api: hub + e2e (e2e imports api)" "hub e2e" "$(blocks)"

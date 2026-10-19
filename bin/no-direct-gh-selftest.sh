@@ -30,6 +30,7 @@
 #   fleet-release-rollback.sh  开发侧: a rollback IS a revert PR opened and merged on GitHub
 #   fleet-hub-pause.sh         开发侧: the release train's hub-deploy gate, run inside CI
 #   fleet-gh-blackhole.sh      演练: fetches GitHub's address list (api.github.com/meta) to block it
+#   go-test-durations.sh       开发侧: reads a CI run's Go test logs (its artifacts) for the cost table (#4817)
 #   nogh-task-deny-probe.py    演练: runs gh only to prove the sandbox refuses it
 #   fleet-node-join.sh         装机: downloaded and run alone, before any layer exists; its
 #                              GitHub roads are the developer's (go build) and Homebrew's
@@ -38,7 +39,7 @@ set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${NO_DIRECT_GH_ROOT:-$BIN/..}"
 BASE="${NO_DIRECT_GH_BASELINE:-$BIN/no-direct-gh.baseline}"
-WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh bin/fleet_gh.py bin/fleet-release-rollback.sh bin/fleet-hub-pause.sh bin/fleet-gh-blackhole.sh bin/nogh-task-deny-probe.py bin/fleet-node-join.sh '
+WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh bin/fleet_gh.py bin/fleet-release-rollback.sh bin/fleet-hub-pause.sh bin/fleet-gh-blackhole.sh bin/go-test-durations.sh bin/nogh-task-deny-probe.py bin/fleet-node-join.sh '
 # What counts as a call (issue #4842, EPIC #4839 C3 — the old regex saw only a bare
 # `gh <sub>`):
 #   RE_GH   gh <sub>, also with gh's own -R / --repo first (`gh -R "$repo" issue …`)

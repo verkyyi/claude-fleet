@@ -12,11 +12,8 @@ import (
 
 func taskStore(t *testing.T) *Store {
 	t.Helper()
-	s := newStore(t)
-	if err := s.EnsureNodes(); err != nil {
-		t.Fatal(err)
-	}
-	return s
+	// the template already has the fleet registry (newStoreFrom)
+	return newStoreFrom(t, "fleet", func(s *Store) error { return s.EnsureNodes() })
 }
 func acceptedTask(t *testing.T, s *Store, token, ticket string) FleetTask {
 	t.Helper()
