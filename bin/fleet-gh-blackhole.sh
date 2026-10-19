@@ -244,6 +244,9 @@ case "$CMD" in
   run)
     [ -n "$RREPO" ] && [ -n "$RISSUE" ] && [ -n "$RPR" ] || die "run needs --repo --issue --pr (a ticket of the test login's GitHub repo)" 2
     applied || [ "${FLEET_GH_BLACKHOLE_RUN_ANYWAY:-}" = 1 ] || die "not applied — sudo $0 apply --user <test login> first" 4
+    # row 1 reads the join line the hub hands out: <hub>/install/bin/fleet-node-join.sh
+    RHUB=${FLEET_HUB_URL:-$(sed -n 's/^[[:space:]]*\(export \)\{0,1\}FLEET_HUB_URL=["'"'"']\{0,1\}\([^"'"'"' ]*\).*/\2/p' "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/fleet.conf" 2>/dev/null | head -1)}
+    RHUB=${RHUB%/}
     W=$(mktemp -d "${TMPDIR:-/tmp}/gh-blackhole-run.XXXXXX") || exit 1
     trap 'rm -rf "$W"' EXIT
     m=live-$(akey mode); [ "$m" = live- ] && m=live
@@ -255,7 +258,7 @@ case "$CMD" in
       c="$W/$id"; mkdir -p "$c"
       ( cd "${RWT:-$PWD}" || exit 1
         export BIN REPO="$RREPO" ISSUE="$RISSUE" PR="$RPR" CELL="$c" SESS="${FLEET_SESSION:-}"
-        export JOIN_URL="${JOIN_URL:-https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh}"  # dist-ok: the row measures the join line's own default
+        export JOIN_URL="${JOIN_URL:-${RHUB:+$RHUB/install/bin/fleet-node-join.sh}}"  # the hub's own join line (#4847)
         python3 -I "$BIN/gh_blackhole.py" cell --cap "$RCAP" --out "$c/verdict" -- bash -c "$cmd" > "$c/out" 2> "$c/err" )
       IFS=$'\t' read -r res secs rc < "$c/verdict"
       printf '%s\t%s\t%s\t%s\t-\trc=%s · %s\n' "$id" "$m" "$res" "$secs" "$rc" \

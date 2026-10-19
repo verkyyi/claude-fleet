@@ -37,14 +37,14 @@
 #   核心照常 X/12 · G 行不卡 Y/3 · 卡住 Z 格 · GitHub 尝试 T 次
 #
 # Hermetic: a sandbox HOME / FLEET_CONF_DIR / TMPDIR per row, a fake tmux (no
-# server), no hub, every listener on 127.0.0.1, all leftovers killed with their row.
+# server), a stand-in hub serving only the join script, every listener on 127.0.0.1, all leftovers killed with their row.
 #
 # Drives: bin/gh_blackhole.py, conf/gh-blackhole.rows, bin/fleet-install-sync.sh,
 # bin/fleet-claim-brief.sh, bin/fleet-gh.sh, bin/fleet-report-parent.sh,
 # bin/fleet-comment.sh, bin/session-end-hook.sh, bin/tmux-issue-preview.sh,
 # bin/fleet-history.sh, bin/fleet-codex.sh, bin/fleet-pr-verdict.sh,
 # bin/fleet-issue-file.sh, bin/fleet-gh-lib.sh, bin/fleet-lib.sh,
-# tokenledger/internal/api/fleet_join.go (the join line's script URL).
+# tokenledger/internal/api/fleet_join.go (the join line's script path), bin/fleet-node-join.sh.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -88,8 +88,24 @@ cleanup() {
 trap cleanup EXIT
 
 SESS=drill REPO=fleet-drill/blackhole ISSUE=7 PR=8
-JOIN_URL=$(sed -n 's/^const DefaultJoinScriptURL = "\(.*\)"$/\1/p' "$ROOT/tokenledger/internal/api/fleet_join.go" 2>/dev/null | head -1)
-[ -n "$JOIN_URL" ] || JOIN_URL='https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh'
+# Row 1's join line: the hub's own <hub>JoinScriptPath since #4847 (C8) — a
+# stand-in hub on 127.0.0.1 (NO_PROXY: never through the black hole) serving
+# the script, as /install/<path> does from the client package.
+JOIN_PATH=$(sed -n 's/^const JoinScriptPath = "\(.*\)"$/\1/p' "$ROOT/tokenledger/internal/api/fleet_join.go" 2>/dev/null | head -1)
+[ -n "$JOIN_PATH" ] || JOIN_PATH=/install/bin/fleet-node-join.sh
+mkdir -p "$WORK/hub$(dirname "$JOIN_PATH")"
+cp "$ROOT/bin/fleet-node-join.sh" "$WORK/hub$JOIN_PATH"
+python3 -I -c 'import functools, http.server, signal, sys
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+H = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+H.log_message = lambda *a: None
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(sys.argv[2], "w").write("%d\n" % s.server_address[1])
+s.serve_forever()' "$WORK/hub" "$WORK/hub.port" >/dev/null 2>&1 &
+PROXIES="$PROXIES $!"
+i=0; while [ ! -s "$WORK/hub.port" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+[ -s "$WORK/hub.port" ] || { printf 'gh-blackhole: the stand-in hub never bound\n' >&2; exit 2; }
+JOIN_URL="http://127.0.0.1:$(cat "$WORK/hub.port")$JOIN_PATH"
 
 # ---- the stand-ins, shared by every row (they read the row's env) -------------
 STUB="$WORK/stub"; mkdir -p "$STUB"

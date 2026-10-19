@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api/fleetclient"
 )
@@ -127,6 +128,19 @@ func stableRig(t *testing.T) (*harness, *fakeGitHub) {
 	return h, g
 }
 
+// waitReady: sha's files reach the hub's cache (the background fetch Ready
+// starts — claude-fleet#4847); until then /version hands out the image's.
+func waitReady(t *testing.T, s *StableSource, sha string) {
+	t.Helper()
+	for i := 0; i < 500; i++ {
+		if s.Ready(sha) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stable %s never became ready", sha[:7])
+}
+
 func getBody(t *testing.T, url string) (*http.Response, string) {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -142,6 +156,7 @@ func getBody(t *testing.T, url string) (*http.Response, string) {
 // stable moves client_version with no redeploy.
 func TestVersionFollowsStable(t *testing.T) {
 	h, g := stableRig(t)
+	waitReady(t, h.srv.Stable, shaA)
 	var v map[string]any
 	_, body := getBody(t, h.http.URL+"/version")
 	if err := json.Unmarshal([]byte(body), &v); err != nil {
@@ -159,6 +174,7 @@ func TestVersionFollowsStable(t *testing.T) {
 	if err := h.srv.Stable.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	waitReady(t, h.srv.Stable, shaB)
 	_, body = getBody(t, h.http.URL+"/version")
 	_ = json.Unmarshal([]byte(body), &v)
 	if v["client_version"] != shaB {
@@ -183,6 +199,7 @@ func TestVersionFollowsStable(t *testing.T) {
 // lookup answers again. Any other failure adds no stable_problem.
 func TestStableRateLimitSaysWhy(t *testing.T) {
 	h, g := stableRig(t)
+	waitReady(t, h.srv.Stable, shaA)
 	version := func() map[string]any {
 		var v map[string]any
 		_, body := getBody(t, h.http.URL+"/version")
@@ -295,6 +312,7 @@ func TestStableFilesProxied(t *testing.T) {
 // address), the image's when stable's predates #1805.
 func TestInstallServesStablesInstaller(t *testing.T) {
 	h, g := stableRig(t)
+	waitReady(t, h.srv.Stable, shaA)
 	resp, body := getBody(t, h.http.URL+"/install")
 	if resp.StatusCode != 200 || !strings.Contains(body, stableAwareMark) || !strings.Contains(body, h.http.URL) ||
 		strings.Contains(body, fleetclient.HubPlaceholder) {

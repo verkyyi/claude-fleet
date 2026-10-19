@@ -747,7 +747,7 @@ button: one click mints a **join code** and prints the line to paste on the
 new machine, as the login that will run the fleet:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh \
+curl -fsSL https://hub.example.com/install/bin/fleet-node-join.sh \
   | bash -s -- --hub https://hub.example.com --token fj_…
 ```
 
@@ -787,8 +787,9 @@ where there is neither. `CCQUOTA_FLEET=1`, plus `CCQUOTA_FLEET_ADMIN=1` unless
 (see *Connection certificates* below). It waits until `/v1/node/self` reads
 online, then clones claude-fleet at `stable` and runs
 `fleet-login-bootstrap.sh`. A rerun reuses the saved registration and leaves a
-new code unspent. `CCQUOTA_FLEET_JOIN_SCRIPT_URL` changes the URL the printed
-command fetches.
+new code unspent. The script comes from the hub's own client package
+(claude-fleet#4847: never GitHub); `CCQUOTA_FLEET_JOIN_SCRIPT_URL` changes the
+URL the printed command fetches.
 
 **Coordinate only — the default for a new node** (claude-fleet#1719). A FIRST
 join writes `CCQUOTA_FLEET_COMPUTE=0` into `node.env`: the agent says

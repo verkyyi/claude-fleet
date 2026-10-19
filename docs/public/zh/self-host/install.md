@@ -98,7 +98,8 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 | 键 | 说明 |
 |---|---|
 | `CCQUOTA_DB_URL` | 用 Postgres 而不是 SQLite：`postgres://用户:密码@主机:5432/库?sslmode=require` |
-| `CCQUOTA_FLEET_STABLE_REPO` | 跟哪个仓库的 `stable`；不设就跟官方仓库。见 [§4.3](#43-自己决定跟哪一版) |
+| `CCQUOTA_FLEET_UPSTREAM_HUB` | 跟另一个入口（例如官方入口）发的版本走，不问 GitHub；要和 `CCQUOTA_FLEET_RELEASE_DIR`、`CCQUOTA_FLEET_RELEASE_ROOT` 一起设。见 [§4.3](#43-自己决定跟哪一版) |
+| `CCQUOTA_FLEET_STABLE_REPO` | 去 GitHub 跟哪个仓库的 `stable`；**只有设了才问 GitHub**，不设就不问。见 [§4.3](#43-自己决定跟哪一版) |
 | `CCQUOTA_FLEET_CRED_RELAY_URL` | 订阅流量经过的中转地址（订阅商不服务你所在地区时才需要，例如在国内）；不设就直连。中转怎么架见 [§1.8](#18-国内部署) |
 | `CCQUOTA_FLEET_PUBLISH_TOKEN` | 允许把 `stable` 推给入口的口令（密钥）。推过一次，入口就不再去 GitHub 问 `stable`；入口在国内时用得上，见 [§4.4](#44-入口问不到-github-时) |
 | `CCQUOTA_METER_ORIGINS` | 允许读用量的网页来源；不设就没有 |
@@ -586,17 +587,36 @@ fleet doctor --installs   # 这台机器上每一份安装 vs stable，落后超
 
 ### 4.3 自己决定跟哪一版
 
-默认跟官方仓库的 `stable`。想自己把关：fork 这个仓库，在你的 fork 上移动 `stable` 标签（只挪到你验过的提交），并给入口设
+入口发给机器和客户端的版本从这几处来，排在前面的先用：
+
+1. **推给入口的发布**：发布列车（或你自己用 `bin/fleet-release-publish.sh`，见 [§4.4](#44-入口问不到-github-时)）推来的版本。推过一次，入口只认推来的。
+2. **上游入口**：设了 `CCQUOTA_FLEET_UPSTREAM_HUB`，入口去那个入口取它签过名的版本，整份（清单、签名、运行时、程序包）存进自己的发布仓库，再发给自己的机器。不经过 GitHub。
+3. **GitHub**：只有设了 `CCQUOTA_FLEET_STABLE_REPO=<组织>/<仓库>` 才去 GitHub 问那个仓库的 `stable`。
+4. **镜像自带**：以上都没有，只发镜像里打进去的那一版客户端，机器不会自动升级。
+
+什么都不设，入口不问 GitHub。`curl -fsS https://hub.example.com/version` 的 `stable_source` 说这一刻用的是哪一处：`release` · `upstream` · `github` · `image`。
+
+**跟官方入口走**（最省事，GitHub 不通也照常）：
+
+```
+CCQUOTA_FLEET_UPSTREAM_HUB=https://官方入口
+CCQUOTA_FLEET_RELEASE_DIR=/data/releases
+CCQUOTA_FLEET_RELEASE_ROOT=ed25519 <官方入口 /v1/fleet/release/key 的那一行>
+```
+
+`CCQUOTA_FLEET_RELEASE_ROOT` 抄一次就行（`curl -fsS https://官方入口/v1/fleet/release/key`）：入口用它核对上游发来的每一个版本，签名对不上的不收，`stable_problem` 会说原因。这种入口自己不签名，所以不要设 `CCQUOTA_FLEET_RELEASE_KEY`。入口在有人访问 `/version` 时顺便看一眼上游（最多 5 分钟一次），上游往前走了就跟上，不会往回退。
+
+**自己把关**：fork 这个仓库，在你的 fork 上移动 `stable` 标签（只挪到你验过的提交），并给入口设
 
 ```
 CCQUOTA_FLEET_STABLE_REPO=<你的组织>/claude-fleet
 ```
 
-设成 `off` 则入口完全不问 GitHub，只发镜像里自带的那一版客户端，机器不会自动升级。
+或者不设它，每次自己把验过的提交推给入口（[§4.4](#44-入口问不到-github-时) 的第 2 步）。
 
 ### 4.4 入口问不到 GitHub 时
 
-没推过 `stable` 的入口，每 5 分钟匿名去问一次 `api.github.com`：「`stable` 现在是哪个提交」。入口在国内时，出口地址常和很多人共用，GitHub 给匿名请求的额度（每小时 60 次）很快被用完，答 403。这时：
+设了 `CCQUOTA_FLEET_STABLE_REPO`、又没推过 `stable` 的入口，每 5 分钟匿名去问一次 `api.github.com`：「`stable` 现在是哪个提交」。入口在国内时，出口地址常和很多人共用，GitHub 给匿名请求的额度（每小时 60 次）很快被用完，答 403。这时：
 
 - `curl -fsS https://hub.example.com/version` 里没有 `stable`，`stable_problem` 写着「GitHub rate-limited …」；
 - 入口日志每 5 分钟一行 `fleet: stable lookup: … HTTP 403 … — GitHub rate-limited this hub's anonymous stable lookup`。

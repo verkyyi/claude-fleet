@@ -77,8 +77,12 @@ func TestJoinCodeRedeemsOnce(t *testing.T) {
 		t.Fatalf("expires in %s; want ~10 minutes", d)
 	}
 	if !strings.Contains(v.Command, "--hub "+h.http.URL) || !strings.Contains(v.Command, "--token "+v.Code) ||
-		!strings.Contains(v.Command, DefaultJoinScriptURL) {
+		!strings.Contains(v.Command, "curl -fsSL "+h.http.URL+JoinScriptPath+" ") {
 		t.Fatalf("command %q does not carry the hub, the code and the script", v.Command)
+	}
+	// the join line reaches nothing but this hub (claude-fleet#4847)
+	if strings.Contains(v.Command, "github") {
+		t.Fatalf("command %q still goes to GitHub", v.Command)
 	}
 
 	code, out := joinWith(t, h, v.Code, "spot-1.local", "ivan")

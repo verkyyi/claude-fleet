@@ -306,6 +306,70 @@ func (f *Fetcher) Fetch(ctx context.Context, sha, dest string, artifacts bool) (
 	return m, nil
 }
 
+// Mirror writes <sha>'s release under dir (which must not exist) in a hub's own
+// build layout — manifest.json, manifest.sig, tree.tar.gz, artifacts/<name> —
+// for a hub that follows another one (claude-fleet#4847, CCQUOTA_FLEET_UPSTREAM_HUB).
+// The manifest is checked against Key exactly as Fetch checks it, the tree and
+// every artifact against the size + sha256 it names; the signature is written
+// last, so a dir that died half way is never a release (the hub's Has looks
+// for it). Built at dir.partial and renamed only when whole.
+func (f *Fetcher) Mirror(ctx context.Context, sha, dir string) (*Manifest, error) {
+	if _, err := os.Lstat(dir); err == nil {
+		return nil, fmt.Errorf("%s already exists", dir)
+	}
+	m, mb, sig, err := f.Manifest(ctx, sha)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := f.get(ctx, m.SHA+"/"+TreeName, treeMax)
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckBlob(m.Tree, tree); err != nil {
+		return nil, err
+	}
+	tmp := dir + ".partial"
+	_ = os.RemoveAll(tmp)
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+	if err := os.MkdirAll(tmp+"/"+ArtifactDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(tmp+"/"+TreeName, tree, 0o644); err != nil {
+		return nil, err
+	}
+	cache, own := f.Cache, false
+	if cache == "" {
+		cache, own = dir+".dl", true
+	}
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		return nil, err
+	}
+	if own {
+		defer os.RemoveAll(cache)
+	}
+	for _, a := range m.Artifacts {
+		if err := f.artifact(ctx, m.SHA, a, cache, tmp+"/"+ArtifactDir+"/"+a.Name); err != nil {
+			return nil, fmt.Errorf("artifact %s: %w", a.Name, err)
+		}
+	}
+	if err := os.WriteFile(tmp+"/"+ManifestName, mb, 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(tmp+"/"+SigName, []byte(sig+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		return nil, err
+	}
+	ok = true
+	return m, nil
+}
+
 // selectArtifacts: every artifact, or (Platforms) the ones the unpacked tree's
 // release.json pins — those the manifest carries; a missing one is the
 // caller's to name (the updater says which hub setting lacks it).

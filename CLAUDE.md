@@ -1183,8 +1183,10 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   (shell, a sandbox pack) pin it from both sides. **The client follows
   STABLE, not the hub image** (issue #1805): the hub's `/version` names
   `refs/tags/stable`'s commit as `client_version` (+ `client_url`, its files
-  proxied at `/install/stable/<sha>/`, `CCQUOTA_FLEET_STABLE_REPO`; `off` / GitHub
-  never answered = the image's pack, byte for byte), `/install` serves stable's
+  proxied at `/install/stable/<sha>/` — only once they are on the hub, #4847;
+  stable from the pushed release store, else `CCQUOTA_FLEET_UPSTREAM_HUB`'s signed
+  releases, else GitHub ONLY when `CCQUOTA_FLEET_STABLE_REPO` is set; none = the
+  image's pack, byte for byte), `/install` serves stable's
   own installer when it carries `fleet-install: stable-aware`, and a client with
   no hub asks GitHub (`FLEET_STABLE_API` / `FLEET_STABLE_RAW`). So moving stable
   is the whole release for both layers — `fleet-client-update.sh` (基础) and

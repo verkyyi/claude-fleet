@@ -523,9 +523,10 @@ files into the ignored Go embed directory before the hub build.
 The hub image is deployed by
 hand — but a client does NOT wait for it (issue #1805): every computer follows
 `refs/tags/stable`. The hub learns what stable names from the CI's publish
-(issue #2772, below); before the first one it looks it up on GitHub (every 5
-minutes, `CCQUOTA_FLEET_STABLE_REPO`, default `verkyyi/claude-fleet`; `off` turns
-it off) and reports it on `/version` as `client_version` + `stable` +
+(issue #2772, below), else from an upstream hub's signed releases
+(`CCQUOTA_FLEET_UPSTREAM_HUB`, issue #4847, below), else — only when
+`CCQUOTA_FLEET_STABLE_REPO` names a repo — by looking it up on GitHub every 5
+minutes (unset or `off`: never), and reports it on `/version` as `client_version` + `stable` +
 `client_url` (`<hub>/install/stable/<sha>`, the repo's client files at that
 commit fetched once from GitHub's raw host and kept — only shas stable has
 named, only the client's paths), and `/install` serves stable's own installer
@@ -716,6 +717,28 @@ store, and the five-minute GitHub lookup is never made again (`StableSource.Loca
 a lookup in flight is ignored). `CCQUOTA_FLEET_STABLE_REPO=off` with a release
 store never asks GitHub at all — it serves what was published; without a store it
 is the image's client, as before. BREAK-IT row `dist-publish-tampered`.
+
+**The hub never sends a client to files it does not hold** (issue #4847). A stable
+is handed out (`client_url`, stable's installer at `/install`) only once its files
+are on the hub — the release store holds it, or the commit's tarball (or at least
+its manifest, the raw host's road) is cached (`StableSource.Ready`). A hub that
+knows stable with a cold cache starts ONE background fetch and meanwhile serves
+the image's client, saying `stable_problem` «known but its files are not on this
+hub yet» — never a 502 from `/install/stable/<sha>/`, never a 90 + 15 s wait on
+GitHub first. `/version`'s `stable_source` names where stable comes from:
+`release` · `upstream` · `github` · `image`.
+
+**A self-hosted hub follows another hub, not GitHub** (issue #4847).
+`CCQUOTA_FLEET_UPSTREAM_HUB=<url>` + a release store with the upstream's
+`/v1/fleet/release/key` as `CCQUOTA_FLEET_RELEASE_ROOT` and no signing key of its
+own (the hub refuses to start otherwise): a stable read past the TTL starts one
+look at the upstream's `stable` (`ReleaseStore.MirrorStable`, the same protocol
+as `fleet-release-fetch.py` — `release.Fetcher.Mirror`), verified against the
+root through the commit's chain and every revocation, the tree and each artifact
+against the digests it signs, kept as the upstream's own build (its signature,
+never a new one), the pointer moved to the upstream's seq — forward only. A
+refused or unreachable upstream keeps the last stable and says why in
+`stable_problem`. `fleet_upstream.go`, `TestUpstreamHub*`.
 
 **Every release train keeps a ledger** (issue #3140, EPIC #3139 C1). The publish
 may carry one more part, `train` — `{run_id, prev_sha, merges: [{sha, merged_at}],

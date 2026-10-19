@@ -98,7 +98,8 @@ Optional:
 | Key | Notes |
 |---|---|
 | `CCQUOTA_DB_URL` | Postgres instead of SQLite: `postgres://user:password@host:5432/db?sslmode=require` |
-| `CCQUOTA_FLEET_STABLE_REPO` | Whose `stable` to follow; unset, the official repository's. See [§4.3](#43-choosing-which-version-to-follow) |
+| `CCQUOTA_FLEET_UPSTREAM_HUB` | Follow another hub's releases (the official hub, say) instead of GitHub; set together with `CCQUOTA_FLEET_RELEASE_DIR` and `CCQUOTA_FLEET_RELEASE_ROOT`. See [§4.3](#43-choosing-which-version-to-follow) |
+| `CCQUOTA_FLEET_STABLE_REPO` | Whose `stable` to look up on GitHub; **GitHub is asked only when this is set**. See [§4.3](#43-choosing-which-version-to-follow) |
 | `CCQUOTA_FLEET_CRED_RELAY_URL` | A relay the subscription traffic goes through (only needed where the subscription provider does not serve your region, for example mainland China); unset, it connects directly. How to set up the relay: [§1.8](#18-deploying-in-mainland-china) |
 | `CCQUOTA_FLEET_PUBLISH_TOKEN` | The password (a secret) that allows pushing `stable` to the hub. Once pushed to, the hub no longer asks GitHub for `stable`; useful for a hub in mainland China, see [§4.4](#44-when-the-hub-cannot-reach-github) |
 | `CCQUOTA_METER_ORIGINS` | Web origins allowed to read usage; unset, none |
@@ -588,17 +589,36 @@ fleet doctor --installs   # every install on this machine vs stable; more than 3
 
 ### 4.3 Choosing which version to follow
 
-By default you follow the official repository's `stable`. To gate it yourself: fork the repository, move the `stable` tag on your fork (only ever to commits you have checked), and give the hub
+The version a hub hands its machines and clients comes from the first of these that has one:
+
+1. **A release pushed to the hub**: by the release train (or by you, with `bin/fleet-release-publish.sh` — see [§4.4](#44-when-the-hub-cannot-reach-github)). Once pushed to, the hub trusts only what is pushed.
+2. **An upstream hub**: with `CCQUOTA_FLEET_UPSTREAM_HUB` set, the hub takes that hub's signed releases, keeps each whole (manifest, signature, runtime, programs) in its own release store and hands them to its own machines. GitHub is not involved.
+3. **GitHub**: only with `CCQUOTA_FLEET_STABLE_REPO=<org>/<repo>` set does the hub ask GitHub for that repository's `stable`.
+4. **The image**: none of the above — only the client built into the image is served, and machines do not upgrade automatically.
+
+With nothing set, the hub never asks GitHub. `stable_source` in `curl -fsS https://hub.example.com/version` says which one is in use right now: `release` · `upstream` · `github` · `image`.
+
+**Following the official hub** (the least work, and unaffected when GitHub is down):
+
+```
+CCQUOTA_FLEET_UPSTREAM_HUB=https://official-hub
+CCQUOTA_FLEET_RELEASE_DIR=/data/releases
+CCQUOTA_FLEET_RELEASE_ROOT=ed25519 <the line at the official hub's /v1/fleet/release/key>
+```
+
+Copy `CCQUOTA_FLEET_RELEASE_ROOT` once (`curl -fsS https://official-hub/v1/fleet/release/key`): the hub checks every release the upstream hands it against this key and refuses one whose signature does not match — `stable_problem` says why. Such a hub signs nothing itself, so leave `CCQUOTA_FLEET_RELEASE_KEY` unset. The hub looks at the upstream when someone reads `/version` (at most once every 5 minutes), follows it forward, and never goes back.
+
+**Gating it yourself**: fork the repository, move the `stable` tag on your fork (only ever to commits you have checked), and give the hub
 
 ```
 CCQUOTA_FLEET_STABLE_REPO=<your-org>/claude-fleet
 ```
 
-Set to `off`, the hub never asks GitHub at all: it serves only the client version built into its image, and machines do not upgrade automatically.
+or leave it unset and push each commit you have checked to the hub yourself (step 2 of [§4.4](#44-when-the-hub-cannot-reach-github)).
 
 ### 4.4 When the hub cannot reach GitHub
 
-A hub that has never been pushed `stable` asks `api.github.com` anonymously every 5 minutes: "which commit is `stable` now". With the hub in mainland China its outgoing address is often shared by many people, and GitHub's allowance for anonymous requests (60 an hour) is soon spent; it answers 403. Then:
+A hub with `CCQUOTA_FLEET_STABLE_REPO` set that has never been pushed `stable` asks `api.github.com` anonymously every 5 minutes: "which commit is `stable` now". With the hub in mainland China its outgoing address is often shared by many people, and GitHub's allowance for anonymous requests (60 an hour) is soon spent; it answers 403. Then:
 
 - `curl -fsS https://hub.example.com/version` has no `stable`, and `stable_problem` says "GitHub rate-limited …";
 - the hub's log has one line every 5 minutes: `fleet: stable lookup: … HTTP 403 … — GitHub rate-limited this hub's anonymous stable lookup`.
