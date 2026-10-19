@@ -216,7 +216,6 @@ CREATE TABLE IF NOT EXISTS usage_events (
   -- ordinal that collides with real issues. It carries NO repository, on
   -- purpose: binding a number to a repository is the reader's job, through
   -- git_repo below.
-  -- docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md
   issue_number           INTEGER,
   -- The repository the turn was spent in, as `owner/name`. DECLARED by the
   -- endpoint, which runs inside the checkout and resolved it once per cwd from

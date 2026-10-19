@@ -635,61 +635,11 @@ func TestCredPolicyMigrationSkipsClients(t *testing.T) {
 	}
 }
 
-// claude-fleet#3440: a drill person's ID is minted fresh for every drill, so
-// no operator can list it — in strict mode its lease came back 200 with no
-// account and the drill login said «not ready: creds». It uses its creator's
-// person list (never more than the admin who minted it), the operator's own
-// token reads as all, the machine's list still applies, and a list written
-// for the drill itself wins.
-func TestCredPolicyStrictDrillUsesCreatorsList(t *testing.T) {
-	h, _, _ := policyRig(t)
-	if err := h.srv.Store.SetFleetSetting(CredPolicyModeKey, "strict", time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if code, out := h.post(t, CredPolicyPath, map[string]any{"scope": "node", "id": "mac-c", "all": true}); code != 200 {
-		t.Fatalf("node all: %d %v", code, out)
-	}
-	now := time.Now()
-	drill := func(pid, login, by string) string {
-		t.Helper()
-		if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: pid, Login: login, Hostname: "mac-c",
-			CodeHash: HashToken("fd_" + pid), CreatedBy: by, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
-			t.Fatal(err)
-		}
-		return enrollAs(t, h, login+"-mac-c", "mac-c", login)
-	}
-	// Minted by alice, who may use gmail only: the drill gets gmail — and
-	// never alice's own account.
-	setPolicy(t, h, "user", pAlice, []string{uuidGmail})
-	if got, _, _ := leased(t, h, drill("drill-a", "drilla", pAlice)); !eq(got, "claude/gmail") {
-		t.Fatalf("drill by alice: %v, want her list's gmail", got)
-	}
-	// Minted with the operator's own token: every pool subscription.
-	if got, _, _ := leased(t, h, drill("drill-o", "drillo", "operator")); !eq(got, "claude/gmail", "claude/icloud", "claude/legacy", "codex/default") {
-		t.Fatalf("drill by the operator: %v", got)
-	}
-	// A creator with no list in strict mode: still nothing.
-	dbob := drill("drill-b", "drillb", pBob)
-	if got, _, _ := leased(t, h, dbob); len(got) != 0 {
-		t.Fatalf("drill by unlisted bob: %v, want none", got)
-	}
-	// A list for the drill itself wins over its creator's.
-	setPolicy(t, h, "user", "drill-b", []string{uuidICloud})
-	if got, _, _ := leased(t, h, dbob); !eq(got, "claude/icloud") {
-		t.Fatalf("drill's own list: %v", got)
-	}
-	// The machine's list still narrows it.
-	setPolicy(t, h, "node", "mac-c", []string{uuidICloud})
-	if got, _, _ := leased(t, h, drill("drill-o2", "drillp", "operator")); !eq(got, "claude/icloud") {
-		t.Fatalf("machine list: %v", got)
-	}
-}
-
 // claude-fleet#4290: a person's own pod (u-<nonce>) is made and rebuilt by the
 // hub for one person, so in strict mode it had no machine list and every
 // subscription was denied — the China real-user probe's Codex turns were all
 // 403 until someone listed the pod by hand. With no list of its own it takes
-// its owner's person list; a drill owner reads its creator's; a list written
+// its owner's person list; a list written
 // for the pod wins; an ordinary machine is unchanged. A pod is a cluster pod:
 // of the owner's list only its Codex entries count (claude-fleet#4601).
 func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
@@ -723,25 +673,6 @@ func TestCredPolicyStrictUserPodUsesOwnersList(t *testing.T) {
 	setPolicy(t, h, "node", pod, []string{uuidCodex})
 	if got, _, _ := leased(t, h, alicePod); !eq(got, "codex/default") {
 		t.Fatalf("pod's own list: %v", got)
-	}
-	// A drill person's pod (the probe's): its creator's list, through the drill.
-	const dpod = "u-pod4290b"
-	if err := h.srv.Store.CreateDrill(store.DrillPerson{PrincipalID: "drill-p", Login: "drillp", Hostname: "mac-c",
-		CodeHash: HashToken("fd_drill-p"), CreatedBy: pAlice, CreatedAt: now, ExpiresAt: now.Add(time.Hour), Home: dpod}); err != nil {
-		t.Fatal(err)
-	}
-	dp, err := h.srv.Store.Principal("drill-p")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := h.srv.Store.AdoptAccount(dp, dpod, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.srv.Store.SetFleetSetting(trustKey(dpod), TrustTrusted, now); err != nil {
-		t.Fatal(err)
-	}
-	if got, _, _ := leased(t, h, enrollAs(t, h, "drillp-"+dpod, dpod, "drillp")); !eq(got, "codex/default") {
-		t.Fatalf("drill's pod: %v, want its creator alice's list", got)
 	}
 }
 

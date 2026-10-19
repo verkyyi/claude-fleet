@@ -466,7 +466,7 @@ hub skill and you are the hub, so there is nothing to hand it to.
 Why it is not prose advice: a batch whose report never runs looks, from the
 outside, exactly like a batch that finished. The tick log holds the whole
 12-hour run and nobody reads it; the page and the parent comment are the only
-artefacts that survive the tailnet reboot, the context boundary and the morning.
+artefacts that survive a reboot, the context boundary and the morning.
 **An EPIC whose report never ran is not finished** — treat a core-empty EPIC
 with no `report:` line the way you would treat an unmerged PR.
 
@@ -493,11 +493,11 @@ survives a context boundary the same way everything else here does:
    `/fleet-epic-report`); write the others here. Never run the move yourself.
 2. **Run `/fleet-epic-report <N> --repo "$FLEET_REPO"` right here** (its page
    carries 「本批跨了 K 个版本」 from `fleet-epic-floor.sh show <N> --repo "$FLEET_REPO"`). Not «hand off to», not «suggest
-   the operator run» — execute it, this tick. It gathers, builds the page, hosts
-   it via doc-preview, posts the durable comment, and closes the EPIC when every
+   the operator run» — execute it, this tick. It gathers, builds the page, opens
+   it on the operator's computer, posts the durable comment, and closes the EPIC when every
    member is resolved. Its own rails still apply; you are just its caller.
 3. **Post the URL back on the parent** as one final tick whose `report:` line
-   carries the tailnet URL in place of `pending` — one grep now separates a
+   carries the page's address in place of `pending` — one grep now separates a
    reported EPIC from an unreported one. Then push the done notification, with
    the URL in it.
 4. **Clear the heartbeat** — `bash ~/.claude/fleet/bin/fleet-epic-heartbeat.sh --clear <N>`
@@ -525,7 +525,7 @@ safe and expected (the skill is built to be re-run — read it), so a duplicated
 report is a far cheaper failure than a missing one.
 
 **The report failing is a stall, not a finish.** If the report cannot complete —
-doc-preview down, gh refusing, the page unbuildable — leave `report: pending`
+the page cannot be opened, gh refusing, the page unbuildable — leave `report: pending`
 standing, say why on the parent, and push the *stalled* notification. Never
 write the done notification off a report that did not run.
 

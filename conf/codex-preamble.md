@@ -25,10 +25,9 @@ Follow it as written, with these translations (they are the only differences):
 - **Claude-only tools you do not have:** the `Explore`/`Task` subagents, and the
   `Artifact` tool. `AskUserQuestion` maps to Codex's native user-input tool when
   it is available. Never wait on the operator — make the call yourself. Claude's
-  `SendMessage` is the `fleet` tool `send` here (`to: issue:<N>`). A document the
-  operator should open goes through doc-preview's `share.sh`; an image/PDF/QR code
-  the operator should SEE goes to them with the `fleet` tool `show` — never `open`
-  it on this machine. Search the code with your own tools.
+  `SendMessage` is the `fleet` tool `send` here (`to: issue:<N>`). A document, image,
+  PDF or QR code the operator should SEE goes to them with the `fleet` tool `show`
+  — never `open` it on this machine. Search the code with your own tools.
 - **The rails are unchanged and absolute:** edit only inside this worktree, never
   the base checkout (a hook blocks it); never run destructive tmux; file adjacent
   work through the `file_issue` tool; converse through issue comments (`comment`);

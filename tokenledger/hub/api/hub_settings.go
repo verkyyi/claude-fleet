@@ -31,7 +31,6 @@ import (
 
 // The hub settings' keys.
 const (
-	PublicBadgesKey = "hub.public_badges"
 	PoolSkipPctKey  = "pool.skip_pct"
 	PoolMoveFullKey = "pool.move_when_full"
 	AutoAssignKey   = "fleet.auto_assign"
@@ -86,10 +85,8 @@ func onOff(key, def string) func(*Server, string) (string, string) {
 
 // hubSettings is every hub setting but the per-person machine login.
 var hubSettings = map[string]hubSetting{
-	MeterKey: {def: "on", help: "the public counter (/meter.json, /odometer.svg)",
+	MeterKey: {def: "on", help: "the public counter (/meter.json)",
 		check: onOff(MeterKey, "on")},
-	PublicBadgesKey: {def: "off", help: "badges and embeds readable without signing in",
-		check: onOff(PublicBadgesKey, "off")},
 	PoolSkipPctKey: {def: "85", help: "a subscription at or above this % of a window is skipped (nodes: FLEET_ACCOUNT_CEILING)",
 		check: func(_ *Server, v string) (string, string) {
 			n, err := strconv.Atoi(strings.TrimSpace(v))
@@ -350,9 +347,6 @@ func (s *Server) setting(key string) string {
 
 func (s *Server) settingOn(key string) bool { return strings.EqualFold(s.setting(key), "on") }
 
-// publicBadges reports whether /badge/ and /embed/ answer without a sign-in.
-func (s *Server) publicBadges() bool { return s.settingOn(PublicBadgesKey) }
-
 // autoAssign is the machines a new person gets a login queued on:
 // fleet.auto_assign's list, or for least-busy the one leastBusyMachine picks
 // right now (nil when none is fit — the person is told who to ask).
@@ -550,7 +544,7 @@ func (s *Server) legacyHolder(pid, holder string) bool {
 	if !isPerson(pid) || isPerson(holder) {
 		return false
 	}
-	return s.Store == nil || !s.Store.IsDrill(holder)
+	return true
 }
 
 // handOverLegacyMap is the mapping of a GitHub person pid to login when an
@@ -634,7 +628,7 @@ func (s *Server) DropLegacyMachineLogins(now time.Time) error {
 		if !ok {
 			continue
 		}
-		if isPerson(pid) || s.Store.IsDrill(pid) {
+		if isPerson(pid) {
 			continue
 		}
 		login := settings[k]

@@ -98,15 +98,6 @@
 #                               `能力` row (基础 · 承载, #1806), cert and
 #                               tls; the Agent configuration (hooks · skills ·
 #                               MCP · mod, #1725) is 承载's (#4826)
-#   fleet doctor --bundle <dir> everything a diagnosis needs from this computer,
-#                               credentials taken out, in one directory (#2890)
-#   fleet debug report          send that bundle to the hub and print a short
-#                               link — fleet-debug, which needs none of fleet (#2892);
-#                               a third failed login / session / connection in
-#                               half an hour offers it (#2894, FLEET_DEBUG_PROMPT=0 off)
-#   fleet feedback on|off|status  /fleet-feedback for this login (#3360): on by
-#                               default on a managed login (once — off stays off),
-#                               off on your own computer until you say on
 #   手机连 fleet               <入口>/fleet/keys in a phone's browser (#3069):
 #                               your address name, the four things Termius asks
 #                               for, add or revoke a key, move your home
@@ -233,12 +224,6 @@ case $cmd in
     echo "fleet · 不认识的选项 ${cmd}；选路调试用 fleet connect $* （fleet --help）" >&2
     exit 2 ;;
 esac
-# `fleet doctor --bundle <dir>` with only the client here (issue #2890): the
-# diagnosis bundle — on a node fleet-doctor.sh execs the same script.
-if [ "$cmd" = doctor ] && [ "${2:-}" = --bundle ] && [ ! -x "$here/fleet-doctor.sh" ]; then
-  shift
-  exec sh "$here/fleet-doctor-bundle.sh" "$@"
-fi
 # `fleet doctor` with only the client here: no fleet-doctor.sh beside — the
 # client's own row (issue #1722: version, hub, tmux, cert), then the Agent
 # configuration package's (issue #1725) where an older client left it — the
@@ -283,29 +268,13 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
   fi
   exit $rc
 fi
-# `fleet debug …` (issue #2892): the stand-alone sender, by its file's name
-if [ "$cmd" = debug ]; then
-  shift
-  exec sh "$here/fleet-debug" "$@"
-fi
-# `fleet login` (issue #2894): its outcome goes to fleet-debug-prompt.sh — a
-# third failure in half an hour asks whether the hub should take a look. The
-# login's own exit code is kept; FLEET_DEBUG_PROMPT=0 execs it as before.
-if [ "$cmd" = login ] && [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -x "$here/fleet-login.py" ] \
-   && [ -f "$here/fleet-debug-prompt.sh" ]; then
-  shift
-  "$here/fleet-login.py" "$@"; rc=$?
-  sh "$here/fleet-debug-prompt.sh" after login "$rc"
-  exit "$rc"
-fi
 # a word whose scripts the client package only SERVES (issue #4826, EPIC #4823
-# C3) — the admin's, the drill's: fetched here on first use (fc_served, from
+# C3) — the admin's: fetched here on first use (fc_served, from
 # where this client came from), then run as before. A full install has them.
 _need=''
 case $cmd in
   users) _need='bin/fleet-users.py bin/fleet-hub-admin.py' ;;
   hub) _need='bin/fleet-hub.py bin/fleet-hub-admin.py' ;;
-  drill) _need='bin/fleet-drill.sh bin/fleet-hub-url.sh' ;;
   release) [ "${2:-}" = stats ] && _need='bin/fleet-release-stats.py bin/fleet-hub-admin.py' ;;
 esac
 if [ -n "$_need" ] && [ -f "$here/fleet-client-lib.sh" ]; then
@@ -357,11 +326,6 @@ case $cmd in
   # and `fleet show <file>` still go to fleet-open.sh / fleet-show.sh from there
   ls|show|open|rename|close|reap|answer)
     exec python3 "$here/fleet-session-cli.py" "$@" ;;
-  # /fleet-feedback's switch (issue #3360); every other word is the sender's
-  feedback)
-    case ${2:-} in
-      on|off|status|enabled) [ -f "$here/fleet-feedback-switch.sh" ] && { shift; exec bash "$here/fleet-feedback-switch.sh" "$@"; } ;;
-    esac ;;
   # a background service / scheduled task, on whichever machine holds it — the
   # hub's service_control (issue #2527); add · rm · ls · logs · cred stay the
   # machine's own fleet-service.sh / fleet-task.sh

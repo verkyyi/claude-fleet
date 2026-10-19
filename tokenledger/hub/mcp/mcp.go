@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/findings"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
@@ -519,36 +518,6 @@ func toolSpecs() []toolSpec {
 				},
 			}, "session_id"),
 		},
-		{
-			Name:  "get_findings",
-			Title: "Machine-generated findings",
-			Description: "Machine-generated findings for a period: runaway sessions, unpriced models, time " +
-				"spent in the critical rate-limit band, cache-hit drops and spend spikes. Pass " +
-				`view: "now" for live, minute-scale alerts instead (high rate-limit windows, an ` +
-				"agent that has stopped reporting, a runaway session in flight) — that mode ignores " +
-				"since/until and the drill-down filters. Findings are ranked, capped at a handful, and " +
-				"each carries a scope map naming the chip an equivalent usage_by_* or list_sessions " +
-				"call can drill into. A finding whose subject has one may also carry owner.user " +
-				"(an OS login) and/or owner.team — who to go to about it. The key is ABSENT when " +
-				"the hub does not know, which is the normal case for a finding about a model, a " +
-				"project or a whole period: those are shared, so do not infer an owner for one. " +
-				"Every finding carries a stable `id`: the same problem gets the same id on every " +
-				"call, so two readings can be compared for whether they are about the same thing " +
-				"rather than merely similar. An id changes when the severity does, which is how an " +
-				"escalation is told apart from the same alert repeating. A finding an operator has " +
-				"silenced carries `muted` ({until, note, by}) and is listed AFTER the live ones, " +
-				"outside their cap — it is still present on purpose, so do not read its absence " +
-				"from the top of the list as the condition having cleared. This server is " +
-				"read-only: there is no tool to mute or unmute, and muting is a person's decision " +
-				"made through the dashboard." + caveat,
-			InputSchema: obj(withChips(map[string]any{
-				"account": accountProp, "since": sinceProp, "until": untilProp,
-				"view": map[string]any{
-					"type": "string", "enum": []string{"review", "now"},
-					"description": `"review" (default) evaluates the period rules; "now" evaluates live alerts.`,
-				},
-			})),
-		},
 	}
 }
 
@@ -933,49 +902,6 @@ func (s *mcpServer) runAs(who *api.UserLogins, name string, args map[string]any)
 		return map[string]any{
 			"session": head, "turns": turns, "pruned": len(turns) == 0 && head.Turns > 0,
 		}, nil
-
-	case "get_findings":
-		// Same envelope shape as usage_summary -- account_uuid plus (for the
-		// review view) the ALIGNED window actually queried, since/until
-		// omitted entirely for "now" rather than echoing a fake window -- for
-		// consistency with the other three new tools and with GET
-		// /v1/findings, which reads the same two gatherers.
-		if str(args, "view") == "now" {
-			account, err := s.account(args)
-			if err != nil {
-				return nil, err
-			}
-			in, err := s.api.GatherNowSource(account, str(args, "source"))
-			if err != nil {
-				return nil, err
-			}
-			out := map[string]any{
-				"account_uuid": account, "view": "now",
-				"findings": findings.Now(in),
-			}
-			if note := scopeNote(account); note != "" {
-				out["all_accounts"] = true
-				out["scope_note"] = note
-			}
-			return out, nil
-		}
-		f, err := s.filterAs(who, args)
-		if err != nil {
-			return nil, err
-		}
-		in, err := s.api.GatherReview(f)
-		if err != nil {
-			return nil, err
-		}
-		out := map[string]any{
-			"account_uuid": f.Account, "since": f.Start, "until": f.End, "view": "review",
-			"findings": findings.Review(in),
-		}
-		if note := scopeNote(f.Account); note != "" {
-			out["all_accounts"] = true
-			out["scope_note"] = note
-		}
-		return out, nil
 
 	default:
 		return nil, fmt.Errorf("unknown tool %q", name)

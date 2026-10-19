@@ -25,8 +25,6 @@
 #   G2 fleet hub accounts forget zx --host linux-a --machine-gone → POST {forget,
 #      hostname, machine_gone: true}; says the home was NOT archived; without
 #      --host → exit 2, nothing sent (claude-fleet#3957)
-#   T  fleet hub debug-ticket @bob --hours 48 → POST {github_login, hours}; prints
-#      the one `fleet-debug ticket …` line once; --list → one row per ticket
 #      (claude-fleet#2891)
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd -P)
@@ -125,15 +123,6 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {"invites": [{"id": "inv_abc", "state": "used", "github_login": "",
                                                   "expires_at": "2026-10-14T00:00:00Z", "created_by": "erin",
                                                   "used_by": "gh:300"}]})
-        if u.path == "/v1/fleet/debug/tickets":
-            if self.command == "POST":
-                b = json.loads(body or "{}")
-                return self.answer(201, {"id": "dt_abc", "owner": b.get("github_login", ""), "by": "admin:erin",
-                                         "expires_at": "2026-10-12T06:00:00Z", "ticket": "fdt1.p.s",
-                                         "command": "fleet-debug ticket fdt1.p.s"})
-            return self.answer(200, {"tickets": [{"id": "dt_abc", "state": "active", "owner": "bob",
-                                                  "by": "admin:erin", "expires_at": "2026-10-12T06:00:00Z",
-                                                  "uses_today": {"upload": 2}}]})
         if u.path == "/v1/fleet/settings":
             if self.command == "PUT":
                 b = json.loads(body)
@@ -308,17 +297,6 @@ rv=$(last)
 if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/invites ]    && [ "$(field "$r" body)" = '{"github_login": "alice"}' ]    && grep -q 'GitHub 用户 alice' "$WORK/out" && grep -qF 'curl -fsSL http://h/i/secretcodesecretcode | sh' "$WORK/out"    && printf '%s\n' "$l" | grep -q '^inv_abc .*used .*anyone.*erin → gh:300$'    && [ "$v" = 'revoked inv_abc' ] && [ "$(field "$rv" query)" = id=inv_abc ]; then
   ok "L fleet hub invite → POST {github_login}, the command printed; --list; --revoke"
 else bad "L rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l revoke=$v"; fi
-
-# T — fleet hub debug-ticket (claude-fleet#2891): re-issue, list
-run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub debug-ticket @bob --hours 48 >"$WORK/out" 2>"$WORK/err"; rc=$?
-r=$(last)
-l=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub debug-ticket --list 2>&1)
-if [ "$rc" = 0 ] && [ "$(field "$r" method)" = POST ] && [ "$(field "$r" path)" = /v1/fleet/debug/tickets ] \
-   && [ "$(field "$r" body)" = '{"github_login": "bob", "hours": 48.0}' ] \
-   && [ "$(grep -c '^  fleet-debug ticket fdt1.p.s$' "$WORK/out")" = 1 ] && grep -q '发给 bob' "$WORK/out" \
-   && printf '%s\n' "$l" | grep -q '^dt_abc .*active .*bob .*admin:erin .*2026-10-12 06:00 *upload 2$'; then
-  ok "T fleet hub debug-ticket → POST {github_login, hours}, the paste line printed once; --list"
-else bad "T rc=$rc req=$r out=$(cat "$WORK/out") err=$(cat "$WORK/err") list=$l"; fi
 
 # M — fleet hub machines (claude-fleet#2263): spares off, then on
 off=$(run FLEET_HUB_URL="$HUB" CCQUOTA_VIEWER_TOKEN=tok "$BIN/fleet" hub machines 2>&1); rc1=$?

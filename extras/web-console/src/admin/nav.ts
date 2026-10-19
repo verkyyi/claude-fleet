@@ -3,7 +3,7 @@
 // (`to`); one still on the old console links to its old address (`href`) until
 // its own ticket (C11–C15) lands it and swaps the line to `to`.
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, CreditCard, Inbox, Megaphone, MessageSquareWarning, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
+import { BarChart3, CreditCard, Inbox, Megaphone, Rocket, ScrollText, Server, Settings, Users } from "lucide-react";
 import type { MsgKey } from "./i18n";
 
 // count: a read answering {pending: n}, drawn beside the item when n > 0
@@ -35,7 +35,6 @@ export const NAV: NavGroup[] = [
     items: [
       { key: "page.settings", icon: Settings, to: "/settings" },
       { key: "page.audit", icon: ScrollText, to: "/audit" },
-      { key: "page.feedback", icon: MessageSquareWarning, to: "/feedback" },
     ],
   },
 ];

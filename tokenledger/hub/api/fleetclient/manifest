@@ -61,18 +61,8 @@ bin/fleet_clientlog.py
 # is this login one a managed node's ops service maintains (#4594): fleet login /
 # connect never tell its person to log in
 bin/fleet_managed.py
-# `fleet doctor --bundle <dir>` (#2890): the diagnosis bundle, its awk redactor
-# (no python needed), the python one and the one list of files it may read
-bin/fleet-doctor-bundle.sh
-bin/fleet-redact.awk
+# the redactor a config / file scan reads (#2890): conf/secret-shapes.list's shapes
 bin/fleet_redact.py
-conf/debug-collect.list
-# `fleet-debug report` (#2892): sends that bundle to the hub when fleet itself
-# is broken — sh + /usr/bin/curl only; `fleet debug` forwards to it, and
-# GET /debug serves it alone (with the four files above spliced in)
-bin/fleet-debug
-# the third failure in half an hour asks whether the hub should look (#2894)
-bin/fleet-debug-prompt.sh
 # the installer's tmux step (#1629) and the served fetch (#4826), and the
 # send-to-your-terminal half of fleet-open / fleet-show
 bin/fleet-client-lib.sh
@@ -153,9 +143,6 @@ bin/fleet-users.py  served
 bin/fleet-hub.py  served
 bin/fleet-hub-admin.py  served
 bin/fleet-release-stats.py  served
-# `fleet drill invite` mints an onboarding drill from any computer (#2024)
-bin/fleet-drill.sh  served
-bin/fleet-hub-url.sh  served
 # 公开前的安全门槛 (#3574): the ONE table — the hub's /v1/fleet/gate reads it
 # from this pack, bin/fleet-gate-check.sh from the checkout
 conf/public-gate.tsv  served

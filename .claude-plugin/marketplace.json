@@ -22,11 +22,6 @@
       "description": "Web pages a session opens show on your computer; an OAuth callback to localhost is forwarded back over your ssh (MCP authorization, /login). Off unless installed."
     },
     {
-      "name": "fleet-feedback",
-      "source": "./plugins/fleet-feedback",
-      "description": "/fleet-feedback 一句话: tell the fleet's maintainers something from any session — preview first, logs and screen only if you say so, a feedback number back."
-    },
-    {
       "name": "fleet-infra",
       "source": "./plugins/fleet-infra",
       "description": "For the machine and hub admins only: runbooks as skills — prepare and enroll a Mac, logins, a cloud Linux node, an overseas relay, hub deploy, release rules, incident runbooks, reading the doctor. Never installed by default, never handed out by the hub."

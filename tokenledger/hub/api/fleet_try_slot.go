@@ -317,7 +317,6 @@ var trialEndNote = map[string]string{
 	trialReleaseOpenSlow: "试用的机器迟迟没开好，放回并重新排队（不算试过） · seat did not open in time, requeued",
 	trialEndTime:         "试用用完，登录收回 · trial spent, login given back",
 	trialEndMsgs:         "试用用完，登录收回 · trial spent, login given back",
-	trialEndDrill:        "演练试用者到期，机器放回 · drill trier expired",
 }
 
 // trialSlotVerdict is what the patrol does with a placed trial at now: a

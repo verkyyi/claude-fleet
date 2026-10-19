@@ -102,8 +102,8 @@ machine's work ONCE, however many logins the machine carries:
                 machine's admin node; issue #2997). A
                 login not taken over keeps its units, named (`account adopt` is
                 its road); a unit that will not unload stays, named; a running
-                fleet-onboard-drill.sh (a process running it, never a command line
-                that merely names it — issue #2991) holds every removal until the next sweep.
+                process named in FLEET_NODE_SWEEP_HOLD (never a command line that
+                merely names it — issue #2991) holds every removal until the next sweep.
                 The admin login's own units with nothing left to do go too (issue
                 #4363, expected.json or not): com.claude-fleet.<admin>.<unit> whose
                 unit this release ships no template for (dispatch), and its
@@ -3940,7 +3940,7 @@ def client_shell_says(c, paths):
 
 # What holds the sweep's removals (issue #2981): a process running one of these
 # — a drill run by hand from an admin login must not lose a launchd unit under it.
-SWEEP_HOLD_ARGV = ("fleet-onboard-drill.sh",)
+SWEEP_HOLD_ARGV = ()   # the onboarding drill that held it left with #4904
 
 
 def keep_labels(paths):

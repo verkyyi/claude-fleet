@@ -556,7 +556,7 @@ EOF
 cat > "$W/claude.sh" <<EOF
 #!/bin/sh
 cd '$BIN' && FLEET_CLIENT=thin FLEET_THIN_ARGV_CMD="sh $W/argv.sh" FLEET_REMOTE_BIN='$W/rbin' FLEET_THIN_LOG='$W/thin.log' \
-  FLEET_DEBUG_PROMPT=0 FLEET_HOME_THIN_CMD='printf "%s\n" "\$@" > $W/thin.want' bash '$BIN/fleet-home-session.sh' claude
+  FLEET_HOME_THIN_CMD='printf "%s\n" "\$@" > $W/thin.want' bash '$BIN/fleet-home-session.sh' claude
 echo "rc=\$?" > '$W/claude.rc'
 EOF
 to new-window -d -t o -n claude "sh '$W/claude.sh'"

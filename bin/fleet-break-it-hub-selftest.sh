@@ -68,8 +68,6 @@
 #                                                   fleet_node_keys.go; bin/fleet_node_sig.py; go test, when here
 #   invite-expired                                  tokenledger/hub/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
-#   drill-person-no-machine                         tokenledger/hub/api fleet_opening.go + fleet_drill.go
-#                                                   (accountStateOf, closeDrillLogins; go test, when a toolchain is here)
 #   remove-pending-machine-gone                     tokenledger/hub/api fleet_account_gone.go (forget
 #                                                   machine_gone) + hub/store fleet_accounts.go
 #                                                   (CloseAccountMachineGone); bin/fleet-hub-admin.py --machine-gone;
@@ -129,31 +127,10 @@
 #   hub-stream-silent                               extras/web-console/src/shared/sessions.ts (watchdog, backoff, poll
 #                                                   fallback, by name) + hub/api fleet_stream.go (ping, scope;
 #                                                   go test, when a toolchain is here)
-#   feedback-secret-in-text                         bin/fleet-feedback.sh (fleet_redact.py over the words, the
-#                                                   whole-set recheck; a fake hub records the bytes)
-#   feedback-secret-in-attach                       bin/fleet-feedback.sh --attach (conf/debug-collect.list's fresh
-#                                                   rows + the screen, each through conf/secret-shapes.list)
 #   service-log-cross-login                         tokenledger/hub/api fleet_service_log.go (FleetScope before any
 #                                                   node read, one follow per service, masking; go test, when a toolchain
 #                                                   is here) + tokenledger/agent node_service_log.go (the register's path only)
 #                                                   + the console's ServiceSheet.tsx (403 is a word, by name)
-#   debug-ticket-replayed                           tokenledger/hub/api fleet_debug_ticket.go (debugTicketAuth: the
-#                                                   fingerprint, the HMAC, expiry, the superseded row; go test, when a
-#                                                   toolchain is here) + bin/fleet-install.sh (debug_fp: only the hash sent)
-#   debug-page-stuck                                tokenledger/hub/api fleet_debug.go (debugTick: no page in 15
-#                                                   minutes ⇒ unfinished, to the admin; seven days ⇒ gone; the upload
-#                                                   re-checked against the shape table; go test, when a toolchain is
-#                                                   here)
-#   feedback-identity-public                        tokenledger/hub/api fleet_feedback_github.go (feedbackIssueBody:
-#                                                   the ONE public template; App token never logged; go test, when a
-#                                                   toolchain is here)
-#   feedback-github-down                            tokenledger/hub/api fleet_feedback_github.go (feedbackFile: 待转,
-#                                                   1 min doubling to 1 h, the marker adopts the issue a 500 created;
-#                                                   go test, when a toolchain is here)
-#   feedback-reply-lost                             tokenledger/hub/api fleet_feedback_reply.go (a close read
-#                                                   once, sent until a node says succeeded, the next session when
-#                                                   the first is gone, 30 days; go test, when a toolchain is here)
-#                                                   + bin/fleet_control.py (the prefix to any session's inbox)
 #   dist-publish-tampered                           tokenledger/hub/api fleet_publish.go (POST …/publish: the archive
 #                                                   hashed into the commit's tree, OIDC, forward only; go test, when a
 #                                                   toolchain is here) + bin/fleet-release-publish.sh (what CI sends)
@@ -207,9 +184,6 @@
 #   trial-host-no-spare                             tokenledger/hub/api fleet_accounts.go (trialMachine: only
 #                                                   machines with a ready spare) + fleet_try.go (no_spare,
 #                                                   trial_no_spare); go test, when a toolchain is here
-#   drill-trial-escape                              tokenledger/hub/api fleet_drill_trial.go (an admin's ft_ code,
-#                                                   spent once, into trialSignIn; SweepDrillTrials) + hub/store
-#                                                   drill_trials.go (DeleteDrillTrial); go test, when a toolchain is here
 #
 # Each prints `PASS <id> <secs>s ≤<cap>s <what came back>` like its parent.
 # BREAK_KEEP=1 keeps the work dir; BREAK_ONLY narrows to those ids.
@@ -769,10 +743,10 @@ drill_cred_user_pod_unlisted() {
     || { WHY="credPolicyFor does not give a person's pod its owner's list"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList|TestCredPolicyStrictDrillUsesCreatorsList)$' ./hub/api 2>&1); rc=$?
+          go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList)$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='严格模式下没单独列的个人 pod 用主人的个人白名单（演练人用创建者的），pod 自己的列表优先，普通机器不变（go test）' ;;
+      0:*) WHAT='严格模式下没单独列的个人 pod 用主人的个人白名单，pod 自己的列表优先，普通机器不变（go test）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它；测试按名核对在' ;;
       *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
@@ -967,39 +941,6 @@ drill_invite_expired() {
   SECS=$(since "$t0")
 }
 
-# ---- drill-person-no-machine (#2549): a drill person (`fleet drill invite
-# --host <m>`) confirms its scan — its own computer is a bare client login, so
-# before it got 「No fleet on any of your machines」. It must be opened a login
-# on another machine (the doors say 「正在开」), and its self-delete / expiry
-# must remove that login before the person goes.
-drill_drill_person_no_machine() {
-  CAP=120; local t0 out rc tests f
-  tests='TestDrillFirstSessionGetsAMachine TestDrillGoesOnlyAfterItsLoginIsRemoved TestDrillOnlyItsOwnMachineAnswersAsBefore'
-  f="$ROOT/tokenledger/hub/api/fleet_drill_test.go"
-  t0=$(now)
-  for out in $tests; do
-    grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
-  done
-  grep -q 'return drill.OwnComputer(a)' "$ROOT/tokenledger/hub/api/fleet_opening.go" \
-    || { WHY="accountStateOf no longer sets a drill's own computer apart"; return 1; }
-  grep -q 'closeDrillLogins(d, now)' "$ROOT/tokenledger/hub/api/fleet_drill.go" \
-    || { WHY="DELETE /v1/self no longer removes the login opened for the drill first"; return 1; }
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='演练身份扫码即在另一台最闲的机器开登录、入口说「正在开」、开好后不再开第二个；删自己 / 到期先收掉那个登录（202 removing），收到已移除才删人；没有别的机器时答案照旧（go test 三条）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
-        WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；三条测试按名核对在' ;;
-      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  else
-    WHAT='没有 go：三条测试按名核对在，Go 门（tokenledger.yml）跑它们'
-  fi
-  SECS=$(since "$t0")
-}
-
 # ---- opened-login-no-fleet (#2652): a login the hub opened for a person (a
 # drill, an invited newcomer, a spare) went active with no node and no fleet —
 # nobody ever logs in to it, and the hub sees a login's fleet only through that
@@ -1010,29 +951,26 @@ drill_drill_person_no_machine() {
 # fleet up; a drill's remove drops the home.
 drill_opened_login_no_fleet() {
   CAP=120; local t0 out rc s="$ROOT/bin/fleet-login-new.sh"
-  local api='TestDrillGoesOnlyAfterItsLoginIsRemoved' agent='TestAdminAgentHandsJoinCodeInEnv|TestAdminAgentDropHomeDeletesHome'
+  local agent='TestAdminAgentHandsJoinCodeInEnv|TestAdminAgentDropHomeDeletesHome'
   t0=$(now)
   grep -q 'op.JoinCode = s.loginJoinCode(a' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
     || { WHY="the hub's create op no longer carries the login's join code"; return 1; }
-  grep -q 'op.DropHome = true' "$ROOT/tokenledger/hub/api/fleet_accounts.go" \
-    || { WHY="a drill's remove no longer drops the home"; return 1; }
   grep -q '"FLEET_LOGIN_JOIN_CODE="' "$ROOT/tokenledger/agent/node_accounts.go" \
     || { WHY="the admin agent no longer hands the join code to fleet-login-new.sh in its environment"; return 1; }
   grep -q '^  node_join_step$' "$s" && grep -q 'fleet_up_step$' "$s" \
     || { WHY="fleet-login-new.sh no longer joins an opened login / brings its fleet up"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($api)\$" ./hub/api 2>&1 \
-          && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
+          go test -count=1 -run "^($agent)\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go half's tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；演练身份收号 --delete-home（go test 三条；脚本一半是 fleet-login-new-selftest O）' ;;
+      0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；收号带 --delete-home 时删家目录（go test 两条；脚本一半是 fleet-login-new-selftest O）' ;;
       *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*)
         WHAT='Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；脚本一半是 fleet-login-new-selftest O' ;;
       *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
     esac
   else
-    WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑三条测试；脚本一半是 fleet-login-new-selftest O'
+    WHAT='没有 go：标记按名核对在，Go 门（tokenledger.yml）跑两条测试；脚本一半是 fleet-login-new-selftest O'
   fi
   SECS=$(since "$t0")
 }
@@ -1955,74 +1893,6 @@ drill_service_log_cross_login() {
   SECS=$(since "$t0")
 }
 
-# ---- debug-ticket-replayed (#2891, EPIC #2889 C2): the ticket a computer took
-# at install, copied to another computer, a byte changed, used past its expiry,
-# or kept after a re-issue. The hub refuses all four with 401 and one line on
-# how to get a new one; a re-issue retires the old ticket; off adds nothing.
-# The installer sends the fingerprint's hash, never the hardware id. Go tests by
-# name (and run with a toolchain).
-drill_debug_ticket_replayed() {
-  CAP=120; local t0 out rc t f="$ROOT/tokenledger/hub/api/fleet_debug_ticket.go"
-  local tests='TestDebugTicketBindsExpiresAndRefusesTampering TestDebugTicketReissueRetiresTheOld TestDebugTicketUploadQuota TestDebugOffAddsNothing'
-  t0=$(now)
-  grep -q 'case p.FP != "" && p.FP != fp, p.FP == "" && row.FP != "" && row.FP != fp:' "$f" 2>/dev/null \
-    || { WHY="debugTicketAuth no longer refuses a ticket used from another computer's fingerprint"; return 1; }
-  grep -q 'if !row.RevokedAt.IsZero() {' "$f" || { WHY="debugTicketAuth no longer refuses a superseded ticket"; return 1; }
-  grep -q "printf '%s|%s|%s' \"\$_hw\" \"\$(id -un)\" \"\${FLEET_DEBUG_ROOT:-\$ROOT}\" | { shasum -a 256" "$ROOT/bin/fleet-install.sh" \
-    || { WHY="the installer no longer sends only the hash of hwid|login|root"; return 1; }
-  for t in $tests; do
-    grep -q "^func $t(" "$ROOT/tokenledger/hub/api/fleet_debug_ticket_test.go" 2>/dev/null \
-      || { WHY="the hub half's test $t is not in tokenledger/hub/api/fleet_debug_ticket_test.go"; return 1; }
-  done
-  WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补；安装只送指纹哈希（测试按名核对在，Go 门跑它们）'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补，第 6 次上传 → 429，关掉 ⇒ 路由不存在（go test）；安装只送指纹哈希' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
-  SECS=$(since "$t0")
-}
-
-# ---- debug-page-stuck (#2893, EPIC #2889 C4): the debugger session a report
-# opened dies, never opens (no login, no machine), or never hands in its page;
-# or a bundle arrives still holding a credential. The page would read 「诊断员
-# 正在看」 forever and the person would wait. The hub moves a report with no page
-# 15 minutes after its debugger was asked (or with none opened) to 没看完 — the
-# page says it went to the admin — refuses
-# a bundle with anything credential-shaped in any file (400, the file named),
-# and deletes everything seven days on. Go tests by name (run with a toolchain).
-drill_debug_page_stuck() {
-  CAP=120; local t0 out rc t f="$ROOT/tokenledger/hub/api/fleet_debug.go"
-  local tests='TestDebugBundleToPage TestDebugBundleRefusals TestDebugTickUnfinishedAndPrune TestDebugSessionsQueueWhenSpent TestDebugReportsOffAddsNothing'
-  t0=$(now)
-  grep -q 'case r.State == store.DebugDiagnosing && now.Sub(r.DispatchedAt) > debugPageLimit:' "$f" 2>/dev/null \
-    || { WHY="debugTick no longer moves a report with no page past its limit to unfinished"; return 1; }
-  grep -q 'debugPageLimit = 15 \* time.Minute' "$f" || { WHY="the debugger's page limit is no longer 15 minutes"; return 1; }
-  grep -q 'if hit := debugShapeHit(shapes, string(files\[n\])); hit != "" {' "$f" \
-    || { WHY="the upload no longer holds every file of the bundle against the shape table"; return 1; }
-  for t in $tests; do
-    grep -q "^func $t(" "$ROOT/tokenledger/hub/api/fleet_debug_test.go" 2>/dev/null \
-      || { WHY="the hub half's test $t is not in tokenledger/hub/api/fleet_debug_test.go"; return 1; }
-  done
-  WHAT='诊断员没开成 / 中途死了 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；7 天后全删（测试按名核对在，Go 门跑它们）'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='诊断员没开成 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；同包重传同一页；7 天后全删；关掉 ⇒ 路由不存在（go test）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
-  SECS=$(since "$t0")
-}
-
 # ---- usage-unattributed (#3204): a login runs Claude with no /login (its
 # sessions on the credential proxy's pool), so ~/.claude.json has no
 # oauthAccount. The agent skipped every Claude scan there — silently, Codex
@@ -2142,164 +2012,6 @@ drill_pool_usage_silent() {
     esac
   fi
   SECS=$(since "$t0")
-}
-
-# ---- feedback-identity-public (#3356, EPIC #3354 C2): a feedback filed into
-# the PUBLIC repo carries who sent it — a login, a person, a machine's name, a
-# session. The hub writes the issue itself, and its body has ONE definition,
-# feedbackIssueBody: the words, the version (a sha or 未知), the kind of machine
-# (a known word or 未知, never echoed), Claude/Codex, the F number and its
-# marker. The App's token and key never reach a log line. Go tests by name.
-drill_feedback_identity_public() {
-  CAP=120; local t0 out rc t f="$ROOT/tokenledger/hub/api/fleet_feedback_github.go"
-  local tests='TestFeedbackFiledPublicFieldsOnly TestFeedbackFilingOffSendsNothing'
-  t0=$(now)
-  grep -q '"title": feedbackIssueTitle(f.Text), "body": feedbackIssueBody(f), "labels": \[\]string{feedbackGHLabel}}' "$f" 2>/dev/null \
-    || { WHY="the filer no longer writes the issue only from feedbackIssueTitle / feedbackIssueBody"; return 1; }
-  grep -q 'ver, feedbackPublicKind(ctx\["machine_kind"\]), feedbackPublicAgent(ctx\["agent"\]), num, feedbackMarker(num))' "$f" \
-    || { WHY="feedbackIssueBody no longer holds to the four public fields + the F number"; return 1; }
-  for t in $tests; do
-    grep -q "^func $t(" "$ROOT/tokenledger/hub/api/fleet_feedback_github_test.go" 2>/dev/null \
-      || { WHY="the hub half's test $t is not in tokenledger/hub/api/fleet_feedback_github_test.go"; return 1; }
-  done
-  WHAT='公开单子只有原话 · 版本 · 机器类型 · Claude/Codex · F 号；登录名、人、机器名、会话、窗口不进；令牌不进日志（测试按名核对在，Go 门跑它们）'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='假 GitHub 收到的单子正文只有原话 · 版本 · 托管 Linux · Claude · F1 + 标记，登录名 / 机器名 / 会话 / 窗口一个不在；认不出的机器类型写「未知」；令牌、私钥不在任何日志行；没配 App ⇒ 一个请求不发（go test）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
-  SECS=$(since "$t0")
-}
-
-# ---- feedback-github-down (#3356, EPIC #3354 C2): GitHub answers 500 or times
-# out while the hub files a feedback — or the 500 came after the issue WAS
-# created. The feedback must stay 待转 and be tried again (1 minute, doubling,
-# at most an hour), and once GitHub is back it is ONE issue: each pass first
-# lists the repo's feedback issues and adopts the one ending in its marker.
-drill_feedback_github_down() {
-  CAP=120; local t0 out rc f="$ROOT/tokenledger/hub/api/fleet_feedback_github.go"
-  local tests='TestFeedbackGitHubDownQueuesThenFilesOnce'
-  t0=$(now)
-  grep -q 'filed, err := g.feedbackFiled(ctx, auth)' "$f" 2>/dev/null \
-    || { WHY="a filing pass no longer looks for the issue a feedback already has before creating one"; return 1; }
-  grep -q 'd = min(r.delay\*2, feedbackRetryMax)' "$f" || { WHY="a failed filing no longer backs off doubling"; return 1; }
-  grep -q 'feedbackRetryFirst   = time.Minute' "$f" && grep -q 'feedbackRetryMax     = time.Hour' "$f" \
-    || { WHY="the filing backoff is no longer 1 minute to 1 hour"; return 1; }
-  grep -q "^func $tests(" "$ROOT/tokenledger/hub/api/fleet_feedback_github_test.go" 2>/dev/null \
-    || { WHY="the hub half's test $tests is not in tokenledger/hub/api/fleet_feedback_github_test.go"; return 1; }
-  WHAT='GitHub 500 / 超时 ⇒ 待转，1 分钟起翻倍到 1 小时再试；恢复后只建一张（测试按名核对在，Go 门跑它们）'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($tests)\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='假 GitHub 先「建成却回 500」、再超时：反馈一直待转，59 秒内不重试、2 分钟内不再试；恢复后认领已建的那张，仓库里只有 1 张；退避封顶 1 小时（go test）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
-  SECS=$(since "$t0")
-}
-
-# ---- feedback-reply-lost (#3359, EPIC #3354 C5): a feedback's issue is closed
-# and what the closing said never reaches the person — the session they sent it
-# from is gone, their machine is down — or reaches them twice. The hub closes a
-# row once, sends until a node says succeeded (then never again), tries the
-# person's other live sessions when the first is gone, keeps it 30 days; the
-# node delivers the desk's prefix to any session's inbox, never the bridge.
-drill_feedback_reply_lost() {
-  CAP=120; local t0 out rc f="$ROOT/tokenledger/hub/api/fleet_feedback_reply.go"
-  local tests='TestFeedbackReplyClosedSendsOnce|TestFeedbackReplyWaitsForNextSession|TestFeedbackReplyFailedSessionTriesNext|TestFeedbackReplyExpiresAfter30Days|TestFeedbackReplyPrefixIsTheDesks'
-  t0=$(now)
-  grep -q 'if ok, err := s.Store.SetFeedbackReplied(f.ID, now); err != nil' "$f" 2>/dev/null \
-    || { WHY="a reply no longer writes replied_at when its node says succeeded"; return 1; }
-  grep -q 'feedbackReplyKeep      = 30 \* 24 \* time.Hour' "$f" || { WHY="a waiting reply is no longer kept 30 days"; return 1; }
-  grep -q 'if action == "worker_message" and actor == FEEDBACK_ACTOR and params\["text"\].startswith(FEEDBACK_PREFIX):' \
-    "$BIN/fleet_control.py" || { WHY="the node no longer hands the desk's reply to any session's inbox"; return 1; }
-  local tn; for tn in $(printf '%s' "$tests" | tr '|' ' '); do
-    grep -q "^func $tn(" "$ROOT/tokenledger/hub/api/fleet_feedback_reply_test.go" 2>/dev/null \
-      || { WHY="the hub half's test $tn is not in tokenledger/hub/api/fleet_feedback_reply_test.go"; return 1; }
-  done
-  WHAT='关单 ⇒ 送一次；会话已关 ⇒ 存着，他下一个会话上线时送一次；30 天过期不送；重复关单不重复送（测试按名核对在，Go 门跑它们）'
-  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($tests)\$" ./hub/api 2>&1); rc=$?
-    case "$rc:$out" in
-      0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
-      0:*) WHAT='假 GitHub 关单、假节点收信：关单送一次、重开再关不再送；原会话不在 ⇒ 存着，他另一台机器上的会话上线后送一次；原会话拒收 ⇒ 换下一个；30 天前关的不送；别人冒用前缀 403（go test）' ;;
-      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
-      *) WHY="the Go half is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"; return 1 ;;
-    esac
-  fi
-  SECS=$(since "$t0")
-}
-
-# ---- feedback-secret-in-text / feedback-secret-in-attach (#3358, EPIC #3354 C4):
-# a person pastes a token into /fleet-feedback, or the log / screen they agree to
-# attach holds one. bin/fleet-feedback.sh runs for real against a fake hub (a curl
-# that writes down every byte of every part): no sample of the shape table may be
-# in what leaves the machine, nor in what the outbox keeps when the hub is away.
-_fb_drill() {  # _fb_drill <dir> <words> <log line> <screen line> <attach yes|no>
-  local d="$1" a=''
-  mkdir -p "$d/home" "$d/conf" "$d/tmp" "$d/cache/claude-fleet/shell/logs"
-  printf 'CCQUOTA_HUB_URL=https://hub.example\nCCQUOTA_TOKEN=FAKEnode\n' > "$d/conf/node.env"
-  printf '%s\n' "$3" > "$d/cache/claude-fleet/shell/logs/connect.log"
-  cat > "$d/curl" <<SH
-#!/bin/bash
-prev=''
-for a in "\$@"; do
-  if [ "\$prev" = -F ]; then v=\${a#*=}; v=\${v%%;*}; case "\$v" in '<'*|'@'*) cat "\${v#?}" ;; *) printf '%s' "\$v" ;; esac; fi
-  prev=\$a
-done >> "$d/sent"
-[ -f "$d/away" ] && exit 7
-printf '{"id":"F1","state":"received"}\n200'
-SH
-  chmod +x "$d/curl"
-  [ "$5" = yes ] && a=--attach
-  for mode in up away; do
-    [ "$mode" = away ] && : > "$d/away"
-    ( unset CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL TMUX TMUX_PANE
-      export HOME="$d/home" FLEET_CONF_DIR="$d/conf" XDG_CACHE_HOME="$d/cache" TMPDIR="$d/tmp" \
-             FLEET_HUB_CURL="$d/curl" FLEET_FEEDBACK_MACHINE_KIND=managed-linux \
-             FLEET_FEEDBACK_SCREEN_CMD="printf '%s\n' '$4'"
-      printf '%s\n' "$2" | bash "$BIN/fleet-feedback.sh" send ${a:+"$a"} - >/dev/null 2>&1 ) || :
-  done
-}
-drill_feedback_secret_in_text() {
-  CAP=30; local d="$WORK/fbt" t0 v left=''
-  set -- ghp_FAKEfbaaaaaaaaaaaaaaa github_pat_11FAKEfbbbbbbbbbbbb sk-ant-api03-FAKEfbcccccc glpat-FAKEfbdddddd \
-         xoxb-FAKEfbeeeeee AKIAFAKEFBFFFFFFFFFF eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYiJ9.FAKEsig
-  t0=$(now)
-  _fb_drill "$d" "⌘P 慢，顺手贴了 $* 和 DB_PASSWORD=FAKEfbpass" 'nothing here' 'nothing here' no
-  [ -s "$d/sent" ] || { WHY="fleet-feedback.sh sent nothing at all"; return 1; }
-  [ -n "$(ls "$d/conf/feedback-outbox" 2>/dev/null)" ] || { WHY="an unreachable hub kept nothing in the outbox"; return 1; }
-  for v in "$@" FAKEfbpass; do
-    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
-    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
-  done
-  SECS=$(since "$t0")
-  [ -z "$left" ] || { WHY="credentials left in the feedback:$left"; return 1; }
-  grep -q '<redacted:github>' "$d/sent" || { WHY="the words went out without their mask"; return 1; }
-  WHAT='原话里贴了七类假凭据 + 一个密码：发出的字节和入口不在时本机存下的都一处不剩'
-}
-drill_feedback_secret_in_attach() {
-  CAP=30; local d="$WORK/fba" t0 v left='' L=sk-ant-api03-FAKEfblogaaaa S=ghp_FAKEfbscreenbbbbbbbb
-  t0=$(now)
-  _fb_drill "$d" '附上日志和屏幕' "relay token Authorization: Bearer FAKEfbbearer $L" "prompt> export GH=$S" yes
-  grep -q 'prompt> export' "$d/sent" || { WHY="the screen was not attached"; return 1; }
-  grep -q 'relay token' "$d/sent" || { WHY="the log was not attached"; return 1; }
-  for v in "$L" "$S" FAKEfbbearer; do
-    grep -qF -e "$v" "$d/sent" && left="$left sent:$v"
-    grep -rqF -e "$v" "$d/conf/feedback-outbox" && left="$left outbox:$v"
-  done
-  SECS=$(since "$t0")
-  [ -z "$left" ] || { WHY="credentials left in the attachments:$left"; return 1; }
-  WHAT='附上的日志和屏幕各塞假凭据：发出的附件和本机存下待补发的一处不剩'
 }
 
 # ---- pool-usage-node-dropped (#3376, EPIC #3225 C1's patch): a login's local
@@ -2979,7 +2691,7 @@ drill_trial_host_no_spare() {
   t0=$(now)
   grep -q 'if spareOnly && !c.spare {' "$tl/api/fleet_accounts.go" 2>/dev/null \
     || { WHY="a trial's machine pick no longer skips machines without a ready spare (fleet_accounts.go pickMachine)"; return 1; }
-  grep -q 's.trialMachine(now, s.drillComputer(pid)...)' "$tl/api/fleet_try.go" 2>/dev/null \
+  grep -q 's.trialMachine(now)' "$tl/api/fleet_try.go" 2>/dev/null \
     || { WHY="the trial claim no longer picks through trialMachine (fleet_try.go)"; return 1; }
   grep -q 'AlertTrialNoSpare = "trial_no_spare"' "$tl/store/fleet_alerts.go" 2>/dev/null \
     || { WHY="no trial_no_spare alert kind (store/fleet_alerts.go)"; return 1; }
@@ -2994,27 +2706,6 @@ drill_credential_quota_unbound() {
   t0=$(now)
   c11_go_tests fleet_credential_quota_test.go TestCredentialQuotaUnbound TestCredentialQuotaIsolation || return 1
   WHAT='无 UUID 的 OAuth 凭据独立计量；重复 Token 去重、换 Token 不继承旧读数（Go 门验证）'
-  SECS=$(since "$t0")
-}
-
-# ---- drill-trial-escape (#4215): a drill trier — the stand-in stranger an
-# admin mints so the isolated drill (#4061) walks the trial without a real
-# scan — must not outgrow it: its code replayed, minted by a non-admin, landing
-# on the list or a console session, or the trier outliving its life with its
-# conversation, identity or machine still there.
-drill_drill_trial_escape() {
-  CAP=120; local t0 tl="$ROOT/tokenledger/hub"; GO_RAN=0
-  t0=$(now)
-  grep -q 'UPDATE hub_drill_trial_codes SET used_at = ?' "$tl/store/drill_trials.go" 2>/dev/null \
-    || { WHY="a drill trier's code is no longer spent once (store/drill_trials.go)"; return 1; }
-  grep -q 's.trialSignIn(w, r, true, store.DrillKind,' "$tl/api/fleet_drill_trial.go" 2>/dev/null \
-    || { WHY="the redeem no longer goes through the real trial sign-in (fleet_drill_trial.go)"; return 1; }
-  grep -q 'go s.SweepDrillTrials(now)' "$tl/api/fleet_alerts.go" 2>/dev/null \
-    || { WHY="nothing deletes an expired drill trier on the tick (fleet_alerts.go)"; return 1; }
-  c11_go_tests fleet_drill_trial_test.go TestDrillTrialMintIsAdminOnly TestDrillTrialCodeOnceIntoTheTrial \
-    TestDrillTrialExpiresGivesBackAndDeletes TestDrillTrialSelfDelete TestDrillTrialOffAddsNothing || return 1
-  WHAT='演练试用码只管理员铸、只换一次、换到的是试用会话不进名单；到期放回机器并删对话密文 / 身份 / 试用（测试按名核对在，Go 门跑它们）'
-  [ "$GO_RAN" = 1 ] && WHAT='非管理员铸 403；码重放 / 过期 401；换到 roleTrial、不在名单、控制台 404；到期放回 + 删密文身份试用、旧码作废；自删；真人路不变（go test 五条）'
   SECS=$(since "$t0")
 }
 

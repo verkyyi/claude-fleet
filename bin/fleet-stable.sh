@@ -86,19 +86,8 @@
 #               already carry every tokenledger/ commit the target has (tests and
 #               *.md aside), else REFUSED `ccquota:` listing them. No hub
 #               address, or a target with no Go source / no updater: said, passes.
-#            9. the China real-user path is not red on the CURRENT stable
-#               (issue #4180): bin/fleet-cn-probe-watch.sh walks it every few
-#               hours against what is live and leaves a commit status `cn path`
-#               on the stable it tested. Its newest one `failure` refuses (reason
-#               `cn:`) while the breakage issue it names (the status's target)
-#               is still open — closing that issue (its fix is what this move
-#               ships) or a green re-walk lets the move through; --force moves and
-#               logs. No such status (no machine walks it, or stable moved since)
-#               ⇒ said, passes. Only the PRODUCT's red refuses (issue #4663): a
-#               status of class env (环境无效…) or probe (检测出错…) is said and
-#               passes — filed all the same, re-walked hourly.
-#               FLEET_STABLE_CN_GATE=0 turns it off. Runs on --precheck too, so a
-#               red path stops a train before its tests.
+#            9. retired (issue #4904): the China real-user path probe left with
+#               its watcher; a `cn path` status on a commit gates nothing.
 #          There is ONE release line (issue #4671): refs/tags/stable-macos and
 #          its `--ref stable-macos` / `--seed` / `--with-stable` moves are gone.
 #
@@ -135,8 +124,7 @@
 #   move  0 moved (or already there, or dry-run passed) · 2 usage / read error
 #         3 refused (not on trunk / backward / CI not green / oldcfg red /
 #           release.json missing or invalid / a pinned artifact not on the hub /
-#           the hub's ccquota not the target's or behind it / the China path
-#           red) · 4 push failed
+#           the hub's ccquota not the target's or behind it) · 4 push failed
 #           (lease lost to a concurrent move, no push rights, or — said as
 #           such — no workflows permission for a range that changes
 #           .github/workflows, issue #3912)
@@ -451,43 +439,6 @@ oldcfg_gate() {   # oldcfg_gate <old> <new>
   refuse "oldcfg: an old session of stable $(short "$1") would break on $(short "$2") — fix the findings above (CONTRIBUTING «老会话兼容», #2068), or --force to move anyway (logged)"
 }
 
-# 9. The China real-user path (issue #4180): the newest `cn path` status on the
-# CURRENT stable — the release every client, login and pod runs now.
-CN_CONTEXT="cn path"
-cn_gate() {   # cn_gate <old> <new>
-  [ "${FLEET_STABLE_CN_GATE:-1}" != 0 ] && [ -n "$1" ] || return 0
-  _s=${slug:-$(repo_slug)}; [ -n "$_s" ] || return 0
-  _row=$(gh api "repos/$_s/commits/$1/statuses?per_page=100" \
-    --jq "[.[] | select(.context == \"$CN_CONTEXT\")][0] | [.state, (.target_url // \"-\"), (.description // \"\")] | @tsv" 2>/dev/null | head -n 1)
-  # only the row this --jq prints (state, target, description) is a verdict —
-  # anything else (an older gh, a stub answering every statuses read) is none
-  case "$_row" in *"	"*"	"*) ;; *) _row='' ;; esac
-  _st=$(printf '%s' "$_row" | cut -f1) _url=$(printf '%s' "$_row" | cut -f2) _desc=$(printf '%s' "$_row" | cut -f3)
-  case "$_st" in
-    success) printf 'cn: the China real-user path is green on %s\n' "$(short "$1")"; return 0 ;;
-    failure|error) ;;
-    *) printf 'cn: no "%s" verdict on %s — not gated\n' "$CN_CONTEXT" "$(short "$1")"; return 0 ;;
-  esac
-  # only the PRODUCT's red holds a release (issue #4663): an invalid test road
-  # (env — a certificate, a quota, a drill login's leftovers) or the probe's own
-  # error says nothing about the release; it is filed, and re-walked hourly
-  case "$_desc" in
-    环境无效*|检测出错*)
-      printf 'cn: the China path probe is red on %s for a reason that is not the product (%s) — not gated; filed, re-walked hourly\n' \
-        "$(short "$1")" "$(printf '%s' "$_desc" | cut -c1-80)"
-      return 0 ;;
-  esac
-  _iss=''
-  case "$_url" in https://github.com/*/*/issues/[0-9]*)
-    _iss=$(gh api "repos/${_url#https://github.com/}" --jq .state 2>/dev/null) ;; esac
-  if [ "$_iss" = closed ]; then
-    printf 'cn: the China path was red on %s (%s) — its issue is closed, the fix ships with this move\n' "$(short "$1")" "$_url"; return 0
-  fi
-  _why="the China real-user path is red on the current stable $(short "$1"): ${_desc:-?}"
-  if [ "$force" -eq 1 ]; then force_log "$1" "$2" cn "$_why" "the China path"; return 0; fi
-  refuse "cn: $_why — fix it (${_url#-}), or close its issue once the fix is on trunk, or --force to move anyway (logged)"
-}
-
 # --train <run id> (issue #3142): the train's own jobs, "status conclusion name"
 # one per line — gate 3 for a move the release train makes.
 train_jobs() {   # train_jobs <slug> <run id>
@@ -539,10 +490,9 @@ do_move() {
   if [ "$precheck" -eq 1 ]; then
     release_gate "$old" "$new"
     artifacts_gate "$old" "$new"
-    cn_gate "$old" "$new"
     [ -z "$old" ] || oldcfg_gate "$old" "$new"
     if [ -n "$old" ]; then from=$(short "$old"); else from=none; fi
-    printf 'precheck: %s -> %s passes on trunk / forward / oldcfg / release.json / artifacts / cn — no tag pushed\n' "$from" "$(short "$new")"
+    printf 'precheck: %s -> %s passes on trunk / forward / oldcfg / release.json / artifacts — no tag pushed\n' "$from" "$(short "$new")"
     exit 0
   fi
   slug=$(repo_slug); [ -n "$slug" ] || die "cannot tell the GitHub repo from $remote — pass --repo owner/name"
@@ -576,7 +526,6 @@ do_move() {
   release_gate "$old" "$new"
   artifacts_gate "$old" "$new"
   ccquota_gate "$old" "$new"
-  cn_gate "$old" "$new"
   [ -z "$old" ] || oldcfg_gate "$old" "$new"
   push_tag
 }

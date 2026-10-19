@@ -614,7 +614,7 @@ terminal. The node enables `set-clipboard on`, and the terminal must accept it:
 ### `fleet-open`'s laptop half (iTerm2)
 
 `fleet-open` (#1379) asks the iTerm2 you are typing in to open a link — and, for
-a service on the fleet machine's loopback (a doc-preview, a dev server), to add a
+a service on the fleet machine's loopback (a dev server, a page), to add a
 `-L` forward to the SSH connection you already have and open
 `http://localhost:<port>` here. The receiving end is an iTerm2 AutoLaunch
 script, `extras/iterm2/fleet_open.py`; install it on the laptop with
@@ -705,7 +705,6 @@ names, same stdin JSON, `exit 2` blocks, `$TMUX_PANE` inherited (measured on
 codex-cli 0.154). So the dash colours a Codex worker off real hooks instead of
 degrading to a pane-content heuristic.
 
-<!-- codex-matrix:begin -->
 | Capability | Claude Code | Codex | Why |
 |---|:--:|:--:|---|
 | worktree per task · `@issue` binding · claim-at-spawn · PR/CI map · cleanup · session caps | ✅ | ✅ | Not agent code at all — `git`, `gh` and tmux window options. The whole worker path is agent-agnostic. |
@@ -738,12 +737,10 @@ degrading to a pane-content heuristic.
 | native panel prompts (rename · answer · message) | ✅ | ✅ | `bin/fleet_view.py` handles the prompts without changing the agent pane. |
 | questions and permission requests in the panel and notifications | ✅ | ✅ | Claude's AskUserQuestion / permission payload and Codex's app-server requests flow through `bin/fleet_needs_detail.py` into `@claude_needs_detail`. The node inventory and hub preserve the words; the native panel and `bin/fleet_notify.py` show them through the thin client's lease and OSC 9. |
 | orchestrating: an orchestrator session template (spawn agent:orchestrator); nothing opens or reopens a resident one | ✅ | ✅ | The template is a standard agent file (`conf/agent-defaults/claude/agents/orchestrator.md`, issue #4335): its body is Claude's system prompt and Codex's `model_instructions_file`, its model `fleet.codex_model`; the dispatch group ships with the core (issue #4334). No seat, no state hook (issue #4340). |
-<!-- codex-matrix:end -->
 
-That table is **generated** from the `MATRIX` block in
-[`bin/fleet-codex.sh`](bin/fleet-codex.sh)'s header — one source of truth, sitting
-next to the code it grades. `bin/codex-matrix.sh --check` fails on any drift and
-runs in CI, so a row cannot be edited in one file and forgotten in the other.
+That table says what the `MATRIX` block in
+[`bin/fleet-codex.sh`](bin/fleet-codex.sh)'s header grades — the source of truth,
+sitting next to the code it grades; edit a row there, then here.
 
 Codex context tracking, recovery/history, handoff, messaging, startup policy,
 warm pools, native account quotas and dashboard answers are implemented in

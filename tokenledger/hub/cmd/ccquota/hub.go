@@ -270,13 +270,9 @@ func loadFleetCerts(srv *api.Server) error {
 	if err := loadFleetReleases(srv); err != nil {
 		return err
 	}
-	if err := loadFleetDebug(srv); err != nil {
-		return err
-	}
 	if err := loadFleetAccountKey(srv); err != nil {
 		return err
 	}
-	loadFleetFeedback(srv)
 	issueMetaViaApp(srv)
 	if up := srv.Stable.Upstream; up != "" {
 		switch {
@@ -435,88 +431,28 @@ func loadFleetReleases(srv *api.Server) error {
 	return nil
 }
 
-// loadFleetDebug wires the debug tickets (claude-fleet#2891).
-// CCQUOTA_FLEET_DEBUG_DIR is where the diagnostic bundles are kept (the
-// cluster's OSS bucket, mounted) and the switch: unset, the feature is off and
-// no /v1/fleet/debug/ route exists. CCQUOTA_FLEET_DEBUG_KEY is the tickets'
-// HMAC key (its own k8s Secret) — the key itself, or the path of a file
-// holding it; at least 32 bytes. A dir without a usable key: the hub refuses
-// to start.
-func loadFleetDebug(srv *api.Server) error {
-	dir := os.Getenv("CCQUOTA_FLEET_DEBUG_DIR")
-	if dir == "" {
-		log.Printf("fleet: no CCQUOTA_FLEET_DEBUG_DIR — debug tickets are off")
-		return nil
-	}
-	key := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_KEY"))
-	if strings.HasPrefix(key, "/") {
-		b, err := os.ReadFile(key)
-		if err != nil {
-			if m := checkUnmounted(key); m != "" && errors.Is(err, os.ErrNotExist) {
-				log.Printf("fleet: check: CCQUOTA_FLEET_DEBUG_KEY %s is on %s, which only the new render mounts — not checked; the real start reads it", key, m)
-				return nil
-			}
-			return fmt.Errorf("CCQUOTA_FLEET_DEBUG_KEY: %w", err)
-		}
-		key = strings.TrimSpace(string(b))
-	}
-	if len(key) < 32 {
-		return errors.New("CCQUOTA_FLEET_DEBUG_DIR is set but CCQUOTA_FLEET_DEBUG_KEY is missing or shorter than 32 bytes")
-	}
-	// The reports (claude-fleet#2893): CCQUOTA_FLEET_DEBUG_LOGIN is where a
-	// debugger session opens, <machine>/<login>; unset, no debugger opens (a
-	// report goes unfinished, to the admin). CCQUOTA_FLEET_DEBUG_NOTIFY, the
-	// orchestrator's feed, left with the seat (claude-fleet#3130) and is ignored.
-	login := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_DEBUG_LOGIN"))
-	if m, l, ok := strings.Cut(login, "/"); login != "" && (!ok || m == "" || l == "" || strings.Contains(l, "/")) {
-		return fmt.Errorf("CCQUOTA_FLEET_DEBUG_LOGIN=%q: want <machine>/<login>", login)
-	}
-	srv.Debug = &api.DebugTickets{Dir: dir, Key: []byte(key), Login: login}
-	log.Printf("fleet: debug tickets on, bundles in %s; debugger %s", dir, orNone(login))
-	return nil
-}
-
-// loadFleetFeedback wires /fleet-feedback's hub half (claude-fleet#3355).
-// CCQUOTA_FLEET_FEEDBACK_DIR is where attachments are kept seven days (the
-// cluster's OSS bucket, mounted) and the switch: unset, the feature is off and
-// no feedback route exists.
-func loadFleetFeedback(srv *api.Server) {
-	dir := os.Getenv("CCQUOTA_FLEET_FEEDBACK_DIR")
-	if dir == "" {
-		log.Printf("fleet: no CCQUOTA_FLEET_FEEDBACK_DIR — feedback is off")
-		return
-	}
-	srv.Feedback = &api.FeedbackDesk{Dir: dir}
-	log.Printf("fleet: feedback on, attachments in %s", dir)
-	// Filing each one as a GitHub issue (claude-fleet#3356): the App's
-	// credentials from the mounted Secret (app-id · installation-id ·
-	// private-key). Missing ⇒ feedback is taken and listed, nothing goes to
-	// GitHub; a key that will not parse ⇒ the same, said once.
-	ghDir := os.Getenv("CCQUOTA_FLEET_FEEDBACK_GH_DIR")
-	gh, err := api.LoadFeedbackGitHub(ghDir, os.Getenv("CCQUOTA_FLEET_FEEDBACK_REPO"))
-	switch {
-	case err != nil:
-		log.Printf("fleet: feedback filing off — %v", err)
-	case gh == nil:
-		log.Printf("fleet: feedback filing off — no GitHub App credentials in CCQUOTA_FLEET_FEEDBACK_GH_DIR (%s)", orNone(ghDir))
-	default:
-		srv.Feedback.GitHub = gh
-		log.Printf("fleet: feedback filed as issues in %s (GitHub App %s)", gh.Repo, gh.AppID)
-	}
-}
-
 // issueMetaViaApp: the hub's GitHub reads (issue states, 我的用量's titles)
-// carry the feedback App's installation token (claude-fleet#4881) — anonymous
+// carry the GitHub App's installation token (claude-fleet#4881) — anonymous
 // ones share the cluster's address and run out of GitHub's 60 an hour, which
-// left every legacy task "issue state unknown". CCQUOTA_GITHUB_ISSUES_TOKEN,
-// when set, stays the fallback; no App ⇒ byte for byte as before.
+// left every legacy task "issue state unknown". The App's Secret is mounted at
+// CCQUOTA_FLEET_FEEDBACK_GH_DIR (the feedback desk's name, kept for the
+// deployment). CCQUOTA_GITHUB_ISSUES_TOKEN, when set, stays the fallback; no
+// App ⇒ byte for byte as before.
 func issueMetaViaApp(srv *api.Server) {
 	im, ok := srv.IssueMeta.(*api.GitHubIssueMeta)
-	if !ok || im == nil || srv.Feedback == nil || srv.Feedback.GitHub == nil {
+	if !ok || im == nil {
 		return
 	}
-	im.TokenSource = srv.Feedback.GitHub.Token
-	log.Printf("fleet: GitHub issue reads carry the App's installation token (GitHub App %s)", srv.Feedback.GitHub.AppID)
+	app, err := api.LoadGitHubApp(os.Getenv("CCQUOTA_FLEET_FEEDBACK_GH_DIR"))
+	switch {
+	case err != nil:
+		log.Printf("fleet: GitHub App off — %v", err)
+		return
+	case app == nil:
+		return
+	}
+	im.TokenSource = app.Token
+	log.Printf("fleet: GitHub issue reads carry the App's installation token (GitHub App %s)", app.AppID)
 }
 
 func orNone(s string) string {
@@ -1027,12 +963,6 @@ func runHub(args []string) error {
 		go srv.RunNodeAlerts(ctx)
 		// Off (srv.HubQuota nil): returns at once.
 		go srv.RunHubQuota(ctx)
-		// Debug reports (claude-fleet#2893): no page in 15 minutes ⇒ unfinished,
-		// seven days ⇒ deleted. Off (srv.Debug nil): returns at once.
-		go srv.RunDebug(ctx)
-		// Feedback attachments past seven days are deleted (claude-fleet#3355).
-		// Off (srv.Feedback nil): returns at once.
-		go srv.RunFeedback(ctx)
 		// Address records (claude-fleet#3073): no CCQUOTA_DNS_* ⇒ off,
 		// no call at all.
 		if c, ok := dns.FromEnv(); ok {

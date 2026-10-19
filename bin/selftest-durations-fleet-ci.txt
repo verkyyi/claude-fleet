@@ -23,7 +23,6 @@
 7.0 cfg-stale-selftest.sh
 43.4 client-log-selftest.sh
 21.7 clipboard-osc52-selftest.sh
-0.2 codex-matrix-selftest.sh
 45.1 compact-prep-selftest.sh
 18.9 compact-resume-selftest.sh
 0.1 conf-surface-selftest.sh
@@ -74,9 +73,6 @@
 3.5 desk-ticket-selftest.sh
 8.8 dist-no-github-selftest.sh
 2.0 dist-source-selftest.sh
-0.5 doc-preview-render-selftest.sh
-29.2 doc-preview-share-selftest.sh
-5.2 doctor-bundle-selftest.sh
 6.3 doctor-resident-selftest.sh
 0.0 epic-autoreport-selftest.sh
 0.1 epic-page-selftest.sh
@@ -145,14 +141,12 @@
 1.0 fleet-collect-sessmap-guard-selftest.sh
 2.7 fleet-collect-stale-selftest.sh
 2.6 fleet-comment-selftest.sh
-0.8 fleet-compose-latency-selftest.sh
 49.1 fleet-compose-selftest.sh
 58.7 fleet-conf-selftest.sh
 6.3 fleet-config-selftest.sh
 4.2 fleet-connect-route-selftest.sh
 3.0 fleet-connect-selftest.sh
 3.2 fleet-context-selftest.sh
-1.7 fleet-crash-harvest-selftest.sh
 6.8 fleet-cred-doctor-selftest.sh
 17.2 fleet-cred-proxy-selftest.sh
 5.2 fleet-cred-rollout-selftest.sh
@@ -161,10 +155,6 @@
 5.3 fleet-credsep-selftest.sh
 0.5 fleet-daemon-loaded-selftest.sh
 3.1 fleet-daemon-watch-selftest.sh
-1.4 fleet-debug-desk-selftest.sh
-1.9 fleet-debug-drill-selftest.sh
-3.4 fleet-debug-prompt-selftest.sh
-7.5 fleet-debug-selftest.sh
 2.4 fleet-degenerate-selftest.sh
 7.6 fleet-deps-link-selftest.sh
 4.5 fleet-diskguard-selftest.sh
@@ -179,7 +169,6 @@
 5.6 fleet-doctor-repos-selftest.sh
 4.6 fleet-doctor-webhook-selftest.sh
 0.2 fleet-down-selftest.sh
-0.5 fleet-drill-selftest.sh
 2.6 fleet-emit-selftest.sh
 1.7 fleet-epic-backstop-selftest.sh
 0.3 fleet-epic-floor-selftest.sh
@@ -210,7 +199,6 @@
 0.8 fleet-hub-node-env-selftest.sh
 1.2 fleet-hub-pool-selftest.sh
 66.7 fleet-hub-selftest.sh
-0.1 fleet-hub-url-selftest.sh
 3.0 fleet-idle-gate-selftest.sh
 33.1 fleet-install-join-selftest.sh
 180.5 fleet-install-selftest.sh
@@ -245,7 +233,6 @@
 0.9 fleet-model-switch-scale-selftest.sh
 103.2 fleet-model-switch-selftest.sh
 20.9 fleet-move-selftest.sh
-5.9 fleet-node-drill-selftest.sh
 18.9 fleet-node-hosted-selftest.sh
 9.5 fleet-node-install-selftest.sh
 2.8 fleet-node-join-selftest.sh
@@ -261,8 +248,6 @@
 25.1 fleet-node-upgrade-selftest.sh
 4.2 fleet-oldcfg-check-selftest.sh
 10.3 fleet-oldcfg-replay-selftest.sh
-0.4 fleet-onboard-clock-selftest.sh
-1.0 fleet-onboard-drill-selftest.sh
 2.1 fleet-onboard-selftest.sh
 23.7 fleet-one-per-login-selftest.sh
 13.2 fleet-open-laptop-selftest.sh
@@ -298,9 +283,6 @@
 5.6 fleet-restore-outcome-selftest.sh
 10.3 fleet-restore-pick-selftest.sh
 15.8 fleet-restore-selftest.sh
-7.3 fleet-role-merge-selftest.sh
-1.8 fleet-role-migrate-selftest.sh
-2.8 fleet-role-write-selftest.sh
 0.8 fleet-run-selftest.sh
 11.2 fleet-seed-selftest.sh
 0.1 fleet-selftest-reap-selftest.sh
@@ -371,7 +353,6 @@
 1.1 needs-reason-selftest.sh
 14.5 needs-reconcile-selftest.sh
 8.5 new-session-selection-selftest.sh
-0.1 newcomer-cn-selftest.sh
 7.5 notify-selftest.sh
 13.0 operator-send-selftest.sh
 1.2 keyless-parent-selftest.sh
@@ -426,7 +407,6 @@
 1.6 transcript-archive-selftest.sh
 0.2 usage-lib-selftest.sh
 0.1 usage-modal-selftest.sh
-0.9 whats-new-selftest.sh
 12.5 window-reap-selftest.sh
 3.0 worker-identity-selftest.sh
 10.7 worker-locate-selftest.sh

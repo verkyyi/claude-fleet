@@ -12,8 +12,7 @@ import (
 //
 // The refusals are not hypothetical: every "false" case below except the
 // synthetic ones was taken from the 2,415 distinct branch names measured
-// across 420,237 real events while designing this
-// (docs/superpowers/specs/2026-09-19-cost-per-issue-seam-design.md). Each of
+// across 420,237 real events while designing this. Each of
 // them would resolve to a REAL issue number under a looser rule, in the right
 // repository, describing the wrong work.
 func TestIssueFromBranch(t *testing.T) {

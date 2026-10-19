@@ -243,30 +243,6 @@ export type AuditKind = "sub" | "mach" | "dev" | "user" | "set" | "sess";
 export type AuditEvent = { at: string; kind: AuditKind; source: string; actor: string; action: string; target?: string; outcome?: string; detail?: string };
 export type AuditAnswer = { events: AuditEvent[]; counts: Record<string, number>; days: number; total: number };
 
-// /v1/admin/feedback: what /fleet-feedback brought in.
-export type FeedbackState = "received" | "filed" | "closed";
-export type Feedback = {
-  id: string;
-  text: string;
-  state: FeedbackState;
-  who: string;
-  principal?: string;
-  login: string;
-  host: string;
-  machine_kind?: string;
-  agent?: string;
-  attachments: number;
-  gh_number?: number;
-  gh_url?: string;
-  reply?: string;
-  filed_at?: string;
-  closed_at?: string;
-  replied_at?: string;
-  created_at: string;
-};
-export type FeedbackPage = { feedback: Feedback[]; next?: string; counts?: Record<string, number> };
-export type FeedbackDetail = Feedback & { endpoint_id?: string; ctx?: Record<string, string>; attach?: { name: string; size: number; url: string }[] };
-
 // 申请 (GET /v1/admin/requests, claude-fleet#4052): what a person the list
 // does not name asked for at /apply, and the admin's decision.
 export type AccessRequest = {

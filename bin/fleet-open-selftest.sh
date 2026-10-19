@@ -8,7 +8,7 @@
 # here can reach the operator's real terminal, tunnel or browser.
 #   • REWRITE   :port/path · localhost / 127.0.0.1 / [::1] URL · this machine's
 #               tailnet name (via `tailscale serve`'s proxy, longest mount + its
-#               path; via doc-preview's https.port → server.port; neither → url)
+#               path; nothing serving it → url)
 #               · an external URL → {"kind":"url"} · a bad port / junk → exit 1
 #   • BYTES     the escape on the client is EXACTLY
 #               ESC ] 1337 ; Custom=id=<secret>:<base64 JSON> BEL, the JSON equals
@@ -39,7 +39,6 @@
 #               and its result is ours; a home that cannot be asked → the old roads
 #   • PEER      `--from-peer`: the home forwards the peer's port (FLEET_OPEN_FWD_CMD)
 #               and its 看台's loop gets the HOME's port, the receipt comes back
-#   • DOCPREV   doc-preview http-direct: its tailnet URL maps to the loopback port
 #   • RECORD    open.last holds the last result + kind, never the URL
 #   • DOCTOR    fleet-doctor's `open` line: no secret → INFO; secret 0600 + last
 #               result → PASS naming it; a loose secret → WARN
@@ -83,7 +82,7 @@ echo "\${FAKE_OPENURL_SAYS:-fallback:copied}"
 EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/tailscale" "$WORK/bin/open-url"
 export PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1"
-export FLEET_OPEN_URL_BIN="$WORK/bin/open-url" FLEET_OPEN_DOCPREV_ROOT="$WORK/docprev"
+export FLEET_OPEN_URL_BIN="$WORK/bin/open-url"
 # a road with a receipt waits this long for it; a leg that answers sets its own
 export FLEET_OPEN_ACK_WAIT=1
 OUT="$WORK/out"; export FLEET_SHOW_OUT="$OUT"
@@ -120,9 +119,7 @@ chk 'tailnet longest mount' 'https://box.example.ts.net/api/users?x=1' '{"v":1,"
 chk 'tailnet short name' 'https://box/z'          '{"v":1,"kind":"forward","rport":9000,"path":"/z","scheme":"http","host":""}'
 chk 'tailnet IP'      'https://100.64.0.7:8446/'  '{"v":1,"kind":"forward","rport":8765,"path":"/","scheme":"http","host":""}'
 chk 'tailnet, proxy not loopback → url' 'https://box.example.ts.net:10000/' '{"v":1,"kind":"url","url":"https://box.example.ts.net:10000/","host":""}'
-echo '{}' > "$STATE/serve.json"; mkdir -p "$WORK/docprev"
-echo https > "$WORK/docprev/mode"; echo 8447 > "$WORK/docprev/https.port"; echo 8800 > "$WORK/docprev/server.port"
-chk 'tailnet via doc-preview record' 'https://box.example.ts.net:8447/d/q/' '{"v":1,"kind":"forward","rport":8800,"path":"/d/q/","scheme":"http","host":""}'
+echo '{}' > "$STATE/serve.json"
 chk 'tailnet, nothing serves it → url' 'https://box.example.ts.net:9999/' '{"v":1,"kind":"url","url":"https://box.example.ts.net:9999/","host":""}'
 chk 'external URL'    'https://github.com/o/r/pull/1' '{"v":1,"kind":"url","url":"https://github.com/o/r/pull/1","host":""}'
 chk 'external, no scheme' 'github.com/o/r'       '{"v":1,"kind":"url","url":"https://github.com/o/r","host":""}'
@@ -363,10 +360,6 @@ RES=$(FLEET_OPEN_WHERE_CMD="$WORK/bin/where-thin" FLEET_OPEN_FWD_CMD=false "$OPE
 [ "$RC" = 4 ] && case "$RES" in failed:*) true ;; *) false ;; esac && ok "PEER no link to the peer → failed" || bad "PEER no link ($RC): $RES"
 rm -f "$RV/Mac-1"
 
-# ---- DOCPREV http-direct: the tailnet URL is the loopback port too ------------------------
-echo '{}' > "$STATE/serve.json"; rm -f "$WORK/docprev/https.port"
-echo http-direct > "$WORK/docprev/mode"; echo 8801 > "$WORK/docprev/server.port"
-chk 'tailnet via doc-preview http-direct' 'http://box.example.ts.net:8801/d/q/' '{"v":1,"kind":"forward","rport":8801,"path":"/d/q/","scheme":"http","host":""}'
 clients '300|/dev/ttyNEW|iTerm2 3.6.10'
 
 # ---- DOCTOR's open line ---------------------------------------------------------------

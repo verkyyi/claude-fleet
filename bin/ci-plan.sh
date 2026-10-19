@@ -57,7 +57,7 @@ check_rules() {
       globs='tokenledger/* extras/web-console/* .github/workflows/task-acceptance.yml' ;;
     client_e2e|client-e2e)
       # the installer fetches every file the client manifest lists
-      among='client-e2e.sh newcomer-e2e.sh nogh-e2e-selftest.sh fleet-client-pack.sh ../tokenledger/hub/api/fleetclient/manifest'
+      among='client-e2e.sh nogh-e2e-selftest.sh fleet-client-pack.sh ../tokenledger/hub/api/fleetclient/manifest'
       paths='bin/* shell/* conf/* tokenledger/* .github/workflows/client-e2e.yml'
       globs='tokenledger/* .github/workflows/client-e2e.yml' ;;
     fleet_hub_mcp|fleet-hub-mcp)

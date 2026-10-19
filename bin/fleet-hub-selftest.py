@@ -970,39 +970,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         lost = self.lifecycle("worker_message", idem="msg-lost", text="anyone?")
         self.assertEqual((lost["status"], lost["result"]["error"]["code"]), ("unknown", "UNKNOWN_OUTCOME"))
 
-    def test_feedback_reply_goes_to_any_session_inbox(self):
-        # issue #3359: the hub's feedback desk (actor `feedback`) sends a reply
-        # prefixed [fleet-feedback] — delivered to the session's inbox by its
-        # worker_id, a no-repo / scratch session too, never through the issue
-        # bridge; no such session ⇒ a clean NOT_FOUND, nothing sent.
-        ident = str(uuid.uuid4())
-        self.node.windows(("@12", 123, False, "/fixture/issue-123"), ("@4", None, True, "/fixture/project-scratch-4", "", "", ident))
-        fleet = self.node.controller.fleet(self.fleet)
-        text = "[fleet-feedback] 你的反馈 F12 有回音了（o/r#9000）：修好了"
-        msg = lambda wid, actor="feedback": self.node.controller.execute_worker(
-            fleet, "worker_message", {"worker_id": wid, "text": text}, actor)
-        done = msg(self.fleet + "/" + ident)
-        self.assertEqual(done["channel"], "direct")
-        self.assertEqual(self.node.calls("peer")[-1].split(" ")[-2:], ["wid:" + self.fleet + "/" + ident, "-"])
-        self.assertEqual((self.node.conf / "peer.body").read_text(), text)
-        self.assertEqual(self.node.calls("comment"), [])
-        # an issue session with the bridge on: still the inbox, never a comment
-        msg(self.worker())
-        self.assertEqual(self.node.calls("comment"), [])
-        self.assertEqual(len(self.node.calls("peer")), 2)
-        with self.assertRaises(Fault) as gone:
-            msg(self.fleet + "/" + str(uuid.uuid4()))
-        self.assertEqual(gone.exception.code, "NOT_FOUND")
-        (self.node.conf / "peer-down").touch()
-        with self.assertRaises(Fault) as down:
-            msg(self.fleet + "/" + ident)
-        self.assertEqual(down.exception.code, "EXECUTION_FAILED")
-        (self.node.conf / "peer-down").unlink()
-        # the prefix from anyone else is an ordinary message: a scratch is refused
-        with self.assertRaises(Fault) as other:
-            msg(self.worker("scratch-4"), actor="operator")
-        self.assertEqual(other.exception.code, "INVALID_ARGUMENT")
-
     def gh_grant(self, *scopes):
         return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]
 
@@ -1584,25 +1551,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         calls = (self.node.conf / "scratch.calls").read_text().splitlines()
         self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --test-identity$")
         self.assertRegex(calls[1], r"^demo --origin hub --print --agent claude --no-repo --reap keep --test-identity$")
-
-    def test_start_debugger_scratch(self):
-        # issue #2893: the hub's debugger for a report — `debug:<id>` reaches the
-        # adapter as $10; dash-raw-session.sh opens it with the debugger role and a
-        # desk ticket, never from the warm pool (no --warm-only call before it)
-        for bad in ({"kind": "scratch", "no_repo": True, "debug": "ABCDEFGH"},
-                    {"kind": "scratch", "debug": "abcdefgh"},
-                    {"kind": "scratch", "no_repo": True, "test": True, "debug": "abcdefgh"},
-                    {"kind": "issue", "issue": 1, "debug": "abcdefgh"}):
-            with self.subTest(bad=bad), self.assertRaises(Fault):
-                validate_write("worker_start", bad)
-        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="debug-1",
-                                                 params={"kind": "scratch", "no_repo": True, "debug": "abcdefgh",
-                                                         "reap": "done:30m", "body": "〔诊断〕票 dt_x · https://hub/s/abcdefgh"}))
-        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
-        calls = (self.node.conf / "scratch.calls").read_text().splitlines()
-        self.assertEqual(len(calls), 1, calls)
-        self.assertRegex(calls[0], r"^demo --origin hub --print --agent claude --no-repo --reap done:30m "
-                                   r"--as fleet-debugger --desk --prompt-file=\S+$")
 
     def test_new_issue_start_files_then_spawns(self):
         # issue #1953: the client's writing area — kind=new carries a title and a

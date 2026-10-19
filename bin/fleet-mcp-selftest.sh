@@ -3,7 +3,7 @@
 #
 # bin/fleet-mcp.py is the ONE stdio MCP server Claude and Codex sessions both mount
 # (docs/dev/FLEET-MCP.md). Driven against fake scripts in a sandbox bin/:
-#   A  initialize + tools/list: server `fleet`, exactly the twenty-three core tools
+#   A  initialize + tools/list: server `fleet`, exactly the nineteen core tools
 #      (the dispatch group is `fleet-orch`'s — Q), every schema closed
 #      (additionalProperties false)
 #   B  refusals: an unknown argument, a wrong type, a missing argument, an
@@ -192,8 +192,8 @@ assert rows[0]["result"]["protocolVersion"] == "2025-06-18", rows[0]
 tools = {t["name"]: t for t in rows[1]["result"]["tools"]}
 assert set(tools) == {"status", "repos", "agents",
                       "report", "ask", "comment", "evidence", "handoff", "pr_verdict", "pr_merge",
-                      "brief", "file_issue", "gh", "context", "transfer", "where", "whats_new", "show", "open",
-                      "set_reap", "debug_bundle", "debug_publish", "debug_propose"}, sorted(tools)
+                      "brief", "file_issue", "gh", "context", "transfer", "where", "show", "open",
+                      "set_reap"}, sorted(tools)
 for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
     assert t["description"], t
@@ -205,7 +205,7 @@ for n in ("pr_verdict", "pr_merge"):       # pr is optional since #3602 (FLEET_L
     assert "required" not in tools[n]["inputSchema"], n
     assert tools[n]["inputSchema"]["properties"]["pr"]["minimum"] == 1, n
 PY
-ok "A server \`fleet\`, the twenty-three core tools, every schema closed"
+ok "A server \`fleet\`, the nineteen core tools, every schema closed"
 
 # --- B: refusals — nothing runs -----------------------------------------------
 : > "$LOG"
@@ -221,6 +221,7 @@ ok "A server \`fleet\`, the twenty-three core tools, every schema closed"
   call 18 send '{"to":"rm -rf","text":"x"}'
   call 19 nope '{}'
   call 20 spawn '{"issue":true}'
+  call 21 whats_new '{}'
 } | serve "$WORK/b"
 python3 - "$WORK/b" <<'PY' || fail "B: a bad call was not refused with its reason" "$(cat "$WORK/b")"
 import json, sys
@@ -228,7 +229,7 @@ rows = {r["id"]: r for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip
 want = {10: 'unknown argument "force"', 11: "must be an integer", 12: 'missing required argument "issue"',
         13: "≤ 570", 14: "owner/name", 15: "not hosted by this fleet", 16: "acme/app, acme/lib",
         17: "takes no arguments", 18: "agent:<name>, fid:<uuid> or parent", 19: "unknown tool",
-        20: "must be an integer"}
+        20: "must be an integer", 21: "removed (claude-fleet#4904)"}
 for i, why in want.items():
     res = rows[i]["result"]
     assert res.get("isError") is True, (i, res)
@@ -238,7 +239,7 @@ PY
 # The repo check READS fleet-repo.sh list; nothing else may have run.
 ran=$(grep -v '^fleet-repo.sh list$' "$LOG")
 [ -z "$ran" ] || fail "B: a refused call ran a script" "$ran"
-ok "B unknown arg · wrong type · missing · out of range · bad/unhosted repo · unknown tool: refused, nothing ran"
+ok "B unknown arg · wrong type · missing · out of range · bad/unhosted repo · unknown tool · a retired tool (its reason): refused, nothing ran"
 
 # --- C: each tool runs its script once ----------------------------------------
 : > "$LOG"
@@ -298,12 +299,12 @@ ok "C status · children · repos · agents · spawn · await · send each ran i
 python3 - "$WORK/d" <<'PY' || fail "D: with no hub a tool was missing or failed" "$(cat "$WORK/d")"
 import json, sys
 rows = {r["id"]: r["result"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
-assert len(rows[1]["tools"]) == 23, rows[1]
+assert len(rows[1]["tools"]) == 19, rows[1]
 assert rows[40]["structuredContent"]["exit"] == 2 and not rows[40].get("isError"), rows[40]
 assert rows[41]["structuredContent"]["exit"] == 0, rows[41]
 PY
 grep -qx 'fleet-await.sh 3 --timeout 540' "$LOG" || fail "D: await's default timeout is not 540" "$(cat "$LOG")"
-ok "D no hub configured: all twenty-three core tools listed, spawn/await run locally (await default 540s)"
+ok "D no hub configured: all nineteen core tools listed, spawn/await run locally (await default 540s)"
 
 # --- E: the legacy fleet-peer shim --------------------------------------------
 env -u FLEET_WORKER_CRED PATH="$WORK:$PATH" TMUX=1 TMUX_PANE=%1 python3 "$WORK/bin/fleet-peer-mcp.py" > "$WORK/e" <<'EOF'
@@ -1143,7 +1144,7 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 19 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
   && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
@@ -1181,7 +1182,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [29, 23, 29, 29], [len(x) for x in lists]   # + task (#3330)
+assert [len(x) for x in lists] == [25, 19, 25, 25], [len(x) for x in lists]   # + task (#3330), − #4904's four
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
 assert {"spawn", "await", "children", "answer_dialog", "send", "task"} <= names, sorted(names)

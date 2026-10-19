@@ -267,7 +267,6 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 		{AutoAssignKey, " Least-Busy ", http.StatusOK, "least-busy"}, // claude-fleet#2069
 		{AutoAssignKey, "mac-c, mac-e", http.StatusOK, "mac-c,mac-e"},
 		{AutoAssignKey, "bad host!", http.StatusBadRequest, "mac-c,mac-e"},
-		{PublicBadgesKey, "on", http.StatusOK, "on"},
 		{MeterKey, "off", http.StatusOK, "off"},
 		{RoutesExtraKey, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`, http.StatusOK, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
 		{RoutesExtraKey, `[{"hostname":"bad host"}]`, http.StatusBadRequest, `[{"hostname":"m9","routes":[{"name":"lan","host":"10.0.0.9"}]}]`},
@@ -296,15 +295,12 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 			n++
 		}
 	}
-	if n != 9 { // one per accepted change
-		t.Errorf("setting audit rows = %d, want 9", n)
+	if n != 8 { // one per accepted change
+		t.Errorf("setting audit rows = %d, want 8", n)
 	}
 	// The readers follow at once.
 	if got := h.srv.autoAssign(); strings.Join(got, ",") != "mac-c,mac-e" {
 		t.Errorf("autoAssign = %v", got)
-	}
-	if !h.srv.publicBadges() {
-		t.Error("publicBadges off after hub.public_badges on")
 	}
 	found := false
 	for _, m := range h.srv.fleetMachines() {
@@ -322,31 +318,6 @@ func TestHubSettings_PutReadAudit(t *testing.T) {
 	}
 	if !h.auditHas(t, "setting", "ok", "fleet.node_cap.mac-c") {
 		t.Errorf("node cap change not audited")
-	}
-}
-
-// hub.public_badges is read per request: switching it opens /badge/ to a
-// signed-out browser at once, and closes it again.
-func TestHubSettings_PublicBadgesLive(t *testing.T) {
-	h := newUsersHarness(t)
-	get := func() int {
-		resp, err := noFollow.Get(h.http.URL + "/badge/team/x.svg")
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		return resp.StatusCode
-	}
-	if code := get(); code != http.StatusUnauthorized && code != http.StatusFound && code != http.StatusForbidden {
-		t.Fatalf("badge signed out, switch off = %d", code)
-	}
-	h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"hub.public_badges","value":"on"}`, nil)
-	if code := get(); code == http.StatusUnauthorized || code == http.StatusFound || code == http.StatusForbidden {
-		t.Fatalf("badge signed out, switch on = %d", code)
-	}
-	h.call(t, http.MethodPut, "/v1/fleet/settings", `{"key":"hub.public_badges","value":"off"}`, nil)
-	if code := get(); code != http.StatusUnauthorized && code != http.StatusFound && code != http.StatusForbidden {
-		t.Fatalf("badge signed out, switch off again = %d", code)
 	}
 }
 
@@ -377,8 +348,8 @@ func TestMigrateLegacySettings_NothingIsLeft(t *testing.T) {
 			t.Errorf("%s still reads an old variable", k)
 		}
 	}
-	if s.publicBadges() || len(s.autoAssign()) != 0 || len(s.principalLogins()) != 0 {
-		t.Fatalf("defaults: badges %v, auto_assign %v, logins %v", s.publicBadges(), s.autoAssign(), s.principalLogins())
+	if len(s.autoAssign()) != 0 || len(s.principalLogins()) != 0 {
+		t.Fatalf("defaults: auto_assign %v, logins %v", s.autoAssign(), s.principalLogins())
 	}
 	if err := s.MigrateLegacySettings(time.Now()); err != nil {
 		t.Fatal(err)

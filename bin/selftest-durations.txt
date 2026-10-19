@@ -39,7 +39,6 @@
 11.9 cfg-stale-selftest.sh
 42.3 client-log-selftest.sh
 16.2 clipboard-osc52-selftest.sh
-0.2 codex-matrix-selftest.sh
 40.8 compact-prep-selftest.sh
 18.6 compact-resume-selftest.sh
 0.2 conf-surface-selftest.sh
@@ -96,12 +95,9 @@
 9.4 dialog-wait-selftest.sh
 12.1 dist-no-github-selftest.sh
 1.6 dist-source-selftest.sh
-1.4 doc-preview-render-selftest.sh
-42.5 doc-preview-share-selftest.sh
 1.2 docs-build-selftest.sh
 0.8 docs-faq-selftest.sh
 0.3 docs-links-selftest.sh
-5.2 doctor-bundle-selftest.sh
 11.7 doctor-resident-selftest.sh
 0.1 entry-e2e-selftest.sh
 0.0 epic-autoreport-selftest.sh
@@ -206,7 +202,6 @@
 1.3 fleet-client-update-selftest.sh
 0.1 fleet-client-upload-selftest.sh
 4.4 fleet-client-where-selftest.sh
-49.0 fleet-cn-probe-selftest.sh
 1.4 fleet-codex-account-selftest.sh
 0.6 fleet-codex-attention-selftest.sh
 3.5 fleet-codex-busy-selftest.sh
@@ -229,7 +224,6 @@
 0.8 fleet-collect-sessmap-guard-selftest.sh
 1.9 fleet-collect-stale-selftest.sh
 3.3 fleet-comment-selftest.sh
-0.4 fleet-compose-latency-selftest.sh
 3.4 fleet-compose-selftest.sh
 59.4 fleet-conf-2-selftest.sh
 5.6 fleet-conf-3-selftest.sh
@@ -240,7 +234,6 @@
 4.3 fleet-connect-route-selftest.sh
 3.0 fleet-connect-selftest.sh
 2.9 fleet-context-selftest.sh
-1.9 fleet-crash-harvest-selftest.sh
 9.5 fleet-cred-doctor-selftest.sh
 0.3 fleet-cred-noaccount-selftest.sh
 1.0 fleet-cred-policy-selftest.sh
@@ -253,10 +246,6 @@
 6.2 fleet-credsep-selftest.sh
 0.5 fleet-daemon-loaded-selftest.sh
 2.3 fleet-daemon-watch-selftest.sh
-1.0 fleet-debug-desk-selftest.sh
-1.7 fleet-debug-drill-selftest.sh
-0.6 fleet-debug-prompt-selftest.sh
-7.4 fleet-debug-selftest.sh
 2.7 fleet-default-audit-selftest.sh
 2.4 fleet-degenerate-selftest.sh
 6.3 fleet-deps-link-selftest.sh
@@ -275,7 +264,6 @@
 4.1 fleet-doctor-webhook-selftest.sh
 0.2 fleet-down-selftest.sh
 8.9 fleet-draft-selftest.sh
-1.3 fleet-drill-selftest.sh
 2.7 fleet-emit-selftest.sh
 1.0 fleet-entry-lang-selftest.sh
 1.5 fleet-epic-backstop-selftest.sh
@@ -285,7 +273,6 @@
 1.3 fleet-epic-stable-row-selftest.sh
 8.8 fleet-evidence-selftest.sh
 1.2 fleet-failover-selftest.sh
-3.8 fleet-feedback-selftest.sh
 4.8 fleet-fold-selftest.sh
 0.7 fleet-gate-check-selftest.sh
 2.0 fleet-gh-blackhole-selftest.sh
@@ -317,9 +304,6 @@
 0.0 fleet-hub-notify-selftest.sh
 1.2 fleet-hub-pool-selftest.sh
 28.8 fleet-hub-selftest.sh
-0.1 fleet-hub-url-selftest.sh
-23.3 fleet-idle-cost-selftest.sh
-6.1 fleet-idle-edges-selftest.sh
 3.2 fleet-idle-gate-selftest.sh
 23.6 fleet-install-2-selftest.sh
 8.5 fleet-install-3-selftest.sh
@@ -381,7 +365,6 @@
 0.6 fleet-native-observe-selftest.sh
 2.8 fleet-nightly-miss-selftest.sh
 30.7 fleet-node-core-selftest.sh
-5.6 fleet-node-drill-selftest.sh
 0.3 fleet-node-hosted-selftest.sh
 29.7 fleet-node-install-selftest.sh
 2.7 fleet-node-join-selftest.sh
@@ -405,10 +388,6 @@
 30.6 fleet-node-upgrade-selftest.sh
 4.5 fleet-oldcfg-check-selftest.sh
 10.1 fleet-oldcfg-replay-selftest.sh
-0.2 fleet-onboard-clock-selftest.sh
-2.2 fleet-onboard-drill-selftest.sh
-26.2 fleet-onboard-drill-steps-2-selftest.sh
-40.3 fleet-onboard-drill-steps-selftest.sh
 3.5 fleet-onboard-selftest.sh
 25.1 fleet-one-per-login-selftest.sh
 15.4 fleet-open-laptop-selftest.sh
@@ -425,7 +404,6 @@
 44.0 fleet-peerlink-selftest.sh
 21.6 fleet-pending-tool-selftest.sh
 2.1 fleet-permission-selftest.sh
-3.9 fleet-phone-mcp-selftest.sh
 0.2 fleet-plugin-selftest.sh
 1.8 fleet-plugins-selftest.sh
 36.0 fleet-popup-redraw-selftest.sh
@@ -589,7 +567,6 @@
 1.0 needs-reason-selftest.sh
 13.3 needs-reconcile-selftest.sh
 10.8 new-session-selection-selftest.sh
-0.1 newcomer-cn-selftest.sh
 1.2 no-direct-gh-selftest.sh
 0.0 nogh-e2e-selftest.sh
 0.2 nogh-task-acceptance-selftest.sh
@@ -639,7 +616,6 @@
 0.0 sidebar-machine-tag-selftest.sh
 0.1 sidebar-sleep-selftest.sh
 3.4 site-build-selftest.sh
-3.2 site-drill-selftest.sh
 0.5 skill-tools-selftest.sh
 1.9 spawn-origin-gate-selftest.sh
 0.3 spinner-budget-contract-selftest.sh
@@ -661,7 +637,6 @@
 1.2 transcript-archive-selftest.sh
 0.2 usage-lib-selftest.sh
 0.0 usage-modal-selftest.sh
-0.9 whats-new-selftest.sh
 12.4 window-reap-selftest.sh
 5.5 worker-identity-selftest.sh
 12.4 worker-locate-selftest.sh

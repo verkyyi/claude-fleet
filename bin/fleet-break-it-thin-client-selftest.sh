@@ -661,7 +661,7 @@ drill_client_pack_file_missing() {
     # shellcheck disable=SC2086  # the word's arguments
     out=$(cd "$H" && env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$H" LANG=C.UTF-8 TERM=dumb TMPDIR="$S" \
       FLEET_CLIENT_IDENTITY=test FLEET_SERVED_FROM="file://$S/src" FLEET_STABLE_API="file://$S/no-api" \
-      FLEET_CLIENT_CHECK_SECS=999999 FLEET_DEBUG_PROMPT=0 FLEET_NOTIFY=0 "$R/bin/fleet" $w </dev/null 2>&1)
+      FLEET_CLIENT_CHECK_SECS=999999 FLEET_NOTIFY=0 "$R/bin/fleet" $w </dev/null 2>&1)
     miss=$(printf '%s\n' "$out" | grep -E "No such file|not found|can.t open|command not found|ModuleNotFoundError|unbound variable" | head -n 1)
     [ -z "$miss" ] || bad="$bad | fleet $w: $miss"
   done <<'EOF'
@@ -675,12 +675,11 @@ logout
 ls --services
 users --help
 release stats --help
-drill --help
 node status
 config
 claude --here
 EOF
-  for p in bin/fleet-users.py bin/fleet-hub-admin.py bin/fleet-release-stats.py bin/fleet-drill.sh bin/fleet-hub-url.sh; do
+  for p in bin/fleet-users.py bin/fleet-hub-admin.py bin/fleet-release-stats.py; do
     [ -f "$R/$p" ] || bad="$bad | $p not fetched on first use"
   done
   [ -z "$bad" ] || { WHY="${bad# | }"; return 1; }
@@ -688,7 +687,7 @@ EOF
   out=$(bash "$src/bin/fleet-client-runtime.sh" --check "$src/conf/client-runtime.list" "$src/$M" 2>&1) \
     || { WHY="fleet-client-runtime.sh --check: $(printf '%s' "$out" | head -n 3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="纯客户端：14 个词离线跑通、没有一处缺文件；fleet users / release stats / drill 用到时才把 served 的脚本取来；--check 两个方向都对得上"
+  WHAT="纯客户端：13 个词离线跑通、没有一处缺文件；fleet users / release stats 用到时才把 served 的脚本取来；--check 两个方向都对得上"
 }
 
 # client-update-deletes-foreign (issue #4827, EPIC #4823 C4): an installed

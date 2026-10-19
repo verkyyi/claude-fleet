@@ -192,24 +192,15 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `extras/gh-relay/gh-relay.py` | — | — | allow |
 | `extras/gh-relay/gh-relay.service` | — | — | allow |
 | `extras/managed-node/render.py` | — | — | allow |
-| `extras/web-chat/ui/dist/assets/index-Bqwz13YT.js` | — | — | allow |
 | `plugins/fleet-browser/.claude-plugin/plugin.json` | — | — | allow |
 | `plugins/fleet-epic/.claude-plugin/plugin.json` | — | — | allow |
-| `plugins/fleet-feedback/.claude-plugin/plugin.json` | — | — | allow |
 | `plugins/fleet-infra/.claude-plugin/plugin.json` | — | — | allow |
-| `plugins/fleet-orchestrate/.claude-plugin/plugin.json` | — | — | allow |
-| `plugins/fleet-steward/.claude-plugin/plugin.json` | — | — | allow |
-| `skills/doc-preview/render.mjs` | 2 | machine 2 | config |
 | `tokenledger/README.md` | — | — | allow |
 | `tokenledger/hub/cmd/ccquota/hub_test.go` | — | — | allow |
 | `tokenledger/hub/cmd/ccquota/tls_test.go` | — | — | allow |
-| `tokenledger/docs/superpowers/plans/2026-09-12-provider-dimension.md` | — | — | allow |
-| `tokenledger/docs/superpowers/plans/2026-09-13-tokenledger-ui.md` | — | — | allow |
-| `tokenledger/docs/superpowers/specs/2026-09-12-tokenledger-provider-and-reorientation-design.md` | — | — | allow |
 | `tokenledger/agent/node_entry_test.go` | — | — | allow |
 | `tokenledger/agent/node_routes_test.go` | — | — | allow |
 | `tokenledger/hub/api/fleet_certs_test.go` | — | — | allow |
-| `tokenledger/hub/api/fleet_debug_ticket_test.go` | — | — | allow |
 | `tokenledger/hub/api/fleet_entry_reach_test.go` | — | — | allow |
 | `tokenledger/hub/api/fleet_home_login_test.go` | — | — | allow |
 | `tokenledger/hub/api/fleet_maintenance_test.go` | — | — | allow |

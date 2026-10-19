@@ -62,12 +62,8 @@
 # --- CAPABILITY MATRIX · SOURCE OF TRUTH (issue #608) -------------------------
 # Everything above is the WHY; the block below is the public, per-capability
 # grading — and it lives HERE, next to the code it describes, so it cannot quietly
-# stop matching the launcher. README.md's "Agents: Claude Code and Codex" table is
-# a RENDER of this block: `bin/codex-matrix.sh` prints the markdown, `--write`
-# re-renders the README in place, `--check` fails on drift, and
-# bin/codex-matrix-selftest.sh runs that check in CI alongside assertions that the
-# verdicts still match the flags this script actually sets. Edit a row here, then
-# run `bin/codex-matrix.sh --write` — never edit the README table by hand.
+# stop matching the launcher. README.md's "Agents: Claude Code and Codex" table
+# says the same: edit a row here, then the table (its renderer left with #4904).
 #
 # Grading rule (issue #608): a ❌ says WHICH kind of gap it is. "Codex has no such
 # mechanism" and "the mechanism exists, we have not adapted it" are different

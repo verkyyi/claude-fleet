@@ -7,13 +7,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
-// meterServer is badgeServer's hub (one 4242-token turn) with the public
+// meterServer is usageServer's hub (one 4242-token turn) with the public
 // site on and no built site.
 func meterServer(t *testing.T) *Server {
 	t.Helper()
-	s := badgeServer(t, false)
+	s := usageServer(t)
 	s.Site = true // the public site at "/" (claude-fleet#3583)
 	return s
 }
@@ -175,7 +177,7 @@ func TestMeter_SettingOffIs404(t *testing.T) {
 	if err := s.Store.SetFleetSetting(MeterKey, "off", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"/meter.json", "/odometer.svg"} {
+	for _, p := range []string{"/meter.json"} {
 		if rec := meterGet(t, s, p, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("%s with %s=off = %d, want 404", p, MeterKey, rec.Code)
 		}
@@ -186,20 +188,6 @@ func TestMeter_SettingOffIs404(t *testing.T) {
 	}
 	if rec := meterGet(t, s, "/meter.json", nil); rec.Code != http.StatusOK {
 		t.Errorf("/meter.json with the default = %d, want 200", rec.Code)
-	}
-}
-
-func TestOdometer_IsTheBadgeSVG(t *testing.T) {
-	s := meterServer(t)
-	rec := meterGet(t, s, "/odometer.svg?theme=light", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/odometer.svg = %d %s", rec.Code, rec.Body.String())
-	}
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "image/svg+xml") {
-		t.Errorf("Content-Type = %q", ct)
-	}
-	if !strings.HasPrefix(rec.Body.String(), "<svg") {
-		t.Fatalf("not an SVG: %.40q", rec.Body.String())
 	}
 }
 
@@ -227,4 +215,33 @@ func TestUnconfiguredNotes(t *testing.T) {
 	if len(set) != 0 {
 		t.Errorf("set: %q", set)
 	}
+}
+
+// usageServer is a hub with one 4242-token turn on record.
+func usageServer(t *testing.T) *Server {
+	t.Helper()
+	st := openTestStore(t)
+
+	id := model.Identity{AccountUUID: "acct-1", Email: "a@example.com", Hostname: "h1"}
+	if err := st.UpsertAccount(id, "max", "tier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Enroll("ep-1", "ep-1", "h1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.TouchEndpoint("ep-1", id, "test", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetEndpointTeam("ep-1", "platform"); err != nil {
+		t.Fatal(err)
+	}
+	c := 1.0
+	if _, _, err := st.InsertEvents([]model.UsageEvent{{
+		AccountUUID: "acct-1", EndpointID: "ep-1", MessageUUID: "m1",
+		TS: time.Now().UTC().Add(-time.Hour), Model: "claude-opus-5",
+		OutputTokens: 4242, CostUSD: &c, CWD: "/repo/a", OSUser: "alice",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	return &Server{Store: st, ViewerToken: "viewer-secret"}
 }

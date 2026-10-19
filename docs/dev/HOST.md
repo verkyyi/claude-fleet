@@ -373,7 +373,7 @@ Configure IPv4: Manually* (Linux: your distribution's network config).
 another overlay) running on the host: its address stays the same whatever the
 LAN does, it works from outside the house, and when the LAN side is confused —
 two links, a new router, a changed lease — the tailnet address is how you get
-in to fix it. The fleet's doc-preview already serves on the tailnet.
+in to fix it.
 
 <a id="ingress"></a>
 ## Reachable from outside

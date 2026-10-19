@@ -19,7 +19,6 @@ import { PoolSettingsPage } from "./pages/PoolSettings";
 import { ReleasePage } from "./pages/Release";
 import { UsagePage } from "./pages/Usage";
 import { AuditPage } from "./pages/Audit";
-import { FeedbackPage } from "./pages/Feedback";
 import { PeoplePage } from "./pages/People";
 import { SettingsPage } from "./pages/Settings";
 import { RequestsPage } from "./pages/Requests";
@@ -47,8 +46,6 @@ const routes = [
       { path: "settings", element: <SettingsPage /> },
       { path: "settings/:k", element: <SettingsPage /> },
       { path: "audit", element: <AuditPage /> },
-      { path: "feedback", element: <FeedbackPage /> },
-      { path: "feedback/:id", element: <FeedbackPage /> },
       { path: "*", element: <NotFound /> },
     ],
   },

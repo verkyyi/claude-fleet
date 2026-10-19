@@ -197,7 +197,7 @@ func TestClientPathsUnchanged(t *testing.T) {
 	mounted := h.srv.Handler()
 	for _, p := range []string{
 		"/v1/fleet/me", "/v1/me", "/v1/fleet/connect", "/v1/fleet/ssh-ca.pub", "/install", "/install/bin/fleet",
-		"/fleet/login", "/fleet/login?code=ABCD-EFGH", "/mcp", "/badge/u/x", "/embed/u/x",
+		"/fleet/login", "/fleet/login?code=ABCD-EFGH", "/mcp",
 		"/healthz", "/version", "/v1/node/self", "/meter.json", "/i/nosuchcode",
 		"/app.css", "/no-such-page",
 	} {

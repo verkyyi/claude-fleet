@@ -8,14 +8,14 @@ description: Turn a theme into a confirmed, two-layer EPIC — one design page f
 
 PHASE 1 of the EPIC trio (`/fleet-epic-plan` → `/fleet-epic-run` →
 `/fleet-epic-report`). You name a **theme**; this reads the fleet's open issues,
-proposes a bounded batch as **one design page** you open in a browser (hosted via
-doc-preview, issue #809), and — **only after you say yes** — files ONE parent
+proposes a bounded batch as **one design page** you open in a browser (served
+on this machine's loopback and opened on yours, issue #809), and — **only after you say yes** — files ONE parent
 `epic` issue whose body is the batch charter, with every member linked as a real
 GitHub sub-issue whose body is that member's section of the page. It mutates this
 fleet's repos and nothing else — the parent's `$FLEET_REPO`, plus any hosted repo
 a member is filed in (issue #1942) — and it mutates **nothing at all** until
 you confirm: before the nod the plan exists only in your scratchpad and on the
-tailnet.
+page you opened.
 
 **Argument** (`$ARGUMENTS`): the theme, in your own words — *"让无人值守的失败会
 出声"*, *"collect/dash 性能"*, *"额度池化"*. Required: with no argument, ask for
@@ -177,10 +177,9 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
 「What goes IN the slots」:
 
 0. **动笔前先读一份已批的样例页 — its surface, folds closed.**
-   `share.sh --list | grep -i epic` (the header line is the base URL), then
-   `~/.claude/fleet/bin/epic-page-surface.sh <base-url>/d/<id>/`. The current
-   样例页 is EPIC #787 「Multi-repo fleet」; if its row is gone, the newest approved
-   plan page. Write yours to that bar.
+   `~/.claude/fleet/bin/epic-page-surface.sh <an approved page.html>`. The
+   样例页 is EPIC #787 「Multi-repo fleet」, else the newest approved plan page you
+   have as a file. Write yours to that bar.
 1. **Plain words in the number band** — 要做的事 / 有空再做 / 要看的指标 /
    开跑前要处理. Never 核心层 / 储备层 / 新建子单 / 预检警告.
 2. **The preflight says only the problem** — one sentence on what to handle
@@ -251,8 +250,8 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
     A member is **visual** when it changes anything the user sees — a dash /
     侧栏 row, the 状态栏, a 弹出菜单, a 网页, a 小程序 page, a report page's
     样式. For each one, build **one single-file HTML prototype** in your
-    scratchpad (`<scratchpad>/proto-<slug>-<key>.html`), host it with
-    `~/.claude/skills/doc-preview/share.sh`, and put the frame's
+    scratchpad (`<scratchpad>/proto-<slug>-<key>.html`), served beside the
+    design page, and put the frame's
     `<p class="proto"><a href="…">▶ 打开可交互原型</a></p>` in that card's
     **upper layer** (under 怎么算成功 — never in the 技术细节 fold). The
     prototype must:
@@ -267,8 +266,8 @@ not someone executing — same rules as `plugins/fleet-epic/skills/epic-page/SKI
     whose sidebar, status bar and popup menu are real DOM, scenario + 现在 / 改后
     switches along the top, keyboard and taps both drive it. An ASCII sketch or a
     still screenshot is **not** a delivery. When the design page changes, the
-    prototype changes with it — edit the same file and `share.sh --refresh`, so
-    the link already on the page stays valid. `--lint` (rule 23) WARNs
+    prototype changes with it — edit the same file, so the link already on
+    the page stays valid. `--lint` (rule 23) WARNs
     `prototype` for a card that reads visual (侧栏 / 状态栏 / 菜单 / 页面 / 界面 /
     样式 …) with no such link; a non-visual card that trips it is yours to wave
     through, a visual one is not. At filing (step 5) the link goes into the
@@ -375,30 +374,25 @@ The sections, as the template lays them out:
    `dataviz` skill first) only when the graph has real branches. 「先后」 never
    appears on the surface.
 
-Self-check the surface (rule 23), fix what it shows, then host it and put
-**one URL + one sentence** in front of the operator:
+Self-check the surface (rule 23), fix what it shows, then serve it on loopback
+and open it on the operator's computer with **one sentence**:
 
 ```sh
-~/.claude/skills/doc-preview/share.sh <scratchpad>/epic-plan-<slug>.html   # → READY <url>
+(cd <scratchpad> && python3 -m http.server --bind 127.0.0.1 <port> >/dev/null 2>&1 &)   # once; dies with the session
 ```
 
-*"设计方案页 <READY url> — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
+then the fleet `open` tool, target `:<port>/epic-plan-<slug>.html`, and say:
+*"设计方案页 :<port>/epic-plan-<slug>.html — 要做的事 N · 有空再做 M · 指标 j 条（或「本批不量」）·
 开跑前要处理 w（为 0 时不写）。改哪条直接说；点头即全部按建议，照页面建单。"* On a fleet that runs tap-first (`FLEET_TAP_FIRST=1`), the nod is a
 bounded choice — an `AskUserQuestion` menu of *照页面建单 / 改清单 / 放弃* is the
 right shape; keep free text for what they want changed.
 
 Then **stop and wait**. No issue is created, no label is seeded, no worker is
 spawned until the operator answers — `"$T" list` must show nothing new. If
-they change the list, **edit the same file and re-render the same URL**:
-
-```sh
-~/.claude/skills/doc-preview/share.sh --refresh   # same URL; their open tab is now current
-```
-
-Never `share.sh <file>` a second time for a revision — every call APPENDS a new
-row with a new URL, and the operator ends up with three tabs of the same plan
-(the share list on this machine shows exactly that). The loop here is cheap and
-the alternative is a batch nobody chose.
+they change the list, **edit the same file** — the same address, they reload
+it. Never a second copy for a revision: the operator ends up with three tabs of
+the same plan. The loop here is cheap and the alternative is a batch nobody
+chose.
 
 Deliberately **not** on the page: an estimate in hours or tokens. This fleet has
 no session→spend join yet (issue #625), so any number would be invented.
@@ -416,8 +410,7 @@ same section shape as before, so `/fleet-epic-run` and the workers read exactly
 the bodies they always did. Only now, and in this order:
 
 1. **Record the nod on the page** — `#signoff` gets the operator's login and the
-   date, and any change they asked for goes into the page first
-   (`share.sh --refresh`).
+   date, and any change they asked for goes into the page first.
 2. **Seed labels** if the operator approved it: `fleet-epic-preflight.sh --repo "$FLEET_REPO" --fix`.
 3. **Create the parent**, labelled `epic`, titled after the theme. **Which repo**
    (issue #1942; the operator's ruling on EPIC #1935): the one holding the MOST
@@ -431,7 +424,7 @@ the bodies they always did. Only now, and in this order:
    split is `#new` until step 4 fills it):
 
    ```markdown
-   > 设计方案页：<READY url>（tailnet 内可达，重启即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
+   > 设计方案页：<url>（这台机器提供，会话结束即失效；页面内容已全部写回本 issue 与各子单，页面失效不丢信息）
    <!-- fleet:epic repo=<owner/name> short=<简称> -->
 
    ## 主题
@@ -532,7 +525,7 @@ the bodies they always did. Only now, and in this order:
    </details>
 
    ---
-   Part of EPIC #<P>. **Read its charter before starting.** 设计方案页：<url>（tailnet，重启即失效）
+   Part of EPIC #<P>. **Read its charter before starting.** 设计方案页：<url>（会话结束即失效）
    <!-- fleet:epic-member epic=<P> key=C1 -->
    ```
 
@@ -590,9 +583,8 @@ the bodies they always did. Only now, and in this order:
 6. **Mark the reserve.** Reserve members are sub-issues too, distinguished in the
    charter's own list — `run` promotes from that list, so it must be in the body,
    not only in this conversation.
-7. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC #<P>`, then
-   `share.sh --refresh` once more, so the tab the operator still has open says
-   what it became.
+7. **Stamp the page** — the eyebrow's 「提案」 becomes `EPIC #<P>`, so the tab
+   the operator still has open says what it became on its next reload.
 
 ## 6. Report (keep it short)
 
@@ -607,7 +599,7 @@ whole report then), say that instead, with the reason.
 
 Rails: operate on YOUR fleet's repos only — the parent's `$FLEET_REPO` and the
 other repos this fleet hosts that its members are filed in — never another
-fleet's repo, sessions, or ledgers. The design page is hosted with doc-preview, never the
+fleet's repo, sessions, or ledgers. The design page is served on loopback and opened with the `open` tool, never the
 Artifact tool (hook-blocked in fleet sessions, issue #526), and lives in your
 scratchpad, never in the repo. This skill files issues; it never edits code,
 opens a PR, or spawns a worker — spawning is `/fleet-epic-run`'s job, and the

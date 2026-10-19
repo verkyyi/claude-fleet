@@ -6,7 +6,7 @@ The hub (Go) writes time.Time as RFC 3339 with NANOSECONDS and a `Z`:
 neither the 9-digit fraction nor the `Z` before python 3.11, and macOS's own
 /usr/bin/python3 is 3.9 — so every bare `fromisoformat` in bin/ was a
 ValueError waiting for the first machine without a newer python
-(`fleet drill invite` lost its one-time code to one). This parser builds the
+(a hub one-time code was lost to one). This parser builds the
 datetime itself, so it reads the same on every python3 ≥ 3.6:
 
     import fleet_iso

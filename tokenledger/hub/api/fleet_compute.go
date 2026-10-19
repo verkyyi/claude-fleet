@@ -1,14 +1,12 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/findings"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
@@ -218,31 +216,6 @@ func (s *Server) auditComputeForce(ep store.Endpoint, nc *nodeConn, force bool, 
 	if err := s.Store.FleetAudit("node:"+ep.OSUser+"@"+ep.Hostname, "compute_force", "node:"+ep.ID, outcome, "", now); err != nil {
 		log.Printf("fleet audit: %v", err)
 	}
-}
-
-// computeClosed lists the online logins whose egress region closed them — the
-// compute_region finding's input. Empty on a hub with no node or no probe.
-func (s *Server) computeClosed(now time.Time) []findings.ComputeClosed {
-	rows, err := s.Store.Nodes()
-	if err != nil || len(rows) == 0 {
-		return nil
-	}
-	settings, _ := s.Store.FleetSettings()
-	var out []findings.ComputeClosed
-	for _, n := range rows {
-		if NodeStatus(n.LastHeartbeat, n.HeartbeatMS, now) != "online" {
-			continue
-		}
-		var hb control.Heartbeat
-		_ = json.Unmarshal([]byte(n.StatusJSON), &hb)
-		cv := s.computeOf(n.EndpointID, hb, settings, now)
-		if !cv.Closed || cv.Probe == nil {
-			continue
-		}
-		out = append(out, findings.ComputeClosed{EndpointID: n.EndpointID, Hostname: n.Hostname,
-			OSUser: n.OSUser, Loc: probeLoc(cv.Probe), Reason: cv.Probe.Reason})
-	}
-	return out
 }
 
 // computeAutoAudit records the team policy changing hands.

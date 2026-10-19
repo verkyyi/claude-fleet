@@ -46,7 +46,6 @@ func TestAccess_ListsEveryDoorIncludingTheOneThatIsNotHTTP(t *testing.T) {
 		"api":       "http",
 		"mcp":       "http",
 		"ingest":    "http",
-		"badges":    "http",
 		"meter":     "http",
 		"healthz":   "http",
 		"version":   "http",
@@ -96,12 +95,6 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 	if off.Hub.GitHub {
 		t.Error("GitHub sign-in reported as enabled on a hub that never configured it")
 	}
-	if off.Hub.PublicBadges {
-		t.Error("public badges reported on by default; they are off by default")
-	}
-	if doorState(off.Doors, "badges") != "open" {
-		t.Errorf("badges door = %q with --public-badges off; want open", doorState(off.Doors, "badges"))
-	}
 	if doorState(off.Doors, "mcp") != "off" {
 		t.Errorf("mcp door = %q with no MCP handler; want off", doorState(off.Doors, "mcp"))
 	}
@@ -111,7 +104,6 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 
 	// Now turn things on. The handler reads the Server at request time, so
 	// this is the same hub answering differently -- which is the claim.
-	setHubSetting(t, h.srv, PublicBadgesKey, "on")
 	h.srv.MCP = http.NotFoundHandler()
 	h.srv.GitHub = &GitHubAuth{ClientID: "Iv1.test", ClientSecret: "s", Admins: []string{"ada", "bob"}}
 	h.srv.Listeners = ListenerFacts{HTTP: []string{"127.0.0.1:8787"}, HTTPS: ":443", HTTPSURL: "https://hub.example.ts.net/"}
@@ -120,9 +112,6 @@ func TestAccess_ReportsWhatIsActuallyTurnedOn(t *testing.T) {
 	h.getJSON(t, "/v1/access", &on)
 	if !on.Hub.GitHub || on.Hub.GitHubAdmins != 2 {
 		t.Errorf("github facts = %v / %d admins; want on with 2", on.Hub.GitHub, on.Hub.GitHubAdmins)
-	}
-	if !on.Hub.PublicBadges || doorState(on.Doors, "badges") != "public" {
-		t.Errorf("badges door = %q with --public-badges on; want public", doorState(on.Doors, "badges"))
 	}
 	if doorState(on.Doors, "mcp") != "open" {
 		t.Errorf("mcp door = %q with MCP mounted; want open", doorState(on.Doors, "mcp"))

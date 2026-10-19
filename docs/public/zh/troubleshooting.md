@@ -60,10 +60,10 @@ sudo fleet doctor --machine               # 托管机器（装了整机守护的
 ### 把诊断信息发给管理员
 
 ```sh
-fleet debug report
+fleet doctor --json
 ```
 
-把这台电脑的体检和日志打包发给入口，给你一个短链接——把链接发给管理员即可，不用截图、不用贴日志。没有入口时，`fleet doctor --bundle <目录>` 把同样的东西存到本地目录。
+把输出发给管理员即可——每一行的级别、名字和说明都在里面。
 
 ## 体检的每一行
 
@@ -184,13 +184,6 @@ fleet debug report
 
 - **是什么**：整机更新器最近一轮的结果。
 - **WARN / FAIL 怎么办**：看 `/var/log/fleet-node/update.log` 和 `sudo fleet doctor --machine`。换版后多出 FAIL 时，更新器会自己退回上一版，不用手动回退。结果是 `refused`：入口给的目标比正在跑的版本旧（入口的 stable 被回退了），机器只往前走、留在当前版本——等下一版，或确要回退时在那台机器上设 `FLEET_NODE_UPDATE_BACKWARD=1`。
-
-#### `cnpath`
-
-来自 `fleet doctor`；只在走国内真实用户路径巡检的那台机器上出现。
-
-- **是什么**：上一次从国内客户端走一遍真实用户路径（连上测试 pod、裸 `fleet` 进界面、新开 Codex 会话问一句、建一个任务）的结论，以及走了多久以前。
-- **WARN / FAIL 怎么办**：不通：说明里写着卡在哪层和它开的 breakage 单；那张单关掉或下一次巡检转绿之前，stable 不会前移。超过 12 小时没走：看这台机器的 diskguard 守护是不是还在跑。
 
 #### `install`
 
@@ -662,14 +655,6 @@ fleet debug report
 - **是什么**：整台机器的负载、有没有失控的孤儿进程、会话总数。
 - **WARN / FAIL 怎么办**：负载过高：`fleet-diskguard.sh --orphans` 点名失控的进程，停掉它们。
 
-#### `idle-cost`
-
-来自 `fleet doctor`（承载机）。
-
-- **是什么**：整机空闲时每秒新起的进程数、fleet 的 CPU 开销和最多的来源。无 working 会话且无 CI 作业时才量，量读数的会话本身除外；其它登录的状态缺失或过期也显示「未量」。
-- **WARN / FAIL 怎么办**：默认超过 50 个/秒时 WARN。运行 `bash ~/.claude/fleet/bin/fleet-idle-cost.sh` 取 60 秒读数，`--json` 给报告用，`--idle` 只查能否量，`--last` 看上次结果。来源排名来自 0.2 秒采样，来源速率为估计值，极短命进程可能漏采。不要停掉正在干活的会话来制造空闲；等它们自然空闲再量。
-- **每天一次**：承载机每天空闲时自动量一次，记进 `~/.config/claude-fleet/global/idle-cost.ndjson`（保留 30 天；整天都不空闲记一行「未量」），这一行末尾的「每日读数近 7 天 …」就读它；超过阈值时同一台机器一天最多开一张单，列出前三个来源。`python3 ~/.claude/fleet/bin/fleet-idle-daily.py show` 看最近 7 天。
-
 #### `memory`
 
 来自 `fleet doctor`。
@@ -704,13 +689,6 @@ fleet debug report
 
 - **是什么**：系统默认的单进程打开文件上限。只报状态。
 - **WARN / FAIL 怎么办**：不用管：fleet 的服务会自己调高。
-
-#### `last-crash`
-
-来自 `fleet doctor`。
-
-- **是什么**：这台机器一天之内有没有崩溃重启过。
-- **WARN / FAIL 怎么办**：看说明里的崩溃摘要，查内存、温度和最近装的东西。
 
 #### `reap`
 
@@ -831,20 +809,6 @@ fleet debug report
 - **是什么**：新会话的第一句话怎么来。只报状态。
 - **WARN / FAIL 怎么办**：不用管。
 
-#### `feedback`
-
-来自 `fleet doctor`。
-
-- **是什么**：`/fleet-feedback`（给维护者提意见）开着没有。只报状态。
-- **WARN / FAIL 怎么办**：想用就 `fleet feedback on`。
-
-#### `compose`
-
-来自 `fleet doctor`。
-
-- **是什么**：在 ⌘P 里回车派一件事，到能开始打字要多久。
-- **WARN / FAIL 怎么办**：超过 3 秒：`fleet-compose-latency.sh --last 20` 看慢在哪一段，发给管理员。
-
 #### `timing`
 
 来自 `fleet doctor`。
@@ -914,13 +878,6 @@ fleet debug report
 
 - **是什么**：你那台笔记本上 iTerm2 那一侧的小插件装了没有、是不是最新。
 - **WARN / FAIL 怎么办**：照说明在那台笔记本上重装一次。
-
-#### `docprev`
-
-来自 `fleet doctor`。
-
-- **是什么**：文档预览服务：有没有旧进程、残留的路由、过期的公开链接。
-- **WARN / FAIL 怎么办**：照说明里的 `share.sh` 命令清理。
 
 #### `listen`
 

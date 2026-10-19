@@ -1324,9 +1324,6 @@ except Exception: pass' "$use.route" "$BIN/fleet-connect.py" 2>/dev/null
   }
   # A fleet's own proxy alternates direct / hub below (the old client's
   # `fleet connect` route picking and pinned routes went with it, #3008).
-  # Stuck past FLEET_DEBUG_STALL_SECS (60) with no session lasting (issue #2894):
-  # the reconnect page says 「按 d 让远端看一眼」 and d sends fleet-debug report
-  # from here — only on this page, never a key of the node's or the client's.
   route=direct; delay=1; retest=''; gone_since=''; tries=0; fails=0
   while :; do
     mine || { rv_switch_log stray-end "$node" run 0 "pid $$"; exit 0; }

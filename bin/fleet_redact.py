@@ -3,9 +3,7 @@
 
 Issue #2890 (EPIC #2889 C1, 共同约定第 1 条). The ONE table of credential shapes
 is conf/secret-shapes.list (C7 #2896 made it; bin/fleet_clientlog.py and
-fleet_clientlog in bin/fleet-client-lib.sh read it too). This file and
-bin/fleet-redact.awk (for a computer with no working Python — C3's fleet-debug)
-must write the same bytes for the same input (doctor-bundle-selftest.sh pins it).
+fleet_clientlog in bin/fleet-client-lib.sh read it too).
 
     fleet_redact.py [--table F] [--stats F] < in > out   every match → <redacted:name>
     fleet_redact.py [--table F] --check FILE…             FILE<TAB>shape per hit; exit 1 on any

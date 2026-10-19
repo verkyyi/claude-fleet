@@ -403,7 +403,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "debug", "task", "coding_agent", "dispatch", "ticket_ref"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref"); err != nil {
 			break
 		}
 		// kind (claude-fleet#1541): "issue" (the default — a worker on an
@@ -416,8 +416,8 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 			break
 		}
 		if value, ok := args["draft"]; ok {
-			if kind != "scratch" || args["body"] != nil || args["task"] != nil || args["attachments"] != nil || args["debug"] != nil {
-				err = fault("INVALID_ARGUMENT", "draft belongs to a plain scratch without body, task, debug or attachments")
+			if kind != "scratch" || args["body"] != nil || args["task"] != nil || args["attachments"] != nil {
+				err = fault("INVALID_ARGUMENT", "draft belongs to a plain scratch without body, task or attachments")
 				break
 			}
 			var draft string
@@ -468,9 +468,6 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 				noRepo = true
 			}
 		}
-		if _, ok := args["debug"]; err == nil && ok && kind != "scratch" {
-			err = fault("INVALID_ARGUMENT", "debug belongs to a no-repo scratch start")
-		}
 		if err != nil {
 			break
 		}
@@ -517,20 +514,6 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 					break
 				}
 				w.params["test"] = true
-			}
-			// debug (claude-fleet#2893): the hub's own debugger for a report —
-			// a no-repo scratch the node opens with the debugger role.
-			if v, ok := args["debug"]; ok {
-				id, isStr := v.(string)
-				if !isStr || !debugIDRe.MatchString(id) {
-					err = fault("INVALID_ARGUMENT", "debug is a report id (8 letters a-z, 2-7)")
-					break
-				}
-				if !noRepo || w.params["test"] == true {
-					err = fault("INVALID_ARGUMENT", "debug belongs to a no-repo scratch start")
-					break
-				}
-				w.params["debug"] = id
 			}
 		} else {
 			if _, ok := args["test"]; ok {
@@ -889,12 +872,6 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 	}
 	if err := s.authorize(p, fleetScopeOf[tool], w.configKey); err != nil {
 		return nil, err
-	}
-	if t, _ := w.params["text"].(string); tool == "worker_message" && strings.HasPrefix(t, FeedbackReplyPrefix) &&
-		(p.Person != "" || p.Actor != feedbackActor) {
-		// claude-fleet#3359: the node delivers this prefix to any session's
-		// inbox; only the feedback desk's reply may carry it.
-		return nil, fault("FORBIDDEN", "text must not start with "+FeedbackReplyPrefix)
 	}
 	if tool == "worker_start" {
 		if err := s.acceptDispatch(p, &w); err != nil {
@@ -1306,8 +1283,8 @@ var (
 )
 
 // CCQUOTA_FLEET_MAX_LOAD_PER_CORE moves the load ceiling for a whole hub
-// (claude-fleet#2267: newcomer-e2e's hub, whose fake node reports a shared CI
-// runner's own load — the drill under test pushes it past 0.8). Unset, or not
+// (claude-fleet#2267: a test hub whose fake node reports a shared CI runner's
+// own load — the run under test pushes it past 0.8). Unset, or not
 // a positive number: 0.8, as before.
 //
 // CCQUOTA_FLEET_MAX_CPU_BUSY is the hub's CPU-busy ceiling (claude-fleet#2882,

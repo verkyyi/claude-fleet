@@ -51,7 +51,7 @@ const limits = {
 // 发布 (C14): a week of release trains, built from the stages the ledger keeps
 const hex = (n: number) => Array.from({ length: 40 }, (_, i) => "0123456789abcdef"[(n * 7 + i * 13 + ((n * i) % 11)) % 16]).join("");
 const SUBJECTS = [
-  "管理侧的骨架，和成员与开号（#3933）", "doc-preview 不再随会话回收而死（#3988）", "个人 pod 的路由表给门的 entry 路由（#3985）",
+  "管理侧的骨架，和成员与开号（#3933）", "会话回收不再带走它起的服务（#3988）", "个人 pod 的路由表给门的 entry 路由（#3985）",
   "登录后的骨架，对话做首页（#3926）", "删号时 account forget 等不到就停掉该登录的任务（#3379）", "列车在深圳集群里跑 Linux 半边（#3864）",
   "sidebar：远端会话行同一种样式（#3960）", "fleet-theme：一份颜色字体三处共用（#3924）", "hub：新地址和管理页守门（#3925）",
   "bash32：空数组展开再收一处（#703）", "doctor：channel 行说清 Mac 线落后几趟（#3868）", "webchat：预算 403 一行说清（#3643）",

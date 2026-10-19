@@ -136,6 +136,24 @@ func TestAutoAssignUsernameFallsBack(t *testing.T) {
 
 // Every door the client reads says 「正在开」 while the create runs, and
 // nothing once the login is active — the answer before, byte for byte.
+// openingPerson is the newcomer openingOnFleet placed.
+type openingPerson struct{ PersonID string }
+
+// openingOnFleet: leastBusyFleet with fleet.auto_assign naming mac-c, and one
+// newcomer whose first look at /v1/nodes queues its login's create there.
+func openingOnFleet(t *testing.T) (*harness, map[string]*fleetNode, openingPerson) {
+	t.Helper()
+	h := newFleetHarness(t)
+	const p = "gh:4010"
+	enablePeople(t, h)
+	nodes := leastBusyFleet(t, h)
+	setHubSetting(t, h.srv, AutoAssignKey, "mac-c")
+	if code, body := asUID(t, h, http.MethodGet, "/v1/nodes", p, "", nil); code != http.StatusOK {
+		t.Fatalf("/v1/nodes: HTTP %d %s", code, body)
+	}
+	return h, nodes, openingPerson{PersonID: p}
+}
+
 func TestAccountOpeningOnEveryDoor(t *testing.T) {
 	h := newFleetHarness(t)
 	const p = "gh:4006"
@@ -214,7 +232,7 @@ func TestAccountStateWithAutoAssignOff(t *testing.T) {
 // create nobody can finish — no answer in openingGiveUp, or unsent with no
 // admin node of its machine connected — reads failed, saying why.
 func TestOpeningHasAnHonestETAAndAnEnd(t *testing.T) {
-	h, nodes, inv := drillOnFleet(t)
+	h, nodes, inv := openingOnFleet(t)
 	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	if got := h.srv.openingETAFor("mac-c"); got != openingETA {
 		t.Fatalf("eta with no history = %d; want %d", got, openingETA)
@@ -300,7 +318,7 @@ func loginReportsFleet(t *testing.T, h *harness, host, login, machine string) {
 // missing step; a refused placement names the login instead of 没有你的登录;
 // once its fleet reports the person reads as anyone with a login.
 func TestOpenedLoginWithoutFleetIsNotDone(t *testing.T) {
-	h, nodes, inv := drillOnFleet(t)
+	h, nodes, inv := openingOnFleet(t)
 	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})
 	waitState(t, h, inv.PersonID, "mac-c", store.AccountActive)
@@ -353,7 +371,7 @@ func TestOpeningPastItsOwnETAFails(t *testing.T) {
 		t.Fatalf("eta at the floor = %d; want 5", got)
 	}
 
-	h, nodes, inv := drillOnFleet(t)
+	h, nodes, inv := openingOnFleet(t)
 	m, op := expectAccountOp(t, nodes["mac-c"].tnode)
 	// mac-c has opened one before, in a minute: its median is the 60 s floor.
 	sendResult(t, nodes["mac-c"].c, m.OpID, control.AccountResult{Op: control.AccountCreate, Login: op.Login, OK: true})

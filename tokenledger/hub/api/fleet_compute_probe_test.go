@@ -8,8 +8,6 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/findings"
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -38,25 +36,9 @@ func waitProbe(t *testing.T, h *harness, ep, verdict string, force bool) {
 	})
 }
 
-func computeFindings(t *testing.T, h *harness) []findings.Finding {
-	t.Helper()
-	in, err := h.srv.GatherNow(store.AllAccounts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []findings.Finding
-	for _, f := range findings.Now(in) {
-		if f.Kind == "compute_region" {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 // 境内地区 → unsupported_region: a login that asked to run (here: a node from
 // before #1719, no compute word at all) is closed — never placed, auto or
-// named — the roster says why, and the compute_region finding raises the
-// alert. Back in a supported region it runs again and the alert clears.
+// named — and the roster says why. Back in a supported region it runs again.
 func TestComputeRegionClosesAndAlerts(t *testing.T) {
 	h, macD, macC, f5, f4 := twoNodes(t)
 	macD.beatLoad("mac-d", "frank", machineA, 5, 1, f5)
@@ -78,18 +60,11 @@ func TestComputeRegionClosesAndAlerts(t *testing.T) {
 		!strings.Contains(nodes["mac-c"]["compute_why"].(string), "CN") {
 		t.Fatalf("roster mac-c = %v; want compute_off + compute_closed naming CN", nodes["mac-c"])
 	}
-	fs := computeFindings(t, h)
-	if len(fs) != 1 || fs[0].Severity != "warning" || !strings.Contains(fs[0].Title, "frank@mac-c") || !strings.Contains(fs[0].Title, "CN") {
-		t.Fatalf("compute_region findings = %+v; want one warning naming frank@mac-c and CN", fs)
-	}
 
 	macC.beatProbe("mac-c", "frank", machineB, nil, false, probe("US", control.ProbeOK), f4)
 	waitProbe(t, h, "ep_mac-c", control.ProbeOK, false)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
 		t.Fatalf("back in a supported region: %q %v; want mac-c", pl.Machine, err)
-	}
-	if fs := computeFindings(t, h); len(fs) != 0 {
-		t.Fatalf("alert after the region came back: %+v", fs)
 	}
 }
 
@@ -103,9 +78,6 @@ func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 	waitProbe(t, h, "ep_mac-c", control.ProbeOK, false)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
 		t.Fatalf("policy off: %q %v; want mac-d (an ok probe only hints)", pl.Machine, err)
-	}
-	if fs := computeFindings(t, h); len(fs) != 0 {
-		t.Fatalf("a coordinate-only node is no alert: %+v", fs)
 	}
 
 	putSetting(t, h, ComputeAutoKey, "maybe", 400)
@@ -132,15 +104,11 @@ func TestComputeAutoOpensOnlyByPolicy(t *testing.T) {
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
 		t.Fatalf("unreachable probe: %q %v; want mac-d", pl.Machine, err)
 	}
-	// Policy on never opens a login in an unsupported region, and that
-	// login asked for nothing, so it is no alert either.
+	// Policy on never opens a login in an unsupported region.
 	macC.beatProbe("mac-c", "frank", machineB, computeOff(), false, probe("CN", control.ProbeUnsupportedRegion), f4)
 	waitProbe(t, h, "ep_mac-c", control.ProbeUnsupportedRegion, false)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-d" {
 		t.Fatalf("region + policy: %q %v; want mac-d", pl.Machine, err)
-	}
-	if fs := computeFindings(t, h); len(fs) != 0 {
-		t.Fatalf("a coordinate-only node in CN is no alert: %+v", fs)
 	}
 }
 
@@ -163,9 +131,6 @@ func TestComputeUnreachableAndForce(t *testing.T) {
 	waitProbe(t, h, "ep_mac-c", control.ProbeUnsupportedRegion, true)
 	if pl, err := h.srv.PickNode("", writeRepo); err != nil || pl.Machine != "mac-c" {
 		t.Fatalf("forced: %q %v; want mac-c", pl.Machine, err)
-	}
-	if fs := computeFindings(t, h); len(fs) != 0 {
-		t.Fatalf("a forced login is no alert: %+v", fs)
 	}
 	var n int
 	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_audit WHERE action = 'compute_force' AND outcome LIKE '%unsupported_region%'`).Scan(&n); err != nil || n != 1 {

@@ -41,7 +41,7 @@ func TestReadOnlyRefusesWritesServesReads(t *testing.T) {
 	}
 
 	for _, w := range []struct{ method, path string }{
-		{"POST", "/v1/ingest"}, {"POST", "/v1/live/report"}, {"POST", "/v1/accounts/label"}, {"PUT", "/v1/fleet/settings"}, {"DELETE", "/v1/findings/mutes"},
+		{"POST", "/v1/ingest"}, {"POST", "/v1/live/report"}, {"POST", "/v1/accounts/label"}, {"PUT", "/v1/fleet/settings"},
 	} {
 		resp, body := do(w.method, w.path)
 		if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "15" || !strings.Contains(body, "read_only") {

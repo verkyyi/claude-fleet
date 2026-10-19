@@ -67,18 +67,18 @@ func TestAdminAudit_ActorAndSince(t *testing.T) {
 // actor; the page finds both with the person filter.
 func TestAdminAudit_SettingBackAndForth(t *testing.T) {
 	h, _, _ := newVaultHarness(t)
-	for _, v := range []string{"on", "off"} {
-		if code, out := h.post(t, "/v1/fleet/settings", map[string]string{"key": PublicBadgesKey, "value": v}); code != http.StatusOK {
+	for _, v := range []string{"off", "on"} {
+		if code, out := h.post(t, "/v1/fleet/settings", map[string]string{"key": MeterKey, "value": v}); code != http.StatusOK {
 			t.Fatalf("set %s: %d %v", v, code, out)
 		}
 	}
 	n := 0
 	for _, e := range auditOf(t, h, "?kind=set") {
-		if e.Action == "setting" && e.Target == PublicBadgesKey {
+		if e.Action == "setting" && e.Target == MeterKey {
 			n++
 		}
 	}
 	if n != 2 {
-		t.Errorf("%d setting rows for %s; want 2", n, PublicBadgesKey)
+		t.Errorf("%d setting rows for %s; want 2", n, MeterKey)
 	}
 }

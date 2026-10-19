@@ -974,20 +974,6 @@ class LiveRowEntry(unittest.TestCase):
                     with self.assertRaises(live.Refused): adapter.system_context()
         self.assertIn('context=system_context()', (ROOT / 'bin/nogh_live_http.py').read_text())
 
-    def test_overlay_has_workload_logins_and_a_seeded_toolchain(self):
-        import re
-        text = (ROOT / 'extras/managed-node/c9/Dockerfile').read_text()
-        logins = dict(re.findall(r'^ARG (C9_(?:HUB|NODE_A|NODE_B)_LOGIN)=(\S+)$', text, re.M))
-        self.assertEqual(len(logins), 3)
-        self.assertTrue(all(live.NAME.fullmatch(v) for v in logins.values()))
-        self.assertIn('id=10001;', text)
-        self.assertIn('useradd --uid "$id" --gid "$id"', text)
-        self.assertIn('groupadd --gid "$id"', text)
-        self.assertIn('seed=/opt/claude-fleet/seed/current', text)
-        for tool in ('tmux', 'claude'):
-            self.assertIn('for t in tmux claude;', text)
-        self.assertIn('ln -sfn "$seed/bin/ccquota" /usr/local/bin/ccquota', text)
-        self.assertNotIn('/var/db/fleet-node/runtime/current', text)
 
     def test_bypass_port_cannot_be_a_dns_or_github_port(self):
         for port in (53, 80, 443):

@@ -65,7 +65,7 @@ var routeAccess = map[string]string{
 	ReleaseStatsPath:       accessAdmin,  // the release ledger (claude-fleet#3140)
 	ReleaseKeysPath:        accessAdmin,  // the signing keys' state, 404 to a member (claude-fleet#3937)
 	// The public counter (claude-fleet#1988); the handler 404s it when off.
-	"/meter.json": accessPublic, "/odometer.svg": accessPublic,
+	"/meter.json": accessPublic,
 	// The tab icon, a copy of the site's logo (claude-fleet#3946).
 	"/favicon.svg": accessPublic, "/favicon.ico": accessPublic, "/apple-touch-icon.png": accessPublic,
 	"/v1/fleet/ssh-ca.pub":  accessPublic,
@@ -77,13 +77,7 @@ var routeAccess = map[string]string{
 	// Their own credential, checked by the handler.
 	"/v1/ingest": accessSelf, "/v1/live/report": accessSelf,
 	"/v1/collectors/quota-lease": accessSelf,
-	// The onboarding drill (claude-fleet#2010): each request signed by the
-	// inviting machine, the drill person's certificate or its approve code.
-	DrillPath: accessSelf, DrillSelfPath: accessSelf, LoginApprovePath: accessSelf,
-	// Drill triers (claude-fleet#4215): an admin mints (cert or gate, like
-	// DrillPath); the one-time code in the query is the redeem's credential.
-	DrillTrialPath: accessSelf, DrillTrialRedeemPath: accessPublic,
-	control.Path: accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
+	control.Path:                 accessSelf, "/v1/node/lease": accessSelf, "/v1/node/place": accessSelf,
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
@@ -175,7 +169,6 @@ var routeAccess = map[string]string{
 	"/v1/collectors": accessAdmin, "/v1/account-usage": accessAdmin,
 	"/v1/limits": accessAdmin, "/v1/limits/history": accessAdmin, "/v1/quota/history": accessAdmin,
 	"/v1/endpoints": accessAdmin, "/v1/account-switches": accessAdmin, "/v1/endpoint-accounts": accessAdmin,
-	"/v1/findings": accessAdmin, "/v1/findings/mutes": accessAdmin,
 	"/v1/access": accessAdmin,
 	// The one audit the admin side reads (claude-fleet#1990).
 	AuditPath: accessAdmin,
@@ -186,7 +179,6 @@ var routeAccess = map[string]string{
 	// The new console's admin side (claude-fleet#3925): to anyone else, the
 	// 404 an unknown address gets.
 	AdminPrefix: accessAdmin, AdminPrefix + "/": accessAdmin,
-	"/badge/": accessAdmin, "/embed/": accessAdmin,
 
 	// A user's own: scoped to their machine login, their principal, or
 	// FleetScope.

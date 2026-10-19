@@ -880,10 +880,6 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 		var resp *CertResponse
 		var err error
 		switch {
-		case approve && r.FormValue("approve_code") != "":
-			// A drill's code (claude-fleet#2010): the login is the drill
-			// person's, whoever is signed in on this browser.
-			_, resp, _, err = s.approveWithCode(r, code, strings.TrimSpace(r.FormValue("approve_code")), now)
 		case approve:
 			resp, _, err = s.approveDeviceLogin(r, pid, code, now)
 		default:
@@ -900,8 +896,6 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, errLoginGone):
 			page.Error = pageT(loc, "login.err.gone")
-		case errors.Is(err, store.ErrDrillCode):
-			page.Error = pageT(loc, "login.err.drill")
 		case err != nil:
 			page.Error = i18n.Interpolate(pageT(loc, "login.err.issue"), map[string]string{"err": err.Error()})
 		case !approve:
@@ -983,6 +977,9 @@ func (s *Server) noMachineLoginReason(r *http.Request, pid string, p *store.Prin
 	}
 	return i18n.Interpolate(pageT(loc, "login.why.nologin"), map[string]string{"who": who})
 }
+
+// errLoginGone: no pending device login under that user code.
+var errLoginGone = errors.New("no pending login under that code")
 
 // approveDeviceLogin confirms the pending login under code as pid: the
 // certificate, the node pass for a `fleet node join` scan, and the device

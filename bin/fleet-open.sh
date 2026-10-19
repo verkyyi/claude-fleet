@@ -14,8 +14,8 @@
 # The JSON (built by bin/fleet-open-addr.py — the contract #1380 reads):
 #   {"v":1,"kind":"forward","rport":8765,"path":"/d/x/","scheme":"http","host":"<ssh alias>","ts":…}
 #       a page on THIS machine (:port, localhost / 127.0.0.1, or this machine's
-#       tailnet name — mapped to the loopback port `tailscale serve` or doc-preview
-#       fronts): the laptop forwards a local port over its ssh to 127.0.0.1:<rport>
+#       tailnet name — mapped to the loopback port `tailscale serve` fronts):
+#       the laptop forwards a local port over its ssh to 127.0.0.1:<rport>
 #   {"v":1,"kind":"url","url":"https://…","host":…,"ts":…}   anything else, as is
 # A FILE goes to bin/fleet-show.sh (a download into their ~/Downloads); its receipt
 # (issue #3541) is ours: saved:<path> → opened (the path on stderr).

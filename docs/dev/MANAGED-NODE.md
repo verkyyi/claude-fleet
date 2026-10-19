@@ -381,23 +381,9 @@ curl -fsSL <入口>/install/bin/fleet-node-install.sh | sudo bash -s -- --hub <�
 
 ## 9. 真机演练（C8，#2336）
 
-```
-sudo bin/fleet-node-drill.sh run --to <升级到的 sha> --fail <故意失败的 sha> [--join-file <f>] [--logins a,b]
-bin/fleet-node-drill.sh count        # 五个指标此刻的读数（不用 root）
-sudo bin/fleet-node-drill.sh unblock # 演练被杀后留在 /etc/hosts 的 GitHub 挡板
-```
-
-在**被演练的那台**上跑（先 mac-a，共同约定 6）。每一步动真机前先问（y 做 · n 跳过记 SKIP · q 停）：
-基线 → 加入码（人）→ 安装（人，§8 那一条）→ 逐个账号 `account adopt`（发起人自己的账号最后迁；管理员登录 adopt 退 5、记 SKIP——它不交给守护，§15；其余失败即停并打印 `account release`）
-→ 升级（人移 stable 到 `--to`，等更新器 `committed`）→ 回退（人移到 `--fail`：master 上一个只加 `conf/drill-fail` 的提交——带这个标记的发布版 doctor 多一行 FAIL（`fleet-node-update.py` `DRILL_FAIL`）——等 `rolled-back` 回到 `--to`；看完 stable **往前**移到删掉标记的下一提交。不用演练分支：install-sync 从不往回移，停在主干外的提交上的非托管账号就再也跟不上 stable）
-→ 复查（`doctor --machine` + 五个指标）→ 断 GitHub（这一步内 `/etc/hosts` 挡住 github.com 等，重装应全部跳过、只从入口取到当前发布版；挡板总会撤掉，下次启动也先撤）
-→ 回话（人确认会话能回话、入口能往这台派会话）。
-
-每步计时、标「人 / 自动」，最后两张表——步骤表和五个指标的演练前 / 后 / 目标——打印并存到
-`<state>/drill/<UTC>/report.md`，报告页直接用。加入码只从 `--join-file`（读后删除）或不回显的提示读，不打印、不落盘。
-指标口径（`count`）：服务 = `/Library/LaunchDaemons` + 每个账号 `~/Library/LaunchAgents` 里有效的 `com.claude-fleet.*` / `com.ccquota.*`
-（`.bak` / `.retired` 等残留不算）；种类 = 各账号服务组合去重（托管账号算「守护代跑」一种）；GitHub = 未托管且有 install-sync 的账号数；
-部件 = `doctor --machine` 里 runtime / ccquota / claude / codex / tmux / cache 不是 PASS 的个数。沙箱自测 `bin/fleet-node-drill-selftest.sh`。
+整机演练脚本随 #4904 去掉。回退这一步仍可手工演：人把 stable 移到 master 上一个只加
+`conf/drill-fail` 的提交——带这个标记的发布版 doctor 多一行 FAIL（`fleet-node-update.py` `DRILL_FAIL`）——
+等更新器 `rolled-back` 回到上一版；看完 stable **往前**移到删掉标记的下一提交（install-sync 从不往回移）。
 
 演练记录与五个指标的读数：#2336（mac-a，2026-10-08）。
 演练里的「升级」用一个只改这份文档的提交；「回退」用一个只加 `conf/drill-fail` 的提交，再用一个删掉它的提交往前走。
@@ -549,9 +535,6 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
 次日 07:00 的 `daily-<日期>` 会话由守护开出；手机收到一条测试短信推送。`~/daily-report/run.sh --now`
 仍可手动补跑一版。
 
-**mac-d 的手机 MCP（#3247）**：`phone-mcp` 同样登记给守护，以管理员登录 dave 常驻、带鉴权代理听 tailnet，
-人的每个登录经 http 连它——装法、配法、换令牌见 [PHONE-MCP.md](PHONE-MCP.md)。
-
 ## 14. 托管机器不是谁的常驻客户端（#2702 · #2720 · #2904）
 
 人在自己的设备上跑 `fleet`（客户端壳）；托管机器只跑会话和后台服务。所以在托管机器上
@@ -596,7 +579,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   以及**管理员登录**的每个单元（管理员永不被接管，#2842；它的 `com.ccquota.agent.<管理员>` 就是这台机器的 admin node，
   入口靠它开新人的登录——#2997：清扫曾把它收进 attic，两台机器都没了 admin node，新人一个号也开不出来）。
   **只点名不动**的：没被接管的非管理员登录的（`account adopt` 是它的路）、卸不下来的、子进程还起不来的旧 daemon；
-  有 `fleet-onboard-drill.sh` 在跑时这一轮一个都不动（`held:`）。`status` 每个留下的一行 `extra <label> left in place — <为什么>`，
+  `FLEET_NODE_SWEEP_HOLD` 点名的程序在跑时这一轮一个都不动（`held:`）。`status` 每个留下的一行 `extra <label> left in place — <为什么>`，
   末行 `removed N · extra M (left in place)`。
 
 ## 15. 破坏能力 = 登录的能力，不是提示词（#2842）
@@ -608,7 +591,7 @@ BREAK-IT 行 `service-handwritten`。只点名接管过的登录（`logins/<登�
   也不该写：一句提示词拦不住一个不听话（或被注入）的会话，却会让有能力的会话也不敢动手（#2139 的演练被连推 5 轮给人）。
 - **管理员的能力是管理员的**：dave 这类有 sudo 的登录可以做，任何以它身份跑的会话也可以做——包括编排经
   `mac-a-admin` / `mac-b-admin` 的管理员 SSH。限制的对象是普通租户，不是角色。
-- **要 root 的脚本只看能力**：`fleet-onboard-drill.sh`、`fleet-login-smoke.sh` 的预检只问 `sudo -n`，
+- **要 root 的脚本只看能力**：`fleet-login-smoke.sh` 的预检只问 `sudo -n`，
   不通就拒并说「需要管理员登录（有 sudo）」，从不问「调用的是不是 worker」。新写的同类脚本照此办。
 - **能力面是检查出来的**：`account adopt` 先查这个登录——admin 组、`sudo -l -U` 的规则、sudoers 里的名字——
   有一条就退 5、什么也不挪（管理员登录不交给守护）；守护每 `FLEET_NODE_TENANT_EVERY`（300 s）以 root 重读每个接管的
@@ -782,33 +765,13 @@ PR 永远不上自家机器。没有 `/var/db/fleet-node/ci.env` = 什么都不�
 - BREAK-IT：`ci-runner-hogs` · `ci-runner-pr-code`（`bin/fleet-break-it-ci-selftest.sh`，沙箱里的假 GitHub、
   假测试机包、假测试账号）。
 
-## 18. 托管登录默认开的插件：/fleet-feedback（EPIC #3354 C6，#3360）
+## 18. 托管登录没有默认开的插件（#3360 → #4904）
 
-新功能在人自己的电脑上默认关、要他自己打开——这是规矩。`fleet-feedback`（`/fleet-feedback 一句话`，
-EPIC #3354）在**托管登录**上是这条规矩的例外，理由三条：
-
-1. **托管机器是我们装、我们升级、我们负责体验的机器。** 上面的人不维护它，也不会去 `/plugin` 里找一个
-   他不知道存在的东西——在这里默认关，等于没有。
-2. **默认开只是「命令存在」。** 发什么永远要他亲手打 `/fleet-feedback` 并看过预览（哪些会公开写在预览里），
-   日志和屏幕每次单独问；没有任何静默上报。
-3. **一句话能关，关了不再开。** `fleet feedback off`；之后每次升级都不会再打开它。
-
-人自己的电脑不满足 ①，所以照规矩：什么都不装，`fleet feedback on` 打开。
-
-- **怎么装上**：install-apply 的 `plugins` 一步，`fleet_node_manages "$LOGIN"` 为真 ⇒
-  `fleet-plugins.py ensure --default fleet-feedback`：没装过 ⇒ `claude plugin install` + `enable`，
-  名字写进 `$FLEET_CONF_DIR/plugins-defaulted.json`；记过 ⇒ 再也不动（他 disable / uninstall 了就尊重）；
-  他早已自己装着 ⇒ 只记下，不改他的开关。
-- **`plugins-defaulted.json` 只增不减**，是「这个登录默认装过一次」的唯一记录；开没开只看 Claude Code 的
-  `enabledPlugins`（同 fleet-browser）。以后别的「托管默认开」照这条路加一个 `--default <名字>`，不另造。
-- **`account release`（§6）不卸它**：这时它已经是他的选择，留给他。
-- **开关**：`fleet feedback on|off|status`（`bin/fleet-feedback-switch.sh`，包一层 `claude plugin`）；
-  doctor 的 `feedback` 行：开 ⇒ PASS，托管登录被关 ⇒ 一行 INFO（不 WARN：人可以关），自己的电脑没开 ⇒ 没有这行。
-  反馈进了入口却没变成 GitHub 单（状态「待转」），是入口那侧的 GitHub App 没配，不是这台机器的事。
-- 测试：`fleet-plugins-selftest.sh` J。
-- **反过来的一个**：`fleet-infra`（管机器和入口的人用的运维技能，#3586）**永远不是**托管默认——
-  `--default fleet-infra` 被 `fleet-plugins.py` 拒绝，入口的团队配置也不许在 `enabledPlugins` 里下发它
-  （入口与本机两侧都拒）；要用的管理员自己 `claude plugin install fleet-infra@claude-fleet`。测试：同上 K。
+反馈插件曾是托管登录上唯一默认开的插件（EPIC #3354 C6）；它随 #4904 去掉，install-apply 的
+`plugins` 一步（`fleet-plugins.py ensure`）把还装着的卸掉（`RETIRED`）。规矩回到一条：新功能在任何登录上都
+默认关，要的人自己 `claude plugin install`。`fleet-infra`（管机器和入口的人用的运维技能，#3586）同样只由
+要用的管理员自己装，入口的团队配置也不许在 `enabledPlugins` 里下发它（入口与本机两侧都拒）。
+测试：`fleet-plugins-selftest.sh` J（卸掉退役的）、K。
 
 ## 19. 托管 Mac 关掉 Spotlight（#3402）
 
@@ -1119,10 +1082,9 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 
 ## 25. 托管登录的连接证书由运维维护，从不叫人登录（#4594）
 
-被 `account adopt` 接管的登录（accounts.json 里 `managed: true`，`fleet_node_manages` / `bin/fleet_managed.py`）是 fleet 自己的，它的连接证书（`~/.ssh/fleet-cert-cert.pub`，12 小时）也是。连接证书平时只在「用到时」续（#3701），可托管节点上除了国内探针的身份步，几乎没有东西用这个登录的证书：它过期，7 天后设备登记也失效，就只剩扫码一条路——2026-10-13 一台托管 Mac 上正是这样挡住了 stable 的 `cn:` 关口，还把「请你跑 `fleet login`」升级给了运营者。
+被 `account adopt` 接管的登录（accounts.json 里 `managed: true`，`fleet_node_manages` / `bin/fleet_managed.py`）是 fleet 自己的，它的连接证书（`~/.ssh/fleet-cert-cert.pub`，12 小时）也是。连接证书平时只在「用到时」续（#3701），可托管节点上常常没有东西用这个登录的证书：它过期，7 天后设备登记也失效，就只剩扫码一条路——2026-10-13 一台托管 Mac 上正是这样，还把「请你跑 `fleet login`」升级给了运营者。
 
 - **运维兜底续期**：这个登录的 diskguard 一拍（节点守护以它的身份跑的账号任务）每 `FLEET_MANAGED_CERT_EVERY`（900 秒）跑一次 `fleet-login.py keep`：证书没了 / 低于续期余量，或上次续期超过 `FLEET_KEEP_DEVICE_SECS`（2 天），就用设备钥匙续（login.log `why=keep`，`cert-renew.last`）。入口的设备窗口因此永远到不了 7 天。别的登录上 `keep` 什么也不做——它是 #3701「用到时才续」唯一的例外。`FLEET_MANAGED_CERT_KEEP=0` 关掉。
-- **演练命令先续再判断**：`fleet-drill.sh` 在看 `cert_live` 之前先跑 `fleet-login.py renew --on-use drill`。
 - **续不了是运维的事**：设备钥匙也续不了（exit 3：设备过了窗口 / 不认识）时，每段连续失败只报一条 `breakage` 告警，写明由运维重新登记；节点令牌重新登记设备的入口路见 #4595。
-- **措辞**：托管登录上 `fleet login` 的输出、`fleet-drill.sh`、体检 cert 行都不叫人跑 `fleet login` / 扫码，只说「运维会自动续期」/「已报运维处理」。
+- **措辞**：托管登录上 `fleet login` 的输出、体检 cert 行都不叫人跑 `fleet login` / 扫码，只说「运维会自动续期」/「已报运维处理」。
 - 演练：BREAK-IT `managed-cert-lapses-idle`（`bin/fleet-managed-cert-selftest.sh`）。

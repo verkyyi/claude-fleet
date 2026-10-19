@@ -5,11 +5,11 @@ artifact-guard.py — PreToolUse hook: a fleet session never PUBLISHES an Artifa
 WHY (issue #526): an Artifact page is scoped to the claude.ai ACCOUNT that
 published it. The fleet rotates subscription tokens under sessions
 (#513/#515/#524), so the operator cannot tell which account a given session
-used — and from the wrong login the page simply is not there. The fleet ships
-the `doc-preview` skill instead: one fixed Tailscale tailnet URL, any device, no
-login, every session's shares in one list. This guard turns a publish into a
-pointer at that, and leaves reading / listing / commenting on artifacts that
-OTHERS shared alone (those are viewing, not hosting).
+used — and from the wrong login the page simply is not there. The fleet's own
+road is the `show` / `open` tools: the file or page goes to the operator's own
+computer. This guard turns a publish into a pointer at that, and leaves reading /
+listing / commenting on artifacts that OTHERS shared alone (those are viewing,
+not hosting).
 
 Wired from hooks/settings-hooks.json with matcher "Artifact"; installed
 machine-wide into ~/.claude/settings.json by /fleet-sync-install, so it covers
@@ -40,12 +40,10 @@ MSG = (
     "  An Artifact page belongs to the claude.ai ACCOUNT that published it. The fleet\n"
     "  rotates subscription accounts under sessions, so the operator cannot know which\n"
     "  login would show this page — from any other account it does not exist.\n"
-    "  Host it on the fleet's tailnet instead (any device, no login, all sessions in\n"
-    "  one list):\n"
-    "    ~/.claude/skills/doc-preview/share.sh <file.md|file.html>\n"
-    "  then relay the READY URL it prints. Markdown is rendered GitHub-style; an\n"
-    "  .html file is served as-is. Reading / listing / commenting on artifacts others\n"
-    "  shared is still allowed. Operator override: FLEET_ALLOW_ARTIFACT=1.\n"
+    "  Send it to the operator's own computer instead: the `fleet` tool `show`\n"
+    "  (fleet-show.sh <file.md|file.html> outside a session), or serve it on\n"
+    "  127.0.0.1 and `open` :port/<file>. Reading / listing / commenting on artifacts\n"
+    "  others shared is still allowed. Operator override: FLEET_ALLOW_ARTIFACT=1.\n"
 )
 
 

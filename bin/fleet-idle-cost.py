@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""fleet-idle-cost.py — the idle-cost sampler (issue #4355, EPIC #4354 C1).
+"""fleet-idle-cost.py — the idle predicate and its sampler (issue #4355, EPIC #4354 C1).
 
-How much the machine spends when nobody is working: over one window it counts
-the processes started (the rate) and charges each one it saw to the nearest
-ancestor that is still alive and at least a minute old (the ranking), and reads
-the CPU time each long-lived process used. bin/fleet-idle-cost.sh decides
-whether the machine is idle (fleet_idle_now) and calls this; nothing else should.
+published_idle is the machine daemon's idle beat's one reader (issue #4359):
+every login's published working state, files only. The sampler measures how much
+the machine spends when nobody is working: over one window it counts the
+processes started (the rate) and charges each one it saw to the nearest ancestor
+that is still alive and at least a minute old (the ranking), and reads the CPU
+time each long-lived process used; fleet_idle_now (bin/fleet-lib.sh) decides
+whether the machine is idle. Its CLI (fleet-idle-cost.sh) left with #4904.
 
   fleet-idle-cost.py sample --secs 60 [--interval 0.2] [--exclude-pid PID]…
         [--top 10] --out FILE           measure; write the reading (JSON) to FILE

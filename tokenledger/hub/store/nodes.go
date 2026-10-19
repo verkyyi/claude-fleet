@@ -113,18 +113,6 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetTasks(); err != nil {
 		return err
 	}
-	// Debug tickets (claude-fleet#2891).
-	if err := s.ensureFleetDebugTickets(); err != nil {
-		return err
-	}
-	// What the debug tickets sent up, and the pages made of it (claude-fleet#2893).
-	if err := s.ensureFleetDebugReports(); err != nil {
-		return err
-	}
-	// What people on managed machines sent with /fleet-feedback (claude-fleet#3355).
-	if err := s.ensureFleetFeedback(); err != nil {
-		return err
-	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err
@@ -151,10 +139,6 @@ func (s *Store) EnsureNodes() error {
 	}
 	// Registered devices + their audit (claude-fleet#1470).
 	if err := s.ensureFleetDevices(); err != nil {
-		return err
-	}
-	// Drill people (claude-fleet#2010) — after the devices they own.
-	if err := s.ensureFleetDrill(); err != nil {
 		return err
 	}
 	if err := s.ensureFleetCreds(); err != nil {

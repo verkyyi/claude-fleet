@@ -39,13 +39,6 @@
 # replaces step 2 and gets the window / worker id as its argument.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
-# a failed step goes to fleet-debug-prompt.sh (issue #2894): the third in half an
-# hour asks whether the hub should take a look; a placement emptied the book
-debug_after() {
-  [ "${FLEET_DEBUG_PROMPT:-1}" != 0 ] && [ -f "$BIN/fleet-debug-prompt.sh" ] || return 0
-  sh "$BIN/fleet-debug-prompt.sh" after "$1" "$2"
-}
-
 usage() { sed -n '5,6p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 helpn=$(awk '/^set -uo pipefail/ { print NR - 1; exit }' "$0")
 
@@ -99,7 +92,6 @@ hline=$(python3 "$BIN/fleet-thin.py" --run -- sh -c \
    bash "$@" ${f:+--body-file "$f"}; rc=$?; [ -z "$f" ] || rm -f "$f"; exit $rc' \
   fleet-home "$text" "$rbin/fleet-client-place.sh" - home --agent "$agent" ${node:+--node "$node"} ${fresh:+--new} \
   | tail -n 1); rc=$?
-debug_after place "$rc"
 [ "$rc" = 0 ] || { [ -z "$hline" ] || printf '%s\n' "${hline#*$'\t'}" >&2; exit "$rc"; }
 head=${hline%%$'\t'*}; why=''; case "$hline" in *$'\t'*) why=${hline#*$'\t'} ;; esac
 case "$head" in

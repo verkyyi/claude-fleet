@@ -99,15 +99,9 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 	if err != nil {
 		return nil
 	}
-	// A drill person's own computer (claude-fleet#2549) is the bare login
-	// `fleet drill invite` named: it is where the client runs, never where a
-	// session can open, so it counts for nothing here.
-	drill, _ := s.Store.Drill(pid)
-	own := func(a store.FleetAccount) bool {
-		// for a drill, any computer it signed in on (#2212) is no machine either
-		return drill.OwnComputer(a) || (drill != nil && !a.Managed())
-	}
-	if !hasMachine(accts, own) && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
+	// An account in any state counts — one being opened or removed is not a
+	// reason to queue another.
+	if len(accts) == 0 && (s.autoAssignOn() || s.invitedPrincipal(pid)) {
 		// Nothing queued yet — least-busy found no fit machine at the
 		// sign-in, or the setting came on after it: the same idempotent
 		// placement the sign-in runs, once more, so the client's next look
@@ -120,14 +114,9 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		}
 	}
 	var opening, failed, settling *store.FleetAccount
-	ownActive := false
 	reported := s.loginsWithFleet()
 	for i := range accts {
 		a := &accts[i]
-		if own(*a) {
-			ownActive = ownActive || a.State == store.AccountActive
-			continue
-		}
 		if !a.Managed() {
 			continue // a computer the person logged in on, not a machine opened for them (#2212)
 		}
@@ -172,11 +161,6 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		return &AccountState{State: "failed", Machine: failed.Hostname, Login: failed.Login, Ask: ask,
 			Why: truncate(lastLine(failed.Detail), 200)}
 	}
-	if ownActive {
-		// No other machine to open one on: the drill's own login is all it
-		// has — the answer before #2549, when it may well host its fleet.
-		return nil
-	}
 	none := &AccountState{State: "none", Ask: ask}
 	if snap, err := s.Nodes(now); err == nil && len(adminNodesOnline(snap)) == 0 {
 		// Nothing is coming because no machine can open a login
@@ -184,19 +168,6 @@ func (s *Server) accountStateOf(pid string, now time.Time) *AccountState {
 		none.Why = noLoginOpenerWhy(snap)
 	}
 	return none
-}
-
-// hasMachine says accts holds a row that is a machine for the person: any
-// account but the ones own() names (a drill's own computer). An account in
-// any state counts — one being opened or removed is not a reason to queue
-// another.
-func hasMachine(accts []store.FleetAccount, own func(store.FleetAccount) bool) bool {
-	for _, a := range accts {
-		if !own(a) {
-			return true
-		}
-	}
-	return false
 }
 
 // openingStuck says why a create still pending / creating / unknown will not

@@ -81,14 +81,9 @@
 #                 with an earlier install → no solo; a bundle that does not match
 #                 its SHA-256 → file by file, still exit 0; a bundle with no tmux
 #                 → the archive conf/vendor-tmux.lock pins, SHA-256 checked
-#   L. ticket     (issue #2891) the same hub with debug tickets on (the
-#                 installer's __FLEET_DEBUG__ filled with 1): one POST
-#                 /v1/fleet/debug/ticket carrying the install fingerprint's hash
-#                 (sha256 of hwid|login|root) and the invitation, the ticket kept
-#                 0600 at ~/.config/claude-fleet/debug-ticket, never printed; a
-#                 rerun within 12 hours asks for none; the hub answering 429 →
-#                 no file, exit 0; the feature off (placeholder unfilled, as leg
-#                 K) → no request at all
+#   L. ticket     (issue #4904) the debug desk is gone: an older install's
+#                 debug-ticket files are taken out, and no install asks the hub
+#                 for one (no POST at all)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
@@ -181,7 +176,7 @@ class H(BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers(); return
         sha = hashlib.sha256(b).hexdigest()
-        if os.path.exists(os.path.join(W, "corrupt")) and name in ("bin/fleet-connect.py", "bin/fleet-drill.sh"):
+        if os.path.exists(os.path.join(W, "corrupt")) and name in ("bin/fleet-connect.py", "bin/fleet-hub.py"):
             b = b"<html>proxy error</html>\n"   # the body changes, the header does not
         self.send_response(200)
         self.send_header("Content-Type", ct)
@@ -266,15 +261,15 @@ out2=$("$HOME/.local/bin/fleet" --help 2>&1); rc=$?
 # a download that does not match its sum leaves nothing behind
 sv=''; for f in $SERVED; do [ -e "$ROOT/$f" ] && sv="$sv $f"; done
 [ -z "$sv" ] && ok "B no served file installed ($(printf '%s\n' "$SERVED" | wc -l | tr -d ' ') on the hub)" || bad "B served files installed:$sv"
-out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-node-join.sh bin/fleet-hub-url.sh; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
+out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-node-join.sh bin/fleet-users.py; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
 [ "$out2" = "rc=0 " ] && cmp -s "$ROOT/bin/fleet-node-join.sh" "$REPO/bin/fleet-node-join.sh" && [ -x "$ROOT/bin/fleet-node-join.sh" ] \
-  && cmp -s "$ROOT/bin/fleet-hub-url.sh" "$REPO/bin/fleet-hub-url.sh" && ok "B fc_served fetches served files from the hub, identical, executable" || bad "B fc_served: $out2"
+  && cmp -s "$ROOT/bin/fleet-users.py" "$REPO/bin/fleet-users.py" && ok "B fc_served fetches served files from the hub, identical, executable" || bad "B fc_served: $out2"
 : > "$WORK/corrupt"
-out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-drill.sh; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
+out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-hub.py; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
 rm -f "$WORK/corrupt"
-case $out2 in "rc=1 取不到 bin/fleet-drill.sh"*) [ ! -e "$ROOT/bin/fleet-drill.sh" ] && [ -z "$(find "$ROOT/bin" -name '*.fetch.*')" ] \
+case $out2 in "rc=1 取不到 bin/fleet-hub.py"*) [ ! -e "$ROOT/bin/fleet-hub.py" ] && [ -z "$(find "$ROOT/bin" -name '*.fetch.*')" ] \
   && ok "B a fetch that fails its SHA-256 → rc 1, nothing left" || bad "B corrupt fetch left files" ;; *) bad "B corrupt fetch: $out2" ;; esac
-rm -f "$ROOT/bin/fleet-node-join.sh" "$ROOT/bin/fleet-hub-url.sh"
+rm -f "$ROOT/bin/fleet-node-join.sh" "$ROOT/bin/fleet-users.py"
 
 # ── C — a second run adds nothing ───────────────────────────────────────────
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
@@ -816,15 +811,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("X-Ccquota-Sha256", sha)
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        req = self.rfile.read(n)
         open(os.path.join(W, "requests"), "a").write("POST " + self.path + "\n")
-        open(os.path.join(W, "debug-req"), "wb").write(req)
-        if self.path != "/v1/fleet/debug/ticket" or os.path.exists(os.path.join(W, "debug429")):
-            self.send_response(429 if self.path == "/v1/fleet/debug/ticket" else 404); self.end_headers(); return
-        b = b'{"ticket":"fdt1.eyJpZCI6ImR0X3gifQ.c2lnLXRlc3Q","id":"dt_x","by":"anon"}'
-        self.send_response(200); self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+        self.send_response(404); self.end_headers()
 s = HTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(W, "port.tmp"), "w").write(str(s.server_port)); os.rename(os.path.join(W, "port.tmp"), os.path.join(W, "port"))
 s.serve_forever()
@@ -900,43 +888,15 @@ kinstall "$KH5"
 [ "$rc" = 0 ] && echo "$out" | grep -q '静态版校验不符' && [ ! -e "$KH5/.local/share/claude-fleet-vendor/bin/tmux" ] \
   && ok "K a lock archive failing its SHA-256 is not installed (→ the Homebrew hint), exit 0" || bad "K bad lock sum: rc=$rc $out"
 rm -f "$K/novendor" "$K/lock"
-grep -q '^POST ' "$K/requests" && bad "K the feature off (placeholder unfilled) still asked for a debug ticket" \
-  || ok "K debug tickets off → no ticket request (#2891)"
 
-# ── L — the debug ticket the install asks for (#2891) ───────────────────────
-sed -e "s|__FLEET_HUB_URL__|$KHUB|g" -e "s|__FLEET_INVITE__|inv-K2260abc|g" -e "s|__FLEET_DEBUG__|1|g" "$BIN/fleet-install.sh" > "$K/install.sh"
-linstall() {
-  : > "$K/requests"; rm -f "$K/debug-req"
-  out=$(env -i HOME="$1" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FC_BREW_DIRS= FLEET_DEBUG_HWID=hw-L2891 \
-        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_AGENTS=1 sh < "$K/install.sh" 2>&1); rc=$?
-}
-LH="$K/lhome"; mkdir -p "$LH"
-linstall "$LH"
-tk="$LH/.config/claude-fleet/debug-ticket"
-want=$(printf '%s|%s|%s' hw-L2891 "$(id -un)" "$LH/.claude/fleet" | { shasum -a 256 2>/dev/null || sha256sum; } | awk '{print $1}')
-got=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["fp"], d["invite"])' "$K/debug-req" 2>&1)
-[ "$rc" = 0 ] && [ "$(grep -c '^POST /v1/fleet/debug/ticket$' "$K/requests")" = 1 ] && [ "$got" = "$want inv-K2260abc" ] \
-  && ! grep -q hw-L2891 "$K/debug-req" \
-  && ok "L one ticket request: the fingerprint's hash (never the hardware id) + the invitation" || bad "L request: rc=$rc got=$got want=$want $(cat "$K/requests") $out"
-[ "$(cat "$tk" 2>/dev/null)" = fdt1.eyJpZCI6ImR0X3gifQ.c2lnLXRlc3Q ] && [ "$(ls -l "$tk" | cut -c1-10)" = '-rw-------' ] && ! echo "$out" | grep -q fdt1 \
-  && ok "L the ticket kept 0600 at ~/.config/claude-fleet/debug-ticket, never printed" || bad "L ticket file: $(ls -l "$tk" 2>&1) $out"
-linstall "$LH"
-[ "$rc" = 0 ] && ! grep -q '^POST ' "$K/requests" && ok "L a rerun within 12 hours asks for no second ticket" || bad "L rerun asked again: $(cat "$K/requests")"
-# a staged install (fleet-client-update.sh: FLEET_INSTALL_HOME=<temp>) asks over
-# the REAL root, and a ticket with no fingerprint beside it is asked again (#4127)
-rm -f "$LH/.config/claude-fleet/debug-ticket.fp"; : > "$K/requests"; rm -f "$K/debug-req"
-out=$(env -i HOME="$LH" PATH="$KP" SHELL=/bin/zsh TMPDIR="$WORK" FC_BREW_DIRS= FLEET_DEBUG_HWID=hw-L2891 \
-      FLEET_INSTALL_HOME="$K/lstage" FLEET_DEBUG_ROOT="$LH/.claude/fleet" \
-      FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_NO_AGENTS=1 sh < "$K/install.sh" 2>&1); rc=$?
-got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["fp"])' "$K/debug-req" 2>&1)
-[ "$rc" = 0 ] && [ "$got" = "$want" ] && [ "$(cat "$LH/.config/claude-fleet/debug-ticket.fp" 2>/dev/null)" = "$want" ] \
-  && ok "L a staged install fingerprints the real root; a ticket with no .fp is asked again (#4127)" \
-  || bad "L staged: rc=$rc got=$got want=$want $(cat "$K/requests") $out"
-touch "$K/debug429"; LH2="$K/lhome2"; mkdir -p "$LH2"
-linstall "$LH2"; rm -f "$K/debug429"
-[ "$rc" = 0 ] && grep -q '^POST /v1/fleet/debug/ticket$' "$K/requests" && [ ! -e "$LH2/.config/claude-fleet/debug-ticket" ] \
-  && cmp -s "$LH2/.claude/fleet/bin/fleet" "$REPO/bin/fleet" \
-  && ok "L the hub answering 429 → no ticket, the install still done, exit 0" || bad "L 429: rc=$rc $(ls "$LH2/.config/claude-fleet" 2>&1) $out"
+# ── L — no debug ticket any more (#4904) ────────────────────────────────────
+LH="$K/lhome"; mkdir -p "$LH/.config/claude-fleet"
+printf 'fdt1.old\n' > "$LH/.config/claude-fleet/debug-ticket"; printf 'fp\n' > "$LH/.config/claude-fleet/debug-ticket.fp"
+kinstall "$LH"
+[ "$rc" = 0 ] && ! grep -q '^POST ' "$K/requests" && [ ! -e "$LH/.config/claude-fleet/debug-ticket" ] \
+  && [ ! -e "$LH/.config/claude-fleet/debug-ticket.fp" ] \
+  && ok "L an older install's debug ticket is taken out; nothing is asked of the hub" \
+  || bad "L ticket: rc=$rc $(cat "$K/requests") $(ls "$LH/.config/claude-fleet" 2>&1) $out"
 kill "$KHUB_PID" 2>/dev/null
 
 fi

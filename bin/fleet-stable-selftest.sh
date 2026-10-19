@@ -44,6 +44,8 @@
 #                         --ignore-check names is passed over, all green moves
 #   Q. one release line   (issues #4671, #4790) --ref / --seed / --with-stable /
 #                         --macos-timeout are unknown flags (exit 2), nothing pushed
+#   S. no cn gate         (issue #4904) gate 9 is retired: a red `cn path` status
+#                         on the current stable, its issue open, refuses nothing
 #
 # Exit 0 = pass.
 set -uo pipefail
@@ -82,7 +84,6 @@ case "\$*" in
   *'actions/runs?head_sha='*) cat "$WORK/derived" 2>/dev/null ;;
   *actions/runs/*/jobs*) cat "$WORK/jobs" 2>/dev/null ;;
   *'cn path'*) cat "$WORK/cnstatus" 2>/dev/null ;;
-  */issues/*) cat "$WORK/cnissue" 2>/dev/null ;;
   */statuses*) cat "$WORK/statuses" 2>/dev/null ;;
   'workflow run'*) echo "\$*" >> "$WORK/dispatched"; cat "$WORK/dispatch_to" >> "$WORK/macos" 2>/dev/null ;;
   *) cat "$WORK/checks" ;;
@@ -361,47 +362,14 @@ printf '%s\tcompleted\tfailure\tpush\t32\tselftests (macOS)\n' "$C25" > "$WORK/m
 run move "$C25"
 eq "Q: stable moves past a red macOS" 0 "$RC"; eq "Q: stable at C25" "$C25" "$(tag)"
 
-# --- S. gate 9, the China real-user path (issue #4180) -------------------------------------------
-# bin/fleet-cn-probe-watch.sh leaves `cn path` on the stable it walked; red holds stable while
-# the breakage issue it names is open. macOS holds nothing, so only gate 9 decides here.
-green; S25=$(tag)
+# --- S. no cn gate (issue #4904) -------------------------------------------------------------
+# gate 9 left with the China path probe: a red `cn path` status on stable holds nothing.
+green
 C26=$(commit twentysix); push
 printf 'failure\thttps://github.com/o/r/issues/77\t不通：卡在 codex:entry — no answer\n' > "$WORK/cnstatus"
-printf 'open\n' > "$WORK/cnissue"
 run move "$C26"
-eq "S: a red China path on stable refuses" 3 "$RC"; contains "S: reason cn:" "$OUT" "REFUSED — cn:"
-contains "S: names the layer" "$OUT" "卡在 codex:entry"; contains "S: names the issue" "$OUT" "issues/77"
-eq "S: stable untouched" "$S25" "$(tag)"
-run move "$C26" --precheck
-eq "S: --precheck refuses it too" 3 "$RC"; contains "S: precheck reason cn:" "$OUT" "REFUSED — cn:"
-export FLEET_STABLE_CN_GATE=0
-run move "$C26" --dry-run
-eq "S: FLEET_STABLE_CN_GATE=0 turns it off" 0 "$RC"
-unset FLEET_STABLE_CN_GATE
-printf 'closed\n' > "$WORK/cnissue"
-run move "$C26"
-eq "S: its issue closed → the fix ships, stable moves" 0 "$RC"; eq "S: stable at C26" "$C26" "$(tag)"
-contains "S: says the issue is closed" "$OUT" "its issue is closed"
-C27=$(commit twentyseven); push; printf 'open\n' > "$WORK/cnissue"
-OUT=$(FLEET_STABLE_LOG="$WORK/stable-move.log" sh "$ST" move "$C27" --force --dir "$CO" --repo o/r 2>&1); RC=$?
-eq "S: --force moves past a red path" 0 "$RC"
-contains "S: …and logs cn=" "$(cat "$WORK/stable-move.log" 2>/dev/null)" "	cn=the China real-user path is red"
-C28=$(commit twentyeight); push
-printf 'success\t-\t通：自动选 entry\n' > "$WORK/cnstatus"
-run move "$C28"
-eq "S: a green path moves" 0 "$RC"; contains "S: says green" "$OUT" "cn: the China real-user path is green"
-C29=$(commit twentynine); push; : > "$WORK/cnstatus"
-run move "$C29"
-eq "S: no verdict → not gated" 0 "$RC"; contains "S: says no verdict" "$OUT" 'no "cn path" verdict'
-# issue #4663: only the product's red holds — env (an invalid test road) and probe (the probe's
-# own error) are said and pass, with their issue still open
-for cls in '环境无效（cert_expired）：卡在 cert — expired' '检测出错（no_verdict）：卡在 probe — no verdict'; do
-  Cx=$(commit "cls-$cls"); push
-  printf 'failure\thttps://github.com/o/r/issues/78\t%s\n' "$cls" > "$WORK/cnstatus"; printf 'open\n' > "$WORK/cnissue"
-  run move "$Cx"
-  eq "S: a red China path of class ${cls%%（*} moves" 0 "$RC"; eq "S: stable moved (${cls%%（*})" "$Cx" "$(tag)"
-  contains "S: says it is not the product (${cls%%（*})" "$OUT" "not the product"
-done
+eq "S: a red cn path status moves" 0 "$RC"; eq "S: stable at C26" "$C26" "$(tag)"
+case "$OUT" in *'cn:'*) fail "S: the move still speaks of a cn gate: $OUT" ;; esac
 : > "$WORK/cnstatus"
 
 green

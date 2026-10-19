@@ -1018,11 +1018,11 @@ class O_SweepRemoves(Sandbox):
                 d.wait()
 
     def test_runs_script_rule(self):
-        n = "fleet-onboard-drill.sh"
+        n = "fleet-hold-me.sh"
         for cmd in ("/bin/bash /Users/x/.claude/fleet/bin/%s --login t" % n, "/x/bin/%s" % n,
                     "env FOO=1 bash -x /a/%s" % n, "bash -- /a/%s" % n):
             self.assertTrue(fns.runs_script(cmd, n), cmd)
-        for cmd in ("ssh mini %s --help" % n, "pgrep -f onboard-drill", "bash -c %s --help" % n,
+        for cmd in ("ssh mini %s --help" % n, "pgrep -f hold-me", "bash -c %s --help" % n,
                     "zsh -lc /a/%s" % n, "grep %s x" % n, "-zsh", "sshd: heidi@ttys001 %s" % n,
                     "/bin/bash /a/other.sh %s" % n):
             self.assertFalse(fns.runs_script(cmd, n), cmd)

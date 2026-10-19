@@ -4,8 +4,7 @@
 `fleet hub set|get|unset|settings|users|accounts|invite|machines|debug-ticket …` are the
 hub's own settings, people list (claude-fleet#1986), login records
 (claude-fleet#2094), invites (claude-fleet#2261) and machines with their spare
-logins (claude-fleet#2263) and debug tickets (claude-fleet#2891), in
-bin/fleet-hub-admin.py.
+logins (claude-fleet#2263), in bin/fleet-hub-admin.py.
 """
 import os
 import sys

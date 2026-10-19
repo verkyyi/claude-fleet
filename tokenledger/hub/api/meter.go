@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/hub/badge"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 )
 
@@ -20,7 +19,7 @@ import (
 // each window — so a rename here is a rename there:
 //
 //	total         the lifetime total, LifetimeTotals: the one number behind the
-//	              dashboard, the badges and the MCP. Never goes down.
+//	              dashboard and the MCP. Never goes down.
 //	ts            epoch seconds the total was measured at.
 //	windowTokens  how much total grew since the previous measurement …
 //	windowSecs    … and over how many seconds. A difference of two totals,
@@ -29,8 +28,7 @@ import (
 //	ratePerSec    the last six hours' average, tokens per second — only for
 //	              picking which odometer wheel still reads clearly.
 //
-// /odometer.svg is the same figure as `ccquota badge` draws it. Both are behind
-// the hub.public_meter setting (default on); off, both answer 404.
+// It is behind the hub.public_meter setting (default on); off, it answers 404.
 const (
 	// MeterKey switches the public counter: "off" hides it, anything else
 	// (or unset) shows it.
@@ -204,25 +202,4 @@ func (s *Server) handleMeter(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", meterMaxAge)
 	writeJSON(w, http.StatusOK, v)
-}
-
-// handleOdometer draws the same figure as `ccquota badge`: the animated
-// odometer, all time. ?theme / ?style / ?size / ?bg … as on /badge/.
-func (s *Server) handleOdometer(w http.ResponseWriter, r *http.Request) {
-	if !s.publicMeter() {
-		http.NotFound(w, r)
-		return
-	}
-	v, ok := s.meterRead(time.Now())
-	if !ok {
-		w.Header().Set("Cache-Control", "no-store")
-		httpError(w, http.StatusServiceUnavailable, "the counter has not been measured yet")
-		return
-	}
-	turns, _, _, _ := s.counter.Total(s.Store.LifetimeTotals)
-	d := badgeOptions(r)
-	d.Tokens, d.Turns, d.Period = v.Total, turns, "all"
-	w.Header().Set("Cache-Control", badgeMaxAge)
-	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-	_, _ = w.Write(badge.Render(d))
 }

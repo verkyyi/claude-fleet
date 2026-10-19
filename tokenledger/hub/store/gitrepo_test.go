@@ -19,7 +19,9 @@ func repoOf(t *testing.T, s *Store, table, branch string) string {
 }
 
 func evIn(account, endpoint, uuid, branch, repo string) model.UsageEvent {
-	e := evOnBranch(account, endpoint, uuid, branch)
+	e := ev(account, endpoint, uuid, 10)
+	e.GitBranch = branch
+	e.SessionID = branch // keep each branch in its own hourly row
 	e.GitRepo = repo
 	return e
 }
@@ -170,131 +172,5 @@ func TestOpenUpgradesDatabaseWithoutTheRepoColumn(t *testing.T) {
 		if got := repoOf(t, up, table, "issue-57"); got != "" {
 			t.Errorf("%s: upgrade invented %q for a row written before the column", table, got)
 		}
-	}
-	declared, err := up.AnyRepoDeclared()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if declared {
-		t.Error("AnyRepoDeclared on a freshly upgraded hub; nothing has declared yet")
-	}
-}
-
-// AnyRepoDeclared is the switch between the two regimes, so it has to be
-// exactly "has anybody declared", not "has this repo".
-func TestAnyRepoDeclared(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acc", "ep")
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "main", ""),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if declared, err := s.AnyRepoDeclared(); err != nil || declared {
-		t.Fatalf("AnyRepoDeclared = %v, %v; want false with only undeclared spend", declared, err)
-	}
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u2", "issue-57", "frank/tokenledger"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if declared, err := s.AnyRepoDeclared(); err != nil || !declared {
-		t.Fatalf("AnyRepoDeclared = %v, %v; want true once one row declares", declared, err)
-	}
-}
-
-// The three buckets, and the sum a reader is meant to be able to check.
-//
-// Scoping to a repository is a WHERE clause that silently drops two different
-// things — another repository's spend, and spend that declared nothing — and on
-// a half-upgraded fleet the second is most of it. A filter whose discards are
-// invisible reads as "this repository cost nothing".
-func TestRepoDeclaration_PartsSumToTheTotal(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acc", "ep")
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
-		evIn("acc", "ep", "u2", "issue-58", "frank/tokenledger"),
-		evIn("acc", "ep", "u3", "issue-9", "verkyyi/claude-fleet"),
-		evIn("acc", "ep", "u4", "main", ""),
-		evIn("acc", "ep", "u5", "HEAD", ""),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	f := spendWindow()
-	d, err := s.RepoDeclaration(f, "frank/tokenledger")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Scoped.Events != 2 {
-		t.Errorf("scoped = %d events; want 2", d.Scoped.Events)
-	}
-	if d.OtherRepos.Events != 1 {
-		t.Errorf("other_repos = %d events; want 1", d.OtherRepos.Events)
-	}
-	if d.Undeclared.Events != 2 {
-		t.Errorf("undeclared = %d events; want 2", d.Undeclared.Events)
-	}
-	if sum := d.Scoped.Events + d.OtherRepos.Events + d.Undeclared.Events; sum != d.Total.Events {
-		t.Errorf("the parts sum to %d and total says %d", sum, d.Total.Events)
-	}
-	if d.Total.Tokens != d.Scoped.Tokens+d.OtherRepos.Tokens+d.Undeclared.Tokens {
-		t.Error("tokens do not sum")
-	}
-	// Repo is ignored on the incoming filter, on purpose: the whole job is to
-	// measure what scoping WOULD leave out, so it cannot start out scoped.
-	f.Repo = "frank/tokenledger"
-	scoped, err := s.RepoDeclaration(f, "frank/tokenledger")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if scoped.Total.Events != d.Total.Events {
-		t.Errorf("a pre-scoped filter changed the total %d -> %d", d.Total.Events, scoped.Total.Events)
-	}
-}
-
-// Filter.Repo excludes undeclared rows rather than counting them in: "not
-// declared" is not "not this repo", and folding the two together would put one
-// repository's issue #12 on another's money.
-func TestFilterRepoExcludesTheUndeclared(t *testing.T) {
-	s := newStore(t)
-	seedAccount(t, s, "acc", "ep")
-	if _, _, err := s.InsertEvents([]model.UsageEvent{
-		evIn("acc", "ep", "u1", "issue-57", "frank/tokenledger"),
-		evIn("acc", "ep", "u2", "issue-57-b", ""),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	f := spendWindow()
-	f.Repo = "frank/tokenledger"
-	page, err := s.SpendByIssue(f, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(page.Issues) != 1 || page.Issues[0].Number != 57 {
-		t.Fatalf("scoped issues = %+v; want only #57 from the declaring row", page.Issues)
-	}
-	if page.Total.Events != 1 {
-		t.Errorf("scoped total = %d events; the undeclared row was counted in", page.Total.Events)
-	}
-
-	// Lifetime takes the same scope, and needs it more: it spans all history.
-	life, err := s.IssueLifetimeSpend(AllAccounts, "frank/tokenledger", []int64{57})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if life[57].Events != 1 {
-		t.Errorf("scoped lifetime = %d events; want 1", life[57].Events)
-	}
-	// Unscoped, the undeclared turn joins it: `issue-57-b` reads as #57 too, and
-	// with no repository on the row there is nothing to tell the two apart. That
-	// is exactly the blend the scope exists to prevent, and the reason the read
-	// discloses how much spend is still undeclared.
-	all, err := s.IssueLifetimeSpend(AllAccounts, "", []int64{57})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if all[57].Events != 2 {
-		t.Errorf("unscoped lifetime = %d events; want 2, the blend", all[57].Events)
 	}
 }

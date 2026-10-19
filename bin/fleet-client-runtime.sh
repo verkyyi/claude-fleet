@@ -53,7 +53,6 @@
 #                (never answers a real question)
 #   connect      fleet connect --pick <m> and fleet connect <m> hostname
 #   doctor-live  fleet doctor with the certificate (cert · tls rows)
-#   bundle       fleet doctor --bundle <dir>
 #   update-live  fleet update as that login
 #   and two uses no trace takes, written by hand (issue #4826):
 #   agent        the node agent a login starts runs it from the install
@@ -76,7 +75,7 @@ BIN=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$BIN/.." && pwd)
 MANIFEST_DEF="$REPO/tokenledger/hub/api/fleetclient/manifest"
 LIST_DEF="$REPO/conf/client-runtime.list"
-ACTIONS="install help status update doctor login logout host-on view ls show answer connect doctor-live bundle update-live agent dispatch static"
+ACTIONS="install help status update doctor login logout host-on view ls show answer connect doctor-live update-live agent dispatch static"
 
 usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it)$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
@@ -92,8 +91,8 @@ usage() { sed -n '/^#   fleet-client-runtime.sh --check/,/the list (or writes it
 #     fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh
 #     fleet-login-bootstrap.sh fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py
 #     fleet-agent-team.py fleet-daemon-lib.sh fleet-cred-proxy.sh fleet-credsep.sh
-#     fleet-peer-cert.sh fleet-feedback-switch.sh fleet-node-shell-retire.sh
-#     fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh
+#     fleet-peer-cert.sh fleet-node-shell-retire.sh
+#     fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
 #     fleet-node-probe.sh (a managed node's, #4886 — fleet-node.sh tests for it)
 NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_view.py
   tmux-dashboard-rows.sh fleet_thin_lease.py fleet-window-reap.sh fleet-peerlink.py
@@ -101,8 +100,8 @@ NOT_HERE="fleet-hub-sessions.sh fleet-remote-view.sh fleet-quickopen.py fleet_vi
   dash-reap.sh fleet-account.sh fleet-migrate.sh fleet-repo.sh
   fleet-lib.sh fleet-doctor.sh fleet-up.sh fleet-install-sync.sh fleet-login-bootstrap.sh
   fleet-dev-mode.sh fleet-run.sh fleet-agent-bundle.py fleet-agent-team.py fleet-daemon-lib.sh
-  fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh fleet-feedback-switch.sh
-  fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-onboard-clock.sh fleet-control-read.sh
+  fleet-cred-proxy.sh fleet-credsep.sh fleet-peer-cert.sh
+  fleet-node-shell-retire.sh fleet_sidefx.py fleet-browser.sh fleet-control-read.sh
   fleet-node-probe.sh"
 
 check() {
@@ -308,7 +307,7 @@ trace() {
   # its install's version mark, so `start` / `update` ask the hub as they do there
   # (the same version: nothing staged, nothing switched — the check is traced)
   [ -f "$lh/.claude/fleet/.client-version" ] && cp "$lh/.claude/fleet/.client-version" "$ROOT/" && chmod 644 "$ROOT/.client-version"
-  local LW="$W/live"   # what the login itself writes (its bundle, the terminal's screen)
+  local LW="$W/live"   # what the login itself writes (the terminal's screen)
   mkdir -p "$LW"; chown "$live" "$LW"
   local as="runuser -u $live -- env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=$lh USER=$live LANG=C.UTF-8 TERM=xterm-256color FLEET_CLIENT_CHECK_SECS=0"
   st ls $as "$ROOT/bin/fleet" ls
@@ -325,7 +324,6 @@ print((r[0].get("key") or r[0].get("name") or "") if r else "")' 2>/dev/null)
     st connect $as sh -c "'$ROOT/bin/fleet' connect --pick '$machine'; '$ROOT/bin/fleet' connect '$machine' -- hostname"
   fi
   st doctor-live $as "$ROOT/bin/fleet" doctor
-  st bundle $as "$ROOT/bin/fleet" doctor --bundle "$LW/bundle"
   st update-live $as "$ROOT/bin/fleet" update
   # the view: a terminal of its own, a picture dropped on it, then closed
   python3 -c 'import base64,sys; open(sys.argv[1],"wb").write(base64.b64decode(

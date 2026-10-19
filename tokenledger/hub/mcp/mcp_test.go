@@ -113,8 +113,8 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 	if !ok {
 		t.Fatalf("no tools: %v", out)
 	}
-	if len(tools) != 27 {
-		t.Fatalf("tools = %d, want 27", len(tools))
+	if len(tools) != 26 {
+		t.Fatalf("tools = %d, want 26", len(tools))
 	}
 
 	want := map[string]bool{
@@ -129,7 +129,7 @@ func TestToolsList_AllToolsWithCaveats(t *testing.T) {
 		"usage_by_effort": false, "usage_by_entrypoint": false,
 		"usage_history":      false,
 		"get_limits_history": false, "get_user": false,
-		"usage_summary": false, "list_sessions": false, "get_session": false, "get_findings": false,
+		"usage_summary": false, "list_sessions": false, "get_session": false,
 	}
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
@@ -396,7 +396,7 @@ func TestAllToolsAreReadOnly(t *testing.T) {
 	}
 }
 
-// Task 8 adds findings, session listing/detail and a period summary shaped
+// Task 8 adds session listing/detail and a period summary shaped
 // for an agent to call directly rather than reassemble from usage_by_*.
 func TestToolsList_NewToolsPresent(t *testing.T) {
 	ts, _ := newMCP(t)
@@ -407,7 +407,7 @@ func TestToolsList_NewToolsPresent(t *testing.T) {
 	for _, raw := range tools {
 		names[raw.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"usage_summary", "list_sessions", "get_session", "get_findings"} {
+	for _, want := range []string{"usage_summary", "list_sessions", "get_session"} {
 		if !names[want] {
 			t.Errorf("tools/list is missing %q", want)
 		}
@@ -478,52 +478,6 @@ func TestCall_UsageHistoryAndUsageBySurviveAPrune(t *testing.T) {
 	sc = res["structuredContent"].(map[string]any)
 	if buckets, _ := sc["buckets"].([]any); len(buckets) == 0 {
 		t.Fatal("usage_by_endpoint.buckets went to zero after a prune: it must read the rollup, like /v1/usage, not usage_events")
-	}
-}
-
-// get_findings uses the same envelope shape as usage_summary and GET
-// /v1/findings: account_uuid plus the ALIGNED since/until for the review
-// view, and since/until omitted entirely (not null) for the now view.
-func TestCall_GetFindingsEnvelope(t *testing.T) {
-	ts, st := newMCP(t)
-	seed(t, st, "acct-a", "ep-1", "/a", "a1", "a2")
-
-	out := call(t, ts, "get_findings", map[string]any{"account": "acct-a"})
-	res := out["result"].(map[string]any)
-	if res["isError"] == true {
-		t.Fatalf("unexpected error: %v", res)
-	}
-	sc := res["structuredContent"].(map[string]any)
-	if sc["view"] != "review" {
-		t.Errorf("view = %v, want %q", sc["view"], "review")
-	}
-	if sc["account_uuid"] != "acct-a" {
-		t.Errorf("account_uuid = %v, want %q", sc["account_uuid"], "acct-a")
-	}
-	if _, ok := sc["since"]; !ok {
-		t.Error("the review view must carry since")
-	}
-	if _, ok := sc["until"]; !ok {
-		t.Error("the review view must carry until")
-	}
-	if _, ok := sc["findings"].([]any); !ok {
-		t.Errorf("findings must be an array, got %T: %v", sc["findings"], sc["findings"])
-	}
-
-	nowOut := call(t, ts, "get_findings", map[string]any{"account": "acct-a", "view": "now"})
-	res = nowOut["result"].(map[string]any)
-	if res["isError"] == true {
-		t.Fatalf("unexpected error: %v", res)
-	}
-	sc = res["structuredContent"].(map[string]any)
-	if sc["view"] != "now" {
-		t.Errorf("view = %v, want %q", sc["view"], "now")
-	}
-	if _, ok := sc["since"]; ok {
-		t.Errorf("view=now must not carry since, got %v", sc["since"])
-	}
-	if _, ok := sc["until"]; ok {
-		t.Errorf("view=now must not carry until, got %v", sc["until"])
 	}
 }
 

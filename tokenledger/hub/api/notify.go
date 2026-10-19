@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
@@ -742,4 +743,12 @@ func serviceNoticeMsg(sn *store.ServiceNotice, en bool, base string, fields [][2
 		m.Text += "\n" + sn.Link
 	}
 	return m
+}
+
+func clipRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
 }

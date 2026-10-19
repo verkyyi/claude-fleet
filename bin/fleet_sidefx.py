@@ -26,7 +26,7 @@ targets from:
 
 Processes are the target's (`ps` by its uid) whose argv names a path UNDER the
 target's home: <home>/.claude/fleet/ · .claude/fleet.versions/ ·
-.claude/skills/doc-preview/ · .local/share/claude-fleet/ — or, when that
+.local/share/claude-fleet/ — or, when that
 ~/.claude/fleet is a link to <runtime>/current (a managed login, #4669), under
 <runtime>/ — never a bare `/.claude/fleet/` that every login's processes carry.
 
@@ -53,8 +53,7 @@ import sys
 
 LIVE, SANDBOX, REFUSED = "live", "sandbox", "refused"
 EXIT = {LIVE: 0, SANDBOX: 3, REFUSED: 4}
-FLEET_PATHS = (".claude/fleet/", ".claude/fleet.versions/",
-               ".claude/skills/doc-preview/", ".local/share/claude-fleet/")
+FLEET_PATHS = (".claude/fleet/", ".claude/fleet.versions/", ".local/share/claude-fleet/")
 LABEL_RE = re.compile(r"^(com\.claude-fleet\.|com\.ccquota\.)")
 
 

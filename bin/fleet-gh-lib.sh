@@ -200,7 +200,7 @@ fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
 # Local subcommands (`auth token`, `config`, `--version` …) never see the marker.
 # Constants of the layer, not settings: the env overrides exist for the selftests.
 # FLEET_GH_BIN names the gh the layer runs (default `gh` off PATH) — a caller's own
-# test seam (FLEET_CN_PROBE_GH, FLEET_IDLE_DAILY_GH …) hands its fake through it, so
+# test seam hands its fake through it, so
 # the fake still rides the layer (issue #4842).
 fleet_gh_timeout() { case "${FLEET_GH_TIMEOUT:-}" in ''|*[!0-9]*) printf 15 ;; *) printf '%s' "$FLEET_GH_TIMEOUT" ;; esac; }
 fleet_gh_timeout_key() { case "${FLEET_GH_TIMEOUT_KEY:-}" in ''|*[!0-9]*) printf 5 ;; *) printf '%s' "$FLEET_GH_TIMEOUT_KEY" ;; esac; }

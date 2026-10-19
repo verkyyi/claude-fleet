@@ -49,8 +49,6 @@ func main() {
 		err = runEndpoint(os.Args[2:])
 	case "name":
 		err = runName(os.Args[2:])
-	case "badge":
-		err = runBadge(os.Args[2:])
 	case "team":
 		err = runTeam(os.Args[2:])
 	case "svc":
@@ -98,8 +96,6 @@ Usage:
   ccquota endpoint <cmd>    List, retire or delete an enrolled endpoint
                             (list | retire <id> | delete <id>)
   ccquota name   [flags]    List subscriptions, or name one permanently
-  ccquota badge  [flags]    Render this hub's totals as an SVG badge (local,
-                            no network) or as shields.io endpoint JSON
   ccquota team   [flags]    Allocate an endpoint's spend to a team
   ccquota svc    <cmd>      Service principals and their fcs_ tokens: /v1/svc/
                             only, scope by scope (list | create | token issue |
