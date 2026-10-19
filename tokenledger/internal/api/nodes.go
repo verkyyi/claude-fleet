@@ -1018,6 +1018,9 @@ type NodeView struct {
 	// routes every session central.
 	Credsep     string `json:"credsep,omitempty"`
 	CredsepGate string `json:"credsep_gate,omitempty"`
+	// SignIn is set only in /v1/node/self's answer, on a hub with GitHub
+	// sign-in: who a GitHub outage would lock out (claude-fleet#4849).
+	SignIn *SignInCount `json:"signin,omitempty"`
 	// Gate is the login's newest machine half of the public gate
 	// (claude-fleet#3574): conf/public-gate.tsv's where=node rows as
 	// fleet-gate-check.sh --local judged them; absent from an older agent.

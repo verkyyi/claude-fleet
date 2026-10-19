@@ -393,7 +393,28 @@ if [ -r "$_hb_nenv" ]; then
       warn hub "node.env 接着入口 ${_hb_show}，fleet.conf 没写 ${_hb_miss} — fleet 工具（中转 / 可信 / 会话通行证）都以为入口关着；\`bash $(dirname "$0")/fleet-conf.sh migrate\` 补齐（同步时自动跑）"
     fi
   elif [ "$_hb_non" = 1 ]; then
-    pass hub "接着入口 ${_hb_show}（fleet.conf 与 node.env 一致）"
+    # Who a GitHub outage would lock out of the hub (issue #4849): the hub's
+    # own count off /v1/node/self's signin, only where the node token passed;
+    # a hub without GitHub sign-in (or older) says nothing, and so does this.
+    _hb_gh=''
+    if [ "${_tok_lv:-}" = PASS ] && [ -f "$(dirname "$0")/fleet-node-trust.sh" ]; then
+      _hb_gh=$(CCQUOTA_FLEET=1 FLEET_CONF_DIR="$conf_dir" FLEET_HUB_TIMEOUT="${FLEET_HUB_TIMEOUT:-5}" \
+        bash "$(dirname "$0")/fleet-node-trust.sh" self --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    c = (json.load(sys.stdin) or {}).get("signin")
+except (ValueError, AttributeError):
+    c = None
+if isinstance(c, dict):
+    n, a = int(c.get("github_only") or 0), int(c.get("admins_unpinned") or 0)
+    s = " · 只能用 GitHub 登录的人 %d" % n
+    if a:
+        s += "（另有 %d 个管理员名还没钉住 GitHub ID）" % a
+    if n or a:
+        s += " — GitHub 挂了就进不来，让他们在 设置 · 登录方式 加一种"
+    print(s)' 2>/dev/null) || _hb_gh=''
+    fi
+    pass hub "接着入口 ${_hb_show}（fleet.conf 与 node.env 一致）${_hb_gh}"
   fi
 fi
 

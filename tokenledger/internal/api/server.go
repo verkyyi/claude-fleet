@@ -455,6 +455,11 @@ type Server struct {
 
 	// relayExpiredAt is when pending relays were last expired (UnixNano).
 	relayExpiredAt atomic.Int64
+
+	// githubDownAt is when GitHub was last unreachable from a sign-in
+	// (UnixNano, 0 = answering): /signin says so beside its button
+	// (github_down.go, claude-fleet#4849).
+	githubDownAt atomic.Int64
 }
 
 // Handler builds the router.

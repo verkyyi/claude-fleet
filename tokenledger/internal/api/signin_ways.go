@@ -115,7 +115,7 @@ var signinWayNotes = map[string]bool{
 	"wechat": true, "wechat-cancelled": true, "wechat-app": true, "wechat-taken": true,
 	"wechat-expired": true, "wechat-down": true,
 	"email-expired": true, "email-device": true, "email-wrong": true, "email-void": true, "email-slow": true,
-	"email-bad": true,
+	"email-bad": true, "github-down": true, "github-down-email": true, "github-down-wechat": true,
 }
 
 var signinWaysTmpl = template.Must(template.New("signin-ways").Funcs(pageFuncs(i18n.EN)).Parse(authPageHead + `

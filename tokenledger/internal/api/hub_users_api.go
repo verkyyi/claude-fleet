@@ -187,7 +187,14 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, canonical, err := s.githubLookup(r.Context(), login)
+	s.githubSaw(err, now)
 	if err != nil {
+		if githubUnreachable(err) {
+			// Not a dead end (claude-fleet#4849): a mail invite needs no GitHub.
+			httpError(w, http.StatusServiceUnavailable, "GitHub can't be reached to look up "+login+
+				" — GitHub 不通，改用邮箱邀请: POST /v1/fleet/invites {\"email\": …}")
+			return
+		}
 		if strings.Contains(err.Error(), "HTTP 404") {
 			_ = s.Store.HubAudit(actor, "user.add", login, "refused", "no such GitHub user", now)
 			httpError(w, http.StatusBadRequest, "GitHub has no user named "+login+" — nobody was added")

@@ -419,6 +419,7 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 			if _, err := s.Store.PrincipalForLogin(n.Hostname, n.OSUser); err == nil && credsepGated(n.Credsep) {
 				n.CredsepGate = LeaseNotSeparated
 			}
+			n.SignIn = s.signInCount()
 			writeJSON(w, http.StatusOK, n)
 			return
 		}
@@ -427,9 +428,12 @@ func (s *Server) handleNodeSelf(w http.ResponseWriter, r *http.Request) {
 	// trust (claude-fleet#1968) is read off it like the roster does.
 	settings, _ := s.trustSettings(time.Now())
 	trust, src := s.endpointTrust(ep.ID, ep.Hostname, settings)
-	out := map[string]string{"endpoint_id": ep.ID, "status": "never", "trust": trust}
+	out := map[string]any{"endpoint_id": ep.ID, "status": "never", "trust": trust}
 	if src != "" {
 		out["trust_source"] = src
+	}
+	if c := s.signInCount(); c != nil {
+		out["signin"] = c
 	}
 	writeJSON(w, http.StatusOK, out)
 }
