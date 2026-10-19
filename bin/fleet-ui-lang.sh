@@ -1010,6 +1010,10 @@ fleet_ui_t() {
     en:thin_first_settle_timeout_fmt) printf 'the login on %s was opened, but its fleet did not report within %s minutes (%s)' "${1:-}" "${2:-}" "${3:-}" ;;
     zh:thin_path_hint_fmt)      printf '这个终端还找不到 fleet 命令：先敲 exec %s（或开一个新终端），或直接敲 %s' "${1:-zsh}" "${2:-fleet}" ;;
     en:thin_path_hint_fmt)      printf 'this terminal cannot find fleet yet: type exec %s (or open a new terminal), or type %s' "${1:-zsh}" "${2:-fleet}" ;;
+    zh:thin_first_wait_fmt)     printf '第一个会话还开不了（%s）——这会自己好，接着等（最多再等 %s 秒）' "${1:-}" "${2:-}" ;;
+    en:thin_first_wait_fmt)     printf 'your first session cannot open yet (%s) — this heals by itself, waiting (up to %ss more)' "${1:-}" "${2:-}" ;;
+    zh:thin_rehome_back_fmt)    printf '除了 %s 没有别的在线机器，回到它接着重连' "${1:-}" ;;
+    en:thin_rehome_back_fmt)    printf 'no other machine is online: back to %s, reconnecting' "${1:-}" ;;
     zh:thin_first_no_lease_fmt) printf '入口没给这台电脑客户端租约（%s）' "${1:-}" ;;
     en:thin_first_no_lease_fmt) printf 'the hub gave this computer no client lease (%s)' "${1:-}" ;;
     zh:thin_first_timeout_fmt)  printf '等了 %s 分钟，机器还没开好' "${1:-}" ;;

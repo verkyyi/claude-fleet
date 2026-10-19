@@ -21,6 +21,12 @@
 #                           view, the same session — never 换家 to a fresh view
 #   thin-home-down          the home machine down, the hub reachable: 换家 to
 #                           another machine after three failures
+#   thin-home-alone-down    (issue #4829) the home down and no other machine: the
+#                           换家 finds none, the loop goes back to the home and is
+#                           on it again once it is up — never asking forever
+#   thin-first-heals        (issue #4829) no fleet there yet, the hub refuses the
+#                           first session «m1: not ready: creds» three times (the
+#                           machine coming up): waited out, said, then placed
 #   thin-home-login-no-fleet  the person's fleet moved to another login on the
 #                           machine (#3049): the hub's home answer names the
 #                           login with the live fleet (Go tests by name, run when
@@ -110,6 +116,8 @@ while [ \$# -gt 0 ]; do
     --token) token=\$2; shift ;; --device|--route) shift ;;
   esac; shift
 done
+# no fleet of yours yet (thin-first-heals): rc 3 until the first session is placed
+[ -e "$R/empty.\$HOST_NAME" ] && { echo "fleet-remote-view: no fleet session is live on \$HOST_NAME" >&2; exit 3; }
 # the home's tmux restarting (thin-home-restart-new-session): no fleet for N resumes
 n=\$(cat "$R/nofleet.\$HOST_NAME" 2>/dev/null || echo 0)
 if [ -n "\$resume" ] && [ "\$n" -gt 0 ]; then echo \$((n - 1)) > "$R/nofleet.\$HOST_NAME"
@@ -461,6 +469,57 @@ drill_thin_home_down() {
   grep -aq 'rehome' "$R/thin.log" || { WHY="thin.log has no rehome line"; tc_done; return 1; }
   tc_done; wait 2>/dev/null
   WHAT="家机器 m1 停了、入口在：连续 3 次连不上后 ${SECS}s 换到 m2，新的看台（没有 --resume，仍按 --want 打开 s1），thin.log 记了 rehome"
+}
+
+drill_thin_home_alone_down() {
+  CAP=10   # the home back up → on it again within a few backoffs
+  local t0
+  tc_rig
+  # one machine only: a 换家 has nowhere to go
+  printf 'Host m1 fleet-m1 fleet-m1-lan\n  HostName 127.0.0.1\n  User u1\n' > "$R/client/.ssh/fleet-ssh-config"
+  printf 'm1 lan\n' > "$R/client/.config/claude-fleet/routes"
+  ( THIN_ARGS='["--home", "m1", "s1"]' tc_drive ha '[["expect", "VIEW s1 ON m1"], ["linger", 40]]' & ) 2>/dev/null
+  until_ok 10 grep -q 'True' "$R/res.ha" || { WHY="the view never came up: $(cat "$R/res.ha")"; tc_done; return 1; }
+  touch "$R/down.m1"; tc_drop_view
+  until_ok 10 grep -aq 'asking for a home other than m1' "$R/thin.log" \
+    || { WHY="no 换家 asked: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  sleep 2   # the 换家 finds nothing a few times while m1 is still down
+  rm -f "$R/down.m1"; t0=$(now)
+  until_ok "$CAP" sh -c '[ "$(grep -ac "VIEW s1 ON m1" "$1/term.out")" -ge 2 ]' _ "$R" \
+    || { WHY="never back on m1 once it was up: $(tail -n 4 "$R/thin.log" | tr '\t' ' ')"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  grep -aq 'no other home: back to m1' "$R/thin.log" || { WHY="thin.log has no back-to-the-home line"; tc_done; return 1; }
+  grep -aq '除了 m1 没有别的在线机器' "$R/term.out" || { WHY="the screen never said there is no other machine"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="家机器 m1 停了、也没有别的机器：换家找不到就回到 m1（屏幕说「除了 m1 没有别的在线机器，回到它接着重连」），m1 起来后 ${SECS}s 回到 s1"
+}
+
+drill_thin_first_heals() {
+  CAP=12   # three «not ready» refusals 0.3 s apart, then placed and drawn (3 s warm, 8 s cold)
+  local t0
+  tc_rig
+  touch "$R/empty.m1"
+  cat > "$R/place.sh" <<PLACE
+#!/bin/sh
+n=\$(cat "$R/place.n" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$R/place.n"
+if [ \$n -le 3 ]; then
+  printf 'DECLINED -\tNo machine can take a new session now — m1: not ready: creds; m2: 没有你的登录；正在更新（switched）\n'; exit 5
+fi
+rm -f "$R/empty.m1"; printf 'REMOTE m1 x y s1\n'
+PLACE
+  printf '#!/bin/sh\nprintf "active\\tL1\\n"\n' > "$R/lease.sh"
+  chmod +x "$R/place.sh" "$R/lease.sh"; t0=$(now)
+  ( THIN_ARGS='["--home", "m1", "s1"]' FLEET_THIN_FIRST_RETRY=0.3 FLEET_THIN_PLACE_CMD="$R/place.sh" \
+      FLEET_CLIENT_LEASE_CMD="$R/lease.sh" FLEET_THIN_ACCOUNT_CMD="echo {}" \
+      tc_drive fh '[["expect", "VIEW s1 ON m1", 20], ["linger", 2]]' & ) 2>/dev/null
+  until_ok "$CAP" grep -aq 'VIEW s1 ON m1' "$R/term.out" \
+    || { WHY="never placed and drawn: $(tail -n 4 "$R/thin.log" | tr '\t' ' ') / $(tr -d '\r' < "$R/term.out" | tail -n 3)"; tc_done; return 1; }
+  SECS=$(since "$t0")
+  grep -aq '没开出来' "$R/term.out" && { WHY="it told the person the first session did not open"; tc_done; return 1; }
+  grep -aq '这会自己好' "$R/term.out" || { WHY="the screen never said it is waiting for the machine"; tc_done; return 1; }
+  [ "$(cat "$R/place.n")" = 4 ] || { WHY="asked the hub $(cat "$R/place.n") times, not 4"; tc_done; return 1; }
+  tc_done; wait 2>/dev/null
+  WHAT="新人的第一个会话：入口三次说「m1: not ready: creds」（机器在起），客户端说「这会自己好，接着等」，第四次放下去，${SECS}s 画出 s1——不再两次就说没开出来"
 }
 
 drill_thin_home_restart_new_session() {
