@@ -97,7 +97,7 @@ W_a=$(mk_win busy 205); tmux set-window-option -t "$W_a" @claude_state working
 
 # ── B. rows ────────────────────────────────────────────────────────────────────
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
-side=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null | strip)
+side=$(FLEET_SESSION=$S bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null | strip)
 glyph_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3; exit }'; }
 # issue #1328: the sidebar glyph is the bare `z` — the age stays in the dash's
 # act cell (below), where it has a column of its own.

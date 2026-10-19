@@ -478,9 +478,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   are its plugins** (issue #3112, EPIC #3111 C1).
   `.claude-plugin/marketplace.json` lists the core `fleet` (source `./`) and
   `plugins/fleet-epic` · `fleet-browser` · `fleet-feedback` · `fleet-infra`
-  (`plugins/fleet-orchestrate` and `plugins/fleet-steward` are empty 已下架 entries
-  for one version, issues #4340 / #4339 — `fleet-plugins.py`'s `RETIRED`, never
-  defaulted, the doctor says 可卸), each a standard plugin (skills ·
+  (fleet-orchestrate and fleet-steward are gone, issues #4340 / #4339 / #4790),
+  each a standard plugin (skills ·
   commands · agents · hooks/hooks.json · .mcp.json). **Nothing installs them but
   Claude Code's `/plugin`** (`claude plugin install|uninstall|enable|disable`);
   the fleet records nothing — `bin/fleet-plugins.py` is the one reader of `claude
@@ -560,13 +559,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   and `steward.md` are standard agent files shipped into `~/.claude/agents` like
   fleet-worker; a person opens one with `spawn agent:orchestrator|steward` (`--as`,
   above). Its body is the session's system prompt — a compaction or a resume keeps
-  it, so nothing relays a role's state (`bin/fleet-orchestrator-state.py` is a
-  quiet exit-0 shell for one version: a copy of the old plugin still runs it as a
-  hook). The orchestrator's few dispatch rules are written into its template, and
-  nothing else holds any — the `rule` argument of `file_issue` / `task` and `--rule`
-  on `fleet-issue-file.sh` / `fleet-task-record.sh` are accepted and ignored for one
-  version; the old role-taking tool answers 「retired」 (exit 2) for one version
-  (issue #4340). Several orchestrators may run at once; each
+  it, so nothing relays a role's state. The orchestrator's few dispatch rules are
+  written into its template, and nothing else holds any (issue #4340; the `rule`
+  argument and the role-taking tool are gone, #4790). Several orchestrators may run at once; each
   looks after what it dispatched. **The shared parts know no role** (issue #4341, C8):
   a session with no key of its own (no issue, no scratch — a template opened bare, a
   person's no-repo session) answers to its IDENTITY — `fleet_origin_key` /
@@ -584,8 +579,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   open** (issue #3118, EPIC #3111 C7 — it replaced the resident-seat sections of
   #1957 / #2670 / #2671). There is no resident orchestrator or steward: nothing opens,
   reopens, revives or renews one — not fleet-up, not the diskguard tick's
-  `home_watch`, not the hub (`/v1/node/orchestrator` is gone, #3130; an older
-  client's `orch_ensure` answers 「没有编排」 for one version, never a window), and no setting brings one back (FLEET_ORCHESTRATOR,
+  `home_watch`, not the hub (`/v1/node/orchestrator` is gone, #3130; `orch_ensure` too,
+  #4790), and no setting brings one back (FLEET_ORCHESTRATOR,
   FLEET_STEWARD, FLEET_ORCH_*, FLEET_STEWARD_MODEL|EFFORT|CODEX_MODEL|REVIVE_SECS are
   gone). The `bin/fleet-orchestrator.sh` / `bin/fleet-steward.sh`
   launchers are gone (their quiet shells left with #3576). A person who wants the role spawns `agent:orchestrator`

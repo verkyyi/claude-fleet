@@ -24,8 +24,9 @@
 #      parent either ⇒ the person's reminder (one orphan-reports row, the alert once)
 #      — never exit 0 with nobody holding it; two sessions ⇒ ambiguous, exit 1; the
 #      older bare word `orchestrator` is that address for one version.
-#   F  the MCP `send` accepts `to: agent:<name>` and the old word; `parent_window`
-#      accepts an identity and the old word; list_agents keys a keyless row by it.
+#   F  the MCP `send` accepts `to: agent:<name>` (the bare old word is refused,
+#      #4790); `parent_window` accepts an identity; list_agents keys a keyless
+#      row by it.
 # tmux absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -160,8 +161,10 @@ m.run = lambda argv, **kw: (calls.append(argv), type("R", (), {"returncode": 0, 
 m.hub_env = lambda *a, **k: None
 out = m.send_message("agent:orchestrator", "hi")
 assert out["delivered"] and calls[-1][2] == "agent:orchestrator", (out, calls)
-out = m.send_message("orchestrator", "hi")
-assert calls[-1][2] == "agent:orchestrator", calls
+try:
+    m.send_message("orchestrator", "hi"); raise SystemExit("the bare old word accepted")
+except m.Refused:
+    pass
 try:
     m.send_message("agent:", "hi"); raise SystemExit("agent: with no name accepted")
 except m.Refused:
@@ -169,9 +172,8 @@ except m.Refused:
 m.current_session = lambda: "s"
 m.lib = lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "@9", "stderr": ""})()
 m.parent_remote = lambda: ""
-for origin in (sys.argv[2], "orchestrator"):
-    m.origin_option = lambda o=origin: o
-    assert m.parent_window() == "@9", origin
+m.origin_option = lambda: sys.argv[2]
+assert m.parent_window() == "@9"
 row = {"issue": "", "worktree": "", "path": "/home/x", "repo": "", "norepo": "1", "role": "worker", "fleet_id": sys.argv[2]}
 assert m.window_key(row, "acme/app") == sys.argv[2]
 assert m.window_key(dict(row, role="home"), "acme/app") == ""

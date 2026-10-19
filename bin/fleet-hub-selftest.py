@@ -1375,33 +1375,6 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertFalse((self.node.conf / "spawn.calls").exists())
         self.assertIn("worker_start %s failed EXPIRED" % op_id, (self.node.conf / "control" / "ops.log").read_text())
 
-    def test_orch_ensure_answers_no_orchestrator(self):
-        # issue #3118: there is no orchestrating seat to open. An older hub's
-        # orch_ensure (#2616) is still validated, and fails INVALID_STATE
-        # 「没有编排」 without running the adapter — no window, ever.
-        validate_write("orch_ensure", {})
-        with self.assertRaises(Fault):
-            validate_write("orch_ensure", {"session": "x"})
-        real_popen = control.subprocess.Popen
-
-        def no_executor(argv, *args, **kwargs):
-            return MagicMock() if "execute" in argv else real_popen(argv, *args, **kwargs)
-        op_id = str(uuid.uuid4())
-        with patch.object(control.subprocess, "Popen", side_effect=no_executor):
-            self.node.rpc("submit", {"operation_id": op_id, "fleet_id": self.fleet, "action": "orch_ensure",
-                                     "params": {}, "actor": "operator"})
-        real_adapter, calls = self.node.controller.adapter, []
-
-        def adapter(mode, *a, **k):
-            calls.append(mode)
-            return real_adapter(mode, *a, **k)
-        with patch.object(self.node.controller, "adapter", side_effect=adapter):
-            self.node.controller.execute(op_id)
-        got = self.node.rpc("operation_get", {"operation_id": op_id})
-        self.assertEqual((got["status"], got["result"]["error"]["code"]), ("failed", "INVALID_STATE"), got)
-        self.assertIn("没有编排", got["result"]["error"]["message"])
-        self.assertNotIn("orch", calls)
-
     def test_task_record_on_a_start_and_task_issue(self):
         # issue #3325: the hub's task record T<n> rides a new / scratch start
         # (FLEET_CONTROL_TASK to the adapter, never an argv word), and task_issue

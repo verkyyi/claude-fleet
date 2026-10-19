@@ -2961,8 +2961,6 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   FLEET_EGRESS_SOURCES    deploy/k8s/egress — the pod range it serves; unset = nobody
 #   FLEET_RELAY_SITE        extras/cred-relay/Caddyfile — the relay's own host name
 # An unset hub-side key is said once at the hub's start: 「未配置 <键>」.
-# compat-1v (下一批删): a machine of ours pointed at one of the hubs
-# conf/compat-ours.conf names keeps that file's old relay until it sets the key.
 #
 # --- The hub's own settings (issue #3748) -----------------------------------
 # What a self-hosting team sets on its hub (入口): its environment, a k8s

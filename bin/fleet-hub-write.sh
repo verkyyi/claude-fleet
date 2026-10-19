@@ -16,8 +16,7 @@
 #
 #   <tool>       worker_message · worker_stop · worker_resume · worker_answer ·
 #                worker_reap · worker_switch · worker_rename · worker_reap_policy · worker_pin · worker_transfer ·
-#                worker_start · gh_comment · config_set · service_control ·
-#                orch_ensure (issue #2616; answers 「没有编排」 since #3118) — the hub's
+#                worker_start · gh_comment · config_set · service_control — the hub's
 #                write tools; anything else is refused here before a byte goes out.
 #   <json-args>  ONE JSON object: the tool's arguments as docs/dev/FLEET-HUB.md lists
 #                them. `idempotency_key` is added when absent (`--idem`, else a
@@ -77,7 +76,7 @@ _fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 [ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
 
 WRITE_NS="fleet-write@claude-fleet"
-WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control orch_ensure "
+WRITE_TOOLS=" worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control "
 
 usage() { sed -n '/^#   fleet-hub-write.sh <tool>/,/^# nothing was sent/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 note() { [ "$QUIET" = 1 ] || printf 'fleet-hub-write: %s\n' "$*" >&2; }

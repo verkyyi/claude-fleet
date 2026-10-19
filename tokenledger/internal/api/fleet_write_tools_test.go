@@ -405,28 +405,6 @@ func TestFleetWriteSwitch(t *testing.T) {
 	}
 }
 
-// orch_ensure (claude-fleet#2616) is retired (#3118): still a listed write tool
-// under worker:start for one version, so an older client's ⌘N gets an answer —
-// 409 INVALID_STATE 「没有编排」 — and no node is ever sent anything.
-func TestFleetWriteOrchEnsure(t *testing.T) {
-	h, macD, macC, f5, _ := twoNodes(t)
-	if !hasString(FleetTools, "orch_ensure") || !fleetWriteTools["orch_ensure"] || fleetScopeOf["orch_ensure"] != "worker:start" {
-		t.Fatal("orch_ensure must stay a listed write tool under worker:start for one version")
-	}
-	for i, args := range []map[string]any{{"idempotency_key": "o1"}, {"fleet_id": f5.FleetID, "idempotency_key": "o2"}} {
-		out := postFleet(t, h, "orch_ensure", args, 409)
-		if e, _ := out["error"].(map[string]any); e["code"] != "INVALID_STATE" || !strings.Contains(e["message"].(string), "没有编排") {
-			t.Fatalf("orch_ensure #%d = %v; want INVALID_STATE 没有编排", i, out)
-		}
-	}
-	postFleet(t, h, "orch_ensure", map[string]any{"session": "x", "idempotency_key": "bad"}, 400)
-	postFleet(t, h, "orch_ensure", map[string]any{}, 400)
-	time.Sleep(200 * time.Millisecond)
-	if macC.count() != 0 || macD.count() != 0 {
-		t.Fatalf("orch_ensure reached a node (mac-c=%d mac-d=%d)", macC.count(), macD.count())
-	}
-}
-
 // A node acts for its owner by its OWN token (claude-fleet#3106): the steward
 // on mac-d reaps alice's finished worker on mac-c with no connection certificate —
 // mac-d's login and mac-c's are both alice's — and the same request against bob's
@@ -493,7 +471,7 @@ func TestFleetWriteByNodeToken(t *testing.T) {
 	if code, got := post("worker_reap", bobs, t5); code != 404 {
 		t.Fatalf("alice's node reaps bob's worker: HTTP %d %v; want 404", code, got)
 	}
-	for _, tool := range []string{"worker_start", "config_set", "gh_comment", "service_control", "orch_ensure"} {
+	for _, tool := range []string{"worker_start", "config_set", "gh_comment", "service_control"} {
 		if code, got := post(tool, `{"idempotency_key":"x"}`, t5); code != 403 {
 			t.Fatalf("%s by node token: HTTP %d %v; want 403", tool, code, got)
 		}

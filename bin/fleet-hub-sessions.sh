@@ -668,8 +668,7 @@ inputs = [sys.argv[14], user, host, aliases, via, login,
           [(p, digest_file(p)) for p in parent_paths]]
 key = hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()
 outputs = [wpath, str(Path(gdir) / "fleet_logins")] + [str(Path(gdir) / (pre + f["sess"]))
-           for f in local for pre in ("remote_", "epicstale_", "orphanrep_",
-                                     "orch_", "orch_all_", "orch_multi_", "steward_all_", "needs_")]  # compat-1v: 下一批删 (orch_* · steward_all_ · needs_)
+           for f in local for pre in ("remote_", "epicstale_", "orphanrep_")]
 def output_digests():
     return {p: digest_file(p, rows=Path(p).name.startswith("remote_")) for p in outputs}
 try:
@@ -1000,15 +999,6 @@ for f in local:
         except OSError:
             pass
     write(path, "".join(out))
-    # `orch_<sess>` / `orch_all_<sess>` / `orch_multi_<sess>` and the fourth one
-    # were the resident seats' (issues #1957 #2117 #2670); no
-    # such seat exists any more (issue #3118) — an older version's file goes; so
-    # does `needs_<sess>`, the old client's waiting rows (issues #1951, #3008).
-    for pre in ("orch_", "orch_all_", "orch_multi_", "steward_all_", "needs_"):   # compat-1v: 下一批删
-        try:
-            os.remove(os.path.join(gdir, pre + f["sess"]))
-        except OSError:
-            pass
     # The batches nobody drives (issue #1916): `epicstale_<sess>` beside the cache,
     # one line per (machine, EPIC) — `<owner/name>#<N> US <machine> US <online|lost>
     # US <age s> US <title> US <local 1|0>` — off any row of that machine (every

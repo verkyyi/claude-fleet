@@ -84,10 +84,7 @@ var fleetScopeOf = map[string]string{
 	// machine (claude-fleet#2527, EPIC #2524 C3): stop / start / restart /
 	// run now / a new schedule — on their own (machine, login) only.
 	"service_control": "service:control",
-	// An older client's ⌘N asking for the orchestrating session (claude-fleet#2616):
-	// answered 「没有编排」 since #3118, never sent — compat-1v.
-	"orch_ensure": "worker:start",
-	"gh_comment":  "gh:comment",
+	"gh_comment":      "gh:comment",
 	// A task record's 「建 GitHub 单」 (claude-fleet#3325): filing an issue is
 	// a GitHub write of the same weight as a comment.
 	"task_issue":    "gh:comment",
@@ -120,7 +117,7 @@ var (
 	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
 		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
 		"worker_reap_policy": true, "worker_pin": true, "worker_transfer": true, "config_set": true, "gh_comment": true,
-		"service_control": true, "orch_ensure": true}
+		"service_control": true}
 	fleetGHReads = map[string]bool{"gh_issue_view": true, "gh_pr_view": true, "gh_pr_checks": true}
 )
 
@@ -669,13 +666,6 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	case "worker_move_in":
 		w.fleetID, w.params, err = parseMoveIn(args)
 		w.repo, _ = w.params["repo"].(string)
-	case "orch_ensure":
-		// claude-fleet#2616: no arguments but the key and, optionally, the fleet.
-		// Nothing is ever sent (#3118): there is no seat to open.
-		if err = checkFields(args, []string{"idempotency_key"}, "fleet_id"); err != nil {
-			break
-		}
-		w.fleetID, _ = args["fleet_id"].(string)
 	case "task_issue":
 		// claude-fleet#3325: 「建 GitHub 单」 on a task record — the node files
 		// the issue in repo (the one filer channel) and, when the task's
@@ -924,10 +914,6 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		if target, err = s.serviceTarget(p, *w.svc); err != nil {
 			return nil, err
 		}
-	case tool == "orch_ensure":
-		// An older client's ⌘N (claude-fleet#3118): there is no orchestrating
-		// seat; compat-1v.
-		return nil, fault("INVALID_STATE", "没有编排：入口不再开编排会话；起一个编排会话（spawn agent:orchestrator）")
 	case w.fleetID != "":
 		if target, err = s.visibleFleet(p, w.fleetID); err != nil {
 			return nil, err

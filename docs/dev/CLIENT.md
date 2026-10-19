@@ -21,13 +21,12 @@ action. On the ⚡ row, ↵ or Tab opens the editor: write a task, then choose
 shell or switch sessions. The current panel's steps and row actions are in
 [日常使用](../public/zh/member/usage.md#一个键总面板).
 
-**The keys that went (issue #3328, EPIC #3178 ⑤ — kept one version):** ⌘↓ ⌘↑ ⌘[
-⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet for this one version:
-each opens the panel (a new task / blank session lit on ⚡) and says
-「… 已并进 ⌘P」 the first time. `fleet doctor`'s `oldkeys` row counts how often they
-were still pressed (`logs/view-switch.ndjson`, `how=old:<action>`). The next
-version drops them and they are iTerm2's own again. The orchestrator's old quick
-dispatch went the same way: an old session's dialog says so and sends through ⌘P's ⚡.
+**The keys that went (issue #3328, EPIC #3178 ⑤ — kept for good, #4790):** ⌘↓ ⌘↑ ⌘[
+⌘] ⌘N ⌘K ⌘Q ⌃\ and the old popup's key still reach fleet: each opens the panel (a
+new task / blank session lit on ⚡) and says 「… 已并进 ⌘P」 the first time.
+`fleet doctor`'s `oldkeys` row counts how often they are still pressed
+(`logs/view-switch.ndjson`, `how=old:<action>`). They stay fleet's: given back to
+iTerm2, ⌘Q would quit it.
 
 Want an old key back, or a different one? One line in `fleet.conf`
 (`~/.config/claude-fleet/fleet.conf`; `bin/fleet_keys.py` reads it) — a key you

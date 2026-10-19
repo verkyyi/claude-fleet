@@ -481,7 +481,8 @@ grep -q "ignored FLEET_CRED_ANTHROPIC_URL from $C/fleet.conf" "$SB/launch.err" &
   || fail "L ignored note: $(cat "$SB/launch.err" "$SR/ignored.$ME" 2>&1)"
 cp "$SB/node.env.keep" "$R/node.env"
 # install --adopt: root takes the login's values — an https URL to an allowed host only
-OLDHUB=https://ccquota.24haowan.com  # oss-ok: fleet_compat.py 一版兼容的旧主机，随它删（#3577）
+OLDHUB=https://hub.example.com
+printf 'FLEET_CRED_ALLOW_HOSTS=hub.example.com\n' >> "$SB/lib/$ME.conf"   # root's own word allows it
 printf 'FLEET_HUB_URL=%s\nFLEET_CRED_RELAY_URL=https://evil.example/relay\nFLEET_CRED_ALLOW_HOSTS=evil.example\n' "$OLDHUB" > "$C/fleet.conf"
 out=$(bash "$BIN/fleet-credsep.sh" install --adopt 2>&1); rc=$?
 if [ "$rc" = 0 ] && grep -qx "FLEET_HUB_URL=$OLDHUB" "$SB/lib/$ME.conf" \

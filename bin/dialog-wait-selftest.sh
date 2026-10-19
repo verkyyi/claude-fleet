@@ -9,7 +9,7 @@
 #      stopped ⇒ looping again
 #   C  the channel (bin/fleet_dialog_answer.py → bin/fleet-answer.sh) against a fake
 #      dialog in an isolated tmux: answered + confirmed + the trail (the answer log
-#      代答记录, record-only comment); `--by steward` is read as session (one version); a fingerprint that differs ⇒ 3, nothing pressed; a label
+#      代答记录, record-only comment); a fingerprint that differs ⇒ 3, nothing pressed; a label
 #      not among the options ⇒ 3; a draft in the input box ⇒ 5, nothing pressed; a
 #      press never confirmed ⇒ 4 and exactly ONE key reached the pane
 #   G  hooks/bash-guard.py still refuses a raw `tmux send-keys` into a fleet and
@@ -162,12 +162,12 @@ CH "$W" --fp 0000000000000000 --pick 等发起人; rc=$?
 CH "$W" --fp "$FP" --pick 'Type something'; rc=$?
 [ "$rc" = 3 ] && [ ! -s "$WORK/keys.c1" ] && ok "C: a label not among the options (free text) ⇒ 3, nothing pressed" \
   || bad "C: free text rc=$rc $(cat "$WORK/ch.err")"
-CH "$W" --fp "$FP" --pick 等发起人 --by steward --basis '章程第 3 条'; rc=$?
+CH "$W" --fp "$FP" --pick 等发起人 --by session --basis '章程第 3 条'; rc=$?
 DEC="$FLEET_CONF_DIR/fleets/st/answers/answers-$(date +%F).md"
 [ "$rc" = 0 ] && grep -q '等发起人' "$CTP" && [ "$(grep -c . "$WORK/keys.c1")" = 1 ] \
   && grep -q '会话按章程代答（章程第 3 条）.*选「等发起人」' "$DEC" 2>/dev/null \
   && grep -q '^>>> o/r#2482 note' "$ST_GH/posts.log" && grep -q 'fleet:dialog-answer by=session' "$ST_GH/posts.log" \
-  && ok "C: answered + confirmed in the transcript, one key; the trail in answers-<day>.md and on the batch issue (steward ⇒ session)" \
+  && ok "C: answered + confirmed in the transcript, one key; the trail in answers-<day>.md and on the batch issue" \
   || bad "C: answer rc=$rc keys=$(cat "$WORK/keys.c1" 2>/dev/null | tr '\n' ' ') err=$(cat "$WORK/ch.err") dec=$(cat "$DEC" 2>/dev/null)"
 CH "$W" --fp "$FP" --pick 等发起人; rc=$?
 [ "$rc" = 3 ] && ok "C: the same dialog again (already answered) ⇒ 3" || bad "C: re-answer rc=$rc"

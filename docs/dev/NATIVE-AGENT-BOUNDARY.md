@@ -857,7 +857,7 @@ python3 bin/fleet-native-plugin-cli-selftest.py --codex /path/to/codex
 
 `fleet-orchestrate` 曾带一份 Codex 原生包，并用 `fleet-native-plugin-cli-selftest.py --package` /
 `--package-role` 验收真实包加载与角色链路。编排改成普通会话模板（`spawn agent:orchestrator`，#4340）后，
-插件只剩一版空的已下架条目，角色脚本与这两种验收方式一并删除；没有角色要接，
+插件条目、角色脚本与这两种验收方式一并删除（#4790 删掉了最后的空条目）；没有角色要接，
 Codex 会话也只用原生历史/压缩和 `children` 取当前业务状态。
 
 ### 原生 hook 信任与实际执行

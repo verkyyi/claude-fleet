@@ -12,7 +12,7 @@
 #                  (an older adapter) has no `title`, every other field as before
 #   C. cache     — fleet-hub-sessions.sh --refresh appends `title` as field 17 of
 #                  a remote_<sess> row; a worker without one keeps its 16 fields
-#   D. sidebar   — tmux-dashboard-rows.sh --sidebar: field 14 = the title, for a
+#   D. sidebar   — tmux-dashboard-rows.sh --rows: field 14 = the title, for a
 #                  local row (this machine's issue cache) and a remote one (cache
 #                  field 17); field 13 stays empty when cfg is unknown; a row with
 #                  no title is byte for byte what it was with no issue cache at all
@@ -227,11 +227,6 @@ p, x = inventory_row(full + bus + ["agentstatus=nope"])
 assert "status_kind" not in x and x["model"] == "Opus 5.5", x
 p, x = inventory_row(full + bus + ["agentstatus="])
 assert "status_msg" not in x and x["ctx_band"] == "ok", x
-# an older node's columns 31-37 (issue #3118) are dropped unread, the row as before
-p, x = inventory_row(full + bus + ["agentstatus=", "test=", "orchq=2"])
-assert "orch_queue" not in x and (x["ctx_band"], x["title"]) == ("ok", "t") and "test" not in x, x
-p, x = inventory_row(full + bus + ["agentstatus=", "test=1", "orchq=", "orchdec=2", "orchpark=1", "orchpage=https://p/d/"])
-assert not any(k.startswith("orch_") for k in x) and x["test"] is True and x["model"] == "Opus 5.5", x
 # column 31 (issue #3369): orphanrep= → orphan_reports, after test=; junk dropped
 OR = "aaaaaaaaaaaa\x1f1800000000\x1fo/r\x1fissue-41\x1fMERGED\x1f12\x1flanded it\x1ejunk\x1ebbbbbbbbbbbb\x1f1\x1f\x1fissue-9\x1fBOGUS\x1f\x1fx"
 p, x = inventory_row(full + bus + ["agentstatus=", "test=1", "orphanrep=" + OR])
@@ -313,7 +308,7 @@ SHIMPATH="$WORK/bin:$PATH"
 # w <idx> <name> <window_id> <issue>
 w() { printf '%s\n' "$S$US$1$US$2$US/w/app-$2${US}done$US$US$3$US$4$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US$US${1}000$US" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
-side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip; }
+side() { PATH="$SHIMPATH" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip; }
 fld() { printf '%s\n' "$1" | LC_ALL=C awk -F"$US" -v n="$2" -v k="$3" '$4 == n { print (NF >= k ? $k : "-") }'; }
 : > "$WLIST_FILE"
 w 1 fix-sidebar-slug @1 7

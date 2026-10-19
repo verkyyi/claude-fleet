@@ -226,9 +226,7 @@ case "$mode" in
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
-    # Columns 31-37 (orchq= · orchdec= · orchtodo= · orchpark= · orchpage= ·
-    # orchparkl= · orchtodol=) were the resident seats' (issues #2617 #2670 #2672
-    # #2671 #2735 #2913); gone with the seat (issue #3118). Column 31 (issue #3369): `orphanrep=` — the results of sessions
+    # Column 31 (issue #3369): `orphanrep=` — the results of sessions
     # whose spawner was gone, filed for the person (global/orphan-reports.ndjson,
     # fleet-report-parent.sh) and not read yet: bin/fleet-orphan-reports.py cell —
     # `id\037ts\037repo\037child\037state\037pr\037summary`, \036-joined, at most
@@ -807,13 +805,6 @@ case "$mode" in
     [ -n "$(tmux -L "$tsock" show-options -wqv -t "$twin" @issue 2>/dev/null)" ] && exit 0
     tmux -L "$tsock" set-option -w -t "$twin" @repo "$trepo" \; set-option -w -t "$twin" @issue "${url##*/}" 2>/dev/null
     exit 0
-    ;;
-  # --- orch <sess> (issue #2616): an older hub's orch_ensure. There is no
-  # orchestrating seat to open any more (issue #3118): answer 3 (off) with one
-  # line, never a window. # compat-1v: 下一批删
-  orch)
-    echo "没有编排：起一个编排会话（spawn agent:orchestrator）" >&2   # compat-1v: 下一批删
-    exit 3
     ;;
   stop)
     fleet_load_conf "$sess"

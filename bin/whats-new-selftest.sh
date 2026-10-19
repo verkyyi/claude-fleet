@@ -9,8 +9,7 @@
 #   B. unrelated — a range of internal commits only: ONE summary line
 #   C. overflow  — more relevant changes than fit: still ≤ 5 lines, 「看全部」
 #   D. rollback / unknown sha — one line each
-#   E. old hook  — old tables can still call --hook: exit 0, no output or stamp,
-#                  even after a version move; --full still reads the session version
+#   E. full      — --full reads the session's launch version and the expected one
 #   F. degenerate — no `ver` line expected, or the same version ⇒ no output, no stamp
 #   G. wiring    — Claude and Codex carry no whats-new hook; where/refocus stay
 #   H. tool      — fleet-mcp.py lists whats_new and runs `fleet-whats-new.sh --full`
@@ -101,33 +100,15 @@ out=$("$WN" deadbeefcafe "$V3")
 has "D: unknown sha" "$out" "看不到变化明细"
 "$WN" "$V3" "$V3" >/dev/null; eq "D: same version → exit 1" 1 "$?"
 
-# --- E: the hook on an isolated server ----------------------------------------
+# --- E: --full on an isolated server -------------------------------------------
 printf '#!/bin/sh\nexec "%s" -L "%s" "$@"\n' "$REAL_TMUX" "$S" > "$WORK/shim/tmux"; chmod +x "$WORK/shim/tmux"
 "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s t -n w1 'sleep 600'
-"$REAL_TMUX" -L "$S" new-window -d -t t -n w2 'sleep 600'
 P1=$("$REAL_TMUX" -L "$S" display-message -p -t t:w1 '#{pane_id}')
-P2=$("$REAL_TMUX" -L "$S" display-message -p -t t:w2 '#{pane_id}')
 opt() { "$REAL_TMUX" -L "$S" show-options -wqv -t "$1" "$2"; }
-hook() { printf '{"hook_event_name":"UserPromptSubmit","prompt":"go"}' | PATH="$WORK/shim:$PATH" TMUX="x" TMUX_PANE="$1" "$WN" --hook; }
 printf 'claude aaa default:x\nver %s\n' "$V6" > "$EXP"
 "$REAL_TMUX" -L "$S" set-option -w -t "$P1" @agent_ver "$V0"
-out=$(hook "$P1" 2>&1); rc=$?
-eq "E: hook exit" 0 "$rc"
-eq "E: old hook is silent after a version move" "" "$out"
-eq "E: no stamp written" "" "$(opt "$P1" @ver_told)"
-eq "E: the next turn says nothing" "" "$(hook "$P1")"
 out=$(PATH="$WORK/shim:$PATH" TMUX=x TMUX_PANE="$P1" "$WN" --full)
-has "E: on-demand full output still reads launch/expected versions" "$out" "fleet 已从 ${V0:0:7} 更新到 ${V6:0:7}"
-"$REAL_TMUX" -L "$S" set-option -w -t "$P1" @ver_told "$V6"
-printf 'claude aaa default:x\nver %s\n' "$V9" > "$EXP"
-out=$(hook "$P1" 2>&1); rc=$?
-eq "E: next version hook exit" 0 "$rc"
-eq "E: another version move stays silent" "" "$out"
-eq "E: old stamp left untouched" "$V6" "$(opt "$P1" @ver_told)"
-eq "E: no stamps → nothing said" "" "$(hook "$P2")"
-eq "E: no baseline written" "" "$(opt "$P2" @ver_told)"
-"$REAL_TMUX" -L "$S" set-option -wu -t "$P1" @ver_told
-eq "E: no pane → nothing" "" "$(hook "")"
+has "E: on-demand full output reads launch/expected versions" "$out" "fleet 已从 ${V0:0:7} 更新到 ${V6:0:7}"
 
 # --- F: degenerate ------------------------------------------------------------
 printf 'claude aaa default:x\ncodex bbb default:y\n' > "$EXP"

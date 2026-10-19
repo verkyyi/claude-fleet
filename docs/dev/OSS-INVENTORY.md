@@ -182,7 +182,6 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `bin/fleet-peer-cert-selftest.sh` | — | — | allow |
 | `bin/fleet-peerlink-selftest.sh` | — | — | allow |
 | `bin/oss-scan-selftest.sh` | — | — | allow |
-| `conf/compat-ours.conf` | — | — | allow |
 | `conf/oss-scan.allow` | — | — | allow |
 | `conf/oss-scan.rules` | — | — | allow |
 | `deploy/k8s/RUNBOOK.md` | — | — | allow |

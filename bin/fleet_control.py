@@ -963,10 +963,6 @@ class Control:
                 if code or not re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/issues/[1-9][0-9]*", url):
                     raise Fault("EXECUTION_FAILED", "The issue was not filed: " + last_line(err if (err or b"").strip() else output))
                 result = {"issue_url": url, "observed_at": now()}
-            elif req["action"] == "orch_ensure":
-                # issue #2616's ⌘N from an older hub: there is no orchestrating
-                # seat to open any more (issue #3118) — compat-1v: 下一批删
-                raise Unattempted("INVALID_STATE", "没有编排：起一个编排会话（spawn agent:orchestrator）")  # compat-1v: 下一批删
             elif req["action"] == "worker_start":
                 # No --force, arbitrary argv, paths, environment or shell input.
                 attempted = True

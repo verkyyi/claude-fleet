@@ -8,8 +8,6 @@
 #                                      every relevant change, no line cap; with no
 #                                      <old>, THIS session's launch version
 #                                      (@agent_ver) → the current one (fleet.whats_new)
-#   fleet-whats-new.sh --hook          retired hook: reads stdin, exits 0 silently
-#                                      for sessions carrying an old hook table
 #
 # The current version is the `ver` line of agent-cfg.expected (issue #1895, C2:
 # the sha ~/.claude/fleet points at); a session's own is @agent_ver, stamped by
@@ -17,7 +15,6 @@
 # The whats_new tool calls --full when the agent asks for the changes.
 #
 # Exit: 0 printed · 1 nothing to say (same version / no version) · 2 usage.
-# --hook always exits 0 — a prompt is never blocked by it.
 
 BIN=$(cd "$(dirname "$0")" && pwd -P)
 ROOT=$(cd "$BIN/.." && pwd -P)
@@ -143,10 +140,6 @@ PY
 }
 
 case "${1:-}" in
-  --hook)
-    # compat-1v: 下一批删 — old sessions still carry this UserPromptSubmit entry.
-    cat >/dev/null 2>&1      # the hook's stdin JSON: read, unused
-    exit 0 ;;
   --full)
     shift
     old=${1:-}; new=${2:-}

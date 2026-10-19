@@ -7,7 +7,7 @@
 #   A. 7501 → sidebar — a real isolated tmux socket: an OSC 7501
 #                  `state=blocked:kind=question:msg=<b64>` record, decoded by
 #                  fleet-status-7501.py and written by set-claude-state.sh
-#                  --via 7501, comes out of tmux-dashboard-rows.sh --sidebar as
+#                  --via 7501, comes out of tmux-dashboard-rows.sh --rows as
 #                  fields 17-18 (question · its words); `kind=auth` stamps the
 #                  `auth` subtype; a working row has no fields 17-18 (byte for
 #                  byte as before)
@@ -77,7 +77,7 @@ PY
   eq "A: the window reads needs/ask with the question" "needs|ask|$Q" \
      "$(T display-message -p -t "=$S:asking" '#{@claude_state}|#{@claude_needs}|#{@claude_needs_detail}')"
   eq "A: kind=auth stamps its own subtype" "needs|auth" "$(T display-message -p -t "=$S:login" '#{@claude_state}|#{@claude_needs}')"
-  SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
+  SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
   eq "A: the asking row's field 17 is its kind" "question" "$(fld "$SIDE" asking 17)"
   eq "A: …field 18 its words" "$Q" "$(fld "$SIDE" asking 18)"
   eq "A: a login request says auth" "auth|/login" "$(fld "$SIDE" login 17)|$(fld "$SIDE" login 18)"
@@ -119,7 +119,7 @@ eq "C: a row not in needs carries no words" "16|||" "$(crow issue-33)"
 eq "C: beside a measured bus, the bus is kept" "28|40|question|哪一个？" "$(crow issue-34)"
 if [ -n "$REAL_TMUX" ]; then
   NOW=$(date +%s); printf '%s\n' "$NOW" > "$G/hub_ok"
-  S2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --sidebar 2>"$WORK/err" | strip)
+  S2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
   eq "C: a remote needs row's sidebar fields 17-18" "permission|Bash: git push" "$(fld "$S2" RP 17)|$(fld "$S2" RP 18)"
   eq "C: a remote working row has none" "-" "$(fld "$S2" RW 17)"
 fi

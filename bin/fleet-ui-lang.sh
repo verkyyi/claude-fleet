@@ -415,9 +415,9 @@ fleet_ui_t() {
     en:view_reap_keep) printf 'never closed by itself' ;;
     zh:view_far_fmt) printf '%s 这台还没接上' "${1:-}" ;;
     en:view_far_fmt) printf '%s is not connected yet' "${1:-}" ;;
-    # the keys issue #3328 took away (compat-1v: 下一批删): what a forwarded one says, once
-    zh:view_forward_fmt) printf '%s 已并进 ⌘P —— 下一版这个键就不管用了' "${1:-}" ;;
-    en:view_forward_fmt) printf '%s is part of ⌘P now — the next version drops this key' "${1:-}" ;;
+    # the keys issue #3328 folded into ⌘P: what a forwarded one says, once
+    zh:view_forward_fmt) printf '%s 已并进 ⌘P' "${1:-}" ;;
+    en:view_forward_fmt) printf '%s is part of ⌘P now' "${1:-}" ;;
     zh:view_keys_moved) printf '快捷键只剩 ⌘P：翻会话、新任务、shell、退出都在里面（⌘↑↓ ⌘[ ⌘] ⌘T ⌘N 下一版删）' ;;
     en:view_keys_moved) printf 'One key now, ⌘P: switching sessions, a new task, a shell, quit are all in it (⌘↑↓ ⌘[ ⌘] ⌘T ⌘N go next version)' ;;
     zh:view_gone) printf '这个会话已经不在了' ;;
@@ -1049,34 +1049,6 @@ fleet_ui_t() {
     en:desk_body_fmt)           printf '%s\n\nOpened by: %s\n\nThe ticket of a task with no code to change (a design page, research, a release): the session is bound to it, with no workspace. A comment here reaches the session.' "${1:-}" "${2:-}" ;;
     zh:desk_seed_note_fmt)      printf '（这个会话的单子是 %s：进展、证据和结论都写回这张单——fleet 的 comment / evidence 工具会自动落到它上面；单上的评论会作为你的下一轮送到。）' "${1:-}" ;;
     en:desk_seed_note_fmt)      printf '(This session'"'"'s ticket is %s: write progress, evidence and the outcome back to it — the fleet comment / evidence tools land on it by themselves; a comment on it arrives as your next turn.)' "${1:-}" ;;
-    # quick dispatch — the mod's /qd dialog (issue #2618, EPIC #2615 C3)
-    zh:qd_title)                printf '快速派发' ;;
-    en:qd_title)                printf 'Quick dispatch' ;;
-    zh:qd_desc)                 printf '已并进 ⌘P（这一版还能用，下一版删）' ;;
-    en:qd_desc)                 printf 'now part of ⌘P (works this version, gone in the next)' ;;
-    zh:qd_field_title)          printf '标题' ;;
-    en:qd_field_title)          printf 'Title' ;;
-    zh:qd_field_repo)           printf '仓库' ;;
-    en:qd_field_repo)           printf 'Repo' ;;
-    zh:qd_placeholder)          printf '这件事是干什么用的（≤ 20 字）' ;;
-    en:qd_placeholder)          printf 'what it is for, in one line' ;;
-    zh:qd_submit)               printf '建单开工' ;;
-    en:qd_submit)               printf 'file + start' ;;
-    zh:qd_hint)                 printf '↵ 派出（和 ⌘P 的 ⚡ 一样） · Esc 关闭' ;;
-    en:qd_hint)                 printf 'Enter sends (as ⌘P\x27s ⚡ does) · Esc closes' ;;
-    zh:qd_empty)                printf '标题是空的：写一句这件事是干什么用的' ;;
-    en:qd_empty)                printf 'the title is empty: say in one line what it is for' ;;
-    zh:qd_norepo)               printf '读不到这个 fleet 托管的仓库' ;;
-    en:qd_norepo)               printf 'could not read the repos this fleet hosts' ;;
-    zh:qd_sending)              printf '派单中…' ;;
-    # /qd retired by issue #3328 (compat-1v: 下一批删, with every qd_ key)
-    zh:qd_moved)                printf '/qd 已并进 ⌘P：在 ⌘P 里直接写这件事，↵ 就派出；下一版 /qd 就没有了' ;;
-    en:qd_moved)                printf '/qd is part of ⌘P now: type the task in ⌘P and press Enter; the next version drops /qd' ;;
-    en:qd_sending)              printf 'sending…' ;;
-    zh:qd_done_fmt)             printf '已建 #%s 并开工' "${1:-}" ;;
-    en:qd_done_fmt)             printf 'filed #%s and started its worker' "${1:-}" ;;
-    zh:qd_failed_fmt)           printf '没派出去：%s' "${1:-}" ;;
-    en:qd_failed_fmt)           printf 'not dispatched: %s' "${1:-}" ;;
     zh:compose_sent_fmt)        printf '已发出：%s · 开工中…' "${1:-}" ;;
     en:compose_sent_fmt)        printf 'sent: %s · starting…' "${1:-}" ;;
     zh:compose_empty)           printf '先写一行再 ↵' ;;

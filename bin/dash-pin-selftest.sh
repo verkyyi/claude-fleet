@@ -162,7 +162,7 @@ not_contains "baseline: nothing is marked" "$base_out" "📌"
 not_contains "baseline: no 置顶 heading without a pin" "$base_out" "置顶"
 not_contains "baseline: no rule without a pin" "$base_out" "─"
 base_raw=$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null)
-base_side=$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)
+base_side=$(FLEET_SESSION=fleetP bash "$ROWS" --rows 2>/dev/null)
 
 # --- B1. a pin beats the status rank -----------------------------------------
 # pB goes RED (needs, rank 0) — it would normally head the list. pA is idle
@@ -190,7 +190,7 @@ eq "the heading is inert (hdr keys) and folds as \`pin\`" "hdr hdr pin" \
 rule_raw=$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null | grep '───')
 eq "the rule is an inert hdr row with no 4th field" "hdr hdr 3" \
   "$(printf '%s' "$rule_raw" | awk -F"$US" '{print $1, $2, NF}')"
-side=$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)
+side=$(FLEET_SESSION=fleetP bash "$ROWS" --rows 2>/dev/null)
 eq "sidebar: 置顶 heading first, keyed hdr:pin" "hdr pin 置顶 (3)" \
   "$(printf '%s\n' "$side" | sed -n 1p | awk -F"$US" '{print $1, $2, $4}')"
 eq "sidebar: the pinned row's label opens with its name (no \`* \`)" "pA|0/2" \
@@ -252,7 +252,7 @@ not_contains "unpinning removes the mark" "$after_out" "📌"
 eq "no pin ⇒ the list is byte-identical to before (hub)" "$base_raw" \
   "$(FLEET_SESSION=fleetP FZF_COLUMNS=180 bash "$ROWS" 2>/dev/null)"
 eq "no pin ⇒ the sidebar is byte-identical to before" "$base_side" \
-  "$(FLEET_SESSION=fleetP bash "$ROWS" --sidebar 2>/dev/null)"
+  "$(FLEET_SESSION=fleetP bash "$ROWS" --rows 2>/dev/null)"
 eq "unpinning leaves no @pin option behind" "" \
   "$(opt "$W_pA")$(opt "$W_pB")$(opt "$W_cA")$(opt "$W_cB")$(opt "$W_gA")"
 # closing a pinned window takes its pin with it — the option lives on the window.

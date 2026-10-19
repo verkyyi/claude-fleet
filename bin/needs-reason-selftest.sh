@@ -248,7 +248,7 @@ for idx in 1 2 3 5; do
 done
 # The sidebar carries the kind in its detail field (the 8th), for the selected
 # row's line under the list.
-side=$(FLEET_SESSION="$SESS" bash "$ROWS" --sidebar 2>&1)
+side=$(FLEET_SESSION="$SESS" bash "$ROWS" --rows 2>&1)
 det_of() { printf '%s\n' "$side" | awk -F"$US" -v w="$1" '$1 == w { print $3 "|" $8; exit }'; }
 has "sidebar: ask → ! + its detail"     "$(det_of @1)" "!|$(fleet_ui_t needs_ask)"
 has "sidebar: perm → ! + its detail"    "$(det_of @2)" "!|$(fleet_ui_t needs_perm)"

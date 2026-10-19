@@ -2162,8 +2162,8 @@ def key_lines(me, extra=None, browser=False):
     for chord in fleet_keys.phone():                          # ⌃空格 · F12 · ⌃] p
         bind_chord(chord, "quickopen")
     carried = key_extra() if extra is None else extra
-    # the keys issue #3328 took away, one version long: the panel + a one-time hint,
-    # unless the person bound that chord (an extra below wins it). compat-1v: 下一批删
+    # the keys issue #3328 folded into ⌘P: the panel + a one-time hint, unless the
+    # person bound that chord (an extra below wins it)
     for action, chord, _, code in fleet_keys.forwards(carried):
         if fleet_keys.is_cmd(chord):
             bind("fleet-view", "User%s" % code if code else "", "quickopen", action)
@@ -3082,8 +3082,8 @@ def panel_key(screen, timeout_ms, completed=None, inputs=None):
 
 # --- the popup -------------------------------------------------------------------------
 
-# --- the keys issue #3328 took away (EPIC #3178 ⑤) — compat-1v: 下一批删 ----------------------
-# One version long, ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
+# --- the keys issue #3328 folded into ⌘P (EPIC #3178 ⑤) ------------------------------------
+# ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K ⌃\ open the panel instead (fleet_keys.FORWARD,
 # key_lines): ⌘N ⌘T lit on ⚡, and each says 「⌘T 已并进 ⌘P」 the first time — one
 # mark per key per login. Every press is a line of view-switch.ndjson, how=old:<action>,
 # which the doctor's `oldkeys` row counts.
@@ -3255,7 +3255,7 @@ def _popup(screen, qo, vid, client, forward=""):
     at = next((i for i, e in enumerate(shown) if e.get("target") == cur and e["kind"] == "sess"),
               next((i for i, e in enumerate(shown) if e["kind"] == "sess"),
                    next((i for i, e in enumerate(shown) if pickable(e)), 0)))
-    # a key issue #3328 took away (compat-1v): ⌘N ⌘T open on ⚡, every one says so once
+    # a key issue #3328 folded into ⌘P: ⌘N ⌘T open on ⚡, every one says so once
     if forward:
         if forward in FORWARD_BOLT and bolt_at() >= 0:
             at = bolt_at()

@@ -718,7 +718,7 @@ RS="$WORK/rowshim"; mkdir -p "$RS"
 # tmux's own output stays UTF-8 under LC_ALL=C below — only bash is byte-wise, the
 # world of a login whose LANG names a locale the machine does not have
 printf '#!/bin/sh\nPATH=%s exec tmux -u -L %s "$@"\n' "'$PATH'" "$LBL" > "$RS/tmux"; chmod +x "$RS/tmux"
-rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null)
+rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null)
 hrow=$(printf '%s\n' "$rows" | awk -F'\037' -v w="$nwh" '$1 == w')
 ok; [ -n "$hrow" ] || fail "#3444: the producer must list the reopened home session: $(printf '%s' "$rows" | tr '\037' '|')"
 ok; printf '%s' "$hrow" | grep -qF "$NM" || fail "#3444: its row must wear its name: $(printf '%s' "$hrow" | tr '\037' '|')"
@@ -727,7 +727,7 @@ ok; [ -z "$(printf '%s\n' "$rows" | awk -F'\037' -v w="$nwh" '$1 == "hdr" && $2 
 # no UTF-8 locale (LC_ALL=C above, an ssh forced command's world): every byte the
 # readers get must still decode — a byte-sliced spinner glyph killed `fleet ls`
 TM set-window-option -t "$nwh" @claude_state working
-rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --sidebar 2>/dev/null)
+rows=$(PATH="$RS:$PATH" FLEET_SESSION="$SESS" FLEET_ROWS_UNFOLD=1 LC_ALL=C bash "$BIN/tmux-dashboard-rows.sh" --rows 2>/dev/null)
 ok; printf '%s' "$rows" | python3 -c 'import sys; sys.stdin.buffer.read().decode("utf-8")' 2>/dev/null \
   || fail "#3444: the rows must be valid UTF-8 without a UTF-8 locale: $(printf '%s' "$rows" | tr '\037' '|' | od -c | head -5)"
 TM set-window-option -t "$nwh" @claude_state 'done'

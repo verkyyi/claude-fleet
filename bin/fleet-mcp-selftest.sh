@@ -63,7 +63,6 @@
 #      a caller with no repo, or a one-repo fleet, hands the script no --repo
 #   Q  two groups (issue #3113, EPIC #3111 C2): `--group orch` is the server
 #      `fleet-orch` listing exactly spawn · await · children · answer_dialog · send · task
-#      (take_role listed by neither, still answered — issue #4334);
 #      `--list` prints each server's list; `fleet` still answers a dispatch-group
 #      call (an old session's, road=legacy in the call log); a server that took over
 #      from a pre-group version keeps listing all 28 and hands that on; a session with
@@ -74,7 +73,7 @@
 #      --bridge-seat is 0 in any fleet pane, never by role or @agent_spawn (#3118, #4703)
 #   Q2 the dispatch group ships with the core (issue #4334); @agent_spawn gates nothing
 #      (issue #4703): unset / 0 / 1 ⇒ --bridge-seat 0 and file_issue spawns; the spawn
-#      tool hands back the spawner's cap (2) and claim (3) exits; take_role on neither list
+#      tool hands back the spawner's cap (2) and claim (3) exits
 set -u
 
 BIN=$(cd "$(dirname "$0")" && pwd)
@@ -1065,13 +1064,12 @@ ok "O ask: hints are plain lines (no marker, class ignored), no field ⇒ the ba
 # comment), red all the same; with both ⇒ the comment, then the record mirrors it;
 # neither ⇒ refused as before. task ⇒ fleet-task-record.sh dispatch, the words on
 # stdin; await takes a T<n> instead of an issue (exactly one); file_issue --task.
-# A task's `rule` is accepted and dropped (issue #4340: the rule table is gone).
 : > "$LOG"
 { call 130 ask '{"question":"which one?"}'; } | FAKE_NOISSUE=1 FAKE_TASK=T7 serve "$WORK/r1"
 { call 131 ask '{"question":"push?"}'; } | FAKE_TASK=T7 serve "$WORK/r2"
 { call 132 ask '{"question":"nobody?"}'; } | FAKE_NOISSUE=1 serve "$WORK/r3"
 {
-  call 133 task '{"title":"看看风扇","body":"为什么一直转","rule":1,"spawn":true}'
+  call 133 task '{"title":"看看风扇","body":"为什么一直转","spawn":true}'
   call 134 await '{"task":"T7","timeout":30}'
   call 135 await '{"issue":3,"task":"T7"}'
   call 136 await '{}'
@@ -1145,7 +1143,7 @@ for t in tools.values():
     assert t["inputSchema"]["additionalProperties"] is False, t
 PY
 cli "$WORK/q.l0" --list && cli "$WORK/q.l1" --group orch --list || fail "Q: --list exited non-zero" "$(cat "$WORK/q.l0.err" "$WORK/q.l1.err")"
-[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|take_role|task' "$WORK/q.l0" \
+[ "$(wc -l < "$WORK/q.l0" | tr -d ' ')" = 23 ] && ! grep -Eqx 'spawn|await|children|answer_dialog|send|task' "$WORK/q.l0" \
   && [ "$(sort "$WORK/q.l1" | tr '\n' ' ')" = "answer_dialog await children send spawn task " ] \
   || fail "Q: --list is not each server's list" "$(cat "$WORK/q.l0"; echo ---; cat "$WORK/q.l1")"
 cli "$WORK/q.bad" --group zz --list && fail "Q: --group zz was accepted"
@@ -1183,10 +1181,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
 python3 - "$WORK/q4" <<'PY' || fail "Q: a takeover from a pre-group server dropped tools from its session's list" "$(cat "$WORK/q4")"
 import json, sys
 lists = [r["result"]["tools"] for r in (json.loads(l) for l in open(sys.argv[1]) if l.strip()) if "id" in r]
-assert [len(x) for x in lists] == [30, 23, 30, 29], [len(x) for x in lists]   # + task (#3330)
+assert [len(x) for x in lists] == [29, 23, 29, 29], [len(x) for x in lists]   # + task (#3330)
 assert "spawn" in {t["name"] for t in lists[0]}
 names = {t["name"] for t in lists[3]}
-assert {"spawn", "await", "children", "answer_dialog", "send", "task"} <= names and "take_role" not in names, sorted(names)
+assert {"spawn", "await", "children", "answer_dialog", "send", "task"} <= names, sorted(names)
 PY
 grep -q '"list": "all" if SERVING\["list_all"\]' "$WORK/bin/fleet-mcp.py" \
   && grep -q 'SELF\] + sys.argv\[1:\]' "$WORK/bin/fleet-mcp.py" \
@@ -1261,20 +1259,6 @@ for f in dash-raw-session.sh scratch-pool.sh fleet-restore.sh; do
 done
 grep -q 'stamp_option @agent_spawn 1' "$BIN/dash-raw-session.sh" || fail "Q2: a claimed warm window keeps no @agent_spawn"
 ok "Q2 the person's no-issue sessions are stamped @agent_spawn 1 before their launcher mounts the group"
-# take_role: listed by neither server, still answered one version (an old session's
-# call) — its script left with the role seats (issue #4340): the answer says where the
-# role went, exit 2, and nothing runs.
-grep -Eqx 'take_role' "$WORK/q.l0" "$WORK/q.l1" && fail "Q2: take_role is still listed" "$(cat "$WORK/q.l0" "$WORK/q.l1")"
-: > "$LOG"
-call 162 take_role '{"role":"orchestrator"}' | serve "$WORK/q11" --group orch
-[ -s "$LOG" ] && fail "Q2: a retired take_role still ran something" "$(cat "$LOG")"
-python3 - "$WORK/q11" <<'PY' || fail "Q2: an old session's take_role is no longer answered" "$(cat "$WORK/q11")"
-import json, sys
-r = [json.loads(l) for l in open(sys.argv[1]) if l.strip()][0]["result"]
-sc = r["structuredContent"]
-assert sc["exit"] == 2 and "retired" in sc["stderr"] and "spawn agent:orchestrator" in sc["stderr"], sc
-PY
-ok "Q2 take_role is on no server's list and still answered: retired, nothing marked (one version)"
 
 # --- S: a fleet of two repos (issue #4761) -------------------------------------
 cp "$WORK/bin/fleet-lib.sh" "$WORK/lib.keep"

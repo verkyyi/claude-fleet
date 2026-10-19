@@ -61,7 +61,7 @@ WLIST_FILE="$WORK/wlist"; export WLIST_FILE
 # @origin @worktree @cc_agent @wid @claude_needs @expand
 w() { printf '%s\n' "S$US$1$US$2$US$3$US$4$US$US$5$US$6$US$7$US$8$US$US$US${10:-}$US${9:-}" >> "$WLIST_FILE"; }
 strip() { LC_ALL=C sed -e $'s/\x1b\\[[0-9;]*m//g'; }
-side() { FLEET_SESSION=S FLEET_SIDEBAR_CURRENT="${1:-}" bash "$ROWS" --sidebar 2>/dev/null | strip; }
+side() { FLEET_SESSION=S FLEET_SIDEBAR_CURRENT="${1:-}" bash "$ROWS" --rows 2>/dev/null | strip; }
 hub()  { FLEET_SESSION=S FZF_COLUMNS=140 bash "$ROWS" 2>/dev/null | strip; }
 # sidebar row → `name|tree|badge|depth` ; its order → names joined by space
 srow()  { printf '%s\n' "$1" | awk -F"$US" -v n="$2" '$4 == n { print $4 "|" $5 "|" $6 "|" $7; exit }'; }

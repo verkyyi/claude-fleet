@@ -34,13 +34,13 @@ DEFAULT_PANEL = "cmd+p"
 DEFAULT_PHONE = "ctrl+space f12 ctrl+]p"
 # the actions with no switch-table code: bound only as a chord the terminal sends
 CODELESS = ("shell",)
-# The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) took away — one key, ⌘P. For ONE
-# version each still reaches the 看台 and opens the panel (⌘N ⌘T lit on its ⚡ row)
-# with a one-time 「⌘T 已并进 ⌘P」 (fleet_view.forward_note): (action, chord, glyph,
+# The keys issue #3328 (EPIC #3178 ⑤, D3 · D4) folded into one key, ⌘P. Each still
+# reaches the 看台 and opens the panel (⌘N ⌘T lit on its ⚡ row) with a one-time
+# 「⌘T 已并进 ⌘P」 (fleet_view.forward_note) — kept for good (issue #4790: they are
+# still pressed, and given back to iTerm2 ⌘Q would quit it): (action, chord, glyph,
 # code) — the code the iTerm2 row sends; ⌘K's is the retired 930 (an old profile
 # sent it for the same panel), ⌃\ has none (the terminal sends it). A chord the
 # person names in FLEET_KEYS_EXTRA / FLEET_KEY_PANEL is theirs, never a forward.
-# compat-1v: 下一批删
 FORWARD = (("next", "cmd+down", "⌘↓", "920"), ("prev", "cmd+up", "⌘↑", "921"),
            ("back", "cmd+[", "⌘[", "922"), ("fwd", "cmd+]", "⌘]", "923"),
            ("new", "cmd+n", "⌘N", "928"), ("dispatch", "cmd+t", "⌘T", "932"),
@@ -217,9 +217,9 @@ def phone_extra():
 
 
 def old_presses(log, days=7):
-    """`<n> <key> <k> · …` — how often in the last `days` the keys issue #3328 took
-    away were pressed (their forwards' how=old:<action> lines in view-switch.ndjson),
-    most pressed first; `0 ` for none. The doctor's oldkeys row. compat-1v: 下一批删"""
+    """`<n> <key> <k> · …` — how often in the last `days` the keys issue #3328 folded
+    into ⌘P were pressed (their forwards' how=old:<action> lines in view-switch.ndjson),
+    most pressed first; `0 ` for none. The doctor's oldkeys row."""
     import json
     import time
     since, by = time.time() - days * 86400, {}
