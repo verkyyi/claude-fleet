@@ -756,9 +756,9 @@ def send_message(to, text, repo=None):
     if FID_RE.match(fid):
         target = "wid:" + fid
     if target != "parent" and not re.match(
-            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}"
+            r"^(issue:[0-9]+|#[0-9]+|issue-[0-9]+|scratch-[0-9]+|agent:[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}|[Tt]-[0-9A-Za-z]{4,26}"
             r"|wid:[A-Za-z0-9][A-Za-z0-9_.:/-]{0,200}|[@%][A-Za-z0-9_.:-]+)$", target):
-        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, agent:<name>, fid:<uuid> or parent")
+        raise Refused("to must be issue:<N>, <slug>:issue-<N>, scratch-<N>, T-<code>, agent:<name>, fid:<uuid> or parent")
     is_issue = re.match(r"^(issue:|#|issue-)[0-9]+$", target) is not None
     if repo is not None:
         if not is_issue and not target.startswith("scratch-"):
@@ -1258,6 +1258,7 @@ TOOLS = {
                        "to is issue:<N> (in a fleet of several repos: narrowed by repo, else your own "
                        "window's repo), <slug>:issue-<N>, scratch-<N>, agent:<name> (the session started "
                        "from that agent file; none running ⇒ your parent, else the person's reminder), "
+                       "T-<code> (a window by its ID's short code), "
                        "fid:<uuid> (a session by its identity — one with no issue) or parent.",
         "inputSchema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
                                                          "repo": REPO},

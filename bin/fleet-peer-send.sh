@@ -14,6 +14,7 @@
 #             <pid>                                     → that Claude process
 #             <session-uuid>                            → the process running it
 #             wid:<worker_id> / wid:<key>               → that worker, wherever it lives
+#             T-<code>                                  → the window whose ID's short code it is
 #             agent:<name>                              → the session started from that agent file
 #                                                         (none here ⇒ your parent, else your person's reminder)
 #   <text>    the message; `-` or omitted → read stdin (multi-line ok)
@@ -77,7 +78,7 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 
 die() { printf 'fleet-peer-send: %s\n' "$(printf '%s' "$2" | tr '\n' ' ' | sed 's/ *$//')" >&2; exit "$1"; }
-usage() { sed -n '9,26p' "$0" >&2; exit 2; }
+usage() { sed -n '9,27p' "$0" >&2; exit 2; }
 
 # --receipt-check <sess> <rid> <pane> <to> <secs> <excerpt> — receipt_watch's
 # background pass (issue #2729): after <secs>, a send the delivery book still does
@@ -237,6 +238,29 @@ ended_or_die() {
   fi
   die 1 "$2"
 }
+
+# --- a short code → its ID (EPIC T497 C1) -----------------------------------------
+# `T-k3f9q` names the one ID — this login's ledger or a live window — whose code
+# starts with it; from there it is that identity's worker_id, wherever it lives. Two
+# IDs sharing the prefix refuse with both named (fleet-id.sh resolve), never a pick.
+case "$tgt" in
+  [Tt]-?*)
+    fid=$(bash "$BIN/fleet-id.sh" resolve "$tgt" 2>&1); rc=$?
+    [ "$rc" -eq 0 ] && fleet_is_fid "$fid" || die 1 "${fid#fleet-id: }"
+    if [ -n "$SOCK" ]; then socks="$SOCK"
+    elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
+    else socks=$(fleet_sockets); fi
+    w=''
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
+      if [ "$s" = "-" ]; then w=$(fleet_win_for_fid "$fid" '' 2>/dev/null) || w=''
+      else w=$(fleet_win_for_fid "$fid" "$s" 2>/dev/null) || w=''; fi
+      [ -n "$w" ] && { [ "$s" = "-" ] || SOCK=$s; break; }
+    done <<EOF_IDS
+$socks
+EOF_IDS
+    if [ -n "$w" ]; then tgt=$w; else tgt="wid:$fid"; fi ;;   # not live here: wherever it lives
+esac
 
 # --- worker_id → where it lives (issue #1420) -------------------------------------
 case "$tgt" in

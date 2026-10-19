@@ -28,6 +28,7 @@
 - [FLEET-MCP.md](dev/FLEET-MCP.md) — 会话用的 `fleet` 工具服务
 - [STATE.md](dev/STATE.md) — 窗口上的 Claude 状态怎么刷新
 - [CLEANUP.md](dev/CLEANUP.md) · [REAP-SAFETY.md](dev/REAP-SAFETY.md) — 合并后的回收与回收安全
+- [FLEET-ID.md](dev/FLEET-ID.md) — 一个窗口一个 ID：节点账本、短码与原生段
 - [WORKER.md](dev/WORKER.md) — 执行会话的规则背景与排障（流程由 SessionStart hook 给出）
 - [TASK-ACCEPTANCE.md](dev/TASK-ACCEPTANCE.md) — 无 GitHub 任务控制：12 项夹具验收与独立的 live 演练单
 - [TASK-BLOCKERS.md](dev/TASK-BLOCKERS.md) — 显式 blocker 的身份、依赖事件、授权与只读消费契约
