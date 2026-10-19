@@ -26,8 +26,29 @@
 #                    bin/fleet-train-plan.sh --full, its red traced by
 #                    bin/fleet-nightly-miss.sh with issues: write
 #   H. plan --full   fleet-train-plan.sh --full prices without --changed
-#   I. BREAK-IT      docs/dev/BREAK-IT.md row selection-miss-silent ⇔ its drill
-# NM_LEG=<letter> runs one leg (the BREAK-IT drill runs B).
+#   I. BREAK-IT      docs/dev/BREAK-IT.md rows selection-miss-silent and
+#                    selection-miss-go-silent ⇔ their drills
+# Go and whole checks (issue #4816, ci-nightly.yml) — a second sandbox with the four
+# tokenledger modules and the REAL bin/ci-plan.sh; history: A base — B changes
+# tokenledger/agent/data.txt, which a hub/api test reads (the plan maps agent ⇒
+# agent + e2e, never hub) — C docs only:
+#   J. Go miss       go-log names hub/api TestReadsAgent red; bisected to B, where
+#                    `ci-plan.sh go B^` selected no hub ⇒ ONE selection-miss issue,
+#                    key nightly-go-hub.api.TestReadsAgent, naming B and the file
+#   K. Go others     an agent test red since B ⇒ picked (agent selected); the same on
+#                    the Postgres leg ⇒ nightly-pg-…; no database to re-run ⇒
+#                    unanalysed; a package red with no test named ⇒ unanalysed; green
+#                    again ⇒ flaky-go-…; a long name keeps the key ≤ 80
+#   L. checks        a red check: the merges whose `ci-plan.sh <check> M^` said
+#                    run=false are the suspects (one ⇒ named), none ⇒ picked, red the
+#                    night before ⇒ old; `tokenledger` red with a named Go test is
+#                    left to the test
+#   M. ci-nightly    .github/workflows/ci-nightly.yml: 06:17 Beijing, calls every
+#                    ci-plan check but selftests (selftests-nightly.yml) and oss_scan
+#                    (a PR's diff), none of those keeps a schedule of its own, and
+#                    its report runs fleet-nightly-miss.sh --go --checks with a
+#                    Postgres and issues: write
+# NM_LEG=<letter> runs one leg (the BREAK-IT drills run B and J).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -232,7 +253,154 @@ fi
 if leg I; then
   grep -q '`selection-miss-silent`' "$ROOT/docs/dev/BREAK-IT.md" || fail "I no BREAK-IT row selection-miss-silent"
   grep -q '^drill_selection_miss_silent()' "$BIN/fleet-break-it-selftest.sh" || fail "I no drill_selection_miss_silent"
-  CHECKS=$((CHECKS + 2))
+  grep -q '`selection-miss-go-silent`' "$ROOT/docs/dev/BREAK-IT.md" || fail "I no BREAK-IT row selection-miss-go-silent"
+  grep -q '^drill_selection_miss_go_silent()' "$BIN/fleet-break-it-selftest.sh" || fail "I no drill_selection_miss_go_silent"
+  CHECKS=$((CHECKS + 4))
+fi
+
+# ---- the Go sandbox (J–L) --------------------------------------------------------
+if leg J || leg K || leg L; then
+  G="$WORK/go"
+  mkdir -p "$G/bin" "$G/docs"
+  cp "$BIN/ci-plan.sh" "$BIN/run-selftests.sh" "$G/bin/"
+  for m in shared agent hub e2e; do
+    mkdir -p "$G/tokenledger/$m"
+    printf 'module github.com/verkyyi/claude-fleet/tokenledger/%s\n\ngo 1.25\n' "$m" > "$G/tokenledger/$m/go.mod"
+  done
+  mkdir -p "$G/tokenledger/hub/api" "$G/tokenledger/agent/cli"
+  printf 'package api\n' > "$G/tokenledger/hub/api/doc.txt"
+  printf 'package cli\n' > "$G/tokenledger/agent/cli/doc.txt"
+  printf 'ok\n' > "$G/tokenledger/agent/data.txt"
+  echo a > "$G/docs/a.md"
+  git -C "$G" init -q -b master
+  git -C "$G" add -A && git -C "$G" commit -qm A
+  GA=$(git -C "$G" rev-parse HEAD)
+  printf 'broken\n' > "$G/tokenledger/agent/data.txt"; git -C "$G" commit -qam 'B agent data'
+  GB=$(git -C "$G" rev-parse HEAD)
+  echo c >> "$G/docs/a.md"; git -C "$G" commit -qam 'C docs'
+  GC=$(git -C "$G" rev-parse HEAD)
+  # one Go test, by name: red iff the agent's data.txt is broken (Steady: never red)
+  cat > "$WORK/gorun" <<'SH'
+#!/bin/bash
+# <checkout> <go|pg> <pkg> <Test>
+case "$4" in TestSteady) exit 0 ;; esac
+grep -qx ok "$1/tokenledger/agent/data.txt"
+SH
+  chmod +x "$WORK/gorun"
+  golog() {   # golog <leg go|pg> <part> <pkg> <Test|-> ... — one part's `go test -v` log
+    local leg=$1 part=$2 d; shift 2
+    d="$WORK/gores/$leg-log-$part"; mkdir -p "$d"
+    while [ "$#" -ge 2 ]; do
+      if [ "$2" != - ]; then printf '=== RUN   %s\n--- FAIL: %s (0.01s)\n    x_test.go:9: broken\n' "$2" "$2"; fi
+      printf 'FAIL\ngithub.com/verkyyi/claude-fleet/tokenledger/%s\t0.1s\n' "$1" | sed 's/^github/FAIL\tgithub/;/^FAIL$/d'
+      shift 2
+    done >> "$d/$leg.log"
+    printf 'ok  \tgithub.com/verkyyi/claude-fleet/tokenledger/hub/other\t0.2s\n' >> "$d/$leg.log"
+  }
+  gnm() { rm -f "$WORK/filed"; FLEET_NM_GO_RUN="$WORK/gorun" bash "$M" --sha "$GC" --since "$GA" --repo o/r --run 88 --dir "$G" "$@"; }
+fi
+
+# ---- J. a Go test red in a block the plan never selected ---------------------------
+if leg J; then
+  rm -rf "$WORK/gores"; golog go api-1 hub/api TestReadsAgent
+  out=$(gnm --go "$WORK/gores"); rc=$?
+  eq "J exits 0" 0 "$rc"
+  contains "J the row: selection-miss since B" "$out" "| go hub/api TestReadsAgent | selection-miss | $(printf '%.7s' "$GB") |"
+  f=$(filed_for nightly-go-hub.api.TestReadsAgent)
+  contains "J filed with key nightly-go-hub.api.TestReadsAgent" "$f" '--breakage-key nightly-go-hub.api.TestReadsAgent'
+  contains "J labelled selection-miss" "$f" '--label selection-miss'
+  contains "J the title names the merge and 漏选" "$f" "自 $(printf '%.7s' "$GB") 起红，PR 门没选中它（漏选）"
+  contains "J the body names the merge's file" "$f" 'tokenledger/agent/data.txt'
+  contains "J the body quotes the plan" "$f" 'skip: hub'
+  contains "J the body says how it was bisected" "$f" "go test -run '^TestReadsAgent\$' ./api"
+  eq "J exactly one filing" 1 "$(nfiled)"
+  echo 5 > "$WORK/filer_rc"; gnm --go "$WORK/gores" >/dev/null; rc=$?; rm -f "$WORK/filer_rc"
+  eq "J the next night: the filer's 同一故障 (exit 5) is fine" 0 "$rc"
+  eq "J … and still one filing asked, same key" 1 "$(nfiled)"
+fi
+
+# ---- K. the other Go verdicts -------------------------------------------------------
+if leg K; then
+  rm -rf "$WORK/gores"; golog go agent agent/cli TestAgentOwn
+  out=$(gnm --go "$WORK/gores")
+  contains "K an agent test red since B ⇒ picked (agent was selected)" "$out" "| go agent/cli TestAgentOwn | picked | $(printf '%.7s' "$GB") |"
+  contains "K picked is a bug, not a miss" "$(filed_for nightly-go-agent.cli.TestAgentOwn)" '--label bug '
+  rm -rf "$WORK/gores"; golog pg api-2 hub/api TestReadsAgent
+  out=$(gnm --go "$WORK/gores")
+  contains "K the Postgres leg has its own key" "$out" '| pg hub/api TestReadsAgent | selection-miss |'
+  contains "K … nightly-pg-…" "$(filed_for nightly-pg-hub.api.TestReadsAgent)" '--breakage-key nightly-pg-hub.api.TestReadsAgent'
+  out=$(rm -f "$WORK/filed"; FLEET_NM_DB_URL='' bash "$M" --sha "$GC" --since "$GA" --repo o/r --dir "$G" --go "$WORK/gores")
+  contains "K no database to re-run a Postgres test ⇒ unanalysed" "$out" '| pg hub/api TestReadsAgent | unanalysed |'
+  rm -rf "$WORK/gores"; golog go rest hub/api -
+  out=$(gnm --go "$WORK/gores")
+  contains "K a package red with no test named ⇒ unanalysed, filed by package" "$out" '| go hub/api（整包） | unanalysed |'
+  contains "K … key nightly-go-hub.api" "$(filed_for nightly-go-hub.api)" '--breakage-key nightly-go-hub.api '
+  rm -rf "$WORK/gores"; golog go rest hub/api TestSteady
+  out=$(gnm --go "$WORK/gores")
+  contains "K green when re-run ⇒ flaky" "$out" '| go hub/api TestSteady | flaky |'
+  contains "K … flaky-go-…" "$(filed_for flaky-go-hub.api.TestSteady)" '--label flaky'
+  long=TestAVeryLongNameThatKeepsGoingAndGoingPastEightyCharactersOfBreakageKeyForSure
+  rm -rf "$WORK/gores"; golog go rest hub/api "$long"
+  gnm --go "$WORK/gores" --dry-run > "$WORK/out" 2>&1
+  k=$(sed -n 's/.*would file: [a-z-]* · \([^)]*\)).*/\1/p' "$WORK/out")
+  CHECKS=$((CHECKS + 1)); [ -n "$k" ] && [ "${#k}" -le 80 ] || fail "K a long test name keeps the key ≤ 80, got [$k]"
+  printf '%s' "$k" | grep -Eq '^[A-Za-z0-9._-]+$' || fail "K the key is the filer's charset: [$k]"
+fi
+
+# ---- L. whole checks ---------------------------------------------------------------
+if leg L; then
+  printf 'task_acceptance failure\nweb_console success\n' > "$WORK/checks"
+  out=$(gnm --checks "$WORK/checks"); rc=$?
+  eq "L exits 0" 0 "$rc"
+  # B touches tokenledger/ (task-acceptance runs), C only docs (skipped): C is the one suspect
+  contains "L the one merge that skipped it is named" "$out" "| 检查 task_acceptance | selection-miss | $(printf '%.7s' "$GC") |"
+  f=$(filed_for nightly-check-task_acceptance)
+  contains "L key nightly-check-task_acceptance, label selection-miss" "$f" '--label selection-miss'
+  contains "L the body lists the suspect with the plan's words" "$f" 'task_acceptance: skipped'
+  lacks "L a green check is not filed" "$(cat "$WORK/filed")" 'nightly-check-web_console'
+  printf 'oss_scan failure\n' > "$WORK/checks"
+  out=$(gnm --checks "$WORK/checks")
+  contains "L run by every merge's PR ⇒ picked" "$out" '| 检查 oss_scan | picked |'
+  printf 'task_acceptance failure\n' > "$WORK/prev"
+  printf 'task_acceptance failure\n' > "$WORK/checks"
+  out=$(gnm --checks "$WORK/checks" --prev-checks "$WORK/prev")
+  contains "L red the night before ⇒ old" "$out" '| 检查 task_acceptance | old |'
+  rm -rf "$WORK/gores"; golog go api-1 hub/api TestReadsAgent
+  printf 'tokenledger failure\n' > "$WORK/checks"
+  out=$(gnm --checks "$WORK/checks" --go "$WORK/gores")
+  lacks "L tokenledger's red is its named test's" "$out" '检查 tokenledger'
+  contains "L … the test is traced" "$out" '| go hub/api TestReadsAgent |'
+  rm -rf "$WORK/gores"; mkdir -p "$WORK/gores"
+  out=$(gnm --checks "$WORK/checks" --go "$WORK/gores")
+  contains "L tokenledger red with no test named (lint, build) is the check's" "$out" '| 检查 tokenledger |'
+fi
+
+# ---- M. the ci nightly workflow ------------------------------------------------------
+if leg M; then
+  WF="$ROOT/.github/workflows/ci-nightly.yml"
+  [ -f "$WF" ] || fail "M no .github/workflows/ci-nightly.yml"
+  w=$(cat "$WF")
+  contains "M scheduled 06:17 Beijing (22:17 UTC)" "$w" "cron: '17 22 * * *'"
+  for k in $(bash "$BIN/ci-plan.sh" checks); do
+    wf=$(printf '%s' "$k" | tr _ -); [ "$k" = fleet_hub_mcp ] && wf=fleet-hub
+    case "$k" in
+      selftests|oss_scan)
+        CHECKS=$((CHECKS + 1)); case "$w" in *"uses: ./.github/workflows/$wf.yml"*) fail "M ci-nightly calls $wf.yml — it has its own nightly / is a PR's diff" ;; esac ;;
+      *)
+        contains "M calls $wf.yml" "$w" "uses: ./.github/workflows/$wf.yml"
+        y="$ROOT/.github/workflows/$wf.yml"
+        CHECKS=$((CHECKS + 1))
+        awk '/^on:/{o=1; next} o && /^[^ #]/{o=0} o' "$y" | grep -q '^  schedule:' && fail "M $wf.yml keeps a schedule of its own — ci-nightly.yml runs it" ;;
+    esac
+  done
+  contains "M traces its red" "$w" 'bin/fleet-nightly-miss.sh'
+  contains "M … Go logs and checks" "$w" '--go '
+  contains "M … the checks' results" "$w" '--checks '
+  contains "M … against last night's" "$w" '--prev-checks'
+  contains "M a Postgres to re-run the pg leg" "$w" 'FLEET_NM_DB_URL'
+  contains "M may file issues" "$w" 'issues: write'
+  CHECKS=$((CHECKS + 1))
+  printf '%s\n' "$w" | grep -Eq '^  pull_request' && fail "M ci-nightly runs on pull_request"
 fi
 
 printf 'PASS fleet-nightly-miss-selftest (%s checks)\n' "$CHECKS"

@@ -3,6 +3,7 @@
 # selftest-part-of: fleet-cleanup-idle-selftest.sh
 BIN="$(cd "$(dirname "$0")" && pwd)"
 if [ "$#" -eq 0 ]; then
-  set -- RoundTrip.test_unmerged_pr_requires_strict_ancestor_and_activity_recheck
+  set -- RoundTrip.test_unmerged_pr_requires_strict_ancestor_and_activity_recheck \
+    TaskSession.test_open_or_unknown_record_keeps_the_session
 fi
 SELFTEST_PART=4/4 exec bash "$BIN/fleet-cleanup-idle-selftest.sh" "$@"
