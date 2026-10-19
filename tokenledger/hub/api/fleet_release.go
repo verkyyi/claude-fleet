@@ -49,6 +49,7 @@ import (
 //	GET /v1/fleet/release/<sha>/artifacts/<n>   one binary / installer
 //	POST /v1/fleet/release/publish              the CI hands over a stable (fleet_publish.go)
 //	POST /v1/fleet/release/train                every train run's stages (fleet_release_runs.go)
+//	POST /v1/fleet/release/notice               each train's one line to the person (fleet_release_notice.go)
 //
 // Since claude-fleet#2772 stable comes by that POST, not by StableSource's
 // lookup: the commit's own bytes, checked against its sha here, then built from
@@ -807,6 +808,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimPrefix(r.URL.Path, release.Path) == "train" {
 		s.handleReleaseTrain(w, r) // every run of the train (claude-fleet#3870)
+		return
+	}
+	if strings.TrimPrefix(r.URL.Path, release.Path) == "notice" {
+		s.handleReleaseNotice(w, r) // each train's one line to the person (claude-fleet#4913)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {

@@ -1,0 +1,87 @@
+name: release train next
+
+# The backstop of the train's `next` job (issue #4913, BREAK-IT train-red-stalls).
+# `next` re-sends a flaky train the moment it ends; this catches what it could
+# not: a run that never reached `next` (cancelled before it, a dispatch that
+# failed, a push whose train was lost) and a release-hold that has since closed.
+# Every 10 minutes, and when a train completes: master's head not on stable, no
+# release train running or waiting ⇒ bin/fleet-train-next.py decide on the last
+# finished train's `train-next` verdict — the SAME rule as `next` (a real red
+# waits for its fix; at most two re-sends a sha, counted off the run names). It
+# only ever dispatches release-train.yml: one lane, never a release of its own.
+# It replaced release-train.yml's hourly cron, which re-ran a real red too.
+
+on:
+  schedule:
+    - cron: '3-59/10 * * * *'
+  workflow_run:
+    workflows: [release train]
+    types: [completed]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-train-next
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write    # the lane's runs, the last verdict, the re-send dispatch
+  issues: read      # the open release-hold issues
+  id-token: write   # the notice's OIDC token (audience ccquota-fleet-release)
+
+env:
+  FLEET_HUB_URL: https://claudefleet.24haowan.com  # oss-ok: the train's hub (release-train.yml)
+
+jobs:
+  next:
+    name: next
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: decide, re-send, say it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          R=$GITHUB_REPOSITORY
+          git fetch -q origin master --tags --force
+          head=$(git rev-parse origin/master); stable=$(git rev-parse -q --verify 'refs/tags/stable^{commit}')
+          [ "$head" != "$stable" ] || { echo "stable is at master's head (${head:0:7}) — nothing to do"; exit 0; }
+          active=0
+          for st in queued in_progress waiting pending requested; do
+            n=$(gh api "repos/$R/actions/workflows/release-train.yml/runs?status=$st&per_page=50" \
+                  --jq '.workflow_runs | length') || n=1
+            active=$((active + n))
+          done
+          [ "$active" = 0 ] || { echo "a release train is running or waiting ($active) — nothing to do"; exit 0; }
+          # the newest finished train that is not a drill, and its verdict
+          last=$(gh api "repos/$R/actions/workflows/release-train.yml/runs?status=completed&per_page=20" \
+                   --jq '[.workflow_runs[] | select(.display_title | test("drill") | not)][0].id // empty')
+          : > verdict.json
+          [ -z "$last" ] || gh run download "$last" --repo "$R" -n train-next -D v >/dev/null 2>&1 \
+            && [ -s v/verdict.json ] && cp v/verdict.json verdict.json
+          echo "last train: ${last:-none} · verdict: $(cat verdict.json 2>/dev/null || echo none)"
+          holds=$(gh api "repos/$R/issues?labels=release-hold&state=open&per_page=20" \
+                    --jq '[.[] | select(.pull_request | not) | .number] | map(tostring) | join(" ")') || holds=unreadable
+          gh api "repos/$R/actions/workflows/release-train.yml/runs?event=workflow_dispatch&per_page=100" > runs.json || echo '{}' > runs.json
+          n=$(python3 bin/fleet-train-next.py retries --runs runs.json --sha "$head") || n=0
+          python3 bin/fleet-train-next.py decide --verdict verdict.json --head "$head" --stable "$stable" \
+            --active 0 --retries "$n" --holds "$holds" > decide.txt
+          cat decide.txt
+          action=$(sed -n 's/^action=//p' decide.txt); reason=$(sed -n 's/^reason=//p' decide.txt)
+          echo "### 🔁 ${head:0:7}：$action（$reason）" >> "$GITHUB_STEP_SUMMARY"
+          [ "$action" = dispatch ] || exit 0
+          resend=$(python3 bin/fleet-train-next.py resend --sha "$head" --n "$((n + 1))" --max 2 --why "$reason")
+          gh workflow run release-train.yml --repo "$R" --ref master -f resend="$resend" \
+            || { echo "::error::the re-send dispatch failed"; exit 1; }
+          python3 - "$head" "$resend" "$GITHUB_RUN_ID" > notice.json <<'PY'
+          import json, sys
+          print(json.dumps({"run_id": sys.argv[3], "sha": sys.argv[1], "verdict": "resent",
+                            "text": "补发 %s（兜底）" % sys.argv[2]}, ensure_ascii=False))
+          PY
+          python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
+            || echo "::warning::the hub did not take the notice"

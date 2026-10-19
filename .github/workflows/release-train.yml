@@ -117,11 +117,25 @@ name: release train
 #     (BREAK-IT train-ack-reclaimed). The variable empty ⇒ no pick, no rescue: the
 #     Linux half is ubuntu-latest exactly as before (BREAK-IT train-ack-down).
 #
+#   * a red train re-sends itself when its red was only a flake (issue #4913,
+#     BREAK-IT train-red-stalls): `next` (after the ledger, if: always()) judges
+#     the run with bin/fleet-train-next.py, dispatches ONE more train on master's
+#     head through this same lane when the red was a lost runner, a shard cut
+#     short with no test red, or tests that each have an open `flaky` issue (at
+#     most two re-sends a sha, counted off the 「补发」 run names), waits on a real
+#     red, and says one line a run to the hub's notifier (/v1/fleet/release/notice).
+#     An open issue labelled `release-hold` keeps `release` from publishing and
+#     moving (the tests run as always). release-train-next.yml is the 10-minute
+#     backstop by the same rule (it replaced the hourly cron, which re-ran a real
+#     red too).
+#
 # Outputs of `board` (C1 / C3 hang off them): train_sha · stable_sha · skip ·
 # merges (count) · merges_json (first-parent stable..TRAIN_SHA, newest first,
 # {sha, subject, committed}).
 # A drill names itself in the title: fleet_breakage_probe skips such a run (issue #3372).
-run-name: ${{ inputs.drill_red != '' && format('release train (drill {0})', inputs.drill_red) || 'release train' }}
+# A re-send names itself too (issue #4913): 「补发 <sha7> · n/2 · why」 is what
+# fleet-train-next.py retries counts — at most two a sha.
+run-name: ${{ inputs.drill_red != '' && format('release train (drill {0})', inputs.drill_red) || inputs.resend != '' && format('release train (补发 {0})', inputs.resend) || 'release train' }}
 
 on:
   push:
@@ -143,9 +157,14 @@ on:
         type: string
         required: false
         default: ''
-  schedule:
-    # hourly backstop (a push lost, a train red on a flake): off the top of the hour
-    - cron: '41 * * * *'
+      resend:
+        description: 'a re-send (issue #4913, set by the train''s `next` job and release-train-next.yml): "<sha7> · n/max · why"'
+        type: string
+        required: false
+        default: ''
+  # No schedule (issue #4913): the hourly backstop re-ran a real red too. The
+  # 10-minute one is release-train-next.yml, which re-sends only what
+  # fleet-train-next.py decide says (a flake, a lost push, a lifted hold).
 
 concurrency:
   group: release-train
@@ -753,6 +772,8 @@ jobs:
     environment: release-sign
     outputs:
       moved: ${{ steps.move.outputs.moved }}
+      held: ${{ steps.hold.outputs.held }}
+      superseded: ${{ steps.sup.outputs.superseded == 'true' || steps.pub.outputs.superseded == 'true' }}
     permissions:
       contents: write   # the stable tag (STABLE_PUSH_TOKEN, else GITHUB_TOKEN)
       id-token: write   # the publish's OIDC token (audience ccquota-fleet-release)
@@ -789,8 +810,26 @@ jobs:
         id: sup
         run: bash bin/fleet-train-superseded.sh "$TRAIN_SHA" --dir . --hub "$FLEET_HUB_URL" || true
 
-      - name: the hub is TRAIN_SHA's
+      # A person holds the release (issue #4913): an open issue labelled
+      # `release-hold` ⇒ the train tests as always but publishes and moves
+      # nothing, naming the issue; `next` says so and re-sends once it closes.
+      # Unreadable ⇒ red, never a blind release. (The hub's own pause is
+      # bin/fleet-hub-pause.sh, #4621.)
+      - name: release-hold?
+        id: hold
         if: steps.sup.outputs.superseded != 'true'
+        run: |
+          held=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=release-hold&state=open&per_page=20" \
+                   --jq '[.[] | select(.pull_request | not) | .number] | map(tostring) | join(" ")') \
+            || { echo "::error::cannot read the release-hold issues — nothing published"; exit 1; }
+          echo "held=$held" >> "$GITHUB_OUTPUT"
+          [ -z "$held" ] || {
+            echo "release-hold: $held — tested, not published"
+            echo "### ⏸ 测完未发布：release-hold $(printf '#%s ' $held)挡着" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+      - name: the hub is TRAIN_SHA's
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == ''
         run: |
           v=$(curl -fsS -m 30 "$FLEET_HUB_URL/version") || { echo "::error::cannot read $FLEET_HUB_URL/version"; exit 1; }
           echo "$v"
@@ -809,7 +848,7 @@ jobs:
           echo "### 入口 \`$img\`$note" >> "$GITHUB_STEP_SUMMARY"
 
       - name: the train's ledger (#3140)
-        if: steps.sup.outputs.superseded != 'true'
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == ''
         env:
           MERGES: ${{ needs.board.outputs.merges_json }}
         run: |
@@ -822,7 +861,7 @@ jobs:
 
       # the stage `发布包` kept while the tests ran (issue #3867)
       - uses: actions/download-artifact@v4
-        if: steps.sup.outputs.superseded != 'true' && needs.release-stage.outputs.staged == 'true'
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == '' && needs.release-stage.outputs.staged == 'true'
         continue-on-error: true   # none ⇒ the whole publish
         with:
           name: release-stage
@@ -830,7 +869,7 @@ jobs:
 
       - name: publish TRAIN_SHA to the hub
         id: pub
-        if: steps.sup.outputs.superseded != 'true'
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == ''
         env:
           # the train's signing key (issue #3559): a keyless hub builds the
           # release unsigned, this step checks it against the checkout and signs
@@ -856,7 +895,7 @@ jobs:
       # deploy tree may name CCQUOTA_FLEET_RELEASE_KEY. A warning, never a stop:
       # the migration's step A runs a train while the hub still signs.
       - name: the signing key is only in the train
-        if: steps.sup.outputs.superseded != 'true'
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == ''
         env:
           HAVE_KEY: ${{ secrets.RELEASE_SIGN_KEY != '' }}
         run: |
@@ -874,13 +913,13 @@ jobs:
 
       - name: move stable to TRAIN_SHA
         id: move
-        if: steps.sup.outputs.superseded != 'true' && steps.pub.outputs.superseded != 'true'
+        if: steps.sup.outputs.superseded != 'true' && steps.hold.outputs.held == '' && steps.pub.outputs.superseded != 'true'
         run: |
           set +e
           # node tools / node image (#3855) build the node image beside the
           # release, never gate it: a registry hiccup does not hold stable back;
           # nor does the ledger (#3870), which waits for this job
-          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image' --ignore-check ledger
+          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image' --ignore-check ledger --ignore-check next
           # a Linux shard whose cluster runner went away and that `Linux rescue`
           # reran green (issue #3864): its red job is not this train's verdict
           for k in $(printf '%s' "$LOST" | tr -c '0-9' ' '); do set -- "$@" --ignore-check "Linux / shard $k"; done
@@ -951,6 +990,105 @@ jobs:
           python3 -c 'import json; d=json.load(open("run.json")); print("run %s: %s · %s" % (d["run_id"], d["conclusion"], ", ".join(s["name"] for s in d["stages"])))'
           python3 bin/fleet-train-ledger.py post run.json --hub "$FLEET_HUB_URL" --summary "$GITHUB_STEP_SUMMARY" \
             || echo "::warning::the hub did not take this run's ledger row (the board misses it; nothing else does)"
+
+  next:
+    # A red train no longer stops the lane until the next merge (issue #4913,
+    # BREAK-IT train-red-stalls). After everything else (if: always(), so a run
+    # 红灯即停 cancelled judges too): bin/fleet-train-next.py judges the run —
+    # shipped · held · flaky (every red Linux shard lost, cut short with no test
+    # red, or its red tests each with an open `flaky` issue) · red · superseded ·
+    # cancelled — and decides: master's head not on stable, no other train running
+    # or queued, no release-hold, < 2 re-sends of that head, the verdict flaky /
+    # held-then-lifted / the head newer ⇒ ONE workflow_dispatch of this workflow
+    # (the same lane: concurrency release-train). A real red waits for its fix.
+    # The verdict goes up as `train-next` for the 10-minute backstop
+    # (release-train-next.yml), and ONE line to the hub's notifier
+    # (POST /v1/fleet/release/notice). Bookkeeping: it never reds the train.
+    name: next
+    needs: [board, linux, linux-rescue-plan, linux-rescue, release, ledger]
+    if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write    # this run's jobs, the lane's runs, the re-send dispatch
+      issues: read      # the open flaky / release-hold issues
+      id-token: write   # the notice's OIDC token (audience ccquota-fleet-release)
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      MERGES: ${{ needs.board.outputs.merges_json }}
+      MOVED: ${{ needs.release.outputs.moved }}
+      HELD: ${{ needs.release.outputs.held }}
+      SUPERSEDED: ${{ needs.release.outputs.superseded }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: train-result-*
+          path: results
+      - name: judge, decide, re-send, say it
+        run: |
+          set +e
+          R=$GITHUB_REPOSITORY
+          gh api --paginate "repos/$R/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[]' > jobs.ndjson \
+            || { echo "::warning::could not read this run's jobs — no verdict"; exit 0; }
+          gh api "repos/$R/issues?labels=flaky&state=open&per_page=100" \
+            --jq '.[] | select(.pull_request | not) | "\(.number)\t\(.title)"' > flaky.tsv
+          lost=$(GITHUB_OUTPUT=/dev/null bash bin/fleet-train-runner.sh lost --repo "$R" --run "$GITHUB_RUN_ID" --prefix Linux 2>/dev/null \
+                   | sed -n 's/^lost=//p' | tr -c '0-9' ' ')
+          python3 bin/fleet-train-next.py judge --sha "$TRAIN_SHA" --jobs jobs.ndjson --results results \
+            --flaky-issues flaky.tsv --lost "$lost" --moved "${MOVED:-}" --held "${HELD:-}" \
+            --superseded "${SUPERSEDED:-}" > verdict.json
+          cat verdict.json
+          git fetch -q origin master --tags --force
+          head=$(git rev-parse origin/master); stable=$(git rev-parse -q --verify 'refs/tags/stable^{commit}')
+          # other trains running or waiting (this one excluded)
+          active=0
+          for st in queued in_progress waiting pending requested; do
+            n=$(gh api "repos/$R/actions/workflows/release-train.yml/runs?status=$st&per_page=50" \
+                  --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID)] | length") || n=1
+            active=$((active + n))
+          done
+          holds=$(gh api "repos/$R/issues?labels=release-hold&state=open&per_page=20" \
+                    --jq '[.[] | select(.pull_request | not) | .number] | map(tostring) | join(" ")') || holds=unreadable
+          gh api "repos/$R/actions/workflows/release-train.yml/runs?event=workflow_dispatch&per_page=100" > runs.json || echo '{}' > runs.json
+          n=$(python3 bin/fleet-train-next.py retries --runs runs.json --sha "$head") || n=0
+          python3 bin/fleet-train-next.py decide --verdict verdict.json --head "$head" --stable "$stable" \
+            --active "$active" --retries "$n" --holds "$holds" > decide.txt
+          cat decide.txt
+          action=$(sed -n 's/^action=//p' decide.txt); reason=$(sed -n 's/^reason=//p' decide.txt)
+          if [ "$action" = dispatch ]; then
+            resend=$(python3 bin/fleet-train-next.py resend --sha "$head" --n "$((n + 1))" --max 2 --why "$reason")
+            gh workflow run release-train.yml --repo "$R" --ref master -f resend="$resend" \
+              || { echo "::warning::the re-send dispatch failed — the 10-minute backstop tries again"; action=wait; reason="补发没发出去"; }
+          fi
+          printf '%s\n' "$MERGES" > merges.json
+          line=$(python3 bin/fleet-train-next.py notice --verdict verdict.json --action "$action" --reason "$reason" \
+                   --retries "$n" --max 2 --merges merges.json --holds "${HELD:-}" \
+                   --run-url "$GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID")
+          echo "$line"
+          { echo "### 🔁 $line"; echo; echo "下一趟：$action（$reason）"; } >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$line" "$GITHUB_RUN_ID" > notice.json <<'PY'
+          import json, sys
+          v = json.load(open("verdict.json"))
+          print(json.dumps({"run_id": sys.argv[2], "sha": v["sha"], "verdict": v["verdict"], "text": sys.argv[1]}, ensure_ascii=False))
+          PY
+          python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
+            || echo "::warning::the hub did not take this train's notice"
+          exit 0
+      - name: the verdict for the backstop
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: train-next
+          path: verdict.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   node-tools:
     # The managed node image's `tools` stage (extras/managed-node/Dockerfile),
