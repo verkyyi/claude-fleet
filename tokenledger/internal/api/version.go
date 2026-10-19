@@ -71,5 +71,18 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if p := s.Stable.Problem(); p != "" {
 		out["stable_problem"] = p
 	}
+	// where stable comes from (claude-fleet#4847): release · upstream · github ·
+	// image — image when nothing is handed out but this build's own client
+	src := s.Stable.Source()
+	if _, ok := out["stable"]; !ok {
+		if known := s.stableKnown(); known != "" {
+			// known, its files not here yet: the image's client until they are
+			if _, ok := out["stable_problem"]; !ok {
+				out["stable_problem"] = "stable " + known[:7] + " is known but its files are not on this hub yet — handing out the image's client meanwhile"
+			}
+		}
+		src = stableSrcImage
+	}
+	out["stable_source"] = src
 	writeJSON(w, http.StatusOK, out)
 }

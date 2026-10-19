@@ -344,7 +344,7 @@ type Server struct {
 	// binary or `go install`.
 	FleetDistDir string
 	// FleetJoinScriptURL is where the join command fetches the script
-	// (CCQUOTA_FLEET_JOIN_SCRIPT_URL); empty means DefaultJoinScriptURL.
+	// (CCQUOTA_FLEET_JOIN_SCRIPT_URL); empty means <hub>JoinScriptPath.
 	FleetJoinScriptURL string
 	// Stable is where the client comes from (claude-fleet#1805): GitHub's
 	// refs/tags/stable, reported by /version and proxied at

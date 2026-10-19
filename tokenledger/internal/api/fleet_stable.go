@@ -83,6 +83,10 @@ type StableSource struct {
 	// (CCQUOTA_FLEET_STABLE_REPO=off): only what Local holds is served.
 	Local   StableLocal
 	Offline bool
+	// Upstream is another hub whose signed stable this one mirrors into Local
+	// (CCQUOTA_FLEET_UPSTREAM_HUB, claude-fleet#4847, fleet_upstream.go) —
+	// asked instead of GitHub, and still asked once a release has landed.
+	Upstream string
 
 	mu         sync.Mutex
 	sha        string
@@ -95,6 +99,7 @@ type StableSource struct {
 	whole      map[string]bool      // sha → its tarball is in files (a path not there is not in the commit)
 	tarFail    map[string]time.Time // sha → when its tarball last failed (retried after a TTL)
 	tarLock    sync.Mutex           // one tarball download at a time
+	warming    map[string]bool      // sha → its files are being fetched in the background (Ready)
 }
 
 // StableLocal is what the release store answers for a stable it was handed.
@@ -164,18 +169,35 @@ func (s *StableSource) ttl() time.Duration {
 func (s *StableSource) Commit() string {
 	if s.Local != nil {
 		if sha, on := s.Local.PublishedStable(); on {
+			if s.Upstream != "" {
+				s.kick() // a mirror keeps looking upstream
+			}
 			return sha
 		}
+	}
+	if s.Upstream != "" {
+		s.kick()
+		return ""
 	}
 	if s.Offline {
 		return ""
 	}
+	return s.kick()
+}
+
+// kick starts one lookup in the background when the last answer is past its
+// TTL, and returns the last answer meanwhile.
+func (s *StableSource) kick() string {
 	s.mu.Lock()
 	sha, stale := s.sha, time.Since(s.at) > s.ttl()
 	if stale && !s.refreshing {
 		s.refreshing = true
+		d := stableFetchTime
+		if s.Upstream != "" {
+			d = upstreamMirrorTime // a whole release, artifacts and all
+		}
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), stableFetchTime)
+			ctx, cancel := context.WithTimeout(context.Background(), d)
 			defer cancel()
 			if err := s.Refresh(ctx); err != nil {
 				log.Printf("fleet: stable lookup: %v", err)
@@ -186,14 +208,37 @@ func (s *StableSource) Commit() string {
 	return sha
 }
 
-// Refresh asks GitHub which commit stable names now. A failure keeps the last
-// answer (a hub that lost GitHub keeps handing out the stable it knew).
+// Source says where the stable this hub hands out comes from — /version's
+// stable_source (claude-fleet#4847): release · upstream · github · image.
+func (s *StableSource) Source() string {
+	switch {
+	case s == nil:
+		return stableSrcImage
+	case s.Upstream != "":
+		return stableSrcUpstream
+	case s.Local != nil:
+		if _, on := s.Local.PublishedStable(); on {
+			return stableSrcRelease
+		}
+	}
+	if s.Offline {
+		return stableSrcImage
+	}
+	return stableSrcGitHub
+}
+
+// Refresh asks the upstream hub, else GitHub, which commit stable names now. A
+// failure keeps the last answer (a hub that lost GitHub keeps handing out the
+// stable it knew).
 func (s *StableSource) Refresh(ctx context.Context) error {
 	defer func() {
 		s.mu.Lock()
 		s.refreshing = false
 		s.mu.Unlock()
 	}()
+	if s.Upstream != "" {
+		return s.refreshUpstream(ctx)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.apiBase()+"/repos/"+s.repo()+"/commits/stable", nil)
 	if err != nil {
 		return err
@@ -259,7 +304,7 @@ func (s *StableSource) Problem() string {
 	if s == nil {
 		return ""
 	}
-	if s.Local != nil {
+	if s.Local != nil && s.Upstream == "" {
 		if _, on := s.Local.PublishedStable(); on {
 			return ""
 		}
@@ -267,6 +312,43 @@ func (s *StableSource) Problem() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.problem
+}
+
+// Ready says sha's client files are on this hub — the release store holds it,
+// or its tarball (or at least its manifest, the raw host's road) is cached —
+// so /install/stable/<sha>/ answers without a GitHub trip (claude-fleet#4847).
+// Not ready ⇒ one background fetch starts and the caller hands out the image's
+// client meanwhile: a hub that knows stable but whose cache is cold (just
+// restarted) never sends a client to a URL that would 502 while GitHub is
+// out, and never makes it wait 90 + 15 s to find out.
+func (s *StableSource) Ready(sha string) bool {
+	if s.Local != nil && s.Local.PublishedSeen(sha) {
+		return true
+	}
+	s.mu.Lock()
+	_, manifest := s.files[sha+"/"+StableManifestPath]
+	ready := s.whole[sha] || manifest
+	start := !ready && !s.Offline && !s.warming[sha]
+	if start {
+		if s.warming == nil {
+			s.warming = map[string]bool{}
+		}
+		s.warming[sha] = true
+	}
+	s.mu.Unlock()
+	if start {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), stableTarTime+stableFetchTime)
+			defer cancel()
+			if _, err := s.File(ctx, sha, StableManifestPath); err != nil {
+				log.Printf("fleet: stable %s: its files are not here yet (%v) — handing out the image's client", sha[:7], err)
+			}
+			s.mu.Lock()
+			delete(s.warming, sha)
+			s.mu.Unlock()
+		}()
+	}
+	return ready
 }
 
 // fail marks a failed lookup as an answer for one TTL, so a GitHub that is
@@ -460,7 +542,7 @@ func (s *StableSource) Tree(ctx context.Context, sha string, keep func(string) b
 		return nil, fmt.Errorf("bad sha %q", sha)
 	}
 	if s.Offline {
-		return nil, fmt.Errorf("%s: GitHub is off here (CCQUOTA_FLEET_STABLE_REPO=off) — publish it", sha[:7])
+		return nil, fmt.Errorf("%s: GitHub is not asked here (CCQUOTA_FLEET_STABLE_REPO unset or off) — publish it", sha[:7])
 	}
 	return s.tarballFiles(ctx, sha, keep)
 }
@@ -537,8 +619,18 @@ func stablePathOK(p string) bool {
 	return false
 }
 
-// stableCommit — the stable this hub hands out, or "" (the image's client).
+// stableCommit — the stable this hub hands out, or "" (the image's client):
+// only one whose files are here (Ready), never a URL that would wait on GitHub.
 func (s *Server) stableCommit() string {
+	sha := s.stableKnown()
+	if sha == "" || !s.Stable.Ready(sha) {
+		return ""
+	}
+	return sha
+}
+
+// stableKnown — the stable this hub knows of, whether or not its files are here.
+func (s *Server) stableKnown() string {
 	if s.Stable == nil || !s.installReady() {
 		return ""
 	}

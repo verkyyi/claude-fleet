@@ -250,15 +250,17 @@ func loadFleetCerts(srv *api.Server) error {
 	srv.FleetPublicURL = os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")
 	srv.FleetDistDir = os.Getenv("CCQUOTA_FLEET_DIST_DIR")
 	srv.FleetJoinScriptURL = os.Getenv("CCQUOTA_FLEET_JOIN_SCRIPT_URL")
-	// The client follows stable through this hub (claude-fleet#1805): pushed
-	// to the release store by the CI (claude-fleet#2772), else — one version's
-	// fallback — looked up on GitHub. "off" never asks GitHub: with a release
-	// store it serves what was published, without one the image's packed
-	// client only, as before.
+	// The client follows stable through this hub (claude-fleet#1805). Where it
+	// comes from, first that answers (claude-fleet#4847): pushed to the release
+	// store by the train (claude-fleet#2772) · an upstream hub's signed
+	// releases (CCQUOTA_FLEET_UPSTREAM_HUB) · GitHub, ONLY when
+	// CCQUOTA_FLEET_STABLE_REPO names a repo · else the image's packed client.
+	// Unset (or "off") never asks GitHub.
 	repo := os.Getenv("CCQUOTA_FLEET_STABLE_REPO")
-	srv.Stable = &api.StableSource{Repo: repo, Offline: repo == "off"}
-	if repo == "off" {
-		srv.Stable.Repo = ""
+	github := repo != "" && repo != "off"
+	srv.Stable = &api.StableSource{Offline: !github, Upstream: strings.TrimRight(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_UPSTREAM_HUB")), "/")}
+	if github {
+		srv.Stable.Repo = repo
 	}
 	// 我的用量's task titles and batches (claude-fleet#3227): GitHub's REST
 	// API, cached; off with the stable lookup. The token is optional.
@@ -275,10 +277,21 @@ func loadFleetCerts(srv *api.Server) error {
 		return err
 	}
 	loadFleetFeedback(srv)
+	if up := srv.Stable.Upstream; up != "" {
+		switch {
+		case srv.Releases == nil:
+			return errors.New("CCQUOTA_FLEET_UPSTREAM_HUB needs a release store to keep what it takes: set CCQUOTA_FLEET_RELEASE_DIR and CCQUOTA_FLEET_RELEASE_ROOT (the upstream's " + up + "/v1/fleet/release/key)")
+		case !srv.Releases.TrainSigned():
+			return errors.New("CCQUOTA_FLEET_UPSTREAM_HUB serves the upstream's signatures, never its own: unset CCQUOTA_FLEET_RELEASE_KEY (keep CCQUOTA_FLEET_RELEASE_ROOT)")
+		case !strings.HasPrefix(up, "https://") && !strings.HasPrefix(up, "http://"):
+			return fmt.Errorf("CCQUOTA_FLEET_UPSTREAM_HUB %q is not a URL", up)
+		}
+		log.Printf("fleet: stable follows the upstream hub %s (its signed releases, checked against CCQUOTA_FLEET_RELEASE_ROOT)", up)
+	}
 	switch {
-	case srv.Stable.Offline && srv.Releases == nil:
+	case srv.Stable.Offline && srv.Stable.Upstream == "" && srv.Releases == nil:
 		srv.Stable = nil
-	case !srv.Stable.Offline:
+	case !srv.Stable.Offline || srv.Stable.Upstream != "":
 		srv.Stable.Commit() // the first lookup (none once a publish landed), in the background
 	}
 	path := os.Getenv("CCQUOTA_FLEET_SSH_CA_KEY")

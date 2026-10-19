@@ -44,9 +44,12 @@ const JoinCodeTTL = 10 * time.Minute
 // to walk to the new machine and install, short enough to be worth little.
 const ManagedJoinCodeTTL = time.Hour
 
-// DefaultJoinScriptURL is where the one command fetches the join script: the
-// fleet's `stable` tag, the same ref fleet-login-bootstrap.sh installs.
-const DefaultJoinScriptURL = "https://raw.githubusercontent.com/verkyyi/claude-fleet/stable/bin/fleet-node-join.sh"
+// JoinScriptPath is where the one command fetches the join script by default:
+// this hub's own client package (fleetclient/manifest lists it), so the line a
+// colleague pastes reaches nothing but the hub (claude-fleet#4847 — it used to
+// start at raw.githubusercontent.com, and died there whenever GitHub did).
+// CCQUOTA_FLEET_JOIN_SCRIPT_URL still overrides it.
+const JoinScriptPath = "/install/bin/fleet-node-join.sh"
 
 // NodeInstallScript is the 托管 installer's path in the client package, served
 // at /install/<it> (fleetclient/manifest lists it).
@@ -192,7 +195,7 @@ func (s *Server) joinCommand(r *http.Request, code, role string) string {
 	}
 	script := s.FleetJoinScriptURL
 	if script == "" {
-		script = DefaultJoinScriptURL
+		script = s.hubURL(r) + JoinScriptPath
 	}
 	return fmt.Sprintf("curl -fsSL %s | bash -s -- --hub %s --token %s", script, s.hubURL(r), code)
 }

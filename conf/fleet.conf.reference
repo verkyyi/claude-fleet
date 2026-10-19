@@ -3044,7 +3044,13 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #   CCQUOTA_FLEET_OAUTH_REFRESH_VIA   node | relay | direct — who refreshes a
 #                                 subscription's sign-in · 可选 (relay needs
 #                                 CCQUOTA_FLEET_CRED_RELAY_URL + CCQUOTA_FLEET_SESSION_CRED_KEY)
-#   CCQUOTA_FLEET_STABLE_REPO     owner/name whose stable the clients follow;
-#                                 off = never ask GitHub · 可选
+#   CCQUOTA_FLEET_STABLE_REPO     owner/name whose stable the clients follow,
+#                                 looked up on GitHub — ONLY when set (#4847);
+#                                 unset / off = never ask GitHub · 可选
+#   CCQUOTA_FLEET_UPSTREAM_HUB    another hub's URL whose signed releases this one
+#                                 follows instead of GitHub (a self-hosted hub):
+#                                 needs CCQUOTA_FLEET_RELEASE_DIR + _RELEASE_ROOT
+#                                 (that hub's /v1/fleet/release/key), no
+#                                 _RELEASE_KEY · 可选
 #   CCQUOTA_DB_URL                postgres://… instead of SQLite · 可选 · 密钥
 #   CCQUOTA_SITE                  on = the public site at "/" · 可选 (unset = off)

@@ -1344,7 +1344,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		}
 	}
 	if len(installs) > 0 {
-		stable := s.stableCommit()
+		stable := s.stableKnown()
 		for h, pk := range installs {
 			if m := machines[h]; m != nil {
 				m.Installs = pk.judged(stable)
