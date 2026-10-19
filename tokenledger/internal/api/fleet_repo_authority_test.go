@@ -375,7 +375,7 @@ func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
 	path := FleetTicketsPath + "/authority?repo=" + writeRepo
-	other := FleetTicketsPath + "/authority?repo=verkyyi/other-repo"
+	other := FleetTicketsPath + "/authority?repo=example/other-repo"
 	st := h.srv.Store
 	touch := func(ep, host, hw string) {
 		if _, err := st.DB().Exec(`UPDATE endpoints SET hostname = ?, os_user = 'frank', machine_id = ? WHERE endpoint_id = ?`, host, hw, ep); err != nil {
