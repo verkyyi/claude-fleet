@@ -83,6 +83,12 @@
 #               test F names (lines `<test><TAB><why>`, bin/fleet-train-reuse.sh): it
 #               passed on a PR's merge tree this change does not touch it from. Prints
 #               `REUSED <test> ← <why>`; before the deal, so the shards still partition.
+#   --passed F  (with --shard; the release train's cut-short rerun — issue #4914) skip
+#               a test of THIS slice that F names (one per line, the first word): it
+#               passed on the attempt the shard's deadline cut short
+#               (bin/fleet-shard-run.sh --resume-opt). After the deal, so every
+#               shard still gets the slice the first attempt had; prints
+#               `PASSED-BEFORE <test>` for each one left out.
 #   --quarantine LIST   (with --changed; the RELEASE TRAIN only — issue #3243) skip a
 #               test LIST holds in force (bin/fleet-train-quarantine.sh, the one
 #               reader) unless this change touches it; prints `QUARANTINED <test> …`.
@@ -267,7 +273,7 @@ fi
 # works. Forwarded verbatim through the shadow re-exec above, so it is only ever
 # parsed here, in the inner run.
 shard_k=1 shard_n=1 changed_base='' dur_spec='' q_list='' q_prev='' drill_red='' plan=0
-retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven=''
+retry_red=0 drill_flaky='' solo=0 list_only=0 among='' exact=0 proven='' passed_before=''
 # a relative path is the caller's, not this bin dir's
 abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$start_dir" "$1" ;; esac; }
 
@@ -297,6 +303,9 @@ while [ "$#" -gt 0 ]; do
     --proven) [ "$#" -ge 2 ] && [ -f "$2" ] \
                 || { echo "run-selftests: --proven needs a file of test names" >&2; exit 2; }
               proven=$(abspath "$2"); shift 2; continue ;;
+    --passed) [ "$#" -ge 2 ] && [ -f "$(abspath "$2")" ] \
+                || { echo "run-selftests: --passed needs a file of test names" >&2; exit 2; }
+              passed_before=$(abspath "$2"); shift 2; continue ;;
     --among) [ "$#" -ge 2 ] && [ -n "$2" ] \
                || { echo "run-selftests: --among needs a list of files" >&2; exit 2; }
              among=$2; shift 2; continue ;;
@@ -704,6 +713,25 @@ if [ "$shard_n" -ne 1 ]; then
           printf "run-selftests: WARN heaviest shard predicted ~%ss > %ss — widen the shard: matrix, or refresh bin/%s\n", max, warn, tbl
       }'
   fi
+fi
+
+# THE CUT-SHORT RERUN (issue #4914): the release train's shard ran out of its budget
+# with no test red, and bin/fleet-shard-run.sh runs it again. The tests that already
+# passed on the cut attempt are not run twice — only the one in flight and the ones
+# that never started. After the deal: the same slice, minus what is done.
+if [ -n "$passed_before" ]; then
+  keep=''
+  # shellcheck disable=SC2086  # intentional: test names carry no whitespace
+  for t in $tests; do
+    if awk -v t="$t" '$1 == t { f = 1 } END { exit !f }' "$passed_before"; then
+      printf 'PASSED-BEFORE %s — passed on the cut-short attempt, not run again\n' "$t"
+    else
+      keep="$keep $t"
+    fi
+  done
+  tests=$keep
+  # nothing left (the cut fell after the last result line) runs nothing: all green
+  printf 'run-selftests: shard %s/%s — rerunning:%s\n' "$shard_k" "$shard_n" "${tests:- (none left)}"
 fi
 
 # Milliseconds since the epoch. BSD `date` has no %N/%3N, so perl (already a fleet
