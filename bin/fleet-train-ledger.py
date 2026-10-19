@@ -15,8 +15,9 @@
 #   build --mac --train-run N --jobs <jobs.ndjson> [--run-id N] [--conclusion C]
 #       mac-follow's word on the train run that started it: one `mac follow`
 #       stage, the run's span.
-#   post <file> [--hub URL] [--summary <file>]
-#       POST it to <hub>/v1/fleet/release/train with this run's OIDC token (as
+#   post <file> [--hub URL] [--summary <file>] [--to train|notice]
+#       POST it to <hub>/v1/fleet/release/train (--to notice: …/notice, the
+#       train's one line to the person — fleet-train-next.py, #4913) with this run's OIDC token (as
 #       fleet-release-publish.sh: audience ccquota-fleet-release; else
 #       FLEET_PUBLISH_TOKEN), print the answer, and with --summary append the
 #       hub's 「卡在…」 line to it (GITHUB_STEP_SUMMARY). Exit 0 recorded · 1 refused
@@ -218,11 +219,14 @@ def identity():
 def post(args):
     if not args:
         die("post needs a file")
-    path, hub, summ = args[0], os.environ.get("FLEET_HUB_URL", ""), ""
+    path, hub, summ, to = args[0], os.environ.get("FLEET_HUB_URL", ""), "", "train"
     rest = args[1:]
     while rest:
         if rest[0] == "--hub" and len(rest) > 1:
             hub, rest = rest[1], rest[2:]
+        elif rest[0] == "--to" and len(rest) > 1 and rest[1] in ("train", "notice"):
+            # notice: the train's one line to the person (fleet-train-next.py, #4913)
+            to, rest = rest[1], rest[2:]
         elif rest[0] == "--summary" and len(rest) > 1:
             summ, rest = rest[1], rest[2:]
         else:
@@ -233,7 +237,7 @@ def post(args):
     tok = identity()
     if not tok:
         die("no identity: not a GitHub Actions run with id-token: write, and no FLEET_PUBLISH_TOKEN", 3)
-    req = urllib.request.Request(hub.rstrip("/") + "/v1/fleet/release/train", data=body, method="POST",
+    req = urllib.request.Request(hub.rstrip("/") + "/v1/fleet/release/" + to, data=body, method="POST",
                                  headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
     tok = ""
     try:

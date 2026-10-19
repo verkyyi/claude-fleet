@@ -36,6 +36,9 @@
 #                       --ignore-check; the old auto roads are gone (#3143)
 #   train-superseded-red    stable moved past TRAIN_SHA mid-run: the train's release
 #                       ends green saying superseded, not red on the 409 (#3143)
+#   train-red-stalls        a train red only on a flake: master's head sat unreleased
+#                       until the next merge; now `next` re-sends it (≤ 2 a sha), a
+#                       real red waits with a notice, release-hold blocks the move (#4913)
 #   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
 #                       hub plan skips the deploy (superseded), never rolls it back (#3319)
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
@@ -594,6 +597,46 @@ drill_train_superseded_red() {
   [ "$rc" = 0 ] && case "$out" in *"the hub's stable"*) true ;; *) false ;; esac || { WHY="the hub's stable ahead was not superseded: $rc $out"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="stable 被手动挪过了 TRAIN_SHA（或入口 stable 已在前面）：release 写 superseded、以成功收场，不再被 409 打红；stable 落后则照常发"
+}
+
+# A red train stalled the lane until the next merge (issue #4913): 2026-10-19
+# stable sat 5 commits behind master after one real red (39220924047) and one
+# flake (39225563317). The train's `next` job (bin/fleet-train-next.py) judges the
+# run: red only on a flake ⇒ ONE re-send of master's head through the same lane
+# (≤ 2 a sha, counted off the 「补发」 run names); a real red ⇒ no re-send, a
+# notice; an open release-hold ⇒ no move, no re-send until it closes.
+drill_train_red_stalls() {
+  CAP=30
+  local t0 d py wf bk sha stb v a i
+  py="$BIN/fleet-train-next.py"; wf="$BIN/../.github/workflows/release-train.yml"; bk="$BIN/../.github/workflows/release-train-next.yml"
+  [ -f "$py" ] || { WHY="no bin/fleet-train-next.py: a red train re-sends nothing"; return 1; }
+  grep -q 'fleet-train-next.py judge' "$wf" && grep -q 'gh workflow run release-train.yml' "$wf" \
+    || { WHY="release-train.yml has no next job re-sending a flaky train"; return 1; }
+  grep -q "cron: '3-59/10" "$bk" 2>/dev/null || { WHY="no 10-minute backstop (release-train-next.yml)"; return 1; }
+  grep -q 'labels=release-hold' "$wf" || { WHY="release-train.yml never reads release-hold"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/train-stall.XXXXXX"); t0=$(now)
+  sha=$(printf 'a%.0s' $(seq 40)); stb=$(printf 'c%.0s' $(seq 40))
+  printf '{"name":"Linux / shard 3","conclusion":"failure"}\n{"name":"train","conclusion":"failure"}\n{"name":"release","conclusion":"skipped"}\n' > "$d/jobs"
+  mkdir -p "$d/res/train-result-Linux-3"; printf 'FAIL  wobbly-selftest.sh  (exit 1)\n' > "$d/res/train-result-Linux-3/train-result.txt"
+  printf '4101\t列车上 wobbly-selftest.sh 时好时坏：红了一次，重跑才过\n' > "$d/flaky"
+  : > "$d/none"
+  dec() { python3 "$py" decide --verdict "$d/v.json" --head "$sha" --stable "$stb" --active 0 "$@" | sed -n 's/^action=//p'; }
+  # the flake: judged flaky, re-sent twice, then left
+  python3 "$py" judge --sha "$sha" --jobs "$d/jobs" --results "$d/res" --flaky-issues "$d/flaky" > "$d/v.json"
+  v=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["verdict"])' "$d/v.json")
+  [ "$v" = flaky ] || { WHY="a red on a test with an open flaky issue was judged $v"; rm -rf "$d"; return 1; }
+  for i in 0 1; do
+    a=$(dec --retries "$i"); [ "$a" = dispatch ] || { WHY="a flaky train (re-sent $i×) was not re-sent: $a"; rm -rf "$d"; return 1; }
+  done
+  a=$(dec --retries 2); [ "$a" = wait ] || { WHY="a third re-send of one sha: $a"; rm -rf "$d"; return 1; }
+  a=$(dec --retries 0 --holds 9); [ "$a" = wait ] || { WHY="re-sent past an open release-hold: $a"; rm -rf "$d"; return 1; }
+  # the real red: no re-send, a notice that says so
+  python3 "$py" judge --sha "$sha" --jobs "$d/jobs" --results "$d/res" --flaky-issues "$d/none" > "$d/v.json"
+  a=$(dec --retries 0); [ "$a" = wait ] || { WHY="a real red was re-sent: $a"; rm -rf "$d"; return 1; }
+  case "$(python3 "$py" notice --verdict "$d/v.json" --action wait)" in *'wobbly-selftest.sh · 真红，等修复'*) ;;
+    *) WHY="the real red's notice does not name the test: $(python3 "$py" notice --verdict "$d/v.json" --action wait)"; rm -rf "$d"; return 1 ;; esac
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="一趟只因不稳而红的车：next 判 flaky、对 master 头补发（同一个 sha 最多 2 次）；真红不补发、通知写明测试；release-hold 开着就不补发、不挪 stable；每 10 分钟兜底一次"
 }
 
 # The hub deploy only moves forward (issue #3319): run 38139898013 (5e11587) rolled

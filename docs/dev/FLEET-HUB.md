@@ -784,6 +784,18 @@ a row's merges and stage table on a tap, phone-width. The ledger job never reds 
 red would stop mac-follow) and the move ignores it (`--ignore-check ledger`);
 `fleet-train-ledger-selftest.sh`, `TestTrainBottleneck`, `TestReleaseTrainRunRoute`.
 
+**…and one line to the person a run** (issue #4913, BREAK-IT `train-red-stalls`).
+After the ledger, the train's `next` job judges the run with `bin/fleet-train-next.py`
+(shipped · held · flaky · red · superseded · cancelled), re-sends a flaky one on
+master's head through the same lane (`workflow_dispatch`, run name 「补发 <sha7> ·
+n/2」, at most two a sha), and POSTs `{run_id, sha, verdict, text}` to `POST
+/v1/fleet/release/notice` (`fleet-train-ledger.py post --to notice`; the same OIDC
+check, `release-train.yml` and its 10-minute backstop `release-train-next.yml`
+taken). The hub hands `发布列车 · <text>` to its notifier (`FLEET_NOTIFY_CMD`) and
+writes one `release.notice` audit row — never a GitHub issue. An open issue
+labelled `release-hold` keeps the train's publish and move (tests run as always);
+`TestReleaseNoticeRoute`, `fleet-train-next-selftest.sh`.
+
 **Views across machines.** Each device has its own grouped view session on
 the home machine. `fleet-view-go.sh` selects the row by worker identity; a row
 on another machine uses that (machine, login)'s peer window over peerlink.

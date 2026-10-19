@@ -34,7 +34,7 @@
 #               used to block every move after it, one --ignore-check name at a
 #               time. Which workflows: FLEET_STABLE_DERIVED_RE, an ERE on the
 #               workflow's file name (default
-#               `^(release-train|stable-[a-z0-9-]+|hub-deploy)\.yml$`; empty =
+#               `^(release-train(-next)?|stable-[a-z0-9-]+|hub-deploy)\.yml$`; empty =
 #               count every run), matched through the run's check suite
 #               (gh api …/actions/runs?head_sha=<sha>); each run passed over is
 #               named on stderr;
@@ -148,7 +148,7 @@ remote=origin branch=master repo="" timeout=15 dry=0 precheck=0 allow_nochecks=0
 cmd="" target=""
 TAG=stable
 US=$(printf '\037')   # joins the --ignore-check names (a name may hold spaces)
-DERIVED_RE=${FLEET_STABLE_DERIVED_RE-'^(release-train|stable-[a-z0-9-]+|hub-deploy)\.yml$'}
+DERIVED_RE=${FLEET_STABLE_DERIVED_RE-'^(release-train(-next)?|stable-[a-z0-9-]+|hub-deploy)\.yml$'}
 
 die() { printf 'fleet-stable: %s\n' "$*" >&2; exit 2; }
 refuse() { printf 'fleet-stable: REFUSED — %s\n' "$*" >&2; exit 3; }
