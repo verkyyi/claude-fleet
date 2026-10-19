@@ -14,9 +14,9 @@
 #           --node and with --node auto / local (the degenerate case is sacred).
 #   NOHUB   CCQUOTA_FLEET unset + --node mac-a → refused (exit 1), nothing spawned.
 #   REMOTE  the hub placed it on mac-a → exit 0, stderr names mac-a and the reason, no
-#           window, no GitHub claim here, the lease NOT given back.
+#           window, the lease NOT given back.
 #   PARENT  a worker spawning a child sends its worker_id as --origin-wid.
-#   LOCAL   the hub chose this machine → today's claim + spawn.
+#   LOCAL   the hub chose this machine → spawn here (no GitHub claim since #4898).
 #   HELD    the hub says another machine holds it → exit 3, no spawn.
 #   NOELIG  auto, no machine eligible → opened here, one note.
 #   NAMED   --node mac-a refused by the hub → exit 2, no spawn, lease given back.
@@ -33,24 +33,18 @@
 #           3 claimed · 1 else), its reason on stderr, the lease released, nothing
 #           opened here (never the auto fallback); a re-send is granted, no --force.
 #           (issue #1606/#1610) A start that never reached mac-a / never started
-#           there comes back the same way (exit 1, its line, the operation id);
-#           the GitHub claim mac-a may have taken is withdrawn — only when the issue
-#           was unassigned before the ask, never on exit 3 (claimed).
+#           there comes back the same way (exit 1, its line, the operation id).
 #   UNKNOWN still running there when the wait ran out → exit 1 saying 未知,
 #           never a success; (issue #1606) the lease the hub gave back is
-#           released, the GitHub claim kept; nothing opened here.
-#   UNCLAIM (issue #1610) a spawn here that claimed the issue and then failed
-#           (new-window) takes its GitHub assignee back; one that opened keeps it.
-#           Hub on only: with CCQUOTA_FLEET unset a failed spawn is as today (OFF).
-#   STALE   (issue #1610) a claim an unknown send left — no window, no report, no
-#           session in a fresh hub table, past FLEET_STALE_CLAIM_SECS — is withdrawn
-#           before the next send (no --force); a young send / silent hub keeps it.
+#           released; nothing opened here.
+#   UNCLAIM a spawn here that failed (new-window) releases its lease; since #4898
+#           nothing is claimed on GitHub, so nothing is given back there.
 #   FALLBACK (issue #1610) the hub tried the next machine after a decline: the
 #           line's `after <m>:<op>:<exit>,…` field is a dispatch row per machine
 #           before the answer's, stripped from every message; each try's stderr
 #           line passes through; LOCAL after the others opens here; REFUSED
 #           ALL_DECLINED refuses (2 when every machine was full, else 1), never
-#           opens here, gives the lease and (unassigned before) the claim back.
+#           opens here, gives the lease back.
 #   ASYNC   --async asks with --wait 0; the operation id is left in the dispatch
 #           file and `fleet-children.py show --json` lists it.
 #   PERSONAL (issue #1721) a personal login (node.env CCQUOTA_FLEET_PERSONAL=1,
@@ -356,9 +350,9 @@ ok "PARENT a worker's child carries --origin-wid <fleet UUID>/issue-77"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b (score 0.9)' run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "LOCAL spawns (rc=$(rc))"
 tmux_has 'new-window'                            || fail "LOCAL opens the window here"
-gh_has '--add-assignee'                          || fail "LOCAL the GitHub claim runs as today"
+gh_has '--add-assignee'                          && fail "LOCAL claims nothing on GitHub (#4898)"
 err_has '开在本机 mac-b'                             || fail "LOCAL says where and why"
-ok "LOCAL the hub chose this machine → claim + spawn as today"
+ok "LOCAL the hub chose this machine → spawn here, no GitHub claim"
 
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'HELD mac-a\t#258 is leased to mac-a' PLACE_RC=3 run_spawn 258
 [ "$(rc)" = 3 ]                                  || fail "HELD exits 3 (rc=$(rc))"
@@ -546,8 +540,7 @@ CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=0 LEASE_ANSWER="GRANTED mac-b" PLACE_RC=5 P
 [ "$(rc)" = 1 ]                                  || fail "SWALLOWED exits 1, never 0 (rc=$(rc))"
 err_has '#258 被 mac-a 拒绝 (exit 1): mac-a accepted operation op_47 but never started it' || fail "SWALLOWED one line naming mac-a and the operation"
 lease_has release                                || fail "SWALLOWED releases the lease"
-gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "SWALLOWED withdraws the GitHub claim mac-a may have taken"
-err_has 'GitHub 认领已撤回'                       || fail "SWALLOWED says the claim was withdrawn"
+gh_has '--remove-assignee'                       && fail "SWALLOWED writes nothing to GitHub (#4898: no claim to withdraw)"
 grep -q '"op": "op_47".*"state": "refused"' "$DISPATCH" || fail "SWALLOWED is recorded with its operation" "$(cat "$DISPATCH")"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "SWALLOWED the re-send opens without --force (rc=$(rc))"
@@ -559,37 +552,16 @@ CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=0 LEASE_ANSWER="GRANTED mac-b" PLACE_RC=5 \
 gh_has '--remove-assignee'                       && fail "SWALLOWED exit 3 (claimed there) never withdraws the claim"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=5 PLACE_ANSWER="$SWALLOWED" run_spawn 258 --async
 gh_has '--json assignees --jq'                   && fail "SWALLOWED --async never pays for the pre-place read"
-ok "SWALLOWED never started on mac-a → exit 1 with its line; lease + claim back; re-send needs no --force"
+ok "SWALLOWED never started on mac-a → exit 1 with its line; lease back; re-send needs no --force"
 
-# ===== UNCLAIM: a spawn here that claimed and then failed takes the claim back ====
+# ===== UNCLAIM: a spawn here that failed gives its lease back, writes no GitHub ======
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' TMUX_NEWWIN_FAIL=1 run_spawn 258
 [ "$(rc)" = 1 ]                                  || fail "UNCLAIM a failed new-window exits 1 (rc=$(rc))"
-gh_has '--add-assignee @me'                      || fail "UNCLAIM setup: the spawn claimed first"
-gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "UNCLAIM the failed spawn withdraws its claim"
-lease_has release                                || fail "UNCLAIM and releases its lease"
-CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
-gh_has '--remove-assignee'                       && fail "UNCLAIM a spawn that opened keeps its claim"
-ok "UNCLAIM a claimed-then-failed spawn here withdraws its GitHub claim; an opened one keeps it"
+gh_has 'assignee'                                && fail "UNCLAIM no claim taken or given back (#4898)"
+lease_has release                                || fail "UNCLAIM the failed spawn releases its lease"
+ok "UNCLAIM a failed spawn here releases its lease and writes nothing to GitHub"
 
-# ===== STALE (issue #1610): a claim an unknown send left, no session anywhere =====
-# The parent's ledger, as fleet-children.sh reads it: the one repo's key (#1939).
 DISPATCH="$WORK/conf/fleets/testsess/children/acme-widgets:issue-77.dispatch"
-rm -f "$DISPATCH"; mkdir -p "$(dirname "$DISPATCH")"
-_old=$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)))')
-printf '{"seq": 1, "ts": "%s", "child": "acme-widgets:issue-258", "node": "mac-d", "op": "op_50", "state": "unknown"}\n' "$_old" > "$DISPATCH"
-CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 HUBCACHE=1 LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258 --origin issue-77
-gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "STALE the dead claim is withdrawn before the send" "$(cat "$WORK/spawn.err")"
-err_has '死认领'                                  || fail "STALE says the claim was a dead one"
-[ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "STALE the send opens without --force (rc=$(rc))" "$(cat "$WORK/spawn.err")"
-grep -q -- '--force' "$LEASE_LOG"                && fail "STALE never needs --force"
-CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258 --origin issue-77
-gh_has '--remove-assignee'                       && fail "STALE a hub that said nothing proves nothing: the claim stays"
-printf '{"seq": 2, "ts": "%s", "child": "acme-widgets:issue-258", "node": "mac-a", "op": "op_51", "state": "unknown"}\n' \
-  "$(python3 -c 'import time; print(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))')" >> "$DISPATCH"
-CLAIM_STATE=$'0\tOPEN' PRE_ASSIGNEES=1 HUBCACHE=1 LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258 --origin issue-77
-gh_has '--remove-assignee'                       && fail "STALE a send still young may yet open: the claim stays"
-ok "STALE a claim an unknown send left with no session anywhere is withdrawn before the next send — no --force; a young send or a silent hub keeps it"
-
 # ===== FALLBACK (issue #1610): the hub tried the next machine after a decline =====
 rm -f "$DISPATCH"; DISPATCH="$WORK/conf/fleets/testsess/children/issue-77.dispatch"   # the writer's, as above
 rm -f "$DISPATCH"
@@ -618,11 +590,7 @@ for pre in 0 1; do
   err_has '#258 每台机器都拒绝了: every machine that could take it said no — mac-d: declined: fork; mac-a: declined: full' || fail "ALL_DECLINED names each machine's reason" "$(cat "$WORK/spawn.err")"
   tmux_has 'new-window'                          && fail "ALL_DECLINED never opens it here on the hub's no"
   lease_has release                              || fail "ALL_DECLINED releases the lease the hub gave back"
-  if [ "$pre" = 0 ]; then
-    gh_has "issue edit 258 --repo acme/widgets --remove-assignee @me" || fail "ALL_DECLINED withdraws the GitHub claim a machine may have taken"
-  else
-    gh_has '--remove-assignee'                   && fail "ALL_DECLINED an assignee that predates the ask is not ours to take"
-  fi
+  gh_has '--remove-assignee'                     && fail "ALL_DECLINED writes nothing to GitHub (#4898)"
 done
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=4 \
   PLACE_ANSWER=$'REFUSED ALL_DECLINED\tall full\tafter mac-d:op_63:2,mac-a:op_64:2' run_spawn 258
@@ -630,7 +598,7 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_RC=4 \
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b' run_spawn 258
 [ "$(rc)" = 0 ] && tmux_has 'new-window'         || fail "ALL_DECLINED the re-send opens without --force (rc=$(rc))"
 grep -q -- '--force' "$LEASE_LOG"                && fail "ALL_DECLINED a re-send must not need --force"
-ok "FALLBACK the hub's next machine: done/LOCAL after a decline recorded per machine; ALL_DECLINED refuses, gives lease + claim back, no --force after"
+ok "FALLBACK the hub's next machine: done/LOCAL after a decline recorded per machine; ALL_DECLINED refuses, gives the lease back, no --force after"
 
 rm -f "$DISPATCH"
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'REMOTE mac-a op_46 accepted\tchose mac-a' run_spawn 258 --origin issue-77 --async
