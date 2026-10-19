@@ -736,6 +736,17 @@ func (s *Server) OperationGet(req *http.Request, opID string) (map[string]any, e
 	if err != nil {
 		return nil, err
 	}
+	if st := settleRefusedStart(o.Action, o.Status, o.Result); st != o.Status {
+		// A refusal journalled as unknown settles here, node or no node
+		// (claude-fleet#4864).
+		if err := s.Store.UpdateFleetOperation(o.ID, st, o.Result, time.Now()); err != nil {
+			return nil, err
+		}
+		if o, err = s.Store.FleetOperation(o.ID); err != nil {
+			return nil, err
+		}
+		s.progressOp(o)
+	}
 	var reconcileErr error
 	_, launch, _ := s.launchContract(o)
 	if (launch && o.Status != "failed") || (o.Status != "succeeded" && o.Status != "failed") {
@@ -755,6 +766,21 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 		return fault("NOT_FOUND", "the operation's fleet is not registered")
 	}
 	res, _, err := s.NodeRead(ctx, r.EndpointID, "operation_get", map[string]any{"operation_id": o.ID})
+	var nf *FleetFault
+	if errors.As(err, &nf) && nf.Code == "NOT_FOUND" && time.Since(o.Created) > orphanOpGrace {
+		// The node that answers for the fleet says it never accepted this
+		// operation: it never ran there and never will (claude-fleet#4864).
+		// Past the grace, so a write still in flight is not cut short.
+		b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "NOT_ACCEPTED",
+			"message": "the node has no record of this operation; it never ran there (" + nf.Message + ")"}})
+		now := time.Now()
+		if err := s.Store.UpdateFleetOperation(o.ID, "failed", string(b), now); err != nil {
+			return err
+		}
+		o.Status, o.Result, o.Updated = "failed", string(b), now
+		s.progressOp(*o)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -774,6 +800,7 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 		return fault("PROTOCOL_ERROR", "remote operation status is not one this hub knows")
 	}
 	verifiedStatus, verifiedResult := s.verifyLaunchResult(*o, r, remote.Status, string(remote.Result))
+	verifiedStatus = settleRefusedStart(o.Action, verifiedStatus, verifiedResult)
 	remote.Status, remote.Result = verifiedStatus, json.RawMessage(verifiedResult)
 	now := time.Now()
 	if err := s.Store.UpdateFleetOperation(o.ID, remote.Status, string(remote.Result), now); err != nil {
@@ -786,6 +813,10 @@ func (s *Server) reconcileOperation(ctx context.Context, o *store.FleetOperation
 	}
 	return nil
 }
+
+// orphanOpGrace: how old an operation must be before a node's NOT_FOUND
+// settles it failed — well past any write's wait for the node's journal.
+var orphanOpGrace = 10 * time.Minute
 
 func operationView(o store.FleetOperation) map[string]any {
 	var result any

@@ -187,6 +187,17 @@ if [ -f "$FLEET_CONF_DIR/spawn-full" ]; then
   echo "dash-raw-session: at capacity: 6/6 sessions" >&2
   exit 2
 fi
+# issue #4864: exit 1 after its own refuse() line (nothing left open), or a crash
+if [ -f "$FLEET_CONF_DIR/spawn-infra" ]; then
+  echo "tmux: toast" >&2
+  echo "dash-raw-session: spawn failed: new-window" >&2
+  exit 1
+fi
+if [ -f "$FLEET_CONF_DIR/spawn-crash" ]; then
+  echo "dash-raw-session: opening scratch-3" >&2
+  echo "dash-raw-session.sh: line 9: x: unbound variable" >&2
+  exit 1
+fi
 printf '%s\\n' "$*" >> "$FLEET_CONF_DIR/scratch.calls"
 repo=''; agent=claude; prev=''; for a in "$@"; do [ "$prev" = --repo ] && repo=$a; [ "$prev" = --agent ] && agent=$a; prev=$a
   case "$a" in
@@ -1504,6 +1515,21 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         err = down["result"]["error"]
         self.assertEqual((down["status"], err["code"], err["exit"]), ("failed", "UNAVAILABLE", 8))
         self.assertEqual(err["stderr1"], "start: fleet demo has no running tmux server — nothing opened")
+        # issue #4864: an exit the reason table lacks is still the spawner's own
+        # refusal when its refuse() line is its last word — failed, not unknown;
+        # a crash (its last line is bash's) stays unknown: a window may be open
+        (self.node.conf / "spawn-infra").touch()
+        infra = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="scratch-4",
+                                                              params={"kind": "scratch"}))["operation_id"])
+        (self.node.conf / "spawn-infra").unlink()
+        err = infra["result"]["error"]
+        self.assertEqual((infra["status"], err["code"], err["exit"]), ("failed", "EXECUTION_FAILED", 1))
+        self.assertEqual(err["stderr1"], "dash-raw-session: spawn failed: new-window")
+        (self.node.conf / "spawn-crash").touch()
+        crash = self.node.wait(self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="scratch-5",
+                                                              params={"kind": "scratch"}))["operation_id"])
+        (self.node.conf / "spawn-crash").unlink()
+        self.assertEqual((crash["status"], crash["result"]["error"]["exit"]), ("unknown", 1))
         self.assertEqual(len((self.node.conf / "scratch.calls").read_text().splitlines()), 1)
 
     def test_start_scratch_with_unsent_draft(self):
