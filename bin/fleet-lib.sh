@@ -603,17 +603,6 @@ fleet_pane_fmt() {
 # the operator's current pane. A daemon (no $TMUX at all) is not this.
 fleet_pane_lost() { [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ]; }
 
-# fleet_spawn_refused — never refuses (rc 1) since issue #4591: any session —
-# a worker too — may spawn. It used to refuse a worker pane (issue #2960: one level
-# of delegation); the caps and the claim dedup stay in the spawners, and a
-# grandchild's report reaches its parent, else the nearest live ancestor
-# (fleet_live_ancestor, issue #1352), else the person (issue #3117). Kept so a
-# caller from the previous version still answers "may spawn".
-# compat-1v: 下一批删
-# shellcheck disable=SC2034
-FLEET_SPAWN_REFUSAL=''
-fleet_spawn_refused() { return 1; }
-
 # --- the `agent:<name>` address (EPIC #4333 C8, issue #4341) -----------------------
 # fleet_win_for_agent <name> [<sock>] → the live window started from the agent file
 # <name> (@agent_def, issue #3122) on this fleet's server. rc 0 + the id · rc 1 none
@@ -623,14 +612,13 @@ fleet_win_for_agent() {
   local name="${1:-}" sock="${2:-}" rows hits n
   case "$name" in ''|*[!A-Za-z0-9._:-]*) return 1 ;; esac
   if [ -n "$sock" ]; then
-    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}|#{@fleet_role_def}|#{@fleet_role}' tmux -L "$sock")   # compat-1v: 下一批删 (cols 4-5)
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}' tmux -L "$sock")
   else
-    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}|#{@fleet_role_def}|#{@fleet_role}')   # compat-1v: 下一批删 (cols 4-5)
+    rows=$(fleet_lw '#{window_id}|#{@agent_def}|#{@pool}')
   fi
   hits=$(printf '%s\n' "$rows" | awk -F'|' -v r="$name" '
     $3 == "1" { next }
-    $2 == r { print $1; next }
-    ($4 == r || $5 == r) && r !~ /^(home|panel|worker)$/ { print $1 }   # compat-1v: 下一批删 — an old role mark
+    $2 == r { print $1 }
   ' | awk '!seen[$0]++')
   n=$(printf '%s' "$hits" | grep -c .)
   case "$n" in
@@ -639,17 +627,6 @@ fleet_win_for_agent() {
   esac
   printf 'fleet: agent:%s is ambiguous — %s sessions run it\n' "$name" "$n" >&2
   return 2
-}
-
-# fleet_agent_addr <target> → `agent:<name>` for an agent address, rc 1 otherwise.
-# The two bare words an older session still sends to are read as the agent files of
-# the same name for one version. # compat-1v: 下一批删
-fleet_agent_addr() {
-  case "${1:-}" in
-    agent:?*) printf '%s' "$1" ;;
-    orchestrator|steward) printf 'agent:%s' "$1" ;;   # compat-1v: 下一批删
-    *) return 1 ;;
-  esac
 }
 
 # fleet_claude_has_agent_flag <claude binary> — rc 0 when that Claude Code knows
@@ -6125,10 +6102,6 @@ fleet_win_for_key() {
   case "$key" in ?*:?*) pre=${key%%:*}; key=${key#*:} ;; esac
   case "$key" in
     issue-*|scratch-*) sn=${key#*-}; case "$sn" in ''|*[!0-9]*) return 1 ;; esac ;;
-    orchestrator|steward)   # compat-1v: 下一批删 — an old child's @origin; fid comes first
-      [ -z "$pre" ] || return 1
-      fleet_win_for_agent "$key" "$sock"
-      return $? ;;
     *) return 1 ;;
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)

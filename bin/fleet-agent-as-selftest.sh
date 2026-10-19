@@ -11,9 +11,9 @@
 #      no `fleet:` key reads exactly like an empty one
 #   C  fleet-claude.sh: `--as <name>` ⇒ the argv carries `--agent <name>` and the
 #      file's model is the FLEET_MODEL default (a fleet's FLEET_MODEL still wins);
-#      no --as ⇒ no agent / role argument at all, byte for byte as before; the old
-#      `--role worker|epic-driver|debugger` reads as --as fleet-worker|epic-driver|
-#      fleet-debugger; a file gone at launch ⇒ a plain session and one stderr line
+#      no --as ⇒ no agent / role argument at all, byte for byte as before; the
+#      shipped fleet-worker / fleet-debugger and the plugin's epic-driver answer
+#      --as; a file gone at launch ⇒ a plain session and one stderr line
 #   D  a Claude Code with no `--agent` (its --help says so): the same file rides
 #      --tools / --disallowedTools / --append-system-prompt-file instead; one that
 #      hangs on --help is given ~5 s, then counts as knowing it
@@ -118,12 +118,12 @@ python3 "$BIN/fleet-agent-def.py" ship >/dev/null
 # epic-driver is the fleet-epic plugin's (issue #3116): installed, it answers
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$ROOT/plugins/fleet-epic" > "$WORK/plugins.json"
 rm -f "$FLEET_CONF_DIR/agents/plugins.json"
-eq "C: --role worker reads as --as fleet-worker" "$(fc bash "$BIN/fleet-claude.sh" --role worker x)" "--model opus --agent fleet-worker x"
-eq "C: --role=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --role=epic-driver x)" "--model opus --agent epic-driver x"
+eq "C: --as fleet-worker" "$(fc bash "$BIN/fleet-claude.sh" --as fleet-worker x)" "--model opus --agent fleet-worker x"
+eq "C: --as=epic-driver" "$(fc bash "$BIN/fleet-claude.sh" --as=epic-driver x)" "--model opus --agent epic-driver x"
 eq "C: --as epic-driver (fleet-epic installed) ⇒ --agent epic-driver, the bare name Claude Code finds" \
   "$(fc bash "$BIN/fleet-claude.sh" --as epic-driver '/fleet-epic-run 1')" "--model opus --agent epic-driver /fleet-epic-run 1"
 eq "C: …its fleet.reap is loop-end" "$(kv epic-driver --dir "$WORK" | field reap)" loop-end
-eq "C: --role debugger reads as fleet-debugger" "$(fc bash "$BIN/fleet-claude.sh" --role debugger x)" "--model opus --agent fleet-debugger x"
+eq "C: --as fleet-debugger" "$(fc bash "$BIN/fleet-claude.sh" --as fleet-debugger x)" "--model opus --agent fleet-debugger x"
 eq "C: a file gone at launch ⇒ a plain session" "$(fc bash "$BIN/fleet-claude.sh" --as gone-now x)" "--model opus x"
 orch() { env -u TMUX -u TMUX_PANE -u FLEET_CRED_SID -u FLEET_CRED_PROXY -u FLEET_MCP_CONFIG FLEET_CLAUDE_BIN="$WORK/claude" \
            FLEET_AGENT_CFG=0 FLEET_MOD=0 FLEET_STATUS_7501=0 FLEET_AGENT=claude FLEET_PRETRUST=0 \

@@ -320,7 +320,6 @@ case "$tgt" in
     case "${tgt#scratch-}" in ''|*[!0-9]*) die 2 "bad scratch target '$tgt' (want scratch-<N>)" ;; esac
     key="$tgt" ;;
   agent:?*) key="$tgt" ;;   # the session started from that agent file (issue #4341)
-  orchestrator|steward) key=$(fleet_agent_addr "$tgt") ;;   # compat-1v: 下一批删 — an older session's bare word
   @*|%*|*-*-*-*-*) ;;
   *:*) die 2 "'$tgt' is a window position or name (<sess>:<idx> / <sess>:<name>) — a closing window renumbers it onto someone else; address the worker as issue:<N>, scratch-<N> or wid:<key>" ;;
   *[!0-9]*) die 2 "'$tgt' is a window name, not an address (tmux prefix-matches names); use issue:<N>, scratch-<N> or wid:<key>" ;;

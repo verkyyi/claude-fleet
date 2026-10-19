@@ -92,7 +92,7 @@ esac
 # The launch POLICY a resume / new session keeps: its Codex home and the whole
 # launch group an older version rendered from a role's definition (issue #2782):
 # model, effort, an appended system prompt, tools, permission mode, and the agent file a session started as (`--as`, issue
-# #3122 — fleet-claude.sh finds it again; `--role` is its old spelling). The agent is the one that just ran, @cc_agent. The rest — a seed
+# #3122 — fleet-claude.sh finds it again). The agent is the one that just ran, @cc_agent. The rest — a seed
 # prompt, a --resume + nudge, a --session-id — belonged to the first launch only.
 policy=(); want=''
 for a in "$@"; do
@@ -105,8 +105,8 @@ for a in "$@"; do
     want=''; continue
   fi
   case "$a" in
-    --agent|--codex-home|--model|-m|--effort|-c|--append-system-prompt-file|--permission-mode|--as|--role) want=$a ;;
-    --model=*|--effort=*|--append-system-prompt-file=*|--permission-mode=*|--tools=*|--disallowedTools=*|--as=*|--role=*) policy+=("$a") ;;
+    --agent|--codex-home|--model|-m|--effort|-c|--append-system-prompt-file|--permission-mode|--as) want=$a ;;
+    --model=*|--effort=*|--append-system-prompt-file=*|--permission-mode=*|--tools=*|--disallowedTools=*|--as=*) policy+=("$a") ;;
   esac
 done
 
