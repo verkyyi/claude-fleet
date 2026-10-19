@@ -311,18 +311,16 @@ _fleet_gh_down_close() {  # _fleet_gh_down_close <how>
 # _fleet_gh_conn_failed <reason> — count one connection failure; the
 # FLEET_GH_DOWN_AFTER-th in a row (inside FLEET_GH_DOWN_WINDOW) opens the marker.
 _fleet_gh_conn_failed() {
-  local d f n at now win after tmp
+  local d f n now win after
   d=$(fleet_gh_state_dir); f="$d/gh-fail"; now=$(date +%s)
   win=$(_fleet_gh_num "${FLEET_GH_DOWN_WINDOW:-}" 300)
   after=$(_fleet_gh_num "${FLEET_GH_DOWN_AFTER:-}" 2)
-  n=0 at=0
-  [ -f "$f" ] && read -r n at < "$f" 2>/dev/null
-  n=$(_fleet_gh_num "$n" 0); at=$(_fleet_gh_num "$at" 0)
-  [ $(( now - at )) -gt "$win" ] && n=0
-  n=$(( n + 1 ))
-  tmp="$d/.gh-fail.$$"
-  printf '%s %s\n' "$n" "$now" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null
-  rm -f "$tmp" 2>/dev/null
+  # One appended line per failure — an O_APPEND write of a short line is atomic, so
+  # callers failing at the same second (20 sessions behind one blackhole) are all
+  # counted; a read-modify-write lost all but one of them.
+  printf '%s\n' "$now" >> "$f" 2>/dev/null
+  n=$(awk -v c=$(( now - win )) '$1 >= c { n++ } END { print n + 0 }' "$f" 2>/dev/null)
+  n=$(_fleet_gh_num "$n" 1)
   fleet_gh_log "gh-conn-fail n=$n reason=${1// /_} source=${0##*/}"
   [ "$n" -ge "$after" ] && _fleet_gh_down_open "$1"
   return 0
