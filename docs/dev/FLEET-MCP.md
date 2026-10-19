@@ -662,6 +662,16 @@ Stop/reap gates remain required; a `no_pending` result waives none of them.
 
 ### Existing-repo authority cutover (#4395)
 
+A repo the fleet is about to host skips all of this when it is new (issue
+#4885): `fleet-repo.sh add` (and fleet-up) on a login that reaches a hub posts
+`action: init` (`fleet_repo_authority.py owner/repo --init-new`) before it
+writes the overlay. The hub takes it — revision 0 → 1, `mode: hub` — only when
+it has no trace of the repo from any login (a fleet row hosting it or a worker
+of it, a local start, a task, a lease, a ticket, a worker start); then the
+overlay gets `FLEET_TASK_AUTHORITY="hub"`. Refused, the repo stays legacy with
+no line and is cut over as below; no hub, nothing is asked. `--authority
+legacy` skips the ask; `--authority hub` refuses the add when the hub declines.
+
 `fleet-repo.sh authority owner/repo --session fleet --dry-run` reads a private
 manifest: local authority/ticket/forge/landing settings and their digest, hub
 revision, registered hosts and capabilities, legacy owners (including expired

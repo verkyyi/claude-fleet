@@ -29,6 +29,10 @@ mkdir -p "$WORK/bin" "$WORK/home" "$WORK/conf"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"; chmod +x "$WORK/bin/gh"
 export PATH="$WORK/bin:$PATH" HOME="$WORK/home" FLEET_CONF_DIR="$WORK/conf"
 export FLEET_SKIP_GLOBAL_CONF=1 _FLEET_REGISTER_NO_KICK=1 GIT_TERMINAL_PROMPT=0
+# hub.example is never asked: the new-repo authority ask (issue #4885, its own
+# selftest fleet-authority-default-selftest.sh) answers legacy here.
+printf '#!/bin/sh\necho legacy\n' > "$WORK/bin/authority-stub"; chmod +x "$WORK/bin/authority-stub"
+export FLEET_HUB_AUTHORITY_CMD="$WORK/bin/authority-stub"
 unset TMUX TMUX_PANE CCQUOTA_TOKEN CCQUOTA_HUB_URL FLEET_HUB_URL FLEET_TICKETS FLEET_SESSION
 
 FAILS=0

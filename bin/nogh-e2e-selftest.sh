@@ -408,7 +408,10 @@ printf 'FLEET_SESSION=%s\nFLEET_CLEANUP_MERGED_GRACE=0\nFLEET_REAP_MIN_AGE=0\n' 
 "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s "$S" -n home -x 200 -y 50 || die 'could not start the private tmux server'
 tmux set-option -w -t "$S:home" @fleet_role home >/dev/null 2>&1
 ADDR='ssh://mac-a/~/repos/demo.git'
-tok=$(bash "$BIN/fleet-repo.sh" add --session "$S" "$ADDR" 2>"$WORK/err") || die 'fleet repo add refused the ssh address' "$tok $(cat "$WORK/err")"
+# --authority legacy: this run walks the person's own road (dash-issue-session.sh
+# on a ticket); a new repo would otherwise start on the hub (issue #4885), where a
+# start needs the hub's accepted task.
+tok=$(bash "$BIN/fleet-repo.sh" add --session "$S" "$ADDR" --authority legacy 2>"$WORK/err") || die 'fleet repo add refused the ssh address' "$tok $(cat "$WORK/err")"
 R=mac-a/demo
 . "$BIN/fleet-lib.sh"
 [ "$tok" = "added:$(fleet_slug "$R")" ] || die 'fleet repo add named the repo otherwise' "$tok"

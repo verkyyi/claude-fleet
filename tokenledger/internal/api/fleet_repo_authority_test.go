@@ -490,3 +490,24 @@ func TestSupersededByRules(t *testing.T) {
 		t.Fatal("a retired successor superseded it")
 	}
 }
+
+// A node starts a never-seen repo on the hub through the same POST; a repo a
+// fleet already hosts (writeRepo) is refused and stays legacy (claude-fleet#4885).
+func TestRepoAuthorityAPIInitNewRepo(t *testing.T) {
+	h, _, _, _, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
+	body := map[string]any{"action": "init", "expected_revision": 0, "idempotency_key": "repo-init-new", "legacy_tickets": "hub"}
+	code, a := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo=acme/brand-new", body)
+	if code != 200 || a["mode"] != "hub" || a["revision"] != float64(1) {
+		t.Fatalf("init a new repo: %d %v", code, a)
+	}
+	body["idempotency_key"] = "repo-init-hosted"
+	code, out := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo="+writeRepo, body)
+	if code != 409 {
+		t.Fatalf("init a hosted repo: %d %v", code, out)
+	}
+	code, g := ticketCall(t, h, auth, http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo+"&gate=1", nil)
+	if code != 200 || g["mode"] != "legacy" {
+		t.Fatalf("hosted repo after a refused init: %d %v", code, g)
+	}
+}
