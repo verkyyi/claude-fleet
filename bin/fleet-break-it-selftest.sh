@@ -5857,6 +5857,21 @@ drill_authority_legacy_task_unclosable() {
   SECS=$(since "$t0")
 }
 
+# ---- authority-open-issue-legacy-task (T479, #4830's cutover): the drain
+# stops workers whose issues stay open, so #4867's settle (issue closed) never
+# ended their legacy records and freeze never passed. settle --drained ends one
+# on the worker half alone; a live worker is kept.
+drill_authority_open_issue_legacy_task() {
+  CAP=120;  # a cold go test build is ~40 s on a CI runner
+  local t0 b="$BIN/fleet-task-record.sh"
+  t0=$(now)
+  grep -q -- '--drained) drained=true' "$b" \
+    || { WHY="fleet-task-record.sh settle has no --drained"; return 1; }
+  _drill_go_tests 'TestNodeTaskSettleDrained' "$ROOT/tokenledger/hub/api/fleet_task_settle_test.go" \
+    '旧式 T 记录 drain：issue 还开着、worker 已停（无 lease / local start / inventory）的结成 closed，不问 GitHub、issue 不动；worker 还活着的照样挡（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 # ---- authority-orphan-worker-start (#4864): a worker_start that can never
 # settle — refused by the spawner but filed unknown, sent to a retired
 # endpoint's fleet, or never accepted by its node — held a repo off the hub as
