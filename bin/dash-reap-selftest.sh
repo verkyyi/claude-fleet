@@ -114,6 +114,8 @@ git init -q "$BASEDIR"
 git -C "$BASEDIR" config user.email t@t; git -C "$BASEDIR" config user.name t
 printf 'seed\n' > "$BASEDIR/f"; git -C "$BASEDIR" add f; git -C "$BASEDIR" commit -qm seed
 BASE_BR="$(git -C "$BASEDIR" branch --show-current)"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/noconf" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"
 MASTER="$(git -C "$BASEDIR" rev-parse HEAD)"
 
 # issue-1: its commit is merged into base; base advances below ⇒ strict ancestor
@@ -200,6 +202,7 @@ case "$*" in
   *@reap_hold*)   printf '%s\n' "${HOLD:-}" ;;       # issue #1244
   *@worker_lifecycle*) printf '%s\n' "${LIFE:-}" ;;
   *@fleet_id*)    printf '%s\n' "${FID:-}" ;;       # fleet_win_retire's read (#1840)
+  *'#{@repo}|'*)  printf '||%s\n' "${WT:-}" ;;   # fleet_window_repo's one read: the fleet's only repo
   *@raw*)         printf '%s\n' "${RAW:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;         # scratch worktree path (#290)
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
@@ -526,7 +529,7 @@ git -C "$BASEDIR" worktree add -q -b scratch-10 "$WORK/scr10" >/dev/null 2>&1
 printf 'exp\n' > "$WORK/scr10/untracked"
 : > "$TMLOG"; : > "$GHLOG"
 RAW=1 WID='@9' WT="$WORK/scr10" run_reap "" "@9"
-grep -q 'CONFIRM' "$TMLOG" || fail "dirty scratch ⌃x should ask y/n first (confirm-before)"
+grep -q 'CONFIRM' "$TMLOG" || fail "dirty scratch ⌃x should ask y/n first (confirm-before)" "$(cat "$TMLOG")"
 grep -q 'KILL' "$TMLOG" && fail "dirty scratch ⌃x must not close the window before confirm"
 [ -d "$WORK/scr10" ] || fail "dirty scratch ⌃x must KEEP the worktree"
 grep 'CONFIRM' "$TMLOG" | grep -q -- "dash-reap.sh' '@9' --yes" || fail "the scratch y/n's y must re-run this reap --yes" "$(cat "$TMLOG")"

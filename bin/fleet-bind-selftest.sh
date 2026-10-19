@@ -57,6 +57,8 @@ git init -q "$MAIN"
 git -C "$MAIN" config user.email t@t; git -C "$MAIN" config user.name t
 printf 'seed\n' > "$MAIN/f"; git -C "$MAIN" add f; git -C "$MAIN" commit -qm seed
 BASE_BR="$(git -C "$MAIN" branch --show-current)"
+. "$BIN/selftest-repo-fixture.sh"
+fx_repo "$WORK/conf" testsess acme/widgets FLEET_MAIN="$MAIN" FLEET_BASE_BRANCH="$BASE_BR"
 WT="$WORK/main-scratch-1"
 
 reset_scratch() {   # fresh scratch-1 worktree on branch scratch-1; no issue-* branches

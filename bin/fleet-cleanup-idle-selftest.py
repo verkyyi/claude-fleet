@@ -644,8 +644,12 @@ class Rig(unittest.TestCase):
         self.call("git", "-C", str(self.main), "update-ref", "refs/remotes/origin/master", head)
         self.conf = self.root / "conf/fleets" / self.label / "conf"
         self.conf.parent.mkdir(parents=True)
-        self.conf.write_text(
-            f'FLEET_REPO=acme/repo\nFLEET_MAIN={shlex.quote(str(self.main))}\nFLEET_REAP_MIN_AGE=0\n')
+        self.conf.write_text('FLEET_REAP_MIN_AGE=0\n')
+        repos = self.conf.parent / "repos"   # every repo is an overlay (#1937, #4806)
+        repos.mkdir()
+        (repos / "acme-repo.conf").write_text(
+            f'FLEET_REPO=acme/repo\nFLEET_MAIN={shlex.quote(str(self.main))}\n')
+        (repos / ".order").write_text("acme-repo\n")
         self.tm("-f", "/dev/null", "new-session", "-d", "-s", self.label, "-c", str(self.root), "sleep 90")
         self.win = self.tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", self.label,
                            "-c", str(self.wt), "sleep 90").strip()
