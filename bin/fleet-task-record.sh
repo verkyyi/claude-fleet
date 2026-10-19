@@ -16,12 +16,15 @@
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
-#   fleet-task-record.sh settle --repo o/n [--apply]
+#   fleet-task-record.sh settle --repo o/n [--apply] [--drained]
 #                     → end this owner's legacy records of a repo whose issue is
 #                       closed and whose worker holds nothing (no lease, no open
 #                       local start, not in inventory) — issue #4867. Dry unless
 #                       --apply; the hub's JSON (settled · kept by reason · items)
 #                       on stdout. A node never writes `closed` through `set`.
+#                       --drained (the authority cutover, T479): the worker half
+#                       alone — gone ⇒ closed even with its issue still open
+#                       (GitHub not asked, the issue untouched); live ⇒ kept.
 #                       Waits at least 90 s (the hub asks GitHub for up to 60 s,
 #                       issue #4881), FLEET_HUB_TIMEOUT when that is longer.
 #   fleet-task-record.sh attach T<n> [<window>]
@@ -298,11 +301,12 @@ case "$cmd" in
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1" || exit 1 ;;
   settle)
-    repo='' apply=false
+    repo='' apply=false drained=false
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo) repo="${2:-}"; shift ;;
         --apply) apply=true ;;
+        --drained) drained=true ;;
         *) usage ;;
       esac
       shift
@@ -312,7 +316,7 @@ case "$cmd" in
     to=${FLEET_HUB_TIMEOUT:-10}
     case "$to" in ''|*[!0-9]*) to=90 ;; esac
     [ "$to" -ge 90 ] || to=90
-    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true"}))' "$repo" "$apply")" || exit 1 ;;
+    FLEET_HUB_TIMEOUT=$to call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true","drained":sys.argv[3]=="true"}))' "$repo" "$apply" "$drained")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift

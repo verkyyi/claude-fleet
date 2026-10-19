@@ -132,3 +132,69 @@ func TestNodeTaskSettleLegacy(t *testing.T) {
 		t.Fatalf("foreign settle = %v", out)
 	}
 }
+
+// claude-fleet T479 (#4830's cutover): drained ends a legacy record whose
+// worker is gone even while its issue is still open — GitHub not asked, the
+// issue left as it is — and keeps one whose worker is live.
+func TestNodeTaskSettleDrained(t *testing.T) {
+	h, _, nodes := peerHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	h.srv.IssueMeta = fakeIssueStates{"org/repo#2": "open"}
+	gone := wrFleetM4 + "/" + wrFid
+	live := wrFleetM4 + "/44444444-4444-4444-8444-444444444444"
+	if _, err := h.srv.Store.RecordFleetSnapshot(nodes["verk4"].id, "verk4", "frank", "verk4", []store.FleetReport{{FleetID: wrFleetM4, Name: "fleet", Repo: "org/repo",
+		WorkersJSON: `[{"worker_id":"` + live + `","key":"issue-9"}]`}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	tok := nodes["verk4"].token
+	mk := func(token, worker string) string {
+		t.Helper()
+		st, rec := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath,
+			map[string]any{"token": token, "title": token, "repo": "org/repo", "issue": "org/repo#2", "worker_id": worker, "state": "open"})
+		if st != 200 {
+			t.Fatalf("create %s = %d %v", token, st, rec)
+		}
+		return rec["id"].(string)
+	}
+	stopped := mk("stopped", gone)
+	running := mk("running", live)
+	settle := func(body map[string]any) map[string]any {
+		t.Helper()
+		body["repo"] = "org/repo"
+		st, out := nodeTaskCall(t, h, tok, http.MethodPost, NodeTasksPath+"/settle", body)
+		if st != 200 {
+			t.Fatalf("settle = %d %v", st, out)
+		}
+		return out
+	}
+	// Without drained an open issue keeps both.
+	if out := settle(map[string]any{"apply": true}); out["settled"] != float64(0) {
+		t.Fatalf("undrained = %v", out)
+	}
+	if out := settle(map[string]any{"drained": true}); out["settled"] != float64(1) || out["drained"] != true {
+		t.Fatalf("drained dry = %v", out)
+	}
+	if n := unverified(t, h); n != 2 {
+		t.Fatalf("a dry drain wrote: blockers = %d", n)
+	}
+	out := settle(map[string]any{"drained": true, "apply": true})
+	kept, _ := out["kept"].(map[string]any)
+	if out["settled"] != float64(1) || kept["worker live: in inventory"] != float64(1) {
+		t.Fatalf("drained apply = %v", out)
+	}
+	if n := unverified(t, h); n != 1 {
+		t.Fatalf("blockers after drain = %d; want 1", n)
+	}
+	read := func(ref string) map[string]any {
+		t.Helper()
+		_, rec := nodeTaskCall(t, h, tok, http.MethodGet, NodeTasksPath+"/"+ref, nil)
+		task, _ := rec["task"].(map[string]any)
+		return task
+	}
+	if rec := read(stopped); rec["state"] != "closed" || !strings.Contains(rec["note"].(string), "drained for authority cutover; issue org/repo#2 still open") {
+		t.Fatalf("drained record = %v", rec)
+	}
+	if rec := read(running); rec["state"] != "open" {
+		t.Fatalf("a live worker's record was drained: %v", rec)
+	}
+}

@@ -18,13 +18,18 @@ import (
 // state that ends it, so every one once attached to a worker blocks the repo's
 // authority switch as "legacy task owner is unverified" forever.
 //
-//	POST /v1/node/tasks/settle {repo, apply?} → {repo, apply, settled, kept, items}
+//	POST /v1/node/tasks/settle {repo, apply?, drained?} → {repo, apply, drained, settled, kept, items}
 //
 // A record is settled (state closed) only when its issue is closed — the hub's
 // own ticket, else GitHub read now — AND its worker holds nothing on the hub's
 // books (store.LegacyWorkerLive, re-read in the write). Dry by default; every
 // other record is counted by why it was kept. A node settles only its owner's
 // records (the operator's machines: anyone's, like nodeOwnTask).
+//
+// drained (claude-fleet T479, the #4830 cutover): the work was stopped on
+// purpose and goes on as a hub task, so the issue is still open. The worker
+// half alone decides — gone ⇒ closed whatever the issue says (GitHub is not
+// asked, the issue is left as it is); a live worker is kept all the same.
 const nodeTaskSettleRef = "settle"
 
 // IssueStateSource answers an issue's state on GitHub ("open" / "closed").
@@ -51,8 +56,9 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 		return
 	}
 	var in struct {
-		Repo  string `json:"repo"`
-		Apply bool   `json:"apply"`
+		Repo    string `json:"repo"`
+		Apply   bool   `json:"apply"`
+		Drained bool   `json:"drained"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&in); err != nil {
 		httpError(w, http.StatusBadRequest, "the body is one JSON object")
@@ -85,6 +91,7 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 		switch {
 		case live != "":
 			items[i].Why = "worker live: " + live
+		case in.Drained:
 		case t.Issue == "":
 			items[i].Why = "no issue on the record"
 		default:
@@ -97,20 +104,25 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 		if items[i].Why != "" {
 			continue
 		}
-		switch st := states[t.Issue]; st {
-		case "closed":
-		case "open":
-			items[i].Why = "issue open"
-			continue
-		default:
-			items[i].Why = "issue state unknown: " + orDefault(whyNot[t.Issue], "no answer")
-			continue
+		var evidence string
+		if in.Drained {
+			evidence = "drained for authority cutover; issue " + orDefault(t.Issue, "(none)") + " still open, left as is; worker " + t.WorkerID + " holds no lease, start or inventory row (#4867)"
+		} else {
+			switch st := states[t.Issue]; st {
+			case "closed":
+			case "open":
+				items[i].Why = "issue open"
+				continue
+			default:
+				items[i].Why = "issue state unknown: " + orDefault(whyNot[t.Issue], "no answer")
+				continue
+			}
+			evidence = "settled: issue " + t.Issue + " closed; worker " + t.WorkerID + " holds no lease, start or inventory row (#4867)"
 		}
 		if !in.Apply {
 			items[i].Verdict = "settle"
 			continue
 		}
-		evidence := "settled: issue " + t.Issue + " closed; worker " + t.WorkerID + " holds no lease, start or inventory row (#4867)"
 		if err := s.Store.SettleLegacyTask(t.ID, t.WorkerID, evidence, now); err != nil {
 			if !errors.Is(err, store.ErrTaskConflict) {
 				httpError(w, http.StatusInternalServerError, err.Error())
@@ -129,7 +141,7 @@ func (s *Server) nodeTaskSettle(w http.ResponseWriter, r *http.Request, owner st
 			settled++
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "apply": in.Apply, "candidates": len(items),
+	writeJSON(w, http.StatusOK, map[string]any{"repo": repo, "apply": in.Apply, "drained": in.Drained, "candidates": len(items),
 		"settled": settled, "kept": kept, "items": items})
 }
 
