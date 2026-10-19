@@ -211,6 +211,40 @@ class Supervisor(Receipts):
             with self.assertRaisesRegex(ValueError, "cannot replace"):
                 launch.hook(dict(hook_event_name="SessionStart", session_id="55555555-5555-4555-8555-555555555555"))
 
+    def test_codex_witness_writes_the_receipt_without_a_turn(self):
+        # T485: Codex 0.162 runs SessionStart only at the first turn, which the
+        # launch holds — the runtime's witness writes the same receipt instead.
+        opts = {"@launch": json.dumps(self.context)}
+        server = {k: self.receipt[k] for k in ("pid", "birth", "executable")}
+        payload = dict(hook_event_name="SessionStart", session_id=self.receipt["native_session"], cwd="/w")
+        env = {"TMUX_PANE": "%1", "FLEET_LAUNCH_CONTEXT": json.dumps(self.context),
+               "FLEET_LAUNCH_SUPERVISOR": "12", "FLEET_CODEX_REMOTE": "", "CODEX_HOME": "/home/.codex"}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(launch, "option", side_effect=lambda p,k: opts.get(k,"")), \
+             mock.patch.object(launch, "process", return_value=dict(server, ppid=12)), \
+             mock.patch.object(launch, "native_provider", return_value="codex"), \
+             mock.patch.object(launch, "root_native", return_value=True), \
+             mock.patch.object(launch, "tmux", side_effect=lambda *a, **k: opts.__setitem__(a[4], a[5]) or ""):
+            launch.witness_codex(42, payload, "unix:///tmp/x/worker.sock")
+            stamped = check_receipt(self.context, json.loads(opts["@launch_receipt"]))
+            self.assertEqual(stamped["native_remote"], "unix:///tmp/x/worker.sock")
+            self.assertEqual(stamped["native_home"], "/home/.codex")
+            self.assertEqual((stamped["pid"], stamped["native_session"]), (42, self.receipt["native_session"]))
+            # the real SessionStart hook at the first turn finds the same proof
+            native = dict(server, actual_provider="codex")
+            with mock.patch.object(launch, "native_parent", return_value=native), \
+                 mock.patch.object(launch, "stamp") as stamp:
+                launch.hook(payload)
+                stamp.assert_not_called()
+            opts.pop("@launch_receipt")
+            with mock.patch.object(launch, "native_provider", return_value="claude"):
+                with self.assertRaisesRegex(ValueError, "not a verified Codex"):
+                    launch.witness_codex(42, payload, "unix:///tmp/x/worker.sock")
+            with mock.patch.object(launch, "root_native", return_value=False):
+                with self.assertRaisesRegex(ValueError, "outside this launch"):
+                    launch.witness_codex(42, payload, "unix:///tmp/x/worker.sock")
+            self.assertNotIn("@launch_receipt", opts)
+
 
 class Worktrees(Receipts):
     def setUp(self):

@@ -187,6 +187,54 @@ def trust_launch_hooks(remote, cwd, rpc_client=None):
         client.close()
 
 
+class LaunchWitness:
+    """Write an accepted launch's receipt off this runtime's own server (T485).
+
+    Codex 0.162's app-server runs SessionStart only when the first turn starts,
+    while fleet_launch.py holds the task's first turn until a receipt exists:
+    waiting for the hook was a deadlock (every task-bound Codex start gave up
+    after 45 s, «no matching process/native-session receipt»). The server is
+    private to this TUI, so its one loaded root thread IS the TUI's session and
+    the socket's kernel peer IS the native process; fleet_launch.witness_codex
+    applies the hook's own checks to them. A later SessionStart hook finds the
+    same pid + session and leaves the receipt alone."""
+
+    def __init__(self, remote, rpc_client=None, launch=None):
+        self.remote = remote
+        self.rpc_client = rpc_client or runpy.run_path(str(Path(__file__).with_name('fleet-codex-rpc.py')))['Client']
+        if launch is None:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import fleet_launch as launch
+        self.launch = launch
+        self.error = ''
+        # fleet_launch.py stops waiting after 45 s; past that nobody reads it.
+        self.deadline = time.monotonic() + 60
+
+    def tick(self):
+        """False once the receipt is written or too late (stop ticking); True to try again."""
+        if time.monotonic() > self.deadline:
+            return False
+        try:
+            client = self.rpc_client(self.remote, timeout=3)
+            try:
+                peer = client.peer_pid()
+                roots = []
+                for thread_id in (client.call('thread/loaded/list', {}) or {}).get('data') or []:
+                    thread = (client.call('thread/read', {'threadId': thread_id}) or {}).get('thread') or {}
+                    if thread.get('id') == thread_id and not thread.get('parentThreadId') and not thread.get('ephemeral'):
+                        roots.append(thread)
+            finally:
+                client.close()
+            if len(roots) != 1:
+                return True  # the TUI has not started its thread yet (or it is not one thread)
+            self.launch.witness_codex(peer, {'hook_event_name': 'SessionStart', 'session_id': roots[0]['id'],
+                                             'cwd': roots[0].get('cwd', '')}, self.remote)
+            return False
+        except Exception as exc:
+            self.error = str(exc)
+            return True
+
+
 def run(argv, prepare=None, tick=None):
     options = argv[:argv.index('--')] if '--' in argv else argv
     if '--no-daemon' in options:
@@ -264,6 +312,13 @@ def run(argv, prepare=None, tick=None):
                           file=sys.stderr)
             except Exception as exc:
                 print('fleet-codex-runtime: could not pre-trust the fleet hooks: ' + str(exc), file=sys.stderr)
+        witness = None
+        if env.get('FLEET_LAUNCH_CONTEXT'):
+            try:
+                witness = LaunchWitness(remote)
+            except Exception as exc:
+                # The SessionStart hook stays the receipt's only road then.
+                print('fleet-codex-runtime: launch witness unavailable: ' + str(exc), file=sys.stderr)
         client = subprocess.Popen(['codex', '--remote', remote, *argv], env=env)
         next_tick = time.monotonic()
         while client.poll() is None and guardian.poll() is None and not ended:
@@ -272,6 +327,8 @@ def run(argv, prepare=None, tick=None):
                 if meter is not None: meter.tick()
                 if seeder is not None and not seeder.tick():
                     seeder = None
+                if witness is not None and not witness.tick():
+                    witness = None
                 if tick: tick()
                 next_tick = time.monotonic() + 1
             time.sleep(0.1)

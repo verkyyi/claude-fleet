@@ -24,17 +24,8 @@ class Client:
         try:
             self.socket.settimeout(timeout)
             self.socket.connect(remote[7:])
-            if peer_pid is not None:
-                if sys.platform == 'darwin':
-                    actual_pid = self.socket.getsockopt(0, 2)  # SOL_LOCAL / LOCAL_PEERPID
-                elif hasattr(socket, 'SO_PEERCRED'):
-                    actual_pid, uid, _ = struct.unpack('3i', self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-                    if uid != os.getuid():
-                        raise ValueError('native RPC belongs to another login')
-                else:
-                    raise ValueError('kernel RPC peer identity is unavailable')
-                if actual_pid != peer_pid:
-                    raise ValueError('native RPC peer PID changed')
+            if peer_pid is not None and self.peer_pid() != peer_pid:
+                raise ValueError('native RPC peer PID changed')
             key = base64.b64encode(os.urandom(16)).decode()
             self.socket.sendall(('GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n'
                 'Connection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n').encode())
@@ -61,6 +52,17 @@ class Client:
         except Exception:
             self.close()
             raise
+
+    def peer_pid(self):
+        """The PID the kernel names as this socket's server (same login only)."""
+        if sys.platform == 'darwin':
+            return self.socket.getsockopt(0, 2)  # SOL_LOCAL / LOCAL_PEERPID
+        if hasattr(socket, 'SO_PEERCRED'):
+            pid, uid, _ = struct.unpack('3i', self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if uid != os.getuid():
+                raise ValueError('native RPC belongs to another login')
+            return pid
+        raise ValueError('kernel RPC peer identity is unavailable')
 
     def close(self):
         self.socket.close()
