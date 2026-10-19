@@ -709,3 +709,78 @@ func TestRepoAuthorityClientHostBlocksNothing(t *testing.T) {
 		t.Fatalf("a client reserved a start: %d %v", code, m)
 	}
 }
+
+// claude-fleet#4978: a stale worker_start its node never ran is abandoned by
+// that node alone — listed only to its own login, refused while too young,
+// refused to another node, then failed START_ABANDONED with one audit row; it
+// no longer blocks its owner's cutover.
+func TestAuthorityOperationNodeAbandonsStaleStart(t *testing.T) {
+	h, _, _, f5, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
+	auth := func(token string) func(http.Header) {
+		return func(h http.Header) { h.Set("Authorization", "Bearer "+token) }
+	}
+	path := FleetAuthorityPath + "/operation"
+	id := postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "fleet_id": f5.FleetID, "idempotency_key": "stale"}, 200)["operation_id"].(string)
+	if err := h.srv.Store.UpdateFleetOperation(id, "running", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	listed := func(token string) bool {
+		code, out := authorityCall(t, h, auth(token), http.MethodGet, path, nil)
+		if code != 200 {
+			t.Fatal(code, out)
+		}
+		for _, raw := range out["operations"].([]any) {
+			if raw.(map[string]any)["operation_id"] == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !listed(h.tokens["mac-d"]) || listed(h.tokens["mac-c"]) {
+		t.Fatal("the start is listed to its own node only")
+	}
+	body := map[string]any{"operation_id": id, "local": "not_accepted"}
+	if code, out := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, body); code != 409 || !strings.Contains(asJSON(out), "younger than") {
+		t.Fatal("young", code, out)
+	}
+	old := abandonAge
+	abandonAge = 0
+	t.Cleanup(func() { abandonAge = old })
+	if code, _ := authorityCall(t, h, auth(h.tokens["mac-c"]), http.MethodPost, path, body); code != 404 {
+		t.Fatal("another node abandoned it", code)
+	}
+	if code, _ := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, map[string]any{"operation_id": id, "local": "running"}); code != 400 {
+		t.Fatal("a node that ran it may not abandon it", code)
+	}
+	if code, _ := authorityCall(t, h, auth(viewerToken), http.MethodPost, path, body); code != 403 {
+		t.Fatal("only its node abandons a start", code)
+	}
+	code, out := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, body)
+	e, _ := out["result"].(map[string]any)["error"].(map[string]any)
+	if code != 200 || out["status"] != "failed" || e["code"] != "START_ABANDONED" || e["prior_status"] != "running" || e["local"] != "not_accepted" {
+		t.Fatal("abandon", code, out)
+	}
+	if code, _ := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, body); code != 409 {
+		t.Fatal("abandoned twice", code)
+	}
+	log, err := h.srv.Store.FleetAuditLog(50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, a := range log {
+		if a.Action == "operation_abandon" && a.OperationID == id && strings.HasPrefix(a.Actor, "node:") && strings.Contains(a.Outcome, "local=not_accepted") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no operation_abandon audit row: %+v", log)
+	}
+	blockers, _, err := h.srv.Store.OwnerAuthorityBlockers("operator", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(blockers, "|"), "unsettled start: "+id) {
+		t.Fatal("still blocks", blockers)
+	}
+}
