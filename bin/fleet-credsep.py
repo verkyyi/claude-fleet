@@ -15,8 +15,6 @@ front; install runs as ROOT (it calls it through `sudo -n`).
     check     --conf-dir C                          (as the login: the doctor row)
     plan      --bin B                               (anyone: every login's state + commands)
     machine install|refresh [--logins a,b|all] [--dry-run]    (root; `machine uninstall` gone, #4675)
-    machine join  [--logins a,b|all] [--dry-run]    (root: an own-mode login onto the shared proxy, no gap —
-                                                     the last ones' road; `machine leave` left with #4674)
     machine status [--json]                         (anyone)
     machine enforce [--logins a,b|all] [--dry-run]  (root: every human login separated — the machine
                                                      daemon's credsep-enforce task, issue #4607)
@@ -50,9 +48,8 @@ What install does, each step idempotent:
      .credentials.json, hub-managed Codex auth.json (refresh_token
      "hub-managed"), node.env (C/node.env becomes a symlink there, so reading it
      is "Permission denied"; C/node.pub.env keeps its token-less lines)
-  5. the machine's shared proxy takes it as a tenant (a login's own proxy,
-     com.claude-fleet.credsep.<L>, is no longer made — issue #4674; one left
-     from before is booted out, its old port answered by the shared proxy)
+  5. the machine's shared proxy takes it as a tenant (a login's own proxy is
+     no longer made — issue #4674)
   6. the agent service now starts through fleet-credsep-launch.py agent (root,
      token down a pipe, then the login); the original definition is kept in
      backup/ for an install's rollback
@@ -773,16 +770,7 @@ def install(a):
     CUR.update(meta)
     put(os.path.join(R, "meta.json"), json.dumps(meta, indent=1), 0o600, ROLE)
 
-    # the machine's one proxy serves this login (issue #2217); an own one from
-    # before goes (compat-1v: 下一批删 — machine_install / main send an own
-    # login through join_login, no gap)
-    plabel, ppath = own_label(login)
-    if os.path.exists(ppath):
-        unload_daemon(plabel)
-        if not DRY:
-            os.unlink(ppath)
-        say("proxy: %s removed — the machine's shared proxy serves %s (old port %s kept for its sessions)"
-            % (plabel, login, legacy or "-"))
+    # the machine's one proxy serves this login (issue #2217)
     ppath = SHARED_PATH
     mkdir(LOG_BASE, 0o755, "root" if os.geteuid() == 0 else login)
 
@@ -916,9 +904,7 @@ def adopt(a):
     if not settings_conf(a.login, os.path.abspath(a.conf_dir), a.install_dir or meta.get("install_dir", ""), True):
         return 0
     if meta.get("mode") != "shared":
-        # compat-1v: 下一批删 — still on its own proxy: it joins the shared one,
-        # which reads root's settings at its start (issue #4674)
-        return 0 if join_login(a.login) else 1
+        die("%s is not a tenant of the machine's shared proxy: `machine install --logins %s`" % (a.login, a.login), 3)
     shared_restart()
     say("proxy: restarted on root's settings")
     return 0
@@ -1618,13 +1604,12 @@ def managed_logins():
 
 
 def store_state(login):
-    """'shared' · 'own' · 'none' · 'unknown' — from what anyone may read: the
-    shared record's tenants, the own-proxy definitions, the store's name (its
-    dir is the role account's 0700; that it exists is not a secret)."""
+    """'shared' · 'own' (a store, but no tenant of the shared proxy) · 'none' ·
+    'unknown' — from what anyone may read: the shared record's tenants, the
+    store's name (its dir is the role account's 0700; that it exists is not a
+    secret)."""
     if login in ((shared_rec() or {}).get("logins") or []):
         return "shared"
-    if login in own_proxies():
-        return "own"
     try:
         os.lstat(paths(login)[0])
     except FileNotFoundError:
@@ -1656,8 +1641,8 @@ def machine_managed(a):
               "separated): %s" % (len(none), len(logins), ", ".join(none), fix))
         return 1
     if own:
-        print("credsep-managed: WARN — every managed login separated, but %s on its own proxy, not the machine's "
-              "shared one (the hub reads it as not separated). Join: %s" % (", ".join(own), fix))
+        print("credsep-managed: WARN — every managed login separated, but %s not on the machine's shared proxy "
+              "(the hub reads it as not separated): %s" % (", ".join(own), fix))
         return 1
     print("credsep-managed: OK — %d managed login(s) on the shared proxy: %s%s"
           % (len(logins) - len(unk), ", ".join(l for l in logins if l not in unk),
@@ -1698,10 +1683,8 @@ def machine_logins(spec):
 # been refusing the login any lease (its backstop) and the files it would keep
 # are only a leak. A failed install is rolled back by install itself and tried
 # again after FLEET_CREDSEP_ENFORCE_RETRY (1 h).
-# There is no way out (issue #4675): root's old <NODE_STATE>/credsep.optional is
-# said once a pass and ignored (# compat-1v: 下一批删).
+# There is no way out (issue #4675).
 ENFORCE_STATUS = os.path.join(NODE_STATE, "credsep-enforce.json")
-ENFORCE_OPTIONAL = os.path.join(NODE_STATE, "credsep.optional")
 NOLOGIN = ("/usr/bin/false", "/bin/false", "/sbin/nologin", "/usr/sbin/nologin", "/usr/bin/nologin", "")
 
 
@@ -1779,7 +1762,7 @@ def enforce_run(argv):
     return r.returncode, " | ".join((pre[:3] if r.returncode == 6 and pre else []) + lines[-2:])[:600]
 
 
-def sweep_leftovers(login, home):  # compat-1v: 下一批删 (issue #4675: nothing writes there any more)
+def sweep_leftovers(login, home):
     """A separated login whose credentials are back at its login paths (issue
     #4643: 2026-10-09 an agent with no store leased a real Claude token into
     one's accounts/<l>.hub/ and it sat there a week; `check` only WARNed). Root
@@ -1870,17 +1853,14 @@ def machine_enforce(a):
         prev = json.load(open(ENFORCE_STATUS)).get("logins") or {}
     except (OSError, ValueError, AttributeError):
         prev = {}
-    if os.path.lexists(ENFORCE_OPTIONAL):   # compat-1v: 下一批删
-        say("enforce: %s is gone (issue #4675) — ignored: every login is separated; delete it" % ENFORCE_OPTIONAL)
     want = [l for l in a.logins.split(",") if l] if a.logins not in ("", "all") else None
     logins = [(l, h) for l, h in human_logins() if want is None or l in want]
     out, bad = {}, []
-    shared = shared_on()
     for login, home in logins:
         p = prev.get(login) or {}
         st = store_state(login)
         row = {"state": st, "at": now_}
-        if st == "shared" or (st == "own" and not shared):
+        if st == "shared":
             row["verdict"] = "separated"
             moved, rest = sweep_leftovers(login, home)
             if moved or rest:
@@ -1898,7 +1878,7 @@ def machine_enforce(a):
             row.update({k: p[k] for k in ("verdict", "why", "rc", "since", "next", "tries") if k in p})
             bad.append(login)
         else:
-            argv = ["machine", "join" if st == "own" else "install", "--logins", login]
+            argv = ["machine", "install", "--logins", login]
             since = p.get("since") or now_
             force = st == "none" and p.get("verdict") == "refused" and now_ - since >= grace
             if force:
@@ -1988,8 +1968,6 @@ def machine_install(a):
     say("role:", ROLE, "(created)" if created else "(exists)")
     pre = {"service": os.path.exists(SHARED_PATH), "rec": shared_rec() is not None}
     fresh = []      # the logins this run took into the store from nothing: a failure puts them back
-    own = [r for r in rows if store_mode(r[0]) == "own"]
-    rows = [r for r in rows if r not in own]
     try:
         for login, conf, home in rows:
             say("")
@@ -2007,20 +1985,10 @@ def machine_install(a):
         if DRY:
             raise
         return machine_rollback(rows, fresh, pre, e)
-    bad = []
-    for login, _, _ in own:
-        say("")
-        say("== %s (separated on its own proxy: joins without a gap)" % login)
-        if not join_login(login):
-            bad.append(login)
-    logins = sorted({m["login"] for m in shared_tenants()}) if not DRY else logins + [r[0] for r in own]
+    logins = sorted({m["login"] for m in shared_tenants()}) if not DRY else logins
     say("")
     say("shared: ON — %s on 127.0.0.1:%d as %s, %d login(s): %s"
         % (SHARED_LABEL, SHARED_PORT, ROLE, len(logins), ", ".join(logins)))
-    if bad:
-        say("machine install: %s stayed on its own proxy (see above) — `machine join --logins %s` again"
-            % (", ".join(bad), ",".join(bad)))
-        return 1
     return 0
 
 
@@ -2152,23 +2120,14 @@ def unserved_tried(logins=None):
     return logins
 
 
-# ---- an own-mode login onto the shared proxy, and back (issue #2432) ----------------
-# A login separated BEFORE the machine had a shared proxy keeps its own one
-# (com.claude-fleet.credsep.<login>, meta.json without `mode: shared`). `machine
-# join` moves it over without a moment with no proxy: the store's state is
-# already where the shared proxy reads it (<store>/cred-proxy), so the shared
-# proxy takes the login as a tenant FIRST — its answer on the control socket is
-# the proof — the agent's leases go to the shared socket, and only then is the
-# own proxy booted out; its old port is then bound by the shared proxy for that
-# login (a session minted on it goes on). The own service definition is kept in
-# <store>/backup/ for join's own rollback. There is no way back (issue #4674:
-# `machine leave` left with the per-login proxy) and no new own proxy: join is
-# only how the last ones leave — compat-1v: 下一批删 once none is left.
+# ---- a tenant of the shared proxy (issues #2432, #3155) ----------------------------
 JOIN_WAIT = int(E("FLEET_CREDSEP_JOIN_WAIT", "30"))
 NODE_STATE = E("FLEET_NODE_STATE", "/var/db/fleet-node")
 
 
 def own_label(login):
+    """A login's own proxy definition from before the shared one (issue #2432):
+    purge still removes one it finds."""
     plabel = "com.claude-fleet.credsep.%s" % login if MAC else "claude-fleet-credsep-%s.service" % login
     return plabel, os.path.join(DAEMON_DIR, plabel + (".plist" if MAC else ""))
 
@@ -2179,24 +2138,6 @@ def read_meta(login):
     except (OSError, ValueError):
         return None
     return m if isinstance(m, dict) and m.get("login") == login else None
-
-
-def store_mode(login):
-    """'shared' · 'own' (separated on its own proxy) · None (no store / unreadable)."""
-    m = read_meta(login)
-    return None if m is None else ("shared" if m.get("mode") == "shared" else "own")
-
-
-def own_proxies():
-    """The logins whose own proxy service is installed — read from the service
-    dir, which anyone may list (the stores are the role account's)."""
-    out = []
-    pat = re.compile(r"^com\.claude-fleet\.credsep\.(.+)\.plist$" if MAC else r"^claude-fleet-credsep-(.+)\.service$")
-    for n in sorted(os.listdir(DAEMON_DIR)) if os.path.isdir(DAEMON_DIR) else []:
-        m = pat.match(n)
-        if m:
-            out.append(m.group(1))
-    return out
 
 
 def shared_ctl(login, req, root=False):
@@ -2246,130 +2187,6 @@ def wait_for(fn, secs):
         time.sleep(0.2)
 
 
-def agent_store(login, meta, sock):
-    """Point the login's node agent at <sock> for its leases. Managed (the node
-    daemon's logins/<login>.env, issue #2387): its CCQUOTA_FLEET_CRED_STORE line,
-    rewritten whole — the daemon restarts the node program when logins/ changes.
-    Else credsep's own agent definition, restarted (the launcher reads the mode).
-    The file holds a token: never printed."""
-    envp = os.path.join(NODE_STATE, "logins", login + ".env")
-    if os.path.isfile(envp) and not os.path.islink(envp):
-        lines = open(envp).read().splitlines()
-        out, done = [], False
-        for l in lines:
-            if l.startswith("CCQUOTA_FLEET_CRED_STORE="):
-                l, done = "CCQUOTA_FLEET_CRED_STORE=" + sock, True
-            out.append(l)
-        if not done:
-            out.append("CCQUOTA_FLEET_CRED_STORE=" + sock)
-        if out != lines:
-            put(envp, "\n".join(out) + "\n", 0o600, "root" if os.geteuid() == 0 else getpw(login).pw_name)
-        say("agent: %s → leases to %s (the node daemon restarts its node program)" % (envp, sock))
-        return
-    s = meta.get("agent")
-    if s:
-        dp = s["path"] if s["kind"] != "launchd-gui" else os.path.join(DAEMON_DIR, "com.ccquota.agent.%s.plist" % login)
-        lb = s["label"] if s["kind"] != "launchd-gui" else "com.ccquota.agent.%s" % login
-        if os.path.exists(dp):
-            load_daemon(dp, lb)
-            say("agent: %s restarted — its leases go to %s" % (lb, sock))
-            return
-    say("agent: none to repoint for %s" % login)
-
-
-def record_run(login, conf, run, shared, proxy):
-    rec = record(conf)
-    if not rec:
-        return
-    rec["run"] = run
-    rec.pop("shared", None)
-    if shared:
-        rec["shared"] = True
-    rec.setdefault("back", {})["proxy"] = proxy
-    put(os.path.join(conf, "credsep.json"), json.dumps(rec, indent=1) + "\n", 0o644, getpw(login).pw_name)
-
-
-def join_login(login, wait=None):
-    """An own-mode login onto the machine's shared proxy, no gap. -> True when it
-    joined; False when it is back on its own proxy exactly as it was."""
-    wait = JOIN_WAIT if wait is None else wait
-    R, RUN = paths(login)
-    meta = read_meta(login)
-    if meta is None:
-        say("join: %s has no store here (not separated) — `machine install --logins %s`" % (login, login))
-        return False
-    if meta.get("mode") == "shared":
-        say("join: %s is already a tenant of the shared proxy" % login)
-        return True
-    if not shared_rec() or not (os.path.exists(SHARED_PATH) or shared_supervised()):
-        die("machine join: this machine has no shared proxy yet — `machine install` first", 3)
-    plabel, ppath = own_label(login)
-    conf, pw = meta["conf_dir"], getpw(login)
-    try:
-        legacy = int(open(os.path.join(RUN, "port")).read().strip())
-    except (OSError, ValueError):
-        legacy = 0
-    say("join: %s — own proxy %s, port %s" % (login, plabel, legacy or "-"))
-    old = dict(meta)
-    # pool_hold: the shared proxy leaves the store's credential files where they
-    # are (no pool) while the own proxy still reads them; dropped once it is out
-    meta.update(mode="shared", legacy_port=legacy, own_prior={"proxy": plabel}, pool_hold=True)
-    if "conf_prior" not in meta:
-        meta["conf_prior"] = conf_switch_on(login, conf, pw)
-    if DRY:
-        say("    would restart %s with %s as a tenant, wait for it to answer, repoint the agent, "
-            "then boot %s out (kept in %s/backup)" % (SHARED_LABEL, login, plabel, R))
-        return True
-    put(os.path.join(R, "meta.json"), json.dumps(meta, indent=1), 0o600, ROLE)
-
-    def back(why, plist_out=False):
-        say("join: %s — %s; putting it back on its own proxy" % (login, why))
-        if plist_out:
-            bk = os.path.join(R, "backup", os.path.basename(ppath))
-            if os.path.isfile(bk) and not os.path.exists(ppath):
-                put(ppath, open(bk, "rb").read(), 0o644, "root" if os.geteuid() == 0 else pw.pw_name)
-            agent_store(login, old, os.path.join(RUN, "ctl.sock"))
-            load_daemon(ppath, plabel)
-        conf_switch_back(login, conf, pw, {k: v for k, v in (meta.get("conf_prior") or {}).items()
-                                           if "conf_prior" not in old})
-        put(os.path.join(R, "meta.json"), json.dumps(old, indent=1), 0o600, ROLE)
-        shared_record([m["login"] for m in shared_tenants()])
-        shared_restart()
-        say("join: %s — FAILED, still on its own proxy (nothing else moved)" % login)
-        return False
-
-    # 1. the shared proxy takes the tenant — its own answer is the proof
-    shared_service()
-    shared_record([m["login"] for m in shared_tenants()])
-    shared_restart()
-    if not wait_for(lambda: shared_ask(login) is not None, wait):
-        return back("the shared proxy did not take it within %ds" % wait)
-    say("join: %s — the shared proxy serves it" % login)
-    # 2. the agent's leases to the shared socket, before its own socket goes
-    agent_store(login, meta, os.path.join(SHARED_RUN, "ctl.sock"))
-    # 3. only now the own proxy goes — its definition kept for join's own rollback
-    if os.path.exists(ppath):
-        mkdir(os.path.join(R, "backup"), 0o700, ROLE)
-        put(os.path.join(R, "backup", os.path.basename(ppath)), open(ppath, "rb").read(), 0o600, ROLE)
-        unload_daemon(plabel)
-        os.unlink(ppath)
-        say("proxy: %s booted out (kept in %s/backup)" % (plabel, R))
-    # 4. its old port, now answered by the shared proxy for this login
-    if legacy and not wait_for(lambda: (shared_ask(login) or {}).get("legacy_port") == legacy, wait):
-        return back("the shared proxy did not bind its old port %d within %ds" % (legacy, wait), plist_out=True)
-    meta.pop("pool_hold", None)         # its files go into the pool at the shared proxy's next start
-    put(os.path.join(R, "meta.json"), json.dumps(meta, indent=1), 0o600, ROLE)
-    record_run(login, conf, SHARED_RUN, True, SHARED_PATH)
-    say("join: %s — on the shared proxy%s" % (login, " (old port %d kept for its sessions)" % legacy if legacy else ""))
-    return True
-
-
-def shared_on():
-    """This machine runs the shared proxy: its record and its service (a
-    definition, or the machine daemon's child) — what join_login requires."""
-    return bool(shared_rec()) and (os.path.exists(SHARED_PATH) or shared_supervised())
-
-
 def fresh_join(login, wait=None):
     """install --fresh as a tenant (issue #3155): the shared proxy restarts on a
     tenants file that names the new login. Its answer is reported, not required —
@@ -2386,17 +2203,6 @@ def fresh_join(login, wait=None):
     else:
         say("shared: %s — a tenant; the shared proxy has not answered for it within %ds (check says when it does)"
             % (login, wait))
-
-
-def machine_join(a):
-    logins = [l for l, _, _ in machine_logins(a.logins)] if a.logins != "all" else \
-        [d for d in (sorted(os.listdir(ROOT_BASE)) if os.path.isdir(ROOT_BASE) else [])
-         if not d.startswith(".") and ".rolledback-" not in d and store_mode(d) == "own"]
-    if not logins:
-        say("join: no login on its own proxy here — nothing to do")
-        return 0
-    bad = [l for l in logins if not join_login(l)]
-    return 1 if bad else 0
 
 
 def machine_status(a):
@@ -2419,7 +2225,6 @@ def machine_status(a):
         out["install_version"] = code_version(os.path.join(HERE, "fleet-cred-proxy.py"))
         out["machine_logins"] = [n for n, _, _ in fleet_logins()]
         out["live_logins"], out["unserved"] = shared_unserved(rec)
-    out["own"] = own_proxies()
     try:
         out["pool_sync"] = json.load(open(POOL_SYNC))
     except (OSError, ValueError):
@@ -2429,12 +2234,11 @@ def machine_status(a):
     elif not rec:
         print("per-login (no shared proxy on this machine)")
     else:
-        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s%s%s"
+        print("shared · %s · %d login(s) · 127.0.0.1:%s · version %s%s%s%s"
               % (rec.get("user"), len(rec.get("logins") or []), out["live_port"] or "down", out["live_version"] or "-",
                  "" if out["live_version"] == out["install_version"] else " (this install: %s)" % out["install_version"],
                  " · NOT SERVED: %s (joined after the running proxy started)" % ", ".join(out["unserved"])
                  if out["unserved"] else "",
-                 " · own proxy: %s (machine join)" % ", ".join(out["own"]) if out["own"] else "",
                  pool_sync_line(out["pool_sync"])))
     return 0 if rec else 3
 
@@ -3270,8 +3074,8 @@ def check(a):
     if subprocess.run(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         note = " · note: this login has password-less sudo, which reaches any file"
     if not rec.get("shared") and shared_rec():
-        print("credsep: WARN — separated on its own proxy, but this machine runs the shared one: one more service "
-              "for nothing. Join it (sudo, no gap): bash %s/fleet-credsep.sh machine join --logins %s" % (HERE, me))
+        print("credsep: WARN — separated, but not a tenant of this machine's shared proxy: "
+              "sudo bash %s/fleet-credsep.sh machine install --logins %s" % (HERE, me))
         return WARNED
     rconf = os.path.join(rec.get("lib") or LIB, me + ".conf")
     if not os.path.exists(rconf):
@@ -3350,7 +3154,7 @@ def main():
     sub.add_parser("role")      # the role account alone (fleet-node-install.sh, #2330)
     pl = sub.add_parser("plan"); pl.add_argument("--bin", default=HERE)
     mc = sub.add_parser("machine")
-    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "join", "pooldup", "pool-sync",
+    mc.add_argument("verb", choices=("install", "uninstall", "refresh", "status", "pooldup", "pool-sync",
                                      "enforce", "enforced",
                                           "managed", "proxies"))
     mc.add_argument("--logins", default="all")
@@ -3407,7 +3211,7 @@ def main():
         if os.geteuid() != 0 and not TEST and not DRY:
             die("machine %s needs root (bin/fleet-credsep.sh machine runs it through sudo)" % a.verb, 2)
         return {"install": machine_install, "refresh": machine_refresh,
-                "join": machine_join, "pooldup": machine_pooldup,
+                "pooldup": machine_pooldup,
                 "pool-sync": machine_pool_sync, "enforce": machine_enforce}[a.verb](a)
     if a.cmd in ("install", "uninstall"):
         if a.cmd == "uninstall":
@@ -3439,10 +3243,7 @@ def main():
                 preflight_gate([(a.login, os.path.abspath(a.conf_dir))], a.force)
         # A login is a tenant of the machine's ONE proxy (issues #3155, #4674): no
         # login gets a proxy of its own any more — the machine's first tenant
-        # brings the shared proxy up (fresh_join writes its service). A login
-        # still on its own proxy joins it without a gap.
-        if store_mode(a.login) == "own":
-            return 0 if join_login(a.login) else 1
+        # brings the shared proxy up (fresh_join writes its service).
         a.shared = True
         say("shared: %s joins it as a tenant — the machine's one proxy, %s" % (a.login, SHARED_LABEL))
         try:

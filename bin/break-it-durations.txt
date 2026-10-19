@@ -75,7 +75,6 @@
 0.6 cred-managed-unseparated
 0.1 cred-migration-client
 1.5 cred-new-login-not-tenant
-6.7 cred-own-to-shared
 0.3 cred-pass-lapsed
 0.1 cred-policy-empties-machine
 13.0 cred-pool-delete-stale-proxy

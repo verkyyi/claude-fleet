@@ -176,7 +176,7 @@ grep -sqx status "$W/ctl2.log" || fail "E: relay-tick never asked its proxy"; ok
 
 # ---- F. the per-login launcher is gone (#4674) --------------------------------
 out=$(HOME="$W/home" FLEET_CONF_DIR="$C" FLEET_SKIP_GLOBAL_CONF=1 bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] || fail "F: run did something (rc $rc): $out"; ok
+[ "$rc" = 2 ] || fail "F: run is not an unknown command (rc $rc): $out"; ok
 pgrep -f "fleet-cred-proxy.sh relay-tick" >/dev/null && fail "F: a relay-tick outlived its pass"; ok
 
 printf 'fleet-cred-relay-retry selftest: PASS (%d checks)\n' "$CHECKS"

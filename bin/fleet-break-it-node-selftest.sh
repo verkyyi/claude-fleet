@@ -1367,8 +1367,8 @@ drill_codesign_identity_switch() {
 # ~/.claude/fleet linked into <root>/fc6b100…; the updater only counted managed
 # logins' trees, pruned fc6b100, and the admin agent's fork/exec of
 # bin/fleet-login-new.sh failed — no login opened, none removed. Now any login's
-# linked tree keeps its release, moves with the machine, and a pruned one FAILs
-# the machine doctor's login-tree row until the next tick re-links it.
+# ~/.claude/fleet is one link to <root>/current (#4669) and moves with the machine;
+# a link whose target is gone FAILs the machine doctor's login-tree row.
 drill_runtime_gc_admin_tree() {
   CAP=60
   local t0 out
@@ -1376,7 +1376,7 @@ drill_runtime_gc_admin_tree() {
   out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-node-update-selftest.py" --drill-admin-tree 2>&1) \
     || { WHY="an admin's linked tree lost its release: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
-  WHAT="非托管管理员的 ~/.claude/fleet 是链向运行时的树：它链着的版本不被清；更新器随整机换版把它一起重链；版本已被清掉 → 机器体检 login-tree FAIL，下一拍重链到 current；登录自己的副本不动"
+  WHAT="非托管管理员的 ~/.claude/fleet 直链 <root>/current：随整机换版一起动；链接指向的东西没了 → 机器体检 login-tree FAIL；登录自己的副本不动"
 }
 
 # ---- release-fetch-slow (#2701): a new managed machine's release fetch at ~1 MB/s.

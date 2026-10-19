@@ -992,8 +992,8 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   machine's own switch / rollback; the updater's `point` (demoted) puts it there
   and runs that version's `fleet-install-apply.sh --tree-from <root>/<old>
   --tree-to <root>/<new>` (no git); `fleet_mod_dir` hands Claude the release's
-  PHYSICAL mod dir (BREAK-IT `managed-login-mod-escapes`); an older login's
-  `fleet.versions/` goes after its 7-day keep (`# compat-1v`);
+  PHYSICAL mod dir (BREAK-IT `managed-login-mod-escapes`); a copy moved into
+  `fleet.versions/` goes after its 7-day keep;
   its own install-sync answers `off · managed · 跟随 <root>/current`, the
   doctor's `install` row PASSes only when it links to `current`, `account release`
   makes it an own copy again (BREAK-IT `managed-login-own-copy`,

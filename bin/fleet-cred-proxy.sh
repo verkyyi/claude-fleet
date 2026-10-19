@@ -8,9 +8,6 @@
 # account table's row); only a client computer (not a host — FLEET_HOST!=1) still
 # starts `fleet run`'s central-only proxy on demand (`ensure`).
 #
-#   fleet-cred-proxy.sh run       compat-1v: 下一批删 — the per-login launcher's old
-#                                 entry: exits 0 at once (an old unit that still
-#                                 names it starts nothing)
 #   fleet-cred-proxy.sh relay-tick  separated / shared only: answer the shared
 #                                 proxy's request for a relay pass, then exit — what
 #                                 the node daemon runs for a login on the machine's
@@ -182,10 +179,6 @@ load_conf
 [ -n "$_FCP_ENV_SWITCH" ] && FLEET_CRED_PROXY="$_FCP_ENV_SWITCH"
 export FLEET_CONF_DIR="$CONF"
 
-# compat-1v: 下一批删 — the per-login launcher (#4674): an old launchd / systemd
-# unit or account-table row that still names it starts nothing
-[ "$cmd" = run ] && exit 0
-
 if [ -n "$SEP_RUN" ]; then
   export FLEET_CRED_CTL_DIR="$SEP_RUN"
   case "$cmd" in
@@ -315,11 +308,6 @@ if st.get("shared"):
     if iv and v != iv:
         lv = "WARN"
         notes.append("共享代理落后本安装：管理员登录 sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine refresh")
-elif st.get("separated"):
-    # compat-1v: 下一批删 — a login still on its own separated proxy until the
-    # node daemon's credsep-enforce joins it (machine join, #4674)
-    lv = "WARN"
-    parts.append("own 自己的隔离代理（每登录代理已删，#4674：等 credsep-enforce 接进整机代理）")
 elif os.environ.get("FCD_HOST") == "1":
     gone = True     # a FAIL nothing below may soften
     parts.append("per-login 每登录代理（已删，#4674：管理员 machine install 接进整机代理）")
