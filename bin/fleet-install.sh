@@ -43,8 +43,10 @@
 #      file it lists in one SHA-256-checked tar (#2260; ~140 requests took close
 #      to two minutes) — and file by file when that fails, each SHA-256-checked, from the hub's /install/<path> (接) or the
 #      repo paths on GitHub's stable (不接, FLEET_INSTALL_SRC), in the repo's own
-#      layout, no git. A copy the manifest no longer lists goes, so the tree is
-#      exactly the manifest's; `.client-version` records which client it is
+#      layout, no git. A copy the manifest no longer lists goes when it is still
+#      as the fleet put it — `installed.list` (path TAB sha256, #4827) records
+#      what it put; a file the person added or edited stays, and is carried
+#      into the next whole version; `.client-version` records which client it is
 #      (#1722, with a hub). Run again on a client it installed (one with a
 #      .client-version), the new client goes BESIDE the one in use, whole, into
 #      <home>.versions/<version>/ and <home> — a link — is switched in one
@@ -338,6 +340,23 @@ stale_in() {
     done
   done
 }
+# drop_in <dir> — what an upgrade deletes from <dir> (issue #4827): only a file
+# the fleet installed there (its installed.list, fleet-versions-lib.sh) that
+# still holds the listed bytes and that the manifest no longer lists. A file
+# the person put in, or one they edited, is theirs and stays. No list (an
+# install from before it): the old rule, stale_in — but only a file that names
+# the fleet, as every file the fleet ships does (compat-1v: 下一批删).
+drop_in() {
+  if command -v fleet_installed_owned >/dev/null 2>&1 && [ -f "$1/installed.list" ]; then
+    fleet_installed_owned "$1" | while IFS= read -r rel; do
+      case " $FILES" in *" $rel "*) ;; *) printf '%s\n' "$rel" ;; esac
+    done
+    return 0
+  fi
+  stale_in "$1" | while IFS= read -r rel; do
+    grep -q fleet "$1/$rel" 2>/dev/null && printf '%s\n' "$rel"
+  done
+}
 # mark_get <file> <key> — one `key=value` line of a .client-version
 mark_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
 # vkey <version> — a version as a directory name (fleet-client-update.sh's)
@@ -357,16 +376,20 @@ client_running() {
 # .client-version; an install with no version to name)
 install_in_place() {
   mkdir -p "$ROOT"
+  # A copy the manifest no longer lists — an earlier install's, still as the
+  # fleet installed it — goes (drop_in, read before a byte moves); a file the
+  # person put in or edited stays. Never in a full install.
+  drop_in "$ROOT" > "$tmp/stale.list"
   for f in $FILES; do
     mkdir -p "$ROOT/$(dirname "$f")"
     mv -f "$tmp/$f" "$ROOT/$f"
   done
-  # A copy the manifest no longer lists — an earlier install's — goes: the tree
-  # is the manifest's, file for file. Never in a full install.
-  stale_in "$ROOT" > "$tmp/stale.list"
   while IFS= read -r rel; do
     rm -f "${ROOT}/${rel}"; say "  去掉了不再发的旧文件 ${rel}"
   done < "$tmp/stale.list"
+  # what this install put here (issue #4827): the next upgrade's drop_in reads it
+  # shellcheck disable=SC2086  # the manifest's paths are words
+  command -v fleet_installed_write >/dev/null 2>&1 && fleet_installed_write "$ROOT" $FILES
   for d in hooks commands skills mod; do
     [ -d "$ROOT/$d" ] && find "$ROOT/$d" -depth -type d -empty -exec rmdir {} \; 2>/dev/null
   done
@@ -381,12 +404,10 @@ install_in_place() {
 # then <home> switched to it (or, with the client running, staged as .next)
 install_versioned() {
   VERS="$ROOT.versions"
-  # shellcheck source=fleet-versions-lib.sh
-  . "$tmp/bin/fleet-versions-lib.sh"
   # the client in use already is this one, file for file: nothing to do
   _same=1
   for f in $FILES; do cmp -s "$tmp/$f" "$ROOT/$f" || { _same=0; break; }; done
-  [ "$_same" = 1 ] && [ -n "$(stale_in "$ROOT")" ] && _same=0
+  [ "$_same" = 1 ] && [ -n "$(drop_in "$ROOT")" ] && _same=0
   [ "$(grep -v '^at=' "$tmp/client-version")" = "$(grep -v '^at=' "$ROOT/.client-version" 2>/dev/null)" ] || _same=0
   if [ "$_same" = 1 ]; then
     say "fleet: ${ROOT} 已是这一版，不重装"
@@ -416,6 +437,8 @@ install_versioned() {
     mv -f "$tmp/$f" "$STG/$f"
   done
   mv -f "$tmp/client-version" "$STG/.client-version"
+  # shellcheck disable=SC2086  # the manifest's paths are words
+  fleet_installed_write "$STG" $FILES
   : > "$STG/.staged"
   rm -rf "${VERS:?}/$_key"
   mv "$STG" "$VERS/$_key"; STG=''
@@ -423,6 +446,8 @@ install_versioned() {
     printf '%s\n' "$_key" > "$VERS/.next.tmp" && mv -f "$VERS/.next.tmp" "$VERS/.next"
     say "fleet: 旧客户端还在运行 — 新版装在 ${VERS}/${_key}，下次打开 fleet 时换上（正在用的一个字节不动）"
   else
+    # what the person put in the one in use goes along (issue #4827)
+    fleet_versions_carry "$ROOT" "$VERS/$_key" | while IFS= read -r rel; do say "  带上了你自己的文件 ${rel}"; done
     _old=$_cur
     if [ -z "$_old" ]; then
       # a home that is still a plain directory becomes a version of its own
@@ -530,6 +555,9 @@ PYV
     _mhub=''; [ "$HUB_ANS" = 1 ] && _mhub=$HUBURL
     printf 'version=%s\ncompat=%s\ncommit=%s\nhub=%s\nat=%s\n' "$VER" "$COMPAT" "$COMMIT" "$_mhub" "$(date +%s)" > "$tmp/client-version"
   fi
+  # the downloaded client's own switch and bookkeeping (installed.list, #4827)
+  # shellcheck source=fleet-versions-lib.sh
+  [ -f "$tmp/bin/fleet-versions-lib.sh" ] && . "$tmp/bin/fleet-versions-lib.sh"
   if [ "$MARK" = 1 ] && [ -f "$ROOT/.client-version" ] && [ -f "$tmp/bin/fleet-versions-lib.sh" ]; then
     # A client the line installed before (issue #1900): the new one goes BESIDE
     # it, whole, into <home>.versions/<version>/, and <home> — a link — is

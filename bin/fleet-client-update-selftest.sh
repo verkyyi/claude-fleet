@@ -31,6 +31,11 @@
 #   I. bin/fleet   a staged client is switched by `fleet` itself, which then runs
 #                  the NEW bin/fleet's client (once — FLEET_CLIENT_UPDATED); staged at the
 #                  old <home>.next, it is taken over as a version first
+#   J. carry+tidy  (issue #4827) a switch keeps what is the person's — a file
+#                  they put in and a fleet file they edited that the new version
+#                  drops — and leaves the fleet's unchanged one behind
+#                  (installed.list); a version dir past the current + .prev and
+#                  a staging dir a crashed run left go at the next start
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-update-selftest.XXXXXX") || exit 2
@@ -206,6 +211,30 @@ printf 'version=v2\ncompat=1\ncommit=beef002\n' > "$ROOT.next/.client-version"; 
 out=$(sh "$ROOT/bin/fleet" mac-a 2>&1)
 case "$out" in *已更新到\ beef002*"NEW --thin --home mac-a"*) ok "I \`fleet mac-a\`: switched, then the NEW fleet opened the same client" ;;
   *) bad "I bin/fleet: $out" ;; esac
+
+# --- J. a switch carries the person's files; tidy (issue #4827) --------------
+install_client v1; hub v2 1 1
+printf '#!/bin/sh\n# fleet-old.sh\n' > "$ROOT/bin/fleet-old.sh"
+printf '#!/bin/sh\n# fleet-edited.sh\n' > "$ROOT/bin/fleet-edited.sh"
+( . "$BIN/fleet-versions-lib.sh"; fleet_installed_write "$ROOT" bin/fleet bin/fleet-old.sh bin/fleet-edited.sh )
+printf '#!/bin/sh\necho mine\n' > "$ROOT/bin/mine.sh"; echo '# by hand' >> "$ROOT/bin/fleet-edited.sh"
+mkdir -p "$ROOT.next/bin"; cp "$HUBD/new/"* "$ROOT.next/bin/"; chmod +x "$ROOT.next/bin/"*
+printf 'version=v2\ncompat=1\ncommit=beef002\n' > "$ROOT.next/.client-version"; : > "$ROOT.next/.staged"
+start; rc=$?
+if [ "$rc" = 3 ] && [ -L "$ROOT" ] && grep -q NEW "$ROOT/bin/fleet" && [ -f "$ROOT/bin/mine.sh" ] \
+   && grep -q 'by hand' "$ROOT/bin/fleet-edited.sh" && [ ! -e "$ROOT/bin/fleet-old.sh" ]; then
+  ok "J switch: the person's file and edit carried, the fleet's unchanged one left behind"
+else
+  bad "J carry: rc=$rc mine=$([ -f "$ROOT/bin/mine.sh" ] && echo y) old=$([ -e "$ROOT/bin/fleet-old.sh" ] && echo y) err=$(cat "$WORK/err")"
+fi
+mkdir -p "$ROOT.versions/stale/bin" "$ROOT.versions/.staging-install.99/bin"
+touch -t 202001010000 "$ROOT.versions/.staging-install.99"
+stamp_old; start
+if [ ! -e "$ROOT.versions/stale" ] && [ ! -e "$ROOT.versions/.staging-install.99" ] && [ -e "$ROOT/bin/fleet" ]; then
+  ok "J tidy: a version past the current + .prev and a crashed staging dir gone"
+else
+  bad "J tidy: $(ls -a "$ROOT.versions" | tr '\n' ' ')"
+fi
 
 if [ "$fail" = 0 ]; then echo "PASS fleet-client-update-selftest"; else echo "FAIL fleet-client-update-selftest"; fi
 exit "$fail"

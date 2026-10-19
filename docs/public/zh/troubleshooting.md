@@ -384,6 +384,13 @@ fleet debug report
 - **是什么**：你的连接证书有没有、过没过期、入口认不认。
 - **WARN / FAIL 怎么办**：`fleet login` 重签；机器上则重跑 `fleet node install --join <加入码>`。
 
+#### `background`
+
+来自只当客户端用的电脑上的 `fleet doctor`。
+
+- **是什么**：没人在看时 fleet 还在后台跑的进程（旧客户端留下的、断掉的客户端留下的 ssh 主连接）有几个，以及升级后留在安装目录旁边的多余文件（超过「当前 + 上一版」的版本目录、没收尾的临时目录）有几个。三个都是 0 才 PASS。
+- **WARN 怎么办**：`fleet quit` 收掉后台进程；多余文件下次打开 `fleet` 时自动清。你自己放进安装目录、或改过的文件不算多余，升级也不会删。
+
 #### `hubauth`
 
 来自 `fleet doctor`。

@@ -8,8 +8,14 @@
 #   B. its warm lines — an ssh master whose ControlPath is in the cache's tmp/ —
 #      are stopped with it, not left to their ControlPersist=10m
 #   C. a server a person IS attached to is left alone (exit 3)
-#   D. bin/fleet's client start runs it in the background, --if-unattached, only
-#      when the old client's cache is there (FLEET_RETIRE_OLD=0 leaves it)
+#   D. bin/fleet's client start runs it in the background, --if-unattached
+#      (FLEET_RETIRE_OLD=0 leaves it) — since #4827 with or without the old
+#      client's cache
+#   E. (issue #4827) any client's leftover on a client-only install: an ssh
+#      master with no parent and no terminal, ControlPath in the fleet's cache,
+#      and a loop of the install's — counted, the `background` row WARNs, stop
+#      takes them (and what runs under them), the row PASSes; a process with a
+#      live parent is left; on a 承载 install (bin/fleet-up.sh) none is ours
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=0
@@ -84,7 +90,45 @@ rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null 
 eq "D: the client start retires the old client, unattended only" "stop --quiet --if-unattached|" "$(calls)"
 rm -f "$WORK/retire.calls"; FLEET_RETIRE_OLD=0 FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1; sleep 1
 eq "D: FLEET_RETIRE_OLD=0 → not asked" "" "$(cat "$WORK/retire.calls" 2>/dev/null)"
-rm -rf "${C:?}/bin"; rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1; sleep 1
-eq "D: no old client's cache → not asked (byte for byte as before)" "" "$(cat "$WORK/retire.calls" 2>/dev/null)"
+rm -rf "${C:?}/bin"; rm -f "$WORK/retire.calls"; FLEET_CLIENT_UPDATED=1 sh "$D/bin/fleet" </dev/null >/dev/null 2>&1
+eq "D: no old client's cache → still asked (any client's leftovers, #4827)" "stop --quiet --if-unattached|" "$(calls)"
+
+# --- E. any client's leftovers (issue #4827) -----------------------------------
+I="$HOME/.claude/fleet"; mkdir -p "$I/bin" "$XDG_CACHE_HOME/claude-fleet/cm"
+cp "$BIN/fleet-client-retire.sh" "$BIN/fleet-ui-lang.sh" "$I/bin/"
+[ -f "$BIN/../conf/ui-strings.tsv" ] && mkdir -p "$I/conf" && cp "$BIN"/../conf/ui-* "$I/conf/" 2>/dev/null
+export FLEET_CONF_DIR="$WORK/conf"
+CM="$XDG_CACHE_HOME/claude-fleet/cm"
+# orphan <name> <argv…> — a process with no parent (PPID 1) and no terminal (setsid)
+orphan() {
+  local n=$1; shift
+  ( ( exec -a "$n" perl -MPOSIX -e 'POSIX::setsid(); if (fork() == 0) { sleep 600; exit } sleep 600' -- "$@" </dev/null >/dev/null 2>&1 & ) & )
+}
+orphan ssh -o "ControlPath=$CM/u@m1:22" -o ControlPersist=10m -N m1
+orphan bash "$I/bin/fleet-warm-loop.sh" warm
+# a process with a live parent (a person's own, or a running client's): never ours
+( exec -a ssh perl -e 'sleep 600' -- -o "ControlPath=$CM/kept" m2 ) & KP=$!; PIDS="$PIDS $KP"
+sleep 1
+OP=$(ps -axo pid=,ppid=,command= | OC="$CM/u@m1" OW="$I/bin/fleet-warm-loop.sh" awk 'index($0, ENVIRON["OC"]) || index($0, ENVIRON["OW"]) { print $1 }' | tr '\n' ' ')
+PIDS="$PIDS $OP"
+eq "E: two leftovers + their children found" 4 "$(printf '%s\n' $OP | grep -c .)"
+eq "E: count — 4 processes, 1 ssh master" "$(printf '4\t1')" "$(bash "$I/bin/fleet-client-retire.sh" count)"
+r=$(bash "$I/bin/fleet-client-retire.sh" background)
+case "$r" in WARN*'后台进程 4'*'ssh 主连接 1'*'多余文件 0'*) CHECKS=$((CHECKS + 1)) ;; *) fail "E: background row before — got [$r]" ;; esac
+# a 承载 install: its daemons run with no parent from the same paths — never ours
+: > "$I/bin/fleet-up.sh"
+eq "E: a 承载 install counts none of it" "$(printf '0\t0')" "$(bash "$I/bin/fleet-client-retire.sh" count)"
+rm -f "$I/bin/fleet-up.sh"
+FLEET_RETIRE_GRACE=1 bash "$I/bin/fleet-client-retire.sh" stop --quiet --if-unattached; eq "E: stop → 0" 0 "$?"
+for p in $OP; do gone "$p" || fail "E: leftover $p still runs"; done
+alive "$KP" || fail "E: a process with a live parent was stopped"
+r=$(bash "$I/bin/fleet-client-retire.sh" background)
+case "$r" in PASS*'后台进程 0'*'ssh 主连接 0'*'多余文件 0'*) CHECKS=$((CHECKS + 1)) ;; *) fail "E: background row after — got [$r]" ;; esac
+# the files an update left: a third version dir and a staging dir
+V="$HOME/.claude/fleet2"; mkdir -p "$V.versions/a/bin" "$V.versions/b/bin" "$V.versions/c/bin" "$V.versions/.staging/bin"
+cp "$BIN/fleet-client-retire.sh" "$BIN/fleet-ui-lang.sh" "$V.versions/b/bin/"; touch "$V.versions/a/bin/x" "$V.versions/c/bin/y" "$V.versions/.staging/bin/z"
+ln -s "$V.versions/b" "$V"; echo a > "$V.versions/.prev"
+r=$(bash "$V/bin/fleet-client-retire.sh" background)
+case "$r" in WARN*'多余文件 2'*) CHECKS=$((CHECKS + 1)) ;; *) fail "E: extra files beside the install — got [$r]" ;; esac
 
 printf 'fleet-client-retire-selftest OK (%d checks)\n' "$CHECKS"

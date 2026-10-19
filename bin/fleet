@@ -188,10 +188,11 @@ client() {
   fi
   # what the deleted two-pane client still runs here (issue #4283): its warm loop
   # kept ~120 ssh lines open, each a hub relay on the relay route, until the hub
-  # said TOO_MANY — taken away in the background, never one a person looks at
-  # (fleet-client-retire.sh --if-unattached); FLEET_RETIRE_OLD=0 leaves it
-  if [ "${FLEET_RETIRE_OLD:-1}" != 0 ] && [ -f "$here/fleet-client-retire.sh" ] \
-    && [ -d "${FLEET_SHELL_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/shell}/bin" ]; then
+  # said TOO_MANY — and what any client left with no parent and no terminal (an
+  # ssh master, a disowned loop: issue #4827) — taken away in the background,
+  # never one a person looks at (fleet-client-retire.sh --if-unattached);
+  # FLEET_RETIRE_OLD=0 leaves it
+  if [ "${FLEET_RETIRE_OLD:-1}" != 0 ] && [ -f "$here/fleet-client-retire.sh" ]; then
     ( bash "$here/fleet-client-retire.sh" stop --quiet --if-unattached </dev/null >/dev/null 2>&1 & )
   fi
   # keep up with the hub (issue #1722): an installed client asks it, at most
@@ -268,11 +269,14 @@ if [ "$cmd" = doctor ] && [ ! -x "$here/fleet-doctor.sh" ] \
     printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" tls "${r#*"$tab"}"
     case $r in FAIL*) rc=1 ;; esac
   fi
-  # old client (issue #3008): what the deleted two-pane client may still run in the
-  # background here — `fleet quit` stops it
-  if [ -f "$here/fleet-client-retire.sh" ] && bash "$here/fleet-client-retire.sh" running 2>/dev/null; then
-    printf '  WARN  %-8s %s\n' old "$(sh "$here/fleet-ui-lang.sh" t retire_left)"
-    rc=1
+  # background (issue #4827; the `old` row of #3008 before it): what fleet still
+  # runs here with nobody looking — the deleted two-pane client, an ssh master
+  # or loop a client left — and the files an update left beside the install;
+  # `fleet quit` stops the processes, the next `fleet` clears the files
+  if [ -f "$here/fleet-client-retire.sh" ] && r=$(bash "$here/fleet-client-retire.sh" background 2>/dev/null) && [ -n "$r" ]; then
+    tab=$(printf '\t')
+    printf '  %-4s  %-8s %s\n' "${r%%"$tab"*}" background "${r#*"$tab"}"
+    case $r in PASS*) ;; *) rc=1 ;; esac
   fi
   if [ -f "$here/fleet-agent-bundle.py" ]; then
     python3 "$here/fleet-agent-bundle.py" doctor --root "$here/.." "$@" || rc=1
