@@ -162,7 +162,7 @@ ok; [ "$(st "$F9")" = "running 运行中" ] || fail "S9: closing one restores th
 
 # ---- ROUTE · up the parent; nobody ------------------------------------------------
 PP=$(mkfid); P=$(mkfid)
-read -r WPP PPP <<EOF
+read -r WPP _ <<EOF
 $(newwin "$PP")
 EOF
 fid open "$PP" --window "$WPP" --socket "$L" >/dev/null
@@ -194,7 +194,7 @@ ok; printf '%s' "$out" | grep -q "($WPA" || fail "CLEAR: after the parent's /cle
 # the parent closes; a successor continues it — the report goes there
 lib fleet_win_retire "$WPA" "$L" exited; tf kill-window -t "$WPA"
 SU=$(mkfid)
-read -r WSU PSU <<EOF
+read -r WSU _ <<EOF
 $(newwin "$SU")
 EOF
 fid open "$SU" --window "$WSU" --socket "$L" --agent claude --prev "$PA" >/dev/null

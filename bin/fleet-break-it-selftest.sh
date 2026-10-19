@@ -6187,11 +6187,11 @@ drill_report_parent_cleared() {
   rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0001 --source startup >/dev/null
   rpe python3 "$BIN/fleet_id.py" native "$pa" --native p0002 --source clear >/dev/null   # the parent clears
   t0=$(now)
-  out1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary done 2>&1)
+  out1=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary finished 2>&1)
   rpe bash -c '. "$1/fleet-lib.sh"; fleet_win_retire "$2" "$3" exited' _ "$BIN" "$wpa" "$L"; rtm kill-window -t "$wpa"
   wsu=$(rtm new-window -d -P -F '#{window_id}' 'sleep 120'); rtm set-option -w -t "$wsu" @fleet_id "$su"
   rpe python3 "$BIN/fleet_id.py" open "$su" --prev "$pa" >/dev/null
-  out2=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary done 2>&1)
+  out2=$(rpe env TMUX_PANE="$pch" bash "$BIN/fleet-report-parent.sh" --dry-run --state merged --summary finished 2>&1)
   SECS=$(since "$t0")
   rtm kill-server 2>/dev/null
   case "$out1" in *"($wpa"*) ;; *) WHY="after the parent's /clear the report names [$out1], want its window $wpa"; return 1 ;; esac
