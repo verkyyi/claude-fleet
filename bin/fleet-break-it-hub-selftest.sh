@@ -2075,7 +2075,7 @@ drill_pool_usage_unattributed() {
     || { WHY="the hub files a cluster report under something other than the pass's principal / session"; return 1; }
   grep -q 'return ErrPoolUsageNoPrincipal' "$tl/store/pool_usage.go" 2>/dev/null \
     || { WHY="the store no longer refuses an ownerless pool_usage row"; return 1; }
-  grep -q 'u.Cred, u.Principal, u.WorkerID' "$tl/credproxy/credproxy.go" \
+  grep -q 'u.Cred, u.Principal, u.WorkerID' "$ROOT/tokenledger/shared/credproxy/credproxy.go" \
     || { WHY="the cluster proxy no longer reports each request with its pass"; return 1; }
   for t in $api_tests; do
     grep -q "^func $t(" "$tl/api/pool_usage_test.go" 2>/dev/null \
