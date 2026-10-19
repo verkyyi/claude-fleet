@@ -268,7 +268,6 @@
 13.2 fleet-open-laptop-selftest.sh
 11.0 fleet-open-selftest.sh
 2.3 fleet-palette-selftest.sh
-0.5 fleet-panel-jump-selftest.sh
 3.1 fleet-peer-cert-selftest.sh
 0.1 fleet-peer-mcp-selftest.sh
 4.5 fleet-peer-send-identity-selftest.sh

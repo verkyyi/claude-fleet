@@ -415,7 +415,6 @@
 2.7 fleet-palette-selftest.sh
 0.0 fleet-pane-submit-selftest.sh
 0.3 fleet-panel-draft-selftest.sh
-0.5 fleet-panel-jump-selftest.sh
 12.9 fleet-panel-overlay-selftest.sh
 3.7 fleet-peer-cert-selftest.sh
 0.1 fleet-peer-mcp-selftest.sh
