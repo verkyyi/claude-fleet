@@ -67,6 +67,16 @@ pack_vendor() {
   [ -f "$lock" ] || return 0
   cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/vendor"
   mkdir -p "$cache" "$PACK/vendor" || return 0
+  # every missing archive at once (issue #4818): one after another they cost the
+  # release train's hub build 73 s from the Shenzhen cluster, on its critical path;
+  # the loop below checks each and fetches again what this left missing
+  while read -r plat sum url; do
+    case "$plat" in ''|'#'*) continue ;; esac
+    arc="$cache/$sum.tar.gz"
+    [ -f "$arc" ] && [ "$(sha256_of "$arc")" = "$sum" ] && continue
+    { curl -fsSL --max-time 120 "$url" -o "$arc.part" 2>/dev/null && mv -f "$arc.part" "$arc"; } || rm -f "$arc.part" &
+  done < "$lock"
+  wait
   while read -r plat sum url; do
     case "$plat" in ''|'#'*) continue ;; esac
     arc="$cache/$sum.tar.gz"

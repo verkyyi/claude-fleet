@@ -213,6 +213,18 @@ name) and `NODE_IMAGE_BUILD_REPO` (the VPC name the cluster pushes to); unset =
 the two jobs are skipped. A red `node image` never holds a release back — stable
 has already moved; the next train builds again, or build by hand (below).
 
+**Most releases only re-tag** (issue #4818). The image's runtime is a seed the
+updater replaces on a pod's first tick, so a release that changed nothing a
+fresh pod runs before that update needs no new image: `node tools` computes
+TRAIN_SHA's key beside the tests (`bin/fleet-node-image-key.sh` — the recipe
+`extras/managed-node/`, `conf/release-keys/`, `release.json`'s pins, the node
+source digest and the node's root-run programs `bin/fleet-node-*` ·
+`bin/fleet_node_*` · credsep · release-verify · ed25519, selftests left out)
+and compares it with stable's; equal, and stable's own `<repo>:<stable commit>` is still in the registry ⇒ after
+the release `node image` runs on a GitHub-hosted runner and only tags that
+digest `<repo>:<release commit>` (seconds, not the 2+ minute build). Anything else, or
+anything unreadable ⇒ the cluster build above.
+
 ### By hand
 
 The same build anywhere outside CN, from a **published signed release

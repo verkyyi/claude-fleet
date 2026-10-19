@@ -293,6 +293,7 @@ jobs:
       pull-requests: read   # each merge's PR head
     outputs:
       proven: ${{ steps.reuse.outputs.proven }}
+      linux_tests: ${{ steps.plan.outputs.linux_tests }}
       linux_shards: ${{ steps.plan.outputs.linux_shards }}
       linux_budget_secs: ${{ steps.plan.outputs.linux_budget_secs }}
       linux_step_minutes: ${{ steps.plan.outputs.linux_step_minutes }}
@@ -379,10 +380,15 @@ jobs:
     name: Linux
     needs: [board, quarantine, plan, linux-pick]
     # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    # linux_tests 0 (issue #4818): every selected test already passed on its PR
+    # (fleet-train-reuse.sh, all REUSED) or nothing related changed — no runner
+    # is started for a shard that would run nothing; `train` reads that skip as
+    # green. A drill always runs. '?' (the plan could not price) runs as before.
     if: >-
       !cancelled() && needs.board.result == 'success' && needs.quarantine.result == 'success' &&
       needs.plan.result == 'success' &&
-      (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
+      (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '') &&
+      (needs.plan.outputs.linux_tests != '0' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
     uses: ./.github/workflows/selftests-shards.yml
     with:
       sha: ${{ needs.board.outputs.train_sha }}
@@ -476,6 +482,7 @@ jobs:
         with:
           ref: ${{ needs.board.outputs.train_sha }}
       - uses: actions/download-artifact@v4
+        continue-on-error: true   # none when no shard ran (all proven, #4818)
         with:
           pattern: train-result-*
           path: results
@@ -531,6 +538,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LINUX_JOB: ${{ needs.plan.outputs.linux_job_minutes }}
+          # no shard is started when the PRs proved every test (issue #4818)
+          LINUX_TESTS: ${{ needs.plan.outputs.linux_tests }}
           # a Linux shard whose cluster runner went away waits for its rescue (#3864)
           LOST_OK: ${{ vars.FLEET_TRAIN_RUNNER != '' && 'Linux' || '' }}
         run: |
@@ -539,6 +548,7 @@ jobs:
           d=$(( (m + 30) * 60 )); [ "$d" -le 21000 ] || d=21000   # under the job's 360 minutes
           # no macOS shard in the train since #3869: never wait for one to show up
           set -- --deadline "$d" --need 'precheck|Linux / shard'
+          [ "$LINUX_TESTS" != 0 ] || set -- --deadline "$d" --need 'precheck'
           [ -z "$LOST_OK" ] || set -- "$@" --lost-ok "$LOST_OK"
           bash bin/fleet-train-failfast.sh "$@"
 
@@ -599,6 +609,7 @@ jobs:
           GATE: ${{ needs.gate.result }}
           QUAR: ${{ needs.quarantine.result }}
           REC: ${{ needs.record.result }}
+          TESTS: ${{ needs.plan.outputs.linux_tests }}
           # 本趟片数 / 预计 / 实际最慢一片 (issue #3865)
           GH_TOKEN: ${{ github.token }}
           NSHARDS: ${{ needs.plan.outputs.linux_shards }}
@@ -615,6 +626,9 @@ jobs:
           # a Linux half whose only reds were lost runners, rescued green (#3864)
           if [ "$LINUX" = failure ] && [ "$COVERS" = true ] && [ "$RESCUE" = success ]; then
             LINUX="success（补跑 $LOST）"; lok=success
+          elif [ "$LINUX" = skipped ] && [ "$TESTS" = 0 ]; then
+            # every selected test proven on its PR: no shard was started (#4818)
+            LINUX="success（全部已由 PR 证明，未起分片）"; lok=success
           else
             lok=$LINUX
           fi
@@ -648,6 +662,7 @@ jobs:
       deploy: ${{ steps.plan.outputs.deploy }}
       live: ${{ steps.plan.outputs.live }}
       why: ${{ steps.plan.outputs.why }}
+      node: ${{ steps.plan.outputs.node }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -669,7 +684,8 @@ jobs:
     # its OIDC role are the same as when it runs by itself) — phase deploy: the
     # image `hub build` pushed beside the tests, by its digest (issue #3867).
     name: hub
-    needs: [board, linux, gate, train, hub-plan, hub-build]
+    # release-stage: a stage made on the running hub is finished before it is replaced
+    needs: [board, linux, gate, train, hub-plan, hub-build, release-stage]
     # !cancelled(): a Linux shard lost and rescued leaves `linux` red; `train` judged it
     if: "!cancelled() && needs.train.result == 'success' && needs.hub-plan.outputs.deploy == 'true' && needs.hub-build.result == 'success'"
     permissions:
@@ -716,10 +732,16 @@ jobs:
     # when the hub is not redeployed — a stage carries the RUNNING hub's ccquota,
     # which then already is TRAIN_SHA's source — and only to a hub the train
     # signs for (else exit 4, nothing sent). Never red: no stage means `release`
-    # publishes whole, as before.
+    # publishes whole, as before. Also when the hub IS redeployed but only for its
+    # own source (issue #4818: hub-plan's node=same — the running hub's ccquota is
+    # built from TRAIN_SHA's node source): the stage is on the release volume the
+    # new hub mounts, so `release` only signs it — not a whole publish after the
+    # deploy. `hub` waits for this job, so the old hub is never replaced mid-stage.
     name: 发布包
     needs: [board, hub-plan]
-    if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' && needs.hub-plan.outputs.deploy == 'false'
+    if: >-
+      needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' &&
+      (needs.hub-plan.outputs.deploy == 'false' || needs.hub-plan.outputs.node == 'same')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # the signer's public half is computed from the key here; nothing is signed
@@ -1109,12 +1131,15 @@ jobs:
       tag: ${{ steps.tools.outputs.tag }}
       digest: ${{ steps.tools.outputs.digest }}
       base: ${{ steps.base.outputs.digest }}
+      key: ${{ steps.reuse.outputs.key }}
+      reuse: ${{ steps.reuse.outputs.reuse }}
     env:
       REPO: ${{ vars.NODE_IMAGE_REPO }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.board.outputs.train_sha }}
+          fetch-depth: 0   # stable's commit too: its image key (#4818)
       - uses: ./.github/actions/hub-acr
         with:
           role: gha-claudefleet-node-image
@@ -1154,6 +1179,32 @@ jobs:
           case "$digest" in (sha256:*) ;; (*) echo "::error::cannot read the digest of $REPO:base-debian-trixie-slim"; exit 1 ;; esac
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
           echo "### 节点镜像基础层 \`$src\` (linux/amd64 \`$amd\`): \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      # The node image of TRAIN_SHA, found beside the tests (issue #4818): when its
+      # key (bin/fleet-node-image-key.sh — the recipe, the root, the pins, the node
+      # source and the node's root-run programs) is stable's, stable's image (its
+      # <repo>:<stable sha> tag, by digest) is this release's too — its runtime is
+      # only a seed the updater moves on. `node image` then only tags it. Anything
+      # unreadable ⇒ no reuse: the build after the release, as before.
+      - name: the node image to reuse
+        id: reuse
+        continue-on-error: true
+        env:
+          TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+          STABLE_SHA: ${{ needs.board.outputs.stable_sha }}
+        run: |
+          set -u
+          key=$(bash bin/fleet-node-image-key.sh . "$TRAIN_SHA") || exit 0
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          was=''; [ -z "$STABLE_SHA" ] || was=$(bash bin/fleet-node-image-key.sh . "$STABLE_SHA" 2>/dev/null)
+          if [ "$was" != "$key" ]; then
+            echo "### 节点镜像：键 \`${key:0:12}\` ≠ stable \`${STABLE_SHA:0:7}\` 的 \`${was:0:12}\` — 发布后重新构建" >> "$GITHUB_STEP_SUMMARY"; exit 0
+          fi
+          # stable's image: the tag its train pushed (built, or itself reused), by digest
+          dg=$(docker buildx imagetools inspect "$REPO:$STABLE_SHA" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // ""') || dg=''
+          case "$dg" in (sha256:*) ;; (*) echo "### 节点镜像：仓库里没有 stable \`${STABLE_SHA:0:7}\` 的镜像 — 发布后重新构建" >> "$GITHUB_STEP_SUMMARY"; exit 0 ;; esac
+          img="$REPO@$dg"
+          echo "reuse=${img#"$REPO"@}" >> "$GITHUB_OUTPUT"
+          echo "### 节点镜像：键与 stable \`${STABLE_SHA:0:7}\` 相同，复用 \`${img#"$REPO"@}\`（发布后只打 tag）" >> "$GITHUB_STEP_SUMMARY"
 
   node-image:
     # The managed node image of the release this train just shipped (issue
@@ -1161,12 +1212,15 @@ jobs:
     # deploy/k8s/runners/) by its buildkitd, native amd64, pushed over ACR's VPC
     # endpoint as <repo>:<TRAIN_SHA> — the image a person deploys by its digest.
     # Red here is the image's alone: stable has already moved.
+    # node tools found stable's image reusable (issue #4818: the same image key)
+    # ⇒ no build: on GitHub's runner, that digest is tagged <repo>:<TRAIN_SHA> —
+    # seconds after the release instead of minutes.
     name: node image
     needs: [board, release, node-tools]
     if: >-
       always() && needs.release.outputs.moved == 'true' &&
       needs.node-tools.result == 'success'
-    runs-on: fleet-ack
+    runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-latest' || 'fleet-ack' }}
     timeout-minutes: 45
     environment: node-image
     permissions:
@@ -1180,6 +1234,7 @@ jobs:
       BUILD_REPO: ${{ vars.NODE_IMAGE_BUILD_REPO || vars.NODE_IMAGE_REPO }}
       TOOLS_DIGEST: ${{ needs.node-tools.outputs.digest }}
       BASE_DIGEST: ${{ needs.node-tools.outputs.base }}
+      REUSE: ${{ needs.node-tools.outputs.reuse }}
     steps:
       # The cluster's git mirror first (vars.FLEET_TRAIN_GIT_MIRROR, issue #4109):
       # github.com from Shenzhen now and then does not connect at all (run
@@ -1188,7 +1243,7 @@ jobs:
       # it once it has caught up (it fetches GitHub every 5 s).
       - name: Fetch the commit from the cluster's git mirror
         id: mirror
-        if: vars.FLEET_TRAIN_GIT_MIRROR != ''
+        if: vars.FLEET_TRAIN_GIT_MIRROR != '' && needs.node-tools.outputs.reuse == ''
         continue-on-error: true
         env:
           MIRROR: ${{ vars.FLEET_TRAIN_GIT_MIRROR }}
@@ -1241,13 +1296,29 @@ jobs:
           role: gha-claudefleet-node-image
       - name: build and push (train-build.sh)
         id: build
+        if: needs.node-tools.outputs.reuse == ''
         run: bash extras/managed-node/train-build.sh "${HUB_URLS%% *}" "$TRAIN_SHA" "$BUILD_REPO" "$BUILD_REPO@$TOOLS_DIGEST" "$BUILD_REPO@$BASE_DIGEST"
+      - uses: docker/setup-buildx-action@v3
+        if: needs.node-tools.outputs.reuse != ''
+      # the same image key as stable's: stable's image, tagged for this release
+      - name: tag stable's image (same key)
+        id: tag
+        if: needs.node-tools.outputs.reuse != ''
+        run: |
+          set -euo pipefail
+          for try in 1 2 3; do
+            docker buildx imagetools create -t "$REPO:$TRAIN_SHA" "$REPO@$REUSE" && break
+            [ "$try" -lt 3 ] || { echo "::error::cannot tag $REPO@$REUSE as $REPO:$TRAIN_SHA"; exit 1; }
+            sleep $((try * 10))
+          done
+          echo "digest=$REUSE" >> "$GITHUB_OUTPUT"
+          echo "tagged $REPO:$TRAIN_SHA → $REUSE (key ${{ needs.node-tools.outputs.key }})"
       - name: summary
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest || steps.tag.outputs.digest }}
         run: |
           {
-            echo "### 节点镜像 \`${TRAIN_SHA:0:7}\`"
+            echo "### 节点镜像 \`${TRAIN_SHA:0:7}\`$([ -z "$REUSE" ] || echo '（与 stable 同键，复用、只打 tag）')"
             echo '```'
             echo "$REPO:$TRAIN_SHA"
             echo "$REPO@$DIGEST"

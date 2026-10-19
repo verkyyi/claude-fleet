@@ -704,7 +704,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   (1..18, ~3 min a shard) and uploads `selftests-selection` (the merge tree, base,
   head, the tests selected); the train's `bin/fleet-train-reuse.sh` skips
   (`run-selftests.sh --proven`, `REUSED …`) a test a merged PR's green run tested
-  on a tree the selector (`--changed <tree> --exact`) says is untouched since.
+  on a tree the selector (`--changed <tree> --exact`) says is untouched since;
+  all of them reused (`plan`'s `linux_tests` 0) ⇒ no Linux shard is started at
+  all and `train` reads the skip green (issue #4818, BREAK-IT `train-all-proven-skips`).
   **Every PR check is called from ONE gate, `.github/workflows/ci.yml`** (issue
   #4815, docs/dev/CI.md): `bin/ci-plan.sh all` decides per check (its old
   `paths:`, the selector `--among` entry files for task-acceptance · client-e2e ·
@@ -722,7 +724,7 @@ runner else ubuntu-latest; TRAIN_SHA from the in-cluster git mirror; a shard who
 spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` /
 `train-ack-reclaimed`, deploy/k8s/runners/README.md); empty = ubuntu-latest, byte for byte;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
-  with `sha=TRAIN_SHA` (built BESIDE the tests since #3867: `hub plan` right after board, `hub build` = phase build on the train's Linux runner — fleet-ack's buildkitd + the registry's layer cache — pushing `prod-<sha7>` labelled TRAIN_SHA; `hub / deploy` = phase deploy, no build, refuses a tag whose digest / revision is not that build's — `bin/fleet-train-prebuild.sh`, BREAK-IT `train-prebuild-wrong-sha`; a train that redeploys no hub stages its release meanwhile, `fleet-release-publish.sh --stage`, and `release` only `--commit`s it: check · sign · one POST, a stage lives 30 min; skipped when `bin/fleet-train-hub.sh` finds the hub already
+  with `sha=TRAIN_SHA` (built BESIDE the tests since #3867: `hub plan` right after board, `hub build` = phase build on the train's Linux runner — fleet-ack's buildkitd + the registry's layer cache — pushing `prod-<sha7>` labelled TRAIN_SHA; `hub / deploy` = phase deploy, no build, refuses a tag whose digest / revision is not that build's — `bin/fleet-train-prebuild.sh`, BREAK-IT `train-prebuild-wrong-sha`; a train whose hub keeps TRAIN_SHA's node source (no redeploy, or a hub-only one — `hub plan`'s `node=same`, #4818) stages its release meanwhile, `fleet-release-publish.sh --stage`, and `release` only `--commit`s it: check · sign · one POST, a stage lives 30 min; skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
   `fleet-stable.sh move TRAIN_SHA --train <run>` (gate 3 reads the run's jobs) —
   so the hub and stable never come from two commits; the doctor's `hub-image` row

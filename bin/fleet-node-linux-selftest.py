@@ -2136,7 +2136,8 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
                      'prepare-image.sh', 'build-arg:TOOLS=', 'push=true', 'containerimage.digest'):
             self.assertIn(want, tb)
         wf = (BIN.parent / '.github/workflows/release-train.yml').read_text()
-        self.assertIn('runs-on: fleet-ack', wf)
+        # the cluster builds it; a reused image (#4818, the same key as stable's) is only tagged
+        self.assertIn("runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-latest' || 'fleet-ack' }}", wf)
         self.assertIn('extras/managed-node/train-build.sh', wf)
         self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
         self.assertIn('role: gha-claudefleet-node-image', wf)
