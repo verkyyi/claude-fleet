@@ -6281,6 +6281,22 @@ drill_authority_orphan_worker_start() {
   SECS=$(since "$t0")
 }
 
+# ---- orphan-unknown-outcome-start (#4932): an online node answering
+# UNKNOWN_OUTCOME for a worker_start whose worker never appeared kept it an
+# `unsettled start` forever. The hub now settles it failed on its own books —
+# past the grace, a later inventory without it, no lease, no open local start.
+drill_orphan_unknown_outcome_start() {
+  CAP=180;  # two cold go test builds
+  local t0
+  t0=$(now)
+  grep -q 'settleNeverAppeared(o, now)' "$ROOT/tokenledger/hub/api/fleet.go" \
+    || { WHY="reconcileOperation no longer settles a never-appeared start"; return 1; }
+  _drill_go_tests 'TestSettleNeverAppearedStart' "$ROOT/tokenledger/hub/store/fleet_start_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestFleetWriteNeverAppearedStartSettles' "$ROOT/tokenledger/hub/api/fleet_write_test.go" \
+    '在线节点的 UNKNOWN_OUTCOME 启动：过宽限、清单读于宽限后且没有它的 worker / lease / 未收口 local start 才结成 failed（WORKER_NEVER_APPEARED）；清单里有、宽限内、说不出是哪个 worker 照旧 unknown（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 # ---- authority-superseded-fleet-row (#4877): fleet rows are never deleted,
 # so an old row of the same machine + login that a newer row replaced stayed
 # present=0 and asked for a capable observation that never comes. The manifest
