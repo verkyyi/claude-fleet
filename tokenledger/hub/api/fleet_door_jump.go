@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,14 +73,51 @@ func (s *Server) jumpWordOf(host string, now time.Time) (jumpWord, bool) {
 // jumpTarget is the pod's sshd inside the cluster when the door and the pod
 // both said lately they are ready for the jump, else "".
 func (s *Server) jumpTarget(pod, door string, now time.Time) string {
+	target, _ := s.jumpTargetWhy(pod, door, now)
+	return target
+}
+
+// jumpTargetWhy is jumpTarget with the one condition that is missing when
+// there is no target (claude-fleet#4317: a probe that saw no jump could not
+// tell which end had not said so).
+func (s *Server) jumpTargetWhy(pod, door string, now time.Time) (string, string) {
+	if !isUserPodName(pod) {
+		return "", "not a person's pod"
+	}
 	dw, ok := s.jumpWordOf(door, now)
-	if !ok || dw.ns == "" || !isUserPodName(pod) {
-		return ""
+	switch {
+	case dw.at.IsZero():
+		return "", "the door " + door + " never said it is ready (GET entry-routes?jump=1&ns=…)"
+	case !ok:
+		return "", "the door " + door + " last said it is ready at " + dw.at.UTC().Format(time.RFC3339)
+	case dw.ns == "":
+		return "", "the door " + door + " named no namespace"
 	}
-	if _, ok := s.jumpWordOf(pod, now); !ok {
-		return ""
+	pw, ok := s.jumpWordOf(pod, now)
+	switch {
+	case pw.at.IsZero():
+		return "", "the pod never said it is ready (GET entry-keys?jump=1)"
+	case !ok:
+		return "", "the pod last said it is ready at " + pw.at.UTC().Format(time.RFC3339)
 	}
-	return strings.ToLower(firstLabel(pod)) + "." + dw.ns + ".svc.cluster.local"
+	return strings.ToLower(firstLabel(pod)) + "." + dw.ns + ".svc.cluster.local", ""
+}
+
+// jumpWhy is each pod's last reason for no jump, so a route list read every
+// few seconds logs a pod only when its reason changes.
+var jumpWhy sync.Map // pod → string ("" = the jump is offered)
+
+// noteJumpWhy logs pod's reason for no jump (why "" = offered, to target)
+// when it differs from the last one this replica logged.
+func noteJumpWhy(pod, door, target, why string) {
+	if prev, loaded := jumpWhy.Swap(pod, why); loaded && prev == why {
+		return
+	}
+	if why == "" {
+		log.Printf("fleet: door jump to %s offered via %s (%s)", pod, door, target)
+	} else {
+		log.Printf("fleet: door jump to %s not offered: %s", pod, why)
+	}
 }
 
 // withJump fills a pod's entry routes for the jump, and the pod's own host
@@ -87,8 +125,12 @@ func (s *Server) jumpTarget(pod, door string, now time.Time) string {
 // own host keys. Unchanged unless the door and the pod both said they are
 // ready and the pod's keys are known.
 func (s *Server) withJump(m FleetMachine, door string, own []string, now time.Time) FleetMachine {
-	target := s.jumpTarget(m.Hostname, door, now)
-	if len(own) == 0 || target == "" {
+	target, why := s.jumpTargetWhy(m.Hostname, door, now)
+	if why == "" && len(own) == 0 {
+		why = "the pod's own host keys are not known (no heartbeat with host_keys)"
+	}
+	noteJumpWhy(m.Hostname, door, target, why)
+	if why != "" {
 		return m
 	}
 	out := make([]FleetRoute, len(m.Routes))

@@ -111,6 +111,9 @@ func (s *Server) withEntryReachRelay(m FleetMachine, now time.Time, relay bool) 
 	door := s.entryAddrMachine(m.Hostname, now)
 	addrs, err := s.EntryReachable(door, now)
 	if err != nil || len(addrs) == 0 {
+		if pod && door != m.Hostname {
+			noteJumpWhy(m.Hostname, door, "", "the door "+door+" has no address the outside reached lately")
+		}
 		return m
 	}
 	var own []string

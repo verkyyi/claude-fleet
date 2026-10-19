@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,5 +63,37 @@ func TestEntryMachineAuthorizationAcrossReplicas(t *testing.T) {
 				t.Errorf("%s, machine=%v: HTTP %d, want %d: %s", replica.srv.Replica.Name, machine, code, want, raw)
 			}
 		}
+	}
+	// The pod's pull through the replica that does NOT hold its link said it
+	// is ready, and both replicas know it (claude-fleet#4317).
+	for _, replica := range []*harness{first, second} {
+		if w, ok := replica.srv.jumpWordOf("u-alice1", time.Now()); !ok {
+			t.Errorf("%s: the pod's readiness is not seen: %+v", replica.srv.Replica.Name, w)
+		}
+	}
+}
+
+func TestDoorJumpSaysWhichEndIsMissing(t *testing.T) {
+	first, _ := newReplicaPair(t)
+	now := time.Now()
+	why := func() string { _, w := first.srv.jumpTargetWhy("u-alice1", "fleet-door", now); return w }
+	if w := why(); !strings.Contains(w, "door fleet-door never said") {
+		t.Fatalf("no door word: %q", w)
+	}
+	first.srv.noteJump(httptest.NewRequest(http.MethodGet, "/?jump=1&ns=fleet-workers", nil), "fleet-door", true, now.Add(-jumpFresh-time.Second))
+	if w := why(); !strings.Contains(w, "door fleet-door last said") {
+		t.Fatalf("stale door word: %q", w)
+	}
+	first.srv.noteJump(httptest.NewRequest(http.MethodGet, "/?jump=1&ns=fleet-workers", nil), "fleet-door", true, now)
+	if w := why(); !strings.Contains(w, "pod never said") {
+		t.Fatalf("no pod word: %q", w)
+	}
+	first.srv.noteJump(httptest.NewRequest(http.MethodGet, "/?jump=1", nil), "u-alice1", false, now)
+	if w := why(); w != "" {
+		t.Fatalf("both said so, still: %q", w)
+	}
+	pod := FleetMachine{Hostname: "u-alice1", Routes: []FleetRoute{{Name: "entry", Host: "door.example", Port: 22022}}}
+	if got := first.srv.withJump(pod, "fleet-door", nil, now); got.Routes[0].Jump != "" {
+		t.Fatalf("a jump with the pod's own host keys unknown: %+v", got.Routes[0])
 	}
 }

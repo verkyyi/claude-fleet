@@ -74,6 +74,11 @@
 #                         door's key alone — a real sshd on pod_sshd_text: a hub-CA
 #                         certificate lands on loopback, not on the pod's address,
 #                         and a plain key does not
+#   door-jump-two-replicas  the hub with two replicas (issue #4317): a pod's pull and
+#                         the door's pull land on the replica that does not hold the
+#                         pod's link — the machine check reads the other replica's
+#                         link, the jump readiness is in the store, and a route
+#                         without the jump says which end is missing (go test)
 #   entry-forward-out     entry_config (issue #3075, C9): -L / -W only to this machine
 #                         (localhost · 127.0.0.1 · ::1) — another address is
 #                         denied by the entry, -R refused — and a file the
@@ -1170,6 +1175,31 @@ open(d + "/cfg", "w").write(t.replace("Subsystem sftp /usr/lib/openssh/sftp-serv
   [ -z "$bad" ] || { WHY="the pod's sshd:$bad — $(tail -3 "$d/sshd.log")"; return 1; }
   SECS=$(since "$t0")
   WHAT="pod 的 sshd（#4193 一条规则）：本人钥匙、本人主体名的入口证书、过渡期门的钥匙能进；别人的钥匙、别人主体名的证书、本人钥匙换 root 一律进不来"
+}
+
+drill_door_jump_two_replicas() {
+  CAP=150   # the hub half's go tests: two replicas over one store
+  local t0 out rc f gohalf t
+  local tests='TestDoorJumpReadinessAcrossReplicas|TestEntryMachineAuthorizationAcrossReplicas|TestDoorJumpSaysWhichEndIsMissing'
+  t0=$(now)
+  f="$ROOT/tokenledger/hub/api/fleet_door_jump_replica_test.go"
+  for t in TestDoorJumpReadinessAcrossReplicas TestEntryMachineAuthorizationAcrossReplicas TestDoorJumpSaysWhichEndIsMissing; do
+    grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is gone"; return 1; }
+  done
+  gohalf="no go toolchain here — the Go gate (tokenledger.yml) runs the two-replica tests"
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($tests)\$" ./hub/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
+      0:*) gohalf="go test ok" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the two-replica Go tests are red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="入口两副本：pod 的链路在 A，它拉钥匙落到 B 照样 200、普通登录两边都 403；门和 pod 的就绪两副本都看得到、过期不算、重启不丢；路线不带 jump 时说出缺哪一头；$gohalf"
 }
 
 # bin/entry-e2e-selftest.sh (issue #3076) sources the rig above and runs its own legs
