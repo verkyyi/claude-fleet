@@ -14,7 +14,8 @@
 #          daemon wake marker (issue #1104), and fleet-doctor's `repos` row then
 #          lists both repos — the one-repo fleet beside it gets its one-repo row.
 #   spawn  issue #12 in BOTH repos, a scratch in both, a no-repo session.
-#   (a) PR/CI by branch name     each issue-12 row shows its OWN repo's PR.
+#   (a) PR/CI by branch name     no issue-12 row shows another repo's PR (the rows
+#                                carry none since issue #4902).
 #   (b) cleanup by bare number   A's PR merges; one cleanup tick reaps A's #12
 #                                window + worktree, B's #12 window + worktree live.
 #   (c) issue-number collisions  spawn dedup and the
@@ -367,10 +368,12 @@ row_of() { printf '%s\n' "$rows" | awk -F '\037' -v w="$1" '$2==w {print; exit}'
 rows=$(dash)
 rA=$(row_of "$wA")
 rB=$(row_of "$wB")
-has   a "A#12's row shows A's PR merged" "$rA" "merged"
+# The rows read no PR map any more (issue #4902): no row can show another repo's
+# PR — nor its own; ⌘P reads a PR off the hub task record.
 hasnt a "A#12's row shows no B PR"     "$rA" "#201"
-has   a "B#12's row shows B's PR"      "$rB" "#201"
+hasnt a "A#12's row shows no PR state" "$rA" "merged"
 hasnt a "B#12's row shows no A PR"     "$rB" "#101"
+hasnt a "B#12's row shows no PR"       "$rB" "#201"
 rN=$(row_of "$wN")
 hasnt a "the no-repo row shows no PR"  "$rN" "#"
 

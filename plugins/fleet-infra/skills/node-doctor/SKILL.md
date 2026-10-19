@@ -91,7 +91,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `commands` | node | [release-rules] | fleet 的 /命令 没装：下一次同步补，或装 fleet 插件 |
 | `timing` | node | [node-doctor] | ⌘P 面板或新会话慢：`fleet_timing.py table` 看哪一段；新会话全是冷启 = 预热池空了（`scratch-pool.sh status`） |
 | `compute` | node | [node-doctor] | 这台能不能接入口派的会话：node.env 的 `CCQUOTA_FLEET_COMPUTE` |
-| `config` | node | [release-rules] | 安装不完整（缺 fleet.conf.example）：下一次同步补 |
 | `context` | node | [node-doctor] | 压缩后没续跑：看 context-ladder.log 的 resumed 行 |
 | `cpu` | node | [ack-linux-node] | 容器到了 CPU 上限：调大这台 Linux 节点的 limits |
 | `cred` | node | [sg-relay-setup] [login-lifecycle] | 会话凭据走哪条路：照行内的 trust × probe 结论修中转或代理 |
@@ -129,7 +128,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `ingress` | node | [runbook-door-down] | 系统 sshd 的公网转发探不通：查路由器转发与远程登录 |
 | `install` | node · machine | [release-rules] | 安装落后 / 有本地提交 / 分叉 stable：让 install-sync 跟上，不在会话里手同步 |
 | `key` | machine | [release-rules] [mac-node-enroll] | 发布签名钥匙没钉 / 对不上：`sudo fleet node install --release-key <file>` |
-| `keys` | node | [node-doctor] | 面板键与 tmux prefix 撞了：改 prefix2 或那个键 |
 | `labels` | node | [node-doctor] | 仓库缺 fleet 标签：`fleet-labels-seed.sh --repo <repo>` |
 | `laptop` | node | [node-doctor] | 笔记本上的 iTerm2 插件缺 / 旧：在那台重跑 extras/iterm2/install.sh |
 | `launchd` | node | [mac-node-prep] | launchd 的 gui 域坏了：机器层面——注销重登或重启 |
