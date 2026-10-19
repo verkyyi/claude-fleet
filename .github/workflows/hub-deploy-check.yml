@@ -47,6 +47,6 @@ jobs:
           bin/oss-scan.sh -- deploy/k8s/overlays/example
       - name: The base names no environment
         run: |
-          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then
+          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then  # oss-ok: the check that keeps the name out of the bases (moved from hub-deploy.yml)
             echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
           fi
