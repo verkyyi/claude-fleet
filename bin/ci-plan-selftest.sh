@@ -19,6 +19,10 @@
 #   D  unsure ⇒ run: an unknown base runs every check and every block; a change to
 #      ci-plan.sh / ci.yml runs everything; a docs-only change runs nothing but
 #      oss-scan
+#   F  browser-attachment / hub-rolling (issue #4919): an ordinary hub / agent Go
+#      change runs neither; the attachment / terminal / chat files run the browser
+#      check only; the manifests, hub start and migrations run the drill only; a
+#      go.mod or an unknown tokenledger/ path runs both
 #   E  `CI 结论`'s fold: selected must be success, unselected skipped, a failed plan
 #      or a cancelled check is red (the job's own python, run on fixtures)
 #
@@ -203,6 +207,25 @@ if leg D; then
   (cd "$G" && bash bin/ci-plan.sh all "$BASE" --out "$rec" >/dev/null 2>&1)
   grep -q '^check tokenledger true ' "$rec" && grep -q '^go select: hub ← ' "$rec" \
     && ok "D the record says each check and block, and why" || fail "D the ci-plan record" "$(head -5 "$rec" 2>/dev/null)"
+fi
+
+# ---- F. the browser check and the rolling drill ------------------------------------
+if leg F; then
+  two() { (cd "$G" && bash bin/ci-plan.sh all "$BASE" --no-pkgs 2>/dev/null) \
+    | grep -E '^(browser_attachment|hub_rolling)=' | sed 's/^[a-z_]*=//' | tr '\n' ' ' | sed 's/ $//'; }
+  change tokenledger/hub/store/issue.go tokenledger/hub/api/fleet.go tokenledger/agent/cli/lease.go
+  eq "F an ordinary hub / agent change runs neither" "false false" "$(two)"
+  change tokenledger/agent/node_term_relay.go;  eq "F a terminal relay file runs the browser check only" "true false" "$(two)"
+  change tokenledger/hub/api/chat_relay.go;     eq "F a chat file runs the browser check only" "true false" "$(two)"
+  change extras/web-console/src/x.ts;           eq "F the web console runs the browser check only" "true false" "$(two)"
+  change deploy/k8s/base/hub.yaml;              eq "F a manifest runs the drill only" "false true" "$(two)"
+  change tokenledger/hub/cmd/ccquota/hub.go;    eq "F the hub's start runs the drill only" "false true" "$(two)"
+  change tokenledger/hub/store/migrations.go;   eq "F a migration runs the drill only" "false true" "$(two)"
+  change tokenledger/hub/api/server.go;         eq "F the hub's server runs the drill only" "false true" "$(two)"
+  change tokenledger/shared/control/cluster_reading.go; eq "F another control message runs neither" "false false" "$(two)"
+  change tokenledger/shared/control/term_relay.go; eq "F the terminal's control message runs the browser check" "true false" "$(two)"
+  change tokenledger/hub/go.sum;                eq "F a module's dependencies run both" "true true" "$(two)"
+  change tokenledger/brand-new/x.go;            eq "F an unknown tokenledger/ path runs both (unsure)" "true true" "$(two)"
 fi
 
 # ---- E. CI 结论's fold -----------------------------------------------------------
