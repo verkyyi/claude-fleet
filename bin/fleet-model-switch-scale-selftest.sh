@@ -20,7 +20,13 @@ import tempfile
 import time
 
 bin_dir = Path(sys.argv[1])
-real_tmux = shutil.which("tmux")
+# Never the fleet's tmux shim (bin/tmux-shim, first on a fleet pane's PATH): it
+# re-resolves `tmux` off PATH, finds the counting wrapper below, and the two
+# exec each other until the probe's timeout (T367).
+real_tmux = next(t for t in (shutil.which("tmux", path=d)
+                             for d in os.environ.get("PATH", "").split(os.pathsep)
+                             if d and os.path.basename(d.rstrip("/")) != "tmux-shim")
+                 if t)
 real_ps = shutil.which("ps")
 label = f"model-switch-scale-selftest-{os.getpid()}"
 work = Path(tempfile.mkdtemp(prefix="model-switch-scale-selftest."))
