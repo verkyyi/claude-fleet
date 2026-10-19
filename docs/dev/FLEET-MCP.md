@@ -660,7 +660,68 @@ its complete default 60-second budget. Real whole-machine idle/busy evidence and
 deployment are separate. Background tools, active loops, children and all #4318
 Stop/reap gates remain required; a `no_pending` result waives none of them.
 
+### Task authority is a person's (#4896) — the hub contract
+
+Tasks belong to their owner; a repo is only a field on one. The selection is
+`fleet_settings["task-authority:owner:<owner>"]` = `{owner, mode legacy|frozen|hub,
+revision, frozen_at, legacy_owners (the executions to drain), mappings}`; absent
+= `legacy` at revision 0. Each person cuts over alone, and nobody else's mode,
+starts or leftovers take part. The old per-repo rows (`task-authority:<repo>`,
+#4885's hub default for a new repo included) are read as absent — on the live
+hub both hosted repos were still legacy at revision 0, so nothing migrates.
+
+**Every gate asks whose action it is**, never which repo: a `worker_start`'s
+journal by the principal's task owner (`fleet_operations.task_owner`, the node
+placement's `nodeTaskOwner`, else the actor), a task's accept and start by
+`t.Owner`, an issue lease by the claiming endpoint's person (written as the
+lease's `account_owner`), a local start by its node's person, a hub dispatch by
+the dispatcher's. `frozen` refuses every start of that person's — in any repo or
+none; `hub` admits only an accepted dispatch, and only to a node that lists
+`repo_authority_v1`. **Blockers are the person's own**: their local starts,
+their legacy leases (`account_owner`, else one on their endpoint), their
+unfinished v0 T, their unsettled worker_starts (task_owner, else the actor or
+the fleet's endpoint), their accepted work (rollback). The manifest's hosts are
+their own fleet rows (retired and superseded ones listed apart, as before) —
+another person's host is theirs, never "foreign" — and every session on those
+hosts that is not an accepted task's execution is a legacy execution, whatever
+repo it works in. A task carries a `ticket_ref` only when its caller names one:
+dispatch no longer makes one up from a repo's ticket home, and
+`checkTicketBackend` reads the ticket rows alone.
+
+The road (a node's token speaks for its login's person, a person's sign-in for
+that person; only a caller who sees every owner — an admin, the operator's
+door — may add `?owner=<owner>`, never a node, and each such read or change is
+audited `task_authority_read|freeze|apply|rollback|stop_ack|adopt` with
+fleet_id `owner:<owner>`):
+
+| Request | Answer |
+|---|---|
+| `GET /v1/fleet/authority?gate=1` | the authority alone — a node's pre-start read |
+| `GET /v1/fleet/authority[?repo=][&rollback=1]` | the dry-run manifest: `authority`, `nodes`, `retired_hosts`, `superseded_hosts`, `legacy_owners`, `blockers`, `starts`, `tasks`, `tickets` (`repo=` narrows the three lists, never the hosts or blockers); writes nothing |
+| `POST /v1/fleet/authority` `{action, expected_revision, idempotency_key, worker_id?, evidence?}` | `freeze` · `stop_ack` (its node only; `evidence` is the native stop receipt) · `apply` · `rollback`: CAS on the revision, 409 + `blockers` while any remain; the same key with the same body replays the first answer, with another body 409 |
+| `GET\|POST /v1/fleet/authority/start?repo=` | a node's local start, as before: `reserve` · `begin` · `observe` · `recover-observe` · `stopped` · `cancel` · `unobserved`; `GET reservation=` · `list=1` — fenced by its node's person's mode |
+| `POST /v1/fleet/authority/adopt?repo=` `{source, title, body, expected_revision}` | selective adoption onto a hub ticket; the mapping is kept on the person's authority |
+
+After a freeze / apply / rollback the hub sends `repo_authority` (`{repo, mode,
+revision}` — the person's mode and revision) to each of the person's capable
+hosts, once per repo that host's fleets host, and on such a host's first beat
+when the person's revision is past 0; another person's hosts hear nothing.
+
+The old road, `/v1/fleet/tickets/authority[/start|/adopt]?repo=<repo>`, stays one
+version (`# compat-1v`) and answers the same per-person semantics for its
+caller: the gate read is the person's authority with `repo` echoed, the manifest
+the person's (its lists narrowed to the repo), `legacy_tickets` in a body is
+accepted and ignored, and `action: init` is refused 409 — a new repo selects
+nothing, and `fleet_repo_authority.py --init-new`'s fallback gate read then
+writes the person's own mode. The node half — `FLEET_TASK_AUTHORITY` per login
+instead of per repo overlay, the gate / settle / sync on this road — is
+#4830's child ③.
+
 ### Existing-repo authority cutover (#4395)
+
+> Since #4896 the hub answers every step below per **person** (the section
+> above); the per-repo wording is the node side's until #4830's child ③ moves it.
+
 
 A repo the fleet is about to host skips all of this when it is new (issue
 #4885): `fleet-repo.sh add` (and fleet-up) on a login that reaches a hub posts

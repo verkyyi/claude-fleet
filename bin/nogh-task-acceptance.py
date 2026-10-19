@@ -287,7 +287,7 @@ class Harness:
         self.go("authority", "store", "TestTaskAuthorityLifecycle", "TestTaskAuthorityTransferAndPinnedLease", "TestTaskAuthorityRaces", "TestTaskAuthorityTicketScopeAndMigration")
         self.python("recovery", "fleet_task_recovery_test.py")
         self.go("outbox", "agent", "TestTaskReceiptOutboxAckAndExpiry", "TestTaskReceiptReconnectCapabilityAndOnePass")
-        self.go("migration", "store", "TestRepoAuthorityDryRunAndPerRepoCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityRollbackRetainsCompletedExecution", "TestRepoAuthorityFreezeSerializesClaim")
+        self.go("migration", "store", "TestOwnerAuthorityDryRunAndPerOwnerCutover", "TestRepoAuthorityPausedAfterFinalGate", "TestRepoAuthorityStopBoundToCurrentNative", "TestRepoAuthorityRollbackRetainsCompletedExecution", "TestRepoAuthorityFreezeSerializesClaim")
         self.go("cutover", "api", "TestRepoAuthorityAPICleanCutoverNoGitHub", "TestRepoAuthorityAPIManifestCutoverAndCapabilities")
         self.python("repo-cli", "fleet_repo_authority_test.py")
         self.go("landing", "api", "TestTaskPageConfirmedOutcomeAndLanding")

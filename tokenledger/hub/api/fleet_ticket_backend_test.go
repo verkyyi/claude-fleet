@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -11,8 +10,8 @@ import (
 )
 
 // A ticket_ref's backend is checked, not just carried (claude-fleet#4654): a
-// hub-ticketed repo refuses gh:…#N, a GitHub-ticketed one refuses hub:…#N
-// unless the adopt road moved that ticket here — refused before any task.
+// hub-ticketed repo refuses gh:…#N, a GitHub-ticketed one refuses hub:…#N —
+// refused before any task.
 func TestTicketRefBackendChecked(t *testing.T) {
 	type try struct {
 		ref  string
@@ -27,16 +26,11 @@ func TestTicketRefBackendChecked(t *testing.T) {
 			hubTicket(t, s, owner, 7)
 		}, []try{{"gh:" + writeRepo + "#7", 400}, {"hub:" + writeRepo + "#8", 400}, {"gh:" + writeRepo + "#8", 400}, {"hub:" + writeRepo + "#7", 200}}},
 		{"GitHub-ticketed repo", func(*testing.T, *store.Store, string) {}, []try{{"hub:" + writeRepo + "#7", 400}, {"gh:" + writeRepo + "#7", 200}}},
-		{"authority: tickets were the hub's", func(t *testing.T, s *store.Store, owner string) {
-			hubTicket(t, s, owner, 7)
-			setAuthority(t, s, store.RepoAuthority{Repo: writeRepo, Mode: "legacy", Revision: 3, LegacyTickets: "hub"})
-		}, []try{{"gh:" + writeRepo + "#7", 400}, {"hub:" + writeRepo + "#7", 200}}},
-		{"authority: GitHub tickets, one adopted", func(t *testing.T, s *store.Store, owner string) {
-			hubTicket(t, s, owner, 7)
-			hubTicket(t, s, owner, 8)
-			setAuthority(t, s, store.RepoAuthority{Repo: writeRepo, Mode: "legacy", Revision: 3, LegacyTickets: "github",
-				Mappings: []store.RepoTicketMap{{From: "gh:" + writeRepo + "#3", To: "hub:" + writeRepo + "#7"}}})
-		}, []try{{"hub:" + writeRepo + "#8", 400}, {"hub:" + writeRepo + "#7", 200}, {"gh:" + writeRepo + "#8", 200}}},
+		// An old per-repo authority row (claude-fleet#4885's ticket home) takes
+		// no part any more (claude-fleet#4896): only the ticket rows decide.
+		{"old repo authority row ignored", func(t *testing.T, s *store.Store, owner string) {
+			setOldRepoAuthority(t, s, `{"repo":"`+writeRepo+`","mode":"hub","revision":3,"legacy_tickets":"hub"}`)
+		}, []try{{"hub:" + writeRepo + "#7", 400}, {"gh:" + writeRepo + "#7", 200}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -95,10 +89,9 @@ func TestTicketRefOfAnotherOwnerIsForbidden(t *testing.T) {
 	}
 }
 
-func setAuthority(t *testing.T, s *store.Store, a store.RepoAuthority) {
+func setOldRepoAuthority(t *testing.T, s *store.Store, raw string) {
 	t.Helper()
-	b, _ := json.Marshal(a)
-	if err := s.SetFleetSetting("task-authority:"+store.NormRepo(a.Repo), string(b), time.Now()); err != nil {
+	if err := s.SetFleetSetting("task-authority:"+store.NormRepo(writeRepo), raw, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }

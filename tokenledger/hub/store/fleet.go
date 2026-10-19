@@ -135,6 +135,11 @@ type FleetOperation struct {
 	// WorkerID is the session a node's call was made for (claude-fleet#1810):
 	// the worker_id of a verified worker assertion, "" for everyone else.
 	WorkerID string
+	// TaskOwner is the person whose task authority admits a worker_start
+	// (claude-fleet#4896): the principal's task owner, kept in the task_owner
+	// column so a cutover counts only that person's unsettled starts. ""
+	// falls back to Actor. Written once, never read back by the journal.
+	TaskOwner string
 }
 
 // fleetStateUnknown is control.FleetStateUnknown (claude-fleet#1465): a fleet
@@ -322,17 +327,23 @@ func (s *Store) InsertFleetOperation(o FleetOperation) error {
 		return err
 	}
 	defer tx.Rollback()
-	if repo, accepted := repoOfStart(o); repo != "" {
-		if err = s.repoStartTx(tx, repo, accepted); err != nil {
+	if o.Action == "worker_start" {
+		// Every start is its owner's, whatever repo it names — or none
+		// (claude-fleet#4896): the gate reads that person's authority only.
+		if o.TaskOwner == "" {
+			o.TaskOwner = o.Actor
+		}
+		_, accepted := repoOfStart(o)
+		if err = s.ownerStartTx(tx, o.TaskOwner, accepted); err != nil {
 			return err
 		}
 	}
 	res, err := tx.Exec(`INSERT INTO fleet_operations
-		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?)
+		(id, fleet_id, action, request, actor, idem, status, created, updated, result, placement, worker_id, task_owner)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
 		ON CONFLICT(actor, idem) DO NOTHING`,
 		o.ID, o.FleetID, o.Action, o.Request, o.Actor, o.Idem, o.Status,
-		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement, o.WorkerID)
+		o.Created.UTC().Format(rfc), o.Updated.UTC().Format(rfc), o.Result, o.Placement, o.WorkerID, o.TaskOwner)
 	if err != nil {
 		return err
 	}
@@ -357,7 +368,7 @@ func (s *Store) ensureFleetColumns() error {
 	}
 	// Blocker snapshots remain in the existing journal. Indexed scope selects
 	// one task/attempt or one dependency; no issue scan or polling is needed.
-	for _, col := range []string{"task_ref", "dependency_task"} {
+	for _, col := range []string{"task_ref", "dependency_task", "task_owner"} {
 		if err := s.addColumn("fleet_operations", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
 		}

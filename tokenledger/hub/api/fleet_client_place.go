@@ -637,7 +637,8 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 			// take it in between (the node place rule).
 			claim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue,
 				WorkerID: pl.FleetID + "/" + targetKey("issue-"+strconv.Itoa(req.Issue), target, req.Repo),
-				FleetID:  pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+				FleetID:  pl.FleetID, EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser,
+				Owner: p.taskOwner()}
 			hadOwn := false
 			if ls, err := s.Store.Leases(time.Now()); err == nil {
 				for _, l := range ls {

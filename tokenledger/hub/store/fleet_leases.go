@@ -81,6 +81,11 @@ type LeaseClaim struct {
 	// --force). The caller records the takeover; Acquire reports whom it
 	// displaced.
 	Force bool
+	// Owner is the person whose task authority admits this claim — the task
+	// owner of the claiming endpoint (claude-fleet#4896). It is written as the
+	// lease's account_owner, so a cutover counts only that person's leases.
+	// "" consults no authority: every API caller sets it.
+	Owner string
 }
 
 // NormRepo is the lease table's spelling of a repo: owner/name, lower case.
@@ -134,7 +139,7 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
 		return false, Lease{}, nil, err
 	}
-	if err := s.repoStartTx(tx, strings.TrimPrefix(c.Repo, "hub:"), false); err != nil {
+	if err := s.ownerStartTx(tx, c.Owner, false); err != nil {
 		return false, Lease{}, nil, err
 	}
 
@@ -147,9 +152,9 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 		// Free: one statement takes it. Losing it here means another hub's
 		// claim inserted the row since the read (Postgres; SQLite's claim
 		// already waited for it) — read that one, now committed, and judge it.
-		res, ierr := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+		res, ierr := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`, account_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
 			ON CONFLICT(repo, issue) DO NOTHING`,
-			l.Repo, l.Issue, l.WorkerID, l.FleetID, l.EndpointID, l.Hostname, l.OSUser, ts, ts, l.ExpiresAt.Format(rfc))
+			l.Repo, l.Issue, l.WorkerID, l.FleetID, l.EndpointID, l.Hostname, l.OSUser, ts, ts, l.ExpiresAt.Format(rfc), c.Owner)
 		if ierr != nil {
 			return false, Lease{}, nil, ierr
 		}
@@ -187,8 +192,8 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 			exp = cur.ExpiresAt
 		}
 		if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, endpoint_id = ?, hostname = ?, os_user = ?,
-			renewed_at = ?, expires_at = ? WHERE repo = ? AND issue = ?`,
-			c.WorkerID, c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Repo, c.Issue); err != nil {
+			renewed_at = ?, expires_at = ?, account_owner = ? WHERE repo = ? AND issue = ?`,
+			c.WorkerID, c.EndpointID, c.Hostname, c.OSUser, at.UTC().Format(rfc), exp.UTC().Format(rfc), c.Owner, c.Repo, c.Issue); err != nil {
 			return false, Lease{}, nil, err
 		}
 		cur.WorkerID, cur.ExpiresAt = c.WorkerID, exp
@@ -199,13 +204,13 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 		forced = 1
 	}
 	l.Forced = forced == 1
-	if _, err := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+	if _, err := tx.Exec(`INSERT INTO fleet_leases (`+leaseCols+`, account_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
 		ON CONFLICT(repo, issue) DO UPDATE SET worker_id = excluded.worker_id, fleet_id = excluded.fleet_id,
 		  endpoint_id = excluded.endpoint_id, hostname = excluded.hostname, os_user = excluded.os_user,
 		  acquired_at = excluded.acquired_at, renewed_at = excluded.renewed_at,
-		  expires_at = excluded.expires_at, seen = 0, forced = excluded.forced`,
+		  expires_at = excluded.expires_at, seen = 0, forced = excluded.forced, account_owner = excluded.account_owner`,
 		l.Repo, l.Issue, l.WorkerID, l.FleetID, l.EndpointID, l.Hostname, l.OSUser,
-		ts, ts, l.ExpiresAt.Format(rfc), forced); err != nil {
+		ts, ts, l.ExpiresAt.Format(rfc), forced, c.Owner); err != nil {
 		return false, Lease{}, nil, err
 	}
 	return true, l, displaced, tx.Commit()
@@ -332,7 +337,7 @@ func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim
 		return false, err
 	}
 	defer tx.Rollback()
-	if err := s.repoStartTx(tx, strings.TrimPrefix(repo, "hub:"), false); err != nil {
+	if err := s.ownerStartTx(tx, to.Owner, false); err != nil {
 		return false, err
 	}
 	if err := s.d.claimWrites(tx, "fleet_leases"); err != nil {
@@ -350,10 +355,10 @@ func (s *Store) HandOverLease(repo string, issue int, from string, to LeaseClaim
 	}
 	ts := at.UTC().Format(rfc)
 	if _, err := tx.Exec(`UPDATE fleet_leases SET worker_id = ?, fleet_id = ?, endpoint_id = ?, hostname = ?,
-		os_user = ?, acquired_at = ?, renewed_at = ?, expires_at = ?, seen = 0, forced = 0
+		os_user = ?, acquired_at = ?, renewed_at = ?, expires_at = ?, seen = 0, forced = 0, account_owner = ?
 		WHERE repo = ? AND issue = ?`,
 		to.WorkerID, to.FleetID, to.EndpointID, to.Hostname, to.OSUser, ts, ts, at.Add(grace).UTC().Format(rfc),
-		repo, issue); err != nil {
+		to.Owner, repo, issue); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

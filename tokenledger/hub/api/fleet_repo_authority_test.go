@@ -10,6 +10,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 func TestRepoAuthorityRecoveryScope(t *testing.T) {
@@ -111,7 +112,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	if code != 409 {
 		t.Fatalf("unbound old owners must drain before freeze: %d %v", code, a)
 	}
-	unchanged, _ := h.srv.Store.RepoAuthority(writeRepo)
+	unchanged, _ := h.srv.Store.OwnerAuthority("operator")
 	after, _ = h.srv.Store.FleetSettings()
 	if unchanged.Mode != "legacy" || unchanged.Revision != 0 || !reflect.DeepEqual(before, after) {
 		t.Fatal("unbound preflight changed authority", unchanged)
@@ -370,7 +371,7 @@ func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 // A fleet row no machine reports any more, whose machine has since reported a
 // newer row, is superseded (claude-fleet#4877): listed apart in
 // superseded_hosts, no host, no blocker. An absent row with no successor still
-// blocks; another repo's manifest stays byte for byte.
+// blocks; another repo's manifest is the same person's, so the same.
 func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
@@ -395,7 +396,6 @@ func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	sameMachine := fakeFleet(t, machineB, "fleet-old", writeRepo, "/u/frank/old")
 	rejoined := fakeFleet(t, machineC, "fleet-rejoined", writeRepo, "/u/frank/claude-fleet")
 	stranger := fakeFleet(t, machineD, "fleet-z", writeRepo, "/u/frank/claude-fleet")
-	_, otherBefore := ticketCall(t, h, auth, http.MethodGet, other, nil)
 	t0 := time.Now().Add(-time.Hour)
 	snap := func(ep, host string, machine string, at time.Time, fs ...control.Fleet) {
 		var reps []store.FleetReport
@@ -433,10 +433,12 @@ func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	if !strings.Contains(string(nodes), f5.FleetID) || !strings.Contains(string(nodes), f4.FleetID) || strings.Contains(string(nodes), sameMachine.FleetID) {
 		t.Fatalf("nodes: %s", nodes)
 	}
-	_, otherAfter := ticketCall(t, h, auth, http.MethodGet, other, nil)
+	// The hosts are the person's, whichever repo the old road names
+	// (claude-fleet#4896): another repo's manifest lists the same ones.
+	_, otherM := ticketCall(t, h, auth, http.MethodGet, other, nil)
 	for _, k := range []string{"blockers", "nodes", "retired_hosts", "superseded_hosts", "legacy_owners"} {
-		if !reflect.DeepEqual(otherBefore[k], otherAfter[k]) {
-			t.Fatalf("another repo's %s changed: %v → %v", k, otherBefore[k], otherAfter[k])
+		if !reflect.DeepEqual(m[k], otherM[k]) {
+			t.Fatalf("another repo's %s differs: %v → %v", k, m[k], otherM[k])
 		}
 	}
 }
@@ -491,24 +493,151 @@ func TestSupersededByRules(t *testing.T) {
 	}
 }
 
-// A node starts a never-seen repo on the hub through the same POST; a repo a
-// fleet already hosts (writeRepo) is refused and stays legacy (claude-fleet#4885).
-func TestRepoAuthorityAPIInitNewRepo(t *testing.T) {
+// The old per-repo road's init (claude-fleet#4885) selects nothing any more: it
+// is refused, and the node's fallback gate read answers the person's own mode,
+// the repo echoed (claude-fleet#4896, # compat-1v).
+func TestRepoAuthorityAPIInitRefusedGateIsTheOwners(t *testing.T) {
 	h, _, _, _, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
 	body := map[string]any{"action": "init", "expected_revision": 0, "idempotency_key": "repo-init-new", "legacy_tickets": "hub"}
-	code, a := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo=acme/brand-new", body)
-	if code != 200 || a["mode"] != "hub" || a["revision"] != float64(1) {
+	if code, a := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo=acme/brand-new", body); code != 409 {
 		t.Fatalf("init a new repo: %d %v", code, a)
 	}
-	body["idempotency_key"] = "repo-init-hosted"
-	code, out := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo="+writeRepo, body)
-	if code != 409 {
-		t.Fatalf("init a hosted repo: %d %v", code, out)
+	code, g := ticketCall(t, h, auth, http.MethodGet, FleetTicketsPath+"/authority?repo=acme/brand-new&gate=1", nil)
+	if code != 200 || g["mode"] != "legacy" || g["repo"] != "acme/brand-new" || g["owner"] != "operator" {
+		t.Fatalf("gate after a refused init: %d %v", code, g)
 	}
-	code, g := ticketCall(t, h, auth, http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo+"&gate=1", nil)
-	if code != 200 || g["mode"] != "legacy" {
-		t.Fatalf("hosted repo after a refused init: %d %v", code, g)
+	if after, _ := h.srv.Store.FleetSettings(); after["task-authority:acme/brand-new"] != "" || after["task-authority:owner:operator"] != "" {
+		t.Fatal("a refused init wrote a selection", after)
+	}
+}
+
+// BREAK-IT authority-other-owner-blocks + authority-owner-cutover
+// (claude-fleet#4896): alice and bob both host writeRepo. alice drains her own
+// legacy session (freeze · stop_ack · apply · rollback) while bob's legacy
+// session and local start in the same repo neither block her nor are blocked;
+// bob's gate stays legacy throughout and his hosts are never pushed.
+func TestOwnerAuthorityTwoPeopleOneRepo(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice, pBob)
+	h.srv.FleetAdmins = []string{"frank"}
+	for _, a := range []FleetAccountRequest{{Action: "adopt", PrincipalID: pAlice, Hostname: "mac-a", Login: "alice"}, {Action: "adopt", PrincipalID: pBob, Hostname: "mac-b", Login: "bob"}} {
+		if code := operatorPost(t, h, a); code != 200 {
+			t.Fatalf("adopt %s: %d", a.Login, code)
+		}
+	}
+	caps := []string{control.CapRead, control.CapWrite, control.CapLaunch, control.CapRepoAuthority}
+	ta, tb := h.enroll(t, "mac-a"), h.enroll(t, "mac-b")
+	na, nb := connectWriteNodeCaps(t, h, ta, caps...), connectWriteNodeCaps(t, h, tb, caps...)
+	fa := fakeFleet(t, machineA, "fleet-a", writeRepo, "/u/alice/cf", 5)
+	fb := fakeFleet(t, machineB, "fleet-b", writeRepo, "/u/bob/cf", 7)
+	na.beatLoad("mac-a", "alice", machineA, 1, 1, fa)
+	nb.beatLoad("mac-b", "bob", machineB, 1, 1, fb)
+	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
+		fs, _ := h.srv.Store.Fleets()
+		return len(fs) == 2
+	})
+	if o := h.srv.endpointOwner("ep_mac-a"); o != pAlice {
+		t.Fatalf("mac-a's owner %q", o)
+	}
+	as := func(tok string) func(http.Header) {
+		return func(hd http.Header) { hd.Set("Authorization", "Bearer "+tok) }
+	}
+	alice, bob := as(ta), as(tb)
+	path, start := FleetAuthorityPath, FleetAuthorityPath+"/start?repo="+writeRepo
+	call := func(who func(http.Header), method, p string, body map[string]any, want int) map[string]any {
+		t.Helper()
+		code, out := ticketCall(t, h, who, method, p, body)
+		if code != want {
+			t.Fatalf("%s %s: %d %v; want %d", method, p, code, out, want)
+		}
+		return out
+	}
+	refresh := func(f control.Fleet, workers string) {
+		t.Helper()
+		if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, workers, time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	strs := func(v any) string { b, _ := json.Marshal(v); return string(b) }
+	wa := fleetid.WorkerID(fa.FleetID, fleetid.WorkerKey(5, false, "", ""))
+	wb := fleetid.WorkerID(fb.FleetID, fleetid.WorkerKey(7, false, "", ""))
+
+	// bob keeps working on the legacy road in the same repo.
+	call(bob, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "bob-1"}, 200)
+	// alice's own session was launched (and observed) on the legacy road.
+	native := map[string]any{"worker_id": wa, "native_session": "s-a", "pid": 55, "birth": "b-a", "executable": "/bin/claude"}
+	call(alice, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "a-5"}, 200)
+	call(alice, http.MethodPost, start, map[string]any{"action": "begin", "reservation": "a-5", "worker_id": wa}, 200)
+	call(alice, http.MethodPost, start, map[string]any{"action": "observe", "reservation": "a-5", "worker_id": wa, "native_identity": native}, 200)
+
+	m := call(alice, http.MethodGet, path, nil, 200)
+	if b := strs(m["blockers"]); strings.Contains(b, wb) || strings.Contains(b, "bob-1") || strings.Contains(b, fb.FleetID) || !strings.Contains(b, "legacy execution: "+wa) {
+		t.Fatalf("alice's blockers: %s", b)
+	}
+	if n := strs(m["nodes"]); strings.Contains(n, fb.FleetID) || !strings.Contains(n, fa.FleetID) {
+		t.Fatalf("alice's hosts: %s", n)
+	}
+	if mb := call(bob, http.MethodGet, path, nil, 200); !strings.Contains(strs(mb["blockers"]), "legacy execution: "+wb) || !strings.Contains(strs(mb["blockers"]), "local start retained: bob-1") || strings.Contains(strs(mb["blockers"]), wa) {
+		t.Fatalf("bob's blockers: %v", mb["blockers"])
+	}
+	// Only someone who sees every owner may read another's.
+	call(alice, http.MethodGet, path+"?owner="+pBob, nil, 403)
+	viewer := as(viewerToken)
+	if mb := call(viewer, http.MethodGet, path+"?owner="+pBob, nil, 200); !strings.Contains(strs(mb["blockers"]), wb) {
+		t.Fatalf("admin read of bob: %v", mb["blockers"])
+	}
+
+	// alice: freeze → her session stops → stop_ack → apply.
+	a := call(alice, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "a-freeze", "expected_revision": 0}, 200)
+	if a["mode"] != "frozen" || a["owner"] != pAlice {
+		t.Fatal(a)
+	}
+	call(bob, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "bob-2"}, 200)
+	call(alice, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "a-new"}, 409)
+	call(alice, http.MethodPost, start, map[string]any{"action": "stopped", "reservation": "a-5", "worker_id": wa, "native_identity": native, "execution_stopped": true}, 200)
+	evidence := map[string]any{"execution_stopped": true}
+	for k, v := range native {
+		evidence[k] = v
+	}
+	call(alice, http.MethodPost, path, map[string]any{"action": "stop_ack", "idempotency_key": "a-ack", "expected_revision": 1, "worker_id": wa, "evidence": strs(evidence)}, 200)
+	refresh(fa, "[]")
+	a = call(alice, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "a-apply", "expected_revision": 2}, 200)
+	if a["mode"] != "hub" {
+		t.Fatal(a)
+	}
+	if g := call(alice, http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo+"&gate=1", nil, 200); g["mode"] != "hub" || g["repo"] != writeRepo {
+		t.Fatalf("alice's old-road gate: %v", g)
+	}
+	if g := call(bob, http.MethodGet, path+"?gate=1", nil, 200); g["mode"] != "legacy" || g["revision"] != float64(0) {
+		t.Fatalf("bob's gate moved with alice's: %v", g)
+	}
+	call(bob, http.MethodPost, start, map[string]any{"action": "begin", "reservation": "bob-2", "worker_id": wb}, 200)
+	waitFor(t, 3*time.Second, "alice's host told", func() bool { return len(na.authorityPushes()) == 2 })
+	if p := na.authorityPushes(); p[1] != (control.RepoAuthority{Repo: writeRepo, Mode: "hub", Revision: 3}) {
+		t.Fatalf("alice's pushes: %v", p)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if p := nb.authorityPushes(); len(p) != 0 {
+		t.Fatalf("bob's host was pushed alice's authority: %v", p)
+	}
+
+	// alice rolls back; bob was never asked.
+	refresh(fa, "[]")
+	call(alice, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "a-freeze-2", "expected_revision": 3}, 200)
+	refresh(fa, "[]")
+	if a = call(alice, http.MethodPost, path+"?rollback=1", map[string]any{"action": "rollback", "idempotency_key": "a-back", "expected_revision": 4}, 200); a["mode"] != "legacy" {
+		t.Fatal(a)
+	}
+	var n int
+	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_audit WHERE action LIKE 'task_authority_%' AND fleet_id = ?`, "owner:"+pAlice).Scan(&n); err != nil || n != 5 {
+		t.Fatalf("alice's audit rows %d %v", n, err)
+	}
+	if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_audit WHERE action = 'task_authority_read' AND fleet_id = ?`, "owner:"+pBob).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the admin's read of bob is not audited: %d %v", n, err)
+	}
+	if b, _ := h.srv.Store.OwnerAuthority(pBob); b.Revision != 0 || b.Mode != "legacy" {
+		t.Fatal("bob's authority moved", b)
 	}
 }
 

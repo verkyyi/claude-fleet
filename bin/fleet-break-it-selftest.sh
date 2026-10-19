@@ -6610,7 +6610,7 @@ drill_authority_legacy_task_unclosable() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
   local t0 f="$ROOT/tokenledger/hub/store/fleet_repo_authority.go" b="$BIN/fleet-task-record.sh"
   t0=$(now)
-  grep -q "state NOT IN (?, ?)\`, repo, TaskClosed, TaskRefused" "$f" \
+  grep -q "state NOT IN (?, ?)\`, owner, TaskClosed, TaskRefused" "$f" \
     || { WHY="the legacy-owner blocker query no longer honours TaskClosed"; return 1; }
   grep -q 'call POST /v1/node/tasks/settle' "$b" \
     || { WHY="fleet-task-record.sh has no settle command"; return 1; }
@@ -6645,12 +6645,47 @@ drill_authority_superseded_fleet_row() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
   local t0 a="$ROOT/tokenledger/hub/api/fleet_repo_authority.go"
   t0=$(now)
-  grep -q 'supersededBy(f, a.Repo, fs, eps)' "$a" \
+  grep -q 'supersededBy(f, store.NormRepo(f.Repo), fs, eps)' "$a" \
     || { WHY="repoAuthorityInventory no longer skips a superseded fleet row"; return 1; }
   grep -q '"superseded_hosts": superseded' "$a" \
     || { WHY="the authority manifest no longer lists superseded fleet rows apart"; return 1; }
   _drill_go_tests 'TestSupersededByRules TestRepoAuthoritySupersededFleetRowBlocksNothing' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
-    '被取代的旧 fleet 行：同一台机器（fleet machine / endpoint / 硬件 machine_id + os_user）之后报过 present 行，它列进 superseded_hosts 不再挡；没有后继的 absent 行、present 而不 capable 的行照旧挡，另一个仓库一字不变（go test）' || return 1
+    '被取代的旧 fleet 行：同一台机器（fleet machine / endpoint / 硬件 machine_id + os_user）之后报过 present 行，它列进 superseded_hosts 不再挡；没有后继的 absent 行、present 而不 capable 的行照旧挡；主机是人的，另一个仓库的 manifest 列的是同一批（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- authority-other-owner-blocks (#4896): task authority was one row per
+# repo with one owner, so a person still on legacy in a shared repo held
+# everyone else's cutover (their host was "foreign", their starts blocked), and
+# one person's freeze froze the others. Now it is a person's: each gate reads
+# the starting person's own row, each blocker counts only their own work.
+drill_authority_other_owner_blocks() {
+  CAP=180;  # two cold go test builds
+  local t0 f="$ROOT/tokenledger/hub/store/fleet_repo_authority.go" a="$ROOT/tokenledger/hub/api/fleet_repo_authority.go"
+  t0=$(now)
+  grep -q 'return "task-authority:owner:" + owner' "$f" \
+    || { WHY="task authority is no longer keyed by its owner"; return 1; }
+  grep -q 'if ep == nil || s.nodeTaskOwner(ep) != a.Owner {' "$a" \
+    || { WHY="the authority inventory counts another person's host again"; return 1; }
+  _drill_go_tests 'TestOwnerAuthorityDryRunAndPerOwnerCutover' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestOwnerAuthorityTwoPeopleOneRepo' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
+    '同一个仓库两个人：A 的 legacy 会话、local start 不进 B 的 blocker；B 冻结 / 切到 hub 后 A 照常 legacy 开会话，A 的 gate 不动、A 的机器收不到推送（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- authority-owner-cutover (#4896): one person's whole road, alone — dry
+# run writes nothing, freeze stops only their starts, their own legacy session
+# drains by a native stop receipt, apply admits only accepted work, rollback
+# waits on their accepted work, and every step is CAS + idempotent + audited.
+drill_authority_owner_cutover() {
+  CAP=180;  # two cold go test builds
+  local t0 a="$ROOT/tokenledger/hub/api/fleet_repo_authority.go"
+  t0=$(now)
+  grep -q '"task_authority_"+action, "owner:"+owner' "$a" \
+    || { WHY="a task authority change is no longer audited"; return 1; }
+  _drill_go_tests 'TestRepoAuthorityStopBoundToCurrentNative TestRepoAuthorityRollbackRetainsCompletedExecution' "$ROOT/tokenledger/hub/store/fleet_repo_authority_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestOwnerAuthorityTwoPeopleOneRepo' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
+    '一个人的全程：dry-run 零写入，freeze 只挡本人，本人 legacy 会话凭原生停止回执 stop_ack 后 apply，再 freeze → rollback；每步按 revision CAS、幂等、写审计（go test）' || return 1
   SECS=$(since "$t0")
 }
 

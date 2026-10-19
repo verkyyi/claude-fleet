@@ -61,7 +61,7 @@ func TestRepoStartUnobservedCloses(t *testing.T) {
 		t.Fatal("an observed native was closed without a stop proof")
 	}
 
-	blockers, _, err := s.RepoAuthorityBlockers("org/repo", false)
+	blockers, _, err := s.OwnerAuthorityBlockers("alice", nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

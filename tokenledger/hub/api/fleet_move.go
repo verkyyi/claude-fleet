@@ -412,7 +412,7 @@ func (s *Server) handleNodeMove(w http.ResponseWriter, r *http.Request) {
 	giveBack := func() {}
 	if issue > 0 {
 		tclaim := store.LeaseClaim{Repo: req.Repo, Issue: issue, WorkerID: toWID, FleetID: pl.FleetID,
-			EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser}
+			EndpointID: target.EndpointID, Hostname: target.Hostname, OSUser: target.OSUser, Owner: s.endpointOwner(target.EndpointID)}
 		moved, err := s.Store.HandOverLease(req.Repo, issue, req.WorkerID, tclaim, leaseStartGrace, now)
 		if err == nil && !moved {
 			var held store.Lease
@@ -516,7 +516,7 @@ func (s *Server) moveGiveBack(actor, moveID string) {
 		return
 	}
 	mine := store.LeaseClaim{Repo: mv.Repo, Issue: mv.Issue, WorkerID: mv.FromWID, FleetID: fromFleet,
-		EndpointID: src.EndpointID, Hostname: src.Hostname, OSUser: src.OSUser}
+		EndpointID: src.EndpointID, Hostname: src.Hostname, OSUser: src.OSUser, Owner: s.endpointOwner(src.EndpointID)}
 	if _, err := s.Store.HandOverLease(mv.Repo, mv.Issue, mv.ToWID, mine, leaseStartGrace, time.Now()); err != nil {
 		s.leaseAudit(actor, "move", fromFleet, "lease give-back failed: "+err.Error(), time.Now())
 	}

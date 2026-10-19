@@ -10,20 +10,22 @@ import (
 	"time"
 )
 
-// Repo authority is configuration, not another task store. The existing
-// settings registry holds its selection; operations journal every transition.
-// Absence is legacy. Merely reading a manifest never inserts a setting.
-var ErrRepoAuthority = errors.New("repo authority refuses new dispatch or unsafe cutover")
+// Task authority is configuration, not another task store, and it is a
+// PERSON's (claude-fleet#4896): tasks belong to their owner, a repo is only a
+// field on one. fleet_settings["task-authority:owner:<owner>"] holds that
+// person's selection; operations journal every transition. Absence is legacy.
+// Merely reading a manifest never inserts a setting. One person's selection
+// never admits, refuses or blocks another person's start, whatever repo the
+// two share. The old per-repo rows (task-authority:<repo>) are read as absent.
+var ErrRepoAuthority = errors.New("task authority refuses new dispatch or unsafe cutover")
 
-type RepoAuthority struct {
-	Repo          string            `json:"repo"`
-	Owner         string            `json:"owner,omitempty"`
-	Mode          string            `json:"mode"` // legacy | frozen | hub
-	Revision      int64             `json:"revision"`
-	LegacyTickets string            `json:"legacy_tickets,omitempty"`
-	FrozenAt      time.Time         `json:"frozen_at,omitempty"`
-	Owners        []RepoLegacyOwner `json:"legacy_owners,omitempty"`
-	Mappings      []RepoTicketMap   `json:"mappings,omitempty"`
+type OwnerAuthority struct {
+	Owner    string            `json:"owner"`
+	Mode     string            `json:"mode"` // legacy | frozen | hub
+	Revision int64             `json:"revision"`
+	FrozenAt time.Time         `json:"frozen_at,omitempty"`
+	Owners   []RepoLegacyOwner `json:"legacy_owners,omitempty"` // the executions to drain
+	Mappings []RepoTicketMap   `json:"mappings,omitempty"`
 }
 
 type RepoLegacyOwner struct {
@@ -56,23 +58,23 @@ type RepoTicketMap struct {
 	PayloadSHA string `json:"payload_sha"`
 }
 
-type RepoAuthorityChange struct {
-	Action        string            `json:"action"` // init | freeze | apply | rollback | stop_ack
-	Revision      int64             `json:"expected_revision"`
-	Key           string            `json:"idempotency_key"`
-	LegacyTickets string            `json:"legacy_tickets,omitempty"`
-	WorkerID      string            `json:"worker_id,omitempty"`
-	Evidence      string            `json:"evidence,omitempty"`
-	EndpointID    string            `json:"-"` // authenticated node, never caller JSON
-	Owners        []RepoLegacyOwner `json:"-"` // current registry inventory
+type OwnerAuthorityChange struct {
+	Action     string            `json:"action"` // freeze | apply | rollback | stop_ack
+	Revision   int64             `json:"expected_revision"`
+	Key        string            `json:"idempotency_key"`
+	WorkerID   string            `json:"worker_id,omitempty"`
+	Evidence   string            `json:"evidence,omitempty"`
+	EndpointID string            `json:"-"` // authenticated node, never caller JSON
+	Owners     []RepoLegacyOwner `json:"-"` // current registry inventory
+	Endpoints  []string          `json:"-"` // the owner's endpoints, from the registry
 }
 
-func authorityKey(repo string) string { return "task-authority:" + NormRepo(repo) }
+func ownerAuthorityKey(owner string) string { return "task-authority:owner:" + owner }
 
-func readRepoAuthority(q querier, repo string) (RepoAuthority, error) {
-	a := RepoAuthority{Repo: NormRepo(repo), Mode: "legacy"}
+func readOwnerAuthority(q querier, owner string) (OwnerAuthority, error) {
+	a := OwnerAuthority{Owner: owner, Mode: "legacy"}
 	var raw string
-	err := q.QueryRow(`SELECT value FROM fleet_settings WHERE key = ?`, authorityKey(repo)).Scan(&raw)
+	err := q.QueryRow(`SELECT value FROM fleet_settings WHERE key = ?`, ownerAuthorityKey(owner)).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, nil
 	}
@@ -82,20 +84,22 @@ func readRepoAuthority(q querier, repo string) (RepoAuthority, error) {
 	if err = json.Unmarshal([]byte(raw), &a); err != nil {
 		return a, err
 	}
-	if a.Repo != NormRepo(repo) || (a.Mode != "legacy" && a.Mode != "frozen" && a.Mode != "hub") {
+	if a.Owner != owner || (a.Mode != "legacy" && a.Mode != "frozen" && a.Mode != "hub") {
 		return a, ErrRepoAuthority
 	}
 	return a, nil
 }
 
-func (s *Store) RepoAuthority(repo string) (RepoAuthority, error) {
-	return readRepoAuthority(s.read, repo)
+// OwnerAuthority is owner's selection; legacy at revision 0 when none.
+func (s *Store) OwnerAuthority(owner string) (OwnerAuthority, error) {
+	return readOwnerAuthority(s.read, owner)
 }
 
 // RepoTaskInventory contains identity/outcome only, never request payloads or
 // transcripts. Work success and code landing remain separate manifest fields.
+// repo "" lists every task of owner's (the per-person manifest).
 func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) {
-	rows, err := s.read.Query(`SELECT id,authority_version,generation,execution_owner,ticket_ref,outcome,pr,evidence FROM fleet_tasks WHERE repo = ? AND owner = ? ORDER BY id`, NormRepo(repo), owner)
+	rows, err := s.read.Query(`SELECT id,authority_version,generation,execution_owner,ticket_ref,outcome,pr,evidence FROM fleet_tasks WHERE (repo = ? OR ? = '') AND owner = ? ORDER BY id`, NormRepo(repo), NormRepo(repo), owner)
 	if err != nil {
 		return nil, err
 	}
@@ -162,23 +166,27 @@ func (s *Store) RepoTaskInventory(repo, owner string) ([]map[string]any, error) 
 	return out, reports.Err()
 }
 
-// Serialize authority changes with acceptance, launch journals and lease claims,
-// including an absent setting. No default rows are added to unrelated repos.
-func (s *Store) lockRepoAuthority(tx *sql.Tx, repo string) error {
-	if repo == "" {
+// Serialize authority changes with acceptance, launch journals and lease claims
+// of the SAME person, including an absent setting. Two people never wait on
+// each other's key. No default rows are added for anyone.
+func (s *Store) lockOwnerAuthority(tx *sql.Tx, owner string) error {
+	if owner == "" {
 		return nil
 	}
-	return s.d.lockKey(tx, "fleet_settings", authorityKey(repo))
+	return s.d.lockKey(tx, "fleet_settings", ownerAuthorityKey(owner))
 }
 
-func (s *Store) repoStartTx(tx *sql.Tx, repo string, accepted bool) error {
-	if repo == "" {
+// ownerStartTx admits one start of owner's: frozen refuses every start, hub
+// only an accepted one. owner "" (an internal caller with no person) consults
+// no authority.
+func (s *Store) ownerStartTx(tx *sql.Tx, owner string, accepted bool) error {
+	if owner == "" {
 		return nil
 	}
-	if err := s.lockRepoAuthority(tx, repo); err != nil {
+	if err := s.lockOwnerAuthority(tx, owner); err != nil {
 		return err
 	}
-	a, err := readRepoAuthority(tx, repo)
+	a, err := readOwnerAuthority(tx, owner)
 	if err != nil {
 		return err
 	}
@@ -188,11 +196,24 @@ func (s *Store) repoStartTx(tx *sql.Tx, repo string, accepted bool) error {
 	return nil
 }
 
-// RepoAuthorityBlockers includes EXPIRED legacy leases and terminal accepted
-// tasks with retained execution leases. Neither is proof of native stop.
-func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []RepoLegacyOwner, error) {
+func inSet(set []string, v string) bool {
+	for _, x := range set {
+		if x != "" && x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ownerAuthorityBlockers is what still holds owner's cutover, and ONLY owner's:
+// their local starts, their legacy leases (account_owner, else one held on one
+// of their endpoints), their unfinished v0 T, their unsettled worker_starts
+// (task_owner, else the actor or the fleet's endpoint) and, for a rollback,
+// their accepted work. It includes EXPIRED legacy leases and terminal accepted
+// tasks with retained execution leases: neither is proof of native stop.
+func ownerAuthorityBlockers(q querier, owner string, endpoints []string, rollback bool) ([]string, []RepoLegacyOwner, error) {
 	blockers, owners := []string{}, []RepoLegacyOwner{}
-	starts, err := repoLocalStarts(q, repo)
+	starts, err := localStarts(q, func(st RepoLocalStart) bool { return st.Owner == owner })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -205,21 +226,23 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 			owners = append(owners, RepoLegacyOwner{WorkerID: start.WorkerID, EndpointID: start.EndpointID, Native: start.Native})
 		}
 	}
-	rows, err := q.Query(`SELECT worker_id, endpoint_id, task_id FROM fleet_leases WHERE repo = ? OR repo = ? OR task_id IN (SELECT id FROM fleet_tasks WHERE repo = ?)`, repo, "hub:"+repo, repo)
+	rows, err := q.Query(`SELECT l.worker_id, l.endpoint_id, l.task_id, l.account_owner, COALESCE(t.owner, '') FROM fleet_leases l LEFT JOIN fleet_tasks t ON t.id = l.task_id AND l.task_id <> 0`)
 	if err != nil {
 		return nil, nil, err
 	}
 	for rows.Next() {
-		var w, ep string
+		var w, ep, account, taskOwner string
 		var task int64
-		if err = rows.Scan(&w, &ep, &task); err != nil {
+		if err = rows.Scan(&w, &ep, &task, &account, &taskOwner); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
 		if task == 0 {
-			owners = append(owners, RepoLegacyOwner{WorkerID: w, EndpointID: ep})
-			blockers = append(blockers, "legacy lease: "+w)
-		} else if rollback {
+			if account == owner || (account == "" && inSet(endpoints, ep)) {
+				owners = append(owners, RepoLegacyOwner{WorkerID: w, EndpointID: ep})
+				blockers = append(blockers, "legacy lease: "+w)
+			}
+		} else if rollback && taskOwner == owner {
 			blockers = append(blockers, "execution retained: "+TaskRef(task))
 		}
 	}
@@ -229,9 +252,9 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 		return nil, nil, err
 	}
 	// Legacy placement records can retain an owner even after both its lease
-	// and snapshot disappear. An unfinished T is not an empty-repo proof; one
-	// settled on evidence (TaskClosed, claude-fleet#4867) is ended.
-	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE repo = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`, repo, TaskClosed, TaskRefused)
+	// and snapshot disappear. An unfinished T is not an empty-inventory proof;
+	// one settled on evidence (TaskClosed, claude-fleet#4867) is ended.
+	rows, err = q.Query(`SELECT worker_id FROM fleet_tasks WHERE owner = ? AND authority_version = 0 AND worker_id <> '' AND state NOT IN (?, ?)`, owner, TaskClosed, TaskRefused)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -249,18 +272,22 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err = q.Query(`SELECT id, request FROM fleet_operations WHERE action = 'worker_start' AND status IN ('pending','running','unknown','sent')`)
+	rows, err = q.Query(`SELECT o.id, o.actor, o.task_owner, COALESCE(m.endpoint_id, '') FROM fleet_operations o
+		  LEFT JOIN fleet_fleets f ON f.fleet_id = o.fleet_id
+		  LEFT JOIN fleet_machines m ON m.machine_id = f.machine_id
+		 WHERE o.action = 'worker_start' AND o.status IN ('pending','running','unknown','sent')`)
 	if err != nil {
 		return nil, nil, err
 	}
 	for rows.Next() {
-		var id, raw string
-		if err = rows.Scan(&id, &raw); err != nil {
+		var id, actor, taskOwner, ep string
+		if err = rows.Scan(&id, &actor, &taskOwner, &ep); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
-		r, _ := repoOfStart(FleetOperation{Action: "worker_start", Request: raw})
-		if r == repo {
+		// A start journalled before task_owner existed is its actor's, else
+		// the person's whose endpoint it was sent to.
+		if taskOwner == owner || (taskOwner == "" && (actor == owner || inSet(endpoints, ep))) {
 			blockers = append(blockers, "unsettled start: "+id)
 		}
 	}
@@ -270,7 +297,7 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 		return nil, nil, err
 	}
 	if rollback {
-		rows, err = q.Query(`SELECT id FROM fleet_tasks WHERE repo = ? AND authority_version > 0 AND outcome = ''`, repo)
+		rows, err = q.Query(`SELECT id FROM fleet_tasks WHERE owner = ? AND authority_version > 0 AND outcome = ''`, owner)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -288,87 +315,13 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 	return blockers, owners, err
 }
 
-// repoHistory is "" when the hub has never seen repo — no fleet row of any
-// owner hosting it (or a worker of it), no local start, task, lease, worker
-// start or ticket — else the first kind of trace found (claude-fleet#4885).
-func repoHistory(q querier, repo string) (string, error) {
-	rows, err := q.Query(`SELECT repo, repos_json, workers_json FROM fleet_fleets`)
-	if err != nil {
-		return "", err
-	}
-	used := ""
-	for rows.Next() && used == "" {
-		var one, repos, workers string
-		if err = rows.Scan(&one, &repos, &workers); err != nil {
-			rows.Close()
-			return "", err
-		}
-		var rs []string
-		var ws []struct {
-			Repo string `json:"repo"`
-		}
-		_ = json.Unmarshal([]byte(repos), &rs)
-		_ = json.Unmarshal([]byte(workers), &ws)
-		for _, w := range ws {
-			rs = append(rs, w.Repo)
-		}
-		for _, r := range append(rs, one) {
-			if r != "" && NormRepo(r) == repo {
-				used = "a fleet hosts it"
-			}
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil || used != "" {
-		return used, err
-	}
-	starts, err := repoLocalStarts(q, repo)
-	if err != nil || len(starts) > 0 {
-		if len(starts) > 0 {
-			used = "a local start"
-		}
-		return used, err
-	}
-	for _, c := range []struct{ why, query string }{
-		{"a task", `SELECT COUNT(*) FROM fleet_tasks WHERE LOWER(repo) = ?`},
-		{"a lease", `SELECT COUNT(*) FROM fleet_leases WHERE LOWER(repo) = ? OR LOWER(repo) = 'hub:' || ?`},
-		{"a ticket", `SELECT COUNT(*) FROM fleet_tickets WHERE LOWER(repo) = ?`},
-	} {
-		var n int
-		args := []any{repo}
-		if strings.Count(c.query, "?") == 2 {
-			args = append(args, repo)
-		}
-		if err = q.QueryRow(c.query, args...).Scan(&n); err != nil {
-			return "", err
-		}
-		if n > 0 {
-			return c.why, nil
-		}
-	}
-	rows, err = q.Query(`SELECT request FROM fleet_operations WHERE action = 'worker_start'`)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
-			return "", err
-		}
-		if r, _ := repoOfStart(FleetOperation{Action: "worker_start", Request: raw}); r == repo {
-			return "a worker start", nil
-		}
-	}
-	return "", rows.Err()
+// OwnerAuthorityBlockers is ownerAuthorityBlockers on the read pool. endpoints
+// are the owner's own endpoints, read from the registry by the caller.
+func (s *Store) OwnerAuthorityBlockers(owner string, endpoints []string, rollback bool) ([]string, []RepoLegacyOwner, error) {
+	return ownerAuthorityBlockers(s.read, owner, endpoints, rollback)
 }
 
-func (s *Store) RepoAuthorityBlockers(repo string, rollback bool) ([]string, []RepoLegacyOwner, error) {
-	return repoAuthorityBlockers(s.read, NormRepo(repo), rollback)
-}
-
-func rememberOwners(a *RepoAuthority, owners []RepoLegacyOwner) {
+func rememberOwners(a *OwnerAuthority, owners []RepoLegacyOwner) {
 	for _, o := range owners {
 		found := false
 		for i, old := range a.Owners {
@@ -388,41 +341,41 @@ func rememberOwners(a *RepoAuthority, owners []RepoLegacyOwner) {
 	}
 }
 
-func saveRepoAuthority(tx *sql.Tx, a RepoAuthority, now time.Time) error {
+func saveOwnerAuthority(tx *sql.Tx, a OwnerAuthority, now time.Time) error {
 	b, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`INSERT INTO fleet_settings (key, value, updated) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated`, authorityKey(a.Repo), string(b), now.UTC().Format(rfc))
+	_, err = tx.Exec(`INSERT INTO fleet_settings (key, value, updated) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated`, ownerAuthorityKey(a.Owner), string(b), now.UTC().Format(rfc))
 	return err
 }
 
-func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, now time.Time) (RepoAuthority, error) {
-	repo = NormRepo(repo)
-	if repo == "" || owner == "" || c.Key == "" {
-		return RepoAuthority{}, ErrTaskInvalid
+// ChangeOwnerAuthority moves owner's own selection: freeze → (stop_ack each
+// drained execution) → apply, or freeze → rollback. CAS on the revision, an
+// idempotency key per owner (an exact replay returns the first answer, a
+// changed one conflicts), journalled as a repo_authority operation.
+func (s *Store) ChangeOwnerAuthority(owner string, c OwnerAuthorityChange, now time.Time) (OwnerAuthority, error) {
+	if owner == "" || c.Key == "" {
+		return OwnerAuthority{}, ErrTaskInvalid
 	}
 	tx, err := s.write.Begin()
 	if err != nil {
-		return RepoAuthority{}, err
+		return OwnerAuthority{}, err
 	}
 	defer tx.Rollback()
-	if err = s.lockRepoAuthority(tx, repo); err != nil {
-		return RepoAuthority{}, err
+	if err = s.lockOwnerAuthority(tx, owner); err != nil {
+		return OwnerAuthority{}, err
 	}
-	a, err := readRepoAuthority(tx, repo)
+	a, err := readOwnerAuthority(tx, owner)
 	if err != nil {
 		return a, err
 	}
-	if a.Owner != "" && a.Owner != owner {
-		return a, ErrTaskFence
-	}
 	// Exact replay precedes the revision check. Changed payload/key is refused.
 	raw, _ := json.Marshal(struct {
-		Change   RepoAuthorityChange
+		Change   OwnerAuthorityChange
 		Endpoint string
 	}{c, c.EndpointID})
-	actor, idem := "repo-authority:"+owner, repo+":"+c.Key
+	actor, idem := "task-authority:"+owner, "owner:"+c.Key
 	var request, result string
 	err = tx.QueryRow(`SELECT request, result FROM fleet_operations WHERE actor = ? AND idem = ?`, actor, idem).Scan(&request, &result)
 	if err == nil {
@@ -440,32 +393,11 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 	if a.Revision != c.Revision {
 		return a, ErrTaskConflict
 	}
-	blockers, owners, err := repoAuthorityBlockers(tx, repo, c.Action == "rollback")
+	blockers, owners, err := ownerAuthorityBlockers(tx, owner, c.Endpoints, c.Action == "rollback")
 	if err != nil {
 		return a, err
 	}
 	switch c.Action {
-	case "init":
-		// A NEW repo starts on the hub (claude-fleet#4885): no setting yet and no
-		// trace of it anywhere on the hub — any owner's fleet row, start, task,
-		// lease or ticket. One that was ever used, by anyone, stays legacy and
-		// takes the explicit freeze → apply road, so no pre-cutover check is
-		// skipped. The reason never names another person's row.
-		if a.Revision != 0 || a.Mode != "legacy" {
-			return a, fmt.Errorf("%w: repo already has an authority selection", ErrRepoAuthority)
-		}
-		if c.LegacyTickets != "github" && c.LegacyTickets != "hub" {
-			return a, ErrTaskInvalid
-		}
-		used, err := repoHistory(tx, repo)
-		if err != nil {
-			return a, err
-		}
-		if used != "" {
-			return a, fmt.Errorf("%w: repo is not new on the hub (%s); switch it explicitly", ErrRepoAuthority, used)
-		}
-		a.LegacyTickets = c.LegacyTickets
-		a.Mode = "hub"
 	case "freeze":
 		// An old native without a saved binding has no safe stop_ack road.
 		// Refuse BEFORE changing authority, so its existing owner can drain on
@@ -476,17 +408,11 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		rememberOwners(&next, c.Owners)
 		for _, o := range next.Owners {
 			if o.Stopped == "" && !o.Native.Valid() {
-				return a, fmt.Errorf("%w: drain/reconcile unbound legacy owner %s before freeze", ErrRepoAuthority, o.WorkerID)
+				return a, fmt.Errorf("%w: drain/reconcile unbound legacy execution %s before freeze", ErrRepoAuthority, o.WorkerID)
 			}
 		}
 		a = next
 		if a.Mode != "frozen" {
-			if a.Revision == 0 {
-				if c.LegacyTickets != "github" && c.LegacyTickets != "hub" {
-					return a, ErrTaskInvalid
-				}
-				a.LegacyTickets = c.LegacyTickets
-			}
 			a.Mode = "frozen"
 			a.FrozenAt = now.UTC()
 		}
@@ -522,7 +448,7 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		}
 		// The operation journal is the saved native observation. A missing,
 		// unbound or replacement execution cannot be released by an old receipt.
-		if err = checkRepoNativeStop(tx, repo, c.EndpointID, &proof.RepoNativeIdentity); err != nil {
+		if err = checkRepoNativeStop(tx, owner, c.EndpointID, &proof.RepoNativeIdentity); err != nil {
 			return a, err
 		}
 		matched := false
@@ -538,26 +464,25 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		if !matched {
 			return a, ErrTaskFence
 		}
-		if err = stopRepoNativeTx(tx, repo, c.EndpointID, &proof.RepoNativeIdentity, now); err != nil {
+		if err = stopRepoNativeTx(tx, owner, c.EndpointID, &proof.RepoNativeIdentity, now); err != nil {
 			return a, err
 		}
 		// An authenticated native-stop receipt releases only this legacy owner.
-		_, err = tx.Exec(`DELETE FROM fleet_leases WHERE (repo = ? OR repo = ?) AND worker_id = ? AND endpoint_id = ? AND task_id = 0`, repo, "hub:"+repo, c.WorkerID, c.EndpointID)
+		_, err = tx.Exec(`DELETE FROM fleet_leases WHERE worker_id = ? AND endpoint_id = ? AND task_id = 0`, c.WorkerID, c.EndpointID)
 		if err != nil {
 			return a, err
 		}
 	default:
 		return a, ErrTaskInvalid
 	}
-	a.Owner = owner
 	a.Revision++
-	if err = saveRepoAuthority(tx, a, now); err != nil {
+	if err = saveOwnerAuthority(tx, a, now); err != nil {
 		return a, err
 	}
 	b, _ := json.Marshal(a)
 	sum := sha256.Sum256([]byte(actor + "\x00" + idem))
 	ts := now.UTC().Format(rfc)
-	_, err = tx.Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,result) VALUES (?, '', 'repo_authority', ?, ?, ?, 'succeeded', ?, ?, ?)`, fmt.Sprintf("repo-authority:%x", sum[:]), string(raw), actor, idem, ts, ts, string(b))
+	_, err = tx.Exec(`INSERT INTO fleet_operations (id,fleet_id,action,request,actor,idem,status,created,updated,result) VALUES (?, '', 'repo_authority', ?, ?, ?, 'succeeded', ?, ?, ?)`, fmt.Sprintf("task-authority:%x", sum[:]), string(raw), actor, idem, ts, ts, string(b))
 	if err != nil {
 		return a, err
 	}
@@ -587,7 +512,9 @@ func repoOfStart(o FleetOperation) (string, bool) {
 // AdoptRepoTicket copies only an explicitly selected backlog item. It never
 // takes over a running executor, imports its number, or writes to GitHub.
 // The mapping and independently allocated hub ticket commit together.
-func (s *Store) AdoptRepoTicket(repo, owner, source, title, body string, revision int64, now time.Time) (RepoTicketMap, error) {
+// The mapping is kept on owner's authority, and owner's cutover must be
+// drained (endpoints: the owner's own, as for OwnerAuthorityBlockers).
+func (s *Store) AdoptRepoTicket(repo, owner string, endpoints []string, source, title, body string, revision int64, now time.Time) (RepoTicketMap, error) {
 	repo = NormRepo(repo)
 	r, n, ok := splitGHID(source)
 	if !ok || r != repo || title == "" {
@@ -602,15 +529,12 @@ func (s *Store) AdoptRepoTicket(repo, owner, source, title, body string, revisio
 		return RepoTicketMap{}, err
 	}
 	defer tx.Rollback()
-	if err = s.lockRepoAuthority(tx, repo); err != nil {
+	if err = s.lockOwnerAuthority(tx, owner); err != nil {
 		return RepoTicketMap{}, err
 	}
-	a, err := readRepoAuthority(tx, repo)
+	a, err := readOwnerAuthority(tx, owner)
 	if err != nil {
 		return RepoTicketMap{}, err
-	}
-	if a.Owner != owner {
-		return RepoTicketMap{}, ErrTaskFence
 	}
 	for _, m := range a.Mappings {
 		if m.From == source {
@@ -623,7 +547,7 @@ func (s *Store) AdoptRepoTicket(repo, owner, source, title, body string, revisio
 	if a.Revision != revision || (a.Mode != "hub" && a.Mode != "frozen") {
 		return RepoTicketMap{}, ErrRepoAuthority
 	}
-	blockers, _, err := repoAuthorityBlockers(tx, repo, false)
+	blockers, _, err := ownerAuthorityBlockers(tx, owner, endpoints, false)
 	if err != nil {
 		return RepoTicketMap{}, err
 	}
@@ -668,7 +592,7 @@ func (s *Store) AdoptRepoTicket(repo, owner, source, title, body string, revisio
 	m := RepoTicketMap{From: source, To: TicketRef(TicketHub, repo, allocated), SourceURL: url, PayloadSHA: digest}
 	a.Mappings = append(a.Mappings, m)
 	a.Revision++
-	if err = saveRepoAuthority(tx, a, now); err != nil {
+	if err = saveOwnerAuthority(tx, a, now); err != nil {
 		return RepoTicketMap{}, err
 	}
 	return m, tx.Commit()

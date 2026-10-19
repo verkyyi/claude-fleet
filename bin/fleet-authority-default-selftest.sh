@@ -16,7 +16,9 @@
 #      hub): hub
 #
 # The hub is a stand-in on 127.0.0.1 answering /v1/fleet/tickets/authority as
-# the real one does (tokenledger's TestRepoAuthorityAPIInitNewRepo pins that side).
+# the #4885 hub did. Since #4896 the real hub refuses init (authority is a
+# person's) and the fallback gate read answers the person's mode —
+# tokenledger's TestRepoAuthorityAPIInitRefusedGateIsTheOwners pins that side.
 # Drives bin/fleet-repo.sh, bin/fleet_repo_authority.py (--init-new), bin/fleet-lib.sh
 # (fleet_repo_register, fleet_repo_authority_init, fleet_ticket_hub_ready).
 set -uo pipefail

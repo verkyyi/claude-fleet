@@ -125,16 +125,22 @@ func (s *Store) retireStartsTx(tx *sql.Tx, endpointID string, at time.Time, out 
 	if err = rows.Err(); err != nil {
 		return err
 	}
-	seen := map[string]bool{}
+	seen, owners := map[string]bool{}, map[string]bool{}
+	var lock []string
 	for _, o := range todo {
 		if !seen[o.start.Repo] {
 			seen[o.start.Repo] = true
 			out.Repos = append(out.Repos, o.start.Repo)
 		}
+		if !owners[o.start.Owner] {
+			owners[o.start.Owner] = true
+			lock = append(lock, o.start.Owner)
+		}
 	}
 	sort.Strings(out.Repos)
-	for _, repo := range out.Repos {
-		if err = s.lockRepoAuthority(tx, repo); err != nil {
+	sort.Strings(lock)
+	for _, owner := range lock {
+		if err = s.lockOwnerAuthority(tx, owner); err != nil {
 			return err
 		}
 	}

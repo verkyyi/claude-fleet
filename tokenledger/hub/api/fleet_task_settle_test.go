@@ -29,14 +29,26 @@ func (f fakeIssueStates) IssueState(_ context.Context, repo string, n int) (stri
 
 func unverified(t *testing.T, h *harness) int {
 	t.Helper()
-	bs, _, err := h.srv.Store.RepoAuthorityBlockers("org/repo", false)
+	// Task authority is a person's (claude-fleet#4896): count each owner's.
+	fs, err := h.srv.Store.Fleets()
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := 0
-	for _, b := range bs {
-		if strings.HasPrefix(b, "legacy task owner is unverified") {
-			n++
+	n, seen := 0, map[string]bool{}
+	for _, f := range fs {
+		owner := h.srv.endpointOwner(f.EndpointID)
+		if owner == "" || seen[owner] {
+			continue
+		}
+		seen[owner] = true
+		bs, _, err := h.srv.Store.OwnerAuthorityBlockers(owner, nil, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range bs {
+			if strings.HasPrefix(b, "legacy task owner is unverified") {
+				n++
+			}
 		}
 	}
 	return n

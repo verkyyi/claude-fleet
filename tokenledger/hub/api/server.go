@@ -611,6 +611,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(FleetTicketRegisterPath, s.handleFleetTicketRegister)
 		// Tickets whose home is the hub (claude-fleet#2677): a node's token or a
 		// person's sign-in, each scoped to its own by the handler.
+		mux.HandleFunc(FleetAuthorityPath, s.handleFleetAuthority)
+		mux.HandleFunc(FleetAuthorityPath+"/", s.handleFleetAuthority)
 		mux.HandleFunc(FleetTicketsPath, s.handleFleetTickets)
 		mux.HandleFunc(FleetTicketsPath+"/", s.handleFleetTickets)
 		// The direct door (claude-fleet#3068): a home machine reads its list

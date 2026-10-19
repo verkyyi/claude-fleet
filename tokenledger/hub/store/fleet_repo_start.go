@@ -89,7 +89,8 @@ func recoverRepoStartFence(q querier, id string, start RepoLocalStart) error {
 	return rows.Err()
 }
 
-func repoLocalStarts(q querier, repo string) ([]RepoLocalStart, error) {
+// localStarts is every repo_local_start journal entry that keep selects.
+func localStarts(q querier, keep func(RepoLocalStart) bool) ([]RepoLocalStart, error) {
 	rows, err := q.Query(`SELECT result FROM fleet_operations WHERE action = 'repo_local_start'`)
 	if err != nil {
 		return nil, err
@@ -105,7 +106,7 @@ func repoLocalStarts(q querier, repo string) ([]RepoLocalStart, error) {
 		if err = json.Unmarshal([]byte(raw), &start); err != nil {
 			return nil, err
 		}
-		if start.Repo == repo {
+		if keep(start) {
 			starts = append(starts, start)
 		}
 	}
@@ -121,8 +122,8 @@ type RepoStartRow struct {
 }
 
 // RepoOpenStarts lists the starts of repo that still hold something, oldest
-// first — the same set repoAuthorityBlockers names as "local start retained".
-// owner / endpoint "" = any. Read only: settling goes through RepoLocalStart's
+// first — the same set ownerAuthorityBlockers names as "local start retained".
+// repo / owner / endpoint "" = any. Read only: settling goes through RepoLocalStart's
 // own actions (cancel · unobserved · stopped), never a write here.
 func (s *Store) RepoOpenStarts(repo, owner, endpoint string) ([]RepoStartRow, error) {
 	repo = NormRepo(repo)
@@ -141,7 +142,7 @@ func (s *Store) RepoOpenStarts(repo, owner, endpoint string) ([]RepoStartRow, er
 		if err = json.Unmarshal([]byte(raw), &r.RepoLocalStart); err != nil {
 			return nil, err
 		}
-		if r.Repo != repo || repoStartClosed(r.Phase) || (owner != "" && r.Owner != owner) || (endpoint != "" && r.EndpointID != endpoint) {
+		if (repo != "" && r.Repo != repo) || repoStartClosed(r.Phase) || (owner != "" && r.Owner != owner) || (endpoint != "" && r.EndpointID != endpoint) {
 			continue
 		}
 		out = append(out, r)
@@ -149,8 +150,10 @@ func (s *Store) RepoOpenStarts(repo, owner, endpoint string) ([]RepoStartRow, er
 	return out, rows.Err()
 }
 
-func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIdentity) error {
-	starts, err := repoLocalStarts(q, repo)
+// checkRepoNativeStop: proof is the native a start of owner's observed on
+// endpoint, and the worker's latest such start — in any of owner's repos.
+func checkRepoNativeStop(q querier, owner, endpoint string, proof *RepoNativeIdentity) error {
+	starts, err := localStarts(q, func(st RepoLocalStart) bool { return st.Owner == owner })
 	if err != nil {
 		return err
 	}
@@ -173,8 +176,8 @@ func checkRepoNativeStop(q querier, repo, endpoint string, proof *RepoNativeIden
 	return nil
 }
 
-func stopRepoNativeTx(tx *sql.Tx, repo, endpoint string, proof *RepoNativeIdentity, now time.Time) error {
-	starts, err := repoLocalStarts(tx, repo)
+func stopRepoNativeTx(tx *sql.Tx, owner, endpoint string, proof *RepoNativeIdentity, now time.Time) error {
+	starts, err := localStarts(tx, func(st RepoLocalStart) bool { return st.Owner == owner })
 	if err != nil {
 		return err
 	}
@@ -184,8 +187,7 @@ func stopRepoNativeTx(tx *sql.Tx, repo, endpoint string, proof *RepoNativeIdenti
 		}
 		start.Phase = "stopped"
 		b, _ := json.Marshal(start)
-		sum := sha256.Sum256([]byte(start.Owner + "\x00" + endpoint + "\x00" + repo + "\x00" + start.Reservation))
-		if _, err = tx.Exec(`UPDATE fleet_operations SET result = ?, status = 'succeeded', updated = ? WHERE id = ? AND action = 'repo_local_start'`, string(b), now.UTC().Format(rfc), fmt.Sprintf("repo-start:%x", sum[:])); err != nil {
+		if _, err = tx.Exec(`UPDATE fleet_operations SET result = ?, status = 'succeeded', updated = ? WHERE id = ? AND action = 'repo_local_start'`, string(b), now.UTC().Format(rfc), repoStartID(start.Repo, start.Owner, endpoint, start.Reservation)); err != nil {
 			return err
 		}
 	}
@@ -202,15 +204,14 @@ func (s *Store) RepoLocalStart(repo, owner, endpoint, key, action, worker string
 		return RepoLocalStart{}, err
 	}
 	defer tx.Rollback()
-	if err = s.lockRepoAuthority(tx, repo); err != nil {
+	// The start's owner's authority, never the repo's (claude-fleet#4896):
+	// another person in another mode on the same repo changes nothing here.
+	if err = s.lockOwnerAuthority(tx, owner); err != nil {
 		return RepoLocalStart{}, err
 	}
-	a, err := readRepoAuthority(tx, repo)
+	a, err := readOwnerAuthority(tx, owner)
 	if err != nil {
 		return RepoLocalStart{}, err
-	}
-	if a.Owner != "" && a.Owner != owner {
-		return RepoLocalStart{}, ErrTaskFence
 	}
 	sum := sha256.Sum256([]byte(owner + "\x00" + endpoint + "\x00" + repo + "\x00" + key))
 	id := fmt.Sprintf("repo-start:%x", sum[:])
@@ -311,7 +312,7 @@ func (s *Store) RepoLocalStart(repo, owner, endpoint, key, action, worker string
 		after, _ := json.Marshal(a.Owners)
 		if string(before) != string(after) {
 			a.Revision++
-			if err = saveRepoAuthority(tx, a, now); err != nil {
+			if err = saveOwnerAuthority(tx, a, now); err != nil {
 				return start, err
 			}
 		}
