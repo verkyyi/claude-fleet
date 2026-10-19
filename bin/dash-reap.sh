@@ -101,10 +101,12 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 # merged_heads <repo> <branch> [--at] — one line per MERGED PR on <branch>:
 # `ref<TAB>sha`, or `ref<TAB>mergedAt<TAB>sha` with --at (issues #1542, #1842: the
 # merge time feeds the liveness probe, the head sha keeps a commit made after the
-# merge). Plain gh, timed (issue #4899 took the GitHub layer away).
+# merge). Plain gh, timed (issue #4899 took the GitHub layer away) — and never for
+# a repo whose conf says FLEET_FORGE=none, the refusal that layer used to make.
 merged_heads() {
+  [ "$(fleet_repo_forge "$1")" = none ] && return 0
   local q='.[] | "\(.headRefName)\t\(.headRefOid)"' j=headRefName,headRefOid
-  [ "${3:-}" = --at ] && { q='.[] | "\(.headRefName)\t\(.mergedAt)\t\(.headRefOid)"'; j=$j,mergedAt; }
+  [ "${3:-}" = --at ] && { q='.[] | "\(.headRefName)\t\(.mergedAt)\t\(.headRefOid)"'; j=headRefName,mergedAt,headRefOid; }
   fleet_timebox 15 gh -R "$1" pr list --state merged --head "$2" --json "$j" -q "$q"
 }
 

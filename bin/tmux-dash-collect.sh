@@ -175,7 +175,7 @@ fetch_issues_for() {
   [ "$(fleet_repo_forge "$rp")" = none ] && return 0
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
     raw="$FD/issuesx.$$"
-    if fleet_timebox 30 gh issue list --repo "$rp" --state open --limit 300 \
+    if gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | ($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       2>/dev/null | utf8_scrub > "$raw"; then
@@ -198,7 +198,7 @@ fetch_issues_for() {
     # of repo B whose parent is A's #7 must not nest under B's own #7 — numbers
     # repeat across repos. Such a member renders flat in B's backlog.
     owner="${rp%%/*}"; name="${rp#*/}"
-    if fleet_timebox 30 gh api graphql --paginate \
+    if gh api graphql --paginate \
       -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number repository{nameWithOwner}}}}}}' \
       -F owner="$owner" -F name="$name" \
       --jq '.data.repository.issues.nodes[]|select(.parent!=null and ((.parent.repository.nameWithOwner // "")|ascii_downcase) == ("'"$rp"'"|ascii_downcase))|"\(.number)\t\(.parent.number)"' \
@@ -217,7 +217,9 @@ fetch_issues_for() {
 # BEFORE the tmux/socket enumeration so it stays cheap.
 if [ -n "$TARGET_ISSUES_REPO" ]; then
   _tr=$(fleet_norm_repo "$TARGET_ISSUES_REPO")
-  [ -n "$_tr" ] && fetch_issues_for "$_tr" "$(fleet_slug "$_tr")" 1
+  # Bounded as a whole here; inside the tick the issues phase's own box bounds it
+  # (a nested box would put gh in its own process group, out of the phase's kill).
+  [ -n "$_tr" ] && fleet_timebox 60 fetch_issues_for "$_tr" "$(fleet_slug "$_tr")" 1
   exit 0
 fi
 

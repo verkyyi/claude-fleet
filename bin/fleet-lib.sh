@@ -9319,7 +9319,8 @@ fleet_cfg_restart_why() {
   case "$iss" in ''|*[!0-9]*) ;; *)
     wrepo=$(fleet_window_repo "$sess" "$win" 2>/dev/null)
     if [ -n "$wrepo" ] && command -v gh >/dev/null 2>&1 \
-       && [ "$(fleet_timebox 10 gh issue view "$iss" --repo "$wrepo" --json state -q .state 2>/dev/null)" = CLOSED ]; then
+       && [ "$(fleet_timebox 10 gh issue view "$iss" --repo "$wrepo" --json state 2>/dev/null \
+               | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' 2>/dev/null)" = CLOSED ]; then
       echo reap; return 1
     fi ;;
   esac
