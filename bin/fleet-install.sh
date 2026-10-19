@@ -77,7 +77,9 @@
 #      --no-node (FLEET_INSTALL_NO_NODE=1) skips the hub registration;
 #   6. the Agent configuration (#1725) — hooks · skills · commands · MCP · the
 #      mod — is 承载's (issue #4826, EPIC #4823 decision 1): a full install's
-#      own setup / sync applies it; the client package carries none;
+#      own setup / sync applies it; the client package carries none, and what
+#      an earlier client wired into this login is taken out
+#      (FLEET_INSTALL_NO_AGENTS=1 leaves the login's config alone);
 #   7. one line, 能力 基础 · 承载 已开/未开 · 入口 接/不接, and runs `fleet`.
 #
 # Only what a stock macOS or Linux has: sh, curl, python3 (macOS's own 3.9 is
@@ -822,7 +824,7 @@ fi
 # never where ~/.claude/fleet is the full install, or this computer hosts.
 if full; then
   say "Agent 配置: 完整安装的同步装同一份"
-elif [ ! -f "$HOME/.claude/fleet/bin/fleet-up.sh" ] && [ ! -d "$HOME/.claude/fleet/.git" ] \
+elif [ "${FLEET_INSTALL_NO_AGENTS:-}" != 1 ] && [ ! -f "$HOME/.claude/fleet/bin/fleet-up.sh" ] && [ ! -d "$HOME/.claude/fleet/.git" ] \
      && [ "$(fconf host 2>/dev/null || true)" != 1 ]; then
   cat > "$tmp/unwire.py" <<'PYUW'
 import json, os, re, sys, time
