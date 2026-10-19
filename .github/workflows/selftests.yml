@@ -103,6 +103,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.plan.outputs.pr_shards }}
+      step_minutes: ${{ steps.plan.outputs.pr_step_minutes }}
+      job_minutes: ${{ steps.plan.outputs.pr_job_minutes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,4 +188,9 @@ jobs:
       sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
       runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
       mirror: ${{ inputs.mirror || '' }}
+      # the plan's bounds follow its forecast (a full-suite PR's heaviest shard
+      # was predicted 417 s, ran 479 s against the old fixed 8 minutes); the
+      # per-test 240 s ceiling still names a hung test
+      step_minutes: ${{ needs.plan.outputs.step_minutes || '' }}
+      job_minutes: ${{ needs.plan.outputs.job_minutes || '' }}
       shards: ${{ inputs.shards || needs.plan.outputs.shards || '[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]' }}
