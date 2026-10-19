@@ -31,7 +31,7 @@ on:
       parts:
         description: 'the `test` matrix (bin/ci-plan.sh go: go_parts)'
         type: string
-        default: '["rest", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]'
+        default: '["rest", "store", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]'
       pg_parts:
         description: 'the Postgres matrix (go_pg_parts); [] = no Postgres leg'
         type: string
@@ -80,8 +80,8 @@ jobs:
   # tokenledger/test-durations.txt (recorded seconds ÷ 240, 1..8), each
   # `api-K` lists the package (`go test -list`) and keeps its deal from
   # bin/go-test-shard.sh — longest first into the lightest part, so the union is
-  # the whole package by construction. `rest` runs every selected hub package
-  # but hub/api; `shared`, `agent` and `e2e` are the other three modules, their
+  # the whole package by construction. `store` runs hub/store (and below), `rest`
+  # every other selected hub package but hub/api; `shared`, `agent` and `e2e` are the other three modules, their
   # selected packages. Every part prints its predicted load against what it
   # took; refresh the table with bin/go-test-durations.sh --run <run>, off the
   # go-log-* artifacts (`go test -v`). gofmt / vet / the modules selftest are
@@ -140,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: ${{ fromJSON(inputs.parts || '["rest", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]') }}
+        part: ${{ fromJSON(inputs.parts || '["rest", "store", "api-1", "api-2", "api-3", "shared", "agent", "e2e"]') }}
     env:
       API_SHARDS: ${{ inputs.api_shards || '3' }}
       TABLE: test-durations.txt
@@ -185,11 +185,17 @@ jobs:
           fi
           echo 'PRED=' >> "$GITHUB_ENV"
           case "$PART" in
-            rest)
-              # the plan's hub packages (./... = all of them), hub/api left to api-K
+            rest|store)
+              # the plan's hub packages (./... = all of them): hub/api is api-K's,
+              # hub/store (and below) the `store` part's, the rest `rest`'s
               if [ "$PKGS_HUB" = ./... ]; then all=$(cd hub && go list ./...); else all=$(printf '%s\n' $PKGS_HUB); fi
-              pkgs=$(printf '%s\n' "$all" | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' | paste -sd' ' -)
-              [ -n "$pkgs" ] || { echo "::error::rest picked no hub package"; exit 1; }
+              st='^github\.com/verkyyi/claude-fleet/tokenledger/hub/store(/|$)'
+              if [ "$PART" = store ]; then
+                pkgs=$(printf '%s\n' "$all" | grep -E "$st" | paste -sd' ' -)
+              else
+                pkgs=$(printf '%s\n' "$all" | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' | grep -vE "$st" | paste -sd' ' -)
+              fi
+              [ -n "$pkgs" ] || { echo "::error::$PART picked no hub package"; exit 1; }
               echo "MOD=hub" >> "$GITHUB_ENV"
               echo "PKGS=$pkgs" >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;

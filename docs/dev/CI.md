@@ -76,7 +76,7 @@
 | `README.md`、`docs/`、`notify/`、`test-durations*.txt`（只改发牌） | 不选 |
 | `tokenledger/` 下别的路径 | 四块全选（拿不准） |
 
-一块里没有一个包依赖到改动 ⇒ 这块也跳过。`hub/api` 被选中才跑它的 `api-K` 片（片数按耗时表定，见下节；含 Postgres 腿）；`hub/store`、`hub/leader` 被选中才跑 Postgres 的 `store` 片；e2e 被选中才跑 Postgres 的 e2e 片；交叉编译 hub 块选中编 hub、agent 块选中编节点。gofmt / vet（只在选中的模块）/ 模块方向自测在 `lint` 一项里。
+一块里没有一个包依赖到改动 ⇒ 这块也跳过。`hub/api` 被选中才跑它的 `api-K` 片（片数按耗时表定，见下节；含 Postgres 腿）；`hub/store` 被选中才跑 -race 的 `store` 片（它单独一片，#4817）；`hub/store`、`hub/leader` 被选中才跑 Postgres 的 `store` 片；e2e 被选中才跑 Postgres 的 e2e 片；交叉编译 hub 块选中编 hub、agent 块选中编节点。gofmt / vet（只在选中的模块）/ 模块方向自测在 `lint` 一项里。
 
 打印形如：
 
@@ -95,6 +95,7 @@ pkgs agent: github.com/verkyyi/claude-fleet/tokenledger/agent/cli
 - **每片的 summary**：测试数、预测（表）、实际（各测试秒数之和）、偏差、`go test` 墙钟，以及缓存读数。
 - **缓存**：每个 job 自己的 `actions/cache`（键：腿 + 片 + go.sum + OS + run），只在 PR 上恢复（同一 PR 上一次推送的，退到同一片最新的）——没改的包 `go test` 直接拿缓存里的结果（`ok … (cached)`），`-race` 的编译产物复用。PR 之外（手动、每晚）不恢复、`-count=1`，一律重新测。保存前 `bin/go-ci-cache.py prune` 删掉这次没用到的条目（仓库缓存上限 10 GB，早就满了），`report` 打印编译条目复用率和测试结果命中率。
 - **Postgres 模板库**：`storetest.Open` / `OpenFleet`（hub/api、e2e）和 store 包的 `newStore` / `taskStore` 在 Postgres 腿上先 `store.PGTemplate`：每个测试二进制建一个迁移好的模板库，每个测试 `CREATE DATABASE … TEMPLATE` 一份，不再每个测试从空 schema 建表（原来每个 ~1.3 秒）。日志里 `pg leg: N test database(s) copied from a template, X s per test` 就是固定开销。
+- **store 包自己的测试**：`newStore` / `taskStore` 同样从模板起——SQLite 是一份迁移好的文件按字节复制（store 包不能引 storetest），Postgres 是模板库。
 - **交叉编译**：一个 job 编四个平台（两个一组并行），不再四个 job 各排一次队。
 
 ## 怎么加一个新检查

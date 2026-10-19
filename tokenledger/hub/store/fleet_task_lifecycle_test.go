@@ -12,14 +12,8 @@ import (
 
 func taskStore(t *testing.T) *Store {
 	t.Helper()
-	ensure := func(s *Store) error { return s.EnsureNodes() }
-	s := newStoreFrom(t, "fleet", ensure)
-	if pgLegNow == nil { // on the Postgres leg the template already has it
-		if err := ensure(s); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return s
+	// the template already has the fleet registry (newStoreFrom)
+	return newStoreFrom(t, "fleet", func(s *Store) error { return s.EnsureNodes() })
 }
 func acceptedTask(t *testing.T, s *Store, token, ticket string) FleetTask {
 	t.Helper()

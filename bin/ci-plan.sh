@@ -311,21 +311,25 @@ api_parts() {
 
 # go_outputs — the matrices tokenledger.yml takes
 go_outputs() {
-  local k parts='' pg='' build='' pk ap=0 st=0 rest=0 an pn
+  local k parts='' pg='' build='' pk ap=0 st=0 rest=0 sr=0 an pn
   an=$(api_shards test-durations.txt) pn=$(api_shards test-durations-pg.txt)
   case " $GO_SELECTED " in *" hub "*)
-    if [ "$GO_PKGS_hub" = ./... ]; then ap=1 st=1 rest=1
+    if [ "$GO_PKGS_hub" = ./... ]; then ap=1 st=1 rest=1 sr=1
     else
       for pk in $GO_PKGS_hub; do
         case "$pk" in
           "$MODPFX/hub/api") ap=1 ;;
-          "$MODPFX/hub/store"|"$MODPFX/hub/store/"*|"$MODPFX/hub/leader"|"$MODPFX/hub/leader/"*) st=1 rest=1 ;;
+          # hub/store is its own -race part (claude-fleet#4817): ~300s alone, it
+          # was the `rest` part's long pole
+          "$MODPFX/hub/store"|"$MODPFX/hub/store/"*) st=1 sr=1 ;;
+          "$MODPFX/hub/leader"|"$MODPFX/hub/leader/"*) st=1 rest=1 ;;
           *) rest=1 ;;
         esac
       done
     fi
     build="$build hub"
     [ "$rest" = 1 ] && parts="$parts \"rest\","
+    [ "$sr" = 1 ] && parts="$parts \"store\","
     [ "$ap" = 1 ] && { parts="$parts$(api_parts "$an")"; pg="$pg$(api_parts "$pn")"; }
     [ "$st" = 1 ] && pg="\"store\",$pg" ;;
   esac
