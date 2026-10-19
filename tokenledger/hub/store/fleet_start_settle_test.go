@@ -20,7 +20,7 @@ func TestSettleNeverAppearedStart(t *testing.T) {
 	}
 	snapshot := func(workers string, at time.Time) {
 		t.Helper()
-		if _, err := s.RecordFleetSnapshot("ep", "mini2", "verkyyi", "m-1", []FleetReport{{FleetID: "f1", Name: "fleet",
+		if _, err := s.RecordFleetSnapshot("ep", "host", "u", "m-1", []FleetReport{{FleetID: "f1", Name: "fleet",
 			Repo: "org/repo", State: "running", WorkersJSON: workers}}, at); err != nil {
 			t.Fatal(err)
 		}
