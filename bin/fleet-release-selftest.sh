@@ -101,7 +101,7 @@ SH
 cat > "$d/doctor" <<SH
 #!/bin/sh
 echo "  PASS  fleet    x"
-echo "  note: install com.claude-fleet.pr-refresh (~15s, FLEET_PR_REFRESH_INTERVAL) for fast PR/CI status"
+echo "  note: install com.claude-fleet.collect (~60s) for the backlog panels"
 echo "  INFO  install  x"
 echo "  PASS  install  live at x — up to date with origin/master"
 echo "  PASS  install  install-sync on — at stable x"

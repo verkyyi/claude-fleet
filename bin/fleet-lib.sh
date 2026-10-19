@@ -47,13 +47,13 @@ else
 fi
 
 # GLOBAL-ONLY FLEET_* keys (issue #237): read machine-wide — one daemon serving
-# EVERY fleet (collector, pr-refresh, spinner, diskguard) or the SYSTEM-WIDE
+# EVERY fleet (collector, spinner, diskguard) or the SYSTEM-WIDE
 # session cap — so a per-fleet value is a silent no-op at best, and for the caps
 # actively wrong (one fleet raising the machine-wide ceiling for its own spawns).
 # fleet_load_conf strips these from the per-fleet overlay so GLOBAL always wins.
 # Keep this list in step with the @scope=global tags in conf/fleet.conf.reference —
 # conf-surface-selftest.sh cross-checks the two so they can't drift.
-_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_BRIDGE_SECRET FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_GH_SHARE FLEET_GH_SHARE_TRUST FLEET_PR_REFRESH_INTERVAL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_RESIDENT_WATCH FLEET_DAEMON_RESIDENT_GRACE FLEET_DAEMON_RESIDENT_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_POLL_MAX_BACKOFF FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_ORPHAN_TREE_SECS FLEET_ORPHAN_TREE_EVERY FLEET_SELFTEST_REAP FLEET_SELFTEST_PROC_SECS FLEET_SELFTEST_PROC_GLOBS FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_WEBHOOK_PORT FLEET_WEBHOOK_SECRET FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_CPU_BUSY FLEET_ADMIT_LOAD_HARD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_GUIDE_PASS FLEET_ADMIT_ROOM FLEET_ADMIT_CPU_SHARE FLEET_ADMIT_CPU_THROTTLE FLEET_ADMIT_CPU_SAMPLE_SECS FLEET_ADMIT_CPU_WINDOW_SECS FLEET_ADMIT_POD_CPU FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_STREAM_RESUME FLEET_STREAM_RESUME_SECS FLEET_STREAM_RESUME_MAX FLEET_STREAM_RESUME_WINDOW FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA FLEET_VIEW_CLOSED_HOURS FLEET_VIEW_LANDED_SECS FLEET_TASK_AUTHORITY"
+_FLEET_GLOBAL_ONLY="FLEET_GLOBAL_MAX_SESSIONS FLEET_ISSUE_TTL FLEET_GH_TTL FLEET_STUCK_WORKING_SECS FLEET_STATE_IDLE_SECS FLEET_DEGENERATE_SECS FLEET_DEGENERATE_LINES FLEET_DEGENERATE_COOLDOWN_SECS FLEET_DEGENERATE_MARK_SECS FLEET_ACCOUNTS FLEET_ACCOUNT_LIMIT_TTL FLEET_ACCOUNT_CEILING FLEET_ACCOUNT_WARN_PCT FLEET_ACCOUNT_PAUSED FLEET_ACCOUNT_QUOTA_TTL FLEET_ACCOUNT_QUOTA_STALE FLEET_QUOTA_RL_TTL FLEET_ACCOUNT_QUOTA_BLIND_STREAK FLEET_QUOTA_STALE_OK FLEET_QUOTA_REFUSED_ALARM FLEET_ACCOUNT_QUOTA_VIA_BANNER_SECS FLEET_ACCOUNT_VERDICT_REFETCH FLEET_ACCOUNT_PICK FLEET_ACCOUNT_PICK_HYST FLEET_ACCOUNT_PACE_LEAD FLEET_ACCOUNT_PACE_HOLD FLEET_ACCOUNT_PACE_MARGIN FLEET_ACCOUNT_PACE_REBALANCE FLEET_ACCOUNT_PACE_COOLDOWN FLEET_ACCOUNT_PACE_SPREAD_WARN FLEET_ACCOUNT_PHASE FLEET_ACCOUNT_PHASE_AUTO FLEET_COLLECT_DEADLINE FLEET_COLLECT_GIT_BUDGET FLEET_COLLECT_GIT_SLOW FLEET_COLLECT_TICK_BUDGET FLEET_COLLECT_QUOTAWATCH_BUDGET FLEET_COLLECT_SOCKETS_BUDGET FLEET_COLLECT_SESSMAP_BUDGET FLEET_COLLECT_ISSUES_BUDGET FLEET_COLLECT_CTX_BUDGET FLEET_COLLECT_USAGE_BUDGET FLEET_COLLECT_SCRAPE_BUDGET FLEET_COLLECT_BANNER_BUDGET FLEET_COLLECT_BANNER_PER_WINDOW_MS FLEET_COLLECT_ESCALATE_BUDGET FLEET_COLLECT_AGENTCFG_BUDGET FLEET_COLLECT_SNAPSHOT_BUDGET FLEET_COLLECT_HUBSESS_BUDGET FLEET_COLLECT_VIEWS_BUDGET FLEET_NODE_ALIASES FLEET_COLLECT_STALE FLEET_COLLECT_KICK FLEET_COLLECT_KICK_COOLDOWN FLEET_COLLECT_KICK_TRACE FLEET_DAEMON_STALE_MULT FLEET_DAEMON_STALE_FLOOR FLEET_DAEMON_KICK FLEET_DAEMON_KICK_COOLDOWN FLEET_DAEMON_KICK_COOLDOWN_MULT FLEET_DAEMON_KICK_COOLDOWN_FLOOR FLEET_DAEMON_KICK_TRACE FLEET_DAEMON_RELOAD_AFTER FLEET_DAEMON_RELOAD_COOLDOWN FLEET_RESIDENT_WATCH FLEET_DAEMON_RESIDENT_GRACE FLEET_DAEMON_RESIDENT_COOLDOWN FLEET_DAEMON_DOMAIN_MIN FLEET_DAEMON_DOMAIN_KICK_WINDOW FLEET_DAEMON_IDLE_AFTER FLEET_LAUNCHD_PROBE FLEET_LAUNCHD_PROBE_WINDOW FLEET_LAUNCHD_PROBE_INTERVAL FLEET_LAUNCHD_PROBE_TTL FLEET_MODEL_FALLBACK FLEET_MODEL_LIMIT_TTL FLEET_MODEL_CAP_PCT FLEET_CLOSE_ON_EXIT FLEET_NOTIFY_CMD FLEET_ESCALATE_AFTER FLEET_DISK_FLOOR_GB FLEET_DISK_WARN_GB FLEET_QUOTA_GATE FLEET_QUOTA_CEILING FLEET_QUOTA_ACCOUNT FLEET_QUOTA_BIN FLEET_RUNAWAY_CPU_PCT FLEET_RUNAWAY_CPU_SECS FLEET_RUNAWAY_CPU_ACTION FLEET_ORPHAN_CPU_PCT FLEET_ORPHAN_CPU_SECS FLEET_ORPHAN_CPU_ACTION FLEET_ORPHAN_EXTRA_RE FLEET_ORPHAN_LISTEN_SECS FLEET_ORPHAN_LISTEN_ACTION FLEET_ORPHAN_LISTEN_EVERY FLEET_ORPHAN_TREE_SECS FLEET_ORPHAN_TREE_EVERY FLEET_SELFTEST_REAP FLEET_SELFTEST_PROC_SECS FLEET_SELFTEST_PROC_GLOBS FLEET_DOCTOR_TESTTMUX_LIVE FLEET_DOCTOR_TESTTMUX_DEAD FLEET_LISTEN_EXEMPT_RE FLEET_LOAD_WARN_PER_CORE FLEET_FSEVENTSD_WARN_MB FLEET_DOCTOR_SPOTLIGHT FLEET_CODEX_VERSION_CHECK FLEET_DOCTOR_SLEEP FLEET_DOCTOR_SIRI FLEET_DOCTOR_ICLOUD FLEET_DOCTOR_NETWORK FLEET_DOCTOR_MCP FLEET_LOADGEN_MAX_PROCS FLEET_LOADGEN_MAX_SECS FLEET_LOADGEN_LOAD_PER_CORE FLEET_LOADGEN_CORE_PCT FLEET_USAGE_WARN_PCT FLEET_USAGE_CRIT_PCT FLEET_RATELIMIT_TTL FLEET_OPEN_LAPTOP FLEET_REAP_KEPT_PROCS FLEET_REAP_KEPT_MINAGE FLEET_ROTATE_LEASE_TTL FLEET_HELPER_NO_MCP FLEET_INFLIGHT_TTL FLEET_INSTALL_SYNC FLEET_INSTALL_SYNC_TIMEOUT FLEET_INSTALL_LOOP_MARGIN_SECS FLEET_KEEP_AGENTS_KEY FLEET_INSTALL_FOLLOW_STUCK_SECS FLEET_INSTALL_VERSIONS_KEEP_SECS FLEET_NODE_FOLLOW FLEET_NODE_FOLLOW_RETRY_SECS FLEET_ONBOARD FLEET_GUIDE_WAIT_SECS FLEET_GUIDE_COOLDOWN FLEET_GUIDE_SPEAK_SECS FLEET_GUIDE_MAX_TRIES FLEET_GUIDE_STUCK_SECS FLEET_GUIDE_OPEN_SECS FLEET_EXIT_CLOSE_SECS FLEET_COLLECT_GUIDE_BUDGET FLEET_SSH_PUBLIC_HOST FLEET_SSH_PUBLIC_PORT FLEET_SSH_PROBE_HOST FLEET_DOCTOR_INGRESS FLEET_INGRESS_TTL FLEET_INGRESS_TIMEOUT FLEET_HEAVY FLEET_HEAVY_SLOTS FLEET_HEAVY_WAIT FLEET_HEAVY_RE FLEET_HEAVY_LIGHT_RE FLEET_MEMGUARD FLEET_MEM_SPIKE_GROW_MB FLEET_MEM_SPIKE_WINDOW FLEET_MEM_SPIKE_ACTION FLEET_MEM_PROC_HARD_PCT FLEET_MEM_EXEMPT_RE FLEET_MEM_ORPHAN_MB FLEET_MEM_ORPHAN_SECS FLEET_MEM_ORPHAN_ACTION FLEET_CRED_PROXY FLEET_CRED_RELAY_URL FLEET_CRED_CENTRAL_URL FLEET_CRED_BUDGET FLEET_CRED_BUDGET_SECS FLEET_CRED_SEPARATE FLEET_CLAUDE_RSS_WARN_MB FLEET_ADMIT FLEET_ADMIT_MEM_FREE_PCT FLEET_ADMIT_PRESSURE FLEET_ADMIT_LOAD_PER_CORE FLEET_ADMIT_CPU_BUSY FLEET_ADMIT_LOAD_HARD_PER_CORE FLEET_ADMIT_RESERVE_MB FLEET_ADMIT_HYST_MB FLEET_ADMIT_SESSION_MB FLEET_ADMIT_SESSION_MB_MIN FLEET_ADMIT_SESSION_GROWTH FLEET_ADMIT_SETTLE_SECS FLEET_ADMIT_GUIDE_PASS FLEET_ADMIT_ROOM FLEET_ADMIT_CPU_SHARE FLEET_ADMIT_CPU_THROTTLE FLEET_ADMIT_CPU_SAMPLE_SECS FLEET_ADMIT_CPU_WINDOW_SECS FLEET_ADMIT_POD_CPU FLEET_FILES_WARN_PCT FLEET_PTY_WARN_PCT FLEET_MEM_NOTIFY_COOLDOWN FLEET_TRANSCRIPT_KEEP_DAYS FLEET_TRANSCRIPT_HELPER_KEEP_HOURS FLEET_TRANSCRIPT_ARCHIVE FLEET_TRANSCRIPT_ARCHIVE_EVERY FLEET_TRANSCRIPT_ARCHIVE_BUDGET FLEET_BREW_PERMS FLEET_BREW_PERMS_EVERY FLEET_MACHINE_MAX_SESSIONS FLEET_MACHINE_SESSIONS_STALE FLEET_MOD FLEET_STATUS_7501 FLEET_STATUS_REPLAY_DEPTH FLEET_STREAM_RESUME FLEET_STREAM_RESUME_SECS FLEET_STREAM_RESUME_MAX FLEET_STREAM_RESUME_WINDOW FLEET_AGENT_CFG FLEET_AGENT_LOCK FLEET_CFG_RESTART FLEET_CFG_RESTART_IDLE FLEET_CFG_RESTART_MAX FLEET_NOTIFY FLEET_NOTIFY_JUMP_SECS FLEET_NOTIFY_DONE FLEET_NOTIFY_QUIET FLEET_CLIENT_PASTE FLEET_KEYS_PARITY FLEET_DASH_ORDER FLEET_KEY_PANEL FLEET_KEYS_EXTRA FLEET_KEY_PHONE FLEET_KEYS_PHONE_EXTRA FLEET_VIEW_CLOSED_HOURS FLEET_VIEW_LANDED_SECS FLEET_TASK_AUTHORITY"
 
 # Source the GLOBAL fleet.conf on load + EXPORT the global-only keys (issue #399).
 # ---------------------------------------------------------------------------------
@@ -128,11 +128,6 @@ unset _flib_here
 # client and the installer too. One release line (issue #4671): no lane reader.
 # shellcheck source=fleet-versions-lib.sh
 [ -f "$_FLEET_LIB_DIR/fleet-versions-lib.sh" ] && . "$_FLEET_LIB_DIR/fleet-versions-lib.sh"
-# The GitHub layer (issue #3721): fleet_gh is how every program here calls gh. Bash
-# only (a zsh skill sourcing this, or a copy without the file, gets plain gh).
-# shellcheck source=fleet-gh-lib.sh
-if [ -n "${BASH_VERSION:-}" ] && [ -f "$_FLEET_LIB_DIR/fleet-gh-lib.sh" ]; then . "$_FLEET_LIB_DIR/fleet-gh-lib.sh"
-else fleet_gh() { gh "$@"; }; fleet_gh_write() { gh "$@"; }; fleet_gh_git() { git "$@"; }; fi
 
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
@@ -323,7 +318,7 @@ fleet_conf_file() {
 
 # repo (owner/name or any remote URL) → the tmux SESSION name of the configured
 # fleet whose FLEET_REPO matches, or empty if none. Lets the repo-native daemons
-# (issue-bridge/watch) resolve which fleets/<sess>/ dir owns their state. Compares
+# (watch) resolve which fleets/<sess>/ dir owns their state. Compares
 # on normalized owner/name so URL vs slug forms match.
 fleet_sess_for_repo() {
   local want sess conf rp tab
@@ -460,7 +455,7 @@ fleet_origin_url() {
 # git remote URL (or owner/name) → owner/name. Empty if it isn't GitHub-ish.
 # Forkless (issue #888) — the same four edits, in the same order, as the
 #   sed -E 's#^git@[^:]*:##; s#^https?://[^/]*/##; s#\.git$##; s#/+$##'
-# it replaces: pr-refresh normalizes every queued repo on every 15s tick. A value
+# it replaces: a daemon normalizes every queued repo on every tick. A value
 # with a newline in it keeps the sed, whose edits are per LINE.
 fleet_norm_repo() {
   local r="${1:-}"
@@ -838,43 +833,6 @@ fleet_repo_hosted() {
   printf '%s\n' "$all" | grep -qxF "$want"
 }
 
-# fleet_bridge_rows [<floor> [<revive>]] → one `repo<TAB>floor<TAB>revive` line per
-# repo a configured fleet hosts with the issue-bridge ON in that repo's view (fleet
-# conf + its overlay; issues #798, #1941) and not a seed repo (#1167) — the per-fleet
-# half of the bridge's poll set, shared with fleet_bridge_covers so the two can never
-# disagree (issue #2059). <floor>/<revive> are the defaults a view leaves unset.
-# Each view is loaded in a subshell, so nothing leaks into the caller. Order: the
-# confs in fleet_each_conf order, each fleet's repos in fleet_repos order (dups kept;
-# the caller dedups).
-fleet_bridge_rows() {
-  local fl="${1:-OWNER MEMBER COLLABORATOR}" rv="${2:-0}" s cf rp
-  while IFS="$(printf '\t')" read -r s cf; do
-    [ -n "$s" ] && [ -f "$cf" ] || continue
-    fleet_repos "$s" | while IFS= read -r rp; do
-      [ -n "$rp" ] || continue
-      ( fleet_load_repo_conf "$s" "$rp" >/dev/null 2>&1 || exit 0
-        [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] && printf '%s\t%s\t%s\n' "$rp" \
-          "${FLEET_ISSUE_BRIDGE_ASSOC_FLOOR:-$fl}" "${FLEET_ISSUE_BRIDGE_REVIVE:-$rv}" )
-    done
-  done <<EOF
-$(fleet_each_conf)
-EOF
-  return 0
-}
-
-# fleet_bridge_covers <repo> → 0 iff the issue-bridge's poll relays <repo>'s
-# comments: the global switch with FLEET_REPO = <repo>, or a fleet hosting it with
-# the bridge on (fleet_bridge_rows). 1 = an unmarked comment there reaches no
-# worker through the bridge (issue #2059).
-fleet_bridge_covers() {
-  local want rows
-  want=$(fleet_norm_repo "${1:-}"); [ -n "$want" ] || return 1
-  [ "${FLEET_ISSUE_BRIDGE:-0}" = 1 ] && [ "${FLEET_SEED:-0}" != 1 ] \
-    && [ "$(fleet_norm_repo "${FLEET_REPO:-}")" = "$want" ] && return 0
-  rows=$(fleet_bridge_rows | cut -f1 | while IFS= read -r r; do fleet_norm_repo "$r"; echo; done)
-  printf '%s\n' "$rows" | grep -qxF "$want"
-}
-
 # fleet_repo_mains <sess> → each hosted repo's base checkout (FLEET_MAIN), one per
 # line — what the base-readonly guard protects. Degenerate: the fleet conf's one.
 fleet_repo_mains() {
@@ -980,13 +938,13 @@ fleet_load_repo_conf() {
 #   identity/deploy (_FLEET_REPO_SCOPED)  FLEET_REPO FLEET_MAIN FLEET_BASE_BRANCH
 #                                         FLEET_DEPLOY_REF FLEET_DEPLOY_CHECK FLEET_REPO_SHORT
 #   launch                                FLEET_MODEL FLEET_AGENT FLEET_MCP_CONFIG
-#   setup + switches (#978)   (+ webhook #800)  $_FLEET_REPO_OVERRIDABLE
+#   setup + switches (#978)                    $_FLEET_REPO_OVERRIDABLE
 # An in-pane reader gets its window's repo for free (fleet_load_conf is window-
 # aware); a reader OUTSIDE the window (daemon, spawner, sleep/failover) resolves the
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_CLEANUP FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
 
 # fleet_task_authority [<sess> <repo>] → who runs this LOGIN's tasks (issue #4901):
 # legacy | frozen | hub as its fleet.conf [node] says — the hub answers it per
@@ -1162,7 +1120,7 @@ fleet_ticket_url() {
 fleet_ticket_state() {
   local repo="${1:-}" n="${2:-}"
   command -v gh >/dev/null 2>&1 || return 0
-  fleet_gh -R "$repo" issue view "$n" --json state,stateReason,labels \
+  gh -R "$repo" issue view "$n" --json state,stateReason,labels \
     -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null
 }
 
@@ -1171,8 +1129,7 @@ fleet_ticket_state() {
 # the fleet works from its first minute; the login has no write access there, and
 # the operator's own fleet watches the same backlog. So the seed repo only LOOKS:
 # FLEET_SEED=1 in the fleet conf marks the conf's OWN repo (it is repo-scoped above,
-# so a repo added later never inherits it), and the issue-bridge skips it whatever
-# FLEET_ISSUE_BRIDGE says (the autofill dispatcher that skipped it too is gone, #3120). The one marker every consumer
+# so a repo added later never inherits it). The one marker every consumer
 # reads — the onboarding wizard included — through fleet_repo_is_seed.
 
 # fleet_repo_is_seed <sess> <repo> → 0 iff <repo> is <sess>'s seed repo.
@@ -1487,7 +1444,7 @@ fleet_issue_key() {
 # fleet_sub_issues <repo> <N> → one `<owner/name>\t<num>\t<state>` line per
 # sub-issue of <repo>#<N>, each with the repo it lives in. rc ≠ 0 = gh failed.
 fleet_sub_issues() {
-  fleet_gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
+  gh api "repos/${1:-}/issues/${2:-}/sub_issues" --paginate \
     --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)\t\(.state)"' 2>/dev/null
 }
 
@@ -1706,7 +1663,7 @@ fleet_resolve_base_branch() {
     default=$(git -C "$dir" ls-remote --symref origin HEAD 2>/dev/null \
                 | sed -n 's#^ref: refs/heads/\(.*\)[[:space:]]HEAD$#\1#p' | head -n 1)
   elif command -v gh >/dev/null 2>&1; then
-    default=$(fleet_gh repo view "$repo" --json defaultBranchRef \
+    default=$(gh repo view "$repo" --json defaultBranchRef \
                 -q .defaultBranchRef.name 2>/dev/null) || default=''
   fi
   if [ -n "$flag" ]; then
@@ -1724,7 +1681,7 @@ fleet_resolve_base_branch() {
 
 # Write a fleet's per-session conf, PRESERVING everything the operator added
 # (issue #170). fleet-up.sh regenerates this conf on every restore; a naive
-# truncating `cat >` silently drops FLEET_ISSUE_BRIDGE / FLEET_CLEANUP /
+# truncating `cat >` silently drops FLEET_CLEANUP /
 # FLEET_MAX_SESSIONS / … — anything outside
 # the derived three. Here we rewrite ONLY the three derived keys (repo/main/base)
 # and re-emit every OTHER line from the existing conf verbatim — not just custom
@@ -1917,10 +1874,10 @@ fleet_repo_checkout() {
     # An address given (issue #3600) is cloned as itself when gh cannot (missing,
     # or no GitHub login): an ssh key reaches a GitHub repo without gh.
     if [ -n "$remote" ] && [ "$remote" != "$repo" ]; then
-      { command -v gh >/dev/null 2>&1 && fleet_gh repo clone "$repo" "$dir" 2>/dev/null; } \
+      { command -v gh >/dev/null 2>&1 && gh repo clone "$repo" "$dir" 2>/dev/null; } \
         || { rm -rf "$dir"; git clone "$remote" "$dir"; } || { echo "$tag: clone failed" >&2; return 5; }
-    elif command -v gh >/dev/null 2>&1; then fleet_gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
-    else fleet_gh_git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
+    elif command -v gh >/dev/null 2>&1; then gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
+    else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
   fi
   return 0
 }
@@ -2061,7 +2018,7 @@ fleet_repo_register() {
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
-        printf 'FLEET_SEED="1"\nFLEET_ISSUE_BRIDGE="0"\n'
+        printf 'FLEET_SEED="1"\n'
       fi
     } > "$f.tmp.$$" || ! mv -f "$f.tmp.$$" "$f"; then
     rm -f "$f.tmp.$$"; echo "fleet-repo: failed to write $f" >&2; echo "failed:write"; return 1
@@ -2069,7 +2026,7 @@ fleet_repo_register() {
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
   echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )) — $f" >&2
-  [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
+  [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
   bin="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
@@ -4326,9 +4283,9 @@ EOF
   return 0
 }
 
-# Legitimate fleet listeners that must never be counted or reaped: a tunnel, the
-# fleet webhook receiver. FLEET_LISTEN_EXEMPT_RE extends it.
-FLEET_LISTEN_EXEMPT_RE_DEFAULT='cloudflared|fleet-webhook|tailscale'
+# Legitimate fleet listeners that must never be counted or reaped: a tunnel.
+# FLEET_LISTEN_EXEMPT_RE extends it.
+FLEET_LISTEN_EXEMPT_RE_DEFAULT='cloudflared|tailscale'
 
 # fleet_listen_rows — every TCP LISTEN socket this user owns, one row per PROCESS:
 #   pid \t ppid \t age_s \t exposure \t addrs \t cwd \t argv
@@ -7518,7 +7475,7 @@ fleet_reap_record() {
   if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
     case "$outcome" in
       merged-pr|merged-PR|merged|landed)
-        pr="$(fleet_gh -R "$repo" pr list --head "$branch" --state merged \
+        pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
                 --json number -q '.[0].number' 2>/dev/null)" ;;
     esac
   fi
@@ -7838,7 +7795,7 @@ EOF_CHARTER
 # nothing. rc 1 = the parent could not be read.
 fleet_epic_agent() {
   local body
-  body=$(fleet_gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
+  body=$(gh issue view "${2:-}" --repo "${1:-}" --json body -q .body 2>/dev/null) || return 1
   fleet_epic_charter_agent "${1:-}" "$body" "${3:-}" "${4:-}"
 }
 
@@ -7941,7 +7898,7 @@ fleet_issue_plain_name() {
 fleet_issue_win_name() {
   local repo="${1:-}" num="${2:-}" t="${3:-}" b="${4:-}" ref er en f sh='' et eb js now ts
   if [ -z "$b" ] && [ -n "$repo" ] && [ -n "$num" ] && command -v gh >/dev/null 2>&1; then
-    b=$(fleet_gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
+    b=$(gh issue view "$num" --repo "$repo" --json body -q .body 2>/dev/null) || b=''
   fi
   ref=$(fleet_epic_member_ref "$b")
   if [ -n "$ref" ]; then
@@ -7954,7 +7911,7 @@ fleet_issue_win_name() {
     else
       js=''
       if command -v gh >/dev/null 2>&1; then
-        js=$(fleet_gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
+        js=$(gh issue view "$en" --repo "$er" --json title,body 2>/dev/null)
       fi
       if [ -n "$js" ]; then
         et=$(printf '%s' "$js" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title") or "")' 2>/dev/null)
@@ -8058,7 +8015,7 @@ fleet_repo_cached() { _fleet_sessmap_field 3 "${1:-}"; }
 # _fleet_sessmap_field <2|3> <session> — field N of the first sessmap row whose
 # field 1 is <session> (what `awk -F'\t' '$1==s{print $N; exit}'` printed). Pure
 # builtins (issue #888): the sessmap is a handful of rows and these are asked per
-# window per tick (pr-refresh, the dash), so an awk exec each was the cost. Split
+# window per tick (the dash), so an awk exec each was the cost. Split
 # with parameter expansion, not `read`: IFS=<tab> would fold an EMPTY field away.
 _fleet_sessmap_field() {
   local sm line rest tab
@@ -8853,9 +8810,8 @@ fleet_machine_login() {
 # a hidden temp in the same dir, then rename. Creates the dir chain 1777 when it
 # is the first login there. Never fails a caller that ignores its rc.
 # The default row carries a third field, the login's ASLEEP workers (issue #4231):
-# `<count> <epoch> <asleep>` — the node daemon runs a login's GitHub loops
-# (issue-bridge, pr-refresh: class `worker` in conf/node-tasks.tsv) while
-# count + asleep is above 0, so a comment still reaches a hibernated worker.
+# `<count> <epoch> <asleep>` — the node daemon runs a login's `worker`-class
+# tasks (conf/node-tasks.tsv) while count + asleep is above 0.
 # An explicit count writes no third field (the reader then knows no sleepers).
 fleet_machine_sessions_publish() {
   local n="${1:-}" d f tmp p z='' t aw activity
@@ -9088,199 +9044,6 @@ fleet_slots_chip() {
   printf '\033[38;2;%sm slots %s/%s%s %s' "$col" "$n" "$gmax" "$zs" "$reset"
 }
 
-# ── prmap jq program — the ONE fold from `gh pr list --json` to the prmap TSV ─────
-# (issue #533). bin/tmux-pr-refresh.sh (the single prmap writer) feeds this to
-# `gh --jq`; bin/pr-refresh-jq-selftest.sh feeds the byte-identical program to the
-# system `jq` against fixture JSON, so the taxonomy below is tested offline. It used
-# to be inlined in the refresher, where it silently drifted from the merge gate
-# (fleet-pr-verdict.sh → land_verdict): the dash showed `#N✓` on a PR the worker's
-# verdict called DRAFT / FAILING / PENDING. Keep the two in step — the ci fold here
-# IS the verdict's `fail|pending|pass`, spelled as glyphs.
-#
-# Input: the JSON array from
-#   gh pr list --state all --json number,headRefName,state,mergeable,mergeStateStatus,isDraft,statusCheckRollup,mergeCommit
-# Output: one line per branch (newest PR wins):  branch<TAB>#num<TAB>state<TAB>ci<TAB>ready<TAB>sha<TAB>fail
-#   ci    ·  no checks at all
-#         ✗  any red: a CheckRun whose conclusion is FAILURE / TIMED_OUT / CANCELLED /
-#            ACTION_REQUIRED, or a StatusContext (the OTHER rollup shape — it has
-#            `.state`, not `.status`/`.conclusion`) in FAILURE / ERROR
-#         …  anything not final yet (a CheckRun not COMPLETED, a StatusContext not SUCCESS)
-#         ✓  every check final and none red (NEUTRAL / SKIPPED count as green — same as
-#            the verdict's `pass`)
-#   ready only for an OPEN + ✓ PR, else "" — the dash decorates the ✓ with it:
-#         draft    isDraft — wins over everything; a draft can't land whatever CI says (✓d)
-#         conflict mergeable CONFLICTING or mergeStateStatus DIRTY               (✓!)
-#         ready    CLEAN | HAS_HOOKS | UNSTABLE (UNSTABLE = a NON-required check is
-#                  red; with ci=✓ nothing is, so it's mergeable — as land_classify)  (✓)
-#         behind   BEHIND — update-branch                                        (✓↑)
-#         blocked  BLOCKED — branch protection (review required / other)         (✓·)
-#         unknown  UNKNOWN / "" — GitHub hasn't computed mergeability yet (every
-#                  fresh push for a few seconds) — NOT the same as ready          (✓?)
-#   sha   the MERGE commit (mergeCommit.oid) of a MERGED PR, "" otherwise (issue #541).
-#         The deploy probe below keys its fleets/<slug>/deploy_<sha> cache on it; the
-#         ledger's own sha is the pre-squash worktree HEAD, which is NOT on master.
-#   fail  the names of the RED checks (CheckRun .name / StatusContext .context), sorted,
-#         comma-joined, "" when none (issue #1954) — the session header's `✗ <name>`.
-#         Last on the line, so every reader that cuts the sha at the next tab is unchanged.
-# The first 4 fields are a stable contract (fleet-cleanup-daemon.sh keys off
-# branch/#num/state); readers tab-guard a missing 5th/6th/7th field to "" (older caches).
-# shellcheck disable=SC2016,SC2034  # jq vars ($r/$ci/$ready) not shell — keep single-quoted; read cross-file by pr-refresh + its selftest
-FLEET_PRMAP_JQ='group_by(.headRefName)[] | max_by(.number) |
-  (.statusCheckRollup // []) as $r |
-  (if   ($r|length)==0                                                       then "·"
-   elif ($r|any(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
-                or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
-                or .state=="FAILURE" or .state=="ERROR"))                    then "✗"
-   elif ($r|any(.status!="COMPLETED" and .state!="SUCCESS"))                 then "…"
-   else "✓" end) as $ci |
-  (if .state=="OPEN" and $ci=="✓" then
-     (if   .isDraft==true                                                    then "draft"
-      elif (.mergeable=="CONFLICTING" or .mergeStateStatus=="DIRTY")         then "conflict"
-      elif (.mergeStateStatus=="CLEAN" or .mergeStateStatus=="HAS_HOOKS"
-            or .mergeStateStatus=="UNSTABLE")                                then "ready"
-      elif .mergeStateStatus=="BEHIND"                                       then "behind"
-      elif .mergeStateStatus=="BLOCKED"                                      then "blocked"
-      else "unknown" end)
-   else "" end) as $ready |
-  ([$r[] | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT"
-                  or .conclusion=="CANCELLED" or .conclusion=="ACTION_REQUIRED"
-                  or .state=="FAILURE" or .state=="ERROR")
-        | (.name // .context // "") | gsub("[\t\n,]"; " ") | select(. != "")]
-   | unique | join(",")) as $fail |
-  .headRefName + "\t#" + (.number|tostring) + "\t" + .state + "\t" + $ci + "\t" + $ready
-  + "\t" + (.mergeCommit.oid // "") + "\t" + $fail'
-
-# ── poll backoff for the 15s GitHub pollers (issue #892) ─────────────────────────
-# pr-refresh and the issue-bridge poll each fire every ~15s and each fire used to
-# run `gh` for every repo — while almost every fire saw nothing new. With
-# FLEET_POLL_MAX_BACKOFF above the unit's base interval, a repo whose poll came
-# back UNCHANGED waits twice as long before the next one (15 → 30 → 60, capped at
-# the knob); any change drops it straight back to the base, and an event (the
-# webhook's targeted kick, a bridge --deliver) resets it outright. Default 15 =
-# the base = no backoff, and then no state file is written or read at all: the
-# degenerate path is the pre-#892 behaviour, byte for byte.
-#
-# State: one small file per repo, `<interval> <last-poll-epoch>`. Missing or
-# garbled ⇒ the base interval and "due now" (fail open: a wrongly-skipped poll is
-# a stale dash, a wrongly-run one is one gh call). Forkless — builtins only.
-
-# fleet_poll_backoff_read <file> <base> — sets FLEET_PB_MAX / FLEET_PB_INT /
-# FLEET_PB_TS. Returns 1 when backoff is OFF (knob ≤ base): keep the historic path.
-fleet_poll_backoff_read() {
-  FLEET_PB_INT=$2 FLEET_PB_TS=0
-  FLEET_PB_MAX="${FLEET_POLL_MAX_BACKOFF:-15}"
-  case "$FLEET_PB_MAX" in ''|*[!0-9]*) FLEET_PB_MAX=15 ;; esac
-  [ "$FLEET_PB_MAX" -gt "$2" ] || { FLEET_PB_MAX=$2; return 1; }
-  _pb_i='' _pb_t=''
-  [ -f "$1" ] && read -r _pb_i _pb_t < "$1" 2>/dev/null
-  case "$_pb_i" in ''|*[!0-9]*) ;; *) [ "$_pb_i" -gt "$2" ] && FLEET_PB_INT=$_pb_i ;; esac
-  [ "$FLEET_PB_INT" -le "$FLEET_PB_MAX" ] || FLEET_PB_INT=$FLEET_PB_MAX
-  case "$_pb_t" in ''|*[!0-9]*) ;; *) FLEET_PB_TS=$_pb_t ;; esac
-  return 0
-}
-
-# fleet_poll_backoff_due <file> <base> <now> — 0 = poll this tick. Always 0 when
-# backoff is off. Floored 3s below the interval, like pr-refresh's PR_TTL, so
-# integer-second timer jitter never costs a whole extra tick.
-fleet_poll_backoff_due() {
-  fleet_poll_backoff_read "$1" "$2" || return 0
-  _pb_ttl=$(( FLEET_PB_INT > 4 ? FLEET_PB_INT - 3 : 1 ))
-  [ $(( $3 - FLEET_PB_TS )) -ge "$_pb_ttl" ]
-}
-
-# fleet_poll_backoff_note <file> <base> <changed 0|1> <now> — record a completed
-# poll: changed → back to the base, unchanged → double (capped). Off → no file.
-fleet_poll_backoff_note() {
-  fleet_poll_backoff_read "$1" "$2" || { [ -f "$1" ] && rm -f "$1" 2>/dev/null; return 0; }
-  if [ "$3" = 1 ]; then
-    _pb_n=$2
-  else
-    _pb_n=$(( FLEET_PB_INT * 2 )); [ "$_pb_n" -le "$FLEET_PB_MAX" ] || _pb_n=$FLEET_PB_MAX
-  fi
-  printf '%s %s\n' "$_pb_n" "$4" > "$1.$$" 2>/dev/null && mv -f "$1.$$" "$1" 2>/dev/null
-  return 0
-}
-
-# fleet_poll_backoff_reset <file> — an event arrived: the next tick polls, at the base.
-fleet_poll_backoff_reset() { [ -f "$1" ] && rm -f "$1" 2>/dev/null; return 0; }
-
-# ── deploy state of a MERGED PR (issue #541) ────────────────────────────────────
-# "Merged" is not "live": claude-fleet's own tooling only runs once /fleet-sync-install
-# fast-forwards ~/.claude/fleet, and an app repo deploys off a post-merge workflow.
-# Two per-fleet knobs (fleet.conf; neither set ⇒ the feature is off and the dash keeps
-# rendering `merged`):
-#   FLEET_DEPLOY_REF=<path>     a local git checkout that IS the deployment — live ⇔
-#                               the merge sha is an ancestor of its HEAD. Zero network.
-#                               Wins over FLEET_DEPLOY_CHECK when both are set.
-#   FLEET_DEPLOY_CHECK=actions  GitHub Actions runs for the merge sha (push runs +
-#                               the workflow_dispatch deploys a conductor fans out with
-#                               the same head_sha): folded by FLEET_DEPLOY_RUNS_JQ.
-# States: live (terminal) · deploying · failed · unknown. bin/tmux-pr-refresh.sh (the
-# single prmap writer) caches them at fleets/<slug>/deploy_<sha> as `<state>\t<epoch>`;
-# the dash (`live` / `deploy…` / `deploy✗`) and the ⌃t landed list (`dep` column) read
-# that file fork-free. bin/deploy-state-selftest.sh pins both programs offline.
-#
-# One run → one token: its status while not completed (queued / in_progress / waiting
-# / requested / pending), else its conclusion. Any red token → failed (a broken
-# post-merge run is attention, whichever workflow it is); any still-running → deploying;
-# all green (success / skipped / neutral) → live; no runs at all → unknown.
-# shellcheck disable=SC2016,SC2034  # jq vars ($s) not shell — keep single-quoted; read cross-file
-FLEET_DEPLOY_RUNS_JQ='[.workflow_runs[]? | (if .status=="completed" then (.conclusion // "unknown") else .status end)] as $s |
-  if   ($s|length)==0                                                                    then "unknown"
-  elif ($s|any(.=="failure" or .=="cancelled" or .=="timed_out" or .=="action_required"
-               or .=="startup_failure" or .=="stale"))                                  then "failed"
-  elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                          then "deploying"
-  else "live" end'
-
-# The same fold, over ONE listing of the base branch's newest runs, grouped by
-# head_sha → `<sha>\t<state>` lines (claude-fleet#1211). Measured 2026-09-25: the
-# per-sha read below, once per candidate per FLEET_DEPLOY_TTL, was 32 of the 41 REST
-# calls in a 45 s sample — 18 monorepo candidates × two logins on one token ≈ the
-# whole 5000/h core bucket. A sha absent from the listing (older than its 100-run
-# window) is simply not printed; the caller falls back to the per-sha read for it.
-# shellcheck disable=SC2016  # jq vars, not shell
-FLEET_DEPLOY_BATCH_JQ='[.workflow_runs[]? | {sha: .head_sha, tok: (if .status=="completed" then (.conclusion // "unknown") else .status end)}]
-  | group_by(.sha)[] | .[0].sha as $sha | [.[].tok] as $s
-  | $sha + "\t" + (
-      if   ($s|any(.=="failure" or .=="cancelled" or .=="timed_out" or .=="action_required"
-                   or .=="startup_failure" or .=="stale"))                              then "failed"
-      elif ($s|any(.!="success" and .!="skipped" and .!="neutral"))                      then "deploying"
-      else "live" end)'
-
-# fleet_deploy_probe_batch <repo> <branch> — one read of the newest 100 runs whose
-# head_branch is <branch> (push runs + the workflow_dispatch deploys a conductor fans
-# out on the same sha), folded per sha as above. rc 1 with no output when the read
-# itself failed — the caller keeps its cache and may fall back per sha.
-fleet_deploy_probe_batch() {
-  local repo="${1:-}" branch="${2:-}" out
-  [ -n "$repo" ] && [ -n "$branch" ] || return 1
-  out=$(fleet_gh api "repos/$repo/actions/runs?branch=$branch&per_page=100" --jq "$FLEET_DEPLOY_BATCH_JQ" 2>/dev/null) || return 1
-  printf '%s' "$out"
-  return 0
-}
-
-# fleet_deploy_probe <repo> <sha> <ref> <check> — print live|deploying|failed|unknown
-# for one merge sha under the given knobs; "" (rc 0) when the feature is off for this
-# repo or the sha is empty; rc 1 with "" when the actions read itself failed (the
-# caller keeps whatever it cached rather than downgrading on a transient gh error).
-fleet_deploy_probe() {
-  local repo="${1:-}" sha="${2:-}" ref="${3:-}" check="${4:-}" out
-  [ -n "$sha" ] || return 0
-  if [ -n "$ref" ]; then
-    # rc 1 = not an ancestor, rc 128 = sha not in that checkout's object db (it has
-    # not fetched master yet) — both read as "not live here", never as an error.
-    if git -C "$ref" merge-base --is-ancestor "$sha" HEAD >/dev/null 2>&1; then printf 'live'; else printf 'unknown'; fi
-    return 0
-  fi
-  case "$check" in
-    actions)
-      out=$(fleet_gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" --jq "$FLEET_DEPLOY_RUNS_JQ" 2>/dev/null) || return 1
-      case "$out" in live|deploying|failed|unknown) printf '%s' "$out" ;; *) return 1 ;; esac ;;
-    *) : ;;
-  esac
-  return 0
-}
-
 # Pick the cache file for <base> (prmap|issues) for a session: the slug'd file if
 # the session resolved AND its fetch has COMPLETED (the .ts marker exists, even if
 # the repo has 0 rows). Keying off .ts — not file size — so a fleet whose repo
@@ -9435,7 +9198,7 @@ fleet_child_busy() {
   command -v gh >/dev/null 2>&1 || { printf 'pr-unknown\n'; return 0; }
   # REST, not `gh pr list`: the core budget is separate from the GraphQL one the
   # prmap spends, and this runs on every unreported Stop.
-  n=$(fleet_timebox 5 fleet_gh api "repos/$repo/pulls?state=open&head=${repo%%/*}:$br" \
+  n=$(fleet_timebox 5 gh api "repos/$repo/pulls?state=open&head=${repo%%/*}:$br" \
         --jq length 2>/dev/null)
   case "$n" in
     0) return 1 ;;
@@ -9551,13 +9314,12 @@ fleet_cfg_restart_why() {
   # A finished session whose ticket is CLOSED is the reaper's too (issue #4822):
   # the idle pass's done-no-pr road counts from its last turn, and a reopen's
   # resume nudge is a new turn — every release restarted that clock, so a session
-  # finished on a closed ticket never came due. The fleet's local copy first
-  # (fleet-gh.sh); unreadable or not CLOSED ⇒ reopened as before.
+  # finished on a closed ticket never came due. One timed gh read; unreadable
+  # or not CLOSED ⇒ reopened as before.
   case "$iss" in ''|*[!0-9]*) ;; *)
     wrepo=$(fleet_window_repo "$sess" "$win" 2>/dev/null)
-    if [ -n "$wrepo" ] && [ -f "$bin/fleet-gh.sh" ] \
-       && [ "$(bash "$bin/fleet-gh.sh" issue view "$iss" --repo "$wrepo" --json state --max-age 600 2>/dev/null \
-               | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))' 2>/dev/null)" = CLOSED ]; then
+    if [ -n "$wrepo" ] && command -v gh >/dev/null 2>&1 \
+       && [ "$(fleet_timebox 10 gh issue view "$iss" --repo "$wrepo" --json state -q .state 2>/dev/null)" = CLOSED ]; then
       echo reap; return 1
     fi ;;
   esac
@@ -10067,7 +9829,7 @@ fleet_pr_merge_state() {
     done
   fi
   if [ -n "$n" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
-    raw=$(fleet_timebox 10 fleet_gh api "repos/$repo/pulls/$n" \
+    raw=$(fleet_timebox 10 gh api "repos/$repo/pulls/$n" \
             --jq '"\(.merged) \(.state) \(.auto_merge != null)"' 2>/dev/null)
     case "$raw" in
       'true '*)          st=merged ;;

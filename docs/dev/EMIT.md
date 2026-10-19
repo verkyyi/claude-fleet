@@ -126,15 +126,15 @@ every scratch that turned into real work is attributed to nothing: the session
 spent its tokens under `scratch-7` and landed a PR under `issue-625`, and only
 this line joins the two.
 
-### `session.pr` — `bin/tmux-pr-refresh.sh`
+### `session.pr` — no emitter since issue #4899 (still accepted)
 
 ```json
 {"event":"session.pr","ts":"…","session":"…","repo":"…","issue":625,
  "pr":646,"branch":"issue-625","state":"MERGED","action":"merged"}
 ```
 
-The PR refresher already rewrites the whole prmap every ~15s, so a PR transition
-is a **diff** of the file about to be replaced against the one just fetched — no
+The PR refresher (gone with issue #4899) rewrote the whole prmap every ~15s, so a PR transition
+was a **diff** of the file about to be replaced against the one just fetched — no
 second poller, no second source of truth. `action` ∈ `opened` | `merged` |
 `closed`. CI churn is not a transition (only `state` is compared), and a **cold**
 prmap emits nothing: without that guard the first tick after an install would
@@ -200,7 +200,6 @@ how many events are waiting.
 | file | role |
 |---|---|
 | `bin/fleet-emit.sh` | the ONE outbound channel: filter → spool → detached drain |
-| `bin/fleet-emit-selftest.sh` | hermetic tests (off-is-off, the allowlist, injection, the cap, 4xx, the prmap diff, the wiring) |
+| `bin/fleet-emit-selftest.sh` | hermetic tests (off-is-off, the allowlist, injection, the cap, 4xx, the wiring) |
 | `hooks/settings-hooks.json` | `session.start` on SessionStart, `session.end --via hook` on SessionEnd |
 | `bin/fleet-lib.sh` (`fleet_reap_record`) | `session.end --via reap` |
-| `bin/tmux-pr-refresh.sh` (`emit_pr_transitions`) | `session.pr` |

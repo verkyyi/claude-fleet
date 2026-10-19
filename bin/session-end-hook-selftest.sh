@@ -468,25 +468,22 @@ ok "Codex close-on-exit honors the global switch, hub/panel scope, and transfer 
 
 # GitHub connecting but never answering (issue #4842, EPIC #4839 C3): the exit itself
 # makes no GitHub call — the in-pane gate returns at once — and the detached --exec
-# closes the window within a key's bound (FLEET_GH_TIMEOUT_KEY), not gh's forever:
-# the first unanswered read opens the shared gh-down marker, every later one skips.
-# Nothing is reaped on an unread merged-PR answer (#2 kept), and the issue stays.
+# closes the window within a key's bound (5 s a read, fleet_timebox), not gh's
+# forever. Nothing is reaped on an unread merged-PR answer (#2 kept), and the issue stays.
 GHDOWN="$WORK/ghdown-conf"; mkdir -p "$GHDOWN"; HANG="$WORK/gh-hang.log"; : > "$HANG"
 fx_repo "$GHDOWN" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"
 clr; t0=$(date +%s)
-GH_HANG="$HANG" RUNSHELL_BG=1 FLEET_GH_TIMEOUT_KEY=3 CONFDIR="$GHDOWN" \
+GH_HANG="$HANG" RUNSHELL_BG=1 CONFDIR="$GHDOWN" \
   REASON=prompt_input_exit ISS=2 WID='@2' run_hook </dev/null
 t1=$(date +%s)
 [ $((t1 - t0)) -le 2 ] || fail "the exit waited on GitHub: $((t1 - t0))s (≤ 2 s)" "$(cat "$TMLOG")"
-i=0; while ! grep -q '^DONE' "$TMLOG" && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+i=0; while ! grep -q '^DONE' "$TMLOG" && [ "$i" -lt 250 ]; do sleep 0.1; i=$((i + 1)); done
 t2=$(date +%s)
 grep -q 'KILL' "$TMLOG" || fail "a black-holed GitHub kept the window open" "$(cat "$TMLOG")"
-[ $((t2 - t0)) -le 10 ] || fail "the window closed only after $((t2 - t0))s (the key bound is 3 s)"
-[ -f "$GHDOWN/global/gh-down" ] || fail "the unanswered read did not open the shared gh-down marker"
-[ "$(grep -c . "$HANG")" = 1 ] || fail "GitHub was asked again after it went quiet" "$(cat "$HANG")"
+[ $((t2 - t0)) -le 20 ] || fail "the window closed only after $((t2 - t0))s (the key bound is 5 s a read)"
 [ -d "$WT2" ] || fail "an unread merged-PR answer must never reap the worktree"
 grep -q 'CLOSE' "$GHLOG" && fail "an unread GitHub must not close the issue"
-ok "GitHub black-holed → exit in $((t1 - t0))s, window closed in $((t2 - t0))s, one GitHub try, nothing reaped (#4842)"
+ok "GitHub black-holed → exit in $((t1 - t0))s, window closed in $((t2 - t0))s, nothing reaped (#4842)"
 
 printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw record+window-close, stdin parse) [#403, #409, #466]\n' "$pass"
 exit 0

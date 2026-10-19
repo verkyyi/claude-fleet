@@ -331,8 +331,8 @@ class Hub:
                 self.authorize(principal, "fleet:read", params["fleet_id"])
                 result = self.rpc(self.fleet_node(params["fleet_id"]), tool, params)
             elif tool in GH_READS:
-                # Answered on the fleet's machine by fleet-gh.sh: its local
-                # copy first, gh/REST only when that copy is too old (#1274).
+                # Answered on the fleet's machine by one plain gh read
+                # (fleet-control-read.sh gh; #1274, #4899).
                 validate_gh_read(params)
                 self.authorize(principal, "gh:read", params["fleet_id"])
                 result = self.rpc(self.fleet_node(params["fleet_id"]), tool, params)

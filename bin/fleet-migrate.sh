@@ -533,7 +533,7 @@ migrate_one_body() {
     CFG_REASON=cfg-stale; [ "$FCFG_STATE" = renew ] && CFG_REASON=ver-stale
     CFG_NEWVER=${FCFG_EXP_VER:-}
     local cfgpr=''
-    [ -n "$iss" ] && [ -z "$raw" ] && cfgpr=$(wopt "$wid" '#{@pr_num}')   # an OPEN PR only (tmux-pr-refresh.sh)
+    [ -n "$iss" ] && [ -z "$raw" ] && cfgpr=$(wopt "$wid" '#{@pr_num}')   # an OPEN PR only
     [ "$NUDGE_SET" = 1 ] || CFG_NUDGE=$(cfg_update_nudge "$(wopt "$wid" '#{@agent_ver}')" "$CFG_NEWVER" "$CFG_REASON" "$cfgpr")
   fi
   if [ "$CFG" != 1 ] && migrate_noop "$label" "$ACTIVE" "$MODEL" "$ACTIVE_BENCHED"; then

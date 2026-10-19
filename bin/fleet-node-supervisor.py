@@ -20,7 +20,7 @@ machine's work ONCE, however many logins the machine carries:
                 but the machine-level ones), run for every account the daemon
                 MANAGES, each demoted to that account (initgroups/setgid/setuid)
                 with its HOME / USER / PATH / FLEET_CONF_DIR / TMPDIR — an interval
-                unit as a task, a KeepAlive unit (spinner, webhook) as a child.
+                unit as a task, a KeepAlive unit (the spinner) as a child.
                 The template's own interval, environment and log paths; the log
                 is opened by the demoted process, never by root. One account's
                 failing task never touches another's. No account runs a proxy of
@@ -29,7 +29,7 @@ machine's work ONCE, however many logins the machine carries:
                 renewed by `cred-relay` (`fleet-cred-proxy.sh relay-tick`, issues
                 #3524, #4674 — ACCOUNT_BUILTIN, no template) — run only when the
                 shared proxy asks (`relay-want.<login>`, issue #3561).
-                A unit conf/node-tasks.tsv marks `session` (spinner, webhook)
+                A unit conf/node-tasks.tsv marks `session` (the spinner)
                 runs only while the login's collector publishes a session count
                 above 0 (issue #3671); a restart adopts a live account unit by its
                 own process (the wrapper sh exec'd), an orphaned copy is stopped,
@@ -337,9 +337,6 @@ MACHINE_UNITS = ("memguard", "node", "cred-proxy-shared")
 # its relay pass when the proxy asks — is this one (fleet-machine-tasks.py
 # reads the names: a row of kind unit each).
 ACCOUNT_BUILTIN = ("cred-relay",)
-# Account units the machine's own child replaces while it runs (issue #4358): the
-# webhook forwarder, one for every login (webhook_machine_child).
-WEBHOOK_UNITS = ("webhook",)
 # The locale every child is started in (issue #3514): macOS always has
 # en_US.UTF-8, a slim Linux image only C.UTF-8 — there en_US.UTF-8 named a locale
 # that does not exist, perl warned on every call and python's setlocale raised,
@@ -2315,9 +2312,8 @@ class Supervisor(object):
         self.logroot = os.path.join(self.p.log, "node") if self.seated else self.p.log
 
     # -- the account half (#2332): entries built from the one table, per managed login
-    def account_entries(self, retired=False):
-        """Every account unit of every login it runs; retired: instead, the units
-        the machine runs itself now (#4358), whose old copies the sweep stops."""
+    def account_entries(self):
+        """Every account unit of every login it runs."""
         t = now()
         if self.units is None or t - self.units_at >= 60:
             self.units = account_units(self.p, self.table)
@@ -2326,8 +2322,6 @@ class Supervisor(object):
         if not self.units:
             return out
         brew = brew_prefix()
-        # the machine's one forwarder serves every login (#4358): no login runs its own
-        gone = WEBHOOK_UNITS if self.webhook_machine_on() else ()
         for login, why in managed_accounts(self.p).items():
             if why:
                 continue
@@ -2339,19 +2333,10 @@ class Supervisor(object):
                     self.dirty = True
                 continue
             for u in self.units:
-                if (u["name"] in gone) != retired:
-                    continue
                 u = account_unit_for(u, ident[2])
                 if u is not None:
                     out.append(account_entry(u, login, ident, brew))
         return out
-
-    def webhook_machine_on(self):
-        """The machine's one webhook forwarder runs (#4358): never seated — the
-        seat cannot run as a login itself, so there each login keeps its unit —
-        and FLEET_NODE_WEBHOOK=0 is the old road, a copy per login."""
-        return (not self.seated and env("FLEET_NODE_WEBHOOK", "1") != "0"
-                and trusted(webhook_machine_script(self.p)))
 
     def service_entries(self):
         """The login-level register (#2525): every valid, enabled entry of a login
@@ -2389,7 +2374,6 @@ class Supervisor(object):
         entry = [entry_child(self.p)] if entry_settings(self.p)[0] else []
         # the test runner (#3144) only where ci.env is — off, no child at all
         entry += [ci_child(self.p)] if ci_on(self.p) else []
-        entry += [webhook_machine_child(self.p)] if self.webhook_machine_on() else []
         return (list(self.table["children"]) + entry + [e for e in self.account_entries() if e.get("keepalive")]
                 + self.service_entries())
 
@@ -2639,21 +2623,20 @@ class Supervisor(object):
 
     def sweep_strays(self):
         """An account unit's copy no daemon tends any more (issue #3671): a run
-        before the adoption fix left one behind at every restart — two extra
-        webhooks per idle login on a managed machine. Once a minute, an orphan (PPID 1) of a login
+        before the adoption fix left one behind at every restart — extra
+        KeepAlive copies per idle login on a managed machine. Once a minute, an orphan (PPID 1) of a login
         this daemon runs a KeepAlive unit for, reading as that unit
         (account_proc_is), not the pid we hold, is stopped. A seat stops nothing
         of a login's itself: it asks the core's stop-as, which stops the strays of
         that (login, unit) with it (issue #4231 — seated, this sweep did nothing,
-        and every core restart left one more webhook and spinner per login);
+        and every core restart left one more spinner per login);
         FLEET_NODE_STRAY_SWEEP=0 is off."""
         t = now()
         if t - self.strays_at < env_num("FLEET_NODE_STRAY_SECS", 60) \
                 or env("FLEET_NODE_STRAY_SWEEP", "1") == "0":
             return
         self.strays_at = t
-        # …and a unit the machine now runs once (#4358): a login's own copy is a stray
-        units = [e for e in self.account_entries() + self.account_entries(retired=True) if e.get("keepalive")]
+        units = [e for e in self.account_entries() if e.get("keepalive")]
         if not units:
             return
         try:
@@ -5659,19 +5642,6 @@ def ci_child(paths):
     return {"name": "ci-runner",
             "cmd": ["/usr/bin/python3", "-I", os.path.join(paths.runtime, "bin", "fleet-ci-runner.py"), "loop"],
             "requires": [ci_env_path(paths)], "reload": ci_env_path(paths), "note": "#3144"}
-
-
-def webhook_machine_script(paths):
-    return os.path.join(paths.runtime, "bin", "fleet-webhook-machine.py")
-
-
-def webhook_machine_child(paths):
-    """The machine's ONE webhook forwarder (issue #4358, EPIC #4354 C4): one
-    localhost listener for every login it took over, each login's forwards and
-    routes run as that login. While it runs, no login runs the `webhook` unit."""
-    return {"name": "webhook-machine",
-            "cmd": ["/usr/bin/python3", "-I", webhook_machine_script(paths), "run"],
-            "note": "#4358"}
 
 
 def ci_summary(paths):

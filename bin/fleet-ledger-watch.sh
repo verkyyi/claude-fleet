@@ -19,14 +19,21 @@
 # resume just reuses it; a later reap is covered by the HEAD sha record-closed
 # stores while the worktree is still there.
 #
-# TWO KINDS of window are snapshotted, under one KEY column:
+# THREE KINDS of window are snapshotted, under one KEY column (the ledger row's key):
 #   * issue-bound WORKER  → key = the numeric @issue
 #   * @raw SCRATCH (#466) → key = the `scratch-<N>` slug of its @worktree
 #     (fleet_scratch_key). A scratch has no issue, but it does have its own
 #     worktree + transcript (#290), so it indexes and resumes like any worker.
-#     A @raw window with no resolvable scratch worktree has nothing to index →
-#     skipped, exactly as every @raw window was before this.
+#   * a TASK session (#4899) with neither — a hub record's session in a native
+#     worktree → key = its record, `T<n>` (@task).
+#     A @raw window with no scratch worktree and no record has nothing to index →
+#     skipped, exactly as every @raw window was before.
 # Panels (dash/plan/backlog — no @issue, no @raw) are never snapshotted.
+# Each row also carries the window's IDENTITY (@fleet_id, #1646; col 12): a window
+# is "vanished" only when neither its key nor its identity is live any more, so a
+# window whose key moved (a rebind, a recycled scratch number) is never recorded
+# closed while it runs (issue #4899: the ledger keys on the record and identity,
+# not the issue number alone).
 #
 # Design (mirrors the other single-writer, disk-gated fleet daemons — the cleanup
 # daemon it sits beside):
@@ -173,7 +180,7 @@ watch_fleet() { (
   # printable '|' survives — same reasoning as fleet-restore.sh's snapshot).
   #   window-id | @issue | @raw | @worktree | pane_current_path | window_name | @origin
   raw=$(ftmux list-windows -t "$sess" \
-        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@task}|#{@task_line}' 2>/dev/null)
+        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@task}|#{@fleet_id}|#{@task_line}' 2>/dev/null)
   # A LIVE fleet always has ≥1 hub window (dash/plan/backlog). An empty read here
   # means the session is gone or tmux glitched — either way do NOT diff (that would
   # false-record still-live workers as closed) and do NOT overwrite the snapshot.
@@ -206,14 +213,16 @@ watch_fleet() { (
   # window whose repo is unknown is skipped — never recorded under a guessed repo
   # (a one-repo fleet's unstamped window answers its only repo, fleet_window_repo).
   : > "$cur"
-  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wtline; do
+  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wfid wtline; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
+    case "$wtask" in T[1-9]*) ;; *) wtask='' ;; esac
     if [ "$rawf" = 1 ]; then
       # @raw SCRATCH: no issue to key on — use the scratch-<N> slug of its worktree
       # (#466). fleet_scratch_key is STRICT, so a @raw window that is not in a real
       # scratch worktree (nothing to index or reconstruct) is skipped, exactly as
       # every @raw window was before — @raw is never keyed by a stray @issue.
       key=$(fleet_scratch_key "$local_wt")
+      [ -z "$key" ] && key=$wtask        # a task session with no scratch worktree (#4899)
       [ -z "$key" ] && continue
     else
       case "$iss" in ''|*[!0-9]*) continue ;; esac    # numeric @issue only (skips panels)
@@ -224,21 +233,19 @@ watch_fleet() { (
     key="$wrepo#${key##*:}"        # a `<slug>:scratch-N` key (#789) → its bare form
     # dedup within a tick: one window ≡ one key — first seen wins.
     case "$cur_keys" in *$'\n'"$key"$'\n'*) continue ;; esac
+    fleet_is_fid "$wfid" || wfid=
     smry=""
     # col 6 = @origin (issue #503): captured while live like the title, so
     # a vanished window's history row still carries its spawn provenance.
+    # cols 7-9: the agent (a Claude row leaves them empty, read as claude);
     # cols 10-11 (issue #3387): the hub task record (@task) and its words
-    # (@task_line), only when the window has one — a row without stays as it was.
-    case "$wtask" in T[1-9]*) ;; *) wtask='' ;; esac
-    if [ -n "$wtask" ]; then
-      wtline=$(printf '%s' "$wtline" | tr '\t\r\n\037' '    ')
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" "$wagent" "$wowner" "$widentity" "$wtask" "$wtline" >> "$cur"
-    elif [ "$wagent" = codex ]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" "$wagent" "$wowner" "$widentity" >> "$cur"
-    else
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" >> "$cur"
-    fi
-    cur_keys="${cur_keys}${key}"$'\n'
+    # (@task_line); col 12 (#4899): the window's identity (@fleet_id).
+    # (a plain Claude row carried no agent columns before #4899 — kept so)
+    [ "$wagent" = codex ] || [ -n "$wtask" ] || { wagent='' wowner='' widentity=''; }
+    [ -n "$wtask" ] && wtline=$(printf '%s' "$wtline" | tr '\t\r\n\037' '    ') || wtline=''
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" \
+      "$wagent" "$wowner" "$widentity" "$wtask" "$wtline" "$wfid" >> "$cur"
+    cur_keys="${cur_keys}${key}"$'\n'"${wfid:+fid:$wfid}"$'\n'
   done <<EOF
 $raw
 EOF
@@ -252,15 +259,17 @@ EOF
   if [ -f "$snap" ]; then
     # A non-whitespace separator preserves the intentionally empty summary and
     # origin columns. JSON's own control characters are escaped already.
-    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline; do
+    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline p_fid; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
+      # …or the same window under another key (its identity, #4899)
+      [ -n "$p_fid" ] && case "$cur_keys" in *$'\n'"fid:$p_fid"$'\n'*) continue ;; esac
       vanished=$((vanished + 1))
       # `<owner/name>#<key>` (#790) → that repo's ledger, bare key.
       p_repo=$repo
       case "$p_key" in *'#'*) p_repo=${p_key%'#'*}; p_key=${p_key##*'#'} ;; esac
       # log label: `#<issue>` for a worker, the bare `scratch-<N>` for a scratch (#466).
-      lbl="$p_key"; case "$p_key" in [0-9]*) lbl="#$p_key" ;; esac
+      lbl="$p_key"; case "$p_key" in [0-9]*) lbl="#$p_key" ;; esac   # T<n> / scratch-<N> as is
       [ "$p_repo" = "$repo" ] || lbl="$p_repo $lbl"
       if [ "$DRY" = 1 ]; then
         log "$sess: would record closed-unlanded $lbl (win $p_wid, wt ${p_wt##*/})"

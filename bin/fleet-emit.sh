@@ -22,8 +22,8 @@
 #                  belong to the issue.
 #   session.bind   a scratch became the worker for issue N — nothing emits it since
 #                  the scratch→worker promotion left (issue #4898); still accepted.
-#   session.pr     a PR for a session's branch was opened / merged / closed —
-#                  diffed off the prmap the PR refresher already maintains.
+#   session.pr     a PR for a session's branch was opened / merged / closed — nothing
+#                  emits it since the PR refresher left (issue #4899); still accepted.
 #   session.end    how it ended. Two `via` values because two different things end:
 #                    via=hook  an agent session ended (SessionEnd) — carries the
 #                              ledger's session id + the CLI's `reason`. `clear` is

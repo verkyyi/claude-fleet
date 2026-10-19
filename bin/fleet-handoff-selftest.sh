@@ -2,8 +2,7 @@
 # fleet-handoff-selftest.sh — hermetic smoke test for bin/fleet-handoff-cycle.sh.
 #
 # Asserts the detached cycle's contract (issue #273) against a FAKE tmux (no tmux
-# server, no real pane, no live Claude) — the same mock-tmux shape the issue-bridge
-# selftest uses (bin/fleet-issue-bridge-selftest.sh):
+# server, no real pane, no live Claude):
 #   • REFUSE-NO-STORE   armed without --doc AND without --issue → refuses, no clear.
 #   • REFUSE-EMPTY-DOC  --doc points at an empty file → refuses, never clears.
 #   • REFUSE-OUTSIDE    no $TMUX and no --socket → refuses (nothing to drive).

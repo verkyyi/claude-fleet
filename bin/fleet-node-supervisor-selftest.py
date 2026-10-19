@@ -1319,11 +1319,13 @@ class H_Accounts(Sandbox):
         # the autofill dispatcher's template is gone (issue #3120): no account
         # runs it, and nothing keeps a unit the runtime no longer carries
         self.assertNotIn("dispatch", units)
-        for need in ("issue-bridge", "pr-refresh", "ledger-watch", "quotawatch", "sleep", "cleanup",
-                     "worktree-autoclean", "spinner", "webhook", "collect", "install-sync", "base-sync"):
+        for need in ("ledger-watch", "quotawatch", "sleep", "cleanup",
+                     "worktree-autoclean", "spinner", "collect", "install-sync", "base-sync"):
             self.assertIn(need, units)
-        self.assertTrue(units["spinner"].get("keepalive") and units["webhook"].get("keepalive"))
-        self.assertEqual(units["issue-bridge"]["every"], 15)
+        # the GitHub daemons left with issue #4899
+        for gone in ("issue-bridge", "pr-refresh", "webhook"):
+            self.assertNotIn(gone, units)
+        self.assertTrue(units["spinner"].get("keepalive"))
         self.assertEqual(units["install-sync"]["every"], 1800)
         self.assertEqual(units["worktree-autoclean"]["every"], 3600)
         self.assertEqual(units["spinner"]["env"].get("SPIN_INTERVAL"), "0.12")
@@ -3526,12 +3528,11 @@ class V_SessionUnits(H_Accounts):
         finally:
             os.environ.clear()
             os.environ.update(old)
-        self.assertEqual(fns.table_worker_units(rt), {"issue-bridge", "pr-refresh"})
-        for gh in ("issue-bridge", "pr-refresh"):
-            self.assertTrue(units[gh].get("session") and units[gh].get("asleep"), gh)
+        # the shipped GitHub loops left with issue #4899: no class-worker unit is left
+        self.assertEqual(fns.table_worker_units(rt), set())
         for other in ("collect", "diskguard", "cleanup", "install-sync"):
             self.assertFalse(units[other].get("session"), "%s must run with no session" % other)
-        self.assertFalse(units["webhook"].get("asleep"), "a session unit counts the awake ones only")
+        self.assertFalse(units["spinner"].get("asleep"), "a session unit counts the awake ones only")
         # the daemon: alice has no session (spare), bob's only worker is asleep
         # (third field), carol has one awake — the GitHub task runs for bob and carol
         os.makedirs(os.path.join(self.home("carol"), ".claude", "fleet", "bin"))

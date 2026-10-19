@@ -46,7 +46,7 @@
 #   - more than FLEET_HANDOFF_MAX_LINES lines (default 200; 0 = no line cap);
 #   - FLEET_HANDOFF_COPY_LINES (default 5; 0 = off) or more substantive lines
 #     copied from the bound issue's body (--issue N, else this pane's @issue; read
-#     through fleet-gh.sh — or --issue-body F, a file holding the body).
+#     with gh — or --issue-body F, a file holding the body).
 #     Lines are compared after stripping list/quote/heading markers and spacing;
 #     short lines (< 16 bytes), fences and table rules never count.
 # It is advice, never a gate: the caller trims and rewrites, then stores either way.
@@ -111,7 +111,7 @@ if [ "$cmd" = check ]; then
       if [ -n "$ISSUE" ]; then
         set -- issue view "$ISSUE" --json body
         [ -n "$REPO" ] && set -- "$@" --repo "$REPO"
-        if "$BIN/fleet-gh.sh" "$@" 2>/dev/null \
+        if gh "$@" 2>/dev/null \
              | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("body") or "")' > "$T/body" 2>/dev/null; then
           body="$T/body"
         else

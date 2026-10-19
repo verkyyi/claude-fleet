@@ -25,6 +25,10 @@
 #   • OFF SWITCH       FLEET_LEDGER_WATCH=0 → no-op (default is ON).
 #   • SINGLE-WRITER    a fresh per-repo lease held by someone else → skip.
 #   • DISK GATE        diskguard --gate closed → no-op for the whole tick.
+#   • TASK KEY         a task session with no issue / scratch worktree is keyed by
+#                       its record T<n> (#4899).
+#   • IDENTITY         a window whose key moved (a rebind) but whose @fleet_id lives
+#                       is never recorded; gone, it is recorded under its new key.
 #
 # Exit 0 = pass. Non-zero = fail (prints the captured log + record-closed calls).
 set -uo pipefail
@@ -240,7 +244,7 @@ PYTEST
 # A hub task record (issue #3387): @task + @task_line ride the snapshot, so the row
 # a vanished window gets still carries T<n> and the session's words; none ⇒ no flag.
 reset_all
-windows '@1|10|0||/wk/issue-10|fix-ten|||||T41|把周报 | 做成一页' '@5|||||dash'
+windows '@1|10|0||/wk/issue-10|fix-ten|||||T41||把周报 | 做成一页' '@5|||||dash'
 run s1
 windows '@5|||||dash'
 run s1
@@ -258,5 +262,26 @@ windows '@5|||||dash'
 run s1
 grep -qx -- '--task' "$WORK/record-args" && fail 'a window with no task record grew a --task'
 
-printf 'selftest PASS: seed · vanished→record · still-live · scratch recorded · @raw-no-worktree/panel excluded · dedup-token · transient-empty · dry-run · off-switch · single-writer · disk-gate\n'
+# A task session with no issue and no scratch worktree (a native worktree, issue
+# #4899): keyed by its record T<n>, recorded when it vanishes.
+reset_all
+F1=11111111-2222-4333-8444-555555555555
+windows "@7||1||/main|task-x|||||T52|$F1|写周报" '@5|||||dash'
+run s1
+grep -q '^fake/repo#T52	' "$SNAP" || fail "a task session must be snapshotted under its record T52"
+windows '@5|||||dash'
+run s1
+[ "$(recorded_list)" = T52 ] || fail "the vanished task session must be recorded as T52, got [$(recorded_list)]"
+# Identity (#4899): the same window under a new key (a rebind) is not «vanished».
+reset_all
+windows "@8|30|0||/wk/issue-30|thirty||||||$F1" '@5|||||dash'
+run s1
+windows "@8||1||/main|thirty|||||T60|$F1|" '@5|||||dash'
+run s1
+[ -z "$(recorded_list)" ] || fail "a window whose key moved but whose identity lives was recorded: [$(recorded_list)]"
+windows '@5|||||dash'
+run s1
+[ "$(recorded_list)" = T60 ] || fail "once gone it is recorded under its current key, got [$(recorded_list)]"
+
+printf 'selftest PASS: seed · vanished→record · still-live · scratch recorded · @raw-no-worktree/panel excluded · dedup-token · transient-empty · dry-run · off-switch · single-writer · disk-gate · task key · identity\n'
 exit 0

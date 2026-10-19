@@ -194,7 +194,6 @@ strip()  { sed $'s/\x1b\\[[0-9;]*m//g'; }
 collect() {
   FLEET_ACCOUNTS_DIR="$WORK/accounts" FLEET_NOTIFY_CMD="" GH_TTL=0 \
     bash "$BIN/tmux-dash-collect.sh" >"$WORK/collect.out" 2>&1
-  bash "$BIN/tmux-pr-refresh.sh" >"$WORK/refresh.out" 2>&1
 }
 
 
@@ -348,10 +347,20 @@ fi
 
 if selftest_section 2; then
 # ==== (a) PR/CI by branch name ==========================================================
-# The prmaps pr-refresh writes, one per repo: A's #12 merged, B's #12 open.
+# The prmaps, one per repo: A's #12 merged, B's #12 open. Their GitHub writer
+# left with issue #4899; the cleanup daemon still reads them, so the test writes
+# what that writer did.
 git -C "$tA" rev-parse HEAD > "$GH_SHA_A"
-# One tick of each real daemon: the collector (sessmap, every window's git_<key>,
-# every hosted repo's issues cache) and pr-refresh (every hosted repo's prmap).
+for _pm in "o-alpha	issue-12	#101	MERGED	$(cat "$GH_SHA_A")" "o-beta	issue-12	#201	OPEN	"; do
+  IFS='	' read -r _sl _br _n _st _sha <<EOF_PM
+$_pm
+EOF_PM
+  mkdir -p "$TMPDIR/.claude-dash/fleets/$_sl"
+  printf '%s\t%s\t%s\t·\t\t%s\n' "$_br" "$_n" "$_st" "$_sha" > "$TMPDIR/.claude-dash/fleets/$_sl/prmap"
+  date +%s > "$TMPDIR/.claude-dash/fleets/$_sl/prmap.ts"
+done
+# One tick of the real collector (sessmap, every window's git_<key>, every hosted
+# repo's issues cache).
 collect
 dash() { FLEET_SESSION="$S" FZF_COLUMNS=160 bash "$BIN/tmux-dashboard-rows.sh" 2>/dev/null | tail -n +2 | strip; }
 # A row is found by its window id (field 2), never its name: since #1023 names carry

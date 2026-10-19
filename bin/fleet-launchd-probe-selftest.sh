@@ -197,8 +197,8 @@ grep -q "spawnprobe.99999" "$S/bootouts" 2>/dev/null \
 # ============================================================================
 # D. the cooldown scales with the unit's own interval
 # ============================================================================
-[ "$(lib 'fleet_daemon_kick_cooldown issue-bridge')" = 60 ] \
-  || fail "D: a 15s unit must floor at 60s, not sit on a flat 600s"; ok
+[ "$(lib 'fleet_daemon_kick_cooldown memguard')" = 60 ] \
+  || fail "D: a 2s unit must floor at 60s, not sit on a flat 600s"; ok
 [ "$(lib 'fleet_daemon_kick_cooldown collect')" = 180 ] \
   || fail "D: a 60s unit must be 3×60"; ok
 [ "$(lib 'fleet_daemon_kick_cooldown worktree-autoclean')" = 10800 ] \
@@ -214,9 +214,9 @@ for u in $(lib 'fleet_daemon_unit_names'); do
   ok
 done
 # The knobs still work, and the absolute one still wins outright.
-[ "$(FLEET_DAEMON_KICK_COOLDOWN=600 lib 'fleet_daemon_kick_cooldown issue-bridge')" = 600 ] \
+[ "$(FLEET_DAEMON_KICK_COOLDOWN=600 lib 'fleet_daemon_kick_cooldown memguard')" = 600 ] \
   || fail "D: FLEET_DAEMON_KICK_COOLDOWN must still override absolutely"; ok
-[ "$(FLEET_DAEMON_KICK_COOLDOWN_ISSUE_BRIDGE=45 lib 'fleet_daemon_kick_cooldown issue-bridge')" = 45 ] \
+[ "$(FLEET_DAEMON_KICK_COOLDOWN_LEDGER_WATCH=45 lib 'fleet_daemon_kick_cooldown ledger-watch')" = 45 ] \
   || fail "D: the per-unit override (dash → underscore) stopped working"; ok
 [ "$(FLEET_COLLECT_KICK_COOLDOWN=900 lib 'fleet_daemon_kick_cooldown collect')" = 900 ] \
   || fail "D: #638's FLEET_COLLECT_KICK_COOLDOWN must still govern collect"; ok
@@ -261,7 +261,7 @@ out=$(STUB_VERDICT=no-spawn run_doctor)
   || fail "E1: expected exactly ONE \`WARN launchd\` line" "$out"; ok
 [ "$(warns_of "$out" daemons)" = 0 ] \
   || fail "E1: the per-unit \`WARN daemons\` lines must be HELD BACK when the domain is the cause — printing all ten is the #711 misdiagnosis" "$out"; ok
-has "issue-bridge" "$out" "E1: the collapsed line must still NAME the stalled units"
+has "ledger-watch" "$out" "E1: the collapsed line must still NAME the stalled units"
 has "MACHINE state, not fleet state" "$out" "E1: the collapsed line must say whose problem this is"
 has "reboot" "$out" "E1: the collapsed line must name the remedy"
 [ -s "$WORK/probe-calls" ] || fail "E1: the doctor never ran the probe on a domain-shaped stall"; ok

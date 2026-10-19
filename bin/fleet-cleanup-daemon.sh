@@ -20,7 +20,7 @@
 #     load its conf; skip a repo whose FLEET_CLEANUP=0 (per repo, #978)
 #     acquire a per-REPO LEASE (mkdir, steal-if-stale)      → single-writer
 #     honor the diskguard GATE (fleet-diskguard.sh --gate)  → never reap on a full disk
-#     read the prmap_<slug> cache pr-refresh already writes  → ZERO extra gh
+#     read the prmap_<slug> cache (git's, for a repo with no GitHub) → ZERO gh
 #     candidates = its MERGED/CLOSED PRs whose head branch STILL has a live
 #                  worktree or window (a local git/tmux check — zero gh)
 #     clean up to FLEET_CLEANUP_MAX_PER_TICK of them via bin/fleet-cleanup.sh <pr>,
@@ -239,7 +239,7 @@ reap_repo_prs() {
     # its progress notes go to stderr → this daemon's log. Pass FLEET_SESSION so it
     # resolves THIS fleet's repo/main/socket (it has no $TMUX) — via `env`, because
     # fleet_timebox runs its argv directly (no eval, so no VAR=val prefix).
-    # A `-` PR is a repo with no GitHub (issue #3601): pr-refresh wrote the row from
+    # A `-` PR is a repo with no GitHub (issue #3601): landed_prmap wrote the row from
     # git, and the janitor is driven by the branch.
     if [ "$pr" = - ]; then target=(--branch "$branch"); else target=("$pr"); fi
     tok=$(fleet_timebox "$cto" env FLEET_SESSION="$sess" bash "$BIN/fleet-cleanup.sh" ${target[@]+"${target[@]}"} --auto \
@@ -299,17 +299,40 @@ cleanup_repo() { (
     lease_acquire "$lease" "$me" || { log "$sess: [$repo] another cleaner holds the lease — skip"; echo 0; exit 0; }
     trap 'lease_release "$lease" "$me"' EXIT
   fi
-  # The repo's OWN prmap (pr-refresh writes one per hosted repo, #788) — the
-  # session-keyed fleet_cache would hand every repo the conf repo's map.
+  # The repo's OWN prmap (one per hosted repo, #788) — the session-keyed
+  # fleet_cache would hand every repo the conf repo's map. A repo with no GitHub
+  # (issue #3601) gets git's here, each tick; GitHub's PR map left with its
+  # refresher (issue #4899) — those sessions close by their task record.
   prmf="$FLEET_C/fleets/$slug/prmap"
+  if [ "${FLEET_FORGE:-github}" = none ]; then
+    mkdir -p "$(dirname "$prmf")" 2>/dev/null
+    landed_prmap "$repo" "$main" "${FLEET_BASE_BRANCH:-main}" > "$prmf.$$" \
+      && mv -f "$prmf.$$" "$prmf" && date +%s > "$prmf.ts"
+    rm -f "$prmf.$$"
+  fi
   if [ ! -f "$prmf.ts" ] || [ ! -s "$prmf" ]; then
-    log "$sess: [$repo] no prmap cache yet (pr-refresh hasn't run for $slug?) — skip"
+    log "$sess: [$repo] no prmap — skip"
     echo 0; exit 0
   fi
   used=0
   reap_repo_prs >&2
   echo "$used"
 ) }
+
+# --- a repo with no GitHub (FLEET_FORGE=none, issue #3601) ---------------------
+# It has no PRs, so its prmap is git's: one MERGED row per worktree branch whose
+# work fleet_landed finds on the base — the same shape, the PR column `-`, the
+# landing commit as the sha — and nothing for one still open. gh is never called.
+# (Written by the PR-map refresher until it left with issue #4899.)
+landed_prmap() {   # $1=repo $2=checkout $3=base → rows on stdout
+  local rp="$1" mn="$2" bs="$3" b land
+  git -C "$mn" worktree list --porcelain 2>/dev/null | sed -n 's#^branch refs/heads/##p' |
+  while IFS= read -r b; do
+    case "$b" in issue-[0-9]*|scratch-[0-9]*) ;; *) continue ;; esac
+    land=$(fleet_landed "$rp" "$b" "$mn" "$bs") || continue
+    printf '%s\t-\tMERGED\t\t\t%s\n' "$b" "$(printf '%s' "$land" | cut -d' ' -f2)"
+  done
+}
 
 # --- clean up ONE fleet. Runs in a subshell so its per-fleet conf never leaks. ---
 cleanup_fleet() { (
@@ -348,7 +371,7 @@ EOF_FORGE
   # Single-writer per REPO: two sessions serving one repo don't double-drive a
   # reap — each repo's lease is taken inside cleanup_repo.
 
-  # Detection is cache-only: the prmap pr-refresh already writes (ZERO extra gh).
+  # Detection is cache-only: the prmap (ZERO gh).
   # The PR pass runs FIRST (issue #3352): a merged PR is the surest reap there is,
   # and before this an idle pass that timed out (`rc=124`) ended the tick ahead of
   # it — on 2026-10-11 mac-c's idle pass timed out every tick from 06:47 and not

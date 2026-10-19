@@ -34,8 +34,8 @@
 #     no recovery map path consumer, so no map. The hub still gets its ledger row
 #     (reason `<trigger> no-map`) — a native compaction anywhere is worth knowing.
 #
-# The latest-comment link is the hook's ONE network read: bin/fleet-gh.sh (cache
-# first, REST under a GraphQL limit) bounded by a kernel alarm,
+# The latest-comment link is the hook's ONE network read: one gh call bounded by
+# a kernel alarm,
 # FLEET_PRECOMPACT_GH_SECS (default 8; 0 = offline, the issue URL only).
 #
 # Kill switch: FLEET_PRECOMPACT=0 in fleet.conf / the fleet overlay. Test seam:
@@ -128,9 +128,9 @@ if [ -n "$repo" ]; then
   fi
   gsecs="${FLEET_PRECOMPACT_GH_SECS:-8}"
   case "$gsecs" in ''|*[!0-9]*) gsecs=8 ;; esac
-  if [ -n "$issue" ] && [ "$gsecs" -gt 0 ] && [ -f "$BIN/fleet-gh.sh" ]; then
+  if [ -n "$issue" ] && [ "$gsecs" -gt 0 ] && command -v gh >/dev/null 2>&1; then
     comment=$(perl -e 'alarm shift; exec @ARGV or exit 127' "$gsecs" \
-        bash "$BIN/fleet-gh.sh" issue view "$issue" --repo "$repo" --json comments --max-age 600 \
+        gh issue view "$issue" --repo "$repo" --json comments \
         </dev/null 2>/dev/null \
       | python3 -c 'import json,sys
 try: c = json.load(sys.stdin).get("comments") or []
@@ -186,7 +186,7 @@ lines = [
 if n and repo:
     lines.append("- issue: https://github.com/%s/issues/%s" % (repo, n))
     lines.append("- latest issue comment: %s" % (e("PC_COMMENT") or
-                 "unknown — ~/.claude/fleet/bin/fleet-gh.sh issue view %s --json comments" % n))
+                 "unknown — gh issue view %s --repo %s --json comments" % (n, repo)))
 lines += [
     "- cwd: %s" % (e("PC_CWD") or "-"),
     "- branch: %s → base %s · HEAD %s" % (e("PC_BRANCH") or "-", e("PC_BASE") or "-", e("PC_HEAD") or "-"),

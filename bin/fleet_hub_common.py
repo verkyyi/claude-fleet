@@ -75,8 +75,8 @@ def reap_policy_ok(policy):
 # multiSelect (fleet-answer.sh --answer's grammar). Nothing else: each word
 # becomes an argv word of a script that types into a pane.
 ANSWER_RE = re.compile(r"yes|no|[1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}(?: [1-9][0-9]{0,2}(?:,[1-9][0-9]{0,2}){0,15}){0,7}")
-# GitHub reads through the fleet's local copy (issue #1274): tool → fleet-gh.sh
-# kind. Synchronous like fleet_status; gated by gh:read, never by fleet:read alone.
+# GitHub reads through the fleet's machine (issue #1274): tool → fleet-control-read.sh
+# gh kind. Synchronous like fleet_status; gated by gh:read, never by fleet:read alone.
 GH_READS = {"gh_issue_view": "issue", "gh_pr_view": "pr", "gh_pr_checks": "checks"}
 MAX_MESSAGE = 4000
 # The tool dirs every control adapter must see, whatever started it (issue

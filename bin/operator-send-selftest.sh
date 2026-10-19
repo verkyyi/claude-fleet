@@ -15,11 +15,8 @@
 #      is refused; a receipt TO an operator sender lands in the sender's book.
 #   E  the repo rail: a message naming another repo than the target window works
 #      is refused for good (exit 1).
-#   F  an issue comment whose worker lives on another machine: the bridge
-#      forwards it through the hub ONCE (relay id `bridge-<cid>`, the hub's
-#      idempotency key) and marks it seen — a redelivery is `dup`; on the
-#      worker's machine `--apply-forward` (via deliver) hands it over once and a
-#      second push of it is a dup.
+#   F  an issue comment an older machine's bridge forwarded: refused for good
+#      (exit 1, nothing delivered) — the issue bridge left with #4899.
 # tmux / python3 absent → SKIP. Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -32,7 +29,7 @@ L="opsd$$"
 export FLEET_SKIP_GLOBAL_CONF=1
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
-export FLEET_ISSUE_BRIDGE_STATE_DIR="$WORK/bridge" FLEET_DISPATCH_LEASE_DIR="$WORK/leases"
+export FLEET_DISPATCH_LEASE_DIR="$WORK/leases"
 export FLEET_HISTORY_LEDGER="$WORK/landed.tsv"
 : > "$FLEET_CONF_DIR/fleets/$L/conf"
 fx_repo "$FLEET_CONF_DIR" "$L" acme/app FLEET_MAIN="$WORK/main"
@@ -124,39 +121,10 @@ ok; [ "$rc" = 1 ] && [ "$(queued_with 'wrong repo')" = 0 ] || fail "E: another r
 deliver "$(relay 4 message "$FOP" "$U/issue-7" '{"text":"right repo","repo":"acme/app"}')"
 ok; [ "$rc" = 0 ] && [ "$(queued_with 'right repo')" = 1 ] || fail "E: the named repo matches ⇒ delivered" "rc=$rc $err"
 
-# --- F: an issue comment forwarded to the worker's machine, once ---------------------------
-SHIM="$WORK/shim"; mkdir -p "$SHIM"
-# The webhook path checks `tmux info` on the default server; nothing else here
-# talks to it (every lookup passes -L). The shim answers that one call.
-printf '#!/bin/sh\n[ "$1" = info ] && exit 0\nexec %s "$@"\n' "$REAL_TMUX" > "$SHIM/tmux"; chmod +x "$SHIM/tmux"
-hook() { # <cid> <issue> <author> <body>
-  python3 -c 'import json,sys; c,i,a,b=sys.argv[1:5]; print(json.dumps({"action":"created","comment":{"id":int(c),"author_association":"OWNER","user":{"login":a},"body":b},"issue":{"number":int(i)},"repository":{"full_name":"acme/app"}}))' "$@"
-}
-bdeliver() { # <payload>
-  sig="sha256=$(printf '%s' "$1" | python3 -c 'import hmac,hashlib,sys; print(hmac.new(b"s3", sys.stdin.buffer.read(), hashlib.sha256).hexdigest())')"
-  out=$(printf '%s' "$1" | env -u TMUX PATH="$SHIM:$PATH" FLEET_ISSUE_BRIDGE_SECRET=s3 FLEET_DELIVERY_SIG="$sig" \
-        bash "$BIN/fleet-issue-bridge.sh" --deliver 2>&1); rc=$?
-}
-P=$(hook 900001 42 bob 'please rebase')
-bdeliver "$P"
-f=$(outbox | head -1)
-ok; [ "$rc" = 0 ] && [ "$(outbox | wc -l | tr -d ' ')" = 1 ] && case "$out" in *"forwarded(#42->mac-a)"*) true ;; *) false ;; esac \
-  || fail "F: a comment for a worker elsewhere is forwarded through the hub" "rc=$rc $out"
-ok; [ -n "$f" ] && [ "$(jget "$f" id)" = "$OP#bridge-900001" ] && [ "$(jget "$f" to)" = "$F/issue-42" ] \
-  && [ "$(jget "$f" payload.bridge.cid)" = 900001 ] && [ "$(jget "$f" payload.repo)" = acme/app ] \
-  && case "$(jget "$f" payload.text)" in *"[issue #42 — comment from @bob]"*"please rebase"*) true ;; *) false ;; esac \
-  || fail "F: relay id bridge-<cid>, payload names repo + comment" "$(cat "$f" 2>/dev/null)"
-bdeliver "$P"
-ok; [ "$rc" = 0 ] && [ "$(outbox | wc -l | tr -d ' ')" = 1 ] && case "$out" in *"dup"*) true ;; *) false ;; esac \
-  || fail "F: the same comment again is a dup — forwarded once" "rc=$rc $out"
-rm -f "$OUTBOX"/*.json
-# The worker's machine (here, for #7): applied through the bridge, once.
+# --- F: an older machine's issue-bridge forward is refused for good (#4899) -----------------
 FW=$(relay bridge-900002 message "$FOP" "$U/issue-7" '{"text":"[issue #7 — comment from @bob]\n\nship it","repo":"acme/app","bridge":{"issue":7,"cid":900002}}')
 deliver "$FW"
-ok; [ "$rc" = 0 ] && [ "$(queued_with 'ship it')" = 1 ] || fail "F: --apply-forward hands the comment to #7's window" "rc=$rc $err"
-deliver "$FW"
-ok; [ "$rc" = 0 ] && [ "$(queued_with 'ship it')" = 1 ] && case "$err" in *dup*) true ;; *) false ;; esac \
-  || fail "F: pushed again ⇒ dup, still one delivery" "rc=$rc $err"
+ok; [ "$rc" = 1 ] && [ "$(queued_with 'ship it')" = 0 ] || fail "F: a bridge forward is refused, nothing delivered" "rc=$rc $err"
 deliver "$(relay bridge-900003 message "$FOP" "$U/issue-7" '{"text":"x","repo":"acme/app","bridge":{"issue":"7; rm -rf /","cid":1}}')"
 ok; [ "$rc" = 1 ] || fail "F: a malformed bridge forward is refused" "rc=$rc $err"
 

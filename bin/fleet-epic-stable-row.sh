@@ -98,13 +98,13 @@ have_commit() {
 if [ -n "$epic" ]; then
   # only the members filed in THIS repo (issue #1942): an EPIC may span repos, and
   # another repo's #N is not this repo's issue-N branch — stable is per repo
-  members=$(bash "$BIN_DIR/fleet-gh.sh" run api "repos/$epic_repo/issues/$epic/sub_issues" --paginate \
+  members=$(gh api "repos/$epic_repo/issues/$epic/sub_issues" --paginate \
       --jq '.[] | "\(.repository_url | sub("^.*/repos/"; ""))\t\(.number)"' 2>/dev/null) ||
     die "could not read #$epic's sub-issues on $epic_repo (gh auth?)"  # no-gh-ok: a hint
   members=$(printf '%s\n' "$members" | awk -F '\t' -v r="$repo" 'NF == 1 || $1 == r { print $NF }')
   for m in $members; do
     case "$m" in ''|*[!0-9]*) continue ;; esac
-    sha=$(bash "$BIN_DIR/fleet-gh.sh" run pr list --repo "$repo" --state merged --head "issue-$m" --limit 5 \
+    sha=$(gh pr list --repo "$repo" --state merged --head "issue-$m" --limit 5 \
             --json mergeCommit,mergedAt --jq 'map(select(.mergeCommit != null)) | sort_by(.mergedAt) | last | .mergeCommit.oid // empty' 2>/dev/null) || sha=""
     [ -n "$sha" ] && merged="$merged
 $sha"
@@ -131,7 +131,7 @@ t_short=$(short "$target"); t_subj=$(g log -1 --format=%s "$target" 2>/dev/null)
 # the last release-train runs (newest first): one TAB row each —
 # status, conclusion, head sha, url. Unreadable ⇒ empty.
 train_runs() {
-  bash "$BIN_DIR/fleet-gh.sh" run api "repos/$repo/actions/workflows/release-train.yml/runs?per_page=10" \
+  gh api "repos/$repo/actions/workflows/release-train.yml/runs?per_page=10" \
     --jq '.workflow_runs[] | "\(.status)\t\(.conclusion // "-")\t\(.head_sha)\t\(.html_url)"' 2>/dev/null
 }
 

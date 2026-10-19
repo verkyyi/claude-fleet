@@ -97,7 +97,16 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-ui-lang.sh"   # fleet_ui_fail — the one failure line (issue #1618)
-. "$BIN/fleet-gh-lib.sh"   # merged-PR check with the REST fallback (issue #1042)
+
+# merged_heads <repo> <branch> [--at] — one line per MERGED PR on <branch>:
+# `ref<TAB>sha`, or `ref<TAB>mergedAt<TAB>sha` with --at (issues #1542, #1842: the
+# merge time feeds the liveness probe, the head sha keeps a commit made after the
+# merge). Plain gh, timed (issue #4899 took the GitHub layer away).
+merged_heads() {
+  local q='.[] | "\(.headRefName)\t\(.headRefOid)"' j=headRefName,headRefOid
+  [ "${3:-}" = --at ] && { q='.[] | "\(.headRefName)\t\(.mergedAt)\t\(.headRefOid)"'; j=$j,mergedAt; }
+  fleet_timebox 15 gh -R "$1" pr list --state merged --head "$2" --json "$j" -q "$q"
+}
 
 # --- script-facing result (issue #596) ----------------------------------------
 # Print ONE token on stdout for the caller. The INTERACTIVE passes print UI, not
@@ -455,7 +464,7 @@ if [ "$(tmux display-message -t "$target" -p '#{@raw}' 2>/dev/null)" = 1 ]; then
     || git -C "$MAIN" rev-parse --verify -q "$SBASE" 2>/dev/null)"
   SMERGED=""
   [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 \
-    && SMERGED="$(fleet_gh_merged_heads "${FLEET_REPO:-}" "$sbranch" --sha 2>/dev/null)"
+    && SMERGED="$(merged_heads "${FLEET_REPO:-}" "$sbranch" 2>/dev/null)"
   # The target was vetted by guard_live above; the worktree probe looks at the
   # OTHER windows only (issue #3352 — its own panes are not another user).
   sreason="$(fleet_reap_ok "$swt" "$MAIN" "$sbranch" "$shead" "$SMASTER" "$SMERGED" "" "$target")"
@@ -635,7 +644,7 @@ if [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1; then
 }$mref $msha"
     mep="$(fleet_epoch_from_iso "$miso")"
     case "$mep" in ''|*[!0-9]*) ;; *) [ "$mep" -gt "${MERGED_AT:-0}" ] && MERGED_AT="$mep" ;; esac
-  done < <(fleet_gh_merged_heads "$REPO" "$branch" --at --sha 2>/dev/null)
+  done < <(merged_heads "$REPO" "$branch" --at 2>/dev/null)
 fi
 # No merged-PR answer — a repo with no GitHub, or GitHub silent (issue #3601): the
 # merge time is git's, read off the locally-known base (no fetch on the ⌃x path).

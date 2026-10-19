@@ -800,8 +800,8 @@ func fleetRPCRaw(ctx context.Context, script string, req map[string]any) (json.R
 // requestTimeout bounds one hub read request on this node.
 const requestTimeout = 20 * time.Second
 
-// ghRequestTimeout bounds a gh_* read: fleet-gh.sh may fall through its local
-// copy to gh, then to REST, and fleet-control.py gives it 20s of its own.
+// ghRequestTimeout bounds a gh_* read: one timed gh call on the node, and
+// fleet-control.py gives it 20s of its own.
 const ghRequestTimeout = 30 * time.Second
 
 // writeTimeout bounds one hub write. fleet-control.py's submit only journals

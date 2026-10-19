@@ -20,9 +20,9 @@
 #      reading (tokenledger/agent/node_cluster_reading.go
 #      renderMachineReading) is fleet-machine-tasks.py's render, byte for byte,
 #      and the reader takes it
-#   F  class session (#3671): spinner and webhook serve only a login's sessions — the
-#      daemon runs them only while it has one; class worker (#4231): issue-bridge and
-#      pr-refresh only while it has one awake or asleep; a session row on a machine-table task
+#   F  class session (#3671): the spinner serves only a login's sessions — the
+#      daemon runs it only while it has one; class worker (#4231) has no unit left
+#      since #4899; a session row on a machine-table task
 #      is red; bin/fleet-node-supervisor-selftest.py V (session units, a restart
 #      adopts instead of doubling, an orphaned copy stops, a task is not doubled)
 set -u
@@ -158,8 +158,8 @@ print(" ".join(sorted(u["name"] for u in us if u.get("session") and not u.get("a
       + " ".join(sorted(u["name"] for u in us if u.get("asleep"))))
 PY
 )
-[ "$sess" = "spinner webhook | issue-bridge pr-refresh" ] \
-  && ok "F spinner and webhook run only while the login has a session; issue-bridge and pr-refresh (class worker, #4231) while it has one awake or asleep" \
+[ "$sess" = "spinner | " ] \
+  && ok "F the spinner runs only while the login has a session; no class-worker unit is left (#4899)" \
   || bad "F session units: '$sess'"
 cp "$ROOT/conf/node-tasks.tsv" "$fake/conf/"
 sed -i.bak 's/^orphans	machine	machine	/orphans	machine	session	/' "$fake/conf/node-tasks.tsv"

@@ -1211,7 +1211,7 @@ Each `fleet_sessions` row carries `observed_at` / `age_sec` for that.
 The rest of the Fleet Hub moves in on the same switch: `worker_start`,
 `worker_message`, `worker_stop`, `worker_resume`, `config_set` and `gh_comment`
 (journalled writes), plus `gh_issue_view` / `gh_pr_view` / `gh_pr_checks`
-(live reads through the node's `fleet-gh.sh`). Same MCP endpoint, same
+(live gh reads on the node). Same MCP endpoint, same
 arguments and codes as `bin/fleet_hub.py` (`docs/FLEET-HUB.md`); over HTTP a
 write is `POST /v1/fleet/<tool>` with a JSON body (`Content-Type:
 application/json` — a GET, or any other type, is refused).

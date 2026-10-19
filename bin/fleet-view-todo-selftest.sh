@@ -2,10 +2,8 @@
 # shellcheck disable=SC1010  # `done` here is a state word handed to w(), not the keyword
 # fleet-view-todo-selftest.sh — ⌘P's groups say what the person should do (issue #4225).
 #
-#   A  the ask book (fleet-issue-bridge.sh bridge_ask_note): a ⛔ comment writes
-#      $G/asks/<slug>#<N> with its question; the worker's own later note keeps it;
-#      a later person's comment, a `fleet:answer` or a 「决定…」 removes it; an
-#      older comment relayed late never does
+#   A  (the ask book's writer, the issue bridge, left with #4899; C and D read a
+#      book this test writes itself)
 #   B  the producer (tmux-dashboard-rows.sh --rows) marks a bound session 已结束
 #      once its issue is off the open-issue list and its last state is older than
 #      FLEET_VIEW_LANDED_SECS — not while the issue is open, not inside the window,
@@ -22,7 +20,6 @@ set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROWS="$BIN/tmux-dashboard-rows.sh"
-BRIDGE="$BIN/fleet-issue-bridge.sh"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-view-todo selftest: python3 absent — SKIP'; exit 0; }
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fvtodo-selftest.XXXXXX")" || exit 2
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -36,39 +33,6 @@ printf 'FLEET_REPO="acme/app"\n' > "$WORK/conf/fleets/$S/repos/acme-app.conf"
 
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 pass() { echo "ok   $*"; }
-
-# ============================================================================
-# A. the ask book
-# ============================================================================
-(
-  FLEET_C="$C"; FROM_PREFIX='<!-- fleet:from '
-  : "$FLEET_C" "$FROM_PREFIX"   # read by the eval'd function below (opaque to shellcheck)
-  now() { date +%s; }
-  eval "$(awk '/^bridge_ask_note\(\) \{/,/^}/' "$BRIDGE")"
-  command -v bridge_ask_note >/dev/null || { echo "no bridge_ask_note in $BRIDGE"; exit 1; }
-  F="$G/asks/acme-app#12"
-  W='<!-- fleet:from role=worker session=s issue=12 -->'
-  bridge_ask_note acme-app 12 100 $'⛔ blocked: 要不要先合 #7？\n\nmore\n<!-- fleet:no-relay -->\n'"$W"
-  [ "$(cut -f1,3 "$F")" = $'100\t要不要先合 #7？' ] || { echo "ask not written: $(cat "$F" 2>&1)"; exit 1; }
-  bridge_ask_note acme-app 12 101 "still working on it"$'\n'"$W"
-  [ -f "$F" ] || { echo "the worker's own note answered it"; exit 1; }
-  bridge_ask_note acme-app 12 99 "an older person's comment, relayed late"
-  [ -f "$F" ] || { echo "an older comment answered it"; exit 1; }
-  bridge_ask_note acme-app 12 102 "先合 #7"
-  [ -f "$F" ] && { echo "a person's answer did not remove it"; exit 1; }
-  bridge_ask_note acme-app 12 103 $'⛔ blocked — needs authorization: 推 tag？\n<!-- fleet:ask v=1 id=x -->\n'"$W"
-  [ "$(cut -f3 "$F")" = '推 tag？' ] || { echo "a permission ask: $(cat "$F")"; exit 1; }
-  bridge_ask_note acme-app 12 104 $'默认\n<!-- fleet:answer row=x by=default -->\n<!-- fleet:from role=steward -->'
-  [ -f "$F" ] && { echo "a fleet:answer did not remove it"; exit 1; }
-  bridge_ask_note acme-app 12 105 $'⛔ blocked: again\n'"$W"
-  bridge_ask_note acme-app 12 106 $'决定（直达）：先不推\n'"$W"
-  [ -f "$F" ] && { echo "a 决定 did not remove it"; exit 1; }
-  bridge_ask_note acme-app x 107 '⛔ blocked: no number'
-  [ -e "$G/asks/acme-app#x" ] && { echo "a non-number issue wrote a file"; exit 1; }
-  exit 0
-) || fail "A: the ask book" "$(cat "$G"/asks/* 2>/dev/null)"
-rm -rf "$G/asks"
-pass "A  ask book: ⛔ writes, the worker's own note keeps, a person / fleet:answer / 决定 removes, late relays ignored"
 
 # ============================================================================
 # B. the producer — a PATH-shimmed tmux replays a fixture window list

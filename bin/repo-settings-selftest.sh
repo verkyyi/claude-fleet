@@ -15,7 +15,7 @@
 #   basesync  fleet-base-sync.sh walks every hosted repo, each with its own deps
 #   sleep     FLEET_SLEEP_MCP_RESTARTABLE resolved per window/worktree repo
 #             (fleet_sleep_mcp.restartable), the hint naming the repo's conf
-#   switches  FLEET_CLEANUP (cleanup daemon), FLEET_ISSUE_BRIDGE (hub message
+#   switches  FLEET_CLEANUP (cleanup daemon), FLEET_CHECK_REQUIRED (the check
 #             gate)
 #
 # tmux: a PATH shim maps every `-L <label>` to a private socket under $WORK —
@@ -56,7 +56,7 @@ export FLEET_DISK_FLOOR_GB=0 FLEET_WORKTREE_SETUP_LOG="$WORK/setup.log"
 export LAND_LEASE_DIR="$WORK/leases" FLEET_LAND_LEASE_DIR="$WORK/leases"
 unset TMUX TMUX_PANE FLEET_MAIN FLEET_REPO FLEET_BASE_BRANCH FLEET_SESSION FLEET_WORKTREE_ROOT
 unset FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE
-unset FLEET_ISSUE_BRIDGE FLEET_CLEANUP
+unset FLEET_CHECK_REQUIRED FLEET_CLEANUP
 . "$BIN/fleet-lib.sh"
 
 FAILS=0
@@ -90,7 +90,7 @@ cat > "$FLEET_CONF_DIR/fleets/$M/conf" <<EOF
 FLEET_WORKTREE_ROOT="$WORK/wt"
 FLEET_WORKTREE_SETUP="$WORK/setup-a.sh"
 FLEET_SLEEP_MCP_RESTARTABLE="fleetmcp"
-FLEET_ISSUE_BRIDGE=1
+FLEET_CHECK_REQUIRED=1
 EOF
 cat > "$(fleet_repo_conf_file "$M" o/b)" <<EOF
 FLEET_REPO="o/b"
@@ -99,7 +99,7 @@ FLEET_BASE_BRANCH="master"
 FLEET_WORKTREE_SETUP="$WORK/setup-b.sh"
 FLEET_BASE_DEPS=1
 FLEET_SLEEP_MCP_RESTARTABLE="bmcp,playwright"
-FLEET_ISSUE_BRIDGE=0
+FLEET_CHECK_REQUIRED=0
 FLEET_CLEANUP=0
 EOF
 cat > "$(fleet_repo_conf_file "$M" o/e)" <<EOF
@@ -130,8 +130,8 @@ eq 'a cleanup unset'        "$(fleet_repo_conf_get $M o/a FLEET_CLEANUP)" ""
 eq 'b cleanup'              "$(fleet_repo_conf_get $M o/b FLEET_CLEANUP)" "0"
 fleet_repo_conf_get $M o/zz FLEET_CLEANUP >/dev/null; eq 'unhosted rc' "$?" 1
 fleet_repo_conf_get $M o/a 'x;y' >/dev/null; eq 'bad key rc' "$?" 2
-eq 'cli b'       "$(bash "$BIN/fleet-repo.sh" get FLEET_ISSUE_BRIDGE o/b --session $M)" "0"
-eq 'cli e tsv'   "$(bash "$BIN/fleet-repo.sh" get FLEET_ISSUE_BRIDGE o/e --session $M --tsv)" \
+eq 'cli b'       "$(bash "$BIN/fleet-repo.sh" get FLEET_CHECK_REQUIRED o/b --session $M)" "0"
+eq 'cli e tsv'   "$(bash "$BIN/fleet-repo.sh" get FLEET_CHECK_REQUIRED o/e --session $M --tsv)" \
                  "o/e	$(fleet_repo_conf_file $M o/e)	1"
 eq 'cli degenerate' "$(bash "$BIN/fleet-repo.sh" get FLEET_WORKTREE_SETUP o/c --session $D --tsv)" \
                     "o/c	$(fleet_repo_conf_file $D o/c)	$WORK/setup-c.sh"
@@ -149,7 +149,7 @@ eq 'caller env survives (baseline)' \
 # One road (issue #1943): a one-repo fleet resets to the baseline too, so a value
 # a previous load left behind never survives into the next repo's view.
 eq 'one-repo reset like any other' \
-   "$( FLEET_ISSUE_BRIDGE=7; fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_ISSUE_BRIDGE-unset}" )" "$( fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_ISSUE_BRIDGE-unset}" )"
+   "$( FLEET_CHECK_REQUIRED=7; fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_CHECK_REQUIRED-unset}" )" "$( fleet_load_repo_conf $D o/c; printf '%s' "${FLEET_CHECK_REQUIRED-unset}" )"
 leg leak
 
 # --- setup -----------------------------------------------------------------------

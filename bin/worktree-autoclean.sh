@@ -377,7 +377,7 @@ process_locked() {
   if [ -n "$inum" ] && [ "$FORGE" != none ]; then
     local ist=""
     if [ -n "$REPO" ]; then
-      ist="$(fleet_gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
+      ist="$(gh -R "$REPO" issue view "$inum" --json state -q .state 2>/dev/null)"
     fi
     if [ "$ist" != CLOSED ]; then
       reap_detached "$dir" "$branch"   # past the liveness gate: no window, so orphans (#469)
@@ -442,7 +442,7 @@ clean_fleet() {   # $1=main-checkout  $2=owner/name  $3=base-branch  $4=protecte
     || git -C "$REPO_ROOT" rev-parse --verify -q "$BASE")"
   [ -z "$MASTER" ] && { say "SKIP  $REPO_ROOT (cannot resolve base $BASE)"; return; }
   MERGED_PRS=""
-  [ -n "$REPO" ] && [ "$FORGE" != none ] && MERGED_PRS="$(fleet_gh -R "$REPO" pr list \
+  [ -n "$REPO" ] && [ "$FORGE" != none ] && MERGED_PRS="$(gh -R "$REPO" pr list \
     --state merged --limit 400 --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)"
   say "fleet $REPO_ROOT  (repo=${REPO:-·} base=$BASE)"
   dir=""; head=""; branch=""

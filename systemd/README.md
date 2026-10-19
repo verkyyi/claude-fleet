@@ -1,19 +1,16 @@
 # Linux systemd user units
 
-Parity with `launchd/` for Linux. Three always-on services (spinner, memguard +
-the optional webhook daemon) plus the `.timer` + `.service` pairs matching the launchd
+Parity with `launchd/` for Linux. Two always-on services (spinner, memguard)
+plus the `.timer` + `.service` pairs matching the launchd
 `StartInterval`s:
 
 | Unit | Cadence | launchd equivalent | Optional? |
 |---|---|---|---|
 | `claude-fleet-spinner.service` | always-on (`Restart=always`) | `com.claude-fleet.spinner` (KeepAlive) | required |
-| `claude-fleet-webhook.service` | always-on (`Restart=always`) | `com.claude-fleet.webhook` (KeepAlive) | optional (fresh ~1s PR/issue/CI status via `gh webhook forward`, no public endpoint; needs FLEET_WEBHOOK=1 per fleet + the `cli/gh-webhook` extension) |
 | `claude-fleet-memguard.service` | always-on (`Restart=always`), samples every 2s | `com.claude-fleet.memguard` (KeepAlive) | recommended (stops a fleet command whose memory spikes under pressure, reports memory-holding orphans; issue #1292) |
 | `claude-fleet-collect.timer` | every 60s, +10s after start | `com.claude-fleet.collect` | required |
 | `claude-fleet-diskguard.timer` | every 60s, +10s after start | `com.claude-fleet.diskguard` | recommended (disk gate + forensics; also the ON-by-default orphaned-runaway watchdog, issue #697 — a machine with no diskguard unit has no machine-level runaway defense) |
 | `claude-fleet-quotawatch.timer` | every 60s, +15s after start | `com.claude-fleet.quotawatch` | recommended with a ccquota hub (the pre-emptive account rotation's own tick, issue #551; no-op without `CCQUOTA_HUB_URL` + an accounts pool) |
-| `claude-fleet-pr-refresh.timer` | every 15s, +5s after start | `com.claude-fleet.pr-refresh` | recommended (fast PR/CI status) |
-| `claude-fleet-issue-bridge.timer` | every 15s, +5s after start | `com.claude-fleet.issue-bridge` | optional (issue→worker relay; LLM tokens) |
 | `claude-fleet-cleanup.timer` | every 60s, +25s after start | `com.claude-fleet.cleanup` | recommended (reap worktrees after merges — the worker does the merging, this only cleans up) |
 | `claude-fleet-ledger-watch.timer` | every 60s, +30s after start | `com.claude-fleet.ledger-watch` | recommended (index every closed worker session for `/fleet-history` resume) |
 | `claude-fleet-base-sync.timer` | every 60s, +35s after start | `com.claude-fleet.base-sync` | recommended (keep the local base fast-forwarded to the remote, merge-independent; ON per fleet unless `FLEET_BASE_SYNC=0`) |
@@ -40,14 +37,11 @@ systemctl --user enable --now claude-fleet-collect.timer
 systemctl --user enable --now claude-fleet-diskguard.timer   # recommended: crash-guard
 systemctl --user enable --now claude-fleet-memguard.service # recommended: stop a memory spike within seconds (#1292)
 systemctl --user enable --now claude-fleet-quotawatch.timer  # with a ccquota hub: pre-emptive account rotation on its own 60s tick (#551)
-systemctl --user enable --now claude-fleet-pr-refresh.timer  # recommended: fast ~15s PR/CI status
 systemctl --user enable --now claude-fleet-cleanup.timer    # recommended: reap worktrees after merges (it merges nothing itself); ON per fleet unless FLEET_CLEANUP=0
 systemctl --user enable --now claude-fleet-ledger-watch.timer # recommended: index every closed worker session for resume; ON per fleet unless FLEET_LEDGER_WATCH=0
 systemctl --user enable --now claude-fleet-base-sync.timer  # recommended: keep the local base fast-forwarded to the remote (merge-independent); ON per fleet unless FLEET_BASE_SYNC=0
 systemctl --user enable --now claude-fleet-install-sync.timer # recommended: follow refs/tags/stable every 30 min when idle, roll back on a failed doctor; ON per login unless FLEET_INSTALL_SYNC=0
 # optional:
-systemctl --user enable --now claude-fleet-issue-bridge.timer # issue→worker relay — needs FLEET_ISSUE_BRIDGE=1 per fleet
-systemctl --user enable --now claude-fleet-webhook.service  # fresh ~1s PR/issue/CI status — needs FLEET_WEBHOOK=1 per fleet + `gh extension install cli/gh-webhook`
 systemctl --user enable --now claude-fleet-worktree-autoclean.timer
 
 # 3. Keep the units running when you are not logged in (detached fleets).

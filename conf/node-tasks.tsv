@@ -35,22 +35,18 @@ collect	unit	login	the dash collector for the login's tmux server
 cred-relay	unit	login	the login's relay pass, renewed when the machine's shared proxy asks (no template: the supervisor's ACCOUNT_BUILTIN, #4674)
 diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog is the machine's
 install-sync	unit	login	follows stable for the login's install (a managed login answers off · follows the runtime)
-issue-bridge	unit	worker	relays the login's issue comments into its sessions: nothing to relay into with no worker window
 ledger-watch	unit	login	the login's child-report ledgers
 memguard	unit	machine	the machine's memguard template: never run per login (the machine table's memguard is the one copy)
 peerlink	unit	login	the login's links into other machines' views
-pr-refresh	unit	worker	gh pr list for the login's own repos with its own token; stamps its tmux windows: none to stamp with no worker window
 quotawatch	unit	login	the login's account quota policy and its sessions' warnings
 sleep	unit	login	hibernates the login's idle sessions
 spinner	unit	session	animates the login's session windows: nothing to animate with no session
-webhook	unit	session	the login's GitHub webhook receiver: a freshness kick for its sessions (pollers stay the backstop); only where the daemon is seated — elsewhere webhook-machine serves every login
 worktree-autoclean	unit	login	the login's stale worktrees
 cred-proxy-shared	machine	machine	the shared credential proxy, one for every login
 node-agent	machine	machine	the one node program, each login a tenant on its link
 entry	machine	machine	the entry port's sshd
 entry-revocations	machine	machine	the entry's revocation follower
 ci-runner	machine	machine	the test runner
-webhook-machine	machine	machine	the GitHub webhook forwarder, one for every login: one localhost listener, each login's forwards and routes run as that login (#4358)
 sshd	machine	machine	sshd on a Linux node
 diskguard	machine	machine	disk, CPU and orphan watch for the whole machine
 memguard	machine	machine	memory spike / orphan watch for every process on the machine

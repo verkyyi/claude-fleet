@@ -387,7 +387,7 @@ def check_segment(masked_seg, raw_seg, orig_seg, span, masked_cmd):
                 "\"${P:-/tmp/x}\"/*, or the literal path — then run it again. "
                 "Claude Code would otherwise stop for a person's approval" % bad)
 
-    # 3) Inter-agent messaging must go through the issue-bridge, not a raw
+    # 3) Inter-agent messaging must go through the peer channel (send), not a raw
     #    send-keys into a live Claude TUI — send-keys is racy (bracketed-paste
     #    swallows the Enter). SELF-SCOPED TO FLEET SERVERS (#528): the rail
     #    exists to protect a live worker's TUI, and a tmux server that hosts no

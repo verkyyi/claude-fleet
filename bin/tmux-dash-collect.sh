@@ -3,16 +3,14 @@
 # external status work and writes it to cache files; the dash producer only READS
 # these, so the dashboard renders instantly. Run from launchd
 # (com.claude-fleet.collect, StartInterval 60s) or a systemd user timer.
-# PR status (prmap_<slug>, the flat prmap mirror, and @prci/@pfg) is NOT written
-# here — it lives in bin/tmux-pr-refresh.sh, which owns it on a faster ~15s tick
-# (see #81). The collector still WRITES sessmap and git_<key>, which that
-# refresher reads; the two never write the same cache file.
+# PR status (prmap_<slug>, @prci/@pfg) is NOT written here: its refresher left
+# with issue #4899 (a repo with no GitHub gets git's prmap from the cleanup daemon).
 # Writes under $C = $TMPDIR/.claude-dash, one directory per fleet (issue #181):
 #   global/sessmap        — session<TAB>slug<TAB>repo  (one row per live tmux session)
 #   fleets/<slug>/issues  — milestone<TAB>#num<TAB>assignee<TAB>title per repo (gh, ≥90s)
 #   fleets/<slug>/labels  — #num<TAB>comma-joined-labels per repo, split from the SAME
-#                           issues fetch (no extra gh call). Read by fleet-gh.sh's
-#                           issue view and the spawn's priority read (fleet-lib.sh)
+#                           issues fetch (no extra gh call). Read by the spawn's
+#                           priority read (fleet-lib.sh)
 #   fleets/<slug>/parents — child<TAB>parent per repo for sub-issues (issue #335), from
 #                           a small separate GraphQL pass (parent isn't in `gh issue
 #                           list --json`). Read by fleet-hub-sessions.sh (an EPIC's members)
@@ -84,11 +82,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/fleet-lib.sh"
 # shellcheck source=/dev/null
 . "$BIN/usage-lib.sh"     # fleet_limit_banner (pure lib, no dispatch)
-# Background reads shared per repo (issues #1271, #3529): guarded — an install or
-# a sandbox without the gh lib just fetches, as it always has.
-# shellcheck source=/dev/null
-[ -f "$BIN/fleet-gh-lib.sh" ] && . "$BIN/fleet-gh-lib.sh"
-command -v fleet_gh_share_on >/dev/null 2>&1 || { fleet_gh_share_on() { return 1; }; fleet_gh_share_get() { return 1; }; fleet_gh_share_put() { return 0; }; }
 C="${TMPDIR:-/tmp/claude-fleet-$(id -u)}/.claude-dash"; mkdir -p "$C"
 # Per-fleet cache layout (issue #181): slug-keyed fetches live under fleets/<slug>/
 # and machine-wide caches under global/. G is the global bucket.
@@ -124,8 +117,7 @@ else
 fi
 
 # Targeted mode (issue #315): `--issues <owner/repo>` refreshes JUST that repo's
-# issues/labels cache NOW and exits (the webhook handler's instant kick,
-# bin/fleet-webhook.sh), skipping the git/ctx/usage/snapshot work of a full 60s
+# issues/labels cache NOW and exits, skipping the git/ctx/usage/snapshot work of a full 60s
 # tick. The collector stays the SINGLE writer of issues_<slug>. Normal (no-arg)
 # invocation is byte-for-byte unchanged.
 TARGET_ISSUES_REPO=''
@@ -157,7 +149,7 @@ cache_key() {
 }
 
 # fetch_issues_for REPO SLUG [FORCE] — the SINGLE issues/labels fetch, shared by the
-# per-repo TTL-gated loop below AND the targeted `--issues <repo>` webhook kick
+# per-repo TTL-gated loop below AND the targeted `--issues <repo>` kick
 # (issue #315) so the two can never drift on the jq/column contract. FORCE=1
 # bypasses the TTL (the kick wants it NOW); else it fetches only when the cache is
 # older than GH_TTL. No-op (return) when gh is missing.
@@ -169,7 +161,7 @@ cache_key() {
 # shifting the label column and dropping the issue. We then derive:
 #   issues_<slug>  — the 4-column backlog (milestone, #num, assignee, title), keeping
 #                    its contract EXACTLY (readers `cut`/`read` fields 1-4).
-#   labels_<slug>  — #num<TAB>labels for EVERY open issue (fleet-gh.sh, fleet-lib.sh).
+#   labels_<slug>  — #num<TAB>labels for EVERY open issue (fleet-lib.sh).
 # Deriving both from one fetch keeps the labels cache zero-extra-token. The raw temp
 # is <name>.$$, so the EXIT trap sweeps it if we die mid-split.
 fetch_issues_for() {
@@ -181,26 +173,9 @@ fetch_issues_for() {
   command -v gh >/dev/null 2>&1 || return 0
   # A repo not on GitHub has no GitHub backlog to fetch (issue #3600): never gh.
   [ "$(fleet_repo_forge "$rp")" = none ] && return 0
-  # GitHub unreachable (issue #4841): keep the last issues/labels caches.
-  command -v fleet_gh_ready >/dev/null 2>&1 && { fleet_gh_ready || return 0; }
   if [ "$force" = 1 ] || [ $(( $(now) - its )) -ge "$ttl" ]; then
-    # Shared per repo (issue #3529): a trusted login's copy younger than the TTL,
-    # or the one another login is fetching right now, instead of asking GitHub.
-    # A webhook kick (force) still fetches: it was asked for NOW.
-    if [ "$force" != 1 ] && fleet_gh_share_get "$rp" issues "$ttl" "$FD" issues.ts issues labels parents issues.json; then
-      return 0
-    fi
-    local fetched=0 inc=''
     raw="$FD/issuesx.$$"
-    # Shared, the list comes by increments (fleet_gh_issues.py: REST since + ETag;
-    # 0 changed · 3 not modified · else the full GraphQL list below).
-    if fleet_gh_share_on; then
-      python3 "$BIN/fleet_gh_issues.py" sync --repo "$rp" --dir "$FD" 2>/dev/null; inc=$?
-      case "$inc" in 0|3) fetched=1 ;; *) inc='' ;; esac
-    fi
-    if [ -n "$inc" ]; then
-      :
-    elif fleet_gh issue list --repo "$rp" --state open --limit 300 \
+    if fleet_timebox 30 gh issue list --repo "$rp" --state open --limit 300 \
       --json number,title,milestone,assignees,labels \
       --jq '.[] | (.labels|map(.name)) as $l | ($l|join(","))+"\t"+(.milestone.title // "· no milestone")+"\t#"+(.number|tostring)+"\t"+((((.assignees|map(.login)|join(","))[0:10]) | if .=="" then "·" else . end))+"\t"+(.title)' \
       2>/dev/null | utf8_scrub > "$raw"; then
@@ -208,7 +183,6 @@ fetch_issues_for() {
         && mv "$FD/issues.$$" "$FD/issues"
       awk -F'\t' '{n=$3; sub(/^#/,"",n); print n"\t"$1}' "$raw" > "$FD/labels.$$" \
         && mv "$FD/labels.$$" "$FD/labels"
-      fetched=1
     fi
     rm -f "$raw"
     # parent→child links (issue #335): sub-issues are NOT exposed by the `gh issue
@@ -224,12 +198,7 @@ fetch_issues_for() {
     # of repo B whose parent is A's #7 must not nest under B's own #7 — numbers
     # repeat across repos. Such a member renders flat in B's backlog.
     owner="${rp%%/*}"; name="${rp#*/}"
-    # Nothing changed since the last increment ⇒ the links did not either — asked
-    # again only once the copy is FLEET_GH_PARENTS_TTL (600s) old.
-    if [ "$inc" = 3 ] && [ -f "$FD/parents" ] \
-       && [ $(( $(now) - $(_fleet_gh_mtime "$FD/parents" || echo 0) )) -lt "${FLEET_GH_PARENTS_TTL:-600}" ]; then
-      :
-    elif fleet_gh api graphql --paginate \
+    if fleet_timebox 30 gh api graphql --paginate \
       -f query='query($owner:String!,$name:String!,$endCursor:String){repository(owner:$owner,name:$name){issues(first:100,states:OPEN,after:$endCursor){pageInfo{hasNextPage endCursor}nodes{number parent{number repository{nameWithOwner}}}}}}' \
       -F owner="$owner" -F name="$name" \
       --jq '.data.repository.issues.nodes[]|select(.parent!=null and ((.parent.repository.nameWithOwner // "")|ascii_downcase) == ("'"$rp"'"|ascii_downcase))|"\(.number)\t\(.parent.number)"' \
@@ -239,14 +208,11 @@ fetch_issues_for() {
       rm -f "$FD/parents.$$"
     fi
     now > "$FD/issues.ts"
-    # publish only what was really fetched (issues.ts last — it is the copy's
-    # freshness) and drop the claim either way
-    fleet_gh_share_put "$rp" issues "$fetched" "$FD" issues.ts issues labels parents issues.json
   fi
 }
 
 # Targeted issues kick (issue #315): `--issues <owner/repo>` force-refreshes JUST
-# that repo's issues/labels cache and exits — the webhook handler's instant kick,
+# that repo's issues/labels cache and exits — an instant kick,
 # skipping all the git/ctx/usage/escalation/snapshot work a full tick does. Placed
 # BEFORE the tmux/socket enumeration so it stays cheap.
 if [ -n "$TARGET_ISSUES_REPO" ]; then
@@ -258,7 +224,7 @@ fi
 # --- idle gate (issue #1077) ---------------------------------------------------
 # No live fleet socket for FLEET_DAEMON_IDLE_AFTER (300s) ⇒ do a full tick only
 # once every IDLE_AFTER, not every 60s; a spawn's wake marker or any live socket
-# reopens it at once. After the targeted --issues mode (a webhook kick is always
+# reopens it at once. After the targeted --issues mode (a kick is always
 # wanted) and after the scheduling stamp at the top (so a gated tick still proves
 # launchd ran it). Guarded like that stamp: a half-synced install without the
 # lib just works every tick.
@@ -273,7 +239,7 @@ fi
 # so on stderr (→ logs/collect.launchd.log). Older ⇒ it is wedged: TERM its whole
 # process tree (pipeline subshells, a hung gh/python) and take over. The targeted
 # `--issues` kick above bypasses this on purpose (short, single writer of its own
-# file, and the webhook wants it NOW).
+# file, and the caller wants it NOW).
 kill_tree() {  # TERM <pid> and every descendant (children first is not needed: TERM, not KILL)
   local ps p kids; ps=$(ps -axo pid=,ppid=) || { kill -TERM "$1" 2>/dev/null; return 0; }
   set -- "$1"
@@ -700,10 +666,8 @@ fi
 }
 
 # --- per-repo issues (TTL-gated per repo) ---
-# NB: PR status (prmap_<slug> + the flat prmap mirror + @prci/@pfg) is NOT built
-# here anymore — it moved to bin/tmux-pr-refresh.sh so it can refresh on a ~15s
-# cadence instead of this 60s tick. That script is the SINGLE writer of all PR
-# state; the collector only touches issues/git/usage. See issue #81.
+# NB: PR status is NOT built here (issue #81); its refresher left with #4899.
+# The collector only touches issues/git/usage.
 # Reads the (repo,slug) queue `sessmap` published (global/collect.repoqueue) —
 # see there for why it travels on disk rather than in an array (issue #653).
 ISSUES_CURSOR="$G/collect.issues.cursor"
@@ -754,8 +718,7 @@ ph_issues_over() {
 # dash could show a two-hours-stale world (#636). Three changes fix it:
 #
 #   1. NO `git status`. The dirty column (✱) this loop used to compute is read by
-#      NOTHING: tmux-dashboard-rows.sh takes field 1 (`read -r branch _`) and
-#      tmux-pr-refresh.sh does `cut -f1`. So the most expensive call per worktree —
+#      NOTHING: tmux-dashboard-rows.sh takes field 1 (`read -r branch _`). So the most expensive call per worktree —
 #      a full working-tree scan of a large monorepo — produced a value nobody
 #      consumed. The on-disk format is unchanged (branch<TAB>, field 2 now always
 #      empty = byte-identical to what a clean worktree already wrote), so no reader
@@ -1246,9 +1209,8 @@ ph_banner_over() {
 # its own 60s daemon, and run at the TOP of this tick (see above), so it no longer
 # waits on the gh/git/python phases and a tick that dies early can't skip it.
 
-# NB: the PR/CI attention signal (@prci/@pfg per window) moved to
-# bin/tmux-pr-refresh.sh (single writer, ~15s cadence) — see #81. The collector
-# no longer touches it.
+# NB: the PR/CI attention signal (@prci/@pfg per window) is not the collector's
+# (#81); its writer left with #4899.
 
 # --- detached-attention escalation (every run) ---
 # A window stuck on 'needs' >FLEET_ESCALATE_AFTER sec while NO tmux client is

@@ -105,9 +105,9 @@ MD
 cat > "$WORK/fx/red-after.md" <<'MD'
 # skill
 ## 排障
-`~/.claude/fleet/bin/fleet-gh.sh` is the script.
+`~/.claude/fleet/bin/fleet-heavy.sh` is the script.
 ### detail
-still troubleshooting: `~/.claude/fleet/bin/fleet-gh.sh issue view 5`
+still troubleshooting: `~/.claude/fleet/bin/fleet-heavy.sh --status`
 ## 2. Back to work
 `~/.claude/fleet/bin/fleet-pr-merge.sh 5`
 MD

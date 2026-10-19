@@ -37,7 +37,7 @@
 # fleet up waits its turn; either order ends with each session open once.
 #
 # Seams (selftests): FLEET_SESSIONS_STATE_CMD "<cmd>" is run as `<cmd> <repo>
-# <issue>` and prints OPEN / CLOSED (default: fleet-gh.sh's cached read; no
+# <issue>` and prints OPEN / CLOSED (default: one timed gh read; no
 # answer ⇒ treated as open — a session is never dropped on a failed read).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -65,10 +65,8 @@ issue_state() {
     $FLEET_SESSIONS_STATE_CMD "$repo" "$n" 2>/dev/null | head -n 1
     return 0
   fi
-  bash "$BIN/fleet-gh.sh" issue view "$n" --repo "$repo" --json state --max-age 300 2>/dev/null \
-    | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("state",""))
-except Exception: pass' 2>/dev/null
+  command -v gh >/dev/null 2>&1 || return 0
+  fleet_timebox 15 gh issue view "$n" --repo "$repo" --json state -q .state 2>/dev/null
 }
 
 save() {

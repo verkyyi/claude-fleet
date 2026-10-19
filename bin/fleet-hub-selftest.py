@@ -48,7 +48,7 @@ class Sandbox:
         (repos / ".order").write_text("example-project\n")
         for filename in ("fleet-control.py", "fleet_control.py", "fleet_hub_common.py", "fleet_config_write.py",
                          "fleet-lib.sh", "fleet-client-core.sh", "fleet-control-read.sh", "fleet-hub.py", "fleet_hub.py", "fleet_hub_mcp.py",
-                         "fleet-gh.sh", "fleet-gh-lib.sh", "fleet_loop_mark.py", "fleet_iso.py",
+                         "fleet_loop_mark.py", "fleet_iso.py",
                          "fleet-reap-policy.sh", "fleet_reap_policy.py", "fleet-orphan-reports.py"):
             shutil.copy2(BIN / filename, self.bin / filename)
         self.tools = self.root / "tools"
@@ -145,8 +145,7 @@ sys.exit(9)
 [ "$1 $2" = "codex list" ] || exit 1
 printf 'PROFILE DEFAULT EMAIL PLAN LOGIN REFRESH DIRECTORY\\ndefault * u@e pro valid - /h\\n'
 ''')
-        # GitHub shim (issue #1274): every argv logged, so "served from the local
-        # copy" is checkable as ZERO gh calls.
+        # GitHub shim (issue #1274): every argv logged.
         self.script(self.tools / "gh", '''#!/bin/bash
 a="$*"; printf '%s\\n' "${a//$'\\n'/ }" >> "$FLEET_CONF_DIR/gh.calls"
 case "$1 $2" in
@@ -951,9 +950,9 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
     def gh_grant(self, *scopes):
         return self.hub.grant("ipad", [self.fleet], ["fleet:read", *scopes])["token"]
 
-    def test_gh_reads_serve_the_local_copy_and_need_gh_read(self):
-        (self.node.cache / "issues").write_text("· no milestone\t#7\t·\tFix the thing\n")
-        (self.node.cache / "prmap").write_text("issue-7\t#9\tOPEN\t✓\tready\t\n")
+    def test_gh_reads_ask_gh_and_need_gh_read(self):
+        # issue #4899: the fleet's local copy (fleet-gh.sh) is gone — every read
+        # is one gh call on the node, the same JSON shape (_source gh, _age 0)
         before = len(self.rpc_calls)
         for tool in ("gh_issue_view", "gh_pr_view", "gh_pr_checks"):
             with self.subTest(tool=tool), self.assertRaises(Fault) as refused:
@@ -962,21 +961,13 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual(len(self.rpc_calls), before)
         reader = self.gh_grant("gh:read")
         issue = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, reader)
-        self.assertEqual((issue["_source"], issue["title"], issue["state"]), ("cache", "Fix the thing", "OPEN"))
-        self.assertIn("_age", issue)
+        self.assertEqual((issue["_source"], issue["title"], issue["state"], issue["_age"]),
+                         ("gh", "live title", "OPEN", 0))
         pr = self.call("gh_pr_view", {"fleet_id": self.fleet, "number": 9, "repo": "example/project"}, reader)
-        self.assertEqual((pr["_source"], pr["headRefName"]), ("cache", "issue-7"))
+        self.assertEqual((pr["_source"], pr["headRefName"]), ("gh", "issue-7"))
         checks = self.call("gh_pr_checks", {"fleet_id": self.fleet, "number": 9}, reader)
-        self.assertEqual((checks["_source"], checks["bucket"]), ("cache", "pass"))
-        self.assertEqual(self.node.calls("gh"), [], "a fresh local copy must cost zero gh calls")
-        # A field the copy does not hold, or a stale copy → gh, same shape.
-        live = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "fields": "number,title,body"}, reader)
-        self.assertEqual(live["_source"], "gh")
-        old = time.time() - 3600
-        os.utime(self.node.cache / "issues", (old, old))
-        stale = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, reader)
-        self.assertEqual((stale["_source"], stale["title"]), ("gh", "live title"))
-        self.assertEqual(len(self.node.calls("gh")), 2)
+        self.assertEqual((checks["_source"], checks["bucket"]), ("gh", "pass"))
+        self.assertEqual(len(self.node.calls("gh")), 3)
         self.assertTrue(all("--repo example/project" in c for c in self.node.calls("gh")))
         with self.assertRaises(Fault) as other:
             self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": "someone/else"}, reader)
@@ -1616,18 +1607,14 @@ printf '@9\\t4242\\t/fixture/moved\\n'
         # Keyed by (repo, N), never a bare number: repo B's #7 is not repo A's.
         (self.node.conf / "fleets/demo/repos").mkdir(exist_ok=True)
         (self.node.conf / "fleets/demo/repos/example-other.conf").write_text('FLEET_REPO="example/other"\n')
-        other = self.node.tmp / ".claude-dash/fleets/example-other"
-        other.mkdir(parents=True)
-        (other / "issues").write_text("· no milestone\t#7\t·\tOther repo's seven\n")
-        (self.node.cache / "issues").write_text("· no milestone\t#7\t·\tFirst repo's seven\n")
         token = self.gh_grant("gh:read", "gh:comment")
         with self.assertRaises(Fault) as bare:
             self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7}, token)
         self.assertEqual(bare.exception.code, "INVALID_ARGUMENT")
-        for repo, title in (("example/other", "Other repo's seven"), ("project", "First repo's seven")):
-            got = self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": repo}, token)
-            self.assertEqual((got["_source"], got["title"]), ("cache", title))
         self.assertEqual(self.node.calls("gh"), [])
+        for repo, full in (("example/other", "example/other"), ("project", "example/project")):
+            self.call("gh_issue_view", {"fleet_id": self.fleet, "number": 7, "repo": repo}, token)
+            self.assertIn("--repo " + full, self.node.calls("gh")[-1])
 
     def test_multi_repo_worker_keys_carry_the_repo(self):
         # issue #1018: two hosted repos can both have an issue-123, so a multi-repo

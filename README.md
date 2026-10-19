@@ -335,8 +335,7 @@ is gone — issue #4902). `bin/fleet-attach.sh` — a direct attach to the node'
 works for a script or a person who types it, but is no longer advertised.
 
 Each fleet keeps its durable state in **one directory per fleet** —
-`~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map,
-issue-bridge state), so `ls ~/.config/claude-fleet/fleets/` is the list of
+`~/.config/claude-fleet/fleets/<session>/` (its `conf` overlay, restore map), so `ls ~/.config/claude-fleet/fleets/` is the list of
 running fleets (issue #181). The `conf` overlays the global `fleet.conf`, which
 still works as a one-fleet default. **One settings file per login** (issue #979):
 `bin/fleet-settings.sh merge` folds the install's `fleet.conf` and the fleet's
@@ -696,7 +695,7 @@ degrading to a pane-content heuristic.
 | per-model cap fallback (same thread) | ✅ | ✅ | Native thread/settings/update changes an idle Codex model and verifies it without keystrokes or restart. Opt-in fallback requires explicit model-to-limit IDs and fresh quota on both buckets. Only an exact native quota-failed turn receives a continuation. |
 | MCP servers + subagent model | ✅ | ✅ | `FLEET_MCP_CONFIG` translates stdio/HTTP allowlists — recommended value `~/.claude/fleet/conf/mcp-worker.json`, the minimal worker set shipped with the fleet (the `fleet` tool service only, issues #1078/#1807); `FLEET_CODEX_MCP_CONFIG` also accepts native JSON/TOML. Strict policies disable inherited servers and apps. Codex subagent model/effort use separate native knobs; explicit caller overrides win. Both TUI and private server receive the policy. |
 | warm scratch pool | ✅ | ✅ | A Codex-specific stable-screen probe checks the current launcher, echoes and clears one unsubmitted character, and never makes a model request. Claims require the matching agent, account home, dimensions and age; startup/trust failures use the cold path. |
-| PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ✅ | ✅ | tmux draws it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which `bin/tmux-pr-refresh.sh` stamps on every window from the PR map (issue #1954). The mod's progress band above Claude Code's input stays as a mirror. |
+| PR + check status in the session header (`PR #N ✓ 检查通过` · `… 检查中` · `✗ <check>`) | ✅ | ✅ | tmux draws it, not the agent: `conf/tmux-attention.conf`'s `pane-border-format` reads `@pr_num` / `@pr_ci` / `@pr_fail`, which nothing stamps since the PR-map refresher left (issue #4899; it was #1954). The mod's progress band above Claude Code's input stays as a mirror. |
 | knows where the person is from the first turn (device · terminal · what it can do) | ✅ | ✅ | One reader, `bin/fleet-client-where.sh`. Claude Code gets the line from the mod (`where.ts`, every request); Codex gets the same text as SessionStart `additionalContext` from `bin/fleet-where-hook.sh`, in the shared hook table and gated to a Codex pane so Claude never reads it twice (issue #1954). A takeover mid-session reaches Codex through the `where` tool. |
 | native panel prompts (rename · answer · message) | ✅ | ✅ | `bin/fleet_view.py` handles the prompts without changing the agent pane. |
 | questions and permission requests in the panel and notifications | ✅ | ✅ | Claude's AskUserQuestion / permission payload and Codex's app-server requests flow through `bin/fleet_needs_detail.py` into `@claude_needs_detail`. The node inventory and hub preserve the words; the native panel and `bin/fleet_notify.py` show them through the thin client's lease and OSC 9. |
@@ -725,8 +724,7 @@ watching.
 
 - **A fleet hosts one or more repos, all on one tmux server.** Each window's repo
   is `@repo`; PR/issue state is fetched per hosted repo. The warm scratch pool
-  keeps one pool per hosted repo (#797). The issue bridge and webhooks
-  cover the fleet conf's own repo only for now (EPIC #787 reserve).
+  keeps one pool per hosted repo (#797).
 - Windows named `dash`, `plan`, or `backlog` are treated as panels, not
   Claude sessions.
 - The dashboard/hub sits at the lowest index (slot 1), placed once at spawn.

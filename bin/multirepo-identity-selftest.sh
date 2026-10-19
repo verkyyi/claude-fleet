@@ -15,7 +15,6 @@
 #   keys       fleet_repos / fleet_issue_key / fleet_window_key /
 #              fleet_bound_windows / fleet_repo_for_slug / fleet_okey_prefix
 #   reap       fleet-reap-target.py: bare #12 refused as ambiguous, <repo>#12 exact
-#   bridge     bridge_find_window (fleet-issue-bridge.sh --find-window)
 #   ledger     fleet-ledger-watch.sh: key (repo, N), row to its own repo's ledger
 #   dash       okey grouping (tmux-dashboard-rows.sh)
 #   landed     the landed view's origin join + per-repo fold file (fleet-history.sh)
@@ -25,7 +24,6 @@
 # bare call made outside a pane to a socket nothing listens on — never the live
 # server. gh is shimmed to fail, so nothing touches the network.
 set -uo pipefail
-export FLEET_GH_WRITE_GAP=0   # no write pacing here: the queue has its own test (fleet-gh-write-selftest.sh)
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-repo-fixture.sh"
@@ -84,7 +82,6 @@ mkdir -p "$FLEET_CONF_DIR/fleets/$M/repos" "$FLEET_CONF_DIR/fleets/$D"
 fx_repo "$FLEET_CONF_DIR" "$M" o/a FLEET_MAIN="$WORK/mainA" FLEET_BASE_BRANCH=master
 fx_repo "$FLEET_CONF_DIR" "$D" o/c FLEET_MAIN="$WORK/mainC" FLEET_BASE_BRANCH=master
 cat > "$FLEET_CONF_DIR/fleets/$M/conf" <<EOF
-FLEET_ISSUE_BRIDGE=1
 FLEET_FAILOVER=0
 EOF
 cat > "$FLEET_CONF_DIR/fleets/$M/repos/o-b.conf" <<EOF
@@ -160,15 +157,6 @@ out=$(reap 'o/a#16'); has "reap: unknown repo never matches" "$out" "matched 0"
 eq "reap: unambiguous bare #14 still works" "$(reap '#14')" "$B14"
 eq "reap: one-repo #12" "$(in_pane "$D" "$D:plan" python3 "$BIN/fleet-reap-target.py" '#12')" "$D12"
 leg reap
-
-# --- bridge: a comment on B#12 is never typed into A#12 ------------------------------
-find() { bash "$BIN/fleet-issue-bridge.sh" --find-window "$1" "$2" | cut -f1,2; }
-eq "bridge: o/a#12 → A12" "$(find 12 o/a)" "$M	$A12"
-eq "bridge: o/b#12 → B12" "$(find 12 o/b)" "$M	$B12"
-eq "bridge: o/a#14 → none (B14 is o/b's)" "$(find 14 o/a)" ""
-eq "bridge: unknown-repo #16 → none" "$(find 16 o/a)" ""
-eq "bridge: one-repo o/c#12 → D12" "$(find 12 o/c)" "$D	$D12"
-leg bridge
 
 # --- ledger: key (repo, N); each row to its own repo's ledger -------------------------
 ledger() { printf '%s/logs/landed_%s.tsv' "$FLEET_CONF_DIR" "$1"; }

@@ -26,7 +26,7 @@
 #               repo's check ran, the bare repo's master carries the commit, git
 #               says landed (fleet_landed, C8), and the session's `merged` report
 #               is taken with no PR and closes the record
-#   6. 回收     the collector's git prmap + one cleanup-daemon tick: the window,
+#   6. 回收     one cleanup-daemon tick (its git prmap): the window,
 #               the worktree and the branch go, the history ledger has the row
 #   7. 报告     what the person reads: the record closed in their list, the landing
 #               record (the check passed)
@@ -49,7 +49,7 @@
 # Drives: bin/fleet-install.sh (served), bin/fleet-login.py, bin/fleet-hub-admin.py,
 # bin/fleet-repo.sh, bin/fleet-task-record.sh, bin/dash-raw-session.sh,
 # bin/fleet-brief.sh, bin/fleet-pr-verdict.sh, bin/fleet-pr-merge.sh,
-# bin/fleet-land.sh, bin/tmux-pr-refresh.sh, bin/fleet-cleanup-daemon.sh,
+# bin/fleet-land.sh, bin/fleet-cleanup-daemon.sh,
 # bin/fleet-cleanup.sh, bin/fleet-report-parent.sh, fleet_landed /
 # fleet_task_closed / fleet_repo_register (bin/fleet-lib.sh).
 set -uo pipefail
@@ -579,7 +579,6 @@ passed
 step 6 '回收: the cleanup daemon reaps the window, the worktree and the branch'
 tmux set-option -w -t "$W" @claude_state "done"
 tmux set-option -w -t "$W" @claude_state_ts "$(( $(date +%s) - 3600 ))"
-bash "$BIN/tmux-pr-refresh.sh" >"$WORK/out" 2>"$WORK/err" || die "the collector's PR pass failed" "$(cat "$WORK/err")"
 bash "$BIN/fleet-cleanup-daemon.sh" "$S" >"$WORK/out" 2>"$WORK/err" || die "the cleanup tick exited $?" "$(cat "$WORK/err")"
 # The first tick only shows the window its notice (a minute, #565); the next one,
 # that minute later, reaps — the minute is moved, not waited.

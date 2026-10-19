@@ -3,20 +3,13 @@
 # with shell builtins where they used to fork a `tr` / `date` / `cut` / `sed` /
 # `dirname` / `cat`, and they answer EXACTLY what the forked version answered.
 #
-# Two halves, because either alone lets the regression back in:
 #   EQUIVALENCE  every rewritten helper is run against the original pipeline it
 #                replaced, over a corpus that includes the awkward inputs (empty,
 #                no separator, trailing slashes, non-ASCII, empty tab fields).
-#   BUDGET       the producer that dominated the machine's exec rate is run
-#                under a counting PATH shim and must not exec the tools it no
-#                longer needs: tmux-pr-refresh.sh's per-window @prci loop (every
-#                15s, per window). (The other, the old client's tmux-status.sh,
-#                went with that client — issue #3008.)
-#                The pr-refresh half also replays a window list through a fake tmux
-#                and checks every glyph it paints, so a builtin rewrite that drifts
-#                from `sed`/`cut` shows up as a wrong @prci, not just a count.
+#   (BUDGET left with the producers it counted: the old client's tmux-status.sh,
+#   issue #3008, and tmux-pr-refresh.sh, issue #4899.)
 #
-# No live tmux, no network: tmux and gh are shims, TMPDIR is a sandbox.
+# No live tmux, no network.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -78,7 +71,7 @@ for s in a b c d e '' last zz; do
 done
 unset FLEET_C
 
-for u in collect quotawatch base-sync issue-bridge worktree-autoclean ledger-watch 'X-y_z9' ''; do
+for u in collect quotawatch base-sync worktree-autoclean ledger-watch 'X-y_z9' ''; do
   eq "_fleet_daemon_key [$u]" "$(printf '%s' "$u" | tr 'a-z-' 'A-Z_')" "$(_fleet_daemon_key "$u")"
 done
 
@@ -106,91 +99,5 @@ for c in '1.57 10 0.2' '9.00 10 0.9' '0.04 4 0.0' '12.5 4 3.1' '0.995 1 1.0' '3 
   _fa_loadpc "$1" "$2"
   eq "_fa_loadpc $1 / $2 cores" "$3" "${FA_LOAD:-–}"
 done
-
-# ================================================================ BUDGET shims
-# Counting shims for the tools the hot paths must no longer exec: each logs its
-# name, then runs the real binary (resolved BEFORE the shim dir goes on PATH).
-mkdir -p "$WORK/bin"
-for t in date tr cut sed dirname basename uname cat; do
-  real=$(command -v "$t") || continue
-  printf '#!/bin/sh\necho %s >> "%s/exec.log"\nexec %s "$@"\n' "$t" "$WORK" "$real" > "$WORK/bin/$t"
-  chmod +x "$WORK/bin/$t"
-done
-count() { local n; n=$(grep -cx "$1" "$WORK/exec.log" 2>/dev/null); printf '%s' "${n:-0}"; }
-
-# ---------------------------------------------------------------- tmux-pr-refresh.sh
-# One fake fleet `s1` on fake/repo; gh fails (offline — the loop reads the prmap we
-# seed); tmux replays a window list and logs every set-window-option.
-TMPD="$WORK/tmp"; G="$TMPD/.claude-dash/global"; mkdir -p "$G"
-now=$(date +%s)
-CONFD="$WORK/conf"; mkdir -p "$CONFD/fleets/s1"
-: > "$CONFD/fleets/s1/conf"
-fx_repo "$CONFD" "s1" fake/repo
-C="$TMPD/.claude-dash"; FD="$C/fleets/fake-repo"; mkdir -p "$FD"
-printf 's1\tfake-repo\tfake/repo\n' > "$G/sessmap"
-printf '%s\n' \
-  "issue-1${TAB}#1${TAB}OPEN${TAB}✓${TAB}ready${TAB}" \
-  "issue-2${TAB}#2${TAB}OPEN${TAB}✗${TAB}${TAB}${TAB}lint,selftests" \
-  "issue-11${TAB}#11${TAB}OPEN${TAB}…${TAB}${TAB}${TAB}" \
-  "issue-3${TAB}#3${TAB}OPEN${TAB}✓${TAB}behind${TAB}" \
-  "issue-4${TAB}#4${TAB}OPEN${TAB}✓${TAB}draft${TAB}" \
-  "feat${TAB}#5${TAB}OPEN${TAB}✓${TAB}conflict${TAB}" \
-  "issue-6${TAB}#6${TAB}MERGED${TAB}✓${TAB}${TAB}abc123" \
-  "issue-8${TAB}#8${TAB}OPEN${TAB}✓${TAB}${TAB}" > "$FD/prmap"
-printf '%s\n' "$now" > "$FD/prmap.ts"
-gitc() { k=${1//_/_u}; k=${k//\//_s}; k=${k// /_w}; printf '%s\tx\n' "$2" > "$G/git_$k"; }
-: > "$WORK/wlist"
-win() { printf 's1%s%s%s%s%s%s\n' "$US" "s1:$1" "$US" "$2" "$US" "$4" >> "$WORK/wlist"; gitc "$2" "$3"; }
-#    idx path          branch          current @prci
-win 1 /w/one          issue-1+2       ''
-win 2 /w/two          issue-2+3       ''
-win 3 /w/three        issue-3-2       ''
-win 4 "/w/fo ur"      issue-4+1-7     ''
-win 5 /w/five         feat-2024       ''
-win 6 /w/six          issue-6         '✓'
-win 7 /w/seven        -               ''
-win 8 /w/eight        issue-8-3       ''
-win 10 /w/ten          issue-3         ''   # exact spelling wins (#792)
-win 9 /w/nine         issue-9         ''   # no such PR, exact or stripped
-win 11 /w/eleven      issue-11        ''   # checks still running
-cat > "$WORK/bin/tmux" <<SHIM
-#!/bin/sh
-case " \$* " in
-  *" has-session "*) exit 0 ;;
-  *" list-windows "*) while IFS= read -r l; do printf '%s\\n' "\$l"; done < "$WORK/wlist" ;;   # not \`cat\`: it is being counted
-  *" set-window-option "*) printf '%s\n' "\$*" >> "$WORK/tmux.log" ;;
-esac
-exit 0
-SHIM
-printf '#!/bin/sh\nexit 1\n' > "$WORK/bin/gh"
-chmod +x "$WORK/bin/tmux" "$WORK/bin/gh"
-: > "$WORK/exec.log"; : > "$WORK/tmux.log"
-out=$(TMPDIR="$TMPD/" FLEET_CONF_DIR="$CONFD" FLEET_LIVE_ROOT="$BIN/.." PATH="$WORK/bin:$PATH" \
-      bash "$BIN/tmux-pr-refresh.sh" 2>&1 </dev/null) || fail "tmux-pr-refresh.sh exited non-zero" "$out"
-prci() { awk -v w="s1:$1" '$5==w && $6=="@prci" {print $7; f=1} END{if(!f) print "<unset>"}' "$WORK/tmux.log"; }
-eq "@prci: +N stripped → green + ready"                 '✓'      "$(prci 1)"
-eq "@prci: +N suffix stripped → red CI"                 '✗'      "$(prci 2)"
-eq "@prci: -N suffix stripped → green but behind"       '✓↑'     "$(prci 3)"
-eq "@prci: +N-M stripped (path with a space) → draft"   '✓d'     "$(prci 4)"
-eq "@prci: no exact row → the stripped spelling matches" '✓!'    "$(prci 5)"
-eq "@prci: MERGED clears the glyph"                     ''       "$(prci 6)"
-eq "@prci: no branch, glyph already empty → untouched"  '<unset>' "$(prci 7)"
-eq "@prci: -N stripped; EMPTY readiness stays empty → ✓" '✓'     "$(prci 8)"
-eq "@prci: no PR, glyph already empty → untouched"      '<unset>' "$(prci 9)"
-eq "@prci: a clean issue-N matches exactly (#792)"      '✓↑'     "$(prci 10)"
-# the session header's PR segment (issue #1954): @pr_num|@pr_ci|@pr_fail in ONE call
-prseg() { awk -v w="s1:$1" '$5==w && $6=="@pr_num" {
-    for (i = 6; i <= NF; i++) if ($i ~ /^@pr_(num|ci|fail)$/) v[$i] = (i == NF || $(i+1) == ";") ? "" : $(i+1)
-    print v["@pr_num"] "|" v["@pr_ci"] "|" v["@pr_fail"]; f=1 } END{if(!f) print "<unset>"}' "$WORK/tmux.log"; }
-eq "header PR: green → #1|✓|"                          '#1|✓|'   "$(prseg 1)"
-eq "header PR: red → #2|✗|<red check names>"           '#2|✗|lint,selftests' "$(prseg 2)"
-eq "header PR: running → #11|…|"                       '#11|…|'  "$(prseg 11)"
-eq "header PR: green+behind keeps the bare ✓"          '#3|✓|'   "$(prseg 3)"
-eq "header PR: MERGED → nothing to write (all empty)"  '<unset>' "$(prseg 6)"
-eq "header PR: no PR → untouched"                      '<unset>' "$(prseg 9)"
-for t in cut sed tr dirname basename cat; do
-  eq "tmux-pr-refresh.sh execs no $t (#888)" 0 "$(count "$t")"
-done
-[ "$(count date)" -le 2 ] || fail "tmux-pr-refresh.sh forked date $(count date)× — one pinned clock per run (#888)"; CHECKS=$((CHECKS+1))
 
 printf 'forkless-hotpath-selftest: OK (%d checks) — builtins where the hot paths forked, same answers (issue #888)\n' "$CHECKS"

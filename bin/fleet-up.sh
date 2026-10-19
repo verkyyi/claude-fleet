@@ -23,9 +23,7 @@
 #
 # --seed (issue #1167): this repo is only the login's STARTER — the fleet comes up
 # on it so it works at once, but it never takes work: its overlay also gets
-# FLEET_SEED=1 + FLEET_ISSUE_BRIDGE=0, so the issue-bridge never relays its
-# comments (see
-# fleet_repo_is_seed). It marks the fleet's ONLY repo — a --seed for a repo added
+# FLEET_SEED=1 (see fleet_repo_is_seed). It marks the fleet's ONLY repo — a --seed for a repo added
 # beside others is refused.
 #
 # --no-attach (issue #1165): bring the fleet up and stop — no attach, no client
@@ -198,10 +196,10 @@ mark_seed() {
   [ "$SEED" = 1 ] && [ -z "$ADD_REPO" ] || return 0
   f=$(fleet_repo_conf_file "$NAME" "$REPO")
   [ -f "$f" ] || return 0
-  for kv in FLEET_SEED=1 FLEET_ISSUE_BRIDGE=0; do
+  for kv in FLEET_SEED=1; do
     fleet_conf_set "$f" "${kv%%=*}" "${kv#*=}" || die "failed to write ${kv%%=*} to $f"
   done
-  echo "fleet-up: $REPO is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)"
+  echo "fleet-up: $REPO is this fleet's seed repo (FLEET_SEED=1)"
 }
 
 if [ "$LIVE" = 1 ]; then
@@ -211,7 +209,7 @@ else
 # --- write the per-fleet conf ---
 # PRESERVE any custom FLEET_* keys already in the conf (issue #170): a crash + `cf`
 # restore re-runs fleet-up, and a truncating rewrite would silently drop the
-# operator's FLEET_ISSUE_BRIDGE / FLEET_CLEANUP / FLEET_MAX_SESSIONS / … Only the
+# operator's FLEET_CLEANUP / FLEET_MAX_SESSIONS / … Only the
 # header is refreshed — the conf holds the fleet's settings, no repo (#1937).
 # Atomic write.
 # One directory per fleet (issue #181): the conf lives at fleets/<sess>/conf. If an

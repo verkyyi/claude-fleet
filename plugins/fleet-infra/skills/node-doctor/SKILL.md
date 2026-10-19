@@ -116,7 +116,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `fzf` | node | [mac-node-prep] | 装 fzf ≥ 0.45 |
 | `gate` | node | [node-doctor] | 只报状态：公开前的七项安全门槛 |
 | `gh` | node | [mac-node-prep] | 装 gh 并 `gh auth login` |
-| `github` | node | [node-doctor] | GitHub GraphQL 额度用完：等重置，期间走 REST，不是权限问题 |
 | `handoff` | node | [release-rules] | 自动交接的阈值读不到：同步安装补上 bin/fleet-hook-conf.sh |
 | `helper` | machine | [release-rules] | 部件缺它的帮手程序：更新器下一轮补 |
 | `hooks` | node | [release-rules] | settings.json 的 hook 表不对：`python3 fleet-hooks-merge.py merge`（同步时也做） |
@@ -191,7 +190,6 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `versions` | machine | [release-rules] | 只报状态：本机留着几个发布版、占多少盘 |
 | `image` | machine | [release-rules] | 运行时归镜像的 pod 落后 stable：本机不会自己追上，要把 pod 滚到 stable 的节点镜像（入口 roll-user-pod，或 render.py --image-patch + kubectl patch） |
 | `wallpaper` | node | [mac-node-prep] | 不接显示器的托管 Mac 还在跑动态桌面：守护每小时换一次（只换一次）；现在就换 `sudo ~/.claude/fleet/bin/fleet-wallpaper.sh off`，换回过的是人的选择 |
-| `webhook` | node | [node-doctor] | webhook 缺 gh / gh-webhook 扩展 / python3：照行内装 |
 | `wtroot` | node | [node-doctor] | worktree 根目录：照行内修 |
 | `信任框` | node | [node-doctor] | 只报状态：没预信任时新会话会停在信任框 |
 | `可信` | node | [login-lifecycle] | 这台不可信，入口不发订阅凭据：操作者 `fleet-node-trust.sh set <machine> trusted` |
