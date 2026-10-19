@@ -7,47 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/hubwire"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
-// Account is a subscription tracked by this hub.
-type Account struct {
-	Source           string     `json:"source"`
-	AccountUUID      string     `json:"account_uuid"`
-	Email            string     `json:"email"`
-	OrgUUID          string     `json:"org_uuid"`
-	OrgName          string     `json:"org_name"`
-	SubscriptionType string     `json:"subscription_type"`
-	RateLimitTier    string     `json:"rate_limit_tier"`
-	DisplayName      string     `json:"display_name"`
-	AccountCreatedAt *time.Time `json:"account_created_at,omitempty"`
-	LabelLocked      bool       `json:"label_locked"`
-	FirstSeen        time.Time  `json:"first_seen"`
-	LastSeen         time.Time  `json:"last_seen"`
-	EndpointCount    int        `json:"endpoint_count"`
-}
-
-// Label is THE display name for a subscription, everywhere.
-//
-// Every surface must resolve it the same way or the same account appears under
-// two names on one page. Preference order: a name set by hand, then whatever
-// the login reported, then the identifier itself — never blank, because a blank
-// row is unclickable and unreadable.
-func (a Account) Label() string {
-	switch {
-	case a.Email != "":
-		return a.Email
-	case a.DisplayName != "":
-		return a.DisplayName
-	default:
-		return a.AccountUUID
-	}
-}
-
-// Inferred reports whether this subscription was identified by its rate-limit
-// schedule rather than by a login. The UI says so rather than presenting a
-// heuristic as a fact.
-func (a Account) Inferred() bool { return strings.HasPrefix(a.AccountUUID, "win_") }
+// Account is a subscription tracked by this hub — the row `GET /v1/accounts`
+// serves, which the node reads too, so it lives in shared/hubwire
+// (claude-fleet#4812).
+type Account = hubwire.Account
 
 // ListAccounts returns every subscription on this hub.
 func (s *Store) ListAccounts() ([]Account, error) {

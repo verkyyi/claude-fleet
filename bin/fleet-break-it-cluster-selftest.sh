@@ -17,7 +17,7 @@
 #                            bin/fleet-node-linux.py pod-etc (issue #3757)
 #   cluster-reading-wrong-pod extras/managed-node/render.py (ops_resources) + deploy/k8s/fleet-workers +
 #                            tokenledger/internal/api/fleet_cluster_reading.go +
-#                            tokenledger/internal/agent/node_cluster_reading.go (issue #3734)
+#                            tokenledger/agent/node_cluster_reading.go (issue #3734)
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
 #                            tokenledger/internal/api/fleet_jobs.go
@@ -1251,15 +1251,15 @@ drill_user_pod_opener_group_write() {
   printf '%s' "$out" | grep -q '"fsGroup": 10003' \
     && printf '%s' "$out" | grep -q '"fsGroupChangePolicy": "OnRootMismatch"' \
     || { WHY="the user pod no longer carries fsGroup=<uid> OnRootMismatch — re-check this row"; return 1; }
-  grep -q 'scriptBeside(filepath.Dir(exe), name, os.Geteuid(), os.Getegid())' "$ROOT/tokenledger/cmd/ccquota/agent_machine.go" \
-    && grep -q 'FLEET_NODE_ACCOUNT_OPS=1 but no opener' "$ROOT/tokenledger/cmd/ccquota/agent_machine.go" \
+  grep -q 'scriptBeside(filepath.Dir(exe), name, os.Geteuid(), os.Getegid())' "$ROOT/tokenledger/agent/cli/agent_machine.go" \
+    && grep -q 'FLEET_NODE_ACCOUNT_OPS=1 but no opener' "$ROOT/tokenledger/agent/cli/agent_machine.go" \
     || { WHY="machineScript no longer judges the program's own group, or the opener's refusal is silent again"; return 1; }
   gohalf="程序一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestScriptBesideGroupWrite"
-  grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/cmd/ccquota/agent_machine_script_test.go" 2>/dev/null \
+  grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/agent/cli/agent_machine_script_test.go" 2>/dev/null \
     || { WHY="the program half's test TestScriptBesideGroupWrite is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestScriptBesideGroupWrite$' ./cmd/ccquota 2>&1); rc=$?
+          go test -count=1 -run '^TestScriptBesideGroupWrite$' github.com/verkyyi/claude-fleet/tokenledger/agent/cli 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the program half's Go test did not run"; return 1 ;;
       0:*) gohalf="程序一半：go test 自己组可写照收、root / 别人的组 / 人人可写都拒、拒必说原因 通过" ;;

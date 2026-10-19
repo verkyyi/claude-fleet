@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Which language a PAGE is drawn in (claude-fleet#2023).

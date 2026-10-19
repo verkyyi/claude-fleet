@@ -13,7 +13,7 @@ import (
 
 // Pricer is the part of the rate table that repricing needs.
 //
-// An interface, so this package keeps not importing internal/pricing: a rate is
+// An interface, so this package keeps not importing shared/pricing: a rate is
 // policy, and this package is storage. More importantly it means repricing runs
 // the SAME function ingest runs (pricing.Table.Apply) instead of a second
 // implementation of the pricing rules — a parallel copy would drift, and the

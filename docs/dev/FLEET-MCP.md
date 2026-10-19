@@ -1035,7 +1035,7 @@ and Codex retain device-location context and compact-time refocus.
 credential, its signature and claims, zero network with no hub, `fleet_hub_put`'s
 `worker`. Hub: `TestWorkerAssertion*` (`internal/api/fleet_worker_assert_test.go`)
 — valid → placed + audited + journalled, forged → 401, out of scope → 404, the
-relay; `TestPlaceCarriesWorkerAssertion` (`cmd/ccquota`).
+relay; `TestPlaceCarriesWorkerAssertion` (`agent/cli`).
 `bin/session-wrap-selftest.sh` B' — the wrapper mints per launch and revokes on exit.
 `bin/fleet-claude-selftest.sh` #1807 and `bin/fleet-codex-selftest.sh` I — the
 launch command lines carry the server. `mod/fleet/tests/lifecycle.test.ts`

@@ -1,0 +1,21 @@
+# The node's subcommands (claude-fleet#4812, EPIC #4810 C2): agent/cli.Run's
+# names, one per line — what a machine, a pod or bin/ runs, in BOTH binaries
+# (this module's cmd/ccquota and the combined tokenledger/cmd/ccquota).
+# bin/tokenledger-modules-selftest.sh holds it to agent/cli/run.go and to every
+# `ccquota <cmd>` that bin/, hooks/ and conf/ name. A hub command (hub, enroll,
+# endpoint, name, badge, team, svc, plan, db, notify) is not listed: it opens the
+# hub's database or serves the hub, and stays in the hub's build.
+agent
+budget
+chat-pipe
+codex
+core-exec
+credproxy
+lease
+move
+place
+release
+report
+stamp
+term-pty
+version

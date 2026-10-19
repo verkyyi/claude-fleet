@@ -23,6 +23,8 @@ on:
       - tokenledger/go.sum
       - tokenledger/shared/go.mod
       - tokenledger/shared/go.sum
+      - tokenledger/agent/go.mod
+      - tokenledger/agent/go.sum
       - bin/fleet-ci-job-gate.sh
       - .github/workflows/ci-runner-image.yml
   workflow_dispatch:

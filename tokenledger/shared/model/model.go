@@ -94,7 +94,7 @@ type UsageEvent struct {
 }
 
 // TotalTokens is the raw, unweighted sum. Useful for display; not the right
-// basis for apportioning a rate limit (see internal/recon).
+// basis for apportioning a rate limit (see shared/recon).
 func (e UsageEvent) TotalTokens() int64 {
 	return e.InputTokens + e.OutputTokens + e.CacheCreate5m + e.CacheCreate1h + e.CacheRead
 }

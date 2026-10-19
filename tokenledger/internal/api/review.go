@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {

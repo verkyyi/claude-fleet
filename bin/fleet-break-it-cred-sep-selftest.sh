@@ -898,11 +898,11 @@ drill_credsep_warn_cuts_creds() {
     || { WHY="fleet-cred-proxy.py's deny does not carry the trust reason"; return 1; }
   # the agent's half: check exit 4 → separated, 1 → not
   gohalf="代理一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestCredsepJudge"
-  grep -q '"separated, check warns", true, 0, 4, control.CredsepSeparated' "$ROOT/tokenledger/internal/agent/node_credsep_test.go" 2>/dev/null \
+  grep -q '"separated, check warns", true, 0, 4, control.CredsepSeparated' "$ROOT/tokenledger/agent/node_credsep_test.go" 2>/dev/null \
     || { WHY="TestCredsepJudge no longer pins «warns ⇒ separated»"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestCredsepJudge$' ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run '^TestCredsepJudge$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
       0:*) gohalf="代理一半：go test TestCredsepJudge ok（警告仍算已隔离）" ;;
@@ -969,11 +969,11 @@ drill_cred_sep_home_leak() {
     || { WHY="a planted link was followed or not named (rc $rc): $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
   rm -f "$C/accounts/icloud.hub/.credentials.json"
   gohalf="agent 一半：没有 go 工具链 — Go 门（tokenledger.yml）跑 TestNoStoreWritesNothingHome"
-  grep -q 'func TestNoStoreWritesNothingHome(' "$ROOT/tokenledger/internal/agent/node_credstore_test.go" 2>/dev/null \
+  grep -q 'func TestNoStoreWritesNothingHome(' "$ROOT/tokenledger/agent/node_credstore_test.go" 2>/dev/null \
     || { WHY="the agent half's TestNoStoreWritesNothingHome is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestNoStoreWritesNothingHome$' ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run '^TestNoStoreWritesNothingHome$' github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go test did not run"; return 1 ;;
       0:*) gohalf="agent 一半：go test ok（没有凭据库就一份订阅凭据也不写进任何家，报 no_store）" ;;

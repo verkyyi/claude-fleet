@@ -4,7 +4,7 @@ import (
 	"html/template"
 	"net/http"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // 试用暂未开放 (claude-fleet#4269): with fleet.trial off, a trial link that is

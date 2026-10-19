@@ -310,3 +310,17 @@ func dedupeAccounts(st *store.Store, dryRun bool) error {
 	}
 	return nil
 }
+
+// humanInt is report's short count (agent/cli's report.go has the same).
+func humanInt(n int64) string {
+	switch {
+	case n >= 1_000_000_000:
+		return fmt.Sprintf("%.1fB", float64(n)/1e9)
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}

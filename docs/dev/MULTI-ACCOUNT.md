@@ -730,7 +730,7 @@ the doctor:
   **red (FAIL)**: `bin/fleet-doctor-quota-selftest.sh` pins all four verdicts.
 
 One more shape note: `budget --json` states `resets_at` as **RFC3339**
-(`cmd/ccquota/budget.go`), while the stamp API in the same binary uses **unix
+(`agent/cli/budget.go`), while the stamp API in the same binary uses **unix
 seconds** (`stamp.go`). `quota_parse` now accepts either — an integer used to
 except into `0`, which silently flattened every `fleet_same_window` comparison.
 

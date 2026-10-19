@@ -79,15 +79,15 @@
 #   spare-refill-session-gate                       tokenledger/internal/api fleet_spare.go (spareMachines; go test, when here)
 #                                                   (claimSpare, replenishSpares; go test, when a toolchain is here)
 #   lease-unseparated-user                          tokenledger/internal/api fleet_creds.go (credsepGated) + fleet_join.go
-#                                                   (/v1/node/self credsep_gate), internal/agent node_credsep.go,
+#                                                   (/v1/node/self credsep_gate), tokenledger/agent node_credsep.go,
 #                                                   bin/fleet-cred-proxy.py (Router.refresh); go test, when a toolchain is here
 #   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
 #                                                   (go test, when a toolchain is here)
 #   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
 #                                                   shared/release (Build, Fetch, Unpack; go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
-#                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
-#   usage-unattributed                              tokenledger/internal/agent (the claude:local pool) + internal/api
+#                                                   + tokenledger/agent node_machine.go / runas.go (go test, when a toolchain is here)
+#   usage-unattributed                              tokenledger/agent (the claude:local pool) + internal/api
 #                                                   fleet_usage_silent.go (usage_silent; go test, when a toolchain is here)
 #   pool-usage-unattributed                         tokenledger/internal/api fleet_person_budget.go (handleCredProxyUsage,
 #                                                   poolUsagePass) + internal/store pool_usage.go + shared/credproxy
@@ -135,7 +135,7 @@
 #                                                   rows + the screen, each through conf/secret-shapes.list)
 #   service-log-cross-login                         tokenledger/internal/api fleet_service_log.go (FleetScope before any
 #                                                   node read, one follow per service, masking; go test, when a toolchain
-#                                                   is here) + internal/agent node_service_log.go (the register's path only)
+#                                                   is here) + tokenledger/agent node_service_log.go (the register's path only)
 #                                                   + the console's ServiceSheet.tsx (403 is a word, by name)
 #   debug-ticket-replayed                           tokenledger/internal/api fleet_debug_ticket.go (debugTicketAuth: the
 #                                                   fingerprint, the HMAC, expiry, the superseded row; go test, when a
@@ -1016,14 +1016,14 @@ drill_opened_login_no_fleet() {
     || { WHY="the hub's create op no longer carries the login's join code"; return 1; }
   grep -q 'op.DropHome = true' "$ROOT/tokenledger/internal/api/fleet_accounts.go" \
     || { WHY="a drill's remove no longer drops the home"; return 1; }
-  grep -q '"FLEET_LOGIN_JOIN_CODE="' "$ROOT/tokenledger/internal/agent/node_accounts.go" \
+  grep -q '"FLEET_LOGIN_JOIN_CODE="' "$ROOT/tokenledger/agent/node_accounts.go" \
     || { WHY="the admin agent no longer hands the join code to fleet-login-new.sh in its environment"; return 1; }
   grep -q '^  node_join_step$' "$s" && grep -q 'fleet_up_step$' "$s" \
     || { WHY="fleet-login-new.sh no longer joins an opened login / brings its fleet up"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($api)\$" ./internal/api 2>&1 \
-          && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" ./internal/agent 2>&1); rc=$?
+          && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go half's tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；演练身份收号 --delete-home（go test 三条；脚本一半是 fleet-login-new-selftest O）' ;;
@@ -1176,7 +1176,7 @@ drill_lease_unseparated_user() {
   api='TestLeaseCredsepGate TestNodeSelfCarriesCredsepGate TestLeaseCredsepMandatory'
   agent='TestCredsepJudge TestCredsepProbeCaches'
   fa="$ROOT/tokenledger/internal/api/fleet_credsep_test.go"
-  fg="$ROOT/tokenledger/internal/agent/node_credsep_test.go"
+  fg="$ROOT/tokenledger/agent/node_credsep_test.go"
   t0=$(now)
   for out in $api; do
     grep -q "^func $out(" "$fa" 2>/dev/null || { WHY="the hub half's test $out is not in ${fa#$ROOT/}"; return 1; }
@@ -1188,7 +1188,7 @@ drill_lease_unseparated_user() {
     || { WHY="fleet-cred-proxy.py no longer routes a credsep-gated login central"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central），管理员也一样；隔离后 200；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
@@ -1306,7 +1306,7 @@ drill_machine_agent_wrong_login() {
   api='TestMachineLinkRefusesWrongLogin TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin TestMachineLinkAccountCreateGoesToTheAdminLogin TestMachineLinkMoveLandsOnItsLogin TestMachineLinkAndPlainAgents TestMachineAgentRunsEachLoginAsItself'
   agt='TestMachineLinkDemuxByLogin TestPrepCmdRunsAsTheLogin TestPrepCmdStrictOnlyForARootMachine'
   f="$ROOT/tokenledger/internal/api/node_machine_test.go"
-  g="$ROOT/tokenledger/internal/agent/node_machine_test.go"
+  g="$ROOT/tokenledger/agent/node_machine_test.go"
   t0=$(now)
   for out in $api; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
@@ -1316,11 +1316,11 @@ drill_machine_agent_wrong_login() {
   done
   grep -q 'ep.OSUser != login' "$ROOT/tokenledger/internal/api/node_machine.go" \
     || { WHY="loginEndpoint no longer holds a login hello to its own token's login"; return 1; }
-  grep -q 'CodeWrongLogin' "$ROOT/tokenledger/internal/agent/node_machine.go" \
+  grep -q 'CodeWrongLogin' "$ROOT/tokenledger/agent/node_machine.go" \
     || { WHY="the node's demux no longer refuses a login it does not serve"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='整机连接上账号 hello 拿别人的 / 机器的 / 别的机器的令牌都答 WRONG_LOGIN、不上线、记审计；不认识的账号两端都拒；会话、开号、迁移各落在自己的账号；真的 RunMachine 以各账号身份跑控制器（go test 十条）' ;;
@@ -1403,7 +1403,7 @@ print(c.attached_body({"body": "看图 /Users/me/shot.png", "attachments": [{"id
   gohalf='hub half: the Go gate (tokenledger.yml) runs the attachment tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'TestClientPlace(CarriesAttachments|AttachmentsToAnOlderNode)$|TestFetchAttachments$' ./internal/api ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run 'TestClientPlace(CarriesAttachments|AttachmentsToAnOlderNode)$|TestFetchAttachments$' ./internal/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) gohalf='hub half: go test 入口转交 / 旧节点照说 / 节点下载校验 ok' ;;
@@ -1921,11 +1921,11 @@ drill_service_log_cross_login() {
   api='TestServiceLogCrossLoginIs403 TestServiceLogOneFollowForManyViewers TestRedactLogLine'
   agt='TestServiceLogOnlyTheRegisteredFile'
   fa="$ROOT/tokenledger/internal/api/fleet_service_log_test.go"
-  fg="$ROOT/tokenledger/internal/agent/node_service_log_test.go"
+  fg="$ROOT/tokenledger/agent/node_service_log_test.go"
   t0=$(now)
   grep -q 'if visible != nil && !visible(host, login) {' "$ROOT/tokenledger/internal/api/fleet_service_log.go" \
     || { WHY="handleServiceLog no longer asks FleetScope before anything else"; return 1; }
-  grep -q 'serviceLogPath(a.cfg.ServicesFile, login, req.Name)' "$ROOT/tokenledger/internal/agent/node_service_log.go" \
+  grep -q 'serviceLogPath(a.cfg.ServicesFile, login, req.Name)' "$ROOT/tokenledger/agent/node_service_log.go" \
     || { WHY="the node no longer takes the log path from the register for the lane's own login"; return 1; }
   for out in $api; do
     grep -q "^func $out(" "$fa" 2>/dev/null || { WHY="the hub half's test $out is not in ${fa#$ROOT/}"; return 1; }
@@ -1937,7 +1937,7 @@ drill_service_log_cross_login() {
   WHAT="${WHAT}；页面：403 是一句话、不重试（按名核对）"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT="${WHAT}；go test：403、一份节点流、打码、只读登记的文件" ;;
@@ -2028,13 +2028,13 @@ drill_usage_unattributed() {
   local agent_tests='TestAgent_NoLoginFilesClaudeUsageUnderThePool TestAgent_NoLoginNoTranscriptsFilesNothing'
   local hub_tests='TestUsageSilentRaisedWhenWorkingLoginSendsNothing TestUsageSilentQuietWhenUsageFlowsOrNothingWorks TestUsageSilentAfterFromEnv'
   t0=$(now)
-  grep -q 'id, err = identity.ClaudePool(a.cfg.Home), nil' "$ROOT/tokenledger/internal/agent/agent.go" 2>/dev/null \
+  grep -q 'id, err = identity.ClaudePool(a.cfg.Home), nil' "$ROOT/tokenledger/agent/agent.go" 2>/dev/null \
     || { WHY="the agent no longer files a login with no oauthAccount under the claude:local pool"; return 1; }
   grep -q 's.UsageSilentTick(now, false)' "$ROOT/tokenledger/internal/api/fleet_alerts.go" \
     || { WHY="the alerts sweep no longer runs the usage_silent check"; return 1; }
   for t in $agent_tests; do
-    grep -q "^func $t(" "$ROOT/tokenledger/internal/agent/claude_pool_test.go" 2>/dev/null \
-      || { WHY="the agent half's test $t is not in tokenledger/internal/agent/claude_pool_test.go"; return 1; }
+    grep -q "^func $t(" "$ROOT/tokenledger/agent/claude_pool_test.go" 2>/dev/null \
+      || { WHY="the agent half's test $t is not in tokenledger/agent/claude_pool_test.go"; return 1; }
   done
   for t in $hub_tests; do
     grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_usage_silent_test.go" 2>/dev/null \
@@ -2043,7 +2043,7 @@ drill_usage_unattributed() {
   WHAT='没 /login 的登录：Claude 用量记进 claude:local 池、照常归到人；会话 working 超 30 分钟没用量 → usage_silent，用量一到就清（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$agent_tests" "$hub_tests" | tr ' ' '|'))\$" ./internal/agent ./internal/api 2>&1); rc=$?
+          go test -count=1 -run "^($(printf '%s %s' "$agent_tests" "$hub_tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/agent ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='没 /login 的登录的 Claude 用量进 claude:local 池（来源 session、不动登录账号）；没对话目录不造池；working 超阈值没用量 → usage_silent，用量到 / 不工作即清（go test）' ;;
@@ -2759,7 +2759,7 @@ PY
     || { WHY="fleet-release-fetch.py no longer keeps the revoked ids it saw"; return 1; }
   grep -q 'relverify.signer_of(pub, m' "$BIN/fleet-node-core.py" \
     || { WHY="the root core's switch no longer holds the signer to the chain and the revocations"; return 1; }
-  grep -q 'f.Trust.Keep(\*pub)' "$ROOT/tokenledger/cmd/ccquota/release.go" \
+  grep -q 'f.Trust.Keep(\*pub)' "$ROOT/tokenledger/agent/cli/release.go" \
     || { WHY="ccquota release fetch no longer keeps the revoked ids it saw"; return 1; }
   WHAT='根钥匙作废 k1：清单带作废单即拒；下一版不带了，机器记下的作废 id 照拒；伪造的作废单（非根钥匙签）不认（Go 半边测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
@@ -2883,7 +2883,7 @@ drill_spare_ready_unverified() {
     || { WHY="fleet-login-new.sh no longer checks the login it opened (fleet-login-ready.sh)"; return 1; }
   grep -q 'READY_LINE' "$ROOT/bin/fleet-login-reset.sh" 2>/dev/null \
     || { WHY="a wash no longer carries the opener's ready: line to the hub (fleet-login-reset.sh)"; return 1; }
-  grep -q 'res.Ready = readyResult(out.String())' "$tl/agent/node_accounts.go" 2>/dev/null \
+  grep -q 'res.Ready = readyResult(out.String())' "$tl/../agent/node_accounts.go" 2>/dev/null \
     || { WHY="the agent no longer reads the ready: line (readyResult)"; return 1; }
   grep -q 'spareCheckedSQL("a.op_id", checked)' "$tl/store/fleet_spare.go" 2>/dev/null \
     || { WHY="a claim no longer asks for a spare that passed its check (store.ClaimSpare)"; return 1; }

@@ -1,6 +1,6 @@
 package api
 
-import "github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+import "github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 
 // pageText is every sentence the public pages say — /signin, the "can't use this hub" refusal and the /fleet/login
 // confirmation — in both languages (claude-fleet#2023).

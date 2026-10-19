@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 

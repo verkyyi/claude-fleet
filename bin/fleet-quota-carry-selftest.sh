@@ -53,7 +53,7 @@ G="$WORK/.claude-dash/global"
 MODE="$WORK/mode"
 
 # rows    — a clean two-account payload
-# refused — what ccquota prints when the hub answers 401 (cmd/ccquota/budget.go:
+# refused — what ccquota prints when the hub answers 401 (agent/cli/budget.go:
 #           "hub unreachable: HTTP 401: …", verdict unknown, no accounts)
 # down    — no answer at all (ccquota killed / crashed)
 cat > "$WORK/fakepath/ccquota" <<'FAKE'

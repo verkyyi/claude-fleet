@@ -17,7 +17,7 @@
 #   E  the daemon's machine-reading task (15 s, the seat's), kept off a user pod;
 #      install-apply writes and takes back the switch
 #   G  a user pod's copy (#3734): the file the node program writes from fleet-ops'
-#      reading (tokenledger/internal/agent/node_cluster_reading.go
+#      reading (tokenledger/agent/node_cluster_reading.go
 #      renderMachineReading) is fleet-machine-tasks.py's render, byte for byte,
 #      and the reader takes it
 #   F  class session (#3671): spinner and webhook serve only a login's sessions — the
@@ -166,7 +166,7 @@ out=$(python3 "$BIN/fleet-node-supervisor-selftest.py" V_SessionUnits 2>&1) && o
   || bad "F fleet-node-supervisor-selftest.py V_SessionUnits: $(printf '%s' "$out" | grep -E '^(FAIL|ERROR|AssertionError)' | head -3 | tr '\n' ' ')"
 
 # ---- G: a user pod's copy (#3734) ------------------------------------------------
-GO="$ROOT/tokenledger/internal/agent/node_cluster_reading.go"
+GO="$ROOT/tokenledger/agent/node_cluster_reading.go"
 want=$(python3 -c 'import importlib.util, sys
 s = importlib.util.spec_from_file_location("mt", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 sys.stdout.write(m.render({"v": 1, "ts": 1760000000, "mem_probe": "1 60 0 0", "mem_total_mb": "6144", "load_per_core": "0.25"}))' "$MT")

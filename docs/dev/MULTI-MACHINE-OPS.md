@@ -216,7 +216,7 @@ linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf �
 | 你的本地壳（MacBook） | 列表保留最后一次的样子，60 秒后变灰（失联）；断开 5 分钟闪**一次**「入口失联」 | 右边直连照常——靠你那张 12 小时的客户端证书，不经入口 |
 | 机器之间（打开别机会话、`fleet-node-upgrade.sh --host`、`fleet-move.sh`） | 1 秒内拒：「入口失联，机器间访问暂停；你可直接 `fleet <机器>` 进去」 | 自己 `fleet mac-a` 进去；**不**退回长期互信 |
 
-**重连**（节点程序 `ccquota agent`，参数只在 `tokenledger/internal/agent/node.go` 一处）：
+**重连**（节点程序 `ccquota agent`，参数只在 `tokenledger/agent/node.go` 一处）：
 
 - 每次断开后按 **5 → 10 → 20 → 30 → 30 …** 秒重试（抖动只往短里抖，不超过 30 秒）——网络恢复到节点重新在线 ≤ 30 秒。
 - 本机网络一变（换 Wi-Fi、睡醒、插回网线；macOS 路由套接字 / Linux netlink）**立刻**重试，退避清零。

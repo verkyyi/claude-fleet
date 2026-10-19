@@ -5,9 +5,9 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // Each dashboard Text's English entry must BE the constant it translates, for

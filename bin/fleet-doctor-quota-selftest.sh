@@ -26,7 +26,7 @@
 # just without the version, so both halves are asserted.
 #
 # The fixture speaks ccquota's OWN vocabulary: `verdict` is one of go / hold /
-# unknown (cmd/ccquota/budget.go), never "ok". `hold` — every account is at its
+# unknown (agent/cli/budget.go), never "ok". `hold` — every account is at its
 # ceiling — carries perfectly good rows and must land on the same verdict as
 # `go`; only `unknown` means "no reading", and quota_parse alone drops that.
 #
@@ -72,7 +72,7 @@ case "$(cat "$FAKE_B_SHAPE_FILE" 2>/dev/null)" in
   gone)    b='{"account_uuid":"u-z","label":"not-in-pool","headroom_pct":90,"five_hour":{"utilization":10}}' ;;
   *)       b='{"account_uuid":"u-b","label":"b","headroom_pct":80,"five_hour":{"utilization":20,"resets_at":"2026-09-16T05:00:00Z"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}}' ;;
 esac
-# verdict: ccquota emits go / hold / unknown only (cmd/ccquota/budget.go).
+# verdict: ccquota emits go / hold / unknown only (agent/cli/budget.go).
 v=$(cat "$FAKE_VERDICT_FILE" 2>/dev/null); v=${v:-go}
 printf '{"verdict":"%s","accounts":[{"account_uuid":"u-a","label":"a","headroom_pct":70,"five_hour":{"utilization":30,"resets_at":"2026-09-16T05:00:00Z"},"seven_day":{"utilization":10,"resets_at":"2026-09-16T05:00:00Z"}},%s]}' "$v" "$b"
 FAKE

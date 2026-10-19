@@ -56,6 +56,9 @@
 #                       (#4811), and `go install …/cmd/ccquota@<v>` refuses any module
 #                       with a replace: a bin/ script still spelling it reds
 #                       tokenledger-modules-selftest.sh (run in a sandbox repo, for real)
+#   node-command-hub-only  the node's own build (agent/cmd/ccquota, #4812) lacks a
+#                       command bin/ runs, or CI stops testing agent/: the modules
+#                       selftest reds both (sandbox repo, for real)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -798,6 +801,29 @@ drill_oss_internal_name_committed() {
   WHAT="PR 新增一行私网地址：门禁红，报 文件:行 规则；同一行写上 # oss-ok: <理由> 转绿并计入豁免；oss-scan.yml 每个 PR 都跑、不设路径过滤"
 }
 
+# A sandbox repo in the real layout's shape for tokenledger-modules-selftest.sh
+# (#4811, #4812): the root, shared/ (every PKGS package) and agent/ (one node
+# command), the workflow step that tests agent/ — green as laid out.
+_modules_sandbox() {
+  local d=$1 p M=github.com/verkyyi/claude-fleet/tokenledger
+  mkdir -p "$d/bin" "$d/tokenledger/shared" "$d/tokenledger/agent/cli" "$d/tokenledger/agent/cmd/ccquota" "$d/tokenledger/cmd/ccquota"
+  cp "$BIN/tokenledger-modules-selftest.sh" "$BIN/tokenledger-split-shared.sh" "$BIN/tokenledger-split-agent.sh" "$d/bin/"
+  printf 'module %s\n\ngo 1.25.0\n\nrequire (\n\t%s/agent v0.0.0\n\t%s/shared v0.0.0\n)\n\nreplace %s/agent => ./agent\n\nreplace %s/shared => ./shared\n' "$M" "$M" "$M" "$M" "$M" > "$d/tokenledger/go.mod"
+  printf 'go 1.25.0\n\nuse (\n\t.\n\t./agent\n\t./shared\n)\n' > "$d/tokenledger/go.work"
+  printf 'module %s/shared\n\ngo 1.25.0\n' "$M" > "$d/tokenledger/shared/go.mod"
+  # the node's module (#4812): agent/ naming shared/ only, one command
+  printf 'module %s/agent\n\ngo 1.25.0\n\nrequire %s/shared v0.0.0\n\nreplace %s/shared => ../shared\n' "$M" "$M" "$M" > "$d/tokenledger/agent/go.mod"
+  printf 'package agent\n' > "$d/tokenledger/agent/x.go"
+  printf 'package cli\n\nfunc Run(name string) bool {\n\tswitch name {\n\tcase "version":\n\t\treturn true\n\t}\n\treturn false\n}\n' > "$d/tokenledger/agent/cli/run.go"
+  printf '# names\nversion\n' > "$d/tokenledger/agent/cmd/ccquota/commands.txt"
+  printf 'package main\n\nfunc main() {\n\tswitch "" {\n\tcase "hub":\n\t}\n}\n' > "$d/tokenledger/cmd/ccquota/main.go"
+  for p in $(sed -n 's/^PKGS="\(.*\)"$/\1/p' "$BIN/tokenledger-split-shared.sh"); do
+    mkdir -p "$d/tokenledger/shared/$p"; printf 'package %s\n' "$p" > "$d/tokenledger/shared/$p/x.go"
+  done
+  mkdir -p "$d/.github/workflows"
+  printf 'jobs:\n  test:\n    steps:\n      - name: tests (agent module)\n        working-directory: tokenledger/agent\n        run: go test ./...\n' > "$d/.github/workflows/tokenledger.yml"
+}
+
 # ---- go-install-replace (#4811): the developer road built ccquota with `go install
 # …/cmd/ccquota@latest`; a replace in tokenledger/go.mod makes Go refuse that. The
 # modules selftest is copied into a sandbox repo with the real layout's shape and run:
@@ -810,14 +836,7 @@ drill_go_install_replace() {
   grep -nE "go[[:space:]]+install[[:space:]]+[^ ]*$M/[^ ]*@" "$BIN/fleet-node-join.sh" | grep -vE '^[0-9]+:[[:space:]]*#' \
     && { WHY="fleet-node-join.sh still runs go install …@<v>"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/goinst.XXXXXX"); t0=$(now)
-  mkdir -p "$d/bin" "$d/tokenledger/shared"
-  cp "$BIN/tokenledger-modules-selftest.sh" "$BIN/tokenledger-split-shared.sh" "$d/bin/"
-  printf 'module %s\n\ngo 1.25.0\n\nrequire %s/shared v0.0.0\n\nreplace %s/shared => ./shared\n' "$M" "$M" "$M" > "$d/tokenledger/go.mod"
-  printf 'go 1.25.0\n\nuse (\n\t.\n\t./shared\n)\n' > "$d/tokenledger/go.work"
-  printf 'module %s/shared\n\ngo 1.25.0\n' "$M" > "$d/tokenledger/shared/go.mod"
-  for p in $(sed -n 's/^PKGS="\(.*\)"$/\1/p' "$BIN/tokenledger-split-shared.sh"); do
-    mkdir -p "$d/tokenledger/shared/$p"; printf 'package %s\n' "$p" > "$d/tokenledger/shared/$p/x.go"
-  done
+  _modules_sandbox "$d"
   printf '#!/bin/sh\n(cd tokenledger && GOWORK=off go build -o x ./cmd/ccquota)\n' > "$d/bin/fleet-x.sh"
   out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 0 ] || { WHY="the sandbox's checkout build was not green ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
@@ -827,6 +846,43 @@ drill_go_install_replace() {
     || { WHY="a planted go install …@latest was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="tokenledger/go.mod 带 replace：bin/ 里一行 go install …/cmd/ccquota@latest 让模块自测红（点名文件:行）；节点开发路改成克隆后 go build，自测绿"
+}
+
+# ---- node-command-hub-only (#4812): the node gets its own build (agent/cmd/ccquota,
+# no hub code), so a subcommand bin/ runs that lives only in the hub's build is a
+# command the machine's binary answers «unknown command». Two ways in: a bin/
+# script names a hub-only command; tokenledger.yml loses the agent module's test
+# step (root `go list ./...` stops at agent/, the node's tests stop running). The
+# modules selftest is run in a sandbox repo for both, red then green.
+drill_node_command_hub_only() {
+  CAP=60
+  local t0 d out rc M=github.com/verkyyi/claude-fleet/tokenledger
+  grep -qx 'agent' "$BIN/../tokenledger/agent/cmd/ccquota/commands.txt" 2>/dev/null \
+    || { WHY="tokenledger/agent/cmd/ccquota/commands.txt is gone (the premise of this row)"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/nodecmd.XXXXXX"); t0=$(now)
+  _modules_sandbox "$d"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the sandbox was not green as laid out ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # a hub-only command, named by a bin/ script
+  printf 'package main\n\nfunc main() {\n\tswitch "" {\n\tcase "hub":\n\tcase "svc":\n\t}\n}\n' > "$d/tokenledger/cmd/ccquota/main.go"
+  # (spelt through %s so this file itself names no hub command)
+  printf '#!/bin/sh\nccquota %s list\n' svc > "$d/bin/fleet-y.sh"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "hub-only ccquota command.*svc" \
+    || { WHY="bin/ naming the hub-only svc command was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # moved to the node (agent/cli.Run + commands.txt): green again
+  printf 'package main\n\nfunc main() {\n\tswitch "" {\n\tcase "hub":\n\t}\n}\n' > "$d/tokenledger/cmd/ccquota/main.go"
+  printf 'package cli\n\nfunc Run(name string) bool {\n\tswitch name {\n\tcase "svc":\n\tcase "version":\n\t\treturn true\n\t}\n\treturn false\n}\n' > "$d/tokenledger/agent/cli/run.go"
+  printf 'svc\nversion\n' > "$d/tokenledger/agent/cmd/ccquota/commands.txt"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the command moved to agent/cli was still red ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # the workflow loses the agent module's test step
+  printf 'jobs:\n  test:\n    steps:\n      - run: go test ./...\n' > "$d/.github/workflows/tokenledger.yml"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'no go test step in tokenledger/agent' \
+    || { WHY="a workflow without the agent module's tests was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="节点单独成块（agent/cmd/ccquota）：bin/ 调一个只在 hub 那份里的 ccquota 子命令 ⇒ 模块自测红并点名；搬进 agent/cli 与 commands.txt 转绿；tokenledger.yml 丢了 agent 模块的 go test ⇒ 红"
 }
 
 cred_run_drills "$0"

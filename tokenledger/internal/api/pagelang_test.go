@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
 )
 
 // Every public-page key says something in both languages, with the same

@@ -407,7 +407,7 @@ up the native Stop evidence writer through `set-claude-state.sh` without restart
      line is red and another's is green.
 
      TokenLedger lives in this repo under `tokenledger/` (its own Go modules —
-     the root and `shared/`, issue #4811 —
+     the root, `shared/` and `agent/`, issues #4811 #4812 —
      merged with full history in issue #1391; the old `github.com/dave/ccquota`
      / `dave/tokenledger` install paths are retired). Installing the fleet
      never builds it — the build above is the only way it gets onto `PATH`.

@@ -1,7 +1,7 @@
 # ccquota hub 的费率覆盖文件（`--pricing`，PROD new-deploy，#5983）。
 #
 # hub 启动时读它，**merge 而非 replace** —— 改一个模型的费率不会把其它的丢掉
-# （ccquota internal/pricing/pricing.go `Table.LoadOverrides`）。所以调价 = 改这份
+# （ccquota shared/pricing/pricing.go `Table.LoadOverrides`）。所以调价 = 改这份
 # ConfigMap + 重启 hub，不用发版、不用重建镜像。
 #
 # ★★★ `gateway` 这一档的 cost_usd 是**真账单**，不是别处那个「假如按 API 价会花多少」
@@ -167,7 +167,7 @@
 # ── `providers`：给上游一个人看得懂的名字（2026-09-20，tokenledger EPIC #122 / #127）──
 #
 # `gateway.providers.<provider>.label` 是**纯显示名**，key 是事件里的 `provider` 原串、
-# 不做归一化，且 `label` 永远不参与算价（ccquota `internal/pricing/gateway.go` 的
+# 不做归一化，且 `label` 永远不参与算价（ccquota `shared/pricing/gateway.go` 的
 # `merge()`：只填 label、不填 models 的条目直接 `continue`，一条费率都不会动）。
 #
 # 为什么要填：hub **绝不发明名字** —— 叫不出名字的主机名就按主机名显示

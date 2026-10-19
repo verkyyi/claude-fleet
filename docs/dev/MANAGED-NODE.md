@@ -204,7 +204,7 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 
 **以账号身份跑**：每个账号是进程里一个租户；它启动的每条命令（`fleet-control.py`、
 开号脚本、中继、git、tailscale）降权到这个账号——uid / gid / 附属组、`HOME` / `USER` /
-`LOGNAME`、工作目录是它的家（`internal/agent/runas.go` `prepCmd`）；root 的机器程序遇到
+`LOGNAME`、工作目录是它的家（`agent/runas.go` `prepCmd`）；root 的机器程序遇到
 没带账号的命令**拒跑**，不以 root 跑。写进账号家目录的文件（中继、迁入的会话包、凭据
 标记）交还这个账号；订阅凭据只交给共享凭据代理（以 `as=<账号>` 说明是谁的），没有代理
 就不领——root 不往账号目录写凭据。
@@ -974,7 +974,7 @@ staging → 核心复制、填工具缓存、签名、切换 → `update` 各步
 - **没有 `seat-agent` / 没有 `--core` ⇒ 今天的路，字节不变**（Go `TestPrepCmdNoCoreUnchanged`）。
 
 BREAK-IT：`node-program-seat`；`bin/fleet-node-core-selftest.py` 的 O；Go
-`internal/agent/runas_core_unix_test.go`。
+`agent/runas_core_unix_test.go`。
 
 ## 23. 管理员 agent 只能开号删号，而且只认入口签的单（EPIC #3500 C15，#3557 · 迁移步 E）
 
@@ -1039,7 +1039,7 @@ BREAK-IT：`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
 旧 agent 交接进 attic：§23.3（#3725）。真机切换演练（一台托管 Mac，时间由操作者定）还没做。
 
 BREAK-IT：`fleetadmin-gate-tampered`、`fleetadmin-forged-op`（`bin/fleet-break-it-admin-selftest.sh`）；
-`bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `internal/agent/node_accounts_seat_test.go`。
+`bin/fleet-admin-seat-selftest.sh`；`bin/fleet-node-core-selftest.py` G_Switch；Go `agent/node_accounts_seat_test.go`。
 
 ### 23.2 座位自己的令牌和单元（C15·b-3，#3724）
 

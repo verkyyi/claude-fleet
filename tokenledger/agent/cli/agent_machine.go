@@ -1,0 +1,451 @@
+package cli
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"os/user"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/agent"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
+)
+
+// `ccquota agent --machine` (claude-fleet#2333, EPIC #2329 C5): ONE node
+// program for the whole machine, run as root by the node supervisor. It opens
+// one control connection with the machine's own node token and serves every
+// login listed in the logins directory:
+//
+//	<logins dir>/<login>.env    root-owned, 0600 — the login's agent settings,
+//	                            KEY=VALUE lines (the same CCQUOTA_* /
+//	                            FLEET_CONF_DIR keys its own agent's service
+//	                            set), CCQUOTA_TOKEN = the login's node token.
+//
+// The file is PARSED, never sourced: root reading what an installer wrote.
+// A file another user can read or write is refused — it holds a token.
+
+const (
+	defaultMachineLogins = "/var/db/fleet-node/logins"
+	defaultMachineState  = "/var/db/fleet-node/agent"
+)
+
+// hubDialRE: the only dial address taken in the hub's place — a Kubernetes
+// Service's cluster-local name (claude-fleet#4175, render.py --hub-internal).
+var hubDialRE = regexp.MustCompile(`^https?://[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9]([a-z0-9-]*[a-z0-9])?\.svc\.cluster\.local(:[0-9]{1,5})?$`)
+
+// hubDialURL is FLEET_HUB_INTERNAL_URL when it is such a name, else "" (the
+// public hub URL is dialled, as before); a value of any other shape is logged.
+func hubDialURL(v string) string {
+	v = strings.TrimRight(strings.TrimSpace(v), "/")
+	if v == "" {
+		return ""
+	}
+	if !hubDialRE.MatchString(v) {
+		log.Printf("agent --machine: FLEET_HUB_INTERNAL_URL %q is not http(s)://NAME.NS.svc.cluster.local[:PORT] — dialling the hub URL", v)
+		return ""
+	}
+	return v
+}
+
+func runAgentMachine(args []string) error {
+	fs := flag.NewFlagSet("agent --machine", flag.ExitOnError)
+	_ = fs.Bool("machine", true, "serve every login of this machine over one connection")
+	hub := fs.String("hub", os.Getenv("CCQUOTA_HUB_URL"), "hub base URL")
+	token := secretEnvFlag(fs, "token", "CCQUOTA_TOKEN", "the machine's own node `token`")
+	machineEnv := fs.String("machine-env", "", "root-only file with the machine's CCQUOTA_TOKEN (and CCQUOTA_HUB_URL);\n"+
+		"how the node supervisor starts it, so the token is in neither argv nor the environment")
+	logins := fs.String("logins", envOr("CCQUOTA_MACHINE_LOGINS", defaultMachineLogins), "directory of <login>.env files, one per login served")
+	state := fs.String("state", envOr("CCQUOTA_MACHINE_STATE", defaultMachineState), "state directory; each login's under <state>/<login>")
+	liveEvery := fs.Duration("live-interval", agent.DefaultLiveInterval, "how often to report running sessions")
+	scanEvery := fs.Duration("scan-interval", agent.DefaultScanInterval, "how often to scan transcripts")
+	limitsEvery := fs.Duration("limits-interval", agent.DefaultLimitsInterval, "how often to read account-wide limits")
+	core := fs.String("core", "", "the root core's `socket`: run as the node daemon's seat (_fleetnode), every\n"+
+		"command a login runs going through the core's exec-as (claude-fleet#3669)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	// The files that hold tokens are root's 0600 — or, on the seat, the seat's
+	// own 0600 (install --seat --agent hands them over).
+	strict := os.Geteuid() == 0 || *core != ""
+	if *token == "" {
+		t, err := tokenFromFD(os.Getenv("CCQUOTA_TOKEN_FD"))
+		if err != nil {
+			return err
+		}
+		*token = t
+	}
+	maxBusy := os.Getenv("FLEET_MAX_CPU_BUSY")
+	entryOn := os.Getenv("FLEET_ENTRY")
+	acctOn := os.Getenv("FLEET_NODE_ACCOUNT_OPS")
+	service := os.Getenv("FLEET_NODE_LOGIN")
+	userPod := os.Getenv("FLEET_USER_POD")
+	hubDial := os.Getenv("FLEET_HUB_INTERNAL_URL")
+	if *machineEnv != "" {
+		env, err := readLoginEnv(*machineEnv, strict)
+		if err != nil {
+			return err
+		}
+		if v := env["FLEET_MAX_CPU_BUSY"]; v != "" {
+			maxBusy = v
+		}
+		if entryOn == "" {
+			entryOn = env["FLEET_ENTRY"]
+		}
+		if acctOn == "" {
+			acctOn = env["FLEET_NODE_ACCOUNT_OPS"]
+		}
+		if service == "" {
+			service = env["FLEET_NODE_LOGIN"]
+		}
+		if userPod == "" {
+			userPod = env["FLEET_USER_POD"]
+		}
+		if hubDial == "" {
+			hubDial = env["FLEET_HUB_INTERNAL_URL"]
+		}
+		if *token == "" {
+			*token = env["CCQUOTA_TOKEN"]
+		}
+		if *hub == "" {
+			*hub = env["CCQUOTA_HUB_URL"]
+		}
+	}
+	// The machine's own CPU-busy ceiling for new sessions (claude-fleet#2882),
+	// carried in every beat it and its logins send: machine.env
+	// FLEET_MAX_CPU_BUSY, else the environment's; neither = the hub's.
+	agent.SetMaxCPUBusy(maxBusy)
+	tenants, err := machineTenants(*logins, *state, strict)
+	if err != nil {
+		return err
+	}
+	for i := range tenants {
+		tenants[i].LiveInterval = *liveEvery
+		tenants[i].ScanInterval = *scanEvery
+		tenants[i].LimitsInterval = *limitsEvery
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return agent.RunMachine(ctx, agent.MachineConfig{
+		HubURL: strings.TrimRight(*hub, "/"), Token: *token, Version: Version,
+		// a person's pod: the hub's in-cluster Service (claude-fleet#4175)
+		HubDial: hubDialURL(hubDial),
+		// machine.key beside machine.env (claude-fleet#3699, made by fleet node
+		// install), else $CCQUOTA_NODE_KEY.
+		KeyFile:      machineKeyFile(*machineEnv),
+		LiveInterval: *liveEvery, Tenants: tenants,
+		// The daemon's own state file sits beside the agent's state
+		// directory (/var/db/fleet-node/{agent,state.json}) — claude-fleet#2526.
+		ServicesFile: envOr("CCQUOTA_MACHINE_SERVICES", filepath.Join(filepath.Dir(filepath.Clean(*state)), "state.json")),
+		// …and its script, beside this binary in the root runtime
+		// (<current>/bin/{ccquota,fleet-node-supervisor.py}) — claude-fleet#2527.
+		ServiceCtl: envOr("CCQUOTA_MACHINE_SUPERVISOR", machineSupervisor()),
+		// …and the updater beside it, for the beat's 版本与更新
+		// (claude-fleet#2798).
+		Updater: envOr("CCQUOTA_MACHINE_UPDATER", machineScript("fleet-node-update.py")),
+		// …and, where the entry port is on (claude-fleet#3070), the daemon's
+		// script again for its `entry pull`.
+		EntryCtl: seatDrops(*core, "the entry's key pull (the daemon's entry pass, through the core)", entryCtl(entryOn)),
+		// …and a pushed release wakes the daemon's update through its
+		// <state>/update-now (claude-fleet#3146) — only where the updater is.
+		UpdateNow:      updateNow(filepath.Dir(filepath.Clean(*state))),
+		CurrentRelease: filepath.Join(envOr("FLEET_NODE_ROOT", "/Library/Application Support/claude-fleet"), "current"),
+		// …and, on a Linux managed machine with FLEET_NODE_ACCOUNT_OPS=1,
+		// the opener of its own logins (claude-fleet#3210).
+		AccountOpener: seatDrops(*core, "account ops (C15 #3557: _fleetadmin)", accountOpener(acctOn)),
+		AccountState:  filepath.Join(filepath.Clean(*state), "_machine"),
+		ServiceLogin:  service,
+		LinuxTenants:  filepath.Join(filepath.Dir(filepath.Clean(*state)), "linux-tenants"),
+		// …and, in one person's pod, CapUserPod (claude-fleet#3550).
+		UserPod: userPod == "1",
+		Core:    *core,
+	})
+}
+
+// seatDrops is v, except on the seat (core != ""): what only root can do is not
+// the seat's — logged once, and "" (claude-fleet#3669).
+func seatDrops(core, what, v string) string {
+	if core == "" || v == "" {
+		return v
+	}
+	fmt.Fprintf(os.Stderr, "ccquota agent --machine: on the seat, %s is not this program's — off\n", what)
+	return ""
+}
+
+// accountOpener is fleet-node-linux.py beside this binary when this Linux
+// managed machine opens its own logins (FLEET_NODE_ACCOUNT_OPS=1, the
+// environment, else machine.env — claude-fleet#3210); "" anywhere else: a Mac
+// never does, its admin login's agent opens them.
+func accountOpener(on string) string {
+	if on != "1" || accountGOOS != "linux" {
+		return ""
+	}
+	if v := os.Getenv("CCQUOTA_MACHINE_OPENER"); v != "" {
+		return v
+	}
+	p, why := machineScriptWhy("fleet-node-linux.py")
+	if p == "" {
+		// said once at start: without it a machine with no login only ever
+		// printed «no logins to serve» (claude-fleet#4301)
+		fmt.Fprintf(os.Stderr, "ccquota agent --machine: FLEET_NODE_ACCOUNT_OPS=1 but no opener: %s\n", why)
+	}
+	return p
+}
+
+// accountGOOS is the platform accountOpener judges; a test seam.
+var accountGOOS = runtime.GOOS
+
+// updateNow is the daemon's update-now beside the agent's state directory, or
+// "" where this machine has no updater (an image-managed one: Kubernetes owns
+// the runtime) — then the hello lists no CapRelease.
+func updateNow(stateDir string) string {
+	if os.Getenv("FLEET_NODE_UPDATE_OWNER") == "image" || machineScript("fleet-node-update.py") == "" && os.Getenv("CCQUOTA_MACHINE_UPDATER") == "" {
+		return ""
+	}
+	return envOr("CCQUOTA_MACHINE_UPDATE_NOW", filepath.Join(stateDir, "update-now"))
+}
+
+// machineTenants reads the logins directory into one agent Config per login.
+// strict (running as root) refuses a file anyone but root may read or write.
+func machineTenants(dir, state string, strict bool) ([]agent.Config, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("logins directory: %w", err)
+	}
+	var names []string
+	for _, e := range ents {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".env") {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+	var out []agent.Config
+	for _, n := range names {
+		login := strings.TrimSuffix(n, ".env")
+		if !control.ValidCreateLogin(login, true) {
+			return nil, fmt.Errorf("%s: %q is not a login name", n, login)
+		}
+		path := filepath.Join(dir, n)
+		env, err := readLoginEnv(path, strict)
+		if err != nil {
+			return nil, err
+		}
+		u, err := user.Lookup(login)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		ra, err := runAsFor(u)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		getenv := func(k string) string { return env[k] }
+		var routes []control.NodeRoute
+		if getenv("CCQUOTA_FLEET") == "1" {
+			if routes, err = agent.ParseNodeRoutes(getenv("CCQUOTA_FLEET_NODE_ROUTES")); err != nil {
+				return nil, fmt.Errorf("%s: %w", n, err)
+			}
+		}
+		cfg := agentFleetConfig(getenv, routes)
+		cfg.Token = getenv("CCQUOTA_TOKEN")
+		if cfg.Token == "" {
+			return nil, fmt.Errorf("%s: no CCQUOTA_TOKEN", n)
+		}
+		// the login's signing key beside its env file (claude-fleet#3710)
+		cfg.KeyFile = nodesig.Beside(path)
+		ra.ConfDir = getenv("FLEET_CONF_DIR")
+		cfg.Home = ra.Home
+		cfg.RunAs = ra
+		cfg.Sources = getenv("CCQUOTA_SOURCES")
+		cfg.CodexHomes = getenv("CCQUOTA_CODEX_HOMES")
+		cfg.CodexBinary = getenv("CCQUOTA_CODEX_BINARY")
+		cfg.AccountsDir = getenv("CCQUOTA_ACCOUNTS_DIR")
+		cfg.ProbeModels = splitList(getenv("CCQUOTA_PROBE_MODELS"))
+		cfg.StateDir = filepath.Join(state, login)
+		cfg.SessionsDir = filepath.Join(ra.Home, ".ccquota")
+		cfg.SpoolMaxBytes = 64 << 20
+		out = append(out, cfg)
+	}
+	// None is not refused here: agent.RunMachine decides — a machine that
+	// opens its own logins runs its link with none yet (claude-fleet#3554)
+	return out, nil
+}
+
+func runAsFor(u *user.User) (*agent.RunAs, error) {
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("uid %q: %w", u.Uid, err)
+	}
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("gid %q: %w", u.Gid, err)
+	}
+	if uid == 0 {
+		return nil, errors.New("refusing to serve root as a login")
+	}
+	ra := &agent.RunAs{Login: u.Username, UID: uint32(uid), GID: uint32(gid), Home: u.HomeDir}
+	if gs, err := u.GroupIds(); err == nil {
+		for _, g := range gs {
+			if n, err := strconv.ParseUint(g, 10, 32); err == nil {
+				ra.Groups = append(ra.Groups, uint32(n))
+			}
+		}
+	}
+	return ra, nil
+}
+
+// readLoginEnv parses KEY=VALUE lines (an optional `export `, one level of
+// matching quotes, # comments). Nothing is expanded or run.
+func readLoginEnv(path string, strict bool) (map[string]string, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", path)
+	}
+	if strict {
+		if fi.Mode().Perm()&0o077 != 0 {
+			return nil, fmt.Errorf("%s: mode %o — it holds a token; only root may read it (chmod 600)", path, fi.Mode().Perm())
+		}
+		if uid, ok := fileUID(fi); ok && uid != uint32(os.Geteuid()) {
+			if os.Geteuid() == 0 {
+				return nil, fmt.Errorf("%s: owned by uid %d, not root", path, uid)
+			}
+			// the seat's own (claude-fleet#3669): handed over by install --seat --agent
+			return nil, fmt.Errorf("%s: owned by uid %d, not this program's (uid %d) — install --seat --agent hands it over",
+				path, uid, os.Geteuid())
+		}
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	env := map[string]string{}
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || k == "" {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			v = v[1 : len(v)-1]
+		}
+		env[strings.TrimSpace(k)] = v
+	}
+	return env, sc.Err()
+}
+
+// machineFlag says the agent was started as the machine's node program.
+func machineFlag(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--machine", "-machine", "--machine=true", "-machine=true":
+			return true
+		}
+	}
+	return false
+}
+
+// machineSupervisor is fleet-node-supervisor.py beside this binary, when root
+// may run it: a regular file root owns that no group or other may write (the
+// root runtime's rule, 共同约定 3). "" when there is none — service_control is
+// then refused, never run from anywhere else.
+func machineSupervisor() string { return machineScript("fleet-node-supervisor.py") }
+
+// entryCtl is the script the machine pulls its entry keys with: the daemon's
+// own, only when FLEET_ENTRY=1 (the environment, else machine.env).
+func entryCtl(on string) string {
+	if on != "1" {
+		return ""
+	}
+	return envOr("CCQUOTA_MACHINE_SUPERVISOR", machineSupervisor())
+}
+
+// machineScript is a root-owned, not group/world-writable script beside this
+// binary in the root runtime, or "" — never one anyone else could swap.
+func machineScript(name string) string {
+	p, _ := machineScriptWhy(name)
+	return p
+}
+
+// machineScriptWhy is machineScript plus, for "", why the script was not taken.
+func machineScriptWhy(name string) (string, string) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err.Error()
+	}
+	return scriptBeside(filepath.Dir(exe), name, os.Geteuid(), os.Getegid())
+}
+
+// scriptBeside judges <dir>/<name> for a program running as euid/egid. A
+// group-writable file passes only for a non-root program whose own group it is:
+// one person's pod runs as its login with fsGroup = that login's group, and the
+// kubelet's fsGroup pass (OnRootMismatch, after anything touched the disk's top)
+// adds g+w to every file — a group of one, nobody else's write (claude-fleet#4301:
+// the opener read "" and the drill pod sat at «no logins to serve»).
+func scriptBeside(dir, name string, euid, egid int) (string, string) {
+	p := filepath.Join(dir, name)
+	fi, err := os.Stat(p)
+	if err != nil {
+		return "", err.Error()
+	}
+	if !fi.Mode().IsRegular() {
+		return "", p + ": not a regular file"
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o002 != 0 {
+		return "", fmt.Sprintf("%s: mode %o — anyone may write it", p, perm)
+	}
+	if perm&0o020 != 0 {
+		gid, ok := fileGID(fi)
+		if euid == 0 || !ok || int(gid) != egid {
+			return "", fmt.Sprintf("%s: mode %o — its group may write it", p, perm)
+		}
+	}
+	if uid, ok := fileUID(fi); euid == 0 && (!ok || uid != 0) {
+		return "", p + ": not root's"
+	}
+	return p, ""
+}
+
+// runCoreExec is `ccquota core-exec --sock S --login L -- argv…`: what prepCmd
+// turns a login's command into on the seat (claude-fleet#3669). Not for people.
+func runCoreExec(args []string) int {
+	fs := flag.NewFlagSet(agent.CoreExecCmd, flag.ContinueOnError)
+	sock := fs.String("sock", "", "the root core's socket")
+	login := fs.String("login", "", "the login to run as")
+	if err := fs.Parse(args); err != nil || *sock == "" || *login == "" || fs.NArg() == 0 {
+		fmt.Fprintln(os.Stderr, "usage: ccquota core-exec --sock <socket> --login <login> -- <argv…>")
+		return 2
+	}
+	return agent.CoreExec(*sock, *login, fs.Args())
+}
+
+// machineKeyFile is the machine's signing key (claude-fleet#3710):
+// $CCQUOTA_NODE_KEY (off = none), else machine.key beside machine.env, else none.
+func machineKeyFile(machineEnv string) string {
+	if p := os.Getenv("CCQUOTA_NODE_KEY"); p == "off" {
+		return ""
+	} else if p != "" {
+		return p
+	}
+	return nodesig.Beside(machineEnv)
+}

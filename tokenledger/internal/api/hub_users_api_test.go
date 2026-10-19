@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
 
 // claude-fleet#1986 (EPIC #1982 C4): the people list and the hub's settings

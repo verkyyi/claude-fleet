@@ -21,9 +21,10 @@ import (
 // it is building, and a release whose two differ is not built.
 //
 // The digest is over tokenledger/'s build inputs: go.mod, go.sum and every
-// regular file under cmd/, internal/ and shared/ (embedded files too —
+// regular file under cmd/, internal/, shared/ and agent/ (embedded files too —
 // schema.sql; shared/ is the module both the hub and the node build in,
-// claude-fleet#4811, its go.mod and go.sum with it; go.work is a developer's
+// claude-fleet#4811, agent/ the node's own, claude-fleet#4812, their go.mod
+// and go.sum with them; go.work is a developer's
 // convenience the image builds without, GOWORK=off),
 // less tests (*_test.go, testdata/), Markdown and the client's file list and
 // pack (internal/api/fleetclient/manifest and pack/: the client follows stable,
@@ -42,7 +43,8 @@ func SourceInput(p string) bool {
 	if p == "go.mod" || p == "go.sum" {
 		return true
 	}
-	if !strings.HasPrefix(p, "cmd/") && !strings.HasPrefix(p, "internal/") && !strings.HasPrefix(p, "shared/") {
+	if !strings.HasPrefix(p, "cmd/") && !strings.HasPrefix(p, "internal/") && !strings.HasPrefix(p, "shared/") &&
+		!strings.HasPrefix(p, "agent/") {
 		return false
 	}
 	if strings.HasSuffix(p, "_test.go") || strings.HasSuffix(p, ".md") ||
