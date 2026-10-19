@@ -1550,7 +1550,7 @@ class DoneNoPr(Rig):
 class StuckReaps(unittest.TestCase):
     """Issue #4822: the finished windows nothing closed on a multi-repo fleet.
     Last in the module on purpose — a case added above would move every later
-    case to another stride part; this class runs as fleet-cleanup-idle-9."""
+    case to another stride part (part 4/4's groups are named one by one)."""
     NAMES = ("@raw", "@issue", "@repo", "@norepo", "@worktree", "@claude_state", "@claude_state_ts",
              "@cc_agent", "@cc_launcher_pid", "@codex_identity", "@handoff_manifest",
              "@agent_transfer_until", "window_name", "@reap_policy", "@loop", "@worker_lifecycle",
