@@ -27,8 +27,12 @@
 # `ln -sfn <home>.versions/<prev> <home>`. A home that is still a plain dir is
 # adopted by the next `start` or `tick`, together with a pre-#1781 <home>.prev
 # (issue #1829).
-# A hand edit in <home> is gone at the next switch, by design: a lasting local
-# patch belongs in ~/.ssh/config or fleet.conf, never in the client's files.
+# A file the person put in <home>, or a fleet file they edited and the new
+# version no longer ships, goes along into the new version (issue #4827:
+# <home>/installed.list names what the fleet put there, path TAB sha256 —
+# fleet_versions_carry); a fleet file the new version ships is the new
+# version's. Only the current version and the one before are kept (+ a staged
+# one), and a staging dir a crashed run left is cleared (tidy).
 #
 # `start`, at most once per FLEET_CLIENT_CHECK_SECS (3600; the stamp is in
 # ~/.cache/claude-fleet/client/), asks the hub two things, each with a short
@@ -301,6 +305,19 @@ prune() {
   fleet_versions_prune "$ROOT" "$(cur_key)" "$prev" "$next"
 }
 
+# tidy — what an update leaves behind goes (issue #4827): every version dir but
+# the current one, .prev's and .next's, and a staging dir a crashed stage or
+# install line left (older than 15 minutes, no stager holding the lock)
+tidy() {
+  local d
+  [ -d "$VERS" ] || return 0
+  prune
+  [ -d "$VERS/.lock" ] && [ -z "$(find "$VERS/.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && return 0
+  for d in "$VERS"/.staging "$VERS"/.staging-install.*; do
+    [ -d "$d" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rm -rf "$d"
+  done
+  return 0
+}
 # stage — the hub's client into <home>.versions/<version>, the way a person
 # would get it: the hub's own /install, aimed at a staging dir (no PATH line, no
 # tmux step, no run), then renamed into place. Done = <dir>/.staged and .next
@@ -380,6 +397,9 @@ switch() {
   k=$(next_key)
   [ -n "$k" ] || return 1
   old=$(cur_key); ADOPTED=''
+  # what the person put in the one in use goes along (issue #4827)
+  command -v fleet_versions_carry >/dev/null 2>&1 \
+    && fleet_versions_carry "$ROOT" "$VERS/$k" | while IFS= read -r rel; do ulog "carry: $rel → $k"; done
   point "$k" || return 1
   [ -n "$old" ] || old=$ADOPTED
   [ -n "$old" ] && printf '%s\n' "$old" > "$VERS/.prev"
@@ -456,6 +476,7 @@ cmd_start() {
   HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   mkdir -p "$STATE" 2>/dev/null || return 0
   adopt
+  tidy
   # 1. a client staged earlier: switch to it now (the version dirs keep the one
   #    in use, so a client still running from it is not written under)
   legacy_next
@@ -494,6 +515,7 @@ cmd_tick() {
   mkdir -p "$STATE" 2>/dev/null || return 0
   HUB=$(hub_url)                                      # empty: GitHub's stable (#1805)
   adopt
+  tidy
   check 2>/dev/null
   case "$?" in 10|11) [ "${FLEET_CLIENT_AUTO_UPDATE:-1}" != 0 ] && stage_bg ;; esac
   return 0

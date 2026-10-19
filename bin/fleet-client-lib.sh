@@ -262,6 +262,12 @@ fc_served() {  # <root> <path>…
     fi
     case $_fsp in bin/*) chmod 755 "$_fst" ;; *) chmod 644 "$_fst" ;; esac
     mv -f "$_fst" "$_fsr0/$_fsp" || { rm -f "$_fst"; FC_WHY="放不进 $_fsr0/$_fsp"; return 1; }
+    # the fleet's file (issue #4827): on installed.list, so a later upgrade
+    # drops it rather than carrying it along as the person's
+    if [ -f "$_fsr0/installed.list" ]; then
+      printf '%s\t%s\n' "$_fsp" "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_fsr0/$_fsp")" \
+        >> "$_fsr0/installed.list" 2>/dev/null
+    fi
   done
   return 0
 }

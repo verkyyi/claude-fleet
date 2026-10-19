@@ -384,6 +384,13 @@ From `fleet doctor`.
 - **What it is**: whether you have a connection certificate, whether it has expired, and whether the hub accepts it.
 - **On WARN / FAIL**: `fleet login` to sign it again; on a machine, run `fleet node install --join <join-code>` again.
 
+#### `background`
+
+From `fleet doctor` on a computer used only as a client.
+
+- **What it is**: how many fleet processes still run in the background with nobody looking (left by the old client, or an ssh master a dropped client left), and how many extra files an update left beside the install (version folders past the current one and the one before, unfinished staging folders). PASS only when all three are 0.
+- **On WARN**: `fleet quit` stops the processes; the extra files go the next time you open `fleet`. A file you put into the install folder yourself, or edited, is not extra and an update never deletes it.
+
 #### `hubauth`
 
 From `fleet doctor`.

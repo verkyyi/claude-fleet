@@ -37,6 +37,10 @@
 #                           client uses: every offline word runs with no missing
 #                           file, a served script comes on first use, --check
 #                           holds the package to what its scripts name
+#   client-update-deletes-foreign  (issue #4827) an upgrade to a manifest that
+#                           drops files: the fleet's own unchanged copies go,
+#                           a file the person put in or edited stays — in place
+#                           and across a whole-version switch
 #
 # The loop runs for real under a python pty (the terminal), with the real
 # bin/fleet-connect.py --argv (a sandbox HOME, its own fleet-ssh-config + routes,
@@ -685,6 +689,71 @@ EOF
     || { WHY="fleet-client-runtime.sh --check: $(printf '%s' "$out" | head -n 3 | tr '\n' ' ')"; return 1; }
   SECS=$(since "$t0")
   WHAT="纯客户端：14 个词离线跑通、没有一处缺文件；fleet users / release stats / drill 用到时才把 served 的脚本取来；--check 两个方向都对得上"
+}
+
+# client-update-deletes-foreign (issue #4827, EPIC #4823 C4): an installed
+# client upgraded to a manifest that no longer lists two of its files. This
+# tree's client from a file:// copy with two extra fleet files on its manifest
+# (v1), then the tree's own manifest (v2, v3): the fleet's unchanged copy goes,
+# the one the person edited and the ones they put in stay — in place (no
+# version) and across whole-version switches (only the current + the one before
+# kept). FLEET_CUF_SRC (another tree) is the seam that shows it red.
+drill_client_update_deletes_foreign() {
+  CAP=150
+  local t0 src S M p v H R bad=''
+  t0=$(now)
+  src=$(cd "${FLEET_CUF_SRC:-$BIN/..}" && pwd -P)
+  S=$(mktemp -d /tmp/cuf.XXXXXX); S=$(cd "$S" && pwd -P); printf '%s\n' "$S" >> "$WORK/tc-rigs"
+  M=tokenledger/internal/api/fleetclient/manifest
+  for v in v1 v2; do
+    mkdir -p "$S/$v/$(dirname "$M")"; cp "$src/$M" "$S/$v/$M"
+    awk '!/^[[:space:]]*#/ && NF && $2 != "served" { print $1 }' "$S/$v/$M" | while IFS= read -r p; do
+      mkdir -p "$S/$v/$(dirname "$p")"; cp -p "$src/$p" "$S/$v/$p"
+    done
+  done
+  printf '#!/bin/sh\n# fleet-gone-a.sh\n' > "$S/v1/bin/fleet-gone-a.sh"
+  printf '#!/bin/sh\n# fleet-gone-b.sh\n' > "$S/v1/bin/fleet-gone-b.sh"
+  printf 'bin/fleet-gone-a.sh\nbin/fleet-gone-b.sh\n' >> "$S/v1/$M"
+  # cuf_install <home> <src> [version] — the install line, offline
+  cuf_install() {
+    env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$1" LANG=C.UTF-8 TMPDIR="$S" FLEET_INSTALL_SRC="file://$S/$2" \
+      ${3:+FLEET_INSTALL_VERSION="$3"} FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_HUB=1 \
+      FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_STATIC_TMUX=0 \
+      sh "$S/$2/bin/fleet-install.sh" >>"$S/install.out" 2>&1
+  }
+  # cuf_person <root> — what a person does to an installed client
+  cuf_person() {
+    printf '#!/bin/sh\necho mine\n' > "$1/bin/my-tool.sh"
+    printf 'MINE=1\n' > "$1/conf/my.conf"
+    printf '# edited by hand\n' >> "$1/bin/fleet-gone-b.sh"
+  }
+  # cuf_check <root> <leg>
+  cuf_check() {
+    [ -f "$1/bin/fleet" ] || bad="$bad | $2: bin/fleet missing"
+    [ ! -e "$1/bin/fleet-gone-a.sh" ] || bad="$bad | $2: the fleet's unchanged bin/fleet-gone-a.sh left behind"
+    for p in bin/my-tool.sh conf/my.conf; do [ -f "$1/$p" ] || bad="$bad | $2: the person's $p deleted"; done
+    grep -q 'edited by hand' "$1/bin/fleet-gone-b.sh" 2>/dev/null || bad="$bad | $2: the person's edit of bin/fleet-gone-b.sh deleted"
+  }
+  # in place: no version named → file by file in the one directory
+  H="$S/h1"; R="$H/.claude/fleet"; mkdir -p "$H"
+  cuf_install "$H" v1 || { WHY="install v1: $(tail -n 2 "$S/install.out")"; return 1; }
+  cuf_person "$R"
+  cuf_install "$H" v2 || { WHY="install v2: $(tail -n 2 "$S/install.out")"; return 1; }
+  cuf_check "$R" 'in place'
+  # whole versions: v1 → v2 → v3, the person's files carried each time
+  H="$S/h2"; R="$H/.claude/fleet"; mkdir -p "$H"
+  cuf_install "$H" v1 1111111111111111111111111111111111111111 || { WHY="install v1 (versioned): $(tail -n 2 "$S/install.out")"; return 1; }
+  cuf_person "$R"
+  cuf_install "$H" v2 2222222222222222222222222222222222222222 || { WHY="install v2 (versioned): $(tail -n 2 "$S/install.out")"; return 1; }
+  [ -L "$R" ] || bad="$bad | versioned: $R is not a link after the switch"
+  cuf_check "$R" 'versioned v2'
+  cuf_install "$H" v2 3333333333333333333333333333333333333333 || { WHY="install v3 (versioned): $(tail -n 2 "$S/install.out")"; return 1; }
+  cuf_check "$R" 'versioned v3'
+  v=$(find "$R.versions" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | wc -l | tr -d ' ')
+  [ "$v" -le 2 ] || bad="$bad | versioned: $v version dirs kept (the current + the one before = 2)"
+  [ -z "$bad" ] || { WHY="${bad# | }"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="升级到少了两个文件的清单：fleet 原样的那个删了，人改过的、自己放的留着；整版切换两次也带着，版本目录只留当前 + 上一版"
 }
 
 tc_cleanup() {
