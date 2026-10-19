@@ -10,17 +10,10 @@ name: node-join
 # node online. The full output is the run log.
 
 on:
-  pull_request:
-    paths:
-      - 'bin/fleet-node-join.sh'
-      - 'tokenledger/hub/api/fleet_join.go'
-      - 'tokenledger/hub/store/fleet_join.go'
-      - '.github/workflows/node-join.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: node-join-${{ github.ref }}
-  cancel-in-progress: true
 
 defaults:
   run:

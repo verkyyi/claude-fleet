@@ -50,21 +50,27 @@ while d <= end:
     print(d.isoformat()); d += datetime.timedelta(days=1)
 PY
 : > "$work/runs"
+# Since issue #4815 a PR's Go tests are the PR gate's (ci.yml) `tokenledger / …`
+# jobs; tokenledger.yml's own runs are the older PRs and a dispatch. A ci run
+# counts only when an earlier attempt had a failed tokenledger job.
 while read -r d; do
-  gh api --paginate "repos/$repo/actions/workflows/tokenledger.yml/runs?per_page=100&created=$d" \
-    --jq '.workflow_runs[]|[.id,.run_attempt,.conclusion,(.created_at|.[0:10])]|@tsv' >> "$work/runs"
+  for wfy in tokenledger.yml ci.yml; do
+    gh api --paginate "repos/$repo/actions/workflows/$wfy/runs?per_page=100&created=$d" \
+      --jq '.workflow_runs[]|[.id,.run_attempt,.conclusion,(.created_at|.[0:10]),"'"$wfy"'"]|@tsv' >> "$work/runs" || true   # no ci.yml before #4815
+  done
 done < "$work/days"
 total=$(sort -u "$work/runs" | wc -l | tr -d ' ')
 sort -u "$work/runs" | awk -F'\t' '$2>1 && $3=="success"' > "$work/retried"
-echo "retried-green runs: $(wc -l < "$work/retried" | tr -d ' ') (of $total runs since $since)"
 
 : > "$work/hits"
-while IFS=$'\t' read -r id att _ day; do
+while IFS=$'\t' read -r id att _ day wfy; do
   a=1
   while [ "$a" -lt "$att" ]; do
     gh api "repos/$repo/actions/runs/$id/attempts/$a/jobs?per_page=50" \
       --jq '.jobs[]|select(.conclusion=="failure")|[.id,.name]|@tsv' |
     while IFS=$'\t' read -r jid jname; do
+      [ "$wfy" != ci.yml ] || case "$jname" in "tokenledger / "*) ;; *) continue ;; esac
+      echo "$id" >> "$work/hitruns"
       log="$cache/logs/$jid.log"
       [ -s "$log" ] || gh api --allow-escape-sequences "repos/$repo/actions/jobs/$jid/logs" > "$log" 2>/dev/null || true
       case "$jname" in *pg*) leg=pg ;; *) leg=go ;; esac
@@ -78,6 +84,8 @@ while IFS=$'\t' read -r id att _ day; do
     a=$((a + 1))
   done
 done < "$work/retried"
+n=$({ awk -F'\t' '$5 != "ci.yml" { print $1 }' "$work/retried"; cat "$work/hitruns" 2>/dev/null; } | sort -u | wc -l | tr -d ' ')
+echo "retried-green runs: $n (of $total runs since $since)"
 
 awk -F'\t' '{
   c[$1]++; l[$1, $3]++

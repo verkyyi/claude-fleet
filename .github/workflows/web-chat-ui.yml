@@ -7,16 +7,10 @@ name: web-chat-ui
 # No master `push` run (issue #4663): its PR ran this on the change already, and a
 # post-merge re-run only re-checked it beside the release train.
 on:
-  pull_request:
-    paths:
-      - 'extras/web-chat/ui/**'
-      - 'extras/fleet-theme/**'
-      - 'extras/browser-transport/**'
-      - '.github/workflows/web-chat-ui.yml'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   build:

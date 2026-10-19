@@ -1,0 +1,52 @@
+name: hub-deploy-check
+
+# hub-deploy.yml's `check` job on its own (issue #4815): the actions' selftests,
+# the overlay renders, the base names no environment — no credential. The PR gate
+# (.github/workflows/ci.yml) calls it when bin/ci-plan.sh says the change reaches
+# deploy/k8s/ or the hub actions; hub-deploy.yml calls it before every deploy
+# (sha = the train's TRAIN_SHA). It lives apart so a pull request can call it
+# without inheriting the deploy's id-token / issues permissions.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: "the commit to check; empty = the event's commit"
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
+      - run: node .github/actions/hub-acr/acr.js --selftest
+      - run: .github/actions/hub-release/release.sh --selftest
+      # The deployment's own overlays (prod · updating · credproxy) render as
+      # one whole shape with one placeholder tag (issues #2125, #1973) —
+      # render-check.sh. Production's live in FLEET_DEPLOY_OVERLAY_REPO
+      # (claude-fleet#3630): a PR has no access to it, so here the check runs on
+      # whatever this tree still carries (none ⇒ only the base), and the deploy
+      # job runs it again, required, on the tree with the overlay laid over it.
+      - name: The base and this tree's prod overlays render
+        run: .github/actions/hub-release/render-check.sh deploy/k8s
+      - name: The example overlay renders and names nothing of ours
+        run: |
+          set -euo pipefail
+          # the shape a deployment's own overlay takes (claude-fleet#3577)
+          kubectl kustomize deploy/k8s/overlays/example > "$RUNNER_TEMP/example.yaml"
+          bin/oss-scan.sh -- deploy/k8s/overlays/example
+      - name: The base names no environment
+        run: |
+          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then
+            echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
+          fi

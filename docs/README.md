@@ -21,6 +21,7 @@
 - [INSTALL.md](dev/INSTALL.md) — 安装 / 卸载步骤（CLAUDE.md 让 agent 照它装）
 - [TERMS.md](dev/TERMS.md) — 术语表
 - [BREAK-IT.md](dev/BREAK-IT.md) — 已知的每一种弄坏方式、后果、自愈与演练
+- [CI.md](dev/CI.md) — 开 PR、列车、每晚各跑什么；唯一必过的「CI 结论」、每个检查的触发规则、怎么加一个
 - [PATROLS.md](dev/PATROLS.md) — 自动开单、提醒和定时巡检的清单：一个入口、一种指纹、一处巡检
 
 **会话与工具**

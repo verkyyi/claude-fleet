@@ -52,7 +52,7 @@
 #                                        rc $FLEET_GH_LIMITED_RC (75) = rate-limited
 #                                        (marked, logged) → take the fallback; any
 #                                        other non-zero rc replays gh's stderr
-#   fleet_gh_rest_pr_view <repo> <pr>    the six lines fleet-pr-verdict.sh reads
+#   fleet_gh_rest_pr_view <repo> <pr>    the seven lines fleet-pr-verdict.sh reads
 #   fleet_gh_rest_merge <repo> <pr> <method> [--delete-branch]
 #   fleet_gh_rest_comment <repo> <issue> <body-file>   → prints the comment URL
 #   fleet_gh_rest_issue_close <repo> <issue>
@@ -491,7 +491,7 @@ fleet_gh() {  # fleet_gh <gh args…>
 # commit status; none / fail / pending / pass. A MERGED/CLOSED PR skips the check
 # reads (the verdict ignores them) — two calls saved under a budget squeeze.
 fleet_gh_rest_pr_view() {  # fleet_gh_rest_pr_view <repo> <pr>
-  local repo="$1" pr="$2" row st mg ms dr sha am runs stats ck
+  local repo="$1" pr="$2" row st mg ms dr sha am runs stats ck ci=''
   # shellcheck disable=SC2016
   row=$(fleet_gh_run core pr-view api "repos/$repo/pulls/$pr" --jq '
           (if .merged then "MERGED" elif .state=="closed" then "CLOSED" else "OPEN" end),
@@ -508,21 +508,30 @@ fleet_gh_rest_pr_view() {  # fleet_gh_rest_pr_view <repo> <pr>
     # exactly as fleet-pr-verdict.sh's GraphQL fold drops it.
     runs=$(fleet_gh_run core pr-view api "repos/$repo/commits/$sha/check-runs?per_page=100" --jq '
              .check_runs[] | select((.name // "") | startswith("macOS shard") | not) |
-             if (.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled"
+             (if .name == "CI 结论" then "ci-" else "" end) +
+             (if (.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled"
                  or .conclusion=="action_required") then "fail"
-             elif .status!="completed" then "pending" else "pass" end') || return $?
+              elif .status!="completed" then "pending" else "pass" end)') || return $?
     stats=$(fleet_gh_run core pr-view api "repos/$repo/commits/$sha/status" --jq '
              .statuses[] |
              if (.state=="failure" or .state=="error") then "fail"
              elif .state=="pending" then "pending" else "pass" end') || return $?
     runs="$runs
 $stats"
-    if   printf '%s\n' "$runs" | grep -qx fail;    then ck=fail
+    # `CI 结论` decides when present (issue #4815) — another red still fails
+    # (# compat-1v: 下一批删); the same fold as fleet-pr-verdict.sh's GraphQL read
+    if printf '%s\n' "$runs" | grep -q '^ci-'; then
+      ci=CI
+      if   printf '%s\n' "$runs" | grep -qE '^(ci-)?fail$'; then ck=fail
+      elif printf '%s\n' "$runs" | grep -qx ci-pending;     then ck=pending
+      else ck=pass
+      fi
+    elif printf '%s\n' "$runs" | grep -qx fail;    then ck=fail
     elif printf '%s\n' "$runs" | grep -qx pending; then ck=pending
     elif printf '%s\n' "$runs" | grep -qx pass;    then ck=pass
     fi
   fi
-  printf '%s\n' "$st" "$mg" "$ms" "$dr" "$ck" "$am"
+  printf '%s\n' "$st" "$mg" "$ms" "$dr" "$ck" "$am" "$ci"
 }
 
 # Merge over REST, pinned to the head sha it reads (a push that lands between the

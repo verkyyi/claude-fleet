@@ -40,6 +40,12 @@ case "$path" in
   */workflows/tokenledger.yml/runs*created=2026-10-01*)
     printf '101\t2\tsuccess\t2026-10-01\n102\t1\tsuccess\t2026-10-01\n103\t3\tsuccess\t2026-10-01\n104\t2\tfailure\t2026-10-01\n' ;;
   */workflows/tokenledger.yml/runs*) : ;;
+  */workflows/ci.yml/runs*created=2026-10-01*)
+    printf '201\t2\tsuccess\t2026-10-01\tci.yml\n202\t2\tsuccess\t2026-10-01\tci.yml\n' ;;
+  */workflows/ci.yml/runs*) : ;;
+  */runs/201/attempts/1/jobs*) printf '9101\ttokenledger / test (api-1)\n9102\tselftests / selftests / shard 1\n' ;;
+  */runs/202/attempts/1/jobs*) printf '9103\tselftests / selftests / shard 2\n' ;;
+  */jobs/9101/logs) printf -- '--- FAIL: TestFlaky (1.5s)\n' ;;
   */runs/101/attempts/1/jobs*) printf '9001\ttest (api-1)\n' ;;
   */runs/103/attempts/1/jobs*) printf '9002\ttokenledger-pg (api-2)\n' ;;
   */runs/103/attempts/2/jobs*) printf '9003\ttest (rest)\n' ;;
@@ -53,8 +59,8 @@ chmod +x "$T/stub/gh"
 out=$(PATH="$T/stub:$PATH" TMPDIR="$T" "$BIN/tokenledger-flaky.sh" --since 2026-10-01 --repo o/r 2>"$T/err")
 rc=$?
 [ "$rc" = 0 ] && ok "B1 runs off the stub" || fail "B1 rc=$rc: $(cat "$T/err")"
-echo "$out" | grep -q '^retried-green runs: 2 ' && ok "B2 counts only runs green on a later attempt" || fail "B2 header: $out"
-echo "$out" | grep -qE '^ +2 TestFlaky  2026-10-01\.\.2026-10-01  go=1 pg=1$' && ok "B3 one per (job, test), legs apart, subtests folded" || fail "B3 table: $out"
+echo "$out" | grep -q '^retried-green runs: 3 ' && ok "B2 counts only runs green on a later attempt (a ci.yml run only for a tokenledger job)" || fail "B2 header: $out"
+echo "$out" | grep -qE '^ +3 TestFlaky  2026-10-01\.\.2026-10-01  go=2 pg=1$' && ok "B3 one per (job, test), legs apart, subtests folded, ci.yml's tokenledger jobs counted" || fail "B3 table: $out"
 echo "$out" | grep -qE '^ +1 panic:_test_timed_out_after_20m0s ' && ok "B4 a job with no FAIL line counts as its timeout" || fail "B4 table: $out"
 [ "$(echo "$out" | sed -n 2p | awk '{print $2}')" = TestFlaky ] && ok "B5 most frequent first" || fail "B5 order: $out"
 

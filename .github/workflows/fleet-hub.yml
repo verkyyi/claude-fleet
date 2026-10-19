@@ -10,39 +10,15 @@ name: fleet-hub-mcp
 #   - macOS runs nightly and on demand, not per PR. The test is Python in temp
 #     fixtures; a PR-time macOS leg here only queued in front of the Mac shards.
 on:
-  pull_request:
-    paths:
-      - 'bin/fleet*'
-      - 'requirements-mcp.txt'
-      - '.github/workflows/fleet-hub.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   schedule:
     - cron: '41 20 * * *'   # 04:41 CST — the macOS leg
   workflow_dispatch:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  plan:
-    # Does this change reach these checks? (issue #4794, bin/ci-plan.sh — the
-    # selftest selector over this workflow's entry files.) Not related ⇒ the job
-    # below is skipped, which reads green; a schedule or a dispatch always runs.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      run: ${{ steps.plan.outputs.run }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: plan
-        run: bash bin/ci-plan.sh fleet-hub-mcp origin/${{ github.base_ref }}
-
   protocol:
-    needs: plan
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.plan.outputs.run == 'true') }}
     strategy:
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest"]') }}

@@ -13,26 +13,10 @@ name: cluster-perms
 # Docker Hub pulls go through mirror.gcr.io (claude-fleet#2734), as hub-rolling's.
 
 on:
-  pull_request:
-    paths:
-      - 'deploy/k8s/fleet-workers/**'
-      - 'deploy/k8s/provisioner/**'
-      - 'deploy/k8s/credproxy/**'
-      - 'deploy/k8s/egress/**'
-      - 'deploy/k8s/caches/**'
-      - 'extras/managed-node/render.py'
-      - 'bin/fleet-provisioner.py'
-      - 'bin/fleet-node-linux.py'
-      - 'bin/fleet_cluster_ticket.py'
-      - 'bin/fleet_admin_ticket.py'
-      - 'bin/fleet_ed25519.py'
-      - 'bin/fleet-job-runner.sh'
-      - '.github/workflows/cluster-perms.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: cluster-perms-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read

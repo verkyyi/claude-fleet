@@ -17,17 +17,10 @@ name: hub-rolling
 # come through mirror.gcr.io, Google's pull-through cache of Docker Hub.
 
 on:
-  pull_request:
-    paths:
-      - 'deploy/k8s/**'
-      - '.github/actions/hub-release/**'
-      - '.github/workflows/hub-rolling.yml'
-      - 'tokenledger/**'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: hub-rolling-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read

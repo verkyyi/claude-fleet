@@ -1,0 +1,218 @@
+name: CI
+
+# The ONE pull-request gate (issue #4815, EPIC #4810 C5; docs/dev/CI.md). Every PR
+# check used to be its own `on: pull_request` workflow with its own `paths:`, and
+# whether a skipped one counted as passed was said differently in each place. Now:
+#
+#   plan        bin/ci-plan.sh all — for every check: does this change reach it?
+#               (its old paths, the selftest selector over its entry files, and
+#               for Go the four blocks: shared ⇒ all, agent ⇒ agent + e2e,
+#               hub ⇒ hub + e2e, e2e ⇒ e2e, narrowed to the packages whose test
+#               binary depends on a changed one). Unsure ⇒ run. The record is the
+#               `ci-plan` artifact (each check, run or not, and why).
+#   <check>     each check is its workflow, called here (`workflow_call`) only when
+#               the plan says so; a check not called reads `skipped`. Each workflow
+#               keeps its own schedule / dispatch for the nightly and by hand.
+#   CI 结论     needs every job above, runs always: the plan must succeed, a check
+#               the plan selected must succeed, a check it did not select must be
+#               skipped; anything failed or cancelled is red. It runs no test, so it
+#               is the one check branch protection requires.
+#
+# Adding a check: a `workflow_call:` trigger on its workflow (no `pull_request:`),
+# its key in bin/ci-plan.sh's CHECKS + rules, a caller job here and its name in
+# `CI 结论`'s needs. bin/ci-plan-selftest.sh holds the three in lockstep.
+#
+# A called workflow's `github.workflow` is THIS file's name: a callee's concurrency
+# group spells its own name, never `${{ github.workflow }}` (it would collide with
+# its siblings, or deadlock with this run).
+on:
+  pull_request:
+
+concurrency:
+  group: ci-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+# the most any called workflow's jobs ask for (a callee can never ask for more)
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      selftests: ${{ steps.plan.outputs.selftests }}
+      shellcheck: ${{ steps.plan.outputs.shellcheck }}
+      tokenledger: ${{ steps.plan.outputs.tokenledger }}
+      task_acceptance: ${{ steps.plan.outputs.task_acceptance }}
+      client_e2e: ${{ steps.plan.outputs.client_e2e }}
+      fleet_hub_mcp: ${{ steps.plan.outputs.fleet_hub_mcp }}
+      browser_attachment: ${{ steps.plan.outputs.browser_attachment }}
+      hub_rolling: ${{ steps.plan.outputs.hub_rolling }}
+      hub_deploy_check: ${{ steps.plan.outputs.hub_deploy_check }}
+      cluster_perms: ${{ steps.plan.outputs.cluster_perms }}
+      native_claude_worktree: ${{ steps.plan.outputs.native_claude_worktree }}
+      native_managed_hooks: ${{ steps.plan.outputs.native_managed_hooks }}
+      node_join: ${{ steps.plan.outputs.node_join }}
+      oss_scan: ${{ steps.plan.outputs.oss_scan }}
+      web_chat_ui: ${{ steps.plan.outputs.web_chat_ui }}
+      web_console: ${{ steps.plan.outputs.web_console }}
+      go_parts: ${{ steps.plan.outputs.go_parts }}
+      go_pg_parts: ${{ steps.plan.outputs.go_pg_parts }}
+      go_build: ${{ steps.plan.outputs.go_build }}
+      go_modules: ${{ steps.plan.outputs.go_modules }}
+      go_pkgs_shared: ${{ steps.plan.outputs.go_pkgs_shared }}
+      go_pkgs_agent: ${{ steps.plan.outputs.go_pkgs_agent }}
+      go_pkgs_hub: ${{ steps.plan.outputs.go_pkgs_hub }}
+      go_pkgs_e2e: ${{ steps.plan.outputs.go_pkgs_e2e }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Go only when the change reaches tokenledger/ — a PR that does not pays nothing
+      # for it (the `go list -test` narrowing needs the toolchain and the modules)
+      - name: touches Go?
+        id: touch
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: |
+          if git diff --name-only "$(git merge-base "$BASE" HEAD)" HEAD | grep -q '^tokenledger/'; then
+            echo go=true >> "$GITHUB_OUTPUT"
+          else
+            echo go=false >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.touch.outputs.go == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: |
+            tokenledger/hub/go.sum
+            tokenledger/shared/go.sum
+            tokenledger/agent/go.sum
+            tokenledger/e2e/go.sum
+      - if: steps.touch.outputs.go == 'true'
+        name: the hub's embedded client (go list needs the pack)
+        run: bin/fleet-client-pack.sh
+      - name: bin/ci-plan.sh all
+        id: plan
+        run: bash bin/ci-plan.sh all "origin/${{ github.base_ref }}" --out ci-plan.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-plan
+          path: ci-plan.txt
+          retention-days: 30
+
+  selftests:
+    needs: plan
+    if: needs.plan.outputs.selftests == 'true'
+    uses: ./.github/workflows/selftests.yml
+  shellcheck:
+    needs: plan
+    if: needs.plan.outputs.shellcheck == 'true'
+    uses: ./.github/workflows/shellcheck.yml
+  tokenledger:
+    needs: plan
+    if: needs.plan.outputs.tokenledger == 'true'
+    uses: ./.github/workflows/tokenledger.yml
+    with:
+      parts: ${{ needs.plan.outputs.go_parts }}
+      pg_parts: ${{ needs.plan.outputs.go_pg_parts }}
+      build: ${{ needs.plan.outputs.go_build }}
+      modules: ${{ needs.plan.outputs.go_modules }}
+      pkgs_shared: ${{ needs.plan.outputs.go_pkgs_shared }}
+      pkgs_agent: ${{ needs.plan.outputs.go_pkgs_agent }}
+      pkgs_hub: ${{ needs.plan.outputs.go_pkgs_hub }}
+      pkgs_e2e: ${{ needs.plan.outputs.go_pkgs_e2e }}
+  task-acceptance:
+    needs: plan
+    if: needs.plan.outputs.task_acceptance == 'true'
+    uses: ./.github/workflows/task-acceptance.yml
+  client-e2e:
+    needs: plan
+    if: needs.plan.outputs.client_e2e == 'true'
+    uses: ./.github/workflows/client-e2e.yml
+  fleet-hub-mcp:
+    needs: plan
+    if: needs.plan.outputs.fleet_hub_mcp == 'true'
+    uses: ./.github/workflows/fleet-hub.yml
+  browser-attachment:
+    needs: plan
+    if: needs.plan.outputs.browser_attachment == 'true'
+    uses: ./.github/workflows/browser-attachment.yml
+  hub-rolling:
+    needs: plan
+    if: needs.plan.outputs.hub_rolling == 'true'
+    uses: ./.github/workflows/hub-rolling.yml
+  hub-deploy-check:
+    needs: plan
+    if: needs.plan.outputs.hub_deploy_check == 'true'
+    uses: ./.github/workflows/hub-deploy-check.yml
+  cluster-perms:
+    needs: plan
+    if: needs.plan.outputs.cluster_perms == 'true'
+    uses: ./.github/workflows/cluster-perms.yml
+  native-claude-worktree:
+    needs: plan
+    if: needs.plan.outputs.native_claude_worktree == 'true'
+    uses: ./.github/workflows/native-claude-worktree.yml
+  native-managed-hooks:
+    needs: plan
+    if: needs.plan.outputs.native_managed_hooks == 'true'
+    uses: ./.github/workflows/native-managed-hooks.yml
+  node-join:
+    needs: plan
+    if: needs.plan.outputs.node_join == 'true'
+    uses: ./.github/workflows/node-join.yml
+  oss-scan:
+    needs: plan
+    if: needs.plan.outputs.oss_scan == 'true'
+    uses: ./.github/workflows/oss-scan.yml
+  web-chat-ui:
+    needs: plan
+    if: needs.plan.outputs.web_chat_ui == 'true'
+    uses: ./.github/workflows/web-chat-ui.yml
+  web-console:
+    needs: plan
+    if: needs.plan.outputs.web_console == 'true'
+    uses: ./.github/workflows/web-console.yml
+
+  conclusion:
+    name: CI 结论
+    if: always()
+    needs: [plan, selftests, shellcheck, tokenledger, task-acceptance, client-e2e, fleet-hub-mcp, browser-attachment, hub-rolling, hub-deploy-check, cluster-perms, native-claude-worktree, native-managed-hooks, node-join, oss-scan, web-chat-ui, web-console]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every selected check green, every other skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          plan = needs.get("plan", {})
+          sel = plan.get("outputs", {}) or {}
+          rows, red = [], []
+          if plan.get("result") != "success":
+              red.append(f"plan: {plan.get('result')} — nothing can be judged without the plan")
+          for job, v in needs.items():
+              if job == "plan":
+                  continue
+              key = job.replace("-", "_")
+              chosen = sel.get(key) == "true"
+              res = v.get("result")
+              ok = res == "success" if chosen else res in ("skipped", "success")
+              rows.append(f"| {job} | {'选中' if chosen else '未选中'} | {res} | {'✓' if ok else '✗'} |")
+              if not ok:
+                  red.append(f"{job}: {'selected' if chosen else 'not selected'}, {res}")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as f:
+                  f.write("### CI 结论\n| 检查 | 计划 | 结果 | |\n|---|---|---|---|\n" + "\n".join(rows) + "\n")
+          for r in red:
+              print(f"::error::{r}")
+          print("\n".join(rows))
+          sys.exit(1 if red else 0)
+          PY

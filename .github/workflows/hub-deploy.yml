@@ -55,16 +55,12 @@ name: hub-deploy
 # snapshot, `set image` on the credential proxy's Deployment (issue #2092) —
 # no secrets, no RBAC. The runbook is deploy/k8s/README.md.
 #
-# The `check` job runs on every PR that touches any of it and needs no
-# credential: the actions' selftests, the overlay renders, the base names no
-# environment.
+# The `check` job (hub-deploy-check.yml, issue #4815) runs on every PR that
+# touches any of it — the PR gate calls it — and needs no credential: the
+# actions' selftests, the overlay renders, the base names no environment.
 
 on:
-  pull_request:
-    paths:
-      - 'deploy/k8s/**'
-      - '.github/actions/hub-*/**'
-      - '.github/workflows/hub-deploy.yml'
+  # its PR check is hub-deploy-check.yml, called by the PR gate (ci.yml, issue #4815)
   workflow_call:
     inputs:
       sha:
@@ -141,35 +137,9 @@ env:
 jobs:
   check:
     if: inputs.phase != 'build'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.sha }}   # the train's TRAIN_SHA; empty = the event's commit
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: node .github/actions/hub-kubeconfig/oidc.js --selftest
-      - run: node .github/actions/hub-acr/acr.js --selftest
-      - run: .github/actions/hub-release/release.sh --selftest
-      # The deployment's own overlays (prod · updating · credproxy) render as
-      # one whole shape with one placeholder tag (issues #2125, #1973) —
-      # render-check.sh. Production's live in FLEET_DEPLOY_OVERLAY_REPO
-      # (claude-fleet#3630): a PR has no access to it, so here the check runs on
-      # whatever this tree still carries (none ⇒ only the base), and the deploy
-      # job runs it again, required, on the tree with the overlay laid over it.
-      - name: The base and this tree's prod overlays render
-        run: .github/actions/hub-release/render-check.sh deploy/k8s
-      - name: The example overlay renders and names nothing of ours
-        run: |
-          set -euo pipefail
-          # the shape a deployment's own overlay takes (claude-fleet#3577)
-          kubectl kustomize deploy/k8s/overlays/example > "$RUNNER_TEMP/example.yaml"
-          bin/oss-scan.sh -- deploy/k8s/overlays/example
-      - name: The base names no environment
-        run: |
-          if grep -rn '24haowan' deploy/k8s/base deploy/k8s/credproxy/base deploy/k8s/updating/base; then
-            echo "::error::a base must stay environment-free — move it to an overlay"; exit 1
-          fi
+    uses: ./.github/workflows/hub-deploy-check.yml
+    with:
+      sha: ${{ inputs.sha }}
 
   # The pause switch (issues #2013, #4621): the release train's call deploys
   # nothing while repo variable HUB_DEPLOY_PAUSED=1 (as read when the run was

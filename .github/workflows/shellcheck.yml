@@ -8,22 +8,12 @@ name: shellcheck
 # tree runs nightly and on dispatch (a sourced lib's change shows in its
 # sourcers there). A re-push to a PR cancels its stale run — issue #2034.
 on:
-  pull_request:
-    paths:
-      - 'bin/**'
-      - 'hooks/**'
-      - 'shell/**'
-      - 'extras/**'
-      - '.shellcheckrc'
-      - '.shellcheck-version'
-      - '.github/workflows/shellcheck.yml'
+  # the PR gate calls it (.github/workflows/ci.yml, issue #4815) when bin/ci-plan.sh says
+  # the change reaches it — its old `paths:` live there now
+  workflow_call:
   schedule:
     - cron: '23 21 * * *'   # 05:23 CST, the whole tree
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   shellcheck:

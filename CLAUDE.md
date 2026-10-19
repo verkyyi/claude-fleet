@@ -704,9 +704,13 @@ one-off drill / audit records do not go in the repo (issue #3576).
   head, the tests selected); the train's `bin/fleet-train-reuse.sh` skips
   (`run-selftests.sh --proven`, `REUSED …`) a test a merged PR's green run tested
   on a tree the selector (`--changed <tree> --exact`) says is untouched since.
-  task-acceptance · client-e2e · fleet-hub-mcp run only when `bin/ci-plan.sh` (the
-  same selector `--among` their entry files, plus their globs) says the change is
-  theirs — skipped reads green; unsure ⇒ run; nightly they run whole. **The BSD half is not on the PR** (issue #2286): since #3141 it
+  **Every PR check is called from ONE gate, `.github/workflows/ci.yml`** (issue
+  #4815, docs/dev/CI.md): `bin/ci-plan.sh all` decides per check (its old
+  `paths:`, the selector `--among` entry files for task-acceptance · client-e2e ·
+  fleet-hub-mcp, Go by block — shared ⇒ all four, agent ⇒ agent + e2e, hub ⇒ hub
+  + e2e, narrowed by `go list -test`), each workflow is `workflow_call` only, and
+  `CI 结论` (selected ⇒ success, unselected ⇒ skipped) is the one required check,
+  read first by `fleet-pr-verdict.sh`; unsure ⇒ run; nightly they run whole. **The BSD half is not on the PR** (issue #2286): since #3141 it
   rides the release train (`release-train.yml`: ONE concurrency lane, a push never
   cancels a running train; each train boards origin/master's head as `TRAIN_SHA`
   via `bin/fleet-train-board.sh` and runs the shared matrix `selftests-shards.yml`
