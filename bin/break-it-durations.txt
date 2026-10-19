@@ -1,4 +1,6 @@
-# Hub rows: Ubuntu PR run38960548935 at 00faaac8 (all93 drills, issue #3884).
+# Hub rows: median of release trains 39294587332 (4a8d5479) + 39300665899 (3ef4b26f), fleet-ack runners, all 80 drills (T372, issue #4544).
+# node-tmux-restart takes 26.2 on fleet-ack (10.1 on the old Ubuntu row): part 1/3 must hold on it.
+# The earlier hub row set was Ubuntu PR run38960548935 at 00faaac8 (all93 drills, issue #3884); run38955383651 at f2e86584 measured hub-2 at 65.1s as part 2/2, before #4420 cut it to 3.
 # Cred-sep rows: complete Ubuntu run38955383651 at f2e86584 (issue #3884); the whole file then 65.4s (74.4/70.8 earlier, 86.6/82.4 on fleet-ack).
 # T371: cred-sep drill rows refreshed from Ubuntu nightly 39081314546 at acb8c585 (six were 20.0 guesses for 0.1-1.1s drills,
 # which left part 1 at 62.3/58.6s on fleet-ack train 39300665899/39294587332); predicted parts now ~45.5/43.8s fleet-ack, ~38/41.6s Ubuntu.
@@ -20,13 +22,13 @@
 7.2 admin-agent-stale
 3.4 admin-handover-cut-op
 0.5 admit-open-window-twice
-0.6 admit-room-advice
+0.7 admit-room-advice
 0.8 agent-file-broken
 0.1 apply-flood
 0.1 apply-reaches-app
-1.8 attach-cross-machine
+1.3 attach-cross-machine
 0.4 bootstrap-abroad
-3.9 bootstrap-reaches-github
+3.6 bootstrap-reaches-github
 0.9 break-pane
 0.3 brew-keg-700
 0.1 browser-import-access-crossed
@@ -97,15 +99,15 @@
 2.5 disk-full
 0.4 dispatch-identity-fallback
 0.1 dispatch-wrong-replica
-2.6 dist-bad-signature
-13.3 dist-no-github
-2.4 dist-publish-tampered
+2.5 dist-bad-signature
+8.2 dist-no-github
+2.8 dist-publish-tampered
 0.4 doctor-stricter-rollback
 2.1 done-no-pr-stranded
 0.1 egress-private-via-proxy
 0.1 egress-required-via-direct
 0.1 email-link-replay
-3.7 empty-fleet-disk-floor
+3.5 empty-fleet-disk-floor
 3.7 empty-fleet-not-restored
 0.1 entry-dns-follows
 0.1 entry-name-unclaimed
@@ -134,13 +136,13 @@
 0.2 home-pool-claim-unkeyed
 2.7 home-template-leak
 0.3 hub-deploy-lost-config
-4.0 hub-disk-attach-stuck
-6.3 hub-read-refused-silent
+0.1 hub-disk-attach-stuck
+6.7 hub-read-refused-silent
 0.4 hub-refused-cert
 11.5 hub-release-downtime
-0.4 hub-shape-extra-volume
+0.5 hub-shape-extra-volume
 0.1 hub-stream-silent
-2.8 hubsess-daemon-nohup
+2.4 hubsess-daemon-nohup
 1.4 human-step-reopen
 3.5 idle-timeout-starves-merged
 0.5 install-sync-killed
@@ -155,7 +157,7 @@
 0.2 launch-receipt-fence
 0.1 lease-unseparated-user
 1.7 linux-admit-burst
-0.6 linux-admit-host-load
+0.7 linux-admit-host-load
 0.7 linux-admit-pod-start
 0.2 linux-create-relay-403
 0.4 linux-egress-metadata
@@ -186,11 +188,11 @@
 20.7 login-remove-uid-leftovers
 1.4 login-sandbox-real-conf
 2.3 loop-window-killed
-1.3 mac-admit-load-not-busy
+1.1 mac-admit-load-not-busy
 0.6 mac-login-no-lease
 0.1 machine-agent-wrong-login
 1.4 machine-lane-reissued
-1.3 machine-policy-bypass
+1.5 machine-policy-bypass
 0.5 macos-red-to-stable
 9.9 managed-login-install-predates
 1.2 managed-login-install-stale
@@ -216,18 +218,18 @@
 2.6 node-install-half
 2.8 node-menu
 0.4 node-paused-still-placed
-0.7 node-person-cert-expired
+0.6 node-person-cert-expired
 6.4 node-prefix-keys
 0.4 node-program-seat
 20.4 node-restart-shared-orphan
 6.7 node-supervisor-dead
 3.6 node-supervisor-stop-hang
 8.3 node-supervisor-wedged
-10.1 node-tmux-restart
-0.7 node-token-replayed
+26.2 node-tmux-restart
+0.3 node-token-replayed
 0.3 node-token-wrong-door
 1.9 node-update-half
-1.5 switch-no-session-save
+2.6 switch-no-session-save
 5.6 node-update-stale-fail
 1.3 nothing-starts-by-itself
 0.1 notify-leaks-secret
@@ -268,7 +270,7 @@
 0.2 place-server-down
 0.3 pod-disk-node-tmp
 0.1 pod-sshd-tty-audit
-0.8 pool-admit-phantoms
+0.9 pool-admit-phantoms
 1.7 pool-empty-compose
 32.6 pool-prompt-nbsp
 32.8 pool-remote-hangs
@@ -286,7 +288,7 @@
 0.3 quarantine-one-red
 0.2 quarantine-pr-skips
 0.4 quarantine-touched
-1.3 quota-refused-blind
+1.2 quota-refused-blind
 0.1 recycle-old-cert
 29.6 recycle-rejoins
 19.9 relay-revocations-hub-down
@@ -294,12 +296,12 @@
 1.1 release-ccquota-behind
 1.2 release-ccquota-stale
 1.8 release-fetch-slow
-4.3 release-key-outside-train
-0.9 release-key-revoked
-2.7 release-key-status-chain
+5.7 release-key-outside-train
+1.1 release-key-revoked
+3.0 release-key-status-chain
 0.2 release-push-lost
 0.1 release-tampered
-10.1 release-unverified
+9.8 release-unverified
 0.1 remove-pending-machine-gone
 0.2 repo-cutover-inflight
 0.2 repo-cutover-stop-binding
@@ -431,7 +433,7 @@
 0.1 cluster-pod-claude-leak
 0.1 trial-pause-not-recycled
 0.1 trial-slot-held
-0.6 trial-transcript-cross
+0.5 trial-transcript-cross
 0.1 trial-wash-webchat-registered
 0.1 trust-name-borrowed
 0.1 two-hubs-double-refresh
@@ -444,7 +446,7 @@
 0.9 view-far-reaped
 1.0 view-first-frame-hub-slow
 0.4 view-mouse-stale
-5.6 view-node-restart
+5.5 view-node-restart
 4.0 view-popup-far-bleed
 4.4 view-popup-idle-redraw
 3.9 view-popup-wide-bleed
