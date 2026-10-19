@@ -930,18 +930,11 @@ From `fleet doctor`.
 - **What it is**: whether the repository has the issue labels fleet uses.
 - **On WARN / FAIL**: add each missing one with `gh label create <name> --repo <repo>`.
 
-#### `tickets`
-
-From `fleet doctor`.
-
-- **What it is**: whether each repository's tickets (issues, comments, labels) live on the hub or on GitHub; code and pull requests are not affected. A newly added repository on a machine connected to a hub defaults to the hub; repositories that were already there stay on GitHub.
-- **On WARN / FAIL**: it warns only on a wrong value (neither `hub` nor `github`): fix `FLEET_TICKETS` in that repository's settings.
-
 #### `overrides`
 
 From `fleet doctor`.
 
-- **What it is**: the settings this repository changed on its own — every key and value its repository settings (`repos/<slug>.conf`) write beyond its name, checkout, base branch and ticket place; when one shadows a fleet-wide value, the old value follows as `fleet:` in brackets. A credential-shaped key or value shows only `<hidden>`. With only its identity it says "no setting of its own".
+- **What it is**: the settings this repository changed on its own — every key and value its repository settings (`repos/<slug>.conf`) write beyond its name, checkout and base branch; when one shadows a fleet-wide value, the old value follows as `fleet:` in brackets. A credential-shaped key or value shows only `<hidden>`. With only its identity it says "no setting of its own".
 - **On WARN / FAIL**: status only, never WARN / FAIL. To change a setting, edit the file named at the end of the line.
 
 #### `webhook`
