@@ -6730,9 +6730,11 @@ _fleet_hub_creds_missing() {
 #   <what> refused: HTTP N — <e>   the hub answered non-OK (`hub answered HTTP N: …`);
 #                                  <e> = its JSON "error", else the rest of the line
 #   <cmd> exit N: <first line>     anything else — `(no stderr)` when there was none
+# A `ccquota <cmd>: retry k/n after: …` line (issue #4933) is ccquota's own note
+# of a dropped connection it tried again, never the reason: skipped.
 _fleet_hub_fail() {
   local what="$1" cmd="$2" rc="$3" f="$4" l code e
-  l=$(grep -v '^[[:space:]]*$' "$f" 2>/dev/null | head -n 1 | sed -E 's/^ccquota( [a-z]+)?: //' | cut -c 1-300)
+  l=$(grep -v -e '^[[:space:]]*$' -e '^ccquota [a-z]*: retry [0-9]' "$f" 2>/dev/null | head -n 1 | sed -E 's/^ccquota( [a-z]+)?: //' | cut -c 1-300)
   case "$l" in
     *'hub answered HTTP '*)
       code=$(printf '%s\n' "$l" | sed -n 's/.*hub answered HTTP \([0-9][0-9]*\).*/\1/p')

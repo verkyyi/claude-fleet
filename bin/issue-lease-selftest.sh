@@ -244,6 +244,13 @@ err_has 'fleet: hub unreachable (dial tcp 127.0.0.1:9: connect: connection refus
 gh_has '--add-assignee'                          || fail "DOWN falls back to the GitHub claim"
 tmux_has 'new-window'                            || fail "DOWN spawns"
 ok "DOWN hub unreachable → stderr note, today's GitHub claim + spawn"
+# issue #4933: ccquota's own `retry k/n after:` notes are never the reason —
+# the line after them is.
+CLAIM_STATE=$'0\tOPEN' CCQUOTA_FLEET=1 FLEET_HUB_LEASE_CMD="$LEASE" LEASE_RC=1 \
+  LEASE_STDERR=$'ccquota lease: retry 1/2 after: Post "https://hub.test/v1/node/lease": EOF\nccquota lease: retry 2/2 after: Post "https://hub.test/v1/node/lease": EOF\nccquota lease: Post "https://hub.test/v1/node/lease": EOF' run_spawn 258
+err_has 'fleet: hub unreachable (EOF) — no lease on #258' \
+                                                 || fail "DOWN a retried EOF reads 「hub unreachable (EOF)」, not the retry note" "$(cat "$WORK/spawn.err")"
+ok "DOWN retry notes skipped → the final reason is the one said"
 
 # ===== WHY: a hub that ANSWERED is never 「unreachable」 (issue #1507) ============
 # The #1427 case: the hub answers 403 for a fleet UUID the node never registered.

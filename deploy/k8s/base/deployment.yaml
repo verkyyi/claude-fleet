@@ -7,6 +7,9 @@
 # Service (preStop), then gets SIGTERM and finishes the requests it already took
 # for up to CCQUOTA_SHUTDOWN_GRACE (25 s). So a release, a node drain or a
 # deleted pod is 0 seconds down — hub-deploy measures it (downtime_seconds).
+# A request held longer than the grace (a stream; `ccquota place` waiting on a
+# remote start) is cut at its end; the node's one-shot calls retry a dropped
+# connection with the same request (claude-fleet#4933, agent/cli/hubretry.go).
 # The two replicas share the database (CCQUOTA_DB_URL) and find each other for
 # the node links each holds (CCQUOTA_REPLICA*, claude-fleet#2124); background
 # work runs once (hub/leader, #2123). No disk: nothing here mounts a volume
