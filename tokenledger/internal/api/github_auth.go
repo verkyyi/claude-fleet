@@ -377,12 +377,17 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 		if s.wxScanOn() && step == "" {
 			// The service account's code up front, the rest folded
 			// (claude-fleet#4054).
+			if d := s.githubDownNote(); e == "" && s.githubDown(time.Now()) {
+				e = d
+			}
 			s.renderSigninScan(w, r, loc, e)
 			return
 		}
 		note := ""
 		if signinNotes[e] || signinWayNotes[e] {
 			note = pageT(loc, "signin.note."+e)
+		} else if d := s.githubDownNote(); e == "" && d != "" && s.githubDown(time.Now()) {
+			note = pageT(loc, "signin.note."+d)
 		}
 		s.renderSigninWays(w, r, loc, note)
 		return
@@ -493,12 +498,17 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, login, err := s.githubWho(r.Context(), code, flow.Verifier, s.githubCallbackURL(r))
+	now := time.Now()
+	s.githubSaw(err, now)
 	if err != nil {
 		log.Printf("github sign-in: %v", err)
-		http.Redirect(w, r, appURL("/signin")+"?e=github", http.StatusFound)
+		e := "github"
+		if d := s.githubDownNote(); d != "" && githubUnreachable(err) {
+			e = d // GitHub cannot be reached: say which other way works
+		}
+		http.Redirect(w, r, appURL("/signin")+"?e="+e, http.StatusFound)
 		return
 	}
-	now := time.Now()
 	if flow.Link != "" {
 		// Still the same person, still on the list — else it is an ordinary
 		// sign-in.
@@ -542,8 +552,13 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// every machine that runs it.
 	s.onPrincipalSignIn(principal, login)
 	// A `fleet login` code scanned while signed out comes back to its
-	// confirmation page; everything else goes to the console.
-	http.Redirect(w, r, loginReturn(w, r), http.StatusFound)
+	// confirmation page; everything else goes to the console — once, for
+	// someone whose only way in is GitHub, to 登录方式 (claude-fleet#4849).
+	to := loginReturn(w, r)
+	if to == AppPrefix && s.addWayNudge(principal, now) {
+		to = settingsBack("add-way")
+	}
+	http.Redirect(w, r, to, http.StatusFound)
 }
 
 // The refusals, as the 403 page words them.
@@ -708,6 +723,7 @@ func (s *Server) ResolveGitHubAdmins(ctx context.Context) {
 			continue
 		}
 		id, login, err := s.githubLookup(ctx, name)
+		s.githubSaw(err, time.Now())
 		if err != nil {
 			log.Printf("WARN github sign-in: could not resolve admin %s to a GitHub ID: %v (not let in until resolved)", name, err)
 			continue

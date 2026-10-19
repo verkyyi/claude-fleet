@@ -398,6 +398,27 @@ func (s *Store) HubAudit(actor, action, target, outcome, detail string, at time.
 	return err
 }
 
+// HubGitHubOnly counts the people on the list whose one way in is GitHub: a
+// github identity (or a GitHub ID from before identities) and no other kind
+// — the people a GitHub outage locks out (claude-fleet#4849).
+func (s *Store) HubGitHubOnly() (int, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM hub_users u
+		WHERE (u.github_id > 0 OR EXISTS (SELECT 1 FROM hub_identities g
+			WHERE g.principal_id = u.principal_id AND g.kind = ?))
+		AND NOT EXISTS (SELECT 1 FROM hub_identities o
+			WHERE o.principal_id = u.principal_id AND o.kind <> ?)`, IdentityGitHub, IdentityGitHub).Scan(&n)
+	return n, err
+}
+
+// HubAuditHas reports whether actor has an audit row for action — a
+// once-only nudge remembers itself this way, with no column of its own.
+func (s *Store) HubAuditHas(actor, action string) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM hub_audit WHERE actor = ? AND action = ?`, actor, action).Scan(&n)
+	return n > 0, err
+}
+
 // HubAuditLog is the newest entries first.
 func (s *Store) HubAuditLog(limit int) ([]HubAuditEntry, error) {
 	if limit <= 0 {

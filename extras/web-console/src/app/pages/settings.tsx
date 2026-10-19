@@ -74,6 +74,12 @@ const BACK_ERR: Record<string, [string, string]> = {
   wechat: ["没能绑上微信，再试一次。", "WeChat could not be added — try again."],
 };
 
+// what the hub says here without anything having gone wrong: a person whose
+// only way in is GitHub, sent here once after signing in (claude-fleet#4849)
+const BACK_TIP: Record<string, [string, string]> = {
+  "add-way": ["你现在只能用 GitHub 登录。加一种登录方式，GitHub 连不上时也进得来。", "GitHub is your only way to sign in. Add another, so you can still get in when GitHub is down."],
+};
+
 // ── 资料 ───────────────────────────────────────────────────────────────────
 
 const Profile: FC = () => {
@@ -172,6 +178,7 @@ const SignInWays: FC = () => {
   const [drop, setDrop] = useState<Identity | null>(null);
   const [note, setNote] = useState<Note>(() => {
     const e = new URLSearchParams(location.search).get("e");
+    if (e && BACK_TIP[e]) return { tone: "ok", text: tr(...BACK_TIP[e]) };
     return e && BACK_ERR[e] ? { tone: "bad", text: tr(...BACK_ERR[e]) } : null;
   });
   const ref = useRef<HTMLDivElement>(null);
