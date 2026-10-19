@@ -127,7 +127,7 @@ if [ "${FLEET_DIST_SOURCE:-}" != github ] && [ -f "$here/fleet-release-lib.sh" ]
        # say so; a developer's machine asks for GitHub by name.
        if [ -n "${REL_HUB:-}" ]; then
          rm -rf "$new"
-         err "the hub ($REL_HUB) keeps no releases (404 on /v1/fleet/release/stable) — nothing was made, GitHub not asked. Publish one to the hub (fleet-release-publish.sh), or on a developer's machine say FLEET_DIST_SOURCE=github to clone from $GITBASE"
+         err "the hub ($REL_HUB) keeps no releases (404 on /v1/fleet/release/stable) — nothing was made, GitHub not asked. Publish a release to the hub, or on a developer's machine say FLEET_DIST_SOURCE=github to clone from $GITBASE"
          exit 1
        fi ;;
     *) rm -rf "$new"

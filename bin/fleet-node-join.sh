@@ -431,7 +431,7 @@ dev_road() {
 }
 # no_release_store — the one line for a hub that keeps no releases (issue #4848)
 no_release_store() {
-  say "fleet: FAIL — $HUB keeps no releases (404 on /v1/fleet/release/stable); GitHub not asked. Publish one to the hub (fleet-release-publish.sh), or take the code yourself: --fleet-src <git url|dir> [--ref <ref>], or FLEET_DIST_SOURCE=github on a developer's machine"
+  say "fleet: FAIL — $HUB keeps no releases (404 on /v1/fleet/release/stable); GitHub not asked. Publish a release to the hub, or take the code yourself: --fleet-src <git url|dir> [--ref <ref>], or FLEET_DIST_SOURCE=github on a developer's machine"
   FLEET_RC=1
 }
 # rel_lib — fleet-release-lib.sh sourced (its fetch beside it): this script's

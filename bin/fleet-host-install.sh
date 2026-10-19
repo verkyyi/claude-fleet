@@ -90,7 +90,7 @@ hub_checkout() {
   case $? in
     0) echo "  · 从入口取 stable $(printf '%.7s' "$REL_SHA")（验过章 ${REL_FPR}，不经 GitHub）" ;;
     3) [ -z "${REL_HUB:-}" ] && return 3
-       echo "✗ 入口（${REL_HUB}）不存发布（/v1/fleet/release/stable 答 404）— 什么都没动，没去找 GitHub。先在入口发一版（fleet-release-publish.sh）；开发者机器要从 GitHub 装就显式 FLEET_DIST_SOURCE=github"
+       echo "✗ 入口（${REL_HUB}）不存发布（/v1/fleet/release/stable 答 404）— 什么都没动，没去找 GitHub。先在入口发一版；开发者机器要从 GitHub 装就显式 FLEET_DIST_SOURCE=github"
        return 1 ;;
     *) case "$REL_STAGE" in
          unreachable) echo "✗ 入口不可达（${REL_HUB}）：${REL_ERR} — 什么都没动；再跑一次即可" ;;
