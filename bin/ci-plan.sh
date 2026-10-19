@@ -32,11 +32,12 @@ case "$wf" in
     globs='tokenledger/* .github/workflows/client-e2e.yml' ;;
   fleet-hub-mcp)
     # run-selftests.sh fleet-hub 'fleet-hub-[0-9]*', with the MCP SDK installed
-    among=$(cd "$bin" && printf '%s ' fleet-hub-selftest.sh fleet-hub-[0-9]*-selftest.sh)
+    among=$(cd "$bin" && printf '%s ' fleet-hub-selftest.sh fleet-hub-selftest.py fleet-hub-[0-9]*-selftest.sh)
     globs='requirements-mcp.txt .github/workflows/fleet-hub.yml' ;;
   *) echo "ci-plan: no entry for workflow '$wf'" >&2; exit 2 ;;
 esac
 
+set -f   # the globs below are patterns, never filenames
 decide() {
   printf 'run=%s\n' "$1"
   printf '%s: %s — %s\n' "$wf" "$([ "$1" = true ] && echo runs || echo skipped)" "$2"
