@@ -31,7 +31,7 @@ func TestTaskDispatchCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
-		"gh":   "#!/bin/sh\ncase \"$1 $2\" in 'api rate_limit') echo 100;; 'issue create') echo https://github.com/org/repo/issues/71;; esac\n",
+		"gh":   "#!/bin/sh\ncase \"$1 $2\" in 'api rate_limit') echo 100;; 'issue create') echo x >> \"$HOME/creates\"; echo https://github.com/org/repo/issues/71;; esac\n",
 		"tmux": "#!/bin/sh\nexit 1\n",
 	} {
 		if err = os.WriteFile(filepath.Join(bin, name), []byte(body), 0700); err != nil {
@@ -53,21 +53,43 @@ func TestTaskDispatchCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The rule table left (claude-fleet#4340, #4790): the dispatch goes through
-	// and the payload carries no rule mark.
-	cmd := exec.Command("bash", filepath.Join(root, "bin/fleet-task-record.sh"), "dispatch", "--title", "rule integration", "--repo", "org/repo", "--agent", "codex")
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("dispatch --agent codex: %v\n%s", err, out)
+	// and the payload carries no rule mark. A development task the hub accepted
+	// is the record alone (claude-fleet#4897): no GitHub issue, no ticket_ref.
+	dispatch := func(title string, extra ...string) string {
+		t.Helper()
+		cmd := exec.Command("bash", filepath.Join(root, "bin/fleet-task-record.sh"), "dispatch", "--title", title, "--repo", "org/repo", "--agent", "codex")
+		cmd.Env = append(append([]string{}, env...), extra...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("dispatch --agent codex: %v\n%s", err, out)
+		}
+		return string(out)
 	}
-	if !strings.Contains(string(out), "https://github.com/org/repo/issues/71") {
+	record := func(ref string) map[string]any {
+		t.Helper()
+		st, task := nodeTaskCall(t, h, nodes["bob4"].token, "GET", NodeTasksPath+"/"+ref, nil)
+		if st != 200 {
+			t.Fatal(st, task)
+		}
+		return task["task"].(map[string]any)
+	}
+	out := dispatch("rule integration")
+	if !strings.Contains(out, "T1") || strings.Contains(out, "/issues/") {
+		t.Fatalf("not the record alone: %s", out)
+	}
+	if _, e := os.Stat(filepath.Join(dir, "creates")); e == nil {
+		t.Fatalf("record-only task filed a GitHub issue: %s", out)
+	}
+	rec := record("T1")
+	if (rec["ticket_ref"] != nil && rec["ticket_ref"] != "") || rec["resolved_agent"] != "codex" || strings.Contains(rec["request_payload"].(string), `n=1 v=`) {
+		t.Fatalf("association/provenance lost: %v", rec)
+	}
+	// The old road, kept for one batch (FLEET_TASK_ISSUE=1): its issue hangs on the record.
+	out = dispatch("issue road", "FLEET_TASK_ISSUE=1")
+	if !strings.Contains(out, "T2") || !strings.Contains(out, "https://github.com/org/repo/issues/71") {
 		t.Fatalf("no issue: %s", out)
 	}
-	st, task := nodeTaskCall(t, h, nodes["bob4"].token, "GET", NodeTasksPath+"/T1", nil)
-	if st != 200 {
-		t.Fatal(st, task)
-	}
-	rec := task["task"].(map[string]any)
+	rec = record("T2")
 	if rec["ticket_ref"] != "gh:org/repo#71" || rec["resolved_agent"] != "codex" || strings.Contains(rec["request_payload"].(string), `n=1 v=`) {
 		t.Fatalf("association/provenance lost: %v", rec)
 	}
