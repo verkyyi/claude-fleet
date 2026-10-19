@@ -41,6 +41,8 @@ def snapshot(payload):
     require(set(context) - {'worktree'} == {'repo', 'worker_id', 'reservation', 'supervisor'},
             'unknown authority context')
     require(type(context['supervisor']) is int and context['supervisor'] > 1, 'unknown supervisor')
+    # A supervisor before #4789 put the registered spelling in the context.
+    context['repo'] = authority.repo_identity(context['repo'])
     require(all(admission.get(k) == context[k] for k in ('repo', 'worker_id', 'reservation')),
             'independent admission differs from context')
     authority.check_start_ack(admission, admission, 'starting')
