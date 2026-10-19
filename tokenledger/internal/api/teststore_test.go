@@ -21,9 +21,31 @@ import (
 // each test's schema is made as before.
 func openTestStore(t testing.TB) *store.Store {
 	t.Helper()
+	return openTestStoreFrom(t, &testStoreTpl, nil)
+}
+
+// openFleetTestStore is openTestStore with the fleet registry applied
+// (store.EnsureNodes), from a template of its own (claude-fleet#4794). Its
+// ALTER TABLEs re-parse the whole SQLite schema each, and newFleetHarness ran
+// them for every one of ~900 tests: 65% of the package's CPU under -race. On
+// SQLite the copy already holds what EnsureNodes makes, so it is not run
+// again; on the Postgres leg it is, as before.
+func openFleetTestStore(t testing.TB) *store.Store {
+	t.Helper()
+	st := openTestStoreFrom(t, &testFleetStoreTpl, func(st *store.Store) error { return st.EnsureNodes() })
+	if os.Getenv("CCQUOTA_DB_URL") != "" {
+		if err := st.EnsureNodes(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return st
+}
+
+func openTestStoreFrom(t testing.TB, tpl *storeTemplate, prep func(*store.Store) error) *store.Store {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
 	if os.Getenv("CCQUOTA_DB_URL") == "" {
-		files, err := testStoreTemplate()
+		files, err := tpl.get(prep)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,45 +63,52 @@ func openTestStore(t testing.TB) *store.Store {
 	return st
 }
 
-var testStoreTpl struct {
+type storeTemplate struct {
 	once  sync.Once
 	files map[string][]byte // "" = the database, "-wal" … = what Close left beside it
 	err   error
 }
 
-func testStoreTemplate() (map[string][]byte, error) {
-	testStoreTpl.once.Do(func() {
-		dir, err := os.MkdirTemp("", "tl-api-store-")
-		if err != nil {
-			testStoreTpl.err = err
-			return
-		}
-		defer os.RemoveAll(dir)
-		tpl := filepath.Join(dir, "tpl.db")
-		st, err := store.Open(tpl)
-		if err != nil {
-			testStoreTpl.err = err
-			return
-		}
-		if err := st.Close(); err != nil {
-			testStoreTpl.err = err
-			return
-		}
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			testStoreTpl.err = err
-			return
-		}
-		files := map[string][]byte{}
-		for _, e := range ents {
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				testStoreTpl.err = err
-				return
-			}
-			files[strings.TrimPrefix(e.Name(), "tpl.db")] = raw
-		}
-		testStoreTpl.files = files
+var testStoreTpl, testFleetStoreTpl storeTemplate
+
+func (tpl *storeTemplate) get(prep func(*store.Store) error) (map[string][]byte, error) {
+	tpl.once.Do(func() {
+		tpl.files, tpl.err = buildStoreTemplate(prep)
 	})
-	return testStoreTpl.files, testStoreTpl.err
+	return tpl.files, tpl.err
+}
+
+func buildStoreTemplate(prep func(*store.Store) error) (map[string][]byte, error) {
+	dir, err := os.MkdirTemp("", "tl-api-store-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	tpl := filepath.Join(dir, "tpl.db")
+	st, err := store.Open(tpl)
+	if err != nil {
+		return nil, err
+	}
+	if prep != nil {
+		if err := prep(st); err != nil {
+			st.Close()
+			return nil, err
+		}
+	}
+	if err := st.Close(); err != nil {
+		return nil, err
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	files := map[string][]byte{}
+	for _, e := range ents {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		files[strings.TrimPrefix(e.Name(), "tpl.db")] = raw
+	}
+	return files, nil
 }
