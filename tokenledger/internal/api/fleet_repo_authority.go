@@ -40,7 +40,8 @@ type repoRetiredHost struct {
 
 // repoSupersededHost is a fleet row no machine reports any more (present=0)
 // whose machine — the same fleet machine, endpoint, or hardware machine_id +
-// os_user — has since reported a newer present row (claude-fleet#4877). That
+// os_user — has since reported a newer present row of the same repo
+// (claude-fleet#4877). That
 // machine will never observe this fleet_id again, so it is no host of the repo.
 type repoSupersededHost struct {
 	Fleet      string    `json:"fleet_id"`
@@ -53,16 +54,16 @@ type repoSupersededHost struct {
 // supersededBy names the present row that supersedes f, "" when none does. A
 // present row is never superseded — a host that is still there but not
 // capable keeps blocking. The successor must itself be a live, unretired row
-// observed AFTER f, on the same machine: the fleet machine that reported both,
+// of the same repo observed AFTER f, on the same machine: the fleet machine that reported both,
 // the endpoint, or the endpoint's hardware machine_id + os_user (a re-joined
 // login). An endpoint no longer on record falls back to hostname + os_user.
-func supersededBy(f store.FleetRow, fs []store.FleetRow, eps func(string) *store.Endpoint) (store.FleetRow, bool) {
+func supersededBy(f store.FleetRow, repo string, fs []store.FleetRow, eps func(string) *store.Endpoint) (store.FleetRow, bool) {
 	if f.Present {
 		return store.FleetRow{}, false
 	}
 	epF := eps(f.EndpointID)
 	for _, g := range fs {
-		if !g.Present || g.FleetID == f.FleetID || !g.ObservedAt.After(f.ObservedAt) {
+		if !g.Present || g.FleetID == f.FleetID || !g.ObservedAt.After(f.ObservedAt) || !fleetHosts(g, repo) {
 			continue
 		}
 		epG := eps(g.EndpointID)
@@ -117,7 +118,7 @@ func (s *Server) repoAuthorityInventory(ctx context.Context, c ticketCaller, a s
 			}
 			continue
 		}
-		if g, ok := supersededBy(f, fs, eps); ok {
+		if g, ok := supersededBy(f, a.Repo, fs, eps); ok {
 			// Listed to whoever owns its successor (or sees every owner): the
 			// successor is the proof, and its owner is the one reading.
 			if c.all || s.nodeTaskOwner(eps(g.EndpointID)) == c.owner {

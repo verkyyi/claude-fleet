@@ -451,24 +451,29 @@ func TestSupersededByRules(t *testing.T) {
 		}
 		return &store.Endpoint{ID: id, MachineID: "hw", OSUser: "u"}
 	}
-	old := store.FleetRow{FleetID: "a", MachineID: "m", EndpointID: "e", ObservedAt: now.Add(-time.Hour)}
-	succ := store.FleetRow{FleetID: "b", MachineID: "m", EndpointID: "e", Present: true, ObservedAt: now}
-	if g, ok := supersededBy(old, []store.FleetRow{old, succ}, eps); !ok || g.FleetID != "b" {
+	old := store.FleetRow{FleetID: "a", MachineID: "m", EndpointID: "e", Repo: writeRepo, ObservedAt: now.Add(-time.Hour)}
+	succ := store.FleetRow{FleetID: "b", MachineID: "m", EndpointID: "e", Repo: writeRepo, Present: true, ObservedAt: now}
+	if g, ok := supersededBy(old, writeRepo, []store.FleetRow{old, succ}, eps); !ok || g.FleetID != "b" {
 		t.Fatal("same machine, newer present row: superseded")
+	}
+	elsewhere := succ
+	elsewhere.Repo = "example/other-repo"
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, elsewhere}, eps); ok {
+		t.Fatal("a successor of another repo superseded it")
 	}
 	live := old
 	live.Present = true
-	if _, ok := supersededBy(live, []store.FleetRow{live, succ}, eps); ok {
+	if _, ok := supersededBy(live, writeRepo, []store.FleetRow{live, succ}, eps); ok {
 		t.Fatal("a present row was superseded")
 	}
 	early := succ
 	early.ObservedAt = now.Add(-2 * time.Hour)
-	if _, ok := supersededBy(old, []store.FleetRow{old, early}, eps); ok {
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, early}, eps); ok {
 		t.Fatal("a successor observed before the row superseded it")
 	}
 	absent := succ
 	absent.Present = false
-	if _, ok := supersededBy(old, []store.FleetRow{old, absent}, eps); ok {
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, absent}, eps); ok {
 		t.Fatal("an absent successor superseded it")
 	}
 	retired := func(id string) *store.Endpoint {
@@ -481,7 +486,7 @@ func TestSupersededByRules(t *testing.T) {
 	}
 	gone := succ
 	gone.MachineID, gone.EndpointID = "m2", "e2"
-	if _, ok := supersededBy(old, []store.FleetRow{old, gone}, retired); ok {
+	if _, ok := supersededBy(old, writeRepo, []store.FleetRow{old, gone}, retired); ok {
 		t.Fatal("a retired successor superseded it")
 	}
 }

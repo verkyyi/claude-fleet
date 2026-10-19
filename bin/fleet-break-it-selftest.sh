@@ -6627,7 +6627,7 @@ drill_authority_superseded_fleet_row() {
   CAP=120;  # a cold go test build is ~40 s on a CI runner
   local t0 a="$ROOT/tokenledger/internal/api/fleet_repo_authority.go"
   t0=$(now)
-  grep -q 'supersededBy(f, fs, eps)' "$a" \
+  grep -q 'supersededBy(f, a.Repo, fs, eps)' "$a" \
     || { WHY="repoAuthorityInventory no longer skips a superseded fleet row"; return 1; }
   grep -q '"superseded_hosts": superseded' "$a" \
     || { WHY="the authority manifest no longer lists superseded fleet rows apart"; return 1; }
