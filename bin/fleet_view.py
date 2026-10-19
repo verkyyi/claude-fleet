@@ -1161,6 +1161,161 @@ def id_page(e, w):
     return out
 
 
+# --- an EPIC's members under its driver (T507, T486 v18 定稿 ⑪–⑭) -----------------
+# Only an EPIC hangs: a driver is a window here wearing @epic (fleet-epic-heartbeat.sh)
+# whose @task is the batch's parent task; its members are that task's children on
+# the hub (`fleet-task-record.sh children T<n>` — parent_task, whatever their repo
+# or state). A member's row follows its driver into the driver's group, its name the
+# child's title (「C5 · EPIC 技能跟改」), the tree drawn in the name column only. The
+# driver says 已完成/总数 (closed members counted) and is folded unless its window's
+# @expand is `1` (⑭: kept until the window closes, a new member never opens it);
+# folded, only a member that is ! or ✗ shows (⑬), counted red on the driver. A
+# closed member stays in 已关闭 (⑫). An ordinary dispatch never hangs. The hub's
+# answer is kept in remote-views/epic-<fleet>.json, read again every
+# FLEET_VIEW_EPIC_SECS (30 s) by the refresh thread — never on the first frame.
+EPIC_DONE = ("succeeded", "done", "merged")
+
+
+def epic_windows(fleet):
+    """{window id: (@epic, @expand)} of the fleet's windows that wear an @epic."""
+    rc, out = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@epic}|#{@expand}")
+    res = {}
+    for line in out.splitlines() if rc == 0 else []:
+        w, epic, exp = (line.split("|") + ["", ""])[:3]
+        if epic.strip():
+            res[w] = (epic.strip(), exp.strip())
+    return res
+
+
+def epic_file(fleet):
+    return views_dir() / ("epic-%s.json" % (fleet or "-"))
+
+
+def epic_read_children(task):
+    """The hub's children of `task`: [{id, title, state, outcome}], None when unread.
+    FLEET_VIEW_EPIC_CMD (a seam, `sh -c` with the task as $1) answers instead."""
+    seam = os.environ.get("FLEET_VIEW_EPIC_CMD")
+    argv = ["sh", "-c", seam, "sh", task] if seam else \
+        ["bash", str(Path(__file__).absolute().parent / "fleet-task-record.sh"), "children", task]
+    try:
+        p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=8)
+        got = json.loads(p.stdout) if p.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if not isinstance(got, dict) or not isinstance(got.get("children"), list):
+        return None
+    return [{k: str(c.get(k) or "") for k in ("id", "title", "state", "outcome")}
+            for c in got["children"] if isinstance(c, dict) and re.fullmatch(r"T\d+", str(c.get("id") or ""))]
+
+
+def epic_members(fleet, tasks, refresh=True, now=None):
+    """{driver task: its children} for `tasks`, off the kept copy; refresh=True reads
+    the hub again for a task whose copy is older than FLEET_VIEW_EPIC_SECS."""
+    now = time.time() if now is None else now
+    p = epic_file(fleet)
+    try:
+        book = json.loads(p.read_text())
+        book = book if isinstance(book, dict) else {}
+    except (OSError, ValueError):
+        book = {}
+    changed = False
+    for t in tasks:
+        ent = book.get(t) if isinstance(book.get(t), dict) else None
+        if refresh and (ent is None or now - (ent.get("ts") or 0) >= fenv("FLEET_VIEW_EPIC_SECS", 30)):
+            kids = epic_read_children(t)
+            if kids is not None:
+                book[t] = ent = {"ts": now, "children": kids}
+                changed = True
+    if changed:
+        keep = {t: v for t, v in book.items() if t in tasks}
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(p, json.dumps(keep, ensure_ascii=False))
+        except OSError:
+            pass
+    return {t: (book.get(t) or {}).get("children") or [] for t in tasks if isinstance(book.get(t), dict)}
+
+
+def epic_kept(e):
+    """A folded driver still shows a member that waits on you (!) or failed (✗)."""
+    return e.get("sym") in ROW_RED
+
+
+def epic_tree(groups, ended, fleet, refresh=True, marks=None):
+    """Hang every EPIC's open member rows under its driver (in place). `marks`:
+    epic_windows' answer (read here when None)."""
+    marks = epic_windows(fleet) if marks is None and fleet else (marks or {})
+    drivers = {}
+    for g in GROUPS:
+        for e in groups[g]:
+            t = e.get("task") or ""
+            if not e.get("far") and e["target"] in marks and re.fullmatch(r"T\d+", t) and t not in drivers:
+                drivers[t] = e
+    if not drivers:
+        return
+    kids = epic_members(fleet, list(drivers), refresh)
+    for t, d in drivers.items():
+        if t not in kids:
+            continue
+        recs = {c["id"]: c for c in kids[t]}
+        members = []
+        for g in GROUPS:
+            stay = []
+            for e in groups[g]:
+                (members if e is not d and e.get("task") in recs else stay).append(e)
+            groups[g] = stay
+        stay = []
+        for e in ended:
+            (members if e.get("task") in recs else stay).append(e)
+        ended[:] = stay
+        members.sort(key=lambda e: int(e["task"][1:]))
+        for m in members:
+            title = (recs[m["task"]].get("title") or "").strip()
+            if title:
+                m["text"] = title
+            m.pop("sec", None)
+            m["depth"], m["fold"], m["group"] = 0, d["target"], d["group"]
+        done = sum(1 for c in recs.values() if (c.get("outcome") or c.get("state")) in EPIC_DONE)
+        d["epic"] = {"done": done, "total": len(recs),
+                     "needs": sum(1 for m in members if m.get("sym") == "needs"),
+                     "fail": sum(1 for m in members if m.get("sym") == "fail")}
+        d["expanded"] = marks[d["target"]][1] == "1"
+        lst = groups[d["group"]]
+        i = next(n for n, e in enumerate(lst) if e is d)
+        lst[i + 1:i + 1] = members
+
+
+def epic_hidden(e, drivers):
+    """A member row a folded driver hides."""
+    f = e.get("fold")
+    return bool(f) and f in drivers and not drivers[f].get("expanded") and not epic_kept(e)
+
+
+def epic_count(items):
+    """Each group heading's count again: the rows it shows (a folded driver's
+    hidden members not among them)."""
+    drivers = {e["target"]: e for e in items if e.get("epic")}
+    n = {}
+    for e in items:
+        if e["kind"] == "sess" and not e.get("sec") and not e.get("gone") and not epic_hidden(e, drivers):
+            n[e["group"]] = n.get(e["group"], 0) + 1
+    for e in items:
+        if e["kind"] == "hdr" and e.get("group") in n:
+            e["text"] = say("view_grp_" + e["group"] + "_fmt", n[e["group"]])
+
+
+def epic_toggle(items, fleet, target, on):
+    """→ / ← on a driver: its window's @expand (⑭), and the list at once."""
+    if on:
+        tm("set-option", "-w", "-t", target, "@expand", "1")
+    else:
+        tm("set-option", "-wu", "-t", target, "@expand")
+    for e in items:
+        if e.get("epic") and e.get("target") == target:
+            e["expanded"] = bool(on)
+    epic_count(items)
+
+
 def entries(vid, now=None, hub=True):
     """Every line the popup can show, in order (issue #3179): grouped by what you
     should do — 置顶 (@pin) · 等你 (needs / failed / blocked, or an unanswered ⛔
@@ -1335,6 +1490,7 @@ def entries(vid, now=None, hub=True):
         # a window here with no agent word (an older producer) is Claude — the
         # spawners' convention; another machine's says its own or 未知
         row_cols(e, f[21], f[22] or ("claude" if local else ""), title, name)
+        e["task"] = f[21].strip() if re.fullmatch(r"T\d+", f[21].strip()) else ""
         # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else target.rpartition("/")[2], known)
         if e["state"] != state:
@@ -1386,6 +1542,9 @@ def entries(vid, now=None, hub=True):
         id_apply(gone[-1], gidx.get(gone_key(target), ""), known, live=False)
     if held != held0:
         names_save(fleet, held)
+    # an EPIC's members under its driver (T507) — the hub read off the first frame
+    if fleet:
+        epic_tree(groups, ended, fleet, refresh=hub)
     # S9: two live windows on one conversation — both to 等你
     id_conflicts([e for g in GROUPS for e in groups[g]])
     for g in GROUPS:
@@ -1394,6 +1553,8 @@ def entries(vid, now=None, hub=True):
             groups[g] = [e for e in groups[g] if not e.get("conflict")]
             for e in moved:
                 e["depth"] = 0
+            for e in moved:
+                e.pop("fold", None)
             groups["ask"] += moved
     multi = len(set(repos)) >= 2
     out = []
@@ -1432,6 +1593,7 @@ def entries(vid, now=None, hub=True):
         if older:
             out.append({"kind": "cmd", "cmd": "history", "act": "history", "sec": "gone", "n": older, "row": {},
                         "text": say("view_cmd_older_fmt", older)})
+    epic_count(out)
     return out
 
 
@@ -1631,8 +1793,28 @@ def visible(items, query, opened):
             if e.get("target") in asks and not e.get("sec"):
                 out.append(dict(asks[e["target"]], depth=0))
         return out
-    return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
-            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)]
+    drivers = {e["target"]: e for e in items if e.get("epic")}
+    hide = {e["target"] for e in items if e["kind"] == "sess" and epic_hidden(e, drivers)}
+    out = [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
+           for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
+           and not (e["kind"] == "sess" and e.get("target") in hide)
+           and not (e["kind"] == "ask" and e.get("of") in hide)]
+    if not drivers:
+        return out
+    # the tree in the name column (T507): ├ each shown member, └ the last
+    last = {}
+    for i, e in enumerate(out):
+        if e["kind"] == "sess" and e.get("fold") in drivers:
+            last[e["fold"]] = i
+    stem = {}
+    for i, e in enumerate(out):
+        if e["kind"] == "sess" and e.get("fold") in drivers:
+            end = last[e["fold"]] == i
+            out[i] = dict(e, tree="└ " if end else "├ ")
+            stem[e["target"]] = "  " if end else "│ "
+        elif e["kind"] == "ask" and e.get("of") in stem:
+            out[i] = dict(e, tree=stem[e["of"]])
+    return out
 
 
 def sec_fold(opened, sec, expand):
@@ -1675,6 +1857,11 @@ def agent_word(e):
     return a.capitalize() if a else say("view_agent_unknown")
 
 
+def name_col(width):
+    """The cell the name column starts at, as row_segs lays a row out."""
+    return 4 + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0)
+
+
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
     """One session as plan B draws it (T486 v14 §1): glyph(1) · ID(8, bold) ·
     Agent(7) · short name · repo(13), the repo column kept when empty. Only ! and ✗
@@ -1695,8 +1882,28 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     used = sum(cells(t) for t, _ in segs)
     tail = (REPO_W + 2) if show_repo else 1
     room = max(1, width - used - tail)
-    name = clip_name(indent + (e.get("text") or ""), room, cells, clip)
-    segs.append((name + " " * max(0, room - cells(name)), base))
+    # an EPIC (T507): a member's tree, the driver's ▸ / ▾ and its 已完成/总数 —
+    # grey — then !k / ✗k in red for the members that still show folded
+    lead = e.get("tree") or indent
+    ep = e.get("epic")
+    after = []
+    if ep:
+        lead = ("▾ " if e.get("expanded") else "▸ ") + lead
+        after.append((" %d/%d" % (ep["done"], ep["total"]), base + ("dim",)))
+        red = base + ((("c%d" % GLYPH_COLORS["needs"], "bold") if col and not e.get("lost") else ()))
+        for k in ("needs", "fail"):
+            if ep.get(k):
+                after.append((" %s%d" % (gl[k], ep[k]), red))
+    extra = sum(cells(t) for t, _ in after)
+    if extra and room - extra < 8:
+        after, extra = [], 0
+    name = clip_name(lead + (e.get("text") or ""), room - extra, cells, clip)
+    if after:
+        segs.append((name, base))
+        segs += after
+        segs.append((" " * max(0, room - extra - cells(name)), base))
+    else:
+        segs.append((name + " " * max(0, room - cells(name)), base))
     if show_repo:
         r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
         segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
@@ -1738,7 +1945,7 @@ def paint(shown, at, width, cells, clip):
         if e["kind"] == "ask":
             # the question under its row, from the name column
             lead = " " * (4 + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0))
-            lines.append([(clip(lead + indent + e["text"], width), ("dim",))])
+            lines.append([(clip(lead + (e.get("tree") or indent) + e["text"], width), ("dim",))])
             continue
         lines.append(row_segs(e, width, cells, clip, lit))
     return lines
@@ -4016,6 +4223,8 @@ def _popup(screen, qo, vid, client, forward=""):
             foot = say("view_narrow")
         panel.put(screen, height - 2, 0, foot, width - 1, qo.clip, attr(fstyle))
         keys = say("view_keys_sending") if busy else say("view_keys_short")
+        if not busy and not page and lit_e.get("epic") and not query.split():
+            keys = say("view_keys_epic") + "  " + keys
         hits, controls = {}, {}
         editor_width, editor_height = 20, 1
         if page:
@@ -4208,6 +4417,14 @@ def _popup(screen, qo, vid, client, forward=""):
                     top = panel.clamp_top(top + wheel, len(shown), body)
                     continue
                 i = top + my - off
+                if i < len(shown) and shown[i].get("epic") and not query.split() and \
+                        buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED) and \
+                        0 <= mx - name_col(width - 1) < 2:
+                    # a click on the driver's ▸ / ▾ folds it (T507)
+                    at, follow_list = i, False
+                    epic_toggle(items, fleet, shown[i]["target"], not shown[i].get("expanded"))
+                    shown = listing()
+                    continue
                 if i < len(shown) and pickable(shown[i]):
                     at = i
                     follow_list = False
@@ -4319,6 +4536,15 @@ def _popup(screen, qo, vid, client, forward=""):
             down = [i for i in sel if i > at]
             follow_list = True
             at = down[0] if down else (sel[0] if sel else at)
+            continue
+        if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sess" \
+                and not query.split() and (shown[at].get("epic") or (shown[at].get("fold") and ch == curses.KEY_LEFT)):
+            # an EPIC (T507): → opens the driver, ← shuts it; ← on a member goes up
+            # to its driver and shuts it — ↵ still goes to the session
+            tgt = shown[at]["target"] if shown[at].get("epic") else shown[at]["fold"]
+            epic_toggle(items, fleet, tgt, ch == curses.KEY_RIGHT)
+            shown = listing()
+            at = next((i for i, x in enumerate(shown) if x["kind"] == "sess" and x.get("target") == tgt), at)
             continue
         if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sec":
             # → opens a folding heading (已结束), ← shuts it — as ↵ toggles it
