@@ -10,7 +10,9 @@
 #      name inside a call — siblings would cancel each other)
 #   B  Go blocks in a sandbox repo: agent ⇒ agent + e2e (never hub), hub ⇒ hub +
 #      e2e (never agent), shared ⇒ all four, e2e ⇒ e2e, go.work / the Go workflow
-#      ⇒ all four, an unknown tokenledger/ path ⇒ all four, docs ⇒ none
+#      ⇒ all four, an unknown tokenledger/ path ⇒ all four, docs ⇒ none; a bin/
+#      script a Go test runs (in a filepath.Join, or on a `// drives:` line) ⇒
+#      that test's block, a bin/ path only listed as data ⇒ none (issue #4944)
 #   C  packages: inside a block only those whose test binary depends on a changed
 #      package (go list -test); a block none of whose packages depends ⇒ skipped;
 #      the hub/api shards only when hub/api is reached (needs go; skipped without)
@@ -116,6 +118,10 @@ gof tokenledger/hub/store/store_test.go 'package store
 import "testing"
 func TestS(t *testing.T) {}'
 gof tokenledger/hub/store/testdata/x.json '{}'
+gof tokenledger/hub/store/run_test.go 'package store
+import ("path/filepath"; "testing")
+// drives: bin/via.sh
+func TestRun(t *testing.T) { _ = filepath.Join("..", "bin", "run-me.sh"); _ = []string{"bin/listed.sh"} }'
 gof tokenledger/e2e/e2e.go 'package e2e'
 gof tokenledger/e2e/e2e_test.go "package e2e
 import (\"testing\"; \"$P/agent/node\"; \"$P/hub/api\")
@@ -151,6 +157,11 @@ if leg B; then
   change .github/workflows/tokenledger.yml;      eq "B the Go workflow ⇒ all four" "shared agent hub e2e" "$(blocks)"
   change tokenledger/brand-new/x.go;             eq "B an unknown tokenledger/ path ⇒ all four (unsure)" "shared agent hub e2e" "$(blocks)"
   change tokenledger/README.md docs/a.md;        eq "B docs ⇒ no block" "" "$(blocks)"
+  # a bin/ script a Go test runs picks that test's block (issue #4944)
+  change bin/run-me.sh;                          eq "B a bin/ script a hub test runs ⇒ hub" "hub" "$(blocks --no-pkgs)"
+  change bin/via.sh;                             eq "B a bin/ script on a // drives: line ⇒ hub" "hub" "$(blocks --no-pkgs)"
+  change bin/listed.sh;                          eq "B a bin/ path only listed as data ⇒ no block" "" "$(blocks --no-pkgs)"
+  change bin/other.sh;                           eq "B a bin/ script no Go test runs ⇒ no block" "" "$(blocks --no-pkgs)"
 fi
 
 # ---- C. packages ----------------------------------------------------------------
@@ -168,6 +179,8 @@ if leg C; then
     eq "C hub/api: the api shards, no rest" '["api-1", "api-2", "api-3", "e2e"]' "$(gout go_parts)"
     change tokenledger/hub/store/testdata/x.json
     eq "C testdata belongs to its package" "$P/hub/store" "$(gout go_pkgs_hub)"
+    change bin/run-me.sh
+    eq "C a driven bin/ script: only the package of the test that runs it" "$P/hub/store" "$(gout go_pkgs_hub)"
     change tokenledger/shared/go.mod
     eq "C a module's go.mod ⇒ all its packages and their dependents" "shared agent hub e2e" "$(blocks)"
   else

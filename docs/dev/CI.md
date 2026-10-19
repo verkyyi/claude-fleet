@@ -72,6 +72,7 @@
 | `e2e/**` | e2e |
 | `go.work`、`Dockerfile`、`Makefile`、`test-quarantine.txt`、`tokenledger.yml`、`tokenledger-quarantine.sh`、`tokenledger-modules-selftest.sh` | 四块全选（不再收窄） |
 | `bin/fleet-client-pack.sh`（hub 内嵌的客户端） | hub · e2e |
+| 被 Go 测试执行的 `bin/` 脚本（`*_test.go` 里 `filepath.Join(…, "bin/<名>")` / `"bin", "<名>"`，或 `// drives: bin/<名>` 一行点名；issue #4944） | 那个测试所在的块，只收窄到它的包 |
 | `README.md`、`docs/`、`notify/` | 不选 |
 | `tokenledger/` 下别的路径 | 四块全选（拿不准） |
 
