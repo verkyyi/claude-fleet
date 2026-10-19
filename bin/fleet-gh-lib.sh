@@ -241,7 +241,7 @@ fleet_gh_conn_fail() {
     *'network is unreachable'*|*'Network is unreachable'*|*'connection reset by peer'*|\
     *'Could not resolve host'*|*'Failed to connect to'*|*"Couldn't connect to server"*|\
     *'Connection timed out'*|*'Operation timed out'*|*'Operation too slow'*|\
-    *'SSL connection timeout'*|*'Could not resolve hostname'*) return 0 ;;
+    *'SSL connection timeout'*) return 0 ;;
   esac
   return 1
 }
@@ -262,7 +262,8 @@ fleet_gh_down() {
 
 # fleet_gh_down_reason — the marker's reason (one line), or nothing.
 fleet_gh_down_reason() {
-  local f="$(fleet_gh_state_dir)/gh-down" _s r
+  local f _s r
+  f="$(fleet_gh_state_dir)/gh-down"
   [ -f "$f" ] && read -r _s r < "$f" 2>/dev/null && printf '%s' "$r"
 }
 

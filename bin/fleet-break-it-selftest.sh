@@ -3018,7 +3018,7 @@ EOF
 # process group killed), two connection failures open the shared gh-down marker,
 # the next call returns 75 at once, and a probe that gets an answer closes it.
 drill_gh_blackhole_hang() {
-  CAP=20; local d="$WORK/ghbh" t0 t1 r1 r2 r3 r4 calls left
+  CAP=20; local d="$WORK/ghbh" t0 t1 r1 r2 r3 calls left
   mkdir -p "$d/fp" "$d/state" "$d/tmp"
   cat > "$d/fp/gh" <<'EOF'
 #!/bin/bash
