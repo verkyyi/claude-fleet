@@ -2,6 +2,8 @@
 # fleet-train-runner.sh pick    [--runner <name>] [--repo <owner/name>] [--runners-file <json>]
 # fleet-train-runner.sh lost    [--repo <owner/name>] [--run <id>] [--prefix <job name>]
 # fleet-train-runner.sh is-lost [--repo <owner/name>] --job <id>
+# fleet-train-runner.sh pr-pick [--runner <name>] [--repo <owner/name>] --head-repo <owner/name>
+#                               --fork true|false [--status <file>] [--max-age <secs>]
 #   — where one release train runs its Linux half (issue #3864, EPIC #3863 C1).
 #
 # pick (the train's `board` job): the Shenzhen cluster's fleet-ack runners when the
@@ -41,9 +43,20 @@
 # is-lost --job <id>: exit 0 when that job's runner went away (the same annotations),
 #   1 when not — the train's fail-fast asks it before calling a fleet-ack shard red.
 #
+# pr-pick (the PR gate's plan, .github/workflows/ci.yml — issue #4821, EPIC #4810
+#   C18): where THIS PR's heavy checks run. A pull request cannot read the runner
+#   list (the runner app's key is master-only), so fleet-ack-status.yml asks it every
+#   10 minutes with `pick` and leaves the answer in the Actions cache — `ts=<epoch>`
+#   + pick's lines — which ci.yml restores as --status. `fleet-ack` only when the
+#   repo variable FLEET_PR_RUNNER (--runner) names the set, the PR's head is this
+#   repo's own branch (--head-repo = --repo and --fork false: a fork's PR never runs
+#   on our runners) and the status is fresh (≤ --max-age, 1800 s) and «up»;
+#   otherwise ubuntu-latest and the why says which. No variable ⇒ nothing read.
+#   Prints (and to $GITHUB_OUTPUT): pr_runs_on · pr_where · pr_why.
+#
 # gh reads $GH_TOKEN; $FLEET_TRAIN_GH is a test seam for the gh command.
-# Exit: pick 0 always (a choice is always made) · lost 0 (1 the jobs unreadable) ·
-#       is-lost 0 lost / 1 not · 2 usage
+# Exit: pick / pr-pick 0 always (a choice is always made) · lost 0 (1 the jobs
+#       unreadable) · is-lost 0 lost / 1 not · 2 usage
 set -u
 die() { printf 'fleet-train-runner: %s\n' "$*" >&2; exit 2; }
 emit() {
@@ -123,6 +136,54 @@ else:
   return 0
 }
 
+pr_pick() {
+  local runner=${FLEET_PR_RUNNER:-} repo=${GITHUB_REPOSITORY:-} head='' fork='' stfile='' maxage=1800
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --runner)    shift; runner="${1:-}" ;;
+      --repo)      shift; repo="${1:-}" ;;
+      --head-repo) shift; head="${1:-}" ;;
+      --fork)      shift; fork="${1:-}" ;;
+      --status)    shift; stfile="${1:-}" ;;
+      --max-age)   shift; maxage="${1:-}" ;;
+      *) die "pr-pick: unknown argument $1" ;;
+    esac
+    shift
+  done
+  case "$maxage" in ''|*[!0-9]*) die "pr-pick: --max-age takes seconds" ;; esac
+  local why='' ts='' where='' said='' age
+  if [ -z "$runner" ]; then
+    emit 'pr_runs_on=ubuntu-latest' 'pr_where=github' 'pr_why=FLEET_PR_RUNNER 未设：GitHub 的 ubuntu-latest'
+    printf 'PR checks: github — FLEET_PR_RUNNER is empty\n' >&2
+    return 0
+  fi
+  case "$runner" in *[!A-Za-z0-9_.-]*) die "pr-pick: not a runner set name: $runner" ;; esac
+  if [ -z "$repo" ] || [ "$head" != "$repo" ] || [ "$fork" != false ]; then
+    why="不是本仓库自己的分支（head ${head:-?}, fork ${fork:-?}）：自建机器不跑外来的代码"
+  elif [ -z "$stfile" ] || [ ! -r "$stfile" ]; then
+    why="深圳不可用，退回 GitHub（没有集群的最近状态：fleet-ack-status.yml 没留下缓存）"
+  else
+    ts=$(sed -n 's/^ts=//p' "$stfile" | head -1)
+    where=$(sed -n 's/^linux_where=//p' "$stfile" | head -1)
+    said=$(sed -n 's/^linux_why=//p' "$stfile" | head -1)
+    case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+    age=$(( $(date +%s) - ts ))
+    if [ "$age" -gt "$maxage" ]; then
+      why="深圳不可用，退回 GitHub（集群的最近状态已过 ${age}s > ${maxage}s）"
+    elif [ "$where" != fleet-ack ]; then
+      why="深圳不可用，退回 GitHub（${said:-the status says ${where:-nothing}}，${age}s 前）"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    emit 'pr_runs_on=ubuntu-latest' 'pr_where=github' "pr_why=$why"
+    printf 'PR checks: github — %s\n' "$why" >&2
+  else
+    emit "pr_runs_on=[\"$runner\"]" 'pr_where=fleet-ack' "pr_why=${runner}（${said:-up}，${age}s 前）"
+    printf 'PR checks: fleet-ack — %s, %ss ago\n' "${said:-up}" "$age" >&2
+  fi
+  return 0
+}
+
 # annotations_lost <job id>: 0 when GitHub says the job's runner went away
 annotations_lost() {
   local msgs
@@ -190,6 +251,7 @@ case "$cmd" in
   pick)    pick "$@" ;;
   lost)    lost "$@" ;;
   is-lost) is_lost "$@" ;;
-  -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  *) die "usage: fleet-train-runner.sh pick|lost|is-lost …" ;;
+  pr-pick) pr_pick "$@" ;;
+  -h|--help) sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) die "usage: fleet-train-runner.sh pick|lost|is-lost|pr-pick …" ;;
 esac

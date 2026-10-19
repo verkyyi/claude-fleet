@@ -65,6 +65,13 @@ on:
       pkgs_e2e:
         type: string
         default: './...'
+      # claude-fleet#4821: this repo's own PR on the Shenzhen cluster (ci.yml's
+      # plan, fleet-train-runner.sh pr-pick) — lint, test and cross-compile; the
+      # Postgres leg stays on GitHub's (its service container needs Docker)
+      runs_on:
+        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        type: string
+        default: ubuntu-latest
   workflow_dispatch:
 
 defaults:
@@ -92,16 +99,21 @@ jobs:
   # other caller (dispatch, a nightly) starts empty and runs -count=1. Before the
   # save bin/go-ci-cache.py drops what this job did not use — the repo's cache
   # is capped at 10 GB — and the summary prints what was reused.
+  # On fleet-ack (claude-fleet#4821) the runner image IS the cache: Go 1.25 and
+  # tokenledger's module + build caches are baked in (extras/ci-runner/Dockerfile),
+  # so setup-go and the Actions cache (an ocean away) are skipped there, and
+  # the summary's reuse line counts what the image held.
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        if: ${{ !startsWith(inputs.runs_on, '[') }}
         with:
           go-version: '1.25'
           cache: false
       - name: Go caches (restore — a PR only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -125,9 +137,9 @@ jobs:
       # any of the three, and neither build has the other's package
       - run: ../bin/tokenledger-modules-selftest.sh
       - name: Go caches (save what this job used)
-        if: always() && steps.gotest.outcome != 'skipped'
+        if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         run: python3 ../bin/go-ci-cache.py prune
-      - if: always() && steps.gotest.outcome != 'skipped'
+      - if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/save@v4
         with:
           path: |
@@ -136,7 +148,7 @@ jobs:
           key: go-${{ runner.os }}-lint-lint-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -151,11 +163,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        if: ${{ !startsWith(inputs.runs_on, '[') }}
         with:
           go-version: '1.25'
           cache: false
       - name: Go caches (restore — a PR only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -275,9 +288,9 @@ jobs:
             echo "$cache"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Go caches (save what this job used)
-        if: always() && steps.gotest.outcome != 'skipped'
+        if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         run: python3 ../bin/go-ci-cache.py prune
-      - if: always() && steps.gotest.outcome != 'skipped'
+      - if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/save@v4
         with:
           path: |
@@ -492,15 +505,16 @@ jobs:
   # four matrix jobs each waited 2-11 minutes for a runner of its own.
   cross-compile:
     if: github.event_name == 'workflow_dispatch' || inputs.build != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        if: ${{ !startsWith(inputs.runs_on, '[') }}
         with:
           go-version: '1.25'
           cache: false
       - name: Go caches (restore — a PR only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -525,9 +539,9 @@ jobs:
             for t in linux/amd64 linux/arm64 darwin/arm64 windows/amd64; do echo "$b $t"; done
           done | xargs -P 2 -L 1 sh -c 'cd "$0" && CGO_ENABLED=0 GOOS=${1%/*} GOARCH=${1#*/} go build -o /dev/null ./cmd/ccquota && echo "built $0 $1"'
       - name: Go caches (save what this job used)
-        if: always() && steps.gotest.outcome != 'skipped'
+        if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         run: python3 ../bin/go-ci-cache.py prune
-      - if: always() && steps.gotest.outcome != 'skipped'
+      - if: always() && steps.gotest.outcome != 'skipped' && !startsWith(inputs.runs_on, '[')
         uses: actions/cache/save@v4
         with:
           path: |

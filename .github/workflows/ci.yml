@@ -13,6 +13,14 @@ name: CI
 #   <check>     each check is its workflow, called here (`workflow_call`) only when
 #               the plan says so; a check not called reads `skipped`. Each workflow
 #               keeps its own schedule / dispatch for the nightly and by hand.
+#   where       the heavy checks (tokenledger's -race / lint / cross-compile, the
+#               selftest shards) of THIS repo's own PRs run on the Shenzhen
+#               cluster's fleet-ack when the repo variable FLEET_PR_RUNNER names it
+#               and the cluster said «up» within 30 minutes (fleet-ack-status.yml's
+#               cache; bin/fleet-train-runner.sh pr-pick — issue #4821); a fork's PR,
+#               a stale or «down» word, or no variable ⇒ ubuntu-latest as before.
+#               The plan job's `runs_on` output; the Postgres leg stays on GitHub
+#               (its service container needs Docker, which the runner pod has not).
 #   CI 结论     needs every job above, runs always: the plan must succeed, a check
 #               the plan selected must succeed, a check it did not select must be
 #               skipped; anything failed or cancelled is red. It runs no test, so it
@@ -68,6 +76,7 @@ jobs:
       go_pkgs_agent: ${{ steps.plan.outputs.go_pkgs_agent }}
       go_pkgs_hub: ${{ steps.plan.outputs.go_pkgs_hub }}
       go_pkgs_e2e: ${{ steps.plan.outputs.go_pkgs_e2e }}
+      runs_on: ${{ steps.where.outputs.pr_runs_on }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -100,6 +109,27 @@ jobs:
       - name: bin/ci-plan.sh all
         id: plan
         run: bash bin/ci-plan.sh all "origin/${{ github.base_ref }}" --out ci-plan.txt
+      # Where the heavy checks run (issue #4821): the cluster's last word, left by
+      # fleet-ack-status.yml on master — the newest cache of that prefix
+      - name: the cluster's last word
+        if: vars.FLEET_PR_RUNNER != ''
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: fleet-ack-status.txt
+          key: fleet-ack-status-none
+          restore-keys: fleet-ack-status-
+      - name: fleet-train-runner.sh pr-pick
+        id: where
+        env:
+          FLEET_PR_RUNNER: ${{ vars.FLEET_PR_RUNNER }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          bash bin/fleet-train-runner.sh pr-pick --status fleet-ack-status.txt \
+            --head-repo "$HEAD_REPO" --fork "$HEAD_FORK" 2> where.err
+          cat where.err
+          echo "### $(cat where.err)" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: ci-plan
@@ -110,6 +140,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.selftests == 'true'
     uses: ./.github/workflows/selftests.yml
+    with:
+      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-latest' }}
   shellcheck:
     needs: plan
     if: needs.plan.outputs.shellcheck == 'true'
@@ -129,6 +161,7 @@ jobs:
       pkgs_agent: ${{ needs.plan.outputs.go_pkgs_agent }}
       pkgs_hub: ${{ needs.plan.outputs.go_pkgs_hub }}
       pkgs_e2e: ${{ needs.plan.outputs.go_pkgs_e2e }}
+      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-latest' }}
   task-acceptance:
     needs: plan
     if: needs.plan.outputs.task_acceptance == 'true'

@@ -64,6 +64,28 @@ fleet-ack runner (night, the set scaled to 0, the controller down, no token) ⇒
 `ubuntu-latest` as `Linux rescue / shard K` and the train ships (BREAK-IT
 `train-ack-reclaimed`).
 
+## This repo's own PRs on fleet-ack (issue #4821)
+
+The PR gate's heavy checks — tokenledger's lint / `-race` tests / cross-compile and
+the selftest shards — run here for a PR whose head is a branch of THIS repo (never
+a fork's) when the repo variable `FLEET_PR_RUNNER=fleet-ack` asks and
+`fleet-ack-status.yml` (every 10 minutes on master, environment `fleet-ack-probe`)
+said «up» within 30 minutes; otherwise `ubuntu-latest` (docs/dev/CI.md, BREAK-IT
+`pr-ack-down`). The scale set must carry `CI_GATE_PR_WORKFLOWS=ci.yml`: the job gate
+then takes a `pull_request` of `ci.yml` only when its event says the head is this
+repo, not a fork, base master, no bot (BREAK-IT `ci-ack-pr-fork`); without it every
+PR job is refused, as before. A PR job sees what a train job sees (the build
+daemon, the mirror): same-repo branches are pushed only by those who merge to
+master anyway. Turn it on in this order — the new image (its gate and its `-race`
+cache), the set's env, then the variable:
+
+```sh
+# deploy repo: k8s/runners/fleet-ack.yaml → image fleet-ci-runner:<tag.sh>, env CI_GATE_PR_WORKFLOWS=ci.yml
+kubectl apply -f k8s/runners/fleet-ack.yaml
+gh variable set FLEET_PR_RUNNER --body fleet-ack     # back to GitHub's: gh variable delete FLEET_PR_RUNNER
+gh workflow run fleet-ack-status.yml                 # the first status now, not in 10 minutes
+```
+
 A new runner image: change `extras/ci-runner/`, merge — `ci-runner image` pushes
 `fleet-ci-runner:<tag>` — then point the scale set's `template` image **and** the
 prepull DaemonSet at that tag in the private deploy repo and apply. A shard on an

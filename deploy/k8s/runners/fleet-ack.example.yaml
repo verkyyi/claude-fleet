@@ -171,7 +171,9 @@ spec:
             memory: 2Gi
         # the image's passwordless sudo, as on ubuntu-latest (root-only selftests);
         # its job gate (ACTIONS_RUNNER_HOOK_JOB_STARTED) refuses any job but this
-        # repo's master push / dispatch / schedule runs of the workflows below
+        # repo's master push / dispatch / schedule runs of the workflows below, and
+        # (claude-fleet#4821) the PR gate ci.yml on a pull request from THIS repo's
+        # own branch — never a fork's, a bot's, or another workflow's
         securityContext:
           allowPrivilegeEscalation: true
         env:
@@ -179,6 +181,8 @@ spec:
           value: verkyyi/claude-fleet
         - name: CI_GATE_WORKFLOWS
           value: release-train.yml selftests.yml ci-runner-image.yml
+        - name: CI_GATE_PR_WORKFLOWS
+          value: ci.yml
         - name: BUILDKIT_HOST
           value: tcp://buildkitd.arc-runners:1234
         - name: BUILDKIT_TLSDIR
