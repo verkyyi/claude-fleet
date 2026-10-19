@@ -91,13 +91,10 @@ type nodeConn struct {
 	// identity's scratch (claude-fleet#2505).
 	canTest bool
 	// canTask is the hello's CapTask: this node takes the hub's task record
-	// on a start and runs task_issue (claude-fleet#3325).
+	// on a start (claude-fleet#3325).
 	canTask          bool
 	canLaunch        bool
 	canRepoAuthority bool
-	// canTicket is the hello's CapTicket: this node follows its person's
-	// hub tickets (claude-fleet#2677).
-	canTicket bool
 	// workersAt is when the worker map was last pushed (UnixNano).
 	workersAt atomic.Int64
 	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
@@ -640,7 +637,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
 		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
-		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
 		canCredsep:     hp.HasCap(control.CapCredsep),
 		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
 		canRecycle:     hp.HasCap(control.CapRecycle),

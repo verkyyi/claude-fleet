@@ -105,10 +105,9 @@ func TestTaskWithRepoHangsItsIssue(t *testing.T) {
 	}
 }
 
-// 「建 GitHub 单」 on a record with none: the task's own machine files it
-// (task_issue, bound to its session) and the issue hangs on the record; a
-// second ask answers the same issue and sends nothing.
-func TestTaskIssueOnDemand(t *testing.T) {
+// 「建 GitHub 单」 is gone (claude-fleet#4898, T477): the record is the
+// ticket. Asking a record for an issue is 404 and sends nothing.
+func TestTaskFilesNoIssue(t *testing.T) {
 	h, _, macC, f4, _, _ := capNodes(t, control.CapTask)
 	lease, key := clientLeaseFor(t, h)
 	wid := f4.FleetID + "/" + machineB
@@ -118,32 +117,14 @@ func TestTaskIssueOnDemand(t *testing.T) {
 		"task": true, "body": "整理一下这周的账单", "idempotency_key": "c-task-3"}); st != 200 || out.Task != "T1" {
 		t.Fatalf("place = %d %+v", st, out)
 	}
-	macC.setOpGet(finished("succeeded", map[string]any{"issue_url": "https://github.com/" + writeRepo + "/issues/3312"}))
-
-	st, rec := taskPost(t, h, FleetTasksPath+"/T1/issue", map[string]any{"repo": writeRepo})
-	if st != 200 || rec["issue"] != writeRepo+"#3312" {
-		t.Fatalf("建 GitHub 单 = %d %v; want the issue on the record", st, rec)
+	if st, _ := taskPost(t, h, FleetTasksPath+"/T1/issue", map[string]any{"repo": writeRepo}); st != 404 {
+		t.Fatalf("POST …/T1/issue = %d; want 404", st)
 	}
-	if macC.count() != 2 {
-		t.Fatalf("mac-c writes = %d; want the start and the filing", macC.count())
+	if macC.count() != 1 {
+		t.Fatalf("mac-c writes = %d; want the start alone", macC.count())
 	}
-	env := macC.writes[1]
-	params := env["params"].(map[string]any)
-	if env["action"] != "task_issue" || env["fleet_id"] != f4.FleetID || params["task"] != "T1" ||
-		params["repo"] != writeRepo || params["worker_id"] != wid || params["title"] != "整理一下这周的账单" {
-		t.Fatalf("mac-c was sent %v; want task_issue for T1 on the task's own fleet, bound to its session", env)
-	}
-	if st, rec := taskPost(t, h, FleetTasksPath+"/T1/issue", map[string]any{"repo": writeRepo}); st != 200 ||
-		rec["issue"] != writeRepo+"#3312" || macC.count() != 2 {
-		t.Fatalf("again = %d %v (writes %d); want the same issue, nothing sent", st, rec, macC.count())
-	}
-	// the client's road: the signed place request's action task_issue
-	st2, out := clientPlace(t, h, lease, key, map[string]any{"action": "task_issue", "task_ref": "T1"})
-	if st2 != 200 || out.Exit != 0 || out.Line != "FILED "+writeRepo+"#3312\tT1" {
-		t.Fatalf("client 建 GitHub 单 = %d %+v", st2, out)
-	}
-	if st, _ := taskPost(t, h, FleetTasksPath+"/T9/issue", map[string]any{"repo": writeRepo}); st != 404 {
-		t.Fatalf("an unknown task = %d; want 404", st)
+	if r := taskRecords(t, h)[0]; r["issue"] != nil && r["issue"] != "" {
+		t.Fatalf("record = %v; want no issue on it", r)
 	}
 }
 

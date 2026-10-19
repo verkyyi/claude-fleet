@@ -102,9 +102,6 @@ type clientPlaceRequest struct {
 	// ignores both and places it as before.
 	Task bool   `json:"task"`
 	Via  string `json:"via"`
-	// TaskRef is `action: task_issue`'s record (T<n>): 「建 GitHub 单」 from the
-	// client — Repo names where to file it, else the task's own.
-	TaskRef string `json:"task_ref"`
 }
 
 // ClientPlaceResponse is the answer: Line and Exit are fleet_hub_place's.
@@ -270,10 +267,8 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
 	case "", "place":
 		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
-	case "task_issue":
-		s.clientTaskIssue(w, r, p, req)
 	default:
-		httpError(w, http.StatusBadRequest, "action must be place, draft, status or task_issue")
+		httpError(w, http.StatusBadRequest, "action must be place, draft or status")
 	}
 }
 

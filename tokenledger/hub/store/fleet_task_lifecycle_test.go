@@ -280,17 +280,14 @@ func TestTaskAuthorityTicketScopeAndMigration(t *testing.T) {
 	if _, err = s.UpdateFleetTask(legacy.ID, FleetTaskUpdate{State: TaskOpen}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.CreateFleetTicket(FleetTicket{Owner: "alice", Repo: "hub/repo", Title: "hub item"}, 7, now); err != nil {
-		t.Fatal(err)
-	}
-	for i, ticket := range []string{"gh:org/a#7", "gh:org/b#7", "hub:hub/repo#7"} {
+	for i, ticket := range []string{"gh:org/a#7", "gh:org/b#7", "gh:hub/repo#7"} {
 		rec := claimTask(t, s, acceptedTask(t, s, fmt.Sprintf("ticket-%d", i), ticket))
 		if rec.LeaseRef != ticket {
 			t.Fatalf("lost backend/repo: %+v", rec)
 		}
 	}
-	// A legacy claimant uses the same pair for hub tickets too. A separate
-	// hub lease namespace would allow a second execution through that road.
+	// A legacy claimant uses the same pair. A separate lease namespace would
+	// allow a second execution through that road.
 	if ok, _, _, err := s.AcquireLease(LeaseClaim{Repo: "hub/repo", Issue: 7, WorkerID: "legacy/worker", Force: true}, time.Minute, now.Add(time.Hour)); err != nil || ok {
 		t.Fatalf("legacy bypassed hub task lease: %v %v", ok, err)
 	}
@@ -303,13 +300,11 @@ func TestTaskAuthorityTicketScopeAndMigration(t *testing.T) {
 	if _, err = s.MutateFleetTask(rec.ID, "alice", TaskMutation{Key: "claim", Kind: "claim", Generation: 1, EndpointID: "node-a", FleetID: "fleet-a", WorkerID: "fleet-a/session"}, now); !errors.Is(err, ErrTaskConflict) {
 		t.Fatalf("adopted legacy owner: %v", err)
 	}
-	// A linked ticket or parent belonging to another account is not adoptable.
-	if _, err = s.CreateFleetTicket(FleetTicket{Owner: "bob", Repo: "foreign/repo", Title: "private"}, 7, now); err != nil {
-		t.Fatal(err)
-	}
-	input := FleetTask{Owner: "alice", Title: "foreign", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex", TicketRef: "hub:foreign/repo#7"}
-	if _, err = s.CreateFleetTask(input, "foreign-ticket", now); !errors.Is(err, ErrTaskFence) {
-		t.Fatalf("foreign ticket: %v", err)
+	// A hub ticket is no backend any more (claude-fleet#4898, T477), and a
+	// parent belonging to another account is not adoptable.
+	input := FleetTask{Owner: "alice", Title: "hub ticket", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex", TicketRef: "hub:foreign/repo#7"}
+	if _, err = s.CreateFleetTask(input, "hub-ticket", now); !errors.Is(err, ErrTaskInvalid) {
+		t.Fatalf("hub ticket: %v", err)
 	}
 	input.TicketRef = ""
 	input.Owner = "bob"

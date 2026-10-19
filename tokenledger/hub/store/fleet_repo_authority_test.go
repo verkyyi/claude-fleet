@@ -170,42 +170,6 @@ func TestRepoAuthorityStopBoundToCurrentNative(t *testing.T) {
 	}
 }
 
-func TestRepoAuthorityCollisionAndSelectiveMapping(t *testing.T) {
-	s := taskStore(t)
-	now := time.Now()
-	legacy, err := s.CreateFleetTicket(FleetTicket{Repo: "org/a", Owner: "alice", Title: "unrelated hub seven"}, 7, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a, _ := s.OwnerAuthority("alice")
-	a = repoChange(t, s, a, "freeze")
-	a = repoChange(t, s, a, "apply")
-	m, err := s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
-	if err != nil || m.From != "gh:org/a#7" || m.To != "hub:org/a#8" || m.SourceURL != "https://github.com/org/a/issues/7" {
-		t.Fatal(m, err)
-	}
-	again, err := s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "selected GH seven", "selected body", a.Revision, now)
-	if err != nil || again != m {
-		t.Fatal("mapping not idempotent", again, err)
-	}
-	if _, err = s.AdoptRepoTicket("org/a", "alice", nil, "gh:org/a#7", "changed input", "selected body", a.Revision, now); !errors.Is(err, ErrTaskConflict) {
-		t.Fatal("changed adoption replay", err)
-	}
-	unchanged, err := s.FleetTicketAt("org/a", 7)
-	if err != nil || !reflect.DeepEqual(legacy, unchanged) {
-		t.Fatal("collision changed existing hub seven", unchanged, err)
-	}
-	gh := acceptedTask(t, s, "gh-seven", "gh:org/a#7")
-	hub := acceptedTask(t, s, "hub-eight", m.To)
-	if _, err = s.CreateFleetTask(FleetTask{Owner: "bob", Title: "foreign", AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex", TicketRef: "gh:org/a#7"}, "foreign-seven", now); !errors.Is(err, ErrTaskFence) {
-		t.Fatal("colliding hub row hid the original GH owner", err)
-	}
-	if gh.TicketRef != "gh:org/a#7" || hub.TicketRef != m.To {
-		t.Fatal("refs reinterpreted", gh, hub)
-	}
-	t.Logf("fixture mapping: %s -> %s; hub:org/a#7 unchanged; original URL %s", m.From, m.To, m.SourceURL)
-}
-
 func TestRepoAuthorityRollbackRetainsCompletedExecution(t *testing.T) {
 	s := taskStore(t)
 	a, _ := s.OwnerAuthority("alice")

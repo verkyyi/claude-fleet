@@ -31,6 +31,35 @@ var migrations = []migration{
 	{ID: 1, Name: "remove-company-business", Run: removeCompanyBusiness},
 	{ID: 2, Name: "hub-users-principal", Run: hubUsersPrincipal},
 	{ID: 3, Name: "remove-spot-nodes", Run: removeSpotNodes},
+	{ID: 4, Name: "remove-hub-tickets", Run: removeHubTickets},
+}
+
+// ticketTables are the hub tickets' tables (claude-fleet#2676 / #2677): the
+// tickets, their threads, the per-repo number and the old GitHub registry.
+var ticketTables = []string{"fleet_ticket_comments", "fleet_ticket_seq", "fleet_ticket_index", "fleet_tickets"}
+
+// removeHubTickets is migration 4 (claude-fleet#4898, T477): a task's ticket
+// is its hub record, so the hub's own tickets are gone and their tables are
+// dropped. detail counts each table's rows. Rolling back is the previous
+// image, which recreates them empty, plus hub-deploy's snapshot for the rows.
+func removeHubTickets(d dialect, tx *sql.Tx) (map[string]int64, error) {
+	done := map[string]int64{}
+	for _, t := range ticketTables {
+		if ok, err := d.tableExists(tx, t); err != nil {
+			return nil, err
+		} else if !ok {
+			continue
+		}
+		var n int64
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM ` + t).Scan(&n); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`DROP TABLE ` + t); err != nil {
+			return nil, fmt.Errorf("drop %s: %w", t, err)
+		}
+		done["dropped."+t] = n
+	}
+	return done, nil
 }
 
 // spotSettings are the fleet settings only the SPOT nodes read: the switch,

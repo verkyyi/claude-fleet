@@ -601,16 +601,10 @@ func (s *Server) routes() *routeMux {
 		// outage, with its own token; the operator flags any machine through
 		// /v1/fleet/settings.
 		mux.HandleFunc("/v1/node/maintenance", s.handleNodeMaintenance)
-		// The ticket registry (claude-fleet#2676): a node registers a ticket it
-		// opened, with its own token — exact, so the /v1/fleet/ viewer gate is not
-		// in the way.
-		mux.HandleFunc(FleetTicketRegisterPath, s.handleFleetTicketRegister)
-		// Tickets whose home is the hub (claude-fleet#2677): a node's token or a
+		// A person's task authority (claude-fleet#4896): a node's token or a
 		// person's sign-in, each scoped to its own by the handler.
 		mux.HandleFunc(FleetAuthorityPath, s.handleFleetAuthority)
 		mux.HandleFunc(FleetAuthorityPath+"/", s.handleFleetAuthority)
-		mux.HandleFunc(FleetTicketsPath, s.handleFleetTickets)
-		mux.HandleFunc(FleetTicketsPath+"/", s.handleFleetTickets)
 		// The direct door (claude-fleet#3068): a home machine reads its list
 		// and sends its record with the machine's token.
 		mux.HandleFunc(control.EntryKeysNodePath, s.handleNodeEntryKeys)
@@ -972,8 +966,6 @@ func (s *Server) routes() *routeMux {
 	// 我的 (claude-fleet#3926): a page of the new console only — appMount
 	// serves it at /app/me; here is where it lands with no console build (404).
 	mux.Handle(mePagePath, s.appSide())
-	// one ticket under 任务 (claude-fleet#3928): the same, at /app/tasks/tickets/…
-	mux.Handle(ticketPagesPrefix, s.appSide())
 	// 设备 (claude-fleet#3930): the same, at /app/devices
 	mux.Handle(devicesPagePath, s.appSide())
 	// 设置 (claude-fleet#3931): the same — the page that took over /config.

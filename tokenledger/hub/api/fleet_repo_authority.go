@@ -108,7 +108,7 @@ func (s *Server) endpointRole(endpointID string) string {
 // FleetAuthorityPath is a person's task authority (claude-fleet#4896):
 //
 //	GET  /v1/fleet/authority[?owner=]            → the manifest (dry run): authority,
-//	                                                hosts, blockers, starts, tasks, tickets
+//	                                                hosts, blockers, starts, tasks
 //	GET  /v1/fleet/authority?gate=1              → the authority alone (a node's pre-start read)
 //	POST /v1/fleet/authority                     {action freeze|apply|rollback|stop_ack,
 //	                                              expected_revision, idempotency_key,
@@ -116,53 +116,69 @@ func (s *Server) endpointRole(endpointID string) string {
 //	GET|POST /v1/fleet/authority/start?repo=     a node's local start (reserve · begin ·
 //	                                              observe · recover-observe · stopped ·
 //	                                              cancel · unobserved; GET reservation= | list=1)
-//	POST /v1/fleet/authority/adopt?repo=         {source, title, body, expected_revision}
 //
 // The scope is the caller's own: a node's token speaks for its login's person
 // (nodeTaskOwner), a person's sign-in for that person. Only a caller who sees
 // every owner (an admin, the operator's door) may name ?owner= — never a node —
-// and each such read or change is audited. /v1/fleet/tickets/authority[...]
-// ?repo= is the old per-repo road, kept one version and forwarded here.
+// and each such read or change is audited. The old per-repo road under
+// /v1/fleet/tickets left with the hub's tickets (claude-fleet#4898, T477).
 const FleetAuthorityPath = "/v1/fleet/authority"
+
+// authorityBodyMax bounds a POST's body.
+const authorityBodyMax = 80 << 10
+
+// authorityCaller is who is asking: whose tasks they own, whether they see
+// everyone's, the name an audit row of theirs carries.
+type authorityCaller struct {
+	owner, actor string
+	all          bool
+	node         bool
+}
+
+// authorityCallerOf resolves r: a node token first (a bearer that is one),
+// then a person's session or the operator's door.
+func (s *Server) authorityCallerOf(r *http.Request) (authorityCaller, bool) {
+	if ep, _ := s.nodeAuthOpt(r); ep != nil { // its signature, else its token (claude-fleet#3710)
+		host, user := s.peerSelf(ep)
+		return authorityCaller{owner: s.nodeTaskOwner(ep), actor: "node:" + user + "@" + host, node: true}, true
+	}
+	id, ok := s.sshRelayHTTPIdentity(r)
+	switch {
+	case !ok:
+		return authorityCaller{}, false
+	case id.Admin:
+		return authorityCaller{owner: id.Actor, actor: id.Actor, all: true}, true
+	case id.Operator:
+		return authorityCaller{owner: "operator", actor: "operator", all: true}, true
+	}
+	return authorityCaller{owner: id.Principal, actor: id.Principal}, true
+}
+
+// decodeAuthority reads one JSON object of the listed fields, nothing else.
+func decodeAuthority(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, authorityBodyMax))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		httpError(w, http.StatusBadRequest, "the body is one JSON object of the listed fields: "+err.Error())
+		return false
+	}
+	return true
+}
 
 func (s *Server) handleFleetAuthority(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	c, ok := s.ticketCallerOf(r)
+	c, ok := s.authorityCallerOf(r)
 	if !ok {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 		httpError(w, http.StatusUnauthorized, "a node token, a session or the viewer token is required")
 		return
 	}
 	sub := strings.Trim(strings.TrimPrefix(r.URL.Path, FleetAuthorityPath), "/")
-	if sub != "" && sub != "start" && sub != "adopt" {
-		httpError(w, http.StatusNotFound, "a task authority is "+FleetAuthorityPath+"[/start|/adopt]")
+	if sub != "" && sub != "start" {
+		httpError(w, http.StatusNotFound, "a task authority is "+FleetAuthorityPath+"[/start]")
 		return
 	}
-	s.taskAuthority(w, r, c, sub, "")
-}
-
-// ticketAuthority is the old per-repo road (claude-fleet#4730 … #4885): one
-// explicit repo=, answered with the CALLER's own authority, the repo echoed so
-// an older node's reader keeps working. `init` is refused — a new repo no
-// longer selects anything. # compat-1v: 下一批删
-func (s *Server) ticketAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller) {
-	repo := store.NormRepo(r.URL.Query().Get("repo"))
-	if !leaseRepoRE.MatchString(repo) {
-		httpError(w, 400, "select one explicit repo=owner/name")
-		return
-	}
-	sub := strings.TrimPrefix(strings.Trim(strings.TrimPrefix(r.URL.Path, FleetTicketsPath), "/"), "authority")
-	s.taskAuthority(w, r, c, strings.Trim(sub, "/"), repo)
-}
-
-// authorityView is what a gate read answers: the person's authority, plus the
-// repo the old road asked about (# compat-1v: 下一批删).
-func authorityView(a store.OwnerAuthority, compatRepo string) any {
-	if compatRepo == "" {
-		return a
-	}
-	return map[string]any{"repo": compatRepo, "owner": a.Owner, "mode": a.Mode, "revision": a.Revision,
-		"frozen_at": a.FrozenAt, "legacy_owners": a.Owners, "mappings": a.Mappings, "scope": "owner"}
+	s.taskAuthority(w, r, c, sub)
 }
 
 // endpointOwner is whose task authority admits a claim made on endpoint id:
@@ -260,17 +276,13 @@ type authorityChangeIn struct {
 	LegacyTickets string `json:"legacy_tickets"`
 }
 
-// taskAuthority serves both roads. compatRepo is the old road's repo ("" on
-// the new one): it narrows the manifest's lists and is echoed in the gate read.
-func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketCaller, sub, compatRepo string) {
+// taskAuthority serves the road; a repo= narrows the manifest's lists.
+func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c authorityCaller, sub string) {
 	q := r.URL.Query()
-	repo := compatRepo
-	if repo == "" {
-		repo = store.NormRepo(q.Get("repo"))
-		if repo != "" && !leaseRepoRE.MatchString(repo) {
-			httpError(w, 400, "repo is owner/name")
-			return
-		}
+	repo := store.NormRepo(q.Get("repo"))
+	if repo != "" && !leaseRepoRE.MatchString(repo) {
+		httpError(w, 400, "repo is owner/name")
+		return
 	}
 	owner, onBehalf := c.owner, false
 	if o := strings.TrimSpace(q.Get("owner")); o != "" && o != c.owner {
@@ -293,7 +305,7 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketC
 			httpError(w, 400, "select one explicit repo=owner/name")
 			return
 		}
-		s.ticketAuthorityStart(w, r, c, repo)
+		s.authorityStart(w, r, c, repo)
 		return
 	}
 	a, err := s.Store.OwnerAuthority(owner)
@@ -303,7 +315,7 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketC
 	}
 	// A node's pre-start check is a read, not a manifest or a new polling loop.
 	if r.Method == http.MethodGet && q.Get("gate") == "1" {
-		writeJSON(w, 200, authorityView(a, compatRepo))
+		writeJSON(w, 200, a)
 		return
 	}
 	nodes, owners, blockers, retired, superseded, clients, endpoints, err := s.ownerAuthorityInventory(r.Context(), a)
@@ -325,11 +337,6 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketC
 		}
 	}
 	if r.Method == http.MethodGet {
-		tickets, err := s.Store.FleetTickets(store.TicketFilter{Repo: repo, Owner: owner, Limit: 500})
-		if err != nil {
-			httpError(w, 500, err.Error())
-			return
-		}
 		tasks, err := s.Store.RepoTaskInventory(repo, owner)
 		if err != nil {
 			httpError(w, 500, err.Error())
@@ -343,43 +350,15 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketC
 			return
 		}
 		audit("read", "OK")
-		writeJSON(w, 200, map[string]any{"authority": authorityView(a, compatRepo), "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "client_hosts": clients, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tickets": tickets, "tickets_may_be_truncated": len(tickets) == 500, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
+		writeJSON(w, 200, map[string]any{"authority": a, "nodes": nodes, "retired_hosts": retired, "superseded_hosts": superseded, "client_hosts": clients, "legacy_owners": owners, "blockers": blockers, "starts": starts, "tasks": tasks, "dry_run": true, "live_acceptance": "unverified"})
 		return
 	}
 	if r.Method != http.MethodPost {
 		httpError(w, 405, "GET manifest or POST authority transition")
 		return
 	}
-	if sub == "adopt" {
-		var in struct {
-			Source   string `json:"source"`
-			Title    string `json:"title"`
-			Body     string `json:"body"`
-			Revision int64  `json:"expected_revision"`
-		}
-		if !decodeTicket(w, r, &in) {
-			return
-		}
-		if !leaseRepoRE.MatchString(repo) {
-			httpError(w, 400, "select one explicit repo=owner/name")
-			return
-		}
-		if len(blockers) > 0 {
-			httpError(w, 409, "drain/verify legacy owners before selective adoption")
-			return
-		}
-		m, e := s.Store.AdoptRepoTicket(repo, owner, endpoints, in.Source, in.Title, in.Body, in.Revision, time.Now())
-		if e != nil {
-			audit("adopt", "REFUSED: "+e.Error())
-			httpError(w, 409, e.Error())
-			return
-		}
-		audit("adopt", "OK "+m.From+" -> "+m.To)
-		writeJSON(w, 200, m)
-		return
-	}
 	var in authorityChangeIn
-	if !decodeTicket(w, r, &in) {
+	if !decodeAuthority(w, r, &in) {
 		return
 	}
 	change := in.OwnerAuthorityChange
@@ -455,10 +434,10 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c ticketC
 		// (claude-fleet#4730). One that is offline hears it on its first beat.
 		go s.pushOwnerAuthority(endpoints, a)
 	}
-	writeJSON(w, 200, authorityView(a, compatRepo))
+	writeJSON(w, 200, a)
 }
 
-func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c ticketCaller, repo string) {
+func (s *Server) authorityStart(w http.ResponseWriter, r *http.Request, c authorityCaller, repo string) {
 	ep, _ := s.nodeAuthOpt(r)
 	if ep == nil || (r.Method != http.MethodPost && r.Method != http.MethodGet) {
 		httpError(w, 403, "local reservation needs its authenticated node")
@@ -511,7 +490,7 @@ func (s *Server) ticketAuthorityStart(w http.ResponseWriter, r *http.Request, c 
 		Native  *store.RepoNativeIdentity `json:"native_identity"`
 		Stopped bool                      `json:"execution_stopped"`
 	}
-	if !decodeTicket(w, r, &in) {
+	if !decodeAuthority(w, r, &in) {
 		return
 	}
 	if !idemRE.MatchString(in.Key) || (in.Action == "stopped" && !in.Stopped) {

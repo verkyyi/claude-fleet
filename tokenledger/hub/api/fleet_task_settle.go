@@ -168,13 +168,6 @@ func (s *Server) issueStates(ctx context.Context, issues map[string]bool) (state
 			why[ref] = "not an issue reference"
 			continue
 		}
-		repo := store.NormRepo(ref[:i])
-		if t, err := s.Store.FleetTicketAt(repo, int64(n)); err == nil && t.Backend == store.TicketHub {
-			mu.Lock()
-			out[ref] = t.State
-			mu.Unlock()
-			continue
-		}
 		if src == nil {
 			why[ref] = "this hub reads no GitHub"
 			continue

@@ -49,7 +49,7 @@ var appPagePaths = map[string]bool{
 
 // appPagePrefixes are the console's pages that carry one name under them
 // (/machines/<host>, /subscriptions/<id>, /admin/users/<principal>).
-var appPagePrefixes = []string{"/machines/", "/subscriptions/", "/admin/users/", ticketPagesPrefix}
+var appPagePrefixes = []string{"/machines/", "/subscriptions/", "/admin/users/"}
 
 // isAppPage says whether p (a path under AppPrefix, or an old one) is a
 // console page.
@@ -82,11 +82,6 @@ func isAppPage(p string) bool {
 // and — for an admin — the way to the admin side. A page of the new console
 // only: no old page answers at it.
 const mePagePath = "/me"
-
-// ticketPagesPrefix is one ticket's page under 任务 (C5, claude-fleet#3928):
-// /app/tasks/tickets/<owner>/<name>/<N>, where an old /fleet/tickets/… link
-// lands. A page of the new console only, as 我的 is.
-const ticketPagesPrefix = TasksPagePath + "/tickets/"
 
 // devicesPagePath is 设备 (C7): the computer's install, the phone's way in,
 // the keys and the person's own machines, one tab each (?tab=pc|phone|keys|home).
@@ -141,10 +136,8 @@ var consolePages = []consolePage{
 	{old: AppPrefix + "/sessions", new: AppPrefix + "/sessions", side: sideMe, owner: "C4"},
 	{old: "/term", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
 	{old: AppPrefix + "/terminal", new: AppPrefix + "/terminal", side: sideMe, owner: "term-C2"},
-	// 任务 and 我的单子 are one page (C5): the tickets a tab of it
+	// 任务 (C5); its tickets tab and pages left with the hub's tickets (claude-fleet#4898)
 	{old: AppPrefix + TasksPagePath, new: AppPrefix + TasksPagePath, side: sideMe, owner: "C5"},
-	{old: TicketsPagePath, new: AppPrefix + TasksPagePath + "?tab=tickets", side: sideMe, owner: "C5"},
-	{old: TicketsPagePath + "/", new: AppPrefix + ticketPagesPrefix, side: sideMe, owner: "C5", under: true},
 	{old: AppPrefix + "/usage", new: AppPrefix + "/usage", side: sideMe, owner: "C6"},
 	// 我的额度 is folded into 我的用量 already; the page only moved on in
 	// the browser, a second hop.

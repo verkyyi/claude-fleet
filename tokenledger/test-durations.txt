@@ -232,8 +232,6 @@
 0.00	agent.TestTermPtyLocaleEnv
 0.00	agent.TestTermPtyRunsTheOneCommand
 0.01	agent.TestTermPtySignalCleanup
-0.00	agent.TestTicketOffWithoutHome
-0.06	agent.TestTicketPushRunsBridge
 0.00	agent.TestUnreadSysIsSaidAndLoggedOnce
 0.00	agent.TestVirtualIf
 2.17	agent.TestWatchTranscripts_DebouncesABurst
@@ -666,7 +664,6 @@
 0.40	hub/api.TestFleetSummaryByCertificate
 0.42	hub/api.TestFleetSummaryCarriesHostedRepos
 0.41	hub/api.TestFleetSummaryCarriesMachineFleetVersion
-0.41	hub/api.TestFleetTicketRegister
 0.71	hub/api.TestFleetUnknownOpFailsAfterGiveUp
 0.46	hub/api.TestFleetUnmappedSignInLeavesNoRow
 2.49	hub/api.TestFleetUsersAndAccountsListEveryLogin
@@ -983,7 +980,6 @@
 0.59	hub/api.TestNodeTaskBlockerContract
 0.46	hub/api.TestNodeTaskRecordRoad
 0.56	hub/api.TestNodeTaskSettleLegacy
-0.49	hub/api.TestNodeTaskTicketBoundary
 0.39	hub/api.TestNodesCarryMachineInstalls
 0.18	hub/api.TestNotListedEveryWayLandsOnApply
 2.43	hub/api.TestNotListedTrialInviteAndForm
@@ -1324,7 +1320,6 @@
 0.00	hub/api.TestTargetKey
 0.55	hub/api.TestTaskCollaborationAPIAuthority
 0.58	hub/api.TestTaskDispatchCLI
-0.43	hub/api.TestTaskIssueOnDemand
 0.37	hub/api.TestTaskLastKnownInventoryEvidence
 0.48	hub/api.TestTaskNoRepoIsARecordOnly
 0.46	hub/api.TestTaskOffAddsNothing
@@ -1339,12 +1334,6 @@
 0.24	hub/api.TestTerminalBrowserLease
 2.55	hub/api.TestTerminalConsoleRoutes
 0.16	hub/api.TestThemeServed
-0.40	hub/api.TestTicketListCommentCount
-2.00	hub/api.TestTicketPushOwnerOnly
-1.46	hub/api.TestTicketRefBackendChecked
-0.40	hub/api.TestTicketRefOfAnotherOwnerIsForbidden
-0.61	hub/api.TestTicketRoad
-1.55	hub/api.TestTicketsOffAddsNothing
 0.00	hub/api.TestTimeRange_RejectsInvertedRange
 0.00	hub/api.TestTimeRange_RelativeAndAbsolute
 0.00	hub/api.TestTokens_HashIsNotThePlaintext
@@ -1654,7 +1643,6 @@
 0.67	hub/store.TestRebuildRollupKeepsIssueNumber
 0.66	hub/store.TestRebuildRollupKeepsTheDeclaration
 0.66	hub/store.TestRebuildRollupRefusesToDestroyPrunedHistory
-3.19	hub/store.TestRepoAuthorityCollisionAndSelectiveMapping
 4.54	hub/store.TestRepoAuthorityExpiredOwnerAndNativeStop
 3.21	hub/store.TestRepoAuthorityFreezeSerializesClaim
 3.27	hub/store.TestRepoAuthorityLandingAfterWorkCompleted
@@ -1737,10 +1725,6 @@
 3.10	hub/store.TestTaskChildReportsFenced
 11.94	hub/store.TestTaskCompletionRetainsExecutionFence
 3.12	hub/store.TestTaskParentGenerationAndRetainedSession
-3.01	hub/store.TestTaskTicketLinkContract
-3.33	hub/store.TestTaskTicketScopeAndConcurrentWriters
-3.23	hub/store.TestTicketIndexCarriedOver
-3.09	hub/store.TestTicketNumbersConcurrent
 0.64	hub/store.TestTouchDeployProbeIsOneRow
 0.66	hub/store.TestTouchEndpoint_BatchWithoutFleetVersionKeepsTheLastReading
 0.66	hub/store.TestTouchEndpoint_CannotSetOrClearTeam

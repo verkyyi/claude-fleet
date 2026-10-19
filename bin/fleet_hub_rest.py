@@ -3,7 +3,8 @@
 
 It is what was left of the ticket store's client when the ticket layer went (issue #4898,
 EPIC #4895 批 1): the node-token credential pair, one REST call, and the
-`hub:` / `gh:` reference grammar a repo authority's accepted start still names.
+`gh:` reference grammar a repo authority's accepted start still names (the hub's
+own `hub:` tickets left with T477).
 bin/fleet_repo_authority.py is its caller.
 
 The node token is read the way every hub caller reads it (`_fleet_hub_env`, issue
@@ -20,7 +21,7 @@ import urllib.parse
 import urllib.request
 
 BIN = os.path.dirname(os.path.abspath(__file__))
-ID_RE = re.compile(r'^(hub|gh):([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$')
+ID_RE = re.compile(r'^(gh):([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+)$')
 REPO_RE = re.compile(r'^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')
 TIMEOUT = float(os.environ.get('FLEET_HUB_TIMEOUT') or 10)
 
@@ -41,7 +42,7 @@ def norm_repo(r):
 def parse(tid):
     m = ID_RE.match(tid or '')
     if not m:
-        raise Fail(2, f'{tid or "(empty)"} is not a ticket id — write hub:<owner/name>#<N> or gh:<owner/name>#<N>')
+        raise Fail(2, f'{tid or "(empty)"} is not a ticket id — write gh:<owner/name>#<N>')
     return m.group(1), m.group(2), int(m.group(3))
 
 
@@ -77,7 +78,7 @@ def creds():
 
 def api(method, path, body=None, query=None):
     url, tok = creds()
-    # A task authority is a person's (issue #4901): /authority[/start|/adopt] is
+    # A task authority is a person's (issue #4901): /authority[/start] is
     # the hub's /v1/fleet/authority road (#4896); a repo= on it only names the
     # start or narrows the lists.
     full = url + '/v1/fleet' + path

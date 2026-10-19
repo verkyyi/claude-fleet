@@ -30,7 +30,6 @@ async function fixture(route) {
   if (path.startsWith('/v1/')) {
     if (path === '/v1/fleet/tasks' && offline) { await route.fulfill({ status: 503, json: {} }); return; }
     const data = path === '/v1/fleet/tasks' ? { tasks, observed_at: observed }
-      : path === '/v1/fleet/tickets' ? { tickets: [] }
       : path === '/v1/me' ? { name: 'Fixture', login: 'fixture', role: 'user' } : {};
     await route.fulfill({ json: data }); return;
   }
@@ -70,12 +69,6 @@ try {
     await page.keyboard.press('Enter');
     assert.equal(await card('T1').locator('details').getAttribute('open'), '');
     assert.match(await card('T1').innerText(), /Verified actual agent/);
-    const tab = page.getByRole('tab', { name: 'Sent by me' });
-    await tab.focus(); await page.keyboard.press('ArrowRight');
-    await page.locator('[role="tab"][aria-selected="true"]').filter({ hasText: /^Tickets$/ }).waitFor();
-    assert.equal(await page.getByRole('tab', { name: 'Tickets', exact: true }).getAttribute('aria-selected'), 'true');
-    await page.keyboard.press('ArrowLeft');
-    await card('T1').waitFor();
     offline = true;
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     await page.getByRole('button', { name: 'Retry read', exact: true }).waitFor();
@@ -91,7 +84,7 @@ try {
   }
   assert.ok(requests.every(r => r.method === 'GET'), 'view wrote task state');
   await writeFile(resolve(work, 'evidence/browser-snapshots.json'), JSON.stringify({ fixture: true, evidence, requests }, null, 2));
-  console.log('PASS committed portal: desktop/mobile navigation, keyboard tabs/details, stale confirmed timestamp, honest outcome and PR separation');
+  console.log('PASS committed portal: desktop/mobile navigation, keyboard details, stale confirmed timestamp, honest outcome and PR separation');
 } finally {
   if (browser) await browser.close();
 }

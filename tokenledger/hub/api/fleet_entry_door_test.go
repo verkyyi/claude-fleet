@@ -71,11 +71,11 @@ func TestEntryViewCarriesTheDoor(t *testing.T) {
 // page's address (it moves on from there) or the trial, never elsewhere.
 func TestEntryReturn(t *testing.T) {
 	for v, want := range map[string]string{
-		EntryPagePath:                         EntryPagePath,
-		TicketsPagePath + "/o/r/7":            TicketsPagePath + "/o/r/7",
-		TryPagePath:                           TryPagePath,
-		"https://evil.example/":               AppPrefix,
-		TicketsPagePath + "/../../etc/passwd": AppPrefix,
+		EntryPagePath:                     EntryPagePath,
+		"/fleet/tickets/o/r/7":            AppPrefix,
+		TryPagePath:                       TryPagePath,
+		"https://evil.example/":           AppPrefix,
+		"/fleet/tickets/../../etc/passwd": AppPrefix,
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/auth/github/callback", nil)
 		r.AddCookie(&http.Cookie{Name: entryReturnCookie, Value: v})

@@ -35,8 +35,7 @@ func TestNoGHPrefixOutsideIdentity(t *testing.T) {
 	prefix := regexp.MustCompile(`\b(githubPrincipalPrefix|GitHubPrincipalPrefix)\b`)
 	// Where each may appear, and why.
 	literalOK := map[string]string{
-		"hub/store/hub_users.go":   "the GitHub identity's prefix itself",
-		"hub/api/fleet_tickets.go": "a ticket id, gh:<repo>#<N> (EPIC #3570 共同约定 1) — not a person",
+		"hub/store/hub_users.go": "the GitHub identity's prefix itself",
 	}
 	prefixOK := map[string]bool{
 		"hub/store/hub_users.go": true, // declares it; UpsertHubUser spells a GitHub person's

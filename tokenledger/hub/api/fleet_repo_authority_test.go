@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
@@ -13,41 +15,67 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
+// authorityCall is one request to the authority road with auth (a bearer).
+func authorityCall(t *testing.T, h *harness, auth func(http.Header), method, path string, body any) (int, map[string]any) {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, h.http.URL+path, rd)
+	if auth != nil {
+		auth(req.Header)
+	}
+	res, err := h.http.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if out == nil {
+		out = map[string]any{"raw": string(raw)}
+	}
+	return res.StatusCode, out
+}
+
 func TestRepoAuthorityRecoveryScope(t *testing.T) {
 	h, _, _, f5, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(token string) func(http.Header) {
 		return func(h http.Header) { h.Set("Authorization", "Bearer "+token) }
 	}
-	path := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	path := FleetAuthorityPath + "/start?repo=" + writeRepo
 	worker := f5.FleetID + "/" + wrFid
 	for _, action := range []string{"reserve", "begin"} {
-		code, out := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path,
+		code, out := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path,
 			map[string]any{"action": action, "reservation": "original", "worker_id": worker})
 		if code != 200 {
 			t.Fatalf("start %d %v", code, out)
 		}
 	}
 	for _, token := range []string{viewerToken, h.tokens["mac-c"], "foreign"} {
-		if code, _ := ticketCall(t, h, auth(token), http.MethodGet, path+"&reservation=original", nil); code == 200 {
+		if code, _ := authorityCall(t, h, auth(token), http.MethodGet, path+"&reservation=original", nil); code == 200 {
 			t.Fatal("foreign/observer caller read original reservation")
 		}
 	}
-	code, before := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, path+"&reservation=original", nil)
+	code, before := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, path+"&reservation=original", nil)
 	if code != 200 || before["phase"] != "starting" {
 		t.Fatal(code, before)
 	}
 	proof := map[string]any{"worker_id": worker, "native_session": "original", "pid": 42, "birth": "birth", "executable": "/bin/codex"}
 	request := map[string]any{"action": "recover-observe", "reservation": "original", "worker_id": worker, "native_identity": proof}
-	code, ack := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
+	code, ack := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
 	if code != 200 || ack["phase"] != "observed" {
 		t.Fatal(code, ack)
 	}
-	code, again := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
+	code, again := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request)
 	if code != 200 || !reflect.DeepEqual(ack, again) {
 		t.Fatal("exact replay", code, again)
 	}
 	request["worker_id"] = "foreign/worker"
-	if code, _ := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request); code == 200 {
+	if code, _ := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, path, request); code == 200 {
 		t.Fatal("foreign worker accepted")
 	}
 }
@@ -55,8 +83,8 @@ func TestRepoAuthorityRecoveryScope(t *testing.T) {
 func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
-	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
+	start := FleetAuthorityPath + "/start?repo=" + writeRepo
 	refresh := func() {
 		for _, f := range []control.Fleet{f5, f4} {
 			if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, "[]", time.Now().Add(time.Second)); err != nil {
@@ -65,30 +93,30 @@ func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
 		}
 	}
 	refresh()
-	code, reservation := ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "paused-after-final-gate"})
+	code, reservation := authorityCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "paused-after-final-gate"})
 	if code != 200 {
 		t.Fatalf("final gate: %d %v", code, reservation)
 	}
 	// Launcher deliberately stays paused here BEFORE new-window/native creation.
-	code, frozen := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-paused", "expected_revision": 0, "legacy_tickets": "github"})
+	code, frozen := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-paused", "expected_revision": 0, "legacy_tickets": "github"})
 	if code != 200 {
 		t.Fatalf("freeze: %d %v", code, frozen)
 	}
 	refresh()
-	code, refused := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-paused", "expected_revision": 1})
+	code, refused := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-paused", "expected_revision": 1})
 	if code != 409 {
 		t.Fatalf("empty fresh snapshot erased a reserved start: %d %v", code, refused)
 	}
 	// The launcher resumes; native creation is behind begin's one-shot CAS.
-	code, _ = ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "begin", "reservation": "paused-after-final-gate", "worker_id": f5.FleetID + "/" + wrFid})
+	code, _ = authorityCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "begin", "reservation": "paused-after-final-gate", "worker_id": f5.FleetID + "/" + wrFid})
 	if code != 409 {
 		t.Fatal("frozen launcher resumed native execution", code)
 	}
-	code, _ = ticketCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "cancel", "reservation": "paused-after-final-gate"})
+	code, _ = authorityCall(t, h, auth, http.MethodPost, start, map[string]any{"action": "cancel", "reservation": "paused-after-final-gate"})
 	if code != 200 {
 		t.Fatal("never-begun reservation cannot reconcile", code)
 	}
-	code, applied := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-reconciled", "expected_revision": 1})
+	code, applied := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "apply-reconciled", "expected_revision": 1})
 	if code != 200 || applied["mode"] != "hub" {
 		t.Fatalf("reconciled: %d %v", code, applied)
 	}
@@ -97,9 +125,9 @@ func TestRepoAuthorityAPILocalFinalGateReservation(t *testing.T) {
 func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	h, first, target, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
 	before, _ := h.srv.Store.FleetSettings()
-	code, manifest := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, manifest := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	if code != 200 || manifest["dry_run"] != true || len(manifest["legacy_owners"].([]any)) != 2 {
 		t.Fatalf("inventory: %d %v", code, manifest)
 	}
@@ -108,7 +136,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 		t.Fatal("GET mutated registry")
 	}
 	freeze := map[string]any{"action": "freeze", "idempotency_key": "freeze", "expected_revision": 0, "legacy_tickets": "github"}
-	code, a := ticketCall(t, h, auth, http.MethodPost, path, freeze)
+	code, a := authorityCall(t, h, auth, http.MethodPost, path, freeze)
 	if code != 409 {
 		t.Fatalf("unbound old owners must drain before freeze: %d %v", code, a)
 	}
@@ -129,7 +157,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 			}
 		}
 	}
-	code, a = ticketCall(t, h, auth, http.MethodPost, path, freeze)
+	code, a = authorityCall(t, h, auth, http.MethodPost, path, freeze)
 	if code != 200 || a["mode"] != "frozen" {
 		t.Fatalf("freeze: %d %v", code, a)
 	}
@@ -138,7 +166,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 	if first.count()+target.count() != 0 {
 		t.Fatal("freeze sent a start")
 	}
-	code, _ = ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "unsafe", "expected_revision": 1})
+	code, _ = authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "unsafe", "expected_revision": 1})
 	if code != 409 {
 		t.Fatal("active owners allowed cutover", code)
 	}
@@ -148,7 +176,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	code, _ = ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "absent", "expected_revision": 1})
+	code, _ = authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "apply", "idempotency_key": "absent", "expected_revision": 1})
 	if code != 409 {
 		t.Fatal("disappearance cleared native owner", code)
 	}
@@ -158,7 +186,7 @@ func TestRepoAuthorityAPIManifestCutoverAndCapabilities(t *testing.T) {
 func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 	h, _, target, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
 	refresh := func() {
 		for _, f := range []control.Fleet{f5, f4} {
 			if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, "[]", time.Now().Add(time.Second)); err != nil {
@@ -167,17 +195,17 @@ func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 		}
 	}
 	refresh()
-	code, a := ticketCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-empty", "expected_revision": 0, "legacy_tickets": "github"})
+	code, a := authorityCall(t, h, auth, http.MethodPost, path, map[string]any{"action": "freeze", "idempotency_key": "freeze-empty", "expected_revision": 0, "legacy_tickets": "github"})
 	if code != 200 {
 		t.Fatalf("freeze: %d %v", code, a)
 	}
 	refresh()
 	apply := map[string]any{"action": "apply", "idempotency_key": "apply-empty", "expected_revision": 1}
-	code, a = ticketCall(t, h, auth, http.MethodPost, path, apply)
+	code, a = authorityCall(t, h, auth, http.MethodPost, path, apply)
 	if code != 200 || a["mode"] != "hub" {
 		t.Fatalf("apply: %d %v", code, a)
 	}
-	code, again := ticketCall(t, h, auth, http.MethodPost, path, apply)
+	code, again := authorityCall(t, h, auth, http.MethodPost, path, apply)
 	if code != 200 || !reflect.DeepEqual(a, again) {
 		t.Fatalf("repeat apply: %d %v", code, again)
 	}
@@ -216,7 +244,7 @@ func TestRepoAuthorityAPICleanCutoverNoGitHub(t *testing.T) {
 func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
 	h, macD, macC, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
 	refresh := func() {
 		for _, f := range []control.Fleet{f5, f4} {
 			if err := h.srv.Store.UpdateFleetWorkers(f.FleetID, "running", 0, "[]", time.Now().Add(time.Second)); err != nil {
@@ -238,7 +266,7 @@ func TestRepoAuthorityTransitionTellsEveryHost(t *testing.T) {
 	}
 	for i, st := range steps {
 		refresh()
-		if code, out := ticketCall(t, h, auth, http.MethodPost, path, st.body); code != 200 || out["mode"] != st.mode {
+		if code, out := authorityCall(t, h, auth, http.MethodPost, path, st.body); code != 200 || out["mode"] != st.mode {
 			t.Fatalf("%s: %d %v", st.mode, code, out)
 		}
 		want := control.RepoAuthority{Repo: writeRepo, Mode: st.mode, Revision: int64(i + 1)}
@@ -270,16 +298,16 @@ func TestRepoAuthorityStartsAsFields(t *testing.T) {
 	auth := func(token string) func(http.Header) {
 		return func(h http.Header) { h.Set("Authorization", "Bearer "+token) }
 	}
-	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	start := FleetAuthorityPath + "/start?repo=" + writeRepo
 	worker := f5.FleetID + "/" + wrFid
 	for _, step := range [][2]string{{"reserve", "held"}, {"reserve", "begun"}, {"begin", "begun"}, {"reserve", "gone"}, {"cancel", "gone"}} {
-		code, out := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, start,
+		code, out := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodPost, start,
 			map[string]any{"action": step[0], "reservation": step[1], "worker_id": worker})
 		if code != 200 {
 			t.Fatalf("%v %d %v", step, code, out)
 		}
 	}
-	code, list := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, start+"&list=1", nil)
+	code, list := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, start+"&list=1", nil)
 	if code != 200 {
 		t.Fatal(code, list)
 	}
@@ -298,12 +326,12 @@ func TestRepoAuthorityStartsAsFields(t *testing.T) {
 	if !reflect.DeepEqual(phases, map[string]string{"held": "reserved", "begun": "starting"}) {
 		t.Fatal("open starts", phases)
 	}
-	if code, other := ticketCall(t, h, auth(h.tokens["mac-c"]), http.MethodGet, start+"&list=1", nil); code == 200 {
+	if code, other := authorityCall(t, h, auth(h.tokens["mac-c"]), http.MethodGet, start+"&list=1", nil); code == 200 {
 		if rows, _ := other["starts"].([]any); len(rows) != 0 {
 			t.Fatal("another node read this node's starts", other)
 		}
 	}
-	code, m := ticketCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo, nil)
+	code, m := authorityCall(t, h, auth(h.tokens["mac-d"]), http.MethodGet, FleetAuthorityPath+"?repo="+writeRepo, nil)
 	if code != 200 {
 		t.Fatal(code, m)
 	}
@@ -325,7 +353,7 @@ func TestRepoAuthorityStartsAsFields(t *testing.T) {
 func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
 	row, _ := h.srv.Store.Fleet(f4.FleetID)
 	if _, err := h.srv.Store.RepoLocalStart(writeRepo, "operator", row.EndpointID, "left-open", "reserve", "", nil, time.Now()); err != nil {
 		t.Fatal(err)
@@ -334,7 +362,7 @@ func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"b": m["blockers"], "o": m["legacy_owners"], "n": m["nodes"]})
 		return strings.Contains(string(b), s)
 	}
-	code, before := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, before := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	if code != 200 || !mentions(before, f4.FleetID) || !mentions(before, "left-open") || len(before["retired_hosts"].([]any)) != 0 {
 		t.Fatalf("before: %d %v", code, before)
 	}
@@ -342,7 +370,7 @@ func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 	if err != nil || !res.Retired || res.Settled.Starts != 1 {
 		t.Fatal(res, err)
 	}
-	code, after := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, after := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	if code != 200 || mentions(after, f4.FleetID) || mentions(after, row.EndpointID) || mentions(after, "left-open") {
 		t.Fatalf("a retired host still blocks: %d %v", code, after)
 	}
@@ -375,8 +403,8 @@ func TestRepoAuthorityRetiredHostBlocksNothing(t *testing.T) {
 func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
-	other := FleetTicketsPath + "/authority?repo=example/other-repo"
+	path := FleetAuthorityPath + "?repo=" + writeRepo
+	other := FleetAuthorityPath + "?repo=example/other-repo"
 	st := h.srv.Store
 	touch := func(ep, host, hw string) {
 		if _, err := st.DB().Exec(`UPDATE endpoints SET hostname = ?, os_user = 'frank', machine_id = ? WHERE endpoint_id = ?`, host, hw, ep); err != nil {
@@ -413,7 +441,7 @@ func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	snap("ep_mac-z", "mac-z", machineD, t0.Add(time.Second))
 	snap("ep_mac-c", "mac-c", machineB, time.Now(), f4)
 
-	code, m := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, m := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	blockers, _ := json.Marshal(m["blockers"])
 	if code != 200 || strings.Contains(string(blockers), sameMachine.FleetID) || strings.Contains(string(blockers), rejoined.FleetID) {
 		t.Fatalf("a superseded row still blocks: %d %s", code, blockers)
@@ -435,7 +463,7 @@ func TestRepoAuthoritySupersededFleetRowBlocksNothing(t *testing.T) {
 	}
 	// The hosts are the person's, whichever repo the old road names
 	// (claude-fleet#4896): another repo's manifest lists the same ones.
-	_, otherM := ticketCall(t, h, auth, http.MethodGet, other, nil)
+	_, otherM := authorityCall(t, h, auth, http.MethodGet, other, nil)
 	for _, k := range []string{"blockers", "nodes", "retired_hosts", "superseded_hosts", "legacy_owners"} {
 		if !reflect.DeepEqual(m[k], otherM[k]) {
 			t.Fatalf("another repo's %s differs: %v → %v", k, m[k], otherM[k])
@@ -493,18 +521,18 @@ func TestSupersededByRules(t *testing.T) {
 	}
 }
 
-// The old per-repo road's init (claude-fleet#4885) selects nothing any more: it
-// is refused, and the node's fallback gate read answers the person's own mode,
-// the repo echoed (claude-fleet#4896, # compat-1v).
+// An older node's init (claude-fleet#4885) selects nothing any more: it is
+// refused, and the node's fallback gate read answers the person's own mode
+// (claude-fleet#4896).
 func TestRepoAuthorityAPIInitRefusedGateIsTheOwners(t *testing.T) {
 	h, _, _, _, _ := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-d"]) }
 	body := map[string]any{"action": "init", "expected_revision": 0, "idempotency_key": "repo-init-new", "legacy_tickets": "hub"}
-	if code, a := ticketCall(t, h, auth, http.MethodPost, FleetTicketsPath+"/authority?repo=acme/brand-new", body); code != 409 {
+	if code, a := authorityCall(t, h, auth, http.MethodPost, FleetAuthorityPath+"?repo=acme/brand-new", body); code != 409 {
 		t.Fatalf("init a new repo: %d %v", code, a)
 	}
-	code, g := ticketCall(t, h, auth, http.MethodGet, FleetTicketsPath+"/authority?repo=acme/brand-new&gate=1", nil)
-	if code != 200 || g["mode"] != "legacy" || g["repo"] != "acme/brand-new" || g["owner"] != "operator" {
+	code, g := authorityCall(t, h, auth, http.MethodGet, FleetAuthorityPath+"?repo=acme/brand-new&gate=1", nil)
+	if code != 200 || g["mode"] != "legacy" || g["owner"] != "operator" {
 		t.Fatalf("gate after a refused init: %d %v", code, g)
 	}
 	if after, _ := h.srv.Store.FleetSettings(); after["task-authority:acme/brand-new"] != "" || after["task-authority:owner:operator"] != "" {
@@ -547,7 +575,7 @@ func TestOwnerAuthorityTwoPeopleOneRepo(t *testing.T) {
 	path, start := FleetAuthorityPath, FleetAuthorityPath+"/start?repo="+writeRepo
 	call := func(who func(http.Header), method, p string, body map[string]any, want int) map[string]any {
 		t.Helper()
-		code, out := ticketCall(t, h, who, method, p, body)
+		code, out := authorityCall(t, h, who, method, p, body)
 		if code != want {
 			t.Fatalf("%s %s: %d %v; want %d", method, p, code, out, want)
 		}
@@ -606,8 +634,8 @@ func TestOwnerAuthorityTwoPeopleOneRepo(t *testing.T) {
 	if a["mode"] != "hub" {
 		t.Fatal(a)
 	}
-	if g := call(alice, http.MethodGet, FleetTicketsPath+"/authority?repo="+writeRepo+"&gate=1", nil, 200); g["mode"] != "hub" || g["repo"] != writeRepo {
-		t.Fatalf("alice's old-road gate: %v", g)
+	if g := call(alice, http.MethodGet, FleetAuthorityPath+"?repo="+writeRepo+"&gate=1", nil, 200); g["mode"] != "hub" {
+		t.Fatalf("alice's gate: %v", g)
 	}
 	if g := call(bob, http.MethodGet, path+"?gate=1", nil, 200); g["mode"] != "legacy" || g["revision"] != float64(0) {
 		t.Fatalf("bob's gate moved with alice's: %v", g)
@@ -647,7 +675,7 @@ func TestOwnerAuthorityTwoPeopleOneRepo(t *testing.T) {
 func TestRepoAuthorityClientHostBlocksNothing(t *testing.T) {
 	h, _, _, f5, f4 := twoNodesCaps(t, control.CapLaunch, control.CapRepoAuthority)
 	auth := func(h http.Header) { h.Set("Authorization", "Bearer "+viewerToken) }
-	path := FleetTicketsPath + "/authority?repo=" + writeRepo
+	path := FleetAuthorityPath + "?repo=" + writeRepo
 	row, _ := h.srv.Store.Fleet(f4.FleetID)
 	ws, _ := json.Marshal([]map[string]any{{"worker_id": f4.FleetID + "/old", "repo": writeRepo}})
 	if err := h.srv.Store.UpdateFleetWorkers(f4.FleetID, "running", 1, string(ws), time.Now()); err != nil {
@@ -657,14 +685,14 @@ func TestRepoAuthorityClientHostBlocksNothing(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"b": m["blockers"], "o": m["legacy_owners"], "n": m["nodes"]})
 		return strings.Contains(string(b), s)
 	}
-	code, before := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, before := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	if code != 200 || !mentions(before, f4.FleetID) || len(before["client_hosts"].([]any)) != 0 {
 		t.Fatalf("before: %d %v", code, before)
 	}
 	if err := h.srv.Store.SetEndpointRole(row.EndpointID, store.NodeRoleClient); err != nil {
 		t.Fatal(err)
 	}
-	code, after := ticketCall(t, h, auth, http.MethodGet, path, nil)
+	code, after := authorityCall(t, h, auth, http.MethodGet, path, nil)
 	if code != 200 || mentions(after, f4.FleetID) || mentions(after, row.EndpointID) {
 		t.Fatalf("a client host still blocks: %d %v", code, after)
 	}
@@ -675,9 +703,9 @@ func TestRepoAuthorityClientHostBlocksNothing(t *testing.T) {
 	if !mentions(after, f5.FleetID) {
 		t.Fatalf("the managed host vanished: %v", after)
 	}
-	start := FleetTicketsPath + "/authority/start?repo=" + writeRepo
+	start := FleetAuthorityPath + "/start?repo=" + writeRepo
 	cauth := func(hdr http.Header) { hdr.Set("Authorization", "Bearer "+h.tokens["mac-c"]) }
-	if code, m := ticketCall(t, h, cauth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "client-start"}); code != 403 || !strings.Contains(m["error"].(string), "客户端") {
+	if code, m := authorityCall(t, h, cauth, http.MethodPost, start, map[string]any{"action": "reserve", "reservation": "client-start"}); code != 403 || !strings.Contains(m["error"].(string), "客户端") {
 		t.Fatalf("a client reserved a start: %d %v", code, m)
 	}
 }

@@ -609,11 +609,8 @@ def main(argv=None):
         actions.add_argument("--" + a, action="store_true")
     actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
-    actions.add_argument("--adopt", help="one explicit gh:owner/repo#N reference")
     actions.add_argument("--init-new", action="store_true", help=argparse.SUPPRESS)  # compat-1v: 下一批删
     p.add_argument("--tickets", default="github", help=argparse.SUPPRESS)  # compat-1v: 下一批删
-    p.add_argument("--title", default="")
-    p.add_argument("--body-file")
     p.add_argument("--manifest")
     argv = sys.argv[1:] if argv is None else list(argv)
     if "--settle" in argv:
@@ -644,9 +641,6 @@ def main(argv=None):
     action = next((x for x in ("freeze", "apply", "rollback") if getattr(args, x)), "")
     if args.stop_receipt:
         action = "stop_ack"
-    if args.adopt:
-        action = "adopt"
-        repo = repo or repo_identity(hubrest.parse(args.adopt)[1])
     if not action:
         print(json.dumps(manifest(repo), indent=2))
         return
@@ -673,13 +667,7 @@ def main(argv=None):
         if action == "stop_ack":
             proof = stopped_receipt(args.stop_receipt, a)
             data.update(worker_id=proof["worker_id"], evidence=json.dumps(proof, sort_keys=True))
-        endpoint, query = "/authority", {}
-        if action == "adopt":
-            data = dict(source=args.adopt, title=args.title,
-                        body=Path(args.body_file).read_text() if args.body_file else "",
-                        expected_revision=a["revision"])
-            endpoint, query = "/authority/adopt", {"repo": repo}
-        result = hubrest.api("POST", endpoint, body=data, query=query)
+        result = hubrest.api("POST", "/authority", body=data)
         if wanted:
             current = hubrest.api("GET", "/authority", query={"gate": "1"})
             if current.get("owner", before.get("owner")) != before.get("owner"):

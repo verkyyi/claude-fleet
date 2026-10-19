@@ -359,8 +359,8 @@ one-off drill / audit records do not go in the repo (issue #3576).
   the answer (machine · login · worker_id · key · state). A task that chose a repo
   is a `new` start that opens on the record (`dash-raw-session.sh --repo --task`); a
   task with no repo is the record alone — a node that says `CapTask` is sent
-  `task: T<n>` and stamps `@task`. The node refuses an older hub's `task_issue`
-  (「建 GitHub 单」, #4898). The top bar shows `#N`, else `T<n>`; the
+  `task: T<n>` and stamps `@task`. 「建 GitHub 单」 is gone (#4898; the hub's
+  own tickets, their API and console pages too, T477). The top bar shows `#N`, else `T<n>`; the
   hub's 任务 page (`/tasks`) lists them. No `task` asked, or a node without
   `CapTask`, or no hub ⇒ byte for byte as before (`TestTaskOffAddsNothing`).
   **The fleet's coordinators write the same record from a machine** (issue #3330):

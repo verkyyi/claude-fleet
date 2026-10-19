@@ -273,7 +273,7 @@ func TestConsoleTableOneHop(t *testing.T) {
 	}
 	h.srv.ConsoleFS = nil
 	// The old pages are gone: a form gets the 404, never the page.
-	for _, p := range []string{TicketsPagePath, TicketsPagePath + "/o/r/1", EntryPagePath, EntryConnPath, ChatPagePath, "/usage", AppPrefix + "/config"} {
+	for _, p := range []string{"/fleet/tickets", "/fleet/tickets/o/r/1", EntryPagePath, EntryConnPath, ChatPagePath, "/usage", AppPrefix + "/config"} {
 		if got := consoleDo(hd, http.MethodPost, p, user); got.Code != http.StatusNotFound {
 			t.Errorf("POST %s = %d; want 404", p, got.Code)
 		}
