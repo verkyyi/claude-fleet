@@ -29,12 +29,12 @@ import (
 
 // RetiredSettle is what one settle closed.
 type RetiredSettle struct {
-	Starts int      // repo_local_start rows ended retired
+	Starts int // repo_local_start rows ended retired
 	// WorkerStarts: worker_start operations on its fleets ended failed
 	// (claude-fleet#4864).
 	WorkerStarts int
-	Repos  []string // the repos those starts were on, sorted
-	Leases []Lease  // legacy leases released
+	Repos        []string // the repos those starts were on, sorted
+	Leases       []Lease  // legacy leases released
 }
 
 func (r RetiredSettle) empty() bool {
@@ -185,7 +185,7 @@ func failRetiredWorkerStartsTx(tx *sql.Tx, endpointID string, at time.Time) (int
 			prior = json.RawMessage(o.result)
 		}
 		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "ENDPOINT_RETIRED",
-			"message": "the fleet's endpoint was retired; this start can never open there",
+			"message":     "the fleet's endpoint was retired; this start can never open there",
 			"endpoint_id": endpointID, "prior_status": o.status, "prior_result": prior}})
 		res, err := tx.Exec(`UPDATE fleet_operations SET status = 'failed', result = ?, updated = ? WHERE id = ? AND status = ?`, string(b), ts, o.id, o.status)
 		if err != nil {
