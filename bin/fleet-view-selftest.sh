@@ -313,7 +313,8 @@ done
 [ -n "$closed" ] || fail "G: phone popup did not close and thaw"
 TMUX="$IN,0,0" bash "$BIN/fleet-view-go.sh" v1 "$UU/f1" || fail "G: go to alpha"
 to send-keys -t o:view C-] n                 # alpha → the next in the list: mac-a's session
-for _ in 1 2 3 4 5 6 7 8; do sleep 0.3; case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done
+for _ in $(seq 1 40); do sleep 0.25;  # a poll, not a budget: the first go opens the peer window (#4443)
+   case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in mac-a@*) break ;; esac; done
 case $(ti display-message -p -t 'fl@view-v1:' '#{@peer}') in
   "mac-a@$ME") ;; *) fail "G: ⌃] n from alpha did not step on to mac-a's window ($(cur) @peer=$(ti display-message -p -t 'fl@view-v1:' '#{@peer}'))" ;;
 esac
