@@ -506,6 +506,16 @@ if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-hub-node.sh" ]; then
   [ -z "$pout" ] || log "$pout"
 fi
 
+# --- the hub's ID mirror (EPIC T497 C2) ---------------------------------------------
+# Every window's ID ledger handed to the hub from where the hub is: a window opened,
+# reported or closed while the hub was away lands now, in (ID, seq) order, once.
+# Exit 3 (no hub, no node token) and 75 (the hub did not answer) say nothing — the
+# next tick resumes.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-id.sh" ] && [ -d "$FLEET_CONF_DIR/ids" ]; then
+  iout=$(fleet_timebox 60 bash "$BIN/fleet-id.sh" push 2>&1)
+  [ -z "$iout" ] || log "ids: $iout"
+fi
+
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.

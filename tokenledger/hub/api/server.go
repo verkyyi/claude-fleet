@@ -640,6 +640,9 @@ func (s *Server) routes() *routeMux {
 		// record, a question or a park on one, an EPIC member's.
 		mux.HandleFunc(NodeTasksPath, s.handleNodeTasks)
 		mux.HandleFunc(NodeTasksPath+"/", s.handleNodeTasks)
+		// The hub's mirror of every window's ID (EPIC T497 C2).
+		mux.HandleFunc(NodeIDsPath, s.handleNodeIDs)
+		mux.HandleFunc(NodeIDsPath+"/", s.handleNodeIDs)
 		// A throwaway Job for a session in a person's pod (claude-fleet#3552).
 		mux.HandleFunc(NodeJobsPath, s.handleNodeJobs)
 		mux.HandleFunc(NodeJobsPath+"/", s.handleNodeJobs)

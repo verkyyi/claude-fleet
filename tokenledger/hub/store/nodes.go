@@ -109,6 +109,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetTasks(); err != nil {
 		return err
 	}
+	// The hub's mirror of every window's ID (EPIC T497 C2).
+	if err := s.ensureFleetIDs(); err != nil {
+		return err
+	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err

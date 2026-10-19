@@ -188,6 +188,11 @@ def fold(events):
             rec["segments"].append(seg)
         elif kind == "result":
             rec["results"].append({k: v for k, v in ev.items() if k not in ("ev", "id")})
+        elif kind == "short":
+            # the hub's code for this ID (EPIC T497 C2): only ever longer
+            have = rec["opened"].get("short", "")
+            if isinstance(ev.get("short"), str) and len(ev["short"]) > len(have):
+                rec["opened"]["short"] = ev["short"]
         elif kind == "closed":
             rec["closed"] = {"ts": ev.get("ts"), "reason": ev.get("reason", "")}
             if rec["segments"] and rec["segments"][-1]["end"] is None:
@@ -279,6 +284,197 @@ def resolve(addr, extra_known=()):
     if not hits:
         return 1, []
     return (0 if len(hits) == 1 else 2), hits
+
+
+# ---- the hub mirror (EPIC T497 C2) ----------------------------------------------
+#
+# `push` hands each ledger to the hub (POST /v1/node/ids, the node token — through
+# `fleet-id.sh _post`, so the token never leaves that shell) in (ID, seq) order,
+# from the seq the hub last said it holds ($ids/.hub/<ID>.seq). The hub answers
+# where it is: a resend is a no-op there, a gap is answered with its own seq and
+# the node resends from it (a hub rebuilt empty gets every ledger again — the
+# mirror is a replay). Its answer also carries the ID's code: a longer one than
+# the ledger's (another ID of the owner shared the prefix, S12) is written down as
+# a `short` event and moved onto the window's @task_short. A 409 DUPLICATE_ID (the
+# full ID is another machine's — a cloned machine, S13) is kept as
+# $ids/.hub/<ID>.refused, said on the window (@id_hub_error) and as one alert,
+# and that ledger is never pushed again; the window keeps running.
+
+PUSH_BATCH = 200
+KNOWN_TTL = 600
+
+
+def hub_dir():
+    return os.path.join(ids_dir(), ".hub")
+
+
+def _hub_state(fid):
+    try:
+        with open(os.path.join(hub_dir(), fid + ".seq"), encoding="utf-8") as fh:
+            seq, _, size = fh.read().strip().partition(" ")
+        return int(seq), int(size or -1)
+    except (OSError, ValueError):
+        return 0, -1
+
+
+def _hub_set(fid, seq):
+    os.makedirs(hub_dir(), exist_ok=True)
+    try:
+        size = os.path.getsize(ledger_path(fid))
+    except OSError:
+        size = -1
+    tmp = os.path.join(hub_dir(), ".%s.%d" % (fid, os.getpid()))
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("%d %d\n" % (seq, size))
+    os.replace(tmp, os.path.join(hub_dir(), fid + ".seq"))
+
+
+def _poster():
+    """(method, path, body|None) → (http code, parsed JSON | None); code 0 = unreachable,
+    -3 = no hub here. FLEET_ID_HUB_POST is the seam (a command: METHOD PATH as args,
+    the body on stdin, `<code>\n<body>` out)."""
+    import shlex
+    cmd = shlex.split(os.environ.get("FLEET_ID_HUB_POST", "")) or \
+        ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-id.sh"), "_post"]
+
+    def call(method, path, body=None):
+        try:
+            p = subprocess.run(cmd + [method, path], input=json.dumps(body, ensure_ascii=False) if body is not None else "",
+                               text=True, capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return 0, None
+        if p.returncode == 3:
+            return -3, None
+        code, _, rest = p.stdout.partition("\n")
+        try:
+            code = int(code.strip())
+        except ValueError:
+            return 0, None
+        try:
+            return code, json.loads(rest) if rest.strip() else None
+        except ValueError:
+            return code, None
+    return call
+
+
+def _windows():
+    """FLEET_ID_WINDOWS (fleet-id.sh fills it): `<ID>\t<socket>\t<window>` lines."""
+    out = {}
+    for line in os.environ.get("FLEET_ID_WINDOWS", "").splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and is_fid(parts[0]):
+            out[parts[0]] = (parts[1], parts[2])
+    return out
+
+
+def _wset_any(where, name, value):
+    if not where:
+        return
+    sock, win = where
+    try:
+        subprocess.run(["tmux"] + (["-L", sock] if sock else []) + ["set-option", "-w", "-t", win, name, value],
+                       capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _refuse(fid, why, where):
+    os.makedirs(hub_dir(), exist_ok=True)
+    with open(os.path.join(hub_dir(), fid + ".refused"), "w", encoding="utf-8") as fh:
+        fh.write(why.strip() + "\n")
+    short = fold(read(fid))["opened"].get("short") or short_for(fid, known_ids())
+    text = "%s: 完整 ID 已被另一台机器登记（整机克隆？）——hub 不收这个窗口的记录，窗口照常跑；开新窗口会有新 ID" % short
+    _wset_any(where, "@id_hub_error", text)
+    alerts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-alerts.sh")
+    if os.path.exists(alerts) and os.environ.get("FLEET_ID_ALERT", "1") != "0":
+        try:
+            subprocess.run(["bash", alerts, "event", "id-duplicate", text], capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def push_one(fid, call, where=None):
+    """Push one ledger. → 0 done (or nothing to do / refused) · 75 the hub did not answer · 3 no hub."""
+    if os.path.exists(os.path.join(hub_dir(), fid + ".refused")):
+        return 0
+    seq, size = _hub_state(fid)
+    try:
+        if size >= 0 and os.path.getsize(ledger_path(fid)) == size:
+            return 0   # nothing written since the hub last answered
+    except OSError:
+        return 0
+    stuck = 0
+    while True:
+        events = [e for e in read(fid) if isinstance(e.get("seq"), int)]
+        todo = [e for e in events if e["seq"] > seq][:PUSH_BATCH]
+        if not todo:
+            _hub_set(fid, seq)
+            return 0
+        code, ans = call("POST", "/v1/node/ids", {"id": fid, "events": todo})
+        if code == -3:
+            return 3
+        if code == 409 and isinstance(ans, dict) and ans.get("code") == "DUPLICATE_ID":
+            _refuse(fid, ans.get("error", "DUPLICATE_ID"), where)
+            return 0
+        if code != 200 or not isinstance(ans, dict) or not isinstance(ans.get("seq"), int):
+            if code == 0 or code >= 500:
+                return 75
+            print("fleet-id: the hub refused %s (HTTP %s): %s" % (fid, code, (ans or {}).get("error", "")), file=sys.stderr)
+            return 0
+        got = ans["seq"]
+        short = ans.get("short") or ""
+        have = fold(read(fid))["opened"].get("short", "")
+        if short.startswith("T-") and len(short) > len(have):
+            append(fid, {"ev": "short", "short": short, "by": "hub"})
+            _wset_any(where, "@task_short", short)
+        if got > seq or got < seq:
+            stuck = 0 if got > seq else stuck + 1
+            seq = got   # behind us (a hub rebuilt): resend from where it is
+        else:
+            stuck += 1
+        if stuck > 2:
+            return 0
+        _hub_set(fid, seq)
+
+
+def push(ids, call=None):
+    call = call or _poster()
+    wins = _windows()
+    rc = 0
+    for fid in ids or sorted(ledger_ids()):
+        r = push_one(fid, call, wins.get(fid))
+        if r in (3, 75):
+            return r
+        rc = rc or r
+    # the owner's IDs the hub knows, for the short codes (known_ids) — at most every KNOWN_TTL
+    kp = os.path.join(ids_dir(), ".known")
+    try:
+        fresh = time.time() - os.path.getmtime(kp) < KNOWN_TTL
+    except OSError:
+        fresh = False
+    if not fresh:
+        code, ans = call("GET", "/v1/node/ids")
+        if code == 200 and isinstance(ans, dict) and isinstance(ans.get("ids"), list):
+            os.makedirs(ids_dir(), exist_ok=True)
+            tmp = kp + ".%d" % os.getpid()
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for x in ans["ids"]:
+                    if isinstance(x, dict) and is_fid(x.get("id")):
+                        fh.write(x["id"] + "\n")
+            os.replace(tmp, kp)
+    return rc
+
+
+def push_later(fid):
+    """Hand one ID to `fleet-id.sh push` in the background — never waited for."""
+    if os.environ.get("FLEET_ID_PUSH", "1") == "0":
+        return
+    try:
+        subprocess.Popen(["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-id.sh"), "push", fid],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        pass
 
 
 # ---- the hook -------------------------------------------------------------------
@@ -382,6 +578,7 @@ def hook(stdin):
         short = fold(read(fid))["opened"].get("short")
         if short and wopt(pane, "@task_short") != short:
             wset(pane, "@task_short", short)
+        push_later(fid)
     except OSError:
         raw = wopt(pane, "@id_retry")
         try:
@@ -430,7 +627,7 @@ def render(fid):
 
 def main(argv):
     if not argv:
-        print("usage: fleet_id.py short|open|native|result|close|get|resolve|hook …", file=sys.stderr)
+        print("usage: fleet_id.py short|open|native|result|close|get|resolve|push|hook …", file=sys.stderr)
         return 2
     cmd, args = argv[0], argv[1:]
     # Live windows' IDs ride in as FLEET_ID_LIVE (newline-separated): fleet-id.sh fills it.
@@ -441,6 +638,8 @@ def main(argv):
         except Exception:   # never block the agent, never speak
             pass
         return 0
+    if cmd == "push":
+        return push([a for a in args if is_fid(a)])
     if cmd == "encode" and args:
         print(encode(args[0]))
         return 0
@@ -493,12 +692,16 @@ def main(argv):
         for k in ("pr", "agent"):
             if opts.get(k):
                 ev[k] = opts[k]
+        if opts.get("issues"):
+            ev["issues"] = [x.strip() for x in opts["issues"].split(",") if x.strip()]
         append(target, ev)
+        push_later(target)
         return 0
     if cmd == "close":
         def decide(evs):
             return None if fold(evs)["closed"] else {"ev": "closed", "reason": opts.get("reason", "")}
         append(target, None, decide=decide)
+        push_later(target)
         return 0
     if cmd == "get":
         if not os.path.exists(ledger_path(target)):
