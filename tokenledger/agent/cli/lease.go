@@ -86,13 +86,19 @@ Exit 0 granted/released, 3 held by another node, 1 hub unreachable, 2 usage.
 	}
 	body, _ := json.Marshal(map[string]any{"action": action, "repo": rest[0], "issue": issue,
 		"worker_id": rest[2], "force": *force})
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/lease", bytes.NewReader(body))
-	if err != nil {
-		return 1, err
+	build := func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/lease", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
 	}
-	nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: leaseTimeout}).Do(req)
+	// A dropped connection is retried (claude-fleet#4933): an acquire by the
+	// same worker_id re-grants its own lease, a release of a released one is
+	// NOT_HELD — the same answer either way.
+	resp, err := hubDo(&http.Client{Timeout: leaseTimeout}, build, "lease", stderr)
 	if err != nil {
 		return 1, err
 	}

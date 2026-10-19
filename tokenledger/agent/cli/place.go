@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -79,6 +81,13 @@ const (
 	placeWaitDefault = 60
 	placeTries       = 3
 )
+
+// placeKey is a send's own idempotency key when the caller named none.
+func placeKey() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return "place-" + strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + hex.EncodeToString(b)
+}
 
 func runPlace(args []string) error {
 	code, err := place(args, os.Stdout, os.Stderr)
@@ -181,21 +190,30 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 		ask["wait"] = *wait
 		timeout = placeTimeout + placeTries*time.Duration(*wait)*time.Second
 	}
+	// Every send carries a key (claude-fleet#4933): a retry after a dropped
+	// connection is then the same start — the hub replays its operation and
+	// waits on it again — never a second one.
+	if ask["idempotency_key"] == "" {
+		ask["idempotency_key"] = placeKey()
+	}
 	body, _ := json.Marshal(ask)
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/place", bytes.NewReader(body))
-	if err != nil {
-		return 1, err
+	build := func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodPost, strings.TrimRight(*hub, "/")+"/v1/node/place", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
+		req.Header.Set("Content-Type", "application/json")
+		// The session this placement is for (claude-fleet#1810): its tool service
+		// (bin/fleet-mcp.py) verified the session's credential and signed this
+		// with the node's token. Environment only, never an argv; absent = the
+		// node's own call, as before.
+		if a := strings.TrimSpace(os.Getenv(workerAssertEnv)); a != "" {
+			req.Header.Set("X-Fleet-Worker", a)
+		}
+		return req, nil
 	}
-	nodesig.Set(req, nodesig.Confirmed(nodesig.LoginKeyPath(), *hub), *token) // signed once this login has a key (claude-fleet#3710)
-	req.Header.Set("Content-Type", "application/json")
-	// The session this placement is for (claude-fleet#1810): its tool service
-	// (bin/fleet-mcp.py) verified the session's credential and signed this
-	// with the node's token. Environment only, never an argv; absent = the
-	// node's own call, as before.
-	if a := strings.TrimSpace(os.Getenv(workerAssertEnv)); a != "" {
-		req.Header.Set("X-Fleet-Worker", a)
-	}
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	resp, err := hubDo(&http.Client{Timeout: timeout}, build, "place", stderr)
 	if err != nil {
 		return 1, err
 	}

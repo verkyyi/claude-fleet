@@ -1098,7 +1098,11 @@ func runHub(args []string) error {
 // pod's preStop has already taken it out of the Service, so every second here
 // is a request finishing, not a request refused. Long streams (the live view,
 // SSE) hold it to the end and are then cut — their clients reconnect to the
-// other replica.
+// other replica. So is a long wait: `ccquota place` waits on a remote start
+// up to a minute per machine, past any grace worth a rollout, and its cut
+// read `EOF` on the asking node (claude-fleet#4933) — the node retries it
+// with the same idempotency key (agent/cli/hubretry.go), and the other
+// replica replays the operation and waits on it again.
 func shutdownGrace(getenv func(string) string) (time.Duration, error) {
 	v := strings.TrimSpace(getenv("CCQUOTA_SHUTDOWN_GRACE"))
 	if v == "" {
