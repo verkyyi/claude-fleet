@@ -136,3 +136,39 @@ func orDur(d, def time.Duration) time.Duration {
 	}
 	return def
 }
+
+// IssueState is repo#issue's state on GitHub right now ("open" / "closed"),
+// never cached: settling a legacy task record (claude-fleet#4867) acts on it.
+func (g *GitHubIssueMeta) IssueState(ctx context.Context, repo string, issue int) (string, error) {
+	if !issueRepoRE.MatchString(repo) || issue <= 0 {
+		return "", errors.New("not an issue")
+	}
+	base := strings.TrimRight(orDefault(g.APIBase, "https://api.github.com"), "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/repos/%s/issues/%d", base, repo, issue), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if g.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+g.Token)
+	}
+	c := g.Client
+	if c == nil {
+		c = &http.Client{Timeout: 5 * time.Second}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github %s#%d: HTTP %d", repo, issue, resp.StatusCode)
+	}
+	var body struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 1<<20)).Decode(&body); err != nil {
+		return "", err
+	}
+	return body.State, nil
+}

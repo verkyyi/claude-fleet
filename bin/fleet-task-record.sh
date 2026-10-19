@@ -16,6 +16,12 @@
 #   fleet-task-record.sh set T<n> [--asked TEXT] [--parked TEXT] [--clear asked|parked]
 #                     [--issue o/n#N] [--pr o/n#N] [--key K] [--worker-id W]
 #                     [--state S] [--note TEXT]
+#   fleet-task-record.sh settle --repo o/n [--apply]
+#                     → end this owner's legacy records of a repo whose issue is
+#                       closed and whose worker holds nothing (no lease, no open
+#                       local start, not in inventory) — issue #4867. Dry unless
+#                       --apply; the hub's JSON (settled · kept by reason · items)
+#                       on stdout. A node never writes `closed` through `set`.
 #   fleet-task-record.sh attach T<n> [<window>]
 #                     → the record names the window's session (its key + worker_id)
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
@@ -277,6 +283,18 @@ case "$cmd" in
   get)
     is_tref "${1:-}" || usage
     call GET "/v1/node/tasks/$1" || exit 1 ;;
+  settle)
+    repo='' apply=false
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo) repo="${2:-}"; shift ;;
+        --apply) apply=true ;;
+        *) usage ;;
+      esac
+      shift
+    done
+    case "$repo" in */*) ;; *) usage ;; esac
+    call POST /v1/node/tasks/settle "$(python3 -c 'import json,sys; print(json.dumps({"repo":sys.argv[1],"apply":sys.argv[2]=="true"}))' "$repo" "$apply")" || exit 1 ;;
   set)
     is_tref "${1:-}" || usage
     t="$1"; shift

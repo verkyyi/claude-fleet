@@ -106,6 +106,21 @@ rm -f "$CODE"
 bash "$R" new --title t >/dev/null 2>&1; [ "$?" = 2 ] && ok "B no token: usage (2)" || bad "B no --token accepted"
 bash "$R" new --title t --token k --rule 9999 >/dev/null 2>&1; [ "$?" = 2 ] && ok "B --rule is gone: usage (issue #4790)" || bad "B --rule 9999 accepted"
 
+# --- S: settle (issue #4867) -----------------------------------------------------------
+: > "$CURL_LOG"
+bash "$R" settle --repo o/r >/dev/null 2>&1 && \
+python3 - "$CURL_LOG" <<'PY' && ok "S settle: POST /v1/node/tasks/settle, dry unless --apply" || bad "S settle: $(cat "$CURL_LOG")"
+import json, sys
+L = open(sys.argv[1]).read().splitlines()
+assert L[0].endswith("https://hub.test/v1/node/tasks/settle"), L[0]
+b = json.loads([l for l in L if l.startswith("body: ")][0][6:])
+assert b == {"repo": "o/r", "apply": False}, b
+PY
+: > "$CURL_LOG"
+bash "$R" settle --repo o/r --apply >/dev/null 2>&1 && grep -q '^body: {"repo": "o/r", "apply": true}' "$CURL_LOG" \
+  && ok "S settle --apply sends apply" || bad "S --apply: $(cat "$CURL_LOG")"
+bash "$R" settle >/dev/null 2>&1; [ "$?" = 2 ] && ok "S settle without --repo is usage" || bad "S no --repo accepted"
+
 # --- C: set / get ------------------------------------------------------------------
 : > "$CURL_LOG"
 bash "$R" set T5 --asked '要合吗？' --parked '停放：等 #3' --clear note >/dev/null 2>&1 && \
