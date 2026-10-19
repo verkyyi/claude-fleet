@@ -27,6 +27,10 @@
 #                           a toolchain is here), and the client enters as it
 #   route-lan-elsewhere     (issue #3074) away from home with home's LAN line
 #                           remembered: the pick never waits on that dark address
+#   client-pack-file-missing  (issue #4826) the client package, cut to what a
+#                           client uses: every offline word runs with no missing
+#                           file, a served script comes on first use, --check
+#                           holds the package to what its scripts name
 #
 # The loop runs for real under a python pty (the terminal), with the real
 # bin/fleet-connect.py --argv (a sandbox HOME, its own fleet-ssh-config + routes,
@@ -458,6 +462,64 @@ drill_thin_upload_blocks_input() {
   out=$(python3 "$BIN/fleet-thin-upload-selftest.py" Pump 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT="慢剪贴板期间 PTY 输出和 resize 继续，Ctrl+C 只取消上传并及时恢复输入，暂停期文字回车不执行"
+}
+
+
+# client-pack-file-missing (issue #4826, EPIC #4823 C3): the client package
+# leaves out a file a client road still runs. This tree's client, installed from
+# a file:// copy of it (no hub) into a sandbox HOME: every word a client types
+# offline runs with no missing-file error, the words whose scripts the package
+# only serves fetch them on first use, and --check holds the package to what its
+# scripts name. FLEET_CPM_SRC (another tree) is the seam that shows it red — a
+# bin/fleet that knows no served file, against this manifest.
+drill_client_pack_file_missing() {
+  CAP=120
+  local t0 src S H R M w out miss bad='' p
+  t0=$(now)
+  src=$(cd "${FLEET_CPM_SRC:-$BIN/..}" && pwd -P)
+  S=$(mktemp -d /tmp/cpm.XXXXXX); S=$(cd "$S" && pwd -P); printf '%s\n' "$S" >> "$WORK/tc-rigs"
+  M=tokenledger/internal/api/fleetclient/manifest
+  mkdir -p "$S/src/$(dirname "$M")"; cp "$src/$M" "$S/src/$M"
+  awk '!/^[[:space:]]*#/ && NF { print $1 }' "$S/src/$M" | while IFS= read -r p; do
+    mkdir -p "$S/src/$(dirname "$p")"; cp -p "$src/$p" "$S/src/$p"
+  done
+  H="$S/home"; R="$H/.claude/fleet"; mkdir -p "$H"
+  env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$H" LANG=C.UTF-8 TMPDIR="$S" FLEET_INSTALL_SRC="file://$S/src" \
+    FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_NO_HUB=1 FLEET_INSTALL_NO_NODE=1 FLEET_INSTALL_STATIC_TMUX=0 \
+    sh "$S/src/bin/fleet-install.sh" >"$S/install.out" 2>&1 || { WHY="install: $(tail -n 2 "$S/install.out")"; return 1; }
+  # the words, offline (test identity, no hub, no GitHub); a served file comes from the tree
+  while IFS= read -r w; do
+    # shellcheck disable=SC2086  # the word's arguments
+    out=$(cd "$H" && env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$H" LANG=C.UTF-8 TERM=dumb TMPDIR="$S" \
+      FLEET_CLIENT_IDENTITY=test FLEET_SERVED_FROM="file://$S/src" FLEET_STABLE_API="file://$S/no-api" \
+      FLEET_CLIENT_CHECK_SECS=999999 FLEET_DEBUG_PROMPT=0 FLEET_NOTIFY=0 "$R/bin/fleet" $w </dev/null 2>&1)
+    miss=$(printf '%s\n' "$out" | grep -E "No such file|not found|can.t open|command not found|ModuleNotFoundError|unbound variable" | head -n 1)
+    [ -z "$miss" ] || bad="$bad | fleet $w: $miss"
+  done <<'EOF'
+--help
+status
+update
+doctor
+host status
+route
+logout
+ls --services
+users --help
+release stats --help
+drill --help
+node status
+config
+claude --here
+EOF
+  for p in bin/fleet-users.py bin/fleet-hub-admin.py bin/fleet-release-stats.py bin/fleet-drill.sh bin/fleet-hub-url.sh; do
+    [ -f "$R/$p" ] || bad="$bad | $p not fetched on first use"
+  done
+  [ -z "$bad" ] || { WHY="${bad# | }"; return 1; }
+  # the package, held to what its scripts name (both ways)
+  out=$(bash "$src/bin/fleet-client-runtime.sh" --check "$src/conf/client-runtime.list" "$src/$M" 2>&1) \
+    || { WHY="fleet-client-runtime.sh --check: $(printf '%s' "$out" | head -n 3 | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="纯客户端：14 个词离线跑通、没有一处缺文件；fleet users / release stats / drill 用到时才把 served 的脚本取来；--check 两个方向都对得上"
 }
 
 tc_cleanup() {
