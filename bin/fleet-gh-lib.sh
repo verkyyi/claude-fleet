@@ -217,8 +217,11 @@ _fleet_gh_timed() {
   { "$@" 0<&7 7<&- & job=$!; } 7<&0
   # The watcher writes the flag BEFORE the signal, so a job it killed is told
   # apart from one that failed by itself.
-  ( trap - TERM; sleep "$secs"; : > "$flag"
-    kill -TERM -- "-$job" 2>/dev/null; sleep 2; kill -KILL -- "-$job" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
+  # The system's sleep, never a PATH shim a test put first (`command -p` still
+  # takes bash's hashed path).
+  local sl=/bin/sleep; [ -x "$sl" ] || sl=/usr/bin/sleep
+  ( trap - TERM; "$sl" "$secs"; : > "$flag"
+    kill -TERM -- "-$job" 2>/dev/null; "$sl" 2; kill -KILL -- "-$job" 2>/dev/null ) >/dev/null 2>&1 </dev/null &
   w=$!
   [ "$mflag" = 1 ] || set +m
   wait "$job" 2>/dev/null; rc=$?
