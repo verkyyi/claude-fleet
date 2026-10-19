@@ -1,4 +1,5 @@
 #!/bin/bash
+# bin-inventory: 人工入口 — 管理员设每人可用机器，docs/public/*/admin/machines.md
 # fleet-machine-policy.sh — which machines a person may use (issue #3824): the
 # hub's per-person machine allowlist.
 #

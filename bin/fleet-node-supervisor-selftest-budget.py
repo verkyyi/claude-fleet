@@ -531,8 +531,6 @@ def envelope_module():
 
 def main():
     global ACTIVE
-    if len(sys.argv) == 4 and sys.argv[1] == "--counterexample-gate":
-        return counterexample_module().gate(sys.modules[__name__], sys.argv[2], sys.argv[3])
     if len(sys.argv) > 1 and sys.argv[1] == "--outer":
         return envelope_module().outer(sys.modules[__name__], sys.argv[2:])
     if len(sys.argv) == 3 and sys.argv[1] == "--outer-gate":
@@ -542,8 +540,6 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: fleet-node-supervisor-selftest-budget.py <case>")
     case = sys.argv[1]
-    if "SUPERVISOR_COUNTEREXAMPLE_CONTEXT" in os.environ:
-        return counterexample_module().entry(sys.modules[__name__], case)
     if "SUPERVISOR_TEST_ENVELOPE" in os.environ:
         return envelope_module().entry(sys.modules[__name__], case)
     print("supervisor-budget-origin " + json.dumps({"pid": os.getpid(), "case": case,
@@ -556,28 +552,9 @@ def main():
     source = os.path.join(os.path.dirname(__file__), "fleet-node-supervisor-selftest.py")
     sys.argv = [source, case]
     try:
-        if case == "--cleanup-counterexample":
-            namespace = runpy.run_path(source, run_name="supervisor_counterexample")
-            return namespace["budget_cleanup_counterexample"]()
         runpy.run_path(source, run_name="__main__")
     finally:
         ACTIVE.close()
-
-
-def counterexample_module():
-    # Fixed, opt-in counterexample only; never added to the four business cases.
-    import importlib.util
-    current = sys.modules[__name__]
-    if sys.modules.setdefault("supervisor_test_budget", current) is not current:
-        raise RuntimeError("counterexample refuses a second budget module/clock origin")
-    name = "supervisor_counterexample_envelope"
-    if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name,
-            os.path.join(os.path.dirname(__file__), "fleet-node-supervisor-counterexample-envelope.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[name]
 
 
 if __name__ == "__main__":

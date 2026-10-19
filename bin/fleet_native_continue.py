@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — 旧 Codex 会话一次续接（#4775），docs/dev/NATIVE-OBSERVE.md
 """One-shot continuation of a legacy Codex session whose fixed hooks are gone.
 
 --preflight reads (never writes) the idle original and prints a manifest with

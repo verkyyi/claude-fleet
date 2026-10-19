@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — 维护者重生成 docs/dev/BIN-INVENTORY.md（--markdown），见 COMPONENTS.md
 """Read-only bin ownership/reference inventory; COMPONENTS.md owns the rules."""
 import argparse
 import csv
@@ -17,6 +18,12 @@ ROOTS = ('bin', 'hooks', 'launchd', 'systemd', 'commands', 'skills', 'plugins',
 SKIP = {'.git', '__pycache__', 'node_modules', '.venv', 'vendor'}
 CATEGORIES = {'核心', '按需', '移除', '待定'}
 TOKEN = re.compile(r'[\w.-]+', re.UNICODE)
+# bin/fleet runs `fleet <word>` as bin/fleet-<word>.{py,sh}: a literal dispatch,
+# counted only where it is spelled as a command (line start, quote, paren), not prose.
+DISPATCH = re.compile(r'(?:^[ \t]*|[`\'"(])fleet ([a-z][a-z0-9-]*)', re.M)
+# A file nobody calls by name but a person runs by hand says so in its header.
+MANUAL = re.compile(r'^#\s*bin-inventory:\s*人工入口\s*[—:：-]?\s*(.*)$', re.M)
+CODE = ('', '.py', '.sh', '.mjs', '.js', '.ts')
 
 
 def files(root):
@@ -67,6 +74,20 @@ def is_test(path):
             or any(x in p.name for x in ('-fixture.', '-fake-', '-rig.')))
 
 
+def is_data(path):
+    """A fixture / baseline / table read by a program, not a program."""
+    return Path(path).suffix not in CODE
+
+
+def manual(root, name):
+    try:
+        head = '\n'.join((root / 'bin' / name).read_text(errors='replace').splitlines()[:40])
+    except OSError:
+        return ''
+    found = MANUAL.search(head)
+    return (found.group(1).strip() or '人工入口') if found else ''
+
+
 def inventory(root):
     components, rules = read_rules(root)
     sources = files(root)
@@ -84,6 +105,19 @@ def inventory(root):
     discovered = set()
     nested = {n: re.compile(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])')
               for n in names if '/' in n}
+    # A directory read as a whole (a fixture folder, a folder put on PATH) is a
+    # reference to every file under it; one segment must be spelled as a path.
+    folders = {}
+    for n in names:
+        parts = n.split('/')[:-1]
+        for i in range(1, len(parts) + 1):
+            folders.setdefault('/'.join(parts[:i]), set()).add(n)
+    folder_patterns = {d: re.compile(('(?<![\\w.-])' if '/' in d else '(?<=/)')
+                                     + re.escape(d) + r'(?![\w./-])')
+                       for d in folders}
+    dispatch = {n[6:-3] for n in names
+                if '/' not in n and n.startswith('fleet-') and n.endswith(('.sh', '.py'))
+                and os.access(root / 'bin' / n, os.X_OK)}
     for path in sources:
         content = (root / path).read_bytes()
         if b'\0' in content:
@@ -96,6 +130,12 @@ def inventory(root):
         for n, pattern in nested.items():
             if pattern.search(body):
                 references.add(n)
+        for d, pattern in folder_patterns.items():
+            if pattern.search(body):
+                references.update(folders[d])
+        for word in set(DISPATCH.findall(body)) & dispatch:
+            references.update(n for n in ('fleet-%s.py' % word, 'fleet-%s.sh' % word)
+                              if n in callers)
         references.discard(path[4:] if path.startswith('bin/') else '')
         outgoing[path] = references
         for n in references:
@@ -141,21 +181,23 @@ def inventory(root):
     pending = list(discovered)
     while pending:
         for target in outgoing.get('bin/' + pending.pop(), ()):
-            if target in tests and target not in reached:
+            if (target in tests or is_data(target)) and target not in reached:
                 reached.add(target)
                 pending.append(target)
     rows = []
     for n in names:
         refs = sorted(callers[n])
         production = [p for p in refs if not is_test(p)]
-        reason = ''
-        if not refs:
+        reason, by_hand = '', manual(root, n)
+        if by_hand:
+            pass
+        elif not refs:
             reason = '扫描范围内无静态引用；复核外部入口及动态拼接'
         elif not production and n not in reached:
             reason = '仅测试/夹具引用；复核人工入口及测试专用依赖'
         rows.append(dict(file='bin/' + n, component=owners.get(n, ''),
                          callers=refs, production=production, reason=reason,
-                         category=components.get(owners.get(n, ''), ''),
+                         manual=by_hand, category=components.get(owners.get(n, ''), ''),
                          test=n in tests))
     return rows
 
@@ -164,7 +206,9 @@ def summary(rows):
     classified = sum(bool(r['component']) for r in rows)
     candidates = sum(bool(r['reason']) for r in rows)
     unknown = sum(not r['component'] and not r['reason'] for r in rows)
-    return f'总数\t{len(rows)}\n已归类\t{classified}\n待删候选\t{candidates}\n未归类\t{unknown}\n'
+    by_hand = sum(bool(r['manual']) for r in rows)
+    return (f'总数\t{len(rows)}\n已归类\t{classified}\n待删候选\t{candidates}\n'
+            f'人工入口\t{by_hand}\n未归类\t{unknown}\n')
 
 
 def tsv(rows):
@@ -198,7 +242,11 @@ def markdown(rows):
              'CI 的 `*-selftest.sh` 通配符发现单独计为 run-selftests.sh 引用；',
              '自测优先继承同名被测脚本（允许省略 fleet- 前缀），再取最长被测名称前缀；',
              '其余依显式规则，跨组件检查归构建与验证。被 CI 自测引用链触达的测试/夹具保留；',
-             '只有测试引用的生产文件仍列候选，不能据此删除测试专用依赖。', '',
+             '只有测试引用的生产文件仍列候选，不能据此删除测试专用依赖。',
+             '另外三种引用也算：`fleet <词>` 按命令写出时（行首、引号、括号里）指 bin/fleet 分派到的',
+             '`fleet-<词>.{py,sh}`；按目录读的夹具/放上 PATH 的目录，引用目录即引用其下全部文件；',
+             'CI 自测引用链读到的数据文件（基线、夹具、表）。没人按名调用、由人手动运行的程序',
+             '在文件头写 `# bin-inventory: 人工入口 — <谁在用>`，单列「人工入口」，不计候选。', '',
              '## 组件汇总', '', '| 组件 | 类别 | 文件数 |', '|---|---|---:|']
     for c, count in sorted(counts.items()):
         lines.append(f'| {c} | {categories.get(c, "—")} | {count} |')
@@ -211,6 +259,9 @@ def markdown(rows):
             lines.append(f'| `{r["file"]}` | {r["component"] or "待复核"} | '
                          f'{"测试/夹具" if r["test"] else "程序/数据"} | '
                          f'{len(r["callers"])} | `{first}` | {r["reason"]} |')
+    lines += ['', '## 人工入口（不计候选）', '', '| 文件 | 组件 | 谁在用 |', '|---|---|---|']
+    lines += [f'| `{r["file"]}` | {r["component"] or "待复核"} | {r["manual"]} |'
+              for r in rows if r['manual']] or ['| — | — | 无 |']
     unknown = [r for r in rows if not r['component'] and not r['reason']]
     lines += ['', '## 未归类', '']
     lines += [f'- `{r["file"]}`' for r in unknown] or ['无。']
@@ -230,7 +281,7 @@ def selftest():
 <!-- bin-inventory:rules -->
 | 组件名前缀 | bin/ 文件模式 | 说明 |
 |---|---|---|
-| 测试组件 | `live.sh orphan.sh only-test.sh lib.py session-shell/*` | fixture |
+| 测试组件 | `live.sh orphan.sh only-test.sh lib.py session-shell/* fixtures/* fleet-word.sh fleet-prose.sh by-hand.py table.baseline` | fixture |
 | 构建与验证 | `run-selftests.sh` | runner |
 <!-- /bin-inventory:rules -->
 ''')
@@ -248,6 +299,18 @@ def selftest():
         put('shell/client.sh', 'bash ../bin/live.sh\n')
         put('conf/false.conf', 'not-orphan.sh orphan.sh.bak orphan.sh-extra\n')
         put('docs/report.md', 'orphan.sh\n')
+        put('bin/fixtures/case/a.jsonl', '{}\n')
+        put('bin/fixtures/case/b.jsonl', '{}\n')
+        put('bin/fixtures/other/c.jsonl', '{}\n')
+        put('bin/case-selftest.sh', 'cp "$BIN/fixtures/case"/* "$d"\ngrep x "$BIN/table.baseline"\n')
+        put('bin/table.baseline', '# lines\n')
+        put('conf/path.conf', 'PATH=$BIN/session-shell:$PATH\n')
+        put('bin/session-shell/codex', '# wrapper\n')
+        for name in ('fleet-word.sh', 'fleet-prose.sh'):
+            put('bin/' + name, '# ' + name + '\n')
+            (root / 'bin' / name).chmod(0o755)
+        put('hooks/hint.sh', "echo '(fleet word to retry)'\n# its fleet prose list\n")
+        put('bin/by-hand.py', '#!/usr/bin/env python3\n# bin-inventory: 人工入口 — docs/run.md\n')
         rows = inventory(root)
         by = {r['file']: r for r in rows}
         assert by['bin/live.sh']['callers'] == ['hooks/start.sh', 'shell/client.sh']
@@ -259,7 +322,19 @@ def selftest():
         assert not by['bin/only-test-selftest.sh']['reason']
         assert by['bin/lib.py']['callers'] == ['bin/live-selftest.py', 'mod/use.py']
         assert not by['bin/live-selftest.py']['reason']
-        assert by['bin/session-shell/claude']['callers'] == ['conf/wrapper.conf']
+        assert by['bin/session-shell/claude']['callers'] == ['conf/path.conf', 'conf/wrapper.conf']
+        # A folder read whole, PATH dirs, data reached from CI, dispatch, manual.
+        assert not by['bin/fixtures/case/a.jsonl']['reason']
+        assert not by['bin/fixtures/case/b.jsonl']['reason']
+        assert by['bin/fixtures/other/c.jsonl']['reason'].startswith('扫描范围内无')
+        assert not by['bin/table.baseline']['reason']
+        assert by['bin/session-shell/codex']['callers'] == ['conf/path.conf']
+        assert by['bin/fleet-word.sh']['callers'] == ['hooks/hint.sh']
+        assert by['bin/fleet-prose.sh']['reason'].startswith('扫描范围内无')
+        assert by['bin/by-hand.py']['manual'] == 'docs/run.md'
+        assert not by['bin/by-hand.py']['reason']
+        assert '人工入口\t1\n' in summary(rows)
+        assert '| `bin/by-hand.py` | 测试组件 | docs/run.md |' in markdown(rows)
         assert '未归类\t1\n' in summary(rows)
         assert len(list(csv.reader(io.StringIO(tsv(rows)), delimiter='\t'))) == len(rows) + 1
         assert markdown(rows) == markdown(inventory(root))
@@ -278,6 +353,7 @@ def selftest():
         assert '未归类\t0\n' in summary(inventory(root))
         check_cli(0, inventory(root))
         print('PASS inventory: runtime/orphan/test-only, inheritance, boundaries, imports, unknown, TSV, deterministic')
+        print('PASS inventory: folder reads, PATH dirs, CI data, fleet <word> dispatch (not prose), 人工入口 marker')
         print('PASS inventory CLI: unknown live file exits 1; mapped file exits 0; summary/TSV retain all files')
 
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — 显式运行的原生插件探针，docs/dev/NATIVE-AGENT-BOUNDARY.md
 """Opt-in native plugin probe: isolated homes, fixture MCP, no model or live configuration."""
 import argparse
 import hashlib
