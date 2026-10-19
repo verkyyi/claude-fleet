@@ -343,3 +343,50 @@ func TestRepoAuthorityLandingAfterWorkCompleted(t *testing.T) {
 		t.Fatal(after, err)
 	}
 }
+
+// A repo the hub has never seen starts on the hub in one step; any trace of it —
+// a fleet row, a task, a ticket — of ANY owner keeps it legacy (claude-fleet#4885).
+func TestRepoAuthorityInitOnlyForNewRepo(t *testing.T) {
+	s := taskStore(t)
+	now := time.Now()
+	init := func(repo, owner, key string) (RepoAuthority, error) {
+		return s.ChangeRepoAuthority(repo, owner, RepoAuthorityChange{Action: "init", Key: key, LegacyTickets: "hub"}, now)
+	}
+	a, err := init("org/fresh", "alice", "init-fresh")
+	if err != nil || a.Mode != "hub" || a.Revision != 1 || a.LegacyTickets != "hub" || a.Owner != "alice" {
+		t.Fatal("new repo init", a, err)
+	}
+	if replay, err := init("org/fresh", "alice", "init-fresh"); err != nil || !reflect.DeepEqual(a, replay) {
+		t.Fatal("init replay", replay, err)
+	}
+	if _, err = init("org/fresh", "alice", "init-again"); err == nil {
+		t.Fatal("a second init on a selected repo must refuse")
+	}
+	if _, err = s.ChangeRepoAuthority("org/x", "alice", RepoAuthorityChange{Action: "init", Key: "bad", LegacyTickets: "gitlab"}, now); !errors.Is(err, ErrTaskInvalid) {
+		t.Fatal("init needs a ticket home", err)
+	}
+	// Another login (bob) already hosts org/hosted under legacy: not new for alice.
+	if _, err = s.RecordFleetSnapshot("ep-b", "mac-b", "bob", "m-b", []FleetReport{{FleetID: "f-b", Name: "fleet", Repo: "org/other", Repos: []string{"org/other", "Org/Hosted"}}}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = init("org/hosted", "alice", "init-hosted"); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("a repo another fleet hosts must stay legacy", err)
+	}
+	if _, err = s.CreateFleetTicket(FleetTicket{Repo: "org/ticketed", Owner: "bob", Title: "old"}, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = init("org/ticketed", "alice", "init-ticketed"); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("a repo with a ticket must stay legacy", err)
+	}
+	if _, err = s.CreateFleetTask(FleetTask{Repo: "org/tasked", Owner: "bob", Title: "old", RequestedAgent: "claude", ResolvedAgent: "claude"}, "tasked", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = init("org/tasked", "alice", "init-tasked"); !errors.Is(err, ErrRepoAuthority) {
+		t.Fatal("a repo with a task must stay legacy", err)
+	}
+	for _, r := range []string{"org/hosted", "org/ticketed", "org/tasked"} {
+		if a, _ := s.RepoAuthority(r); a.Mode != "legacy" || a.Revision != 0 {
+			t.Fatal("a refused init wrote a selection", r, a)
+		}
+	}
+}

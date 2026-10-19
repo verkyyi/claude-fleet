@@ -2113,6 +2113,8 @@ fleet_repo_trust_warn() {
 #   added:<slug>              0  overlay written, daemons woken
 #   refused:invalid-repo      1  not owner/name
 #   refused:invalid-tickets   1  --tickets is neither hub nor github
+#   refused:invalid-authority 1  --authority is neither hub nor legacy
+#   refused:authority         1  --authority hub, and the hub did not take the repo
 #   refused:hosted            1  the fleet already hosts it
 #   refused:origin-mismatch   1  <dir> is a checkout of another repo
 #   refused:not-a-checkout    1  <dir> exists and is not a git checkout
@@ -2123,13 +2125,19 @@ fleet_repo_trust_warn() {
 # login that reaches a hub (fleet_ticket_hub_ready) writes FLEET_TICKETS="hub", one
 # that does not writes nothing (unset = github, the conf byte for byte as before).
 # A repo registered before this has no line and `fleet-conf.sh migrate` pins it.
+# Who runs its tasks (issue #4885): `--authority hub|legacy` says it; left out, a
+# login that reaches a hub asks it to start the repo on the hub (fleet_repo_authority_init)
+# and writes FLEET_TASK_AUTHORITY="hub" when it did — only a repo the hub has never
+# seen; one another login already used stays legacy (no line) and is switched
+# explicitly (`fleet-repo.sh authority`). No hub ⇒ no line, byte for byte as before.
 fleet_repo_register() {
   local sess="" repo="" dir="" base="" base_src="" base_default="" tab f bin rc seed=0
-  local as="" remote="" forge=github had tickets=""
+  local as="" remote="" forge=github had tickets="" authority=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --base) base="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --tickets) tickets="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
+      --authority) authority="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --as) as="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
       --seed) seed=1; shift ;;
       *) if [ -z "$sess" ]; then sess="$1"; elif [ -z "$repo" ]; then repo="$1"
@@ -2147,6 +2155,10 @@ fleet_repo_register() {
   case "$tickets" in
     ''|hub|github) : ;;
     *) echo "fleet-repo: --tickets takes hub or github, not '$tickets'" >&2; echo "refused:invalid-tickets"; return 1 ;;
+  esac
+  case "$authority" in
+    ''|hub|legacy) : ;;
+    *) echo "fleet-repo: --authority takes hub or legacy, not '$authority'" >&2; echo "refused:invalid-authority"; return 1 ;;
   esac
   repo=$(fleet_norm_repo "$repo")
   case "$repo" in
@@ -2193,6 +2205,21 @@ fleet_repo_register() {
        fi ;;
   esac
   [ -n "$tickets" ] || { fleet_ticket_hub_ready && tickets=hub; }
+  # Who runs its tasks (issue #4885) — decided before anything is written, beside
+  # the tickets' home: hub only when the hub took the repo (new there), else none.
+  case "$authority" in
+    legacy) authority='' ;;
+    hub)
+      authority=$(fleet_repo_authority_init "$repo" "$tickets" "$forge") || authority=''
+      if [ "$authority" != hub ]; then
+        echo "fleet-repo: the hub did not take $repo as a new repo — add it without --authority and switch it with \`fleet-repo.sh authority\`" >&2
+        echo "refused:authority"; return 1
+      fi ;;
+    *) if fleet_ticket_hub_ready; then
+         authority=$(fleet_repo_authority_init "$repo" "$tickets" "$forge") || authority=''
+         [ "$authority" = hub ] || authority=''
+       fi ;;
+  esac
   f=$(fleet_repo_conf_file "$sess" "$repo")
   if ! mkdir -p "$(dirname "$f")" 2>/dev/null || ! {
       printf "# claude-fleet: repo '%s' hosted by fleet '%s' — written by fleet-repo.sh %s\n" \
@@ -2213,6 +2240,8 @@ fleet_repo_register() {
       fi
       # Its tickets' home (issue #3739): written only when it is the hub or was asked.
       [ -n "$tickets" ] && printf 'FLEET_TICKETS="%s"\n' "$tickets"
+      # Who runs its tasks (issue #4885): written only when the hub took it.
+      [ -n "$authority" ] && printf 'FLEET_TASK_AUTHORITY="%s"\n' "$authority"
       # The seed only looks (issue #1167): marked in the same write, so no daemon
       # tick ever reads it unmarked; its switches are its own, never the fleet's.
       if [ "$seed" = 1 ]; then
@@ -2223,7 +2252,7 @@ fleet_repo_register() {
   fi
   fleet_repo_order_put "$sess" "$repo" \
     || echo "fleet-repo: WARNING — could not record $repo in $(dirname "$f")/.order (it lists after the others)" >&2
-  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )${tickets:+ tickets=$tickets}) — $f" >&2
+  echo "fleet-repo: $sess now hosts $repo (main=$dir base=$base$( [ "$forge" = github ] || printf ' remote=%s forge=%s' "$remote" "$forge" )${tickets:+ tickets=$tickets}${authority:+ authority=$authority}) — $f" >&2
   [ "$seed" = 1 ] && echo "fleet-repo: $repo is this fleet's seed repo — no issue-bridge (FLEET_SEED=1)" >&2
   # --- the follow-through ---
   fleet_repo_trust_warn "$dir" fleet-repo
@@ -2237,6 +2266,22 @@ fleet_repo_register() {
     || ( GH_TTL=0 bash "$bin/tmux-dash-collect.sh" >/dev/null 2>&1 & )
   echo "added:$(fleet_slug "$repo")"
   return 0
+}
+
+# fleet_repo_authority_init <repo> <tickets> <forge> → `hub` on stdout when the
+# hub started <repo> on itself — it never saw the repo before (issue #4885) —
+# else `legacy`; rc 1 (nothing) when the hub could not be asked. <tickets> empty
+# is github's, or the hub's for a repo not on GitHub. FLEET_HUB_AUTHORITY_CMD is
+# the selftest seam, as for fleet_repo_authority_guard.
+fleet_repo_authority_init() {
+  local repo home="${2:-}"
+  repo=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  [ -n "$home" ] || { [ "${3:-github}" = github ] && home=github || home=hub; }
+  if [ -n "${FLEET_HUB_AUTHORITY_CMD:-}" ]; then
+    "$FLEET_HUB_AUTHORITY_CMD" "$repo" --init-new --tickets "$home"
+  else
+    python3 "$_FLEET_LIB_DIR/fleet_repo_authority.py" "$repo" --init-new --tickets "$home"
+  fi
 }
 
 # ---- per-fleet tmux socket (issue #159) -------------------------------------

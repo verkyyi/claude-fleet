@@ -57,7 +57,7 @@ type RepoTicketMap struct {
 }
 
 type RepoAuthorityChange struct {
-	Action        string            `json:"action"` // freeze | apply | rollback | stop_ack
+	Action        string            `json:"action"` // init | freeze | apply | rollback | stop_ack
 	Revision      int64             `json:"expected_revision"`
 	Key           string            `json:"idempotency_key"`
 	LegacyTickets string            `json:"legacy_tickets,omitempty"`
@@ -288,6 +288,82 @@ func repoAuthorityBlockers(q querier, repo string, rollback bool) ([]string, []R
 	return blockers, owners, err
 }
 
+// repoHistory is "" when the hub has never seen repo — no fleet row of any
+// owner hosting it (or a worker of it), no local start, task, lease, worker
+// start or ticket — else the first kind of trace found (claude-fleet#4885).
+func repoHistory(q querier, repo string) (string, error) {
+	rows, err := q.Query(`SELECT repo, repos_json, workers_json FROM fleet_fleets`)
+	if err != nil {
+		return "", err
+	}
+	used := ""
+	for rows.Next() && used == "" {
+		var one, repos, workers string
+		if err = rows.Scan(&one, &repos, &workers); err != nil {
+			rows.Close()
+			return "", err
+		}
+		var rs []string
+		var ws []struct {
+			Repo string `json:"repo"`
+		}
+		_ = json.Unmarshal([]byte(repos), &rs)
+		_ = json.Unmarshal([]byte(workers), &ws)
+		for _, w := range ws {
+			rs = append(rs, w.Repo)
+		}
+		for _, r := range append(rs, one) {
+			if r != "" && NormRepo(r) == repo {
+				used = "a fleet hosts it"
+			}
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || used != "" {
+		return used, err
+	}
+	starts, err := repoLocalStarts(q, repo)
+	if err != nil || len(starts) > 0 {
+		if len(starts) > 0 {
+			used = "a local start"
+		}
+		return used, err
+	}
+	for _, c := range []struct{ why, query string }{
+		{"a task", `SELECT COUNT(*) FROM fleet_tasks WHERE LOWER(repo) = ?`},
+		{"a lease", `SELECT COUNT(*) FROM fleet_leases WHERE LOWER(repo) = ? OR LOWER(repo) = 'hub:' || ?`},
+		{"a ticket", `SELECT COUNT(*) FROM fleet_tickets WHERE LOWER(repo) = ?`},
+	} {
+		var n int
+		args := []any{repo}
+		if strings.Count(c.query, "?") == 2 {
+			args = append(args, repo)
+		}
+		if err = q.QueryRow(c.query, args...).Scan(&n); err != nil {
+			return "", err
+		}
+		if n > 0 {
+			return c.why, nil
+		}
+	}
+	rows, err = q.Query(`SELECT request FROM fleet_operations WHERE action = 'worker_start'`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if err = rows.Scan(&raw); err != nil {
+			return "", err
+		}
+		if r, _ := repoOfStart(FleetOperation{Action: "worker_start", Request: raw}); r == repo {
+			return "a worker start", nil
+		}
+	}
+	return "", rows.Err()
+}
+
 func (s *Store) RepoAuthorityBlockers(repo string, rollback bool) ([]string, []RepoLegacyOwner, error) {
 	return repoAuthorityBlockers(s.read, NormRepo(repo), rollback)
 }
@@ -369,6 +445,27 @@ func (s *Store) ChangeRepoAuthority(repo, owner string, c RepoAuthorityChange, n
 		return a, err
 	}
 	switch c.Action {
+	case "init":
+		// A NEW repo starts on the hub (claude-fleet#4885): no setting yet and no
+		// trace of it anywhere on the hub — any owner's fleet row, start, task,
+		// lease or ticket. One that was ever used, by anyone, stays legacy and
+		// takes the explicit freeze → apply road, so no pre-cutover check is
+		// skipped. The reason never names another person's row.
+		if a.Revision != 0 || a.Mode != "legacy" {
+			return a, fmt.Errorf("%w: repo already has an authority selection", ErrRepoAuthority)
+		}
+		if c.LegacyTickets != "github" && c.LegacyTickets != "hub" {
+			return a, ErrTaskInvalid
+		}
+		used, err := repoHistory(tx, repo)
+		if err != nil {
+			return a, err
+		}
+		if used != "" {
+			return a, fmt.Errorf("%w: repo is not new on the hub (%s); switch it explicitly", ErrRepoAuthority, used)
+		}
+		a.LegacyTickets = c.LegacyTickets
+		a.Mode = "hub"
 	case "freeze":
 		// An old native without a saved binding has no safe stop_ack road.
 		// Refuse BEFORE changing authority, so its existing owner can drain on

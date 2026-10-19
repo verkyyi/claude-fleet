@@ -135,6 +135,38 @@ NATIVE_KEYS = ("worker_id", "native_session", "pid", "birth", "executable")
 START_KEYS = ("reservation", "repo", "owner", "endpoint_id", "worker_id")
 
 
+def init_new(repo, tickets):
+    # A repo this fleet is about to host starts on the hub when the hub has never
+    # seen it (issue #4885): one POST, revision 0 -> 1 mode=hub. Prints the mode
+    # the new overlay takes — hub, or legacy when the hub refused (the repo has a
+    # history somewhere, so it takes the explicit cutover). Unreachable raises.
+    # The key is the repo's own, so a rerun after a failed overlay write replays.
+    repo = repo_identity(repo)
+    if tickets not in ("hub", "github"):
+        raise ValueError("--tickets takes hub or github")
+    key = "repo-init-" + hashlib.sha256(repo.encode()).hexdigest()
+    try:
+        a = ticket.api("POST", "/authority", query={"repo": repo},
+                       body=dict(action="init", expected_revision=0, idempotency_key=key,
+                                 legacy_tickets=tickets))
+    except ticket.Fail as exc:
+        if exc.rc == 4:
+            raise
+        try:
+            a = ticket.api("GET", "/authority", query={"repo": repo, "gate": "1"})
+        except ticket.Fail as again:
+            if again.rc == 4:
+                raise
+            a = {}
+        # Already ours on the hub (an earlier add of this repo) is still hub.
+        mode = a.get("mode") if isinstance(a, dict) else None
+        print("hub" if mode == "hub" else "legacy")
+        if mode != "hub":
+            print("repo authority: %s stays legacy — %s" % (repo, error_reason(exc)), file=sys.stderr)
+        return
+    print("hub" if isinstance(a, dict) and a.get("mode") == "hub" else "legacy")
+
+
 def check_start_ack(expected, ack, phase, proof=None):
     if (not isinstance(expected, dict)
             or any(not isinstance(expected.get(k), str) or not expected[k] for k in START_KEYS)
@@ -571,6 +603,9 @@ def main(argv=None):
     actions.add_argument("--stop-receipt")
     actions.add_argument("--cancel-start", help="revoke one never-begun local reservation; a started/unknown native refuses")
     actions.add_argument("--adopt", help="one explicit gh:owner/repo#N reference")
+    actions.add_argument("--init-new", action="store_true",
+                         help="a repo about to be hosted: start it on the hub if the hub never saw it")
+    p.add_argument("--tickets", default="github", help="with --init-new: where its tickets live")
     p.add_argument("--title", default="")
     p.add_argument("--body-file")
     p.add_argument("--manifest")
@@ -593,6 +628,9 @@ def main(argv=None):
         return
     if args.sync:
         sync(repo)
+        return
+    if args.init_new:
+        init_new(repo, args.tickets)
         return
     if args.cancel_start:
         print(json.dumps(start_call(repo, args.cancel_start, "cancel"), indent=2))
