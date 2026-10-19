@@ -32,17 +32,17 @@ fmt:
 lint: vet
 	@test -z "$$(gofmt -l . | grep -v '^web/')" || (echo "gofmt needed:"; gofmt -l .; exit 1)
 
-# Cross-compiles every supported endpoint platform. CGO_ENABLED=0 is what makes
-# this work from any host without a cross toolchain — the SQLite driver is pure
-# Go for exactly this reason.
+# Cross-compiles every supported endpoint platform — the node's build
+# (agent/cmd/ccquota, claude-fleet#4813), stamped with the node's source digest.
+# CGO_ENABLED=0 is what makes this work from any host without a cross toolchain.
 dist:
 	@mkdir -p dist
 	@for p in $(PLATFORMS); do \
 	  os=$${p%/*}; arch=$${p#*/}; ext=""; \
 	  [ "$$os" = "windows" ] && ext=".exe"; \
 	  echo "  $$os/$$arch"; \
-	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" \
-	    -o dist/ccquota-$$os-$$arch$$ext ./cmd/ccquota || exit 1; \
+	  (cd agent && CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" \
+	    -o ../dist/ccquota-$$os-$$arch$$ext ./cmd/ccquota) || exit 1; \
 	done
 	@ls -lh dist/
 

@@ -230,10 +230,13 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 
 **发布版里的 ccquota 是该提交的 Go**（#2930）。发布版的 `ccquota-<os>-<arch>` 取自入口镜像自带的那份，所以入口镜像
 构建时给每个 ccquota 盖上它编译的 Go 源摘要（`shared/cmd/ccquota-srcdigest` → `-X main.SrcDigest`；`ccquota version` 第二行
-`src <摘要>`）。摘要只算 `tokenledger/` 的构建输入（`go.mod` · `go.sum` · `cmd/` `internal/` 下的文件，去掉测试、
-`testdata/`、`.md`、客户端清单和 pack；`release.SourceDigest`，git 一侧是 `bin/fleet-src-digest.py`）。入口建发布版时按该提交
+`src <摘要>`）。这些 ccquota 从节点自己的模块编（`tokenledger/agent/cmd/ccquota`，不带 hub 代码，#4813），摘要
+只算**节点源**：`tokenledger/shared/` 与 `tokenledger/agent/` 下的文件（含各自的 `go.mod` · `go.sum`，去掉测试、
+`testdata/`、`.md`；`release.SourceDigest`，git 一侧是 `bin/fleet-src-digest.py`）——只改 hub 的提交不动它。整个
+`tokenledger/`（hub 镜像编的全部）是另一个摘要（`release.ImageSourceDigest` / `fleet-src-digest.py --image`），列车靠它
+决定要不要重部署入口；拆分前的入口镜像盖的就是它，入口与第 8 道门认它一个版本（`# compat-1v`，认了就把它签进清单）。入口建发布版时按该提交
 算同一摘要：不等就不建（发布 422 `ccquota:`，等入口镜像重新部署），等了就签进清单的 `ccquota_src`；补建沿用原包的 ccquota。
-所以 **Go 改了的提交要先重新部署入口镜像，stable 才挪得过去**：`fleet-stable.sh move` 第 8 道门先比入口
+所以 **节点源改了的提交要先重新部署入口镜像，stable 才挪得过去**：`fleet-stable.sh move` 第 8 道门先比入口
 `/v1/fleet/release/artifacts` 的 `ccquota_src` 与目标提交的摘要（`ccquota:`；入口不报 `ccquota_src` 时退回 #2927 按 `/version` 查提交的那条）。机器上 `fleet doctor --machine` 的 `ccquota`
 行：清单记了源、二进制的 `src` 不是它 → FAIL（整机退回）；旧发布版没记源、构建提交又不是 runtime → WARN。
 更新器是 `bin/fleet-node-update.py`，守护（C3）的 `update` 任务（每 5 分钟一次，`FLEET_NODE_UPDATE_EVERY`），

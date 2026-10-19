@@ -59,6 +59,11 @@
 #   node-command-hub-only  the node's own build (agent/cmd/ccquota, #4812) lacks a
 #                       command bin/ runs, or CI stops testing agent/: the modules
 #                       selftest reds both (sandbox repo, for real)
+#   module-split-digest  the release's ccquota-* come from the node's module (agent/,
+#                       #4813) while the source digest still hashes all of tokenledger/:
+#                       a hub-only change would hold stable (or a hub-only digest stop
+#                       the hub redeploy) — the Dockerfile, fleet-src-digest.py (node ·
+#                       --image) and the stable gate (+ the old digest, one version)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -883,6 +888,74 @@ drill_node_command_hub_only() {
     || { WHY="a workflow without the agent module's tests was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="节点单独成块（agent/cmd/ccquota）：bin/ 调一个只在 hub 那份里的 ccquota 子命令 ⇒ 模块自测红并点名；搬进 agent/cli 与 commands.txt 转绿；tokenledger.yml 丢了 agent 模块的 go test ⇒ 红"
+}
+
+# ---- module-split-digest (#4813): the ccquota a release carries is built from the
+# node's own module (agent/cmd/ccquota) and stamped with the digest of the NODE's
+# source (shared/ + agent/), which the hub's 422, the manifest's ccquota_src and
+# fleet-stable.sh's ccquota gate all compare; the whole tokenledger/ (the hub
+# image) is a second digest — what the train's hub-deploy decision reads, and the
+# old algorithm a hub image from before the split still stamps (compat-1v).
+# Before: the dist came from the combined cmd/ccquota and one digest meant both —
+# hashing only the node would stop the hub redeploy on a hub-only change, hashing
+# everything holds stable on it. A git rig; the stable gate against a file:// hub.
+drill_module_split_digest() {
+  CAP=30
+  local t0 d out rc c1 c2 c3 c4 n1 n2 n3 n4 i1 i2 pins t f
+  for t in tokenledger/internal/api/fleet_publish_test.go:TestReleaseSourceIsTheNodes \
+           tokenledger/shared/release/srcdigest_test.go:TestImageSourceDigest; do
+    f="$ROOT/${t%%:*}"
+    grep -q "${t#*:}(" "$f" 2>/dev/null || { WHY="${t#*:} is not in ${t%%:*}"; return 1; }
+  done
+  # the Dockerfile builds the dist from the agent module
+  out=$(awk '/^RUN /{blk=""} {blk=blk $0 "\n"} /\/out\/dist\/ccquota-/{hit=1} !/\\$/{ if (hit) print blk; hit=0; blk="" }' "$ROOT/tokenledger/Dockerfile")
+  case "$out" in *'cd agent'*'./cmd/ccquota'*) ;; *) WHY="tokenledger/Dockerfile builds /out/dist/ccquota-* from the combined cmd/ccquota, not the agent module"; return 1 ;; esac
+  d=$(mktemp -d "${TMPDIR:-/tmp}/modsplit.XXXXXX"); mkdir -p "$d/shim" "$d/seed" "$d/conf" "$d/hub/v1/fleet/release"
+  printf '#!/bin/sh\nprintf "completed success ci\\n"\n' > "$d/shim/gh"; chmod +x "$d/shim/gh"
+  ( export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+    export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+    git init -q --bare -b master "$d/origin.git" && git clone -q "$d/origin.git" "$d/seed" 2>/dev/null || exit 1
+    s=$d/seed/tokenledger; mkdir -p "$d/seed/bin" "$s/cmd/ccquota" "$s/internal/api" "$s/agent/cmd/ccquota" "$s/shared/release"
+    printf '#!/usr/bin/env python3\n' > "$d/seed/bin/fleet-node-update.py"; cp "$ROOT/release.json" "$d/seed/release.json"
+    printf 'module x\n' > "$s/go.mod"; printf 'package main\n' > "$s/cmd/ccquota/main.go"; printf 'package api\n' > "$s/internal/api/a.go"
+    printf 'module x/agent\n' > "$s/agent/go.mod"; printf 'package main\n' > "$s/agent/cmd/ccquota/main.go"
+    printf 'module x/shared\n' > "$s/shared/go.mod"; printf 'package release\n' > "$s/shared/release/r.go"
+    c() { git -C "$d/seed" add -A && git -C "$d/seed" commit -qm "$1" && git -C "$d/seed" push -q origin HEAD:master && git -C "$d/seed" rev-parse HEAD > "$d/$2"; }
+    c base c1 || exit 1
+    printf 'package api\n\nconst HubOnly = 1\n' > "$s/internal/api/a.go"; c hub-only c2 || exit 1
+    printf 'package main\n\nconst Node = 1\n' > "$s/agent/cmd/ccquota/main.go"; c node c3 || exit 1
+    printf 'package release\n\nconst Shared = 1\n' > "$s/shared/release/r.go"; c shared c4 || exit 1
+    git --git-dir="$d/origin.git" update-ref refs/tags/stable "$(cat "$d/c1")" && git clone -q "$d/origin.git" "$d/co" 2>/dev/null
+  ) || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
+  c1=$(cat "$d/c1"); c2=$(cat "$d/c2"); c3=$(cat "$d/c3"); c4=$(cat "$d/c4")
+  t0=$(now)
+  sd() { python3 "$BIN/fleet-src-digest.py" "$@" 2>/dev/null; }
+  n1=$(sd "$d/co" "$c1"); n2=$(sd "$d/co" "$c2"); n3=$(sd "$d/co" "$c3"); n4=$(sd "$d/co" "$c4")
+  i1=$(sd --image "$d/co" "$c1"); i2=$(sd --image "$d/co" "$c2")
+  [ -n "$n1" ] && [ "$n1" = "$n2" ] || { WHY="a hub-only change (internal/api) moved the node's digest ($n1 → $n2): stable would wait for a hub image the machines never needed"; rm -rf "$d"; return 1; }
+  [ -n "$i1" ] && [ -n "$i2" ] && [ "$i1" != "$i2" ] || { WHY="fleet-src-digest.py --image did not see the hub-only change ($i1 / $i2): the train would skip the hub redeploy"; rm -rf "$d"; return 1; }
+  [ "$n3" != "$n2" ] && [ "$n4" != "$n3" ] || { WHY="a change to agent/ or shared/ left the node's digest alone"; rm -rf "$d"; return 1; }
+  [ "$i1" != "$n1" ] || { WHY="the node digest and the image digest are one value"; rm -rf "$d"; return 1; }
+  pins=$(python3 "$BIN/fleet-node-update.py" pinned-artifacts - darwin-arm64 < "$ROOT/release.json" | tr -s ' \n' ' ')
+  hub_src() { printf '{"artifacts":[%s],"platforms":["darwin-arm64"],"ccquota_src":"%s"}\n' \
+    "$(for n in $pins; do printf '"%s",' "$n"; done | sed 's/,$//')" "$1" > "$d/hub/v1/fleet/release/artifacts"; }
+  mv_to() { PATH="$d/shim:$PATH" FLEET_CONF_DIR="$d/conf" XDG_CONFIG_HOME="$d/conf" CCQUOTA_HUB_URL='' FLEET_HUB_URL="file://$d/hub" \
+              sh "$BIN/fleet-stable.sh" move "$1" --dir "$d/co" --repo o/r 2>&1; }
+  # a hub image that predates the split stamps the whole tree: accepted for one version
+  hub_src "$(sd --image "$d/co" "$c2")"
+  out=$(mv_to "$c2") || { WHY="the gate refused a hub stamped with the old (whole-tree) digest of the target: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # the hub's node build is c2's: the node change (c3) is refused, named
+  hub_src "$n2"
+  out=$(mv_to "$c3"); rc=$?
+  [ "$rc" = 3 ] && case "$out" in *'REFUSED — ccquota:'*) true ;; *) false ;; esac \
+    || { WHY="moving onto a node change the hub's ccquota lacks exited $rc, want 3 ccquota: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  # redeployed from c4: the node's digest is c4's, the move goes through
+  hub_src "$n4"
+  out=$(mv_to "$c4") || { WHY="the move once the hub ran the target's node source failed: $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0")
+  [ "$(git --git-dir="$d/origin.git" rev-parse refs/tags/stable)" = "$c4" ] || { WHY="stable is not at the target after the green move"; rm -rf "$d"; return 1; }
+  rm -rf "$d"
+  WHAT="发布的 ccquota 从 agent 模块编、盖节点源（shared+agent）的摘要：只改 hub 节点摘要不动、--image 照样变（列车照常重部署 hub）；旧算法的入口镜像认一个版本；节点改了而入口没跟上 ⇒ stable 拒挪 ccquota:，跟上后放行"
 }
 
 cred_run_drills "$0"

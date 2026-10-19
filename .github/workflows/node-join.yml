@@ -45,12 +45,14 @@ jobs:
           go-version: '1.25'
           cache: true
           cache-dependency-path: tokenledger/go.sum
+      # the hub from the combined cmd/ccquota, the node it hands out from the
+      # node's own module — as the image does (claude-fleet#4813)
       - name: Build ccquota into the hub's dist dir
         working-directory: tokenledger
         run: |
           mkdir -p /srv/dist
-          CGO_ENABLED=0 go build -o /srv/dist/ccquota-linux-amd64 ./cmd/ccquota
-          cp /srv/dist/ccquota-linux-amd64 /usr/local/bin/ccquota-hub
+          CGO_ENABLED=0 go build -o /usr/local/bin/ccquota-hub ./cmd/ccquota
+          (cd agent && CGO_ENABLED=0 go build -o /srv/dist/ccquota-linux-amd64 ./cmd/ccquota)
       - name: Start the hub
         run: |
           CCQUOTA_FLEET=1 CCQUOTA_VIEWER_TOKEN=vt CCQUOTA_FLEET_DIST_DIR=/srv/dist \

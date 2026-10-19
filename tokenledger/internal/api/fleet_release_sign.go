@@ -159,7 +159,7 @@ func (rs *ReleaseStore) stage(sha string, all map[string][]byte, signer ed25519.
 		return nil, publishErr(http.StatusBadRequest, "release-tree.list: %v", err)
 	}
 	cur := rs.stable()
-	seal := release.Seal{Prev: cur.SHA, Seq: cur.Seq + 1, Src: release.SourceDigest(all), KeyChain: chain, Revoked: rev, Signer: signer}
+	seal := release.Seal{Prev: cur.SHA, Seq: cur.Seq + 1, Src: rs.srcFor(all), KeyChain: chain, Revoked: rev, Signer: signer}
 	shaDir := filepath.Join(rs.Dir, sha)
 	if err := os.MkdirAll(shaDir, 0o755); err != nil {
 		return nil, err

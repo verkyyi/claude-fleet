@@ -485,19 +485,19 @@ func TestPublishRefusesMissingPinned(t *testing.T) {
 	}
 }
 
-// claude-fleet#2930: a commit whose Go source is not the hub image's is a 422
+// claude-fleet#2930: a commit whose node source is not the hub image's is a 422
 // (ccquota:) and stable stays; a commit that changes no Go goes through.
 func TestPublishRefusesStaleCCQuota(t *testing.T) {
 	p := newPublishRig(t)
 	tok := p.oidc.token(nil)
-	a := p.repo.commit("A", map[string]string{"tokenledger/internal/x/x.go": "package x\n"})
+	a := p.repo.commit("A", map[string]string{"tokenledger/agent/x.go": "package agent\n"})
 	if code, body := p.publish(tok, a, "", nil, nil); code != 422 || !strings.Contains(body, "ccquota:") || !strings.Contains(body, "redeploy") {
-		t.Fatalf("a new tokenledger/ over an old image: %d %s", code, body)
+		t.Fatalf("a new node source over an old image: %d %s", code, body)
 	}
 	if p.rs.stable().SHA != "" {
 		t.Fatal("stable moved onto a release carrying another commit's ccquota")
 	}
-	p.rs.DistSrc = release.SourceDigest(map[string][]byte{"tokenledger/go.mod": []byte("module x\n"), "tokenledger/internal/x/x.go": []byte("package x\n")})
+	p.rs.DistSrc = release.SourceDigest(map[string][]byte{"tokenledger/agent/x.go": []byte("package agent\n")})
 	if code, body := p.publish(tok, a, "", nil, nil); code != 200 {
 		t.Fatalf("once the image is A's: %d %s", code, body)
 	}
@@ -507,6 +507,49 @@ func TestPublishRefusesStaleCCQuota(t *testing.T) {
 	}
 	if m := p.stable(t); m.SHA != b || m.CCQuotaSrc != p.rs.DistSrc {
 		t.Fatalf("stable %s ccquota_src %q", m.SHA, m.CCQuotaSrc)
+	}
+}
+
+// claude-fleet#4813: the release's ccquota is the node's build, held to the
+// node's source (shared/ + agent/). A change to the hub alone (cmd/, internal/)
+// publishes over the same image — no machine runs it; a change to agent/ is a
+// 422. An image from before the split stamped the whole tree's digest
+// (compat-1v: 下一批删): it is accepted, and the release signs THAT in, so a
+// machine's ccquota row matches its binary's own src line.
+func TestReleaseSourceIsTheNodes(t *testing.T) {
+	p := newPublishRig(t)
+	tok := p.oidc.token(nil)
+	node := map[string][]byte{"tokenledger/agent/x.go": []byte("package agent\n")}
+	p.rs.DistSrc = release.SourceDigest(node)
+	a := p.repo.commit("A", map[string]string{"tokenledger/agent/x.go": "package agent\n"})
+	if code, body := p.publish(tok, a, "", nil, nil); code != 200 {
+		t.Fatalf("A over its own node build: %d %s", code, body)
+	}
+	b := p.repo.commit("B", map[string]string{"tokenledger/internal/api/h.go": "package api\n", "tokenledger/cmd/ccquota/hub.go": "package main\n"})
+	if code, body := p.publish(tok, b, a, nil, nil); code != 200 {
+		t.Fatalf("a hub-only change refused over the same node build: %d %s", code, body)
+	}
+	if m := p.stable(t); m.SHA != b || m.CCQuotaSrc != p.rs.DistSrc {
+		t.Fatalf("stable %s ccquota_src %q, want %s", m.SHA, m.CCQuotaSrc, p.rs.DistSrc)
+	}
+	c := p.repo.commit("C", map[string]string{"tokenledger/shared/r/r.go": "package r\n"})
+	if code, body := p.publish(tok, c, b, nil, nil); code != 422 || !strings.Contains(body, "ccquota:") || !strings.Contains(body, "node source") {
+		t.Fatalf("a shared/ change over an older node build: %d %s", code, body)
+	}
+	// an image from before the split: its dist names the whole tree's digest
+	whole := map[string][]byte{
+		"tokenledger/go.mod":             []byte("module x\n"),
+		"tokenledger/agent/x.go":         []byte("package agent\n"),
+		"tokenledger/internal/api/h.go":  []byte("package api\n"),
+		"tokenledger/cmd/ccquota/hub.go": []byte("package main\n"),
+		"tokenledger/shared/r/r.go":      []byte("package r\n"),
+	}
+	p.rs.DistSrc = release.ImageSourceDigest(whole)
+	if code, body := p.publish(tok, c, b, nil, nil); code != 200 {
+		t.Fatalf("C over a pre-split image of the same tree: %d %s", code, body)
+	}
+	if m := p.stable(t); m.SHA != c || m.CCQuotaSrc != p.rs.DistSrc {
+		t.Fatalf("stable %s ccquota_src %q, want the image's own %s", m.SHA, m.CCQuotaSrc, p.rs.DistSrc)
 	}
 }
 

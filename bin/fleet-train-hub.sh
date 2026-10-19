@@ -6,9 +6,11 @@
 # One train ships one commit: the hub image, the publish and stable all name
 # TRAIN_SHA. Rebuilding and rolling the hub costs a train 10–15 minutes, so it is
 # done only when the hub would differ (EPIC #3139 发起人拍板 9):
-#   * the Go source the hub's ccquota is built from — the same digest
-#     `fleet-stable.sh move`'s gate 8 and the hub's own publish check compare
-#     (bin/fleet-src-digest.py: tokenledger/ less tests and docs), or
+#   * the Go source the hub image is built from — the IMAGE's digest
+#     (bin/fleet-src-digest.py --image: tokenledger/ less tests and docs), never
+#     the node's that `fleet-stable.sh move`'s gate 8 and the hub's publish check
+#     compare (shared/ + agent/ only, issue #4813: a hub-only change moves the
+#     image's and not the node's), or
 #   * deploy/k8s/ (the manifests the deploy applies), or
 #   * site/ or docs/public/ (the website and its documentation the image carries,
 #     built by bin/site-build.sh / docs-build.sh — issue #3584), the theme they
@@ -90,8 +92,8 @@ live=$(git -C "$dir" rev-parse -q --verify "$short^{commit}" 2>/dev/null) || {
 [ "$live" != "$train" ] || say false "$live" "the hub already runs $(printf '%.7s' "$train")"
 git -C "$dir" merge-base --is-ancestor "$live" "$train" \
   || say false "$live" "hub superseded: live is $(printf '%.7s' "$live"), not behind $(printf '%.7s' "$train") — the train never deploys the hub backwards; the publish's forward gate judges the release"
-src_live=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$live" 2>/dev/null) || src_live="?live"
-src_train=$(python3 "$BIN_DIR/fleet-src-digest.py" "$dir" "$train" 2>/dev/null) || src_train="?train"
+src_live=$(python3 "$BIN_DIR/fleet-src-digest.py" --image "$dir" "$live" 2>/dev/null) || src_live="?live"
+src_train=$(python3 "$BIN_DIR/fleet-src-digest.py" --image "$dir" "$train" 2>/dev/null) || src_train="?train"
 if [ "$src_live" != "$src_train" ]; then
   say true "$live" "the Go source changed since the hub's $ver — deploying $(printf '%.7s' "$train")"
 fi

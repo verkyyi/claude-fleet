@@ -998,10 +998,14 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   release.json (`release:`), or one pinning an artifact the hub's
   `/v1/fleet/release/artifacts` lacks (`artifacts:`; the hub never builds such a
   release either — issue #2631, BREAK-IT `release-artifact-missing`). A release's
-  ccquota is its COMMIT's Go (issue #2930): the image stamps each binary with its
-  source digest (`release.SourceDigest`, `ccquota version`'s `src` line), the hub
-  refuses a build whose commit's `tokenledger/` digests otherwise (422 `ccquota:`)
-  and signs `ccquota_src` in; `fleet-stable.sh move` refuses first (`ccquota:` —
+  ccquota is its COMMIT's Go (issue #2930): the image builds it from the node's
+  module (`tokenledger/agent/cmd/ccquota`, #4813) and stamps each binary with the
+  NODE source's digest (`release.SourceDigest`: shared/ + agent/; `ccquota
+  version`'s `src` line), the hub refuses a build whose commit's node source
+  digests otherwise (422 `ccquota:`) and signs `ccquota_src` in — the whole
+  tree's digest (`ImageSourceDigest`, `fleet-src-digest.py --image`) is what
+  `fleet-train-hub.sh` redeploys the hub on, and the one a pre-split image
+  stamped (accepted one version, BREAK-IT `module-split-digest`); `fleet-stable.sh move` refuses first (`ccquota:` —
   redeploy the hub image), the node doctor's `ccquota` row FAILs on a mismatch
   (BREAK-IT `release-ccquota-stale`). The pinned
   Claude Code is the hub's to fetch (npm, sha512 integrity), never a person's upload. `docs/dev/MANAGED-NODE.md` §7; BREAK-IT `node-update-half`,
