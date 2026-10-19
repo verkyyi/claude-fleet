@@ -314,8 +314,8 @@ $ndiff"; }
   fv_copy=$(awk '$3 == "fleet-view" && !('"$fv_ours"') { $3 = "root"; $1 = $1; print }' "$KW/node.keys")
   [ "$fv_copy" = "$(awk '$3 == "root" && !('"$fv_ours"') { $1 = $1; print }' "$KW/node.keys")" ] \
     || fail "8: the 看台's fleet-view is not a copy of the node's root: $(diff <(printf '%s\n' "$fv_copy") <(awk '$3 == "root" { $1 = $1; print }' "$KW/node.keys") | head -5)"
-  # + one version long (issue #3328, compat-1v: 下一批删) the codes of the keys that
-  # went — ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘K ⌘Q ⌘T — and ⌃\, each the panel `--forward <action>`
+  # + the codes of the keys issue #3328 folded into ⌘P — ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘K ⌘Q ⌘T —
+  # and ⌃\, each the panel `--forward <action>`
   fv_user=$(awk '$3 == "fleet-view" && $4 ~ /^User/ { print $4 }' "$KW/node.keys" | sort | tr '\n' ' ')
   [ "$fv_user" = "User920 User921 User922 User923 User927 User928 User930 User931 User932 " ] \
     || fail "8: by default the 看台 binds User927 (⌘P) + the forwarded codes of #3328 — got: $fv_user"
@@ -403,7 +403,7 @@ $sw_table
 EOF
 SW_PROF=$(mktemp -d "${TMPDIR:-/tmp}/fkeys-iterm.XXXXXX") || fail "10: mktemp"
 # the client's profile (issue #3185, EPIC #3178 C7): ONE ⌘ chord, ⌘P, + ⇧↵ — and
-# one version long (issue #3328, compat-1v) the ⌘ keys that went, at their old
+# the ⌘ keys issue #3328 folded into ⌘P, at their old
 # codes (the 看台 forwards them to the panel); FLEET_KEY_PANEL=off none;
 # FLEET_KEYS_EXTRA adds exactly what it names (a forward of the same chord goes)
 sw_map() { FLEET_ITERM_DIR="$SW_PROF" FLEET_ITERM_PREFS=/dev/null ITERM_PROFILE='' FLEET_CONF_DIR="$SW_PROF/conf" "$@" python3 "$BIN/fleet-iterm-profile.py" json \

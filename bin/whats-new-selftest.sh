@@ -100,12 +100,10 @@ out=$("$WN" deadbeefcafe "$V3")
 has "D: unknown sha" "$out" "看不到变化明细"
 "$WN" "$V3" "$V3" >/dev/null; eq "D: same version → exit 1" 1 "$?"
 
-# --- E: the hook on an isolated server ----------------------------------------
+# --- E: --full on an isolated server -------------------------------------------
 printf '#!/bin/sh\nexec "%s" -L "%s" "$@"\n' "$REAL_TMUX" "$S" > "$WORK/shim/tmux"; chmod +x "$WORK/shim/tmux"
 "$REAL_TMUX" -L "$S" -f /dev/null new-session -d -s t -n w1 'sleep 600'
-"$REAL_TMUX" -L "$S" new-window -d -t t -n w2 'sleep 600'
 P1=$("$REAL_TMUX" -L "$S" display-message -p -t t:w1 '#{pane_id}')
-P2=$("$REAL_TMUX" -L "$S" display-message -p -t t:w2 '#{pane_id}')
 opt() { "$REAL_TMUX" -L "$S" show-options -wqv -t "$1" "$2"; }
 printf 'claude aaa default:x\nver %s\n' "$V6" > "$EXP"
 "$REAL_TMUX" -L "$S" set-option -w -t "$P1" @agent_ver "$V0"

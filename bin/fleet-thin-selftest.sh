@@ -292,8 +292,8 @@ case $out in *$'\e]1337;SetProfile=Default\a') ok "H: the iTerm2 profile back la
 rm -f "$T/clip.on" "$T/echo-input"
 
 # K — the keys (issue #3185, EPIC #3178 C7): each start writes iTerm2's `fleet`
-# profile with ONE ⌘ chord (⌘P) + ⇧↵ — and, one version long (issue #3328,
-# compat-1v), the ⌘ keys that went, at their old codes (the home turns them into the
+# profile with ONE ⌘ chord (⌘P) + ⇧↵ — and the ⌘ keys issue #3328 folded into
+# ⌘P, at their old codes (the home turns them into the
 # panel); a FLEET_KEYS_EXTRA's ⌘ chords are there and it rides the remote command's
 # environment to the home, which binds them
 kmap() { python3 -c 'import json,sys; print(" ".join(sorted(json.load(open(sys.argv[1]))["Profiles"][0]["Keyboard Map"])))' "$T/iterm/fleet.json" 2>/dev/null; }

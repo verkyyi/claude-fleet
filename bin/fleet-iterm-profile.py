@@ -11,10 +11,10 @@ send the private codes the 看台 (conf/tmux-view.conf) catches.
 Which ⌘ chords (issue #3185, EPIC #3178 C7): ONE by default — FLEET_KEY_PANEL
 (⌘P, the panel; `off` none) — plus every ⌘ chord the person names in
 FLEET_KEYS_EXTRA (`next=cmd+down …`), both fleet.conf [client] (bin/fleet_keys.py
-reads them). Every other ⌘ key is the parent's — except, for ONE version (issue
-#3328, compat-1v), the ⌘ keys that went: ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K still send their
-old code, which the 看台 turns into the panel + a one-time 「已并进 ⌘P」
-(fleet_keys.FORWARD); the next batch gives them back to iTerm2. (The old
+reads them). Every other ⌘ key is the parent's — except the ⌘ keys issue #3328
+folded into ⌘P: ⌘↓ ⌘↑ ⌘[ ⌘] ⌘N ⌘T ⌘Q ⌘K still send their old code, which the 看台
+turns into the panel + a one-time 「已并进 ⌘P」 (fleet_keys.FORWARD; kept for good,
+issue #4790 — given back to iTerm2, ⌘Q would quit it). (The old
 client's `--all` — every row of the table at its own chord — went with that
 client, issue #3008.)
 
@@ -127,8 +127,8 @@ def rows():
         key = fleet_keys.iterm_key(chord)
         if key and action in codes:
             out.append((key, codes[action]))
-    # the keys issue #3328 took away, one version long: their old code, which the
-    # 看台 binds to the panel + a one-time hint (fleet_keys.FORWARD). compat-1v: 下一批删
+    # the keys issue #3328 folded into ⌘P: their old code, which the 看台 binds to
+    # the panel + a one-time hint (fleet_keys.FORWARD)
     for _, chord, _, code in fleet_keys.forwards():
         key = fleet_keys.iterm_key(chord)
         if key and code:

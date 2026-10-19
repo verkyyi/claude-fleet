@@ -49,7 +49,7 @@ fleet-client-place.sh <repo> new (the machine that takes it files the issue
 through fleet-issue-file.sh and opens its worker; with no lease it opens through
 this machine's own adapter), and the result goes on the 看台's client as a
 message. Nothing on the way calls a model or waits behind another session's
-turn; an old session's /qd (compat-1v, issue #3328) runs `send` itself.
+turn.
 
 FLEET_DISPATCH_SEND_CMD (tests): replaces `fleet-compose.py --send <payload>`.
 FLEET_DISPATCH_GO_CMD (tests): replaces `fleet-view-go.sh` — a 看台's send that

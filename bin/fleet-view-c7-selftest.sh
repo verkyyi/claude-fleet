@@ -17,7 +17,7 @@
 #      orch_<fleet> naming one, and no orchestrator script run at all
 #      (FLEET_VIEW_ORCH_CMD would leave a mark); a direct attach: nothing;
 #      each ⌘N one run in timing/session.ndjson (#3551) — a cold one marked `cold`
-#   T  ⌘T and ⌘K, keys issue #3328 took away (compat-1v): the panel (its first
+#   T  ⌘T and ⌘K, keys issue #3328 folded into ⌘P: the panel (its first
 #      frame one run in timing/panel.ndjson, #3551) — ⌘T lit on
 #      its ⚡ row, no 派一件事 popup — saying 「⌘T 已并进 ⌘P」 the first time only;
 #      each press logged how=old:<action>, counted by fleet_keys.old_presses (the
