@@ -415,7 +415,7 @@ func TestMigration4_RemovesTheHubTickets(t *testing.T) {
 		`CREATE TABLE fleet_tickets (repo TEXT NOT NULL, num INTEGER NOT NULL, owner TEXT NOT NULL, PRIMARY KEY (repo, num))`,
 		`INSERT INTO fleet_tickets VALUES ('o/r', 1, 'alice'), ('o/r', 2, 'bob')`,
 		`CREATE TABLE fleet_ticket_comments (id INTEGER PRIMARY KEY, repo TEXT, num INTEGER, body TEXT)`,
-		`INSERT INTO fleet_ticket_comments (repo, num, body) VALUES ('o/r', 1, 'hi')`,
+		`INSERT INTO fleet_ticket_comments (id, repo, num, body) VALUES (1, 'o/r', 1, 'hi')`,
 		`CREATE TABLE fleet_ticket_seq (repo TEXT PRIMARY KEY, next_n INTEGER)`,
 		`CREATE TABLE fleet_ticket_index (id TEXT PRIMARY KEY, owner TEXT)`,
 		`DELETE FROM hub_migrations WHERE id = 4`,
