@@ -277,6 +277,13 @@ From `fleet doctor --machine`.
 - **What it is**: how many releases the machine keeps and how much disk they take.
 - **On WARN / FAIL**: WARN = more than usual: the updater clears the unneeded ones; read `update.log` for why it did not.
 
+#### `image`
+
+From `fleet doctor --machine`.
+
+- **What it is**: only on a machine whose runtime is its image's (a person's pod): it runs no update task and reaches stable only when the pod is rolled onto a newer image; this row compares the runtime with the hub's stable.
+- **On WARN / FAIL**: WARN = behind stable, and nothing here will catch up: with a provisioner in the cluster the hub rolls it (`roll-user-pod`); without one, follow the hint — `render.py --image-patch` with stable's node image, then `kubectl patch deploy <pod>`.
+
 #### `credpool`
 
 From `fleet doctor --machine`.
