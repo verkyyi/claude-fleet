@@ -170,6 +170,7 @@ class PanelDraftTests(unittest.TestCase):
                         patch.object(dispatch.compose, "send_path", return_value=path), \
                         patch.object(dispatch.compose, "state_path", return_value=Path(directory) / "state.json"), \
                         patch.object(dispatch.compose, "compose_log"), \
+                        patch.object(dispatch, "authority", return_value="legacy"), \
                         patch.object(dispatch.subprocess, "run", side_effect=place) as run, \
                         patch.object(dispatch, "failed") as failed, patch.object(fleet_view, "main") as focus:
                     self.assertEqual(dispatch.send(data, "test-view")[0], status == 0)

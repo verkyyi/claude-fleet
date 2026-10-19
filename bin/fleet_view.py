@@ -1732,6 +1732,15 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     fleet = view_fleet(vid)
     if not fleet:
         return 2
+    if repo and not prompt and new_authority(fleet, vid, repo) == "hub":
+        # under hub authority a repo's start is a task record first (issue #4965):
+        # with words it is the ⚡ row's send; without, there is nothing to record
+        said = say("view_new_failed_fmt", say("view_new_hub_words"))
+        if draft:
+            return bolt_task(vid, client, repo, agent, draft)
+        toast(client, said)
+        print(said, file=sys.stderr, flush=True)
+        return 3
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
     # the HOME slot of the warm pool first (issue #3311): a claimed window is an agent
@@ -1777,6 +1786,29 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     toast(client, said)
     print(said, file=sys.stderr, flush=True)
     return 3
+
+
+def new_authority(fleet, vid, repo):
+    """The task authority a start of `repo` meets (fleet-quick-dispatch.py
+    authority): hub · legacy · frozen, "" when it cannot tell — the old road."""
+    try:
+        out = subprocess.run([sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"),
+                              "authority", "--repo", repo, "--view", "%s@view-%s" % (fleet, vid)],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (out.strip().splitlines() or [""])[-1].strip()
+
+
+def bolt_task(vid, client, repo, agent, words):
+    """go_new's repo + words under hub authority: the ⚡ row's own send (issue #4965)."""
+    argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send",
+            "--title", words, "--repo", repo, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast",
+            "--draft"] + (["--agent", agent] if agent else []) + (["--client", client] if client else [])
+    try:
+        return 0 if subprocess.run(argv, stdin=subprocess.DEVNULL).returncode == 0 else 3
+    except OSError:
+        return 3
 
 
 def new_agent(fleet, vid):
@@ -3053,7 +3085,9 @@ def bolt_argv(qo, vid, client, st, query):
     """Open a scratch and leave the typed words as an unsubmitted draft.
 
     Repo drafts keep hub placement; otherwise use the local new-session path.
-    Neither route files an issue or submits a model turn.
+    Neither route files an issue or submits a model turn — except under hub
+    authority, where a repo's words become a task record T<n> first and its
+    session's first turn (fleet-quick-dispatch.py task_send, issue #4965).
     """
     repo, agent = bolt_repo(st, query), bolt_agent(st)
     extra = ["--agent", agent]

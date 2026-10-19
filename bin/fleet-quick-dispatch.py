@@ -25,6 +25,10 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
                                           (the fleet's default) · missing {agent: why}
                                           — not installed here, or 「管理员暂未开放」
                                           (the hub's allowlists, issue #3826)
+    fleet-quick-dispatch.py authority --repo R [--view V]
+                                          the task authority a start of R meets:
+                                          hub · legacy · frozen, or an empty line
+                                          (issue #4965 — ⌘P's ⚡ row asks it)
     fleet-quick-dispatch.py agent [--view V]
                                           the agent ⌘N opens with: {agent, why} —
                                           the default, else the one usable agent
@@ -56,6 +60,16 @@ FLEET_DISPATCH_GO_CMD (tests): replaces `fleet-view-go.sh` — a 看台's send t
 opened a window here goes to it (`window: @N` from fleet-compose.py --send).
 FLEET_DISPATCH_AGENTS_HERE (tests): the agents installed here, comma-separated,
 in place of looking (FLEET_CLAUDE_BIN / PATH / FLEET_TOOL_DIRS, fleet_find_tool's rule).
+
+Under hub authority (issue #4965, #4830 step 6) a repo's start needs an accepted
+launch, which only the record-first road makes: a send that names a repo goes
+through `fleet-task-record.sh dispatch --repo R --spawn` instead — the hub writes
+T<n>, the session opens on this machine bound to it (the top bar shows T<n>), and
+the words are its first turn (a hub task has no unsubmitted draft). A repo this
+machine does not host is said, never tried here. Legacy authority: as above.
+FLEET_DISPATCH_AUTHORITY_CMD (tests): prints the authority mode for <repo> <fleet>.
+FLEET_DISPATCH_HOSTED (tests): the repos this machine hosts, comma-separated.
+FLEET_DISPATCH_TASK_CMD (tests): replaces `fleet-task-record.sh`.
 """
 import curses
 import importlib.util
@@ -210,10 +224,110 @@ def payload(title, repo, codex=False, agent=None):
     return data
 
 
+def authority(repo, fleet=""):
+    """The person's task authority for a start of `repo` — hub · legacy · frozen —
+    as the spawners' gate asks it (fleet_repo_authority_guard --gate); "" when no
+    hub is on for it, or the hub did not say."""
+    seam = os.environ.get("FLEET_DISPATCH_AUTHORITY_CMD")
+    if seam:
+        argv = seam.split() + [repo, fleet]
+    else:
+        script = ('[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-lib.sh"; '
+                  's="$2"; [ -n "$s" ] || s=$(fleet_current_session 2>/dev/null); '
+                  '[ -n "$s" ] && fleet_load_conf "$s"; fleet_repo_authority_guard "$3" --gate "$s"')
+        argv = ["bash", "-c", script, "_", str(BIN), fleet, repo]
+    try:
+        out = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    line = (out.strip().splitlines() or [""])[-1].strip()
+    if line in ("hub", "legacy", "frozen"):
+        return line
+    try:
+        mode = json.loads(line).get("mode") or ""
+    except (ValueError, AttributeError):
+        return ""
+    return mode if mode in ("hub", "legacy", "frozen") else ""
+
+
+def hosted(fleet=""):
+    """The repos this machine's fleet hosts (fleet_repos), lower-cased."""
+    seam = os.environ.get("FLEET_DISPATCH_HOSTED")
+    if seam is not None:
+        return [r.strip().lower() for r in seam.split(",") if r.strip()]
+    script = ('. "$1/fleet-lib.sh"; s="$2"; [ -n "$s" ] || s=$(fleet_current_session 2>/dev/null); '
+              'fleet_repos "$s"')
+    try:
+        out = subprocess.run(["bash", "-c", script, "_", str(BIN), fleet], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [r.strip().lower() for r in out.splitlines() if "/" in r]
+
+
+TASK_TITLE_MAX = 80     # a record's title; longer words go whole as its body (the hub takes ≤200)
+
+
+def task_send(data, view="", client=""):
+    """A repo's start under hub authority (issue #4965): the record first
+    (fleet-task-record.sh dispatch --repo --spawn), then its session here — a 看台
+    goes to the window it opened. (ok, words)."""
+    repo, fleet = data["repo"], fleet_of(view)
+    title = data.get("draft") or data.get("title") or ""
+    host = socket.gethostname().split(".")[0]
+    if repo.lower() not in hosted(fleet):
+        failed(data, view, "not hosted here")
+        return False, tr("compose_failed_fmt", tr("dispatch_hub_elsewhere_fmt", repo, host))
+    seam = os.environ.get("FLEET_DISPATCH_TASK_CMD")
+    argv = (seam.split() if seam else ["bash", str(BIN / "fleet-task-record.sh")]) + ["dispatch"]
+    body = None
+    head = title.strip().splitlines()[0].strip() if title.strip() else ""
+    if head != title.strip() or len(head) > TASK_TITLE_MAX:
+        # the hub's record holds a title of 1..200; the whole words ride as its body
+        body = title
+        title = head if len(head) <= TASK_TITLE_MAX else head[:TASK_TITLE_MAX - 1] + "…"
+    argv += ["--title", title, "--repo", repo, "--spawn", "--origin", "hub", "--via", "⌘P", "--print"]
+    argv += ["--body-file", "-"] if body is not None else []
+    argv += ["--agent", data["agent"]] if data.get("agent") in AGENTS else []
+    argv += ["--session", fleet] if fleet else []
+    try:
+        out = subprocess.run(argv, input=body or "", capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError) as error:
+        failed(data, view, str(error))
+        return False, tr("compose_failed_fmt", str(error))
+    lines = (out.stdout or "").splitlines()
+    t = next((l.strip() for l in lines if l.strip()[:1] == "T" and l.strip()[1:].isdigit()), "")
+    if out.returncode != 0 or not t:
+        err = [l.strip() for l in (out.stderr or "").splitlines() if l.strip()]
+        why = (err[-1] if err else "") or "rc=%d" % out.returncode
+        failed(data, view, why)
+        return False, tr("compose_failed_fmt", (tr("dispatch_task_made_fmt", t) + " · " if t else "") + why)
+    compose.compose_log("dispatch_task", id=data.get("id"), repo=repo, agent=data.get("agent"), view=view, task=t)
+    win = next((l.split("\t", 1)[0].strip() for l in lines if l.startswith("@")), "")
+    if view and win:
+        go(view, win, client)
+    return True, tr("dispatch_task_done_fmt", t, repo)
+
+
+def go(view, win, client=""):
+    """A 看台's send that opened a window here goes to it (fleet-view-go.sh)."""
+    seam = os.environ.get("FLEET_DISPATCH_GO_CMD")
+    arguments = [view, win, "--how", "dispatch"] + (["--client", client] if client else [])
+    if seam:
+        subprocess.run(seam.split() + arguments, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        import fleet_view
+        fleet_view.main(["go"] + arguments, quick)
+
+
 def send(data, view="", client=""):
     """Write it, --send it here. (ok, words): how it ended — a 看台 then goes to
     the window it opened (issue #3097, fleet-view-go.sh). A send that did not open is logged (`dispatch_failed`
-    in logs/compose.ndjson) as well as said, never only said."""
+    in logs/compose.ndjson) as well as said, never only said. Under hub authority a
+    repo's send is a task record first (task_send, issue #4965)."""
+    if data.get("repo") and authority(data["repo"], fleet_of(view)) == "hub":
+        return task_send(data, view, client)
     path = compose.send_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not compose.write_atomic(path, json.dumps(data, ensure_ascii=False) + "\n"):
@@ -242,14 +356,7 @@ def send(data, view="", client=""):
     if out.returncode == 0:
         win = next((l.split(" ", 1)[1].strip() for l in (out.stderr or "").splitlines() if l.startswith("window: @")), "")
         if view and win:
-            go = os.environ.get("FLEET_DISPATCH_GO_CMD")
-            arguments = [view, win, "--how", "dispatch"] + (["--client", client] if client else [])
-            if go:
-                subprocess.run(go.split() + arguments, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                import fleet_view
-                fleet_view.main(["go"] + arguments, quick)
+            go(view, win, client)
         return True, tr("compose_result_fmt", compose.place_why(out.stdout or out.stderr))
     compose.keep_failed(path)
     why = compose.place_why((out.stdout or "") + "\n" + (out.stderr or ""))
@@ -422,6 +529,10 @@ def main(argv):
     if argv[:1] == ["agent"]:
         a, why = agent_pick(opts(argv[1:])["--view"])
         print(json.dumps({"agent": a, "why": why}, ensure_ascii=False))
+        return 0
+    if argv[:1] == ["authority"]:
+        o = opts(argv[1:])
+        print(authority(o["--repo"], fleet_of(o["--view"])) if o["--repo"] else "")
         return 0
     if argv[:1] == ["grid"]:
         view = opts(argv[1:])["--view"]
