@@ -50,6 +50,7 @@ import (
 //	POST /v1/fleet/release/publish              the CI hands over a stable (fleet_publish.go)
 //	POST /v1/fleet/release/train                every train run's stages (fleet_release_runs.go)
 //	POST /v1/fleet/release/notice               each train's one line to the person (fleet_release_notice.go)
+//	GET  /v1/fleet/release/health               the post-release watch's read (fleet_release_canary.go)
 //
 // Since claude-fleet#2772 stable comes by that POST, not by StableSource's
 // lookup: the commit's own bytes, checked against its sha here, then built from
@@ -814,6 +815,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		s.handleReleaseNotice(w, r) // each train's one line to the person (claude-fleet#4913)
 		return
 	}
+	if strings.TrimPrefix(r.URL.Path, release.Path) == releaseHealthRest {
+		s.handleReleaseHealth(w, r) // the post-release watch's read (claude-fleet#4915)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		httpError(w, http.StatusMethodNotAllowed, "GET only")
@@ -883,6 +888,10 @@ func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
 		// one release line (claude-fleet#4671): every platform is served stable;
 		// an older client's ?platform= is not read
 		sha = rs.StableSHA()
+		// a stable still with its canary (claude-fleet#4915): the rest keep theirs
+		if held, ok := s.followerStable(r.URL.Query().Get("machine")); ok {
+			sha = held
+		}
 	}
 	if !release.ValidSHA(sha) {
 		http.NotFound(w, r)

@@ -455,6 +455,10 @@ type Server struct {
 	// (UnixNano, 0 = answering): /signin says so beside its button
 	// (github_down.go, claude-fleet#4849).
 	githubDownAt atomic.Int64
+
+	// httpStats counts this replica's requests and 5xx per minute, for the
+	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
+	httpStats httpStats
 }
 
 // Handler builds the router.
@@ -1077,6 +1081,8 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		var viewer string
 		r = r.WithContext(context.WithValue(r.Context(), viewerKey{}, &viewer))
 		next.ServeHTTP(sw, r)
+		// the post-release watch's 5xx count (claude-fleet#4915)
+		s.httpStats.add(sw.status, time.Now())
 		path := r.URL.Path
 		if strings.HasPrefix(path, InvitePath) {
 			path = InvitePath + "…"

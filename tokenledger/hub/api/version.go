@@ -62,6 +62,11 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 		"min_client_compat": fleetclient.MinCompat,
 	}
 	if sha := s.stableCommit(); sha != "" {
+		// a stable still with its canary (claude-fleet#4915): the rest are
+		// handed the release before it
+		if held, ok := s.followerStable(r.URL.Query().Get("machine")); ok && held != "" {
+			sha = held
+		}
 		out["client_version"] = sha
 		out["stable"] = sha
 		out["client_url"] = s.hubURL(r) + "/install/stable/" + sha

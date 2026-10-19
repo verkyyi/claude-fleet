@@ -39,6 +39,10 @@
 #   train-red-stalls        a train red only on a flake: master's head sat unreleased
 #                       until the next merge; now `next` re-sends it (≤ 2 a sha), a
 #                       real red waits with a notice, release-hold blocks the move (#4913)
+#   release-bad-spreads     a version whose doctor FAILs (or that 5xxs the hub) reached
+#                       every machine and stayed: now the canary (fleet.release_canary)
+#                       gets it first and a refusal holds the rest; release-watch.yml
+#                       rolls the WHOLE version back within 15 minutes, with a notice (#4915)
 #   train-hub-backwards     the hub was deployed by hand past TRAIN_SHA: the train's
 #                       hub plan skips the deploy (superseded), never rolls it back (#3319)
 #   train-prebuild-wrong-sha  the hub image built beside the tests is pushed over
@@ -1205,6 +1209,32 @@ drill_train_all_proven_skips() {
     || { WHY="run-selftests.sh --plan no longer says tests=0 when every test is proven"; return 1; }
   SECS=$(since "$t0")
   WHAT="选中的测试全部已由 PR 证明（plan tests=0）：Linux 分片不起 runner，train 只在 0 个测试时把跳过算绿，红灯即停不等分片；估不出价（?）或演练照常跑"
+}
+
+# ---- release-bad-spreads (#4915, EPIC #4810 S3): each machine switched and rolled
+# back only itself (`.prev`) — the hub and every other machine stayed on a version
+# whose doctor FAILs; nothing took a whole version back, and nobody was told. Now
+# the hub hands a new stable to fleet.release_canary first (the rest are handed the
+# old one until it commits, or 2 minutes; a canary rollback blocks the sha) and the
+# train's `next` starts release-watch.yml, whose watcher rolls the whole version
+# back (one revert commit = a new seq: 「只向前」 holds) and says so. The drill runs
+# the watcher against a fake hub on 127.0.0.1 and the rollback in sandbox repos.
+drill_release_bad_spreads() {
+  CAP=90
+  local t0 out wf rw
+  wf="$BIN/../.github/workflows/release-train.yml"; rw="$BIN/../.github/workflows/release-watch.yml"
+  [ -f "$BIN/fleet-release-watch.py" ] || { WHY="no bin/fleet-release-watch.py: nothing watches a release"; return 1; }
+  grep -q 'gh workflow run release-watch.yml' "$wf" || { WHY="the train never starts release-watch.yml after a move"; return 1; }
+  grep -q 'fleet-release-watch.py watch' "$rw" 2>/dev/null || { WHY="no release-watch.yml running the watcher"; return 1; }
+  grep -q 'followerStable' "$BIN/../tokenledger/hub/api/version.go" \
+    && grep -q 'forMachine(nc.hostname())' "$BIN/../tokenledger/hub/api/fleet_release_push.go" \
+    || { WHY="the hub hands every follower the new stable at once (no canary gate on /version and the push)"; return 1; }
+  grep -q '"?machine="' "$BIN/fleet-node-update.py" || { WHY="the updater never says which machine asks — the canary cannot be told apart"; return 1; }
+  t0=$(now)
+  out=$(bash "$BIN/fleet-release-watch-selftest.sh" 2>&1) || { WHY="the watcher: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; return 1; }
+  out=$(bash "$BIN/fleet-release-rollback-selftest.sh" 2>&1) || { WHY="the whole-version rollback: $(printf '%s' "$out" | grep '^FAIL' | head -2 | tr '\n' '|')"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="坏版本：金丝雀先拿、拒了其余不换（入口 fleet.release_canary）；发布后入口 5xx / 机器回滚 / 金丝雀拦住 / healthz 连挂 ⇒ release-watch 一次整版回退（--since 上一版，一个新提交）+ 入口回镜像 + 列车补发 + 通知；已回退不重复，回退失败通知请手动"
 }
 
 cred_run_drills "$0"

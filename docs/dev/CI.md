@@ -8,6 +8,7 @@
 |---|---|---|---|
 | 开 PR（`.github/workflows/ci.yml`） | 这次改动碰得到的检查：相关的 shell 自测、改到的那几块 Go（块内只测受影响的包）、相关的端到端 | `bin/ci-plan.sh all`，结果在 run 的 `ci-plan` 产物里 | 通过——由「CI 结论」统一判 |
 | 合并后的列车（`release-train.yml`） | PR 上没证明过的自测（`bin/fleet-train-reuse.sh` 复用 PR 的绿），再发布 | `run-selftests.sh --changed <stable> --proven` | 复用的算过，没复用的照跑 |
+| 发布后 15 分钟（`release-watch.yml`，列车 `next` 挪了 stable 就派，自己一条道） | `bin/fleet-release-watch.py`：读入口 `/v1/fleet/release/health`（金丝雀 `fleet.release_canary` 拦住、机器回滚这一版、入口 5xx）并探 `/healthz`；出问题 ⇒ `fleet-release-rollback.sh <stable> --since <上一版>` 整版回退 + 通知（#4915，BREAK-IT `release-bad-spreads`） | 不挑 | — |
 | 每晚 | 全部：Linux 全量自测（`selftests-nightly.yml`）、Mac 全量（`selftests-macos.yml`）、task-acceptance / client-e2e / fleet-hub-mcp / shellcheck 的定时全跑；Go 全量 + Postgres 由 C6（#4816）加 | 不挑，全跑 | 没有跳过；漏选的第二天自动开单（`fleet-nightly-miss.sh`） |
 
 拿不准就跑：base 解析不了、git 或 `go list` 出错、`tokenledger/` 下认不出的路径、改了 `bin/ci-plan.sh` 或 `ci.yml` 本身——一律全跑（EPIC #4810 共同约定 7）。

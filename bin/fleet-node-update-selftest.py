@@ -2057,9 +2057,11 @@ class U_OneLine(Sandbox):
         import http.server
         import threading
         data = json.dumps(body).encode()
+        paths = self.paths = []
 
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                paths.append(self.path)
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
@@ -2086,6 +2088,18 @@ class U_OneLine(Sandbox):
         st = self.follow("darwin")
         self.assertEqual(st["target_seen"]["sha"], V2, st)
         self.assertEqual(st["phase"], "switched", st)
+
+    def test_names_its_machine(self):
+        # issue #4915: the hub hands a new stable to fleet.release_canary first —
+        # the updater says which machine asks
+        import socket
+        self.install(V1)
+        self.release(V2)
+        self.hub({"stable": V2})
+        self.follow("darwin")
+        asked = [p for p in self.paths if p.startswith("/version")]
+        self.assertTrue(asked, self.paths)
+        self.assertIn("machine=" + socket.gethostname(), asked[0])
 
     def test_older_target_refused(self):
         self.install(V2, seq=5)
