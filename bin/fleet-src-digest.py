@@ -10,11 +10,13 @@ has no such source; exit 2 when git cannot read the commit.
 Two digests (issue #4813; KEEP IN STEP with release.SourceInput /
 ImageSourceInput — fleet-src-digest-selftest.sh pins both to one vector), both
 under tokenledger/ less *_test.go, testdata/, *.md,
-internal/api/fleetclient/manifest and internal/api/fleetclient/pack/:
+hub/api/fleetclient/manifest and hub/api/fleetclient/pack/ (internal/ before #4814):
   (default) the NODE's — every regular file under shared/ (#4811) and agent/
             (#4812): what a release's ccquota-<os>-<arch> are built from
-  --image   the hub IMAGE's — go.mod, go.sum and everything under cmd/,
-            internal/, shared/ and agent/: what fleet-train-hub.sh reads to
+  --image   the hub IMAGE's — everything under hub/ (less hub/web/ and
+            hub/apitest/, #4814), shared/ and agent/, and the hub's paths
+            before it was a module (go.mod, go.sum, cmd/, internal/): what
+            fleet-train-hub.sh reads to
             redeploy the hub, and the digest an image from before #4813 stamped
             (compat-1v: 下一批删 — the stable gate accepts it for one version)
 sha256 over "<path>\\0<sha256 hex>\\n" per file, paths relative to
@@ -36,15 +38,18 @@ def image_source_input(p):
     """The hub image's inputs (release.ImageSourceInput)."""
     if p in ("go.mod", "go.sum"):
         return True
-    if not (p.startswith("cmd/") or p.startswith("internal/") or p.startswith("shared/")
-            or p.startswith("agent/")):
+    if p.startswith("hub/web/") or p.startswith("hub/apitest/"):
+        return False
+    if not (p.startswith("hub/") or p.startswith("cmd/") or p.startswith("internal/")
+            or p.startswith("shared/") or p.startswith("agent/")):
         return False
     return build_file(p)
 
 
 def build_file(p):
-    if p.endswith("_test.go") or p.endswith(".md") or p == "internal/api/fleetclient/manifest" \
-            or p.startswith("internal/api/fleetclient/pack/"):
+    if p.endswith("_test.go") or p.endswith(".md") \
+            or p in ("hub/api/fleetclient/manifest", "internal/api/fleetclient/manifest") \
+            or p.startswith("hub/api/fleetclient/pack/") or p.startswith("internal/api/fleetclient/pack/"):
         return False
     return "testdata" not in p.split("/")
 

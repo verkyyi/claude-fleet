@@ -3,7 +3,7 @@
 #
 #   fleet-client-pack.sh            copy every file the manifest lists, from
 #                                   the repo, into the embed dir's pack/
-#                                   (tokenledger/internal/api/fleetclient/pack/,
+#                                   (tokenledger/hub/api/fleetclient/pack/,
 #                                   gitignored) — after emptying it, so a file
 #                                   the manifest dropped never rides along
 #   fleet-client-pack.sh --check    exit 0 when pack/ holds exactly the
@@ -15,7 +15,7 @@
 # so a hub build packs first, every time, never from a stale pack:
 #
 #   bin/fleet-client-pack.sh && docker build -t ccquota tokenledger/
-#   bin/fleet-client-pack.sh && (cd tokenledger && go test ./...)
+#   bin/fleet-client-pack.sh && (cd tokenledger/hub && go test ./...)
 #
 # The pack is a build input, never committed (only pack/doc.go is). A build with
 # no pack still compiles — the hub then serves no client (fleetclient.Packed)
@@ -45,7 +45,7 @@ while [ -L "$real" ]; do
   case "$link" in /*) real="$link" ;; *) real="$(dirname "$real")/$link" ;; esac
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
-CLIENT="$REPO/tokenledger/internal/api/fleetclient"
+CLIENT="$REPO/tokenledger/hub/api/fleetclient"
 MANIFEST="$CLIENT/manifest"
 PACK="$CLIENT/pack"
 [ -f "$MANIFEST" ] || { echo "fleet-client-pack: no manifest at $MANIFEST" >&2; exit 2; }
@@ -135,7 +135,7 @@ EOT
     done <<EOT
 $(listed)
 EOT
-    echo "packed $n file(s) into tokenledger/internal/api/fleetclient/pack/"
+    echo "packed $n file(s) into tokenledger/hub/api/fleetclient/pack/"
     pack_vendor ;;
   *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

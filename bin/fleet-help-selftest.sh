@@ -11,7 +11,7 @@
 #      serve are each red, naming what is gone
 #   B  the real skill: every § 「…」 resolves (docs/dev/CLIENT.md, MULTI-MACHINE-OPS.md,
 #      MANAGED-NODE.md, STATE.md …), every <入口>/… page is a route in
-#      tokenledger/internal/api (server.go, roles.go, or an old address app_mount.go's
+#      tokenledger/hub/api (server.go, roles.go, or an old address app_mount.go's
 #      consolePages moves on), and the
 #      index is not empty
 #   C  the skill ships: it is in the Agent package (conf/agent-bundle.manifest's
@@ -67,7 +67,7 @@ for doc, anchor in refs:
         bad.append("missing section: %s § 「%s」" % (doc, anchor))
 
 src = ""
-for f in glob.glob(os.path.join(root, "tokenledger/internal/api/*.go")):
+for f in glob.glob(os.path.join(root, "tokenledger/hub/api/*.go")):
     if not f.endswith("_test.go"):
         src += open(f, encoding="utf-8").read()
 for page in pages:
@@ -86,14 +86,14 @@ check() { python3 "$WORK/check.py" "$@"; }
 
 # --- A: the checker on fixtures -------------------------------------------------
 F="$WORK/fx"
-mkdir -p "$F/docs" "$F/tokenledger/internal/api"
+mkdir -p "$F/docs" "$F/tokenledger/hub/api"
 cat > "$F/docs/A.md" <<'EOF'
 # A
 ## The keys — every one
 **手机：Termius 四样** (EPIC #1).
 EOF
-printf 'package api\nconst p = "/quota"\n' > "$F/tokenledger/internal/api/server.go"
-printf 'package api\nconst q = "/usage"\n' > "$F/tokenledger/internal/api/server_test.go"
+printf 'package api\nconst p = "/quota"\n' > "$F/tokenledger/hub/api/server.go"
+printf 'package api\nconst q = "/usage"\n' > "$F/tokenledger/hub/api/server_test.go"
 cat > "$F/good.md" <<'EOF'
 | x | `docs/A.md` § 「The keys」 · `docs/A.md` § 「手机：Termius 四样」 |
 see `<入口>/quota`

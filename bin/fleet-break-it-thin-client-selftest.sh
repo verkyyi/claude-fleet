@@ -553,7 +553,7 @@ drill_thin_home_restart_new_session() {
 drill_thin_home_login_no_fleet() {
   CAP=120; local t0 out rc tests f
   tests='TestHomeLoginIsTheOneWithALiveFleet TestHomeLoginNeverAnotherPersonsLogin'
-  f="$ROOT/tokenledger/internal/api/fleet_home_login_test.go"
+  f="$ROOT/tokenledger/hub/api/fleet_home_login_test.go"
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
@@ -565,8 +565,8 @@ drill_thin_home_login_no_fleet() {
   t0=$(now)
   WHAT='人的 fleet 搬到同机另一个登录（dave → carol）：入口的家答案每台机器带上有活 fleet 的那个登录（不是人的默认登录、不是别人的登录），别处有 fleet 时没有 fleet 的机器不当家、换家也不去；fleet-connect 照它进（FLEET_CONNECT_LOGIN 仍优先），看台遇到 rc 3 说「<机器> 这台机器的登录 <登录> 下没有 fleet」'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT="${WHAT}（go test 两条）" ;;
@@ -647,7 +647,7 @@ drill_client_pack_file_missing() {
   t0=$(now)
   src=$(cd "${FLEET_CPM_SRC:-$BIN/..}" && pwd -P)
   S=$(mktemp -d /tmp/cpm.XXXXXX); S=$(cd "$S" && pwd -P); printf '%s\n' "$S" >> "$WORK/tc-rigs"
-  M=tokenledger/internal/api/fleetclient/manifest
+  M=tokenledger/hub/api/fleetclient/manifest
   mkdir -p "$S/src/$(dirname "$M")"; cp "$src/$M" "$S/src/$M"
   awk '!/^[[:space:]]*#/ && NF { print $1 }' "$S/src/$M" | while IFS= read -r p; do
     mkdir -p "$S/src/$(dirname "$p")"; cp -p "$src/$p" "$S/src/$p"
@@ -704,7 +704,7 @@ drill_client_update_deletes_foreign() {
   t0=$(now)
   src=$(cd "${FLEET_CUF_SRC:-$BIN/..}" && pwd -P)
   S=$(mktemp -d /tmp/cuf.XXXXXX); S=$(cd "$S" && pwd -P); printf '%s\n' "$S" >> "$WORK/tc-rigs"
-  M=tokenledger/internal/api/fleetclient/manifest
+  M=tokenledger/hub/api/fleetclient/manifest
   for v in v1 v2; do
     mkdir -p "$S/$v/$(dirname "$M")"; cp "$src/$M" "$S/$v/$M"
     awk '!/^[[:space:]]*#/ && NF && $2 != "served" { print $1 }' "$S/$v/$M" | while IFS= read -r p; do

@@ -213,7 +213,7 @@ CODEX_DENIED = {"model", "mcp_servers", "model_providers"}
 # A plugin never turned on from the hub (issue #3586): fleet-infra is the machine
 # admins' runbook, installed by hand where one is wanted.
 PLUGINS_DENIED = {"fleet-infra"}
-# The hub's rules (tokenledger/internal/api/fleet_team_bundle.go), kept in step.
+# The hub's rules (tokenledger/hub/api/fleet_team_bundle.go), kept in step.
 SECRET_KEY = re.compile(r"(?i)(token|secret|passw(or)?d|api[_-]?key|credential|private[_-]?key|authorization"
                         r"|(^|[_-])auth($|[_-])|cookie|session[_-]?key)")
 SECRET_REF = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$")

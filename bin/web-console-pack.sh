@@ -4,7 +4,7 @@
 #
 #   web-console-pack.sh               copy extras/web-console/dist (committed,
 #                                     rebuilt by its CI off the lockfile) into
-#                                     tokenledger/web/console/ — gitignored but
+#                                     tokenledger/hub/web/console/ — gitignored but
 #                                     its .gitkeep, emptied first, so nothing
 #                                     stale rides along
 #   web-console-pack.sh --out <dir>   the same, into <dir>
@@ -12,7 +12,7 @@
 # The build has one directory per side: app/ (the member side, /app) and
 # admin/ (the admin side, /admin), each an index.html and its assets/. The
 # hub embeds web/console (web/embed.go) and serves /app/assets/ and
-# /admin/assets/ off it (internal/api/app_mount.go), so a build packs first:
+# /admin/assets/ off it (hub/api/app_mount.go), so a build packs first:
 #
 #   bin/fleet-client-pack.sh && bin/web-console-pack.sh && docker build -t ccquota tokenledger/
 #
@@ -22,7 +22,7 @@
 #
 # The theme the way-in pages wear (/signin, /fleet/login, /i/, the 404 —
 # claude-fleet#3932) is packed every time, build or not: extras/fleet-theme's
-# theme.css, fonts.css, fonts/*.woff2 and logo.svg go to tokenledger/web/theme/
+# theme.css, fonts.css, fonts/*.woff2 and logo.svg go to tokenledger/hub/web/theme/
 # (gitignored but its .gitkeep), served at /app/assets/fleet-theme/.
 #
 #   web-console-pack.sh --theme-out <dir>   the theme into <dir>
@@ -36,9 +36,9 @@ while [ -L "$real" ]; do
 done
 REPO="$(cd "$(dirname "$real")/.." && pwd)"
 DIST="$REPO/extras/web-console/dist"
-OUT="$REPO/tokenledger/web/console"
+OUT="$REPO/tokenledger/hub/web/console"
 THEME="$REPO/extras/fleet-theme"
-THEME_OUT="$REPO/tokenledger/web/theme"
+THEME_OUT="$REPO/tokenledger/hub/web/theme"
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) [ $# -ge 2 ] || { echo "web-console-pack: --out <dir>" >&2; exit 2; }; OUT="$2"; shift 2 ;;

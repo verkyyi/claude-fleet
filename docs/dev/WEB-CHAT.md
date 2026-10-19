@@ -92,18 +92,18 @@ bin/fleet-webchat.sh move --to <登录>  # 家换了登录：fleet service move 
 目标写死：`chat_relay_open` 只有上面三个字段，`ccquota chat-pipe` 不收任何参数。每个登录同时最多 8 条
 （`CCQUOTA_FLEET_CHAT_RELAY_MAX`），合计 1 MiB/s（`CCQUOTA_FLEET_CHAT_RELAY_RATE_BPS`，负数不限）；节点自己也最多接 8 条。
 `CCQUOTA_FLEET_CHAT=0` 让节点不报 `CapChat`。入口那半边给 C3 用的是 `dialChatRelay(ctx, 人, 机器, 登录)`，
-返回一条 `net.Conn`。BREAK-IT `chat-relay-wrong-person`（Go 测试：`tokenledger/internal/api/chat_relay_test.go`）。
+返回一条 `net.Conn`。BREAK-IT `chat-relay-wrong-person`（Go 测试：`tokenledger/hub/api/chat_relay_test.go`）。
 
 入口跑多副本时（#3847，照 SSH 转发的 #2151）：人的 `/v1/chat/*`（含 `home`）落在不持该登录 CapChat 链的副本上，
 整个请求连同副本令牌交给持链副本（`chatRelayPeer`），由它认人、开转发、审计，不再二跳；节点的回拨落在没开这条
 转发的副本上，在**验签之前**按请求自称的身份（FleetSig keyid 或 bearer，`claimedEndpoint`）转给持链副本——签名的
 nonce 只在真正处理它的副本上花一次。单入口逐字节不变。BREAK-IT `chat-relay-replica-hop`
-（`tokenledger/internal/api/chat_relay_replica_test.go`）。
+（`tokenledger/hub/api/chat_relay_replica_test.go`）。
 
 ### 入口的路由（#3645，EPIC #3642 C3）
 
 页面只跟入口说话：`/v1/chat/conversation`（GET）· `/v1/chat/turn` · `/v1/chat/stop` · `/v1/chat/answer`（POST），
-各自转到对话服务的 `/api/<同名>`（`tokenledger/internal/api/fleet_chat.go`）。
+各自转到对话服务的 `/api/<同名>`（`tokenledger/hub/api/fleet_chat.go`）。
 
 1. **认人**：挂在 `viewerOnly` 后，只认登录的人——普通用户或管理员，**各自只进自己的**（D5）；operator 口令
    答 403 `operator`，请求里点名别人（`?principal=`）答 403 `not_yours`；没登录 401，不在名单 403。
@@ -225,7 +225,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   语言、时区与偏移、屏幕 / 视口、触点、`navigator.connection`、深色——随每个 `/api/turn` 的 `client` 一起发。
   服务端 `cleanBrowser()` 只留这些字段、截长度，别的丢掉。
 - **入口报地址和城市**：入口转发时自己写一个 `X-Fleet-Client`（base64url JSON `{ip, country, province, city}`，
-  `tokenledger/internal/api/chat_client.go`），浏览器带来的同名头丢掉——和 `X-Fleet-Person` 一样只有入口能写；
+  `tokenledger/hub/api/chat_client.go`），浏览器带来的同名头丢掉——和 `X-Fleet-Person` 一样只有入口能写；
   它走在节点验过首帧签名之后才接到 socket 的那条流上，所以不改 `chat_relay_open`、首帧和节点。地址取最右一个
   公网的 `X-Forwarded-For`（ingress 加的；副本转交加的是私网段，跳过），否则连接对端。城市来自入口本地的
   ip2region IPv4 xdb（Apache-2.0，约 11 MB，中文地名）：`CCQUOTA_FLEET_CHAT_GEO_DB` 指向它，进程内只读一次；
@@ -248,7 +248,7 @@ CI 的 `web-chat-ui` 用同一个锁文件重新构建，`dist/` 和提交的不
   `CCQUOTA_FLEET_CHAT_GEO_DB=/usr/share/ccquota/ip2region/ip2region_v4.xdb`。
 - **更新**：上游大约每月合一次社区修正。每季度一次（或有人报某段地址城市错了时），谁想换谁开一个 PR：
   改 `geo` 阶段的 `GEO_DB_COMMIT` · `GEO_DB_SHA256` · `GEO_LICENSE_SHA256` 三个钉子，
-  本机拿新文件跑 `CCQUOTA_TEST_GEO_DB=<文件> go test ./internal/api -run TestChatGeoRealDB`
+  本机拿新文件跑 `CCQUOTA_TEST_GEO_DB=<文件> (cd tokenledger/hub && go test ./api -run TestChatGeoRealDB)`
   （格式变了这里先红），随下一班列车上线。
 - **许可**：ip2region 是 Apache-2.0 / MIT 双许可；它的 `LICENSE.md` 原样随库进镜像（同一目录），这一节就是署名处。
 - **验**：上线后在 `/chat` 问「我大概在哪」，模型那行上下文里有「大致位置 …」；`browser_context` 工具能给出完整的省市。

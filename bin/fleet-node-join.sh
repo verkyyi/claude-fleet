@@ -30,7 +30,7 @@
 #             on PATH, else — the developer road only (FLEET_DIST_SOURCE=github,
 #             issue #4848) — built with Go from a shallow
 #             clone (issue #2862; `go install …@latest` stopped working when
-#             tokenledger/go.mod took a replace for its shared module, #4811).
+#             the node's go.mod took a replace for its shared module, #4811).
 #   service   the agent under the platform's supervisor, as THIS login:
 #             macOS — a LaunchAgent in the gui domain, else (SSH-only login) a
 #             LaunchDaemon with UserName through sudo -n; Linux — a systemd user
@@ -499,12 +499,12 @@ install_ccquota() {
     return 1
   fi
   if command -v go >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
-    # tokenledger/go.mod replaces its shared module with ./shared (#4811), and
-    # `go install <pkg>@<version>` refuses any module with a replace — so build
-    # from a checkout, where the replace resolves.
+    # the node's own module, tokenledger/agent (#4812, #4814), replaces its shared
+    # module with ../shared (#4811), and `go install <pkg>@<version>` refuses any
+    # module with a replace — so build from a checkout, where the replace resolves.
     # dist-ok: the developer road — FLEET_DIST_SOURCE=github said by name
     git clone -q --depth 1 https://github.com/verkyyi/claude-fleet.git "$WORK/src" >"$WORK/go.log" 2>&1 \
-      && (cd "$WORK/src/tokenledger" && GOWORK=off CGO_ENABLED=0 go build -o "$LBIN/ccquota" ./cmd/ccquota) >>"$WORK/go.log" 2>&1 \
+      && (cd "$WORK/src/tokenledger/agent" && GOWORK=off CGO_ENABLED=0 go build -o "$LBIN/ccquota" ./cmd/ccquota) >>"$WORK/go.log" 2>&1 \
       && say "agent: ccquota built with go from a clone" && return 0
     say "agent: go build failed: $(tail -n 2 "$WORK/go.log" | tr '\n' ' ')"
   fi

@@ -8,7 +8,7 @@ token; once the hub has its public key (POST /v1/node/key), a request carries
     Authorization: FleetSig keyid=nk_…, ts=<unix>, nonce=<random>, sig=<b64url>
 
 signed over the lines `fleet-sig-v1 · keyid · ts · nonce · METHOD · URI` — the
-hub's half is tokenledger/internal/api/node_sig.go. A signature is good once and
+hub's half is tokenledger/hub/api/node_sig.go. A signature is good once and
 for two minutes, so a copied header is worth nothing and the private key never
 leaves this file. This script only does the arithmetic; HTTP is the caller's
 (curl, with its own seams).

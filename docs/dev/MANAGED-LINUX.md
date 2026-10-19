@@ -927,7 +927,7 @@ hub settings and one agent variable turn it on:
 | hub `CCQUOTA_FLEET_ACCOUNT_KEY` | the account-op key — every ticket is signed with it (C15/C16); none = no pool |
 | fleet-ops `CCQUOTA_FLEET_PROVISIONER` | the provisioner's address; the agent's hello lists `cluster_ops` and it carries tickets there unopened |
 
-What the hub does (`tokenledger/internal/api/fleet_spare_pods.go`):
+What the hub does (`tokenledger/hub/api/fleet_spare_pods.go`):
 
 - **Refill**: three records — principal `spare:<cluster>:<nonce>`, its login
   `fleetu<N>` pending on the pod `u-<nonce>`, the pod row in
@@ -964,7 +964,7 @@ provisioner against a stand-in API + the hub's Go test) and on kind
 (issue #3562, EPIC #3500 R1) One pod's ceiling only goes so far, and two big repos
 in one pod slow each other down. The hub setting
 `fleet.user_pod_split.<principal>` = `owner/name,…` (at most 8, `PUT /v1/fleet/settings`) gives that person a second pod in the cluster where
-they already hold one (`tokenledger/internal/api/fleet_user_pod_split.go`):
+they already hold one (`tokenledger/hub/api/fleet_user_pod_split.go`):
 
 | | What |
 |---|---|
@@ -997,7 +997,7 @@ fleet job logs job-0123456789ab [--follow]
 The road (`bin/fleet-job.sh` → `bin/fleet_job.py`):
 
 - **Ask**: `POST /v1/node/jobs {repo, ref, kind, cmd}` with the login's own node
-  credential (`tokenledger/internal/api/fleet_jobs.go`). The hub takes the
+  credential (`tokenledger/hub/api/fleet_jobs.go`). The hub takes the
   caller's machine as the pod — a live `fleet_cluster_pods` row — never a pod it
   names, signs a `create-job` ticket (pod · repo · commit · kind · one command
   line) and carries it down the cluster's ops link like every other cluster op;

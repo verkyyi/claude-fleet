@@ -5,6 +5,8 @@
 /dist/
 /bin/
 /ccquota
+/hub/ccquota
+/agent/ccquota
 
 *.db
 *.db-wal
@@ -15,5 +17,5 @@
 
 # The client a hub build packs from the repo (bin/fleet-client-pack.sh,
 # claude-fleet#1803): a build input, never committed — the repo keeps ONE copy.
-/internal/api/fleetclient/pack/*
-!/internal/api/fleetclient/pack/doc.go
+/hub/api/fleetclient/pack/*
+!/hub/api/fleetclient/pack/doc.go

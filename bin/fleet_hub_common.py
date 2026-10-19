@@ -553,7 +553,7 @@ def validate_write(action, params):
         # kind (issue #1541): "issue" (the default — a worker on an issue, `issue`
         # required) or "scratch" (a raw scratch session: no issue, an optional
         # name — dash-raw-session.sh opens it). Held to the hub's own rule
-        # (tokenledger/internal/api/fleet_write.go), letter for letter.
+        # (tokenledger/hub/api/fleet_write.go), letter for letter.
         kind = params.get("kind", "issue")
         if "draft" in params:
             if kind != "scratch" or any(key in params for key in ("body", "task", "attachments", "debug")):
@@ -712,7 +712,7 @@ def validate_write(action, params):
 # worker_move_in (issue #1426): a session moved here through the hub. Every
 # value becomes an argv word of fleet-move-remote.sh movein (or a tmux window
 # option), never shell input — and each is held to the hub's own rule
-# (tokenledger/internal/api/fleet_move.go parseMoveIn), letter for letter.
+# (tokenledger/hub/api/fleet_move.go parseMoveIn), letter for letter.
 MOVE_RES = {
     "move_id": re.compile(r"[0-9a-f]{32}"),
     "worker_key": re.compile(WORKER_KEY_RE),

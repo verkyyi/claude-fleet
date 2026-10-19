@@ -19,7 +19,7 @@
 # minimal collection: system · tools · route · ssh -v · the client's logs). Those
 # four files are read beside this script (a checkout, an install), or — the copy
 # GET /debug serves — out of this script itself, where the hub splices them in
-# (tokenledger/internal/api/fleet_debug_script.go); never a second copy of the
+# (tokenledger/hub/api/fleet_debug_script.go); never a second copy of the
 # table or the list. Then: tar czf, every file scanned once more (and for the
 # ticket itself), and `/usr/bin/curl` — the system's TLS and keychain, never a
 # Python's CA store (#2878) — POSTs it to /v1/fleet/debug/bundle with the

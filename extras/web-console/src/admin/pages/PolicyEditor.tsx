@@ -1,5 +1,5 @@
 // PolicyEditor — 可用订阅: which subscriptions one person's sessions may use,
-// moved here from the old person page (tokenledger/web/dist/lib/cred-policy.js,
+// moved here from the old person page (tokenledger/hub/web/dist/lib/cred-policy.js,
 // claude-fleet#3713) so the page keeps what it did. The hub owns every verdict;
 // this writes one scope through PUT /v1/fleet/cred-policy and never guesses an
 // ID from a label.

@@ -1,0 +1,1513 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+)
+
+// The hub half of the fleet control channel (claude-fleet#1408).
+//
+// Every agent with CCQUOTA_FLEET=1 dials /v1/node/connect, says hello, and then
+// sends a heartbeat every few seconds for as long as the connection lives. The
+// hub keeps two things: the newest heartbeat per node in SQLite (the roster
+// survives a hub restart, so a node that never comes back reads as lost rather
+// than vanishing), and the open connections in memory (the only thing a write
+// can be sent down, and only to a node whose protocol version is compatible).
+//
+// None of this is mounted unless Server.Fleet is set: a hub without the fleet
+// module answers these paths exactly as it did before they existed.
+
+// lostAfterBeats is how many missed heartbeats make a node lost.
+const lostAfterBeats = 3
+
+// defaultHeartbeatMS stands in when a node did not state its cadence.
+const defaultHeartbeatMS = 5000
+
+// helloTimeout bounds how long a fresh connection may stay silent.
+const helloTimeout = 10 * time.Second
+
+// nodeConns is the set of open control channels, by endpoint.
+type nodeConns struct {
+	mu    sync.Mutex
+	conns map[string]*nodeConn
+	// superseded is when each endpoint's link was last displaced by a newer
+	// one, newest last (claude-fleet#2661): two agents of one login take the
+	// link from each other, and each hello brings its own compute word.
+	superseded map[string][]time.Time
+	// seats says the hub signs account tickets (claude-fleet#3557): only then
+	// is an admin seat (CapAdminSeat) sent account ops — and preferred over
+	// an admin login's agent on the same machine. Without a key a seat would
+	// refuse every op, so it is never picked.
+	seats atomic.Bool
+}
+
+// supersedeWindow is how far back placement counts displaced links.
+const supersedeWindow = 10 * time.Minute
+
+type nodeConn struct {
+	attachmentGeneration string
+	canAttachment        bool
+	canTermController    bool
+	canTermRenew         bool
+	canChatAttachment    bool
+	// wire is the endpoint's half of its control channel: the websocket, or
+	// one login's lane on its machine's link (claude-fleet#2333).
+	wire nodeWire
+	// proto is re-read on every heartbeat by the reader and checked by
+	// SendNodeWrite from other goroutines.
+	proto atomic.Int64
+	// admin is set once, at hello: this connection may be sent account ops
+	// (claude-fleet#1411).
+	admin bool
+	// canRead is the hello's CapRead: this node answers TypeRequest
+	// (claude-fleet#1409). Set once, before the conn is published.
+	canRead bool
+	// canWrite is the hello's CapWrite: this node takes TypeWrite
+	// (claude-fleet#1410). Set once, before the conn is published.
+	canWrite bool
+	// canRelay is the hello's CapRelay: this node sends and takes TypeRelay
+	// and keeps a worker map (claude-fleet#1421). Set once, before publish.
+	canRelay bool
+	// canMove is the hello's CapMove: this node downloads a moved session's
+	// transcript and takes worker_move_in (claude-fleet#1426).
+	canMove bool
+	// canAttach is the hello's CapAttach: this node downloads a writing
+	// area's attachments before a start (claude-fleet#2393).
+	canAttach bool
+	// canTest is the hello's CapTestIdentity: this node marks the test
+	// identity's scratch (claude-fleet#2505).
+	canTest bool
+	// canTask is the hello's CapTask: this node takes the hub's task record
+	// on a start and runs task_issue (claude-fleet#3325).
+	canTask          bool
+	canLaunch        bool
+	canRepoAuthority bool
+	// canTicket is the hello's CapTicket: this node follows its person's
+	// hub tickets (claude-fleet#2677).
+	canTicket bool
+	// workersAt is when the worker map was last pushed (UnixNano).
+	workersAt atomic.Int64
+	// canTeam is the hello's CapTeam (claude-fleet#1899): this node follows
+	// TypeTeam. teamSent is the team version last told this connection (0 =
+	// none yet), so a beat pushes only a version the node has not heard.
+	canTeam  bool
+	teamSent atomic.Int64
+	// pushMu serializes the "told once" pushes below (team, person, entry,
+	// release): each reads what this connection has heard, writes, then
+	// records it, and a second push between that write and that record — a
+	// beat's push beside a PUT's broadcast — sent the same version again
+	// (claude-fleet#4679: TestTeamPushOnPutBeatAndReconnect and
+	// TestReleasePushOnPromoteBeatAndReconnect read a repeat). Held for the
+	// write; only these pushes take it.
+	pushMu sync.Mutex
+	// canPerson is the hello's CapPerson (claude-fleet#2784): this node
+	// follows TypePerson. personSent is the "<principal>#<version>" last
+	// told this connection, so a beat pushes only what it has not heard.
+	canPerson  bool
+	personSent atomic.Value
+	// canEntryKeys is the hello's CapEntryKeys (claude-fleet#3068): this
+	// machine keeps the direct door's key files. entrySent is the entry
+	// version last told this connection.
+	canEntryKeys bool
+	entrySent    atomic.Int64
+	// canRelease is the hello's CapRelease (claude-fleet#3146): this node
+	// wakes its update on a pushed release. releaseSent is the stable seq
+	// last told this connection.
+	canRelease  bool
+	releaseSent atomic.Int64
+	// canCreds is the hello's CapCreds (claude-fleet#3744): this node leases
+	// again the moment the hub says its credentials changed.
+	canCreds bool
+	// canCredsep is an admin hello's CapCredsep (claude-fleet#2263/#2294):
+	// the logins it opens are credential-separated, so spares may go there.
+	canCredsep bool
+	// canLoginJoin is an admin hello's CapLoginJoin (claude-fleet#3032): its
+	// create hands the login its join code. Set once, before publish.
+	canLoginJoin bool
+	// canRecycle is an admin hello's CapRecycle (claude-fleet#3504): its
+	// remove script washes a login for the next person. Set once, before publish.
+	canRecycle bool
+	// canRecycleKeep is its CapRecycleKeep (claude-fleet#4195): its wash keeps
+	// the login's root-held node token rather than re-joining.
+	canRecycleKeep bool
+	// adminSeat is the hello's CapAdminSeat (claude-fleet#3557): an admin
+	// agent running as the machine's admin role account, whose scripts run an
+	// op only with the hub's signed ticket. Set once, before publish.
+	adminSeat bool
+	// machineOpener: a machine link whose hello listed CapLoginJoin
+	// (claude-fleet#3210) — a Linux managed machine has no admin login, so its
+	// root node program opens and closes its own logins. It is that machine's
+	// account-op node and nothing more: not an admin for the SSH CA, the
+	// refresh relay or anything else. Set once, before publish.
+	machineOpener bool
+	// canSSHRelay is the hello's CapSSHRelay: this node splices relays onto its
+	// sshd (claude-fleet#1413). Set once, before the conn is published.
+	canSSHRelay bool
+	// canPodRelay is the hello's CapPodRelay: in a person's pod, its relay
+	// reaches the pod's sshd (claude-fleet#4149). Set once, before publish.
+	canPodRelay bool
+	// canSvcRun is the hello's CapSvcRun: a service login that takes service
+	// run attempts (claude-fleet#4086). Set once, before publish.
+	canSvcRun bool
+	// canChat is the hello's CapChat: this login's agent splices chat relays
+	// onto its conversation socket (claude-fleet#3644). Set once, before publish.
+	canChat bool
+	// canTerm is the hello's CapTerm: this login's agent opens browser
+	// terminals (claude-fleet#3838). Set once, before publish.
+	canTerm bool
+	// tokHash is the token hash this link (or lane) proved its login with:
+	// what a chat relay's X-Fleet-Person is signed with. Set once.
+	tokHash string
+	// canServiceLog is the hello's CapServiceLog: this machine program's lane
+	// reads its login's service logs (claude-fleet#2797).
+	canServiceLog bool
+	// userPod is a machine link that is one person's pod (CapUserPod,
+	// claude-fleet#3550).
+	userPod bool
+	// clusterOps is the hello's CapClusterOps: this link is a cluster's
+	// fleet-ops, the one that carries provisioner tickets (claude-fleet#3553).
+	// Its hostname is the cluster's name. Set once, before publish.
+	clusterOps bool
+	// readingDropped is the count of pod readings this ops link's last
+	// cluster_readings had dropped: logged only when it changes (claude-fleet#3734).
+	readingDropped atomic.Int64
+	// canClusterReading is the hello's CapClusterReading: a user pod's login
+	// that writes its pod's reading (claude-fleet#3734); readingSent is the ts
+	// of the last one sent on this link.
+	canClusterReading bool
+	readingSent       atomic.Int64
+	// canOAuthRefresh is the hello's CapOAuthRefresh: this admin node posts
+	// one token refresh to the provider from its own network and hands the
+	// answer back (claude-fleet#1490). Set once, before the conn is published.
+	canOAuthRefresh bool
+	// computeOff is the hello's Compute=false (claude-fleet#1719): this login
+	// only coordinates. Set once, before the conn is published, with the
+	// hello's force and probe (claude-fleet#1720).
+	computeOff   bool
+	computeForce bool
+	probe        *control.NodeProbe
+	// helloAt and agentVersion say where the hello's compute word came from
+	// (claude-fleet#2661).
+	helloAt      time.Time
+	agentVersion string
+	// personal is the hello's Personal (claude-fleet#1721).
+	personal bool
+	// machineLink: this endpoint is a machine's own node program, the link
+	// that carries its logins (CapMachine, claude-fleet#2333).
+	machineLink bool
+	// beatSaidOn: a heartbeat on this link said compute=true — `fleet node
+	// compute on` overrode the hello's off without a reconnect (#1720).
+	beatSaidOn atomic.Bool
+	// forceAudited: this link's --force is already in fleet_audit.
+	forceAudited atomic.Bool
+	// osUser is the login this agent runs as, refreshed by heartbeats.
+	osUser atomic.Value // string
+	// pending routes read and write replies to their waiter.
+	pending pendingReads
+	// host is the machine as the roster names it, refreshed by heartbeats.
+	host atomic.Value // string
+}
+
+// accountNode says the hub may send this link account ops (and take their
+// results): an admin login's agent, or a machine link that opens its own
+// logins (claude-fleet#3210).
+func (c *nodeConn) accountNode() bool { return c.admin || c.machineOpener }
+
+func (c *nodeConn) user() string {
+	u, _ := c.osUser.Load().(string)
+	return u
+}
+
+func (c *nodeConn) hostname() string {
+	h, _ := c.host.Load().(string)
+	return h
+}
+
+func (n *nodeConns) put(id string, c *nodeConn) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.conns == nil {
+		n.conns = map[string]*nodeConn{}
+	}
+	if old := n.conns[id]; old != nil && old != c {
+		// The same endpoint reconnected before the hub noticed the old link
+		// die. The newer one is the truth; the old one is closed so its
+		// reader stops and cannot remove the new entry on its way out.
+		old.wire.close(websocket.StatusPolicyViolation, "superseded by a newer connection")
+		if n.superseded == nil {
+			n.superseded = map[string][]time.Time{}
+		}
+		now := time.Now()
+		keep := n.superseded[id][:0]
+		for _, t := range n.superseded[id] {
+			if now.Sub(t) < supersedeWindow {
+				keep = append(keep, t)
+			}
+		}
+		n.superseded[id] = append(keep, now)
+	}
+	n.conns[id] = c
+}
+
+func (n *nodeConns) drop(id string, c *nodeConn) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.conns[id] == c {
+		delete(n.conns, id)
+	}
+}
+
+func (n *nodeConns) get(id string) *nodeConn {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.conns[id]
+}
+
+// supersededSince counts the endpoint's links displaced within
+// supersedeWindow of now.
+func (n *nodeConns) supersededSince(id string, now time.Time) int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	k := 0
+	for _, t := range n.superseded[id] {
+		if now.Sub(t) < supersedeWindow {
+			k++
+		}
+	}
+	return k
+}
+
+// each calls fn for every open connection, in endpoint order (deterministic
+// when two candidates tie). fn runs under the set's lock: look, never block.
+func (n *nodeConns) each(fn func(id string, c *nodeConn)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		fn(id, n.conns[id])
+	}
+}
+
+// adminFor returns the open, write-compatible admin connection on hostname —
+// one that hands a new login its join code (openerFor) when there is one.
+func (n *nodeConns) adminFor(hostname string) (endpointID string, ok bool) {
+	if id, ok := n.openerFor(hostname); ok {
+		return id, true
+	}
+	return n.pickAdmin(hostname, false)
+}
+
+// openerFor returns the admin connection on hostname a create may go to: one
+// whose hello listed CapLoginJoin (claude-fleet#3032). An older admin opens
+// a login whose own node never connects, so it is never sent a create.
+func (n *nodeConns) openerFor(hostname string) (endpointID string, ok bool) {
+	return n.pickAdmin(hostname, true)
+}
+
+func (n *nodeConns) pickAdmin(hostname string, join bool) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	// Deterministic when a machine has two admin logins on the allowlist.
+	sort.Strings(ids)
+	// An admin seat first (claude-fleet#3557, step E): while the old agent of
+	// an admin login is still connected beside it, it finishes the op in its
+	// hands and is sent no new one. No account key: no seat at all.
+	seats := n.seats.Load()
+	for _, seat := range []bool{true, false} {
+		if seat && !seats {
+			continue
+		}
+		for _, id := range ids {
+			c := n.conns[id]
+			if c.adminSeat != seat {
+				continue
+			}
+			if c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load())) && (!join || c.canLoginJoin) {
+				return id, true
+			}
+		}
+	}
+	return "", false
+}
+
+// opsFor returns the open, write-compatible ops link of cluster: a link whose
+// hello listed CapClusterOps and whose hostname is the cluster's name
+// (claude-fleet#3553). Deterministic when two replicas are up.
+func (n *nodeConns) opsFor(cluster string) (string, *nodeConn) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := n.conns[id]
+		if c.clusterOps && sameMachine(c.hostname(), cluster) && control.Compatible(int(c.proto.Load())) {
+			return id, c
+		}
+	}
+	return "", nil
+}
+
+// svcLane is one service login's link (claude-fleet#4086).
+type svcLane struct {
+	id    string
+	conn  *nodeConn       // a link this replica holds, else nil
+	peer  *store.NodeConn // the other replica holding it (claude-fleet#2124)
+	host  string
+	login string
+}
+
+// place is how svc_run_jobs names where an attempt ran: node:<host>/<login>.
+func (l svcLane) place() string { return "node:" + l.host + "/" + l.login }
+
+// svcLanes are the connected links that listed CapSvcRun and that allowed
+// (host, login) names — by endpoint id, so the pick is stable.
+func (n *nodeConns) svcLanes(allowed func(host, login string) bool) []svcLane {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	ids := make([]string, 0, len(n.conns))
+	for id := range n.conns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var out []svcLane
+	for _, id := range ids {
+		c := n.conns[id]
+		if !c.canSvcRun || !control.Compatible(int(c.proto.Load())) {
+			continue
+		}
+		if h, u := c.hostname(), c.user(); h != "" && u != "" && allowed(h, u) {
+			out = append(out, svcLane{id: id, conn: c, host: h, login: u})
+		}
+	}
+	return out
+}
+
+// isAdminSeat says endpointID's link is an admin seat (CapAdminSeat): its ops
+// carry a signed ticket.
+func (n *nodeConns) isAdminSeat(endpointID string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[endpointID]
+	return c != nil && c.adminSeat
+}
+
+// openerInfo is hostname's account-op node (openerFor's pick): since when its
+// link has been up, and whether it is a machine's own node program rather than
+// an admin login (claude-fleet#3294) — a create chooses among machines whose
+// opener has stayed up, and a Linux machine's opener needs the relay.
+func (n *nodeConns) openerInfo(hostname string) (since time.Time, machine, ok bool) {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return time.Time{}, false, false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	if c == nil {
+		return time.Time{}, false, false
+	}
+	return c.helloAt, c.machineOpener, true
+}
+
+// adminLink says endpointID is a connected, write-compatible admin on hostname.
+func (n *nodeConns) adminLink(endpointID, hostname string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[endpointID]
+	return c != nil && c.accountNode() && c.hostname() == hostname && control.Compatible(int(c.proto.Load()))
+}
+
+// staleAdmins names hostname's connected admin nodes that cannot open a login
+// (no CapLoginJoin) as "<login> (ccquota <version>)", for the words that say
+// why nothing opens there (claude-fleet#3032).
+func (n *nodeConns) staleAdmins(hostname string) []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	var out []string
+	for _, c := range n.conns {
+		if c.admin && !c.canLoginJoin && c.hostname() == hostname {
+			v := c.agentVersion
+			if v == "" {
+				v = "unknown"
+			}
+			out = append(out, c.user()+" (ccquota "+v+")")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// credsepAdminFor says hostname's account-op node (openerFor's pick) opens
+// credential-separated logins (CapCredsep).
+func (n *nodeConns) credsepAdminFor(hostname string) bool {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	return c != nil && c.canCredsep
+}
+
+// recyclerFor returns hostname's account-op node (openerFor's pick) when it
+// can wash a login back into a spare (claude-fleet#3504): its hello listed
+// CapRecycle, its logins open credential-separated, and the machine is no
+// person's own computer.
+func (n *nodeConns) recyclerFor(hostname string) (string, bool) {
+	id, ok := n.openerFor(hostname)
+	if !ok {
+		return "", false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	if c == nil || !c.canRecycle || !c.canCredsep || c.personal {
+		return "", false
+	}
+	return id, true
+}
+
+// recyclerKeeps says id's wash keeps a recycled login's node token
+// (CapRecycleKeep, claude-fleet#4195).
+func (n *nodeConns) recyclerKeeps(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c := n.conns[id]
+	return c != nil && c.canRecycleKeep
+}
+
+// ErrNodeOffline is returned when a write is addressed to a node with no open
+// control channel.
+var ErrNodeOffline = errors.New("node has no open control channel")
+
+// SendNodeWrite sends a write op down endpointID's control channel.
+//
+// It is the one door every hub→node write goes through (C3 and later), and it
+// refuses a node whose protocol version this hub does not accept writes from
+// BEFORE anything leaves the hub — the node is still listed, with its version,
+// so the refusal is visible rather than silent.
+func (s *Server) SendNodeWrite(ctx context.Context, endpointID string, msg control.Message) error {
+	c := s.nodes.get(endpointID)
+	if c == nil {
+		if peer, ok := s.peerOf(ctx, endpointID); ok {
+			if msg.Proto == 0 {
+				msg.Proto = control.Proto
+			}
+			return s.forwardSend(ctx, peer, msg)
+		}
+		return ErrNodeOffline
+	}
+	if !control.Compatible(int(c.proto.Load())) {
+		return control.ErrIncompatible
+	}
+	if msg.Proto == 0 {
+		msg.Proto = control.Proto
+	}
+	return c.wire.write(ctx, msg)
+}
+
+// handleNodeConnect accepts one node's control channel.
+func (s *Server) handleNodeConnect(w http.ResponseWriter, r *http.Request) {
+	// Its signature over GET /v1/node/connect, else its token
+	// (claude-fleet#3710); either way the endpoint's token hash keys what
+	// the link checks later (nodeTokenLive, a worker assertion).
+	ep, tokHash, ok := s.nodeEndpointOr(w, r, "missing bearer token", "unrecognised enrollment token")
+	if !ok {
+		return
+	}
+
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return // Accept has already answered the request.
+	}
+	defer conn.CloseNow()
+	conn.SetReadLimit(1 << 20)
+
+	// Detached from the request: the handler outlives nothing, but a hijacked
+	// connection's request context is not a reliable signal of its end.
+	ctx := context.Background()
+
+	hctx, cancel := context.WithTimeout(ctx, helloTimeout)
+	var hello control.Message
+	err = wsjson.Read(hctx, conn, &hello)
+	cancel()
+	if err != nil {
+		return
+	}
+	if hello.Type != control.TypeHello {
+		refuse(ctx, wsWire{conn}, hello.OpID, control.CodeBadMessage, "the first message must be a hello")
+		return
+	}
+	var hp control.Hello
+	if len(hello.Payload) > 0 {
+		if err := json.Unmarshal(hello.Payload, &hp); err != nil {
+			refuse(ctx, wsWire{conn}, hello.OpID, control.CodeBadMessage, "malformed hello")
+			return
+		}
+	}
+	if hp.HeartbeatMS <= 0 {
+		hp.HeartbeatMS = defaultHeartbeatMS
+	}
+	if hp.HasCap(control.CapMachine) {
+		// One link for every login of the machine (claude-fleet#2333).
+		s.serveMachine(ctx, conn, ep, tokHash, hello, hp)
+		return
+	}
+	if cur := s.nodes.get(ep.ID); cur != nil && cur.wire.machine() != "" {
+		// The login is already served by its machine's link: an old
+		// per-login agent left running must not take it back and forth.
+		refuse(ctx, wsWire{conn}, hello.OpID, control.CodeRefused,
+			"this login is served by its machine's node program (ccquota agent --machine)")
+		return
+	}
+	s.serveNode(ctx, wsWire{conn}, ep, tokHash, hello, hp)
+}
+
+// serveNode runs one endpoint's session after its hello: on a plain link the
+// whole websocket, on a machine link one login's lane (claude-fleet#2333).
+func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoint, tokHash string,
+	hello control.Message, hp control.Hello) {
+	if err := s.Store.NodeConnected(ep.ID, ep.Hostname, ep.OSUser, hp.AgentVersion,
+		hello.Proto, hp.HeartbeatMS, time.Now()); err != nil {
+		log.Printf("node %s: record hello: %v", ep.ID, err)
+		wire.close(websocket.StatusInternalError, "hub could not record the node")
+		return
+	}
+	// A borrowed machine name is said out loud (claude-fleet#2214): the node
+	// reports a trusted machine's name it did not join as — it gets no trust,
+	// and the audit carries one row per connection.
+	// The raw settings, never trustSettings: a hello must not run the trust
+	// migration before the machine's accounts exist.
+	if set, err := s.Store.FleetSettings(); err == nil {
+		if et, err := s.Store.EndpointTrustOf(ep.ID); err == nil {
+			if _, src := nodeTrust(ep.Hostname, et, set); src == TrustSourceNameBorrowed {
+				s.leaseAudit("node:"+ep.ID, "node_trust", "machine:"+trustKey(ep.Hostname)[len(NodeTrustPrefix):],
+					"BORROWED NAME — joined as "+et.EnrolledHost+", reports "+ep.Hostname+": untrusted", time.Now())
+			}
+		}
+	}
+	// A machine joining as a mapped login AFTER its person signed in: adopt
+	// it now rather than at their next sign-in (claude-fleet#1458).
+	if s.mappedLogin(ep.OSUser) {
+		s.adoptMappedLogins(time.Now())
+	}
+
+	welcome := control.Welcome{Accepted: control.Compatible(hello.Proto), HubProto: control.Proto, MinProto: control.MinProto}
+	if !welcome.Accepted {
+		// Listed, never written to. The connection stays open so the roster
+		// shows the node and its version — "online, proto 7, writes refused"
+		// is something an operator can act on; a node that just disappears
+		// is not.
+		welcome.Reason = control.CodeProtoMismatch
+	}
+	reply, _ := control.New(control.TypeWelcome, welcome)
+	reply.OpID = hello.OpID
+	wctx, cancel := context.WithTimeout(ctx, helloTimeout)
+	err := wire.write(wctx, reply)
+	cancel()
+	if err != nil {
+		return
+	}
+
+	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
+		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), attachmentGeneration: hp.AttachmentGeneration,
+		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
+		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay),
+		canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
+		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
+		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canLaunch: hp.HasCap(control.CapLaunch), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canTicket: hp.HasCap(control.CapTicket), canCreds: hp.HasCap(control.CapCreds),
+		canCredsep:     hp.HasCap(control.CapCredsep),
+		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
+		canRecycle:     hp.HasCap(control.CapRecycle),
+		canRecycleKeep: hp.HasCap(control.CapRecycleKeep),
+		adminSeat:      hp.HasCap(control.CapAdminSeat),
+		canServiceLog:  hp.HasCap(control.CapServiceLog),
+		computeOff:     !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
+		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
+		userPod:           hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
+		clusterOps:        hp.HasCap(control.CapClusterOps),
+		canClusterReading: hp.HasCap(control.CapClusterReading),
+		helloAt:           time.Now().UTC(), agentVersion: hp.AgentVersion}
+	// The refresh relay is an ADMIN role: a node that offers it without
+	// being on the hub's admin list is never handed a refresh token's form.
+	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
+	nc.machineOpener = nc.machineLink && nc.canLoginJoin
+	nc.osUser.Store(ep.OSUser)
+	nc.proto.Store(int64(hello.Proto))
+	nc.host.Store(ep.Hostname)
+	if hp.Admin && !nc.admin {
+		log.Printf("node %s (%s@%s) claims admin but is not on the hub's admin list; no account ops will be sent to it",
+			ep.ID, ep.OSUser, ep.Hostname)
+	}
+	s.nodes.put(ep.ID, nc)
+	defer s.nodes.drop(ep.ID, nc)
+	// Where this link ends, for the other replicas (claude-fleet#2124).
+	defer s.claimLink(ep.ID, nc, hp.Capabilities)()
+	s.auditComputeForce(*ep, nc, hp.ComputeForce, hp.Probe, time.Now())
+	if nc.canRelay {
+		// Relays that waited for this node while it was away go now
+		// (claude-fleet#1421).
+		go s.dispatchRelays(ep.ID)
+	}
+	// Relays this link carried end with it (claude-fleet#1413): the agent
+	// has dropped its halves, and the client deserves a clean close, not a
+	// stream that silently stops moving.
+	defer s.sshRelays.closeNode(nc)
+	defer s.chatRelays.closeNode(nc)
+	defer s.termRelays.closeNode(nc)
+	// So do the service logs it was following (claude-fleet#2797): each
+	// viewer is told, and its page reconnects.
+	defer s.svcLogs.closeNode(nc)
+	if nc.admin {
+		// Every admin connect re-sends the SSH user CA: the node checks
+		// what it already has, so a matching machine changes nothing
+		// (claude-fleet#1412).
+		go s.sendSSHCA(ep.ID)
+	}
+	if nc.accountNode() {
+		// Anything sent down this link and not yet answered is now unknown:
+		// whether the login got made is a question only the node can answer,
+		// and it re-sends its answer when it is back.
+		defer func() {
+			// Superseded by a newer link of the same endpoint: ops sent
+			// down that one are still in flight, not lost.
+			if cur := s.nodes.get(ep.ID); cur != nil && cur != nc {
+				return
+			}
+			if err := s.Store.LoseAccountOps(ep.ID, time.Now()); err != nil {
+				log.Printf("node %s: mark in-flight account ops unknown: %v", ep.ID, err)
+			}
+		}()
+	}
+
+	// A read deadline of a few missed beats: a node whose network vanished
+	// sends no FIN, and without this the goroutine would wait on it forever.
+	idle := time.Duration(hp.HeartbeatMS*(lostAfterBeats+1)) * time.Millisecond
+	if idle < helloTimeout {
+		idle = helloTimeout
+	}
+	// The first beat on this connection is the node's full picture after a
+	// (re)connect: the one checked for leases handed on while it was away.
+	first := true
+	for {
+		rctx, cancel := context.WithTimeout(ctx, idle)
+		m, err := wire.read(rctx)
+		cancel()
+		if err != nil {
+			return
+		}
+		// The token was checked once, at connect; a revoke since then
+		// (claude-fleet#1403) — the operator's, or a retire made by another
+		// process — ends the link here, before the message is acted on.
+		if !s.nodeTokenLive(tokHash) {
+			log.Printf("node %s: enrollment revoked; closing its link", ep.ID)
+			s.revokeNodeRest(ep, time.Now(), false)
+			wire.close(websocket.StatusPolicyViolation, "unrecognised enrollment token")
+			return
+		}
+		switch m.Type {
+		case control.TypeHeartbeat:
+			var hb control.Heartbeat
+			if err := json.Unmarshal(m.Payload, &hb); err != nil {
+				refuse(ctx, wire, m.OpID, control.CodeBadMessage, "malformed heartbeat")
+				continue
+			}
+			if hb.Hostname == "" {
+				hb.Hostname = ep.Hostname
+			}
+			if hb.OSUser == "" {
+				hb.OSUser = ep.OSUser
+			}
+			nc.host.Store(hb.Hostname)
+			nc.osUser.Store(hb.OSUser)
+			// The heartbeat carries the version too: a node that upgrades
+			// without reconnecting is re-judged on its next beat.
+			nc.proto.Store(int64(m.Proto))
+			now := time.Now()
+			if hb.Compute != nil && *hb.Compute {
+				nc.beatSaidOn.Store(true)
+			} else if hb.Compute != nil {
+				nc.beatSaidOn.Store(false)
+			}
+			s.auditComputeForce(*ep, nc, hb.ComputeForce, hb.Probe, now)
+			payload := string(m.Payload)
+			if (hb.Services != nil || hb.CIRunner != nil) && !nc.machineLink {
+				// Only the machine link speaks for the register
+				// (claude-fleet#2526) and the test runner (#3144): a
+				// login's beat cannot add to either.
+				hb.Services, hb.CIRunner = nil, nil
+				if b, err := json.Marshal(hb); err == nil {
+					payload = string(b)
+				}
+			}
+			// The push channel reads the roster and the sessions while this
+			// beat is being recorded; begin/end tell it a read that overlapped
+			// may be half this beat and half the last (claude-fleet#3396).
+			// Deferred, so a panic in between cannot leave it waiting.
+			func() {
+				s.nodesChanged.begin()
+				defer s.nodesChanged.end()
+				s.sessionsChanged.begin()
+				defer s.sessionsChanged.end()
+				if err := s.Store.NodeHeartbeat(ep.ID, hb.Hostname, hb.OSUser, hb.MachineID,
+					m.Proto, payload, now); err != nil {
+					log.Printf("node %s: record heartbeat: %v", ep.ID, err)
+				}
+				// A load the node could not read is no point on the trend
+				// (claude-fleet#2798): 读不到 is not a zero.
+				if !hasString(hb.SysUnread, "load") {
+					s.loadHist.add(hb.Hostname, hb.Load1, hb.NCPU, now)
+				}
+				// The push channel's nodes topic reads again (claude-fleet#2794).
+				s.nodesChanged.fire()
+				// The Fleet Hub registry (claude-fleet#1409): this login's
+				// fleets, re-derived and checked before they are registered.
+				s.nodeBack(*ep, now)
+				if nc.machineLink {
+					s.serviceAlerts(hb.Hostname, hb.Services, now)
+					// The release ledger (claude-fleet#3140): the first beat on a train's sha.
+					if hb.Versions != nil {
+						s.noteReleaseReach(hb.Hostname, hb.Versions.Runtime, now)
+					}
+				}
+				s.recordFleets(*ep, hb, nc.canRead, first, now)
+				if first && nc.canRepoAuthority && nc.canLaunch {
+					// The repos whose authority moved while this link was
+					// away (claude-fleet#4730), after its fleets are registered.
+					go s.pushRepoAuthorities(ep.ID)
+				}
+				first = false
+			}()
+			if nc.canRelay {
+				// The worker map, and any relay whose push went
+				// unanswered (claude-fleet#1421).
+				go s.pushWorkers(*ep, nc)
+				go s.dispatchRelays(ep.ID)
+			}
+			if nc.canTeam {
+				// The team version this link has not heard yet — on a
+				// (re)connect, the current one (claude-fleet#1899).
+				go s.pushTeam(ep.ID, nc, 0)
+			}
+			if nc.canPerson {
+				// The person's own layer, likewise (claude-fleet#2784).
+				go s.pushPerson(ep.ID, nc, "", 0)
+			}
+			if nc.canEntryKeys {
+				// The direct door's list, likewise (claude-fleet#3068).
+				go s.pushEntry(ep.ID, nc, 0)
+			}
+			if nc.canRelease {
+				// The stable this link has not heard yet (claude-fleet#3146).
+				go s.pushRelease(ep.ID, nc, stablePointer{})
+			}
+			if nc.canClusterReading {
+				// Its pod's reading, when fleet-ops is on the other
+				// replica (claude-fleet#3734).
+				go s.pushClusterReading(ep.ID, nc, nil)
+			}
+			if nc.accountNode() {
+				// Each admin beat is a chance to send what is queued for
+				// this machine: a person assigned while it was offline
+				// gets their login within a beat of it coming back.
+				// The same beat refills the machines' spare logins
+				// (claude-fleet#2263), at most once per spareScanEvery.
+				go func() {
+					s.replenishSpares(time.Now(), false)
+					s.dispatchAccounts()
+				}()
+			}
+		case control.TypeAccountResult:
+			s.applyAccountResult(ctx, wire, ep.ID, nc, m)
+		case control.TypeResult:
+			// A reply to a hub read (claude-fleet#1409) or write
+			// (claude-fleet#1410).
+			nc.pending.deliver(m)
+		case control.TypeSSHCAResult:
+			s.applySSHCAResult(ep.ID, nc, m)
+		case control.TypeServiceLogLines:
+			// A service's log, for the viewers following it (claude-fleet#2797).
+			s.svcLogs.deliver(nc, m)
+		case control.TypeClusterOpResult, control.TypeClusterJobResult:
+			// The provisioner's answer to a ticket this link carried
+			// (claude-fleet#3553), or a Job read back (claude-fleet#3552),
+			// goes to its waiter.
+			nc.pending.deliver(m)
+		case control.TypeClusterReadings:
+			// Every user pod's own reading, from the cluster's fleet-ops
+			// (claude-fleet#3734).
+			s.acceptClusterReadings(ctx, wire, *ep, nc, m)
+		case control.TypeOAuthRefreshResult:
+			// A relayed token refresh's answer (claude-fleet#1490) goes to
+			// the lease that is waiting on it; nothing of it is kept here.
+			nc.pending.deliver(m)
+		case control.TypeError:
+			// A refused hub read or write goes to its waiter; any other
+			// error is a refused account op.
+			if nc.pending.deliver(m) || s.svcLogs.refused(nc, m) {
+				break
+			}
+			if nc.accountNode() && m.Error != nil {
+				s.applyAccountRefusal(ep.ID, m)
+			}
+		case control.TypeRelay:
+			// A node handing over a relay for another machine
+			// (claude-fleet#1421).
+			if !nc.canRelay {
+				refuse(ctx, wire, m.OpID, control.CodeRefused, "relays need the relay capability in the hello")
+				break
+			}
+			s.acceptRelay(ctx, wire, *ep, tokHash, m)
+		case control.TypeRelayResult:
+			s.relayResult(ep.ID, m)
+		case control.TypeAck:
+			// Replies to hub writes. Nothing sends one yet (C3 will).
+		default:
+			refuse(ctx, wire, m.OpID, control.CodeBadMessage, "unknown message type "+m.Type)
+		}
+	}
+}
+
+func refuse(ctx context.Context, wire nodeWire, opID, code, msg string) {
+	m := control.Message{Type: control.TypeError, OpID: opID, Proto: control.Proto,
+		Error: &control.Error{Code: code, Message: msg}}
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = wire.write(wctx, m)
+}
+
+// NodeView is one node as the roster API presents it.
+type NodeView struct {
+	EndpointID    string     `json:"endpoint_id"`
+	Hostname      string     `json:"hostname"`
+	OSUser        string     `json:"os_user"`
+	MachineID     string     `json:"machine_id,omitempty"`
+	Proto         int        `json:"proto"`
+	Compatible    bool       `json:"compatible"`
+	Status        string     `json:"status"` // online | maintenance | lost
+	Connected     bool       `json:"connected"`
+	HeartbeatMS   int        `json:"heartbeat_ms"`
+	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	AgeSec        float64    `json:"age_sec"`
+	AgentVersion  string     `json:"agent_version,omitempty"`
+	// Admin is a connected node the hub will send account ops to.
+	Admin bool `json:"admin,omitempty"`
+	// LoginJoin is an admin node that hands a login it opens its join code
+	// (CapLoginJoin, claude-fleet#3032): the only kind a create goes to. An
+	// admin without it is too old to open one — update its ccquota. A Linux
+	// managed machine's own link lists it too (claude-fleet#3210): its root
+	// node program opens that machine's logins, with Admin false.
+	LoginJoin bool `json:"login_join,omitempty"`
+	// MachineLink is a machine's own node program (claude-fleet#2333): the
+	// one link that carries its logins — not a login itself. Via, on a login,
+	// is the machine link's endpoint that carries it right now; absent on a
+	// login with its own link (or none).
+	MachineLink bool   `json:"machine_link,omitempty"`
+	Via         string `json:"via,omitempty"`
+	// UserPod is a machine link that is one person's pod (claude-fleet#3550):
+	// its hostname is the pod's u-<nonce>. Absent everywhere else.
+	UserPod bool `json:"user_pod,omitempty"`
+	// SSHCA is an admin node's last answer to the SSH user CA install
+	// (claude-fleet#1412): sent | trusted… | failed….
+	SSHCA string `json:"ssh_ca,omitempty"`
+	// ComputeOff is a login that only coordinates (claude-fleet#1719,
+	// CCQUOTA_FLEET_COMPUTE=0): placement skips it and its credential lease is
+	// refused. The /nodes page reads it as 「只协调」.
+	ComputeOff bool `json:"compute_off,omitempty"`
+	// ComputeWhy says why when ComputeOff; ComputeAuto is a login the team
+	// policy fleet.compute_auto opened; ComputeClosed is one that asked to run
+	// and whose egress region closed it; Probe is its last probe
+	// (claude-fleet#1720). All absent with no probe and no policy.
+	ComputeWhy    string             `json:"compute_why,omitempty"`
+	ComputeAuto   bool               `json:"compute_auto,omitempty"`
+	ComputeClosed bool               `json:"compute_closed,omitempty"`
+	Probe         *control.NodeProbe `json:"probe,omitempty"`
+	// Personal is a person's own computer (claude-fleet#1721): auto never
+	// places on it, and nothing asked from another machine lands there.
+	Personal bool `json:"personal,omitempty"`
+
+	Load1         float64 `json:"load1"`
+	NCPU          int     `json:"ncpu"`
+	MemFreeBytes  uint64  `json:"mem_free_bytes"`
+	MemTotalBytes uint64  `json:"mem_total_bytes"`
+	// CPUBusy / MaxCPUBusy are the beat's CPU busy and the machine's own
+	// ceiling (claude-fleet#2882); absent from an older agent.
+	CPUBusy    *float64 `json:"cpu_busy,omitempty"`
+	MaxCPUBusy float64  `json:"max_cpu_busy,omitempty"`
+	// SysAt is when the load and memory above were read, SysUnread what the
+	// node could not read (claude-fleet#2798); FleetAt when its fleets,
+	// sessions and readiness were read — older than LastHeartbeat when the
+	// node's fleet read ran past its budget. Versions / VersionsAt are a
+	// machine link's 版本与更新. All absent from an older node: 时间未知.
+	SysAt      *time.Time        `json:"sys_at,omitempty"`
+	SysUnread  []string          `json:"sys_unread,omitempty"`
+	FleetAt    *time.Time        `json:"fleet_at,omitempty"`
+	Versions   *control.Versions `json:"versions,omitempty"`
+	VersionsAt *time.Time        `json:"versions_at,omitempty"`
+	// Sessions is nil when a fleet of this login could not be read
+	// (claude-fleet#1465): its count is unknown, never 0. SessionsUnknown
+	// then names each unreadable fleet and why.
+	Sessions        *int     `json:"sessions"`
+	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
+	// LoginsRefused is a machine link's word (claude-fleet#2501): login →
+	// why the hub refused its lane. Only on a machine link's row.
+	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
+	// MaxSessions is the login's own session cap and CapSessions the count
+	// its gate reads (claude-fleet#1587); absent when the node does not say.
+	MaxSessions int  `json:"max_sessions,omitempty"`
+	CapSessions *int `json:"cap_sessions,omitempty"`
+	// Admit / AdmitWhy / Room are the login's own admission verdict
+	// (claude-fleet#1836): false = its gate is holding new sessions, and why;
+	// Room how many more fit in its memory. Absent when the node does not say.
+	Admit        *bool              `json:"admit,omitempty"`
+	AdmitWhy     string             `json:"admit_why,omitempty"`
+	Room         *int               `json:"room,omitempty"`
+	Fleets       []NodeFleetSummary `json:"fleets"`
+	FleetError   string             `json:"fleet_error,omitempty"`
+	FleetVersion string             `json:"fleet_version,omitempty"`
+	// Installs is this login's installs as its beat read them
+	// (claude-fleet#2697) — the script's own at_stable; the machine's
+	// Installs is the hub's judgement.
+	Installs *control.Installs `json:"installs,omitempty"`
+
+	// Maintenance is the 维护中 record when the machine is flagged
+	// (claude-fleet#1427); Status then reads maintenance while it is heard.
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// Trust is the operator's word on the machine (claude-fleet#1968):
+	// trusted | untrusted — only a trusted one leases credentials, and the
+	// node's own proxy reads it off /v1/node/self to pick its road.
+	Trust string `json:"trust,omitempty"`
+	// TrustSource is where Trust came from: machine (the setting of the
+	// machine this endpoint enrolled as — claude-fleet#3300) · name_borrowed
+	// (a trusted name this node did not join as, #2214).
+	TrustSource string `json:"trust_source,omitempty"`
+	// Role is managed for a 托管 machine (EPIC #2329).
+	Role string `json:"role,omitempty"`
+	// Desired pairs the hub's desired-state version with the one the node
+	// reports it reached; absent when neither exists.
+	Desired *DesiredView `json:"desired,omitempty"`
+	// Credsep is the login's own credential-separation word from its newest
+	// heartbeat (claude-fleet#2295): separated | not | unknown, absent from
+	// an older agent. CredsepGate is set only in /v1/node/self's answer:
+	// "not_separated" when the hub leases this login no token, so its proxy
+	// routes every session central.
+	Credsep     string `json:"credsep,omitempty"`
+	CredsepGate string `json:"credsep_gate,omitempty"`
+	// SignIn is set only in /v1/node/self's answer, on a hub with GitHub
+	// sign-in: who a GitHub outage would lock out (claude-fleet#4849).
+	SignIn *SignInCount `json:"signin,omitempty"`
+	// Gate is the login's newest machine half of the public gate
+	// (claude-fleet#3574): conf/public-gate.tsv's where=node rows as
+	// fleet-gate-check.sh --local judged them; absent from an older agent.
+	Gate []control.GateItem `json:"gate,omitempty"`
+}
+
+// DesiredView is one node's 期望 / 实际 pair on the roster.
+type DesiredView struct {
+	Want        int    `json:"want"`
+	Reached     int    `json:"reached"`
+	Release     string `json:"release,omitempty"`
+	WantRelease string `json:"want_release,omitempty"`
+	Diff        string `json:"diff,omitempty"`
+}
+
+// NodeFleetSummary is one fleet on a node, without its window list (C2 owns
+// that view; the roster only counts).
+type NodeFleetSummary struct {
+	FleetID string   `json:"fleet_id"`
+	Name    string   `json:"name"`
+	Repo    string   `json:"repo,omitempty"`
+	Repos   []string `json:"repos,omitempty"` // claude-fleet#1512; absent from an older agent
+	State   string   `json:"state,omitempty"`
+	Count   int      `json:"count"`
+	Error   string   `json:"error,omitempty"` // why a state "unknown" fleet could not be read
+}
+
+// MachineView folds a machine's logins into one row: the operator asks "is mac-a
+// up", not "is each of mac-a's six agents up".
+type MachineView struct {
+	Hostname string `json:"hostname"`
+	// Alias is the short name the admin gave it (fleet.machine_names,
+	// claude-fleet#1706), else CCQUOTA_FLEET_ROUTES' alias; absent for none.
+	Alias  string `json:"alias,omitempty"`
+	Status string `json:"status"` // online if any login is; maintenance when flagged
+	Online int    `json:"logins_online"`
+	Logins int    `json:"logins"`
+	// Links is how many control connections the machine holds open
+	// (claude-fleet#2333): one for a machine served by its machine link, one
+	// per login for logins that still dial their own.
+	Links int `json:"links"`
+	// Sessions is nil when a heard login's count is unknown
+	// (claude-fleet#1465); SessionsUnknown names those fleets as
+	// "<login>/<fleet>: <why>".
+	Sessions        *int     `json:"sessions"`
+	SessionsUnknown []string `json:"sessions_unknown,omitempty"`
+	Load1           float64  `json:"load1"`
+	NCPU            int      `json:"ncpu"`
+	MemFree         uint64   `json:"mem_free_bytes"`
+	MemTotal        uint64   `json:"mem_total_bytes"`
+	// CPUBusy / MaxCPUBusy ride with the load (claude-fleet#2882).
+	CPUBusy    *float64 `json:"cpu_busy,omitempty"`
+	MaxCPUBusy float64  `json:"max_cpu_busy,omitempty"`
+	// SysAt is when that load and memory were read: the newest reading any
+	// heard row of the machine carries — its machine link's or a login's
+	// (claude-fleet#2798) — so one login whose fleet read is slow, or a lane
+	// the hub refused, never empties the machine's load. Absent when only an
+	// older node reported (时间未知); SysUnread names what the machine could
+	// not read (读不到).
+	SysAt     *time.Time `json:"sys_at,omitempty"`
+	SysUnread []string   `json:"sys_unread,omitempty"`
+	// Versions is the machine's 版本与更新 as its machine link last read it
+	// at VersionsAt (claude-fleet#2798); absent from a machine without one.
+	Versions   *control.Versions `json:"versions,omitempty"`
+	VersionsAt *time.Time        `json:"versions_at,omitempty"`
+	// LastHeartbeat is the newest from any login.
+	LastHeartbeat *time.Time `json:"last_heartbeat"`
+	// FleetVersion is the claude-fleet install (fleet-install-version.sh's
+	// head) the newest heard login that reported one runs (claude-fleet#2692):
+	// /v1/fleet/summary carries machines only, so without it a sidebar read
+	// every machine as "no fleet version reported". Absent when none did.
+	FleetVersion string `json:"fleet_version,omitempty"`
+	// Installs is the machine's 「安装」 (claude-fleet#2697): its runtime and
+	// every heard login's install, client shell and client install, each
+	// judged against the stable this hub follows (Stable — the Mac lane's
+	// for a machine on it; at_stable nil when the hub knows none). Absent
+	// when no login reported one.
+	Installs *control.Installs `json:"installs,omitempty"`
+	// ComputeOff: every login of the machine only coordinates
+	// (claude-fleet#1719) — nothing is placed on it.
+	ComputeOff bool `json:"compute_off,omitempty"`
+	// Personal: a login of the machine is personal (claude-fleet#1721).
+	Personal bool `json:"personal,omitempty"`
+	// Role is host for a machine the hub can place sessions on and client for
+	// one that only runs a shell or a browser (claude-fleet#2795): the admin
+	// 「机器」 page and 我的机器 list hosts, 我的设备 / 全部设备 the clients.
+	// machineRole is its one judge.
+	Role string `json:"role"`
+	// Maintenance is the 维护中 record when the operator flagged the machine
+	// (claude-fleet#1427): Status reads maintenance while any login is heard,
+	// lost when none is.
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
+	// LoadHist is load per core over the last two hours, one point per five
+	// minutes, oldest first (claude-fleet#1990, the Machines card's trend).
+	// Kept in memory since the hub started: empty after a restart.
+	LoadHist []float64 `json:"load_hist"`
+	// LoginsRefused is login → why the hub refuses that login's lane on the
+	// machine's node program (claude-fleet#2501): 令牌失效 · 需要 relogin.
+	LoginsRefused map[string]string `json:"logins_refused,omitempty"`
+	// Services is the machine's login-level register (claude-fleet#2526):
+	// the entries of the logins the reader may see, as the machine link's
+	// last beat said at ServicesAt. Absent when it reported none.
+	Services   []control.ServiceStatus `json:"services,omitempty"`
+	ServicesAt *time.Time              `json:"services_at,omitempty"`
+	// Repos is every repo a registered fleet on the machine hosts
+	// (store.FleetRow.HostedRepos, the list placement checks), over the
+	// logins the reader may see (claude-fleet#1927): a newcomer's empty list
+	// still knows which repo a first session can open in. Always present
+	// ([] for none), so a client tells "hosts none" from an older hub.
+	Repos []string `json:"repos"`
+	// Spare is how many spare logins stand ready on the machine, LoginsUsed
+	// how many logins are handed out there and LoginCap how many it may hold
+	// (fleet.node_user_cap.<machine>) — claude-fleet#2263: on the operator's
+	// roster only, and only while fleet.spares is on; absent otherwise.
+	Spare      *int `json:"spare,omitempty"`
+	LoginsUsed *int `json:"logins_used,omitempty"`
+	LoginCap   *int `json:"login_cap,omitempty"`
+	// SpareResetting is how many spares are being washed for the next
+	// person and SpareFailed how many failed — neither is ready
+	// (claude-fleet#3501). SpareTarget is how many the machine should hold.
+	// Same rule as Spare: present only while fleet.spares is on.
+	SpareResetting *int `json:"spare_resetting,omitempty"`
+	SpareFailed    *int `json:"spare_failed,omitempty"`
+	SpareTarget    *int `json:"spare_target,omitempty"`
+	// SpareUnchecked is how many active spares did not pass their check
+	// before being handed out (claude-fleet#4673): held, never ready.
+	SpareUnchecked *int `json:"spare_unchecked,omitempty"`
+	// Door is the machine's entry port on the operator's roster
+	// (claude-fleet#3934, stampDoors); absent elsewhere and while no entry
+	// port or door is set up.
+	Door *MachineDoor `json:"door,omitempty"`
+}
+
+// NodesSnapshot is the body of /v1/nodes.
+type NodesSnapshot struct {
+	At       time.Time     `json:"at"`
+	Machines []MachineView `json:"machines"`
+	Nodes    []NodeView    `json:"nodes"`
+	// Account is a signed-in person's login while they have no active one
+	// (claude-fleet#2069): opening / failed / none. Absent for the operator
+	// and for anyone already holding a login.
+	Account *AccountState `json:"account,omitempty"`
+}
+
+// NodeStatus judges a node: lost after lostAfterBeats missed heartbeats. Lost
+// is only a label — the row stays, its sessions are not read as idle, and
+// nothing on the node is touched.
+func NodeStatus(last *time.Time, heartbeatMS int, now time.Time) string {
+	if heartbeatMS <= 0 {
+		heartbeatMS = defaultHeartbeatMS
+	}
+	if last == nil || now.Sub(*last) > time.Duration(heartbeatMS*lostAfterBeats)*time.Millisecond {
+		return "lost"
+	}
+	return "online"
+}
+
+// Nodes builds the roster as of now.
+func (s *Server) Nodes(now time.Time) (NodesSnapshot, error) {
+	return s.nodesWhere(now, nil)
+}
+
+// nodesWhere builds the roster from the nodes visible passes (nil: all).
+func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string) bool) (NodesSnapshot, error) {
+	rows, err := s.Store.Nodes()
+	if err != nil {
+		return NodesSnapshot{}, err
+	}
+	if s.nodesRowsHook != nil {
+		s.nodesRowsHook()
+	}
+	out := NodesSnapshot{At: now.UTC(), Machines: []MachineView{}, Nodes: []NodeView{}}
+	// Each endpoint's enrolled machine (claude-fleet#2214, #3300): one read for the roster.
+	epTrust, _, _ := s.Store.EndpointTrusts()
+	// 维护中 (claude-fleet#1427): the flag is a setting, read once per roster;
+	// an empty settings table leaves every status as the heartbeat said.
+	// Trust (claude-fleet#1968) reads the same table, migrated once first.
+	settings, err := s.trustSettings(now)
+	if err != nil {
+		settings, _ = s.Store.FleetSettings()
+	}
+	peers := s.peerConns() // nil on a single hub (claude-fleet#2124)
+	aliases := s.staticAliases(settings)
+	machines := map[string]*MachineView{}
+	fleetVerAt := map[string]time.Time{}   // when each machine's FleetVersion was heard
+	installs := map[string]*installsPick{} // each machine's installs so far (#2697)
+	sysBest := map[string]*sysPick{}       // each machine's load reading so far (#2798)
+	order := []string{}
+	// The register rides the machine link's beat (claude-fleet#2526), a row
+	// a person never sees — its entries are narrowed one by one below.
+	registers := map[string]machineServices{}
+	linkSys := map[string][]NodeView{} // a narrowed roster's machine-link rows (#2798)
+	for _, n := range rows {
+		var hbs struct {
+			Services []control.ServiceStatus `json:"services"`
+		}
+		if len(n.StatusJSON) > 0 && json.Unmarshal([]byte(n.StatusJSON), &hbs) == nil && len(hbs.Services) > 0 {
+			if old, ok := registers[n.Hostname]; !ok || (n.LastHeartbeat != nil && (old.at == nil || n.LastHeartbeat.After(*old.at))) {
+				registers[n.Hostname] = machineServices{at: n.LastHeartbeat, services: hbs.Services}
+			}
+		}
+		// The machine link's load is the machine's, not a login's
+		// (claude-fleet#2798): a person who sees the machine gets it too,
+		// though the link's own row is never theirs to see.
+		if visible != nil {
+			if c := s.nodes.get(n.EndpointID); c != nil && c.machineLink {
+				if lv := nodeView(n, now); lv.Status != "lost" {
+					linkSys[n.Hostname] = append(linkSys[n.Hostname], lv)
+				}
+			}
+		}
+		if visible != nil && !visible(n.Hostname, n.OSUser) {
+			continue
+		}
+		v := nodeView(n, now)
+		et, known := epTrust[n.EndpointID]
+		if !known {
+			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
+		}
+		v.Trust, v.TrustSource = nodeTrust(n.Hostname, et, settings)
+		v.Role = et.Role
+		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
+			v.Maintenance = &m
+			if v.Status == "online" {
+				v.Status = "maintenance"
+			}
+		}
+		var hb control.Heartbeat
+		_ = json.Unmarshal([]byte(n.StatusJSON), &hb)
+		cv := s.computeOf(n.EndpointID, hb, settings, now)
+		v.ComputeOff, v.ComputeAuto, v.ComputeClosed, v.Probe = cv.Off, cv.Auto, cv.Closed, cv.Probe
+		if cv.Off {
+			v.ComputeWhy = cv.Why
+		}
+		v.Personal = s.personalOf(n.EndpointID, hb)
+		v.Desired = s.desiredView(n.EndpointID, hb.Desired)
+		if c := s.nodes.get(n.EndpointID); c != nil {
+			v.Connected, v.Admin = true, c.admin
+			v.LoginJoin = c.accountNode() && c.canLoginJoin
+			v.MachineLink, v.Via = c.machineLink, c.wire.machine()
+			v.UserPod = c.userPod
+			if v.MachineLink {
+				v.Via = ""
+			}
+			if c.admin {
+				v.SSHCA = s.sshCAStatusOf(n.EndpointID)
+			}
+		} else if pc, ok := peers[n.EndpointID]; ok {
+			// Held by another replica (claude-fleet#2124): connected all
+			// the same. The CA answer is that replica's to keep.
+			v.Connected, v.Admin = true, pc.Admin
+			v.LoginJoin = (pc.Admin || pc.HasCap(control.CapMachine)) && pc.HasCap(control.CapLoginJoin)
+			v.UserPod = pc.HasCap(control.CapMachine) && pc.HasCap(control.CapUserPod)
+		}
+		out.Nodes = append(out.Nodes, v)
+
+		m := machines[v.Hostname]
+		if m == nil {
+			zero := 0
+			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Sessions: &zero, Repos: []string{}}
+			machines[v.Hostname] = m
+			order = append(order, v.Hostname)
+		}
+		if v.Connected && v.Via == "" {
+			m.Links++
+		}
+		if v.Status != "lost" {
+			if sysBest[v.Hostname] == nil {
+				sysBest[v.Hostname] = &sysPick{}
+			}
+			m.foldSys(sysBest[v.Hostname], v)
+		}
+		if v.MachineLink {
+			// The link, not a login: it carries the logins below it — and
+			// says which of them the hub refused.
+			if v.Status != "lost" && len(v.LoginsRefused) > 0 {
+				m.LoginsRefused = v.LoginsRefused
+			}
+			continue
+		}
+		m.Logins++
+		m.Personal = m.Personal || v.Personal
+		if m.Maintenance == nil {
+			m.Maintenance = v.Maintenance // a lost machine still shows why it was flagged
+		}
+		if v.Status == "lost" {
+			continue
+		}
+		// Heard: online, or maintenance when flagged — the machine's word is
+		// its logins' word, since the flag is per machine.
+		m.Status, m.Maintenance = v.Status, v.Maintenance
+		// 只协调 is the machine's word only when every heard login says it.
+		m.ComputeOff = v.ComputeOff && (m.Online == 0 || m.ComputeOff)
+		m.Online++
+		// One unreadable login makes the machine's count unknown: a sum
+		// that silently drops it would read a busy machine as idle.
+		for _, u := range v.SessionsUnknown {
+			m.SessionsUnknown = append(m.SessionsUnknown, v.OSUser+"/"+u)
+		}
+		switch {
+		case v.Sessions == nil:
+			m.Sessions = nil
+		case m.Sessions != nil:
+			*m.Sessions += *v.Sessions
+		}
+		if m.LastHeartbeat == nil || (v.LastHeartbeat != nil && v.LastHeartbeat.After(*m.LastHeartbeat)) {
+			m.LastHeartbeat = v.LastHeartbeat
+		}
+		// The fleet version: the newest login that reported one — a login
+		// without claude-fleet reports none and must not blank the machine's.
+		if v.FleetVersion != "" && v.LastHeartbeat != nil {
+			if at, ok := fleetVerAt[v.Hostname]; !ok || v.LastHeartbeat.After(at) {
+				m.FleetVersion, fleetVerAt[v.Hostname] = v.FleetVersion, *v.LastHeartbeat
+			}
+		}
+		if v.Installs != nil {
+			if installs[v.Hostname] == nil {
+				installs[v.Hostname] = &installsPick{logins: map[string]installsLogin{}}
+			}
+			installs[v.Hostname].add(v.Installs)
+		}
+	}
+	if len(installs) > 0 {
+		stable := s.stableKnown()
+		for h, pk := range installs {
+			if m := machines[h]; m != nil {
+				m.Installs = pk.judged(stable)
+			}
+		}
+	}
+	// The repos each machine hosts (claude-fleet#1927): one read of the
+	// fleet registry, narrowed exactly as the roster is.
+	if fleets, err := s.Store.Fleets(); err == nil {
+		for _, r := range fleets {
+			m := machines[r.Hostname]
+			if m == nil || !r.Present || (visible != nil && !visible(r.Hostname, r.OSUser)) {
+				continue
+			}
+			for _, repo := range r.HostedRepos() {
+				if !hasString(m.Repos, repo) {
+					m.Repos = append(m.Repos, repo)
+				}
+			}
+		}
+	}
+	sort.Strings(order)
+	for _, h := range order {
+		for _, lv := range linkSys[h] {
+			if sysBest[h] == nil {
+				sysBest[h] = &sysPick{}
+			}
+			machines[h].foldSys(sysBest[h], lv)
+		}
+		if reg, ok := registers[h]; ok {
+			if svcs := visibleServices(h, reg, visible); len(svcs) > 0 {
+				machines[h].Services, machines[h].ServicesAt = svcs, reg.at
+			}
+		}
+		sort.Strings(machines[h].Repos)
+		machines[h].Role = machineRole(*machines[h], out.Nodes)
+		machines[h].LoadHist = s.loadHist.series(h, now)
+		out.Machines = append(out.Machines, *machines[h])
+	}
+	return out, nil
+}
+
+// sysAt is when a row's load was read: its own sys_at, else (an older node)
+// its heartbeat — known says which.
+func sysAt(v NodeView) (at time.Time, known bool) {
+	if v.SysAt != nil {
+		return *v.SysAt, true
+	}
+	if v.LastHeartbeat != nil {
+		return *v.LastHeartbeat, false
+	}
+	return time.Time{}, false
+}
+
+// sysPick is the reading foldSys holds so far for one machine.
+type sysPick struct {
+	seen, known bool
+	at          time.Time
+}
+
+// foldSys takes a heard row's load and memory into the machine when it is the
+// best reading so far (claude-fleet#2798). One machine, one load: every row
+// reads the same kernel, so the newest timed reading stands for all of them —
+// a reading with its own time beats one without, and the machine link's row
+// counts like any login's. Its versions ride along from the machine link.
+func (m *MachineView) foldSys(best *sysPick, v NodeView) {
+	if v.Versions != nil && (m.VersionsAt == nil || (v.VersionsAt != nil && v.VersionsAt.After(*m.VersionsAt))) {
+		m.Versions, m.VersionsAt = v.Versions, v.VersionsAt
+	}
+	at, known := sysAt(v)
+	if at.IsZero() {
+		return
+	}
+	if best.seen {
+		if best.known && !known {
+			return
+		}
+		if best.known == known && !at.After(best.at) {
+			return
+		}
+	}
+	*best = sysPick{seen: true, known: known, at: at}
+	m.Load1, m.NCPU, m.MemFree, m.MemTotal = v.Load1, v.NCPU, v.MemFreeBytes, v.MemTotalBytes
+	m.CPUBusy, m.MaxCPUBusy = v.CPUBusy, v.MaxCPUBusy
+	m.SysUnread = v.SysUnread
+	m.SysAt = nil
+	if known {
+		t := at
+		m.SysAt = &t
+	}
+}
+
+// Machine roles (claude-fleet#2795).
+const (
+	MachineRoleHost   = "host"
+	MachineRoleClient = "client"
+)
+
+// machineRole judges one machine from the roster rows it folds: host when it
+// carries a machine link (its own node program — a managed machine), or any
+// of its logins is managed, or is neither personal nor only-coordinating
+// (the hub may place a session there) and not typed client (claude-fleet
+// #4886); client otherwise — a person's laptop
+// or tablet that only runs the shell. A lost login still counts: a host that
+// went quiet is a host that is down, not a client.
+func machineRole(m MachineView, nodes []NodeView) string {
+	for _, n := range nodes {
+		if n.Hostname != m.Hostname {
+			continue
+		}
+		if n.MachineLink || n.Role == store.NodeRoleManaged {
+			return MachineRoleHost
+		}
+		// A login typed client is a terminal whatever else it says
+		// (claude-fleet#4886).
+		if n.Role != store.NodeRoleClient && !n.Personal && !n.ComputeOff {
+			return MachineRoleHost
+		}
+	}
+	return MachineRoleClient
+}
+
+func nodeView(n store.Node, now time.Time) NodeView {
+	v := NodeView{
+		EndpointID: n.EndpointID, Hostname: n.Hostname, OSUser: n.OSUser,
+		MachineID: n.MachineID, Proto: n.Proto, Compatible: control.Compatible(n.Proto),
+		HeartbeatMS: n.HeartbeatMS, LastHeartbeat: n.LastHeartbeat,
+		AgentVersion: n.AgentVersion, Fleets: []NodeFleetSummary{},
+		Status: NodeStatus(n.LastHeartbeat, n.HeartbeatMS, now),
+	}
+	if n.LastHeartbeat != nil {
+		v.AgeSec = now.Sub(*n.LastHeartbeat).Seconds()
+	}
+	var hb control.Heartbeat
+	if json.Unmarshal([]byte(n.StatusJSON), &hb) == nil {
+		v.Load1, v.NCPU = hb.Load1, hb.NCPU
+		v.CPUBusy, v.MaxCPUBusy = hb.CPUBusy, hb.MaxCPUBusy
+		v.MemFreeBytes, v.MemTotalBytes = hb.MemFreeBytes, hb.MemTotalBytes
+		v.Sessions, v.SessionsUnknown = hb.SessionsCount(), hb.UnreadableFleets()
+		v.MaxSessions, v.CapSessions = hb.MaxSessions, hb.CapSessions
+		v.Admit, v.AdmitWhy, v.Room = hb.Admit, hb.AdmitWhy, hb.Room
+		v.FleetError, v.FleetVersion = hb.FleetError, hb.FleetVersion
+		v.Installs = hb.Installs
+		v.Credsep = hb.Credsep
+		v.Gate = hb.Gate
+		v.LoginsRefused = hb.LoginsRefused
+		v.SysAt, v.SysUnread, v.FleetAt = hb.SysAt, hb.SysUnread, hb.FleetAt
+		v.Versions, v.VersionsAt = hb.Versions, hb.VersionsAt
+		for _, f := range hb.Fleets {
+			v.Fleets = append(v.Fleets, NodeFleetSummary{FleetID: f.FleetID, Name: f.Name, Repo: f.Repo, Repos: reportedRepos(f.Repos), State: f.State, Count: f.Count, Error: f.Error})
+		}
+	}
+	return v
+}
+
+// handleNodes serves the roster — narrowed, for a signed-in person, to the
+// logins that are theirs (claude-fleet#1411).
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.nodesFor(r, time.Now())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, snap)
+}

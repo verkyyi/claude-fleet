@@ -3,19 +3,19 @@
 #
 # extras/fleet-theme/logo.svg (+ site/assets' favicon.ico, apple-touch-icon.png)
 # is the only source. The console's copies are byte for byte —
-#   tokenledger/web/dist/favicon.svg favicon.ico apple-touch-icon.png
+#   tokenledger/hub/web/dist/favicon.svg favicon.ico apple-touch-icon.png
 # — every page names them at the root, web-chat names the package's own, and no console page, web-chat page or docs page inlines an icon of its own
 # (the old green M4 17l4-10… once sat on 28 pages). The Go side has the same
-# check for web/dist (tokenledger/web/embed_test.go); this one also runs when
+# check for web/dist (tokenledger/hub/web/embed_test.go); this one also runs when
 # only the theme package, site/assets or extras/web-chat change.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 fail=0
 bad() { echo "FAIL: $*"; fail=1; }
 
-for pair in "extras/fleet-theme/logo.svg tokenledger/web/dist/favicon.svg" \
-            "site/assets/favicon.ico tokenledger/web/dist/favicon.ico" \
-            "site/assets/apple-touch-icon.png tokenledger/web/dist/apple-touch-icon.png"; do
+for pair in "extras/fleet-theme/logo.svg tokenledger/hub/web/dist/favicon.svg" \
+            "site/assets/favicon.ico tokenledger/hub/web/dist/favicon.ico" \
+            "site/assets/apple-touch-icon.png tokenledger/hub/web/dist/apple-touch-icon.png"; do
   src="${pair%% *}" dst="${pair#* }"
   cmp -s "$ROOT/$src" "$ROOT/$dst" || bad "$dst is not $src (cp $src $dst)"
 done

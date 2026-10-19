@@ -1,7 +1,7 @@
 // machines/i18n.ts — 机器与 pod's words, 中文 and English together (EPIC #3923
 // rule 8; C11). Kept beside the page so the batch's other admin pages do not
 // share one file of words; the language is the admin side's (../i18n). The
-// confirm texts are today's (tokenledger/web/dist/lib/i18n ui.mach.* · ui.dev.*
+// confirm texts are today's (tokenledger/hub/web/dist/lib/i18n ui.mach.* · ui.dev.*
 // · ui.svc.*), word for word.
 import { lang } from "../i18n";
 

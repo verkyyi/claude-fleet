@@ -141,7 +141,7 @@ For when there is no upstream hub. Run this in the repository copy §1.1 built t
 |---|---|---|
 | `codex-<version>-<system>-<arch>` | `codex-<triple>.tar.gz` on Codex's official release page `github.com/openai/codex/releases/tag/rust-v<version>` | Unpack it; it holds one file, `codex-<triple>`; rename that |
 | `codex-code-mode-host-<version>-<system>-<arch>` | `codex-code-mode-host-<triple>.tar.gz` on the same page | The same: unpack `codex-code-mode-host-<triple>` and rename it |
-| `tmux-<version>-<system>-<arch>` | §1.1's `fleet-client-pack.sh` has already downloaded it by `conf/vendor-tmux.lock` and checked its sha256, at `tokenledger/internal/api/fleetclient/pack/vendor/tmux-<platform>` | Copy it under the new name; no build of your own |
+| `tmux-<version>-<system>-<arch>` | §1.1's `fleet-client-pack.sh` has already downloaded it by `conf/vendor-tmux.lock` and checked its sha256, at `tokenledger/hub/api/fleetclient/pack/vendor/tmux-<platform>` | Copy it under the new name; no build of your own |
 | `claude-<version>-<system>-<arch>` | Nothing to put in place: the hub fetches it from npm itself | — |
 
 How a system / architecture maps to the names on each side (Codex's musl builds: statically linked, they run on any Linux):
@@ -166,7 +166,7 @@ while read -r plat triple tplat; do
       "https://github.com/openai/codex/releases/download/rust-v$CX/$n-$triple.tar.gz" &&
     tar xzf "$T/$n.tar.gz" -C "$T" && install -m 0755 "$T/$n-$triple" "$A/$n-$CX-$plat" || echo "failed: $n $plat"
   done
-  install -m 0755 "tokenledger/internal/api/fleetclient/pack/vendor/tmux-$tplat" "$A/tmux-$TM-$plat" || echo "failed: tmux $plat"
+  install -m 0755 "tokenledger/hub/api/fleetclient/pack/vendor/tmux-$tplat" "$A/tmux-$TM-$plat" || echo "failed: tmux $plat"
 done <<'EOF'
 darwin-arm64 aarch64-apple-darwin      macos-arm64
 linux-amd64  x86_64-unknown-linux-musl linux-x86_64

@@ -125,10 +125,10 @@ tree: 7 个文件 · 19 处（允许清单另放过 60 个文件）
 | 7, 12 | private-key | `bin/doctor-bundle-selftest.sh:32`（d5742450 · 8c94c870） | 测试假数据 | 私钥体 70 字符，解码只有 openssh-key-v1 的通用开头，没有密钥材料 |
 | 8, 13 | jwt | `bin/doctor-bundle-selftest.sh:44`（d5742450）· `:43`（8c94c870） | 测试假数据 | jwt.io 的公开示例 |
 | 9, 11, 14 | aws-access-token · gitlab-pat | `bin/doctor-bundle-selftest.sh:45`（d5742450）· `:44`（8c94c870 ×2） | 测试假数据 | AKIA 加字母表、glpat 值含 FAKE |
-| 15–16 | curl-auth-header | `tokenledger/internal/api/fleet_service_log_test.go:319`（f7a0ede2 · 7d9224e3） | 测试假数据 | Bearer 后的值就是期望结果 abc.def-ghi |
+| 15–16 | curl-auth-header | `tokenledger/hub/api/fleet_service_log_test.go:319`（f7a0ede2 · 7d9224e3） | 测试假数据 | Bearer 后的值就是期望结果 abc.def-ghi |
 | 17, 18, 20, 21 | generic-api-key | `bin/fleet-release-publish-selftest.sh:105` · `:115`（efb05b86 · 66603aa7） | 测试假数据 | 发布令牌是普通英文词组，给替身入口用 |
 | 19, 22 | generic-api-key | `bin/fleet-role-merge-selftest.sh:162`（4c21b98f · 30c966d5，HEAD 已无此文件） | 测试假数据 | API_KEY 值为 abcd1234… |
-| 23 | aws-access-token | `tokenledger/internal/api/fleet_client_settings_test.go:98`（be6677e9） | 测试假数据 | AKIA 加字母表 |
+| 23 | aws-access-token | `tokenledger/hub/api/fleet_client_settings_test.go:98`（be6677e9） | 测试假数据 | AKIA 加字母表 |
 | 24 | generic-api-key | `bin/fleet-hub-node-env-selftest.sh:53`（3b1dc054） | 测试假数据 | 值含 SECRET 与 abcdef |
 | 25 | generic-api-key | `bin/fleet-node-join-selftest.sh:13`（91498a7f） | 误报 | 注释里的环境变量名，没有值 |
 | 26 | generic-api-key | `bin/fleet-doctor-ingress-selftest.sh:71`（91c7b898，HEAD 里还在） | **真实主机公钥（非机密）** | 与一台托管机器的 ssh ed25519 主机公钥逐字相同。公钥不是凭据、不能登录、不用换；HEAD 里的由 C8 换成随机生成的假公钥，历史那条留在 allowlist |
@@ -201,21 +201,21 @@ bin/oss-scan.sh --inventory         # 下面这张表
 | `plugins/fleet-steward/.claude-plugin/plugin.json` | — | — | allow |
 | `skills/doc-preview/render.mjs` | 2 | machine 2 | config |
 | `tokenledger/README.md` | — | — | allow |
-| `tokenledger/cmd/ccquota/hub_test.go` | — | — | allow |
-| `tokenledger/cmd/ccquota/tls_test.go` | — | — | allow |
+| `tokenledger/hub/cmd/ccquota/hub_test.go` | — | — | allow |
+| `tokenledger/hub/cmd/ccquota/tls_test.go` | — | — | allow |
 | `tokenledger/docs/superpowers/plans/2026-09-12-provider-dimension.md` | — | — | allow |
 | `tokenledger/docs/superpowers/plans/2026-09-13-tokenledger-ui.md` | — | — | allow |
 | `tokenledger/docs/superpowers/specs/2026-09-12-tokenledger-provider-and-reorientation-design.md` | — | — | allow |
 | `tokenledger/agent/node_entry_test.go` | — | — | allow |
 | `tokenledger/agent/node_routes_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_certs_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_debug_ticket_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_entry_reach_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_home_login_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_maintenance_test.go` | — | — | allow |
-| `tokenledger/internal/api/fleet_routes_test.go` | — | — | allow |
-| `tokenledger/internal/api/hub_users_api_test.go` | — | — | allow |
-| `tokenledger/internal/api/node_route_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_certs_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_debug_ticket_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_entry_reach_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_home_login_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_maintenance_test.go` | — | — | allow |
+| `tokenledger/hub/api/fleet_routes_test.go` | — | — | allow |
+| `tokenledger/hub/api/hub_users_api_test.go` | — | — | allow |
+| `tokenledger/hub/api/node_route_test.go` | — | — | allow |
 | `tokenledger/shared/credproxy/credproxy_test.go` | — | — | allow |
-| `tokenledger/internal/credvault/kms.go` | — | — | allow |
-| `tokenledger/internal/store/sources_test.go` | — | — | allow |
+| `tokenledger/hub/credvault/kms.go` | — | — | allow |
+| `tokenledger/hub/store/sources_test.go` | — | — | allow |

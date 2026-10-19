@@ -44,7 +44,7 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: |
-            tokenledger/go.sum
+            tokenledger/hub/go.sum
             tokenledger/agent/go.sum
       - uses: actions/setup-node@v4
         with:
@@ -56,12 +56,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/task-acceptance/home"
           bin/fleet-client-pack.sh
           cd tokenledger
-          CGO_ENABLED=0 go build -o "$RUNNER_TEMP/task-acceptance/ccquota" ./cmd/ccquota
+          # the hub is its own module since claude-fleet#4814
+          (cd hub && CGO_ENABLED=0 GOWORK=off go build -o "$RUNNER_TEMP/task-acceptance/ccquota" ./cmd/ccquota)
           for package in store api; do
-            CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/task-acceptance/$package.test" "./internal/$package"
+            (cd hub && CGO_ENABLED=0 GOWORK=off go test -c -o "$RUNNER_TEMP/task-acceptance/$package.test" "./$package")
           done
           # the node is its own module since claude-fleet#4812
           (cd agent && CGO_ENABLED=0 GOWORK=off go test -c -o "$RUNNER_TEMP/task-acceptance/agent.test" .)
+          # the node's build beside the hub's: nogh-e2e's agent runs it (claude-fleet#4814)
+          (cd agent && CGO_ENABLED=0 GOWORK=off go build -o "$RUNNER_TEMP/task-acceptance/ccquota-node" ./cmd/ccquota)
           npm install --prefix "$RUNNER_TEMP/task-acceptance/browser" --no-audit --no-fund playwright@1.58.2
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/task-acceptance/browsers" node "$RUNNER_TEMP/task-acceptance/browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: C9 test-only isolation contracts (entry includes cleanup, under 60 seconds)

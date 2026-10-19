@@ -74,7 +74,7 @@ curl -fsSL <入口>/install | sh
 - **邀请**：入口 `/i/<码>` 发的那份安装命令带着邀请码，存到 `~/.config/claude-fleet/invite`
   （0600），第一次登录时交给入口。
 - **一个目录**：都装在 `~/.claude/fleet`。只看只派 = 客户端清单
-  （`tokenledger/internal/api/fleetclient/manifest`）那部分，不要 git；承载 = 同一个目录
+  （`tokenledger/hub/api/fleetclient/manifest`）那部分，不要 git；承载 = 同一个目录
   原地换成跟 `stable` 的 git 检出、跑新登录的设置（`bin/fleet-host-install.sh`，
   `fleet host on` 走的也是它）。已是完整安装的目录一个文件都不重下。
 - **再跑一次零改动**，安装从不拆东西——关承载用 `fleet host off`。

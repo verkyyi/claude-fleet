@@ -411,7 +411,7 @@ Give the token to `alice` over a private channel. It is a credential.
 ## 4. Run the ccquota agent as that person (LaunchAgent)
 
 `ccquota` isn't a brew formula. See [INSTALL.md step 6](INSTALL.md#install-steps)
-for building it from a clone (`cd claude-fleet/tokenledger && go build -o ~/.local/bin/ccquota ./cmd/ccquota`). As `alice`:
+for building it from a clone (`cd claude-fleet/tokenledger/agent && go build -o ~/.local/bin/ccquota ./cmd/ccquota`). As `alice`:
 
 ```sh
 mkdir -p ~/.ccquota/agent

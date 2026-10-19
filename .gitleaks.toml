@@ -197,22 +197,22 @@ commits = ["a1514dc30ac162d17ceb9682eca440c3ffa77055"]
 paths = ['''^extras/managed\-node/smoke\.py$''']
 
 [[allowlists]]
-description = "#26 aws-access-token · tokenledger/internal/api/fleet_client_settings_test.go:98 @ be6677e9 — 测试假数据：AKIA+字母表"
+description = "#26 aws-access-token · tokenledger/hub/api/fleet_client_settings_test.go:98 @ be6677e9 — 测试假数据：AKIA+字母表"
 condition = "AND"
 targetRules = ["aws-access-token"]
 commits = ["be6677e90e74509dc82a82f364584dddeb64e167"]
-paths = ['''^tokenledger/internal/api/fleet_client_settings_test\.go$''']
+paths = ['''^tokenledger/hub/api/fleet_client_settings_test\.go$''']
 
 [[allowlists]]
-description = "#27 curl-auth-header · tokenledger/internal/api/fleet_service_log_test.go:319 @ 7d9224e3 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
+description = "#27 curl-auth-header · tokenledger/hub/api/fleet_service_log_test.go:319 @ 7d9224e3 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
 condition = "AND"
 targetRules = ["curl-auth-header"]
 commits = ["7d9224e3411e03b8d6e38cf049ed76dac9c996e8"]
-paths = ['''^tokenledger/internal/api/fleet_service_log_test\.go$''']
+paths = ['''^tokenledger/hub/api/fleet_service_log_test\.go$''']
 
 [[allowlists]]
-description = "#28 curl-auth-header · tokenledger/internal/api/fleet_service_log_test.go:319 @ f7a0ede2 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
+description = "#28 curl-auth-header · tokenledger/hub/api/fleet_service_log_test.go:319 @ f7a0ede2 — 测试假数据：Bearer 值就是期望结果 abc.def-ghi"
 condition = "AND"
 targetRules = ["curl-auth-header"]
 commits = ["f7a0ede2fb3d284502be596620aaaa5d152473a7"]
-paths = ['''^tokenledger/internal/api/fleet_service_log_test\.go$''']
+paths = ['''^tokenledger/hub/api/fleet_service_log_test\.go$''']

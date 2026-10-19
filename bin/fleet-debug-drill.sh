@@ -333,7 +333,7 @@ run_check() {
     # with its own words — routed, and no anonymous ticket spent on a check
     400) if grep -q 'fp' "$tmp/ticket"; then chk PASS C2 "POST /v1/fleet/debug/ticket is routed (400 on the probe's fake fp)"
          else chk FAIL C2 "POST /v1/fleet/debug/ticket answers 400 — $(head -c 80 "$tmp/ticket") (#2891)"; fi ;;
-    401) if grep -q 'viewer token' "$tmp/ticket" && [ -f "$ROOT/tokenledger/internal/api/fleet_debug_ticket.go" ]; then
+    401) if grep -q 'viewer token' "$tmp/ticket" && [ -f "$ROOT/tokenledger/hub/api/fleet_debug_ticket.go" ]; then
            off=1; chk GAP C2 "$DEBUG_OFF_MSG"
          elif grep -q 'viewer token' "$tmp/ticket"; then chk FAIL C2 "POST /v1/fleet/debug/ticket is not routed — no ticket (#2891)"
          else chk FAIL C2 "POST /v1/fleet/debug/ticket answers 401 — no ticket (#2891)"; fi ;;
@@ -352,7 +352,7 @@ run_check() {
   c=$(hub_code "$tmp/status" -H 'Authorization: FleetDebug drill-check' "$HUB/v1/fleet/debug/drillchk")
   case "$c" in
     401|403|404) if ! grep -q 'viewer token' "$tmp/status"; then chk PASS C4 "GET /v1/fleet/debug/<id> is routed ($c without a good ticket)"
-                 elif [ "$off" = 1 ] && [ -f "$ROOT/tokenledger/internal/api/fleet_debug.go" ]; then chk GAP C4 'GET /v1/fleet/debug/<id> not routed — remote debugging off (see C2)'
+                 elif [ "$off" = 1 ] && [ -f "$ROOT/tokenledger/hub/api/fleet_debug.go" ]; then chk GAP C4 'GET /v1/fleet/debug/<id> not routed — remote debugging off (see C2)'
                  else chk FAIL C4 "GET /v1/fleet/debug/<id> is not routed — no report status (#2893)"; fi ;;
     *) chk FAIL C4 "GET /v1/fleet/debug/<id> answers $c — no report status (#2893)" ;;
   esac

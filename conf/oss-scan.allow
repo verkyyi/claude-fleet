@@ -16,7 +16,7 @@ LICENSE	person	版权人署名（MIT 许可证要求写明版权人）
 plugins/*/.claude-plugin/plugin.json	gh-owner	插件清单的 author 字段：公开发布的署名
 extras/web-chat/ui/dist/assets/*.js	machine	打包产物（#3637）：图标库的 SVG 路径数据 `m5 12`、`m4.9 …` 撞上机器名规则，不是机器名
 extras/web-console/dist/*/assets/*.js	machine	打包产物（#3926）：同一个图标库的 SVG 路径数据 `m5 12`、`m4.9 …`，不是机器名
-**/internal/credvault/kms.go	cloud	阿里云 KMS / STS 自己的公开 API 地址（KMS 适配代码本身；用哪个区域是部署的 CCQUOTA_FLEET_CRED_KMS_REGION）
+**/hub/credvault/kms.go	cloud	阿里云 KMS / STS 自己的公开 API 地址（KMS 适配代码本身；用哪个区域是部署的 CCQUOTA_FLEET_CRED_KMS_REGION）
 deploy/k8s/base/ccquota-pricing.yaml	cloud	阿里云百炼的公开 API 域名：定价表认提供方用，不是我们的地址
 extras/managed-node/render.py	private-ipv4	--egress-* 的默认值是阿里云 ACK 的产品默认网段（kube-dns、pod、service），参数可改
 docs/dev/MANAGED-LINUX.md	private-ipv4	出口守卫一表写的就是 render.py 的 --egress-* 默认值（ACK 产品默认网段），随它改
@@ -46,28 +46,29 @@ bin/fleet-node-supervisor-selftest.py	private-ipv4	测试局域网 / tailnet / �
 bin/fleet-open-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 bin/fleet-peer-cert-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 bin/fleet-peerlink-selftest.sh	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/cmd/ccquota/hub_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/cmd/ccquota/tls_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/cmd/ccquota/hub_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/cmd/ccquota/tls_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 tokenledge?/agent/node_entry_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 tokenledge?/agent/node_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_certs_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_debug_ticket_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_entry_reach_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_home_login_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_maintenance_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/fleet_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/hub_users_api_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
-tokenledge?/internal/api/node_route_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_certs_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_debug_ticket_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_entry_reach_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_home_login_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_maintenance_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/fleet_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/e2e/fleet_routes_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/hub_users_api_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
+tokenledge?/hub/api/node_route_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 tokenledge?/shared/credproxy/credproxy_test.go	private-ipv4	测试局域网 / tailnet / 入口地址的判定，要的就是私网地址（都是编的）
 extras/gh-relay/README.md	private-ipv4	Lightsail VPC 的默认解析地址（AWS 定的，每台实例都一样）
 tokenledge?/README.md	private-ipv4	配置写法示例里的局域网地址（编的）
 # C8 (#3578): a vendor's public address, not our cloud
-tokenledge?/internal/store/sources_test.go	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：测供应商归类，不是我们的云
+tokenledge?/hub/store/sources_test.go	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：测供应商归类，不是我们的云
 tokenledge?/docs/superpowers/plans/2026-09-12-provider-dimension.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
 tokenledge?/docs/superpowers/plans/2026-09-13-tokenledger-ui.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
 tokenledge?/docs/superpowers/specs/2026-09-12-tokenledger-provider-and-reorientation-design.md	cloud	阿里云百炼的公开接口域名 dashscope.aliyuncs.com：供应商归类的设计与计划，不是我们的云
 tokenledge?/README.md	cloud	阿里云 KMS 接入点的写法（区域已是占位 region-a）
 deploy/k8s/RUNBOOK.md	cloud	阿里云 ACK 自带的系统镜像地址（供应商的仓库，区域已是占位）
 # C8 (#3578): pinned to a value the code still hard-codes — goes with C7's change
-tokenledge?/internal/api/meter_test.go	corp-domain	测 meter.go 写死的放行来源；C7 把它改成配置项时一起换
+tokenledge?/hub/api/meter_test.go	corp-domain	测 meter.go 写死的放行来源；C7 把它改成配置项时一起换
 site/strings.en.json	corp-domain	官网首屏真实案例写公司英文名 24haowan，发起人同意公开（#3593）

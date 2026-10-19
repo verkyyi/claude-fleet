@@ -28,7 +28,7 @@ case "$wf" in
     globs='tokenledger/* extras/web-console/* .github/workflows/task-acceptance.yml' ;;
   client-e2e)
     # the installer fetches every file the client manifest lists
-    among='client-e2e.sh newcomer-e2e.sh nogh-e2e-selftest.sh fleet-client-pack.sh ../tokenledger/internal/api/fleetclient/manifest'
+    among='client-e2e.sh newcomer-e2e.sh nogh-e2e-selftest.sh fleet-client-pack.sh ../tokenledger/hub/api/fleetclient/manifest'
     globs='tokenledger/* .github/workflows/client-e2e.yml' ;;
   fleet-hub-mcp)
     # run-selftests.sh fleet-hub 'fleet-hub-[0-9]*', with the MCP SDK installed

@@ -129,7 +129,7 @@ grep -q '/\*{{fleet_theme}}\*/' "$REPO/site/template.html" && ok "C the website'
 grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-chat/ui/src/theme.css" && ok "C the web chat imports the package" \
   || bad "C extras/web-chat/ui/src/theme.css does not import extras/fleet-theme/theme.css"
 grep -q 'THEME="$REPO/extras/fleet-theme"' "$REPO/bin/web-console-pack.sh" \
-  && grep -q 'themePrefix + `theme.css' "$REPO/tokenledger/internal/api/entry_pages.go" \
+  && grep -q 'themePrefix + `theme.css' "$REPO/tokenledger/hub/api/entry_pages.go" \
   && ok "C the way-in pages link the theme web-console-pack.sh packs" \
   || bad "C the way-in pages (entry_pages.go) do not take extras/fleet-theme through web-console-pack.sh"
 grep -q '@import "../../../fleet-theme/theme.css"' "$REPO/extras/web-console/src/shared/index.css" && ok "C the console imports the package (#3926)" \

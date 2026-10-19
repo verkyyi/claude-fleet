@@ -1,6 +1,6 @@
 # the build reads only these (context = the repo root)
 *
 !tokenledger/
-tokenledger/web/node_modules
+tokenledger/hub/web/node_modules
 !extras/ci-runner/actions.txt
 !bin/fleet-ci-job-gate.sh

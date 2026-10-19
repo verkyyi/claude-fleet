@@ -9,7 +9,7 @@
 # compute_region alert, fleet.compute_auto=on opens an ok one, --force is
 # audited — is tokenledger's: TestComputeRegionClosesAndAlerts,
 # TestComputeAutoOpensOnlyByPolicy, TestComputeUnreachableAndForce,
-# TestDecideCompute (internal/api/fleet_compute_probe_test.go).
+# TestDecideCompute (hub/api/fleet_compute_probe_test.go).
 #
 # What it pins:
 #   A. ok          US + both APIs answer 401 → verdict ok, exit 0, the JSON's

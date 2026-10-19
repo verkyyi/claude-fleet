@@ -10,13 +10,14 @@ name: tokenledger
 #     neither selftests*.yml path filter lists it, and run-selftests.sh
 #     --changed ignores files outside the shipped shell trees
 #     (bin/tokenledger-isolation-selftest.sh pins both directions).
-#   - every step runs with working-directory tokenledger/, which holds three Go
-#     modules (EPIC #4810): the root (github.com/verkyyi/claude-fleet/tokenledger),
-#     shared/ (…/shared — what the hub and the node both build in, #4811) and
-#     agent/ (…/agent — the node, #4812), joined by the go.mods' replaces.
+#   - tokenledger/ holds four Go modules (EPIC #4810), each tested whole here
+#     (which change runs which is C5's, claude-fleet#4815): hub/ (…/hub — the
+#     hub, #4814), agent/ (…/agent — the node, #4812), shared/ (…/shared — what
+#     both build in, #4811) and e2e/ (…/e2e — the联调 tests: a real node against
+#     a real hub, through hub/apitest, #4814), joined by the go.mods' replaces.
 #     GOWORK=off: each module must build on its own; go.work is for a person's
-#     editor. `go list ./...` from tokenledger/ stops at shared/ and agent/, so every step
-#     that walks packages runs once per module. No go.mod at the repo root.
+#     editor. No go.mod at tokenledger/ or the repo root: every step that walks
+#     packages runs in its module's directory.
 #   - no `push` run (issue #4663; a branch push only duplicated its PR's run):
 #     its PR ran this on the change already, and the release train builds the
 #     hub from the merged commit anyway.
@@ -38,19 +39,20 @@ env:
   GOWORK: 'off'
 
 jobs:
-  # Sharded like the Postgres leg below (claude-fleet#4067): internal/api ran
+  # Sharded like the Postgres leg below (claude-fleet#4067): hub/api ran
   # ~570-600s under -race on a runner (go test's 10m default timed it out,
   # claude-fleet#3146), then grew past the 20m cap on a slow one (1200s on
-  # dd2107b2). `rest` runs gofmt + vet + every package but internal/api; each
+  # dd2107b2). `rest` runs gofmt + vet + every hub package but hub/api; each
   # `api-K` runs every API_SHARDS-th test of `go test -list` (sorted,
   # round-robin, so the union is the whole package by construction). Adding a
-  # shard = one more `api-K` in `part` AND API_SHARDS raised to match.
+  # shard = one more `api-K` in `part` AND API_SHARDS raised to match. `shared`,
+  # `agent` and `e2e` are the other three modules, each whole.
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        part: [rest, api-1, api-2, api-3]
+        part: [rest, api-1, api-2, api-3, shared, agent, e2e]
     env:
       API_SHARDS: 3
     steps:
@@ -60,18 +62,20 @@ jobs:
           go-version: '1.25'
           cache: true
           cache-dependency-path: |
-            tokenledger/go.sum
+            tokenledger/hub/go.sum
             tokenledger/shared/go.sum
             tokenledger/agent/go.sum
+            tokenledger/e2e/go.sum
       # The client /install serves lives once, in the repo's bin/ conf/ …
       # (claude-fleet#1803); a build packs it into fleetclient/pack/ first.
       - run: ../bin/fleet-client-pack.sh
       - if: matrix.part == 'rest'
         run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
       - if: matrix.part == 'rest'
-        run: go vet ./... && (cd shared && go vet ./...) && (cd agent && go vet ./...)
+        run: for m in hub shared agent e2e; do (cd "$m" && go vet ./...) || exit 1; done
       # the blocks' dependency direction (EPIC #4810 共同约定 3): shared/ names no
-      # other block, agent/ only shared/, and the node's build has no hub package
+      # other block, agent/ and hub/ only shared/ (hub/ not even in a test), e2e/
+      # any of the three, and neither build has the other's package
       - if: matrix.part == 'rest'
         run: ../bin/tokenledger-modules-selftest.sh
       - name: pick this part's tests
@@ -88,35 +92,32 @@ jobs:
           fi
           case "$PART" in
             rest)
-              pkgs=$(go list ./... | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/internal/api' | paste -sd' ')
+              pkgs=$(cd hub && go list ./... | grep -vx 'github.com/verkyyi/claude-fleet/tokenledger/hub/api' | paste -sd' ')
+              echo "MOD=hub" >> "$GITHUB_ENV"
               echo "PKGS=$pkgs" >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;
             api-*)
               k=${PART#api-}
               [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
-              go test -race -list '.*' ./internal/api/ > /tmp/list.txt
+              (cd hub && go test -race -list '.*' ./api/) > /tmp/list.txt
               grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
-              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) internal/api tests"
+              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) hub/api tests"
               [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
-              echo 'PKGS=./internal/api/' >> "$GITHUB_ENV"
+              echo "MOD=hub" >> "$GITHUB_ENV"
+              echo 'PKGS=./api/' >> "$GITHUB_ENV"
               echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
+            shared|agent|e2e)
+              echo "MOD=$PART" >> "$GITHUB_ENV"
+              echo 'PKGS=./...' >> "$GITHUB_ENV"
+              echo 'RUN=' >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown part $PART"; exit 1 ;;
           esac
       - name: tests (${{ matrix.part }})
-        run: go test -race -timeout 20m ${RUN:+-run "$RUN"} $PKGS
-      - name: tests (shared module)
-        if: matrix.part == 'rest'
-        working-directory: tokenledger/shared
-        run: go test -race -timeout 20m ./...
-      # the node (claude-fleet#4812): its own module, so `go list ./...` above
-      # no longer reaches it
-      - name: tests (agent module)
-        if: matrix.part == 'rest'
-        working-directory: tokenledger/agent
-        run: go test -race -timeout 20m ./...
+        run: cd "$MOD" && go test -race -timeout 20m ${RUN:+-run "$RUN"} $PKGS
 
   # The Postgres leg (claude-fleet#2120, #2121; EPIC #2119): the same
-  # internal/store AND internal/api tests — the api ones are where the fleet
+  # hub/store AND hub/api tests (and since claude-fleet#4814 the联调 tests in
+  # e2e/, which open their stores the same way) — the api ones are where the fleet
   # half (machines, sessions, leases, the vault, device certificates, the
   # audit) is read and written — run against a real Postgres. CCQUOTA_DB_URL is
   # what switches the store over; with it set, each package's TestMain
@@ -128,7 +129,7 @@ jobs:
   # postgres:16 comes from mirror.gcr.io (Google's cache of Docker Hub): an
   # unauthenticated Docker Hub pull hit its rate limit (claude-fleet#2734).
   #
-  # Sharded (claude-fleet#3856): internal/api is ~1000 serial tests, each
+  # Sharded (claude-fleet#3856): hub/api is ~1000 serial tests, each
   # paying ~1.3s for its own schema + migrations on Postgres under -race, so
   # the package alone ran 650-1220s by the runner — past the 20m cap on a slow
   # one. `store` runs store + leader + the migrate timing; each `api-K` runs
@@ -140,7 +141,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [store, api-1, api-2, api-3]
+        part: [store, api-1, api-2, api-3, e2e]
     services:
       postgres:
         image: mirror.gcr.io/library/postgres:16
@@ -159,9 +160,10 @@ jobs:
           go-version: '1.25'
           cache: true
           cache-dependency-path: |
-            tokenledger/go.sum
+            tokenledger/hub/go.sum
             tokenledger/shared/go.sum
             tokenledger/agent/go.sum
+            tokenledger/e2e/go.sum
       - run: ../bin/fleet-client-pack.sh
       - name: pick this part's tests
         env:
@@ -177,25 +179,31 @@ jobs:
           fi
           case "$PART" in
             store)
-              echo 'PKGS=./internal/store/... ./internal/leader/...' >> "$GITHUB_ENV"
+              echo "MOD=hub" >> "$GITHUB_ENV"
+              echo 'PKGS=./store/... ./leader/...' >> "$GITHUB_ENV"
               echo 'RUN=' >> "$GITHUB_ENV" ;;
             api-*)
               k=${PART#api-}
               [ "$k" -ge 1 ] && [ "$k" -le "$API_SHARDS" ] || { echo "::error::$PART is outside API_SHARDS=$API_SHARDS"; exit 1; }
-              go test -race -list '.*' ./internal/api/ > /tmp/list.txt
+              (cd hub && go test -race -list '.*' ./api/) > /tmp/list.txt
               grep -E '^(Test|Example|Fuzz)' /tmp/list.txt | sort | awk -v n="$API_SHARDS" -v k="$k" 'NR % n == k % n' > /tmp/mine.txt
-              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) internal/api tests"
+              echo "$PART: $(wc -l < /tmp/mine.txt) of $(grep -cE '^(Test|Example|Fuzz)' /tmp/list.txt) hub/api tests"
               [ -s /tmp/mine.txt ] || { echo "::error::$PART picked no test"; exit 1; }
-              echo 'PKGS=./internal/api/' >> "$GITHUB_ENV"
+              echo "MOD=hub" >> "$GITHUB_ENV"
+              echo 'PKGS=./api/' >> "$GITHUB_ENV"
               echo "RUN=^($(paste -sd'|' /tmp/mine.txt))\$" >> "$GITHUB_ENV" ;;
+            e2e)
+              echo "MOD=e2e" >> "$GITHUB_ENV"
+              echo 'PKGS=./...' >> "$GITHUB_ENV"
+              echo 'RUN=' >> "$GITHUB_ENV" ;;
             *) echo "::error::unknown part $PART"; exit 1 ;;
           esac
-      # claude-fleet#2640 / #2479: internal/api alone ran 420-600s, then up to
+      # claude-fleet#2640 / #2479: hub/api alone ran 420-600s, then up to
       # 1220s (#3856), against go test's cap — hence the 20m and the shards.
       - name: tests on Postgres (${{ matrix.part }})
         run: |
           set -o pipefail
-          go test -race -count=1 -v -timeout 20m ${RUN:+-run "$RUN"} $PKGS 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
+          cd "$MOD" && go test -race -count=1 -v -timeout 20m ${RUN:+-run "$RUN"} $PKGS 2>&1 | tee /tmp/pg.log | grep -E '^(pg leg|  SKIP-PG|--- FAIL|--- SKIP|ok|FAIL|panic)|leader_test.go:[0-9]+: (handover|job )'
       # claude-fleet#2216: `ccquota db migrate` on a million usage_events
       # rows, without -race, each table's and phase's time in the summary.
       - name: db migrate timing (1M rows)
@@ -204,7 +212,7 @@ jobs:
           CCQUOTA_MOVE_SPEED_ROWS: '1000000'
         run: |
           set -o pipefail
-          go test -count=1 -v -run '^TestMoveDatabaseSpeed$' -timeout 15m ./internal/store/ 2>&1 | tee /tmp/move-speed.log | grep -E 'usage_events|indexes|moved|source:|--- |^(ok|FAIL)'
+          cd hub && go test -count=1 -v -run '^TestMoveDatabaseSpeed$' -timeout 15m ./store/ 2>&1 | tee /tmp/move-speed.log | grep -E 'usage_events|indexes|moved|source:|--- |^(ok|FAIL)'
           { echo '### db migrate timing (1M rows)'; echo; echo '```'; grep -E 'usage_events|indexes|moved|source:' /tmp/move-speed.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       # Keep successful fixture output too: task-contract evidence must name
       # the tested generation/provider/result, not reconstruct a JSON example.
@@ -258,10 +266,12 @@ jobs:
           go-version: '1.25'
           cache: true
           cache-dependency-path: |
-            tokenledger/go.sum
+            tokenledger/hub/go.sum
             tokenledger/shared/go.sum
             tokenledger/agent/go.sum
-      - run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
+      # the hub's build (claude-fleet#4814)
+      - working-directory: tokenledger/hub
+        run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota
       # the node's own build (claude-fleet#4812) — what C3 ships to machines
       - working-directory: tokenledger/agent
         run: CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/ccquota

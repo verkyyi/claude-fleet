@@ -54,7 +54,7 @@ bad() { echo "FAIL $*"; fail=1; }
 SYSPATH=/usr/bin:/bin:/usr/sbin:/sbin
 command -v git >/dev/null 2>&1 || { echo 'fleet-update-selftest SKIP (no git)'; exit 0; }
 GH="$WORK/gh"; mkdir -p "$GH/raw"
-M=tokenledger/internal/api/fleetclient/manifest
+M=tokenledger/hub/api/fleetclient/manifest
 S1=1111111111111111111111111111111111111111
 S2=2222222222222222222222222222222222222222
 S3=3333333333333333333333333333333333333333

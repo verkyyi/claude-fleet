@@ -13,8 +13,8 @@ on:
   pull_request:
     paths:
       - 'bin/fleet-node-join.sh'
-      - 'tokenledger/internal/api/fleet_join.go'
-      - 'tokenledger/internal/store/fleet_join.go'
+      - 'tokenledger/hub/api/fleet_join.go'
+      - 'tokenledger/hub/store/fleet_join.go'
       - '.github/workflows/node-join.yml'
   workflow_dispatch:
 
@@ -44,14 +44,14 @@ jobs:
         with:
           go-version: '1.25'
           cache: true
-          cache-dependency-path: tokenledger/go.sum
-      # the hub from the combined cmd/ccquota, the node it hands out from the
-      # node's own module — as the image does (claude-fleet#4813)
+          cache-dependency-path: tokenledger/hub/go.sum
+      # the hub from its own module (claude-fleet#4814), the node it hands out
+      # from the node's (claude-fleet#4813) — as the image does
       - name: Build ccquota into the hub's dist dir
         working-directory: tokenledger
         run: |
           mkdir -p /srv/dist
-          CGO_ENABLED=0 go build -o /usr/local/bin/ccquota-hub ./cmd/ccquota
+          (cd hub && CGO_ENABLED=0 go build -o /usr/local/bin/ccquota-hub ./cmd/ccquota)
           (cd agent && CGO_ENABLED=0 go build -o /srv/dist/ccquota-linux-amd64 ./cmd/ccquota)
       - name: Start the hub
         run: |

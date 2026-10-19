@@ -12,7 +12,7 @@
 # bundle in the target's move-in dir, and runs the target's REAL adapter
 # (`fleet-control-read.sh movein`) under the target's HOME. So everything this
 # repo ships for a hub move runs for real; the Go hub's half (lease hand-over,
-# bundle access, the journalled write) is tokenledger/internal/api/
+# bundle access, the journalled write) is tokenledger/hub/api/
 # fleet_move_test.go.
 #
 # The fake hub names the target fleet DST_UUID (the source's is its real

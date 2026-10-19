@@ -89,7 +89,7 @@ pod 重建就变。
 - 多副本：人的请求落在不持家登录链路的副本上，整个升级交给持链的那个（`termRelayPeer`）。
 
 BREAK-IT：`term-other-person` · `term-relay-orphan` · `term-view-kills-session`。
-测试：`tokenledger/internal/api/term_relay_test.go`、`agent/term_pty_test.go`、
+测试：`tokenledger/hub/api/term_relay_test.go`、`agent/term_pty_test.go`、
 `shared/control/term_relay_test.go`、`bin/fleet-term-attach-selftest.sh`。
 
 ## 直连优先的共用传输（C5 #4374）
@@ -148,7 +148,7 @@ SNAT 映射允许反向 ICE。严格/对称 NAT 或 UDP 禁止时保留现有 hu
 CI `browser-attachment` 在隔离身份、真实节点适配器和抛弃式 shell 上运行 Chromium：直连、
 跨帧中文、ready 前拒绝输入、直连中断后的无重放回退、浏览器策略禁 UDP 后回退、进程与转发表归零。
 精确命令：在 `extras/browser-transport` 中 `npm ci && npm run check && npx playwright install chromium`；
-在 `tokenledger` 中 `go test -tags browseracceptance -count=1 -v -run '^TestAttachmentChromium$' ./internal/api`。
+在 `tokenledger/e2e`（联调测试的一块，#4814）中 `go test -tags browseracceptance -count=1 -v -run '^TestAttachmentChromium$' .`。
 普通 Go 门另跑 `TestAttachment*` 的授权、重放、租约、候选/帧上限与背压测试。
 
 每次部署另外记录 Mac SSH-only 实际网络、ACK 个人 pod 各自的节点/hub 版本、STUN 配置、

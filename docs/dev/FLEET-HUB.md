@@ -450,7 +450,7 @@ hub without ETags is fetched in full every time, as before.
 is looking and a validator is held, the ask also carries `wait` (seconds, ≤ 25 —
 under an ingress's 60 s idle timeout): `?wait=` on the token's `GET`, a `"wait"`
 field in the certificate's `POST` body. With a matching `If-None-Match` the hub
-holds the request (`fleetSessionsWait`, `tokenledger/internal/api/fleet_longpoll.go`)
+holds the request (`fleetSessionsWait`, `tokenledger/hub/api/fleet_longpoll.go`)
 and answers `200` the moment a recorded heartbeat moves the validator — every
 `recordFleets` fires a broadcast that wakes the held asks, which re-read and go
 back to waiting if *their* answer did not move; a 5 s recheck catches a machine
@@ -512,7 +512,7 @@ is the ONE install line and asks 只看只派 / 承载 and 接 / 不接, everyth
 GitHub's `stable`, answered 「不接」 — issue #1712,
 [LOCAL-AND-HUB.md](LOCAL-AND-HUB.md#一条安装命令issue-1804)).
 `curl -fsSL <hub>/install | sh` fetches `/install/manifest` — the list the hub's
-image embeds (`tokenledger/internal/api/fleetclient/manifest`, the ONE place the
+image embeds (`tokenledger/hub/api/fleetclient/manifest`, the ONE place the
 client's file set is maintained) — then `/install/<path>` for each, SHA-256
 checked, into `~/.claude/fleet/<path>` (the one directory, #1804): `bin/fleet`,
 `fleet-login.py`, `fleet-connect.py`, `fleet-thin.py` and its shared modules.
@@ -546,7 +546,7 @@ cluster access, no token.
 
 **Machines take stable from the hub, signed** (issue #2335, EPIC #2329 C7). Each
 time the hub sees stable move it builds a **node release** for that commit
-(`tokenledger/internal/api/fleet_release.go`, format in `shared/release`): the
+(`tokenledger/hub/api/fleet_release.go`, format in `shared/release`): the
 whole install — what that commit's own `conf/release-tree.list` names (issue
 #2771: the runtime trees, `.claude-plugin/`, `extras/`, the top-level files; never
 `tokenledger/`, `deploy/`, `.github/`; `bin/release-tree-selftest.sh` reds when a
@@ -1819,7 +1819,7 @@ out, else the image's client: one version, no second copy of the table. `GET
 
 ### Debug reports: the bundle, the debugger, the page (claude-fleet#2893)
 
-What the ticket is for (EPIC #2889 C4, `tokenledger/internal/api/fleet_debug.go`):
+What the ticket is for (EPIC #2889 C4, `tokenledger/hub/api/fleet_debug.go`):
 
 - **The upload** — `POST /v1/fleet/debug/bundle` (the ticket's two headers; one
   `upload` use) takes `multipart/form-data`: `bundle` = C1's bundle directory as a
@@ -2105,7 +2105,7 @@ person's session.
 ## A service run's environment: one Job, then nothing (claude-fleet#4005)
 
 With `CCQUOTA_FLEET_SVC_CLUSTER=<cluster>` (the name its fleet-ops link says)
-the hub's runner is `ClusterSvcRunner` (`internal/api/svc_runner.go`); unset,
+the hub's runner is `ClusterSvcRunner` (`hub/api/svc_runner.go`); unset,
 there is none and runs queue and expire as above.
 
 - **One Job per attempt.** `Start` checks the run's `template_digest` is one its
@@ -2147,7 +2147,7 @@ there is none and runs queue and expire as above.
 
 Claude Code runs only where its region allows — the Mac mini — so production
 does not run a service run in the cluster: `CCQUOTA_FLEET_SVC_RUNNER=node` makes
-the hub's runner `NodeSvcRunner` (`internal/api/svc_runner_node.go`; it and
+the hub's runner `NodeSvcRunner` (`hub/api/svc_runner_node.go`; it and
 `CCQUOTA_FLEET_SVC_CLUSTER` together refuse to start — one runner per hub). The
 cluster road stays for a Codex-only service; nothing routes there today.
 

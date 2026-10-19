@@ -2969,7 +2969,7 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #
 # --- The hub's own settings (issue #3748) -----------------------------------
 # What a self-hosting team sets on its hub (入口): its environment, a k8s
-# Secret / ConfigMap, a deploy overlay. Read by tokenledger/cmd/ccquota/hub.go;
+# Secret / ConfigMap, a deploy overlay. Read by tokenledger/hub/cmd/ccquota/hub.go;
 # docs/public/zh/self-host/install.md §1.3 / §1.4 is the reader's table of
 # these same rows. Each row: purpose · 必填 | 可选 | 成对 · 密钥 (= the value is
 # a secret: the env or a Secret only, never a ConfigMap, a commit or a log).

@@ -41,7 +41,7 @@ func TestRepoTreeList(t *testing.T) {
 	for p, want := range map[string]bool{
 		"bin/fleet-lib.sh": true, "conf/release-tree.list": true, ".claude-plugin/plugin.json": true,
 		"extras/iterm2/install.sh": true, "mod/fleet/x": true, "release.json": true, "README.md": true,
-		"tokenledger/go.mod": false, "deploy/k8s/x": false, ".github/workflows/x.yml": false, ".gitignore": false,
+		"tokenledger/hub/go.mod": false, "deploy/k8s/x": false, ".github/workflows/x.yml": false, ".gitignore": false,
 	} {
 		if l.Keep(p) != want {
 			t.Errorf("Keep(%q) = %v", p, !want)

@@ -44,7 +44,7 @@
 # bin/fleet-comment.sh, bin/session-end-hook.sh, bin/tmux-issue-preview.sh,
 # bin/fleet-history.sh, bin/fleet-codex.sh, bin/fleet-pr-verdict.sh,
 # bin/fleet-issue-file.sh, bin/fleet-gh-lib.sh, bin/fleet-lib.sh,
-# tokenledger/internal/api/fleet_join.go (the join line's script path), bin/fleet-node-join.sh.
+# tokenledger/hub/api/fleet_join.go (the join line's script path), bin/fleet-node-join.sh.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -92,7 +92,7 @@ SESS=drill REPO=fleet-drill/blackhole ISSUE=7 PR=8
 # Row 1's join line: the hub's own <hub>JoinScriptPath since #4847 (C8) — a
 # stand-in hub on 127.0.0.1 (NO_PROXY: never through the black hole) serving
 # the script, as /install/<path> does from the client package.
-JOIN_PATH=$(sed -n 's/^const JoinScriptPath = "\(.*\)"$/\1/p' "$ROOT/tokenledger/internal/api/fleet_join.go" 2>/dev/null | head -1)
+JOIN_PATH=$(sed -n 's/^const JoinScriptPath = "\(.*\)"$/\1/p' "$ROOT/tokenledger/hub/api/fleet_join.go" 2>/dev/null | head -1)
 [ -n "$JOIN_PATH" ] || JOIN_PATH=/install/bin/fleet-node-join.sh
 mkdir -p "$WORK/hub$(dirname "$JOIN_PATH")"
 cp "$ROOT/bin/fleet-node-join.sh" "$WORK/hub$JOIN_PATH"

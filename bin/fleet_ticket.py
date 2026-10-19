@@ -4,7 +4,7 @@
 The same verbs as bin/fleet-ticket.sh, for python callers (parking, once the
 decision sheet) — and the ONE place the hub backend lives: every verb on a
 `hub:<owner/name>#<N>` ticket (or a repo whose FLEET_TICKETS=hub) is a REST call
-to the hub's /v1/fleet/tickets (C1, tokenledger/internal/api/fleet_tickets.go).
+to the hub's /v1/fleet/tickets (C1, tokenledger/hub/api/fleet_tickets.go).
 A `gh:` ticket is handed to the shell door unchanged, so GitHub stays behind
 fleet-ticket.sh and its one write throttle.
 

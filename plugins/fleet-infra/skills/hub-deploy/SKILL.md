@@ -30,7 +30,7 @@ gh variable list --repo verkyyi/claude-fleet | grep -E 'HUB_DEPLOY_PAUSED|HUB_DE
 
 - 有一班列车或一次部署正在跑：等它，**不要取消**（sqlite 形态取消一半会让入口停着）。
 - 要回退到的 `<OLD_TAG>`：上一次成功部署的运行摘要里写着「旧 → 新」标签和快照路径。
-- 新旧之间有没有库迁移：摘要里「可能有」一栏，或 `git log <旧>..<新> -- tokenledger/internal/store`。
+- 新旧之间有没有库迁移：摘要里「可能有」一栏，或 `git log <旧>..<新> -- tokenledger/hub/store`。
 
 ## 步骤
 

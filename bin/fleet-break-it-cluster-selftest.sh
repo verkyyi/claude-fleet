@@ -12,28 +12,28 @@
 #
 #   sa-token-in-user-pod     extras/managed-node/render.py + deploy/k8s/fleet-workers
 #   provisioner-off-template bin/fleet-provisioner.py + bin/fleet_cluster_ticket.py
-#   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/internal/api/fleet_spare_pods.go
+#   spare-pod-leaks          bin/fleet-provisioner.py + tokenledger/hub/api/fleet_spare_pods.go
 #   root-in-user-pod         extras/managed-node/render.py + bin/fleet-provisioner.py +
 #                            bin/fleet-node-linux.py pod-etc (issue #3757)
 #   cluster-reading-wrong-pod extras/managed-node/render.py (ops_resources) + deploy/k8s/fleet-workers +
-#                            tokenledger/internal/api/fleet_cluster_reading.go +
+#                            tokenledger/hub/api/fleet_cluster_reading.go +
 #                            tokenledger/agent/node_cluster_reading.go (issue #3734)
-#   cluster-pod-gone-held    tokenledger/internal/api/fleet_cluster_pod_gone.go +
+#   cluster-pod-gone-held    tokenledger/hub/api/fleet_cluster_pod_gone.go +
 #                            tokenledger/agent/node_cluster_reading.go (issue #4887)
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
-#                            tokenledger/internal/api/fleet_jobs.go
+#                            tokenledger/hub/api/fleet_jobs.go
 #   pod-sshd-tty-audit       extras/managed-node/render.py + bin/fleet-provisioner.py +
 #                            deploy/k8s/provisioner/policy.yaml (issue #4167)
 #   mirror-private-unlisted  extras/managed-node/render.py (private_mirrors, --mirror-grant) +
 #                            bin/fleet-provisioner.py + bin/fleet-node-linux.py devnet (issue #4002)
 #   user-pod-image-stale     bin/fleet-provisioner.py (roll-user-pod) + bin/fleet_cluster_ticket.py +
 #                            extras/managed-node/render.py (user_pod_image_patch) + deploy/k8s/provisioner/policy.yaml +
-#                            tokenledger/internal/api/fleet_user_pod_roll.go (issue #4174)
+#                            tokenledger/hub/api/fleet_user_pod_roll.go (issue #4174)
 #   svc-run-sees-keys        extras/managed-node/render.py (svc_run_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet_cluster_ticket.py + bin/fleet-svc-runner.py +
 #                            deploy/k8s/fleet-workers/networkpolicy.yaml + deploy/k8s/egress/run +
-#                            tokenledger/internal/api/svc_runner.go (issue #4005)
+#                            tokenledger/hub/api/svc_runner.go (issue #4005)
 #   pod-disk-unasked         extras/managed-node/render.py (user pod, door) +
 #                            deploy/k8s/{egress,credproxy,caches}/base (issue #4729)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
@@ -391,11 +391,11 @@ PY
   [ "$RC" = 3 ] || { WHY="a bind of 甲's gone pod to 乙: rc $RC: $OUT"; return 1; }
   # the hub half
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestSparePodClaimDestroyRefill"
-  grep -q '^func TestSparePodClaimDestroyRefill(' "$ROOT/tokenledger/internal/api/fleet_spare_pods_test.go" 2>/dev/null \
+  grep -q '^func TestSparePodClaimDestroyRefill(' "$ROOT/tokenledger/hub/api/fleet_spare_pods_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSparePodClaimDestroyRefill is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestSparePodClaimDestroyRefill$' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestSparePodClaimDestroyRefill$' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 甲领 · 删 · 乙领 通过" ;;
@@ -650,11 +650,11 @@ PY
     || { WHY="the runner in an untrusted Job's environment saw something: $out"; return 1; }
   # the hub half
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestJobRunsForTheCallersOwnPod"
-  grep -q '^func TestJobRunsForTheCallersOwnPod(' "$ROOT/tokenledger/internal/api/fleet_jobs_test.go" 2>/dev/null \
+  grep -q '^func TestJobRunsForTheCallersOwnPod(' "$ROOT/tokenledger/hub/api/fleet_jobs_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestJobRunsForTheCallersOwnPod is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestJob' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestJob' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 只为调用者自己的 pod 建 Job、只按它读回" ;;
@@ -712,11 +712,11 @@ sys.exit(1 if bad else 0)
 PY
 ) || { WHY="$out"; return 1; }
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterReadingReachesItsPod"
-  grep -q '^func TestClusterReadingReachesItsPod(' "$ROOT/tokenledger/internal/api/fleet_cluster_reading_test.go" 2>/dev/null \
+  grep -q '^func TestClusterReadingReachesItsPod(' "$ROOT/tokenledger/hub/api/fleet_cluster_reading_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestClusterReadingReachesItsPod is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestClusterReading' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestClusterReading' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 读数只到自己集群的自己的 pod、坏值和冒充的链路一律丢" ;;
@@ -747,16 +747,16 @@ drill_cluster_pod_gone_held() {
     || { WHY="ClusterReadings carries no list of the pods standing"; return 1; }
   grep -q 'userPodsPresent(raw)' "$ROOT/tokenledger/agent/node_cluster_reading.go" \
     || { WHY="fleet-ops no longer lists the user pods standing"; return 1; }
-  grep -q 's.clusterPodsListed(cluster, cr.Present)' "$ROOT/tokenledger/internal/api/fleet_cluster_reading.go" \
+  grep -q 's.clusterPodsListed(cluster, cr.Present)' "$ROOT/tokenledger/hub/api/fleet_cluster_reading.go" \
     || { WHY="the hub no longer acts on fleet-ops' list"; return 1; }
   for t in TestClusterPodGoneRetires TestClusterPodGoneHandMadeAndGaps TestClusterPodGoneOffAddsNothing; do
-    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_cluster_pod_gone_test.go" 2>/dev/null \
+    grep -q "^func $t(" "$ROOT/tokenledger/hub/api/fleet_cluster_pod_gone_test.go" 2>/dev/null \
       || { WHY="the hub half's test $t is gone"; return 1; }
   done
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterPodGone*"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestClusterPodGone' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestClusterPodGone' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 缩到 0 过 30 分钟 → 退役（system、通知操作者）；宽限内恢复、别的集群的、还有心跳的、不是 pod 的机器 → 不动" ;;
@@ -1153,11 +1153,11 @@ PY
   [ -z "$out" ] || { WHY="$out"; return 1; }
   # the hub half
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestSvcRunKeyOpensOnlyItsRun"
-  grep -q '^func TestSvcRunKeyOpensOnlyItsRun(' "$ROOT/tokenledger/internal/api/svc_runner_test.go" 2>/dev/null \
+  grep -q '^func TestSvcRunKeyOpensOnlyItsRun(' "$ROOT/tokenledger/hub/api/svc_runner_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestSvcRunKeyOpensOnlyItsRun is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestSvcRun' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestSvcRun' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 一把钥匙只开自己那次运行、各一次" ;;
@@ -1256,11 +1256,11 @@ PY2
   [ "$RC" = 3 ] && [ ! -s "$d/writes" ] || { WHY="a roll onto an image by tag: rc $RC: $OUT"; return 1; }
   # the hub half
   gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestUserPodRollBatchesSkipsBusyOncePerRelease"
-  grep -q '^func TestUserPodRollBatchesSkipsBusyOncePerRelease(' "$ROOT/tokenledger/internal/api/fleet_user_pod_roll_test.go" 2>/dev/null \
+  grep -q '^func TestUserPodRollBatchesSkipsBusyOncePerRelease(' "$ROOT/tokenledger/hub/api/fleet_user_pod_roll_test.go" 2>/dev/null \
     || { WHY="the hub half's test TestUserPodRollBatchesSkipsBusyOncePerRelease is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run '^TestUserPodRoll' ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestUserPodRoll' ./hub/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 换版后分批滚、忙的等、一个版本只问一次、失败不连坐 通过" ;;
@@ -1300,7 +1300,7 @@ drill_user_pod_opener_group_write() {
   grep -q '^func TestScriptBesideGroupWrite(' "$ROOT/tokenledger/agent/cli/agent_machine_script_test.go" 2>/dev/null \
     || { WHY="the program half's test TestScriptBesideGroupWrite is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestScriptBesideGroupWrite$' github.com/verkyyi/claude-fleet/tokenledger/agent/cli 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the program half's Go test did not run"; return 1 ;;

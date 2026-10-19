@@ -19,12 +19,14 @@ on:
     branches: [master]
     paths:
       - extras/ci-runner/**
-      - tokenledger/go.mod
-      - tokenledger/go.sum
+      - tokenledger/hub/go.mod
+      - tokenledger/hub/go.sum
       - tokenledger/shared/go.mod
       - tokenledger/shared/go.sum
       - tokenledger/agent/go.mod
       - tokenledger/agent/go.sum
+      - tokenledger/e2e/go.mod
+      - tokenledger/e2e/go.sum
       - bin/fleet-ci-job-gate.sh
       - .github/workflows/ci-runner-image.yml
   workflow_dispatch:

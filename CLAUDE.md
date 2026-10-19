@@ -16,7 +16,7 @@ Do not install from memory: read the doc and work from it.
 
 `docs/README.md` is the index. `docs/public/{zh,en}/` is for people who USE fleet
 (split by reader: self-host · hosted · member; `bin/docs-build.sh` renders it to
-`tokenledger/web/docs/` for `/docs/`, issue #3575); `docs/dev/` is for people who build it — design, protocols,
+`tokenledger/hub/web/docs/` for `/docs/`, issue #3575); `docs/dev/` is for people who build it — design, protocols,
 runbooks, BREAK-IT. A public page never links into `docs/dev/`. Research notes and
 one-off drill / audit records do not go in the repo (issue #3576).
 `bin/docs-links-selftest.sh` reads every link on every PR. Settings: every key is
@@ -376,7 +376,7 @@ one-off drill / audit records do not go in the repo (issue #3576).
 - **A person's task is a hub record first, an issue only when it needs one**
   (issue #3325, EPIC #3178). ⌘P's words go out as a task (`fleet-compose.py` →
   `fleet-client-place.sh --task --via ⌘P`): the hub writes `T<n>` in `fleet_tasks`
-  (`internal/store/fleet_tasks.go`) BEFORE it places the start, then fills it from
+  (`hub/store/fleet_tasks.go`) BEFORE it places the start, then fills it from
   the answer (machine · login · worker_id · key · state). A task that chose a repo
   is a `new` start, so its issue hangs on the record; a task with no repo is the
   record alone — a node that says `CapTask` is sent `task: T<n>`, stamps `@task`
@@ -953,7 +953,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   `/var/db/fleet-node/machine.env` + `logins/<login>.env` exist; one control link
   with the machine's token, each login a tenant that says its own hello on it
   (`Message.login`, its own token in `Hello.login_token`) and stays its own
-  endpoint. A login is proven ONLY by `loginEndpoint` (`internal/api/node_machine.go`)
+  endpoint. A login is proven ONLY by `loginEndpoint` (`hub/api/node_machine.go`)
   — anything else is `WRONG_LOGIN`, on both halves — and every command a tenant
   starts goes through `prepCmd` (`agent/runas.go`): dropped to the login,
   refused rather than run as root. `docs/dev/MANAGED-NODE.md` §6; BREAK-IT
@@ -1185,7 +1185,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   which every dir-of-symlinks shadow relies on). **The repo keeps ONE copy of
   each client file** (issue #1803): `//go:embed` cannot reach `..`, so a hub
   build first runs `bin/fleet-client-pack.sh`, which copies the manifest's files
-  into the gitignored `tokenledger/internal/api/fleetclient/pack/` (only
+  into the gitignored `tokenledger/hub/api/fleetclient/pack/` (only
   `pack/doc.go` is committed) — `bin/fleet-client-pack.sh && docker build -t
   ccquota tokenledger/`; the Dockerfile refuses an empty pack, and a plain `go
   build` without one serves no client (`fleetclient.Packed`, 503 on `/install`).

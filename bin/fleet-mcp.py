@@ -449,7 +449,7 @@ def log_path():
 # node's enrollment token (SHA-256 hex — the hub stores exactly that, so it checks
 # the signature without a new secret). Minted per call, only for a call whose
 # credential held, only when the hub is on for this fleet; handed to the script in
-# its environment only. tokenledger/internal/api/fleet_worker_assert.go verifies it.
+# its environment only. tokenledger/hub/api/fleet_worker_assert.go verifies it.
 
 ASSERT_ENV = "FLEET_WORKER_ASSERT"
 ASSERT_PREFIX = "fwa1"

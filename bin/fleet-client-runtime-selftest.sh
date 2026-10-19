@@ -123,12 +123,12 @@ out=$(bash "$RT" --check "$T/short.list" 2>&1); rc=$?
 [ "$rc" = 1 ] && case $out in *'bin/fleet-route.py is installed by the client manifest but on no line'*) true ;; *) false ;; esac \
   && ok "F an installed file off the list → exit 1, named" || no "F rc=$rc $out"
 grep -v '^#' "$BIN/../conf/client-runtime.list" | grep -v "^bin/fleet-node-join.sh${tab}" > "$T/served.list"
-grep -q '^bin/fleet-node-join.sh[[:space:]]\{1,\}served$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" \
+grep -q '^bin/fleet-node-join.sh[[:space:]]\{1,\}served$' "$BIN/../tokenledger/hub/api/fleetclient/manifest" \
   && bash "$RT" --check "$T/served.list" >/dev/null 2>&1 && ok "F a served file off the list is fine" || no "F served: $(bash "$RT" --check "$T/served.list" 2>&1)"
 
 # G — what the installed scripts name (issue #4826, BREAK-IT client-pack-file-missing):
 # a file the package forgot is named; one of NOT_HERE (fleet-hub-sessions.sh) is not
-grep -v '^bin/fleet_iso.py$' "$BIN/../tokenledger/internal/api/fleetclient/manifest" > "$T/forgot.manifest"
+grep -v '^bin/fleet_iso.py$' "$BIN/../tokenledger/hub/api/fleetclient/manifest" > "$T/forgot.manifest"
 grep -v "^bin/fleet_iso.py${tab}" "$BIN/../conf/client-runtime.list" > "$T/forgot.list"
 out=$(bash "$RT" --check "$T/forgot.list" "$T/forgot.manifest" 2>&1); rc=$?
 [ "$rc" = 1 ] && case $out in *'bin/fleet-services.py:'*'names bin/fleet_iso.py, which the client package neither installs nor serves'*) true ;; *) false ;; esac \

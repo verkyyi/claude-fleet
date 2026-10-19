@@ -1,0 +1,244 @@
+package api
+
+import (
+	"strings"
+	"testing"
+	"unicode"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/i18n"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
+)
+
+// Each dashboard Text's English entry must BE the constant it translates, for
+// the same reason the pricing ones must: a copy drifts, and the drift is
+// invisible because every existing test still asserts on the constant.
+func TestDashboardNotes_EnglishIsTheConstant(t *testing.T) {
+	for name, pair := range map[string]struct {
+		text     i18n.Text
+		original string
+	}{
+		"real_spend": {realSpendNote, RealSpendNote},
+		"across":     {acrossNoteText, acrossNote},
+		"disclaimer": {shareDisclaimerText, shareDisclaimer},
+		"live":       {liveNoteText, liveNote},
+		"acct_usage": {accountUsageNote, accountUsageNoteEN},
+	} {
+		if pair.text[i18n.EN] != pair.original {
+			t.Errorf("%s: the English entry has drifted from its constant", name)
+		}
+		zh := pair.text[i18n.ZhCN]
+		if strings.TrimSpace(zh) == "" {
+			t.Errorf("%s: no Chinese text", name)
+		}
+		if zh == pair.original {
+			t.Errorf("%s: the Chinese entry is just the English text", name)
+		}
+	}
+}
+
+// The point of the whole locale parameter: a request that asks for Chinese gets
+// the server's own prose in Chinese. These notes are the ones the page CANNOT
+// translate itself -- they are written where the figures are computed, and the
+// page has no business restating a claim about money it did not make.
+func TestSummary_LocaleTranslatesServerProse(t *testing.T) {
+	h := newHarness(t)
+
+	var en struct {
+		RealSpendNote string `json:"real_spend_note"`
+		PricingNote   string `json:"pricing_note"`
+		Disclaimer    string `json:"disclaimer"`
+	}
+	h.getJSON(t, "/v1/summary?since=1d&account=all", &en)
+	if en.RealSpendNote != RealSpendNote {
+		t.Errorf("default real_spend_note = %q; want the English constant", en.RealSpendNote)
+	}
+
+	var zh struct {
+		RealSpendNote string `json:"real_spend_note"`
+		PricingNote   string `json:"pricing_note"`
+		Disclaimer    string `json:"disclaimer"`
+	}
+	h.getJSON(t, "/v1/summary?since=1d&account=all&locale=zh-CN", &zh)
+	if zh.RealSpendNote == en.RealSpendNote {
+		t.Error("real_spend_note was not translated")
+	}
+	if zh.PricingNote == en.PricingNote {
+		t.Error("pricing_note was not translated")
+	}
+	if zh.Disclaimer == en.Disclaimer {
+		t.Error("disclaimer was not translated")
+	}
+	if !strings.Contains(zh.RealSpendNote, "真实支出") {
+		t.Errorf("real_spend_note does not read as Chinese: %q", zh.RealSpendNote)
+	}
+}
+
+// Per-source provenance travels as a list, and every entry's note must follow
+// the locale while its identifiers do not.
+func TestSummary_LocaleTranslatesEveryProvenanceNote(t *testing.T) {
+	h := newHarness(t)
+	var got struct {
+		Pricing []pricing.SourceProvenance `json:"pricing"`
+	}
+	h.getJSON(t, "/v1/summary?since=1d&account=all&locale=zh-CN", &got)
+	if len(got.Pricing) == 0 {
+		t.Fatal("no provenance in the response")
+	}
+	for _, p := range got.Pricing {
+		if p.Note == pricing.Note(p.Source) {
+			t.Errorf("%s: note was not translated", p.Source)
+		}
+		// The source key is a filter value and a grep target; it never changes.
+		if p.Source != strings.ToLower(p.Source) {
+			t.Errorf("source identifier was rewritten: %q", p.Source)
+		}
+	}
+}
+
+// An unknown locale is answered in English rather than refused: a stale
+// bookmark or a typo in a hand-built URL should still render a page.
+func TestSummary_UnknownLocaleIsEnglish(t *testing.T) {
+	h := newHarness(t)
+	var got struct {
+		RealSpendNote string `json:"real_spend_note"`
+	}
+	h.getJSON(t, "/v1/summary?since=1d&account=all&locale=klingon", &got)
+	if got.RealSpendNote != RealSpendNote {
+		t.Errorf("unknown locale = %q; want the English text", got.RealSpendNote)
+	}
+}
+
+// scope_note answers "what does this total span". It only exists for an
+// all-accounts scope, and that must stay true in both languages -- a caveat
+// about cross-subscription totals on a single-subscription request is noise.
+func TestScopeNote_OnlyWhenItSpansSubscriptions(t *testing.T) {
+	if scopeNoteIn(store.AllAccounts, i18n.ZhCN) == "" {
+		t.Error("all-accounts scope has no note in Chinese")
+	}
+	if got := scopeNoteIn("some-account-uuid", i18n.ZhCN); got != "" {
+		t.Errorf("single-account scope got a note: %q", got)
+	}
+	if scopeNoteIn(store.AllAccounts, i18n.ZhCN) == scopeNoteIn(store.AllAccounts, i18n.EN) {
+		t.Error("scope_note was not translated")
+	}
+}
+
+// The two prose surfaces the dashboard prints verbatim from the server but
+// which are chosen at RUNTIME rather than being one constant: why a quota
+// reading is missing, and why a request has no price. Both were English on a
+// Chinese page until they carried a code instead of a sentence.
+func TestLimitsReasonIn_EveryCodeIsTranslated(t *testing.T) {
+	for code := range limitsReasons {
+		en, zh := LimitsReasonIn(code, i18n.EN), LimitsReasonIn(code, i18n.ZhCN)
+		if en == "" || zh == "" {
+			t.Errorf("%s: empty (en=%q zh=%q)", code, en, zh)
+		}
+		if en == zh {
+			t.Errorf("%s: not translated", code)
+		}
+	}
+	// An unknown code explains nothing rather than inventing an explanation:
+	// the card falls back to its own plain "no reading available", which is
+	// true, where a guessed sentence would not be.
+	if got := LimitsReasonIn("no_such_code", i18n.ZhCN); got != "" {
+		t.Errorf("unknown code invented a reason: %q", got)
+	}
+}
+
+// A reason is a whole sentence, in the punctuation of its own language.
+//
+// The dashboard prints these straight after a bold title that has already
+// ended in a full stop, so a lowercase fragment reads as a sentence that fell
+// over ("Account-wide limits unavailable. no endpoint on this subscription…"),
+// and a caller that finishes the fragment itself can only do it in ONE
+// language — which is how an ASCII "." ended up inside a Chinese sentence
+// (#107). Punctuation belongs to whoever writes the sentence.
+func TestLimitsReasonIn_EveryReasonIsAWholeSentence(t *testing.T) {
+	for code := range limitsReasons {
+		en := LimitsReasonIn(code, i18n.EN)
+		if !strings.HasSuffix(en, ".") {
+			t.Errorf("%s: en does not end in a full stop: %q", code, en)
+		}
+		if r := []rune(en)[0]; r != unicode.ToUpper(r) {
+			t.Errorf("%s: en starts mid-sentence: %q", code, en)
+		}
+
+		zh := LimitsReasonIn(code, i18n.ZhCN)
+		if !strings.HasSuffix(zh, "。") {
+			t.Errorf("%s: zh-CN does not end in a full-width full stop: %q", code, zh)
+		}
+		// The half-width dot is the actual #107 defect, not a style note: it is
+		// a Latin mark sitting inside a Chinese sentence.
+		if strings.ContainsAny(zh, ".;!?") {
+			t.Errorf("%s: zh-CN carries half-width punctuation: %q", code, zh)
+		}
+	}
+}
+
+// An endpoint's own reported reason is relayed, never rewritten: an agent said
+// those words. Only the frame around them — and the full stop that closes the
+// frame — is this hub's wording.
+func TestEndpointReports_RelaysTheAgentsOwnWords(t *testing.T) {
+	const said = "HTTP 429 from the account endpoint"
+	for _, loc := range []string{i18n.EN, i18n.ZhCN} {
+		got := endpointReports("mac-studio", said, loc)
+		if !strings.Contains(got, said) {
+			t.Errorf("%s: the endpoint's words were rewritten: %q", loc, got)
+		}
+		if !strings.Contains(got, "mac-studio") {
+			t.Errorf("%s: the endpoint name was lost: %q", loc, got)
+		}
+	}
+	if endpointReports("m", said, i18n.EN) == endpointReports("m", said, i18n.ZhCN) {
+		t.Error("the frame was not translated")
+	}
+}
+
+// The frame is a sentence too, and an endpoint hands over a fragment as often
+// as not. The hub closes its OWN sentence -- in the reader's punctuation -- and
+// never touches an endpoint that already closed one.
+func TestEndpointReports_FinishesTheSentenceItStarted(t *testing.T) {
+	if got := endpointReports("mac-studio", "HTTP 429 from the account endpoint", i18n.EN); !strings.HasSuffix(got, ".") {
+		t.Errorf("en: unfinished sentence: %q", got)
+	}
+	if got := endpointReports("mac-studio", "凭证已过期", i18n.ZhCN); !strings.HasSuffix(got, "。") {
+		t.Errorf("zh-CN: unfinished sentence: %q", got)
+	}
+	// Already punctuated: relayed as-is, never doubled.
+	for _, tc := range []struct{ said, loc, want string }{
+		{"HTTP 429.", i18n.EN, "mac-studio reports: HTTP 429."},
+		{"凭证已过期。", i18n.ZhCN, "mac-studio 报告：凭证已过期。"},
+		{"is it throttled?", i18n.EN, "mac-studio reports: is it throttled?"},
+	} {
+		if got := endpointReports("mac-studio", tc.said, tc.loc); got != tc.want {
+			t.Errorf("endpointReports(%q, %s) = %q; want %q", tc.said, tc.loc, got, tc.want)
+		}
+	}
+}
+
+func TestUnpricedReasons_TranslatedWithoutTouchingIdentifiers(t *testing.T) {
+	rows := []store.UnpricedReason{
+		{Source: "codex", Model: "gpt-5", Code: store.UnpricedServiceTier, Events: 3},
+		{Source: "claude", Model: "claude-opus-5", Code: store.UnpricedPruned, Events: 7},
+	}
+	got := localizedReasons(rows, i18n.ZhCN)
+	if len(got) != len(rows) {
+		t.Fatalf("got %d rows; want %d", len(got), len(rows))
+	}
+	for i, r := range got {
+		if r.Source != rows[i].Source || r.Model != rows[i].Model || r.Events != rows[i].Events {
+			t.Errorf("row %d: identifiers or counts changed: %+v", i, r)
+		}
+		if r.Reason == store.UnpricedReasonIn(r.Code, i18n.EN) {
+			t.Errorf("row %d: reason was not translated", i)
+		}
+		if r.Reason == "" {
+			t.Errorf("row %d: blank reason in a table that exists to explain an absence", i)
+		}
+	}
+	// The input is not mutated: the caller may still hold the English rows.
+	if rows[0].Reason != "" {
+		t.Error("localizedReasons wrote through to its input")
+	}
+}

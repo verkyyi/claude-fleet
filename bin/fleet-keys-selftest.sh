@@ -432,7 +432,7 @@ grep -q -- '--page' "$KEYS" && fail "11: fleet-keys.sh still has its --page"
 SH="$(FLEET_UI_LANG=zh NO_COLOR=1 bash "$KEYS" --plain)"
 grep -Eq '^  prefix (k|\?) ' <<< "$SH" && fail "11: the sheet still lists prefix k / prefix ?: $(grep -E '^  prefix (k|\?) ' <<< "$SH")"
 grep -Eq '⌘J|⌘/' <<< "$SH" && fail "11: the sheet still names ⌘J / ⌘/"
-grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/internal/api/fleetclient/manifest" && fail "11: the client still ships fleet-keys.sh"
+grep -qx 'bin/fleet-keys.sh' "$ROOT/tokenledger/hub/api/fleetclient/manifest" && fail "11: the client still ships fleet-keys.sh"
 
 # 9 — the recovery page's keys (issue #1862)
 page_out=$(python3 - "$BIN" <<'PY'

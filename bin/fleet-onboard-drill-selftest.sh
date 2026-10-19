@@ -372,7 +372,7 @@ r=$(printf '313\n858\n100\n' | bash "$DRILL" --eta-rises)
 # the wait outlasts the hub's own give-up: never again a cap shorter than a
 # real create (360 s judged a login still opening a FAIL, #2908)
 GIVEUP=$(sed -n 's/^[[:space:]]*openingGiveUp[[:space:]]*=[[:space:]]*\([0-9]*\) \* time\.Minute.*/\1/p' \
-           "$(dirname "$DRILL")/../tokenledger/internal/api/fleet_opening.go")
+           "$(dirname "$DRILL")/../tokenledger/hub/api/fleet_opening.go")
 CAP=$(sed -n 's/^OPENING_CAP=\${FLEET_DRILL_OPENING_SECS:-\([0-9]*\)}$/\1/p' "$DRILL")
 if [ -n "$GIVEUP" ] && [ -n "$CAP" ] && [ "$CAP" -gt $((GIVEUP * 60)) ]; then
   ok "opening: the drill waits ${CAP}s, past the hub's ${GIVEUP} min give-up"

@@ -194,7 +194,7 @@ NO_DOOR = 4
 CLIENT_PATH = "/v1/fleet/client"
 CLIENT_NAMESPACE = "fleet-client@claude-fleet"
 # The hub's words for a certificate it will never accept, however often renewed
-# (tokenledger/internal/api/ssh_relay.go verifySSHRelayCert).
+# (tokenledger/hub/api/ssh_relay.go verifySSHRelayCert).
 RESCAN_REFUSALS = ("names no one this hub knows", "not signed by this hub")
 # Exit code: this device has to scan again.
 NEEDS_SCAN = 3

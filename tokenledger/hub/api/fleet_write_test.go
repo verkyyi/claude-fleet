@@ -1,0 +1,624 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+)
+
+// The Fleet Hub write half (claude-fleet#1410).
+
+const writeRepo = "verkyyi/claude-fleet"
+
+// writeNode is a hand-driven node that takes writes: it records every submit
+// envelope and answers it with answer(envelope), the way fleet-control.py's
+// submit answers — the node's own operation record.
+type writeNode struct {
+	t      *testing.T
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	writes []map[string]any
+	// pushed is every other hub message it heard (claude-fleet#4730).
+	pushed []control.Message
+	answer func(env map[string]any) (any, *control.Error)
+	// opGet answers operation_get (claude-fleet#1586); nil = the operation
+	// as submit journalled it, still accepted.
+	opGet func(env map[string]any) (any, *control.Error)
+}
+
+func connectWriteNode(t *testing.T, h *harness, label string) *writeNode {
+	t.Helper()
+	return connectWriteNodeTok(t, h, h.enroll(t, label))
+}
+
+// connectWriteNodeTok dials with an existing enrollment: the same endpoint
+// coming back.
+func connectWriteNodeTok(t *testing.T, h *harness, token string) *writeNode {
+	t.Helper()
+	return connectWriteNodeCaps(t, h, token, control.CapRead, control.CapWrite)
+}
+
+// connectWriteNodeCaps is connectWriteNodeTok saying the given capabilities.
+func connectWriteNodeCaps(t *testing.T, h *harness, token string, caps ...string) *writeNode {
+	t.Helper()
+	c := dialNode(t, h, token)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m, _ := control.New(control.TypeHello, control.Hello{HeartbeatMS: 60000, AgentVersion: "test",
+		Capabilities: caps})
+	if err := wsjson.Write(ctx, c, m); err != nil {
+		t.Fatal(err)
+	}
+	var reply control.Message
+	if err := wsjson.Read(ctx, c, &reply); err != nil || reply.Type != control.TypeWelcome {
+		t.Fatalf("hello: %v %+v", err, reply)
+	}
+	n := &writeNode{t: t, conn: c, answer: accepted}
+	go n.serve()
+	return n
+}
+
+// accepted is fleet-control.py's submit answer: the operation, journalled.
+func accepted(env map[string]any) (any, *control.Error) {
+	return map[string]any{"operation_id": env["operation_id"], "fleet_id": env["fleet_id"],
+		"action": env["action"], "status": "accepted", "result": nil}, nil
+}
+
+func (n *writeNode) serve() {
+	for {
+		var m control.Message
+		if err := wsjson.Read(context.Background(), n.conn, &m); err != nil {
+			return
+		}
+		var req control.Request
+		_ = json.Unmarshal(m.Payload, &req)
+		var env map[string]any
+		_ = json.Unmarshal(req.Params, &env)
+		var res any
+		var e *control.Error
+		switch {
+		case m.Type == control.TypeRequest && req.Method == "operation_get":
+			res, e = n.operation(asString(env["operation_id"]))
+		case m.Type != control.TypeWrite:
+			n.mu.Lock()
+			n.pushed = append(n.pushed, m)
+			n.mu.Unlock()
+			continue
+		default:
+			n.mu.Lock()
+			n.writes = append(n.writes, env)
+			answer := n.answer
+			n.mu.Unlock()
+			res, e = answer(env)
+		}
+		if res == nil && e == nil {
+			continue // say nothing: the hub must time out to unknown
+		}
+		var out control.Message
+		if e != nil {
+			out = control.Message{Type: control.TypeError, Proto: control.Proto, Error: e}
+		} else {
+			raw, _ := json.Marshal(res)
+			out, _ = control.New(control.TypeResult, control.Result{Result: raw})
+		}
+		out.OpID = m.OpID
+		_ = wsjson.Write(context.Background(), n.conn, out)
+	}
+}
+
+// authorityPushes is every TypeRepoAuthority it heard, in order.
+func (n *writeNode) authorityPushes() []control.RepoAuthority {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := []control.RepoAuthority{}
+	for _, m := range n.pushed {
+		var r control.RepoAuthority
+		if m.Type == control.TypeRepoAuthority && json.Unmarshal(m.Payload, &r) == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// operation is the node's record of one operation it was sent.
+func (n *writeNode) operation(id string) (any, *control.Error) {
+	n.mu.Lock()
+	get := n.opGet
+	var env map[string]any
+	for _, w := range n.writes {
+		if w["operation_id"] == id {
+			env = w
+		}
+	}
+	n.mu.Unlock()
+	switch {
+	case env == nil:
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
+	case get != nil:
+		return get(env)
+	}
+	return accepted(env)
+}
+
+func (n *writeNode) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.writes)
+}
+
+func (n *writeNode) setOpGet(f func(map[string]any) (any, *control.Error)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.opGet = f
+}
+
+func (n *writeNode) setAnswer(f func(map[string]any) (any, *control.Error)) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.answer = f
+}
+
+// beatLoad reports a login with a given load, memory and session count.
+func (n *writeNode) beatLoad(host, user, machine string, load1 float64, sessions int, fleets ...control.Fleet) {
+	beat(n.t, n.conn, control.Proto, control.Heartbeat{Hostname: host, OSUser: user, MachineID: machine,
+		Load1: load1, NCPU: 10, MemFreeBytes: 8 << 30, MemTotalBytes: 16 << 30, Sessions: sessions,
+		Fleets: fleets, ObservedAt: time.Now()})
+}
+
+// waitLoad blocks until the hub has stored host's beat at load1. Each node is
+// its own connection, so waiting on one machine's beat says nothing about
+// another's: a test that re-beats two machines and then places waits on both
+// (claude-fleet#2168 — PickNode read mac-d's load from twoNodes).
+func waitLoad(t *testing.T, h *harness, host string, load1 float64) {
+	t.Helper()
+	waitFor(t, 3*time.Second, host+" reports load "+strconv.FormatFloat(load1, 'f', -1, 64), func() bool {
+		hb, _, _ := h.srv.nodeStatusOf("ep_"+host, time.Now())
+		return hb.Load1 == load1
+	})
+}
+
+func postFleet(t *testing.T, h *harness, tool string, args map[string]any, wantStatus int) map[string]any {
+	t.Helper()
+	body, _ := json.Marshal(args)
+	req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/"+tool, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("%s: HTTP %d (%v), want %d", tool, resp.StatusCode, out, wantStatus)
+	}
+	return out
+}
+
+// twoNodes is the issue's rig: mac-d and mac-c, the same repo on each, both
+// connected and accepting writes. mac-d is busy (1.0 load per core).
+func twoNodes(t *testing.T) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
+	return twoNodesCaps(t)
+}
+
+func twoNodesCaps(t *testing.T, extra ...string) (*harness, *writeNode, *writeNode, control.Fleet, control.Fleet) {
+	t.Helper()
+	h := newFleetHarness(t)
+	caps := append([]string{control.CapRead, control.CapWrite}, extra...)
+	macD := connectWriteNodeCaps(t, h, h.enroll(t, "mac-d"), caps...)
+	macC := connectWriteNodeCaps(t, h, h.enroll(t, "mac-c"), caps...)
+	f5 := fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1)
+	f4 := fakeFleet(t, machineB, "fleet-mac-c", writeRepo, "/u/frank/claude-fleet", 2)
+	macD.beatLoad("mac-d", "frank", machineA, 10, 3, f5)
+	macC.beatLoad("mac-c", "frank", machineB, 1, 1, f4)
+	waitFor(t, 3*time.Second, "both fleets registered", func() bool {
+		return len(getFleet(t, h, "/v1/fleet/fleet_list", 200)["fleets"].([]any)) == 2
+	})
+	return h, macD, macC, f5, f4
+}
+
+// The issue's acceptance check: with mac-d under load, worker_start(node=auto)
+// lands on mac-c, says why, and a repeat of the same request runs once.
+func TestFleetWriteAutoPlacesOnIdleNode(t *testing.T) {
+	h, macD, macC, _, f4 := twoNodes(t)
+	args := map[string]any{"issue": 7, "repo": writeRepo, "idempotency_key": "start-7"}
+	op := postFleet(t, h, "worker_start", args, 200)
+	if op["fleet_id"] != f4.FleetID || op["status"] != "accepted" {
+		t.Fatalf("worker_start(node=auto) = %v; want accepted on mac-c's fleet %s", op, f4.FleetID)
+	}
+	pl, _ := op["placement"].(map[string]any)
+	if pl["machine"] != "mac-c" || !strings.Contains(pl["reason"].(string), "mac-d excluded: load 1.00/core") {
+		t.Fatalf("placement = %v; want mac-c with mac-d's exclusion in the reason", pl)
+	}
+	if macD.count() != 0 || macC.count() != 1 {
+		t.Fatalf("writes sent: mac-d=%d mac-c=%d; want 0 and 1", macD.count(), macC.count())
+	}
+	env := macC.writes[0]
+	if env["action"] != "worker_start" || env["actor"] != "operator" || env["operation_id"] != op["operation_id"] {
+		t.Fatalf("envelope = %v", env)
+	}
+	// fleet-control.py's validate_write takes issue/agent/repo and nothing
+	// else: node and fleet_id never reach it.
+	params := env["params"].(map[string]any)
+	if _, ok := params["node"]; ok || params["issue"].(float64) != 7 || params["repo"] != writeRepo {
+		t.Fatalf("params = %v", params)
+	}
+
+	// The same request again: the same operation, no second write.
+	again := postFleet(t, h, "worker_start", args, 200)
+	if again["operation_id"] != op["operation_id"] || macC.count() != 1 {
+		t.Fatalf("repeat returned %v (mac-c writes %d); want the first operation and no second write", again["operation_id"], macC.count())
+	}
+	// The same key for something else is refused.
+	other := map[string]any{"issue": 8, "repo": writeRepo, "idempotency_key": "start-7"}
+	if e := postFleet(t, h, "worker_start", other, 409)["error"].(map[string]any); e["code"] != "IDEMPOTENCY_CONFLICT" {
+		t.Fatalf("reused key: %v", e)
+	}
+
+	// The journal keeps the placement for operation_get.
+	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+op["operation_id"].(string), 200)
+	if got["placement"].(map[string]any)["machine"] != "mac-c" {
+		t.Fatalf("operation_get lost the placement: %v", got)
+	}
+}
+
+// Concurrent calls with one key: exactly one reaches a node.
+func TestFleetWriteIdempotentUnderRace(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	var wg sync.WaitGroup
+	ids := make([]string, 8)
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			out := postFleet(t, h, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID,
+				"idempotency_key": "race"}, 200)
+			ids[i], _ = out["operation_id"].(string)
+		}(i)
+	}
+	wg.Wait()
+	for _, id := range ids {
+		if id != ids[0] {
+			t.Fatalf("operation ids differ: %v", ids)
+		}
+	}
+	if macC.count() != 1 {
+		t.Fatalf("mac-c received %d writes; want exactly 1", macC.count())
+	}
+}
+
+// A node that is not connected is refused at once: nothing journalled,
+// nothing queued, nothing sent when it comes back.
+func TestFleetWriteOfflineFailsWithoutQueueing(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	macC.conn.Close(websocket.StatusNormalClosure, "gone")
+	waitFor(t, 3*time.Second, "mac-c disconnected", func() bool { return h.srv.nodes.get("ep_mac-c") == nil })
+
+	start := map[string]any{"issue": 11, "fleet_id": f4.FleetID, "idempotency_key": "off-1"}
+	if e := postFleet(t, h, "worker_start", start, 503)["error"].(map[string]any); e["code"] != "UNAVAILABLE" {
+		t.Fatalf("start on a disconnected node: %v", e)
+	}
+	if _, err := h.srv.Store.FleetOperationByIdem("operator", "off-1"); err == nil {
+		t.Fatal("a refused write was journalled; the key must stay free for a retry")
+	}
+	// Placed: mac-c is gone and mac-d is busy — no machine qualifies.
+	auto := map[string]any{"issue": 11, "repo": writeRepo, "idempotency_key": "off-2"}
+	e := postFleet(t, h, "worker_start", auto, 503)["error"].(map[string]any)
+	if e["code"] != "NO_ELIGIBLE_NODE" || !strings.Contains(e["message"].(string), "mac-d: load") {
+		t.Fatalf("placed start with no eligible node: %v", e)
+	}
+
+	// mac-c returns: nothing was waiting for it.
+	back := connectWriteNodeTok(t, h, h.tokens["mac-c"])
+	waitFor(t, 3*time.Second, "mac-c reconnected", func() bool { return h.srv.nodes.get("ep_mac-c") != nil })
+	time.Sleep(200 * time.Millisecond)
+	if macC.count() != 0 || back.count() != 0 {
+		t.Fatalf("a refused write was delivered later (mac-c=%d, reconnect=%d)", macC.count(), back.count())
+	}
+}
+
+// What the node says decides the status: a structured refusal is failed, an
+// unconfirmed outcome or silence is unknown — and unknown is never re-sent.
+func TestFleetWriteOutcomes(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	old := fleetWriteWait
+	fleetWriteWait = 300 * time.Millisecond
+	t.Cleanup(func() { fleetWriteWait = old })
+	start := func(key string) map[string]any {
+		return postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": key}, 200)
+	}
+
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Fleet is not configured"}
+	})
+	if op := start("o-refused"); op["status"] != "failed" {
+		t.Fatalf("a node refusal = %v; want failed", op)
+	}
+	macC.setAnswer(func(map[string]any) (any, *control.Error) {
+		return nil, &control.Error{Code: control.CodeUnknownOutcome, Message: "controller crashed"}
+	})
+	if op := start("o-crash"); op["status"] != "unknown" {
+		t.Fatalf("an unconfirmed write = %v; want unknown", op)
+	}
+	macC.setAnswer(func(map[string]any) (any, *control.Error) { return nil, nil })
+	op := start("o-silent")
+	if op["status"] != "unknown" {
+		t.Fatalf("a write the node never acknowledged = %v; want unknown", op)
+	}
+	n := macC.count()
+	if again := start("o-silent"); again["operation_id"] != op["operation_id"] || macC.count() != n {
+		t.Fatal("retrying an unknown operation's key re-sent it")
+	}
+}
+
+// The grant: a person needs the tool's scope, and sees only their own logins.
+func TestFleetWriteAuthorization(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	p, err := h.srv.Store.AdoptPrincipal("wx-frank", "frank", "Frank", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.AdoptAccount(p, "mac-c", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	as := func(person string) fleetPrincipal {
+		r, _ := http.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(context.WithValue(withViewer(r.Context(), person), principalKey{}, person))
+		pr, err := h.srv.FleetPrincipal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pr
+	}
+	args := func(key string) map[string]any {
+		return map[string]any{"issue": 13, "fleet_id": f4.FleetID, "idempotency_key": key}
+	}
+
+	h.srv.FleetPersonScopes = []string{"fleet:read"}
+	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "worker_start", args("a1")); errorObject(err)["code"] != "FORBIDDEN" {
+		t.Fatalf("start without worker:start: %v; want FORBIDDEN", err)
+	}
+	// Every person is refused config:write by default, whatever the key.
+	h.srv.FleetPersonScopes = nil
+	cfg := map[string]any{"fleet_id": f4.FleetID, "key": "FLEET_MAX_SESSIONS", "value": 1,
+		"expected_revision": strings.Repeat("a", 64), "idempotency_key": "c1"}
+	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "config_set", cfg); errorObject(err)["code"] != "FORBIDDEN" {
+		t.Fatalf("config_set by a person: %v; want FORBIDDEN", err)
+	}
+	// Not their login: indistinguishable from no such fleet.
+	if _, err := h.srv.SubmitWrite(context.Background(), as("wx-someone"), "worker_start", args("a2")); errorObject(err)["code"] != "NOT_FOUND" {
+		t.Fatalf("start on someone else's fleet: %v; want NOT_FOUND", err)
+	}
+	if macC.count() != 0 {
+		t.Fatalf("a refused call reached the node (%d writes)", macC.count())
+	}
+	// With the default grant, their own login works.
+	op, err := h.srv.SubmitWrite(context.Background(), as("wx-frank"), "worker_start", args("a3"))
+	if err != nil || op["status"] != "accepted" || macC.writes[0]["actor"] != "wx-frank" {
+		t.Fatalf("own start: %v %v", op, err)
+	}
+}
+
+// The per-person cap: at the cap a machine is excluded from placement, and a
+// start named at it is refused.
+func TestFleetWriteNodeCap(t *testing.T) {
+	h, macD, macC, _, f4 := twoNodes(t)
+	// No machine has a default cap (claude-fleet#1994): the operator sets one.
+	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"mac-c", "6", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	macD.beatLoad("mac-d", "frank", machineA, 1, 3, fakeFleet(t, machineA, "fleet-mac-d", writeRepo, "/u/frank/claude-fleet", 1))
+	macC.beatLoad("mac-c", "frank", machineB, 0, 6, f4) // idle, but at mac-c's cap of 6
+	time.Sleep(100 * time.Millisecond)
+
+	op := postFleet(t, h, "worker_start", map[string]any{"issue": 14, "repo": writeRepo, "idempotency_key": "cap-1"}, 200)
+	pl := op["placement"].(map[string]any)
+	if pl["machine"] != "mac-d" || !strings.Contains(pl["reason"].(string), "mac-c excluded: at the per-person cap (6/6") {
+		t.Fatalf("placement = %v; want mac-d, mac-c at its cap", pl)
+	}
+	e := postFleet(t, h, "worker_start", map[string]any{"issue": 15, "fleet_id": f4.FleetID, "idempotency_key": "cap-2"}, 429)
+	if e["error"].(map[string]any)["code"] != "AT_CAPACITY" {
+		t.Fatalf("named start at the cap: %v", e)
+	}
+	// The operator raises it.
+	if err := h.srv.Store.SetFleetSetting(NodeCapPrefix+"mac-c", "8", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 15, "fleet_id": f4.FleetID, "idempotency_key": "cap-3"}, 200)
+}
+
+func TestFleetWriteRefusesGETAndBadArgs(t *testing.T) {
+	h, _, _, _, f4 := twoNodes(t)
+	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/fleet/worker_start?fleet_id="+f4.FleetID, nil)
+	req.Header.Set("Authorization", "Bearer "+viewerToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET worker_start: HTTP %d", resp.StatusCode)
+	}
+	for _, bad := range []map[string]any{
+		{"issue": 1.5, "fleet_id": f4.FleetID, "idempotency_key": "b"},
+		{"issue": 1, "fleet_id": f4.FleetID, "idempotency_key": "has space"},
+		{"issue": 1, "idempotency_key": "b"}, // placed, but no repo
+		{"issue": 1, "fleet_id": f4.FleetID, "idempotency_key": "b", "force": true},
+	} {
+		postFleet(t, h, "worker_start", bad, 400)
+	}
+	msg := map[string]any{"worker_id": f4.FleetID + "/issue-2", "text": "hi <!-- fleet:x -->", "idempotency_key": "m"}
+	postFleet(t, h, "worker_message", msg, 400)
+}
+
+// account_class on worker_start (claude-fleet#1540): local / pool reach the
+// node's params, any adds nothing, free text is refused.
+func TestFleetWriteAccountClass(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "account_class": "pool", "idempotency_key": "ac-7"}, 200)
+	if macC.count() != 1 {
+		t.Fatalf("mac-c writes = %d; want 1", macC.count())
+	}
+	if params := macC.writes[0]["params"].(map[string]any); params["account_class"] != "pool" {
+		t.Fatalf("params = %v; want account_class pool", params)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "account_class": "any", "idempotency_key": "ac-8"}, 200)
+	if macC.count() != 2 {
+		t.Fatalf("mac-c writes = %d; want 2", macC.count())
+	}
+	if params := macC.writes[1]["params"].(map[string]any); params["account_class"] != nil {
+		t.Fatalf("any must add nothing: %v", params)
+	}
+	e := postFleet(t, h, "worker_start", map[string]any{"issue": 9, "fleet_id": f4.FleetID, "account_class": "x", "idempotency_key": "ac-9"}, 400)["error"].(map[string]any)
+	if e["code"] != "INVALID_ARGUMENT" || macC.count() != 2 {
+		t.Fatalf("free text: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", e, macC.count())
+	}
+}
+
+// reap on worker_start (claude-fleet#1902): a reap policy reaches the node's
+// params as one word, none adds nothing, anything off the grammar is refused.
+func TestFleetWriteReapPolicy(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"issue": 7, "fleet_id": f4.FleetID, "reap": "merged:48h", "idempotency_key": "rp-7"}, 200)
+	if params := macC.writes[0]["params"].(map[string]any); params["reap"] != "merged:48h" {
+		t.Fatalf("params = %v; want reap merged:48h", params)
+	}
+	postFleet(t, h, "worker_start", map[string]any{"issue": 8, "fleet_id": f4.FleetID, "idempotency_key": "rp-8"}, 200)
+	if params := macC.writes[1]["params"].(map[string]any); params["reap"] != nil {
+		t.Fatalf("no reap must add nothing: %v", params)
+	}
+	for i, bad := range []string{"never", "keep; rm -rf /", "done:0", "at:soon"} {
+		e := postFleet(t, h, "worker_start", map[string]any{"issue": 20 + i, "fleet_id": f4.FleetID, "reap": bad, "idempotency_key": "rp-bad-" + strconv.Itoa(i)}, 400)["error"].(map[string]any)
+		if e["code"] != "INVALID_ARGUMENT" || macC.count() != 2 {
+			t.Fatalf("reap %q: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, macC.count())
+		}
+	}
+	for _, ok := range []string{"merged", "done:2h", "loop-end", "keep", "at:2026-10-06T18:00:00Z", "at:18:00"} {
+		if !reapPolicyOK(ok) {
+			t.Fatalf("reapPolicyOK(%q) = false", ok)
+		}
+	}
+}
+
+// test on worker_start (claude-fleet#2505): a scratch the test identity
+// placed reaches the node as test=true; only `true`, only on a scratch.
+func TestFleetWriteDraft(t *testing.T) {
+	harness, _, node, _, target := twoNodes(t)
+	postFleet(t, harness, "worker_start", map[string]any{"kind": "scratch", "no_repo": true,
+		"draft": "literal #42", "fleet_id": target.FleetID, "idempotency_key": "draft-ok"}, 200)
+	if params := node.writes[0]["params"].(map[string]any); params["draft"] != "literal #42" || params["body"] != nil {
+		t.Fatalf("params = %v", params)
+	}
+	for index, invalid := range []map[string]any{
+		{"kind": "new", "title": "task", "draft": "text"},
+		{"kind": "scratch", "draft": "text", "body": ""},
+		{"kind": "scratch", "draft": "text", "task": "T1"},
+		{"kind": "scratch", "draft": "text", "attachments": []any{}},
+		{"kind": "scratch", "draft": ""},
+		{"kind": "scratch", "draft": 42},
+	} {
+		invalid["fleet_id"], invalid["idempotency_key"] = target.FleetID, "draft-bad-"+strconv.Itoa(index)
+		postFleet(t, harness, "worker_start", invalid, 400)
+	}
+	if node.count() != 1 {
+		t.Fatalf("refused drafts reached node: %d", node.count())
+	}
+}
+
+func TestFleetWriteTestScratch(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	postFleet(t, h, "worker_start", map[string]any{"kind": "scratch", "no_repo": true, "test": true, "fleet_id": f4.FleetID, "idempotency_key": "ts-1"}, 200)
+	if params := macC.writes[0]["params"].(map[string]any); params["test"] != true {
+		t.Fatalf("params = %v; want test=true", params)
+	}
+	for i, bad := range []map[string]any{
+		{"kind": "scratch", "no_repo": true, "test": false},
+		{"kind": "scratch", "no_repo": true, "test": "yes"},
+		{"issue": 7, "test": true},
+	} {
+		bad["fleet_id"], bad["idempotency_key"] = f4.FleetID, "ts-bad-"+strconv.Itoa(i)
+		e := postFleet(t, h, "worker_start", bad, 400)["error"].(map[string]any)
+		if e["code"] != "INVALID_ARGUMENT" || macC.count() != 1 {
+			t.Fatalf("%v: %v (mac-c writes %d); want INVALID_ARGUMENT and nothing sent", bad, e, macC.count())
+		}
+	}
+}
+
+// claude-fleet#4864: a start the node's spawner refused (its own refuse() line,
+// a nonzero exit) settles failed even when the node filed it unknown — at the
+// send, at operation_get's reconcile and, node or no node, from the journal; a
+// crash stays unknown; an operation the node never accepted fails past the grace.
+func TestFleetWriteRefusedStartSettles(t *testing.T) {
+	h, _, macC, _, f4 := twoNodes(t)
+	start := func(key string) map[string]any {
+		return postFleet(t, h, "worker_start", map[string]any{"issue": 12, "fleet_id": f4.FleetID, "idempotency_key": key}, 200)
+	}
+	refusal := func(line string) json.RawMessage {
+		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "EXECUTION_FAILED", "exit": 1,
+			"message": "Fleet refused to start the worker: " + line, "stderr1": line}})
+		return b
+	}
+	unknownWith := func(res json.RawMessage) func(map[string]any) (any, *control.Error) {
+		return func(env map[string]any) (any, *control.Error) {
+			return map[string]any{"operation_id": env["operation_id"], "fleet_id": env["fleet_id"],
+				"action": env["action"], "status": "unknown", "result": res}, nil
+		}
+	}
+	macC.setAnswer(unknownWith(refusal("dash-issue-session: spawn failed for #12: new-window")))
+	if op := start("r-send"); op["status"] != "failed" {
+		t.Fatalf("a spawner refusal filed unknown = %v; want failed", op)
+	}
+	macC.setAnswer(unknownWith(refusal("dash-issue-session.sh: line 9: x: unbound variable")))
+	if op := start("r-crash"); op["status"] != "unknown" {
+		t.Fatalf("a crash = %v; want unknown", op)
+	}
+	// Reconcile: sent accepted, the node later reads it back as a refused unknown.
+	macC.setAnswer(accepted)
+	op := start("r-reconcile")
+	macC.setOpGet(unknownWith(refusal("dash-raw-session: spawn failed: worktree checkout")))
+	id := op["operation_id"].(string)
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+id, 200); got["status"] != "failed" {
+		t.Fatalf("reconcile of a refusal = %v; want failed", got)
+	}
+	// The journal alone: an older hub stored the refusal as unknown and its
+	// node is gone — operation_get settles it without asking anyone.
+	stored := start("r-stored")
+	sid := stored["operation_id"].(string)
+	if err := h.srv.Store.UpdateFleetOperation(sid, "unknown", string(refusal("dash-issue-session: #12 已被认领")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	macC.setOpGet(func(map[string]any) (any, *control.Error) {
+		t.Error("asked the node for a refusal the journal already proves")
+		return nil, &control.Error{Code: "INTERNAL", Message: "x"}
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+sid, 200); got["status"] != "failed" {
+		t.Fatalf("a journalled refusal = %v; want failed", got)
+	}
+	// Never accepted by the node: unknown inside the grace, failed past it.
+	lost := start("r-lost")["operation_id"].(string)
+	macC.setOpGet(func(map[string]any) (any, *control.Error) {
+		return nil, &control.Error{Code: "NOT_FOUND", Message: "Operation has not been accepted by this machine"}
+	})
+	if got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+lost, 200); got["status"] != "unknown" {
+		t.Fatalf("NOT_FOUND inside the grace = %v; want unknown", got)
+	}
+	old := orphanOpGrace
+	orphanOpGrace = 0
+	t.Cleanup(func() { orphanOpGrace = old })
+	got := getFleet(t, h, "/v1/fleet/operation_get?operation_id="+lost, 200)
+	if e, _ := got["result"].(map[string]any)["error"].(map[string]any); got["status"] != "failed" || e["code"] != "NOT_ACCEPTED" {
+		t.Fatalf("NOT_FOUND past the grace = %v; want failed NOT_ACCEPTED", got)
+	}
+}

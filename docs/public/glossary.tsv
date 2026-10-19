@@ -1,6 +1,6 @@
 zh	en	note
 # The words of the English pages under docs/public/en/. UI labels are quoted as the UI's own English says them:
-# the console's extras/web-console/src/shared/i18n.ts, the client's bin/fleet-ui-lang.sh (en), the hub pages' tokenledger/internal/api/pagetext.go.
+# the console's extras/web-console/src/shared/i18n.ts, the client's bin/fleet-ui-lang.sh (en), the hub pages' tokenledger/hub/api/pagetext.go.
 会话	session	one running Claude Code or Codex doing a task; "Claude session" when a tmux session is also in play (docs/dev/TERMS.md)
 任务	task	one thing a person asked for; recorded as T<n>
 任务记录	task record	the hub's T<n> row

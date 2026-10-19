@@ -118,7 +118,7 @@
 #                         default_table / requirement_met (#4010): a Linux machine joined with
 #                         the one public line said 「已收敛」 while its node program waited for a
 #                         logins/*.env only the hub's first create (down that program) writes
-#   linux-relay-not-handed  tokenledger/internal/api/fleet_node_desired.go (cred_relay_url) +
+#   linux-relay-not-handed  tokenledger/hub/api/fleet_node_desired.go (cred_relay_url) +
 #                         bin/fleet-node-install.sh 期望状态 / 中转 + bin/fleet-node-linux.py
 #                         route_settings / hub_relay (#4010): the hub's relay reached no login
 #   installer-umask-077   bin/fleet-node-install.sh (umask 022) + bin/fleet-credsep.py mkdirs /
@@ -1128,7 +1128,7 @@ drill_account_op_rerun_exists() {
   t0=$(now)
   WHAT='同一个开号第二次到达（入口再问、重启丢了账本）：脚本留下的 ~/<login>-onboard/op 记着这次 op——跑完了就按它的结果答成功、不再跑脚本、不报「已存在」；还在跑就等；半路停了就收回登录（remove，家目录保留）再报失败；别的 op 的登录照旧「已存在」'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the agent half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1399,7 +1399,7 @@ drill_release_fetch_slow() {
     || { WHY="the updater half: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   WHAT='更新器：只取本机钉住的制品、缓存先填已有的、断了不退避下一轮接着取'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOFLAGS='' GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/shared/release 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the ccquota half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1492,7 +1492,7 @@ drill_linux_relay_not_handed() {
     TMPDIR="$WORK" FNI_LIB=1 . "$BIN/fleet-node-install-selftest.sh"
     sandbox_linux
     res() { printf '%s\n%s\n' "${1:-}" "${2:-}" > "$WORK/fni.res"; exit 0; }
-    grep -q 'st.CredRelayURL = s.CredRelayURL' "$BIN/../tokenledger/internal/api/fleet_node_desired.go" \
+    grep -q 'st.CredRelayURL = s.CredRelayURL' "$BIN/../tokenledger/hub/api/fleet_node_desired.go" \
       || res "" "the hub's /v1/node/desired hands no relay down"
     python3 - "$HUBD/desired.json" <<'PY'
 import json, sys
