@@ -1,19 +1,20 @@
 #!/bin/bash
 # fleet-epic-stable-row-selftest.sh — bin/fleet-epic-stable-row.sh, the
-# 「挪稳定版」 row /fleet-epic-report adds to its 还差什么 table (issue #1124,
-# EPIC #1117 R2). Fully hermetic: a local BARE repo stands in for github, a clone
+# 列车结果 line /fleet-epic-report writes (issue #4917; #1124's 「挪稳定版」 row
+# before it). Fully hermetic: a local BARE repo stands in for github, a clone
 # of it is `--main`, `gh` is a PATH shim answering from fixture files. Nothing
 # touches the real `stable` tag or the network.
 #
-# What it pins (the issue's 完成判据: the row appears when stable trails the
-# batch, and ONLY then):
+# What it pins (the report says the train's result and NEVER asks a person to
+# move stable — issue #4917):
 #   A. gate      a --main without bin/fleet-stable.sh → `skip`, no row (a team
 #                repo's own `stable` tag is not ours to talk about)
-#   B. none      no tag yet → a row that says so, with the move command; the tag
-#                is NOT created (the row proposes, never moves)
-#   C. behind    tag on an older commit → `behind`, target = the NEWEST merge
-#                whatever order --merged came in, count right, cmd names it
-#   D. current   tag AT the last merge, or AHEAD of it → exit 1, no row
+#   B. none      no tag yet → a row that says so; the tag is NOT created
+#   C. behind    tag on an older commit: target = the NEWEST merge whatever order
+#                --merged came in, count right; the last release-train run says
+#                running / red (卡在红车 <run>, a kind=human mark) / waiting /
+#                unreadable — never a move command, never 挪稳定版
+#   D. current   tag AT the last merge, or AHEAD of it → 已随列车上线, exit 1, no row
 #   E. --epic    members from `sub_issues` (this repo's only, #1942), each merge from `pr list --head
 #                issue-<M>`; an unfinished member is ignored; none merged →
 #                `nomerge`, no row
@@ -46,13 +47,18 @@ export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 : > "$WORK/gitconfig"
 
-# gh shim: `gh api …/sub_issues` → $WORK/subs; `gh pr list … --head X …` → $WORK/prs/X
-# (one sha, the merge commit) or nothing when the member has no merged PR.
+# gh shim: `gh api …/sub_issues` → $WORK/subs; `gh api …/release-train.yml/runs` →
+# $WORK/train (status TAB conclusion TAB head sha TAB url rows; absent = unreadable);
+# `gh pr list … --head X …` → $WORK/prs/X (one sha, the merge commit) or nothing
+# when the member has no merged PR.
 mkdir -p "$WORK/shim" "$WORK/prs"
 cat > "$WORK/shim/gh" <<SH
 #!/bin/sh
 case "\$1" in
-  api) cat "$WORK/subs" ;;
+  api) case "\$2" in
+         *release-train*) [ -f "$WORK/train" ] && cat "$WORK/train" || exit 1 ;;
+         *) cat "$WORK/subs" ;;
+       esac ;;
   pr)  head=""; while [ "\$#" -gt 0 ]; do [ "\$1" = --head ] && { head="\$2"; break; }; shift; done
        [ -n "\$head" ] && [ -f "$WORK/prs/\$head" ] && cat "$WORK/prs/\$head" ;;
 esac
@@ -95,22 +101,39 @@ run --merged "$C2" --merged "$C3"
 eq "B: no tag → a row is due (exit 0)" 0 "$RC"
 eq "B: kind none" none "$(kind)"
 contains "B: row says there is no stable mark" "$OUT" "还没有稳定版标记"
-contains "B: cmd names the newest merge" "$OUT" "fleet-stable.sh move $(sh3 "$C3")"
+lacks "B: no move command" "$OUT" "fleet-stable.sh move"
 eq "B: the tag was NOT created" none "$(tag)"
 
-# --- C. behind -------------------------------------------------------------------
+# --- C. behind: the train's result ----------------------------------------------
 settag "$C1"
+rm -f "$WORK/train"
 run --merged "$C3" --merged "$C2"          # reverse order on purpose
-eq "C: behind → exit 0" 0 "$RC"
-eq "C: kind behind" behind "$(kind)"
+eq "C: train unreadable → exit 0" 0 "$RC"
+eq "C: kind trainunknown" trainunknown "$(kind)"
 contains "C: target is the newest merge (C3), not the last argument" "$OUT" "target:  $(sh3 "$C3")"
 contains "C: count is stable..target" "$OUT" "behind:  2"
-contains "C: row names the stable sha" "$OUT" "稳定版还停在 $(sh3 "$C1")"
-contains "C: cmd" "$OUT" "cmd:     "
-contains "C: cmd is fleet-stable.sh move <target>" "$OUT" "fleet-stable.sh move $(sh3 "$C3")"
-contains "C: tr renders the command as <code>" "$OUT" "<tr><td>稳定版还停在"
-contains "C: tr has code" "$OUT" "<code>"
-contains "C: the followup marker for the closing comment (#2672)" "$OUT" "mark:    <!-- fleet:followup kind=stable what=挪稳定版到 $(sh3 "$C3") -->"
+printf 'in_progress\t-\t%s\thttps://x/run/9\ncompleted\tfailure\t%s\thttps://x/run/8\n' "$C3" "$C3" > "$WORK/train"
+run --merged "$C3"
+eq "C: a train in progress → kind running" running "$(kind)"
+contains "C: line 列车在跑" "$OUT" "line:    列车在跑（https://x/run/9）"
+lacks "C: running → no mark" "$OUT" "mark:"
+printf 'completed\tfailure\t%s\thttps://x/run/8\n' "$C4" > "$WORK/train"
+run --merged "$C3"
+eq "C: last train red, it boarded the batch → kind red" red "$(kind)"
+contains "C: line 卡在红车 <run>" "$OUT" "line:    卡在红车 https://x/run/8"
+contains "C: tr" "$OUT" "<tr><td>本批最后一次合并"
+contains "C: red → a human mark naming the run" "$OUT" "mark:    <!-- fleet:followup kind=human what=列车红在 https://x/run/8"
+printf 'completed\tfailure\t%s\thttps://x/run/7\n' "$C1" > "$WORK/train"
+run --merged "$C3"
+eq "C: red train that never boarded the batch → waiting" waiting "$(kind)"
+printf 'completed\tsuccess\t%s\thttps://x/run/6\n' "$C1" > "$WORK/train"
+run --merged "$C3"
+eq "C: green train before the batch → waiting" waiting "$(kind)"
+contains "C: waiting names the next train" "$OUT" "等下一趟"
+contains "C: tr renders the command as <code>" "$OUT" "<code>gh workflow run release-train.yml</code>"
+lacks "C: never a move command" "$OUT" "fleet-stable.sh move"
+lacks "C: never 挪稳定版" "$OUT" "挪稳定版"
+lacks "C: never a kind=stable followup" "$OUT" "kind=stable"
 eq "C: the tag did not move" "$C1" "$(tag)"
 
 # --- D. current ------------------------------------------------------------------
@@ -118,6 +141,7 @@ settag "$C3"
 run --merged "$C2" --merged "$C3"
 eq "D: stable AT the last merge → exit 1" 1 "$RC"
 eq "D: kind current" current "$(kind)"
+contains "D: 已随列车上线" "$OUT" "line:    已随列车上线（stable = $(sh3 "$C3")）"
 lacks "D: no row" "$OUT" "row:"
 settag "$C4"
 run --merged "$C3"
@@ -132,7 +156,7 @@ printf '%s\n' "$C2" > "$WORK/prs/issue-10"
 printf '%s\n' "$C3" > "$WORK/prs/issue-11"      # issue-12: no merged PR
 run --epic 7
 eq "E: --epic → exit 0" 0 "$RC"
-eq "E: kind behind" behind "$(kind)"
+eq "E: kind waiting" waiting "$(kind)"
 contains "E: target = newest member merge" "$OUT" "target:  $(sh3 "$C3")"
 contains "E: behind 2" "$OUT" "behind:  2"
 printf '12\n' > "$WORK/subs"
@@ -161,7 +185,8 @@ run --merged "$C3" --remote nowhere
 eq "F: unreadable remote → still a row (exit 0)" 0 "$RC"
 eq "F: kind unknown" unknown "$(kind)"
 contains "F: says it could not read, not 0" "$OUT" "不是 0"
-contains "F: still hands over the move command" "$OUT" "fleet-stable.sh move $(sh3 "$C3")"
+lacks "F: no move command" "$OUT" "fleet-stable.sh move"
+contains "F: a human mark" "$OUT" "kind=human"
 
 # --- G. offtrunk -----------------------------------------------------------------
 settag "$S1"
@@ -169,7 +194,7 @@ run --merged "$C3"
 eq "G: offtrunk → exit 0" 0 "$RC"
 eq "G: kind offtrunk" offtrunk "$(kind)"
 contains "G: row says stable is off trunk" "$OUT" "不在 origin/master 上"
-lacks "G: no move promised in the next cell" "$OUT" "挪稳定版到"
+lacks "G: no move promised in the next cell" "$OUT" "挪稳定版"
 eq "G: the tag did not move" "$S1" "$(tag)"
 
 # --- H. unknown sha --------------------------------------------------------------
