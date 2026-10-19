@@ -18,3 +18,7 @@ logs/connect.log	$SHELL_CACHE/logs/connect.log	200
 logs/place.log	$SHELL_CACHE/logs/place.log	200
 logs/keeper.log	$SHELL_CACHE/logs/keeper.log	200
 logs/login.log	$SHELL_CACHE/logs/login.log	200
+# The thin client's own log (bin/fleet-thin.py, ${XDG_CACHE_HOME:-~/.cache}/claude-fleet/thin.log —
+# the shell cache's parent): bin/fleet-client-stats.py reads drops / reconnects /
+# open failures off it (issue #4824); 5000 lines is about one rotation (512 KiB).
+logs/thin.log	$SHELL_CACHE/../thin.log	5000

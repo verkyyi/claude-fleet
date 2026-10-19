@@ -85,6 +85,7 @@ mkhome() {  # mkhome <dir>
   cp "$T/corpus" "$lg/connect.log"
   printf 'place mac-b → refused sk-ant-api03-placeplaceplace\n' > "$lg/place.log"
   printf 'keeper renew ok\n' > "$lg/keeper.log"
+  printf '2026-10-01T00:00:00Z\tconnect\tmac-b\tentry\t1\t2\t3\t255\tup sk-ant-api03-thinthinthin\n' > "$lg/../../thin.log"
   printf 'NOTLISTED_cert\n' > "$h/.ssh/fleet-cert"
   printf '{"token": "NOTLISTED_hubjson"}\n' > "$1/conf/hub.json"
   printf 'FLEET_HUB_TOKEN=NOTLISTED_secrets\n' > "$1/conf/secrets.env"
@@ -112,7 +113,7 @@ for r in python awk; do
   rc=$?
   [ "$rc" = 0 ] && ok "C[$r] fleet-doctor.sh --bundle → 0 though the doctor FAILed" || { bad "C[$r] exit $rc"; cat "$T/c/out-$r"; continue; }
   b="$T/c/b-$r"
-  for f in doctor.txt doctor.json system.txt tools.txt route.txt ssh-v.txt logs/connect.log logs/place.log logs/keeper.log manifest.json; do
+  for f in doctor.txt doctor.json system.txt tools.txt route.txt ssh-v.txt logs/connect.log logs/place.log logs/keeper.log logs/thin.log manifest.json; do
     [ -f "$b/$f" ] || bad "C[$r] no $f"
   done
   l=$(leaks "$b"); [ -z "$l" ] && ok "C[$r] none of the planted credentials is in the bundle" || bad "C[$r] left in the bundle:$l"
