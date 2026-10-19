@@ -399,7 +399,7 @@ remote_cache "$NOW"
 stamp_cache() { { printf '#ts\037%s\n' "$1"; tail -n +2 "$G/remote_$S"; } > "$WORK/stamp" && mv "$WORK/stamp" "$G/remote_$S"; }
 new_cache
 hs=$(FLEET_SIDEBAR_SOURCE=hub side)
-printf '%s\n' "$NOW" > "$G/hub_ok"
+date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 eq "L: a fresh hub_ok changes nothing on the hub source" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 eq "L: …nor on the default source" "$golden_s" "$(side)"
 printf '%s\n' $(( NOW - 600 )) > "$G/hub_ok"            # silent 10 minutes; the cache itself fresh
@@ -418,7 +418,7 @@ cp "$WORK/wlist.keep" "$WLIST_FILE"
 eq "L: …no network call on the render path, silent or not" "" "$(cat "$NET_LOG")"
 eq "L: FLEET_HUB_SESSIONS_STALE is the knob here too" "$hs" "$(FLEET_HUB_SESSIONS_STALE=900 FLEET_SIDEBAR_SOURCE=hub side)"
 eq "L: hub off — the no-cache output, hub_ok or not" "$base_s" "$(CCQUOTA_FLEET='' FLEET_SIDEBAR_SOURCE=hub side)"
-printf '%s\n' "$NOW" > "$G/hub_ok"
+date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 eq "L: hub_ok fresh again — the hub's row set is back on the next render, nothing restarted" "$hs" "$(FLEET_SIDEBAR_SOURCE=hub side)"
 # degenerate: a loop from before #1483 writes no hub_ok — the cache's own #ts is
 # the clock, as it always was, and renders the very same bytes
@@ -793,7 +793,7 @@ FQ=44444444-5555-6666-7777-999999999999
   # field 20 (issue #2235): a warm start whose issue was never filed
   printf 'wid:%s/acme-app:scratch-8\037mac-a\037online\037\037acme/app\037working\037claude\037没建上的\037\037\0370\037\037\037\037\037\037\037\037\037failed\n' "$FQ"
 } > "$G/remote_$QS"
-printf '%s\n' "$NOW" > "$G/hub_ok"
+date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf '%s/acme-app:scratch-9\n' "$FQ" > "$G/remote_fold_$QS"
 qr=$(CCQUOTA_FLEET=1 qside)
 eq "Q: a remote driver is one row too, named and badged off its node's cell" "wid:$FQ/acme-app:scratch-9|▾|2/5|0|mac-a" "$(srow "$qr" '另一批')"
@@ -887,7 +887,7 @@ rm -f "$TM"
 eq "T: the mark gone — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache
 printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
-printf '%s\n' "$NOW" > "$G/hub_ok"
+date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf 'acme/tool#77\037mac-a\037online\0373600\037工具批\0370\nacme/app#1949\037mac-b\037online\03760\037本机的\0371\nbad ref\037mac-a\037online\0371\037x\0370\n' > "$G/epicstale_$TS"
 t=$(CCQUOTA_FLEET=1 tside)
 eq "T: a remote batch nobody drives — its machine on the row, in its repo's group" \
@@ -949,7 +949,7 @@ rm -f "$OF" "$WORK/conf/global/orphan-reports.read"
 eq "U: no report file — byte for byte the frame without one" "$t0" "$(unset CCQUOTA_FLEET; tside)"
 # another machine's, off the hub cache; what this computer read is skipped
 printf '#ts\037%s\n#me\037mac-b\n#node\037mac-a\037online\0370\037%s\n' "$NOW" "$NOW" > "$G/remote_$TS"
-printf '%s\n' "$NOW" > "$G/hub_ok"
+date +%s > "$G/hub_ok"   # fresh as of NOW, not the test's start: a slow run passes FLEET_HUB_SESSIONS_STALE (#3902)
 printf 'aaaaaaaaaaaa\037mac-a\037online\037%s\037acme/tool\037issue-77\037BLOCKED\037\037要一个 token\0370\nbbbbbbbbbbbb\037mac-b\037online\0371\037acme/app\037issue-5\037MERGED\0373\037本机的\0371\ncccccccccccc\037mac-a\037online\0371\037acme/tool\037issue-78\037MERGED\0379\037已读的\0370\n' "$NOW" > "$G/orphanrep_$TS"
 printf 'mac-a/cccccccccccc\n' > "$G/orphanrep_read"
 t=$(CCQUOTA_FLEET=1 tside)

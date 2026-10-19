@@ -106,11 +106,14 @@ case "$(rd off)" in 9.99*) bad "D a 120 s old reading was used" ;; *) ok "D a st
 put "$cl" "$(( $(date +%s) + 120 ))"
 case "$(rd off)" in 9.99*) bad "D a reading from the future was used" ;; *) ok "D a reading from the future is no reading" ;; esac
 put "$cl" "$(date +%s)"
-mkdir -p "$WORK/conf/cluster"; printf '{\n"v": 1,\n"ts": %s,\n"mem_probe": "1 80 0 0",\n"mem_total_mb": "1111",\n"load_per_core": "0.11"\n}\n' "$(date +%s)" > "$WORK/conf/cluster/machine.json"
-[ "$(rd off)" = "0.11|1 80 0 0|1111" ] && ok "D a copy pushed into the login's own cluster/ wins" || bad "D pushed copy: $(rd off)"
+# the pushed copy names a reading no probe here can make (a Linux probe always says
+# compressor 0): "1 80 0 0" is a plain runner at 80% free, so D's empty-value check
+# once read the real probe as the copy (#3904)
+mkdir -p "$WORK/conf/cluster"; printf '{\n"v": 1,\n"ts": %s,\n"mem_probe": "1 80 37 5",\n"mem_total_mb": "1111",\n"load_per_core": "0.11"\n}\n' "$(date +%s)" > "$WORK/conf/cluster/machine.json"
+[ "$(rd off)" = "0.11|1 80 37 5|1111" ] && ok "D a copy pushed into the login's own cluster/ wins" || bad "D pushed copy: $(rd off)"
 printf '{\n"v": 1,\n"ts": %s,\n"mem_probe": "",\n"mem_total_mb": "1111",\n"load_per_core": "0.11"\n}\n' "$(date +%s)" > "$WORK/conf/cluster/machine.json"
 got=$(rd off)
-case "$got" in "0.11|1 80 0 0|"*) bad "D an empty value was used: $got" ;;
+case "$got" in "0.11|1 80 37 5|"*) bad "D an empty value was used: $got" ;;
   "0.11|"*"|1111") grep -q sysctl "$WORK/probed" 2>/dev/null || [ -r /proc/meminfo ] \
        && ok "D an empty value: that probe (and only it) runs here" || bad "D empty mem_probe, yet no probe ran" ;;
   *) bad "D an empty value spoiled the others: $got" ;; esac
