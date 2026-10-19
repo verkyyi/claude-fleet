@@ -272,7 +272,7 @@ out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-node-join
 : > "$WORK/corrupt"
 out2=$(sh -c '. "$1/bin/fleet-client-lib.sh"; fc_served "$1" bin/fleet-drill.sh; echo "rc=$? $FC_WHY"' _ "$ROOT" 2>&1)
 rm -f "$WORK/corrupt"
-case $out2 in "rc=1 取不到 bin/fleet-drill.sh"*) [ ! -e "$ROOT/bin/fleet-drill.sh" ] && [ -z "$(ls "$ROOT/bin" | grep '\.fetch\.')" ] \
+case $out2 in "rc=1 取不到 bin/fleet-drill.sh"*) [ ! -e "$ROOT/bin/fleet-drill.sh" ] && [ -z "$(find "$ROOT/bin" -name '*.fetch.*')" ] \
   && ok "B a fetch that fails its SHA-256 → rc 1, nothing left" || bad "B corrupt fetch left files" ;; *) bad "B corrupt fetch: $out2" ;; esac
 rm -f "$ROOT/bin/fleet-node-join.sh" "$ROOT/bin/fleet-hub-url.sh"
 

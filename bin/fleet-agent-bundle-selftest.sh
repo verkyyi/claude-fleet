@@ -175,7 +175,7 @@ printf '%s' "$out" | grep -q '^Agent 配置: 撤下了旧客户端接进来的 �
 nb=$(ls "$H/.claude/"settings.json.fleet-bak-* "$H/".claude.json.fleet-bak-* "$H/.codex/"config.toml.fleet-bak-* 2>/dev/null | wc -l | tr -d ' ')
 [ "$nb" = 3 ] && grep -q fleet-hook-run "$H/.claude/"settings.json.fleet-bak-* && ok "I each file kept beside once" || bad "I backups: $nb"
 # cfg <home> — the three files the unwire may touch, and the backups beside them
-cfg() { (cd "$1" && ls -a .claude .codex . 2>/dev/null | grep fleet-bak; cksum .claude/settings.json .claude.json .codex/config.toml 2>/dev/null); }
+cfg() { (cd "$1" && for f in .claude/*fleet-bak* .codex/*fleet-bak* .*fleet-bak*; do [ -e "$f" ] && echo "$f"; done; cksum .claude/settings.json .claude.json .codex/config.toml 2>/dev/null); }
 before=$(cfg "$H"); out=$(line "$H"); rc=$?
 [ "$rc" = 0 ] && [ "$before" = "$(cfg "$H")" ] && ! printf '%s' "$out" | grep -q 'Agent 配置' && ok "I again → nothing" || bad "I again rc=$rc: $out"
 # ~/.claude/fleet the full install (its files apart from the client's) → nothing
