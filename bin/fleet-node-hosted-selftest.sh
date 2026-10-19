@@ -109,19 +109,22 @@ eq "A fleet claude → exit 3" "$rc" 3
 has "A … says to type fleet or --here" "$out" "敲 fleet 在这台上开客户端，或 fleet claude --here"
 fa -- claude --here
 eq "A fleet claude --here → its road as before" "$calls" "inst fleet-home-session.sh claude --here|hosted=1"
+# nr <calls> — without the client start's background retire (its line lands in
+# any order, issue #4827; fleet-client-retire-selftest.sh D pins that it is asked)
+nr() { printf '%s\n' "$1" | grep -v '^inst fleet-client-retire.sh stop --quiet --if-unattached|'; }
 # a resident client from before #2702 still running here: the line says how to retire it
 mkdir -p "$W/home/.cache/claude-fleet/shell/bin"
 fa --
 rm -rf "$W/home/.cache/claude-fleet/shell"
 has "A … an old resident client's files still here: the retire command (#2904)" "$out" "fleet-node-shell-retire.sh --login"
 fa FLEET_NODE_CLIENT=1 --
-eq "A the hatch: the install's own thin loop, the update asked" "$calls" "inst fleet-client-update.sh start|hosted=
+eq "A the hatch: the install's own thin loop, the update asked" "$(nr "$calls")" "inst fleet-client-update.sh start|hosted=
 inst fleet-thin.py |hosted="
 fa FLEET_CLIENT_IDENTITY=test --
-eq "A the test identity: the same" "$calls" "inst fleet-client-update.sh start|hosted=
+eq "A the test identity: the same" "$(nr "$calls")" "inst fleet-client-update.sh start|hosted=
 inst fleet-thin.py |hosted="
 fa FLEET_NODE_STATE="$W/nowhere" --
-eq "A an unmanaged machine: the install's, no line" "$calls|$out" "inst fleet-client-update.sh start|hosted=
+eq "A an unmanaged machine: the install's, no line" "$(nr "$calls")|$out" "inst fleet-client-update.sh start|hosted=
 inst fleet-thin.py |hosted=|"
 
 # ---- D. the where -------------------------------------------------------------
