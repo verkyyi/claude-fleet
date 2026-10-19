@@ -12,8 +12,13 @@
 #               · an external URL → {"kind":"url"} · a bad port / junk → exit 1
 #   • BYTES     the escape on the client is EXACTLY
 #               ESC ] 1337 ; Custom=id=<secret>:<base64 JSON> BEL, the JSON equals
-#               --print's minus ts and id, and stdout is the one line `unconfirmed`
-#               (the escape has no receipt — issue #3538)
+#               --print's minus ts and id, and with no answer stdout is the one line
+#               `unconfirmed` (FLEET_OPEN_ACK_WAIT, 1 s here)
+#   • ITERM     (issue #3540) the laptop half for real: extras/iterm2/fleet_open.py's
+#               handle() takes the escape's payload, opens (a stub `open`) and answers
+#               over an `ssh` shim that runs the mini's `fleet-open.sh --ack` here —
+#               opened → `opened`, `open` failing → `failed:<why>` exit 4, no answer
+#               → `unconfirmed` saying so; the ssh goes to the payload's host
 #   • SECRET    made on first run at ~/.config/claude-fleet/open.secret, mode 0600,
 #               64 hex; a loose existing one is chmod'ed to 0600 and kept; the
 #               secret never appears on stdout/stderr or in the lock-command
@@ -79,6 +84,8 @@ EOF
 chmod +x "$WORK/bin/tmux" "$WORK/bin/tailscale" "$WORK/bin/open-url"
 export PATH="$WORK/bin:$PATH" TMUX="/x/sock,1,0" TMUX_PANE="%1"
 export FLEET_OPEN_URL_BIN="$WORK/bin/open-url" FLEET_OPEN_DOCPREV_ROOT="$WORK/docprev"
+# a road with a receipt waits this long for it; a leg that answers sets its own
+export FLEET_OPEN_ACK_WAIT=1
 OUT="$WORK/out"; export FLEET_SHOW_OUT="$OUT"
 OPEN="$BIN/fleet-open.sh"
 SECRET="$HOME/.config/claude-fleet/open.secret"
@@ -166,6 +173,53 @@ chmod 644 "$SECRET"; rm -f "$OUT"
 perm=$(stat -c '%a' "$SECRET" 2>/dev/null || stat -f '%Lp' "$SECRET" 2>/dev/null)
 [ "$perm" = 600 ] && [ "$(cat "$SECRET")" = "$sec" ] && ok "SECRET loose → 0600, same secret" || bad "SECRET re-perm: $perm"
 grep -q 'Custom=id=' "$OUT" && ok "url kind sent too" || bad "url kind not sent"
+
+# ---- ITERM: the laptop script answers the escape (issue #3540) -------------------------
+ROOT="$(cd "$BIN/.." && pwd)"
+# the mini as the laptop's ssh reaches it: the remote command runs from this HOME,
+# where .claude/fleet/bin is this checkout's bin/ (fleet_open.py's ACK_BIN)
+mkdir -p "$HOME/.claude/fleet"; ln -sfn "$BIN" "$HOME/.claude/fleet/bin"
+cat > "$WORK/bin/ssh" <<SSH
+#!/bin/sh
+printf '%s\n' "\$*" > "$STATE/ssh.argv"
+for last; do :; done
+cd "\$HOME" && sh -c "\$last"
+SSH
+chmod +x "$WORK/bin/ssh"
+laptop() {  # <opened|open-failed|none> — fleet_open.py's handle() on the escape in $OUT
+  ( for _ in $(seq 1 60); do [ -s "$OUT" ] && break; sleep 0.1; done
+    [ "$1" = none ] && exit 0
+    PYTHONDONTWRITEBYTECODE=1 FLEET_OPEN_CONF_DIR="$WORK/laptop" python3 - "$ROOT/extras/iterm2" "$OUT" "$1" <<'PY2'
+import re, sys
+sys.path.insert(0, sys.argv[1])
+import fleet_open as fo
+m = re.search(rb"Custom=id=[0-9a-f]+:([A-Za-z0-9+/=]+)\x07", open(sys.argv[2], "rb").read())
+fo._open = lambda url: sys.argv[3] == "opened"
+fo.handle(m.group(1).decode())
+PY2
+  ) &
+}
+iterm() {  # <opened|open-failed|none> → RES RC
+  rm -f "$OUT" "$STATE/ssh.argv"; laptop "$1"
+  RES=$(FLEET_OPEN_SSH_HOST=mini-a FLEET_OPEN_ACK_WAIT="${2:-5}" "$OPEN" 'https://github.com/x' 2>"$WORK/err"); RC=$?; wait
+}
+clients '300|/dev/ttyNEW|iTerm2 3.6.10'
+iterm opened
+[ "$RC" = 0 ] && [ "$RES" = opened ] && grep -q '那边已打开' "$WORK/err" && ok "ITERM the laptop opened it → opened" || bad "ITERM ok ($RC): $RES / $(cat "$WORK/err")"
+case "$(cat "$STATE/ssh.argv" 2>/dev/null)" in
+  "-o BatchMode=yes -o ConnectTimeout=10 mini-a bash .claude/fleet/bin/fleet-open.sh --ack "*" ok ''")
+    ok "ITERM the receipt rides ssh to the payload's host: fleet-open.sh --ack <id> ok" ;;
+  *) bad "ITERM ssh argv: $(cat "$STATE/ssh.argv" 2>/dev/null)" ;;
+esac
+grep -q 'ack-sent' "$WORK/laptop/log" && ok "ITERM the laptop logged ack-sent" || bad "ITERM laptop log: $(cat "$WORK/laptop/log" 2>/dev/null)"
+iterm open-failed
+[ "$RC" = 4 ] && case "$RES" in 'failed:the browser did not open it'*) true ;; *) false ;; esac   && grep -q '那边没打开' "$WORK/err" && ok "ITERM \`open\` failed on the laptop → failed:<why>, exit 4" || bad "ITERM fail ($RC): $RES / $(cat "$WORK/err")"
+iterm none 1
+[ "$RC" = 0 ] && [ "$RES" = unconfirmed ] && grep -q '没等到那边的回执' "$WORK/err" && grep -q '链接：https://github.com/x' "$WORK/err" \
+  && ok "ITERM no answer (not installed / v1) → unconfirmed + the link" || bad "ITERM none ($RC): $RES / $(cat "$WORK/err")"
+[ -n "$(find "$HOME/.config/claude-fleet/open-acks" -type f 2>/dev/null)" ] && bad "ITERM an ack file was left" || ok "ITERM ack files consumed"
+ls -d "$WORK"/fleet-show.* >/dev/null 2>&1 && bad "ITERM job/lock dir left while waiting" || ok "ITERM no job/lock dir left"
+rm -f "$WORK/bin/ssh"
 
 # ---- FALLBACK ---------------------------------------------------------------------
 fb() {  # <label> <expect stdout> <expect open-url arg> <cmd…>

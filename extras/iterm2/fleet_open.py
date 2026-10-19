@@ -20,12 +20,19 @@ it does what the JSON asks:
 
 Every action appends one line to ~/.config/fleet-open/log.
 
+THE RECEIPT (issue #3540): a payload with an "id" (hex) is answered over the same
+ssh the forward rides — `ssh <host> bash .claude/fleet/bin/fleet-open.sh --ack <id>
+ok|fail <why>` — so the session that asked prints `opened` or `failed:<why>`, not
+`unconfirmed`: opened (also after the dialog's Open) → ok; declined, `open` failing,
+a refused request (stale, bad field), a forward that would not come up → fail with
+the reason. No id (an older mini) → nothing sent.
+
 Install with extras/iterm2/install.sh (it puts this file in
 ~/Library/Application Support/iTerm2/Scripts/AutoLaunch/). Everything above the
 `iTerm2 glue` line is pure and unit-tested (test_fleet_open.py) without iTerm2.
 """
 
-FLEET_OPEN_VERSION = "1"  # bump on any behaviour change: fleet-doctor compares it
+FLEET_OPEN_VERSION = "2"  # bump on any behaviour change: fleet-doctor compares it
 
 import base64
 import binascii
@@ -33,6 +40,7 @@ import json
 import os
 import random
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -46,6 +54,11 @@ PORT_LO, PORT_HI = 20000, 29999
 IDLE_SECS = 30 * 60
 STALE_SECS = 600  # a request older than this (by its own ts) is a replay, not a click
 PAYLOAD_RE = r"^([A-Za-z0-9+/=_-]+)$"
+ID_RE = r"^[a-f0-9]{1,64}$"
+# The mini's fleet-open.sh, from its login's home (install.sh's MINI_ROOT): never a
+# path the payload names — the laptop runs nothing a request spells out.
+ACK_BIN = ".claude/fleet/bin/fleet-open.sh"
+HOST_RE = r"^[A-Za-z0-9][A-Za-z0-9._@-]*$"
 
 
 class Reject(ValueError):
@@ -79,7 +92,7 @@ def parse_payload(b64, now=None):
         if abs(now - ts) > STALE_SECS:
             raise Reject("stale ts")
     host = req.get("host") or ""
-    if not isinstance(host, str) or (host and not re.match(r"^[A-Za-z0-9][A-Za-z0-9._@-]*$", host)):
+    if not isinstance(host, str) or (host and not re.match(HOST_RE, host)):
         raise Reject("bad host")
     kind = req.get("kind")
     if kind == "forward":
@@ -103,6 +116,41 @@ def parse_payload(b64, now=None):
         check_url(url)
         return {"kind": "url", "url": url, "host": host}
     raise Reject("unknown kind=%r" % kind)
+
+
+def peek(b64):
+    """(id, host hint) of a payload, before any check — so even a request we refuse
+    is answered. Either is None/"" when absent or not well-formed."""
+    try:
+        req = json.loads(_b64decode(b64).decode("utf-8"))
+    except (Reject, ValueError):
+        return None, ""
+    if not isinstance(req, dict):
+        return None, ""
+    oid, host = req.get("id"), req.get("host")
+    oid = oid if isinstance(oid, str) and re.match(ID_RE, oid) else None
+    host = host if isinstance(host, str) and re.match(HOST_RE, host) else ""
+    return oid, host
+
+
+RESULT_WHY = {
+    "open-failed": "the browser did not open it (`open` failed on the laptop)",
+    "declined": "declined on the laptop (the link is not on its allow-list)",
+}
+
+
+def ack_words(result):
+    """A handled request's result → ("ok", "") or ("fail", why)."""
+    if result in ("opened", "opened-confirmed"):
+        return "ok", ""
+    return "fail", RESULT_WHY.get(result, "the laptop said %s" % result)
+
+
+def ack_cmd(host, oid, state, why):
+    """The receipt, as one ssh to the mini (the multiplexed one when it is up)."""
+    why = re.sub(r"[\t\n\r\x00-\x1f]", " ", why or "")[:200]
+    remote = " ".join(shlex.quote(w) for w in ["bash", ACK_BIN, "--ack", oid, state, why])
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, remote]
 
 
 def load_allow(text):
@@ -326,7 +374,23 @@ def do_url(req):
     return url, ("opened-confirmed" if _open(url) else "open-failed")
 
 
+def send_ack(hint, oid, state, why):
+    """The receipt of open <oid> (issue #3540); a failed send is only logged."""
+    try:
+        host = resolve_host({"host": hint}, _read("host"))
+        r = subprocess.run(ack_cmd(host, oid, state, why), stdin=subprocess.DEVNULL,
+                           capture_output=True, timeout=20)
+        res = "ack-sent" if r.returncode == 0 else "ack-failed rc=%d" % r.returncode
+    except Reject as e:
+        res = "ack-failed %s" % e
+    except (OSError, subprocess.SubprocessError) as e:
+        res = "ack-failed %s" % type(e).__name__
+    log("ack", "id=%s %s" % (oid, state), res)
+
+
 def handle(b64):
+    oid, hint = peek(b64)
+    state, why = "fail", ""
     try:
         req = parse_payload(b64, now=time.time())
         if req["kind"] == "forward":
@@ -334,10 +398,15 @@ def handle(b64):
         else:
             detail, result = do_url(req)
         log(req["kind"], detail, result)
+        state, why = ack_words(result)
     except Reject as e:
         log("reject", b64[:60], str(e))
+        why = "the laptop refused it: %s" % e
     except Exception as e:  # never let one request kill the monitor
         log("error", b64[:60], "%s: %s" % (type(e).__name__, e))
+        why = "error on the laptop: %s" % type(e).__name__
+    if oid:
+        send_ack(hint, oid, state, why)
 
 
 def reap_idle(now=None):
