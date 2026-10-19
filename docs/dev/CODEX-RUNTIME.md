@@ -108,6 +108,29 @@ release with:
   guards-install /opt/fleet/current /etc/codex --check
 ```
 
+On a Mac managed node the same command runs against the root runtime. Codex
+reads `/etc/codex/requirements.toml` on every Unix, macOS included (the
+`/etc` link resolves to `/private/etc`); a forced MDM preference
+`com.openai.codex` `requirements_toml_base64`, when an organisation sets one, is
+a further layer this installer neither writes nor reads. macOS ships no
+`/etc/codex`, so the administrator creates it first:
+
+```sh
+sudo install -d -o root -g wheel -m 0755 /etc/codex
+sudo /usr/bin/python3 -I "/Library/Application Support/claude-fleet/current/extras/managed-node/image-stage.py" \
+  guards-install "/Library/Application Support/claude-fleet/current" /etc/codex --check
+```
+
+macOS's `/usr/bin/python3` is 3.9, which has no `tomllib`. The installer then
+reads TOML through its own strict subset (`_TomlSubset` in `image-stage.py`:
+tables, arrays of tables, one-line strings, booleans, decimal numbers, arrays,
+one-line inline tables). Whatever it accepts it reads exactly as `tomllib`
+does (`fleet-node-linux-selftest.py` holds the two together); anything outside
+the subset — multi-line strings, dates, hex numbers, a reopened table — is
+refused and nothing changes. The interpreter checks are unchanged: the release,
+`/etc/codex` and `/usr/bin/python3` must still be root-owned and not writable
+by other users.
+
 Omitting `--check` atomically installs the requirements. This is an administrative
 operation, not a launch-time repair. Both directories must already exist. The
 release, symlink and ancestor directories, guard scripts and system interpreters

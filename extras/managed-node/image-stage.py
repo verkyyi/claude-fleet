@@ -36,6 +36,242 @@ SEED = os.environ.get('FLEET_NODE_SEED', '/opt/claude-fleet/seed')
 HEARTBEAT = os.environ.get('FLEET_NODE_HEARTBEAT', '/run/fleet-node-loop')
 
 
+class _TomlSubset:
+    """A strict TOML reader for an interpreter without tomllib (macOS ships python
+    3.9, issue #4785): tables, arrays of tables, plain and dotted keys, one-line
+    strings, booleans, decimal numbers, arrays and one-line inline tables. Whatever
+    it returns equals tomllib's answer; anything outside the subset (multi-line
+    strings, dates, hex/inf, reopening a table) raises, so the installer refuses
+    and changes nothing rather than reading a policy differently."""
+
+    _BARE = re.compile('[A-Za-z0-9_-]+')
+    _NUMBER = re.compile(r'[+-]?(?:0|[1-9](?:_?[0-9])*)(\.[0-9](?:_?[0-9])*)?([eE][+-]?[0-9](?:_?[0-9])*)?')
+    _ESCAPES = {'b': '\b', 't': '\t', 'n': '\n', 'f': '\f', 'r': '\r', '"': '"', '\\': '\\'}
+
+    def __init__(self, text):
+        if '\r' in text.replace('\r\n', '\n') or text.startswith('\ufeff'):
+            raise ValueError('unsupported TOML: bare carriage return or byte-order mark')
+        self.s, self.i = text.replace('\r\n', '\n'), 0
+        self.root = {}
+        self.headers, self.implicit, self.dotted, self.aot = {id(self.root)}, set(), set(), set()
+
+    def fail(self, what):
+        raise ValueError('unsupported TOML at line %d: %s' % (self.s.count('\n', 0, self.i) + 1, what))
+
+    def peek(self):
+        return self.s[self.i] if self.i < len(self.s) else ''
+
+    def spaces(self):
+        while self.peek() in (' ', '\t') and self.peek():
+            self.i += 1
+
+    def end_of_line(self):
+        self.spaces()
+        if self.peek() == '#':
+            while self.peek() not in ('\n', ''):
+                if self.peek() < ' ' and self.peek() != '\t' or self.peek() == '\x7f':
+                    self.fail('control character in a comment')
+                self.i += 1
+        if self.peek() == '\n':
+            self.i += 1
+        elif self.peek():
+            self.fail('expected the end of the line')
+
+    def blank(self):
+        """Whitespace, newlines and comments between array elements."""
+        while True:
+            self.spaces()
+            if self.peek() == '#':
+                self.end_of_line()
+            elif self.peek() == '\n':
+                self.i += 1
+            else:
+                return
+
+    def string(self):
+        quote = self.peek()
+        if self.s.startswith(quote * 3, self.i):
+            self.fail('multi-line strings')
+        self.i += 1
+        out = []
+        while True:
+            c = self.peek()
+            if not c or c == '\n':
+                self.fail('unterminated string')
+            if c < ' ' and c != '\t' or c == '\x7f':
+                self.fail('control character in a string')
+            self.i += 1
+            if c == quote:
+                return ''.join(out)
+            if c == '\\' and quote == '"':
+                e = self.peek()
+                self.i += 1
+                if e in self._ESCAPES:
+                    out.append(self._ESCAPES[e])
+                elif e in ('u', 'U'):
+                    digits = self.s[self.i:self.i + (4 if e == 'u' else 8)]
+                    if len(digits) != (4 if e == 'u' else 8) or not re.fullmatch('[0-9A-Fa-f]+', digits):
+                        self.fail('bad unicode escape')
+                    point = int(digits, 16)
+                    if point > 0x10FFFF or 0xD800 <= point <= 0xDFFF:
+                        self.fail('bad unicode escape')
+                    out.append(chr(point))
+                    self.i += len(digits)
+                else:
+                    self.fail('bad escape')
+            else:
+                out.append(c)
+
+    def key(self):
+        parts = []
+        while True:
+            self.spaces()
+            if self.peek() in ('"', "'"):
+                parts.append(self.string())
+            else:
+                m = self._BARE.match(self.s, self.i)
+                if not m:
+                    self.fail('expected a key')
+                parts.append(m.group(0))
+                self.i = m.end()
+            self.spaces()
+            if self.peek() != '.':
+                return parts
+            self.i += 1
+
+    def delimited(self):
+        if self.peek() not in ('', ' ', '\t', '\n', ',', ']', '}', '#'):
+            self.fail('unsupported value')
+
+    def value(self):
+        c = self.peek()
+        if c in ('"', "'"):
+            return self.string()
+        if c == '[':
+            self.i += 1
+            items = []
+            while True:
+                self.blank()
+                if self.peek() == ']':
+                    self.i += 1
+                    return items
+                items.append(self.value())
+                self.blank()
+                if self.peek() == ',':
+                    self.i += 1
+                elif self.peek() != ']':
+                    self.fail('expected , or ] in an array')
+        if c == '{':
+            self.i += 1
+            table = {}
+            self.spaces()
+            if self.peek() == '}':
+                self.i += 1
+                return table
+            while True:
+                name = self.key()
+                if len(name) != 1:
+                    self.fail('dotted key inside an inline table')
+                if self.peek() != '=':
+                    self.fail('expected =')
+                self.i += 1
+                self.spaces()
+                if name[0] in table:
+                    self.fail('duplicate key')
+                table[name[0]] = self.value()
+                self.spaces()
+                if self.peek() == '}':
+                    self.i += 1
+                    return table
+                if self.peek() != ',':
+                    self.fail('expected , or } in an inline table')
+                self.i += 1
+        for word, meaning in (('true', True), ('false', False)):
+            if self.s.startswith(word, self.i):
+                self.i += len(word)
+                self.delimited()
+                return meaning
+        m = self._NUMBER.match(self.s, self.i)
+        if not m:
+            self.fail('unsupported value')
+        self.i = m.end()
+        self.delimited()
+        literal = m.group(0).replace('_', '')
+        return float(literal) if m.group(1) or m.group(2) else int(literal)
+
+    def header(self):
+        many = self.s.startswith('[[', self.i)
+        self.i += 2 if many else 1
+        path = self.key()
+        if not self.s.startswith(']]' if many else ']', self.i):
+            self.fail('unclosed table header')
+        self.i += 2 if many else 1
+        table = self.root
+        for name in path[:-1]:
+            if name not in table:
+                table[name] = {}
+                self.implicit.add(id(table[name]))
+            found = table[name]
+            if isinstance(found, list) and id(found) in self.aot:
+                table = found[-1]
+            elif isinstance(found, dict) and id(found) in self.headers | self.implicit:
+                table = found
+            else:
+                self.fail('table header reaches into a value')
+        name, found = path[-1], table.get(path[-1])
+        if many:
+            if found is None:
+                found = table[name] = []
+                self.aot.add(id(found))
+            elif not (isinstance(found, list) and id(found) in self.aot):
+                self.fail('array of tables over a value')
+            found.append({})
+            self.headers.add(id(found[-1]))
+            return found[-1]
+        if found is None:
+            found = table[name] = {}
+        elif not (isinstance(found, dict) and id(found) in self.implicit):
+            self.fail('table defined twice')
+        self.implicit.discard(id(found))
+        self.headers.add(id(found))
+        return found
+
+    def assign(self, table):
+        path = self.key()
+        if self.peek() != '=':
+            self.fail('expected =')
+        self.i += 1
+        self.spaces()
+        for name in path[:-1]:
+            if name not in table:
+                table[name] = {}
+                self.dotted.add(id(table[name]))
+            elif not (isinstance(table[name], dict) and id(table[name]) in self.dotted):
+                self.fail('dotted key reaches into a defined value')
+            table = table[name]
+        if path[-1] in table:
+            self.fail('key defined twice')
+        table[path[-1]] = self.value()
+
+    def load(self):
+        table = self.root
+        while True:
+            self.blank()
+            if not self.peek():
+                return self.root
+            table = self.header() if self.peek() == '[' else (self.assign(table) or table)
+            self.end_of_line()
+
+
+def toml_loads(text):
+    """tomllib when the interpreter has it, else the strict subset above."""
+    try:
+        import tomllib
+    except ImportError:
+        return _TomlSubset(text).load()
+    return tomllib.loads(text)
+
+
 def wanted(spec, arch):
     """[(binary, artifact name)] stage takes from a release for linux-<arch>:
     each tool's artifact and its helpers (#3017: codex's codex-code-mode-host)
@@ -79,7 +315,6 @@ def stage_managed_guards(source, published, staged=None):
         if marker.is_file() and 'codex_managed_preview' in json.loads(marker.read_text()):
             raise ValueError('staged managed guard configuration has lost its registration')
         return False
-    import tomllib
     emitter = source / 'bin/fleet-hooks-emit.sh'
     metadata = source / '.release'
     if (not emitter.is_file() or emitter.resolve() != emitter or not metadata.is_dir()
@@ -90,7 +325,7 @@ def stage_managed_guards(source, published, staged=None):
          '--python', '/usr/bin/python3'],
         env={'PATH': '/usr/bin:/bin'}, cwd=source, stdin=subprocess.DEVNULL,
         capture_output=True, text=True, timeout=15, check=True)
-    rendered = tomllib.loads(result.stdout)
+    rendered = toml_loads(result.stdout)
     if rendered['hooks']['managed_dir'] != str(published / 'hooks'):
         raise ValueError('managed guard staging produced a different runtime path')
     for group in rendered['hooks']['PreToolUse']:
@@ -180,7 +415,6 @@ def managed_root_owned(path):
 
 def install_managed_guards(current, system, check_only=False):
     """Explicit root-only policy installation; never called by stage/seed/boot."""
-    import tomllib
     if os.geteuid() != 0:
         raise ValueError('managed guard installation requires the administrator')
     current, system = Path(current).absolute(), Path(system).absolute()
@@ -205,7 +439,7 @@ def install_managed_guards(current, system, check_only=False):
          '--managed-dir', str(current / 'hooks'), '--python', '/usr/bin/python3'],
         env={'PATH': '/usr/bin:/bin'}, cwd=source, stdin=subprocess.DEVNULL,
         capture_output=True, text=True, timeout=15, check=True)
-    generated = tomllib.loads(result.stdout)
+    generated = toml_loads(result.stdout)
     if generated.get('features') != {'hooks': True} or generated['hooks']['managed_dir'] != str(current / 'hooks'):
         raise ValueError('managed guard renderer produced a different policy destination')
     for group in generated['hooks']['PreToolUse']:
@@ -226,7 +460,7 @@ def install_managed_guards(current, system, check_only=False):
             raise ValueError('existing requirements are not a protected regular file')
         previous = target.read_bytes() if target.exists() else None
         previous_stat = target.stat() if previous is not None else None
-        existing = tomllib.loads(previous.decode('utf-8')) if previous is not None else {}
+        existing = toml_loads(previous.decode('utf-8')) if previous is not None else {}
         features = existing.get('features', {})
         if not isinstance(features, dict) or features.get('hooks', True) is not True:
             raise ValueError('existing requirements conflict with managed hooks; nothing changed')
@@ -234,7 +468,7 @@ def install_managed_guards(current, system, check_only=False):
             raise ValueError('existing hook policy is not this exact Fleet policy; administrator review required')
         merged = dict(existing, features=dict(features, hooks=True), hooks=generated['hooks'])
         output = ''.join(json.dumps(key) + ' = ' + serialize(value) + '\n' for key, value in merged.items()).encode('utf-8')
-        if tomllib.loads(output.decode('utf-8')) != merged:
+        if toml_loads(output.decode('utf-8')) != merged:
             raise ValueError('managed requirements serialization did not preserve policy values')
         if current.resolve() != source:
             raise ValueError('active release changed during managed guard validation')

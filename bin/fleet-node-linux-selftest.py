@@ -1809,6 +1809,102 @@ case " $* " in *" --pinned "*) ;; *) for n in codex-code-mode-host-9-linux-amd64
                     image.install_managed_guards(current, system)
             self.assertFalse((system / 'requirements.toml').exists())
 
+    # issue #4785: macOS /usr/bin/python3 is 3.9 — no tomllib. The installer reads
+    # TOML through image-stage.py's own strict subset there; it must agree with
+    # tomllib on everything it accepts and refuse (nothing changed) the rest.
+    TOML_ACCEPTED = (
+        '', '# only a comment\n', 'a = 1\r\nb = "x"\r\n',
+        'allowed_approval_policies=["on-request"]\n[features]\nremote_plugin=false\n'
+        '[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n',
+        'a = "tab\\there \\"q\\" \\\\ \\u00e9 \\U0001F600"\nb = \'C:\\\\raw\'\n"quoted key" = 1\n\'lit\' = 2\n',
+        'n = [1, -2, +3, 1_000, 0, 3.5, -0.25, 1e3, 2.5E-2, 6_0.1_2]\n',
+        'multi = [\n  "a",  # one\n  "b",\n]\nempty = []\nt = {}\n',
+        'x.y.z = true\nx.y.w = false\nx.v = "s"\n[t]\n  k = { a = 1, "b c" = [ {d = "e"} ] }  # trailing\n',
+        '[a.b.c]\nv = 1\n[a]\nw = 2\n[a.b]\nu = 3\n',
+        '[[p]]\nm = "Bash"\n[[p.h]]\nc = 1\n[[p.h]]\nc = 2\n[[p]]\nm = "x"\n[p.sub]\nk = 1\n',
+        '"features" = {"hooks"=true,"x"=1}\n"hooks" = {"managed_dir"="/L/A S/c/current/hooks","PreToolUse"=[{"matcher"="Bash","hooks"=[{"type"="command"}]}]}\n',
+        '[ spaced . "header" ]\nkey="v"\n',
+    )
+    TOML_REFUSED_VALID = (  # valid TOML outside the subset: refused, never read differently
+        's = """multi"""\n', "s = '''multi'''\n", 'd = 2026-01-01T00:00:00Z\n', 'd = 2026-01-01\n',
+        'h = 0xff\n', 'f = inf\n', 'f = nan\n', 'o = 0o7\n', 't = {a.b = 1}\n',
+        '[fruit]\napple.color = "red"\n[fruit.apple.texture]\nsmooth = true\n', '\ufeffa = 1\n',
+    )
+    TOML_INVALID = (
+        'a = 1\na = 2\n', '[t]\n[t]\n', 'a = {b = 1}\n[a]\n', 'a = [1]\n[[a]]\n', 'a.b = 1\n[a]\n',
+        '[[a]]\n[a]\n', 'unclosed=[\n', 'a = "x\n', 'a = 01\n', 'a = 1 2\n', 'a = truex\n',
+        'a = "\\q"\n', 'a = "\\uD800"\n', 'a = 1,\n', '[a\n', 'a = {b = 1,}\n', 'a = {b = 1\n}\n',
+        'a\rb = 1\n', 'a = "ctl\x01"\n', '= 1\n', 'a = \n', 't = {a = 1, a = 2}\n', 'x = 1\nx.y = 2\n',
+    )
+
+    def test_managed_guard_toml_subset_matches_tomllib(self):
+        image = self.stage_mod()
+        try:
+            import tomllib
+        except ImportError:
+            tomllib = None
+        for text in self.TOML_ACCEPTED:
+            with self.subTest(accepted=text):
+                got = image._TomlSubset(text).load()
+                if tomllib:
+                    self.assertEqual(got, tomllib.loads(text))
+        for text in self.TOML_REFUSED_VALID + self.TOML_INVALID:
+            with self.subTest(refused=text):
+                with self.assertRaises(ValueError):
+                    image._TomlSubset(text).load()
+                if tomllib and text in self.TOML_INVALID:
+                    with self.assertRaises(ValueError):
+                        tomllib.loads(text)
+        emitted = REAL_RUN(['/bin/bash', str(BIN / 'fleet-hooks-emit.sh'), '--target', 'codex-managed', '--managed-dir',
+                            '/Library/Application Support/claude-fleet/current/hooks', '--python', '/usr/bin/python3'],
+                           capture_output=True, text=True, check=True).stdout
+        parsed = image._TomlSubset(emitted).load()
+        self.assertEqual(parsed['hooks']['managed_dir'], '/Library/Application Support/claude-fleet/current/hooks')
+        self.assertEqual(len(parsed['hooks']['PreToolUse']), 2)
+        if tomllib:
+            self.assertEqual(parsed, tomllib.loads(emitted))
+
+    def test_image_stage_runs_on_python39(self):
+        import ast
+        source = (BIN.parent / 'extras/managed-node/image-stage.py').read_text()
+        ast.parse(source, feature_version=(3, 9))
+
+    def test_managed_guard_install_without_tomllib(self):
+        image = self.stage_mod()
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(sys.modules, {'tomllib': None}):
+            with self.assertRaises(ImportError):
+                import tomllib  # noqa: F401
+            current, system, source = self.managed_install_fixture(temporary)
+            target = system / 'requirements.toml'
+            original = ('# administrator requirements\nallowed_approval_policies=["on-request"]\n'
+                        '[features]\nremote_plugin=false\n[mcp_servers.docs.identity]\nurl="https://docs.example/mcp"\n')
+            target.write_text(original)
+            with patch.object(image.os, 'geteuid', return_value=0), patch.object(image, 'managed_root_owned', return_value=True):
+                self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'would-install')
+                self.assertEqual(target.read_text(), original)
+                self.assertEqual(image.install_managed_guards(current, system), 'installed')
+                installed = target.read_bytes()
+                policy = image.toml_loads(installed.decode())
+                self.assertEqual(policy['allowed_approval_policies'], ['on-request'])
+                self.assertEqual(policy['mcp_servers'], {'docs': {'identity': {'url': 'https://docs.example/mcp'}}})
+                self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
+                self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
+                self.assertEqual(image.install_managed_guards(current, system), 'kept')
+                second = self.fake_release(current.parent, 'b' * 40, 2)
+                self.managed_release(second)
+                shutil.copyfile(BIN / 'fleet-codex-runtime.py', second / 'bin/fleet-codex-runtime.py')
+                for revision in (second.name, source.name):
+                    image.swap(current, revision)
+                    self.assertEqual(image.install_managed_guards(current, system, check_only=True), 'kept')
+                    self.assertEqual(target.read_bytes(), installed)
+                for refused in ('[features]\nhooks=false\n', 'updated=2026-01-01T00:00:00Z\n', 's = """x"""\n'):
+                    with self.subTest(refused=refused):
+                        target.write_text(refused)
+                        with self.assertRaises(ValueError):
+                            image.install_managed_guards(current, system)
+                        self.assertEqual(target.read_text(), refused)
+            self.assertEqual(sorted(path.name for path in system.iterdir()), ['requirements.toml'])
+
     def test_personal_pod_guard_preview_uses_image_seed_across_upgrade_and_rollback(self):
         import tomllib
         image = self.stage_mod()
