@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # selftest-repo-fixture.sh — sourced by selftests (issue #4806): put a repo into a
 # sandbox fleet the way fleet_repo_register leaves it — an overlay at
 # <conf-dir>/fleets/<sess>/repos/<slug>.conf, listed in repos/.order. The fleet
