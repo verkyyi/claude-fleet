@@ -64,6 +64,8 @@ git init -q "$BASEDIR"
 git -C "$BASEDIR" config user.email t@t; git -C "$BASEDIR" config user.name t
 printf 'seed\n' > "$BASEDIR/f"; git -C "$BASEDIR" add f; git -C "$BASEDIR" commit -qm seed
 BASE_BR="$(git -C "$BASEDIR" branch --show-current)"
+. "$BIN/selftest-repo-fixture.sh"
+for _c in noconf transfer-conf pfconf; do fx_repo "$WORK/$_c" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"; done
 
 # helper: add an issue-<N> worktree, optionally with a divergent commit / dirt.
 add_wt() {  # <n> <mode: ancestor|zero|commit|dirty>
@@ -126,6 +128,7 @@ case "$*" in
   *@agent_transfer_until*) printf '%s\n' "${TRANSFER_UNTIL:-}" ;;
    *@cc_agent*)    printf '%s\n' "${AGENT:-}" ;;
    *@cc_launcher_pid*) printf '%s\n' "${LAUNCH_PID:-}" ;;
+  *'#{@repo}|'*)  printf '||%s\n' "${WT:-}" ;;   # fleet_window_repo's one read: the fleet's only repo
   *@issue*)       printf '%s\n' "${ISS:-}" ;;
   *@worktree*)    printf '%s\n' "${WT:-}" ;;
   *pane_current_path*) printf '%s\n' "${PCWD:-}" ;;
