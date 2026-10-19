@@ -446,7 +446,7 @@ def main():
             assert result.returncode == 0 and result.stdout.strip().startswith('fcp1.'), result.stderr
             args.uid += 1
             try:
-                m.prepare(args)
+                m.login_open(args)
             except ValueError:
                 pass
             else:
