@@ -248,20 +248,20 @@ mod 不再按登录拷贝：`fleet_mod_dir` 给 `--plugin-dir` 的是 `<root>/<s
 Claude Code 解析插件文件真实路径时都落在目录内（不报「Path escapes plugin directory」，#2964），会话一直用起步时那一版的 mod，
 它的 argv 点名这一版，`process_releases` 保这一版不被清（BREAK-IT `managed-login-mod-escapes`）。
 把登录接上去的是更新器的 `point <sha>`，**降权到该登录**（它的 HOME / TMPDIR / `FLEET_CONF_DIR`）运行：普通目录先挪进
-`fleet.versions/`（不删）→ 旧布局的 `fleet.versions/.shared/logs` 并进 `$FLEET_CONF_DIR/logs` → 一次 rename 把
+`fleet.versions/`（不删）→ 一次 rename 把
 `~/.claude/fleet` 指向 `<root>/current` → 跑新版的 `fleet-install-apply.sh --tree-from <root>/<旧> --tree-to <root>/<新>`
 （两目录比较模式：发布目录里没有 git，改了什么逐文件比两棵树得出；守护重载、hook 合并、技能安装照旧）。
 **机器换版时所有登录同时换**：`current` 一动就都换了，切换那一拍（请守护重启之前）每个托管登录各跑一次 apply；
 体检 FAIL 整机退回时随 `current` 一起退回、各跑一次 apply；提交后、以及每拍处于发布版时，不是指向 `current` 的登录（被手动指回一份
-独立旧副本、开号时那份自己的拷贝、#2774 的旧链接树）重新指回（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。root 用 `account dev <登录> on` 同意过开发模式的登录（`accounts.json` 的 `dev`，#2779）例外：它的链接指着自己的代码目录（`fleet host dev on`），更新器不动、`install` 行 INFO，`account dev <登录> off` 后照常指回。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
+独立旧副本、开号时那份自己的拷贝）重新指回（BREAK-IT `managed-login-own-copy`；只有打开了 EPIC 挡（`FLEET_EPIC_HOLD_CAP_SECS`）时，有活的批次在跑才先等）。root 用 `account dev <登录> on` 同意过开发模式的登录（`accounts.json` 的 `dev`，#2779）例外：它的链接指着自己的代码目录（`fleet host dev on`），更新器不动、`install` 行 INFO，`account dev <登录> off` 后照常指回。跟不上的记进 `update.json` 的 `follow`，`install` 行写明最后一次结果，同一版
 `FLEET_NODE_UPDATE_RETRY` 后再试（`FLEET_NODE_UPDATE_FOLLOW=0` 关）。登录自己的 `fleet-install-sync.sh` 在托管登录上答
 `off · managed · 跟随 <root>/current (<sha>)`（这次是对的：更新器负责），不再自己去取——以前（#2688 / #2714）它按提交
 从 GitHub 取对象、每个登录各存一份。`account adopt` 接管那一刻**当场同步**做一次 `fleet-node-update.py follow <login>`
 （`FLEET_NODE_ADOPT_FOLLOW=0` 关）；`account release` 先把链接换回一份**独立副本**（拷贝，一个
 `fleet-release: <sha> seq=<n>` 提交的 checkout，放手后它的 install-sync 走入口那条路自己活），再放回它自己的服务。
-旧布局留下的 `fleet.versions/<…>`（#2774 的链接树、install-sync 时代的检出、挪开的副本）在登录指向 `current` 后一律退役，
-`FLEET_INSTALL_VERSIONS_KEEP_SECS`（7 天，给还在跑旧文件的会话）后删，删空了连 `fleet.versions` 一起删（`# compat-1v`）；
-旧名 `link-tree <sha>` 读一个版本，等于 `point`。
+`fleet.versions/<…>`（install-sync 时代的检出、挪开的副本）在登录指向 `current` 后一律退役，
+`FLEET_INSTALL_VERSIONS_KEEP_SECS`（7 天，给还在跑旧文件的会话）后删，删空了连 `fleet.versions` 一起删；
+#2774 的每登录链接树和旧名 `link-tree` 已删（#4790）。
 旧的 fleet-shell.sh 钉在某个版本目录的客户端壳镜像（`~/.cache/claude-fleet/shell/{bin,conf}` → `fleet.versions/<key>/…`）
 每拍改走登录链接（`~/.claude/fleet/…`），随安装一起动。
 `fleet doctor --installs`（#2692）一张表列本机的运行时、每个登录安装、每份客户端壳，各自是否等于 stable。

@@ -967,12 +967,9 @@ main() {
   # bootstrapped from it) is the updater's too (issue #3248): its git road could
   # only refuse — no checkout — and it sat on a release the runtime later pruned.
   MANAGED_SHA='' MARKW=stable
-  local linked_root pointed=0
+  local pointed=0
   [ "$(readlink "$ROOT" 2>/dev/null)" = "$NODE_ROOT/current" ] && pointed=1
-  # an older per-login linked tree (#2774) names its root in .fleet-linked (compat-1v: 下一批删)
-  linked_root=$(cat "$(cd "$ROOT" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null | sed -n 's/.*"root": *"\([^"]*\)".*/\1/p')
-  if { command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; } || [ "$pointed" = 1 ] \
-     || { [ -n "$linked_root" ] && [ "$(cd "$linked_root" 2>/dev/null && pwd -P)" = "$(cd "$NODE_ROOT" 2>/dev/null && pwd -P)" ]; }; then
+  if { command -v fleet_node_manages >/dev/null 2>&1 && fleet_node_manages; } || [ "$pointed" = 1 ]; then
     MANAGED_SHA=$(managed_release)
     DEFERRED_SINCE=''
     if [ -z "$MANAGED_SHA" ]; then

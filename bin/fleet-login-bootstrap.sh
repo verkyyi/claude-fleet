@@ -314,10 +314,8 @@ else
           || { rm -rf "$seed_dir"; fail fleet "could not clone the starter from $ROOT"; }
       else
         # the runtime's own release dir, so the files are files, not links into it
-        # (LINKED IS <runtime>/<sha> once ~/.claude/fleet links to <runtime>/current, #4669;
-        # an older linked tree names its runtime in .fleet-linked — compat-1v: 下一批删)
-        rel=$(sed -n 's/.*"root": *"\([^"]*\)".*/\1/p' "$LINKED/.fleet-linked" 2>/dev/null)
-        [ -n "$rel" ] || { [ "${LINKED##*/}" = "$ISHA" ] && rel=${LINKED%/*}; }
+        # (LINKED IS <runtime>/<sha> once ~/.claude/fleet links to <runtime>/current, #4669)
+        rel=''; [ "${LINKED##*/}" = "$ISHA" ] && rel=${LINKED%/*}
         if [ -n "$rel" ] && [ -d "$rel/$ISHA" ] && git init -q "$seed_dir" 2>/dev/null \
            && ( cd "$rel/$ISHA" && GIT_DIR="$seed_dir/.git" GIT_WORK_TREE="$rel/$ISHA" \
                 git -c "safe.directory=$rel/$ISHA" -c core.autocrlf=false add -A -f -- . ':(exclude).release' ':(exclude)tools' ) >/dev/null 2>&1 </dev/null \

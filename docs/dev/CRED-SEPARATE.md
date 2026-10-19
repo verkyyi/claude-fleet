@@ -279,46 +279,17 @@ shared proxy binds it, and a session minted before the switch goes on with its
 next request. Nothing reverses it (`disable --machine` is gone, issue #4675).
 
 A login on the shared proxy ignores its own `FLEET_CRED_SEPARATE` (a mark, no
-switch): `fleet-credsep.sh apply` says `shared`. A login that was separated per
-login before joins as it is. The shared proxy dying is BREAK-IT `cred-shared-down`.
+switch): `fleet-credsep.sh apply` says `shared`. The shared proxy dying is BREAK-IT `cred-shared-down`.
 `bin/fleet-cred-shared-selftest.sh` runs two logins through one proxy in a
 sandbox.
 
-### A login already separated on its own proxy (issue #2432)
+### A login once separated on its own proxy (issue #2432)
 
-A login separated before the machine had the shared proxy runs its own one
-(`com.claude-fleet.credsep.<login>`, the store's `meta.json` without
-`mode: shared`). `machine status` names it (`own proxy: …`), the login's
-`credsep check` WARNs, and one command moves it over with no gap:
-
-
-No login is made an own proxy any more (issue #4674) and there is no way back
-(`machine leave` left with it): `join` is how the last ones leave, and the
-node daemon's `credsep-enforce` runs it every tick.
-
-```sh
-sudo bash ~/.claude/fleet/bin/fleet-credsep.sh machine join  --logins a,b   # --dry-run first; no --logins = every own-mode login
-```
-
-`join`, in this order: the store becomes a tenant (`mode: shared`, its old port
-kept as `legacy_port`, `pool_hold` so the shared proxy leaves the credential
-files where the own proxy still reads them) and the shared proxy restarts; the
-join waits for the shared proxy's OWN answer for that login on its control
-socket (`FLEET_CREDSEP_JOIN_WAIT`, 30 s); the agent's leases are repointed to
-the shared socket (on a managed machine the `CCQUOTA_FLEET_CRED_STORE` line of
-`/var/db/fleet-node/logins/<login>.env` — the node daemon restarts its node
-program; else credsep's agent definition is restarted); only then is the own
-proxy booted out, its definition kept in `<store>/backup/`; the shared proxy
-binds the old port (it retries every 0.2 s), so a session minted on the own
-proxy goes on with its next request. No answer in time ⇒ everything is put back
-and `join` exits 1 — the own proxy never stopped. `machine install` takes an
-own-mode login down this same road.
-
-`leave` reverses it: the pool's copies back into the store, the tenant out of
-the shared proxy (its old port freed), the own definition back from `backup/`
-and started on the old port with the same key, the agent repointed. A session
-started under the shared proxy (the shared port) needs a reopen after a leave.
-BREAK-IT `cred-own-to-shared`.
+Before the machine had the shared proxy a login could run its own one; `machine
+join` moved those over with no gap. None is left (issue #4790 checked every
+login on both machines), so `join`, the launcher's `proxy` mode and the node
+daemon's join sweep are gone: a store that is no tenant of the shared proxy is
+what `machine install --logins <it>` is for.
 
 ## A step fails halfway (issue #2273)
 

@@ -1219,8 +1219,8 @@ class I_Credsep(Sandbox):
 class K_LoginInstall(Sandbox):
     """issues #2688, #4669: a managed login's ~/.claude/fleet is on the doctor —
     PASS only when it is a link straight to <root>/current; an own copy (even of
-    the same sha), an older per-login tree (#2774), one behind, or an unreadable
-    one WARNs (never FAIL: no rollback); no row without one."""
+    the same sha), one behind, or an unreadable one WARNs (never FAIL: no
+    rollback); no row without one."""
     def test_login_install_row(self):
         self.install(V1, claude="2.1.1")
         self.assertNotRegex(self.cmd("doctor").stdout, r"\binstall\b")
@@ -1233,10 +1233,6 @@ class K_LoginInstall(Sandbox):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertRegex(r.stdout, r"WARN\s+install\s+alice: ~/.claude/fleet at %s but its own copy \(link\), "
                                    r"not a link to " % V1[:12])
-        # an older per-login tree linked into this root (#2774): still a WARN — the tick moves it
-        self.wj(os.path.join(vers, V1, ".fleet-linked"), {"sha": V1, "root": self.root, "at": 1})
-        self.assertRegex(self.cmd("doctor").stdout, r"WARN\s+install\s+alice: ~/.claude/fleet at %s but an "
-                                                    r"older per-login tree" % V1[:12])
         os.remove(live)
         os.symlink(os.path.join(self.root, "current"), live)
         r = self.cmd("doctor")
@@ -1311,10 +1307,9 @@ class M_FollowInstall(Sandbox):
     per login — so it moves WITH the machine: the switch and the rollback move
     `current` and every login's apply runs --tree-from <root>/<old> --tree-to
     <root>/<new>; a tick reclaims one pointed at an own copy by hand (BREAK-IT
-    managed-login-own-copy) unless an EPIC batch with work holds it. An older
-    per-login layout is moved off: its .shared/logs into the conf dir, its
-    version dirs retired and gone after their keep, then ~/.claude/fleet.versions
-    itself. `release-install` makes it an own copy again (a checkout of one
+    managed-login-own-copy) unless an EPIC batch with work holds it. Version
+    dirs under ~/.claude/fleet.versions are retired and gone after their keep,
+    then ~/.claude/fleet.versions itself. `release-install` makes it an own copy again (a checkout of one
     `fleet-release:` commit). A client-shell mirror pinned to a version dir
     follows the link."""
     V0 = "a" * 40
@@ -1329,13 +1324,9 @@ class M_FollowInstall(Sandbox):
             "bob": {"uid": os.geteuid(), "gid": os.getegid(), "home": self.bob}})
         self.wj(os.path.join(self.d, "db", "accounts.json"),
                 {"alice": {"managed": True, "since": 1}, "bob": {"managed": True, "since": 1}})
-        # alice: the older layout (a version dir, logs/ in .shared); bob: a plain bootstrap copy
+        # alice: a link to a version dir (a copy moved aside); bob: a plain bootstrap copy
         vers = os.path.join(self.home, ".claude", "fleet.versions")
         os.makedirs(os.path.join(vers, self.V0, "bin"))
-        os.makedirs(os.path.join(vers, ".shared", "logs"))
-        with open(os.path.join(vers, ".shared", "logs", "old.log"), "w") as f:
-            f.write("old\n")
-        os.symlink("../.shared/logs", os.path.join(vers, self.V0, "logs"))
         os.symlink(os.path.join(vers, self.V0), self.live("alice"))
         os.makedirs(os.path.join(self.bob, ".claude", "fleet", "bin"))
         os.makedirs(os.path.join(self.bob, ".claude", "fleet", "epic-pages"))
@@ -1377,11 +1368,6 @@ class M_FollowInstall(Sandbox):
         self.assertEqual(st["phase"], "switched", st)
         for who in ("alice", "bob"):
             self.assert_pointed(who, V1)
-        # alice's shared logs/ moved into her conf dir; nothing of them is left in the versions dir
-        conf_logs = os.path.join(self.home, ".config", "claude-fleet", "logs")
-        with open(os.path.join(conf_logs, "old.log")) as f:
-            self.assertEqual(f.read(), "old\n")
-        self.assertFalse(os.path.lexists(os.path.join(self.live("alice") + ".versions", ".shared", "logs")))
         # bob's plain copy is kept aside (retired, not deleted at once)
         bv = self.live("bob") + ".versions"
         kept = [n for n in os.listdir(bv) if not n.startswith(".")]
@@ -1413,8 +1399,8 @@ class M_FollowInstall(Sandbox):
             self.assertIn("--tree-from %s --tree-to %s " % (os.path.join(self.root, V1), os.path.join(self.root, V2)), r)
 
     def test_old_versions_go_after_their_keep(self):
-        """issue #4669: once pointed, the login's old version dirs (a linked tree,
-        install-sync's checkouts, a copy moved aside) go after their keep, and
+        """issue #4669: once pointed, the login's old version dirs (install-sync's
+        checkouts, a copy moved aside) go after their keep, and
         ~/.claude/fleet.versions with them."""
         vers = self.live("alice") + ".versions"
         os.makedirs(os.path.join(vers, "b" * 40, ".git"))      # an install-sync checkout
@@ -1498,16 +1484,6 @@ class M_FollowInstall(Sandbox):
         self.daemon_on(V1)
         self.tick(V1)
         self.assertFalse(os.path.lexists(self.live("bob")))
-
-    def test_old_name_link_tree_still_points(self):
-        """compat-1v: an updater before #4669 asks a login by `link-tree <sha>`."""
-        self.release(V1)
-        self.tick(V1, FLEET_NODE_UPDATE_FOLLOW="0")
-        e = dict(self.env, HOME=self.home, FLEET_NODE_ROOT=self.root)
-        r = subprocess.run([sys.executable, UPD, "link-tree", V1, "--no-apply"], env=e, capture_output=True,
-                           text=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assert_pointed("alice", V1)
 
     def test_release_install_is_an_own_copy(self):
         self.install(V1)
@@ -1893,11 +1869,9 @@ class S_AdminTree(Sandbox):
     """issue #3248: a login NOT taken over (mac-d's admin heidi, its node agent
     exec'ing ~/.claude/fleet/bin/fleet-login-new.sh) whose ~/.claude/fleet stands
     on the runtime: a link to <root>/current (issue #4669) moves with the machine
-    by itself; an older tree linked into one release (#2774, compat-1v) keeps
-    that release from being pruned while it stands there, is pointed at current
-    by the updater like a managed login's, and the machine doctor's `login-tree`
-    row FAILs when it links a release that is gone. A login's own copy (carol's
-    checkout) is never touched."""
+    by itself, and the machine doctor's `login-tree` row FAILs when its link
+    names something that is gone. A login's own copy (carol's checkout) is never
+    touched."""
 
     def setUp(self):
         Sandbox.setUp(self)
@@ -1916,10 +1890,7 @@ class S_AdminTree(Sandbox):
         live = self.live(home)
         if os.path.islink(live) and os.readlink(live) == os.path.join(self.root, "current"):
             return os.path.basename(os.path.realpath(live))
-        try:
-            return self.rj(os.path.join(os.path.realpath(live), ".fleet-linked"))["sha"]
-        except (IOError, OSError, ValueError, KeyError):
-            return None
+        return None
 
     def point(self, sha):
         """frank bootstrapped from the runtime (fleet-login-install.sh's runtime road)."""
@@ -1928,15 +1899,6 @@ class S_AdminTree(Sandbox):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.at(self.vh), sha)
-
-    def old_tree(self, sha):
-        """frank on the layout before #4669: a tree whose files link into <root>/<sha>."""
-        t = os.path.join(self.live(self.vh) + ".versions", sha)
-        os.makedirs(os.path.join(t, "bin"))
-        os.symlink(os.path.join(self.root, sha, "bin", "fleet-node-update.py"),
-                   os.path.join(t, "bin", "fleet-node-update.py"))
-        self.wj(os.path.join(t, ".fleet-linked"), {"sha": sha, "root": self.root, "at": 1})
-        os.symlink(t, self.live(self.vh))
 
     def to(self, sha, **extra):
         self.release(sha)
@@ -1958,43 +1920,16 @@ class S_AdminTree(Sandbox):
         self.assertFalse(os.path.islink(self.live(self.ch)))
         self.assertFalse(os.path.lexists(self.live(self.vh) + ".versions"))
 
-    def test_old_tree_kept_then_pointed(self):
+    def test_gone_link_fails_doctor(self):
+        """BREAK-IT runtime-gc-admin-tree: a link whose target is gone outright —
+        the doctor FAILs; carol's own copy says nothing."""
         self.install(V1)
-        self.old_tree(V1)
-        self.assertTrue(any("PASS" in l for l in self.rows()), self.rows())
-        # the logins may not move (follow off): the old tree's release is never pruned
-        self.to(V2, FLEET_NODE_UPDATE_FOLLOW="0")
-        self.to(V3, FLEET_NODE_UPDATE_FOLLOW="0")
-        self.tick(V3, FLEET_NODE_UPDATE_FOLLOW="0", FLEET_NODE_UPDATE_KEEP_SECS="0", FLEET_NODE_PS_CMD=os.devnull)
-        self.assertTrue(os.path.isdir(os.path.join(self.root, V1)), "a release the admin's tree links was pruned")
-        self.assertEqual(self.at(self.vh), V1)
-        # follow on: the admin is pointed at current; carol's own copy is left
-        self.tick(V3, FLEET_NODE_PS_CMD=os.devnull)
-        self.assertEqual(self.at(self.vh), V3)
-        self.assertEqual(os.readlink(self.live(self.vh)), os.path.join(self.root, "current"))
-        self.assertFalse(os.path.islink(self.live(self.ch)))
-        self.assertFalse(any("FAIL" in l for l in self.rows()), self.rows())
-
-    def test_pruned_release_fails_doctor_then_points(self):
-        """BREAK-IT runtime-gc-admin-tree: an updater from before #3248 pruned the
-        release under the admin's tree — the doctor FAILs, the next tick points it at current."""
-        self.install(V1)
-        self.old_tree(V1)
-        self.to(V2, FLEET_NODE_UPDATE_FOLLOW="0")
-        shutil.rmtree(os.path.join(self.root, V1))
-        self.assertFalse(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
-        rows = self.rows()
-        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+frank: .*no longer has", l) for l in rows), rows)
-        self.assertFalse(any("carol" in l for l in rows), rows)
-        self.tick(V2)
-        self.assertEqual(self.at(self.vh), V2)
-        self.assertTrue(os.path.exists(os.path.join(self.live(self.vh), "bin", "fleet-node-update.py")))
-        rows = self.rows()
-        self.assertTrue(rows and all("PASS" in l for l in rows), rows)
-        # a link whose target is gone outright FAILs too
+        self.point(V1)
         os.remove(self.live(self.vh))
         os.symlink(os.path.join(self.d, "gone"), self.live(self.vh))
-        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+frank: .*which is gone", l) for l in self.rows()))
+        rows = self.rows()
+        self.assertTrue(any(re.search(r"FAIL\s+login-tree\s+frank: .*which is gone", l) for l in rows), rows)
+        self.assertFalse(any("carol" in l for l in rows), rows)
 
 
 def _codesign_ready():
@@ -2227,7 +2162,7 @@ if __name__ == "__main__":
         # BREAK-IT codesign-identity-switch (issue #3433): the identity survives a version switch
         unittest.main(argv=[sys.argv[0], "T_Codesign"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-admin-tree":
-        # BREAK-IT runtime-gc-admin-tree (issue #3248): kept, followed, FAILed when pruned anyway
+        # BREAK-IT runtime-gc-admin-tree (issue #3248): moves with the machine, FAILs when gone
         unittest.main(argv=[sys.argv[0], "S_AdminTree"], verbosity=1)
     if len(sys.argv) > 1 and sys.argv[1] == "--drill-fetch":
         # BREAK-IT release-fetch-slow: the updater half

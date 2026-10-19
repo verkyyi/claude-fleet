@@ -59,17 +59,15 @@ made() {
   printf '%s %s %s\n' "$1" "$2" "$3"
 }
 # linked_sha <dir> — the release <dir> stands on in the runtime: <NROOT>/current's
-# when it is a link there (issue #4669), else the sha an older linked tree's
-# .fleet-linked names (compat-1v: 下一批删)
+# when it is a link there (issue #4669), else nothing
 linked_sha() {
   local t
   t=$(readlink "$1" 2>/dev/null)
   if [ "${t%/}" = "$NROOT/current" ]; then
     t=$(readlink "$NROOT/current" 2>/dev/null); t=${t%/}; t=${t##*/}
     case "$t" in *[!0-9a-f]*) ;; *) [ "${#t}" = 40 ] && printf '%s\n' "$t" ;; esac
-    return 0
   fi
-  sed -n 's/.*"sha": *"\([0-9a-f]\{40\}\)".*/\1/p' "$(cd "$1" 2>/dev/null && pwd -P)/.fleet-linked" 2>/dev/null
+  return 0
 }
 
 # --- already there -------------------------------------------------------------

@@ -128,9 +128,9 @@ if "-w" in a:
 
     def managed(self, linked=False):
         self.pin.write_text(V.key_line(KEYS["stranger"]) + "\n")
-        if linked:
-            (self.root / "home/.claude/fleet/.fleet-linked").write_text(json.dumps({
-                "root": str(self.root / "runtime")}))
+        if linked:     # ~/.claude/fleet → <runtime>/current (issue #4669)
+            (self.root / "home/.claude/fleet").rmdir()
+            (self.root / "home/.claude/fleet").symlink_to(self.root / "runtime" / "current")
         else:
             (self.root / "node/accounts.json").write_text('{"fixture":{"managed":true}}')
         (self.root / "node/release.pub").write_text((self.root / "key").read_text())

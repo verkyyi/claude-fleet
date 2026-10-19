@@ -3,18 +3,6 @@
 agent (issue #1971, EPIC #1967 C4). Run by ROOT, from the root-owned copy
 bin/fleet-credsep.sh installs; never from a login's own checkout.
 
-    fleet-credsep-launch.py proxy <login>
-        compat-1v: 下一批删 — a login's OWN proxy (issue #4674: none is made any
-        more; one left from before runs here until credsep-enforce's `machine
-        join` takes it onto the shared one). As the role account (_fleetcred / fleetcred):
-        reads <root>/meta.json, takes the proxy's port / timings from the
-        login's fleet.conf + secrets.env (PARSED, never sourced — this is root
-        reading a file the login writes) and everything that names an upstream,
-        the hub or the relay pass from root's <lib>/<login>.conf ONLY (issue
-        #2290), copies node-probe.json in, then drops
-        to the role account and execs fleet-cred-proxy.py serve with every
-        credential path pointing into <root>.
-
     fleet-credsep-launch.py agent <login>
         The login's ccquota node agent, as the LOGIN: reads <root>/node.env,
         hands the token down a pipe (CCQUOTA_TOKEN_FD=3, never the environment
@@ -342,8 +330,8 @@ def shared():
 def main():
     if len(sys.argv) == 2 and sys.argv[1] == "shared":
         return shared()
-    if len(sys.argv) != 3 or sys.argv[1] not in ("proxy", "agent", "agents"):
-        die("usage: fleet-credsep-launch.py proxy|agent|agents <login> · shared", 2)
+    if len(sys.argv) != 3 or sys.argv[1] not in ("agent", "agents"):
+        die("usage: fleet-credsep-launch.py agent|agents <login> · shared", 2)
     mode, login = sys.argv[1], sys.argv[2]
     if not LOGIN_RE.match(login):
         die("bad login name %r" % login, 2)
@@ -362,47 +350,8 @@ def main():
         die("%s/meta.json: %s (not installed? bin/fleet-credsep.sh install)" % (root, e))
     if meta.get("login") != login:
         die("%s/meta.json names %r, not %r" % (root, meta.get("login"), login))
-    role = meta.get("role") or ROLE
     pw_login = getpw(login)
     login_home = os.environ["HOME"] if os.environ.get("FLEET_CREDSEP_TEST") == "1" else pw_login.pw_dir
-
-    if mode == "proxy":     # compat-1v: 下一批删 (issue #4674)
-        if meta.get("mode") == "shared":
-            die("%s is a tenant of the machine's shared proxy (fleet-credsep-launch.py shared)" % login)
-        pw_role = pwd.getpwnam(role)
-        # the login reads the port and connects to ctl.sock here; only the
-        # proxy writes it. /var/run is emptied at boot, so make it every start.
-        os.makedirs(run, mode=0o755, exist_ok=True)
-        os.chmod(run, 0o755)
-        if os.geteuid() == 0:
-            os.chown(run, pw_role.pw_uid, pw_role.pw_gid)
-        logdir = base("FLEET_CREDSEP_LOG_BASE", "/var/log/fleet-cred")
-        os.makedirs(logdir, mode=0o755, exist_ok=True)
-        if os.geteuid() == 0:
-            os.chown(logdir, pw_role.pw_uid, pw_role.pw_gid)
-        settings = tenant_settings(meta, run)
-        state = os.path.join(root, "cred-proxy")
-        probe = os.path.join(state, "node-probe.json")
-        copy_probe(meta["conf_dir"], probe, pw_role)
-        env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": pw_role.pw_dir or "/var/empty",
-               "LANG": "en_US.UTF-8", "FLEET_CONF_DIR": root,
-               "FLEET_CRED_ACCOUNTS": os.path.join(root, "accounts"),
-               "FLEET_CRED_CODEX_AUTH": os.path.join(root, "codex", "default", "auth.json"),
-               "FLEET_CRED_CODEX_HOMES": os.path.join(root, "codex"),
-               "FLEET_CRED_NODE_ENV": os.path.join(root, "node.env"),
-               "FLEET_CRED_PROBE": probe,
-               "FLEET_CRED_STORE": "1",
-               "FLEET_CRED_CTL_UID": str(pw_login.pw_uid),
-               "FLEET_CRED_CTL_DIR": run,
-               "FLEET_CRED_PROXY_LOG": os.path.join(logdir, login + ".log")}
-        env.update(settings)
-        if TEST:    # loopback upstreams pass the allow-list only in the sandbox
-            env["FLEET_CREDSEP_TEST"] = "1"
-        drop_to(role)
-        os.umask(0o077)
-        os.chdir("/")
-        py = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else shutil.which("python3") or "python3"
-        os.execve(py, [py, "-I", os.path.join(HERE, "fleet-cred-proxy.py"), "serve"], env)
 
     # agent
     ne = env_lines(os.path.join(root, "node.env"))

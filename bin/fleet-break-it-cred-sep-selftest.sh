@@ -43,7 +43,7 @@
 #   cred-new-login-unseparated  bin/fleet-login-new.sh (--no-credsep gone, #4675), bin/fleet-credsep.py
 #                              install (conf_ensure: no ~/.config) — issue #4607
 #   cred-existing-unseparated  bin/fleet-credsep.py machine enforce / enforced (human_logins,
-#                              fleet_login; root's credsep.optional ignored, #4675),
+#                              fleet_login; root's credsep.optional means nothing, #4675),
 #                              bin/fleet-node-supervisor.py credsep-enforce — #4607
 #   cred-enforce-fails-no-lease  bin/fleet-credsep.py machine enforce (refused → --force past the
 #                              grace, failed → retry later) / enforced / check, tokenledger
@@ -632,7 +632,7 @@ drill_cred_new_login_unseparated() {
 # program wrote the pool's real tokens and node.env into their homes. The machine
 # daemon's credsep-enforce takes every human fleet login in by itself and leaves a
 # CI runner / a plain account alone — and root's old way out, credsep.optional
-# naming every login, is said and ignored (#4675).
+# naming every login, means nothing (#4675).
 drill_cred_existing_unseparated() {
   CAP=30
   local sb="$WORK/existunsep" t0 out rc env
@@ -648,8 +648,6 @@ drill_cred_existing_unseparated() {
   out=$(env $env HOME="$sb/homes/alpha" python3 -I "$BIN/fleet-credsep.py" machine enforce 2>&1); rc=$?
   SECS=$(since "$t0")
   [ "$rc" = 0 ] || { WHY="machine enforce failed (rc $rc): $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; return 1; }
-  printf '%s' "$out" | grep -q 'credsep.optional is gone' \
-    || { WHY="root's credsep.optional was not said to be gone: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"; return 1; }
   [ -L "$C/node.env" ] && [ -f "$sb/db/alpha/node.env" ] && [ ! -e "$C/accounts/a1.hub/.credentials.json" ] \
     || { WHY="after enforce alpha's node.env / lease are still its own files: $(ls -lR "$C" | head -20 | tr '\n' ' ')"; return 1; }
   python3 -c 'import json,sys; l=json.load(open(sys.argv[1]))["logins"]; sys.exit(0 if l.get("alpha",{}).get("verdict")=="separated" and set(l)=={"alpha"} else 1)' \
@@ -663,7 +661,7 @@ drill_cred_existing_unseparated() {
     || { WHY="every fleet login separated, yet the doctor row is not OK (rc $rc): $out"; return 1; }
   grep -q '"credsep-enforce"' "$BIN/fleet-node-supervisor.py" \
     || { WHY="the machine daemon no longer runs credsep-enforce"; return 1; }
-  WHAT="没隔离的现有登录：守护的 credsep-enforce 自己把它收进隔离库（node.env、租约都搬走），root 的 credsep.optional 写了 * 也照收（说一句已删）；审计一行、状态文件写 separated；CI 账号和不能登录的账号不碰；doctor credsep-logins 行 OK"
+  WHAT="没隔离的现有登录：守护的 credsep-enforce 自己把它收进隔离库（node.env、租约都搬走），root 的 credsep.optional 写了 * 也照收；审计一行、状态文件写 separated；CI 账号和不能登录的账号不碰；doctor credsep-logins 行 OK"
 }
 
 # #4607: separating a login fails (its live sessions still read the files, or the

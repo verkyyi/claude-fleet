@@ -104,7 +104,7 @@ case "$rc:$out" in "2:"*"disable --machine is gone (issue #4675)"*) pass "C disa
 out=$(R enable --all-logins 2>&1); rc=$?
 [ "$rc" = 2 ] && cmp -s "$SB/orig.conf" "$FLEET_CONF_DIR/fleet.conf" && pass "C enable --all-logins: exit 2 too" || fail "C --all-logins rc=$rc: $out"
 out=$(bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
-[ "$rc" = 0 ] && [ -z "$out" ] && ! up && pass "C the per-login launcher's old entry \`run\` exits 0, starts nothing" || fail "C run rc=$rc: $out"
+[ "$rc" = 2 ] && ! up && pass "C the per-login launcher's old entry \`run\` is gone (exit 2), starts nothing" || fail "C run rc=$rc: $out"
 
 # ── B: on, through the proxy this login's sessions use ─────────────────────
 printf 'export FLEET_CRED_PROXY=1\n' >> "$FLEET_CONF_DIR/fleet.conf"

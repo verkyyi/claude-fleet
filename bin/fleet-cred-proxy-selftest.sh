@@ -67,8 +67,8 @@ out=$(FLEET_CRED_PROXY=0 bash "$BIN/fleet-cred-proxy.sh" ensure 2>&1); rc=$?
 [ "$rc" = 3 ] && pass "A off: ensure refuses (exit 3)" || fail "A off: ensure rc=$rc ($out)"
 for sw in 0 1; do
   out=$(FLEET_CRED_PROXY=$sw bash "$BIN/fleet-cred-proxy.sh" run 2>&1); rc=$?
-  if [ "$rc" = 0 ] && [ -z "$out" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/port" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ]; then
-    pass "A run (FLEET_CRED_PROXY=$sw): the per-login launcher's old entry exits 0, starts nothing (#4674)"
+  if [ "$rc" = 2 ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/port" ] && [ ! -e "$FLEET_CONF_DIR/cred-proxy/ctl.sock" ]; then
+    pass "A run (FLEET_CRED_PROXY=$sw): the per-login launcher's old entry is gone (exit 2), starts nothing (#4674, #4790)"
   else fail "A run (FLEET_CRED_PROXY=$sw) rc=$rc: $out"; ls -la "$FLEET_CONF_DIR/cred-proxy" 2>&1; fi
 done
 

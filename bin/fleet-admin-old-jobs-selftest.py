@@ -12,9 +12,7 @@ launchctl (nothing reaches a real launchd domain — FLEET_NODE_LAUNCHCTL):
   C  a tenant's (non-admin) units and a gone login's are not this road's; no old
      unit at all ⇒ nothing done (no launchctl, no attic)
   D  --dry-run moves nothing; `attic restore` puts a retired unit back
-  E  a managed login still on its own credential proxy is joined (machine join),
-     a shared one is not; a failed join is named, nothing else moved;
-     FLEET_NODE_CREDSEP_JOIN=0 asks nothing
+  E  the sweep asks the credential store nothing (no own proxy to join, #4790)
 """
 import json
 import os
@@ -105,13 +103,10 @@ class OldJobs(unittest.TestCase):
         return p
 
     def link_install(self, login, root=None):
-        """<home>/.claude/fleet → a version tree whose .fleet-linked names <root>."""
+        """<home>/.claude/fleet → <root>/current (issue #4669)."""
         home = os.path.join(self.users, login)
-        tree = os.path.join(home, ".claude", "fleet.versions", "a" * 40)
-        os.makedirs(tree)
-        with open(os.path.join(tree, ".fleet-linked"), "w") as f:
-            json.dump({"sha": "a" * 40, "root": root or self.root, "at": 1}, f)
-        os.symlink(tree, os.path.join(home, ".claude", "fleet"))
+        os.makedirs(os.path.join(home, ".claude"), exist_ok=True)
+        os.symlink(os.path.join(root or self.root, "current"), os.path.join(home, ".claude", "fleet"))
 
     def sweep(self, *args, **kw):
         e = dict(self.env, **kw.pop("env", {}))
@@ -222,36 +217,12 @@ class OldJobs(unittest.TestCase):
         self.assertTrue(os.path.isfile(disp))
 
     # -- E
-    def test_e_own_credential_proxy_joined(self):
+    def test_e_no_credential_proxy_join(self):
+        """issue #4790: the sweep asks the credential store nothing — there is no
+        own proxy left to join."""
         self.cstate({"carol": "own", "dave": "shared"})
-        r = self.sweep()
-        calls = self.cs_calls()
-        self.assertIn("machine managed --json", calls)
-        self.assertIn("machine join --logins carol", calls)
-        self.assertFalse([c for c in calls if "dave" in c], "a login already on the shared proxy is left alone")
-        self.assertIn("credsep carol: on its own proxy — joining", r.stderr)
-        self.assertIn("credsep carol: joined", r.stderr)
-        self.assertIn("joined carol to the shared credential proxy", r.stdout)
-        # a dry run passes --dry-run
-        os.unlink(self.cslog)
-        r = self.sweep("--dry-run")
-        self.assertIn("machine join --logins carol --dry-run", self.cs_calls())
-        # a failed join is named
-        with open(self.csrc, "w") as f:
-            f.write("1\n")
-        r = self.sweep()
-        self.assertIn("credsep carol stays on its own proxy: rc 1", r.stdout)
-        self.assertEqual(self.attic(), [])
-        # nobody on an own proxy ⇒ no join asked; the switch off ⇒ nothing asked
-        self.cstate({"carol": "shared"})
-        os.unlink(self.cslog)
         self.sweep()
-        self.assertEqual(self.cs_calls(), ["machine managed --json"])
-        os.unlink(self.cslog)
-        self.cstate({"carol": "own"})
-        self.sweep(env={"FLEET_NODE_CREDSEP_JOIN": "0"})
         self.assertEqual(self.cs_calls(), [])
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

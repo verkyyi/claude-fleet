@@ -528,9 +528,8 @@ if [ "$DRY" != 1 ] && [ -f "$ROOT/bin/fleet-conf.sh" ] && [ -f "${FLEET_CONF_DIR
   unset _mt
 fi
 # The login's records leave the install (issue #4668): the install is read-only,
-# every log / heartbeat / ledger is $FLEET_CONF_DIR/logs. <install>/logs — a real
-# directory, or a link tree's link into ../.shared/logs (compat-1v: 下一批删) —
-# is moved there, every apply, until nothing is left in it: an entry the conf dir
+# every log / heartbeat / ledger is $FLEET_CONF_DIR/logs. <install>/logs is moved
+# there, every apply, until nothing is left in it: an entry the conf dir
 # lacks moves as is; a log / ndjson / tsv it has keeps its own lines after the
 # old ones; any other (a heartbeat, a cache) is the newer writer's and the old
 # copy goes. The daemons' StandardErrorPath needs the directory before a load.

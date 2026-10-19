@@ -107,10 +107,8 @@ machine's work ONCE, however many logins the machine carries:
                 The admin login's own units with nothing left to do go too (issue
                 #4363, expected.json or not): com.claude-fleet.<admin>.<unit> whose
                 unit this release ships no template for (dispatch), and its
-                install-sync once its ~/.claude/fleet stands on this root (→ current);
-                and a managed login still on its own credential proxy is joined to
-                the shared one (`fleet-credsep.py machine join`, no gap;
-                FLEET_NODE_CREDSEP_JOIN=0 leaves it). One log line before, one after.
+                install-sync once its ~/.claude/fleet stands on this root (→ current).
+                One log line before, one after.
                 It also clears a taken-over login that still carries the person's
                 client here (issue #2702): `~/.cache/claude-fleet/shell` or a
                 `~/.zshrc` line that sources shell/fleet-login.zsh / cw.zsh / the
@@ -1714,7 +1712,7 @@ def account_proc_is(ent, cmd):
 
 def shared_proxy_run(home):
     """The shared credential proxy's run dir when this login's sessions go
-    through the machine's ONE shared proxy (`fleet-credsep.py machine join`:
+    through the machine's ONE shared proxy (`fleet-credsep.py machine install`:
     credsep.json "shared"), else ""."""
     try:
         with open(os.path.join(home, ".config", "claude-fleet", "credsep.json")) as f:
@@ -3804,10 +3802,7 @@ class attic_lock(object):
 
 def sweep(paths, dry=False):
     with attic_lock(paths):
-        res = _sweep(paths, dry)
-    # outside the attic lock: a join restarts the shared proxy and waits on it
-    res["credsep_join"] = credsep_join_own(paths, res.get("hold") or None, dry)
-    return res
+        return _sweep(paths, dry)
 
 
 def _handwritten(paths, d, n, src):
@@ -4068,8 +4063,8 @@ def _extra_verdict(paths, d, src, label, legacy, managed):
     to boot it out into the attic, (False, why) to leave it named, (None, "") when
     it IS expected. The expected set: this daemon, expected.json's labels (the
     caller), and each existing login's own credential proxy
-    (com.claude-fleet.credsep.<login> — `fleet-credsep.py machine join` is its
-    road; the sweep never cuts a login's credentials)."""
+    (com.claude-fleet.credsep.<login>; the sweep never cuts a login's
+    credentials)."""
     if d == paths.daemon_dir:
         m = re.match(r"^com\.claude-fleet\.credsep\.(.+)$", label)
         if m:
@@ -4491,21 +4486,16 @@ def sweep_say(msg):
 
 def _linked_into(home, root):
     """Does <home>/.claude/fleet stand on <root> — a link to <root>/current (issue
-    #4669), or an older version tree whose .fleet-linked mark names <root>
-    (compat-1v: 下一批删) — fleet-node-update.py linked_sha?"""
+    #4669)?"""
     live = os.path.join(home, ".claude", "fleet")
     try:
         if not os.path.islink(live):
             return False
         t = os.readlink(live).rstrip("/")
-        if os.path.basename(t) == "current" and \
-                os.path.realpath(os.path.dirname(os.path.join(os.path.dirname(live), t))) == os.path.realpath(root):
-            return True
-        m = read_json(os.path.join(os.path.realpath(live), ".fleet-linked"), None)
+        return os.path.basename(t) == "current" and \
+            os.path.realpath(os.path.dirname(os.path.join(os.path.dirname(live), t))) == os.path.realpath(root)
     except OSError:
         return False
-    return isinstance(m, dict) and bool(m.get("root")) and \
-        os.path.realpath(str(m["root"])) == os.path.realpath(root)
 
 
 def admin_old_jobs(paths, managed=()):
@@ -4571,56 +4561,6 @@ def admin_old_retire(paths, index, stamp, managed=(), hold=None, dry=False):
             sweep_say("admin old job %s (%s): booted out → attic %s (attic restore %s puts it back)"
                       % (a["label"], a["login"], e["id"], e["id"]))
         res["moved"].append(e)
-    return res
-
-
-# -- a managed login still on its own credential proxy (issue #4363): every
-# taken-over login is a tenant of the machine's ONE shared proxy (#3700) — the
-# own one (com.claude-fleet.credsep.<login>) is one more copy per login, and none
-# is made any more (#4674): this is how the last ones leave. `fleet-credsep.py machine join` is the no-gap road (it puts the login
-# back on its own proxy when the shared one does not take it); the sweep runs it
-# once per such login, one log line before and one after.
-# FLEET_NODE_CREDSEP_JOIN=0 leaves them.
-def credsep_join_own(paths, hold=None, dry=False):
-    """{"joined": [...], "failed": [{login, why}], "skipped": why} — never raises."""
-    res = {"joined": [], "failed": [], "skipped": ""}
-    if env("FLEET_NODE_CREDSEP_JOIN", "1") == "0":
-        res["skipped"] = "FLEET_NODE_CREDSEP_JOIN=0"
-        return res
-    py = env("FLEET_NODE_CREDSEP_PY", os.path.join(paths.runtime, "bin", "fleet-credsep.py"))
-    if not trusted(py):
-        res["skipped"] = "%s is not there / not root's" % py
-        return res
-    try:
-        r = subprocess.run(["/usr/bin/python3", "-I", py, "machine", "managed", "--json"], stdout=subprocess.PIPE,
-                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=60)
-        st = (json.loads(r.stdout.strip().splitlines()[-1]) or {}).get("state") or {}
-    except (OSError, subprocess.SubprocessError, ValueError, IndexError, AttributeError) as ex:
-        res["skipped"] = "machine managed: %s" % ex
-        return res
-    own = sorted(l for l, s in st.items() if s == "own" and re.match(r"^[a-z0-9_][a-z0-9_.-]{0,31}$", l))
-    if own and hold is None:
-        hold = sweep_hold()
-    for login in own:
-        if hold:
-            res["failed"].append({"login": login, "why": "held: %s" % hold})
-            continue
-        sweep_say("credsep %s: on its own proxy — %s the shared one (fleet-credsep.py machine join)"
-                  % (login, "would join" if dry else "joining"))
-        try:
-            r = subprocess.run(["/usr/bin/python3", "-I", py, "machine", "join", "--logins", login]
-                               + (["--dry-run"] if dry else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               universal_newlines=True, timeout=env_num("FLEET_NODE_CREDSEP_JOIN_TIMEOUT", 300))
-            rc, out = r.returncode, r.stdout
-        except (OSError, subprocess.SubprocessError) as ex:
-            rc, out = 1, str(ex)
-        last = (out.strip().splitlines() or ["rc %s" % rc])[-1][:200]
-        sweep_say("credsep %s: %s — %s" % (login, "joined" if rc == 0 else "join rc %s, stays on its own proxy" % rc,
-                                           last))
-        if rc == 0:
-            res["joined"].append(login)
-        else:
-            res["failed"].append({"login": login, "why": "rc %s: %s" % (rc, last)})
     return res
 
 
@@ -9020,11 +8960,6 @@ def main(argv):
                                                             x["why"]))
         for w in (res.get("admin_old") or {}).get("kept") or []:
             print("admin old job %s left in place: %s" % (w["label"], w["why"]))
-        cj = res.get("credsep_join") or {}
-        for l in cj.get("joined") or []:
-            print("%s %s to the shared credential proxy" % ("would join" if dry else "joined", l))
-        for w in cj.get("failed") or []:
-            print("credsep %s stays on its own proxy: %s" % (w["login"], w["why"]))
         return 0
     if cmd == "admin-handover":
         return admin_handover_cli(paths, dry="--dry-run" in rest)
