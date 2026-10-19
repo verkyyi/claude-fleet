@@ -381,7 +381,7 @@ case "$verb" in
       # GitHub not answering ⇒ no ticket is opened, and none is kept for later
       # (issue #4844, EPIC #4839 拍板 2): exit 6, the filer says it in one line.
       fleet_gh_down >/dev/null && exit 6
-      _FLEET_GH_WRITE_ONCE=$write_once fleet_gh_wrun graphql ticket issue create ${cargs[@]+"${cargs[@]}"}; rc=$?
+      _FLEET_GH_WRITE_ONCE=$write_once fleet_gh_write issue create ${cargs[@]+"${cargs[@]}"}; rc=$?
       [ "$rc" -eq "$FLEET_GH_LIMITED_RC" ] && exit 6
       exit "$rc" ;;
     esac
