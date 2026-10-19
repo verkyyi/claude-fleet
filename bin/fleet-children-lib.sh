@@ -124,7 +124,7 @@ report_tier() {
   case "$cs" in needs*) printf 'loud\n'; return 0 ;; esac
   case "$st" in
     WAITING|IDLE|DEGENERATE) printf 'silent\n' ;;   # DEGENERATE: #1557, already handled
-    MERGED)       printf 'quiet\n' ;;
+    MERGED|SUCCEEDED) printf 'quiet\n' ;;   # SUCCEEDED: a task outcome on the ID road (T497 C6)
     FAILED)
       case "$(printf '%s' "$sum" | tr '[:upper:]' '[:lower:]')" in
         *fixing*|*正在修*) printf 'quiet\n' ;;

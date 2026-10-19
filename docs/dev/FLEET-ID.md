@@ -1,6 +1,6 @@
 # 一个窗口一个 ID：节点账本与原生段
 
-EPIC T497 的 C1（节点账本）、C2（hub 镜像）与 C3（⌘P 面板的编号列）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
+EPIC T497 的 C1（节点账本）、C2（hub 镜像）、C3（⌘P 面板的编号列）、C4（结果、父子、通信）与 C6（迁移命令与切换开关）。设计页：「会话与 hub 任务（T）的关系 · 设计稿」第 6 版（§3、§4.1、§4.2、§4.6）。
 这一层目前**只双写**：旧 T 记录与执行权照旧，谁都不读这里做决定，直到 C7 打开切换开关。
 
 ## ID 与短码
@@ -126,3 +126,41 @@ Tab 操作页在动作下面列出：编号 + 完整 ID、别名、每一段（a
 只是读本机账本。`bin/fleet-view-id-selftest.sh` 钉住它。
 
 `bin/fleet-id-selftest.sh` 钉住 §4.6 的 S1、S3–S6、S11 与短码/寻址/钩子的规矩。
+
+## 迁移与切换开关（C6，设计页 §5、§5.1）
+
+**迁移**：`fleet-id.sh migrate [--apply] [--only T1,T2] [--json]` → `POST /v1/node/ids/migrate`
+（节点令牌；运营方的机器看所有人的记录，别人只看自己的）。hub 把每条还没迁过的旧 T 记录按一张表定成：
+
+| 旧记录 | 定成 | 依据 |
+|---|---|---|
+| 已终态（不管 execution_owner） | 照抄结果、已关闭 | 记录本身 |
+| 有 worker，节点答窗口在 | 活着 → 那个窗口的 ID（短码），旧 T 号记成它的别名 | 节点 tmux 的正面回答 |
+| 有 worker，节点答 tmux 正常、没有窗口带它 | 已退出（有 cancel_request 记已取消）、已关闭 | 节点的正面回答 |
+| 从未认领（没有 worker） | 已关闭 · 没开起来 | 记录本身 |
+| 节点不回答（失联、tmux 没起、旧 agent） | **不迁**，下次再跑 | 失联不是证据 |
+
+- 节点只问一次、只读：控制连接上的 `id_presence`（`control.ReadMethods`；`fleet_control.py` 列出每个 fleet 的窗口和
+  它们的 `@fleet_id`）。一台机器的 fleet tmux 没起（down）或答不出，它的记录一条不动——**已终态的也不动**（反例：停掉一台机器的节点）。
+  窗口还在、记录却已终态（如 T488）⇒ 活着，结果照抄在旁边，从不在活窗口底下关记录。
+- dry-run 只打印、什么都不写；`--apply` 对每条写一行 `fleet_operations`（`action=id_migrate`，`idem=id_migrate:T<n>`：
+  迁前整条记录、定成什么、证据原文、操作者），只在记录还没有终态时写它的 `outcome` 与 `state=closed`，
+  活着的把 `T<n>` 加进 `fleet_ids.aliases`。有这一行的记录不再列出；重复 apply 不会第二次写。没有「强制收」的路。
+- 规则在 `hub/store/fleet_id_migrate.go`（`ClassifyIDMigration`），节点只负责打印。
+
+**切换开关**：hub 设置 `fleet.id_switch`（`on`，否则关）。`fleet-id.sh switch [status|on|off]` → `/v1/node/ids/switch`
+（GET 谁都能读，设置只有运营方的机器；也可 `PUT /v1/fleet/settings`），两条都记审计 `id_switch`。
+
+- **关（默认）**：旧行为，一个字节不差。
+- **开**：门只看「窗口有 ID」。hub 拒收执行权命令——认领、转移、重试、stop/cancel 确认、带围栏的回报
+  （`MutateFleetTask` / `RecordFleetTaskReport` → 409 `{code: ID_SWITCH}`），派单不再签启动合约（`launchContract`）；
+  已排队的子回报照常送给父会话（不丢）；记录的终态改读它对应 ID 的最新结果（`IDTaskOutcome`：窗口 `opened` 记的 `task`，
+  或迁移给活窗口加的别名；merged/succeeded ⇒ succeeded，failed ⇒ failed），所以 `await T<n>`、回收、⌘P 照常。
+- 节点把 hub 的话记在 `ids/.switch`：清理 tick 每轮问一次，任何一次被 ID_SWITCH 拒收也写下（`fleet-task-record.sh`）。
+  开：派单开窗不认领（`fleet_launch.py local` / `admit`），`fleet_task_control.py report` 答 5，`fleet-report-parent.sh`
+  把回报写成窗口 ID 的结果（`--outcome` 成为结果状态，PR 照旧核 merged）。关回来：带 `@launch` 的窗口照走旧路。
+  来回切不丢会话：窗口、ID、账本都不动（BREAK-IT `id-switch-flip-report`）。
+- 打开开关（迁移 `--apply` + `switch on`，§5.1 第 5 步）由操作者 MacBook 上、不在任何 fleet 里的会话来做（C7）；出问题 `switch off` 回退，旧表没删、写侧双写还在。
+
+`bin/fleet-id-migrate-selftest.sh` 钉节点这一半；hub 那一半是 `hub/store/fleet_id_migrate_test.go`（§5 样例表逐条、
+反例、apply 一次、开关两轮）与 `hub/api/fleet_id_migrate_test.go`（机器只问一次、失联不动、开关两轮下旧路拒收、记录读 ID 的结果）。

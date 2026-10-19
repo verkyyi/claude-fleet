@@ -50,7 +50,9 @@ func (s *Server) launchContract(op store.FleetOperation) (launchContract, bool, 
 	var request struct {
 		Params map[string]any `json:"params"`
 	}
-	if op.Action != "worker_start" || json.Unmarshal([]byte(op.Request), &request) != nil {
+	// The switch on (EPIC T497 C6): no contract — the start opens a window with
+	// an ID and its @task, and nothing claims the record.
+	if op.Action != "worker_start" || s.Store.IDSwitchOn() || json.Unmarshal([]byte(op.Request), &request) != nil {
 		return launchContract{}, false, nil
 	}
 	d := acceptedLaunch(writeRequest{params: request.Params})

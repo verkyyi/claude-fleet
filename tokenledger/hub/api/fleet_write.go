@@ -2045,6 +2045,13 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			}
 			s.writeFleetSettings(w)
 			return
+		case body.Key == store.IDSwitchSetting:
+			// The ID switch (EPIC T497 C6): "on", or "" (off — the old road).
+			if body.Value != "" && body.Value != "on" {
+				httpError(w, http.StatusBadRequest, "fleet.id_switch is \"on\", or \"\" (off)")
+				return
+			}
+			_ = s.Store.FleetAudit(actorOf(r), "id_switch", "", map[bool]string{true: "on", false: "off"}[body.Value == "on"], "", time.Now())
 		case strings.HasPrefix(body.Key, ClientDefaultsPrefix):
 			// A client's team default (claude-fleet#1722): whitelisted
 			// keys, plain one-line values, never a credential; "" clears.

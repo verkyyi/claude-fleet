@@ -589,6 +589,112 @@ def _poster():
     return call
 
 
+# ---- the switch and the migration (EPIC T497 C6; design §5, §5.1) ---------------
+#
+# The switch is the hub's (`fleet.id_switch`); this node keeps its last word in
+# $ids/.switch («on» / «off») — written by `fleet-id.sh switch` (the cleanup tick
+# asks every round) and by any old-road call the hub refused with ID_SWITCH. Off,
+# or never heard: every old road as before. On: a spawn claims nothing (the window
+# has its ID and its @task), a report is a result on the window's ID — the one
+# gate is «the window has an ID». A stale «off» costs one refused call, which
+# flips it here; nothing waits on the hub to read it.
+
+def switch_path():
+    return os.path.join(ids_dir(), ".switch")
+
+
+def switch_on():
+    """The hub's last word on the switch here; never heard = off (the old road)."""
+    if os.environ.get("FLEET_ID_SWITCH") in ("on", "off"):   # the selftests' seam
+        return os.environ["FLEET_ID_SWITCH"] == "on"
+    try:
+        with open(switch_path(), encoding="utf-8") as fh:
+            return fh.read().split()[:1] == ["on"]
+    except OSError:
+        return False
+
+
+def switch_note(on):
+    """Write the hub's word down (atomic); never fails the caller."""
+    try:
+        os.makedirs(ids_dir(), exist_ok=True)
+        tmp = "%s.%d" % (switch_path(), os.getpid())
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("%s %d\n" % ("on" if on else "off", int(time.time())))
+        os.replace(tmp, switch_path())
+    except OSError:
+        pass
+
+
+def switch_cmd(word, call=None):
+    """`fleet-id.sh switch [status|on|off]`: ask (or, on/off, set — the operator's
+    machines only) the hub's switch and write it down. rc 0 · 3 no hub here (the
+    note says what this node last heard) · 75 the hub did not answer · 1 refused."""
+    call = call or _poster()
+    if word in ("on", "off"):
+        code, ans = call("POST", "/v1/node/ids/switch", {"on": word == "on"})
+    else:
+        code, ans = call("GET", "/v1/node/ids/switch")
+    if code == -3:
+        print("%s (no hub here — the last word this node heard)" % ("on" if switch_on() else "off"))
+        return 3
+    if code == 0:
+        print("%s (the hub did not answer — the last word this node heard)" % ("on" if switch_on() else "off"), file=sys.stderr)
+        return 75
+    if code != 200 or not isinstance(ans, dict):
+        why = (ans or {}).get("error") if isinstance(ans, dict) else ""
+        print("fleet-id: the hub refused the switch (HTTP %s)%s" % (code, ": " + why if why else ""), file=sys.stderr)
+        return 1
+    on = bool(ans.get("on"))
+    switch_note(on)
+    print("on" if on else "off")
+    return 0
+
+
+MIGRATE_ORDER = ("live", "succeeded", "failed", "cancelled", "exited", "closed", "not_started", "wait")
+
+
+def migrate_cmd(apply, only, as_json, call=None):
+    """`fleet-id.sh migrate [--apply] [--only T1,T2] [--json]`: the hub settles every
+    old T record by the §5 table, asking each worker's machine once, read-only. Dry
+    by default — it prints what each record WOULD become and writes nothing; --apply
+    writes each one's end and its audit row (action id_migrate). A record whose
+    machine did not answer is never moved (等节点回答): run it again later."""
+    call = call or _poster()
+    body = {"apply": bool(apply)}
+    if only:
+        body["only"] = only
+    code, ans = call("POST", "/v1/node/ids/migrate", body)
+    if code == -3:
+        print("fleet-id: no hub here — nothing to migrate", file=sys.stderr)
+        return 3
+    if code == 0:
+        print("fleet-id: the hub did not answer — nothing was migrated", file=sys.stderr)
+        return 75
+    if code != 200 or not isinstance(ans, dict):
+        why = (ans or {}).get("error") if isinstance(ans, dict) else ""
+        print("fleet-id: the hub refused the migration (HTTP %s)%s" % (code, ": " + why if why else ""), file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps(ans, ensure_ascii=False))
+        return 0
+    items = ans.get("items") or []
+    print("%s · %d 条旧记录 · 开关 %s" % ("迁移（已写入）" if ans.get("apply") else "dry-run（只看，不改）",
+                                     len(items), "开" if ans.get("switch") else "关"))
+    for it in items:
+        after = it.get("label", "")
+        if it.get("verdict") == "live":
+            after = "活着 → %s（别名 %s）" % (it.get("short") or "窗口没有 ID", it["task"])
+            if it.get("result"):
+                after += "，结果：" + {"succeeded": "已完成", "failed": "失败", "cancelled": "已取消"}.get(it["result"], it["result"])
+        mark = "  ✓" if it.get("applied") else ""
+        print("%-6s %-58s → %s%s" % (it.get("task", ""), it.get("before", ""), after, mark))
+        print("       依据：%s" % it.get("evidence", ""))
+    counts = ans.get("counts") or {}
+    print("合计：" + " · ".join("%s %d" % (k, counts[k]) for k in MIGRATE_ORDER if counts.get(k)))
+    return 0
+
+
 def _windows():
     """FLEET_ID_WINDOWS (fleet-id.sh fills it): `<ID>\t<socket>\t<window>` lines."""
     out = {}
@@ -876,6 +982,19 @@ def main(argv):
         return 0
     if cmd == "push":
         return push([a for a in args if is_fid(a)])
+    if cmd == "switch":
+        if args[:1] and args[0] not in ("status", "on", "off"):
+            return 2
+        return switch_cmd(args[0] if args else "status")
+    if cmd == "migrate":
+        only = []
+        for i, a in enumerate(args):
+            if a == "--only" and i + 1 < len(args):
+                only += [x.strip() for x in args[i + 1].split(",") if x.strip()]
+        if any(not re.match(r"^T[1-9][0-9]{0,9}$", x) for x in only):
+            print("fleet-id: --only takes task numbers T<n>,…", file=sys.stderr)
+            return 2
+        return migrate_cmd("--apply" in args, only, "--json" in args)
     if cmd == "encode" and args:
         print(encode(args[0]))
         return 0

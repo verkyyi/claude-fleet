@@ -514,6 +514,9 @@ fi
 if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-id.sh" ] && [ -d "$FLEET_CONF_DIR/ids" ]; then
   iout=$(fleet_timebox 60 bash "$BIN/fleet-id.sh" push 2>&1)
   [ -z "$iout" ] || log "ids: $iout"
+  # The hub's ID switch, written down for this tick's readers (EPIC T497 C6):
+  # a spawn and a report read ids/.switch, never the network.
+  fleet_timebox 20 bash "$BIN/fleet-id.sh" switch >/dev/null 2>&1 || :
 fi
 
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per

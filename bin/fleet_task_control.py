@@ -27,8 +27,24 @@ def call(action, task, payload=None, timeout=15, stale=False):
                             input=json.dumps(payload) if payload is not None else None,
                             text=True, capture_output=True, timeout=timeout, env=env)
     if result.returncode:
+        if "ID_SWITCH" in result.stderr:
+            raise IDSwitched("the hub reads sessions by ID now")
         raise ValueError(result.stderr.strip() or "task authority unavailable/refused")
     return json.loads(result.stdout)
+
+
+class IDSwitched(Exception):
+    """The hub's ID switch is on (EPIC T497 C6): the record takes no claim, no
+    fenced report. The gate is «the window has an ID» — a report is a result of
+    that ID (fleet-report-parent.sh's ID road); exit 5 tells it to take it."""
+
+
+def id_switch_on():
+    try:
+        import fleet_id
+        return fleet_id.switch_on()
+    except ImportError:
+        return False
 
 
 def verdict(task):
@@ -170,6 +186,8 @@ def progress(pane, summary, state, event="", socket=""):
     ⌘P / the 任务 page read it), never relayed: a tick is not a child report."""
     if not summary.strip():
         raise ValueError("progress needs a --summary")
+    if id_switch_on():
+        raise IDSwitched("progress is no longer recorded on the task record")
     c = context(pane, socket)
     t = call("get", c["task"])["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
@@ -271,6 +289,8 @@ def id_result(c, state, summary, pr):
 
 
 def report(pane, state, summary, pr, dry, socket="", outcome=""):
+    if id_switch_on():
+        raise IDSwitched("the report is a result of the window's ID")
     c = context(pane, socket)
     observation = call("get", c["task"], stale=True)
     t = observation["task"]
@@ -316,6 +336,8 @@ def report(pane, state, summary, pr, dry, socket="", outcome=""):
 
 
 def finalize(pane):
+    if id_switch_on():
+        return 0   # EPIC T497 C6: nothing holds the record, nothing to release
     c = context(pane)
     t = call("get", c["task"], stale=True)["task"]
     if any(t.get(k) != c[v] for k, v in (("owner", "owner"), ("generation", "generation"), ("execution_owner", "worker_id"))):
@@ -517,6 +539,9 @@ def main():
         if args.action == "release":
             if not args.event: raise ValueError("release needs a stable --event")
             return release(args.task, args.event)
+    except IDSwitched as e:
+        print("ID_SWITCH\nnote: %s" % e)
+        return 5
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as e:
         print("UNKNOWN\nnote: %s" % e)
         return 75 if args.action == "receive" else 3

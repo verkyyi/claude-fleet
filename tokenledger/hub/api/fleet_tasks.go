@@ -122,7 +122,14 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 	rows := map[string][]map[string]any{}
 	landings := map[[2]string]map[string]map[string]any{}
 	out := make([]taskView, 0, len(tasks))
+	idSwitch := s.Store.IDSwitchOn()
 	for _, t := range tasks {
+		if idSwitch && t.AuthorityVersion == store.TaskAuthorityVersion && t.Outcome == "" {
+			// EPIC T497 C6: with the switch on a record's end is its ID's result.
+			if out, _, err := s.Store.IDTaskOutcome(t.Owner, t.Ref); err == nil && out != "" {
+				t.Outcome, t.State = out, out
+			}
+		}
 		live := s.taskLive(&t, rows)
 		v := taskView{FleetTask: t, Live: live, PRState: "unverified"}
 		if t.AuthorityVersion == store.TaskAuthorityVersion {

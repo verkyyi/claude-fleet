@@ -79,6 +79,11 @@ func (s *Server) prepareTaskReportRelay(ep store.Endpoint, r *store.FleetRelay) 
 	if r.Kind != control.RelayChildReport {
 		return false, nil
 	}
+	if s.Store.IDSwitchOn() {
+		// EPIC T497 C6: the record takes no fenced report; the relay is still
+		// the parent's message (one queued before the flip is delivered, not lost).
+		return false, nil
+	}
 	var payload struct {
 		Report *store.TaskReport `json:"task_report"`
 	}
@@ -112,7 +117,7 @@ func (s *Server) prepareTaskReportRelay(ep store.Endpoint, r *store.FleetRelay) 
 }
 
 func (s *Server) taskRelayStillCurrent(r store.FleetRelay) (bool, error) {
-	if r.Kind != control.RelayChildReport {
+	if r.Kind != control.RelayChildReport || s.Store.IDSwitchOn() {
 		return true, nil
 	}
 	var payload struct {
