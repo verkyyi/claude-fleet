@@ -311,13 +311,6 @@ def supervise(argv):
     # is a one-shot admission and its native wait, not another runtime observer.
     script = '''. "$1/fleet-lib.sh"
 s=$(fleet_current_session)
-pool_socket=${TMUX:-}; pool_socket=${pool_socket%%,*}; pool_socket=${pool_socket##*/}
-for pool_owner in "${FLEET_LAUNCH_SESSION:-}" "$pool_socket"; do
-    if [ -n "$pool_owner" ] && [ "$s" = "${pool_owner}-pool" ]; then
-        s=$pool_owner
-        break
-    fi
-done
 fleet_load_conf "$s"
 r=$(fleet_window_repo "$s" "$TMUX_PANE")
 if [ -z "$r" ] || { [ "${CCQUOTA_FLEET:-0}" != 1 ] && [ -z "$(fleet_task_authority "$s" "$r")" ]; }; then exit 0; fi

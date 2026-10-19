@@ -347,15 +347,8 @@ ok "M failed background dispatch reports rc1 + stderr and cleans up staged input
 # dash-enter.sh). The seed rides in a task file read at launch — `fleet-claude.sh
 # "$(cat <tf>)"`, the worker-seed handoff — never inline in the command string; a
 # --bg --prompt stages it through --prompt-file (never into the run-shell string);
-# a seeded scratch never claims a warm-pool window; a whitespace-only prompt is a plain scratch.
-POOL_LOG="$WORK/pool"
-cat > "$WORK/bin/scratch-pool.sh" <<POOLFAKE
-#!/bin/bash
-printf '%s\n' "\$*" >> "$POOL_LOG"    # log the call; answer with an EMPTY claim (cold path)
-exit 0
-POOLFAKE
-chmod +x "$WORK/bin/scratch-pool.sh"
-reset_scratch; : > "$POOL_LOG"; rm -rf "$WORK/tmp/.claude-dash/fleets" "$WORK/tmp/.claude-dash/global"
+# a whitespace-only prompt is a plain scratch.
+reset_scratch; rm -rf "$WORK/tmp/.claude-dash/fleets" "$WORK/tmp/.claude-dash/global"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt $'audit the dash binds for "$(injection)" risks'
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N --prompt must still land a scratch-N window" "$(cat "$NEWWIN_LOG")"
 grep -q 'SETOPT .*@raw 1' "$OPTS_LOG"      || fail "N a seeded scratch is still @raw=1" "$(cat "$OPTS_LOG")"
@@ -365,12 +358,7 @@ grep -qF -- 'injection' "$NEWWIN_LOG"      && fail "N the prompt text must NEVER
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"
 [ -n "$tf" ] && [ -f "$tf" ]               || fail "N the task file task_scratch-1.txt must exist" "$(cat "$NEWWIN_LOG")"
 [ "$(cat "$tf")" = $'audit the dash binds for "$(injection)" risks' ] || fail "N the task file must hold the prompt verbatim" "$(cat "$tf")"
-grep -qs 'claim' "$POOL_LOG"               && fail "N a seeded scratch must never claim a warm-pool window (the seed is a launch arg)" "$(cat "$POOL_LOG")"
 [ -s "$DISPLAY_LOG" ]                      && fail "N a seeded spawn that works draws NO line (issue #1618)" "$(cat "$DISPLAY_LOG")"
-# …while an UNSEEDED spawn does consult the pool first
-reset_scratch; : > "$POOL_LOG"
-WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw
-grep -qs 'claim' "$POOL_LOG"               || fail "N a plain scratch should still try the warm pool first" "$(cat "$POOL_LOG")"
 # --bg --prompt: staged through --prompt-file, lands, and the text never touches run-shell
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --prompt 'bg seeded task'
@@ -384,8 +372,7 @@ reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt '   '
 grep -q -- '-n scratch-1\b' "$NEWWIN_LOG"  || fail "N a blank --prompt must still spawn" "$(cat "$NEWWIN_LOG")"
 grep -qF -- '$(cat' "$NEWWIN_LOG"          && fail "N a blank --prompt is a PLAIN scratch — no task-file launch" "$(cat "$NEWWIN_LOG")"
-rm -f "$WORK/bin/scratch-pool.sh"
-ok "N --prompt seeds the scratch via a task file (never inline), skips the pool, --bg stages it"
+ok "N --prompt seeds the scratch via a task file (never inline), --bg stages it"
 
 # ============================ D: restore includes scratch @raw ==============
 out=$(printf 'scratch|%s|-|done|-|-|1\nissue-7|%s|7|working|#12|✓|\n__HUB__|%s|-\nlegacy-raw|%s|-|done|-|-|1\n' \
@@ -429,13 +416,11 @@ ok "O in-flight spawn markers count toward the cap (fresh blocks, stale ages out
 
 # ==================== O: --agent picks the agent CLI for THIS scratch (#547) ====
 # `--agent codex` rides into the launcher's argv inside the new-window command
-# (`fleet-claude.sh --agent codex`), survives the --bg re-exec, never claims a
-# warm-pool window (the pool holds fleet-default windows), and an unknown token is
-# dropped (fleet default) rather than embedded. Default spawns carry no --agent.
-reset_scratch; : > "$POOL_LOG"; : > "$NEWWIN_LOG"
+# (`fleet-claude.sh --agent codex`), survives the --bg re-exec, and an unknown
+# token is dropped (fleet default) rather than embedded.
+reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --agent codex
 grep -qF -- "fleet-session-wrap.sh' --agent codex" "$NEWWIN_LOG" || fail "O --agent codex must reach the launcher inside the new-window command" "$(cat "$NEWWIN_LOG")"
-grep -qs 'claim' "$POOL_LOG"               && fail "O an explicit --agent scratch must never claim a warm-pool window" "$(cat "$POOL_LOG")"
 [ -s "$DISPLAY_LOG" ]                      && fail "O a codex spawn that works draws NO line (issue #1618)" "$(cat "$DISPLAY_LOG")"
 reset_scratch; : > "$NEWWIN_LOG"
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --bg --agent=codex --prompt 'seeded on codex'
@@ -490,16 +475,7 @@ grep -qF "FLEET_AUTHORITY_START='1111-it'\\''s'" "$NEWWIN_LOG" \
   || fail "A2 the launch line lost the admission reservation" "$(cat "$NEWWIN_LOG")"
 ok "A2 the hub reservation from --finish is carried, shell-quoted, onto the launch line"
 
-cat > "$WORK/bin/scratch-pool.sh" <<'SH'
-#!/bin/bash
-[ "${1:-}" = claim ] && printf '@9\tscratch-1\t%s/main-scratch-1\n' "$FLEET_MAIN"
-exit 0
-SH
-reset_scratch
-WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name 'warm draft'
-[ -s "$NEWWIN_LOG" ] && fail "P a named warm scratch must reuse its ready window"
-check_draft 'warm draft' 1
-ok "P cold/--bg/Codex and warm names prefill the full draft; unnamed and seeded spawns do not"
+ok "P cold/--bg/Codex names prefill the full draft; unnamed and seeded spawns do not"
 
 reset_scratch
 mkdir -p "$WORK/conf/fleets/testsess/repos"
@@ -515,7 +491,6 @@ for mode in direct background; do
   grep -qF -- "-c $MAIN " "$NEWWIN_LOG" || fail "Q native launch must start from its admitted repository" "$(cat "$NEWWIN_LOG")"
   grep -q '@native_worktree' "$NEWWIN_LOG" || fail "Q native creation intent was not stamped"
   grep -q '@worktree' "$OPTS_LOG" && fail "Q only the native hook may stamp the actual worktree"
-  grep -q 'scratch-pool.sh' "$RS_LOG" && fail "Q native creation must not claim/refill a legacy pool"
   [ "$(git -C "$MAIN" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "Q Fleet must not pre-create a worktree"
   [ ! -e "$MAIN/.claude/worktrees" ] || fail "Q native directory created before the native process"
 done
@@ -543,7 +518,6 @@ for mode in direct background; do
   grep -qF "FLEET_AUTHORITY_START='11111111-1111-4111-8111-111111111111'" "$NEWWIN_LOG" \
     || fail "R raw launcher lost the original admission reservation" "$(cat "$NEWWIN_LOG")"
   grep -q '@worktree' "$OPTS_LOG" && fail "R local launch must wait for the native worktree hook"
-  grep -q 'scratch-pool.sh' "$RS_LOG" && fail "R native local launch must not refill the legacy pool"
   grep -qF '$(cat' "$NEWWIN_LOG" && fail "R local draft became a submitted seed"
   check_draft 'native local draft' 0
   [ "$(git -C "$MAIN" worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail "R Fleet allocated a local worktree"

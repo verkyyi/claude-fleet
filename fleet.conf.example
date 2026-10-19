@@ -34,8 +34,6 @@ FLEET_BASE_BRANCH="main"
 #FLEET_AGENT="claude"
 # Jump to new worker windows
 #FLEET_SPAWN_FOCUS=0
-# Warm scratch sessions
-#FLEET_SCRATCH_POOL=1
 # Auto-merge method
 #FLEET_MERGE_METHOD="squash"
 # Worker seed prompt

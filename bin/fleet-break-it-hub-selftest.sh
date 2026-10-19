@@ -100,7 +100,7 @@
 #                                                   (exit 8), fleet_control.py (UNAVAILABLE); the hub half is
 #                                                   tokenledger/hub/api pickNodeAfter (go test, when here)
 #   pool-admit-phantoms                             fleet_session_cap_ok / fleet_admit_reserve / fleet_admit_confirm /
-#                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh), scratch-pool.sh
+#                                                   fleet_admit_release / fleet_admit_holders (fleet-lib.sh)
 #   guide-admission-room                            fleet_machine_admit / _fleet_admit_guide_pass / fleet_guide_tick
 #                                                   (fleet-lib.sh), dash-raw-session.sh, fleet-alerts.sh event
 #   admit-room-advice                               fleet_machine_admit / _fleet_admit_room_advice /
@@ -116,7 +116,7 @@
 #   mac-admit-load-not-busy                         fleet_machine_admit / _fleet_cpu_busy (fleet-lib.sh),
 #                                                   fleet-machine-tasks.py probe (cpu_busy), fleet-control-read.sh capacity
 #   pod-disk-node-tmp                               fleet_disk_target (fleet-lib.sh), fleet-diskguard.sh --free /
-#                                                   --gate, scratch-pool.sh pool_free_gb, fleet-alerts.sh (a df shim)
+#                                                   --gate, fleet-alerts.sh (a df shim)
 #   hubsess-daemon-nohup                            bin/fleet-hub-sessions.sh (ensure: no nohup; the lock)
 #   dist-no-github                                  bin/dist-no-github-selftest.sh (GitHub a black hole: install-sync,
 #                                                   client stage, login bootstrap, the updater's follow → the new version)
@@ -1707,12 +1707,10 @@ SH
   [ "$out" = 13 ] || { WHY="FLEET_DISK_TARGET must win: got $out"; return 1; }
   out=$(dg bash -c "source '$BIN/fleet-lib.sh'; fleet_disk_target")
   [ "$out" = "$d/home" ] || { WHY="fleet_disk_target with no TMPDIR: $out"; return 1; }
-  grep -q 'df -Pk "$(fleet_disk_target)"' "$BIN/scratch-pool.sh" \
-    || { WHY="scratch-pool.sh's pool_free_gb must read fleet_disk_target"; return 1; }
   grep -qF 'target="${FLEET_DISK_TARGET:-${TMPDIR:-${HOME:-/tmp}}}"' "$BIN/fleet-alerts.sh" \
     || { WHY="fleet-alerts.sh's inline copy of fleet_disk_target drifted"; return 1; }
   SECS=$(since "$t0")
-  WHAT="pod 无 TMPDIR：/tmp（节点共享盘）13 GB、家 46 GB——diskguard --free 读 46、--gate 15 放行；有 TMPDIR（Mac）照读 TMPDIR；FLEET_DISK_TARGET 优先；预热池和侧栏告警读同一个目标"
+  WHAT="pod 无 TMPDIR：/tmp（节点共享盘）13 GB、家 46 GB——diskguard --free 读 46、--gate 15 放行；有 TMPDIR（Mac）照读 TMPDIR；FLEET_DISK_TARGET 优先；侧栏告警读同一个目标"
 }
 
 # hubsess-daemon-nohup (issue #2630): the collector is a LaunchDaemon now, and

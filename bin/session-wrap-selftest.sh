@@ -88,7 +88,7 @@ CHECKS=$((CHECKS + 1))
 [ -z "$bad" ] || fail "A: a spawn path launches fleet-claude.sh directly — name fleet-session-wrap.sh" "$bad"
 # The five spawners name the wrapper (a rename of it must break this test, not them).
 for f in dash-issue-session.sh dash-raw-session.sh dash-restore-session.sh fleet-restore.sh \
-         fleet-migrate.sh fleet-move-remote.sh fleet-transfer.sh scratch-pool.sh fleet-sleep.py; do
+         fleet-migrate.sh fleet-move-remote.sh fleet-transfer.sh fleet-sleep.py; do
   CHECKS=$((CHECKS + 1))
   grep -q 'fleet-session-wrap\.sh' "$BIN/$f" || fail "A: $f does not launch through fleet-session-wrap.sh"
 done

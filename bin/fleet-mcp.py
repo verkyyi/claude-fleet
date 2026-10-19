@@ -210,16 +210,6 @@ def current_session():
     sess = tmux("display-message", "-p", "-t", pane, "#{?#{session_group},#{session_group},#{session_name}}")
     if not sess:
         raise ToolFault("could not resolve the current fleet session")
-    # A warm-pool window is parked in its fleet's HOLDING session <fleet>-pool
-    # until claimed — it belongs to the fleet all the same (fleet-claude.sh's
-    # rule). Without this its credential named the pool's fleet UUID, which no
-    # hub knows: a central-route session pass came back 404 (issue #2914).
-    launch = os.environ.get("FLEET_LAUNCH_SESSION", "")
-    if launch and sess == launch + "-pool":
-        return launch
-    sock = os.environ.get("TMUX", "").split(",", 1)[0].rsplit("/", 1)[-1]
-    if sock and sess == sock + "-pool":
-        return sock
     return sess
 
 
@@ -341,7 +331,7 @@ def worker_id(claims):
 
 def fleet_label():
     """This pane's FLEET: the socket label (== the fleet session, issue #159) — the same
-    for a warm-pool window parked in <fleet>-pool and for a view session's client."""
+    for a view session's client."""
     sock = os.environ.get("TMUX", "").split(",", 1)[0]
     if "/" in sock:
         return sock.rsplit("/", 1)[-1]
@@ -361,7 +351,7 @@ def cred_mint():
         time.sleep(0.2)
         fid = pane_opt("#{@fleet_id}")
     session = current_session()
-    if not fid:   # a warm-pool window, a road that does not stamp: mint it now (fleet_window_fid)
+    if not fid:   # a road that does not stamp: mint it now (fleet_window_fid)
         wid = pane_opt("#{window_id}")
         fid = lib("fleet_window_fid " + shquote(session) + " " + shquote(wid)).stdout.strip()
     if not fid:
@@ -694,7 +684,7 @@ def parent_window():
     session = current_session()
     # The ONE resolver (fleet_win_for_key, issue #1537): rc 2 = the key is
     # ambiguous (two windows, or a bare issue key in a 2+ repo fleet) — said on
-    # stderr; never a pick. A warm-pool window never answers.
+    # stderr; never a pick.
     # By IDENTITY first (issue #1646): fleet_origin_win reads this pane's
     # @origin_fid — the parent may have changed its key since it spawned us —
     # and falls back to the key through the same resolver.

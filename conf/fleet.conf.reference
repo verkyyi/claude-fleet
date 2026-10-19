@@ -172,7 +172,7 @@ FLEET_BASE_BRANCH="main"
 # FLEET_AGENT / FLEET_MCP_CONFIG), these keys are honored PER REPO — set one in a
 # repo's overlay and that repo's windows, worktrees and daemons passes use it; leave
 # it unset there and the repo gets the fleet conf's value (then this file's):
-#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED
+#   per-repo: FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED
 # (That line is kept in lockstep with _FLEET_REPO_OVERRIDABLE in bin/fleet-lib.sh
 # by bin/repo-settings-selftest.sh.) Setting one to "" in an overlay switches it
 # off for that repo. `fleet-repo.sh get <KEY> <owner/repo>` prints what a repo sees.
@@ -2610,8 +2610,8 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_SPAWN_FOCUS=0
 
 # --- Worktree location (bin/fleet-lib.sh fleet_worktree_dir, issue #886) ------
-# Where NEW worktrees are created — issue spawns, scratch sessions (⌃s and the warm
-# pool) and a manual `cw` all ask the same function. Empty (default) = a sibling of
+# Where NEW worktrees are created — issue spawns, scratch sessions (⌃s) and a
+# manual `cw` all ask the same function. Empty (default) = a sibling of
 # the base checkout (`<main>-issue-N` next to `<main>`), the historic layout.
 #
 # Why set it: worktrees are short-lived, but Spotlight indexes each one (checkout +
@@ -2703,62 +2703,24 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Base deps install timeout @group=spawn @tier=internal @scope=fleet @edit=int @unit=sec
 #FLEET_BASE_DEPS_TIMEOUT=900
 
-# --- Warm scratch pool (bin/scratch-pool.sh) ---------------------------------
-# How many pre-started scratch sessions to keep parked and ready. 0 (default) = OFF.
-#
-# Why: pressing ⌃s cold costs ~7s before you can type — `git fetch` + `git worktree
-# add` (~3.2s), claude's boot (~1.7s), and then a ~1.1s window in which Claude Code's
-# TUI has ALREADY painted its `❯` box but silently DISCARDS everything you type
-# (its input handler flushes whatever is in flight when it mounts). The box looking
-# ready is the trap. With a warm entry, ⌃s is a `move-window` + rename of a session
-# that finished all of that minutes ago: measured 0.46s to the window and 0.30s for
-# the first keystroke — 2.9s end to end including the dash's own 3s refresh tick.
-#
-# Cost: each warm entry is a real idle claude (~550MB RSS) plus its worktree. They
-# are parked in a `<fleet>-pool` holding session, which has no plan/dash window, so
-# they are invisible to the dash and to every session count. Warming refuses to
-# start one when the fleet is already at its session cap.
-#
-# In a fleet hosting 2+ repos this is PER REPO (issue #797): each hosted repo keeps
-# its own warm entries (stamped @repo, all in the one holding session), and a
-# scratch only ever claims one of its own repo's. A repo overlay
-# (fleets/<sess>/repos/<slug>.conf) may set its own FLEET_SCRATCH_POOL; unset
-# there, it takes this fleet value — so N here means N per hosted repo.
-#
-# ON by default (issue #2233): 1 per hosted repo plus 1 for HOME (a no-repo
-# session warmed in $HOME), refilled on the diskguard tick within seconds of a
-# claim. A slot only grows while the machine is quiet — load per core at most
-# FLEET_POOL_LOAD_PER_CORE (1) and the disk above FLEET_DISK_WARN_GB — and an entry
-# warmed before an upgrade is retired, never handed out. 0 turns it off.
-# @label=Warm scratch sessions @group=spawn @tier=common @scope=fleet @edit=int
-#FLEET_SCRATCH_POOL=1
-
-# Seconds before an unclaimed warm entry is retired and rebuilt. Its worktree is a
-# snapshot of origin/<base> taken when it was created, so handing out an old one
-# silently branches your work off a stale master.
-# @label=Warm entry max age (s) @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_POOL_MAX_AGE=1800
-
-# How long ⌃s waits before rebuilding the entry it just consumed. Warming is a full
-# cold claude boot; firing it at the instant you start typing into the window you
-# just claimed is the one moment that contention is felt.
-# @label=Warm pool refill delay (s) @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_POOL_REFILL_DELAY=45
-
-# The HOME slot's floor — the warm sessions ⚡ / ⌘N take, so a new session is
-# typeable in ≤ 3 s (issue #3551, EPIC #3500 C6). It lifts a lower
-# FLEET_SCRATCH_POOL for HOME (never a repo slot) and sizes an unset one; a pool
-# switched off (FLEET_SCRATCH_POOL=0) stays off.
-# @label=Warm sessions kept for ⚡ (min) @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_POOL_MIN=2
+# --- A new session starts cold (the warm pool is gone, T495) ---------------------
+# FLEET_SCRATCH_POOL, FLEET_POOL_MIN, FLEET_POOL_MAX_AGE and FLEET_POOL_REFILL_DELAY
+# are retired with the warm scratch pool (bin/scratch-pool.sh, issue #2233): it kept
+# ~550MB of idle agent plus a worktree per slot, rebuilt every 30 minutes and after
+# every upgrade, and opened with no hub task record. `fleet-conf.sh migrate`
+# comments a line that still sets one out. The work now is making the cold start
+# itself fast — measured on ⌃s: ~7s to the first keystroke that survives, of which
+# `git fetch` + `git worktree add` ~3.2s, claude's boot ~1.7s, and a ~1.1s window in
+# which Claude Code's TUI has painted its `❯` box but still discards what is typed.
 
 # The doctor's `timing` row (issue #3551): the median of the last 10 ⌘P → panel
-# and ⌘N / ⚡ → typeable (warm opens) against these, in ms. The runs are
+# and ⌘N / ⚡ → typeable against these, in ms (a session starts cold since the
+# warm pool left, T495). The runs are
 # $FLEET_CONF_DIR/timing/*.ndjson; `fleet_timing.py table` prints the segments.
 # @label=⌘P panel limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
 #FLEET_TIMING_PANEL_MS=500
 # @label=New session limit (ms) @group=spawn @tier=internal @scope=fleet @edit=int
-#FLEET_TIMING_SESSION_MS=3000
+#FLEET_TIMING_SESSION_MS=8000
 
 
 # How long an in-progress scratch spawn (issue #531) counts against the session cap

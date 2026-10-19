@@ -13,7 +13,7 @@
 #   E  proc_start: on Linux the process's own start, before the module loaded;
 #      elsewhere None
 #   F  the doctor's `timing` row (bin/fleet-doctor.sh): PASS under the limits, WARN
-#      over one, WARN when every new session started cold
+#      over one (a session start judged since the warm pool left, T495)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo 'fleet-timing: python3 absent — SKIP'; exit 0; }
@@ -61,7 +61,7 @@ printf '%s\n' "$out" | grep -qx '| total | 200 | 300 | 3 |' \
 f0=$fails
 out=$(T check); rc=$?
 [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=500 over=0 cold=0' \
-  && printf '%s\n' "$out" | grep -qx 'session n=2 p50=300 limit=3000 over=0 cold=1' \
+  && printf '%s\n' "$out" | grep -qx 'session n=2 p50=300 limit=8000 over=0 cold=1' \
   || fail "C check under the limits: rc=$rc $out"
 out=$(FLEET_TIMING_PANEL_MS=150 T check); rc=$?
 [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx 'panel n=3 p50=200 limit=150 over=1 cold=0' \
@@ -108,11 +108,11 @@ printf '%s\n' "$out" | grep -q '^PASS timing ⌘P → 面板 p50 0.20s (3 次) �
   || fail "F PASS under the limits: $out"
 out=$(FLEET_TIMING_PANEL_MS=150 row)
 printf '%s\n' "$out" | grep -q '^WARN timing ⌘P → 面板 p50 0.20s (3 次) > 0.1s' || fail "F WARN over a limit: $out"
-rm -f "$FLEET_CONF_DIR/timing/session.ndjson"; T add session claim=10 cold=4000 total=4010
+rm -f "$FLEET_CONF_DIR/timing/session.ndjson"; T add session start=9000 go=10 total=9010
 out=$(row)
-printf '%s\n' "$out" | grep -q '^WARN timing .*the warm pool is empty' || fail "F WARN all cold: $out"
+printf '%s\n' "$out" | grep -q '^WARN timing .*新会话 → 能打字 p50 9.01s (1 次) > 8.0s' || fail "F WARN a slow start: $out"
 [ -z "$(FLEET_CONF_DIR="$WORK/none" row)" ] || fail "F no run printed a row"
-[ "$fails" = "$f0" ] && ok "F doctor timing: PASS under, WARN over or all cold, no row with nothing measured"
+[ "$fails" = "$f0" ] && ok "F doctor timing: PASS under, WARN over (a slow start too), no row with nothing measured"
 
 [ "$fails" = 0 ] || { echo "fleet-timing-selftest: $fails failed"; exit 1; }
 echo "fleet-timing-selftest: all passed"

@@ -57,7 +57,9 @@
 #                     kept; a second migrate writes nothing. (issue #3008) the old
 #                     client's FLEET_CLIENT / FLEET_COMPOSE / FLEET_SIDEBAR_FOLD in
 #                     [client] become `# retired #3008: …`; FLEET_CLIENT_LAYOUT
-#                     (a newcomer's mark, still read) stays
+#                     (a newcomer's mark, still read) stays. (T495) the warm pool's
+#                     FLEET_SCRATCH_POOL / FLEET_POOL_MIN / FLEET_START_WARM … go
+#                     the same way; FLEET_POOL_FETCH_SECS (the scratch fetch) stays
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-sections.sh"
@@ -564,6 +566,18 @@ is "K: (#3008) the old client's four lines are comments" "$(grep -c '^# retired 
 is "K: (#3008) …and none is active" "$(grep -cE '^[[:space:]]*(export[[:space:]]+)?(FLEET_CLIENT|FLEET_COMPOSE|FLEET_SIDEBAR_FOLD)=' "$CD/fleet.conf")" 0
 has "K: (#3008) layout is retired" "$(cat "$CD/fleet.conf")" "# retired #3008: export FLEET_CLIENT_LAYOUT=solo"
 has "K: (#3008) …and the panel key" "$(cat "$CD/fleet.conf")" "FLEET_KEY_PANEL=cmd+p"
+# the warm pool's keys (T495): the line an operator appended to switch it off goes
+# too; the scratch fetch's bound (FLEET_POOL_FETCH_SECS) is still read and stays
+mkbox k3
+printf '# claude-fleet — one file\n\n# ---- [common] ----\nFLEET_HOST=1\nFLEET_POOL_FETCH_SECS=5\nexport FLEET_SCRATCH_POOL=0\n' > "$CD/fleet.conf"
+mkdir -p "$CD/fleets/fleet/repos"
+printf 'FLEET_POOL_MIN=3\nFLEET_START_WARM=0\n' > "$CD/fleets/fleet/conf"
+printf 'FLEET_REPO="o/a"\nFLEET_SCRATCH_POOL=2\n' > "$CD/fleets/fleet/repos/o-a.conf"
+out=$(run bash "$INS/bin/fleet-conf.sh" migrate 2>&1); rc=$?
+is "K: (T495) migrate exits 0" "$rc" 0
+is "K: (T495) the four pool lines are comments" "$(cat "$CD/fleet.conf" "$CD/fleets/fleet/conf" "$CD/fleets/fleet/repos/o-a.conf" | grep -c '^# retired #T495: ')" 4
+has "K: (T495) …the appended off switch too" "$(cat "$CD/fleet.conf")" "# retired #T495: export FLEET_SCRATCH_POOL=0"
+has "K: (T495) the fetch bound stays" "$(cat "$CD/fleet.conf")" $'\nFLEET_POOL_FETCH_SECS=5'
 
 fi
 

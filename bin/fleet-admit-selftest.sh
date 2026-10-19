@@ -271,7 +271,7 @@ ok "G one owner holds one reservation however often it is admitted; confirm keep
 # The doctor lists who holds them (the row named a bare number before #2502).
 grep -q 'fleet_admit_holders' "$BIN/fleet-doctor.sh" || fail "G the doctor's admit row must list the holders"
 # Every spawner confirms the window it opened.
-for f in dash-raw-session.sh dash-issue-session.sh dash-restore-session.sh scratch-pool.sh; do
+for f in dash-raw-session.sh dash-issue-session.sh dash-restore-session.sh; do
   grep -q 'fleet_admit_confirm' "$BIN/$f" || fail "G $f opens windows but never confirms its admission"
 done
 ok "G every spawner confirms its window; the doctor names the holders"

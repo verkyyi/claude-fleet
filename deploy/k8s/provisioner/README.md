@@ -35,8 +35,8 @@ NS=fleet-workers
 # user-pod arguments, the Job image — every image by digest. A user pod's own
 # guard cuts the Service range, so the two in-cluster roads it uses are named in
 # egress.allow by ClusterIP: the egress proxy (git / gh to GitHub) and the git
-# mirror (fetches of the repos it carries — a fetch that had neither hung the
-# warm pool, #3999). One git_mirrors entry per mirrored repo.
+# mirror (fetches of the repos it carries — a fetch that had neither hung every
+# new scratch, #3999). One git_mirrors entry per mirrored repo.
 EGRESS_IP=$(kubectl -n $NS get svc fleet-egress -o jsonpath='{.spec.clusterIP}')
 MIRROR_IP=$(kubectl -n arc-runners get svc fleet-git-mirror -o jsonpath='{.spec.clusterIP}')
 # the hub's own Service (#4175): the pods' node link and passes ask it here, not

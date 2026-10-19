@@ -236,7 +236,7 @@ run_new() {
   fx_repo "$WORK/central" "testsess" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH="master"
   : > "$WORK/spawn-args"; : > "$WORK/gh.log"
   PATH="$WORK/fakebin:$PATH" GH_LOG="$WORK/gh.log" FLEET_CONF_DIR="$WORK/central" TMUX='' TMUX_PANE='' \
-  FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master FLEET_START_WARM=0 \
+  FLEET_REPO=acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master \
   FLEET_CRED_PROXY=1 FLEET_CRED_CENTRAL_URL="$1" FLEET_CODEX_READY_CMD=false FLEET_CONTROL_TASK=T9 \
     bash "$SB/fleet-control-read.sh" start testsess new codex acme/widgets '' '' 'Central Codex task' \
     <<< 'Reply OK' > "$WORK/new.out" 2> "$WORK/new.err"

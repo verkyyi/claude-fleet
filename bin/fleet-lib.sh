@@ -986,7 +986,7 @@ fleet_load_repo_conf() {
 # repo first — fleet_window_repo / fleet_worktree_repo — then asks
 # fleet_repo_conf_get, or loads fleet_load_repo_conf itself. A fleet with no
 # repos/ overlay answers with the fleet conf's value, byte for byte.
-_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_SCRATCH_POOL FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
+_FLEET_REPO_OVERRIDABLE="FLEET_WORKTREE_SETUP FLEET_WORKTREE_SETUP_TIMEOUT FLEET_BASE_DEPS FLEET_SLEEP_MCP_RESTARTABLE FLEET_ISSUE_BRIDGE FLEET_CLEANUP FLEET_WEBHOOK FLEET_CHECK_CMD FLEET_CHECK_TIMEOUT FLEET_CHECK_REQUIRED"
 
 # fleet_task_authority [<sess> <repo>] → who runs this LOGIN's tasks (issue #4901):
 # legacy | frozen | hub as its fleet.conf [node] says — the hub answers it per
@@ -8140,9 +8140,8 @@ fleet_session_sleepers_for() { local t; t=$(_fleet_session_tally_for "$1"); prin
 # and a sleeper's own wake reads them through fleet_cap_full below.
 # fleet_fetch_bounded <main> <base> — `git fetch origin <base>`, given at most
 # FLEET_POOL_FETCH_SECS seconds (default 20; 0 = no bound) — issue #3999. A remote
-# that never answers (a pod with no egress to GitHub) hung the fetch forever, and
-# the warm pool's tick, which fills its slots one after another, never reached the
-# HOME slot. The fetch runs in its own process group and the whole group is killed
+# that never answers (a pod with no egress to GitHub) hung the fetch forever — and
+# with it every new scratch. The fetch runs in its own process group and the whole group is killed
 # at the deadline (git's transport helper / ssh with it); no terminal prompt.
 # Exit 124 = timed out: origin/<base> stays what it was, and the caller goes on
 # with the base it already has. Silent on both streams.
@@ -8160,7 +8159,7 @@ fleet_fetch_bounded() {
     "$secs" git -C "$main" fetch origin "$base" --quiet >/dev/null 2>&1
 }
 
-# ---- scratch worktree allocation (shared by the ⌃s spawner and the warm pool) --
+# ---- scratch worktree allocation (the ⌃s spawner) ------------------------------
 # fleet_scratch_alloc <main> <base> — allocate the next free `scratch-<N>` branch
 # and its worktree (fleet_worktree_dir) off origin/<base> (falling back to the local base ref
 # when there is no origin). `git worktree add -b` IS the serialization point — it
@@ -8187,8 +8186,8 @@ fleet_scratch_alloc() {
   return 1
 }
 
-# fleet_scratch_free <main> <slug> <worktree> — undo an allocation (failed spawn,
-# or a warm-pool entry retired unclaimed). Never fails the caller.
+# fleet_scratch_free <main> <slug> <worktree> — undo an allocation (a failed spawn,
+# or an older release's warm-pool entry retired unclaimed). Never fails the caller.
 fleet_scratch_free() {
   git -C "$1" worktree remove --force "$3" >/dev/null 2>&1
   git -C "$1" branch -D "$2" >/dev/null 2>&1
@@ -8196,11 +8195,11 @@ fleet_scratch_free() {
   return 0
 }
 
-# fleet_pool_session <sess> — the HOLDING session that parks pre-warmed scratch
-# windows for <sess>, on the same socket. It deliberately has NO plan/dash window:
-# that is what keeps warm entries invisible to fleet_session_count (which only
-# counts sessions that HAVE a hub), to fleet_session_count_for (fleet-scoped) and
-# to the dash rows (scoped by FLEET_SESSION) — no per-consumer opt-out to forget.
+# fleet_pool_session <sess> — the HOLDING session where an older release parked
+# pre-warmed scratch windows for <sess>, on the same socket. The warm pool is gone
+# (T495): nothing parks there any more, the diskguard tick retires what is left
+# (pool_watch), and the readers below keep skipping it for one version.
+# compat-1v: 下一批删 (with fleet_is_pool_session and every `@pool` skip)
 fleet_pool_session() { printf '%s-pool\n' "$1"; }
 
 # fleet_is_pool_session <name> [socket] — true when <name> is a warm-pool HOLDING

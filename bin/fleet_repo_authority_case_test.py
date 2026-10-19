@@ -41,8 +41,8 @@ class CaseAuthorityTests(unittest.TestCase):
         self.env = dict(HOME=str(self.root), PATH=str(self.fakebin) + ":" + os.environ["PATH"],
                         TMPDIR=str(self.root), FLEET_CONF_DIR=str(self.conf), FLEET_SKIP_GLOBAL_CONF="1",
                         FLEET_SESSION="fixture", FLEET_TASK_AUTHORITY="legacy",
-                        FLEET_MAX_SESSIONS="0", FLEET_GLOBAL_MAX_SESSIONS="0", FLEET_START_WARM="0",
-                        FLEET_SCRATCH_POOL="0", FLEET_CODEX_READY_CHECK="0", FLEET_SPAWN_NODE="local",
+                        FLEET_MAX_SESSIONS="0", FLEET_GLOBAL_MAX_SESSIONS="0",
+                        FLEET_CODEX_READY_CHECK="0", FLEET_SPAWN_NODE="local",
                         FLEET_SPAWN_OVERLAP="0",
                         # Exercise real admission with fixture readings, never
                         # the runner's CPU/memory or its running agents (#4512).

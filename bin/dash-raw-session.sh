@@ -106,12 +106,11 @@
 # editable, unsent draft. Only --prompt is handed to `claude` as its initial prompt,
 # exactly how dash-issue-session.sh seeds a worker, so the session starts WORKING on
 # it instead of sitting at an empty `❯`. Everything else — worktree, @raw, cap,
-# naming, reaping — is the plain scratch. A seeded scratch always takes the COLD
-# path (never a warm-pool window): the pool's value is an instantly TYPEABLE `❯`,
-# which a seeded session has no use for, and delivering a prompt into a running
-# TUI would mean `send-keys` — the TUI's bracketed paste eats the trailing Enter
-# (the same reason inter-agent messaging never send-keys), so the only prompt
-# channel that is deterministic is the launch argument.
+# naming, reaping — is the plain scratch. The seed is the launch argument:
+# delivering a prompt into a running TUI would mean `send-keys` — the TUI's
+# bracketed paste eats the trailing Enter (the same reason inter-agent messaging
+# never send-keys), so the only prompt channel that is deterministic is the
+# launch argument.
 set -uo pipefail
 
 # Args (order-independent): --name <n> / --name=<n> is the optional window name
@@ -123,7 +122,7 @@ set_agent() {
   [ -z "$AGENT" ] || [ "$AGENT" = "$1" ] || { printf 'dash-raw-session: contradictory --agent values\n' >&2; exit 2; }
   AGENT=$1
 }
-NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; WARM_ONLY=0; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
+NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; NATIVE_WT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --name)        NAME="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -147,9 +146,7 @@ while [ "$#" -gt 0 ]; do
     --prompt-file=*) f="${1#--prompt-file=}"; PROMPT="$(cat "$f" 2>/dev/null)"; rm -f "$f"; shift ;;
     # --agent (issue #547): `claude` | `codex` for THIS scratch, overriding the
     # fleet's FLEET_AGENT. Rides the --bg re-exec and lands in the launcher's argv;
-    # validated below so only a known token is embedded in a command string. An
-    # explicit agent always takes the COLD path — the warm pool holds windows
-    # launched under the fleet default, which may be the other agent.
+    # validated below so only a known token is embedded in a command string.
     --agent)       set_agent "${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --agent=*)     set_agent "${1#--agent=}"; shift ;;
     # --as <name> (issue #3122, EPIC #3111 C11): the standard agent file this
@@ -187,13 +184,10 @@ while [ "$#" -gt 0 ]; do
     # exists, ONE stdout line `<window_id>\t<name>\t<worktree>\t<fleet_id>`. Foreground pass
     # only (the --bg pass's stdout is silenced, #446). The hub's node reads it.
     --print)       PRINT_WIN=1; shift ;;
-    # --warm-only (issue #2234, EPIC #2230 C4): a window from the warm pool or
-    # NOTHING — exit 3 when that (repo | HOME) × agent slot has no ready entry, so
-    # the caller takes its own cold path. A seed (--prompt / --prompt-file) is
-    # SUBMITTED into the claimed window as its first turn (fleet-pane-submit.sh),
-    # never a launch argument; --print adds `<t_window>\t<t_ready>\t<t_prompt>`
-    # (epoch ms) after the receipt's four fields. Headless callers only.
-    --warm-only)   WARM_ONLY=1; shift ;;
+    # --warm-only: the warm pool is gone (T495) — a caller of the release before
+    # still asks for a pool window first; it is answered "none ready" (exit 3), so
+    # it takes its own cold path. # compat-1v: 下一批删
+    --warm-only)   exit 3 ;;
     # --reap <policy> (issue #1902): when the fleet may close this session on its
     # own — merged[:<dur>] | done[:<dur>] | loop-end | at:<time> | keep. None =
     # the kind's default, stamped below: done:15m, or loop-end for a /loop seed.
@@ -417,7 +411,7 @@ BASE="${FLEET_BASE_BRANCH:-master}"
 if [ "$NATIVE_WT" = 1 ]; then
   [ "$NOREPO" = 0 ] && [ -n "$REPO_ARG" ] && [ "${AGENT:-${FLEET_AGENT:-claude}}" = claude ] \
     && [ "$NODE_ARG" = local ] \
-    && [ "$WARM_ONLY" = 0 ] && [ -z "$WT_ARG$RESUME_SID" ] \
+    && [ -z "$WT_ARG$RESUME_SID" ] \
     || { refuse "raw: native worktree requires a fresh local Claude repository session"; exit 2; }
   [ -z "${FLEET_WORKTREE_SETUP:-}" ] && [ "${FLEET_DEPS_SHARE:-0}" != 1 ] \
     || { refuse "raw: native worktree requires migrating explicit Fleet setup/dependency sharing first"; exit 2; }
@@ -627,18 +621,6 @@ if [ -n "$NAME" ]; then
   esac
 fi
 
-# --- get a scratch window: WARM POOL first, cold spawn otherwise --------------
-# With FLEET_SCRATCH_POOL>0 the slow half of a spawn already happened, minutes ago,
-# to a window parked in the `<sess>-pool` holding session: worktree built, claude
-# booted, and — the part that actually bites — PAST the TUI's input-mount flush,
-# the ~1s window in which Claude Code silently discards whatever you type even
-# though the `❯` box is already on screen. Claiming one is a `move-window` +
-# rename: the pane, its pty and the running claude survive untouched, so the
-# window is typeable in the same tick (measured 0.29s vs 7.0s cold).
-# An empty claim (pool off, cold, stale, or account-rotated) falls straight
-# through to the original cold path below — the pool is never load-bearing.
-# A SEEDED scratch (--prompt) never claims: the prompt goes in as the launch
-# argument, which only a cold spawn can carry (see the header).
 # An accepted task opening HERE (issue #4754): the hub binds only a remote
 # start, so a local one claims the task itself and carries the same launch
 # binding — refused, never opened unbound. Before --finish, which reads it.
@@ -668,62 +650,13 @@ if [ -n "$TASK_REF" ] && [ -z "$REBIND" ]; then
 fi
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
   || { refuse "$FLEET_AUTHORITY_ERROR"; exit 1; }
-warm=0; win=""; slug=""; wt=""
-claimed=""
-# One pool per hosted repo (issue #797): the claim names the scratch's repo, so it
-# only ever gets a window warmed from THAT repo's worktree. A no-repo scratch never
-# claims.
-_pool_ok=1; { [ "$NOREPO" = 1 ] || [ -n "${FLEET_LAUNCH:-}" ]; } && _pool_ok=0
-[ -z "${FLEET_AUTHORITY_START:-}" ] || _pool_ok=0
-[ "$NATIVE_WT" = 0 ] || _pool_ok=0
-_pool_repo=$REPO_ARG
-if [ "$WARM_ONLY" = 1 ]; then
-  # A pre-existing native process cannot consume a new admission reservation.
-  [ -z "${FLEET_AUTHORITY_START:-}" ] || { refuse "authority reservation requires a cold start"; exit 3; }
-  # The node's slot contract (issue #2233): the window id alone, exit 3 = none
-  # ready. HOME is `--repo -`. Its worktree (and so its slug) is read off the
-  # window: the claim clears @pool_slug. Nothing ready: nothing opened, exit 3.
-  win=$(bash "$BIN/scratch-pool.sh" claim "$SESS" --repo "$([ "$NOREPO" = 1 ] && echo - || echo "$REPO_ARG")" \
-          --agent "${AGENT:-${FLEET_AGENT:-claude}}" 2>/dev/null | head -1)
-  case "$win" in @[0-9]*) ;; *) exit 3 ;; esac
-  t_window=$(fleet_now_ms)
-  warm=1
-  # Read both fields in one round trip, after the claim, preserving empty fields.
-  IFS=$'\t' read -r _warm_wt _wa <<EOF
-$(TM display-message -p -t "$win" $':#{@worktree}\t:#{@cc_agent}' 2>/dev/null)
-EOF
-  _warm_wt=${_warm_wt#:}; _wa=${_wa#:}
-  if [ "$NOREPO" != 1 ]; then
-    wt=$_warm_wt
-    slug="scratch-${wt##*-scratch-}"
-  fi
-  # The agent it runs is the one asked for, or it is not handed out (issue #2403):
-  # never another agent standing in — closed, and exit 3, so the caller opens the
-  # asked-for agent cold. @cc_agent empty = a Claude (only a Codex stamps it).
-  if [ "${_wa:-claude}" != "${AGENT:-${FLEET_AGENT:-claude}}" ]; then
-    fleet_win_retire "$win" "$SOCK"
-    TM kill-window -t "$win" 2>/dev/null
-    [ "$NOREPO" = 1 ] || { [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; }
-    printf 'dash-raw-session: the warm window runs %s, not %s — closed it\n' "${_wa:-claude}" "${AGENT:-${FLEET_AGENT:-claude}}" >&2
-    exit 3
-  fi
-else
-[ -n "$WT_ARG$RESUME_SID" ] && _pool_ok=0      # a parked session's return is always cold (#3387)
-[ "$_pool_ok" = 1 ] && [ -z "$PROMPT" ] && [ -z "$AS_ARG" ] && { [ -z "$AGENT" ] || [ "$AGENT" = "${FLEET_AGENT:-claude}" ]; } && claimed=$(bash "$BIN/scratch-pool.sh" claim "$SESS" ${_pool_repo:+--repo "$_pool_repo"} 2>/dev/null | head -1)
-if [ -n "$claimed" ]; then
-  warm=1
-  win=${claimed%%	*}; _rest=${claimed#*	}; slug=${_rest%%	*}; wt=${_rest#*	}
-fi
-fi
-# A warm window is memory the machine already carries: this spawn's admission
-# holds nothing more (issue #2502).
-[ "${warm:-0}" = 1 ] && fleet_admit_release
+win=""; slug=""; wt=""
 
 # --- allocate a scratch worktree off the base branch (issue #290) -------------
 # The branch `scratch-<N>` + worktree `<repo-parent>/<repo-dir>-scratch-<N>` mirror
 # dash-issue-session.sh's mechanics. The allocator lives in fleet-lib.sh
-# (fleet_scratch_alloc) because the warm pool allocates identically; `git worktree
-# add -b` is itself the serialization point vs concurrent ⌃s presses.
+# (fleet_scratch_alloc); `git worktree add -b` is itself the serialization point
+# vs concurrent ⌃s presses.
 if [ "$NOREPO" = 1 ]; then
   slug=norepo; wt="$HOME"                        # no worktree: the agent runs in $HOME
 elif [ -n "$WT_ARG" ]; then
@@ -739,7 +672,7 @@ elif [ "$NATIVE_WT" = 1 ]; then
   IFS=$'\t' read -r slug wt native_intent <<EOF
 $native_alloc
 EOF
-elif [ "$warm" = 0 ]; then
+else
   alloc=$(fleet_scratch_alloc "$MAIN" "$BASE" "$SESS") || alloc=""
   if [ -n "$alloc" ]; then slug=${alloc%%	*}; wt=${alloc#*	}; fi
   [ -n "$slug" ] || { refuse "raw: could not create a scratch worktree"; exit 1; }
@@ -769,12 +702,7 @@ while printf '%s\n' "$existing" | grep -qxF "$name"; do name="$base-$n"; n=$((n 
 # subscription account + the fleet's default model (transparent when single-account).
 # On a new-window failure, roll back the just-created worktree + branch so a failed
 # spawn leaves no orphan (the janitor would otherwise inherit it).
-if [ "$warm" = 1 ]; then
-  # already spawned + already warm: it only needs this fleet's name on it. @raw /
-  # @worktree were stamped when it was warmed; the @pool_* marks were cleared by
-  # the claim, so from here on it is indistinguishable from a cold scratch window.
-  TM rename-window -t "$win" -- "$name" 2>/dev/null
-else
+{
   # A seed prompt rides in a file read AT LAUNCH (`"$(cat …)"`), never inline in the
   # new-window command string — same handoff dash-issue-session.sh uses, so
   # arbitrary user text (quotes, `$`, backticks) can't break or inject into it.
@@ -861,9 +789,9 @@ fleet_admit_confirm >/dev/null   # the window is open: its admission holds on it
     TM set-window-option -t "$win" @raw 1 2>/dev/null        # mark: raw/scratch, NOT issue-bound
     [ "$NATIVE_WT" = 1 ] || TM set-window-option -t "$win" @worktree "$wt" 2>/dev/null
   fi
-fi
-# The session's lifelong identity (issue #1646), warm or cold: a pool window was no
-# session until this claim. Minted once; restore / migrate / move carry it.
+}
+# The session's lifelong identity (issue #1646). Minted once; restore / migrate /
+# move carry it.
 [ -z "${_launch_fid:-}" ] || TM set-window-option -t "$win" @fleet_id "$_launch_fid" 2>/dev/null
 fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)
@@ -882,7 +810,7 @@ stamp_option() {
   stamp_option @agent_def_sha "$(as_kv sha)"
   stamp_option @agent_spawn "$(as_kv spawn)"; }
 [ -z "$AS_KV" ] && stamp_option @agent_spawn 1   # no agent file, no issue: may spawn (#4334)
-# Every repo scratch carries its repo (issue #789), warm or cold.
+# Every repo scratch carries its repo (issue #789).
 [ -n "$REPO_ARG" ] && stamp_option @repo "$REPO_ARG" 2>/dev/null
 [ "$PIN" = 1 ] && stamp_option @pin 1 2>/dev/null
 # When the fleet may close it on its own (issue #1902): the one asked for, else the
@@ -903,8 +831,7 @@ fi
 # (fleet-cleanup-idle.py `empty`) — never one resumed, seeded or given words.
 [ "$NOREPO" = 1 ] && [ -z "$PROMPT$RESUME_SID$SEED_FILE" ] && [ "$TEST_ID" = 0 ] \
   && stamp_option @prompt_track 1 2>/dev/null
-# Spawn provenance (issue #503) — stamped on the WARM path too: a pool window was
-# pre-warmed with no requester, so its origin is decided at CLAIM time, here.
+# Spawn provenance (issue #503).
 [ -n "$ORIGIN" ] && stamp_option @origin "$ORIGIN" 2>/dev/null
 TM ${window_stamps[@]+"${window_stamps[@]}"} 2>/dev/null
 unset window_stamps
@@ -920,39 +847,9 @@ if [ -n "$ORIGIN_WID" ]; then TM set-window-option -t "$win" @origin_wid "$ORIGI
   fleet_is_fid "${ORIGIN_WID#*/}" && TM set-window-option -t "$win" @origin_fid "${ORIGIN_WID#*/}" 2>/dev/null
 elif [ -n "$ORIGIN" ]; then fleet_stamp_origin_wid "$SESS" "$win" "$ORIGIN" "$SOCK"; fi
 [ -n "$ORIGIN" ] && [ -z "$ORIGIN_WID" ] && fleet_stamp_origin_gen "$SESS" "$win" "$ORIGIN" "$SOCK"
-# --warm-only's seed (issue #2234): the claimed window is an agent at rest past its
-# input-mount flush, so the seed goes in as its FIRST TURN — paste + a separate
-# Enter, only once its input is seen empty (fleet-pane-submit.sh). One that never
-# shows an idle, empty input is broken: it is closed (the pool's own close) and
-# nothing is left open — exit 3, the caller's cold path carries the seed instead.
-t_ready=''; t_prompt=''
-if [ "$WARM_ONLY" = 1 ] && [ -n "$PROMPT" ]; then
-  sf=$(mktemp "${TMPDIR:-/tmp}/dash-raw-seed.XXXXXX") || sf=''
-  if [ -n "$sf" ] && printf '%s' "$PROMPT" > "$sf"; then
-    stamps=$(bash "$BIN/fleet-pane-submit.sh" "$SOCK" "$win" "$sf"); src=$?
-  else
-    stamps=''; src=3
-  fi
-  [ -n "$sf" ] && rm -f "$sf"
-  if [ "$src" = 3 ] || [ "$src" = 1 ] || [ "$src" = 2 ]; then
-    fleet_win_retire "$win" "$SOCK"
-    TM kill-window -t "$win" 2>/dev/null
-    [ "$NOREPO" = 1 ] || { [ -n "$slug" ] && [ -n "$wt" ] && fleet_scratch_free "$MAIN" "$slug" "$wt"; }
-    printf 'dash-raw-session: the warm window would not take the first turn — closed it\n' >&2
-    exit 3
-  fi
-  t_ready=${stamps%%	*}; t_prompt=${stamps#*	}
-  [ "$src" = 0 ] || t_prompt=${t_prompt:-$(fleet_now_ms)}
-  # exit 4 (issue #2430): the seed is in the window, its turn never seen to start
-  # after four Enters — said, never passed off as a clean start
-  [ "$src" = 4 ] && printf 'dash-raw-session: the seed is in %s but its first turn was not seen to start\n' "$win" >&2
-fi
-
-# Window handle (issue #566), likewise on BOTH paths: a warm-pool window is parked
-# in the holding session with no handle, and only becomes a fleet window here at
-# claim time. Best-effort — the dash backfills a window that ends up without one.
-# After the first turn, not before: its lock + scan is the dearest stamp, and
-# nothing the turn starts reads it (发出即开 ≤1 s, issue #2352).
+# Window handle (issue #566). Best-effort — the dash backfills a window that ends
+# up without one. Last: its lock + scan is the dearest stamp, and nothing the
+# launch reads needs it (issue #2352).
 fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 
 # Keep the full name separate from the clipped/deduplicated window title. The
@@ -964,7 +861,7 @@ if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)
   if [ -n "$df" ] && [ -n "$pane" ] && printf '%s' "$INPUT_DRAFT" > "$df"; then
-    TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' '$warm' >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
+    TM run-shell -b "python3 '$BIN/scratch-prefill.py' '$SOCK' '$pane' '$df' 0 >/dev/null 2>&1 || { rm -f '$df'; tmux -L '$SOCK' display-message 'raw: could not prefill the scratch name' 2>/dev/null; }" 2>/dev/null \
       || { rm -f "$df"; FLEET_UI_SOCK=$SOCK fleet_ui_fail 'raw: could not prefill the scratch name'; }
   else
     [ -n "$df" ] && rm -f "$df"
@@ -972,28 +869,13 @@ if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   fi
 fi
 
-# Refill the pool in the background, so the NEXT ⌃s is instant too — but NOT right
-# now. Warming costs a whole cold claude boot (node + the fleet's MCP set), and
-# firing it at the instant the operator starts typing into the window they just
-# claimed is the one moment it hurts: on a box already running several sessions
-# that contention pushed the first keystroke's echo from sub-second to tens of
-# seconds — reintroducing, from the other end, exactly the stall this removes.
-# So the refill waits first — `--delay`, which scratch-pool.sh applies INSIDE the
-# pool-enabled gate so that with the pool off this whole line costs nothing.
-# run-shell -b because it is slow either way.
-[ "$NATIVE_WT" = 1 ] || TM run-shell -b "bash '$BIN/scratch-pool.sh' ensure '$SESS' --delay >/dev/null 2>&1" 2>/dev/null
-
 # The headless caller's receipt (issue #1541, --print): the window, its name, its
 # worktree — what the hub's node reads back as the start's window — and its
 # @fleet_id (issue #1873), the address `fleet-worker-stop.sh <sess> fid:<id>` stops
 # it by later (a no-repo session has no key). Readers split on the tab and take
 # the fields they know, so the 4th column is additive.
 if [ "$PRINT_WIN" = 1 ]; then
-  if [ "$WARM_ONLY" = 1 ]; then
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid" "$t_window" "$t_ready" "$t_prompt"
-  else
-    printf '%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid"
-  fi
+  printf '%s\t%s\t%s\t%s\n' "$win" "$name" "$wt" "$fid"
 fi
 
 if [ -z "$TARGET_SESS" ]; then

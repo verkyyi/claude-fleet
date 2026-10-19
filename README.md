@@ -67,11 +67,9 @@ or a throughput multiplier. [Evidence and counting method](docs/dev/USAGE-EVIDEN
   in its own writable `scratch-N` worktree, so an experiment can push a branch and
   open a PR like any worker). Once a scratch has talked its way to a real
   requirement, dispatch it as a task (the `task` tool) — its session opens on the
-  hub's record `T<n>` (#4898: the fleet files and claims no issue). Set `FLEET_SCRATCH_POOL=1` to keep one pre-started and
-  ready: `⌃s` then hands you a session you can type into immediately (0.46s to
-  the window, 0.30s to the first keystroke) instead of one that spends ~7s
-  booting — the last second of which paints a `❯` box that silently swallows
-  whatever you type.
+  hub's record `T<n>` (#4898: the fleet files and claims no issue). A new session
+  starts cold (~7s to the first keystroke on `⌃s` today; the pre-started warm pool
+  is gone, T495) — making that start itself fast is the work now.
 
 - **Background collectors** keep it all instant: a 45-second daemon caches
   each worktree's branch, the repo's PR/CI map, open issues, per-session

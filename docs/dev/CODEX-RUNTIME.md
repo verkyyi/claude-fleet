@@ -467,13 +467,8 @@ sets native reasoning effort. Explicit caller `-c` values win. Policies reach
 both the private app-server and TUI without editing account configuration.
 `FLEET_CODEX_HOME` optionally pins a pre-existing account home for new workers.
 
-`FLEET_SCRATCH_POOL` now warms either provider. Pool launches load the owning
-fleet's config even before their window moves into that fleet. The Codex probe
-waits for a stable empty input, verifies launcher ownership, types one character,
-and verifies that Ctrl-U clears it. It never presses Enter or sends a model
-request. Trust dialogs, stale owners and shell remnants cannot become ready.
-Claims check provider, account home, window size and age; an unavailable warm
-entry falls back to the normal cold launch.
+The warm scratch pool that pre-started either provider is gone (T495): every
+session is a cold launch.
 
 Scheduled refills (`ensure --soon` / `--delay`) coalesce per fleet/repository/agent
 and retry a resource hold at most three times, after 15, 30 and 60 seconds.

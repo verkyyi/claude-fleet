@@ -102,7 +102,7 @@ operation journal. Spec: [FLEET-MCP.md](FLEET-MCP.md) «The hub route».
   `worker_id` in the inventory is still the key form, and a lease, a placement
   and a move still name a key.
 - `window_id`, `handle` — **observations** of where that identity lives right
-  now. They are re-minted by every migration, restore and warm-pool claim and are
+  now. They are re-minted by every migration and restore and are
   never accepted as a target.
 
 `worker_message`, `worker_stop`, `worker_resume`, `worker_answer`,

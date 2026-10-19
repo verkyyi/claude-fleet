@@ -357,7 +357,6 @@
 21.5 fleet-open-selftest.sh
 0.5 fleet-orphan-reports-selftest.sh
 2.7 fleet-palette-selftest.sh
-0.0 fleet-pane-submit-selftest.sh
 0.3 fleet-panel-draft-selftest.sh
 12.9 fleet-panel-overlay-selftest.sh
 3.7 fleet-peer-cert-selftest.sh
@@ -422,8 +421,6 @@
 0.2 fleet-spotlight-selftest.sh
 0.2 fleet-src-digest-selftest.sh
 13.8 fleet-stable-selftest.sh
-34.8 fleet-start-warm-2-selftest.sh
-29.0 fleet-start-warm-selftest.sh
 8.4 fleet-state-reconcile-selftest.sh
 6.6 fleet-status-7501-selftest.sh
 0.1 fleet-status-evidence-selftest.sh
@@ -534,7 +531,6 @@
 0.5 pane-header-selftest.sh
 9.9 peer-queue-selftest.sh
 4.2 poll-backoff-selftest.sh
-1.6 pool-cred-selftest.sh
 0.4 pool-not-a-fleet-selftest.sh
 10.5 portability-selftest.sh
 0.8 posix-lib-parse-selftest.sh
@@ -549,9 +545,6 @@
 18.3 run-selftests-shard-selftest.sh
 34.3 run-selftests-timeout-selftest.sh
 4.0 run-shell-silence-selftest.sh
-33.5 scratch-pool-live-selftest.sh
-29.5 scratch-pool-off-race-selftest.sh
-29.7 scratch-pool-selftest.sh
 0.0 scratch-prefill-selftest.sh
 0.6 seed-words-selftest.sh
 0.0 sel-visible-selftest.sh

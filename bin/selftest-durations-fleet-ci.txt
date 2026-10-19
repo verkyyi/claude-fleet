@@ -262,7 +262,6 @@
 2.4 fleet-evacuate-selftest.sh
 0.2 fleet-src-digest-selftest.sh
 5.3 fleet-stable-selftest.sh
-55.0 fleet-start-warm-selftest.sh
 8.8 fleet-state-reconcile-selftest.sh
 7.0 fleet-status-7501-selftest.sh
 15.8 fleet-status-replay-selftest.sh
@@ -326,7 +325,6 @@
 0.4 pane-header-selftest.sh
 8.0 peer-queue-selftest.sh
 4.1 poll-backoff-selftest.sh
-1.6 pool-cred-selftest.sh
 0.6 pool-not-a-fleet-selftest.sh
 8.3 portability-selftest.sh
 0.6 posix-lib-parse-selftest.sh
@@ -341,8 +339,6 @@
 16.2 run-selftests-shard-selftest.sh
 34.5 run-selftests-timeout-selftest.sh
 4.1 run-shell-silence-selftest.sh
-33.1 scratch-pool-live-selftest.sh
-9.5 scratch-pool-selftest.sh
 0.1 scratch-prefill-selftest.sh
 5.8 selftest-isolation-selftest.sh
 0.2 session-cap-agent-selftest.sh

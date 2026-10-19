@@ -875,9 +875,6 @@ EOF
 account_adapter() {
   local adapter_session
   adapter_session=$(fleet_current_session 2>/dev/null)
-  if [ -n "${FLEET_LAUNCH_SESSION:-}" ] && [ "$adapter_session" = "${FLEET_LAUNCH_SESSION}-pool" ]; then
-    adapter_session="$FLEET_LAUNCH_SESSION"
-  fi
   [ -z "$adapter_session" ] || fleet_load_conf "$adapter_session" || return 1
   [ -n "$_fa_cls_env" ] && FLEET_ACCOUNT_CLASS="$_fa_cls_env"   # the pane's choice beats the overlay (#1540)
   export FLEET_C FLEET_CONF_DIR FLEET_ACCOUNTS_DIR FLEET_QUOTA_BIN

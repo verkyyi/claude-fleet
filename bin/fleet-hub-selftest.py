@@ -41,9 +41,7 @@ class Sandbox:
         self.conf = self.root / "conf"
         self.fleet_conf = self.conf / "fleets/demo/conf"
         self.fleet_conf.parent.mkdir(parents=True)
-        # FLEET_START_WARM=0 (issue #2234): these legs pin the cold start's argv;
-        # the warm-pool start has its own test (fleet-start-warm-selftest.sh).
-        self.fleet_conf.write_text('FLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\nFLEET_START_WARM=0\n')
+        self.fleet_conf.write_text('FLEET_MAX_SESSIONS=3\nFLEET_ISSUE_BRIDGE=1\n')
         repos = self.fleet_conf.parent / "repos"   # every repo is an overlay (#1937, #4806)
         repos.mkdir()
         (repos / "example-project.conf").write_text('FLEET_REPO="example/project"\nFLEET_MAIN="/fixture/project"\n')

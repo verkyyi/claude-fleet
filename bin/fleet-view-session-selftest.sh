@@ -25,9 +25,7 @@
 #                    view session going away unlinks every window from IT); the
 #                    list-sessions walkers (fleet-restore, the collector) skip a
 #                    view session by name
-#   F. membership  — scratch-pool.sh retire needs every session membership after
-#                    a refused kill, not fleet_lw's one display row per window
-# tmux absent → legs C–F SKIP (the lints still run). Exit 0 = pass.
+# tmux absent → legs C–E SKIP (the lints still run). Exit 0 = pass.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
@@ -166,98 +164,6 @@ eq "E: fleet-window-reap.sh --hook <view session> is a no-op (exit 0, no sweeper
 has "E: fleet-restore.sh skips a view session when it walks list-sessions" "$(grep -A1 'fleet_is_pool_session "\$sess" "\$sock" && continue' "$BIN/fleet-restore.sh")" 'fleet_is_view_session "$sess" && continue'
 has "E: the collector skips a view session when it walks list-sessions" "$(grep -A1 "list-sessions -F '#{session_name}' 2>/dev/null); do" "$BIN/tmux-dash-collect.sh")" 'fleet_is_view_session "$sess" && continue'
 has "E: the window-unlinked hook hands the reaper the unlinking session" "$(grep 'window-unlinked\[72\]' "$ROOT/conf/tmux-attention.conf")" "--hook '#{hook_session_name}'"
-
-# ---- F. a pool membership is not a deduplicated display row ------------------
-# Use the shipped retire/unmark/wopt bodies, the real library and real tmux.
-# Only a refused kill / unreadable membership RPC is injected. No warm-up or
-# live fleet is involved; E in scratch-pool-off-race-selftest.sh separately
-# covers a real claim moving the pane while retire waits at its kill.
-eval "$(sed -n '/^wopt() {/p; /^retire() {/,/^}/p; /^unmark() {/,/^}/p' "$BIN/scratch-pool.sh")"
-NOW() { date +%s; }
-pool_kill_refuse=1; pool_scan_unknown=0
-TM() {
-  case "$1" in
-    kill-window)
-      printf '%s\n' "$*" >> "$WORK/pool-kills"
-      [ "$pool_kill_refuse" = 0 ] || return 1 ;;
-    list-windows) [ "$pool_scan_unknown" = 0 ] || return 1 ;;
-  esac
-  T "$@"
-}
-fleet_scratch_free() { printf '%s\n' "$*" >> "$WORK/pool-frees"; }
-POOL="$S-pool"
-# shellcheck disable=SC2034  # read by the shipped retire() body loaded above
-MAIN="$WORK/main"
-T new-session -d -s "$POOL" -n keeper 'exec sleep 300'
-PW=$(T new-window -d -P -F '#{window_id}' -t "$POOL:" 'exec sleep 300')
-PFID=11111111-1111-4111-8111-111111111111
-PWT="$WORK/parked"; mkdir -p "$PWT"
-T set-option -w -t "$PW" @worktree "$PWT"
-T set-option -w -t "$PW" @pool_slug scratch-1
-T set-option -w -t "$PW" @fleet_id "$PFID"
-PMARK="$(fleet_retired_dir)/$PFID"
-pool_identity() { T display-message -p -t "$PW" '#{pane_id}|#{pane_pid}|#{pane_dead}'; }
-PIDENT=$(pool_identity)
-eq "F: fixture starts with a live pane" "0" "$(T display-message -p -t "$PW" '#{pane_dead}')"
-pool_kept() {
-  eq "$1: same live pane" "$PIDENT" "$(pool_identity)"
-  eq "$1: worktree kept, no free" "kept" "$([ -d "$PWT" ] && [ ! -e "$WORK/pool-frees" ] && echo kept)"
-}
-
-# A grouped view alone duplicates rows, but fleet_lw keeps the pool's own row.
-PV="$POOL@view-membership"
-T new-session -d -t "=$POOL" -s "$PV"
-raw=$(T list-windows -a -F '#{window_id} #{session_name}')
-eq "F: grouped pool has two raw memberships" "2" "$(printf '%s\n' "$raw" | grep -c "^$PW ")"
-eq "F: grouped view still leaves the canonical pool row" "$PW $POOL" "$(fleet_lw '#{window_id} #{session_name}' T | grep "^$PW ")"
-rc=0; retire "$PW" || rc=$?
-eq "F: refused kill, still parked is failure" "1" "$rc"
-has "F: still parked retains this pass's mark" "$(cat "$PMARK" 2>/dev/null)" 'scratch-pool '
-PTOKEN=$(cat "$PMARK" 2>/dev/null)
-pool_kept 'F grouped parked'
-printf 'pool membership: grouped pool %s, pane %s, retire rc=%s (mark kept)\n' "$PW" "$PIDENT" "$rc"
-
-# A link into the earlier fleet session (and its existing grouped view) is a
-# DIFFERENT case: the pool membership still exists, but the display dedup drops
-# it. Keep the raw membership test even when the displayed row names the fleet.
-T link-window -s "$POOL:$PW" -t "$S:"
-raw=$(T list-windows -a -F '#{window_id} #{session_name}')
-eq "F: link plus both grouped views has four raw memberships" "4" "$(printf '%s\n' "$raw" | grep -c "^$PW ")"
-eq "F: raw scan retains exact pool membership" "$PW $POOL" "$(printf '%s\n' "$raw" | grep -Fx "$PW $POOL")"
-eq "F: display dedup loses that pool membership" "$PW $S" "$(fleet_lw '#{window_id} #{session_name}' T | grep "^$PW ")"
-rc=0; retire "$PW" || rc=$?
-eq "F: linked but still parked is failure" "1" "$rc"
-eq "F: linked parked mark unchanged" "$PTOKEN" "$(cat "$PMARK" 2>/dev/null)"
-pool_kept 'F linked parked'
-printf 'pool membership: linked %s still in %s, display row %s, retire rc=%s (mark kept)\n' "$PW" "$POOL" "$(fleet_lw '#{window_id} #{session_name}' T | grep "^$PW ")" "$rc"
-
-# Remove the extra link, then really MOVE the pane out of the pool. The actual
-# pool-qualified kill must now refuse; only this pass's newly created mark goes.
-T unlink-window -t "$S:$PW"
-T move-window -s "$POOL:$PW" -t "$S:"
-eq "F: moved pane has no pool membership" "" "$(T list-windows -a -F '#{window_id} #{session_name}' | grep -Fx "$PW $POOL")"
-rm -f "$PMARK"; pool_kill_refuse=0
-rc=0; retire "$PW" || rc=$?
-eq "F: moved pane is left alone" "0" "$rc"
-eq "F: only this pass's mark was removed" "absent" "$([ ! -e "$PMARK" ] && echo absent)"
-pool_kept 'F moved'
-printf 'pool membership: moved %s, same pane %s, retire rc=%s (own mark removed)\n' "$PW" "$(pool_identity)" "$rc"
-printf 'another closer\n' > "$PMARK"
-rc=0; retire "$PW" || rc=$?
-eq "F: moved pane with another mark is left alone" "0" "$rc"
-eq "F: another closer's mark survives" "another closer" "$(cat "$PMARK" 2>/dev/null)"
-pool_kept 'F moved marked'
-printf 'pool membership: moved marked %s, retire rc=%s (other mark kept)\n' "$PW" "$rc"
-
-# No membership answer is UNKNOWN, not proof that the pane left the pool.
-rm -f "$PMARK"; pool_scan_unknown=1
-rc=0; retire "$PW" || rc=$?
-eq "F: unanswered membership RPC is failure" "1" "$rc"
-has "F: unknown keeps this pass's mark" "$(cat "$PMARK" 2>/dev/null)" 'scratch-pool '
-pool_kept 'F unknown'
-printf 'pool membership: unanswered scan for %s, retire rc=%s (mark and worktree kept)\n' "$PW" "$rc"
-eq "F: every kill names the exact pool and window" "kill-window -t $POOL:$PW" "$(sort -u "$WORK/pool-kills")"
-eq "F: five retirement observations completed" "5" "$(wc -l < "$WORK/pool-kills" | tr -d ' ')"
 
 if [ "$FAIL" -eq 0 ]; then printf 'fleet-view-session selftest: PASS (%d checks)\n' "$CHECKS"; exit 0; fi
 printf 'fleet-view-session selftest: %d FAILED of %d\n' "$FAIL" "$CHECKS" >&2

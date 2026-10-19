@@ -117,9 +117,9 @@ norm_repo_arg() {
 #      then dash-restore-session.sh --repo into <sess> (same transcript, same
 #      worktree, @repo stamped). A hibernating worker is woken first. A busy one
 #      (working / needs) is left where it is — or, with --wait, moved the moment it
-#      goes idle (at most FLEET_FOLD_WAIT s, default 7200). Panels and warm-pool
-#      windows are not moved: they retire with the server, and <sess>'s own pool
-#      refills for the repo (#797).
+#      goes idle (at most FLEET_FOLD_WAIT s, default 7200). Panels and an older
+#      release's warm-pool windows (the pool is gone, T495) are not moved: they
+#      retire with the server.
 #   3. only when nothing is left behind: fleet-down <from> (never --purge), and its
 #      conf dir is ARCHIVED, never deleted, to
 #      $FLEET_CONF_DIR/archive/<from>-folded-into-<sess without fleet->-<YYYYMMDD>.
@@ -161,7 +161,7 @@ fold_classify() {
   name=$(fold_opt "$1" "$2" '#{window_name}')
   case "$name" in dash|plan|backlog|home) printf 'panel\t-\t%s\tretires with the server\n' "$name"; return 0 ;; esac
   if [ "$(fold_opt "$1" "$2" '#{@pool}')" = 1 ]; then
-    printf 'pool\t-\t%s\tretires with the server; the target refills its pool\n' "$name"; return 0
+    printf 'pool\t-\t%s\ta warm-pool window from before T495: retires with the server\n' "$name"; return 0
   fi
   key=$(fold_key "$1" "$2")
   if [ -z "$key" ]; then

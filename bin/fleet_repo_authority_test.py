@@ -119,23 +119,13 @@ class PoolAuthorityTests(unittest.TestCase):
         self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
         self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
 
-    def test_warm_pool_uses_owning_fleet_with_launch_hint(self):
-        self.supervise("fixture-pool", "fixture", "fixture")
-
-    def test_warm_pool_uses_socket_without_launch_hint(self):
-        self.supervise("fixture-pool", "fixture")
-
-    def test_unrelated_launch_hint_cannot_rebind_pool(self):
-        self.supervise("fixture-pool", "fixture", "separate")
-
     def test_normal_fleet_ignores_unrelated_launch_hint(self):
         self.supervise("fixture", "fixture", "separate")
 
     def test_genuine_fleet_ending_in_pool_keeps_identity(self):
         self.supervise("separate-pool", "separate-pool", "fixture")
 
-    def test_claimed_window_keeps_its_owning_fleet_identity(self):
-        self.supervise("fixture-pool", "fixture", "fixture")
+    def test_window_moved_into_a_fleet_takes_that_fleets_identity(self):
         self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
         self.supervise("fixture-pool", "fixture", "fixture")
 
@@ -150,8 +140,8 @@ class PoolAuthorityTests(unittest.TestCase):
     def test_missing_receipt_with_an_older_hub_is_said(self):
         self.supervise("fixture", "fixture", no_receipt=True, old_hub=True)
 
-    def test_hub_refusal_remains_fatal_after_pool_resolution(self):
-        self.supervise("fixture-pool", "fixture", "fixture", refuse=True)
+    def test_hub_refusal_remains_fatal(self):
+        self.supervise("fixture", "fixture", refuse=True)
 
 
 class RepoAuthorityTests(unittest.TestCase):

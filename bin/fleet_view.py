@@ -1876,8 +1876,7 @@ def do(qo, verb, vid, client="", target=None, new=None):
 
 def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     """⌘N (issue #3119): a NEW session — a no-repo one on this machine, in $HOME
-    (dash-raw-session.sh --no-repo, the hub's own origin; the warm pool's HOME
-    entry when one is ready, issue #3311), then go() onto it: the
+    (dash-raw-session.sh --no-repo, the hub's own origin), then go() onto it: the
     pane is the agent's input. No session is special, so nothing here names a
     template. rc as go(); 3 when none opened (one line on the client).
     ⌘P's ⚡ row (issue #3327) names its cells: `repo` (--repo, else --no-repo),
@@ -1897,9 +1896,6 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
         return 3
     seam = os.environ.get("FLEET_VIEW_NEW_CMD")
     argv = shlex.split(seam) if seam else ["bash", str(Path(__file__).absolute().parent / "dash-raw-session.sh")]
-    # the HOME slot of the warm pool first (issue #3311): a claimed window is an agent
-    # already at its prompt (~0.3 s, against 5-20 s cold on a busy machine); exit 3 =
-    # none ready ⇒ the cold open, as a hub start does (fleet-control-read.sh).
     if not agent:
         agent, why = new_agent(fleet, vid)
         if why:
@@ -1907,27 +1903,21 @@ def go_new(qo, vid, client="", repo="", agent="", prompt="", draft=""):
     named = ["--repo", repo] if repo else ["--no-repo"]
     named += (["--agent", agent] if agent else []) + (["--prompt", prompt] if prompt else [])
     named += ["--draft", draft] if draft else []
-    warm = os.environ.get("FLEET_START_WARM", "1") != "0" and not prompt
-    tries = [["--warm-only"], []] if warm else [[]]
-    rc, w, why = 1, "", ""
     secs = fenv("FLEET_VIEW_NEW_SECS", 60)
-    # the session's clock (issue #3551): a warm window bound (`claim`), else one
-    # started now (`cold` — the run counts apart), then the view onto it (`go`)
+    # the session's clock (issue #3551): the session started (`start`), then the
+    # view onto it (`go`)
     clock = fleet_timing.Clock("session")
-    for extra in tries:
-        try:
-            p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk"] + extra + ["--print", fleet],
-                               stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
-                               errors="replace", timeout=secs)
-            rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
-            why = new_why(p.stderr, rc)
-        except subprocess.TimeoutExpired:
-            rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
-        except OSError as error:
-            rc, w, why = 1, "", str(error)
-        clock.mark("claim" if extra else "cold")
-        if not (extra and rc == 3):
-            break
+    try:
+        p = subprocess.run(argv + ["--origin", "hub"] + named + ["--no-desk", "--print", fleet],
+                           stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=secs)
+        rc, w = p.returncode, ((p.stdout.strip().splitlines() or [""])[-1].split("\t") + [""])[0].strip()
+        why = new_why(p.stderr, rc)
+    except subprocess.TimeoutExpired:
+        rc, w, why = 1, "", say("view_new_timeout_fmt", "%g" % secs)
+    except OSError as error:
+        rc, w, why = 1, "", str(error)
+    clock.mark("start")
     if rc == 0 and re.fullmatch(r"@[0-9]+", w):
         went = go(qo, vid, w, "new", client)
         clock.mark("go")
