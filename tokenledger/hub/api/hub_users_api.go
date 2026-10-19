@@ -243,7 +243,7 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 		row = *existing
 		row.Login, row.Role = canonical, roleUser
 	}
-	if err := s.Store.UpsertHubUser(row); err != nil {
+	if err := s.Store.AdmitHubUser(row); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

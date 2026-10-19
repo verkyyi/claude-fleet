@@ -45,8 +45,10 @@ type authorityFollow struct {
 // handleRepoAuthority takes the hub's TypeRepoAuthority.
 func (a *Agent) handleRepoAuthority(ctx context.Context, script string, m control.Message) {
 	var r control.RepoAuthority
-	if err := json.Unmarshal(m.Payload, &r); err != nil || r.Repo == "" || r.Revision <= 0 ||
-		strings.Count(r.Repo, "/") != 1 || strings.HasPrefix(r.Repo, "-") {
+	// No repo = a host that hosts none yet (claude-fleet T490): the re-read is
+	// the login's person's all the same.
+	if err := json.Unmarshal(m.Payload, &r); err != nil || r.Revision <= 0 ||
+		(r.Repo != "" && (strings.Count(r.Repo, "/") != 1 || strings.HasPrefix(r.Repo, "-"))) {
 		return
 	}
 	st := &a.authority
@@ -86,7 +88,11 @@ func (a *Agent) authoritySync(ctx context.Context, script, repo string, w *autho
 	// Not the connection's: a link that drops mid-write must not cut it short.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorityTimeout)
 	defer cancel()
-	cmd := authorityCommand(ctx, script, "authority-sync", repo)
+	args := []string{"authority-sync"}
+	if repo != "" {
+		args = append(args, repo)
+	}
+	cmd := authorityCommand(ctx, script, args...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := prepCmd(ctx, cmd)

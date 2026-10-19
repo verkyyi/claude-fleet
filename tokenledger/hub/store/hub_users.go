@@ -175,7 +175,16 @@ func (s *Store) HubUsers() ([]HubUser, error) {
 // (who first put them on the list), its last_seen and its GitHub ID; login,
 // role and machine_login take the new values. AddedAt zero means now; an
 // empty PrincipalID with a GitHub ID means gh:<id>, the GitHub person's.
-func (s *Store) UpsertHubUser(u HubUser) error {
+func (s *Store) UpsertHubUser(u HubUser) error { return s.upsertHubUser(u, false) }
+
+// AdmitHubUser is UpsertHubUser on a road that puts a person on the list — an
+// invite, a request (a trial made a member too), an admin's add, a deploy
+// admin's first row: a person new to the list starts on the hub
+// (seedNewOwnerAuthority, claude-fleet T490). A row already there is only
+// updated, its authority untouched.
+func (s *Store) AdmitHubUser(u HubUser) error { return s.upsertHubUser(u, true) }
+
+func (s *Store) upsertHubUser(u HubUser, admit bool) error {
 	if u.PrincipalID == "" && u.GitHubID > 0 {
 		u.PrincipalID = GitHubPrincipalPrefix + strconv.FormatInt(u.GitHubID, 10)
 	}
@@ -192,13 +201,39 @@ func (s *Store) UpsertHubUser(u HubUser) error {
 	if u.GitHubID > 0 {
 		gid = u.GitHubID
 	}
-	_, err := s.write.Exec(`INSERT INTO hub_users (principal_id, github_id, login, role, machine_login, added_by, added_at)
+	if admit {
+		// No fleet registry (CCQUOTA_FLEET off) = no task authority to seed.
+		fleet, err := hasColumn(s.write, "fleet_settings", "key")
+		if err != nil {
+			return err
+		}
+		admit = fleet
+	}
+	tx, err := s.write.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var one int
+	err = tx.QueryRow(`SELECT 1 FROM hub_users WHERE principal_id = ?`, u.PrincipalID).Scan(&one)
+	created := errors.Is(err, sql.ErrNoRows)
+	if err != nil && !created {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO hub_users (principal_id, github_id, login, role, machine_login, added_by, added_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(principal_id) DO UPDATE SET login = excluded.login, role = excluded.role,
 			machine_login = excluded.machine_login,
 			github_id = COALESCE(hub_users.github_id, excluded.github_id)`,
-		u.PrincipalID, gid, u.Login, u.Role, u.MachineLogin, u.AddedBy, u.AddedAt.UTC().Format(rfc))
-	return err
+		u.PrincipalID, gid, u.Login, u.Role, u.MachineLogin, u.AddedBy, u.AddedAt.UTC().Format(rfc)); err != nil {
+		return err
+	}
+	if admit && created {
+		if _, err = s.seedNewOwnerAuthority(tx, u.PrincipalID, time.Now()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // TouchHubUser records a GitHub sign-in: the username GitHub reported this

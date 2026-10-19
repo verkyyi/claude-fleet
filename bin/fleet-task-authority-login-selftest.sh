@@ -14,7 +14,8 @@
 #      frozen or hub; bob's freeze in turn does not touch alice's gate
 #   S  settle: each login's `--settle --apply` (no repo = every hosted repo) closes
 #      only its own node's dead starts
-#   Y  the hub's push: bob's authority-sync writes nothing; alice's re-reads hub
+#   Y  the hub's push: bob's authority-sync writes nothing; alice's re-reads hub,
+#      with a repo or (a host that hosts none yet, T490) without one
 #   R  rollback: alice back to legacy, her login opens again; bob never moved
 #
 # Drives bin/fleet_repo_authority.py, bin/fleet-repo.sh (authority),
@@ -196,6 +197,11 @@ out=$(as alice bash "$BIN/fleet-hub-node.sh" authority-sync o/app 2>&1)
 has "Y alice's sync re-reads hub" "$out" '"changed": ["fleet.conf"]'
 chk "Y …her login reads hub again" "$(login_mode alice)" hub
 grep -q '^FLEET_HOST=1$' "$WORK/alice/fleet.conf" && ok "Y …the rest of her fleet.conf kept" || fail "Y fleet.conf: $(cat "$WORK/alice/fleet.conf")"
+# A host with no repo yet (a new person's first login, T490) is pushed with none.
+printf 'FLEET_HOST=1\n' > "$WORK/alice/fleet.conf"
+out=$(as alice bash "$BIN/fleet-hub-node.sh" authority-sync 2>&1)
+has "Y a no-repo push re-reads hub too" "$out" '"changed": ["fleet.conf"]'
+chk "Y …her login reads hub" "$(login_mode alice)" hub
 
 # ---- R: alice rolls back; bob's row never moved for her ----
 as alice bash "$BIN/fleet-repo.sh" authority --dry-run > "$WORK/m.json" 2>/dev/null

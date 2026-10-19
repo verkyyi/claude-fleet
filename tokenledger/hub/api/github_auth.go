@@ -700,7 +700,7 @@ func (s *Server) recordAdminAs(pid string, id int64, login string, now time.Time
 			row.Login = u.Login // a name they chose is theirs, not GitHub's
 		}
 	}
-	return s.Store.UpsertHubUser(row)
+	return s.Store.AdmitHubUser(row)
 }
 
 // ResolveGitHubAdmins pins every CCQUOTA_GITHUB_ADMINS name not pinned yet to

@@ -289,8 +289,9 @@ case "${1:-}" in
   # The hub's word that this login's person's authority moved (issues #4730,
   # #4901 — sent once per repo a host hosts): fleet.conf [node] re-reads it,
   # the mode from the hub's gate read; the repo is only the push's label.
-  authority-sync) [ -n "${2:-}" ] || die 2 "usage: fleet-hub-node.sh authority-sync <owner/repo>"
-    exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync ;;
+  # No repo = a host that hosts none yet (T490): the person's mode all the same.
+  authority-sync) if [ -n "${2:-}" ]; then exec python3 "$BIN/fleet_repo_authority.py" "$2" --sync; fi
+    exec python3 "$BIN/fleet_repo_authority.py" --sync ;;
   recovery) exec python3 "$BIN/fleet_task_recovery.py" status ;;
   env) shift; node_env "$@"; exit $? ;;
   progress) shift; progress_pull "$@"; exit $? ;;

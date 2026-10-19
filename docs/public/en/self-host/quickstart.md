@@ -76,7 +76,13 @@ to the hub, your new tasks in every repository are dispatched by the hub, while
 other people's sessions in the same repository are untouched and never block you.
 A newly added repository selects nothing of its own; it follows you.
 
-To hand your tasks to the hub, first save a private migration inventory on any
+**A new account starts on the hub**: it is set when the hub puts you on its list
+(an invite, an approved request, an admin's add), your machines pick it up the
+first time they connect, and your first task from ⌘P or the `task` tool is
+dispatched by the hub — skip the migration below.
+
+If your account predates that and still runs the old way, to hand your tasks to
+the hub, first save a private migration inventory on any
 of your hosts:
 
 ```sh

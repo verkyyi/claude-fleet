@@ -77,11 +77,17 @@ func TestRepoAuthorityPushSyncRetryDedup(t *testing.T) {
 	if count() != 4 {
 		t.Fatalf("a new revision: %d runs, want 4", count())
 	}
-	for _, bad := range []string{"", "-x/y", "org", "a/b/c"} {
+	for _, bad := range []string{"-x/y", "org", "a/b/c"} {
 		push(bad, 9)
 	}
 	push("org/b", 0)
 	if count() != 4 {
 		t.Fatalf("malformed pushes ran the script: %q", runs)
+	}
+	// A host that hosts no repo yet (claude-fleet T490) is pushed with none:
+	// the re-read runs with no repo argument.
+	push("", 1)
+	if count() != 5 || runs[4] != "/fleet/bin/fleet-hub-node.sh authority-sync" {
+		t.Fatalf("no-repo push: runs %q", runs)
 	}
 }

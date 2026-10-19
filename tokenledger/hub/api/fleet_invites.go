@@ -148,7 +148,7 @@ func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time
 	if gid, ok := githubIDOf(pid); ok && kind == store.IdentityGitHub {
 		row.GitHubID = gid
 	}
-	if err := s.Store.UpsertHubUser(row); err != nil {
+	if err := s.Store.AdmitHubUser(row); err != nil {
 		_ = s.Store.UnuseInvite(hash)
 		return "", err
 	}

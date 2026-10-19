@@ -366,7 +366,7 @@ func (s *Server) admitRequest(req *store.AccessRequest, by string, now time.Time
 		if _, isGH := githubIDOf(pid); isGH {
 			row.GitHubID = gid
 		}
-		if err := s.Store.UpsertHubUser(row); err != nil {
+		if err := s.Store.AdmitHubUser(row); err != nil {
 			return "", err
 		}
 	}
