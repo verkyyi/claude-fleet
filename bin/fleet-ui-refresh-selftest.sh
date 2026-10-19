@@ -12,8 +12,8 @@
 # servers (their own `-L` sockets under a private TMUX_TMPDIR, torn down at exit —
 # never the user's live server) and asserts:
 #
-#   1. --all --dash respawns the @dash=1 pane on BOTH fleets (each server's marker
-#      script runs), and NEVER a non-dash pane.
+#   1. --dash (the dash's pane respawn, gone with issue #4902) is accepted and does
+#      nothing: no pane is respawned.
 #   2. --all --conf <before> <after> unbinds a REMOVED bind on BOTH servers (the
 #      real tmux-conf-reload.sh --socket path), proving the conf fan-out is real.
 #   3. --dry-run touches nothing (the removed bind survives on both servers) yet
@@ -68,52 +68,12 @@ for f in fleetA fleetB; do
   tmux -L "$f" new-window -d -t "$f:" -n plain 'sleep 300' >/dev/null
 done
 
-# --- 1. --all --dash respawns ONLY the @dash pane, on BOTH fleets -------------
-# The launcher is overridden to a marker script that stamps <label> so we can prove
-# each server's dash pane actually re-ran it. It writes then sleeps so respawn-pane
-# has a live command (a pane whose command exits immediately can close the window).
-LAUNCH="$WORK/launch.sh"
-cat > "$LAUNCH" <<EOF
-#!/bin/sh
-# \$TMUX gives the running server's socket path; its basename is the -L label.
-# (Escaped so THIS heredoc — written under the selftest's own set -u — doesn't try
-# to expand \$TMUX, which is unset when the selftest runs outside tmux, e.g. in CI.)
-label=\$(basename "\$(printf '%s' "\$TMUX" | cut -d, -f1)")
-printf 'respawned\n' >> "$WORK/dash.\$label"
-exec sleep 300
-EOF
-chmod +x "$LAUNCH"
-
-out=$(FLEET_DASH_LAUNCHER="$LAUNCH" bash "$SUT" --all --dash 2>&1) \
-  || fail "--all --dash exited non-zero: $out"
-
-# DETERMINISTIC core assertion (the #248 fan-out): the helper reports respawning
-# the @dash pane on BOTH fleets — 2 total, one per fleet, never the plain pane.
-# This is read from the helper's OWN stdout, so it never races on pane execution.
-printf '%s\n' "$out" | grep -q 'dash panes: 2' \
-  || fail "summary should report 2 dash panes total — got: $out"
-printf '%s\n' "$out" | grep -q '\[fleetA\] dash: 1 pane' \
-  || fail "fleetA should report exactly 1 dash pane respawned — got: $out"
-printf '%s\n' "$out" | grep -q '\[fleetB\] dash: 1 pane' \
-  || fail "fleetB should report exactly 1 dash pane respawned — got: $out"
-
-# END-TO-END confirmation: each server's respawned pane actually RAN the launcher
-# (proving respawn-pane executed `bash <launcher>` on the right socket). The pane's
-# bash is scheduled asynchronously, so poll with a REAL sleep up to ~15s — a fake
-# no-sleep spin raced on a loaded CI runner and flaked (marker not yet written).
-for _ in $(seq 1 50); do
-  [ -f "$WORK/dash.fleetA" ] && [ -f "$WORK/dash.fleetB" ] && break
-  sleep 0.3
-done
-[ -f "$WORK/dash.fleetA" ] || fail "fleetA dash pane never ran the launcher (marker missing after 15s)
-out: $out"
-[ -f "$WORK/dash.fleetB" ] || fail "fleetB dash pane never ran the launcher (marker missing after 15s)
-out: $out"
-# exactly one respawn per fleet (only the @dash pane, never the plain one)
-[ "$(grep -c respawned "$WORK/dash.fleetA")" = 1 ] \
-  || fail "fleetA: expected exactly 1 dash respawn (a non-dash pane was hit?)"
-[ "$(grep -c respawned "$WORK/dash.fleetB")" = 1 ] \
-  || fail "fleetB: expected exactly 1 dash respawn (a non-dash pane was hit?)"
+# --- 1. --dash is an older caller's flag: a no-op, it respawns nothing ---------
+# (the dash went with issue #4902 — fleet-ui-refresh.sh still accepts it)
+dpane=$(tmux -L fleetA list-panes -s -t fleetA -F '#{pane_id} #{@dash}' | awk '$2==1{print $1; exit}')
+dpid=$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')
+bash "$SUT" --all --dash >/dev/null 2>&1 && fail "--dash alone (nothing to do) should be a usage error"
+[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || fail "--dash respawned a pane"
 
 # --- 2. --all --conf unbinds a REMOVED bind on BOTH servers -------------------
 # Bind a key on each server, then hand the helper a before/after conf pair where the
@@ -129,8 +89,9 @@ for f in fleetA fleetB; do
     || fail "$f: precondition — bind Q should be present before reload"
 done
 
-out=$(bash "$SUT" --all --conf "$before" "$after" "$tmconf" 2>&1) \
-  || fail "--all --conf exited non-zero: $out"
+out=$(bash "$SUT" --all --dash --conf "$before" "$after" "$tmconf" 2>&1) \
+  || fail "--all --dash --conf exited non-zero: $out"
+[ "$(tmux -L fleetA display-message -p -t "$dpane" '#{pane_pid}')" = "$dpid" ] || fail "--dash --conf respawned a pane"
 for f in fleetA fleetB; do
   tmux -L "$f" list-keys -T prefix 2>/dev/null | grep -q ' Q ' \
     && fail "$f: bind Q should have been unbound by the conf fan-out (issue #248)
@@ -154,7 +115,7 @@ printf '%s\n' "$out" | grep -q '(dry-run)' || fail "--dry-run summary should be 
 
 # --- 4. usage errors exit non-zero -------------------------------------------
 bash "$SUT" --dash >/dev/null 2>&1 && fail "missing --all should be a usage error"
-bash "$SUT" --all  >/dev/null 2>&1 && fail "no --dash/--conf should be a usage error"
+bash "$SUT" --all  >/dev/null 2>&1 && fail "no --conf should be a usage error"
 
-printf 'selftest PASS: fleet-ui-refresh --all fans dash respawn + conf reload over every live fleet (issue #248)\n'
+printf 'selftest PASS: fleet-ui-refresh --all fans the conf reload over every live fleet (issue #248); --dash is a no-op\n'
 exit 0
