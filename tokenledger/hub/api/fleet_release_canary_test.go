@@ -85,7 +85,7 @@ func canaryLinks(t *testing.T, r *canaryRig) (k, o *websocket.Conn) {
 	tokK, tokO := r.h.enroll(t, "k"), r.h.enroll(t, "o")
 	k = teamNode(t, r.h, tokK, control.CapMachine, control.CapRelease)
 	o = teamNode(t, r.h, tokO, control.CapMachine, control.CapRelease)
-	beat(t, k, control.Proto, r.hb("mini2.local", &control.Versions{Runtime: shaA}))
+	beat(t, k, control.Proto, r.hb("canary-m.local", &control.Versions{Runtime: shaA}))
 	nextRelease(t, k, shaA, 1, "canary's first beat: the old stable, not held")
 	beat(t, o, control.Proto, r.hb("mac-d", &control.Versions{Runtime: shaA}))
 	nextRelease(t, o, shaA, 1, "other's first beat")
@@ -94,7 +94,7 @@ func canaryLinks(t *testing.T, r *canaryRig) (k, o *websocket.Conn) {
 
 func TestReleaseCanaryPassesThenAll(t *testing.T) {
 	r := newCanaryRig(t)
-	r.setting(t, ReleaseCanaryKey, "mini2")
+	r.setting(t, ReleaseCanaryKey, "canary-m")
 	k, o := canaryLinks(t, r)
 
 	r.promoteB(t)
@@ -106,17 +106,17 @@ func TestReleaseCanaryPassesThenAll(t *testing.T) {
 	if got := v.forMachine("").SHA; got != shaA {
 		t.Fatalf("an unnamed follower is handed %.7s, want %.7s", got, shaA)
 	}
-	if got := v.forMachine("MINI2").SHA; got != shaB {
+	if got := v.forMachine("CANARY-M").SHA; got != shaB {
 		t.Fatalf("the canary is handed %.7s, want %.7s", got, shaB)
 	}
 	h := r.waitHold(t, holdCanary)
-	if h.Prev != shaA || h.PrevSeq != 1 || h.Canary != "mini2" {
+	if h.Prev != shaA || h.PrevSeq != 1 || h.Canary != "canary-m" {
 		t.Fatalf("hold %+v", h)
 	}
 	r.h.srv.releaseGateTick(time.Now())
 
 	// switched + doctor PASS: everyone gets it
-	beat(t, k, control.Proto, r.hb("mini2.local", &control.Versions{Runtime: shaB, Update: &control.UpdateState{Result: "committed"}}))
+	beat(t, k, control.Proto, r.hb("canary-m.local", &control.Versions{Runtime: shaB, Update: &control.UpdateState{Result: "committed"}}))
 	r.waitHold(t, holdReleased)
 	nextRelease(t, o, shaB, 2, "released: the rest hear it")
 	if got := r.h.srv.releaseGate(time.Now()).forMachine("mac-d").SHA; got != shaB {
@@ -127,7 +127,7 @@ func TestReleaseCanaryPassesThenAll(t *testing.T) {
 
 func TestReleaseCanaryRollbackBlocks(t *testing.T) {
 	r := newCanaryRig(t)
-	r.setting(t, ReleaseCanaryKey, "mini2")
+	r.setting(t, ReleaseCanaryKey, "canary-m")
 	notes := make(chan string, 8)
 	r.h.srv.Notify = func(m string) { notes <- m }
 	k, o := canaryLinks(t, r)
@@ -135,13 +135,13 @@ func TestReleaseCanaryRollbackBlocks(t *testing.T) {
 	r.promoteB(t)
 	nextRelease(t, k, shaB, 2, "canary")
 	r.waitHold(t, holdCanary)
-	beat(t, k, control.Proto, r.hb("mini2.local", &control.Versions{Runtime: shaA,
+	beat(t, k, control.Proto, r.hb("canary-m.local", &control.Versions{Runtime: shaA,
 		Update: &control.UpdateState{Result: "rolled-back", Reason: shaB[:12] + " → back to " + shaA[:12] + ": doctor: new FAIL install"}}))
 	h := r.waitHold(t, holdBlocked)
 	if h.Reason == "" {
 		t.Fatal("a blocked hold says no why")
 	}
-	for _, m := range []string{"mac-d", "mini2", ""} {
+	for _, m := range []string{"mac-d", "canary-m", ""} {
 		if got := r.h.srv.releaseGate(time.Now()).forMachine(m).SHA; got != shaA {
 			t.Fatalf("blocked: %q is handed %.7s, want the old %.7s", m, got, shaA)
 		}
@@ -152,7 +152,7 @@ func TestReleaseCanaryRollbackBlocks(t *testing.T) {
 	}
 	hl := r.h.srv.releaseHealth(shaB, time.Now().Add(-time.Minute), time.Now())
 	rb, _ := hl["rolled_back"].([]machineWord)
-	if len(rb) != 1 || !sameMachine(rb[0].Machine, "mini2") {
+	if len(rb) != 1 || !sameMachine(rb[0].Machine, "canary-m") {
 		t.Fatalf("health rolled_back = %+v", hl["rolled_back"])
 	}
 	if hh, _ := hl["hold"].(releaseHold); hh.State != holdBlocked {
@@ -175,7 +175,7 @@ func TestReleaseCanaryQuietReleasesAfterWait(t *testing.T) {
 	releaseCanaryWait = 600 * time.Millisecond
 	t.Cleanup(func() { releaseCanaryWait = old })
 	r := newCanaryRig(t)
-	r.setting(t, ReleaseCanaryKey, "mini2")
+	r.setting(t, ReleaseCanaryKey, "canary-m")
 	k, o := canaryLinks(t, r)
 	r.promoteB(t)
 	nextRelease(t, k, shaB, 2, "canary")

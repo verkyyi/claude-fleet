@@ -31,7 +31,7 @@ SHA=$(printf 'b%.0s' $(seq 40)); PREV=$(printf 'a%.0s' $(seq 40)); NEWER=$(print
 # (no $(…) around the JSON: bash 3.2 mis-reads escaped quotes inside a command substitution)
 j() { printf '%s' "$2" > "$T/h.json"; python3 "$W" judge --health "$T/h.json" ${3:+--healthz-fails "$3"} >/dev/null 2>&1; eq "$1" "$4" "$?"; }
 j "A: clean" "{\"sha\":\"$SHA\",\"http\":{\"total\":500,\"errors_5xx\":2}}" "" 0
-j "A: the canary blocked it" "{\"sha\":\"$SHA\",\"hold\":{\"sha\":\"$SHA\",\"state\":\"blocked\",\"canary\":\"mini2\"}}" "" 1
+j "A: the canary blocked it" "{\"sha\":\"$SHA\",\"hold\":{\"sha\":\"$SHA\",\"state\":\"blocked\",\"canary\":\"canary-m\"}}" "" 1
 j "A: …a hold on another sha says nothing" "{\"sha\":\"$SHA\",\"hold\":{\"sha\":\"$PREV\",\"state\":\"blocked\"}}" "" 0
 j "A: a machine rolled it back" "{\"sha\":\"$SHA\",\"rolled_back\":[{\"machine\":\"mac-d\",\"reason\":\"doctor\"}]}" "" 1
 j "A: 5xx past the threshold" "{\"sha\":\"$SHA\",\"http\":{\"total\":100,\"errors_5xx\":25}}" "" 1
