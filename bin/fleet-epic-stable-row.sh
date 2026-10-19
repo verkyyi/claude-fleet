@@ -164,7 +164,7 @@ case "$verdict" in
         kind=trainunknown
         line="还没进稳定版（停在 ${st_short}），列车结论读不出来"
         what="本批最后一次合并 $t_short 还没进稳定版 ${st_short}，列车结论读不出来"
-        next="看 \`gh run list --workflow release-train.yml\`"
+        next="看 \`gh run list --workflow release-train.yml\`"  # no-gh-ok: a hint
       elif [ -n "$live" ]; then
         kind=running url=$(printf '%s' "$live" | cut -f4)
         train="$(printf '%s' "$live" | cut -f1) $url"
@@ -187,7 +187,7 @@ case "$verdict" in
           kind=waiting
           line="等下一趟列车（稳定版停在 ${st_short}）"
           what="本批最后一次合并 $t_short 还没上车，稳定版停在 $st_short"
-          next="等下一趟（每小时 41 分兜底），急就 \`gh workflow run release-train.yml\`"
+          next="等下一趟（每小时 41 分兜底），急就 \`gh workflow run release-train.yml\`"  # no-gh-ok: a hint
         fi
       fi
     fi ;;
