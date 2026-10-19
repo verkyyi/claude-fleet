@@ -1046,7 +1046,8 @@ fleet_task_closed() {
 # @fleet_id · @task) that put the record's own binding back before the launcher
 # runs, so fleet_launch.py supervise resumes it as the same executor instead of a
 # new start the hub refuses. rc 0 printed · 3 nothing to rebind (closed, another
-# conversation) · 1 refused (the reason on stderr). FLEET_TASK_REBIND_CMD is the
+# conversation) · 4 no record readable (no hub: the caller's old road) · 1 refused
+# (the reason on stderr). FLEET_TASK_REBIND_CMD is the
 # seam (prints fleet_launch.py rebind's JSON, same rc).
 fleet_task_rebind_stamp() {
   local out rc

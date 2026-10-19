@@ -546,6 +546,11 @@ class Rebind(Receipts):
         with self.assertRaises(launch.NotBound):
             self.rebind(self.record(), sid="55555555-5555-4555-8555-555555555555")
 
+    def test_unreadable_record_is_unknown_not_refused(self):
+        with mock.patch.object(launch, "task_call", side_effect=ValueError("no hub")):
+            with self.assertRaises(launch.Unread):
+                launch.rebind("T1", self.receipt["native_session"])
+
     def test_refuses_another_executor_a_live_native_or_another_window(self):
         for task in (self.record(execution_owner="22222222-2222-4222-8222-222222222222/66666666-6666-4666-8666-666666666666"),
                      self.record(generation=2), self.record(resolved_agent="claude")):

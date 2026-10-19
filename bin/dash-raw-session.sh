@@ -653,7 +653,7 @@ if [ -n "$TASK_REF" ] && [ -n "$RESUME_SID" ] && [ -z "${FLEET_LAUNCH:-}" ]; the
     0) FLEET_LAUNCH=$(printf '%s' "$REBIND" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["launch"], separators=(",", ":")))') \
          || { refuse "raw: $TASK_REF rebind answer unreadable"; exit 1; }
        export FLEET_LAUNCH ;;
-    3) REBIND='' ;;
+    3|4) REBIND='' ;;   # not this session's / no record here: as before
     *) refuse "raw: $TASK_REF is still this session's but cannot continue now"; exit 1 ;;
   esac
 fi

@@ -237,7 +237,7 @@ case "$kind" in
       tstamp=$(fleet_task_rebind_stamp "$tref" "$rsid"); trc=$?
       case "$trc" in
         0) args="--resume $rsid"; tstamp="$tstamp$(fleet_win_stamp_cmd @worktree "$wt")" ;;
-        3) tstamp='' ;;
+        3|4) tstamp='' ;;   # not this session's / no record here: as before
         *) refuse "restore: $tref is still this session's but cannot continue now — not reopened"; exit 1 ;;
       esac
     fi

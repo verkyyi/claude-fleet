@@ -490,6 +490,10 @@ class NotBound(ValueError):
     """rebind: the record holds no live binding for this native session."""
 
 
+class Unread(ValueError):
+    """rebind: the record could not be read (no hub, no answer) — unknown."""
+
+
 def rebind(task, sid, fleet_id=""):
     """The SAME session back in a new window (claude-fleet#4974).
 
@@ -500,12 +504,16 @@ def rebind(task, sid, fleet_id=""):
     Never a new claim or a new identity: the record must still name this worker,
     its receipt this native session, and that native must be gone. Returns
     {launch, receipt, fleet_id} for the new window's stamps. NotBound (exit 3) =
-    nothing to rebind (closed, unowned, another session); ValueError (1) = the
+    nothing to rebind (closed, unowned, another session); Unread (4) = no record
+    could be read (no hub here: the caller's road as before); ValueError (1) = the
     record says it is this session but it cannot continue now.
     """
     if not re.fullmatch(r"T[1-9][0-9]*", task or "") or not valid_uuid(sid):
         raise NotBound("rebind needs a task T<n> and a native session id")
-    t = task_call({"task": task})
+    try:
+        t = task_call({"task": task})
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise Unread("task record unreadable: " + str(exc)) from exc
     if t.get("authority_version") != 1 or t.get("outcome") or not t.get("execution_owner"):
         raise NotBound("task has no open execution to continue")
     try:
@@ -825,6 +833,9 @@ def main():
             except NotBound as e:
                 print("launch: " + str(e), file=sys.stderr)
                 return 3
+            except Unread as e:
+                print("launch: " + str(e), file=sys.stderr)
+                return 4
             return 0
         if a.mode == "restore-native-worktree":
             if len(a.argv) != 4:
