@@ -323,22 +323,22 @@ natt() { [ "$(gatt)" = "$1" ]; }
 still() { [ -z "$(tr_ show-options -qv -t "=$RS:" status)$(tr_ show-options -qv -t "=$RS:" @remote_view_solo)$(tr_ show-options -qv -t "=$RS:" @remote_view_saved)" ] && [ "$(layout)" = "$L0" ]; }
 # I1. a second SHELL client, on the node itself: a pane of ANOTHER tmux server (the
 # shell's own), no ssh, $TMUX left set — C5's `fleet` shell run on the machine.
-SW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell2 "bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2'; sleep 300")
-waitfor 10 natt 2 || fail "I: the nested --shell client never attached" "$(tl capture-pane -p -t "$SW" | head -3)"
+SW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell2 "bash '$BIN/fleet-remote-view.sh' attach '$WID2' sh2; sleep 300")
+waitfor 10 natt 2 || fail "I: the nested client never attached" "$(tl capture-pane -p -t "$SW" | head -3)"
 settle
 still || fail "I: a second shell changed the node" "$(layout) vs $L0"
 eq "I: …no list" "" "$(rviews)"
-eq "I: the registry holds the view and the shell" "shell view " "$(regrows | cut -f3 | sort | tr '\n' ' ')"
-srow=$(regrows | awk -F '\t' '$3 == "shell"')
+eq "I: the registry holds the proxy's view and the nested one" "view view " "$(regrows | cut -f3 | sort | tr '\n' ' ')"
+srow=$(cat "$FLEET_CONF_DIR/remote-views/sh2")
 eq "I: the shell row names the remote session" "$RS" "$(printf '%s' "$srow" | cut -f2)"
 has "I: …the shell client's tty" "$(tr_ list-clients -F '#{client_tty}' | tr '\n' ' ')" "$(printf '%s' "$srow" | cut -f1)"
 kill -0 "$(printf '%s' "$srow" | cut -f5)" 2>/dev/null; eq "I: …a live pid" "0" "$?"
-eq "I: …and no spool: nothing drains one for a shell without a view id" "" "$(ls -d "$FLEET_CONF_DIR"/remote-views/shell-*.d 2>/dev/null)"
+eq "I: …and its spool" "yes" "$([ -d "$FLEET_CONF_DIR/remote-views/sh2.d" ] && echo yes)"
 
 # ============================================================================
 # J. two shells, each its own current window (#1489)
 # ============================================================================
-S2ID=''; for f in "$FLEET_CONF_DIR"/remote-views/shell-*; do [ -f "$f" ] && { S2ID=${f##*/}; break; }; done; S2V="$RS@view-$S2ID"
+S2ID=sh2; S2V="$RS@view-$S2ID"
 eq "J: the nested shell has a view session of its own, named by its registry id" "1" "$(tr_ has-session -t "=$S2V" 2>/dev/null && echo 1)"
 eq "J: …two view sessions now, both grouped onto the fleet session" "$RS $RS" "$(tr_ display-message -p -t "=$VS:" '#{session_group}') $(tr_ display-message -p -t "=$S2V:" '#{session_group}')"
 eq "J: …each on the window it asked for (both worker 8 so far)" "$RW8 $RW8" "$(vcur "$VS") $(vcur "$S2V")"
@@ -374,7 +374,7 @@ has "J: …it resolved the one window and went looking for its Claude" "$out" "n
 # A hook in a pane of the shared window names the FLEET — tmux's bare
 # session_name there is whichever session holding the window was active last.
 eq "J: FLEET_SESSION_FMT names the fleet from a pane of the shared window" "$RS" "$(tr_ display-message -p -t "$RW" '#{?#{session_group},#{session_group},#{session_name}}')"
-# I2. a PLAIN client: someone on the node runs `attach` by hand — no --shell, no view
+# I2. a PLAIN client: someone on the node runs `attach` by hand — no view
 # — so it registers nothing and counts as a person. Everything back at once.
 HW=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n hand "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach '$WID2'; sleep 300")
 waitfor 10 natt 3 || fail "I: the plain client never attached" "$(tl capture-pane -p -t "$HW" | head -3)"
@@ -383,11 +383,11 @@ still || fail "I: a plain client changed the node" "$(layout) vs $L0"
 eq "I: …it registered nothing" "2" "$(regrows | wc -l | tr -d ' ')"
 # I3. a shell arriving beside the plain client hides nothing (a view id too: a
 # shell may carry a fleet-open spool).
-SW3=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell3 "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach --shell '$WID2' view3; sleep 300")
+SW3=$(tl new-window -d -P -F '#{window_id}' -t "=$LS:" -n shell3 "env -u TMUX bash '$BIN/fleet-remote-view.sh' attach '$WID2' view3; sleep 300")
 waitfor 10 natt 4 || fail "I: the third shell never attached"
 settle
 still || fail "I: a shell arriving beside a plain client changed the node" "$(layout) vs $L0"
-eq "I: …registered as a shell, with its spool" "2 yes" "$(regrows | awk -F '\t' '$3 == "shell"' | wc -l | tr -d ' ') $([ -d "$FLEET_CONF_DIR/remote-views/view3.d" ] && echo yes)"
+eq "I: …registered, with its spool" "3 yes" "$(regrows | awk -F '\t' '$3 == "view"' | wc -l | tr -d ' ') $([ -d "$FLEET_CONF_DIR/remote-views/view3.d" ] && echo yes)"
 eq "I: …and a view session named by the id it brought (#1489)" "1" "$(tr_ has-session -t "=$RS@view-view3" 2>/dev/null && echo 1)"
 # I4. that shell leaves: the plain client keeps everything.
 tl kill-window -t "$SW3"

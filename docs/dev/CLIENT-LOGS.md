@@ -77,9 +77,8 @@ interfaces is on its network (`skip 不在这台机器的局域网` otherwise), 
 only when this computer has a Tailscale address (`skip 这台电脑没有 Tailscale`).
 The remembered route is filed by network (default gateway + its network: the
 `; net=<key>` at the end of a `pick` reason), so the line picked at home is not
-the first one tried elsewhere. `FLEET_CONNECT_PREFER_TAILNET=1` is #2987's order
-for one version (the tailnet first, one remembered route, nothing skipped);
-`=0` ranks by latency alone.
+the first one tried elsewhere. `FLEET_CONNECT_PREFER_TAILNET=0` ranks by latency
+alone.
 
 `relay-end` is the line to put beside the hub's `/v1/fleet/ssh-relays` row for
 the same minute: the hub records its own view of the same stream (direction,

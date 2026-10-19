@@ -159,9 +159,8 @@ watch_fleet() { (
     exit 0
   fi
 
-  # compat-1v: 下一批删
-  # The fleet's first repo names the lease and the ledger a bare (pre-#1941)
-  # snapshot key belongs to; every live window is keyed by its own repo below.
+  # The fleet's first repo names the lease; every live window is keyed by its own
+  # repo below.
   repo=$(fleet_repo_first "$sess")
   [ -z "$repo" ] && { log "$sess: no repo hosted — skip"; exit 0; }
   repo=$(fleet_norm_repo "$repo")
@@ -206,8 +205,6 @@ watch_fleet() { (
   # `<owner/name>#<key>` and a vanished row is recorded into ITS repo's ledger. A
   # window whose repo is unknown is skipped — never recorded under a guessed repo
   # (a one-repo fleet's unstamped window answers its only repo, fleet_window_repo).
-  # A bare key read back from an older snapshot means the fleet's first repo
-  # (below) — compat-1v: 下一批删.
   : > "$cur"
   while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wtline; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
@@ -258,14 +255,6 @@ EOF
     while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
-      # A snapshot written before #1941 holds a one-repo fleet's BARE keys: match
-      # one on its `#<key>` suffix, so no live window reads as vanished across the
-      # upgrade (compat-1v: 下一批删). A qualified key is matched exactly — o/a#12
-      # must still vanish while o/b#12 lives.
-      case "$p_key" in
-        *'#'*) ;;
-        *) case "$cur_keys" in *"#$p_key"$'\n'*) continue ;; esac ;;
-      esac
       vanished=$((vanished + 1))
       # `<owner/name>#<key>` (#790) → that repo's ledger, bare key.
       p_repo=$repo

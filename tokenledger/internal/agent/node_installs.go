@@ -63,7 +63,6 @@ func installsRead(ctx context.Context, home string, now time.Time) *control.Inst
 	// exit 1 (one is behind) and 2 (no stable known here) still print the JSON
 	out, _ := cmd.Output()
 	var got struct {
-		Lane    string                 `json:"lane"`
 		Stable  *string                `json:"stable"`
 		Runtime *control.InstallItem   `json:"runtime"`
 		Logins  []control.LoginInstall `json:"logins"`
@@ -71,7 +70,7 @@ func installsRead(ctx context.Context, home string, now time.Time) *control.Inst
 	if json.Unmarshal(out, &got) != nil {
 		return nil
 	}
-	in := &control.Installs{Lane: got.Lane, Runtime: got.Runtime, Logins: got.Logins}
+	in := &control.Installs{Runtime: got.Runtime, Logins: got.Logins}
 	if got.Stable != nil {
 		in.Stable = *got.Stable
 	}

@@ -150,7 +150,7 @@ tt set-environment -g FLEET_VIEW_FIRST_CMD "echo >> $WORK/first.log"
 Z0=$(globals); F0=$(fleetopts)
 term plain "-"
 waitfor 5 sh -c "[ \"\$('$REAL_TMUX' -L '$RS' list-clients 2>/dev/null | wc -l | tr -d ' ')\" -ge 1 ]" || fail "Z: the plain attach never arrived"
-term shellv "--shell - v0"
+term shellv "- v0"
 waitfor 5 sh -c "'$REAL_TMUX' -L '$RS' has-session -t '=$RS@view-v0' 2>/dev/null" || fail "Z: the view attach made no view session"
 tt new-window -d -t "=$TL:" -n direct "env -u TMUX '$REAL_TMUX' -L '$RS' attach -t '=$RS'; sleep 300"
 sleep 1
@@ -437,7 +437,7 @@ bell() { tt display-message -p -t "=$TL:$1" '#{window_bell_flag}' 2>/dev/null; }
 ring() { printf '\a' > "$(tn display-message -p -t "$1" '#{pane_tty}')"; }
 term bellh "--thin --view devb --want $U/fid-7 --device $DEV --route lan --token tbk"
 term bellf "--thin --view devf-via-home --want $U/fid-7 --device $DEV --route lan --token tfk"
-term bello "--shell - devo"
+term bello "- devo"
 for v in devb devf-via-home devo; do
   waitfor 5 sh -c "[ -n \"\$('$REAL_TMUX' -L '$RS' list-clients -t '=$(vs $v)' 2>/dev/null)\" ]" || fail "R: no client on $(vs $v)"
 done

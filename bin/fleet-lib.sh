@@ -180,10 +180,7 @@ fleet_state_dir() {
 # alone cannot see the batch. A LEASE, not a lock: fresh for its own `ttl:` (default
 # 2700 s) counted from its `epoch:`, else from the file's mtime (a bare `touch` is a
 # hand override). No gh, no tmux: the daemon that reads it has neither.
-# The pre-#2062 single file global/epic-running is still READ for one version
-# (fleet_epic_running_marks lists it last) and never written.
 fleet_epic_running_dir() { printf '%s/global/epic-running.d' "$FLEET_CONF_DIR"; }
-fleet_epic_running_file() { printf '%s/global/epic-running' "$FLEET_CONF_DIR"; }   # compat-1v: 下一批删
 # fleet_epic_mark_file <repo|-> <N> — the mark ONE batch writes.
 fleet_epic_mark_file() {
   local slug
@@ -191,13 +188,12 @@ fleet_epic_mark_file() {
   printf '%s/%s-%s' "$(fleet_epic_running_dir)" "$slug" "${2:-}"
 }
 # fleet_epic_running_marks — every mark on this login, one path per line (the
-# directory's files, then the legacy single file); nothing when there is none.
+# directory's files); nothing when there is none.
 # find, not a glob: zsh (a skill sourcing this lib, #1633) errors on an empty one.
 fleet_epic_running_marks() {
-  local d f
+  local d
   d=$(fleet_epic_running_dir)
   [ -d "$d" ] && find "$d" -maxdepth 1 -type f ! -name '*.tmp.*' 2>/dev/null | sort   # *.tmp.*: an atomic write in flight
-  f=$(fleet_epic_running_file); [ -f "$f" ] && printf '%s\n' "$f"   # compat-1v: 下一批删
   return 0
 }
 # fleet_epic_running_fresh — the ONE read install-sync, apply and the doctor make:
@@ -6010,8 +6006,8 @@ _fleet_wfk_repo_ok() {
 #   ② @worktree, once stamped, is the scratch's identity; the pane cwd is read ONLY
 #     when no @worktree exists (a crash-restored scratch) — never as a second chance
 #     for a window whose stamp said otherwise
-# A bare key in a fleet of ONE repo is read as that repo's (issue #1939, one
-# version): it matches the windows a qualified key would, never written again.
+# A bare key in a fleet of ONE repo is read as that repo's (issue #1939): it
+# matches the windows a qualified key would.
 fleet_win_for_key() {
   local key="${1:-}" sock="${2:-}" wl line wid rest iss wt pth cand bn sn pre='' wsess pool fleet hits='' n names
   # `<slug>:<key>` (issue #789): match the bare key, then require the window's repo.
@@ -6024,7 +6020,7 @@ fleet_win_for_key() {
   esac
   fleet="$sock"; [ -n "$fleet" ] || fleet=$(fleet_current_session 2>/dev/null)
   if [ -z "$pre" ] && [ -n "$fleet" ]; then
-    # compat-1v: 下一批删 — a bare key is the old spelling, read in a one-repo fleet.
+    # a bare key is read in a one-repo fleet (issue #1939): `issue:<N>` with no repo
     case "$key" in issue-*)
       if [ "$(fleet_repos "$fleet" | grep -c .)" -ge 2 ]; then
         printf 'fleet: %s is ambiguous in %s — the fleet hosts several repos and each may bind #%s; qualify the key with the repo slug (<slug>:%s)\n' \

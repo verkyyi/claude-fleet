@@ -250,10 +250,8 @@ def payload(text, prev="", repo="", node=None, agent=None):
 
 
 def payload_norepo(data, mode=""):
-    """HOME: the payload's repo is null (an older writing area said it as
-    repo_mode none / multi — #1956 — read for one version). # compat-1v: 下一批删"""
-    mode = mode or data.get("repo_mode") or ""
-    return mode in ("none", "multi") or ("repo" in data and data["repo"] is None)
+    """HOME: the payload's repo is null (or the list said --no-repo)."""
+    return mode == "none" or ("repo" in data and data["repo"] is None)
 
 
 def scratch_name(title):
@@ -434,7 +432,7 @@ def main(argv):
                 chosen += rest[0] == "--repo"
                 opts[rest[0]] = rest[1]
                 rest = rest[2:]
-            elif rest[0] in ("--no-repo", "--multi"):   # --multi: an older list's word for it  # compat-1v: 下一批删
+            elif rest[0] == "--no-repo":
                 mode = "none"
                 chosen += 1
                 rest = rest[1:]

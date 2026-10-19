@@ -47,10 +47,9 @@ func TestPersonRulesValidation(t *testing.T) {
 	}
 }
 
-// The roles key is no longer rendered: an older client's PUT that still
-// carries it is taken (compat-1v — never checked, even a bad overlay), the key
-// dropped, and the layer stored and answered exactly as validateBundle makes
-// it of the rest. A node that never said CapPerson is never sent anything.
+// The roles key is no longer rendered: a PUT that still carries it is refused
+// (422, claude-fleet#4790) and nothing is stored. A node that never said
+// CapPerson is never sent anything.
 func TestPersonRolesOffAddsNothing(t *testing.T) {
 	h := newFleetHarness(t)
 	enablePeople(t, h, pAlice)
@@ -74,9 +73,9 @@ func TestPersonRolesOffAddsNothing(t *testing.T) {
 		withRoles[k] = v
 	}
 	withRoles["roles"] = map[string]any{"reviewer": 3, "worker": "---\nmodel: opus\n---\n"}
-	code, out, body, _ = personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": withRoles}, "")
-	if code != 200 || string(out.Bundle) != string(want) || strings.Contains(body, `"roles"`) {
-		t.Fatalf("PUT with roles: HTTP %d %s, want it taken and the bundle as %s", code, body, want)
+	code, _, body, _ = personCall(t, h, http.MethodPut, asSession(pAlice), map[string]any{"bundle": withRoles}, "")
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("PUT with roles: HTTP %d %s, want 422", code, body)
 	}
 	if code, _, body, _ := personCall(t, h, http.MethodGet, asSession(pAlice), nil, ""); code != 200 || strings.Contains(body, `"roles"`) {
 		t.Fatalf("GET after a roles PUT: HTTP %d %s", code, body)

@@ -107,7 +107,7 @@ want_snip="alice mac-a:public=gw.example.com:22023,tailnet=mac-a.example.ts.net:
 # EPIC #3067 共同约定 8: lan < entry < tailnet < another direct < relay among the
 # routes that answered most; a LAN route only measured from its own network, the
 # tailnet only with a Tailscale address here; the remembered route filed by
-# network; FLEET_CONNECT_PREFER_TAILNET=1 = #2987's order. Seams:
+# network. Seams:
 # FLEET_CONNECT_LOCAL_ADDRS, FLEET_CONNECT_NET_KEY.
 out=$(python3 - "$BIN/fleet-connect.py" <<'EOF2'
 import importlib.util, os, sys
@@ -146,12 +146,6 @@ here("192.168.1.235/24", "192.168.1.254@192.168.1.0/24")
 back = (fc.remembered(ent) or {}).get("route", {}).get("name")
 print(at_home, away, back, sorted(ent["by_net"]),
       (fc.remembered({"route": {"name": "public"}, "at": 7}) or {}).get("route", {}).get("name"))
-# 5 FLEET_CONNECT_PREFER_TAILNET=1: #2987's order and nothing skipped
-os.environ["FLEET_CONNECT_PREFER_TAILNET"] = "1"; here("172.20.10.3/28", "hotspot")
-rows = rows_with({"lan": [3.0, 3.1, 3.0], "tailnet": [2.5, 2.6, 2.5], "public": [1.0, 1, 1], "relay": [60, 61, 62]})
-print(",".join(r["name"] for r in fc.rank_routes(rows)), [r["name"] for r in rows if r.get("skip")],
-      fc.remembered({"route": {"name": "lan"}, "at": 5})["route"]["name"])
-del os.environ["FLEET_CONNECT_PREFER_TAILNET"]
 # 6 interface lists: macOS ifconfig, Linux net-tools, iproute2
 mac = """en0: flags=8863<UP,BROADCAST,SMART,RUNNING> mtu 1500
 \tinet6 fe80::1c%en0 prefixlen 64 secured scopeid 0xb
@@ -176,12 +170,10 @@ EOF2
   || bad "no tailscale: got $(sed -n 3p <<<"$out")"
 [ "$(sed -n 4p <<<"$out")" = "lan None lan ['172.20.10.1@172.20.10.0/28', '192.168.1.254@192.168.1.0/24'] public" ] && ok "memory by network: home's lan not first on the hotspot, and still there back home; a pre-#3074 entry keeps its one route" \
   || bad "net memory: got $(sed -n 4p <<<"$out")"
-[ "$(sed -n 5p <<<"$out")" = "tailnet,public,lan,relay [] lan" ] && ok "FLEET_CONNECT_PREFER_TAILNET=1: #2987's order, nothing skipped, one remembered route" \
-  || bad "prefer tailnet compat: got $(sed -n 5p <<<"$out")"
-[ "$(sed -n 6p <<<"$out")" = "['fe80::1c/64', '192.168.1.235/24', '100.101.2.3/32'] ['10.0.0.7/24'] ['10.0.0.7/24']" ] && ok "interfaces: macOS ifconfig, net-tools, iproute2" \
-  || bad "ifconfig parse: got $(sed -n 6p <<<"$out")"
-[ "$(sed -n 7p <<<"$out")" = "None None 局域网 局域网 lan-2" ] && ok "loopback / a name never skipped; lan reads 局域网" \
-  || bad "skip edges: got $(sed -n 7p <<<"$out")"
+[ "$(sed -n 5p <<<"$out")" = "['fe80::1c/64', '192.168.1.235/24', '100.101.2.3/32'] ['10.0.0.7/24'] ['10.0.0.7/24']" ] && ok "interfaces: macOS ifconfig, net-tools, iproute2" \
+  || bad "ifconfig parse: got $(sed -n 5p <<<"$out")"
+[ "$(sed -n 6p <<<"$out")" = "None None 局域网 局域网 lan-2" ] && ok "loopback / a name never skipped; lan reads 局域网" \
+  || bad "skip edges: got $(sed -n 6p <<<"$out")"
 
 # ── 1c — out without Tailscale: the entry route (issue #3075) ──────────────
 # EPIC #3067 C9 + amendment 3: the home's entry port at the person's address

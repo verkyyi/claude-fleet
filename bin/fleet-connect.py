@@ -39,8 +39,8 @@ ssh's in over the winner: most handshakes answered first, then the class (lan <
 entry < tailnet < another direct line < relay — EPIC #3067 共同约定 8), lowest
 median latency next. A `lan` route is measured only when one of this
 computer's interfaces is on its network, the tailnet only when this computer
-has a Tailscale address (100.64/10); FLEET_CONNECT_PREFER_TAILNET=1 is #2987's
-order for one version (compat-1v), =0 latency alone. The `entry` route is the home's entry port at your
+has a Tailscale address (100.64/10); FLEET_CONNECT_PREFER_TAILNET=0 is latency
+alone. The `entry` route is the home's entry port at your
 address (claude-fleet#3075): ssh offers this computer's own key there — the hub put it on your door's keys
 at `fleet login` — never the certificate. The interactive login on the far side opens the fleet client
 there (shell/fleet-login.zsh, claude-fleet#1711).
@@ -777,14 +777,8 @@ def is_tailnet(r):
 def route_mode():
     """How routes are ordered (claude-fleet#3074, EPIC #3067 共同约定 8):
     "class" (the default) — lan < entry < tailnet < any other direct < relay;
-    "tailnet" — FLEET_CONNECT_PREFER_TAILNET=1, #2987's order, byte for byte
-    (compat-1v); "latency" — FLEET_CONNECT_PREFER_TAILNET=0, latency alone."""
-    v = os.environ.get("FLEET_CONNECT_PREFER_TAILNET", "")
-    return {"1": "tailnet", "0": "latency"}.get(v, "class")
-
-
-def prefer_tailnet():
-    return route_mode() == "tailnet"
+    "latency" — FLEET_CONNECT_PREFER_TAILNET=0, latency alone."""
+    return "latency" if os.environ.get("FLEET_CONNECT_PREFER_TAILNET", "") == "0" else "class"
 
 
 def is_lan(r):
@@ -959,8 +953,7 @@ def rank_routes(rows):
     none is never chosen. A same-network LAN line wins over the tailnet even
     when the tailnet is a millisecond quicker: it does not depend on Tailscale
     holding a direct path, and route_skip keeps it out of the race anywhere
-    else. FLEET_CONNECT_PREFER_TAILNET=1: #2987's order (the tailnet first, then
-    latency); =0: latency alone."""
+    else. FLEET_CONNECT_PREFER_TAILNET=0: latency alone."""
     mode = route_mode()
 
     def key(r):
@@ -968,7 +961,7 @@ def rank_routes(rows):
         if mode == "class":
             cls = route_class(r) if r["ms"] else 9
         else:
-            cls = 0 if mode == "tailnet" and r["ms"] and is_tailnet(r) else 1
+            cls = 1
         return (-len(r["ms"]), cls, med if med is not None else float("inf"), r["order"])
     return sorted(rows, key=key)
 
@@ -1405,16 +1398,8 @@ def connect(want, hub, token, verbose, retest, print_only, ssh_args, info=None, 
             got = measure([r] + ups, hub, token, 1, timeout)
             tl = got[0] if got and got[0] is not r and got[0]["ms"] else None
         else:
-            # A remembered line that is not the tailnet while the machine has
-            # one (claude-fleet#2987): the tailnet is asked in the same breath,
-            # and taken when it answers — a line picked once (the tailnet down
-            # that minute, or a coin toss of latency) is no longer kept for
-            # every reconnect after it.
             tl = None
-            if prefer_tailnet() and not is_tailnet(r):
-                tl = next((dict(x, kind="direct", ms=[], errors=[], order=1) for x in (ent.get("routes") or [])
-                           if isinstance(x, dict) and x.get("host") and is_tailnet(x)), None)
-            measure([r] + ([tl] if tl else []), hub, token, 1, timeout)
+            measure([r], hub, token, 1, timeout)
         if tl and tl["ms"]:
             remember(ent, tl, now)
             save_cache(cache)
@@ -1923,11 +1908,10 @@ CERT_WARN_UNDER = 3600  # the doctor's cert row WARNs inside the certificate's l
 def renew_last():
     """(rc, minutes ago, why) of the last renewal a use asked for
     (claude-fleet#3701: fleet-login.py renew --on-use writes `<epoch> <rc> <why>`
-    to <conf>/cert-renew.last), or None. The diskguard tick's old file
-    (#3455, `<epoch> <rc>`) is read for one version. # compat-1v: 下一批删"""
+    to <conf>/cert-renew.last), or None."""
     conf = os.environ.get("FLEET_CONF_DIR") or os.path.join(
         os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "claude-fleet")
-    for path in (os.path.join(conf, "cert-renew.last"), os.path.join(conf, "diskguard", "cert-renew.last")):
+    for path in (os.path.join(conf, "cert-renew.last"),):
         try:
             with open(path) as f:
                 parts = f.read().split()
