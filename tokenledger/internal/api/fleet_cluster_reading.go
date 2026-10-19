@@ -68,6 +68,9 @@ func (s *Server) acceptClusterReadings(ctx context.Context, wire nodeWire, ep st
 			}
 		})
 	}
+	if cr.Listed {
+		s.clusterPodsListed(cluster, cr.Present) // claude-fleet#4887
+	}
 	if dropped > 0 && nc.readingDropped.Swap(int64(dropped)) != int64(dropped) {
 		log.Printf("node %s (cluster %s): %d pod reading(s) dropped — not a pod this hub made in this cluster, or malformed", ep.ID, cluster, dropped)
 	}

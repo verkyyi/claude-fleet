@@ -64,6 +64,13 @@ type PodReading struct {
 // ClusterReadings is TypeClusterReadings' payload.
 type ClusterReadings struct {
 	Pods []PodReading `json:"pods"`
+	// Listed says Present is the whole list of user pods standing in the
+	// cluster — every pod object labelled fleet/role=user, whatever its phase
+	// (claude-fleet#4887). A Deployment deleted or scaled to 0 has none. An
+	// older fleet-ops sends neither field, and a read it could not finish sends
+	// Listed false: the hub then concludes nothing about a pod's absence.
+	Listed  bool     `json:"listed,omitempty"`
+	Present []string `json:"present,omitempty"`
 }
 
 // ClusterReading is TypeClusterReading's payload: the pod's own reading.

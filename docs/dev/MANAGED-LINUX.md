@@ -879,6 +879,21 @@ writes `FLEET_MACHINE_TASKS=off` for a user pod's login. A pod the hub did not
 make (moved in by hand, `fleet-move-to-pod.sh`) gets no reading and probes for
 itself, as before. BREAK-IT `cluster-reading-wrong-pod`.
 
+The same message lists every user pod standing in the cluster
+(`listed` · `present`: every pod object labelled `fleet/role=user`, whatever its
+phase — issue #4887). A pod whose Deployment is deleted or scaled to 0 drops off
+that list, and once its cluster has not named it for 30 minutes (a gap of more
+than 5 minutes in the lists starts the clock again) and none of its endpoints is
+connected or has beaten in that time, the hub retires them as the machines
+page's 「移除」 does — `node_revoke` audited actor `system`, reason
+`cluster pod gone/scaled to 0` — and tells the operator which pod and which login.
+Nothing in the cluster is touched (no destroy, the home PVC stays); scaled back
+to 1 the pod joins again with a fresh machine join code in its `u-<nonce>-join`
+Secret. Only pods: a machine not named `u-<nonce>` is never retired here, and a
+pod the hub never made counts only while one cluster is listing. Hub setting
+`fleet.cluster_pod_retire` (`on`) turns it off (`fleet_cluster_pod_gone.go`);
+an older fleet-ops sends no list and nothing is retired. BREAK-IT `cluster-pod-gone-held`.
+
 Setting it up (once, after the fleet-workers layer — its account, Role and
 `control-out` rule):
 

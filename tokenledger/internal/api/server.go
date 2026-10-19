@@ -134,6 +134,9 @@ type Server struct {
 	podRoll         podRollBook
 	podRollStable   func() string
 	podRollRuntimes func(now time.Time) map[string]podRuntime
+	// podGone is when each cluster pod was last seen standing
+	// (fleet_cluster_pod_gone.go, claude-fleet#4887).
+	podGone podGoneBook
 	// releaseRoster is the roster a train snapshots its machines from; nil =
 	// Nodes (a test's seam).
 	releaseRoster func(now time.Time) (NodesSnapshot, error)

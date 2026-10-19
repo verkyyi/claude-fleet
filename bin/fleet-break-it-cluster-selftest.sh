@@ -18,6 +18,8 @@
 #   cluster-reading-wrong-pod extras/managed-node/render.py (ops_resources) + deploy/k8s/fleet-workers +
 #                            tokenledger/internal/api/fleet_cluster_reading.go +
 #                            tokenledger/agent/node_cluster_reading.go (issue #3734)
+#   cluster-pod-gone-held    tokenledger/internal/api/fleet_cluster_pod_gone.go +
+#                            tokenledger/agent/node_cluster_reading.go (issue #4887)
 #   job-sees-keys            extras/managed-node/render.py (job_resources) + bin/fleet-provisioner.py +
 #                            bin/fleet-job-runner.sh + deploy/k8s/fleet-workers/networkpolicy.yaml +
 #                            tokenledger/internal/api/fleet_jobs.go
@@ -725,6 +727,46 @@ PY
   fi
   SECS=$(since "$t0")
   WHAT="集群只有一个 fleet-ops：只读账号（Role 只有 get/list/watch，能读 pod 指标）、fleet/role control、非 root、令牌走管道、出站只有 control-out；${gohalf}"
+}
+
+# cluster-pod-gone-held (#4887): a person's or a test pod whose Deployment is
+# deleted or scaled to 0 left its endpoints on the roster, their starts and
+# leases holding every repo switch until somebody retired them by hand (#4830).
+# fleet-ops now lists every user pod standing with each readings message; the
+# hub retires a pod's endpoints once its cluster has not listed it for 30
+# minutes and none of them has been heard — actor system, the operator told —
+# and never a pod back within the grace, another cluster's, one still heard,
+# or a machine that is no pod. Here: the agent lists every phase, the list is
+# carried, and the hub half's tests (TestClusterPodGone*) — run with a Go
+# toolchain, else by the Go gate.
+drill_cluster_pod_gone_held() {
+  CAP=120
+  local t0 out rc gohalf t
+  t0=$(now)
+  grep -q 'Present \[\]string' "$ROOT/tokenledger/shared/control/cluster_reading.go" \
+    || { WHY="ClusterReadings carries no list of the pods standing"; return 1; }
+  grep -q 'userPodsPresent(raw)' "$ROOT/tokenledger/agent/node_cluster_reading.go" \
+    || { WHY="fleet-ops no longer lists the user pods standing"; return 1; }
+  grep -q 's.clusterPodsListed(cluster, cr.Present)' "$ROOT/tokenledger/internal/api/fleet_cluster_reading.go" \
+    || { WHY="the hub no longer acts on fleet-ops' list"; return 1; }
+  for t in TestClusterPodGoneRetires TestClusterPodGoneHandMadeAndGaps TestClusterPodGoneOffAddsNothing; do
+    grep -q "^func $t(" "$ROOT/tokenledger/internal/api/fleet_cluster_pod_gone_test.go" 2>/dev/null \
+      || { WHY="the hub half's test $t is gone"; return 1; }
+  done
+  gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestClusterPodGone*"
+  if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run '^TestClusterPodGone' ./internal/api 2>&1); rc=$?
+    case "$rc:$out" in
+      0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
+      0:*) gohalf="入口一半：go test 缩到 0 过 30 分钟 → 退役（system、通知操作者）；宽限内恢复、别的集群的、还有心跳的、不是 pod 的机器 → 不动" ;;
+      *GOPROXY=off*|*'module lookup disabled'*|*'cannot find module'*|*'missing go.sum entry'*|*'requires go >= '*) ;;
+      *) WHY="the hub half (go test) is red: $(printf '%s' "$out" | grep -v '^ok' | grep -v '^20' | head -6 | tr '\n' ' ')"
+         return 1 ;;
+    esac
+  fi
+  SECS=$(since "$t0")
+  WHAT="fleet-ops 每拍报本集群现存的全部用户 pod（任何阶段），入口按它判 pod 消失；${gohalf}"
 }
 
 # mirror-private-unlisted (#4002): an internal repo's in-cluster mirror speaks
