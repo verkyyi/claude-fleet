@@ -865,10 +865,11 @@ drill_node_command_hub_only() {
   [ "$rc" = 0 ] || { WHY="the sandbox was not green as laid out ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # a hub-only command, named by a bin/ script
   printf 'package main\n\nfunc main() {\n\tswitch "" {\n\tcase "hub":\n\tcase "svc":\n\t}\n}\n' > "$d/tokenledger/cmd/ccquota/main.go"
-  printf '#!/bin/sh\nccquota svc list\n' > "$d/bin/fleet-y.sh"
+  # (spelt through %s so this file itself names no hub command)
+  printf '#!/bin/sh\nccquota %s list\n' svc > "$d/bin/fleet-y.sh"
   out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
   [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "hub-only ccquota command.*svc" \
-    || { WHY="bin/ naming the hub-only 'ccquota svc' was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+    || { WHY="bin/ naming the hub-only svc command was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
   # moved to the node (agent/cli.Run + commands.txt): green again
   printf 'package main\n\nfunc main() {\n\tswitch "" {\n\tcase "hub":\n\t}\n}\n' > "$d/tokenledger/cmd/ccquota/main.go"
   printf 'package cli\n\nfunc Run(name string) bool {\n\tswitch name {\n\tcase "svc":\n\tcase "version":\n\t\treturn true\n\t}\n\treturn false\n}\n' > "$d/tokenledger/agent/cli/run.go"
