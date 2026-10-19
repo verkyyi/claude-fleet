@@ -138,6 +138,14 @@ def pump(secs):
             except OSError: return
             if not d: return
             buf += d
+OSC52 = rb"\x1b\]52;([a-z]*);([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)"
+def settle(secs=8.0):
+    # until the copy's OSC 52 has crossed every hop (a busy runner took more than a
+    # fixed 2 s, #3906), then a breath for a second copy behind it
+    end = time.time() + secs
+    while time.time() < end and not re.search(OSC52, buf):
+        pump(0.1)
+    pump(0.3)
 def T(sock, *a):
     return subprocess.run([tmux, "-S", work + "/" + sock, *a], capture_output=True, text=True).stdout
 # Wait until every hop has a client: the home (us), the node (in the home's pane).
@@ -158,7 +166,7 @@ if mode == "drag":
         pump(0.03)
     pump(0.3)
     os.write(fd, b"\x1b[<0;%d;1m" % (width + 1))
-    pump(2.0)
+    settle()
 elif mode in ("pane", "pane-pt"):
     # The program in the node's pane copies by itself (Claude Code's own copy):
     # it writes OSC 52 to its terminal — raw, or wrapped as tmux passthrough.
@@ -167,7 +175,7 @@ elif mode in ("pane", "pane-pt"):
     if mode == "pane-pt":
         seq = "\\033Ptmux;\\033\\033]52;c;%s\\007\\033\\\\" % b64
     T("node", "respawn-pane", "-k", "-t", "node", "printf '%s'; exec sleep 600" % seq)
-    pump(2.0)
+    settle()
 else:
     # Select the payload line in copy-mode and copy it — where a mouse drag ends.
     T("node", "copy-mode", "-t", "node")
@@ -175,9 +183,9 @@ else:
     T("node", "send", "-t", "node", "-X", "begin-selection")
     T("node", "send", "-t", "node", "-X", "end-of-line")
     T("node", "send", "-t", "node", "-X", "copy-selection-and-cancel")
-    pump(2.0)
+    settle()
 out = []
-for m in re.finditer(rb"\x1b\]52;([a-z]*);([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)", buf):
+for m in re.finditer(OSC52, buf):
     out.append({"sel": m.group(1).decode(), "text": base64.b64decode(m.group(2)).decode("utf-8", "replace")})
 print(json.dumps({"osc52": out, "buffer": T("node", "show-buffer")}, ensure_ascii=False))
 os.kill(pid, 9)

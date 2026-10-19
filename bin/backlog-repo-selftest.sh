@@ -131,6 +131,9 @@ rows() { FLEET_SESSION="$1" bash "$SB/tmux-issues-rows.sh" all 2>&1; }
 f4()   { printf '%s\n' "$1" | tail -n +2 | awk -F '\037' '{ print $1 "|" $4 }'; }
 strip(){ printf '%s\n' "$1" | sed $'s/\x1b\\[[0-9;]*m//g'; }
 logs() { : > "$WORK/gh.log"; : > "$WORK/tmux.log"; : > "$WORK/spawn.log"; : > "$WORK/fzf.args"; }
+# The --spawn tail runs in its own background subshell (dash-issue-new.sh: the popup
+# never waits on the spawn), so its line can land after the call returns (#4690).
+spawned() { local _; for _ in $(seq 1 100); do [ -s "$WORK/spawn.log" ] && break; sleep 0.1; done; cat "$WORK/spawn.log"; }
 
 # --- A. no filter ---------------------------------------------------------------
 printf 'o/bbb\n' > "$FLEET_CONF_DIR/fleets/alpha/current-repo"
@@ -204,7 +207,7 @@ has   "E: ⌃n with no repo asks which repo"    "$(cat "$WORK/fzf.args")" "which
 has   "E: filed into the picked repo"         "$(cat "$WORK/gh.log")" "issue create --repo o/bbb"
 has   "E: optimistic row in B's cache"        "$(cat "$C/fleets/o-bbb/issues")" "new thing"
 hasnt "E: … not A's"                          "$(cat "$C/fleets/o-aaa/issues")" "new thing"
-has   "E: --spawn passes --repo"              "$(cat "$WORK/spawn.log")" "77 --title new thing --repo o/bbb"
+has   "E: --spawn passes --repo"              "$(spawned)" "77 --title new thing --repo o/bbb"
 seed; logs
 FAKE_CUR=alpha FZF_TITLE='nope' bash "$SB/dash-issue-new.sh" confirm >/dev/null 2>&1
 hasnt "E: esc on the repo pick files nothing" "$(cat "$WORK/gh.log")" "issue create"
@@ -237,7 +240,7 @@ seed; logs
 FAKE_CUR=solo FZF_TITLE='solo thing' bash "$SB/dash-issue-new.sh" confirm --spawn >/dev/null 2>&1
 hasnt "F: ⌃n never asks"                      "$(cat "$WORK/fzf.args")" "which repo"
 has   "F: files into the fleet repo"          "$(cat "$WORK/gh.log")" "issue create --repo o/sss"
-eq    "F: spawn names the repo, as with 2+"   "$(cat "$WORK/spawn.log")" "77 --title solo thing --repo o/sss"
+eq    "F: spawn names the repo, as with 2+"   "$(spawned)" "77 --title solo thing --repo o/sss"
 
 if [ "$FAILS" -gt 0 ]; then
   printf 'backlog-repo-selftest: %d/%d checks FAILED\n' "$FAILS" "$CHECKS" >&2; exit 1

@@ -55,7 +55,9 @@ print("200")
                        FLEET_SKIP_GLOBAL_CONF="1", FLEET_HUB_CURL=str(stub), CALL_LOG=str(root/"calls"), DENY_LOG=str(root/"denied"))
             for key in ("TMUX", "TMUX_PANE", "FLEET_SESSION", "FLEET_LAUNCH_CONTEXT"):
                 env.pop(key, None)
-            result = subprocess.run(["bash", str(control.BIN/"fleet-await.sh"), "T7", "--timeout", "1", "--no-spawn"], env=env, capture_output=True, text=True, timeout=15)
+            # the read itself (bash + the stub) is ~1 s on a busy runner, and await's
+            # timeout bounds that read too: room for it — the verdict is the point (#4570)
+            result = subprocess.run(["bash", str(control.BIN/"fleet-await.sh"), "T7", "--timeout", "10", "--no-spawn"], env=env, capture_output=True, text=True, timeout=15)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
             self.assertIn("SUCCEEDED", result.stdout)
             result = subprocess.run(["bash", str(control.BIN/"fleet-children.sh"), "T7", "--json"], env=env, capture_output=True, text=True, timeout=15)

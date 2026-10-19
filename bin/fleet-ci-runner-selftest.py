@@ -133,9 +133,10 @@ class FakeGitHub(object):
 # hook runs as the real runner runs it: `/bin/bash -e <path>`, the path UNQUOTED
 # (a space in it split it and failed every job — issue #4152).
 RUN_SH = r"""#!/bin/bash
-env > "$HOME/seen.env.tmp" && mv "$HOME/seen.env.tmp" "$HOME/seen.env"   # whole, or not yet there (#3241)
 ps -o nice= -p $$ | tr -d ' ' > "$HOME/seen.nice"
 pwd > "$HOME/seen.pwd"
+# last: the test waits on seen.env, then reads the two above (#4170)
+env > "$HOME/seen.env.tmp" && mv "$HOME/seen.env.tmp" "$HOME/seen.env"   # whole, or not yet there (#3241)
 while [ ! -e "$HOME/go" ]; do sleep 0.1; done
 . "$HOME/go"   # the job's GITHUB_* context
 rm -f "$HOME/go"

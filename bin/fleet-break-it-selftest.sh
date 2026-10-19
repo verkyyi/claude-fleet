@@ -2150,6 +2150,8 @@ vr_view_reconnect() {
   mkdir -p "$WORK/vr/fake"; printf 'sleep 600\n' > "$WORK/vr/fake/fleet-remote-view.sh"
   bash "$WORK/vr/fake/fleet-remote-view.sh" attach - V9 >/dev/null 2>&1 </dev/null & one=$!
   printf '/dev/ttys999\tvrn\tshell\t%s\t%s\n' "$(date +%s)" "$one" > "$WORK/vr/conf/remote-views/V9"
+  # health finds an attach by its argv: not before the fork has exec'd it (#4299)
+  until_ok 5 sh -c "ps -o args= -p $one 2>/dev/null | grep -q 'fleet-remote-view.sh attach'" || :
   s=$(eval "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh health" 2>&1)
   [ "$s" = "shared=0 orphans=1" ] || { pkill -P "$one"; kill "$one" 2>/dev/null; WHY="health with one orphan says [$s]"; return 1; }
   vr vrc new-window -d -t vrc: -n t3 "$(vr_env) FLEET_REMOTE_ORPHAN_SECS=0 bash $BIN/fleet-remote-view.sh attach - V3; exec sleep 600"
@@ -5021,7 +5023,10 @@ drill_idle_timeout_starves_merged() {
 # fork/exec … invalid argument`, three times) was a failure, and an unknown one
 # left a GitHub claim with no session that only --force got past (issue #1610).
 drill_task_outage_recovery() {
-  CAP=15; local out t0
+  # the wall of the whole fixture file (17 cases, one driving six CLI calls with
+  # two offline back-offs: ~12 s on an idle Mac) — the test's speed, not a recovery
+  # the product promises; 15 s went red at 15.3 s on a busy runner (#4570)
+  CAP=30; local out t0
   t0=$(now)
   out=$(bash "$BIN/fleet-task-recovery-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")

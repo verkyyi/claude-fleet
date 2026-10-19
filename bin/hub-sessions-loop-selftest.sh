@@ -64,6 +64,14 @@ CHECKS=0
 fail() { printf 'selftest FAIL: %s\n' "$1" >&2; [ -n "${2:-}" ] && printf -- '--- detail ---\n%s\n' "$2" >&2; exit 1; }
 # wait_for <secs> <cmd…> — poll every 0.2s until <cmd> succeeds; rc 1 on timeout
 wait_for() { local n=$(( $1 * 5 )); shift; while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.2; n=$((n-1)); done; return 1; }
+# The top-level --loop processes only: a `$(…)` / `( … )` inside a round is a forked
+# bash with the very same argv, so a bare pgrep counts the loop 2–3 times while it
+# is mid-round (#4691). A match whose parent is itself a match is that fork.
+loop_pids() {
+  local all p pp; all=" $(pgrep -f "^bash $HUBS --loop" | tr '\n' ' ')"
+  for p in $all; do pp=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    case "$all" in *" $pp "*) ;; *) [ -n "$pp" ] && printf '%s\n' "$p" ;; esac; done
+}
 loop_alive() { local p; { read -r p < "$G/hubsess.pid"; } 2>/dev/null && kill -0 "$p" 2>/dev/null; }
 
 # --- D (off) ------------------------------------------------------------------
@@ -133,10 +141,10 @@ CHECKS=$((CHECKS+1)); grep -q 'fleet-hub-sessions.sh" --ensure' "$BIN/tmux-dash-
 killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || fail "F: could not stop the leg-C loop"
 bash "$HUBS" --loop & bash "$HUBS" --loop &
 sleep 2
-n=$(pgrep -f "^bash $HUBS --loop" | wc -l | tr -d ' ')
-CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "F: two --loop started together — $n stayed, want 1" "$(pgrep -fl "^bash $HUBS --loop")"
+n=$(loop_pids | wc -l | tr -d ' ')
+CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "F: two --loop started together — $n stayed, want 1" "$(loop_pids)"
 read -r LP < "$G/hubsess.lock"
-CHECKS=$((CHECKS+1)); [ "$LP" = "$(pgrep -f "^bash $HUBS --loop")" ] || fail "F: the lock names $LP, the loop is $(pgrep -f "^bash $HUBS --loop")"
+CHECKS=$((CHECKS+1)); [ "$LP" = "$(loop_pids)" ] || fail "F: the lock names $LP, the loop is $(loop_pids)"
 out=$(bash "$HUBS" --status 2>&1)
 case "$out" in "loop $LP · "*) : ;; *) fail "F: --status does not name the lock holder $LP" "$out" ;; esac
 CHECKS=$((CHECKS+1))
@@ -166,7 +174,7 @@ wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hu
   || fail "J: a loop of other code was not replaced by --ensure"
 CHECKS=$((CHECKS+1))
 CHECKS=$((CHECKS+1)); ! kill -0 "$J1" 2>/dev/null || fail "J: the old loop $J1 still runs beside the new one"
-n=$(pgrep -f "^bash $HUBS --loop" | wc -l | tr -d ' ')
+n=$(loop_pids | wc -l | tr -d ' ')
 CHECKS=$((CHECKS+1)); [ "$n" = 1 ] || fail "J: $n loops after the replacement, want 1"
 read -r J2 < "$G/hubsess.pid"
 wait_for 5 sh -c '[ "$(cat "$1")" != old-code ]' _ "$G/hubsess.loopcode" || fail "J: the new loop did not restamp its code"
@@ -233,7 +241,8 @@ case "$out" in *FAIL*hub-sessions*"loop none"*) : ;; *) fail "I: a 700s cache wi
 CHECKS=$((CHECKS+1))
 printf 'quota\t%s\t%s\tHTTP 401: a viewer token is required\n' "$(( $(date +%s) - 2000 ))" "$(date +%s)" > "$G/hub_auth_fail"
 out=$(docrow hubauth)
-case "$out" in *FAIL*hubauth*"quota refused 33m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
+# 2000 s plus the doctor's own run time, which can pass a minute on a busy box
+case "$out" in *FAIL*hubauth*"quota refused 3"[345]"m"*) : ;; *) fail "I: a reader refused 2000s must be a hubauth FAIL" "$out" ;; esac
 CHECKS=$((CHECKS+1))
 printf 'quota\t%s\t%s\tHTTP 401\n' "$(( $(date +%s) - 100 ))" "$(date +%s)" > "$G/hub_auth_fail"
 out=$(docrow hubauth)

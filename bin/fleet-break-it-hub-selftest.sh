@@ -1626,8 +1626,10 @@ drill_linux_admit_burst() {
   n=$(date +%s)
   printf '%s 1000000000 10000 1000\n' "$((n - 60))" > "$d/conf/global/admit-cpu.window"
   # 0.2 cores and 5 % throttled since the note, then a full throttled core from now on
+  # stopped by a flag, never a bare kill: a killed loop's in-flight `mv` lands after
+  # the static reading written below and the last leg read 0.2 cores (#4380)
   ( u=1012000000 p=10600 t=1030
-    while :; do
+    while [ ! -e "$d/cg/stop" ]; do
       printf 'usage_usec %s\nnr_periods %s\nnr_throttled %s\n' "$u" "$p" "$t" > "$d/cg/cpu.stat.w"
       mv -f "$d/cg/cpu.stat.w" "$d/cg/cpu.stat"
       u=$((u + 100000)); p=$((p + 1)); t=$((t + 1)); sleep 0.1
@@ -1645,7 +1647,7 @@ drill_linux_admit_burst() {
   case "$out" in *'container cpu busy'*'|rc=1') ;; *) kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null; WHY="the old 0.5 s sample should still see the burst (FLEET_ADMIT_CPU_WINDOW_SECS=0): $out"; return 1 ;; esac
   rm -f "$d/conf/global/admit-cpu.window"
   out=$(adm)
-  kill "$wp" 2>/dev/null; wait "$wp" 2>/dev/null
+  : > "$d/cg/stop"; wait "$wp" 2>/dev/null
   case "$out" in *'container cpu busy'*'|rc=1') ;; *) WHY="with no note yet the gate must sample and hold on a busy core: $out"; return 1 ;; esac
   [ -s "$d/conf/global/admit-cpu.window" ] || { WHY="the first reading left no note for the next one"; return 1; }
   n=$(date +%s)

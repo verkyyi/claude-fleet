@@ -20,7 +20,9 @@
 #
 #   OVERLAP   the agent starts before the tree is whole, with CLAUDE.md already
 #             there; its first prompt waits until the tree is whole; ↵→ready
-#             (t_accepted → t_ready) ≤ 4.5 s where the old order needs ≥ 5 s;
+#             (t_accepted → t_ready) ≤ 7 s where the old order needs ≥ 8 s (4 s
+#             each, so a busy runner's ~2 s of spawn overhead never reads as the
+#             old order — at 2.5 s each the margin was 0.5 s, #4773);
 #             --print names the window; the spawn returns only once filled.
 #   STAMPS    the window carries @issue @fleet_id @born @fleet_role @reap_policy
 #             @repo @worktree from the one batched call.
@@ -114,7 +116,7 @@ export FLEET_CONF_DIR="$WORK/conf" TMPDIR="$WORK/tmp"
 . "$BIN/selftest-repo-fixture.sh"
 fx_repo "$FLEET_CONF_DIR" "$SESS" acme/widgets FLEET_MAIN="$WORK/main" FLEET_BASE_BRANCH=master
 env PATH="$WORK/fakebin:$PATH" FLEET_WRAP_LAUNCH="$WORK/fakebin/agent" FLEET_WRAP_FAST_FAIL=0 \
-  AGENT_LOG="$WORK/agent" BOOT=2.5 STATE_HOOK="$BIN/set-claude-state.sh" \
+  AGENT_LOG="$WORK/agent" BOOT=4 STATE_HOOK="$BIN/set-claude-state.sh" \
   tmux -L "$SESS" -f /dev/null new-session -d -s "$SESS" -n home || fail "setup: tmux"
 
 # This synchronous read is after setup/trap and before the first spawn/T0.
@@ -207,7 +209,7 @@ secs() { python3 -c "print('%.2f' % ($2 - $1))"; }
 le() { python3 -c "import sys; sys.exit(0 if $1 <= $2 else 1)"; }
 
 # ===== OVERLAP ================================================================
-spawn 11 FLEET_SPAWN_FILL_CMD='sleep 2.5; git -C "$1" reset -q --hard'
+spawn 11 FLEET_SPAWN_FILL_CMD='sleep 4; git -C "$1" reset -q --hard'
 [ "$SRC" = 0 ] || fail "OVERLAP spawn rc=$SRC"
 win=$(tail -1 "$WORK/spawn.out")
 case "$win" in @[0-9]*) ;; *) fail "OVERLAP --print names the window" "$(cat "$WORK/spawn.out")" ;; esac
@@ -220,8 +222,8 @@ wait_ready 11
 [ -n "$(field 11 pending)" ] || fail "OVERLAP the agent carries FLEET_WT_PENDING"
 [ "$(field 11 ready_big)" = 1 ] || fail "OVERLAP the first prompt waits until the tree is whole"
 took=$(secs "$T0" "$(field 11 t_ready)")
-le "$took" 4.5 || fail "OVERLAP t_accepted → t_ready ${took}s > 4.5s (checkout 2.5s + start 2.5s run one after the other)"
-ok "OVERLAP the agent starts beside the checkout: accepted → ready ${took}s ≤ 4.5s (spawn returned in $(secs "$T0" "$T1")s)"
+le "$took" 7 || fail "OVERLAP t_accepted → t_ready ${took}s > 7s (checkout 4s + start 4s run one after the other)"
+ok "OVERLAP the agent starts beside the checkout: accepted → ready ${took}s ≤ 7s (spawn returned in $(secs "$T0" "$T1")s)"
 
 # ===== STAMPS =================================================================
 opts=$(TM show-options -w -t "$win" 2>/dev/null)
