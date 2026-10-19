@@ -54,6 +54,12 @@ python3 "$ROWS" page-skeleton "$T/p1.md" --root "$T/r" | grep -q '^#### `gamma`$
 out="$(python3 "$ROWS" page-check "$T/p2.md" --root "$T/r")"; rc=$?
 case "$out" in *"\`beta\` is still a skeleton"*"\`delta\` is on the page but"*) [ $rc = 1 ] && ok "B skeleton + gone row red" || bad "B rc $rc" ;;
   *) bad "B skeleton / gone row not caught: $out" ;; esac
+# a row only the client-only doctor in bin/fleet prints (issue #4908) is a row too
+printf '%s\n' "    printf '  %-4s  %-8s %s\\n' \"\${r%%x}\" epsilon \"\${r#*x}\"" > "$T/r/bin/fleet"
+out="$(python3 "$ROWS" page-check "$T/p1.md" --root "$T/r")"
+case "$out" in *"missing section \`epsilon\` (client)"*) ok "B a client-only row reds page-check" ;; *) bad "B client row not caught: $out" ;; esac
+{ echo "# t"; sec alpha a; sec beta b; sec gamma c; sec epsilon e; } > "$T/p3.md"
+python3 "$ROWS" page-check "$T/p3.md" --root "$T/r" >/dev/null && ok "B its section is accepted" || bad "B client section refused"
 
 # C
 for l in zh en; do

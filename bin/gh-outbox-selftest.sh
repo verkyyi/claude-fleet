@@ -145,9 +145,12 @@ export HOME="$T/home" FLEET_CONF_DIR="$T/conf" TMPDIR="$T/tmp" FLEET_SKIP_GLOBAL
 export PATH="$T/stub:$PATH" GHOB_STATE="$STATE" GHOB_REPO="$REPO" GH_TOKEN=gho_fake_never_written
 export FLEET_GH_WRITE_GAP=0 FLEET_GH_TIMEOUT=5 FLEET_REPO="$REPO" CF_REPO="$REPO" CCQUOTA_FLEET=0
 unset TMUX TMUX_PANE FLEET_GH_FAKE_DOWN FLEET_GH_FAKE_LIMIT FLEET_STATE_DIR FLEET_GH_OUTBOX_DIR
-mkdir -p "$FLEET_CONF_DIR/global" "$FLEET_CONF_DIR/fleets/st" "$T/main"
+mkdir -p "$FLEET_CONF_DIR/global" "$FLEET_CONF_DIR/fleets/st/repos" "$T/main"
+# the evidence store's fleet: its one repo in the repos/ layout (#1937, #4806)
+: > "$FLEET_CONF_DIR/fleets/st/conf"
 printf 'FLEET_REPO=%s\nFLEET_MAIN=%s\nFLEET_BASE_BRANCH=master\nFLEET_FORGE=github\n' "$REPO" "$T/main" \
-  > "$FLEET_CONF_DIR/fleets/st/conf"      # the evidence store's fleet
+  > "$FLEET_CONF_DIR/fleets/st/repos/octo-outbox.conf"
+printf 'octo-outbox\n' > "$FLEET_CONF_DIR/fleets/st/repos/.order"
 OB="$FLEET_CONF_DIR/gh-outbox"
 st() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$STATE" "$1"; }
 mode() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["mode"]=sys.argv[2]; json.dump(d,open(sys.argv[1],"w"))' "$STATE" "$1"; }
