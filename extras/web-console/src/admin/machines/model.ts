@@ -55,7 +55,6 @@ export type MachineView = {
   installs?: Installs;
   versions?: { runtime?: string; actual?: Record<string, string>; want?: Record<string, string>; daemon?: string };
   role: "host" | "client" | string;
-  kind: "fixed" | "ephemeral" | string;
   maintenance?: Maintenance;
   load_hist: number[];
   logins_refused?: Record<string, string>;
@@ -86,19 +85,7 @@ export type NodeView = {
   desired?: DesiredView;
   logins_refused?: Record<string, string>;
 };
-export type SpotNodeView = {
-  id: string;
-  pod_name: string;
-  state: "provisioning" | "online" | "releasing" | "reclaiming" | "released" | string;
-  reason?: string;
-  created_at: string;
-  hostname?: string;
-  idle_sec?: number;
-  age_sec: number;
-  peak_sessions?: number;
-};
-export type SpotSummary = { enabled: boolean; max: number; idle_minutes: number; weight?: number; image?: string; nodes: SpotNodeView[]; history: SpotNodeView[] };
-export type NodesSnapshot = { at: string; machines: MachineView[]; nodes: NodeView[]; spot?: SpotSummary };
+export type NodesSnapshot = { at: string; machines: MachineView[]; nodes: NodeView[] };
 export type CIRunner = { machine: string; online: boolean; heard_at?: string; runner: { state: string; why?: string; since?: string; runs: number; failed: number } };
 export type VersionInfo = { version?: string; stable?: string; client_version?: string; client_version_macos?: string };
 export type SettingsView = { hub?: { key: string; value: string }[] };
@@ -159,8 +146,8 @@ export type NodeDetail = {
 
 // ---- rows -----------------------------------------------------------------
 
-export type Kind = "fixed" | "spot" | "person";
-export type Status = "online" | "maintenance" | "lost" | "starting" | "reclaim" | "releasing" | "reclaiming";
+export type Kind = "fixed" | "person";
+export type Status = "online" | "maintenance" | "lost";
 export type Door = { state: "open" | "cluster" | "off" | "unknown"; port?: number };
 
 export type MachineRow = {
@@ -169,7 +156,6 @@ export type MachineRow = {
   label: string;
   kind: Kind;
   status: Status;
-  reclaimMin?: number; // a SPOT pod idling toward deletion
   loadCore: number | null;
   sessions: number | null;
   cap: number | null;
@@ -204,32 +190,19 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
     const k = firstLabel(n.hostname).toLowerCase();
     byHost.set(k, [...(byHost.get(k) || []), n]);
   }
-  const spotByHost = new Map<string, SpotNodeView>();
-  for (const s of snap.spot?.nodes || []) if (s.hostname) spotByHost.set(firstLabel(s.hostname).toLowerCase(), s);
-  const idleMin = snap.spot?.idle_minutes || 30;
 
   const rows: MachineRow[] = (snap.machines || [])
     .filter((m) => m.role !== "client")
     .map((m) => {
       const id = firstLabel(m.hostname);
       const nodes = byHost.get(id.toLowerCase()) || [];
-      const kind: Kind = m.kind === "ephemeral" ? "spot" : isPersonPod(m.hostname) ? "person" : "fixed";
+      const kind: Kind = isPersonPod(m.hostname) ? "person" : "fixed";
       // 期望 / 实际 (claude-fleet#2214): a managed machine's newest desired pair
       const desired = nodes.map((n) => n.desired).filter(Boolean).sort((a, b) => b!.want - a!.want)[0];
       const installed = m.versions?.runtime || m.fleet_version || nodes.map((n) => n.fleet_version || "").sort().pop() || "";
       const offDesired = !!desired && (desired.want !== desired.reached || !!desired.diff);
       const offStable = !!installed && /^[0-9a-f]{7,}$/i.test(installed) && stables.length > 0 && !stables.some((s) => sameVersion(installed, s));
-      let status: Status = m.status === "maintenance" ? "maintenance" : m.status === "online" ? "online" : "lost";
-      let reclaimMin: number | undefined;
-      const sp = spotByHost.get(id.toLowerCase());
-      if (kind === "spot" && sp) {
-        if (sp.state === "releasing") status = "releasing";
-        else if (sp.state === "reclaiming") status = "reclaiming";
-        else if (sp.state === "online" && !(m.sessions ?? 0) && sp.idle_sec) {
-          reclaimMin = Math.max(0, Math.ceil(idleMin - sp.idle_sec / 60));
-          status = "reclaim";
-        }
-      }
+      const status: Status = m.status === "maintenance" ? "maintenance" : m.status === "online" ? "online" : "lost";
       const caps = nodes.map((n) => n.max_sessions || 0);
       const cap = caps.some((c) => c > 0) ? caps.reduce((a, b) => a + b, 0) : null;
       return {
@@ -238,7 +211,6 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
         label: m.alias || id,
         kind,
         status,
-        reclaimMin,
         loadCore: m.ncpu && m.status !== "lost" ? m.load1 / m.ncpu : null,
         sessions: m.sessions,
         cap,
@@ -253,30 +225,7 @@ export function machineRows(snap: NodesSnapshot, ver: VersionInfo | null): Machi
         m,
       };
     });
-  // a SPOT pod the cluster is still starting has no roster row yet
-  for (const s of snap.spot?.nodes || []) {
-    if (s.hostname && rows.some((r) => sameHost(r.host, s.hostname))) continue;
-    if (s.state === "released") continue;
-    rows.push({
-      id: s.hostname ? firstLabel(s.hostname) : s.pod_name,
-      host: s.hostname || s.pod_name,
-      label: s.hostname ? firstLabel(s.hostname) : s.pod_name,
-      kind: "spot",
-      status: s.state === "releasing" ? "releasing" : s.state === "reclaiming" ? "reclaiming" : "starting",
-      loadCore: null,
-      sessions: null,
-      cap: null,
-      version: "",
-      behind: false,
-      stableShort: "",
-      door: { state: "unknown" },
-      seen: null,
-      maintenance: null,
-      eps: [],
-      logins: [],
-    });
-  }
-  const rank: Record<string, number> = { online: 0, reclaim: 0, starting: 1, maintenance: 2, releasing: 3, reclaiming: 3, lost: 4 };
+  const rank: Record<string, number> = { online: 0, maintenance: 2, lost: 4 };
   return rows.sort((a, b) => (rank[a.status] ?? 5) - (rank[b.status] ?? 5) || a.label.localeCompare(b.label));
 }
 

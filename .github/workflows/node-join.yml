@@ -1,8 +1,8 @@
 name: node-join
 
 # One command adds a machine (issue #1418, EPIC #1407 R3), proved on a CLEAN
-# Linux container: a bare debian image with only curl, the way a fresh SPOT box
-# arrives. The job builds ccquota, runs a real hub with the fleet module on and
+# Linux container: a bare debian image with only curl, the way a fresh cloud
+# Linux machine arrives. The job builds ccquota, runs a real hub with the fleet module on and
 # that build in its dist dir, mints a join code over the operator API, then runs
 # bin/fleet-node-join.sh exactly as the hub's command line does (`… | bash -s --`)
 # — deps through apt, the agent from the hub, no systemd so the detached path,

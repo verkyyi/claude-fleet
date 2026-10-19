@@ -21,7 +21,7 @@
 #                           says another one is the better place — at most
 #                           --max (FLEET_MOVE_REBALANCE_MAX, 2); `--max all` is
 #                           every one of them, which is what a machine about
-#                           to go down wants (fleet-spot-evacuate.sh, #1428).
+#                           to go down wants (fleet-evacuate.sh, #1428).
 #                           Only `done` sessions move; a session mid-turn
 #                           never does. One no machine can take (REFUSED) is
 #                           skipped with a `↷` line, not a stop (#1513); the

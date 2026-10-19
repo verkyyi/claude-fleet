@@ -1399,9 +1399,6 @@ type Candidate struct {
 	Eligible     bool     `json:"eligible"`
 	Excluded     string   `json:"excluded,omitempty"`
 	Score        float64  `json:"score"`
-	// Kind is ephemeral for a SPOT node (claude-fleet#1428): its score is
-	// multiplied by the SPOT weight, so a fixed machine with room wins.
-	Kind string `json:"kind,omitempty"`
 	// Ready is the node's own word on whether it can take a NEW session
 	// (claude-fleet#1475: gh logged in, a usable credential, the checkouts
 	// present); nil from an agent that does not say. An `auto` placement
@@ -1561,18 +1558,6 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, no
 		return pl, err
 	}
 	accounts := s.loginAccounts()
-	// SPOT nodes (claude-fleet#1428): which endpoints are ephemeral, and
-	// where each is in its life. Empty maps on a hub without any.
-	kinds, _ := s.Store.EphemeralEndpoints()
-	spotState := map[string]string{}
-	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
-		for _, sp := range spots {
-			if sp.EndpointID != "" {
-				spotState[sp.EndpointID] = sp.State
-			}
-		}
-	}
-	weight := s.spotWeight(settings)
 	from := s.askedFrom(p, now)                  // claude-fleet#1721: who may land on a personal machine
 	mallow := machineAllowOf(settings, p.Person) // claude-fleet#3824: the person's machine allowlist
 	// A login whose first fleet by name is down while another of its fleets
@@ -1640,15 +1625,6 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, no
 			if why := s.denyEndpoint(mallow, r.EndpointID, r.Hostname); why != "" {
 				c.Eligible, c.Excluded = false, MachineDisabledWord+"："+why
 			}
-		}
-		if k := kinds[r.EndpointID]; k != "" {
-			c.Kind = k
-			if st := spotState[r.EndpointID]; st != "" && st != store.SpotOnline && c.Eligible {
-				// Starting, releasing or being reclaimed: not a place for
-				// new work.
-				c.Eligible, c.Excluded = false, "SPOT node "+st
-			}
-			c.Score = math.Round(c.Score*weight*1000) / 1000
 		}
 		if sp, ok := split[strings.ToLower(firstLabel(r.Hostname))]; ok && node == "auto" && c.Eligible && !splitTakes(sp.Split, repo) {
 			// A second pod (claude-fleet#3562) is for its repos: auto
@@ -1757,12 +1733,6 @@ func (s *Server) pickNodeAfter(p fleetPrincipal, repo, node, provider string, no
 				msg = "all-full: " + pinnedFull(pl.Candidates[0].Machine) + " — " + strings.Join(reasons, "; ")
 			}
 		}
-		if sp := s.spot(); sp != nil && node == "auto" {
-			// Peak: every fixed machine is out. Ask for a SPOT node
-			// (claude-fleet#1428) while fleet.spot is on (claude-fleet#1986);
-			// the next placement finds it.
-			msg += "; " + sp.Want("placement for "+repo+" found no eligible machine: "+strings.Join(reasons, "; "))
-		}
 		if full {
 			return pl, fault("AT_CAPACITY", msg)
 		}
@@ -1783,7 +1753,7 @@ func pinnedFull(machine string) string {
 
 // unplacedMachines is "<machine>: <why>" for every machine the hub could place
 // sessions on that gave no candidate (claude-fleet#2882): online (or 维护中)
-// hosts — never a person's own computer or a SPOT node — with skipped's reason
+// hosts — never a person's own computer — with skipped's reason
 // where the caller has a login there, else 没有你的登录; a machine its updater
 // is switching says so. Sorted by machine. updating maps every machine whose
 // updater is mid-switch (lower-cased) to its phase.
@@ -1797,7 +1767,7 @@ func (s *Server) unplacedMachines(cands []Candidate, skipped map[string]string, 
 		if ph := updatingPhase(m.Versions); ph != "" {
 			updating[strings.ToLower(m.Hostname)] = ph
 		}
-		if m.Role != MachineRoleHost || m.Personal || m.Kind == store.NodeKindEphemeral || m.Online == 0 {
+		if m.Role != MachineRoleHost || m.Personal || m.Online == 0 {
 			continue
 		}
 		in := false
@@ -2010,9 +1980,6 @@ func better(a, b Candidate) bool {
 
 func placementReason(c Candidate, all []Candidate) string {
 	parts := []string{fmt.Sprintf("chose %s (score %.3f", c.Machine, c.Score)}
-	if c.Kind == store.NodeKindEphemeral {
-		parts = append(parts, "SPOT node")
-	}
 	if c.CPUBusy != nil {
 		parts = append(parts, fmt.Sprintf("CPU busy %.0f%%", *c.CPUBusy*100))
 	}
@@ -2056,7 +2023,7 @@ func placementReason(c Candidate, all []Candidate) string {
 
 // handleFleetSettings serves GET/PUT /v1/fleet/settings — the operator's
 // (mounted behind adminOnly). fleet.node_cap.<machine> is an integer 0–256,
-// or "" to fall back to the default; fleet.spot_weight a number 0–2;
+// or "" to fall back to the default;
 // fleet.node_maintenance.<machine> (claude-fleet#1427) a reason — any text,
 // "" to end the maintenance — stored as the dated record the roster shows;
 // fleet.client_defaults.<KEY> (claude-fleet#1722) a client's team default;
@@ -2192,15 +2159,6 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-		case body.Key == SpotWeightKey:
-			// The SPOT placement weight (claude-fleet#1428): 0–2, or ""
-			// for CCQUOTA_FLEET_SPOT_WEIGHT's value.
-			if body.Value != "" {
-				if f, err := strconv.ParseFloat(body.Value, 64); err != nil || f < 0 || f > 2 {
-					httpError(w, http.StatusBadRequest, "the SPOT weight is a number 0–2, or \"\" for the default")
-					return
-				}
-			}
 		case body.Key == ComputeAutoKey:
 			// The team policy (claude-fleet#1720): on opens a login whose
 			// fresh probe is ok; "" or off is the default — only a hint.
@@ -2211,7 +2169,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 			s.computeAutoAudit(body.Value, time.Now())
 		case isHubSettingKey(body.Key):
 			// The hub's own settings (claude-fleet#1986): hub.*, pool.*,
-			// fleet.auto_assign / spot / routes_extra and
+			// fleet.auto_assign / routes_extra and
 			// user.<id>.machine_login — checked, stored and audited in one
 			// place (hub_settings.go).
 			if code, why := s.putHubSetting(actorOf(r), body.Key, body.Value, time.Now()); code != http.StatusOK {
@@ -2256,7 +2214,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+SpotWeightKey+", "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()
@@ -2312,7 +2270,6 @@ func (s *Server) writeFleetSettings(w http.ResponseWriter) {
 			eff[k] = n
 		}
 	}
-	eff[SpotWeightKey] = s.spotWeight(settings)
 	// A relay credential's hash never leaves the hub (claude-fleet#1974).
 	settings = relayRedact(settings)
 	for k, v := range settings {

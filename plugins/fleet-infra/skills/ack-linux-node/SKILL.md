@@ -15,7 +15,6 @@ description: 在 Kubernetes（如阿里云 ACK）上起一台托管 Linux 节点
 
 - 要一台不归任何人桌面的 Linux 机器跑会话（托管客户、容量不够）。
 - 节点 pod 起不来、要换镜像、要回到上一版镜像。
-- 临时容量走 SPOT 节点是另一条路（入口自己起停，`extras/spot-node/README.md`），不用这张。
 
 ## 先查什么
 

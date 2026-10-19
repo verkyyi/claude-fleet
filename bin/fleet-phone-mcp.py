@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# bin-inventory: 人工入口 — 管理员 `fleet service add phone-mcp` 起的服务，docs/dev/PHONE-MCP.md
 """fleet-phone-mcp.py — the person's phone MCP, ONE copy for all their logins (issue #3247).
 
 The phone (USB on mac-a) is driven by mcp-server-mobile over adb. Before this,

@@ -140,7 +140,7 @@ func TestCheckCredPodProviders(t *testing.T) {
 	}
 	for m, want := range map[string]bool{
 		"u-abcd1234": true, "u-drillx1": true, "fleet-linux-3": true, "fleet-linux-3.fleet-workers": true,
-		"ccquota-spot-ab12": true, "mac-c": false, "fleet-linux-": false, "mac-b": false, "": false,
+		"mac-c": false, "fleet-linux-": false, "mac-b": false, "": false,
 	} {
 		if got := isClusterPodMachine(m); got != want {
 			t.Errorf("isClusterPodMachine(%q) = %v", m, got)

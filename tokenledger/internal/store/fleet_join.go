@@ -34,8 +34,8 @@ CREATE INDEX IF NOT EXISTS fleet_join_codes_created ON fleet_join_codes(created_
 // JoinCode is one code as the operator sees it — never the code itself.
 type JoinCode struct {
 	Label string `json:"label"`
-	// Kind is the node kind the code enrolls (claude-fleet#1428): fixed, or
-	// ephemeral for a SPOT node the hub started itself.
+	// Kind is the node kind the code enrolls (claude-fleet#1428): fixed
+	// since the SPOT nodes went (claude-fleet#4797).
 	Kind       string     `json:"kind"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ExpiresAt  time.Time  `json:"expires_at"`
@@ -166,12 +166,6 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 		VALUES (?, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`, endpointID, label, tokenHash, fmtTime(now), host, osUser, kind,
 		enrolled, trust, source, role); err != nil {
 		return fmt.Errorf("enroll endpoint: %w", err)
-	}
-	// A code the hub minted for a SPOT node it started: the ledger row learns
-	// which endpoint the pod became. A no-op for every other code.
-	if _, err := tx.Exec(`UPDATE fleet_spot_nodes SET endpoint_id = ?, joined_at = ? WHERE code_hash = ? AND endpoint_id IS NULL`,
-		endpointID, fmtTime(now), codeHash); err != nil {
-		return fmt.Errorf("link spot node: %w", err)
 	}
 	return tx.Commit()
 }

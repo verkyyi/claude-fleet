@@ -98,6 +98,18 @@ class Registration(unittest.TestCase):
             self.assertEqual(post.call_count, 1)
         self.assertTrue(all(self.local().values()))
 
+    def test_registered_spelling_with_capitals_registers(self):
+        # #4789: the window keeps Fixture/Repo, the hub admits fixture/repo; an
+        # older supervisor's context still carried the registered spelling.
+        self.tm('set-option', '-w', '-t', self.pane, '@repo', 'Fixture/Repo')
+        context = dict(self.context, repo='Fixture/Repo')
+        with patch.dict(os.environ, FLEET_AUTHORITY_CONTEXT=json.dumps(context)), \
+                patch.object(authority, 'start_call', side_effect=self.ack) as post:
+            registration.observe(self.payload, self.identity)
+            registration.verify_registered(dict(self.payload, hook_event_name='UserPromptSubmit'))
+            self.assertEqual(post.call_count, 1)
+        self.assertTrue(all(self.local().values()))
+
     def test_worktree_context_that_differs_or_carries_more_keys_refuses(self):
         binding = self.linked_worktree()
         cases = dict(other=dict(self.context, worktree=dict(binding, root=str(self.root))),

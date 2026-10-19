@@ -1,4 +1,5 @@
 #!/bin/bash
+# bin-inventory: 人工入口 — 跨机状态延迟测量（「≤ 3 秒」），docs/dev/FLEET-HUB.md
 # fleet-hub-latency.sh — how long a state change on THIS machine takes to show up
 # in another machine's sidebar cache (issue #1481, EPIC #1479's 「≤ 3 秒」 metric).
 #

@@ -9,8 +9,7 @@ import (
 
 // Cluster pods are one provider's (claude-fleet#4601). The operator's rule:
 // every pod of the cluster — a person's pod u-<nonce> (drill pods included),
-// the shared ACK worker fleet-linux-*, a SPOT node ccquota-spot-* — uses only
-// Codex subscriptions. A person's pod reads its owner's own allowance as the
+// the shared ACK worker fleet-linux-* — uses only Codex subscriptions. A person's pod reads its owner's own allowance as the
 // machine's (userPodNodeAllow, #4290), so an owner opened to "*" handed every
 // new pod Claude too. The machine layer of a cluster pod therefore passes ONE
 // hub setting's providers before any list is read:
@@ -30,8 +29,9 @@ const CredPodProvidersKey = "fleet.cred_pod_providers"
 const credPodProvidersDef = credvault.Codex
 
 // clusterPodPrefixes are the names a cluster pod joins as besides u-<nonce>:
-// the shared ACK worker's StatefulSet replicas and the hub's SPOT pods.
-var clusterPodPrefixes = []string{"fleet-linux-", "ccquota-spot-"}
+// the shared ACK worker's StatefulSet replicas (the hub's SPOT pods,
+// ccquota-spot-*, went with the SPOT nodes — claude-fleet#4797).
+var clusterPodPrefixes = []string{"fleet-linux-"}
 
 // isClusterPodMachine says whether a machine is one of the cluster's pods.
 func isClusterPodMachine(machine string) bool {

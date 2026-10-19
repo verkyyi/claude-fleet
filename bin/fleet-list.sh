@@ -1,4 +1,5 @@
 #!/bin/bash
+# bin-inventory: 人工入口 — 列出 fleet，README「bin/fleet-list.sh」
 # fleet-list.sh — list fleets: configured (a per-fleet conf) and/or live (a tmux
 # session). Columns: ● live/○ down · name · repo · checkout. A fleet hosting 2+
 # repos (issue #788) lists each further repo under its row as `↳ owner/name

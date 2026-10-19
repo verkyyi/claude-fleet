@@ -956,22 +956,6 @@ func runHub(args []string) error {
 		if err := replicaConfig(srv); err != nil {
 			return err
 		}
-		// SPOT nodes (claude-fleet#1428): on only with an image to run.
-		// A configured image whose cluster cannot be reached refuses to
-		// start rather than run a hub that silently never scales.
-		spotCfg, spotOn, err := api.ParseSpotConfig(os.Getenv, srv.FleetPublicURL)
-		if err != nil {
-			return err
-		}
-		if spotOn {
-			sc, err := api.NewSpotController(srv, spotCfg)
-			if err != nil {
-				return fmt.Errorf("CCQUOTA_FLEET_SPOT_IMAGE is set but the Kubernetes API is not usable: %w", err)
-			}
-			srv.Spot = sc
-		} else {
-			log.Printf("fleet: SPOT nodes off (set CCQUOTA_FLEET_SPOT_IMAGE to turn them on)")
-		}
 	}
 	// The GitHub sign-in's token exchange through the relay
 	// (claude-fleet#3392). After the session pass key: it signs the pass.
@@ -979,9 +963,9 @@ func runHub(args []string) error {
 		return err
 	}
 	srv.MCP = mcp.Handler(srv)
-	// The settings an admin changes on the web (claude-fleet#1986): the one
-	// old value still read is a SPOT image (fleet.spot), copied into the
-	// database once at a real start. --public-badges,
+	// The settings an admin changes on the web (claude-fleet#1986): an old
+	// value still read is copied into the database once at a real start
+	// (none since fleet.spot left, claude-fleet#4797). --public-badges,
 	// CCQUOTA_FLEET_AUTO_ASSIGN and CCQUOTA_FLEET_PRINCIPAL_LOGINS are no
 	// longer read (claude-fleet#2087): hub.public_badges, fleet.auto_assign and
 	// user.<id>.machine_login are the only source.
@@ -1014,9 +998,6 @@ func runHub(args []string) error {
 	// new requests to the admins — WeChat, else a mail. Every replica runs
 	// it; a notice is claimed with a lease, so it goes out once.
 	go srv.RunNotify(ctx)
-	if srv.Spot != nil {
-		go srv.Spot.Run(ctx)
-	}
 	if srv.Fleet {
 		// Node-lost / lease-conflict alerts (claude-fleet#1630).
 		srv.NodeLostAfter = api.NodeLostAfterFromEnv()
@@ -1658,29 +1639,6 @@ func runAgent(args []string) error {
 	if !*once {
 		log.Printf("ccquota agent %s -> %s (scan every %s)", Version, *hub, scanEvery)
 	}
-	if a.Ephemeral() && !*once {
-		// SIGTERM on a SPOT node is the kubelet's warning (the pod's
-		// terminationGracePeriodSeconds): tell the hub, move idle sessions
-		// off, THEN stop. A second signal stops at once.
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		sigs := make(chan os.Signal, 2)
-		signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-		go func() {
-			sig := <-sigs
-			log.Printf("reclaim: %s — this is a SPOT node; telling the hub and moving idle sessions off (up to %s). A second signal stops at once", sig, reclaimTimeout)
-			done := make(chan struct{})
-			go func() { a.Reclaim(ctx); close(done) }()
-			select {
-			case <-done:
-			case <-sigs:
-				log.Printf("reclaim: second signal — stopping now")
-			}
-			cancel()
-		}()
-		return a.Run(ctx)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return a.Run(ctx)
@@ -1747,12 +1705,6 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		FleetRoutes:       nodeRoutes,
 		FleetTailnetRoute: fleet && getenv("CCQUOTA_FLEET_NODE_TAILNET") != "0",
 		FleetLANRoute:     fleet && getenv("CCQUOTA_FLEET_NODE_LAN") != "0",
-		// A SPOT node (claude-fleet#1428): the join wrote
-		// CCQUOTA_FLEET_NODE_KIND=ephemeral from the hub's answer. SIGTERM is
-		// then the cloud taking the machine, not a restart.
-		FleetEphemeral:      fleet && getenv("CCQUOTA_FLEET_NODE_KIND") == "ephemeral",
-		FleetReclaimCmd:     getenv("CCQUOTA_FLEET_RECLAIM_CMD"),
-		FleetReclaimTimeout: reclaimTimeout,
 		// The state nudge (claude-fleet#1481): the fleet's conf dir when
 		// the environment names one, else the agent's default under home.
 		FleetNudgePath: confPath("global/hub-nudge"),
@@ -1761,18 +1713,6 @@ func agentFleetConfig(getenv func(string) string, nodeRoutes []control.NodeRoute
 		FleetProbePath:   confPath("node-probe.json"),
 	}
 }
-
-// reclaimTimeout is how long a SPOT node's agent spends moving sessions off
-// after SIGTERM: CCQUOTA_FLEET_RECLAIM_SECS, default 240 — inside the pod's
-// default 300s grace, leaving the kubelet's SIGKILL a margin.
-var reclaimTimeout = func() time.Duration {
-	if v := os.Getenv("CCQUOTA_FLEET_RECLAIM_SECS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return time.Duration(n) * time.Second
-		}
-	}
-	return 240 * time.Second
-}()
 
 // bindHosts is the list of hosts in a comma-separated --addr. The tailnet
 // identity gate treats these as "self" and never trusts them: the hub's own

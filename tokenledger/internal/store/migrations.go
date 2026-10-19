@@ -30,6 +30,63 @@ type migration struct {
 var migrations = []migration{
 	{ID: 1, Name: "remove-company-business", Run: removeCompanyBusiness},
 	{ID: 2, Name: "hub-users-principal", Run: hubUsersPrincipal},
+	{ID: 3, Name: "remove-spot-nodes", Run: removeSpotNodes},
+}
+
+// spotSettings are the fleet settings only the SPOT nodes read: the switch,
+// the placement weight, the start's copy mark of the old image variable, and
+// a request one replica handed the leader.
+var spotSettings = []string{"fleet.spot", "fleet.spot_weight", "hub.legacy_migrated.fleet.spot", "spot.want"}
+
+// removeSpotNodes is migration 3 (claude-fleet#4797): the SPOT execution
+// nodes are gone, so their ledger fleet_spot_nodes is dropped and their
+// settings deleted. detail counts both, and the endpoints still marked
+// ephemeral (left as they are: nothing reads node_kind any more). Rolling
+// back is the previous image, which recreates the table empty at its start,
+// plus hub-deploy's snapshot for the rows.
+func removeSpotNodes(d dialect, tx *sql.Tx) (map[string]int64, error) {
+	done := map[string]int64{}
+	if ok, err := d.tableExists(tx, "fleet_spot_nodes"); err != nil {
+		return nil, err
+	} else if ok {
+		var n int64
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM fleet_spot_nodes`).Scan(&n); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(`DROP TABLE fleet_spot_nodes`); err != nil {
+			return nil, fmt.Errorf("drop fleet_spot_nodes: %w", err)
+		}
+		done["dropped.fleet_spot_nodes"] = n
+	}
+	if ok, err := d.tableExists(tx, "fleet_settings"); err != nil {
+		return nil, err
+	} else if ok {
+		in := "'" + strings.Join(spotSettings, "', '") + "'"
+		res, err := tx.Exec(`DELETE FROM fleet_settings WHERE key IN (` + in + `)`)
+		if err != nil {
+			return nil, fmt.Errorf("delete the SPOT settings: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			done["deleted.fleet_settings"] = n
+		}
+	}
+	cols, err := d.columns(tx, "endpoints")
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range cols {
+		if c.name != "node_kind" {
+			continue
+		}
+		var n int64
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM endpoints WHERE node_kind = 'ephemeral'`).Scan(&n); err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			done["kept.ephemeral_endpoints"] = n
+		}
+	}
+	return done, nil
 }
 
 // RemovedSources are the usage sources migration 1 deleted (claude-fleet#1987):

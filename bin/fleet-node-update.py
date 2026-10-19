@@ -1847,7 +1847,8 @@ class Updater(object):
     def _tick(self):
         # Image ownership wins BEFORE recovering any persisted partial switch.
         if env("FLEET_NODE_UPDATE_OWNER", "hub") == "image":
-            print("image-managed: runtime updates belong to Kubernetes")
+            print("image-managed: runtime updates belong to Kubernetes (its pod is rolled onto a new image; "
+                  "`fleet doctor --machine` says when it is behind stable)")
             return 0
         ph = self.st["phase"]
         if ph == "switching":
@@ -1959,6 +1960,29 @@ def runtime_usage(p):
     rc, out, _ = run(["du", "-sk"] + dirs, timeout=120)
     kb = sum(int(l.split()[0]) for l in out.splitlines() if l.split() and l.split()[0].isdigit())
     return len(dirs), kb * 1024
+
+
+def image_row(p, cur):
+    """issue #4791: an image-owned runtime (FLEET_NODE_UPDATE_OWNER=image — a
+    person's pod) runs no update task, so it reaches stable only when its pod is
+    rolled onto a newer image (roll-user-pod, #4174). In a cluster with no
+    provisioner nothing rolls it: u-3wnuf3v654 sat on c48dd07 for days and every
+    new Codex task stayed `starting`. Said here against the hub's stable — WARN,
+    never FAIL (nothing here can fix it). Not image-owned ⇒ no row."""
+    if env("FLEET_NODE_UPDATE_OWNER", "hub") != "image":
+        return None
+    target, src = Updater(p).target()
+    if not target or not SHA_RE.match(target):
+        return ("WARN", "image", "runtime %s is the image's (no update task here); stable unknown: %s"
+                % (cur[:12], src))
+    if target == cur:
+        return ("PASS", "image", "runtime %s is the image's and stable (%s)" % (cur[:12], src))
+    host = socket.gethostname().split(".")[0] or "<pod>"
+    return ("WARN", "image", "runtime %s is the image's and nothing in this pod updates it; stable is %s (%s) — "
+            "the pod must be rolled onto %s's node image: the hub's roll-user-pod (needs the cluster's "
+            "provisioner), or by hand `render.py --image-patch --image <node image of %s>` | "
+            "`kubectl patch deploy %s --type strategic -p …`" % (
+                cur[:12], target[:12], src, target[:7], target[:7], host))
 
 
 def versions_row(p):
@@ -2095,6 +2119,9 @@ def doctor_rows(p):
         rows.append(hr)
     rows.append(shell_row(p, st))
     rows.append(versions_row(p))
+    ir = image_row(p, cur)
+    if ir:
+        rows.append(ir)
     # the drill's deliberate failure (issue #2336): a release carrying this marker
     # fails its own doctor, so the updater must roll it back. On trunk, so a
     # non-managed install that follows stable onto it moves forward off it again.

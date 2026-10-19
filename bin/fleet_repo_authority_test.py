@@ -51,9 +51,14 @@ class PoolAuthorityTests(unittest.TestCase):
         return subprocess.check_output(["tmux", "-S", str(self.socket), *arguments],
                                        text=True, stderr=subprocess.PIPE).strip()
 
-    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False):
+    def supervise(self, session, expected, hint=None, refuse=False, no_receipt=False, spelled=None,
+                  old_hub=False):
         worker = self.identities[expected] + "/" + self.fid
         pane = self.panes[session]
+        if spelled:
+            # The window keeps the registered spelling; the hub answers canonical.
+            (self.conf / "fleets" / session / "conf").write_text('FLEET_REPO="%s"\n' % spelled)
+            self.tm("set-option", "-w", "-t", pane, "@repo", spelled)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("FLEET_") and key not in ("TMUX", "TMUX_PANE")}
         environment.update(HOME=str(self.root), FLEET_CONF_DIR=str(self.conf),
@@ -79,8 +84,13 @@ class PoolAuthorityTests(unittest.TestCase):
             elif action == "stopped":
                 self.assertEqual(fields["native_identity"], native)
                 self.assertTrue(fields["execution_stopped"])
+            elif action == "unobserved":
+                self.assertEqual(fields, dict(worker_id=worker))
+                if old_hub:
+                    raise migration.ticket.Fail(4, "HTTP 409: invalid")
+            phase = dict(begin='starting', unobserved='abandoned').get(action, action)
             return dict(repo=repo, reservation=key, worker_id=worker, owner='owner',
-                        endpoint_id='node', phase='starting' if action == 'begin' else action)
+                        endpoint_id='node', phase=phase)
 
         with patch.dict(os.environ, environment, clear=True), \
                 patch.object(migration, "start_call", side_effect=start), \
@@ -101,7 +111,10 @@ class PoolAuthorityTests(unittest.TestCase):
             # reason, never a JSON parse error, and no stopped claim.
             self.assertIn("no local native receipt", err.getvalue())
             self.assertNotIn("Expecting value", err.getvalue())
-            self.assertEqual(writes, ["reserve", "begin"])
+            # ...and the hub is told the start never ran (issue #4792), so it
+            # does not stay `starting` for ever; an older hub leaves it open.
+            self.assertEqual(writes, ["reserve", "begin", "unobserved"])
+            self.assertIn("start left open" if old_hub else "start closed as abandoned", err.getvalue())
             return
         self.assertEqual(writes, ["reserve", "begin", "cancel" if refuse else "stopped"])
         self.assertFalse((self.conf / "fleets/fixture-pool/conf").exists())
@@ -126,8 +139,16 @@ class PoolAuthorityTests(unittest.TestCase):
         self.tm("move-window", "-s", "fixture-pool:", "-t", "fixture:")
         self.supervise("fixture-pool", "fixture", "fixture")
 
+    def test_registered_spelling_with_capitals_is_canonical_in_context(self):
+        # Issue #4789: a repo registered as Org/A put "Org/A" in the context, the
+        # admission said "org/a", and every start stayed unobserved.
+        self.supervise("fixture", "fixture", spelled="Org/A")
+
     def test_missing_receipt_says_why(self):
         self.supervise("fixture", "fixture", no_receipt=True)
+
+    def test_missing_receipt_with_an_older_hub_is_said(self):
+        self.supervise("fixture", "fixture", no_receipt=True, old_hub=True)
 
     def test_hub_refusal_remains_fatal_after_pool_resolution(self):
         self.supervise("fixture-pool", "fixture", "fixture", refuse=True)
@@ -351,6 +372,25 @@ class RepoAuthorityTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 migration.observe_native(dict(hook_event_name="SessionStart", session_id="11111111-1111-4111-8111-111111111111"))
             write.assert_not_called()
+
+    def test_native_hook_matches_admission_by_canonical_repo(self):
+        # Issue #4789: a context in the registered spelling (Org/A) is the same
+        # repo as the hub's canonical admission (org/a); a different repo is not.
+        sid = "11111111-1111-4111-8111-111111111111"
+        native = dict(pid=456, birth="birth", executable="/bin/claude", actual_provider="claude")
+        for spelled, admitted, observed in (("Org/A", "org/a", True), ("Org/B", "org/a", False)):
+            c = dict(repo=spelled, worker_id="fleet/session", reservation="start", supervisor=123)
+            admission = dict(repo=admitted, worker_id="fleet/session", reservation="start")
+            with patch.dict(os.environ, {"FLEET_AUTHORITY_CONTEXT": json.dumps(c), "TMUX_PANE": "%1",
+                                         "FLEET_AUTHORITY_ADMISSION": json.dumps(admission)}), \
+                    patch.object(migration.launch, "native_parent", return_value=native), \
+                    patch.object(migration.launch, "root_native", return_value=True), \
+                    patch.object(migration, "start_call",
+                                 side_effect=migration.ticket.Fail(4, "reached observe")) as write:
+                with self.assertRaisesRegex((ValueError, migration.ticket.Fail),
+                                            "reached observe" if observed else "admission context differs"):
+                    migration.observe_native(dict(hook_event_name="SessionStart", session_id=sid))
+                self.assertEqual(write.called, observed)
 
     def test_supervisor_confirms_only_its_own_observed_native_stop(self):
         c = dict(repo="org/a", worker_id="fleet/session", reservation="start", supervisor=os.getpid())

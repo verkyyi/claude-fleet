@@ -1,7 +1,6 @@
 // chat.ts — the one conversation (issue #3567), as assistant-ui's external store
 // (issue #3637). The server's protocol is unchanged: GET /api/conversation for
-// the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer
-// — on the website the same four under the entry's /v1/chat (issue #3646, API).
+// the whole history, POST /api/turn streams NDJSON items, /api/stop, /api/answer.
 // This file only turns those items into ThreadMessageLike[] for the components.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -10,7 +9,6 @@ import {
   type RespondToToolApprovalOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { API, SITE, chatFetch } from "@/site";
 import { browserContext, primeBrowser } from "@/browser";
 
 type Item =
@@ -40,10 +38,6 @@ type Answered = { approved: boolean; answers?: Record<string, { optionIds: strin
 export type Model = { id: string; label: string };
 // The pool's per-person budget, as the service says it (fleet.person_budget).
 export type Budget = { blocked: boolean; msg?: string; until?: string };
-// Why there is no conversation to show: the entry's refusal (issue #3645) —
-// no_home, home_down, operator, … — or any other read that failed.
-export type Gate = { code: string; msg: string };
-const GATES = new Set(["no_home", "home_down", "operator", "signin", "forbidden", "not_yours"]);
 
 const H = { "X-Fleet-Webchat": "1", "Content-Type": "application/json" };
 type Part = Exclude<ThreadMessageLike["content"], string>[number];
@@ -152,9 +146,7 @@ async function readLines(r: Response, onItems: (items: Record<string, unknown>[]
   }
 }
 
-// blockedBy: a limit the page knows of before the service refuses a turn (the
-// website reads the person's own off /v1/me/usage); onTurnEnd: a turn ended here.
-export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budget | null; onTurnEnd?: () => void } = {}) {
+export function useFleetChat() {
   const [items, setItems] = useState<Item[]>([]);
   const [asks, setAsks] = useState<Ask[]>([]);
   const [answered, setAnswered] = useState<Map<string, Answered>>(new Map());
@@ -164,10 +156,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
   const [model, setModelState] = useState("");
   const [resume, setResume] = useState<{ id: string; cwd: string } | null>(null);
   const [notice, setNotice] = useState("");
-  const [gate, setGate] = useState<Gate | null>(null);
   const [budget, setBudget] = useState<Budget>({ blocked: false });
-  const turnEnd = useRef(onTurnEnd);
-  turnEnd.current = onTurnEnd;
   const turnId = useRef<string | null>(null);
   const streaming = useRef(false);
   const transport = useRef(new AbortController());
@@ -179,20 +168,16 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     const signal = transport.current.signal;
     if (signal.aborted || !navigator.onLine || streaming.current) return;
     const read = ++historyRead.current;
-    const r = await chatFetch(`${API}/conversation`, { headers: H, signal }).catch(() => null);
+    const r = await fetch("/api/conversation", { headers: H, signal }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     // A newer read or local turn owns the transcript, even after that turn ends.
     if (signal.aborted || read !== historyRead.current) return;
     if (!r || !r.ok) {
-      if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
-      const code = String(j.code || "");
-      if (SITE && GATES.has(code)) setGate({ code, msg: String(j.error || "") });
-      else setNotice(j.error || "读不到对话");
+      setNotice(j.error || "读不到对话");
       setLoaded(true);
       return;
     }
     setNotice("");
-    setGate(null);
     setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);
     setModelState((m) => {
@@ -237,10 +222,9 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     let lost = false;
     try {
       await Promise.race([primeBrowser(), new Promise((r) => setTimeout(r, 300))]);
-      const r = await chatFetch(`${API}/turn`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, client: browserContext() }) });
+      const r = await fetch("/api/turn", { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, client: browserContext() }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
         setItems((xs) => [...xs, { t: "error", msg: String(j.error || r.status) }]);
         return;
       }
@@ -269,7 +253,6 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
       streaming.current = false;
       setBusy(false);
       turnId.current = null;
-      turnEnd.current?.();
     }
     // the line dropped; the turn goes on — pick it back up. A finished turn
     // reloads too: the transcript is the record, the stream was only its preview.
@@ -279,7 +262,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
   const onCancel = useCallback(async () => {
     if (!turnId.current) return;
     try {
-      const r = await chatFetch(`${API}/stop`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ turn: turnId.current }) });
+      const r = await fetch("/api/stop", { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ turn: turnId.current }) });
       if (!r.ok) throw new Error("stop refused");
     } catch { await load(); setNotice("无法确认是否已停止，请查看对话后重试。"); }
   }, [load]);
@@ -302,7 +285,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
       payload = { allow: o.approved };
     }
     try {
-      const r = await chatFetch(`${API}/answer`, { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ rid: a.rid, ...payload }) });
+      const r = await fetch("/api/answer", { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ rid: a.rid, ...payload }) });
       if (!r.ok) throw new Error("answer refused");
       setAnswered((m) => new Map(m).set(a.rid, { approved: a.kind === "question" ? true : o.approved, ...(answers ? { answers } : {}) }));
     } catch { await load(); setNotice("无法确认回答是否送达，请查看对话后重试。"); }
@@ -319,7 +302,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     const t = window.setTimeout(load, ms + 1000);
     return () => clearTimeout(t);
   }, [own, budget.until, load]);
-  const stop = own ? budget : blockedBy?.blocked ? blockedBy : null;
+  const stop = own ? budget : null;
 
   const runtime = useExternalStoreRuntime<Msg>({
     messages,
@@ -332,5 +315,5 @@ export function useFleetChat({ blockedBy = null, onTurnEnd }: { blockedBy?: Budg
     onRespondToToolApproval,
   });
 
-  return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load };
+  return { runtime, models, model, setModel, resume, notice, budget: stop };
 }

@@ -8,7 +8,7 @@
 
 | 场景 | 谁 | 做什么 |
 |---|---|---|
-| **计划下线** mac-b | 运营者，在 mac-b 的任意一个 fleet 窗格 | ① `fleet-node-maintenance.sh enter --reason '升级'` ② 每个登录 `fleet-spot-evacuate.sh` ③ 看 `/nodes`：mac-b 会话数降到 0 或只剩「工作中」 ④ 关机 |
+| **计划下线** mac-b | 运营者，在 mac-b 的任意一个 fleet 窗格 | ① `fleet-node-maintenance.sh enter --reason '升级'` ② 每个登录 `fleet-evacuate.sh` ③ 看 `/nodes`：mac-b 会话数降到 0 或只剩「工作中」 ④ 关机 |
 | 期间 | 每位同事，在自己电脑 | `fleet` ——入口自动选 mac-a；`fleet mac-a` 指名也行 |
 | **恢复** | 运营者，在 mac-b | 开机 → agent 自己回连，`/nodes` 上 mac-b 从「失联」回到「维护中」→ 确认 `fleet-doctor` 全绿 → `fleet-node-maintenance.sh leave` |
 | **意外下线** mac-b | 每位同事 | 什么都不用做：`fleet` 会落到 mac-a；mac-b 上的会话入口标「失联」，30 分钟后它们的认领释放，**不自动重派**——你在 mac-a 上 `fleet-history`/重新 `/fleet-claim` 把要紧的接着做 |
@@ -62,8 +62,8 @@
 **每个登录各自跑一次**（它只搬本登录的 fleet；运营者可以 `sudo -u <login>` 逐个代跑，或各人自己在自己的 fleet 窗格里跑）：
 
 ```sh
-~/.claude/fleet/bin/fleet-spot-evacuate.sh --dry-run    # 先看计划：哪些会动、去哪
-~/.claude/fleet/bin/fleet-spot-evacuate.sh              # 真搬：每个 fleet `fleet-move.sh --rebalance --max all`
+~/.claude/fleet/bin/fleet-evacuate.sh --dry-run    # 先看计划：哪些会动、去哪
+~/.claude/fleet/bin/fleet-evacuate.sh              # 真搬：每个 fleet `fleet-move.sh --rebalance --max all`
 # evacuate: moved 7, left 2
 ```
 
@@ -366,7 +366,7 @@ Codex 的刷新凭证（refresh token）**一次性**：谁刷新，服务端就
 |---|---|
 | 标 / 撤 / 看本机维护中 | `fleet-node-maintenance.sh enter [--reason …]` · `leave` · `status`（本机 node 令牌，`POST/GET /v1/node/maintenance`） |
 | 运营者标任意机器 | `/nodes` 页卡片按钮；或 `PUT /v1/fleet/settings {"key":"fleet.node_maintenance.mac-b","value":"原因"}`，`value:""` 撤 |
-| 搬空闲会话到别台 | `fleet-spot-evacuate.sh [--dry-run]`（每个登录一次）= `fleet-move.sh --rebalance --max all` |
+| 搬空闲会话到别台 | `fleet-evacuate.sh [--dry-run]`（每个登录一次）= `fleet-move.sh --rebalance --max all` |
 | 搬一个指定会话 | `fleet-move.sh <window> --via hub --to mac-a` |
 | 从外面（手机 / 没 Tailscale）连 | 钥匙页 `<入口>/fleet/keys` · Termius 四样 · 体检 `entry` / `public` 行 · 第 5⅞⅞⅞ 节 |
 | 进某台机器 | `fleet`（入口选）· `fleet mac-a`（指名）· `fleet connect --print` 看选了哪条线 |

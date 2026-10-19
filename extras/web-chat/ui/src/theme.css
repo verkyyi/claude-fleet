@@ -5,7 +5,3 @@
  * Only what is this page's own stays below.
  */
 @import "../../../fleet-theme/theme.css";
-
-/* the website's /chat (issue #3646): its buttons are the site's capsules —
- * all but a two-line answer card (an option with its description) */
-html[data-site] [data-slot="button"]:not(.flex-col) { border-radius: 9999px; }

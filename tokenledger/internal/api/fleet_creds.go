@@ -132,12 +132,12 @@ func credsepGated(credsep string) bool {
 // counts. It mirrors handleNodeCredentials' refusals before the credsep gate,
 // plus what is never a person's node login: a lost row, a machine link, a
 // cluster pod (a person's u-<nonce> or the shared workers: their sessions take
-// the central route, nothing lands on the node), a SPOT node, a login that only
+// the central route, nothing lands on the node), a login that only
 // coordinates (a client computer: 登录即认人, compute off), an untrusted
 // machine, a system account (root, _<name>), a login with no active fleet
 // account (a deleted user: no_principal) or a revoked one.
 func (s *Server) leaseServes(n NodeView) bool {
-	if n.Status == "lost" || n.MachineLink || n.UserPod || n.Kind == store.NodeKindEphemeral ||
+	if n.Status == "lost" || n.MachineLink || n.UserPod ||
 		isClusterPodMachine(n.Hostname) || n.ComputeOff || n.Trust != TrustTrusted || systemLogin(n.OSUser) {
 		return false
 	}

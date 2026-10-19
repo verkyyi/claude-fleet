@@ -262,18 +262,6 @@ func (n *nodeConns) drop(id string, c *nodeConn) {
 	}
 }
 
-// dropAll closes and forgets an endpoint's connection, whichever it is: a
-// released SPOT node's token is retired, so its link must not outlive it
-// (claude-fleet#1428).
-func (n *nodeConns) dropAll(id string) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if c := n.conns[id]; c != nil {
-		c.wire.close(websocket.StatusGoingAway, "node released")
-		delete(n.conns, id)
-	}
-}
-
 func (n *nodeConns) get(id string) *nodeConn {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -807,12 +795,6 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				}
 				first = false
 			}()
-			if s.Spot != nil {
-				// A SPOT node's first beat makes it online; a beat with
-				// sessions — or an unknown count, #1465 — restarts its
-				// idle clock (claude-fleet#1428).
-				s.Spot.Beat(ep.ID, hb.SessionsCount(), now)
-			}
 			if nc.canRelay {
 				// The worker map, and any relay whose push went
 				// unanswered (claude-fleet#1421).
@@ -1005,10 +987,6 @@ type NodeView struct {
 	// Installs is the hub's judgement.
 	Installs *control.Installs `json:"installs,omitempty"`
 
-	// Kind is fixed, or ephemeral for a SPOT node the hub started
-	// (claude-fleet#1428); Spot is that node's ledger state while it lives.
-	Kind string `json:"kind"`
-	Spot string `json:"spot,omitempty"`
 	// Maintenance is the 维护中 record when the machine is flagged
 	// (claude-fleet#1427); Status then reads maintenance while it is heard.
 	Maintenance *Maintenance `json:"maintenance,omitempty"`
@@ -1120,8 +1098,6 @@ type MachineView struct {
 	// 「机器」 page and 我的机器 list hosts, 我的设备 / 全部设备 the clients.
 	// machineRole is its one judge.
 	Role string `json:"role"`
-	// Kind is ephemeral when the machine is a SPOT node (claude-fleet#1428).
-	Kind string `json:"kind"`
 	// Maintenance is the 维护中 record when the operator flagged the machine
 	// (claude-fleet#1427): Status reads maintenance while any login is heard,
 	// lost when none is.
@@ -1172,9 +1148,6 @@ type NodesSnapshot struct {
 	At       time.Time     `json:"at"`
 	Machines []MachineView `json:"machines"`
 	Nodes    []NodeView    `json:"nodes"`
-	// Spot is the SPOT nodes block (claude-fleet#1428): absent on a hub
-	// that never started one.
-	Spot *SpotSummary `json:"spot,omitempty"`
 	// Account is a signed-in person's login while they have no active one
 	// (claude-fleet#2069): opening / failed / none. Absent for the operator
 	// and for anyone already holding a login.
@@ -1209,20 +1182,8 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		s.nodesRowsHook()
 	}
 	out := NodesSnapshot{At: now.UTC(), Machines: []MachineView{}, Nodes: []NodeView{}}
-	// Node kinds and SPOT states (claude-fleet#1428): both tables are empty
-	// on a hub that never started a SPOT node, and the reads are one query
-	// each.
-	kinds, _ := s.Store.EphemeralEndpoints()
 	// Each endpoint's enrolled machine (claude-fleet#2214, #3300): one read for the roster.
 	epTrust, _, _ := s.Store.EndpointTrusts()
-	spotState := map[string]string{}
-	if spots, err := s.Store.SpotNodes(false, 0); err == nil {
-		for _, sp := range spots {
-			if sp.EndpointID != "" {
-				spotState[sp.EndpointID] = sp.State
-			}
-		}
-	}
 	// 维护中 (claude-fleet#1427): the flag is a setting, read once per roster;
 	// an empty settings table leaves every status as the heartbeat said.
 	// Trust (claude-fleet#1968) reads the same table, migrated once first.
@@ -1264,11 +1225,6 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			continue
 		}
 		v := nodeView(n, now)
-		v.Kind = store.NodeKindFixed
-		if k := kinds[n.EndpointID]; k != "" {
-			v.Kind = k
-		}
-		v.Spot = spotState[n.EndpointID]
 		et, known := epTrust[n.EndpointID]
 		if !known {
 			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
@@ -1313,7 +1269,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		m := machines[v.Hostname]
 		if m == nil {
 			zero := 0
-			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Kind: v.Kind, Sessions: &zero, Repos: []string{}}
+			m = &MachineView{Hostname: v.Hostname, Alias: machineAlias(v.Hostname, aliases), Status: "lost", Sessions: &zero, Repos: []string{}}
 			machines[v.Hostname] = m
 			order = append(order, v.Hostname)
 		}
@@ -1417,7 +1373,6 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		machines[h].LoadHist = s.loadHist.series(h, now)
 		out.Machines = append(out.Machines, *machines[h])
 	}
-	out.Spot = s.spotSummary(now, out.Nodes)
 	return out, nil
 }
 

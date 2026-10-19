@@ -115,7 +115,7 @@ func TestMaintenanceOffAddsNothing(t *testing.T) {
 			t.Fatalf("fleet_sessions nodes: %v; want every machine online", sess["nodes"])
 		}
 	}
-	eff := putSetting(t, h, SpotWeightKey, "", 200)["effective"].(map[string]any)
+	eff := putSetting(t, h, "fleet.node_cap.mac-c", "", 200)["effective"].(map[string]any)
 	for k := range eff {
 		if strings.HasPrefix(k, NodeMaintenancePrefix) {
 			t.Fatalf("effective settings carry %s with nothing set", k)

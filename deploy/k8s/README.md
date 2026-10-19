@@ -81,7 +81,7 @@ Once it goes, the deploy job:
    the hub as far as serving and stops there: it runs the pending migrations,
    then every startup check the hub refuses to start without — the GitHub
    sign-in pair (one half ⇒ refuse), the SSH CA and credential-vault keys,
-   `--pricing`, the routes, the SPOT and
+   `--pricing`, the routes and the
    refresh settings — and exits 0 without binding a port or touching the live
    database. A Secret key the env names but the Secret lacks fails the
    container's own start (CreateContainerConfigError) — red too. Anything red

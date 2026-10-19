@@ -9,7 +9,7 @@
 # What 维护中 does (docs/dev/MULTI-MACHINE-OPS.md is the runbook this is one step
 # of): the hub keeps placing nothing new on a flagged machine — not a spawn's
 # `--node auto`, not a start that names it, not a `move plan` — so
-# `fleet-spot-evacuate.sh` (= `fleet-move.sh --rebalance --max all` per fleet)
+# `fleet-evacuate.sh` (= `fleet-move.sh --rebalance --max all` per fleet)
 # run right after finds every idle session a better home, and the sessions
 # still working here finish on their own. The flag is the hub's record, not
 # this machine's: it survives the outage and a hub restart, the machine comes

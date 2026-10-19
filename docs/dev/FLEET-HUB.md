@@ -1497,7 +1497,7 @@ provider's answer verbatim (`oauth_refresh_result`). The hub unseals, saves and
 issues exactly as before.
 
 - The node chosen is a connected admin agent that offered the capability, online
-  by heartbeat, not a SPOT pod, least loaded per core; it is asked once, never
+  by heartbeat, least loaded per core; it is asked once, never
   twice (a refresh token is single-use).
 - The node keeps nothing: form and answer stay in memory, and its log carries
   only provider, HTTP status and duration — no token text, ever.

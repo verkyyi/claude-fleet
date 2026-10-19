@@ -105,6 +105,10 @@
 #                         and a release whose new part fails the doctor
 #   update-goes-back      bin/fleet-node-update.py backward (#4671): the target the hub
 #                         names is older (a lower seq) than what the machine runs
+#   user-pod-no-roll-road bin/fleet-node-update.py image_row (#4791): a person's pod
+#                         runs the image's runtime and no update task, and nothing
+#                         rolls it (no provisioner in its cluster) — the doctor says
+#                         how far behind stable it is and how to roll it
 #   node-update-stale-fail  bin/fleet-node-update.py key_row + skip_retry (#2906): one
 #                         torn read an older updater never cleared rolled every new
 #                         release back as a «new FAIL» and skipped each sha for good
@@ -1227,6 +1231,43 @@ drill_update_goes_back() {
   [ "$(cur)" = "$V1" ] || { WHY="FLEET_NODE_UPDATE_BACKWARD=1 did not take the operator back"; return 1; }
   SECS=$(since "$t0")
   WHAT="目标比正在跑的旧（seq 4 < 5）：拒切、记 refused（历史一行）、status --check 报错，机器留在新版；FLEET_NODE_UPDATE_BACKWARD=1 才退"
+}
+
+# user-pod-no-roll-road (#4791): u-3wnuf3v654 ran c48dd07 for days after stable
+# moved on — its runtime is the image's (FLEET_NODE_UPDATE_OWNER=image, no update
+# task) and its cluster had no provisioner, so the hub's roll-user-pod never
+# reached it and every new Codex task stayed `starting`. Nothing said so: the
+# machine doctor now does, against the hub's stable.
+drill_user_pod_no_roll_road() {
+  CAP=20
+  local sb t0 u tk out
+  sb="$WORK/noroll"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons" "$sb/bin"
+  cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
+  python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; return 1; }
+  V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2)
+  python3 "$tk" --make-release "$sb/rel" "$V1" '{"seq":4}' || { WHY="fixtures not built"; return 1; }
+  printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
+  printf '{"alice":{"uid":%s,"gid":%s,"home":"%s"}}\n' "$(id -u)" "$(id -g)" "$sb/Users/alice" > "$sb/passwd.json"
+  printf 'CCQUOTA_HUB_URL=https://hub.invalid\n' > "$sb/db/machine.env"; printf 'ed25519 AAAA\n' > "$sb/db/release.pub"
+  upd() { env FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/root/current" \
+      FLEET_NODE_DAEMON_DIR="$sb/LaunchDaemons" FLEET_NODE_TABLE="$sb/table.json" FLEET_NODE_PASSWD="$sb/passwd.json" \
+      FLEET_NODE_TEST=1 FLEET_NODE_LAUNCHCTL='' FLEET_NODE_CCQUOTA="$sb/ccquota" FAKE_REL="$sb/rel" \
+      FLEET_NODE_UPDATE_PLATFORM=darwin-arm64 FLEET_NODE_UPDATE_SETTLE=0 FLEET_NODE_UPDATE_LIB=/nonexistent "$@"; }
+  upd FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" tick >/dev/null 2>&1
+  [ "$(basename "$(readlink "$sb/root/current")")" = "$V1" ] || { WHY="the pod's runtime V1 never landed"; return 1; }
+  t0=$(now)
+  out=$(upd FLEET_NODE_UPDATE_OWNER=image FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" doctor 2>&1)
+  case "$out" in *WARN*image*"${V1:0:12}"*"nothing in this pod updates it"*"${V2:0:12}"*roll-user-pod*image-patch*) ;;
+    *) WHY="a pod behind stable with no roll was not said: $(printf '%s' "$out" | grep -E 'image|FAIL' | head -3 | tr '\n' '|')"; return 1 ;; esac
+  out=$(upd FLEET_NODE_UPDATE_OWNER=image FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" tick 2>&1)
+  case "$out" in *"fleet doctor --machine"*) ;; *) WHY="the image-managed tick does not point at the doctor: $out"; return 1 ;; esac
+  out=$(upd FLEET_NODE_UPDATE_OWNER=image FLEET_NODE_UPDATE_TARGET="$V1" python3 "$u" doctor 2>&1)
+  case "$out" in *PASS*image*"is the image's and stable"*) ;; *) WHY="a pod on stable was not PASS: $(printf '%s' "$out" | grep image | head -2 | tr '\n' '|')"; return 1 ;; esac
+  out=$(upd FLEET_NODE_UPDATE_TARGET="$V2" python3 "$u" doctor 2>&1)
+  case "$out" in *" image "*) WHY="a machine whose updater runs grew an image row"; return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="镜像归属的运行时（个人 pod，没有更新任务）落后 hub 的 stable：机器体检 image 行 WARN，写出两边的版本和滚动的两条路（入口 roll-user-pod / render.py --image-patch + kubectl patch）；在 stable 上 PASS；自己会更新的机器没有这一行"
 }
 
 # node-update-stale-fail (#2906): mac-c sat on ee7099a for hours — a torn read

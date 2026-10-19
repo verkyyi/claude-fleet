@@ -305,8 +305,7 @@ with no schedule, a plain-text question at Stop — reads `done`. The screen
 classifier that used to send the pane to a model to guess it (`classify-sessions.sh`,
 its `CLASSIFY_BACKEND` haiku / jev / shadow backends, the Stop hook
 `classify-hook.sh`) was off by default from #4551 and is deleted (issue #2543);
-`classify-hook.sh` stays one version as a quiet exit-0 shell for an older session's
-Stop hook table. Only sourced states take the default path: the agent's 7501
+`classify-hook.sh` stayed one version as a quiet exit-0 shell and left with #4798. Only sourced states take the default path: the agent's 7501
 report, the hooks, recorded waits, native status and pending requests.
 
 ## The floor — native-truth reconcile (#806)

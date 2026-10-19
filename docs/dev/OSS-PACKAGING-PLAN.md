@@ -83,7 +83,7 @@
 >     `bin/fleet-conf-example.sh` 从它生成，只列常用项（约 2 KB）。
 >   - 守住：`bin/docs-links-selftest.sh` 每个 PR 读一遍所有文档链接；
 >     `conf-surface-selftest.sh` 核对短样例与全量清单一致。
->   - 以后再拆的：`tokenledger/`（见 ①）；`extras/managed-node`、`extras/spot-node`
+>   - 以后再拆的：`tokenledger/`（见 ①）；`extras/managed-node`
 >     这类只给托管运营者用的部件，随运维插件（#3586 / #3587）再定。
 > - **③ 团队层不走 git 仓库模型**：已经做成入口发的团队层（`/v1/fleet/team-bundle`，
 >   #1726，新版本由入口推送 #1899）——fleet 默认 < 团队 < 本机，手改的永远赢；
