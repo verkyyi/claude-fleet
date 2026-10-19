@@ -13,7 +13,7 @@
 set -eu
 
 cmd=${1:-}
-file=${2:-$(dirname "$0")/../tokenledger/test-quarantine.txt}
+file=${2:-$(dirname "$0")/../tokenledger/test-quarantine.txt}  # release-tree-ok: CI-only, tokenledger/ never ships; absent file = no-op
 [ -r "$file" ] || { [ "$cmd" = check ] && echo "tokenledger-quarantine: no $file" >&2 && exit 1; exit 0; }
 
 entries() {
