@@ -37,6 +37,7 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/selftest-repo-fixture.sh"
 REAL_TMUX="$(command -v tmux 2>/dev/null)"
 [ -n "$REAL_TMUX" ] || { printf 'selftest: tmux not installed — SKIP\n' >&2; exit 0; }
 command -v git >/dev/null 2>&1 || { printf 'selftest: git not installed — SKIP\n' >&2; exit 0; }
@@ -199,12 +200,10 @@ mkdir -p "$FLEET_CONF_DIR/fleets/fleet-cf"
 printf 'FLEET_GLOBAL_MAX_SESSIONS=7\nFLEET_X=install\nFLEET_Y=install\n' > "$WORK/root/fleet.conf"
 cat > "$FLEET_CONF_DIR/fleets/fleet-cf/conf" <<EOF
 # claude-fleet: fleet 'fleet-cf' — written by fleet-up.sh 2026-09-22 00:00:00
-FLEET_REPO="o/a"
-FLEET_MAIN="$WORK/src/a"
-FLEET_BASE_BRANCH="master"
 FLEET_X=fleet
 FLEET_GLOBAL_MAX_SESSIONS=99
 EOF
+fx_repo "$FLEET_CONF_DIR" fleet-cf o/a FLEET_MAIN="$WORK/src/a" FLEET_BASE_BRANCH=master
 probe='fleet_load_conf fleet-cf; printf "%s %s %s %s %s" "$FLEET_REPO" "$FLEET_X" "$FLEET_Y" "$FLEET_GLOBAL_MAX_SESSIONS" "$(bash -c "echo \$FLEET_GLOBAL_MAX_SESSIONS")"'
 want="o/a fleet install 7 7"
 eq "6 two-file loads" "$(lib "$probe")" "$want"
@@ -219,7 +218,7 @@ has "6 dropped" "$out" "FLEET_GLOBAL_MAX_SESSIONS"
 [ -e "$WORK/root/fleet.conf" ] && fail "6: the install fleet.conf was not moved aside"
 [ -f "$WORK/root/fleet.conf.pre-merge" ] || fail "6: no fleet.conf.pre-merge"
 eq "6 merged loads the same" "$(lib "$probe")" "$want"
-eq "6 conf is identity" "$(grep -c '^FLEET_' "$FLEET_CONF_DIR/fleets/fleet-cf/conf")" 3
+eq "6 conf keeps no setting" "$(grep -c '^FLEET_' "$FLEET_CONF_DIR/fleets/fleet-cf/conf")" 0
 eq "6 still not a fleet" "$(lib 'fleet_each_conf | cut -f1 | tr "\n" " "')" "fleet-cf "
 eq "6 hook resolver" "$(bash "$SB/fleet-hook-conf.sh" --session fleet-cf FLEET_X FLEET_GLOBAL_MAX_SESSIONS | tr '\n' ' ')" "fleet 7 "
 out=$(bash "$SB/fleet-settings.sh" merge 2>&1); rc=$?
