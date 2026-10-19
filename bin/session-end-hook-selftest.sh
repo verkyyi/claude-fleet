@@ -114,6 +114,11 @@ cat > "$WORK/fakepath/tmux" <<'FAKE'
 if [ "${1:-}" = "run-shell" ]; then
   shift; [ "${1:-}" = "-b" ] && shift
   printf 'RUNSHELL %s\n' "$1" >> "$TMLOG"
+  # RUNSHELL_BG: detached, as a real server's run-shell -b (the GitHub leg times it)
+  if [ -n "${RUNSHELL_BG:-}" ]; then
+    ( sh -c "$1"; printf 'DONE\n' >> "$TMLOG" ) </dev/null >/dev/null 2>&1 &
+    exit 0
+  fi
   sh -c "$1"
   exit 0
 fi
@@ -144,6 +149,8 @@ chmod +x "$WORK/fakepath/tmux"
 #   issue close → logged
 cat > "$WORK/fakepath/gh" <<'FAKE'
 #!/bin/bash
+# GH_HANG=<log>: GitHub takes the connection and never answers (a black-hole proxy)
+[ -n "${GH_HANG:-}" ] && { printf '%s\n' "$*" >> "$GH_HANG"; exec sleep 30; }
 head=""; prev=""
 for a in "$@"; do [ "$prev" = "--head" ] && head="$a"; prev="$a"; done
 case "$*" in
@@ -454,6 +461,27 @@ clr; AGENT=codex LAUNCH_PID=123 TRANSFER_UNTIL=$(( $(date +%s) + 120 )) \
 grep -q 'RUNSHELL\|KILL' "$TMLOG" && fail "Codex exit must honor an in-progress agent transfer"
 rm "$LEASE_FILE"
 ok "Codex close-on-exit honors the global switch, hub/panel scope, and transfer protection"
+
+# GitHub connecting but never answering (issue #4842, EPIC #4839 C3): the exit itself
+# makes no GitHub call — the in-pane gate returns at once — and the detached --exec
+# closes the window within a key's bound (FLEET_GH_TIMEOUT_KEY), not gh's forever:
+# the first unanswered read opens the shared gh-down marker, every later one skips.
+# Nothing is reaped on an unread merged-PR answer (#2 kept), and the issue stays.
+GHDOWN="$WORK/ghdown-conf"; mkdir -p "$GHDOWN"; HANG="$WORK/gh-hang.log"; : > "$HANG"
+clr; t0=$(date +%s)
+GH_HANG="$HANG" RUNSHELL_BG=1 FLEET_GH_TIMEOUT_KEY=3 CONFDIR="$GHDOWN" \
+  REASON=prompt_input_exit ISS=2 WID='@2' run_hook </dev/null
+t1=$(date +%s)
+[ $((t1 - t0)) -le 2 ] || fail "the exit waited on GitHub: $((t1 - t0))s (≤ 2 s)" "$(cat "$TMLOG")"
+i=0; while ! grep -q '^DONE' "$TMLOG" && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+t2=$(date +%s)
+grep -q 'KILL' "$TMLOG" || fail "a black-holed GitHub kept the window open" "$(cat "$TMLOG")"
+[ $((t2 - t0)) -le 10 ] || fail "the window closed only after $((t2 - t0))s (the key bound is 3 s)"
+[ -f "$GHDOWN/global/gh-down" ] || fail "the unanswered read did not open the shared gh-down marker"
+[ "$(grep -c . "$HANG")" = 1 ] || fail "GitHub was asked again after it went quiet" "$(cat "$HANG")"
+[ -d "$WT2" ] || fail "an unread merged-PR answer must never reap the worktree"
+grep -q 'CLOSE' "$GHLOG" && fail "an unread GitHub must not close the issue"
+ok "GitHub black-holed → exit in $((t1 - t0))s, window closed in $((t2 - t0))s, one GitHub try, nothing reaped (#4842)"
 
 printf '\nselftest PASS: %s assertions (SessionEnd hook — reason gate, default-on + global opt-out, seat scope, gate-reap by verdict, record-now, idempotent, @raw record+window-close, stdin parse) [#403, #409, #466]\n' "$pass"
 exit 0

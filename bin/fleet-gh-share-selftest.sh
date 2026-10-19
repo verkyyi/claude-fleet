@@ -25,7 +25,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/gh-share-selftest.XXXXXX") || exit 2
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf/fleets/f1"
 printf 'FLEET_REPO=acme/a\n' > "$WORK/conf/fleets/f1/conf"   # one "live" fleet (fake tmux answers has-session)
-for f in tmux-dash-collect.sh tmux-pr-refresh.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-gh-lib.sh fleet_gh_issues.py; do
+for f in tmux-dash-collect.sh tmux-pr-refresh.sh fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-gh-lib.sh fleet_gh_issues.py fleet_gh.py fleet-gh.sh; do
   cp "$BIN/$f" "$WORK/bin/"
 done
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/fleet-restore.sh"

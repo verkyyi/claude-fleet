@@ -199,6 +199,9 @@ fleet_gh_run() {  # fleet_gh_run <bucket> <source> <gh args…>
 # — a background process group would stop on SIGTTIN), and a shell that is not bash.
 # Local subcommands (`auth token`, `config`, `--version` …) never see the marker.
 # Constants of the layer, not settings: the env overrides exist for the selftests.
+# FLEET_GH_BIN names the gh the layer runs (default `gh` off PATH) — a caller's own
+# test seam (FLEET_CN_PROBE_GH, FLEET_IDLE_DAILY_GH …) hands its fake through it, so
+# the fake still rides the layer (issue #4842).
 fleet_gh_timeout() { case "${FLEET_GH_TIMEOUT:-}" in ''|*[!0-9]*) printf 15 ;; *) printf '%s' "$FLEET_GH_TIMEOUT" ;; esac; }
 fleet_gh_timeout_key() { case "${FLEET_GH_TIMEOUT_KEY:-}" in ''|*[!0-9]*) printf 5 ;; *) printf '%s' "$FLEET_GH_TIMEOUT_KEY" ;; esac; }
 _fleet_gh_num() { case "${1:-}" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
@@ -347,7 +350,7 @@ fleet_gh_ready() {
     return "$FLEET_GH_LIMITED_RC"
   fi
   printf '%s\n' "$now" > "$d/gh-down.probe" 2>/dev/null
-  _fleet_gh_timed "$(fleet_gh_timeout_key)" gh api zen >/dev/null 2>&1; rc=$?
+  _fleet_gh_timed "$(fleet_gh_timeout_key)" "${FLEET_GH_BIN:-gh}" api zen >/dev/null 2>&1; rc=$?
   rmdir "$lk" 2>/dev/null
   if [ "$rc" -eq 0 ]; then _fleet_gh_down_close probe; return 0; fi
   fleet_gh_log "gh-down probe-fail rc=$rc source=${0##*/}"
@@ -366,15 +369,15 @@ _fleet_gh_local_cmd() {  # gh subcommands that never reach the network
 # so it can be read). Down / timed out / no connection: rc 75 + one stderr line.
 _fleet_gh_call() {
   local err rc txt
-  _fleet_gh_local_cmd "$@" && { gh "$@"; return $?; }
+  _fleet_gh_local_cmd "$@" && { "${FLEET_GH_BIN:-gh}" "$@"; return $?; }
   if ! fleet_gh_ready; then
     printf 'fleet_gh: GitHub unreachable (since %s) — gh %s not run, rc %s\n' \
       "$(fleet_gh_hhmm "$(fleet_gh_down)")" "${1:-}" "$FLEET_GH_LIMITED_RC" >&2
     fleet_gh_log "down-skip cmd=${1:-}_${2:-} source=${0##*/}"
     return "$FLEET_GH_LIMITED_RC"
   fi
-  err=$(mktemp "${TMPDIR:-/tmp}/fleet-gh-err.XXXXXX" 2>/dev/null) || { _fleet_gh_timed "$(fleet_gh_timeout)" gh "$@"; return $?; }
-  _fleet_gh_timed "$(fleet_gh_timeout)" gh "$@" 2>"$err"; rc=$?
+  err=$(mktemp "${TMPDIR:-/tmp}/fleet-gh-err.XXXXXX" 2>/dev/null) || { _fleet_gh_timed "$(fleet_gh_timeout)" "${FLEET_GH_BIN:-gh}" "$@"; return $?; }
+  _fleet_gh_timed "$(fleet_gh_timeout)" "${FLEET_GH_BIN:-gh}" "$@" 2>"$err"; rc=$?
   if [ "$rc" -eq 0 ]; then
     [ -f "$(fleet_gh_state_dir)/gh-fail" ] && _fleet_gh_down_close call
     [ -s "$err" ] && cat "$err" >&2
@@ -674,7 +677,7 @@ fleet_gh_write() {  # fleet_gh_write <gh args…>
   gap_ms=$(awk -v g="${FLEET_GH_WRITE_GAP:-1}" 'BEGIN{ if (g !~ /^[0-9]*[.]?[0-9]+$/) g=1; printf "%d", g*1000 }')
   base="${FLEET_GH_WRITE_BACKOFF:-60}"; case "$base" in ''|*[!0-9]*) base=60 ;; esac
   src="${0##*/}"
-  out=$(mktemp "${TMPDIR:-/tmp}/fleet-ghw-out.XXXXXX") || { [ "$locked" = 1 ] && _fleet_gh_write_unlock "$lock" "$me"; gh "$@"; return $?; }
+  out=$(mktemp "${TMPDIR:-/tmp}/fleet-ghw-out.XXXXXX") || { [ "$locked" = 1 ] && _fleet_gh_write_unlock "$lock" "$me"; _fleet_gh_call "$@"; return $?; }
   err="$out.err"
   while :; do
     # Someone else's secondary refusal still holds → wait it out with them.

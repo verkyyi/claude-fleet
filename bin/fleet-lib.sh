@@ -134,7 +134,7 @@ unset _flib_here
 # only (a zsh skill sourcing this, or a copy without the file, gets plain gh).
 # shellcheck source=fleet-gh-lib.sh
 if [ -n "${BASH_VERSION:-}" ] && [ -f "$_FLEET_LIB_DIR/fleet-gh-lib.sh" ]; then . "$_FLEET_LIB_DIR/fleet-gh-lib.sh"
-else fleet_gh() { gh "$@"; }; fi
+else fleet_gh() { gh "$@"; }; fleet_gh_write() { gh "$@"; }; fleet_gh_git() { git "$@"; }; fi
 
 # ----------------------------------------------------------------- layout (#181)
 # ONE DIRECTORY PER FLEET. A fleet's DURABLE state is keyed by its tmux SESSION
@@ -1216,7 +1216,7 @@ print("%s\t%s\t%s" % (d.get("state") or "", d.get("stateReason") or "",
     return 0
   fi
   command -v gh >/dev/null 2>&1 || return 0
-  gh -R "$repo" issue view "$n" --json state,stateReason,labels \
+  fleet_gh -R "$repo" issue view "$n" --json state,stateReason,labels \
     -q '"\(.state)\t\(.stateReason // "")\t\([.labels[].name] | join(","))"' 2>/dev/null
 }
 
@@ -2101,7 +2101,7 @@ fleet_repo_checkout() {
       { command -v gh >/dev/null 2>&1 && fleet_gh repo clone "$repo" "$dir" 2>/dev/null; } \
         || { rm -rf "$dir"; git clone "$remote" "$dir"; } || { echo "$tag: clone failed" >&2; return 5; }
     elif command -v gh >/dev/null 2>&1; then fleet_gh repo clone "$repo" "$dir" || { echo "$tag: clone failed" >&2; return 5; }
-    else git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
+    else fleet_gh_git clone "https://github.com/$repo.git" "$dir" || { echo "$tag: clone failed" >&2; return 5; }; fi  # dist-ok: the session's own business repo, not the fleet
   fi
   return 0
 }
@@ -3603,8 +3603,8 @@ fleet_issue_release_claim() {
     return 0
   fi
   command -v gh >/dev/null 2>&1 || return 0
-  gh -R "$repo" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
-  gh -R "$repo" issue comment "$iss" --body "$what. The issue stays OPEN and the claim is released, so it can be picked up again.
+  fleet_gh_write -R "$repo" issue edit "$iss" --remove-assignee @me >/dev/null 2>&1 || true
+  fleet_gh_write -R "$repo" issue comment "$iss" --body "$what. The issue stays OPEN and the claim is released, so it can be picked up again.
 
 <!-- fleet:no-relay -->" >/dev/null 2>&1 || true
 }
@@ -7669,7 +7669,7 @@ fleet_reap_record() {
   if [ -z "$pr" ] && [ -n "$branch" ] && [ -n "$repo" ] && [ "$forge" != none ] && command -v gh >/dev/null 2>&1; then
     case "$outcome" in
       merged-pr|merged-PR|merged|landed)
-        pr="$(gh -R "$repo" pr list --head "$branch" --state merged \
+        pr="$(fleet_gh -R "$repo" pr list --head "$branch" --state merged \
                 --json number -q '.[0].number' 2>/dev/null)" ;;
     esac
   fi

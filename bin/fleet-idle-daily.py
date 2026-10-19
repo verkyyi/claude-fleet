@@ -42,6 +42,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_gh  # noqa: E402 — the GitHub layer (issue #4842)
+
 BIN = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -192,10 +195,10 @@ def remote_url(repo, nd, day, t):
     """An issue already carrying the marker (another login on this machine filed
     it) → its URL; '' for none or an unreadable list."""
     since = datetime.datetime.fromtimestamp(t - 2 * 86400, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    c = cmd("FLEET_IDLE_DAILY_GH", ["gh"]) + [
-        "api", "repos/%s/issues?state=all&per_page=100&since=%s" % (repo, since)]
-    try:
-        p = subprocess.run(c, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+    try:  # through the GitHub layer (issue #4842); FLEET_IDLE_DAILY_GH is the test's gh
+        p = fleet_gh.run("api", "repos/%s/issues?state=all&per_page=100&since=%s" % (repo, since),
+                         gh=os.environ.get("FLEET_IDLE_DAILY_GH") or None,
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         items = json.loads(p.stdout.decode(errors="replace") or "[]")
     except (OSError, subprocess.SubprocessError, ValueError):
         return ""

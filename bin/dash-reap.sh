@@ -190,7 +190,7 @@ settle_issue() {
   command -v gh >/dev/null 2>&1 || return 0
   [ "${FLEET_FORGE:-github}" != none ] || return 0   # no GitHub: no gh (issue #3601)
   case "${reason:-}" in unmerged|dirty) ;; *) return 0 ;; esac
-  local st; st="$(gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)"
+  local st; st="$(fleet_gh -R "$REPO" issue view "$iss" --json state -q .state 2>/dev/null)"
   [ "$st" = OPEN ] || return 0
   local what="its work did not land" base n
   if [ -n "${whead:-}" ] && [ -n "${MAIN:-}" ]; then

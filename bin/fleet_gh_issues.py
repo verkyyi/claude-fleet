@@ -31,19 +31,22 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import fleet_gh  # noqa: E402 — the GitHub layer (issue #4842)
+
 LIMIT = 300
 STATE = "issues.json"
 
 
 def gh_get(url, etag=None):
     """→ (status, headers{lower: value}, body text); status 0 = gh could not run."""
-    argv = [os.environ.get("FLEET_GH_ISSUES_GH") or "gh", "api", "-i",
-            "-H", "Accept: application/vnd.github+json"]
+    args = ["api", "-i", "-H", "Accept: application/vnd.github+json"]
     if etag:
-        argv += ["-H", "If-None-Match: " + etag]
-    argv.append(url)
-    try:
-        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        args += ["-H", "If-None-Match: " + etag]
+    args.append(url)
+    try:  # through the GitHub layer (issue #4842): down ⇒ 75 at once, no status line
+        p = fleet_gh.run(*args, gh=os.environ.get("FLEET_GH_ISSUES_GH"),
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except (OSError, subprocess.TimeoutExpired):
         return 0, {}, ""
     out = p.stdout.decode("utf-8", "replace").replace("\r\n", "\n")

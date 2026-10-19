@@ -125,7 +125,7 @@ issue_done_by_merge() {  # <repo> <issue> <branch>
   [ "$(printf '%s' "$st" | cut -f1)" = OPEN ] || { printf 'not open'; return 1; }
   [ "$reason" = REOPENED ] && { printf 'reopened'; return 1; }
   case ",$labels," in *,blocked,*) printf 'blocked'; return 1 ;; esac
-  says=$(gh -R "$repo" pr list --state merged --head "$br" --json closingIssuesReferences,body \
+  says=$(fleet_gh -R "$repo" pr list --state merged --head "$br" --json closingIssuesReferences,body \
     -q '.[] | (.closingIssuesReferences[] | "closes #\(.number)"), .body' 2>/dev/null)
   printf '%s\n' "$says" | grep -Eiq "(^|[^[:alnum:]])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+#$n([^0-9]|\$)" \
     || { printf 'no merged PR closes it'; return 1; }
@@ -152,6 +152,13 @@ if [ "${1:-}" = "--exec" ]; then
   # is released (fleet_issue_release_claim, dash ⌃x's copy), not left held.
   how="${6:-}"
   transfer_holds_window "$win" && exit 0
+  # The window waits on this job (issue #4842, EPIC #4839 C3): every GitHub read
+  # below goes through the layer (fleet_gh — timed, and instant while the shared
+  # gh-down marker is open) at a key's bound, not a daemon's — a person just closed
+  # it. The first read that GitHub leaves unanswered opens the marker, so the rest
+  # return 75 at once; an unread merged PR leaves git's verdict alone (kept, never
+  # wrongly reaped), and the next cleanup tick looks again.
+  FLEET_GH_TIMEOUT=$(fleet_gh_timeout_key 2>/dev/null || echo 5); export FLEET_GH_TIMEOUT
   # A fleet REOPEN in flight (issue #2321): fleet-migrate.sh — a quota move, a
   # cfg-stale / ver-stale reopen — stamps @migrating <reason> before its /exit and
   # holds a rotate lease on the worktree. That exit is "same session, new window",
@@ -200,7 +207,7 @@ if [ "${1:-}" = "--exec" ]; then
         MASTER=$(git -C "$MAIN" rev-parse --verify -q "origin/$BASE" 2>/dev/null \
           || git -C "$MAIN" rev-parse --verify -q "$BASE" 2>/dev/null)
       fi
-      [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(gh -R "$REPO" pr list \
+      [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && [ -n "$REPO" ] && MERGED_PRS=$(fleet_gh -R "$REPO" pr list \
         --state merged --head "$key" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
       verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$key" "$whead" "$MASTER" "$MERGED_PRS")
       # No issue → pass an empty one; fleet_reap_record derives the scratch key from
@@ -277,7 +284,7 @@ if [ "${1:-}" = "--exec" ]; then
   # A repo with no GitHub (FLEET_FORGE=none, issue #3601): no gh — git's landing
   # check inside fleet_reap_ok answers alone.
   MERGED_PRS=""
-  [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && MERGED_PRS=$(gh -R "$REPO" pr list \
+  [ "${FLEET_FORGE:-github}" != none ] && command -v gh >/dev/null 2>&1 && MERGED_PRS=$(fleet_gh -R "$REPO" pr list \
     --state merged --head "$branch" --json headRefName,headRefOid -q '.[] | "\(.headRefName)\t\(.headRefOid)"' 2>/dev/null)
 
   verdict=$(fleet_reap_ok "$wtdir" "$MAIN" "$branch" "$whead" "$MASTER" "$MERGED_PRS")
@@ -336,7 +343,7 @@ if [ "${1:-}" = "--exec" ]; then
           bash "$BIN/fleet-ticket.sh" post "$tid" --body "$rcpt" >/dev/null 2>&1 \
             && bash "$BIN/fleet-ticket.sh" close "$tid" >/dev/null 2>&1 || true
         else
-          gh -R "$REPO" issue close "$iss" --comment "$rcpt" >/dev/null 2>&1 || true
+          fleet_gh_write -R "$REPO" issue close "$iss" --comment "$rcpt" >/dev/null 2>&1 || true
         fi
       fi
       ;;

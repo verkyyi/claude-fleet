@@ -96,7 +96,9 @@ case "$repo" in */*) ;; *) printf 'fleet-cn-probe-watch: --repo owner/name is re
 [ "${FLEET_CN_PROBE:-1}" = 0 ] && exit 0
 [ -r "${FLEET_CN_PROBE_KEY:-$HOME/fleet-secrets/oss-drill/id_oss_drill}" ] || exit 0
 
-GH=${FLEET_CN_PROBE_GH:-gh}
+# GitHub through the layer (issue #4842): fleet_gh — timed, «不通» shared; the
+# test's fake gh (FLEET_CN_PROBE_GH) rides it as FLEET_GH_BIN
+FLEET_GH_BIN=${FLEET_CN_PROBE_GH:-${FLEET_GH_BIN:-gh}}
 PROBE=${FLEET_CN_PROBE_CMD:-bash $BIN/fleet-cn-probe.sh}
 ENSURE=${FLEET_CN_PROBE_ENV_CMD:-bash $BIN/fleet-cn-probe-env.sh ensure}
 FILER=${FLEET_CN_PROBE_FILE_CMD:-bash $BIN/fleet-issue-file.sh}
@@ -164,7 +166,7 @@ printf '%s %s\n' "$$" "$t" > "$SD/lock/pid"
 [ "$dry" = 1 ] || { printf '%s\n' "$t" > "$SD/stamp"; rm -f "$SD/skip"; }
 
 # the stable this run tests: what every client, login and pod follows now
-stable=$($GH api "repos/$repo/commits/stable" --jq .sha 2>/dev/null)
+stable=$(fleet_gh api "repos/$repo/commits/stable" --jq .sha 2>/dev/null)
 case "$stable" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;; *) stable='' ;; esac
 
 # one run id for the whole run: the probe's run dir, the ensure stage, the diagnosis
@@ -280,7 +282,7 @@ PY
 rc=0
 if [ -n "$stable" ]; then
   state=success; [ "$verdict" = green ] || state=failure
-  $GH api -X POST "repos/$repo/statuses/$stable" -f state="$state" -f context="$CONTEXT" \
+  fleet_gh_write api -X POST "repos/$repo/statuses/$stable" -f state="$state" -f context="$CONTEXT" \
       -f description="$desc" ${issue:+-f target_url="$issue"} >/dev/null 2>&1 \
     || { log "could not post the $CONTEXT status on ${stable:0:7}"; rc=1; }
 else

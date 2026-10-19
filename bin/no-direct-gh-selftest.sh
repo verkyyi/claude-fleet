@@ -18,17 +18,41 @@
 # WHITELIST — the two layers that ARE the road, never counted:
 #   the door           fleet-ticket.sh fleet_ticket.py
 #   the GitHub layer   fleet-gh-lib.sh fleet-gh.sh fleet-pr-verdict.sh fleet-pr-merge.sh mcp-github.sh
+#                      fleet_gh.py (#4842: the same layer for a Python caller)
 #   fleet's own release fleet-release.sh fleet-stable.sh fleet-train-failfast.sh
 #                      fleet-train-macos.sh fleet-train-quarantine.sh fleet-macos-watch.sh
 #                      fleet-train-runner.sh (#3864: the Linux half's runners)
 #                      fleet-train-reuse.sh (#4794: the PR runs it reuses)
 #                      tokenledger-flaky.sh (#4679: the CI runs' job logs it counts)
+#
+# 开发侧 / 演练 / 装机 — reach GitHub on purpose, never on a session's road (issue
+# #4842; one line each, why):
+#   fleet-release-rollback.sh  开发侧: a rollback IS a revert PR opened and merged on GitHub
+#   fleet-hub-pause.sh         开发侧: the release train's hub-deploy gate, run inside CI
+#   fleet-gh-blackhole.sh      演练: fetches GitHub's address list (api.github.com/meta) to block it
+#   nogh-task-deny-probe.py    演练: runs gh only to prove the sandbox refuses it
+#   fleet-node-join.sh         装机: downloaded and run alone, before any layer exists; its
+#                              GitHub roads are the developer's (go build) and Homebrew's
+#                              installer — the join line's own road is C9's (#4848)
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${NO_DIRECT_GH_ROOT:-$BIN/..}"
 BASE="${NO_DIRECT_GH_BASELINE:-$BIN/no-direct-gh.baseline}"
-WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh '
-RE='(^|[^a-z_-])gh (issue|pr|api|search|label|repo|run|auth)'
+WHITELIST=' bin/fleet-ticket.sh bin/fleet_ticket.py bin/fleet-gh-lib.sh bin/fleet-gh.sh bin/fleet-pr-verdict.sh bin/fleet-pr-merge.sh bin/mcp-github.sh bin/fleet-release.sh bin/fleet-stable.sh bin/fleet-train-failfast.sh bin/fleet-train-macos.sh bin/fleet-train-quarantine.sh bin/fleet-macos-watch.sh bin/fleet-train-runner.sh bin/fleet-train-reuse.sh bin/tokenledger-flaky.sh bin/fleet_gh.py bin/fleet-release-rollback.sh bin/fleet-hub-pause.sh bin/fleet-gh-blackhole.sh bin/nogh-task-deny-probe.py bin/fleet-node-join.sh '
+# What counts as a call (issue #4842, EPIC #4839 C3 — the old regex saw only a bare
+# `gh <sub>`):
+#   RE_GH   gh <sub>, also with gh's own -R / --repo first (`gh -R "$repo" issue …`)
+#   RE_VAR  a gh held in a variable: `$GH api …`, `"$GH" issue …`, `${GH} pr …`
+#   RE_PY   Python handing gh an argv: `["gh", …]`, `run("gh", …)`, `… or "gh"`
+#   RE_NET  git / curl / wget (Python urlopen / requests) at github.com, api. ·
+#           raw.githubusercontent · codeload — a line that says fleet_gh_git /
+#           fleet_gh_curl is the layer's own bounded road and is not counted
+SUB='(issue|pr|api|search|label|repo|run|auth|workflow|release)'
+RE_GH='(^|[^a-zA-Z0-9_.$-])gh( +(-R|--repo)(=| +)[^ ]+)? +'"$SUB"'([^a-z_-]|$)'
+RE_VAR='[$][{]?GH[}]?"? +'"$SUB"'([^a-z_-]|$)'
+RE_PY="[[] *['\"]gh['\"] *[],]|(run|call|check_call|check_output|Popen)[(] *['\"]gh['\"]|or +['\"]gh['\"]"
+RE_NET='(^|[^a-zA-Z0-9_-])(curl|wget|git) +[^=+ #][^#]*(https?://|git@)([a-z]+[.])?github(usercontent)?[.]com|(urlopen|requests[.][a-z]+)[(][^#]*github(usercontent)?[.]com'
+RE="$RE_GH|$RE_VAR|$RE_PY|$RE_NET"
 [ -f "$BASE" ] || { echo "no-direct-gh: $BASE missing" >&2; exit 1; }
 
 # direct <root> → every counted file that calls gh, relative, sorted
@@ -37,9 +61,9 @@ direct() {
   for f in "$1"/bin/*.sh "$1"/bin/*.py "$1"/hooks/*; do
     [ -f "$f" ] || continue
     rel=${f#"$1"/}
-    case "$rel" in *selftest*) continue ;; esac
+    case "$rel" in *selftest*|*_test.py) continue ;; esac
     case "$WHITELIST" in *" $rel "*) continue ;; esac
-    grep -vE '^[[:space:]]*#' "$f" | grep -v 'no-gh-ok:' | grep -E "$RE" >/dev/null && printf '%s\n' "$rel"
+    grep -vE '^[[:space:]]*#' "$f" | grep -v 'no-gh-ok:' | grep -vE 'fleet_gh_(git|curl)' | grep -E "$RE" >/dev/null && printf '%s\n' "$rel"
   done | LC_ALL=C sort
 }
 
@@ -54,8 +78,20 @@ printf '#!/bin/bash\nfleet_gh_write issue edit 1\n' > "$T/bin/d.sh"
 printf 'gh pr view 1\n' > "$T/bin/x-selftest.sh"
 printf 'gh api user\n' > "$T/bin/fleet-gh.sh"
 printf 'subprocess.run(["gh", "api"])\ngh_out = "gh pr list"\n' > "$T/bin/e.py"
+# the forms the widened counter reads (issue #4842) — and the ones it must not
+printf '#!/bin/bash\ns=$(gh -R "$repo" issue view 1 --json state)\n' > "$T/bin/f.sh"
+printf '#!/bin/bash\n"$GH" api "repos/o/r/issues"\n' > "$T/bin/g.sh"
+printf '#!/bin/bash\nout=$($GH pr list --repo o/r)\n' > "$T/bin/h.sh"
+printf 'json.loads(run("gh", "pr", "list"))\n' > "$T/bin/i.py"
+printf 'argv = [os.environ.get("X_GH") or "gh", "api"]\n' > "$T/bin/j.py"
+printf '#!/bin/bash\ncurl -fsS https://api.github.com/repos/o/r\n' > "$T/bin/k.sh"
+printf '#!/bin/bash\ngit clone "https://github.com/$repo.git" "$dir"\n' > "$T/bin/l.sh"
+printf '#!/bin/bash\nfleet_gh -R "$repo" issue view 1\nfleet_gh_curl -fsS https://api.github.com/x\nfleet_gh_git clone https://github.com/o/r.git d\n' > "$T/bin/m.sh"
+printf '#!/bin/bash\ngit -C d -c user.email=x@users.noreply.github.com commit -m x\necho "https://github.com/o/r/issues/1"\n' > "$T/bin/n.sh"
+printf 'code = self.adapter("gh", name)\ngit += ["[http \\"https://github.com/\\"]"]\n' > "$T/bin/o.py"
+printf 'run(["gh", "api"])\n' > "$T/bin/p_test.py"
 got=$(direct "$T" | tr '\n' ' ')
-[ "$got" = 'bin/a.sh bin/e.py ' ] || { echo "no-direct-gh: the counter misreads its fixtures: [$got]" >&2; exit 1; }
+[ "$got" = 'bin/a.sh bin/e.py bin/f.sh bin/g.sh bin/h.sh bin/i.py bin/j.py bin/k.sh bin/l.sh ' ] || { echo "no-direct-gh: the counter misreads its fixtures: [$got]" >&2; exit 1; }
 
 # the GitHub layer itself (issue #3721): fleet_gh (bin/fleet-gh-lib.sh, sourced by
 # bin/fleet-lib.sh) is gh byte for byte, and refuses a FLEET_FORGE=none target
