@@ -307,7 +307,7 @@ for m in $MODES; do
   printf '写丢（%s）%s/%s · 记下待补 %s · 报了成功却没写上 %s%s\n' "$m" "$((w - q))" "$w" "$q" "$silent" "$note"
 done
 
-case " $PICK ${IDS[*]} " in *" 3 "*|*,3,*) printf '登不进入口的人：入口侧（row 3），沙箱读不了 — 现场版读入口库里只挂 GitHub 一种登录的人数\n' ;; esac
+case " $PICK ${IDS[*]-} " in *" 3 "*|*,3,*) printf '登不进入口的人：入口侧（row 3），沙箱读不了 — 现场版读入口库里只挂 GitHub 一种登录的人数\n' ;; esac
 
 if [ "$RECORD" = 1 ]; then
   printf '\n期望 to write in %s:\n' "$ROWS"; cut -f2- "$WORK/record"
