@@ -406,7 +406,7 @@ if tf and isinstance(out.get("timing"), dict):
 # The login the session landed under (issue #2430): the hub's `login`, else the
 # chosen candidate's os_user (a hub older than #2430) — remembered against its
 # fleet's UUID in the client's fleet → login map (fleet_fleet_login, the format's
-# owner in fleet-lib.sh), so opening it connects as THAT login.
+# owner in the machine library), so opening it connects as THAT login.
 def placed_login(o):
     pl = o.get("placement") if isinstance(o.get("placement"), dict) else {}
     fid = pl.get("fleet_id") or (o.get("worker_id") or "").split("/", 1)[0]
@@ -570,7 +570,10 @@ if [ "$KIND" = task_issue ]; then
 fi
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
-. "$BIN/fleet-lib.sh" 2>/dev/null
+# the client's library (issue #4825): fleet_login_fleet / fleet_node_is_self — a
+# client-only computer has no fleet conf, so it answers 「没有 fleet」 below
+# shellcheck source=fleet-client-core.sh
+. "$BIN/fleet-client-core.sh" 2>/dev/null
 # shellcheck source=fleet-client-lib.sh
 . "$BIN/fleet-client-lib.sh" 2>/dev/null
 T0=$(date +%s)

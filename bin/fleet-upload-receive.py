@@ -63,7 +63,7 @@ def run(cmd, data=None, source=None, limit=65536):
 def identity(wid):
     if not ID.fullmatch(wid):
         raise ValueError('stable worker identity required')
-    script = '''. "$1/fleet-lib.sh"
+    script = '''. "$1/fleet-client-core.sh" && fleet_host_lib || exit 1
 s=$(fleet_wid_home "$2") || exit 1
 w=$(fleet_win_for_addr "${2#*/}" "$s") || exit 1
 tmux -L "$s" display-message -p -t "$w" "$3"

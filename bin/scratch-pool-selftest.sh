@@ -583,7 +583,7 @@ ok "AA remote that never answers: HOME first, every fetch bounded, the tick ends
 REFILL_BIN="$WORK/refill-bin"; mkdir -p "$REFILL_BIN"
 for source in "$BIN"/*; do ln -s "$source" "$REFILL_BIN/${source##*/}"; done
 rm "$REFILL_BIN/fleet-lib.sh"
-cp "$LIB" "$REFILL_BIN/fleet-lib.sh"
+cp "$LIB" "$REFILL_BIN/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$REFILL_BIN/fleet-client-core.sh"
 cat >> "$REFILL_BIN/fleet-lib.sh" <<'REFILL_READER'
 
 _fleet_cgroup_cpu() {

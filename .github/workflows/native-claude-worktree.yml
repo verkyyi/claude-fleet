@@ -16,6 +16,7 @@ on:
       - 'bin/fleet_launch.py'
       - 'bin/fleet_repo_authority.py'
       - 'bin/fleet-lib.sh'
+      - 'bin/fleet-client-core.sh'
       - 'bin/fleet-worktree-drop.sh'
       - 'hooks/base-readonly-guard.py'
       - '.github/workflows/native-claude-worktree.yml'

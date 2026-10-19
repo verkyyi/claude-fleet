@@ -65,7 +65,7 @@ CLEAN_LOG="$WORK/reaps"; : > "$CLEAN_LOG"
 # The daemon + lib run from $WORK/bin so BIN resolves the fake cleanup + gate
 # scripts next to them (both are invoked as "$BIN/<name>").
 cp "$SRC" "$WORK/bin/fleet-cleanup-daemon.sh"
-cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 chmod +x "$WORK/bin/fleet-cleanup-daemon.sh"
 
 # --- fake fleet-cleanup.sh: record the PR arg, emit a `cleaned:` token -----------

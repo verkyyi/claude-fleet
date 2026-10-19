@@ -87,7 +87,7 @@ trap '[ -n "$HOLDER" ] && kill "$HOLDER" 2>/dev/null
       pkill -9 -f "$HANGMARK" >/dev/null 2>&1
       rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-quotawatch.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-alerts.sh fleet-daemon-lib.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"
 printf 'FLEET_REPO="acme/widgets"\n' > "$WORK/conf/fleets/sessA/conf"

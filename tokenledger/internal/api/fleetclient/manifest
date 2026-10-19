@@ -17,9 +17,9 @@
 #
 # What is on it: `fleet` and what it dispatches to (#1470) — the thin client
 # (bin/fleet-thin.py, #3003; the old two-pane client and its files went with
-# issue #3008) and what it runs on the person's own computer. fleet-lib.sh ships
-# whole: the scripts here source it unconditionally. What a fleet NODE needs —
-# spawning, reaping, the daemons, gh — stays out.
+# issue #3008) and what it runs on the person's own computer. The client's scripts
+# read bin/fleet-client-core.sh, never the machine's fleet-lib.sh (issue #4825);
+# what a fleet NODE needs — spawning, reaping, the daemons, gh — stays out.
 # bin/fleet-client-lib.sh rides along for the installer itself (#1629): its
 # tmux step sources the lib's fc_tmux_ok / fc_pkg_install once downloaded.
 # bin/fleet-node.sh + bin/fleet-node-join.sh are `fleet node join` (#1627): the
@@ -157,6 +157,9 @@ bin/fleet_reap_policy.py
 bin/fleet-reap-policy.sh
 bin/fleet-row-remote.sh
 bin/tmux-dashboard-rows.sh
+# the client's small library (#4825): what its scripts call, defined only there;
+# fleet-lib.sh (still below until the package is cut, EPIC #4823 C3) sources it
+bin/fleet-client-core.sh
 bin/fleet-lib.sh
 bin/fleet-conf.sh
 bin/fleet-lang.sh

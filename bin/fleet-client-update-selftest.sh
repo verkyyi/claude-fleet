@@ -194,7 +194,7 @@ case "$row" in *有新版\ v2*) ok "H doctor: a newer client on the hub is said"
 row=$(bash "$ROOT/bin/fleet-client-update.sh" doctor --root "$WORK/none")
 case "$row" in INFO*没有*) ok "H doctor: no installed client → INFO" ;; *) bad "H doctor none: $row" ;; esac
 cp "$BIN/fleet" "$ROOT/bin/fleet"
-cp "$BIN/fleet-conf.sh" "$BIN/fleet-lib.sh" "$ROOT/bin/"   # the 能力 row's reader (#1806)
+cp "$BIN/fleet-conf.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$ROOT/bin/"   # the 能力 row's reader (#1806)
 out=$(sh "$ROOT/bin/fleet" doctor 2>&1)
 case "$out" in *fleet*版本*) ok "H \`fleet doctor\` on a client-only home: the fleet row" ;; *) bad "H fleet doctor: $out" ;; esac
 case "$out" in *能力*基础*) ok "H …and the 能力 row (#1806)" ;; *) bad "H no 能力 row: $out" ;; esac

@@ -43,7 +43,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/quota-blind-selftest.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"     # physical path: the scripts resolve $BIN via pwd
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/accounts" "$WORK/conf/fleets/sessA" "$WORK/.claude-dash/global"
-for f in fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh usage-lib.sh fleet-quotawatch.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-doctor.sh fleet-account.sh fleet_iso.py fleet-lib.sh fleet-client-core.sh usage-lib.sh fleet-quotawatch.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 printf 'tok-a\n' > "$WORK/accounts/a"; printf 'tok-b\n' > "$WORK/accounts/b"
 chmod 600 "$WORK/accounts/a" "$WORK/accounts/b"

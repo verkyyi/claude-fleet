@@ -18,7 +18,7 @@ WORK=$(cd "$WORK" && pwd -P)   # one spelling of the path: $PWD is compared agai
 trap 'rm -rf "${WORK:?}"' EXIT INT TERM HUP
 REAL_TAR=$(command -v tar) || exit 2
 mkdir -p "$WORK/bin" "$WORK/shim" "$WORK/shim-tar-fails" "$WORK/shim-tar-warns" "$WORK/homes" "$WORK/LaunchDaemons" "$WORK/ds/groups"
-cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$BIN/fleet-credsep.py" "$WORK/bin/"
+cp "$BIN/fleet-login-remove.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$BIN/fleet-down.sh" "$BIN/fleet-node-leave.sh" "$BIN/fleet-credsep.py" "$WORK/bin/"
 cat > "$WORK/bin/fleet-restore.sh" <<'EOF'
 #!/bin/sh
 exit 0

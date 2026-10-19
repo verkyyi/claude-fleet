@@ -43,7 +43,7 @@ WINDOWS="$WORK/windows";  : > "$WINDOWS"
 # The daemon + lib run from $WORK/bin so BIN resolves the fake history + gate
 # scripts next to them (both invoked as "$BIN/<name>").
 cp "$SRC" "$WORK/bin/fleet-ledger-watch.sh"
-cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 chmod +x "$WORK/bin/fleet-ledger-watch.sh"
 
 # --- fake fleet-history.sh: log every record-closed --key, emit a token ----------

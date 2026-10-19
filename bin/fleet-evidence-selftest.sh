@@ -44,7 +44,7 @@ has()  { case "$2" in *"$3"*) ok ;; *) fail "$1 — missing [$3]" "$2" "${ERR:-}
 hasnt(){ case "$2" in *"$3"*) fail "$1 — unexpected [$3]" "$2" "${ERR:-}" ;; *) ok ;; esac; }
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf/fleets/fevsess" "$WORK/src"
-cp "$SRC" "$WORK/bin/fleet-evidence.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$SRC" "$WORK/bin/fleet-evidence.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 # the ticket door the script reads parents and bodies through (issue #3599)
 for f in fleet-ticket.sh fleet_ticket.py fleet-gh.sh fleet-gh-lib.sh; do cp "$BIN/$f" "$WORK/bin/$f"; done
 chmod +x "$WORK/bin/fleet-evidence.sh"

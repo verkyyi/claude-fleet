@@ -107,9 +107,11 @@ done
 # The fleet's knobs: global fleet.conf + this pane's fleet conf, under the env.
 _env_show="${FLEET_SHOW-__unset}"; _env_max="${FLEET_SHOW_MAX_BYTES-__unset}"
 _env_re="${FLEET_SHOW_TERM_RE-__unset}"; _env_part="${FLEET_SHOW_PART_BYTES-__unset}"
-if [ -f "$BIN/fleet-lib.sh" ] && [ -n "${TMUX:-}" ]; then
-  # shellcheck source=/dev/null
-  . "$BIN/fleet-lib.sh" 2>/dev/null && fleet_load_conf "$(fleet_current_session)" 2>/dev/null
+# (a pane of a fleet: the machine's library, fleet_host_lib — issue #4825)
+if [ -n "${TMUX:-}" ] && [ -f "$BIN/fleet-client-core.sh" ]; then
+  # shellcheck source=fleet-client-core.sh
+  . "$BIN/fleet-client-core.sh" 2>/dev/null && fleet_host_lib 2>/dev/null \
+    && fleet_load_conf "$(fleet_current_session)" 2>/dev/null
 fi
 [ "$_env_show" = __unset ] || FLEET_SHOW="$_env_show"
 [ "$_env_max" = __unset ]  || FLEET_SHOW_MAX_BYTES="$_env_max"

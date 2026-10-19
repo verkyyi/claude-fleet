@@ -234,7 +234,7 @@ FLEET_UUID = []
 
 def fleet_uuid():
     """This machine's fleet UUID, the one its inventory reports to the hub ('' =
-    none): the fleet's frozen identity file, else fleet-lib's fleet_uuid."""
+    none): the fleet's frozen identity file, else the fleet library's fleet_uuid."""
     if not FLEET_UUID:
         sess = os.environ.get("FLEET_SESSION", "")
         u = ""
@@ -720,7 +720,7 @@ def close_tests(yes):
 def reap_row(row):
     """The hub's worker_reap on one row (fleet_hub_reap) → 0 reaped, 1 not."""
     try:
-        out = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh" && fleet_hub_reap "$2" 90', "fleet-close",
+        out = subprocess.run(["bash", "-c", LIB + 'fleet_hub_reap "$2" 90', "fleet-close",
                               str(BIN), worker_id(row)], stdin=subprocess.DEVNULL, capture_output=True,
                              text=True, timeout=150)
         token = (out.stdout.strip().splitlines() or [""])[-1]
@@ -810,11 +810,19 @@ def usage():
 HOME = [False]
 
 
+# The fleet's shell library for a snippet run as `bash -c LIB+snippet <bin> …` (the
+# fleet's conf first, as its scripts do): the client's core (issue #4825), and the
+# machine's library on a computer that has it — a client-only one reads its
+# fleet.conf instead, and only the core's helpers (fleet_sockets, fleet_find_tool…)
+# answer there.
+LIB = ('[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-client-core.sh" || exit 1; '
+       'fleet_host_lib || { [ -f "$FLEET_CONF_DIR/fleet.conf" ] && . "$FLEET_CONF_DIR/fleet.conf"; }; ')
+
+
 def sh_lib(snippet, *args):
-    """One line out of fleet-lib.sh (the fleet's conf first, as its scripts do);
-    `args` are the snippet's $2…"""
+    """One line out of the fleet's shell library (LIB); `args` are the snippet's $2…"""
     try:
-        return subprocess.run(["bash", "-c", '[ -f "$1/../fleet.conf" ] && . "$1/../fleet.conf"; . "$1/fleet-lib.sh" && ' + snippet,
+        return subprocess.run(["bash", "-c", LIB + snippet,
                                "fleet-session-cli", str(BIN)] + list(args), stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=15).stdout.strip().split("\n")[0].strip()
     except (OSError, subprocess.SubprocessError):
@@ -829,7 +837,7 @@ def tools_on_path():
     #3454). The thin client's `--run` is a bare ssh: a managed login's tmux is the
     vendor copy fleet_find_tool picks, never on that PATH, so `fleet_sockets` saw no
     fleet and the home answered 「没有在跑的 fleet」 to a person whose sessions run there."""
-    if TOOLS_FILLED[0] or not (BIN / "fleet-lib.sh").exists():
+    if TOOLS_FILLED[0] or not (BIN / "fleet-client-core.sh").exists():
         return
     TOOLS_FILLED[0] = True
     pth = sh_lib('p=$(fleet_path_fill); t=$(fleet_find_tool tmux 2>/dev/null); '
@@ -840,7 +848,7 @@ def tools_on_path():
 
 def fleet_here():
     """The first fleet live on this machine (fleet_sockets), "" on a client-only computer."""
-    if not (BIN / "fleet-lib.sh").exists():
+    if not (BIN / "fleet-client-core.sh").exists():
         return ""
     tools_on_path()
     return sh_lib("fleet_sockets 2>/dev/null")

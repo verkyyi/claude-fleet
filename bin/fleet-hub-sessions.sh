@@ -178,7 +178,7 @@ ETAGF="$G/hubsess.etag"      # the validator of the cache on disk (issue #1481)
 # validator under any other stamp is never sent: cj's client, updated to the code
 # that keeps his node login's rows (#2390), kept asking with the ETag the old code
 # had stored beside an empty cache, and every 304 kept the list empty.
-MAPCODE=$(cat "$BIN/fleet-hub-sessions.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-render-watch.py" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }')
+MAPCODE=$(cat "$BIN/fleet-hub-sessions.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$BIN/fleet-render-watch.py" 2>/dev/null | cksum | awk '{ print $1 "-" $2 }')
 ETAG_STAMP=''  # this round's stamp (fetch sets it; curl_sessions writes it)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac

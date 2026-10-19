@@ -264,7 +264,7 @@ leg landed
 
 # --- hub adapter: the WINDOW's repo, not the fleet conf's ------------------------------
 HB="$WORK/hubbin"; mkdir -p "$HB"
-cp "$BIN/fleet-control-read.sh" "$BIN/fleet-lib.sh" "$HB/"
+cp "$BIN/fleet-control-read.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$HB/"
 printf '#!/bin/bash\nprintf "comment %%s\\n" "$*"\n' > "$HB/fleet-comment.sh"
 printf '#!/bin/bash\nexit 0\n' > "$HB/fleet-diskguard.sh"; cp "$HB/fleet-diskguard.sh" "$HB/fleet-quotaguard.sh"
 printf '#!/bin/bash\nprintf "restore %%s\\n" "$*"\n' > "$HB/dash-restore-session.sh"

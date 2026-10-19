@@ -145,11 +145,11 @@ node_door() {
   if [ -r "$f" ]; then grep -q '^CCQUOTA_TOKEN=.' "$f" 2>/dev/null; return; fi
   [ -f "$_fcd/credsep.json" ]
 }
-# node_pair → NURL / NTOK (shell variables only), from fleet-lib's fleet_node_pair
+# node_pair → NURL / NTOK (shell variables only), from fleet_node_pair (the client core)
 node_pair() {
   local p
   NURL=''; NTOK=''
-  p=$(FLEET_CONF_DIR="$_fcd" bash -c '. "$1/fleet-lib.sh" 2>/dev/null && fleet_node_pair "$2"' fleet-hub-write "$BIN" "$(hub_url 2>/dev/null)") || return 1
+  p=$(FLEET_CONF_DIR="$_fcd" bash -c '. "$1/fleet-client-core.sh" 2>/dev/null && fleet_node_pair "$2"' fleet-hub-write "$BIN" "$(hub_url 2>/dev/null)") || return 1
   NURL=${p%%$'\t'*}; NTOK=${p#*$'\t'}
   [ -n "$NURL" ] && [ -n "$NTOK" ] && [ "$NURL" != "$p" ]
 }

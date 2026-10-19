@@ -52,9 +52,8 @@ bin/fleet-hub-sessions.sh	static
 bin/fleet-hub-write.sh	static
 bin/fleet_reap_policy.py	static
 bin/tmux-dashboard-rows.sh	static
-bin/fleet-lib.sh	install,doctor,host-on,ls,show,answer,doctor-live,bundle
+bin/fleet-client-core.sh	install,doctor,host-on,ls,show,answer,doctor-live,bundle
 bin/fleet-conf.sh	install,doctor,host-on,doctor-live,bundle
-bin/fleet-lang.sh	install,doctor,host-on,ls,show,answer,doctor-live,bundle
 bin/fleet-ui-lang.sh	status
 bin/fleet-daemon-lib.sh	install,doctor:read,doctor-live:read,bundle:read
 bin/dash-keymap.sh	static

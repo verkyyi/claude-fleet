@@ -43,7 +43,7 @@ mkdir -p "$WORK/bin" "$WORK/conf" "$WORK/leases"
 
 # The daemon + libs run from $WORK/bin so BIN resolves the fake gate next to them.
 cp "$SRC" "$WORK/bin/fleet-base-sync.sh"
-cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"
+cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 cp "$BIN/fleet-land-lease.sh" "$WORK/bin/fleet-land-lease.sh"
 cp "$BIN/fleet-deps-link.sh" "$WORK/bin/fleet-deps-link.sh"
 chmod +x "$WORK/bin/fleet-base-sync.sh" "$WORK/bin/fleet-deps-link.sh"

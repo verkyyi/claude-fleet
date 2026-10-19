@@ -54,10 +54,11 @@
 # Static closure (`build`, the safety net under the trace — a branch the actions
 # did not take): the code lines (comments skipped) of a file that RAN, naming
 # another manifest file by its file name, add that file as `static` — one hop,
-# a static file's own names are not followed. fleet-lib.sh and
-# bin/fleet's dispatch loop are not followed (the lib names every script of the
-# fleet; the dispatch is the `fleet-<word>` of every one) — a client command
-# reached only that way is an action above, or it is not the client's.
+# a static file's own names are not followed. fleet-lib.sh, fleet-client-core.sh
+# and bin/fleet's dispatch loop are not followed (the lib names every script of
+# the fleet, the core names the lib it loads only on a hosting machine; the
+# dispatch is the `fleet-<word>` of every one) — a client command reached only
+# that way is an action above, or it is not the client's.
 set -uo pipefail
 BIN=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$BIN/.." && pwd)
@@ -318,7 +319,9 @@ for d in dirs:
             u[act] = u.get(act, False) or ran
 # static: code lines of a traced file naming another manifest file
 names = {os.path.basename(p): p for p in files}
-skip_from = {"bin/fleet-lib.sh"}
+# fleet-client-core.sh names fleet-lib.sh only to load it where it is installed
+# (fleet_host_lib: a hosting machine's branch, issue #4825)
+skip_from = {"bin/fleet-lib.sh", "bin/fleet-client-core.sh"}
 def code(path):
     try:
         text = open(os.path.join(repo, path), encoding="utf-8", errors="replace").read().splitlines()

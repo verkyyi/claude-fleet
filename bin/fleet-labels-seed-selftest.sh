@@ -33,7 +33,7 @@ GH_LOG="$WORK/ghlog"
 
 # real seeder + lib run from $WORK/bin so BIN resolves the copies and ../fleet.conf
 # is absent (env FLEET_REPO wins) — fully hermetic.
-cp "$SRC" "$WORK/bin/fleet-labels-seed.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$SRC" "$WORK/bin/fleet-labels-seed.sh"; cp "$LIB" "$WORK/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 chmod +x "$WORK/bin/fleet-labels-seed.sh"
 
 # --- fake gh: log each `label create` line verbatim; echo nothing. GH_FAIL_ON is

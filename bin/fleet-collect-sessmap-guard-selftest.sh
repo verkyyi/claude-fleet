@@ -37,7 +37,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/bin" "$WORK/fakepath"
 cp "$SRC" "$WORK/bin/tmux-dash-collect.sh"; chmod +x "$WORK/bin/tmux-dash-collect.sh"
-cp "$LIB" "$WORK/bin/fleet-lib.sh"
+cp "$LIB" "$WORK/bin/fleet-lib.sh"; cp "${LIB%/*}/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
 
 # --- fake gh: only `issue list … --jq <expr>`, applied to an empty array via jq
 # (sessmap doesn't need issues; keep the per-repo fetch cheap + hermetic).

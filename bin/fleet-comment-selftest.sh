@@ -39,7 +39,7 @@ MARKER='<!-- fleet:no-relay -->'
 
 # real fleet-comment.sh + lib, run from $WORK/bin so BIN resolves the copies and
 # ../fleet.conf is absent (env FLEET_REPO wins) — fully hermetic.
-cp "$SRC" "$FCS"; cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"
+cp "$SRC" "$FCS"; cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"; cp "$BIN/fleet-gh-lib.sh" "$WORK/bin/fleet-gh-lib.sh"
 cp "$BIN/fleet-ticket.sh" "$BIN/fleet_ticket.py" "$WORK/bin/"   # the post goes through the ticket door (issue #3595)
 chmod +x "$FCS"
 

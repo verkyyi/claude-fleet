@@ -261,7 +261,7 @@ def live_ids():
     """The @fleet_id of every live window on this login, or None (unknown)."""
     seam = os.environ.get("FLEET_INBOX_LIVE_CMD")
     cmd = shlex.split(seam) if seam else \
-        ["bash", "-c", '. "$1/fleet-lib.sh" && fleet_list_windows_all "#{@fleet_id}"', "-", BIN]
+        ["bash", "-c", '. "$1/fleet-client-core.sh" && fleet_host_lib && fleet_list_windows_all "#{@fleet_id}"', "-", BIN]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):

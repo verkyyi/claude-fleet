@@ -119,7 +119,7 @@ leg stale
 
 # --- restore + open-PR: the row's repo ------------------------------------------------
 HB="$WORK/hb"; mkdir -p "$HB"
-cp "$BIN/dash-restore-session.sh" "$BIN/dash-open-pr.sh" "$BIN/fleet-lib.sh" "$HB/"
+cp "$BIN/dash-restore-session.sh" "$BIN/dash-open-pr.sh" "$BIN/fleet-lib.sh" "$BIN/fleet-client-core.sh" "$HB/"
 cat > "$HB/fleet-history.sh" <<'EOF'
 #!/bin/bash
 repo='' main=''; while [ "$#" -gt 1 ]; do case "$1" in --repo) repo=$2; shift ;; --main) main=$2; shift ;; esac; shift; done
