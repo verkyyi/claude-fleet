@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
 // ccquota move — a node moves one of its sessions to another machine through

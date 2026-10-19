@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // claude-fleet#3162: a client takes a release with no ccquota — the repo's

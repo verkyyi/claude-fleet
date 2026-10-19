@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 func TestQuotaPoolUpdatesPreserveOtherPoolsAndTheirObservationTime(t *testing.T) {

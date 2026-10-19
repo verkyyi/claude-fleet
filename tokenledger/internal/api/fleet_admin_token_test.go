@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The admin role account's token (claude-fleet#3724, BREAK-IT

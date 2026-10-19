@@ -221,7 +221,7 @@ HUB_DENY = ("/v1/node/credentials",)
 # What a session may reach under /codex/ (issue #4611): the provider-relative paths
 # Codex CLI (0.162) calls on its model provider, each with its methods — nothing
 # else of chatgpt.com/backend-api/codex is forwarded. ONE list: the same line is
-# tokenledger/internal/credproxy CodexAllowSpec (TestCodexAllowMatchesPython).
+# tokenledger/shared/credproxy CodexAllowSpec (TestCodexAllowMatchesPython).
 CODEX_ALLOW_SPEC = "POST responses, POST responses/compact, GET models"
 CODEX_ALLOW = {}
 for _m, _p in (_x.split() for _x in CODEX_ALLOW_SPEC.split(",")):
@@ -245,7 +245,7 @@ REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
                 "unsupported_region", "request not allowed",
                 "not available in your country", "not available in your region")
 # The upstream's codes for refusing a Codex ACCESS token — the same list as
-# tokenledger/internal/codex rpc.go accessRejectCodes (claude-fleet#1920).
+# tokenledger/shared/codex rpc.go accessRejectCodes (claude-fleet#1920).
 ACCESS_REJECT = ("token_revoked", "token_invalidated", "token_expired", "invalid_token", "account_deactivated")
 BIN = os.path.dirname(os.path.abspath(__file__))
 
@@ -374,7 +374,7 @@ def meter_accept(v):
 class Meter:
     """What one answer says it used: the largest value each usage field
     reached (Claude: message_start + message_delta; Codex: response.completed;
-    a plain JSON body: once). Mirrors tokenledger internal/credproxy usage.go."""
+    a plain JSON body: once). Mirrors tokenledger shared/credproxy usage.go."""
     MAX_WHOLE = 8 << 20
 
     def __init__(self, encoding=""):

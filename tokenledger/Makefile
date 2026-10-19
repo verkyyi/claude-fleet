@@ -6,7 +6,7 @@
 # icons (web/dist), and no console.
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-SRCDIGEST ?= $(shell go run ./cmd/ccquota-srcdigest . 2>/dev/null)
+SRCDIGEST ?= $(shell GOWORK=off go run github.com/verkyyi/claude-fleet/tokenledger/shared/cmd/ccquota-srcdigest . 2>/dev/null)
 LDFLAGS := -s -w -X main.Version=$(VERSION) -X main.SrcDigest=$(SRCDIGEST)
 PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
 
@@ -17,10 +17,12 @@ build:
 
 test:
 	go test ./...
+	cd shared && go test ./...
 	@command -v node >/dev/null && node --test web/test/*.test.mjs || echo "node not found: skipping web tests"
 
 vet:
 	go vet ./...
+	cd shared && go vet ./...
 
 fmt:
 	gofmt -l -w .

@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The admin agent's half of account provisioning (claude-fleet#1411).

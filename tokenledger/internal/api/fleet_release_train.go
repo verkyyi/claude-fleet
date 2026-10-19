@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // The release ledger (claude-fleet#3140, EPIC #3139 C1): every release train

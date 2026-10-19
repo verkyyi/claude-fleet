@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // GET /v1/fleet/release/keys (claude-fleet#3937, EPIC #3923 C14) — the

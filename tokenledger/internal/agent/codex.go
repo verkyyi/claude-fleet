@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/spool"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/spool"
 )
 
 type codexCollector struct {

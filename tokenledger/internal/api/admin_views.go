@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // The whole hub, in the admin area (claude-fleet#2515, EPIC #2512 C3). An

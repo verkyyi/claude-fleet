@@ -11,8 +11,8 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 )
 
 // reloginTo moves pid's row on host to a new login and settles it active the

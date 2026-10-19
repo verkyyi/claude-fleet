@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // SourceCost is one source's cost over some scope, and the two facts needed to

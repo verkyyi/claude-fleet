@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"sort"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // An SSH relay with two hub replicas (claude-fleet#2151, EPIC #2119 C8).

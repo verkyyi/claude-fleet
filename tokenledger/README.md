@@ -1167,7 +1167,7 @@ registers its machine (by claude-fleet's own control `machine_id`) and its
 fleets in four new tables — `fleet_machines`, `fleet_fleets`,
 `fleet_operations` (the journal C3 writes into) and `fleet_audit` (one row per
 fleet tool call, refusals included). Identity is claude-fleet's scheme byte for
-byte (`internal/fleetid`, checked value for value against
+byte (`shared/fleetid`, checked value for value against
 `bin/fleet_hub_common.py`): fleet UUID = `uuid5(machine_id, [session, repo,
 checkout])`, worker_id = `<fleet UUID>/[<repo slug>:]issue-N | scratch-N`. So a
 fleet UUID or worker_id issued by the SSH-era `fleet-hub.py` is the same one
@@ -1649,7 +1649,7 @@ expired certificate is simply refused — scan again for the next one.
 Make the CA once: `ssh-keygen -t ed25519 -N '' -C fleet-user-ca -f ca`, then
 `kubectl create secret generic ccquota-ssh-ca --from-file=ca`.
 
-**What a certificate says** (`internal/sshca`): principals = the person's
+**What a certificate says** (`shared/sshca`): principals = the person's
 login (C4's one name, active somewhere — no active login, no certificate),
 valid 12 hours (a minute back-dated for clock skew), key id
 `person:<principal>` (`person:gh:<GitHub ID>`; the hub relay, C6, reads the

@@ -23,7 +23,7 @@ written into its join Secret) ·
 `roll-user-pod` (the pod alone: its Deployment onto this template's `user_pod.image`,
 the four containers' image and nothing else — claude-fleet#4174)
 (`bin/fleet_cluster_ticket.py`,
-its Go twin `tokenledger/internal/control/cluster_ticket.go`). No manifest ever
+its Go twin `tokenledger/shared/control/cluster_ticket.go`). No manifest ever
 crosses: the provisioner renders the pod itself and checks it again
 (`off_template`) before the API server checks it a third time.
 

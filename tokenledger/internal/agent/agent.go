@@ -28,14 +28,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/identity"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/limits"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sessions"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/spool"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/limits"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/spool"
 )
 
 // hub is the base URL a call to the hub dials (claude-fleet#4175).

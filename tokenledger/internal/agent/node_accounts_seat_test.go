@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // seatAgent is an admin agent in seat mode (claude-fleet#3696): its gate dir

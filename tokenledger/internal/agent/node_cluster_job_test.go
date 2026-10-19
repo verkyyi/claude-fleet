@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // fleet-ops reads a throwaway Job back as its own read-only account

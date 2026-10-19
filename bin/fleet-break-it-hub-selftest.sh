@@ -13,7 +13,7 @@
 #                                                   fleet-doctor.sh (releasekey), release-train.yml; the hub
 #                                                   half is fleet_release_sign.go (go test, when a toolchain is)
 #   release-key-revoked                             bin/fleet-release-verify.py (trust), fleet-release-fetch.py;
-#                                                   tokenledger/internal/release trust.go (go test, when a toolchain is)
+#                                                   tokenledger/shared/release trust.go (go test, when a toolchain is)
 #   node-tmux-restart                               bin/fleet-sessions-snapshot.sh → fleet-restore.sh
 #   empty-fleet-not-restored                        bin/fleet-sessions-snapshot.sh, fleet-restore.sh --auto
 #   empty-fleet-disk-floor                          bin/fleet-restore.sh home_floor_gb, fleet-sessions-snapshot-selftest.sh H2
@@ -64,7 +64,7 @@
 #   email-link-replay                               tokenledger/internal/api email_auth.go (handleEmailLink /
 #                                                   handleEmailCode) + internal/store hub_signin.go; go test, when here
 #   node-token-replayed                             tokenledger/internal/api node_sig.go (nodeAuth) + store,
-#                                                   internal/nodesig (Ensure), every door's nodeAuth (#3710)
+#                                                   shared/nodesig (Ensure), every door's nodeAuth (#3710)
 #                                                   fleet_node_keys.go; bin/fleet_node_sig.py; go test, when here
 #   invite-expired                                  tokenledger/internal/api fleet_invites.go + github_auth.go
 #                                                   (admitInvite, denyText; go test, when a toolchain is here)
@@ -84,13 +84,13 @@
 #   trust-name-borrowed                             tokenledger/internal/api fleet_trust.go (nodeTrust) + fleet_node_desired.go
 #                                                   (go test, when a toolchain is here)
 #   release-tampered                                tokenledger/internal/api fleet_release.go (ReleaseStore) +
-#                                                   internal/release (Build, Fetch, Unpack; go test, when a toolchain is here)
+#                                                   shared/release (Build, Fetch, Unpack; go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/internal/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + internal/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   usage-unattributed                              tokenledger/internal/agent (the claude:local pool) + internal/api
 #                                                   fleet_usage_silent.go (usage_silent; go test, when a toolchain is here)
 #   pool-usage-unattributed                         tokenledger/internal/api fleet_person_budget.go (handleCredProxyUsage,
-#                                                   poolUsagePass) + internal/store pool_usage.go + internal/credproxy
+#                                                   poolUsagePass) + internal/store pool_usage.go + shared/credproxy
 #                                                   usage.go (go test, when a toolchain is here)
 #   pool-usage-silent                               tokenledger/internal/api fleet_pool_usage_silent.go (notePoolResolve,
 #                                                   PoolUsageSilentTick) + fleet_credproxy.go (resolve) + internal/store
@@ -300,7 +300,7 @@ PY2
   out2=$(tail -1 "$sc/p2.log")
   case "$out2" in "probes="[1-9]*" downtime_seconds=0 write_unsupported=0") ;; *) WHY="a hub up throughout read as [$out2]"; return 1 ;; esac
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^(TestReadyzAndDeployProbe|TestReadyFollowsTheMigrations|TestShutdownGrace)$' ./internal/api ./internal/store ./cmd/ccquota 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -617,7 +617,7 @@ PY2
   grep -q 'personcert' "$BIN/fleet-doctor.sh" || { WHY="the doctor has no personcert row"; return 1; }
   WHAT='证书过期、没有 viewer 令牌：节点凭自己的节点令牌回收（node.env 直连入口 / 分离登录走凭据代理 broker），证书一次没发'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    gout=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    gout=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
            go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
     case "$rc:$gout" in
       0:*'no tests to run'*) WHY="the Go test $tests is not there (go test ran none)"; return 1 ;;
@@ -676,7 +676,7 @@ drill_node_paused_still_placed() {
   case "$out" in *'"room"'*) WHY="with FLEET_ADMIT=0 the beat still carries room — the hub would hold on it: $out"; return 1 ;; esac
   gohalf='hub half: the Go gate (tokenledger.yml) runs judge()'"'"'s tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run 'TestNodePlace(SkipsPausedNode|AllPausedRefuses|WithoutCapFieldsFiltersNothing)$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -707,7 +707,7 @@ drill_burst_lands_on_one() {
   done
   grep -q 'recent' "$ROOT/tokenledger/internal/api/fleet_write.go" || { WHY="judge() does not read the recent table"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -740,7 +740,7 @@ drill_dispatch_wrong_replica() {
   done
   grep -q 'peerOf' "$ROOT/tokenledger/internal/api/fleet_write.go" || { WHY="the write path does not look for the replica holding the link"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -768,7 +768,7 @@ drill_cred_user_pod_unlisted() {
   grep -q 'userPodNodeAllow(settings' "$ROOT/tokenledger/internal/api/fleet_cred_policy.go" \
     || { WHY="credPolicyFor does not give a person's pod its owner's list"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^(TestCredPolicyStrictUserPodUsesOwnersList|TestCredPolicyStrictDrillUsesCreatorsList)$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -803,7 +803,7 @@ drill_two_hubs_double_refresh() {
   grep -q 'Leader(ctx, "alerts")' "$ROOT/tokenledger/internal/api/fleet_alerts.go" || { WHY="node alerts are not gated on the leader"; return 1; }
   grep -q 'Leader(ctx, "prune")' "$ROOT/tokenledger/cmd/ccquota/hub.go" || { WHY="the daily prune is not gated on the leader"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^(TestTwoReplicasRefreshOnce|TestSingleHubAlwaysLeads)$' ./internal/credvault ./internal/leader 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -845,7 +845,7 @@ drill_github_signin_unreachable() {
     WHAT="${WHAT}；$PROD_GONE"
   fi
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -884,7 +884,7 @@ drill_entry_dns_follows() {
   fi
   WHAT='地址变 ⇒ 下一拍改（同一条记录）；家连不上 ⇒ 一条不改；手动换家 ⇒ 指新家；手改 ⇒ 改回 + 「有人手改」；调用失败 ⇒ 不算写过、下一拍再试；没 token ⇒ 0 次调用；DNSPod 只认带 fleet 备注的 cf 记录，token 不进 URL / 错误；同一路由器后两个家：钥匙页端口 = 家的转发端口，换家说端口要改，别的端口上的 IPv6 不写 AAAA'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api ./internal/dns 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -918,7 +918,7 @@ drill_entry_name_unclaimed() {
     || { WHY="the address-record loop no longer keeps the *.cf guard"; return 1; }
   WHAT='有家没名 ⇒ 设家（自动或手动）时领下建议名、审计一行，老的下一拍补上；名已在不动、建议名被占不强领；运维仍不能替人起任意名；没领的名不在计划里，*.cf 只有一条 TXT、没有 A/AAAA，被手删下一拍补回'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -952,7 +952,7 @@ drill_invite_expired() {
   grep -q 'denyInvitePrefix + reason' "$ROOT/tokenledger/internal/api/fleet_invites.go" \
     || { WHY="admitInvite no longer refuses a bad invite with its reason"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -985,7 +985,7 @@ drill_drill_person_no_machine() {
   grep -q 'closeDrillLogins(d, now)' "$ROOT/tokenledger/internal/api/fleet_drill.go" \
     || { WHY="DELETE /v1/self no longer removes the login opened for the drill first"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1021,9 +1021,9 @@ drill_opened_login_no_fleet() {
   grep -q '^  node_join_step$' "$s" && grep -q 'fleet_up_step$' "$s" \
     || { WHY="fleet-login-new.sh no longer joins an opened login / brings its fleet up"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($api)\$" ./internal/api 2>&1 \
-          && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" ./internal/agent 2>&1); rc=$?
+          && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local go test -count=1 -run "^($agent)\$" ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go half's tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='入口开号带一次性加入码、管理节点只经环境交给 fleet-login-new.sh；演练身份收号 --delete-home（go test 三条；脚本一半是 fleet-login-new-selftest O）' ;;
@@ -1060,7 +1060,7 @@ drill_remove_pending_machine_gone() {
   grep -q 'body\["machine_gone"\] = True' "$BIN/fleet-hub-admin.py" \
     || { WHY="fleet hub accounts forget has no --machine-gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1092,7 +1092,7 @@ drill_spare_login_empty() {
   grep -q 'state = ? AND op = .create.' "$ROOT/tokenledger/internal/store/fleet_spare.go" \
     || { WHY="ClaimSpare no longer takes only a ready (active) spare"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1122,7 +1122,7 @@ drill_spare_stall_silent() {
   grep -q 's.SpareAlertTick(since, now)' "$ROOT/tokenledger/internal/api/fleet_alerts.go" \
     || { WHY="the alert sweep no longer looks at the spares (SpareAlertTick)"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1151,7 +1151,7 @@ drill_spare_refill_session_gate() {
     WHY="spareMachines reads a login's admit / room again — the session gate holds the spares"; return 1
   fi
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go test is not there (go test ran none)"; return 1 ;;
@@ -1187,7 +1187,7 @@ drill_lease_unseparated_user() {
   grep -q 'credsep_gate' "$BIN/fleet-cred-proxy.py" \
     || { WHY="fleet-cred-proxy.py no longer routes a credsep-gated login central"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -1219,7 +1219,7 @@ drill_trust_name_borrowed() {
   grep -q 'machine := enrolledMachine(et)' "$ROOT/tokenledger/internal/api/fleet_trust.go" \
     || { WHY="nodeTrust no longer judges the machine the endpoint enrolled as"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1279,10 +1279,10 @@ drill_release_tampered() {
   for out in $tests; do
     grep -q "^func $out(" "$f" 2>/dev/null || { WHY="the hub half's test $out is not in ${f#$ROOT/}"; return 1; }
   done
-  grep -q 'digest does not match the manifest' "$ROOT/tokenledger/internal/release/release.go" \
+  grep -q 'digest does not match the manifest' "$ROOT/tokenledger/shared/release/release.go" \
     || { WHY="Unpack no longer checks each file against the signed manifest"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1319,7 +1319,7 @@ drill_machine_agent_wrong_login() {
   grep -q 'CodeWrongLogin' "$ROOT/tokenledger/internal/agent/node_machine.go" \
     || { WHY="the node's demux no longer refuses a login it does not serve"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -1357,7 +1357,7 @@ drill_place_server_down() {
     || { WHY="fleet_control.py no longer files exit 8 as UNAVAILABLE (not attempted)"; return 1; }
   gohalf='hub half: the Go gate (tokenledger.yml) runs the down-fleet tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run 'TestPlacement(SkipsDownFleet|SameLoginPrefersLiveFleet)$|TestClientPlaceServerDownTriesNextMachine$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1402,7 +1402,7 @@ print(c.attached_body({"body": "看图 /Users/me/shot.png", "attachments": [{"id
     || { WHY="the node's start text does not name the landed file: $out"; return 1; }
   gohalf='hub half: the Go gate (tokenledger.yml) runs the attachment tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run 'TestClientPlace(CarriesAttachments|AttachmentsToAnOlderNode)$|TestFetchAttachments$' ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1835,7 +1835,7 @@ drill_dist_publish_tampered() {
     || { WHY="the CI half: $(printf '%s' "$out" | grep -m 3 FAIL | cut -c1-200 | tr '\n' '|')"; return 1; }
   WHAT='CI 送的是整个提交 + 从入口 stable 起的提交链，令牌不上命令行'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1873,7 +1873,7 @@ drill_hub_stream_silent() {
   done
   WHAT='页面：代理挂住的推送 30 s 断开重连（1→2→4→8→15 s）、重连即补一份；连着两次没声音或建不起来退回 10 s 轮询（按名核对）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -1936,7 +1936,7 @@ drill_service_log_cross_login() {
     || { WHY="the console's ServiceSheet no longer takes a 403 as a word (it would retry)"; return 1; }
   WHAT="${WHAT}；页面：403 是一句话、不重试（按名核对）"
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -1969,7 +1969,7 @@ drill_debug_ticket_replayed() {
   done
   WHAT='拷到别的电脑 / 改一字节 / 过期 / 已被补发替换的调试票 → 401 并说怎么补；安装只送指纹哈希（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2004,7 +2004,7 @@ drill_debug_page_stuck() {
   done
   WHAT='诊断员没开成 / 中途死了 / 15 分钟没交页 → 没看完、转给管理员；包里还有凭据 → 400 说哪个文件；7 天后全删（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2042,7 +2042,7 @@ drill_usage_unattributed() {
   done
   WHAT='没 /login 的登录：Claude 用量记进 claude:local 池、照常归到人；会话 working 超 30 分钟没用量 → usage_silent，用量一到就清（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$agent_tests" "$hub_tests" | tr ' ' '|'))\$" ./internal/agent ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2076,7 +2076,7 @@ drill_pool_usage_unattributed() {
     || { WHY="the hub files a cluster report under something other than the pass's principal / session"; return 1; }
   grep -q 'return ErrPoolUsageNoPrincipal' "$tl/store/pool_usage.go" 2>/dev/null \
     || { WHY="the store no longer refuses an ownerless pool_usage row"; return 1; }
-  grep -q 'u.Cred, u.Principal, u.WorkerID' "$tl/credproxy/credproxy.go" \
+  grep -q 'u.Cred, u.Principal, u.WorkerID' "$ROOT/tokenledger/shared/credproxy/credproxy.go" \
     || { WHY="the cluster proxy no longer reports each request with its pass"; return 1; }
   for t in $api_tests; do
     grep -q "^func $t(" "$tl/api/pool_usage_test.go" 2>/dev/null \
@@ -2088,7 +2088,7 @@ drill_pool_usage_unattributed() {
   done
   WHAT='池子用量一笔一行记在通行证的人名下：无通行证 / 伪造 / 自报别人的上报被拒且不写；repo/issue 取自租约；无主行存不进去（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api_tests" "$store_tests" | tr ' ' '|'))\$" ./internal/api ./internal/store 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2125,7 +2125,7 @@ drill_pool_usage_silent() {
   done
   WHAT='代理一直在为某人放行、池子用量却没进账超 30 分钟 → pool_usage_silent；记账一到 / 代理不再放行即清（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2157,7 +2157,7 @@ drill_feedback_identity_public() {
   done
   WHAT='公开单子只有原话 · 版本 · 机器类型 · Claude/Codex · F 号；登录名、人、机器名、会话、窗口不进；令牌不进日志（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2187,7 +2187,7 @@ drill_feedback_github_down() {
     || { WHY="the hub half's test $tests is not in tokenledger/internal/api/fleet_feedback_github_test.go"; return 1; }
   WHAT='GitHub 500 / 超时 ⇒ 待转，1 分钟起翻倍到 1 小时再试；恢复后只建一张（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2220,7 +2220,7 @@ drill_feedback_reply_lost() {
   done
   WHAT='关单 ⇒ 送一次；会话已关 ⇒ 存着，他下一个会话上线时送一次；30 天过期不送；重复关单不重复送（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2327,7 +2327,7 @@ drill_pool_usage_node_dropped() {
   done
   WHAT='节点代理的用量：登录没对应到人 → 不写无主行、记 pool_usage_unowned 告警；按会话（worker_id · 订阅 · 模型 · 分项）上报，repo/issue 取自租约；旧代理的汇总照记（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$api_tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -2357,7 +2357,7 @@ drill_account_gh_only_check() {
   [ -z "$out" ] || { WHY="a principal is judged by its gh: spelling again: $(printf '%s' "$out" | head -2 | sed "s|$tl/||" | tr '\n' ' ')"; return 1; }
   WHAT='没有 GitHub 的人：邀请（绑邮箱）→ 登录 → 绑机器 → 发证书 → 自己的 /v1/me；老 GitHub 人迁移前后快照一致；「是不是一个人」只问 isPerson（测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -2377,7 +2377,7 @@ c11_go_tests() {
     grep -q "^func $t(" "$tl/api/$file" 2>/dev/null || { WHY="the hub half's test $t is not in internal/api/$file"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$*" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -2464,7 +2464,7 @@ drill_apply_flood() {
     || { WHY="the store's racing-submit test is gone (access_requests_test.go)"; return 1; }
   c11_go_tests access_requests_test.go TestApplySubmitEditWithdraw TestApplyPerAddressLimit TestApplyCooldown || return 1
   if [ "$GO_RAN" = 1 ]; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestAccessRequestsOnePending$' ./internal/store 2>&1); rc=$?
     [ "$rc" = 0 ] || { WHY="eight racing submits did not leave one pending (go test): $(printf '%s' "$out" | head -4 | tr '\n' ' ')"; return 1; }
   fi
@@ -2692,7 +2692,7 @@ drill_release_key_outside_train() {
     || { WHY="the hub half's test TestReleaseTrainSigned is gone"; return 1; }
   WHAT='签名私钥抄进登录的 secrets.env、或会话里设了签名变量：scan 找到（exit 1）、体检 releasekey FAIL；删掉即干净；入口无私钥只建未签清单、列车握 release-sign（测试按名核对在，Go 门跑它）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($tests)\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
@@ -2763,8 +2763,8 @@ PY
     || { WHY="ccquota release fetch no longer keeps the revoked ids it saw"; return 1; }
   WHAT='根钥匙作废 k1：清单带作废单即拒；下一版不带了，机器记下的作废 id 照拒；伪造的作废单（非根钥匙签）不认（Go 半边测试按名核对在，Go 门跑它们）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s' "$tests" "$api" | tr ' ' '|'))\$" ./internal/release ./internal/api 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s' "$tests" "$api" | tr ' ' '|'))\$" github.com/verkyyi/claude-fleet/tokenledger/shared/release ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='根钥匙作废 k1：Python 与 Go（ccquota 取包 / 校验目录、入口验签）都拒；下一版不带作废单，机器记下的照拒；伪造的作废单不认；两种语言读同一格式（go test + python）' ;;
@@ -3018,7 +3018,7 @@ drill_browser_import_access_crossed() {
     || { WHY="browser import has no credential replacement regression"; return 1; }
   WHAT='导入保存与缓存之间替换 / 刷新同名行，旧 access 被拒且新行不变；正常导入保留 MeterID（Go 门验证）'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
       go test -count=1 -run '^TestBrowserCache(RejectsReplacedSecret|PreservesSavedIdentity)$' ./internal/credvault 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="browser cache regression ran no tests"; return 1 ;;

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 )
 
 func TestCodexLauncherWorkingDirectory(t *testing.T) {

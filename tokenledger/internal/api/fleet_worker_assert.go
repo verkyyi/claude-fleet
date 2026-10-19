@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // A worker assertion — 执行会话声明 (claude-fleet#1810, EPIC #1813 C8).

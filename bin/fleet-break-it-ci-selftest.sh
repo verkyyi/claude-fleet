@@ -52,6 +52,10 @@
 #   oss-internal-name-committed  a PR adds a line holding a private address: the
 #                       oss-scan gate (the REAL rule table) reds it; `# oss-ok:` greens
 #                       it; .github/workflows/oss-scan.yml runs it on every PR (#3572)
+#   go-install-replace  tokenledger/go.mod replaces its shared module with ./shared
+#                       (#4811), and `go install …/cmd/ccquota@<v>` refuses any module
+#                       with a replace: a bin/ script still spelling it reds
+#                       tokenledger-modules-selftest.sh (run in a sandbox repo, for real)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -792,6 +796,37 @@ drill_oss_internal_name_committed() {
     || { WHY="the same line with # oss-ok: was not green ($rc): $(printf '%s' "$out" | tr '\n' '|')"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
   WHAT="PR 新增一行私网地址：门禁红，报 文件:行 规则；同一行写上 # oss-ok: <理由> 转绿并计入豁免；oss-scan.yml 每个 PR 都跑、不设路径过滤"
+}
+
+# ---- go-install-replace (#4811): the developer road built ccquota with `go install
+# …/cmd/ccquota@latest`; a replace in tokenledger/go.mod makes Go refuse that. The
+# modules selftest is copied into a sandbox repo with the real layout's shape and run:
+# a planted `go install …@latest` is red, the checkout build the node-join uses is green.
+drill_go_install_replace() {
+  CAP=60
+  local t0 d out rc p M=github.com/verkyyi/claude-fleet/tokenledger
+  grep -qE "^replace $M/shared => \./shared$" "$BIN/../tokenledger/go.mod" 2>/dev/null \
+    || { WHY="tokenledger/go.mod has no replace for shared (the premise of this row)"; return 1; }
+  grep -nE "go[[:space:]]+install[[:space:]]+[^ ]*$M/[^ ]*@" "$BIN/fleet-node-join.sh" | grep -vE '^[0-9]+:[[:space:]]*#' \
+    && { WHY="fleet-node-join.sh still runs go install …@<v>"; return 1; }
+  d=$(mktemp -d "${TMPDIR:-/tmp}/goinst.XXXXXX"); t0=$(now)
+  mkdir -p "$d/bin" "$d/tokenledger/shared"
+  cp "$BIN/tokenledger-modules-selftest.sh" "$BIN/tokenledger-split-shared.sh" "$d/bin/"
+  printf 'module %s\n\ngo 1.25.0\n\nrequire %s/shared v0.0.0\n\nreplace %s/shared => ./shared\n' "$M" "$M" "$M" > "$d/tokenledger/go.mod"
+  printf 'go 1.25.0\n\nuse (\n\t.\n\t./shared\n)\n' > "$d/tokenledger/go.work"
+  printf 'module %s/shared\n\ngo 1.25.0\n' "$M" > "$d/tokenledger/shared/go.mod"
+  for p in $(sed -n 's/^PKGS="\(.*\)"$/\1/p' "$BIN/tokenledger-split-shared.sh"); do
+    mkdir -p "$d/tokenledger/shared/$p"; printf 'package %s\n' "$p" > "$d/tokenledger/shared/$p/x.go"
+  done
+  printf '#!/bin/sh\n(cd tokenledger && GOWORK=off go build -o x ./cmd/ccquota)\n' > "$d/bin/fleet-x.sh"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="the sandbox's checkout build was not green ($rc): $(printf '%s' "$out" | grep FAIL | head -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  printf '#!/bin/sh\nGOBIN=x go install %s/cmd/ccquota@latest\n' "$M" > "$d/bin/fleet-x.sh"
+  out=$(bash "$d/bin/tokenledger-modules-selftest.sh" 2>&1); rc=$?
+  [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'fleet-x.sh:2:.*go install' \
+    || { WHY="a planted go install …@latest was not red ($rc): $(printf '%s' "$out" | tail -2 | tr '\n' '|')"; rm -rf "$d"; return 1; }
+  SECS=$(since "$t0"); rm -rf "$d"
+  WHAT="tokenledger/go.mod 带 replace：bin/ 里一行 go install …/cmd/ccquota@latest 让模块自测红（点名文件:行）；节点开发路改成克隆后 go build，自测绿"
 }
 
 cred_run_drills "$0"

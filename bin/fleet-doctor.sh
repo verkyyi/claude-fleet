@@ -299,7 +299,7 @@ if [ "$_hub_on" = 1 ]; then
   _nenv="$conf_dir/node.env"
   _nfix="\`bash $(dirname "$0")/fleet-hub-node.sh env --write\` (fills it from this login's agent service), or re-join with fleet-node-join.sh"
   if ! command -v ccquota >/dev/null 2>&1; then
-    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\`)"  # dist-ok: advice printed to a person, never fetched here
+    _tok_lv=WARN _tok_msg="CCQUOTA_FLEET=1 but ccquota is not on PATH — the entry's lease / placement / move all fall back: spawns are guarded by the GitHub claim alone, every session opens here, no move lands. Install the agent (fleet-node-join.sh, or build it: \`cd claude-fleet/tokenledger && go build -o ~/.local/bin/ccquota ./cmd/ccquota\` in a clone)"
   elif [ -n "${CCQUOTA_TOKEN:-}" ]; then
     # Reaches the hub, but the wrong way round: a token exported into the shell is
     # inherited by every worker a pane spawns (a node credential in each session's
@@ -1293,7 +1293,7 @@ if [ -d "$acct_dir" ] && [ -n "$(find "$acct_dir" -maxdepth 1 -type f ! -name '.
         fi
       fi
     else
-      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; install it with \`go install github.com/verkyyi/claude-fleet/tokenledger/cmd/ccquota@latest\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"  # dist-ok: advice printed to a person, never fetched here
+      warn quota "CCQUOTA_HUB_URL set but ccquota not on PATH — pre-emptive rotation off; build it in a clone of the claude-fleet repo with \`cd tokenledger && go build -o ~/.local/bin/ccquota ./cmd/ccquota\` (needs Go 1.25+; the product is TokenLedger, tokenledger/ in the claude-fleet repo, the binary is still \`ccquota\`)"  # dist-ok: advice printed to a person, never fetched here
     fi
   else
     printf '        note: set CCQUOTA_HUB_URL (fleet.conf) for pre-emptive rotation via ccquota — today it rotates only after a limit banner.\n'

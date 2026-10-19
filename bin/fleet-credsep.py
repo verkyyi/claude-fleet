@@ -76,7 +76,7 @@ import argparse, glob, grp, json, os, plistlib, pwd, re, shlex, shutil, stat, su
 
 MAC = sys.platform == "darwin"
 HERE = os.path.dirname(os.path.abspath(__file__))
-HUB_MANAGED = "hub-managed"     # tokenledger internal/codex HubManagedRefreshToken
+HUB_MANAGED = "hub-managed"     # tokenledger shared/codex HubManagedRefreshToken
 SAFE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$")
 
 

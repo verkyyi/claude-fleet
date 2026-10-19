@@ -18,7 +18,7 @@ import (
 // Per-person budgets (claude-fleet#1977, EPIC #1967 R2).
 //
 // Both credential proxies — a login's local one (bin/fleet-cred-proxy.py) and
-// the cluster's (internal/credproxy) — count the tokens each response's own
+// the cluster's (shared/credproxy) — count the tokens each response's own
 // `usage` names and report them here under the person: the local proxy with
 // its node token (POST /v1/node/usage — the person is the login's, never the
 // node's say-so), the cluster proxy with its own token (POST

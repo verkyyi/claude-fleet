@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // rollupVersion is stamped into rollup_meta. Bump it when the rollup's key or

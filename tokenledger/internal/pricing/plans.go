@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // PlanPrice is one subscription price as declared in an overrides file.

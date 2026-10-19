@@ -7,8 +7,8 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/findings"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // The account_login inputs (claude-fleet#1469, EPIC #1665 C2): where the hub
@@ -19,7 +19,7 @@ import (
 //
 //   - a machine's collector reports its Codex profile's login health on every
 //     status push (model.CollectorStatus.Login — computed on the node by
-//     internal/codex.LoginHealth, the same reading `ccquota codex list`
+//     shared/codex.LoginHealth, the same reading `ccquota codex list`
 //     prints). reauth_required there means that machine's copy of the
 //     credential is dead and the agent has given up on it.
 //   - a vault credential the hub itself refreshes carries refresh_error when

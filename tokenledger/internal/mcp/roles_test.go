@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // A user over /mcp (claude-fleet#1985): only the tools IsUserTool names,

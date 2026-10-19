@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 // 会话通行证 (claude-fleet#1969, EPIC #1967 C2): a pass for one person's one

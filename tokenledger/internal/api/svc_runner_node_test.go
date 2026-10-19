@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket/wsjson"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Service runs on the Mac mini's service logins (claude-fleet#4086): the hub

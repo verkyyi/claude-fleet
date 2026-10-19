@@ -19,8 +19,8 @@ import (
 	"syscall"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
 // `ccquota agent --machine` (claude-fleet#2333, EPIC #2329 C5): ONE node

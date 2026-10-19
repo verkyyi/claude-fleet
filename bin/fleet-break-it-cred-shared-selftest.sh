@@ -27,7 +27,7 @@
 #   cred-codex-path-open    bin/fleet-cred-proxy.py codex_refused / CODEX_ALLOW_SPEC (issue #4611):
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
-#                       go test ./internal/credproxy TestCodexPathAllowList)
+#                       go test github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy TestCodexPathAllowList)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT / CP are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"

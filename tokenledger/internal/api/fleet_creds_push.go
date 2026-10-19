@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A changed credential, pushed (claude-fleet#3744).

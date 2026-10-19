@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/credproxy"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
 )
 
 func TestCredProxyExpiredAccessRefreshes(t *testing.T) {

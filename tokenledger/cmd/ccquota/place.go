@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/fleetid"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
 // ccquota place — a node asks the hub where a new session should run

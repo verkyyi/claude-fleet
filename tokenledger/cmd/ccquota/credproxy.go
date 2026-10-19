@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/credproxy"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy"
 )
 
 // runCredProxy is `ccquota credproxy` — the cluster credential proxy

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // The repository a turn was spent in, declared at the source.
@@ -49,7 +49,7 @@ const repoNegativeTTL = 10 * time.Minute
 // whole rather than grown, which costs one re-resolution round and cannot leak.
 const repoCacheMax = 4096
 
-// gitCommand is the injection point for tests, mirroring internal/codex/rpc.go.
+// gitCommand is the injection point for tests, mirroring shared/codex/rpc.go.
 var gitCommand = exec.CommandContext
 
 // repoResolver answers "which repository is this working directory" once per

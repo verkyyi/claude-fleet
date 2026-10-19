@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // CIRunnersPath lists every machine's test runner (claude-fleet#3144, EPIC

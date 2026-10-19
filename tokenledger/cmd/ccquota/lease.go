@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
 )
 
 // ccquota lease — a node's side of the hub's issue leases (claude-fleet#1422).

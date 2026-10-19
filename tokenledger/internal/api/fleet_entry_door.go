@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // A person's door from a phone (claude-fleet#3069, EPIC #3067 C2): the

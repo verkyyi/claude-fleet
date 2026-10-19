@@ -18,8 +18,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // FiveHourWindow is the length of the session rate-limit bucket.

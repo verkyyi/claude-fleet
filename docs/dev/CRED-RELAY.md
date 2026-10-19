@@ -72,7 +72,7 @@ prod 入口已开（`deploy/k8s/overlays/prod/deployment-env.yaml`）；回滚�
 把保险箱里每个 pool 凭据（github、已暂停、待重新登录的除外）的额度自己读一遍，读数不再依赖节点：
 
 - **Claude**：setup token 经 `/anthropic/v1/messages` 发和节点 `probeToken` 一样的一 token 请求，
-  从响应头读 5 小时 / 7 天（`internal/limits`）。每读一次消耗极少量订阅额度，频率可配。
+  从响应头读 5 小时 / 7 天（`shared/limits`）。每读一次消耗极少量订阅额度，频率可配。
 - **Codex**：保险箱的 access token（入口自己刷新）经 `/chatgpt/wham/usage` 读用量
   （`codex.ParseUsage`，和 app-server 读数同一套池 / 窗口命名）。
 - **归属**：按凭据自己的 `account_uuid`（Codex 由 id_token 算出；Claude 用导入时记下的，或操作者

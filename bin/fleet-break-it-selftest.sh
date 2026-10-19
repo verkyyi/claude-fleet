@@ -4203,7 +4203,7 @@ _drill_go_tests() {  # <tests> <test file> <what> [<package>, default ./internal
     grep -q "^func $t(" "$f" 2>/dev/null || { WHY="the hub half's test $t is not in ${f#$ROOT/}"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" "$pkg" 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -4895,7 +4895,7 @@ drill_machine_lane_reissued() {
   [ "$rc" = 0 ] || { WHY="the supervisor half is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
   [ -f "$sup" ] || { WHY="${sup#$ROOT/} is gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s %s' "$api" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -5114,7 +5114,7 @@ drill_place_declined_not_retried() {
   case "$out" in *'"claim": "stale"'*) ;; *) WHY="fleet-children does not call a claim with no session stale: $out"; return 1 ;; esac
   gohalf='hub half: the Go gate (tokenledger.yml) runs the next-machine tests'
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run 'TestNodePlace(DeclinedTriesNextMachine|AllDeclinedRefuses|AskerIsTriedLast|NamedOrClaimedIsTriedOnce)$|TestClientPlaceDeclinedTriesNextMachine$' ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests are not there (go test ran none)"; return 1 ;;
@@ -6878,14 +6878,14 @@ drill_chat_relay_wrong_person() {
   for out in $api; do
     grep -q "^func $out(" "$ROOT/tokenledger/internal/api/chat_relay_test.go" 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
   done
-  grep -q "^func $ctl(" "$ROOT/tokenledger/internal/control/chat_relay_test.go" 2>/dev/null || { WHY="the statement's test $ctl is gone"; return 1; }
+  grep -q "^func $ctl(" "$ROOT/tokenledger/shared/control/chat_relay_test.go" 2>/dev/null || { WHY="the statement's test $ctl is gone"; return 1; }
   grep -q "^func $agt(" "$ROOT/tokenledger/internal/agent/node_chat_relay_test.go" 2>/dev/null || { WHY="the helper's test $agt is gone"; return 1; }
   # the open carries no target: ChatRelayOpen is relay_id · secret · login, nothing more
-  out=$(awk '/^type ChatRelayOpen struct/,/^}/' "$ROOT/tokenledger/internal/control/chat_relay.go" | grep -c 'json:"')
+  out=$(awk '/^type ChatRelayOpen struct/,/^}/' "$ROOT/tokenledger/shared/control/chat_relay.go" | grep -c 'json:"')
   [ "$out" = 3 ] || { WHY="ChatRelayOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./internal/api ./internal/control ./internal/agent 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run "^($(printf '%s %s %s' "$api" "$ctl" "$agt" | tr ' ' '|'))\$" ./internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/control ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
       0:*) WHAT='签错 / 过期 / 给别的转发 / 给别的登录 / 寿命过长 / 没有声明 / 先发字节 → 节点断开，socket 0 连接 0 字节；给别的登录的 open 不回拨；请求里塞 target/path/addr/port 只到本登录自己的 socket；没报 CapChat 的节点不收 open（NO_CHAT）' ;;
@@ -6913,7 +6913,7 @@ drill_chat_first_open_cold() {
   grep -q 'a.chatSockOrEnsure(ctx, dctx, login' "$f" 2>/dev/null \
     || { WHY="openChatRelay dials the socket without chatSockOrEnsure: a cold home never starts"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run '^TestChatSockEnsuresOnDemand$' ./internal/agent 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go test is not there (go test ran none)"; return 1 ;;
@@ -6952,7 +6952,7 @@ drill_chat_relay_replica_hop() {
   grep -q 's.chatRelayPeer(r, home.Machine, home.Login)' "$ROOT/tokenledger/internal/api/fleet_chat.go" 2>/dev/null \
     || { WHY="the chat routes never hand a request to the replica holding the login's link"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./internal/api 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -6973,11 +6973,11 @@ term_go() {
   local tests="$1" pkgs="$2" ok="$3" out rc t
   for t in $tests; do
     grep -q "^func $t(" "$ROOT"/tokenledger/internal/api/*_test.go "$ROOT"/tokenledger/internal/agent/*_test.go \
-      "$ROOT"/tokenledger/internal/control/*_test.go "$ROOT"/tokenledger/internal/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
+      "$ROOT"/tokenledger/shared/control/*_test.go "$ROOT"/tokenledger/shared/attachment/*_test.go 2>/dev/null || { WHY="the test $t is gone"; return 1; }
   done
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
     # shellcheck disable=SC2086 # pkgs is a word list
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
           go test -count=1 -run "^($(printf '%s' "$tests" | tr ' ' '|'))\$" $pkgs 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the Go tests are not there (go test ran none)"; return 1 ;;
@@ -7033,12 +7033,12 @@ drill_term_controller_ready() {
 drill_term_other_person() {
   CAP=180; local t0 out
   t0=$(now)
-  out=$(awk '/^type TermOpen struct/,/^}/' "$ROOT/tokenledger/internal/control/term_relay.go" | grep -c 'json:"')
+  out=$(awk '/^type TermOpen struct/,/^}/' "$ROOT/tokenledger/shared/control/term_relay.go" | grep -c 'json:"')
   [ "$out" = 3 ] || { WHY="TermOpen has $out wire fields, want 3 (relay_id, secret, login)"; return 1; }
   grep -q 'viewAsAsked(r) != ""' "$ROOT/tokenledger/internal/api/term_relay.go" 2>/dev/null \
     || { WHY="termPerson does not refuse a view-as"; return 1; }
   term_go 'TestTermRelayOtherPersonNeverReachesIt TestTermRelayBadGrantNeverOpensATerminal TestTermRelayReachesOwnWorker TestTermGrant TestAttachmentGrant TestAttachmentRejectsBeforeTarget TestAttachmentGrantReplayAndWrongService' \
-    './internal/api ./internal/control' \
+    './internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/control' \
     '别人 / 管理员本人 / 以他视角 / 运营门 / 别的 Origin / 两个或没有选择器 / 路径当目标 / 不存在的 worker → 拒，命令 0 次启动；签错 / 过期 / 给别的转发 / 别的登录 / 对话的声明 / 命令当目标 / 重放 → 节点断开，不开终端；本人能开（对照）' \
     || return 1
   SECS=$(since "$t0")
@@ -7054,7 +7054,7 @@ drill_term_relay_orphan() {
   grep -q 'defer s.termRelays.closeNode(nc)' "$ROOT/tokenledger/internal/api/nodes.go" 2>/dev/null \
     || { WHY="a dropped control link does not end its terminals (no termRelays.closeNode)"; return 1; }
   term_go 'TestTermRelayOrphanReleasesEverything TestTermRelayAgentLinkDrop TestTermRelayDoesNotInterruptChat TestTermPtyRunsTheOneCommand TestTermControlFrames TestAttachmentLogoutRevokesDirect TestAttachmentLeaseAndEpoch TestAttachmentReplacementFence TestAttachmentRelayAndLateSelection TestAttachmentBackpressureAndEarlyData TestAttachmentSDPLimits' \
-    './internal/api ./internal/agent ./internal/control ./internal/attachment' \
+    './internal/api ./internal/agent github.com/verkyyi/claude-fleet/tokenledger/shared/control github.com/verkyyi/claude-fleet/tokenledger/shared/attachment' \
     '半开 / 畸形帧 / 超大帧 / 撤销登录 / 接到一半走了 / 控制链路断：30 秒内伪终端和命令进程归零、转发表空；终端饱和、关、发垃圾都不打断同登录的对话，反之亦然' \
     || return 1
   SECS=$(since "$t0")

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 // claude-fleet#2772 (EPIC #2770 C2): the CI pushes each stable to the hub, the

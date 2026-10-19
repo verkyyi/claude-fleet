@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/i18n"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // Every translation's English entry must BE the exported constant, not a copy

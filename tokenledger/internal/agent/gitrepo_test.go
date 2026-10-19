@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/model"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // The shapes a real `git remote get-url origin` comes back with, and every

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The agent half of node-to-node relays (claude-fleet#1421, EPIC #1419 C2).

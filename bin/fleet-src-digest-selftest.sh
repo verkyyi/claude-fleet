@@ -1,13 +1,13 @@
 #!/bin/bash
 # fleet-src-digest-selftest.sh — bin/fleet-src-digest.py (git) and
-# tokenledger/internal/release/srcdigest.go (the hub, the Dockerfile) compute ONE
+# tokenledger/shared/release/srcdigest.go (the hub, the Dockerfile) compute ONE
 # digest of the Go source a ccquota is built from (issue #2930). The Go test's
 # vector (sourceDigestVector / sourceDigestWant in srcdigest_test.go) is
 # committed into a sandbox repo here and the python must print the same value —
 # so the two can never drift apart without one side going red. No Go needed.
 set -u
 BIN=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$BIN/.." && pwd)
-T="$ROOT/tokenledger/internal/release/srcdigest_test.go"
+T="$ROOT/tokenledger/shared/release/srcdigest_test.go"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/srcdig.XXXXXX"); trap 'rm -rf "$WORK"' EXIT
 fail=0
 ok()  { printf 'ok   %s\n' "$1"; }
@@ -43,6 +43,13 @@ printf 'x\n' >> "$WORK/r/tokenledger/internal/store/store_test.go"
 printf 'y\n' >> "$WORK/r/tokenledger/internal/api/fleetclient/manifest"
 git -C "$WORK/r" commit -qam noise
 [ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" = "$want" ] && ok "tests / the client manifest are not inputs" || bad "a non-input moved the digest"
+printf 'z\n' >> "$WORK/r/tokenledger/go.work"
+git -C "$WORK/r" commit -qam work
+[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" = "$want" ] && ok "go.work is not an input (the image builds GOWORK=off)" || bad "go.work moved the digest"
+# the shared module both the hub and the node build in counts (#4811)
+printf '// edit\n' >> "$WORK/r/tokenledger/shared/release/r.go"
+git -C "$WORK/r" commit -qam shared
+[ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a shared/ edit moves it" || bad "an edit under shared/ did not move the digest"
 printf '// edit\n' >> "$WORK/r/tokenledger/cmd/ccquota/main.go"
 git -C "$WORK/r" commit -qam go
 [ "$(python3 "$BIN/fleet-src-digest.py" "$WORK/r" HEAD)" != "$want" ] && ok "a Go edit moves it" || bad "a Go edit did not move the digest"

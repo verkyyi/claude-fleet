@@ -435,11 +435,11 @@ drill_key_rotation_breaks_sessions() {
   # cluster credential proxy's (it follows the key the hub names)
   local gohalf="入口一半：此处没有 Go 工具链，由 Go 门（tokenledger.yml）跑 TestKeyRotation*" out rc
   grep -q '^func TestKeyRotationSessionPassH1(' "$ROOT/tokenledger/internal/api/fleet_key_rotation_test.go" 2>/dev/null \
-    && grep -q '^func TestPass2KeyRotation(' "$ROOT/tokenledger/internal/credproxy/pass2_test.go" 2>/dev/null \
+    && grep -q '^func TestPass2KeyRotation(' "$ROOT/tokenledger/shared/credproxy/pass2_test.go" 2>/dev/null \
     || { WHY="the hub half's tests TestKeyRotation* / TestPass2KeyRotation are gone"; return 1; }
   if [ "${BREAK_GO:-1}" != 0 ] && command -v go >/dev/null 2>&1; then
-    out=$(cd "$ROOT/tokenledger" && GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
-          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./internal/api ./internal/credproxy 2>&1); rc=$?
+    out=$(cd "$ROOT/tokenledger" && GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local \
+          go test -count=1 -run 'KeyRotation|LoadKeysPrev' ./internal/api github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy 2>&1); rc=$?
     case "$rc:$out" in
       0:*'no tests to run'*) WHY="the hub half's Go tests did not run"; return 1 ;;
       0:*) gohalf="入口一半：go test 旧钥签的 fcp-h1 / fcp-h2 / frl2 / frh1 在 PREV 下验得过、续签成新钥签的同一张，没 PREV 403；中心代理跟上入口换的钥" ;;

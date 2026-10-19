@@ -21,17 +21,17 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/api"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/dns"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/leader"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/mcp"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/nodesig"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/pricing"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/scan"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/nodesig"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sshca"
 	"github.com/verkyyi/claude-fleet/tokenledger/web"
 )
 

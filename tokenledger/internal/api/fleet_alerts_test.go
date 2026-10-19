@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket/wsjson"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // Node-lost and lease-conflict alerts (claude-fleet#1630).

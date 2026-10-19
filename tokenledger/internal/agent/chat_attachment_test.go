@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/attachment"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/attachment"
 )
 
 type chatTestStream struct{ frames []attachmentFrame }

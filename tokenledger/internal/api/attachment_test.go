@@ -10,8 +10,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/pion/webrtc/v4"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/attachment"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/attachment"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 func TestAttachmentControllerCapability(t *testing.T) {

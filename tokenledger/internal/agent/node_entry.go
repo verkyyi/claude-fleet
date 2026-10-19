@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // The entry port's keys, pushed (claude-fleet#3070, EPIC #3067 C3).

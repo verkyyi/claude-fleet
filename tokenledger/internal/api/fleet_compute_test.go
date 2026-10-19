@@ -10,8 +10,8 @@ import (
 
 	"github.com/coder/websocket/wsjson"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/credvault"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // 只协调 (claude-fleet#1719, EPIC #1718 C1): a login started with

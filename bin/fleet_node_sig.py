@@ -111,7 +111,7 @@ def register_body(seed, bearer_off=False):
 
 def confirmed_auth(path, method, url):
     """The FleetSig value for url when path is the key the hub at url's hub took
-    (<path>.ok); None otherwise — tokenledger/internal/nodesig's Confirmed."""
+    (<path>.ok); None otherwise — tokenledger/shared/nodesig's Confirmed."""
     try:
         seed = _read_seed(path)
         with open(path + ".ok") as f:

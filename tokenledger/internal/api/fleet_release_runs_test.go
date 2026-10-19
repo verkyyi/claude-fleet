@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/release"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 var runT0 = time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC)

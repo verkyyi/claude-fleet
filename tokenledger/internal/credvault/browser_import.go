@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/internal/store"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 )
 
 var ErrImportExists = errors.New("subscription name exists; explicitly update its credential")

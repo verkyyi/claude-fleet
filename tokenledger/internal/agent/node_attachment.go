@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/attachment"
-	"github.com/verkyyi/claude-fleet/tokenledger/internal/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/attachment"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
 // openAttachment uses the existing per-login callback and cap. The signaling
