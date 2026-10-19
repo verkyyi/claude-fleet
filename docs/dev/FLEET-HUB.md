@@ -963,6 +963,17 @@ the reason. It is refused (409 `INVALID_STATE`) for a start the hub can check �
 an issue start, or one whose node named the window (`fid:`) — which the hub
 settles on its own books (#4932); the CLI is `fleet hub settle-start
 <operation_id> --reason <why>`.
+The start's own node may end one too, with no admin (#4978): its owner's
+`fleet_repo_authority.py --settle --apply` reads `GET /v1/fleet/authority/operation`
+(the owner's — or unowned — open `worker_start`s on this login's fleets: the same
+endpoint, or an earlier one of the same machine and OS login) and, for one over
+24 h that this login's control journal never accepted (`not_accepted`) or
+journalled `failed`, and that no window or process names, `POST`s
+`{operation_id, local}`. The hub re-checks its books in the write (still open,
+not another person's, no inventory row / lease / open local start of a worker it
+can name) and ends it `failed` (`START_ABANDONED`, `prior_status` /
+`prior_result` kept), one `operation_abandon` audit row. A lease's expiry is
+never taken as proof.
 `fleet_list` is an inventory, not a worker-health check: its `fresh` availability
 means the node recently answered discovery. Use `fleet_status` for live workers.
 

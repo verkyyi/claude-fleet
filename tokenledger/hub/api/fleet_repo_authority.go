@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
 )
 
 func (s *Server) canRepoAuthority(ctx context.Context, endpoint string) bool {
@@ -116,6 +118,9 @@ func (s *Server) endpointRole(endpointID string) string {
 //	GET|POST /v1/fleet/authority/start?repo=     a node's local start (reserve · begin ·
 //	                                              observe · recover-observe · stopped ·
 //	                                              cancel · unobserved; GET reservation= | list=1)
+//	GET|POST /v1/fleet/authority/operation       a node's stale worker_starts: GET lists its
+//	                                              own fleets' open ones, POST {operation_id,
+//	                                              local} abandons one it never ran (#4978)
 //
 // The scope is the caller's own: a node's token speaks for its login's person
 // (nodeTaskOwner), a person's sign-in for that person. Only a caller who sees
@@ -174,8 +179,8 @@ func (s *Server) handleFleetAuthority(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub := strings.Trim(strings.TrimPrefix(r.URL.Path, FleetAuthorityPath), "/")
-	if sub != "" && sub != "start" {
-		httpError(w, http.StatusNotFound, "a task authority is "+FleetAuthorityPath+"[/start]")
+	if sub != "" && sub != "start" && sub != "operation" {
+		httpError(w, http.StatusNotFound, "a task authority is "+FleetAuthorityPath+"[/start|/operation]")
 		return
 	}
 	s.taskAuthority(w, r, c, sub)
@@ -294,6 +299,14 @@ func (s *Server) taskAuthority(w http.ResponseWriter, r *http.Request, c authori
 	}
 	if owner == "" {
 		httpError(w, 403, "no person owns this caller's tasks")
+		return
+	}
+	if sub == "operation" {
+		if onBehalf {
+			httpError(w, 403, "a start is settled by its own node")
+			return
+		}
+		s.authorityOperation(w, r, c)
 		return
 	}
 	if sub == "start" {
@@ -521,6 +534,122 @@ func (s *Server) authorityStart(w http.ResponseWriter, r *http.Request, c author
 		return
 	}
 	writeJSON(w, 200, start)
+}
+
+// abandonAge: how old a worker_start must be before its node may abandon it.
+var abandonAge = 24 * time.Hour
+
+// authorityOperation is a node settling its own fleets' stale worker_starts
+// (claude-fleet#4978): GET lists the owner's open starts whose fleet is this
+// node's login; POST abandons one the node says it never ran — its journal
+// has no such operation (not_accepted) or journalled it failed (failed), and
+// no window or process there names it. The hub adds its own books
+// (store.AbandonStaleStart) and writes one operation_abandon audit row.
+func (s *Server) authorityOperation(w http.ResponseWriter, r *http.Request, c authorityCaller) {
+	ep, _ := s.nodeAuthOpt(r)
+	if ep == nil || (r.Method != http.MethodPost && r.Method != http.MethodGet) {
+		httpError(w, 403, "a start is settled by its own authenticated node")
+		return
+	}
+	fs, err := s.Store.Fleets()
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	mine := map[string]bool{}
+	for _, f := range fs {
+		if s.sameNodeLogin(f, ep) {
+			mine[f.FleetID] = true
+		}
+	}
+	if r.Method == http.MethodGet {
+		ops, err := s.Store.OwnerOpenStarts(c.owner)
+		if err != nil {
+			httpError(w, 500, err.Error())
+			return
+		}
+		out := []map[string]any{}
+		for _, o := range ops {
+			if mine[o.FleetID] {
+				out = append(out, map[string]any{"operation_id": o.ID, "fleet_id": o.FleetID, "status": o.Status,
+					"created": o.Created.UTC().Format(time.RFC3339), "updated": o.Updated.UTC().Format(time.RFC3339)})
+			}
+		}
+		writeJSON(w, 200, map[string]any{"endpoint_id": ep.ID, "min_age_seconds": int(abandonAge.Seconds()), "operations": out})
+		return
+	}
+	var in struct {
+		OperationID string `json:"operation_id"`
+		Local       string `json:"local"`
+	}
+	if !decodeAuthority(w, r, &in) {
+		return
+	}
+	if !fleetid.IsUUID(in.OperationID) || (in.Local != "not_accepted" && in.Local != "failed") {
+		httpError(w, 400, "operation_id (a UUID) and local (not_accepted | failed) are required")
+		return
+	}
+	o, err := s.Store.FleetOperation(in.OperationID)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !mine[o.FleetID]) {
+		httpError(w, 404, "no start of this node's fleets has that id")
+		return
+	}
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	var res struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(o.Result), &res)
+	sw := startWorkerOf(o.Request, res.Error.Message)
+	said := map[string]string{"not_accepted": "has no record of it", "failed": "journalled it failed"}[in.Local]
+	now := time.Now()
+	result := func(priorStatus, priorResult string) string {
+		var prior any
+		if priorResult != "" {
+			prior = json.RawMessage(priorResult)
+		}
+		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": "START_ABANDONED",
+			"message": "abandoned: " + c.actor + " " + said + " and no window or process there names it; past " + abandonAge.String() +
+				", nothing on the hub's books holds its worker",
+			"actor": c.actor, "local": in.Local, "prior_status": priorStatus, "prior_result": prior}})
+		return string(b)
+	}
+	fleetID, why, err := s.Store.AbandonStaleStart(o.ID, c.owner, sw, abandonAge, result, now)
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	if why != "" {
+		httpError(w, 409, why)
+		return
+	}
+	if aerr := s.Store.FleetAudit(c.actor, "operation_abandon", fleetID, "ABANDONED: node "+said+" (local="+in.Local+")", o.ID, now); aerr != nil {
+		log.Printf("fleet audit: %v", aerr)
+	}
+	fresh, err := s.Store.FleetOperation(o.ID)
+	if err != nil {
+		httpError(w, 500, err.Error())
+		return
+	}
+	s.progressOp(fresh)
+	writeJSON(w, 200, operationView(fresh))
+}
+
+// sameNodeLogin: fleet row f is ep's login's — its endpoint, or an earlier
+// endpoint of the same machine and OS login (a re-joined login), the rule
+// supersededBy uses.
+func (s *Server) sameNodeLogin(f store.FleetRow, ep *store.Endpoint) bool {
+	if f.EndpointID == ep.ID {
+		return true
+	}
+	if old, err := s.Store.EndpointByID(f.EndpointID); err == nil && old != nil {
+		return old.MachineID != "" && old.OSUser != "" && old.MachineID == ep.MachineID && old.OSUser == ep.OSUser
+	}
+	return f.Hostname != "" && f.OSUser != "" && f.Hostname == ep.Hostname && f.OSUser == ep.OSUser
 }
 
 // ownerDispatchGate refuses a hub dispatch the owner's authority does not

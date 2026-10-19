@@ -5919,6 +5919,25 @@ drill_orphan_start_unnamed() {
   SECS=$(since "$t0")
 }
 
+# ---- orphan-start-node-abandon (#4978): a stale worker_start the hub never
+# heard the end of (its fleet row replaced, a reconcile that never reached the
+# node) blocked its owner's cutover with no road of their own. The node now
+# says it never ran it — no row in its control journal, or failed, and no
+# window or process names it — and the hub abandons it on its own books, audited.
+drill_orphan_start_node_abandon() {
+  CAP=180;  # two cold go test builds
+  local t0
+  t0=$(now)
+  grep -q 'operations=settle_operations(apply)' "$ROOT/bin/fleet_repo_authority.py" \
+    || { WHY="the node's --settle no longer settles its stale worker_starts"; return 1; }
+  ( cd "$ROOT/bin" && python3 -m unittest fleet_repo_authority_settle_test.SettleOperationsTests >/dev/null 2>&1 ) \
+    || { WHY="SettleOperationsTests red: a start this login may hold was abandoned, or one it never ran was kept"; return 1; }
+  _drill_go_tests 'TestAbandonStaleStart' "$ROOT/tokenledger/hub/store/fleet_start_settle_test.go" x ./hub/store || return 1
+  _drill_go_tests 'TestAuthorityOperationNodeAbandonsStaleStart' "$ROOT/tokenledger/hub/api/fleet_repo_authority_test.go" \
+    '节点自己结失效的 worker_start：只列给本 login 的节点，24 小时内、别的节点、管理员门都拒；结成 failed（START_ABANDONED），写 operation_abandon 审计，不再挡切换（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
 # ---- authority-superseded-fleet-row (#4877): fleet rows are never deleted,
 # so an old row of the same machine + login that a newer row replaced stayed
 # present=0 and asked for a capable observation that never comes. The manifest

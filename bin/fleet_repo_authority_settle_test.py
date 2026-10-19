@@ -25,11 +25,14 @@ def native_of(pid):
 
 class FakeHub:
     """RepoLocalStart's transitions for the three settle actions, nothing more."""
-    def __init__(self, starts):
+    def __init__(self, starts, ops=None):
         self.starts = {(s["repo"], s["reservation"]): dict(s) for s in starts}
+        self.ops = None if ops is None else {o["operation_id"]: dict(o) for o in ops}  # None: a hub before #4978
         self.writes = []
 
     def api(self, method, path, body=None, query=None):
+        if path == "/authority/operation":
+            return self.operation(method, body)
         repo = query["repo"]
         if method == "GET" and path == "/authority/start" and query.get("list") == "1":
             return dict(repo=repo, endpoint_id="node", starts=[
@@ -48,6 +51,18 @@ class FakeHub:
         else:
             raise migration.hubrest.Fail(1, "HTTP 409 fence token=SECRET-X")
         return {k: v for k, v in s.items() if k != "updated"}
+
+    def operation(self, method, body):
+        if self.ops is None:
+            raise migration.hubrest.Fail(1, "the hub refused: HTTP 404 — a task authority is /v1/fleet/authority[/start]")
+        if method == "GET":
+            return dict(endpoint_id="node", min_age_seconds=86400,
+                        operations=[dict(o) for o in self.ops.values() if o["status"] in ("pending", "running", "unknown", "sent")])
+        assert method == "POST" and set(body) == {"operation_id", "local"}, body
+        self.writes.append(("op", body["operation_id"], body["local"]))
+        o = self.ops[body["operation_id"]]
+        o["status"] = "failed"
+        return dict(operation_id=o["operation_id"], status="failed")
 
     def open(self, repo):
         return sorted(k for (r, k), s in self.starts.items()
@@ -139,6 +154,80 @@ class SettleTests(unittest.TestCase):
         with patch.object(migration.hubrest, "api", return_value=dict(phase="reserved")):
             with self.assertRaisesRegex(ValueError, "issue #4832"):
                 migration.main(["org/a", "--settle"])
+
+
+DAY = 86400
+
+
+def op(op_id, created=OLD, status="running"):
+    return dict(operation_id=op_id, fleet_id="fleet-uuid", status=status, created=created, updated=created)
+
+
+class SettleOperationsTests(unittest.TestCase):
+    """issue #4978: a worker_start this login never ran — its control journal
+    has no such operation, or journalled it failed, and no window or process
+    names it — is abandoned on the hub; anything this login may still hold
+    is kept."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.env = patch.dict(os.environ, FLEET_CONF_DIR=self.tmp.name, FLEET_HUB_TOKEN="SECRET-X")
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def journal(self, rows):
+        import sqlite3
+        d = Path(self.tmp.name) / "control"
+        d.mkdir(exist_ok=True)
+        db = sqlite3.connect(str(d / "state.sqlite3"))
+        db.execute("CREATE TABLE operations (id TEXT PRIMARY KEY, fleet_id TEXT NOT NULL, action TEXT NOT NULL,"
+                   " request TEXT NOT NULL, actor TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL,"
+                   " updated REAL NOT NULL, result TEXT)")
+        for op_id, status in rows:
+            db.execute("INSERT INTO operations VALUES (?, 'fleet-uuid', 'worker_start', '{}', 'gh:1', ?, 0, 0, NULL)", (op_id, status))
+        db.commit()
+        db.close()
+
+    def run_settle(self, hub, held, apply):
+        out = io.StringIO()
+        with patch.object(migration.hubrest, "api", side_effect=hub.api), \
+                patch.object(migration, "held_text", return_value=held), contextlib.redirect_stdout(out):
+            migration.main(["--settle"] + (["--apply"] if apply else []))
+        return json.loads(out.getvalue())
+
+    def hub(self):
+        young = migration.time.strftime("%Y-%m-%dT%H:%M:%SZ", migration.time.gmtime(migration.time.time() - 3600))
+        return FakeHub([], [op("e183930f-8be5-447e-911d-85ee7145e2e8"), op("local-failed"), op("local-running"),
+                            op("in-a-window"), op("young", created=young)])
+
+    def test_eleven_day_old_start_never_run_here_is_abandoned(self):
+        self.journal([("local-failed", "failed"), ("local-running", "running")])
+        hub = self.hub()
+        with patch.object(migration, "hosted_repos", return_value=[]):
+            dry = self.run_settle(hub, "@authority_receipt in-a-window", False)
+            self.assertEqual(hub.writes, [], "a dry settle wrote")
+            self.assertEqual({r["operation_id"]: r["action"] for r in dry["operations"]["operations"]},
+                             {"e183930f-8be5-447e-911d-85ee7145e2e8": "abandon", "local-failed": "abandon",
+                              "local-running": "keep", "in-a-window": "keep", "young": "keep"})
+            done = self.run_settle(hub, "@authority_receipt in-a-window", True)
+        self.assertEqual(hub.writes, [("op", "e183930f-8be5-447e-911d-85ee7145e2e8", "not_accepted"), ("op", "local-failed", "failed")])
+        self.assertEqual(done["operations"]["counts"], {"abandoned": 2, "local running": 1, "held": 1, "recent": 1})
+        log = (Path(self.tmp.name) / "logs" / "authority.log").read_text()
+        self.assertIn("settle operation=e183930f-8be5-447e-911d-85ee7145e2e8 fleet=fleet-uuid local=not_accepted result=abandoned", log)
+        self.assertNotIn("SECRET-X", log + json.dumps(done))
+
+    def test_blind_or_no_journal_keeps_everything(self):
+        hub = FakeHub([], [op("x")])
+        with patch.object(migration, "hosted_repos", return_value=[]):
+            self.assertEqual(self.run_settle(hub, "", True)["operations"]["counts"], {"unknown": 1}, "no journal, yet called it never run")
+            self.journal([])
+            self.assertEqual(self.run_settle(hub, None, True)["operations"]["counts"], {"unknown": 1}, "could not look, yet called it unheld")
+        self.assertEqual(hub.writes, [])
+
+    def test_old_hub_leaves_operations_out(self):
+        with patch.object(migration, "hosted_repos", return_value=[]):
+            self.assertIsNone(self.run_settle(FakeHub([]), "", True)["operations"])
 
 
 if __name__ == "__main__":

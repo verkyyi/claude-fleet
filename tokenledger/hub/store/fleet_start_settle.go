@@ -206,3 +206,99 @@ func (s *Store) SettleStartByOperator(opID string, w StartWorker, minAge time.Du
 	}
 	return fleetID, "", tx.Commit()
 }
+
+// Abandoning a stale worker_start on its node's word (claude-fleet#4978). A
+// start the node that answers for its fleet never ran — it has no such
+// operation in its journal, or journalled it failed, and no window or process
+// there names it — still blocks its owner's authority switch when the hub
+// never heard the outcome (its fleet row since replaced, a reconcile that
+// never reached the node). That node may say so: the start ends failed
+// (START_ABANDONED) when it is still that worker_start, open, older than minAge,
+// the owner's (task_owner, else unowned), and nothing on the hub's books could
+// be its worker (startWorkerHeld). A lease's expiry is never taken as proof.
+
+// OwnerOpenStarts lists the open worker_starts owner may settle: their own
+// (task_owner) and the unowned ones journalled before task_owner existed. The
+// caller keeps only those of its own fleets.
+func (s *Store) OwnerOpenStarts(owner string) ([]FleetOperation, error) {
+	rows, err := s.read.Query(`SELECT id FROM fleet_operations
+		 WHERE action = 'worker_start' AND status IN ('pending','running','unknown','sent') AND (task_owner = ? OR task_owner = '')
+		 ORDER BY created`, owner)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	out := []FleetOperation{}
+	for _, id := range ids {
+		o, err := s.FleetOperation(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+// AbandonStaleStart ends op failed on its node's word (see above); fleetID
+// when it did, why when it keeps it.
+func (s *Store) AbandonStaleStart(opID, owner string, w StartWorker, minAge time.Duration, result func(priorStatus, priorResult string) string, now time.Time) (string, string, error) {
+	tx, err := s.write.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	var fleetID, action, status, prior, created, taskOwner string
+	if err = tx.QueryRow(`SELECT fleet_id, action, status, COALESCE(result, ''), created, task_owner FROM fleet_operations WHERE id = ?`, opID).
+		Scan(&fleetID, &action, &status, &prior, &created, &taskOwner); err != nil {
+		return "", "", err
+	}
+	if action != "worker_start" {
+		return "", "only a worker_start is abandoned this way", nil
+	}
+	switch status {
+	case "pending", "running", "unknown", "sent":
+	default:
+		return "", "the start is " + status + ", already settled", nil
+	}
+	if taskOwner != "" && taskOwner != owner {
+		return "", "the start is another person's", nil
+	}
+	at, _ := time.Parse(rfc, created)
+	if at.IsZero() || now.Sub(at) < minAge {
+		return "", "the start is younger than " + minAge.String(), nil
+	}
+	if err = s.lockOwnerAuthority(tx, owner); err != nil {
+		return "", "", err
+	}
+	workers := "[]"
+	if err = tx.QueryRow(`SELECT workers_json FROM fleet_fleets WHERE fleet_id = ?`, fleetID).Scan(&workers); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", err
+	}
+	if w.named() {
+		why, err := startWorkerHeld(tx, fleetID, workers, w)
+		if err != nil || why != "" {
+			return "", why, err
+		}
+	}
+	res, err := tx.Exec(`UPDATE fleet_operations SET status = 'failed', result = ?, updated = ? WHERE id = ? AND status = ?`,
+		result(status, prior), now.UTC().Format(rfc), opID, status)
+	if err != nil {
+		return "", "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", "changed while settling", nil
+	}
+	return fleetID, "", tx.Commit()
+}

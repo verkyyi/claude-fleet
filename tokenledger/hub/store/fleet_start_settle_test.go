@@ -199,3 +199,87 @@ func TestSettleStartByOperator(t *testing.T) {
 		t.Fatal(f, why)
 	}
 }
+
+// claude-fleet#4978: an 11-day-old running worker_start its node never ran
+// ends failed (START_ABANDONED) on the node's word; one that is too young,
+// another person's, already settled, or whose worker the hub's books still
+// show (a live window in the inventory) is kept.
+func TestAbandonStaleStart(t *testing.T) {
+	s := taskStore(t)
+	t0 := time.Date(2026, 10, 8, 5, 32, 18, 0, time.UTC)
+	day := 24 * time.Hour
+	now := t0.Add(11 * day)
+	if err := s.Enroll("ep", "ep", "hash-ep"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordFleetSnapshot("ep", "host", "u", "m-1", []FleetReport{{FleetID: "f1", Name: "fleet",
+		Repo: "org/repo", State: "running", WorkersJSON: `[{"worker_id":"f1/issue-7","issue":7,"repo":"org/repo"}]`}}, now); err != nil {
+		t.Fatal(err)
+	}
+	op := func(id, owner, status, request string) {
+		t.Helper()
+		if err := s.InsertFleetOperation(FleetOperation{ID: id, FleetID: "f1", Actor: "gh:2987262", TaskOwner: owner, Idem: id,
+			Action: "worker_start", Request: request, Status: status, Created: t0, Updated: t0}); err != nil {
+			t.Fatal(id, err)
+		}
+	}
+	res := func(prior, priorResult string) string {
+		return `{"error":{"code":"START_ABANDONED","prior_status":"` + prior + `"}}`
+	}
+	abandon := func(id string, w StartWorker, at time.Time) (string, string) {
+		t.Helper()
+		f, why, err := s.AbandonStaleStart(id, "gh:2987262", w, day, res, at)
+		if err != nil {
+			t.Fatal(id, err)
+		}
+		return f, why
+	}
+	scratch := `{"params":{"agent":"claude","kind":"scratch","no_repo":true}}`
+	op("stale", "", "running", scratch)
+	op("bob", "gh:bob", "running", scratch)
+	op("live", "gh:2987262", "unknown", `{"params":{"kind":"issue","issue":7,"repo":"org/repo"}}`)
+
+	open, err := s.OwnerOpenStarts("gh:2987262")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{}
+	for _, o := range open {
+		ids = append(ids, o.ID)
+	}
+	if strings.Join(ids, ",") != "stale,live" && strings.Join(ids, ",") != "live,stale" {
+		t.Fatal("open starts", ids)
+	}
+	if _, why := abandon("stale", StartWorker{}, t0.Add(time.Hour)); !strings.Contains(why, "younger than") {
+		t.Fatal(why)
+	}
+	if _, why := abandon("bob", StartWorker{}, now); why != "the start is another person's" {
+		t.Fatal(why)
+	}
+	// Its worker is still in the fleet's inventory: a live window, never abandoned.
+	if _, why := abandon("live", StartWorker{Issue: 7, Repo: "org/repo"}, now); !strings.Contains(why, "in inventory") {
+		t.Fatal(why)
+	}
+	if f, why := abandon("stale", StartWorker{}, now); f != "f1" || why != "" {
+		t.Fatal(f, why)
+	}
+	o, err := s.FleetOperation("stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Status != "failed" || !strings.Contains(o.Result, `"START_ABANDONED"`) || !strings.Contains(o.Result, `"prior_status":"running"`) {
+		t.Fatal(o.Status, o.Result)
+	}
+	if _, why := abandon("stale", StartWorker{}, now); !strings.Contains(why, "already settled") {
+		t.Fatal(why)
+	}
+	// It no longer blocks its owner's cutover; the live one still does.
+	blockers, _, err := s.OwnerAuthorityBlockers("gh:2987262", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(blockers, "|")
+	if strings.Contains(got, "unsettled start: stale") || !strings.Contains(got, "unsettled start: live") {
+		t.Fatal("blockers", blockers)
+	}
+}

@@ -511,9 +511,12 @@ def hosted_repos():
 
 
 def settle(repo, apply):
-    """One repo's settle (below), else every hosted repo's, printed as one doc."""
+    """One repo's settle (below), else every hosted repo's, printed as one doc;
+    either way with this node's stale worker_starts (settle_operations)."""
     if repo:
-        print(json.dumps(settle_one(repo, apply), indent=2))
+        doc = settle_one(repo, apply)
+        doc["operations"] = settle_operations(apply)
+        print(json.dumps(doc, indent=2))
         return
     docs = [settle_one(r, apply) for r in hosted_repos()]
     counts = {}
@@ -521,7 +524,92 @@ def settle(repo, apply):
         for k, v in d["counts"].items():
             counts[k] = counts.get(k, 0) + v
     print(json.dumps(dict(repo="", endpoint_id=docs[0]["endpoint_id"] if docs else "", apply=apply,
-                          counts=counts, repos=docs), indent=2))
+                          counts=counts, repos=docs, operations=settle_operations(apply)), indent=2))
+
+
+def local_operation(op_id):
+    """This login's control journal's word on op_id: None = never accepted
+    here, else its local status. Raises OSError when there is no journal to
+    read — then nothing may be called never accepted."""
+    import sqlite3
+    path = conf_dir() / "control" / "state.sqlite3"
+    if not path.is_file():
+        raise OSError("no control journal at %s" % path)
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=10)
+        try:
+            row = db.execute("SELECT status FROM operations WHERE id=?", (op_id,)).fetchone()
+        finally:
+            db.close()
+    except sqlite3.Error as exc:
+        raise OSError(str(exc)) from exc
+    return None if row is None else row[0]
+
+
+def operation_plan(op, held, now, min_age):
+    """One stale worker_start of this node -> (local, why); local "" = kept.
+    Abandoned only when this login never ran it: its journal has no such
+    operation or journalled it failed, and no window or process names it."""
+    op_id = op.get("operation_id") or ""
+    try:
+        if start_age(op.get("created") or "", now) < min_age:
+            return "", "recent"
+    except ValueError:
+        return "", "unknown"
+    if held is None:
+        return "", "unknown"
+    if op_id in held:
+        return "", "held"
+    try:
+        local = local_operation(op_id)
+    except OSError:
+        return "", "unknown"
+    if local is None:
+        return "not_accepted", "this machine has no record of it"
+    if local == "failed":
+        return "failed", "this machine journalled it failed"
+    return "", "local " + str(local)
+
+
+def settle_operations(apply):
+    """Abandon this node's stale worker_starts (issue #4978): an open start of
+    one of this login's fleets, older than the hub's min age, that this login
+    never ran (operation_plan) ends START_ABANDONED, audited on the hub. A hub
+    from before it answers None."""
+    try:
+        data = hubrest.api("GET", "/authority/operation")
+    except hubrest.Fail as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+    ops = data.get("operations") if isinstance(data, dict) else None
+    min_age = data.get("min_age_seconds") if isinstance(data, dict) else None
+    if not isinstance(ops, list) or not isinstance(min_age, int) or min_age <= 0:
+        raise ValueError("the Hub answered no list of this node's starts")
+    held, now = held_text(), time.time()
+    counts, plan = {}, []
+    for op in ops:
+        if not isinstance(op, dict) or not isinstance(op.get("operation_id"), str):
+            continue
+        local, why = operation_plan(op, held, now, min_age)
+        row = dict(operation_id=op["operation_id"], fleet_id=op.get("fleet_id") or "", status=op.get("status") or "",
+                   action="abandon" if local else "keep", why=why)
+        if local and apply:
+            try:
+                ack = hubrest.api("POST", "/authority/operation", {"operation_id": op["operation_id"], "local": local})
+                if not isinstance(ack, dict) or ack.get("operation_id") != op["operation_id"] or ack.get("status") != "failed":
+                    raise ValueError("abandon acknowledgement differs")
+                row["result"] = "abandoned"
+            except (hubrest.Fail, ValueError) as exc:
+                row["result"] = "failed: " + error_reason(exc)
+            authority_log("settle operation=%s fleet=%s local=%s result=%s" % (
+                row["operation_id"], row["fleet_id"] or "-", local, row["result"]))
+        bucket = row.get("result", "abandon" if local else why)
+        if bucket.startswith("failed"):
+            bucket = "failed"
+        counts[bucket] = counts.get(bucket, 0) + 1
+        plan.append(row)
+    return dict(apply=apply, counts=counts, operations=plan)
 
 
 def settle_one(repo, apply):
