@@ -75,22 +75,26 @@ cd "$R/home/\$host" || exit 255
 [ -e "$R/stall-rig" ] || HOME="$R/home/\$host" HOST_NAME=\$host exec sh -c "\$last"
 # thin-stall-drops: the line goes silent for \$(cat stall) seconds — ssh's own rule
 # for it, off the argv it was given: ServerAliveCountMax keepalives in a row
-# unanswered, one every ServerAliveInterval, and it gives the line up (255)
+# unanswered, one every ServerAliveInterval, and it gives the line up (255). The
+# view stays in the foreground (its stdin is the pty); the watcher is the job.
 ai=0 am=3
 for a; do case \$a in ServerAliveInterval=*) ai=\${a#*=} ;; ServerAliveCountMax=*) am=\${a#*=} ;; esac; done
-HOME="$R/home/\$host" HOST_NAME=\$host sh -c "\$last" 0<&0 &
-c=\$!
-while kill -0 \$c 2>/dev/null; do
-  if [ -e "$R/stall" ]; then
-    d=\$(cat "$R/stall"); rm -f "$R/stall"; b=\$((ai * am))
-    if [ "\$ai" -gt 0 ] && [ "\$d" -gt "\$b" ]; then
-      sleep "\$b"; echo "Timeout, server \$prev not responding." >&2; kill \$c 2>/dev/null; exit 255
+me=\$\$; rm -f "$R/cut.\$me"
+( while kill -0 \$me 2>/dev/null; do
+    if [ -e "$R/stall" ]; then
+      d=\$(cat "$R/stall"); rm -f "$R/stall"; b=\$((ai * am))
+      if [ "\$ai" -gt 0 ] && [ "\$d" -gt "\$b" ]; then
+        sleep "\$b"; touch "$R/cut.\$me"; echo "Timeout, server \$prev not responding." >&2
+        pkill -P \$me 2>/dev/null; exit 0
+      fi
+      echo "stalled \$d s, within \$b s" >> "$R/stalls"
     fi
-    echo "stalled \$d s, within \$b s" >> "$R/stalls"
-  fi
-  sleep 0.1
-done
-wait \$c
+    sleep 0.1
+  done ) </dev/null &
+HOME="$R/home/\$host" HOST_NAME=\$host sh -c "\$last"
+rc=\$?
+[ -e "$R/cut.\$me" ] && exit 255
+exit \$rc
 EOF
   local m
   for m in m1 m2; do
