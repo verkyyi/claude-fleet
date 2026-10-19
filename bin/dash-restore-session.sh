@@ -226,11 +226,26 @@ case "$kind" in
     # (its encoded path is where the transcript lives) — that is why resume rebuilt
     # it at the original path.
     args=${cmd#claude }
+    # A hub task's session (claude-fleet#4974): the worktree remembers its record,
+    # and while that record still names THIS conversation's executor the window
+    # comes back as that same session — its binding stamped from the record, the
+    # transcript resumed (never forked: a fork is a new start the hub refuses).
+    # A closed record or another conversation ⇒ the resume below, as before.
+    tstamp=''
+    if tref=$(fleet_worktree_task "$wt"); then
+      rsid=$(printf '%s' "$verdict" | cut -f3)
+      tstamp=$(fleet_task_rebind_stamp "$tref" "$rsid"); trc=$?
+      case "$trc" in
+        0) args="--resume $rsid"; tstamp="$tstamp$(fleet_win_stamp_cmd @worktree "$wt")" ;;
+        3) tstamp='' ;;
+        *) refuse "restore: $tref is still this session's but cannot continue now — not reopened"; exit 1 ;;
+      esac
+    fi
     # Same descriptive name as the original worker (kebab of the ledger title);
     # fall back to resume-<key> when the title is missing (issue #319).
     name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
-      "$stamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
+      "$stamp$tstamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for $key"; exit 1; }
     # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
     # which resolve to their key via the ledger (issue #319) — so the row reads like

@@ -125,8 +125,9 @@ LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: 
 # what the reapers (@reap_policy, @reap_hold, @pin, @epic, @test_identity), the
 # report chain (@origin_gen, @origin_retired), the launcher (@account_class) and
 # the lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
-# apart: it defaults to worker.
-MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line @name_manual"
+# apart: it defaults to worker. A hub task's record (@task, @task_flow — issue
+# #4974) rides too: its reapers and top bar read it off the window.
+MIGRATE_CARRY="@reap_policy @reap_hold @pin @epic @test_identity @origin_gen @origin_retired @account_class @task_line @name_manual @task @task_flow"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear
@@ -582,6 +583,32 @@ migrate_one_body() {
     ta_why=$(bash "$BIN/fleet-account.sh" target-auth --agent claude --label "$ACTIVE" 2>&1 >/dev/null) && ta_why='' \
       || { ta_why=${ta_why##*fleet-account: }; ta_why=${ta_why#target-auth: }; ta_why=${ta_why:-the login check itself failed}; }
   fi
+  # A hub task's session (@launch, claude-fleet#4974) is the SAME executor in its
+  # new window: its launch binding rides the move — stamped before the launcher
+  # reads it — and fleet_launch.py supervise resumes it as the one the record
+  # names; without it the new window was a fresh start the hub refused (409), and
+  # the session was gone. Asked BEFORE the /exit: the record must still name this
+  # window's live native (transfer-check), or the session is left running.
+  local tlaunch tlr='' tl_why='' tlstamp='' ttask=''
+  tlaunch=$(wopt "$wid" '#{@launch}')
+  if [ -n "$tlaunch" ]; then
+    local tl_rc
+    if [ -n "${FLEET_MIGRATE_TASK_CHECK:-}" ]; then   # selftest seam: <socket> <window>, rc 0 = bound
+      tl_why=$("$FLEET_MIGRATE_TASK_CHECK" "$SOCK" "$wid" 2>&1 >/dev/null); tl_rc=$?
+    else tl_why=$(python3 "$BIN/fleet_launch.py" --socket "$SOCK" --pane "$wid" transfer-check 2>&1 >/dev/null); tl_rc=$?; fi
+    if [ "$tl_rc" = 0 ]; then tl_why=''
+    else tl_why=$(printf '%s' "$tl_why" | tail -n 1); tl_why=${tl_why#launch: }; tl_why=${tl_why:-the task binding check failed}; fi
+    tlr=$(wopt "$wid" '#{@launch_receipt}')
+    local tlo tlv tlpairs=(@launch "$tlaunch" @launch_receipt "$tlr" @launch_started 1)
+    for tlo in @fleet_id @worktree @native_worktree @task @task_flow @dispatch @agent_def; do
+      tlv=$(wopt "$wid" "#{$tlo}"); [ -n "$tlv" ] && tlpairs+=("$tlo" "$tlv")
+    done
+    tlstamp=$(fleet_win_stamp_cmd ${tlpairs[@]+"${tlpairs[@]}"})
+    ttask=$(wopt "$wid" '#{@task}')
+  fi
+  if [ "$DRY" = 1 ] && [ -n "$tl_why" ]; then
+    say "    ! task binding: $tl_why — would be left running"
+  fi
   if [ "$DRY" = 1 ] && [ "${AGENT:-claude}" = codex ]; then
     say "  ↻ $name ($wid) [codex · $cxhome] would /exit launcher $cpid and codex resume ${sid%%-*}… in $cwd${nudge:+ (nudged)}"
     return 0
@@ -600,6 +627,12 @@ migrate_one_body() {
   # account after inventory, immediately before the first state change or /exit.
   if [ -n "$TARGET_ACCOUNT" ] && ! bash "$BIN/fleet-manual-sub.sh" check "$SESS" "$TARGET_ACCOUNT"; then
     say "  – $name ($wid): target quota changed or cannot be verified — left running"
+    skipped=$((skipped+1)); return 0
+  fi
+  if [ -n "$tl_why" ]; then
+    say "  – $name ($wid): task binding: $tl_why — left running (its record must still name this session)"
+    [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
+      "$name: 未重开：hub 任务的绑定对不上，原会话留着 · not reopened: $tl_why" >/dev/null 2>&1 || :
     skipped=$((skipped+1)); return 0
   fi
   if [ -n "$ta_why" ]; then
@@ -711,11 +744,16 @@ migrate_one_body() {
     pin="FLEET_ACCOUNT_SELECTED=1 FLEET_ACCOUNT_LABEL='$ACTIVE' FLEET_ACCOUNT_TARGET='$target_json' "
   fi
   local cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || ${pin}'$LAUNCH'$mflag; exec \$SHELL"
+  # A hub task's session never falls back to a fresh start (the record names this
+  # conversation): the resume once more after a breath — the old launch's stop
+  # reconciliation may still hold its native fence — then the shell.
+  [ -z "$tlaunch" ] || cmd="${pin}'$LAUNCH'$mflag --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; ${pin}'$LAUNCH'$mflag --resume '$sid'; }; exec \$SHELL"
   # Codex (issue #1896): `codex resume <thread>` in the SAME home — fleet-codex.sh
   # turns `--resume` into the native verb; the explicit --agent keeps it Codex.
   if [ "${AGENT:-claude}" = codex ]; then
     local cxh; cxh=$(printf '%s' "$cxhome" | tr -d "'")
     cmd="'$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'${nudge:+ '$nudge'} || '$LAUNCH' --agent codex --codex-home '$cxh'; exec \$SHELL"
+    [ -z "$tlaunch" ] || cmd="'$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'${nudge:+ '$nudge'} || { sleep 3; '$LAUNCH' --agent codex --codex-home '$cxh' --resume '$sid'; }; exec \$SHELL"
   fi
   # 3. the SessionEnd hook closes the window (and records the ledger row) …
   for ((i=1; i<=CLOSE_WAIT; i++)); do
@@ -747,6 +785,7 @@ migrate_one_body() {
     # Before the launcher runs, as a spawn stamps them (@account_class is read by
     # fleet-claude.sh; a set-option after new-window would race it).
     stamp="$stamp$(fleet_win_stamp_cmd @fleet_role "$role" ${cpairs[@]+"${cpairs[@]}"})"
+    stamp="$stamp$tlstamp"   # a hub task's binding (#4974): before the launcher reads @launch
     nw=$(TM new-window -d -t "$SESS:" -n "$name" -c "$cwd" -P -F '#{window_id}' "$stamp$cmd" 2>/dev/null)
     # Stamped first thing (issue #870): a cold `claude --resume` takes seconds to
     # render the old wall, this takes one tmux call.
@@ -821,6 +860,8 @@ migrate_one_body() {
   [ -n "$ncp" ] && TM clear-history -t "$nw" 2>/dev/null
   if [ -z "$ncp" ]; then
     say "  ? $name ($wid → $nw): resumed window opened but no Claude seen within ${BOOT_WAIT}s — check it"
+    [ -z "$tlaunch" ] || { [ -x "$BIN/fleet-alerts.sh" ] && bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} transfer-refused \
+      "$name: hub 任务会话重开后没起来（${ttask:-?}），请看 $nw · reopened task session did not start" >/dev/null 2>&1 || :; }
   elif [ -n "$ACTIVE" ] && [ "$nl" != "$ACTIVE" ]; then
     say "  ? $name ($wid → $nw): resumed as pid $ncp on '${nl:-ambient login}', expected '$ACTIVE' — check it"
   else

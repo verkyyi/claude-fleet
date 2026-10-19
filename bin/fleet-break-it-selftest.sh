@@ -4671,6 +4671,46 @@ PY
   WHAT="迁移带上 @fleet_role / @reap_policy；无策略、绑了单（或 EPIC）的窗口走「单已关才收」，sleep on 也一样，keep 不收"
 }
 
+# A hub task's session reopened by the fleet (a ver-stale / cfg-stale reopen, a
+# quota migrate, a history resume) came back WITHOUT its launch binding: a fresh
+# start the hub refused (409) — the old window gone, the new one a bare shell,
+# @task lost (claude-fleet#4974).
+drill_task_reopen_rebind() {
+  CAP=10; local t0 out
+  t0=$(now)
+  grep -q 'stamp="\$stamp\$tlstamp"' "$BIN/fleet-migrate.sh" \
+    && grep -q 'transfer-check 2>&1' "$BIN/fleet-migrate.sh" \
+    && grep -q 'fleet_task_rebind_stamp "\$tref" "\$rsid"' "$BIN/dash-restore-session.sh" \
+    && grep -q 'fleet_launch.py" rebind "\$TASK_REF" "\$RESUME_SID"' "$BIN/dash-raw-session.sh" \
+    || { WHY="a reopen road does not carry the task's launch binding (migrate · history restore · parked wake)"; return 1; }
+  out=$(cd "$BIN" && PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import json
+from unittest import mock
+import fleet_launch as launch
+c = dict(version=1, operation_id="33333333-3333-4333-8333-333333333333", task="T7", owner="o", generation=1,
+         worker_id="22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333",
+         provider="claude", attempt_id="task:T7:g1")
+r = dict(c, native_session="44444444-4444-4444-8444-444444444444", actual_provider="claude", pid=42,
+         birth="b", executable="/x/claude", phase="verified")
+t = dict(authority_version=1, owner="o", generation=1, attempt_id="task:T7:g1", resolved_agent="claude",
+         execution_owner=c["worker_id"], state="running", outcome="", evidence=json.dumps(r))
+writes = []
+with mock.patch.object(launch, "task_call", side_effect=lambda ctx, m=None: writes.append(m) or t), \
+     mock.patch.object(launch, "same_process", return_value=False):
+    got = launch.rebind("T7", r["native_session"])
+    try:
+        launch.rebind("T7", "55555555-5555-4555-8555-555555555555"); other = "bound"
+    except launch.NotBound:
+        other = "notbound"
+print(got["launch"] == c, got["fleet_id"] == c["operation_id"], writes == [None, None], other)
+PY
+)
+  SECS=$(since "$t0")
+  [ "$out" = "True True True notbound" ] \
+    || { WHY="rebind does not hand back the record's own binding, read-only (got: $out)"; return 1; }
+  WHAT="重开 hub 任务会话（换新 / 配置旧 / 配额迁移 / 历史恢复）带着原 T 绑定走：/exit 前先问记录还认不认这个会话，不认就留着原会话；新窗口在启动器读之前盖上 @launch / @launch_receipt / @task，按同一个执行者 resume"
+}
+
 # A selftest's tmux server outlived its test (a failure, a timeout, a missed
 # kill-server) and its dead sockets piled up beside the fleets' (#2970).
 drill_selftest_tmux_leak() {

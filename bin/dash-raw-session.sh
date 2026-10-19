@@ -642,13 +642,28 @@ fi
 # An accepted task opening HERE (issue #4754): the hub binds only a remote
 # start, so a local one claims the task itself and carries the same launch
 # binding — refused, never opened unbound. Before --finish, which reads it.
+# A parked or closed task session's RETURN (--resume with --task, claude-fleet#4974)
+# is the same executor, not a new claim: while the record still names that
+# conversation, its own binding is what the window carries (fleet_launch.py
+# rebind) — a fresh claim of a running task is refused, and so was the session.
+REBIND=''
+if [ -n "$TASK_REF" ] && [ -n "$RESUME_SID" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
+  REBIND=$(python3 "$BIN/fleet_launch.py" rebind "$TASK_REF" "$RESUME_SID"); _rb=$?
+  case "$_rb" in
+    0) FLEET_LAUNCH=$(printf '%s' "$REBIND" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["launch"], separators=(",", ":")))') \
+         || { refuse "raw: $TASK_REF rebind answer unreadable"; exit 1; }
+       export FLEET_LAUNCH ;;
+    3) REBIND='' ;;
+    *) refuse "raw: $TASK_REF is still this session's but cannot continue now"; exit 1 ;;
+  esac
+fi
 if [ -n "$TASK_REF" ] && [ -z "${FLEET_LAUNCH:-}" ]; then
   _fu=$(fleet_uuid "$SESS" 2>/dev/null) || _fu=''   # none: `local` refuses a tasked dispatch
   FLEET_LAUNCH=$(printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" local "$_fu") \
     || { refuse "raw: $TASK_REF could not be claimed for a local launch"; exit 1; }
   [ -z "$FLEET_LAUNCH" ] || export FLEET_LAUNCH   # empty: the dispatch carries no task
 fi
-if [ -n "$TASK_REF" ]; then
+if [ -n "$TASK_REF" ] && [ -z "$REBIND" ]; then
   printf '%s' "$DISPATCH" | python3 "$BIN/fleet_launch.py" admit || exit 1
 fi
 [ "$NOREPO" = 1 ] || fleet_repo_authority_guard "${REPO_ARG:-${FLEET_REPO:-}}" --finish "$SESS" >/dev/null \
@@ -814,7 +829,12 @@ else
     printf '%s' "$PROMPT" > "$tf" 2>/dev/null \
       && launch="$launch \"\$(cat '$tf')\""
   fi
-  if [ -n "${FLEET_LAUNCH:-}" ]; then
+  if [ -n "$REBIND" ] && [ -n "$rsid" ]; then
+    # the record's own binding (#4974): resumed as that executor, no seed redelivered
+    stamp="$stamp$(fleet_task_rebind_stamps "$REBIND")" || { refuse "raw: $TASK_REF rebind answer unreadable"; exit 1; }
+  elif [ -n "$REBIND" ]; then
+    refuse "raw: $TASK_REF's transcript ${RESUME_SID%%-*}… is not in $wt — not reopened"; exit 1
+  elif [ -n "${FLEET_LAUNCH:-}" ]; then
     _launch_fid=$(python3 -c 'import json,os; print(json.loads(os.environ["FLEET_LAUNCH"])["worker_id"].split("/")[1])') || exit 1
     stamp="$stamp$(fleet_win_stamp_cmd @launch "$FLEET_LAUNCH" @launch_seed "${tf:-}" @fleet_id "$_launch_fid" @dispatch "$DISPATCH")"
   fi

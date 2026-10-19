@@ -193,6 +193,7 @@ EOS
 cat > "$FB/launcher" <<EOS
 #!/bin/bash
 printf '%s\n' "\$*" >> "$WORK/launched"
+tmux display-message -p -t "\$TMUX_PANE" '#{@launch}|#{@launch_receipt}|#{@launch_started}|#{@task}|#{@fleet_id}|#{@worktree}' >> "$WORK/launch-opts" 2>/dev/null
 printf '%s\n%s\n' "\${FLEET_ACCOUNT_LABEL:-}" "\${FLEET_ACCOUNT_TARGET:-}" > "$WORK/manual-env"
 export CLAUDE_CODE_OAUTH_TOKEN="\$(bash '$BIN/fleet-account.sh' token "\${FLEET_ACCOUNT_LABEL:-}")" FLEET_CC_SESSIONS_DIR="$FLEET_CC_SESSIONS_DIR"
 exec "$FB/claude" "$WORK/claude.pl" "\$@"
@@ -677,6 +678,39 @@ out=$(bash "$SCRIPT" --session "$SESS" --target-account acctB "$wn" 2>&1)
 for _ in $(seq 1 30); do grep -q 'sid-noloop' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
 ok; grep -qx -- "--resume sid-noloop" "$WORK/launched" 2>/dev/null \
   || fail "nothing pending ⇒ a bare resume, as before (launched: $(cat "$WORK/launched" 2>/dev/null)) $out"
+
+# --- a hub task's session (claude-fleet#4974): its launch binding rides the
+# reopen, stamped BEFORE the launcher runs (the launcher reads it at once), so the
+# new window is the same executor the record names — never a fresh start the hub
+# refuses (409, the session lost). Asked before the /exit: a binding the record
+# no longer holds leaves the session running and launches nothing.
+mkdir -p "$WORK/wtt"
+wt9=$(spawn wtask runner-hook sid-task "$WORK/wtt")
+TM set-window-option -t "$wt9" @claude_state 'done'
+set -- @launch '{"task":"T9","v":1}' @launch_receipt '{"native_session":"sid-task"}' \
+       @task T9 @task_flow 1 @fleet_id fid-task-9
+while [ "$#" -ge 2 ]; do TM set-window-option -t "$wt9" "$1" "$2"; shift 2; done
+printf '#!/bin/sh\necho "launch: task generation is terminal" >&2; exit 1\n' > "$FB/tcheck-no"
+printf '#!/bin/sh\n[ "$2" = "%s" ] || { echo "launch: wrong window $2" >&2; exit 1; }\n' "$wt9" > "$FB/tcheck-ok"
+chmod +x "$FB/tcheck-no" "$FB/tcheck-ok"
+sleep 1.5
+: > "$WORK/launched"; : > "$WORK/launch-opts"
+out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-no" bash "$SCRIPT" --session "$SESS" --target-account acctB "$wt9" 2>&1)
+ok; printf '%s' "$out" | grep -q "task binding: task generation is terminal — left running" \
+  || fail "#4974: a binding the record no longer holds must leave the session running: $out"
+ok; TM display-message -p -t "$wt9" '#{pane_pid}' >/dev/null 2>&1 && [ ! -s "$WORK/launched" ] \
+  || fail "#4974: a refused task binding must close nothing and launch nothing ($(diag))"
+out=$(FLEET_MIGRATE_TASK_CHECK="$FB/tcheck-ok" bash "$SCRIPT" --session "$SESS" --target-account acctB "$wt9" 2>&1)
+for _ in $(seq 1 30); do grep -q 'sid-task' "$WORK/launched" 2>/dev/null && break; sleep 0.5; done
+nwt=$(TM list-windows -t "$SESS" -F '#{window_id} #{window_name}' | awk '$2=="wtask"{print $1}' | head -1)
+ok; [ -n "$nwt" ] && [ "$nwt" != "$wt9" ] || fail "#4974: the task session must reopen in a new window: $out $(diag)"
+ok; grep -qx -- "--resume sid-task" "$WORK/launched" 2>/dev/null || fail "#4974: the same conversation resumes (launched: $(cat "$WORK/launched" 2>/dev/null))"
+ok; [ "$(head -n 1 "$WORK/launch-opts")" = "{\"task\":\"T9\",\"v\":1}|{\"native_session\":\"sid-task\"}|1|T9|fid-task-9|$WORK/wtt" ] \
+  || fail "#4974: the launcher must see the task binding already stamped (saw '$(head -n 1 "$WORK/launch-opts")')"
+for opt in "@task=T9" "@task_flow=1" "@fleet_id=fid-task-9" "@launch_started=1"; do
+  ok; [ "$(TM display-message -p -t "$nwt" "#{${opt%%=*}}")" = "${opt#*=}" ] \
+    || fail "#4974: the reopened window must carry ${opt%%=*}=${opt#*=} (got '$(TM display-message -p -t "$nwt" "#{${opt%%=*}}")')"
+done
 
 # --- a renamed home session through a ver-stale reopen stays on the list (issue
 # #3444): no issue, no repo, in $HOME, renamed by its person, kept (`keep`). The

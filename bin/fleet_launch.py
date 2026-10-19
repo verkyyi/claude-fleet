@@ -486,6 +486,48 @@ def local_launch(d, fleet_uuid):
     return c
 
 
+class NotBound(ValueError):
+    """rebind: the record holds no live binding for this native session."""
+
+
+def rebind(task, sid, fleet_id=""):
+    """The SAME session back in a new window (claude-fleet#4974).
+
+    A reopen (a cfg-stale / ver-stale / quota migrate, a /fleet-history resume,
+    a parked wake) closes a hub task's window and resumes its transcript in
+    another; the task's binding is the hub's own record of it: the executor it
+    names and the launch receipt its last verified start published as evidence.
+    Never a new claim or a new identity: the record must still name this worker,
+    its receipt this native session, and that native must be gone. Returns
+    {launch, receipt, fleet_id} for the new window's stamps. NotBound (exit 3) =
+    nothing to rebind (closed, unowned, another session); ValueError (1) = the
+    record says it is this session but it cannot continue now.
+    """
+    if not re.fullmatch(r"T[1-9][0-9]*", task or "") or not valid_uuid(sid):
+        raise NotBound("rebind needs a task T<n> and a native session id")
+    t = task_call({"task": task})
+    if t.get("authority_version") != 1 or t.get("outcome") or not t.get("execution_owner"):
+        raise NotBound("task has no open execution to continue")
+    try:
+        evidence = json.loads(t.get("evidence") or "")
+        c = validate_context({k: evidence.get(k) for k in IDENTITY})
+        receipt = check_receipt(c, {k: v for k, v in evidence.items() if k != "window_id"})
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise NotBound("task record carries no verified launch receipt") from exc
+    if receipt["native_session"] != sid:
+        raise NotBound("task's native session is another conversation")
+    if (c["task"] != task or t.get("owner") != c["owner"] or t.get("generation") != c["generation"]
+            or t.get("execution_owner") != c["worker_id"] or t.get("attempt_id") != c["attempt_id"]
+            or t.get("resolved_agent") != c["provider"]):
+        raise ValueError("task owner/generation/provider fence differs from its launch receipt")
+    fid = c["worker_id"].split("/")[1]
+    if fleet_id and fleet_id != fid:
+        raise ValueError("window identity differs from the task's executor")
+    if same_process(receipt):
+        raise ValueError("the original native process is still alive; reconnect to it")
+    return dict(launch=c, receipt=receipt, fleet_id=fid)
+
+
 def publish(c, receipt):
     current_task(c)  # idempotent event replay alone cannot authorize old work
     proof = {k: v for k, v in receipt.items() if k != "window_id"}
@@ -637,6 +679,10 @@ def supervise_guarded(argv, pane, c, guard):
         directory = native_worktree["root"]
     tmux("set-option", "-wu", "-t", pane, "@launch_receipt")
     tmux("set-option", "-w", "-t", pane, "@launch_started", "1")
+    if not option(pane, "@task"):
+        # A reopened window (restore, migrate, a history resume) is the same
+        # task's session: its record rides with the launch (claude-fleet#4974).
+        tmux("set-option", "-w", "-t", pane, "@task", c["task"])
     child = subprocess.Popen(argv, env=env, **({"cwd": directory} if directory else {}))
     root = None
     verified = False
@@ -763,7 +809,7 @@ def transfer_commit(pane, socket, target, bundle):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "local", "native-worktree", "restore-native-worktree"))
+    p.add_argument("mode", choices=("inspect", "supervise", "transfer-check", "transfer-commit", "admit", "local", "native-worktree", "restore-native-worktree", "rebind"))
     p.add_argument("--socket", default="")
     p.add_argument("--pane", default="")
     p.add_argument("--target", default="")
@@ -771,6 +817,15 @@ def main():
     p.add_argument("argv", nargs=argparse.REMAINDER)
     a = p.parse_args()
     try:
+        if a.mode == "rebind":
+            if len(a.argv) not in (2, 3):
+                raise ValueError("rebind requires a task, a native session and optionally a fleet identity")
+            try:
+                print(json.dumps(rebind(*a.argv), separators=(",", ":")))
+            except NotBound as e:
+                print("launch: " + str(e), file=sys.stderr)
+                return 3
+            return 0
         if a.mode == "restore-native-worktree":
             if len(a.argv) != 4:
                 raise ValueError("restore-native-worktree requires directory, session, provider and fleet identity")

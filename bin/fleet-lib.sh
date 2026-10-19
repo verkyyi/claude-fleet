@@ -1040,6 +1040,33 @@ fleet_task_closed() {
   return "$rc"
 }
 
+# fleet_task_rebind_stamp <T<n>> <native sid> [<fleet_id>] — a hub task's SAME
+# session reopened in a new window (claude-fleet#4974): the stamps (a
+# fleet_win_stamp_cmd prefix — @launch · @launch_receipt · @launch_started ·
+# @fleet_id · @task) that put the record's own binding back before the launcher
+# runs, so fleet_launch.py supervise resumes it as the same executor instead of a
+# new start the hub refuses. rc 0 printed · 3 nothing to rebind (closed, another
+# conversation) · 1 refused (the reason on stderr). FLEET_TASK_REBIND_CMD is the
+# seam (prints fleet_launch.py rebind's JSON, same rc).
+fleet_task_rebind_stamp() {
+  local out rc
+  if [ -n "${FLEET_TASK_REBIND_CMD:-}" ]; then out=$("$FLEET_TASK_REBIND_CMD" "$@"); rc=$?
+  else out=$(python3 "$_FLEET_LIB_DIR/fleet_launch.py" rebind "$@"); rc=$?; fi
+  [ "$rc" = 0 ] || return "$rc"
+  fleet_task_rebind_stamps "$out"
+}
+# fleet_task_rebind_stamps <rebind JSON> — the same stamps off an answer in hand.
+fleet_task_rebind_stamps() {
+  local out _l _r _f _t
+  out=$(printf '%s' "${1:-}" | python3 -c 'import json,sys
+d = json.load(sys.stdin); j = lambda v: json.dumps(v, separators=(",", ":"))
+print(j(d["launch"])); print(j(d["receipt"])); print(d["fleet_id"]); print(d["launch"]["task"])') || return 1
+  { IFS= read -r _l; IFS= read -r _r; IFS= read -r _f; IFS= read -r _t; } <<EOF
+$out
+EOF
+  fleet_win_stamp_cmd @launch "$_l" @launch_receipt "$_r" @launch_started 1 @fleet_id "$_f" @task "$_t"
+}
+
 # A capable node checks the hub immediately before new dispatch, including a
 # local scratch without a lease. Hub outage is unknown, never legacy fallback.
 # No hub and no explicit selection remains byte-for-byte the legacy path. The
