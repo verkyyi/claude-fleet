@@ -310,6 +310,85 @@ class RecoveryTests(unittest.TestCase):
                     generation=2, expected_worker="", evidence="explicit cancel"))
         self.assertIn("unclaimed", self.commits)
 
+    def retired_stop(self):
+        op = "11111111-1111-4111-8111-111111111111"
+        fid = "22222222-2222-4222-8222-222222222222"
+        c = dict(version=1, operation_id=op, task="T7", owner="alice", generation=2,
+                 worker_id=op+"/"+fid, provider="claude", attempt_id="task:T7:g2")
+        proof = dict(pid=77, birth="P1", executable="/native", native_session=op)
+        return fid, dict(idempotency_key="stop:retired", generation=2, expected_worker=c["worker_id"],
+                         execution_stopped=True, evidence=json.dumps(proof),
+                         _native=dict(launch=c, pane="%901", socket="/fixture/socket"))
+
+    def test_retired_binding_needs_window_and_process_gone(self):
+        # claude-fleet#4964: the window closed before the stop was acknowledged.
+        import fleet_launch as launch
+        fid, stop = self.retired_stop()
+        def tmux(out="", rc=0, err=""):
+            return patch.object(recovery.subprocess, "run", return_value=subprocess.CompletedProcess([], rc, out, err))
+        with tmux("other\n"), patch.object(recovery.os, "kill", side_effect=ProcessLookupError):
+            proof = recovery.verify_retired(stop, "T7")
+        self.assertTrue(proof["binding_retired"])
+        self.assertIn("ESRCH", proof["process"])
+        with tmux(err="no server running on /fixture/socket", rc=1), patch.object(recovery.os, "kill", side_effect=ProcessLookupError):
+            self.assertIn("no tmux server", recovery.verify_retired(stop, "T7")["window"])
+        with tmux(fid + "\n"), patch.object(recovery.os, "kill", side_effect=ProcessLookupError):
+            with self.assertRaisesRegex(recovery.Refused, "live window"):
+                recovery.verify_retired(stop, "T7")
+        with tmux("other\n"), patch.object(recovery.os, "kill"), patch.object(launch, "process", return_value=dict(pid=77, birth="P1", executable="/native")):
+            with self.assertRaisesRegex(recovery.Refused, "still alive"):
+                recovery.verify_retired(stop, "T7")
+        with tmux("other\n"), patch.object(recovery.os, "kill"), patch.object(launch, "process", return_value=dict(pid=77, birth="P9", executable="/other")):
+            self.assertIn("another process", recovery.verify_retired(stop, "T7")["process"])
+        with tmux(err="permission denied", rc=1):
+            with self.assertRaises(recovery.Deferred):
+                recovery.verify_retired(stop, "T7")
+        with tmux("other\n"), patch.object(recovery.os, "kill"), patch.object(launch, "process", side_effect=OSError("ps failed")):
+            with self.assertRaises(recovery.Deferred):
+                recovery.verify_retired(stop, "T7")
+        with self.assertRaises(recovery.Refused):
+            recovery.verify_retired(dict(stop, _native={}), "T7")
+
+    def test_release_retired_running_record_cancels_then_acks(self):
+        fid, stop = self.retired_stop()
+        self.task.update(execution_owner=stop["expected_worker"])
+        self.j.get("T7")
+        with patch.object(recovery, "verify_stopped", side_effect=recovery.Deferred("native stop binding unavailable; reconciliation required")):
+            with self.assertRaises(recovery.Pending):
+                self.j.send("stopped", "T7", stop)
+            self.assertEqual(self.j.replay()["unresolved"][0]["task"], "T7")  # listed, never released by replay
+        self.assertEqual(self.commits, {})
+        proof = dict(binding_retired=True, window="no window", process="pid 77 gone (ESRCH)", checked_at=1)
+        with patch.object(recovery, "verify_retired", return_value=proof), contextlib.redirect_stdout(io.StringIO()):
+            r = self.j.release("T7", "release-T7")
+        self.assertEqual(r["released"], "release-T7")
+        self.assertEqual(self.task["outcome"], "cancelled")
+        self.assertEqual(set(self.commits), {"release-T7", "release-T7.ack", "stop:retired"})
+        self.assertTrue(json.loads(self.commits["stop:retired"]["evidence"])["binding_retired"])
+        self.assertEqual(self.commits["stop:retired"]["kind"], "stop_ack")
+        self.assertEqual(self.j.status()["pending"], 0)
+        log = Path(self.temp.name) / "logs" / "task-release.ndjson"
+        self.assertIn('"task":"T7"', log.read_text())
+
+    def test_release_refuses_without_witness_or_on_live_native(self):
+        fid, stop = self.retired_stop()
+        self.task.update(execution_owner=stop["expected_worker"], outcome="succeeded")
+        self.j.get("T7")
+        with self.assertRaisesRegex(recovery.Refused, "nothing witnessed"):
+            self.j.release("T7", "release-T7")  # an expired lease alone is never proof
+        with patch.object(recovery, "verify_stopped", side_effect=recovery.Deferred("binding unavailable")):
+            with self.assertRaises(recovery.Pending):
+                self.j.send("stopped", "T7", stop)
+        with patch.object(recovery, "verify_retired", side_effect=recovery.Refused("native execution is still alive")):
+            with self.assertRaises(recovery.Refused):
+                self.j.release("T7", "release-T7")
+        self.assertEqual(self.commits, {})
+        proof = dict(binding_retired=True, window="no window", process="gone", checked_at=1)
+        with patch.object(recovery, "verify_retired", return_value=proof):
+            self.j.release("T7", "release-T7")
+        self.assertEqual(set(self.commits), {"stop:retired"})  # an outcome stays; only the ack
+        self.assertEqual(self.task["outcome"], "succeeded")
+
     def test_deterministic_outbox_survives_publish_crash(self):
         r = dict(self.report(), parent_session="parent/session")
         self.j.send("report", "T7", r)

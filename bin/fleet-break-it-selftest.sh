@@ -5810,6 +5810,26 @@ drill_authority_open_issue_legacy_task() {
   SECS=$(since "$t0")
 }
 
+# ---- task-execution-retained-window-gone (#4964): a hub task's window closed
+# before its stop receipt was acknowledged — the pane binding verify_stopped
+# reads is gone, so the receipt deferred forever and execution_owner never let
+# go; an unclaimed record's cancel died on a missing execution_owner key.
+drill_task_execution_retained_window_gone() {
+  CAP=60
+  local t0 out rc
+  t0=$(now)
+  grep -q '"release"' "$BIN/fleet_task_control.py" \
+    || { WHY="fleet_task_control.py has no release action"; return 1; }
+  out=$(cd "$ROOT/bin" && python3 -W ignore::ResourceWarning -m unittest -q \
+        fleet_task_recovery_test.RecoveryTests.test_retired_binding_needs_window_and_process_gone \
+        fleet_task_recovery_test.RecoveryTests.test_release_retired_running_record_cancels_then_acks \
+        fleet_task_recovery_test.RecoveryTests.test_release_refuses_without_witness_or_on_live_native \
+        fleet_task_control_test.TaskControlTests.test_cancel_unclaimed_record_without_execution_owner 2>&1); rc=$?
+  [ "$rc" = 0 ] || { WHY="release / unclaimed cancel is red: $(printf '%s' "$out" | grep -E 'Error|FAIL' | head -3 | tr '\n' ' ')"; return 1; }
+  WHAT='窗口先关、stop 回执对不上 pane：release 只认本机留着的 stop 回执，窗口没了且那个进程没了才放（没回执 / 进程还在 / 读不到都不放），没 outcome 的先 cancel；没人认领的 cancel 直接结成 cancelled（unittest）'
+  SECS=$(since "$t0")
+}
+
 # ---- authority-orphan-worker-start (#4864): a worker_start that can never
 # settle — refused by the spawner but filed unknown, sent to a retired
 # endpoint's fleet, or never accepted by its node — held a repo off the hub as

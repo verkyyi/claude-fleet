@@ -326,10 +326,28 @@ def finalize(pane):
 
 def cancel(task, event):
     t = call("get", task)["task"]
+    # An unclaimed record carries no execution_owner key at all (claude-fleet#4964).
+    worker = t.get("execution_owner", "")
+    if not worker and t.get("state") == "accepted":
+        # Nothing runs and nobody would ever acknowledge a request: end it.
+        call("mutate", task, dict(kind="transition", idempotency_key=event, generation=t["generation"],
+             expected_worker="", state="cancelled", evidence="explicit cancel request; unclaimed, no execution owner"))
+        print("CANCELLED\ntask: %s\nnote: unclaimed; nothing to stop" % task)
+        return 2
     result = call("mutate", task, dict(kind="cancel_request", idempotency_key=event,
-                  generation=t["generation"], expected_worker=t["execution_owner"], evidence="explicit cancel request"))
+                  generation=t["generation"], expected_worker=worker, evidence="explicit cancel request"))
     print("CANCEL_REQUESTED\ntask: %s\nevent_id: %s\nnote: owner retained until stopped acknowledgement" % (task, result["cancel_request"]))
     return 3
+
+
+def release(task, event):
+    """An execution whose native and window are both gone (claude-fleet#4964):
+    proven from this node's retained stop receipt, never from a lease's age."""
+    from fleet_task_recovery import Journal
+    r = Journal().release(task, event)
+    print("RELEASED\ntask: %s\noutcome: %s\nevent_id: %s\nevidence: %s; %s" %
+          (task, r.get("outcome") or "", event, r["evidence"]["window"], r["evidence"]["process"]))
+    return 0
 
 
 def parent_matches(report, parent):
@@ -434,7 +452,7 @@ printf "%s\n%s\n%s\n" "$sock" "$win" "$dir"
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("action", choices=("children", "await", "closed", "report", "progress", "finalize", "cancel", "receive", "blocker", "blockers"))
+    p.add_argument("action", choices=("children", "await", "closed", "report", "progress", "finalize", "cancel", "release", "receive", "blocker", "blockers"))
     p.add_argument("--task", default="")
     p.add_argument("--file", default="")
     p.add_argument("--pane", default=os.environ.get("TMUX_PANE", ""))
@@ -473,6 +491,9 @@ def main():
         if args.action == "cancel":
             if not args.event: raise ValueError("cancel needs a stable --event")
             return cancel(args.task, args.event)
+        if args.action == "release":
+            if not args.event: raise ValueError("release needs a stable --event")
+            return release(args.task, args.event)
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as e:
         print("UNKNOWN\nnote: %s" % e)
         return 75 if args.action == "receive" else 3

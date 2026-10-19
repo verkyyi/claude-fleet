@@ -197,6 +197,20 @@ print("200")
             self.assertTrue(calls.call_args.args[2]["execution_stopped"])
             self.assertNotIn("state", calls.call_args.args[2])
 
+    def test_cancel_unclaimed_record_without_execution_owner(self):
+        # claude-fleet#4964: the hub sends no execution_owner key for an unclaimed record.
+        t = dict(id="T361", owner="alice", generation=1, state="accepted")
+        with patch.object(control, "call", side_effect=[dict(task=t), t]) as calls, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(control.cancel("T361", "residual-T361"), 2)
+        m = calls.call_args.args[2]
+        self.assertEqual((calls.call_args.args[0], m["kind"], m["state"], m["expected_worker"]), ("mutate", "transition", "cancelled", ""))
+        self.assertTrue(m["evidence"])
+        self.assertIn("CANCELLED", out.getvalue())
+        held = dict(t, state="running", execution_owner="fleet/session")
+        with patch.object(control, "call", side_effect=[dict(task=held), dict(cancel_request="ev")]) as calls, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(control.cancel("T361", "ev"), 3)
+        self.assertEqual((calls.call_args.args[2]["kind"], calls.call_args.args[2]["expected_worker"]), ("cancel_request", "fleet/session"))
+
     def test_native_alive_cannot_ack_cancel(self):
         c=dict(task="T7",owner="alice",generation=1,worker_id="fleet/session")
         t=dict(id="T7",owner="alice",generation=1,execution_owner="fleet/session",cancel_request="stop")
