@@ -162,6 +162,11 @@ python3 bin/fleet_native_observe_native_test.py --codex /absolute/path/to/codex
 python3 bin/fleet_native_observe_native_test.py --codex /absolute/path/to/codex --keep-install
 ```
 
+演练的工作区是 fixture 仓库（`git init` + `git worktree add`，repo conf 的 `FLEET_MAIN`
+指向它——#4573 以后窗口的 worktree 必须是已登记的 linked worktree）。旧安装默认取自
+#4553 之前的树（`--old-ref` 可改）：#4553 起 SessionStart 观察登记失败即停下这一轮，
+「登记没落地、工具还在跑」只会出现在更早的安装起的会话里。
+
 第一种删除自己的临时旧安装，验证原活工具不被打断、原身份和 dirty 文件保留、
 丢 ACK/部分登记重试，并单独报告消息消费是否取得原生证据；旧 hook 缺失不算已修复。
 第二种保留旧安装作正常消息对照：同 SID 的唯一 userMessage/turn 和测试上游收到
