@@ -471,6 +471,7 @@ ok "Codex close-on-exit honors the global switch, hub/panel scope, and transfer 
 # the first unanswered read opens the shared gh-down marker, every later one skips.
 # Nothing is reaped on an unread merged-PR answer (#2 kept), and the issue stays.
 GHDOWN="$WORK/ghdown-conf"; mkdir -p "$GHDOWN"; HANG="$WORK/gh-hang.log"; : > "$HANG"
+fx_repo "$GHDOWN" s1 fake/repo FLEET_MAIN="$BASEDIR" FLEET_BASE_BRANCH="$BASE_BR"
 clr; t0=$(date +%s)
 GH_HANG="$HANG" RUNSHELL_BG=1 FLEET_GH_TIMEOUT_KEY=3 CONFDIR="$GHDOWN" \
   REASON=prompt_input_exit ISS=2 WID='@2' run_hook </dev/null
